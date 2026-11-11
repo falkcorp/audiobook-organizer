@@ -489,3 +489,45 @@ func TestOperator_RealLayersBeforeRegistration(t *testing.T) {
 		t.Errorf("state_dir from _FILE = %+v %v %v", v, ok, err)
 	}
 }
+
+// TestFile_ScalarTags (05-config §1.3.6): a file scalar becomes JSON by its
+// resolved YAML tag, losslessly: a float keeps its spelling, an integer
+// past int64 is kept as an unsigned one, a timestamp stays a string; an
+// infinite float, NaN and an unsupported tag fail boot. (YAML resolves an
+// integer past uint64 as a float, so it is a JSON number that a key of an
+// integer type then refuses.)
+func TestFile_ScalarTags(t *testing.T) {
+	pt := config.Options{Passthrough: func(p config.Path) bool { return strings.HasPrefix(string(p), "integrations.ai.wayne.") }}
+	r := realRig(t, nil, `integrations:
+  ai:
+    wayne:
+      ratio: 1.10
+      big: 18446744073709551615
+      when: 2026-11-10
+      quoted: "007"
+      plain: 7
+      exp: 1e3
+      flag: true
+`, rigOpts{o: pt})
+	r.start()
+	got := map[config.Path]string{}
+	for p, v := range r.st.PassthroughValues() {
+		got[p] = string(v.Value)
+	}
+	want := map[config.Path]string{
+		"integrations.ai.wayne.ratio": "1.10", "integrations.ai.wayne.big": "18446744073709551615",
+		"integrations.ai.wayne.when": `"2026-11-10"`, "integrations.ai.wayne.quoted": `"007"`,
+		"integrations.ai.wayne.plain": "7", "integrations.ai.wayne.exp": "1e3", "integrations.ai.wayne.flag": "true",
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("passthrough values = %v\nwant %v", got, want)
+	}
+	for name, v := range map[string]string{
+		"infinite": ".inf", "not a number": ".nan", "binary": "!!binary aGVsbG8=",
+	} {
+		r := realRig(t, nil, "integrations:\n  ai:\n    wayne:\n      x: "+v+"\n", rigOpts{o: pt})
+		if _, err := r.st.Boot(context.Background()); err == nil {
+			t.Errorf("%s: Boot accepted %s", name, v)
+		}
+	}
+}
