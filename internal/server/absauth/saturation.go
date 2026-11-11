@@ -1,13 +1,11 @@
 // file: internal/server/absauth/saturation.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: f4881432-1772-4d8d-a653-33fde6815d7a
 // last-edited: 2026-11-10
 
 package absauth
 
 import (
-	"time"
-
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
@@ -18,10 +16,10 @@ import (
 // A ceiling that refused every login once spent would let an anonymous flood
 // lock out every user, the owner included. Instead the gate marks the request
 // saturated (MarkLoginSaturated) and the login handlers, which are the ones
-// that know the account, apply coreauth.SaturationPolicy before any password
-// work: an account with few failures of its own is delayed, never refused, and
-// only an account that has already failed coreauth.DefaultSoftThreshold times
-// in the window is refused (429). The per-visitor limit refuses regardless, as
+// that know the account, apply the shared throttle's SaturationPolicy before
+// any password work: an account with few failures of its own is delayed, never
+// refused, and only an account that has already failed the throttle's
+// SoftThreshold times in the window is refused (429). The per-visitor limit refuses regardless, as
 // it always did. The policy and its delays moved to core auth at F4-02; these
 // gin request marks stay.
 
@@ -70,20 +68,20 @@ func LoginAccount(c *gin.Context) string {
 	return s
 }
 
-// RefuseSaturatedLogin applies coreauth.SaturationPolicy for a saturated login on account
-// key accountKey: it applies the delay through delay when there is one and returns
-// false, or, when the account has already failed coreauth.DefaultSoftThreshold times, records the
-// refusal on c and returns true so the caller answers 429. The policy is decided
+// RefuseSaturatedLogin applies t.SaturationPolicy for a saturated login on account
+// key accountKey: it applies the delay through t.Delay when there is one and
+// returns false, or, when the account has already failed t's SoftThreshold
+// times, records the refusal on c and returns true so the caller answers 429. The policy is decided
 // by the SUBMITTED name, so a name that does not exist is delayed and refused
 // exactly like one that does. The refusal is recorded so the ceiling treats it as
 // a failure while saturated, like a 401.
-func RefuseSaturatedLogin(c *gin.Context, accountFailures int, delay func(time.Duration)) (refused bool) {
-	d, refuse := coreauth.SaturationPolicy(accountFailures)
+func RefuseSaturatedLogin(c *gin.Context, t *coreauth.Throttle, accountKey string) (refused bool) {
+	d, refuse := t.SaturationPolicy(accountKey)
 	if refuse {
 		c.Set(loginSatRefusedKey, true)
 		return true
 	}
-	delay(d)
+	t.Delay(d)
 	return false
 }
 
