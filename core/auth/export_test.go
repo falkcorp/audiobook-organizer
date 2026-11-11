@@ -1,11 +1,14 @@
 // file: core/auth/export_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 893eb259-d801-49c9-9efd-55a9ab60080d
 // last-edited: 2026-11-11
 
 package auth
 
-import "time"
+import (
+	"net/http"
+	"time"
+)
 
 // Test-only views of a Service's sign-in protections for the external test
 // package (compiled into this package's tests only).
@@ -26,3 +29,7 @@ func ConnectorKeyOf(c ClientInfo) string { return c.connectorKey() }
 
 // OwnerSatisfied is §4.8's owner rule for p (Service.ownerSatisfied).
 func (s *Service) OwnerSatisfied(p *Principal) bool { return s.ownerSatisfied(p) }
+
+// ClientOf is the ClientInfo the service builds for r when no resolver is
+// wired (Service.client).
+func (s *Service) ClientOf(r *http.Request) ClientInfo { return s.client(r) }

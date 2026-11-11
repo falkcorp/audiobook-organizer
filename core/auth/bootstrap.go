@@ -1,5 +1,5 @@
 // file: core/auth/bootstrap.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9c1b0e37-5a64-4f0b-8d0e-3b1f7e4c2a95
 // last-edited: 2026-11-11
 
@@ -36,8 +36,11 @@ const (
 	BootstrapTokenLabel = "auth.bootstrap_token"
 
 	actionBootstrapRedeem = "core.bootstrap.redeem"
-	bootstrapKeyName      = "bootstrap"
-	bootstrapAdminName    = "admin"
+	// reasonBootstrapDisabled is the audit reason of a redeem or setup
+	// refused because core.auth.bootstrap.enabled is false.
+	reasonBootstrapDisabled = "bootstrap_disabled"
+	bootstrapKeyName        = "bootstrap"
+	bootstrapAdminName      = "admin"
 	// bootstrapNameTries bounds the admin-name suffix search (HEAD's 100).
 	bootstrapNameTries = 100
 	// generatedPasswordLen is the length of a generated admin password.
@@ -60,9 +63,11 @@ type StateFiles interface {
 // creation leaves the token unspent (HEAD wrote the hash back) and a crash
 // leaves either everything or nothing.
 //
-// The source's throttle (§4.9) refuses a spent budget first; a token that is
-// malformed or not stored is a failed credential check, charged to the
-// source (ErrBootstrapInvalid). A stored token is spent whatever the answer:
+// The source's throttle (§4.9) refuses a spent budget first; with
+// core.auth.bootstrap.enabled false every redeem is refused
+// (ErrBootstrapInvalid, audited bootstrap_disabled, nothing charged); a token
+// that is malformed or not stored is a failed credential check, charged to
+// the source (ErrBootstrapInvalid). A stored token is spent whatever the answer:
 // past its expiry it is deleted, audited, and ErrBootstrapInvalid answers.
 //
 // The key belongs to the first active user holding core:admin, role-resolved
@@ -89,6 +94,11 @@ func (s *Service) redeemBootstrap(ctx context.Context, token string, client Clie
 	if th.SourceBlocked(source) {
 		s.bootstrapRefused(ctx, client, reasonThrottled, "")
 		return nil, s.throttledOn(surfaceBootstrap, LoginRetryAfter)
+	}
+	if !s.bootstrapEnabled() {
+		// Nothing is charged: the caller guessed nothing, the switch is off.
+		s.bootstrapRefused(ctx, client, reasonBootstrapDisabled, "")
+		return nil, fmt.Errorf("%w: bootstrap is disabled (core.auth.bootstrap.enabled)", ErrBootstrapInvalid)
 	}
 	if _, err := s.lookupBootstrap(ctx, token, source, client); err != nil {
 		return nil, err
@@ -182,8 +192,11 @@ func (s *Service) redeemBootstrap(ctx context.Context, token string, client Clie
 // through), and is spent in the batch that creates the admin, so an
 // unspent-on-failure token cannot be replayed once a user exists.
 //
-// The username and password are checked and the password hashed before the
-// token is looked at, so a malformed request spends nothing. The source's
+// The username and password are checked, and the token looked up (not spent),
+// before the password is hashed: a malformed request spends nothing, and a
+// guessed token is refused before it can cost an argon2 run. With
+// core.auth.bootstrap.enabled false a request presenting a token is refused
+// (ErrSetupClosed). The source's
 // throttle (§4.9) applies as in RedeemBootstrap. The admin has role admin,
 // an unverified e-mail if one is given, and is audited core.user.create. It
 // returns the created user; no session is opened.
@@ -196,6 +209,10 @@ func (s *Service) Setup(ctx context.Context, in SetupInput) (*User, error) {
 	}
 	if s.HasUsers() {
 		return nil, fmt.Errorf("%w: a user already exists", ErrSetupClosed)
+	}
+	if in.BootstrapToken != "" && !s.bootstrapEnabled() {
+		s.bootstrapRefused(ctx, in.Client, reasonBootstrapDisabled, "")
+		return nil, fmt.Errorf("%w: bootstrap tokens are disabled (core.auth.bootstrap.enabled)", ErrSetupClosed)
 	}
 	needToken := s.setupRequiresToken() || !in.Client.Local()
 	if needToken && in.BootstrapToken == "" {
@@ -211,14 +228,15 @@ func (s *Service) Setup(ctx context.Context, in SetupInput) (*User, error) {
 	if err := s.checkNewPassword(in.Password); err != nil {
 		return nil, err
 	}
-	hash, err := s.hashNew(ctx, in.Password)
-	if err != nil {
-		return nil, err
-	}
 	if in.BootstrapToken != "" {
+		// Before the hasher: a guessed token must not cost an argon2 run.
 		if _, err := s.lookupBootstrap(ctx, in.BootstrapToken, source, in.Client); err != nil {
 			return nil, err
 		}
+	}
+	hash, err := s.hashNew(ctx, in.Password)
+	if err != nil {
+		return nil, err
 	}
 	s.setupMu.Lock()
 	defer s.setupMu.Unlock()
@@ -267,6 +285,16 @@ func (s *Service) Setup(ctx context.Context, in SetupInput) (*User, error) {
 		s.removeBootstrapFile()
 	}
 	return out, nil
+}
+
+// bootstrapEnabled is core.auth.bootstrap.enabled: true unless set false
+// (§4.6 item 1, §8). It is read live, so turning it off stops redemption at
+// once; BootWrites deletes the stored token and file at the next start.
+func (s *Service) bootstrapEnabled() bool {
+	if v := s.settings().BootstrapEnabled; v != nil {
+		return *v
+	}
+	return true
 }
 
 // setupRequiresToken is core.auth.setup_requires_token: true unless set false.

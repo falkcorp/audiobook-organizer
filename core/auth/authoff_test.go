@@ -1,5 +1,5 @@
 // file: core/auth/authoff_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8e2f4a67-1b3c-4d95-a0e8-5f6c7d9b1a42
 // last-edited: 2026-11-11
 
@@ -116,7 +116,12 @@ func TestAuthDisabled_InteractiveGuardRefuses(t *testing.T) {
 	wantErr(t, "revoking a key", svc.RevokeAPIKey(ctx, p, "any"), auth.ErrDenied)
 	_, err = svc.MintTempLogin(ctx, p, dick.ID)
 	wantErr(t, "a temp-login link", err, auth.ErrDenied)
-	wantErr(t, "a revalidation", svc.Revalidate(ctx, p), auth.ErrInvalidCredentials)
+	if err := svc.Revalidate(ctx, p); err != nil {
+		t.Fatalf("revalidating the auth-off principal: %v", err)
+	}
+	// Only the binding itself stands: a principal of the same method that the
+	// middleware did not bind (no auth-off mode) has no user to check.
+	wantErr(t, "the required-mode service refuses the same principal", f.svc.Revalidate(ctx, p), auth.ErrInvalidCredentials)
 }
 
 // TestAuthDisabled_RefusesNonLoopbackOrProxyWithoutOptIn (§4.11, SEC-30,

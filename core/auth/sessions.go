@@ -1,5 +1,5 @@
 // file: core/auth/sessions.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 587ac104-093e-402c-80f7-30ea7e13591d
 // last-edited: 2026-11-11
 
@@ -264,6 +264,11 @@ func (s *Service) Revalidate(ctx context.Context, p *Principal) error {
 }
 
 func (s *Service) revalidate(ctx context.Context, p *Principal) error {
+	if p != nil && p.Method == MethodAuthDisabled && s.authOff {
+		// The auth-off binding has no user, credential or epoch to go
+		// stale (§4.11); it stands exactly while the mode does.
+		return nil
+	}
 	if p == nil || p.User == nil || p.User.ID == "" {
 		return fmt.Errorf("%w: no principal", ErrInvalidCredentials)
 	}

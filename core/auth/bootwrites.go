@@ -1,5 +1,5 @@
 // file: core/auth/bootwrites.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4e0a7b3-5d18-4f92-8a6c-1b9d3e7f2054
 // last-edited: 2026-11-11
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"time"
 
 	"github.com/falkcorp/mediacore/backup/journal"
@@ -44,7 +45,10 @@ func defaultReadOnlyScopes() []rbac.Permission { return []rbac.Permission{"core:
 //     is wired, replace any stored bootstrap token with a fresh one (ten
 //     minutes, DefaultBootstrapTokenTTL) and write it, mode 0600, to the
 //     bootstrap token file (label auth.bootstrap_token); the log names the
-//     file and the expiry, never the value;
+//     file and the expiry, never the value; with it disabled, delete every
+//     stored bootstrap token and the file (a token minted while it was on
+//     must not outlive the switch), whether or not a state filesystem is
+//     wired, and RedeemBootstrap and a token-bearing Setup refuse;
 //   - when core.auth.bootstrap.readonly_key.enabled, revoke the previous
 //     start-up key and mint a new one, scoped by readonly_key.scopes (default
 //     ["core:system.view"]; empty, wildcard and core:admin scopes are
@@ -68,6 +72,8 @@ func BootWrites(ctx context.Context, d RestoreDeps) error {
 		if err := bootstrapToken(ctx, d); err != nil {
 			return fmt.Errorf("auth: boot writes: bootstrap token: %w", err)
 		}
+	} else if err := retireBootstrapToken(ctx, d); err != nil {
+		return fmt.Errorf("auth: boot writes: retire the bootstrap token: %w", err)
 	}
 	if err := startupKey(ctx, d, st); err != nil {
 		return fmt.Errorf("auth: boot writes: read-only key: %w", err)
@@ -100,16 +106,8 @@ func bootstrapToken(ctx context.Context, d RestoreDeps) error {
 	var raw Token
 	expires := d.now().Add(DefaultBootstrapTokenTTL)
 	err := d.commit(ctx, func(b *storage.Batch) error {
-		for t, err := range d.Store.ScanOneTime(ctx, OneTimeBootstrap) {
-			if err != nil {
-				if leftUndecodable(d.log(), "onetime", "", err) {
-					continue
-				}
-				return err
-			}
-			if err := d.Store.DeleteOneTime(b, OneTimeBootstrap, t.ID); err != nil {
-				return err
-			}
+		if err := stageDeleteBootstrapTokens(ctx, d, b); err != nil {
+			return err
 		}
 		var err error
 		raw, err = d.Store.IssueOneTime(b, &OneTimeToken{Kind: OneTimeBootstrap, CreatedAt: d.now(), ExpiresAt: expires})
@@ -123,6 +121,42 @@ func bootstrapToken(ctx context.Context, d RestoreDeps) error {
 		return nil
 	}
 	d.log().Info("auth: bootstrap token written", "file", BootstrapTokenFile, "expires_at", expires.Format(time.RFC3339))
+	return nil
+}
+
+// stageDeleteBootstrapTokens stages the deletion of every stored bootstrap
+// token. An undecodable one is left in place, logged: it cannot be named for
+// deletion, and a redeem of it is refused as invalid.
+func stageDeleteBootstrapTokens(ctx context.Context, d RestoreDeps, b *storage.Batch) error {
+	for t, err := range d.Store.ScanOneTime(ctx, OneTimeBootstrap) {
+		if err != nil {
+			if leftUndecodable(d.log(), "onetime", "", err) {
+				continue
+			}
+			return err
+		}
+		if err := d.Store.DeleteOneTime(b, OneTimeBootstrap, t.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// retireBootstrapToken is BootWrites' answer to core.auth.bootstrap.enabled
+// = false: the stored tokens and the token file go, so a token minted while
+// the switch was on cannot be redeemed after it was turned off. The store
+// deletion needs no state filesystem; the file removal needs one and is best
+// effort (a leftover file names a token that no longer exists).
+func retireBootstrapToken(ctx context.Context, d RestoreDeps) error {
+	if err := d.commit(ctx, func(b *storage.Batch) error { return stageDeleteBootstrapTokens(ctx, d, b) }); err != nil {
+		return err
+	}
+	if d.StateFiles == nil {
+		return nil
+	}
+	if err := d.StateFiles.Remove(BootstrapTokenLabel, BootstrapTokenFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		d.log().Warn("auth: bootstrap token file not removed", "file", BootstrapTokenFile, "err", err)
+	}
 	return nil
 }
 

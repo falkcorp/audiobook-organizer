@@ -1,5 +1,5 @@
 // file: core/auth/bootwrites_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2d9b6f84-a317-4c5e-b0e2-8f61c3a7d905
 // last-edited: 2026-11-11
 
@@ -329,4 +329,42 @@ func TestBootWrites_RequiresRevocations(t *testing.T) {
 	if err := auth.BootWrites(context.Background(), d); err == nil {
 		t.Fatal("no error without revocations")
 	}
+}
+
+// TestBootWrites_DisabledRetiresTheStoredToken (§4.6 item 1): a token minted
+// while core.auth.bootstrap.enabled was on must not outlive the switch. With
+// it off BootWrites deletes the stored token and the file, and the token no
+// longer redeems; the store deletion happens with no state filesystem too.
+func TestBootWrites_DisabledRetiresTheStoredToken(t *testing.T) {
+	f, files := bootFx(t)
+	ctx := context.Background()
+	f.mustBootWrites(files)
+	tok := files.file(auth.BootstrapTokenLabel, auth.BootstrapTokenFile)
+	if tok == "" || !f.tokenStored(tok) {
+		t.Fatal("no stored bootstrap token to retire")
+	}
+	f.setSettings(auth.Settings{BootstrapEnabled: new(false)})
+	f.mustBootWrites(files)
+	if f.tokenStored(tok) {
+		t.Fatal("the bootstrap token outlived the switch")
+	}
+	if len(files.removed) != 1 || files.removed[0] != auth.BootstrapTokenLabel+"/"+auth.BootstrapTokenFile {
+		t.Fatalf("file removals %v, want the token file", files.removed)
+	}
+	_, err := f.svc.RedeemBootstrap(ctx, tok, from("192.0.2.63"))
+	wantErr(t, "a retired token", err, auth.ErrBootstrapInvalid)
+
+	g := newFx(t)
+	stored := g.bootToken(auth.DefaultBootstrapTokenTTL)
+	g.setSettings(auth.Settings{BootstrapEnabled: new(false)})
+	g.mustBootWrites(nil)
+	if g.tokenStored(stored) {
+		t.Fatal("with no state filesystem the stored token was kept")
+	}
+
+	// A file that cannot be removed is logged, not fatal.
+	h, hfiles := bootFx(t)
+	h.setSettings(auth.Settings{BootstrapEnabled: new(false)})
+	hfiles.failRm = errors.New("the Batcave's disks are on fire")
+	h.mustBootWrites(hfiles)
 }

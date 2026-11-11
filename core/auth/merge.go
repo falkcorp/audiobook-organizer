@@ -1,5 +1,5 @@
 // file: core/auth/merge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2bd811e8-1e8d-440b-990a-c71b06517f58
 // last-edited: 2026-11-11
 
@@ -38,10 +38,13 @@ var _ Admin = (*Service)(nil)
 // plan with an Expect on the bytes the plan read; Source disabled with its
 // credential epoch bumped (user.disabled and credential_epoch.bumped
 // journaled); and every open invite Source created deleted, not re-owned
-// (DATA4-9), the count listed in the core.user.disable audit record. An
-// invite Source creates after the scan escapes the deletion, but it is
-// refused on accept: its creator is disabled and its epoch moved
-// (inviteRefusal). The caller commits; a record changed since the plan was
+// (DATA4-9), and every temp-login link it created (stageDeleteCreatedLinks),
+// the counts listed in the core.user.disable audit record. Target must be
+// active: merging into a disabled or pending account would hand its records
+// to a user who cannot sign in. An invite or link Source creates after the
+// scan escapes the deletion, but it is refused on use: its creator is
+// disabled and its epoch moved (inviteRefusal, linkCreatorRefusal). The
+// caller commits; a record changed since the plan was
 // built fails the commit with storage.ErrConflict, which the caller reports
 // as ErrMergeConflict.
 func (s *Service) StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) error {
@@ -73,6 +76,9 @@ func (s *Service) StageUserMerge(ctx context.Context, b *storage.Batch, plan Use
 		if err := s.dominates(actor, u); err != nil {
 			return err
 		}
+	}
+	if tgt.Status != StatusActive {
+		return fmt.Errorf("%w: the merge target %s is %s, not active", ErrInactiveUser, tgt.ID, tgt.Status)
 	}
 	if err := s.keepAnAdmin(ctx, b, src, src.Roles, StatusDisabled); err != nil {
 		return err

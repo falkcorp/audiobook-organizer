@@ -1,5 +1,5 @@
 // file: core/auth/compat.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b7e6f2d-83c4-4a19-b5d0-7e2a9c41f386
 // last-edited: 2026-11-11
 
@@ -46,7 +46,11 @@ type Compat interface {
 	// Throttle (§4.9): a call from a throttled source is refused first
 	// (ErrThrottled), but none of its own refusals counts toward the
 	// throttle: the token was verified by the surface, so a refusal is not a
-	// credential guess.
+	// credential guess. scopes are the surface's own narrowing of what the
+	// credential may do; a scoped API key is not a surface credential, and a
+	// caller holding one must go through AuthenticateKey, which applies the
+	// key's stored scopes, status and expiry: scopes passed here are taken
+	// as given.
 	PrincipalFor(ctx context.Context, u *User, scopes []rbac.Permission, epoch int64, client ClientInfo) (*Principal, error)
 	// CheckCredentialFor is Service.CheckCredentialFor (§3.2).
 	CheckCredentialFor(p *Principal, perm rbac.Requirement) error
