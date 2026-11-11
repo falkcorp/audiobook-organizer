@@ -1,7 +1,7 @@
 // file: internal/books/restore_drill_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2c7e9a41-5f08-4d3b-b916-8e4a0d6c1f75
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package books
 
@@ -881,21 +881,24 @@ func testDrillSelftest(t *testing.T, c corpus, pristine string) {
 		}},
 		"checkpoint-after-the-step": {want: "family u:: all", mutate: nil},
 		"prefreeze-row-lost": {want: "the pre-freeze binary's row", mutate: func(t *testing.T, db *pebble.DB) {
-			if c.wrote == nil {
-				t.Skip("prefreeze-written only")
-			}
 			require.NoError(t, db.Delete([]byte("u:"+c.wrote.User.ID), pebble.Sync))
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
+			// Skip before anything is opened: t.Skip ends the test through
+			// runtime.Goexit, so a skip raised while the mutation's store is
+			// open (the old shape, on r0, where c.wrote is nil) never reached
+			// its Close, and t.TempDir's cleanup then removed the files under
+			// a live pebble DB whose table-stats job found an sstable gone and
+			// Fatalf'd the whole test binary (no "--- FAIL", the process exits).
+			if name == "prefreeze-row-lost" && c.wrote == nil {
+				t.Skip("prefreeze-written only")
+			}
 			work := copyCorpus(t, corpus{dir: pristine})
 			if tc.mutate == nil {
 				moveUsers(t, storeDB(work), "", c)
 			} else {
-				db, err := pebble.Open(storeDB(work), &pebble.Options{})
-				require.NoError(t, err)
-				tc.mutate(t, db)
-				require.NoError(t, db.Close())
+				mutateStore(t, storeDB(work), tc.mutate)
 			}
 			got := drillProblems(pre, scanStore(t, storeDB(work), wholeStore()), c.wrote)
 			if tc.want == "" {
@@ -906,6 +909,18 @@ func testDrillSelftest(t *testing.T, c corpus, pristine string) {
 				"drillProblems did not report %q: %v", tc.want, got)
 		})
 	}
+}
+
+// mutateStore opens the store at dir read-write, runs mutate on it and closes
+// it. The close is deferred, so it also runs when mutate fails the test or
+// skips it (both end the goroutine through runtime.Goexit): the store is never
+// left open for t.TempDir's cleanup to remove its files under.
+func mutateStore(t *testing.T, dir string, mutate func(t *testing.T, db *pebble.DB)) {
+	t.Helper()
+	db, err := pebble.Open(dir, &pebble.Options{})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, db.Close()) }()
+	mutate(t, db)
 }
 
 // testAnswersSelftest proves answersProblems bites on a changed answer and
