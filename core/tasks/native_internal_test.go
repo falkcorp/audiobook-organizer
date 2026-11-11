@@ -1,5 +1,5 @@
 // file: core/tasks/native_internal_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 077fc32b-be7d-4ba9-9c02-c2ee627bcf57
 // last-edited: 2026-11-10
 
@@ -10,11 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/falkcorp/mediacore/coretest"
+	"github.com/cockroachdb/pebble/v2/vfs"
+
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/internal/taskstore"
 	"github.com/falkcorp/mediacore/storage"
@@ -29,10 +31,49 @@ type nativeEnv struct {
 
 func newNativeEnv(t *testing.T) nativeEnv {
 	t.Helper()
-	ks := coretest.NewStore(t, storage.OwnerSpec{Owner: taskstore.Owner, Spec: taskstore.StorageSpec(), Enabled: true}).Keyspace(taskstore.Owner)
+	ks := openTasksKeyspace(t)
 	s := NativeStores(ks)
 	runs := s.Runs.(*nativeRuns)
 	return nativeEnv{ks: ks, runs: runs, imp: runs.Importer().(*nativeImporter)}
+}
+
+// openTasksKeyspace boots an in-memory store as the kernel's P2, P4a and P4b
+// do (storage.Open, Prepare, Migrate) with c/tasks/ registered by
+// taskstore.StorageSpec, returns that keyspace and closes the store at
+// cleanup. It opens storage itself instead of calling coretest.NewStore:
+// coretest imports app, app imports kernel and kernel's imports reach this
+// package (through internal/storagemigrate), so an in-package test that
+// imports coretest is an import cycle.
+func openTasksKeyspace(t *testing.T) storage.Keyspace {
+	t.Helper()
+	ctx := context.Background()
+	o, err := storage.Open(ctx, storage.OpenOptions{
+		Path:            filepath.Join(t.TempDir(), "main.pebble"),
+		Owners:          []storage.OwnerSpec{{Owner: taskstore.Owner, Spec: taskstore.StorageSpec(), Enabled: true}},
+		Build:           "coretest+fixture",
+		FreeSpaceMargin: 1,
+		FS:              storage.FSOf(vfs.NewMem()),
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	db, err := o.Prepare(ctx)
+	if err == nil {
+		err = db.Migrate(ctx)
+	}
+	if err != nil {
+		t.Fatalf("boot: %v", errors.Join(err, o.Close()))
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	ks, ok := db.Keyspace(taskstore.Owner)
+	if !ok {
+		t.Fatalf("owner %s has no keyspace", taskstore.Owner)
+	}
+	return ks
 }
 
 func (e nativeEnv) commit(t *testing.T, stage func(b *storage.Batch) error) error {
