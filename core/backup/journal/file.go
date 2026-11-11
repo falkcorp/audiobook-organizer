@@ -621,11 +621,9 @@ func OpenGaps(ctx context.Context, ks storage.Reader) (bool, error) {
 	return false, nil
 }
 
-// Gap stages c/backup/journal_gap/<since> into b: the interval from since
-// may hold a revocation the journal lacks (§5B.3.6 row "Append failure"). It
-// touches no file, so it works when Append cannot, and it makes the next
-// successful Append write the closing `gap` line.
-func (j *File) Gap(b *storage.Batch, since time.Time) error {
+// stageGapRecord stages c/backup/journal_gap/<since> into b: the interval from
+// since may hold a revocation the journal lacks. It needs only the keyspace.
+func stageGapRecord(b *storage.Batch, ks storage.Keyspace, since time.Time) error {
 	if b == nil {
 		return errors.New("journal: Gap without a batch")
 	}
@@ -633,10 +631,18 @@ func (j *File) Gap(b *storage.Batch, since time.Time) error {
 	if err != nil {
 		return err
 	}
-	if err := bind(b, j.ks); err != nil {
+	if err := bind(b, ks); err != nil {
 		return err
 	}
-	if err := b.In(j.ks).Set(gapKey(since), v); err != nil {
+	return b.In(ks).Set(gapKey(since), v)
+}
+
+// Gap stages c/backup/journal_gap/<since> into b: the interval from since
+// may hold a revocation the journal lacks (§5B.3.6 row "Append failure"). It
+// touches no file, so it works when Append cannot, and it makes the next
+// successful Append write the closing `gap` line.
+func (j *File) Gap(b *storage.Batch, since time.Time) error {
+	if err := stageGapRecord(b, j.ks, since); err != nil {
 		return err
 	}
 	j.mu.Lock()

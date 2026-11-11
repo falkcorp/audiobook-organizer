@@ -1,5 +1,5 @@
 // file: core/storage/admin.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: e760c156-0276-4ad3-9f53-76551e9860b5
 // last-edited: 2026-11-11
 
@@ -149,6 +149,24 @@ func (a *Admin) ClaimViolationKeys() map[ClaimViolation][]string { return a.db.C
 // intent (Intent.InstallID, 05-backup §5B.3.4 step 8; R1-21 decision D8):
 // P2 gives it to a restored store that carries no marker.
 func (a *Admin) InstallID() string { return a.db.boot.installID }
+
+// StoreIdentity is the open store's generation (c/storage/epoch, §5S.3.7) and
+// DB directory identity: the filesystem ID statfs reports and the inode. The
+// journal's backup.location.json records it (05-backup §5B.3.6, the "store"
+// member), so the boot can tell a store that was relocated from one that was
+// replaced. A store on MemFS reports DirFSID and DirIno 0.
+type StoreIdentity struct {
+	Epoch   uint64 `json:"epoch"`
+	DirFSID uint64 `json:"dir_fsid"`
+	DirIno  uint64 `json:"dir_ino"`
+}
+
+// StoreIdentity is the identity the open store's boot recorded: the epoch it
+// runs at and the identity of its directory.
+func (a *Admin) StoreIdentity() StoreIdentity {
+	e := a.db.boot.epoch
+	return StoreIdentity{Epoch: e.Epoch, DirFSID: e.DirFSID, DirIno: e.DirIno}
+}
 
 // CompactionStats samples the engine's compaction counters; a closed store
 // reports Absent.
