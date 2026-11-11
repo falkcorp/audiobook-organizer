@@ -530,3 +530,98 @@ func TestAPIKey_StatusChangesAreAuditedByAction(t *testing.T) {
 		}
 	}
 }
+
+// §4.4, §4.13: a key manages only keys it may create, and no key re-enables
+// one. Tim's case-files key can neither re-enable nor restrict his broader
+// key; it may disable and revoke a case-files key of his, but not re-enable
+// that one either. His interactive sign-in re-enables both.
+func TestAPIKey_KeyManagesOnlyKeysItMayCreate(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	tim := f.user("tim-drake", "gotham.detective")
+	me := f.session(tim)
+	_, broad := f.mint(me, tim.ID, "gotham:patrol", "gotham:cases.read")
+	_, narrow := f.mint(me, tim.ID, "gotham:cases.read")
+	_, twin := f.mint(me, tim.ID, "gotham:cases.read")
+	np := f.keyPrincipal(tim, narrow)
+	status := func(id string, want auth.KeyStatus) {
+		t.Helper()
+		if got := f.key(id).Status; got != want {
+			t.Fatalf("key %s is %s, want %s", id, got, want)
+		}
+	}
+
+	if err := f.svc.SetAPIKeyStatus(ctx, me, broad.ID, auth.KeyDisabled); err != nil {
+		t.Fatal(err)
+	}
+	wantErr(t, "the narrow key re-enables the broad one", f.svc.SetAPIKeyStatus(ctx, np, broad.ID, auth.KeyActive), auth.ErrScopeEscalation)
+	wantErr(t, "the narrow key revokes the broad one", f.svc.RevokeAPIKey(ctx, np, broad.ID), auth.ErrScopeEscalation)
+	status(broad.ID, auth.KeyDisabled)
+
+	if err := f.svc.SetAPIKeyStatus(ctx, np, twin.ID, auth.KeyDisabled); err != nil {
+		t.Fatalf("a key disabling a key it could create: %v", err)
+	}
+	wantErr(t, "a key re-enables a key it could create", f.svc.SetAPIKeyStatus(ctx, np, twin.ID, auth.KeyActive), auth.ErrDenied)
+	status(twin.ID, auth.KeyDisabled)
+
+	for _, id := range []string{broad.ID, twin.ID} {
+		if err := f.svc.SetAPIKeyStatus(ctx, me, id, auth.KeyActive); err != nil {
+			t.Fatalf("the owner's interactive re-enable of %s: %v", id, err)
+		}
+		status(id, auth.KeyActive)
+	}
+	if err := f.svc.RevokeAPIKey(ctx, np, twin.ID); err != nil {
+		t.Fatalf("a key revoking a key it could create: %v", err)
+	}
+	status(twin.ID, auth.KeyRevoked)
+}
+
+// §4.13: Gordon disables Tim's broad key. Neither a narrower key of Tim's
+// nor an equally broad one can undo it; Tim's interactive sign-in can, as at
+// HEAD (PATCH /api-keys/:id refused every key).
+func TestAPIKey_KeyCannotUndoAManagersDisable(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	gordon := f.user("jim-gordon", roleCommissioner)
+	tim := f.user("tim-drake", "gotham.detective")
+	me := f.session(tim)
+	_, broad := f.mint(me, tim.ID, "gotham:patrol", "gotham:cases.read")
+	_, peer := f.mint(me, tim.ID, "gotham:patrol", "gotham:cases.read")
+	_, narrow := f.mint(me, tim.ID, "gotham:cases.read")
+	if err := f.svc.SetAPIKeyStatus(ctx, f.session(gordon), broad.ID, auth.KeyDisabled); err != nil {
+		t.Fatalf("the manager's disable: %v", err)
+	}
+	wantErr(t, "a narrower key", f.svc.SetAPIKeyStatus(ctx, f.keyPrincipal(tim, narrow), broad.ID, auth.KeyActive), auth.ErrScopeEscalation)
+	wantErr(t, "an equally broad key", f.svc.SetAPIKeyStatus(ctx, f.keyPrincipal(tim, peer), broad.ID, auth.KeyActive), auth.ErrDenied)
+	if got := f.key(broad.ID).Status; got != auth.KeyDisabled {
+		t.Fatalf("a key undid the manager's disable: %s", got)
+	}
+	if err := f.svc.SetAPIKeyStatus(ctx, me, broad.ID, auth.KeyActive); err != nil {
+		t.Fatalf("the owner's interactive re-enable: %v", err)
+	}
+}
+
+// §4.4: the effective set a key manages with is read now, and the checker it
+// presented bounds it too. Once Tim is a viewer, his wide key, through a
+// checker compiled while he was a detective, may not revoke a case-files
+// key; a checker compiled while he was a viewer may not either after he is
+// promoted back. A checker compiled now may.
+func TestAPIKey_KeyManagementReadsTheEffectiveSetNow(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	tim := f.user("tim-drake", "gotham.detective")
+	_, wide := f.mint(f.session(tim), tim.ID, "gotham:patrol", "gotham:cases.read")
+	_, files := f.mint(f.session(tim), tim.ID, "gotham:cases.read")
+	stale := f.keyPrincipal(tim, wide)
+	viewer := f.setRoles(tim.ID, rbac.RoleViewer)
+	wantErr(t, "after a demotion", f.svc.RevokeAPIKey(ctx, stale, files.ID), auth.ErrScopeEscalation)
+	narrowed := f.keyPrincipal(viewer, wide)
+	detective := f.setRoles(tim.ID, "gotham.detective")
+	wantErr(t, "a checker compiled before a promotion", f.svc.RevokeAPIKey(ctx, narrowed, files.ID), auth.ErrScopeEscalation)
+	if got := f.key(files.ID).Status; got != auth.KeyActive {
+		t.Fatalf("a refused revoke wrote %s", got)
+	}
+	if err := f.svc.RevokeAPIKey(ctx, f.keyPrincipal(detective, wide), files.ID); err != nil {
+		t.Fatalf("a checker compiled now: %v", err)
+	}
+}
