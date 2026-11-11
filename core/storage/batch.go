@@ -1,5 +1,5 @@
 // file: core/storage/batch.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 95428f24-dcaf-4b52-bcb8-b5a04189097c
 // last-edited: 2026-11-11
 
