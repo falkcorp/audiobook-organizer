@@ -1,18 +1,19 @@
-// file: internal/server/middleware/cfaccess.go
+// file: internal/cfaccess/binder.go
 // version: 1.8.1
 // guid: 8d1a4f92-3c07-4b56-9e28-6a0b5c2e7d41
 // last-edited: 2026-11-11
 
-package middleware
+package cfaccess
 
 import (
 	"errors"
 	"log/slog"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
-	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 )
 
@@ -52,13 +53,36 @@ type CFAccessAuthenticator struct {
 	// the middleware a pass-through.
 	verifier CFAssertionVerifier
 	cfg      *legacyoauth.Config
-	store    cfAccessStore
+	store    legacyoauth.UserStore
+	hooks    Hooks
+}
+
+// Hooks is what the gin binder takes from the gin auth chain it feeds, so this
+// package never imports internal/server/middleware (which imports it). The
+// middleware package builds them (CFAccessHooks); every field is required, and
+// the binder is a pass-through while one is missing. F4-08 deletes the binder
+// with the gin chain.
+type Hooks struct {
+	// KeyPresented reports whether r presents an API key. A request that does
+	// is authenticated by the key, never by an Access assertion riding along
+	// with it.
+	KeyPresented func(r *http.Request) bool
+	// BindUser records user in the gin context as the request's authenticated
+	// user. That context key is load-bearing for RequireAuth (it skips its own
+	// session check when it is set), so it is the chain's to set.
+	BindUser func(c *gin.Context, user *database.User)
+	// Permissions is the union of user's role permissions.
+	Permissions func(user *database.User) []auth.Permission
+}
+
+func (h Hooks) complete() bool {
+	return h.KeyPresented != nil && h.BindUser != nil && h.Permissions != nil
 }
 
 // NewCFAccessAuthenticator wires the verifier, config, and store. Any nil → the
 // middleware becomes a no-op pass-through.
-func NewCFAccessAuthenticator(verifier *cfaccess.CFAccessVerifier, cfg *legacyoauth.Config, store cfAccessStore) *CFAccessAuthenticator {
-	a := &CFAccessAuthenticator{cfg: cfg, store: store}
+func NewCFAccessAuthenticator(verifier *CFAccessVerifier, cfg *legacyoauth.Config, store legacyoauth.UserStore, hooks Hooks) *CFAccessAuthenticator {
+	a := &CFAccessAuthenticator{cfg: cfg, store: store, hooks: hooks}
 	if verifier != nil {
 		a.verifier = verifier
 	}
@@ -68,8 +92,8 @@ func NewCFAccessAuthenticator(verifier *cfaccess.CFAccessVerifier, cfg *legacyoa
 // NewCFAccessAuthenticatorWithVerifier is NewCFAccessAuthenticator for any
 // CFAssertionVerifier (a test's fake). A nil verifier makes the middleware a
 // pass-through.
-func NewCFAccessAuthenticatorWithVerifier(verifier CFAssertionVerifier, cfg *legacyoauth.Config, store cfAccessStore) *CFAccessAuthenticator {
-	return &CFAccessAuthenticator{verifier: verifier, cfg: cfg, store: store}
+func NewCFAccessAuthenticatorWithVerifier(verifier CFAssertionVerifier, cfg *legacyoauth.Config, store legacyoauth.UserStore, hooks Hooks) *CFAccessAuthenticator {
+	return &CFAccessAuthenticator{verifier: verifier, cfg: cfg, store: store, hooks: hooks}
 }
 
 // CloudflareAccessAuth returns a middleware that, when a valid Cf-Access-Jwt-Assertion
@@ -80,20 +104,20 @@ func NewCFAccessAuthenticatorWithVerifier(verifier CFAssertionVerifier, cfg *leg
 // spoofable Cf-Access-Authenticated-User-Email header — is the trust anchor.
 func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if a == nil || a.verifier == nil || a.cfg == nil || a.store == nil {
+		if a == nil || a.verifier == nil || a.cfg == nil || a.store == nil || !a.hooks.complete() {
 			c.Next()
 			return
 		}
 		// A request that presents an API key is authenticated by the key
 		// (RequireAuth), never by an Access assertion riding along with it.
-		if APIKeyFromRequest(c.Request) != "" {
+		if a.hooks.KeyPresented(c.Request) {
 			c.Next()
 			return
 		}
 		// Prefer the Cf-Access-Jwt-Assertion header; fall back to the CF_Authorization
 		// cookie (browser flows may deliver only the cookie — Cloudflare says the header
 		// is "not guaranteed to be passed" in some setups).
-		raw := c.GetHeader(cfaccess.CFAccessHeader)
+		raw := c.GetHeader(CFAccessHeader)
 		if raw == "" {
 			if ck, err := c.Cookie("CF_Authorization"); err == nil {
 				raw = ck
@@ -108,7 +132,7 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 		// expiry and AUD, but no email claim) as ErrNonIdentityAssertion. That
 		// token is still proof the request passed Cloudflare Access, so it
 		// sets the verified marker; it just resolves no user.
-		if err == nil || errors.Is(err, cfaccess.ErrNonIdentityAssertion) {
+		if err == nil || errors.Is(err, ErrNonIdentityAssertion) {
 			MarkCFAccessVerified(c)
 		}
 		if err != nil {
@@ -124,8 +148,8 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 			c.Next() // not allowlisted / not verified — normal auth will 401
 			return
 		}
-		c.Set(contextUserKey, user)
-		perms := EffectivePermissionsFor(a.store, user)
+		a.hooks.BindUser(c, user)
+		perms := a.hooks.Permissions(user)
 		ctx := auth.WithUser(c.Request.Context(), user)
 		ctx = auth.WithPermissions(ctx, perms)
 		ctx = auth.WithMethod(ctx, auth.MethodCFAccess)
@@ -135,14 +159,4 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
-}
-
-// cfAccessStore is what this authenticator forwards its store into: the
-// identity resolution in legacyoauth.Config.ResolveUser, and the role lookup behind
-// EffectivePermissionsFor. Both already declare narrow interfaces, so both are
-// embedded BY NAME -- two entries, and this re-narrows on its own if either
-// does. It was database.Store -- 398 methods -- until 2026-08-19.
-type cfAccessStore interface {
-	legacyoauth.UserStore
-	roleResolver
 }

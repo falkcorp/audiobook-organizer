@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package server
 
@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
@@ -61,7 +62,7 @@ func bootstrapAttemptStatus(t *testing.T, remote, cfIP string, verified bool) in
 	c, _ := gin.CreateTestContext(w)
 	c.Request = req
 	if verified {
-		servermiddleware.MarkCFAccessVerified(c)
+		cfaccess.MarkCFAccessVerified(c)
 	}
 	s.handleBootstrap(c)
 	return w.Code

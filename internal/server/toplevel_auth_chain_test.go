@@ -1,7 +1,7 @@
 // file: internal/server/toplevel_auth_chain_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 3e8b56d1-04af-42c7-9b18-5d7a2f0c6e94
-// last-edited: 2026-08-01
+// last-edited: 2026-11-11
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// boundUserKey mirrors the context key that middleware.CloudflareAccessAuth sets
+// boundUserKey mirrors the context key that cfaccess.CloudflareAccessAuth sets
 // and middleware.RequireAuth early-outs on. The real constant is unexported in
 // the middleware package; the contract it encodes — "an upstream stage may bind
 // a user, and the auth guard must then admit without a session" — is locked

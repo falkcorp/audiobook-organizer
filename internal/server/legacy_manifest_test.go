@@ -1,7 +1,7 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package server
 
@@ -300,7 +300,7 @@ func (s *Server) wireArkham(g *gin.RouterGroup, server *Server) {
 	g.POST("/a", og())
 	g.POST("/b", server.ownerGateWhenOwnerSet())
 	g.POST("/c", (*Server).ownerGateWhenOwnerSet(s))
-	g.POST("/d", servermiddleware.RequireOwner(nil, "", nil))
+	g.POST("/d", cfaccess.RequireOwner(nil, "", nil))
 }
 
 func (s *Server) ownerCredRoute() { _ = s.ownerGateWhenOwnerSet() }

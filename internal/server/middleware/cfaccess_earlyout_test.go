@@ -1,5 +1,5 @@
 // file: internal/server/middleware/cfaccess_earlyout_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2c9e0b74-6a31-4d58-8f07-1b5a6c2e9d43
 
 package middleware
@@ -33,7 +33,7 @@ func TestRequireAuth_NoCredentials_Still401(t *testing.T) {
 	}
 }
 
-// Conversely, an upstream stage that binds a user (as CloudflareAccessAuth does after a
+// Conversely, an upstream stage that binds a user (as cfaccess.CloudflareAccessAuth does after a
 // verified JWT + allowlist) lets RequireAuth admit the request without a session token.
 // This documents/locks the intended early-out behavior.
 func TestRequireAuth_UpstreamBoundUser_Admitted(t *testing.T) {

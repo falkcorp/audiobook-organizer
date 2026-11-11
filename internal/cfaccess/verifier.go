@@ -70,6 +70,15 @@ func CFAssertionCommonName(err error) string {
 	return ""
 }
 
+// CFAssertionVerifier is the slice of *CFAccessVerifier the ABS identity
+// resolver, the gin binder and the service-token bouncer need. Declared as an
+// interface so tests can inject a verifier without standing up Cloudflare's
+// JWKS endpoint. It moved here from internal/server/middleware/absauth.go
+// (04 §2.4), so the import runs absauth -> cfaccess and never back.
+type CFAssertionVerifier interface {
+	Verify(ctx context.Context, rawJWT string) (*legacyoauth.IdentityClaims, error)
+}
+
 // CFAccessHeader is the request header Cloudflare Access injects with the signed
 // application token once a user has authenticated at the edge.
 const CFAccessHeader = "Cf-Access-Jwt-Assertion"

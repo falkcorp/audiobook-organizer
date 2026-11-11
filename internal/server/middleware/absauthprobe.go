@@ -70,7 +70,7 @@ func ABSAuthProbe() gin.HandlerFunc {
 			if strings.HasPrefix(strings.ToUpper(ck.Name), "CF_") {
 				cfCookieLen += len(ck.Value)
 			}
-			if strings.EqualFold(ck.Name, CFAuthorizationCookie) {
+			if strings.EqualFold(ck.Name, cfaccess.CFAuthorizationCookie) {
 				cfAuthLen += len(ck.Value)
 			}
 		}

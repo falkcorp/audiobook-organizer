@@ -1,17 +1,18 @@
 // file: internal/server/owner_routes.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 3e9a6c25-1f74-4b8d-a0c2-5d7e8b4f1a63
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package server
 
 import (
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // ownerGateWhenOwnerSet is the owner gate for routes that can UNSET the owner:
@@ -26,7 +27,7 @@ import (
 // s.perm / RequireAdmin.
 func (s *Server) ownerGateWhenOwnerSet() gin.HandlerFunc {
 	ownerEmail := func() string { return config.Snapshot().OwnerEmail }
-	return servermiddleware.RequireOwner(ownerEmail, "", func(*gin.Context) bool {
+	return cfaccess.RequireOwner(ownerEmail, "", func(*gin.Context) bool {
 		return strings.TrimSpace(ownerEmail()) != ""
 	})
 }

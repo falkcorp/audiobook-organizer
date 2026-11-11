@@ -6,7 +6,6 @@
 package middleware
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -49,13 +48,6 @@ const (
 	ABSModeAPIKey = "apikey"
 )
 
-// CFAssertionVerifier is the slice of *cfaccess.CFAccessVerifier this middleware needs.
-// Declared as an interface so tests can inject a verifier without standing up
-// Cloudflare's JWKS endpoint.
-type CFAssertionVerifier interface {
-	Verify(ctx context.Context, rawJWT string) (*legacyoauth.IdentityClaims, error)
-}
-
 // ABSIdentityStore is the narrow store slice the ABS identity resolver needs.
 // database.Store satisfies it (PebbleStore implements GetABSSession).
 type ABSIdentityStore interface {
@@ -82,7 +74,7 @@ type ABSIdentityStore interface {
 //     GET (Mode B).
 //  3. Else 401.
 //
-// WHY THIS IS NOT CloudflareAccessAuth: that middleware is FAIL-OPEN on /api/v1 — an
+// WHY THIS IS NOT cfaccess.CloudflareAccessAuth: that middleware is FAIL-OPEN on /api/v1 — an
 // unverifiable assertion falls through to RequireAuth, which then enforces a session
 // or API key. On the ABS surface there is no such second gate, so falling through
 // would be an authentication bypass. Here every failure mode is terminal:
@@ -99,7 +91,7 @@ type ABSIdentityStore interface {
 // trivially forged on a direct-to-origin request. The signed JWT is the only anchor.
 type ABSIdentityResolver struct {
 	cfg      *absauth.Config
-	verifier CFAssertionVerifier
+	verifier cfaccess.CFAssertionVerifier
 	oauthCfg *legacyoauth.Config
 	store    ABSIdentityStore
 	// now is the clock for token expiry, session liveness and session extension.
@@ -110,7 +102,7 @@ type ABSIdentityResolver struct {
 
 // NewABSIdentityResolver wires the resolver. A nil cfg, or a cfg whose ABS API is
 // disabled, makes every request 401 — a wiring mistake must never open a door.
-func NewABSIdentityResolver(cfg *absauth.Config, verifier CFAssertionVerifier, oauthCfg *legacyoauth.Config, store ABSIdentityStore) *ABSIdentityResolver {
+func NewABSIdentityResolver(cfg *absauth.Config, verifier cfaccess.CFAssertionVerifier, oauthCfg *legacyoauth.Config, store ABSIdentityStore) *ABSIdentityResolver {
 	return &ABSIdentityResolver{cfg: cfg, verifier: verifier, oauthCfg: oauthCfg, store: store, now: time.Now}
 }
 
@@ -173,11 +165,11 @@ func (r *ABSIdentityResolver) Enabled() bool {
 // ServiceTokenBouncer returns the service-token browser-recovery helper on this
 // resolver's Cloudflare Access verifier, or nil when CF assertions are not enabled
 // (the SSO browser hop then has nothing to recover with). See cfbounce.go.
-func (r *ABSIdentityResolver) ServiceTokenBouncer() *CFServiceTokenBouncer {
+func (r *ABSIdentityResolver) ServiceTokenBouncer() *cfaccess.CFServiceTokenBouncer {
 	if !r.CFAssertionsEnabled() {
 		return nil
 	}
-	return NewCFServiceTokenBouncer(r.verifier)
+	return cfaccess.NewCFServiceTokenBouncer(r.verifier, KeyPresented)
 }
 
 // Config exposes the resolved ABS config to handlers wired alongside the resolver.
@@ -284,7 +276,7 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 		}
 		// Everything else FAILS CLOSED — forged signature, wrong issuer, wrong aud,
 		// expired. This is the single most important difference from
-		// CloudflareAccessAuth: no c.Next(), no fall-through to the bearer path. A
+		// cfaccess.CloudflareAccessAuth: no c.Next(), no fall-through to the bearer path. A
 		// bad credential must not be rescued by presenting a second one.
 		return nil, absErr(http.StatusUnauthorized, "assertion-invalid",
 			"invalid Cloudflare Access assertion", ABSModeCF)
@@ -707,7 +699,7 @@ func ABSAuthMode(c *gin.Context) string {
 // absAssertionFromRequest reads the signed Cloudflare Access assertion.
 //
 // Header only, deliberately: the CF_Authorization cookie fallback that
-// CloudflareAccessAuth keeps for browser flows is irrelevant to native ABS clients
+// cfaccess.CloudflareAccessAuth keeps for browser flows is irrelevant to native ABS clients
 // (iOS sandboxes the browser cookie jar away from an app's URLSession), and
 // Cloudflare's own guidance for API clients is to validate this header. Fewer inputs,
 // smaller surface.

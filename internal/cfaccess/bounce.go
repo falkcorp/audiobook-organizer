@@ -1,9 +1,9 @@
-// file: internal/server/middleware/cfbounce.go
+// file: internal/cfaccess/bounce.go
 // version: 1.3.2
 // guid: 3b7e1d52-9c04-4a68-b1f3-5d2a8e60c9b7
 // last-edited: 2026-11-11
 
-package middleware
+package cfaccess
 
 import (
 	"errors"
@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	logging "github.com/falkcorp/mediacore/log"
 )
@@ -109,15 +108,20 @@ type CFNavInspection struct {
 // CFServiceTokenBouncer holds the verifier the recovery decisions run on. A nil
 // bouncer never matches anything.
 type CFServiceTokenBouncer struct {
-	verifier CFAssertionVerifier
+	verifier     CFAssertionVerifier
+	keyPresented func(*http.Request) bool
 }
 
-// NewCFServiceTokenBouncer returns a bouncer on v, or nil when v is nil.
-func NewCFServiceTokenBouncer(v CFAssertionVerifier) *CFServiceTokenBouncer {
-	if v == nil {
+// NewCFServiceTokenBouncer returns a bouncer on v, or nil when v or
+// keyPresented is nil: a bouncer that cannot tell a key-bearing request from
+// a browser one could bounce an API client, so it bounces nothing. keyPresented
+// is Hooks.KeyPresented: a request carrying an API key is authenticated by the
+// key and never bounced.
+func NewCFServiceTokenBouncer(v CFAssertionVerifier, keyPresented func(*http.Request) bool) *CFServiceTokenBouncer {
+	if v == nil || keyPresented == nil {
 		return nil
 	}
-	return &CFServiceTokenBouncer{verifier: v}
+	return &CFServiceTokenBouncer{verifier: v, keyPresented: keyPresented}
 }
 
 // IsBrowserNavigation reports a top-level document navigation: GET with
@@ -161,7 +165,7 @@ func (b *CFServiceTokenBouncer) inspect(c *gin.Context, requireNav bool) CFNavIn
 	dest := cfSecFetchLogValue(r.Header.Get("Sec-Fetch-Dest"))
 	// Same test as CloudflareAccessAuth: a key authenticates the request, an
 	// assertion riding along with it is not considered.
-	if r.Method != http.MethodGet || strings.Contains(r.UserAgent(), "AppleCoreMedia") || APIKeyFromRequest(r) != "" {
+	if r.Method != http.MethodGet || strings.Contains(r.UserAgent(), "AppleCoreMedia") || b.keyPresented(r) {
 		return CFNavInspection{}
 	}
 	nav := IsBrowserNavigation(r)
@@ -170,15 +174,15 @@ func (b *CFServiceTokenBouncer) inspect(c *gin.Context, requireNav bool) CFNavIn
 		// Sec-Fetch headers at all) say so, so a device test can tell whether a
 		// client that needed recovery was passed over for want of the headers.
 		if mode == "" && dest == "" && strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
-			if raw := strings.TrimSpace(c.GetHeader(cfaccess.CFAccessHeader)); raw != "" {
-				if _, err := b.verifier.Verify(r.Context(), raw); errors.Is(err, cfaccess.ErrNonIdentityAssertion) {
-					return CFNavInspection{SkippedNoSecFetch: true, CommonName: strings.TrimSpace(cfaccess.CFAssertionCommonName(err))}
+			if raw := strings.TrimSpace(c.GetHeader(CFAccessHeader)); raw != "" {
+				if _, err := b.verifier.Verify(r.Context(), raw); errors.Is(err, ErrNonIdentityAssertion) {
+					return CFNavInspection{SkippedNoSecFetch: true, CommonName: strings.TrimSpace(CFAssertionCommonName(err))}
 				}
 			}
 		}
 		return CFNavInspection{}
 	}
-	raw := strings.TrimSpace(c.GetHeader(cfaccess.CFAccessHeader))
+	raw := strings.TrimSpace(c.GetHeader(CFAccessHeader))
 	if raw == "" {
 		return CFNavInspection{}
 	}
@@ -187,16 +191,16 @@ func (b *CFServiceTokenBouncer) inspect(c *gin.Context, requireNav bool) CFNavIn
 	switch {
 	case err == nil:
 		return CFNavInspection{Kind: CFNavPerson, SecFetchMode: mode, SecFetchDest: dest}
-	case !errors.Is(err, cfaccess.ErrNonIdentityAssertion):
+	case !errors.Is(err, ErrNonIdentityAssertion):
 		return CFNavInspection{} // forged / expired / wrong aud: not ours to recover
 	}
 	out := CFNavInspection{
-		Kind: CFNavServiceToken, CommonName: strings.TrimSpace(cfaccess.CFAssertionCommonName(err)),
+		Kind: CFNavServiceToken, CommonName: strings.TrimSpace(CFAssertionCommonName(err)),
 		SecFetchMode: mode, SecFetchDest: dest,
 	}
 	if ck, cerr := c.Cookie(CFAuthorizationCookie); cerr == nil && strings.TrimSpace(ck) != "" {
 		_, verr := b.verifier.Verify(ctx, strings.TrimSpace(ck))
-		out.CookiePoisoned = errors.Is(verr, cfaccess.ErrNonIdentityAssertion)
+		out.CookiePoisoned = errors.Is(verr, ErrNonIdentityAssertion)
 		out.CookieIsPerson = verr == nil
 	}
 	return out

@@ -1,9 +1,9 @@
-// file: internal/server/middleware/owner_guard.go
-// version: 1.2.0
+// file: internal/cfaccess/owner_guard.go
+// version: 1.2.1
 // guid: 8c4f2e17-9a63-4d05-b1e8-6f3a7d2c5b90
-// last-edited: 2026-10-09
+// last-edited: 2026-11-11
 
-package middleware
+package cfaccess
 
 import (
 	"net/http"
