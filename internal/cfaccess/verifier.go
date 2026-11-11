@@ -14,7 +14,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	oidc "github.com/coreos/go-oidc/v3/oidc"
 
@@ -70,6 +72,13 @@ func CFAssertionCommonName(err error) string {
 	return ""
 }
 
+// ErrKeysUnavailable reports that Cloudflare's signing keys could not be
+// fetched, so the token could not be judged either way. It is not "the token
+// is invalid": a caller must not refuse a request on it as it would for a
+// forged token, and must not accept one either (fail closed: no identity is
+// granted). Match with errors.Is; it is returned wrapped and carries no URL.
+var ErrKeysUnavailable = errors.New("cfaccess: signing keys unavailable")
+
 // CFAssertionVerifier is the slice of *CFAccessVerifier the ABS identity
 // resolver, the gin binder and the service-token bouncer need. Declared as an
 // interface so tests can inject a verifier without standing up Cloudflare's
@@ -94,7 +103,21 @@ type CFAccessVerifier struct {
 // NewCFAccessVerifier builds a verifier bound to the team domain (e.g.
 // "myteam.cloudflareaccess.com") and the Access application AUD tag. It uses a remote
 // keyset that refreshes automatically as Cloudflare rotates signing keys.
+//
+// Every key fetch goes through keysTransport, so a fetch that fails (the
+// network, a non-200 answer, a body that is not a key set) surfaces as
+// ErrKeysUnavailable and never as "this token is forged": the extension opens
+// to the next method on the first and refuses on the second.
 func NewCFAccessVerifier(ctx context.Context, teamDomain, aud string) (*CFAccessVerifier, error) {
+	return newCFAccessVerifier(ctx, teamDomain, aud, nil)
+}
+
+// keysTimeout bounds one key-set fetch.
+const keysTimeout = 10 * time.Second
+
+// newCFAccessVerifier is NewCFAccessVerifier over an HTTP client; a test
+// passes the one that trusts its fake team domain's certificate.
+func newCFAccessVerifier(ctx context.Context, teamDomain, aud string, hc *http.Client) (*CFAccessVerifier, error) {
 	teamDomain = strings.TrimSpace(teamDomain)
 	aud = strings.TrimSpace(aud)
 	if teamDomain == "" || aud == "" {
@@ -102,7 +125,16 @@ func NewCFAccessVerifier(ctx context.Context, teamDomain, aud string) (*CFAccess
 	}
 	issuer := "https://" + teamDomain
 	certsURL := issuer + "/cdn-cgi/access/certs"
-	keySet := oidc.NewRemoteKeySet(ctx, certsURL)
+	client := &http.Client{Timeout: keysTimeout}
+	if hc != nil {
+		c := *hc
+		client = &c
+		if client.Timeout == 0 {
+			client.Timeout = keysTimeout
+		}
+	}
+	client.Transport = keysTransport{base: client.Transport}
+	keySet := probingKeySet{inner: oidc.NewRemoteKeySet(oidc.ClientContext(ctx, client), certsURL)}
 	verifier := oidc.NewVerifier(issuer, keySet, &oidc.Config{ClientID: aud}) // ClientID = expected aud
 	return &CFAccessVerifier{verifier: verifier}, nil
 }
@@ -111,8 +143,14 @@ func NewCFAccessVerifier(ctx context.Context, teamDomain, aud string) (*CFAccess
 // returns the verified identity. Cloudflare only mints this token after its own IdP
 // login, so the email is verified.
 func (v *CFAccessVerifier) Verify(ctx context.Context, rawJWT string) (*legacyoauth.IdentityClaims, error) {
-	tok, err := v.verifier.Verify(ctx, rawJWT)
+	pr := &keyProbe{}
+	tok, err := v.verifier.Verify(context.WithValue(ctx, keyProbeKey{}, pr), rawJWT)
 	if err != nil {
+		if pr.unavailable.Load() {
+			// go-oidc wraps a key-set error with %v, which drops the chain
+			// errors.Is would follow; the probe saw it first-hand.
+			return nil, fmt.Errorf("cfaccess: verify jwt: %w", ErrKeysUnavailable)
+		}
 		return nil, fmt.Errorf("cfaccess: verify jwt: %w", err)
 	}
 	var claims struct {
