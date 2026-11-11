@@ -30,12 +30,11 @@ import (
 	"sync"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/singleflight"

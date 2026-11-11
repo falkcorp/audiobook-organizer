@@ -10,10 +10,9 @@ import (
 	"fmt"
 	"strings"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Sentinel errors so callers can map to the right HTTP status (both → 403, never 500).

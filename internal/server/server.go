@@ -9,8 +9,6 @@ import (
 	"context"
 	"fmt"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"errors"
 	"log/slog"
 	"net/http"
@@ -53,6 +51,7 @@ import (
 	operationshandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	diagflight "github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/gin-gonic/gin"
@@ -69,7 +68,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	acoustidplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
 	dedupplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
-
 	// opscatalog is the one list of op bundles and of service-registry
 	// plugins (it replaced internal/plugins/plugins.go, 05-PR7): importing it
 	// links the five plugin packages, whose init() registers them.

@@ -13,11 +13,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
 )

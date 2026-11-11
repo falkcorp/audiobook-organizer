@@ -18,10 +18,9 @@ import (
 	"strings"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Family names used in Plan.Counts, Conflict.Family and UserMergeOp.Family.

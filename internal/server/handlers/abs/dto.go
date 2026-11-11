@@ -8,9 +8,8 @@ package abs
 import (
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // The DTOs in this file are a TYPE CONTRACT, not a convenience. Both target clients

@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
-
 	authpw "github.com/falkcorp/mediacore/auth/password"
 )
 

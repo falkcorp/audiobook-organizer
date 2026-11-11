@@ -14,14 +14,13 @@ import (
 	"strings"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 

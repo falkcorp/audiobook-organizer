@@ -8,13 +8,11 @@ package abs
 import (
 	"net/http"
 
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
-
-	coreaudit "github.com/falkcorp/mediacore/audit"
-
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreaudit "github.com/falkcorp/mediacore/audit"
 )
 
 // Authorize handles POST /api/authorize — the endpoint an already-logged-in client
