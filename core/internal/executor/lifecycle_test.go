@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-11
 
@@ -523,6 +523,65 @@ func TestStandDown_ClaimInFlightIsDeferred(t *testing.T) {
 		if r := h.waitState(id, tasks.StateSucceeded, tasks.StateFailed); r.State != tasks.StateSucceeded || !ran.Load() {
 			t.Fatalf("after the hold: %s (%q), ran %v; want succeeded", r.State, r.Error, ran.Load())
 		}
+	})
+}
+
+// TestLedger_StaleAttemptWritesNothing (5T.7, synctest; review of #4586):
+// a second executor over the same store (the first one's process presumed
+// dead) resumes a run the first is still executing. The first executor's
+// attempt does not know it was superseded, so its in-memory fence is
+// intact; its late checkpoint is refused (ErrFenced) by the ledger's check
+// of the stored attempt and fence, and the second attempt restores the
+// value written before the takeover, not the stale one.
+func TestLedger_StaleAttemptWritesNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan int32, 2)
+		poke := make(chan chan error)
+		check := make(chan struct{})
+		restored := make(chan int, 1)
+		var calls atomic.Int32
+		def := taskDef("gotham.patrol", func(rc *tasks.RC, _ noParams) (string, error) {
+			n := calls.Add(1)
+			if n > 1 {
+				started <- n
+				<-check
+				var v int
+				_, err := rc.Restore(&v)
+				restored <- v
+				return "second attempt", err
+			}
+			if err := rc.Checkpoint(1); err != nil {
+				return "", err
+			}
+			started <- n
+			reply := <-poke
+			time.Sleep(time.Second) // past min_checkpoint_interval, so the checkpoint flushes now
+			reply <- rc.Checkpoint(99)
+			<-rc.Context().Done()
+			return "", context.Cause(rc.Context())
+		})
+		defs := []tasks.Definition{def}
+		cfg := func(o *Options) {
+			o.Config = Config{DispatchTick: time.Second, WatchdogInterval: time.Hour, MinCheckpointInterval: time.Nanosecond}
+		}
+		h := newHarness(t, defs, cfg)
+		id := h.start("gotham.patrol", tasks.StartRequest{})
+		<-started
+		next := onStores(t, h.fs, h.stores, h.ks, defs, cfg, true)
+		<-started
+		if r := next.get(id); r.Attempt != 2 || r.State != tasks.StateRunning {
+			t.Fatalf("after the takeover: %s attempt %d, want running attempt 2", r.State, r.Attempt)
+		}
+		reply := make(chan error, 1)
+		poke <- reply
+		if err := <-reply; !isErr(err, tasks.ErrFenced) {
+			t.Fatalf("the superseded attempt's checkpoint: %v, want ErrFenced", err)
+		}
+		close(check)
+		if v := <-restored; v != 1 {
+			t.Fatalf("the second attempt restored %d, want 1 (the superseded attempt's 99 must not land)", v)
+		}
+		next.waitState(id, tasks.StateSucceeded)
 	})
 }
 

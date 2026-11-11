@@ -1,5 +1,5 @@
 // file: core/internal/executor/writer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d2387b9f-4100-4a09-af79-f3829a530ac5
 // last-edited: 2026-11-11
 
@@ -11,8 +11,36 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 )
+
+// intentsOf counts a run's write-ahead intents.
+func (h *harness) intentsOf(id tasks.RunID) int {
+	h.t.Helper()
+	n := 0
+	for _, err := range h.stores.Runs.Pages(context.Background(), id, tasks.PageQuery{Page: tasks.PageIntents, Limit: 1000}) {
+		if err != nil {
+			h.t.Fatalf("intents: %v", err)
+		}
+		n++
+	}
+	return n
+}
+
+// parkedIntents is a run store whose AppendIntent parks until the test lets
+// it go: a stop sent while it is parked lands between Do's intent and fn.
+type parkedIntents struct {
+	tasks.RunStore
+	reached chan<- struct{}
+	release <-chan struct{}
+}
+
+func (p parkedIntents) AppendIntent(ctx context.Context, b *storage.Batch, id tasks.RunID, seq uint64, w tasks.Write, c []tasks.Change) error {
+	p.reached <- struct{}{}
+	<-p.release
+	return p.RunStore.AppendIntent(ctx, b, id, seq, w, c)
+}
 
 // doOutcome is what a body's write after its stop saw.
 type doOutcome struct {
@@ -95,6 +123,9 @@ func TestWriter_RefusesOnceTheRunIsStopped(t *testing.T) {
 				if !isErr(o.err, tasks.ErrFenced) || o.called {
 					t.Fatalf("write after the %s: err %v, fn called %v; want ErrFenced and fn never called", c.name, o.err, o.called)
 				}
+				if n := h.intentsOf(id); n != 0 {
+					t.Fatalf("the refused write recorded %d intent(s); a stopped run records none", n)
+				}
 				if c.name == "cancel" {
 					if r := h.get(id); r.FenceEpoch != before.FenceEpoch {
 						t.Fatalf("fence epoch %d, was %d: the refusal must not wait for the grace", r.FenceEpoch, before.FenceEpoch)
@@ -103,4 +134,40 @@ func TestWriter_RefusesOnceTheRunIsStopped(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestWriter_StopDuringIntentKeepsFnFromRunning (5T.3.5, synctest): a
+// cancel that lands while Do writes its write-ahead intent still keeps fn
+// from running: the permit is checked again after the intent.
+func TestWriter_StopDuringIntentKeepsFnFromRunning(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reached := make(chan struct{}, 1)
+		release := make(chan struct{})
+		got := make(chan doOutcome, 1)
+		def := taskDef("gotham.scan", func(rc *tasks.RC, _ noParams) (string, error) {
+			var o doOutcome
+			o.err = rc.Writer().Do(context.Background(), tasks.Write{Name: "gotham.note", Resource: casesRef("gotham.scan"),
+				Subject: tasks.ResID("gotham", "cases", "riddler")}, func(context.Context) ([]tasks.Change, error) {
+				o.called = true
+				return nil, nil
+			})
+			got <- o
+			<-rc.Context().Done()
+			return "", context.Cause(rc.Context())
+		}, withCancel(tasks.Cooperative(time.Hour)))
+		h := newHarness(t, []tasks.Definition{def}, func(o *Options) {
+			synctestConfig(o)
+			o.NewBatch = o.Stores.Runs.(batchOpener).NewBatch
+			o.Stores.Runs = parkedIntents{RunStore: o.Stores.Runs, reached: reached, release: release}
+		})
+		id := h.start("gotham.scan", tasks.StartRequest{})
+		<-reached
+		if err := h.x.CancelAs(context.Background(), id, tasks.Actor{UserID: "gordon"}); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		if o := <-got; !isErr(o.err, tasks.ErrFenced) || o.called {
+			t.Fatalf("write whose intent a cancel overtook: err %v, fn called %v; want ErrFenced and fn never called", o.err, o.called)
+		}
+	})
 }
