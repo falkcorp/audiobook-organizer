@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/restore.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 729b02e6-c9d2-4e68-993b-d4ac02281f97
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package restoreswap
 
@@ -135,7 +135,11 @@ func (s *Swapper) resumeRestore(ctx context.Context, in restorejournal.Intent, r
 		// this swapper (rechecked precedes the rename); c onward is
 		// idempotent, so it resumes as rechecked would.
 		return s.forward(ctx, in, last)
-	case StepSwapped, StepOpened:
+	case StepSwapped, StepOpened, StepRestoreLine, StepHooksDone:
+		// restore_line and hooks_done are the journaling build's steps of P4d
+		// 2 and 3 (hooks.go): a crash after either re-runs the restore boot,
+		// whose hooks are idempotent and whose restore line is found, not
+		// appended twice.
 		return s.restoreBoot(in, last), nil
 	case StepFailed:
 		// An offline escape that started may have moved the failed store

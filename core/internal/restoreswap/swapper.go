@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/swapper.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 1bb086f7-5f58-41ff-80f4-aecc32bca186
 // last-edited: 2026-11-11
 
@@ -520,7 +520,7 @@ func (s *Swapper) last(id string) (string, error) {
 // (05-backup step g), unless the journal already reads it (a crash loop).
 func (s *Swapper) Opened(ctx context.Context, id string) error {
 	last, err := s.last(id)
-	if err != nil || last == StepOpened {
+	if err != nil || afterOpened(last) {
 		return err
 	}
 	return s.appendRec(ctx, id, restorejournal.Record{Step: StepOpened})
