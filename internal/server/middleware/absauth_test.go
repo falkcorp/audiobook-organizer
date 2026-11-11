@@ -16,8 +16,6 @@ import (
 	"testing"
 	"time"
 
-	authpw "github.com/falkcorp/mediacore/auth/password"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
@@ -350,7 +348,7 @@ func TestABSAuth_VerifiedAssertionJITProvisionsAllowlistedUser(t *testing.T) {
 	for _, u := range h.store.users {
 		// A CF-identified user has no password credential and must not be loginable
 		// by password.
-		if ok, _ := authpw.VerifyPassword(u.PasswordHashAlgo, u.PasswordHash, ""); ok {
+		if ok, _ := absauth.Passwords.Verify(u.PasswordHashAlgo, u.PasswordHash, ""); ok {
 			t.Fatal("a JIT-provisioned user must not authenticate with an empty password")
 		}
 	}

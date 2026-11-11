@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+
 	authpw "github.com/falkcorp/mediacore/auth/password"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -42,7 +44,7 @@ func savingCreds(t *testing.T, user *database.User, saved **database.User) *cred
 // hash comes from authpw.HashPassword, the same call rehashPassword makes.
 func absRehashedUser(t *testing.T, password string) *database.User {
 	t.Helper()
-	algo, hash, err := authpw.HashPassword(password)
+	algo, hash, err := absauth.Passwords.Hash(password)
 	require.NoError(t, err)
 	require.Equal(t, authpw.AlgoArgon2id, algo)
 	return &database.User{
@@ -146,9 +148,9 @@ func TestAuthHandler_ChangePassword_AcceptsArgon2idCurrentPassword(t *testing.T)
 	// Web password writes use the shared policy (argon2id), and the algo column
 	// must say so, or the new hash would be read with the wrong algorithm.
 	assert.Equal(t, authpw.AlgoArgon2id, saved.PasswordHashAlgo)
-	ok, _ := authpw.VerifyPassword(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
+	ok, _ := absauth.Passwords.Verify(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
 	assert.True(t, ok)
-	oldOK, _ := authpw.VerifyPassword(saved.PasswordHashAlgo, saved.PasswordHash, "old-password-1")
+	oldOK, _ := absauth.Passwords.Verify(saved.PasswordHashAlgo, saved.PasswordHash, "old-password-1")
 	assert.False(t, oldOK)
 }
 
@@ -211,7 +213,7 @@ func TestAuthHandler_ChangePassword_LegacyEmptyAlgoBcryptRow(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, c.Writer.Status(), w.Body.String())
 	require.NotNil(t, saved)
 	assert.Equal(t, authpw.AlgoArgon2id, saved.PasswordHashAlgo)
-	ok, _ := authpw.VerifyPassword(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
+	ok, _ := absauth.Passwords.Verify(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
 	assert.True(t, ok)
 }
 

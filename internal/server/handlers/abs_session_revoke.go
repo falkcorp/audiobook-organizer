@@ -7,6 +7,7 @@ package handlers
 
 import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	coreaudit "github.com/falkcorp/mediacore/audit"
 )
 
@@ -60,12 +61,12 @@ func RevokeAllABSSessions(r ABSSessionRevoker, userID, reason string) {
 		return
 	}
 	n, err := r.RevokeAllABSSessionsForUser(userID)
-	ev := coreaudit.AuditEvent{Action: "revoke-all", UserID: userID, Reason: reason, Outcome: coreaudit.OutcomeSuccess}
+	ev := coreaudit.AuthAttempt{Action: "revoke-all", UserID: userID, Reason: reason, Outcome: coreaudit.Success}
 	if err != nil {
-		ev.Outcome = coreaudit.OutcomeError
+		ev.Outcome = coreaudit.Error
 		ev.Reason = reason + "-revoke-failed"
 	}
 	if err != nil || n > 0 {
-		coreaudit.Audit(ev)
+		absauth.AttemptLog.Record(ev)
 	}
 }

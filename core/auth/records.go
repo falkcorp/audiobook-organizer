@@ -1,0 +1,332 @@
+// file: core/auth/records.go
+// version: 1.0.0
+// guid: 056d2e0c-400d-404d-99ff-15b759dd0403
+// last-edited: 2026-11-10
+
+package auth
+
+import (
+	"context"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/falkcorp/mediacore/rbac"
+)
+
+// FoldUsername is the form a username is unique under and looked up by:
+// lower-cased, nothing else. It is HEAD's idx:user:username: key
+// (internal/books/store/pebble_store_auth.go CreateUser), kept exactly so an
+// imported user is found under the name it signed in with before the cutover.
+func FoldUsername(name string) string { return strings.ToLower(name) }
+
+// SessionOrigin says how a session was opened (05-authn §3.4).
+type SessionOrigin string
+
+const (
+	OriginPassword   SessionOrigin = "password"
+	OriginTempLogin  SessionOrigin = "delegated:temp_login"
+	OriginInvite     SessionOrigin = "delegated:invite"
+	originOIDCPrefix               = "oidc:"
+)
+
+// OriginOIDC is the origin of a session an OIDC or OAuth sign-in opened.
+func OriginOIDC(provider string) SessionOrigin { return SessionOrigin(originOIDCPrefix + provider) }
+
+// Method is the authentication method a session of this origin carries: the
+// user's own sign-in (password, OIDC) is MethodSession, a delegated session
+// (temp-login, invite) or one of unknown origin is MethodSessionDelegated
+// (§3.1, fail closed).
+func (o SessionOrigin) Method() Method {
+	s := string(o)
+	if o == OriginPassword || (len(s) > len(originOIDCPrefix) && s[:len(originOIDCPrefix)] == originOIDCPrefix) {
+		return MethodSession
+	}
+	return MethodSessionDelegated
+}
+
+// SessionRecord is one stored session (§3.4). The token never appears in it:
+// the store keeps the token's SHA-256 beside the record, not in this type.
+type SessionRecord struct {
+	PublicID        string        // ULID, safe to show and used for revoke
+	UserID          UserID        //
+	Origin          SessionOrigin // password, oidc:<provider>, delegated:temp_login, delegated:invite
+	CredentialEpoch int64
+	CreatedAt       time.Time
+	ExpiresAt       time.Time
+	LastSeen        time.Time
+	ClientAddr      netip.Addr
+	UserAgent       string
+	Version         int64
+}
+
+// IssuedSession is a freshly opened session: the raw token is returned once
+// (§3.2, §4.1).
+type IssuedSession struct {
+	Token     string // "mcs_...", returned once (§4.1)
+	PublicID  string // ULID, safe to show, used for revoke
+	ExpiresAt time.Time
+}
+
+// SessionView is what a session listing shows (§3.2): never a token, never a
+// hash (TestSessions_ListNeverReturnsToken).
+type SessionView struct {
+	PublicID, UserAgent            string
+	ClientAddr                     netip.Addr
+	Origin                         SessionOrigin
+	CreatedAt, LastSeen, ExpiresAt time.Time
+	Current                        bool
+}
+
+// KeySpec is a request to create an API key (§3.2).
+type KeySpec struct {
+	Owner     UserID
+	Name      string
+	Scopes    []rbac.Permission // REQUIRED non-empty, no wildcards (05-rbac §4.5); the stored record is never empty (R3-1)
+	ExpiresIn time.Duration     // 0 = default; > max = error
+	// Purpose and Module are deferred-build members (§3.5).
+}
+
+// KeyStatus is an API key's status (§3.2).
+type KeyStatus string
+
+const (
+	KeyActive            KeyStatus = "active"
+	KeyDisabled          KeyStatus = "disabled"
+	KeyNeedsConfirmation KeyStatus = "needs_confirmation" // set by the post-restore hook (§4.14); refused until an admin re-enables
+	KeyRevoked           KeyStatus = "revoked"
+)
+
+// valid reports a status the store may hold.
+func (s KeyStatus) valid() bool {
+	switch s {
+	case KeyActive, KeyDisabled, KeyNeedsConfirmation, KeyRevoked:
+		return true
+	}
+	return false
+}
+
+// rank orders statuses by restriction: revoked > needs_confirmation >
+// disabled > active (§4.14 step 3, SEC7-8). An unknown status ranks with
+// revoked (fail closed).
+func (s KeyStatus) rank() int {
+	switch s {
+	case KeyActive:
+		return 0
+	case KeyDisabled:
+		return 1
+	case KeyNeedsConfirmation:
+		return 2
+	}
+	return 3
+}
+
+// MoreRestrictive returns the more restrictive of a and b (§4.14 step 3).
+func MoreRestrictive(a, b KeyStatus) KeyStatus {
+	if b.rank() > a.rank() {
+		return b
+	}
+	return a
+}
+
+// APIKey is one stored API key. Its secret is never held: the store keeps
+// the SHA-256 of the raw value beside the record (§4.1). HashPrefix is the
+// first 8 hex characters of that hash, HEAD's display identifier (§4.4).
+type APIKey struct {
+	ID         string
+	Owner      UserID
+	Name       string
+	Scopes     []rbac.Permission // never empty (R3-1)
+	Status     KeyStatus
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	RevokedAt  time.Time // zero unless revoked
+	LastUsedAt time.Time
+	LastUsedIP netip.Addr
+	UseCount   int64
+	// Imported marks a key an app imported at its cutover (§4.1); its raw
+	// value keeps the app's format.
+	Imported   bool
+	HashPrefix string
+	Version    int64
+}
+
+// OneTimeKind is the family of a one-time token (§3.4).
+type OneTimeKind string
+
+const (
+	OneTimeInvite    OneTimeKind = "invite"
+	OneTimeTempLogin OneTimeKind = "temp_login"
+	OneTimeBootstrap OneTimeKind = "bootstrap"
+)
+
+func (k OneTimeKind) valid() bool {
+	return k == OneTimeInvite || k == OneTimeTempLogin || k == OneTimeBootstrap
+}
+
+// OneTimeToken is one stored single-use token (§3.4, §4.1). ID is a public
+// ULID (revoking an invite names it); the secret is never held.
+type OneTimeToken struct {
+	ID        string
+	Kind      OneTimeKind
+	UserID    UserID // temp-login: the target user; invite: none; bootstrap: none
+	CreatedBy UserID // invite and temp-login: the actor who minted it
+	Role      rbac.RoleName
+	Email     string
+	// CredentialEpoch is the target's epoch at issue (temp-login): a bump
+	// kills the token (§4.12).
+	CredentialEpoch int64
+	// ClearsRestriction marks a reset link an owner-verified actor minted:
+	// consuming it clears SignInRestricted (§4.14).
+	ClearsRestriction bool
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+}
+
+// ExternalIdentity links an OIDC or OAuth subject to a user (§4.7).
+type ExternalIdentity struct {
+	Provider  string
+	Subject   string
+	UserID    UserID
+	Email     string
+	CreatedAt time.Time
+}
+
+// UserMergePlan is the auth half of an admin user merge; books builds it from
+// its preview (internal/usermerge stays in ABO).
+type UserMergePlan struct {
+	Source, Target UserID
+	Rows           []MergeRow
+}
+
+// MergeRow is one record of a merge plan (§3.1).
+type MergeRow struct {
+	Kind string // "apikey", "identity", "inviteallow"; invites are deleted, never re-owned (DATA4-9)
+	ID   string
+	Seen []byte // the stored bytes the preview read (the Expect value)
+}
+
+// Merge row kinds.
+const (
+	MergeAPIKey      = "apikey"
+	MergeIdentity    = "identity"
+	MergeInviteAllow = "inviteallow"
+)
+
+// Failure is what stage 12 records when an authenticator refused a presented
+// credential (05-http-api §4.2). Stage 13 turns it into a response.
+type Failure struct {
+	Code   string // "invalid_credential", "expired", "revoked", "inactive_user"
+	Cookie bool   // the refused credential came from the session cookie (§4.3 cookie rule)
+}
+
+// Failure codes (§6).
+const (
+	CodeInvalidCredential = "invalid_credential"
+	CodeExpired           = "expired"
+	CodeRevoked           = "revoked"
+	CodeInactiveUser      = "inactive_user"
+	CodeResetRequired     = "password_reset_required"
+)
+
+type failureKey struct{}
+
+// withFailure records f in ctx.
+func withFailure(ctx context.Context, f Failure) context.Context {
+	return context.WithValue(ctx, failureKey{}, f)
+}
+
+// FailureFrom returns the failure stage 12 recorded, and false when none.
+func FailureFrom(ctx context.Context) (Failure, bool) {
+	f, ok := ctx.Value(failureKey{}).(Failure)
+	return f, ok
+}
+
+// ClientInfo is what auth knows of the caller's connection. Addr is the
+// client address httpapi resolved (trusted-proxy aware, 05-http-api §3.5);
+// Peer is the TCP peer. Forwarded is true when the request carried any
+// forwarding header (Forwarded, X-Forwarded-For, X-Real-IP or the configured
+// client-IP header); TrustedProxy when Peer is a trusted proxy or tunnel
+// connector.
+type ClientInfo struct {
+	Addr         netip.Addr
+	Peer         netip.Addr
+	UserAgent    string
+	Forwarded    bool
+	TrustedProxy bool
+}
+
+// Local is §4.6 item 4 (SEC-30): a loopback TCP peer, no forwarding header,
+// and a peer that is not a trusted proxy or tunnel connector. Behind a local
+// reverse proxy every request has a loopback peer, so the peer alone proves
+// nothing.
+func (c ClientInfo) Local() bool {
+	return c.Peer.IsValid() && c.Peer.Unmap().IsLoopback() && !c.Forwarded && !c.TrustedProxy
+}
+
+// sourceKey is the throttle source of c: the resolved client address, or ""
+// when none is known (only the account is then charged).
+func (c ClientInfo) sourceKey() string {
+	if !c.Addr.IsValid() {
+		return ""
+	}
+	return c.Addr.Unmap().String()
+}
+
+// NewUser is a request to create a user (§3.2).
+type NewUser struct {
+	Username      string
+	Email         string
+	EmailVerified bool
+	DisplayName   string
+	Password      string // "" = no password (an OIDC-only account)
+	Roles         []rbac.RoleName
+}
+
+// UserFilter narrows Users (§3.1). The zero value lists everyone.
+type UserFilter struct {
+	Status UserStatus    // "" = any
+	Role   rbac.RoleName // "" = any
+}
+
+// LoginInput is a password sign-in (§3.2).
+type LoginInput struct {
+	Username string
+	Password string
+	Remember bool
+	Client   ClientInfo
+}
+
+// SetupInput creates the first admin (§4.6 item 3).
+type SetupInput struct {
+	Username       string
+	Password       string
+	Email          string
+	BootstrapToken string
+	Client         ClientInfo
+}
+
+// BootstrapResult is what a bootstrap redeem returns (§4.6 item 2).
+type BootstrapResult struct {
+	Key       string // the raw mck_ key, shown once
+	KeyID     string
+	ExpiresAt time.Time
+	User      *User
+	// GeneratedPassword is set only when the redeem created the admin.
+	GeneratedPassword string
+}
+
+// InviteSpec is a request to create an invite (§4.13).
+type InviteSpec struct {
+	Email string
+	Role  rbac.RoleName
+	TTL   time.Duration // 0 = core.auth.invite.ttl
+}
+
+// AcceptInviteInput accepts an invite with the new account's credentials.
+type AcceptInviteInput struct {
+	Token    string
+	Username string
+	Password string
+	Client   ClientInfo
+}
