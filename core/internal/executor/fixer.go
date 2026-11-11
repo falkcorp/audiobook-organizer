@@ -1,5 +1,5 @@
 // file: core/internal/executor/fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9689d192-751d-423a-b144-61fe27e2a8d1
 // last-edited: 2026-11-10
 
@@ -211,6 +211,15 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 	}
 	ids = slices.DeleteFunc(ids, func(id string) bool { return marked[id] || plan[id].ID == "" })
 	slices.Sort(ids)
+	// Row.Subjects always act as ExclusiveRefs at apply; PartitionBy, when
+	// set, also runs the rows of one key in order on one worker (5T.3.1).
+	opts := tasks.ItemsOptions[string]{
+		OnError:       tasks.Collect,
+		ExclusiveRefs: func(id string) []entity.Ref { return plan[id].Subjects },
+	}
+	if fs.PartitionBy != nil {
+		opts.PartitionBy = func(id string) string { return fs.PartitionBy(plan[id]) }
+	}
 	var mu sync.Mutex
 	var applied []string
 	res, _ := tasks.RunItems(rc, a.itemsPar(fs.Parallelism), ids, func(ic *tasks.ItemRC, id string) error {
@@ -245,10 +254,7 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 		applied = append(applied, id)
 		mu.Unlock()
 		return nil
-	}, tasks.ItemsOptions[string]{
-		OnError:       tasks.Collect,
-		ExclusiveRefs: func(id string) []entity.Ref { return plan[id].Subjects },
-	})
+	}, opts)
 	if ctx.Err() != nil {
 		return nil, context.Cause(ctx)
 	}

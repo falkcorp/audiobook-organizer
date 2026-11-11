@@ -1,5 +1,5 @@
 // file: core/internal/executor/batch_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ff587c0b-7c81-4a29-8286-03cb21859652
 // last-edited: 2026-11-10
 
@@ -11,7 +11,10 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -153,4 +156,83 @@ func TestBatch_StopPolicyAndPartitions(t *testing.T) {
 			t.Fatalf("partitions ran out of order: even %v odd %v", even, odd)
 		}
 	})
+}
+
+// TestBatch_PartitionItemTimeoutPerItem (5T.3.1, 5T.3.2: ItemTimeout is per
+// item; synctest): in one partition, item 2 times out on its own while items
+// 1 and 3 succeed. Items 1 and 3 together outlast one ItemTimeout, so a clock
+// shared by the partition would also fail item 3.
+func TestBatch_PartitionItemTimeoutPerItem(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var lateErr error
+		var lateRan atomic.Bool
+		s := tasks.BatchSpec[noParams, string, tasks.Summary]{
+			Common: common("gotham.stakeout"),
+			Source: func(*tasks.RC, noParams) (tasks.Source[string], error) {
+				return tasks.Source[string]{Items: []string{"post-1", "post-2", "post-3"}, Key: func(s string) string { return s }}, nil
+			},
+			Item: func(ic *tasks.ItemRC, _ noParams, post string) error {
+				switch post {
+				case "post-2":
+					<-ic.Context().Done()
+					return ic.Context().Err()
+				case "post-3":
+					lateErr = ic.Context().Err()
+					lateRan.Store(true)
+				}
+				time.Sleep(40 * time.Second)
+				return ic.Context().Err()
+			},
+			Parallelism: tasks.Fixed(2, "two patrol cars"),
+			PartitionBy: func(string) string { return "the narrows" },
+			ItemTimeout: time.Minute,
+		}
+		h := newHarness(t, []tasks.Definition{tasks.Batch(tasks.Kind("gotham.stakeout"), s)}, nil)
+		id := h.start("gotham.stakeout", tasks.StartRequest{})
+		time.Sleep(5 * time.Minute)
+		synctest.Wait()
+		r := h.get(id)
+		if r.State != tasks.StateSucceeded {
+			t.Fatalf("run %s (%q), want succeeded under BatchContinue", r.State, r.Error)
+		}
+		if !lateRan.Load() || lateErr != nil {
+			t.Fatalf("item 3 ran %v with context error %v, want it started on a live clock of its own", lateRan.Load(), lateErr)
+		}
+		var sum tasks.Summary
+		if err := json.Unmarshal(r.Result, &sum); err != nil || sum.Done != 2 || sum.Failed != 1 {
+			t.Fatalf("summary %s (%v), want items 1 and 3 done and item 2 failed", r.Result, err)
+		}
+	})
+}
+
+// TestFixer_ApplyPartitionBy (5T.3.1): a Fixer's PartitionBy holds at apply:
+// the approved rows of one key run one at a time, in row order, even with
+// parallel workers.
+func TestFixer_ApplyPartitionBy(t *testing.T) {
+	log := &applyLog{}
+	var inFlight, peak atomic.Int64
+	h := newHarness(t, []tasks.Definition{fixerDef(log, func(s *tasks.FixerSpec[noParams, string]) {
+		s.Parallelism = tasks.Fixed(3, "three cell blocks")
+		s.PartitionBy = func(tasks.Row) string { return "block-a" }
+		s.Apply = func(_ *tasks.ItemRC, _ tasks.Writer, _ noParams, row tasks.Row) error {
+			cur := inFlight.Add(1)
+			for p := peak.Load(); cur > p && !peak.CompareAndSwap(p, cur); p = peak.Load() {
+			}
+			time.Sleep(20 * time.Millisecond)
+			log.add(row.ID)
+			inFlight.Add(-1)
+			return nil
+		}
+	})}, withPrincipal)
+	plan := h.plan()
+	if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun), plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	h.waitState(h.onlyApplyRun(plan).ID, tasks.StateSucceeded)
+	log.mu.Lock()
+	order := slices.Clone(log.ids)
+	log.mu.Unlock()
+	if !slices.Equal(order, inmates) || peak.Load() != 1 {
+		t.Fatalf("applied %v with peak concurrency %d, want %v one at a time", order, peak.Load(), inmates)
+	}
 }

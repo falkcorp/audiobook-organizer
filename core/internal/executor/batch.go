@@ -1,5 +1,5 @@
 // file: core/internal/executor/batch.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a863231-8741-4cda-83be-b9eddcb8c094
 // last-edited: 2026-11-10
 
@@ -164,14 +164,11 @@ func (a *attempt) runBatch(rc *tasks.RC, p any) (json.RawMessage, error) {
 		base := int(tot.sum.Done + tot.sum.Failed + tot.sum.Skipped)
 		total := int(tot.sum.Total)
 		tot.mu.Unlock()
+		// PartitionBy is the loop's own option, so each item of a
+		// partition keeps its own gates, ItemTimeout clock and counts.
 		opts := tasks.ItemsOptions[any]{OnError: mode, ItemTimeout: bs.ItemTimeout, ExclusiveRefs: bs.ExclusiveRefs, Label: bs.Label,
-			ProgressBase: base, ProgressTotal: total}
-		var res tasks.ItemsResult
-		if bs.PartitionBy != nil {
-			res = a.runPartitioned(rc, par, items, itemFn, opts, bs.PartitionBy)
-		} else {
-			res, _ = tasks.RunItems(rc, par, items, itemFn, opts)
-		}
+			PartitionBy: bs.PartitionBy, ProgressBase: base, ProgressTotal: total}
+		res, _ := tasks.RunItems(rc, par, items, itemFn, opts)
 		if ctx.Err() != nil || res.NotStarted > 0 {
 			return true, nil // incomplete: redone on resume
 		}
@@ -282,46 +279,4 @@ func (a *attempt) batchChunks(ctx context.Context, src tasks.Source[any], size i
 		}
 		return false, nil
 	}
-}
-
-// runPartitioned is PartitionBy: items with one partition key run on one
-// worker, in order; distinct keys run in parallel under the run's
-// parallelism. Counts are per item.
-func (a *attempt) runPartitioned(rc *tasks.RC, par tasks.Parallelism, items []any,
-	fn func(ic *tasks.ItemRC, it any) error, opts tasks.ItemsOptions[any], part func(any) string) tasks.ItemsResult {
-	var order []string
-	groups := map[string][]any{}
-	for _, it := range items {
-		k := part(it)
-		if _, ok := groups[k]; !ok {
-			order = append(order, k)
-		}
-		groups[k] = append(groups[k], it)
-	}
-	gs := make([][]any, len(order))
-	for i, k := range order {
-		gs[i] = groups[k]
-	}
-	var done, failed atomic.Int64
-	gopts := tasks.ItemsOptions[[]any]{OnError: opts.OnError, ItemTimeout: opts.ItemTimeout}
-	res, _ := tasks.RunItems(rc, par, gs, func(ic *tasks.ItemRC, g []any) error {
-		var first error
-		for _, it := range g {
-			if err := fn(ic, it); err != nil {
-				failed.Add(1)
-				if first == nil {
-					first = err
-				}
-				if opts.OnError == tasks.FailFast {
-					return first
-				}
-				continue
-			}
-			done.Add(1)
-		}
-		return first
-	}, gopts)
-	out := tasks.ItemsResult{Done: done.Load(), Failed: failed.Load(), Counters: res.Counters}
-	out.NotStarted = int64(len(items)) - out.Done - out.Failed
-	return out
 }

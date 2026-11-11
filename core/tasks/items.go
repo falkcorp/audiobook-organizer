@@ -1,5 +1,5 @@
 // file: core/tasks/items.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4939aca5-9ac9-469d-bb84-fc497d308458
 // last-edited: 2026-11-10
 
@@ -26,7 +26,9 @@ import (
 // a fixed set of min(workers, len(items)) goroutines pulls indexes from an
 // atomic cursor, checks the run context before taking an index and again
 // before calling fn, and parks on the executor's pause gate, ref locks and
-// CPU budget through rc before the item clock starts.
+// CPU budget through rc before the item clock starts. With
+// ItemsOptions.PartitionBy a worker takes a whole partition from the cursor
+// instead and runs its items one at a time, in item order.
 func RunItems[T any](rc *RC, par Parallelism, items []T,
 	fn func(ic *ItemRC, item T) error, opts ...ItemsOptions[T]) (ItemsResult, error) {
 	if rc == nil {
@@ -46,17 +48,7 @@ func RunItems[T any](rc *RC, par Parallelism, items []T,
 	if err := l.restoreIndex(); err != nil {
 		return ItemsResult{}, refusal(err)
 	}
-	var cursor atomic.Int64
-	cursor.Store(int64(l.resumed))
-	take := func() (int, T, bool) {
-		i := int(cursor.Add(1) - 1)
-		if i >= n {
-			var zero T
-			return 0, zero, false
-		}
-		return i, items[i], true
-	}
-	l.run(min(l.workers(), n-l.resumed), take, fn)
+	l.runSlice(items, l.resumed, fn)
 	l.pulled = int64(n - l.resumed)
 	return l.result()
 }
@@ -77,6 +69,9 @@ func RunSeq[T any](rc *RC, par Parallelism, items iter.Seq[T], total Total,
 	}
 	if o.Watermark != "" && o.Key == nil {
 		return ItemsResult{}, refusal(errWatermarkNeedsKey)
+	}
+	if o.PartitionBy != nil {
+		return ItemsResult{}, refusal(errPartitionNeedsSlice)
 	}
 	if items == nil {
 		return ItemsResult{}, nil
@@ -180,16 +175,7 @@ func ForEach[T any](ctx context.Context, par Parallelism, items []T,
 	n := len(items)
 	l.total = int64(n)
 	l.exhausted.Store(true) // a slice: every item is counted in pulled
-	var cursor atomic.Int64
-	take := func() (int, T, bool) {
-		i := int(cursor.Add(1) - 1)
-		if i >= n {
-			var zero T
-			return 0, zero, false
-		}
-		return i, items[i], true
-	}
-	l.run(min(l.workers(), n), take, func(ic *ItemRC, item T) error { return fn(ic.ctx, item) })
+	l.runSlice(items, 0, func(ic *ItemRC, item T) error { return fn(ic.ctx, item) })
 	l.pulled = int64(n)
 	return l.result()
 }
@@ -208,6 +194,13 @@ type ItemsOptions[T any] struct {
 	ProgressBase    int            // absolute offset when items is a slice of a larger set
 	ProgressTotal   int            // absolute denominator
 	Key             func(T) string // RunSeq + Watermark: stable key instead of index
+	// PartitionBy gives each item one key: the items of a key run on one
+	// worker, one at a time, in item order, and distinct keys run in
+	// parallel. Each is still its own item: its own pause gate, ref locks,
+	// CPU slot, ItemTimeout clock, Skip and counts. It may be combined with
+	// ExclusiveRefs (a Fixer's apply does). RunItems and ForEach only: a
+	// stream cannot be grouped before it ends. Pure; a panic fails that item.
+	PartitionBy func(T) string
 }
 
 // DefaultCheckpointEvery is ItemsOptions.CheckpointEvery when it is zero.
@@ -276,7 +269,10 @@ func refusal(err error) *ItemsError { return &ItemsError{First: err, FirstIndex:
 
 var (
 	errWatermarkNeedsKey = errors.New("tasks: RunSeq with a Watermark needs ItemsOptions.Key")
-	errManyOptions       = errors.New("tasks: pass at most one ItemsOptions")
+	// errPartitionNeedsSlice: a stream cannot be grouped by key before it
+	// ends. Name coined by F2-03.
+	errPartitionNeedsSlice = errors.New("tasks: RunSeq cannot take ItemsOptions.PartitionBy; use RunItems over a slice")
+	errManyOptions         = errors.New("tasks: pass at most one ItemsOptions")
 )
 
 func oneOptions[T any](opts []ItemsOptions[T]) (ItemsOptions[T], error) {
@@ -741,18 +737,85 @@ func (l *loop[T]) restoreKeyed(take func() (int, T, bool)) error {
 	return nil
 }
 
-// run starts n workers (wg.Go) over take and waits for them.
+// runSlice runs items[from:] (RunItems after a watermark resume, ForEach
+// from 0): one index at a time from an atomic cursor, or, with PartitionBy,
+// one partition at a time.
+func (l *loop[T]) runSlice(items []T, from int, fn func(ic *ItemRC, item T) error) {
+	var cursor atomic.Int64
+	if l.opts.PartitionBy == nil {
+		cursor.Store(int64(from))
+		l.run(min(l.workers(), len(items)-from), func() (int, T, bool) {
+			i := int(cursor.Add(1) - 1)
+			if i >= len(items) {
+				var zero T
+				return 0, zero, false
+			}
+			return i, items[i], true
+		}, fn)
+		return
+	}
+	groups := l.partition(items, from)
+	l.pool(min(l.workers(), len(groups)), func() bool {
+		g := int(cursor.Add(1) - 1)
+		if g >= len(groups) {
+			return false
+		}
+		for _, i := range groups[g] {
+			if l.halted() { // checked BEFORE each item of the partition
+				return false
+			}
+			l.one(i, items[i], fn)
+		}
+		return true
+	})
+}
+
+// partition groups the indexes of items[from:] by PartitionBy, in order of
+// first appearance, each group in item order. An item whose PartitionBy
+// panics fails here and joins no group.
+func (l *loop[T]) partition(items []T, from int) [][]int {
+	var order []string
+	groups := map[string][]int{}
+	for i := from; i < len(items); i++ {
+		k, err := guarded("PartitionBy", func() (string, error) { return l.opts.PartitionBy(items[i]), nil })
+		if err != nil {
+			l.started.Add(1)
+			l.complete(i, "", "", err, nil)
+			continue
+		}
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], i)
+	}
+	out := make([][]int, len(order))
+	for j, k := range order {
+		out[j] = groups[k]
+	}
+	return out
+}
+
+// run starts n workers over take, one item per step, and waits for them.
 func (l *loop[T]) run(n int, take func() (int, T, bool), fn func(ic *ItemRC, item T) error) {
+	l.pool(n, func() bool {
+		i, item, ok := take()
+		if !ok {
+			return false
+		}
+		l.one(i, item, fn)
+		return true
+	})
+}
+
+// pool starts n workers (wg.Go), each calling step until it reports nothing
+// left or the loop halts (checked BEFORE each step takes work), and waits
+// for them; then it checkpoints the last watermark advance.
+func (l *loop[T]) pool(n int, step func() bool) {
 	defer l.stop(nil)
 	var wg sync.WaitGroup
 	for range n {
 		wg.Go(func() {
-			for !l.halted() { // checked BEFORE taking an index
-				i, item, ok := take()
-				if !ok {
-					return
-				}
-				l.one(i, item, fn)
+			for !l.halted() && step() {
 			}
 		})
 	}
