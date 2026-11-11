@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/06-app-sdk.md -->
-<!-- version: 1.14.4 -->
+<!-- version: 1.14.5 -->
 <!-- guid: d581911c-8f90-48bb-a307-5cd6288a9695 -->
-<!-- last-edited: 2026-11-08 -->
+<!-- last-edited: 2026-11-11 -->
 
 # 06 — App SDK: `module`, `kernel`, `app`, `coretest`
 
@@ -1739,7 +1739,7 @@ the same PR; a durable write in this range that is not listed is a defect.
 | P4b, first (reset boot) | the kernel | journal `applied` right after `secrets.Open` (in release R1 at the same point) | swap journal |
 | P4b | the migration list (M1, M7, M2–M6, M8) | each step's batch with its version bump (books' legacy and versioned migrations included); `BootBlocking` shard cursors; the level step's batch and the level sidecar; each cutover chunk's batch (importer writes, deletions of HEAD's rows, quarantine copies, the residual-blob rewrite of M2, the cursor); the claim ledger and store generation | cutover cursors; level sidecar |
 | P4b (F3+) | M2b (05-config §1.12.2; CONFORM-3, XFILE-3) | the gap-fill file `<db parent>/config.yaml` rewritten without its managed keys (temp file + fsync + rename + directory fsync) through the labelled state filesystem, or deleted when nothing is left | cutover cursors |
-| P4b (F3+) | M8, the store rewrite (SEC-5) | full compaction and flush; the fresh directory written and fsynced; the swap journal's records; the close, rename and reopen of the store; the old directory deleted | swap journal; cutover cursors |
+| P4b (F3+) | M8, the store rewrite (SEC-5) | full compaction and flush; the fresh directory written and fsynced; the swap journal's records; the attempt's checkpoint record (the copy's directory identity staged as `next_dir_fsid`/`next_dir_ino` before the swap, promoted after the reopen; 05-storage §5S.3.13); the close, rename and reopen of the store; the old directory deleted | swap journal; checkpoint record; cutover cursors |
 | P4b (`KindCheckpoint` restore boot) | the kernel | journal `failed` with this binary's ID when a migration step itself fails (`storage.StepError`; a P4b bookkeeping error journals nothing, and the next boot resumes the restore boot, R1-21 (f)); `inflight.json` kept; the boot refuses (DATA7-12, DATA8-6) | swap journal |
 | P4d 1 (reset boot) | the kernel | for a `ResetStore`, or with no reset hook, the removal of the intent's `delete` entries, then `hook_done` and the deletion of `inflight.json` (COR8-4) | swap journal |
 | P4d 2 | revocation re-apply (05-backup, from R2's identity flip) | revocations through auth's and rbac's stores; gap and `restore` lines with their head updates; `c/backup/served_boot`, `backup.location.json`; a journal move (copy, verify, rename) | — |
