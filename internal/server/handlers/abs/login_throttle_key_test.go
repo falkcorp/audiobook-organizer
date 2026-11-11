@@ -10,9 +10,8 @@ import (
 	"testing"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 

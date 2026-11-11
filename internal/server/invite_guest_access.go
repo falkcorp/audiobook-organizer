@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
@@ -21,6 +19,7 @@ import (
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 var inviteAccessLog = logger.New("server.invites")

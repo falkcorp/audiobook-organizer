@@ -11,10 +11,9 @@ import (
 	"testing"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // S1: refresh failures have a budget of their own (key "refresh:"+visitor).

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/gin-gonic/gin"
 )
 

@@ -22,8 +22,6 @@ import (
 	"sync"
 	"time"
 
-	coreaudit "github.com/falkcorp/mediacore/audit"
-
 	"github.com/gin-gonic/gin"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -31,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreaudit "github.com/falkcorp/mediacore/audit"
 )
 
 // Single sign-on for Audiobookshelf clients, implemented against AudioBooth's
