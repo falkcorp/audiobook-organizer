@@ -1,7 +1,7 @@
 // file: internal/books/crash_matrix_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 1a6f3d82-9c4e-4b17-8e25-7d0b5c9a2f61
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package books
 
@@ -269,20 +269,19 @@ func aboUnreachedLabels() map[string]string {
 			"hello's m8-rewrite cells break the writer through the kernel's entry point and restoreswap's P0a until then"
 	)
 	return map[string]string{
-		"storage.levelstep.sidecars":  "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
-		"storage.levelstep.rollback":  "books declares no level step at R1",
-		"storage.dm.plan":             noDataMigration,
-		"storage.dm.chunk":            noDataMigration,
-		"storage.dm.state":            noDataMigration,
-		"storage.quarantine.sequence": noDataMigration,
-		"storage.rewrite.state":       noM8,
-		"storage.rewrite.compact":     noM8,
-		"storage.rewrite.copy":        noM8,
-		"storage.rewrite.close":       noM8,
-		"storage.rewrite.reopen":      noM8,
-		"swap.rewrite.stage":          noM8,
-		"swap.rewrite.delete":         noM8,
-		"storage.checkpoint.ready":    "needs an upgrade whose step failed, leaving its checkpoint open, then a boot with nothing to run; no books step fails on a store HEAD wrote",
+		"storage.levelstep.sidecars": "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
+		"storage.levelstep.rollback": "books declares no level step at R1",
+		"storage.dm.plan":            noDataMigration,
+		"storage.dm.chunk":           noDataMigration,
+		"storage.dm.state":           noDataMigration,
+		"storage.rewrite.state":      noM8,
+		"storage.rewrite.compact":    noM8,
+		"storage.rewrite.copy":       noM8,
+		"storage.rewrite.close":      noM8,
+		"storage.rewrite.reopen":     noM8,
+		"swap.rewrite.stage":         noM8,
+		"swap.rewrite.delete":        noM8,
+		"storage.checkpoint.ready":   "needs an upgrade whose step failed, leaving its checkpoint open, then a boot with nothing to run; no books step fails on a store HEAD wrote",
 		// The kit's clock is fixed (crashmatrix.Now) and a fixture's files
 		// are copied into memory with the host's current time as their
 		// mtime, so no scratch entry is 7 days old at a kit boot. Storage's
