@@ -1,5 +1,5 @@
 // file: core/integrations/origin_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 394052ef-66a7-48bf-a8f2-6fb61af1e689
 // last-edited: 2026-11-11
 
@@ -242,11 +242,13 @@ func TestOperatorSecret_OperatorPortMoveWithheld(t *testing.T) {
 	}
 }
 
-// TestPut_KeepsNoSecretWrittenForAnotherDestination: a Put that leaves the
-// destination alone keeps a stored secret only while the row's
-// SecretsOrigin is that destination; otherwise the secret is dropped, and
-// the update says so.
-func TestPut_KeepsNoSecretWrittenForAnotherDestination(t *testing.T) {
+// TestPut_KeepsAWithheldSecretWithItsOrigin (M1.3 Put, SEC-15): a Put that
+// moves no destination and writes no secret keeps a stored secret whose
+// SecretsOrigin names another destination, still bound to that origin: it
+// is kept, never re-bound to the destination it was not written for, and
+// stays withheld (reported as such) until a Put re-supplies it.
+func TestPut_KeepsAWithheldSecretWithItsOrigin(t *testing.T) {
+	ctx := context.Background()
 	e := newEnv(t)
 	mustPut(t, admin(), e.registry(t, nil, nil), signal("http://192.0.2.20/"), cred("alfred-1"))
 	rewriteRow(t, e, signalRef, func(row *integrations.StoredInstance) { row.SecretsOrigin = "http://192.0.2.99:80" })
@@ -254,14 +256,96 @@ func TestPut_KeepsNoSecretWrittenForAnotherDestination(t *testing.T) {
 	renamed := current(t, r, signalRef)
 	renamed.Name = "Arkham watch"
 	mustPut(t, manager(), r, renamed, nil)
-	if a := lastAction(t, e); a != "core.integration.update secrets_dropped" {
+	if a := lastAction(t, e); a != "core.integration.update" {
 		t.Errorf("audit = %q", a)
 	}
-	if v := e.secret(t, signalRef, "password"); v != "" {
-		t.Errorf("a secret written for another destination was kept: %q", v)
+	if v := e.secret(t, signalRef, "password"); v != "alfred-1" {
+		t.Errorf("the withheld secret was not kept: %q", v)
 	}
+	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "http://192.0.2.99:80" {
+		t.Errorf("SecretsOrigin = %q, want the origin the secret was written for", row.SecretsOrigin)
+	}
+	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthMisconfigured || h.Message != integrations.ReasonStoredSecretWithheld+": password" {
+		t.Errorf("Health = %+v", h)
+	}
+	if n := sentWith(e, "alfred-1"); n != 0 {
+		t.Errorf("a secret written for another destination was sent %d times", n)
+	}
+
+	mustPut(t, manager(), r, current(t, r, signalRef), cred("alfred-2"))
 	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "http://192.0.2.20:80" {
-		t.Errorf("SecretsOrigin = %q", row.SecretsOrigin)
+		t.Errorf("SecretsOrigin after a re-supply = %q", row.SecretsOrigin)
+	}
+	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthOK || !slices.Equal(e.credentialsSentTo("http://192.0.2.20/"), []string{"alfred-2"}) {
+		t.Errorf("Health after a re-supply = %+v, sent %v", h, e.credentialsSentTo("http://192.0.2.20/"))
+	}
+}
+
+// TestPut_SaveDuringOperatorURLKeepsStoredSecret (M1.3 Put, M1.4 step 2):
+// while the operator overlay moves the URL, a stored secret is withheld but
+// kept. A Save that moves no stored destination and writes no secret (a
+// rename, or the echoed mask) keeps it and its SecretsOrigin, and removing
+// the overlay serves it at its own destination again. A secret written
+// during the overlay belongs to the overlay's destination instead.
+func TestPut_SaveDuringOperatorURLKeepsStoredSecret(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	r := e.registry(t, nil, nil)
+	mustPut(t, admin(), r, signal("http://192.0.2.20/"), cred("alfred-1"))
+	moved := overlay("integrations.notify.gcpd-roof.url", "http://192.0.2.99/")
+	if err := r.SetOverlay(ctx, moved); err != nil {
+		t.Fatal(err)
+	}
+	withheld := integrations.ReasonStoredSecretWithheld + ": password"
+	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthMisconfigured || h.Message != withheld {
+		t.Errorf("Health beside the operator's URL = %+v", h)
+	}
+
+	renamed := current(t, r, signalRef)
+	renamed.Name = "Arkham watch"
+	mustPut(t, manager(), r, renamed, nil)
+	mustPut(t, admin(), r, current(t, r, signalRef), map[string]secrets.Value{"password": secrets.NewValue("********")})
+	if a := e.actions(t); !slices.Equal(a[len(a)-2:], []string{"core.integration.update", "core.integration.update"}) {
+		t.Errorf("audit of the Saves = %v", a)
+	}
+	if v := e.secret(t, signalRef, "password"); v != "alfred-1" {
+		t.Errorf("a Save beside the operator's URL deleted the stored secret: %q", v)
+	}
+	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "http://192.0.2.20:80" || row.Config.Settings["url"] != "http://192.0.2.20/" {
+		t.Errorf("row after the Saves = %q / %v", row.SecretsOrigin, row.Config.Settings)
+	}
+	if res, err := r.Test(manager(), current(t, r, signalRef), nil); err != nil || res.OK || res.Class != integrations.ClassInvalid {
+		t.Errorf("a Test beside the operator's URL = %+v, %v", res, err)
+	}
+	if n := sentWith(e, "alfred-1"); n != 0 {
+		t.Errorf("the stored secret followed the operator's URL (%d sends)", n)
+	}
+
+	if err := r.SetOverlay(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthOK || !slices.Equal(e.credentialsSentTo("http://192.0.2.20/"), []string{"alfred-1"}) {
+		t.Errorf("Health once the overlay is removed = %+v, sent %v", h, e.credentialsSentTo("http://192.0.2.20/"))
+	}
+
+	if err := r.SetOverlay(ctx, moved); err != nil {
+		t.Fatal(err)
+	}
+	mustPut(t, manager(), r, current(t, r, signalRef), cred("alfred-2"))
+	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "http://192.0.2.99:80" {
+		t.Errorf("SecretsOrigin of a secret written beside the operator's URL = %q", row.SecretsOrigin)
+	}
+	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthOK || !slices.Equal(e.credentialsSentTo("http://192.0.2.99/"), []string{"alfred-2"}) {
+		t.Errorf("Health with the new secret = %+v", h)
+	}
+	if err := r.SetOverlay(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthMisconfigured || h.Message != withheld {
+		t.Errorf("Health back at the stored URL = %+v", h)
+	}
+	if got := e.credentialsSentTo("http://192.0.2.20/"); !slices.Equal(got, []string{"alfred-1"}) {
+		t.Errorf("credentials to the stored URL = %v", got)
 	}
 }
 
@@ -421,7 +505,16 @@ func TestRegistry_DefaultDestinationSecretNotServedOnceSet(t *testing.T) {
 		t.Error("a secret stored for the adapter defaults followed an operator host")
 	}
 	release()
-	_, _ = r.Health(ctx, oracleRef)
+	// The password is optional: the probe runs, and the instance reports the
+	// withheld secret as itself.
+	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthDegraded || h.Message != integrations.ReasonStoredSecretWithheld+": password" {
+		t.Errorf("Health with an optional stored secret withheld = %+v", h)
+	}
+	// A Test of the same config builds the instance the Put would leave:
+	// the secret is kept and still withheld, so nothing authenticates.
+	if res, err := r.Test(manager(), current(t, r, oracleRef), nil); err != nil || res.OK {
+		t.Errorf("a Test beside the operator's host = %+v, %v", res, err)
+	}
 	if n := sentWith(e, "alfred-1"); n != 1 {
 		t.Errorf("the stored secret was sent to the operator's host (%d sends)", n)
 	}
@@ -455,9 +548,11 @@ func TestRegistry_DefaultDestinationSecretNotServedOnceSet(t *testing.T) {
 	}
 }
 
-// parkingStore parks the next secret read until the test releases it.
+// parkingStore parks the next secret read (Get, or Meta when onMeta is set)
+// until the test releases it.
 type parkingStore struct {
 	integrations.SecretStore
+	onMeta bool
 	mu     sync.Mutex
 	park   chan struct{}
 	parked chan struct{}
@@ -473,16 +568,28 @@ func (s *parkingStore) arm() (parked <-chan struct{}, release func()) {
 	return s.parked, func() { close(p) }
 }
 
-func (s *parkingStore) Get(ctx context.Context, n secrets.Name) (secrets.Value, secrets.Meta, error) {
+// wait parks the calling read when one is armed for it.
+func (s *parkingStore) wait(meta bool) {
 	s.mu.Lock()
+	if s.park == nil || s.onMeta != meta {
+		s.mu.Unlock()
+		return
+	}
 	park, parked := s.park, s.parked
 	s.park, s.parked = nil, nil
 	s.mu.Unlock()
-	if park != nil {
-		close(parked)
-		<-park
-	}
+	close(parked)
+	<-park
+}
+
+func (s *parkingStore) Get(ctx context.Context, n secrets.Name) (secrets.Value, secrets.Meta, error) {
+	s.wait(false)
 	return s.SecretStore.Get(ctx, n)
+}
+
+func (s *parkingStore) Meta(ctx context.Context, n secrets.Name) (secrets.Meta, error) {
+	s.wait(true)
+	return s.SecretStore.Meta(ctx, n)
 }
 
 // TestRegistry_ParkedSecretReadNeverGetsTheMovedSecret (SEC-15, M1.6): a
@@ -572,5 +679,145 @@ func TestRegistry_LocalBoundToItsDestination(t *testing.T) {
 	release()
 	if tr := lastSpec(t, e, oracleRef).Trust; len(tr.PrivateOrigins) != 0 {
 		t.Errorf("Local followed the operator's host: %v", tr)
+	}
+}
+
+// TestOperatorSecret_AdminSaveDuringOperatorURLKeepsApproval (R8-5): an
+// admin's Save while the operator supplies the whole URL neither approves
+// the stored URL under the lock (the admin never saw it) nor forgets an
+// approval an earlier admin Save recorded for it. Once the operator's URL is
+// removed, the operator password is served at the URL an admin chose and
+// withheld at one a manager chose.
+func TestOperatorSecret_AdminSaveDuringOperatorURLKeepsApproval(t *testing.T) {
+	ctx := context.Background()
+	pass := overlay("integrations.notify.gcpd-roof.password", "env-signal-pass")
+	movedPass := overlay(
+		"integrations.notify.gcpd-roof.url", "http://192.0.2.99/",
+		"integrations.notify.gcpd-roof.password", "env-signal-pass",
+	)
+	for _, tc := range []struct {
+		name   string
+		by     context.Context
+		served bool
+	}{
+		{"an admin's URL", admin(), true},
+		{"a manager's URL", manager(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			r := e.registry(t, pass, nil)
+			mustPut(t, tc.by, r, signal("http://192.0.2.20/"), nil)
+			if err := r.SetOverlay(ctx, movedPass); err != nil {
+				t.Fatal(err)
+			}
+			if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthOK || !slices.Equal(e.credentialsSentTo("http://192.0.2.99/"), []string{"env-signal-pass"}) {
+				t.Fatalf("Health at the operator's URL = %+v", h)
+			}
+			renamed := current(t, r, signalRef)
+			renamed.Name = "Arkham watch"
+			mustPut(t, admin(), r, renamed, nil)
+			var want map[string]string
+			if tc.served {
+				want = map[string]string{"url": "http://192.0.2.20:80"}
+			}
+			if row, _ := e.stored(t, signalRef); !maps.Equal(row.OperatorSecretOrigin, want) {
+				t.Errorf("OperatorSecretOrigin after the admin's Save = %v, want %v", row.OperatorSecretOrigin, want)
+			}
+
+			if err := r.SetOverlay(ctx, pass); err != nil {
+				t.Fatal(err)
+			}
+			h, _ := r.Health(ctx, signalRef)
+			sent := e.credentialsSentTo("http://192.0.2.20/")
+			switch {
+			case tc.served && (h.Status != integrations.HealthOK || !slices.Equal(sent, []string{"env-signal-pass"})):
+				t.Errorf("Health back at the admin's URL = %+v, sent %v", h, sent)
+			case !tc.served && (h.Status != integrations.HealthDegraded || h.Message != integrations.ReasonOperatorSecretWithheld+": password" || slices.Contains(sent, "env-signal-pass")):
+				t.Errorf("Health back at the manager's URL = %+v, sent %v", h, sent)
+			}
+		})
+	}
+}
+
+// TestOperatorSecret_AdminSaveDuringOperatorHostReplacesApproval pins a
+// residual of R8-5's one origin per destination field: with the operator
+// setting the host beside an admin's port, the destination is part the
+// admin's, so an admin Save records the joined origin and replaces the
+// approval of the admin's own host. Once the operator's host is removed the
+// password is withheld at that host until an admin saves again.
+func TestOperatorSecret_AdminSaveDuringOperatorHostReplacesApproval(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	pass := overlay("integrations.metadata.clocktower.password", "env-oracle-pass")
+	r := e.registry(t, pass, nil)
+	mustPut(t, admin(), r, integrations.InstanceConfig{
+		Ref: oracleRef, Adapter: oracle, Enabled: true, Settings: map[string]any{"host": "192.0.2.60", "port": 9000},
+	}, nil)
+	if err := r.SetOverlay(ctx, overlay(
+		"integrations.metadata.clocktower.host", "192.0.2.61",
+		"integrations.metadata.clocktower.password", "env-oracle-pass",
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthDegraded {
+		t.Errorf("Health beside the operator's host before an admin Save = %+v", h)
+	}
+	mustPut(t, admin(), r, current(t, r, oracleRef), nil)
+	if row, _ := e.stored(t, oracleRef); row.OperatorSecretOrigin["host"] != "smtp://192.0.2.61:9000" {
+		t.Errorf("OperatorSecretOrigin = %v, want the joined origin", row.OperatorSecretOrigin)
+	}
+	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthOK {
+		t.Errorf("Health beside the operator's host after an admin Save = %+v", h)
+	}
+	if err := r.SetOverlay(ctx, pass); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthDegraded || h.Message != integrations.ReasonOperatorSecretWithheld+": password" {
+		t.Errorf("Health back at the admin's host = %+v", h)
+	}
+	mustPut(t, admin(), r, current(t, r, oracleRef), nil)
+	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthOK {
+		t.Errorf("Health after the admin saves again = %+v", h)
+	}
+	if n := sentWith(e, "env-oracle-pass"); n != 2 {
+		t.Errorf("the operator secret was sent %d times, want 2", n)
+	}
+}
+
+// TestRegistry_ForceClosedBeforeBuildLeaksNothing (M1.6): a probe that took
+// its lease before a swap and reaches its build only after the drain timeout
+// force-closed the swapped-out slot builds no instance there (one no closer
+// would ever Close): every instance built is closed by Close.
+func TestRegistry_ForceClosedBeforeBuildLeaksNothing(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	ps := &parkingStore{onMeta: true}
+	r := e.registry(t, nil, func(o *integrations.Options) {
+		ps.SecretStore = o.Secrets
+		o.Secrets = ps
+		o.Settings = func() integrations.Settings { return integrations.Settings{DrainTimeout: time.Nanosecond} }
+	})
+	mustPut(t, admin(), r, signal("http://192.0.2.20/"), cred("alfred-1"))
+	parked, unpark := ps.arm()
+	probed := make(chan error, 1)
+	go func() {
+		_, err := r.Health(ctx, signalRef)
+		probed <- err
+	}()
+	<-parked // the probe holds its lease and has not built
+	if err := r.SetOverlay(ctx, overlay("integrations.notify.gcpd-roof.channel", "robin")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(ctx); err != nil { // waits for the swapped-out slot's closer
+		t.Fatal(err)
+	}
+	unpark()
+	if err := <-probed; !errors.Is(err, integrations.ErrClosed) {
+		t.Errorf("the probe of the force-closed slot = %v, want ErrClosed", err)
+	}
+	for i, inst := range e.fake.Built() {
+		if inst.Closed() == 0 {
+			t.Errorf("instance %d (%s) was built and never closed", i, inst.Config.Name)
+		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/integrations/fields_internal_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: dfaab137-5259-4293-befc-1800491e6971
 // last-edited: 2026-11-11
 
@@ -234,8 +234,8 @@ func TestCloneConfig(t *testing.T) {
 	}
 }
 
-// proxySettings is a nested object holding a URL-typed field.
-type proxySettings struct {
+// relaySettings is a nested object holding a URL-typed field.
+type relaySettings struct {
 	Endpoint string `json:"endpoint,omitempty" schema:"format=uri"`
 }
 
@@ -273,7 +273,7 @@ func TestAnalyze_RefusesHiddenDestinations(t *testing.T) {
 		},
 		"nested URL field": func() (config.Schema, error) {
 			return config.SchemaFor[struct {
-				Proxy proxySettings `json:"proxy"`
+				Relay relaySettings `json:"relay"`
 			}]()
 		},
 		"nested secret": func() (config.Schema, error) {
@@ -297,7 +297,40 @@ func TestAnalyze_RefusesHiddenDestinations(t *testing.T) {
 		},
 		"array of objects with a URL": func() (config.Schema, error) {
 			return config.SchemaFor[struct {
-				Mirrors []proxySettings `json:"mirrors"`
+				Mirrors []relaySettings `json:"mirrors"`
+			}]()
+		},
+		"proxy": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Proxy string `json:"proxy"`
+			}]()
+		},
+		"address": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				ServerAddress string `json:"listen_address"`
+			}]()
+		},
+		"addr": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Addr string `json:"addr"`
+			}]()
+		},
+		"a port beside a URL": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				URL  string `json:"url,omitempty" schema:"format=uri"`
+				Port int    `json:"port,omitempty"`
+			}]()
+		},
+		"a port alone": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Port int `json:"port,omitempty"`
+			}]()
+		},
+		"nested port": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Upstream struct {
+					Port int `json:"port"`
+				} `json:"upstream"`
 			}]()
 		},
 	}
@@ -337,9 +370,13 @@ func TestURLLike(t *testing.T) {
 	for name, want := range map[string]bool{
 		"url": true, "base_url": true, "baseurl": true, "webhook_url": true, "callback-uri": true,
 		"endpoint": true, "endpoints": true, "host": true, "smtp_host": true, "hostname": true,
-		"webhook": true, "href": true, "server": true, "urls": true,
-		"channel": false, "port": false, "timeout": false, "retries": false, "tokens_used": false,
-		"password": false, "status": false, "hosting_plan": false,
+		"webhook": true, "href": true, "server": true, "urls": true, "mirror_baseurls": true,
+		"proxy": true, "http_proxy": true, "proxies": true, "address": true, "listen_address": true,
+		"addresses": true, "addr": true, "bind-addr": true, "addrs": true,
+		"port": true, "smtp_port": true, "ports": true,
+		"channel": false, "timeout": false, "retries": false, "tokens_used": false,
+		"password": false, "status": false, "hosting_plan": false, "report": false,
+		"transport": false, "support_email": false, "proxying": false,
 	} {
 		if urlLike(name) != want {
 			t.Errorf("urlLike(%q) = %v", name, !want)

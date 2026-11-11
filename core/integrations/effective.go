@@ -1,5 +1,5 @@
 // file: core/integrations/effective.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4cea2446-663d-448f-b1e5-1ba9259adfc6
 // last-edited: 2026-11-11
 
@@ -204,6 +204,64 @@ func overlayValues(fs fieldSet, settings map[string]any, ops map[string]config.O
 	return out
 }
 
+// operatorFields are the non-secret fields of fs whose operator value in ops
+// applies: the fields overlayValues and effective set from the overlay.
+func operatorFields(fs fieldSet, ops map[string]config.OperatorValue) map[string]bool {
+	out := map[string]bool{}
+	for f, v := range ops {
+		p, known := fs.props[f]
+		if !known || p.secret {
+			continue
+		}
+		if _, err := coerce(p, v.Value); err == nil {
+			out[f] = true
+		}
+	}
+	return out
+}
+
+// operatorDestinations reports, for each destination key of fs, whether the
+// operator supplies the whole destination in view: every field that makes
+// its origin is operator-sourced (opSource). That is a URL field itself; for
+// the host-and-port pair the host, and the port unless view sets no port at
+// all.
+func (fs fieldSet) operatorDestinations(opSource map[string]bool, view map[string]any) map[string]bool {
+	out := map[string]bool{}
+	for _, k := range fs.urls {
+		out[k] = opSource[k]
+	}
+	if fs.hostPort {
+		_, portSet := view[portField]
+		out[hostField] = opSource[hostField] && (opSource[portField] || !portSet)
+	}
+	return out
+}
+
+// withheldStored lists the secret fields of s that hold their stored
+// secret's ref while the stored secrets are withheld (the effective
+// destinations are not the ones the row's SecretsOrigin names), sorted. An
+// operator-sourced field, and a Test's re-supplied one, is not a stored
+// secret. It is computed on use: Test sets given and storedSecrets after
+// effective builds the slot.
+func (s *slot) withheldStored() []string {
+	if s.row == nil || s.storedSecrets || s.ad == nil {
+		return nil
+	}
+	var out []string
+	for _, f := range s.ad.fs.secrets {
+		if _, ok := s.opSec[f]; ok {
+			continue
+		}
+		if _, ok := s.given[f]; ok {
+			continue
+		}
+		if sr, ok := s.cfg.Settings[f].(secrets.Ref); ok && sr.Name() == secretName(s.cfg.Ref, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // bind applies the origin rules of M1.4 step 2 to s: which stored and which
 // operator-sourced secrets may be served, and which hosts are trusted for
 // private networks. Every rule compares the effective destinations (scheme,
@@ -222,17 +280,7 @@ func (r *Registry) bind(s *slot, opSource map[string]bool) {
 		opSettings[f] = s.cfg.Settings[f]
 	}
 	opOrigins := fs.origins(opSettings)
-	// A destination is operator-sourced when every field that makes its
-	// origin is: a URL field itself; for the host-and-port pair the host,
-	// and the port unless no port is set at all.
-	opDest := map[string]bool{}
-	for _, k := range fs.urls {
-		opDest[k] = opSource[k]
-	}
-	if fs.hostPort {
-		_, portSet := s.cfg.Settings[portField]
-		opDest[hostField] = opSource[hostField] && (opSource[portField] || !portSet)
-	}
+	opDest := fs.operatorDestinations(opSource, s.cfg.Settings)
 
 	// Stored secrets follow only the destination they were written for,
 	// whichever layer moved it (SEC-15): an operator overlay that moves the
