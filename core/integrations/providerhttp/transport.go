@@ -123,15 +123,18 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		o := outcome{status: resp.StatusCode, success: resp.StatusCode < 400}
 		var head []byte
 		if !o.success {
-			head, _ = io.ReadAll(io.LimitReader(resp.Body, classifyBodyMax))
+			var rerr error
+			head, rerr = io.ReadAll(io.LimitReader(resp.Body, classifyBodyMax))
+			if rerr != nil {
+				head = nil // a body that cannot be read classifies by its status alone
+			}
 			o.class = classifyStatus(resp.StatusCode, head)
 			o.retryAfter = retryAfterOf(resp.Header, r.now())
 		}
 		r.met.request(g.ref, o.class)
 		last, haveLast = o, true
 		if !o.success && o.class.Retryable() && attempt < maxRetries && ctx.Err() == nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, classifyBodyMax)) // reuse the connection, bounded
-			_ = resp.Body.Close()
+			finishBody(resp.Body)
 			cancel()
 			if err := t.backoff(ctx, attempt, o.retryAfter, lim); err != nil {
 				tk.finish(o)
@@ -256,4 +259,14 @@ func (b *guardBody) Close() error {
 	err := b.c.Close()
 	b.cancel()
 	return err
+}
+
+// finishBody drains a bounded rest of body so its connection is reused, then
+// closes it. It reports whether both worked; a body that cannot be drained or
+// closed only costs the next attempt a new connection, so a caller that is not
+// asking ignores the answer.
+func finishBody(body io.ReadCloser) (reusable bool) {
+	_, drainErr := io.Copy(io.Discard, io.LimitReader(body, classifyBodyMax))
+	closeErr := body.Close()
+	return drainErr == nil && closeErr == nil
 }
