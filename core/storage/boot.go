@@ -1,7 +1,7 @@
 // file: core/storage/boot.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package storage
 
@@ -76,6 +76,12 @@ type OpenOptions struct {
 	ExtendStart     func(step string)
 	Clock           func() time.Time // nil = time.Now
 	FS              FS               // the filesystem the store opens on; zero = the OS's (tests: MemFS)
+
+	// DataSteps are the build's BootBlocking data migrations as DAG nodes
+	// (DataStep; 05-storage §5S.3.6): ordered among the versioned steps,
+	// counted in the checkpoint decision, recorded done by a fresh install,
+	// and run by Migrate before step 9. The kernel builds them.
+	DataSteps []DataStep
 
 	// ReadOnly opens Pebble ReadOnly (§5S.3.10's OpenReadOnly): no WAL
 	// flush, no ratchet, no OPTIONS-<n>, and every handle refuses writes
@@ -236,12 +242,6 @@ type attemptRecord struct {
 
 func codecAttempt() codec.Codec[attemptRecord] { return codec.JSON[attemptRecord](1) }
 
-type dmRecord struct {
-	State string    `json:"state"`
-	At    time.Time `json:"at"`
-	Build string    `json:"build"`
-}
-
 // Relative keys of storage's own keyspace c/storage/ (notation §5S.3.3).
 func installKey() []byte      { return keys.Join(keys.Str("install")) }
 func epochKey() []byte        { return keys.Join(keys.Str("epoch")) }
@@ -309,6 +309,9 @@ func Open(ctx context.Context, opts OpenOptions) (*Opened, error) {
 	}
 	owners, claims, refs, err := register(opts.Owners)
 	if err != nil {
+		return nil, err
+	}
+	if err := attachDataSteps(owners, opts.DataSteps); err != nil {
 		return nil, err
 	}
 	if opts.MustExist || opts.ReadOnly {
@@ -796,18 +799,18 @@ func (db *DB) floors(ctx context.Context) []error {
 // migration) in this store.
 func (db *DB) stepDone(ctx context.Context, r StepRef) (bool, error) {
 	if r.DataMigration != "" {
-		raw, err := db.storageKS().Get(ctx, dmKey(r.String()))
+		raw, err := db.storageKS().Get(ctx, dmKey(r.DataMigration))
 		if errors.Is(err, ErrNotFound) {
 			return false, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		rec, err := codec.JSON[dmRecord](1).Decode(raw)
+		rec, err := DataMigrationCodec().Decode(raw)
 		if err != nil {
 			return false, fmt.Errorf("storage: data migration record %s: %w", r, ErrBookkeepingUnreadable)
 		}
-		return rec.State == "done", nil
+		return rec.State == DataMigrationDone, nil
 	}
 	v, err := db.appliedVersion(ctx, r.Owner)
 	return r.Version <= v, err
@@ -1092,8 +1095,9 @@ func (db *DB) writeMarker(ctx context.Context) error {
 
 // freshInstall is §5S.4 step 6 on an empty store: ONE batch with the marker,
 // the store generation, every owner's stamp at the build's level, the applied
-// records below each owner's lowest Seed step, `done` for every step a
-// declared floor's Requires names, and the claim ledger; then the sidecars.
+// records below each owner's lowest Seed step, `done` for every registered
+// data migration and every step a declared floor's Requires names, and the
+// claim ledger; then the sidecars.
 // A crash before the batch leaves an empty store.
 func (db *DB) freshInstall(ctx context.Context) (err error) {
 	st := db.boot
@@ -1128,15 +1132,23 @@ func (db *DB) freshInstall(ctx context.Context) (err error) {
 		}
 		versions[o.owner] = upTo
 	}
+	done := DataMigrationRecord{State: DataMigrationDone, At: now, Build: st.opts.Build}
 	for _, o := range sortedInfos(db.owners) {
 		if f := o.spec.UpgradeFloor; f != nil {
 			for _, r := range f.Requires {
 				if r.DataMigration == "" {
 					continue
 				}
-				if err := setEnc(b, dmKey(r.String()), codec.JSON[dmRecord](1), dmRecord{State: "done", At: now, Build: st.opts.Build}); err != nil {
+				if err := setEnc(b, dmKey(r.DataMigration), DataMigrationCodec(), done); err != nil {
 					return err
 				}
+			}
+		}
+		// Every registered data migration is done on a fresh install: it has
+		// no older rows to convert (§5S.4 step 6).
+		for _, d := range o.data {
+			if err := setEnc(b, dmKey(d.ID), DataMigrationCodec(), done); err != nil {
+				return err
 			}
 		}
 	}

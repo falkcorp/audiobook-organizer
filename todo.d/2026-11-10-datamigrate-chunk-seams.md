@@ -1,0 +1,3 @@
+- [ ] **F2-06 follow-up: data-migration chunk seams.** Two gaps the runner (`core/internal/storagemigrate`) leaves open:
+      (1) a chunk's batch is not exclusive, so a Cutover importer that stages a plain `Set` into a `Serialized` keyspace range through `StepWriter.Batch()` fails the chunk with `storage.ErrBlindWrite`. The first importer over a Serialized family needs an exclusive chunk batch, or must stage an `Expect` per key.
+      (2) the `RewritesInPlace` written set lives in memory, so after a crash a resumed shard can step one of the migration's own writes once. §5S.3.6 allows that (`Step` is idempotent for its own outputs). Closing it costs a durable record per such write in the chunk's batch, deleted when the shard passes it.

@@ -1,7 +1,7 @@
 // file: core/storage/migrate_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 25ec79a2-2c84-47a2-8cd6-89d5026a6925
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package storage
 
@@ -228,7 +228,7 @@ func TestFreshInstallStampsLevelsAtomically(t *testing.T) {
 		}}},
 		{Owner: "core/tasks", Enabled: true, Spec: Spec{Keyspace: true}},
 		{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamClaims(), Level: 0, UpgradeFloor: &UpgradeFloor{
-			Owner: "gotham", Requires: []StepRef{{Owner: "gotham", DataMigration: "m2"}}, InstallFirst: "r2",
+			Owner: "gotham", Requires: []StepRef{{Owner: "gotham", DataMigration: "gotham.m2"}}, InstallFirst: "r2",
 		}}},
 	}
 	e := newEnvFS(t, fs, owners...)
@@ -241,7 +241,7 @@ func TestFreshInstallStampsLevelsAtomically(t *testing.T) {
 	ctx := context.Background()
 	ks := db.storageKS()
 	for _, k := range [][]byte{installKey(), epochKey(), levelKey("core"), levelKey("wayne"), levelKey("gotham"),
-		versionKey("wayne"), appliedKey("wayne", 1), dmKey("gotham#m2"), claimsKey("gotham"), claimsKey("wayne")} {
+		versionKey("wayne"), appliedKey("wayne", 1), dmKey("gotham.m2"), claimsKey("gotham"), claimsKey("wayne")} {
 		if ok, err := ks.Has(ctx, k); err != nil || !ok {
 			t.Errorf("fresh install lacks %q (%v)", k, err)
 		}

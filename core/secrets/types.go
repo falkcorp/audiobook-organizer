@@ -1,5 +1,5 @@
 // file: core/secrets/types.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: a67c98df-8fe3-435f-9a52-46603e1ad0cb
 // last-edited: 2026-11-10
 
@@ -87,19 +87,47 @@ const redacted = "[REDACTED]"
 
 // Value holds secret bytes. Every formatting path is redacted; only Reveal
 // and Bytes expose it.
-type Value struct{ b []byte }
+//
+// Value's own methods redact it where fmt or slog can call them: a Value
+// passed as an argument or held in an exported field. Held in an unexported
+// field, alone or in a slice, array, map or nested struct, the methods
+// cannot be called and fmt walks the fields instead. So the bytes sit behind
+// a pointer to a pointer: fmt dereferences a pointer only at the top level
+// (which its bad-verb path, %s or %q on a pointer, resets to) and only when
+// it points at an array, slice, struct or map, so a **[]byte prints as an
+// address on every path, whatever wraps the Value
+// (TestValue_NeverFormatsInsideAnyShape).
+type Value struct {
+	p **[]byte  // nil for the zero Value; see valueOf and raw
+	_ [0]func() // not comparable, as it was when it held a []byte
+}
+
+// valueOf returns a Value that owns b (no copy).
+func valueOf(b []byte) Value {
+	bp := &b
+	return Value{p: &bp}
+}
+
+// raw is v's own bytes, not a copy: the store reads, seals and wipes them
+// in place. nil for the zero Value.
+func (v Value) raw() []byte {
+	if v.p == nil || *v.p == nil {
+		return nil
+	}
+	return **v.p
+}
 
 // NewValue returns a Value holding a copy of s's bytes.
-func NewValue(s string) Value { return Value{b: []byte(s)} }
+func NewValue(s string) Value { return valueOf([]byte(s)) }
 
 // Reveal returns the secret as a string.
-func (v Value) Reveal() string { return string(v.b) }
+func (v Value) Reveal() string { return string(v.raw()) }
 
 // Bytes returns a copy of the secret's bytes.
-func (v Value) Bytes() []byte { return append([]byte(nil), v.b...) }
+func (v Value) Bytes() []byte { return append([]byte(nil), v.raw()...) }
 
 // IsZero reports whether v holds no bytes.
-func (v Value) IsZero() bool { return len(v.b) == 0 }
+func (v Value) IsZero() bool { return len(v.raw()) == 0 }
 
 // String prints [REDACTED].
 func (Value) String() string { return redacted }

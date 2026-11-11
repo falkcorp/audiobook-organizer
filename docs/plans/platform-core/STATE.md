@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.56.0 -->
+<!-- version: 1.57.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -132,6 +132,13 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W35 | F2-13 | #4549 `83b77f605` | T3: R2 corpus stage 2, the overlay and blockers (dark, test data only). Follow-up #4555 `5c3cf2ba1`. Merged 2026-11-10 |
 | W35 | F4-01 | #4548 `702da1347` | T3: core RBAC store, service and seeds (dark). Merged 2026-11-10 |
 | W35 | F3-01 | #4563 `b6d4e986b` | T3: core config loader, override store and importer (dark), inside the announced move window over `internal/config/`, `internal/arch/layering_test.go` and `scripts/ci/short_test_weights.json`. Re-cut of #4550, #4557, #4559 and #4560 after rebase conflicts and a coverage-floor fix. Review follow-up #4564 `a371841d1`. Merged 2026-11-10, deployed, healthy; the move window is closed |
+| W36 | F3-05 | #4567 `c3b07800d` | Stage 8 Basic gate with HEAD's exempt set and the no-password refusal (dark). Follow-up #4570 `a754970da` (Build-recorded facts, slash fail-open, posture race). Merged 2026-11-10 |
+| W36 | F4-09 | #4568 `a98ac813b` | `core/internal/authz`: compiled checker, `AuthDisabled` and `ForSystem(cat, perms)`, and `NoSystemPrincipalOutsideKernel` (dark). Merged 2026-11-10 |
+| W36 | F2-02 | #4572 `32db27b29` | Tasks native stores, importer and `StoresSuite` (dark). Re-cut of #4569. Merged 2026-11-10 |
+| W36 | F2-14 | #4573 `a309aa2bb` | Production-shaped store and boot-time measurement. Unblocked by OWNER-04. Merged 2026-11-10 |
+| W36 | F3-03 | #4571 `47d1ce946` | Core secrets: keyring, sealed records, importer and the offline keyring commands (dark). Follow-up #4576 `cfc281eb3` (wrapped-store formatting leak, key-digest race, dangling keyring path). Merged 2026-11-10 |
+| W36 | F2-06 | #4575 `4177a932f` | `datamigrate` and the BootBlocking runner (dark), with the storage DataStep seam (see the open owner item under Blockers). Re-cut of #4574. Merged 2026-11-10, W26 deployed with the wave |
+| W36 | OWNER-04 | — | owner answered the read-only production counts: https://github.com/falkcorp/audiobook-organizer/issues/4382#issuecomment-6781137669. |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -156,11 +163,23 @@ start as soon as their dependencies merge, announced on #4382, still running alo
 
 None for agents. R0 complete (6/6). R1 complete (37/37 rows merged): the 32 listed through R1-24 plus R1-25, R1-26, R1-27, R1-28 and R1-31. The owner action from R1-27 (host.conf and the root-owned rollback helpers) is pending.
 
+Open owner item (2026-11-10): F2-06's storage DataStep seam was built under a STOP override (the brief's STOP condition was overridden to land it). The owner's after-the-fact sign-off on that seam is open; it is recorded here and is not decided by the agents.
+
+Pending brief notes (2026-11-10), for briefs that agents are working from now and are therefore not edited here; the coordinator folds each in when the brief is next free:
+
+- F4-02 brief line 42: `authz.ForSystem(perms)` is now `authz.ForSystem(cat, perms)` (from the #4568 re-verify; the F4-09 brief is already synced).
+- F4-02 seams from F4-09: refuse nil or empty key scopes before `Compile`, and `auth` must never export a wrapper around the privileged constructors (`AuthDisabled`, `ForSystem`).
+- F2-03: add a Coordinator addition: spec 5T.3 needs `RunStore` readers for marks and strikes, and they are to land before F2-03 (found in the F2-02 re-verify).
+- Spec drift to note: 05-authn §3.2 still names `authsys.Principal`, found in the F4-09 re-verify; the spec text is to be reconciled.
+- F3-03 follow-up #4576 is merged. The core/config engine PR for an OIDC `Ref` in a list value is #4577 (not a plan row), in review fixes.
+
 Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
 ## Next action
 
-W25 is merged, 4 of 4 (F2-01, F2-13, F3-01 and F4-01), and deployed 2026-11-10 (main `a371841d1`, `make deploy-debug` at 15:42 EST; active, NRestarts=0, `/health` ready after a 143 s warm-up). W26 is in progress: F2-02, F2-06, F3-03, F3-05 and F4-09, all dispatched 15:50 EST. F2-14 still waits for OWNER-04, the owner's read-only production counts. The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending. In plain terms: W25 adds more dark building blocks (the task API kit, the R2 corpus overlay, core RBAC and the core config engine); nothing users see has changed.
+W26 is merged, 6 of 6 (F3-05, F4-09, F2-02, F2-14, F3-03 and F2-06, with follow-ups #4570 and #4576), and deployed 2026-11-10 from main `cfc281eb3` with `make deploy-debug`; the service came up active with NRestarts=0. OWNER-04 is answered (https://github.com/falkcorp/audiobook-organizer/issues/4382#issuecomment-6781137669). W27 is in progress: F2-03, F4-02, F2-15 and F2-17 (#4578), plus #4577 (OIDC `client_secret`). F3-02 waits on #4577. The owner's after-the-fact sign-off on F2-06's DataStep seam is open (see Blockers). The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending. In plain terms: W26 adds more dark building blocks (the Basic gate, authorization checks, the task stores, core secrets and the data-migration runner); nothing users see has changed.
+
+Before W26: W25 is merged, 4 of 4 (F2-01, F2-13, F3-01 and F4-01), and deployed 2026-11-10 (main `a371841d1`, `make deploy-debug` at 15:42 EST; active, NRestarts=0, `/health` ready after a 143 s warm-up). W26 is in progress: F2-02, F2-06, F3-03, F3-05 and F4-09, all dispatched 15:50 EST. F2-14 still waits for OWNER-04, the owner's read-only production counts. The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending. In plain terms: W25 adds more dark building blocks (the task API kit, the R2 corpus overlay, core RBAC and the core config engine); nothing users see has changed.
 
 Before W25: W24 (the first F2 wave) is merged, 7 of 7, and deployed 2026-11-10. Next is W25: F2-01, F2-13, F3-01 (inside an announced move window over `internal/config/`, `internal/arch/layering_test.go` and `scripts/ci/short_test_weights.json`) and F4-01. F2-14 waits for OWNER-04, the owner's read-only production counts. The F2-12 follow-up (answer normalization and lapse guards) lands before F2-15. The deadcode ratchet carries staged entries for F2-07, F2-08, F2-09, F2-10 and F4-04 until their boot rows wire them. The R1-27 owner action is still pending. In plain terms: the first set of R2 building blocks is in production, switched off.
 

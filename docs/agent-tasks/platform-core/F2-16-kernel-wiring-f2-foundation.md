@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F2-16-kernel-wiring-f2-foundation.md -->
-<!-- version: 1.0.4 -->
+<!-- version: 1.0.5 -->
 <!-- guid: ee4d77ac-3711-47b9-9be9-7b78297d36f2 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # F2-16 — Kernel wiring of the F2 foundation: the tasks start rule, `Registrar.Tasks` and `Resources`, `Manifest.TaskLedger` and `DataMigrations`, the boot calls of every F2 subsystem, `hello.count` registered, and `coretest`'s task cells and held runs
 
@@ -257,3 +257,5 @@ the PR: the F2 packages return to unwired, hello registers no kind, and ABO is u
   `manifest.go` or `registrar.go`, that file needs adding to the row.
 - The `hello.count` half of `TestNativeStores_RoundTrip` needs hello's registration and `coretest`'s task cells, so it
   lands here, not in F2-02 (which owns the gate); no row named it.
+- Coordinator addition (2026-11-10, from the F2-02 re-verify): the definition snapshot moves as bytes and must not embed the
+  kind.

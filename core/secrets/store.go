@@ -1,5 +1,5 @@
 // file: core/secrets/store.go
-// version: 1.0.1
+// version: 1.0.4
 // guid: be9e243c-f9df-4ff7-930d-10a5b90f2f49
 // last-edited: 2026-11-10
 
@@ -62,7 +62,8 @@ type Options struct {
 	Now       func() time.Time
 }
 
-// ephemeralValue is an operator-supplied value (env or file).
+// ephemeralValue is an operator-supplied value (env or file). The Store holds
+// it by pointer (Store.ephemeral): see Store.String for why.
 type ephemeralValue struct {
 	v   Value
 	src Source
@@ -84,9 +85,9 @@ type Store struct {
 
 	mu        sync.RWMutex
 	ring      *keyring
-	retired   map[string]bool // verify derive keys RetireUnused retired, this process only
-	blocked   []string        // verify derive keys past retire_after kept by the in-use check
-	ephemeral map[Name]ephemeralValue
+	retired   map[string]bool          // verify derive keys RetireUnused retired, this process only
+	blocked   []string                 // verify derive keys past retire_after kept by the in-use check
+	ephemeral map[Name]*ephemeralValue // pointers: see String
 	closed    bool
 
 	ctr counters
@@ -138,7 +139,7 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	s := &Store{
 		ks: o.Keyspace, appID: o.AppID, keyFile: keyFile, root: o.StateDir,
 		log: o.Logger, now: o.Now,
-		retired: map[string]bool{}, ephemeral: map[Name]ephemeralValue{},
+		retired: map[string]bool{}, ephemeral: map[Name]*ephemeralValue{},
 	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
@@ -299,12 +300,18 @@ func isTempSuffix(s string) bool {
 // rewrites it on a reset boot only. A new keyring is k<n> and d<n> with n
 // past every key number known: the sealed records' key IDs, c/secrets/meta's
 // max_key_id (m) and the export record's IDs. It is created exclusively,
-// never over a keyring that appeared meanwhile.
+// never over a keyring that appeared meanwhile. The keyring path must hold a
+// regular file or nothing: a symbolic link (dangling or not), a directory or
+// any other entry is refused, never followed and never replaced, as
+// export-keyring refuses one (05-config §2.4 names a file, 0600, written
+// atomically; nothing there allows a link).
 func (s *Store) resolveKeyring(ctx context.Context, o Options, m *storeMeta) (*keyringFile, error) {
-	_, statErr := s.root.Stat(s.keyFile)
+	fi, statErr := s.root.Lstat(s.keyFile)
 	switch {
-	case statErr == nil:
+	case statErr == nil && fi.Mode().IsRegular():
 		return s.loadKeyring(o)
+	case statErr == nil:
+		return nil, notRegularKeyring(s.keyFile, fi.Mode())
 	case !errors.Is(statErr, fs.ErrNotExist):
 		return nil, fmt.Errorf("secrets: stat the keyring %s: %w", s.keyFile, statErr)
 	}
@@ -349,6 +356,25 @@ func (s *Store) resolveKeyring(ctx context.Context, o Options, m *storeMeta) (*k
 		"The stored secrets under the old keys are kept and read as \"must be re-entered\" until the old keyring is put back",
 		"key_file", s.keyFile, "kept_records", sealed, "key_ids", []string{f.Keys[0].ID, f.Keys[1].ID})
 	return f, nil
+}
+
+// notRegularKeyring is the refusal of an entry at the keyring path that is
+// not a regular file.
+func notRegularKeyring(keyFile string, mode fs.FileMode) error {
+	what := fmt.Sprintf("an entry of mode %v", mode)
+	switch {
+	case mode&fs.ModeSymlink != 0:
+		what = "a symbolic link"
+	case mode.IsDir():
+		what = "a directory"
+	}
+	// The advice never says "remove it": removing the entry makes the next
+	// Open create a new keyring (or refuse with ErrKeyMissing), and when the
+	// entry pointed at the real keyring that orphans every stored secret.
+	return fmt.Errorf("secrets: the keyring path %s holds %s, not a regular file; it is never followed or replaced: "+
+		"if it points at the keyring, replace it with a copy of that file (mode 0600, owned by the service user); "+
+		"delete it only if no keyring ever existed here, because a new keyring cannot read secrets stored under the old one",
+		keyFile, what)
 }
 
 // exportedMaxID is the highest key number the export record names, 0 when
@@ -446,15 +472,16 @@ func (s *Store) lookup(ctx context.Context, n Name, withValue bool) (Value, Meta
 		return Value{}, Meta{Name: n}, err
 	}
 	s.mu.RLock()
-	closed := s.closed
-	eph, isEph := s.ephemeral[n]
-	s.mu.RUnlock()
-	if closed {
+	if s.closed {
+		s.mu.RUnlock()
 		return Value{}, Meta{Name: n}, errClosed
 	}
-	if isEph {
-		return s.ephemeralMeta(n, eph, withValue)
+	if eph, ok := s.ephemeral[n]; ok {
+		v, m := s.ephemeralMetaLocked(n, eph, withValue)
+		s.mu.RUnlock()
+		return v, m, nil
 	}
+	s.mu.RUnlock()
 	raw, err := s.ks.Get(ctx, recordKey(n))
 	if errors.Is(err, storage.ErrNotFound) {
 		return Value{}, Meta{Name: n}, ErrNotSet
@@ -465,19 +492,17 @@ func (s *Store) lookup(ctx context.Context, n Name, withValue bool) (Value, Meta
 	return s.fromRecord(n, raw, withValue)
 }
 
-// ephemeralMeta is the Meta (and, for Get, a copy of the value) of an
-// operator value.
-func (s *Store) ephemeralMeta(n Name, eph ephemeralValue, withValue bool) (Value, Meta, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.closed {
-		return Value{}, Meta{Name: n}, errClosed
-	}
-	m := Meta{Name: n, Set: true, Source: eph.src, Fingerprint: s.ring.fingerprint(eph.v.b)}
+// ephemeralMetaLocked is the Meta (and, for Get, a copy of the value) of an
+// operator value. The caller holds s.mu and has checked the store is open:
+// the fingerprint and the copy are taken under the same lock as the map
+// read, because Ephemeral wipes a replaced value under the write lock, so no
+// reader ever touches the store's own bytes outside it (copy on read).
+func (s *Store) ephemeralMetaLocked(n Name, eph *ephemeralValue, withValue bool) (Value, Meta) {
+	m := Meta{Name: n, Set: true, Source: eph.src, Fingerprint: s.ring.fingerprint(eph.v.raw())}
 	if !withValue {
-		return Value{}, m, nil
+		return Value{}, m
 	}
-	return Value{b: eph.v.Bytes()}, m, nil
+	return valueOf(eph.v.Bytes()), m
 }
 
 // fromRecord reads one record's bytes: a cleared marker is ErrNotSet, an
@@ -512,7 +537,7 @@ func (s *Store) fromRecord(n Name, raw []byte, withValue bool) (Value, Meta, err
 		clear(pt)
 		return Value{}, m, nil
 	}
-	return Value{b: pt}, m, nil
+	return valueOf(pt), m, nil
 }
 
 // Get reads n (05-config §2.3 "Read order"): ErrNotSet when nothing is set
@@ -708,8 +733,8 @@ func (s *Store) put(b *storage.Batch, w Write) (Meta, error) {
 			s.mu.RUnlock()
 			return Meta{Name: w.Name}, errClosed
 		}
-		sealed, err := s.ring.seal(s.appID, w.Name, w.Value.b, at, w.By)
-		fp := s.ring.fingerprint(w.Value.b)
+		sealed, err := s.ring.seal(s.appID, w.Name, w.Value.raw(), at, w.By)
+		fp := s.ring.fingerprint(w.Value.raw())
 		s.mu.RUnlock()
 		if err != nil {
 			return Meta{Name: w.Name}, err
@@ -769,10 +794,14 @@ func (s *Store) Ephemeral(n Name, v Value, src Source) {
 	if s.closed {
 		return
 	}
-	if old, ok := s.ephemeral[n]; ok {
-		clear(old.v.b)
+	// Readers copy an operator value under s.mu (ephemeralMetaLocked), so
+	// with the write lock held none can still hold the old bytes: they are
+	// wiped once the new value is in place.
+	old := s.ephemeral[n]
+	s.ephemeral[n] = &ephemeralValue{v: valueOf(v.Bytes()), src: src}
+	if old != nil {
+		clear(old.v.raw())
 	}
-	s.ephemeral[n] = ephemeralValue{v: Value{b: v.Bytes()}, src: src}
 }
 
 // All yields the Meta of every secret the store knows, sorted by name: each
@@ -800,7 +829,10 @@ func (s *Store) allMetas(ctx context.Context) ([]Meta, error) {
 		s.mu.RUnlock()
 		return nil, errClosed
 	}
-	eph := maps.Clone(s.ephemeral)
+	eph := make(map[Name]Meta, len(s.ephemeral))
+	for n, e := range s.ephemeral {
+		_, eph[n] = s.ephemeralMetaLocked(n, e, false)
+	}
 	s.mu.RUnlock()
 	byName := map[Name]Meta{}
 	for kv, err := range s.ks.ScanPrefix(ctx, recordPrefix()) {
@@ -821,13 +853,7 @@ func (s *Store) allMetas(ctx context.Context) ([]Meta, error) {
 		}
 		byName[n] = m
 	}
-	for n, e := range eph {
-		_, m, err := s.ephemeralMeta(n, e, false)
-		if err != nil {
-			return nil, err
-		}
-		byName[n] = m
-	}
+	maps.Copy(byName, eph)
 	names := slices.Sorted(maps.Keys(byName))
 	out := make([]Meta, 0, len(names))
 	for _, n := range names {
@@ -893,6 +919,18 @@ func (s *Store) KeyIDs() []string {
 // String names the store's app and keyring file, never a value or a key:
 // the operator values and the keyring sit in unexported fields, which fmt
 // would print raw.
+//
+// String, GoString and Format cover the Store printed itself or through an
+// exported field. Through an unexported field (a wrapper such as the kernel's
+// kernelSecrets, or a bound Ref's resolver) fmt cannot call them: a pointer
+// printed with a verb it does not take (%s, %q) is reprinted with %v at
+// depth 0, which walks the Store's fields one level and prints every pointer
+// below as an address. So every field that holds key material sits behind a
+// pointer: ring is a *keyring. A field holding a keyMaterial, a keyring type
+// or a []byte of key material by value would print it raw
+// (TestStore_SecretFieldsSitBehindPointers). Operator values are Values,
+// whose bytes fmt never reaches whatever holds them (see Value); ephemeral
+// maps to *ephemeralValue as well.
 func (s *Store) String() string {
 	if s == nil {
 		return "secrets.Store(nil)"
@@ -922,14 +960,15 @@ func (s *Store) LogValue() slog.Value {
 // the record on every call, since export-keyring runs while the server
 // serves. An absent record leaves every key unexported; a record that cannot
 // be read does too, and its error is returned beside them.
+//
+// The digests are taken under the read lock: the key material is the
+// keyring's own memory, which Close wipes under the write lock, so hashing
+// it after the unlock would race with Close and could digest zeroed bytes.
 func (s *Store) UnexportedKeys() ([]string, error) {
-	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
-		return nil, errClosed
+	keys, err := s.loadedKeyDigests()
+	if err != nil {
+		return nil, err
 	}
-	keys := slices.Clone(s.ring.file.Keys)
-	s.mu.RUnlock()
 	ids := make([]string, len(keys))
 	for i, k := range keys {
 		ids[i] = k.ID
@@ -942,12 +981,27 @@ func (s *Store) UnexportedKeys() ([]string, error) {
 		return ids, err
 	}
 	var out []string
-	for i := range keys {
-		if !exported.covers(&keys[i]) {
-			out = append(out, keys[i].ID)
+	for _, k := range keys {
+		if !exported.covers(k) {
+			out = append(out, k.ID)
 		}
 	}
 	return out, nil
+}
+
+// loadedKeyDigests is every key of the loaded keyring as the export record
+// names it (ID and material digest), in file order, read under s.mu.
+func (s *Store) loadedKeyDigests() ([]exportedKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, errClosed
+	}
+	keys := make([]exportedKey, len(s.ring.file.Keys))
+	for i := range s.ring.file.Keys {
+		keys[i] = exportedKeyOf(&s.ring.file.Keys[i])
+	}
+	return keys, nil
 }
 
 // Close wipes the loaded key material and the operator values. It does not
@@ -961,7 +1015,7 @@ func (s *Store) Close() error {
 	s.closed = true
 	s.ring.wipe()
 	for _, e := range s.ephemeral {
-		clear(e.v.b)
+		clear(e.v.raw())
 	}
 	clear(s.ephemeral)
 	s.mu.Unlock()
