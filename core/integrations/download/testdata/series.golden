@@ -1,0 +1,11 @@
+# file: core/integrations/download/testdata/series.golden
+# version: 1.0.0
+# guid: 0ca26e25-f1e8-4898-a46b-05c0f0c266a3
+# last-edited: 2026-11-11
+#
+# The mediacore.download scope's phase-1 series (05-download §9, 05-metrics
+# §12): family<TAB>type<TAB>labels, checked by metricstest.AssertSeries in
+# TestDownloadSeries_Golden. Phase 2 appends its families (grabs, monitor,
+# polls) with the code that records them; none exists yet.
+mediacore_download_unknown_state_total	counter	adapter
+mediacore_download_unmapped_paths_total	counter	instance
