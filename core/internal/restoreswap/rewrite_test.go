@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/rewrite_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d92e319d-69bf-437e-a034-410415eaefa0
 // last-edited: 2026-11-11
 
@@ -540,8 +540,15 @@ func TestRewriteJournalsOfAReplacedStore(t *testing.T) {
 		if err := writeFileAtomic(mem, s.inflightPath(in.ID), raw, privateFile); err != nil {
 			t.Fatal(err)
 		}
+		// The set-aside the journal names is there, so only the record's
+		// state can tell that the live store is not the copy.
+		aside := restorejournal.SetAsideDest(stateDir, db, in.ID, db)
+		writeFile(t, mem, filepath.Join(aside, "000001.sst"), "Two-Face's ledger")
 		if res := m8Boot(t, mem, db); !errors.Is(res.err, ErrJournalCorrupt) || res.runs != 1 {
 			t.Fatalf("M8 over a store the swapped journal does not describe = %+v, want ErrJournalCorrupt", res)
+		}
+		if ok, err := exists(mem, aside); err != nil || !ok {
+			t.Errorf("the refusal deleted the set-aside %s (%v)", aside, err)
 		}
 	})
 }
