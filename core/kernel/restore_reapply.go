@@ -440,13 +440,18 @@ func forkedAt(chain *journal.Chain, head journal.Head) bool {
 // unrelated to the journal: the chain's end (for a chain that does not verify,
 // everything it claims) is above the store's head, the file is not the one the
 // store committed or starts above its head, or it is another install's while the
-// store has a head (its own journal is gone). It happens once per broken state
-// (journal.Chain.Fingerprint), so a restart does not bump every epoch again. On
-// a restore boot the hooks do their own fallback with no coverage.
+// store has a head (its own journal is gone). Another install's journal never
+// answers "is the store behind it": its seqs are not this store's, so a store
+// that has never journaled (head 0) has lost nothing to it, however many lines
+// it holds. It happens once per broken state (journal.Chain.Fingerprint), so a
+// restart does not bump every epoch again. On a restore boot the hooks do their
+// own fallback with no coverage.
 func (in reapplyInput) failClosedIfBehind(ctx context.Context, chain *journal.Chain, head journal.Head, restoring bool, res *reapplyResult) error {
-	forked := forkedAt(chain, head) || (otherInstall(chain, in.Install) && head.Seq > 0)
+	foreign := otherInstall(chain, in.Install)
+	forked := forkedAt(chain, head) || (foreign && head.Seq > 0)
 	pruned := chain.Break == nil && chain.HasHeader && head.Seq < chain.Header.BaseSeq
-	if restoring || !(forked || pruned || chain.Behind(head.Seq)) {
+	behind := !foreign && chain.Behind(head.Seq)
+	if restoring || !(forked || pruned || behind) {
 		return nil
 	}
 	fp := chain.Fingerprint(head, forked)
