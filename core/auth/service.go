@@ -25,10 +25,10 @@ import (
 
 // Defaults of the core.auth.* settings the service reads (05-authn §8).
 const (
-	DefaultSessionTTL    = 24 * time.Hour
-	DefaultRememberTTL   = 168 * time.Hour
-	DefaultKeyTTL        = 720 * time.Hour
-	DefaultKeyMaxTTL     = 8760 * time.Hour
+	DefaultSessionTTL  = 24 * time.Hour
+	DefaultRememberTTL = 168 * time.Hour
+	DefaultKeyTTL      = 720 * time.Hour
+	DefaultKeyMaxTTL   = 8760 * time.Hour
 	// DefaultSessionCookie is core.auth.session.cookie_name's fallback; the
 	// kernel passes <AppID>_session (§4.3, SEC-11).
 	DefaultSessionCookie = "mediacore_session"
@@ -71,6 +71,9 @@ type Settings struct {
 	KeyDefaultTTL time.Duration // core.auth.apikey.default_ttl
 	KeyMaxTTL     time.Duration // core.auth.apikey.max_ttl
 	SessionCookie string        // core.auth.session.cookie_name
+	// NoHostPrefix is core.auth.session.cookie_host_prefix=false: a Secure
+	// session cookie keeps its plain name (§4.3).
+	NoHostPrefix bool
 }
 
 func (s Settings) withDefaults() Settings {
