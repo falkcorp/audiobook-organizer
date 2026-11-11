@@ -1,5 +1,5 @@
 // file: core/config/entrysecret_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d87e4d85-933b-47a2-acce-30fd13cf619a
 // last-edited: 2026-11-10
 
@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +19,7 @@ import (
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/config/configtest"
 	"github.com/falkcorp/mediacore/secrets"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // Entry secrets (F3-OIDC-SECRET; keys.go "Entry secrets"): a secrets.Ref in a
@@ -34,10 +37,11 @@ const (
 	leak = "jokers-wild-hunter2"
 )
 
-// signal is a list entry with a secret of its own.
+// signal is a list entry with a secret of its own, bound to its issuer.
 type signal struct {
 	ID     string      `json:"id"`
-	Issuer string      `json:"issuer"`
+	Issuer string      `json:"issuer" secret:"bind"`
+	Note   string      `json:"note,omitempty"`
 	Key    secrets.Ref `json:"key" protect:"admin"`
 }
 
@@ -47,21 +51,35 @@ type watchtower struct {
 	Signals []signal `json:"signals" protect:"owner"`
 }
 
-// Validate refuses an entry whose issuer is "joker", quoting the issuer: in a
-// section holding entry secrets the message must not survive.
+// Validate refuses an entry whose issuer or note is "joker", quoting the
+// issuer: in a section holding entry secrets the message must not survive.
 func (w *watchtower) Validate() error {
 	for _, s := range w.Signals {
-		if strings.HasPrefix(s.Issuer, "joker") {
+		if strings.HasPrefix(s.Issuer, "joker") || strings.HasPrefix(s.Note, "joker") {
 			return &config.FieldError{Path: kSignals, Err: errors.New("issuer " + s.Issuer + " is not trusted")}
 		}
 	}
 	return nil
 }
 
-// mapResolver serves the secrets it holds, by name.
+// mapResolver serves the secrets it holds, by name: stored, or from the
+// environment for a name in env.
 type mapResolver struct {
 	mu   sync.Mutex
 	vals map[secrets.Name]string
+	env  map[secrets.Name]bool
+}
+
+func (m *mapResolver) meta(n secrets.Name) secrets.Meta {
+	_, ok := m.vals[n]
+	src := secrets.SourceStored
+	if m.env[n] {
+		src = secrets.SourceEnv
+	}
+	if !ok {
+		return secrets.Meta{Name: n}
+	}
+	return secrets.Meta{Name: n, Set: true, Source: src}
 }
 
 func (m *mapResolver) Get(_ context.Context, n secrets.Name) (secrets.Value, secrets.Meta, error) {
@@ -71,14 +89,36 @@ func (m *mapResolver) Get(_ context.Context, n secrets.Name) (secrets.Value, sec
 	if !ok {
 		return secrets.Value{}, secrets.Meta{Name: n}, secrets.ErrNotSet
 	}
-	return secrets.NewValue(v), secrets.Meta{Name: n, Set: true, Source: secrets.SourceStored}, nil
+	return secrets.NewValue(v), m.meta(n), nil
 }
 
 func (m *mapResolver) Meta(_ context.Context, n secrets.Name) (secrets.Meta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.vals[n]
-	return secrets.Meta{Name: n, Set: ok, Source: secrets.SourceStored}, nil
+	return m.meta(n), nil
+}
+
+// syncCommitter commits through cm and then applies the commit's secret
+// writes to res, as the secrets store would have them.
+type syncCommitter struct {
+	cm  *configtest.Committer
+	res *mapResolver
+}
+
+func (c syncCommitter) Commit(ctx context.Context, cm config.Commit) error {
+	if err := c.cm.Commit(ctx, cm); err != nil {
+		return err
+	}
+	c.res.mu.Lock()
+	defer c.res.mu.Unlock()
+	for _, w := range cm.Secrets {
+		if w.Delete {
+			delete(c.res.vals, w.Name)
+			continue
+		}
+		c.res.vals[w.Name] = w.Value.Reveal()
+	}
+	return nil
 }
 
 // towerRig is a store holding the watchtower section only.
@@ -136,7 +176,7 @@ func (r *towerRig) start() (config.AttachReport, error) {
 		return config.AttachReport{}, err
 	}
 	r.st.SetSecrets(r.res)
-	return r.st.Attach(ctx, r.mem, r.cm)
+	return r.st.Attach(ctx, r.mem, syncCommitter{cm: r.cm, res: r.res})
 }
 
 // startedTower is newTower + start, failing t on an error.
@@ -173,6 +213,19 @@ func (r *towerRig) lastSecrets() []secrets.Write {
 		r.t.Fatal("no commit")
 	}
 	return cms[len(cms)-1].Secrets
+}
+
+// deletes lists the names the last commit deletes, sorted.
+func (r *towerRig) deletes() []string {
+	r.t.Helper()
+	var out []string
+	for _, w := range r.lastSecrets() {
+		if w.Delete {
+			out = append(out, string(w.Name))
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // owner is an interactive admin with owner proof.
@@ -463,15 +516,22 @@ func TestEntrySecret_Writes(t *testing.T) {
 	}
 }
 
-// TestEntrySecret_RemovalDeletes: removing or renaming an entry deletes its
-// secret in the same commit, so no later entry inherits it.
-func TestEntrySecret_RemovalDeletes(t *testing.T) {
+// TestEntrySecret_ChangedEntriesDelete: an Apply deletes, in the same
+// commit, the secret of every entry it does not keep as it was: removed,
+// renamed, added or rebound (a secret:"bind" field changed). A kept entry's
+// secret survives a change to a field that does not bind it.
+func TestEntrySecret_ChangedEntriesDelete(t *testing.T) {
 	r := startedTower(t, towerOpts{})
 	r.mustApply(owner(), map[config.Path]string{kSignals: twoSignals})
+	if got := r.deletes(); !slices.Equal(got, []string{string(kArkhamKey), string(kBatcaveKey)}) {
+		t.Fatalf("adding two entries deletes %v", got)
+	}
 	r.res.vals[secrets.Name(kArkhamKey)] = "asylum"
-	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"batcave","issuer":"x"}]`})
-	if w := r.lastSecrets(); len(w) != 1 || w[0].Name != secrets.Name(kArkhamKey) || !w[0].Delete || w[0].By != "bruce" {
-		t.Fatalf("removal writes %+v", w)
+	r.res.vals[secrets.Name(kBatcaveKey)] = "cave"
+	const batcaveOnly = `[{"id":"batcave","issuer":"https://id.example.com"}]`
+	r.mustApply(owner(), map[config.Path]string{kSignals: batcaveOnly})
+	if got := r.deletes(); !slices.Equal(got, []string{string(kArkhamKey)}) || r.lastSecrets()[0].By != "bruce" {
+		t.Fatalf("a removal deletes %v", got)
 	}
 	if _, ok := r.st.Lookup(kArkhamKey); ok {
 		t.Error("a removed entry's secret is still listed")
@@ -479,53 +539,72 @@ func TestEntrySecret_RemovalDeletes(t *testing.T) {
 	if _, err := r.apply(admin(), map[config.Path]string{kArkhamKey: `"x"`}); !errors.Is(err, config.ErrUnknownKey) {
 		t.Errorf("a removed entry's secret is writable: %v", err)
 	}
-	// A rename is a removal: the secret is never carried to the new ID.
-	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"wayne","issuer":"x"}]`})
-	if w := r.lastSecrets(); len(w) != 1 || w[0].Name != secrets.Name(kBatcaveKey) || !w[0].Delete {
-		t.Fatalf("rename writes %+v", w)
+	// A field that does not bind the secret keeps it.
+	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"batcave","issuer":"https://id.example.com","note":"rooftop"}]`})
+	if got := r.deletes(); len(got) != 0 || r.res.vals[secrets.Name(kBatcaveKey)] != "cave" {
+		t.Fatalf("a note change deletes %v", got)
+	}
+	// A rebound entry (its issuer changed) loses its secret, as a rename.
+	if _, err := r.apply(owner(), map[config.Path]string{kSignals: `[{"id":"batcave","issuer":"https://idp.example.org"}]`, kBatcaveKey: `"x"`}); !errors.Is(err, config.ErrInvalid) {
+		t.Errorf("setting the secret of an entry the patch rebinds: %v, want ErrInvalid", err)
+	}
+	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"batcave","issuer":"https://idp.example.org"}]`})
+	if got := r.deletes(); !slices.Equal(got, []string{string(kBatcaveKey)}) {
+		t.Fatalf("an issuer change deletes %v", got)
+	}
+	if v, err := r.h.Get().Signals[0].Key.Resolve(context.Background()); !errors.Is(err, secrets.ErrNotSet) {
+		t.Errorf("a rebound entry resolves %v (%v)", v.IsZero(), err)
+	}
+	// A rename deletes the old ID's secret and starts the new one unset.
+	r.res.vals[secrets.Name(kWayneKey)] = "stale"
+	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"wayne","issuer":"https://idp.example.org"}]`})
+	if got := r.deletes(); !slices.Equal(got, []string{string(kBatcaveKey), string(kWayneKey)}) {
+		t.Fatalf("a rename deletes %v", got)
 	}
 	// An unset list goes back to its default, removing every entry.
 	r.mustApply(owner(), nil, kSignals)
-	if w := r.lastSecrets(); len(w) != 1 || w[0].Name != secrets.Name(kWayneKey) || !w[0].Delete {
-		t.Fatalf("unset writes %+v", w)
+	if got := r.deletes(); !slices.Equal(got, []string{string(kWayneKey)}) {
+		t.Fatalf("an unset deletes %v", got)
 	}
-	// A list rewritten with the same entries deletes nothing.
+	// A reorder keeps every entry as it was.
 	r.mustApply(owner(), map[config.Path]string{kSignals: twoSignals})
-	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"https://id.example.com"},{"id":"batcave","issuer":"x"}]`})
-	if w := r.lastSecrets(); len(w) != 0 {
-		t.Errorf("a reorder writes %+v", w)
+	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"https://id.example.com"},{"id":"batcave","issuer":"https://id.example.com"}]`})
+	if got := r.deletes(); len(got) != 0 {
+		t.Errorf("a reorder deletes %v", got)
 	}
 }
 
-// TestEntrySecret_RemovalRefusals: a removal that cannot delete the secret
-// is refused whole.
-func TestEntrySecret_RemovalRefusals(t *testing.T) {
-	r := startedTower(t, towerOpts{env: map[config.Path]string{kArkhamKey: `"asylum"`}})
-	r.mustApply(owner(), map[config.Path]string{kSignals: twoSignals})
+// TestEntrySecret_ClearRefusals: a change that cannot delete an entry's
+// secret is refused whole.
+func TestEntrySecret_ClearRefusals(t *testing.T) {
+	r := startedTower(t, towerOpts{env: map[config.Path]string{kArkhamKey: `"asylum"`, kWayneKey: `"manor"`}, rows: map[config.Path]string{kSignals: twoSignals}})
 	ks, ok := r.st.Lookup(kArkhamKey)
 	if !ok || ks.Source != config.SourceEnv || ks.LockedBy == "" {
 		t.Fatalf("an operator-set entry secret: %+v", ks)
 	}
-	calls := r.cm.Calls()
 	if _, err := r.apply(admin(), map[config.Path]string{kArkhamKey: `"x"`}); !errors.Is(err, config.ErrLocked) {
 		t.Errorf("an operator-set entry secret was written: %v", err)
 	}
-	if _, err := r.apply(owner(), map[config.Path]string{kSignals: `[{"id":"batcave","issuer":"x"}]`}); !errors.Is(err, config.ErrLocked) {
+	if _, err := r.apply(owner(), map[config.Path]string{kSignals: `[{"id":"batcave","issuer":"https://id.example.com"}]`}); !errors.Is(err, config.ErrLocked) {
 		t.Errorf("removing an entry whose secret an operator sets: %v, want ErrLocked", err)
 	}
-	if _, err := r.apply(owner(), map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"x"}]`, kBatcaveKey: `"x"`}); !errors.Is(err, config.ErrInvalid) {
+	if _, err := r.apply(owner(), map[config.Path]string{kSignals: twoSignals[:len(twoSignals)-1] + `,{"id":"wayne","issuer":"x"}]`}); !errors.Is(err, config.ErrLocked) {
+		t.Errorf("adding an entry whose secret an operator sets: %v, want ErrLocked", err)
+	}
+	if _, err := r.apply(owner(), map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"https://id.example.com"}]`, kBatcaveKey: `"x"`}); !errors.Is(err, config.ErrInvalid) {
 		t.Errorf("setting the secret of an entry the patch removes: %v, want ErrInvalid", err)
 	}
-	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"x"}]`}, kBatcaveKey)
-	if w := r.lastSecrets(); len(w) != 1 || w[0].Name != secrets.Name(kBatcaveKey) || !w[0].Delete {
-		t.Errorf("an explicit unset with its removal writes %+v", w)
+	calls := r.cm.Calls()
+	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"https://id.example.com"}]`}, kBatcaveKey)
+	if got := r.deletes(); !slices.Equal(got, []string{string(kBatcaveKey)}) || len(r.lastSecrets()) != 1 {
+		t.Errorf("an explicit unset with its removal writes %+v", r.lastSecrets())
 	}
 	if r.cm.Calls() != calls+1 {
 		t.Errorf("%d commits, want 1", r.cm.Calls()-calls)
 	}
 
-	// A secret stricter than its list: removing its entry needs the
-	// secret's protection too.
+	// A secret stricter than its list: removing or adding its entry needs
+	// the secret's protection too.
 	type vaultEntry struct {
 		ID  string      `json:"id"`
 		Key secrets.Ref `json:"key" protect:"owner"`
@@ -552,10 +631,13 @@ func TestEntrySecret_RemovalRefusals(t *testing.T) {
 	patch := func(v string) config.Patch {
 		return config.Patch{Set: map[config.Path]json.RawMessage{"core.gotham.vaults.doors": json.RawMessage(v)}}
 	}
-	if _, err := st.Apply(ctx, patch(`[{"id":"batcave"}]`), admin()); err != nil {
+	var pe *config.ProtectedError
+	if _, err := st.Apply(ctx, patch(`[{"id":"batcave"}]`), admin()); !errors.As(err, &pe) || pe.Path != "core.gotham.vaults.batcave.key" {
+		t.Errorf("an admin added an entry whose secret is owner: %v", err)
+	}
+	if _, err := st.Apply(ctx, patch(`[{"id":"batcave"}]`), owner()); err != nil {
 		t.Fatal(err)
 	}
-	var pe *config.ProtectedError
 	if _, err := st.Apply(ctx, patch(`[]`), admin()); !errors.As(err, &pe) || pe.Path != "core.gotham.vaults.batcave.key" {
 		t.Errorf("an admin removed an entry whose secret is owner: %v", err)
 	}
@@ -564,11 +646,11 @@ func TestEntrySecret_RemovalRefusals(t *testing.T) {
 	}
 }
 
-// TestEntrySecret_QuarantinedRowIDsDeleted: an entry of a stored row that
-// was quarantined still has its secret deleted when Apply replaces the list
-// without it.
+// TestEntrySecret_QuarantinedRowIDsDeleted: the entries of a quarantined
+// stored row count as gone, so an Apply deletes their secrets whether it
+// drops them or adds them again.
 func TestEntrySecret_QuarantinedRowIDsDeleted(t *testing.T) {
-	r := newTower(t, towerOpts{rows: map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"joker-gas"}]`}})
+	r := newTower(t, towerOpts{rows: map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"x","note":"joker"},{"id":"wayne","issuer":"x"}]`}})
 	rep, err := r.start()
 	if err != nil {
 		t.Fatal(err)
@@ -576,9 +658,205 @@ func TestEntrySecret_QuarantinedRowIDsDeleted(t *testing.T) {
 	if rep.Quarantined[kSignals] == nil {
 		t.Fatalf("report %+v", rep)
 	}
-	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"batcave","issuer":"x"}]`})
-	if w := r.lastSecrets(); len(w) != 1 || w[0].Name != secrets.Name(kArkhamKey) || !w[0].Delete {
-		t.Errorf("writes %+v", w)
+	r.res.vals[secrets.Name(kWayneKey)] = "stale"
+	// wayne is kept exactly as the quarantined row had it, and still loses
+	// the secret: a quarantined row is not a live list.
+	r.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"batcave","issuer":"x"},{"id":"wayne","issuer":"x"}]`})
+	if got := r.deletes(); !slices.Equal(got, []string{string(kArkhamKey), string(kBatcaveKey), string(kWayneKey)}) {
+		t.Errorf("deletes %v", got)
+	}
+}
+
+// stagerRec records the secret writes an Importer stages.
+type stagerRec struct {
+	writes []string
+	fail   error
+}
+
+func (f *stagerRec) Stage(_ context.Context, b *storage.Batch, w secrets.Write) error {
+	if b == nil || !w.Delete || w.By != "cutover:m2" {
+		return fmt.Errorf("unexpected stage %+v", w)
+	}
+	f.writes = append(f.writes, string(w.Name))
+	return f.fail
+}
+
+// TestEntrySecret_ImporterClears: an import that replaces a stored list
+// deletes, in the step's batch, the secrets of the entries it drops or
+// rebinds, as Apply does, and none of an entry it adds or keeps as it was.
+func TestEntrySecret_ImporterClears(t *testing.T) {
+	stage := func(t *testing.T, row string, st config.SecretStager, next string) (*towerRig, error) {
+		t.Helper()
+		r := newTower(t, towerOpts{})
+		if row != "" {
+			r.mem.Put(config.Override{Path: kSignals, Value: json.RawMessage(row), By: "alfred"})
+		}
+		if err := r.st.Load(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		r.st.SetImportTarget(r.mem)
+		if st != nil {
+			r.st.SetImportSecrets(st)
+		}
+		return r, r.st.Importer().Stage(new(storage.Batch), kSignals, json.RawMessage(next), "cutover:m2")
+	}
+	const row = `[{"id":"arkham","issuer":"https://id.example.com"},{"id":"batcave","issuer":"https://id.example.com"},{"id":"wayne","issuer":"https://id.example.com"}]`
+	const next = `[{"id":"batcave","issuer":"https://idp.example.org"},{"id":"wayne","issuer":"https://id.example.com","note":"manor"},{"id":"robin","issuer":"x"}]`
+	rec := &stagerRec{}
+	r, err := stage(t, row, rec, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(rec.writes)
+	if !slices.Equal(rec.writes, []string{string(kArkhamKey), string(kBatcaveKey)}) {
+		t.Errorf("an import deletes %v, want the dropped and the rebound entry's", rec.writes)
+	}
+	if got := string(r.mem.Rows()[kSignals].Value); !strings.Contains(got, "robin") {
+		t.Errorf("row %s", got)
+	}
+	// Without a stager, an import that must delete is refused and stages no row.
+	if r, err := stage(t, row, nil, next); err == nil || !strings.Contains(err.Error(), "SetImportSecrets") || strings.Contains(string(r.mem.Rows()[kSignals].Value), "robin") {
+		t.Errorf("an import with no stager: %v", err)
+	}
+	// One with nothing to delete needs none.
+	if _, err := stage(t, "", nil, next); err != nil {
+		t.Errorf("a first import: %v", err)
+	}
+	if _, err := stage(t, row, nil, row[:len(row)-1]+`,{"id":"robin","issuer":"x"}]`); err != nil {
+		t.Errorf("an import that only adds: %v", err)
+	}
+	// A stager failure fails the Stage.
+	if _, err := stage(t, row, &stagerRec{fail: errors.New("sealed")}, next); err == nil || !strings.Contains(err.Error(), "sealed") {
+		t.Errorf("a stager failure: %v", err)
+	}
+}
+
+// TestEntrySecret_BindTagMisuse: Register refuses a secret tag anywhere but
+// on an exported, non-secret field of an entry type, and any value but bind.
+func TestEntrySecret_BindTagMisuse(t *testing.T) {
+	type onRef struct {
+		ID  string      `json:"id"`
+		Key secrets.Ref `json:"key" protect:"admin" secret:"bind"`
+	}
+	type badValue struct {
+		ID  string      `json:"id" secret:"yes"`
+		Key secrets.Ref `json:"key" protect:"admin"`
+	}
+	type noSecret struct {
+		ID     string `json:"id"`
+		Issuer string `json:"issuer" secret:"bind"`
+	}
+	type inner struct {
+		Issuer string `json:"issuer" secret:"bind"`
+	}
+	type nestedBind struct {
+		ID  string      `json:"id"`
+		In  inner       `json:"in"`
+		Key secrets.Ref `json:"key" protect:"admin"`
+	}
+	for name, sec := range map[string]any{
+		"on a Ref": config.Define("core.gotham.misuse", struct {
+			L []onRef `json:"l" protect:"owner"`
+		}{}),
+		"a value other than bind": config.Define("core.gotham.misuse", struct {
+			L []badValue `json:"l" protect:"owner"`
+		}{}),
+		"in an entry with no secret": config.Define("core.gotham.misuse", struct {
+			L []noSecret `json:"l" protect:"owner"`
+		}{}),
+		"below the entry": config.Define("core.gotham.misuse", struct {
+			L []nestedBind `json:"l" protect:"owner"`
+		}{}),
+		"on a section field": config.Define("core.gotham.misuse", struct {
+			Base string `json:"base" secret:"bind"`
+		}{}),
+	} {
+		st, err := config.NewStore(config.Options{AppID: "gotham"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := config.RegisterSections(st.Registry(), sec); !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), "secret") {
+			t.Errorf("%s: Register = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+// TestEntrySecret_RevivalOperatorRemovedEntry (the review's repro): an
+// operator layer supplies "arkham" and the store holds a secret under its
+// name; once the operator drops the entry, an owner who adds a new "arkham"
+// at another issuer starts it unset.
+func TestEntrySecret_RevivalOperatorRemovedEntry(t *testing.T) {
+	ctx := context.Background()
+	mem := configtest.NewMemory()
+	res := &mapResolver{vals: map[secrets.Name]string{}}
+	boot := func(file map[config.Path]string) *towerRig {
+		r := newTower(t, towerOpts{file: file})
+		r.mem, r.cm, r.res = mem, configtest.NewCommitter(mem), res
+		if _, err := r.start(); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	r1 := boot(map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"https://old-idp.example"}]`})
+	// An operator-supplied entry takes no stored secret, and serves none.
+	if _, err := r1.apply(admin(), map[config.Path]string{kArkhamKey: `"old-client-secret"`}); !errors.Is(err, config.ErrLocked) {
+		t.Fatalf("an admin stored the secret of an operator entry: %v", err)
+	}
+	res.vals[secrets.Name(kArkhamKey)] = "old-client-secret" // a record from before the operator took the list
+	if _, err := r1.h.Get().Signals[0].Key.Resolve(ctx); !errors.Is(err, secrets.ErrNotSet) {
+		t.Fatalf("an operator entry resolves a stored secret: %v", err)
+	}
+	if ks, _ := r1.st.Lookup(kArkhamKey); ks.Secret == nil || ks.Secret.Set {
+		t.Errorf("an operator entry's stored secret reads set: %+v", ks.Secret)
+	}
+
+	r2 := boot(map[config.Path]string{})
+	if _, ok := r2.st.Lookup(kArkhamKey); ok {
+		t.Error("boot 2 lists the dropped entry's secret")
+	}
+	r2.mustApply(owner(), map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"https://new-idp.example"}]`})
+	if got := r2.deletes(); !slices.Equal(got, []string{string(kArkhamKey)}) {
+		t.Fatalf("adding arkham deletes %v", got)
+	}
+	got, err := r2.h.Get().Signals[0].Key.Resolve(ctx)
+	if !errors.Is(err, secrets.ErrNotSet) {
+		t.Errorf("REVIVAL: the new arkham resolves the stale secret (%v, %v)", got.IsZero(), err)
+	}
+}
+
+// TestEntrySecret_RevivalOperatorReAddsAtBoot (the review's repro): a stored
+// "arkham" has a stored secret; an operator file that supplies its own
+// "arkham" at another issuer binds only an operator-layer secret.
+func TestEntrySecret_RevivalOperatorReAddsAtBoot(t *testing.T) {
+	ctx := context.Background()
+	const attacker = `[{"id":"arkham","issuer":"https://attacker.example"}]`
+	r := newTower(t, towerOpts{rows: map[config.Path]string{kSignals: `[{"id":"arkham","issuer":"https://old.example"}]`}, file: map[config.Path]string{kSignals: attacker}})
+	r.res.vals[secrets.Name(kArkhamKey)] = "old"
+	if _, err := r.start(); err != nil {
+		t.Fatal(err)
+	}
+	v := r.h.Get().Signals[0]
+	if v.Issuer != "https://attacker.example" {
+		t.Fatalf("issuer %s", v.Issuer)
+	}
+	if got, err := v.Key.Resolve(ctx); !errors.Is(err, secrets.ErrNotSet) {
+		t.Fatalf("an operator entry resolves the stored secret (%v, %v)", got.IsZero(), err)
+	}
+	if ks, _ := r.st.Lookup(kArkhamKey); ks.Secret == nil || ks.Secret.Set || ks.Source != config.SourceDefault {
+		t.Errorf("KeyState %+v", ks)
+	}
+	// With the secret from the operator too, the entry is served.
+	r = newTower(t, towerOpts{file: map[config.Path]string{kSignals: attacker}})
+	r.res.vals[secrets.Name(kArkhamKey)] = "from-env"
+	r.res.env = map[secrets.Name]bool{secrets.Name(kArkhamKey): true}
+	if _, err := r.start(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.h.Get().Signals[0].Key.Resolve(ctx); err != nil || got.Reveal() != "from-env" {
+		t.Errorf("an operator entry with an operator secret: %v", err)
+	}
+	if ks, _ := r.st.Lookup(kArkhamKey); ks.Secret == nil || !ks.Secret.Set || ks.Source != config.SourceEnv {
+		t.Errorf("KeyState %+v", ks)
 	}
 }
 
@@ -691,11 +969,15 @@ func TestEntrySecret_MetaFollowsEntries(t *testing.T) {
 	if ks, _ := r.st.Lookup(kBatcaveKey); ks.Secret == nil || ks.Secret.Set || ks.Source != config.SourceDefault {
 		t.Errorf("an unset entry secret: %+v", ks)
 	}
-	// An entry added by Apply whose name holds a record reads it.
+	// An entry added by Apply starts unset, whatever its name held.
 	r.res.vals[secrets.Name(kWayneKey)] = "manor"
 	r.mustApply(owner(), map[config.Path]string{kSignals: twoSignals[:len(twoSignals)-1] + `,{"id":"wayne","issuer":"x"}]`})
-	if ks, ok := r.st.Lookup(kWayneKey); !ok || ks.Secret == nil || !ks.Secret.Set {
-		t.Errorf("an added entry's stored secret: %+v", ks)
+	if ks, ok := r.st.Lookup(kWayneKey); !ok || ks.Secret == nil || ks.Secret.Set {
+		t.Errorf("an added entry's stale record: %+v", ks)
+	}
+	r.mustApply(admin(), map[config.Path]string{kWayneKey: `"manor"`})
+	if ks, _ := r.st.Lookup(kWayneKey); ks.Secret == nil || !ks.Secret.Set {
+		t.Errorf("a set entry secret: %+v", ks)
 	}
 	var n int
 	for p, ks := range r.st.Keys() {

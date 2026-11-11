@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
 // last-edited: 2026-11-10
 
@@ -480,12 +480,16 @@ type authOIDC struct {
 // entry's ID (05-authn §8, 05-config §1.12.3), live and ProtectAdmin by its
 // own tag (05-config §1.3.7's FieldSignIn row), not the list's owner class.
 // config binds it from the ID (core/config/keys.go, "Entry secrets"); the
-// list carries only its reference.
+// list carries only its reference. Kind, Issuer and ClientID are tagged
+// secret:"bind": the secret belongs to that identity provider and client, so
+// an Apply that changes one deletes it as a rename does (fail closed: a list
+// editor must not repoint a kept ID at their own provider and receive the
+// secret at the first sign-in; seams.d/F3-03.md).
 type authOIDCProvider struct {
 	ID                  string      `json:"id"`
-	Kind                string      `json:"kind" schema:"enum=oidc|github"`
-	Issuer              string      `json:"issuer"`
-	ClientID            string      `json:"client_id"`
+	Kind                string      `json:"kind" schema:"enum=oidc|github" secret:"bind"`
+	Issuer              string      `json:"issuer" secret:"bind"`
+	ClientID            string      `json:"client_id" secret:"bind"`
 	Scopes              []string    `json:"scopes"`
 	AllowedEmails       []string    `json:"allowed_emails" protect:"owner"`
 	AllowedDomains      []string    `json:"allowed_domains" protect:"owner"`

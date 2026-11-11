@@ -1,5 +1,5 @@
 // file: core/config/keys.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: a7f1dcb2-a279-4c3a-b299-94cbbb319e4d
 // last-edited: 2026-11-10
 
@@ -35,7 +35,11 @@ import (
 // every entry (05-authn §8's core.auth.oidc.<id>.client_secret), protected,
 // reloaded and audited by its own tags, not the list's. The list's canonical
 // value carries each entry's reference {"secret": "<that name>"}, never a
-// value, and the decoder binds it.
+// value, and the decoder binds it. An entry field tagged secret:"bind" (the
+// OIDC kind, issuer and client_id) is part of what the secret belongs to.
+// An Apply deletes the secret of every entry it does not keep as it was
+// (removed, renamed, added or rebound; apply.go entryClears), and an entry an
+// operator layer supplies binds only an operator-layer secret (operatorOnly).
 
 // keyInfo is one leaf key of a section. For a map section it is a template:
 // rel is relative to the entry, and the concrete path is
@@ -68,6 +72,7 @@ type keyInfo struct {
 	entrySecrets []*keyInfo
 	idIdx        int
 	reservedIDs  map[string]bool
+	bindNames    []string // json names of the entry fields tagged secret:"bind"
 }
 
 // path is the key's path; id is the map entry's ID, or a derived key's list
@@ -217,6 +222,9 @@ func (w *keyWalker) walk(t reflect.Type, rel []string, idx []int, inh tagSet, na
 			continue
 		}
 		ix := append(slices.Clone(idx), i)
+		if _, ok := f.Tag.Lookup("secret"); ok {
+			return fmt.Errorf("%w: %s: the secret tag is for a field of a list entry that holds secrets (keys.go, \"Entry secrets\")", ErrInvalid, where)
+		}
 		if f.Anonymous && name == "" && f.Type.Kind() == reflect.Pointer && f.Type.Elem().Kind() == reflect.Struct {
 			// encoding/json promotes the fields of an embedded *struct when
 			// it is set and cannot allocate one of an unexported type, so
@@ -293,7 +301,11 @@ func (w *keyWalker) add(where string, t reflect.Type, rel []string, idx []int, t
 	if w.sec.isMap {
 		shown = k.path("<id>")
 	}
-	if err := checkNested(where, shown, t, tagSet{reload: k.reload, protect: k.protect, sensitive: k.sensitive}, map[reflect.Type]bool{}); err != nil {
+	var entry reflect.Type
+	if len(k.entrySecrets) > 0 {
+		entry = t.Elem()
+	}
+	if err := checkNested(where, shown, t, entry, tagSet{reload: k.reload, protect: k.protect, sensitive: k.sensitive}, map[reflect.Type]bool{}); err != nil {
 		return err
 	}
 	w.keys = append(w.keys, k)
@@ -327,6 +339,12 @@ func (w *keyWalker) entrySecrets(where string, k *keyInfo) error {
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if name == "id" && f.Type.Kind() == reflect.String && f.IsExported() && !f.Anonymous {
 			k.idIdx = i
+		}
+		if v, ok := f.Tag.Lookup("secret"); ok {
+			if v != "bind" || f.Type == refType() || !f.IsExported() || f.Anonymous || !validSegment(name) {
+				return fmt.Errorf("%w: %s entry field %s.%s: secret:%q (want secret:\"bind\" on an exported, json-named field that is not the secret)", ErrInvalid, where, elem.Name(), f.Name, v)
+			}
+			k.bindNames = append(k.bindNames, name)
 		}
 		if f.Type != refType() {
 			if containsRef(f.Type, map[reflect.Type]bool{}) {
@@ -374,11 +392,14 @@ func (w *keyWalker) entrySecrets(where string, k *keyInfo) error {
 // the key's value) and every field of a struct, the self-encoding ones and
 // the embedded unexported ones included, once per type. A malformed tag there
 // fails as it would on a key.
-func checkNested(where string, key Path, t reflect.Type, own tagSet, seen map[reflect.Type]bool) error {
+//
+// entry is the element type of a list with entry secrets (nil otherwise): its
+// direct fields are the only place a secret tag may stand.
+func checkNested(where string, key Path, t, entry reflect.Type, own tagSet, seen map[reflect.Type]bool) error {
 	for {
 		switch t.Kind() {
 		case reflect.Map:
-			if err := checkNested(where, key, t.Key(), own, seen); err != nil {
+			if err := checkNested(where, key, t.Key(), entry, own, seen); err != nil {
 				return err
 			}
 			t = t.Elem()
@@ -405,6 +426,9 @@ func checkNested(where string, key Path, t reflect.Type, own tagSet, seen map[re
 		if err != nil {
 			return err
 		}
+		if _, ok := f.Tag.Lookup("secret"); ok && t != entry {
+			return fmt.Errorf("%w: %s carries a secret tag outside a list entry that holds secrets: it would be ignored (keys.go, \"Entry secrets\")", ErrInvalid, fw)
+		}
 		if f.Type == refType() {
 			// An entry secret: add accepted it only as a direct field of a
 			// list entry, and its tags are its own key's, not this key's.
@@ -421,7 +445,7 @@ func checkNested(where string, key Path, t reflect.Type, own tagSet, seen map[re
 			return fmt.Errorf("%w: %s carries sensitive:\"true\" and its key does not: config redacts whole keys, so the key itself must carry it (05-config §1.3.1)",
 				ErrInvalid, fw)
 		}
-		if err := checkNested(where, key, f.Type, own, seen); err != nil {
+		if err := checkNested(where, key, f.Type, entry, own, seen); err != nil {
 			return err
 		}
 	}
@@ -562,13 +586,40 @@ func (k *keyInfo) bindEntries(p Path, list reflect.Value, res secrets.Resolver) 
 	return nil
 }
 
+// entryBindings returns, for each entry of the list key k's JSON that names
+// derived keys, what its secrets belong to: the JSON of its secret:"bind"
+// fields, compared byte for byte (canonical values only). A value that is not
+// a list of objects yields none.
+func (k *keyInfo) entryBindings(raw json.RawMessage) map[string]string {
+	var entries []map[string]json.RawMessage
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	out := make(map[string]string, len(entries))
+	for _, e := range entries {
+		var id string
+		if json.Unmarshal(e["id"], &id) != nil || !validSegment(id) || k.reservedIDs[id] {
+			continue
+		}
+		var b strings.Builder
+		for _, n := range k.bindNames {
+			b.WriteString(n)
+			b.WriteByte('=')
+			b.Write(e[n])
+			b.WriteByte(0)
+		}
+		out[id] = b.String()
+	}
+	return out
+}
+
 // templatePath is a derived key's path with "<id>" for the entry ID.
 func (k *keyInfo) templatePath() Path { return k.path("<id>") }
 
 // entryIDsOf returns the entry IDs of the list key k's JSON that name derived
 // keys (valid, not reserved), leniently: a value that is not a list of
 // objects yields none. It reads canonical values (a build's) and stored rows
-// that may be quarantined (Apply's removals).
+// that may be quarantined (entryClears, importClears).
 func (k *keyInfo) entryIDsOf(raw json.RawMessage) []string {
 	var entries []struct {
 		ID string `json:"id"`
