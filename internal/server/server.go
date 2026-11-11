@@ -451,7 +451,7 @@ type Server struct {
 	// guestPolicyOverride, when set before the first accept, replaces it
 	// (tests only).
 	loginCeilingOnce   sync.Once
-	loginCeilingState  *loginCeiling           // shared by the web and ABS password logins (login_ceiling.go)
+	loginCeilingState  *coreauth.LoginCeiling  // shared by the web and ABS password logins (login_gate.go)
 	loginCeilingExempt func(*gin.Context) bool // verified Access identity test, set by buildOAuthWiring
 	// loginThrottleState is the ONE failed-login throttle (per-source budget,
 	// per-account soft delay) the web and ABS password logins share.

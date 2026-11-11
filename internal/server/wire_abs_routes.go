@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.37.1
+// version: 1.37.2
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -646,9 +646,9 @@ func (s *Server) wireABSRoutes() {
 			"Credential VALUES are never logged (booleans and lengths only), but this is verbose; " +
 			"unset " + servermiddleware.ABSAuthProbeEnvVar + " when the diagnostic window is over")
 	}
-	// Aggregate password-guessing ceilings (login_ceiling.go) in front of the ABS
+	// Aggregate password-guessing ceilings (login_gate.go) in front of the ABS
 	// password login only; /auth/refresh does no password work.
-	absGroup.Use(s.loginCeiling().middleware(func(c *gin.Context) bool {
+	absGroup.Use(s.loginCeilingMiddleware(func(c *gin.Context) bool {
 		return c.Request.Method == http.MethodPost && c.FullPath() == "/login"
 	}, respondABSLoginError)) // ABS clients parse {"error": msg}, not the web envelope
 	handler.Register(absGroup)
