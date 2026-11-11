@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/codec"
+	"github.com/falkcorp/mediacore/storage/keys"
 )
 
 // otherOwner is a second keyspace, to prove New refuses a foreign one.
@@ -319,5 +321,71 @@ func TestSession_NativeOnlyRecord(t *testing.T) {
 	}
 	if _, err := st.SessionByToken(ctx, unknown); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatalf("an unknown token: %v, want ErrNotFound", err)
+	}
+}
+
+// hexRun is 64 hex digits in a row: a SHA-256 written out.
+var hexRun = regexp.MustCompile(`[0-9a-fA-F]{64}`)
+
+// TestErrors_NeverCarryACredentialHash (STOP 3): an error about a record
+// keyed by a credential's hash names the key's family and length, never the
+// hash, because the stage-12 touch logs the errors it gets.
+func TestErrors_NeverCarryACredentialHash(t *testing.T) {
+	ks, other := newKeyspace(t)
+	st, err := New(ks, Options{Now: func() time.Time { return time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, rec := issueOneSession(t, st)
+	h := auth.HashHex(tok)
+	described := map[string][]byte{
+		"session/h":          sessionKey(h),
+		"apikey/h":           apiKeyHashKey(h),
+		"onetime/invite":     oneTimeKey(auth.OneTimeInvite, h),
+		"onetime/temp_login": oneTimeKey(auth.OneTimeTempLogin, h),
+		"onetime/bootstrap":  oneTimeKey(auth.OneTimeBootstrap, h),
+		"session/id":         sessionIDKey(rec.PublicID),
+		"user":               userKey("01JDICK"),
+	}
+	for family, key := range described {
+		d := keyDesc(key)
+		if hexRun.MatchString(d) || strings.Contains(d, h) {
+			t.Fatalf("keyDesc of a %s key carries the hash: %s", family, d)
+		}
+		if !strings.HasPrefix(d, family+" key len=") {
+			t.Fatalf("keyDesc of a %s key = %q, want the family and the length", family, d)
+		}
+	}
+	// A key of no family, and a family key whose second segment is not a
+	// structural one, describe no segment beyond what is known.
+	for want, key := range map[string][]byte{
+		"unrecognised key len=": keys.Join(keys.Str(h), keys.Str("joker")),
+		"session key len=":      keys.Join(keys.Str(segSession), keys.Str(h), keys.Str("joker")),
+	} {
+		if d := keyDesc(key); hexRun.MatchString(d) || !strings.HasPrefix(d, want) {
+			t.Fatalf("keyDesc of a foreign key = %q, want %q...", d, want)
+		}
+	}
+	if d := keyDesc([]byte("joker/" + h)); hexRun.MatchString(d) || !strings.HasPrefix(d, "unrecognised key") {
+		t.Fatalf("keyDesc of an unsplittable key = %q", d)
+	}
+
+	// A staged write that fails wraps the key it was writing: poison the
+	// batch with an Expect through a handle it never bound, then re-stamp
+	// the session, whose record is keyed by the token's hash.
+	b := st.NewBatch()
+	defer func() { _ = b.Close() }()
+	if err := b.Expect(other, []byte("joker"), nil); err == nil {
+		t.Fatal("an Expect through an unbound handle did not fail")
+	}
+	err = st.RestampSession(b, rec, 2)
+	if err == nil {
+		t.Fatal("a poisoned batch staged a write")
+	}
+	if hexRun.MatchString(err.Error()) || strings.Contains(err.Error(), h) {
+		t.Fatalf("the error carries the session's hash: %v", err)
+	}
+	if !strings.Contains(err.Error(), "session/h key len=") {
+		t.Fatalf("the error does not name the key's family: %v", err)
 	}
 }
