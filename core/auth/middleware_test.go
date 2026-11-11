@@ -8,6 +8,7 @@ package auth_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -47,17 +48,53 @@ func serve(t *testing.T, svc *auth.Service, r *http.Request) (*httptest.Response
 	return w, got
 }
 
+// The session cookie names a default service reads: __Host- on HTTPS, the
+// plain name on plain http (§4.3).
+const (
+	hostCookie  = "__Host-" + auth.DefaultSessionCookie
+	plainCookie = auth.DefaultSessionCookie
+)
+
+// request is an HTTPS request (r.TLS is set, so ClientInfo.HTTPS) carrying
+// bearer as Bearer and cookie as the __Host- session cookie.
 func request(bearer, cookie string) *http.Request {
 	r := httptest.NewRequest(http.MethodGet, "/api/gotham/cases", nil)
+	r.TLS = &tls.ConnectionState{}
 	r.RemoteAddr = "192.0.2.10:44123"
 	r.Header.Set("User-Agent", "Batcomputer/7")
 	if bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	if cookie != "" {
-		r.AddCookie(&http.Cookie{Name: auth.DefaultSessionCookie, Value: cookie})
+		r.AddCookie(&http.Cookie{Name: hostCookie, Value: cookie})
 	}
 	return r
+}
+
+// cookieRequest is a request carrying cookies, over HTTPS when https is set.
+func cookieRequest(https bool, cookies ...*http.Cookie) *http.Request {
+	r := request("", "")
+	if !https {
+		r.TLS = nil
+	}
+	for _, ck := range cookies {
+		r.AddCookie(ck)
+	}
+	return r
+}
+
+func cookie(name, value string) *http.Cookie { return &http.Cookie{Name: name, Value: value} }
+
+func (f *fx) withSettings(t *testing.T, st auth.Settings) *auth.Service {
+	t.Helper()
+	svc, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}}, auth.Deps{
+		Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
+		Settings: func() auth.Settings { return st },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
 }
 
 func (f *fx) withExtensions(t *testing.T, exts ...auth.Extension) (*auth.Service, error) {
@@ -123,6 +160,103 @@ func TestAPIKey_PresentedKeyWins(t *testing.T) {
 		}
 		if got.actor.CredentialID != k.ID || got.actor.UserID != string(dick.ID) || got.actor.ClientAddr != "192.0.2.10" {
 			t.Fatalf("%s: audit actor %+v", name, got.actor)
+		}
+	}
+}
+
+// Cookie tossing (session fixation): a sibling subdomain or a plain-http
+// origin can plant a plain-named cookie, never a __Host- one. Stage 12 reads
+// exactly one cookie name, the one SessionCookie writes for the request: on
+// HTTPS only __Host-<name>, so a planted plain cookie is ignored, alone or
+// beside the victim's real one. A key is taken from a cookie only when it is
+// the __Host- one (§4.2 item 2 keeps HEAD's key-as-cookie-value; §4.3).
+func TestStage12_CookieTossing(t *testing.T) {
+	f := newFx(t)
+	dick := f.user("dick", "gotham.detective")
+	joker := f.user("joker", "gotham.detective")
+	dickSess, jokerSess := f.issue(t, dick), f.issue(t, joker)
+	dickKey, dk := f.mint(f.session(dick), dick.ID, "gotham:patrol")
+	jokerKey, _ := f.mint(f.session(joker), joker.ID, "gotham:patrol")
+	noPrefix := f.withSettings(t, auth.Settings{NoHostPrefix: true})
+
+	type want struct {
+		user   auth.UserID // "": nothing bound
+		cred   string      // the bound credential's ID
+		failed bool        // a cookie failure (invalid_credential) is recorded
+	}
+	sess, key := want{user: dick.ID, cred: dickSess.PublicID}, want{user: dick.ID, cred: dk.ID}
+	for _, tc := range []struct {
+		name string
+		svc  *auth.Service
+		r    *http.Request
+		want want
+	}{
+		{"https: a planted plain session alone is ignored", f.svc, cookieRequest(true, cookie(plainCookie, jokerSess.Token)), want{}},
+		{"https: a planted plain key alone is ignored", f.svc, cookieRequest(true, cookie(plainCookie, jokerKey)), want{}},
+		{"https: a planted plain session beside the real one loses", f.svc, cookieRequest(true, cookie(plainCookie, jokerSess.Token), cookie(hostCookie, dickSess.Token)), sess},
+		{"https: a planted plain key beside the real session loses", f.svc, cookieRequest(true, cookie(plainCookie, jokerKey), cookie(hostCookie, dickSess.Token)), sess},
+		{"https: the __Host- session binds", f.svc, cookieRequest(true, cookie(hostCookie, dickSess.Token)), sess},
+		{"https: a key as the __Host- cookie's value binds", f.svc, cookieRequest(true, cookie(hostCookie, dickKey)), key},
+		{"http: the plain session binds", f.svc, cookieRequest(false, cookie(plainCookie, dickSess.Token)), sess},
+		{"http: a __Host- cookie is not the http name", f.svc, cookieRequest(false, cookie(hostCookie, jokerSess.Token)), want{}},
+		{"http: a key is never taken from the plain cookie", f.svc, cookieRequest(false, cookie(plainCookie, dickKey)), want{failed: true}},
+		{"no prefix, https: the plain session binds", noPrefix, cookieRequest(true, cookie(plainCookie, dickSess.Token)), sess},
+		{"no prefix, https: a __Host- cookie is not read", noPrefix, cookieRequest(true, cookie(hostCookie, jokerSess.Token)), want{}},
+		{"no prefix, https: a key is never taken from the plain cookie", noPrefix, cookieRequest(true, cookie(plainCookie, dickKey)), want{failed: true}},
+	} {
+		_, got := serve(t, tc.svc, tc.r)
+		switch {
+		case tc.want.user == "":
+			if got.p != nil {
+				t.Fatalf("%s: bound %s's %s", tc.name, got.p.User.Username, got.p.Method)
+			}
+			if got.failed != tc.want.failed {
+				t.Fatalf("%s: failure %+v (recorded %v), want recorded %v", tc.name, got.fail, got.failed, tc.want.failed)
+			}
+			if tc.want.failed && (got.fail.Code != auth.CodeInvalidCredential || !got.fail.Cookie) {
+				t.Fatalf("%s: failure %+v, want a cookie invalid_credential", tc.name, got.fail)
+			}
+		case got.p == nil || got.p.User.ID != tc.want.user || got.p.CredentialID != tc.want.cred:
+			t.Fatalf("%s: bound %+v (failure %+v), want %s's credential %s", tc.name, got.p, got.fail, tc.want.user, tc.want.cred)
+		}
+	}
+}
+
+// SessionCookie writes the one name stage 12 reads for the same request,
+// with §4.3's attributes; an empty token clears it, and an expiry already
+// past deletes rather than making a browser-session cookie.
+func TestSessionCookie_WritesTheNameStage12Reads(t *testing.T) {
+	f := newFx(t)
+	dick := f.user("dick", "gotham.detective")
+	is := f.issue(t, dick)
+	noPrefix := f.withSettings(t, auth.Settings{NoHostPrefix: true})
+	for _, tc := range []struct {
+		name     string
+		svc      *auth.Service
+		https    bool
+		wantName string
+	}{
+		{"https", f.svc, true, hostCookie},
+		{"http", f.svc, false, plainCookie},
+		{"no prefix, https", noPrefix, true, plainCookie},
+	} {
+		c := auth.ClientInfo{HTTPS: tc.https}
+		ck := tc.svc.SessionCookie(c, is.Token, is.ExpiresAt)
+		if ck.Name != tc.wantName || ck.Value != is.Token || ck.Path != "/" || ck.Domain != "" || !ck.HttpOnly ||
+			ck.Secure != tc.https || ck.SameSite != http.SameSiteStrictMode {
+			t.Fatalf("%s: cookie %+v", tc.name, ck)
+		}
+		if want := int(auth.DefaultSessionTTL / time.Second); ck.MaxAge != want {
+			t.Fatalf("%s: MaxAge %d, want %d", tc.name, ck.MaxAge, want)
+		}
+		if _, got := serve(t, tc.svc, cookieRequest(tc.https, ck)); got.p == nil || got.p.User.ID != dick.ID {
+			t.Fatalf("%s: the written cookie did not bind (failure %+v)", tc.name, got.fail)
+		}
+		if gone := tc.svc.SessionCookie(c, "", time.Time{}); gone.Name != tc.wantName || gone.Value != "" || gone.MaxAge >= 0 || gone.Secure != tc.https {
+			t.Fatalf("%s: clearing cookie %+v", tc.name, gone)
+		}
+		if past := tc.svc.SessionCookie(c, is.Token, f.clock().Add(-time.Second)); past.MaxAge >= 0 {
+			t.Fatalf("%s: an expired session's cookie has MaxAge %d", tc.name, past.MaxAge)
 		}
 	}
 }

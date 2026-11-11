@@ -182,7 +182,7 @@ func (s *Service) client(r *http.Request) ClientInfo {
 	if s.d.Client != nil {
 		return s.d.Client(r)
 	}
-	c := ClientInfo{UserAgent: r.UserAgent()}
+	c := ClientInfo{UserAgent: r.UserAgent(), HTTPS: r.TLS != nil}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -202,31 +202,69 @@ func addrString(a netip.Addr) string {
 
 // presented is one credential value found on a request.
 type presented struct {
-	raw    string
-	cookie bool // from the session cookie, not the Authorization header
+	raw      string
+	cookie   bool // from the session cookie, not the Authorization header
+	hostOnly bool // the cookie is the __Host- form
 }
 
 // credentials returns the Bearer value and the session cookie value of r,
-// in that order, skipping absent ones.
-func (s *Service) credentials(r *http.Request) []presented {
+// in that order, skipping absent ones. Exactly one cookie name is read, the
+// one SessionCookie sets for c: on an HTTPS request only the __Host- name,
+// so a plain-named cookie a sibling subdomain or a plain-http origin
+// planted is never read (cookie tossing, session fixation).
+func (s *Service) credentials(r *http.Request, c ClientInfo) []presented {
 	var out []presented
 	if h := r.Header.Get("Authorization"); h != "" {
 		if scheme, val, ok := strings.Cut(h, " "); ok && strings.EqualFold(scheme, "Bearer") && strings.TrimSpace(val) != "" {
 			out = append(out, presented{raw: strings.TrimSpace(val)})
 		}
 	}
-	name := s.settings().SessionCookie
-	for _, n := range []string{hostPrefix + name, name} {
-		if ck, err := r.Cookie(n); err == nil && ck.Value != "" {
-			out = append(out, presented{raw: ck.Value, cookie: true})
-			break
-		}
+	name, hostOnly := s.sessionCookieName(c)
+	if ck, err := r.Cookie(name); err == nil && ck.Value != "" {
+		out = append(out, presented{raw: ck.Value, cookie: true, hostOnly: hostOnly})
 	}
 	return out
 }
 
 // hostPrefix is the cookie-name prefix of a Secure session cookie (§4.3).
 const hostPrefix = "__Host-"
+
+// sessionCookieName is the session cookie's name for a request from c, and
+// whether it is the __Host- form, which only a secure origin can set and
+// only with Path=/ and no Domain (§4.3: the name gets the prefix when the
+// cookie is Secure, i.e. on an HTTPS request, unless
+// core.auth.session.cookie_host_prefix=false). Stage 12 reads exactly this
+// name and SessionCookie writes exactly this name.
+func (s *Service) sessionCookieName(c ClientInfo) (name string, hostOnly bool) {
+	st := s.settings()
+	if c.HTTPS && !st.NoHostPrefix {
+		return hostPrefix + st.SessionCookie, true
+	}
+	return st.SessionCookie, false
+}
+
+// SessionCookie is the session cookie to set on the response to a request
+// from c (§4.3): the one name stage 12 reads for c, HttpOnly,
+// SameSite=Strict, Path=/, Secure when c.HTTPS. An empty token clears the
+// cookie (the §4.3 cookie failure rule, logout). Coined by F4-02: the login,
+// logout and stage 13 code that writes the cookie takes it from here, so the
+// name written can never drift from the name read.
+func (s *Service) SessionCookie(c ClientInfo, token string, expires time.Time) *http.Cookie {
+	name, _ := s.sessionCookieName(c)
+	ck := &http.Cookie{
+		Name: name, Value: token, Path: "/",
+		HttpOnly: true, Secure: c.HTTPS, SameSite: http.SameSiteStrictMode,
+	}
+	if token == "" {
+		ck.MaxAge = -1
+		return ck
+	}
+	ck.MaxAge = max(int(expires.Sub(s.now()).Seconds()), 0)
+	if ck.MaxAge == 0 {
+		ck.MaxAge = -1 // already expired: a zero MaxAge would mean a browser-session cookie
+	}
+	return ck
+}
 
 // isKey reports whether raw is shaped like an API key: native or imported.
 func (s *Service) isKey(raw string) bool {
@@ -235,10 +273,16 @@ func (s *Service) isKey(raw string) bool {
 
 // authenticateKey is core's API-key authenticator (Order 100): a key
 // presented in the Authorization header or as the session cookie's value
-// wins over everything after it (§4.2 item 2).
+// wins over everything after it (§4.2 item 2; HEAD middleware/auth.go
+// APIKeyFromRequest). A key is taken from the cookie only when that cookie
+// is the __Host- form: a plain-named cookie can be planted, and a key-shaped
+// value in it is left to the session authenticator, which refuses it.
 func (s *Service) authenticateKey(r *http.Request, c ClientInfo) (*Principal, *Failure, error) {
 	var cred *presented
-	for _, p := range s.credentials(r) {
+	for _, p := range s.credentials(r, c) {
+		if p.cookie && !p.hostOnly {
+			continue
+		}
 		if s.isKey(p.raw) {
 			cred = &p
 			break
@@ -288,7 +332,7 @@ func (s *Service) authenticateKey(r *http.Request, c ClientInfo) (*Principal, *F
 // and deleted in the same request (prune on read until the sweep task, COR4-13).
 func (s *Service) authenticateSession(r *http.Request, c ClientInfo) (*Principal, *Failure, error) {
 	var cred *presented
-	for _, p := range s.credentials(r) {
+	for _, p := range s.credentials(r, c) {
 		if p.cookie || strings.HasPrefix(p.raw, string(KindSession)) {
 			cred = &p
 			break
