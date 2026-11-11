@@ -1,5 +1,5 @@
 // file: core/secrets/store.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: be9e243c-f9df-4ff7-930d-10a5b90f2f49
 // last-edited: 2026-11-10
 
@@ -368,8 +368,13 @@ func notRegularKeyring(keyFile string, mode fs.FileMode) error {
 	case mode.IsDir():
 		what = "a directory"
 	}
+	// The advice never says "remove it": removing the entry makes the next
+	// Open create a new keyring (or refuse with ErrKeyMissing), and when the
+	// entry pointed at the real keyring that orphans every stored secret.
 	return fmt.Errorf("secrets: the keyring path %s holds %s, not a regular file; it is never followed or replaced: "+
-		"put the keyring file itself there, or remove the entry so a new keyring is created", keyFile, what)
+		"if it points at the keyring, replace it with a copy of that file (mode 0600, owned by the service user); "+
+		"delete it only if no keyring ever existed here, because a new keyring cannot read secrets stored under the old one",
+		keyFile, what)
 }
 
 // exportedMaxID is the highest key number the export record names, 0 when
