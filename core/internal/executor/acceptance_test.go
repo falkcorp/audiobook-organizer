@@ -1,7 +1,7 @@
 // file: core/internal/executor/acceptance_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0d06a72a-c352-44d0-b19d-3122c4700486
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -125,11 +125,12 @@ func TestShutdown_DrainBoundedAndStampsInterrupted(t *testing.T) {
 	}
 }
 
-// TestCancel_GraceThenFenceRevoked (5T.3.6): a cancel moves the run to
-// stopping and cancels its context; within the grace its writes still
-// land; after the grace the fence is revoked (FenceEpoch+1, the row ends
-// canceled, writes are ErrFenced) and the goroutine is a zombie that keeps
-// the concurrency key until it exits.
+// TestCancel_GraceThenFenceRevoked (5T.3.6, 5T.3.5): a cancel moves the
+// run to stopping and cancels its context; from then on its writes are
+// refused (ErrFenced) though the row keeps its fence through the grace;
+// after the grace the fence is revoked (FenceEpoch+1, the row ends
+// canceled) and the goroutine is a zombie that keeps the concurrency key
+// until it exits.
 func TestCancel_GraceThenFenceRevoked(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		type cmd struct{ reply chan error }
@@ -170,8 +171,11 @@ func TestCancel_GraceThenFenceRevoked(t *testing.T) {
 			t.Fatalf("after cancel: %s/%q, want stopping/cancel", r.State, r.Reason)
 		}
 		synctest.Wait() // every goroutine idle: a zero grace would have abandoned the attempt by now
-		if err := write(); err != nil {
-			t.Fatalf("write inside the grace: %v, want nil (fence intact)", err)
+		if err := write(); !isErr(err, tasks.ErrFenced) {
+			t.Fatalf("write inside the grace: %v, want ErrFenced (the run was canceled)", err)
+		}
+		if r := h.get(id); r.State != tasks.StateStopping || r.FenceEpoch != before.FenceEpoch {
+			t.Fatalf("inside the grace: %s fence %d, want stopping with fence %d", r.State, r.FenceEpoch, before.FenceEpoch)
 		}
 		time.Sleep(6 * time.Second)
 		synctest.Wait()

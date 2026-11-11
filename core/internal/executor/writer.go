@@ -1,7 +1,7 @@
 // file: core/internal/executor/writer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b36bdb50-f432-4165-bf9a-e3cd86723c0a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -16,16 +16,40 @@ import (
 // writer is a run's tasks.Writer (5T.3.5): the one gated write path.
 type writer struct{ a *attempt }
 
-// Do refuses with ErrFenced once the fence is revoked (grace expired,
-// shutdown stamped the run, or a stand-down hold was lost), with
-// ErrOutsideEffects for a resource the definition did not declare; in
-// Preview it records the intent and returns ErrPreview without calling fn;
-// in Live it records a write-ahead intent, calls fn, and hands the changes
-// to the module's ChangeSink.
-func (w *writer) Do(ctx context.Context, wr tasks.Write, fn func(ctx context.Context) ([]tasks.Change, error)) error {
-	a := w.a
+// writable is the attempt's write permit (HEAD's opswriter Fence.Check):
+// ErrFenced once the attempt was abandoned (a.fenced) or its run context is
+// done, whatever stopped it: a cancel or the watchdog, a quiesce, Shutdown
+// or the attempt's Timeout. Every stop path ends a.ctx first, and a
+// context's Done channel is closed before its cancel returns, so a body
+// that has seen ctx.Done() can no longer pass this check: the permit is
+// revoked by the cancel itself, never after it (HEAD revoked the fence
+// before cancelling for the same reason). The run's ledger writes
+// (checkpoints, marks, progress) do not go through it: a stopping run still
+// records where it got to (5T.7).
+func (a *attempt) writable() error {
 	if a.fenced.Load() {
 		return tasks.ErrFenced
+	}
+	select {
+	case <-a.ctx.Done():
+		return fmt.Errorf("%w: the run was stopped (%v)", tasks.ErrFenced, context.Cause(a.ctx))
+	default:
+		return nil
+	}
+}
+
+// Do refuses with ErrFenced once the run no longer holds its permit
+// (5T.3.5: canceled, abandoned, timed out or a stand-down hold lost; see
+// writable), with ErrOutsideEffects for a resource the definition did not
+// declare; in Preview it records the intent and returns ErrPreview without
+// calling fn; in Live it records a write-ahead intent, calls fn, and hands
+// the changes to the module's ChangeSink. The permit is checked again after
+// the intent, just before fn, so a stop that lands while the intent is
+// written still keeps fn from running.
+func (w *writer) Do(ctx context.Context, wr tasks.Write, fn func(ctx context.Context) ([]tasks.Change, error)) error {
+	a := w.a
+	if err := a.writable(); err != nil {
+		return err
 	}
 	if !declared(a.d.writes, wr.Resource) {
 		return fmt.Errorf("%w: %s writes %s", tasks.ErrOutsideEffects, a.d.kind, tasks.FormatRef(wr.Resource))
@@ -46,6 +70,9 @@ func (w *writer) Do(ctx context.Context, wr tasks.Write, fn func(ctx context.Con
 		return tasks.ErrPreview
 	}
 	if err := intent(nil); err != nil {
+		return err
+	}
+	if err := a.writable(); err != nil {
 		return err
 	}
 	changes, err := fn(ctx)
