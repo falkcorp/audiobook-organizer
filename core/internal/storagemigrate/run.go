@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/run.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 98f094d6-2e4a-420d-b36c-e26822f5cc4d
 // last-edited: 2026-11-10
 
@@ -387,7 +387,7 @@ func (run *shardRun) chunk(ctx context.Context, s *shardState, items []item) err
 	mg, sks := run.mg, run.sks
 	b := run.newBatch()
 	c := &chunk{run: run, shard: s, b: b, counts: map[string]int64{}, staged: map[string]struct{}{}, ctx: ctx}
-	w := datamigrate.NewStepWriter(c)
+	w := datamigrate.NewStepWriter(c, c)
 	var last []byte
 	for _, it := range items {
 		if int64(b.Len()) >= run.r.opts.ChunkBytes && last != nil {
