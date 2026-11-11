@@ -1,7 +1,7 @@
 // file: core/config/apply.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: dd5734d4-3c90-4ba8-9e83-8eb5778ff55a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config
 
@@ -497,10 +497,14 @@ func (s *Store) decodeChange(ck ckey, raw json.RawMessage, isUnset bool, by stri
 	if err != nil {
 		return change{}, err
 	}
-	// C4 does not apply to a FailClosed key: a stored value equal to the
-	// default (the most restrictive, for both declared keys) is what keeps a
-	// weaker operator value, set now or later, from taking effect
-	// (05-config §1.3.5).
+	// C4 does not apply to a FailClosed key: its stored row is the value the
+	// fail-closed rule weighs against the operator value (05-config §1.3.5),
+	// so it is kept even when it equals the default. For core.auth.mode the
+	// default "required" is the most restrictive value, and a stored
+	// "required" is what keeps a weaker operator value, set now or later,
+	// from taking effect. core.http.basic_gate.enabled defaults to false, its
+	// least restrictive value; a stored false never beats an operator value,
+	// and is kept so the row reads as the admin wrote it.
 	if bytes.Equal(c, ck.def()) && ck.k.failOrder == nil {
 		return change{ck: ck, unset: true}, nil
 	}

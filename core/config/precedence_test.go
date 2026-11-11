@@ -1,7 +1,7 @@
 // file: core/config/precedence_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f72db87-b1b3-4bcb-9393-6594c50533ca
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config_test
 
@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // The two FailClosed keys, declared with the tags and the orders their
@@ -539,5 +540,43 @@ func TestFile_ScalarTags(t *testing.T) {
 		if _, err := r.st.Boot(context.Background()); err == nil {
 			t.Errorf("%s: Boot accepted %s", name, v)
 		}
+	}
+}
+
+// TestImporter_StagesFailClosedDefault (05-config §1.3.5, §1.12): the
+// Importer stages a FailClosed key's value even when it equals the default,
+// so R0's enable_auth=true (core.auth.mode "required", the default) still
+// beats a stale ABO_CORE_AUTH_MODE=disabled after the cutover; a plain key's
+// default value stages nothing (C4).
+func TestImporter_StagesFailClosedDefault(t *testing.T) {
+	r := fcRig(t, []string{"GOTHAM_CORE_AUTH_MODE=disabled"}, "", nil)
+	ctx := context.Background()
+	if _, err := r.st.Boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.st.SetImportTarget(r.mem)
+	imp := r.st.Importer()
+	if err := imp.Stage(new(storage.Batch), kAuthMode, json.RawMessage(`"required"`), "cutover:m1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := imp.Stage(new(storage.Batch), kCount, json.RawMessage("3"), "cutover:m1"); err != nil {
+		t.Fatal(err)
+	}
+	rows := r.mem.Rows()
+	if string(rows[kAuthMode].Value) != `"required"` {
+		t.Errorf("rows %v: the FailClosed default was not staged", rows)
+	}
+	if _, ok := rows[kCount]; ok {
+		t.Error("a plain key's default value was staged")
+	}
+	rep, err := r.st.Attach(ctx, r.mem, r.cm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ks := r.lookup(kAuthMode); string(ks.Effective) != `"required"` || rep.FailClosed[kAuthMode] != "env GOTHAM_CORE_AUTH_MODE" {
+		t.Errorf("after the cutover: core.auth.mode %s, FailClosed %v; want the staged required over the stale env", ks.Effective, rep.FailClosed)
 	}
 }
