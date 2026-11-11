@@ -1,5 +1,5 @@
 // file: core/integrations/fields.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: cbc1be32-ff91-4789-be1d-70da64f29e97
 // last-edited: 2026-11-11
 
@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"slices"
@@ -30,8 +31,17 @@ import (
 //   - a host-and-port adapter (core.email, 05-notify §3.1) has properties
 //     named "host" and "port" and no URL field named host; the pair is one
 //     destination, keyed "host" as M1.3's StoredInstance comment keys it, of
-//     origin tcp://host:port (the scheme is fixed: core cannot know the
-//     protocol, and only equality of origins is ever compared).
+//     origin smtp://host:port (M1.3, M1.4 step 2: the one host-and-port
+//     adapter the spec names is core.email; only equality of origins is
+//     ever compared). Its origin is set when either part is set, and a part
+//     that is unset renders empty (the adapter's default for that part), so
+//     a change of the port alone is a change of the destination.
+//
+// Every other property whose name reads as a destination (url, *_url, uri,
+// endpoint, host, ...; urlLike) is refused, as is a secret, URL-typed or
+// destination-named property below the top level: the Registry binds
+// secrets and Local only to the destinations it can see, so a destination
+// it cannot see would let a stored secret follow a URL change (SEC-15).
 //
 // The adapter's built-in default of a destination field is "the field is
 // unset": with neither a stored nor an operator value the adapter dials its
@@ -43,8 +53,9 @@ const (
 	portField = "port"
 )
 
-// hostPortScheme is the scheme of a host-and-port destination's origin.
-const hostPortScheme = "tcp"
+// hostPortScheme is the scheme of a host-and-port destination's origin
+// (M1.3 StoredInstance: core.email's origin is smtp://host:port).
+const hostPortScheme = "smtp"
 
 // prop is one settings property.
 type prop struct {
@@ -62,14 +73,83 @@ type fieldSet struct {
 	required map[string]bool // the schema's top-level "required" list
 }
 
-// schemaDoc is the part of a config.Schema document the Registry reads.
-type schemaDoc struct {
-	Properties map[string]struct {
-		Type   json.RawMessage `json:"type"`
-		Format string          `json:"format"`
-		Secret bool            `json:"x-mediacore-secret"`
-	} `json:"properties"`
-	Required []string `json:"required"`
+// schemaNode is the part of one JSON Schema object the Registry reads: a
+// property's class, and every place a nested property can hide.
+type schemaNode struct {
+	Type       json.RawMessage            `json:"type"`
+	Format     string                     `json:"format"`
+	Secret     bool                       `json:"x-mediacore-secret"`
+	Properties map[string]json.RawMessage `json:"properties"`
+	Required   []string                   `json:"required"`
+	// Nested schemas: an object's or array's members and the subschemas.
+	Items                json.RawMessage            `json:"items"`
+	PrefixItems          []json.RawMessage          `json:"prefixItems"`
+	AdditionalProperties json.RawMessage            `json:"additionalProperties"`
+	PatternProperties    map[string]json.RawMessage `json:"patternProperties"`
+	Defs                 map[string]json.RawMessage `json:"$defs"`
+	AnyOf                []json.RawMessage          `json:"anyOf"`
+	OneOf                []json.RawMessage          `json:"oneOf"`
+	AllOf                []json.RawMessage          `json:"allOf"`
+}
+
+// subschemas are n's nested schemas (not its own properties).
+func (n schemaNode) subschemas() []json.RawMessage {
+	all := slices.Concat(n.PrefixItems, n.AnyOf, n.OneOf, n.AllOf, []json.RawMessage{n.Items, n.AdditionalProperties})
+	for _, m := range []map[string]json.RawMessage{n.PatternProperties, n.Defs} {
+		for _, k := range slices.Sorted(maps.Keys(m)) {
+			all = append(all, m[k])
+		}
+	}
+	out := all[:0]
+	for _, raw := range all {
+		if len(bytes.TrimSpace(raw)) > 0 {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
+// decodeNode decodes raw as a schema object; a boolean schema, null or an
+// absent schema is the zero node.
+func decodeNode(raw json.RawMessage) (schemaNode, error) {
+	var n schemaNode
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 || t[0] != '{' {
+		return n, nil
+	}
+	err := json.Unmarshal(t, &n)
+	return n, err
+}
+
+// checkNested refuses a secret, URL-typed or destination-named property
+// anywhere below the top level of the schema node at path (M1.3: secret
+// fields and destinations are top-level settings properties).
+func checkNested(path string, n schemaNode) error {
+	for _, name := range slices.Sorted(maps.Keys(n.Properties)) {
+		child, err := decodeNode(n.Properties[name])
+		if err != nil {
+			return invalidf("settings property %s.%s: %v", path, name, err)
+		}
+		if child.Secret || secretLike(name) || urlLike(name) || child.Format == "uri" {
+			return invalidf("settings property %s.%s is a secret or destination field below the top level; secret and destination fields are top-level settings properties", path, name)
+		}
+		if err := checkNested(path+"."+name, child); err != nil {
+			return err
+		}
+	}
+	for _, raw := range n.subschemas() {
+		child, err := decodeNode(raw)
+		if err != nil {
+			return invalidf("settings property %s: %v", path, err)
+		}
+		if child.Secret || child.Format == "uri" {
+			return invalidf("settings property %s holds a secret or URL-typed member; secret and destination fields are top-level string properties", path)
+		}
+		if err := checkNested(path, child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // analyze classifies s's top-level properties. A secret-named property that
@@ -81,7 +161,7 @@ func analyze(s config.Schema) (fieldSet, error) {
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return fieldSet{}, invalidf("Meta.Settings is the zero Schema; an adapter without settings uses config.SchemaFor[struct{}]()")
 	}
-	var doc schemaDoc
+	var doc schemaNode
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return fieldSet{}, invalidf("Meta.Settings is not a JSON Schema object: %v", err)
 	}
@@ -89,7 +169,19 @@ func analyze(s config.Schema) (fieldSet, error) {
 	for _, name := range doc.Required {
 		fs.required[name] = true
 	}
-	for name, p := range doc.Properties {
+	// The document's own subschemas ($defs and the like) hold no top-level
+	// property: whatever they declare is nested.
+	if err := checkNested("$", schemaNode{AnyOf: doc.AnyOf, OneOf: doc.OneOf, AllOf: doc.AllOf, Defs: doc.Defs, PatternProperties: doc.PatternProperties, AdditionalProperties: doc.AdditionalProperties}); err != nil {
+		return fieldSet{}, err
+	}
+	for _, name := range slices.Sorted(maps.Keys(doc.Properties)) {
+		p, err := decodeNode(doc.Properties[name])
+		if err != nil {
+			return fieldSet{}, invalidf("settings property %q: %v", name, err)
+		}
+		if err := checkNested(name, p); err != nil {
+			return fieldSet{}, err
+		}
 		pr := prop{format: p.Format, secret: p.Secret}
 		if len(p.Type) > 0 {
 			var one string
@@ -117,9 +209,40 @@ func analyze(s config.Schema) (fieldSet, error) {
 			fs.hostPort = true
 		}
 	}
+	// A destination-named property is a URL-typed string field or the host
+	// of the host-and-port pair; anything else would be a destination the
+	// Registry cannot see (SEC-15), refused like a secret-named property
+	// that is not a secret field.
+	for _, name := range slices.Sorted(maps.Keys(fs.props)) {
+		p := fs.props[name]
+		switch {
+		case !urlLike(name) || p.secret:
+		case p.format == "uri" && slices.Contains(p.types, "string"):
+		case name == hostField && fs.hostPort:
+		default:
+			return fieldSet{}, invalidf("settings property %q reads as a destination but is not a URL-typed string field (schema:\"format=uri\") nor the host of a host-and-port pair; the Registry binds secrets and Local only to destinations it can see", name)
+		}
+	}
 	slices.Sort(fs.secrets)
 	slices.Sort(fs.urls)
 	return fs, nil
+}
+
+// urlLike reports a property name that reads as a destination: a name, or
+// a '_'/'-' separated part of one, that is url, uri, endpoint, host,
+// hostname, webhook, href or server (plurals included), or that ends in
+// "url" or "uri" (baseurl, webhookurl).
+func urlLike(name string) bool {
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '_' || r == '-' }) {
+		switch strings.TrimSuffix(part, "s") {
+		case "url", "uri", "endpoint", "host", "hostname", "webhook", "href", "server":
+			return true
+		}
+		if strings.HasSuffix(part, "url") || strings.HasSuffix(part, "uri") {
+			return true
+		}
+	}
+	return false
 }
 
 // isSecret reports whether field is a secret field.
@@ -136,7 +259,10 @@ func (fs fieldSet) destinationKeys() []string {
 }
 
 // origins returns the origin of every destination set in settings; an unset
-// destination is absent (the adapter default).
+// destination is absent (the adapter default). The Registry passes it an
+// effective view (the stored layer with the operator overlay applied), so
+// every layer's scheme, host and port count. The host-and-port destination
+// is set when either part is, an unset part rendering empty.
 func (fs fieldSet) origins(settings map[string]any) map[string]string {
 	out := map[string]string{}
 	for _, f := range fs.urls {
@@ -145,11 +271,28 @@ func (fs fieldSet) origins(settings map[string]any) map[string]string {
 		}
 	}
 	if fs.hostPort {
-		if h, ok := stringValue(settings[hostField]); ok && h != "" {
-			out[hostField] = hostPortScheme + "://" + net.JoinHostPort(strings.ToLower(h), portString(settings[portField]))
+		h, _ := stringValue(settings[hostField])
+		if p := portString(settings[portField]); h != "" || p != "" {
+			out[hostField] = hostPortOrigin(h, p)
 		}
 	}
 	return out
+}
+
+// hostPortOrigin renders a host-and-port destination's origin.
+func hostPortOrigin(host, port string) string {
+	return hostPortScheme + "://" + net.JoinHostPort(strings.ToLower(host), port)
+}
+
+// wellFormedHostPort reports whether o is a host-and-port origin as
+// hostPortOrigin renders it, either part possibly empty but not both.
+func wellFormedHostPort(o string) bool {
+	rest, ok := strings.CutPrefix(o, hostPortScheme+"://")
+	if !ok {
+		return false
+	}
+	h, p, err := net.SplitHostPort(rest)
+	return err == nil && (h != "" || p != "") && hostPortOrigin(h, p) == o
 }
 
 // stringValue is v as a string when it is one.

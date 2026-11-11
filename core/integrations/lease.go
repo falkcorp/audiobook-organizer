@@ -1,5 +1,5 @@
 // file: core/integrations/lease.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8db314c4-39fe-4242-974f-f95bb76ffdd4
 // last-edited: 2026-11-11
 
@@ -88,8 +88,10 @@ func (r *Registry) current(ref Ref) (*slot, *snapshot) {
 	}
 }
 
-// lease is Lease without the type assertion.
-func (r *Registry) lease(ctx context.Context, ref Ref) (*slot, func(), error) {
+// lease is Lease without the type assertion. It returns the instance build
+// returned, never s.inst: a closer may clear s.inst under buildMu once the
+// drain timeout passes, so reading the field here would race with it.
+func (r *Registry) lease(ctx context.Context, ref Ref) (Instance, func(), error) {
 	if r.closed.Load() {
 		return nil, nil, ErrClosed
 	}
@@ -122,11 +124,12 @@ func (r *Registry) lease(ctx context.Context, ref Ref) (*slot, func(), error) {
 		release()
 		return nil, nil, refused(ref, "lease", fmt.Errorf("%w: %s is not enabled", ErrDisabled, ref))
 	}
-	if _, err := r.build(ctx, s); err != nil {
+	inst, err := r.build(ctx, s)
+	if err != nil {
 		release()
 		return nil, nil, err
 	}
-	return s, release, nil
+	return inst, release, nil
 }
 
 // build builds s's instance once (lazily, at its first lease or probe). A

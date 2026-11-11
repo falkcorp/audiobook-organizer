@@ -1,5 +1,5 @@
 // file: core/integrations/instance_store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2141de3b-d072-48fc-a0f7-b1f628eb04a5
 // last-edited: 2026-11-11
 
@@ -38,6 +38,12 @@ import (
 // Put naming the Version Load reported for it: its stored version when that
 // can still be read, else 0. Delete of an absent row is ErrNotConfigured. A
 // failed Put or Delete stages nothing.
+//
+// The version counts writes within one life of a row, not across a delete:
+// a re-created row starts again at version 1, so a writer still holding
+// version 1 of the deleted row can overwrite the new one (ABA). The check
+// guards concurrent edits of one instance; a client that must not write
+// over a re-created instance compares more than the version.
 type InstanceStore interface {
 	Load(ctx context.Context) ([]StoredInstance, error)
 	// Put writes inst and returns the new Version.

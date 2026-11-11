@@ -1,5 +1,5 @@
 // file: core/integrations/registry.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5291a2b4-f665-40ef-8c7f-d588aa319bec
 // last-edited: 2026-11-11
 
@@ -277,13 +277,16 @@ func (r *Registry) Load(ctx context.Context, overlay iter.Seq2[config.Path, conf
 
 // SetOverlay replaces the operator overlay at a config hot swap (M1.4 steps
 // 2 and 4). Only instances whose effective view changes are swapped; nothing
-// is persisted.
+// is persisted. After Close it returns ErrClosed and swaps nothing.
 func (r *Registry) SetOverlay(ctx context.Context, overlay iter.Seq2[config.Path, config.OperatorValue]) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed.Load() {
+		return ErrClosed
+	}
 	cur := r.snap.Load()
 	next := &snapshot{storeErr: cur.storeErr, rows: cur.rows, ops: r.opPaths(overlay), slots: map[Ref]*slot{}}
 	r.rebuild(next, cur)
@@ -524,14 +527,14 @@ func (r *Registry) Health(ctx context.Context, ref Ref) (Health, error) {
 // instance cannot be Closed while a lease is held. Kind packages wrap this.
 func Lease[T Instance](ctx context.Context, r *Registry, ref Ref) (T, func(), error) {
 	var zero T
-	s, release, err := r.lease(ctx, ref)
+	inst, release, err := r.lease(ctx, ref)
 	if err != nil {
 		return zero, nil, err
 	}
-	v, ok := s.inst.(T)
+	v, ok := inst.(T)
 	if !ok {
 		release()
-		return zero, nil, fmt.Errorf("%w: %s is built as %T, not the requested instance type", ErrNotConfigured, ref, s.inst)
+		return zero, nil, fmt.Errorf("%w: %s is built as %T, not the requested instance type", ErrNotConfigured, ref, inst)
 	}
 	return v, release, nil
 }
@@ -544,6 +547,11 @@ func (r *Registry) Close(ctx context.Context) error {
 	if !r.closed.Swap(true) {
 		for _, s := range r.snap.Load().slots {
 			r.retire(s)
+		}
+		if r.met != nil && r.met.gauges != nil {
+			if err := r.met.gauges.Unregister(); err != nil {
+				r.log.Warn("integrations: unregistering the gauges' callback failed", "error", err)
+			}
 		}
 	}
 	r.mu.Unlock()

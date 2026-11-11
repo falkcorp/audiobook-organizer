@@ -1,5 +1,5 @@
 // file: core/integrations/put_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9ee5562e-9650-4bd0-912e-7df382b78912
 // last-edited: 2026-11-11
 
@@ -527,7 +527,7 @@ func TestOperatorSecret_AdminStoredHostServed(t *testing.T) {
 	r := e.registry(t, nil, nil)
 	in := integrations.InstanceConfig{Ref: oracleRef, Adapter: oracle, Enabled: true, Settings: map[string]any{"host": "192.0.2.60", "port": 9000}}
 	mustPut(t, admin(), r, in, nil)
-	if row, _ := e.stored(t, oracleRef); row.OperatorSecretOrigin["host"] != "tcp://192.0.2.60:9000" {
+	if row, _ := e.stored(t, oracleRef); row.OperatorSecretOrigin["host"] != "smtp://192.0.2.60:9000" {
 		t.Fatalf("the admin's host was not recorded: %v", row.OperatorSecretOrigin)
 	}
 	if err := r.SetOverlay(ctx, overlay("integrations.metadata.clocktower.password", "env-oracle-pass")); err != nil {

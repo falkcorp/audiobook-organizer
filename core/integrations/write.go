@@ -1,5 +1,5 @@
 // file: core/integrations/write.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 29ac02ee-bf78-408e-a1cf-db1779640943
 // last-edited: 2026-11-11
 
@@ -40,8 +40,11 @@ type shaped struct {
 // (keep), and its value travels in secretsIn only; a field an operator value
 // locks may be omitted or repeat its effective value, and anything else is
 // ErrFieldLocked; URL-typed fields are absolute URLs without userinfo; the
-// effective settings validate against the adapter's schema.
-func shape(ref Ref, a *adapter, inst InstanceConfig, secretsIn map[string]secrets.Value, storedSettings map[string]any, cur *slot) (shaped, error) {
+// effective settings validate against the adapter's schema. The effective
+// values of the locked fields are read from ops through a's fields, not
+// from cur's view, which holds no operator value while cur's adapter is
+// unknown (an operator-only instance being created).
+func shape(ref Ref, a *adapter, inst InstanceConfig, secretsIn map[string]secrets.Value, storedSettings map[string]any, cur *slot, ops map[string]config.OperatorValue) (shaped, error) {
 	fs := a.fs
 	out := shaped{settings: map[string]any{}, clear: map[string]bool{}}
 	for _, f := range sortedFields(inst.Settings) {
@@ -71,10 +74,10 @@ func shape(ref Ref, a *adapter, inst InstanceConfig, secretsIn map[string]secret
 		}
 	}
 	var locked map[string]string
-	var eff map[string]any
 	if cur != nil {
-		locked, eff = cur.cfg.Locked, cur.cfg.Settings
+		locked = cur.cfg.Locked
 	}
+	eff := overlayValues(fs, storedSettings, ops)
 	for _, f := range sortedFields(locked) {
 		if fs.isSecret(f) {
 			if v, ok := secretsIn[f]; (ok && resupplied(v, secretName(ref, f))) || out.clear[f] {
@@ -230,13 +233,17 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 		}
 	}
 	storedSettings := readableSettings(stored)
-	sh, err := shape(ref, a, inst, secretsIn, storedSettings, snap.slots[ref])
+	ops := snap.ops[ref]
+	sh, err := shape(ref, a, inst, secretsIn, storedSettings, snap.slots[ref], ops)
 	if err != nil {
 		return putPlan{}, err
 	}
 	fs := a.fs
 	keys := fs.destinationKeys()
-	oldO, newO := fs.origins(storedSettings), fs.origins(sh.settings)
+	// The destinations before and after, from the effective views (the
+	// stored layer with the operator overlay applied): a port change beside
+	// an operator-set host is a destination change.
+	oldO, newO := fs.origins(overlayValues(fs, storedSettings, ops)), fs.origins(sh.view)
 	readable := stored != nil && stored.Malformed == ""
 	destChanged := readable && !sameOrigins(keys, oldO, newO)
 	keepStored := readable && !destChanged && (stored.SecretsOrigin == "" || stored.SecretsOrigin == signature(oldO))
@@ -275,8 +282,10 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 				p.writes = append(p.writes, secrets.Write{Name: name, Delete: true, By: by})
 			}
 		}
-		if had {
-			dropped = dropped || destChanged
+		// A stored secret the write does not keep is dropped, unless the
+		// request itself cleared it over unchanged destinations.
+		if had && (destChanged || !sh.clear[f]) {
+			dropped = true
 		}
 	}
 	local, localOrigin, err := localFor(w, inst.Local, stored, destChanged, newO)
@@ -312,11 +321,11 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 		ev.Action = "core.integration.change_url"
 		details["destinations"] = signature(newO)
 		details["previous_destinations"] = signature(oldO)
-		if dropped {
-			// The fact is the record's Reason: a detail key naming secrets
-			// would be masked by the audit redactor.
-			ev.Reason = "secrets_dropped"
-		}
+	}
+	if dropped {
+		// The fact is the record's Reason: a detail key naming secrets would
+		// be masked by the audit redactor.
+		ev.Reason = "secrets_dropped"
 	}
 	p.events = append([]audit.Event{ev}, p.events...)
 	return p, nil
@@ -527,12 +536,12 @@ func (r *Registry) test(ctx context.Context, w writer, inst InstanceConfig, secr
 		return TestResult{}, err
 	}
 	storedSettings := readableSettings(stored)
-	sh, err := shape(ref, a, inst, secretsIn, storedSettings, cur)
+	sh, err := shape(ref, a, inst, secretsIn, storedSettings, cur, ops)
 	if err != nil {
 		return TestResult{}, err
 	}
 	fs := a.fs
-	oldO, newO := fs.origins(storedSettings), fs.origins(sh.settings)
+	oldO, newO := fs.origins(overlayValues(fs, storedSettings, ops)), fs.origins(sh.view)
 	readable := stored != nil && stored.Malformed == ""
 	destChanged := readable && !sameOrigins(fs.destinationKeys(), oldO, newO)
 	local, localOrigin, err := localFor(w, inst.Local, stored, destChanged, newO)
@@ -566,6 +575,9 @@ func (r *Registry) test(ctx context.Context, w writer, inst InstanceConfig, secr
 	s := r.effective(ref, &row, ops)
 	r.mu.Unlock()
 	s.storedSecrets = sameDest
+	if sameDest {
+		s.secretsOrigin = stored.SecretsOrigin
+	}
 	s.given = given
 	if s.problem != "" {
 		return TestResult{OK: false, Class: ClassInvalid}, nil

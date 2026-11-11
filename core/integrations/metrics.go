@@ -1,5 +1,5 @@
 // file: core/integrations/metrics.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 20ea4a87-4f0e-4c8b-9a51-6f0d2c7b3e19
 // last-edited: 2026-11-11
 
@@ -35,10 +35,13 @@ func probeBuckets() []float64 { return []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 
 // statusUnknown is the status label of an instance not yet probed.
 const statusUnknown = "unknown"
 
-// instruments are the Registry's synchronous instruments.
+// instruments are the Registry's synchronous instruments and the
+// registration of its gauges' callback, which Close unregisters so a closed
+// Registry is neither observed nor kept alive by the meter.
 type instruments struct {
-	probe metric.Float64Histogram
-	swaps metric.Int64Counter
+	probe  metric.Float64Histogram
+	swaps  metric.Int64Counter
+	gauges metric.Registration
 }
 
 // instrument creates the scope's instruments on sc, the core
@@ -69,13 +72,14 @@ func (r *Registry) instrument(sc *metrics.Scope) (*instruments, error) {
 	if err != nil {
 		return nil, fmt.Errorf("integrations: health status gauge: %w", err)
 	}
-	if _, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		r.observeGauges(o, insts, status)
 		return nil
-	}, insts, status); err != nil {
+	}, insts, status)
+	if err != nil {
 		return nil, fmt.Errorf("integrations: register gauges: %w", err)
 	}
-	return &instruments{probe: probe, swaps: swaps}, nil
+	return &instruments{probe: probe, swaps: swaps, gauges: reg}, nil
 }
 
 // instanceKey is one series of the instances gauge.

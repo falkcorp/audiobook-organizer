@@ -1,5 +1,5 @@
 // file: core/integrations/fields_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dfaab137-5259-4293-befc-1800491e6971
 // last-edited: 2026-11-11
 
@@ -82,7 +82,7 @@ func TestPortString(t *testing.T) {
 		}
 	}
 	fs := fieldSet{hostPort: true}
-	if got := fs.origins(map[string]any{"host": "Oracle.Example", "port": float64(25)})["host"]; got != "tcp://oracle.example:25" {
+	if got := fs.origins(map[string]any{"host": "Oracle.Example", "port": float64(25)})["host"]; got != "smtp://oracle.example:25" {
 		t.Errorf("host-and-port origin = %q", got)
 	}
 }

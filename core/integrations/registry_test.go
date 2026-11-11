@@ -1,5 +1,5 @@
 // file: core/integrations/registry_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 15dbbe11-ae4b-4f69-8aa6-03dc9b368cd6
 // last-edited: 2026-11-11
 
@@ -287,7 +287,7 @@ func TestRegistry_OperatorOverlayLocksAndTrusts(t *testing.T) {
 	mustPut(t, admin(), r, o, nil)
 	_, release = lease(t, r, oracleRef)
 	release()
-	if tr := lastSpec(t, e, oracleRef).Trust; !slices.Equal(tr.PrivateOrigins, []string{"tcp://192.0.2.60:9000"}) {
+	if tr := lastSpec(t, e, oracleRef).Trust; !slices.Equal(tr.PrivateOrigins, []string{"smtp://192.0.2.60:9000"}) {
 		t.Errorf("Local trust = %v", tr)
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/integrations/effective.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4cea2446-663d-448f-b1e5-1ba9259adfc6
 // last-edited: 2026-11-11
 
@@ -71,8 +71,15 @@ type slot struct {
 	// binding withholds (sorted); empty when every one is served.
 	withheld []string
 	// storedSecrets is whether the row's stored secrets may be served: the
-	// row is stored and its destinations are those SecretsOrigin names.
+	// row is stored and its effective destinations are those SecretsOrigin
+	// names.
 	storedSecrets bool
+	// secretsOrigin is the SecretsOrigin of the stored row storedSecrets was
+	// judged against. A stored secret is read by name at use time, so a slot
+	// still draining after a Put that moved the instance (and wrote a new
+	// secret for the new destination) must not read it: secretFor serves a
+	// stored secret only while the committed row still carries this origin.
+	secretsOrigin string
 	trust         Trust
 	// given holds a Test's re-supplied secret values by field; nil for a
 	// served instance.
@@ -122,7 +129,9 @@ func (r *Registry) effective(ref Ref, row *StoredInstance, ops map[string]config
 	if s.cfg.Settings == nil {
 		s.cfg.Settings = map[string]any{}
 	}
-	stored := maps.Clone(s.cfg.Settings)
+	if row != nil {
+		s.secretsOrigin = row.SecretsOrigin
+	}
 	opSource := map[string]bool{}
 	if len(ops) > 0 {
 		s.cfg.Locked = make(map[string]string, len(ops))
@@ -167,20 +176,44 @@ func (r *Registry) effective(ref Ref, row *StoredInstance, ops map[string]config
 		}
 	}
 	if s.ad != nil {
-		r.bind(s, stored, opSource)
+		r.bind(s, opSource)
 	}
 	s.fp = fingerprint(s)
 	return s
 }
 
+// overlayValues is settings with the operator's non-secret values applied
+// through fs, coerced as effective applies them (a value that names no
+// field of fs, or does not fit its field, is skipped): the effective view of
+// a stored layer, which Put and Test read destination origins from exactly
+// as bind reads them from a slot's view.
+func overlayValues(fs fieldSet, settings map[string]any, ops map[string]config.OperatorValue) map[string]any {
+	out := maps.Clone(settings)
+	if out == nil {
+		out = map[string]any{}
+	}
+	for f, v := range ops {
+		p, known := fs.props[f]
+		if !known || p.secret {
+			continue
+		}
+		if val, err := coerce(p, v.Value); err == nil {
+			out[f] = val
+		}
+	}
+	return out
+}
+
 // bind applies the origin rules of M1.4 step 2 to s: which stored and which
 // operator-sourced secrets may be served, and which hosts are trusted for
-// private networks.
-func (r *Registry) bind(s *slot, stored map[string]any, opSource map[string]bool) {
+// private networks. Every rule compares the effective destinations (scheme,
+// host and port from every layer) with the origins the row recorded from
+// the effective destinations of the write that stored it.
+func (r *Registry) bind(s *slot, opSource map[string]bool) {
 	fs := s.ad.fs
 	keys := fs.destinationKeys()
 	eff := fs.origins(s.cfg.Settings)
-	storedOrigins := fs.origins(stored)
+	effSig := signature(eff)
 	// The operator origin of each destination key: the origin of the
 	// operator's own value, or "" (the adapter default) when the operator
 	// sets none for that key.
@@ -201,9 +234,11 @@ func (r *Registry) bind(s *slot, stored map[string]any, opSource map[string]bool
 		opDest[hostField] = opSource[hostField] && (opSource[portField] || !portSet)
 	}
 
-	// Stored secrets follow only the destination they were written for.
+	// Stored secrets follow only the destination they were written for,
+	// whichever layer moved it (SEC-15): an operator overlay that moves the
+	// destination withholds them too, until a Put re-supplies them.
 	if s.row != nil {
-		s.storedSecrets = s.row.SecretsOrigin == "" || s.row.SecretsOrigin == signature(storedOrigins)
+		s.storedSecrets = s.row.SecretsOrigin == "" || s.row.SecretsOrigin == effSig
 	}
 
 	// Operator secrets bind to origin plus provenance (SEC7-3, R8-5).
@@ -230,16 +265,16 @@ func (r *Registry) bind(s *slot, stored map[string]any, opSource map[string]bool
 	}
 
 	// Private-network trust follows the effective value's source: an
-	// operator-sourced destination is trusted; a stored one only while Local
-	// holds for the origin it was granted for.
-	localHolds := s.row != nil && s.cfg.Local && s.row.LocalOrigin != "" && s.row.LocalOrigin == signature(storedOrigins)
+	// operator-sourced destination is trusted; any other only while Local
+	// holds for the effective destinations it was granted for.
+	localHolds := s.row != nil && s.cfg.Local && s.row.LocalOrigin != "" && s.row.LocalOrigin == effSig
 	var trusted []string
 	for _, k := range keys {
 		o, ok := eff[k]
 		if !ok {
 			continue
 		}
-		if opDest[k] || (localHolds && storedOrigins[k] == o) {
+		if opDest[k] || localHolds {
 			trusted = append(trusted, o)
 		}
 	}
@@ -309,7 +344,10 @@ func (sr secretReader) Secret(ctx context.Context, field string) (secrets.Value,
 
 // secretFor resolves field of s: an operator value unless withheld, else
 // the stored secret the row's ref names while the row's destinations are
-// the ones it was written for. Any other case refuses before sending.
+// the ones it was written for and the committed row still carries the
+// SecretsOrigin s was built against (a draining slot never reads a secret
+// written for the destination a later Put moved the instance to). Any other
+// case refuses before sending.
 func (r *Registry) secretFor(ctx context.Context, s *slot, field string) (secrets.Value, error) {
 	ref := s.cfg.Ref
 	if v, ok := s.given[field]; ok {
@@ -327,6 +365,9 @@ func (r *Registry) secretFor(ctx context.Context, s *slot, field string) (secret
 	sref, ok := s.row.Config.Settings[field].(secrets.Ref)
 	if !ok || sref.Name() != secretName(ref, field) {
 		return secrets.Value{}, &Error{Ref: ref, Op: "secret", Class: ClassAuth, Err: fmt.Errorf("%w: secret field %q is not set", ErrNotConfigured, field)}
+	}
+	if cur, ok := r.snap.Load().rows[ref]; !ok || cur.Malformed != "" || cur.SecretsOrigin != s.secretsOrigin {
+		return secrets.Value{}, refused(ref, "secret", fmt.Errorf("%w: the stored secret of field %q was rewritten for another destination", ErrNotConfigured, field))
 	}
 	v, m, err := r.o.Secrets.Get(ctx, sref.Name())
 	switch {
