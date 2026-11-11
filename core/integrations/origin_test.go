@@ -234,7 +234,9 @@ func TestOperatorSecret_OperatorPortMoveWithheld(t *testing.T) {
 	)); err != nil {
 		t.Fatal(err)
 	}
-	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthDegraded {
+	// The row's stored layer holds no secret, so only the operator's is
+	// withheld (an operator secret is never a stored one).
+	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthDegraded || h.Message != integrations.ReasonOperatorSecretWithheld+": password" {
 		t.Errorf("Health after the operator moved the port = %+v", h)
 	}
 	if n := sentWith(e, "env-oracle-pass"); n != 1 {
