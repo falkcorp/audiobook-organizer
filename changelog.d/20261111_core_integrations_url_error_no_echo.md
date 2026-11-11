@@ -1,0 +1,1 @@
+- Core integrations: a refused instance URL no longer quotes the submitted text in its error, so a credential pasted into a URL that fails to parse cannot reach a route answer, a log line or an audit detail.
