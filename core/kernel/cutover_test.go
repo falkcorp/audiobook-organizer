@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -533,4 +535,212 @@ func TestPreflight_RunsOnlyBeforeCutoverStarts(t *testing.T) {
 	if err := preflightOnce(t, mem, levelOwners(storage.ClaimRetired), m, nil); err != nil {
 		t.Errorf("preflight with the record (level not raised) = %v, want skipped", err)
 	}
+}
+
+// p4bOrderFixture is the cutover build of TestP4bOrder_LevelStepBeforeCutover:
+// gcpd at level 1 with a versioned step (v1) and its level step (v2), the
+// cutover step raising level 1 and M8 after it, each noting itself in order
+// when it runs. failAt makes the cutover step fail on that source key.
+type p4bOrderFixture struct {
+	mu      sync.Mutex
+	order   []string
+	failAt  string
+	visits  map[string]int
+	enabled bool
+}
+
+func (f *p4bOrderFixture) note(s string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.order) == 0 || f.order[len(f.order)-1] != s {
+		f.order = append(f.order, s)
+	}
+}
+
+func (f *p4bOrderFixture) owners() []storage.OwnerSpec {
+	owners := cutoverOwners(storage.ClaimRetired)
+	lvl := storage.LevelStep("gcpd", 2, 1)
+	up := lvl.Up
+	lvl.Up = func(ctx context.Context, tx *storage.MigrationTx) error { f.note("level"); return up(ctx, tx) }
+	owners[0].Enabled = f.enabled
+	owners[0].Spec.Level = 1
+	owners[0].Spec.Migrations = []storage.Migration{
+		{Version: 1, Name: "bat-signal", Compat: storage.Additive, Up: func(context.Context, *storage.MigrationTx) error { f.note("versioned"); return nil }},
+		lvl,
+	}
+	return owners
+}
+
+// boot runs the cutover build's P4b over fs and returns the open store or
+// the boot's error.
+func (f *p4bOrderFixture) boot(t *testing.T, fs vfs.FS) (*storage.DB, error) {
+	t.Helper()
+	ctx := context.Background()
+	h, sf := &cutoverHandles{}, &fakeSealer{}
+	m := cutoverMigration(h)
+	m.RaisesLevel = 1
+	inner := m.Step
+	m.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+		f.note("cutover")
+		f.mu.Lock()
+		f.visits[string(kv.Key)]++
+		f.mu.Unlock()
+		if string(kv.Key) == f.failAt {
+			return errors.New("scarecrow's toxin: the importer fails")
+		}
+		return inner(ctx, kv, w)
+	}
+	rw := storage.NewRewriteStep("gcpd", "gcpd.rewrite")
+	owners := f.owners()
+	dms, err := NewDataMigrations(DataMigrationsConfig{ChunkItems: 7, Build: "batcomputer-2", Logger: slog.New(slog.DiscardHandler),
+		Quarantine: storage.QuarantineWriter(sf), LevelStep: LevelStep, Rewrite: &rw}, owners, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dms.rewriteRun = func(ctx context.Context, db *storage.DB) error {
+		f.note("compaction")
+		return db.SetRewriteRecord(ctx, rw.ID, storage.DataMigrationDone)
+	}
+	o, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(fs), Owners: owners,
+		Build: "batcomputer-2", FreeSpaceMargin: 1, DataSteps: dms.Steps()})
+	if err != nil {
+		return nil, err
+	}
+	db, err := o.Prepare(ctx)
+	if err != nil {
+		return nil, errors.Join(err, o.Close())
+	}
+	h.ks, _ = db.Keyspace("gcpd")
+	sf.db = db
+	if err := db.Migrate(ctx); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	return db, nil
+}
+
+// TestP4bOrder_LevelStepBeforeCutover (06 §6.10, D10, 03 §3.8): over a
+// module with a legacy claim, a cutover step with an importer and M8, P4b
+// runs the versioned step, then the level step, then the cutover step, then
+// M8's compaction. An error inside the cutover step, after the level step
+// committed, leaves a store the older build refuses; the next boot resumes
+// from the cursor and every row ends imported or quarantined exactly once,
+// the undecodable ones under c/storage/quarantine/ and in health. The
+// cutover runs with the module disabled; a fresh install stamps the cutover
+// step and M8 done and runs neither.
+func TestP4bOrder_LevelStepBeforeCutover(t *testing.T) {
+	ctx := context.Background()
+	newMem := func() *vfs.MemFS {
+		m := vfs.NewMem()
+		m.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+		return m
+	}
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			mem := newMem()
+			seedCutover(t, mem, cutoverRows(30, 2))
+			older := cutoverOwners(storage.ClaimReadWrite)
+			want := []string{"versioned", "level", "cutover"}
+			if !enabled {
+				// The module's own steps up to the cutover build ran while it
+				// was enabled; only the level step and the cutover are left.
+				older[0].Spec.Migrations = []storage.Migration{{Version: 1, Name: "bat-signal", Compat: storage.Additive,
+					Up: func(context.Context, *storage.MigrationTx) error { return nil }}}
+				if _, err := bootOwners(t, mem, older); err != nil {
+					t.Fatal(err)
+				}
+				want = []string{"level", "cutover"}
+			}
+			f := &p4bOrderFixture{failAt: "case:file/024", visits: map[string]int{}, enabled: enabled}
+			if db, err := f.boot(t, mem); err == nil {
+				_ = db.Close()
+				t.Fatal("the failing cutover boot succeeded")
+			}
+			if !slices.Equal(f.order, want) {
+				t.Fatalf("P4b order before the failure = %q, want %q", f.order, want)
+			}
+			if _, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(mem), Owners: older,
+				Build: "batcomputer-1", FreeSpaceMargin: 1}); !isLevelTooNew(err) {
+				t.Fatalf("the older build over the raised store = %v, want *storage.LevelTooNewError", err)
+			}
+			f.failAt = ""
+			db, err := f.boot(t, mem)
+			if err != nil {
+				t.Fatalf("the resuming boot: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			if want := append(want, "compaction"); !slices.Equal(f.order, want) {
+				t.Errorf("P4b order = %q, want %q", f.order, want)
+			}
+			ks, _ := db.Keyspace("gcpd")
+			imported := map[string]bool{}
+			for kv, err := range ks.Scan(ctx, storage.ScanOptions{Start: []byte("case/"), End: []byte("case0"), KeysOnly: true}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				imported[string(kv.Key)] = true
+			}
+			q, err := db.Quarantine(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := map[string]int{}
+			for _, e := range q {
+				seen[string(e.Record.Key)]++
+			}
+			for k, n := range seen {
+				if n != 1 {
+					t.Errorf("row %s quarantined %d times", k, n)
+				}
+			}
+			if len(imported) != 24 || len(seen) != 8 {
+				t.Errorf("imported %d and quarantined %d rows, want 24 and 8 (6 undecodable, 2 sensitive)", len(imported), len(seen))
+			}
+			if left := legacyKeysOf(t, db); len(left) != 0 {
+				t.Errorf("source rows left: %q", left)
+			}
+			if f.visits["case:file/001"] != 1 {
+				t.Errorf("case:file/001, in the first committed chunk, was stepped %d times; the resume must start at the cursor", f.visits["case:file/001"])
+			}
+			res, err := StorageHealth(ctx, db, nil, time.Now())
+			if err != nil || !strings.Contains(res.Detail, "step=gcpd.case-files rows=8") || res.Reason != "" {
+				t.Errorf("health = %+v, %v; want the quarantine in Detail", res, err)
+			}
+		})
+	}
+
+	t.Run("fresh install", func(t *testing.T) {
+		f := &p4bOrderFixture{visits: map[string]int{}, enabled: true}
+		db, err := f.boot(t, newMem())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = db.Close() }()
+		if slices.Contains(f.order, "cutover") || slices.Contains(f.order, "compaction") {
+			t.Errorf("a fresh install ran %q", f.order)
+		}
+		for _, id := range []string{"gcpd.case-files", "gcpd.rewrite"} {
+			if state, err := db.RewriteRecord(ctx, id); err != nil || state != storage.DataMigrationDone {
+				t.Errorf("fresh install: %s's record = %q, %v; want done", id, state, err)
+			}
+		}
+	})
+}
+
+func isLevelTooNew(err error) bool {
+	_, ok := errors.AsType[*storage.LevelTooNewError](err)
+	return ok
+}
+
+// legacyKeysOf lists gcpd's legacy keys on an open store.
+func legacyKeysOf(t *testing.T, db *storage.DB) []string {
+	t.Helper()
+	lr, _ := db.Legacy("gcpd")
+	var out []string
+	for kv, err := range lr.Scan(context.Background(), storage.ScanOptions{Start: []byte("case:"), End: []byte("case;"), KeysOnly: true}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, string(kv.Key))
+	}
+	return out
 }
