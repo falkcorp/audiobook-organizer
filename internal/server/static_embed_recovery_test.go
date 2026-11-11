@@ -1,9 +1,9 @@
 //go:build embed_frontend
 
 // file: internal/server/static_embed_recovery_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4a9e2d7-83f1-4b56-a0d8-5e7b1f9c3a62
-// last-edited: 2026-10-20
+// last-edited: 2026-11-11
 
 package server
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 )
 
 // The REAL embedded-build wiring: setupStaticFiles(cfRecoveryMW) installs the
@@ -35,7 +35,7 @@ func TestStaticEmbed_NoRouteChainRunsCFRecovery(t *testing.T) {
 			req.Header.Set("Sec-Fetch-Mode", "navigate")
 			req.Header.Set("Sec-Fetch-Dest", "document")
 		}
-		req.Header.Set(oauth.CFAccessHeader, assertion)
+		req.Header.Set(cfaccess.CFAccessHeader, assertion)
 		w := httptest.NewRecorder()
 		s.router.ServeHTTP(w, req)
 		return w

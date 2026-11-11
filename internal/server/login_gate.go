@@ -1,7 +1,7 @@
 // file: internal/server/login_gate.go
-// version: 5.0.0
+// version: 5.0.1
 // guid: bbbd655c-e45d-48ca-badb-d7b48a4d69e0
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package server
 
@@ -15,9 +15,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreauth "github.com/falkcorp/mediacore/auth"
@@ -246,7 +247,7 @@ func loginCeilingMiddleware(l *coreauth.LoginCeiling, exempt func(*gin.Context) 
 // deliver) that verifier accepts (signature, issuer, expiry, AUD) for a verified
 // email cfg allows. A service-token assertion names no person and is not exempt.
 // The answer is kept on the request.
-func newAccessExemption(verifier servermiddleware.CFAssertionVerifier, cfg *oauth.Config) func(*gin.Context) bool {
+func newAccessExemption(verifier servermiddleware.CFAssertionVerifier, cfg *legacyoauth.Config) func(*gin.Context) bool {
 	const ctxKey = "login_ceiling_access_exempt"
 	if verifier == nil || cfg == nil {
 		return nil
@@ -256,7 +257,7 @@ func newAccessExemption(verifier servermiddleware.CFAssertionVerifier, cfg *oaut
 			b, _ := v.(bool)
 			return b
 		}
-		raw := c.GetHeader(oauth.CFAccessHeader)
+		raw := c.GetHeader(cfaccess.CFAccessHeader)
 		if raw == "" {
 			if ck, err := c.Cookie("CF_Authorization"); err == nil {
 				raw = ck

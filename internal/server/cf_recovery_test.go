@@ -1,7 +1,7 @@
 // file: internal/server/cf_recovery_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2d8f4a6-1c73-4e95-9a0b-6f3e7d2c8a15
-// last-edited: 2026-10-20
+// last-edited: 2026-11-11
 
 package server
 
@@ -15,7 +15,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 )
 
 func TestIsCFRecoverySPAPath(t *testing.T) {
@@ -60,12 +61,12 @@ func TestIsCFRecoverySPAPath(t *testing.T) {
 
 type recoveryTestVerifier struct{}
 
-func (recoveryTestVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityClaims, error) {
+func (recoveryTestVerifier) Verify(_ context.Context, raw string) (*legacyoauth.IdentityClaims, error) {
 	switch raw {
 	case "svc":
-		return nil, &oauth.NonIdentityAssertionError{CommonName: "abcdef0123456789.access"}
+		return nil, &cfaccess.NonIdentityAssertionError{CommonName: "abcdef0123456789.access"}
 	case "person":
-		return &oauth.IdentityClaims{Provider: oauth.ProviderCFAccess, Subject: "p", Email: "o@example.com", EmailVerified: true}, nil
+		return &legacyoauth.IdentityClaims{Provider: legacyoauth.ProviderCFAccess, Subject: "p", Email: "o@example.com", EmailVerified: true}, nil
 	}
 	return nil, errors.New("invalid")
 }
@@ -83,7 +84,7 @@ func TestCFRecoveryMiddleware_OnNoRouteChain(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Sec-Fetch-Mode", "navigate")
 		req.Header.Set("Sec-Fetch-Dest", "document")
-		req.Header.Set(oauth.CFAccessHeader, assertion)
+		req.Header.Set(cfaccess.CFAccessHeader, assertion)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		return w

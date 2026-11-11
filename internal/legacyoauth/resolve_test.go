@@ -1,9 +1,9 @@
-// file: internal/oauth/resolve_test.go
-// version: 1.2.1
+// file: internal/legacyoauth/resolve_test.go
+// version: 1.2.2
 // guid: 4c9e1b73-6a20-4d58-8f16-2b5a7c0e9d38
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
-package oauth
+package legacyoauth
 
 import (
 	"errors"

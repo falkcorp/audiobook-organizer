@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_apikey_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5d3b8a71-9e64-4c02-b1f7-8a06d2e93c45
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -14,7 +14,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 )
@@ -66,7 +67,7 @@ func newAPIKeyHarness(t *testing.T) *apiKeyHarness {
 		t.Fatalf("absauth.Load: %v", err)
 	}
 	store := newAPIKeyStore(newFakeABSStore())
-	verifier := &fakeCFVerifier{byToken: map[string]*oauth.IdentityClaims{}}
+	verifier := &fakeCFVerifier{byToken: map[string]*legacyoauth.IdentityClaims{}}
 
 	resolver := NewABSIdentityResolver(cfg, verifier, nil, store)
 	r := gin.New()
@@ -260,10 +261,10 @@ func TestABSAPIKey_WinsOverAccessAssertion(t *testing.T) {
 	store := newAPIKeyStore(newFakeABSStore())
 	store.addUser(&database.User{ID: "u1", Username: "owner", Email: "owner@example.com", Status: "active"})
 	store.addKey("abk_valid", &database.APIKey{ID: "k1", UserID: "u1", Status: "active"})
-	verifier := &fakeCFVerifier{byToken: map[string]*oauth.IdentityClaims{
-		"human": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
+	verifier := &fakeCFVerifier{byToken: map[string]*legacyoauth.IdentityClaims{
+		"human": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
 	}}
-	resolver := NewABSIdentityResolver(cfg, verifier, oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com"}}), store)
+	resolver := NewABSIdentityResolver(cfg, verifier, legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com"}}), store)
 	r := gin.New()
 	var method auth.Method
 	r.GET("/api/me", ABSRequireAuth(resolver), func(c *gin.Context) {
@@ -271,7 +272,7 @@ func TestABSAPIKey_WinsOverAccessAssertion(t *testing.T) {
 		c.JSON(http.StatusOK, gin.H{"mode": ABSAuthMode(c)})
 	})
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	req.Header.Set(oauth.CFAccessHeader, "human")
+	req.Header.Set(cfaccess.CFAccessHeader, "human")
 	req.Header.Set("Authorization", "Bearer abk_valid")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

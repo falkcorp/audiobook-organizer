@@ -1,7 +1,7 @@
 // file: internal/server/middleware/cfbounce.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3b7e1d52-9c04-4a68-b1f3-5d2a8e60c9b7
-// last-edited: 2026-11-06
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	logging "github.com/falkcorp/mediacore/log"
 )
 
@@ -170,15 +170,15 @@ func (b *CFServiceTokenBouncer) inspect(c *gin.Context, requireNav bool) CFNavIn
 		// Sec-Fetch headers at all) say so, so a device test can tell whether a
 		// client that needed recovery was passed over for want of the headers.
 		if mode == "" && dest == "" && strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
-			if raw := strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader)); raw != "" {
-				if _, err := b.verifier.Verify(r.Context(), raw); errors.Is(err, oauth.ErrNonIdentityAssertion) {
-					return CFNavInspection{SkippedNoSecFetch: true, CommonName: strings.TrimSpace(oauth.CFAssertionCommonName(err))}
+			if raw := strings.TrimSpace(c.GetHeader(cfaccess.CFAccessHeader)); raw != "" {
+				if _, err := b.verifier.Verify(r.Context(), raw); errors.Is(err, cfaccess.ErrNonIdentityAssertion) {
+					return CFNavInspection{SkippedNoSecFetch: true, CommonName: strings.TrimSpace(cfaccess.CFAssertionCommonName(err))}
 				}
 			}
 		}
 		return CFNavInspection{}
 	}
-	raw := strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader))
+	raw := strings.TrimSpace(c.GetHeader(cfaccess.CFAccessHeader))
 	if raw == "" {
 		return CFNavInspection{}
 	}
@@ -187,16 +187,16 @@ func (b *CFServiceTokenBouncer) inspect(c *gin.Context, requireNav bool) CFNavIn
 	switch {
 	case err == nil:
 		return CFNavInspection{Kind: CFNavPerson, SecFetchMode: mode, SecFetchDest: dest}
-	case !errors.Is(err, oauth.ErrNonIdentityAssertion):
+	case !errors.Is(err, cfaccess.ErrNonIdentityAssertion):
 		return CFNavInspection{} // forged / expired / wrong aud: not ours to recover
 	}
 	out := CFNavInspection{
-		Kind: CFNavServiceToken, CommonName: strings.TrimSpace(oauth.CFAssertionCommonName(err)),
+		Kind: CFNavServiceToken, CommonName: strings.TrimSpace(cfaccess.CFAssertionCommonName(err)),
 		SecFetchMode: mode, SecFetchDest: dest,
 	}
 	if ck, cerr := c.Cookie(CFAuthorizationCookie); cerr == nil && strings.TrimSpace(ck) != "" {
 		_, verr := b.verifier.Verify(ctx, strings.TrimSpace(ck))
-		out.CookiePoisoned = errors.Is(verr, oauth.ErrNonIdentityAssertion)
+		out.CookiePoisoned = errors.Is(verr, cfaccess.ErrNonIdentityAssertion)
 		out.CookieIsPerson = verr == nil
 	}
 	return out

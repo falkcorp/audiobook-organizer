@@ -1,7 +1,7 @@
 // file: internal/server/middleware/cfbounce_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e5c1a7d3-2f94-4b60-8d17-a3b9c6e04f28
-// last-edited: 2026-10-22
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -16,8 +16,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
 const (
@@ -34,8 +34,8 @@ const (
 // forged.
 func bounceTestVerifier() *fakeCFVerifier {
 	return &fakeCFVerifier{
-		byToken: map[string]*oauth.IdentityClaims{
-			bouncePerson: {Provider: oauth.ProviderCFAccess, Subject: "cf|p", Email: "owner@example.com", EmailVerified: true},
+		byToken: map[string]*legacyoauth.IdentityClaims{
+			bouncePerson: {Provider: legacyoauth.ProviderCFAccess, Subject: "cf|p", Email: "owner@example.com", EmailVerified: true},
 		},
 		nonIdentity: map[string]bool{bounceSvcHeader: true, bounceSvcCookie: true},
 	}

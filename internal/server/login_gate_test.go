@@ -1,7 +1,7 @@
 // file: internal/server/login_gate_test.go
-// version: 5.0.1
+// version: 5.0.2
 // guid: 47178e5a-1329-49cf-847d-f019456d21c6
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package server
 
@@ -22,8 +22,9 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
@@ -285,11 +286,11 @@ func TestLoginCeiling_VisitorThatFailedWhileSaturatedIsRefused(t *testing.T) {
 // The exemption needs a verified assertion for a verified, allow-listed email.
 func TestLoginCeiling_ExemptionNeedsAVerifiedAllowListedIdentity(t *testing.T) {
 	setTunnelConnectors(t, "")
-	cfg := oauth.New(oauth.Config{AllowedEmails: []string{"kowner@example.test"}})
+	cfg := legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"kowner@example.test"}})
 	ver := fakeAccessVerifier{
-		"jwt-ok":         {Provider: oauth.ProviderCFAccess, Subject: "s1", Email: "kowner@example.test", EmailVerified: true},
-		"jwt-not-listed": {Provider: oauth.ProviderCFAccess, Subject: "s2", Email: "stranger@example.test", EmailVerified: true},
-		"jwt-unverified": {Provider: oauth.ProviderCFAccess, Subject: "s3", Email: "kowner@example.test", EmailVerified: false},
+		"jwt-ok":         {Provider: legacyoauth.ProviderCFAccess, Subject: "s1", Email: "kowner@example.test", EmailVerified: true},
+		"jwt-not-listed": {Provider: legacyoauth.ProviderCFAccess, Subject: "s2", Email: "stranger@example.test", EmailVerified: true},
+		"jwt-unverified": {Provider: legacyoauth.ProviderCFAccess, Subject: "s3", Email: "kowner@example.test", EmailVerified: false},
 	}
 	l := newLoginCeiling()
 	exempt := newAccessExemption(ver, cfg)
@@ -302,11 +303,11 @@ func TestLoginCeiling_ExemptionNeedsAVerifiedAllowListedIdentity(t *testing.T) {
 		hdr  map[string]string
 		want bool // saturated
 	}{
-		{"verified allow-listed identity", map[string]string{oauth.CFAccessHeader: "jwt-ok"}, false},
+		{"verified allow-listed identity", map[string]string{cfaccess.CFAccessHeader: "jwt-ok"}, false},
 		{"the same assertion as the CF_Authorization cookie", map[string]string{"Cookie": "CF_Authorization=jwt-ok"}, false},
-		{"verified but not allow-listed", map[string]string{oauth.CFAccessHeader: "jwt-not-listed"}, true},
-		{"email not verified", map[string]string{oauth.CFAccessHeader: "jwt-unverified"}, true},
-		{"assertion that does not verify", map[string]string{oauth.CFAccessHeader: "forged"}, true},
+		{"verified but not allow-listed", map[string]string{cfaccess.CFAccessHeader: "jwt-not-listed"}, true},
+		{"email not verified", map[string]string{cfaccess.CFAccessHeader: "jwt-unverified"}, true},
+		{"assertion that does not verify", map[string]string{cfaccess.CFAccessHeader: "forged"}, true},
 		{"no assertion", nil, true},
 		{"only the unsigned email header", map[string]string{"Cf-Access-Authenticated-User-Email": "kowner@example.test"}, true},
 	} {
@@ -319,7 +320,7 @@ func TestLoginCeiling_ExemptionNeedsAVerifiedAllowListedIdentity(t *testing.T) {
 	l2 := newLoginCeiling()
 	r2 := ceilingRouterWith(loginCeilingMiddleware(l2, exempt, nil, nil), &code, &saturated)
 	for i := 0; i < 3*coreauth.LoginGlobalCeiling; i++ {
-		ceilingPost(r2, "192.0.2.5:4000", map[string]string{oauth.CFAccessHeader: "jwt-ok"})
+		ceilingPost(r2, "192.0.2.5:4000", map[string]string{cfaccess.CFAccessHeader: "jwt-ok"})
 	}
 	require.Zero(t, ceilingGlobalCount(l2))
 }
@@ -338,7 +339,7 @@ func TestLoginCeiling_ExemptionNeedsAVerifiedAllowListedIdentity(t *testing.T) {
 //     negligible refill rate, so the count is deterministic.
 func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t *testing.T) {
 	cfAccessVerifierOverride = fakeAccessVerifier{
-		"jwt-owner": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: ownerRouteEmail, EmailVerified: true},
+		"jwt-owner": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-owner", Email: ownerRouteEmail, EmailVerified: true},
 	}
 	t.Cleanup(func() { cfAccessVerifierOverride = nil })
 	fx := setupCredGuardServerWith(t, func(c *config.Config) {

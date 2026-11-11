@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -15,7 +15,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	coreaudit "github.com/falkcorp/mediacore/audit"
 	coreauth "github.com/falkcorp/mediacore/auth"
@@ -48,17 +49,17 @@ const (
 	ABSModeAPIKey = "apikey"
 )
 
-// CFAssertionVerifier is the slice of *oauth.CFAccessVerifier this middleware needs.
+// CFAssertionVerifier is the slice of *cfaccess.CFAccessVerifier this middleware needs.
 // Declared as an interface so tests can inject a verifier without standing up
 // Cloudflare's JWKS endpoint.
 type CFAssertionVerifier interface {
-	Verify(ctx context.Context, rawJWT string) (*oauth.IdentityClaims, error)
+	Verify(ctx context.Context, rawJWT string) (*legacyoauth.IdentityClaims, error)
 }
 
 // ABSIdentityStore is the narrow store slice the ABS identity resolver needs.
 // database.Store satisfies it (PebbleStore implements GetABSSession).
 type ABSIdentityStore interface {
-	oauth.UserStore
+	legacyoauth.UserStore
 	GetRoleByID(id string) (*database.Role, error)
 	GetABSSession(id string) (*database.ABSSession, error)
 	// ExtendABSSession is how authenticated use keeps a session alive (sliding
@@ -99,7 +100,7 @@ type ABSIdentityStore interface {
 type ABSIdentityResolver struct {
 	cfg      *absauth.Config
 	verifier CFAssertionVerifier
-	oauthCfg *oauth.Config
+	oauthCfg *legacyoauth.Config
 	store    ABSIdentityStore
 	// now is the clock for token expiry, session liveness and session extension.
 	// time.Now until UseClock binds it (abs.New binds it to the ABS handler's
@@ -109,7 +110,7 @@ type ABSIdentityResolver struct {
 
 // NewABSIdentityResolver wires the resolver. A nil cfg, or a cfg whose ABS API is
 // disabled, makes every request 401 — a wiring mistake must never open a door.
-func NewABSIdentityResolver(cfg *absauth.Config, verifier CFAssertionVerifier, oauthCfg *oauth.Config, store ABSIdentityStore) *ABSIdentityResolver {
+func NewABSIdentityResolver(cfg *absauth.Config, verifier CFAssertionVerifier, oauthCfg *legacyoauth.Config, store ABSIdentityStore) *ABSIdentityResolver {
 	return &ABSIdentityResolver{cfg: cfg, verifier: verifier, oauthCfg: oauthCfg, store: store, now: time.Now}
 }
 
@@ -222,8 +223,8 @@ func (r *ABSIdentityResolver) CFCallerKey(c *gin.Context) (string, bool) {
 	}
 	claims, err := r.verifier.Verify(c.Request.Context(), raw)
 	if err != nil {
-		if errors.Is(err, oauth.ErrNonIdentityAssertion) {
-			cn := strings.TrimSpace(oauth.CFAssertionCommonName(err))
+		if errors.Is(err, cfaccess.ErrNonIdentityAssertion) {
+			cn := strings.TrimSpace(cfaccess.CFAssertionCommonName(err))
 			if cn == "" {
 				return "", false
 			}
@@ -269,14 +270,14 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 		// Note this does NOT widen access: falling through lands on the bearer path,
 		// which is itself fail-closed. A request with a service token and no bearer
 		// still gets 401 — it has simply not proven who it is.
-		if errors.Is(err, oauth.ErrNonIdentityAssertion) {
+		if errors.Is(err, cfaccess.ErrNonIdentityAssertion) {
 			// Record WHICH service token this was before falling through. It is the
 			// only attribution a machine credential ever carries, and on the
 			// fall-through path the request may still go on to authenticate as a
 			// real user via its bearer — at which point the token and the person
 			// appear together on one audit line, which is the pairing that makes an
 			// anomaly visible (see coreaudit.AuthAttempt.ServiceToken).
-			if cn := oauth.CFAssertionCommonName(err); cn != "" && c != nil {
+			if cn := cfaccess.CFAssertionCommonName(err); cn != "" && c != nil {
 				c.Set(contextABSServiceTokenKey, cn)
 			}
 			return nil, nil
@@ -294,7 +295,7 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 		// A verified identity that is not on the allowlist is 403 and provisions
 		// nothing. Anything else is a store failure, which is a 500 — reporting it as
 		// 401/403 would tell the client its credential is dead when it is not.
-		if errors.Is(err, oauth.ErrEmailNotAllowed) || errors.Is(err, oauth.ErrEmailNotVerified) {
+		if errors.Is(err, legacyoauth.ErrEmailNotAllowed) || errors.Is(err, legacyoauth.ErrEmailNotVerified) {
 			return nil, &ABSAuthError{
 				Status: http.StatusForbidden, Reason: "email-not-allowed",
 				Message: "identity is not authorized for this server",
@@ -714,7 +715,7 @@ func absAssertionFromRequest(c *gin.Context) string {
 	if c == nil || c.Request == nil {
 		return ""
 	}
-	return strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader))
+	return strings.TrimSpace(c.GetHeader(cfaccess.CFAccessHeader))
 }
 
 // absBearerFromRequest reads our own access token from Authorization: Bearer, or from

@@ -1,9 +1,14 @@
-// file: internal/oauth/cfaccess.go
-// version: 1.2.1
+// file: internal/cfaccess/verifier.go
+// version: 1.2.2
 // guid: 3a7e0c92-8b41-4d56-9f08-1c6b2a5d7e39
-// last-edited: 2026-09-02
+// last-edited: 2026-11-11
 
-package oauth
+// Package cfaccess is ABO's Cloudflare Access adapter (04 §2.4, G11: deployment-
+// specific): the Access JWT verifier, the gin binder and the service-token
+// recovery HEAD's gin chain still uses, the owner-guard route middleware and,
+// from F4-03, the auth.Extension core's stage 12 runs once F4-08 registers it.
+// Core ships no Cloudflare code.
+package cfaccess
 
 import (
 	"context"
@@ -12,6 +17,8 @@ import (
 	"strings"
 
 	oidc "github.com/coreos/go-oidc/v3/oidc"
+
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 )
 
 // ErrNonIdentityAssertion reports an Access token that is cryptographically VALID —
@@ -94,7 +101,7 @@ func NewCFAccessVerifier(ctx context.Context, teamDomain, aud string) (*CFAccess
 // Verify checks the signature, issuer, expiry, and aud of a Cloudflare Access JWT and
 // returns the verified identity. Cloudflare only mints this token after its own IdP
 // login, so the email is verified.
-func (v *CFAccessVerifier) Verify(ctx context.Context, rawJWT string) (*IdentityClaims, error) {
+func (v *CFAccessVerifier) Verify(ctx context.Context, rawJWT string) (*legacyoauth.IdentityClaims, error) {
 	tok, err := v.verifier.Verify(ctx, rawJWT)
 	if err != nil {
 		return nil, fmt.Errorf("cfaccess: verify jwt: %w", err)
@@ -122,8 +129,8 @@ func (v *CFAccessVerifier) Verify(ctx context.Context, rawJWT string) (*Identity
 	if subject == "" {
 		subject = claims.Email // fall back to email as the stable id
 	}
-	return &IdentityClaims{
-		Provider:      ProviderCFAccess,
+	return &legacyoauth.IdentityClaims{
+		Provider:      legacyoauth.ProviderCFAccess,
 		Subject:       subject,
 		Email:         claims.Email,
 		EmailVerified: true,

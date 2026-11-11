@@ -1,7 +1,7 @@
 // file: internal/server/middleware/abs_caller_key_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8b3e1d47-2c95-4f60-a7d8-5e9c0b1f6a23
-// last-edited: 2026-10-19
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -12,14 +12,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )
 
 // verifierFunc adapts a function to CFAssertionVerifier.
-type verifierFunc func(raw string) (*oauth.IdentityClaims, error)
+type verifierFunc func(raw string) (*legacyoauth.IdentityClaims, error)
 
-func (f verifierFunc) Verify(_ context.Context, raw string) (*oauth.IdentityClaims, error) {
+func (f verifierFunc) Verify(_ context.Context, raw string) (*legacyoauth.IdentityClaims, error) {
 	return f(raw)
 }
 
@@ -27,7 +28,7 @@ func callerKeyContext(assertion string) *gin.Context {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("GET", "/auth/openid", nil)
 	if assertion != "" {
-		c.Request.Header.Set(oauth.CFAccessHeader, assertion)
+		c.Request.Header.Set(cfaccess.CFAccessHeader, assertion)
 	}
 	return c
 }
@@ -43,20 +44,20 @@ func TestCFCallerKey(t *testing.T) {
 	}
 	store := newFakeABSStore()
 	v := &fakeCFVerifier{
-		byToken: map[string]*oauth.IdentityClaims{
-			"person": {Provider: oauth.ProviderCFAccess, Subject: "cf|p", Email: "Owner@Example.com", EmailVerified: true},
+		byToken: map[string]*legacyoauth.IdentityClaims{
+			"person": {Provider: legacyoauth.ProviderCFAccess, Subject: "cf|p", Email: "Owner@Example.com", EmailVerified: true},
 		},
 	}
-	svc := &oauth.NonIdentityAssertionError{CommonName: "family"}
-	r := NewABSIdentityResolver(cfg, verifierFunc(func(raw string) (*oauth.IdentityClaims, error) {
+	svc := &cfaccess.NonIdentityAssertionError{CommonName: "family"}
+	r := NewABSIdentityResolver(cfg, verifierFunc(func(raw string) (*legacyoauth.IdentityClaims, error) {
 		if raw == "svc" {
 			return nil, svc
 		}
 		if raw == "svc-no-cn" {
-			return nil, &oauth.NonIdentityAssertionError{Subject: "s"}
+			return nil, &cfaccess.NonIdentityAssertionError{Subject: "s"}
 		}
 		return v.Verify(context.Background(), raw)
-	}), oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com"}}), store)
+	}), legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com"}}), store)
 
 	cases := []struct {
 		assertion, want string
@@ -83,7 +84,7 @@ func TestCFCallerKey(t *testing.T) {
 	}
 
 	jwtOnly, _ := absauth.Load(absauth.Settings{Enabled: true, JWTSecret: absTestSecret, AuthModes: "jwt"})
-	if _, ok := NewABSIdentityResolver(jwtOnly, v, oauth.New(oauth.Config{}), store).CFCallerKey(callerKeyContext("person")); ok {
+	if _, ok := NewABSIdentityResolver(jwtOnly, v, legacyoauth.New(legacyoauth.Config{}), store).CFCallerKey(callerKeyContext("person")); ok {
 		t.Fatal("with cf mode off there is no verified caller key")
 	}
 }

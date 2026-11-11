@@ -1,7 +1,7 @@
 // file: internal/server/middleware/cfaccess_verified_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0123b67f-04fc-421e-8413-4d4f53b5ece8
-// last-edited: 2026-10-20
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -14,19 +14,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 )
 
 // markerVerifier answers by raw assertion: "person" verifies with an email,
 // "service-token" verifies but names no person, anything else fails.
 type markerVerifier struct{}
 
-func (markerVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityClaims, error) {
+func (markerVerifier) Verify(_ context.Context, raw string) (*legacyoauth.IdentityClaims, error) {
 	switch raw {
 	case "person":
-		return &oauth.IdentityClaims{Provider: oauth.ProviderCFAccess, Subject: "sub-1", Email: "guest@example.com", EmailVerified: true}, nil
+		return &legacyoauth.IdentityClaims{Provider: legacyoauth.ProviderCFAccess, Subject: "sub-1", Email: "guest@example.com", EmailVerified: true}, nil
 	case "service-token":
-		return nil, &oauth.NonIdentityAssertionError{Subject: "sub-2", CommonName: "token-id.access"}
+		return nil, &cfaccess.NonIdentityAssertionError{Subject: "sub-2", CommonName: "token-id.access"}
 	}
 	return nil, errors.New("fake verifier: bad assertion")
 }
@@ -38,7 +39,7 @@ func (markerVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityClai
 func TestCloudflareAccessAuth_VerifiedMarker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, _, _ := setupAuthTestStore(t)
-	cfg := oauth.New(oauth.Config{})
+	cfg := legacyoauth.New(legacyoauth.Config{})
 
 	tests := []struct {
 		name    string
@@ -46,12 +47,12 @@ func TestCloudflareAccessAuth_VerifiedMarker(t *testing.T) {
 		headers map[string]string
 		want    bool
 	}{
-		{"verified person, not admitted", NewCFAccessAuthenticatorWithVerifier(markerVerifier{}, cfg, store), map[string]string{oauth.CFAccessHeader: "person"}, true},
-		{"verified service token, no identity", NewCFAccessAuthenticatorWithVerifier(markerVerifier{}, cfg, store), map[string]string{oauth.CFAccessHeader: "service-token"}, true},
-		{"assertion that does not verify", NewCFAccessAuthenticatorWithVerifier(markerVerifier{}, cfg, store), map[string]string{oauth.CFAccessHeader: "forged"}, false},
+		{"verified person, not admitted", NewCFAccessAuthenticatorWithVerifier(markerVerifier{}, cfg, store), map[string]string{cfaccess.CFAccessHeader: "person"}, true},
+		{"verified service token, no identity", NewCFAccessAuthenticatorWithVerifier(markerVerifier{}, cfg, store), map[string]string{cfaccess.CFAccessHeader: "service-token"}, true},
+		{"assertion that does not verify", NewCFAccessAuthenticatorWithVerifier(markerVerifier{}, cfg, store), map[string]string{cfaccess.CFAccessHeader: "forged"}, false},
 		{"no assertion", NewCFAccessAuthenticatorWithVerifier(markerVerifier{}, cfg, store), nil, false},
 		{"spoofed email header only", NewCFAccessAuthenticatorWithVerifier(markerVerifier{}, cfg, store), map[string]string{"Cf-Access-Authenticated-User-Email": "guest@example.com", "CF-Connecting-IP": "192.0.2.9"}, false},
-		{"access not configured", NewCFAccessAuthenticatorWithVerifier(nil, cfg, store), map[string]string{oauth.CFAccessHeader: "person"}, false},
+		{"access not configured", NewCFAccessAuthenticatorWithVerifier(nil, cfg, store), map[string]string{cfaccess.CFAccessHeader: "person"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
