@@ -13,7 +13,6 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -406,19 +405,16 @@ func textJSONOf(k *keyInfo, p Path, text string) (json.RawMessage, error) {
 			return nil, &FieldError{Path: p, Err: fmt.Errorf("want true or false, got %q", text)}
 		}
 		return json.RawMessage(text), nil
-	case t.Kind() >= reflect.Int && t.Kind() <= reflect.Int64:
-		if _, err := strconv.ParseInt(text, 10, 64); err != nil {
-			return nil, &FieldError{Path: p, Err: fmt.Errorf("not an integer: %w", err)}
+	case t.Kind() >= reflect.Int && t.Kind() <= reflect.Float64:
+		// A number is a JSON number literal of the key's own type, as the
+		// file gives it: strconv's extras ("+5", "007", "0x1f", "1_000",
+		// "Inf") are not JSON, so they do not decode, and the value is never
+		// handed on in a form the snapshot cannot read.
+		if !json.Valid([]byte(text)) {
+			return nil, &FieldError{Path: p, Err: fmt.Errorf("not a %s", t.Kind())}
 		}
-		return json.RawMessage(text), nil
-	case t.Kind() >= reflect.Uint && t.Kind() <= reflect.Uint64:
-		if _, err := strconv.ParseUint(text, 10, 64); err != nil {
-			return nil, &FieldError{Path: p, Err: fmt.Errorf("not an unsigned integer: %w", err)}
-		}
-		return json.RawMessage(text), nil
-	case t.Kind() == reflect.Float32 || t.Kind() == reflect.Float64:
-		if _, err := strconv.ParseFloat(text, 64); err != nil {
-			return nil, &FieldError{Path: p, Err: fmt.Errorf("not a number: %w", err)}
+		if err := json.Unmarshal([]byte(text), reflect.New(t).Interface()); err != nil {
+			return nil, &FieldError{Path: p, Err: fmt.Errorf("not a %s: %w", t.Kind(), err)}
 		}
 		return json.RawMessage(text), nil
 	default:
