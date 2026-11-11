@@ -1,7 +1,7 @@
 // file: core/storage/batch.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 95428f24-dcaf-4b52-bcb8-b5a04189097c
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -223,7 +223,12 @@ func (b *Batch) Expect(h Handle, key, value []byte) error {
 // GetForUpdate reads key through h (the batch's own writes first) and records
 // Expect(h, key, <value read>): optimistic read-modify-write. The recorded
 // precondition is the committed value, so a write this batch staged earlier
-// does not make its own Expect fail.
+// does not make its own Expect fail. A repeated GetForUpdate of a key this
+// batch already expects keeps the first read's precondition: the batch's
+// writes derive from that read, so a value another batch committed since
+// fails the commit (ErrConflict) instead of becoming the precondition, which
+// would let writes built from the older value overwrite it unseen (05-storage
+// "checked at commit": the commit fails when the key changed since the read).
 func (b *Batch) GetForUpdate(ctx context.Context, h Handle, key []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -237,7 +242,9 @@ func (b *Batch) GetForUpdate(ctx context.Context, h Handle, key []byte) ([]byte,
 		b.poison(err)
 		return nil, err
 	}
-	b.expect(abs, committed, !ok)
+	if _, had := b.expects[string(abs)]; !had {
+		b.expect(abs, committed, !ok)
+	}
 	view, vok := committed, ok
 	if b.indexed {
 		if view, vok, err = b.getView(abs); err != nil {

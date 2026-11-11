@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.14.3 -->
+<!-- version: 1.14.4 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
-<!-- last-edited: 2026-11-08 -->
+<!-- last-edited: 2026-11-11 -->
 
 # 05 — Storage (`storage`, `storage/index`, `storage/datamigrate`)
 
@@ -266,7 +266,8 @@ func (b *Batch) Get(ctx context.Context, key []byte) ([]byte, error) // indexed 
 // for keys in Serialized ranges (§5S.3.4) of a bound handle; else ErrNotSerialized.
 func (b *Batch) Expect(h Handle, key, value []byte) error
 // GetForUpdate reads key through h (the batch's own writes first) and records
-// Expect(h, key, <value read>): optimistic read-modify-write.
+// Expect(h, key, <value read>): optimistic read-modify-write. A repeated
+// GetForUpdate of a key the batch already expects keeps the first read's precondition.
 func (b *Batch) GetForUpdate(ctx context.Context, h Handle, key []byte) ([]byte, error)
 
 func (b *Batch) Participants() []Owner // owners of the bound handles, for logs and metrics
@@ -347,7 +348,9 @@ sub-prefixes in `Spec.Serialized`.
 a store's state transitions. A writer that stages a write derived from anything it read — a whole row
 written back with one field changed, a progress tick, a chunk-ledger commit, a checkpoint, a result-data
 write, a usage counter — reads that key with `GetForUpdate` in the same batch, or stages `Expect(h, key,
-nil)` for a create, so the commit fails with `ErrConflict` when the key changed since the read. On
+nil)` for a create, so the commit fails with `ErrConflict` when the key changed since the read. A
+second `GetForUpdate` of that key in the same batch keeps the first read's precondition: the writes derive
+from the first read, so a value committed in between fails the commit instead of becoming the precondition. On
 `ErrConflict` the writer re-reads and decides again from the new value. It never resubmits the bytes it
 built from the stale read. A write that the new value makes pointless is **dropped**, by HEAD's
 closed-ledger rule (R7-3, DATA7-3): a chunk-ledger commit, checkpoint, Fixer row or row mark is re-staged
@@ -3314,3 +3317,5 @@ Round 16 (2026-11-05): review fixes X4 (§5S.4 "Task kinds": `storagetasks` is c
 Owner answers (2026-11-05): D15 — §5S.3.13 and its tests: M8 has one fixed ID, `books.rewrite`, registered at F3 and kept last; the "second M8" journal rule and test cell removed (advisor S2); the R2 bullet of the migration lifecycle cites it.
 
 R1-21 (2026-11-08), the journaled swap and the crash-matrix kit: `storage.ErrRenameRefused` is restorejournal's sentinel re-exported, as `ErrSwapPending` is; `Record` states the journal's JSON Lines rule and its torn tail (D2); §5S.3.16 and the `TestBootCrashMatrix` row state that the error mode skips Pebble's own files, which are kill points only (D12). After the row's review: `StepError` in the runner's error block (decision (f)); `Record.Kept` for the delete entries the kernel's no-hook completion skips under rule (4) (M1); the torn tail is dropped by rewriting the journal (m6); the "Completion" row and P4d step 11(a) place the kernel's own `hook_done` after P4b, as 06's writer-table row "P4d 1" does (e).
+
+F2-03 (2026-11-11), found by the task executor's tests: a repeated `GetForUpdate` of one key in one batch replaced the first read's precondition with the value committed since, so a batch whose writes derived from the first read committed over a newer value. 05-tasks' `move` reads the run row in `Transition` and again when it appends the transition's event, and two concurrent approvals of one plan both committed. The first read's precondition is now kept (`TestGetForUpdateKeepsTheFirstReadsPrecondition`); "checked at commit" and the `GetForUpdate` signature state it.

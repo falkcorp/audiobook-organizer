@@ -1,7 +1,7 @@
 // file: core/internal/executor/approve_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a500492e-f488-4dcd-aaeb-3ffe778b43c1
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -588,6 +588,31 @@ func TestApprove_DecidesAPlanOnce(t *testing.T) {
 			t.Fatalf("second reject: %v, want ErrPlanRejected", err)
 		}
 	})
+	t.Run("an approve that commits while another is staged", func(t *testing.T) {
+		var fired atomic.Bool
+		var during func()
+		h := newHarness(t, []tasks.Definition{fixerDef(&applyLog{})}, func(o *Options) {
+			withPrincipal(o)
+			o.NewBatch = o.Stores.Runs.(batchOpener).NewBatch
+			o.Stores.Runs = approveDuring{RunStore: o.Stores.Runs, fired: &fired, during: &during}
+		})
+		plan := h.plan()
+		var first error
+		during = func() { first = h.x.Approve(gordon, plan, tasks.ApproveRequest{Rows: []string{"penguin"}}) }
+		second := h.x.Approve(gordon, plan, tasks.ApproveRequest{Rows: []string{"joker"}})
+		if !fired.Load() {
+			t.Fatal("no approve was staged (the interleaving did not happen)")
+		}
+		if first != nil {
+			t.Fatalf("the approve that committed first: %v", first)
+		}
+		if !isErr(second, ErrPlanDecided) {
+			t.Fatalf("the approve staged across another's commit: %v, want ErrPlanDecided", second)
+		}
+		if runs := h.applyRuns(plan); len(runs) != 1 {
+			t.Fatalf("%d apply runs of one plan, want 1", len(runs))
+		}
+	})
 	t.Run("concurrent approves", func(t *testing.T) {
 		defs := []tasks.Definition{fixerDef(&applyLog{})}
 		fs := vfs.NewCrashableMem()
@@ -628,6 +653,26 @@ func TestApprove_DecidesAPlanOnce(t *testing.T) {
 			t.Fatalf("%d apply runs of one plan, want 1", len(runs))
 		}
 	})
+}
+
+// approveDuring is a run store whose first AppendEvent of an approve runs
+// during before staging the event: another approval of the plan commits
+// while the first is staged, after its Transition and its re-read and
+// before the event's read of the run row. Storage used to let that second
+// read replace the Transition's precondition, so both approvals committed
+// (found by the concurrent cell under -race; storage's
+// TestGetForUpdateKeepsTheFirstReadsPrecondition pins the rule).
+type approveDuring struct {
+	tasks.RunStore
+	fired  *atomic.Bool
+	during *func()
+}
+
+func (s approveDuring) AppendEvent(ctx context.Context, b *storage.Batch, id tasks.RunID, seq uint64, e tasks.RunEvent) error {
+	if e.Event == eventApprove && s.fired.CompareAndSwap(false, true) {
+		(*s.during)()
+	}
+	return s.RunStore.AppendEvent(ctx, b, id, seq, e)
 }
 
 // Fold fixtures: gotham.lockdown is a Task kind with an Approval that does
