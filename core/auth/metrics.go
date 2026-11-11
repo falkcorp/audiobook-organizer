@@ -1,5 +1,5 @@
 // file: core/auth/metrics.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b1f3d97-e842-4a05-9c7d-0e5a2b8c4f61
 // last-edited: 2026-11-11
 
@@ -26,9 +26,10 @@ import (
 //
 // Not recorded here, and so not in testdata/series.golden: the two password
 // histograms (mediacore_auth_password_hash_seconds and
-// _queue_wait_seconds, which need an observer in auth/password's Hasher)
-// and mediacore_auth_extension_errors_total (stage 12 does not yet tell an
-// extension's internal error from a refusal, §8 failure table). The seam
+// _queue_wait_seconds, which need an observer in auth/password's Hasher).
+// mediacore_auth_extension_errors_total is recorded (an extension reports an
+// outage as ErrExtensionUnavailable, F4-03) but its extension label is open,
+// so it is created on first use and is not in the golden either. The seam
 // notes say so.
 
 // Label values of the closed sets.
@@ -66,6 +67,7 @@ type authMetrics struct {
 	throttledCtr  metric.Int64Counter
 	redemptions   metric.Int64Counter
 	invalidations metric.Int64Counter
+	extErrors     metric.Int64Counter
 
 	mu       sync.Mutex
 	scanned  time.Time
@@ -95,6 +97,10 @@ func newAuthMetrics(sc *metrics.Scope, s *Service) (*authMetrics, error) {
 	if am.invalidations, err = m.Int64Counter(prefix+".principal_invalidations",
 		metric.WithDescription("Principals Revalidate refused, by reason.")); err != nil {
 		return nil, fmt.Errorf("auth: principal invalidations counter: %w", err)
+	}
+	if am.extErrors, err = m.Int64Counter(prefix+".extension_errors",
+		metric.WithDescription("Identity extensions that could not decide a request (their IdP or backend failed), by extension. The request went on to the next method.")); err != nil {
+		return nil, fmt.Errorf("auth: extension errors counter: %w", err)
 	}
 	sessions, err := m.Int64ObservableGauge(prefix+".sessions_active",
 		metric.WithDescription("Live sessions."))
@@ -217,6 +223,16 @@ func attemptOutcome(code string) string {
 		return outcomeInactive
 	}
 	return outcomeInvalid
+}
+
+// extensionError counts one request an identity extension could not decide.
+// The extension label is open (an app registers its own names), so the series
+// is created on first use and not seeded.
+func (m *authMetrics) extensionError(ctx context.Context, extension string) {
+	if m == nil {
+		return
+	}
+	m.extErrors.Add(ctx, 1, metric.WithAttributes(attribute.String("extension", extension)))
 }
 
 // throttle counts one refusal on surface.
