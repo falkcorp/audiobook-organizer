@@ -1,5 +1,5 @@
 // file: core/secrets/scope.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 260601d3-3d42-4bb6-bd05-ec43f4e9b477
 // last-edited: 2026-11-10
 
@@ -41,7 +41,7 @@ func validScopePrefix(prefix string) bool {
 // "core.<subsystem>." (kernel only).
 func (s *Store) Scope(prefix string) Scope {
 	if !validScopePrefix(prefix) {
-		return Scope{s: s, prefix: prefix, err: fmt.Errorf("%w: scope prefix %q is not modules.<id>. or core.<subsystem>.", ErrOutOfScope, prefix)}
+		return Scope{s: s, prefix: prefix, err: fmt.Errorf("%w: scope prefix %q is neither a modules.<id>. nor a core.<subsystem>. prefix", ErrOutOfScope, prefix)}
 	}
 	return Scope{s: s, prefix: prefix}
 }
