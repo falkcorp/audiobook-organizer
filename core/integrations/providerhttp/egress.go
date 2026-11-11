@@ -67,8 +67,9 @@ const MaxRedirects = 5
 // DefaultDialTimeout bounds a single TCP connect attempt.
 const DefaultDialTimeout = 10 * time.Second
 
-// extraBlockedCIDRs lists ranges that the net.IP predicates below do not
-// already cover.
+// extraBlockedNets lists ranges that the net.IP predicates below do not
+// already cover. A function, not a package variable: core holds no
+// package-level state (R5), and the table is only read at dial time.
 //
 // Deliberately ABSENT: the documentation ranges 192.0.2.0/24 (TEST-NET-1),
 // 198.51.100.0/24 (TEST-NET-2) and 203.0.113.0/24 (TEST-NET-3). They are
@@ -76,7 +77,7 @@ const DefaultDialTimeout = 10 * time.Second
 // and docs are required to use those ranges as stand-ins for public addresses,
 // so blocking them would make it impossible to write a test that proves a
 // public address is still allowed.
-var extraBlockedCIDRs = func() []*net.IPNet {
+func extraBlockedNets() []*net.IPNet {
 	blocks := []string{
 		"0.0.0.0/8",     // "this network"; 0.0.0.0 reaches localhost on Linux
 		"100.64.0.0/10", // CGNAT / carrier internal
@@ -97,7 +98,7 @@ var extraBlockedCIDRs = func() []*net.IPNet {
 		}
 	}
 	return nets
-}()
+}
 
 // IsBlockedIP reports whether ip must not be connected to.
 //
@@ -116,7 +117,7 @@ func IsBlockedIP(ip net.IP) bool {
 		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
 		return true
 	}
-	for _, n := range extraBlockedCIDRs {
+	for _, n := range extraBlockedNets() {
 		if n.Contains(ip) {
 			return true
 		}
@@ -156,6 +157,15 @@ type Dialer struct {
 	// Timeout bounds one connect attempt. Zero means DefaultDialTimeout.
 	Timeout time.Duration
 
+	// AllowPrivate admits loopback, RFC 1918, RFC 4193 (ULA), CGNAT and the
+	// exact unspecified addresses, the ranges an instance trusted for private
+	// networks may reach (05-metadata M2.4). It never admits link-local
+	// (169.254.0.0/16, which holds the cloud metadata endpoint, and fe80::/10),
+	// multicast, 0.0.0.0/8 beyond 0.0.0.0, the reserved, benchmarking, NAT64,
+	// 6to4 and documentation ranges: those are refused whatever the trust.
+	// The zero value refuses every private address, as the covers guard does.
+	AllowPrivate bool
+
 	// LookupIP resolves a host. Tests override it to avoid real DNS; nil means
 	// net.DefaultResolver.
 	LookupIP func(ctx context.Context, host string) ([]net.IP, error)
@@ -164,6 +174,37 @@ type Dialer struct {
 	// net.Dialer. Implementations may assume the address has already been
 	// checked by IsBlockedIP.
 	DialAddr func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+// blocked reports whether the dial must refuse ip under d's trust.
+func (d *Dialer) blocked(ip net.IP) bool {
+	if !IsBlockedIP(ip) {
+		return false
+	}
+	return !(d.AllowPrivate && privateBypassable(ip))
+}
+
+// privateBypassable reports whether ip is in a range a private-trusted dial
+// may reach: loopback, RFC 1918 and RFC 4193 private space, CGNAT, and the
+// exact unspecified addresses (the spec's EgressPolicy text lists unspecified
+// among them). IPv4-mapped IPv6 is normalised by To4 first, so
+// ::ffff:127.0.0.1 is loopback and ::ffff:169.254.169.254 is link-local.
+// Link-local, multicast and everything else stay refused.
+func privateBypassable(ip net.IP) bool {
+	if ip == nil || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() ||
+		ip.IsInterfaceLocalMulticast() {
+		return false
+	}
+	if ip.IsUnspecified() {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsPrivate() {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4[0] == 100 && v4[1]&0xC0 == 64 // 100.64.0.0/10
+	}
+	return false
 }
 
 func (d *Dialer) lookup(ctx context.Context, host string) ([]net.IP, error) {
@@ -214,7 +255,7 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 	// the guard depend on resolver ordering, and a split-horizon answer where
 	// the public record is dead would fall through to the internal one.
 	for _, ip := range ips {
-		if IsBlockedIP(ip) {
+		if d.blocked(ip) {
 			return nil, fmt.Errorf("%w: %s resolves to %s", ErrBlockedAddress, host, ip)
 		}
 	}
