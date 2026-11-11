@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/auth/password"
 	"github.com/falkcorp/mediacore/storage"
@@ -210,15 +211,24 @@ func TestLogin_StatusAndResetAreCheckedAfterVerifyAndNotCharged(t *testing.T) {
 	reset := f.edit(f.withPassword(f.user("jason"), "red-hood"), func(u *auth.User) { u.PasswordResetRequired = true })
 	restricted := f.edit(f.withPassword(f.user("barbara"), "oracle"), func(u *auth.User) { u.SignInRestricted = true })
 	for _, tc := range []struct {
-		u    *auth.User
-		pw   string
-		want error
+		u      *auth.User
+		pw     string
+		want   error
+		reason string
 	}{
-		{disabled, "two-face", auth.ErrInactiveUser},
-		{reset, "red-hood", auth.ErrResetRequired},
-		{restricted, "oracle", auth.ErrResetRequired},
+		{disabled, "two-face", auth.ErrInactiveUser, "inactive"},
+		{reset, "red-hood", auth.ErrResetRequired, "reset_required"},
+		{restricted, "oracle", auth.ErrResetRequired, "reset_required"},
 	} {
 		th := auth.LoginThrottleOf(f.svc)
+		// One mistype first: a wrong password on any of these is charged, and
+		// the refused correct one after it neither charges nor clears it.
+		if _, err := f.login(tc.u.Username, "wrong", from("192.0.2.50")); !errors.Is(err, auth.ErrInvalidCredentials) {
+			t.Fatalf("%s: wrong password: %v", tc.u.Username, err)
+		}
+		if n := th.AccountFailures(auth.AccountKey(tc.u.Username)); n != 1 {
+			t.Fatalf("%s: a wrong password was charged %d times, want 1", tc.u.Username, n)
+		}
 		before := f.derivations()
 		sess, err := f.login(tc.u.Username, tc.pw, from("192.0.2.50"))
 		if !errors.Is(err, tc.want) || sess != nil {
@@ -227,15 +237,15 @@ func TestLogin_StatusAndResetAreCheckedAfterVerifyAndNotCharged(t *testing.T) {
 		if f.derivations()-before != 1 {
 			t.Fatalf("%s: the refusal did not cost one derivation", tc.u.Username)
 		}
-		if n := th.AccountFailures(auth.AccountKey(tc.u.Username)); n != 0 {
-			t.Fatalf("%s: a correct password was charged (%d)", tc.u.Username, n)
+		if n := th.AccountFailures(auth.AccountKey(tc.u.Username)); n != 1 {
+			t.Fatalf("%s: a refused correct password left %d failures, want the 1 before it", tc.u.Username, n)
 		}
-	}
-	if _, err := f.login("jason", "wrong", from("192.0.2.50")); !errors.Is(err, auth.ErrInvalidCredentials) {
-		t.Fatalf("wrong password on a reset-required account: %v", err)
-	}
-	if auth.LoginThrottleOf(f.svc).AccountFailures(auth.AccountKey("jason")) != 1 {
-		t.Fatal("a wrong password on a reset-required account was not charged")
+		f.audit.mu.Lock()
+		last := f.audit.emitted[len(f.audit.emitted)-1]
+		f.audit.mu.Unlock()
+		if last.Action != "core.auth.login" || last.Outcome != audit.Failure || last.Reason != tc.reason || last.Target.ID != string(tc.u.ID) {
+			t.Fatalf("%s: refusal audited as %+v, want reason %q on the account", tc.u.Username, last, tc.reason)
+		}
 	}
 	for range f.svc.Sessions(context.Background(), disabled.ID) {
 		t.Fatal("a refused sign-in opened a session")
@@ -374,6 +384,36 @@ func TestLogin_RehashesBcryptWithoutANewEpoch(t *testing.T) {
 	}
 	if h2, _ := f.st.PasswordHash(context.Background(), u.ID); h2 != h {
 		t.Fatal("an argon2id hash was re-stored")
+	}
+}
+
+// A password changed between the bcrypt verification and the transparent
+// rehash wins: the rehash of the old password is skipped, so a sign-in can
+// never put back a password an admin or the user just replaced.
+func TestLogin_RehashNeverRevertsAPasswordChangedMeanwhile(t *testing.T) {
+	f, _ := loginFx(t)
+	legacy, err := bcrypt.GenerateFromPassword([]byte("utility-belt"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := f.withHash(f.user("tim"), string(legacy))
+	var once sync.Once
+	f.audit.hold = func(e audit.Event) {
+		if e.Action == "core.auth.login" {
+			// The session batch is staged; the password changes before the
+			// rehash, which runs after the session commits.
+			once.Do(func() { f.withPassword(u, "red-robin-2008") })
+		}
+	}
+	if _, err := f.login("tim", "utility-belt", from("192.0.2.81")); err != nil {
+		t.Fatalf("bcrypt sign-in: %v", err)
+	}
+	f.audit.hold = nil
+	if _, err := f.login("tim", "utility-belt", from("192.0.2.82")); !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatalf("the replaced password signs in again after the rehash: %v", err)
+	}
+	if _, err := f.login("tim", "red-robin-2008", from("192.0.2.83")); err != nil {
+		t.Fatalf("the new password does not sign in: %v", err)
 	}
 }
 
