@@ -8,6 +8,7 @@ package integrations_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"reflect"
 	"testing"
 
@@ -104,9 +105,7 @@ func TestNativeInstanceStore_MalformedRows(t *testing.T) {
 	}
 	row := func(id string, extra map[string]any) map[string]any {
 		m := map[string]any{"kind": "indexer", "instance": id, "adapter": "hello.oracle", "enabled": true, "origin": "ui", "version": 4}
-		for k, v := range extra {
-			m[k] = v
-		}
+		maps.Copy(m, extra)
 		return m
 	}
 	ref := func(id string) integrations.Ref {

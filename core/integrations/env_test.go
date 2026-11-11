@@ -52,7 +52,7 @@ type batsignalSettings struct {
 type oracleSettings struct {
 	Host     string      `json:"host,omitempty"`
 	Port     int         `json:"port,omitempty"`
-	Password secrets.Ref `json:"password,omitempty"`
+	Password secrets.Ref `json:"password,omitzero"`
 }
 
 // schema reflects T or fails t.

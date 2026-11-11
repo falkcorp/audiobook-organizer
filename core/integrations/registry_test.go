@@ -296,9 +296,9 @@ func TestRegistry_OperatorOverlayLocksAndTrusts(t *testing.T) {
 func lastSpec(t testing.TB, e *env, ref integrations.Ref) integrations.OutboundSpec {
 	t.Helper()
 	specs := e.out.Specs()
-	for i := len(specs) - 1; i >= 0; i-- {
-		if specs[i].Ref == ref {
-			return specs[i]
+	for _, spec := range slices.Backward(specs) {
+		if spec.Ref == ref {
+			return spec
 		}
 	}
 	t.Fatalf("no outbound spec for %s", ref)

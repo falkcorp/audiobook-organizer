@@ -30,7 +30,7 @@ import (
 
 // probeBuckets are health_probe's bucket boundaries, in seconds: a probe is
 // one request bounded by core.integrations.probe_timeout (default 10s).
-var probeBuckets = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
+func probeBuckets() []float64 { return []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30} }
 
 // statusUnknown is the status label of an instance not yet probed.
 const statusUnknown = "unknown"
@@ -46,7 +46,7 @@ type instruments struct {
 func (r *Registry) instrument(sc *metrics.Scope) (*instruments, error) {
 	m, prefix := sc.Meter(), sc.Prefix()
 	probeName := prefix + ".health_probe"
-	if err := sc.View(probeName, probeBuckets...); err != nil {
+	if err := sc.View(probeName, probeBuckets()...); err != nil {
 		return nil, fmt.Errorf("integrations: health probe view: %w", err)
 	}
 	probe, err := m.Float64Histogram(probeName, metric.WithUnit("s"),

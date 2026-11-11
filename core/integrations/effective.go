@@ -277,7 +277,7 @@ func fingerprint(s *slot) string {
 		_, _ = h.Write(sum[:])
 	}
 	if s.row != nil {
-		_, _ = fmt.Fprint(h, s.row.LocalOrigin, "|", s.row.SecretsOrigin, "|", signature(s.row.OperatorSecretOrigin))
+		_, _ = h.Write([]byte(s.row.LocalOrigin + "|" + s.row.SecretsOrigin + "|" + signature(s.row.OperatorSecretOrigin)))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
