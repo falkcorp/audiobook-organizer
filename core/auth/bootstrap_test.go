@@ -1,5 +1,5 @@
 // file: core/auth/bootstrap_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a0d8c64-2f1b-4e7a-9b35-6c8e1d4f7a20
 // last-edited: 2026-11-11
 
@@ -207,7 +207,8 @@ func TestBootstrap_AdminIsCoreAdminHolder(t *testing.T) {
 	ctx := context.Background()
 	f.user("jim-gordon", roleCommissioner)
 	f.edit(f.user("damian-wayne", rbac.RoleAdmin), func(u *auth.User) { u.Status = auth.StatusDisabled })
-	f.edit(f.user("tim-drake", rbac.RoleAdmin), func(u *auth.User) { u.SignInRestricted = true })
+	// Sorts before bruce, so a pick that ignored the restriction would take it.
+	f.edit(f.user("barbara-gordon", rbac.RoleAdmin), func(u *auth.User) { u.SignInRestricted = true })
 	bruce := f.user("bruce-wayne", rbac.RoleAdmin)
 	f.user("dick-grayson", rbac.RoleAdmin)
 	before := f.userCount()
@@ -513,5 +514,34 @@ func TestSetup_ConcurrentCreatesOneAdmin(t *testing.T) {
 	wg.Wait()
 	if wins.Load() != 1 || f.userCount() != 1 {
 		t.Fatalf("%d setups won, %d users, want 1 and 1", wins.Load(), f.userCount())
+	}
+}
+
+// TestBootstrap_OwnerDemotedBeforeCommitIsRepicked (§4.6 item 2): the admin
+// the key is minted for is guarded in the redeem's batch, so a demotion that
+// commits between the pick and the commit fails the commit and the retry
+// picks again, never a key for an account that is no longer an admin.
+func TestBootstrap_OwnerDemotedBeforeCommitIsRepicked(t *testing.T) {
+	f, _ := bootFx(t)
+	bruce := f.user("bruce-wayne", rbac.RoleAdmin)
+	dick := f.user("dick-grayson", rbac.RoleAdmin)
+	var once sync.Once
+	f.audit.mu.Lock()
+	f.audit.hold = func(e audit.Event) {
+		if e.Action != "core.bootstrap.redeem" {
+			return
+		}
+		once.Do(func() {
+			f.edit(f.reload(bruce.ID), func(u *auth.User) { u.Status = auth.StatusDisabled })
+		})
+	}
+	f.audit.mu.Unlock()
+
+	res, err := f.svc.RedeemBootstrap(context.Background(), f.bootToken(auth.DefaultBootstrapTokenTTL), from("192.0.2.53"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.User.ID != dick.ID || f.key(res.KeyID).Owner != dick.ID {
+		t.Fatalf("the key went to %s, want the remaining admin %s", res.User.ID, dick.ID)
 	}
 }
