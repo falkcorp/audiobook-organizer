@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/chunks.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: ca419ac2-8938-45ee-a04a-fe0d1930eb92
 // last-edited: 2026-11-10
 
@@ -28,12 +28,14 @@ import (
 )
 
 // DataMigrationLabels are the crash-matrix labels of the data-migration
-// runner's three boot writers (06 §6.5.1 "Boot writers"): the plan with the
-// running state, each chunk's batch with its shard cursor, and the
-// verifying, done and failed states with Verify's report. Name coined by
-// F2-06.
+// runner's boot writers (06 §6.5.1 "Boot writers"): the plan with the
+// running state, each chunk's batch with its shard cursor, the verifying,
+// done and failed states with Verify's report, and the quarantine
+// sequence's lease, which a chunk's first quarantine commits on its own
+// before the chunk (storage.QuarantineWriter, F3-04; a kill after it only
+// skips record numbers). Name coined by F2-06.
 func DataMigrationLabels() []string {
-	return []string{storagemigrate.LabelPlan, storagemigrate.LabelChunk, storagemigrate.LabelState}
+	return []string{storagemigrate.LabelPlan, storagemigrate.LabelChunk, storagemigrate.LabelState, storage.LabelQuarantineSequence}
 }
 
 // ChunkScenario is one cell of the chunk-boundary crash matrix (05-storage
@@ -213,8 +215,9 @@ func ObservedChunks(t *testing.T, s ChunkScenario) map[string]bool {
 // Parallelism. Each row is imported into the owner's keyspace as
 // case/<n> through StepWriter.Batch (an importer's participant staging) and
 // its source key deleted, or, every QuarantineEvery-th row, quarantined
-// through a fake quarantine writer that stages c/storage/quarantine/<step>/
-// <key> into the chunk's batch. The cell boots through the kernel's P4b
+// through storage's quarantine writer (storage.QuarantineWriter, F3-04),
+// which stages the record c/storage/quarantine/<step>/<n> and its sequence
+// into the chunk's batch. The cell boots through the kernel's P4b
 // entry point (kernel.NewDataMigrations, DataMigrations.Steps into
 // storage.Open). Each real cutover step (M2 in F3-06, M3 in F4-06, ...)
 // adds its own cells. Name coined by F2-06.
@@ -239,8 +242,9 @@ type SyntheticCutover struct {
 	ChunkItems int
 	// QuarantineEvery quarantines every n-th row; 0 = 97.
 	QuarantineEvery int
-	// NoQuarantineWriter boots without the kernel's quarantine writer, as
-	// every build does until F3-04: the first quarantine fails the chunk.
+	// NoQuarantineWriter boots without a quarantine writer
+	// (DataMigrationsConfig.Quarantine nil): the first quarantine fails the
+	// chunk.
 	NoQuarantineWriter bool
 }
 
@@ -323,11 +327,6 @@ func (c SyntheticCutover) migration(h *handles) datamigrate.DataMigration {
 	}
 }
 
-// quarantineKey is the fake writer's record of a source key.
-func quarantineKey(step string, key []byte) []byte {
-	return []byte("quarantine/" + step + "/" + string(key))
-}
-
 // Boot opens the store at SyntheticPath on fs with the cutover build's
 // owners and the kernel's data-migration steps for migs, then prepares and
 // migrates it (P2, P4a, P4b) and closes it.
@@ -338,9 +337,8 @@ func (c SyntheticCutover) boot(ctx context.Context, fs vfs.FS, migs []datamigrat
 	}
 	cfg := kernel.DataMigrationsConfig{ChunkItems: c.ChunkItems, Build: "batcomputer-2", Logger: slog.New(slog.DiscardHandler)}
 	if !c.NoQuarantineWriter {
-		cfg.Quarantine = func(_ context.Context, b *storage.Batch, step string, key, raw []byte, _ string, _ bool) error {
-			return b.Bind(h.sks).In(h.sks).Set(quarantineKey(step, key), raw)
-		}
+		// The fixture has no Sensitive prefix, so no sealer is needed.
+		cfg.Quarantine = storage.QuarantineWriter(nil)
 	}
 	owners := c.owners(storage.ClaimRetired)
 	dms, err := kernel.NewDataMigrations(cfg, owners, migs...)
@@ -443,6 +441,14 @@ func (c SyntheticCutover) Check(t testing.TB, fs vfs.FS) {
 	sks, _ := db.Keyspace("core/storage")
 	lr, _ := db.Legacy(c.Owner)
 	id := SyntheticID(c.Owner)
+	entries, err := db.Quarantine(ctx, id)
+	if err != nil {
+		t.Fatalf("crashmatrix: quarantine of %s: %v", id, err)
+	}
+	records := map[string][]storage.QuarantineRecord{}
+	for _, e := range entries {
+		records[string(e.Record.Key)] = append(records[string(e.Record.Key)], e.Record)
+	}
 	for kv, err := range lr.Scan(ctx, storage.ScanOptions{Start: []byte("case:"), End: []byte("case;"), KeysOnly: true}) {
 		if err != nil {
 			t.Fatal(err)
@@ -453,24 +459,26 @@ func (c SyntheticCutover) Check(t testing.TB, fs vfs.FS) {
 	for n := 1; n <= c.Rows; n++ {
 		k, v := SyntheticRow(n)
 		got, ierr := ks.Get(ctx, []byte(fmt.Sprintf("case/%05d", n)))
-		raw, qerr := sks.Get(ctx, quarantineKey(id, k))
+		recs := records[string(k)]
 		switch {
-		case ierr == nil && qerr == nil:
+		case ierr != nil && !errors.Is(ierr, storage.ErrNotFound):
+			t.Fatalf("row %d: %v", n, ierr)
+		case len(recs) > 1:
+			t.Errorf("row %d quarantined %d times (doubled)", n, len(recs))
+		case ierr == nil && len(recs) == 1:
 			t.Errorf("row %d both imported and quarantined (doubled)", n)
 		case ierr == nil:
 			imported++
 			if want := append([]byte("imported: "), v...); !bytes.Equal(got, want) {
 				t.Errorf("row %d imported as %q, want %q", n, got, want)
 			}
-		case qerr == nil:
+		case len(recs) == 1:
 			quarantined++
-			if !bytes.Equal(raw, v) || n%c.QuarantineEvery != 0 {
-				t.Errorf("row %d quarantined as %q (every %d-th row is), want its bytes %q", n, raw, c.QuarantineEvery, v)
+			if r := recs[0]; !bytes.Equal(r.Value, v) || r.Sensitive || r.Step != id || n%c.QuarantineEvery != 0 {
+				t.Errorf("row %d quarantined as %+v (every %d-th row is), want its bytes %q", n, r, c.QuarantineEvery, v)
 			}
-		case errors.Is(ierr, storage.ErrNotFound) && errors.Is(qerr, storage.ErrNotFound):
-			t.Errorf("row %d lost: neither imported nor quarantined", n)
 		default:
-			t.Fatalf("row %d: %v, %v", n, ierr, qerr)
+			t.Errorf("row %d lost: neither imported nor quarantined", n)
 		}
 	}
 	extra := -imported

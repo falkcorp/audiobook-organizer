@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/chunks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4499d593-7cb3-408c-bfa0-5a58852c8320
 // last-edited: 2026-11-10
 
@@ -7,6 +7,7 @@ package crashmatrix
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"slices"
@@ -114,7 +115,11 @@ func TestSyntheticCheckFailsALostOrDoubledRow(t *testing.T) {
 	if err := ks.Delete(ctx, []byte("case/00005")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sks.Set(ctx, quarantineKey(SyntheticID(c.Owner), []byte("case:00006")), six); err != nil {
+	b := sks.NewBatch()
+	if err := storage.QuarantineWriter(nil)(ctx, b, SyntheticID(c.Owner), []byte("case:00006"), six, "doubled by hand", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(b.Commit(ctx, storage.Sync), b.Close()); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
