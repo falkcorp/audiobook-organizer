@@ -1,5 +1,5 @@
 // file: core/secrets/types.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a67c98df-8fe3-435f-9a52-46603e1ad0cb
 // last-edited: 2026-11-10
 
@@ -87,6 +87,14 @@ const redacted = "[REDACTED]"
 
 // Value holds secret bytes. Every formatting path is redacted; only Reveal
 // and Bytes expose it.
+//
+// The redaction is Value's own methods, so it holds where fmt or slog can
+// call them: a Value passed as an argument, or held in an exported field.
+// Through an unexported field they cannot be called, and a struct holding a
+// Value there prints the bytes raw under every verb (the Store keeps its
+// operator values behind pointers for this reason, see Store.String).
+// core/log's redactor fails such a field closed; a bare fmt or slog call
+// does not.
 type Value struct{ b []byte }
 
 // NewValue returns a Value holding a copy of s's bytes.

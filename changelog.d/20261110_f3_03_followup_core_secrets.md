@@ -1,0 +1,5 @@
+### Fixed
+
+- core/secrets: a struct holding the `*secrets.Store` in an unexported field (the kernel's `kernelSecrets`), or a bound `secrets.Ref`, no longer prints the operator's secret values when formatted with `%s` or `%q`. fmt reprints a pointer it cannot format with `%v` and walks the Store's fields one level, and the operator values sat in those fields by value; they now sit behind pointers, and a type check fails any later Store field that holds a value or key material by value. `Value`'s doc now states that its redaction does not reach a `Value` held in an unexported field (F3-03 follow-up).
+- core/secrets: `UnexportedKeys` takes the key digests under the store's lock, so a call running beside `Close` no longer hashes key material `Close` is wiping and reports a fully exported keyring as unexported.
+- core/secrets: `Open` refuses a dangling symbolic link (or another entry that is not a regular file) at the keyring path with an error that says so, instead of "it appeared meanwhile".

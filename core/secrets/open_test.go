@@ -1,5 +1,5 @@
 // file: core/secrets/open_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5543ef2e-3564-4e6b-a213-df11eb05e442
 // last-edited: 2026-11-10
 
@@ -291,6 +291,44 @@ func TestOpen_KeyringPermissions(t *testing.T) {
 	}
 	if n := len(rows(t, g.ks)); n != 0 {
 		t.Error("a refused Open wrote c/secrets/meta")
+	}
+}
+
+// TestOpen_DanglingKeyringPathRefuses (a test name coined by the F3-03
+// follow-up): a dangling symbolic link at the keyring path reads as absent
+// to Stat but holds the name. Open refuses it with an error that names the
+// link (not the create race's "appeared meanwhile"), leaves the link as it
+// was and writes no keyring, no temporary file and no c/secrets/meta. The
+// link's target is relative, inside the state directory: an absolute one is
+// an os.Root escape, a different refusal.
+func TestOpen_DanglingKeyringPathRefuses(t *testing.T) {
+	e := newEnv(t)
+	const target = "batcave.keyring.lost"
+	if err := os.Symlink(target, e.keyringPath()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Open(context.Background(), e.opts())
+	if err == nil {
+		t.Fatal("Open accepted a dangling symbolic link at the keyring path")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "appeared meanwhile") || !strings.Contains(msg, "dangling symbolic link") || !strings.Contains(msg, defaultKeyFile) {
+		t.Errorf("Open = %q, want a refusal naming the dangling link at %s", msg, defaultKeyFile)
+	}
+	if got, lerr := os.Readlink(e.keyringPath()); lerr != nil || got != target {
+		t.Errorf("the link is now %q (%v), want it left pointing at %s", got, lerr, target)
+	}
+	entries, err := os.ReadDir(e.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, de := range entries {
+		if de.Name() != defaultKeyFile {
+			t.Errorf("a refused Open left %s in the state directory", de.Name())
+		}
+	}
+	if n := len(rows(t, e.ks)); n != 0 {
+		t.Errorf("a refused Open wrote %d c/secrets/ rows", n)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: core/secrets/value_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: adb6b331-c577-44b6-8aa4-93c55c31c6e3
 // last-edited: 2026-11-10
 
@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -135,4 +136,90 @@ func TestStore_NeverFormatsSecrets(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestStore_NeverFormatsInsideAWrapper (a test name coined by the F3-03
+// follow-up): a struct holding the *Store in an unexported field (the shape
+// of kernel.kernelSecrets) prints no value and no key material under any
+// verb or slog handler. fmt cannot call the Store's own Format through an
+// unexported field; its bad-verb path (%s, %q on a pointer) reprints the
+// pointer with %v at depth 0, which walks the Store's fields one level, so
+// every field that holds secret bytes must sit behind a pointer. A bound Ref
+// reaches the Store the same way, through its resolver.
+func TestStore_NeverFormatsInsideAWrapper(t *testing.T) {
+	e := newEnv(t)
+	s := e.open(t, nil)
+	mustPut(t, s, nameModule, valueSerious)
+	s.Ephemeral(nameGate, NewValue(valueVengeance), SourceEnv)
+	s.Ephemeral(nameOracle, NewValue(valueClock), SourceFile)
+	var leaks []string
+	for _, v := range []string{valueVengeance, valueSerious, valueClock} {
+		leaks = append(leaks, encodings([]byte(v))...)
+		leaks = append(leaks, strings.Trim(fmt.Sprintf("%#v", []byte(v)), "[]uint8{}")[:20])
+	}
+	for _, m := range [][]byte{s.ring.data.Material, s.ring.derive.Material, s.ring.fp} {
+		leaks = append(leaks, encodings(m[:8])...)
+	}
+	type wrapper struct {
+		name  string
+		store *Store
+	}
+	type nested struct{ inner wrapper }
+	type refHolder struct{ ref Ref }
+	w := wrapper{name: "batcomputer", store: s}
+	ref := RefTo(nameGate).Bind(s)
+	for name, v := range map[string]any{
+		"wrapper": w, "*wrapper": &w, "nested wrapper": nested{inner: w}, "[]wrapper": []wrapper{w},
+		"bound Ref": ref, "Ref field": refHolder{ref: ref}, "*Ref field": &refHolder{ref: ref},
+	} {
+		for path, out := range formatted(v) {
+			for _, l := range leaks {
+				if strings.Contains(out, l) {
+					t.Errorf("%s formatted with %s leaks a value or key material: %s", name, path, out)
+					break
+				}
+			}
+		}
+	}
+}
+
+// TestStore_SecretFieldsSitBehindPointers (a test name coined by the F3-03
+// follow-up) is TestStore_NeverFormatsInsideAWrapper's rule checked on the
+// Store's type, so a field added later fails here even when no test fills
+// it: no type that holds secret bytes is reachable from Store's fields
+// without passing a pointer. fmt walks structs, arrays, slices and maps by
+// value after its bad-verb dereference, and stops at a pointer.
+func TestStore_SecretFieldsSitBehindPointers(t *testing.T) {
+	secretTypes := map[reflect.Type]bool{
+		reflect.TypeFor[Value]():          true,
+		reflect.TypeFor[keyMaterial]():    true,
+		reflect.TypeFor[keyring]():        true,
+		reflect.TypeFor[keyringFile]():    true,
+		reflect.TypeFor[keyringKey]():     true,
+		reflect.TypeFor[ringKey]():        true,
+		reflect.TypeFor[ephemeralValue](): true,
+	}
+	var walk func(path string, typ reflect.Type, seen map[reflect.Type]bool)
+	walk = func(path string, typ reflect.Type, seen map[reflect.Type]bool) {
+		if secretTypes[typ] {
+			t.Errorf("Store%s holds %s by value: put it behind a pointer", path, typ)
+			return
+		}
+		if seen[typ] {
+			return
+		}
+		seen[typ] = true
+		switch typ.Kind() {
+		case reflect.Struct:
+			for f := range typ.Fields() {
+				walk(path+"."+f.Name, f.Type, seen)
+			}
+		case reflect.Array, reflect.Slice:
+			walk(path+"[]", typ.Elem(), seen)
+		case reflect.Map:
+			walk(path+"[key]", typ.Key(), seen)
+			walk(path+"[value]", typ.Elem(), seen)
+		}
+	}
+	walk("", reflect.TypeFor[Store](), map[reflect.Type]bool{})
 }
