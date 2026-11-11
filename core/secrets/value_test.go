@@ -155,7 +155,7 @@ func TestStore_NeverFormatsInsideAWrapper(t *testing.T) {
 	var leaks []string
 	for _, v := range []string{valueVengeance, valueSerious, valueClock} {
 		leaks = append(leaks, encodings([]byte(v))...)
-		leaks = append(leaks, strings.Trim(fmt.Sprintf("%#v", []byte(v)), "[]uint8{}")[:20])
+		leaks = append(leaks, strings.TrimPrefix(fmt.Sprintf("%#v", []byte(v)), "[]byte{")[:20])
 	}
 	for _, m := range [][]byte{s.ring.data.Material, s.ring.derive.Material, s.ring.fp} {
 		leaks = append(leaks, encodings(m[:8])...)
