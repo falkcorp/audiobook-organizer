@@ -1,9 +1,9 @@
-// file: internal/oauth/oauth_test.go
-// version: 1.0.1
+// file: internal/legacyoauth/oauth_test.go
+// version: 1.0.2
 // guid: 0b7e2c94-3a18-4d56-9f07-1a6c5b0e9d24
-// last-edited: 2026-08-20
+// last-edited: 2026-11-11
 
-package oauth
+package legacyoauth
 
 import (
 	"testing"

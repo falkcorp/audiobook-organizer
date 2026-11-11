@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_servicetoken_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9f2b60d4-38a1-4c75-b9e0-71a5c34e8206
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -16,8 +16,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
 // A Cloudflare service token's JWT names a CREDENTIAL, not a person:
@@ -60,8 +60,8 @@ func ctxWithServiceToken(token string) *gin.Context {
 // (service token at the edge + our own bearer) authenticate at all; if the typed
 // error stopped matching errors.Is, every such request would 401.
 func TestNonIdentityAssertionError_StillMatchesErrorsIs(t *testing.T) {
-	err := error(&oauth.NonIdentityAssertionError{Subject: "", CommonName: "family.access"})
-	if !errors.Is(err, oauth.ErrNonIdentityAssertion) {
+	err := error(&cfaccess.NonIdentityAssertionError{Subject: "", CommonName: "family.access"})
+	if !errors.Is(err, cfaccess.ErrNonIdentityAssertion) {
 		t.Fatal("errors.Is no longer matches — ResolveCFAssertion would 401 every Mode B request")
 	}
 }
@@ -71,15 +71,15 @@ func TestCFAssertionCommonName(t *testing.T) {
 		err  error
 		want string
 	}{
-		"typed non-identity": {&oauth.NonIdentityAssertionError{CommonName: "testing.access"}, "testing.access"},
-		"wrapped":            {errors.Join(&oauth.NonIdentityAssertionError{CommonName: "friends.access"}), "friends.access"},
-		"bare sentinel":      {oauth.ErrNonIdentityAssertion, ""},
+		"typed non-identity": {&cfaccess.NonIdentityAssertionError{CommonName: "testing.access"}, "testing.access"},
+		"wrapped":            {errors.Join(&cfaccess.NonIdentityAssertionError{CommonName: "friends.access"}), "friends.access"},
+		"bare sentinel":      {cfaccess.ErrNonIdentityAssertion, ""},
 		"unrelated":          {errors.New("boom"), ""},
 		"nil":                {nil, ""},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := oauth.CFAssertionCommonName(tc.err); got != tc.want {
+			if got := cfaccess.CFAssertionCommonName(tc.err); got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
 		})

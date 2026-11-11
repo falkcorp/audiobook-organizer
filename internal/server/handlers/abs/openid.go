@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.10.3
+// version: 2.10.4
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package abs
 
@@ -25,8 +25,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreaudit "github.com/falkcorp/mediacore/audit"
@@ -1411,7 +1411,7 @@ const (
 // oidcAssertionKind classifies what Cloudflare forwarded on a hop-2 load.
 func oidcAssertionKind(c *gin.Context, identity *servermiddleware.ABSIdentity, authErr *servermiddleware.ABSAuthError) string {
 	switch {
-	case strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader)) == "":
+	case strings.TrimSpace(c.GetHeader(cfaccess.CFAccessHeader)) == "":
 		return oidcAssertionNone
 	case authErr != nil:
 		return oidcAssertionRejected

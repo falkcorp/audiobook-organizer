@@ -1,7 +1,7 @@
 // file: internal/server/handlers/oauth_login_deeplink_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e04b7c2-1a68-4d39-b0f5-93c7e2016d84
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package handlers
 
@@ -20,7 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -52,9 +52,9 @@ func (p *stubProvider) AuthCodeURL(state, challenge, redirectURI string) string 
 		"&code_challenge=" + url.QueryEscape(challenge)
 }
 
-func (p *stubProvider) Exchange(_ context.Context, _, verifier, _ string) (*oauth.IdentityClaims, error) {
+func (p *stubProvider) Exchange(_ context.Context, _, verifier, _ string) (*legacyoauth.IdentityClaims, error) {
 	p.lastVerifier = verifier
-	return &oauth.IdentityClaims{
+	return &legacyoauth.IdentityClaims{
 		Provider: "google", Subject: "sub-1", Email: p.email, EmailVerified: true,
 	}, nil
 }
@@ -62,7 +62,7 @@ func (p *stubProvider) Exchange(_ context.Context, _, verifier, _ string) (*oaut
 type deepLinkHarness struct {
 	router   *gin.Engine
 	provider *stubProvider
-	codec    *oauth.StateCodec
+	codec    *legacyoauth.StateCodec
 }
 
 func newDeepLinkHarness(t *testing.T) *deepLinkHarness {
@@ -75,7 +75,7 @@ func newDeepLinkHarness(t *testing.T) *deepLinkHarness {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	cfg := oauth.New(oauth.Config{
+	cfg := legacyoauth.New(legacyoauth.Config{
 		Enabled:            true,
 		GoogleClientID:     "cid",
 		GoogleClientSecret: "secret",
@@ -83,12 +83,12 @@ func newDeepLinkHarness(t *testing.T) *deepLinkHarness {
 		AllowedEmails:      []string{"owner@example.com"},
 		DefaultRole:        "viewer",
 	})
-	codec, err := oauth.NewStateCodec(10 * time.Minute)
+	codec, err := legacyoauth.NewStateCodec(10 * time.Minute)
 	if err != nil {
 		t.Fatalf("NewStateCodec: %v", err)
 	}
 	provider := &stubProvider{email: "owner@example.com"}
-	h := NewOAuthHandler(store, cfg, codec, map[string]oauth.Provider{"google": provider})
+	h := NewOAuthHandler(store, cfg, codec, map[string]legacyoauth.Provider{"google": provider})
 
 	r := gin.New()
 	r.GET("/auth/oauth/:provider/start", h.Start)

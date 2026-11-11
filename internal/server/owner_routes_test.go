@@ -1,7 +1,7 @@
 // file: internal/server/owner_routes_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 7b2d9e41-6c85-4f30-a1e7-4c9f2b8d6a15
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 // Router-level coverage for the owner gate on the iTunes library (2026-10-07):
 // every route that removes, overwrites or repoints iTunes tracks, or turns off
@@ -23,8 +23,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 )
 
 const (
@@ -36,9 +37,9 @@ const (
 	otherAdminEmail     = "target@example.test"
 )
 
-type fakeAccessVerifier map[string]*oauth.IdentityClaims
+type fakeAccessVerifier map[string]*legacyoauth.IdentityClaims
 
-func (f fakeAccessVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityClaims, error) {
+func (f fakeAccessVerifier) Verify(_ context.Context, raw string) (*legacyoauth.IdentityClaims, error) {
 	if c, ok := f[raw]; ok {
 		cp := *c
 		return &cp, nil
@@ -60,9 +61,9 @@ func setupOwnerRouteServer(t *testing.T) *ownerRouteFixture {
 func setupOwnerRouteServerAuth(t *testing.T, authOn bool) *ownerRouteFixture {
 	t.Helper()
 	cfAccessVerifierOverride = fakeAccessVerifier{
-		"jwt-owner":     {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: ownerRouteEmail, EmailVerified: true},
-		"jwt-other":     {Provider: oauth.ProviderCFAccess, Subject: "sub-other", Email: otherAdminEmail, EmailVerified: true},
-		"jwt-lookalike": {Provider: oauth.ProviderCFAccess, Subject: "sub-lookalike", Email: ownerLookalikeEmail, EmailVerified: true},
+		"jwt-owner":     {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-owner", Email: ownerRouteEmail, EmailVerified: true},
+		"jwt-other":     {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-other", Email: otherAdminEmail, EmailVerified: true},
+		"jwt-lookalike": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-lookalike", Email: ownerLookalikeEmail, EmailVerified: true},
 	}
 	t.Cleanup(func() { cfAccessVerifierOverride = nil })
 	f := setupCredGuardServerWith(t, func(c *config.Config) {
@@ -115,8 +116,8 @@ func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := setupOwnerRouteServerAuth(t, authOn)
 			refused := map[string]map[string]string{
-				"another admin's Access sign-in": {oauth.CFAccessHeader: "jwt-other"},
-				"a look-alike Access sign-in":    {oauth.CFAccessHeader: "jwt-lookalike"},
+				"another admin's Access sign-in": {cfaccess.CFAccessHeader: "jwt-other"},
+				"a look-alike Access sign-in":    {cfaccess.CFAccessHeader: "jwt-lookalike"},
 				"password session":               {"Authorization": "Bearer " + f.sessionToken},
 				"API key":                        {"Authorization": "Bearer " + f.apiKey},
 			}
@@ -133,7 +134,7 @@ func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
 				assert.Contains(t, w.Body.String(), "Only the owner may change", caller)
 			}
 			// The owner may hand ownership on.
-			w := f.putOwnerEmail(otherAdminEmail, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
+			w := f.putOwnerEmail(otherAdminEmail, map[string]string{cfaccess.CFAccessHeader: "jwt-owner"})
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			assert.Equal(t, otherAdminEmail, config.Snapshot().OwnerEmail)
 
@@ -141,8 +142,8 @@ func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
 			// would-be owner's own Access sign-in included (host only).
 			config.AppConfig.OwnerEmail = ""
 			noOwner := map[string]map[string]string{
-				"that person's Access sign-in":    {oauth.CFAccessHeader: "jwt-owner"},
-				"another person's Access sign-in": {oauth.CFAccessHeader: "jwt-other"},
+				"that person's Access sign-in":    {cfaccess.CFAccessHeader: "jwt-owner"},
+				"another person's Access sign-in": {cfaccess.CFAccessHeader: "jwt-other"},
 				"password session":                {"Authorization": "Bearer " + f.sessionToken},
 				"API key":                         {"Authorization": "Bearer " + f.apiKey},
 			}
@@ -170,7 +171,7 @@ func TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet(t *testing.T) {
 	body := `{"backup_filename":"no-such-backup.tar.gz"}`
 	for caller, hdr := range map[string]map[string]string{
 		"password session":               {"Authorization": "Bearer " + f.sessionToken},
-		"another admin's Access sign-in": {oauth.CFAccessHeader: "jwt-other"},
+		"another admin's Access sign-in": {cfaccess.CFAccessHeader: "jwt-other"},
 	} {
 		w := f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, hdr)
 		assert.True(t, ownerRefused(w), "%s got %d: %s", caller, w.Code, w.Body.String())
@@ -183,8 +184,8 @@ func TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet(t *testing.T) {
 	for caller, hdr := range map[string]map[string]string{
 		"API key (admin, every scope)": {"Authorization": "Bearer " + f.apiKey},
 		"API key with the owner's Access JWT riding along": {
-			"Authorization": "Bearer " + f.apiKey, oauth.CFAccessHeader: "jwt-owner"},
-		"Access sign-in as a Kelvin-sign lookalike of the owner": {oauth.CFAccessHeader: "jwt-lookalike"},
+			"Authorization": "Bearer " + f.apiKey, cfaccess.CFAccessHeader: "jwt-owner"},
+		"Access sign-in as a Kelvin-sign lookalike of the owner": {cfaccess.CFAccessHeader: "jwt-lookalike"},
 		"password session plus the unsigned Access email header": {
 			"Authorization": "Bearer " + f.sessionToken, "Cf-Access-Authenticated-User-Email": ownerRouteEmail},
 	} {
@@ -192,7 +193,7 @@ func TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet(t *testing.T) {
 		assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, w.Code,
 			"%s reached the restore handler: %d %s", caller, w.Code, w.Body.String())
 	}
-	w := f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
+	w := f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, map[string]string{cfaccess.CFAccessHeader: "jwt-owner"})
 	assert.False(t, ownerRefused(w), "the owner was refused: %s", w.Body.String())
 
 	// No owner yet: the ordinary guards only (a signed-in session reaches

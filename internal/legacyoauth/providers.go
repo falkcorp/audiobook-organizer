@@ -1,9 +1,9 @@
-// file: internal/oauth/providers.go
-// version: 1.0.0
+// file: internal/legacyoauth/providers.go
+// version: 1.0.1
 // guid: 9e3b1d75-2c48-4a06-8f19-5b0a7c2e6d43
-// last-edited: 2026-07-26
+// last-edited: 2026-11-11
 
-package oauth
+package legacyoauth
 
 import (
 	"context"

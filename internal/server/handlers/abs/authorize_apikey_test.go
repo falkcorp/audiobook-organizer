@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/authorize_apikey_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9a3d6e12-7c48-4b5f-b0e9-2d81f4c6a573
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package abs_test
 
@@ -14,7 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -43,8 +43,8 @@ func TestAuthorize_APIKeyIsEchoedNotExchanged(t *testing.T) {
 	exp := time.Now().Add(time.Hour)
 	store.keys[database.HashAPIKeyToken(raw)] = &database.APIKey{ID: "k1", UserID: "u1", Status: "active", ExpiresAt: &exp}
 
-	verifier := &fakeVerifier{byToken: map[string]*oauth.IdentityClaims{}}
-	resolver := servermiddleware.NewABSIdentityResolver(cfg, verifier, oauth.New(oauth.Config{DefaultRole: "viewer"}), store)
+	verifier := &fakeVerifier{byToken: map[string]*legacyoauth.IdentityClaims{}}
+	resolver := servermiddleware.NewABSIdentityResolver(cfg, verifier, legacyoauth.New(legacyoauth.Config{DefaultRole: "viewer"}), store)
 	h, err := abshandler.New(abshandler.Options{Config: cfg, Store: store, Resolver: resolver,
 		UserData: &fakeUserData{progress: []any{}, bookmarks: []any{}}})
 	if err != nil {

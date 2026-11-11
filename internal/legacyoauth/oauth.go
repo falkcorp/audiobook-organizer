@@ -1,13 +1,18 @@
-// file: internal/oauth/oauth.go
-// version: 1.2.2
+// file: internal/legacyoauth/oauth.go
+// version: 1.2.3
 // guid: 7c2a9e14-6b38-4d05-8f71-3a0e5b9d2c46
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
-// Package oauth implements OAuth2 / OIDC single sign-on (GitHub, Google) and
-// Cloudflare Access identity verification for the audiobook organizer. It is the
-// PURE core: config, the CSRF-state + PKCE machinery, provider code-exchange, and
-// JWT verification. It has NO gin/server dependency — the HTTP handlers live in the
-// server layer and call into this package.
+// Package legacyoauth is HEAD's OAuth2 / OIDC single sign-on (GitHub, Google)
+// for the audiobook organizer's gin chain: config, the CSRF-state + PKCE
+// machinery, provider code-exchange and the user resolver over database.Store.
+// It has NO gin/server dependency; the HTTP handlers live in the server layer.
+//
+// It is residue. Core's generic OIDC is mediacore/auth/oidc (05-authn §4.7,
+// F4-03), over auth.Store; core/auth is dark until F4-08, so the gin chain keeps
+// signing users in through this package, with HEAD's behaviour unchanged. F4-08
+// deletes it with the routes that call it. The Cloudflare Access JWT verifier
+// that used to share this package is internal/cfaccess.
 //
 // SECURITY MODEL (do not weaken):
 //   - Every login path (GitHub, Google, Cloudflare Access) yields an IdentityClaims
@@ -18,7 +23,7 @@
 //     not on the configured allowlist MUST be rejected — the server is not a public
 //     app, so anyone with a Google/GitHub account could otherwise obtain a valid
 //     identity. IsEmailAllowed is the gate, checked before any user/session is created.
-package oauth
+package legacyoauth
 
 import (
 	"fmt"

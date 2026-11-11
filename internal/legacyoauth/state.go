@@ -1,9 +1,9 @@
-// file: internal/oauth/state.go
-// version: 1.1.0
+// file: internal/legacyoauth/state.go
+// version: 1.1.1
 // guid: 1d6f8b03-4a29-4c57-9e08-2b7a5c0e3d94
-// last-edited: 2026-08-02
+// last-edited: 2026-11-11
 
-package oauth
+package legacyoauth
 
 import (
 	"crypto/hmac"
