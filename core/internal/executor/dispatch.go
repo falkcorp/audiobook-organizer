@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
 // last-edited: 2026-11-11
 
@@ -306,16 +306,29 @@ func (e *executor) claim(ctx context.Context, c candidate, ws []entity.Ref) {
 	e.startAttempt(a, rec) // releases the claim instead when Shutdown overtook it
 }
 
-// release returns a claimed run that never started to the queue.
+// release returns a claimed run that never started to the queue. A claim
+// whose record already shows a committed cancel or watchdog stop ends by
+// that stop instead (canceled, never started), whether or not stop had yet
+// handed the attempt its cause (it commits its move first, then sets
+// stopCause under e.mu). Re-queuing such a run would undo the cancel, and a
+// CAS that wanted running would fail and leave the run stopping with no
+// attempt until the next boot, with a repeat Cancel answering nil.
 func (e *executor) release(a *attempt, rec tasks.RunRecord) {
 	_, err := e.move(context.Background(), a.id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
-		if cur.State != tasks.StateRunning || cur.Attempt != rec.Attempt || cur.FenceEpoch != rec.FenceEpoch {
+		if cur.Attempt != rec.Attempt || cur.FenceEpoch != rec.FenceEpoch {
 			return cur, tasks.RunEvent{}, errStale(cur, "release")
 		}
 		next := cur
-		next.State = tasks.StateQueued
-		next.Attempt = cur.Attempt - 1
-		return next, tasks.RunEvent{Event: "release"}, nil
+		switch {
+		case cur.State == tasks.StateRunning:
+			next.State = tasks.StateQueued
+			next.Attempt = cur.Attempt - 1
+			return next, tasks.RunEvent{Event: "release"}, nil
+		case cur.State == tasks.StateStopping && (cur.Reason == reasonCancel || cur.Reason == reasonWatchdog):
+			next.State, next.Finished = tasks.StateCanceled, e.now()
+			return next, tasks.RunEvent{Event: "cancel", Reason: cur.Reason}, nil
+		}
+		return cur, tasks.RunEvent{}, errStale(cur, "release")
 	}, nil)
 	if err != nil {
 		e.log.Warn("claimed run not released; the resume sweep re-queues it at next boot", "run", a.id, "err", err)
@@ -335,7 +348,9 @@ func (e *executor) release(a *attempt, rec tasks.RunRecord) {
 // view (so it is canceled, or quiesced, like any live run) or never goes
 // live. A check made before this critical section would let an attempt go
 // live just after the view and run on past Shutdown, or beside a hold on
-// its key, with its fence intact.
+// its key, with its fence intact. A claim overtaken after a cancel committed
+// is not re-queued: release ends it by that stop, so the cancel stands
+// whether or not the attempt had been handed its cause yet.
 func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	start := e.now()
 	deadline := start.Add(a.d.timeout)

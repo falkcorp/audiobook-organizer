@@ -1,5 +1,5 @@
 // file: core/internal/executor/start.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 89eb5ff3-93fb-4a22-9970-d55b28fbbe40
 // last-edited: 2026-11-11
 
@@ -25,6 +25,13 @@ import (
 // systemMethod is the AuthMethod of a module system actor (SEC2-15).
 const systemMethod = "system"
 
+// starter is who makes a start: the caller's checker (nil: none) and, for
+// rc.Enqueue, the definition of the run whose body makes it (permitStart).
+type starter struct {
+	who    rbac.Checker
+	parent *def
+}
+
 // startMode is how a start resolves an unset mode.
 type startMode uint8
 
@@ -42,7 +49,7 @@ func (e *executor) Start(ctx context.Context, kind tasks.Kind, req tasks.StartRe
 		return tasks.RunRef{}, err
 	}
 	var ref tasks.RunRef
-	err = e.startLocked(ctx, kind, req, who, modeDefault, func(prep prepared) error {
+	err = e.startLocked(ctx, kind, req, starter{who: who}, modeDefault, func(prep prepared) error {
 		return e.write(ctx, func(ctx context.Context, b *storage.Batch) error {
 			var err error
 			ref, err = e.stageStart(ctx, b, prep)
@@ -66,7 +73,7 @@ func (e *executor) StartIn(ctx context.Context, b *storage.Batch, kind tasks.Kin
 	}
 	req.Actor = tasks.Actor{AuthMethod: systemMethod, System: kind.Module()}
 	req.IdempotencyKey = "" // the relay's same-batch cursor commit is its guarantee (SIMP3-8)
-	prep, err := e.prepare(ctx, kind, req, nil, modeRequired)
+	prep, err := e.prepare(ctx, kind, req, starter{}, modeRequired)
 	if err != nil {
 		return tasks.RunRef{}, err
 	}
@@ -80,8 +87,8 @@ func (e *executor) StartIn(ctx context.Context, b *storage.Batch, kind tasks.Kin
 // startLocked prepares and runs commit, under startMu when the kind folds
 // duplicates (the dedupe read and the insert must not interleave in this
 // process; the store's own guard keys cover the commit).
-func (e *executor) startLocked(ctx context.Context, kind tasks.Kind, req tasks.StartRequest, who rbac.Checker, m startMode, commit func(prepared) error) error {
-	prep, err := e.prepare(ctx, kind, req, who, m)
+func (e *executor) startLocked(ctx context.Context, kind tasks.Kind, req tasks.StartRequest, s starter, m startMode, commit func(prepared) error) error {
+	prep, err := e.prepare(ctx, kind, req, s, m)
 	if err != nil {
 		return err
 	}
@@ -123,7 +130,7 @@ func (d *def) folds() bool {
 // prepare validates a start before anything is staged: the kind, held,
 // the actor's permission, the mode, the params, the write set and a
 // Fixer's plan reference.
-func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.StartRequest, who rbac.Checker, m startMode) (prepared, error) {
+func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.StartRequest, s starter, m startMode) (prepared, error) {
 	d, ok := e.defs[kind]
 	if !ok {
 		if e.held(kind) {
@@ -134,7 +141,7 @@ func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.Start
 	if e.held(kind) {
 		return prepared{}, fmt.Errorf("%w: %s", ErrHeld, kind)
 	}
-	if err := e.permitStart(d, req.Actor, who); err != nil {
+	if err := e.permitStart(d, req.Actor, s); err != nil {
 		return prepared{}, err
 	}
 	mode, ok := req.Mode.Mode()
@@ -180,24 +187,40 @@ func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.Start
 	return prepared{d: d, req: req, mode: mode, params: params, prio: prio}, nil
 }
 
-// permitStart is the start permission rule: a module system actor may start
+// permitStart is the start permission rule. A module system actor may start
 // only its module's kinds plus its manifest's TaskStarts, with the union of
 // those kinds' Perms.Start minus core:admin and every AuthRequired scope
-// (SEC2-15, COR3-10); any other actor needs who to satisfy Perms.Start when
-// a checker is present.
-func (e *executor) permitStart(d *def, actor tasks.Actor, who rbac.Checker) error {
-	if actor.AuthMethod == systemMethod && actor.System != "" {
-		allowed := d.module == actor.System || slices.Contains(e.starts[actor.System], d.kind)
-		if !allowed {
-			return fmt.Errorf("%w: module %s may not start %s (not its kind, not in TaskStarts)", ErrNotPermitted, actor.System, d.kind)
+// (SEC2-15, COR3-10); any other actor needs s.who to satisfy Perms.Start
+// when a checker is present. A child start (s.parent set, rc.Enqueue) is
+// module code, so it is also bounded by the same rule for the module whose
+// body makes it, whoever started the parent: the run's context carries no
+// request principal, so a user's own grants cannot be checked there, and a
+// child whose Perms.Start needs core:admin or an AuthRequired scope is
+// started directly, never enqueued.
+func (e *executor) permitStart(d *def, actor tasks.Actor, s starter) error {
+	if p := s.parent; p != nil {
+		if err := e.moduleReach(p.module, d); err != nil {
+			return fmt.Errorf("%w (enqueued by %s)", err, p.kind)
 		}
-		if !e.systemChecker(actor.System).Satisfies(d.c.Perms.Start) {
-			return fmt.Errorf("%w: module %s's system actor does not hold %s's start requirement", ErrNotPermitted, actor.System, d.kind)
-		}
-		return nil
 	}
-	if who != nil && !who.Satisfies(d.c.Perms.Start) {
+	if actor.AuthMethod == systemMethod && actor.System != "" {
+		return e.moduleReach(actor.System, d)
+	}
+	if s.who != nil && !s.who.Satisfies(d.c.Perms.Start) {
 		return fmt.Errorf("%w: start %s", ErrNotPermitted, d.kind)
+	}
+	return nil
+}
+
+// moduleReach is SEC2-15's start rule for module: d is one of its own
+// kinds or listed in its manifest's TaskStarts, and its system actor's
+// checker holds d's start requirement.
+func (e *executor) moduleReach(module string, d *def) error {
+	if d.module != module && !slices.Contains(e.starts[module], d.kind) {
+		return fmt.Errorf("%w: module %s may not start %s (not its kind, not in TaskStarts)", ErrNotPermitted, module, d.kind)
+	}
+	if !e.systemChecker(module).Satisfies(d.c.Perms.Start) {
+		return fmt.Errorf("%w: module %s's system actor does not hold %s's start requirement", ErrNotPermitted, module, d.kind)
 	}
 	return nil
 }

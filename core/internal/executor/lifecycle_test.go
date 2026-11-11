@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.5.0
+// version: 1.6.1
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-11
 
@@ -537,6 +537,123 @@ func TestStandDown_ClaimInFlightIsDeferred(t *testing.T) {
 	})
 }
 
+// TestStartAttempt_OvertakenClaimEndsByItsCommittedStop (5T.3.6, 5T.4 step
+// 4, synctest; re-verify of #4586): a run is claimed, a cancel commits while
+// its attempt is not live, and then a stand-down hold on its key is taken or
+// Shutdown begins, so startAttempt releases the claim. The release must end
+// the run by the cancel, without its body. Before the fix the release's edit
+// wanted running while the record was stopping{cancel}: the release failed
+// and the run sat in stopping with no attempt until the next boot, while a
+// repeat Cancel answered nil. The last cell commits the cancel's record
+// without handing the attempt its stop, the window between stop's move and
+// its setting stopCause under e.mu, which is why the release (not a check of
+// the attempt's pending stop) is where the fix lives.
+func TestStartAttempt_OvertakenClaimEndsByItsCommittedStop(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		cancel    func(h *harness, id tasks.RunID)
+		overtaker string // "hold" or "shutdown"
+	}{
+		{name: "a stand-down hold on its key", overtaker: "hold", cancel: cancelAsGordon},
+		{name: "shutdown", overtaker: "shutdown", cancel: cancelAsGordon},
+		{name: "a cancel committed but not yet handed to the attempt", overtaker: "hold", cancel: func(h *harness, id tasks.RunID) {
+			h.t.Helper()
+			if _, err := h.e.move(context.Background(), id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+				next := cur
+				next.State, next.Reason = tasks.StateStopping, reasonCancel
+				return next, tasks.RunEvent{Event: "cancel", Reason: reasonCancel}, nil
+			}, nil); err != nil {
+				h.t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				reached := make(chan tasks.RunID, 1)
+				release := make(chan struct{})
+				unpark := releaser(release)
+				defer unpark()
+				takeHold, holding, free := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				defer close(free)
+				var ran atomic.Bool
+				scan := taskDef("gotham.scan", func(rc *tasks.RC, _ noParams) (string, error) {
+					ran.Store(true)
+					<-rc.Context().Done()
+					return "", context.Cause(rc.Context())
+				}, func(c *tasks.Common) { c.Yields = true })
+				holder := taskDef("gotham.compact", func(rc *tasks.RC, _ noParams) (string, error) {
+					<-takeHold
+					if _, err := rc.StandDown("gotham.scan"); err != nil {
+						return "", err
+					}
+					close(holding)
+					<-free
+					return "compacted", nil
+				}, func(c *tasks.Common) { c.Effects = tasks.Writes(tasks.Res("gotham", "lab")) })
+				h := newHarness(t, []tasks.Definition{scan, holder}, func(o *Options) {
+					synctestConfig(o)
+					o.NewBatch = o.Stores.Runs.(batchOpener).NewBatch
+					o.Stores.Runs = gatedRuns{RunStore: o.Stores.Runs, reached: reached, release: release, kind: "gotham.scan"}
+				})
+				if c.overtaker == "hold" {
+					h.waitState(h.start("gotham.compact", tasks.StartRequest{}), tasks.StateRunning)
+				}
+				id := h.start("gotham.scan", tasks.StartRequest{})
+				<-reached
+				c.cancel(h, id)
+				if r := h.get(id); r.State != tasks.StateStopping || r.Reason != reasonCancel {
+					t.Fatalf("after the cancel: %s/%q, want stopping/cancel", r.State, r.Reason)
+				}
+				var shut chan error
+				switch c.overtaker {
+				case "hold":
+					close(takeHold)
+					<-holding
+				case "shutdown":
+					shut = make(chan error, 1)
+					go func() { shut <- h.x.Shutdown(context.Background()) }()
+					for !h.shutting() {
+						time.Sleep(time.Millisecond)
+					}
+				}
+				unpark()
+				if shut != nil {
+					if err := <-shut; err != nil {
+						t.Fatalf("Shutdown: %v", err)
+					}
+				}
+				synctest.Wait()
+				if r := h.get(id); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
+					t.Fatalf("once the attempt was overtaken: %s/%q, want canceled/cancel at once (not stopping until the next boot)", r.State, r.Reason)
+				}
+				if ran.Load() {
+					t.Fatal("the body started although a cancel had committed")
+				}
+				if c.overtaker == "hold" {
+					if err := h.x.CancelAs(context.Background(), id, tasks.Actor{UserID: "gordon"}); !isErr(err, tasks.ErrRunNotFound) {
+						t.Fatalf("a repeat cancel: %v, want ErrRunNotFound (the run is terminal)", err)
+					}
+				}
+			})
+		})
+	}
+}
+
+// cancelAsGordon cancels id through the executor's own cancel path.
+func cancelAsGordon(h *harness, id tasks.RunID) {
+	h.t.Helper()
+	if err := h.x.CancelAs(context.Background(), id, tasks.Actor{UserID: "gordon"}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// shutting reports whether Shutdown has begun.
+func (h *harness) shutting() bool {
+	h.e.mu.Lock()
+	defer h.e.mu.Unlock()
+	return h.e.shutting
+}
+
 // TestLedger_StaleAttemptWritesNothing (5T.7, synctest; review of #4586):
 // a second executor over the same store (the first one's process presumed
 // dead) resumes a run the first is still executing. The first executor's
@@ -848,4 +965,150 @@ func kindStrings(ks []tasks.Kind) []string {
 		out[i] = string(k)
 	}
 	return out
+}
+
+// children lists the runs whose parent is id.
+func (h *harness) children(id tasks.RunID) []tasks.RunID {
+	h.t.Helper()
+	var out []tasks.RunID
+	for v, err := range h.x.Runs(context.Background(), tasks.RunQuery{Parent: id}) {
+		if err != nil {
+			h.t.Fatalf("children of %s: %v", id, err)
+		}
+		out = append(out, v.ID)
+	}
+	return out
+}
+
+// enqueueOnce boots defs plus gotham.dispatch, whose body makes one
+// rc.Enqueue of kind with opts and hands back its error, starts the parent
+// as Gordon (who holds gotham:run and nothing else) and returns the
+// harness, the parent's ID and the enqueue's error once the parent ended.
+func enqueueOnce(t *testing.T, defs []tasks.Definition, starts []tasks.Kind, kind tasks.Kind, opts ...tasks.StartOption) (*harness, tasks.RunID, error) {
+	t.Helper()
+	got := make(chan error, 1)
+	parent := taskDef("gotham.dispatch", func(rc *tasks.RC, _ noParams) (string, error) {
+		_, err := rc.Enqueue(kind, noParams{}, opts...)
+		got <- err
+		return "", nil
+	})
+	h := newHarness(t, append([]tasks.Definition{parent}, defs...), func(o *Options) {
+		withPrincipal(o)
+		o.Catalog = catalogWith(t, "gotham:run", "arkham:run")
+		o.Manifests = []Manifest{{Module: "gotham", Enabled: true, TaskStarts: starts}}
+	})
+	ref, err := h.x.Start(asUser("gordon", "gotham:run"), "gotham.dispatch", tasks.StartRequest{Mode: tasks.ModeRequestLive})
+	if err != nil {
+		t.Fatalf("start the parent: %v", err)
+	}
+	err = <-got
+	h.waitState(ref.ID, tasks.StateSucceeded)
+	return h, ref.ID, err
+}
+
+var gordon = tasks.Actor{UserID: "gordon", AuthMethod: "session"}
+
+// TestEnqueue_ChildBoundedByItsModule (SEC2-15, COR-21): a child start is
+// module code, so it is bounded by the reach of the module whose body makes
+// it (its own kinds plus its manifest's TaskStarts, never a kind needing
+// core:admin or an AuthRequired scope), whoever started the parent. The
+// parent here is a user's, the start that once ran no check at all: no
+// request principal reaches a body. The user's own grants are not what
+// bounds it either way: Gordon holds no arkham scope, yet a listed arkham
+// kind is enqueued. A refused enqueue creates no run.
+func TestEnqueue_ChildBoundedByItsModule(t *testing.T) {
+	purge := func(c *tasks.Common) { c.Perms.Start = rbac.Need("core:system.manage") } // AuthRequired
+	defs := []tasks.Definition{
+		taskDef("gotham.forensics", okBody),
+		taskDef("arkham.cleanup", okBody),
+		taskDef("arkham.purge", okBody, purge),
+		taskDef("arkham.transfer", okBody),
+	}
+	cells := []struct {
+		kind    tasks.Kind
+		starts  []tasks.Kind
+		allowed bool
+	}{
+		{kind: "gotham.forensics", allowed: true},
+		{kind: "arkham.cleanup"},
+		{kind: "arkham.cleanup", starts: []tasks.Kind{"arkham.cleanup"}, allowed: true},
+		{kind: "arkham.transfer", starts: []tasks.Kind{"arkham.cleanup"}},
+		{kind: "arkham.purge", starts: []tasks.Kind{"arkham.purge"}},
+	}
+	for _, c := range cells {
+		t.Run(string(c.kind)+"/"+strings.Join(kindStrings(c.starts), ","), func(t *testing.T) {
+			h, pid, err := enqueueOnce(t, defs, c.starts, c.kind)
+			kids := h.children(pid)
+			if !c.allowed {
+				if !errors.Is(err, ErrNotPermitted) {
+					t.Fatalf("enqueue %s: %v, want ErrNotPermitted", c.kind, err)
+				}
+				if len(kids) != 0 {
+					t.Fatalf("a refused enqueue created runs %v", kids)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("enqueue %s: %v, want allowed", c.kind, err)
+			}
+			if len(kids) != 1 {
+				t.Fatalf("children %v, want one", kids)
+			}
+			if r := h.get(kids[0]); r.Kind != c.kind || r.Actor != gordon || r.Trigger != tasks.TriggerParent {
+				t.Fatalf("child %s actor %+v trigger %v, want %s as %+v by parent", r.Kind, r.Actor, r.Trigger, c.kind, gordon)
+			}
+		})
+	}
+}
+
+// TestEnqueue_OptionCannotRestampTheChild (COR-21): a StartOption adjusts a
+// child's mode, params or priority. One that sets the child's actor, parent,
+// trigger or idempotency key is refused and creates no run, so a body
+// cannot start a child as another user or as a system actor (whose reach is
+// another rule), unlinked from its parent, or folded into another run.
+func TestEnqueue_OptionCannotRestampTheChild(t *testing.T) {
+	defs := []tasks.Definition{taskDef("gotham.forensics", okBody)}
+	cells := []struct {
+		name    string
+		opt     tasks.StartOption
+		allowed bool
+	}{
+		{name: "priority", opt: func(r *tasks.StartRequest) { r.Priority = tasks.PriorityHigh }, allowed: true},
+		{name: "another user", opt: func(r *tasks.StartRequest) { r.Actor = tasks.Actor{UserID: "joker", AuthMethod: "session"} }},
+		{name: "a system actor", opt: func(r *tasks.StartRequest) { r.Actor = tasks.Actor{AuthMethod: systemMethod, System: "gotham"} }},
+		{name: "no parent", opt: func(r *tasks.StartRequest) { r.Parent = "" }},
+		{name: "manual trigger", opt: func(r *tasks.StartRequest) { r.Trigger = tasks.TriggerManual }},
+		{name: "idempotency key", opt: func(r *tasks.StartRequest) { r.IdempotencyKey = "bat-signal" }},
+	}
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			h, pid, err := enqueueOnce(t, defs, nil, "gotham.forensics", c.opt)
+			if !c.allowed {
+				if !errors.Is(err, ErrNotPermitted) {
+					t.Fatalf("enqueue with %s: %v, want ErrNotPermitted", c.name, err)
+				}
+				var n int
+				for _, err := range h.x.Runs(context.Background(), tasks.RunQuery{Kinds: []tasks.Kind{"gotham.forensics"}}) {
+					if err != nil {
+						t.Fatal(err)
+					}
+					n++
+				}
+				if n != 0 {
+					t.Fatalf("a refused enqueue created %d runs", n)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("enqueue with %s: %v, want allowed", c.name, err)
+			}
+			kids := h.children(pid)
+			if len(kids) != 1 {
+				t.Fatalf("children %v, want one", kids)
+			}
+			if r := h.get(kids[0]); r.Priority != tasks.PriorityHigh || r.Actor != gordon {
+				t.Fatalf("child priority %v actor %+v, want high as %+v", r.Priority, r.Actor, gordon)
+			}
+		})
+	}
 }

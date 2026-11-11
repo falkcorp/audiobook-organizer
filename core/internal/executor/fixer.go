@@ -1,5 +1,5 @@
 // file: core/internal/executor/fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9689d192-751d-423a-b144-61fe27e2a8d1
 // last-edited: 2026-11-11
 
@@ -53,7 +53,7 @@ type fixerResult struct {
 // runFixer is the Fixer runner (5T.3.1, 5T.3.7): a Preview run is the plan
 // (Candidates → Evaluate → rows); a Live run applies the rows of its plan
 // (PlanRef: only the approved rows, each re-evaluated and refused when it
-// changed since the plan) or, without a plan, the rows it evaluates. Each
+// changed since the plan); a Live run with no plan applies nothing. Each
 // applied row takes its Row.Subjects as ExclusiveRefs and is marked as it
 // returns, so a resumed attempt skips it.
 func (a *attempt) runFixer(rc *tasks.RC, p any) (json.RawMessage, error) {
@@ -181,35 +181,30 @@ func (a *attempt) fixerPlan(rc *tasks.RC, p any) (json.RawMessage, error) {
 func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 	fs := a.d.fixer
 	ctx := rc.Context()
-	plan := map[string]tasks.Row{}
-	var ids []string
-	if ref := a.rec.PlanRef; ref != "" {
-		var err error
-		if plan, err = a.e.planRows(ctx, ref); err != nil {
-			return nil, err
-		}
-		approved, err := a.approval(ctx)
-		if err != nil {
-			return nil, err
-		}
-		switch dec, err := a.e.planDecision(ctx, ref); {
-		case err != nil:
-			return nil, err
-		case dec == eventReject:
-			return nil, fmt.Errorf("%w: %s", ErrPlanRejected, ref)
-		case dec != eventApprove:
-			return nil, fmt.Errorf("%w: plan %s carries no approval", ErrNoApproval, ref)
-		}
-		ids = approved
-	} else {
-		rows, _, err := a.evaluate(rc, p)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range rows {
-			plan[r.ID] = r
-			ids = append(ids, r.ID)
-		}
+	// Every apply run applies an approved plan: registration refuses a
+	// Fixer whose Approval leaves PlanRequired false, prepare refuses a Live
+	// start of one without a plan, and only Approve names a plan. A Live run
+	// here with no plan came from none of those paths, so it applies nothing
+	// rather than evaluating and applying live (fail closed).
+	ref := a.rec.PlanRef
+	if ref == "" {
+		return nil, fmt.Errorf("%w: apply run %s names no plan", ErrPlanRequired, a.id)
+	}
+	plan, err := a.e.planRows(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := a.approval(ctx)
+	if err != nil {
+		return nil, err
+	}
+	switch dec, err := a.e.planDecision(ctx, ref); {
+	case err != nil:
+		return nil, err
+	case dec == eventReject:
+		return nil, fmt.Errorf("%w: %s", ErrPlanRejected, ref)
+	case dec != eventApprove:
+		return nil, fmt.Errorf("%w: plan %s carries no approval", ErrNoApproval, ref)
 	}
 	marked := map[string]bool{}
 	for m, err := range a.e.runs.Marks(ctx, a.id) {

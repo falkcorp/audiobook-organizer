@@ -1,5 +1,5 @@
 // file: core/internal/executor/control.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: e0da087e-cd1b-40dd-8ed9-97f8b015517f
 // last-edited: 2026-11-11
 
@@ -307,25 +307,32 @@ func (e *executor) attemptFor(cur tasks.RunRecord) *attempt {
 var errAlreadyStopping = errors.New("executor: run is already stopping")
 
 // Decide implements tasks.Client.Decide: Perms.Approve if set, else
-// Perms.Start (the verified-method half is the HTTP route's, F2-05).
+// Perms.Start (the verified-method half is the HTTP route's, F2-05). As
+// with Approve, a call with no caller identity (no Principal, or a context
+// it resolves to no one) is refused: a decision is always a person's.
+// Kernel-internal callers that carry the actor themselves use DecideAs.
 func (e *executor) Decide(ctx context.Context, id tasks.RunID, d tasks.Decision) error {
+	rec, err := e.runs.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if e.held(rec.Kind) {
+		return fmt.Errorf("%w: %s", ErrHeld, id)
+	}
+	def := e.defs[rec.Kind]
+	if def == nil {
+		return fmt.Errorf("%w: %s", ErrUnknownKind, rec.Kind)
+	}
 	actor, who := e.caller(ctx)
-	if who != nil {
-		rec, err := e.runs.Get(ctx, id)
-		if err != nil {
-			return err
-		}
-		def := e.defs[rec.Kind]
-		if def == nil {
-			return fmt.Errorf("%w: %s", ErrUnknownKind, rec.Kind)
-		}
-		req := def.c.Perms.Approve
-		if req.IsZero() {
-			req = def.c.Perms.Start
-		}
-		if !who.Satisfies(req) {
-			return fmt.Errorf("%w: decide %s", ErrNotPermitted, id)
-		}
+	if who == nil {
+		return fmt.Errorf("%w: decide %s: no caller identity", ErrNotPermitted, id)
+	}
+	req := def.c.Perms.Approve
+	if req.IsZero() {
+		req = def.c.Perms.Start
+	}
+	if !who.Satisfies(req) {
+		return fmt.Errorf("%w: decide %s", ErrNotPermitted, id)
 	}
 	return e.DecideAs(ctx, id, d, actor)
 }
@@ -433,7 +440,7 @@ func (e *executor) Approve(ctx context.Context, id tasks.RunID, req tasks.Approv
 		}
 	}
 	start := tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: plan.Params, PlanRef: id, Actor: actor, Trigger: tasks.TriggerManual}
-	prep, err := e.prepare(ctx, plan.Kind, start, who, modeApprove)
+	prep, err := e.prepare(ctx, plan.Kind, start, starter{who: who}, modeApprove)
 	if err != nil {
 		return err
 	}
