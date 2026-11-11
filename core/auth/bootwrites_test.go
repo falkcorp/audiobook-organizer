@@ -1,5 +1,5 @@
 // file: core/auth/bootwrites_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2d9b6f84-a317-4c5e-b0e2-8f61c3a7d905
 // last-edited: 2026-11-11
 
@@ -367,4 +367,24 @@ func TestBootWrites_DisabledRetiresTheStoredToken(t *testing.T) {
 	h.setSettings(auth.Settings{BootstrapEnabled: new(false)})
 	hfiles.failRm = errors.New("the Batcave's disks are on fire")
 	h.mustBootWrites(hfiles)
+}
+
+// A restart with no state filesystem mints nothing, but a token an earlier
+// boot stored (when the file could be written) is still redeemable, so it
+// must not outlive the restart: BootWrites deletes it before deciding
+// whether it can mint.
+func TestBootWrites_NoStateFilesystemDeletesAPreviousBootsToken(t *testing.T) {
+	f := newFx(t)
+	stored := f.bootToken(auth.DefaultBootstrapTokenTTL)
+	f.mustBootWrites(nil)
+	if f.tokenStored(stored) {
+		t.Fatal("a previous boot's bootstrap token outlived a restart with no state filesystem")
+	}
+	_, err := f.svc.RedeemBootstrap(context.Background(), stored, from("192.0.2.64"))
+	wantErr(t, "a stale token", err, auth.ErrBootstrapInvalid)
+	for tk, err := range f.st.ScanOneTime(context.Background(), auth.OneTimeBootstrap) {
+		if err != nil || tk != nil {
+			t.Fatalf("a bootstrap token is stored with no state filesystem: %v %v", tk, err)
+		}
+	}
 }

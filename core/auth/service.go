@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -127,6 +127,12 @@ type Settings struct {
 	// SetupRequiresToken is core.auth.setup_requires_token (§4.6 item 3): nil
 	// takes the default, true. False lets a local request (ClientInfo.Local)
 	// set up without the bootstrap token.
+	//
+	// True together with BootstrapEnabled false leaves first-run Setup
+	// unreachable: a token-bearing Setup refuses while the bootstrap switch is
+	// off, no token is minted, and a tokenless Setup is refused while a token
+	// is required. Nothing refuses the combination (it is behaviour, not an
+	// error); to create the first admin, set one of the two the other way.
 	SetupRequiresToken *bool
 	// Mode is core.auth.mode (§4.11): empty or "required", or "disabled".
 	// Read once, by New: it is not reloadable, so a live change can never
@@ -140,6 +146,11 @@ type Settings struct {
 	// the default, true. BootWrites reads it at start (a disabled switch
 	// deletes the stored token and file); RedeemBootstrap and a token-bearing
 	// Setup read it live and refuse while it is false.
+	//
+	// False together with SetupRequiresToken true (its default) makes
+	// first-run Setup unreachable: no token exists to present and a tokenless
+	// Setup is refused while one is required. Pair it with
+	// SetupRequiresToken=false (a local, tokenless Setup) or leave it on.
 	BootstrapEnabled *bool
 	// ReadOnlyKey and ReadOnlyKeyScopes are core.auth.bootstrap.readonly_key
 	// .enabled (default false) and .scopes (default ["core:system.view"]):

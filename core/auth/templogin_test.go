@@ -1,5 +1,5 @@
 // file: core/auth/templogin_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c5b74eb3-61fb-41c9-8574-c5f1f428e944
 // last-edited: 2026-11-11
 
@@ -154,6 +154,9 @@ func TestTempLogin_MintRules(t *testing.T) {
 	wantErr(t, "a reset link for a restricted user, no owner", reset(f.session(gordon), tim.ID), auth.ErrResetRequired)
 	owner := f.session(gordon)
 	owner.Assurance |= auth.AssuranceOwner
+	wantErr(t, "an owner's reset link with the owner gate off", reset(owner, tim.ID), auth.ErrDenied)
+	required := true // the gate AssuranceOwner means something under
+	f.setSettings(auth.Settings{OwnerRequired: &required})
 	if err := reset(owner, tim.ID); err != nil {
 		t.Fatalf("an owner's reset link for a restricted user: %v", err)
 	}

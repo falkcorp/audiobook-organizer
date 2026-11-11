@@ -1,5 +1,5 @@
 // file: core/auth/templogin.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 224ca491-2171-423a-bce4-a4654be50c1f
 // last-edited: 2026-11-11
 
@@ -57,7 +57,10 @@ func tempLoginLink(token string) string { return "/login/temp#token=" + token }
 // credential epoch, so a password change, disable or sign-out-everywhere
 // before it is consumed kills it. It carries the creator's epoch too, and
 // consuming it re-checks the creator (linkCreatorRefusal): a link outlives
-// neither its creator's account nor its creator's right to mint it.
+// neither its creator's account nor its creator's right to mint it. Consuming
+// a plain link guards the target's row, so a role change or disable that
+// commits between the consume's read and its commit conflicts it and the
+// retry re-runs every check.
 func (s *Service) MintTempLogin(ctx context.Context, actor *Principal, target UserID) (string, error) {
 	return s.mintTempLogin(ctx, actor, target, false)
 }
@@ -69,7 +72,10 @@ func (s *Service) MintTempLogin(ctx context.Context, actor *Principal, target Us
 // carries the new epoch. Consuming it takes a new password. A link minted by
 // an actor carrying AssuranceOwner also clears SignInRestricted when
 // consumed (§4.14); for a restricted target, any other actor is refused
-// (ErrResetRequired), since its link could not let the user in.
+// (ErrResetRequired), since its link could not let the user in. An
+// owner-assured actor is refused (ErrDenied) while core.auth.owner.required
+// is off: the consume holds such a link to the owner gate, so it could never
+// open.
 func (s *Service) MintResetLink(ctx context.Context, actor *Principal, target UserID) (string, error) {
 	return s.mintTempLogin(ctx, actor, target, true)
 }
@@ -83,6 +89,12 @@ func (s *Service) mintTempLogin(ctx context.Context, actor *Principal, target Us
 		return "", err
 	}
 	clears := reset && actor.Assurance&AssuranceOwner != 0
+	if clears && !s.ownerRequired() {
+		// The consume re-check holds a restriction-lifting link to the owner
+		// gate (linkCreatorRefusal), so with the gate off such a link could
+		// only ever be refused: refuse it here, where the actor can be told.
+		return "", fmt.Errorf("%w: a restriction-lifting reset link needs the owner gate (core.auth.owner.required), which is off", ErrDenied)
+	}
 	ttl := s.settings().TempLoginTTL
 	now := s.now().UTC()
 	var token string
@@ -257,6 +269,11 @@ func (s *Service) ConsumeTempLogin(ctx context.Context, token, newPassword strin
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.PasswordChanged, Subject: target, Epoch: up.CredentialEpoch})
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: target, Epoch: up.CredentialEpoch})
 			u = &up
+		} else if err := s.d.Store.GuardUser(b, u); err != nil {
+			// A plain link writes no user row, so nothing else would notice a
+			// role change, disable or sign-out that committed since the read
+			// above: guard the row, and the retry re-runs every check on it.
+			return err
 		}
 		rec, issued, err := s.stageSession(b, u, OriginTempLogin, false, client, now)
 		if err != nil {
