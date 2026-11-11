@@ -410,6 +410,27 @@ func TestUserAgentAndSharedGate(t *testing.T) {
 }
 
 // TestClassify: the body is read before the status.
+// TestClassify_Google403RateLimitIsRateLimited and
+// TestClassify_DailyQuotaBodyBeatsStatus are the two named cases of M2.9: the
+// BODY is read before the status (Google answers 403 for both).
+func TestClassify_Google403RateLimitIsRateLimited(t *testing.T) {
+	resp := &http.Response{StatusCode: 403, Header: http.Header{}}
+	body := `{"error":{"code":403,"errors":[{"reason":"rateLimitExceeded"}]}}`
+	if got := providerhttp.Classify(context.Background(), resp, []byte(body), nil); got != integrations.ClassRateLimited {
+		t.Errorf("403 rateLimitExceeded: %v, want rate_limited (not auth)", got)
+	}
+}
+
+func TestClassify_DailyQuotaBodyBeatsStatus(t *testing.T) {
+	body := `{"error":{"message":"Quota exceeded for quota metric 'Queries' and limit 'Queries per day'"}}`
+	for _, status := range []int{403, 429} {
+		resp := &http.Response{StatusCode: status, Header: http.Header{}}
+		if got := providerhttp.Classify(context.Background(), resp, []byte(body), nil); got != integrations.ClassQuota {
+			t.Errorf("%d daily quota body: %v, want quota", status, got)
+		}
+	}
+}
+
 func TestClassify(t *testing.T) {
 	ctx := context.Background()
 	resp := func(status int, h ...string) *http.Response {
