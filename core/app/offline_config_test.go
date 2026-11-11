@@ -7,20 +7,85 @@ package app
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2/vfs"
+
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/storage"
 )
+
+// recordingFS is an in-memory storage filesystem that records every call
+// that would open, create, lock or list a store.
+type recordingFS struct {
+	vfs.FS
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *recordingFS) note(op, name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, op+" "+name)
+}
+
+func (r *recordingFS) Create(name string, c vfs.DiskWriteCategory) (vfs.File, error) {
+	r.note("create", name)
+	return r.FS.Create(name, c)
+}
+
+func (r *recordingFS) Open(name string, opts ...vfs.OpenOption) (vfs.File, error) {
+	r.note("open", name)
+	return r.FS.Open(name, opts...)
+}
+
+func (r *recordingFS) OpenReadWrite(name string, c vfs.DiskWriteCategory, opts ...vfs.OpenOption) (vfs.File, error) {
+	r.note("open-rw", name)
+	return r.FS.OpenReadWrite(name, c, opts...)
+}
+
+func (r *recordingFS) OpenDir(name string) (vfs.File, error) {
+	r.note("opendir", name)
+	return r.FS.OpenDir(name)
+}
+
+func (r *recordingFS) MkdirAll(dir string, perm os.FileMode) error {
+	r.note("mkdir", dir)
+	return r.FS.MkdirAll(dir, perm)
+}
+
+func (r *recordingFS) Lock(name string) (io.Closer, error) {
+	r.note("lock", name)
+	return r.FS.Lock(name)
+}
+
+func (r *recordingFS) List(dir string) ([]string, error) {
+	r.note("list", dir)
+	return r.FS.List(dir)
+}
+
+func (r *recordingFS) Stat(name string) (vfs.FileInfo, error) {
+	r.note("stat", name)
+	return r.FS.Stat(name)
+}
+
+func (r *recordingFS) seen() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.calls)
+}
 
 // TestConfigCheck_ListsRetiredNamesOpensNoStore (05-config §1.3.6, 06
 // §6.4.5, SEC10-9): config check lists each retired name set with its
 // canonical env name and file key, refused ones first, exits non-zero when
-// one would refuse boot, and opens no store: the state directory is never
-// created. With only warn-class names set it exits zero.
+// one would refuse boot, and opens no store: the recording storage
+// filesystem sees no call and the state directory is never created. With only warn-class names set it exits zero.
 func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 	opts := offlineOpts(t)
 	opts.StateDir = filepath.Join(t.TempDir(), "state")
@@ -31,6 +96,8 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 		{Name: "GOTHAM_NOT_SET", Canonical: "core.log.journal.min_level"},
 	}
 	opts.Env = []string{"GOTHAM_DB_PATH=/srv/gotham/main.pebble", "GOTHAM_JOURNAL_DAYS=30", "GOTHAM_BAT_SIGNAL=on"}
+	rec := &recordingFS{FS: vfs.NewMem()}
+	opts.StorageFS = storage.FSOf(rec)
 	check := secretsCmd(t, OfflineCommands(opts, offlineKeeper()), "config check")
 
 	var out bytes.Buffer
@@ -60,6 +127,9 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 	if _, err := os.Stat(opts.StateDir); !os.IsNotExist(err) {
 		t.Errorf("config check created the state directory: %v", err)
 	}
+	if calls := rec.seen(); len(calls) != 0 {
+		t.Errorf("config check touched the store's filesystem: %v", calls)
+	}
 
 	opts.Env = []string{"GOTHAM_JOURNAL_DAYS=30"}
 	out.Reset()
@@ -82,6 +152,15 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 	if err := secretsCmd(t, OfflineCommands(opts, offlineKeeper()), "config check").Run(t.Context(), nil, &out); err != nil ||
 		!strings.Contains(out.String(), "No retired config names are set") {
 		t.Errorf("clean config check = %v, output %q", err, out.String())
+	}
+	if calls := rec.seen(); len(calls) != 0 {
+		t.Errorf("config check touched the store's filesystem: %v", calls)
+	}
+
+	// The control: a boot over the same filesystem is recorded.
+	served(t, opts, offlineKeeper())
+	if len(rec.seen()) == 0 {
+		t.Error("the recording filesystem records nothing, so its silence above proves nothing")
 	}
 }
 
