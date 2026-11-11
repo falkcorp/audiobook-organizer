@@ -3,7 +3,7 @@
 // guid: 5cd17e42-c363-4a36-b03d-c2556ce8cef7
 // last-edited: 2026-10-22
 
-package absauth
+package password
 
 import (
 	"sync/atomic"

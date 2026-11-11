@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	"github.com/gin-gonic/gin"
 )
@@ -51,7 +52,7 @@ func failRefresh(t *testing.T, h *harness, visitor string) int {
 func TestLoginThrottle_DefaultKeyIsOneBucketPerPeer(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil)
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range absauth.MaxFailuresPerIP {
+	for i := range coreauth.MaxFailuresPerIP {
 		if code := failLogin(t, h, "192.0.2.10"); code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: %d, want 401", i, code)
 		}
@@ -64,7 +65,7 @@ func TestLoginThrottle_DefaultKeyIsOneBucketPerPeer(t *testing.T) {
 func TestLoginThrottle_ThrottleKeySeparatesVisitorsBehindOnePeer(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey())
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range absauth.MaxFailuresPerIP {
+	for i := range coreauth.MaxFailuresPerIP {
 		if code := failLogin(t, h, "192.0.2.10"); code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: %d, want 401", i, code)
 		}
@@ -79,13 +80,13 @@ func TestLoginThrottle_ThrottleKeySeparatesVisitorsBehindOnePeer(t *testing.T) {
 
 // /auth/refresh charges the same throttle: the visitor's key, not the peer's,
 // so one map never holds two kinds of key. Refresh failures are counted under
-// their own key (absauth.RefreshKey) that no password login reads; the budgets
+// their own key (coreauth.RefreshKey) that no password login reads; the budgets
 // are isolated in both directions (TestRefreshBudget_LoginTyposDoNotSpendIt and
 // TestRefreshBudget_SpentRefreshBudgetDoesNotRefuseAbsLogin).
 func TestRefreshThrottle_UsesTheSameVisitorKeyAsLogin(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey())
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range absauth.MaxFailuresPerIP {
+	for i := range coreauth.MaxFailuresPerIP {
 		if code := failRefresh(t, h, "192.0.2.10"); code != http.StatusUnauthorized {
 			t.Fatalf("refresh attempt %d: %d, want 401", i, code)
 		}
@@ -111,7 +112,7 @@ func TestRefreshThrottle_UsesTheSameVisitorKeyAsLogin(t *testing.T) {
 func TestLoginThrottle_EmptyThrottleKeyFallsBackToThePeer(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey())
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range absauth.MaxFailuresPerIP {
+	for i := range coreauth.MaxFailuresPerIP {
 		if code := failLogin(t, h, ""); code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: %d, want 401", i, code)
 		}
@@ -122,8 +123,8 @@ func TestLoginThrottle_EmptyThrottleKeyFallsBackToThePeer(t *testing.T) {
 }
 
 // quickThrottle is a shared Throttle whose failure delay is a no-op.
-func quickThrottle() *absauth.Throttle {
-	t := absauth.NewThrottle()
+func quickThrottle() *coreauth.Throttle {
+	t := coreauth.NewThrottle()
 	t.SetSleep(func(time.Duration) {})
 	return t
 }
@@ -194,8 +195,8 @@ func TestLoginThrottle_SharedThrottleCountsFailuresFromElsewhere(t *testing.T) {
 	shared := quickThrottle()
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = shared })
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for range absauth.MaxFailuresPerIP {
-		shared.RecordFailure(absauth.AccountKey("owner"), "192.0.2.52") // as the web login would
+	for range coreauth.MaxFailuresPerIP {
+		shared.RecordFailure(coreauth.AccountKey("owner"), "192.0.2.52") // as the web login would
 	}
 	if code := okLogin(h, t, "192.0.2.52", "owner", "pw-pw-pw-pw"); code != http.StatusTooManyRequests {
 		t.Fatalf("a source spent through the other login: %d, want 429", code)

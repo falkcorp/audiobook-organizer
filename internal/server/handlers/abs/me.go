@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 
+	coreaudit "github.com/falkcorp/mediacore/audit"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -41,8 +43,8 @@ func (h *Handler) Me(c *gin.Context) {
 
 	progress, bookmarks, err := h.userPayload(user.ID)
 	if err != nil {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "me", Outcome: absauth.OutcomeError, Mode: servermiddleware.ABSAuthMode(c),
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "me", Outcome: coreaudit.OutcomeError, Mode: servermiddleware.ABSAuthMode(c),
 			SourceIP: c.ClientIP(), UserID: user.ID, Username: user.Username,
 			Reason: "user-data-unavailable", Path: c.Request.URL.Path,
 		})
@@ -214,8 +216,8 @@ func (h *Handler) DeleteSession(c *gin.Context) {
 		return
 	}
 	if session == nil || session.UserID != user.ID {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "session-delete", Outcome: absauth.OutcomeDenied,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "session-delete", Outcome: coreaudit.OutcomeDenied,
 			Mode: servermiddleware.ABSAuthMode(c), SourceIP: c.ClientIP(),
 			UserID: user.ID, Username: user.Username, SessionID: id,
 			Reason: "not-found-or-not-owned", Path: c.Request.URL.Path,
@@ -228,8 +230,8 @@ func (h *Handler) DeleteSession(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "could not revoke session")
 		return
 	}
-	absauth.Audit(absauth.AuditEvent{
-		Action: "session-delete", Outcome: absauth.OutcomeSuccess,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "session-delete", Outcome: coreaudit.OutcomeSuccess,
 		Mode: servermiddleware.ABSAuthMode(c), SourceIP: c.ClientIP(),
 		UserID: user.ID, Username: user.Username, SessionID: id, Path: c.Request.URL.Path,
 	})
@@ -258,8 +260,8 @@ func (h *Handler) Logout(c *gin.Context) {
 		if err != nil {
 			unreadable, _ := database.UnreadableMemberCount(err)
 			slog.Error("abs logout all-devices: revoke was partial", "user", user.ID, "revoked", n, "unreadable", unreadable, "err", err)
-			absauth.Audit(absauth.AuditEvent{
-				Action: "logout", Outcome: absauth.OutcomeError, Mode: mode, SourceIP: ip,
+			coreaudit.Audit(coreaudit.AuditEvent{
+				Action: "logout", Outcome: coreaudit.OutcomeError, Mode: mode, SourceIP: ip,
 				UserID: user.ID, Username: user.Username, Reason: "all-devices-partial",
 				Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 			})
@@ -270,8 +272,8 @@ func (h *Handler) Logout(c *gin.Context) {
 			respondJSON(c, http.StatusOK, gin.H{"success": false, "partial": true, "revoked": n, "unreadable": unreadable})
 			return
 		}
-		absauth.Audit(absauth.AuditEvent{
-			Action: "logout", Outcome: absauth.OutcomeSuccess, Mode: mode, SourceIP: ip,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "logout", Outcome: coreaudit.OutcomeSuccess, Mode: mode, SourceIP: ip,
 			UserID: user.ID, Username: user.Username, Reason: "all-devices",
 			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
@@ -298,8 +300,8 @@ func (h *Handler) Logout(c *gin.Context) {
 		}
 	}
 
-	absauth.Audit(absauth.AuditEvent{
-		Action: "logout", Outcome: absauth.OutcomeSuccess, Mode: mode, SourceIP: ip,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "logout", Outcome: coreaudit.OutcomeSuccess, Mode: mode, SourceIP: ip,
 		UserID: user.ID, Username: user.Username, SessionID: sessionID,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})

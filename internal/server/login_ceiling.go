@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
@@ -29,7 +31,7 @@ import (
 // Aggregate ceilings for password login (the web POST /api/v1/auth/login and
 // the Audiobookshelf-compatible POST /login).
 //
-// The per-visitor failure throttle (absauth.Throttle, shared by both logins) is
+// The per-visitor failure throttle (coreauth.Throttle, shared by both logins) is
 // keyed on the visitor address (a public IPv6 visitor per /64), which is what
 // stops one caller locking out everyone behind a tunnel connector. It does
 // nothing against a caller with many addresses (a botnet): each address brings a
@@ -56,11 +58,11 @@ import (
 //     back for anything but a 401. A successful login (2xx) refunds only the
 //     failures that SAME visitor made against the SAME account (the handlers
 //     report the account with absauth.NoteLoginAccount: the normalised submitted
-//     username), from the last 15 minutes, at most absauth.SoftThreshold of them.
+//     username), from the last 15 minutes, at most coreauth.SoftThreshold of them.
 //     Someone who mistyped and got in does not leave their misses counting
 //     against everyone; a caller with one valid account cannot log in to clear
 //     the count and keep guessing at other accounts, whose failures stay counted
-//     at the visitor, connector and global levels. absauth.Throttle's per-source
+//     at the visitor, connector and global levels. coreauth.Throttle's per-source
 //     budget follows the same rule.
 //   - A request carrying a VERIFIED Cloudflare Access identity (a JWT verified
 //     against the team's JWKS and AUD, for an allow-listed verified email, the
@@ -73,7 +75,7 @@ import (
 //     and the handlers delay it before password work, progressively with the
 //     failures already on the submitted username, up to a few seconds (the delay
 //     holds no lock). Only a username that has already failed
-//     absauth.SoftThreshold times, or a visitor past its own budget, is refused
+//     coreauth.SoftThreshold times, or a visitor past its own budget, is refused
 //     with 429 by the handlers, and the decision is the same whether or not the
 //     username exists. Admission of saturated requests is bounded in three ways:
 //     PER VISITOR (keyed on the visitor's address, a public IPv6 visitor per /48,
@@ -111,9 +113,9 @@ import (
 // read as an attack. HTTP Basic auth on the API is a separate path and is not
 // throttled here.
 const (
-	loginConnectorCeiling = 10 * absauth.MaxFailuresPerIP
+	loginConnectorCeiling = 10 * coreauth.MaxFailuresPerIP
 	loginGlobalCeiling    = 500
-	loginCeilingWindow    = absauth.Window
+	loginCeilingWindow    = coreauth.Window
 	// loginBodyLimit caps a login body (the real one is a few hundred bytes).
 	loginBodyLimit = 4 << 10
 	// maxLoginInFlightPerVisitor is how many logins one visitor key may have in the
@@ -169,7 +171,7 @@ type loginVisitor struct {
 	// lastSeen is the last write; the table is in write order, so it decides expiry.
 	lastSeen time.Time
 	// byAccount are the refundable failures per account key, newest last, at most
-	// absauth.SoftThreshold each. A failure with no account key is not recorded.
+	// coreauth.SoftThreshold each. A failure with no account key is not recorded.
 	byAccount map[string][]loginFailure
 	// satFailedAt is when the visitor last failed a login while saturated.
 	satFailedAt time.Time
@@ -224,8 +226,8 @@ func startupLoginSaturated() error {
 // loginThrottle returns the one failed-login throttle both password logins share,
 // so a guess at an account through either door counts toward the same
 // per-account counter and the same per-source budget.
-func (s *Server) loginThrottle() *absauth.Throttle {
-	s.loginThrottleOnce.Do(func() { s.loginThrottleState = absauth.NewThrottle() })
+func (s *Server) loginThrottle() *coreauth.Throttle {
+	s.loginThrottleOnce.Do(func() { s.loginThrottleState = coreauth.NewThrottle() })
 	return s.loginThrottleState
 }
 
@@ -388,15 +390,15 @@ func (l *loginCeiling) failed(visitor, account string, t loginCeilingTicket) {
 		return // not refundable; still counted
 	}
 	fs := append(v.byAccount[account], loginFailure{at: l.now(), connKey: t.connKey, connStart: t.connStart, globalStart: t.globalStart})
-	if len(fs) > absauth.SoftThreshold {
-		fs = fs[len(fs)-absauth.SoftThreshold:]
+	if len(fs) > coreauth.SoftThreshold {
+		fs = fs[len(fs)-coreauth.SoftThreshold:]
 	}
 	v.byAccount[account] = fs
 }
 
 // succeeded hands back the success's own slot and, for the same visitor and the
 // same account only, the failures from the last window (at most
-// absauth.SoftThreshold, into windows still open). Failures against any other
+// coreauth.SoftThreshold, into windows still open). Failures against any other
 // account stay counted.
 func (l *loginCeiling) succeeded(visitor, account string, t loginCeilingTicket) {
 	l.mu.Lock()
@@ -628,7 +630,7 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool, respond loginRe
 		ticket, ok, warn := l.reserve(loginCeilingConnectorKey(c))
 		if !ok {
 			if warn != "" {
-				clientTrustLog.Warn("login failure ceiling reached (%s): further password logins are delayed, and refused for a username past %d failures of its own, until its window ends", warn, absauth.SoftThreshold)
+				clientTrustLog.Warn("login failure ceiling reached (%s): further password logins are delayed, and refused for a username past %d failures of its own, until its window ends", warn, coreauth.SoftThreshold)
 			}
 			// Saturated admission is keyed coarser than the per-visitor throttle
 			// (a public IPv6 visitor per /48) and decided HERE, before any handler

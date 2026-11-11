@@ -3,7 +3,7 @@
 // guid: 341f8c6a-9fe0-4742-b163-b125af970b92
 // last-edited: 2026-10-22
 
-package absauth
+package auth
 
 import (
 	"fmt"

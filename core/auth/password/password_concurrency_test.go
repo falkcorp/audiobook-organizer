@@ -3,7 +3,7 @@
 // guid: 6c2f94d1-7e03-4a58-b9d6-1a4e8f307c25
 // last-edited: 2026-10-20
 
-package absauth
+package password
 
 import (
 	"sync"

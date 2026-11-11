@@ -13,10 +13,11 @@ import (
 	"net/http"
 	"time"
 
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/gin-gonic/gin"
 )
@@ -62,7 +63,7 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 		return
 	}
 
-	algo, hash, err := absauth.HashPassword(req.Password)
+	algo, hash, err := authpw.HashPassword(req.Password)
 	if err != nil {
 		httputil.InternalError(c, "hash password", err)
 		return

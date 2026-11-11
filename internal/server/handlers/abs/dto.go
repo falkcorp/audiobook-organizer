@@ -8,8 +8,9 @@ package abs
 import (
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )
 
 // The DTOs in this file are a TYPE CONTRACT, not a convenience. Both target clients
@@ -241,8 +242,8 @@ func (h *Handler) buildServerSettings() serverSettings {
 		// token burns login attempts. That makes this an upper bound: a client can
 		// hit the 429 before its Nth login. The names say "requests" because they are
 		// an upstream ABS wire contract we do not control.
-		RateLimitLoginRequests: absauth.MaxFailuresPerIP,
-		RateLimitLoginWindow:   absauth.Window.Milliseconds(),
+		RateLimitLoginRequests: coreauth.MaxFailuresPerIP,
+		RateLimitLoginWindow:   coreauth.Window.Milliseconds(),
 		ScannerCoverProvider:   "google",
 		SortingPrefixes:        []string{"the", "a"},
 		TimeFormat:             "HH:mm",

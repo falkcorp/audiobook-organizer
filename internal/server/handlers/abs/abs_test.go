@@ -19,6 +19,9 @@ import (
 	"testing"
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
@@ -448,7 +451,7 @@ func (h *harness) seedPasswordUser(t *testing.T, id, username, password string) 
 
 func (h *harness) seedUser(t *testing.T, id, username, email, password string) *database.User {
 	t.Helper()
-	algo, hash, err := absauth.HashPassword(password)
+	algo, hash, err := authpw.HashPassword(password)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
@@ -600,15 +603,15 @@ func TestStatus_RateLimitMatchesRealThrottle(t *testing.T) {
 	}
 
 	advertised := int64(settings["rateLimitLoginRequests"].(float64))
-	if advertised != int64(absauth.MaxFailuresPerIP) {
-		t.Errorf("rateLimitLoginRequests: got %d, want %d (absauth.MaxFailuresPerIP)",
-			advertised, absauth.MaxFailuresPerIP)
+	if advertised != int64(coreauth.MaxFailuresPerIP) {
+		t.Errorf("rateLimitLoginRequests: got %d, want %d (coreauth.MaxFailuresPerIP)",
+			advertised, coreauth.MaxFailuresPerIP)
 	}
 
 	window := int64(settings["rateLimitLoginWindow"].(float64))
-	expectedWindow := absauth.Window.Milliseconds()
+	expectedWindow := coreauth.Window.Milliseconds()
 	if window != expectedWindow {
-		t.Errorf("rateLimitLoginWindow: got %d, want %d (absauth.Window.Milliseconds())",
+		t.Errorf("rateLimitLoginWindow: got %d, want %d (coreauth.Window.Milliseconds())",
 			window, expectedWindow)
 	}
 }
@@ -819,7 +822,7 @@ func TestLogin_CredentiallessUserCannotPasswordLogin(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil)
 	h.store.addUser(&database.User{
 		ID: "cfu", Username: "cfonly", Email: "cf@example.com", Status: "active",
-		PasswordHashAlgo: absauth.AlgoOAuth, PasswordHash: "", CreatedAt: time.Now(),
+		PasswordHashAlgo: authpw.AlgoOAuth, PasswordHash: "", CreatedAt: time.Now(),
 	})
 	for _, pw := range []string{"", " ", "anything"} {
 		w, _ := h.do(t, request{method: http.MethodPost, path: "/login",
@@ -840,16 +843,16 @@ func TestLogin_BcryptUserIsRehashedToArgon2id(t *testing.T) {
 	}
 	h.store.addUser(&database.User{
 		ID: "legacy", Username: "legacy", Email: "legacy@example.com", Status: "active",
-		PasswordHashAlgo: absauth.AlgoBcrypt, PasswordHash: string(raw),
+		PasswordHashAlgo: authpw.AlgoBcrypt, PasswordHash: string(raw),
 		Roles: []string{"viewer"}, CreatedAt: time.Now(),
 	})
 	h.login(t, "legacy", "legacy-pw")
 
 	u, _ := h.store.GetUserByID("legacy")
-	if u.PasswordHashAlgo != absauth.AlgoArgon2id {
+	if u.PasswordHashAlgo != authpw.AlgoArgon2id {
 		t.Fatalf("expected rehash to argon2id, algo is %q", u.PasswordHashAlgo)
 	}
-	if ok, rehash := absauth.VerifyPassword(u.PasswordHashAlgo, u.PasswordHash, "legacy-pw"); !ok || rehash {
+	if ok, rehash := authpw.VerifyPassword(u.PasswordHashAlgo, u.PasswordHash, "legacy-pw"); !ok || rehash {
 		t.Fatalf("rehashed credential must verify cleanly (ok=%v rehash=%v)", ok, rehash)
 	}
 	// And the user can still log in afterwards.
@@ -863,7 +866,7 @@ func TestLogin_RehashFailureStillLetsTheUserIn(t *testing.T) {
 	raw, _ := bcrypt.GenerateFromPassword([]byte("legacy-pw"), bcrypt.MinCost)
 	h.store.addUser(&database.User{
 		ID: "legacy", Username: "legacy", Status: "active",
-		PasswordHashAlgo: absauth.AlgoBcrypt, PasswordHash: string(raw), CreatedAt: time.Now(),
+		PasswordHashAlgo: authpw.AlgoBcrypt, PasswordHash: string(raw), CreatedAt: time.Now(),
 	})
 	h.store.updateErr = errors.New("pebble: write stalled")
 	w, _ := h.do(t, request{method: http.MethodPost, path: "/login",
@@ -877,7 +880,7 @@ func TestLogin_RehashFailureStillLetsTheUserIn(t *testing.T) {
 func TestLogin_ThrottleIs429AndNeverLocksTheAccount(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil)
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range absauth.MaxFailuresPerIP {
+	for i := range coreauth.MaxFailuresPerIP {
 		w, _ := h.do(t, request{method: http.MethodPost, path: "/login",
 			body: map[string]any{"username": "owner", "password": "wrong"}})
 		if w.Code != http.StatusUnauthorized {

@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	"errors"
 	"log/slog"
 	"net/http"
@@ -47,7 +49,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	operationshandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
@@ -68,6 +69,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	acoustidplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
 	dedupplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
+
 	// opscatalog is the one list of op bundles and of service-registry
 	// plugins (it replaced internal/plugins/plugins.go, 05-PR7): importing it
 	// links the five plugin packages, whose init() registers them.
@@ -454,7 +456,7 @@ type Server struct {
 	// loginThrottleState is the ONE failed-login throttle (per-source budget,
 	// per-account soft delay) the web and ABS password logins share.
 	loginThrottleOnce   sync.Once
-	loginThrottleState  *absauth.Throttle
+	loginThrottleState  *coreauth.Throttle
 	guestPolicyOnce     sync.Once
 	guestPolicy         guestPolicyEnsurer
 	guestPolicyErr      error

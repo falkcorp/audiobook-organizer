@@ -3,7 +3,7 @@
 // guid: 7b26c8f1-3e40-49da-95b7-0c48f2a6d371
 // last-edited: 2026-11-06
 
-package absauth
+package password
 
 import (
 	"crypto/rand"

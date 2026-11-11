@@ -12,6 +12,10 @@ import (
 	"strings"
 	"time"
 
+	coreaudit "github.com/falkcorp/mediacore/audit"
+	coreauth "github.com/falkcorp/mediacore/auth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -79,8 +83,8 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 	if bodyErr != nil {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "login", Outcome: absauth.OutcomeFailure, SourceIP: ip,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "login", Outcome: coreaudit.OutcomeFailure, SourceIP: ip,
 			Reason: "malformed-body", Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
 		respondError(c, http.StatusBadRequest, "invalid request body")
@@ -92,12 +96,12 @@ func (h *Handler) Login(c *gin.Context) {
 	// its credential is dead.
 	throttleKey := h.throttleKey(c)
 	// Only this door's own budget is read. The refresh endpoint spends a separate
-	// one (absauth.RefreshKey), and neither password login looks at it: a client
+	// one (coreauth.RefreshKey), and neither password login looks at it: a client
 	// holding a stale token that burns its refresh budget must still be able to
 	// sign in with its password, which is how it gets a fresh token.
 	if h.throttle.IPBlocked(throttleKey) {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "login", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "login", Outcome: coreaudit.OutcomeThrottled, SourceIP: ip,
 			Username: req.Username, Reason: "ip-failure-budget-exhausted",
 			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
@@ -116,7 +120,7 @@ func (h *Handler) Login(c *gin.Context) {
 
 	// Everything below is keyed on the normalised SUBMITTED username, never on the
 	// user row, so a name that does not exist behaves exactly like one that does.
-	accountKey := absauth.AccountKey(username)
+	accountKey := coreauth.AccountKey(username)
 	absauth.NoteLoginAccount(c, accountKey) // for the login ceilings' same-account refund
 	// While the aggregate login ceilings are spent (absauth.MarkLoginSaturated) the
 	// login is delayed before any password work, and refused only when the
@@ -124,8 +128,8 @@ func (h *Handler) Login(c *gin.Context) {
 	// tell a caller whether the name exists.
 	if absauth.LoginSaturated(c) &&
 		absauth.RefuseSaturatedLogin(c, h.throttle.AccountFailures(accountKey), h.throttle.Delay) {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "login", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "login", Outcome: coreaudit.OutcomeThrottled, SourceIP: ip,
 			Username: username, Reason: "login-ceiling-account-failures",
 			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
@@ -137,8 +141,8 @@ func (h *Handler) Login(c *gin.Context) {
 	user, err := h.store.GetUserByUsername(username)
 	if err != nil {
 		// Transient, not a credential verdict.
-		absauth.Audit(absauth.AuditEvent{
-			Action: "login", Outcome: absauth.OutcomeError, SourceIP: ip, Username: username,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "login", Outcome: coreaudit.OutcomeError, SourceIP: ip, Username: username,
 			Reason: "user-lookup-error", Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
 		respondError(c, http.StatusInternalServerError, "could not verify credentials")
@@ -149,14 +153,14 @@ func (h *Handler) Login(c *gin.Context) {
 		// username, so guessing cannot dodge the hard limit and the name slows
 		// down like a real one. The same password work is spent first, so the
 		// response time does not give the name away either.
-		absauth.SpendVerification(req.Password)
+		authpw.SpendVerification(req.Password)
 		h.throttle.Delay(h.throttle.RecordFailure(accountKey, throttleKey))
 		h.auditLoginFailure(c, ip, username, "", "unknown-user")
 		respondError(c, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	ok, needsRehash := absauth.VerifyLoginPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password)
+	ok, needsRehash := authpw.VerifyLoginPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password)
 	if !ok {
 		h.throttle.Delay(h.throttle.RecordFailure(accountKey, throttleKey))
 		h.auditLoginFailure(c, ip, username, user.ID, "bad-password")
@@ -166,8 +170,8 @@ func (h *Handler) Login(c *gin.Context) {
 	if !isActiveUser(user) {
 		// A correct password for a disabled account is 403: the credential is fine,
 		// the authorization is not. Not counted as a credential failure.
-		absauth.Audit(absauth.AuditEvent{
-			Action: "login", Outcome: absauth.OutcomeDenied, Mode: servermiddleware.ABSModeJWT,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "login", Outcome: coreaudit.OutcomeDenied, Mode: servermiddleware.ABSModeJWT,
 			SourceIP: ip, Username: username, UserID: user.ID, Reason: "user-inactive",
 			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
@@ -217,31 +221,31 @@ func decodeLoginBody(c *gin.Context) (loginRequest, error) {
 // (putting the old password back, minus the epoch bump) or deactivation (putting
 // Status back to active).
 func (h *Handler) rehashPassword(user *database.User, plain string) {
-	algo, hash, err := absauth.HashPassword(plain)
+	algo, hash, err := authpw.HashPassword(plain)
 	if err != nil {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "rehash", Outcome: absauth.OutcomeError, UserID: user.ID,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "rehash", Outcome: coreaudit.OutcomeError, UserID: user.ID,
 			Username: user.Username, Reason: "hash-failed",
 		})
 		return
 	}
 	wrote, err := h.store.RehashUserPassword(user.ID, user.PasswordHash, algo, hash)
 	if err != nil {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "rehash", Outcome: absauth.OutcomeError, UserID: user.ID,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "rehash", Outcome: coreaudit.OutcomeError, UserID: user.ID,
 			Username: user.Username, Reason: "store-update-failed",
 		})
 		return
 	}
 	if !wrote {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "rehash", Outcome: absauth.OutcomeDenied, UserID: user.ID,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "rehash", Outcome: coreaudit.OutcomeDenied, UserID: user.ID,
 			Username: user.Username, Reason: "password-changed-concurrently",
 		})
 		return
 	}
-	absauth.Audit(absauth.AuditEvent{
-		Action: "rehash", Outcome: absauth.OutcomeSuccess, UserID: user.ID,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "rehash", Outcome: coreaudit.OutcomeSuccess, UserID: user.ID,
 		Username: user.Username, Reason: "bcrypt-to-argon2id",
 	})
 }
@@ -253,8 +257,8 @@ func (h *Handler) issueSession(c *gin.Context, user *database.User, deviceInfo j
 
 	session, refreshToken, err := h.createSession(user, deviceInfo, ip, c.Request.UserAgent(), now)
 	if err != nil {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "login", Outcome: absauth.OutcomeError, Mode: mode, SourceIP: ip,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "login", Outcome: coreaudit.OutcomeError, Mode: mode, SourceIP: ip,
 			UserID: user.ID, Username: user.Username, Email: email,
 			Reason: "session-create-failed", Path: c.Request.URL.Path,
 		})
@@ -264,8 +268,8 @@ func (h *Handler) issueSession(c *gin.Context, user *database.User, deviceInfo j
 
 	accessToken, _, err := h.cfg.MintAccessToken(user.ID, session.ID, now)
 	if err != nil {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "login", Outcome: absauth.OutcomeError, Mode: mode, SourceIP: ip,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "login", Outcome: coreaudit.OutcomeError, Mode: mode, SourceIP: ip,
 			UserID: user.ID, Username: user.Username, SessionID: session.ID,
 			Reason: "mint-access-failed", Path: c.Request.URL.Path,
 		})
@@ -277,8 +281,8 @@ func (h *Handler) issueSession(c *gin.Context, user *database.User, deviceInfo j
 	if err != nil {
 		// §1.8.1: a 200 with an empty mediaProgress we could not actually read would
 		// make AudioBooth delete the user's local positions. 5xx and let it retry.
-		absauth.Audit(absauth.AuditEvent{
-			Action: "login", Outcome: absauth.OutcomeError, Mode: mode, SourceIP: ip,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "login", Outcome: coreaudit.OutcomeError, Mode: mode, SourceIP: ip,
 			UserID: user.ID, Username: user.Username, SessionID: session.ID,
 			Reason: "user-data-unavailable", Path: c.Request.URL.Path,
 		})
@@ -286,8 +290,8 @@ func (h *Handler) issueSession(c *gin.Context, user *database.User, deviceInfo j
 		return
 	}
 
-	absauth.Audit(absauth.AuditEvent{
-		Action: "login", Outcome: absauth.OutcomeSuccess, Mode: mode, SourceIP: ip,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "login", Outcome: coreaudit.OutcomeSuccess, Mode: mode, SourceIP: ip,
 		UserID: user.ID, Username: user.Username, Email: email, SessionID: session.ID,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
@@ -352,8 +356,8 @@ func normalizeDeviceInfo(raw json.RawMessage) string {
 }
 
 func (h *Handler) auditLoginFailure(c *gin.Context, ip, username, userID, reason string) {
-	absauth.Audit(absauth.AuditEvent{
-		Action: "login", Outcome: absauth.OutcomeFailure, Mode: servermiddleware.ABSModeJWT,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "login", Outcome: coreaudit.OutcomeFailure, Mode: servermiddleware.ABSModeJWT,
 		SourceIP: ip, Username: username, UserID: userID, Reason: reason,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
