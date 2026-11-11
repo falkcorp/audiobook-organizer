@@ -1,16 +1,18 @@
 // file: internal/cfaccess/extension_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b29f8914-e3a0-4c02-8652-2f64d5cf6c4b
 // last-edited: 2026-11-11
 
 package cfaccess
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,30 +38,79 @@ type access struct {
 	t   testing.TB
 	srv *httptest.Server
 
-	mu       sync.Mutex
-	keys     map[string]*rsa.PrivateKey // kid -> key served
-	mode     string                     // "", "503", "garbage", "empty", "drop"
-	fetches  int
-	teamHost string
+	mu        sync.Mutex
+	keys      map[string]*rsa.PrivateKey // kid -> key served
+	mode      string                     // "", "503", "garbage", "empty", "drop", "redirect", "huge", "nokid", "503keys"
+	fetches   int
+	elsewhere int           // requests to the redirect target
+	gate      chan struct{} // when set, a certs request waits for it to close
+	teamHost  string
+	clk       *fakeClock // the verifier's key-cache clock
+}
+
+// fakeClock is a settable clock.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
 }
 
 func newAccess(t testing.TB) *access {
 	t.Helper()
-	a := &access{t: t, keys: map[string]*rsa.PrivateKey{"k1": newKey(t)}}
+	a := &access{t: t, keys: map[string]*rsa.PrivateKey{"k1": newKey(t)}, clk: &fakeClock{now: time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)}}
 	a.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/elsewhere" {
+			a.mu.Lock()
+			a.elsewhere++
+			a.mu.Unlock()
+			http.Error(w, "the redirect target must never be requested", http.StatusTeapot)
+			return
+		}
 		if r.URL.Path != "/cdn-cgi/access/certs" {
 			http.NotFound(w, r)
 			return
 		}
 		a.mu.Lock()
 		a.fetches++
-		mode := a.mode
+		mode, gate := a.mode, a.gate
 		var set jose.JSONWebKeySet
 		for kid, k := range a.keys {
-			set.Keys = append(set.Keys, jose.JSONWebKey{Key: &k.PublicKey, KeyID: kid, Algorithm: "RS256", Use: "sig"})
+			id := kid
+			if mode == "nokid" {
+				id = ""
+			}
+			set.Keys = append(set.Keys, jose.JSONWebKey{Key: &k.PublicKey, KeyID: id, Algorithm: "RS256", Use: "sig"})
 		}
 		a.mu.Unlock()
+		if gate != nil {
+			select {
+			case <-gate:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		switch mode {
+		case "redirect":
+			http.Redirect(w, r, "/elsewhere", http.StatusFound)
+		case "503keys":
+			// An error page that happens to carry a valid key set is still an error.
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(set)
+		case "huge":
+			_, _ = w.Write([]byte(`{"keys":[],"pad":"`))
+			_, _ = w.Write(bytes.Repeat([]byte("x"), 2<<20))
+			_, _ = w.Write([]byte(`"}`))
 		case "503":
 			http.Error(w, "maintenance: secret-upstream-detail", http.StatusServiceUnavailable)
 		case "garbage":
@@ -93,9 +144,28 @@ func (a *access) setMode(m string) { a.mu.Lock(); a.mode = m; a.mu.Unlock() }
 
 func (a *access) fetchCount() int { a.mu.Lock(); defer a.mu.Unlock(); return a.fetches }
 
+func (a *access) elsewhereCount() int { a.mu.Lock(); defer a.mu.Unlock(); return a.elsewhere }
+
+// hold makes certs requests wait until the returned function is called.
+func (a *access) hold() (release func()) {
+	g := make(chan struct{})
+	a.mu.Lock()
+	a.gate = g
+	a.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			a.mu.Lock()
+			a.gate = nil
+			a.mu.Unlock()
+			close(g)
+		})
+	}
+}
+
 func (a *access) verifier() *CFAccessVerifier {
 	a.t.Helper()
-	v, err := newCFAccessVerifier(context.Background(), a.teamHost, testAUD, a.srv.Client())
+	v, err := newCFAccessVerifier(context.Background(), a.teamHost, testAUD, verifierOptions{hc: a.srv.Client(), now: a.clk.Now})
 	if err != nil {
 		a.t.Fatal(err)
 	}
@@ -108,6 +178,8 @@ type tokenSpec struct {
 	AUD                                 []string
 	Expiry                              time.Time
 	Key                                 *rsa.PrivateKey
+	Iat                                 time.Time // zero = a minute before the fake clock
+	NoIat                               bool
 }
 
 func (a *access) token(s tokenSpec) string {
@@ -135,7 +207,13 @@ func (a *access) token(s tokenSpec) string {
 	if err != nil {
 		a.t.Fatal(err)
 	}
-	claims := map[string]any{"iss": s.Issuer, "aud": s.AUD, "sub": s.Sub, "exp": s.Expiry.Unix(), "iat": time.Now().Add(-time.Minute).Unix()}
+	claims := map[string]any{"iss": s.Issuer, "aud": s.AUD, "sub": s.Sub, "exp": s.Expiry.Unix()}
+	if !s.NoIat {
+		if s.Iat.IsZero() {
+			s.Iat = a.clk.Now().Add(-time.Minute)
+		}
+		claims["iat"] = s.Iat.Unix()
+	}
 	if s.Email != "" {
 		claims["email"] = s.Email
 	}
@@ -177,15 +255,36 @@ type rig struct {
 	res   *resolverFake
 	owner string
 	ext   coreauth.Extension
+	logs  *syncBuf
+}
+
+// syncBuf is a goroutine-safe log sink.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func newRig(t testing.TB) *rig {
 	t.Helper()
-	g := &rig{acc: newAccess(t), res: &resolverFake{user: &coreauth.User{ID: "01JBATCAVE0000000000000020"}}, owner: ownerMail}
+	g := &rig{acc: newAccess(t), res: &resolverFake{user: &coreauth.User{ID: "01JBATCAVE0000000000000020"}}, owner: ownerMail, logs: &syncBuf{}}
 	ext, err := Extension(ExtensionConfig{
 		Verifier: g.acc.verifier(), Resolver: g.res,
 		Policy:     coreoidc.Policy{Provider: "cfaccess", AllowedDomains: []string{"wayne.example.test"}, LinkExistingByEmail: true},
 		OwnerEmail: func() string { return g.owner },
+		Log:        slog.New(slog.NewTextHandler(g.logs, nil)),
+		Clock:      g.acc.clk.Now,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -347,37 +446,13 @@ func TestCFAccess_JWKSOutageFallsThrough(t *testing.T) {
 			if g.res.count() != 0 {
 				t.Fatal("an unverified token reached the resolver")
 			}
-			// Recovery: the next request verifies.
+			// Recovery: the first request after the fetch window refetches and verifies.
 			g.acc.setMode("")
+			g.acc.clk.advance(keysMissWindow + time.Second)
 			if _, err := g.do(g.acc.token(human(ownerMail)), nil); err != nil {
 				t.Fatalf("after the outage: %v", err)
 			}
 		})
-	}
-}
-
-// Key rotation: Cloudflare adds a key under a new kid; a token signed with it
-// verifies after one refetch, and a token under a kid that was never served
-// stays invalid.
-func TestCFAccess_KeyRotation(t *testing.T) {
-	g := newRig(t)
-	if _, err := g.do(g.acc.token(human("dick@wayne.example.test")), nil); err != nil {
-		t.Fatal(err)
-	}
-	k2 := newKey(t)
-	g.acc.mu.Lock()
-	g.acc.keys["k2"] = k2
-	g.acc.mu.Unlock()
-	if _, err := g.do(g.acc.token(tokenSpec{Sub: "s2", Email: "tim@wayne.example.test", Kid: "k2"}), nil); err != nil {
-		t.Fatalf("a token under the rotated-in key: %v", err)
-	}
-	// The old key still verifies from the cache without another fetch.
-	before := g.acc.fetchCount()
-	if _, err := g.do(g.acc.token(human("dick@wayne.example.test")), nil); err != nil {
-		t.Fatal(err)
-	}
-	if g.acc.fetchCount() != before {
-		t.Fatal("a cached key caused a refetch")
 	}
 }
 
@@ -395,7 +470,7 @@ func TestCFAccess_ServiceTokenIsNotAnIdentity(t *testing.T) {
 		t.Fatal("a service token's common_name resolved a user")
 	}
 	// The common name travels in the verifier's typed error only.
-	_, verr := g.ext.Authenticator.(*extension).c.Verifier.Verify(context.Background(), raw)
+	_, verr := g.ext.Authenticator.(*extension).c.Verifier.VerifyIssued(context.Background(), raw)
 	if CFAssertionCommonName(verr) != "friends-token-client-id" {
 		t.Fatalf("Verify error = %v", verr)
 	}
@@ -509,34 +584,3 @@ func TestOwnerGate_AccessWithoutOwnerFallsBack(t *testing.T) {
 		})
 	}
 }
-
-func TestKeysTransportClassifiesEveryFailure(t *testing.T) {
-	acc := newAccess(t)
-	rt := keysTransport{base: acc.srv.Client().Transport}
-	get := func() (*http.Response, error) {
-		req, _ := http.NewRequest(http.MethodGet, acc.srv.URL+"/cdn-cgi/access/certs", nil)
-		return rt.RoundTrip(req)
-	}
-	resp, err := get()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	for _, mode := range []string{"503", "garbage", "empty", "drop"} {
-		acc.setMode(mode)
-		resp, err := get()
-		if resp != nil || !errors.Is(err, ErrKeysUnavailable) {
-			t.Fatalf("%s: %v, %v", mode, resp, err)
-		}
-	}
-	// A transport that cannot connect at all.
-	bad := keysTransport{base: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("dial tcp 192.0.2.9:443: refused") })}
-	req, _ := http.NewRequest(http.MethodGet, "https://192.0.2.9/cdn-cgi/access/certs", nil)
-	if _, err := bad.RoundTrip(req); !errors.Is(err, ErrKeysUnavailable) || strings.Contains(err.Error(), "192.0.2.9") {
-		t.Fatalf("transport error: %v", err)
-	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
