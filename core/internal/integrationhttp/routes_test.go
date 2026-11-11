@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/routes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c8a14f73-2d6b-4e90-b5a7-91f0e3d2864b
 // last-edited: 2026-11-11
 
@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -130,7 +132,7 @@ var wantRoutes = []struct {
 	{http.MethodPost, "/api/core/v1/integrations/{kind}/test", "testIntegration", "core:integrations.manage", true},
 	{http.MethodPost, "/api/core/v1/integrations/{kind}/instances/{id}/test", "testIntegrationInstance", "core:integrations.manage", true},
 	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances/{id}/health", "getIntegrationInstanceHealth", "core:integrations.read", true},
-	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}/hold", "releaseIntegrationInstanceHold", "core:integrations.manage", true},
+	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}/hold", "releaseIntegrationInstanceHold", "core:integrations.manage", false},
 }
 
 func registered(t *testing.T) *httpapi.Router {
@@ -634,32 +636,42 @@ func TestIntegrationHTTP_HoldReleaseCallsReleaseHold(t *testing.T) {
 	}
 	sent := len(e.out.Sent())
 
-	// No hold: 404 no_hold, nothing released, nothing probed or sent.
-	_, err := e.api.releaseHold(ctx, in(ctx, ir))
-	wantStatus(t, err, http.StatusNotFound, "no_hold")
-	if got := e.holds.released(); len(got) != 0 {
-		t.Fatalf("ReleaseHold called with no hold: %v", got)
+	// No hold: 204 (the call is idempotent), nothing released, nothing probed
+	// or sent.
+	if _, err := e.api.releaseHold(ctx, in(ctx, ir)); err != nil {
+		t.Fatalf("release with no hold: %v", err)
+	}
+	if e.holds.heldScopeCalls() != 1 {
+		t.Errorf("HoldFor was asked %d times, want 1", e.holds.heldScopeCalls())
+	}
+	if got := e.holds.releaseCalls(); len(got) != 0 {
+		t.Fatalf("ReleaseHoldIf called with no hold: %v", got)
 	}
 	if probes.Load() != 0 || len(e.out.Sent()) != sent {
 		t.Errorf("a release with no hold probed %d times and sent %d requests", probes.Load(), len(e.out.Sent())-sent)
 	}
 
 	// An empty scope is no scope: it could mean "every hold".
-	e.holds.holdOn(ref, "")
-	_, err = e.api.releaseHold(ctx, in(ctx, ir))
-	wantStatus(t, err, http.StatusNotFound, "no_hold")
-	if got := e.holds.released(); len(got) != 0 {
-		t.Fatalf("an empty scope was released: %q", got)
+	e.holds.holdOn(ref, integrations.Hold{})
+	if _, err := e.api.releaseHold(ctx, in(ctx, ir)); err != nil {
+		t.Fatalf("release of an empty scope: %v", err)
+	}
+	if got := e.holds.releaseCalls(); len(got) != 0 {
+		t.Fatalf("a hold with no scope was released: %v", got)
 	}
 
-	// An active hold: released once, by the scope the holds registry reports,
-	// without a probe.
-	e.holds.holdOn(ref, "gotham-quota")
+	// An active hold: released once, and the hold handed to ReleaseHoldIf is
+	// exactly the one HoldFor read, without a probe.
+	quota := e.hold("gotham-quota", 0)
+	e.holds.holdOn(ref, quota)
 	if _, err := e.api.releaseHold(ctx, in(ctx, ir)); err != nil {
 		t.Fatalf("release: %v", err)
 	}
+	if got := e.holds.releaseCalls(); len(got) != 1 || got[0] != quota {
+		t.Errorf("ReleaseHoldIf calls = %v, want one for %v", got, quota)
+	}
 	if got := e.holds.released(); !slices.Equal(got, []string{"gotham-quota"}) {
-		t.Errorf("ReleaseHold calls = %v, want one for gotham-quota", got)
+		t.Errorf("released = %v, want gotham-quota", got)
 	}
 	if probes.Load() != 0 || len(e.out.Sent()) != sent {
 		t.Errorf("a release probed %d times and sent %d requests", probes.Load(), len(e.out.Sent())-sent)
@@ -681,6 +693,7 @@ func TestIntegrationHTTP_HoldReleaseCallsReleaseHold(t *testing.T) {
 	assertNoLeak(t, "health", mustJSON(t, h), "Joker")
 
 	// A failing release is a plain error: httpapi answers 500 without text.
+	e.holds.holdOn(ref, quota)
 	e.holds.err = errors.New("keel over")
 	_, err = e.api.releaseHold(ctx, in(ctx, ir))
 	if _, ok := errors.AsType[*httpapi.Error](err); ok || err == nil {
@@ -691,6 +704,57 @@ func TestIntegrationHTTP_HoldReleaseCallsReleaseHold(t *testing.T) {
 	e.api.holds = nil
 	_, err = e.api.releaseHold(ctx, in(ctx, ir))
 	wantStatus(t, err, http.StatusServiceUnavailable, "unavailable")
+}
+
+// TestIntegrationHTTP_HoldChangedBetweenReadAndRelease: a hold replaced between
+// HoldFor and ReleaseHoldIf is not released unseen: 409 hold_changed, the
+// newer hold still in force, and the answer carries no hold text. A second
+// call reads the current hold and releases it. A hold that ended in that gap
+// is a 204 (the goal is met).
+func TestIntegrationHTTP_HoldChangedBetweenReadAndRelease(t *testing.T) {
+	e := newEnv(t)
+	ctx := adminCtx()
+	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
+	ref := integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}
+	ir := instanceReq{Kind: kindNotify, ID: roofID}
+	older := e.hold("gotham-quota", 0)
+	newer := e.hold("gotham-quota", time.Hour)
+	newer.Detail = "<html>The Joker's plan</html>"
+	e.holds.holdOn(ref, older)
+	e.holds.afterRead = func(f *fakeHolds) { f.holdOn(ref, newer) }
+
+	_, err := e.api.releaseHold(ctx, in(ctx, ir))
+	wantStatus(t, err, http.StatusConflict, "hold_changed")
+	assertNoLeak(t, "the 409", errBlob(t, err), "Joker", "gotham-quota")
+	if got := e.holds.released(); len(got) != 0 {
+		t.Fatalf("a stale release ended %v", got)
+	}
+	if got := e.holds.releaseCalls(); len(got) != 1 || got[0] != older {
+		t.Errorf("ReleaseHoldIf was handed %v, want the hold that was read", got)
+	}
+	if cur, ok := e.holds.HoldFor(ref); !ok || cur != newer {
+		t.Errorf("the newer hold = %v (in force %v), want it untouched", cur, ok)
+	}
+
+	// Read again and decide again: the current hold is released.
+	e.holds.afterRead = nil
+	if _, err := e.api.releaseHold(ctx, in(ctx, ir)); err != nil {
+		t.Fatalf("the second release: %v", err)
+	}
+	if got := e.holds.released(); !slices.Equal(got, []string{"gotham-quota"}) {
+		t.Errorf("released = %v", got)
+	}
+
+	// The hold ended between the read and the release: nothing in force, 204.
+	e.holds.holdOn(ref, older)
+	e.holds.afterRead = func(f *fakeHolds) {
+		f.mu.Lock()
+		delete(f.held, ref)
+		f.mu.Unlock()
+	}
+	if _, err := e.api.releaseHold(ctx, in(ctx, ir)); err != nil {
+		t.Errorf("a hold that ended in the gap: %v", err)
+	}
 }
 
 // TestIntegrationHTTP_HoldOfUnprobableInstanceIsReleased: a hold on a
@@ -719,7 +783,7 @@ func TestIntegrationHTTP_HoldOfUnprobableInstanceIsReleased(t *testing.T) {
 			t.Fatalf("%s: Registry.Health = %+v, %v; want a static %s finding with no hold", id, h, err, want)
 		}
 		scope := "gotham-quota-" + id
-		e.holds.holdOn(ref, scope)
+		e.holds.holdOn(ref, e.hold(scope, 0))
 		if _, err := e.api.releaseHold(ctx, in(ctx, instanceReq{Kind: kindNotify, ID: id})); err != nil {
 			t.Fatalf("%s: release: %v", id, err)
 		}
@@ -741,7 +805,7 @@ func TestIntegrationHTTP_HoldRouteChecksManage(t *testing.T) {
 	ctx := adminCtx()
 	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
 	ref := integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}
-	e.holds.holdOn(ref, "gotham-quota")
+	e.holds.holdOn(ref, e.hold("gotham-quota", 0))
 
 	reader := integrationstest.As(context.Background(), auth.MethodSession, "core:integrations.read")
 	noPerms := &auth.Principal{Method: auth.MethodSession}
@@ -765,18 +829,19 @@ func TestIntegrationHTTP_HoldRouteChecksManage(t *testing.T) {
 		t.Error("the holds were read for a caller without manage")
 	}
 
-	// The constant matches the Registry's: a principal holding exactly
-	// permManage can write through it.
-	only := integrationstest.As(context.Background(), auth.MethodSession, permManage)
+	// The route's permission is the Registry's constant (integrations.ManagePerm,
+	// also pinned as text by the route table): a principal holding exactly it
+	// can write through the Registry and release a hold.
+	only := integrationstest.As(context.Background(), auth.MethodSession, integrations.ManagePerm)
 	if _, err := e.update(only, kindNotify, roofID, func() IntegrationInstanceBody {
 		b := signalBody("", "http://192.0.2.20/", "")
 		b.Version = 1
 		return b
 	}()); err != nil {
-		t.Errorf("a principal holding permManage cannot write: %v", err)
+		t.Errorf("a principal holding integrations.ManagePerm cannot write: %v", err)
 	}
 	if _, err := e.api.releaseHold(only, in(only, instanceReq{Kind: kindNotify, ID: roofID})); err != nil {
-		t.Errorf("a principal holding permManage cannot release: %v", err)
+		t.Errorf("a principal holding integrations.ManagePerm cannot release: %v", err)
 	}
 }
 
@@ -831,8 +896,8 @@ func TestIntegrationHTTP_AuditOncePerAction(t *testing.T) {
 	if _, err := e.api.getHealth(ctx, in(ctx, instanceReq{Kind: kindNotify, ID: roofID})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.api.releaseHold(ctx, in(ctx, instanceReq{Kind: kindNotify, ID: roofID})); err == nil {
-		t.Fatal("a release with no hold succeeded")
+	if _, err := e.api.releaseHold(ctx, in(ctx, instanceReq{Kind: kindNotify, ID: roofID})); err != nil {
+		t.Fatal(err)
 	}
 	e.get(t, ctx, kindNotify, roofID)
 	bad := signalBody("", "http://192.0.2.77/", "")
@@ -1001,7 +1066,7 @@ func TestInstanceView_NeverEmitsSecretShapedSettings(t *testing.T) {
 			"schema":  "declared secret",
 		},
 	}
-	v := instanceView(cfg, map[string]bool{"schema": true})
+	v := instanceView(cfg, map[string]bool{"schema": true}, nil)
 	if len(v.Settings) != 2 || v.Settings["plain"] != "ok" || v.Settings["nested"] == nil {
 		t.Errorf("settings = %+v", v.Settings)
 	}
@@ -1331,12 +1396,51 @@ func TestHealthView_BoundsAdapterText(t *testing.T) {
 
 // ---- PUT: required fields and the GET round trip --------------------------
 
-// TestUpdateRoute_IsLenient pins what makes a GET answer a valid PUT body:
-// the route accepts the read-only keys it carries.
-func TestUpdateRoute_IsLenient(t *testing.T) {
-	rt := updateRoute(rbac.Need(permManage), nil)
-	if !rt.Lenient || rt.MaxBody != maxBody || rt.Method != http.MethodPut {
+// TestUpdateRoute_IsStrict: the route decodes strictly, so an unknown key is
+// a 400 and not a silently dropped edit. What lets a GET answer through is the
+// read-only members of IntegrationInstanceReplace, tested below.
+func TestUpdateRoute_IsStrict(t *testing.T) {
+	rt := updateRoute(rbac.Need(integrations.ManagePerm), nil)
+	if rt.Lenient || rt.MaxBody != maxBody || rt.Method != http.MethodPut {
 		t.Errorf("update route = lenient %v, max body %d, %s", rt.Lenient, rt.MaxBody, rt.Method)
+	}
+}
+
+// strictDecode decodes raw into a PUT body the way httpapi does for a route
+// that is not Lenient: unknown fields are an error.
+func strictDecode(raw string) (IntegrationInstanceReplace, error) {
+	var b IntegrationInstanceReplace
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	return b, dec.Decode(&b)
+}
+
+// TestIntegrationHTTP_ReplaceDecodesStrictly: a misspelt key is refused, also
+// inside limits; the keys a GET answer carries are not.
+func TestIntegrationHTTP_ReplaceDecodesStrictly(t *testing.T) {
+	const ok = `"name":"GCPD roof","enabled":true,"priority":0,"local":false,"limits":{"rps":2},"version":1`
+	for name, raw := range map[string]string{
+		"misspelt secrets":      `{` + ok + `,"secret":{"password":"x"}}`,
+		"misspelt in limits":    `{"name":"x","enabled":true,"priority":0,"local":false,"limits":{"rsp":2},"version":1}`,
+		"misspelt in nested":    `{"name":"x","enabled":true,"priority":0,"local":false,"limits":{"daily":{"totl":2}},"version":1}`,
+		"an editable-looking x": `{` + ok + `,"enable":true}`,
+	} {
+		if _, err := strictDecode(raw); err == nil {
+			t.Errorf("%s: a strict decode accepted %s", name, raw)
+		}
+	}
+	readOnly := `{` + ok + `,"kind":"notify","origin":"ui","secrets_set":{"password":true},"locked":{"channel":"env"},"stored":true,"updated":"2026-11-11T12:00:00Z"}`
+	b, err := strictDecode(readOnly)
+	if err != nil {
+		t.Fatalf("the read-only keys of a GET answer were refused: %v", err)
+	}
+	// Accepted and never read: they reach no config.
+	cfg, secretsIn, err := func() (integrations.InstanceConfig, map[string]secrets.Value, error) {
+		body := b.body()
+		return body.config(integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}, body.Version)
+	}()
+	if err != nil || secretsIn != nil || cfg.Origin != "" || cfg.Locked != nil || cfg.Stored {
+		t.Errorf("a read-only key reached the config: %+v %v %v", cfg, secretsIn, err)
 	}
 }
 
@@ -1397,16 +1501,10 @@ func TestIntegrationHTTP_GetEditPutRoundTrip(t *testing.T) {
 				t.Errorf("%s: the answer lacks %s: %s", id, key, blob)
 			}
 		}
-		// A strict decoder refuses the answer's read-only keys: that is why
-		// the route is Lenient (updateRoute).
-		strict := json.NewDecoder(strings.NewReader(blob))
-		strict.DisallowUnknownFields()
-		if err := strict.Decode(&IntegrationInstanceReplace{}); err == nil {
-			t.Errorf("%s: a strict decode accepted the answer's read-only keys", id)
-		}
-		var body IntegrationInstanceReplace
-		if err := json.Unmarshal([]byte(blob), &body); err != nil {
-			t.Fatalf("%s: %v", id, err)
+		// The answer is a valid body for the strict route.
+		body, err := strictDecode(blob)
+		if err != nil {
+			t.Fatalf("%s: a strict decode refused the answer: %v", id, err)
 		}
 		name := "edited " + id
 		body.Name = &name
@@ -1442,8 +1540,8 @@ func TestIntegrationHTTP_GetEditPutRoundTrip(t *testing.T) {
 	if _, ok := cur.Settings["channel"]; ok || cur.Locked["channel"] == "" {
 		t.Errorf("channel = %v, locked %v: want it left out of settings and still marked locked", cur.Settings["channel"], cur.Locked)
 	}
-	var body IntegrationInstanceReplace
-	if err := json.Unmarshal([]byte(blob), &body); err != nil {
+	body, err := strictDecode(blob)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := (&updateReq{Kind: kindNotify, ID: roofID, Body: body}).Validate(); err != nil {
@@ -1459,84 +1557,212 @@ func TestIntegrationHTTP_GetEditPutRoundTrip(t *testing.T) {
 	assertNoLeak(t, "the list", mustJSON(t, list), "robin", "grayson")
 }
 
-// TestInstanceView_WithholdsUserinfoURLs: a URL carrying userinfo is left out
-// wherever it sits in settings, whatever the container; clean URLs and text
-// with no "//" authority holding "@" stay. The settings the view reads are
-// not edited.
-func TestInstanceView_WithholdsUserinfoURLs(t *testing.T) {
+// TestInstanceView_WithholdsUnsafeLockedAndURLFields: a field an operator
+// value locks, and a URL-typed field, is left out WHOLE when any part of its
+// value could carry a URL's credentials, whatever the container. A field that
+// is neither is never screened.
+func TestInstanceView_WithholdsUnsafeLockedAndURLFields(t *testing.T) {
 	type named string
-	nested := map[string]any{"hook": "https://oracle:secret@192.0.2.40/x", "ok": "https://192.0.2.40/", "https://k:anykey1@192.0.2.56/": 1}
-	cfg := integrations.InstanceConfig{
-		Ref: integrations.Ref{Kind: integrations.KindNotify, Instance: "x"},
-		Settings: map[string]any{
-			"url":        "https://alfred:hunter2@192.0.2.40:8443/path?x=1",
-			"relative":   "//alfred:hunter2@192.0.2.40/",
-			"unparsed":   "http://alfred:hunter2@192.0.2.40:badport/",
-			"second":     "note //x https://dick:grayson1@192.0.2.43/",
-			"third":      "a // b // c // https://tim:drake1@192.0.2.44",
-			"spaced":     "https://harvey:dent1 two@192.0.2.45/",
-			"backslash":  `https:\\selina:kyle1@192.0.2.46/`,
-			"query":      "https://192.0.2.40/path?next=//jim:gordon1@192.0.2.47",
-			"mapstring":  map[string]string{"ok": "https://192.0.2.40/", "bad": "https://a:mapstring1@192.0.2.48/", "https://k:keyed1@192.0.2.49/": "v"},
-			"maplist":    []map[string]any{{"bad": "https://a:maplist1@192.0.2.50/", "ok": "https://192.0.2.40/", "//k:refkey1@h": 1}, {"deep": []any{map[string]string{"bad": "//a:deep1@h"}}}},
-			"namedstr":   named("https://a:named1@192.0.2.51/"),
-			"ptr":        func() *string { s := "https://a:ptr1@192.0.2.52/"; return &s }(),
-			"bytes":      []byte("https://a:bytes1@192.0.2.53/"),
-			"int-keyed":  map[int]string{1: "https://a:intkey1@192.0.2.54/"},
-			"struct":     struct{ U string }{U: "https://a:struct1@192.0.2.55/"},
-			"fn":         func() {},
-			"clean":      "https://192.0.2.40/path",
-			"text":       "ask the commissioner about it @ noon",
-			"email":      "alfred@wayne.example",
-			"plainport":  "http://192.0.2.40:8080/",
-			"number":     float64(3),
-			"flag":       true,
-			"nothing":    nil,
-			"nested":     nested,
-			"list":       []any{"https://192.0.2.41/", "https://a:b@192.0.2.42/"},
-			"strings":    []string{"https://192.0.2.41/", "https://a:b@192.0.2.42/"},
-			"typedslice": []named{"https://192.0.2.41/", "https://a:typed1@192.0.2.42/"},
-		},
+	const ok = "https://192.0.2.40/"
+	cycleMap := map[string]any{}
+	cycleMap["self"] = cycleMap
+	var cyclePtr any
+	cyclePtr = &cyclePtr
+	deep := func(n int) any {
+		var v any = "x"
+		for range n {
+			v = []any{v}
+		}
+		return v
 	}
-	v := instanceView(cfg, nil)
+	var deepPtr any = "x" // a chain of pointers, which only the reflect walk follows
+	for range 100 {
+		p := new(any)
+		*p = deepPtr
+		deepPtr = p
+	}
+	var wide any = []any{"x"}
+	for range 40 { // 2^40 nodes if walked as a tree: the node budget ends it
+		wide = []any{wide, wide}
+	}
+	bad := map[string]any{
+		"url":       "https://alfred:hunter2@192.0.2.40:8443/path?x=1",
+		"relative":  "//alfred:hunter2@192.0.2.40/",
+		"unparsed":  "http://alfred:hunter2@192.0.2.40:badport/",
+		"second":    "note //x https://dick:grayson1@192.0.2.43/",
+		"third":     "a // b // c // https://tim:drake1@192.0.2.44",
+		"spaced":    "https://harvey:dent1 two@192.0.2.45/",
+		"backslash": `https:\\selina:kyle1@192.0.2.46/`,
+		"query":     "https://192.0.2.40/path?next=//jim:gordon1@192.0.2.47",
+		"mapstring": map[string]string{"ok": ok, "bad": "https://a:mapstring1@192.0.2.48/"},
+		"keystring": map[string]string{"https://k:keyed1@192.0.2.49/": "v"},
+		"maplist":   []map[string]any{{"ok": ok}, {"bad": "https://a:maplist1@192.0.2.50/"}},
+		"namedstr":  named("https://a:named1@192.0.2.51/"),
+		"ptr":       func() *string { s := "https://a:ptr1@192.0.2.52/"; return &s }(),
+		"bytes":     []byte("https://a:bytes1@192.0.2.53/"),
+		"intkey":    map[int]string{1: "https://a:intkey1@192.0.2.54/"},
+		"anykey":    map[string]any{"ok": ok, "https://k:anykey2@192.0.2.60/": 1}, // only the key is bad
+		"intclean":  map[int]bool{1: true},                                        // a clean map that is not keyed by strings
+		"refkey":    map[string]int{"https://k:refkey1@192.0.2.59/": 1},           // a credential in a key the type switch does not name
+		"struct":    struct{ U string }{U: "https://a:struct1@192.0.2.55/"},
+		"fn":        func() {},
+		"nested":    map[string]any{"ok": ok, "hook": "https://oracle:secret1@192.0.2.40/x", "https://k:anykey1@192.0.2.56/": 1},
+		"list":      []any{"https://192.0.2.41/", "https://a:listed1@192.0.2.42/"},
+		"strings":   []string{"https://192.0.2.41/", "https://a:strings1@192.0.2.42/"},
+		"typed":     []named{"https://192.0.2.41/", "https://a:typed1@192.0.2.42/"},
+		"deep":      deep(100),
+		"deepptr":   deepPtr,
+		"cyclemap":  cycleMap,
+		"cycleptr":  cyclePtr,
+		"wide":      wide,
+	}
+	good := map[string]any{
+		"clean":     "https://192.0.2.40/path",
+		"text":      "ask the commissioner about it @ noon",
+		"email":     "alfred@wayne.example",
+		"plainport": "http://192.0.2.40:8080/",
+		"number":    float64(3),
+		"flag":      true,
+		"nothing":   nil,
+		"cleanmap":  map[string]string{"a": ok},
+		"cleanlist": []any{ok, map[string]any{"b": []string{ok}}},
+		"shallow":   deep(10),
+	}
+	settings := map[string]any{}
+	locked := map[string]string{}
+	for k, v := range bad {
+		settings[k], locked[k] = v, "env"
+	}
+	for k, v := range good {
+		settings[k], locked[k] = v, "env"
+	}
+	// Unlocked fields are not screened, however they read.
+	settings["template"] = "🎧 {{title}} // @{{narrator}}"
+	settings["unlocked-map"] = map[string]any{"bad": "https://a:unlocked1@192.0.2.57/"}
+	// A URL-typed field is screened though no operator value locks it.
+	settings["uri-bad"] = "https://a:uribad1@192.0.2.58/"
+	settings["uri-ok"] = ok
+	cfg := integrations.InstanceConfig{
+		Ref:      integrations.Ref{Kind: integrations.KindNotify, Instance: "x"},
+		Settings: settings, Locked: locked,
+	}
+	v := instanceView(cfg, nil, map[string]bool{"uri-bad": true, "uri-ok": true})
 	blob := mustJSON(t, v)
-	assertNoLeak(t, "the view", blob, "hunter2", "alfred:", "oracle", "secret@", "a:b", "grayson1", "drake1", "dent1", "kyle1",
-		"gordon1", "mapstring1", "keyed1", "maplist1", "deep1", "named1", "ptr1", "bytes1", "intkey1", "struct1", "typed1", "anykey1", "refkey1")
-	for _, k := range []string{"url", "relative", "unparsed", "second", "third", "spaced", "backslash", "query", "namedstr", "ptr", "bytes",
-		"int-keyed", "struct", "fn"} {
+	assertNoLeak(t, "the view", blob, "hunter2", "alfred:", "secret1", "grayson1", "drake1", "dent1", "kyle1", "gordon1", "mapstring1",
+		"keyed1", "refkey1", "anykey2", "maplist1", "named1", "ptr1", "bytes1", "intkey1", "struct1", "typed1", "anykey1", "listed1", "strings1", "uribad1")
+	for k := range bad {
 		if _, ok := v.Settings[k]; ok {
 			t.Errorf("%s was answered: %v", k, v.Settings[k])
 		}
 	}
-	for _, k := range []string{"clean", "text", "email", "plainport", "number", "flag", "nothing"} {
-		if _, ok := v.Settings[k]; !ok {
-			t.Errorf("%s was dropped", k)
+	for k, want := range good {
+		got, ok := v.Settings[k]
+		if !ok || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s = %v (present %v), want %v kept as stored", k, got, ok, want)
 		}
 	}
-	if got := v.Settings["nested"].(map[string]any); len(got) != 1 || got["ok"] != "https://192.0.2.40/" {
-		t.Errorf("nested = %v", got)
+	if v.Settings["template"] != "🎧 {{title}} // @{{narrator}}" || v.Settings["unlocked-map"] == nil || v.Settings["uri-ok"] != ok {
+		t.Errorf("an unscreened or clean field was dropped: %v", v.Settings)
 	}
-	if got := v.Settings["list"].([]any); len(got) != 1 || got[0] != "https://192.0.2.41/" {
-		t.Errorf("list = %v", got)
+	if _, ok := v.Settings["uri-bad"]; ok {
+		t.Error("a URL-typed field holding userinfo was answered")
 	}
-	if got := v.Settings["strings"].([]string); len(got) != 1 || got[0] != "https://192.0.2.41/" {
-		t.Errorf("strings = %v", got)
+	if len(v.Locked) != len(locked) {
+		t.Errorf("locked = %v: the lock reasons are still answered", v.Locked)
 	}
-	if got := v.Settings["mapstring"].(map[string]string); len(got) != 1 || got["ok"] != "https://192.0.2.40/" {
-		t.Errorf("mapstring = %v", got)
+}
+
+// TestSchemaFields reads the secret and URL-typed properties of a schema.
+func TestSchemaFields(t *testing.T) {
+	e := newEnv(t)
+	for m := range e.reg.Adapters(integrations.KindNotify) {
+		secret, uri := schemaFields(m)
+		if !secret["password"] || secret["url"] || !uri["url"] || uri["password"] || uri["channel"] {
+			t.Errorf("batsignal: secret %v, uri %v", secret, uri)
+		}
 	}
-	got := v.Settings["maplist"].([]any)
-	if len(got) != 2 || len(got[0].(map[string]any)) != 1 || got[0].(map[string]any)["ok"] != "https://192.0.2.40/" {
-		t.Errorf("maplist = %v", got)
+	// A URL list is URL-typed through its items; a plain list and a string
+	// field of another format are not; an unreadable schema yields none.
+	secret, uri := schemaFieldsOf(json.RawMessage(`{"properties":{
+		"hooks":{"type":"array","items":{"type":"string","format":"uri"}},
+		"names":{"type":"array","items":{"type":"string"}},
+		"mail":{"type":"string","format":"email"},
+		"home":{"type":"string","format":"uri"},
+		"key":{"type":"string","x-mediacore-secret":true}}}`))
+	if !uri["hooks"] || !uri["home"] || uri["names"] || uri["mail"] || uri["key"] || !secret["key"] || len(secret) != 1 || len(uri) != 2 {
+		t.Errorf("secret %v, uri %v", secret, uri)
 	}
-	if deep := got[1].(map[string]any)["deep"].([]any); len(deep) != 1 || len(deep[0].(map[string]any)) != 0 {
-		t.Errorf("maplist deep = %v", deep)
+	if s, u := schemaFieldsOf(json.RawMessage(`{`)); s != nil || u != nil {
+		t.Errorf("an unreadable schema: %v %v", s, u)
 	}
-	if got := v.Settings["typedslice"].([]any); len(got) != 1 || got[0] != named("https://192.0.2.41/") {
-		t.Errorf("typedslice = %v", got)
+	var none integrations.Meta
+	if s, u := schemaFields(none); len(s) != 0 || len(u) != 0 {
+		t.Errorf("an empty schema: %v %v", s, u)
 	}
-	if len(nested) != 3 {
-		t.Errorf("the view edited the Registry's settings: %v", nested)
+}
+
+// TestIntegrationHTTP_UnlockedTemplateRoundTrips: free text in an unlocked
+// field is answered as stored, "// @" included, and a GET-edit-PUT keeps it.
+func TestIntegrationHTTP_UnlockedTemplateRoundTrips(t *testing.T) {
+	const template = "🎧 {{title}} // @{{narrator}}"
+	e := newEnv(t)
+	ctx := adminCtx()
+	b := signalBody(roofID, "http://192.0.2.20/", "alfred-1")
+	b.Settings["channel"] = template
+	if got := e.create(t, ctx, kindNotify, b); got.Settings["channel"] != template {
+		t.Errorf("create answered channel = %v", got.Settings["channel"])
+	}
+	cur := e.get(t, ctx, kindNotify, roofID)
+	if cur.Settings["channel"] != template {
+		t.Fatalf("GET answered channel = %v", cur.Settings["channel"])
+	}
+	body, err := strictDecode(mustJSON(t, cur))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "renamed"
+	body.Name = &name
+	got, err := e.api.updateInstance(ctx, in(ctx, updateReq{Kind: kindNotify, ID: roofID, Body: body}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := e.reg.Config(integrations.Ref{Kind: integrations.KindNotify, Instance: roofID})
+	if got.Settings["channel"] != template || cfg.Settings["channel"] != template {
+		t.Errorf("after the round trip channel = %v (answer), %v (stored)", got.Settings["channel"], cfg.Settings["channel"])
+	}
+}
+
+// TestIntegrationHTTP_LockedContainerWithCredentialRoundTrips: an operator
+// value that locks an object holding one credential URL is left out of GET
+// whole, and the answer still round-trips (a field that kept only some of its
+// elements would be a 409 field_locked).
+func TestIntegrationHTTP_LockedContainerWithCredentialRoundTrips(t *testing.T) {
+	e := newEnv(t)
+	ctx := adminCtx()
+	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
+	raw := func(path, js string) iter.Seq2[config.Path, config.OperatorValue] {
+		return func(yield func(config.Path, config.OperatorValue) bool) {
+			yield(config.Path(path), config.OperatorValue{Value: json.RawMessage(js), Src: config.SourceEnv, By: "env " + path})
+		}
+	}
+	if err := e.reg.SetOverlay(context.Background(), raw("integrations.notify.gcpd-roof.extra",
+		`{"ok":"https://192.0.2.40/","bad":"https://robin:grayson@192.0.2.30/"}`)); err != nil {
+		t.Fatal(err)
+	}
+	cur := e.get(t, ctx, kindNotify, roofID)
+	if cur.Locked["extra"] == "" {
+		t.Fatalf("extra is not locked: %+v", cur.Locked)
+	}
+	assertNoLeak(t, "the view", mustJSON(t, cur), "robin", "grayson", "192.0.2.40")
+	if _, ok := cur.Settings["extra"]; ok {
+		t.Errorf("extra was answered in part: %v", cur.Settings["extra"])
+	}
+	body, err := strictDecode(mustJSON(t, cur))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.api.updateInstance(ctx, in(ctx, updateReq{Kind: kindNotify, ID: roofID, Body: body})); err != nil {
+		t.Errorf("PUT of the answer: %v", err)
 	}
 }
 
@@ -1647,31 +1873,5 @@ func TestIntegrationHTTP_ScopedTestAuditNamesStoredAdapter(t *testing.T) {
 	slices.Sort(got)
 	if want := []string{"false " + string(batsignal), "true " + string(batsignal)}; !slices.Equal(got, want) {
 		t.Errorf("recorded (scoped adapter) = %q, want %q", got, want)
-	}
-}
-
-// TestIntegrationHTTP_UnlockedUserinfoValueIsDroppedOnRoundTrip pins a known
-// effect of withholding by dropping: a plain string field (no format=uri, so
-// the Registry's userinfo check never runs on it) may hold a credential-shaped
-// URL, the view leaves it out, and a GET-edit-PUT then omits the field, which
-// clears it. Masking instead would send a corrupted URL back into storage.
-func TestIntegrationHTTP_UnlockedUserinfoValueIsDroppedOnRoundTrip(t *testing.T) {
-	e := newEnv(t)
-	ctx := adminCtx()
-	b := signalBody(roofID, "http://192.0.2.20/", "alfred-1")
-	b.Settings["channel"] = "http://robin:grayson@192.0.2.50/"
-	got := e.create(t, ctx, kindNotify, b)
-	assertNoLeak(t, "the create answer", mustJSON(t, got), "robin", "grayson")
-	cur := e.get(t, ctx, kindNotify, roofID)
-	assertNoLeak(t, "the view", mustJSON(t, cur), "robin", "grayson")
-	var body IntegrationInstanceReplace
-	if err := json.Unmarshal([]byte(mustJSON(t, cur)), &body); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.api.updateInstance(ctx, in(ctx, updateReq{Kind: kindNotify, ID: roofID, Body: body})); err != nil {
-		t.Fatal(err)
-	}
-	if cfg, _ := e.reg.Config(integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}); cfg.Settings["channel"] != nil {
-		t.Errorf("channel = %v after the round trip, want it cleared", cfg.Settings["channel"])
 	}
 }
