@@ -54,6 +54,7 @@ const (
 	permUsersManage      = rbac.Permission("core:users.manage")
 	actionAPIKeyCreate   = "core.apikey.create"
 	actionAPIKeyStatus   = "core.apikey.set_status"
+	actionAPIKeyRevoke   = "core.apikey.revoke"
 	actionSessionRevoke  = "core.session.revoke"
 	actionAuthenticate   = "core.auth.authenticate"
 	reasonNotInteractive = "not_interactive"

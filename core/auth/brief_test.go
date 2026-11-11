@@ -494,3 +494,39 @@ func TestAPIKey_ExpiredKeyIsRefused(t *testing.T) {
 	_, _, err = f.svc.CreateAPIKey(ctx, kp, auth.KeySpec{Name: "grapnel", Scopes: []rbac.Permission{"gotham:patrol"}})
 	wantErr(t, "a mint by an expired key", err, auth.ErrExpired)
 }
+
+// 05-rbac §8: a revocation is audited as core.apikey.revoke; every other
+// status change is core.apikey.set_status. Both name the key and carry the
+// transition.
+func TestAPIKey_StatusChangesAreAuditedByAction(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	dick := f.user("dick", "gotham.detective")
+	_, k := f.mint(f.session(dick), dick.ID, "gotham:patrol")
+	if err := f.svc.SetAPIKeyStatus(ctx, f.session(dick), k.ID, auth.KeyDisabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.RevokeAPIKey(ctx, f.session(dick), k.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.audit.mu.Lock()
+	recs := slices.Clone(f.audit.recorded)
+	f.audit.mu.Unlock()
+	want := []struct{ action, from, to string }{
+		{"core.apikey.create", "", ""},
+		{"core.apikey.set_status", "active", "disabled"},
+		{"core.apikey.revoke", "disabled", "revoked"},
+	}
+	if len(recs) != len(want) {
+		t.Fatalf("recorded %v, want %d records", f.audit.recordedActions(), len(want))
+	}
+	for i, w := range want {
+		r := recs[i]
+		if r.Action != w.action || r.Target.ID != k.ID {
+			t.Fatalf("record %d = %s on %q, want %s on %s", i, r.Action, r.Target.ID, w.action, k.ID)
+		}
+		if w.from != "" && (r.Details["from"] != w.from || r.Details["to"] != w.to) {
+			t.Fatalf("record %d details %v, want %s -> %s", i, r.Details, w.from, w.to)
+		}
+	}
+}
