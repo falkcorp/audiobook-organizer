@@ -1,5 +1,5 @@
 // file: core/integrations/download/deluge/client.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c1a8d4f7-2e69-4b03-9d5a-7f3e6b0a1c82
 // last-edited: 2026-11-11
 
@@ -149,9 +149,42 @@ func newRPC(base string, h integrations.HTTP, s integrations.SecretReader) (*rpc
 	}, nil
 }
 
+// refuseRedirect is the CheckRedirect of every request this client sends: the
+// Web UI never redirects a JSON-RPC call, and following one would replay the
+// body (auth.login carries the password) to a host nobody configured.
+func refuseRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// send makes one request through the instance's outbound client. The client is
+// the HTTP's own (its transport runs the gate and the dial guards) copied with
+// a redirect policy that follows nothing and no cookie jar, so a 3xx comes back
+// as the answer and never as a second request. An HTTP that offers no client
+// is used through Do; it is then the HTTP's own redirect policy that applies.
+func (c *rpc) send(req *http.Request) (*http.Response, error) {
+	if base := c.http.Client(); base != nil {
+		cl := *base
+		cl.CheckRedirect = refuseRedirect
+		cl.Jar = nil
+		return cl.Do(req)
+	}
+	return c.http.Do(req)
+}
+
 // call sends one JSON-RPC request and decodes the result. The request is
 // bounded by callTimeout and by ctx, whichever ends first.
 func (c *rpc) call(ctx context.Context, method string, params ...any) (json.RawMessage, error) {
+	return c.callRedacting(ctx, "", method, params...)
+}
+
+// callRedacting is call for a request whose params hold a secret: any answer
+// text kept in an error has the secret replaced, so a server that echoes the
+// request back cannot carry it into an error, a log line or a Detail.
+func (c *rpc) callRedacting(ctx context.Context, secret, method string, params ...any) (json.RawMessage, error) {
+	scrub := func(s string) string {
+		if secret == "" {
+			return s
+		}
+		return strings.ReplaceAll(s, secret, "[redacted]")
+	}
 	if params == nil {
 		params = []any{}
 	}
@@ -169,7 +202,7 @@ func (c *rpc) call(ctx context.Context, method string, params ...any) (json.RawM
 	for _, ck := range c.jar.Cookies(c.u) {
 		req.AddCookie(ck)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := c.send(req)
 	if err != nil {
 		return nil, fmt.Errorf("deluge rpc %s: %w", method, err)
 	}
@@ -183,14 +216,17 @@ func (c *rpc) call(ctx context.Context, method string, params ...any) (json.RawM
 	if len(raw) > maxBody {
 		return nil, &decodeError{What: method + " response", Err: errors.New("response too large")}
 	}
+	// Anything but 200 is a statusError, a 3xx included: the Location is never
+	// followed and never put in the error.
 	if resp.StatusCode != http.StatusOK {
-		return nil, &statusError{Status: resp.StatusCode, Excerpt: excerpt(raw)}
+		return nil, &statusError{Status: resp.StatusCode, Excerpt: scrub(excerpt(raw))}
 	}
 	var out rpcResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, &decodeError{What: method + " response", Err: err, Excerpt: excerpt(raw)}
+		return nil, &decodeError{What: method + " response", Err: err, Excerpt: scrub(excerpt(raw))}
 	}
 	if out.Error != nil {
+		out.Error.Message = scrub(out.Error.Message)
 		return nil, out.Error
 	}
 	return out.Result, nil
@@ -279,7 +315,7 @@ func (c *rpc) login(ctx context.Context) error {
 	if err != nil {
 		return &secretError{Err: err}
 	}
-	result, err := c.call(ctx, "auth.login", pw.Reveal())
+	result, err := c.callRedacting(ctx, pw.Reveal(), "auth.login", pw.Reveal())
 	if err != nil {
 		return fmt.Errorf("auth.login: %w", err)
 	}

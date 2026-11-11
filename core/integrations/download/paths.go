@@ -1,5 +1,5 @@
 // file: core/integrations/download/paths.go
-// version: 1.0.0
+// version: 1.1.1
 // guid: 0d2b7e94-3c58-4a16-9e0f-b41c7a8d5f23
 // last-edited: 2026-11-11
 
@@ -196,8 +196,62 @@ func (m mapper) ToLocal(source, remote string) (LocalPath, error) {
 		return "", fmt.Errorf("%w: %q", ErrUnmapped, remote)
 	}
 	rest := p.segs[len(bestRoot.segs):]
-	parts := append([]string{string(rows[best].Local)}, rest...)
-	return LocalPath(filepath.Join(parts...)), nil
+	// A segment the client reports is data, not path syntax on this host: a
+	// POSIX remote may legally hold a backslash or colon in a name, which on a
+	// Windows host is a separator or a volume switch.
+	out, ok := joinUnder(string(rows[best].Local), rest, filepath.Separator)
+	if !ok {
+		return "", fmt.Errorf("%w: the path cannot be mapped to this host", ErrUnmapped)
+	}
+	return LocalPath(out), nil
+}
+
+// joinUnder joins rest under root with every segment a plain name for a host
+// whose path separator is sep, then checks the result is still root plus
+// exactly those segments. It is the host-side guard of ToLocal; sep is a
+// parameter so the Windows-host rules are tested on any host.
+func joinUnder(root string, rest []string, sep rune) (string, bool) {
+	for _, seg := range rest {
+		if !safeLocalSegment(seg, sep) {
+			return "", false
+		}
+	}
+	out := filepath.Join(append([]string{root}, rest...)...)
+	want := localSegments(root)
+	got := localSegments(out)
+	if len(got) != len(want)+len(rest) || !slices.Equal(got[:len(want)], want) {
+		return "", false
+	}
+	return out, true
+}
+
+// safeLocalSegment reports a remote path segment that is one plain name on a
+// host whose separator is sep: not "." or "..", no NUL, no "/" or sep, and
+// (where sep is not "/") no backslash or volume colon.
+func safeLocalSegment(seg string, sep rune) bool {
+	if seg == "" || seg == "." || seg == ".." || strings.ContainsRune(seg, 0) {
+		return false
+	}
+	if strings.ContainsRune(seg, '/') || strings.ContainsRune(seg, sep) {
+		return false
+	}
+	if sep != '/' && strings.ContainsAny(seg, `\:`) {
+		return false
+	}
+	return true
+}
+
+// safeRemoteSegment reports a host path segment that is one plain name in
+// root's syntax: not "." or "..", no NUL, and for a Windows remote no
+// backslash, slash or colon (a separator or a drive switch there).
+func safeRemoteSegment(seg string, windows bool) bool {
+	if seg == "" || seg == "." || seg == ".." || strings.ContainsRune(seg, 0) {
+		return false
+	}
+	if windows && strings.ContainsAny(seg, `\/:`) {
+		return false
+	}
+	return true
 }
 
 // validLocal reports a usable Mapping.Local: an absolute host path.
@@ -226,9 +280,24 @@ func (m mapper) ToRemote(source string, local LocalPath) (string, error) {
 	if best < 0 {
 		return "", fmt.Errorf("%w: no mapping covers %s", ErrUnmapped, string(local))
 	}
-	remote, _ := parseRemote(rows[best].Remote)
-	remote.segs = append(slices.Clone(remote.segs), lp[bestLen:]...)
-	return remote.String(), nil
+	root, _ := parseRemote(rows[best].Remote)
+	rest := lp[bestLen:]
+	// Local segments are appended in the remote's syntax, so each must be one
+	// plain name there; the result is then parsed back and must keep the
+	// mapping's root and add exactly these segments.
+	for _, seg := range rest {
+		if !safeRemoteSegment(seg, root.windows) {
+			return "", fmt.Errorf("%w: a path segment cannot be mapped to the client", ErrUnmapped)
+		}
+	}
+	remote := remotePath{windows: root.windows, segs: append(slices.Clone(root.segs), rest...)}
+	out := remote.String()
+	back, ok := parseRemote(out)
+	if !ok || back.windows != root.windows || len(back.segs) != len(root.segs)+len(rest) ||
+		!back.hasPrefix(root, false) {
+		return "", fmt.Errorf("%w: the mapped path leaves its mapping root", ErrUnmapped)
+	}
+	return out, nil
 }
 
 // localSegments splits an absolute host path, cleaned, into its volume and
