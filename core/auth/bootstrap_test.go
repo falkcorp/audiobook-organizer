@@ -1,5 +1,5 @@
 // file: core/auth/bootstrap_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a0d8c64-2f1b-4e7a-9b35-6c8e1d4f7a20
 // last-edited: 2026-11-11
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io/fs"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,9 +29,31 @@ type stateFilesFake struct {
 	mu      sync.Mutex
 	removed []string
 	failRm  error
+	// written is label/name -> the last data written; perms the mode.
+	written   map[string][]byte
+	perms     map[string]fs.FileMode
+	failWrite error
 }
 
-func (s *stateFilesFake) WriteFile(label, name string, _ []byte, _ fs.FileMode) error { return nil }
+func (s *stateFilesFake) WriteFile(label, name string, data []byte, perm fs.FileMode) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failWrite != nil {
+		return s.failWrite
+	}
+	if s.written == nil {
+		s.written, s.perms = map[string][]byte{}, map[string]fs.FileMode{}
+	}
+	s.written[label+"/"+name], s.perms[label+"/"+name] = append([]byte(nil), data...), perm
+	return nil
+}
+
+// file is the last content written to label/name, "" when none.
+func (s *stateFilesFake) file(label, name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.TrimSpace(string(s.written[label+"/"+name]))
+}
 
 func (s *stateFilesFake) Remove(label, name string) error {
 	s.mu.Lock()

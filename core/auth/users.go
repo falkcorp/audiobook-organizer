@@ -1,5 +1,5 @@
 // file: core/auth/users.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
 // last-edited: 2026-11-11
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -472,43 +473,49 @@ func (s *Service) DeleteUser(ctx context.Context, actor *Principal, id UserID) e
 // deleteCredentials stages into b the deletion of every session, API key,
 // external identity and one-time token of id.
 func (s *Service) deleteCredentials(ctx context.Context, b *storage.Batch, id UserID) error {
-	for rec, err := range s.d.Store.ScanUserSessions(ctx, id) {
+	return stageDeleteCredentials(ctx, s.d.Store, s.log, b, id)
+}
+
+// stageDeleteCredentials is deleteCredentials over any Store: the user delete
+// and the post-restore hook (which has no Service) delete the same records.
+func stageDeleteCredentials(ctx context.Context, st Store, log *slog.Logger, b *storage.Batch, id UserID) error {
+	for rec, err := range st.ScanUserSessions(ctx, id) {
 		if err != nil {
-			if s.leftUndecodable("session", id, err) {
+			if leftUndecodable(log, "session", id, err) {
 				continue
 			}
 			return err
 		}
-		if err := s.d.Store.DeleteSession(b, rec); err != nil {
+		if err := st.DeleteSession(b, rec); err != nil {
 			return err
 		}
 	}
-	for k, err := range s.d.Store.ScanAPIKeys(ctx, id) {
+	for k, err := range st.ScanAPIKeys(ctx, id) {
 		if err != nil {
-			if s.leftUndecodable("apikey", id, err) {
+			if leftUndecodable(log, "apikey", id, err) {
 				continue
 			}
 			return err
 		}
-		if err := s.d.Store.DeleteAPIKey(b, k); err != nil {
+		if err := st.DeleteAPIKey(b, k); err != nil {
 			return err
 		}
 	}
-	for ident, err := range s.d.Store.ScanIdentities(ctx, id) {
+	for ident, err := range st.ScanIdentities(ctx, id) {
 		if err != nil {
-			if s.leftUndecodable("identity", id, err) {
+			if leftUndecodable(log, "identity", id, err) {
 				continue
 			}
 			return err
 		}
-		if err := s.d.Store.DeleteIdentity(b, ident); err != nil {
+		if err := st.DeleteIdentity(b, ident); err != nil {
 			return err
 		}
 	}
 	for _, kind := range []OneTimeKind{OneTimeInvite, OneTimeTempLogin} {
-		for t, err := range s.d.Store.ScanOneTime(ctx, kind) {
+		for t, err := range st.ScanOneTime(ctx, kind) {
 			if err != nil {
-				if s.leftUndecodable("onetime", id, err) {
+				if leftUndecodable(log, "onetime", id, err) {
 					continue
 				}
 				return err
@@ -516,7 +523,7 @@ func (s *Service) deleteCredentials(ctx context.Context, b *storage.Batch, id Us
 			if t.UserID != id && t.CreatedBy != id {
 				continue
 			}
-			if err := s.d.Store.DeleteOneTime(b, kind, t.ID); err != nil {
+			if err := st.DeleteOneTime(b, kind, t.ID); err != nil {
 				return err
 			}
 		}
@@ -525,15 +532,19 @@ func (s *Service) deleteCredentials(ctx context.Context, b *storage.Batch, id Us
 }
 
 // leftUndecodable reports whether err is a scan's per-record
-// ErrUndecodableRecord, which a user delete or a sign-out-everywhere leaves
-// in place (logged): it cannot be named for deletion, and auth already
-// refuses it.
-func (s *Service) leftUndecodable(kind string, id UserID, err error) bool {
+// ErrUndecodableRecord, which a user delete, a sign-out-everywhere and the
+// post-restore hook leave in place (logged): it cannot be named for deletion,
+// and auth already refuses it.
+func leftUndecodable(log *slog.Logger, kind string, id UserID, err error) bool {
 	if !errors.Is(err, ErrUndecodableRecord) {
 		return false
 	}
-	s.log.Warn("auth: undecodable record left in place", "kind", kind, "user", string(id))
+	log.Warn("auth: undecodable record left in place", "kind", kind, "user", string(id))
 	return true
+}
+
+func (s *Service) leftUndecodable(kind string, id UserID, err error) bool {
+	return leftUndecodable(s.log, kind, id, err)
 }
 
 // SetRoles replaces a user's roles (§3.2; 05-rbac §4.7 rules 2 and 5):
@@ -597,6 +608,21 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 // rbac.GrantsAdmin (an unknown role grants nothing). Each role is read once
 // per returned function.
 func (s *Service) adminHolds(ctx context.Context) func(roles []rbac.RoleName, st UserStatus) (bool, error) {
+	return adminHoldsWith(ctx, func(ctx context.Context, name rbac.RoleName) (bool, error) {
+		r, err := s.d.RBAC.Role(ctx, name)
+		switch {
+		case errors.Is(err, rbac.ErrUnknownRole):
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		return rbac.GrantsAdmin(r.Permissions()), nil
+	})
+}
+
+// adminHoldsWith is adminHolds over any role reader: BootWrites runs before
+// rbac.Service exists and reads roles through RestoreDeps.RoleGrantsAdmin.
+func adminHoldsWith(ctx context.Context, roleGrants func(context.Context, rbac.RoleName) (bool, error)) func(roles []rbac.RoleName, st UserStatus) (bool, error) {
 	grants := map[rbac.RoleName]bool{}
 	return func(roles []rbac.RoleName, st UserStatus) (bool, error) {
 		if st != StatusActive {
@@ -605,14 +631,9 @@ func (s *Service) adminHolds(ctx context.Context) func(roles []rbac.RoleName, st
 		for _, name := range roles {
 			g, seen := grants[name]
 			if !seen {
-				r, err := s.d.RBAC.Role(ctx, name)
-				switch {
-				case errors.Is(err, rbac.ErrUnknownRole):
-					g = false
-				case err != nil:
+				var err error
+				if g, err = roleGrants(ctx, name); err != nil {
 					return false, fmt.Errorf("auth: admin check: read role %s: %w", name, err)
-				default:
-					g = rbac.GrantsAdmin(r.Permissions())
 				}
 				grants[name] = g
 			}
