@@ -1,5 +1,5 @@
 // file: internal/server/absauth/saturation_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4b91b557-13ea-4dba-b0b6-03391d4ac1bd
 // last-edited: 2026-11-10
 
@@ -15,28 +15,7 @@ import (
 	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
-func TestSaturationPolicy(t *testing.T) {
-	tests := []struct {
-		failures int
-		delay    time.Duration
-		refuse   bool
-	}{
-		{0, SaturationDelayBase, false},
-		{1, SaturationDelayBase + SaturationDelayStep, false},
-		{coreauth.DefaultSoftThreshold - 1, min(SaturationDelayBase+time.Duration(coreauth.DefaultSoftThreshold-1)*SaturationDelayStep, SaturationDelayMax), false},
-		{coreauth.DefaultSoftThreshold, 0, true},
-		{coreauth.DefaultSoftThreshold + 10, 0, true},
-	}
-	for _, tt := range tests {
-		d, refuse := SaturationPolicy(tt.failures)
-		if d != tt.delay || refuse != tt.refuse {
-			t.Errorf("SaturationPolicy(%d) = %v, %v; want %v, %v", tt.failures, d, refuse, tt.delay, tt.refuse)
-		}
-		if d > SaturationDelayMax {
-			t.Errorf("delay %v exceeds the cap", d)
-		}
-	}
-}
+// TestSaturationPolicy moved to core/auth/ceiling_test.go with the policy (F4-02).
 
 func TestLoginSaturatedMark(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -60,7 +39,7 @@ func TestRefuseSaturatedLogin(t *testing.T) {
 	if RefuseSaturatedLogin(c, 0, delay) || LoginSaturationRefused(c) {
 		t.Fatal("a fresh name must be delayed, not refused")
 	}
-	if len(slept) != 1 || slept[0] != SaturationDelayBase {
+	if len(slept) != 1 || slept[0] != coreauth.SaturationDelayBase {
 		t.Fatalf("slept %v", slept)
 	}
 	if !RefuseSaturatedLogin(c, coreauth.DefaultSoftThreshold, delay) || !LoginSaturationRefused(c) {
