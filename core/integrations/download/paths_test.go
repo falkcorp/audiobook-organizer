@@ -1,5 +1,5 @@
 // file: core/integrations/download/paths_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: daba7df7-02a3-4d43-ae3b-cd72d7252769
 // last-edited: 2026-11-11
 
@@ -7,6 +7,7 @@ package download_test
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/falkcorp/mediacore/integrations/download"
@@ -160,5 +161,87 @@ func TestPaths_RoundTrip(t *testing.T) {
 		if err != nil || back != remote {
 			t.Errorf("%s: %q -> %q -> %q, %v", row.Remote, remote, local, back, err)
 		}
+	}
+}
+
+// A host path segment is data in the client's syntax: ToRemote must never let
+// one add a separator, a "..", a drive switch or a NUL to the client's path,
+// and the result must stay under the mapping's remote root.
+func TestPaths_ToRemoteRefusesInjectedSyntax(t *testing.T) {
+	win := mapperOf(download.Mapping{Remote: `D:\dl`, Local: "/mnt/dl"})
+	winURL := mapperOf(download.Mapping{Remote: "file:///D:/dl", Local: "/mnt/dl"})
+	posix := mapperOf(download.Mapping{Remote: "/remote/library", Local: "/srv/library"})
+	for _, tc := range []struct {
+		name  string
+		m     download.PathMapper
+		local download.LocalPath
+	}{
+		{"windows: backslash traversal in one segment", win, `/mnt/dl/a\..\..\secret`},
+		{"windows: a trailing backslash dot-dot", win, `/mnt/dl/Hush\..`},
+		{"windows: backslash separator", win, `/mnt/dl/Hush\a.m4b`},
+		{"windows: drive switch", win, "/mnt/dl/E:"},
+		{"windows: colon in a name", win, "/mnt/dl/Hush:Year One"},
+		{"windows: NUL", win, "/mnt/dl/Hush\x00a"},
+		{"windows via a file URL root: backslash traversal", winURL, `/mnt/dl/a\..\..\secret`},
+		{"windows via a file URL root: drive switch", winURL, "/mnt/dl/C:"},
+		{"posix: NUL", posix, "/srv/library/Hush\x00a"},
+		{"posix: traversal out of the root", posix, "/srv/library/../etc/passwd"},
+		{"windows: traversal out of the root", win, "/mnt/dl/../secret"},
+	} {
+		got, err := tc.m.ToRemote(download.Source("box"), tc.local)
+		if !errors.Is(err, download.ErrUnmapped) || got != "" {
+			t.Errorf("%s: ToRemote(%q) = %q, %v; want ErrUnmapped", tc.name, tc.local, got, err)
+		}
+	}
+
+	// What stays legal: a POSIX client takes backslash and colon in a name; a
+	// Windows client takes dots and spaces inside a name.
+	for _, tc := range []struct {
+		m     download.PathMapper
+		local download.LocalPath
+		want  string
+	}{
+		{posix, `/srv/library/Hush\Year:One`, `/remote/library/Hush\Year:One`},
+		{win, "/mnt/dl/Hush. Year One/a..b.m4b", `D:\dl\Hush. Year One\a..b.m4b`},
+	} {
+		got, err := tc.m.ToRemote(download.Source("box"), tc.local)
+		if err != nil || got != tc.want {
+			t.Errorf("ToRemote(%q) = %q, %v; want %q", tc.local, got, err, tc.want)
+		}
+	}
+}
+
+// ToLocal never returns a path that leaves its mapping's Local root, whatever
+// the client reports.
+func TestPaths_ToLocalRefusesInjectedSyntax(t *testing.T) {
+	posix := mapperOf(download.Mapping{Remote: "/remote/library", Local: "/srv/library"})
+	win := mapperOf(download.Mapping{Remote: `D:\dl`, Local: "/mnt/dl"})
+	for _, tc := range []struct {
+		name   string
+		m      download.PathMapper
+		remote string
+	}{
+		{"posix: dot-dot", posix, "/remote/library/../etc/passwd"},
+		{"posix: encoded separator in a file URL", mapperOf(download.Mapping{Remote: "file:///remote/library", Local: "/srv/library"}), "file:///remote/library/a%2F..%2F..%2Fx"},
+		{"posix: NUL", posix, "/remote/library/a\x00b"},
+		{"windows: dot-dot", win, `D:\dl\..\..\etc`},
+		{"windows: encoded backslash in a file URL", mapperOf(download.Mapping{Remote: "file:///D:/dl", Local: "/mnt/dl"}), "file:///D:/dl/a%5C..%5Cx"},
+		{"windows: NUL", win, "D:\\dl\\a\x00b"},
+	} {
+		got, err := tc.m.ToLocal(download.Source("box"), tc.remote)
+		if !errors.Is(err, download.ErrUnmapped) || got != "" {
+			t.Errorf("%s: ToLocal(%q) = %q, %v; want ErrUnmapped", tc.name, tc.remote, got, err)
+		}
+	}
+
+	// Names that are only data on a POSIX host stay mapped there; on a host
+	// whose separator is a backslash they are separators and are refused.
+	got, err := posix.ToLocal(download.Source("box"), `/remote/library/Hush\Year:One`)
+	if filepath.Separator == '/' {
+		if err != nil || got != `/srv/library/Hush\Year:One` {
+			t.Errorf("ToLocal of a backslash name = %q, %v", got, err)
+		}
+	} else if !errors.Is(err, download.ErrUnmapped) {
+		t.Errorf("ToLocal of a backslash name on this host = %q, %v; want ErrUnmapped", got, err)
 	}
 }
