@@ -1,5 +1,5 @@
 // file: core/archtest/guards/resumecontinue.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0f9870cc-093b-48cb-82a9-77a7a0753d38
 // last-edited: 2026-11-10
 
@@ -88,6 +88,11 @@ func resumeContinueFindings(patterns, fromZero []string) ([]GuardFinding, error)
 				}
 				fields := keyed(spec)
 				cont, known := resumeIsContinue(p, idx, fields["Common"])
+				if r, ok := fields["Resume"]; ok {
+					// Common's fields set as promoted fields (Go 1.27):
+					// TaskSpec{Title: ..., Resume: ...} with no Common key.
+					cont, known = isResumeContinue(p.TypesInfo, r), true
+				}
 				if !known {
 					report("%s: Resume cannot be read from Common (build Common as a literal, a package variable or a same-package function returning one)", kind)
 					return true

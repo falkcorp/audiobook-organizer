@@ -1,5 +1,5 @@
 // file: core/archtest/guards/testdata/resume/fail/fail.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 922e1b1a-dd7e-4c5e-999d-0dcb29c00aa9
 // last-edited: 2026-11-10
 
@@ -39,6 +39,8 @@ func defs(c tasks.Common, spec tasks.TaskSpec[np, np], k tasks.Kind) []tasks.Def
 			Run: func(rc *tasks.RC, p np) (np, error) { return np{}, nil }}),
 		tasks.Task(k, tasks.TaskSpec[np, np]{Common: cont, //archtest:resume-from-zero the kind is a parameter
 			// want-above: needs a constant kind
+			Run: func(rc *tasks.RC, p np) (np, error) { return np{}, nil }}),
+		tasks.Task("joker.promoted-only", tasks.TaskSpec[np, np]{Title: "t", Help: "h", Resume: tasks.ResumeContinue, // want: reaches no rc.Checkpoint
 			Run: func(rc *tasks.RC, p np) (np, error) { return np{}, nil }}),
 		tasks.Task("joker.stale", tasks.TaskSpec[np, np]{Common: cont, //archtest:resume-from-zero it used to restart
 			// want-above: delete its

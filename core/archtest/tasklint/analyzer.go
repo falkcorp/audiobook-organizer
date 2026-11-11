@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/analyzer.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 48295d11-35d4-4ecf-b2e5-cb82b9451d3d
 // last-edited: 2026-11-10
 
@@ -12,7 +12,8 @@
 //
 //	unregistered-kind       a tasks.Task, tasks.Batch or tasks.Fixer call, or a
 //	                        call of a helper returning tasks.Definition that
-//	                        builds one, that no Registrar.Tasks argument reaches
+//	                        builds one, that no tasks.Definition argument of a
+//	                        Registrar method (Tasks, DerivedIndex) reaches
 //	                        (nor, with -list-funcs, a called package-level func
 //	                        returning []tasks.Definition: 05-tasks §5T.8.2 rule
 //	                        4's books list functions, until the F5 flip). Run
@@ -30,7 +31,9 @@
 //	                        implements a store package's Store interface through
 //	                        a variable it captures: a closure variable, a package
 //	                        variable or the receiver of a method value
-//	missing-help            (warning) a tasks.Common literal with no Help
+//	missing-help            (warning) a tasks.Common literal with no Help, or a
+//	                        spec literal setting Common's fields as promoted
+//	                        fields without one
 //	sequential-empty-reason tasks.Sequential with an empty or blank reason
 //	deletes-owner-review    every Effects.AlsoDeletes call; never silently
 //	                        allowed, "//tasklint:allow <reason>" records the
@@ -471,6 +474,7 @@ func (c *lintState) specLiterals() {
 			if !c.isDefinitionType(tv.Type) {
 				return true
 			}
+			c.promotedHelp(lit, tv.Type)
 			for _, el := range lit.Elts {
 				kv, ok := el.(*ast.KeyValueExpr)
 				if !ok {
@@ -742,6 +746,26 @@ func exprString(e ast.Expr) string {
 
 // missingHelp warns on a tasks.Common literal with no Help, or a constant
 // blank one (rule missing-help).
+// promotedHelp applies missing-help to a core spec literal that sets Common's
+// fields as promoted fields (TaskSpec{Title: ..., Help: ...}) instead of
+// through a Common key; with a Common key, the Common literal is checked.
+func (c *lintState) promotedHelp(lit *ast.CompositeLit, t types.Type) {
+	n, ok := namedIn(t, c.cfg.TasksPath)
+	if !ok || len(lit.Elts) == 0 {
+		return
+	}
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			return // positional: Common is the first element, a literal or not
+		}
+		if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Common" {
+			return
+		}
+	}
+	c.missingHelp(lit, n)
+}
+
 func (c *lintState) missingHelp(lit *ast.CompositeLit, t types.Type) {
 	var help ast.Expr
 	found := false
@@ -763,6 +787,10 @@ func (c *lintState) missingHelp(lit *ast.CompositeLit, t types.Type) {
 			return
 		}
 	}
+	name := "tasks.Common"
+	if n, ok := namedIn(t, c.cfg.TasksPath); ok {
+		name = "tasks." + n.Obj().Name()
+	}
 	c.pass.Report(analysis.Diagnostic{Pos: lit.Pos(), Category: CatMissingHelp,
-		Message: "warning: tasks.Common has no Help; give the kind list and the generated form a 1-3 sentence description"})
+		Message: "warning: " + name + " has no Help; give the kind list and the generated form a 1-3 sentence description"})
 }
