@@ -132,7 +132,7 @@ func (s *Service) Middleware() func(http.Handler) http.Handler {
 				p, fail, err := st.run(r, c)
 				if err != nil {
 					s.log.Error("auth: credential store unavailable", "authenticator", st.name, "err", err)
-					writeUnavailable(w, r)
+					s.writeUnavailable(w, r)
 					return
 				}
 				if p != nil {
@@ -169,11 +169,14 @@ func (s *Service) bind(ctx context.Context, p *Principal, c ClientInfo) context.
 	return audit.WithActor(ctx, a)
 }
 
-func writeUnavailable(w http.ResponseWriter, r *http.Request) {
+func (s *Service) writeUnavailable(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.Header().Set("Retry-After", "5")
 	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = fmt.Fprintf(w, `{"type":"https://mediacore.dev/problems/auth_unavailable","title":"Authentication unavailable","status":503,"code":"auth_unavailable","instance":%q,"request_id":""}`, r.URL.Path)
+	if _, err := fmt.Fprintf(w, `{"type":"https://mediacore.dev/problems/auth_unavailable","title":"Authentication unavailable","status":503,"code":"auth_unavailable","instance":%q,"request_id":""}`, r.URL.Path); err != nil {
+		// The client went away mid-answer; the status line is already sent.
+		s.log.Debug("auth: 503 body not written", "err", err)
+	}
 }
 
 // client is the request's ClientInfo: Deps.Client when the kernel wired
@@ -449,7 +452,11 @@ func (s *Service) touch(ctx context.Context, id string, now time.Time, stage fun
 // retried over it (§3.4).
 func (s *Service) stageTouch(ctx context.Context, stage func(*storage.Batch) error) {
 	b := s.d.NewBatch()
-	defer func() { _ = b.Close() }()
+	defer func() {
+		if err := b.Close(); err != nil {
+			s.log.Warn("auth: last-use batch not closed", "err", err)
+		}
+	}()
 	if err := stage(b); err != nil {
 		s.log.Warn("auth: last-use write not staged", "err", err)
 		return
