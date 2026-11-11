@@ -1,5 +1,5 @@
 // file: core/kernel/secrets_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3f0c9a52-6e1b-4d7a-8c25-b94e1f6a0d37
 // last-edited: 2026-11-10
 
@@ -8,7 +8,12 @@ package kernel
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -411,4 +416,67 @@ func keyringKeys(t *testing.T, kr []byte) []string {
 		t.Fatal("a keyring without keys")
 	}
 	return strings.Split(string(keys), "\n")
+}
+
+// TestKernelSecrets_NeverFormatsSecrets (a test name coined by the F3-03
+// follow-up): the kernel's kernelSecrets, which holds the *secrets.Store in
+// an unexported field, prints no stored value, operator value or key
+// material, alone or inside a struct of its own, under any verb or slog's
+// text and JSON handlers. kernelSecrets has no printing methods of its own:
+// the Store keeps every secret-bearing field behind a pointer, so fmt's walk
+// through the unexported field stops at addresses.
+func TestKernelSecrets_NeverFormatsSecrets(t *testing.T) {
+	const operator = "why-so-serious-hahaha"
+	db := bootAuditDB(t, secretsOwnerSpec())
+	state := t.TempDir()
+	ks := openTestSecrets(t, db, state, nil)
+	if _, err := ks.store.Put(context.Background(), "core.http.basic_gate.password", secrets.NewValue(secretsFixture), "user:alfred"); err != nil {
+		t.Fatal(err)
+	}
+	ks.store.Ephemeral("modules.batcomputer.api_key", secrets.NewValue(operator), secrets.SourceEnv)
+
+	var kr struct {
+		Keys []struct {
+			Material []byte `json:"material"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(readFile(t, filepath.Join(state, "secrets.keyring")), &kr); err != nil || len(kr.Keys) == 0 {
+		t.Fatalf("read the keyring's keys: %v (%d keys)", err, len(kr.Keys))
+	}
+	var leaks []string
+	add := func(b []byte) {
+		leaks = append(leaks, string(b), hex.EncodeToString(b), strings.Trim(fmt.Sprint(b), "[]"),
+			base64.StdEncoding.EncodeToString(b), strings.TrimPrefix(fmt.Sprintf("%#v", b), "[]byte{")[:20])
+	}
+	add([]byte(secretsFixture))
+	add([]byte(operator))
+	for _, k := range kr.Keys {
+		add(k.Material[:8])
+	}
+
+	type kernelish struct {
+		name    string
+		secrets *kernelSecrets
+	}
+	k := kernelish{name: "wayne-manor", secrets: ks}
+	for name, v := range map[string]any{
+		"*kernelSecrets": ks, "kernelSecrets": *ks, "wrapper": k, "*wrapper": &k, "nested": struct{ k kernelish }{k},
+	} {
+		outs := map[string]string{}
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
+			outs[verb] = fmt.Sprintf(verb, v)
+		}
+		var text, js bytes.Buffer
+		slog.New(slog.NewTextHandler(&text, nil)).Info("wayne manor", "kernel", v)
+		slog.New(slog.NewJSONHandler(&js, nil)).Info("wayne manor", "kernel", v)
+		outs["slog text"], outs["slog json"] = text.String(), js.String()
+		for path, out := range outs {
+			for _, l := range leaks {
+				if strings.Contains(out, l) {
+					t.Errorf("%s formatted with %s leaks a value or key material: %s", name, path, out)
+					break
+				}
+			}
+		}
+	}
 }

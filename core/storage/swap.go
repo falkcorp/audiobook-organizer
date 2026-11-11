@@ -1,7 +1,7 @@
 // file: core/storage/swap.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 965b855f-5738-408a-b043-7d62a94a43d8
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package storage
 
@@ -41,6 +41,11 @@ func RewriteSidecars(ctx context.Context, fs vfs.FS, dbPath string, owners []Own
 	}
 	regs, claims, _, err := register(owners)
 	if err != nil {
+		return err
+	}
+	// The DAG's shape is part of the owners' validation (§5S.4 step 4), as
+	// at Open; no data step attaches here, a rewrite runs no step.
+	if err := checkDAGShape(regs); err != nil {
 		return err
 	}
 	eng, err := ipebble.Open(dbPath, ipebble.Options{FS: fs, ReadOnly: true, ErrorIfNotExists: true})

@@ -1,5 +1,5 @@
 // file: core/secrets/keyring_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 211fe806-6c88-41f7-8232-e85cc488f922
 // last-edited: 2026-11-10
 
@@ -297,5 +297,35 @@ func TestOpen_RemovesStaleKeyringTemps(t *testing.T) {
 	}
 	if !strings.Contains(e.logs.String(), "removed a stale keyring temporary file") {
 		t.Error("the removal was not logged")
+	}
+}
+
+// TestUnexportedKeys_SameIDsOtherMaterial (a test name coined by the F3-03
+// follow-up): a keyring put in place of the exported one with the same key
+// IDs (k1, d1) and other material is not covered by the old export record.
+// The record vouches for a key's material, not its name.
+func TestUnexportedKeys_SameIDsOtherMaterial(t *testing.T) {
+	e := newEnv(t)
+	s := e.open(t, nil)
+	exportTo(t, e)
+	if missing, err := s.UnexportedKeys(); err != nil || len(missing) != 0 {
+		t.Fatalf("UnexportedKeys after the export = %v, %v", missing, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := newKeyringFile(1, testInstallID, e.clock.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeKeyring(e.root, defaultKeyFile, f); err != nil {
+		t.Fatal(err)
+	}
+	s2 := e.open(t, nil)
+	if ids := strings.Join(s2.KeyIDs(), ","); ids != "k1,d1" {
+		t.Fatalf("the replacement keyring's IDs are %s, want k1,d1", ids)
+	}
+	if missing, err := s2.UnexportedKeys(); err != nil || !slices.Equal(missing, []string{"k1", "d1"}) {
+		t.Fatalf("UnexportedKeys with the old record and new material = %v, %v; want k1 and d1", missing, err)
 	}
 }

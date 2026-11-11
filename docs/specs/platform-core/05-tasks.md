@@ -432,7 +432,7 @@ func (ic *ItemRC) LockRefs(refs ...entity.Ref) (release func(), err error) // 5T
 | Liveness | Every completed item touches liveness; the watchdog never kills a progressing loop | — |
 | Stand-down hold | If the run holds a stand-down (5T.3.7), each item renews it and a lost hold fails the item before its write | `run_items.go:263-267` |
 
-`archtest.RunItemsDeclareParallelism(t, pkgs...)` (03 R7's name) replaces
+`guards.RunItemsDeclareParallelism(t, pkgs...)` (03 R7's guard; package `core/archtest/guards`) replaces
 `internal/plugins/runitems_concurrency_lint_test.go`. For the parallelism argument of
 `RunItems`/`RunSeq`/`ForEach` and the `Parallelism` field of `BatchSpec`/`FixerSpec` it accepts:
 (a) a call to a `tasks` constructor; (b) a `tasks.Parallelism`-typed variable, parameter or field
@@ -625,7 +625,7 @@ func Uninterruptible(reason string, budget time.Duration) CancelContract // list
 | Topic | Rule |
 |---|---|
 | Checkpoint | `rc.Checkpoint(v)` JSON-encodes into the run's checkpoint record (`RunStore.SaveCheckpoint`, 5T.3.13); throttled by `core.tasks.min_checkpoint_interval`; written in the same storage batch as the progress record. Batch/Fixer checkpoint through the store's chunk ledger and item-key snapshot (`SaveChunk`). An imported run (5T.8.3) carries HEAD's checkpoint bytes: the converted kind's `Restore` decodes HEAD's shape, or its cutover converter rewrites it, and a run whose checkpoint neither can read resumes from zero once (counted, WARN). |
-| `ResumeContinue` requires a checkpoint | (a) static: `archtest.ResumeContinueCheckpoints(t, pkgs...)` — successor of `internal/arch/resume_restart_guard_test.go` — requires every Task-shape def with `ResumeContinue` to reach `.Checkpoint(` or a `RunItems`/`RunSeq` with `Watermark` from its `Run`; Batch/Fixer pass by construction; the 21-entry allowlist is carried over and may only shrink. (b) runtime: an attempt of a `ResumeContinue` Task that ran longer than `min_checkpoint_interval` × 3 without a checkpoint records an `uncheckpointed` watchdog strike (existing strike kind, `raw/06` §5). |
+| `ResumeContinue` requires a checkpoint | (a) static: `guards.ResumeContinueCheckpoints(t, fromZero, pkgs...)` (package `core/archtest/guards`) — successor of `internal/arch/resume_restart_guard_test.go` — requires every Task-shape def with `ResumeContinue` to reach `.Checkpoint(` or a `RunItems`/`RunSeq` with `Watermark` from its `Run`; Batch/Fixer pass by construction; the 21-entry allowlist is carried over as the caller's `fromZero` list of kinds, each of which carries `//archtest:resume-from-zero <reason>` on its definition; a directive on an unlisted kind and a listed kind without the directive both fail, so moving the directive between kinds is caught; the list may only shrink, and core passes none. (b) runtime: an attempt of a `ResumeContinue` Task that ran longer than `min_checkpoint_interval` × 3 without a checkpoint records an `uncheckpointed` watchdog strike (existing strike kind, `raw/06` §5). |
 | Resume at boot | v2 `resumeAfterStartup` (`resume.go:35`) per policy; infinite-restart guard (`worker.go:1412`) kept; a yield is not an attempt for that guard but `core.tasks.max_yields` caps consecutive yields per run (default 1000) as a backstop. |
 | Yield | `rc.ShouldYield()` is true when `Deadline − now < max(10% of Timeout, 1 min)`; the author checkpoints and returns `ErrContinueInPlace` (5T.3.3). Replaces `internal/walkresume` (`walkresume.go:5-17`, `ErrYield`). |
 | Timeout | Per attempt. Defaults Task 30 m, Batch 24 h, Fixer 6 h (`pkg/ops/definition.go:86-88`); cap 24 h. Timeout is **terminal** (`timed_out`), never re-queued (current rule, `continue_in_place.go:18-24`). |
@@ -2057,7 +2057,7 @@ core's. Every row is part of `make ci`; there is no previous-build test and no `
 | `TestDispatch_WaitsForReadySignal` (a `books.*` run that reads books is not dispatched before `books.memdb` reports Up) | COR4-8 |
 | (deferred with the `Online` mode, SIMP5-7) 05-storage's `TestModuleOnlineMigrationRunsAsModuleKind` and `TestOnlineMigrationYieldsPastTimeout`, over a test module fixture (5T.3.12); one name each, the owner's (COR5-17) | COR4-5, COR4-6 |
 | `TestPerRunSeq_NoReissueAfterCrash` (`CrashClone` between row write and commit) | DATA-19 |
-| `TestNoGlobals_Tasks` (R5 AST), `archtest.ResumeContinueCheckpoints`, `archtest.RunItemsDeclareParallelism` self-tests | guards |
+| `TestNoGlobals_Tasks` (R5 AST), `guards.ResumeContinueCheckpoints`, `guards.RunItemsDeclareParallelism` self-tests | guards |
 | `taskstest.Conformance(t, defs...)` — modules run it over their own defs (re-implemented from `pkg/ops/opstest/conformance.go`, 04 §8.6) | per-module |
 
 ## 5T.10 Config keys
@@ -2484,6 +2484,8 @@ F2-02 review (2026-11-10): 5T.3.13 `RunStore` gains `Marks` and `Strikes`, the r
 that reads before it writes is indexed, and a plain one is refused with the new `ErrBatchNotIndexed`, because
 `GetForUpdate` through a plain batch reads only the committed state and the commit would lose an earlier write
 of the same build.
+
+F2-17 review (2026-11-10): the two type-aware guards live in `core/archtest/guards` (they load packages with go/packages, and `archtest`, which `coretest` links, must not); 5T.3.6's from-zero allowlist is a per-kind `fromZero` parameter rather than a count.
 
 F2-03 (2026-11-10): 5T.3.2 `ItemsOptions` gains `PartitionBy`, and its table a Partitions row. A Batch's and a Fixer
 apply's `PartitionBy` run through it, so each item of a partition keeps its own `ItemTimeout` clock, pause gate,

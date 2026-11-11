@@ -1,5 +1,5 @@
 // file: core/storage/batch.go
-// version: 1.1.2
+// version: 1.2.1
 // guid: 95428f24-dcaf-4b52-bcb8-b5a04189097c
 // last-edited: 2026-11-10
 
@@ -320,7 +320,7 @@ func (b *Batch) stage(h Handle, op opKind, key, value []byte) error {
 		return b.err
 	}
 	if b.done {
-		return errBatchDone
+		return ErrBatchDone
 	}
 	s := b.boundScope(h)
 	if s == nil {
@@ -384,7 +384,7 @@ func (b *Batch) stageRange(h Handle, start, end []byte) error {
 		return b.err
 	}
 	if b.done {
-		return errBatchDone
+		return ErrBatchDone
 	}
 	s := b.boundScope(h)
 	if s == nil {
@@ -488,8 +488,11 @@ func (db *DB) coverage(owner Owner, lo, hi []byte) (serialized bool, err error) 
 	return false, refuse(at, "runs past the last claim")
 }
 
-// errBatchDone: a write or commit on a batch already committed or closed.
-var errBatchDone = errors.New("storage: batch already committed or closed")
+// ErrBatchDone: a write or commit on a batch already committed or closed.
+// Exported so a caller that hands its batch to other code (a data
+// migration's chunk, whose step may only stage) can tell that the other
+// code committed or closed it.
+var ErrBatchDone = errors.New("storage: batch already committed or closed")
 
 // Commit applies the batch atomically or not at all. ErrConflict: a
 // precondition failed; ErrOutsideKeyspace / ErrClaimMode: a write resolves
@@ -504,7 +507,7 @@ var errBatchDone = errors.New("storage: batch already committed or closed")
 // is applied with its durability, and the stripes are released.
 func (b *Batch) Commit(ctx context.Context, d Durability) error {
 	if b.done {
-		return errBatchDone
+		return ErrBatchDone
 	}
 	defer b.finish()
 	if err := ctx.Err(); err != nil {

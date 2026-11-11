@@ -1,5 +1,5 @@
 // file: core/secrets/keyring.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 019b2e61-2abe-476e-9ba0-b5fe3f908bb0
 // last-edited: 2026-11-10
 
@@ -288,14 +288,16 @@ func readKeyring(root *os.Root, name string) (*keyringFile, error) {
 
 // checkMode returns the keyring file's mode, setting it to 0600 first when
 // group or others can reach it (05-config §2.4 step 1); ErrKeyfileInsecure
-// when that fails. fixed reports a change, for the caller's log.
+// when that fails. A path that is not a regular file, a symbolic link
+// included, is refused (Lstat): the keyring is never read through a link.
+// fixed reports a change, for the caller's log.
 func checkMode(root *os.Root, name string) (fixed bool, err error) {
-	fi, err := root.Stat(name)
+	fi, err := root.Lstat(name)
 	if err != nil {
 		return false, err
 	}
 	if !fi.Mode().IsRegular() {
-		return false, fmt.Errorf("secrets: keyring %s is not a regular file", name)
+		return false, notRegularKeyring(name, fi.Mode())
 	}
 	if fi.Mode().Perm()&0o077 == 0 {
 		return false, nil
@@ -303,7 +305,7 @@ func checkMode(root *os.Root, name string) (fixed bool, err error) {
 	if err := root.Chmod(name, keyringMode); err != nil {
 		return false, fmt.Errorf("%w: %s is mode %v and could not be set to 0600: %w", ErrKeyfileInsecure, name, fi.Mode().Perm(), err)
 	}
-	if fi, err = root.Stat(name); err != nil {
+	if fi, err = root.Lstat(name); err != nil {
 		return false, err
 	}
 	if fi.Mode().Perm()&0o077 != 0 {

@@ -1,7 +1,7 @@
 // file: core/kernel/storage.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package kernel
 
@@ -197,7 +197,9 @@ func (k *Kernel) storageMetrics(ctx context.Context) error {
 	if k.store == nil || k.store.db == nil {
 		return nil
 	}
-	scope, err := k.provider.Core("storage", "owner", "kind", "state", "op", "mode")
+	// migration and outcome label the data-migration series
+	// (DataMigrations.RecordMetrics): one scope per subsystem.
+	scope, err := k.provider.Core("storage", "owner", "kind", "state", "op", "mode", "migration", "outcome")
 	if err != nil {
 		return fmt.Errorf("kernel: storage metrics scope: %w", err)
 	}

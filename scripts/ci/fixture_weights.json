@@ -26,8 +26,7 @@
     "internal/server/handlers/duplicates": 3,
     "internal/undo": 3,
     "internal/versionprimary": 3,
-    "internal/versions": 3,
-    "tools/cmd/oplint": 3
+    "internal/versions": 3
   },
   "estimated": [],
   "weights": {
@@ -51,7 +50,6 @@
     "internal/opscatalog": 20,
     "internal/plugins/dedup": 17,
     "internal/itunes/service": 13,
-    "tools/cmd/oplint": 9,
     "internal/realtime": 4,
     "internal/versionprimary": 4,
     "internal/diag/flight": 3,

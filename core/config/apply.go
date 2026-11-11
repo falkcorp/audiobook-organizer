@@ -1,5 +1,5 @@
 // file: core/config/apply.go
-// version: 1.0.3
+// version: 1.0.5
 // guid: dd5734d4-3c90-4ba8-9e83-8eb5778ff55a
 // last-edited: 2026-11-10
 
@@ -194,15 +194,15 @@ func (s *Store) applyLocked(ctx context.Context, p Patch, a Actor) (Result, []co
 	}
 	s.syncQuarantineHealth()
 	s.gen.Store(gen)
-	if len(writes) > 0 {
-		s.noteSecretWrites(ctx, writes, a.Subject, now)
-	}
 	notes := make([]commitNote, 0, len(touched))
 	for _, sec := range touched {
 		c := cands[sec]
 		prevEff, nextEff, prevPend, nextPend := s.install(sec, c.eff, c.pend, gen, false)
 		notes = append(notes, commitNote{b: sec.bind, prevPend: prevPend, nextPend: nextPend, prevEff: prevEff, nextEff: nextEff})
 	}
+	// After install, so a removed entry's secret is dropped and an added
+	// entry's is read.
+	s.noteSecretWrites(ctx, writes, a.Subject, now)
 	s.reindex()
 	s.met.setQuarantined(len(s.quar))
 	s.met.apply(outcomeApplied)
@@ -222,18 +222,29 @@ func (s *Store) restartPending(paths []Path) []Path {
 	return out
 }
 
-// noteSecretWrites refreshes the Meta of written secrets: through the
-// resolver when there is one, else from the write itself.
+// noteSecretWrites refreshes the Meta of the written secrets: through the
+// resolver when there is one, else from the writes themselves. Every entry
+// secret an Apply adds, drops or rebinds is among the writes (entryClears
+// deletes it), so no other secret's Meta can have changed. A written secret
+// no build holds any more (a removed entry's) loses its Meta.
 func (s *Store) noteSecretWrites(ctx context.Context, writes []secrets.Write, by string, at time.Time) {
+	if len(writes) == 0 {
+		return
+	}
+	only := make([]Path, 0, len(writes))
+	for _, w := range writes {
+		only = append(only, Path(w.Name))
+	}
 	if s.resolver != nil {
-		only := make([]Path, 0, len(writes))
-		for _, w := range writes {
-			only = append(only, Path(w.Name))
-		}
 		s.refreshSecrets(ctx, only)
 		return
 	}
+	live := s.liveSecrets()
 	for _, w := range writes {
+		if _, ok := live[Path(w.Name)]; !ok {
+			delete(s.secretMeta, Path(w.Name))
+			continue
+		}
 		m := secrets.Meta{Name: w.Name, Set: !w.Delete, UpdatedAt: at, UpdatedBy: by}
 		if !w.Delete {
 			m.Source = secrets.SourceStored
@@ -315,7 +326,10 @@ func (s *Store) plan(p Patch, a Actor) (changes []change, applied []Path, err er
 	var unknown []string
 	for _, pth := range applied {
 		ck, ok := s.keyFor(pth)
-		if !ok || s.passthrough(pth) {
+		// A list entry's secret exists only while an entry names it in the
+		// stored list: one for an ID no entry holds is unknown, so an entry
+		// is added first and its secret set after (fail closed).
+		if !ok || s.passthrough(pth) || (ck.k.list != nil && !ck.k.sec.pend.holds(pth)) {
 			unknown = append(unknown, string(pth))
 			continue
 		}
@@ -346,6 +360,14 @@ func (s *Store) plan(p Patch, a Actor) (changes []change, applied []Path, err er
 	for _, pth := range applied {
 		if op, ok := s.op[pth]; ok {
 			refused = append(refused, &LockedError{Path: pth, By: op.by})
+			continue
+		}
+		// An entry an operator layer supplies reads only an operator-layer
+		// secret (operatorOnly), so a stored one would never be used.
+		if lk := keys[pth].k.list; lk != nil {
+			if op, ok := s.op[lk.path("")]; ok {
+				refused = append(refused, &LockedError{Path: pth, By: op.by})
+			}
 		}
 	}
 	if len(refused) > 0 {
@@ -364,7 +386,82 @@ func (s *Store) plan(p Patch, a Actor) (changes []change, applied []Path, err er
 	if len(verrs) > 0 {
 		return nil, nil, invalid(verrs...)
 	}
-	return changes, applied, nil
+	clears, err := s.entryClears(changes, p.Set, unsetSet, a)
+	if err != nil {
+		return nil, nil, err
+	}
+	return append(changes, clears...), applied, nil
+}
+
+// entryClears deletes, in the same commit, the secrets of every list entry a
+// list change does not keep as it was: an entry removed, renamed (the old ID
+// goes), added (an ID not in the stored list, the IDs of a quarantined stored
+// row included), or rebound (a secret:"bind" field changed, such as an OIDC
+// provider's kind, issuer or client_id). 05-config and 05-authn say nothing
+// of an entry's secret beyond its entry; a secret left stored would be
+// handed to whatever entry next holds the ID, or to an entry now pointing at
+// another identity provider, so config fails closed and a changed entry's
+// secret always starts unset (seams.d/F3-03.md). Each deletion is a write to
+// the derived key: refused when the actor does not meet its protection, when
+// an operator layer sets it (the secrets store refuses to write a locked
+// name), and when the patch also sets it. A patch that unsets it already
+// deletes it.
+func (s *Store) entryClears(changes []change, set map[Path]json.RawMessage, unset map[Path]bool, a Actor) ([]change, error) {
+	var out []change
+	var protected, locked, bad []error
+	for _, c := range changes {
+		lk := c.ck.k
+		if len(lk.entrySecrets) == 0 {
+			continue
+		}
+		next := c.value
+		if c.unset {
+			next = c.ck.def()
+		}
+		kept := lk.entryBindings(lk.sec.pend.vals[c.ck.p].raw)
+		now := lk.entryBindings(next)
+		ids := lk.entryIDsOf(lk.sec.pend.vals[c.ck.p].raw)
+		if row, ok := s.db[c.ck.p]; ok {
+			ids = append(ids, lk.entryIDsOf(row.Value)...)
+		}
+		ids = append(ids, lk.entryIDsOf(next)...)
+		slices.Sort(ids)
+		for _, id := range slices.Compact(ids) {
+			was, wasOK := kept[id]
+			is, isOK := now[id]
+			if wasOK && isOK && was == is {
+				continue
+			}
+			for _, d := range lk.entrySecrets {
+				pth := d.path(id)
+				if unset[pth] {
+					continue
+				}
+				if _, both := set[pth]; both {
+					bad = append(bad, &FieldError{Path: pth, Err: errors.New("set in the patch that adds, removes, renames or rebinds its list entry: set it in a later patch")})
+					continue
+				}
+				if !s.meets(a, d.protect) {
+					protected = append(protected, &ProtectedError{Path: pth, Need: d.protect})
+					continue
+				}
+				if op, ok := s.op[pth]; ok {
+					locked = append(locked, &LockedError{Path: pth, By: op.by})
+					continue
+				}
+				out = append(out, change{ck: ckey{k: d, id: id, p: pth}, secret: &secrets.Write{Name: secrets.Name(pth), Delete: true, By: a.Subject}})
+			}
+		}
+	}
+	switch {
+	case len(protected) > 0:
+		return nil, errors.Join(protected...)
+	case len(locked) > 0:
+		return nil, errors.Join(locked...)
+	case len(bad) > 0:
+		return nil, invalid(bad...)
+	}
+	return out, nil
 }
 
 // decodeChange turns one patch entry into a change. Errors are *FieldError.

@@ -1,5 +1,5 @@
 // file: core/config/keys.go
-// version: 1.0.6
+// version: 1.0.8
 // guid: a7f1dcb2-a279-4c3a-b299-94cbbb319e4d
 // last-edited: 2026-11-10
 
@@ -27,6 +27,19 @@ import (
 // The one exception is a map-typed SECTION root (core.modules): its map keys
 // are data, and each entry's fields are keys under "<section>.<id>.", so an
 // operator value for one module locks that module's key only.
+//
+// Entry secrets (F3-OIDC-SECRET; coined, recorded in seams.d/F3-03.md): a list
+// key whose element struct has a string field json "id" may give that element
+// secrets.Ref fields, each a direct field. Each Ref is not part of the list's
+// value: it is a secret key of its own, "<list parent>.<id>.<ref name>" for
+// every entry (05-authn §8's core.auth.oidc.<id>.client_secret), protected,
+// reloaded and audited by its own tags, not the list's. The list's canonical
+// value carries each entry's reference {"secret": "<that name>"}, never a
+// value, and the decoder binds it. An entry field tagged secret:"bind" (the
+// OIDC kind, issuer and client_id) is part of what the secret belongs to.
+// An Apply deletes the secret of every entry it does not keep as it was
+// (removed, renamed, added or rebound; apply.go entryClears), and an entry an
+// operator layer supplies binds only an operator-layer secret (operatorOnly).
 
 // keyInfo is one leaf key of a section. For a map section it is a template:
 // rel is relative to the entry, and the concrete path is
@@ -45,11 +58,29 @@ type keyInfo struct {
 	resolved  *jsonschema.Resolved // for validating a value of this key
 	def       json.RawMessage      // canonical default (struct sections); the element zero value's (map templates)
 	failOrder []json.RawMessage    // FailClosed order, most restrictive first; nil when not FailClosed
+
+	// An entry secret (a derived key): the list key whose entries name it,
+	// and the Ref's field index in the element struct. rel is the Ref's json
+	// name; the concrete path is "<list parent>.<id>.<rel>".
+	list    *keyInfo
+	elemIdx int
+
+	// A list key with entry secrets: their derived keys, the element's id
+	// field index, and the IDs an entry may not take because they are json
+	// names of the list's parent object (a derived path would overlap that
+	// key, e.g. "providers" or "redirect_base_url" under core.auth.oidc).
+	entrySecrets []*keyInfo
+	idIdx        int
+	reservedIDs  map[string]bool
+	bindNames    []string // json names of the entry fields tagged secret:"bind"
 }
 
-// path is the key's path; id is the map entry's ID (ignored for a struct
-// section).
+// path is the key's path; id is the map entry's ID, or a derived key's list
+// entry ID (ignored for any other key).
 func (k *keyInfo) path(id string) Path {
+	if k.list != nil {
+		return k.list.entryParent().Join(id).Join(k.rel[0])
+	}
 	p := k.sec.path
 	if k.sec.isMap {
 		p = p.Join(id)
@@ -63,6 +94,14 @@ func (k *keyInfo) path(id string) Path {
 // relName is rel joined with dots: the key's name inside its section (or
 // entry).
 func (k *keyInfo) relName() string { return strings.Join(k.rel, ".") }
+
+// entryParent is the path a list key's derived keys extend: the list's parent.
+func (k *keyInfo) entryParent() Path { return k.path("").Parent() }
+
+// redacts reports whether k's errors never carry the value: a sensitive key,
+// and a list whose entries hold secrets (an operator or a client could paste
+// the secret into the list, and the schema validator echoes what it rejects).
+func (k *keyInfo) redacts() bool { return k.sensitive || len(k.entrySecrets) > 0 }
 
 // tagSet is the inherited field metadata of 05-config §1.3.1's tag table. A
 // tag on a struct-typed field applies to every key beneath it; a key's own tag
@@ -183,6 +222,9 @@ func (w *keyWalker) walk(t reflect.Type, rel []string, idx []int, inh tagSet, na
 			continue
 		}
 		ix := append(slices.Clone(idx), i)
+		if _, ok := f.Tag.Lookup("secret"); ok {
+			return fmt.Errorf("%w: %s: the secret tag is for a field of a list entry that holds secrets (keys.go, \"Entry secrets\")", ErrInvalid, where)
+		}
 		if f.Anonymous && name == "" && f.Type.Kind() == reflect.Pointer && f.Type.Elem().Kind() == reflect.Struct {
 			// encoding/json promotes the fields of an embedded *struct when
 			// it is set and cannot allocate one of an unexported type, so
@@ -245,7 +287,9 @@ func (w *keyWalker) add(where string, t reflect.Type, rel []string, idx []int, t
 	k.secret = t == refType()
 	switch {
 	case !k.secret && containsRef(t, map[reflect.Type]bool{}):
-		return fmt.Errorf("%w: %s holds a secrets.Ref inside a list, map or pointer: a secret must be a field of its own (F3-03 owns secret lists)", ErrInvalid, where)
+		if err := w.entrySecrets(where, k); err != nil {
+			return err
+		}
 	case k.secret && k.reload == ReloadBoot:
 		return fmt.Errorf("%w: %s: a secrets.Ref is never reload:\"boot\" (the boot record holds no secret)", ErrInvalid, where)
 	case k.secret && w.sec.isMap:
@@ -257,10 +301,80 @@ func (w *keyWalker) add(where string, t reflect.Type, rel []string, idx []int, t
 	if w.sec.isMap {
 		shown = k.path("<id>")
 	}
-	if err := checkNested(where, shown, t, tagSet{reload: k.reload, protect: k.protect, sensitive: k.sensitive}, map[reflect.Type]bool{}); err != nil {
+	var entry reflect.Type
+	if len(k.entrySecrets) > 0 {
+		entry = t.Elem()
+	}
+	if err := checkNested(where, shown, t, entry, tagSet{reload: k.reload, protect: k.protect, sensitive: k.sensitive}, map[reflect.Type]bool{}); err != nil {
 		return err
 	}
 	w.keys = append(w.keys, k)
+	return nil
+}
+
+// entrySecrets accepts the one shape of a secrets.Ref inside a key's value: a
+// list ([]T, T a struct that does not encode itself) that is not the section
+// root, in a struct section, not reload:"boot", whose element has a string
+// field json "id" and holds each Ref as a direct, exported field with a json
+// name and its own protect tag. Every other shape is refused as before.
+func (w *keyWalker) entrySecrets(where string, k *keyInfo) error {
+	refused := func(why string) error {
+		return fmt.Errorf("%w: %s holds a secrets.Ref inside a list, map or pointer %s: a secret is a field of its own, or a direct field of a list entry that has a string id (05-config §2.2; seams.d/F3-03.md)", ErrInvalid, where, why)
+	}
+	t := k.typ
+	switch {
+	case t.Kind() != reflect.Slice || t.Elem().Kind() != reflect.Struct || encodesItself(t.Elem()):
+		return refused("(only a list of structs may hold one)")
+	case len(k.rel) == 0:
+		return refused("(the list is the section root, so its entries' secrets would lie outside the section)")
+	case w.sec.isMap:
+		return refused("(in a map-typed section)")
+	case k.reload == ReloadBoot:
+		return refused("(the list is reload:\"boot\", and the boot record holds no secret)")
+	}
+	elem := t.Elem()
+	k.idIdx = -1
+	for i := range elem.NumField() {
+		f := elem.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "id" && f.Type.Kind() == reflect.String && f.IsExported() && !f.Anonymous {
+			k.idIdx = i
+		}
+		if v, ok := f.Tag.Lookup("secret"); ok {
+			if v != "bind" || f.Type == refType() || !f.IsExported() || f.Anonymous || !validSegment(name) {
+				return fmt.Errorf("%w: %s entry field %s.%s: secret:%q (want secret:\"bind\" on an exported, json-named field that is not the secret)", ErrInvalid, where, elem.Name(), f.Name, v)
+			}
+			k.bindNames = append(k.bindNames, name)
+		}
+		if f.Type != refType() {
+			if containsRef(f.Type, map[reflect.Type]bool{}) {
+				return refused(fmt.Sprintf("(field %s.%s holds one below the entry's own fields)", elem.Name(), f.Name))
+			}
+			continue
+		}
+		fw := fmt.Sprintf("%s entry field %s.%s", where, elem.Name(), f.Name)
+		switch {
+		case !f.IsExported() || f.Anonymous:
+			return fmt.Errorf("%w: %s: an entry secret is an exported, named field", ErrInvalid, fw)
+		case !validSegment(name):
+			return fmt.Errorf("%w: %s: an entry secret needs a json name matching [a-z][a-z0-9_]{0,47}", ErrInvalid, fw)
+		}
+		if _, ok := f.Tag.Lookup("protect"); !ok {
+			return fmt.Errorf("%w: %s: an entry secret declares its own protect tag: it is a key of its own, and inheriting its list's would be a silent choice (seams.d/F3-03.md)", ErrInvalid, fw)
+		}
+		tags, err := parseTags(fw, f, tagSet{})
+		if err != nil {
+			return err
+		}
+		if tags.reload == ReloadBoot {
+			return fmt.Errorf("%w: %s: a secrets.Ref is never reload:\"boot\" (the boot record holds no secret)", ErrInvalid, fw)
+		}
+		d := &keyInfo{sec: w.sec, rel: []string{name}, typ: f.Type, reload: max(tags.reload, ReloadLive), protect: tags.protect, secret: true, list: k, elemIdx: i}
+		k.entrySecrets = append(k.entrySecrets, d)
+	}
+	if k.idIdx < 0 {
+		return refused(fmt.Sprintf("(its entry type %s has no string field with the json name \"id\" to name each entry's secret by)", elem.Name()))
+	}
 	return nil
 }
 
@@ -278,11 +392,14 @@ func (w *keyWalker) add(where string, t reflect.Type, rel []string, idx []int, t
 // the key's value) and every field of a struct, the self-encoding ones and
 // the embedded unexported ones included, once per type. A malformed tag there
 // fails as it would on a key.
-func checkNested(where string, key Path, t reflect.Type, own tagSet, seen map[reflect.Type]bool) error {
+//
+// entry is the element type of a list with entry secrets (nil otherwise): its
+// direct fields are the only place a secret tag may stand.
+func checkNested(where string, key Path, t, entry reflect.Type, own tagSet, seen map[reflect.Type]bool) error {
 	for {
 		switch t.Kind() {
 		case reflect.Map:
-			if err := checkNested(where, key, t.Key(), own, seen); err != nil {
+			if err := checkNested(where, key, t.Key(), entry, own, seen); err != nil {
 				return err
 			}
 			t = t.Elem()
@@ -309,6 +426,14 @@ func checkNested(where string, key Path, t reflect.Type, own tagSet, seen map[re
 		if err != nil {
 			return err
 		}
+		if _, ok := f.Tag.Lookup("secret"); ok && t != entry {
+			return fmt.Errorf("%w: %s carries a secret tag outside a list entry that holds secrets: it would be ignored (keys.go, \"Entry secrets\")", ErrInvalid, fw)
+		}
+		if f.Type == refType() {
+			// An entry secret: add accepted it only as a direct field of a
+			// list entry, and its tags are its own key's, not this key's.
+			continue
+		}
 		switch {
 		case tags.protect > own.protect:
 			return fmt.Errorf("%w: %s carries protect:%q, stricter than its key's %s: config protects whole keys, so the key itself must carry it (05-config §1.3.1)",
@@ -320,7 +445,7 @@ func checkNested(where string, key Path, t reflect.Type, own tagSet, seen map[re
 			return fmt.Errorf("%w: %s carries sensitive:\"true\" and its key does not: config redacts whole keys, so the key itself must carry it (05-config §1.3.1)",
 				ErrInvalid, fw)
 		}
-		if err := checkNested(where, key, f.Type, own, seen); err != nil {
+		if err := checkNested(where, key, f.Type, entry, own, seen); err != nil {
 			return err
 		}
 	}
@@ -355,13 +480,22 @@ func secretValue(p Path) json.RawMessage {
 //
 // A sensitive key's error never carries the value: the schema validator echoes
 // the rejected value, and these errors reach logs and the quarantine report
-// (05-config §1.3.1: sensitive values are redacted in logs).
+// (05-config §1.3.1: sensitive values are redacted in logs). A list whose
+// entries hold secrets is redacted the same way, failing closed: a secret
+// pasted into the list is a rejected value too. Only the entry checks' own
+// messages (*entryError) are kept; they name entry indexes, never a value.
 func (k *keyInfo) canonical(p Path, raw json.RawMessage) (json.RawMessage, error) {
 	out, err := k.canonicalOf(p, raw)
-	if err != nil && k.sensitive {
+	if err == nil || !k.redacts() {
+		return out, err
+	}
+	if _, own := errors.AsType[*entryError](err); own {
+		return nil, err
+	}
+	if k.sensitive {
 		return nil, &FieldError{Path: p, Err: errSensitiveRedacted()}
 	}
-	return out, err
+	return nil, &FieldError{Path: p, Err: errors.New("the value fails the key's schema or type (detail redacted: the list's entries hold secrets)")}
 }
 
 // errSensitiveRedacted is the message of a sensitive key's error: the
@@ -389,11 +523,117 @@ func (k *keyInfo) canonicalOf(p Path, raw json.RawMessage) (json.RawMessage, err
 	if err := strictDecode(raw, v.Interface()); err != nil {
 		return nil, &FieldError{Path: p, Err: err}
 	}
+	if len(k.entrySecrets) > 0 {
+		if err := k.bindEntries(p, v.Elem(), nil); err != nil {
+			return nil, err
+		}
+	}
 	out, err := json.Marshal(v.Interface())
 	if err != nil {
 		return nil, &FieldError{Path: p, Err: err}
 	}
 	return out, nil
+}
+
+// entryError is an entry check's refusal of a list with entry secrets. Its
+// text names entry indexes and key names, never an entry's id or a supplied
+// value, so canonical keeps it where it redacts everything else.
+type entryError struct{ msg string }
+
+func (e *entryError) Error() string { return e.msg }
+
+// bindEntries checks the entries of list (a decoded value of the list key k)
+// and sets each entry's Ref fields to their derived names, bound to res when
+// it is not nil. An entry is refused when its id is empty, is not a path
+// segment ([a-z][a-z0-9_]{0,47}, 05-authn §8's id grammar), is a json name of
+// the list's parent object, or repeats an earlier entry's id; and when a Ref
+// it supplies names anything but the entry's own secret (an owner writing the
+// list must not point an entry at another key's secret). Errors are
+// *FieldError on p wrapping *entryError.
+func (k *keyInfo) bindEntries(p Path, list reflect.Value, res secrets.Resolver) error {
+	refuse := func(format string, a ...any) error {
+		return &FieldError{Path: p, Err: &entryError{msg: fmt.Sprintf(format, a...)}}
+	}
+	seen := make(map[string]int, list.Len())
+	for i := range list.Len() {
+		e := list.Index(i)
+		id := e.Field(k.idIdx).String()
+		switch {
+		case id == "":
+			return refuse("entry %d has no id: each entry's secrets are named by it", i)
+		case !validSegment(id):
+			return refuse("entry %d: its id does not match [a-z][a-z0-9_]{0,47}", i)
+		case k.reservedIDs[id]:
+			return refuse("entry %d: its id is the name of another key beside the list under %s", i, k.entryParent())
+		}
+		if j, dup := seen[id]; dup {
+			return refuse("entries %d and %d have the same id", j, i)
+		}
+		seen[id] = i
+		for _, d := range k.entrySecrets {
+			f := e.Field(d.elemIdx)
+			want := secrets.Name(d.path(id))
+			if got := f.Interface().(secrets.Ref).Name(); got != "" && got != want {
+				return refuse("entry %d: %s names another secret: omit it, or name the entry's own secret %s", i, d.rel[0], d.templatePath())
+			}
+			ref := secrets.RefTo(want)
+			if res != nil {
+				ref = ref.Bind(res)
+			}
+			f.Set(reflect.ValueOf(ref))
+		}
+	}
+	return nil
+}
+
+// entryBindings returns, for each entry of the list key k's JSON that names
+// derived keys, what its secrets belong to: the JSON of its secret:"bind"
+// fields, compared byte for byte (canonical values only). A value that is not
+// a list of objects yields none.
+func (k *keyInfo) entryBindings(raw json.RawMessage) map[string]string {
+	var entries []map[string]json.RawMessage
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	out := make(map[string]string, len(entries))
+	for _, e := range entries {
+		var id string
+		if json.Unmarshal(e["id"], &id) != nil || !validSegment(id) || k.reservedIDs[id] {
+			continue
+		}
+		var b strings.Builder
+		for _, n := range k.bindNames {
+			b.WriteString(n)
+			b.WriteByte('=')
+			b.Write(e[n])
+			b.WriteByte(0)
+		}
+		out[id] = b.String()
+	}
+	return out
+}
+
+// templatePath is a derived key's path with "<id>" for the entry ID.
+func (k *keyInfo) templatePath() Path { return k.path("<id>") }
+
+// entryIDsOf returns the entry IDs of the list key k's JSON that name derived
+// keys (valid, not reserved), leniently: a value that is not a list of
+// objects yields none. It reads canonical values (a build's) and stored rows
+// that may be quarantined (entryClears, importClears).
+func (k *keyInfo) entryIDsOf(raw json.RawMessage) []string {
+	var entries []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if validSegment(e.ID) && !k.reservedIDs[e.ID] && !slices.Contains(out, e.ID) {
+			out = append(out, e.ID)
+		}
+	}
+	return out
 }
 
 // subJSON returns the value at rel inside the JSON object raw.

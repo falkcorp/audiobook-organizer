@@ -1,5 +1,5 @@
 // file: core/secrets/offline.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: ea65355e-8977-4406-a748-63dd510dc8d8
 // last-edited: 2026-11-10
 
@@ -58,11 +58,14 @@ func keyDigest(m keyMaterial) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// covers reports whether r holds key k: the same ID and the same material.
-func (r *exportRecord) covers(k *keyringKey) bool {
-	d := keyDigest(k.Material)
-	return slices.ContainsFunc(r.Keys, func(e exportedKey) bool { return e.ID == k.ID && e.SHA256 == d })
+// exportedKeyOf is k as an export record names it: its ID and its material's
+// digest.
+func exportedKeyOf(k *keyringKey) exportedKey {
+	return exportedKey{ID: k.ID, SHA256: keyDigest(k.Material)}
 }
+
+// covers reports whether r holds k: the same ID and the same material digest.
+func (r *exportRecord) covers(k exportedKey) bool { return slices.Contains(r.Keys, k) }
 
 // maxIDNumber is the highest key number the record names (0 for none).
 func (r *exportRecord) maxIDNumber() int {
@@ -158,9 +161,9 @@ func ExportKeyring(stateDir *os.Root, keyFile, out string, now time.Time) (Expor
 	}
 	ids := make([]string, 0, len(f.Keys))
 	keys := make([]exportedKey, 0, len(f.Keys))
-	for _, k := range f.Keys {
-		ids = append(ids, k.ID)
-		keys = append(keys, exportedKey{ID: k.ID, SHA256: keyDigest(k.Material)})
+	for i := range f.Keys {
+		ids = append(ids, f.Keys[i].ID)
+		keys = append(keys, exportedKeyOf(&f.Keys[i]))
 	}
 	slices.Sort(ids)
 	slices.SortFunc(keys, func(a, b exportedKey) int { return cmp.Compare(a.ID, b.ID) })
