@@ -1,5 +1,5 @@
-// file: core/archtest/testdata/guards/par/pass/pass.go
-// version: 1.0.0
+// file: core/archtest/guards/testdata/par/pass/pass.go
+// version: 1.0.1
 // guid: 7d0a84ec-ea71-44fe-9ec3-f00a20a1a0fe
 // last-edited: 2026-11-10
 

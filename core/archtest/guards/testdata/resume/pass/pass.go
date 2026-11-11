@@ -1,5 +1,5 @@
-// file: core/archtest/testdata/guards/resume/pass/pass.go
-// version: 1.0.0
+// file: core/archtest/guards/testdata/resume/pass/pass.go
+// version: 1.0.1
 // guid: a7ceb0e0-5b04-43c9-a357-ae4606d85c31
 // last-edited: 2026-11-10
 

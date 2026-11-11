@@ -1,9 +1,9 @@
-// file: core/archtest/resumecontinue.go
-// version: 1.0.0
+// file: core/archtest/guards/resumecontinue.go
+// version: 1.0.1
 // guid: 0f9870cc-093b-48cb-82a9-77a7a0753d38
 // last-edited: 2026-11-10
 
-package archtest
+package guards
 
 import (
 	"fmt"

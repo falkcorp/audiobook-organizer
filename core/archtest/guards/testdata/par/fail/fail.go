@@ -1,5 +1,5 @@
-// file: core/archtest/testdata/guards/par/fail/fail.go
-// version: 1.0.0
+// file: core/archtest/guards/testdata/par/fail/fail.go
+// version: 1.0.1
 // guid: 82d20671-5765-4655-ba60-4c0a8740d2f4
 // last-edited: 2026-11-10
 

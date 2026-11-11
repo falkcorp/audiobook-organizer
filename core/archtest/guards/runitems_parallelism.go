@@ -1,9 +1,9 @@
-// file: core/archtest/runitems_parallelism.go
-// version: 1.0.0
+// file: core/archtest/guards/runitems_parallelism.go
+// version: 1.0.1
 // guid: 692ef99e-03a5-44ad-a650-b8a8b0a0c7e1
 // last-edited: 2026-11-10
 
-package archtest
+package guards
 
 import (
 	"fmt"
