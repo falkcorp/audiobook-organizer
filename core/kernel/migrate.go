@@ -1,7 +1,7 @@
 // file: core/kernel/migrate.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 065a3401-6518-4976-9508-a0b36d3bcb96
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/internal/storagemigrate"
 	"github.com/falkcorp/mediacore/metrics"
@@ -107,7 +108,7 @@ func NewDataMigrations(cfg DataMigrationsConfig, owners []storage.OwnerSpec, mig
 		Logger:      cfg.Logger,
 		Clock:       cfg.Clock,
 		ExtendStart: cfg.ExtendStart,
-		Quarantine:  cfg.Quarantine,
+		Quarantine:  inChunkRegion(cfg.Quarantine),
 		LevelStep:   cfg.LevelStep,
 	}
 	r, err := storagemigrate.New(opts, migs...)
@@ -125,6 +126,24 @@ func NewDataMigrations(cfg DataMigrationsConfig, owners []storage.OwnerSpec, mig
 		}
 	}
 	return &DataMigrations{cfg: cfg, runner: r}, nil
+}
+
+// inChunkRegion runs q (nil stays nil) inside the chunk's crash-matrix
+// region, storagemigrate.LabelChunk: its one durable write, the quarantine
+// sequence's lease refill (storage.QuarantineWriter), is a write of the chunk
+// writer. The runner's shards commit chunks concurrently and a region is the
+// boot's, not a goroutine's (bootseam.Labeler: the outer label wins), so a
+// lease under a label of its own would be counted as whichever region another
+// shard had open; under the chunk's label every attribution is the same.
+func inChunkRegion(q func(ctx context.Context, b *storage.Batch, step string, key, raw []byte, reason string, sensitive bool) error) func(ctx context.Context, b *storage.Batch, step string, key, raw []byte, reason string, sensitive bool) error {
+	if q == nil {
+		return nil
+	}
+	return func(ctx context.Context, b *storage.Batch, step string, key, raw []byte, reason string, sensitive bool) error {
+		exit := bootseam.Region(ctx, storagemigrate.LabelChunk)
+		defer exit()
+		return q(ctx, b, step, key, raw, reason, sensitive)
+	}
 }
 
 // Steps are the P4b entry point: one storage.DataStep per migration, for
