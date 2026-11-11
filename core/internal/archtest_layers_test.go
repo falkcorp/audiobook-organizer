@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.15
+// version: 1.0.16
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-11
 
@@ -36,8 +36,8 @@ const corePath = "github.com/falkcorp/mediacore"
 // internal/sdnotify entry, R1-21's internal/bootseam entry, F4-01's
 // internal/rbacstore entry, F3-01's internal/configstore entry, F4-09's
 // internal/authz entry, F4-02's internal/authstore entry and F2-04's
-// internal/schedspec entry, R4 packages the
-// table missed.
+// internal/schedspec entry and F7-07's internal/bleveindex entry, R4 packages
+// the table missed.
 var coreLayerOf = map[string]int{
 	// L0
 	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "log": 0, "metrics": 0,
@@ -97,6 +97,10 @@ var coreLayerOf = map[string]int{
 	// staging under integrations' NativeInstanceStore and NativeImporter
 	// (F7-01, 05-metadata M1.4), so it takes integrations' layer (R4).
 	"internal/instancestore": 4,
+	// internal/bleveindex implements storage/index on bleve (F7-07, 05-storage
+	// §5S.3.8) and builds the rebuild's tasks.Definition, so it is a bridge: the
+	// layer of its highest import, tasks (R4).
+	"internal/bleveindex": 4,
 	// L5
 	"acquire": 5,
 	// L6 (internal/<capability>http is coreFamily's pattern)

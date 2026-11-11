@@ -1,7 +1,7 @@
 // file: core/app/noglobals_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 68d64f45-c7be-4bf0-8c21-6be99047ed03
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package app
 
@@ -89,6 +89,10 @@ func bannedGlobal(path, name string) (string, bool) {
 		if name == "Notify" || name == "NotifyContext" {
 			return "signal handling belongs to main", true
 		}
+	case "github.com/blevesearch/bleve/v2/index/scorch":
+		if name == "RegistryAsyncErrorCallbacks" {
+			return "scorch's process-global async-error callback registry; only core/internal/bleveindex's asyncCallback may touch it, one guarded entry per opened index", true
+		}
 	}
 	return "", false
 }
@@ -111,8 +115,8 @@ func noGlobalsFindings(fset *token.FileSet, f *ast.File, exempt map[string]map[s
 	var out []string
 	for _, decl := range f.Decls {
 		var allowed map[string]bool
-		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil {
-			allowed = exempt[fd.Name.Name]
+		if fd, ok := decl.(*ast.FuncDecl); ok {
+			allowed = exempt[funcKey(fd)]
 		}
 		ast.Inspect(decl, func(n ast.Node) bool {
 			switch n := n.(type) {
@@ -144,6 +148,34 @@ func noGlobalsFindings(fset *token.FileSet, f *ast.File, exempt map[string]map[s
 		})
 	}
 	return out
+}
+
+// funcKey is the name an exemption is filed under: the function's name, or
+// "Type.Method" for a method.
+func funcKey(fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
+		return fd.Name.Name
+	}
+	t := fd.Recv.List[0].Type
+	if st, ok := t.(*ast.StarExpr); ok {
+		t = st.X
+	}
+	if id, ok := t.(*ast.Ident); ok {
+		return id.Name + "." + fd.Name.Name
+	}
+	return fd.Name.Name
+}
+
+// scorchRegistryExempt is the one place in core that may touch scorch's
+// callback registry (F7-07): core/internal/bleveindex's asyncCallback, which
+// registers one callback per opened index under a unique name and removes it
+// at Close, under a mutex because the registry is a plain map.
+func scorchRegistryExempt() map[string]map[string]bool {
+	const reg = "github.com/blevesearch/bleve/v2/index/scorch.RegistryAsyncErrorCallbacks"
+	return map[string]map[string]bool{
+		"asyncCallback.register":   {reg: true},
+		"asyncCallback.unregister": {reg: true},
+	}
 }
 
 // rootSelector is the innermost pkg.Name selector of an expression like
@@ -216,6 +248,9 @@ func TestNoGlobals(t *testing.T) {
 		var exempt map[string]map[string]bool
 		if filepath.Dir(rel) == "app" {
 			exempt = processDefaultsExempt()
+		}
+		if filepath.ToSlash(filepath.Dir(rel)) == "internal/bleveindex" {
+			exempt = scorchRegistryExempt()
 		}
 		findings = append(findings, noGlobalsFindings(fset, f, exempt)...)
 		return nil
@@ -307,5 +342,37 @@ func installOTelDiagnostics() {
 		if g := got[len(got)-len(want)+i]; !strings.Contains(g, w) {
 			t.Errorf("finding %d = %q, want it to name %s", len(got)-len(want)+i, g, w)
 		}
+	}
+}
+
+// TestGlobalScan_ScorchRegistry: the scorch callback registry is banned
+// everywhere, and exempt only inside the two methods of bleveindex's
+// asyncCallback (F7-07): the same access from any other function, or from a
+// method of another type, is a finding.
+func TestGlobalScan_ScorchRegistry(t *testing.T) {
+	const src = `package bleveindex
+
+import "github.com/blevesearch/bleve/v2/index/scorch"
+
+type asyncCallback struct{}
+type rival struct{}
+
+func (c *asyncCallback) register()   { scorch.RegistryAsyncErrorCallbacks["x"] = nil }
+func (c *asyncCallback) unregister() { delete(scorch.RegistryAsyncErrorCallbacks, "x") }
+func (c *asyncCallback) onError()    { _ = scorch.RegistryAsyncErrorCallbacks }
+func (r rival) register()            { scorch.RegistryAsyncErrorCallbacks["y"] = nil }
+func register()                      { scorch.RegistryAsyncErrorCallbacks["z"] = nil }
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "robin.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := noGlobalsFindings(fset, f, nil); len(got) != 5 {
+		t.Fatalf("findings without the exemption = %d, want 5:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	got := noGlobalsFindings(fset, f, scorchRegistryExempt())
+	if len(got) != 3 {
+		t.Fatalf("findings with the exemption = %d, want 3 (onError, rival.register, register):\n%s", len(got), strings.Join(got, "\n"))
 	}
 }
