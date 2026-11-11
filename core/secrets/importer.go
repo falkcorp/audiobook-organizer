@@ -1,5 +1,5 @@
 // file: core/secrets/importer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0fe45662-890d-4ebd-b671-62d3c038a3e5
 // last-edited: 2026-11-10
 
@@ -72,7 +72,7 @@ func (im importer) ImportSecret(ctx context.Context, b *storage.Batch, w Write) 
 		_, err := s.put(b, w)
 		return err
 	}
-	same, err := s.holdsValue(w.Name, raw, w.Value.b)
+	same, err := s.holdsValue(w.Name, raw, w.Value.raw())
 	if err != nil {
 		return err
 	}

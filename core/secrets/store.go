@@ -1,5 +1,5 @@
 // file: core/secrets/store.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: be9e243c-f9df-4ff7-930d-10a5b90f2f49
 // last-edited: 2026-11-10
 
@@ -300,24 +300,20 @@ func isTempSuffix(s string) bool {
 // rewrites it on a reset boot only. A new keyring is k<n> and d<n> with n
 // past every key number known: the sealed records' key IDs, c/secrets/meta's
 // max_key_id (m) and the export record's IDs. It is created exclusively,
-// never over a keyring that appeared meanwhile, and never over an entry at
-// the path that Stat reads as absent (a dangling symbolic link).
+// never over a keyring that appeared meanwhile. The keyring path must hold a
+// regular file or nothing: a symbolic link (dangling or not), a directory or
+// any other entry is refused, never followed and never replaced, as
+// export-keyring refuses one (05-config §2.4 names a file, 0600, written
+// atomically; nothing there allows a link).
 func (s *Store) resolveKeyring(ctx context.Context, o Options, m *storeMeta) (*keyringFile, error) {
-	_, statErr := s.root.Stat(s.keyFile)
+	fi, statErr := s.root.Lstat(s.keyFile)
 	switch {
-	case statErr == nil:
+	case statErr == nil && fi.Mode().IsRegular():
 		return s.loadKeyring(o)
+	case statErr == nil:
+		return nil, notRegularKeyring(s.keyFile, fi.Mode())
 	case !errors.Is(statErr, fs.ErrNotExist):
 		return nil, fmt.Errorf("secrets: stat the keyring %s: %w", s.keyFile, statErr)
-	}
-	// Stat follows a symbolic link, so a dangling one reads as absent while
-	// its name is taken: the exclusive create below would fail as though a
-	// keyring had appeared meanwhile. Name what is there instead.
-	if fi, err := s.root.Lstat(s.keyFile); err == nil {
-		return nil, fmt.Errorf("secrets: the keyring path %s holds a dangling symbolic link or another entry that is not a regular file (mode %v) "+
-			"and it is never replaced: restore the file it names, or remove it so a new keyring is created", s.keyFile, fi.Mode())
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("secrets: lstat the keyring %s: %w", s.keyFile, err)
 	}
 	sealed, maxKID, err := s.countSealed(ctx)
 	if err != nil {
@@ -360,6 +356,20 @@ func (s *Store) resolveKeyring(ctx context.Context, o Options, m *storeMeta) (*k
 		"The stored secrets under the old keys are kept and read as \"must be re-entered\" until the old keyring is put back",
 		"key_file", s.keyFile, "kept_records", sealed, "key_ids", []string{f.Keys[0].ID, f.Keys[1].ID})
 	return f, nil
+}
+
+// notRegularKeyring is the refusal of an entry at the keyring path that is
+// not a regular file.
+func notRegularKeyring(keyFile string, mode fs.FileMode) error {
+	what := fmt.Sprintf("an entry of mode %v", mode)
+	switch {
+	case mode&fs.ModeSymlink != 0:
+		what = "a symbolic link"
+	case mode.IsDir():
+		what = "a directory"
+	}
+	return fmt.Errorf("secrets: the keyring path %s holds %s, not a regular file; it is never followed or replaced: "+
+		"put the keyring file itself there, or remove the entry so a new keyring is created", keyFile, what)
 }
 
 // exportedMaxID is the highest key number the export record names, 0 when
@@ -457,15 +467,16 @@ func (s *Store) lookup(ctx context.Context, n Name, withValue bool) (Value, Meta
 		return Value{}, Meta{Name: n}, err
 	}
 	s.mu.RLock()
-	closed := s.closed
-	eph, isEph := s.ephemeral[n]
-	s.mu.RUnlock()
-	if closed {
+	if s.closed {
+		s.mu.RUnlock()
 		return Value{}, Meta{Name: n}, errClosed
 	}
-	if isEph {
-		return s.ephemeralMeta(n, eph, withValue)
+	if eph, ok := s.ephemeral[n]; ok {
+		v, m := s.ephemeralMetaLocked(n, eph, withValue)
+		s.mu.RUnlock()
+		return v, m, nil
 	}
+	s.mu.RUnlock()
 	raw, err := s.ks.Get(ctx, recordKey(n))
 	if errors.Is(err, storage.ErrNotFound) {
 		return Value{}, Meta{Name: n}, ErrNotSet
@@ -476,19 +487,17 @@ func (s *Store) lookup(ctx context.Context, n Name, withValue bool) (Value, Meta
 	return s.fromRecord(n, raw, withValue)
 }
 
-// ephemeralMeta is the Meta (and, for Get, a copy of the value) of an
-// operator value.
-func (s *Store) ephemeralMeta(n Name, eph *ephemeralValue, withValue bool) (Value, Meta, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.closed {
-		return Value{}, Meta{Name: n}, errClosed
-	}
-	m := Meta{Name: n, Set: true, Source: eph.src, Fingerprint: s.ring.fingerprint(eph.v.b)}
+// ephemeralMetaLocked is the Meta (and, for Get, a copy of the value) of an
+// operator value. The caller holds s.mu and has checked the store is open:
+// the fingerprint and the copy are taken under the same lock as the map
+// read, because Ephemeral wipes a replaced value under the write lock, so no
+// reader ever touches the store's own bytes outside it (copy on read).
+func (s *Store) ephemeralMetaLocked(n Name, eph *ephemeralValue, withValue bool) (Value, Meta) {
+	m := Meta{Name: n, Set: true, Source: eph.src, Fingerprint: s.ring.fingerprint(eph.v.raw())}
 	if !withValue {
-		return Value{}, m, nil
+		return Value{}, m
 	}
-	return Value{b: eph.v.Bytes()}, m, nil
+	return valueOf(eph.v.Bytes()), m
 }
 
 // fromRecord reads one record's bytes: a cleared marker is ErrNotSet, an
@@ -523,7 +532,7 @@ func (s *Store) fromRecord(n Name, raw []byte, withValue bool) (Value, Meta, err
 		clear(pt)
 		return Value{}, m, nil
 	}
-	return Value{b: pt}, m, nil
+	return valueOf(pt), m, nil
 }
 
 // Get reads n (05-config §2.3 "Read order"): ErrNotSet when nothing is set
@@ -719,8 +728,8 @@ func (s *Store) put(b *storage.Batch, w Write) (Meta, error) {
 			s.mu.RUnlock()
 			return Meta{Name: w.Name}, errClosed
 		}
-		sealed, err := s.ring.seal(s.appID, w.Name, w.Value.b, at, w.By)
-		fp := s.ring.fingerprint(w.Value.b)
+		sealed, err := s.ring.seal(s.appID, w.Name, w.Value.raw(), at, w.By)
+		fp := s.ring.fingerprint(w.Value.raw())
 		s.mu.RUnlock()
 		if err != nil {
 			return Meta{Name: w.Name}, err
@@ -780,10 +789,14 @@ func (s *Store) Ephemeral(n Name, v Value, src Source) {
 	if s.closed {
 		return
 	}
-	if old, ok := s.ephemeral[n]; ok {
-		clear(old.v.b)
+	// Readers copy an operator value under s.mu (ephemeralMetaLocked), so
+	// with the write lock held none can still hold the old bytes: they are
+	// wiped once the new value is in place.
+	old := s.ephemeral[n]
+	s.ephemeral[n] = &ephemeralValue{v: valueOf(v.Bytes()), src: src}
+	if old != nil {
+		clear(old.v.raw())
 	}
-	s.ephemeral[n] = &ephemeralValue{v: Value{b: v.Bytes()}, src: src}
 }
 
 // All yields the Meta of every secret the store knows, sorted by name: each
@@ -811,7 +824,10 @@ func (s *Store) allMetas(ctx context.Context) ([]Meta, error) {
 		s.mu.RUnlock()
 		return nil, errClosed
 	}
-	eph := maps.Clone(s.ephemeral)
+	eph := make(map[Name]Meta, len(s.ephemeral))
+	for n, e := range s.ephemeral {
+		_, eph[n] = s.ephemeralMetaLocked(n, e, false)
+	}
 	s.mu.RUnlock()
 	byName := map[Name]Meta{}
 	for kv, err := range s.ks.ScanPrefix(ctx, recordPrefix()) {
@@ -832,13 +848,7 @@ func (s *Store) allMetas(ctx context.Context) ([]Meta, error) {
 		}
 		byName[n] = m
 	}
-	for n, e := range eph {
-		_, m, err := s.ephemeralMeta(n, e, false)
-		if err != nil {
-			return nil, err
-		}
-		byName[n] = m
-	}
+	maps.Copy(byName, eph)
 	names := slices.Sorted(maps.Keys(byName))
 	out := make([]Meta, 0, len(names))
 	for _, n := range names {
@@ -910,10 +920,12 @@ func (s *Store) KeyIDs() []string {
 // kernelSecrets, or a bound Ref's resolver) fmt cannot call them: a pointer
 // printed with a verb it does not take (%s, %q) is reprinted with %v at
 // depth 0, which walks the Store's fields one level and prints every pointer
-// below as an address. So every field that holds secret bytes sits behind a
-// pointer: ring is a *keyring and ephemeral maps to *ephemeralValue. A field
-// holding a Value, a keyMaterial or a []byte of key material by value would
-// print it raw (TestStore_NeverFormatsInsideAWrapper).
+// below as an address. So every field that holds key material sits behind a
+// pointer: ring is a *keyring. A field holding a keyMaterial, a keyring type
+// or a []byte of key material by value would print it raw
+// (TestStore_SecretFieldsSitBehindPointers). Operator values are Values,
+// whose bytes fmt never reaches whatever holds them (see Value); ephemeral
+// maps to *ephemeralValue as well.
 func (s *Store) String() string {
 	if s == nil {
 		return "secrets.Store(nil)"
@@ -998,7 +1010,7 @@ func (s *Store) Close() error {
 	s.closed = true
 	s.ring.wipe()
 	for _, e := range s.ephemeral {
-		clear(e.v.b)
+		clear(e.v.raw())
 	}
 	clear(s.ephemeral)
 	s.mu.Unlock()
