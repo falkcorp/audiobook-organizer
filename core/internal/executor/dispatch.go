@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
 // last-edited: 2026-11-10
 
@@ -355,7 +355,11 @@ func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	a.ctx = ctx
 	a.cancel = func(cause error) { cancel(cause); stop() }
 	a.live = true
+	pending := a.stopCause // a stop that committed while the attempt was claimed but not live
 	e.mu.Unlock()
+	if pending != nil {
+		a.cancel(pending)
+	}
 	e.ins.runStarted(a)
 	e.bg.Add(1)
 	go a.supervise()

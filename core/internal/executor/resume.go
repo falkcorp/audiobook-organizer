@@ -1,5 +1,5 @@
 // file: core/internal/executor/resume.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4cd3dc83-a564-4bfd-90d7-fa6113583f62
 // last-edited: 2026-11-10
 
@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
@@ -54,7 +56,8 @@ func (e *executor) consultStandDowns(ctx context.Context) error {
 // held runs are left untouched; a run of an unknown kind is dropped; a run
 // that was executing when the process died (running or stopping) and an
 // interrupted run go through the resume policy; a quiesced run is
-// re-queued unless a surviving marker named it.
+// re-queued unless a surviving marker named it or a newer run supersedes it
+// (supersededQuiesced).
 func (e *executor) resumeSweep(ctx context.Context) error {
 	var recs []tasks.RunRecord
 	for rec, err := range e.runs.Unfinished(ctx) {
@@ -65,12 +68,71 @@ func (e *executor) resumeSweep(ctx context.Context) error {
 		}
 		recs = append(recs, rec)
 	}
+	superseded := e.supersededQuiesced(recs)
 	for _, rec := range recs {
-		if err := e.resumeOne(ctx, rec); err != nil && !errors.Is(err, tasks.ErrRunConflict) {
+		resume := e.resumeOne
+		if superseded[rec.ID] {
+			resume = func(ctx context.Context, rec tasks.RunRecord) error {
+				return e.toState(ctx, rec, tasks.StateInterruptedDropped, reasonSuperseded)
+			}
+		}
+		if err := resume(ctx, rec); err != nil && !errors.Is(err, tasks.ErrRunConflict) {
 			return fmt.Errorf("executor: resume %s: %w", rec.ID, err)
 		}
 	}
 	return nil
+}
+
+// reasonSuperseded is the reason of a quiesced run dropped at boot because a
+// newer run of its kind exists (HEAD: "superseded: a newer run of this op
+// exists").
+const reasonSuperseded = "superseded"
+
+// supersededQuiesced is HEAD's boot supersession of stale quiesced runs
+// (supersedeStaleQuiesced, internal/operations/registry/resume.go:65-71),
+// which 05-tasks does not restate; F2-03 keeps it (seams.d/F2-03.md). Per
+// kind, among the quiesced runs this boot would re-queue (interrupted_quiesced
+// or stopping{quiesce}, not those a surviving marker keeps): only the newest
+// is kept, and none when a live run of the kind (queued, waiting or running)
+// exists, unless the kind merges queued params (Dedupe.Merge): such a kind's
+// runs differ by params, so a live run does not cover its quiesced one, but
+// its own quiesced backlog still collapses to the newest. Held and unknown
+// kinds take no part.
+func (e *executor) supersededQuiesced(recs []tasks.RunRecord) map[tasks.RunID]bool {
+	quiet := map[tasks.Kind][]tasks.RunRecord{}
+	live := map[tasks.Kind]bool{}
+	e.mu.Lock()
+	for _, r := range recs {
+		if e.defs[r.Kind] == nil || e.held(r.Kind) {
+			continue
+		}
+		switch {
+		case r.State == tasks.StateInterruptedQuiesced || r.State == tasks.StateStopping && r.Reason == reasonQuiesce:
+			if !e.bootQuiet[r.ID] {
+				quiet[r.Kind] = append(quiet[r.Kind], r)
+			}
+		case r.State == tasks.StateQueued || r.State == tasks.StateWaitingDeps || r.State == tasks.StateRunning:
+			live[r.Kind] = true
+		}
+	}
+	e.mu.Unlock()
+	out := map[tasks.RunID]bool{}
+	for kind, rs := range quiet {
+		slices.SortFunc(rs, func(a, b tasks.RunRecord) int { // newest first
+			if c := b.Created.Compare(a.Created); c != 0 {
+				return c
+			}
+			return strings.Compare(string(b.ID), string(a.ID))
+		})
+		keep := 1
+		if live[kind] && e.defs[kind].c.Dedupe.Merge == nil {
+			keep = 0
+		}
+		for _, r := range rs[keep:] {
+			out[r.ID] = true
+		}
+	}
+	return out
 }
 
 func (e *executor) resumeOne(ctx context.Context, rec tasks.RunRecord) error {

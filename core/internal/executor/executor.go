@@ -1,5 +1,5 @@
 // file: core/internal/executor/executor.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a39876a5-3dce-4f6d-9003-f07fdeb8a28d
 // last-edited: 2026-11-10
 
@@ -311,6 +311,17 @@ func (e *executor) move(ctx context.Context, id tasks.RunID, edit editFunc,
 			want := tasks.Expect{State: cur.State, Attempt: cur.Attempt, FenceEpoch: cur.FenceEpoch}
 			if err := e.runs.Transition(ctx, b, id, want, next); err != nil {
 				return err
+			}
+			// edit decided from cur, a read outside the batch, and
+			// Transition's guarded read checks only state, attempt and
+			// fence. A move committed in between that left those alone (a
+			// cancel replacing a quiesce changes only the reason) shows as a
+			// newer event sequence: decide again from a fresh read instead
+			// of committing a record built from the stale one (5T.7, R7-3).
+			if again, err := e.runs.Get(ctx, id); err != nil {
+				return err
+			} else if again.Seq.Event != cur.Seq.Event {
+				return fmt.Errorf("%w: run %s moved while this transition was staged", tasks.ErrRunConflict, id)
 			}
 			if err := e.runs.AppendEvent(ctx, b, id, cur.Seq.Event+1, ev); err != nil {
 				return err

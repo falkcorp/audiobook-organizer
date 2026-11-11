@@ -1,5 +1,5 @@
 // file: core/internal/executor/fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9689d192-751d-423a-b144-61fe27e2a8d1
 // last-edited: 2026-11-10
 
@@ -209,8 +209,27 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 		}
 		marked[m] = true
 	}
-	ids = slices.DeleteFunc(ids, func(id string) bool { return marked[id] || plan[id].ID == "" })
+	// A row an earlier attempt of this run applied carries its mark: it is
+	// not applied again, but while its changes still stand it is one of the
+	// run's applied rows, for AfterApply and the result (HEAD's
+	// appliedByEarlierAttempt, pkg/ops/fixer.go: Applied counts across
+	// attempts from the apply markers).
+	var prior []string
+	ids = slices.DeleteFunc(ids, func(id string) bool {
+		if plan[id].ID == "" {
+			return true
+		}
+		if marked[id] {
+			prior = append(prior, id)
+			return true
+		}
+		return false
+	})
 	slices.Sort(ids)
+	prior, undone, err := a.standing(ctx, prior)
+	if err != nil {
+		return nil, err
+	}
 	// Row.Subjects always act as ExclusiveRefs at apply; PartitionBy, when
 	// set, also runs the rows of one key in order on one worker (5T.3.1).
 	opts := tasks.ItemsOptions[string]{
@@ -221,7 +240,7 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 		opts.PartitionBy = func(id string) string { return fs.PartitionBy(plan[id]) }
 	}
 	var mu sync.Mutex
-	var applied []string
+	applied := prior
 	res, _ := tasks.RunItems(rc, a.itemsPar(fs.Parallelism), ids, func(ic *tasks.ItemRC, id string) error {
 		planned := plan[id]
 		c, ok, err := fs.Load(rc, p, id)
@@ -264,5 +283,30 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 			return nil, err
 		}
 	}
-	return json.Marshal(fixerResult{Applied: len(applied), Skipped: int(res.Skipped), Failed: int(res.Failed)})
+	return json.Marshal(fixerResult{Applied: len(applied), Skipped: int(res.Skipped) + undone, Failed: int(res.Failed)})
+}
+
+// standing keeps the marked rows whose changes still stand. With the
+// module's ChangeSink, Stands decides (a row whose history was undone is
+// not applied, HEAD's evidence rule); without one the mark is the evidence.
+// A row that no longer stands is skipped as changed since the plan and is
+// not written again (counted in undone).
+func (a *attempt) standing(ctx context.Context, marked []string) (keep []string, undone int, err error) {
+	sink := a.e.opts.ChangeSinks[a.d.module]
+	if sink == nil {
+		return marked, 0, nil
+	}
+	for _, id := range marked {
+		ok, err := sink.Stands(ctx, a.id, id)
+		if err != nil {
+			return nil, 0, fmt.Errorf("executor: read the apply evidence of row %s: %w", id, err)
+		}
+		if !ok {
+			a.log.Info("row applied by an earlier attempt was undone since; skipped", "row", id, "err", tasks.ErrChangedSincePlan)
+			undone++
+			continue
+		}
+		keep = append(keep, id)
+	}
+	return keep, undone, nil
 }

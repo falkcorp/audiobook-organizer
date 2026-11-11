@@ -1,5 +1,5 @@
 // file: core/internal/executor/control.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e0da087e-cd1b-40dd-8ed9-97f8b015517f
 // last-edited: 2026-11-10
 
@@ -205,8 +205,10 @@ func (e *executor) mayCancel(rec tasks.RunRecord, actor tasks.Actor, who rbac.Ch
 // CancelAs cancels a run (5T.3.6). A run that is not executing in this
 // process ends canceled at once; an executing one goes stopping{cancel},
 // its context is canceled with tasks.ErrCanceled and its supervisor
-// abandons it after the contract's grace. A run already stopping is
-// answered nil; a terminal one is not found (HEAD's repeat-cancel rule,
+// abandons it after the contract's grace. A run stopping for a quiesce or a
+// shutdown (a stop that would resume it later) is turned into a cancel; one
+// already stopping for a cancel, the watchdog or its timeout is answered
+// nil; a terminal one is not found (HEAD's repeat-cancel rule,
 // cancel_persisted_test.go). A held run is refused (ErrHeld).
 func (e *executor) CancelAs(ctx context.Context, id tasks.RunID, by tasks.Actor) error {
 	rec, err := e.runs.Get(ctx, id)
@@ -219,34 +221,34 @@ func (e *executor) CancelAs(ctx context.Context, id tasks.RunID, by tasks.Actor)
 	return e.stop(ctx, id, by, reasonCancel, tasks.ErrCanceled)
 }
 
-// stop is cancel's core, shared with the watchdog (reason watchdog).
+// stop is cancel's core, shared with the watchdog (reason watchdog). The
+// in-process attempt is looked up inside the move, from the same fresh read
+// the CAS is staged against, so a run that goes live between Cancel's call
+// and its write is still stopped (attemptFor).
 func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, reason string, cause error) error {
 	actor := &by
 	if by == (tasks.Actor{}) {
 		actor = nil
 	}
-	e.mu.Lock()
-	a := e.running[id]
-	if a != nil && (a.zombie || !a.live) {
-		a = nil // a zombie's row is already ended; a claim in flight has no attempt yet
-	}
-	var an int
-	var afence uint64
-	if a != nil {
-		an, afence = a.n, a.fence
-	}
-	e.mu.Unlock()
+	var target *attempt // the attempt the committed move put in stopping
 	_, err := e.move(ctx, id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+		target = nil
 		if cur.State.Terminal() {
 			return cur, tasks.RunEvent{}, fmt.Errorf("%w: %s is %s", tasks.ErrRunNotFound, id, cur.State)
 		}
-		if cur.State == tasks.StateStopping {
-			return cur, tasks.RunEvent{}, errAlreadyStopping
-		}
 		next := cur
 		ev := tasks.RunEvent{Event: "cancel", Reason: reason, Actor: actor}
-		executing := a != nil && cur.State == tasks.StateRunning && cur.Attempt == an && cur.FenceEpoch == afence
-		if executing {
+		if cur.State == tasks.StateStopping {
+			// A cancel is final: it overrides a stop that would resume the
+			// run later. Any other stop already ends the run.
+			if reason != reasonCancel || (cur.Reason != reasonQuiesce && cur.Reason != reasonShutdown) {
+				return cur, tasks.RunEvent{}, errAlreadyStopping
+			}
+			target = e.attemptFor(cur)
+			next.Reason = reasonCancel
+			return next, ev, nil
+		}
+		if target = e.attemptFor(cur); target != nil {
 			next.State, next.Reason = tasks.StateStopping, reason
 			return next, ev, nil
 		}
@@ -256,16 +258,48 @@ func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, rea
 	if errors.Is(err, errAlreadyStopping) {
 		return nil
 	}
-	if err != nil {
+	if err != nil || target == nil {
 		return err
 	}
-	if a != nil {
-		e.mu.Lock()
-		if a.stopping == "" {
-			a.stopping = reason
+	e.mu.Lock()
+	if target.stopping == "" || reason == reasonCancel {
+		target.stopping = reason // a cancel replaces a quiesce or shutdown already under way
+	}
+	if target.stopCause == nil {
+		target.stopCause = cause
+	}
+	live := target.live
+	e.mu.Unlock()
+	if live {
+		target.cancel(cause)
+	} // else startAttempt applies stopCause before the body runs
+	return nil
+}
+
+// attemptFor is the in-process attempt executing cur, read at each staging
+// of a stop: a live attempt of cur's attempt and fence, or a claim whose
+// queued->running commit is cur but whose attempt has not started yet (the
+// dispatcher claims only queued runs, so a registered, not-yet-live attempt
+// of a running record made that commit). nil for a zombie, a claim still in
+// flight (cur is queued: the stop's CAS and the claim's both want queued, so
+// one of them loses) and a run not executing in this process.
+func (e *executor) attemptFor(cur tasks.RunRecord) *attempt {
+	if cur.State != tasks.StateRunning && cur.State != tasks.StateStopping {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	a := e.running[cur.ID]
+	switch {
+	case a == nil || a.zombie || a.exited:
+		return nil
+	case a.live:
+		if a.n == cur.Attempt && a.fence == cur.FenceEpoch {
+			return a
 		}
-		e.mu.Unlock()
-		a.cancel(cause)
+		return nil
+	case cur.State == tasks.StateRunning:
+		return a
 	}
 	return nil
 }

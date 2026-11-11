@@ -1,5 +1,5 @@
 // file: core/internal/executor/attempt.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4ad76723-6fc7-4bac-840b-f169142b4af9
 // last-edited: 2026-11-10
 
@@ -86,10 +86,13 @@ type attempt struct {
 
 	// Guarded by e.mu.
 	stopping string // "", cancel, shutdown, quiesce, watchdog
-	zombie   bool
-	exited   bool
-	holdLost bool
-	live     bool // startAttempt published the fields above
+	// stopCause is the cause of a stop recorded on the attempt, applied by
+	// startAttempt when the stop committed before the attempt went live.
+	stopCause error
+	zombie    bool
+	exited    bool
+	holdLost  bool
+	live      bool // startAttempt published the fields above
 
 	holds []*standHold
 }
@@ -560,6 +563,8 @@ func (a *attempt) outcome(err error) (tasks.RunState, string) {
 			return tasks.StateCanceled, reasonWatchdog
 		}
 		return tasks.StateCanceled, reasonCancel
+	case cause != nil && stopping == reasonCancel:
+		return tasks.StateCanceled, reasonCancel // a cancel that replaced a quiesce or shutdown under way
 	case errors.Is(cause, tasks.ErrShutdown):
 		return tasks.StateInterrupted, reasonShutdown
 	case errors.Is(cause, tasks.ErrQuiesced):
@@ -598,8 +603,16 @@ func (a *attempt) finish(res json.RawMessage, err error) {
 		next := cur
 		next.Done, next.Total, next.Current = done, total, current
 		ev := tasks.RunEvent{}
-		if yield {
+		// A cancel that committed after this attempt's outcome was decided
+		// (it replaced a quiesce or shutdown under way, CancelAs) is final:
+		// an outcome that would resume the run ends it canceled instead.
+		canceled := cur.State == tasks.StateStopping && cur.Reason == reasonCancel
+		if yield && !canceled {
 			return a.yieldNext(cur, next)
+		}
+		state, reason := state, reason
+		if canceled && (yield || !state.Terminal()) {
+			state, reason = tasks.StateCanceled, reasonCancel
 		}
 		next.State, next.Reason = state, reason
 		switch state {
