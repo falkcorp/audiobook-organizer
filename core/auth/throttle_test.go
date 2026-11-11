@@ -1,13 +1,15 @@
 // file: core/auth/throttle_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 78e17557-457f-4ae3-be51-7a8d454fd0a0
 // last-edited: 2026-11-10
 
 package auth
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 )
@@ -286,4 +288,56 @@ func TestThrottle_SetLimitsAppliesAndKeepsTheTableSize(t *testing.T) {
 	if tr.SourceBlocked("192.0.2.9") {
 		t.Fatal("back at the default budget, 2 failures still block")
 	}
+}
+
+// TestThrottle_SourceAndAccount (05-authn §10) walks one source and one
+// account through a window on synctest's clock, with the throttle's real
+// clock and sleep: soft delays that step and cap, the source's budget spent
+// (what Login refuses with a 429 before any password work), both counters
+// pinned through a stream of new keys in small tables, and the window
+// expiring both.
+func TestThrottle_SourceAndAccount(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		lim := ThrottleLimits{
+			MaxFailuresPerSource: 6, Window: time.Minute,
+			SoftThreshold: 2, SoftStep: 100 * time.Millisecond, SoftMax: 300 * time.Millisecond, MaxKeys: 4,
+		}
+		tr := NewThrottle(lim, nil, nil)
+		for i, want := range []time.Duration{0, 0, 100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond, 300 * time.Millisecond} {
+			if tr.SourceBlocked("192.0.2.40") {
+				t.Fatalf("failure %d: the source is refused before its budget is spent", i)
+			}
+			start := time.Now()
+			d := tr.RecordFailure("selina", "192.0.2.40")
+			tr.Delay(d)
+			if d != want || time.Since(start) != want {
+				t.Fatalf("failure %d: delay %v (slept %v), want %v", i, d, time.Since(start), want)
+			}
+		}
+		if !tr.SourceBlocked("192.0.2.40") {
+			t.Fatal("a source that spent its budget is not refused")
+		}
+		if tr.SourceBlocked("192.0.2.41") {
+			t.Fatal("another source is refused")
+		}
+		if got := tr.AccountFailures("selina"); got != 6 {
+			t.Fatalf("account failures %d, want 6", got)
+		}
+		for i := range 20 {
+			tr.RecordFailure(fmt.Sprintf("rotating-%d", i), fmt.Sprintf("192.0.2.%d", 100+i))
+		}
+		if !tr.SourceBlocked("192.0.2.40") || tr.AccountFailures("selina") != 6 {
+			t.Fatal("a pinned counter was evicted by a stream of new keys")
+		}
+		if src, acct := tr.Len(); src > lim.MaxKeys || acct > lim.MaxKeys {
+			t.Fatalf("tables hold %d sources and %d accounts, bound %d", src, acct, lim.MaxKeys)
+		}
+		time.Sleep(lim.Window + time.Second)
+		if tr.SourceBlocked("192.0.2.40") || tr.AccountFailures("selina") != 0 {
+			t.Fatal("the window passed but the counters did not expire")
+		}
+		if d := tr.RecordFailure("selina", "192.0.2.40"); d != 0 {
+			t.Fatalf("the first failure of a new window was delayed %v", d)
+		}
+	})
 }
