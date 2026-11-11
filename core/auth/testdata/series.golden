@@ -1,0 +1,16 @@
+# file: core/auth/testdata/series.golden
+# version: 1.0.0
+# guid: e5a3c1f7-9d24-4b68-8f0a-7c2d6e1b9a43
+# last-edited: 2026-11-11
+#
+# The mediacore.auth scope's series (05-authn §9): family<TAB>type<TAB>labels,
+# checked by metricstest.AssertSeries in TestAuthSeries_Golden. The counters'
+# closed label sets are exported from zero; the two gauges are observed from
+# the store. Not here yet: mediacore_auth_password_hash_seconds,
+# _password_queue_wait_seconds and _extension_errors_total (seams.d/F4-02.md).
+mediacore_auth_api_keys_active	gauge	imported
+mediacore_auth_attempts_total	counter	method,outcome
+mediacore_auth_bootstrap_redemptions_total	counter	outcome
+mediacore_auth_principal_invalidations_total	counter	reason
+mediacore_auth_sessions_active	gauge	
+mediacore_auth_throttled_total	counter	surface

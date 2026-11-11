@@ -1,5 +1,5 @@
 // file: core/auth/middleware.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9206232a-c4a5-4cca-be1f-569a0020e2c1
 // last-edited: 2026-11-11
 
@@ -97,17 +97,19 @@ func checkExtension(e Extension) error {
 type stage struct {
 	order Order
 	name  string
-	run   func(r *http.Request, c ClientInfo) (*Principal, *Failure, error)
+	// method labels the stage's mediacore_auth_attempts_total series.
+	method Method
+	run    func(r *http.Request, c ClientInfo) (*Principal, *Failure, error)
 }
 
 // stages returns stage 12's authenticators sorted by Order (stable).
 func (s *Service) stages() []stage {
 	out := []stage{
-		{order: OrderAPIKey, name: "apikey", run: s.authenticateKey},
-		{order: OrderSession, name: "session", run: s.authenticateSession},
+		{order: OrderAPIKey, name: "apikey", method: MethodAPIKey, run: s.authenticateKey},
+		{order: OrderSession, name: "session", method: MethodSession, run: s.authenticateSession},
 	}
 	for _, e := range s.extensions {
-		out = append(out, stage{order: e.Order, name: e.Authenticator.Name(), run: s.extensionStage(e)})
+		out = append(out, stage{order: e.Order, name: e.Authenticator.Name(), method: e.Spec.Method, run: s.extensionStage(e)})
 	}
 	slices.SortStableFunc(out, func(a, b stage) int { return cmp.Compare(a.order, b.order) })
 	return out
@@ -142,14 +144,16 @@ func (s *Service) Middleware() func(http.Handler) http.Handler {
 					return
 				}
 				if p != nil {
+					s.met.attempt(ctx, st.method, outcomeSuccess)
 					ctx = s.bind(ctx, p, c)
 					break
 				}
 				if fail != nil {
 					// Recorded for stage 13, not audited: 05-rbac §7.1's
 					// table (audit.CoreActions) names no action for a
-					// refused credential, and §9 counts stage 12's outcomes
-					// in mediacore_auth_attempts_total (F4-02b).
+					// refused credential; §9 counts it instead, in
+					// mediacore_auth_attempts_total.
+					s.met.attempt(ctx, st.method, attemptOutcome(fail.Code))
 					ctx = withFailure(ctx, *fail)
 					break
 				}

@@ -1,5 +1,5 @@
 // file: core/auth/sessions.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 587ac104-093e-402c-80f7-30ea7e13591d
 // last-edited: 2026-11-11
 
@@ -252,6 +252,12 @@ func (s *Service) keptSession(ctx context.Context, u *User, except string, now t
 // rather than from the event-invalidated generation table §3.2 describes,
 // until Deps.Events is wired; the answers are the same.
 func (s *Service) Revalidate(ctx context.Context, p *Principal) error {
+	err := s.revalidate(ctx, p)
+	s.met.invalidated(ctx, err)
+	return err
+}
+
+func (s *Service) revalidate(ctx context.Context, p *Principal) error {
 	if p == nil || p.User == nil || p.User.ID == "" {
 		return fmt.Errorf("%w: no principal", ErrInvalidCredentials)
 	}

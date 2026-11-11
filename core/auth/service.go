@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -266,6 +266,7 @@ type Service struct {
 	// The sign-in protections (§4.9): one instance each per Service, never
 	// package state (R5).
 	hasher   *password.Hasher
+	met      *authMetrics
 	throttle *Throttle
 	ceiling  *LoginCeiling
 }
@@ -341,6 +342,11 @@ func New(ctx context.Context, opts Options, d Deps) (*Service, error) {
 			break
 		}
 	}
+	met, err := newAuthMetrics(d.Metrics, s)
+	if err != nil {
+		return nil, err
+	}
+	s.met = met
 	return s, nil
 }
 

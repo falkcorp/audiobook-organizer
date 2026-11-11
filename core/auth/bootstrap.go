@@ -1,5 +1,5 @@
 // file: core/auth/bootstrap.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c1b0e37-5a64-4f0b-8d0e-3b1f7e4c2a95
 // last-edited: 2026-11-11
 
@@ -78,11 +78,17 @@ type StateFiles interface {
 // core.user.create for an account it created. Removing the token file is
 // best effort after the commit.
 func (s *Service) RedeemBootstrap(ctx context.Context, token string, client ClientInfo) (*BootstrapResult, error) {
+	res, err := s.redeemBootstrap(ctx, token, client)
+	s.met.redemption(ctx, err)
+	return res, err
+}
+
+func (s *Service) redeemBootstrap(ctx context.Context, token string, client ClientInfo) (*BootstrapResult, error) {
 	source := client.sourceKey()
 	th := s.loginThrottle()
 	if th.SourceBlocked(source) {
 		s.bootstrapRefused(ctx, client, reasonThrottled, "")
-		return nil, throttled(LoginRetryAfter)
+		return nil, s.throttledOn(surfaceBootstrap, LoginRetryAfter)
 	}
 	if _, err := s.lookupBootstrap(ctx, token, source, client); err != nil {
 		return nil, err
@@ -186,7 +192,7 @@ func (s *Service) Setup(ctx context.Context, in SetupInput) (*User, error) {
 	th := s.loginThrottle()
 	if th.SourceBlocked(source) {
 		s.bootstrapRefused(ctx, in.Client, reasonThrottled, "")
-		return nil, throttled(LoginRetryAfter)
+		return nil, s.throttledOn(surfaceSetup, LoginRetryAfter)
 	}
 	if s.HasUsers() {
 		return nil, fmt.Errorf("%w: a user already exists", ErrSetupClosed)

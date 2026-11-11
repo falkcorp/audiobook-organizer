@@ -1,5 +1,5 @@
 // file: core/auth/invites.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 50c00e01-9428-42af-bc4e-b9e9aee83e64
 // last-edited: 2026-11-11
 
@@ -220,7 +220,7 @@ func (s *Service) openInvite(ctx context.Context, token string, client ClientInf
 	source := client.sourceKey()
 	th := s.loginThrottle()
 	if th.SourceBlocked(source) {
-		return nil, throttled(LoginRetryAfter)
+		return nil, s.throttledOn(surfaceInvite, LoginRetryAfter)
 	}
 	t, err := s.lookupOneTime(ctx, OneTimeInvite, KindInvite, token)
 	if err != nil {
