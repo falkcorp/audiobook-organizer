@@ -1,7 +1,7 @@
 // file: core/auth/store.go
 // version: 1.0.0
 // guid: c69ddd70-3f1b-4605-9604-d1be29ba81d9
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -73,8 +73,8 @@ type UserStore interface {
 
 // SessionStore is the session family of Store (§4.3).
 type SessionStore interface {
-	IssueSession(b *storage.Batch, s *SessionRecord) (token string, err error) // mints the token and stages the record
-	SessionByToken(ctx context.Context, token string) (*SessionRecord, error)
+	IssueSession(b *storage.Batch, s *SessionRecord) (token Token, err error) // mints the token and stages the record
+	SessionByToken(ctx context.Context, token Token) (*SessionRecord, error)
 	SessionByPublicID(ctx context.Context, id string) (*SessionRecord, error)
 	ScanUserSessions(ctx context.Context, u UserID) iter.Seq2[*SessionRecord, error]
 	// DeleteSession stages the deletion of s, with an Expect on the stored
@@ -95,14 +95,14 @@ type SessionStore interface {
 
 // APIKeyStore is the API-key family of Store (§4.4).
 type APIKeyStore interface {
-	IssueAPIKey(b *storage.Batch, k *APIKey) (raw string, err error) // mints an mck_ key
-	PutAPIKey(b *storage.Batch, k *APIKey) error                     // status, expiry, name
+	IssueKey(b *storage.Batch, k *APIKey) (raw Token, err error) // mints an mck_ key
+	PutAPIKey(b *storage.Batch, k *APIKey) error                 // status, expiry, name
 	// TouchAPIKey records a key's last use (last_used_at, last_used_ip,
 	// use_count), changes only those fields and stages nothing for an absent,
 	// revoked, disabled, unconfirmed or expired key; it never undoes a
 	// revocation (§4.4; SEC6-3, DATA6-8, resolution R6-5).
 	TouchAPIKey(b *storage.Batch, id string, at time.Time, ip netip.Addr) error
-	APIKeyByToken(ctx context.Context, raw string) (*APIKey, error)
+	APIKeyByToken(ctx context.Context, raw Token) (*APIKey, error)
 	APIKeyByID(ctx context.Context, id string) (*APIKey, error)
 	ScanAPIKeys(ctx context.Context, owner UserID) iter.Seq2[*APIKey, error] // owner "" = every key
 	// DeleteAPIKey stages the deletion of k (a deleted user's keys).
@@ -112,10 +112,10 @@ type APIKeyStore interface {
 // OneTimeStore is the one-time token family of Store: invite, temp-login,
 // bootstrap.
 type OneTimeStore interface {
-	IssueOneTime(b *storage.Batch, t *OneTimeToken) (token string, err error)
-	TakeOneTime(b *storage.Batch, kind OneTimeKind, token string) (*OneTimeToken, error) // single use (above)
+	IssueOneTime(b *storage.Batch, t *OneTimeToken) (token Token, err error)
+	TakeOneTime(b *storage.Batch, kind OneTimeKind, token Token) (*OneTimeToken, error) // single use (above)
 	// LookupOneTime reads a token without spending it (invite lookup).
-	LookupOneTime(ctx context.Context, kind OneTimeKind, token string) (*OneTimeToken, error)
+	LookupOneTime(ctx context.Context, kind OneTimeKind, token Token) (*OneTimeToken, error)
 	ScanOneTime(ctx context.Context, kind OneTimeKind) iter.Seq2[*OneTimeToken, error]
 	// DeleteOneTime stages the deletion of the token of kind whose public ID
 	// is id, with an Expect on its stored bytes.

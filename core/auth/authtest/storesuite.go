@@ -1,7 +1,7 @@
 // file: core/auth/authtest/storesuite.go
 // version: 1.0.0
 // guid: 8cf164e8-2a54-46de-8eed-b0912673891b
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package authtest is the conformance kit of auth.Store and auth.Importer
 // (05-authn §3.4, §10 TestNativeStore_RoundTrip): StoreSuite runs every case
@@ -180,12 +180,12 @@ func key(owner auth.UserID, scopes ...rbac.Permission) *auth.APIKey {
 	}
 }
 
-func issueKey(t *testing.T, fx Fixture, k *auth.APIKey) string {
+func issueKey(t *testing.T, fx Fixture, k *auth.APIKey) auth.Token {
 	t.Helper()
-	var raw string
-	must(t, "IssueAPIKey", commit(t, fx, func(b *storage.Batch) error {
+	var raw auth.Token
+	must(t, "IssueKey", commit(t, fx, func(b *storage.Batch) error {
 		var err error
-		raw, err = fx.Store.IssueAPIKey(b, k)
+		raw, err = fx.Store.IssueKey(b, k)
 		return err
 	}))
 	return raw
@@ -199,9 +199,9 @@ func session(u auth.UserID, epoch int64) *auth.SessionRecord {
 	}
 }
 
-func issueSession(t *testing.T, fx Fixture, s *auth.SessionRecord) string {
+func issueSession(t *testing.T, fx Fixture, s *auth.SessionRecord) auth.Token {
 	t.Helper()
-	var tok string
+	var tok auth.Token
 	must(t, "IssueSession", commit(t, fx, func(b *storage.Batch) error {
 		var err error
 		tok, err = fx.Store.IssueSession(b, s)
@@ -376,7 +376,7 @@ func sessionRoundTrip(t *testing.T, fx Fixture) {
 	putUser(t, fx, user("01JBRUCE", "bruce", 1))
 	s := session("01JBRUCE", 0)
 	tok := issueSession(t, fx, s)
-	if err := auth.ParseCredential(auth.KindSession, tok); err != nil {
+	if err := auth.ParseCredential(auth.KindSession, string(tok)); err != nil {
 		t.Fatalf("IssueSession token %q: %v", tok[:4], err)
 	}
 	if s.PublicID == "" || s.Version != 1 {
@@ -428,7 +428,7 @@ func sessionNoToken(t *testing.T, fx Fixture) {
 	secret := tok[4:47]
 	for r, err := range fx.Store.ScanUserSessions(bg(), "01JBRUCE") {
 		must(t, "ScanUserSessions", err)
-		if strings.Contains(stringsOf(r), secret) {
+		if strings.Contains(stringsOf(r), string(secret)) {
 			t.Fatal("a session record carries its token")
 		}
 	}
@@ -537,7 +537,7 @@ func revokeSignIns(t *testing.T, fx Fixture) {
 	fresh := session("01JBRUCE", 0)
 	fresh.CreatedAt = stamp().Add(2 * time.Hour)
 	freshTok := issueSession(t, fx, fresh)
-	var inv string
+	var inv auth.Token
 	must(t, "IssueOneTime", commit(t, fx, func(b *storage.Batch) error {
 		var err error
 		inv, err = fx.Store.IssueOneTime(b, &auth.OneTimeToken{Kind: auth.OneTimeInvite, Email: "robin@gotham.example", CreatedAt: stamp(), ExpiresAt: stamp().Add(time.Hour)})
@@ -574,11 +574,11 @@ func apiKeyRoundTrip(t *testing.T, fx Fixture) {
 	putUser(t, fx, user("01JLUCIUS", "lucius", 1))
 	k := key("01JLUCIUS", "gotham:patrol", "gotham:signal")
 	raw := issueKey(t, fx, k)
-	if err := auth.ParseCredential(auth.KindAPIKey, raw); err != nil {
-		t.Fatalf("IssueAPIKey key: %v", err)
+	if err := auth.ParseCredential(auth.KindKey, string(raw)); err != nil {
+		t.Fatalf("IssueKey key: %v", err)
 	}
 	if k.ID == "" || k.Version != 1 || k.HashPrefix != auth.HashHex(raw)[:8] || k.Imported {
-		t.Fatalf("IssueAPIKey left %+v", k)
+		t.Fatalf("IssueKey left %+v", k)
 	}
 	got, err := fx.Store.APIKeyByToken(bg(), raw)
 	must(t, "APIKeyByToken", err)
@@ -635,35 +635,35 @@ func apiKeyScopes(t *testing.T, fx Fixture) {
 		"malformed": {"Gotham:Patrol"},
 	} {
 		err := commit(t, fx, func(b *storage.Batch) error {
-			_, err := fx.Store.IssueAPIKey(b, key("01JLUCIUS", scopes...))
+			_, err := fx.Store.IssueKey(b, key("01JLUCIUS", scopes...))
 			return err
 		})
 		if !errors.Is(err, auth.ErrBadInput) {
-			t.Errorf("IssueAPIKey(%s scopes) = %v, want ErrBadInput", name, err)
+			t.Errorf("IssueKey(%s scopes) = %v, want ErrBadInput", name, err)
 		}
 	}
 	err := commit(t, fx, func(b *storage.Batch) error {
 		k := key("01JLUCIUS", "gotham:patrol")
 		k.ExpiresAt = time.Time{}
-		_, err := fx.Store.IssueAPIKey(b, k)
+		_, err := fx.Store.IssueKey(b, k)
 		return err
 	})
-	errIs(t, "IssueAPIKey(no expiry)", err, auth.ErrBadInput)
+	errIs(t, "IssueKey(no expiry)", err, auth.ErrBadInput)
 }
 
 func apiKeyOwner(t *testing.T, fx Fixture) {
 	err := commit(t, fx, func(b *storage.Batch) error {
-		_, err := fx.Store.IssueAPIKey(b, key("01JGHOST", "gotham:patrol"))
+		_, err := fx.Store.IssueKey(b, key("01JGHOST", "gotham:patrol"))
 		return err
 	})
-	errIs(t, "IssueAPIKey(owner not stored)", err, auth.ErrBadInput)
+	errIs(t, "IssueKey(owner not stored)", err, auth.ErrBadInput)
 	// The owner is deleted between staging and commit: the key loses.
 	u := user("01JHARVEY", "harvey", 1)
 	putUser(t, fx, u)
 	b := fx.NewBatch()
 	defer closeBatch(t, b)
-	_, err = fx.Store.IssueAPIKey(b, key("01JHARVEY", "gotham:patrol"))
-	must(t, "IssueAPIKey", err)
+	_, err = fx.Store.IssueKey(b, key("01JHARVEY", "gotham:patrol"))
+	must(t, "IssueKey", err)
 	must(t, "DeleteUser", commit(t, fx, func(b *storage.Batch) error { return fx.Store.DeleteUser(b, u) }))
 	errIs(t, "key for a deleted owner", b.Commit(bg(), storage.Sync), storage.ErrConflict)
 }
@@ -759,9 +759,9 @@ func deleteAPIKey(t *testing.T, fx Fixture) {
 // ---------------------------------------------------------------------------
 // One-time tokens.
 
-func issueOneTime(t *testing.T, fx Fixture, tok *auth.OneTimeToken) string {
+func issueOneTime(t *testing.T, fx Fixture, tok *auth.OneTimeToken) auth.Token {
 	t.Helper()
-	var raw string
+	var raw auth.Token
 	must(t, "IssueOneTime", commit(t, fx, func(b *storage.Batch) error {
 		var err error
 		raw, err = fx.Store.IssueOneTime(b, tok)
@@ -780,7 +780,7 @@ func oneTimeSingleUse(t *testing.T, fx Fixture) {
 	} {
 		tok := oneTime(kind)
 		raw := issueOneTime(t, fx, tok)
-		if err := auth.ParseCredential(prefix, raw); err != nil {
+		if err := auth.ParseCredential(prefix, string(raw)); err != nil {
 			t.Fatalf("IssueOneTime(%s) token: %v", kind, err)
 		}
 		if tok.ID == "" {
@@ -1080,7 +1080,7 @@ func importKeyRejects(t *testing.T, fx Fixture) {
 		k := base()
 		mutate(k)
 		b := fx.NewBatch()
-		err := fx.Importer.ImportAPIKey(b, k, auth.HashCredential("abk_"+name))
+		err := fx.Importer.ImportAPIKey(b, k, auth.HashCredential(auth.Token("abk_"+name)))
 		if !errors.Is(err, auth.ErrImportRejected) {
 			t.Errorf("ImportAPIKey(%s) = %v, want ErrImportRejected", name, err)
 		}

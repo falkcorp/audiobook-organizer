@@ -1,7 +1,7 @@
 // file: core/internal/authstore/store.go
 // version: 1.0.0
 // guid: a7b06243-983e-42c3-9979-3aacdb3d3374
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package authstore is core's one implementation of auth.Store and
 // auth.Importer (05-authn §3.4, §11 "Native store"): every identity record in
@@ -566,7 +566,7 @@ func decodeSession(raw []byte) (*sessionRecord, error) {
 
 // IssueSession mints an mcs_ token and stages the session record and its
 // indexes. It fills s.PublicID (when empty) and s.Version.
-func (s *Store) IssueSession(b *storage.Batch, rec *auth.SessionRecord) (string, error) {
+func (s *Store) IssueSession(b *storage.Batch, rec *auth.SessionRecord) (auth.Token, error) {
 	if err := needBatch(b, "IssueSession"); err != nil {
 		return "", err
 	}
@@ -609,7 +609,7 @@ func (s *Store) IssueSession(b *storage.Batch, rec *auth.SessionRecord) (string,
 }
 
 // SessionByToken looks a session up by the SHA-256 of token.
-func (s *Store) SessionByToken(ctx context.Context, token string) (*auth.SessionRecord, error) {
+func (s *Store) SessionByToken(ctx context.Context, token auth.Token) (*auth.SessionRecord, error) {
 	if token == "" {
 		return nil, auth.ErrNotFound
 	}
@@ -889,10 +889,10 @@ func (s *Store) ownerPresent(b *storage.Batch, u auth.UserID) error {
 	return err
 }
 
-// IssueAPIKey mints an mck_ key and stages k. It fills k.ID (when empty),
+// IssueKey mints an mck_ key and stages k. It fills k.ID (when empty),
 // k.HashPrefix, k.Version and k.CreatedAt (when zero).
-func (s *Store) IssueAPIKey(b *storage.Batch, k *auth.APIKey) (string, error) {
-	if err := needBatch(b, "IssueAPIKey"); err != nil {
+func (s *Store) IssueKey(b *storage.Batch, k *auth.APIKey) (auth.Token, error) {
+	if err := needBatch(b, "IssueKey"); err != nil {
 		return "", err
 	}
 	if k == nil {
@@ -910,7 +910,7 @@ func (s *Store) IssueAPIKey(b *storage.Batch, k *auth.APIKey) (string, error) {
 	if err := s.ownerPresent(b, k.Owner); err != nil {
 		return "", fmt.Errorf("%w: %w", auth.ErrBadInput, err)
 	}
-	raw, err := auth.MintCredential(auth.KindAPIKey)
+	raw, err := auth.MintCredential(auth.KindKey)
 	if err != nil {
 		return "", err
 	}
@@ -1044,7 +1044,7 @@ func (s *Store) TouchAPIKey(b *storage.Batch, id string, at time.Time, ip netip.
 
 // APIKeyByToken looks a key up by the SHA-256 of its raw value (a native mck_
 // key or an imported one).
-func (s *Store) APIKeyByToken(ctx context.Context, raw string) (*auth.APIKey, error) {
+func (s *Store) APIKeyByToken(ctx context.Context, raw auth.Token) (*auth.APIKey, error) {
 	if raw == "" {
 		return nil, auth.ErrNotFound
 	}
@@ -1172,7 +1172,7 @@ func decodeOneTime(raw []byte) (*oneTimeRecord, error) {
 
 // IssueOneTime mints a token of t.Kind (mci_, mct_ or mcb_) and stages t.
 // It fills t.ID (when empty) and t.CreatedAt (when zero).
-func (s *Store) IssueOneTime(b *storage.Batch, t *auth.OneTimeToken) (string, error) {
+func (s *Store) IssueOneTime(b *storage.Batch, t *auth.OneTimeToken) (auth.Token, error) {
 	if err := needBatch(b, "IssueOneTime"); err != nil {
 		return "", err
 	}
@@ -1215,7 +1215,7 @@ func (s *Store) IssueOneTime(b *storage.Batch, t *auth.OneTimeToken) (string, er
 // Delete: of two concurrent takes exactly one commits (§7). An absent token
 // is auth.ErrNotFound. The record is returned even when expired: the caller
 // refuses it and commits the delete (prune on read, §4.3).
-func (s *Store) TakeOneTime(b *storage.Batch, kind auth.OneTimeKind, token string) (*auth.OneTimeToken, error) {
+func (s *Store) TakeOneTime(b *storage.Batch, kind auth.OneTimeKind, token auth.Token) (*auth.OneTimeToken, error) {
 	if err := needBatch(b, "TakeOneTime"); err != nil {
 		return nil, err
 	}
@@ -1244,7 +1244,7 @@ func (s *Store) TakeOneTime(b *storage.Batch, kind auth.OneTimeKind, token strin
 }
 
 // LookupOneTime reads a token without spending it.
-func (s *Store) LookupOneTime(ctx context.Context, kind auth.OneTimeKind, token string) (*auth.OneTimeToken, error) {
+func (s *Store) LookupOneTime(ctx context.Context, kind auth.OneTimeKind, token auth.Token) (*auth.OneTimeToken, error) {
 	if _, ok := kindPrefix(kind); !ok || token == "" {
 		return nil, auth.ErrNotFound
 	}

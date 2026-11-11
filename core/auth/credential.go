@@ -1,7 +1,7 @@
 // file: core/auth/credential.go
 // version: 1.0.0
 // guid: a945d114-9800-4a9d-8de2-e3962ca06406
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -20,11 +20,21 @@ import (
 // (05-authn §4.1).
 type CredentialKind string
 
+// Token is the raw value of a bearer credential: one MintCredential minted
+// (32 bytes from crypto/rand behind a native prefix), one a request
+// presented as Bearer or in the session cookie, or an imported key. Only a
+// Token is hashed with SHA-256 (HashCredential), so a password, which is a
+// plain string, cannot reach that hash without an explicit conversion: every
+// password goes to auth/password's argon2id hasher (§4.1, §4.5). The service
+// converts a presented value at its ingress; the store takes and returns
+// Tokens.
+type Token string
+
 // The native prefixes are core's, not per-app: one binary may host several
 // modules, and a key is a core credential (§4.1).
 const (
 	KindSession   CredentialKind = "mcs_"
-	KindAPIKey    CredentialKind = "mck_"
+	KindKey       CredentialKind = "mck_"
 	KindBootstrap CredentialKind = "mcb_"
 	KindInvite    CredentialKind = "mci_"
 	KindTempLogin CredentialKind = "mct_"
@@ -44,7 +54,7 @@ const (
 // and the 6-character base62 CRC32 of everything before it, so a secret
 // scanner can recognise and offline-validate a leaked value without a
 // database (§4.1).
-func MintCredential(kind CredentialKind) (string, error) {
+func MintCredential(kind CredentialKind) (Token, error) {
 	if !kind.native() {
 		return "", fmt.Errorf("%w: mint of non-native prefix %q", ErrBadInput, kind)
 	}
@@ -53,12 +63,12 @@ func MintCredential(kind CredentialKind) (string, error) {
 		return "", fmt.Errorf("auth: read credential randomness: %w", err)
 	}
 	body := string(kind) + base64.RawURLEncoding.EncodeToString(buf)
-	return body + "_" + checksum(body), nil
+	return Token(body + "_" + checksum(body)), nil
 }
 
 // nativeKinds are the five native prefixes.
 func nativeKinds() []CredentialKind {
-	return []CredentialKind{KindSession, KindAPIKey, KindBootstrap, KindInvite, KindTempLogin}
+	return []CredentialKind{KindSession, KindKey, KindBootstrap, KindInvite, KindTempLogin}
 }
 
 // native reports whether k is one of the five native prefixes.
@@ -114,11 +124,11 @@ func ParseCredential(kind CredentialKind, raw string) error {
 // value (§4.1). 256-bit random input makes a slow KDF unnecessary. An
 // imported key is hashed the same way, so ABO's abk_ rows keep verifying
 // (§11).
-func HashCredential(raw string) [32]byte { return sha256.Sum256([]byte(raw)) }
+func HashCredential(t Token) [32]byte { return sha256.Sum256([]byte(t)) }
 
 // HashHex is HashCredential in lower-case hex, the store's index form.
-func HashHex(raw string) string {
-	h := HashCredential(raw)
+func HashHex(t Token) string {
+	h := HashCredential(t)
 	return hex.EncodeToString(h[:])
 }
 

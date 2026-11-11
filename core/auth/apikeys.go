@@ -1,7 +1,7 @@
 // file: core/auth/apikeys.go
 // version: 1.0.0
 // guid: 61144126-f293-45db-8152-bf01124f696a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -107,7 +107,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySp
 	err = s.commitRetrying(ctx, func(b *storage.Batch) error {
 		k := *key
 		k.Scopes = slices.Clone(scopes)
-		r, err := s.d.Store.IssueAPIKey(b, &k)
+		r, err := s.d.Store.IssueKey(b, &k)
 		if err != nil {
 			return err
 		}
@@ -117,7 +117,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySp
 		}); err != nil {
 			return err
 		}
-		raw, *key = r, k
+		raw, *key = string(r), k
 		return nil
 	})
 	if err != nil {
