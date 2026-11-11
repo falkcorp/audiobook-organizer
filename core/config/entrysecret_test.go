@@ -240,13 +240,27 @@ func TestEntrySecret_RegisterShapes(t *testing.T) {
 		Signals []stricterRef `json:"signals" protect:"admin"`
 	}
 	refused := map[string]any{
-		"no id":           config.Define("core.gotham.a", struct{ L []noID `json:"l"` }{}),
-		"int id":          config.Define("core.gotham.b", struct{ L []intID `json:"l"` }{}),
-		"nested Ref":      config.Define("core.gotham.c", struct{ L []deep `json:"l"` }{}),
-		"list of Refs":    config.Define("core.gotham.d", struct{ L []refList `json:"l"` }{}),
-		"no protect tag":  config.Define("core.gotham.e", struct{ L []untagged `json:"l"` }{}),
-		"boot Ref":        config.Define("core.gotham.f", struct{ L []bootRef `json:"l"` }{}),
-		"json dash Ref":   config.Define("core.gotham.g", struct{ L []hidden `json:"l"` }{}),
+		"no id": config.Define("core.gotham.a", struct {
+			L []noID `json:"l"`
+		}{}),
+		"int id": config.Define("core.gotham.b", struct {
+			L []intID `json:"l"`
+		}{}),
+		"nested Ref": config.Define("core.gotham.c", struct {
+			L []deep `json:"l"`
+		}{}),
+		"list of Refs": config.Define("core.gotham.d", struct {
+			L []refList `json:"l"`
+		}{}),
+		"no protect tag": config.Define("core.gotham.e", struct {
+			L []untagged `json:"l"`
+		}{}),
+		"boot Ref": config.Define("core.gotham.f", struct {
+			L []bootRef `json:"l"`
+		}{}),
+		"json dash Ref": config.Define("core.gotham.g", struct {
+			L []hidden `json:"l"`
+		}{}),
 		"pointer entries": config.Define("core.gotham.h", ptrList{}),
 		"array":           config.Define("core.gotham.i", arrList{}),
 		"map":             config.Define("core.gotham.j", mapOf{}),

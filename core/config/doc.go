@@ -1,5 +1,5 @@
 // file: core/config/doc.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e74dba99-865d-4688-bd81-8e7ca26610c8
 // last-edited: 2026-11-10
 
@@ -44,4 +44,15 @@
 // inside a key's value (a list, map, array or pointer element, or a struct
 // that encodes itself) may not be stricter than the key: config protects,
 // reloads and redacts whole keys, so Register refuses it with ErrInvalid.
+//
+// # Secrets
+//
+// A field of type secrets.Ref is a secret key whose value lives in the
+// secrets store; the snapshot holds only its bound reference. A secrets.Ref
+// may also be a direct field of a list entry whose type has a string field
+// json "id" ("entry secrets", keys.go): each entry's Ref is then a secret key
+// of its own, "<list parent>.<id>.<field>" (05-authn's
+// core.auth.oidc.<id>.client_secret), carrying its own protect tag, which
+// Register requires. Removing or renaming an entry through Apply deletes its
+// secret in the same commit.
 package config
