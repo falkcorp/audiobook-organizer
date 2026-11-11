@@ -236,7 +236,10 @@ func (c SyntheticRewrite) check(t testing.TB, fs vfs.FS, gen uint64) {
 	// by phase 4, a swapped-back one's is empty (the original moved back;
 	// its failed/ keeps the refused copy for the journal's retention).
 	dir := restorejournal.Dir(RewriteStateDir)
-	ids, _ := fs.List(dir)
+	ids, err := fs.List(dir)
+	if err != nil {
+		t.Fatalf("crashmatrix: list %s: %v", dir, err)
+	}
 	for _, id := range ids {
 		if _, err := fs.Stat(filepath.Join(dir, id, restorejournal.InflightName)); err == nil {
 			t.Errorf("restore/%s/%s left after M8", id, restorejournal.InflightName)
@@ -247,7 +250,8 @@ func (c SyntheticRewrite) check(t testing.TB, fs vfs.FS, gen uint64) {
 	}
 }
 
-// anyFile is the first regular file under p, "" when there is none.
+// anyFile is the first regular file under p, "" when there is none; a
+// directory it cannot list counts as one, so the check fails closed.
 func anyFile(fs vfs.FS, p string) string {
 	fi, err := fs.Stat(p)
 	if err != nil {
@@ -256,7 +260,10 @@ func anyFile(fs vfs.FS, p string) string {
 	if !fi.IsDir() {
 		return p
 	}
-	names, _ := fs.List(p)
+	names, err := fs.List(p)
+	if err != nil {
+		return p + " (unlisted: " + err.Error() + ")"
+	}
 	for _, n := range names {
 		if f := anyFile(fs, filepath.Join(p, n)); f != "" {
 			return f
