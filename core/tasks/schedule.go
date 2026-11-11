@@ -1,7 +1,7 @@
 // file: core/tasks/schedule.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 231e5481-a9cd-411a-9926-86fc95b5dc49
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package tasks
 
@@ -106,6 +106,32 @@ type ScheduleConfig struct {
 	Cron    string          `json:"cron,omitempty"`     // 5-field, in core.tasks.timezone
 	Window  string          `json:"window,omitempty"`   // member of a maintenance window
 	Order   int             `json:"order,omitempty"`    // position inside Window
+}
+
+// scheduleConfigJSON is ScheduleConfig without its methods, so the two
+// methods below encode the plain struct without recursing.
+type scheduleConfigJSON ScheduleConfig
+
+// MarshalJSON encodes c as its plain JSON object. ScheduleConfig encodes
+// itself so that config treats a schedule key as ONE key whose value is the
+// whole object (05-config §1.6: "an ordinary live object key"); config walks
+// into a struct that does not, which would split each schedule key into six
+// keys and leave the key ScheduleFromConfig names undeclared. Method added by
+// F2-04.
+func (c ScheduleConfig) MarshalJSON() ([]byte, error) {
+	return json.Marshal(scheduleConfigJSON(c))
+}
+
+// UnmarshalJSON decodes the plain JSON object (see MarshalJSON). Fields it
+// does not know are ignored, as encoding/json does; config refuses them first,
+// through the key's schema. Method added by F2-04.
+func (c *ScheduleConfig) UnmarshalJSON(b []byte) error {
+	var v scheduleConfigJSON
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*c = ScheduleConfig(v)
+	return nil
 }
 
 // Every is a fixed, non-configurable schedule reserved for the outbox relay's

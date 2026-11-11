@@ -1,7 +1,7 @@
 // file: core/kernel/core_sections_test.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 9d2c7a54-61f0-4b8e-a3d5-0c1b7e6f4a92
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -38,8 +38,10 @@ const mapKeyPlaceholder = "<id>"
 // sectionLeaves walks the section's type and returns its keys. The convention
 // (names coined by F2-09): a struct field with a json name is a segment; a
 // struct recurses, except secrets.Ref, which is one key (the config field
-// type of a secret, 05-config §2.3; F3-03); any other type is one key, a map
-// and a list included (05-config §1.3.6). The one exception is a section
+// type of a secret, 05-config §2.3; F3-03), and a struct that encodes itself
+// (json.Marshaler), which is one key as config's own walker has it
+// (config/keys.go isLeaf; tasks.ScheduleConfig, F2-04); any other type is one
+// key, a map and a list included (05-config §1.3.6). The one exception is a section
 // whose type is itself a map, whose entries' own keys sit under
 // mapKeyPlaceholder; and a secrets.Ref field of a list entry is one more key,
 // "<list parent>.<id>.<ref>" with the Ref's own tags (core/config's entry
@@ -60,7 +62,7 @@ func sectionLeaves(t *testing.T, sec any) (config.Path, []leaf) {
 func walkType(t *testing.T, path string, typ reflect.Type, reload config.Reload, protect config.Protection, schema string, root bool, out *[]leaf) {
 	t.Helper()
 	switch {
-	case typ == reflect.TypeFor[secrets.Ref]():
+	case typ == reflect.TypeFor[secrets.Ref](), typ.Kind() == reflect.Struct && typ.Implements(reflect.TypeFor[json.Marshaler]()):
 		*out = append(*out, leaf{path, typ, reload, protect, schema, false})
 	case typ.Kind() == reflect.Struct:
 		for f := range typ.Fields() {
@@ -352,17 +354,26 @@ func TestCoreSections_NoOverlap(t *testing.T) {
 	}
 }
 
-// TestCoreSections_NoLaterRowsKeys is a test name coined by F2-09: nothing the
-// brief leaves to F2-04 and F3-02 is declared here. F3-03's secret keys,
-// core.http.basic_gate.password and the OIDC client secret (a list entry's,
-// F3-OIDC-SECRET), are both declared.
+// TestCoreSections_NoLaterRowsKeys is a test name coined by F2-09. F2-09
+// asserted that nothing left to F2-04 and F3-02 was declared; both rows have
+// landed (F2-04 declared the schedule keys and the windows map, F3-02
+// FailClosed), so since F2-04 it asserts that the keys this file's ownerKeys
+// leaves out are exactly those: every key of type tasks.ScheduleConfig sits
+// in a schedules section, nothing else does, and the only other excluded key
+// is the core.tasks.windows map (TestCoreSections_ScheduleKeysDeclared checks
+// the set itself). F3-03's secret keys, core.http.basic_gate.password and the
+// OIDC client secret (a list entry's, F3-OIDC-SECRET), are both declared.
 func TestCoreSections_NoLaterRowsKeys(t *testing.T) {
 	for p, l := range allLeaves(t) {
-		if excluded(l) {
-			t.Errorf("key %s belongs to a later row", p)
-		}
-		if strings.Contains(p, ".schedules.") {
-			t.Errorf("key %s belongs to a later row", p)
+		sched := l.typ.Name() == "ScheduleConfig" && strings.HasSuffix(l.typ.PkgPath(), "/tasks")
+		inSection := strings.Contains(p, ".schedules.")
+		switch {
+		case sched && !inSection:
+			t.Errorf("schedule key %s is not in a schedules section (R2-7)", p)
+		case inSection && !sched:
+			t.Errorf("key %s is in a schedules section but is not a tasks.ScheduleConfig", p)
+		case excluded(l) && !sched && p != "core.tasks.windows":
+			t.Errorf("key %s is excluded from ownerKeys but is neither a schedule key nor the windows map", p)
 		}
 	}
 }
@@ -489,7 +500,10 @@ func TestCoreSections_ReloadAndProtection(t *testing.T) {
 		}
 	}
 	for p, l := range all {
-		if (strings.HasPrefix(p, "core.storage.") || strings.HasPrefix(p, "core.index.")) && l.protect != config.ProtectOperator {
+		// A schedule key is DB-persisted, as every schedule key is
+		// (05-storage §5S.4: core.storage.schedules.compact, "unlike §5S.7's
+		// keys"), so the table-wide rule does not cover it (F2-04).
+		if (strings.HasPrefix(p, "core.storage.") || strings.HasPrefix(p, "core.index.")) && !excluded(l) && l.protect != config.ProtectOperator {
 			t.Errorf("%s: protect %d, want ProtectOperator (05-storage §5S.7: every key)", p, l.protect)
 		}
 		if l.reload == config.ReloadBoot && p != "core.paths.state_dir" && !strings.HasPrefix(p, "core.modules.") {

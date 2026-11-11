@@ -1,7 +1,7 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.13
+// version: 1.0.14
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package internal holds core's R4 layer guard (03 §3.5.1 item 2), the
 // redesigned successor of ABO's internal/arch/layering_test.go for core. It
@@ -76,6 +76,10 @@ var coreLayerOf = map[string]int{
 	// 05-tasks 5T.4): it imports tasks, taskstore, rbac's internal/authz,
 	// health and metrics, so it takes tasks' layer (R4).
 	"internal/executor": 4,
+	// internal/scheduler is core's scheduler (F2-04, 05-tasks 5T.3.8): it
+	// imports tasks, storage and rbac and drives the executor through
+	// tasks.Stager, so it takes tasks' layer (R4).
+	"internal/scheduler": 4,
 	// internal/configstore (F3-01) is a bridge too: config's native override
 	// store and the kernel's committer, which joins config, storage, secrets
 	// and audit, its highest import.
