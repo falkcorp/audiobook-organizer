@@ -1,5 +1,5 @@
 // file: core/auth/service_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 298429ba-81c3-4473-ac04-17d50cc5f897
 // last-edited: 2026-11-10
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/mediacore/archtest"
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/auth/password"
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/authstore"
 	"github.com/falkcorp/mediacore/internal/authz"
@@ -38,9 +39,30 @@ type fx struct {
 	svc   *auth.Service
 	audit *auditFake
 	jrnl  *journalFake
+	// hasher is a lowered-cost hasher (test binaries only) whose derivations
+	// the sign-in tests count.
+	hasher *password.Hasher
+	// loginSleep, when set, replaces the sign-in delays of every service
+	// rebuild builds.
+	loginSleep func(time.Duration)
 
-	mu  sync.Mutex
-	now time.Time
+	mu       sync.Mutex
+	now      time.Time
+	settings auth.Settings
+}
+
+// liveSettings is the Deps.Settings the fixture's service reads.
+func (f *fx) liveSettings() auth.Settings {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.settings
+}
+
+// setSettings replaces the settings the service reads from its next call on.
+func (f *fx) setSettings(st auth.Settings) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.settings = st
 }
 
 func (f *fx) clock() time.Time {
@@ -98,7 +120,8 @@ func newFx(t testing.TB) *fx {
 			t.Errorf("close store: %v", err)
 		}
 	})
-	f := &fx{t: t, audit: &auditFake{}, jrnl: &journalFake{}, now: time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC)}
+	f := &fx{t: t, audit: &auditFake{}, jrnl: &journalFake{}, now: time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC),
+		hasher: password.New(password.Options{Time: 1, MemoryKiB: 64})}
 	aks, _ := db.Keyspace(authstore.Owner)
 	rks, _ := db.Keyspace(rbacstore.Owner)
 	if f.st, err = authstore.New(aks, authstore.Options{Now: f.clock}); err != nil {
@@ -149,9 +172,13 @@ func (f *fx) rebuild() {
 	f.t.Helper()
 	svc, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}}, auth.Deps{
 		Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
+		Hasher: f.hasher, Settings: f.liveSettings,
 	})
 	if err != nil {
 		f.t.Fatal(err)
+	}
+	if f.loginSleep != nil {
+		svc.SetLoginSleep(f.loginSleep)
 	}
 	f.svc = svc
 }

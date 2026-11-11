@@ -1,5 +1,5 @@
 // file: core/auth/records.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 056d2e0c-400d-404d-99ff-15b759dd0403
 // last-edited: 2026-11-10
 
@@ -254,6 +254,15 @@ type ClientInfo struct {
 	// trusted proxy that reported https. httpapi's resolver sets it; the
 	// session cookie's Secure attribute and its name follow it.
 	HTTPS bool
+	// OnLink: Addr is a global IPv6 address inside an on-link prefix of this
+	// host (a home LAN numbered from the ISP's global /64). Only the resolver
+	// can know it, because it reads the host's interfaces. Such an address,
+	// like a private, link-local or loopback one, is a throttle source of its
+	// own rather than one member of its /64 (sourceKey), so one LAN device
+	// cannot spend the others' budgets. The default client (no Deps.Client)
+	// leaves it false, so until the kernel wires httpapi's resolver the
+	// devices of such a LAN share one source.
+	OnLink bool
 }
 
 // Local is §4.6 item 4 (SEC-30): a loopback TCP peer, no forwarding header,
@@ -264,13 +273,41 @@ func (c ClientInfo) Local() bool {
 	return c.Peer.IsValid() && c.Peer.Unmap().IsLoopback() && !c.Forwarded && !c.TrustedProxy
 }
 
-// sourceKey is the throttle source of c: the resolved client address, or ""
-// when none is known (only the account is then charged).
-func (c ClientInfo) sourceKey() string {
+// sourceKey is the throttle source of c (§4.9, HEAD's clientPrefixKey): the
+// resolved address for IPv4 and for a LAN IPv6 address, the /64 of a public
+// IPv6 address, so a caller who owns a /64 cannot mint 2^64 failure budgets.
+// "" when no address is known: only the account is then charged.
+func (c ClientInfo) sourceKey() string { return c.prefixKey(64) }
+
+// saturatedKey is the key of the login ceilings' saturated admission (HEAD's
+// clientSaturatedKey): sourceKey with a public IPv6 address grouped by its
+// /48, the allocation an ISP hands one customer site, because there the
+// per-visitor refusal is all that keeps one caller from holding a seat per
+// /64.
+func (c ClientInfo) saturatedKey() string { return c.prefixKey(48) }
+
+// prefixKey is c's address, or for a public IPv6 address its prefix of bits.
+// Private (ULA), link-local, loopback and OnLink addresses are kept whole:
+// every device of an IPv6 LAN shares one /64.
+func (c ClientInfo) prefixKey(bits int) string {
 	if !c.Addr.IsValid() {
 		return ""
 	}
-	return c.Addr.Unmap().String()
+	a := c.Addr.WithZone("").Unmap()
+	if a.Is6() && !a.IsPrivate() && !a.IsLinkLocalUnicast() && !a.IsLoopback() && !c.OnLink {
+		return netip.PrefixFrom(a, bits).Masked().String()
+	}
+	return a.String()
+}
+
+// connectorKey is the login ceilings' connector bucket of c: the TCP peer when
+// it is a trusted proxy or tunnel connector, "" for any other peer (direct
+// callers are covered by their own budget and the global ceiling).
+func (c ClientInfo) connectorKey() string {
+	if !c.TrustedProxy || !c.Peer.IsValid() {
+		return ""
+	}
+	return c.Peer.WithZone("").Unmap().String()
 }
 
 // NewUser is a request to create a user (§3.2).
