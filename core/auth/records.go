@@ -254,6 +254,10 @@ type ClientInfo struct {
 	UserAgent    string
 	Forwarded    bool
 	TrustedProxy bool
+	// HTTPS is §4.3's Secure rule: the request arrived over TLS, or from a
+	// trusted proxy that reported https. httpapi's resolver sets it; the
+	// session cookie's Secure attribute and its name follow it.
+	HTTPS bool
 }
 
 // Local is §4.6 item 4 (SEC-30): a loopback TCP peer, no forwarding header,
