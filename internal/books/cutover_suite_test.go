@@ -1,5 +1,5 @@
 // file: internal/books/cutover_suite_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a1f3c8e-2d47-4b95-8e0a-7c5d9b2f4e16
 // last-edited: 2026-11-10
 
@@ -582,25 +582,9 @@ func cutoverBootConfig(t *testing.T, work string) (func(*config.Config), func(*a
 	}
 	opt := func(o *app.Options) {
 		o.StorageFS = storage.FS{}
-		prev := loadConfigFromDB
-		t.Cleanup(func() { loadConfigFromDB = prev })
-		loadConfigFromDB = func(s database.SettingsStore) error {
-			if err := config.LoadConfigFromDatabase(s); err != nil {
-				return err
-			}
-			pointConfigAtStore(&config.AppConfig, work)
-			// LoadConfigFromDatabase re-applies the environment-authoritative
-			// keys from the process-wide viper, so its ABS flag is whatever
-			// viper holds, not this boot's environment: once any test in the
-			// package has run config.InitConfig (TestTelemetry_TracerFromEnv
-			// does), abs_api_enabled is registered with its default (false),
-			// IsSet reports true, the stored true is overwritten, and Register
-			// refuses the boot (errABSFlagDrift). Re-apply the boot's own
-			// environment here, as serve's would be, so the boot never
-			// depends on what another test left in viper.
-			cutoverBootEnv(&config.AppConfig)
-			return nil
-		}
+		// The stored settings, paths pointed at the copy, then the boot's own
+		// environment re-applied (loadStoredConfigAt says why).
+		loadStoredConfigAt(t, work, cutoverBootEnv)
 		// sandboxStateDirAt wrote a fixed key; the corpus' secrets are
 		// encrypted under its own.
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))
