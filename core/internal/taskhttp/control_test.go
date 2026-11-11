@@ -1,5 +1,5 @@
 // file: core/internal/taskhttp/control_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b59f28b-7bb8-4285-b43e-2e7ed3a77861
 // last-edited: 2026-11-11
 
@@ -276,7 +276,10 @@ func TestCancel(t *testing.T) {
 		v.Actor = tasks.Actor{System: "scheduler", AuthMethod: "system"}
 		g.client.add(v)
 		g.do(cancel("run-1", session("lucius", scopeManage)))
-		if len(g.aud.recorded) != 1 || g.aud.recorded[0].Details["run_actor"] != "system:scheduler" {
+		if len(g.aud.recorded) != 1 || g.aud.recorded[0].Details["run_actor_system"] != "scheduler" {
+			t.Fatalf("recorded = %+v", g.aud.recorded)
+		}
+		if _, has := g.aud.recorded[0].Details["run_actor"]; has {
 			t.Fatalf("recorded = %+v", g.aud.recorded)
 		}
 	})
