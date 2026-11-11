@@ -1,5 +1,5 @@
 // file: core/integrations/fields_internal_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: dfaab137-5259-4293-befc-1800491e6971
 // last-edited: 2026-11-11
 
@@ -506,5 +506,23 @@ func TestWellFormedHostPort(t *testing.T) {
 	}
 	if !wellFormedSignature("host=smtp://:2525") {
 		t.Error("an origin with the host unset was refused")
+	}
+}
+
+// TestCheckURL_NeverEchoesTheSubmittedText: a URL that fails to parse may
+// still carry a pasted credential, so neither refusal quotes it.
+func TestCheckURL_NeverEchoesTheSubmittedText(t *testing.T) {
+	for _, raw := range []string{
+		"http://oracle:b4tc0mputer pass@192.0.2.10:8112", // space: url.Parse fails
+		"192.0.2.10:8112/b4tc0mputer",                    // no scheme
+		"http://oracle:b4tc0mputer@192.0.2.10:8112",      // userinfo
+	} {
+		err := checkURL("url", raw)
+		if err == nil {
+			t.Fatalf("%q: accepted", raw)
+		}
+		if strings.Contains(err.Error(), "b4tc0mputer") {
+			t.Fatalf("%q: error echoes the credential: %v", raw, err)
+		}
 	}
 }
