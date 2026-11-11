@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/records.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e8ee65f7-200a-40bf-8fad-a457eed5916a
 // last-edited: 2026-11-10
 
@@ -110,15 +110,14 @@ func stage[T any](b *storage.Batch, ks storage.Keyspace, key []byte, c codec.Cod
 // stats are one migration's counters for the metrics (§5S.8): the items per
 // outcome this boot, the state it ended in, the time it took.
 type stats struct {
-	mu       sync.Mutex
-	counts   map[string]int64
-	state    string
-	ran      bool
-	took     time.Duration
-	chunks   int64
-	resumed  bool
-	shards   int
-	finished time.Time
+	mu      sync.Mutex
+	counts  map[string]int64
+	state   string
+	ran     bool
+	took    time.Duration
+	chunks  int64
+	resumed bool
+	shards  int
 }
 
 func newStats() *stats { return &stats{counts: map[string]int64{}} }
