@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/ci/run_cutover_suite.sh
-# version: 1.1.0
+# version: 1.1.1
 # guid: cb3cc064-170c-4661-b9ad-f3d45d18b2b2
 # last-edited: 2026-11-10
 #
@@ -71,6 +71,7 @@ if [ "$shard" = r0 ]; then
     TestCutoverOnR0Corpus/selftest/r0 TestCutoverOnR0Corpus/selftest/prefreeze-written
     TestCutoverOnR0Corpus/selftest/answers TestCutoverOnR0Corpus/selftest/manifest
     TestCutoverOnR0Corpus/selftest/references TestCutoverOnR0Corpus/selftest/checkpoint-guard
+    TestCutoverOnR0Corpus/selftest/id-resolution
     TestPrefreezeTagResolver TestPrefreezeFetchVerifiesChecksum)
   python3 scripts/ci/gen_shared_family_lists.py --check
 fi
