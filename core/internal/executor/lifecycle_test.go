@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-11
 
@@ -535,6 +535,123 @@ func TestStandDown_ClaimInFlightIsDeferred(t *testing.T) {
 			t.Fatalf("after the hold: %s (%q), ran %v; want succeeded", r.State, r.Error, ran.Load())
 		}
 	})
+}
+
+// TestStartAttempt_OvertakenClaimEndsByItsCommittedStop (5T.3.6, 5T.4 step
+// 4, synctest; re-verify of #4586): a run is claimed, a cancel commits while
+// its attempt is not live, and then a stand-down hold on its key is taken or
+// Shutdown begins, so startAttempt releases the claim. The release must end
+// the run by the cancel, without its body. Before the fix the release's edit
+// wanted running while the record was stopping{cancel}: the release failed
+// and the run sat in stopping with no attempt until the next boot, while a
+// repeat Cancel answered nil. The last cell commits the cancel's record
+// without handing the attempt its stop, the window between stop's move and
+// its setting stopCause under e.mu, which is why the release (not a check of
+// the attempt's pending stop) is where the fix lives.
+func TestStartAttempt_OvertakenClaimEndsByItsCommittedStop(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		cancel    func(h *harness, id tasks.RunID)
+		overtaker string // "hold" or "shutdown"
+	}{
+		{name: "a stand-down hold on its key", overtaker: "hold", cancel: cancelAsGordon},
+		{name: "shutdown", overtaker: "shutdown", cancel: cancelAsGordon},
+		{name: "a cancel committed but not yet handed to the attempt", overtaker: "hold", cancel: func(h *harness, id tasks.RunID) {
+			h.t.Helper()
+			if _, err := h.e.move(context.Background(), id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+				next := cur
+				next.State, next.Reason = tasks.StateStopping, reasonCancel
+				return next, tasks.RunEvent{Event: "cancel", Reason: reasonCancel}, nil
+			}, nil); err != nil {
+				h.t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				reached := make(chan tasks.RunID, 1)
+				release := make(chan struct{})
+				unpark := releaser(release)
+				defer unpark()
+				takeHold, holding, free := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				defer close(free)
+				var ran atomic.Bool
+				scan := taskDef("gotham.scan", func(rc *tasks.RC, _ noParams) (string, error) {
+					ran.Store(true)
+					<-rc.Context().Done()
+					return "", context.Cause(rc.Context())
+				}, func(c *tasks.Common) { c.Yields = true })
+				holder := taskDef("gotham.compact", func(rc *tasks.RC, _ noParams) (string, error) {
+					<-takeHold
+					if _, err := rc.StandDown("gotham.scan"); err != nil {
+						return "", err
+					}
+					close(holding)
+					<-free
+					return "compacted", nil
+				}, func(c *tasks.Common) { c.Effects = tasks.Writes(tasks.Res("gotham", "lab")) })
+				h := newHarness(t, []tasks.Definition{scan, holder}, func(o *Options) {
+					synctestConfig(o)
+					o.NewBatch = o.Stores.Runs.(batchOpener).NewBatch
+					o.Stores.Runs = gatedRuns{RunStore: o.Stores.Runs, reached: reached, release: release, kind: "gotham.scan"}
+				})
+				if c.overtaker == "hold" {
+					h.waitState(h.start("gotham.compact", tasks.StartRequest{}), tasks.StateRunning)
+				}
+				id := h.start("gotham.scan", tasks.StartRequest{})
+				<-reached
+				c.cancel(h, id)
+				if r := h.get(id); r.State != tasks.StateStopping || r.Reason != reasonCancel {
+					t.Fatalf("after the cancel: %s/%q, want stopping/cancel", r.State, r.Reason)
+				}
+				var shut chan error
+				switch c.overtaker {
+				case "hold":
+					close(takeHold)
+					<-holding
+				case "shutdown":
+					shut = make(chan error, 1)
+					go func() { shut <- h.x.Shutdown(context.Background()) }()
+					for !h.shutting() {
+						time.Sleep(time.Millisecond)
+					}
+				}
+				unpark()
+				if shut != nil {
+					if err := <-shut; err != nil {
+						t.Fatalf("Shutdown: %v", err)
+					}
+				}
+				synctest.Wait()
+				if r := h.get(id); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
+					t.Fatalf("once the attempt was overtaken: %s/%q, want canceled/cancel at once (not stopping until the next boot)", r.State, r.Reason)
+				}
+				if ran.Load() {
+					t.Fatal("the body started although a cancel had committed")
+				}
+				if c.overtaker == "hold" {
+					if err := h.x.CancelAs(context.Background(), id, tasks.Actor{UserID: "gordon"}); !isErr(err, tasks.ErrRunNotFound) {
+						t.Fatalf("a repeat cancel: %v, want ErrRunNotFound (the run is terminal)", err)
+					}
+				}
+			})
+		})
+	}
+}
+
+// cancelAsGordon cancels id through the executor's own cancel path.
+func cancelAsGordon(h *harness, id tasks.RunID) {
+	h.t.Helper()
+	if err := h.x.CancelAs(context.Background(), id, tasks.Actor{UserID: "gordon"}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// shutting reports whether Shutdown has begun.
+func (h *harness) shutting() bool {
+	h.e.mu.Lock()
+	defer h.e.mu.Unlock()
+	return h.e.shutting
 }
 
 // TestLedger_StaleAttemptWritesNothing (5T.7, synctest; review of #4586):
