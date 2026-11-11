@@ -1,5 +1,5 @@
 // file: core/integrations/registry_extra_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0001123d-da59-42c5-aa6c-5ea8c12c21e2
 // last-edited: 2026-11-11
 
@@ -177,8 +177,8 @@ func TestRegistry_StoredSecretsFollowTheirOrigin(t *testing.T) {
 	if _, err := inst.Env.Secrets.Secret(ctx, "password"); err == nil {
 		t.Error("a stored secret written for another destination was served")
 	}
-	if h, _ := r.Health(ctx, signalRef); h.Status == integrations.HealthOK {
-		t.Errorf("Health with its stored secret withheld = %+v", h)
+	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthMisconfigured || h.Message != integrations.ReasonStoredSecretWithheld+": password" {
+		t.Errorf("Health with its required stored secret withheld = %+v", h)
 	}
 	for _, s := range e.out.Sent() {
 		if s.Credential == "alfred-1" {

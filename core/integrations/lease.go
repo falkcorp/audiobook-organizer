@@ -1,5 +1,5 @@
 // file: core/integrations/lease.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8db314c4-39fe-4242-974f-f95bb76ffdd4
 // last-edited: 2026-11-11
 
@@ -64,6 +64,10 @@ func (r *Registry) retire(s *slot) {
 		s.buildMu.Lock()
 		inst := s.inst
 		s.inst = nil
+		// A lease still held past the timeout builds nothing from now on:
+		// build answers errSwappedOut, so an instance no closer will ever
+		// Close is never made (a slot force-closed before its first build).
+		s.built = true
 		s.buildMu.Unlock()
 		if inst != nil {
 			if err := inst.Close(); err != nil {
@@ -382,28 +386,48 @@ func (r *Registry) health(ctx context.Context, s *slot) (h Health, probed bool, 
 			h.Status = HealthDegraded
 		}
 	}
-	// A withheld operator secret is reported as itself (M1.5: degraded,
-	// operator_secret_withheld), also when the adapter answered "auth
-	// failed": that refusal was ours, not the remote's. Down and
+	// A withheld secret is reported as itself, also when the adapter
+	// answered "auth failed": that refusal was ours, not the remote's. An
+	// operator secret is operator_secret_withheld (M1.5); a stored secret of
+	// an optional field is integration_secret_withheld_destination_moved (a
+	// required one is a static finding above). Either is degraded; down and
 	// misconfigured stay as they are.
-	if len(s.withheld) > 0 && h.Status != HealthDown && h.Status != HealthMisconfigured {
+	var why []string
+	if len(s.withheld) > 0 {
+		why = append(why, ReasonOperatorSecretWithheld+": "+strings.Join(s.withheld, ","))
+	}
+	if ws := s.withheldStored(); len(ws) > 0 {
+		why = append(why, ReasonStoredSecretWithheld+": "+strings.Join(ws, ","))
+	}
+	if len(why) > 0 && h.Status != HealthDown && h.Status != HealthMisconfigured {
 		h.Status = HealthDegraded
-		h.Message = ReasonOperatorSecretWithheld + ": " + strings.Join(s.withheld, ",")
+		h.Message = strings.Join(why, "; ")
 	}
 	return h, true, d, false
 }
 
 // secretFinding is the static secret finding of s (M1.5): a required secret
-// field with nothing to serve is integration_secret_missing; a stored secret
-// that cannot be decrypted is integration_secret_unreadable. A withheld
-// operator secret is not a finding here: it degrades the probe's answer.
+// field with nothing to serve is integration_secret_missing, or
+// integration_secret_withheld_destination_moved when the field keeps a
+// stored secret that the effective destinations withhold (the fix is to
+// re-enter it or restore the destination, not to look for a lost secret); a
+// stored secret that cannot be decrypted is integration_secret_unreadable.
+// A withheld operator secret, or a withheld stored secret of an optional
+// field, is not a finding here: it degrades the probe's answer.
 func (r *Registry) secretFinding(ctx context.Context, s *slot) string {
 	ref := s.cfg.Ref
+	withheld := s.withheldStored()
 	for _, f := range s.ad.fs.secrets {
 		if _, ok := s.opSec[f]; ok {
 			continue
 		}
 		if _, ok := s.given[f]; ok {
+			continue
+		}
+		if slices.Contains(withheld, f) {
+			if s.ad.fs.required[f] {
+				return ReasonStoredSecretWithheld + ": " + strings.Join(withheld, ",")
+			}
 			continue
 		}
 		sr, isRef := s.cfg.Settings[f].(secrets.Ref)

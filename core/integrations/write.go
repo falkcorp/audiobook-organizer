@@ -1,5 +1,5 @@
 // file: core/integrations/write.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 29ac02ee-bf78-408e-a1cf-db1779640943
 // last-edited: 2026-11-11
 
@@ -153,6 +153,52 @@ func localFor(w writer, want bool, stored *StoredInstance, destChanged bool, new
 	return false, "", fmt.Errorf("%w: setting Local, or keeping it across a destination change, needs core:admin and an interactive principal", ErrForbidden)
 }
 
+// keepRule is the stored-secret rule Put and Test share (M1.3 Put, M1.4
+// step 2). A write that moves a destination keeps no stored secret. One that
+// moves none keeps every stored secret it does not clear, with the
+// SecretsOrigin it was written for, even when that is not today's
+// effective destination (an operator value moved it since): the secrets
+// stay withheld and are served again once the operator value is removed,
+// as M1.4 step 2's "removing the operator value reverts to the stored row"
+// requires. The exception is a write that supplies a secret while the
+// stored ones are withheld: the row then records today's destination for
+// the new secret, so the withheld ones cannot stay beside it and are
+// dropped. destChanged compares effective origins; it is also the stored
+// layer's test, because a locked field keeps its stored value and an
+// unlocked field's stored value is its effective one.
+type keepRule struct {
+	keep   bool   // the stored secrets the write does not clear are kept
+	serve  bool   // and served: their SecretsOrigin is today's destinations
+	origin string // the SecretsOrigin the written row records
+}
+
+// secretsKept applies keepRule to a write over stored (nil: none) whose
+// effective destinations go from oldO to newO; writes reports a write that
+// supplies a secret value.
+func secretsKept(stored *StoredInstance, destChanged bool, oldO, newO map[string]string, writes bool) keepRule {
+	readable := stored != nil && stored.Malformed == ""
+	match := readable && stored.SecretsOrigin == signature(oldO)
+	k := keepRule{keep: readable && !destChanged && (match || !writes), origin: signature(newO)}
+	k.serve = k.keep && match
+	if k.keep {
+		// Over unchanged destinations a matching SecretsOrigin already is
+		// signature(newO); a withheld one is carried as it is.
+		k.origin = stored.SecretsOrigin
+	}
+	return k
+}
+
+// suppliesSecret reports whether secretsIn re-supplies any secret field of
+// fs (an empty, echoed or mask-shaped value does not count).
+func suppliesSecret(ref Ref, fs fieldSet, secretsIn map[string]secrets.Value) bool {
+	for _, f := range fs.secrets {
+		if v, ok := secretsIn[f]; ok && resupplied(v, secretName(ref, f)) {
+			return true
+		}
+	}
+	return false
+}
+
 // adapterFor resolves the adapter a write names: inst.Adapter, else the
 // stored row's, else the operator instance's. A stored instance's adapter
 // cannot change (F7-01: delete and re-create), except while its row is
@@ -191,6 +237,14 @@ func readableSettings(stored *StoredInstance) map[string]any {
 		return nil
 	}
 	return stored.Config.Settings
+}
+
+// storedOSO is a readable stored row's OperatorSecretOrigin, or nil.
+func storedOSO(stored *StoredInstance) map[string]string {
+	if stored == nil || stored.Malformed != "" {
+		return nil
+	}
+	return stored.OperatorSecretOrigin
 }
 
 // putPlan is one validated Put, ready to stage.
@@ -246,7 +300,7 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 	oldO, newO := fs.origins(overlayValues(fs, storedSettings, ops)), fs.origins(sh.view)
 	readable := stored != nil && stored.Malformed == ""
 	destChanged := readable && !sameOrigins(keys, oldO, newO)
-	keepStored := readable && !destChanged && stored.SecretsOrigin == signature(oldO)
+	kept := secretsKept(stored, destChanged, oldO, newO, suppliesSecret(ref, fs, secretsIn))
 
 	var p putPlan
 	target := instanceEntity(ref)
@@ -266,7 +320,7 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 		}
 		sr, isRef := storedSettings[f].(secrets.Ref)
 		had := isRef && sr.Name() == name
-		if keepStored && had && !sh.clear[f] {
+		if kept.keep && had && !sh.clear[f] {
 			sh.settings[f] = secrets.RefTo(name)
 			continue
 		}
@@ -294,9 +348,30 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 	}
 	var oso map[string]string
 	switch {
-	case w.admin && len(newO) > 0:
-		oso = maps.Clone(newO)
-	case !w.admin && readable:
+	case w.admin:
+		// An admin approves the destinations it chooses: each one's
+		// effective origin, which may join the admin's port to the
+		// operator's host (R8-5). A destination the operator supplies whole
+		// is not the admin's choice: the operator's own origin is served by
+		// that rule already, and the stored value under it is locked and
+		// unseen, so the admin's write neither approves it nor forgets the
+		// approval an earlier admin write recorded for it.
+		opDest := fs.operatorDestinations(operatorFields(fs, ops), sh.view)
+		oso = map[string]string{}
+		for _, k := range keys {
+			switch {
+			case opDest[k]:
+				if o, ok := storedOSO(stored)[k]; ok {
+					oso[k] = o
+				}
+			case newO[k] != "":
+				oso[k] = newO[k]
+			}
+		}
+		if len(oso) == 0 {
+			oso = nil
+		}
+	case readable:
 		oso = maps.Clone(stored.OperatorSecretOrigin)
 		for _, k := range keys {
 			if oldO[k] != newO[k] {
@@ -310,7 +385,7 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 			Origin: w.origin(), Local: local, Settings: sh.settings, Limits: inst.Limits,
 			Version: expect, Updated: r.now().UTC(),
 		},
-		LocalOrigin: localOrigin, SecretsOrigin: signature(newO), OperatorSecretOrigin: oso,
+		LocalOrigin: localOrigin, SecretsOrigin: kept.origin, OperatorSecretOrigin: oso,
 	}
 	details := map[string]any{"instance": ref.String(), "adapter": string(a.desc.meta.ID), "origin": string(w.origin()), "local": local}
 	ev := audit.Event{Action: "core.integration.update", Outcome: audit.Success, Target: target, Details: details}
@@ -559,7 +634,7 @@ func (r *Registry) test(ctx context.Context, w writer, inst InstanceConfig, secr
 	if err != nil {
 		return TestResult{}, err
 	}
-	sameDest := readable && !destChanged && stored.SecretsOrigin == signature(oldO)
+	kept := secretsKept(stored, destChanged, oldO, newO, suppliesSecret(ref, fs, secretsIn))
 	given := map[string]secrets.Value{}
 	for _, f := range fs.secrets {
 		name := secretName(ref, f)
@@ -568,7 +643,7 @@ func (r *Registry) test(ctx context.Context, w writer, inst InstanceConfig, secr
 			sh.settings[f] = secrets.RefTo(name)
 			continue
 		}
-		if sr, ok := storedSettings[f].(secrets.Ref); ok && sr.Name() == name && sameDest && !sh.clear[f] {
+		if sr, ok := storedSettings[f].(secrets.Ref); ok && sr.Name() == name && kept.keep && !sh.clear[f] {
 			sh.settings[f] = secrets.RefTo(name)
 		}
 	}
@@ -577,7 +652,7 @@ func (r *Registry) test(ctx context.Context, w writer, inst InstanceConfig, secr
 			Ref: ref, Adapter: a.desc.meta.ID, Name: inst.Name, Enabled: true, Priority: inst.Priority,
 			Origin: w.origin(), Local: local, Settings: sh.settings, Limits: inst.Limits, Updated: r.now().UTC(),
 		},
-		LocalOrigin: localOrigin, SecretsOrigin: signature(newO),
+		LocalOrigin: localOrigin, SecretsOrigin: kept.origin,
 	}
 	if readable {
 		row.OperatorSecretOrigin = stored.OperatorSecretOrigin
@@ -585,8 +660,8 @@ func (r *Registry) test(ctx context.Context, w writer, inst InstanceConfig, secr
 	r.mu.Lock()
 	s := r.effective(ref, &row, ops)
 	r.mu.Unlock()
-	s.storedSecrets = sameDest
-	if sameDest {
+	s.storedSecrets = kept.serve
+	if kept.serve {
 		s.secretsOrigin = stored.SecretsOrigin
 	}
 	s.given = given

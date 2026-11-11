@@ -1,5 +1,5 @@
 // file: core/integrations/integrations.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e407ce3-b439-4eda-a361-798c3530fdb0
 // last-edited: 2026-11-11
 
@@ -441,10 +441,15 @@ const (
 	ReasonSecretMissing          = "integration_secret_missing"
 	ReasonSecretUnreadable       = "integration_secret_unreadable"
 	ReasonOperatorSecretWithheld = "operator_secret_withheld"
-	ReasonInstanceDisabled       = "instance_disabled"
-	ReasonMalformed              = "integration_row_malformed"
-	ReasonInvalidSettings        = "integration_settings_invalid"
-	ReasonBuildFailed            = "integration_build_failed"
+	// ReasonStoredSecretWithheld: a stored secret is kept but not served,
+	// because the effective destinations are not the ones it was written for
+	// (an operator value, or a writer outside the Registry, moved them). The
+	// fix is to re-enter the secret or to restore the destination (F7-01).
+	ReasonStoredSecretWithheld = "integration_secret_withheld_destination_moved"
+	ReasonInstanceDisabled     = "instance_disabled"
+	ReasonMalformed            = "integration_row_malformed"
+	ReasonInvalidSettings      = "integration_settings_invalid"
+	ReasonBuildFailed          = "integration_build_failed"
 )
 
 // TestResult is Registry.Test's answer: never a response body or remote

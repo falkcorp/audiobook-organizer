@@ -1,5 +1,5 @@
 // file: core/integrations/fields.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: cbc1be32-ff91-4789-be1d-70da64f29e97
 // last-edited: 2026-11-11
 
@@ -209,18 +209,19 @@ func analyze(s config.Schema) (fieldSet, error) {
 			fs.hostPort = true
 		}
 	}
-	// A destination-named property is a URL-typed string field or the host
-	// of the host-and-port pair; anything else would be a destination the
+	// A destination-named property is a URL-typed string field or a part of
+	// the host-and-port pair; anything else would be a destination the
 	// Registry cannot see (SEC-15), refused like a secret-named property
-	// that is not a secret field.
+	// that is not a secret field. A port beside a URL, or alone, is one: it
+	// can move the dialled destination without changing any origin.
 	for _, name := range slices.Sorted(maps.Keys(fs.props)) {
 		p := fs.props[name]
 		switch {
 		case !urlLike(name) || p.secret:
 		case p.format == "uri" && slices.Contains(p.types, "string"):
-		case name == hostField && fs.hostPort:
+		case (name == hostField || name == portField) && fs.hostPort:
 		default:
-			return fieldSet{}, invalidf("settings property %q reads as a destination but is not a URL-typed string field (schema:\"format=uri\") nor the host of a host-and-port pair; the Registry binds secrets and Local only to destinations it can see", name)
+			return fieldSet{}, invalidf("settings property %q reads as a destination but is not a URL-typed string field (schema:\"format=uri\") nor a part of a host-and-port pair; the Registry binds secrets and Local only to destinations it can see", name)
 		}
 	}
 	slices.Sort(fs.secrets)
@@ -228,17 +229,27 @@ func analyze(s config.Schema) (fieldSet, error) {
 	return fs, nil
 }
 
+// destinationWords are the name parts that read as a destination, with
+// their plurals: where a request goes (url, endpoint, webhook, server, proxy)
+// or what a dialer is given (host, address, port).
+var destinationWords = map[string]bool{
+	"url": true, "urls": true, "uri": true, "uris": true,
+	"endpoint": true, "endpoints": true, "host": true, "hosts": true,
+	"hostname": true, "hostnames": true, "webhook": true, "webhooks": true,
+	"href": true, "hrefs": true, "server": true, "servers": true,
+	"proxy": true, "proxies": true, "address": true, "addresses": true,
+	"addr": true, "addrs": true, "port": true, "ports": true,
+}
+
 // urlLike reports a property name that reads as a destination: a name, or
-// a '_'/'-' separated part of one, that is url, uri, endpoint, host,
-// hostname, webhook, href or server (plurals included), or that ends in
-// "url" or "uri" (baseurl, webhookurl).
+// a '_'/'-' separated part of one, that is one of destinationWords, or that
+// ends in "url" or "uri" (baseurl, webhookurl, plurals included).
 func urlLike(name string) bool {
 	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '_' || r == '-' }) {
-		switch strings.TrimSuffix(part, "s") {
-		case "url", "uri", "endpoint", "host", "hostname", "webhook", "href", "server":
+		if destinationWords[part] {
 			return true
 		}
-		if strings.HasSuffix(part, "url") || strings.HasSuffix(part, "uri") {
+		if p := strings.TrimSuffix(part, "s"); strings.HasSuffix(p, "url") || strings.HasSuffix(p, "uri") {
 			return true
 		}
 	}
