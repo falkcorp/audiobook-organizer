@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -269,6 +269,7 @@ type Service struct {
 	// package state (R5).
 	hasher   *password.Hasher
 	met      *authMetrics
+	warns    logLimiter // extension warnings, once per minute per extension
 	throttle *Throttle
 	ceiling  *LoginCeiling
 }
@@ -295,7 +296,7 @@ func New(ctx context.Context, opts Options, d Deps) (*Service, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("auth: New: missing deps %v", missing)
 	}
-	s := &Service{opts: opts, d: d, now: d.Clock, log: d.Log}
+	s := &Service{opts: opts, d: d, now: d.Clock, log: d.Log, warns: logLimiter{every: time.Minute}}
 	if s.now == nil {
 		s.now = time.Now
 	}

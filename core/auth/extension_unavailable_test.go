@@ -1,5 +1,5 @@
 // file: core/auth/extension_unavailable_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e2b9c41-3a58-4d06-9f1b-c8a4e0d63b75
 // last-edited: 2026-11-11
 
@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -100,6 +101,27 @@ func TestStage12_ExtensionUnavailableOpensToNextMethod(t *testing.T) {
 		}
 		if strings.Contains(logs.String(), "keys.example.invalid") {
 			t.Fatalf("the error text, which quotes a URL, reached the log: %s", logs.String())
+		}
+	})
+
+	t.Run("an outage is counted every time and warned once a minute", func(t *testing.T) {
+		logs.Reset()
+		svc := build(
+			sequenceExt{name: "gordon", err: auth.ErrExtensionUnavailable, calls: &c1},
+			sequenceExt{name: "kane", err: auth.ErrNoCredential, calls: &c2})
+		for range 100 {
+			serve(t, svc, request("", is.Token))
+		}
+		if n := sample(t, p.Gatherer(), "mediacore_auth_extension_errors_total", map[string]string{"extension": "gordon"}); n != 100 {
+			t.Fatalf("extension_errors_total{extension=gordon} = %v, want exactly 100", n)
+		}
+		if n := strings.Count(logs.String(), "identity extension could not decide"); n != 1 {
+			t.Fatalf("%d warnings for 100 failing requests inside a minute, want 1:\n%s", n, logs.String())
+		}
+		f.advance(61 * time.Second)
+		serve(t, svc, request("", is.Token))
+		if n := strings.Count(logs.String(), "identity extension could not decide"); n != 2 || !strings.Contains(logs.String(), "suppressed=99") {
+			t.Fatalf("after the interval: %d warnings, want 2 with suppressed=99:\n%s", n, logs.String())
 		}
 	})
 
