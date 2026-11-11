@@ -1043,6 +1043,9 @@ func runCutover(t *testing.T, c corpus) *cutoverResult {
 	shared := loadSharedFamilies(t)
 	pristine := copyCorpus(t, c)
 	work := copyCorpus(t, c)
+	// A store the pre-freeze release wrote already holds that release's own
+	// checkpoints: only one the boot adds counts as the pre-migration one.
+	had := len(checkpoints(t, work))
 	cutoverBoot(t, work)
 	small := c.name != "shaped"
 	spec := scanSpec{steps: steps, shared: shared, keepRows: small}
@@ -1057,7 +1060,7 @@ func runCutover(t *testing.T, c corpus) *cutoverResult {
 		steps: steps, shared: shared,
 		before: scanStore(t, storeDB(pristine), spec), after: scanStore(t, storeDB(work), spec),
 		plainB: scanStore(t, storeDB(pristine), plain), plainA: scanStore(t, storeDB(work), plain),
-		checkpointTaken: len(checkpoints(t, work)) > 0,
+		checkpointTaken: len(checkpoints(t, work)) > had,
 	}
 	if cutoverRuns.m == nil {
 		cutoverRuns.m = map[string]*cutoverResult{}
@@ -1102,6 +1105,9 @@ func TestCutoverOnR0Corpus(t *testing.T) {
 		requireNoProblems(t, "per-family counts", countProblems(r.steps, r.before, r.after))
 		requireNoProblems(t, "the quarantine report", quarantineProblems(r.steps, c.quarantineCases, r.after.Quarantine))
 		t.Logf("%d steps; %d keys before, %d after; checkpoint taken: %v", len(r.steps), r.before.Total, r.after.Total, r.checkpointTaken)
+		if len(r.steps) > 0 {
+			require.True(t, r.checkpointTaken, "a boot that runs cutover steps must take the pre-migration checkpoint (05-storage §5S.3.12)")
+		}
 		if c.name != "shaped" {
 			bootsToReady(t, c)
 		}

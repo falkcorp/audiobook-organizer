@@ -729,8 +729,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--shift-window",
         action="store_true",
-        help="boot with the maintenance window twelve hours from now (MAINTENANCE_WINDOW_START/END), "
-        "so the replay runs at any hour with no window task; the answers then show that window",
+        help="boot in a time zone that puts the corpus' maintenance window twelve hours from now "
+        "(write_r0_corpus.shifted_window_env), so the replay runs at any hour with no window task",
     )
     ap.add_argument(
         "--allow-foreign-binary",
