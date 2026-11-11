@@ -79,11 +79,13 @@ func (k *testKeys) retire(kid string) {
 // P2, P4a and P4b do (as coretest.Store does; coretest is not imported
 // because it imports kernel, which will import this package).
 type fixture struct {
-	db   *storage.DB
-	ks   storage.Keyspace // c/backup/
-	auth storage.Keyspace // c/auth/
-	path string           // the journal file
-	keys *testKeys
+	db     *storage.DB
+	ks     storage.Keyspace // c/backup/
+	auth   storage.Keyspace // c/auth/
+	path   string           // the journal file
+	keys   *testKeys
+	dir    string // the state directory
+	dbPath string // the store's path
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -110,7 +112,42 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(func() { _ = db.Close() })
 	ks, _ := db.Keyspace(Owner)
 	auth, _ := db.Keyspace(authOwner)
-	return &fixture{db: db, ks: ks, auth: auth, path: filepath.Join(dir, "backups", "gotham_revocations.journal"), keys: newTestKeys()}
+	return &fixture{db: db, ks: ks, auth: auth, path: filepath.Join(dir, "backups", "gotham_revocations.journal"), keys: newTestKeys(),
+		dir: dir, dbPath: filepath.Join(dir, "storage", "main.pebble")}
+}
+
+// component is a journal component over fx's store, not yet bound.
+func (fx *fixture) component(t *testing.T) *Component {
+	t.Helper()
+	c, err := NewComponent(ComponentOptions{StateDir: fx.dir, DBPath: fx.dbPath, Keyspace: fx.ks, Keys: fx.keys, InstallID: installID,
+		App: "gotham", Source: "batcomputer-1", Tick: time.Hour,
+		Clock:  func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) },
+		DirDev: func(string) (uint64, error) { return 0, errors.New("unknown device") }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close(context.Background()) })
+	return c
+}
+
+// locate writes a location file describing fx's store with the given head.
+func (fx *fixture) locate(t *testing.T, head Head, pair ServedBoot) Location {
+	t.Helper()
+	l := Location{BackupDir: filepath.Dir(fx.path), Journal: fx.path, DBPath: fx.dbPath, InstallID: installID,
+		Store: storage.StoreIdentity{Epoch: 1, DirFSID: 7, DirIno: 11}, ServedBoot: pair, Head: head}
+	must(t, os.MkdirAll(fx.dir, 0o700))
+	must(t, WriteLocation(fx.dir, l))
+	return l
+}
+
+// location reads the location file.
+func (fx *fixture) location(t *testing.T) Location {
+	t.Helper()
+	l, ok, err := ReadLocation(fx.dir)
+	if err != nil || !ok {
+		t.Fatalf("ReadLocation = %v, %v, %v", l, ok, err)
+	}
+	return l
 }
 
 // opts is FileOptions for fx's journal.
