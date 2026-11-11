@@ -32,6 +32,15 @@ const (
 	// DefaultSessionCookie is core.auth.session.cookie_name's fallback; the
 	// kernel passes <AppID>_session (§4.3, SEC-11).
 	DefaultSessionCookie = "mediacore_session"
+	// DefaultBootstrapKeyTTL is core.auth.bootstrap.key_ttl's default: how
+	// long a bootstrap-issued key lives (§4.6). A bootstrap key is a
+	// full-scope admin credential handed out for one working session, so it
+	// is short.
+	DefaultBootstrapKeyTTL = 8 * time.Hour
+	// MaxBootstrapKeyTTL caps any configured bootstrap key lifetime: a day
+	// covers any session that needs the break-glass key, and a bootstrap key
+	// always expires.
+	MaxBootstrapKeyTTL   = 24 * time.Hour
 	conflictRetries      = 4
 	auditModule          = "core"
 	refKindUser          = "user"
