@@ -1,5 +1,5 @@
 // file: core/auth/oidc/idp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: da23338d-077f-4650-8c03-f55456b48940
 // last-edited: 2026-11-11
 
@@ -40,6 +40,8 @@ type idpToken struct {
 	Expiry        time.Time
 	SignWith      *rsa.PrivateKey // nil: the IdP's own key
 	OmitIDToken   bool
+	AudList       []string // several audiences; Audience is ignored when set
+	Azp           string
 }
 
 // idpCode is one authorization code the IdP issued: the PKCE challenge it must
@@ -62,6 +64,8 @@ type idp struct {
 	tokenCalls int
 	failBody   string // when set, the token endpoint answers 400 with this body
 	jwksDown   bool
+	// discovery, when set, edits the discovery document before it is served.
+	discovery func(map[string]any)
 }
 
 func newIDP(t testing.TB) *idp {
@@ -73,11 +77,18 @@ func newIDP(t testing.TB) *idp {
 	p := &idp{t: t, key: key, codes: map[string]idpCode{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string]any{
+		doc := map[string]any{
 			"issuer": p.srv.URL, "authorization_endpoint": p.srv.URL + "/authorize",
 			"token_endpoint": p.srv.URL + "/token", "jwks_uri": p.srv.URL + "/jwks",
 			"id_token_signing_alg_values_supported": []string{"RS256"},
-		})
+		}
+		p.mu.Lock()
+		edit := p.discovery
+		p.mu.Unlock()
+		if edit != nil {
+			edit(doc)
+		}
+		writeJSON(w, doc)
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
 		p.mu.Lock()
@@ -180,10 +191,17 @@ func (p *idp) sign(tok idpToken) string {
 	if err != nil {
 		p.t.Fatal(err)
 	}
+	var aud any = tok.Audience
+	if tok.AudList != nil {
+		aud = tok.AudList
+	}
 	claims := map[string]any{
-		"iss": tok.Issuer, "sub": tok.Sub, "aud": tok.Audience,
+		"iss": tok.Issuer, "sub": tok.Sub, "aud": aud,
 		"exp": tok.Expiry.Unix(), "iat": time.Now().Add(-time.Minute).Unix(),
 		"nonce": tok.Nonce, "email": tok.Email, "email_verified": tok.EmailVerified, "name": tok.Name,
+	}
+	if tok.Azp != "" {
+		claims["azp"] = tok.Azp
 	}
 	raw, err := jwt.Signed(sig).Claims(claims).Serialize()
 	if err != nil {

@@ -1,5 +1,5 @@
 // file: core/auth/oidc/providers.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 20025c30-3f94-498a-9544-5998e0c57200
 // last-edited: 2026-11-11
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -195,10 +196,30 @@ func newOIDC(ctx context.Context, cfg ProviderConfig, hc *http.Client) (Provider
 	if err != nil {
 		return nil, fmt.Errorf("oidc: provider %s: discovery: %w", cfg.ID, errClass(err))
 	}
+	// Discovery is the issuer's own document, but a plain-http endpoint in it
+	// would send the code, the verifier and the client secret in the clear.
+	var meta struct {
+		JWKSURI string `json:"jwks_uri"`
+	}
+	if err := prov.Claims(&meta); err != nil {
+		return nil, fmt.Errorf("oidc: provider %s: discovery document cannot be read", cfg.ID)
+	}
+	ep := prov.Endpoint()
+	for _, u := range []string{ep.AuthURL, ep.TokenURL, meta.JWKSURI} {
+		if !httpsURL(u) {
+			return nil, fmt.Errorf("oidc: provider %s: discovery names an endpoint that is not https", cfg.ID)
+		}
+	}
 	return &oidcProvider{
 		cfg: cfg, hc: hc, provider: prov,
 		verifier: prov.Verifier(&gooidc.Config{ClientID: cfg.ClientID}),
 	}, nil
+}
+
+// httpsURL reports whether raw is an absolute https URL without userinfo.
+func httpsURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
 }
 
 func (p *oidcProvider) ID() string { return p.cfg.ID }
@@ -244,18 +265,39 @@ func (p *oidcProvider) Exchange(ctx context.Context, x ExchangeRequest) (*Claims
 		return nil, errors.New("oidc: id_token nonce does not match the sign-in")
 	}
 	var c struct {
-		Sub           string `json:"sub"`
-		Email         string `json:"email"`
-		EmailVerified bool   `json:"email_verified"`
+		Sub   string `json:"sub"`
+		Email string `json:"email"`
+		// EmailVerified is a bool at most providers and the string "true" at a
+		// few; only those two values vouch for the address.
+		EmailVerified any    `json:"email_verified"`
 		Name          string `json:"name"`
+		Azp           string `json:"azp"`
 	}
 	if err := idTok.Claims(&c); err != nil {
 		return nil, errors.New("oidc: id_token claims cannot be read")
 	}
+	// OIDC Core 3.1.3.7: with several audiences azp must be present, and a
+	// present azp must be this client: a token minted for another client of the
+	// same issuer that merely lists ours is not a sign-in to ours.
+	if (len(idTok.Audience) > 1 || c.Azp != "") && !sameSecret(c.Azp, p.cfg.ClientID) {
+		return nil, errors.New("oidc: id_token was issued to another client (azp)")
+	}
 	if c.Sub == "" {
 		return nil, errors.New("oidc: id_token has no subject")
 	}
-	return &Claims{Provider: p.cfg.ID, Subject: c.Sub, Email: c.Email, EmailVerified: c.EmailVerified, Name: c.Name}, nil
+	return &Claims{Provider: p.cfg.ID, Subject: c.Sub, Email: c.Email, EmailVerified: emailVerified(c.EmailVerified), Name: c.Name}, nil
+}
+
+// emailVerified reads an email_verified claim: the JSON boolean true or the
+// string "true", nothing else (not "True", not 1, not a missing claim).
+func emailVerified(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return x == "true"
+	}
+	return false
 }
 
 // errClass reduces a provider-library error to a text that cannot quote a

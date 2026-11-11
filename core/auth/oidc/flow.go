@@ -1,5 +1,5 @@
 // file: core/auth/oidc/flow.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 58d48f93-f1a4-4c1d-872a-9b0960e6346c
 // last-edited: 2026-11-11
 
@@ -214,6 +214,20 @@ type Started struct {
 	MaxAge   int
 }
 
+// MaxAppState bounds the native app's opaque state. The state travels in the
+// signed binding cookie: with the redirect URI (at most maxAppRedirect), the
+// return path (512), the PKCE challenge (128) and the fixed fields, a state at
+// this bound keeps the whole cookie value under maxBinding.
+const MaxAppState = 512
+
+// maxAppRedirect bounds a native app's redirect_uri; the module's allowlist is
+// exact, and deep-link URIs are short.
+const maxAppRedirect = 512
+
+// maxBinding is the largest signed binding Start will hand out: browsers keep
+// a cookie of about 4 KB, and the name and attributes share it.
+const maxBinding = 3500
+
 // validChallenge reports whether s has the shape of a PKCE S256 challenge:
 // 43 to 128 base64url characters (RFC 7636 section 4.2 allows up to 128).
 func validChallenge(s string) bool {
@@ -252,6 +266,9 @@ func (f *Flow) Start(ctx context.Context, req StartRequest) (*Started, error) {
 		if req.CodeChallengeMethod != "S256" || !validChallenge(challenge) {
 			return nil, ErrBadChallenge
 		}
+		if len(req.AppState) > MaxAppState {
+			return nil, ErrAppStateTooLong
+		}
 		pl.AppRedirectURI, pl.AppChallenge, pl.AppState = app, challenge, req.AppState
 	}
 	for _, g := range []struct {
@@ -265,6 +282,9 @@ func (f *Flow) Start(ctx context.Context, req StartRequest) (*Started, error) {
 	blob, err := f.codec.Encode(pl)
 	if err != nil {
 		return nil, err
+	}
+	if len(blob) > maxBinding {
+		return nil, ErrAppStateTooLong
 	}
 	return &Started{
 		Location: p.AuthURL(AuthRequest{
@@ -280,7 +300,7 @@ func (f *Flow) Start(ctx context.Context, req StartRequest) (*Started, error) {
 // fragment and no whitespace, control character or backslash (the shapes
 // browsers and URL parsers disagree about).
 func (f *Flow) appRedirectAllowed(raw string) bool {
-	if f.d.Handoff == nil || len(raw) > 2048 || strings.ContainsAny(raw, " \t\r\n\\") {
+	if f.d.Handoff == nil || len(raw) > maxAppRedirect || strings.ContainsAny(raw, " \t\r\n\\") {
 		return false
 	}
 	for _, r := range raw {
@@ -355,17 +375,24 @@ func (f *Flow) Callback(ctx context.Context, req CallbackRequest) (*Completed, e
 	claims, err := p.Exchange(ctx, ExchangeRequest{Code: req.Code, Verifier: pl.Verifier, Nonce: pl.Nonce, RedirectURI: redirectURI})
 	if err != nil {
 		f.d.Log.Warn("oidc: code exchange failed", "provider", cfg.ID, "err", err)
+		f.failed(ctx, cfg.ID, ErrExchange)
 		return nil, ErrExchange
 	}
 	user, err := f.d.Resolver.Resolve(ctx, cfg.Policy(), *claims)
 	if err != nil {
+		f.failed(ctx, cfg.ID, err)
 		return nil, err
 	}
 	if pl.AppRedirectURI != "" && pl.AppChallenge != "" {
-		return f.handoff(ctx, pl, user, claims.Email)
+		done, err := f.handoff(ctx, pl, user, claims.Email)
+		if err != nil {
+			f.failed(ctx, cfg.ID, err)
+		}
+		return done, err
 	}
 	sess, err := f.d.Sessions.IssueSession(ctx, user, auth.OriginOIDC(cfg.ID), false, req.Client)
 	if err != nil {
+		f.failed(ctx, cfg.ID, err)
 		return nil, err
 	}
 	f.signedIn(ctx, user, cfg.ID, "session")
@@ -405,6 +432,42 @@ func (f *Flow) signedIn(ctx context.Context, u *auth.User, provider, via string)
 	})
 }
 
+// failed records a refused sign-in as core.auth.login with Outcome failure
+// (05-rbac 7.1: success and failure of one action share its name), async so
+// the audit path never delays or undoes the refusal. It carries the class of
+// the refusal and the provider, never the address, a token or a code, and no
+// target: the account is not known to be the caller's.
+func (f *Flow) failed(ctx context.Context, provider string, err error) {
+	if f.d.Audit == nil {
+		return
+	}
+	outcome, reason := audit.Failure, "refused"
+	switch {
+	case errors.Is(err, auth.ErrStoreUnavailable):
+		outcome, reason = audit.Error, "store_unavailable"
+	case errors.Is(err, ErrExchange):
+		reason = "exchange_failed"
+	case errors.Is(err, ErrEmailNotVerified):
+		reason = "email_not_verified"
+	case errors.Is(err, ErrEmailNotPlain):
+		reason = "email_not_plain"
+	case errors.Is(err, ErrEmailNotAllowed):
+		reason = "email_not_allowed"
+	case errors.Is(err, auth.ErrEmailInUse):
+		reason = "email_in_use"
+	case errors.Is(err, auth.ErrInactiveUser):
+		reason = "inactive"
+	case errors.Is(err, auth.ErrResetRequired):
+		reason = "reset_required"
+	case errors.Is(err, ErrMintFailed):
+		reason = "app_handoff_failed"
+	}
+	f.d.Audit.Emit(ctx, audit.Event{
+		Action: "core.auth.login", Outcome: outcome, Reason: reason,
+		Details: map[string]any{"origin": string(auth.OriginOIDC(provider))},
+	})
+}
+
 // sameTarget reports whether location is on the same scheme, host and path as
 // target: a hand-off may add its code and state to the query, nothing else.
 func sameTarget(location, target string) bool {
@@ -413,7 +476,9 @@ func sameTarget(location, target string) bool {
 	if err1 != nil || err2 != nil || l.Scheme == "" || l.User != nil || l.Fragment != "" {
 		return false
 	}
-	return strings.EqualFold(l.Scheme, t.Scheme) && strings.EqualFold(l.Host, t.Host) && l.Path == t.Path
+	// Opaque too: "scheme:other" has no host and no path, so two opaque URIs
+	// would otherwise compare equal whatever they say.
+	return strings.EqualFold(l.Scheme, t.Scheme) && strings.EqualFold(l.Host, t.Host) && l.Path == t.Path && l.Opaque == t.Opaque
 }
 
 // sanitizeReturn allows only a same-site absolute path (no open redirect): a
