@@ -199,7 +199,7 @@ func (k *Kernel) storageMetrics(ctx context.Context) error {
 	}
 	// migration and outcome label the data-migration series
 	// (DataMigrations.RecordMetrics), step and sensitive the quarantine's
-	// (RecordQuarantineMetrics): one scope per subsystem.
+	// (QuarantineGauge): one scope per subsystem.
 	scope, err := k.provider.Core("storage", "owner", "kind", "state", "op", "mode", "migration", "outcome", "step", "sensitive")
 	if err != nil {
 		return fmt.Errorf("kernel: storage metrics scope: %w", err)

@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
@@ -743,4 +744,89 @@ func legacyKeysOf(t *testing.T, db *storage.DB) []string {
 		out = append(out, string(kv.Key))
 	}
 	return out
+}
+
+// TestExitCode: a blocked cutover, a store rewrite swapped back twice and a
+// store too new for the build exit 78 (EX_CONFIG: a restart cannot help),
+// wrapped or not; any other error exits 1, and nil 0.
+func TestExitCode(t *testing.T) {
+	for name, c := range map[string]struct {
+		err  error
+		want int
+	}{
+		"nil":            {nil, 0},
+		"blocked":        {fmt.Errorf("kernel: P4a: %w", &storage.CutoverBlockedError{}), 78},
+		"blocked plain":  {storage.ErrCutoverBlocked, 78},
+		"swapped back":   {fmt.Errorf("storage: M8: %w", storage.ErrRewriteSwappedBack), 78},
+		"level too new":  {fmt.Errorf("kernel: P2: %w", &storage.LevelTooNewError{Owner: "gcpd", Store: 3, Supported: 2, Source: "stamp"}), 78},
+		"anything else":  {errors.New("the Riddler's question"), 1},
+		"quarantine nil": {storage.ErrQuarantineNoSealer, 1},
+	} {
+		if got := ExitCode(c.err); got != c.want {
+			t.Errorf("%s: ExitCode(%v) = %d, want %d", name, c.err, got, c.want)
+		}
+	}
+}
+
+// TestQuarantineGauge: <ns>_storage_quarantine_rows{step,sensitive}
+// records per step the sealed rows and the others; after a purge both fall
+// to 0 rather than keeping the step's last value.
+func TestQuarantineGauge(t *testing.T) {
+	ctx := context.Background()
+	mem := vfs.NewMem()
+	mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+	seedCutover(t, mem, cutoverRows(30, 4))
+	sf := &fakeSealer{}
+	db, err := bootCutover(t, mem, sf, sf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	p, err := metrics.New(ctx, metrics.Options{AppID: "gotham", Prometheus: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Shutdown(ctx) })
+	scope, err := p.Core("storage", "step", "sensitive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gauge := func(sensitive string) float64 {
+		t.Helper()
+		mfs, err := p.Gatherer().Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, mf := range mfs {
+			if mf.GetName() != "mediacore_storage_quarantine_rows" {
+				continue
+			}
+			for _, m := range mf.GetMetric() {
+				if matches(m, map[string]string{"step": "gcpd.case-files", "sensitive": sensitive}) {
+					return m.GetGauge().GetValue()
+				}
+			}
+		}
+		t.Fatalf("no quarantine_rows series for sensitive=%s", sensitive)
+		return 0
+	}
+	qg, err := NewQuarantineGauge(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := qg.Record(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if s, o := gauge("true"), gauge("false"); s != 4 || o != 6 {
+		t.Errorf("quarantine_rows = %v sensitive, %v other; want 4 and 6", s, o)
+	}
+	if _, err := db.PurgeQuarantine(ctx, "gcpd.case-files", sf, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := qg.Record(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if s, o := gauge("true"), gauge("false"); s != 0 || o != 0 {
+		t.Errorf("quarantine_rows after the purge = %v and %v, want 0 and 0", s, o)
+	}
 }
