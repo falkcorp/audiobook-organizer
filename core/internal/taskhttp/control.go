@@ -1,5 +1,5 @@
 // file: core/internal/taskhttp/control.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 13b7c60a-c524-4e3b-bb06-f9180a83fc7e
 // last-edited: 2026-11-11
 
@@ -117,9 +117,12 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, p *auth.Princ
 		details := map[string]any{}
 		if viewErr == nil {
 			details["kind"] = string(before.Kind)
-			details["run_actor"] = before.Actor.UserID
+			// A system run is named in its own field rather than as a
+			// prefixed run_actor, so a reader never parses an in-band prefix.
 			if before.Actor.System != "" {
-				details["run_actor"] = "system:" + before.Actor.System
+				details["run_actor_system"] = before.Actor.System
+			} else {
+				details["run_actor"] = before.Actor.UserID
 			}
 		}
 		if !s.record(w, r, p, actionCancel, id, details) {
