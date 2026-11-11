@@ -1,5 +1,5 @@
 // file: core/internal/executor/start.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 89eb5ff3-93fb-4a22-9970-d55b28fbbe40
 // last-edited: 2026-11-11
 
@@ -84,18 +84,17 @@ func (e *executor) StartIn(ctx context.Context, b *storage.Batch, kind tasks.Kin
 	return ref, err
 }
 
-// startLocked prepares and runs commit, under startMu when the kind folds
-// duplicates (the dedupe read and the insert must not interleave in this
-// process; the store's own guard keys cover the commit).
+// startLocked prepares and runs commit under startMu: every start but a
+// plan's apply run may fold into an existing run (stageFold), and the
+// dedupe read and the insert must not interleave in this process (the
+// store's own guard keys cover the commit).
 func (e *executor) startLocked(ctx context.Context, kind tasks.Kind, req tasks.StartRequest, s starter, m startMode, commit func(prepared) error) error {
 	prep, err := e.prepare(ctx, kind, req, s, m)
 	if err != nil {
 		return err
 	}
-	if prep.d.folds() || req.IdempotencyKey != "" {
-		e.startMu.Lock()
-		defer e.startMu.Unlock()
-	}
+	e.startMu.Lock()
+	defer e.startMu.Unlock()
 	return commit(prep)
 }
 
@@ -120,11 +119,6 @@ type prepared struct {
 	mode   tasks.Mode
 	params json.RawMessage
 	prio   tasks.Priority
-}
-
-func (d *def) folds() bool {
-	p := d.c.Dedupe
-	return p.AnyParams || p.Key != nil || p.Merge != nil
 }
 
 // prepare validates a start before anything is staged: the kind, held,
@@ -177,7 +171,14 @@ func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.Start
 	case mode == tasks.ModeLive && d.c.Approval != nil && d.c.Approval.PlanRequired:
 		return prepared{}, fmt.Errorf("%w: %s", ErrPlanRequired, d.kind)
 	}
+	// PrioritySystem is core-only (tasks.PrioritySystem; 05-tasks 5T.3.1):
+	// its runs take the reserved system workers, so a module kind may not
+	// claim it, and a value past it would sort ahead of system runs in the
+	// queue (^priority) while dispatch treats it as non-system.
 	prio := req.Priority
+	if err := permitPriority(d, prio); err != nil {
+		return prepared{}, err
+	}
 	if prio == 0 {
 		prio = d.c.Priority
 	}
@@ -187,16 +188,32 @@ func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.Start
 	return prepared{d: d, req: req, mode: mode, params: params, prio: prio}, nil
 }
 
+// permitPriority refuses a priority past PrioritySystem on any kind and
+// PrioritySystem on a module kind (zero: the definition's default).
+func permitPriority(d *def, p tasks.Priority) error {
+	switch {
+	case p > tasks.PrioritySystem:
+		return fmt.Errorf("%w: %d is not a priority", ErrInvalidPriority, p)
+	case p == tasks.PrioritySystem && d.module != coreModule:
+		return fmt.Errorf("%w: PrioritySystem is core-only and %s is a module kind", ErrInvalidPriority, d.kind)
+	}
+	return nil
+}
+
 // permitStart is the start permission rule. A module system actor may start
 // only its module's kinds plus its manifest's TaskStarts, with the union of
 // those kinds' Perms.Start minus core:admin and every AuthRequired scope
 // (SEC2-15, COR3-10); any other actor needs s.who to satisfy Perms.Start
 // when a checker is present. A child start (s.parent set, rc.Enqueue) is
-// module code, so it is also bounded by the same rule for the module whose
-// body makes it, whoever started the parent: the run's context carries no
-// request principal, so a user's own grants cannot be checked there, and a
-// child whose Perms.Start needs core:admin or an AuthRequired scope is
-// started directly, never enqueued.
+// module code, so it must also pass the same rule for the module whose
+// body makes it. The two rules intersect: when the parent's actor is a
+// module system actor, the child must be within both modules' reach, so a
+// module that starts another module's kind must list that kind's whole
+// child closure in its own TaskStarts (fail closed). When the parent's
+// actor is a user, only the module rule applies: the run's context carries
+// no request principal, so the user's own grants cannot be checked there,
+// and a child whose Perms.Start needs core:admin or an AuthRequired scope
+// is started directly, never enqueued.
 func (e *executor) permitStart(d *def, actor tasks.Actor, s starter) error {
 	if p := s.parent; p != nil {
 		if err := e.moduleReach(p.module, d); err != nil {
@@ -385,9 +402,10 @@ func (e *executor) stageStart(ctx context.Context, b *storage.Batch, p prepared)
 		}
 	}
 	// An apply run (PlanRef set: only Approve sets it) is always a new run:
-	// it never folds into a queued run, and stageFold never folds a start
-	// into one, so one plan's approval can never land on another's run.
-	if p.d.folds() && p.req.PlanRef == "" {
+	// it never folds into a queued or running run, and stageFold never folds
+	// a start into one, so one plan's approval can never land on another's
+	// run.
+	if p.req.PlanRef == "" {
 		ref, ok, err := e.stageFold(ctx, b, p)
 		if err != nil || ok {
 			if err == nil && idemKey != nil {
@@ -427,11 +445,20 @@ func (e *executor) stageIdem(b *storage.Batch, key []byte, id tasks.RunID) error
 	return e.idem.Set(b, key, v)
 }
 
-// stageFold folds a start into a queued run of the same kind under the
-// kind's DedupePolicy (v2 DedupeQueuedRuns / MergeQueuedParams): AnyParams
-// folds regardless of params, Key folds on an equal key, otherwise equal
-// params fold; SameActorOnly folds only into a run of the same actor. Merge
-// rewrites the queued run's params (a queued→queued transition).
+// stageFold folds a start into an unfinished run of the same kind and mode
+// under the kind's DedupePolicy (05-tasks; v2 EnqueueOp's dedupe,
+// DedupeQueuedRuns, DedupeSameActorOnly, MergeQueuedParams). The zero
+// policy folds into a queued or running run whose params are
+// byte-identical; AnyParams folds into a queued or running run whatever its
+// params; Key folds only into a queued run with an equal key; Merge unions
+// the start into a queued run (a queued→queued transition) and is never
+// called for a running run, which takes the start only on identical params.
+// SameActorOnly narrows every rule to runs of the same actor. Queued runs
+// are tried first, in dispatch order, so with a Merge kind an identical
+// start may merge into a queued run rather than fold into the running one.
+// A fold into a running run is a read with no write: a run that ends
+// between the read and the return is still handed back as Existing (v2
+// parity). waiting_deps and stopping runs are not fold targets.
 func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) (tasks.RunRef, bool, error) {
 	pol := p.d.c.Dedupe
 	var want string
@@ -485,5 +512,29 @@ func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) 
 		}
 		return tasks.RunRef{ID: cur.ID, Existing: true}, true, nil
 	}
+	if pol.Key != nil {
+		return tasks.RunRef{}, false, nil // a Key folds into a queued run only
+	}
+	// The kind's running runs: at most one per worker, so the limit is
+	// never the bound.
+	q := tasks.RunQuery{Kinds: []tasks.Kind{p.d.kind}, States: []tasks.RunState{tasks.StateRunning}, Limit: runningFoldLimit}
+	for cur, err := range e.runs.List(ctx, q) {
+		if err != nil {
+			continue // undecodable: hidden (5T.5)
+		}
+		if cur.Kind != p.d.kind || cur.State != tasks.StateRunning || cur.Mode != p.mode || cur.PlanRef != "" {
+			continue
+		}
+		if pol.SameActorOnly && cur.Actor != p.req.Actor {
+			continue
+		}
+		if pol.AnyParams || bytes.Equal(cur.Params, p.params) {
+			return tasks.RunRef{ID: cur.ID, Existing: true}, true, nil
+		}
+	}
 	return tasks.RunRef{}, false, nil
 }
+
+// runningFoldLimit caps stageFold's read of a kind's running runs (the
+// store's own cap); the worker count bounds them far below it.
+const runningFoldLimit = 1000

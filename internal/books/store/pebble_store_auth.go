@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_auth.go
-// version: 1.28.1
+// version: 1.28.2
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package store
 
@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 var authLog = logger.New("database.auth")
@@ -118,7 +119,7 @@ func (p *PebbleStore) emailHeldByAny(lower string) (bool, error) {
 		return false, err
 	}
 	for _, u := range users {
-		if util.NormalizeEmail(u.Email) == lower {
+		if coreauth.NormalizeEmail(u.Email) == lower {
 			return true, nil
 		}
 	}
@@ -136,7 +137,7 @@ func (p *PebbleStore) CreateUser(username, email, passwordHashAlgo, passwordHash
 	p.inviteMu.Lock()
 	defer p.inviteMu.Unlock()
 	lowerUser := strings.ToLower(username)
-	lowerEmail := util.NormalizeEmail(email)
+	lowerEmail := coreauth.NormalizeEmail(email)
 
 	// uniqueness checks
 	if _, closer, err := p.db.Get([]byte("idx:user:username:" + lowerUser)); err == nil {
@@ -211,7 +212,7 @@ func (p *PebbleStore) CreateUserDisplacingUnverifiedEmail(username, email, passw
 	userWriteMu.Lock() // the holders' rows are rewritten
 	defer userWriteMu.Unlock()
 	lowerUser := strings.ToLower(username)
-	lowerEmail := util.NormalizeEmail(email)
+	lowerEmail := coreauth.NormalizeEmail(email)
 	if lowerEmail == "" {
 		return nil, nil, fmt.Errorf("create user displacing unverified email: email required")
 	}
@@ -283,7 +284,7 @@ func (p *PebbleStore) unprovenHoldersLocked(lower string) ([]User, error) {
 	var holders []User
 	for i := range users {
 		u := users[i]
-		if util.NormalizeEmail(u.Email) != lower {
+		if coreauth.NormalizeEmail(u.Email) != lower {
 			continue
 		}
 		if emailProven(&u, lower) {
@@ -355,7 +356,7 @@ func (p *PebbleStore) GetUserByUsername(username string) (*User, error) {
 // cache; it then repairs that cache key if it disagrees. A self-set address
 // is never found here.
 func (p *PebbleStore) GetUserByVerifiedEmail(email string) (*User, error) {
-	lower := util.NormalizeEmail(email)
+	lower := coreauth.NormalizeEmail(email)
 	if lower == "" {
 		return nil, nil
 	}
@@ -403,12 +404,12 @@ func (p *PebbleStore) MarkUserEmailVerified(userID, email string) (bool, error) 
 	defer p.inviteMu.Unlock()
 	userWriteMu.Lock() // the row's EmailSource is rewritten
 	defer userWriteMu.Unlock()
-	lower := util.NormalizeEmail(email)
+	lower := coreauth.NormalizeEmail(email)
 	if lower == "" {
 		return false, nil
 	}
 	u, err := p.GetUserByID(userID)
-	if err != nil || u == nil || util.NormalizeEmail(u.Email) != lower {
+	if err != nil || u == nil || coreauth.NormalizeEmail(u.Email) != lower {
 		return false, err
 	}
 	// Another account holding the address proven wins, whatever the cache
@@ -459,7 +460,7 @@ func (p *PebbleStore) MarkUserEmailVerified(userID, email string) (bool, error) 
 // holds email with EmailSource idp, so there is nothing to write. Any doubt
 // (a read error, a mismatch) returns false and the locked path decides.
 func (p *PebbleStore) emailAlreadyIdPVerified(userID, email string) bool {
-	lower := util.NormalizeEmail(email)
+	lower := coreauth.NormalizeEmail(email)
 	if lower == "" {
 		return false
 	}
@@ -474,7 +475,7 @@ func (p *PebbleStore) emailAlreadyIdPVerified(userID, email string) bool {
 	}
 	u, err := p.GetUserByID(userID)
 	return err == nil && u != nil && u.EmailSource == EmailSourceIdP &&
-		util.NormalizeEmail(u.Email) == lower
+		coreauth.NormalizeEmail(u.Email) == lower
 }
 
 // emailProvenForOtherByKey is MarkUserEmailVerified's second unlocked fast
@@ -485,7 +486,7 @@ func (p *PebbleStore) emailAlreadyIdPVerified(userID, email string) bool {
 // stale key, a read error or an unproven row returns false and the locked path
 // decides (it also covers two proven holders, where the cache has no key).
 func (p *PebbleStore) emailProvenForOtherByKey(userID, email string) bool {
-	lower := util.NormalizeEmail(email)
+	lower := coreauth.NormalizeEmail(email)
 	if lower == "" {
 		return false
 	}
@@ -612,8 +613,8 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 		user.MergedIntoUserID != stored.MergedIntoUserID || !sameTimePtr(user.MergedAt, stored.MergedAt) {
 		return fmt.Errorf("%w (user %s)", ErrUserProtectedField, user.ID)
 	}
-	oldEmail := util.NormalizeEmail(stored.Email)
-	newEmail := util.NormalizeEmail(user.Email)
+	oldEmail := coreauth.NormalizeEmail(stored.Email)
+	newEmail := coreauth.NormalizeEmail(user.Email)
 	// EmailSource is the store's to set: a self-service change makes it
 	// "self", anything else keeps what is stored, whatever the caller sent.
 	user.EmailSource = stored.EmailSource
@@ -684,8 +685,8 @@ func (p *PebbleStore) SetUserEmailAsAdmin(userID, email string) (string, error) 
 	}
 	previous := stored.Email
 	email = strings.TrimSpace(email)
-	oldLower := util.NormalizeEmail(stored.Email)
-	newLower := util.NormalizeEmail(email)
+	oldLower := coreauth.NormalizeEmail(stored.Email)
+	newLower := coreauth.NormalizeEmail(email)
 	// Checked even when the address is unchanged: the write below makes it
 	// proven for this user, so another proven holder must not exist.
 	if taken, err := p.provenHolderOtherLocked(newLower, userID); err != nil {
@@ -1366,7 +1367,7 @@ func (p *PebbleStore) CreateInvite(invite *Invite) (*Invite, error) {
 	if invite.ExpiresAt.IsZero() {
 		invite.ExpiresAt = invite.CreatedAt.Add(7 * 24 * time.Hour)
 	}
-	invite.Email = util.NormalizeEmail(invite.Email)
+	invite.Email = coreauth.NormalizeEmail(invite.Email)
 	if taken, err := p.provenHolderOtherLocked(invite.Email, ""); err != nil {
 		return nil, err
 	} else if taken {
@@ -1497,7 +1498,7 @@ func (p *PebbleStore) planInviteAcceptLocked(token string, now time.Time) (*invi
 		closer.Close()
 		return nil, fmt.Errorf("%w: %q", ErrInviteUsernameTaken, inv.Username)
 	}
-	inviteEmail := util.NormalizeEmail(inv.Email)
+	inviteEmail := coreauth.NormalizeEmail(inv.Email)
 	lowerEmail := "" // the email bound to the new account, if any
 	grantSSO := false
 	var displace []User // accounts that typed the bound address in

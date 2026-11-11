@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs_session_revoke_test.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: f5a37469-0393-44b9-9335-7ab7e914098f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers_test
 
@@ -14,9 +14,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -76,7 +76,7 @@ func passwordSetter(t *testing.T, wantID, wantExpected string, events *[]string,
 	return &credsFake{setPassword: func(userID, expectedHash, algo, hash, keepSessionID string) (*database.User, error) {
 		require.Equal(t, wantID, userID)
 		require.Equal(t, wantExpected, expectedHash, "self-service passes the verified hash, admin reset passes \"\"")
-		require.Equal(t, absauth.AlgoArgon2id, algo, "every password writer hashes with absauth.HashPassword")
+		require.Equal(t, authpw.AlgoArgon2id, algo, "every password writer hashes with authpw.HashPassword")
 		require.NotEmpty(t, hash)
 		if events != nil {
 			*events = append(*events, "set-password")

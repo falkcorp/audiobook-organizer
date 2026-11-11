@@ -1,7 +1,7 @@
 // file: internal/server/login_budget_isolation_test.go
-// version: 1.1.1
+// version: 1.1.3
 // guid: 4d59a407-dbd7-4beb-9b1b-344f246c9fbd
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package server
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +41,7 @@ func budgetFixture(t *testing.T) *credGuardFixture {
 
 func budgetUser(t *testing.T, fx *credGuardFixture, name, pw string) {
 	t.Helper()
-	algo, hash, err := absauth.HashPassword(pw)
+	algo, hash, err := absauth.Passwords.Hash(pw)
 	require.NoError(t, err)
 	_, err = fx.store.CreateUser(name, name+"@example.test", algo, hash, []string{auth.SeedRoleAdmin}, "active")
 	require.NoError(t, err)
@@ -79,7 +80,7 @@ func TestLoginBudget_DeadRefreshTokensDoNotSpendTheWebLoginBudget(t *testing.T) 
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.90:4000"
-	for i := 0; i < absauth.MaxFailuresPerIP; i++ {
+	for i := 0; i < coreauth.DefaultMaxFailuresPerSource; i++ {
 		require.Equal(t, http.StatusUnauthorized, budgetRefresh(fx, v, i), "refresh %d", i)
 	}
 	require.Equal(t, http.StatusTooManyRequests, budgetRefresh(fx, v, 99), "refresh past its own budget")
@@ -91,7 +92,7 @@ func TestLoginBudget_WebTyposDoNotSpendTheRefreshBudget(t *testing.T) {
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.91:4000"
-	for i := 0; i < absauth.MaxFailuresPerIP; i++ {
+	for i := 0; i < coreauth.DefaultMaxFailuresPerSource; i++ {
 		require.Equal(t, http.StatusUnauthorized, budgetLogin(fx, "/api/v1/auth/login", v, fmt.Sprintf("typo%d", i), "x"), "typo %d", i)
 	}
 	require.Equal(t, http.StatusTooManyRequests, budgetLogin(fx, "/api/v1/auth/login", v, "budget-eve", "eve-pw"), "web login past its budget")
@@ -105,7 +106,7 @@ func TestLoginBudget_SpentRefreshBudgetRefusesRefreshOnly(t *testing.T) {
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.92:4000"
-	for i := 0; i < absauth.MaxFailuresPerIP; i++ {
+	for i := 0; i < coreauth.DefaultMaxFailuresPerSource; i++ {
 		budgetRefresh(fx, v, i)
 	}
 	require.Equal(t, http.StatusTooManyRequests, budgetRefresh(fx, v, 99), "the refresh budget is really spent")
@@ -172,7 +173,7 @@ func TestLoginCeiling_StalledBodyRealRouterAnswers408InTheDoorsShape(t *testing.
 }
 
 // S5: stalled bodies hold no in-flight slot. One visitor stalls
-// maxLoginInFlightPerVisitor bodies; a normal login from the same visitor is
+// coreauth.MaxLoginInFlightPerVisitor bodies; a normal login from the same visitor is
 // admitted (answered by the handler) long before the stalled ones time out. If
 // the body were read after the visitor's slot was taken, the four stalled
 // requests would hold all four slots and the fifth would be refused 429.
@@ -185,13 +186,13 @@ func TestLoginCeiling_StalledBodiesHoldNoInFlightSlot(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(captureRawResponseController()) // the production writer chain in gin (stage 9 compresses outside it)
-	r.POST("/login", l.middleware(nil, nil), func(c *gin.Context) { c.Status(http.StatusUnauthorized) })
+	r.POST("/login", loginCeilingMiddleware(l, nil, nil, nil), func(c *gin.Context) { c.Status(http.StatusUnauthorized) })
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	addr := strings.TrimPrefix(srv.URL, "http://")
 
 	var conns []net.Conn
-	for range maxLoginInFlightPerVisitor {
+	for range coreauth.MaxLoginInFlightPerVisitor {
 		conn, err := net.Dial("tcp", addr)
 		require.NoError(t, err)
 		conns = append(conns, conn)

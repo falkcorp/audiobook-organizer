@@ -1,7 +1,7 @@
 // file: internal/server/password_writers_algo_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0e7d5b38-c1a4-4f92-8d63-b94a27f1c0e6
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -14,12 +14,13 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// Every password writer shares one hashing policy (absauth.HashPassword). These
+// Every password writer shares one hashing policy (authpw.HashPassword). These
 // tests read the stored row back and check it verifies with the algo it records.
 
 func TestAcceptInvite_StoresArgon2idHash(t *testing.T) {
@@ -42,8 +43,8 @@ func TestAcceptInvite_StoresArgon2idHash(t *testing.T) {
 	user, err := s.storeForWiring().GetUserByUsername("newbie")
 	require.NoError(t, err)
 	require.NotNil(t, user)
-	assert.Equal(t, absauth.AlgoArgon2id, user.PasswordHashAlgo)
-	ok, _ := absauth.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, "supersecret")
+	assert.Equal(t, authpw.AlgoArgon2id, user.PasswordHashAlgo)
+	ok, _ := absauth.Passwords.Verify(user.PasswordHashAlgo, user.PasswordHash, "supersecret")
 	assert.True(t, ok)
 }
 
@@ -58,7 +59,7 @@ func TestFindOrCreateAdminUser_StoresArgon2idHash(t *testing.T) {
 	stored, err := s.storeForWiring().GetUserByID(user.ID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Equal(t, absauth.AlgoArgon2id, stored.PasswordHashAlgo)
-	ok, _ := absauth.VerifyPassword(stored.PasswordHashAlgo, stored.PasswordHash, generated)
+	assert.Equal(t, authpw.AlgoArgon2id, stored.PasswordHashAlgo)
+	ok, _ := absauth.Passwords.Verify(stored.PasswordHashAlgo, stored.PasswordHash, generated)
 	assert.True(t, ok)
 }

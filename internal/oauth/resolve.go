@@ -1,7 +1,7 @@
 // file: internal/oauth/resolve.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 6b0d3f81-9a27-4c54-8e16-2a5c7b9e0d43
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package oauth
 
@@ -12,7 +12,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Sentinel errors so callers can map to the right HTTP status (both → 403, never 500).
@@ -81,7 +81,7 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 		if user == nil {
 			return nil, fmt.Errorf("oauth resolve: linked identity %s points to missing user %s", id.ID, id.UserID)
 		}
-		if util.SameEmail(user.Email, claims.Email) {
+		if coreauth.SameEmail(user.Email, claims.Email) {
 			if m, ok := database.AsCapability[database.VerifiedEmailMarker](store); ok {
 				// Best-effort: the login itself is already decided. A failure
 				// only means the address stays unverified for now.

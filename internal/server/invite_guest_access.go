@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -19,7 +19,7 @@ import (
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 var inviteAccessLog = logger.New("server.invites")
@@ -56,7 +56,7 @@ func inviteGrantAllowed(store any) func(string) bool {
 		return nil
 	}
 	return func(email string) bool {
-		email = util.NormalizeEmail(email)
+		email = coreauth.NormalizeEmail(email)
 		g, err := grants.GetInviteEmailGrant(email)
 		if err != nil || g == nil || g.UserID == "" {
 			return false
@@ -65,7 +65,7 @@ func inviteGrantAllowed(store any) func(string) bool {
 		if err != nil || u == nil {
 			return false
 		}
-		return u.Status == "active" && util.NormalizeEmail(u.Email) == email
+		return u.Status == "active" && coreauth.NormalizeEmail(u.Email) == email
 	}
 }
 
@@ -327,7 +327,7 @@ func (s *Server) syncGuestPolicy(parent context.Context, client guestPolicyEnsur
 // or when it is on the operator's OAUTH_ALLOWED_EMAILS: in each case someone
 // still intends that address to have access.
 func (s *Server) revokeGuestAccess(userID, email, reason string) {
-	email = util.NormalizeEmail(email)
+	email = coreauth.NormalizeEmail(email)
 	if email == "" || userID == "" {
 		return
 	}
@@ -389,11 +389,11 @@ func (s *Server) revokeGuestAccess(userID, email, reason string) {
 // off.
 func (s *Server) keepGuestPolicyEmail(userID, email string) string {
 	snap := config.Snapshot()
-	if util.SameEmail(snap.OwnerEmail, email) {
+	if coreauth.SameEmail(snap.OwnerEmail, email) {
 		return "it is the owner's email"
 	}
 	for _, allowed := range oauth.ParseAllowedEmails(snap.OAuthAllowedEmails) {
-		if util.SameEmail(allowed, email) {
+		if coreauth.SameEmail(allowed, email) {
 			return "it is on OAUTH_ALLOWED_EMAILS"
 		}
 	}

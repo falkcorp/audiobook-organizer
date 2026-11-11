@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: b41e6d09-8a37-4f52-9c10-25d7b8e0f346
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package middleware
 
@@ -348,7 +348,7 @@ func TestABSAuth_VerifiedAssertionJITProvisionsAllowlistedUser(t *testing.T) {
 	for _, u := range h.store.users {
 		// A CF-identified user has no password credential and must not be loginable
 		// by password.
-		if ok, _ := absauth.VerifyPassword(u.PasswordHashAlgo, u.PasswordHash, ""); ok {
+		if ok, _ := absauth.Passwords.Verify(u.PasswordHashAlgo, u.PasswordHash, ""); ok {
 			t.Fatal("a JIT-provisioned user must not authenticate with an empty password")
 		}
 	}

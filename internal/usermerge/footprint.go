@@ -1,7 +1,7 @@
 // file: internal/usermerge/footprint.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5a7c3e91-b284-4d06-9f1a-e8d62b05c473
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package usermerge
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Footprint is the read-only view behind the "Sign-ins & data" drawer: one
@@ -65,14 +65,14 @@ func (s *Service) Footprint(userID string) (*Footprint, error) {
 	} {
 		f.Counts[fam] = len(rows)
 	}
-	owner := util.NormalizeEmail(s.ownerEmail())
+	owner := coreauth.NormalizeEmail(s.ownerEmail())
 	for _, r := range d.OAuthIdentities {
 		var id database.OAuthIdentity
 		if err := json.Unmarshal(r.Value, &id); err != nil {
 			return nil, fmt.Errorf("decode %s: %w", r.Key, err)
 		}
 		f.Identities = append(f.Identities, Identity{ID: id.ID, Provider: id.Provider, Subject: maskSubject(id.Subject),
-			Email: id.Email, LinkedAt: id.CreatedAt, OwnerEmail: owner != "" && util.NormalizeEmail(id.Email) == owner})
+			Email: id.Email, LinkedAt: id.CreatedAt, OwnerEmail: owner != "" && coreauth.NormalizeEmail(id.Email) == owner})
 	}
 	sessions, err := s.store.ListUserSessions(userID)
 	if err != nil {

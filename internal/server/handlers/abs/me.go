@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/me.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 63b8c105-2f74-4ea9-8d16-947c0be5a2f3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs
 
@@ -15,6 +15,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreaudit "github.com/falkcorp/mediacore/audit"
 	"github.com/gin-gonic/gin"
 )
 
@@ -41,8 +42,8 @@ func (h *Handler) Me(c *gin.Context) {
 
 	progress, bookmarks, err := h.userPayload(user.ID)
 	if err != nil {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "me", Outcome: absauth.OutcomeError, Mode: servermiddleware.ABSAuthMode(c),
+		absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+			Action: "me", Outcome: coreaudit.Error, Mode: servermiddleware.ABSAuthMode(c),
 			SourceIP: c.ClientIP(), UserID: user.ID, Username: user.Username,
 			Reason: "user-data-unavailable", Path: c.Request.URL.Path,
 		})
@@ -214,8 +215,8 @@ func (h *Handler) DeleteSession(c *gin.Context) {
 		return
 	}
 	if session == nil || session.UserID != user.ID {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "session-delete", Outcome: absauth.OutcomeDenied,
+		absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+			Action: "session-delete", Outcome: coreaudit.Denied,
 			Mode: servermiddleware.ABSAuthMode(c), SourceIP: c.ClientIP(),
 			UserID: user.ID, Username: user.Username, SessionID: id,
 			Reason: "not-found-or-not-owned", Path: c.Request.URL.Path,
@@ -228,8 +229,8 @@ func (h *Handler) DeleteSession(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "could not revoke session")
 		return
 	}
-	absauth.Audit(absauth.AuditEvent{
-		Action: "session-delete", Outcome: absauth.OutcomeSuccess,
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+		Action: "session-delete", Outcome: coreaudit.Success,
 		Mode: servermiddleware.ABSAuthMode(c), SourceIP: c.ClientIP(),
 		UserID: user.ID, Username: user.Username, SessionID: id, Path: c.Request.URL.Path,
 	})
@@ -258,8 +259,8 @@ func (h *Handler) Logout(c *gin.Context) {
 		if err != nil {
 			unreadable, _ := database.UnreadableMemberCount(err)
 			slog.Error("abs logout all-devices: revoke was partial", "user", user.ID, "revoked", n, "unreadable", unreadable, "err", err)
-			absauth.Audit(absauth.AuditEvent{
-				Action: "logout", Outcome: absauth.OutcomeError, Mode: mode, SourceIP: ip,
+			absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+				Action: "logout", Outcome: coreaudit.Error, Mode: mode, SourceIP: ip,
 				UserID: user.ID, Username: user.Username, Reason: "all-devices-partial",
 				Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 			})
@@ -270,8 +271,8 @@ func (h *Handler) Logout(c *gin.Context) {
 			respondJSON(c, http.StatusOK, gin.H{"success": false, "partial": true, "revoked": n, "unreadable": unreadable})
 			return
 		}
-		absauth.Audit(absauth.AuditEvent{
-			Action: "logout", Outcome: absauth.OutcomeSuccess, Mode: mode, SourceIP: ip,
+		absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+			Action: "logout", Outcome: coreaudit.Success, Mode: mode, SourceIP: ip,
 			UserID: user.ID, Username: user.Username, Reason: "all-devices",
 			Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
@@ -298,8 +299,8 @@ func (h *Handler) Logout(c *gin.Context) {
 		}
 	}
 
-	absauth.Audit(absauth.AuditEvent{
-		Action: "logout", Outcome: absauth.OutcomeSuccess, Mode: mode, SourceIP: ip,
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+		Action: "logout", Outcome: coreaudit.Success, Mode: mode, SourceIP: ip,
 		UserID: user.ID, Username: user.Username, SessionID: sessionID,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})

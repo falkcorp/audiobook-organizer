@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user.go
-// version: 1.15.4
+// version: 1.15.5
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. UserHandler covers user management and invite endpoints.
@@ -21,7 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -365,7 +365,7 @@ func (h *UserHandler) AcceptInvite(c *gin.Context) {
 		return
 	}
 
-	algo, hash, err := absauth.HashPassword(req.Password)
+	algo, hash, err := absauth.Passwords.Hash(req.Password)
 	if err != nil {
 		httputil.InternalError(c, "hash password", err)
 		return
@@ -488,7 +488,7 @@ func (h *UserHandler) SetUserEmail(c *gin.Context) {
 		httputil.InternalError(c, "set user email", err)
 		return
 	}
-	if h.revokeGuestAccess != nil && previous != "" && !util.SameEmail(previous, email) {
+	if h.revokeGuestAccess != nil && previous != "" && !coreauth.SameEmail(previous, email) {
 		h.revokeGuestAccess(id, previous, "email changed by an admin")
 	}
 	user, err := h.store.GetUserByID(id)

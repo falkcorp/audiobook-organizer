@@ -1,7 +1,7 @@
 // file: internal/server/auth_accept_invite.go
-// version: 1.13.3
+// version: 1.13.4
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 // Rescued from user_handlers.go during Phase 2 handler extraction.
 // handleAcceptInvite remains a *Server method because it bridges auth
@@ -62,7 +62,7 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 		return
 	}
 
-	algo, hash, err := absauth.HashPassword(req.Password)
+	algo, hash, err := absauth.Passwords.Hash(req.Password)
 	if err != nil {
 		httputil.InternalError(c, "hash password", err)
 		return

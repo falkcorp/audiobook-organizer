@@ -1,7 +1,7 @@
 // file: internal/books/store/oauth_identity.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b3e9c1a7-5f42-4d80-9c16-0a7e2b6d4f38
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package store
 
@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // OAuthIdentity links an external identity-provider account (GitHub, Google, or a
@@ -98,7 +98,7 @@ var _ VerifiedEmailIdentityLinker = (*PebbleStore)(nil)
 // It holds inviteMu, which every email writer takes, for the lookup and the
 // write.
 func (p *PebbleStore) LinkIdentityToVerifiedEmailHolder(identity *OAuthIdentity, email string) (*User, error) {
-	lower := util.NormalizeEmail(email)
+	lower := coreauth.NormalizeEmail(email)
 	if lower == "" || identity == nil {
 		return nil, nil
 	}

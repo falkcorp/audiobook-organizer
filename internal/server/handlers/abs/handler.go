@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/handler.go
-// version: 1.34.1
+// version: 1.34.2
 // guid: fb0271c6-3a49-4d85-9e13-8c507b2ad64f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 // Package abs implements the Audiobookshelf-compatible auth surface (design spec
 // Phase 1): GET /ping, GET /status, POST /login, POST /auth/refresh, POST /logout,
@@ -34,6 +34,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/singleflight"
@@ -380,7 +381,7 @@ type Options struct {
 	// Throttle is the failed-login throttle. The server passes the one it also
 	// gives the web login, so both share their per-account and per-source
 	// counters. Nil builds a private one.
-	Throttle *absauth.Throttle
+	Throttle *coreauth.Throttle
 }
 
 // itemsCountEntry is one cached filtered count and when it was computed.
@@ -395,7 +396,7 @@ type Handler struct {
 	store    Store
 	resolver *servermiddleware.ABSIdentityResolver
 	userData UserDataProvider
-	throttle *absauth.Throttle
+	throttle *coreauth.Throttle
 	// throttleKeyFn is Options.ThrottleKey; read through throttleKey.
 	throttleKeyFn func(*gin.Context) string
 
@@ -588,10 +589,9 @@ func New(o Options) (*Handler, error) {
 	if name == "" {
 		name = "Books"
 	}
-	absauth.WarmLoginDummy() // so the first login for an unknown name costs what any other does
 	throttle := o.Throttle
 	if throttle == nil {
-		throttle = absauth.NewThrottle()
+		throttle = coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil)
 	}
 	h := &Handler{
 		cfg:                     o.Config,

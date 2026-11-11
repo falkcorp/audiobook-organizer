@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs_test
 
@@ -25,6 +25,8 @@ import (
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/conformance"
+	coreauth "github.com/falkcorp/mediacore/auth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -448,7 +450,7 @@ func (h *harness) seedPasswordUser(t *testing.T, id, username, password string) 
 
 func (h *harness) seedUser(t *testing.T, id, username, email, password string) *database.User {
 	t.Helper()
-	algo, hash, err := absauth.HashPassword(password)
+	algo, hash, err := absauth.Passwords.Hash(password)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
@@ -600,15 +602,15 @@ func TestStatus_RateLimitMatchesRealThrottle(t *testing.T) {
 	}
 
 	advertised := int64(settings["rateLimitLoginRequests"].(float64))
-	if advertised != int64(absauth.MaxFailuresPerIP) {
-		t.Errorf("rateLimitLoginRequests: got %d, want %d (absauth.MaxFailuresPerIP)",
-			advertised, absauth.MaxFailuresPerIP)
+	if advertised != int64(coreauth.DefaultMaxFailuresPerSource) {
+		t.Errorf("rateLimitLoginRequests: got %d, want %d (coreauth.DefaultMaxFailuresPerSource)",
+			advertised, coreauth.DefaultMaxFailuresPerSource)
 	}
 
 	window := int64(settings["rateLimitLoginWindow"].(float64))
-	expectedWindow := absauth.Window.Milliseconds()
+	expectedWindow := coreauth.DefaultThrottleWindow.Milliseconds()
 	if window != expectedWindow {
-		t.Errorf("rateLimitLoginWindow: got %d, want %d (absauth.Window.Milliseconds())",
+		t.Errorf("rateLimitLoginWindow: got %d, want %d (coreauth.DefaultThrottleWindow.Milliseconds())",
 			window, expectedWindow)
 	}
 }
@@ -819,7 +821,7 @@ func TestLogin_CredentiallessUserCannotPasswordLogin(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil)
 	h.store.addUser(&database.User{
 		ID: "cfu", Username: "cfonly", Email: "cf@example.com", Status: "active",
-		PasswordHashAlgo: absauth.AlgoOAuth, PasswordHash: "", CreatedAt: time.Now(),
+		PasswordHashAlgo: authpw.AlgoOAuth, PasswordHash: "", CreatedAt: time.Now(),
 	})
 	for _, pw := range []string{"", " ", "anything"} {
 		w, _ := h.do(t, request{method: http.MethodPost, path: "/login",
@@ -840,16 +842,16 @@ func TestLogin_BcryptUserIsRehashedToArgon2id(t *testing.T) {
 	}
 	h.store.addUser(&database.User{
 		ID: "legacy", Username: "legacy", Email: "legacy@example.com", Status: "active",
-		PasswordHashAlgo: absauth.AlgoBcrypt, PasswordHash: string(raw),
+		PasswordHashAlgo: authpw.AlgoBcrypt, PasswordHash: string(raw),
 		Roles: []string{"viewer"}, CreatedAt: time.Now(),
 	})
 	h.login(t, "legacy", "legacy-pw")
 
 	u, _ := h.store.GetUserByID("legacy")
-	if u.PasswordHashAlgo != absauth.AlgoArgon2id {
+	if u.PasswordHashAlgo != authpw.AlgoArgon2id {
 		t.Fatalf("expected rehash to argon2id, algo is %q", u.PasswordHashAlgo)
 	}
-	if ok, rehash := absauth.VerifyPassword(u.PasswordHashAlgo, u.PasswordHash, "legacy-pw"); !ok || rehash {
+	if ok, rehash := absauth.Passwords.Verify(u.PasswordHashAlgo, u.PasswordHash, "legacy-pw"); !ok || rehash {
 		t.Fatalf("rehashed credential must verify cleanly (ok=%v rehash=%v)", ok, rehash)
 	}
 	// And the user can still log in afterwards.
@@ -863,7 +865,7 @@ func TestLogin_RehashFailureStillLetsTheUserIn(t *testing.T) {
 	raw, _ := bcrypt.GenerateFromPassword([]byte("legacy-pw"), bcrypt.MinCost)
 	h.store.addUser(&database.User{
 		ID: "legacy", Username: "legacy", Status: "active",
-		PasswordHashAlgo: absauth.AlgoBcrypt, PasswordHash: string(raw), CreatedAt: time.Now(),
+		PasswordHashAlgo: authpw.AlgoBcrypt, PasswordHash: string(raw), CreatedAt: time.Now(),
 	})
 	h.store.updateErr = errors.New("pebble: write stalled")
 	w, _ := h.do(t, request{method: http.MethodPost, path: "/login",
@@ -877,7 +879,7 @@ func TestLogin_RehashFailureStillLetsTheUserIn(t *testing.T) {
 func TestLogin_ThrottleIs429AndNeverLocksTheAccount(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil)
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range absauth.MaxFailuresPerIP {
+	for i := range coreauth.DefaultMaxFailuresPerSource {
 		w, _ := h.do(t, request{method: http.MethodPost, path: "/login",
 			body: map[string]any{"username": "owner", "password": "wrong"}})
 		if w.Code != http.StatusUnauthorized {

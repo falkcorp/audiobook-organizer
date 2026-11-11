@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_invite_delivery.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 6f1d8b2c-3e47-4a95-b6c0-d82e5f9a7b14
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package store
 
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // ErrInviteEmailTaken is returned when another account already holds an
@@ -89,7 +89,7 @@ const inviteAdminRole = "admin"
 // the invite's address, so that holding the token proves control of it.
 func inviteEmailDelivered(inv *Invite) bool {
 	return inv.Email != "" && inv.EmailSentAt != nil &&
-		util.SameEmail(inv.EmailSentTo, inv.Email)
+		coreauth.SameEmail(inv.EmailSentTo, inv.Email)
 }
 
 // InviteCreatorMayGrant reports whether an invite's creator may give the
@@ -227,7 +227,7 @@ func (p *PebbleStore) ListAcceptedInvitesSince(since time.Time) ([]Invite, error
 
 // GetInviteEmailGrant implements InviteEmailGrantStore.
 func (p *PebbleStore) GetInviteEmailGrant(email string) (*InviteEmailGrant, error) {
-	email = util.NormalizeEmail(email)
+	email = coreauth.NormalizeEmail(email)
 	if email == "" {
 		return nil, nil
 	}
@@ -262,7 +262,7 @@ func (p *PebbleStore) SetInviteEmailGrantCFAdded(email, userID string) (bool, er
 	if err != nil {
 		return false, err
 	}
-	if err := p.db.Set([]byte(inviteEmailGrantPrefix+util.NormalizeEmail(email)), data, pebble.Sync); err != nil {
+	if err := p.db.Set([]byte(inviteEmailGrantPrefix+coreauth.NormalizeEmail(email)), data, pebble.Sync); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -276,7 +276,7 @@ func (p *PebbleStore) DeleteInviteEmailGrant(email, userID string) (*InviteEmail
 	if err != nil || g == nil || g.UserID != userID {
 		return nil, err
 	}
-	if err := p.db.Delete([]byte(inviteEmailGrantPrefix+util.NormalizeEmail(email)), pebble.Sync); err != nil {
+	if err := p.db.Delete([]byte(inviteEmailGrantPrefix+coreauth.NormalizeEmail(email)), pebble.Sync); err != nil {
 		return nil, err
 	}
 	return g, nil

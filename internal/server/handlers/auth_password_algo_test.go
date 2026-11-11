@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_password_algo_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 4f0c7a52-9d3e-4b86-a1c7-6e25b8d0f913
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers_test
 
@@ -14,6 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -38,12 +39,12 @@ func savingCreds(t *testing.T, user *database.User, saved **database.User) *cred
 }
 
 // absRehashedUser returns a user stored the way the ABS rehash leaves it: the
-// hash comes from absauth.HashPassword, the same call rehashPassword makes.
+// hash comes from authpw.HashPassword, the same call rehashPassword makes.
 func absRehashedUser(t *testing.T, password string) *database.User {
 	t.Helper()
-	algo, hash, err := absauth.HashPassword(password)
+	algo, hash, err := absauth.Passwords.Hash(password)
 	require.NoError(t, err)
-	require.Equal(t, absauth.AlgoArgon2id, algo)
+	require.Equal(t, authpw.AlgoArgon2id, algo)
 	return &database.User{
 		ID:               "user-1",
 		Username:         "alice",
@@ -88,7 +89,7 @@ func TestAuthHandler_Login_Argon2idWrongPasswordDenied(t *testing.T) {
 func TestAuthHandler_Login_AcceptsExplicitBcryptAlgo(t *testing.T) {
 	user := &database.User{
 		ID: "user-1", Username: "alice", PasswordHash: testBcryptHash(t, "password123"),
-		PasswordHashAlgo: absauth.AlgoBcrypt, Roles: []string{"user"}, Status: "active", CreatedAt: time.Now(),
+		PasswordHashAlgo: authpw.AlgoBcrypt, Roles: []string{"user"}, Status: "active", CreatedAt: time.Now(),
 	}
 	session := &database.Session{ID: "sess-abc", UserID: user.ID, ExpiresAt: time.Now().Add(24 * time.Hour)}
 
@@ -107,7 +108,7 @@ func TestAuthHandler_Login_AcceptsExplicitBcryptAlgo(t *testing.T) {
 // An algorithm the verifier does not know fails closed, even when the stored
 // hash happens to be a valid bcrypt hash of the supplied password.
 func TestAuthHandler_Login_UnknownAlgoDenied(t *testing.T) {
-	for _, algo := range []string{"scrypt", "md5", absauth.AlgoOAuth} {
+	for _, algo := range []string{"scrypt", "md5", authpw.AlgoOAuth} {
 		t.Run(algo, func(t *testing.T) {
 			user := &database.User{
 				ID: "user-1", Username: "alice", PasswordHash: testBcryptHash(t, "password123"),
@@ -144,10 +145,10 @@ func TestAuthHandler_ChangePassword_AcceptsArgon2idCurrentPassword(t *testing.T)
 	require.NotNil(t, saved)
 	// Web password writes use the shared policy (argon2id), and the algo column
 	// must say so, or the new hash would be read with the wrong algorithm.
-	assert.Equal(t, absauth.AlgoArgon2id, saved.PasswordHashAlgo)
-	ok, _ := absauth.VerifyPassword(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
+	assert.Equal(t, authpw.AlgoArgon2id, saved.PasswordHashAlgo)
+	ok, _ := absauth.Passwords.Verify(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
 	assert.True(t, ok)
-	oldOK, _ := absauth.VerifyPassword(saved.PasswordHashAlgo, saved.PasswordHash, "old-password-1")
+	oldOK, _ := absauth.Passwords.Verify(saved.PasswordHashAlgo, saved.PasswordHash, "old-password-1")
 	assert.False(t, oldOK)
 }
 
@@ -171,7 +172,7 @@ func TestAuthHandler_ChangePassword_Argon2idWrongCurrentPasswordDenied(t *testin
 func TestAuthHandler_ChangePassword_BcryptStillWorks(t *testing.T) {
 	user := &database.User{
 		ID: "user-1", Username: "alice", PasswordHash: testBcryptHash(t, "old-password-1"),
-		PasswordHashAlgo: absauth.AlgoBcrypt, Roles: []string{"user"}, Status: "active", CreatedAt: time.Now(),
+		PasswordHashAlgo: authpw.AlgoBcrypt, Roles: []string{"user"}, Status: "active", CreatedAt: time.Now(),
 	}
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByID(user.ID).Return(user, nil)
@@ -209,13 +210,13 @@ func TestAuthHandler_ChangePassword_LegacyEmptyAlgoBcryptRow(t *testing.T) {
 
 	require.Equal(t, http.StatusNoContent, c.Writer.Status(), w.Body.String())
 	require.NotNil(t, saved)
-	assert.Equal(t, absauth.AlgoArgon2id, saved.PasswordHashAlgo)
-	ok, _ := absauth.VerifyPassword(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
+	assert.Equal(t, authpw.AlgoArgon2id, saved.PasswordHashAlgo)
+	ok, _ := absauth.Passwords.Verify(saved.PasswordHashAlgo, saved.PasswordHash, "new-password-2")
 	assert.True(t, ok)
 }
 
 func TestAuthHandler_ChangePassword_UnknownAlgoDenied(t *testing.T) {
-	for _, algo := range []string{"scrypt", absauth.AlgoOAuth} {
+	for _, algo := range []string{"scrypt", authpw.AlgoOAuth} {
 		t.Run(algo, func(t *testing.T) {
 			user := &database.User{
 				ID: "user-1", Username: "alice", PasswordHash: testBcryptHash(t, "old-password-1"),

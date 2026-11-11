@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.29.1
+// version: 1.29.2
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -291,7 +291,7 @@ func hashBootstrapToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// --- rate-limit state for the bootstrap endpoint: see bootstrap_rate_limit.go ---
+// --- rate-limit state for the bootstrap endpoint: see bootstrap_gate.go (keying) and core/auth/bootstrap_limit.go (the limiter) ---
 
 // --- handler ---
 
@@ -320,7 +320,7 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	// directLANPeer).
 	limitKey, aggs, ip := bootstrapClientKey(c, tunnelConnectorPeers(), remoteAddrIsLocal)
 
-	if !bootstrapLimits.allow(limitKey, aggs...) {
+	if !bootstrapLimits.Allow(limitKey, aggs...) {
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many bootstrap attempts — try again later", "TOO_MANY_REQUESTS")
 		return
 	}
@@ -501,7 +501,7 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 	if err != nil {
 		return nil, "", fmt.Errorf("generate admin password: %w", err)
 	}
-	algo, hash, err := absauth.HashPassword(password)
+	algo, hash, err := absauth.Passwords.Hash(password)
 	if err != nil {
 		return nil, "", fmt.Errorf("hash password: %w", err)
 	}
