@@ -1,7 +1,7 @@
 // file: core/tasks/taskstest/conformance.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9e791d16-82f5-4c80-8314-22f8b1820dab
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package taskstest is the test kit for code built on package tasks:
 // Conformance, which modules run over their own definitions, and FakeRun, an
@@ -33,7 +33,7 @@ const (
 //   - required_common: Title, a declared Effects, Perms.Start and a Resume
 //     policy are set (A2: the zero ResumePolicy is refused);
 //   - parallelism_declared (Batch, Fixer): the Parallelism validates (N8, A1);
-//   - fixer_approval (Fixer): Approval is set and Effects are Writes;
+//   - fixer_approval (Fixer): Approval is set with PlanRequired and Effects are Writes;
 //   - unique_kinds: no two definitions share a kind.
 //
 // An empty Help is logged, not failed (archtest warns on it).
@@ -134,8 +134,8 @@ func checkDefinition(tt tester, d tasks.Definition) {
 	}
 	if d.Shape() == tasks.ShapeFixer {
 		tt.Run(AssertFixerApproval, func(tt tester) {
-			if c.Approval == nil {
-				tt.Errorf("a Fixer needs Approval")
+			if c.Approval == nil || !c.Approval.PlanRequired {
+				tt.Errorf("a Fixer needs Approval with PlanRequired")
 			}
 			if c.Effects.IsReadOnly() {
 				tt.Errorf("a Fixer's Effects must be Writes(...)")

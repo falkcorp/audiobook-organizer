@@ -1,5 +1,5 @@
 // file: core/tasks/items_test.go
-// version: 1.4.0
+// version: 1.6.0
 // guid: acb0e36f-08d6-44a4-beac-44e9516bf795
 // last-edited: 2026-11-10
 
@@ -1072,5 +1072,188 @@ func TestItemLockRefs_OneCallAtATime(t *testing.T) {
 				t.Fatalf("a ref stayed locked after the run: %v", err)
 			}
 		})
+	})
+}
+
+// TestItemLockRefs_ParentRefusedWhileChildHoldsRunTableLock (F2-03
+// coordinator addition, from the #4554 verification): a nested item that
+// holds a run-table lock (through ic.LockRefs under no hold, or through its
+// own ExclusiveRefs) makes its parent's LockRefs fail with
+// ErrLockAlreadyHeld instead of taking a second run-table lock in stages; once
+// the child releases, the parent locks.
+func TestItemLockRefs_ParentRefusedWhileChildHoldsRunTableLock(t *testing.T) {
+	cave := tasks.ResID("gotham", "caves", "batcave")
+	lab := tasks.ResID("gotham", "labs", "lab-1")
+	for _, c := range []struct {
+		name  string
+		child func(ctx context.Context, parent *tasks.ItemRC) error
+	}{
+		{"child ic.LockRefs", func(ctx context.Context, parent *tasks.ItemRC) error {
+			_, err := tasks.ForEach(ctx, tasks.Sequential("one clue"), []int{0}, func(cctx context.Context, _ int) error {
+				release, err := tasks.LockRefs(cctx, cave)
+				if err != nil {
+					return fmt.Errorf("child lock: %w", err)
+				}
+				defer release()
+				if _, err := parent.LockRefs(lab); !errors.Is(err, tasks.ErrLockAlreadyHeld) {
+					return fmt.Errorf("parent lock while the child holds the run table = %v, want ErrLockAlreadyHeld", err)
+				}
+				return nil
+			})
+			return err
+		}},
+		{"child ExclusiveRefs", func(ctx context.Context, parent *tasks.ItemRC) error {
+			_, err := tasks.ForEach(ctx, tasks.Sequential("one clue"), []int{0}, func(context.Context, int) error {
+				if _, err := parent.LockRefs(lab); !errors.Is(err, tasks.ErrLockAlreadyHeld) {
+					return fmt.Errorf("parent lock while the child holds its ExclusiveRefs = %v, want ErrLockAlreadyHeld", err)
+				}
+				return nil
+			}, tasks.ItemsOptions[int]{ExclusiveRefs: func(int) []entity.Ref { return []entity.Ref{cave} }})
+			return err
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+				defer cancel()
+				run := taskstest.NewFakeRun(ctx, caseKind)
+				_, err := tasks.RunItems(run.RC(), tasks.Sequential("one case"), []int{0}, func(ic *tasks.ItemRC, _ int) error {
+					if err := c.child(ic.Context(), ic); err != nil {
+						return err
+					}
+					release, err := ic.LockRefs(lab) // the child released: the parent may lock now
+					if err != nil {
+						return fmt.Errorf("parent lock after the child released: %w", err)
+					}
+					release()
+					return nil
+				})
+				if err != nil || ctx.Err() != nil {
+					t.Fatalf("err %v ctx %v", err, ctx.Err())
+				}
+			})
+		})
+	}
+}
+
+// TestRunItems_PartitionBy (5T.3.2, ItemsOptions.PartitionBy; added by
+// F2-03): the items of one key run one at a time in item order while keys
+// run in parallel, and each item is still its own item: its own ItemTimeout
+// clock, Skip and counts. FailFast stops a partition at its failed item;
+// RunSeq refuses the option; a panicking PartitionBy fails only its item.
+func TestRunItems_PartitionBy(t *testing.T) {
+	t.Run("order within a key, keys in parallel", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			run := taskstest.NewFakeRun(t.Context(), caseKind)
+			var mu sync.Mutex
+			seen := map[int][]int{}
+			busy := map[int]bool{}
+			var inFlight, peak atomic.Int64
+			items := make([]int, 12)
+			for i := range items {
+				items[i] = i
+			}
+			res, err := tasks.RunItems(run.RC(), tasks.Fixed(4, "four detectives"), items, func(ic *tasks.ItemRC, i int) error {
+				mu.Lock()
+				if busy[i%3] {
+					mu.Unlock()
+					return fmt.Errorf("item %d ran while another item of key %d was running", i, i%3)
+				}
+				busy[i%3] = true
+				seen[i%3] = append(seen[i%3], i)
+				mu.Unlock()
+				cur := inFlight.Add(1)
+				for p := peak.Load(); cur > p && !peak.CompareAndSwap(p, cur); p = peak.Load() {
+				}
+				time.Sleep(time.Second)
+				inFlight.Add(-1)
+				mu.Lock()
+				busy[i%3] = false
+				mu.Unlock()
+				if i == 4 {
+					ic.Skip("sealed by the court")
+				}
+				return nil
+			}, tasks.ItemsOptions[int]{PartitionBy: func(i int) string { return strconv.Itoa(i % 3) }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Done != 11 || res.Skipped != 1 {
+				t.Fatalf("result %+v, want 11 done and 1 skipped, counted per item", res)
+			}
+			for k, got := range seen {
+				if !slices.IsSorted(got) || len(got) != 4 {
+					t.Fatalf("key %d ran %v, want its 4 items in item order", k, got)
+				}
+			}
+			if peak.Load() != 3 {
+				t.Fatalf("peak concurrency %d, want one worker per key (3)", peak.Load())
+			}
+		})
+	})
+	t.Run("ItemTimeout is per item", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			run := taskstest.NewFakeRun(t.Context(), caseKind)
+			var lateCtxErr error
+			res, err := tasks.RunItems(run.RC(), tasks.Fixed(2, "two stakeouts"), []int{1, 2, 3}, func(ic *tasks.ItemRC, i int) error {
+				switch i {
+				case 2:
+					<-ic.Context().Done()
+					return ic.Context().Err()
+				case 3:
+					lateCtxErr = ic.Context().Err()
+				}
+				time.Sleep(40 * time.Second)
+				return ic.Context().Err()
+			}, tasks.ItemsOptions[int]{OnError: tasks.Collect, ItemTimeout: time.Minute,
+				PartitionBy: func(int) string { return "narrows" }})
+			if lateCtxErr != nil {
+				t.Fatalf("item 3 started with a done context (%v): the partition shared one clock", lateCtxErr)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) || res.Done != 2 || res.Failed != 1 {
+				t.Fatalf("result %+v err %v, want items 1 and 3 done and item 2 timed out", res, err)
+			}
+			if ie := asItemsError(t, err); ie.FirstIndex != 1 {
+				t.Fatalf("first failed index %d, want 1 (item 2)", ie.FirstIndex)
+			}
+		})
+	})
+	t.Run("FailFast stops the partition", func(t *testing.T) {
+		run := taskstest.NewFakeRun(t.Context(), caseKind)
+		var ran []int
+		res, err := tasks.RunItems(run.RC(), tasks.Sequential("one file"), []int{0, 1, 2, 3}, func(_ *tasks.ItemRC, i int) error {
+			ran = append(ran, i)
+			if i == 1 {
+				return errors.New("the alibi does not hold")
+			}
+			return nil
+		}, tasks.ItemsOptions[int]{PartitionBy: func(int) string { return "arkham" }})
+		if err == nil || res.Done != 1 || res.Failed != 1 || res.NotStarted != 2 || !slices.Equal(ran, []int{0, 1}) {
+			t.Fatalf("result %+v ran %v err %v, want 0 done, 1 failed, 2 not started", res, ran, err)
+		}
+	})
+	t.Run("RunSeq refuses it", func(t *testing.T) {
+		run := taskstest.NewFakeRun(t.Context(), caseKind)
+		_, err := tasks.RunSeq(run.RC(), tasks.Sequential("one file"), slices.Values([]int{1}), tasks.Unknown(),
+			func(*tasks.ItemRC, int) error { return nil }, tasks.ItemsOptions[int]{PartitionBy: func(int) string { return "" }})
+		if ie := asItemsError(t, err); ie.FirstIndex != -1 || ie.First == nil {
+			t.Fatalf("RunSeq with PartitionBy: %v, want a refusal before any item", err)
+		}
+	})
+	t.Run("a panicking PartitionBy fails its item", func(t *testing.T) {
+		var ran atomic.Int64
+		res, err := tasks.ForEach(t.Context(), tasks.Fixed(2, "two clerks"), []int{1, 2, 3}, func(context.Context, int) error {
+			ran.Add(1)
+			return nil
+		}, tasks.ItemsOptions[int]{OnError: tasks.Collect, PartitionBy: func(i int) string {
+			if i == 2 {
+				panic("the Riddler's file")
+			}
+			return "gcpd"
+		}})
+		var pe *tasks.PanicError
+		if !errors.As(err, &pe) || res.Failed != 1 || res.Done != 2 || ran.Load() != 2 {
+			t.Fatalf("result %+v ran %d err %v, want item 2 failed with its panic and the others run", res, ran.Load(), err)
+		}
 	})
 }

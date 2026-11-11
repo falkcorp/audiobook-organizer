@@ -91,6 +91,10 @@ internal/itunes.writePlist
 internal/itunes.xmlEscape
 internal/itunes/service.calculatePercent
 internal/itunes/service.remapWindowsPath
+core/internal/authz.AuthDisabled
+core/internal/authz.Compile
+core/internal/authz.addClosure
+core/internal/authz.confinedSet
 core/internal/configstore.Committer.Commit
 core/internal/configstore.Committer.event
 core/internal/configstore.New
@@ -102,6 +106,8 @@ core/internal/configstore.Store.Load
 core/internal/configstore.Store.Stage
 core/internal/configstore.actor
 core/internal/configstore.decodeEnvelope
+core/internal/executor.Reconfigure
+core/internal/executor.cpuBudget.resize
 core/internal/taskstore.SerializedPrefixes
 core/internal/taskstore.StorageSpec
 core/kernel.bootConfig

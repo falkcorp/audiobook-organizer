@@ -1,7 +1,7 @@
 // file: internal/books/composed_test.go
-// version: 1.5.3
+// version: 1.6.0
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package books
 
@@ -38,8 +38,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks/taskstest/parity"
 )
 
 // freshProcessEnv names the test a child test process runs (inFreshProcess).
@@ -487,6 +489,34 @@ func TestABOMetricsGatherNoDuplicate(t *testing.T) {
 	w = c.serve(http.MethodGet, "/metrics", nil)
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "audiobook_organizer_kernel_")
+
+	// The executor cell (05-metrics §12, §13 item 1; F2-03): a standalone
+	// core executor on its own Provider, under ABO's namespace so that a
+	// leak would collide by name, records all 18 of its families there.
+	// ABO builds no executor before F5, so ABO's gather must still succeed
+	// with one owner per family, and no ops series in it may come from
+	// core/internal/executor: none carries the probe's def_id, and no
+	// executor family that ABO did not already serve appears.
+	probe := coretest.MetricsProvider(t, app.Options{MetricNamespace: metricNamespace})
+	probeFamilies := parity.ExerciseInstruments(t, probe)
+	mfs, err = c.app.Metrics().Gatherer().Gather()
+	require.NoError(t, err, "ABO's registry gather after a core executor ran beside it")
+	after := map[string]bool{}
+	for _, mf := range mfs {
+		require.False(t, after[mf.GetName()], "family %s gathered twice", mf.GetName())
+		after[mf.GetName()] = true
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				assert.NotEqual(t, string(parity.ProbeKind), l.GetValue(),
+					"family %s in ABO's registry has a series of the core executor's probe (label %s)", mf.GetName(), l.GetName())
+			}
+		}
+	}
+	for _, f := range probeFamilies {
+		if !seen[f] {
+			assert.False(t, after[f], "core executor family %s reached ABO's registry", f)
+		}
+	}
 }
 
 // hostileOTLPSentinel stands in for a credential in OTEL_EXPORTER_OTLP_*.
