@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/testdata/src/github.com/falkcorp/mediacore/internal/tasklintcases/unregistered_kind_nolist/nolist.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 9f0307f0-44c6-40e8-9910-3bb995d26b79
 // last-edited: 2026-11-10
 
@@ -9,7 +9,7 @@ package unregistered_kind_nolist
 
 import "github.com/falkcorp/mediacore/tasks"
 
-var Lonely = tasks.Task("nolist.lonely", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: tasks.Common{Help: "synthetic"}}) // want `tasks.Task definition in Lonely is not registered: no Registrar.Tasks call in this package and no called list function returning \[\]tasks.Definition reaches it`
+var Lonely = tasks.Task("nolist.lonely", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: tasks.Common{Help: "synthetic"}}) // want `tasks.Task definition in Lonely is not registered: no Registrar call in this package and no called list function returning \[\]tasks.Definition reaches it`
 
 // helper returns one Definition, not a []tasks.Definition: not a list function.
 func helper() tasks.Definition {

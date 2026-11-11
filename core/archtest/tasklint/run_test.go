@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/run_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 59ad832d-2138-4515-ab39-44beaafda01b
 // last-edited: 2026-11-10
 
@@ -101,8 +101,8 @@ func TestRun_ExemptionUnion(t *testing.T) {
 	}
 
 	r = run([]string{cases + "missing_help"}, nil)
-	if len(r.errors) != 0 || r.count("[missing-help]", r.logs) != 3 {
-		t.Fatalf("missing-help: errors %v logs %v; want 3 logged warnings and no error", r.errors, r.logs)
+	if len(r.errors) != 0 || r.count("[missing-help]", r.logs) != 4 {
+		t.Fatalf("missing-help: errors %v logs %v; want 4 logged warnings and no error", r.errors, r.logs)
 	}
 
 	r = run([]string{cases + "clean"}, map[string]string{
@@ -427,7 +427,7 @@ func TestAnalyze_WholeProgram(t *testing.T) {
 		return out
 	}
 	got := run(false, "owner", "kernel", "stray")
-	if len(got) != 2 || !strings.HasPrefix(got[0], "stray.go:15 tasks.Task definition in Forgotten is not registered: no Registrar.Tasks call in any loaded package") ||
+	if len(got) != 2 || !strings.HasPrefix(got[0], "stray.go:15 tasks.Task definition in Forgotten is not registered: no Registrar call in any loaded package") ||
 		!strings.HasPrefix(got[1], "stray.go:18 definition built by Build in Lost is not registered") {
 		t.Errorf("owner+kernel+stray: %q, want Forgotten and Lost only", got)
 	}

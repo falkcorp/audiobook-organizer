@@ -1,5 +1,5 @@
 // file: core/archtest/guards/testdata/resume/pass/pass.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a7ceb0e0-5b04-43c9-a357-ae4606d85c31
 // last-edited: 2026-11-10
 
@@ -26,6 +26,9 @@ func save(rc *tasks.RC) error { return rc.Checkpoint(1) }
 var defs = []tasks.Definition{
 	// Direct checkpoint in a literal Run.
 	tasks.Task("gotham.direct", tasks.TaskSpec[np, np]{Common: tasks.Common{Resume: tasks.ResumeContinue},
+		Run: func(rc *tasks.RC, p np) (np, error) { return np{}, rc.Checkpoint(1) }}),
+	// Common's fields as promoted fields (Go 1.27), checkpointing.
+	tasks.Task("gotham.promoted", tasks.TaskSpec[np, np]{Resume: tasks.ResumeContinue,
 		Run: func(rc *tasks.RC, p np) (np, error) { return np{}, rc.Checkpoint(1) }}),
 	// Through a method value and a helper two levels down; Common from a var.
 	tasks.Task("gotham.method", tasks.TaskSpec[np, np]{Common: cont, Run: worker{}.run}),
