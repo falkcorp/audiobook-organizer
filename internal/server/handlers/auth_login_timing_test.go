@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_login_timing_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2fc86d12-0fda-4c10-920b-0b83f4b2f534
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers_test
 
@@ -16,6 +16,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
+	coreauth "github.com/falkcorp/mediacore/auth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +25,7 @@ import (
 //
 // The structural ones (…SpendsTheSameVerification…) run everywhere, -short and
 // -race included. They count the argon2id derivations one login spends, through
-// absauth.DerivationsForTest, and use a strict mock store, so they prove that
+// authpw.DerivationsForTest, and use a strict mock store, so they prove that
 // every failed-login path does the same expensive work and no extra store call,
 // whatever the machine's load. They are what fails if a path stops spending the
 // dummy verification.
@@ -47,9 +49,9 @@ type loginWork struct {
 // workOf runs fn and returns the argon2id work it spent. The counters are
 // process-wide, so it is only meaningful in a test that is not t.Parallel().
 func workOf(fn func()) loginWork {
-	n0, c0 := absauth.DerivationsForTest()
+	n0, c0 := absauth.Passwords.Derivations()
 	fn()
-	n1, c1 := absauth.DerivationsForTest()
+	n1, c1 := absauth.Passwords.Derivations()
 	return loginWork{derivations: n1 - n0, kibPasses: c1 - c0}
 }
 
@@ -105,17 +107,17 @@ func fastestLogins(t *testing.T, h *handlers.AuthHandler, cases []loginCase, rou
 // account's wrong password does, make the one store lookup and no other store
 // call (the mock is strict), and are charged once to the name, like the real one.
 func TestLogin_FailedLoginSpendsTheSameVerificationWhetherTheNameExists(t *testing.T) {
-	algo, hash, err := absauth.HashPassword("the-real-password")
+	algo, hash, err := absauth.Passwords.Hash("the-real-password")
 	require.NoError(t, err)
 	real := &database.User{ID: "u-real", Username: "real", PasswordHashAlgo: algo, PasswordHash: hash, Status: "active"}
-	oauthOnly := &database.User{ID: "u-oauth", Username: "oauthy", PasswordHashAlgo: absauth.AlgoOAuth, Status: "active"}
+	oauthOnly := &database.User{ID: "u-oauth", Username: "oauthy", PasswordHashAlgo: authpw.AlgoOAuth, Status: "active"}
 
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("real").Return(real, nil).Once()
 	store.EXPECT().GetUserByUsername("oauthy").Return(oauthOnly, nil).Once()
 	store.EXPECT().GetUserByUsername("ghost").Return(nil, nil).Once()
 
-	th := absauth.NewThrottle()
+	th := coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil)
 	th.SetSleep(func(time.Duration) {})
 	h := handlers.NewAuthHandler(store, true) // builds the dummy hash before anything is counted
 	h.SetThrottle(th)
@@ -125,7 +127,7 @@ func TestLogin_FailedLoginSpendsTheSameVerificationWhetherTheNameExists(t *testi
 	for _, name := range []string{"real", "ghost", "oauthy"} {
 		lc := loginCase{label: name, username: name, password: "wrong-password", want: http.StatusUnauthorized}
 		work[name] = workOf(func() { doLogin(t, h, src, lc) })
-		require.Equal(t, 1, th.AccountFailures(absauth.AccountKey(name)), "%s is charged once to the name", name)
+		require.Equal(t, 1, th.AccountFailures(coreauth.AccountKey(name)), "%s is charged once to the name", name)
 	}
 	t.Logf("work: real=%+v unknown=%+v oauth-only=%+v", work["real"], work["ghost"], work["oauthy"])
 	require.Equal(t, uint64(1), work["real"].derivations, "a wrong password for a real account is one derivation")
@@ -143,10 +145,10 @@ func TestLogin_FailedLoginTimingDoesNotRevealWhetherTheNameExists(t *testing.T) 
 	if testing.Short() {
 		t.Skip("wall-clock comparison; TestLogin_FailedLoginSpendsTheSameVerificationWhetherTheNameExists proves the equal work under -short")
 	}
-	algo, hash, err := absauth.HashPassword("the-real-password")
+	algo, hash, err := absauth.Passwords.Hash("the-real-password")
 	require.NoError(t, err)
 	real := &database.User{ID: "u-real", Username: "real", PasswordHashAlgo: algo, PasswordHash: hash, Status: "active"}
-	oauthOnly := &database.User{ID: "u-oauth", Username: "oauthy", PasswordHashAlgo: absauth.AlgoOAuth, Status: "active"}
+	oauthOnly := &database.User{ID: "u-oauth", Username: "oauthy", PasswordHashAlgo: authpw.AlgoOAuth, Status: "active"}
 
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("real").Return(real, nil).Maybe()
@@ -175,7 +177,7 @@ func TestLogin_StoreLookupErrorIsA500AndChargesNothing(t *testing.T) {
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("alice").Return(nil, errors.New("pebble: closed")).Times(30)
 
-	th := absauth.NewThrottle()
+	th := coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil)
 	th.SetSleep(func(time.Duration) {})
 	h := handlers.NewAuthHandler(store, true)
 	h.SetThrottle(th)
@@ -185,8 +187,8 @@ func TestLogin_StoreLookupErrorIsA500AndChargesNothing(t *testing.T) {
 		h.Login(c)
 		require.Equal(t, http.StatusInternalServerError, w.Code, "attempt %d", i)
 	}
-	require.Zero(t, th.AccountFailures(absauth.AccountKey("alice")), "nothing is charged to the name")
-	require.False(t, th.IPBlocked("192.0.2.9"), "nothing is charged to the source")
+	require.Zero(t, th.AccountFailures(coreauth.AccountKey("alice")), "nothing is charged to the name")
+	require.False(t, th.SourceBlocked("192.0.2.9"), "nothing is charged to the source")
 }
 
 // SF3: a correct password for a disabled account is answered 403 "account is
@@ -194,7 +196,7 @@ func TestLogin_StoreLookupErrorIsA500AndChargesNothing(t *testing.T) {
 // the success path's bookkeeping (Clear), and is not charged as a credential
 // failure. Before the fix it answered 200 and logged the account in.
 func TestLogin_DisabledAccountWithCorrectPasswordIs403AndMintsNothing(t *testing.T) {
-	algo, hash, err := absauth.HashPassword("the-real-password")
+	algo, hash, err := absauth.Passwords.Hash("the-real-password")
 	require.NoError(t, err)
 	for _, status := range []string{"inactive", "revoked", " Disabled "} {
 		t.Run(status, func(t *testing.T) {
@@ -203,15 +205,15 @@ func TestLogin_DisabledAccountWithCorrectPasswordIs403AndMintsNothing(t *testing
 			store := handlersmocks.NewMockAuthStore(t)
 			store.EXPECT().GetUserByUsername("off").Return(disabled, nil)
 
-			th := absauth.NewThrottle()
+			th := coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil)
 			th.SetSleep(func(time.Duration) {})
 			h := handlers.NewAuthHandler(store, true)
 			h.SetThrottle(th)
 			const src = "192.0.2.77"
 			// A pre-existing failure against the name: the success path would Clear
 			// it, the 403 path must leave it alone.
-			th.RecordFailure(absauth.AccountKey("off"), src)
-			before := th.AccountFailures(absauth.AccountKey("off"))
+			th.RecordFailure(coreauth.AccountKey("off"), src)
+			before := th.AccountFailures(coreauth.AccountKey("off"))
 			require.NotZero(t, before)
 
 			c, w := newAuthCtx("POST", "/auth/login", map[string]any{"username": "off", "password": "the-real-password"})
@@ -220,7 +222,7 @@ func TestLogin_DisabledAccountWithCorrectPasswordIs403AndMintsNothing(t *testing
 			require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 			require.Contains(t, w.Body.String(), "account is not active")
 			require.Empty(t, w.Result().Cookies(), "no session cookie")
-			require.Equal(t, before, th.AccountFailures(absauth.AccountKey("off")), "neither cleared nor charged")
+			require.Equal(t, before, th.AccountFailures(coreauth.AccountKey("off")), "neither cleared nor charged")
 		})
 	}
 }
@@ -231,7 +233,7 @@ func TestLogin_DisabledAccountWithCorrectPasswordIs403AndMintsNothing(t *testing
 // same cost, that a wrong password for an active account does, and no other
 // store call.
 func TestLogin_DisabledAccountSpendsTheSameVerificationAsAWrongPassword(t *testing.T) {
-	algo, hash, err := absauth.HashPassword("the-real-password")
+	algo, hash, err := absauth.Passwords.Hash("the-real-password")
 	require.NoError(t, err)
 	disabled := &database.User{ID: "u-off", Username: "off", PasswordHashAlgo: algo, PasswordHash: hash, Status: "inactive"}
 	active := &database.User{ID: "u-on", Username: "on", PasswordHashAlgo: algo, PasswordHash: hash, Status: "active"}
@@ -271,7 +273,7 @@ func TestLogin_DisabledAccountWrongPasswordIs401AndTimesLikeAnyOther(t *testing.
 	if testing.Short() {
 		t.Skip("wall-clock comparison; TestLogin_DisabledAccountSpendsTheSameVerificationAsAWrongPassword proves the equal work under -short")
 	}
-	algo, hash, err := absauth.HashPassword("the-real-password")
+	algo, hash, err := absauth.Passwords.Hash("the-real-password")
 	require.NoError(t, err)
 	disabled := &database.User{ID: "u-off", Username: "off", PasswordHashAlgo: algo, PasswordHash: hash, Status: "inactive"}
 	active := &database.User{ID: "u-on", Username: "on", PasswordHashAlgo: algo, PasswordHash: hash, Status: "active"}
@@ -296,9 +298,9 @@ func TestLogin_DisabledAccountWrongPasswordIs401AndTimesLikeAnyOther(t *testing.
 // A handler-level 429 carries Retry-After (the ceiling middleware's already did).
 func TestLogin_PerSourceRefusalCarriesRetryAfter(t *testing.T) {
 	store := handlersmocks.NewMockAuthStore(t)
-	th := absauth.NewThrottle()
+	th := coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil)
 	th.SetSleep(func(time.Duration) {})
-	for range absauth.MaxFailuresPerIP {
+	for range coreauth.DefaultMaxFailuresPerSource {
 		th.RecordFailure("", "192.0.2.78")
 	}
 	h := handlers.NewAuthHandler(store, true)

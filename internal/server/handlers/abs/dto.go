@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/dto.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 4a8f30c7-1b56-49e2-8d70-63c1e9b28a5f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs
 
@@ -9,7 +9,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // The DTOs in this file are a TYPE CONTRACT, not a convenience. Both target clients
@@ -241,8 +241,8 @@ func (h *Handler) buildServerSettings() serverSettings {
 		// token burns login attempts. That makes this an upper bound: a client can
 		// hit the 429 before its Nth login. The names say "requests" because they are
 		// an upstream ABS wire contract we do not control.
-		RateLimitLoginRequests: absauth.MaxFailuresPerIP,
-		RateLimitLoginWindow:   absauth.Window.Milliseconds(),
+		RateLimitLoginRequests: coreauth.DefaultMaxFailuresPerSource,
+		RateLimitLoginWindow:   coreauth.DefaultThrottleWindow.Milliseconds(),
 		ScannerCoverProvider:   "google",
 		SortingPrefixes:        []string{"the", "a"},
 		TimeFormat:             "HH:mm",

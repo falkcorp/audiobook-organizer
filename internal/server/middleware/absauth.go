@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package middleware
 
@@ -17,7 +17,8 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreaudit "github.com/falkcorp/mediacore/audit"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -231,7 +232,7 @@ func (r *ABSIdentityResolver) CFCallerKey(c *gin.Context) (string, bool) {
 		}
 		return "", false
 	}
-	email := util.NormalizeEmail(claims.Email)
+	email := coreauth.NormalizeEmail(claims.Email)
 	if email == "" {
 		return "", false
 	}
@@ -274,7 +275,7 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 			// fall-through path the request may still go on to authenticate as a
 			// real user via its bearer — at which point the token and the person
 			// appear together on one audit line, which is the pairing that makes an
-			// anomaly visible (see absauth.AuditEvent.ServiceToken).
+			// anomaly visible (see coreaudit.AuthAttempt.ServiceToken).
 			if cn := oauth.CFAssertionCommonName(err); cn != "" && c != nil {
 				c.Set(contextABSServiceTokenKey, cn)
 			}
@@ -390,15 +391,15 @@ func (r *ABSIdentityResolver) extendSession(c *gin.Context, session *database.AB
 		return
 	}
 	if _, err := r.store.ExtendABSSession(session.ID, now, target, window); err != nil {
-		ev := absauth.AuditEvent{
-			Action: "session-extend", Outcome: absauth.OutcomeError, Mode: ABSModeJWT,
+		ev := coreaudit.AuthAttempt{
+			Action: "session-extend", Outcome: coreaudit.Error, Mode: ABSModeJWT,
 			UserID: session.UserID, SessionID: session.ID, Reason: "session-extend-failed",
 		}
 		if c != nil && c.Request != nil {
 			ev.SourceIP = c.ClientIP()
 			ev.Path = c.Request.URL.Path
 		}
-		absauth.Audit(ev)
+		absauth.AttemptLog.Record(ev)
 	}
 }
 
@@ -602,9 +603,9 @@ func noteServiceTokenPairing(commonName string, id *ABSIdentity) {
 	if loaded && prev == id.User.ID {
 		return // already reported for this person
 	}
-	absauth.Audit(absauth.AuditEvent{
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
 		Action:       "service-token-pairing",
-		Outcome:      absauth.OutcomeSuccess,
+		Outcome:      coreaudit.Success,
 		Mode:         id.Mode,
 		UserID:       id.User.ID,
 		Username:     id.User.Username,
@@ -649,7 +650,7 @@ func AbortABSAuth(c *gin.Context, action string, e *ABSAuthError) {
 	if e == nil {
 		return
 	}
-	absauth.Audit(absauth.AuditEvent{
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
 		Action:    action,
 		Outcome:   absOutcomeForStatus(e.Status),
 		Mode:      e.Mode,
@@ -669,16 +670,16 @@ func AbortABSAuth(c *gin.Context, action string, e *ABSAuthError) {
 	c.AbortWithStatusJSON(e.Status, gin.H{"error": msg})
 }
 
-func absOutcomeForStatus(status int) absauth.Outcome {
+func absOutcomeForStatus(status int) coreaudit.Outcome {
 	switch {
 	case status >= 500:
-		return absauth.OutcomeError
+		return coreaudit.Error
 	case status == http.StatusForbidden:
-		return absauth.OutcomeDenied
+		return coreaudit.Denied
 	case status == http.StatusTooManyRequests:
-		return absauth.OutcomeThrottled
+		return coreaudit.Throttled
 	default:
-		return absauth.OutcomeFailure
+		return coreaudit.Failure
 	}
 }
 

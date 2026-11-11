@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/authorize.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e14b0c9-53a6-4d82-91f7-2c8de6a04b13
-// last-edited: 2026-10-07
+// last-edited: 2026-11-10
 
 package abs
 
@@ -12,6 +12,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreaudit "github.com/falkcorp/mediacore/audit"
 )
 
 // Authorize handles POST /api/authorize — the endpoint an already-logged-in client
@@ -61,8 +62,8 @@ func (h *Handler) Authorize(c *gin.Context) {
 
 	progress, bookmarks, err := h.userPayload(user.ID)
 	if err != nil {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "authorize", Outcome: absauth.OutcomeError,
+		absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+			Action: "authorize", Outcome: coreaudit.Error,
 			Mode: servermiddleware.ABSAuthMode(c), SourceIP: c.ClientIP(),
 			UserID: user.ID, Username: user.Username,
 			Reason: "user-data-unavailable", Path: c.Request.URL.Path,
@@ -86,8 +87,8 @@ func (h *Handler) Authorize(c *gin.Context) {
 		}
 	}
 
-	absauth.Audit(absauth.AuditEvent{
-		Action: "authorize", Outcome: absauth.OutcomeSuccess,
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+		Action: "authorize", Outcome: coreaudit.Success,
 		Mode: servermiddleware.ABSAuthMode(c), SourceIP: c.ClientIP(),
 		UserID: user.ID, Username: user.Username,
 		SessionID: servermiddleware.ABSSessionID(c),

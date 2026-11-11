@@ -1,7 +1,7 @@
 // file: internal/server/abs_session_revoke_integration_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: d943df61-c54b-4621-8c73-dd144fc38af8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -230,7 +231,7 @@ func requireRehashedToArgon2id(t *testing.T, s *Server, userID string) {
 	t.Helper()
 	fresh, err := s.storeForWiring().GetUserByID(userID)
 	require.NoError(t, err)
-	require.Equal(t, absauth.AlgoArgon2id, fresh.PasswordHashAlgo, "precondition: the ABS sign-in rehashes to argon2id")
+	require.Equal(t, authpw.AlgoArgon2id, fresh.PasswordHashAlgo, "precondition: the ABS sign-in rehashes to argon2id")
 }
 
 // credentialActions are the four account-security paths. Each must end every

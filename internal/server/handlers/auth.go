@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 3.3.1
+// version: 3.3.3
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers
 
@@ -20,7 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -106,7 +106,7 @@ type AuthHandler struct {
 	// delay. The server shares ONE with the Audiobookshelf-compatible /login
 	// (SetThrottle), so a guess through either door counts toward the same
 	// account. Its delay function defaults to time.Sleep (SetFailureDelay).
-	throttle *absauth.Throttle
+	throttle *coreauth.Throttle
 	// absSessions signs a user out of every ABS client when their password
 	// changes. nil when the store has no ABS keyspace (no ABS session can exist).
 	absSessions ABSSessionRevoker
@@ -125,11 +125,10 @@ type AuthHandler struct {
 // NewAuthHandler constructs an AuthHandler.
 // enableAuth should be set from config.AppConfig.EnableAuth at wire time.
 func NewAuthHandler(store AuthStore, enableAuth bool) *AuthHandler {
-	absauth.WarmLoginDummy() // so the first login for an unknown name costs what any other does
 	return &AuthHandler{
 		store:       store,
 		enableAuth:  enableAuth,
-		throttle:    absauth.NewThrottle(),
+		throttle:    coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil),
 		absSessions: ResolveABSSessionRevoker(store),
 		creds:       ResolveUserCredentialWriter(store),
 	}
@@ -160,7 +159,7 @@ func (h *AuthHandler) throttleKey(c *gin.Context) string {
 // SetThrottle replaces the failed-login throttle. The server calls it with the
 // one Throttle the Audiobookshelf-compatible login also uses, so both logins
 // share their per-account and per-source counters.
-func (h *AuthHandler) SetThrottle(t *absauth.Throttle) {
+func (h *AuthHandler) SetThrottle(t *coreauth.Throttle) {
 	if t != nil {
 		h.throttle = t
 	}
@@ -294,7 +293,7 @@ func (h *AuthHandler) SetupInitialAdmin(c *gin.Context) {
 		httputil.RespondWithConflict(c, "initial setup already completed")
 		return
 	}
-	algo, hash, err := absauth.HashPassword(req.Password)
+	algo, hash, err := absauth.Passwords.Hash(req.Password)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to hash password")
 		return
@@ -330,12 +329,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	// Everything below is keyed on the normalised SUBMITTED username, never on the
 	// user row, so a name that does not exist behaves exactly like one that does.
-	accountKey := absauth.AccountKey(req.Username)
+	accountKey := coreauth.AccountKey(req.Username)
 	absauth.NoteLoginAccount(c, accountKey) // for the login ceilings' same-account refund
 	ip := h.throttleKey(c)
 	// Per-IP throttle first: a source that has burned through its failure budget
 	// is rejected before any credential work, so it can't keep probing (HIGH-3).
-	if h.throttle.IPBlocked(ip) {
+	if h.throttle.SourceBlocked(ip) {
 		absauth.SetRetryAfter(c)
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts from this source — try again later", "TOO_MANY_REQUESTS")
 		return
@@ -346,7 +345,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// counter for the submitted name alone, so the answer does not tell a caller
 	// whether the name exists.
 	if absauth.LoginSaturated(c) &&
-		absauth.RefuseSaturatedLogin(c, h.throttle.AccountFailures(accountKey), h.throttle.Delay) {
+		absauth.RefuseSaturatedLogin(c, h.throttle, accountKey) {
 		absauth.SetRetryAfter(c)
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts — try again later", "TOO_MANY_REQUESTS")
 		return
@@ -365,12 +364,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		// does not exist, so username guessing can't dodge the throttle and an
 		// unknown name slows down exactly like a real one. The same password work
 		// is spent first, so the response time does not give the name away either.
-		absauth.SpendVerification(req.Password)
+		absauth.Passwords.SpendVerification(req.Password)
 		h.throttle.Delay(h.throttle.RecordFailure(accountKey, ip))
 		httputil.RespondWithUnauthorized(c, "invalid credentials")
 		return
 	}
-	if ok, _ := absauth.VerifyLoginPassword(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
+	if ok, _ := absauth.Passwords.VerifyLogin(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
 		// Soft, progressive per-account slowdown — never a hard lock, so the
 		// real user with the correct password is never denied (HIGH-3). An account
 		// with no password credential at all spends the same verification work.
@@ -495,7 +494,7 @@ func (h *AuthHandler) UpdateMe(c *gin.Context) {
 	}
 	// The old address no longer belongs to this account, so neither does any
 	// SSO or Cloudflare access an accepted invite granted to it.
-	if h.revokeGuestAccess != nil && oldEmail != "" && !util.SameEmail(oldEmail, email) {
+	if h.revokeGuestAccess != nil && oldEmail != "" && !coreauth.SameEmail(oldEmail, email) {
 		h.revokeGuestAccess(user.ID, oldEmail, "email changed")
 	}
 	httputil.RespondWithOK(c, gin.H{"user": buildAuthUserResponse(user)})
@@ -647,12 +646,12 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 			httputil.RespondWithBadRequest(c, "current_password is required")
 			return
 		}
-		if ok, _ := absauth.VerifyPassword(target.PasswordHashAlgo, target.PasswordHash, req.CurrentPassword); !ok {
+		if ok, _ := absauth.Passwords.Verify(target.PasswordHashAlgo, target.PasswordHash, req.CurrentPassword); !ok {
 			httputil.RespondWithUnauthorized(c, "current password is incorrect")
 			return
 		}
 	}
-	newAlgo, newHash, err := absauth.HashPassword(req.NewPassword)
+	newAlgo, newHash, err := absauth.Passwords.Hash(req.NewPassword)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to hash password")
 		return

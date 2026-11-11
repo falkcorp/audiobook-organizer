@@ -1,7 +1,7 @@
 // file: internal/usermerge/plan.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: c4a82f17-5d93-4e60-9b2a-71f3d0e86a45
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package usermerge
 
@@ -20,7 +20,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Family names used in Plan.Counts, Conflict.Family and UserMergeOp.Family.
@@ -441,7 +441,7 @@ func (s *Service) planAccounts(p *Plan, surv, abs *database.User) {
 	switch {
 	case surv.Email != "":
 		p.EmailOutcome = "the surviving account keeps its own email address"
-		sameAddr := abs.Email != "" && util.SameEmail(abs.Email, surv.Email)
+		sameAddr := abs.Email != "" && coreauth.SameEmail(abs.Email, surv.Email)
 		absVerified := abs.Email != "" && database.EmailSourceIsTrusted(abs.EmailSource)
 		switch {
 		case sameAddr && absVerified && !database.EmailSourceIsTrusted(surv.EmailSource):
@@ -497,7 +497,7 @@ func (s *Service) warnAboutHistory(p *Plan, absorbedID string) {
 
 // reportIdentities fills the identity lists and the owner-identity answer.
 func (s *Service) reportIdentities(p *Plan, surv, abs *database.UserData) error {
-	owner := util.NormalizeEmail(s.ownerEmail())
+	owner := coreauth.NormalizeEmail(s.ownerEmail())
 	conv := func(rows []database.UserDataRow, into *[]Identity) (hit bool, err error) {
 		for _, r := range rows {
 			var id database.OAuthIdentity
@@ -505,7 +505,7 @@ func (s *Service) reportIdentities(p *Plan, surv, abs *database.UserData) error 
 				// The row key stays out of the error (it reaches operation rows).
 				return false, fmt.Errorf("decode a linked sign-in: %w", err)
 			}
-			isOwner := owner != "" && util.NormalizeEmail(id.Email) == owner
+			isOwner := owner != "" && coreauth.NormalizeEmail(id.Email) == owner
 			hit = hit || isOwner
 			*into = append(*into, Identity{ID: id.ID, Provider: id.Provider, Subject: maskSubject(id.Subject),
 				Email: id.Email, LinkedAt: id.CreatedAt, OwnerEmail: isOwner})
@@ -1079,7 +1079,7 @@ func digest(p *Plan) string {
 	fmt.Fprintf(h, "usermerge/v1\nsurvivor=%s\nabsorbed=%s\n", p.SurvivorID, p.AbsorbedID)
 	writeFields := func(label string, f database.UserIdentityFields) {
 		fmt.Fprintf(h, "%s roles=%s email=%s source=%s merged=%s\n", label,
-			strings.Join(sortedCopy(f.Roles), ","), util.NormalizeEmail(f.Email), f.EmailSource, f.MergedIntoUserID)
+			strings.Join(sortedCopy(f.Roles), ","), coreauth.NormalizeEmail(f.Email), f.EmailSource, f.MergedIntoUserID)
 	}
 	writeFields("survivor.before", p.retire.SurvivorBefore)
 	writeFields("survivor.after", p.retire.SurvivorAfter)

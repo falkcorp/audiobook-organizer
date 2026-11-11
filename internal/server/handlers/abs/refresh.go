@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/refresh.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: a95c6f04-8e21-4d7b-9350-6b1c8d2fe7a3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs
 
@@ -16,6 +16,8 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreaudit "github.com/falkcorp/mediacore/audit"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -63,10 +65,10 @@ func (h *Handler) Refresh(c *gin.Context) {
 		})
 		return
 	}
-	if h.throttle.IPBlocked(absauth.RefreshKey(h.throttleKey(c))) {
+	if h.throttle.SourceBlocked(coreauth.RefreshKey(h.throttleKey(c))) {
 		// 429, not 401: a rate-limit answer must not be mistaken for a dead token.
-		absauth.Audit(absauth.AuditEvent{
-			Action: "refresh", Outcome: absauth.OutcomeThrottled, SourceIP: ip,
+		absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+			Action: "refresh", Outcome: coreaudit.Throttled, SourceIP: ip,
 			Reason: "ip-failure-budget-exhausted", Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 		})
 		absauth.SetRetryAfter(c)
@@ -168,8 +170,8 @@ func (h *Handler) Refresh(c *gin.Context) {
 			// The rotate that minted this pair already slid ExpiresAt to within the
 			// grace window of now, so a failed touch costs at most RefreshGrace of
 			// session life. Do not fail the refresh over it.
-			absauth.Audit(absauth.AuditEvent{
-				Action: "refresh", Outcome: absauth.OutcomeError, Mode: servermiddleware.ABSModeJWT,
+			absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+				Action: "refresh", Outcome: coreaudit.Error, Mode: servermiddleware.ABSModeJWT,
 				SourceIP: ip, SessionID: session.ID, Reason: "last-used-touch-failed",
 			})
 		}
@@ -277,8 +279,8 @@ func (h *Handler) refreshUser(c *gin.Context, ip string, session *database.ABSSe
 		return nil, false
 	}
 	if !isActiveUser(user) {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "refresh", Outcome: absauth.OutcomeDenied, Mode: mode, SourceIP: ip,
+		absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+			Action: "refresh", Outcome: coreaudit.Denied, Mode: mode, SourceIP: ip,
 			UserID: user.ID, Username: user.Username, SessionID: sessionID,
 			Reason: "user-inactive", Path: c.Request.URL.Path,
 		})
@@ -305,8 +307,8 @@ func (h *Handler) completeRefresh(c *gin.Context, user *database.User, session *
 		return
 	}
 
-	absauth.Audit(absauth.AuditEvent{
-		Action: "refresh", Outcome: absauth.OutcomeSuccess, Mode: mode, SourceIP: ip,
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+		Action: "refresh", Outcome: coreaudit.Success, Mode: mode, SourceIP: ip,
 		UserID: user.ID, Username: user.Username, Email: email, SessionID: session.ID,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
@@ -320,9 +322,9 @@ func (h *Handler) completeRefresh(c *gin.Context, user *database.User, session *
 // failRefresh answers 401 for a genuinely dead refresh token and charges the source
 // IP's failure budget.
 func (h *Handler) failRefresh(c *gin.Context, ip, sessionID, reason string) {
-	h.throttle.RecordFailure("", absauth.RefreshKey(h.throttleKey(c)))
-	absauth.Audit(absauth.AuditEvent{
-		Action: "refresh", Outcome: absauth.OutcomeFailure, Mode: servermiddleware.ABSModeJWT,
+	h.throttle.RecordFailure("", coreauth.RefreshKey(h.throttleKey(c)))
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+		Action: "refresh", Outcome: coreaudit.Failure, Mode: servermiddleware.ABSModeJWT,
 		SourceIP: ip, SessionID: sessionID, Reason: reason,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
@@ -333,8 +335,8 @@ func (h *Handler) failRefresh(c *gin.Context, ip, sessionID, reason string) {
 // errorRefresh answers 5xx for a transient failure. It deliberately does NOT charge
 // the failure budget and does NOT return 401: §1.7.3 item 3 — the session must survive.
 func (h *Handler) errorRefresh(c *gin.Context, ip, reason, message string) {
-	absauth.Audit(absauth.AuditEvent{
-		Action: "refresh", Outcome: absauth.OutcomeError, SourceIP: ip, Reason: reason,
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+		Action: "refresh", Outcome: coreaudit.Error, SourceIP: ip, Reason: reason,
 		Path: c.Request.URL.Path, UserAgent: c.Request.UserAgent(),
 	})
 	respondError(c, http.StatusInternalServerError, message)

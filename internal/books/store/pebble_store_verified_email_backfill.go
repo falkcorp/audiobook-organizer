@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_verified_email_backfill.go
-// version: 2.9.2
+// version: 2.9.3
 // guid: b03036d5-834d-4848-93e7-d72c52242753
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package store
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Verified email, computed live.
@@ -55,7 +55,7 @@ func trustedEmailSource(source string) bool {
 // nothing. It does not look at other holders; callers treat two proven
 // holders as a conflict.
 func emailProven(u *User, lower string) bool {
-	return lower != "" && util.NormalizeEmail(u.Email) == lower && trustedEmailSource(u.EmailSource)
+	return lower != "" && coreauth.NormalizeEmail(u.Email) == lower && trustedEmailSource(u.EmailSource)
 }
 
 // verifiedHolderLocked returns the one user whose current email is lower and
@@ -249,7 +249,7 @@ func (p *PebbleStore) emailConflictsLocked(demoted map[string]bool) ([]EmailConf
 	}
 	byAddr := map[string][]*User{}
 	for i := range users {
-		if lower := util.NormalizeEmail(users[i].Email); lower != "" {
+		if lower := coreauth.NormalizeEmail(users[i].Email); lower != "" {
 			byAddr[lower] = append(byAddr[lower], &users[i])
 		}
 	}
@@ -382,7 +382,7 @@ func (p *PebbleStore) stampLegacyEmailSourcesLocked(res *ReconcileResult) error 
 			return err
 		}
 		sources[u.ID] = source
-		lower := util.NormalizeEmail(u.Email)
+		lower := coreauth.NormalizeEmail(u.Email)
 		if _, seen := keyHolders[lower]; seen {
 			continue
 		}
@@ -447,7 +447,7 @@ func demoteDuplicateProofs(users []User, sources, keyHolders map[string]string) 
 	candidates := map[string][]cand{}
 	for i := range users {
 		u := &users[i]
-		lower := util.NormalizeEmail(u.Email)
+		lower := coreauth.NormalizeEmail(u.Email)
 		if lower == "" {
 			continue
 		}
@@ -563,7 +563,7 @@ func (p *PebbleStore) emailKeyHolder(lower string) (string, error) {
 //     provider verified it, so "idp";
 //   - anything else was typed in through the profile: "self".
 func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error) {
-	lower := util.NormalizeEmail(u.Email)
+	lower := coreauth.NormalizeEmail(u.Email)
 	best := EmailSourceSelf
 	consider := func(source string) {
 		if stampRank[source] > stampRank[best] {
@@ -573,7 +573,7 @@ func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error
 	invited := false
 	for i := range invites {
 		inv := &invites[i]
-		if inv.UsedAt == nil || util.NormalizeEmail(inv.Email) != lower {
+		if inv.UsedAt == nil || coreauth.NormalizeEmail(inv.Email) != lower {
 			continue
 		}
 		created := inv.AcceptedUserID == u.ID ||
@@ -618,7 +618,7 @@ func (p *PebbleStore) stampEmailSource(u *User, invites []Invite) (string, error
 		return "", err
 	}
 	for _, id := range ids {
-		if util.NormalizeEmail(id.Email) == lower {
+		if coreauth.NormalizeEmail(id.Email) == lower {
 			consider(EmailSourceIdP)
 		}
 	}
@@ -643,7 +643,7 @@ func (p *PebbleStore) rewriteVerifiedEmailCacheLocked(res *ReconcileResult) erro
 	conflicted := map[string]bool{}
 	for i := range users {
 		u := &users[i]
-		lower := util.NormalizeEmail(u.Email)
+		lower := coreauth.NormalizeEmail(u.Email)
 		if lower == "" {
 			continue
 		}

@@ -1,7 +1,7 @@
 // file: internal/server/main_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2d9f6b3e-7a41-4c58-9e02-b6c1f8a35d74
-// last-edited: 2026-10-30
+// last-edited: 2026-11-10
 
 package server
 
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 )
 
 // TestMain lowers the argon2id cost every password in this package's tests is
@@ -30,7 +31,7 @@ import (
 // SetHashCostForTest panics outside a test binary and once the dummy hash is
 // built, so it must be the first thing here, before any test code runs.
 func TestMain(m *testing.M) {
-	absauth.SetHashCostForTest(1, 64)
+	absauth.Passwords = authpw.New(authpw.Options{Time: 1, MemoryKiB: 64})
 	os.Exit(m.Run())
 }
 
@@ -38,7 +39,7 @@ func TestMain(m *testing.M) {
 // speed-up this package's login-throttle tests depend on is otherwise silent,
 // and losing it would show up only as a package that runs 4x longer.
 func TestMainLoweredTheHashCost(t *testing.T) {
-	_, hash, err := absauth.HashPassword("Gotham")
+	_, hash, err := absauth.Passwords.Hash("Gotham")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/library_fake_test.go
-// version: 1.27.3
+// version: 1.27.4
 // guid: 1d4a67f2-0c85-4f39-9b6e-3a71c5d0e824
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs_test
 
@@ -1472,8 +1472,8 @@ func sourceAllowance() map[string]allowance {
 // any hand-edit on the next recapture -- so an edited number is both false
 // evidence and a test that breaks later for a reason nobody can reconstruct.
 func rateLimitAllowance() map[string]allowance {
-	const reason = "we advertise our own throttle (absauth.MaxFailuresPerIP over " +
-		"absauth.Window), not the oracle's ABS defaults; see dto.go buildServerSettings"
+	const reason = "we advertise our own throttle (coreauth.DefaultMaxFailuresPerSource over " +
+		"coreauth.DefaultThrottleWindow), not the oracle's ABS defaults; see dto.go buildServerSettings"
 	return map[string]allowance{
 		"serverSettings.rateLimitLoginRequests": {Reason: reason},
 		"serverSettings.rateLimitLoginWindow":   {Reason: reason},

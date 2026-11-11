@@ -1,13 +1,14 @@
 // file: internal/server/handlers/abs_session_revoke.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4b97077b-7dcf-4b7e-85de-cae1671df311
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers
 
 import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	coreaudit "github.com/falkcorp/mediacore/audit"
 )
 
 // ABSSessionRevoker is the one ABS session capability the account-security
@@ -60,12 +61,12 @@ func RevokeAllABSSessions(r ABSSessionRevoker, userID, reason string) {
 		return
 	}
 	n, err := r.RevokeAllABSSessionsForUser(userID)
-	ev := absauth.AuditEvent{Action: "revoke-all", UserID: userID, Reason: reason, Outcome: absauth.OutcomeSuccess}
+	ev := coreaudit.AuthAttempt{Action: "revoke-all", UserID: userID, Reason: reason, Outcome: coreaudit.Success}
 	if err != nil {
-		ev.Outcome = absauth.OutcomeError
+		ev.Outcome = coreaudit.Error
 		ev.Reason = reason + "-revoke-failed"
 	}
 	if err != nil || n > 0 {
-		absauth.Audit(ev)
+		absauth.AttemptLog.Record(ev)
 	}
 }

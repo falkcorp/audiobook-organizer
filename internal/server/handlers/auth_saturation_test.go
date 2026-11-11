@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_saturation_test.go
-// version: 2.0.1
+// version: 2.0.4
 // guid: 145af753-2faf-4792-8784-654bedb37b46
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers_test
 
@@ -16,6 +16,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -55,18 +56,15 @@ func TestLogin_SaturatedDelaysLowFailureAccountsAndRefusesSpentOnes(t *testing.T
 
 	// Saturated, account has 1 failure: delayed by the policy, not refused.
 	require.Equal(t, http.StatusUnauthorized, login("sat-user", true, "192.0.2.2:1"))
-	want, refuse := absauth.SaturationPolicy(1)
-	require.False(t, refuse)
-	require.Equal(t, []time.Duration{want}, delays)
+	require.Equal(t, []time.Duration{coreauth.SaturationDelayBase + coreauth.SaturationDelayStep}, delays)
 
 	// An unknown username is delayed like an untouched account.
 	delays = nil
 	require.Equal(t, http.StatusUnauthorized, login("nobody-here", true, "192.0.2.3:1"))
-	base, _ := absauth.SaturationPolicy(0)
-	require.Equal(t, []time.Duration{base}, delays)
+	require.Equal(t, []time.Duration{coreauth.SaturationDelayBase}, delays)
 
 	// Take the account to SoftThreshold failures, then it is refused while saturated.
-	for i := 0; i < absauth.SoftThreshold; i++ {
+	for i := 0; i < coreauth.DefaultSoftThreshold; i++ {
 		login("sat-user", false, "198.51.100.1:1")
 	}
 	delays = nil
@@ -104,7 +102,7 @@ func TestLogin_SaturatedAnswerDoesNotRevealWhetherTheNameExists(t *testing.T) {
 		h.Login(c)
 		return w.Code, absauth.LoginSaturationRefused(c)
 	}
-	for i := 0; i < absauth.SoftThreshold; i++ {
+	for i := 0; i < coreauth.DefaultSoftThreshold; i++ {
 		for _, name := range []string{"Real-User", "ghost-user"} {
 			code, _ := login(name, false, "198.51.100.1:1")
 			require.Equal(t, http.StatusUnauthorized, code)
@@ -138,7 +136,7 @@ func TestLogin_SuccessDoesNotResetTheSourceBudget(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/auth.pebble")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	algo, hash, err := absauth.HashPassword("own-password-123")
+	algo, hash, err := absauth.Passwords.Hash("own-password-123")
 	require.NoError(t, err)
 	_, err = store.CreateUser("own-account", "own@example.test", algo, hash, []string{"viewer"}, "active")
 	require.NoError(t, err)
@@ -183,7 +181,7 @@ func TestLogin_SuccessTakesBackOwnMistypes(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/auth.pebble")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	algo, hash, err := absauth.HashPassword("own-password-123")
+	algo, hash, err := absauth.Passwords.Hash("own-password-123")
 	require.NoError(t, err)
 	_, err = store.CreateUser("own-account", "own@example.test", algo, hash, []string{"viewer"}, "active")
 	require.NoError(t, err)

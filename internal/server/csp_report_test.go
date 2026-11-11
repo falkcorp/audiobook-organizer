@@ -1,7 +1,7 @@
 // file: internal/server/csp_report_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: b0cfe71e-4a49-4714-bc3b-9cbae5c214f5
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package server
 
@@ -431,10 +431,10 @@ func TestCSPReporter_VisitorTableIsBoundedAndSwept(t *testing.T) {
 	for i := 0; i < maxCSPVisitors+500; i++ {
 		rep.admit("v"+strconv.Itoa(i), 1)
 	}
-	require.LessOrEqual(t, rep.visitors.Len(), maxCSPVisitors)
+	require.LessOrEqual(t, len(rep.visitors.m), maxCSPVisitors)
 	now = now.Add(cspVisitorIdle + time.Second)
 	rep.admit("fresh", 1)
-	require.Equal(t, 1, rep.visitors.Len(), "idle visitors are swept")
+	require.Equal(t, 1, len(rep.visitors.m), "idle visitors are swept")
 }
 
 // B4-1: with 7 whole tokens left in the service budget a batch of 10 logs 7 and

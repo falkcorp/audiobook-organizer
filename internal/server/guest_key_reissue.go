@@ -1,7 +1,7 @@
 // file: internal/server/guest_key_reissue.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 06852e7f-0413-46b5-9a54-623e28379772
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
@@ -19,7 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -154,7 +154,7 @@ func guestKeyFirstKeyBlocked(u *database.User) string {
 			return why
 		}
 	}
-	if owner := util.NormalizeEmail(config.Snapshot().OwnerEmail); owner != "" && util.NormalizeEmail(u.Email) == owner {
+	if owner := coreauth.NormalizeEmail(config.Snapshot().OwnerEmail); owner != "" && coreauth.NormalizeEmail(u.Email) == owner {
 		return why
 	}
 	return ""
