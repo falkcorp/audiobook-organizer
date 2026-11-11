@@ -1,7 +1,7 @@
 // file: core/internal/executor/resume.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4cd3dc83-a564-4bfd-90d7-fa6113583f62
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -89,7 +89,7 @@ func (e *executor) resumeSweep(ctx context.Context) error {
 const reasonSuperseded = "superseded"
 
 // supersededQuiesced is HEAD's boot supersession of stale quiesced runs
-// (supersedeStaleQuiesced, internal/operations/registry/resume.go:65-71),
+// (supersedeStaleQuiesced in the registry package's resume.go, lines 65-71),
 // which 05-tasks does not restate; F2-03 keeps it (seams.d/F2-03.md). Per
 // kind, among the quiesced runs this boot would re-queue (interrupted_quiesced
 // or stopping{quiesce}, not those a surviving marker keeps): only the newest

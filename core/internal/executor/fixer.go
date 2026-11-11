@@ -1,7 +1,7 @@
 // file: core/internal/executor/fixer.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9689d192-751d-423a-b144-61fe27e2a8d1
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -215,7 +215,7 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 	// A row an earlier attempt of this run applied carries its mark: it is
 	// not applied again, but while its changes still stand it is one of the
 	// run's applied rows, for AfterApply and the result (HEAD's
-	// appliedByEarlierAttempt, pkg/ops/fixer.go: Applied counts across
+	// appliedByEarlierAttempt in the ops SDK's fixer.go: Applied counts across
 	// attempts from the apply markers).
 	var prior []string
 	ids = slices.DeleteFunc(ids, func(id string) bool {
