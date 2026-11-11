@@ -7,6 +7,7 @@ package kernel
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -146,5 +147,171 @@ func TestReapply_RoleLinesThroughAuthUsers(t *testing.T) {
 	ro := &restoreUsers{store: fx.auth, readOnly: true}
 	if err := ro.StageRoles(fx.ctx, fx.auth.NewBatch(), barbara, nil); !errors.Is(err, storage.ErrReadOnly) {
 		t.Errorf("a read-only users view staged: %v", err)
+	}
+}
+
+// TestReapply_LastAdminKept: a role.unassigned line the store never saw would
+// leave no active core:admin holder: rbac skips that line and reports the
+// holder, and the kernel restricts that user through auth after the batch
+// commits (SEC3-15, SEC4-12), so no lockout and no stale admin.
+func TestReapply_LastAdminKept(t *testing.T) {
+	fx := newRxFx(t, nil)
+	fx.boot(nil, nil)
+	const trustee rbac.RoleName = "custom.trustee"
+	b := fx.roles.NewBatch()
+	if err := fx.roles.PutRole(b, &rbac.Role{Name: trustee, Title: "Trustee", Origin: rbac.OriginCustom, Added: []rbac.Permission{"core:admin"}, Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(fx.ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	_ = b.Close()
+	bruce := fx.user("bruce-wayne", trustee)
+	fx.key("key-batsignal", bruce, auth.KeyActive)
+	fx.journalOnly(journal.Revocation{Kind: journal.RoleUnassigned, Subject: rxUserRef(bruce), Object: rxRoleRef(string(trustee))})
+	fx.restart()
+
+	res, _ := fx.boot(nil, nil)
+	if res.Reapplied != 1 {
+		t.Fatalf("re-applied %d", res.Reapplied)
+	}
+	u := fx.userRow(bruce)
+	if !slices.Equal(u.Roles, []rbac.RoleName{trustee}) || !u.SignInRestricted {
+		t.Errorf("roles %v, sign-in restricted %v: the last admin keeps the role and is restricted", u.Roles, u.SignInRestricted)
+	}
+	if got := fx.keyStatus("key-batsignal"); got != auth.KeyNeedsConfirmation {
+		t.Errorf("key-batsignal = %q, want needs_confirmation (a restricted last admin's keys)", got)
+	}
+}
+
+// TestReapply_TailInSequentialBatches: a tail longer than one batch is applied
+// in order in several batches, each also writing the head, so the head never
+// passes a line not yet applied.
+func TestReapply_TailInSequentialBatches(t *testing.T) {
+	fx := newRxFx(t, nil)
+	fx.boot(nil, nil)
+	robin := fx.user("tim-drake")
+	n := tailBatch + 3
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("key-robin-%03d", i)
+		fx.key(id, robin, auth.KeyActive)
+		fx.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef(id)})
+	}
+	fx.restart()
+	batches := 0
+	var heads []uint64
+	res, _ := fx.boot(nil, func(in *reapplyInput) {
+		inner := in.Apply.NewBatch
+		in.Apply.NewBatch = func() *storage.Batch {
+			batches++
+			h, _ := journal.ReadHead(fx.ctx, fx.bks())
+			heads = append(heads, h.Seq)
+			return inner()
+		}
+	})
+	if res.Reapplied != n || batches != 2 {
+		t.Fatalf("re-applied %d of %d in %d batch(es), want 2 batches", res.Reapplied, n, batches)
+	}
+	if !slices.Equal(heads, []uint64{0, uint64(tailBatch)}) {
+		t.Errorf("the head at the start of each batch = %v, want [0 %d]: it advances with each batch", heads, tailBatch)
+	}
+	if got := fx.head().Seq; got != uint64(n) {
+		t.Errorf("head = %d, want %d", got, n)
+	}
+	for i := 0; i < n; i++ {
+		if got := fx.keyStatus(fmt.Sprintf("key-robin-%03d", i)); got != auth.KeyRevoked {
+			t.Fatalf("key %d = %q", i, got)
+		}
+	}
+}
+
+// TestClassifyStore: the classifier is a pure function of identity and
+// content; every row of it, including the evidence rules for (c).
+func TestClassifyStore(t *testing.T) {
+	id := storage.StoreIdentity{Epoch: 3, DirFSID: 7, DirIno: 11}
+	pair := journal.ServedBoot{N: 4, Nonce: "alfred"}
+	loc := journal.Location{DBPath: "/gotham", InstallID: "wayne", Store: id, ServedBoot: pair, Head: journal.Head{Seq: 2}}
+	line := func(seq uint64, k journal.Kind) journal.Line {
+		return journal.Line{Revocation: journal.Revocation{Seq: seq, Kind: k}}
+	}
+	chain := func(lines ...journal.Line) *journal.Chain {
+		c := &journal.Chain{HasHeader: true, Lines: lines}
+		if n := len(lines); n > 0 {
+			c.ClaimedEnd = lines[n-1].Seq
+		}
+		for _, l := range lines {
+			if journal.IsRevocation(l.Kind) {
+				c.LastRevocation = l.Seq
+			}
+		}
+		return c
+	}
+	moved := id
+	moved.Epoch++
+	hook := line(3, journal.APIKeyRevoked)
+	hook.RestoreSeq = 2
+	base := classifyInput{Loc: loc, Describes: true, StorePair: pair, Head: journal.Head{Seq: 2}, Identity: id, Chain: chain(line(1, journal.APIKeyRevoked), line(2, journal.UserDisabled))}
+	for _, c := range []struct {
+		name string
+		mut  func(*classifyInput)
+		want storeClass
+	}{
+		{"same", func(*classifyInput) {}, classSame},
+		{"restore boot ignores every signal", func(c *classifyInput) { c.RestoreBoot = true; c.StorePair.N = 1; c.Head.Seq = 0 }, classRestoreBoot},
+		{"no record describes the store", func(c *classifyInput) { c.Describes = false; c.StorePair.N = 1 }, classSame},
+		{"older n", func(c *classifyInput) { c.StorePair.N = 3 }, classReplaced},
+		{"same n, another nonce", func(c *classifyInput) { c.StorePair.Nonce = "joker" }, classReplaced},
+		{"no pair while the file has one", func(c *classifyInput) { c.StorePair = journal.ServedBoot{} }, classReplaced},
+		{"pair ahead of the file", func(c *classifyInput) { c.StorePair.N = 9 }, classSame},
+		{"a file with no pair", func(c *classifyInput) { c.Loc.ServedBoot = journal.ServedBoot{}; c.StorePair = journal.ServedBoot{} }, classSame},
+		{"head below the anchor", func(c *classifyInput) { c.Head.Seq = 1 }, classReplaced},
+		{"head above the anchor", func(c *classifyInput) { c.Head.Seq = 5 }, classSame},
+		{"new generation, nothing behind", func(c *classifyInput) { c.Identity = moved }, classRelocated},
+		{"new generation, head behind a revocation line", func(c *classifyInput) {
+			c.Identity = moved
+			c.Loc.Head.Seq = 0
+			c.Head.Seq = 1
+		}, classReplaced},
+		{"new generation, a gap line after the head", func(c *classifyInput) {
+			c.Identity = moved
+			c.Chain = chain(line(1, journal.APIKeyRevoked), line(2, journal.Gap))
+			c.Loc.Head.Seq = 1
+			c.Head.Seq = 1
+		}, classReplaced},
+		{"new generation, a restore line after the head", func(c *classifyInput) {
+			c.Identity = moved
+			c.Chain = chain(line(1, journal.APIKeyRevoked), line(2, journal.Restore))
+			c.Loc.Head.Seq = 1
+			c.Head.Seq = 1
+		}, classReplaced},
+		{"new generation, an aborted restore line after the head", func(c *classifyInput) {
+			c.Identity = moved
+			c.Chain = chain(line(1, journal.APIKeyRevoked), line(2, journal.Restore), line(3, journal.RestoreAborted))
+			c.Aborted = map[uint64]bool{2: true}
+			c.Loc.Head.Seq = 1
+			c.Head.Seq = 1
+		}, classRelocated},
+		{"new generation, only an aborted restore's hook line after the head", func(c *classifyInput) {
+			c.Identity = moved
+			c.Chain = chain(line(1, journal.APIKeyRevoked), line(2, journal.Restore), hook, line(4, journal.RestoreAborted))
+			c.Aborted = map[uint64]bool{2: true}
+			c.Loc.Head.Seq = 1
+			c.Head.Seq = 1
+		}, classRelocated},
+		{"new generation, a store with no head and a journal with revocations", func(c *classifyInput) {
+			c.Identity = moved
+			c.Loc.Head.Seq = 0
+			c.Head.Seq = 0
+		}, classReplaced},
+		{"an unreadable location file, a store that has journaled", func(c *classifyInput) { c.Describes, c.LocUnreadable = false, true }, classReplaced},
+		{"an unreadable location file, a store that never has", func(c *classifyInput) {
+			c.Describes, c.LocUnreadable, c.Head.Seq, c.StorePair = false, true, 0, journal.ServedBoot{}
+		}, classSame},
+	} {
+		in := base
+		c.mut(&in)
+		if got, why := classifyStore(in); got != c.want {
+			t.Errorf("%s: class %q (%s), want %q", c.name, got, why, c.want)
+		}
 	}
 }
