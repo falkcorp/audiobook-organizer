@@ -1,5 +1,5 @@
 // file: internal/books/tasklint_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 710e9000-635d-4826-8047-68b02275e9ca
 // last-edited: 2026-11-10
 
@@ -97,9 +97,10 @@ func TestTasklint_F518ListsOnlyFlaggedFiles(t *testing.T) {
 }
 
 // TestTasklintExemptions_ShrinkOnly: the entry files may only shrink against
-// the merge base with origin/main; an added file or line fails (05-tasks
-// §5T.8.4). Without git or origin/main it skips locally and fails under
-// CI=true. At F2-17's own PR the base has no directory, so it passes.
+// the merge base with origin/main (origin/main itself in CI's shallow
+// checkout, whose workflow fetches it at depth 1); an added file or line fails
+// (05-tasks §5T.8.4). Without git or origin/main it skips locally and fails
+// under CI=true. At F2-17's own PR the base has no directory, so it passes.
 func TestTasklintExemptions_ShrinkOnly(t *testing.T) {
 	tasklint.CheckShrinkOnly(t, tasklintExempt)
 }
