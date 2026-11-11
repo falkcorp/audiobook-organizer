@@ -1,5 +1,5 @@
 # file: scripts/tests/test_gen_production_shaped.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 6f5d38ad-dc4d-42f5-b83c-f79c1e1d4f7c
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/gen_production_shaped.py and the Go row writer (F2-14).
@@ -90,16 +90,29 @@ class P1CountsFile(unittest.TestCase):
         self.assertEqual(doc["recorded"], "2026-11-10")
         # P1 branch A: every key is in a registered family.
         self.assertEqual(doc["unregistered_keys"], 0)
-        self.assertEqual(set(doc), {"_header", "source", "recorded", "unregistered_keys", "families"})
+        self.assertEqual(
+            set(doc), {"_header", "source", "recorded", "unregistered_keys", "families"}
+        )
 
     def test_load_counts_accepts_the_file_and_rejects_bad_shapes(self):
         self.assertEqual(len(gen.load_counts(COUNTS)), 37)
         with tempfile.TemporaryDirectory() as tmp:
             for name, fams in {
                 "empty": [],
-                "extra field": [{"prefix": "a:", "keys": 1, "raw_key_bytes": 2, "raw_value_bytes": 3, "value": "x"}],
-                "negative": [{"prefix": "a:", "keys": -1, "raw_key_bytes": 2, "raw_value_bytes": 3}],
-                "duplicate": [{"prefix": "a:", "keys": 1, "raw_key_bytes": 2, "raw_value_bytes": 3}] * 2,
+                "extra field": [
+                    {
+                        "prefix": "a:",
+                        "keys": 1,
+                        "raw_key_bytes": 2,
+                        "raw_value_bytes": 3,
+                        "value": "x",
+                    }
+                ],
+                "negative": [
+                    {"prefix": "a:", "keys": -1, "raw_key_bytes": 2, "raw_value_bytes": 3}
+                ],
+                "duplicate": [{"prefix": "a:", "keys": 1, "raw_key_bytes": 2, "raw_value_bytes": 3}]
+                * 2,
             }.items():
                 p = pathlib.Path(tmp) / f"{name}.json"
                 p.write_text(json.dumps({"families": fams}), encoding="utf-8")
@@ -141,9 +154,18 @@ class Generator(unittest.TestCase):
         )
         cls.out = cls.tmp / "shaped-store"
         cls.rc, cls.stdout, cls.stderr = run_gen(
-            "--counts", str(cls.counts_file), "--out", str(cls.out), "--report", str(cls.tmp / "report.json")
+            "--counts",
+            str(cls.counts_file),
+            "--out",
+            str(cls.out),
+            "--report",
+            str(cls.tmp / "report.json"),
         )
-        cls.report = {f["prefix"]: f for f in json.loads((cls.tmp / "report.json").read_text())["families"]} if cls.rc == 0 else {}
+        cls.report = (
+            {f["prefix"]: f for f in json.loads((cls.tmp / "report.json").read_text())["families"]}
+            if cls.rc == 0
+            else {}
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -151,8 +173,18 @@ class Generator(unittest.TestCase):
 
     def scan(self, store: pathlib.Path) -> dict[str, dict]:
         proc = subprocess.run(
-            [str(self.exe), "-mode", "scan", "-store", str(store / "db" / "audiobooks.pebble"), "-counts", str(self.counts_file)],
-            capture_output=True, text=True, check=True,
+            [
+                str(self.exe),
+                "-mode",
+                "scan",
+                "-store",
+                str(store / "db" / "audiobooks.pebble"),
+                "-counts",
+                str(self.counts_file),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return {f["prefix"]: f for f in json.loads(proc.stdout)["families"]}
 
@@ -173,9 +205,16 @@ class Generator(unittest.TestCase):
         got = self.scan(self.out)
         for prefix in ("opv3:run:", "u:", "opv3:ix:done:", "opv2:done:", "opv2:row:"):
             keys, kb, vb = self.counts[prefix]
-            self.assertAlmostEqual(got[prefix]["raw_key_bytes"] / keys, kb / keys, delta=0.1 * kb / keys, msg=prefix)
+            self.assertAlmostEqual(
+                got[prefix]["raw_key_bytes"] / keys, kb / keys, delta=0.1 * kb / keys, msg=prefix
+            )
             if vb:
-                self.assertAlmostEqual(got[prefix]["raw_value_bytes"] / keys, vb / keys, delta=0.1 * vb / keys, msg=prefix)
+                self.assertAlmostEqual(
+                    got[prefix]["raw_value_bytes"] / keys,
+                    vb / keys,
+                    delta=0.1 * vb / keys,
+                    msg=prefix,
+                )
             else:
                 self.assertEqual(got[prefix]["raw_value_bytes"], 0, prefix)
 
@@ -184,7 +223,9 @@ class Generator(unittest.TestCase):
         for prefix in ("act:digest:", "batcave:"):
             self.assertEqual(got[prefix]["keys"], 0, f"{prefix} was invented")
             self.assertTrue(self.report[prefix]["skipped"], prefix)
-            self.assertIn("SKIPPED", [ln for ln in self.stdout.splitlines() if ln.startswith(prefix)][0])
+            self.assertIn(
+                "SKIPPED", [ln for ln in self.stdout.splitlines() if ln.startswith(prefix)][0]
+            )
         self.assertIn("skipped families (2): act:digest:, batcave:", self.stdout)
 
     def test_every_generated_row_still_decodes(self):
@@ -208,15 +249,23 @@ class Generator(unittest.TestCase):
             self.assertEqual(e["size"], f.stat().st_size, e["path"])
             self.assertEqual(e["sha256"], gen.sha256_file(f), e["path"])
             self.assertEqual(set(e), {"path", "size", "sha256"})
-        self.assertEqual(gen.check_store(self.out, listed + [{"path": "store_manifest.json", "size": 0, "sha256": ""}]),
-                         [f"store_manifest.json: size {(self.out / 'store_manifest.json').stat().st_size}, manifest says 0"])
+        self.assertEqual(
+            gen.check_store(
+                self.out, listed + [{"path": "store_manifest.json", "size": 0, "sha256": ""}]
+            ),
+            [
+                f"store_manifest.json: size {(self.out / 'store_manifest.json').stat().st_size}, manifest says 0"
+            ],
+        )
 
     def test_stage_one_is_left_as_committed(self):
         manifest = json.loads((CORPUS / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(gen.check_store(CORPUS / "stage1", manifest["stores"][gen.STAGE1_KEY]), [])
         # The copy still holds every stage-1 file the generator did not rewrite.
         for rel in ("state/.encryption_key", "db/config.yaml"):
-            self.assertEqual((self.out / rel).read_bytes(), (CORPUS / "stage1" / rel).read_bytes(), rel)
+            self.assertEqual(
+                (self.out / rel).read_bytes(), (CORPUS / "stage1" / rel).read_bytes(), rel
+            )
 
 
 class Stage1MustMatchTheManifest(unittest.TestCase):
@@ -230,7 +279,9 @@ class Stage1MustMatchTheManifest(unittest.TestCase):
         self.out = self.tmp / "out"
 
     def generate(self) -> tuple[int, str]:
-        rc, _out, err = run_gen("--out", str(self.out), "--stage1", str(self.stage1), "--no-overlay", "--scale", "0.001")
+        rc, _out, err = run_gen(
+            "--out", str(self.out), "--stage1", str(self.stage1), "--no-overlay", "--scale", "0.001"
+        )
         return rc, err
 
     def test_untouched_copy_passes(self):
@@ -243,7 +294,9 @@ class Stage1MustMatchTheManifest(unittest.TestCase):
         rc, err = self.generate()
         self.assertNotEqual(rc, 0)
         self.assertIn(f"{victim.name}: in the manifest but not on disk", err)
-        self.assertFalse(self.out.exists() and any(self.out.iterdir()), "wrote a store from a bad stage 1")
+        self.assertFalse(
+            self.out.exists() and any(self.out.iterdir()), "wrote a store from a bad stage 1"
+        )
 
     def test_changed_file(self):
         victim = self.stage1 / "db" / "config.yaml"
@@ -280,9 +333,12 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 def run_true_patterns(text: str, start_marker: str) -> list[list[str]]:
     """The `a|b|c) run=true ;;` pattern lists after start_marker, one list per case line."""
-    body = text[text.index(start_marker):]
-    return [ln.strip()[: -len(") run=true ;;")].split("|")
-            for ln in body.splitlines() if ln.strip().endswith(") run=true ;;") and "|" in ln][:2]
+    body = text[text.index(start_marker) :]
+    return [
+        ln.strip()[: -len(") run=true ;;")].split("|")
+        for ln in body.splitlines()
+        if ln.strip().endswith(") run=true ;;") and "|" in ln
+    ][:2]
 
 
 class ShapedStoreJobTrigger(unittest.TestCase):
@@ -298,7 +354,11 @@ class ShapedStoreJobTrigger(unittest.TestCase):
         theirs, _ = run_true_patterns(self.lifecycle, "name: Classify changed paths")
         ours, own = run_true_patterns(self.gates, "name: Classify shaped-store paths")
         self.assertGreaterEqual(len(theirs), 8)
-        self.assertEqual(ours, theirs, "extraction-gates.yml's shaped-store paths drifted from unit-lifecycle.yml's")
+        self.assertEqual(
+            ours,
+            theirs,
+            "extraction-gates.yml's shaped-store paths drifted from unit-lifecycle.yml's",
+        )
         # What the job adds is its own files only: the workflows that run it,
         # the generator, the row writer, the test, the shared script, the corpus
         # and F2-15's cutover suite with its shared-family golden.
@@ -306,10 +366,18 @@ class ShapedStoreJobTrigger(unittest.TestCase):
         self.assertIn(".github/workflows/nightly.yml", own)
         for path in own:
             self.assertTrue(
-                path.startswith((".github/workflows/", "scripts/r2corpus/", "scripts/ci/run_production_shaped_store.sh",
-                                 "scripts/tests/test_gen_production_shaped.py", "internal/books/production_shaped_test.go",
-                                 "internal/books/testdata/r2corpus/", "internal/books/cutover_suite_test.go",
-                                 "internal/books/testdata/shared_families.golden")),
+                path.startswith(
+                    (
+                        ".github/workflows/",
+                        "scripts/r2corpus/",
+                        "scripts/ci/run_production_shaped_store.sh",
+                        "scripts/tests/test_gen_production_shaped.py",
+                        "internal/books/production_shaped_test.go",
+                        "internal/books/testdata/r2corpus/",
+                        "internal/books/cutover_suite_test.go",
+                        "internal/books/testdata/shared_families.golden",
+                    )
+                ),
                 f"{path} is not one of the job's own files",
             )
 
@@ -325,18 +393,25 @@ class ShapedStoreJobTrigger(unittest.TestCase):
             self.assertIn("scripts/ci/run_production_shaped_store.sh", job, name)
             self.assertIn("R2_SHAPED_OUT", job, name)
             self.assertIn("actions/upload-artifact@", job, name)
-            self.assertRegex(job, r"uses: [\w./-]+@[0-9a-f]{40} ", name)  # every action pinned to a SHA
+            self.assertRegex(
+                job, r"uses: [\w./-]+@[0-9a-f]{40} ", name
+            )  # every action pinned to a SHA
             self.assertNotRegex(job, r"uses: [\w./-]+@v\d", name)
 
     def test_extraction_gates_job_is_gated_and_required(self):
         job = self.job(self.gates)
         self.assertIn("needs.changes.outputs.shaped == 'true'", job)
-        needs = self.gates[self.gates.index("  extraction-gates:\n"):]
+        needs = self.gates[self.gates.index("  extraction-gates:\n") :]
         self.assertIn("production-shaped-store", needs.split("if:")[0])
 
     def test_the_script_runs_generator_then_the_named_test(self):
-        script = (REPO_ROOT / "scripts" / "ci" / "run_production_shaped_store.sh").read_text(encoding="utf-8")
-        self.assertLess(script.index("gen_production_shaped.py"), script.index("TestProductionShapedStore_BootTime"))
+        script = (REPO_ROOT / "scripts" / "ci" / "run_production_shaped_store.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertLess(
+            script.index("gen_production_shaped.py"),
+            script.index("TestProductionShapedStore_BootTime"),
+        )
         self.assertNotIn("--scale", script, "CI runs at scale 1")
         for env in ("R2_SHAPED_STORE", "R2_SHAPED_OUT"):
             self.assertIn(env, script)

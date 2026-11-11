@@ -1,5 +1,5 @@
 // file: internal/books/production_shaped_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e522628-7990-43c4-8080-fa8436bdee80
 // last-edited: 2026-11-10
 
@@ -177,6 +177,39 @@ func pointConfigAtStore(c *config.Config, work string) {
 	c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
 }
 
+// loadStoredConfigAt makes the boot's loadConfigFromDB, for this test only,
+// load the stored settings as serve does, point each path setting at the copy
+// at work (pointConfigAtStore), and then apply env, the boot's own
+// environment-authoritative settings. The re-apply is needed because
+// LoadConfigFromDatabase re-applies those keys from the process-wide viper,
+// not from this boot's environment: if a test left viper's defaults
+// registered (initConfigForTest is how a test should run InitConfig, and it
+// undoes them), abs_api_enabled reads as set, to false, the stored true is
+// overwritten, and Register refuses the boot (errABSFlagDrift).
+func loadStoredConfigAt(t *testing.T, work string, env func(*config.Config)) {
+	t.Helper()
+	prev := loadConfigFromDB
+	t.Cleanup(func() { loadConfigFromDB = prev })
+	loadConfigFromDB = func(s database.SettingsStore) error {
+		if err := config.LoadConfigFromDatabase(s); err != nil {
+			return err
+		}
+		pointConfigAtStore(&config.AppConfig, work)
+		env(&config.AppConfig)
+		return nil
+	}
+}
+
+// shapedBootEnv is the shaped boot's environment-authoritative config: the
+// corpus was written by an R0 that served the ABS surface (the boot spec's
+// ABS_API_ENABLED, ABS_AUTH_MODES and ABS_JWT_SECRET), the stored settings
+// say so, and a boot that names it differently is refused (errABSFlagDrift).
+func shapedBootEnv(c *config.Config) {
+	c.ABSAPIEnabled = true
+	c.ABSAuthModes = "jwt"
+	c.ABSJWTSecret = "synthetic-shaped-store-secret-0123456789abcdef"
+}
+
 // bootShapedStore boots the composition on the store copy at work as serve runs
 // it (on disk, the stored settings loaded, the key the corpus was written with)
 // and returns the boot's phase samples and the seconds from the start of the
@@ -187,13 +220,7 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 	edit := func(c *config.Config) {
 		c.DatabasePath = filepath.Join(work, "db", "audiobooks.pebble")
 		c.RootDir = filepath.Join(work, "library")
-		// The corpus was written by an R0 that served the ABS surface (the
-		// boot spec's ABS_API_ENABLED, ABS_AUTH_MODES and ABS_JWT_SECRET): the
-		// stored settings say so, and a boot that names it differently is
-		// refused (errABSFlagDrift).
-		c.ABSAPIEnabled = true
-		c.ABSAuthModes = "jwt"
-		c.ABSJWTSecret = "synthetic-shaped-store-secret-0123456789abcdef"
+		shapedBootEnv(c)
 	}
 	opt := func(o *app.Options) {
 		o.StorageFS = storage.FS{}
@@ -204,13 +231,7 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 		// (config.Validate wants the parent of database_path and playlist_dir).
 		// Load them as serve does, then point each path at the copy's real
 		// location, so the boot never touches, or depends on, the builder's.
-		loadConfigFromDB = func(s database.SettingsStore) error {
-			if err := config.LoadConfigFromDatabase(s); err != nil {
-				return err
-			}
-			pointConfigAtStore(&config.AppConfig, work)
-			return nil
-		}
+		loadStoredConfigAt(t, work, shapedBootEnv)
 		// The harness writes its own key into the state directory; the corpus'
 		// secrets are encrypted under the one stage 1 holds.
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))
