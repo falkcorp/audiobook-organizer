@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
 // last-edited: 2026-11-10
 
@@ -355,6 +355,12 @@ func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	a.ctx = ctx
 	a.cancel = func(cause error) { cancel(cause); stop() }
 	a.live = true
+	a.pmu.Lock()
+	// The run's stored progress is where a resumed attempt starts, so one
+	// that reports nothing does not zero it at its end (ResumeFromZero's
+	// requeue has already zeroed it).
+	a.pDone, a.pTotal, a.pCurrent = rec.Done, rec.Total, rec.Current
+	a.pmu.Unlock()
 	pending := a.stopCause // a stop that committed while the attempt was claimed but not live
 	e.mu.Unlock()
 	if pending != nil {
