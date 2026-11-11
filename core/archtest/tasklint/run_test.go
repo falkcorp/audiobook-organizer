@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -353,5 +354,51 @@ func TestCheckShrinkOnly_ShallowCI(t *testing.T) {
 	}
 	if r := check("2", true); len(r.fatals) != 0 || r.count("gained d.go", r.errors) != 1 || len(r.errors) != 1 {
 		t.Fatalf("shallow growth: errors %v fatals %v, want one gained d.go", r.errors, r.fatals)
+	}
+}
+
+// TestAnalyze_WholeProgram: unregistered-kind is checked over every loaded
+// package at once. The kernel registering the owner's kinds (by var, through
+// a list it calls, through a helper and a method) leaves the owner clean; the
+// stray package's kinds, one built through the owner's helper, are reported
+// because no loaded package registers them. Loaded alone, the owner's kinds
+// are reported, and with ListFuncs a list function counts only once a loaded
+// package calls it.
+func TestAnalyze_WholeProgram(t *testing.T) {
+	root := fixtureGOPATH(t)
+	x := cases + "xpkg/"
+	run := func(listFuncs bool, pkgs ...string) []string {
+		t.Helper()
+		cfg := fixtureConfig()
+		cfg.ListFuncs = listFuncs
+		var full []string
+		for _, p := range pkgs {
+			full = append(full, x+p)
+		}
+		fs, _, err := Analyze(cfg, root, full)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, f := range fs {
+			if f.Category == CatUnregisteredKind {
+				out = append(out, fmt.Sprintf("%s:%d %s", path.Base(f.File), f.Line, f.Message))
+			}
+		}
+		return out
+	}
+	got := run(false, "owner", "kernel", "stray")
+	if len(got) != 2 || !strings.HasPrefix(got[0], "stray.go:15 tasks.Task definition in Forgotten is not registered: no Registrar.Tasks call in any loaded package") ||
+		!strings.HasPrefix(got[1], "stray.go:18 definition built by Build in Lost is not registered") {
+		t.Errorf("owner+kernel+stray: %q, want Forgotten and Lost only", got)
+	}
+	if got := run(false, "owner"); len(got) != 3 {
+		t.Errorf("owner alone: %q, want its 3 kind sites (Single, and the Build and Batch.Def calls in Kinds; the helpers have callers, so their own constructors are not sites)", got)
+	}
+	if got := run(true, "listowner"); len(got) != 1 || !strings.Contains(got[0], "no called list function") {
+		t.Errorf("uncalled list function: %q, want its kind reported", got)
+	}
+	if got := run(true, "listowner", "wire"); len(got) != 0 {
+		t.Errorf("list function called by wire: %q, want none", got)
 	}
 }
