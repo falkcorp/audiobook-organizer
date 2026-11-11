@@ -1,5 +1,5 @@
 // file: core/config/apply.go
-// version: 1.0.5
+// version: 1.1.0
 // guid: dd5734d4-3c90-4ba8-9e83-8eb5778ff55a
 // last-edited: 2026-11-10
 
@@ -203,6 +203,7 @@ func (s *Store) applyLocked(ctx context.Context, p Patch, a Actor) (Result, []co
 	// After install, so a removed entry's secret is dropped and an added
 	// entry's is read.
 	s.noteSecretWrites(ctx, writes, a.Subject, now)
+	s.syncFailClosed()
 	s.reindex()
 	s.met.setQuarantined(len(s.quar))
 	s.met.apply(outcomeApplied)
@@ -359,6 +360,12 @@ func (s *Store) plan(p Patch, a Actor) (changes []change, applied []Path, err er
 	}
 	for _, pth := range applied {
 		if op, ok := s.op[pth]; ok {
+			// FailClosed (05-config §1.3.5): a value at least as
+			// restrictive as the operator's, or an unset, is accepted; a
+			// weaker one could never take effect.
+			if failClosedApply(keys[pth].k, pth, p.Set[pth], unsetSet[pth], op) {
+				continue
+			}
 			refused = append(refused, &LockedError{Path: pth, By: op.by})
 			continue
 		}
@@ -490,7 +497,11 @@ func (s *Store) decodeChange(ck ckey, raw json.RawMessage, isUnset bool, by stri
 	if err != nil {
 		return change{}, err
 	}
-	if bytes.Equal(c, ck.def()) {
+	// C4 does not apply to a FailClosed key: a stored value equal to the
+	// default (the most restrictive, for both declared keys) is what keeps a
+	// weaker operator value, set now or later, from taking effect
+	// (05-config §1.3.5).
+	if bytes.Equal(c, ck.def()) && ck.k.failOrder == nil {
 		return change{ck: ck, unset: true}, nil
 	}
 	return change{ck: ck, value: c}, nil

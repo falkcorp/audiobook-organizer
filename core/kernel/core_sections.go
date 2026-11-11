@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
 // last-edited: 2026-11-10
 
@@ -31,9 +31,11 @@ import (
 // Left out of this file, each added by the row named, never declared here as a
 // stand-in:
 //   - every key typed as the tasks package's schedule configuration, and the
-//     core.tasks windows map: F2-04;
-//   - the fail-closed declarations on core.auth.mode and
-//     core.http.basic_gate.enabled: F3-02.
+//     core.tasks windows map: F2-04.
+//
+// core.auth.mode and core.http.basic_gate.enabled are FailClosed (05-config
+// §1.3.5): their more restrictive value wins between the operator layers and
+// the stored layer, most restrictive first in each order.
 //
 // Defaults the owner states as a template (<AppID>_session, logs/<app-id>.log,
 // the compiled state directory, the user agent) are the empty string here: the
@@ -114,7 +116,9 @@ func coreSections() []any {
 				Providers:       []authOIDCProvider{},
 			},
 			Owner: authOwner{Required: false},
-		}),
+		},
+			config.FailClosed("core.auth.mode", json.RawMessage(`"required"`), json.RawMessage(`"disabled"`)),
+		),
 
 		// 05-backup §5B.7
 		config.Define("core.backup", backupSettings{
@@ -196,7 +200,9 @@ func coreSections() []any {
 			OpenAPI:           httpOpenAPI{Public: false},
 			ReadHeaderTimeout: dur(15 * time.Second),
 			IdleTimeout:       dur(120 * time.Second),
-		}),
+		},
+			config.FailClosed("core.http.basic_gate.enabled", json.RawMessage("true"), json.RawMessage("false")),
+		),
 
 		// 05-library §5L.7 (also the one declaration of core.library.mappings, 05-download §7)
 		config.Define("core.library", librarySettings{

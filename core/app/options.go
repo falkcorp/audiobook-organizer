@@ -1,7 +1,7 @@
 // file: core/app/options.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package app
 
@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
@@ -21,10 +22,9 @@ import (
 )
 
 // Options configure one process (06 §6.4.5). Zero values are valid defaults
-// unless noted. These are the R1 fields that need no storage (06 §6.4.10); a
-// field whose package lands later (UI, UIOptions, Authenticators, Auth,
-// RetiredConfigNames, ConfigEnvBindings, Adapters, Updater, InterimBackends)
-// arrives with it.
+// unless noted. These are the R1 fields that need no storage (06 §6.4.10)
+// and F3's config lists; a field whose package lands later (UI, UIOptions,
+// Authenticators, Auth, Adapters, Updater, InterimBackends) arrives with it.
 type Options struct {
 	AppID string // app identifier, [a-z][a-z0-9]{1,15} (03 §3.6), e.g. "abo"
 	// MetricNamespace is the namespace of every series the App emits: core's
@@ -60,6 +60,21 @@ type Options struct {
 	// ConfigFile is optional; layered under env/flags/DB overrides
 	// (05-config). Read once config lands (F3).
 	ConfigFile string
+
+	// RetiredConfigNames are the app's retired env names and file keys (ABO:
+	// generated from its rename table, 05-config §1.12.3), handed to
+	// config.Options.Retired. A retired name is never read: one set for a
+	// ProtectAdmin+ or secret key refuses boot naming the canonical name,
+	// any other is ignored with a warning, and `<app> config check` lists
+	// them (05-config §1.3.6); core holds no app name (03 R1). From F3; ABO
+	// passes it from F3-07 (options_config.go).
+	RetiredConfigNames []config.RetiredName
+	// ConfigEnvBindings are the app's ecosystem env names for passthrough
+	// paths (ABO: OPENAI_API_KEY and OPENAI_BASE_URL onto
+	// integrations.ai.openai.{api_key, base_url}), handed to
+	// config.Options.EnvBindings; core and module keys declare theirs with
+	// config.EnvBinding (05-config §1.3.1). From F3; ABO passes it from F3-07.
+	ConfigEnvBindings []config.EnvName
 	// Args/Env feed the flag and env layers; nil means
 	// os.Args[1:]/os.Environ(). At R1's skeleton only ResolveStateDir reads
 	// Env; the flag layer arrives with config (F3).

@@ -1,5 +1,5 @@
 // file: core/kernel/config.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
 // last-edited: 2026-11-10
 
@@ -31,8 +31,10 @@ import (
 // nothing in boot calls it, and storageOwners does not list
 // configOwnerSpec, so ABO's boot reads no DB layer through core and writes no
 // c/config/ row. F3-07 wires it; the gate is the presence of that wiring, not
-// a flag (09 §9.2.8). Until F3-02 builds the env and file layers, the
-// operator layers that reach it are the explicitly set flags.
+// a flag (09 §9.2.8). The operator layers that reach it are the file, the
+// environment and the explicitly set flags (F3-02). CheckConfig, the engine
+// of the offline config check, is the one exported entry: it registers the
+// same core sections and reads only the operator layers.
 
 const (
 	stateDirKey    config.Path = "core.paths.state_dir"
@@ -121,20 +123,9 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 		}
 	}()
 
-	var paths, mods any
-	rest := make([]any, 0, len(coreSections()))
-	for _, sec := range coreSections() {
-		switch pathOf(sec) {
-		case pathsSection:
-			paths = sec
-		case modulesSection:
-			mods = sec
-		default:
-			rest = append(rest, sec)
-		}
-	}
-	if paths == nil || mods == nil {
-		return nil, errors.New("kernel: config: coreSections lacks core.paths or core.modules")
+	rest, err := coreSectionsButPathsAndModules()
+	if err != nil {
+		return nil, err
 	}
 	// core.storage registers first so step 0 reads its path canonically.
 	handles, err := config.RegisterSections(st.Registry(), rest...)
@@ -170,23 +161,9 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 			"default", in.StateDirDefault, "using", dir, "choose_with", stateVar)
 	}
 
-	ph, err := config.Register(st.Registry(), config.Define(pathsSection, pathsSettings{StateDir: dir}))
+	ph, mh, known, err := registerPathsAndModules(st, dir, in.Modules)
 	if err != nil {
-		return nil, fmt.Errorf("kernel: config: register core.paths: %w", err)
-	}
-	enabled := map[string]moduleSettings{}
-	known := make([]module.ID, 0, len(in.Modules))
-	for _, m := range in.Modules {
-		man := m.Manifest()
-		enabled[string(man.ID)] = moduleSettings{Enabled: man.DefaultEnabled}
-		known = append(known, man.ID)
-	}
-	if _, ok := mods.(config.Section[map[string]moduleSettings]); !ok {
-		return nil, fmt.Errorf("kernel: config: core.modules is %T, want a map of moduleSettings", mods)
-	}
-	mh, err := config.Register(st.Registry(), config.Define(modulesSection, enabled))
-	if err != nil {
-		return nil, fmt.Errorf("kernel: config: register core.modules: %w", err)
+		return nil, err
 	}
 	cb.handles = append(handles, ph, mh)
 
@@ -200,6 +177,102 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 		return nil, err
 	}
 	return cb, nil
+}
+
+// coreSectionsButPathsAndModules is coreSections without core.paths and
+// core.modules, which register with defaults the boot computes
+// (registerPathsAndModules).
+func coreSectionsButPathsAndModules() ([]any, error) {
+	var paths, mods any
+	rest := make([]any, 0, len(coreSections()))
+	for _, sec := range coreSections() {
+		switch pathOf(sec) {
+		case pathsSection:
+			paths = sec
+		case modulesSection:
+			mods = sec
+		default:
+			rest = append(rest, sec)
+		}
+	}
+	if paths == nil || mods == nil {
+		return nil, errors.New("kernel: config: coreSections lacks core.paths or core.modules")
+	}
+	if _, ok := mods.(config.Section[map[string]moduleSettings]); !ok {
+		return nil, fmt.Errorf("kernel: config: core.modules is %T, want a map of moduleSettings", mods)
+	}
+	return rest, nil
+}
+
+// registerPathsAndModules registers core.paths with stateDir as
+// core.paths.state_dir's default and core.modules with each manifest's
+// DefaultEnabled, and returns the compiled module IDs.
+func registerPathsAndModules(st *config.Store, stateDir string, mods []module.Module) (ph, mh any, known []module.ID, err error) {
+	ph, err = config.Register(st.Registry(), config.Define(pathsSection, pathsSettings{StateDir: stateDir}))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("kernel: config: register core.paths: %w", err)
+	}
+	enabled := map[string]moduleSettings{}
+	known = make([]module.ID, 0, len(mods))
+	for _, m := range mods {
+		man := m.Manifest()
+		enabled[string(man.ID)] = moduleSettings{Enabled: man.DefaultEnabled}
+		known = append(known, man.ID)
+	}
+	mh, err = config.Register(st.Registry(), config.Define(modulesSection, enabled))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("kernel: config: register core.modules: %w", err)
+	}
+	return ph, mh, known, nil
+}
+
+// ConfigCheck is what CheckConfig reads (name coined by F3-02): the app's
+// config.Options (its AppID, EnvPrefix, Environ, FilePath, Flags,
+// Passthrough, EnvBindings, Retired and Logger; BootRecordRoot, Metrics and
+// Secrets are ignored), the compiled default of core.paths.state_dir, the
+// app's modules, and the config.Define values of the modules' sections.
+// Until F3-07 hands module sections to the kernel nothing lists them, so a
+// caller passes none and a retired name of a module key is not judged.
+type ConfigCheck struct {
+	Config          config.Options
+	StateDirDefault string
+	Modules         []module.Module
+	ModuleSections  []any
+}
+
+// CheckConfig is the engine of the offline command config check (05-config
+// §1.3.6, 06 §6.4.5): it registers the core sections as the boot does and
+// runs the store's Boot and Load over the operator layers only. It opens no
+// store, reads no boot record and creates no directory. It returns every
+// retired name set; err is a *config.RetiredNameError when one would refuse
+// boot, or the operator layers' own error (a value that does not decode, an
+// unreadable file). A retired name of a module key whose section is not in
+// c.ModuleSections is judged as one of a module this boot does not enable:
+// ignored.
+func CheckConfig(ctx context.Context, c ConfigCheck) (uses []config.RetiredUse, err error) {
+	o := c.Config
+	o.BootRecordRoot = nil
+	o.Metrics, o.Secrets = nil, nil
+	st, err := config.NewStore(o)
+	if err != nil {
+		return nil, fmt.Errorf("kernel: config check: %w", err)
+	}
+	defer func() { err = errors.Join(err, st.Close(ctx)) }()
+	rest, err := coreSectionsButPathsAndModules()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := config.RegisterSections(st.Registry(), rest...); err != nil {
+		return nil, fmt.Errorf("kernel: config check: register the core sections: %w", err)
+	}
+	if _, _, _, err := registerPathsAndModules(st, c.StateDirDefault, c.Modules); err != nil {
+		return nil, err
+	}
+	if _, err := config.RegisterSections(st.Registry(), c.ModuleSections...); err != nil {
+		return nil, fmt.Errorf("kernel: config check: register the module sections: %w", err)
+	}
+	lerr := st.Load(ctx)
+	return st.RetiredSet(), lerr
 }
 
 // bootRoot is Options.BootRecordRoot. Boot hands back core.paths.state_dir
