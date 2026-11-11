@@ -1,7 +1,7 @@
 // file: core/storage/quarantine.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f747e96f-3ac0-4178-ad12-b685be746c02
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -56,12 +56,6 @@ var (
 // and its source row stays: a sensitive row is never kept raw and never
 // dropped.
 var ErrQuarantineNoSealer = errors.New("storage: a sensitive row was quarantined with no sealer wired")
-
-// LabelQuarantineSequence is the crash-matrix label of the quarantine
-// sequence's lease refill: the one durable write of a quarantine outside the
-// chunk's batch (Sequence.NextIn commits a new lease on its own first, so a
-// crash only skips record numbers, never reuses one).
-const LabelQuarantineSequence = "storage.quarantine.sequence"
 
 // quarantineSequence names the quarantine's Sequence in storage's keyspace.
 const quarantineSequence = "quarantine"
@@ -119,7 +113,15 @@ func quarantineCodec() codec.Codec[QuarantineRecord] { return codec.JSON[Quarant
 // carries only the secret's name. With a nil sealer a sensitive row fails
 // (ErrQuarantineNoSealer) before anything is staged. It is safe for
 // concurrent use by the runner's shard workers, each with its own batch.
-// Name coined by F3-04.
+//
+// Its one durable write outside b is the quarantine sequence's lease refill
+// (Sequence.NextIn commits a new lease on its own first, so a crash only
+// skips record numbers, never reuses one). That write is the chunk's: the
+// kernel runs this writer inside the chunk's crash-matrix region
+// (kernel.DataMigrationsConfig.Quarantine), because the shards commit their
+// chunks concurrently and a region is the boot's, not a goroutine's, so a
+// lease under a label of its own would be counted as whichever region
+// another shard had open. Name coined by F3-04.
 func QuarantineWriter(sealer QuarantineSealer) func(ctx context.Context, b *Batch, step string, key, raw []byte, reason string, sensitive bool) error {
 	return func(ctx context.Context, b *Batch, step string, key, raw []byte, reason string, sensitive bool) error {
 		if b == nil || b.db == nil {
@@ -130,12 +132,8 @@ func QuarantineWriter(sealer QuarantineSealer) func(ctx context.Context, b *Batc
 		}
 		db := b.db
 		ks := db.storageKS()
-		var n uint64
-		if err := db.labelled(LabelQuarantineSequence, func() error {
-			var err error
-			n, err = ks.Sequence(quarantineSequence).NextIn(ctx, b)
-			return err
-		}); err != nil {
+		n, err := ks.Sequence(quarantineSequence).NextIn(ctx, b)
+		if err != nil {
 			return fmt.Errorf("storage: quarantine sequence: %w", err)
 		}
 		rec := QuarantineRecord{Key: slices.Clone(key), Reason: reason, Step: step, Sensitive: sensitive, Build: db.buildID(), At: db.clock().UTC()}

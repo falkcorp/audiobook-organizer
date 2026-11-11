@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/chunks.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: ca419ac2-8938-45ee-a04a-fe0d1930eb92
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package crashmatrix
 
@@ -28,14 +28,15 @@ import (
 )
 
 // DataMigrationLabels are the crash-matrix labels of the data-migration
-// runner's boot writers (06 §6.5.1 "Boot writers"): the plan with the
-// running state, each chunk's batch with its shard cursor, the verifying,
-// done and failed states with Verify's report, and the quarantine
-// sequence's lease, which a chunk's first quarantine commits on its own
-// before the chunk (storage.QuarantineWriter, F3-04; a kill after it only
-// skips record numbers). Name coined by F2-06.
+// runner's three boot writers (06 §6.5.1 "Boot writers"): the plan with the
+// running state, each chunk's batch with its shard cursor, and the
+// verifying, done and failed states with Verify's report. The chunk's label
+// also carries the quarantine sequence's lease, which a chunk's first
+// quarantine commits on its own before the chunk (storage.QuarantineWriter,
+// run by the kernel inside the chunk's region; a kill after it only skips
+// record numbers). Name coined by F2-06.
 func DataMigrationLabels() []string {
-	return []string{storagemigrate.LabelPlan, storagemigrate.LabelChunk, storagemigrate.LabelState, storage.LabelQuarantineSequence}
+	return []string{storagemigrate.LabelPlan, storagemigrate.LabelChunk, storagemigrate.LabelState}
 }
 
 // ChunkScenario is one cell of the chunk-boundary crash matrix (05-storage
