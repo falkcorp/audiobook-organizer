@@ -85,6 +85,13 @@ func cookieRequest(https bool, cookies ...*http.Cookie) *http.Request {
 
 func cookie(name, value string) *http.Cookie { return &http.Cookie{Name: name, Value: value} }
 
+// forwardedProto sets the X-Forwarded-Proto header a direct (untrusted)
+// client sends on r.
+func forwardedProto(r *http.Request, proto string) *http.Request {
+	r.Header.Set("X-Forwarded-Proto", proto)
+	return r
+}
+
 func (f *fx) withSettings(t *testing.T, st auth.Settings) *auth.Service {
 	t.Helper()
 	svc, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}}, auth.Deps{
@@ -200,6 +207,9 @@ func TestStage12_CookieTossing(t *testing.T) {
 		{"http: the plain session binds", f.svc, cookieRequest(false, cookie(plainCookie, dickSess.Token)), sess},
 		{"http: a __Host- cookie is not the http name", f.svc, cookieRequest(false, cookie(hostCookie, jokerSess.Token)), want{}},
 		{"http: a key is never taken from the plain cookie", f.svc, cookieRequest(false, cookie(plainCookie, dickKey)), want{failed: true}},
+		{"https: an untrusted peer's X-Forwarded-Proto http does not downgrade the name", f.svc, forwardedProto(cookieRequest(true, cookie(plainCookie, jokerSess.Token)), "http"), want{}},
+		{"https: an untrusted peer's X-Forwarded-Proto http keeps the __Host- session", f.svc, forwardedProto(cookieRequest(true, cookie(plainCookie, jokerSess.Token), cookie(hostCookie, dickSess.Token)), "http"), sess},
+		{"http: an untrusted peer's X-Forwarded-Proto https does not upgrade the name", f.svc, forwardedProto(cookieRequest(false, cookie(hostCookie, jokerSess.Token)), "https"), want{}},
 		{"no prefix, https: the plain session binds", noPrefix, cookieRequest(true, cookie(plainCookie, dickSess.Token)), sess},
 		{"no prefix, https: a __Host- cookie is not read", noPrefix, cookieRequest(true, cookie(hostCookie, jokerSess.Token)), want{}},
 		{"no prefix, https: a key is never taken from the plain cookie", noPrefix, cookieRequest(true, cookie(plainCookie, dickKey)), want{failed: true}},
