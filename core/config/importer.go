@@ -1,7 +1,7 @@
 // file: core/config/importer.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2c9586e1-b071-417e-a1e0-e58dc0945411
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config
 
@@ -48,8 +48,9 @@ func (s *Store) importKey(p Path) (ckey, error) {
 
 // Stage validates v against p's schema and type and stages p's c/config/
 // row into b, binding c/config/ to b. A value equal to p's default stages
-// nothing (C4). An invalid value is returned as the *FieldError itself, which
-// the step quarantines. Nothing is written until the caller commits b.
+// nothing (C4), except on a FailClosed key. An invalid value is returned as
+// the *FieldError itself, which the step quarantines. Nothing is written
+// until the caller commits b.
 func (i storeImporter) Stage(b *storage.Batch, p Path, v json.RawMessage, by string) error {
 	s := i.s
 	s.mu.Lock()
@@ -71,7 +72,12 @@ func (i storeImporter) Stage(b *storage.Batch, p Path, v json.RawMessage, by str
 		}
 		return &FieldError{Path: p, Err: err}
 	}
-	if slices.Equal(c, ck.def()) {
+	// A value equal to the default is not staged (C4), except on a FailClosed
+	// key: there the stored default is what keeps a weaker operator value,
+	// set now or later, from taking effect (05-config §1.3.5). R0's
+	// enable_auth=true becomes core.auth.mode "required", the default; left
+	// unstaged, a stale <APP>_CORE_AUTH_MODE=disabled would open the server.
+	if slices.Equal(c, ck.def()) && ck.k.failOrder == nil {
 		return nil
 	}
 	if s.importTarget == nil {

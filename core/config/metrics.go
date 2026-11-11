@@ -1,5 +1,5 @@
 // file: core/config/metrics.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9fad5524-5619-4741-b804-98f3cc369c0f
 // last-edited: 2026-11-10
 
@@ -69,6 +69,8 @@ type storeMetrics struct {
 	sections    []Path
 	pending     atomic.Int64
 	quarantined atomic.Int64
+	retired     atomic.Int64 // warn-class retired names set (retired.go)
+	failClosed  atomic.Int64 // FailClosed keys whose stored value wins (precedence.go)
 	instrument  atomic.Bool
 }
 
@@ -124,8 +126,7 @@ func (m *storeMetrics) snapshot() (applies map[string]uint64, post, panics map[P
 //	<ns>_config_retired_names_set
 //	<ns>_config_fail_closed_overrides
 //
-// Every outcome and every registered section is exported from zero. The
-// retired-name and fail-closed gauges read 0 until F3-02 fills those rules.
+// Every outcome and every registered section is exported from zero.
 // It is called once: NewStore does it when Options.Metrics is set, the kernel
 // after P5 otherwise (name coined by F3-01, as core/audit's).
 func (s *Store) Instrument(sc *metrics.Scope) error {
@@ -189,8 +190,8 @@ func (s *Store) Instrument(sc *metrics.Scope) error {
 		o.ObserveInt64(gen, int64(s.gen.Load()))
 		o.ObserveInt64(pending, s.met.pending.Load())
 		o.ObserveInt64(quar, s.met.quarantined.Load())
-		o.ObserveInt64(retired, 0)
-		o.ObserveInt64(failClosed, 0)
+		o.ObserveInt64(retired, s.met.retired.Load())
+		o.ObserveInt64(failClosed, s.met.failClosed.Load())
 		return nil
 	}, applies, gen, pending, quar, post, panics, retired, failClosed)
 	if err != nil {

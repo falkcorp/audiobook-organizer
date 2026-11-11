@@ -1,5 +1,5 @@
 // file: core/config/layers.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: 8f38706d-6653-47f3-8d73-4f397c9b3604
 // last-edited: 2026-11-10
 
@@ -10,28 +10,30 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"reflect"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/falkcorp/mediacore/secrets"
 )
 
 // The operator layers (05-config §1.3.5): file, env and flags, lowest to
-// highest. This row parses the flags (Options.Flags) and the boot record.
-// The operator file and the environment are sources behind the seam below,
-// which F3-02 fills with the canonical file form, the canonical env names,
-// <NAME>_FILE, empty-is-unset, the ecosystem bindings and strict decoding of
-// their values. Until then a store has no env layer, and a store whose
-// Options.FilePath is set refuses to boot rather than ignore the file.
+// highest. This file parses the flags (Options.Flags) and places every
+// layer's values. The operator file (precedence.go: the canonical nested YAML
+// form) and the environment (env.go: canonical names, <NAME>_FILE,
+// empty-is-unset, the ecosystem bindings) are sources behind the seam below;
+// every value of every layer is decoded strictly for its key.
 
 // sourced is one value an operator layer supplies.
 type sourced struct {
 	path Path
-	raw  json.RawMessage // JSON
+	raw  json.RawMessage // JSON; when text is set, the operator's text (decoded by the store for its key)
 	by   string          // "file <name>", "env ABO_CORE_LOG_LEVEL"
+	// text marks an env value: raw is the text the operator wrote, which the
+	// store decodes strictly for the key's type (05-config §1.3.6).
+	text bool
+	// binding marks a value read through an ecosystem binding rather than
+	// the canonical name (§1.3.5's in-layer conflict rule).
+	binding bool
 }
 
 // sourceQuery tells a source which paths the store can place.
@@ -48,6 +50,20 @@ type sourceQuery struct {
 	// yet, raw (an env value as a JSON string): the kernel's step 0 reads
 	// core.paths.state_dir before core.paths registers (05-config §1.7).
 	want map[Path]bool
+	// strict is set by Load, when every section is registered: a source then
+	// warns once about each value it cannot place. Boot reads before the
+	// module sections register, so it warns about nothing.
+	strict bool
+	// mapRels are each map section's key names relative to an entry
+	// ("enabled" under core.modules.<id>), so a source can place
+	// "<root>.<id>.<rel>" from an env name.
+	mapRels map[Path][]string
+	// entryRels are each entry list parent's secret names
+	// ("client_secret" under core.auth.oidc.<id>).
+	entryRels map[Path][]string
+	// bindings are the ecosystem env names: the sections' EnvBinding options
+	// and Options.EnvBindings, name -> path.
+	bindings map[string]Path
 }
 
 // operatorSource is one operator layer parsed outside this file.
@@ -69,18 +85,6 @@ type fileSource interface {
 	// is true.
 	redacted(q sourceQuery, drop func(Path) bool) ([]byte, error)
 }
-
-// unbuiltFile is the file layer until F3-02: a configured file is refused,
-// never silently ignored.
-type unbuiltFile struct{ path string }
-
-func (u unbuiltFile) err() error {
-	return fmt.Errorf("config: operator file %q: this build reads no operator file yet (the file grammar is F3-02's); remove Options.FilePath", u.path)
-}
-
-func (u unbuiltFile) read(sourceQuery) ([]sourced, error)                   { return nil, u.err() }
-func (u unbuiltFile) holds(sourceQuery, func(Path) bool) (bool, error)      { return false, u.err() }
-func (u unbuiltFile) redacted(sourceQuery, func(Path) bool) ([]byte, error) { return nil, u.err() }
 
 // opValue is an owned key's operator value: the winner of flag > env > file.
 type opValue struct {
@@ -167,16 +171,26 @@ func (s *Store) query() sourceQuery {
 	q := sourceQuery{passthrough: s.passthrough, entrySecret: func(p Path) bool {
 		c, ok := s.keyFor(p)
 		return ok && c.k.list != nil
-	}}
+	}, mapRels: map[Path][]string{}, entryRels: map[Path][]string{}, bindings: map[string]Path{}}
 	for _, sec := range s.sections {
+		for _, lk := range sec.entryLists {
+			for _, d := range lk.entrySecrets {
+				q.entryRels[lk.entryParent()] = append(q.entryRels[lk.entryParent()], d.rel[0])
+			}
+		}
 		if sec.isMap {
 			q.maps = append(q.maps, sec.path)
+			for _, k := range sec.keys {
+				q.mapRels[sec.path] = append(q.mapRels[sec.path], k.relName())
+			}
 			continue
 		}
 		for _, k := range sec.keys {
 			q.paths = append(q.paths, k.path(""))
 		}
 	}
+	maps.Copy(q.bindings, s.envNames)
+	maps.Copy(q.bindings, s.appBindings)
 	return q
 }
 
@@ -193,49 +207,13 @@ func flagJSON(k *keyInfo, p Path, text string) (json.RawMessage, error) {
 	return out, err
 }
 
-// flagJSONOf is flagJSON without the redaction.
+// flagJSONOf is flagJSON without the redaction: a flag's text decodes as an
+// env value does (textJSONOf), except that a secret is refused.
 func flagJSONOf(k *keyInfo, p Path, text string) (json.RawMessage, error) {
-	if k == nil {
-		return json.Marshal(text) // a passthrough path: config does not own its type
-	}
-	if k.secret {
+	if k != nil && k.secret {
 		return nil, &FieldError{Path: p, Err: errors.New("a secret is never set by a flag (it would show in the process list); use the environment or the file")}
 	}
-	t := k.typ
-	switch {
-	case t == reflect.TypeFor[Duration]():
-		if _, err := time.ParseDuration(text); err != nil {
-			return nil, &FieldError{Path: p, Err: fmt.Errorf("not a Go duration: %w", err)}
-		}
-		return json.Marshal(text)
-	case t.Kind() == reflect.String:
-		return json.Marshal(text)
-	case t.Kind() == reflect.Bool:
-		if text != "true" && text != "false" {
-			return nil, &FieldError{Path: p, Err: fmt.Errorf("want true or false, got %q", text)}
-		}
-		return json.RawMessage(text), nil
-	case t.Kind() >= reflect.Int && t.Kind() <= reflect.Int64:
-		if _, err := strconv.ParseInt(text, 10, 64); err != nil {
-			return nil, &FieldError{Path: p, Err: fmt.Errorf("not an integer: %w", err)}
-		}
-		return json.RawMessage(text), nil
-	case t.Kind() >= reflect.Uint && t.Kind() <= reflect.Uint64:
-		if _, err := strconv.ParseUint(text, 10, 64); err != nil {
-			return nil, &FieldError{Path: p, Err: fmt.Errorf("not an unsigned integer: %w", err)}
-		}
-		return json.RawMessage(text), nil
-	case t.Kind() == reflect.Float32 || t.Kind() == reflect.Float64:
-		if _, err := strconv.ParseFloat(text, 64); err != nil {
-			return nil, &FieldError{Path: p, Err: fmt.Errorf("not a number: %w", err)}
-		}
-		return json.RawMessage(text), nil
-	default:
-		if !json.Valid([]byte(text)) {
-			return nil, &FieldError{Path: p, Err: errors.New("an object or array key takes JSON")}
-		}
-		return json.RawMessage(text), nil
-	}
+	return textJSONOf(k, p, text)
 }
 
 // flagBy is a flag's lock reason.
@@ -245,15 +223,18 @@ func flagBy(p Path) string { return "flag " + string(p) }
 type layerRead struct {
 	op          map[Path]opValue
 	passthrough map[Path]OperatorValue
-	fileSet     map[Path]bool // every path the file supplied, before env and flags override it
+	secrets     map[Path]OperatorValue // secret keys' operator values: the secret, as a JSON string
+	fileSet     map[Path]bool          // every path the file supplied, before env and flags override it
+	conflicts   map[Path]string        // unprotected keys whose canonical env name beat a disagreeing binding
 }
 
 // readOperator reads file, env and flags for the registered sections.
 // strict (Load) refuses a flag whose path nothing registered owns; Boot skips
 // it (a module key, registered at P3).
 func (s *Store) readOperator(strict bool) (layerRead, error) {
-	lr := layerRead{op: map[Path]opValue{}, passthrough: map[Path]OperatorValue{}, fileSet: map[Path]bool{}}
+	lr := layerRead{op: map[Path]opValue{}, passthrough: map[Path]OperatorValue{}, secrets: map[Path]OperatorValue{}, fileSet: map[Path]bool{}}
 	q := s.query()
+	q.strict = strict
 	layers := []struct {
 		src Source
 		os  operatorSource
@@ -265,6 +246,11 @@ func (s *Store) readOperator(strict bool) (layerRead, error) {
 		vals, err := l.os.read(q)
 		if err != nil {
 			return lr, err
+		}
+		if l.src == SourceEnv {
+			if vals, lr.conflicts, err = s.mergeEnv(vals); err != nil {
+				return lr, err
+			}
 		}
 		for _, v := range vals {
 			if err := s.placeOperator(lr, l.src, v); err != nil {
@@ -302,15 +288,30 @@ func (s *Store) placeOperator(lr layerRead, src Source, v sourced) error {
 		lr.fileSet[v.path] = true
 	}
 	if ck, ok := s.keyFor(v.path); ok {
-		c, err := ck.k.canonical(v.path, v.raw)
+		raw, err := operatorJSON(ck.k, v)
 		if err != nil {
 			return fmt.Errorf("config: %s: %w", v.by, invalid(err))
+		}
+		c, err := ck.k.canonical(v.path, raw)
+		if err != nil {
+			return fmt.Errorf("config: %s: %w", v.by, invalid(err))
+		}
+		if ck.k.secret {
+			var text string
+			if json.Unmarshal(raw, &text) != nil {
+				return fmt.Errorf("config: %s: %w", v.by, invalid(&FieldError{Path: v.path, Err: errors.New("a secret takes a string")}))
+			}
+			lr.secrets[v.path] = OperatorValue{Value: slices.Clone(raw), Src: src, By: v.by}
 		}
 		lr.op[v.path] = opValue{raw: c, src: src, by: v.by}
 		return nil
 	}
 	if s.passthrough(v.path) {
-		lr.passthrough[v.path] = OperatorValue{Value: append(json.RawMessage(nil), v.raw...), Src: src, By: v.by}
+		raw, err := operatorJSON(nil, v)
+		if err != nil {
+			return fmt.Errorf("config: %s: %w", v.by, invalid(err))
+		}
+		lr.passthrough[v.path] = OperatorValue{Value: slices.Clone(raw), Src: src, By: v.by}
 		return nil
 	}
 	if src == SourceFlag {
@@ -338,9 +339,14 @@ type keyVal struct {
 
 // resolve merges one key: operator layers (flag > env > file) lock it; then
 // the boot record (boot keys) or the DB layer (other keys) over the default.
-// ProtectOperator keys read neither stored layer (05-config §1.3.5).
+// ProtectOperator keys read neither stored layer (05-config §1.3.5). The one
+// exception to the lock is a FailClosed key, whose stored value is
+// effective when it is more restrictive than the operator value.
 func (s *Store) resolve(c ckey, v view) keyVal {
 	if o, ok := s.op[c.p]; ok {
+		if kv, wins := failClosedWins(c, v, o); wins {
+			return kv
+		}
 		return keyVal(o)
 	}
 	k := c.k

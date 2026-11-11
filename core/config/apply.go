@@ -1,7 +1,7 @@
 // file: core/config/apply.go
-// version: 1.0.5
+// version: 1.1.1
 // guid: dd5734d4-3c90-4ba8-9e83-8eb5778ff55a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config
 
@@ -203,6 +203,7 @@ func (s *Store) applyLocked(ctx context.Context, p Patch, a Actor) (Result, []co
 	// After install, so a removed entry's secret is dropped and an added
 	// entry's is read.
 	s.noteSecretWrites(ctx, writes, a.Subject, now)
+	s.syncFailClosed()
 	s.reindex()
 	s.met.setQuarantined(len(s.quar))
 	s.met.apply(outcomeApplied)
@@ -359,6 +360,12 @@ func (s *Store) plan(p Patch, a Actor) (changes []change, applied []Path, err er
 	}
 	for _, pth := range applied {
 		if op, ok := s.op[pth]; ok {
+			// FailClosed (05-config §1.3.5): a value at least as
+			// restrictive as the operator's, or an unset, is accepted; a
+			// weaker one could never take effect.
+			if failClosedApply(keys[pth].k, pth, p.Set[pth], unsetSet[pth], op) {
+				continue
+			}
 			refused = append(refused, &LockedError{Path: pth, By: op.by})
 			continue
 		}
@@ -490,7 +497,15 @@ func (s *Store) decodeChange(ck ckey, raw json.RawMessage, isUnset bool, by stri
 	if err != nil {
 		return change{}, err
 	}
-	if bytes.Equal(c, ck.def()) {
+	// C4 does not apply to a FailClosed key: its stored row is the value the
+	// fail-closed rule weighs against the operator value (05-config §1.3.5),
+	// so it is kept even when it equals the default. For core.auth.mode the
+	// default "required" is the most restrictive value, and a stored
+	// "required" is what keeps a weaker operator value, set now or later,
+	// from taking effect. core.http.basic_gate.enabled defaults to false, its
+	// least restrictive value; a stored false never beats an operator value,
+	// and is kept so the row reads as the admin wrote it.
+	if bytes.Equal(c, ck.def()) && ck.k.failOrder == nil {
 		return change{ck: ck, unset: true}, nil
 	}
 	return change{ck: ck, value: c}, nil
