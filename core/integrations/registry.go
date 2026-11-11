@@ -102,7 +102,8 @@ type Options struct {
 	// (ClassRefusedLocal): no outbound call at all.
 	Outbound func(OutboundSpec) (HTTP, Gate)
 	// ReleaseAuthHold releases ref's ClassAuth hold (providerhttp, M2.4);
-	// called after a Put that changed a secret field commits. nil = none.
+	// called after a Put that wrote a new secret value commits (F7-01: a
+	// cleared or dropped secret is not new credentials). nil = none.
 	ReleaseAuthHold func(ctx context.Context, ref Ref) error
 	// HealthChanged is called when a probe changes an instance's status:
 	// the kernel publishes core.integration.health.changed.v1 from it

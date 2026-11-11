@@ -356,7 +356,11 @@ func (r *Registry) health(ctx context.Context, s *slot) (h Health, probed bool, 
 			h.Status = HealthDegraded
 		}
 	}
-	if len(s.withheld) > 0 && h.Status <= HealthDegraded {
+	// A withheld operator secret is reported as itself (M1.5: degraded,
+	// operator_secret_withheld), also when the adapter answered "auth
+	// failed": that refusal was ours, not the remote's. Down and
+	// misconfigured stay as they are.
+	if len(s.withheld) > 0 && h.Status != HealthDown && h.Status != HealthMisconfigured {
 		h.Status = HealthDegraded
 		h.Message = ReasonOperatorSecretWithheld + ": " + strings.Join(s.withheld, ",")
 	}

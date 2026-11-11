@@ -32,10 +32,12 @@ import (
 //
 // integrationstest.InstanceStoreSuite is its contract. The version rules
 // every implementation keeps: Put of Version 0 creates and fails with
-// ErrVersionConflict when a row exists (unless that row cannot be decoded,
-// which Put then repairs); Put of Version n updates the row at version n and
-// fails with ErrVersionConflict otherwise; the new version is n+1. Delete of
-// an absent row is ErrNotConfigured. A failed Put or Delete stages nothing.
+// ErrVersionConflict when a row exists; Put of Version n updates the row at
+// version n and fails with ErrVersionConflict otherwise; the new version is
+// n+1. A malformed row (Load returns it with Malformed set) is repaired by a
+// Put naming the Version Load reported for it: its stored version when that
+// can still be read, else 0. Delete of an absent row is ErrNotConfigured. A
+// failed Put or Delete stages nothing.
 type InstanceStore interface {
 	Load(ctx context.Context) ([]StoredInstance, error)
 	// Put writes inst and returns the new Version.

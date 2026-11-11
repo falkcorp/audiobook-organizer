@@ -193,9 +193,12 @@ func readableSettings(stored *StoredInstance) map[string]any {
 // putPlan is one validated Put, ready to stage.
 type putPlan struct {
 	row           StoredInstance
-	writes        []secrets.Write
-	events        []audit.Event
-	secretChanged bool
+	writes []secrets.Write
+	events []audit.Event
+	// newCredentials is set when the Put writes a secret value: the human
+	// action a ClassAuth hold waits for (M2.4). Clearing or dropping a
+	// secret is not.
+	newCredentials bool
 }
 
 // planPut validates inst against the snapshot and computes the row, the
@@ -251,7 +254,7 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 				Details: map[string]any{"instance": ref.String(), "field": f},
 			})
 			sh.settings[f] = secrets.RefTo(name)
-			p.secretChanged = true
+			p.newCredentials = true
 			continue
 		}
 		sr, isRef := storedSettings[f].(secrets.Ref)
@@ -273,7 +276,6 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 			}
 		}
 		if had {
-			p.secretChanged = true
 			dropped = dropped || destChanged
 		}
 	}
@@ -373,7 +375,7 @@ func (r *Registry) commitPut(ctx context.Context, p putPlan) (err error) {
 	row.Config.Version = v
 	row.Config.Stored = true
 	r.applyRow(ref, &row)
-	if p.secretChanged && r.o.ReleaseAuthHold != nil {
+	if p.newCredentials && r.o.ReleaseAuthHold != nil {
 		if err := r.o.ReleaseAuthHold(ctx, ref); err != nil {
 			r.log.Warn("integrations: new credentials were stored but the auth hold was not released", "instance", ref.String(), "error", err)
 		}
