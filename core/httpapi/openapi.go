@@ -1,7 +1,7 @@
 // file: core/httpapi/openapi.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 586f0310-28e5-4cc9-9e26-2a4a520b7395
-// last-edited: 2026-11-07
+// last-edited: 2026-11-10
 
 package httpapi
 
@@ -42,7 +42,7 @@ func (r *Router) OpenAPI(owner string) (*openapi.Document, error) {
 	}
 	var ops []openapi.Operation
 	for _, e := range r.routeSnapshot() {
-		if e.info.Owner != owner || e.info.Kind != RouteKindNative || len(e.errs) > 0 {
+		if e.info.Owner != owner || (e.info.Kind != RouteKindNative && e.info.Kind != RouteKindRaw) || len(e.errs) > 0 {
 			continue
 		}
 		op := openapi.Operation{
@@ -57,7 +57,11 @@ func (r *Router) OpenAPI(owner string) (*openapi.Document, error) {
 			Guards:        guardNames(e.info.Guards),
 			SuccessStatus: e.status,
 		}
-		for _, p := range e.binding.parameters() {
+		params := e.rawParams
+		if e.binding != nil {
+			params = e.binding.parameters()
+		}
+		for _, p := range params {
 			op.Parameters = append(op.Parameters, openapi.Parameter{Name: p.name, In: p.in, Schema: p.schema})
 		}
 		if e.bodyName != "" {

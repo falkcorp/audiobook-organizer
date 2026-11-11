@@ -1,5 +1,5 @@
 // file: core/httpapi/router.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
 // last-edited: 2026-11-10
 
@@ -159,7 +159,7 @@ type RouteKind uint8
 
 const (
 	RouteKindNative RouteKind = iota + 1 // Handle
-	RouteKindRaw                         // HandleRaw (with its first consumer)
+	RouteKindRaw                         // HandleRaw (raw.go; its first consumer is core/internal/authhttp, F4-05)
 	RouteKindLegacy                      // a legacy manifest route (R1-14)
 	RouteKindInfra                       // Router.Infra
 	RouteKindSPA                         // the "/" owner: Router.SPA or a ServesSPA legacy mount
@@ -657,7 +657,7 @@ func (r *Router) Build() (http.Handler, error) {
 			continue
 		}
 		seen[key] = e.info.Owner
-		if e.info.Kind == RouteKindNative {
+		if e.info.Kind == RouteKindNative || e.info.Kind == RouteKindRaw {
 			n := e.info.Owner + "_" + e.info.Name
 			if names[n] {
 				errs = append(errs, fmt.Errorf("%w: %s: route name %q used twice", ErrDuplicateRoute, e.info.Owner, e.info.Name))
@@ -873,7 +873,7 @@ func (r *Router) checkPerm(e *routeEntry) []error {
 	var errs []error
 	switch req.Kind() {
 	case rbac.KindPublic:
-		if ri.Kind == RouteKindNative && ri.Owner != "core" && !r.public[ri.Owner][ri.Name] {
+		if (ri.Kind == RouteKindNative || ri.Kind == RouteKindRaw) && ri.Owner != "core" && !r.public[ri.Owner][ri.Name] {
 			errs = append(errs, fmt.Errorf("%w: %s (%s)", ErrPublicNotAllowed, what, ri.Name))
 		}
 		return errs
