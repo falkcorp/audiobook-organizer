@@ -37,20 +37,10 @@ func (s *Service) issueSession(ctx context.Context, u *User, origin SessionOrigi
 	if u.Status != StatusActive {
 		return nil, fmt.Errorf("%w: %s", ErrInactiveUser, u.ID)
 	}
-	st := s.settings()
-	ttl := st.SessionTTL
-	if remember {
-		ttl = st.RememberTTL
-	}
 	now := s.now().UTC()
 	var out *IssuedSession
 	err := s.commitRetrying(ctx, func(b *storage.Batch) error {
-		rec := &SessionRecord{
-			UserID: u.ID, Origin: origin, CredentialEpoch: u.CredentialEpoch,
-			CreatedAt: now, ExpiresAt: now.Add(ttl), LastSeen: now,
-			ClientAddr: client.Addr, UserAgent: client.UserAgent,
-		}
-		tok, err := s.d.Store.IssueSession(b, rec)
+		rec, issued, err := s.stageSession(b, u, origin, remember, client, now)
 		if err != nil {
 			return err
 		}
@@ -59,13 +49,36 @@ func (s *Service) issueSession(ctx context.Context, u *User, origin SessionOrigi
 				return err
 			}
 		}
-		out = &IssuedSession{Token: string(tok), PublicID: rec.PublicID, ExpiresAt: rec.ExpiresAt}
+		out = issued
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// stageSession stages into b a session for u opened at now, stamped with
+// u.CredentialEpoch: core.auth.session.remember_ttl when remember, else
+// core.auth.session.ttl. A caller that changes u in the same batch (a reset
+// link's epoch bump, an invite's new account) passes the record as staged.
+func (s *Service) stageSession(b *storage.Batch, u *User, origin SessionOrigin, remember bool, client ClientInfo, now time.Time,
+) (*SessionRecord, *IssuedSession, error) {
+	st := s.settings()
+	ttl := st.SessionTTL
+	if remember {
+		ttl = st.RememberTTL
+	}
+	rec := &SessionRecord{
+		UserID: u.ID, Origin: origin, CredentialEpoch: u.CredentialEpoch,
+		CreatedAt: now, ExpiresAt: now.Add(ttl), LastSeen: now,
+		ClientAddr: client.Addr, UserAgent: client.UserAgent,
+	}
+	tok, err := s.d.Store.IssueSession(b, rec)
+	if err != nil {
+		return nil, nil, err
+	}
+	return rec, &IssuedSession{Token: string(tok), PublicID: rec.PublicID, ExpiresAt: rec.ExpiresAt}, nil
 }
 
 // Sessions lists user's open sessions as views: never a token, only the

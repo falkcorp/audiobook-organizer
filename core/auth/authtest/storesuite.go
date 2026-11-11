@@ -1,5 +1,5 @@
 // file: core/auth/authtest/storesuite.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8cf164e8-2a54-46de-8eed-b0912673891b
 // last-edited: 2026-11-11
 
@@ -770,8 +770,12 @@ func issueOneTime(t *testing.T, fx Fixture, tok *auth.OneTimeToken) auth.Token {
 	return raw
 }
 
+// oneTime sets every field, so a round trip proves the store keeps each one.
 func oneTime(kind auth.OneTimeKind) *auth.OneTimeToken {
-	return &auth.OneTimeToken{Kind: kind, Email: "robin@gotham.example", Role: rbac.RoleViewer, CreatedAt: stamp(), ExpiresAt: stamp().Add(time.Hour)}
+	return &auth.OneTimeToken{
+		Kind: kind, UserID: "u-robin", CreatedBy: "u-batman", Email: "robin@gotham.example", Role: rbac.RoleViewer,
+		CredentialEpoch: 3, Reset: true, ClearsRestriction: true, CreatedAt: stamp(), ExpiresAt: stamp().Add(time.Hour),
+	}
 }
 
 func oneTimeSingleUse(t *testing.T, fx Fixture) {
