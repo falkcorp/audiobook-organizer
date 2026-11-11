@@ -256,6 +256,28 @@ func TestChangeOwnPassword(t *testing.T) {
 	}
 }
 
+// A principal whose credential ID names another user's session (a forged or
+// mixed-up request context) changes only its own password: the other user's
+// session keeps its epoch and still resolves.
+func TestChangeOwnPassword_RestampsOnlyTheCallersOwnSession(t *testing.T) {
+	f, _ := loginFx(t)
+	ctx := context.Background()
+	dick := f.withPassword(f.user("dick-grayson", "gotham.detective"), "flying-graysons")
+	babs := f.user("barbara-gordon", "gotham.detective")
+	hers := f.signedIn(babs)
+	me := f.session(dick)
+	me.CredentialID = hers.CredentialID
+	if err := f.svc.ChangeOwnPassword(ctx, me, "flying-graysons", "nightwing-1984"); err != nil {
+		t.Fatalf("ChangeOwnPassword: %v", err)
+	}
+	if got := f.sessionEpoch(hers.CredentialID); got != babs.CredentialEpoch {
+		t.Fatalf("Barbara's session moved to epoch %d by Dick's password change, want %d", got, babs.CredentialEpoch)
+	}
+	if got := f.reload(babs.ID).CredentialEpoch; got != babs.CredentialEpoch {
+		t.Fatalf("Barbara's epoch moved to %d", got)
+	}
+}
+
 func TestChangeOwnPassword_RefusesAChangedAccountAndAnAccountWithoutAPassword(t *testing.T) {
 	f, _ := loginFx(t)
 	ctx := context.Background()
