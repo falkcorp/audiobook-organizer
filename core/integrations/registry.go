@@ -1,5 +1,5 @@
 // file: core/integrations/registry.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5291a2b4-f665-40ef-8c7f-d588aa319bec
 // last-edited: 2026-11-11
 
@@ -156,7 +156,9 @@ type Registry struct {
 
 	// secretsMu orders stored-secret reads against writes: a commit and
 	// the publish of its row run write-held, secretFor's row check and
-	// secret read run read-held (commitAndPublish).
+	// secret read run read-held (commitAndPublish). The order holds only
+	// while no other writer rewrites a row after Load: only the Registry
+	// does (instancestore.Import is create-only).
 	secretsMu sync.RWMutex
 
 	met *instruments

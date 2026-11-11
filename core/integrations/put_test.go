@@ -1,5 +1,5 @@
 // file: core/integrations/put_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9ee5562e-9650-4bd0-912e-7df382b78912
 // last-edited: 2026-11-11
 
@@ -207,13 +207,13 @@ func TestRegistry_LocalNeedsAdmin(t *testing.T) {
 		t.Errorf("an admin testing a Local config: %+v, %v", res, err)
 	}
 	mustPut(t, admin(), r, local, cred("alfred-1"))
-	if row, _ := e.stored(t, signalRef); !row.Config.Local || row.LocalOrigin != "http://192.0.2.20:80" {
+	if row, _ := e.stored(t, signalRef); !row.Config.Local || row.LocalOrigin != "url=http://192.0.2.20:80" {
 		t.Errorf("the admin's Local = %v bound to %q", row.Config.Local, row.LocalOrigin)
 	}
 	keep := current(t, r, signalRef)
 	keep.Name = "renamed by a manager"
 	mustPut(t, manager(), r, keep, nil)
-	if row, _ := e.stored(t, signalRef); !row.Config.Local || row.LocalOrigin != "http://192.0.2.20:80" {
+	if row, _ := e.stored(t, signalRef); !row.Config.Local || row.LocalOrigin != "url=http://192.0.2.20:80" {
 		t.Errorf("a manager's rename lost Local: %+v %q", row.Config.Local, row.LocalOrigin)
 	}
 	moved := withURL(current(t, r, signalRef), "http://192.0.2.70/")

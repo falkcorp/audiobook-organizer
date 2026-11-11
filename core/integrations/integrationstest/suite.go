@@ -1,5 +1,5 @@
 // file: core/integrations/integrationstest/suite.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f898dba-3c41-4e7a-b2d9-8e6f0a1c4b57
 // last-edited: 2026-11-11
 
@@ -93,8 +93,8 @@ func Batcave() integrations.StoredInstance {
 			},
 			Updated: time.Date(2039, 4, 1, 22, 0, 0, 0, time.UTC),
 		},
-		LocalOrigin:          "http://192.0.2.7:8080",
-		SecretsOrigin:        "http://192.0.2.7:8080",
+		LocalOrigin:          "url=http://192.0.2.7:8080",
+		SecretsOrigin:        "url=http://192.0.2.7:8080",
 		OperatorSecretOrigin: map[string]string{"url": "http://192.0.2.7:8080"},
 	}
 }

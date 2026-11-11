@@ -1,5 +1,5 @@
 // file: core/integrations/importer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: cabcf86d-8cd0-4e4c-9a5e-2d3f9d51add8
 // last-edited: 2026-11-11
 
@@ -28,8 +28,8 @@ func gcpdImport() integrations.StoredInstance {
 				"password": secrets.RefTo("integrations.notify.gcpd-roof.password"),
 			},
 		},
-		LocalOrigin:          "http://192.0.2.20:80",
-		SecretsOrigin:        "http://192.0.2.20:80",
+		LocalOrigin:          "url=http://192.0.2.20:80",
+		SecretsOrigin:        "url=http://192.0.2.20:80",
 		OperatorSecretOrigin: map[string]string{"url": "http://192.0.2.20:80"},
 	}
 }
@@ -70,7 +70,7 @@ func TestImporter_ValidatesAndStagesInCallerBatch(t *testing.T) {
 	if c := row.Config; c.Origin != integrations.OriginMigration || c.Version != 1 || !c.Local || c.Name != "GCPD roof" {
 		t.Errorf("imported row = %+v", c)
 	}
-	if row.LocalOrigin != "http://192.0.2.20:80" || row.OperatorSecretOrigin["url"] != "http://192.0.2.20:80" {
+	if row.LocalOrigin != "url=http://192.0.2.20:80" || row.OperatorSecretOrigin["url"] != "http://192.0.2.20:80" {
 		t.Errorf("the trust fields were not kept: %+v", row)
 	}
 	if want := []string{"core.integration.create", "core.integration.local_migrated"}; !slices.Equal(e.actions(t), want) {
@@ -103,10 +103,17 @@ func TestImporter_ValidatesAndStagesInCallerBatch(t *testing.T) {
 		"foreign decoded": bad(func(i *integrations.StoredInstance) {
 			i.Config.Settings["password"] = map[string]any{"secret": "core.oidc.secret"}
 		}),
-		"pointer ref":        bad(func(i *integrations.StoredInstance) { r := secrets.RefTo("x"); i.Config.Settings["password"] = &r }),
-		"secret value":       bad(func(i *integrations.StoredInstance) { i.Config.Settings["password"] = secrets.NewValue("alfred-1") }),
-		"local, no origin":   bad(func(i *integrations.StoredInstance) { i.LocalOrigin = "" }),
-		"malformed origin":   bad(func(i *integrations.StoredInstance) { i.OperatorSecretOrigin["url"] = "the narrows" }),
+		"pointer ref":       bad(func(i *integrations.StoredInstance) { r := secrets.RefTo("x"); i.Config.Settings["password"] = &r }),
+		"secret value":      bad(func(i *integrations.StoredInstance) { i.Config.Settings["password"] = secrets.NewValue("alfred-1") }),
+		"local, no origin":  bad(func(i *integrations.StoredInstance) { i.LocalOrigin = "" }),
+		"malformed origin":  bad(func(i *integrations.StoredInstance) { i.OperatorSecretOrigin["url"] = "the narrows" }),
+		"keyless signature": bad(func(i *integrations.StoredInstance) { i.SecretsOrigin = "http://192.0.2.20:80" }),
+		"unsorted signature": bad(func(i *integrations.StoredInstance) {
+			i.LocalOrigin = "url=http://192.0.2.20:80 alt_url=http://192.0.2.21:80"
+		}),
+		"bad signature key":  bad(func(i *integrations.StoredInstance) { i.SecretsOrigin = "Mirror=http://192.0.2.20:80" }),
+		"pairs as an origin": bad(func(i *integrations.StoredInstance) { i.OperatorSecretOrigin["url"] = "url=http://192.0.2.20:80" }),
+		"bad origin key":     bad(func(i *integrations.StoredInstance) { i.OperatorSecretOrigin["Mirror URL"] = "http://192.0.2.20:80" }),
 		"invalid ref":        bad(func(i *integrations.StoredInstance) { i.Config.Ref.Instance = "Arkham" }),
 		"invalid adapter ID": bad(func(i *integrations.StoredInstance) { i.Config.Adapter = "lazarus" }),
 	} {
@@ -129,7 +136,7 @@ func TestImporter_ValidatesAndStagesInCallerBatch(t *testing.T) {
 	lazarus := bad(func(i *integrations.StoredInstance) {
 		i.Config.Ref.Instance = "lazarus-pit"
 		i.Config.Adapter = "hello.lazarus"
-		i.Config.Local, i.LocalOrigin = false, "http://192.0.2.99:80"
+		i.Config.Local, i.LocalOrigin = false, "url=http://192.0.2.99:80"
 	})
 	riddle := bad(func(i *integrations.StoredInstance) {
 		i.Config.Ref.Instance = "riddler"

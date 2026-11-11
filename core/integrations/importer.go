@@ -1,5 +1,5 @@
 // file: core/integrations/importer.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 4d4c4598-17e3-44ff-83be-ad14e5b9b4d9
 // last-edited: 2026-11-11
 
@@ -174,30 +174,41 @@ func checkImport(inst StoredInstance) error {
 		return invalidf("%s is imported with a secret but no SecretsOrigin: a stored secret is served only to the destinations it was written for", c.Ref)
 	}
 	for _, o := range []string{inst.LocalOrigin, inst.SecretsOrigin} {
-		if o != "" && o != defaultDestinations && !wellFormedOrigin(o) {
-			return invalidf("%s: trust origin %q is not %s, scheme://host[:port] or key=origin pairs", c.Ref, o, defaultDestinations)
+		if o != "" && !wellFormedSignature(o) {
+			return invalidf("%s: trust signature %q is not %s nor key=origin pairs in key order, as the Registry renders them", c.Ref, o, defaultDestinations)
 		}
 	}
-	for _, o := range inst.OperatorSecretOrigin {
-		if o != "" && !wellFormedOrigin(o) {
-			return invalidf("%s: trust origin %q is not scheme://host[:port] or key=origin pairs", c.Ref, o)
+	for _, k := range slices.Sorted(maps.Keys(inst.OperatorSecretOrigin)) {
+		if o := inst.OperatorSecretOrigin[k]; !validSecretSegment(k) || (o != "" && !wellFormedOrigin(o)) {
+			return invalidf("%s: operator-secret origin %s=%q is not a destination field name with a scheme://host[:port] origin", c.Ref, k, o)
 		}
 	}
 	return nil
 }
 
-// wellFormedOrigin reports whether o is an origin (or a signature of
-// key=origin pairs) as the Registry renders them: a URL origin, or a
-// host-and-port origin whose host or port may be unset.
+// wellFormedOrigin reports whether o is one origin as the Registry renders
+// it: a URL origin, or a host-and-port origin whose host or port may be
+// unset.
 func wellFormedOrigin(o string) bool {
-	for part := range strings.FieldsSeq(o) {
-		_, origin, ok := strings.Cut(part, "=")
-		if !ok {
-			origin = part
-		}
-		if originOf(origin) != origin && !wellFormedHostPort(origin) {
+	return originOf(o) == o || wellFormedHostPort(o)
+}
+
+// wellFormedSignature reports whether s is a signature exactly as signature
+// renders one: defaultDestinations, or key=origin pairs in key order, each
+// key a destination field name and each origin well formed. Signatures are
+// compared as whole strings, so any other spelling of the same destinations
+// would never match and is refused here rather than withheld later.
+func wellFormedSignature(s string) bool {
+	if s == defaultDestinations {
+		return true
+	}
+	m := map[string]string{}
+	for part := range strings.SplitSeq(s, " ") {
+		k, o, ok := strings.Cut(part, "=")
+		if !ok || !validSecretSegment(k) || !wellFormedOrigin(o) {
 			return false
 		}
+		m[k] = o
 	}
-	return true
+	return signature(m) == s
 }
