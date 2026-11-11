@@ -1,5 +1,5 @@
 // file: core/internal/executor/control.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e0da087e-cd1b-40dd-8ed9-97f8b015517f
 // last-edited: 2026-11-10
 
@@ -88,7 +88,7 @@ func (e *executor) Timeline(ctx context.Context, q tasks.TimelineQuery) ([]tasks
 	}
 	limit = min(limit, 1000)
 	var out []tasks.RunView
-	for v, err := range e.Runs(ctx, tasks.RunQuery{Kinds: q.Kinds, RunFilter: tasks.RunFilter{States: q.States, Limit: 1000}}) {
+	for v, err := range e.Runs(ctx, tasks.RunQuery{Kinds: q.Kinds, States: q.States, Limit: 1000}) {
 		if err != nil {
 			return nil, err
 		}

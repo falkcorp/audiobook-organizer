@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/parity/kit.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f9960b87-6628-4c89-97f3-68902d08625c
 // last-edited: 2026-11-10
 
@@ -128,8 +128,7 @@ func (k *Kit) open() {
 		err = db.Migrate(ctx)
 	}
 	if err != nil {
-		_ = o.Close()
-		t.Fatalf("boot: %v", err)
+		t.Fatalf("boot: %v", errors.Join(err, o.Close()))
 	}
 	k.closeD = db.Close
 	// One cleanup, in the order that is safe: stop every executor, free every
@@ -137,7 +136,9 @@ func (k *Kit) open() {
 	// fake inside a bubble, so the sleep costs nothing), then close the store.
 	t.Cleanup(func() {
 		for _, x := range k.execs {
-			_ = x.Shutdown(context.Background())
+			if err := x.Shutdown(context.Background()); err != nil {
+				t.Errorf("Shutdown at cleanup: %v", err)
+			}
 		}
 		for _, p := range k.probes {
 			p.Free()
@@ -292,7 +293,7 @@ func (k *Kit) List(kinds []tasks.Kind, states ...tasks.RunState) []tasks.RunReco
 	k.T.Helper()
 	k.open()
 	var out []tasks.RunRecord
-	q := tasks.RunQuery{Kinds: kinds, RunFilter: tasks.RunFilter{States: states, Limit: 1000}}
+	q := tasks.RunQuery{Kinds: kinds, States: states, Limit: 1000}
 	for r, err := range k.raw.Runs.List(context.Background(), q) {
 		if err != nil {
 			k.T.Fatalf("list: %v", err)
@@ -337,10 +338,8 @@ func (k *Kit) WaitState(id tasks.RunID, states ...tasks.RunState) tasks.RunRecor
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		r := k.Get(id)
-		for _, s := range states {
-			if r.State == s {
-				return r
-			}
+		if slices.Contains(states, r.State) {
+			return r
 		}
 		if time.Now().After(deadline) {
 			k.T.Fatalf("run %s is %s (reason %q, err %q), want one of %v", id, r.State, r.Reason, r.Error, states)
@@ -377,11 +376,9 @@ func (k *Kit) Plant(kind tasks.Kind, state tasks.RunState, edits ...func(*tasks.
 	}
 	now := time.Now()
 	rec := tasks.RunRecord{
-		RunView: tasks.RunView{
-			ID: id, Kind: kind, Mode: tasks.ModeLive, State: state, Trigger: tasks.TriggerManual,
-			Actor:   tasks.Actor{UserID: "bruce", AuthMethod: "session"},
-			Created: now.Add(time.Duration(k.seq.Add(1)) * time.Microsecond),
-		},
+		ID: id, Kind: kind, Mode: tasks.ModeLive, State: state, Trigger: tasks.TriggerManual,
+		Actor:    tasks.Actor{UserID: "bruce", AuthMethod: "session"},
+		Created:  now.Add(time.Duration(k.seq.Add(1)) * time.Microsecond),
 		Priority: tasks.PriorityNormal, Params: json.RawMessage(`{}`),
 	}
 	if state != tasks.StateQueued && state != tasks.StateWaitingDeps {

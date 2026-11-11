@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/parity/cases_items.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 92cfb06e-8600-4325-be67-d4878707e637
 // last-edited: 2026-11-10
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -122,7 +123,7 @@ func resumeAt(k *Kit, p *Probe, name string, n int) tasks.RunID {
 	return id
 }
 
-func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
+func itoa(n int) string { return strconv.Itoa(n) }
 
 func itemsCases() []Case {
 	const f = "run_items_resume_test.go:"

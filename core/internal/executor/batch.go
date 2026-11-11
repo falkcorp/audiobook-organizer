@@ -1,5 +1,5 @@
 // file: core/internal/executor/batch.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a863231-8741-4cda-83be-b9eddcb8c094
 // last-edited: 2026-11-10
 
@@ -168,7 +168,10 @@ func (a *attempt) runBatch(rc *tasks.RC, p any) (json.RawMessage, error) {
 		// partition keeps its own gates, ItemTimeout clock and counts.
 		opts := tasks.ItemsOptions[any]{OnError: mode, ItemTimeout: bs.ItemTimeout, ExclusiveRefs: bs.ExclusiveRefs, Label: bs.Label,
 			PartitionBy: bs.PartitionBy, ProgressBase: base, ProgressTotal: total}
-		res, _ := tasks.RunItems(rc, par, items, itemFn, opts)
+		res, err := tasks.RunItems(rc, par, items, itemFn, opts)
+		if err := loopBroke(ctx, res, err, mode == tasks.FailFast); err != nil {
+			return true, fmt.Errorf("executor: %s: chunk %d: %w", a.d.kind, n, err)
+		}
 		if ctx.Err() != nil || res.NotStarted > 0 {
 			return true, nil // incomplete: redone on resume
 		}
@@ -196,6 +199,24 @@ func (a *attempt) runBatch(rc *tasks.RC, p any) (json.RawMessage, error) {
 		return bs.Finish(rc, p, tot.sum)
 	}
 	return json.Marshal(tot.sum)
+}
+
+// loopBroke is a RunItems error that is not an item's own failure, which
+// the runners count rather than return: the loop was refused (FirstIndex
+// -1), or it stopped with items not started while the run went on (a broken
+// pause gate, ref-lock table or CPU budget halts it in both error modes;
+// under FailFast a failed item does too, and that stop is the caller's).
+func loopBroke(ctx context.Context, res tasks.ItemsResult, err error, failFast bool) error {
+	if err == nil || ctx.Err() != nil {
+		return nil
+	}
+	if ie, ok := errors.AsType[*tasks.ItemsError](err); ok && ie.FirstIndex < 0 {
+		return err
+	}
+	if res.NotStarted > 0 && (!failFast || res.Failed == 0) {
+		return err
+	}
+	return nil
 }
 
 // batchChunks walks the source chunk by chunk, skipping what the ledger

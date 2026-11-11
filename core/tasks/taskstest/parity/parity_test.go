@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/parity/parity_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b96825f-95af-4625-bb3f-c9c627503912
 // last-edited: 2026-11-10
 
@@ -133,7 +133,7 @@ func TestParity_CoversEveryHeadTest(t *testing.T) {
 		}
 		cases[c.Head]++
 	}
-	for _, e := range Excluded {
+	for _, e := range Excluded() {
 		if !known[e.Head] {
 			t.Errorf("exclusion names unknown HEAD test %q", e.Head)
 		}

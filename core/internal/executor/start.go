@@ -1,5 +1,5 @@
 // file: core/internal/executor/start.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 89eb5ff3-93fb-4a22-9970-d55b28fbbe40
 // last-edited: 2026-11-10
 
@@ -363,10 +363,8 @@ func (e *executor) stageStart(ctx context.Context, b *storage.Batch, p prepared)
 		return tasks.RunRef{}, err
 	}
 	rec := tasks.RunRecord{
-		RunView: tasks.RunView{
-			ID: id, Kind: kind, Mode: p.mode, State: tasks.StateQueued, Actor: p.req.Actor,
-			Trigger: p.req.Trigger, Parent: p.req.Parent, PlanRef: p.req.PlanRef, Created: e.now(),
-		},
+		ID: id, Kind: kind, Mode: p.mode, State: tasks.StateQueued, Actor: p.req.Actor,
+		Trigger: p.req.Trigger, Parent: p.req.Parent, PlanRef: p.req.PlanRef, Created: e.now(),
 		Priority: p.prio, Params: p.params,
 	}
 	if rec.Trigger == "" {

@@ -1,5 +1,5 @@
 // file: core/internal/executor/attempt.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4ad76723-6fc7-4bac-840b-f169142b4af9
 // last-edited: 2026-11-10
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -269,9 +270,11 @@ func (a *attempt) Note(msg string) {
 	a.pCurrent, a.pDirty = msg, true
 	a.pmu.Unlock()
 	line := tasks.LogLine{At: a.e.now(), Level: "info", Message: msg}
-	_ = a.ledger(a.ctx, func(ctx context.Context, b *storage.Batch) error {
+	if err := a.ledger(a.ctx, func(ctx context.Context, b *storage.Batch) error {
 		return a.e.runs.AppendLog(ctx, b, a.id, a.nextSeq(), line)
-	})
+	}); err != nil && !errors.Is(err, tasks.ErrFenced) {
+		a.log.Warn("run log line not recorded", "err", err)
+	}
 }
 
 // Touch is liveness only (the watchdog's input).
@@ -362,12 +365,7 @@ func (a *attempt) Lane(ctx context.Context, id tasks.LaneID) (tasks.LaneLease, e
 }
 
 func containsLane(ls []tasks.LaneID, id tasks.LaneID) bool {
-	for _, l := range ls {
-		if l == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ls, id)
 }
 
 // CapWorkers applies core.tasks.kinds[kind].parallelism_cap (COR3-11).
@@ -682,8 +680,7 @@ func errText(err error) string {
 	if err == nil {
 		return ""
 	}
-	var pe *tasks.PanicError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*tasks.PanicError](err); ok {
 		return "panic: " + fmt.Sprint(pe.Value)
 	}
 	return err.Error()

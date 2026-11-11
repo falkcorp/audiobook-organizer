@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/parity/cases_cancel.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 472e70eb-50aa-44b3-9b02-6f9848ea070a
 // last-edited: 2026-11-10
 
@@ -351,7 +351,9 @@ func cancelCases() []Case {
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 				defer cancel()
-				_ = k.X.Shutdown(ctx)
+				if err := k.X.Shutdown(ctx); err != nil {
+					t.Errorf("Shutdown: %v", err)
+				}
 				if got := k.Get(id).State; got != tasks.StateCanceled {
 					t.Fatalf("after Shutdown the run is %s, want canceled", got)
 				}

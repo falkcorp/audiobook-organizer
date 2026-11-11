@@ -1,5 +1,5 @@
 // file: core/internal/executor/harness_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 55b9c132-7bf2-4ee6-a4eb-7a9f061f9aef
 // last-edited: 2026-11-10
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -156,10 +157,8 @@ func (h *harness) waitState(id tasks.RunID, states ...tasks.RunState) tasks.RunR
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		r := h.get(id)
-		for _, s := range states {
-			if r.State == s {
-				return r
-			}
+		if slices.Contains(states, r.State) {
+			return r
 		}
 		if time.Now().After(deadline) {
 			h.t.Fatalf("run %s is %s (reason %q, err %q), want one of %v", id, r.State, r.Reason, r.Error, states)

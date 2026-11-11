@@ -1,5 +1,5 @@
 // file: core/internal/executor/executor.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a39876a5-3dce-4f6d-9003-f07fdeb8a28d
 // last-edited: 2026-11-10
 
@@ -249,12 +249,12 @@ func (e *executor) WriteRuns(ctx context.Context, open func() *storage.Batch, st
 		return errors.New("executor: WriteRuns needs open and stage")
 	}
 	sctx := context.WithValue(ctx, stageKey{}, true)
-	return storage.RetryOnConflict(ctx, retryAttempts, func(ctx context.Context) error {
+	return storage.RetryOnConflict(ctx, retryAttempts, func(ctx context.Context) (err error) {
 		b := open()
 		if b == nil {
 			return errors.New("executor: WriteRuns: open returned a nil batch")
 		}
-		defer func() { _ = b.Close() }() // idempotent; a no-op after Commit
+		defer func() { err = errors.Join(err, b.Close()) }() // idempotent; a no-op after Commit
 		if err := stage(sctx, b); err != nil {
 			return err
 		}

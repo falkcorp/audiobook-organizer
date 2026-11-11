@@ -1,5 +1,5 @@
 // file: core/internal/executor/instruments.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0ead5429-af5c-47ad-afaa-91de7e8f5069
 // last-edited: 2026-11-10
 
@@ -8,6 +8,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"time"
 
@@ -203,13 +204,9 @@ func (in *instruments) observe(o metric.Observer, inflight metric.Int64Observabl
 		z += int64(n)
 	}
 	q := make(map[[2]string]int64, len(in.queue))
-	for k, v := range in.queue {
-		q[k] = v
-	}
+	maps.Copy(q, in.queue)
 	heldBy := map[string]int64{}
-	for m, n := range e.heldCount {
-		heldBy[m] = n
-	}
+	maps.Copy(heldBy, e.heldCount)
 	e.mu.Unlock()
 	for kind, k := range kinds {
 		attrs := set(attrDefID.String(string(kind)), attrModule.String(k.mod))

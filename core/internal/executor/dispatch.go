@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
 // last-edited: 2026-11-10
 
@@ -337,10 +337,7 @@ func (e *executor) release(a *attempt, rec tasks.RunRecord) {
 func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	start := e.now()
 	deadline := start.Add(a.d.timeout)
-	var zeroFrom int
-	if raw, ok, err := e.runs.Checkpoint(context.Background(), a.id, ckptZero); err == nil && ok {
-		_ = json.Unmarshal(unwrapData(raw), &zeroFrom)
-	}
+	zeroFrom := e.zeroFrom(a.id, rec.Attempt)
 	base, cancel := context.WithCancelCause(context.WithoutCancel(e.bgCtx))
 	ctx, stop := context.WithDeadlineCause(base, deadline, tasks.ErrTimedOut)
 	a.lastReport.Store(start.UnixNano())
@@ -370,6 +367,26 @@ func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	e.bg.Add(1)
 	go a.supervise()
 	go a.run()
+}
+
+// zeroFrom is the attempt from which ResumeFromZero voids earlier
+// checkpoints (0: none voided). A marker that cannot be read or decoded
+// voids every checkpoint before this attempt, so a broken marker can only
+// redo work, never resume from voided state.
+func (e *executor) zeroFrom(id tasks.RunID, attempt int) int {
+	raw, ok, err := e.runs.Checkpoint(context.Background(), id, ckptZero)
+	if err == nil && !ok {
+		return 0
+	}
+	var n int
+	if err == nil {
+		err = json.Unmarshal(unwrapData(raw), &n)
+	}
+	if err != nil {
+		e.log.Warn("from-zero marker unreadable; earlier checkpoints are void for this attempt", "run", string(id), "err", err)
+		return attempt
+	}
+	return n
 }
 
 // unwrapData is a checkpoint's data, wrapped or not.
@@ -443,7 +460,7 @@ func (e *executor) abandon(a *attempt, state tasks.RunState, reason string) {
 // toWaitingDeps moves a queued run whose NotWhile kinds are running to
 // waiting_deps; releaseWaitingDeps moves it back when they are not.
 func (e *executor) toWaitingDeps(ctx context.Context, rec tasks.RunRecord) {
-	_, _ = e.move(ctx, rec.ID, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+	_, err := e.move(ctx, rec.ID, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
 		if cur.State != tasks.StateQueued {
 			return cur, tasks.RunEvent{}, errStale(cur, "wait")
 		}
@@ -451,13 +468,17 @@ func (e *executor) toWaitingDeps(ctx context.Context, rec tasks.RunRecord) {
 		next.State, next.Reason = tasks.StateWaitingDeps, "not_while"
 		return next, tasks.RunEvent{Event: "wait", Reason: "not_while"}, nil
 	}, nil)
+	if err != nil && !errors.Is(err, tasks.ErrRunConflict) {
+		e.log.Warn("run not moved to waiting_deps; the next dispatch pass retries", "run", string(rec.ID), "err", err)
+	}
 }
 
 func (e *executor) releaseWaitingDeps(ctx context.Context) {
-	q := tasks.RunQuery{RunFilter: tasks.RunFilter{States: []tasks.RunState{tasks.StateWaitingDeps}, Limit: passLimit}}
+	q := tasks.RunQuery{States: []tasks.RunState{tasks.StateWaitingDeps}, Limit: passLimit}
 	var ids []tasks.RunID
 	for rec, err := range e.runs.List(ctx, q) {
 		if err != nil {
+			e.ins.undecodable("run")
 			continue
 		}
 		d := e.defs[rec.Kind]
@@ -477,7 +498,7 @@ func (e *executor) releaseWaitingDeps(ctx context.Context) {
 		}
 	}
 	for _, id := range ids {
-		_, _ = e.move(ctx, id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+		_, err := e.move(ctx, id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
 			if cur.State != tasks.StateWaitingDeps {
 				return cur, tasks.RunEvent{}, errStale(cur, "unwait")
 			}
@@ -485,6 +506,9 @@ func (e *executor) releaseWaitingDeps(ctx context.Context) {
 			next.State, next.Reason = tasks.StateQueued, ""
 			return next, tasks.RunEvent{Event: "unwait"}, nil
 		}, nil)
+		if err != nil && !errors.Is(err, tasks.ErrRunConflict) {
+			e.log.Warn("waiting run not released; the next dispatch pass retries", "run", string(id), "err", err)
+		}
 	}
 }
 

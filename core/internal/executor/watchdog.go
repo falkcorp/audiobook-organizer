@@ -1,5 +1,5 @@
 // file: core/internal/executor/watchdog.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6372f0c4-063d-47dd-8f0e-ab0caf15e5fa
 // last-edited: 2026-11-10
 
@@ -21,7 +21,9 @@ const (
 )
 
 // watchdogActor is the actor stamped on a watchdog stop.
-var watchdogActor = tasks.Actor{AuthMethod: systemMethod, System: "core.tasks.watchdog"}
+func watchdogActor() tasks.Actor {
+	return tasks.Actor{AuthMethod: systemMethod, System: "core.tasks.watchdog"}
+}
 
 func (e *executor) watchdog() {
 	defer e.bg.Done()
@@ -72,7 +74,7 @@ func (e *executor) watchOnce(ctx context.Context) {
 		}
 		a.strike(ctx, kind, fmt.Sprintf("silent for %s (progress timeout %s)", gap.Round(time.Second), a.d.progTO))
 		a.log.Warn("watchdog stops a silent run", "strike", kind, "silent", gap.Round(time.Second))
-		if err := e.stop(ctx, a.id, watchdogActor, reasonWatchdog, tasks.ErrCanceled); err != nil {
+		if err := e.stop(ctx, a.id, watchdogActor(), reasonWatchdog, tasks.ErrCanceled); err != nil {
 			a.log.Warn("watchdog stop failed", "err", err)
 		}
 	}

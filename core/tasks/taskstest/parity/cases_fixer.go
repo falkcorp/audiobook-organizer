@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/parity/cases_fixer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 10ba4b66-7bc7-4bd3-941e-d63df81b5a44
 // last-edited: 2026-11-10
 
@@ -24,9 +24,11 @@ const (
 )
 
 // inmates are the 20 rows of the fixer case.
-var inmates = []string{
-	"joker", "penguin", "riddler", "two-face", "scarecrow", "bane", "clayface", "mr-freeze", "poison-ivy", "harley-quinn",
-	"killer-croc", "ras-al-ghul", "hush", "black-mask", "mad-hatter", "firefly", "deadshot", "man-bat", "ventriloquist", "calendar-man",
+func inmates() []string {
+	return []string{
+		"joker", "penguin", "riddler", "two-face", "scarecrow", "bane", "clayface", "mr-freeze", "poison-ivy", "harley-quinn",
+		"killer-croc", "ras-al-ghul", "hush", "black-mask", "mad-hatter", "firefly", "deadshot", "man-bat", "ventriloquist", "calendar-man",
+	}
 }
 
 // cellBlock is the world the fixer reads and writes: inmate -> cell.
@@ -37,7 +39,7 @@ type cellBlock struct {
 
 func newCellBlock() *cellBlock {
 	c := &cellBlock{cells: map[string]string{}}
-	for _, n := range inmates {
+	for _, n := range inmates() {
 		c.cells[n] = "a-wing"
 	}
 	return c
@@ -60,10 +62,10 @@ func relocateDef(world *cellBlock, block string, once *sync.Once, parked chan st
 			c.Approval = &tasks.Approval{PlanRequired: true}
 		}}),
 		Candidates: func(*tasks.RC, Params) (tasks.Source[string], error) {
-			return tasks.Source[string]{Items: inmates, Key: func(s string) string { return s }}, nil
+			return tasks.Source[string]{Items: inmates(), Key: func(s string) string { return s }}, nil
 		},
 		Load: func(_ *tasks.RC, _ Params, id string) (string, bool, error) {
-			return id, slices.Contains(inmates, id), nil
+			return id, slices.Contains(inmates(), id), nil
 		},
 		Evaluate: func(_ *tasks.ItemRC, _ Params, n string) (tasks.Row, error) {
 			cur := world.get(n)
@@ -108,7 +110,7 @@ func fixerCase() Case {
 			var got []string
 			var gmu sync.Mutex
 			after := func(a []string) { gmu.Lock(); got = a; gmu.Unlock() }
-			defs := func() []tasks.Definition { return Defs(relocateDef(world, inmates[11], &once, parked, after)) }
+			defs := func() []tasks.Definition { return Defs(relocateDef(world, inmates()[11], &once, parked, after)) }
 
 			k.Boot(defs(), WithPrincipal())
 			ref, err := k.X.Start(AsUser("robin", scopeRun), relocateKind, tasks.StartRequest{Mode: tasks.ModeRequestPreview})
@@ -116,7 +118,7 @@ func fixerCase() Case {
 				t.Fatalf("plan: %v", err)
 			}
 			k.WaitState(ref.ID, tasks.StateSucceeded)
-			if err := k.X.Approve(AsUser("gordon", scopeRun, scopeApprove), ref.ID, tasks.ApproveRequest{Rows: inmates}); err != nil {
+			if err := k.X.Approve(AsUser("gordon", scopeRun, scopeApprove), ref.ID, tasks.ApproveRequest{Rows: inmates()}); err != nil {
 				t.Fatalf("approve: %v", err)
 			}
 			var apply tasks.RunID
@@ -145,7 +147,7 @@ func fixerCase() Case {
 
 			k.Boot(defs(), WithPrincipal())
 			k.WaitState(apply, tasks.StateSucceeded)
-			want := slices.DeleteFunc(slices.Clone(inmates), func(n string) bool { return n == foreign })
+			want := slices.DeleteFunc(slices.Clone(inmates()), func(n string) bool { return n == foreign })
 			gmu.Lock()
 			g := slices.Clone(got)
 			gmu.Unlock()
@@ -154,9 +156,9 @@ func fixerCase() Case {
 			if !slices.Equal(g, want) {
 				t.Errorf("AfterApply got %d rows %v, want %d rows (all but %s): %s", len(g), g, len(want), foreign, fmt.Sprint(slices.DeleteFunc(slices.Clone(want), func(n string) bool { return slices.Contains(g, n) })))
 			}
-			for n := range inmates {
-				if c := world.get(inmates[n]); c != proposed(inmates[n]) {
-					t.Errorf("%s is in %q, want %q", inmates[n], c, proposed(inmates[n]))
+			for _, n := range inmates() {
+				if c := world.get(n); c != proposed(n) {
+					t.Errorf("%s is in %q, want %q", n, c, proposed(n))
 				}
 			}
 		},

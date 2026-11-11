@@ -1,5 +1,5 @@
 // file: core/internal/executor/fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9689d192-751d-423a-b144-61fe27e2a8d1
 // last-edited: 2026-11-10
 
@@ -100,7 +100,7 @@ func (a *attempt) evaluate(rc *tasks.RC, p any) ([]tasks.Row, tasks.ItemsResult,
 	}
 	var mu sync.Mutex
 	var rows []tasks.Row
-	res, _ := tasks.RunItems(rc, a.itemsPar(fs.Parallelism), cands, func(ic *tasks.ItemRC, c any) error {
+	res, err := tasks.RunItems(rc, a.itemsPar(fs.Parallelism), cands, func(ic *tasks.ItemRC, c any) error {
 		row, err := fs.Evaluate(ic, p, c)
 		if err != nil {
 			return err
@@ -117,6 +117,9 @@ func (a *attempt) evaluate(rc *tasks.RC, p any) ([]tasks.Row, tasks.ItemsResult,
 		mu.Unlock()
 		return nil
 	}, tasks.ItemsOptions[any]{OnError: tasks.Collect})
+	if err := loopBroke(rc.Context(), res, err, false); err != nil {
+		return nil, res, fmt.Errorf("executor: %s: evaluate: %w", a.d.kind, err)
+	}
 	slices.SortFunc(rows, func(x, y tasks.Row) int { return strings.Compare(x.ID, y.ID) })
 	return rows, res, nil
 }
@@ -241,7 +244,7 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 	}
 	var mu sync.Mutex
 	applied := prior
-	res, _ := tasks.RunItems(rc, a.itemsPar(fs.Parallelism), ids, func(ic *tasks.ItemRC, id string) error {
+	res, err := tasks.RunItems(rc, a.itemsPar(fs.Parallelism), ids, func(ic *tasks.ItemRC, id string) error {
 		planned := plan[id]
 		c, ok, err := fs.Load(rc, p, id)
 		if err != nil {
@@ -274,6 +277,9 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 		mu.Unlock()
 		return nil
 	}, opts)
+	if err := loopBroke(ctx, res, err, false); err != nil {
+		return nil, fmt.Errorf("executor: %s: apply: %w", a.d.kind, err)
+	}
 	if ctx.Err() != nil {
 		return nil, context.Cause(ctx)
 	}
