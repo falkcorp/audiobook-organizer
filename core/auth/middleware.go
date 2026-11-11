@@ -140,12 +140,11 @@ func (s *Service) Middleware() func(http.Handler) http.Handler {
 					break
 				}
 				if fail != nil {
+					// Recorded for stage 13, not audited: 05-rbac §7.1's
+					// table (audit.CoreActions) names no action for a
+					// refused credential, and §9 counts stage 12's outcomes
+					// in mediacore_auth_attempts_total (F4-02b).
 					ctx = withFailure(ctx, *fail)
-					s.d.Audit.Emit(ctx, audit.Event{
-						Action: actionAuthenticate, Outcome: audit.Failure, Reason: fail.Code,
-						Actor:   audit.Actor{ClientAddr: addrString(c.Addr), UserAgent: c.UserAgent},
-						Details: map[string]any{"authenticator": st.name},
-					})
 					break
 				}
 			}
