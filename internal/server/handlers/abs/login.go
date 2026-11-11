@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
 // last-edited: 2026-11-10
 
@@ -125,7 +125,7 @@ func (h *Handler) Login(c *gin.Context) {
 	// submitted name has already failed SoftThreshold times; the answer does not
 	// tell a caller whether the name exists.
 	if absauth.LoginSaturated(c) &&
-		absauth.RefuseSaturatedLogin(c, h.throttle.AccountFailures(accountKey), h.throttle.Delay) {
+		absauth.RefuseSaturatedLogin(c, h.throttle, accountKey) {
 		absauth.AttemptLog.Record(coreaudit.AuthAttempt{
 			Action: "login", Outcome: coreaudit.Throttled, SourceIP: ip,
 			Username: username, Reason: "login-ceiling-account-failures",

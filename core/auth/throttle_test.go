@@ -1,5 +1,5 @@
 // file: core/auth/throttle_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 78e17557-457f-4ae3-be51-7a8d454fd0a0
 // last-edited: 2026-11-10
 
@@ -219,5 +219,71 @@ func TestThrottle_AccountFailuresReadsWithoutCharging(t *testing.T) {
 	_ = th.AccountFailures("alfred")
 	if got := th.AccountFailures("alfred"); got != 2 {
 		t.Fatalf("reading changed the count: %d", got)
+	}
+}
+
+// TestThrottle_SaturationPolicy: the delay grows with the failures already
+// counted on the submitted name, is capped, and turns into a refusal at the
+// soft threshold in force (SetLimits), whether or not the name exists.
+func TestThrottle_SaturationPolicy(t *testing.T) {
+	tr := NewThrottle(ThrottleLimits{}, nil, nil)
+	tr.SetSleep(func(time.Duration) {})
+	for failures := range DefaultSoftThreshold + 3 {
+		d, refuse := tr.SaturationPolicy("robin")
+		want := min(SaturationDelayBase+time.Duration(failures)*SaturationDelayStep, SaturationDelayMax)
+		if failures >= DefaultSoftThreshold {
+			want = 0
+		}
+		if d != want || refuse != (failures >= DefaultSoftThreshold) {
+			t.Fatalf("failures %d: delay %v refuse %v, want %v %v", failures, d, refuse, want, failures >= DefaultSoftThreshold)
+		}
+		if d > SaturationDelayMax {
+			t.Fatalf("failures %d: delay %v above the cap", failures, d)
+		}
+		tr.RecordFailure("robin", "192.0.2.7")
+	}
+	if d, _ := NewThrottle(ThrottleLimits{}, nil, nil).SaturationPolicy("never-seen"); d != SaturationDelayBase {
+		t.Fatalf("an unknown name waits %v, want the base %v", d, SaturationDelayBase)
+	}
+	// 1s + 4 x 500ms = 3s: the cap applies below the threshold.
+	tr = NewThrottle(ThrottleLimits{}, nil, nil)
+	tr.SetSleep(func(time.Duration) {})
+	for range 4 {
+		tr.RecordFailure("batgirl", "192.0.2.8")
+	}
+	if d, _ := tr.SaturationPolicy("batgirl"); d != SaturationDelayMax {
+		t.Fatalf("delay %v, want the cap %v", d, SaturationDelayMax)
+	}
+	// A lower threshold set later refuses at once.
+	tr.SetLimits(ThrottleLimits{SoftThreshold: 3})
+	if _, refuse := tr.SaturationPolicy("batgirl"); !refuse {
+		t.Fatal("4 failures under a threshold of 3 were not refused")
+	}
+}
+
+// TestThrottle_SetLimitsAppliesAndKeepsTheTableSize: a reloaded policy takes
+// effect on the next call, zero fields fall back to their defaults, and the
+// table bound stays the one the throttle was built with.
+func TestThrottle_SetLimitsAppliesAndKeepsTheTableSize(t *testing.T) {
+	tr := NewThrottle(ThrottleLimits{MaxKeys: 7}, nil, nil)
+	tr.SetSleep(func(time.Duration) {})
+	tr.SetLimits(ThrottleLimits{MaxFailuresPerSource: 2, MaxKeys: 999})
+	got := tr.Limits()
+	want := ThrottleLimits{MaxFailuresPerSource: 2, Window: DefaultThrottleWindow, SoftThreshold: DefaultSoftThreshold,
+		SoftStep: DefaultSoftStep, SoftMax: DefaultSoftMax, MaxKeys: 7}
+	if got != want {
+		t.Fatalf("Limits() = %+v, want %+v", got, want)
+	}
+	tr.RecordFailure("alfred", "192.0.2.9")
+	if tr.SourceBlocked("192.0.2.9") {
+		t.Fatal("blocked after 1 failure under a budget of 2")
+	}
+	tr.RecordFailure("alfred", "192.0.2.9")
+	if !tr.SourceBlocked("192.0.2.9") {
+		t.Fatal("the reloaded budget of 2 did not block")
+	}
+	tr.SetLimits(ThrottleLimits{})
+	if tr.SourceBlocked("192.0.2.9") {
+		t.Fatal("back at the default budget, 2 failures still block")
 	}
 }

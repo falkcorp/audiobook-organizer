@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 3.3.2
+// version: 3.3.3
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-11-10
 
@@ -345,7 +345,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// counter for the submitted name alone, so the answer does not tell a caller
 	// whether the name exists.
 	if absauth.LoginSaturated(c) &&
-		absauth.RefuseSaturatedLogin(c, h.throttle.AccountFailures(accountKey), h.throttle.Delay) {
+		absauth.RefuseSaturatedLogin(c, h.throttle, accountKey) {
 		absauth.SetRetryAfter(c)
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many failed login attempts — try again later", "TOO_MANY_REQUESTS")
 		return
