@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.38 -->
+<!-- version: 10.78.39 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -11,7 +11,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-10 -->
+<!-- last-edited: 2026-11-11 -->
 
 # Project TODO — live items only
 
@@ -23,6 +23,47 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **F2-06 follow-up: data-migration chunk seams.** Two gaps the runner (`core/internal/storagemigrate`) leaves open:
+      (1) a chunk's batch is not exclusive, so a Cutover importer that stages a plain `Set` into a `Serialized` keyspace range through `StepWriter.Batch()` fails the chunk with `storage.ErrBlindWrite`. The first importer over a Serialized family needs an exclusive chunk batch, or must stage an `Expect` per key.
+      (2) the `RewritesInPlace` written set lives in memory, so after a crash a resumed shard can step one of the migration's own writes once. §5S.3.6 allows that (`Step` is idempotent for its own outputs). Closing it costs a durable record per such write in the chunk's batch, deleted when the shard passes it.
+
+- [ ] **Make `record_r0_answers.py` wait for R0's search-index rebuild, then re-record stage 1's answers before F2-15** The corpus carries `db/library.bleve.rebuilding`, so R0 rebuilds its search index at every boot, and the recorder does not wait for it: stage 1's committed `search` answer for `^The ` has 0 books, while the overlay's (recorded after a 5-minute settle) has the corpus' 4. Add a settle condition on the rebuild (the marker gone, or the index's document count stable), re-record `internal/books/testdata/r2corpus/answers/` with it and rebuild stage 2 in the same PR (`write_r0_corpus.py --regenerate` resets stage 2), so F2-15's replay does not compare against a mid-rebuild answer. Drop the overlay `search` answer's `note` (`ANSWER_NOTES` in `build_overlay.py`) once `changed` is false (seams.d/F2-13.md).
+  - Owner: F2-12's follow-up, before F2-15.
+
+- [ ] **F8-HEALTH-REASONS** Give `health.Result` more than one reason —
+      `core.secrets` can hold `secrets_undecryptable`,
+      `derive_key_retire_blocked` and `secrets_keyring_not_exported` at once,
+      but a Result carries one `Reason`, so F3-03 reports the most urgent by
+      precedence and lists the rest only in `Detail`. A UI or alert keyed on a
+      token misses the other two. Done means: a Result can carry every active
+      token, the secrets reporter sets them all, and 05-health says how the
+      component status combines them (seams.d/F3-03.md, "Health").
+      - Owner: 05-health's owner (F8).
+
+- [ ] **Rule whether an undecryptable secret row counts as "empty" for M2's gap fill (05-config §1.12.2)** M2a reads "HEAD's effective stored value ... gap-filled", and HEAD's gap fill applies a `config.yaml` value only where the stored value is empty. At the R0 tag a row that does not decrypt reads as empty, so R0's boot gap-fills it from the file and re-encrypts it: F2-13's first overlay recording lost its corrupt `openai_api_key` row this way, and the case now corrupts `basic_auth_password`, which the file does not name. The spec does not say which wins for the three file-named secrets (`openai_api_key`, `google_books_api_key`, `hardcover_api_token`): import the file's value (HEAD's behaviour) or quarantine the ciphertext and mark the secret "must be re-entered" (C16). Write the rule into §1.12.2 and add a stage-2 case for whichever path it picks (seams.d/F2-13.md, "R0's boot rewrites the encrypted secret rows").
+  - Owner: 05-config's owner (F3; lands with F3-06's M2).
+
+- [ ] **Decide how to test 05-config §1.12.2's third stage-2 config case (a blob value R0's own validation refuses)** The case is not in F2-13's overlay: R0 runs `Config.Validate()` at `serve` boot and stops on an error (and its backup codec stops on an unknown compression), so such a value makes the overlay unbootable and R0 records no answers. A test of it needs its own store that R0 is never booted on (a blocker-style store under `internal/books/testdata/r2corpus/`, built by `scripts/r2corpus/overlay/`), plus a ruling on what `Importer.Stage` must do with the value (refuse into quarantine, per §1.12.2) since no R0 answer can anchor it (seams.d/F2-13.md).
+  - Owner: 05-config's owner (F3); the store is a small addition to `build_overlay.py` once ruled.
+
+- [ ] **Add the empty-username rule to 05-authn §3.4's `auth.Importer` invariants** F2-13's blocker corpus has `blocker-identity-user-rejected`, a decodable `u:` row with username `""` (HEAD's `CreateUser` accepts it), and treats it as a row `ErrImportRejected` refuses, so the cutover preflight refuses the boot. §3.4's comment lists unknown status, a key with no scopes and a key or identity whose user was not imported, not this. Proposed sentence for the `Importer` comment, after "(an unknown status, a key with no scopes, a key or identity whose user was not imported)": "or a user whose username is empty after trimming". F4-06's importer and preflight must reject it either way (seams.d/F2-13.md).
+  - Owner: F4-06 (books identity cutover M3 preflight); the spec edit is 05-authn's owner's.
+
+- [ ] **Settle `stopping{watchdog}`: `failed` (reason watchdog) or `timed_out`** 05-tasks §5T.8.3 maps a run left stopping with StopReason watchdog to `failed` with reason watchdog; R0's own `StopTerminal` ends it `timed_out`. F2-13's `run-stopping-watchdog` records the spec's mapping (`expected` and `imported_as: {"state": "failed", "reason": "watchdog"}` in `internal/books/testdata/r2corpus/manifest.json`). Confirm the spec or change it; if it changes, update `IMPORTED_AS` in `scripts/r2corpus/overlay/build_overlay.py` and its pinned table in `scripts/tests/test_build_overlay.py` (seams.d/F2-13.md).
+  - Owner: 05-tasks' owner, before F5's M4 lands.
+
+- [ ] **F4-02-ROLE-GUARD** Guard role definitions in core auth's last-admin rule
+      before anything implements `rbac.Holders`. `core/auth`'s `keepAnAdmin`
+      guards the other admin holder's user record but only reads the role
+      definitions: `rbac.Store` cannot stage an Expect on a role into auth's
+      batch, so an rbac edit that takes `core:admin` from that holder's role and
+      commits between auth's read and commit is not seen. Add an optional
+      role-guard interface on the role store (F4-01's `ImportSealer` pattern) and
+      an `rbac.Service` method auth calls inside its batch, with a concurrent
+      test (about 100 lines across `rbac`, `rbacstore` and tests). Hard
+      prerequisite of F4-08's `rbac.Holders` (see
+      `docs/agent-tasks/platform-core/seams.d/F4-02.md`, "F4-08 must know").
 
 - [ ] **PLATFORM-CORE-R1-25-ABO-SWAP-BACK-FIXTURE** ABO's boot crash matrix
       lists `swap.back.mark`, `swap.back.mv`, `swap.back.sidecars` and
