@@ -1,7 +1,7 @@
 // file: core/kernel/dryrun.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f63ab3a5-e55e-4498-a2d2-ffd73ac392be
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -12,6 +12,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,11 +83,15 @@ func DryRun(ctx context.Context, c Config, opt DryRunOptions) (rep *storage.DryR
 	if err != nil {
 		return nil, err
 	}
-	migs, err := dryRunList(opt.Migrations, opt.ID)
+	rewrite := opt.Rewrite
+	rewriteID := ""
+	if rewrite != nil {
+		rewriteID = rewrite.ID
+	}
+	migs, err := dryRunList(opt.Migrations, opt.ID, rewriteID)
 	if err != nil {
 		return nil, err
 	}
-	rewrite := opt.Rewrite
 	if opt.ID != "" && (rewrite == nil || rewrite.ID != opt.ID) {
 		rewrite = nil
 	}
@@ -125,8 +130,11 @@ func DryRun(ctx context.Context, c Config, opt DryRunOptions) (rep *storage.DryR
 }
 
 // dryRunList is migs limited to id and the data migrations it runs after,
-// transitively; all of migs when id is "".
-func dryRunList(migs []datamigrate.DataMigration, id string) ([]datamigrate.DataMigration, error) {
+// transitively; all of migs when id is "", none when id is M8's
+// (rewriteID). Any other id is refused before anything is copied: --id
+// names a step this build does not register, and a run of nothing would
+// report a clean dry run of it.
+func dryRunList(migs []datamigrate.DataMigration, id, rewriteID string) ([]datamigrate.DataMigration, error) {
 	if id == "" {
 		return slices.Clone(migs), nil
 	}
@@ -153,7 +161,15 @@ func dryRunList(migs []datamigrate.DataMigration, id string) ([]datamigrate.Data
 		return true
 	}
 	if !visit(id) {
-		return nil, nil // M8's ID, or one this build does not register
+		if id == rewriteID {
+			return nil, nil
+		}
+		known := slices.Sorted(maps.Keys(byID))
+		if rewriteID != "" {
+			known = append(known, rewriteID)
+		}
+		return nil, fmt.Errorf("kernel: dry run: --id %q is no data migration of this build (it registers %d: %s)",
+			id, len(known), strings.Join(known, ", "))
 	}
 	var out []datamigrate.DataMigration
 	for _, m := range migs {
