@@ -82,7 +82,8 @@ func (r *Registry) newTransport(allowPrivate bool) *http.Transport {
 	t.Proxy = nil // a proxy would resolve and connect on the guard's behalf
 	t.DialContext = d.DialContext
 	t.DialTLSContext = nil
-	t.DialTLS = nil //nolint:staticcheck // cleared on purpose: a custom TLS dial would bypass the guard
+	//lint:ignore SA1019 cleared on purpose: a custom TLS dial would bypass the guard
+	t.DialTLS = nil
 	return t
 }
 

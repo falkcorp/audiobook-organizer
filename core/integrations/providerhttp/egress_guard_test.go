@@ -359,7 +359,8 @@ func TestCopiedClient_KeepsEveryControl(t *testing.T) {
 	lim.Daily = daily(2, 2)
 	h, g := r.Outbound(integrations.OutboundSpec{Ref: batcave, Egress: integrations.EgressConfigured, Limits: lim,
 		Trust: integrations.Trust{PrivateOrigins: []string{"http://" + hostOf(trusted), "http://" + hostOf(redir)}}})
-	if h.Client() == nil || h.Client() == h.Client() {
+	c1, c2 := h.Client(), h.Client()
+	if c1 == nil || c1 == c2 {
 		t.Fatal("Client must return a fresh, non-nil *http.Client on every call")
 	}
 	if h.Gate() == nil || g == nil {
