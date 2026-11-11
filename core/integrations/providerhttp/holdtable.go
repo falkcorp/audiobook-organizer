@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/holdtable.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e7ac18e-dc95-4438-b438-0ad09045a2f0
 // last-edited: 2026-11-11
 
@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/falkcorp/mediacore/integrations"
 )
@@ -27,38 +26,108 @@ func (r *Registry) storeCtx(ctx context.Context) (context.Context, context.Cance
 	return context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 }
 
-// loadHolds reads the persisted holds into the table: expired ones are
-// dropped, and one beyond the maximum is clamped (HEAD's maxThrottleHold
-// rule). A store that cannot be read leaves the table empty (holds fail open,
-// M2.5), with one warning.
-func (r *Registry) loadHolds() {
-	ctx, cancel := r.storeCtx(context.Background())
-	defer cancel()
-	hs, err := r.store.Holds(ctx)
-	if err != nil {
-		r.warnStore("the persisted holds could not be read; holds are kept in memory only", err)
+// holdRetryEvery is how often a Registry whose store could not be read at boot
+// tries again (N5): often enough that a store that was down for a minute is
+// picked up, rarely enough that a store that is down costs one read per period
+// and not one per request.
+const holdRetryEvery = 30 * time.Second
+
+// ensureState loads the persisted holds and scope mappings if they have not
+// been read yet. New calls it once; a store that was unreadable then is tried
+// again, at most once per holdRetryEvery and by one caller at a time (the
+// others go on without waiting), from every path that reads the table, until a
+// read succeeds. Holds fail open meanwhile (M2.5): the table holds what this
+// process placed.
+func (r *Registry) ensureState() {
+	if r.stateLoaded.Load() {
+		return
+	}
+	if !r.loadMu.TryLock() {
+		return
+	}
+	defer r.loadMu.Unlock()
+	if r.stateLoaded.Load() {
 		return
 	}
 	now := r.now()
+	if !r.nextLoad.IsZero() && now.Before(r.nextLoad) {
+		return
+	}
+	if !r.loadState() {
+		r.nextLoad = now.Add(holdRetryEvery)
+		return
+	}
+	r.stateLoaded.Store(true)
+	if r.stateRetried {
+		r.log.Info("providerhttp: the persisted holds were read after an earlier failure")
+	}
+}
+
+// loadState reads the persisted holds into the table (an expired one is
+// dropped, one beyond the maximum is clamped: HEAD's maxThrottleHold rule) and
+// the persisted ref-to-scope mappings into refScope. A hold already in the
+// table (placed since boot, before this read succeeded) is kept when it
+// outlasts the persisted one. It reports whether the store could be read; an
+// unreadable store leaves the table as it is, with one warning.
+func (r *Registry) loadState() bool {
+	ctx, cancel := r.storeCtx(context.Background())
+	defer cancel()
+	hs, err := r.store.Holds(ctx)
+	if err == nil {
+		var ss map[integrations.Ref]string
+		if ss, err = r.store.Scopes(ctx); err == nil {
+			r.mergeScopes(ctx, ss)
+		}
+	}
+	if err != nil {
+		r.stateRetried = true
+		r.warnStore("the persisted holds could not be read; holds are kept in memory and the read is retried", err)
+		return false
+	}
+	now := r.now()
 	hmax := r.settings().HoldMax
-	r.hmu.Lock()
-	defer r.hmu.Unlock()
 	for _, h := range hs {
-		if !now.Before(h.Until) {
-			// Drop the expired record; a store that cannot is no harm (the
-			// record is expired and is skipped again on the next load).
-			if err := r.store.PutHold(ctx, integrations.Hold{Scope: h.Scope}); err != nil {
-				r.warnStore("an expired hold could not be removed from the store", err)
-			}
-			continue
+		r.adopt(ctx, h, now, hmax)
+	}
+	return true
+}
+
+// adopt puts one persisted hold into the table under its scope's lock. The
+// store is written (to drop an expired record or persist a clamp) outside the
+// table mutex.
+func (r *Registry) adopt(ctx context.Context, h integrations.Hold, now time.Time, hmax time.Duration) {
+	unlock := r.hlock.Lock(h.Scope)
+	defer unlock()
+	if !now.Before(h.Until) {
+		r.hmu.Lock()
+		cur, ok := r.holds[h.Scope]
+		active := ok && now.Before(cur.Until)
+		r.hmu.Unlock()
+		if active { // a newer hold has already replaced the record
+			return
 		}
-		if latest := now.Add(hmax); h.Until.After(latest) {
-			h.Until = latest
-			if err := r.store.PutHold(ctx, h); err != nil {
-				r.warnStore("a clamped hold could not be persisted", err)
-			}
+		// Drop the expired record; a store that cannot is no harm (the record
+		// is expired and is skipped again on the next load).
+		if err := r.store.PutHold(ctx, integrations.Hold{Scope: h.Scope}); err != nil {
+			r.warnStore("an expired hold could not be removed from the store", err)
 		}
-		r.holds[h.Scope] = h
+		return
+	}
+	clamped := false
+	if latest := now.Add(hmax); h.Until.After(latest) {
+		h.Until, clamped = latest, true
+	}
+	r.hmu.Lock()
+	if cur, ok := r.holds[h.Scope]; ok && now.Before(cur.Until) && !cur.Until.Before(h.Until) {
+		r.hmu.Unlock()
+		return
+	}
+	r.holds[h.Scope] = h
+	r.hmu.Unlock()
+	if clamped {
+		if err := r.store.PutHold(ctx, h); err != nil {
+			r.warnStore("a clamped hold could not be persisted", err)
+		}
 	}
 }
 
@@ -71,6 +140,7 @@ func (r *Registry) warnStore(msg string, err error) {
 
 // activeHold is scope's hold while it runs.
 func (r *Registry) activeHold(scope string) (integrations.Hold, bool) {
+	r.ensureState()
 	now := r.now()
 	r.hmu.Lock()
 	defer r.hmu.Unlock()
@@ -81,19 +151,30 @@ func (r *Registry) activeHold(scope string) (integrations.Hold, bool) {
 	return h, true
 }
 
+// The hold table is guarded by two locks that never nest the wrong way round:
+// hlock serialises everything that touches ONE scope's hold (the read of the
+// table, the decision and the store write), and hmu guards the map itself and
+// is held only for the map operation, never across a store call. A stuck store
+// therefore stalls the writers of its own scope and nobody else: admission
+// (activeHold), Holds, HoldFor and the other scopes' writers keep going (N4).
+// The order is always hlock, then hmu.
+
 // placeHold stands scope off for d (clamped to max), keeping a longer hold
-// already in place. It is persisted under the hold mutex, so the table and the
-// store agree; a store write that fails leaves the hold in memory (M2.5).
+// already in place. The table and the store agree because one scope's writers
+// are serialised; a store write that fails leaves the hold in memory (M2.5).
 func (r *Registry) placeHold(ctx context.Context, ref integrations.Ref, scope string, class integrations.Class, detail string, d, hmax time.Duration) {
 	now := r.now()
 	until := now.Add(min(d, hmax))
+	unlock := r.hlock.Lock(scope)
+	defer unlock()
 	r.hmu.Lock()
-	defer r.hmu.Unlock()
 	if cur, ok := r.holds[scope]; ok && now.Before(cur.Until) && !cur.Until.Before(until) {
+		r.hmu.Unlock()
 		return
 	}
 	h := integrations.Hold{Scope: scope, Class: class, Detail: detail, Until: until, SetAt: now}
 	r.holds[scope] = h
+	r.hmu.Unlock()
 	sctx, cancel := r.storeCtx(ctx)
 	defer cancel()
 	if err := r.store.PutHold(sctx, h); err != nil {
@@ -106,9 +187,11 @@ func (r *Registry) placeHold(ctx context.Context, ref integrations.Ref, scope st
 // of throttle_registry.go:303-318, kept), so an attempt that was in flight
 // when the hold was set cannot undo it.
 func (r *Registry) releaseIfStarted(ctx context.Context, scope string, started time.Time) {
+	unlock := r.hlock.Lock(scope)
+	defer unlock()
 	r.hmu.Lock()
-	defer r.hmu.Unlock()
 	h, ok := r.holds[scope]
+	r.hmu.Unlock()
 	if !ok || h.SetAt.After(started) {
 		return
 	}
@@ -117,7 +200,9 @@ func (r *Registry) releaseIfStarted(ctx context.Context, scope string, started t
 	if err := r.store.PutHold(sctx, integrations.Hold{Scope: scope}); err != nil {
 		r.warnStore("a released hold could not be removed from the store", err)
 	}
+	r.hmu.Lock()
 	delete(r.holds, scope)
+	r.hmu.Unlock()
 }
 
 // sameHold reports whether a and b are one hold: the identity of a hold is its
@@ -128,22 +213,25 @@ func sameHold(a, b integrations.Hold) bool {
 }
 
 // ReleaseHoldIf ends the hold expect only while it is still the hold in force
-// for expect.Scope (compared under the hold mutex, so no hold can be placed
+// for expect.Scope (compared under the scope's lock, so no hold can be placed
 // between the comparison and the release). It is the form for a caller that
 // read the hold with HoldFor and acts on what it saw (the hold route: an
 // operator releases the hold on the screen, not one set a moment later).
 //
-//   - the same hold is in force: it is released (store first, as ReleaseHold)
-//     and the result is nil;
+//   - the same hold is in force: it is released (store first) and the result
+//     is nil;
 //   - no hold is in force (never set, ended, or released by someone else): the
 //     goal is met and the result is nil;
 //   - a different hold is in force: nothing is released and the result is
 //     ErrHoldChanged.
 func (r *Registry) ReleaseHoldIf(ctx context.Context, expect integrations.Hold) error {
+	r.ensureState()
 	now := r.now()
+	unlock := r.hlock.Lock(expect.Scope)
+	defer unlock()
 	r.hmu.Lock()
-	defer r.hmu.Unlock()
 	cur, ok := r.holds[expect.Scope]
+	r.hmu.Unlock()
 	if !ok || !now.Before(cur.Until) {
 		return nil
 	}
@@ -153,7 +241,9 @@ func (r *Registry) ReleaseHoldIf(ctx context.Context, expect integrations.Hold) 
 	if err := r.store.PutHold(ctx, integrations.Hold{Scope: expect.Scope}); err != nil {
 		return fmt.Errorf("providerhttp: release hold: %w", err)
 	}
+	r.hmu.Lock()
 	delete(r.holds, expect.Scope)
+	r.hmu.Unlock()
 	return nil
 }
 
@@ -162,22 +252,27 @@ func (r *Registry) ReleaseHoldIf(ctx context.Context, expect integrations.Hold) 
 // hold of another class is left alone.
 func (r *Registry) ReleaseAuthHold(ctx context.Context, ref integrations.Ref) error {
 	scope := r.scopeOf(ref)
+	unlock := r.hlock.Lock(scope)
+	defer unlock()
 	r.hmu.Lock()
-	defer r.hmu.Unlock()
 	h, ok := r.holds[scope]
+	r.hmu.Unlock()
 	if !ok || h.Class != integrations.ClassAuth {
 		return nil
 	}
 	if err := r.store.PutHold(ctx, integrations.Hold{Scope: scope}); err != nil {
 		return fmt.Errorf("providerhttp: release auth hold: %w", err)
 	}
+	r.hmu.Lock()
 	delete(r.holds, scope)
+	r.hmu.Unlock()
 	return nil
 }
 
 // Holds iterates the active holds of every scope, sorted by scope. It reads
 // the gate state only: nothing is dialled and no instance is built.
 func (r *Registry) Holds() iter.Seq[integrations.Hold] {
+	r.ensureState()
 	now := r.now()
 	r.hmu.Lock()
 	out := make([]integrations.Hold, 0, len(r.holds))
@@ -192,13 +287,78 @@ func (r *Registry) Holds() iter.Seq[integrations.Hold] {
 }
 
 // scopeOf is the scope ref's gate state is keyed by: the one its last Client
-// or GateFor call named, else the default (ref.String()). A hold on an
-// instance that was never built since this boot is therefore found when its
-// scope is the default one; otherwise it is listed by Holds, and released by
-// its scope.
+// or GateFor call named, else the one a previous run recorded for it (the
+// store keeps the ref-to-scope mapping of every instance whose scope is not the
+// default, so an instance not built since this boot is found too), else the
+// default (ref.String()).
 func (r *Registry) scopeOf(ref integrations.Ref) string {
+	r.ensureState()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if s, ok := r.refScope[ref]; ok {
+		return s
+	}
+	return ref.String()
+}
+
+// mergeScopes adopts the persisted ref-to-scope mappings: a ref this process has
+// already named keeps its own scope (the build is newer than the record), and
+// the record is rewritten when the two differ.
+func (r *Registry) mergeScopes(ctx context.Context, ss map[integrations.Ref]string) {
+	var stale []integrations.Ref
+	r.mu.Lock()
+	for ref, sc := range ss {
+		r.scopePersisted[ref] = sc
+		if _, built := r.refScope[ref]; !built {
+			r.refScope[ref] = sc
+		}
+	}
+	for ref, sc := range r.refScope {
+		if r.scopePersisted[ref] != storedScope(ref, sc) {
+			stale = append(stale, ref)
+		}
+	}
+	r.mu.Unlock()
+	for _, ref := range stale {
+		r.persistScope(ctx, ref)
+	}
+}
+
+// storedScope is what the store keeps for ref's scope: nothing (empty) for the
+// default, which needs no record.
+func storedScope(ref integrations.Ref, scope string) string {
+	if scope == ref.String() {
+		return ""
+	}
+	return scope
+}
+
+// persistScope makes the store's mapping for ref match refScope. A ref whose
+// scope is the default has no record, and a record left by an earlier custom
+// scope is removed, so HoldFor never follows a stale mapping.
+func (r *Registry) persistScope(ctx context.Context, ref integrations.Ref) {
+	unlock := r.slock.Lock(ref.String())
+	defer unlock()
+	r.mu.Lock()
+	want := storedScope(ref, r.scopeLocked(ref))
+	have := r.scopePersisted[ref]
+	r.mu.Unlock()
+	if want == have {
+		return
+	}
+	sctx, cancel := r.storeCtx(ctx)
+	defer cancel()
+	if err := r.store.PutScope(sctx, ref, want); err != nil {
+		r.warnStore("an instance's scope could not be persisted; its hold may not be found by ref after a restart", err)
+		return
+	}
+	r.mu.Lock()
+	r.scopePersisted[ref] = want
+	r.mu.Unlock()
+}
+
+// scopeLocked is ref's scope; the caller holds r.mu.
+func (r *Registry) scopeLocked(ref integrations.Ref) string {
 	if s, ok := r.refScope[ref]; ok {
 		return s
 	}
@@ -250,12 +410,5 @@ func (r *Registry) scopeAttrs(scope string) []any {
 // Detail is a constant ("class=...") when this Registry placed it, but a
 // persisted record is another writer's input.
 func logDetail(d string) string {
-	d = scrubText(strings.ToValidUTF8(d, ""), nil)
-	if len(d) > maxLogDetail {
-		d = d[:maxLogDetail]
-		for len(d) > 0 && !utf8.ValidString(d) {
-			d = d[:len(d)-1]
-		}
-	}
-	return d
+	return scrubber{}.bounded(d, maxLogDetail)
 }

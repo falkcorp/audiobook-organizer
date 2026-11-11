@@ -1,5 +1,5 @@
 // file: core/integrations/integrations.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1e407ce3-b439-4eda-a361-798c3530fdb0
 // last-edited: 2026-11-11
 
@@ -279,7 +279,15 @@ type SecretReader interface {
 // imports integrations for Ref and Class.
 type HTTP interface {
 	Do(req *http.Request) (*http.Response, error)
-	Client() *http.Client // for SDKs that take an *http.Client (e.g. openai-go option.WithHTTPClient)
+	// Client returns an *http.Client for SDKs that take one (e.g. openai-go
+	// option.WithHTTPClient). Every request it makes passes the gate, but the
+	// *url.Error net/http builds names the URL the CALLER built, and this
+	// package cannot rewrite an error it does not return. So a secret must
+	// never go into a URL a caller builds: send it in a header, or have the
+	// outbound layer add it (OutboundSpec.QueryCredential), which keeps it out
+	// of every URL the caller holds. Do and the typed helpers redact what they
+	// return; the raw client cannot.
+	Client() *http.Client
 	Gate() Gate
 }
 

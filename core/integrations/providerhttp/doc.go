@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/doc.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 28642cb9-f8ea-461a-99c3-c80be49fb21f
 // last-edited: 2026-11-11
 
@@ -17,7 +17,7 @@
 // RESOLVED address (never the name), so a hostname that resolves to a private
 // address, a rebinding answer and a redirect into the private range are all
 // refused at the socket. Private ranges are reachable only through the
-// instance's Policy.Private (its bound, admin-set origins and the operator's
+// instance's Policy.Trust (its bound, admin-set origins and the operator's
 // lan_allow list), never for data-derived URLs, and link-local addresses
 // (cloud metadata included) never.
 //

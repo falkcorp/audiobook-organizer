@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/egress.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 13d22c91-8f27-4c5b-a373-a9c87d5a44f7
 // last-edited: 2026-11-11
 
@@ -38,8 +38,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"time"
 )
@@ -55,6 +57,11 @@ var (
 	// ErrInvalidURL reports a URL that cannot be used for a fetch at all.
 	ErrInvalidURL = errors.New("invalid URL")
 
+	// ErrInsecureRedirect reports a redirect from https to http that the
+	// instance's trust does not cover: the credentials of a request that left
+	// over TLS must not follow it onto plain text.
+	ErrInsecureRedirect = errors.New("redirect from https to http is not allowed")
+
 	// ErrTooManyRedirects reports a redirect chain longer than MaxRedirects.
 	ErrTooManyRedirects = errors.New("too many redirects")
 )
@@ -67,9 +74,11 @@ const MaxRedirects = 5
 // DefaultDialTimeout bounds a single TCP connect attempt.
 const DefaultDialTimeout = 10 * time.Second
 
-// extraBlockedNets lists ranges that the net.IP predicates below do not
+// blockedPrefixes lists ranges that the net.IP predicates below do not
 // already cover. A function, not a package variable: core holds no
-// package-level state (R5), and the table is only read at dial time.
+// package-level state (R5). The Registry parses it ONCE per guard (each
+// Dialer keeps its copy); IsBlockedIP, the exported check for callers with no
+// Dialer, parses per call.
 //
 // Deliberately ABSENT: the documentation ranges 192.0.2.0/24 (TEST-NET-1),
 // 198.51.100.0/24 (TEST-NET-2) and 203.0.113.0/24 (TEST-NET-3). They are
@@ -77,27 +86,33 @@ const DefaultDialTimeout = 10 * time.Second
 // and docs are required to use those ranges as stand-ins for public addresses,
 // so blocking them would make it impossible to write a test that proves a
 // public address is still allowed.
-func extraBlockedNets() []*net.IPNet {
+func blockedPrefixes() []netip.Prefix {
 	blocks := []string{
-		"0.0.0.0/8",     // "this network"; 0.0.0.0 reaches localhost on Linux
-		"100.64.0.0/10", // CGNAT / carrier internal
-		"192.0.0.0/24",  // IETF protocol assignments (incl. 192.0.0.170 NAT64)
-		"198.18.0.0/15", // benchmarking
-		"240.0.0.0/4",   // reserved, incl. 255.255.255.255 broadcast
-		"::/128",        // IPv6 unspecified (belt and braces with IsUnspecified)
-		"64:ff9b::/96",  // NAT64 — embeds an arbitrary IPv4 address
-		"2001:db8::/32", // IPv6 documentation
-		"2002::/16",     // 6to4 — embeds an arbitrary IPv4 address
-		"fc00::/7",      // IPv6 unique-local (belt and braces with IsPrivate)
-		"fe80::/10",     // IPv6 link-local (belt and braces with IsLinkLocal*)
+		"0.0.0.0/8",        // "this network"; 0.0.0.0 reaches localhost on Linux
+		"100.64.0.0/10",    // CGNAT / carrier internal (also Alibaba's 100.100.100.200 metadata)
+		"168.63.129.16/32", // Azure's wire server: a public address that is a metadata endpoint
+		"192.0.0.0/24",     // IETF protocol assignments (incl. 192.0.0.170 NAT64)
+		"198.18.0.0/15",    // benchmarking
+		"240.0.0.0/4",      // reserved, incl. 255.255.255.255 broadcast
+		"::/96",            // IPv6 unspecified and the deprecated IPv4-compatible form (::127.0.0.1)
+		"::ffff:0:0:0/96",  // SIIT (IPv4-translated): not the IPv4-mapped ::ffff:0:0/96, which is unmapped first
+		"64:ff9b::/96",     // NAT64 — embeds an arbitrary IPv4 address
+		"64:ff9b:1::/48",   // local-use NAT64 (RFC 8215)
+		"100::/64",         // discard-only
+		"2001::/32",        // Teredo — embeds an arbitrary IPv4 address
+		"2001:db8::/32",    // IPv6 documentation
+		"2002::/16",        // 6to4 — embeds an arbitrary IPv4 address
+		"fc00::/7",         // IPv6 unique-local (belt and braces with IsPrivate)
+		"fe80::/10",        // IPv6 link-local (belt and braces with IsLinkLocal*)
+		"fec0::/10",        // deprecated site-local
 	}
-	nets := make([]*net.IPNet, 0, len(blocks))
+	out := make([]netip.Prefix, 0, len(blocks))
 	for _, b := range blocks {
-		if _, n, err := net.ParseCIDR(b); err == nil && n != nil {
-			nets = append(nets, n)
+		if p, err := netip.ParsePrefix(b); err == nil {
+			out = append(out, p)
 		}
 	}
-	return nets
+	return out
 }
 
 // IsBlockedIP reports whether ip must not be connected to.
@@ -105,10 +120,11 @@ func extraBlockedNets() []*net.IPNet {
 // It fails closed: a nil or unparseable address is blocked, because "we could
 // not tell what this is" is not a reason to dial it.
 //
-// IPv4-mapped IPv6 (::ffff:127.0.0.1) needs no special case: both the net.IP
-// predicates and net.IPNet.Contains normalise through To4 first, so the v4
-// ranges catch the mapped forms.
-func IsBlockedIP(ip net.IP) bool {
+// IPv4-mapped IPv6 (::ffff:127.0.0.1) is unmapped first, so the v4 ranges
+// catch the mapped forms.
+func IsBlockedIP(ip net.IP) bool { return isBlocked(ip, blockedPrefixes()) }
+
+func isBlocked(ip net.IP, nets []netip.Prefix) bool {
 	if ip == nil {
 		return true
 	}
@@ -117,8 +133,13 @@ func IsBlockedIP(ip net.IP) bool {
 		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() {
 		return true
 	}
-	for _, n := range extraBlockedNets() {
-		if n.Contains(ip) {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	a = a.Unmap()
+	for _, n := range nets {
+		if n.Contains(a) {
 			return true
 		}
 	}
@@ -174,11 +195,30 @@ type Dialer struct {
 	// net.Dialer. Implementations may assume the address has already been
 	// checked by IsBlockedIP.
 	DialAddr func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// Log receives one Debug line per refused dial naming the host and the
+	// address it resolved to: the detail an error must not carry (the refusal
+	// text names neither, so a response to a caller never maps the private
+	// network). nil discards.
+	Log *slog.Logger
+
+	nets []netip.Prefix // blockedPrefixes, parsed once by newGuard
+}
+
+// newGuard is the Dialer of a Registry's transports: the blocked ranges are
+// parsed once, here.
+func newGuard(allowPrivate bool, lookup func(context.Context, string) ([]net.IP, error),
+	dial func(context.Context, string, string) (net.Conn, error), log *slog.Logger) *Dialer {
+	return &Dialer{AllowPrivate: allowPrivate, LookupIP: lookup, DialAddr: dial, Log: log, nets: blockedPrefixes()}
 }
 
 // blocked reports whether the dial must refuse ip under d's trust.
 func (d *Dialer) blocked(ip net.IP) bool {
-	if !IsBlockedIP(ip) {
+	nets := d.nets
+	if nets == nil {
+		nets = blockedPrefixes()
+	}
+	if !isBlocked(ip, nets) {
 		return false
 	}
 	return !(d.AllowPrivate && privateBypassable(ip))
@@ -191,6 +231,9 @@ func (d *Dialer) blocked(ip net.IP) bool {
 // ::ffff:127.0.0.1 is loopback and ::ffff:169.254.169.254 is link-local.
 // Link-local, multicast and everything else stay refused.
 func privateBypassable(ip net.IP) bool {
+	if isMetadataAddr(ip) {
+		return false
+	}
 	if ip == nil || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() ||
 		ip.IsInterfaceLocalMulticast() {
 		return false
@@ -203,6 +246,23 @@ func privateBypassable(ip net.IP) bool {
 	}
 	if v4 := ip.To4(); v4 != nil {
 		return v4[0] == 100 && v4[1]&0xC0 == 64 // 100.64.0.0/10
+	}
+	return false
+}
+
+// isMetadataAddr reports the cloud metadata endpoints that sit inside a range a
+// private-trusted dial may otherwise reach: AWS's IPv6 endpoint fd00:ec2::254
+// (unique-local) and Alibaba's 100.100.100.200 (CGNAT). A LAN service is never
+// at either, and a credential store is at both.
+func isMetadataAddr(ip net.IP) bool {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	switch a.Unmap() {
+	case netip.AddrFrom4([4]byte{100, 100, 100, 200}),
+		netip.AddrFrom16([16]byte{0xfd, 0x00, 0x0e, 0xc2, 15: 0x54, 14: 0x02}):
+		return true
 	}
 	return false
 }
@@ -247,7 +307,8 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 		return nil, err
 	}
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("%w: %s resolved to no addresses", ErrBlockedAddress, host)
+		d.debug("egress dial refused: the host resolved to no addresses", host, "")
+		return nil, fmt.Errorf("%w: the host resolved to no addresses", ErrBlockedAddress)
 	}
 	// Any blocked address rejects the WHOLE dial. Skipping the blocked entries
 	// and dialing the rest would let an attacker who controls the zone answer
@@ -256,7 +317,8 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 	// the public record is dead would fall through to the internal one.
 	for _, ip := range ips {
 		if d.blocked(ip) {
-			return nil, fmt.Errorf("%w: %s resolves to %s", ErrBlockedAddress, host, ip)
+			d.debug("egress dial refused: the host resolved to a blocked address", host, ip.String())
+			return nil, fmt.Errorf("%w: the destination is not allowed", ErrBlockedAddress)
 		}
 	}
 	// Try each checked address in turn: a legitimate CDN with several A records
@@ -270,6 +332,13 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+func (d *Dialer) debug(msg, host, addr string) {
+	if d.Log == nil {
+		return
+	}
+	d.Log.Debug("providerhttp: "+msg, "host", host, "resolved", addr)
 }
 
 // CheckRedirect is the http.Client hook. It re-applies the scheme allowlist to
@@ -290,7 +359,8 @@ func CheckRedirect(req *http.Request, via []*http.Request) error {
 // the resolution and the connect, and the guard would never see the target
 // address at all.
 func NewTransport() *http.Transport {
-	d := &Dialer{Timeout: DefaultDialTimeout}
+	d := newGuard(false, nil, nil, nil)
+	d.Timeout = DefaultDialTimeout
 	return &http.Transport{
 		DialContext:           d.DialContext,
 		Proxy:                 nil,

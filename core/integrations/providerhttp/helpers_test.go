@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/helpers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e67a0ad0-2034-4b3e-917c-c3b16a984944
 // last-edited: 2026-11-11
 
@@ -73,7 +73,10 @@ func ref(name string) integrations.Ref {
 // newRegistry builds a Registry on clk; mut edits the Options.
 func newRegistry(t testing.TB, clk *clock, mut ...func(*providerhttp.Options)) *providerhttp.Registry {
 	t.Helper()
-	o := providerhttp.Options{Now: clk.Now, Sleep: clk.Sleep, Jitter: func(time.Duration) time.Duration { return 0 }}
+	o := providerhttp.Options{Now: clk.Now, Sleep: clk.Sleep, Jitter: func(time.Duration) time.Duration { return 0 },
+		// The loopback httptest servers a test reaches are private; lan_allow is
+		// how a test says so (a test of trust passes Trust origins and clears it).
+		LANAllow: func() []string { return []string{"127.0.0.0/8", "::1/128"} }}
 	for _, m := range mut {
 		m(&o)
 	}
@@ -85,9 +88,10 @@ func newRegistry(t testing.TB, clk *clock, mut ...func(*providerhttp.Options)) *
 	return r
 }
 
-// anyPrivate trusts every endpoint for private addresses: the loopback
-// httptest servers a test reaches are private.
-func anyPrivate(string) bool { return true }
+// lanTrust is a Trust with no bound origin: the instance reaches private
+// addresses only where lan_allow admits them, and newRegistry's does (the
+// loopback httptest servers).
+var lanTrust = integrations.Trust{}
 
 // noRetry is a Limits with retries off ("negative" is the way to say zero).
 func limits(rps float64, burst int) integrations.Limits {

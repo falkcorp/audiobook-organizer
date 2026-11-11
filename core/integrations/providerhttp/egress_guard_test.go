@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/egress_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8815c998-81fb-4bb2-89f4-58fb0a66ea1f
 // last-edited: 2026-11-11
 
@@ -89,7 +89,7 @@ func blockedBy(err error) bool {
 func TestEgressPublicOnlyRefusesPrivate(t *testing.T) {
 	r := newRegistry(t, newClock())
 	srv, hits := server(t, ok)
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Egress: integrations.EgressPublicOnly, Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Egress: integrations.EgressPublicOnly, Trust: lanTrust})
 	if _, err := get(t, c, srv.URL); !blockedBy(err) {
 		t.Fatalf("err = %v, want an egress refusal", err)
 	}
@@ -98,13 +98,24 @@ func TestEgressPublicOnlyRefusesPrivate(t *testing.T) {
 	}
 }
 
+// noLAN is a registry option that clears lan_allow, so only an instance's own
+// Trust can reach a private address.
+func noLAN(o *providerhttp.Options) { o.LANAllow = nil }
+
 // TestEgress_PrivateRefusedUnlessLocal: a private address is refused unless the
-// instance is trusted for that endpoint.
+// instance's Trust lists that endpoint (or lan_allow admits it).
 func TestEgress_PrivateRefusedUnlessLocal(t *testing.T) {
-	r := newRegistry(t, newClock())
+	r := newRegistry(t, newClock(), noLAN)
 	srv, hits := server(t, ok)
-	for name, p := range map[string]func(string) bool{"no trust": nil, "untrusted": func(string) bool { return false }} {
-		c := r.Client(ref(strings.ReplaceAll(name, " ", "")), providerhttp.Policy{Limits: limits(100, 100), Private: p})
+	_, port, _ := net.SplitHostPort(hostOf(srv))
+	for name, trust := range map[string]integrations.Trust{
+		"no trust":          {},
+		"another port":      {PrivateOrigins: []string{"http://127.0.0.1:" + port + "1"}},
+		"another host":      {PrivateOrigins: []string{"http://127.0.0.2:" + port}},
+		"a public origin":   {PrivateOrigins: []string{"http://192.0.2.1:" + port}},
+		"an origin w/o ://": {PrivateOrigins: []string{hostOf(srv)}},
+	} {
+		c := r.Client(ref(strings.ReplaceAll(name, " ", "")), providerhttp.Policy{Limits: limits(100, 100), Trust: trust})
 		if _, err := get(t, c, srv.URL); !blockedBy(err) {
 			t.Errorf("%s: err = %v, want refused", name, err)
 		}
@@ -112,13 +123,10 @@ func TestEgress_PrivateRefusedUnlessLocal(t *testing.T) {
 	if hits.Load() != 0 {
 		t.Fatal("the private server was reached")
 	}
-	var asked []string
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Private: func(hp string) bool { asked = append(asked, hp); return hp == hostOf(srv) }})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100),
+		Trust: integrations.Trust{PrivateOrigins: []string{"HTTP://" + strings.ToUpper(hostOf(srv))}}})
 	if _, err := get(t, c, srv.URL); err != nil {
-		t.Fatalf("trusted endpoint: %v", err)
-	}
-	if len(asked) != 1 || asked[0] != hostOf(srv) {
-		t.Fatalf("Private was asked %v, want the lower-case host:port once", asked)
+		t.Fatalf("trusted endpoint (origin written in upper case): %v", err)
 	}
 	if hits.Load() != 1 {
 		t.Fatal("the trusted request was not sent")
@@ -170,7 +178,7 @@ func TestEgress_LinkLocalAlwaysRefused(t *testing.T) {
 	_, port, _ := net.SplitHostPort(hostOf(srv))
 	rec := &dialRecorder{real: hostOf(srv), answers: func(int, string) []net.IP { return ips("169.254.169.254") }}
 	r := newRegistry(t, newClock(), rec.options)
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Trust: lanTrust})
 	for _, u := range []string{
 		"http://169.254.169.254:" + port + "/latest/meta-data/",
 		"http://[fe80::1]:" + port + "/",
@@ -202,7 +210,7 @@ func TestEgress_RebindingCheckedAtDial(t *testing.T) {
 		return ips("192.0.2.10", "10.0.0.5") // one blocked answer poisons the set
 	}}
 	r := newRegistry(t, newClock(), rec.options)
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Private: func(hp string) bool { return false }})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100)})
 	u := nameURL(srv, "/")
 	if _, err := get(t, c, u); err != nil {
 		t.Fatalf("public answer: %v", err)
@@ -242,9 +250,9 @@ func TestEgress_HostnameResolvingPrivateRefused(t *testing.T) {
 func TestEgressSameHostOrPublic(t *testing.T) {
 	a, _ := server(t, ok)
 	b, bHits := server(t, ok)
-	r := newRegistry(t, newClock())
+	r := newRegistry(t, newClock(), noLAN)
 	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Egress: integrations.EgressSameHostOrPublic,
-		Private: func(hp string) bool { return hp == hostOf(a) }})
+		Trust: integrations.Trust{PrivateOrigins: []string{"http://" + hostOf(a)}}})
 	if _, err := get(t, c, a.URL); err != nil {
 		t.Fatalf("the configured host: %v", err)
 	}
@@ -261,7 +269,7 @@ func TestEgressSameHostOrPublic(t *testing.T) {
 func TestLocalInstance_OtherPrivateHostRefused(t *testing.T) {
 	a, _ := server(t, ok)
 	b, bHits := server(t, ok)
-	r := newRegistry(t, newClock())
+	r := newRegistry(t, newClock(), noLAN)
 	h, _ := r.Outbound(integrations.OutboundSpec{Ref: batcave, Egress: integrations.EgressConfigured, Limits: limits(100, 100),
 		Trust: integrations.Trust{PrivateOrigins: []string{"http://" + hostOf(a)}}})
 	for url, want := range map[string]bool{a.URL: true, b.URL: false} {
@@ -306,7 +314,7 @@ func TestLocalInstance_RedirectToOtherPrivateHostRefused(t *testing.T) {
 			http.Redirect(w, r, b.URL, http.StatusFound)
 		}
 	})
-	r := newRegistry(t, newClock())
+	r := newRegistry(t, newClock(), noLAN)
 	h, _ := r.Outbound(integrations.OutboundSpec{Ref: batcave, Egress: integrations.EgressConfigured, Limits: limits(100, 100),
 		Trust: integrations.Trust{PrivateOrigins: []string{"http://" + hostOf(a)}}})
 	cl := *h.Client()
@@ -336,7 +344,7 @@ func TestRedirectFromPublicToPrivateRefused(t *testing.T) {
 	pub, _ := server(t, redirectTo(inner.URL))
 	rec := &dialRecorder{real: hostOf(pub), answers: func(int, string) []net.IP { return ips("192.0.2.10") }}
 	r := newRegistry(t, newClock(), rec.options)
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Trust: lanTrust})
 	cl := *c.Client()
 	cl.CheckRedirect = follow
 	if _, err := cl.Get(nameURL(pub, "/")); !blockedBy(err) {
@@ -356,7 +364,7 @@ func TestCopiedClient_KeepsEveryControl(t *testing.T) {
 	redir, _ := server(t, redirectTo(other.URL))
 	clk := newClock()
 	rec := &dialRecorder{real: hostOf(trusted), answers: func(int, string) []net.IP { return ips("127.0.0.1") }}
-	r := newRegistry(t, clk, rec.options, func(o *providerhttp.Options) { o.Base = &http.Transport{DisableKeepAlives: true} })
+	r := newRegistry(t, clk, noLAN, rec.options, func(o *providerhttp.Options) { o.Base = &http.Transport{DisableKeepAlives: true} })
 	lim := limits(1, 1)
 	lim.Daily = daily(2, 2)
 	h, g := r.Outbound(integrations.OutboundSpec{Ref: batcave, Egress: integrations.EgressConfigured, Limits: lim,
@@ -424,7 +432,7 @@ func TestCopiedClient_KeepsEveryControl(t *testing.T) {
 // still cannot reach another scheme.
 func TestSchemeAllowlistOnEveryRequest(t *testing.T) {
 	r := newRegistry(t, newClock())
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Trust: lanTrust})
 	cl := *c.Client()
 	cl.CheckRedirect = nil
 	for _, u := range []string{"file:///etc/passwd", "gopher://localhost:70/", "ftp://localhost/x"} {
@@ -453,7 +461,7 @@ func TestRedirectChainIsCapped(t *testing.T) {
 		http.Redirect(w, req, fmt.Sprintf("%s/hop/%d", srv.URL, n), http.StatusFound)
 	}))
 	t.Cleanup(srv.Close)
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Trust: lanTrust})
 	resp, err := c.Client().Get(srv.URL + "/start")
 	if err == nil {
 		_ = resp.Body.Close()

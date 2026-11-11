@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/transport.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 251805ba-baff-4a97-b673-26771486637d
 // last-edited: 2026-11-11
 
@@ -12,8 +12,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/mediacore/integrations"
@@ -37,6 +39,22 @@ const classifyBodyMax = 64 << 10
 // first try, but is not a second failure).
 type transport struct{ g *gate }
 
+// attemptTrace records whether one attempt got a connection or wrote its
+// request: the two facts that say a request may have reached the remote.
+type attemptTrace struct{ gotConn, wrote atomic.Bool }
+
+// sent reports that the attempt may have reached the remote: a connection was
+// obtained or the request was written. A failure before both (a refused dial,
+// a DNS error, an egress refusal) spent nothing at the provider.
+func (a *attemptTrace) sent() bool { return a.gotConn.Load() || a.wrote.Load() }
+
+func (a *attemptTrace) client() *httptrace.ClientTrace {
+	return &httptrace.ClientTrace{
+		GotConn:      func(httptrace.GotConnInfo) { a.gotConn.Store(true) },
+		WroteRequest: func(httptrace.WroteRequestInfo) { a.wrote.Store(true) },
+	}
+}
+
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	g, r := t.g, t.g.r
 	ctx := req.Context()
@@ -50,9 +68,26 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		r.met.refused(g.ref, ReasonEgress)
 		return fail(refuse(g.ref, "http", ReasonEgress, time.Time{}, err))
 	}
+	// A hop to another endpoint than the one that redirected carries no
+	// credential of this instance (M1): net/http itself drops Authorization
+	// and Cookie across hosts, not X-Api-Key, X-Plex-Token or the rest.
+	crossHop := t.crossesEndpoint(req)
+	if downgrades(req) && !t.privateOK(req) {
+		r.met.refused(g.ref, ReasonEgress)
+		return fail(refuse(g.ref, "http", ReasonEgress, time.Time{}, ErrInsecureRedirect))
+	}
 	tk, err := g.admit(ctx, "http")
 	if err != nil {
 		return fail(err)
+	}
+	cred := ""
+	if qc := g.qc; qc != nil && !crossHop {
+		v, verr := qc.Value(ctx)
+		if verr != nil || v == "" { // the cause is not wrapped: it may name what it could not read
+			tk.abort()
+			return fail(&integrations.Error{Ref: g.ref, Op: "http", Class: integrations.ClassRefusedLocal, Err: ErrCredentialUnavailable})
+		}
+		cred = v
 	}
 	lim := g.sc.limits()
 	replayable := req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
@@ -60,6 +95,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if !replayable || tk.probe { // never resend an empty body; a probe is one request
 		maxRetries = 0
 	}
+	idempotent := isIdempotent(req)
 	maxBody := g.pol.MaxBody
 	if maxBody <= 0 {
 		maxBody = defaultMaxBody
@@ -84,6 +120,8 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if lim.Timeout > 0 { // per attempt, started after the bucket wait (M2.6)
 			actx, cancel = context.WithTimeout(ctx, lim.Timeout)
 		}
+		var tr attemptTrace
+		actx = httptrace.WithClientTrace(actx, tr.client())
 		r2 := req.Clone(actx)
 		if attempt > 0 && req.GetBody != nil {
 			b, berr := req.GetBody()
@@ -94,22 +132,39 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 			r2.Body = b
 		}
+		if crossHop {
+			dropCredentialHeaders(r2.Header, g.scr)
+		}
+		if cred != "" {
+			addQuery(r2.URL, g.qc.Name, cred)
+		}
 		if r.o.UserAgent != "" && r2.Header.Get("User-Agent") == "" {
 			r2.Header.Set("User-Agent", r.o.UserAgent)
 		}
 		resp, rerr := t.pick(r2).RoundTrip(r2)
 		if rerr != nil {
 			cancel()
+			rerr = dropLiteral(rerr, cred)
+			if !tr.sent() {
+				g.sc.refund(ctx, counted) // nothing reached the provider: nothing is spent
+			}
 			if isEgressRefusal(rerr) {
 				r.met.refused(g.ref, ReasonEgress)
-				g.sc.refund(ctx, counted) // refused at the dial: nothing was sent
-				tk.finish(outcome{class: integrations.ClassRefusedLocal})
+				g.sc.bk.giveBack() // refused at the dial: it did not use the provider's pace either
+				if haveLast {
+					tk.finish(last) // an earlier attempt's 503 still teaches the breaker and the hold
+				} else {
+					tk.finish(outcome{class: integrations.ClassRefusedLocal})
+				}
 				return nil, refuse(g.ref, "http", ReasonEgress, time.Time{}, rerr)
 			}
 			o := outcome{class: classifyErr(ctx, rerr)}
 			r.met.request(g.ref, o.class)
 			last, haveLast = o, true
-			if o.class.Retryable() && attempt < maxRetries && ctx.Err() == nil {
+			// A request that wrote nothing is safe to send again whatever its
+			// method; one that may have been written is resent only if it is
+			// idempotent.
+			if o.class.Retryable() && attempt < maxRetries && ctx.Err() == nil && (idempotent || !tr.sent()) {
 				if err := t.backoff(ctx, attempt, 0, lim); err != nil {
 					tk.finish(o)
 					return nil, canceled(g.ref, "http", err)
@@ -119,6 +174,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			tk.finish(o)
 			return nil, rerr
 		}
+		resp.Request = req // never the clone that carries the injected credential
 
 		o := outcome{status: resp.StatusCode, success: resp.StatusCode < 400}
 		var head []byte
@@ -133,7 +189,8 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		r.met.request(g.ref, o.class)
 		last, haveLast = o, true
-		if !o.success && o.class.Retryable() && attempt < maxRetries && ctx.Err() == nil {
+		if !o.success && o.class.Retryable() && attempt < maxRetries && ctx.Err() == nil &&
+			(idempotent || serverSaysRetry(resp)) {
 			finishBody(resp.Body)
 			cancel()
 			if err := t.backoff(ctx, attempt, o.retryAfter, lim); err != nil {
@@ -158,6 +215,80 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 }
 
+// isIdempotent reports a request that may be sent twice: an idempotent method
+// (RFC 9110 section 9.2.2) or one that carries an idempotency key.
+func isIdempotent(req *http.Request) bool {
+	switch req.Method {
+	case "", http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
+		return true
+	}
+	return req.Header.Get("Idempotency-Key") != "" || req.Header.Get("X-Idempotency-Key") != ""
+}
+
+// serverSaysRetry reports an answer by which the server itself says the
+// request was not processed and may be sent again: 429, or 503 with a
+// Retry-After.
+func serverSaysRetry(resp *http.Response) bool {
+	return resp.StatusCode == http.StatusTooManyRequests ||
+		resp.StatusCode == http.StatusServiceUnavailable && resp.Header.Get("Retry-After") != ""
+}
+
+// crossesEndpoint reports that req is a redirect hop to another endpoint than
+// the request that was redirected.
+func (t *transport) crossesEndpoint(req *http.Request) bool {
+	res := req.Response
+	return res != nil && (res.Request == nil || endpoint(res.Request.URL) != endpoint(req.URL))
+}
+
+// downgrades reports a redirect hop from https to http.
+func downgrades(req *http.Request) bool {
+	res := req.Response
+	return res != nil && res.Request != nil && res.Request.URL != nil &&
+		strings.EqualFold(res.Request.URL.Scheme, "https") && strings.EqualFold(req.URL.Scheme, "http")
+}
+
+// privateOK reports that req's endpoint is one the instance may reach on a
+// private network: the only case in which a redirect may leave https for http
+// (a LAN service behind a TLS-terminating proxy that redirects to its plain
+// address).
+func (t *transport) privateOK(req *http.Request) bool {
+	g := t.g
+	return g.pol.Egress != integrations.EgressPublicOnly && g.private != nil && g.private(endpoint(req.URL))
+}
+
+// dropCredentialHeaders deletes every header that carries a credential: the
+// named ones and any whose name the scrubber's rules call secret.
+func dropCredentialHeaders(h http.Header, s scrubber) {
+	for k := range h {
+		switch http.CanonicalHeaderKey(k) {
+		case "Authorization", "Cookie", "Proxy-Authorization":
+			delete(h, k)
+		default:
+			if s.secret(k) {
+				delete(h, k)
+			}
+		}
+	}
+}
+
+// addQuery sets query parameter name to value on u (a URL the transport owns:
+// the clone of the request's), replacing any parameter of that name.
+func addQuery(u *url.URL, name, value string) {
+	var parts []string
+	for p := range strings.SplitSeq(u.RawQuery, "&") {
+		if p == "" {
+			continue
+		}
+		n, _, _ := strings.Cut(p, "=")
+		if dec, err := url.QueryUnescape(n); err == nil && dec == name {
+			continue
+		}
+		parts = append(parts, p)
+	}
+	parts = append(parts, url.QueryEscape(name)+"="+url.QueryEscape(value))
+	u.RawQuery = strings.Join(parts, "&")
+}
+
 // backoff sleeps before the next attempt: the server's Retry-After clamped to
 // the instance's RetryAfterMax, else 1s, 2s, 4s ... capped at 30s with up to
 // 50% jitter (so throttled workers do not retry in lockstep).
@@ -178,19 +309,19 @@ func (t *transport) backoff(ctx context.Context, attempt int, retryAfter time.Du
 // EgressPublicOnly (data-derived URLs), never for a redirect hop to another
 // endpoint than the one that redirected (SEC4-15: Local is bound to the
 // instance's configured origins and must not carry to another LAN host), and
-// only where Policy.Private says the endpoint is bound or allow-listed. Every
+// only where the instance's trust says the endpoint is bound or allow-listed. Every
 // other request uses the public-only transport, whose dial refuses private
 // addresses, so an untrusted request can never reuse a connection dialled
 // under trust.
 func (t *transport) pick(req *http.Request) *http.Transport {
 	g := t.g
-	if g.pol.Egress == integrations.EgressPublicOnly || g.pol.Private == nil {
+	if g.pol.Egress == integrations.EgressPublicOnly || g.private == nil {
 		return g.r.strict
 	}
-	if res := req.Response; res != nil && (res.Request == nil || endpoint(res.Request.URL) != endpoint(req.URL)) {
+	if t.crossesEndpoint(req) {
 		return g.r.strict
 	}
-	if g.pol.Private(endpoint(req.URL)) {
+	if g.private(endpoint(req.URL)) {
 		return g.r.lan
 	}
 	return g.r.strict

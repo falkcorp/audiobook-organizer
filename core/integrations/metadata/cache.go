@@ -1,5 +1,5 @@
 // file: core/integrations/metadata/cache.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 72d542b0-8df4-46f9-8c64-b7e589f09c1b
 // last-edited: 2026-11-11
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/codec"
 	"github.com/falkcorp/mediacore/storage/keys"
@@ -35,7 +36,7 @@ type Cache[Q any] struct {
 	now func() time.Time
 
 	mu      sync.Mutex
-	flights map[string]*flight
+	flights map[flightKey]*flight
 	warned  map[string]struct{} // provider refs whose write failure was logged
 }
 
@@ -47,6 +48,15 @@ type CacheOptions[Q any] struct {
 	// question uncacheable (it goes live, nothing is read or written).
 	// Required.
 	QuestionKey func(Q) (key string, ok bool)
+	// Fingerprint, when non-nil, is the effective configuration of provider as
+	// far as its ANSWERS go (base URL, region, language, a filter: anything that
+	// changes what the same question returns), as a short non-secret string.
+	// It is part of the row key, so an instance that is reconfigured stops
+	// reading the answers its old configuration cached; the old rows are never
+	// read again and age out by their TTL (Sweep drops expired rows, not
+	// rows of another fingerprint). nil: the configuration does not change
+	// answers.
+	Fingerprint func(provider integrations.Ref) string
 	// Version invalidates every question when bumped (searchIdentityVersion's
 	// analogue): rows of another Version are never read and Sweep removes them.
 	Version string
@@ -73,7 +83,7 @@ func NewCache[Q any](opts CacheOptions[Q]) (*Cache[Q], error) {
 	case opts.TTL == nil:
 		return nil, errors.New("metadata: a Cache needs TTL")
 	}
-	c := &Cache[Q]{o: opts, now: opts.Now, flights: map[string]*flight{}, warned: map[string]struct{}{}}
+	c := &Cache[Q]{o: opts, now: opts.Now, flights: map[flightKey]*flight{}, warned: map[string]struct{}{}}
 	if c.now == nil {
 		c.now = time.Now
 	}
@@ -121,7 +131,25 @@ type entry struct {
 }
 
 func (c *Cache[Q]) rowKey(provider integrations.Ref, key string) []byte {
-	return keys.Join(keys.Str(provider.String()), keys.Str(c.o.Version), keys.Str(key))
+	return keys.Join(keys.Str(provider.String()), keys.Str(c.o.Version), keys.Str(c.fingerprint(provider)), keys.Str(key))
+}
+
+func (c *Cache[Q]) fingerprint(provider integrations.Ref) string {
+	if c.o.Fingerprint == nil {
+		return ""
+	}
+	return c.o.Fingerprint(provider)
+}
+
+// flightKey identifies the calls that may share one live call: the same
+// provider, configuration, Version and question, asked with the same cache
+// mode and the same gate flags (tier, hold bypass, counter). A struct, not a
+// joined string, so no field can be crafted to run into its neighbour.
+type flightKey struct {
+	provider, version, fingerprint, question string
+	mode                                     cacheMode
+	interactive, bypassHold                  bool
+	counter                                  string
 }
 
 // flight is one live call shared by the callers of one (provider, Version,
@@ -167,10 +195,13 @@ func cached[Q, R any](ctx context.Context, c *Cache[Q], p Provider[Q, R], q Q) (
 			return rs, at, true, nil
 		}
 	}
-	fk := ref.String() + "\x00" + c.o.Version + "\x00" + key
-	if mode&cacheReadOnly != 0 {
-		fk += "\x00ro" // a read-only leader writes nothing, so it cannot serve a writing caller
-	}
+	// A read-only leader writes nothing, so it cannot serve a writing caller
+	// (mode is in the key); a Background leader refused by a spent quota or a
+	// held scope must not hand that refusal to an interactive or hold-bypassing
+	// follower, which the gate would have let through (the flags are in it).
+	inter, bypass, counter := providerhttp.GateFlags(ctx)
+	fk := flightKey{provider: ref.String(), version: c.o.Version, fingerprint: c.fingerprint(ref), question: key,
+		mode: mode & cacheReadOnly, interactive: inter, bypassHold: bypass, counter: counter}
 	for {
 		c.mu.Lock()
 		f, following := c.flights[fk]
@@ -201,7 +232,7 @@ func cached[Q, R any](ctx context.Context, c *Cache[Q], p Provider[Q, R], q Q) (
 
 // lead runs the live call of flight f, writes the answer and releases the
 // followers.
-func lead[Q, R any](ctx context.Context, c *Cache[Q], f *flight, fk string, p Provider[Q, R], q Q, mode cacheMode) (rs []R, at time.Time, err error) {
+func lead[Q, R any](ctx context.Context, c *Cache[Q], f *flight, fk flightKey, p Provider[Q, R], q Q, mode cacheMode) (rs []R, at time.Time, err error) {
 	defer func() {
 		c.mu.Lock()
 		delete(c.flights, fk)
