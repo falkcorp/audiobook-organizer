@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.37.1
+# version: 3.38.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-11-09
+# last-edited: 2026-11-10
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -904,6 +904,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          # Full history: internal/books' TestTasklintExemptions_ShrinkOnly (F2-17,
+          # 05-tasks §5T.8.4) diffs the tasklint exemption list against
+          # `git merge-base HEAD origin/main` and fails under CI=true without it.
+          fetch-depth: 0
 
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -1093,6 +1097,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          # Full history: internal/books' TestTasklintExemptions_ShrinkOnly (F2-17,
+          # 05-tasks §5T.8.4) diffs the tasklint exemption list against
+          # `git merge-base HEAD origin/main` and fails under CI=true without it.
+          fetch-depth: 0
 
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

@@ -1,0 +1,32 @@
+# Owned by F5-13; only F5-13 may delete this file, in the PR that converts these files (05-tasks §5T.8.2 rule 3).
+# The non-test .go files under F5-13's paths in docs/agent-tasks/platform-core/README.md, at F2-17's base.
+# One repo-relative path per line, sorted; the directory is read as one union that may only shrink (05-tasks §5T.8.4).
+internal/scheduler/extra_ops.go
+internal/server/ai_ops.go
+internal/server/ai_scan_apply_op.go
+internal/server/aiscan_op.go
+internal/server/apply_when_scanned_op.go
+internal/server/author_reclassify_op.go
+internal/server/batch_apply_op.go
+internal/server/batch_apply_refusal_reset_op.go
+internal/server/batch_save_op.go
+internal/server/bulk_apply_preview.go
+internal/server/catalog_coverage_op.go
+internal/server/catalog_harvest_op.go
+internal/server/collection_refresh_op.go
+internal/server/diagnostics_ai_ops.go
+internal/server/duplicates_ops.go
+internal/server/entities_ops.go
+internal/server/folder_autoscan_op.go
+internal/server/identification_advance_op.go
+internal/server/itunes_ops.go
+internal/server/library_ai_parse_op.go
+internal/server/library_core_ops.go
+internal/server/library_size_refresh_op.go
+internal/server/library_writeback_op.go
+internal/server/metadata_candidate_op.go
+internal/server/metadata_ops.go
+internal/server/openlibrary_ops.go
+internal/server/purge_soft_deleted_op.go
+internal/server/reconcile_ops.go
+internal/server/series_rename_ops.go
