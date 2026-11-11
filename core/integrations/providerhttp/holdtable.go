@@ -133,6 +133,43 @@ func (r *Registry) ReleaseHold(ctx context.Context, scope string) error {
 	return nil
 }
 
+// sameHold reports whether a and b are one hold: the identity of a hold is its
+// scope, class, start and end. placeHold only replaces a hold with a longer
+// one, which has a new Until and SetAt, so a replacement is never the same.
+func sameHold(a, b integrations.Hold) bool {
+	return a.Scope == b.Scope && a.Class == b.Class && a.SetAt.Equal(b.SetAt) && a.Until.Equal(b.Until)
+}
+
+// ReleaseHoldIf ends the hold expect only while it is still the hold in force
+// for expect.Scope (compared under the hold mutex, so no hold can be placed
+// between the comparison and the release). It is the form for a caller that
+// read the hold with HoldFor and acts on what it saw (the hold route: an
+// operator releases the hold on the screen, not one set a moment later).
+//
+//   - the same hold is in force: it is released (store first, as ReleaseHold)
+//     and the result is nil;
+//   - no hold is in force (never set, ended, or released by someone else): the
+//     goal is met and the result is nil;
+//   - a different hold is in force: nothing is released and the result is
+//     ErrHoldChanged.
+func (r *Registry) ReleaseHoldIf(ctx context.Context, expect integrations.Hold) error {
+	now := r.now()
+	r.hmu.Lock()
+	defer r.hmu.Unlock()
+	cur, ok := r.holds[expect.Scope]
+	if !ok || !now.Before(cur.Until) {
+		return nil
+	}
+	if !sameHold(cur, expect) {
+		return ErrHoldChanged
+	}
+	if err := r.store.PutHold(ctx, integrations.Hold{Scope: expect.Scope}); err != nil {
+		return fmt.Errorf("providerhttp: release hold: %w", err)
+	}
+	delete(r.holds, expect.Scope)
+	return nil
+}
+
 // ReleaseAuthHold releases ref's ClassAuth hold, for integrations.Options.ReleaseAuthHold:
 // a Put that wrote new credentials ends the hold the old ones earned (M1.3). A
 // hold of another class is left alone.
@@ -179,6 +216,13 @@ func (r *Registry) scopeOf(ref integrations.Ref) string {
 		return s
 	}
 	return ref.String()
+}
+
+// HoldFor is ref's active hold itself (its scope, class, start and end),
+// reading the gate state only like HeldScope. Pass what it returns to
+// ReleaseHoldIf to release exactly that hold.
+func (r *Registry) HoldFor(ref integrations.Ref) (integrations.Hold, bool) {
+	return r.activeHold(r.scopeOf(ref))
 }
 
 // HeldScope reports the scope of ref's active hold, reading the gate state
