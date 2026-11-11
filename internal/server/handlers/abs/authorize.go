@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/authorize.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7e14b0c9-53a6-4d82-91f7-2c8de6a04b13
-// last-edited: 2026-10-07
+// last-edited: 2026-11-10
 
 package abs
 

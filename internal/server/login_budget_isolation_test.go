@@ -1,7 +1,7 @@
 // file: internal/server/login_budget_isolation_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4d59a407-dbd7-4beb-9b1b-344f246c9fbd
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package server
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/main_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: fc5d9b1a-46ac-4001-84ff-5f6f759647af
-// last-edited: 2026-10-30
+// last-edited: 2026-11-10
 
 package abs_test
 

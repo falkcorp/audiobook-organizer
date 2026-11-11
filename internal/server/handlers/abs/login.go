@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/login.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 8e40b7d2-6c15-4a93-b027-51d8f3ac9e64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs
 

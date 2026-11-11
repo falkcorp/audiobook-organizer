@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 3.3.1
+// version: 3.3.2
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers
 
@@ -126,7 +126,6 @@ type AuthHandler struct {
 // NewAuthHandler constructs an AuthHandler.
 // enableAuth should be set from config.AppConfig.EnableAuth at wire time.
 func NewAuthHandler(store AuthStore, enableAuth bool) *AuthHandler {
-	absauth.Passwords.Warm() // so the first login for an unknown name costs what any other does
 	return &AuthHandler{
 		store:       store,
 		enableAuth:  enableAuth,

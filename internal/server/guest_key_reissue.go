@@ -1,7 +1,7 @@
 // file: internal/server/guest_key_reissue.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 06852e7f-0413-46b5-9a54-623e28379772
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 

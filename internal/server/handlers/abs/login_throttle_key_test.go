@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/login_throttle_key_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e4d306c4-3290-49d2-b0b1-c9afae9e0fef
-// last-edited: 2026-10-22
+// last-edited: 2026-11-10
 
 package abs_test
 

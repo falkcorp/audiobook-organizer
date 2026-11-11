@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.10.2
+// version: 2.10.3
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package abs
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/user_security_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 7f1c2a93-4d8e-4b6a-9c10-2e5b7a0d1f44
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers_test
 

@@ -1,7 +1,7 @@
 // file: internal/server/abs_session_revoke_integration_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: d943df61-c54b-4621-8c73-dd144fc38af8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package server
 
