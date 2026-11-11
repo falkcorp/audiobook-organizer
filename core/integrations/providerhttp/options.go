@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/options.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b3c95ad-7828-4971-b0b8-f48428f4b0e4
 // last-edited: 2026-11-11
 
@@ -79,6 +79,8 @@ type Options struct {
 	// (connection limits, TLS settings, timeouts). It is CLONED, and its Proxy,
 	// DialContext and DialTLSContext are replaced: the egress guard lives in
 	// the dial, and a proxy would resolve and connect on the guard's behalf.
+	// Its TLS config's InsecureSkipVerify is forced false on the clone: a base
+	// that skips verification must not make every provider call unverified.
 	// Narrower than the spec's http.RoundTripper on purpose: a RoundTripper
 	// that dials for itself would leave the SSRF boundary to the caller.
 	// Default: a clone of http.DefaultTransport, never the global itself.
@@ -89,8 +91,10 @@ type Options struct {
 	// and instance (and reason, class where the series carry them); nil
 	// records nothing.
 	Metrics *metrics.Scope
-	// Log receives the Registry's warnings (hold persistence, one per store).
-	// It never receives a URL, a header or a body. nil discards.
+	// Log receives the Registry's warnings (hold persistence, one per store, and
+	// the recovery of a boot read) and the dial guard's Debug lines, which name
+	// the host and the address of a refused dial (the refusal an error carries
+	// names neither). It never receives a URL, a header or a body. nil discards.
 	Log *slog.Logger
 	// Now is the clock (default time.Now).
 	Now func() time.Time
@@ -131,19 +135,26 @@ type Policy struct {
 	// set the same Scope (e.g. "google-books:" + hex(sha256(key))[:12]). A
 	// Scope never appears in a log line, an error or a metric label.
 	Scope string
-	// Redact names extra query and header names to redact; apikey, api_key,
-	// token, password, Authorization, X-Api-Key and Cookie are always
-	// redacted (see redact.go for the whole list).
+	// Redact names extra query, header and JSON-field names to redact on top of
+	// the built-in rules (redact.go: names ending in token, key, secret or
+	// password, session and sig prefixes, auth, authorization, cookie ...).
 	Redact []string
-	// Private reports whether this instance may reach loopback or private
-	// addresses on hostport, a lower-case "host:port" with the scheme's
-	// default port filled in. It is InstanceConfig.Local AND hostport is one
-	// of the instance's bound origins, or hostport is in lan_allow. It is read
-	// on every request, so a trust change applies without a rebuild, and is
-	// never consulted for EgressPublicOnly, for a redirect to another
-	// endpoint, nor for link-local addresses. (Spec text says "host"; the
-	// port is part of the bound origin, SEC4-15, so it is passed too.)
-	Private func(hostport string) bool
+	// QueryCredential, when non-nil, is how an API that takes its credential in
+	// the URL query gets it WITHOUT the caller ever holding a URL that carries
+	// it: the transport adds the parameter to its own clone of the request URL,
+	// per attempt, so the *url.Error net/http builds, the request a caller logs
+	// and Response.Request all hold the credential-free URL. It is never added
+	// to a redirect hop to another endpoint.
+	QueryCredential *integrations.QueryCredential
+	// Trust lists the origins this instance may reach on a private network
+	// (integrations.Trust). It is the ONLY way to arm the private-capable
+	// transport: the Registry derives the per-request test from it (the
+	// instance's bound origins, or an entry of lan_allow) so a caller cannot
+	// supply a predicate of its own, and the test reads lan_allow on every
+	// request, so a trust change applies without a rebuild. It is never
+	// consulted for EgressPublicOnly, for a redirect to another endpoint, nor
+	// for link-local addresses. The zero Trust still admits lan_allow.
+	Trust integrations.Trust
 	// MaxBody caps a response body; 0 takes the default (32 MiB). A read past
 	// the cap fails with ErrResponseTooLarge.
 	MaxBody int64

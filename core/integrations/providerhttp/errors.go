@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/errors.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8939849f-6501-4def-ad14-936946a2d4c7
 // last-edited: 2026-11-11
 
@@ -42,6 +42,11 @@ var ErrUnknownCounter = errors.New("providerhttp: unknown quota counter")
 // (Policy.MaxBody). It is the read error past the limit, never a silent
 // truncation.
 var ErrResponseTooLarge = errors.New("providerhttp: response body exceeds the size limit")
+
+// ErrCredentialUnavailable: the instance's query credential could not be read
+// (or was empty), so the request is refused before anything is sent. The
+// reader's own error is not wrapped: it may name what it could not read.
+var ErrCredentialUnavailable = errors.New("providerhttp: the request credential could not be read")
 
 // ErrHoldChanged: ReleaseHoldIf found a different hold in force than the one
 // the caller saw (a longer one was set, or one replaced it), so it released

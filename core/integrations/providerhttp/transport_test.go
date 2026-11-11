@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/transport_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e41f8797-cbc5-47da-9318-e0b625e78606
 // last-edited: 2026-11-11
 
@@ -65,7 +65,7 @@ func TestRetryHonoursRetryAfterAndClamp(t *testing.T) {
 			srv, hits := server(t, failThenOK(tc.fails, http.StatusServiceUnavailable, tc.retryAfter))
 			l := retryLimits(tc.retries)
 			l.RetryAfterMax = tc.max
-			c := r.Client(batcave, providerhttp.Policy{Limits: l, Private: anyPrivate})
+			c := r.Client(batcave, providerhttp.Policy{Limits: l, Trust: lanTrust})
 			resp, err := get(t, c, srv.URL)
 			if err != nil || resp.StatusCode != 200 {
 				t.Fatalf("got %v, %v", resp, err)
@@ -85,7 +85,7 @@ func TestRetryHonoursRetryAfterAndClamp(t *testing.T) {
 		clk := newClock()
 		r := newRegistry(t, clk)
 		srv, _ := server(t, failThenOK(1, http.StatusTooManyRequests, clk.Now().Add(90*time.Second).UTC().Format(http.TimeFormat)))
-		c := r.Client(batcave, providerhttp.Policy{Limits: retryLimits(3), Private: anyPrivate})
+		c := r.Client(batcave, providerhttp.Policy{Limits: retryLimits(3), Trust: lanTrust})
 		if _, err := get(t, c, srv.URL); err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +117,7 @@ func TestProbeNeverRetries(t *testing.T) {
 	lim := retryLimits(3)
 	lim.Breaker = integrations.BreakerPolicy{Threshold: 1, Cooldown: 10 * time.Second, ProbeTimeout: 5 * time.Second}
 	lim.Holds = integrations.HoldPolicy{Durations: map[integrations.Class]time.Duration{integrations.ClassTransient: time.Millisecond}}
-	c := r.Client(batcave, providerhttp.Policy{Limits: lim, Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: lim, Trust: lanTrust})
 	if _, err := get(t, c, srv.URL+"/a"); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestRetryExhaustedReturnsLastAnswerAndHolds(t *testing.T) {
 	clk := newClock()
 	r := newRegistry(t, clk)
 	srv, hits := server(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) })
-	c := r.Client(batcave, providerhttp.Policy{Limits: retryLimits(2), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: retryLimits(2), Trust: lanTrust})
 	resp, err := get(t, c, srv.URL)
 	if err != nil || resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("got %v, %v; want the last 502", resp, err)
@@ -167,7 +167,7 @@ func TestNoRetryWithoutGetBody(t *testing.T) {
 	clk := newClock()
 	r := newRegistry(t, clk)
 	srv, hits := server(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
-	c := r.Client(batcave, providerhttp.Policy{Limits: retryLimits(3), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: retryLimits(3), Trust: lanTrust})
 	req, _ := http.NewRequest(http.MethodPost, srv.URL, io.NopCloser(strings.NewReader("batarang")))
 	if req.GetBody != nil {
 		t.Fatal("test setup: this body must have no GetBody")
@@ -185,10 +185,11 @@ func TestNoRetryWithoutGetBody(t *testing.T) {
 	srv2, hits2 := server(t, func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		bodies = append(bodies, string(b))
+		w.Header().Set("Retry-After", "1") // the server says it did not process the request
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 	req2, _ := http.NewRequest(http.MethodPost, srv2.URL, bytes.NewReader([]byte("batarang")))
-	c = r.Client(ref("alfred"), providerhttp.Policy{Limits: retryLimits(3), Private: anyPrivate}) // batcave is held now
+	c = r.Client(ref("alfred"), providerhttp.Policy{Limits: retryLimits(3), Trust: lanTrust}) // batcave is held now
 	resp2, err := c.Do(req2)
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +212,7 @@ func TestRetrySpendsQuotaPerAttempt(t *testing.T) {
 	srv, hits := server(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
 	l := retryLimits(5)
 	l.Daily = daily(3, 3)
-	c := r.Client(batcave, providerhttp.Policy{Limits: l, Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: l, Trust: lanTrust})
 	_, err := get(t, c, srv.URL)
 	if !refusedFor(err, providerhttp.ReasonQuota) {
 		t.Fatalf("err = %v, want the quota to stop the retries", err)
@@ -228,7 +229,7 @@ func TestRetrySpendsQuotaPerAttempt(t *testing.T) {
 // the credential of a request URL.
 func TestRedactsApikeyInURLError(t *testing.T) {
 	const secret = "joker-card-8675309"
-	r := newRegistry(t, newClock())
+	r := newRegistry(t, newClock(), noLAN)
 	srv, _ := server(t, ok)
 	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Redact: []string{"x_gotham_token"}}) // no trust: refused
 	for _, u := range []string{
@@ -261,7 +262,8 @@ func TestRedactsApikeyInURLError(t *testing.T) {
 		}
 	}
 	// A transport failure (connection refused) is redacted the same way.
-	trusted := r.Client(ref("alfred"), providerhttp.Policy{Limits: limits(100, 100), Private: anyPrivate})
+	r = newRegistry(t, newClock()) // lan_allow admits the loopback servers
+	trusted := r.Client(ref("alfred"), providerhttp.Policy{Limits: limits(100, 100), Trust: lanTrust})
 	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:1/x?apikey="+secret, nil)
 	if _, err := trusted.Do(req); err == nil || strings.Contains(err.Error(), secret) {
 		t.Fatalf("connection failure error = %v", err)
@@ -272,7 +274,7 @@ func TestRedactsApikeyInURLError(t *testing.T) {
 		_, _ = io.WriteString(w, `bad request: GET /x?apikey=`+r.URL.Query().Get("apikey")+` {"token": "`+secret+`"} `+strings.Repeat("z", 2000))
 	})
 	var out any
-	trusted = r.Client(ref("selina"), providerhttp.Policy{Limits: limits(100, 100), Private: anyPrivate})
+	trusted = r.Client(ref("selina"), providerhttp.Policy{Limits: limits(100, 100), Trust: lanTrust})
 	err := trusted.GetJSON(context.Background(), echo.URL+"/x?apikey="+secret, &out)
 	e, ok := errors.AsType[*integrations.Error](err)
 	if !ok || e.Class != integrations.ClassInvalid || e.Status != 400 {
@@ -297,7 +299,7 @@ func TestNoSecretInGateState(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, "denied for apikey="+secret)
 	})
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Trust: lanTrust})
 	_, _ = get(t, c, srv.URL+"/x?apikey="+secret)
 	hs, err := gs.Holds(context.Background())
 	if err != nil || len(hs) != 1 {
@@ -324,7 +326,7 @@ func TestResponseSizeLimit(t *testing.T) {
 		_, _ = w.Write(bytes.Repeat([]byte("a"), 10240))
 	})
 	exact, _ := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(bytes.Repeat([]byte("a"), 4096)) })
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Private: anyPrivate, MaxBody: 4096})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Trust: lanTrust, MaxBody: 4096})
 	cp := *c.Client()
 
 	resp, err := cp.Get(chunked.URL)
@@ -369,7 +371,7 @@ func TestAttemptTimeoutOutlivesRoundTrip(t *testing.T) {
 	})
 	l := limits(1000, 1000)
 	l.Timeout = 5 * time.Second
-	c := r.Client(batcave, providerhttp.Policy{Limits: l, Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: l, Trust: lanTrust})
 	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
 	resp, err := c.Do(req)
 	if err != nil {
@@ -383,7 +385,7 @@ func TestAttemptTimeoutOutlivesRoundTrip(t *testing.T) {
 
 	hang, _ := server(t, func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
 	l.Timeout = 40 * time.Millisecond
-	c2 := r.Client(ref("alfred"), providerhttp.Policy{Limits: l, Private: anyPrivate})
+	c2 := r.Client(ref("alfred"), providerhttp.Policy{Limits: l, Trust: lanTrust})
 	_, err = getCtx(t, context.Background(), c2, hang.URL)
 	if err == nil || integrations.ClassOf(context.Background(), err) != integrations.ClassTransient {
 		t.Fatalf("hung attempt: %v (class %v), want transient", err, integrations.ClassOf(context.Background(), err))
@@ -398,7 +400,7 @@ func TestAttemptTimeoutOutlivesRoundTrip(t *testing.T) {
 func TestCanceledCountsForNothing(t *testing.T) {
 	r := newRegistry(t, newClock())
 	srv, _ := server(t, func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Trust: lanTrust})
 	for range 8 {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		_, err := getCtx(t, ctx, c, srv.URL)
@@ -419,7 +421,7 @@ func TestUserAgentAndSharedGate(t *testing.T) {
 	var ua atomic.Value
 	srv, _ := server(t, func(w http.ResponseWriter, r *http.Request) { ua.Store(r.UserAgent()); ok(w, r) })
 	r := newRegistry(t, newClock(), func(o *providerhttp.Options) { o.UserAgent = "batbooks/1.0 (+mediacore/1)" })
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Trust: lanTrust})
 	if _, err := get(t, c, srv.URL); err != nil || ua.Load() != "batbooks/1.0 (+mediacore/1)" {
 		t.Fatalf("user agent = %v, %v", ua.Load(), err)
 	}
@@ -536,7 +538,7 @@ func TestGetJSON(t *testing.T) {
 			_, _ = io.WriteString(w, "<html>")
 		}
 	})
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Trust: lanTrust})
 	var got struct{ Hero string }
 	if err := c.GetJSON(context.Background(), srv.URL+"/ok", &got); err != nil || got.Hero != "Batman" {
 		t.Fatalf("ok: %+v, %v", got, err)
@@ -547,7 +549,7 @@ func TestGetJSON(t *testing.T) {
 		t.Fatalf("limited: %#v", err)
 	}
 	r2 := newRegistry(t, newClock())
-	c2 := r2.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Private: anyPrivate})
+	c2 := r2.Client(batcave, providerhttp.Policy{Limits: limits(1000, 1000), Trust: lanTrust})
 	err = c2.GetJSON(context.Background(), srv.URL+"/junk", &got)
 	if e, isErr := errors.AsType[*integrations.Error](err); !isErr || e.Class != integrations.ClassBadOutput {
 		t.Fatalf("junk: %#v", err)

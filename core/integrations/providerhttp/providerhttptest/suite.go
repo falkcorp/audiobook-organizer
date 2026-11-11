@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/providerhttptest/suite.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: aa23d90d-18ca-4cc2-9bdc-69dc1a2a2e7b
 // last-edited: 2026-11-11
 
@@ -118,6 +118,40 @@ func GateStoreSuite(t *testing.T, factory Factory) {
 			if _, used, err := s.Quota(ctx, sc, "requests"); err != nil || used != len(sc) {
 				t.Errorf("Quota(%q) = %d, %v; want %d: a scope leaked into a neighbour's records", sc, used, err, len(sc))
 			}
+		}
+	})
+
+	t.Run("ScopeRoundTrip", func(t *testing.T) {
+		s := factory(t)
+		a := integrations.Ref{Kind: integrations.KindMetadata, Instance: "alfred"}
+		b := integrations.Ref{Kind: integrations.KindDownload, Instance: "alfred"} // same instance ID, another kind
+		got, err := s.Scopes(ctx)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("empty store: Scopes = %v, %v", got, err)
+		}
+		for ref, scope := range map[integrations.Ref]string{a: "google-books:0123456789ab", b: "a/b\x00c"} {
+			if err := s.PutScope(ctx, ref, scope); err != nil {
+				t.Fatalf("PutScope(%v): %v", ref, err)
+			}
+		}
+		got, err = s.Scopes(ctx)
+		if err != nil || len(got) != 2 || got[a] != "google-books:0123456789ab" || got[b] != "a/b\x00c" {
+			t.Fatalf("Scopes = %v, %v; want both records, kept apart by kind", got, err)
+		}
+		if err := s.PutScope(ctx, a, "second"); err != nil {
+			t.Fatal(err)
+		}
+		if got, err = s.Scopes(ctx); err != nil || got[a] != "second" {
+			t.Fatalf("overwrite: %v, %v", got, err)
+		}
+		if err := s.PutScope(ctx, a, ""); err != nil {
+			t.Fatal(err)
+		}
+		if got, err = s.Scopes(ctx); err != nil || len(got) != 1 || got[b] == "" {
+			t.Fatalf("an empty scope must delete only that record: %v, %v", got, err)
+		}
+		if err := s.PutScope(ctx, a, ""); err != nil {
+			t.Fatalf("deleting an absent record: %v", err)
 		}
 	})
 

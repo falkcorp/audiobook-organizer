@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/client.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 435ee04d-8b14-43d6-9462-be6a491eb852
 // last-edited: 2026-11-11
 
@@ -11,8 +11,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/falkcorp/mediacore/integrations"
 )
@@ -40,7 +38,7 @@ func (c *Client) Client() *http.Client {
 // credentials from the URL.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	resp, err := c.Client().Do(req)
-	return resp, redactError(err, c.pol.Redact)
+	return resp, c.scr.err(err)
 }
 
 // Gate is the instance's gate.
@@ -74,7 +72,7 @@ func (c *Client) GetJSON(ctx context.Context, url string, out any) error {
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJSON+1))
 	if err != nil && !errors.Is(err, ErrResponseTooLarge) {
-		return redactError(err, c.pol.Redact)
+		return c.scr.err(err)
 	}
 	if err != nil || len(body) > maxJSON {
 		return &integrations.Error{Ref: c.ref, Op: "get", Class: integrations.ClassBadOutput, Status: resp.StatusCode, Err: ErrResponseTooLarge}
@@ -90,15 +88,8 @@ func (c *Client) GetJSON(ctx context.Context, url string, out any) error {
 	return nil
 }
 
-// excerpt is body's first MaxDetail bytes, scrubbed of credentials.
+// excerpt is body's first MaxDetail bytes, scrubbed of credentials; it looks
+// at a bounded prefix only, so a 16 MiB body costs what a 1 KiB one does.
 func (c *Client) excerpt(body []byte) string {
-	s := strings.ToValidUTF8(string(body), "")
-	s = scrubText(s, c.pol.Redact)
-	if len(s) > integrations.MaxDetail {
-		s = s[:integrations.MaxDetail]
-		for len(s) > 0 && !utf8.ValidString(s) {
-			s = s[:len(s)-1]
-		}
-	}
-	return s
+	return c.scr.bounded(string(body[:min(len(body), 4*integrations.MaxDetail+256)]), integrations.MaxDetail)
 }

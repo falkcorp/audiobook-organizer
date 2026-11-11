@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/scope.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e8205a94-c082-4fb1-8b84-cf178b452d05
 // last-edited: 2026-11-11
 
@@ -63,6 +63,11 @@ func (s *scopeState) setLimits(l integrations.Limits) {
 	s.bk.set(l.RPS, l.Burst)
 }
 
+// minRPS is the slowest rate a limit may name: one request a day. Below it a
+// rate is configuration noise (1e-300), and the wait it implies is not a
+// duration.
+const minRPS = 1.0 / 86400
+
 // normalizeLimits fills every zero field of l from the core fallback and
 // repairs nonsense: a nonsensical limit is clamped, never allowed to disable
 // pacing (HEAD's normalize, kept).
@@ -71,6 +76,7 @@ func normalizeLimits(l integrations.Limits, set Settings) integrations.Limits {
 	if !(l.RPS > 0) || math.IsInf(l.RPS, 0) || math.IsNaN(l.RPS) {
 		l.RPS = f.RPS
 	}
+	l.RPS = max(l.RPS, minRPS)
 	switch {
 	case l.Burst == 0:
 		l.Burst = f.Burst

@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/gate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ec0c1bf4-fb0b-44a4-ac17-f2ca02f02f83
 // last-edited: 2026-11-11
 
@@ -23,6 +23,15 @@ type gate struct {
 	ref integrations.Ref
 	pol Policy
 	sc  *scopeState
+	// scr removes this instance's credentials from errors and excerpts: the
+	// built-in rules plus Policy.Redact and the query credential's name.
+	scr scrubber
+	// private reports whether an endpoint ("host:port") is one the instance may
+	// reach on a private network. Derived from Policy.Trust by the Registry and
+	// settable by nothing else.
+	private func(hostport string) bool
+	// qc is Policy.QueryCredential.
+	qc *integrations.QueryCredential
 }
 
 var _ integrations.Gate = (*gate)(nil)
@@ -58,7 +67,7 @@ func (g *gate) admit(ctx context.Context, op string) (*ticket, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, canceled(g.ref, op, err)
 	}
-	if !bypassHold(ctx) {
+	if !bypassOf(ctx) {
 		if h, ok := r.activeHold(g.sc.name); ok {
 			r.met.refused(g.ref, ReasonHold)
 			return nil, refuse(g.ref, op, ReasonHold, h.Until, nil)
@@ -90,7 +99,7 @@ func (g *gate) pace(ctx context.Context, counter, op string) (string, error) {
 	if counter == "" {
 		counter = counterOf(ctx)
 	}
-	used, err := g.sc.reserve(ctx, counter, interactive(ctx))
+	used, err := g.sc.reserve(ctx, counter, interactiveOf(ctx))
 	if err != nil {
 		if ctx.Err() != nil && !errors.Is(err, ErrQuotaSpent) {
 			return "", canceled(g.ref, op, ctx.Err())
