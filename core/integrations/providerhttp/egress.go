@@ -1,10 +1,12 @@
-// file: internal/security/safehttp/safehttp.go
-// version: 1.0.0
+// file: core/integrations/providerhttp/egress.go
+// version: 1.1.0
 // guid: 13d22c91-8f27-4c5b-a373-a9c87d5a44f7
-// last-edited: 2026-09-10
+// last-edited: 2026-11-11
 
-// Package safehttp builds HTTP clients that are safe to point at a URL supplied
-// by a third party (a metadata provider's cover URL, a proxied cover request).
+// The egress dial guard (05-metadata M2.4), moved from internal/security/safehttp
+// (04 §3.4) with its behaviour unchanged. It builds HTTP clients that are safe
+// to point at a URL supplied by a third party (a metadata provider's cover URL,
+// a proxied cover request).
 //
 // It is the single implementation of the server-side request forgery (SSRF)
 // guard for this repository. There were two cover-fetch paths before
@@ -29,7 +31,8 @@
 //     address check re-applies on redirects because the same Transport (and so
 //     the same DialContext) handles every hop; CheckRedirect adds the scheme
 //     check, which otherwise only ran on the first URL.
-package safehttp
+
+package providerhttp
 
 import (
 	"context"
