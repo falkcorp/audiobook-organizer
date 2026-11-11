@@ -1,5 +1,5 @@
 // file: core/httpapi/raw.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f0c6a52-8d7e-4c1b-9a64-5e2b17d0c3a8
 // last-edited: 2026-11-10
 
@@ -98,6 +98,20 @@ func rawSchema(owner string, t reflect.Type, at string) (string, *jsonschema.Sch
 		return "", nil, err
 	}
 	return name, sch, nil
+}
+
+// DecodeJSON reads a HandleRaw route's JSON request body into dst (a non-nil
+// pointer) with the rule Handle applies to a body:"json" field: Content-Type
+// must be application/json (415), the body at most limit bytes (413; a limit
+// of 0 or less is core's 1 MiB default, never unbounded), no unknown field
+// (400 unknown_field), no trailing data, a wrong type 422. Every failure is an
+// *Error for WriteError; none carries encoding/json's own text.
+func DecodeJSON(w http.ResponseWriter, r *http.Request, limit int64, dst any) error {
+	v := reflect.ValueOf(dst)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return fmt.Errorf("httpapi: DecodeJSON needs a non-nil pointer, got %T", dst)
+	}
+	return decodeBody(w, r, Route{MaxBody: limit}, v.Elem())
 }
 
 // WriteError writes err as a HandleRaw handler's failure: the problem+json

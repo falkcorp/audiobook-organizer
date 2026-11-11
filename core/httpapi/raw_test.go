@@ -10,8 +10,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/internal/openapi/openapitest"
 	"github.com/falkcorp/mediacore/rbac"
@@ -206,5 +208,83 @@ func TestWriteError_IsHandlesProblem(t *testing.T) {
 	rec = serve(h, http.MethodGet, "/x", "")
 	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "pebble") {
 		t.Fatalf("a plain error = %d %s, want a 500 with the cause withheld", rec.Code, rec.Body)
+	}
+}
+
+func TestError_WithRetryAfterAndThrottled(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		WriteError(w, r, Throttled(90*time.Second), nil)
+	})
+	rec := serve(h, http.MethodGet, "/x", "")
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "90" {
+		t.Fatalf("Throttled = %d Retry-After %q, want 429 and 90", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	var p Problem
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil || p.Code != "throttled" {
+		t.Fatalf("body = %s (%v), want code throttled", rec.Body, err)
+	}
+	// A sub-second wait still tells the client to wait a whole second.
+	rec = serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		WriteError(w, r, Throttled(0), nil)
+	}), http.MethodGet, "/x", "")
+	if rec.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Throttled(0) Retry-After = %q, want 1", rec.Header().Get("Retry-After"))
+	}
+	// Any other code can carry one, and 0 omits the header.
+	rec = serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		WriteError(w, r, (&Error{Status: http.StatusServiceUnavailable, Code: "busy"}).WithRetryAfter(2*time.Second), nil)
+	}), http.MethodGet, "/x", "")
+	if rec.Code != 503 || rec.Header().Get("Retry-After") != "2" {
+		t.Fatalf("busy = %d Retry-After %q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	rec = serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		WriteError(w, r, (&Error{Status: http.StatusServiceUnavailable, Code: "busy"}).WithRetryAfter(0), nil)
+	}), http.MethodGet, "/x", "")
+	if rec.Header().Get("Retry-After") != "" {
+		t.Fatalf("WithRetryAfter(0) set Retry-After %q", rec.Header().Get("Retry-After"))
+	}
+}
+
+func TestDecodeJSON(t *testing.T) {
+	do := func(ct, body string, limit int64) (loginBody, *Error) {
+		var got loginBody
+		var out *Error
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := DecodeJSON(w, r, limit, &got); err != nil {
+				if !errors.As(err, &out) {
+					t.Fatalf("DecodeJSON error %T is not an *Error: %v", err, err)
+				}
+			}
+		})
+		req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
+		if ct != "" {
+			req.Header.Set("Content-Type", ct)
+		}
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		return got, out
+	}
+	if got, err := do("application/json", `{"username":"dick"}`, 0); err != nil || got.Username != "dick" {
+		t.Fatalf("a good body: %+v %v", got, err)
+	}
+	for _, tc := range []struct {
+		name, ct, body string
+		limit          int64
+		status         int
+		code           string
+	}{
+		{"wrong content type", "text/plain", `{"username":"dick"}`, 0, 415, "unsupported_media_type"},
+		{"no content type", "", `{"username":"dick"}`, 0, 415, "unsupported_media_type"},
+		{"unknown field", "application/json", `{"username":"dick","admin":true}`, 0, 400, "unknown_field"},
+		{"trailing data", "application/json", `{"username":"dick"} {}`, 0, 400, "malformed_json"},
+		{"too big", "application/json", `{"username":"` + strings.Repeat("a", 64) + `"}`, 16, 413, "body_too_large"},
+		{"wrong type", "application/json", `{"username":7}`, 0, 422, "validation_failed"},
+		{"empty", "application/json", ``, 0, 400, "malformed_json"},
+	} {
+		if _, err := do(tc.ct, tc.body, tc.limit); err == nil || err.Status != tc.status || err.Code != tc.code {
+			t.Errorf("%s: got %+v, want %d %s", tc.name, err, tc.status, tc.code)
+		}
+	}
+	if err := DecodeJSON(nil, nil, 0, loginBody{}); err == nil {
+		t.Error("a non-pointer destination was accepted")
 	}
 }

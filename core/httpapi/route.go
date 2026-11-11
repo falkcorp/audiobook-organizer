@@ -164,12 +164,12 @@ type routeEntry struct {
 	binding   *binding
 	rawParams []paramDesc // HandleRaw routes: the path wildcards and RawDoc.Query
 	bodyName  string      // component name of the JSON request body
-	bodyType reflect.Type
-	bodySch  *jsonschema.Schema
-	respName string // component name of the success body, "" for no body
-	respType reflect.Type
-	respSch  *jsonschema.Schema
-	status   int
+	bodyType  reflect.Type
+	bodySch   *jsonschema.Schema
+	respName  string // component name of the success body, "" for no body
+	respType  reflect.Type
+	respSch   *jsonschema.Schema
+	status    int
 }
 
 // routeName is the lowerCamel rule for Route.Name.
