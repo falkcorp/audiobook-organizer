@@ -1,5 +1,5 @@
 // file: core/auth/oidc/resolve.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1720bb8f-3301-4a84-b4b5-d3dd31f6c634
 // last-edited: 2026-11-11
 
@@ -56,7 +56,10 @@ type ResolverDeps struct {
 
 // Resolver turns a provider's verified claims into a local user, applying
 // admission and linking in the order of 05-authn §4.7. It has no state.
-type Resolver struct{ d ResolverDeps }
+type Resolver struct {
+	d       ResolverDeps
+	refused *refusals
+}
 
 // NewResolver validates d.
 func NewResolver(d ResolverDeps) (*Resolver, error) {
@@ -70,7 +73,7 @@ func NewResolver(d ResolverDeps) (*Resolver, error) {
 	if d.Clock == nil {
 		d.Clock = time.Now
 	}
-	return &Resolver{d: d}, nil
+	return &Resolver{d: d, refused: newRefusals()}, nil
 }
 
 const (
@@ -86,9 +89,15 @@ const (
 // Resolve is the gate every sign-in from a provider passes, in order:
 //
 //  1. The provider must have verified the address (never trust an unverified
-//     one) and the address must be admitted: on the policy's allowlist (an
-//     address or a domain), invited, or approved by ExtraAllowed. Verified is
-//     not authorized, so an identity not admitted creates nothing.
+//     one), the address must be plain ASCII that NormalizeEmail leaves alone
+//     but for case (ErrEmailNotPlain: a Kelvin-sign or fullwidth look-alike is
+//     another person's address and must never link, displace or be admitted
+//     as the ASCII one), and it must be admitted: on the policy's allowlist
+//     (an address or a domain), invited, or approved by ExtraAllowed. Verified
+//     is not authorized, so an identity not admitted creates nothing. A refusal
+//     that depends on stored state (not admitted, address held) is remembered
+//     per (provider, subject, address) for RefusalTTL and answered again with
+//     no lock, no scan and no audit event.
 //  2. A subject already linked, by (provider, subject), is that user.
 //  3. An unseen subject whose address another account holds VERIFIED takes
 //     that account only when the policy trusts the provider for it
@@ -106,15 +115,26 @@ func (r *Resolver) Resolve(ctx context.Context, pol Policy, c Claims) (*auth.Use
 	if c.Provider != pol.Provider || pol.Provider == "" || c.Subject == "" {
 		return nil, fmt.Errorf("%w: claims do not belong to provider %q", ErrExchange, pol.Provider)
 	}
-	email := auth.NormalizeEmail(c.Email)
-	if !c.EmailVerified || email == "" {
+	email, plain := plainEmail(c.Email)
+	if !c.EmailVerified {
 		return nil, ErrEmailNotVerified
+	}
+	if !plain {
+		return nil, ErrEmailNotPlain
+	}
+	if email == "" {
+		return nil, ErrEmailNotVerified
+	}
+	key := refusalKey(pol.Provider, c.Subject, email)
+	if err := r.refused.get(key, r.d.Clock()); err != nil {
+		return nil, err
 	}
 	ok, err := r.admitted(ctx, pol, email)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", auth.ErrStoreUnavailable, err)
 	}
 	if !ok {
+		r.refused.put(key, ErrEmailNotAllowed, r.d.Clock())
 		return nil, ErrEmailNotAllowed
 	}
 	// A subject already linked, whose account needs no write, is decided
@@ -128,16 +148,47 @@ func (r *Resolver) Resolve(ctx context.Context, pol Policy, c Claims) (*auth.Use
 	// AcceptInvite) when they all take it.
 	unlock := r.d.Accounts.LockEmails()
 	defer unlock()
+	// Requests that queued on the lock while the first of them decided: the
+	// refusal it remembered is theirs too, with no scan and no second audit.
+	if err := r.refused.get(key, r.d.Clock()); err != nil {
+		return nil, err
+	}
 	var u *auth.User
 	err = storage.RetryOnConflict(ctx, conflictTries, func(ctx context.Context) error {
 		var rerr error
 		u, rerr = r.resolveLocked(ctx, pol, c, email)
 		return rerr
 	})
+	if errors.Is(err, auth.ErrEmailInUse) {
+		r.refused.put(key, err, r.d.Clock())
+	}
 	if err != nil {
 		return nil, err
 	}
 	return u, nil
+}
+
+// plainEmail is the claim's address in the one form this package compares: it
+// must be printable ASCII (no byte <= ' ' or > '~', IsOwnerEmail's rule) and
+// equal to NormalizeEmail(claim) after ASCII lowercasing. NormalizeEmail folds
+// compatibility characters onto ASCII (the Kelvin sign, the long s, fullwidth
+// letters), so without this a different account at the provider reads as
+// another person's address and could link, displace or be admitted as them.
+// An empty claim is ("", true) and is the caller's to refuse.
+func plainEmail(raw string) (string, bool) {
+	if raw == "" {
+		return "", true
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] <= ' ' || raw[i] > '~' {
+			return "", false
+		}
+	}
+	lower := strings.ToLower(raw)
+	if lower != auth.NormalizeEmail(raw) {
+		return "", false
+	}
+	return lower, true
 }
 
 // admitted reports whether email may sign in through pol.

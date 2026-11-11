@@ -1,5 +1,5 @@
 // file: core/auth/oidc/errors.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 21138cfb-2d4d-4e59-ab0f-fb39e104eb9f
 // last-edited: 2026-11-11
 
@@ -20,6 +20,9 @@ var (
 	// no plain, and no default), or the challenge is not a 43-128 character
 	// base64url string. 400.
 	ErrBadChallenge = errors.New("oidc: code_challenge_method must be S256 and the challenge a PKCE S256 value")
+	// ErrAppStateTooLong: the native app's state is longer than MaxAppState, or
+	// the signed binding it travels in would outgrow a cookie. 400.
+	ErrAppStateTooLong = errors.New("oidc: the app state is too long")
 	// ErrStateInvalid: the state is missing, malformed, forged, expired,
 	// already used, for another provider, or does not match the callback's
 	// state parameter. 400 oauth_state_invalid (§6).
@@ -33,6 +36,12 @@ var (
 	ErrExchange = errors.New("oidc: code exchange failed")
 	// ErrEmailNotVerified: the provider did not vouch for the address.
 	ErrEmailNotVerified = errors.New("oidc: the identity's e-mail is not verified")
+	// ErrEmailNotPlain: the address is not printable ASCII, or differs from its
+	// normalized form by more than case. NormalizeEmail folds compatibility
+	// characters (the Kelvin sign, fullwidth letters) onto ASCII, so a
+	// different identity at the provider could otherwise read as another
+	// person's address: the same rule IsOwnerEmail applies to the owner.
+	ErrEmailNotPlain = errors.New("oidc: the identity's e-mail is not a plain ASCII address")
 	// ErrEmailNotAllowed: the address is neither on the provider's allowlist
 	// nor invited.
 	ErrEmailNotAllowed = errors.New("oidc: e-mail is not allowed to sign in")

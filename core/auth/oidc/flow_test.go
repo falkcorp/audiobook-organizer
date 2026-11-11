@@ -1,5 +1,5 @@
 // file: core/auth/oidc/flow_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 20c9883a-eb19-464e-a862-def8f847560f
 // last-edited: 2026-11-11
 
@@ -426,7 +426,11 @@ func TestOIDC_IDTokenVerification(t *testing.T) {
 		{"nonce of another sign-in", func(k *idpToken) { k.Nonce = "replayed-from-elsewhere" }},
 		{"no id_token at all", func(k *idpToken) { k.OmitIDToken = true }},
 		{"no subject", func(k *idpToken) { k.Sub = "" }},
-		{"email_verified as a string", func(k *idpToken) { k.EmailVerified = "true" }},
+		{"several audiences and no azp", func(k *idpToken) { k.AudList = []string{testClientID, "joker-client"} }},
+		{"several audiences and azp of another client", func(k *idpToken) {
+			k.AudList, k.Azp = []string{testClientID, "joker-client"}, "joker-client"
+		}},
+		{"azp of another client with our audience alone", func(k *idpToken) { k.Azp = "joker-client" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHX(t)
@@ -448,6 +452,49 @@ func TestOIDC_IDTokenVerification(t *testing.T) {
 		mustIs(t, o.err, ErrEmailNotVerified)
 		if h.countUsers() != 1 {
 			t.Fatal("an unverified address created an account")
+		}
+	})
+	t.Run("azp equal to this client is accepted, with one audience or several", func(t *testing.T) {
+		for _, mod := range []func(*idpToken){
+			func(k *idpToken) { k.Azp = testClientID },
+			func(k *idpToken) { k.AudList, k.Azp = []string{testClientID, "joker-client"}, testClientID },
+		} {
+			h := newHX(t)
+			tok := wayne("sub-robin", "dick@wayne.example.test")
+			mod(&tok)
+			if o := h.signIn("gotham", StartRequest{}, tok); o.err != nil {
+				t.Fatal(o.err)
+			}
+		}
+	})
+	t.Run("email_verified is the bool true or the string true and nothing else", func(t *testing.T) {
+		for _, tc := range []struct {
+			v    any
+			want error
+		}{
+			{true, nil}, {"true", nil},
+			{false, ErrEmailNotVerified}, {"false", ErrEmailNotVerified}, {"True", ErrEmailNotVerified},
+			{"1", ErrEmailNotVerified}, {1, ErrEmailNotVerified}, {"", ErrEmailNotVerified}, {[]string{"true"}, ErrEmailNotVerified},
+		} {
+			h := newHX(t)
+			tok := wayne("sub-robin", "dick@wayne.example.test")
+			tok.EmailVerified = tc.v
+			o := h.signIn("gotham", StartRequest{}, tok)
+			if tc.want == nil {
+				if o.err != nil {
+					t.Fatalf("email_verified %#v: %v", tc.v, o.err)
+				}
+				continue
+			}
+			mustIs(t, o.err, tc.want)
+			if h.countUsers() != 1 {
+				t.Fatalf("email_verified %#v created an account", tc.v)
+			}
+		}
+	})
+	t.Run("a missing email_verified claim does not verify", func(t *testing.T) {
+		if emailVerified(nil) {
+			t.Fatal("nil verified")
 		}
 	})
 	t.Run("the control: a valid token signs in", func(t *testing.T) {
@@ -646,6 +693,10 @@ func TestSameTarget(t *testing.T) {
 		{appURI + "?code=a&state=b", appURI, true},
 		{"BATSIGNAL://CALLBACK?code=a", appURI, true},
 		{"batsignal://callback/?code=a", appURI, false},
+		// Opaque URIs have no host or path: they must still compare by content.
+		{"batsignal:callback?code=a", "batsignal:callback", true},
+		{"batsignal:callback?code=a", "batsignal:other", false},
+		{"batsignal:callback", appURI, false},
 		{"batsignal://evil?code=a", appURI, false},
 		{"https://callback?code=a", appURI, false},
 		{"batsignal://u@callback?code=a", appURI, false},
