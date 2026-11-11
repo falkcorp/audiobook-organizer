@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
 // last-edited: 2026-11-10
 
@@ -32,11 +32,6 @@ import (
 // stand-in:
 //   - every key typed as the tasks package's schedule configuration, and the
 //     core.tasks windows map: F2-04;
-//   - the OIDC client secret, core.auth.oidc.<id>.client_secret: a
-//     secrets.Ref inside a list element, which config's decoder refuses until
-//     the engine binds a Ref in a list by the entry's id (F3-03 declares
-//     core.http.basic_gate.password only; docs/agent-tasks/platform-core/
-//     seams.d/F3-03.md);
 //   - the fail-closed declarations on core.auth.mode and
 //     core.http.basic_gate.enabled: F3-02.
 //
@@ -401,9 +396,6 @@ type aiStructured struct {
 
 // ---- core.auth (05-authn §8) ----
 
-// core.auth.oidc.<id>.client_secret is not declared: a secrets.Ref inside a
-// providers entry is refused by config's decoder (see the file comment).
-
 type authSettings struct {
 	Mode                string        `json:"mode" reload:"restart" protect:"owner" schema:"enum=required|disabled"`
 	DisabledAllowRemote bool          `json:"disabled_allow_remote" reload:"restart" protect:"admin"`
@@ -482,16 +474,24 @@ type authOIDC struct {
 // owner could mint the owner's identity. The owner tags on AllowedEmails and
 // AllowedDomains restate the key's; Register refuses an element tag stricter
 // than its key.
+//
+// ClientSecret is not part of the list's value: it is the secret key
+// core.auth.oidc.<id>.client_secret of its own, one per entry, named by the
+// entry's ID (05-authn §8, 05-config §1.12.3), live and ProtectAdmin by its
+// own tag (05-config §1.3.7's FieldSignIn row), not the list's owner class.
+// config binds it from the ID (core/config/keys.go, "Entry secrets"); the
+// list carries only its reference.
 type authOIDCProvider struct {
-	ID                  string   `json:"id"`
-	Kind                string   `json:"kind" schema:"enum=oidc|github"`
-	Issuer              string   `json:"issuer"`
-	ClientID            string   `json:"client_id"`
-	Scopes              []string `json:"scopes"`
-	AllowedEmails       []string `json:"allowed_emails" protect:"owner"`
-	AllowedDomains      []string `json:"allowed_domains" protect:"owner"`
-	DefaultRole         string   `json:"default_role"`
-	LinkExistingByEmail bool     `json:"link_existing_by_email"`
+	ID                  string      `json:"id"`
+	Kind                string      `json:"kind" schema:"enum=oidc|github"`
+	Issuer              string      `json:"issuer"`
+	ClientID            string      `json:"client_id"`
+	Scopes              []string    `json:"scopes"`
+	AllowedEmails       []string    `json:"allowed_emails" protect:"owner"`
+	AllowedDomains      []string    `json:"allowed_domains" protect:"owner"`
+	DefaultRole         string      `json:"default_role"`
+	LinkExistingByEmail bool        `json:"link_existing_by_email"`
+	ClientSecret        secrets.Ref `json:"client_secret" protect:"admin"`
 }
 
 type authOwner struct {

@@ -1,5 +1,5 @@
 // file: core/config/registry.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 74ce6316-8927-42d8-ac4f-38c9f6a04ebe
 // last-edited: 2026-11-10
 
@@ -92,6 +92,11 @@ type section struct {
 	// The last published builds, under the store mutex: eff is what Get
 	// reads, pend what Pending reads; the key index is made from them.
 	eff, pend *built
+
+	// entryLists are the list keys whose entries hold secrets (keys.go,
+	// "Entry secrets"): their derived keys are not in keys, because they are
+	// no part of the section's JSON and exist once per entry.
+	entryLists []*keyInfo
 }
 
 // core reports whether the section is a core section.
@@ -177,6 +182,9 @@ func buildSection(sp *sectionSpec) (*section, error) {
 	for _, k := range sec.keys {
 		sec.byRel[k.relName()] = k
 	}
+	if err := sec.reserveEntryIDs(); err != nil {
+		return nil, err
+	}
 	if sec.defaults, err = json.Marshal(sp.defaults); err != nil {
 		return nil, fmt.Errorf("%w: section %s defaults: %w", ErrInvalid, sp.path, err)
 	}
@@ -197,6 +205,56 @@ func buildSection(sp *sectionSpec) (*section, error) {
 		return nil, err
 	}
 	return sec, nil
+}
+
+// reserveEntryIDs collects the entry lists and, for each, the IDs its entries
+// may not take: every json name of the list's parent object, the list's own
+// included, since "<parent>.<id>.<ref>" must never extend a declared key. Two
+// entry lists under one parent would share one ID namespace, so a section
+// declaring them is refused.
+func (s *section) reserveEntryIDs() error {
+	parents := map[Path]Path{}
+	for _, k := range s.keys {
+		if len(k.entrySecrets) == 0 {
+			continue
+		}
+		parent := k.entryParent()
+		if prev, dup := parents[parent]; dup {
+			return fmt.Errorf("%w: section %s: the lists %s and %s both hold entry secrets under %s, so their entries' secret names would collide", ErrInvalid, s.path, prev, k.path(""), parent)
+		}
+		parents[parent] = k.path("")
+		k.reservedIDs = map[string]bool{}
+		for _, o := range s.keys {
+			if rest, ok := strings.CutPrefix(string(o.path("")), string(parent)+pathSep); ok {
+				seg, _, _ := strings.Cut(rest, pathSep)
+				k.reservedIDs[seg] = true
+			}
+		}
+		s.entryLists = append(s.entryLists, k)
+	}
+	return nil
+}
+
+// derivedKey resolves p to a derived key of one of the section's entry lists,
+// for any valid, unreserved entry ID: whether an entry holds that ID is the
+// caller's question (Apply refuses a key no entry names).
+func (s *section) derivedKey(p Path) (ckey, bool) {
+	for _, lk := range s.entryLists {
+		rest, ok := strings.CutPrefix(string(p), string(lk.entryParent())+pathSep)
+		if !ok {
+			continue
+		}
+		id, name, _ := strings.Cut(rest, pathSep)
+		if !validSegment(id) || lk.reservedIDs[id] {
+			continue
+		}
+		for _, d := range lk.entrySecrets {
+			if d.rel[0] == name {
+				return ckey{k: d, id: id, p: p}, true
+			}
+		}
+	}
+	return ckey{}, false
 }
 
 // String is the path as a string (for messages).
@@ -252,6 +310,11 @@ func (s *section) decorate() error {
 			setExtra(k.schema, "x-mediacore-fail-closed", true)
 		}
 	}
+	for _, lk := range s.entryLists {
+		if err := lk.decorateEntrySecrets(); err != nil {
+			return err
+		}
+	}
 	for _, k := range s.keys {
 		resolved, err := k.schema.CloneSchemas().Resolve(nil)
 		if err != nil {
@@ -271,6 +334,47 @@ func (s *section) decorate() error {
 			return fmt.Errorf("%w: section %s key %q: schema: %w", ErrInvalid, s.path, k.relName(), err)
 		}
 		k.schemaRaw = raw
+	}
+	return nil
+}
+
+// decorateEntrySecrets rewrites the list key's entry schema for each derived
+// key: the reflected Ref property is the write-only string a secret key
+// takes, and inside the list it is the reference {"secret": "<name>"} the
+// canonical value carries, never a value; the vendor keyword
+// x-mediacore-entry-secret (coined, seams.d/F3-03.md) names the derived key's
+// template path. It also gives each derived key its own schema: a write-only
+// string marked x-mediacore-secret with its reload and protection.
+func (k *keyInfo) decorateEntrySecrets() error {
+	items := k.schema.Items
+	if items == nil || items.Properties == nil {
+		return fmt.Errorf("%w: section %s key %q: the list's schema has no entry properties", ErrInvalid, k.sec.path, k.relName())
+	}
+	for _, d := range k.entrySecrets {
+		name := d.rel[0]
+		if items.Properties[name] == nil {
+			return fmt.Errorf("%w: section %s key %q: no schema for the entry secret %q", ErrInvalid, k.sec.path, k.relName(), name)
+		}
+		items.Properties[name] = &jsonschema.Schema{
+			Type:                 "object",
+			Properties:           map[string]*jsonschema.Schema{"secret": {Type: "string"}},
+			Required:             []string{"secret"},
+			AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
+			Extra:                map[string]any{"x-mediacore-entry-secret": string(d.templatePath())},
+		}
+		// An entry may omit its reference: the canonical value adds it.
+		items.Required = slices.DeleteFunc(items.Required, func(r string) bool { return r == name })
+		ds := &jsonschema.Schema{Type: "string", WriteOnly: true}
+		setExtra(ds, "x-mediacore-secret", true)
+		setExtra(ds, "x-mediacore-reload", d.reload.String())
+		if d.protect != ProtectNone {
+			setExtra(ds, "x-mediacore-protect", d.protect.String())
+		}
+		raw, err := json.Marshal(ds)
+		if err != nil {
+			return fmt.Errorf("%w: section %s entry secret %s: schema: %w", ErrInvalid, k.sec.path, d.templatePath(), err)
+		}
+		d.schema, d.schemaRaw = ds, raw
 	}
 	return nil
 }
@@ -440,6 +544,13 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 		}
 		f.Set(reflect.ValueOf(secrets.RefTo(secrets.Name(k.path(""))).Bind(res)))
 	}
+	for _, lk := range s.entryLists {
+		// The list's value is canonical, so its entries pass; binding them
+		// again here ties every Ref to its entry's ID whatever the bytes say.
+		if err := lk.bindEntries(lk.path(""), v.Elem().FieldByIndex(lk.index), res); err != nil {
+			return nil, s.redact(err, nil)
+		}
+	}
 	if val, ok := v.Interface().(Validator); ok {
 		ids := s.entryIDs(v) // before Validate, which could add an entry
 		if err := val.Validate(); err != nil {
@@ -450,7 +561,9 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 }
 
 // redact keeps a sensitive value out of a decode or Validator error of this
-// section (05-config §1.3.1: a sensitive value is redacted in logs). These
+// section (05-config §1.3.1: a sensitive value is redacted in logs). A list
+// whose entries hold secrets counts as a sensitive key here (fail closed:
+// keys.go redacts). These
 // errors reach AttachReport.Quarantined, KeyState.Quarantined, the logs and
 // Apply's error, and a Validator's message may quote any field it checks: a
 // cross-field check on a plain key can quote the sensitive key beside it. So
@@ -466,7 +579,7 @@ func (s *section) decode(raw json.RawMessage, res secrets.Resolver) (any, error)
 // Validator checked; a path naming any other ID (one invented from a
 // sensitive value, say) is replaced like any other part.
 func (s *section) redact(err error, ids map[string]bool) error {
-	if err == nil || !slices.ContainsFunc(s.keys, func(k *keyInfo) bool { return k.sensitive }) {
+	if err == nil || !slices.ContainsFunc(s.keys, (*keyInfo).redacts) {
 		return err
 	}
 	return s.redactPart(err, ids)

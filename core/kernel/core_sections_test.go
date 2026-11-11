@@ -1,5 +1,5 @@
 // file: core/kernel/core_sections_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9d2c7a54-61f0-4b8e-a3d5-0c1b7e6f4a92
 // last-edited: 2026-11-10
 
@@ -8,6 +8,7 @@ package kernel
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"sort"
@@ -30,7 +31,8 @@ type leaf struct {
 }
 
 // mapKeyPlaceholder stands for a map key in a leaf path of a section that is
-// itself a map (core.modules, keyed by module ID).
+// itself a map (core.modules, keyed by module ID), and for a list entry's ID
+// in the path of that entry's secret (core.auth.oidc.<id>.client_secret).
 const mapKeyPlaceholder = "<id>"
 
 // sectionLeaves walks the section's type and returns its keys. The convention
@@ -39,7 +41,9 @@ const mapKeyPlaceholder = "<id>"
 // type of a secret, 05-config §2.3; F3-03); any other type is one key, a map
 // and a list included (05-config §1.3.6). The one exception is a section
 // whose type is itself a map, whose entries' own keys sit under
-// mapKeyPlaceholder.
+// mapKeyPlaceholder; and a secrets.Ref field of a list entry is one more key,
+// "<list parent>.<id>.<ref>" with the Ref's own tags (core/config's entry
+// secrets, F3-OIDC-SECRET).
 func sectionLeaves(t *testing.T, sec any) (config.Path, []leaf) {
 	t.Helper()
 	v := reflect.ValueOf(sec)
@@ -70,6 +74,17 @@ func walkType(t *testing.T, path string, typ reflect.Type, reload config.Reload,
 		walkType(t, path+"."+mapKeyPlaceholder, typ.Elem(), reload, protect, schema, false, out)
 	default:
 		*out = append(*out, leaf{path, typ, reload, protect, schema, typ.Kind() == reflect.Map})
+		if typ.Kind() == reflect.Slice && typ.Elem().Kind() == reflect.Struct {
+			parent := path[:strings.LastIndex(path, ".")]
+			for f := range typ.Elem().Fields() {
+				if f.Type != reflect.TypeFor[secrets.Ref]() {
+					continue
+				}
+				name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+				p := parent + "." + mapKeyPlaceholder + "." + name
+				*out = append(*out, leaf{p, f.Type, tagReload(t, f, config.ReloadLive), tagProtect(t, f, config.ProtectNone), "", false})
+			}
+		}
 	}
 }
 
@@ -126,8 +141,8 @@ func allLeaves(t *testing.T) map[string]leaf {
 // excluded reports the keys this row leaves to later rows, by type and prefix
 // (so F2-04's additions keep the test green without editing it): a schedule
 // configuration type, the core.tasks.windows keys. F3-03's secret key
-// core.http.basic_gate.password is an owner key (ownerKeys); the OIDC client
-// secret is not declared (TestCoreSections_NoLaterRowsKeys).
+// core.http.basic_gate.password and the OIDC client secret
+// core.auth.oidc.<id>.client_secret are owner keys (ownerKeys).
 func excluded(l leaf) bool {
 	typ := l.typ
 	if typ.Name() == "ScheduleConfig" && strings.HasSuffix(typ.PkgPath(), "/tasks") {
@@ -139,8 +154,7 @@ func excluded(l leaf) bool {
 // ownerKeys is the full list of this row's key paths, transcribed from the
 // owners' key tables (each table is named). A table row naming several keys
 // ("a / b") is several paths. Left out: every row typed as a schedule
-// configuration, the core.tasks.windows rows, the OIDC client-secret row (a
-// secret inside a list entry; F3-03's seams), the "(phase 2)" rows of
+// configuration, the core.tasks.windows rows, the "(phase 2)" rows of
 // 05-download and 05-indexer. core.shutdown.budget (05-health and 06 §6.8)
 // and core.library.mappings (05-download and 05-library) appear once.
 var ownerKeys = []string{
@@ -161,7 +175,8 @@ var ownerKeys = []string{
 	"core.auth.login.soft_threshold", "core.auth.login.soft_step", "core.auth.login.soft_max",
 	"core.auth.login.saturated_rate", "core.auth.login.saturated_burst",
 	"core.auth.invite.ttl", "core.auth.temp_login.ttl",
-	"core.auth.oidc.redirect_base_url", "core.auth.oidc.providers", "core.auth.owner.required",
+	"core.auth.oidc.redirect_base_url", "core.auth.oidc.providers", "core.auth.oidc.<id>.client_secret",
+	"core.auth.owner.required",
 	// 05-backup §5B.7
 	"core.backup.enabled", "core.backup.dir", "core.backup.compression", "core.backup.compression_level",
 	"core.backup.include_derived", "core.backup.include_recreatable", "core.backup.verify_after_create",
@@ -338,38 +353,46 @@ func TestCoreSections_NoOverlap(t *testing.T) {
 }
 
 // TestCoreSections_NoLaterRowsKeys is a test name coined by F2-09: nothing the
-// brief leaves to F2-04 and F3-02 is declared here, and of F3-03's two secret
-// keys only core.http.basic_gate.password is (the OIDC client secret sits in
-// a list entry, which config refuses for a secrets.Ref).
+// brief leaves to F2-04 and F3-02 is declared here. F3-03's secret keys,
+// core.http.basic_gate.password and the OIDC client secret (a list entry's,
+// F3-OIDC-SECRET), are both declared.
 func TestCoreSections_NoLaterRowsKeys(t *testing.T) {
 	for p, l := range allLeaves(t) {
 		if excluded(l) {
 			t.Errorf("key %s belongs to a later row", p)
 		}
-		if strings.Contains(p, ".schedules.") || strings.Contains(p, ".client_secret") {
+		if strings.Contains(p, ".schedules.") {
 			t.Errorf("key %s belongs to a later row", p)
 		}
 	}
 }
 
 // TestCoreSections_SecretKeys (a test name coined by F3-03; 05-config §2.2,
-// 05-http-api §10): core.http.basic_gate.password is the one secrets.Ref key,
-// live and ProtectAdmin; no other key, and no key inside a list or map type,
-// is a secret.
+// §1.12.3, 05-http-api §10, 05-authn §8): the secrets.Ref keys are
+// core.http.basic_gate.password and each OIDC provider entry's
+// core.auth.oidc.<id>.client_secret, both live and ProtectAdmin (the client
+// secret by its own tag, not its owner list's); no other key is a secret.
 func TestCoreSections_SecretKeys(t *testing.T) {
 	refType := reflect.TypeFor[secrets.Ref]()
+	all := allLeaves(t)
 	var refs []string
-	for p, l := range allLeaves(t) {
+	for p, l := range all {
 		if l.typ == refType {
 			refs = append(refs, p)
 		}
 	}
-	if !slices.Equal(refs, []string{"core.http.basic_gate.password"}) {
-		t.Fatalf("secret keys %v, want only core.http.basic_gate.password", refs)
+	slices.Sort(refs)
+	want := []string{"core.auth.oidc.<id>.client_secret", "core.http.basic_gate.password"}
+	if !slices.Equal(refs, want) {
+		t.Fatalf("secret keys %v, want %v", refs, want)
 	}
-	l := allLeaves(t)["core.http.basic_gate.password"]
-	if l.reload != config.ReloadLive || l.protect != config.ProtectAdmin {
-		t.Fatalf("core.http.basic_gate.password: reload %d protect %d, want live and ProtectAdmin", l.reload, l.protect)
+	for _, p := range want {
+		if l := all[p]; l.reload != config.ReloadLive || l.protect != config.ProtectAdmin {
+			t.Errorf("%s: reload %d protect %d, want live and ProtectAdmin", p, l.reload, l.protect)
+		}
+	}
+	if l := all["core.auth.oidc.providers"]; l.protect != config.ProtectOwner {
+		t.Errorf("core.auth.oidc.providers: protect %d, want ProtectOwner", l.protect)
 	}
 }
 
@@ -694,5 +717,53 @@ func TestCoreSections_CoreModulesIsKeyedByModuleID(t *testing.T) {
 	}
 	if all["core.modules.<id>.enabled"].typ.Kind() != reflect.Bool {
 		t.Error("core.modules.<id>.enabled is not a bool")
+	}
+}
+
+// TestCoreSections_OIDCClientSecretPerProvider (F3-OIDC-SECRET; 05-authn §8,
+// 05-config §1.12.3): over the kernel's config store, each provider entry
+// gets its own secret key core.auth.oidc.<id>.client_secret, live and
+// ProtectAdmin, written by an admin without owner proof; an entry whose id
+// would collide with a sibling key is refused; removing an entry deletes its
+// secret in the same commit.
+func TestCoreSections_OIDCClientSecretPerProvider(t *testing.T) {
+	in := configIn(t)
+	in.OwnerSet = func() bool { return true }
+	cb, cm := startedCfg(t, in)
+	proof := interactiveAdmin()
+	proof.Owner = true
+	const github, google = config.Path("core.auth.oidc.github.client_secret"), config.Path("core.auth.oidc.google.client_secret")
+	two := `[{"id":"github","kind":"github","issuer":"","client_id":"bat","scopes":[],"allowed_emails":["bruce@example.com"],"allowed_domains":[],"default_role":"viewer","link_existing_by_email":true},` +
+		`{"id":"google","kind":"oidc","issuer":"accounts.google.com","client_id":"robin","scopes":[],"allowed_emails":["bruce@example.com"],"allowed_domains":[],"default_role":"viewer","link_existing_by_email":true}]`
+	if err := applyOne(cb, proof, "core.auth.oidc.providers", two); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []config.Path{github, google} {
+		ks, ok := cb.store.Lookup(p)
+		if !ok || ks.Secret == nil || ks.Effective != nil || ks.Protection != config.ProtectAdmin || ks.Reload != config.ReloadLive || ks.Section != "core.auth" {
+			t.Fatalf("%s: %+v (%v)", p, ks, ok)
+		}
+	}
+	if err := applyOne(cb, interactiveAdmin(), github, `"wayne-tech"`); err != nil {
+		t.Fatalf("an admin without owner proof sets a client secret: %v", err)
+	}
+	if w := cm.Commits()[len(cm.Commits())-1].Secrets; len(w) != 1 || w[0].Name != secrets.Name(github) || w[0].Value.Reveal() != "wayne-tech" {
+		t.Errorf("writes %+v", w)
+	}
+	for _, id := range []string{"providers", "redirect_base_url", "Git-Hub", ""} {
+		v := `[{"id":"` + id + `","kind":"github","issuer":"","client_id":"bat","scopes":[],"allowed_emails":[],"allowed_domains":[],"default_role":"viewer","link_existing_by_email":false}]`
+		if err := applyOne(cb, proof, "core.auth.oidc.providers", v); !errors.Is(err, config.ErrInvalid) {
+			t.Errorf("id %q: %v, want ErrInvalid", id, err)
+		}
+	}
+	one := `[` + two[1:strings.Index(two, "},{")+1] + `]`
+	if err := applyOne(cb, proof, "core.auth.oidc.providers", one); err != nil {
+		t.Fatal(err)
+	}
+	if w := cm.Commits()[len(cm.Commits())-1].Secrets; len(w) != 1 || w[0].Name != secrets.Name(google) || !w[0].Delete {
+		t.Errorf("removing google writes %+v", w)
+	}
+	if _, ok := cb.store.Lookup(google); ok {
+		t.Error("a removed provider's client secret is still a key")
 	}
 }
