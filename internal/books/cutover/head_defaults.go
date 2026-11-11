@@ -1,0 +1,79 @@
+// file: internal/books/cutover/head_defaults.go
+// version: 1.0.1
+// guid: ea8d2a0e-bf7a-49fb-b3f7-30318998436f
+// last-edited: 2026-11-11
+
+// FROZEN COPY of HEAD (748fd787a) registered viper defaults (the key set of registerConfigDefaults, recorded by running it); read-only; deleted in R3 with the other HEAD-format readers (05-config §1.12.2, 03 §3.8).
+
+package cutover
+
+import (
+	_ "embed"
+	"encoding/json"
+	"reflect"
+	"sync"
+)
+
+// headDefaultsJSON is HEAD's SetDefault table: viper key (dotted for nested
+// keys) to default value, 272 keys. It is data, not behaviour: M2 uses it to
+// say which dropped (class x) values were non-default, and the tests' stand-in
+// registry takes its defaults from it.
+//
+//go:embed testdata/head_defaults.json
+var headDefaultsJSON []byte
+
+var headDefaultsTable = sync.OnceValue(func() map[string]any {
+	var m map[string]any
+	if err := json.Unmarshal(headDefaultsJSON, &m); err != nil {
+		panic("cutover: testdata/head_defaults.json: " + err.Error())
+	}
+	delete(m, "_header") // the file's version header, not a default
+	return m
+})
+
+// headDefault returns HEAD's default for the viper key name.
+func headDefault(name string) (any, bool) {
+	v, ok := headDefaultsTable()[name]
+	return v, ok
+}
+
+// headIsDefault reports whether v, a decoded JSON value stored under the
+// dotted HEAD name, equals HEAD's default: a leaf against its own default, an
+// object against its leaves' (a leaf with no default counts as default only
+// when it is the zero value).
+func headIsDefault(name string, v any) bool {
+	if obj, ok := v.(map[string]any); ok {
+		for k, child := range obj {
+			if !headIsDefault(name+"."+k, child) {
+				return false
+			}
+		}
+		return true
+	}
+	def, ok := headDefault(name)
+	if !ok {
+		return reflect.ValueOf(v).IsZero() || v == nil
+	}
+	return headJSONEqual(def, v)
+}
+
+// headJSONEqual compares two decoded JSON values, numbers by value.
+func headJSONEqual(a, b any) bool {
+	an, aok := headNumber(a)
+	bn, bok := headNumber(b)
+	if aok && bok {
+		return an == bn
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+func headNumber(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
+}
