@@ -1,7 +1,7 @@
 // file: internal/metadata/cover.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 4efaa7b8-e29a-47f3-84f7-39b46bfc9a01
-// last-edited: 2026-10-12
+// last-edited: 2026-11-11
 
 package metadata
 
@@ -18,13 +18,14 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
-	"github.com/falkcorp/audiobook-organizer/internal/security/safehttp"
+	safehttp "github.com/falkcorp/mediacore/integrations/providerhttp"
 )
 
 // ErrSSRFBlocked is returned when a cover URL resolves to a private/reserved
 // address. It aliases safehttp.ErrBlockedAddress so that existing callers that
 // compare against this name keep working; the guard itself lives in
-// internal/security/safehttp and is shared with internal/covers.
+// core/integrations/providerhttp (the moved safehttp) and is shared with
+// internal/covers.
 //
 // The scheme allowlist, the resolved-address block and the redirect re-check
 // used to be three private helpers in this file. They were duplicated nowhere

@@ -1,7 +1,7 @@
 // file: internal/covers/covers.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: c3d4e5f6-7890-abcd-ef12-34567890abcd
-// last-edited: 2026-11-07
+// last-edited: 2026-11-11
 //
 // Cover service logic for proxy caching and validation.
 // Business logic extracted from internal/server/covers.go.
@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/security/safehttp"
+	safehttp "github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/library"
 )
 
