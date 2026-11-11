@@ -1,5 +1,5 @@
 // file: core/auth/sessions.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 587ac104-093e-402c-80f7-30ea7e13591d
 // last-edited: 2026-11-11
 
@@ -7,9 +7,11 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"slices"
+	"time"
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/backup/journal"
@@ -127,6 +129,183 @@ func (s *Service) RevokeSession(ctx context.Context, actor *Principal, publicID 
 	})
 }
 
+// RevokeAllSessions signs user out everywhere (§3.2, §4.12). One batch bumps
+// the user's credential epoch, so every session and one-time token issued
+// before it is refused (and deleted when presented), deletes the user's
+// session records, and journals credential_epoch.bumped. except, when it
+// names a live session of user at the user's current epoch, survives: it is
+// re-stamped with the new epoch in the same batch ("sign out my other
+// devices"). An except that is gone, expired or already epoch-stale keeps
+// nothing (re-stamping a stale session would revive one a password change
+// killed); an except of another user is refused (ErrBadInput). API keys are
+// not epoch-bound and are left alone (§4.12).
+//
+// The epoch is credential state, so the actor needs an interactive method
+// even for its own sessions (MayChangeCredentials, §3.1); another user's
+// also need core:users.manage and dominance. _system is refused.
+func (s *Service) RevokeAllSessions(ctx context.Context, actor *Principal, user UserID, except string) error {
+	if _, err := actorUser(actor); err != nil {
+		return err
+	}
+	if !s.interactive(actor.Method) {
+		return fmt.Errorf("%w: signing out everywhere needs an interactive sign-in", ErrDenied)
+	}
+	now := s.now().UTC()
+	return s.commitRetrying(ctx, func(b *storage.Batch) error {
+		if err := s.mayManage(ctx, actor, user); err != nil {
+			return err
+		}
+		u, err := s.d.Store.GetUser(ctx, user)
+		if err != nil {
+			return err
+		}
+		if err := mutable(u); err != nil {
+			return err
+		}
+		keep, err := s.keptSession(ctx, u, except, now)
+		if err != nil {
+			return err
+		}
+		up := *u
+		up.Version = u.Version + 1
+		up.CredentialEpoch = u.CredentialEpoch + 1
+		up.UpdatedAt = now
+		if err := s.d.Store.PutUser(b, &up); err != nil {
+			return err
+		}
+		revoked := 0
+		for rec, err := range s.d.Store.ScanUserSessions(ctx, user) {
+			if err != nil {
+				if s.leftUndecodable("session", user, err) {
+					continue
+				}
+				return err
+			}
+			if keep != nil && rec.PublicID == keep.PublicID {
+				continue
+			}
+			if err := s.d.Store.DeleteSession(b, rec); err != nil {
+				return err
+			}
+			revoked++
+		}
+		details := map[string]any{"all": true, "revoked": revoked}
+		if keep != nil {
+			if err := s.d.Store.RestampSession(b, keep, up.CredentialEpoch); err != nil {
+				return err
+			}
+			details["kept"] = keep.PublicID
+		}
+		subject := ref(refKindUser, string(user))
+		s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: subject, Epoch: up.CredentialEpoch})
+		return s.d.Audit.RecordIn(ctx, b, audit.Event{
+			Action: actionSessionRevoke, Outcome: audit.Success, Target: subject, Details: details,
+		})
+	})
+}
+
+// keptSession resolves RevokeAllSessions' except against u: the session to
+// re-stamp, or nil when except is empty, gone, expired or not at u's epoch.
+func (s *Service) keptSession(ctx context.Context, u *User, except string, now time.Time) (*SessionRecord, error) {
+	if except == "" {
+		return nil, nil
+	}
+	rec, err := s.d.Store.SessionByPublicID(ctx, except)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case rec.UserID != u.ID:
+		return nil, fmt.Errorf("%w: session %s is not %s's", ErrBadInput, except, u.ID)
+	case rec.CredentialEpoch != u.CredentialEpoch || !now.Before(rec.ExpiresAt):
+		return nil, nil
+	}
+	return rec, nil
+}
+
+// Revalidate reports whether p, a principal bound earlier and held by a
+// long-lived request (an SSE stream), still stands (§3.2): its user exists,
+// is active and is not SignInRestricted; a session principal's session still
+// exists, is unexpired and is at the user's current epoch (so a self-service
+// password change, which re-stamps the caller's own session, keeps that
+// stream); a key principal's key is still active and unexpired, whatever the
+// epoch (keys are not epoch-bound, §4.12); a principal of any other method
+// stands while the user's epoch is the one it was built at. It returns nil,
+// the refusal (ErrRevoked, ErrExpired, ErrStaleEpoch, ErrInactiveUser,
+// ErrResetRequired, ErrInvalidCredentials), or ErrStoreUnavailable.
+//
+// It answers from the store (the user and the credential, two point reads)
+// rather than from the event-invalidated generation table §3.2 describes,
+// until Deps.Events is wired; the answers are the same.
+func (s *Service) Revalidate(ctx context.Context, p *Principal) error {
+	if p == nil || p.User == nil || p.User.ID == "" {
+		return fmt.Errorf("%w: no principal", ErrInvalidCredentials)
+	}
+	u, err := s.d.Store.GetUser(ctx, p.User.ID)
+	if err != nil {
+		return revalidateErr("user "+string(p.User.ID), err)
+	}
+	if err := standing(u); err != nil {
+		return err
+	}
+	now := s.now()
+	switch {
+	case p.Method.sessionMethod():
+		rec, err := s.d.Store.SessionByPublicID(ctx, p.CredentialID)
+		if err != nil {
+			return revalidateErr("session "+p.CredentialID, err)
+		}
+		switch {
+		case rec.UserID != u.ID:
+			return fmt.Errorf("%w: session %s is not %s's", ErrRevoked, p.CredentialID, u.ID)
+		case !now.Before(rec.ExpiresAt):
+			return fmt.Errorf("%w: session %s", ErrExpired, p.CredentialID)
+		case rec.CredentialEpoch != u.CredentialEpoch:
+			return fmt.Errorf("%w: session %s", ErrStaleEpoch, p.CredentialID)
+		}
+	case p.Method == MethodAPIKey:
+		k, err := s.d.Store.APIKeyByID(ctx, p.CredentialID)
+		if err != nil {
+			return revalidateErr("key "+p.CredentialID, err)
+		}
+		if k.Owner != u.ID {
+			return fmt.Errorf("%w: key %s is not %s's", ErrRevoked, p.CredentialID, u.ID)
+		}
+		return keyUsable(k, now)
+	case u.CredentialEpoch != p.User.CredentialEpoch:
+		return fmt.Errorf("%w: %s", ErrStaleEpoch, u.ID)
+	}
+	return nil
+}
+
+// revalidateErr maps a Revalidate point read's error: a missing record is a
+// revoked credential, an undecodable one is refused, anything else is the
+// store's.
+func revalidateErr(what string, err error) error {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return fmt.Errorf("%w: %s is gone", ErrRevoked, what)
+	case errors.Is(err, ErrUndecodableRecord):
+		return fmt.Errorf("%w: %s cannot be decoded", ErrInvalidCredentials, what)
+	case errors.Is(err, ErrStoreUnavailable):
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
+}
+
+// standing is the user half of every credential check: the user is active
+// and not SignInRestricted (§4.2, §4.14).
+func standing(u *User) error {
+	if u.Status != StatusActive {
+		return fmt.Errorf("%w: %s", ErrInactiveUser, u.ID)
+	}
+	if u.SignInRestricted {
+		return fmt.Errorf("%w: %s", ErrResetRequired, u.ID)
+	}
+	return nil
+}
+
 // PrincipalFor builds the principal of a credential that resolved to u
 // through method m (§3.2, G15). It applies exactly what core credentials get:
 // u must be active, not SignInRestricted (ErrResetRequired), and at epoch
@@ -143,11 +322,8 @@ func (s *Service) PrincipalFor(ctx context.Context, u *User, m Method, scopes []
 	if !s.knownMethod(m) {
 		return nil, fmt.Errorf("%w: unregistered method %q", ErrMethodSpec, m)
 	}
-	if u.Status != StatusActive {
-		return nil, fmt.Errorf("%w: %s", ErrInactiveUser, u.ID)
-	}
-	if u.SignInRestricted {
-		return nil, fmt.Errorf("%w: %s", ErrResetRequired, u.ID)
+	if err := standing(u); err != nil {
+		return nil, err
 	}
 	if epoch != u.CredentialEpoch {
 		return nil, fmt.Errorf("%w: %s", ErrStaleEpoch, u.ID)
