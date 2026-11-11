@@ -178,11 +178,25 @@ func (s *Service) APIKeys(ctx context.Context, owner UserID) iter.Seq2[*APIKey, 
 
 // SetAPIKeyStatus changes a key's status, monotone toward revoked (§4.4):
 // revoked is terminal (ErrKeyRevoked for any other target), and
-// needs_confirmation goes only to active (an interactive re-enable) or
-// revoked; needs_confirmation itself is set only by the post-restore hook.
-// A change away from active appends its journal line into the same batch
-// before commit (§4.12). A write that raced a last-use touch is re-read and
-// re-staged, so the revocation always lands (early fix 3, SEC6-3).
+// needs_confirmation goes only to active or revoked; needs_confirmation
+// itself is set only by the post-restore hook. A change away from active
+// appends its journal line into the same batch before commit (§4.12). A
+// write that raced a last-use touch is re-read and re-staged, so the
+// revocation always lands (early fix 3, SEC6-3).
+//
+// Who may write (§4.13's key rows): the key's owner, or another user with
+// core:users.manage through an interactive method and dominance (mayManage,
+// which therefore refuses a key actor any other owner's key). Two rules
+// more, so a key never widens what its owner's other credentials reach:
+//   - a key actor manages only keys it may create (§4.4, §4.13): every scope
+//     of the target is held by its effective set as stored now, intersected
+//     with its own key's scopes (ErrScopeEscalation), whatever the change;
+//   - any change into active — re-enabling a disabled key, a manager's
+//     disable included, or confirming a restored one — needs an interactive
+//     method (ErrDenied), as HEAD's credential guard on PATCH required.
+//
+// Disabling or revoking needs neither interactivity nor more than ownership
+// for a session: a restriction never widens anything.
 func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id string, st KeyStatus) error {
 	if _, err := actorUser(actor); err != nil {
 		return err
@@ -198,14 +212,19 @@ func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id stri
 		if err := s.mayManage(ctx, actor, k.Owner); err != nil {
 			return err
 		}
+		if actor.Method == MethodAPIKey {
+			if err := s.keyMayManage(ctx, actor, k); err != nil {
+				return err
+			}
+		}
 		if err := statusTransition(k.Status, st); err != nil {
 			return err
 		}
-		if k.Status == KeyNeedsConfirmation && st == KeyActive && !s.interactive(actor.Method) {
-			return fmt.Errorf("%w: re-enabling an unconfirmed key needs an interactive sign-in", ErrDenied)
-		}
 		if k.Status == st {
 			return nil
+		}
+		if st == KeyActive && !s.interactive(actor.Method) {
+			return fmt.Errorf("%w: re-enabling a key needs an interactive sign-in", ErrDenied)
 		}
 		next := *k
 		next.Status, next.Version = st, k.Version+1
@@ -232,6 +251,24 @@ func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id stri
 			Details: map[string]any{"from": string(k.Status), "to": string(st)},
 		})
 	})
+}
+
+// keyMayManage is §4.4's "a key may manage only keys it may create" for a
+// key actor over k, a key of its own owner: every scope of k is held by the
+// actor's effective set now (its stored roles intersected with its stored
+// key's scopes) and by the checker it presented, the test CreateAPIKey
+// applies to a new key's scopes.
+func (s *Service) keyMayManage(ctx context.Context, actor *Principal, k *APIKey) error {
+	held, _, err := s.effectiveSet(ctx, actor)
+	if err != nil {
+		return err
+	}
+	for _, p := range k.Scopes {
+		if !held.Has(p) || !actor.Perms.Has(p) {
+			return fmt.Errorf("%w: key %s holds %s, which the managing key could not create", ErrScopeEscalation, k.ID, p)
+		}
+	}
+	return nil
 }
 
 // RevokeAPIKey is SetAPIKeyStatus(…, KeyRevoked).

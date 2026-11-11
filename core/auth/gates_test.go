@@ -254,8 +254,8 @@ func TestAPIKey_RevokedIsTerminal(t *testing.T) {
 				want = auth.ErrKeyRevoked
 			case cur == auth.KeyNeedsConfirmation && to == auth.KeyDisabled:
 				want = auth.ErrKeyRevoked
-			case cur == auth.KeyNeedsConfirmation && to == auth.KeyActive && !actor.Method.Interactive():
-				want = auth.ErrDenied
+			case to == auth.KeyActive && cur != auth.KeyActive && !actor.Method.Interactive():
+				want = auth.ErrDenied // any change into active is an interactive write
 			default:
 				next = to
 			}
