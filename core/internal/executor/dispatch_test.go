@@ -1,7 +1,7 @@
 // file: core/internal/executor/dispatch_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: f380a3d2-0261-42b8-82c6-72a942b58624
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -425,4 +426,172 @@ func TestPreview_WriterRecordsIntentOnly(t *testing.T) {
 			t.Fatalf("%v: intents %+v, want exactly the one close_case intent", mode, intents)
 		}
 	}
+}
+
+// TestPriority_SystemIsCoreOnly (tasks.PrioritySystem, 5T.3.1): a start
+// that names a priority past PrioritySystem is refused on every kind, and
+// PrioritySystem is refused on a module kind, whether it comes from Start,
+// StartIn or an rc.Enqueue option; a core kind may take it. A module kind
+// may not default to it either (registration).
+func TestPriority_SystemIsCoreOnly(t *testing.T) {
+	system := func(c *tasks.Common) { c.Priority = tasks.PrioritySystem }
+	t.Run("registration", func(t *testing.T) {
+		for kind, refused := range map[string]bool{"gotham.signal": true, "core.signal": false} {
+			stores, ks := bootStores(t, vfs.NewCrashableMem())
+			x, err := New(Options{Stores: stores, Keyspace: &ks, Definitions: []tasks.Definition{taskDef(kind, okBody, system)},
+				InstrumentsOff: true, Config: testConfig(), Logger: quietLogger()})
+			if err == nil {
+				t.Cleanup(func() { _ = x.Shutdown(context.Background()) })
+			}
+			if refused && !errors.Is(err, ErrInvalidPriority) {
+				t.Errorf("%s defaulting to PrioritySystem: %v, want ErrInvalidPriority", kind, err)
+			}
+			if !refused && err != nil {
+				t.Errorf("%s defaulting to PrioritySystem: %v, want allowed", kind, err)
+			}
+		}
+	})
+	t.Run("starts", func(t *testing.T) {
+		// gotham's system actor holds gotham:run, so StartIn's refusal below
+		// is the priority's, not the permission's.
+		h := newHarness(t, []tasks.Definition{taskDef("gotham.signal", okBody), taskDef("core.signal", okBody)},
+			func(o *Options) { o.Catalog = catalogWith(t, "gotham:run") })
+		ctx := context.Background()
+		for _, c := range []struct {
+			kind    tasks.Kind
+			prio    tasks.Priority
+			allowed bool
+		}{
+			{kind: "gotham.signal", prio: tasks.PriorityHigh, allowed: true},
+			{kind: "gotham.signal", prio: tasks.PrioritySystem},
+			{kind: "gotham.signal", prio: tasks.PrioritySystem + 1},
+			{kind: "core.signal", prio: tasks.PrioritySystem, allowed: true},
+			{kind: "core.signal", prio: 255},
+		} {
+			ref, err := h.x.Start(ctx, c.kind, tasks.StartRequest{Mode: tasks.ModeRequestLive, Priority: c.prio})
+			if !c.allowed {
+				if !errors.Is(err, ErrInvalidPriority) {
+					t.Errorf("start %s at priority %d: %v, want ErrInvalidPriority", c.kind, c.prio, err)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatalf("start %s at priority %d: %v", c.kind, c.prio, err)
+			}
+			if r := h.get(ref.ID); r.Priority != c.prio {
+				t.Errorf("%s stored priority %d, want %d", c.kind, r.Priority, c.prio)
+			}
+		}
+		b := h.ks.NewIndexedBatch()
+		defer func() { _ = b.Close() }()
+		if _, err := h.x.StartIn(ctx, b, "gotham.signal", tasks.StartRequest{Mode: tasks.ModeRequestLive, Priority: tasks.PrioritySystem}); !errors.Is(err, ErrInvalidPriority) {
+			t.Errorf("StartIn of a module kind at PrioritySystem: %v, want ErrInvalidPriority", err)
+		}
+	})
+	t.Run("enqueue option", func(t *testing.T) {
+		h, _, err := enqueueOnce(t, []tasks.Definition{taskDef("gotham.forensics", okBody)}, nil, "gotham.forensics",
+			func(r *tasks.StartRequest) { r.Priority = tasks.PrioritySystem })
+		if !errors.Is(err, ErrInvalidPriority) {
+			t.Fatalf("enqueue at PrioritySystem: %v, want ErrInvalidPriority", err)
+		}
+		if n := h.count("gotham.forensics"); n != 0 {
+			t.Fatalf("a refused enqueue created %d runs", n)
+		}
+	})
+}
+
+// TestDedupe_FoldsIntoQueuedOrRunningRun (05-tasks DedupePolicy; v2
+// EnqueueOp's dedupe): the zero policy folds a start into a queued or
+// running run of its kind and mode whose params are byte-identical;
+// AnyParams folds whatever the params; Key and Merge reach only queued runs
+// (Merge is never called with a running run); SameActorOnly narrows every
+// rule to the same actor. A start that folds inserts nothing.
+func TestDedupe_FoldsIntoQueuedOrRunningRun(t *testing.T) {
+	bruce := tasks.Actor{UserID: "bruce", AuthMethod: "session"}
+	selina := tasks.Actor{UserID: "selina", AuthMethod: "session"}
+	live, preview := tasks.ModeRequestLive, tasks.ModeRequestPreview
+	// running boots gotham.stakeout under pol and leaves one Live run of it
+	// (params "narrows", started by Bruce) running; its ConcurrencyKey keeps
+	// any second run queued behind it.
+	running := func(t *testing.T, pol tasks.DedupePolicy) (*harness, tasks.RunID) {
+		t.Helper()
+		started := make(chan tasks.RunID, 4)
+		def := taskDef("gotham.stakeout", blockUntilCtx(started), func(c *tasks.Common) { c.Dedupe = pol })
+		h := newHarness(t, []tasks.Definition{def}, nil)
+		id := h.start("gotham.stakeout", tasks.StartRequest{Params: mustParams(t, "narrows"), Actor: bruce})
+		<-started
+		h.waitState(id, tasks.StateRunning)
+		return h, id
+	}
+	start := func(h *harness, mode tasks.ModeRequest, c string, by tasks.Actor) tasks.RunRef {
+		h.t.Helper()
+		ref, err := h.x.Start(context.Background(), "gotham.stakeout", tasks.StartRequest{Mode: mode, Params: mustParams(h.t, c), Actor: by})
+		if err != nil {
+			h.t.Fatalf("start %s: %v", c, err)
+		}
+		return ref
+	}
+	folds := func(t *testing.T, ref tasks.RunRef, into tasks.RunID, what string) {
+		t.Helper()
+		if ref.ID != into || !ref.Existing {
+			t.Fatalf("%s: %+v, want folded into %s", what, ref, into)
+		}
+	}
+	queues := func(t *testing.T, ref tasks.RunRef, not tasks.RunID, what string) {
+		t.Helper()
+		if ref.ID == not || ref.Existing {
+			t.Fatalf("%s: %+v, want a new run", what, ref)
+		}
+	}
+
+	t.Run("zero policy", func(t *testing.T) {
+		h, id := running(t, tasks.DedupePolicy{})
+		folds(t, start(h, live, "narrows", bruce), id, "identical params while it runs")
+		other := start(h, live, "docks", bruce)
+		queues(t, other, id, "other params")
+		folds(t, start(h, live, "docks", bruce), other.ID, "identical params while queued")
+		queues(t, start(h, preview, "narrows", bruce), id, "identical params in the other mode")
+		if n := h.count("gotham.stakeout"); n != 3 {
+			t.Fatalf("%d runs, want 3 (the running one, docks, the preview)", n)
+		}
+	})
+	t.Run("AnyParams", func(t *testing.T) {
+		h, id := running(t, tasks.DedupePolicy{AnyParams: true})
+		folds(t, start(h, live, "docks", bruce), id, "other params while it runs")
+	})
+	t.Run("Key reaches queued runs only", func(t *testing.T) {
+		key := func(raw json.RawMessage) (string, error) {
+			var p noParams
+			err := json.Unmarshal(raw, &p)
+			return p.Case, err
+		}
+		h, id := running(t, tasks.DedupePolicy{Key: key})
+		second := start(h, live, "narrows", bruce)
+		queues(t, second, id, "an equal key while it runs")
+		folds(t, start(h, live, "narrows", bruce), second.ID, "an equal key while queued")
+	})
+	t.Run("Merge is never called with a running run", func(t *testing.T) {
+		var mu sync.Mutex
+		var existing []string
+		merge := func(cur, incoming json.RawMessage) (json.RawMessage, bool, error) {
+			mu.Lock()
+			existing = append(existing, string(cur))
+			mu.Unlock()
+			return incoming, true, nil
+		}
+		h, id := running(t, tasks.DedupePolicy{Merge: merge})
+		second := start(h, live, "docks", bruce)
+		queues(t, second, id, "other params while it runs")
+		folds(t, start(h, live, "bowery", bruce), second.ID, "a merge into the queued run")
+		mu.Lock()
+		defer mu.Unlock()
+		if want := []string{string(mustParams(t, "docks"))}; strings.Join(existing, "|") != strings.Join(want, "|") {
+			t.Fatalf("Merge saw existing params %q, want only the queued run's %q", existing, want)
+		}
+	})
+	t.Run("SameActorOnly", func(t *testing.T) {
+		h, id := running(t, tasks.DedupePolicy{SameActorOnly: true})
+		queues(t, start(h, live, "narrows", selina), id, "another actor while it runs")
+		folds(t, start(h, live, "narrows", bruce), id, "the same actor while it runs")
+	})
 }

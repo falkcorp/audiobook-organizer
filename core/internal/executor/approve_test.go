@@ -1,5 +1,5 @@
 // file: core/internal/executor/approve_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a500492e-f488-4dcd-aaeb-3ffe778b43c1
 // last-edited: 2026-11-11
 
@@ -701,8 +701,10 @@ const (
 	scopeGothamOK = rbac.Permission("gotham:approve")
 )
 
-func lockdownDef() tasks.Definition {
-	return taskDef(lockdown, okBody, func(c *tasks.Common) {
+func lockdownDef() tasks.Definition { return lockdownDefWith(okBody) }
+
+func lockdownDefWith(body func(rc *tasks.RC, p noParams) (string, error)) tasks.Definition {
+	return taskDef(lockdown, body, func(c *tasks.Common) {
 		c.Perms.Approve = rbac.Need(scopeGothamOK)
 		c.Approval = &tasks.Approval{}
 		c.Dedupe = tasks.DedupePolicy{Merge: func(_, incoming json.RawMessage) (json.RawMessage, bool, error) {
@@ -784,6 +786,30 @@ func TestApprove_NeverFoldsIntoAnotherRun(t *testing.T) {
 		}
 		if r := h.get(apply.ID); r.PlanRef != plans[0] || string(r.Params) != string(apply.Params) {
 			t.Fatalf("apply run changed: plan %q params %s, was %q %s", r.PlanRef, r.Params, plans[0], apply.Params)
+		}
+	})
+	t.Run("later starts beside a running apply run", func(t *testing.T) {
+		applying := make(chan tasks.RunID, 1)
+		body := func(rc *tasks.RC, _ noParams) (string, error) {
+			if rc.Mode() == tasks.ModeLive {
+				applying <- rc.RunID()
+				<-rc.Context().Done()
+				return "", context.Cause(rc.Context())
+			}
+			return "", nil
+		}
+		h := newHarness(t, []tasks.Definition{lockdownDefWith(body)}, withPrincipal)
+		plan := h.startAs(commissioner(), lockdown, tasks.StartRequest{Mode: tasks.ModeRequestPreview})
+		h.waitState(plan.ID, tasks.StateSucceeded)
+		if err := h.x.Approve(commissioner(), plan.ID, tasks.ApproveRequest{}); err != nil {
+			t.Fatalf("approve: %v", err)
+		}
+		apply := <-applying
+		h.waitState(apply, tasks.StateRunning)
+		// Same kind, mode and params as the running apply run.
+		ref := h.startAs(commissioner(), lockdown, tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: h.get(apply).Params})
+		if ref.ID == apply || ref.Existing {
+			t.Fatalf("a Live start folded into running apply run %s", apply)
 		}
 	})
 	t.Run("two plans on a folding Fixer", func(t *testing.T) {
