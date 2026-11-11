@@ -1,7 +1,7 @@
 // file: core/app/offline_open_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 050b91d4-5e16-41df-8591-df020d8ac71b
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package app
 
@@ -239,7 +239,8 @@ func TestOfflineCommandsList(t *testing.T) {
 		}
 	}
 	if !slices.Equal(names, []string{"storage prune-checkpoints", "storage restore-offline", "storage reset",
-		"secrets export-keyring", "secrets rotate-derive", "secrets set-install-id", "config check"}) {
+		"secrets export-keyring", "secrets rotate-derive", "secrets set-install-id", "config check",
+		"storage migrate", "storage quarantine list", "storage quarantine export", "storage quarantine purge"}) {
 		t.Fatalf("commands %v", names)
 	}
 	served(t, opts, keeper)
