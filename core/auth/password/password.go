@@ -238,7 +238,12 @@ func AlgoOf(hash string) string {
 // An empty hash never authenticates, whatever the algorithm; "oauth" and an
 // unknown algorithm never authenticate (fail closed). It blocks for a permit.
 func (h *Hasher) Verify(algo, hash, plain string) (ok, needsRehash bool) {
-	ok, needsRehash, _ = h.VerifyWithin(context.Background(), -1, algo, hash, plain)
+	ok, needsRehash, err := h.VerifyWithin(context.Background(), -1, algo, hash, plain)
+	if err != nil {
+		// Unreachable (an unbounded wait on a background context cannot end
+		// early), and fail closed regardless.
+		return false, false
+	}
 	return ok, needsRehash
 }
 
@@ -320,14 +325,21 @@ func newDummy(time, memory uint32) string {
 }
 
 // SpendVerification does one verification's work against the dummy hash and
-// discards the result.
+// discards the result. It blocks for a permit, so the work is always spent.
 func (h *Hasher) SpendVerification(plain string) {
-	_, _ = h.spendWithin(context.Background(), -1, plain)
+	if err := h.spendWithin(context.Background(), -1, plain); err != nil {
+		// verifyArgon2id fails only when the permit wait ends, and an
+		// unbounded wait on a background context never does: a broken
+		// invariant, not a refusal to report.
+		panic(fmt.Sprintf("password: an unbounded permit wait ended: %v", err))
+	}
 }
 
-func (h *Hasher) spendWithin(ctx context.Context, wait time.Duration, plain string) (bool, error) {
+// spendWithin verifies plain against the dummy hash within wait; the only
+// error is the permit wait's.
+func (h *Hasher) spendWithin(ctx context.Context, wait time.Duration, plain string) error {
 	_, err := h.verifyArgon2id(ctx, wait, h.dummy, plain)
-	return false, err
+	return err
 }
 
 // HasCredential reports whether a stored (algo, hash) pair is one Verify does
@@ -347,15 +359,18 @@ func HasCredential(algo, hash string) bool {
 // credential (no hash, an OAuth user, an unknown algorithm) it spends the
 // same work on the dummy hash before answering false.
 func (h *Hasher) VerifyLogin(algo, hash, plain string) (ok, needsRehash bool) {
-	ok, needsRehash, _ = h.VerifyLoginWithin(context.Background(), -1, algo, hash, plain)
+	ok, needsRehash, err := h.VerifyLoginWithin(context.Background(), -1, algo, hash, plain)
+	if err != nil {
+		// Unreachable, as in Verify; fail closed regardless.
+		return false, false
+	}
 	return ok, needsRehash
 }
 
 // VerifyLoginWithin is VerifyLogin with a bounded wait for a permit.
 func (h *Hasher) VerifyLoginWithin(ctx context.Context, wait time.Duration, algo, hash, plain string) (ok, needsRehash bool, err error) {
 	if !HasCredential(algo, hash) {
-		_, err := h.spendWithin(ctx, wait, plain)
-		return false, false, err
+		return false, false, h.spendWithin(ctx, wait, plain)
 	}
 	return h.VerifyWithin(ctx, wait, algo, hash, plain)
 }
