@@ -1,5 +1,5 @@
 // file: core/auth/middleware.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9206232a-c4a5-4cca-be1f-569a0020e2c1
 // last-edited: 2026-11-11
 
@@ -456,8 +456,13 @@ func (s *Service) extensionStage(e Extension) func(*http.Request, ClientInfo) (*
 			// backend) opens to the next method; it granted nothing, so the
 			// request is exactly as anonymous as before it ran. Only the
 			// error's class is logged, never its text: it can quote a URL.
-			s.log.Warn("auth: identity extension could not decide; trying the next method", "extension", e.Authenticator.Name())
-			s.met.extensionError(r.Context(), e.Authenticator.Name())
+			// The counter is exact; the warning is once a minute per
+			// extension, or an outage would log once per request.
+			name := e.Authenticator.Name()
+			if ok, held := s.warns.allow(name, s.now()); ok {
+				s.log.Warn("auth: identity extension could not decide; trying the next method", "extension", name, "suppressed", held)
+			}
+			s.met.extensionError(r.Context(), name)
 			return nil, nil, nil
 		}
 		if err != nil || a == nil || a.User == "" {
