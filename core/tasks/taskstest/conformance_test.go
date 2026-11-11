@@ -1,7 +1,7 @@
 // file: core/tasks/taskstest/conformance_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 02f74c7d-36d4-4265-952a-e0ab50353814
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package taskstest
 
@@ -147,5 +147,5 @@ func TestConformance_SelfTest(t *testing.T) {
 // TestConformance_PassesOnTestingT runs the exported entry point over valid
 // definitions on a real *testing.T.
 func TestConformance_PassesOnTestingT(t *testing.T) {
-	Conformance(t, batch("arkham.inmates.sweep", tasks.CPU()), fixer("arkham.inmates.reassign", &tasks.Approval{}))
+	Conformance(t, batch("arkham.inmates.sweep", tasks.CPU()), fixer("arkham.inmates.reassign", &tasks.Approval{PlanRequired: true}))
 }

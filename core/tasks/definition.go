@@ -1,7 +1,7 @@
 // file: core/tasks/definition.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 91c4b2c9-bbf5-484e-b81c-2622f4951d42
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package tasks
 
@@ -206,7 +206,7 @@ const DefaultChunkSize = 256
 // FixerSpec plans rows, lets a person approve some, then applies exactly
 // those, re-evaluating each against the plan.
 type FixerSpec[P, C any] struct {
-	Common      // Effects must be Writes(...); Approval required
+	Common      // Effects must be Writes(...); Approval with PlanRequired required
 	Candidates  func(rc *RC, p P) (Source[C], error)
 	Load        func(rc *RC, p P, rowID string) (C, bool, error)
 	Evaluate    func(ic *ItemRC, p P, c C) (Row, error) // read-only; runs at plan AND apply
@@ -280,8 +280,11 @@ func Fixer[P, C any](kind Kind, s FixerSpec[P, C]) Definition {
 	if s.Effects.Declared() && s.Effects.IsReadOnly() {
 		d.problem("a Fixer's Effects must be Writes(...)")
 	}
-	if s.Approval == nil {
+	switch {
+	case s.Approval == nil:
 		d.problem("a Fixer needs Approval")
+	case !s.Approval.PlanRequired:
+		d.problem("a Fixer's Approval needs PlanRequired: every apply run applies an approved plan")
 	}
 	for _, f := range []struct {
 		name    string
