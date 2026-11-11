@@ -1,5 +1,5 @@
 // file: core/auth/templogin.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 224ca491-2171-423a-bce4-a4654be50c1f
 // last-edited: 2026-11-11
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/backup/journal"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -33,7 +34,18 @@ const (
 	actionTempLoginConsume = "core.templogin.consume"
 	reasonExpired          = "expired"
 	reasonStaleEpoch       = "stale_epoch"
+	// reasonCreatorChanged is the audit reason of a link whose creator may no
+	// longer mint it (errLinkCreator).
+	reasonCreatorChanged = "creator_changed"
 )
+
+// errLinkCreator marks a temp-login or reset link refused at consume because
+// its creator no longer qualifies (05-authn §3.2's creator parity, the
+// temp-login twin of an invite's SEC3-2 re-check): gone, not active, signed
+// out or password-changed since, no longer holding core:users.manage, no
+// longer dominating the target, or (for a link that lifts a restriction) the
+// owner gate it was minted under is gone. Audited with Outcome denied.
+var errLinkCreator = errors.New("the link's creator may no longer mint it")
 
 // tempLoginLink is the fragment link a temp-login or reset token travels in.
 func tempLoginLink(token string) string { return "/login/temp#token=" + token }
@@ -43,7 +55,9 @@ func tempLoginLink(token string) string { return "/login/temp#token=" + token }
 // active and need neither a password reset nor a restore's restriction
 // lifted (a reset link does that). The token carries target's current
 // credential epoch, so a password change, disable or sign-out-everywhere
-// before it is consumed kills it.
+// before it is consumed kills it. It carries the creator's epoch too, and
+// consuming it re-checks the creator (linkCreatorRefusal): a link outlives
+// neither its creator's account nor its creator's right to mint it.
 func (s *Service) MintTempLogin(ctx context.Context, actor *Principal, target UserID) (string, error) {
 	return s.mintTempLogin(ctx, actor, target, false)
 }
@@ -92,6 +106,10 @@ func (s *Service) mintTempLogin(ctx context.Context, actor *Principal, target Us
 		case u.PasswordResetRequired && !reset:
 			return fmt.Errorf("%w: %s needs a reset link", ErrResetRequired, u.ID)
 		}
+		creator, err := s.linkCreator(ctx, b, actor, u)
+		if err != nil {
+			return err
+		}
 		epoch := u.CredentialEpoch
 		if reset {
 			up := *u
@@ -102,11 +120,14 @@ func (s *Service) mintTempLogin(ctx context.Context, actor *Principal, target Us
 				return err
 			}
 			epoch = up.CredentialEpoch
+			if creator.ID == u.ID {
+				creator = &up // a self-reset: the creator's epoch is the bumped one
+			}
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: ref(refKindUser, string(u.ID)), Epoch: epoch})
 		}
 		t := &OneTimeToken{
-			Kind: OneTimeTempLogin, UserID: u.ID, CreatedBy: actor.User.ID, CredentialEpoch: epoch,
-			Reset: reset, ClearsRestriction: clears, CreatedAt: now, ExpiresAt: now.Add(ttl),
+			Kind: OneTimeTempLogin, UserID: u.ID, CreatedBy: creator.ID, CredentialEpoch: epoch,
+			CreatorEpoch: creator.CredentialEpoch, Reset: reset, ClearsRestriction: clears, CreatedAt: now, ExpiresAt: now.Add(ttl),
 		}
 		tok, err := s.d.Store.IssueOneTime(b, t)
 		if err != nil {
@@ -136,7 +157,12 @@ func (s *Service) mintTempLogin(ctx context.Context, actor *Principal, target Us
 // answer: past its expiry (ErrExpired), its user gone (ErrInvalidCredentials)
 // or not active (ErrInactiveUser), the user's epoch moved since issue
 // (ErrStaleEpoch), or the user restricted beyond what the token lifts
-// (ErrResetRequired) each delete it, audited, and open nothing.
+// (ErrResetRequired) each delete it, audited, and open nothing. So does a
+// creator who no longer qualifies (ErrInvalidCredentials wrapping
+// errLinkCreator, audited denied, reason creator_changed): gone, not active,
+// at another epoch, restricted, without core:users.manage, no longer
+// dominating the user, or, for a link that lifts a restriction, with the
+// owner gate gone.
 //
 // A reset link stores the new password in the session's own batch: the
 // epoch is bumped (so the session carries the new epoch and every other
@@ -195,12 +221,22 @@ func (s *Service) ConsumeTempLogin(ctx context.Context, token, newPassword strin
 			return err
 		default:
 			refusal = tempLoginRefusal(t, u, now)
+			if refusal == nil {
+				var storeErr error
+				if refusal, storeErr = s.linkCreatorRefusal(ctx, b, t, u); storeErr != nil {
+					return storeErr
+				}
+			}
 		}
 		target := ref(refKindUser, string(t.UserID))
 		if refusal != nil {
 			// The take is committed alone: a refused token is spent.
+			outcome := audit.Failure
+			if errors.Is(refusal, errLinkCreator) {
+				outcome = audit.Denied
+			}
 			return s.d.Audit.RecordIn(ctx, b, audit.Event{
-				Action: actionTempLoginConsume, Outcome: audit.Failure, Reason: refusalReason(refusal), Target: target,
+				Action: actionTempLoginConsume, Outcome: outcome, Reason: refusalReason(refusal), Target: target,
 				Actor:   audit.Actor{ClientAddr: addrString(client.Addr), UserAgent: client.UserAgent},
 				Details: map[string]any{"link": t.ID, "reset": t.Reset},
 			})
@@ -307,6 +343,8 @@ func refusalReason(err error) string {
 		return reasonInactive
 	case errors.Is(err, ErrResetRequired):
 		return reasonResetRequired
+	case errors.Is(err, errLinkCreator):
+		return reasonCreatorChanged
 	}
 	return reasonInvalidCredentials
 }
@@ -318,4 +356,77 @@ func (s *Service) consumeRefused(ctx context.Context, c ClientInfo, reason strin
 		Action: actionTempLoginConsume, Outcome: audit.Failure, Reason: reason,
 		Actor: audit.Actor{ClientAddr: addrString(c.Addr), UserAgent: c.UserAgent},
 	})
+}
+
+// linkCreator reads, inside the mint batch, the stored row of the actor
+// minting a link for target, and guards it so a concurrent demotion or
+// disable of the creator conflicts the mint (Store.GuardUser) instead of
+// committing a link the consume re-check would refuse. A creator that is the
+// target is the caller's own row: the reset path stages its bumped copy.
+func (s *Service) linkCreator(ctx context.Context, b *storage.Batch, actor *Principal, target *User) (*User, error) {
+	if actor.User.ID == target.ID {
+		return target, nil
+	}
+	creator, err := s.d.Store.GetUser(ctx, actor.User.ID)
+	if err != nil {
+		return nil, err
+	}
+	if creator.Status != StatusActive {
+		return nil, fmt.Errorf("%w: %s", ErrInactiveUser, creator.ID)
+	}
+	if err := s.d.Store.GuardUser(b, creator); err != nil {
+		return nil, err
+	}
+	return creator, nil
+}
+
+// linkCreatorRefusal is why consuming t, as just taken, is refused because of
+// its creator (wrapping ErrInvalidCredentials and errLinkCreator), a store
+// failure (the second result), or nil, nil when the creator still qualifies.
+// target is t's user as just read. Mirrors inviteRefusal: role changes bump
+// no epoch (§4.12), so the creator's users.manage and dominance are
+// recomputed from its stored roles here.
+//
+// A link that lifts a restriction was minted by an actor carrying
+// AssuranceOwner, a per-request attribute the store cannot replay; the
+// re-check holds the link to the owner gate instead: it is refused once
+// core.auth.owner.required (or an owner-set verifier extension) no longer
+// applies. A token with no recorded creator names no stored user and is refused
+// the same way (fail closed; pinned by a test).
+func (s *Service) linkCreatorRefusal(ctx context.Context, b *storage.Batch, t *OneTimeToken, target *User) (error, error) {
+	deny := func(why string, args ...any) (error, error) {
+		return fmt.Errorf("%w: %w: %s", ErrInvalidCredentials, errLinkCreator, fmt.Sprintf(why, args...)), nil
+	}
+	creator := target
+	if t.CreatedBy != target.ID {
+		var err error
+		switch creator, err = s.d.Store.GetUser(ctx, t.CreatedBy); {
+		case errors.Is(err, ErrNotFound):
+			return deny("its creator no longer exists")
+		case err != nil:
+			return nil, err
+		}
+		if err := s.d.Store.GuardUser(b, creator); err != nil {
+			return nil, err
+		}
+	}
+	switch {
+	case creator.Status != StatusActive:
+		return deny("its creator is %s", creator.Status)
+	case creator.CredentialEpoch != t.CreatorEpoch:
+		return deny("its creator's credentials changed since it was made")
+	case creator.SignInRestricted:
+		return deny("its creator is sign-in restricted")
+	}
+	checker := s.d.RBAC.Compile(rbac.CheckerInput{Roles: creator.Roles, Interactive: true})
+	if !checker.Has(permUsersManage) {
+		return deny("its creator no longer holds %s", permUsersManage)
+	}
+	if err := s.d.RBAC.Dominates(checker, target.Roles); err != nil {
+		return deny("its creator no longer dominates %s: %v", target.ID, err)
+	}
+	if t.ClearsRestriction && !s.ownerRequired() {
+		return deny("the owner gate its restriction-lifting link was minted under no longer applies")
+	}
+	return nil, nil
 }

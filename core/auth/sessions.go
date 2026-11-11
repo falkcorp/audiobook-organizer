@@ -1,5 +1,5 @@
 // file: core/auth/sessions.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 587ac104-093e-402c-80f7-30ea7e13591d
 // last-edited: 2026-11-11
 
@@ -145,7 +145,9 @@ func (s *Service) RevokeSession(ctx context.Context, actor *Principal, publicID 
 // RevokeAllSessions signs user out everywhere (§3.2, §4.12). One batch bumps
 // the user's credential epoch, so every session and one-time token issued
 // before it is refused (and deleted when presented), deletes the user's
-// session records, and journals credential_epoch.bumped. except, when it
+// session records and the temp-login links the user created (their creator's
+// epoch moved, so they would be refused anyway), and journals
+// credential_epoch.bumped. except, when it
 // names a live session of user at the user's current epoch, survives: it is
 // re-stamped with the new epoch in the same batch ("sign out my other
 // devices"). An except that is gone, expired or already epoch-stale keeps
@@ -202,7 +204,11 @@ func (s *Service) RevokeAllSessions(ctx context.Context, actor *Principal, user 
 			}
 			revoked++
 		}
-		details := map[string]any{"all": true, "revoked": revoked}
+		links, err := s.deleteCreatedLinks(ctx, b, user)
+		if err != nil {
+			return err
+		}
+		details := map[string]any{"all": true, "revoked": revoked, "links_deleted": links}
 		if keep != nil {
 			if err := s.d.Store.RestampSession(b, keep, up.CredentialEpoch); err != nil {
 				return err

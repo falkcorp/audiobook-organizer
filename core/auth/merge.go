@@ -1,5 +1,5 @@
 // file: core/auth/merge.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2bd811e8-1e8d-440b-990a-c71b06517f58
 // last-edited: 2026-11-11
 
@@ -104,12 +104,16 @@ func (s *Service) StageUserMerge(ctx context.Context, b *storage.Batch, plan Use
 		}
 		deleted++
 	}
+	links, err := s.deleteCreatedLinks(ctx, b, src.ID)
+	if err != nil {
+		return err
+	}
 	subject := ref(refKindUser, string(src.ID))
 	s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserDisabled, Subject: subject, Epoch: up.CredentialEpoch})
 	s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: subject, Epoch: up.CredentialEpoch})
 	return s.d.Audit.RecordIn(ctx, b, audit.Event{
 		Action: actionUserDisable, Outcome: audit.Success, Target: subject, Reason: reasonMerged,
-		Details: map[string]any{"into": string(tgt.ID), "invites_deleted": deleted, "rows": len(plan.Rows)},
+		Details: map[string]any{"into": string(tgt.ID), "invites_deleted": deleted, "links_deleted": links, "rows": len(plan.Rows)},
 	})
 }
 

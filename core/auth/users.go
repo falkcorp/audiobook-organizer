@@ -1,5 +1,5 @@
 // file: core/auth/users.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
 // last-edited: 2026-11-11
 
@@ -374,10 +374,16 @@ func (s *Service) restampOwnSession(ctx context.Context, b *storage.Batch, actor
 // an interactive method and dominance over the user's current roles. Only
 // active and disabled are settable; _system and a pending invitee are
 // refused (ErrBadInput). A change bumps the credential epoch, so every
-// session and one-time token issued before it stays dead after a later
-// re-enable; API keys are refused while the owner is disabled and work again
-// after. Disabling the last active core:admin holder is refused
-// (ErrLastAdmin). Setting the status a user already has writes nothing.
+// session of the user and every temp-login or reset link that targets it
+// stays dead after a later re-enable; API keys are refused while the owner
+// is disabled and work again after. The epoch bump does not reach the links
+// and invites the user minted (they carry their creator's epoch and are
+// refused at use while it is not active): disabling deletes the user's
+// temp-login links in the same batch, so a re-enable does not revive them,
+// and an invite is refused for as long as its creator is disabled and for
+// good once the re-enable's own bump has moved the epoch past it. Disabling
+// the last active core:admin holder is refused (ErrLastAdmin). Setting the
+// status a user already has writes nothing.
 func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st UserStatus) error {
 	if st != StatusActive && st != StatusDisabled {
 		return fmt.Errorf("%w: status %q is not settable (active or disabled)", ErrBadInput, st)
@@ -418,6 +424,9 @@ func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st
 		action := actionUserEnable
 		if st == StatusDisabled {
 			action = actionUserDisable
+			if _, err := s.deleteCreatedLinks(ctx, b, id); err != nil {
+				return err
+			}
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserDisabled, Subject: subject, Epoch: up.CredentialEpoch})
 		}
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: subject, Epoch: up.CredentialEpoch})
@@ -468,6 +477,12 @@ func (s *Service) DeleteUser(ctx context.Context, actor *Principal, id UserID) e
 			Details: map[string]any{"username": u.Username},
 		})
 	})
+}
+
+// holdsUsersManage reports whether roles, signed in interactively, carry
+// core:users.manage.
+func (s *Service) holdsUsersManage(roles []rbac.RoleName) bool {
+	return s.d.RBAC.Compile(rbac.CheckerInput{Roles: roles, Interactive: true}).Has(permUsersManage)
 }
 
 // deleteCredentials stages into b the deletion of every session, API key,
@@ -531,6 +546,38 @@ func stageDeleteCredentials(ctx context.Context, st Store, log *slog.Logger, b *
 	return nil
 }
 
+// stageDeleteCreatedLinks stages into b the deletion of every temp-login or
+// reset link id created, and returns how many. A link is refused at consume
+// once its creator is disabled, signed out, merged away or demoted
+// (linkCreatorRefusal); deleting them in the batch that changes the creator
+// makes that final at once and keeps the dead rows from waiting for their
+// holder to present them. One helper serves SetStatus, RevokeAllSessions,
+// StageUserMerge and SetRoles, so the four cannot drift. Links targeting id
+// are not touched here: a bumped epoch already kills them.
+func stageDeleteCreatedLinks(ctx context.Context, st Store, log *slog.Logger, b *storage.Batch, id UserID) (int, error) {
+	deleted := 0
+	for t, err := range st.ScanOneTime(ctx, OneTimeTempLogin) {
+		if err != nil {
+			if leftUndecodable(log, "onetime", id, err) {
+				continue
+			}
+			return deleted, err
+		}
+		if t.CreatedBy != id {
+			continue
+		}
+		if err := st.DeleteOneTime(b, OneTimeTempLogin, t.ID); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+func (s *Service) deleteCreatedLinks(ctx context.Context, b *storage.Batch, id UserID) (int, error) {
+	return stageDeleteCreatedLinks(ctx, s.d.Store, s.log, b, id)
+}
+
 // leftUndecodable reports whether err is a scan's per-record
 // ErrUndecodableRecord, which a user delete, a sign-out-everywhere and the
 // post-restore hook leave in place (logged): it cannot be named for deletion,
@@ -592,6 +639,13 @@ func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, rol
 			return err
 		}
 		subject := ref(refKindUser, string(id))
+		if s.holdsUsersManage(u.Roles) && !s.holdsUsersManage(up.Roles) {
+			// The user can no longer mint a link, so none it minted may be
+			// used (linkCreatorRefusal would refuse each anyway).
+			if _, err := s.deleteCreatedLinks(ctx, b, id); err != nil {
+				return err
+			}
+		}
 		for _, r := range removed {
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.RoleUnassigned, Subject: subject, Object: ref(refKindRole, string(r))})
 		}
