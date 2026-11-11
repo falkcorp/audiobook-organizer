@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/transport.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 251805ba-baff-4a97-b673-26771486637d
 // last-edited: 2026-11-11
 
@@ -81,7 +81,9 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return fail(err)
 	}
 	cred := ""
-	if qc := g.qc; qc != nil && !crossHop {
+	// The credential goes only to the instance's configured origins and never on
+	// a hop of a chain that has left its origin.
+	if qc := g.qc; qc != nil && !crossHop && g.qcApplies(req.URL) {
 		v, verr := qc.Value(ctx)
 		if verr != nil || v == "" { // the cause is not wrapped: it may name what it could not read
 			tk.abort()
@@ -233,11 +235,24 @@ func serverSaysRetry(resp *http.Response) bool {
 		resp.StatusCode == http.StatusServiceUnavailable && resp.Header.Get("Retry-After") != ""
 }
 
-// crossesEndpoint reports that req is a redirect hop to another endpoint than
-// the request that was redirected.
+// crossesEndpoint reports that req is a hop of a redirect chain that has been
+// anywhere but req's own endpoint: every request of the chain, back to the
+// first, must have the endpoint req has. Once a chain leaves its origin it stays
+// crossed, even for a hop that returns to the origin (A to B to A) or follows
+// another hop on the new endpoint (A to B to B): neither is the request the
+// caller made, and the credentials were not given to the endpoint that
+// redirected. A previous response that names no request cannot be tied to
+// anything and counts as crossed. net/http sets Request.Response on every hop,
+// and this transport sets Response.Request to the request it was given, so the
+// chain is walkable.
 func (t *transport) crossesEndpoint(req *http.Request) bool {
-	res := req.Response
-	return res != nil && (res.Request == nil || endpoint(res.Request.URL) != endpoint(req.URL))
+	cur := endpoint(req.URL)
+	for res := req.Response; res != nil; res = res.Request.Response {
+		if res.Request == nil || endpoint(res.Request.URL) != cur {
+			return true
+		}
+	}
+	return false
 }
 
 // downgrades reports a redirect hop from https to http.

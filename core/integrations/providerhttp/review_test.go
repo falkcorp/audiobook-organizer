@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1ac0cd3e-0f0c-4b8e-9fb3-5d3d1f0f6a21
 // last-edited: 2026-11-11
 
@@ -229,10 +229,12 @@ func TestQueryCredential_NeverInCallerURL(t *testing.T) {
 	reads := atomic.Int64{}
 	r := newRegistry(t, newClock(), byName)
 	h, _ := r.Outbound(integrations.OutboundSpec{Ref: batcave, Limits: limits(100, 100),
-		QueryCredential: &integrations.QueryCredential{Name: "gotham_pin", Value: func(context.Context) (string, error) {
-			reads.Add(1)
-			return secret, nil
-		}}})
+		QueryCredential: &integrations.QueryCredential{Name: "gotham_pin",
+			Origins: []string{urlOn(a, publicName, ""), "http://127.0.0.1:1", "http://169.254.169.254"},
+			Value: func(context.Context) (string, error) {
+				reads.Add(1)
+				return secret, nil
+			}}})
 
 	req, _ := http.NewRequest(http.MethodGet, urlOn(a, publicName, "/lookup?q=batman&gotham_pin=stale"), nil)
 	resp, err := h.Client().Do(req)
@@ -291,7 +293,7 @@ func TestQueryCredential_UnreadableRefusesBeforeSending(t *testing.T) {
 		"empty": func(context.Context) (string, error) { return "", nil },
 	} {
 		h, _ := r.Outbound(integrations.OutboundSpec{Ref: ref(name), Limits: limits(100, 100),
-			QueryCredential: &integrations.QueryCredential{Name: "gotham_pin", Value: val}})
+			QueryCredential: &integrations.QueryCredential{Name: "gotham_pin", Origins: []string{srv.URL}, Value: val}})
 		_, err := h.Client().Get(srv.URL)
 		if !errors.Is(err, providerhttp.ErrCredentialUnavailable) ||
 			integrations.ClassOf(context.Background(), err) != integrations.ClassRefusedLocal || strings.Contains(err.Error(), "riddler") {
@@ -527,12 +529,139 @@ func TestTransportError_EchoingTheInjectedCredentialIsScrubbed(t *testing.T) {
 	})
 	r := newRegistry(t, newClock())
 	h, _ := r.Outbound(integrations.OutboundSpec{Ref: batcave, Limits: limits(100, 100), Trust: integrations.Trust{},
-		QueryCredential: &integrations.QueryCredential{Name: "gotham_pin", Value: func(context.Context) (string, error) { return secret, nil }}})
+		QueryCredential: &integrations.QueryCredential{Name: "gotham_pin", Origins: []string{srv.URL},
+			Value: func(context.Context) (string, error) { return secret, nil }}})
 	_, err := h.Client().Get(srv.URL)
 	if err == nil {
 		t.Fatal("garbage must fail")
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("the error echoes the credential: %v", err)
+	}
+}
+
+// TestRedirectChain_StaysCrossedOnceItLeftTheOrigin: a hop is judged against the
+// whole chain, not the hop before it. A to B to B and A to B to A both reach
+// their last hop with no credential header and no query credential, although
+// that hop is on the same endpoint as its predecessor or as the origin, and
+// although both hosts are origins the credential is bound to.
+func TestRedirectChain_StaysCrossedOnceItLeftTheOrigin(t *testing.T) {
+	const secret = "riddler-secret-777"
+	var first, bTwo, aFinal headerLog
+	var aURL, bURL func(path string) string
+	a, _ := server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/start-bb":
+			first.record(r)
+			http.Redirect(w, r, bURL("/one"), http.StatusFound)
+		case "/start-ba":
+			first.record(r)
+			http.Redirect(w, r, bURL("/back"), http.StatusFound)
+		case "/final":
+			aFinal.record(r)
+			ok(w, r)
+		}
+	})
+	b, _ := server(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/one":
+			http.Redirect(w, r, bURL("/two"), http.StatusFound)
+		case "/two":
+			bTwo.record(r)
+			ok(w, r)
+		case "/back":
+			http.Redirect(w, r, aURL("/final"), http.StatusFound)
+		}
+	})
+	aURL = func(p string) string { return urlOn(a, publicName, p) }
+	bURL = func(p string) string { return urlOn(b, otherName, p) }
+	r := newRegistry(t, newClock(), byName)
+	h, _ := r.Outbound(integrations.OutboundSpec{Ref: batcave, Limits: limits(100, 100), Redact: []string{"x-batcave-pin"},
+		QueryCredential: &integrations.QueryCredential{Name: "gotham_pin", Origins: []string{aURL(""), bURL("")},
+			Value: func(context.Context) (string, error) { return secret, nil }}})
+	for _, tc := range []struct {
+		name, start string
+		last        *headerLog
+	}{{"A to B to B", "/start-bb", &bTwo}, {"A to B to A", "/start-ba", &aFinal}} {
+		req, _ := http.NewRequest(http.MethodGet, aURL(tc.start), nil)
+		withCredentials(req)
+		resp, err := h.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		_ = resp.Body.Close()
+		got, _, n := first.get()
+		_, q, _ := first.get()
+		if n == 0 || got.Get("X-Api-Key") == "" || q.Get("gotham_pin") != secret {
+			t.Fatalf("%s: control failed, the origin must receive the credentials: %v %v", tc.name, got, q)
+		}
+		first = headerLog{}
+		got, q, n = tc.last.get()
+		if n == 0 {
+			t.Fatalf("%s: the last hop was never reached; the test proves nothing", tc.name)
+		}
+		for k := range credentialHeaders {
+			if got.Get(k) != "" {
+				t.Errorf("%s: the last hop received %s", tc.name, k)
+			}
+		}
+		if q.Get("gotham_pin") != "" {
+			t.Errorf("%s: the last hop received the query credential", tc.name)
+		}
+	}
+}
+
+// TestQueryCredential_BoundToConfiguredOrigins: the credential goes only to the
+// origins it names (scheme included), under every egress policy, and an empty
+// list sends it nowhere.
+func TestQueryCredential_BoundToConfiguredOrigins(t *testing.T) {
+	const secret = "riddler-secret-777"
+	var seen, elsewhere headerLog
+	a, _ := server(t, func(w http.ResponseWriter, r *http.Request) { seen.record(r); ok(w, r) })
+	b, _ := server(t, func(w http.ResponseWriter, r *http.Request) { elsewhere.record(r); ok(w, r) })
+	r := newRegistry(t, newClock(), byName)
+	cred := func(origins ...string) *integrations.QueryCredential {
+		return &integrations.QueryCredential{Name: "gotham_pin", Origins: origins,
+			Value: func(context.Context) (string, error) { return secret, nil }}
+	}
+	do := func(spec integrations.OutboundSpec, u string) {
+		t.Helper()
+		h, _ := r.Outbound(spec)
+		resp, err := h.Client().Get(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+	}
+	spec := func(name string, egress integrations.EgressPolicy, c *integrations.QueryCredential) integrations.OutboundSpec {
+		return integrations.OutboundSpec{Ref: ref(name), Limits: limits(100, 100), Egress: egress, QueryCredential: c}
+	}
+	for i, tc := range []struct {
+		name   string
+		egress integrations.EgressPolicy
+		c      *integrations.QueryCredential
+		target string
+		want   bool
+		log    *headerLog
+	}{
+		{"configured origin", integrations.EgressConfigured, cred(urlOn(a, publicName, "")), urlOn(a, publicName, "/x"), true, &seen},
+		{"configured origin, public-only", integrations.EgressPublicOnly, cred(urlOn(a, publicName, "")), urlOn(a, publicName, "/x"), true, &seen},
+		{"another endpoint", integrations.EgressConfigured, cred(urlOn(a, publicName, "")), urlOn(b, otherName, "/x"), false, &elsewhere},
+		{"another endpoint, public-only", integrations.EgressPublicOnly, cred(urlOn(a, publicName, "")), urlOn(b, otherName, "/x"), false, &elsewhere},
+		{"same host, another port", integrations.EgressConfigured, cred(urlOn(a, publicName, "")), urlOn(b, publicName, "/x"), false, &elsewhere},
+		{"another scheme", integrations.EgressConfigured, cred("https://" + publicName + strings.TrimPrefix(urlOn(a, publicName, ""), "http://"+publicName)), urlOn(a, publicName, "/x"), false, &seen},
+		{"no origins", integrations.EgressConfigured, cred(), urlOn(a, publicName, "/x"), false, &seen},
+		{"unusable origin entry", integrations.EgressConfigured, cred("not a url", "ftp://"+publicName), urlOn(a, publicName, "/x"), false, &seen},
+		{"origin in upper case", integrations.EgressConfigured, cred(strings.ToUpper(urlOn(a, publicName, ""))), urlOn(a, publicName, "/x"), true, &seen},
+	} {
+		*tc.log = headerLog{}
+		do(spec(fmt.Sprintf("robin%d", i), tc.egress, tc.c), tc.target)
+		_, q, n := tc.log.get()
+		if n != 1 {
+			t.Fatalf("%s: the target saw %d requests", tc.name, n)
+		}
+		if got := q.Get("gotham_pin") == secret; got != tc.want {
+			t.Errorf("%s: credential sent = %v, want %v (query %v)", tc.name, got, tc.want, q)
+		}
 	}
 }

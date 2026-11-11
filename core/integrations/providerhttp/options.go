@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/options.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b3c95ad-7828-4971-b0b8-f48428f4b0e4
 // last-edited: 2026-11-11
 
@@ -143,8 +143,9 @@ type Policy struct {
 	// the URL query gets it WITHOUT the caller ever holding a URL that carries
 	// it: the transport adds the parameter to its own clone of the request URL,
 	// per attempt, so the *url.Error net/http builds, the request a caller logs
-	// and Response.Request all hold the credential-free URL. It is never added
-	// to a redirect hop to another endpoint.
+	// and Response.Request all hold the credential-free URL. It is added only to
+	// a request whose origin is one of QueryCredential.Origins, and never to a
+	// hop of a redirect chain that has left its first endpoint.
 	QueryCredential *integrations.QueryCredential
 	// Trust lists the origins this instance may reach on a private network
 	// (integrations.Trust). It is the ONLY way to arm the private-capable

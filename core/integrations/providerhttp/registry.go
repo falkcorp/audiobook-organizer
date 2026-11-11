@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/registry.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 76674dec-435f-4e2d-a9aa-515d33dd8a4c
 // last-edited: 2026-11-11
 
@@ -164,10 +164,12 @@ func (r *Registry) gateFor(ref integrations.Ref, p Policy) *gate {
 	}
 	sc.setLimits(lim)
 	scr := newScrubber(p.Redact)
+	var origins map[string]struct{}
 	if p.QueryCredential != nil {
 		scr = scr.withExtra(p.QueryCredential.Name)
+		origins = originKeys(p.QueryCredential.Origins)
 	}
-	return &gate{r: r, ref: ref, pol: p, sc: sc, scr: scr, private: r.privateFor(p.Trust), qc: p.QueryCredential}
+	return &gate{r: r, ref: ref, pol: p, sc: sc, scr: scr, private: r.privateFor(p.Trust), qc: p.QueryCredential, qcOrigins: origins}
 }
 
 // GateFor returns the gate alone, for SMTP and subprocess adapters.
