@@ -1,7 +1,7 @@
 // file: internal/server/csp_report.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: d896d6d8-b883-482d-8e34-d41a4abd52df
-// last-edited: 2026-11-06
+// last-edited: 2026-11-10
 
 package server
 
@@ -23,7 +23,6 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	logging "github.com/falkcorp/mediacore/log"
 )
 
@@ -61,7 +60,7 @@ type cspReporter struct {
 	// visitor grouped per /48, so a caller holding a /48 cannot mint a fresh
 	// budget per /64), bounded and swept from the cold end.
 	mu         sync.Mutex
-	visitors   *absauth.LRU[*cspVisitor]
+	visitors   *visitorLRU[*cspVisitor]
 	newVisitor func() *rate.Limiter
 	now        func() time.Time
 	// charge takes k tokens from a limiter at now; (*rate.Limiter).AllowN. A field
@@ -89,7 +88,7 @@ const (
 func newCSPReporter(limiter *rate.Limiter) *cspReporter {
 	return &cspReporter{
 		limiter:    limiter,
-		visitors:   absauth.NewLRU[*cspVisitor](maxCSPVisitors),
+		visitors:   newVisitorLRU[*cspVisitor](maxCSPVisitors),
 		newVisitor: func() *rate.Limiter { return rate.NewLimiter(rate.Every(10*time.Second), cspReportMaxPerRequest) },
 		now:        time.Now,
 		charge:     (*rate.Limiter).AllowN,
@@ -122,13 +121,13 @@ func (r *cspReporter) admit(visitor string, n int) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
-	r.visitors.Sweep(func(v *cspVisitor) bool { return now.Sub(v.lastSeen) > cspVisitorIdle })
-	v, ok := r.visitors.Get(visitor)
+	r.visitors.sweep(func(v *cspVisitor) bool { return now.Sub(v.lastSeen) > cspVisitorIdle })
+	v, ok := r.visitors.get(visitor)
 	if !ok {
 		v = &cspVisitor{limiter: r.newVisitor()}
 	}
 	v.lastSeen = now
-	r.visitors.Put(visitor, v)
+	r.visitors.put(visitor, v)
 	k := min(n, tokensAvailable(r.limiter, now, n), tokensAvailable(v.limiter, now, n))
 	if k <= 0 {
 		return 0
