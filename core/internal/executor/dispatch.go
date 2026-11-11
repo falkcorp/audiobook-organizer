@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
 // last-edited: 2026-11-11
 
@@ -326,13 +326,16 @@ func (e *executor) release(a *attempt, rec tasks.RunRecord) {
 }
 
 // startAttempt builds the attempt's context, clock and resume state and
-// starts its goroutine and supervisor. A claim that Shutdown overtook is
-// released instead (claimed-not-started, 5T.4 step 4). The shutdown check
-// and a.live are one decision under e.mu, the lock Shutdown takes its view
-// of the live attempts under: an attempt is either in that view (so
-// Shutdown cancels and stamps it) or never goes live. A check made before
-// this critical section would let an attempt go live just after Shutdown's
-// view and run on past Shutdown with its fence intact.
+// starts its goroutine and supervisor. A claim that Shutdown or a
+// stand-down of its key overtook is released to the queue instead
+// (claimed-not-started, 5T.4 step 4; the dispatch gate then defers it while
+// the hold lives). Both checks and a.live are one decision under e.mu, the
+// lock Shutdown takes its view of the live attempts under and standDown
+// sets its hold and picks its victims under: an attempt is either in that
+// view (so it is canceled, or quiesced, like any live run) or never goes
+// live. A check made before this critical section would let an attempt go
+// live just after the view and run on past Shutdown, or beside a hold on
+// its key, with its fence intact.
 func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	start := e.now()
 	deadline := start.Add(a.d.timeout)
@@ -344,11 +347,12 @@ func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	// callback read in one critical section: they read them under e.mu
 	// (or after taking the attempt from e.running under it).
 	e.mu.Lock()
-	if e.shutting {
+	if h := e.holds[a.d.key]; e.shutting || h != nil && h.liveLocked(start) {
 		e.mu.Unlock()
 		cancel(nil)
 		stop()
 		e.release(a, rec)
+		e.wakeDispatcher() // the gate decides again: deferred while the hold lives
 		return
 	}
 	a.rec, a.n, a.fence = rec, rec.Attempt, rec.FenceEpoch

@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-11
 
@@ -359,20 +359,31 @@ func TestShutdown_StoppingCancelEndsCanceled(t *testing.T) {
 
 // gatedRuns is a run store whose read of the from-zero marker parks until
 // the test lets it go. startAttempt makes that read after the claim's
-// running commit and before the attempt goes live, so a cancel sent while
-// it is parked lands in the window attemptFor covers.
+// running commit and before the attempt goes live, so a cancel, a
+// shutdown or a stand-down sent while it is parked lands in the window
+// startAttempt's go-live decision covers. With kind set, only that kind's
+// claims park.
 type gatedRuns struct {
 	tasks.RunStore
 	reached chan<- tasks.RunID
 	release <-chan struct{}
+	kind    tasks.Kind
 }
 
 func (g gatedRuns) Checkpoint(ctx context.Context, id tasks.RunID, name string) ([]byte, bool, error) {
-	if name == ckptZero {
+	if name == ckptZero && g.parks(ctx, id) {
 		g.reached <- id
 		<-g.release
 	}
 	return g.RunStore.Checkpoint(ctx, id, name)
+}
+
+func (g gatedRuns) parks(ctx context.Context, id tasks.RunID) bool {
+	if g.kind == "" {
+		return true
+	}
+	r, err := g.RunStore.Get(ctx, id)
+	return err == nil && r.Kind == g.kind
 }
 
 // TestCancel_ClaimedNotStartedTakesTheStop (5T.3.6, synctest; added for the
@@ -460,6 +471,57 @@ func TestShutdown_ReleasesClaimNotYetLive(t *testing.T) {
 		}
 		if r := h.get(id); r.State != tasks.StateQueued || r.Attempt != 0 {
 			t.Fatalf("after Shutdown: %s attempt %d, want queued attempt 0 (a claim not yet started is released)", r.State, r.Attempt)
+		}
+	})
+}
+
+// TestStandDown_ClaimInFlightIsDeferred (5T.3.7, synctest; review of
+// #4586): a run whose claim committed but whose attempt is not live when
+// another run takes a stand-down on its key does not start beside the
+// hold. It is released to the queue, deferred while the hold lives, and
+// runs once the hold is gone. Before the fix the stand-down's victims were
+// only live runs, so such a claim went live beside the hold.
+func TestStandDown_ClaimInFlightIsDeferred(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reached := make(chan tasks.RunID, 1)
+		release := make(chan struct{})
+		takeHold, holding, free := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var ran atomic.Bool
+		scan := taskDef("gotham.scan", func(rc *tasks.RC, _ noParams) (string, error) {
+			ran.Store(true)
+			return "case closed", nil
+		}, func(c *tasks.Common) { c.Yields = true })
+		holder := taskDef("gotham.compact", func(rc *tasks.RC, _ noParams) (string, error) {
+			<-takeHold
+			if _, err := rc.StandDown("gotham.scan"); err != nil {
+				return "", err
+			}
+			close(holding)
+			<-free
+			return "compacted", nil
+		}, func(c *tasks.Common) { c.Effects = tasks.Writes(tasks.Res("gotham", "lab")) })
+		h := newHarness(t, []tasks.Definition{scan, holder}, func(o *Options) {
+			synctestConfig(o)
+			o.NewBatch = o.Stores.Runs.(batchOpener).NewBatch
+			o.Stores.Runs = gatedRuns{RunStore: o.Stores.Runs, reached: reached, release: release, kind: "gotham.scan"}
+		})
+		hid := h.start("gotham.compact", tasks.StartRequest{})
+		h.waitState(hid, tasks.StateRunning)
+		id := h.start("gotham.scan", tasks.StartRequest{})
+		<-reached
+		close(takeHold)
+		<-holding
+		close(release)
+		synctest.Wait()
+		if ran.Load() {
+			t.Fatal("the scan started beside a stand-down hold on its key")
+		}
+		if r := h.get(id); r.State != tasks.StateQueued || r.Attempt != 0 {
+			t.Fatalf("while the hold lives: %s attempt %d, want queued attempt 0 (released, deferred)", r.State, r.Attempt)
+		}
+		close(free)
+		if r := h.waitState(id, tasks.StateSucceeded, tasks.StateFailed); r.State != tasks.StateSucceeded || !ran.Load() {
+			t.Fatalf("after the hold: %s (%q), ran %v; want succeeded", r.State, r.Error, ran.Load())
 		}
 	})
 }
