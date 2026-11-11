@@ -1,5 +1,5 @@
 // file: core/internal/authstore/store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ff601fd8-fd3d-4cde-82ec-c1c09c875e1a
 // last-edited: 2026-11-11
 
@@ -32,6 +32,14 @@ const otherOwner storage.Owner = "core/gotham"
 // foreign one) and returns both.
 func newKeyspace(t testing.TB) (ks, other storage.Keyspace) {
 	t.Helper()
+	ks, other, _ = newKeyspaceDB(t)
+	return ks, other
+}
+
+// newKeyspaceDB is newKeyspace that also returns the store, for a test that
+// needs its Admin (a checkpoint, a read-only open).
+func newKeyspaceDB(t testing.TB) (ks, other storage.Keyspace, db *storage.DB) {
+	t.Helper()
 	ctx := context.Background()
 	o, err := storage.Open(ctx, storage.OpenOptions{
 		Path: filepath.Join(t.TempDir(), "main.pebble"),
@@ -46,7 +54,7 @@ func newKeyspace(t testing.TB) (ks, other storage.Keyspace) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	db, err := o.Prepare(ctx)
+	db, err = o.Prepare(ctx)
 	if err == nil {
 		err = db.Migrate(ctx)
 	}
@@ -69,7 +77,7 @@ func newKeyspace(t testing.TB) (ks, other storage.Keyspace) {
 	if !ok {
 		t.Fatal("no foreign keyspace")
 	}
-	return ks, other
+	return ks, other, db
 }
 
 func newStore(t testing.TB) *Store {
@@ -331,7 +339,7 @@ var hexRun = regexp.MustCompile(`[0-9a-fA-F]{64}`)
 // keyed by a credential's hash names the key's family and length, never the
 // hash, because the stage-12 touch logs the errors it gets.
 func TestErrors_NeverCarryACredentialHash(t *testing.T) {
-	ks, other := newKeyspace(t)
+	ks, other, db := newKeyspaceDB(t)
 	st, err := New(ks, Options{Now: func() time.Time { return time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
@@ -373,19 +381,64 @@ func TestErrors_NeverCarryACredentialHash(t *testing.T) {
 	// A staged write that fails wraps the key it was writing: poison the
 	// batch with an Expect through a handle it never bound, then re-stamp
 	// the session, whose record is keyed by the token's hash.
+	// The poison fails the Expect, so this is the expect path's error.
 	b := st.NewBatch()
 	defer func() { _ = b.Close() }()
 	if err := b.Expect(other, []byte("joker"), nil); err == nil {
 		t.Fatal("an Expect through an unbound handle did not fail")
 	}
-	err = st.RestampSession(b, rec, 2)
-	if err == nil {
-		t.Fatal("a poisoned batch staged a write")
+	wantKeyedErr(t, "a poisoned batch", st.RestampSession(b, rec, 2), "expect session/h key len=", storage.ErrOutsideKeyspace, h)
+
+	// The stage path: a batch already committed records the Expect and
+	// refuses the write with ErrBatchDone ...
+	done := st.NewBatch()
+	defer func() { _ = done.Close() }()
+	if err := done.Commit(context.Background(), storage.Sync); err != nil {
+		t.Fatal(err)
 	}
-	if hexRun.MatchString(err.Error()) || strings.Contains(err.Error(), h) {
-		t.Fatalf("the error carries the session's hash: %v", err)
+	wantKeyedErr(t, "a committed batch", st.RestampSession(done, rec, 2), "stage session/h key len=", storage.ErrBatchDone, h)
+
+	// ... and a store opened read-only (a checkpoint of this one, holding
+	// the session) refuses it with ErrReadOnly.
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "checkpoint.pebble")
+	if err := db.Admin().Checkpoint(ctx, dir); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "session/h key len=") {
-		t.Fatalf("the error does not name the key's family: %v", err)
+	ro, err := db.Admin().OpenReadOnly(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := ro.Close(); err != nil {
+			t.Errorf("close the read-only store: %v", err)
+		}
+	})
+	rks, err := ro.Keyspace(Owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rst, err := New(rks, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb := rst.NewBatch()
+	defer func() { _ = rb.Close() }()
+	wantKeyedErr(t, "a read-only store", rst.RestampSession(rb, rec, 2), "stage session/h key len=", storage.ErrReadOnly, h)
+}
+
+// wantKeyedErr fails unless err wraps target, names the failing step and the
+// key's family (want), and carries neither the hash h nor any hex run.
+func wantKeyedErr(t *testing.T, what string, err error, want string, target error, h string) {
+	t.Helper()
+	switch {
+	case err == nil:
+		t.Fatalf("%s staged a write", what)
+	case !errors.Is(err, target):
+		t.Fatalf("%s: %v, want %v", what, err, target)
+	case hexRun.MatchString(err.Error()) || strings.Contains(err.Error(), h):
+		t.Fatalf("%s: the error carries the session's hash: %v", what, err)
+	case !strings.Contains(err.Error(), want):
+		t.Fatalf("%s: the error does not name %q: %v", what, want, err)
 	}
 }
