@@ -1,5 +1,5 @@
 // file: core/storage/datastep.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: bce49c80-c743-47cf-91bc-803ce9df2291
 // last-edited: 2026-11-10
 
@@ -46,6 +46,10 @@ type DataStep struct {
 	// Cutover marks an R2 cutover step: it runs whether its owner is enabled
 	// or not (06 A5); any other step of a disabled owner is deferred.
 	Cutover bool
+	// Rewrite marks M8, the store rewrite (§5S.3.13): a boot whose plan
+	// holds it pending needs the store's size once more in free space, for
+	// the copy beside the store (§5S.3.12 "Free space"). F3-04.
+	Rewrite bool
 	// Run runs the step to completion on db, the store the boot opened, and
 	// records its own state under DataMigrationKey(ID). An error halts the
 	// DAG with ErrMigrationFailed, the attempt's checkpoint open; Run wraps

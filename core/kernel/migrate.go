@@ -1,5 +1,5 @@
 // file: core/kernel/migrate.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 065a3401-6518-4976-9508-a0b36d3bcb96
 // last-edited: 2026-11-10
 
@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/internal/storagemigrate"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/storage"
@@ -50,6 +51,14 @@ import (
 // plain Set an importer stages into a Serialized keyspace range through
 // StepWriter.Batch fails the chunk (storage.ErrBlindWrite). That importer
 // needs an exclusive chunk batch or an Expect per key (todo.d).
+//
+// F3-04 supplies the values: Quarantine is storage.QuarantineWriter over
+// the keyring's sealer (F3-07 binds it), LevelStep is LevelStep, Preflight
+// is CutoverPreflight. Rewrite and Swapper are M8 (§5S.3.13 "M8: the
+// rewrite"): F3-07 registers books' M8 (storage.NewRewriteStep("books",
+// "books.rewrite")) with the boot's P0a swapper, whose
+// restoreswap.Options.RewriteStep it sets to the same ID; Steps then
+// appends M8 last, after every registered migration.
 type DataMigrationsConfig struct {
 	ChunkBytes  int64 // core.storage.data_migration.chunk_bytes; 0 = 4 MiB
 	ChunkItems  int   // core.storage.data_migration.chunk_items; 0 = 2 000
@@ -60,6 +69,8 @@ type DataMigrationsConfig struct {
 	Quarantine  func(ctx context.Context, b *storage.Batch, step string, key, raw []byte, reason string, sensitive bool) error
 	LevelStep   func(ctx context.Context, db *storage.DB, owner storage.Owner, level int) error
 	Preflight   func(ctx context.Context, o *storage.Opened, cutover []datamigrate.DataMigration) error
+	Rewrite     *storage.RewriteStep
+	Swapper     *restoreswap.Swapper
 }
 
 // DataMigrations is the kernel side of the runner, one per App (03 R5):
@@ -77,6 +88,8 @@ type DataMigrationsConfig struct {
 type DataMigrations struct {
 	cfg    DataMigrationsConfig
 	runner *storagemigrate.Runner
+	// rewriteRun replaces M8's Run (the dry run's copy into scratch).
+	rewriteRun func(ctx context.Context, db *storage.DB) error
 }
 
 // NewDataMigrations validates migs against owners, the build's storage
@@ -101,12 +114,44 @@ func NewDataMigrations(cfg DataMigrationsConfig, owners []storage.OwnerSpec, mig
 	if err != nil {
 		return nil, fmt.Errorf("kernel: data migrations: %w", err)
 	}
+	if rw := cfg.Rewrite; rw != nil {
+		switch {
+		case rw.ID == "" || rw.Owner == "":
+			return nil, fmt.Errorf("kernel: data migrations: %w: M8 needs an owner and an ID", datamigrate.ErrInvalidMigration)
+		case !slices.ContainsFunc(owners, func(o storage.OwnerSpec) bool { return o.Owner == rw.Owner }):
+			return nil, fmt.Errorf("kernel: data migrations: %w: M8 %s's owner %s is not a storage owner", datamigrate.ErrInvalidMigration, rw.ID, rw.Owner)
+		case slices.ContainsFunc(migs, func(m datamigrate.DataMigration) bool { return m.ID == rw.ID }):
+			return nil, fmt.Errorf("kernel: data migrations: %w: M8 %s is also a registered migration", datamigrate.ErrInvalidMigration, rw.ID)
+		}
+	}
 	return &DataMigrations{cfg: cfg, runner: r}, nil
 }
 
 // Steps are the P4b entry point: one storage.DataStep per migration, for
-// the P2 open's storage.OpenOptions.DataSteps. Name coined by F2-06.
-func (d *DataMigrations) Steps() []storage.DataStep { return d.runner.Steps() }
+// the P2 open's storage.OpenOptions.DataSteps, then M8 when one is
+// registered: last, after every migration, a cutover step that marks the
+// plan's extra free space (storage.DataStep.Rewrite). Name coined by F2-06.
+func (d *DataMigrations) Steps() []storage.DataStep {
+	steps := d.runner.Steps()
+	rw := d.cfg.Rewrite
+	if rw == nil {
+		return steps
+	}
+	after := slices.Clone(rw.After)
+	for _, s := range steps {
+		after = append(after, storage.StepRef{Owner: s.Owner, DataMigration: s.ID})
+	}
+	run := d.rewriteRun
+	if run == nil {
+		run = func(ctx context.Context, db *storage.DB) error {
+			if d.cfg.Swapper == nil {
+				return fmt.Errorf("kernel: M8 %s has no swapper (DataMigrationsConfig.Swapper)", rw.ID)
+			}
+			return d.cfg.Swapper.RunRewrite(ctx, db, *rw)
+		}
+	}
+	return append(steps, storage.DataStep{Owner: rw.Owner, ID: rw.ID, After: after, Cutover: true, Rewrite: true, Run: run})
+}
 
 // Preflight is the P4a call site of the cutover preflight, before the
 // checkpoint (F3-04's seam, DataMigrationsConfig.Preflight): it hands the
