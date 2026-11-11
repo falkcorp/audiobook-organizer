@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/run_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 59ad832d-2138-4515-ab39-44beaafda01b
 // last-edited: 2026-11-10
 
@@ -211,6 +211,7 @@ func TestCheckShrinkOnly_Git(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	t.Setenv(ShrinkBaseEnv, "") // CI sets it for the real checkout, not this one
 	git("init", "-q", "-b", "work")
 	write("README", "")
 	if err := os.Remove(filepath.Join(ex, "README")); err != nil {
@@ -280,6 +281,7 @@ func TestCheckShrinkOnly_ShallowCI(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
+	t.Setenv(ShrinkBaseEnv, "")
 	root := t.TempDir()
 	up, co := filepath.Join(root, "up"), filepath.Join(root, "co")
 	git := func(dir string, args ...string) {
@@ -325,7 +327,10 @@ func TestCheckShrinkOnly_ShallowCI(t *testing.T) {
 	pr("1", "a.go\n")
 	pr("2", "a.go\nb.go\nd.go\n")
 
-	check := func(n string, fetchMain bool) *recorder {
+	// explicit does what ci.yml does: read the merge ref's first parent from
+	// the raw commit (the shallow boundary hides it from rev-parse), fetch it
+	// at depth 1 and pass it through ShrinkBaseEnv.
+	check := func(n string, fetchMain, explicit bool) *recorder {
 		t.Helper()
 		if err := os.RemoveAll(co); err != nil {
 			t.Fatal(err)
@@ -340,20 +345,54 @@ func TestCheckShrinkOnly_ShallowCI(t *testing.T) {
 		if fetchMain {
 			git(co, "fetch", "-q", "--no-tags", "--depth=1", "origin", "main")
 		}
+		t.Setenv(ShrinkBaseEnv, "")
+		if explicit {
+			cmd := exec.Command("git", "cat-file", "-p", "HEAD")
+			cmd.Dir = co
+			raw, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parent string
+			for l := range strings.SplitSeq(string(raw), "\n") {
+				if p, ok := strings.CutPrefix(l, "parent "); ok {
+					parent = p
+					break
+				}
+			}
+			git(co, "fetch", "-q", "--no-tags", "--depth=1", "origin", parent)
+			t.Setenv(ShrinkBaseEnv, parent)
+		}
 		t.Chdir(co)
 		t.Setenv("CI", "true")
 		r := &recorder{TB: t}
 		CheckShrinkOnly(r, ex)
 		return r
 	}
-	if r := check("1", false); len(r.fatals) != 1 {
+	if r := check("1", false, false); len(r.fatals) != 1 {
 		t.Fatalf("shallow without origin/main: fatals %v errors %v", r.fatals, r.errors)
 	}
-	if r := check("1", true); len(r.errors)+len(r.fatals)+len(r.skips) != 0 {
+	if r := check("1", true, false); len(r.errors)+len(r.fatals)+len(r.skips) != 0 {
 		t.Fatalf("shallow shrink: errors %v fatals %v skips %v", r.errors, r.fatals, r.skips)
 	}
-	if r := check("2", true); len(r.fatals) != 0 || r.count("gained d.go", r.errors) != 1 || len(r.errors) != 1 {
+	if r := check("2", true, false); len(r.fatals) != 0 || r.count("gained d.go", r.errors) != 1 || len(r.errors) != 1 {
 		t.Fatalf("shallow growth: errors %v fatals %v, want one gained d.go", r.errors, r.fatals)
+	}
+
+	// Main moves on after the merge refs were made, dropping c.go. Against
+	// origin/main (the fallback) PR 1 now reads as gaining c.go, and rerunning
+	// would not change that. The explicit base is the commit the merge ref was
+	// built on, so it is exact.
+	write("F5-02.txt", "")
+	git(up, "commit", "-qam", "main drops c.go")
+	if r := check("1", true, false); len(r.errors) != 1 || !strings.Contains(r.errors[0], "gained c.go") {
+		t.Fatalf("fallback after main moved: errors %v fatals %v, want the known false gain of c.go", r.errors, r.fatals)
+	}
+	if r := check("1", true, true); len(r.errors)+len(r.fatals) != 0 {
+		t.Fatalf("explicit base after main moved: errors %v fatals %v", r.errors, r.fatals)
+	}
+	if r := check("2", false, true); len(r.fatals) != 0 || r.count("gained d.go", r.errors) != 1 || len(r.errors) != 1 {
+		t.Fatalf("explicit base, growth: errors %v fatals %v, want one gained d.go", r.errors, r.fatals)
 	}
 }
 
@@ -400,5 +439,122 @@ func TestAnalyze_WholeProgram(t *testing.T) {
 	}
 	if got := run(true, "listowner", "wire"); len(got) != 0 {
 		t.Errorf("list function called by wire: %q, want none", got)
+	}
+}
+
+// TestCheckShrinkOnly_BaseAndGenesis covers the base choice and the genesis
+// rule:
+//   - HEAD older than main: main dropped a line after HEAD branched. The merge
+//     base sees no growth, and an explicit ShrinkBaseEnv is used as given.
+//   - An unknown ShrinkBaseEnv commit fails under CI.
+//   - A directory recreated after its deletion fails.
+//   - A directory created after the package's tests already call
+//     CheckShrinkOnly fails.
+func TestCheckShrinkOnly_BaseAndGenesis(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	repo := t.TempDir()
+	out := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=Lucius Fox", "-c", "user.email=lucius@example.com",
+			"-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = repo
+		b, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, b)
+		}
+		return strings.TrimSpace(string(b))
+	}
+	put := func(name, text string) {
+		t.Helper()
+		p := filepath.Join(repo, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit := func(msg string) string {
+		t.Helper()
+		out("add", "-A")
+		out("commit", "-qm", msg)
+		return out("rev-parse", "HEAD")
+	}
+	check := func() *recorder {
+		t.Helper()
+		r := &recorder{TB: t}
+		CheckShrinkOnly(r, "exempt.d")
+		return r
+	}
+	t.Chdir(repo)
+	t.Setenv("CI", "true")
+	t.Setenv(ShrinkBaseEnv, "")
+
+	out("init", "-q", "-b", "main")
+	put("exempt.d/F5-01.txt", "a.go\nb.go\n")
+	put("shrink_test.go", "package app\n\n// calls tasklint.CheckShrinkOnly(t, \"exempt.d\")\n")
+	branchPoint := commit("ratchet and list")
+	put("exempt.d/F5-01.txt", "a.go\n")
+	mainTip := commit("main drops b.go")
+	out("update-ref", "refs/remotes/origin/main", mainTip)
+	out("checkout", "-q", "-b", "older", branchPoint)
+
+	if r := check(); len(r.errors)+len(r.fatals)+len(r.skips) != 0 {
+		t.Fatalf("HEAD older than main, merge base: errors %v fatals %v skips %v", r.errors, r.fatals, r.skips)
+	}
+	t.Setenv(ShrinkBaseEnv, branchPoint)
+	if r := check(); len(r.errors)+len(r.fatals) != 0 {
+		t.Fatalf("explicit base at the branch point: errors %v fatals %v", r.errors, r.fatals)
+	}
+	t.Setenv(ShrinkBaseEnv, mainTip)
+	if r := check(); len(r.errors) != 1 || !strings.Contains(r.errors[0], "gained b.go") {
+		t.Fatalf("explicit base at main's tip is used as given: errors %v fatals %v", r.errors, r.fatals)
+	}
+	t.Setenv(ShrinkBaseEnv, "0123456789abcdef0123456789abcdef01234567")
+	if r := check(); len(r.fatals) != 1 || !strings.Contains(r.fatals[0], ShrinkBaseEnv) {
+		t.Fatalf("unknown explicit base: fatals %v", r.fatals)
+	}
+	t.Setenv(ShrinkBaseEnv, "")
+
+	// Deleted on main, then recreated: no genesis.
+	out("checkout", "-q", "main")
+	out("rm", "-rq", "exempt.d")
+	deleted := commit("list emptied and deleted")
+	out("update-ref", "refs/remotes/origin/main", deleted)
+	put("exempt.d/F5-01.txt", "a.go\n")
+	if r := check(); len(r.errors) != 1 || !strings.Contains(r.errors[0], "entry file F5-01.txt was added") {
+		t.Fatalf("recreated directory: errors %v fatals %v", r.errors, r.fatals)
+	}
+
+	// A fresh history where the ratchet came first and the directory later.
+	if err := os.RemoveAll(filepath.Join(repo, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(repo, "exempt.d")); err != nil {
+		t.Fatal(err)
+	}
+	out("init", "-q", "-b", "main")
+	ratchet := commit("ratchet without a list")
+	out("update-ref", "refs/remotes/origin/main", ratchet)
+	put("exempt.d/F5-01.txt", "a.go\n")
+	if r := check(); len(r.errors) != 1 || !strings.Contains(r.errors[0], "was added") {
+		t.Fatalf("directory created after the ratchet: errors %v fatals %v", r.errors, r.fatals)
+	}
+	// A history with neither the ratchet nor the list: adding both is the
+	// genesis.
+	for _, p := range []string{".git", "exempt.d", "shrink_test.go"} {
+		if err := os.RemoveAll(filepath.Join(repo, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out("init", "-q", "-b", "main")
+	put("README", "Wayne Enterprises\n")
+	out("update-ref", "refs/remotes/origin/main", commit("before the ratchet"))
+	put("exempt.d/F5-01.txt", "a.go\n")
+	put("shrink_test.go", "package app\n\n// calls tasklint.CheckShrinkOnly(t, \"exempt.d\")\n")
+	if r := check(); len(r.errors)+len(r.fatals) != 0 {
+		t.Fatalf("genesis: errors %v fatals %v", r.errors, r.fatals)
 	}
 }

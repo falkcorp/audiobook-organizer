@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/run.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3353e3e5-8aaf-477a-bffd-f8c6bf6de79c
 // last-edited: 2026-11-10
 
@@ -300,10 +300,11 @@ func union(files map[string]string) (map[string]string, []string, error) {
 	return u, problems, nil
 }
 
-// ShrinkViolations compares entry files at the base (name -> text, nil when the
-// directory did not exist there) with the current ones: an entry file absent at
-// the base, or a line absent from the same file at the base, is a violation. A
-// removed file or line is fine, and creating the directory is fine.
+// ShrinkViolations compares entry files at the base (name -> text) with the
+// current ones: an entry file absent at the base, or a line absent from the
+// same file at the base, is a violation; a removed file or line is fine. A nil
+// base is the directory's genesis (baseEntries decides when that holds) and
+// passes; an empty, non-nil base makes every current file an addition.
 func ShrinkViolations(base, head map[string]string) []string {
 	if base == nil {
 		return nil
@@ -335,17 +336,24 @@ func ShrinkViolations(base, head map[string]string) []string {
 	return out
 }
 
+// ShrinkBaseEnv names the environment variable that gives CheckShrinkOnly its
+// base commit explicitly. CI sets it to merge_group.base_sha in the merge
+// queue and to the first parent of the PR's merge ref on a pull request, and
+// fetches that commit at depth 1 (.github/workflows/ci.yml).
+const ShrinkBaseEnv = "TASKLINT_SHRINK_BASE"
+
 // CheckShrinkOnly fails t when the entry files in dir (relative to the working
-// directory) gained a file or a line since the merge base with origin/main, or
-// since origin/main itself in a shallow checkout (see baseEntries; 05-tasks
-// §5T.8.4: the exemption list may only shrink). Without git or
-// origin/main it skips with a message, and fails when CI is "true".
+// directory) gained a file or a line since the base (05-tasks §5T.8.4: the
+// exemption list may only shrink). The base is ShrinkBaseEnv's commit when it
+// is set, else `git merge-base HEAD origin/main`, else, in a shallow checkout
+// where no merge base is reachable, origin/main itself (baseEntries). Without
+// git or a base it skips with a message, and fails when CI is "true".
 func CheckShrinkOnly(t testing.TB, dir string) {
 	t.Helper()
 	base, err := baseEntries(dir)
 	if err != nil {
 		if os.Getenv("CI") == "true" {
-			t.Fatalf("tasklint shrink-only: %v (CI needs origin/main in the checkout)", err)
+			t.Fatalf("tasklint shrink-only: %v (CI needs the base commit in the checkout)", err)
 			return
 		}
 		t.Skipf("tasklint shrink-only: %v; skipped outside CI", err)
@@ -361,14 +369,25 @@ func CheckShrinkOnly(t testing.TB, dir string) {
 	}
 }
 
-// baseEntries returns dir's entry files at the base revision, or nil when the
-// directory did not exist there. The base is `git merge-base HEAD origin/main`.
-// A shallow checkout has no common ancestor to find: CI checks out the PR's
-// merge ref (or the merge-queue commit) at depth 1 and fetches origin/main at
-// depth 1, and the shallow boundary cuts HEAD's parents off. There HEAD already
-// contains origin/main, so origin/main itself is the base. If main moves between
-// the checkout and the fetch, a line main dropped in the meantime reads as gained;
-// a rerun clears it.
+// baseEntries returns dir's entry files at the base commit (CheckShrinkOnly
+// names it), or nil at the directory's genesis.
+//
+// The fallback to origin/main in a shallow checkout is the last resort: the
+// shallow boundary cuts HEAD's parents off, so no merge base is reachable, and
+// a PR merge ref or merge-queue commit contains origin/main. It is exact only
+// while main has not moved since that commit was made; a line main dropped in
+// between reads as gained, and rerunning the job does not help, since a rerun
+// tests the same commit against main's newer tip. CI therefore passes the
+// exact base through ShrinkBaseEnv, and the fallback applies only where it
+// cannot (a push to main, where origin/main is HEAD).
+//
+// When the directory is absent at the base, it is new or recreated. Genesis
+// (nil, so nothing is a violation) holds only when the directory never existed
+// in the base's history and the base's tests of the working directory's
+// package do not call CheckShrinkOnly yet, which is the change that introduces
+// both the ratchet and its list. Otherwise the base is empty and every entry
+// file counts as added: a recreated directory fails, and so does one created
+// after the ratchet was in place.
 func baseEntries(dir string) (map[string]string, error) {
 	git := func(args ...string) (string, error) {
 		out, err := exec.Command("git", args...).Output()
@@ -380,15 +399,9 @@ func baseEntries(dir string) (map[string]string, error) {
 		}
 		return strings.TrimSpace(string(out)), nil
 	}
-	mb, err := git("merge-base", "HEAD", "origin/main")
+	mb, err := shrinkBase(git)
 	if err != nil {
-		shallow, serr := git("rev-parse", "--is-shallow-repository")
-		if serr != nil || shallow != "true" {
-			return nil, err
-		}
-		if mb, err = git("rev-parse", "--verify", "--quiet", "origin/main^{commit}"); err != nil {
-			return nil, fmt.Errorf("shallow checkout without origin/main (fetch it: git fetch --no-tags --depth=1 origin main): %w", err)
-		}
+		return nil, err
 	}
 	prefix, err := git("rev-parse", "--show-prefix")
 	if err != nil {
@@ -400,7 +413,16 @@ func baseEntries(dir string) (map[string]string, error) {
 		return nil, err
 	}
 	if list == "" {
-		return nil, nil
+		existed, err := git("rev-list", "-1", mb, "--", rel)
+		if err != nil {
+			return nil, err
+		}
+		// git grep exits 1 when nothing matches: no output and an error.
+		callers, _ := git("grep", "-l", "-F", "CheckShrinkOnly(", mb, "--", ":(glob)"+prefix+"*_test.go")
+		if existed == "" && callers == "" {
+			return nil, nil
+		}
+		return map[string]string{}, nil
 	}
 	out := map[string]string{}
 	for p := range strings.SplitSeq(list, "\n") {
@@ -411,4 +433,29 @@ func baseEntries(dir string) (map[string]string, error) {
 		out[path.Base(p)] = text
 	}
 	return out, nil
+}
+
+// shrinkBase resolves CheckShrinkOnly's base commit: ShrinkBaseEnv's commit,
+// else the merge base of HEAD and origin/main, else origin/main in a shallow
+// checkout.
+func shrinkBase(git func(args ...string) (string, error)) (string, error) {
+	if b := strings.TrimSpace(os.Getenv(ShrinkBaseEnv)); b != "" {
+		sha, err := git("rev-parse", "--verify", "--quiet", b+"^{commit}")
+		if err != nil {
+			return "", fmt.Errorf("%s=%s is not a commit in this checkout (fetch it: git fetch --no-tags --depth=1 origin %s): %w", ShrinkBaseEnv, b, b, err)
+		}
+		return sha, nil
+	}
+	mb, err := git("merge-base", "HEAD", "origin/main")
+	if err == nil {
+		return mb, nil
+	}
+	if shallow, serr := git("rev-parse", "--is-shallow-repository"); serr != nil || shallow != "true" {
+		return "", err
+	}
+	sha, ferr := git("rev-parse", "--verify", "--quiet", "origin/main^{commit}")
+	if ferr != nil {
+		return "", fmt.Errorf("shallow checkout without %s or origin/main (fetch it: git fetch --no-tags --depth=1 origin main): %w", ShrinkBaseEnv, ferr)
+	}
+	return sha, nil
 }
