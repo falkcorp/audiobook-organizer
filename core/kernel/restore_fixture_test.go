@@ -265,6 +265,7 @@ func (fx *rxFx) openPrevious(ctx context.Context, dir string) (previousView, err
 
 func rxUserRef(id string) entity.Ref { return entity.Ref{Module: "core", Kind: "user", ID: id} }
 func rxKeyRef(id string) entity.Ref  { return entity.Ref{Module: "core", Kind: "apikey", ID: id} }
+func rxRoleRef(id string) entity.Ref { return entity.Ref{Module: "core", Kind: "role", ID: id} }
 
 // user stores an active user at version 1 and returns its ID.
 func (fx *rxFx) user(name string, roles ...rbac.RoleName) string {
