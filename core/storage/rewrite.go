@@ -1,7 +1,7 @@
 // file: core/storage/rewrite.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7959a601-c65e-4e8c-bdfe-6fedd766d21e
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -52,7 +52,7 @@ type RewriteStep struct {
 	After []StepRef
 }
 
-// NewRewriteStep is M8's invocation API (name coined by F3-04): the
+// NewRewriteStep is M8's invocation API (name coined here, by F3-04): the
 // declaration books' M8 definition builds, with the one fixed ID.
 func NewRewriteStep(owner Owner, id string, after ...StepRef) RewriteStep {
 	return RewriteStep{Owner: owner, ID: id, After: after}
