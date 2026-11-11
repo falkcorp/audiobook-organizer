@@ -396,6 +396,24 @@ func TestCache_UndecodableIsMiss(t *testing.T) {
 		t.Fatal(err)
 	}
 	eq(t, "wrong payload shape is a miss", p.Calls(), 3)
+
+	// A well-formed, unexpired entry of another Version under this key (a row
+	// written before a bump, or by another cache over the same keyspace) is a
+	// miss too: the entry carries its Version and the read checks it.
+	good, err := json.Marshal([]book{{Title: "stale", Source: "a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = codec.JSON[wire](1).Encode(wire{Version: "v0", At: clk.Now(), Expires: clk.Now().Add(time.Hour), Data: good})
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt(raw)
+	rs, _, err = metadata.Cached[query, book](ctx, cache, p, query{"x"})
+	if err != nil || len(rs) != 1 || rs[0].Title == "stale" {
+		t.Fatalf("an entry of another Version was served: rs=%v err=%v", rs, err)
+	}
+	eq(t, "another Version's entry is a miss", p.Calls(), 4)
 }
 
 func TestCache_UncacheableQuestionGoesLive(t *testing.T) {
