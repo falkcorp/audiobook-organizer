@@ -1,7 +1,7 @@
 // file: core/events/bus_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 15316ef2-102c-47b6-b868-5dee13f7d746
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package events_test
 
@@ -667,6 +667,10 @@ func TestOnRaw_EncodeDropLogsNoPayload(t *testing.T) {
 	if got.Load() != 0 {
 		t.Error("the raw subscriber received a payload that fails its schema")
 	}
+	// The drop counter is bumped before the warning is written (sub.drop), so
+	// the counter above does not order the log line: wait for the warning
+	// itself, and only then assert what it does and does not contain.
+	eventually(t, "the drop warning", func() bool { return lb.count("subscriber=wayne.watch") > 0 })
 	out := lb.String()
 	if !strings.Contains(out, "cause=schema") || !strings.Contains(out, "subscriber=wayne.watch") {
 		t.Errorf("the drop warning lacks its cause or subscriber:\n%s", out)
