@@ -1,7 +1,7 @@
 // file: core/auth/service.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -46,7 +46,10 @@ const (
 	// MaxBootstrapKeyTTL caps any configured bootstrap key lifetime: a day
 	// covers any session that needs the break-glass key, and a bootstrap key
 	// always expires.
-	MaxBootstrapKeyTTL   = 24 * time.Hour
+	MaxBootstrapKeyTTL = 24 * time.Hour
+	// DefaultTempLoginTTL is core.auth.temp_login.ttl's default: how long a
+	// temp-login or reset link may be consumed (HEAD's 15 minutes, §4.1).
+	DefaultTempLoginTTL  = 15 * time.Minute
 	conflictRetries      = 4
 	auditModule          = "core"
 	refKindUser          = "user"
@@ -103,6 +106,9 @@ type Settings struct {
 	// service, as HEAD refuses to start.
 	SaturatedRate  float64
 	SaturatedBurst int
+	// TempLoginTTL is core.auth.temp_login.ttl: the lifetime of a temp-login
+	// or reset link (§8, reloadable).
+	TempLoginTTL time.Duration
 }
 
 func (s Settings) withDefaults() Settings {
@@ -120,6 +126,9 @@ func (s Settings) withDefaults() Settings {
 	}
 	if s.MinPasswordLength <= 0 {
 		s.MinPasswordLength = DefaultMinPasswordLength
+	}
+	if s.TempLoginTTL <= 0 {
+		s.TempLoginTTL = DefaultTempLoginTTL
 	}
 	s.Login = s.Login.withDefaults()
 	// Only an unset value takes the default: a negative or NaN one is kept,

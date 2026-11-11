@@ -1,7 +1,7 @@
 // file: core/auth/records.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 056d2e0c-400d-404d-99ff-15b759dd0403
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -172,8 +172,14 @@ type OneTimeToken struct {
 	// CredentialEpoch is the target's epoch at issue (temp-login): a bump
 	// kills the token (§4.12).
 	CredentialEpoch int64
+	// Reset marks a temp-login token minted as a reset link
+	// (Service.MintResetLink): consuming it takes a new password, which is
+	// stored with a credential epoch bump in the session's own batch, and
+	// clears PasswordResetRequired. A plain temp-login takes no password.
+	Reset bool
 	// ClearsRestriction marks a reset link an owner-verified actor minted:
-	// consuming it clears SignInRestricted (§4.14).
+	// consuming it clears SignInRestricted (§4.14). It is set only with
+	// Reset; a token carrying it without Reset is refused.
 	ClearsRestriction bool
 	CreatedAt         time.Time
 	ExpiresAt         time.Time
