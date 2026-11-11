@@ -1,7 +1,7 @@
 // file: core/storage/preflight.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 17127bd3-ef79-4077-aaf5-aac159db016d
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -132,8 +132,15 @@ func (o *Opened) CutoverStarted(ctx context.Context, steps []CutoverStep) (bool,
 // PreflightSource is owner's cutover source as a Preflight reads it: its
 // legacy range (a cutover step's Source is retired claims), through a
 // Reader that has no write method behind it, so a Preflight cannot write
-// even by a type assertion. It refuses an owner with no legacy range.
+// even by a type assertion. It refuses an owner with no legacy range, and
+// refuses once Prepare (or Offline) ran: the preflight is P4a's first act,
+// before the headroom check, the checkpoint and the marker (§5S.4 step 5a),
+// so a refusal writes nothing, and a boot that ran it after Prepare would
+// refuse with the checkpoint already taken.
 func (o *Opened) PreflightSource(owner Owner) (Reader, error) {
+	if o.db.boot.prepared {
+		return nil, errors.New("storage: the cutover preflight runs before Prepare (§5S.4 step 5a, 06 §6.5.1 P4 (a)); this boot already prepared the store")
+	}
 	lr, ok := o.db.Legacy(owner)
 	if !ok {
 		return nil, fmt.Errorf("storage: owner %s has no legacy range for a cutover preflight", owner)

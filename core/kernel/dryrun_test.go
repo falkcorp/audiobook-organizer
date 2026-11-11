@@ -1,7 +1,7 @@
 // file: core/kernel/dryrun_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1a867e9f-773e-4516-bfdc-da0d56a19606
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -200,5 +200,34 @@ func TestDryRunMatchesLiveRun(t *testing.T) {
 	}
 	if _, err := os.Stat(h.db); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestDryRunRefusesAnUnknownID: --id naming no data migration of this
+// build is refused before any scratch copy, with a non-zero exit and the
+// registered IDs named, rather than reporting a clean run of nothing; M8's
+// ID and a registered step's are accepted.
+func TestDryRunRefusesAnUnknownID(t *testing.T) {
+	h, c := dryRunHost(t, cutoverRows(3, 1))
+	rw := storage.NewRewriteStep("gcpd", "gcpd.rewrite")
+	rep, err := DryRun(h.ctx, c, DryRunOptions{ID: "gcpd.riddles", Migrations: []datamigrate.DataMigration{cutoverMigration(&cutoverHandles{})}, Rewrite: &rw})
+	if err == nil || ExitCode(err) == 0 || !strings.Contains(err.Error(), `"gcpd.riddles"`) ||
+		!strings.Contains(err.Error(), "gcpd.case-files, gcpd.rewrite") {
+		t.Fatalf("dry run --id gcpd.riddles = %+v, %v; want refused naming the registered IDs", rep, err)
+	}
+	var scratch []string
+	_ = filepath.WalkDir(filepath.Dir(h.state), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && strings.HasPrefix(d.Name(), "dryrun-") {
+			scratch = append(scratch, p)
+		}
+		return nil
+	})
+	if len(scratch) > 0 {
+		t.Errorf("the refused dry run made scratch %v", scratch)
+	}
+	for _, id := range []string{"gcpd.case-files", "gcpd.rewrite", ""} {
+		if migs, err := dryRunList([]datamigrate.DataMigration{cutoverMigration(&cutoverHandles{})}, id, rw.ID); err != nil {
+			t.Errorf("--id %q = %v, %v; want accepted", id, migs, err)
+		}
 	}
 }
