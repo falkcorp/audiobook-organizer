@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/providerhttp"
@@ -498,5 +497,3 @@ func TestDialerAddressTable(t *testing.T) {
 		t.Fatalf("no answer = %v", err)
 	}
 }
-
-var _ = time.Second
