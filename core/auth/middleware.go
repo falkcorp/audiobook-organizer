@@ -177,7 +177,10 @@ func writeUnavailable(w http.ResponseWriter, r *http.Request) {
 }
 
 // client is the request's ClientInfo: Deps.Client when the kernel wired
-// httpapi's resolver, else the TCP peer as both address and peer.
+// httpapi's resolver, else the TCP peer as both address and peer, and HTTPS
+// only from the connection: no forwarding header is believed without a
+// trusted-proxy list (HEAD handlers/auth.go isHTTPSRequest believed
+// X-Forwarded-Proto from any peer).
 func (s *Service) client(r *http.Request) ClientInfo {
 	if s.d.Client != nil {
 		return s.d.Client(r)
