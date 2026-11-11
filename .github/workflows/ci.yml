@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.37.1
+# version: 3.39.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-11-09
+# last-edited: 2026-11-10
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -905,6 +905,31 @@ jobs:
         with:
           submodules: recursive
 
+      # internal/books' TestTasklintExemptions_ShrinkOnly (F2-17, 05-tasks
+      # §5T.8.4) diffs the tasklint exemption list against a base commit and
+      # fails under CI=true without one. The default checkout stays depth 1;
+      # this fetches only the base, at depth 1, and names it in
+      # TASKLINT_SHRINK_BASE: merge_group.base_sha in the merge queue, and on a
+      # pull request the first parent of the merge ref, read from the raw
+      # commit because the shallow boundary hides it from rev-parse. A push has
+      # neither, so the test falls back to origin/main, which is HEAD there.
+      - name: Fetch the tasklint shrink-only base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          git rev-parse --verify origin/main
+          base="$MERGE_GROUP_BASE"
+          if [ -z "$base" ] && [ "$EVENT_NAME" = pull_request ]; then
+            base=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          fi
+          if [ -n "$base" ]; then
+            git fetch --no-tags --depth=1 origin "$base"
+            git rev-parse --verify "$base^{commit}"
+            echo "TASKLINT_SHRINK_BASE=$base" >> "$GITHUB_ENV"
+          fi
+
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -1093,6 +1118,31 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+
+      # internal/books' TestTasklintExemptions_ShrinkOnly (F2-17, 05-tasks
+      # §5T.8.4) diffs the tasklint exemption list against a base commit and
+      # fails under CI=true without one. The default checkout stays depth 1;
+      # this fetches only the base, at depth 1, and names it in
+      # TASKLINT_SHRINK_BASE: merge_group.base_sha in the merge queue, and on a
+      # pull request the first parent of the merge ref, read from the raw
+      # commit because the shallow boundary hides it from rev-parse. A push has
+      # neither, so the test falls back to origin/main, which is HEAD there.
+      - name: Fetch the tasklint shrink-only base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          git rev-parse --verify origin/main
+          base="$MERGE_GROUP_BASE"
+          if [ -z "$base" ] && [ "$EVENT_NAME" = pull_request ]; then
+            base=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          fi
+          if [ -n "$base" ]; then
+            git fetch --no-tags --depth=1 origin "$base"
+            git rev-parse --verify "$base^{commit}"
+            echo "TASKLINT_SHRINK_BASE=$base" >> "$GITHUB_ENV"
+          fi
 
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

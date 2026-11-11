@@ -1,5 +1,5 @@
 # file: core/archtest/thirdparty_allow.txt
-# version: 1.0.7
+# version: 1.0.9
 # guid: cb537e35-a463-43d1-b870-3ea941cf278d
 # last-edited: 2026-11-10
 #
@@ -72,6 +72,13 @@ github.com/stretchr/testify
 =go.opentelemetry.io/otel
 github.com/go-logr/logr
 github.com/go-logr/stdr
+# F2-17, test-support only (03 §3.5 R4; 13 §13.5.2): archtest/tasklint is a
+# go/analysis analyzer (05-tasks §5T.8.4; 06 §6.11.4 row H: an explicit
+# analysis.Analyzer flag set), and archtest/guards loads packages with
+# go/packages. Only those two packages import it: archtest and coretest, which
+# every module's tests link, do not, and no non-test core package does
+# (TestTasklint_TestSupportOnly). At the root's version (check_module_skew.py).
+golang.org/x/tools
 
 # F3-02: config, the operator YAML file parser (05-config §1.3.6, §1.10.1;
 # pinned at v3.0.6, the version ABO's module also selects).

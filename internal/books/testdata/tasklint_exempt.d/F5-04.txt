@@ -1,0 +1,37 @@
+# Owned by F5-04; only F5-04 may delete this file, in the PR that converts these files (05-tasks §5T.8.2 rule 3).
+# The non-test .go files under F5-04's paths in docs/agent-tasks/platform-core/README.md, at F2-17's base.
+# One repo-relative path per line, sorted; the directory is read as one union that may only shrink (05-tasks §5T.8.4).
+internal/plugins/dedup/auto_resolve.go
+internal/plugins/dedup/book_signature_scan.go
+internal/plugins/dedup/bookfile_seg_sweep.go
+internal/plugins/dedup/breakdown_backfill.go
+internal/plugins/dedup/build_candidate_index.go
+internal/plugins/dedup/build_isbn_index.go
+internal/plugins/dedup/calibrate_composite.go
+internal/plugins/dedup/calibrate_embedding_thresholds.go
+internal/plugins/dedup/check_book.go
+internal/plugins/dedup/cleanup_orphan_author_embeddings.go
+internal/plugins/dedup/cleanup_orphan_embeddings.go
+internal/plugins/dedup/dataset_backfill.go
+internal/plugins/dedup/drain_stale.go
+internal/plugins/dedup/emb_reencode.go
+internal/plugins/dedup/embed_async.go
+internal/plugins/dedup/embed_scan.go
+internal/plugins/dedup/full_scan.go
+internal/plugins/dedup/label_refinement.go
+internal/plugins/dedup/llm_review.go
+internal/plugins/dedup/lsh_index_build.go
+internal/plugins/dedup/mine_gold_labels.go
+internal/plugins/dedup/plugin.go
+internal/plugins/dedup/purge_legacy_fp.go
+internal/plugins/dedup/purge_stale.go
+internal/plugins/dedup/quarantine_chapter_artifacts.go
+internal/plugins/dedup/rebuild_gold_labels.go
+internal/plugins/dedup/reembed_embeddings.go
+internal/plugins/dedup/register.go
+internal/plugins/dedup/rescore_labeled_examples.go
+internal/plugins/dedup/rescore_op.go
+internal/plugins/dedup/run_all.go
+internal/plugins/dedup/split_book_bulk_merge.go
+internal/plugins/dedup/split_book_scan.go
+internal/plugins/dedup/window_index_build.go
