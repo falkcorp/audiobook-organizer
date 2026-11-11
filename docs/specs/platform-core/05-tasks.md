@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-tasks.md -->
-<!-- version: 1.18.0 -->
+<!-- version: 1.19.0 -->
 <!-- guid: 3472a3a5-c492-47aa-9b0b-17411cfb25d3 -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -364,6 +364,9 @@ type ItemsOptions[T any] struct {
 	ProgressBase    int                  // absolute offset when items is a slice of a larger set
 	ProgressTotal   int                  // absolute denominator
 	Key             func(T) string       // RunSeq + Watermark: stable key instead of index
+	PartitionBy     func(T) string       // one key per item: a key's items run on one worker, one at a time,
+	                                     // in item order; each is still its own item (gates, ItemTimeout, counts).
+	                                     // RunItems and ForEach only; may be combined with ExclusiveRefs
 }
 
 type ErrorMode uint8
@@ -417,6 +420,7 @@ func (ic *ItemRC) LockRefs(refs ...entity.Ref) (release func(), err error) // 5T
 | Worker shape | Fixed set of `min(par.Workers(), len)` goroutines (started with `wg.Go`) pulling the next index from an atomic cursor; no goroutine per item | `run_items.go:335-358` spawns per item |
 | Cancellation | Each worker checks `ctx.Err()` **before taking** an index and **again before calling** `fn`; once the run ctx is done no new `fn` starts. Items never started count `NotStarted`. In-flight items see their ctx canceled with the run's cause | `run_items.go:336-345` random `select`; the per-op guard in `docs/decisions/2026-10-31-lsh-backfill-cancel-guard.md` becomes unnecessary |
 | Pause | Workers park on the **executor's** pause gate reached through `rc`, before the item clock starts | global `pause_gate.go:197-199` |
+| Partitions | With `PartitionBy`, a worker takes a whole partition from the cursor and runs its items one at a time, in item order, each through the item path of the rows above and below (pause gate, ref locks, CPU slot, its own `ItemTimeout` clock, `Skip`, counts); distinct keys run in parallel. `RunSeq` refuses it (a stream cannot be grouped before it ends). A Batch's `PartitionBy` and a Fixer apply's are this option (the Fixer's alongside `Row.Subjects` as `ExclusiveRefs`) | the executor's first cut ran a partition as one item, so `ItemTimeout` timed the whole partition (F2-03) |
 | Exclusion | With `ExclusiveRefs`, the worker takes the executor's keyed ref locks for the item (sorted, all-or-wait, cancellable) after the pause gate and before the item clock; items whose ref sets overlap therefore never run concurrently, in this run or against any other run locking the same refs. Fixer apply does the same with `Row.Subjects` (COR-7: a season pack and an overlapping single episode cannot import into one slot at once) | `PartitionBy` alone takes one key per item |
 | Label | `Label(item)` is called in the worker before `fn` for "current item"; progress text is rendered by core from atomic counters (`done/total`, counters), never by the caller | `run_items.go:45-54,268` race; the CLAUDE.md note about `Label` closures becomes structurally impossible except via deliberately captured mutable state, which `-race` in `coretest` catches |
 | Progress | Monotonic atomic completion count; delivered to the reporter in completion order under one lock (current `progressMu` property, `run_items.go:271-285`) | — |
@@ -2480,3 +2484,8 @@ F2-02 review (2026-11-10): 5T.3.13 `RunStore` gains `Marks` and `Strikes`, the r
 that reads before it writes is indexed, and a plain one is refused with the new `ErrBatchNotIndexed`, because
 `GetForUpdate` through a plain batch reads only the committed state and the commit would lose an earlier write
 of the same build.
+
+F2-03 (2026-11-10): 5T.3.2 `ItemsOptions` gains `PartitionBy`, and its table a Partitions row. A Batch's and a Fixer
+apply's `PartitionBy` run through it, so each item of a partition keeps its own `ItemTimeout` clock, pause gate,
+CPU slot, `Skip` and counts; the executor's first cut handed `RunItems` whole partitions as items, which timed a
+partition, not an item. `RunSeq` refuses the option.
