@@ -527,6 +527,17 @@ func TestCheckShrinkOnly_BaseAndGenesis(t *testing.T) {
 	if r := check(); len(r.errors) != 1 || !strings.Contains(r.errors[0], "entry file F5-01.txt was added") {
 		t.Fatalf("recreated directory: errors %v fatals %v", r.errors, r.fatals)
 	}
+	// The ratchet's call went too: the history alone still refuses it.
+	if err := os.RemoveAll(filepath.Join(repo, "exempt.d")); err != nil {
+		t.Fatal(err)
+	}
+	out("rm", "-q", "shrink_test.go")
+	out("update-ref", "refs/remotes/origin/main", commit("ratchet removed"))
+	put("exempt.d/F5-01.txt", "a.go\n")
+	if r := check(); len(r.errors) != 1 || !strings.Contains(r.errors[0], "entry file F5-01.txt was added") {
+		t.Fatalf("recreated directory without the ratchet at the base: errors %v fatals %v", r.errors, r.fatals)
+	}
+	put("shrink_test.go", "package app\n\n// calls tasklint.CheckShrinkOnly(t, \"exempt.d\")\n")
 
 	// A fresh history where the ratchet came first and the directory later.
 	if err := os.RemoveAll(filepath.Join(repo, ".git")); err != nil {
