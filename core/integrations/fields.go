@@ -1,5 +1,5 @@
 // file: core/integrations/fields.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: cbc1be32-ff91-4789-be1d-70da64f29e97
 // last-edited: 2026-11-11
 
@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/secrets"
@@ -27,7 +28,9 @@ import (
 //   - a secret field is a property marked x-mediacore-secret (a secrets.Ref
 //     field, reflected as a write-only string);
 //   - a URL-typed field is a string property of format "uri" (config's
-//     schema:"format=uri" tag); its origin is scheme://host:port;
+//     schema:"format=uri" tag), named by a secret name's last-segment
+//     grammar so that a signature (below) can carry its name; its origin is
+//     scheme://host:port;
 //   - a host-and-port adapter (core.email, 05-notify §3.1) has properties
 //     named "host" and "port" and no URL field named host; the pair is one
 //     destination, keyed "host" as M1.3's StoredInstance comment keys it, of
@@ -200,6 +203,9 @@ func analyze(s config.Schema) (fieldSet, error) {
 		case secretLike(name):
 			return fieldSet{}, invalidf("settings property %q looks like a secret but is not a secrets.Ref field (x-mediacore-secret)", name)
 		case pr.format == "uri":
+			if !validSecretSegment(name) {
+				return fieldSet{}, invalidf("URL-typed settings field %q: a destination field's name must match [a-z][a-z0-9_-]{0,63}; the trust signatures carry it", name)
+			}
 			fs.urls = append(fs.urls, name)
 		}
 		fs.props[name] = pr
@@ -231,7 +237,7 @@ func analyze(s config.Schema) (fieldSet, error) {
 
 // destinationWord reports a name part that reads as a destination, plurals
 // included: where a request goes (url, endpoint, webhook, server, proxy) or
-// what a dialer is given (host, address, port).
+// what a dialer is given (host, address, port, ip, domain).
 func destinationWord(part string) bool {
 	switch part {
 	case "url", "urls", "uri", "uris",
@@ -242,6 +248,8 @@ func destinationWord(part string) bool {
 		"proxy", "proxies",
 		"address", "addresses",
 		"addr", "addrs",
+		"ip", "ips",
+		"domain", "domains",
 		"port", "ports":
 		return true
 	}
@@ -297,9 +305,27 @@ func (fs fieldSet) origins(settings map[string]any) map[string]string {
 	return out
 }
 
-// hostPortOrigin renders a host-and-port destination's origin.
+// hostPortOrigin renders a host-and-port destination's origin. Neither part
+// passes through a URL parser, so a part holding white space renders as a
+// malformed origin: no origin holds a space (see signature).
 func hostPortOrigin(host, port string) string {
-	return hostPortScheme + "://" + net.JoinHostPort(strings.ToLower(host), port)
+	o := hostPortScheme + "://" + net.JoinHostPort(strings.ToLower(host), port)
+	if hasSpace(host) || hasSpace(port) {
+		return malformedOrigin(o)
+	}
+	return o
+}
+
+// malformedOrigin is the origin of a destination value the Registry cannot
+// read as one: "!" and the value query-escaped. It equals no real origin (a
+// real one starts with a scheme) and, query-escaped, holds no space.
+func malformedOrigin(raw string) string {
+	return "!" + url.QueryEscape(raw)
+}
+
+// hasSpace reports whether s holds white space.
+func hasSpace(s string) bool {
+	return strings.IndexFunc(s, unicode.IsSpace) >= 0
 }
 
 // wellFormedHostPort reports whether o is a host-and-port origin as
@@ -357,11 +383,13 @@ func defaultPort(scheme string) string {
 
 // originOf is raw's origin, scheme://host:port with the scheme's default
 // port filled in and scheme and host lower-cased. A value that is not an
-// absolute URL with a host is "!" + raw, which equals no real origin.
+// absolute URL with a host, or whose host holds white space (url.Parse
+// decodes an escaped space in an IPv6 zone), is malformedOrigin(raw), which
+// equals no real origin: no origin holds a space (see signature).
 func originOf(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Hostname() == "" {
-		return "!" + raw
+	if err != nil || u.Scheme == "" || u.Hostname() == "" || hasSpace(u.Hostname()) {
+		return malformedOrigin(raw)
 	}
 	scheme := strings.ToLower(u.Scheme)
 	host := strings.ToLower(u.Hostname())
@@ -400,18 +428,23 @@ func checkURL(field, raw string) error {
 // a destination. No origin renders as it (an origin has a scheme).
 const defaultDestinations = "adapter-default"
 
-// signature renders a destination origin map as one string: the one origin
-// when there is one destination, defaultDestinations when there is none,
-// else "key=origin" pairs in key order. LocalOrigin and SecretsOrigin hold
-// it.
+// signature renders a destination origin map as one string:
+// defaultDestinations when there is none, else "key=origin" pairs in key
+// order, space-separated, also for a single destination. LocalOrigin and
+// SecretsOrigin hold it, and every rule compares them as whole strings, so
+// the rendering must be one-to-one, and it is because:
+//   - the key is always present: one origin under two keys (url=A against
+//     alt_url=A, or a URL smtp://h:25 against the host-and-port pair h:25)
+//     is two different destinations of the adapter;
+//   - a key matches [a-z][a-z0-9_-]{0,63}, so it holds no '=' or space
+//     (analyze refuses any other URL field name; the pair is keyed "host"),
+//     and a pair splits at its first '=' whatever the origin holds;
+//   - no origin holds a space, which separates the pairs: originOf and
+//     hostPortOrigin render a value with white space in its host or port as
+//     malformedOrigin, which is query-escaped. An origin may hold '='.
 func signature(origins map[string]string) string {
 	if len(origins) == 0 {
 		return defaultDestinations
-	}
-	if len(origins) == 1 {
-		for _, o := range origins {
-			return o
-		}
 	}
 	keys := make([]string, 0, len(origins))
 	for k := range origins {

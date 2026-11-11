@@ -1,5 +1,5 @@
 // file: core/integrations/instance_store.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2141de3b-d072-48fc-a0f7-b1f628eb04a5
 // last-edited: 2026-11-11
 
@@ -56,9 +56,15 @@ type InstanceStore interface {
 // never reads or writes a secret value: the Registry reads and stages every
 // secret through secrets, and the row holds only secrets.Refs.
 type StoredInstance struct {
-	Config        InstanceConfig // Locked and Stored are ignored
-	LocalOrigin   string         // scheme://host:port Local was granted for; "" = none
-	SecretsOrigin string         // URL origin the core secrets copies were written for
+	Config InstanceConfig // Locked and Stored are ignored
+	// LocalOrigin and SecretsOrigin are signatures of the effective
+	// destinations Local was granted for and the core secrets copies were
+	// written for: "key=origin" pairs in key order (url=http://192.0.2.1:80
+	// host=smtp://192.0.2.2:25), or "adapter-default" when no destination is
+	// set (F7-01; signature in fields.go). LocalOrigin "" = no grant;
+	// SecretsOrigin "" = never recorded, which serves no stored secret.
+	LocalOrigin   string
+	SecretsOrigin string
 	// OperatorSecretOrigin maps each destination field (a URL-typed field, or
 	// "host" for a host-and-port adapter such as core.email, whose origin is
 	// smtp://host:port) to the origin an operator-sourced secret may be sent to

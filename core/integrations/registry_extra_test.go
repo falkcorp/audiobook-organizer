@@ -1,5 +1,5 @@
 // file: core/integrations/registry_extra_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0001123d-da59-42c5-aa6c-5ea8c12c21e2
 // last-edited: 2026-11-11
 
@@ -158,10 +158,10 @@ func TestRegistry_StoredSecretsFollowTheirOrigin(t *testing.T) {
 	e := newEnv(t)
 	mustPut(t, admin(), e.registry(t, nil, nil), signal("http://192.0.2.20/"), cred("alfred-1"))
 	row, ok := e.stored(t, signalRef)
-	if !ok || row.SecretsOrigin != "http://192.0.2.20:80" {
+	if !ok || row.SecretsOrigin != "url=http://192.0.2.20:80" {
 		t.Fatalf("the created row = %+v", row)
 	}
-	row.SecretsOrigin = "http://192.0.2.99:80"
+	row.SecretsOrigin = "url=http://192.0.2.99:80"
 	b := e.ks.NewBatch()
 	defer func() { _ = b.Close() }()
 	if _, err := integrations.NativeInstanceStore(e.ks).Put(ctx, b, row); err != nil {

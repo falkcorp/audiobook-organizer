@@ -1,5 +1,5 @@
 // file: core/integrations/fields_internal_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: dfaab137-5259-4293-befc-1800491e6971
 // last-edited: 2026-11-11
 
@@ -8,7 +8,9 @@ package integrations
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/config"
@@ -30,8 +32,8 @@ func TestOriginOf(t *testing.T) {
 		"gopher://192.0.2.4":          "gopher://192.0.2.4",
 		"gopher://[2001:db8::1]":      "gopher://[2001:db8::1]",
 		"http://[2001:db8::1]/":       "http://[2001:db8::1]:80",
-		"/relative":                   "!/relative",
-		"::not a url":                 "!::not a url",
+		"/relative":                   "!%2Frelative",
+		"::not a url":                 "!%3A%3Anot+a+url",
 	} {
 		if got := originOf(raw); got != want {
 			t.Errorf("originOf(%q) = %q, want %q", raw, got, want)
@@ -47,7 +49,9 @@ func TestSignature(t *testing.T) {
 	}{
 		{nil, "adapter-default"},
 		{map[string]string{}, "adapter-default"},
-		{map[string]string{"url": "http://192.0.2.1:80"}, "http://192.0.2.1:80"},
+		{map[string]string{"url": "http://192.0.2.1:80"}, "url=http://192.0.2.1:80"},
+		{map[string]string{"alt_url": "http://192.0.2.1:80"}, "alt_url=http://192.0.2.1:80"},
+		{map[string]string{"host": "smtp://192.0.2.1:25"}, "host=smtp://192.0.2.1:25"},
 		{map[string]string{"url": "http://192.0.2.1:80", "callback": "https://192.0.2.2:443"}, "callback=https://192.0.2.2:443 url=http://192.0.2.1:80"},
 	} {
 		if got := signature(c.in); got != c.want {
@@ -61,12 +65,87 @@ func TestSignature(t *testing.T) {
 		t.Error("an unset destination equals a set one")
 	}
 	for o, ok := range map[string]bool{
-		"http://192.0.2.1:80": true, "url=http://192.0.2.1:80 host=tcp://192.0.2.2:25": true,
-		"the narrows": false, "url=gotham": false,
+		"http://192.0.2.1:80": true, "smtp://192.0.2.2:25": true, "smtp://:25": true,
+		"url=http://192.0.2.1:80": false, "the narrows": false, "": false,
 	} {
 		if wellFormedOrigin(o) != ok {
 			t.Errorf("wellFormedOrigin(%q) = %v", o, !ok)
 		}
+	}
+	// A signature is accepted only exactly as signature renders it.
+	for sig, ok := range map[string]bool{
+		"adapter-default":                                   true,
+		"url=http://192.0.2.1:80":                           true,
+		"host=smtp://192.0.2.2:25 url=http://192.0.2.1:80":  true,
+		"http://192.0.2.1:80":                               false,
+		"url=http://192.0.2.1:80 host=smtp://192.0.2.2:25":  false,
+		"url=http://192.0.2.1:80  host=smtp://192.0.2.2:25": false,
+		"URL=http://192.0.2.1:80":                           false,
+		"url=gotham":                                        false,
+		"url=":                                              false,
+		"":                                                  false,
+	} {
+		if wellFormedSignature(sig) != ok {
+			t.Errorf("wellFormedSignature(%q) = %v", sig, !ok)
+		}
+	}
+}
+
+// TestSignatureOneToOne (R12): a signature decodes back to the origin map
+// it renders, so two different destination sets never sign alike. Each pair
+// below signed alike before origins were kept free of spaces (a host or port
+// holding one, a malformed URL value holding one), and an escaped space in
+// an IPv6 zone, which url.Parse decodes into the host, did not decode.
+func TestSignatureOneToOne(t *testing.T) {
+	fs := fieldSet{urls: []string{"alt_url", "url"}, hostPort: true}
+	decode := func(sig string) map[string]string {
+		m := map[string]string{}
+		if sig == defaultDestinations {
+			return m
+		}
+		for part := range strings.SplitSeq(sig, " ") {
+			k, o, ok := strings.Cut(part, "=")
+			if !ok {
+				return nil
+			}
+			m[k] = o
+		}
+		return m
+	}
+	for _, pair := range [][2]map[string]any{
+		{
+			{"host": "[gotham", "port": float64(25), "url": "http://arkham]:25"},
+			{"host": "gotham:25 url=http://arkham", "port": float64(25)},
+		},
+		{
+			{"host": "gotham", "port": "25", "url": "http://192.0.2.10:80"},
+			{"host": "gotham", "port": "25 url=http://192.0.2.10:80"},
+		},
+		{
+			{"alt_url": "gotham", "url": "http://192.0.2.10:80"},
+			{"alt_url": "gotham url=http://192.0.2.10:80"},
+		},
+		{
+			{"url": "http://[fe80::1%25cave]:80/"},
+			{"url": "http://[fe80::1%25cave%20mouth]:80/", "alt_url": "http://192.0.2.10/"},
+		},
+	} {
+		a, b := fs.origins(pair[0]), fs.origins(pair[1])
+		sa, sb := signature(a), signature(b)
+		if sa == sb {
+			t.Errorf("%v and %v both sign %q", pair[0], pair[1], sa)
+		}
+		for sig, m := range map[string]map[string]string{sa: a, sb: b} {
+			if !maps.Equal(decode(sig), m) {
+				t.Errorf("signature %q does not decode to %v", sig, m)
+			}
+		}
+	}
+	if o := originOf("http://[fe80::1%25cave%20mouth]:80/"); o != malformedOrigin("http://[fe80::1%25cave%20mouth]:80/") {
+		t.Errorf("an IPv6 zone holding a space has origin %q", o)
+	}
+	if o := hostPortOrigin("gotham", "25\t"); hasSpace(o) {
+		t.Errorf("a port holding white space has origin %q", o)
 	}
 }
 
@@ -315,6 +394,36 @@ func TestAnalyze_RefusesHiddenDestinations(t *testing.T) {
 				Addr string `json:"addr"`
 			}]()
 		},
+		"a URL field named outside the key grammar": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				AltURL string `json:"altUrl,omitempty" schema:"format=uri"`
+			}]()
+		},
+		"a URL field named with a space": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				AltURL string `json:"alt url,omitempty" schema:"format=uri"`
+			}]()
+		},
+		"ip": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				IP string `json:"ip"`
+			}]()
+		},
+		"prefixed ip": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				BatIP string `json:"bat_ip"`
+			}]()
+		},
+		"domain": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Domain string `json:"domain"`
+			}]()
+		},
+		"domains": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Domains []string `json:"mail-domains"`
+			}]()
+		},
 		"a port beside a URL": func() (config.Schema, error) {
 			return config.SchemaFor[struct {
 				URL  string `json:"url,omitempty" schema:"format=uri"`
@@ -395,7 +504,7 @@ func TestWellFormedHostPort(t *testing.T) {
 			t.Errorf("%q well-formed = %v, want %v", o, got, ok)
 		}
 	}
-	if !wellFormedOrigin("host=smtp://:2525") {
+	if !wellFormedSignature("host=smtp://:2525") {
 		t.Error("an origin with the host unset was refused")
 	}
 }

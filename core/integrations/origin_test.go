@@ -1,5 +1,5 @@
 // file: core/integrations/origin_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 394052ef-66a7-48bf-a8f2-6fb61af1e689
 // last-edited: 2026-11-11
 
@@ -81,7 +81,7 @@ func TestPut_PortChangeBesideOperatorHostDropsSecrets(t *testing.T) {
 	e := newEnv(t)
 	r := e.registry(t, overlay("integrations.metadata.clocktower.host", "192.0.2.60"), nil)
 	mustPut(t, admin(), r, clocktower(9000), cred("alfred-1"))
-	if row, _ := e.stored(t, oracleRef); row.SecretsOrigin != "smtp://192.0.2.60:9000" || row.OperatorSecretOrigin["host"] != "smtp://192.0.2.60:9000" {
+	if row, _ := e.stored(t, oracleRef); row.SecretsOrigin != "host=smtp://192.0.2.60:9000" || row.OperatorSecretOrigin["host"] != "smtp://192.0.2.60:9000" {
 		t.Fatalf("origins recorded = %q / %v, want the effective destination", row.SecretsOrigin, row.OperatorSecretOrigin)
 	}
 	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthOK || sentWith(e, "alfred-1") != 1 {
@@ -107,7 +107,7 @@ func TestPut_PortChangeBesideOperatorHostDropsSecrets(t *testing.T) {
 	if v := e.secret(t, oracleRef, "password"); v != "" {
 		t.Errorf("the stored secret survived the port change: %q", v)
 	}
-	if row, _ := e.stored(t, oracleRef); row.SecretsOrigin != "smtp://192.0.2.60:9443" || len(row.OperatorSecretOrigin) != 0 {
+	if row, _ := e.stored(t, oracleRef); row.SecretsOrigin != "host=smtp://192.0.2.60:9443" || len(row.OperatorSecretOrigin) != 0 {
 		t.Errorf("origins after a manager's port change = %q / %v", row.SecretsOrigin, row.OperatorSecretOrigin)
 	}
 	_, _ = r.Health(ctx, oracleRef)
@@ -124,7 +124,7 @@ func TestPut_PortChangeWithHostUnsetDropsSecrets(t *testing.T) {
 	e := newEnv(t)
 	r := e.registry(t, nil, nil)
 	mustPut(t, manager(), r, clocktower(9000), cred("alfred-1"))
-	if row, _ := e.stored(t, oracleRef); row.SecretsOrigin != "smtp://:9000" {
+	if row, _ := e.stored(t, oracleRef); row.SecretsOrigin != "host=smtp://:9000" {
 		t.Fatalf("SecretsOrigin = %q", row.SecretsOrigin)
 	}
 	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthOK || sentWith(e, "alfred-1") != 1 {
@@ -164,7 +164,7 @@ func TestOperatorSecret_AdminPortBesideOperatorHostServed(t *testing.T) {
 	in := clocktower(9000)
 	in.Local = true
 	mustPut(t, admin(), r, in, nil)
-	if row, _ := e.stored(t, oracleRef); row.OperatorSecretOrigin["host"] != "smtp://192.0.2.60:9000" || row.LocalOrigin != "smtp://192.0.2.60:9000" {
+	if row, _ := e.stored(t, oracleRef); row.OperatorSecretOrigin["host"] != "smtp://192.0.2.60:9000" || row.LocalOrigin != "host=smtp://192.0.2.60:9000" {
 		t.Fatalf("origins recorded = %v / %q", row.OperatorSecretOrigin, row.LocalOrigin)
 	}
 	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthOK || sentWith(e, "env-oracle-pass") != 1 {
@@ -199,7 +199,7 @@ func TestOperatorSecret_AdminPortBesideOperatorHostServed(t *testing.T) {
 	again := withPort(current(t, r, oracleRef), 9445)
 	again.Local = true
 	mustPut(t, admin(), r, again, nil)
-	if row, _ := e.stored(t, oracleRef); row.OperatorSecretOrigin["host"] != "smtp://192.0.2.60:9445" || row.LocalOrigin != "smtp://192.0.2.60:9445" {
+	if row, _ := e.stored(t, oracleRef); row.OperatorSecretOrigin["host"] != "smtp://192.0.2.60:9445" || row.LocalOrigin != "host=smtp://192.0.2.60:9445" {
 		t.Errorf("origins after the admin's port = %v / %q", row.OperatorSecretOrigin, row.LocalOrigin)
 	}
 	if h, _ := r.Health(ctx, oracleRef); h.Status != integrations.HealthOK || sentWith(e, "env-oracle-pass") != 2 {
@@ -253,7 +253,7 @@ func TestPut_KeepsAWithheldSecretWithItsOrigin(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	mustPut(t, admin(), e.registry(t, nil, nil), signal("http://192.0.2.20/"), cred("alfred-1"))
-	rewriteRow(t, e, signalRef, func(row *integrations.StoredInstance) { row.SecretsOrigin = "http://192.0.2.99:80" })
+	rewriteRow(t, e, signalRef, func(row *integrations.StoredInstance) { row.SecretsOrigin = "url=http://192.0.2.99:80" })
 	r := e.registry(t, nil, nil)
 	renamed := current(t, r, signalRef)
 	renamed.Name = "Arkham watch"
@@ -264,7 +264,7 @@ func TestPut_KeepsAWithheldSecretWithItsOrigin(t *testing.T) {
 	if v := e.secret(t, signalRef, "password"); v != "alfred-1" {
 		t.Errorf("the withheld secret was not kept: %q", v)
 	}
-	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "http://192.0.2.99:80" {
+	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "url=http://192.0.2.99:80" {
 		t.Errorf("SecretsOrigin = %q, want the origin the secret was written for", row.SecretsOrigin)
 	}
 	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthMisconfigured || h.Message != integrations.ReasonStoredSecretWithheld+": password" {
@@ -275,7 +275,7 @@ func TestPut_KeepsAWithheldSecretWithItsOrigin(t *testing.T) {
 	}
 
 	mustPut(t, manager(), r, current(t, r, signalRef), cred("alfred-2"))
-	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "http://192.0.2.20:80" {
+	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "url=http://192.0.2.20:80" {
 		t.Errorf("SecretsOrigin after a re-supply = %q", row.SecretsOrigin)
 	}
 	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthOK || !slices.Equal(e.credentialsSentTo("http://192.0.2.20/"), []string{"alfred-2"}) {
@@ -313,7 +313,7 @@ func TestPut_SaveDuringOperatorURLKeepsStoredSecret(t *testing.T) {
 	if v := e.secret(t, signalRef, "password"); v != "alfred-1" {
 		t.Errorf("a Save beside the operator's URL deleted the stored secret: %q", v)
 	}
-	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "http://192.0.2.20:80" || row.Config.Settings["url"] != "http://192.0.2.20/" {
+	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "url=http://192.0.2.20:80" || row.Config.Settings["url"] != "http://192.0.2.20/" {
 		t.Errorf("row after the Saves = %q / %v", row.SecretsOrigin, row.Config.Settings)
 	}
 	if res, err := r.Test(manager(), current(t, r, signalRef), nil); err != nil || res.OK || res.Class != integrations.ClassInvalid {
@@ -334,7 +334,7 @@ func TestPut_SaveDuringOperatorURLKeepsStoredSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustPut(t, manager(), r, current(t, r, signalRef), cred("alfred-2"))
-	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "http://192.0.2.99:80" {
+	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "url=http://192.0.2.99:80" {
 		t.Errorf("SecretsOrigin of a secret written beside the operator's URL = %q", row.SecretsOrigin)
 	}
 	if h, _ := r.Health(ctx, signalRef); h.Status != integrations.HealthOK || !slices.Equal(e.credentialsSentTo("http://192.0.2.99/"), []string{"alfred-2"}) {

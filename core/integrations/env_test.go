@@ -1,5 +1,5 @@
 // file: core/integrations/env_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 08e48a33-e0c4-4f6d-8167-db3c1f261851
 // last-edited: 2026-11-11
 
@@ -38,6 +38,7 @@ const (
 const (
 	batsignal integrations.AdapterID = "hello.batsignal" // notify, one URL, a required credential
 	oracle    integrations.AdapterID = "hello.oracle"    // metadata, host and port, an optional credential
+	gargoyle  integrations.AdapterID = "hello.gargoyle"  // notify, two URLs beside a host and port, an optional credential
 )
 
 // batsignalSettings is hello.batsignal's settings: one URL-typed field
@@ -50,6 +51,17 @@ type batsignalSettings struct {
 
 // oracleSettings is hello.oracle's settings: a host-and-port destination.
 type oracleSettings struct {
+	Host     string      `json:"host,omitempty"`
+	Port     int         `json:"port,omitempty"`
+	Password secrets.Ref `json:"password,omitzero"`
+}
+
+// gargoyleSettings is hello.gargoyle's settings: every destination shape an
+// adapter can mix, two URL-typed fields beside a host-and-port pair, so a
+// destination can move between keys at one origin (R12).
+type gargoyleSettings struct {
+	URL      string      `json:"url,omitempty" schema:"format=uri"`
+	AltURL   string      `json:"alt_url,omitempty" schema:"format=uri"`
 	Host     string      `json:"host,omitempty"`
 	Port     int         `json:"port,omitempty"`
 	Password secrets.Ref `json:"password,omitzero"`
@@ -193,6 +205,7 @@ func (e *env) descriptors(t testing.TB) []integrations.Descriptor {
 	return []integrations.Descriptor{
 		e.fake.Descriptor(integrations.Meta{ID: batsignal, Kind: integrations.KindNotify, DisplayName: "Bat-Signal", Settings: schema[batsignalSettings](t)}),
 		e.fake.Descriptor(integrations.Meta{ID: oracle, Kind: integrations.KindMetadata, DisplayName: "Oracle", Settings: schema[oracleSettings](t)}),
+		e.fake.Descriptor(integrations.Meta{ID: gargoyle, Kind: integrations.KindNotify, DisplayName: "Gargoyle", Settings: schema[gargoyleSettings](t)}),
 	}
 }
 
@@ -245,6 +258,7 @@ func authOff() context.Context {
 var (
 	signalRef = integrations.Ref{Kind: integrations.KindNotify, Instance: "gcpd-roof"}
 	oracleRef = integrations.Ref{Kind: integrations.KindMetadata, Instance: "clocktower"}
+	perchRef  = integrations.Ref{Kind: integrations.KindNotify, Instance: "wayne-perch"}
 )
 
 // signal is a hello.batsignal instance aimed at url.
