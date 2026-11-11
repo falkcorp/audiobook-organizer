@@ -1,5 +1,5 @@
 // file: core/config/export_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: d2bf2cbd-335b-424b-854c-53a0c4529b22
 // last-edited: 2026-11-10
 
@@ -76,21 +76,50 @@ func (t *TestSource) redacted(_ sourceQuery, drop func(Path) bool) ([]byte, erro
 	return json.Marshal(kept)
 }
 
-// SetOperatorSources installs file and env as s's operator layers (either
-// may be nil).
+// SetOperatorSources installs file and env as s's operator layers in place
+// of the real ones (Options.FilePath, Options.Environ); a nil one keeps the
+// real layer, so a test can drive one layer by canonical path and the other
+// through the real grammar.
 func SetOperatorSources(s *Store, file, env *TestSource) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if file != nil {
 		s.file = file
-	} else {
-		s.file = nil
 	}
 	if env != nil {
 		s.env = env
-	} else {
-		s.env = nil
 	}
+}
+
+// SetEnvFileReader replaces the reader of <NAME>_FILE contents, so a test
+// can count the reads.
+func SetEnvFileReader(s *Store, read func(string) ([]byte, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.env.(*envSource).readFile = read
+}
+
+// FailClosedGauge and RetiredGauge read the two gauges' tallies.
+func FailClosedGauge(s *Store) int64 { return s.met.failClosed.Load() }
+func RetiredGauge(s *Store) int64    { return s.met.retired.Load() }
+
+// ConfigPathForTest is Options.FilePath: the name a file value's lock
+// reason carries.
+func (s *Store) ConfigPathForTest() string { return s.o.FilePath }
+
+// CanonicalEnvName is the canonical env name derivation (05-config §1.3.6).
+func CanonicalEnvName(prefix string, p Path) string { return envName(prefix, p) }
+
+// TextJSON is the strict text decoder of env and flag values for the key at
+// p of s, or for a passthrough path when p names no key.
+func TextJSON(s *Store, p Path, text string) (json.RawMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var k *keyInfo
+	if ck, ok := s.keyFor(p); ok {
+		k = ck.k
+	}
+	return textJSON(k, p, text)
 }
 
 // SetBootRecordRenameHook runs fn between the boot record's temp-file fsync

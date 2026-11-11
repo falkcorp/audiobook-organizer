@@ -1,5 +1,5 @@
 // file: core/config/errors.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 00f06753-8c6a-48c9-adf5-5229340bfd87
 // last-edited: 2026-11-10
 
@@ -100,16 +100,22 @@ func (e *PostCommitError) Error() string {
 func (e *PostCommitError) Unwrap() error { return e.Err }
 
 // RetiredNameError lists every refused use of a retired name, so one boot
-// names them all (05-config §1.3.6). F3-02 builds it; this row declares it.
+// names them all (05-config §1.3.6). Boot and Load return it before storage
+// opens (retired.go).
 type RetiredNameError struct{ Uses []RetiredUse }
 
-// Error lists each refused name with its canonical form.
+// Error lists each refused name with its canonical env name and its key in
+// the operator file.
 func (e *RetiredNameError) Error() string {
 	parts := make([]string, 0, len(e.Uses))
 	for _, u := range e.Uses {
-		parts = append(parts, fmt.Sprintf("%s (now %s, env %s)", u.Name, u.Canonical, u.CanonicalEnv))
+		kind := "env"
+		if u.File {
+			kind = "file key"
+		}
+		parts = append(parts, fmt.Sprintf("%s %s (now env %s or file key %s)", kind, u.Name, u.CanonicalEnv, u.Canonical))
 	}
-	return "config: retired names are set: " + strings.Join(parts, "; ")
+	return "config: retired names of protected or secret keys are set; they are never read, so the service stops rather than run without them: " + strings.Join(parts, "; ")
 }
 
 // Unwrap returns ErrRetiredName.

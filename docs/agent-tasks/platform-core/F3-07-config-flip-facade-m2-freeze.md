@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F3-07-config-flip-facade-m2-freeze.md -->
-<!-- version: 1.2.2 -->
+<!-- version: 1.2.3 -->
 <!-- guid: cd0ab95d-94fd-4550-8089-03f6d358f1f1 -->
-<!-- last-edited: 2026-11-10 -->
+<!-- last-edited: 2026-11-11 -->
 
 # F3-07 — F3 flip, one PR: core config and secrets wired, ABO's `internal/config` becomes the façade, M2 with M7 and M8 registered, `R1Values` deleted, `/api/v1/config` on core config, the Basic gate into core, canonical names in every deploy file, behind F3-08's R2 freeze
 
@@ -187,6 +187,12 @@ grep -rn 'ConfigUpdate\|configupdate' internal/serviceregistry/keys.go internal/
    order of 03 §3.8), core's M7 half in the kernel's cutover wiring, both `Spec.Level` values bumped;
    ABO's `main` passes `RetiredConfigNames`, `ConfigEnvBindings` and the flags through `FromFlagSet`'s rule (`--dir`,
    `--db`, `--playlists`, `--log-level`, `--config` and the other shipped flags onto canonical paths).
+   **`config check` seam (F3-02):** `core/app/offline_config.go` builds `kernel.ConfigCheck` with `ModuleSections` nil,
+   so a retired name of a module key (`ABS_JWT_SECRET` → `modules.abs.…`) prints `NOT CHECKED` and exits non-zero.
+   When modules hand their config sections to the kernel, pass the enabled modules' sections into
+   `ConfigCheck.ModuleSections` there (and the shipped flags, which `config check` takes today as
+   `--set <path>=<value>`), so `config check` judges module keys exactly as a start does; add a test that a retired
+   module secret then prints `STOPS THE SERVICE FROM STARTING`.
 5. Delete `R1Values` and its type; add the archtest.
 6. `/api/v1/config` rewrite and the SPA settings page.
 7. Basic gate into core; delete `basicauth.go` and its use.

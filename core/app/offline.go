@@ -1,5 +1,5 @@
 // file: core/app/offline.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 418dd945-667d-43dc-a795-d22188dd4b58
 // last-edited: 2026-11-10
 
@@ -35,11 +35,14 @@ type Command struct {
 // core/internal/restoreswap; then F3's three secrets commands (05-config
 // §2.4; F3-03): secrets export-keyring, which opens no store and works while
 // the server runs, and secrets rotate-derive and secrets set-install-id,
-// which go through kernel.OpenOffline with the service stopped. R2's other
-// flips add theirs (06 §6.4.10).
+// which go through kernel.OpenOffline with the service stopped; and config
+// check (05-config §1.3.6; F3-02), which reads only the operator layers,
+// opens no store and works while the server runs. R2's other flips add
+// theirs (06 §6.4.10).
 func OfflineCommands(opts Options, mods ...module.Module) []Command {
 	return []Command{
 		pruneCheckpointsCommand(opts, mods), restoreOfflineCommand(opts, mods), resetCommand(opts, mods),
 		exportKeyringCommand(opts, mods), rotateDeriveCommand(opts, mods), setInstallIDCommand(opts, mods),
+		configCheckCommand(opts, mods),
 	}
 }

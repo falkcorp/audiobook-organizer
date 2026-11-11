@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F3-06-books-config-cutover-m2-rename-table.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: a42617df-0a4d-49ef-a19d-48538878932a -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-11 -->
 
 # F3-06 — Books' config-and-secrets step M2, built dark in `internal/books/cutover`: the generated rename table and its golden, HEAD's frozen `Config`, codec and cipher, M2a and M2b, HEAD's key guard; the M7 and M8 books step definitions
 
@@ -163,7 +163,10 @@ checks decide; a zero on an edit target stops the task.
    - **Guard first:** any of the four rows non-empty and no key file found → fail before M2a, nothing written, naming
      the file, the directories searched and `ABO_CORE_SECRETS_ALLOW_KEY_REGEN`.
    - **M2a, one batch:** per rename-table row of HEAD's effective stored value (blob value, gap-filled): `k` → `Convert`
-     then `config.Importer.Stage` (a default stages nothing; `core.storage.path` stages nothing); `s` → non-empty value
+     then `config.Importer.Stage` (a default stages nothing, except on a `FailClosed` key: `core.auth.mode` and
+     `core.http.basic_gate.enabled` are staged even when they equal the default, so R0's `enable_auth=true` →
+     `required` still beats a stale `ABO_CORE_AUTH_MODE=disabled`, F3-02 / 05-config §1.3.5; `core.storage.path` stages
+     nothing); `s` → non-empty value
      through `secrets.Importer` under the canonical name (an empty value leaves it unset); `i` → left in the blob, but its
      secrets (the Deluge passwords, metadata-source credentials, the webhook secret) moved out and sealed under their
      canonical names; `o` → nothing; `x` → nothing, one log line for a non-default value. In the same batch: rewrite the

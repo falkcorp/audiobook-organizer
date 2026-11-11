@@ -1,7 +1,7 @@
 // file: core/config/types.go
-// version: 1.0.3
+// version: 1.1.1
 // guid: e2e5754c-03e1-42ea-83cb-5ae606cfee3a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config
 
@@ -42,10 +42,13 @@ type Options struct {
 	Passthrough func(Path) bool
 	// EnvBindings are the app's ecosystem env names for passthrough paths
 	// (ABO: OPENAI_API_KEY and OPENAI_BASE_URL), from
-	// app.Options.ConfigEnvBindings. Read by the env layer (F3-02).
+	// app.Options.ConfigEnvBindings. Read by the env layer under the
+	// canonical-beats-binding rule (§1.3.5); a name listed twice fails
+	// NewStore, one equal to a canonical name fails Register (ErrDuplicate).
 	EnvBindings []EnvName
 	// Retired is the app's list of retired env names and file keys (§1.3.6),
-	// from app.Options.RetiredConfigNames. Acted on by F3-02.
+	// from app.Options.RetiredConfigNames. Boot and Load act on it
+	// (retired.go); RetiredSet lists what is set.
 	Retired []RetiredName
 	Logger  *slog.Logger
 	Metrics *metrics.Scope   // core scope "mediacore.config" (05-metrics); or Store.Instrument later
@@ -84,6 +87,10 @@ type RetiredUse struct {
 	Canonical    Path   // "" for a dropped key
 	CanonicalEnv string // the canonical env name, "" for a dropped key
 	Refused      bool   // a protected or secret key: this boot was refused
+	// Unchecked: a module key of a module that registered no section (not
+	// enabled at this boot, or config check without the module's sections),
+	// so its class is unknown; the use is ignored with a warning.
+	Unchecked bool
 }
 
 // BootView exposes the resolved ReloadBoot and ProtectOperator keys of core
@@ -255,5 +262,5 @@ type AttachReport struct {
 	Unknown     []Path          // retained rows for keys this binary does not declare
 	Quarantined map[Path]error  // rows ignored because their section failed to decode/validate with them
 	Ignored     map[Path]string // stored values shadowed by an operator lock (rows, and boot-record values) -> lock reason
-	FailClosed  map[Path]string // FailClosed keys whose stored value wins (F3-02)
+	FailClosed  map[Path]string // FailClosed keys whose stored value wins -> the operator source it beats (§1.3.5)
 }

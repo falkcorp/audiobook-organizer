@@ -1,7 +1,7 @@
 // file: internal/books/perimeter_app_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d50ddd31-9468-4c34-9994-a64e31f28a71
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package books
 
@@ -10,6 +10,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,6 +62,7 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 		coreBody   bool     // core's own problem body: compare the status only
 		gzip       bool     // the answer is gzipped
 		vary       []string // the answer's Vary values, nil for none
+		volatile   []string // top-level JSON fields that differ per request, removed before the bodies are compared
 	}{
 		{name: "/api redirect, gzip, same origin", path: "/api/audiobooks?batman=1", header: gzipSame,
 			gzip: true, vary: []string{"Origin", "Accept-Encoding"}},
@@ -68,7 +70,10 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 		{name: "legacy 404, gzip, same origin", path: "/api/v1/riddler-unrouted", header: gzipSame},
 		{name: "core group, gzip, same origin", path: "/api/core/v1/riddler", header: gzipSame, coreBody: true},
 		{name: "routed, gzip, same origin", path: "/api/v1/health", header: gzipSame,
-			gzip: true, vary: []string{"Origin", "Accept-Encoding"}},
+			gzip: true, vary: []string{"Origin", "Accept-Encoding"},
+			// /health stamps the second it answered in; the two requests can
+			// straddle a second boundary.
+			volatile: []string{"timestamp"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hreq := httptest.NewRequest(http.MethodGet, tc.path, nil)
@@ -95,7 +100,11 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 				if tc.gzip {
 					want = "gzip: " + want
 				}
-				assert.Equal(t, want, readableBody(resp.Header, body), "body")
+				got := readableBody(resp.Header, body)
+				if len(tc.volatile) > 0 {
+					want, got = withoutFields(t, want, tc.volatile), withoutFields(t, got, tc.volatile)
+				}
+				assert.Equal(t, want, got, "body")
 				assert.Equal(t, hw.Result().Header.Get("Content-Type"), resp.Header.Get("Content-Type"), "Content-Type")
 				assert.Equal(t, hw.Result().Header.Get("Location"), resp.Header.Get("Location"), "Location")
 			}
@@ -123,6 +132,27 @@ func TestPerimeter_ThroughTheRunningApp(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withoutFields removes the named top-level JSON fields from a readableBody
+// string (optionally "gzip: "-prefixed) and re-encodes the rest with sorted
+// keys, so two answers that differ only in those per-request fields compare
+// equal. A body that is not a JSON object fails the test: naming a volatile
+// field for a body that cannot carry one is a mistake in the table.
+func withoutFields(t *testing.T, readable string, fields []string) string {
+	t.Helper()
+	prefix := ""
+	if rest, ok := strings.CutPrefix(readable, "gzip: "); ok {
+		prefix, readable = "gzip: ", rest
+	}
+	var obj map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(readable), &obj), "body is a JSON object: %s", readable)
+	for _, f := range fields {
+		delete(obj, f)
+	}
+	out, err := json.Marshal(obj)
+	require.NoError(t, err)
+	return prefix + string(out)
 }
 
 // readableBody is a response body as the parity check compares and prints
