@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-10
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/auth/password"
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/metrics"
@@ -32,6 +33,9 @@ const (
 	// DefaultSessionCookie is core.auth.session.cookie_name's fallback; the
 	// kernel passes <AppID>_session (§4.3, SEC-11).
 	DefaultSessionCookie = "mediacore_session"
+	// DefaultMinPasswordLength is core.auth.password.min_length's default
+	// (HEAD's value, §4.5).
+	DefaultMinPasswordLength = 8
 	// DefaultBootstrapKeyTTL is core.auth.bootstrap.key_ttl's default: how
 	// long a bootstrap-issued key lives (§4.6). A bootstrap key is a
 	// full-scope admin credential handed out for one working session, so it
@@ -83,6 +87,20 @@ type Settings struct {
 	// NoHostPrefix is core.auth.session.cookie_host_prefix=false: a Secure
 	// session cookie keeps its plain name (§4.3).
 	NoHostPrefix bool
+	// MinPasswordLength is core.auth.password.min_length (§4.5).
+	MinPasswordLength int
+	// Login is the sign-in throttle's policy: core.auth.login
+	// .max_failures_per_source, .window, .soft_threshold, .soft_step and
+	// .soft_max (§4.9). Reloadable: the throttle takes it on every sign-in.
+	// MaxKeys is not a setting and is ignored.
+	Login ThrottleLimits
+	// SaturatedRate and SaturatedBurst are core.auth.login.saturated_rate
+	// (logins per second) and .saturated_burst: the bucket that admits
+	// password sign-ins while the login ceilings are spent (§4.9). Read once,
+	// by New; a value outside SaturatedLimitsValid refuses to build the
+	// service, as HEAD refuses to start.
+	SaturatedRate  float64
+	SaturatedBurst int
 }
 
 func (s Settings) withDefaults() Settings {
@@ -97,6 +115,18 @@ func (s Settings) withDefaults() Settings {
 	}
 	if s.KeyMaxTTL <= 0 {
 		s.KeyMaxTTL = DefaultKeyMaxTTL
+	}
+	if s.MinPasswordLength <= 0 {
+		s.MinPasswordLength = DefaultMinPasswordLength
+	}
+	s.Login = s.Login.withDefaults()
+	// Only an unset value takes the default: a negative or NaN one is kept,
+	// so New refuses it instead of quietly replacing it.
+	if s.SaturatedRate == 0 {
+		s.SaturatedRate = DefaultSaturatedRate
+	}
+	if s.SaturatedBurst == 0 {
+		s.SaturatedBurst = DefaultSaturatedBurst
 	}
 	if s.SessionCookie == "" {
 		s.SessionCookie = DefaultSessionCookie
@@ -125,6 +155,10 @@ type Deps struct {
 	// Extensions are the app's identity extensions, in any order (stage 12
 	// sorts them by Order).
 	Extensions []Extension
+	// Hasher is the password hasher (auth/password); nil builds the
+	// production one (argon2id m=64 MiB, t=3, GOMAXPROCS permits). Coined by
+	// F4-02: a test passes a lowered-cost hasher it can count derivations on.
+	Hasher *password.Hasher
 	// Client returns a request's ClientInfo as httpapi resolved it
 	// (trusted-proxy aware); nil uses the TCP peer, and HTTPS only when the
 	// connection itself is TLS. A resolver sets HTTPS by the perimeter's
@@ -146,6 +180,12 @@ type Service struct {
 	extensions []Extension
 	methods    map[Method]MethodSpec // registered extension and compat methods
 	touches    touchTable
+
+	// The sign-in protections (§4.9): one instance each per Service, never
+	// package state (R5).
+	hasher   *password.Hasher
+	throttle *Throttle
+	ceiling  *LoginCeiling
 }
 
 // New builds the service. It reads the store once (whether any user that can
@@ -176,6 +216,18 @@ func New(ctx context.Context, opts Options, d Deps) (*Service, error) {
 	}
 	if s.log == nil {
 		s.log = slog.Default()
+	}
+	st := s.settings()
+	if !SaturatedLimitsValid(st.SaturatedRate, st.SaturatedBurst) {
+		return nil, fmt.Errorf("%w: core.auth.login.saturated_rate must be %v to %v logins per second and saturated_burst 1 to %d",
+			ErrBadInput, MinSaturatedRate, MaxSaturatedRate, MaxSaturatedBurst)
+	}
+	s.ceiling = NewLoginCeiling(s.now)
+	s.ceiling.SetSaturatedBound(st.SaturatedRate, st.SaturatedBurst)
+	s.throttle = NewThrottle(st.Login, s.now, nil)
+	s.hasher = d.Hasher
+	if s.hasher == nil {
+		s.hasher = password.New(password.Options{})
 	}
 	s.opts.ImportedKeyPrefixes = slices.Clone(opts.ImportedKeyPrefixes)
 	s.methods = map[Method]MethodSpec{}
