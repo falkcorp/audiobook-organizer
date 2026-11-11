@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f380a3d2-0261-42b8-82c6-72a942b58624
 // last-edited: 2026-11-10
 
@@ -85,6 +85,26 @@ func TestContinueInPlace_RequiresProgressAndCheckpoint(t *testing.T) {
 				t.Errorf("error %q names %q, a proof the attempt gave", r.Error, c.notErr)
 			}
 		})
+	}
+}
+
+// TestContinueInPlace_MaxYields (5T.3.6, core.tasks.max_yields; added for
+// the yield invariants): a run that keeps yielding fails once it reaches
+// max_yields consecutive yields.
+func TestContinueInPlace_MaxYields(t *testing.T) {
+	var calls atomic.Int64
+	def := taskDef("gotham.endlesscase", func(rc *tasks.RC, _ noParams) (string, error) {
+		n := calls.Add(1)
+		rc.Progress().Set(n*10, tasks.Unknown())
+		if err := rc.Checkpoint(n); err != nil {
+			return "", err
+		}
+		return "", tasks.ErrContinueInPlace
+	})
+	h := newHarness(t, []tasks.Definition{def}, func(o *Options) { o.Config.MaxYields = 2 })
+	r := h.waitState(h.start("gotham.endlesscase", tasks.StartRequest{}), tasks.StateFailed, tasks.StateSucceeded)
+	if r.State != tasks.StateFailed || r.Reason != "max_yields" || r.Yields != 2 || calls.Load() != 3 {
+		t.Fatalf("endless yields: %s/%q yields %d after %d attempts, want failed/max_yields after 2 yields and 3 attempts", r.State, r.Reason, r.Yields, calls.Load())
 	}
 }
 
