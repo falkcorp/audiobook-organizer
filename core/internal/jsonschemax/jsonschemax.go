@@ -1,7 +1,7 @@
 // file: core/internal/jsonschemax/jsonschemax.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6bd61d18-b410-4f45-9106-70a9efcae5a3
-// last-edited: 2026-11-06
+// last-edited: 2026-11-10
 
 // Package jsonschemax is core's one JSON Schema reflector (05-config §1.10.2):
 // a thin wrapper over github.com/google/jsonschema-go that adds the tag pass
@@ -53,11 +53,17 @@ func (o Overrides) With(more Overrides) Overrides {
 // table, so time.Time renders as plain "string" unless the caller passes
 // Base().
 func For[T any](o Overrides) (*jsonschema.Schema, error) {
-	s, err := jsonschema.For[T](&jsonschema.ForOptions{TypeSchemas: o})
+	return ForType(reflect.TypeFor[T](), o)
+}
+
+// ForType is For for a type known only at run time (httpapi.HandleRaw's
+// RawDoc names its bodies by reflect.Type).
+func ForType(t reflect.Type, o Overrides) (*jsonschema.Schema, error) {
+	s, err := jsonschema.ForType(t, &jsonschema.ForOptions{TypeSchemas: o})
 	if err != nil {
 		return nil, fmt.Errorf("jsonschemax: %w", err)
 	}
-	if err := applyTags(reflect.TypeFor[T](), s); err != nil {
+	if err := applyTags(t, s); err != nil {
 		return nil, fmt.Errorf("jsonschemax: %w", err)
 	}
 	return s, nil

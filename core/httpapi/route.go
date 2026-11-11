@@ -1,7 +1,7 @@
 // file: core/httpapi/route.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0e02f805-1af9-41bb-87b2-82fc71cc65f0
-// last-edited: 2026-11-07
+// last-edited: 2026-11-10
 
 // Package httpapi is core's HTTP surface (05-http-api): routes and groups,
 // typed handlers with a required permission, the problem+json error shape and
@@ -161,8 +161,9 @@ type routeEntry struct {
 	errs    []error // registration errors found at Handle time
 
 	// native routes only
-	binding  *binding
-	bodyName string // component name of the JSON request body
+	binding   *binding
+	rawParams []paramDesc // HandleRaw routes: the path wildcards and RawDoc.Query
+	bodyName  string      // component name of the JSON request body
 	bodyType reflect.Type
 	bodySch  *jsonschema.Schema
 	respName string // component name of the success body, "" for no body
