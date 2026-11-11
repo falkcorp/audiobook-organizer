@@ -1,11 +1,12 @@
 // file: core/internal/restoreswap/journal.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: d009d8c5-8883-4296-8e4d-d30871926413
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package restoreswap
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -26,7 +27,8 @@ import (
 // staged_moved, sidecars, swapped, opened, marker_written, applied, failed,
 // swapped_back, and the offline restore's applied_offline (offline.go).
 // KindReset: staged, set_aside_started, moved, set_aside, applied,
-// hook_done, rejected.
+// hook_done, rejected. KindRewrite: the restore steps, and retired after a
+// terminal one (StepRetired).
 const (
 	StepStaged          = "staged"
 	StepRejected        = "rejected"
@@ -44,7 +46,23 @@ const (
 	StepMoved           = "moved"
 	StepSetAside        = "set_aside"
 	StepHookDone        = "hook_done"
+	// StepRetired follows a KindRewrite journal's terminal step (applied or
+	// swapped_back) when storage restore-offline replaced the store it was
+	// of: M8 no longer reads it (rewriteJournals), so the restored store's
+	// M8 starts with no swap-back counted (§5S.3.13 "M8 never loops").
+	// F3-04.
+	StepRetired = "retired"
 )
+
+// stagedRecord is in's "staged" journal record: its kind in Note and, for
+// KindRewrite, the step, the attempt and the store path M8 reads back.
+func stagedRecord(in restorejournal.Intent) restorejournal.Record {
+	r := restorejournal.Record{Step: StepStaged, Note: string(in.Kind), StepID: in.StepID}
+	if in.Kind == restorejournal.KindRewrite {
+		r.Attempt, r.DBPath = in.Attempt, filepath.Clean(in.DBPath)
+	}
+	return r
+}
 
 // ErrJournalCorrupt: a journal line before the last does not decode. The
 // journal is the swap's only record of what moved, so boot halts naming it
@@ -64,6 +82,28 @@ func ReadJournal(fs vfs.FS, stateDir, id string) ([]restorejournal.Record, error
 
 func journalPath(stateDir, id string) string {
 	return filepath.Join(restorejournal.JournalDir(stateDir, id), restorejournal.JournalName)
+}
+
+// firstRecord decodes the journal at path's first line, which ends in a
+// newline (an acknowledged append); ok is false when the journal does not
+// open or that line does not decode. It is what a journal that ReadJournal
+// refuses still proves about its swap: the kind, step and store its staged
+// record names.
+func firstRecord(fs vfs.FS, path string) (restorejournal.Record, bool) {
+	f, err := fs.Open(path)
+	if err != nil {
+		return restorejournal.Record{}, false
+	}
+	defer func() { _ = f.Close() }()
+	line, err := bufio.NewReader(f).ReadBytes('\n')
+	if err != nil {
+		return restorejournal.Record{}, false
+	}
+	var r restorejournal.Record
+	if json.Unmarshal(line, &r) != nil {
+		return restorejournal.Record{}, false
+	}
+	return r, true
 }
 
 // readJournal returns the records, the bytes of every acknowledged line

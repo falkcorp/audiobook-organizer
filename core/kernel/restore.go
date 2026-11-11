@@ -1,7 +1,7 @@
 // file: core/kernel/restore.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: df7b5c69-060a-442f-82e8-4d31243a2ea3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -266,6 +266,7 @@ func (k *Kernel) restoreInPlace(ctx context.Context, fs vfs.FS, sw *restoreswap.
 	}
 	r, rerr := sw.RestoreOffline(ctx, dbPath, req.RequestedBy, src)
 	res.ID, res.Escaped, res.Superseded = r.ID, r.Escaped, r.Superseded
+	res.Warnings = append(res.Warnings, r.Warnings...)
 	if !r.Linked && (rerr != nil || r.Escaped) {
 		// Refused before Stage linked the intent, or an escape, which
 		// journals no staging path: what this restore staged is its own,
