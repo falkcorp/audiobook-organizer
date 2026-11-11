@@ -29,7 +29,8 @@ func (r *Registry) ReleaseHolds(rc *tasks.RC, _ ReleaseHoldsParams) (ReleaseHold
 	live := rc.Mode() == tasks.ModeLive
 	for h := range r.Holds() {
 		res.Listed++
-		rc.Log().Info("provider hold", "scope", h.Scope, "class", h.Class.String(), "until", h.Until, "reason", h.Detail, "live", live)
+		rc.Log().Info("provider hold", append(r.scopeAttrs(h.Scope),
+			"class", h.Class.String(), "until", h.Until, "reason", logDetail(h.Detail), "live", live)...)
 		if !live {
 			continue
 		}
@@ -39,7 +40,7 @@ func (r *Registry) ReleaseHolds(rc *tasks.RC, _ ReleaseHoldsParams) (ReleaseHold
 		}
 		if err := r.ReleaseHoldIf(rc.Context(), h); err != nil {
 			if errors.Is(err, ErrHoldChanged) {
-				rc.Log().Info("provider hold was replaced since it was listed; left in place", "scope", h.Scope)
+				rc.Log().Info("provider hold was replaced since it was listed; left in place", r.scopeAttrs(h.Scope)...)
 				continue
 			}
 			errs = append(errs, fmt.Errorf("release a %s hold: %w", h.Class, err))
