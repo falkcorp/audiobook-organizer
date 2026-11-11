@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/run_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 59ad832d-2138-4515-ab39-44beaafda01b
 // last-edited: 2026-11-10
 
@@ -166,15 +166,16 @@ func TestShrinkViolations(t *testing.T) {
 		base, head map[string]string
 		want       int
 	}{
-		"unchanged":     {base, base, 0},
-		"line removed":  {base, map[string]string{"F5-01.txt": "a.go\n", "F5-02.txt": "c.go\n"}, 0},
-		"file removed":  {base, map[string]string{"F5-01.txt": "a.go\nb.go\n"}, 0},
-		"comment edit":  {base, map[string]string{"F5-01.txt": "# new comment\na.go\nb.go\n", "F5-02.txt": "c.go\n"}, 0},
-		"created":       {nil, map[string]string{"F5-01.txt": "a.go\n"}, 0},
-		"line added":    {base, map[string]string{"F5-01.txt": "a.go\nb.go\nd.go\n", "F5-02.txt": "c.go\n"}, 1},
-		"line moved":    {base, map[string]string{"F5-01.txt": "a.go\n", "F5-02.txt": "b.go\nc.go\n"}, 1},
-		"file added":    {base, map[string]string{"F5-01.txt": "a.go\nb.go\n", "F5-02.txt": "c.go\n", "F5-77.txt": "e.go\n"}, 1},
-		"emptied, kept": {base, map[string]string{"F5-01.txt": "", "F5-02.txt": ""}, 0},
+		"unchanged":        {base, base, 0},
+		"line removed":     {base, map[string]string{"F5-01.txt": "a.go\n", "F5-02.txt": "c.go\n"}, 0},
+		"file removed":     {base, map[string]string{"F5-01.txt": "a.go\nb.go\n"}, 0},
+		"comment edit":     {base, map[string]string{"F5-01.txt": "# new comment\na.go\nb.go\n", "F5-02.txt": "c.go\n"}, 0},
+		"created":          {nil, map[string]string{"F5-01.txt": "a.go\n"}, 0},
+		"line added":       {base, map[string]string{"F5-01.txt": "a.go\nb.go\nd.go\n", "F5-02.txt": "c.go\n"}, 1},
+		"line moved":       {base, map[string]string{"F5-01.txt": "a.go\n", "F5-02.txt": "b.go\nc.go\n"}, 1},
+		"file added":       {base, map[string]string{"F5-01.txt": "a.go\nb.go\n", "F5-02.txt": "c.go\n", "F5-77.txt": "e.go\n"}, 1},
+		"empty file added": {base, map[string]string{"F5-01.txt": "a.go\nb.go\n", "F5-02.txt": "c.go\n", "F5-78.txt": "# owner F5-78\n"}, 1},
+		"emptied, kept":    {base, map[string]string{"F5-01.txt": "", "F5-02.txt": ""}, 0},
 	} {
 		if got := ShrinkViolations(tc.base, tc.head); len(got) != tc.want {
 			t.Errorf("%s: %d violations %v, want %d", name, len(got), got, tc.want)
