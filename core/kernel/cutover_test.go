@@ -1,7 +1,7 @@
 // file: core/kernel/cutover_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 09c631c4-1c2d-4d66-ae13-7ee32b295c1e
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -542,12 +542,26 @@ func TestPreflight_RunsOnlyBeforeCutoverStarts(t *testing.T) {
 // gcpd at level 1 with a versioned step (v1) and its level step (v2), the
 // cutover step raising level 1 and M8 after it, each noting itself in order
 // when it runs. failAt makes the cutover step fail on that source key.
+//
+// The cutover step runs as two shards and a failing shard cancels its
+// sibling, whose open chunk then commits nothing, so the failing row first
+// waits for passed: closed when the step reaches case:file/008, the first
+// row of shard 0's second chunk, which the runner reads only after the first
+// chunk (case:file/001..007) committed. Without the wait, whether 001's
+// chunk is committed before the failure is down to scheduling.
 type p4bOrderFixture struct {
 	mu      sync.Mutex
 	order   []string
 	failAt  string
 	visits  map[string]int
 	enabled bool
+	passed  chan struct{}
+	once    sync.Once
+}
+
+// newP4bOrderFixture is a fixture failing at failAt ("" never fails).
+func newP4bOrderFixture(failAt string, enabled bool) *p4bOrderFixture {
+	return &p4bOrderFixture{failAt: failAt, visits: map[string]int{}, enabled: enabled, passed: make(chan struct{})}
 }
 
 func (f *p4bOrderFixture) note(s string) {
@@ -586,7 +600,17 @@ func (f *p4bOrderFixture) boot(t *testing.T, fs vfs.FS) (*storage.DB, error) {
 		f.mu.Lock()
 		f.visits[string(kv.Key)]++
 		f.mu.Unlock()
+		if string(kv.Key) == "case:file/008" {
+			f.once.Do(func() { close(f.passed) })
+		}
 		if string(kv.Key) == f.failAt {
+			select {
+			case <-f.passed:
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			case <-time.After(30 * time.Second):
+				return errors.New("p4bOrderFixture: shard 0 never passed its first chunk")
+			}
 			return errors.New("scarecrow's toxin: the importer fails")
 		}
 		return inner(ctx, kv, w)
@@ -651,7 +675,7 @@ func TestP4bOrder_LevelStepBeforeCutover(t *testing.T) {
 				}
 				want = []string{"level", "cutover"}
 			}
-			f := &p4bOrderFixture{failAt: "case:file/024", visits: map[string]int{}, enabled: enabled}
+			f := newP4bOrderFixture("case:file/024", enabled)
 			if db, err := f.boot(t, mem); err == nil {
 				_ = db.Close()
 				t.Fatal("the failing cutover boot succeeded")
@@ -710,7 +734,7 @@ func TestP4bOrder_LevelStepBeforeCutover(t *testing.T) {
 	}
 
 	t.Run("fresh install", func(t *testing.T) {
-		f := &p4bOrderFixture{visits: map[string]int{}, enabled: true}
+		f := newP4bOrderFixture("", true)
 		db, err := f.boot(t, newMem())
 		if err != nil {
 			t.Fatal(err)
