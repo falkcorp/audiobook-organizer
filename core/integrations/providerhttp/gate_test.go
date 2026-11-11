@@ -599,6 +599,88 @@ func TestHeldScope_NeedsNoClient(t *testing.T) {
 	}
 }
 
+// TestReleaseHoldIf_ChangedBetweenReadAndRelease: F7-10 reads a hold (HoldFor)
+// and releases it a moment later. A hold that changed in between is not
+// released unseen: a longer hold set after the read survives, a hold that
+// ended meets the goal, a store that cannot delete keeps the hold.
+func TestReleaseHoldIf_ChangedBetweenReadAndRelease(t *testing.T) {
+	clk := newClock()
+	gs := providerhttp.NativeGateStore(store(t))
+	r := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = gs })
+	g := r.GateFor(batcave, providerhttp.Policy{Limits: limits(100, 100)})
+	ctx := context.Background()
+	place := func(class integrations.Class, retryAfter time.Duration) {
+		t.Helper()
+		tk, err := g.Acquire(providerhttp.WithBypassHold(ctx), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tk.Done(&integrations.Error{Class: class, Status: 429, RetryAfter: retryAfter})
+	}
+	place(integrations.ClassRateLimited, 10*time.Minute)
+	seen, ok := r.HoldFor(batcave)
+	if !ok || seen.Scope != batcave.String() {
+		t.Fatalf("HoldFor = %+v, %v", seen, ok)
+	}
+
+	// Between the read and the release a longer hold replaces it.
+	clk.Advance(time.Minute)
+	place(integrations.ClassQuota, 2*time.Hour)
+	now, _ := r.HoldFor(batcave)
+	if now.Until.Equal(seen.Until) {
+		t.Fatalf("the test did not replace the hold: %+v", now)
+	}
+	if err := r.ReleaseHoldIf(ctx, seen); !errors.Is(err, providerhttp.ErrHoldChanged) {
+		t.Fatalf("ReleaseHoldIf(stale) = %v, want ErrHoldChanged", err)
+	}
+	if got, held := r.HoldFor(batcave); !held || !got.Until.Equal(now.Until) {
+		t.Fatalf("the newer hold was released unseen: %+v, %v", got, held)
+	}
+	if hs, _ := gs.Holds(ctx); len(hs) != 1 || !hs[0].Until.Equal(now.Until) {
+		t.Fatalf("the store lost the newer hold: %+v", hs)
+	}
+
+	// A store that cannot delete leaves the hold in force and says so.
+	// (PutHold is the delete path, so the store is one whose PutHold fails.)
+	r2 := newRegistry(t, clk, func(o *providerhttp.Options) {
+		o.Store = &holdPutFailing{GateStore: providerhttp.NativeGateStore(store(t))}
+	})
+	g2 := r2.GateFor(batcave, providerhttp.Policy{Limits: limits(100, 100)})
+	tk, _ := g2.Acquire(ctx, "")
+	tk.Done(&integrations.Error{Class: integrations.ClassQuota, Status: 429})
+	h2, _ := r2.HoldFor(batcave)
+	if err := r2.ReleaseHoldIf(ctx, h2); err == nil {
+		t.Fatal("a release the store could not delete reported success")
+	}
+	if _, held := r2.HoldFor(batcave); !held {
+		t.Fatal("the hold was dropped though the store kept it")
+	}
+
+	// The current hold, seen again, is released; releasing it again is a no-op.
+	if err := r.ReleaseHoldIf(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, held := r.HoldFor(batcave); held {
+		t.Fatal("the hold survived its own release")
+	}
+	if err := r.ReleaseHoldIf(ctx, now); err != nil {
+		t.Fatalf("releasing a gone hold: %v", err)
+	}
+	// A hold that ended meets the goal too.
+	place(integrations.ClassRateLimited, time.Minute)
+	ended, _ := r.HoldFor(batcave)
+	clk.Advance(time.Hour)
+	if err := r.ReleaseHoldIf(ctx, ended); err != nil {
+		t.Fatalf("an ended hold: %v", err)
+	}
+}
+
+// holdPutFailing is a GateStore whose PutHold (the write and the delete of a
+// hold) always fails.
+type holdPutFailing struct{ providerhttp.GateStore }
+
+func (holdPutFailing) PutHold(context.Context, integrations.Hold) error { return errStore }
+
 // TestReleaseAuthHold: only a ClassAuth hold of the ref's scope is released.
 func TestReleaseAuthHold(t *testing.T) {
 	clk := newClock()
@@ -631,4 +713,11 @@ func TestReleaseAuthHold(t *testing.T) {
 var _ interface {
 	HeldScope(integrations.Ref) (string, bool)
 	ReleaseHold(context.Context, string) error
+} = (*providerhttp.Registry)(nil)
+
+// the conditional pair F7-10 should use so a hold set between the two calls is
+// never released unseen.
+var _ interface {
+	HoldFor(integrations.Ref) (integrations.Hold, bool)
+	ReleaseHoldIf(context.Context, integrations.Hold) error
 } = (*providerhttp.Registry)(nil)
