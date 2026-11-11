@@ -139,12 +139,21 @@ func newFx(t testing.TB) *fx {
 	}); err != nil {
 		t.Fatalf("CreateRole: %v", err)
 	}
-	if f.svc, err = auth.New(ctx, auth.Options{ImportedKeyPrefixes: []string{"abk_"}}, auth.Deps{
-		Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	f.rebuild()
 	return f
+}
+
+// rebuild builds f.svc anew over the same store, as a restart would: the
+// fixture stores users behind the service, and HasUsers is a flag New sets.
+func (f *fx) rebuild() {
+	f.t.Helper()
+	svc, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}}, auth.Deps{
+		Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.svc = svc
 }
 
 // user stores an active user named name holding roles.
@@ -155,6 +164,9 @@ func (f *fx) user(name string, roles ...rbac.RoleName) *auth.User {
 		CreatedAt: f.clock(), UpdatedAt: f.clock(), Version: 1,
 	}
 	f.commit(func(b *storage.Batch) error { return f.st.PutUser(b, u) })
+	if !f.svc.HasUsers() {
+		f.rebuild()
+	}
 	return f.reload(u.ID)
 }
 
