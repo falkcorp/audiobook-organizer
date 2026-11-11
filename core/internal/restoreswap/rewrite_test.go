@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/rewrite_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: d92e319d-69bf-437e-a034-410415eaefa0
 // last-edited: 2026-11-11
 
@@ -571,9 +571,8 @@ func journalOf(t *testing.T, s *Swapper, in restorejournal.Intent, steps ...stri
 	}
 }
 
-// TestRetireRewriteJournals (§5S.3.13 "M8 never loops", §5S.3.12 "In
-// place"): restore-offline retires every KindRewrite journal of the store
-// it replaced that ended (applied or swapped_back), whatever its step ID,
+// TestRetireRewriteJournals (§5S.3.13 "M8", §5S.3.12 "In place"):
+// restore-offline retires every KindRewrite journal of the store it replaced that ended (applied or swapped_back), whatever its step ID,
 // and no other: another store's, another kind's, a rejected one. M8 then
 // reads none of them. A journal that does not read is skipped when its
 // first record proves it is not M8's of this store, and halts M8 when it
@@ -817,7 +816,7 @@ func failPlace(mem *vfs.MemFS, db string) (vfs.FS, func() bool) {
 }
 
 // TestRewriteSwapBackMovesNoCheckpoint (05-backup §5B.3.4 KindRewrite rules;
-// §5S.3.13 "M8 never loops"): a swap that fails swaps back, the store is
+// §5S.3.13 "M8"): a swap that fails swaps back, the store is
 // the original with every row, and the checkpoint area is exactly as M8
 // found it (the swap-back moves no checkpoint and starts no clock). The
 // next boot restarts M8 once from the compaction and finishes, so a row

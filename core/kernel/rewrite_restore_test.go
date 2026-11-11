@@ -1,5 +1,5 @@
 // file: core/kernel/rewrite_restore_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: fb59c561-9bd5-4d96-9ad9-833ccb66559c
 // last-edited: 2026-11-11
 
@@ -77,8 +77,8 @@ func failingPlace(db string) vfs.FS {
 	}))
 }
 
-// TestRestoreOfflineLiftsM8sSwapBackRefusal (05-storage §5S.3.13 "M8
-// never loops", §5S.3.12 "In place"): two consecutive swap-backs refuse
+// TestRestoreOfflineLiftsM8sSwapBackRefusal (05-storage §5S.3.13 "M8",
+// §5S.3.12 "In place"): two consecutive swap-backs refuse
 // every later boot with storage.ErrRewriteSwappedBack (exit 78) until the
 // operator acts; storage restore-offline of the attempt's checkpoint is that
 // act: it retires the replaced store's KindRewrite journals, and the

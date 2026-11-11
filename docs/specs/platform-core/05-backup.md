@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-backup.md -->
-<!-- version: 1.12.12 -->
+<!-- version: 1.12.13 -->
 <!-- guid: 604febb0-a09e-4cf9-99ee-5f3722534da6 -->
-<!-- last-edited: 2026-11-08 -->
+<!-- last-edited: 2026-11-11 -->
 
 # 05 — Backup and restore (`backup`)
 
@@ -771,12 +771,17 @@ moved to `restore/<id>/failed/` and never marked `restore_left`, because the sto
 cutover's open checkpoint is the rollback once M7 has made the store unopenable by older builds (05-storage
 §5S.3.12, "Retention"); and a kill is resumed forward or swapped back by P0a, after which M8 **derives its phase
 from this journal, not from the copy it now runs on**, whose state still reads `copied` (05-storage §5S.3.13, M8):
-M8 considers only the `KindRewrite` journals whose step ID (`StepID`, written by M8 at staging) is its own, so an
-`applied` journal of an earlier M8 is ignored; when P0a resumed its swap forward (journal `swapped` or `opened`), M8
+M8 considers only the `KindRewrite` journals whose step ID (`StepID`, written by M8 at staging) is its own and
+whose store (`DBPath`) is the live one, skipping `retired` ones, so an `applied` journal of an earlier M8 or of a
+replaced store is ignored; when P0a resumed its swap forward (journal `swapped` or `opened`), M8 checks that the
+live store is the copy (its M8 state reads `copied`; otherwise the journal is corrupt and nothing is deleted),
 stages no second swap, deletes the set-aside old directory the journal names, records itself `done` and the journal
 `applied`; when P0a swapped back, M8 starts again from its first phase **once**, and a second consecutive swap-back
-of the same M8 fails the boot with `storage.ErrRewriteSwappedBack` (exit 78), naming `storage restore-offline` and
-`make rollback-restore`, instead of looping (05-storage §5S.3.13, M8).
+of the same M8 in one upgrade attempt (the intent's `Attempt`, the attempt checkpoint's name) fails the boot with
+`storage.ErrRewriteSwappedBack` (exit 78), naming `storage restore-offline` and `make rollback-restore`, instead of
+looping (05-storage §5S.3.13, M8). `storage restore-offline` ends that refusal: the restored store is a new
+attempt, and the restore journals `retired` after the replaced store's ended `KindRewrite` journals (05-storage
+§5S.3.12 "In place", §5S.3.16 machine 1).
 
 Undo: `previous/` is kept for `core.storage.swap.keep_previous` (05-storage §5S.7, a key of the swap that lands in R1; SIMP8-1) and then swept by the kernel after a boot reaches readiness. `RevertLastRestore` (API) and
 `<app> restore --revert` (offline, for an app that no longer boots) stage it through the same mechanism
@@ -1025,7 +1030,7 @@ Phases are 06 §6.5.1's (R2-8).
 | Crash between the swap and the hooks | resumed: `inflight.json` keeps it a restore boot, hooks re-run (idempotent); rollback tooling keeps refusing | Dropping the hooks would serve revoked credentials (DATA3-6). |
 | Swap-back fails | closed (boot halts; journal names every path; offline `restore --revert`) | Manual recovery with exact instructions beats guessing. |
 | Crash during the swap | resume from journal | Each step idempotent. |
-| M8's `KindRewrite` swap fails or is killed between step c and `applied` | closed for the rewrite: swapped back as step x does, with no checkpoint moved, the old directory back in place and the store generation unchanged, and M8 runs again once at the next boot (a second consecutive swap-back of the same M8 fails the boot with `ErrRewriteSwappedBack`, exit 78, naming `storage restore-offline` and `make rollback-restore`); or, after a kill past `swapped`, resumed forward by P0a, and M8 then deletes the old directory and finishes without staging a second swap | The live store is never left half-swapped, no restorable checkpoint is orphaned, and M8 never re-stages a swap into its own occupied slot (05-storage §5S.3.13). |
+| M8's `KindRewrite` swap fails or is killed between step c and `applied` | closed for the rewrite: swapped back as step x does, with no checkpoint moved, the old directory back in place and the store generation unchanged, and M8 runs again once at the next boot (a second consecutive swap-back of the same M8 in one upgrade attempt fails the boot with `ErrRewriteSwappedBack`, exit 78, naming `storage restore-offline` and `make rollback-restore`, and that restore ends the refusal); or, after a kill past `swapped`, resumed forward by P0a, and M8 then deletes the old directory and finishes without staging a second swap | The live store is never left half-swapped, no restorable checkpoint is orphaned, and M8 never re-stages a swap into its own occupied slot (05-storage §5S.3.13). |
 | Post-restore hook fails | handled by the swap-back row | Resurrecting revoked credentials is a security failure (05-authn §4.14). |
 | A `KindCheckpoint` restore boot's migration DAG fails: a migration step's own error, `storage.StepError` (its `Up`, or a write it staged that storage refused); a P4b bookkeeping error (a sidecar write, the checkpoint's record or pointer, an `ENOSPC`) is not one: the boot halts with nothing journaled, the journal stays at `opened` with `inflight.json`, and the next boot of the same binary resumes the restore boot (R1-21 (f)) | closed: no swap-back; the restored checkpoint is kept, the journal reads `failed` with the failing binary's ID, exit non-zero; the recipes keep refusing while `inflight.json` exists, the operator puts the previous binary or a fixed build in place by hand (runbook), and its P0a resumes the journal; the failing binary refuses while the journal is in flight | Swapping back would only bring back the store whose migration failed (DATA7-12); the failing binary resuming its own journal would loop (DATA8-6). |
 | Revocation journal append fails | open (revocation commits; gap recorded; health `degraded`) | Never block a revocation; the gap makes a later restore fail safe (keys need confirmation). |

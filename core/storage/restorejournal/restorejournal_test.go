@@ -1,7 +1,7 @@
 // file: core/storage/restorejournal/restorejournal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8fca2d0f-d53c-4cee-a545-9c2ff8169c20
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package restorejournal
 
@@ -269,10 +269,14 @@ func TestRestoreJournalJSONKeys(t *testing.T) {
 	at := time.Date(1940, 4, 25, 9, 0, 0, 0, time.UTC)
 	full := Record{At: at, Step: "moved", Seq: 7, Actor: "core/storage", Note: "reset", From: "/gotham/main.pebble",
 		To: "/gotham/.mediacore-restore/r1/previous/main.pebble", Failed: []string{"/gotham/cache"}, Kept: []string{"/gotham"},
-		InstallID: "wayne-1", HooksOwed: true, StepID: "storage/8"}
-	want := []string{"actor", "at", "failed", "from", "hooks_owed", "install_id", "kept", "note", "seq", "step", "step_id", "to"}
+		InstallID: "wayne-1", HooksOwed: true, StepID: "storage/8", Attempt: "batcave-1940", DBPath: "/gotham/main.pebble"}
+	want := []string{"actor", "at", "attempt", "db_path", "failed", "from", "hooks_owed", "install_id", "kept", "note", "seq", "step", "step_id", "to"}
 	if got := jsonKeys(t, full); !slices.Equal(got, want) {
 		t.Fatalf("Record keys = %v, want %v", got, want)
+	}
+	// A KindRewrite intent names its attempt (§5S.3.13 "M8").
+	if got := jsonKeys(t, Intent{Kind: KindRewrite, StepID: "storage/8", Attempt: "batcave-1940"}); !slices.Contains(got, "attempt") || !slices.Contains(got, "step_id") {
+		t.Fatalf("a KindRewrite Intent's keys = %v, want attempt and step_id among them", got)
 	}
 	// A step's record carries only what that step sets.
 	if got := jsonKeys(t, Record{At: at, Step: "applied", Actor: "core/storage"}); !slices.Equal(got, []string{"actor", "at", "step"}) {

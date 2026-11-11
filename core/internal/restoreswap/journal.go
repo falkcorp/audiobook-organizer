@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/journal.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: d009d8c5-8883-4296-8e4d-d30871926413
 // last-edited: 2026-11-11
 
@@ -49,7 +49,7 @@ const (
 	// StepRetired follows a KindRewrite journal's terminal step (applied or
 	// swapped_back) when storage restore-offline replaced the store it was
 	// of: M8 no longer reads it (rewriteJournals), so the restored store's
-	// M8 starts with no swap-back counted (§5S.3.13 "M8 never loops").
+	// M8 starts with no swap-back counted (§5S.3.13 "M8").
 	// F3-04.
 	StepRetired = "retired"
 )

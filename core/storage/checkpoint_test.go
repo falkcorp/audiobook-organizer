@@ -1,7 +1,7 @@
 // file: core/storage/checkpoint_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 77194a40-fc27-4829-9543-097e945b3bdd
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package storage
 
@@ -697,15 +697,17 @@ func TestUnreadableCheckpointRecordFailsBoot(t *testing.T) {
 // identity in c/storage/epoch and in a checkpoint record: dir_fsid (statfs's
 // filesystem ID) and dir_ino, never dir_dev (coordinator: the key holds no
 // st_dev, so it is named for what it holds; 05-storage §5S.3.7, and 05-backup's
-// backup.location.json store block reads the same names).
+// backup.location.json store block reads the same names). A record with M8's
+// copy staged also carries next_dir_fsid and next_dir_ino (§5S.3.12 "How");
+// encoding/json decodes keys case-insensitively, so no round trip sees them.
 func TestStoreIdentityKeysAreDirFSID(t *testing.T) {
-	keysOf := func(t *testing.T, what string, raw []byte) {
+	keysOf := func(t *testing.T, what string, raw []byte, extra ...string) {
 		t.Helper()
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &m); err != nil {
 			t.Fatalf("%s: %v", what, err)
 		}
-		for _, k := range []string{"epoch", "dir_fsid", "dir_ino"} {
+		for _, k := range append([]string{"epoch", "dir_fsid", "dir_ino"}, extra...) {
 			if _, ok := m[k]; !ok {
 				t.Errorf("%s has no %q key: %s", what, k, raw)
 			}
@@ -719,6 +721,10 @@ func TestStoreIdentityKeysAreDirFSID(t *testing.T) {
 		t.Fatal(err)
 	}
 	keysOf(t, "c/storage/epoch", raw)
+	if raw, err = json.Marshal(checkpointRecord{Epoch: 1, DirFSID: 7, DirIno: 1, NextDirFSID: 7, NextDirIno: 2}); err != nil {
+		t.Fatal(err)
+	}
+	keysOf(t, "a checkpoint record with M8's copy staged", raw, "next_dir_fsid", "next_dir_ino")
 
 	fs := vfs.NewMem()
 	e := headStore(t, fs, failingOwners()...)
