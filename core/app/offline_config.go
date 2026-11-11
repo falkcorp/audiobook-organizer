@@ -1,5 +1,5 @@
 // file: core/app/offline_config.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b488a2c-118e-4165-86e5-b2a58dbc34c5
 // last-edited: 2026-11-10
 
@@ -32,8 +32,8 @@ exits non-zero when one would, or when a value in the operator layers
 does not decode.
 
 It reads only the operator layers: it opens no store and reads no state,
-so it runs while the service serves. Flags given to the service are not
-seen.`
+so it runs with the service stopped or while it serves. Flags given to the
+service are not seen.`
 
 // configCheckCommand is config check (06 §6.4.5): kernel.CheckConfig over
 // the app's operator layers and retired list, opening no store (SEC10-9).
