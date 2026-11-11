@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_answers.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 0317d881-99be-4394-8279-b5df7ce3cfa7
 # last-edited: 2026-11-10
 """Tests for scripts/r2corpus/record_r0_answers.py and its committed answers (F2-12).
@@ -12,12 +12,15 @@ Run: python3 -m pytest scripts/tests/test_record_r0_answers.py -q
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import json
 import pathlib
 import re
 import sys
 import unittest
+
+import zoneinfo
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "r2corpus" / "record_r0_answers.py"
@@ -318,6 +321,39 @@ class CommittedNormalizationTest(unittest.TestCase):
             p = e["request"]["path"]
             if p.startswith("/api/me/progress/") or p.startswith("/api/me/bookmarks/"):
                 self.assertEqual(e["response"]["status"], 200, p)
+
+
+class ShiftedWindowTest(unittest.TestCase):
+    """F2-15: replays at any hour move the stored window with the boot's TZ."""
+
+    def setUp(self):
+        self.dt, self.zoneinfo = datetime, zoneinfo
+        self.w = r.w
+
+    def local_in_window(self, tz: str, utc: datetime.datetime) -> bool:
+        start, end = self.w.MAINTENANCE_WINDOW_UTC
+        h = utc.astimezone(self.zoneinfo.ZoneInfo(tz)).hour
+        return start <= h < end
+
+    def test_every_hour_is_twelve_hours_from_the_window(self):
+        for hour in range(24):
+            now = self.dt.datetime(2026, 11, 10, hour, 30, tzinfo=self.dt.timezone.utc)
+            window = self.w.shifted_window(now)
+            tz = self.w.shifted_window_env(window)["TZ"]
+            self.w.check_outside_maintenance_window(now=now, window=window)  # does not raise
+            # The binary's view: local now is never inside the stored window, and
+            # the window lands at the UTC hours shifted_window named.
+            self.assertFalse(self.local_in_window(tz, now), (hour, tz))
+            ws = self.dt.datetime(2026, 11, 10, window[0], 0, tzinfo=self.dt.timezone.utc)
+            self.assertTrue(self.local_in_window(tz, ws), (hour, tz, window))
+
+    def test_unshifted_window_is_utc(self):
+        self.assertEqual(self.w.shifted_window_env(self.w.MAINTENANCE_WINDOW_UTC), {"TZ": "UTC"})
+
+    def test_extra_env_overrides_the_boot_env(self):
+        layout = self.w.Layout(pathlib.Path("/nonexistent/r2corpus-test"))
+        proc = self.w.R0Process(pathlib.Path("/bin/true"), layout, 1, extra_env={"TZ": "Etc/GMT-5"})
+        self.assertEqual(proc.extra_env, {"TZ": "Etc/GMT-5"})
 
 
 if __name__ == "__main__":

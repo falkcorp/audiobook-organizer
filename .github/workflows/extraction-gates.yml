@@ -1,5 +1,5 @@
 # file: .github/workflows/extraction-gates.yml
-# version: 1.8.0
+# version: 1.9.0
 # guid: 74123ab5-c44c-487d-9487-430de04743aa
 # last-edited: 2026-11-10
 
@@ -22,9 +22,14 @@
 #                         measurement, boot_time.json uploaded as an artifact.
 #                         It runs only when the change set matches
 #                         `unit-lifecycle`'s path triggers (09 §9.2.1), and
-#                         nightly from nightly.yml
-# Later rows add jobs here: F2-15 the cutover suite (over the same shaped
-# store). Each one must be listed in the terminal job's `needs`.
+#                         nightly from nightly.yml. It also runs F2-15's
+#                         cutover suite on that store (the /shaped subtests)
+#   r2-cutover-suite      F2-15: the cutover suite and the restore drill
+#                         (TestRollbackRestoreBootsPreviousBuild) on the R0
+#                         corpus and on the corpus the pre-freeze release's
+#                         binary wrote into, one matrix shard each, plus the
+#                         suite's selftest and the shared-family golden check
+# Later rows add jobs here. Each one must be listed in the terminal job's `needs`.
 #
 # Trigger: every PR to main that touches a non-doc file, decided by the same
 # `changes` classifier as ci.yml (a skipped job reports success through its
@@ -137,7 +142,7 @@ jobs:
               while IFS= read -r f; do
                 case "$f" in
                   deploy/*|cmd/*|main.go|internal/backup/*|internal/updater/*|internal/server/server_lifecycle*.go|internal/books/cutover/*|core/kernel/*|core/internal/restoreswap/*) run=true ;;
-                  .github/workflows/extraction-gates.yml|.github/workflows/nightly.yml|scripts/r2corpus/gen_production_shaped.py|scripts/r2corpus/shaped/*|scripts/ci/run_production_shaped_store.sh|scripts/tests/test_gen_production_shaped.py|internal/books/production_shaped_test.go|internal/books/testdata/r2corpus/*) run=true ;;
+                  .github/workflows/extraction-gates.yml|.github/workflows/nightly.yml|scripts/r2corpus/gen_production_shaped.py|scripts/r2corpus/shaped/*|scripts/ci/run_production_shaped_store.sh|scripts/tests/test_gen_production_shaped.py|internal/books/production_shaped_test.go|internal/books/testdata/r2corpus/*|internal/books/cutover_suite_test.go|internal/books/testdata/shared_families.golden) run=true ;;
                 esac
               done <<<"$files"
             else
@@ -464,12 +469,77 @@ jobs:
           path: ${{ runner.temp }}/r2-shaped-out
           if-no-files-found: warn
 
+  # F2-15 (05-storage §5S.10; 09 §9.3 "restore drill"): the cutover suite and
+  # the restore drill on the R0 corpus and on the corpus the pre-freeze
+  # release's binary booted and wrote into (rule 10). The pre-freeze binary is
+  # fetched by scripts/ci/fetch_prefreeze_binary.sh (the tag in
+  # ci/prefreeze_release.txt once F3-08 lands it, the latest release until
+  # then) and cached under its tag. Every drill recording waits out the
+  # overlay's five-minute deps sweep, so the corpora are two shards. The body
+  # is scripts/ci/run_cutover_suite.sh, which fails unless each expected
+  # subtest's PASS line appears. The shaped corpus runs in
+  # production-shaped-store.
+  r2-cutover-suite:
+    name: r2-cutover-suite (${{ matrix.shard }})
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [r0, prefreeze-written]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system packages
+        run: scripts/ci/apt_install.sh libtag1-dev
+
+      - name: Resolve the pre-freeze release
+        id: prefreeze
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$(scripts/ci/run_cutover_suite.sh --print-tag)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the pre-freeze binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/audiobook-organizer-tests/prefreeze
+          key: prefreeze-${{ runner.os }}-${{ steps.prefreeze.outputs.tag }}
+
+      - name: Cutover suite and restore drill (${{ matrix.shard }}; must not skip)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREFREEZE_TAG: ${{ steps.prefreeze.outputs.tag }}
+        run: scripts/ci/run_cutover_suite.sh "${{ matrix.shard }}"
+
   # The one stable required-check name. `always()` so it reports even when a
   # gate job failed or was skipped by its job-level `if:`: a skipped job is
   # success, a failed or cancelled one fails this job.
   extraction-gates:
     name: extraction-gates
-    needs: [changes, check-commits-build, dashboard-reference, boot-crash-matrix-abo, production-shaped-store]
+    needs: [changes, check-commits-build, dashboard-reference, boot-crash-matrix-abo, production-shaped-store, r2-cutover-suite]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/ci/run_production_shaped_store.sh
-# version: 1.0.0
+# version: 1.1.0
 # guid: 3b1e7d52-6c4a-4f98-8e0d-5a9c2f7b1d64
 # last-edited: 2026-11-10
 #
@@ -12,9 +12,12 @@
 #   2. boots the current build on a copy of it with
 #      TestProductionShapedStore_BootTime and writes boot_time.json;
 #   3. fails unless that test ran and passed (a skipped or renamed test makes
-#      `go test -run` exit 0).
-# F2-15 extends the job to run the cutover suite over the same store, so the
-# environment names below are stable:
+#      `go test -run` exit 0);
+#   4. runs F2-15's cutover suite (internal/books/cutover_suite_test.go) on the
+#      same store: the boot, the count, ID and byte-identity checks (the
+#      referential pass is r0 and prefreeze-written only), each of whose
+#      /shaped subtests must pass.
+# The environment names below are stable:
 #   R2_SHAPED_STORE  the generated store (set here)
 #   R2_SHAPED_OUT    where boot_time.json and generator_report.json go; the
 #                    job uploads that directory as an artifact
@@ -34,8 +37,8 @@ python3 scripts/r2corpus/gen_production_shaped.py \
 
 df -h "$work" || true
 
-# Not `go test ... | tee`: a pipe would hide go test's exit status. 20 minutes
-# leaves the job's 30 for the generation, the artifact upload and the setup.
+# Not `go test ... | tee`: a pipe would hide go test's exit status. The boot
+# takes seconds; the timeouts (here and the suite's below) are backstops.
 rc=0
 out="$(go test ./internal/books/ -run '^TestProductionShapedStore_BootTime$' -count=1 -v -timeout 20m 2>&1)" || rc=$?
 echo "$out"
@@ -48,3 +51,20 @@ if ! grep -q -- '--- PASS: TestProductionShapedStore_BootTime ' <<<"$out"; then
 fi
 test -s "${R2_SHAPED_OUT}/boot_time.json"
 cat "${R2_SHAPED_OUT}/boot_time.json"
+
+# F2-15: the cutover suite's /shaped subtests. A store this size is scanned
+# streaming (no rows kept); the drill and the selftest run in r2-cutover-suite.
+tests='TestCutoverOnR0Corpus TestCutoverPreservesIDsAndReferences TestCutoverLeavesOtherFamiliesByteIdentical'
+rc=0
+out="$(go test ./internal/books/ -run "^($(tr ' ' '|' <<<"$tests"))\$/^shaped\$" -count=1 -v -timeout 15m 2>&1)" || rc=$?
+grep -E -- '^\s*(--- |PASS|FAIL|ok)|_test\.go:[0-9]+: ' <<<"$out" || true
+if [ "$rc" -ne 0 ]; then
+  echo "$out"
+  exit "$rc"
+fi
+for t in $tests; do
+  if ! grep -q -- "--- PASS: ${t}/shaped " <<<"$out"; then
+    echo "::error::${t}/shaped did not run and pass (skipped, renamed or removed?)"
+    exit 1
+  fi
+done
