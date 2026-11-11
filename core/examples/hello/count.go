@@ -1,5 +1,5 @@
 // file: core/examples/hello/count.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1b89cd69-630b-4f09-9c3d-c5b86b40ba47
 // last-edited: 2026-11-11
 
@@ -23,13 +23,11 @@ type CountResult struct {
 
 func countTask(s *service) tasks.Definition {
 	return tasks.Task("hello.count", tasks.TaskSpec[CountParams, CountResult]{
-		Common: tasks.Common{
-			Title:   "Count recorded names",
-			Help:    "Sums the per-name counters. Read-only.",
-			Effects: tasks.ReadOnly(tasks.Res(string(ID), "name")),
-			Perms:   tasks.Permissions{Start: rbac.Need(PermAdmin)},
-			Resume:  tasks.ResumeFromZero,
-		},
+		Title:   "Count recorded names",
+		Help:    "Sums the per-name counters. Read-only.",
+		Effects: tasks.ReadOnly(tasks.Res(string(ID), "name")),
+		Perms:   tasks.Permissions{Start: rbac.Need(PermAdmin)},
+		Resume:  tasks.ResumeFromZero,
 		Run: func(rc *tasks.RC, _ CountParams) (CountResult, error) {
 			var kvs []storage.KV
 			for kv, err := range s.names.Scan(rc.Context(), storage.ScanOptions{}) {
