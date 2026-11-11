@@ -1,5 +1,5 @@
 // file: core/internal/executor/approve_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a500492e-f488-4dcd-aaeb-3ffe778b43c1
 // last-edited: 2026-11-10
 
@@ -80,17 +80,22 @@ func principal(ctx context.Context) (tasks.Actor, rbac.Checker, bool) {
 
 func withPrincipal(o *Options) { o.Principal = principal }
 
-// arkhamCatalog is core's scopes plus Arkham's two.
-func arkhamCatalog(t testing.TB) *rbac.Catalog {
+// catalogWith is core's scopes plus perms (fixture module scopes).
+func catalogWith(t testing.TB, perms ...rbac.Permission) *rbac.Catalog {
 	t.Helper()
-	cat, err := rbac.NewCatalog(append(rbac.CoreScopes(),
-		rbac.PermissionSpec{Name: scopeRun, Title: "Run Arkham tasks", Description: "Start Arkham's tasks"},
-		rbac.PermissionSpec{Name: scopeApprov, Title: "Approve Arkham plans", Description: "Approve or reject Arkham's plans"})...)
+	specs := rbac.CoreScopes()
+	for _, p := range perms {
+		specs = append(specs, rbac.PermissionSpec{Name: p, Title: string(p), Description: "Fixture scope " + string(p)})
+	}
+	cat, err := rbac.NewCatalog(specs...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return cat
 }
+
+// arkhamCatalog is core's scopes plus Arkham's two.
+func arkhamCatalog(t testing.TB) *rbac.Catalog { return catalogWith(t, scopeRun, scopeApprov) }
 
 const (
 	relocate    = "arkham.relocate"

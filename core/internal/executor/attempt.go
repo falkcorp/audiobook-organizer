@@ -1,5 +1,5 @@
 // file: core/internal/executor/attempt.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4ad76723-6fc7-4bac-840b-f169142b4af9
 // last-edited: 2026-11-10
 
@@ -240,7 +240,9 @@ func (a *attempt) ItemsProgress(done, total int64, current string) {
 
 func (a *attempt) progress(done, total int, current string, setCurrent bool) {
 	a.Touch()
-	a.progressed.Store(true)
+	if done > a.rec.Done {
+		a.progressed.Store(true) // past this attempt's starting point: ErrContinueInPlace's first proof
+	}
 	now := a.e.now()
 	a.pmu.Lock()
 	a.pDone, a.pTotal, a.pDirty = done, total, true
@@ -627,14 +629,28 @@ func (a *attempt) finish(res json.RawMessage, err error) {
 }
 
 // yieldNext is ErrContinueInPlace (5T.3.6): re-queued under the same run ID
-// when this attempt made progress and checkpointed, failed otherwise, and
-// failed once core.tasks.max_yields consecutive yields are reached.
+// (the next attempt gets a fresh Timeout) when the kind resumes with
+// ResumeContinue and this attempt both reported progress past its starting
+// point and checkpointed; failed otherwise, with the missing proof named
+// (HEAD continue_in_place.go's rule), and failed once core.tasks.max_yields
+// consecutive yields are reached.
 func (a *attempt) yieldNext(cur, next tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
 	ev := tasks.RunEvent{Event: "yield"}
+	var missing []string
+	if !a.progressed.Load() {
+		missing = append(missing, "reported no progress past its starting point")
+	}
+	if !a.ckptd.Load() {
+		missing = append(missing, "did not checkpoint")
+	}
 	switch {
-	case !a.progressed.Load() || !a.ckptd.Load():
+	case a.d.c.Resume != tasks.ResumeContinue:
+		next.State, next.Reason, next.Finished = tasks.StateFailed, "yield_not_continue", a.e.now()
+		next.Error = fmt.Sprintf("tasks: continue in place is honoured only for ResumeContinue (this kind resumes %s)", a.d.c.Resume)
+		ev.Event = "fail"
+	case len(missing) > 0:
 		next.State, next.Reason, next.Finished = tasks.StateFailed, "yield_without_progress", a.e.now()
-		next.Error = "tasks: yielded without reporting progress and checkpointing in the attempt"
+		next.Error = "tasks: yielded to continue in place, but the attempt " + strings.Join(missing, " and ")
 		ev.Event = "fail"
 	case cur.Yields+1 > a.e.config().MaxYields:
 		next.State, next.Reason, next.Finished = tasks.StateFailed, "max_yields", a.e.now()
