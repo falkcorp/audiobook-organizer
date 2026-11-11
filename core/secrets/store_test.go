@@ -811,3 +811,54 @@ func TestUnexportedKeys_ConcurrentWithClose(t *testing.T) {
 		wg.Wait()
 	}
 }
+
+// TestEphemeral_ReplaceBesideGet (a test name coined by the F3-03 follow-up):
+// Get, Meta and All running beside Ephemeral replacing an operator value
+// always see one whole value, never the replaced value's wiped (zeroed)
+// bytes: readers copy under the store's lock, and the replace wipes the old
+// value only once the new one is in place, under the write lock. Run it with
+// -race.
+func TestEphemeral_ReplaceBesideGet(t *testing.T) {
+	e := newEnv(t)
+	s := e.open(t, nil)
+	ctx := context.Background()
+	values := []string{valueVengeance, valueSerious}
+	fps := map[string]bool{}
+	for _, v := range values {
+		fps[s.ring.fingerprint([]byte(v))] = true
+	}
+	s.Ephemeral(nameGate, NewValue(values[0]), SourceEnv)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				v, m, err := s.Get(ctx, nameGate)
+				if err != nil || !slices.Contains(values, v.Reveal()) || !fps[m.Fingerprint] {
+					t.Errorf("Get beside a replace = %q (fingerprint %s), %v; want one whole value", v.Bytes(), m.Fingerprint, err)
+					return
+				}
+				if m, err := s.Meta(ctx, nameGate); err != nil || !fps[m.Fingerprint] {
+					t.Errorf("Meta beside a replace = fingerprint %s, %v", m.Fingerprint, err)
+					return
+				}
+				for m, err := range s.All(ctx) {
+					if err != nil || (m.Name == nameGate && !fps[m.Fingerprint]) {
+						t.Errorf("All beside a replace = %+v, %v", m, err)
+						return
+					}
+				}
+			}
+		})
+	}
+	for i := range 2000 {
+		s.Ephemeral(nameGate, NewValue(values[(i+1)%2]), SourceEnv)
+	}
+	close(stop)
+	wg.Wait()
+}
