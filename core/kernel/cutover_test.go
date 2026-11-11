@@ -1,5 +1,5 @@
 // file: core/kernel/cutover_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 09c631c4-1c2d-4d66-ae13-7ee32b295c1e
 // last-edited: 2026-11-11
 
@@ -12,12 +12,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -538,6 +540,104 @@ func TestPreflight_RunsOnlyBeforeCutoverStarts(t *testing.T) {
 	if err := preflightOnce(t, mem, levelOwners(storage.ClaimRetired), m, nil); err != nil {
 		t.Errorf("preflight with the record (level not raised) = %v, want skipped", err)
 	}
+}
+
+// TestPreflight_RunsBeforePrepare (05-storage §5S.4 step 5a, 06 §6.5.1 P4
+// (a)): the cutover preflight is P4a's first act, between Open and Prepare.
+// Over a pre-core build's store (legacy rows only, no c/ key) a blocker
+// refuses the boot with nothing written: no checkpoint, no pointer, no
+// install marker or any other c/ key. After Prepare, which takes the
+// checkpoint and writes the marker (the control), the preflight is refused,
+// so a boot that wires it in the wrong order fails instead of refusing with
+// the checkpoint taken (the order F2-16 wires: Open, DataMigrations.
+// Preflight, Prepare, Migrate).
+func TestPreflight_RunsBeforePrepare(t *testing.T) {
+	ctx := context.Background()
+	cpArea := filepath.Join(filepath.Dir(cutoverPath), ".mediacore-checkpoints")
+	pointer := cutoverPath + ".migration-checkpoint"
+	open := func(t *testing.T) (*vfs.MemFS, *DataMigrations, *storage.Opened) {
+		mem := vfs.NewMem()
+		mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+		raw, err := cpebble.Open(cutoverPath, &cpebble.Options{FS: mem, Logger: quietPebble{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range cutoverRows(5, 2) {
+			if err := raw.Set([]byte(k), []byte(v), cpebble.Sync); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := raw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		owners := cutoverOwners(storage.ClaimRetired)
+		dms, err := NewDataMigrations(DataMigrationsConfig{Build: "batcomputer-2", Logger: slog.New(slog.DiscardHandler),
+			Preflight: CutoverPreflight(slog.New(slog.DiscardHandler))}, owners, blockedMigration(&cutoverHandles{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		o, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(mem), Owners: owners,
+			Build: "batcomputer-2", FreeSpaceMargin: 1, DataSteps: dms.Steps()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return mem, dms, o
+	}
+	// written is the checkpoint area's entries, whether the pointer exists
+	// and the store's c/ keys.
+	written := func(t *testing.T, mem *vfs.MemFS) (cps []string, ptr bool, core []string) {
+		t.Helper()
+		cps, _ = mem.List(cpArea)
+		_, err := mem.Stat(pointer)
+		raw, rerr := cpebble.Open(cutoverPath, &cpebble.Options{FS: mem, ReadOnly: true, Logger: quietPebble{}})
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		defer func() { _ = raw.Close() }()
+		it, ierr := raw.NewIter(&cpebble.IterOptions{LowerBound: []byte("c/"), UpperBound: []byte("c0")})
+		if ierr != nil {
+			t.Fatal(ierr)
+		}
+		for it.First(); it.Valid(); it.Next() {
+			core = append(core, string(it.Key()))
+		}
+		if cerr := it.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+		return cps, err == nil, core
+	}
+
+	t.Run("a blocker refuses before anything is written", func(t *testing.T) {
+		mem, dms, o := open(t)
+		err := dms.Preflight(ctx, o)
+		if cerr := o.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+		if !errors.Is(err, storage.ErrCutoverBlocked) {
+			t.Fatalf("preflight = %v, want ErrCutoverBlocked", err)
+		}
+		if cps, ptr, core := written(t, mem); len(cps) != 0 || ptr || len(core) != 0 {
+			t.Errorf("the refusal wrote checkpoints %v, pointer %t, core keys %v; want nothing", cps, ptr, core)
+		}
+	})
+
+	t.Run("after Prepare it is refused", func(t *testing.T) {
+		mem, dms, o := open(t)
+		db, err := o.Prepare(ctx)
+		if err != nil {
+			t.Fatal(errors.Join(err, o.Close()))
+		}
+		err = dms.Preflight(ctx, o)
+		if cerr := db.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+		if err == nil || errors.Is(err, storage.ErrCutoverBlocked) || !strings.Contains(err.Error(), "before Prepare") {
+			t.Errorf("preflight after Prepare = %v, want it refused as out of order", err)
+		}
+		if cps, ptr, core := written(t, mem); len(cps) == 0 || !ptr || len(core) == 0 {
+			t.Errorf("control: Prepare wrote checkpoints %v, pointer %t, core keys %v; the first case proves nothing", cps, ptr, core)
+		}
+	})
 }
 
 // p4bOrderFixture is the cutover build of TestP4bOrder_LevelStepBeforeCutover:
