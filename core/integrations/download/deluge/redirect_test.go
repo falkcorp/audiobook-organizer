@@ -1,5 +1,5 @@
 // file: core/integrations/download/deluge/redirect_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b0f3d1e-8c52-4a97-b3e4-d2a71f5c9e08
 // last-edited: 2026-11-11
 
@@ -93,8 +93,7 @@ func TestLogin_RedirectIsNeverFollowed(t *testing.T) {
 // does not follow it either.
 func TestCall_RedirectAfterLoginIsNeverFollowed(t *testing.T) {
 	other := newSink(t)
-	var ui *httptest.Server
-	ui = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ui := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		if strings.Contains(string(b), `"auth.login"`) {
 			http.SetCookie(w, &http.Cookie{Name: "_session_id", Value: "gotham", Path: "/"})

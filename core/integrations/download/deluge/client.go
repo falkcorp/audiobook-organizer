@@ -1,5 +1,5 @@
 // file: core/integrations/download/deluge/client.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c1a8d4f7-2e69-4b03-9d5a-7f3e6b0a1c82
 // last-edited: 2026-11-11
 
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"maps"
 	"net/http"
@@ -169,22 +170,20 @@ func (c *rpc) send(req *http.Request) (*http.Response, error) {
 	return c.http.Do(req)
 }
 
+// loginMethod is the one request whose params hold the password.
+const loginMethod = "auth.login"
+
 // call sends one JSON-RPC request and decodes the result. The request is
 // bounded by callTimeout and by ctx, whichever ends first.
+//
+// Answer text kept in an error is the one way a server could hand the password
+// back (an echo of the request, a proxy page quoting it). So no text of an
+// auth.login answer is ever kept: the status, the decode error and the RPC
+// error carry the code or a fixed phrase only. For every other method the
+// whole body is scrubbed of the password, in every encoding a server would
+// echo it in, before it is cut to an excerpt; when the password cannot be
+// read to scrub with, no text is kept at all.
 func (c *rpc) call(ctx context.Context, method string, params ...any) (json.RawMessage, error) {
-	return c.callRedacting(ctx, "", method, params...)
-}
-
-// callRedacting is call for a request whose params hold a secret: any answer
-// text kept in an error has the secret replaced, so a server that echoes the
-// request back cannot carry it into an error, a log line or a Detail.
-func (c *rpc) callRedacting(ctx context.Context, secret, method string, params ...any) (json.RawMessage, error) {
-	scrub := func(s string) string {
-		if secret == "" {
-			return s
-		}
-		return strings.ReplaceAll(s, secret, "[redacted]")
-	}
 	if params == nil {
 		params = []any{}
 	}
@@ -219,21 +218,123 @@ func (c *rpc) callRedacting(ctx context.Context, secret, method string, params .
 	// Anything but 200 is a statusError, a 3xx included: the Location is never
 	// followed and never put in the error.
 	if resp.StatusCode != http.StatusOK {
-		return nil, &statusError{Status: resp.StatusCode, Excerpt: scrub(excerpt(raw))}
+		return nil, &statusError{Status: resp.StatusCode, Excerpt: c.keptExcerpt(ctx, method, raw)}
 	}
 	var out rpcResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, &decodeError{What: method + " response", Err: err, Excerpt: scrub(excerpt(raw))}
+		if method == loginMethod {
+			err = errors.New("not a JSON-RPC document")
+		}
+		return nil, &decodeError{What: method + " response", Err: err, Excerpt: c.keptExcerpt(ctx, method, raw)}
 	}
 	if out.Error != nil {
-		out.Error.Message = scrub(out.Error.Message)
+		out.Error.Message = c.keptText(ctx, method, out.Error.Message)
 		return nil, out.Error
 	}
 	return out.Result, nil
 }
 
-// excerpt is the start of a body, for an error's Detail.
-func excerpt(raw []byte) string { return string(raw[:min(200, len(raw))]) }
+// excerptLimit is how many bytes of an answer an error keeps.
+const excerptLimit = 200
+
+// keptExcerpt is the start of a body, for an error's Detail: "" for an
+// auth.login answer; otherwise the body scrubbed of the password as a whole
+// and only then cut, so a password that straddles the cut cannot survive in
+// part.
+func (c *rpc) keptExcerpt(ctx context.Context, method string, raw []byte) string {
+	if method == loginMethod {
+		return ""
+	}
+	s := c.scrubbed(ctx, string(raw))
+	return strings.ToValidUTF8(s[:min(excerptLimit, len(s))], "")
+}
+
+// keptText is an answer's own text (an RPC error message) kept in an error:
+// "" for auth.login, scrubbed of the password otherwise.
+func (c *rpc) keptText(ctx context.Context, method, s string) string {
+	if method == loginMethod {
+		return ""
+	}
+	return c.scrubbed(ctx, s)
+}
+
+// scrubbed replaces the password, in every form secretForms lists, with
+// "[redacted]". The password is read when it is needed and not kept; if it
+// cannot be read nothing is kept either, the answer text is dropped.
+func (c *rpc) scrubbed(ctx context.Context, s string) string {
+	pw, err := c.secrets.Secret(ctx, "password")
+	if err != nil {
+		return ""
+	}
+	return scrubSecret(s, pw.Reveal())
+}
+
+// scrubSecret replaces secret in s, in the plain form and in the encodings a
+// server echoes it back in (see secretForms), longest form first so a short
+// form cannot leave the tail of a longer one behind.
+func scrubSecret(s, secret string) string {
+	if secret == "" {
+		return s
+	}
+	for _, form := range secretForms(secret) {
+		s = strings.ReplaceAll(s, form, "[redacted]")
+	}
+	return s
+}
+
+// secretForms is secret, its encodings (JSON string escapes with and without
+// HTML-safe escaping, HTML entities, URL query and path percent-encoding) and
+// those encodings applied once more, which is how a value echoed inside a
+// JSON document or an HTML page that quotes a URL shows up. Each form also
+// appears with lowercase percent-hex. Distinct, longest first.
+func secretForms(secret string) []string {
+	jsonOf := func(escapeHTML bool) func(string) string {
+		return func(s string) string {
+			var b bytes.Buffer
+			enc := json.NewEncoder(&b)
+			enc.SetEscapeHTML(escapeHTML)
+			if enc.Encode(s) != nil {
+				return s
+			}
+			return strings.TrimSuffix(strings.TrimPrefix(b.String(), `"`), "\"\n")
+		}
+	}
+	lowerHex := func(s string) string { // %2F -> %2f
+		b := []byte(s)
+		for i := 0; i+2 < len(b); i++ {
+			if b[i] == '%' {
+				for j := i + 1; j <= i+2; j++ {
+					if b[j] >= 'A' && b[j] <= 'F' {
+						b[j] += 'a' - 'A'
+					}
+				}
+			}
+		}
+		return string(b)
+	}
+	encoders := []func(string) string{jsonOf(true), jsonOf(false), html.EscapeString, url.QueryEscape, url.PathEscape}
+	forms := []string{secret}
+	for range 2 {
+		for _, f := range slices.Clone(forms) {
+			for _, enc := range encoders {
+				forms = append(forms, enc(f))
+			}
+		}
+		slices.Sort(forms)
+		forms = slices.Compact(forms)
+	}
+	for _, f := range slices.Clone(forms) {
+		forms = append(forms, lowerHex(f))
+	}
+	slices.SortFunc(forms, func(a, b string) int {
+		if d := len(b) - len(a); d != 0 {
+			return d
+		}
+		return strings.Compare(a, b)
+	})
+	forms = slices.Compact(forms)
+	return slices.DeleteFunc(forms, func(f string) bool { return f == "" })
+}
 
 // callAuthed logs in if needed, then calls; on a "Not authenticated" error it
 // clears the cached login, logs in again and replays the request once.
@@ -315,7 +416,7 @@ func (c *rpc) login(ctx context.Context) error {
 	if err != nil {
 		return &secretError{Err: err}
 	}
-	result, err := c.callRedacting(ctx, pw.Reveal(), "auth.login", pw.Reveal())
+	result, err := c.call(ctx, loginMethod, pw.Reveal())
 	if err != nil {
 		return fmt.Errorf("auth.login: %w", err)
 	}
@@ -387,7 +488,7 @@ func (c *rpc) statuses(ctx context.Context, filter map[string]any) (map[string]t
 	}
 	var m map[string]torrentStatus
 	if err := json.Unmarshal(result, &m); err != nil {
-		return nil, &decodeError{What: "torrents", Err: err, Excerpt: excerpt(result)}
+		return nil, &decodeError{What: "torrents", Err: err, Excerpt: c.keptExcerpt(ctx, "", result)}
 	}
 	for k, v := range m {
 		if v.Hash == "" {
@@ -424,7 +525,7 @@ func (c *rpc) files(ctx context.Context, id string) (fileDetail, error) {
 	}
 	var d fileDetail
 	if err := json.Unmarshal(result, &d); err != nil {
-		return fileDetail{}, &decodeError{What: "torrent files", Err: err, Excerpt: excerpt(result)}
+		return fileDetail{}, &decodeError{What: "torrent files", Err: err, Excerpt: c.keptExcerpt(ctx, "", result)}
 	}
 	if d.Hash == "" {
 		return fileDetail{}, fmt.Errorf("%w: %s", ErrTorrentNotFound, id)
@@ -450,7 +551,7 @@ func (c *rpc) connected(ctx context.Context) (bool, error) {
 	}
 	var ok bool
 	if err := json.Unmarshal(result, &ok); err != nil {
-		return false, &decodeError{What: "web.connected", Err: err, Excerpt: excerpt(result)}
+		return false, &decodeError{What: "web.connected", Err: err, Excerpt: c.keptExcerpt(ctx, "", result)}
 	}
 	return ok, nil
 }
@@ -464,7 +565,7 @@ func (c *rpc) connectFirstHost(ctx context.Context) error {
 	// Each host is [id, host, port, status].
 	var hosts [][]any
 	if err := json.Unmarshal(result, &hosts); err != nil {
-		return &decodeError{What: "web.get_hosts", Err: err, Excerpt: excerpt(result)}
+		return &decodeError{What: "web.get_hosts", Err: err, Excerpt: c.keptExcerpt(ctx, "", result)}
 	}
 	if len(hosts) == 0 || len(hosts[0]) == 0 {
 		return &decodeError{What: "web.get_hosts", Err: errors.New("the Web UI lists no daemon")}
