@@ -1,5 +1,5 @@
 // file: core/internal/executor/errors.go
-// version: 1.2.0
+// version: 1.2.2
 // guid: ee118157-68ed-4213-be77-f44028207038
 // last-edited: 2026-11-11
 
@@ -19,10 +19,13 @@ var (
 	// tasks.held). Held runs are read-only while the process runs.
 	ErrHeld = errors.New("executor: the run's module is disabled; the run is held and read-only")
 	// ErrNotPermitted: the stamped actor may not start, cancel, decide or
-	// pause (403; tasks.actor_not_permitted for a module system actor).
+	// pause; a body's child start is outside its module's reach or an option
+	// restamps the child (403; tasks.actor_not_permitted for a module system
+	// actor).
 	ErrNotPermitted = errors.New("executor: actor not permitted")
 	// ErrPlanRequired: a Live start of a kind whose Approval.PlanRequired is
-	// set names no plan_ref.
+	// set names no plan_ref, or a Fixer apply run names none (it applies
+	// nothing).
 	ErrPlanRequired = errors.New("executor: a live start of this kind must name a preview plan run")
 	// ErrPlanInvalid: plan_ref does not name a succeeded Preview run of the
 	// same kind.
