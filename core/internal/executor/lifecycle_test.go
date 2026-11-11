@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-10
 
@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -304,31 +305,182 @@ func TestResume_RestartGuardFailsCrashLoop(t *testing.T) {
 }
 
 // TestShutdown_StoppingCancelEndsCanceled (5T.4 step 4; added for the
-// shutdown invariants): a run already stopping for a cancel when Shutdown
-// abandons it ends canceled, not interrupted, so it is never resumed.
+// shutdown invariants): a run stopping for a cancel when Shutdown abandons
+// it ends canceled, not interrupted, so it is never resumed, whichever came
+// first. A cancel that lands while Shutdown is draining replaces the
+// shutdown's stop (CancelAs: a cancel is final).
 func TestShutdown_StoppingCancelEndsCanceled(t *testing.T) {
+	for _, order := range []string{"cancel then shutdown", "shutdown then cancel"} {
+		t.Run(order, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				started := make(chan struct{}, 1)
+				release := make(chan struct{})
+				def := taskDef("gotham.interrogation", func(rc *tasks.RC, _ noParams) (string, error) {
+					started <- struct{}{}
+					<-release
+					return "talked", nil
+				}, withCancel(tasks.Cooperative(time.Hour)))
+				h := newHarness(t, []tasks.Definition{def}, func(o *Options) { synctestConfig(o); o.Config.ShutdownDrain = time.Second })
+				id := h.start("gotham.interrogation", tasks.StartRequest{})
+				<-started
+				cancel := func() {
+					if err := h.x.CancelAs(context.Background(), id, tasks.Actor{UserID: "gordon"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if order == "cancel then shutdown" {
+					cancel()
+					if err := h.x.Shutdown(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					done := make(chan error, 1)
+					go func() { done <- h.x.Shutdown(context.Background()) }()
+					synctest.Wait() // Shutdown is draining: the run is stopping for it
+					cancel()
+					if err := <-done; err != nil {
+						t.Fatal(err)
+					}
+				}
+				if r := h.get(id); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
+					t.Fatalf("after Shutdown: %s/%q, want canceled/cancel", r.State, r.Reason)
+				}
+				close(release)
+			})
+		})
+	}
+}
+
+// gatedRuns is a run store whose read of the from-zero marker parks until
+// the test lets it go. startAttempt makes that read after the claim's
+// running commit and before the attempt goes live, so a cancel sent while
+// it is parked lands in the window attemptFor covers.
+type gatedRuns struct {
+	tasks.RunStore
+	reached chan<- tasks.RunID
+	release <-chan struct{}
+}
+
+func (g gatedRuns) Checkpoint(ctx context.Context, id tasks.RunID, name string) ([]byte, bool, error) {
+	if name == ckptZero {
+		g.reached <- id
+		<-g.release
+	}
+	return g.RunStore.Checkpoint(ctx, id, name)
+}
+
+// TestCancel_ClaimedNotStartedTakesTheStop (5T.3.6, synctest; added for the
+// cancel/claim race the parity kit found, #37 and #41): a cancel of a run
+// whose claim committed but whose attempt has not started puts it in
+// stopping, not canceled, because its body is about to run; the attempt
+// takes the stop when it starts, so the body sees its context canceled
+// with ErrCanceled and the run ends canceled.
+func TestCancel_ClaimedNotStartedTakesTheStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		started := make(chan struct{}, 1)
+		reached := make(chan tasks.RunID, 1)
 		release := make(chan struct{})
+		saw := make(chan error, 1)
 		def := taskDef("gotham.interrogation", func(rc *tasks.RC, _ noParams) (string, error) {
-			started <- struct{}{}
-			<-release
-			return "talked", nil
-		}, withCancel(tasks.Cooperative(time.Hour)))
-		h := newHarness(t, []tasks.Definition{def}, func(o *Options) { synctestConfig(o); o.Config.ShutdownDrain = time.Second })
+			<-rc.Context().Done()
+			saw <- context.Cause(rc.Context())
+			return "", context.Cause(rc.Context())
+		}, withCancel(tasks.Cooperative(time.Minute)))
+		h := newHarness(t, []tasks.Definition{def}, func(o *Options) {
+			synctestConfig(o)
+			o.NewBatch = o.Stores.Runs.(batchOpener).NewBatch
+			o.Stores.Runs = gatedRuns{RunStore: o.Stores.Runs, reached: reached, release: release}
+		})
 		id := h.start("gotham.interrogation", tasks.StartRequest{})
-		<-started
+		<-reached
+		if r := h.get(id); r.State != tasks.StateRunning {
+			t.Fatalf("at the gate: %s, want running (the claim committed)", r.State)
+		}
 		if err := h.x.CancelAs(context.Background(), id, tasks.Actor{UserID: "gordon"}); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.x.Shutdown(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if r := h.get(id); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
-			t.Fatalf("after Shutdown: %s/%q, want canceled/cancel", r.State, r.Reason)
+		if r := h.get(id); r.State != tasks.StateStopping || r.Reason != reasonCancel {
+			t.Fatalf("cancel of a claimed run not yet started: %s/%q, want stopping/cancel", r.State, r.Reason)
 		}
 		close(release)
+		synctest.Wait()
+		select {
+		case err := <-saw:
+			if !errors.Is(err, tasks.ErrCanceled) {
+				t.Fatalf("the body's context ended with %v, want ErrCanceled", err)
+			}
+		default:
+			t.Fatal("the body is running with a live context: the committed cancel never reached it")
+		}
+		if r := h.waitState(id, tasks.StateCanceled, tasks.StateSucceeded, tasks.StateFailed); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
+			t.Fatalf("run ended %s/%q, want canceled/cancel", r.State, r.Reason)
+		}
 	})
+}
+
+// TestResume_UnreadableZeroMarkerVoidsCheckpoints (5T.3.6; added for
+// zeroFrom): a resumed attempt restores the checkpoint an earlier attempt
+// wrote, unless the run's from-zero marker cannot be decoded. Such a marker
+// voids every checkpoint before the attempt it is read for, so the attempt
+// starts from nothing (and is not Resumed) rather than from state a
+// ResumeFromZero requeue may have voided.
+func TestResume_UnreadableZeroMarkerVoidsCheckpoints(t *testing.T) {
+	type seen struct {
+		resumed, found bool
+		n              int
+	}
+	for _, c := range []struct {
+		name   string
+		marker []byte
+		want   seen
+	}{
+		{name: "no marker", want: seen{resumed: true, found: true, n: 3}},
+		{name: "undecodable marker", marker: []byte("the Riddler's cipher"), want: seen{}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				started := make(chan tasks.RunID, 1)
+				second := make(chan seen, 1)
+				var calls atomic.Int32
+				def := taskDef("gotham.patrol", func(rc *tasks.RC, _ noParams) (string, error) {
+					if calls.Add(1) > 1 {
+						var got seen
+						found, err := rc.Restore(&got.n)
+						if err != nil {
+							return "", err
+						}
+						got.resumed, got.found = rc.Resumed(), found
+						second <- got
+						return "second attempt", nil
+					}
+					if err := rc.Checkpoint(3); err != nil {
+						return "", err
+					}
+					started <- rc.RunID()
+					<-rc.Context().Done()
+					return "", context.Cause(rc.Context())
+				})
+				defs := []tasks.Definition{def}
+				cfg := func(o *Options) {
+					o.Config = Config{DispatchTick: time.Second, WatchdogInterval: time.Hour, MinCheckpointInterval: time.Nanosecond}
+				}
+				h := newHarness(t, defs, cfg)
+				id := h.start("gotham.patrol", tasks.StartRequest{})
+				<-started
+				if c.marker != nil {
+					if err := h.e.write(context.Background(), func(ctx context.Context, b *storage.Batch) error {
+						return h.stores.Runs.SaveCheckpoint(ctx, b, id, ckptZero, c.marker)
+					}); err != nil {
+						t.Fatalf("plant the marker: %v", err)
+					}
+				}
+				next := h.crashBoot(defs, cfg)
+				if got := <-second; got != c.want {
+					t.Fatalf("second attempt saw %+v, want %+v", got, c.want)
+				}
+				next.waitState(id, tasks.StateSucceeded)
+			})
+		})
+	}
 }
 
 // TestUnknownKindRun_DroppedAtResume (5T.3.6, D10): at boot, an unfinished

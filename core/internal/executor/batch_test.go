@@ -1,5 +1,5 @@
 // file: core/internal/executor/batch_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: ff587c0b-7c81-4a29-8286-03cb21859652
 // last-edited: 2026-11-10
 
@@ -344,4 +344,42 @@ func (h *harness) marked(id tasks.RunID, row string) bool {
 		}
 	}
 	return false
+}
+
+// TestLoopBroke_SortsLoopErrors (added for loopBroke): a RunItems error
+// that is not an item's own failure is returned, so the runner fails the
+// run instead of committing the chunk as complete: a refused loop, and a
+// loop a broken gate stopped with items not started. Item failures, a stop
+// the run's own end caused and FailFast's stop at a failed item are not.
+func TestLoopBroke_SortsLoopErrors(t *testing.T) {
+	live := context.Background()
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	refused := &tasks.ItemsError{First: tasks.ErrNoRunContext, FirstIndex: -1}
+	gate := &tasks.ItemsError{First: errors.New("the pause gate's store is unreadable"), FirstIndex: 1}
+	item := &tasks.ItemsError{First: errors.New("the file is water damaged"), FirstIndex: 2}
+	cells := []struct {
+		name     string
+		ctx      context.Context
+		res      tasks.ItemsResult
+		err      error
+		failFast bool
+		want     error
+	}{
+		{name: "no error", ctx: live, res: tasks.ItemsResult{Done: 3}},
+		{name: "refused loop", ctx: live, err: refused, want: refused},
+		{name: "refused loop under FailFast", ctx: live, err: refused, failFast: true, want: refused},
+		{name: "item failures only", ctx: live, res: tasks.ItemsResult{Done: 2, Failed: 1}, err: item},
+		{name: "a gate stopped the loop", ctx: live, res: tasks.ItemsResult{Done: 1, NotStarted: 2}, err: gate, want: gate},
+		{name: "a gate stopped a FailFast loop", ctx: live, res: tasks.ItemsResult{Done: 1, NotStarted: 2}, err: gate, failFast: true, want: gate},
+		{name: "FailFast stopped at a failed item", ctx: live, res: tasks.ItemsResult{Done: 1, Failed: 1, NotStarted: 1}, err: item, failFast: true},
+		{name: "the run ended", ctx: ended, res: tasks.ItemsResult{Done: 1, NotStarted: 2}, err: gate},
+	}
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			if got := loopBroke(c.ctx, c.res, c.err, c.failFast); got != c.want {
+				t.Fatalf("loopBroke = %v, want %v", got, c.want)
+			}
+		})
+	}
 }
