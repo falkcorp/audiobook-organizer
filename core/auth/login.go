@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth/password"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -77,7 +78,11 @@ func (s *Service) loginThrottle() *Throttle {
 //     against it, opens a session stamped with the epoch of the record the
 //     password was verified against, and re-stores a bcrypt hash as argon2id.
 //
-// Every throttle refusal is a *ThrottledError.
+// Every throttle refusal is a *ThrottledError. Each attempt is audited
+// core.auth.login (05-rbac §8): a success in the session's own batch, a
+// refusal on the async path with its reason (throttled, invalid_credentials,
+// inactive, reset_required, busy). A malformed request and a store failure
+// are not sign-in attempts and record nothing.
 func (s *Service) Login(ctx context.Context, in LoginInput) (*IssuedSession, error) {
 	// Everything is keyed on the normalised SUBMITTED username, never on the
 	// user record, so a name that does not exist behaves exactly like one
@@ -90,6 +95,7 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*IssuedSession, err
 		s.log.Warn("auth: login ceiling reached", "ceiling", dec.Warn)
 	}
 	if adm == nil {
+		s.loginRefused(ctx, in.Client, nil, reasonThrottled)
 		return nil, throttled(dec.RetryAfter)
 	}
 	outcome := LoginOther
@@ -100,12 +106,14 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*IssuedSession, err
 	}
 	th := s.loginThrottle()
 	if th.SourceBlocked(source) {
+		s.loginRefused(ctx, in.Client, nil, reasonThrottled)
 		return nil, throttled(LoginRetryAfter)
 	}
 	if adm.Saturated() {
 		d, refuse := th.SaturationPolicy(account)
 		if refuse {
 			outcome = LoginSaturationRefused
+			s.loginRefused(ctx, in.Client, nil, reasonThrottled)
 			return nil, throttled(LoginRetryAfter)
 		}
 		th.Delay(d)
@@ -120,6 +128,7 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*IssuedSession, err
 	}
 	ok, rehash, err := s.hasher.VerifyLoginWithin(ctx, loginHashWait, algo, hash, in.Password)
 	if errors.Is(err, password.ErrBusy) {
+		s.loginRefused(ctx, in.Client, u, reasonBusy)
 		return nil, ErrBusy
 	}
 	if err != nil {
@@ -127,20 +136,31 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*IssuedSession, err
 	}
 	if u == nil || !ok {
 		outcome = LoginFailed
+		s.loginRefused(ctx, in.Client, u, reasonInvalidCredentials)
 		th.Delay(th.RecordFailure(account, source))
 		return nil, ErrInvalidCredentials
 	}
 	if u.Status != StatusActive {
+		s.loginRefused(ctx, in.Client, u, reasonInactive)
 		return nil, fmt.Errorf("%w: %s", ErrInactiveUser, u.ID)
 	}
 	if u.PasswordResetRequired || u.SignInRestricted {
+		s.loginRefused(ctx, in.Client, u, reasonResetRequired)
 		return nil, fmt.Errorf("%w: %s", ErrResetRequired, u.ID)
 	}
 	th.Clear(account, source)
 	// u is the record the password was just verified against, not a fresh
 	// read: a password change landing between the check and the session
 	// leaves the session with the old epoch, refused on first use.
-	sess, err := s.IssueSession(ctx, u, OriginPassword, in.Remember, in.Client)
+	sess, err := s.issueSession(ctx, u, OriginPassword, in.Remember, in.Client, func(b *storage.Batch, rec *SessionRecord) error {
+		return s.d.Audit.RecordIn(ctx, b, audit.Event{
+			Action: actionLogin, Outcome: audit.Success, Target: ref(refKindUser, string(u.ID)),
+			Actor: audit.Actor{
+				UserID: string(u.ID), Username: u.Username, Method: string(MethodSession), CredentialID: rec.PublicID,
+				ClientAddr: addrString(in.Client.Addr), UserAgent: in.Client.UserAgent,
+			},
+		})
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +169,32 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*IssuedSession, err
 		s.rehashPassword(ctx, u, hash, in.Password)
 	}
 	return sess, nil
+}
+
+// The reasons a refused sign-in is audited with.
+const (
+	actionLogin              = "core.auth.login"
+	reasonThrottled          = "throttled"
+	reasonInvalidCredentials = "invalid_credentials"
+	reasonInactive           = "inactive"
+	reasonResetRequired      = "reset_required"
+	reasonBusy               = "busy"
+)
+
+// loginRefused audits a refused sign-in on the async path (05-rbac §8:
+// failures and throttle refusals are high volume). The target is the account
+// only when the submitted name resolved to one; the submitted name itself is
+// never recorded, since a password typed into the name field would land in
+// the log.
+func (s *Service) loginRefused(ctx context.Context, c ClientInfo, u *User, reason string) {
+	e := audit.Event{
+		Action: actionLogin, Outcome: audit.Failure, Reason: reason,
+		Actor: audit.Actor{ClientAddr: addrString(c.Addr), UserAgent: c.UserAgent},
+	}
+	if u != nil {
+		e.Target = ref(refKindUser, string(u.ID))
+	}
+	s.d.Audit.Emit(ctx, e)
 }
 
 // loginRecord reads the user named name and its stored hash. An unknown name
