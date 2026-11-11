@@ -1,3 +1,8 @@
+<!-- file: .claude/skills/build-deploy/references/makefile-targets.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: b8e341ee-3b43-44b1-8c1a-ac1c3fc27a1f -->
+<!-- last-edited: 2026-11-10 -->
+
 # Makefile Targets Reference
 
 ## Build Targets
@@ -162,17 +167,18 @@
 
 - Detects unused code, incorrect patterns
 
-### `make oplint`
-**Lint operation types**
+### `make tasklint`
+**Lint task definitions**
 
-- Custom linter for operation definitions
+- core/archtest/tasklint (moved from tools/cmd/oplint) over core and books' task packages, the
+  archtest guards' self-tests, and the shrink-only exemption ratchet
 
 ## CI Targets
 
 ### `make ci`
 **Run all CI checks**
 
-- Tests (full), coverage check, staticcheck, oplint, etc.
+- Tests (full), coverage check, staticcheck, tasklint, etc.
 - Time: ~20-25 min
 - This is what runs in GitHub Actions
 

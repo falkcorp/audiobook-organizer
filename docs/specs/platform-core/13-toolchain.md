@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/13-toolchain.md -->
-<!-- version: 1.12.3 -->
+<!-- version: 1.12.4 -->
 <!-- guid: a1e1b657-1c87-4a3e-8407-43269415455f -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # 13 — Toolchain, language idioms, and dependency policy
 
@@ -248,6 +248,7 @@ except where noted).
 | `github.com/klauspost/compress` | v1.20.3 | 2026-10-12 | `backup` (zstd; `internal/backup/codec.go`) | no zstd in stdlib |
 | `github.com/fsnotify/fsnotify` | v1.10.1 | 2026-05-04 | `library` watcher (if [05-library](05-library.md) keeps watching) | |
 | `github.com/stretchr/testify` | v1.12.1 | 2026-08-17 | tests only (`go.md:400`) | |
+| `golang.org/x/tools` | v0.52.0 (the root's version, `check_module_skew.py`) | — | test-support only: `archtest/tasklint` (go/analysis, 05-tasks §5T.8.4) and `archtest/guards` (go/packages, 05-tasks §5T.3.2, §5T.3.6) | added by F2-17; never linked by a runtime package, nor by `archtest` or `coretest`, which every module's tests link (`TestTasklint_TestSupportOnly`) |
 | `github.com/openai/openai-go/v3` | v3.93.0 (ABO v3.91.0) | — | `integrations/ai` OpenAI-compatible adapter only ([05-ai](05-ai.md)) | not in the contract package |
 
 **How "pinned" works.** A Go `require` is a minimum: any module in either build list that requires a
@@ -397,3 +398,4 @@ Round 11:
 - Round 13 (2026-11-04): round-13 ruling R17 (XFILE-6: §13.4.1 E4 and §13.7: R1's front-end work is 07 §7.19 steps 1–2; step 3 is switched flip by flip in R2).
 
 - Round 14 (2026-11-05): V23 (the round-13 history entry names its R-number as a round-13 ruling; checked: no bare round-13 ruling citation in the normative text).
+- F2-17 review (2026-11-10): §13.5.2 gains the `golang.org/x/tools` row, test-support only (`archtest/tasklint`, `archtest/guards`); `archtest` and `coretest` never link it.

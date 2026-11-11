@@ -1,5 +1,5 @@
 // file: core/config/types.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: e2e5754c-03e1-42ea-83cb-5ae606cfee3a
 // last-edited: 2026-11-10
 
@@ -128,6 +128,14 @@ type Importer interface {
 	Stage(b *storage.Batch, p Path, v json.RawMessage, by string) error
 	// Default returns p's registered default.
 	Default(p Path) (json.RawMessage, error)
+}
+
+// SecretStager stages one secret write into the caller's batch:
+// secrets.(*Store).Stage (name coined by F3-OIDC-SECRET). The Importer
+// deletes through it the secrets of the list entries a list it replaces
+// drops or rebinds (Store.SetImportSecrets).
+type SecretStager interface {
+	Stage(ctx context.Context, b *storage.Batch, w secrets.Write) error
 }
 
 // Committer is implemented by the kernel (core/internal/configstore). Commit

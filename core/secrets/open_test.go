@@ -1,5 +1,5 @@
 // file: core/secrets/open_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5543ef2e-3564-4e6b-a213-df11eb05e442
 // last-edited: 2026-11-10
 
@@ -291,6 +291,90 @@ func TestOpen_KeyringPermissions(t *testing.T) {
 	}
 	if n := len(rows(t, g.ks)); n != 0 {
 		t.Error("a refused Open wrote c/secrets/meta")
+	}
+}
+
+// TestOpen_DanglingKeyringPathRefuses (a test name coined by the F3-03
+// follow-up): a dangling symbolic link at the keyring path reads as absent
+// to Stat but holds the name. Open refuses it with an error that names the
+// link (not the create race's "appeared meanwhile"), leaves the link as it
+// was and writes no keyring, no temporary file and no c/secrets/meta. The
+// link's target is relative, inside the state directory.
+func TestOpen_DanglingKeyringPathRefuses(t *testing.T) {
+	e := newEnv(t)
+	const target = "batcave.keyring.lost"
+	if err := os.Symlink(target, e.keyringPath()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Open(context.Background(), e.opts())
+	if err == nil {
+		t.Fatal("Open accepted a dangling symbolic link at the keyring path")
+	}
+	assertNotRegularRefusal(t, err)
+	if got, lerr := os.Readlink(e.keyringPath()); lerr != nil || got != target {
+		t.Errorf("the link is now %q (%v), want it left pointing at %s", got, lerr, target)
+	}
+	entries, err := os.ReadDir(e.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, de := range entries {
+		if de.Name() != defaultKeyFile {
+			t.Errorf("a refused Open left %s in the state directory", de.Name())
+		}
+	}
+	if n := len(rows(t, e.ks)); n != 0 {
+		t.Errorf("a refused Open wrote %d c/secrets/ rows", n)
+	}
+}
+
+// assertNotRegularRefusal checks err is the keyring path's "symbolic link,
+// not a regular file" refusal.
+func assertNotRegularRefusal(t *testing.T, err error) {
+	t.Helper()
+	msg := err.Error()
+	if strings.Contains(msg, "appeared meanwhile") || !strings.Contains(msg, "a symbolic link, not a regular file") || !strings.Contains(msg, defaultKeyFile) {
+		t.Errorf("error = %q, want the refusal naming the symbolic link at %s", msg, defaultKeyFile)
+	}
+}
+
+// TestOpen_SymlinkedKeyringRefuses (a test name coined by the F3-03
+// follow-up): a symbolic link at the keyring path to a valid keyring is
+// refused by Open and by the offline rewrites, as export-keyring refuses it
+// (TestExportKeyring_RefusesSymlinkedKeyring): the keyring is never read or
+// rewritten through a link. Neither the link nor its target changes.
+func TestOpen_SymlinkedKeyringRefuses(t *testing.T) {
+	e := newEnv(t)
+	s := e.open(t, nil)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	const real = "keyring.real"
+	if err := os.Rename(e.keyringPath(), filepath.Join(e.dir, real)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, e.keyringPath()); err != nil {
+		t.Fatal(err)
+	}
+	before := fileBytes(t, filepath.Join(e.dir, real))
+	_, err := Open(context.Background(), e.opts())
+	if err == nil {
+		t.Fatal("Open read the keyring through a symbolic link")
+	}
+	assertNotRegularRefusal(t, err)
+	if _, err := RotateDerive(e.root, "", time.Hour, e.clock.now()); err == nil {
+		t.Error("RotateDerive rewrote the keyring through a symbolic link")
+	} else {
+		assertNotRegularRefusal(t, err)
+	}
+	if _, err := SetInstallID(e.root, "", testInstallID+"-2"); err == nil {
+		t.Error("SetInstallID rewrote the keyring through a symbolic link")
+	}
+	if got, lerr := os.Readlink(e.keyringPath()); lerr != nil || got != real {
+		t.Errorf("the link is now %q (%v), want it left pointing at %s", got, lerr, real)
+	}
+	if !bytes.Equal(fileBytes(t, filepath.Join(e.dir, real)), before) {
+		t.Error("a refusal changed the keyring the link points at")
 	}
 }
 

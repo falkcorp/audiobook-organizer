@@ -1,7 +1,7 @@
 // file: core/storage/db.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 30500128-a267-4af7-ba39-fae150d4e708
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package storage
 
@@ -52,8 +52,9 @@ type ownerInfo struct {
 	spec       Spec
 	enabled    bool
 	core       bool
-	prefix     []byte // keyspace prefix ("m/<id>/" or "c/<sub>/"); nil without Spec.Keyspace
-	serialized []span // absolute Serialized ranges of the keyspace
+	prefix     []byte      // keyspace prefix ("m/<id>/" or "c/<sub>/"); nil without Spec.Keyspace
+	serialized []span      // absolute Serialized ranges of the keyspace
+	data       []*DataStep // the owner's data migrations (OpenOptions.DataSteps), in declaration order
 }
 
 // levelOwner is the owner a level stamp is kept under: "core" for every core
@@ -172,7 +173,9 @@ func coreSub(o Owner) string {
 
 // register builds the owner table and the claim index from the build's
 // specs, and validates them (§5S.3.4 items 1-3, §5S.3.5 registration rules).
-// storage's own owner is always present.
+// storage's own owner is always present. The DAG's shape is Open's check,
+// once the data steps hang on their owners (attachDataSteps): a versioned
+// step's After may name a data step, which the specs alone do not list.
 func register(specs []OwnerSpec) (map[Owner]*ownerInfo, *claimIndex, []claimRef, error) {
 	owners := make(map[Owner]*ownerInfo, len(specs)+1)
 	var probs []string
@@ -222,9 +225,6 @@ func register(specs []OwnerSpec) (map[Owner]*ownerInfo, *claimIndex, []claimRef,
 	}
 	if len(claimProbs) > 0 {
 		return nil, nil, nil, &ClaimConflictError{Problems: claimProbs}
-	}
-	if err := checkDAGShape(owners); err != nil {
-		return nil, nil, nil, err
 	}
 	return owners, buildClaimIndex(refs), refs, nil
 }

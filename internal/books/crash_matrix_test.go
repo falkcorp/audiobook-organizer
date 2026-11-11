@@ -1,7 +1,7 @@
 // file: internal/books/crash_matrix_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 1a6f3d82-9c4e-4b17-8e25-7d0b5c9a2f61
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package books
 
@@ -262,11 +262,16 @@ func aboUnreachedLabels() map[string]string {
 		noLocation = "ABO keeps no backup.location.json at R1 (05-backup §5B.3.6 lands with F8), so the swap has none to copy or put back"
 		swapBack   = "ABO's restore stager opens the extracted store with this build's guard before it stages (database.VerifyStoreOpens), " +
 			"so no ABO-staged restore holds a store the next boot refuses after the swap; hello's restore-refused fixture breaks the swap-back"
-		badSlot = "an unusable pending.json (moved aside at P0a); no ABO stager writes one, every one links a complete intent (restorejournal.CreateIntent)"
+		badSlot         = "an unusable pending.json (moved aside at P0a); no ABO stager writes one, every one links a complete intent (restorejournal.CreateIntent)"
+		noDataMigration = "books declares no data migration until F3-06, and the boot call that runs one is F2-16's; " +
+			"hello's data-migration cells break the writer through the kernel's entry point until then"
 	)
 	return map[string]string{
 		"storage.levelstep.sidecars": "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
 		"storage.levelstep.rollback": "books declares no level step at R1",
+		"storage.dm.plan":            noDataMigration,
+		"storage.dm.chunk":           noDataMigration,
+		"storage.dm.state":           noDataMigration,
 		"storage.checkpoint.ready":   "needs an upgrade whose step failed, leaving its checkpoint open, then a boot with nothing to run; no books step fails on a store HEAD wrote",
 		// The kit's clock is fixed (crashmatrix.Now) and a fixture's files
 		// are copied into memory with the host's current time as their

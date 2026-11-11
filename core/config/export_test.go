@@ -1,5 +1,5 @@
 // file: core/config/export_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d2bf2cbd-335b-424b-854c-53a0c4529b22
 // last-edited: 2026-11-10
 
@@ -46,7 +46,7 @@ func (t *TestSource) read(q sourceQuery) ([]sourced, error) {
 }
 
 func placeable(q sourceQuery, p Path) bool {
-	if slices.Contains(q.paths, p) || q.passthrough(p) {
+	if slices.Contains(q.paths, p) || q.passthrough(p) || q.entrySecret(p) {
 		return true
 	}
 	for _, m := range q.maps {

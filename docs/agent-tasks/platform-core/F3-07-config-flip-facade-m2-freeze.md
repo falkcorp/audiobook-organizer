@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F3-07-config-flip-facade-m2-freeze.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.2.2 -->
 <!-- guid: cd0ab95d-94fd-4550-8089-03f6d358f1f1 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # F3-07 — F3 flip, one PR: core config and secrets wired, ABO's `internal/config` becomes the façade, M2 with M7 and M8 registered, `R1Values` deleted, `/api/v1/config` on core config, the Basic gate into core, canonical names in every deploy file, behind F3-08's R2 freeze
 
@@ -274,6 +274,18 @@ The native settings routes and deleting `/api/v1/config` for `k` and `s` keys (F
 
 From this merge, rollback of a deployed build is `make rollback-restore` to the pre-freeze release (09 §9.2.1). On
 `main`, a revert is a decision for the lead; it does not touch the freeze, which is the owner's repository variable (D15).
+
+## Coordinator additions (2026-11-10)
+
+- **Gate goldens.** `TestBasicGate_ExemptSetGolden` carries golden rows for `POST /api/health` and `HEAD /api/health`, both
+  expected to answer 401.
+- **Realm.** Pass `Realm: "Audiobook Organizer"` to the stage 8 gate so the `WWW-Authenticate` header matches HEAD's.
+- **Posture.** Call `checkPosture` when the `core.http.basic_gate.password` secret key appears and when it disappears,
+  not only at boot.
+- **One Build.** The gate's facts (exempt set, password present, enabled) must come from the same `Build` that mounts
+  the gate; never re-read them from a second Build or from the live config.
+- **Unmapped env names (OWNER-04 P4).** Map the 5 env names OWNER-04 P4 left unmapped by the rename table (each gets a rename-table
+  row), so STOP condition 1 does not fire on them.
 
 ## Repo rules
 

@@ -1,5 +1,5 @@
 // file: core/config/doc.go
-// version: 1.1.1
+// version: 1.1.3
 // guid: e74dba99-865d-4688-bd81-8e7ca26610c8
 // last-edited: 2026-11-10
 
@@ -39,9 +39,25 @@
 //	                               pattern=
 //	sensitive:"true"               not a secret, but redacted in diagnostics
 //	                               bundles and logs
+//	secret:"bind"                  on a field of a list entry that holds a
+//	                               secrets.Ref: the entry's secret belongs
+//	                               to this field's value (see Secrets)
 //
 // A tag on a struct-typed field applies to every key beneath it. A tag
 // inside a key's value (a list, map, array or pointer element, or a struct
 // that encodes itself) may not be stricter than the key: config protects,
 // reloads and redacts whole keys, so Register refuses it with ErrInvalid.
+//
+// # Secrets
+//
+// A field of type secrets.Ref is a secret key whose value lives in the
+// secrets store; the snapshot holds only its bound reference. A secrets.Ref
+// may also be a direct field of a list entry whose type has a string field
+// json "id" ("entry secrets", keys.go): each entry's Ref is then a secret key
+// of its own, "<list parent>.<id>.<field>" (05-authn's
+// core.auth.oidc.<id>.client_secret), carrying its own protect tag, which
+// Register requires. An Apply that removes, renames, adds or rebinds an
+// entry (changes a field tagged secret:"bind") deletes its secret in the
+// same commit, so a secret never outlives the identity it was set for. An
+// entry an operator layer supplies binds only an operator-layer secret.
 package config

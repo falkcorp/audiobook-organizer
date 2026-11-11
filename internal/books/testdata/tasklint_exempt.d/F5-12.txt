@@ -1,0 +1,18 @@
+# Owned by F5-12; only F5-12 may delete this file, in the PR that converts these files (05-tasks §5T.8.2 rule 3).
+# The non-test .go files under F5-12's paths in docs/agent-tasks/platform-core/README.md, at F2-17's base.
+# One repo-relative path per line, sorted; the directory is read as one union that may only shrink (05-tasks §5T.8.4).
+internal/plugins/maintenance/repoint_missing_to_folder_audio.go
+internal/plugins/maintenance/repoint_unrecorded_renames.go
+internal/plugins/maintenance/reports_prune.go
+internal/plugins/maintenance/review_status_index_repair.go
+internal/plugins/maintenance/rewrite_path_prefix.go
+internal/plugins/maintenance/series_denumber_op.go
+internal/plugins/maintenance/series_phantom_repair.go
+internal/plugins/maintenance/tag_backfill.go
+internal/plugins/maintenance/title_backfill.go
+internal/plugins/maintenance/title_repair.go
+internal/plugins/maintenance/unknown_author_audit.go
+internal/plugins/maintenance/user_merge.go
+internal/plugins/maintenance/version_group_primary_repair.go
+internal/plugins/maintenance/version_group_primary_report.go
+internal/plugins/maintenance/write_back.go

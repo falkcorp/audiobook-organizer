@@ -1,0 +1,32 @@
+# Owned by F5-05; only F5-05 may delete this file, in the PR that converts these files (05-tasks §5T.8.2 rule 3).
+# The non-test .go files under F5-05's paths in docs/agent-tasks/platform-core/README.md, at F2-17's base.
+# One repo-relative path per line, sorted; the directory is read as one union that may only shrink (05-tasks §5T.8.4).
+internal/plugins/acoustid/backfill.go
+internal/plugins/acoustid/duration_backfill.go
+internal/plugins/acoustid/fingerprint_rescan.go
+internal/plugins/acoustid/lsh_backfill.go
+internal/plugins/acoustid/online_lookup.go
+internal/plugins/acoustid/plugin.go
+internal/plugins/acoustid/register.go
+internal/plugins/acoustid/reset_all.go
+internal/plugins/acoustid/scan.go
+internal/plugins/acoustid/window_backfill.go
+internal/plugins/acoustid/worker_hub.go
+internal/plugins/deluge/centralization.go
+internal/plugins/deluge/link_backfill.go
+internal/plugins/deluge/path_update.go
+internal/plugins/deluge/plugin.go
+internal/plugins/deluge/protected_paths.go
+internal/plugins/deluge/register.go
+internal/plugins/itunes/adapter.go
+internal/plugins/itunes/import.go
+internal/plugins/itunes/plugin.go
+internal/plugins/itunes/position_sync.go
+internal/plugins/itunes/register.go
+internal/plugins/itunes/stub.go
+internal/plugins/metafetch/asin_backfill.go
+internal/plugins/metafetch/asin_match.go
+internal/plugins/metafetch/calibrate_scoring.go
+internal/plugins/metafetch/pcache_sweep.go
+internal/plugins/metafetch/plugin.go
+internal/plugins/metafetch/register.go

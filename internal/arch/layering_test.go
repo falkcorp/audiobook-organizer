@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.8
+// version: 1.5.9
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -297,7 +297,6 @@ var layerOf = map[string]int{
 	"tools/cmd/dedup-dataset-audit":      6, // family: entry
 	"tools/cmd/itunes-group-preview":     6, // family: entry
 	"tools/cmd/merge-split-books":        6, // family: entry
-	"tools/cmd/oplint":                   6, // family: entry
 	"tools/cmd/opsgen":                   6, // family: entry
 	"tools/cmd/orphan-nonprimary-census": 6, // family: entry
 	"tools/cmd/reconcile-book-counts":    6, // family: entry

@@ -1,5 +1,5 @@
 // file: core/config/layers.go
-// version: 1.0.4
+// version: 1.0.6
 // guid: 8f38706d-6653-47f3-8d73-4f397c9b3604
 // last-edited: 2026-11-10
 
@@ -39,6 +39,10 @@ type sourceQuery struct {
 	paths       []Path          // every concrete key path of the registered struct sections
 	maps        []Path          // map-typed section roots: their entries are data ("core.modules")
 	passthrough func(Path) bool // Options.Passthrough; never nil
+	// entrySecret reports whether p is a list entry's secret key
+	// ("core.auth.oidc.<id>.client_secret" for any valid, unreserved ID): a
+	// source places it like a key of paths. Never nil.
+	entrySecret func(Path) bool
 	// want, when non-nil, asks for these paths only (Store.Operator). A
 	// source returns a wanted path even when no registered section owns it
 	// yet, raw (an env value as a JSON string): the kernel's step 0 reads
@@ -96,6 +100,9 @@ type ckey struct {
 // def is the key's default: for a map entry, the declared default entry's
 // field when the default map has the ID, else the element zero value's.
 func (c ckey) def() json.RawMessage {
+	if c.k.secret {
+		return secretValue(c.p)
+	}
 	if !c.k.sec.isMap {
 		return c.k.def
 	}
@@ -131,7 +138,7 @@ func (s *Store) keyFor(p Path) (ckey, bool) {
 	if !sec.isMap {
 		k := sec.keyOf(p)
 		if k == nil {
-			return ckey{}, false
+			return sec.derivedKey(p)
 		}
 		return ckey{k: k, p: p}, true
 	}
@@ -157,7 +164,10 @@ func (s *Store) passthrough(p Path) bool {
 
 // query describes the registered sections to a source.
 func (s *Store) query() sourceQuery {
-	q := sourceQuery{passthrough: s.passthrough}
+	q := sourceQuery{passthrough: s.passthrough, entrySecret: func(p Path) bool {
+		c, ok := s.keyFor(p)
+		return ok && c.k.list != nil
+	}}
 	for _, sec := range s.sections {
 		if sec.isMap {
 			q.maps = append(q.maps, sec.path)
@@ -177,7 +187,7 @@ func (s *Store) query() sourceQuery {
 // time echo their input.
 func flagJSON(k *keyInfo, p Path, text string) (json.RawMessage, error) {
 	out, err := flagJSONOf(k, p, text)
-	if err != nil && k != nil && k.sensitive {
+	if err != nil && k != nil && k.redacts() {
 		return nil, &FieldError{Path: p, Err: errSensitiveRedacted()}
 	}
 	return out, err
@@ -422,6 +432,15 @@ type built struct {
 	ids  []string
 	keys []ckey
 	vals map[Path]keyVal
+	// opLists are the entry lists whose value an operator layer supplies:
+	// their entries read only operator-layer secrets (operatorOnly).
+	opLists map[*keyInfo]bool
+}
+
+// holds reports whether the build has the concrete key p.
+func (b *built) holds(p Path) bool {
+	_, ok := b.vals[p]
+	return ok
 }
 
 // build resolves every key of sec under v, assembles the section and
@@ -441,11 +460,30 @@ func (s *Store) build(sec *section, v view) (*built, error) {
 	if err != nil {
 		return nil, &FieldError{Path: sec.path, Err: err}
 	}
-	val, err := sec.decode(raw, s.resolver)
+	for _, lk := range sec.entryLists {
+		if b.vals[lk.path("")].src.operator() {
+			if b.opLists == nil {
+				b.opLists = map[*keyInfo]bool{}
+			}
+			b.opLists[lk] = true
+		}
+	}
+	val, err := sec.decode(raw, s.resolver, b.opLists)
 	if err != nil {
 		return nil, err
 	}
 	b.raw, b.val = raw, val
+	// One derived key per entry secret of every entry the build holds: they
+	// are listed (Lookup, Keys) and writable only while an entry names them.
+	for _, lk := range sec.entryLists {
+		for _, id := range lk.entryIDsOf(raws[lk.path("")]) {
+			for _, d := range lk.entrySecrets {
+				c := ckey{k: d, id: id, p: d.path(id)}
+				b.keys = append(b.keys, c)
+				b.vals[c.p] = s.resolve(c, v)
+			}
+		}
+	}
 	return b, nil
 }
 
