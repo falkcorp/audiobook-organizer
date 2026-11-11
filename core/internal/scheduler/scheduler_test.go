@@ -1,5 +1,5 @@
 // file: core/internal/scheduler/scheduler_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0c0f39f5-0a37-4c1b-a1f0-7d6c5b7b8e52
 // last-edited: 2026-11-11
 
@@ -764,6 +764,32 @@ func TestSchedule_FoldIsTheExecutors(t *testing.T) {
 	if rs := runsOf(t, f.st, patrol); len(rs) != 3 {
 		t.Fatalf("%d runs, want 3 (the finished one, the manual one, the scheduled one)", len(rs))
 	}
+}
+
+// TestSchedule_SkipMissedAfterAHold: the freshness bound is the previous
+// poll, which a held kind's poll still advances. A skipping kind released
+// from a hold does not fire for an instant that passed during the hold (the
+// kind's Missed policy applies on re-enable, 05-tasks 5T.3.11) and fires at
+// its next on-time instant.
+func TestSchedule_SkipMissedAfterAHold(t *testing.T) {
+	f := newFixture(t, []tasks.Definition{gotham(signal, tasks.ScheduleFromConfig(signalKey).Missed(tasks.SkipMissed))},
+		fixtureOpts{schedules: map[string]tasks.ScheduleConfig{signalKey: every(time.Hour)}})
+	f.boot(day(1, 0, 0))
+	f.poll(day(1, 0, 0))
+	f.hold(signal, true)
+	f.poll(day(1, 5, 30)) // held: not polled; 05:00 passes
+	f.rec.take()
+	f.hold(signal, false)
+	f.poll(day(1, 5, 31)) // 05:00 came due before the previous poll: missed, not fired
+	f.expect("01-01T05:31 advance gotham.bat-signal last_due=01-01T05:31")
+	if got := f.rec.missed[signal]; got != 5 {
+		t.Fatalf("schedule_missed = %d, want 5", got)
+	}
+	f.poll(day(1, 6, 31)) // an interval is measured from LastDue: the next on-time instant fires
+	f.expect(
+		"01-01T06:31 advance gotham.bat-signal last_due=01-01T06:31",
+		"01-01T06:31 enqueue gotham.bat-signal schedule",
+	)
 }
 
 // TestSchedule_BootGatedFireStampsNoRun: an OnStart fire whose When gate is
