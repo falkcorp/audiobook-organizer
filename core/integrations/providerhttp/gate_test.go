@@ -120,8 +120,8 @@ func TestHoldPersistsAcrossRegistryRestart(t *testing.T) {
 	if integrations.ClassOf(context.Background(), err) != integrations.ClassRefusedLocal || hits.Load() != n {
 		t.Fatalf("the refused request must send nothing (class %v, hits %d -> %d)", integrations.ClassOf(context.Background(), err), n, hits.Load())
 	}
-	if scope, ok := r2.HeldScope(batcave); !ok || scope != batcave.String() {
-		t.Fatalf("HeldScope = %q, %v", scope, ok)
+	if h, ok := r2.HoldFor(batcave); !ok || h.Scope != batcave.String() {
+		t.Fatalf("HoldFor = %+v, %v", h, ok)
 	}
 }
 
@@ -174,11 +174,11 @@ func TestHold_EarlySuccessKeepsHold(t *testing.T) {
 	}
 	clk.Advance(time.Second)
 	late.Done(&integrations.Error{Class: integrations.ClassAuth, Status: 401}) // sets the 6h hold
-	if _, ok := r.HeldScope(batcave); !ok {
+	if _, ok := r.HoldFor(batcave); !ok {
 		t.Fatal("the auth failure must hold the scope")
 	}
 	early.Done(nil) // started before the hold existed
-	if _, ok := r.HeldScope(batcave); !ok {
+	if _, ok := r.HoldFor(batcave); !ok {
 		t.Fatal("an early success released a hold set after its attempt started")
 	}
 	// A bypassing lookup that starts after the hold and succeeds releases it.
@@ -188,7 +188,7 @@ func TestHold_EarlySuccessKeepsHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	t3.Done(nil)
-	if _, ok := r.HeldScope(batcave); ok {
+	if _, ok := r.HoldFor(batcave); ok {
 		t.Fatal("a success that started after the hold must release it")
 	}
 	_ = srv
@@ -372,7 +372,7 @@ func TestQuotaTiers(t *testing.T) {
 		t.Fatalf("state quota = %v / %v", st.QuotaUsed, st.QuotaLimit)
 	}
 	// A quota spent is a refusal, not a remote failure: nothing is held.
-	if _, held := r.HeldScope(batcave); held {
+	if _, held := r.HoldFor(batcave); held {
 		t.Fatal("a local quota refusal must not hold the scope")
 	}
 }
@@ -505,7 +505,7 @@ func TestHoldStoreReadFailureFailsOpen(t *testing.T) {
 	if _, err := get(t, c, srv.URL); err != nil {
 		t.Fatal(err)
 	}
-	if _, held := r.HeldScope(batcave); !held {
+	if _, held := r.HoldFor(batcave); !held {
 		t.Fatal("the hold must stay in memory")
 	}
 }
@@ -606,10 +606,9 @@ func TestGate_DisabledRefusesBeforeDial(t *testing.T) {
 	}
 }
 
-// TestHeldScope_NeedsNoClient: a hold is visible and releasable by ref and by
-// scope with no Client built since the boot (the F7-10 hold-route seam), and a
-// release re-reads the scope it names.
-func TestHeldScope_NeedsNoClient(t *testing.T) {
+// TestHoldFor_NeedsNoClient: a hold is visible and releasable by ref with no
+// Client built since the boot (the F7-10 hold-route seam).
+func TestHoldFor_NeedsNoClient(t *testing.T) {
 	clk := newClock()
 	gs := providerhttp.NativeGateStore(store(t))
 	ctx := context.Background()
@@ -618,23 +617,23 @@ func TestHeldScope_NeedsNoClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = gs })
-	scope, held := r.HeldScope(batcave)
-	if !held || scope != batcave.String() {
-		t.Fatalf("HeldScope = %q, %v; want the persisted hold with no client built", scope, held)
+	h, held := r.HoldFor(batcave)
+	if !held || h.Scope != batcave.String() {
+		t.Fatalf("HoldFor = %+v, %v; want the persisted hold with no client built", h, held)
 	}
-	if _, held := r.HeldScope(ref("alfred")); held {
+	if _, held := r.HoldFor(ref("alfred")); held {
 		t.Fatal("an unrelated ref reports a hold")
 	}
-	if err := r.ReleaseHold(ctx, scope); err != nil {
+	if err := r.ReleaseHoldIf(ctx, h); err != nil {
 		t.Fatal(err)
 	}
-	if _, held := r.HeldScope(batcave); held {
+	if _, held := r.HoldFor(batcave); held {
 		t.Fatal("the hold is still held")
 	}
 	if hs, _ := gs.Holds(ctx); len(hs) != 0 {
 		t.Fatalf("store still has %+v", hs)
 	}
-	if err := r.ReleaseHold(ctx, scope); err != nil { // releasing nothing is not an error
+	if err := r.ReleaseHoldIf(ctx, h); err != nil { // releasing nothing is not an error
 		t.Fatal(err)
 	}
 }
@@ -731,32 +730,31 @@ func TestReleaseAuthHold(t *testing.T) {
 	if err := r.ReleaseAuthHold(context.Background(), batcave); err != nil {
 		t.Fatal(err)
 	}
-	if _, held := r.HeldScope(batcave); !held {
+	if _, held := r.HoldFor(batcave); !held {
 		t.Fatal("a quota hold was released as an auth hold")
 	}
-	_ = r.ReleaseHold(context.Background(), batcave.String())
+	if h, ok := r.HoldFor(batcave); ok {
+		if err := r.ReleaseHoldIf(context.Background(), h); err != nil {
+			t.Fatal(err)
+		}
+	}
 	tk, _ = g.Acquire(context.Background(), "")
 	tk.Done(&integrations.Error{Class: integrations.ClassAuth, Status: 401})
-	if _, held := r.HeldScope(batcave); !held {
+	if _, held := r.HoldFor(batcave); !held {
 		t.Fatal("no auth hold")
 	}
 	if err := r.ReleaseAuthHold(context.Background(), batcave); err != nil {
 		t.Fatal(err)
 	}
-	if _, held := r.HeldScope(batcave); held {
+	if _, held := r.HoldFor(batcave); held {
 		t.Fatal("the auth hold survived ReleaseAuthHold")
 	}
 }
 
 // the shape F7-10's hold route declares (internal/integrationhttp is internal
-// to core, so its assertion is F7-09's; see seams.d/F7-02.md).
-var _ interface {
-	HeldScope(integrations.Ref) (string, bool)
-	ReleaseHold(context.Context, string) error
-} = (*providerhttp.Registry)(nil)
-
-// the conditional pair F7-10 should use so a hold set between the two calls is
-// never released unseen.
+// to core, so its assertion is F7-09's; see seams.d/F7-02.md). It is the only
+// hold-release pair the Registry has: a release by scope alone is not atomic
+// with the read that found the hold, so it does not exist.
 var _ interface {
 	HoldFor(integrations.Ref) (integrations.Hold, bool)
 	ReleaseHoldIf(context.Context, integrations.Hold) error

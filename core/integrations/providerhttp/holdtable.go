@@ -116,27 +116,6 @@ func (r *Registry) releaseIfStarted(ctx context.Context, scope string, started t
 	delete(r.holds, scope)
 }
 
-// ReleaseHold ends scope's hold (the one-instance form of
-// core.integrations.release-holds, and DELETE .../instances/{id}/hold). It
-// reads and removes the hold under the hold mutex, so it is atomic with
-// respect to the scope it names: a hold set a moment later is a new hold for
-// the caller to see. Releasing a scope with no hold is not an error. The
-// record is deleted from the store first; a store that cannot delete leaves the
-// hold in force and returns the error, so the operator is never told a hold is
-// gone while a restart would bring it back.
-func (r *Registry) ReleaseHold(ctx context.Context, scope string) error {
-	r.hmu.Lock()
-	defer r.hmu.Unlock()
-	if _, ok := r.holds[scope]; !ok {
-		return nil
-	}
-	if err := r.store.PutHold(ctx, integrations.Hold{Scope: scope}); err != nil {
-		return fmt.Errorf("providerhttp: release hold: %w", err)
-	}
-	delete(r.holds, scope)
-	return nil
-}
-
 // sameHold reports whether a and b are one hold: the identity of a hold is its
 // scope, class, start and end. placeHold only replaces a hold with a longer
 // one, which has a new Until and SetAt, so a replacement is never the same.
@@ -223,20 +202,12 @@ func (r *Registry) scopeOf(ref integrations.Ref) string {
 }
 
 // HoldFor is ref's active hold itself (its scope, class, start and end),
-// reading the gate state only like HeldScope. Pass what it returns to
-// ReleaseHoldIf to release exactly that hold.
+// reading the gate state only: it never probes the remote, builds an instance
+// or needs the instance to be enabled, so a hold on a disabled or
+// misconfigured instance is still visible and releasable (the seam F7-10's
+// hold route declares). Pass what it returns to ReleaseHoldIf to release
+// exactly that hold. There is deliberately no release by scope alone: a hold
+// set between a read and such a release would be released unseen.
 func (r *Registry) HoldFor(ref integrations.Ref) (integrations.Hold, bool) {
 	return r.activeHold(r.scopeOf(ref))
-}
-
-// HeldScope reports the scope of ref's active hold, reading the gate state
-// only: it never probes the remote, builds an instance or needs the instance
-// to be enabled, so a hold on a disabled or misconfigured instance is still
-// visible and releasable (the seam F7-10's hold route declares).
-func (r *Registry) HeldScope(ref integrations.Ref) (scope string, ok bool) {
-	scope = r.scopeOf(ref)
-	if _, held := r.activeHold(scope); held {
-		return scope, true
-	}
-	return "", false
 }

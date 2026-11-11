@@ -15,7 +15,8 @@ import (
 // ReleaseHolds is the NATIVE body of core.integrations.release-holds (05-metadata
 // M2.4): it lists every active hold of every scope (quota, auth and rate-limit
 // holds alike) as a line of the run's log and, in a Live run, releases each
-// through ReleaseHold. A Preview run lists and releases nothing. Quota counters
+// through ReleaseHoldIf, so a hold replaced since it was listed is left in
+// place (and logged), never released unseen. A Preview run lists and releases nothing. Quota counters
 // and breaker state are left as they are.
 //
 // It has the kind's Run signature, so *Registry satisfies InterimHolds and
@@ -36,7 +37,11 @@ func (r *Registry) ReleaseHolds(rc *tasks.RC, _ ReleaseHoldsParams) (ReleaseHold
 			errs = append(errs, err)
 			break
 		}
-		if err := r.ReleaseHold(rc.Context(), h.Scope); err != nil {
+		if err := r.ReleaseHoldIf(rc.Context(), h); err != nil {
+			if errors.Is(err, ErrHoldChanged) {
+				rc.Log().Info("provider hold was replaced since it was listed; left in place", "scope", h.Scope)
+				continue
+			}
 			errs = append(errs, fmt.Errorf("release a %s hold: %w", h.Class, err))
 			continue
 		}
