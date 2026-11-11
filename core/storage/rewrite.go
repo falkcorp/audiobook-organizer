@@ -1,5 +1,5 @@
 // file: core/storage/rewrite.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7959a601-c65e-4e8c-bdfe-6fedd766d21e
 // last-edited: 2026-11-11
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 
@@ -338,20 +337,6 @@ func (db *DB) RewriteSwap(ctx context.Context, swap func(ctx context.Context) er
 	st.epoch.DirFSID, st.epoch.DirIno = fsid, ino
 	st.epochNew = false
 	return nil
-}
-
-// RemoveRewriteLeftovers removes an earlier attempt's copy beside the store
-// (RewriteDir and its temporary and ingest forms), for a phase engine that
-// restarts M8 from phase 1. Removing what is gone is success.
-func (db *DB) RemoveRewriteLeftovers() error {
-	fs := db.boot.opts.fs
-	final := RewriteDir(db.boot.opts.Path)
-	for _, p := range []string{final + ".tmp", final + ".ingest", final} {
-		if err := fs.RemoveAll(p); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("storage: rewrite: remove %s: %w", p, err)
-		}
-	}
-	return ipebble.SyncDir(fs, filepath.Dir(final))
 }
 
 // planHoldsRewrite reports whether the boot's plan holds M8 pending.
