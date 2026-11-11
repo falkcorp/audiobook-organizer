@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F4-09-core-internal-authz-privileged-checkers.md -->
-<!-- version: 1.0.3 -->
+<!-- version: 1.0.4 -->
 <!-- guid: 99822a5a-94d2-4caa-8a8b-67cdcf901790 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # F4-09 — `core/internal/authz`: `authz.Compile` (injected into rbac as `Deps.Compile`), the privileged checkers `authz.AuthDisabled` and `authz.ForSystem`, and `archtest.NoSystemPrincipalOutsideKernel`
 
@@ -149,10 +149,11 @@ ls -d core/internal/executor 2>/dev/null | wc -l                                
    `admin=false`; no implication from `core:admin`; non-interactive; never `Confined()`. Its `Satisfies` alone applies
    the auth-off evaluation rule: for an `AllOf` it drops the `AuthRequired` members and requires the rest; a requirement
    all of whose scopes are `AuthRequired` is refused.
-4. **`ForSystem(perms)`** (§3.4): a checker holding exactly the given concrete scopes, non-interactive, no admin flag.
+4. **`ForSystem(cat, perms)`** (§3.4): a checker holding exactly the given concrete scopes, non-interactive, no admin flag.
    The kernel passes the union of `Perms.Start` of the module's own kinds plus `Manifest.TaskStarts`, never `core:admin`
-   or an `AuthRequired` scope (that computation is the kernel's, 05-tasks §5T.3.10). The signature carries no catalog:
-   record in the PR how implication and `Confined()` behave for it (design latitude; the invariants below hold).
+   or an `AuthRequired` scope (that computation is the kernel's, 05-tasks §5T.3.10). The signature carries the catalog
+   (as merged in #4568): a nil `cat`, `core:admin`, a malformed or wildcard entry, or an `AuthRequired` scope yields a
+   checker that holds nothing, so a kernel bug fails loudly; an undeclared scope is held by no one.
 5. **Guard** (`core/archtest/nosystemprincipal.go`): `func NoSystemPrincipalOutsideKernel(t testing.TB)` (signature
    coined here; the guard's name is the spec's). Using R1-01's loader over core's tag-set union, fail when (a) any
    non-test file outside `github.com/falkcorp/mediacore/auth`, `.../internal/executor`, `.../kernel` and `authz` itself
@@ -172,7 +173,7 @@ package authz
 
 func Compile(in rbac.CompileInput, cat *rbac.Catalog) rbac.Checker   // the value of rbac.Deps.Compile
 func AuthDisabled(cat *rbac.Catalog) rbac.Checker
-func ForSystem(perms []rbac.Permission) rbac.Checker
+func ForSystem(cat *rbac.Catalog, perms []rbac.Permission) rbac.Checker
 ```
 
 The returned checkers implement `rbac.Checker` (`Has`, `Satisfies`, `Confined`, `Concrete`) and are immutable (05-rbac
