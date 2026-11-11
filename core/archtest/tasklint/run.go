@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/run.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3353e3e5-8aaf-477a-bffd-f8c6bf6de79c
 // last-edited: 2026-11-10
 
@@ -43,6 +43,9 @@ type Options struct {
 	// LegacyDefinitions is Config.LegacyDefinitions: only books sets it, and
 	// F5-18 deletes it with HEAD's engine.
 	LegacyDefinitions []string
+	// Constructors is Config.Constructors: the allowlist of functions that
+	// may carry //tasklint:constructor.
+	Constructors []string
 	// Root is the directory finding paths and entry lines are relative to;
 	// "" means the module root above the working directory.
 	Root string
@@ -106,6 +109,7 @@ func Run(t testing.TB, opts Options) {
 	cfg.StorePackages = opts.StorePackages
 	cfg.LegacyDefinitions = opts.LegacyDefinitions
 	cfg.ListFuncs = opts.ListFuncs
+	cfg.Constructors = opts.Constructors
 	findings, npkgs, err := Analyze(cfg, root, opts.Packages)
 	if err != nil {
 		t.Fatalf("tasklint.Run: %v", err)
@@ -161,6 +165,10 @@ func Analyze(cfg Config, root string, patterns []string) ([]Finding, int, error)
 	}
 	var out []Finding
 	add := func(fset *token.FileSet, p token.Pos, category, msg string) {
+		if !p.IsValid() { // a finding about Options, not a source position
+			out = append(out, Finding{File: "(Options)", Category: category, Message: msg})
+			return
+		}
 		pos := fset.Position(p)
 		file := pos.Filename
 		if rel, err := filepath.Rel(root, file); err == nil && !strings.HasPrefix(rel, "..") {
