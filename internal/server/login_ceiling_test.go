@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
@@ -188,7 +190,7 @@ func TestLoginCeiling_RefundIsCappedAndAgeLimited(t *testing.T) {
 	require.Equal(t, 20, ceilingGlobalCount(l))
 	code = http.StatusOK
 	ceilingPost(r, "192.0.2.5:4000", hdr)
-	require.Equal(t, 20-absauth.SoftThreshold, ceilingGlobalCount(l), "capped at the per-account limit")
+	require.Equal(t, 20-coreauth.SoftThreshold, ceilingGlobalCount(l), "capped at the per-account limit")
 
 	// Age: failures older than the window are not refunded even if their
 	// bucket window is somehow still open.
@@ -483,7 +485,7 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 	// the same is done to a name that does not exist: while saturated the answer
 	// must not tell the two apart.
 	for _, name := range []string{"synthetic-admin", "no-such-account"} {
-		for i := 0; i < absauth.SoftThreshold; i++ {
+		for i := 0; i < coreauth.SoftThreshold; i++ {
 			path := "/api/v1/auth/login"
 			if i%2 == 1 {
 				path = "/login"
@@ -498,7 +500,7 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 		for _, path := range []string{"/api/v1/auth/login", "/login"} {
 			visitor++
 			code, took := post(path, fmt.Sprintf("198.51.100.%d:4000", visitor), name, nil)
-			require.Equal(t, http.StatusTooManyRequests, code, "%s %s: a name past %d failures of its own is refused, whether or not it exists", path, name, absauth.SoftThreshold)
+			require.Equal(t, http.StatusTooManyRequests, code, "%s %s: a name past %d failures of its own is refused, whether or not it exists", path, name, coreauth.SoftThreshold)
 			require.Less(t, took, minDelay, "a refusal is not delayed")
 		}
 	}
@@ -693,7 +695,7 @@ func TestLoginCeiling_SaturationRefusalCountsAsASaturatedFailure(t *testing.T) {
 	r.POST("/login", l.middleware(nil, nil), func(c *gin.Context) {
 		reached++
 		absauth.NoteLoginAccount(c, "acct-a")
-		if absauth.RefuseSaturatedLogin(c, absauth.SoftThreshold, func(time.Duration) {}) {
+		if absauth.RefuseSaturatedLogin(c, coreauth.SoftThreshold, func(time.Duration) {}) {
 			c.Status(http.StatusTooManyRequests)
 			return
 		}

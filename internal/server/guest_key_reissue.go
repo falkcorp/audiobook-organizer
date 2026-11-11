@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cfservicetoken"
@@ -19,7 +21,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -154,7 +155,7 @@ func guestKeyFirstKeyBlocked(u *database.User) string {
 			return why
 		}
 	}
-	if owner := util.NormalizeEmail(config.Snapshot().OwnerEmail); owner != "" && util.NormalizeEmail(u.Email) == owner {
+	if owner := coreauth.NormalizeEmail(config.Snapshot().OwnerEmail); owner != "" && coreauth.NormalizeEmail(u.Email) == owner {
 		return why
 	}
 	return ""

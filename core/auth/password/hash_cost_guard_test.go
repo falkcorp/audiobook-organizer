@@ -3,7 +3,7 @@
 // guid: 6e0b7d24-91c3-4f8a-b5d6-3a28c4f1e907
 // last-edited: 2026-10-30
 
-package absauth
+package password
 
 import (
 	"strings"

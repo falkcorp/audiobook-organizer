@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/pebble/v2"
+	coreauth "github.com/falkcorp/mediacore/auth"
 
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/cockroachdb/pebble/v2"
 )
 
 // The storage half of the admin "merge user B into user A" tool
@@ -587,7 +587,7 @@ func sortedStrings(s []string) []string {
 func sameStringSet(a, b []string) bool { return slices.Equal(sortedStrings(a), sortedStrings(b)) }
 
 func (f UserIdentityFields) matchesUser(u *User) bool {
-	return sameStringSet(f.Roles, u.Roles) && util.NormalizeEmail(f.Email) == util.NormalizeEmail(u.Email) &&
+	return sameStringSet(f.Roles, u.Roles) && coreauth.NormalizeEmail(f.Email) == coreauth.NormalizeEmail(u.Email) &&
 		f.EmailSource == u.EmailSource && f.MergedIntoUserID == u.MergedIntoUserID
 }
 
@@ -687,7 +687,7 @@ func (p *PebbleStore) RetireMergedUser(r UserRetirement) error {
 	case surv.MergedIntoUserID != "":
 		return fmt.Errorf("%w: the surviving account is itself merged away", ErrUserMergeRetireRefused)
 	}
-	survLower := util.NormalizeEmail(r.SurvivorAfter.Email)
+	survLower := coreauth.NormalizeEmail(r.SurvivorAfter.Email)
 	if trustedEmailSource(r.SurvivorAfter.EmailSource) {
 		if taken, err := p.otherProvenHolderLocked(survLower, r.SurvivorID, r.AbsorbedID); err != nil {
 			return err
@@ -696,7 +696,7 @@ func (p *PebbleStore) RetireMergedUser(r UserRetirement) error {
 		}
 	}
 	now := time.Now()
-	oldSurvLower, oldAbsLower := util.NormalizeEmail(surv.Email), util.NormalizeEmail(abs.Email)
+	oldSurvLower, oldAbsLower := coreauth.NormalizeEmail(surv.Email), coreauth.NormalizeEmail(abs.Email)
 	r.SurvivorAfter.applyTo(surv)
 	r.AbsorbedAfter.applyTo(abs)
 	abs.MergedIntoUserID = r.SurvivorID
@@ -773,7 +773,7 @@ func (p *PebbleStore) UnretireMergedUser(r UserRetirement) ([]string, error) {
 		return nil, fmt.Errorf("%w: %s / %s", ErrUserNotFound, r.SurvivorID, r.AbsorbedID)
 	}
 	var conflicts []string
-	oldSurvLower, oldAbsLower := util.NormalizeEmail(surv.Email), util.NormalizeEmail(abs.Email)
+	oldSurvLower, oldAbsLower := coreauth.NormalizeEmail(surv.Email), coreauth.NormalizeEmail(abs.Email)
 
 	// Survivor: roles and email are independent fields.
 	if sameStringSet(surv.Roles, r.SurvivorAfter.Roles) {
@@ -781,9 +781,9 @@ func (p *PebbleStore) UnretireMergedUser(r UserRetirement) ([]string, error) {
 	} else if !sameStringSet(surv.Roles, r.SurvivorBefore.Roles) {
 		conflicts = append(conflicts, "surviving account's roles changed after the merge; left as they are")
 	}
-	if util.NormalizeEmail(surv.Email) == util.NormalizeEmail(r.SurvivorAfter.Email) && surv.EmailSource == r.SurvivorAfter.EmailSource {
+	if coreauth.NormalizeEmail(surv.Email) == coreauth.NormalizeEmail(r.SurvivorAfter.Email) && surv.EmailSource == r.SurvivorAfter.EmailSource {
 		surv.Email, surv.EmailSource = r.SurvivorBefore.Email, r.SurvivorBefore.EmailSource
-	} else if util.NormalizeEmail(surv.Email) != util.NormalizeEmail(r.SurvivorBefore.Email) {
+	} else if coreauth.NormalizeEmail(surv.Email) != coreauth.NormalizeEmail(r.SurvivorBefore.Email) {
 		conflicts = append(conflicts, "surviving account's email changed after the merge; left as it is")
 	}
 
@@ -791,7 +791,7 @@ func (p *PebbleStore) UnretireMergedUser(r UserRetirement) ([]string, error) {
 	// that address proven (two proven holders is the state uniqueness forbids).
 	if abs.Email == "" && abs.EmailSource == "" {
 		restore := true
-		bl := util.NormalizeEmail(r.AbsorbedBefore.Email)
+		bl := coreauth.NormalizeEmail(r.AbsorbedBefore.Email)
 		if bl != "" && trustedEmailSource(r.AbsorbedBefore.EmailSource) {
 			if emailProven(surv, bl) {
 				restore = false
@@ -806,7 +806,7 @@ func (p *PebbleStore) UnretireMergedUser(r UserRetirement) ([]string, error) {
 		if restore {
 			abs.Email, abs.EmailSource = r.AbsorbedBefore.Email, r.AbsorbedBefore.EmailSource
 		}
-	} else if util.NormalizeEmail(abs.Email) != util.NormalizeEmail(r.AbsorbedBefore.Email) {
+	} else if coreauth.NormalizeEmail(abs.Email) != coreauth.NormalizeEmail(r.AbsorbedBefore.Email) {
 		conflicts = append(conflicts, "absorbed account's email was set after the merge; left as it is")
 	}
 	abs.MergedIntoUserID, abs.MergedAt = "", nil
@@ -831,7 +831,7 @@ func (p *PebbleStore) UnretireMergedUser(r UserRetirement) ([]string, error) {
 	}
 	// Keys: drop each address a row gave up, then write the ones the rows hold
 	// verified now.
-	newSurvLower, newAbsLower := util.NormalizeEmail(surv.Email), util.NormalizeEmail(abs.Email)
+	newSurvLower, newAbsLower := coreauth.NormalizeEmail(surv.Email), coreauth.NormalizeEmail(abs.Email)
 	if oldSurvLower != "" && oldSurvLower != newSurvLower {
 		if err := p.stageEmailKey(b, oldSurvLower, "", surv.ID); err != nil {
 			return nil, err
@@ -843,7 +843,7 @@ func (p *PebbleStore) UnretireMergedUser(r UserRetirement) ([]string, error) {
 		}
 	}
 	for _, u := range []*User{abs, surv} { // survivor last: it wins a shared key
-		if l := util.NormalizeEmail(u.Email); l != "" && trustedEmailSource(u.EmailSource) {
+		if l := coreauth.NormalizeEmail(u.Email); l != "" && trustedEmailSource(u.EmailSource) {
 			if err := p.stageEmailKey(b, l, u.ID, ""); err != nil {
 				return nil, err
 			}

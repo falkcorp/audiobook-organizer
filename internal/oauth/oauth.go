@@ -25,7 +25,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/util"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Provider names (stable — persisted on OAuthIdentity.Provider and used in routes).
@@ -75,7 +75,7 @@ type Config struct {
 func New(c Config) *Config {
 	allowed := make([]string, 0, len(c.AllowedEmails))
 	for _, e := range c.AllowedEmails {
-		e = util.NormalizeEmail(e)
+		e = coreauth.NormalizeEmail(e)
 		if e != "" {
 			allowed = append(allowed, e)
 		}
@@ -104,7 +104,7 @@ func ParseAllowedEmails(csv string) []string {
 // match against the allowlist, then ExtraAllowed when set. An empty allowlist with no
 // ExtraAllowed denies everyone (fail-closed).
 func (c *Config) IsEmailAllowed(email string) bool {
-	email = util.NormalizeEmail(email)
+	email = coreauth.NormalizeEmail(email)
 	if email == "" {
 		return false
 	}

@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
@@ -230,7 +232,7 @@ func requireRehashedToArgon2id(t *testing.T, s *Server, userID string) {
 	t.Helper()
 	fresh, err := s.storeForWiring().GetUserByID(userID)
 	require.NoError(t, err)
-	require.Equal(t, absauth.AlgoArgon2id, fresh.PasswordHashAlgo, "precondition: the ABS sign-in rehashes to argon2id")
+	require.Equal(t, authpw.AlgoArgon2id, fresh.PasswordHashAlgo, "precondition: the ABS sign-in rehashes to argon2id")
 }
 
 // credentialActions are the four account-security paths. Each must end every

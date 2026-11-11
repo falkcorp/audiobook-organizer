@@ -10,8 +10,9 @@ import (
 	"fmt"
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // OAuthIdentity links an external identity-provider account (GitHub, Google, or a
@@ -98,7 +99,7 @@ var _ VerifiedEmailIdentityLinker = (*PebbleStore)(nil)
 // It holds inviteMu, which every email writer takes, for the lookup and the
 // write.
 func (p *PebbleStore) LinkIdentityToVerifiedEmailHolder(identity *OAuthIdentity, email string) (*User, error) {
-	lower := util.NormalizeEmail(email)
+	lower := coreauth.NormalizeEmail(email)
 	if lower == "" || identity == nil {
 		return nil, nil
 	}

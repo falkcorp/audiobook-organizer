@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
@@ -49,7 +50,7 @@ func sampleUser() *database.User {
 func TestAcceptInvite_DoesNotLeakPasswordHash(t *testing.T) {
 	store := handlersmocks.NewMockUserStore(t)
 	user := sampleUser()
-	store.EXPECT().ConsumeInvite("tok-1", absauth.AlgoArgon2id, hashOf("supersecret")).Return(user, nil)
+	store.EXPECT().ConsumeInvite("tok-1", authpw.AlgoArgon2id, hashOf("supersecret")).Return(user, nil)
 	store.EXPECT().CreateSession(user.ID, mock.Anything, mock.Anything, mock.Anything, int64(0)).
 		Return(&database.Session{ID: "sess-1", ExpiresAt: time.Now().Add(time.Hour)}, nil)
 

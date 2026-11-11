@@ -3,7 +3,7 @@
 // guid: b81d3e64-2a97-4c05-8f1e-d7a09c5e3b72
 // last-edited: 2026-10-19
 
-package absauth
+package password
 
 import (
 	"go/ast"

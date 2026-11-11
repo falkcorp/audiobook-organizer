@@ -8,6 +8,8 @@ package absauth
 import (
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,7 +20,7 @@ import (
 // the request saturated (MarkLoginSaturated) and the login handlers, which are
 // the ones that know the account, apply SaturationPolicy before any password
 // work: an account with few failures of its own is delayed, never refused, and
-// only an account that has already failed SoftThreshold times in the window is
+// only an account that has already failed coreauth.SoftThreshold times in the window is
 // refused (429). The per-visitor limit refuses regardless, as it always did.
 const (
 	// SaturationDelayBase is the delay a saturated login with no failures of its
@@ -60,7 +62,7 @@ const (
 	loginSatRefusedKey = "login_saturation_refused"
 )
 
-// NoteLoginAccount records on c the account key (AccountKey of the submitted
+// NoteLoginAccount records on c the account key (coreauth.AccountKey of the submitted
 // username, whether or not that user exists) a login attempt names. The login
 // ceilings read it after the handler answers, so that a successful login can
 // hand back the failures the same visitor made against the same account and no
@@ -78,9 +80,9 @@ func LoginAccount(c *gin.Context) string {
 // SaturationPolicy is what a saturated login for an account with
 // accountFailures failures of its own in the window gets: a delay to apply
 // before password work, or a refusal once the account has failed
-// SoftThreshold times. accountFailures is 0 for an unknown username.
+// coreauth.SoftThreshold times. accountFailures is 0 for an unknown username.
 func SaturationPolicy(accountFailures int) (delay time.Duration, refuse bool) {
-	if accountFailures >= SoftThreshold {
+	if accountFailures >= coreauth.SoftThreshold {
 		return 0, true
 	}
 	return min(SaturationDelayBase+time.Duration(accountFailures)*SaturationDelayStep, SaturationDelayMax), false
@@ -88,7 +90,7 @@ func SaturationPolicy(accountFailures int) (delay time.Duration, refuse bool) {
 
 // RefuseSaturatedLogin applies SaturationPolicy for a saturated login on account
 // key accountKey: it applies the delay through delay when there is one and returns
-// false, or, when the account has already failed SoftThreshold times, records the
+// false, or, when the account has already failed coreauth.SoftThreshold times, records the
 // refusal on c and returns true so the caller answers 429. The policy is decided
 // by the SUBMITTED name, so a name that does not exist is delayed and refused
 // exactly like one that does. The refusal is recorded so the ceiling treats it as

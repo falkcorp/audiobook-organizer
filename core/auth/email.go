@@ -3,7 +3,7 @@
 // guid: a11d6c27-5ca8-4c72-b3cc-a9e585bc7dc8
 // last-edited: 2026-10-20
 
-package util
+package auth
 
 import (
 	"strings"
