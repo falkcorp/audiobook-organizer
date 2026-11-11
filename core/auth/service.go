@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -28,6 +29,9 @@ const (
 	DefaultRememberTTL   = 168 * time.Hour
 	DefaultKeyTTL        = 720 * time.Hour
 	DefaultKeyMaxTTL     = 8760 * time.Hour
+	// DefaultSessionCookie is core.auth.session.cookie_name's fallback; the
+	// kernel passes <AppID>_session (§4.3, SEC-11).
+	DefaultSessionCookie = "mediacore_session"
 	conflictRetries      = 4
 	auditModule          = "core"
 	refKindUser          = "user"
@@ -37,6 +41,7 @@ const (
 	actionAPIKeyCreate   = "core.apikey.create"
 	actionAPIKeyStatus   = "core.apikey.status"
 	actionSessionRevoke  = "core.session.revoke"
+	actionAuthenticate   = "core.auth.authenticate"
 	reasonNotInteractive = "not_interactive"
 )
 
@@ -65,6 +70,7 @@ type Settings struct {
 	RememberTTL   time.Duration // core.auth.session.remember_ttl
 	KeyDefaultTTL time.Duration // core.auth.apikey.default_ttl
 	KeyMaxTTL     time.Duration // core.auth.apikey.max_ttl
+	SessionCookie string        // core.auth.session.cookie_name
 }
 
 func (s Settings) withDefaults() Settings {
@@ -80,15 +86,20 @@ func (s Settings) withDefaults() Settings {
 	if s.KeyMaxTTL <= 0 {
 		s.KeyMaxTTL = DefaultKeyMaxTTL
 	}
+	if s.SessionCookie == "" {
+		s.SessionCookie = DefaultSessionCookie
+	}
 	return s
 }
 
-// Deps are the service's collaborators (05-authn §3.2). NewBatch and
-// Settings are coined by F4-02 (seams.d/F4-02.md): the service stages every
-// write on a batch of the identity store's own DB, and reads its settings
-// through a function rather than importing config. Secrets, Events and
-// StateFiles join with the rows that use them (OIDC, invalidation events,
-// the bootstrap token file).
+// Deps are the service's collaborators (05-authn §3.2). NewBatch, Settings,
+// Extensions and Client are coined by F4-02 (seams.d/F4-02.md): the service
+// stages every write on a batch of the identity store's own DB, reads its
+// settings through a function rather than importing config, receives the
+// app's identity extensions (app.Options.Authenticators) from the kernel,
+// and reads the client address httpapi resolved through Client, because
+// auth (L4) may not import httpapi (L6). Secrets and Events join with the
+// rows that use them (OIDC, invalidation events).
 type Deps struct {
 	Store       Store
 	NewBatch    func() *storage.Batch // an indexed batch over Store's keyspace (authstore.Store.NewBatch)
@@ -99,6 +110,12 @@ type Deps struct {
 	Clock       func() time.Time
 	Log         *slog.Logger
 	Metrics     *metrics.Scope // "mediacore.auth"; nil records nothing
+	// Extensions are the app's identity extensions, in any order (stage 12
+	// sorts them by Order).
+	Extensions []Extension
+	// Client returns a request's ClientInfo as httpapi resolved it
+	// (trusted-proxy aware); nil uses the TCP peer.
+	Client func(*http.Request) ClientInfo
 }
 
 // Service is core's authentication service (05-authn §3.2).
@@ -108,6 +125,10 @@ type Service struct {
 	now      func() time.Time
 	log      *slog.Logger
 	hasUsers atomic.Bool
+
+	extensions []Extension
+	methods    map[Method]MethodSpec // registered extension and compat methods
+	touches    touchTable
 }
 
 // New builds the service. It reads the store once (whether any user that can
@@ -140,6 +161,17 @@ func New(ctx context.Context, opts Options, d Deps) (*Service, error) {
 		s.log = slog.Default()
 	}
 	s.opts.ImportedKeyPrefixes = slices.Clone(opts.ImportedKeyPrefixes)
+	s.methods = map[Method]MethodSpec{}
+	for _, e := range d.Extensions {
+		if err := checkExtension(e); err != nil {
+			return nil, err
+		}
+		if _, dup := s.methods[e.Spec.Method]; dup {
+			return nil, fmt.Errorf("%w: extension method %q registered twice", ErrMethodSpec, e.Spec.Method)
+		}
+		s.methods[e.Spec.Method] = e.Spec
+		s.extensions = append(s.extensions, e)
+	}
 	for u, err := range d.Store.ScanUsers(ctx) {
 		if errors.Is(err, ErrUndecodableRecord) {
 			continue
@@ -168,18 +200,30 @@ func (s *Service) settings() Settings {
 }
 
 // interactive reports whether m is an interactive method: core's own
-// classification (Method.Interactive).
-func (s *Service) interactive(m Method) bool { return m.Interactive() }
+// classification (Method.Interactive), or what its registration declared.
+func (s *Service) interactive(m Method) bool {
+	if m.Interactive() {
+		return true
+	}
+	spec, ok := s.methods[m]
+	return ok && spec.Interactive
+}
 
 // knownMethod reports whether m is a method the service builds principals
-// for: core's credential methods.
+// for: core's credential methods and the registered extension and compat
+// methods.
 func (s *Service) knownMethod(m Method) bool {
 	switch m {
 	case MethodSession, MethodSessionDelegated, MethodAPIKey:
 		return true
 	}
-	return false
+	_, ok := s.methods[m]
+	return ok
 }
+
+// authDisabledPrincipal is §4.11's auth-off binding; until auth-off mode
+// lands it binds nothing.
+func (s *Service) authDisabledPrincipal(ClientInfo) (*Principal, bool) { return nil, false }
 
 // journalLine appends r into b, the revoking batch, before it commits
 // (§4.12). An Append failure never blocks the revocation: the batch records
