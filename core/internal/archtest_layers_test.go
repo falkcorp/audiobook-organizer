@@ -1,7 +1,7 @@
 // file: core/internal/archtest_layers_test.go
 // version: 1.0.13
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package internal holds core's R4 layer guard (03 §3.5.1 item 2), the
 // redesigned successor of ABO's internal/arch/layering_test.go for core. It
@@ -84,6 +84,10 @@ var coreLayerOf = map[string]int{
 	// store and the kernel's committer, which joins config, storage, secrets
 	// and audit, its highest import.
 	"internal/configstore": 4,
+	// internal/instancestore is the c/integrations/ key layout and raw
+	// staging under integrations' NativeInstanceStore and NativeImporter
+	// (F7-01, 05-metadata M1.4), so it takes integrations' layer (R4).
+	"internal/instancestore": 4,
 	// L5
 	"acquire": 5,
 	// L6 (internal/<capability>http is coreFamily's pattern)
