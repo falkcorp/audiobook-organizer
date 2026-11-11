@@ -1,5 +1,5 @@
 // file: core/storage/quarantine.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f747e96f-3ac0-4178-ad12-b685be746c02
 // last-edited: 2026-11-11
 
@@ -32,11 +32,18 @@ import (
 
 // QuarantineRecord is one quarantined row (05-storage §5S.3.13). Build is
 // the binary ID (app.BinaryID), never a UI build ID.
+//
+// Reason is the error the step or its importer returned, kept as text in
+// the record and printed by storage quarantine list and the dry run's
+// report. It must never carry a value: an importer's refusal names the
+// field and the rule it broke, never the field's content, because a
+// sensitive row's Value is sealed and its Reason is not (F3-06's importer
+// contract).
 type QuarantineRecord struct {
 	Key       []byte    `json:"key"`
 	Value     []byte    `json:"value"`
 	Secret    string    `json:"secret"`
-	Reason    string    `json:"reason"`
+	Reason    string    `json:"reason"` // never a value; see the type's doc
 	Step      string    `json:"step"`
 	Sensitive bool      `json:"sensitive"`
 	Build     string    `json:"build"`
@@ -258,10 +265,15 @@ func (db *DB) ExportQuarantine(ctx context.Context, step string, unseal Quaranti
 // of each sensitive one, in one batch, with audit's event staged into the
 // same batch (core.storage.quarantine_purge), and commits it Sync. It
 // returns the records deleted; a step with none commits nothing. step must
-// name one step. A read-only store refuses.
+// name one step, and audit is required: a purge deletes rows the operator
+// can never recover, so it never commits without its audit event. A
+// read-only store refuses.
 func (db *DB) PurgeQuarantine(ctx context.Context, step string, del QuarantineSecretDeleter, audit func(b *Batch, rows int) error) (n int, err error) {
 	if step == "" {
 		return 0, errors.New("storage: purge names no step")
+	}
+	if audit == nil {
+		return 0, fmt.Errorf("storage: purge of %s's quarantine stages no audit event (core.storage.quarantine_purge)", step)
 	}
 	if db.readOnly {
 		return 0, fmt.Errorf("storage: purge of %s's quarantine on a read-only store", step)
@@ -286,10 +298,8 @@ func (db *DB) PurgeQuarantine(ctx context.Context, step string, del QuarantineSe
 			return 0, err
 		}
 	}
-	if audit != nil {
-		if err := audit(b, len(entries)); err != nil {
-			return 0, err
-		}
+	if err := audit(b, len(entries)); err != nil {
+		return 0, err
 	}
 	if err := b.Commit(ctx, Sync); err != nil {
 		return 0, err

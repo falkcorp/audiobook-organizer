@@ -1,5 +1,5 @@
 // file: core/storage/rewrite.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7959a601-c65e-4e8c-bdfe-6fedd766d21e
 // last-edited: 2026-11-11
 
@@ -154,11 +154,11 @@ func (db *DB) RewriteCompact(ctx context.Context) error {
 			return err
 		}
 		defer release()
-		if err := db.eng.DB().Flush(); err != nil {
+		if err := db.engine().DB().Flush(); err != nil {
 			return fmt.Errorf("storage: rewrite flush: %w", err)
 		}
 		start, end := fullRange()
-		if err := db.eng.DB().Compact(ctx, start, end, true); err != nil {
+		if err := db.engine().DB().Compact(ctx, start, end, true); err != nil {
 			return fmt.Errorf("storage: rewrite compact: %w", err)
 		}
 		return nil
@@ -221,7 +221,7 @@ func (db *DB) rewriteCopy(ctx context.Context, final, id string) (stats RewriteC
 			err = errors.Join(err, dst.Close(st.opts.CloseTimeout))
 		}
 	}()
-	if f := db.eng.FormatMajorVersion(); f > dst.FormatMajorVersion() {
+	if f := db.engine().FormatMajorVersion(); f > dst.FormatMajorVersion() {
 		if err := dst.DB().RatchetFormatMajorVersion(f); err != nil {
 			return stats, fmt.Errorf("storage: rewrite: the copy's format: %w", err)
 		}
@@ -283,7 +283,7 @@ func (db *DB) writeTables(ctx context.Context, dst *ipebble.Engine, dir string, 
 		return nil, err
 	}
 	defer release()
-	snap := db.eng.DB().NewSnapshot()
+	snap := db.engine().DB().NewSnapshot()
 	defer func() { err = errors.Join(err, snap.Close()) }()
 	it, err := snap.NewIter(nil)
 	if err != nil {
@@ -364,7 +364,7 @@ func (db *DB) RewriteSwap(ctx context.Context, swap func(ctx context.Context) er
 		return err
 	}
 	db.closed.Store(true)
-	if err := db.labelled(LabelRewriteClose, func() error { return db.eng.Close(db.set.closeTimeout) }); err != nil {
+	if err := db.labelled(LabelRewriteClose, func() error { return db.engine().Close(db.set.closeTimeout) }); err != nil {
 		db.closed.Store(false)
 		return fmt.Errorf("storage: rewrite: close the store: %w", err)
 	}
@@ -379,14 +379,14 @@ func (db *DB) RewriteSwap(ctx context.Context, swap func(ctx context.Context) er
 		if err != nil {
 			return errors.Join(cause, backErr, fmt.Errorf("storage: rewrite: reopen the original at %s: %w", st.opts.Path, err))
 		}
-		db.eng = orig
+		db.eng.Store(orig)
 		db.closed.Store(false)
 		return errors.Join(cause, backErr)
 	}
 	if err != nil {
 		return errors.Join(swapErr, fmt.Errorf("storage: rewrite: reopen %s: %w", st.opts.Path, err))
 	}
-	db.eng = eng
+	db.eng.Store(eng)
 	db.closed.Store(false)
 	if swapErr != nil {
 		return swapErr
@@ -449,4 +449,4 @@ func (db *DB) attemptIdentity(fsid, ino uint64, promote bool) error {
 }
 
 // Path is the store's directory, core.storage.path.
-func (db *DB) Path() string { return db.eng.Path() }
+func (db *DB) Path() string { return db.engine().Path() }

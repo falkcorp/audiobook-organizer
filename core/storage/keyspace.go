@@ -1,7 +1,7 @@
 // file: core/storage/keyspace.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 19622090-dcb6-4a27-9fdc-56c0a74d93af
-// last-edited: 2026-11-07
+// last-edited: 2026-11-11
 
 package storage
 
@@ -161,7 +161,7 @@ func (k Keyspace) EstimateBytes(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 	defer release()
-	n, err := k.db.eng.DB().EstimateDiskUsage(k.prefix, keys.PrefixEnd(k.prefix))
+	n, err := k.db.engine().DB().EstimateDiskUsage(k.prefix, keys.PrefixEnd(k.prefix))
 	if err != nil {
 		return 0, fmt.Errorf("storage: estimate %s: %w", k.prefix, err)
 	}

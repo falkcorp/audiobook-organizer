@@ -1,7 +1,7 @@
 // file: core/storage/batch.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 95428f24-dcaf-4b52-bcb8-b5a04189097c
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -100,9 +100,9 @@ func (b *Batch) ensure() error {
 	}
 	defer release()
 	if b.indexed {
-		b.pb = b.db.eng.DB().NewIndexedBatch()
+		b.pb = b.db.engine().DB().NewIndexedBatch()
 	} else {
-		b.pb = b.db.eng.DB().NewBatch()
+		b.pb = b.db.engine().DB().NewBatch()
 	}
 	return nil
 }
@@ -553,7 +553,7 @@ func (b *Batch) Commit(ctx context.Context, d Durability) error {
 	}
 	defer release()
 	for k, want := range b.expects {
-		got, ok, err := getFrom(b.db.eng.DB(), []byte(k))
+		got, ok, err := getFrom(b.db.engine().DB(), []byte(k))
 		if err != nil {
 			return err
 		}
@@ -571,7 +571,7 @@ func (b *Batch) Commit(ctx context.Context, d Durability) error {
 	if d == NoSync {
 		opts = cpebble.NoSync
 	}
-	if err := b.db.eng.DB().Apply(b.pb, opts); err != nil {
+	if err := b.db.engine().DB().Apply(b.pb, opts); err != nil {
 		return fmt.Errorf("storage: commit: %w", err)
 	}
 	return nil
