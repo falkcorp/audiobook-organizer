@@ -1,7 +1,7 @@
 // file: core/storage/boot.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -341,14 +341,16 @@ func Open(ctx context.Context, opts OpenOptions) (*Opened, error) {
 }
 
 func newDB(eng *ipebble.Engine, opts OpenOptions, owners map[Owner]*ownerInfo, claims *claimIndex, readOnly bool) *DB {
-	return &DB{
-		eng: eng, log: opts.Logger, clock: opts.Clock, readOnly: readOnly,
+	db := &DB{
+		log: opts.Logger, clock: opts.Clock, readOnly: readOnly,
 		set: settings{
 			maxBatchBytes: opts.MaxBatchBytes, seqLease: opts.SequenceLease, migMaxBytes: opts.MigrationBytes,
 			migMaxOps: opts.MigrationOps, closeTimeout: opts.CloseTimeout, shadow: opts.ClaimsShadow,
 		},
 		owners: owners, claims: claims, hooks: opts.hooks,
 	}
+	db.eng.Store(eng)
+	return db
 }
 
 // Close closes a store Prepare was never called on.
@@ -441,7 +443,7 @@ func (o *Opened) Offline() (*DB, error) {
 		return refuse("the store has no install marker: serve takes its checkpoint and writes the marker first")
 	case st.attempt != "":
 		return refuse(fmt.Sprintf("upgrade attempt %s was left uncompleted by a killed boot: serve completes it", st.attempt))
-	case db.eng.NeedsRatchet():
+	case db.engine().NeedsRatchet():
 		return refuse("the store's Pebble format is below this build's: serve ratchets it behind a checkpoint")
 	}
 	st.prepared, st.migrated = true, true
@@ -549,7 +551,7 @@ func (db *DB) readBoot(ctx context.Context, refs []claimRef) error {
 	if err := db.planDAG(ctx); err != nil {
 		return err
 	}
-	st.needsCP = !st.fresh && (db.eng.NeedsRatchet() || len(st.plan) > 0 || !st.marker)
+	st.needsCP = !st.fresh && (db.engine().NeedsRatchet() || len(st.plan) > 0 || !st.marker)
 	return nil
 }
 
@@ -566,7 +568,7 @@ func (db *DB) isEmpty() (bool, error) {
 		return false, err
 	}
 	defer release()
-	it, err := db.eng.DB().NewIter(nil)
+	it, err := db.engine().DB().NewIter(nil)
 	if err != nil {
 		return false, fmt.Errorf("storage: iterator: %w", err)
 	}
@@ -871,7 +873,7 @@ func (db *DB) foreignKeys() error {
 	defer release()
 	var sample []string
 	for _, r := range []Range{{Start: []byte("c/"), End: []byte("c0")}, {Start: []byte("m/"), End: []byte("m0")}} {
-		it, err := db.eng.DB().NewIter(&cpebble.IterOptions{LowerBound: r.Start, UpperBound: r.End})
+		it, err := db.engine().DB().NewIter(&cpebble.IterOptions{LowerBound: r.Start, UpperBound: r.End})
 		if err != nil {
 			return fmt.Errorf("storage: iterator: %w", err)
 		}
@@ -938,7 +940,7 @@ func (db *DB) unclaimedKeys(limit int) (int, []string, error) {
 	}
 	n, sample := 0, []string(nil)
 	for _, g := range gaps {
-		it, err := db.eng.DB().NewIter(&cpebble.IterOptions{LowerBound: g.Start, UpperBound: g.End})
+		it, err := db.engine().DB().NewIter(&cpebble.IterOptions{LowerBound: g.Start, UpperBound: g.End})
 		if err != nil {
 			return 0, nil, fmt.Errorf("storage: iterator: %w", err)
 		}
@@ -1066,8 +1068,8 @@ func (o *Opened) Prepare(ctx context.Context) (*DB, error) {
 		}
 		st.attempt = ""
 	}
-	if db.eng.NeedsRatchet() {
-		if err := db.labelled(labelRatchet, db.eng.Ratchet); err != nil {
+	if db.engine().NeedsRatchet() {
+		if err := db.labelled(labelRatchet, db.engine().Ratchet); err != nil {
 			return nil, fmt.Errorf("storage: %w", err)
 		}
 	}

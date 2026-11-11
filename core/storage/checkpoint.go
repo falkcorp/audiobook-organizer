@@ -1,5 +1,5 @@
 // file: core/storage/checkpoint.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 32e3978a-4fec-4d22-bab1-48d0d64226d4
 // last-edited: 2026-11-11
 
@@ -216,7 +216,7 @@ func oserrorNotExist(err error) bool { return errors.Is(err, os.ErrNotExist) }
 // currentVector is the live store's vector.
 func (db *DB) currentVector() vector {
 	st := db.boot
-	v := vector{Versions: map[Owner]int{}, Levels: map[Owner]int{}, Format: uint64(db.eng.FormatMajorVersion())}
+	v := vector{Versions: map[Owner]int{}, Levels: map[Owner]int{}, Format: uint64(db.engine().FormatMajorVersion())}
 	maps.Copy(v.Versions, st.versions)
 	for lo := range st.supported {
 		v.Levels[lo] = st.stamps[lo]
@@ -269,7 +269,7 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	storeBytes, err := db.eng.DB().EstimateDiskUsage([]byte{0}, bytes.Repeat([]byte{0xff}, 8))
+	storeBytes, err := db.engine().DB().EstimateDiskUsage([]byte{0}, bytes.Repeat([]byte{0xff}, 8))
 	release()
 	if err != nil {
 		return fmt.Errorf("storage: estimate the store's size: %w", err)
@@ -381,16 +381,16 @@ func (db *DB) checkpointInto(dir string) error {
 	if err != nil {
 		return err
 	}
-	if err = db.eng.DB().Flush(); err != nil {
+	if err = db.engine().DB().Flush(); err != nil {
 		err = fmt.Errorf("flush before it: %w", err)
 	} else {
-		err = db.eng.DB().Checkpoint(dir, cpebble.WithFlushedWAL())
+		err = db.engine().DB().Checkpoint(dir, cpebble.WithFlushedWAL())
 	}
 	release()
 	if err != nil {
 		return fmt.Errorf("storage: checkpoint: %w", err)
 	}
-	eng, err := ipebble.Open(dir, ipebble.Options{FS: db.eng.FS(), ReadOnly: true, ErrorIfNotExists: true, Logger: db.log})
+	eng, err := ipebble.Open(dir, ipebble.Options{FS: db.engine().FS(), ReadOnly: true, ErrorIfNotExists: true, Logger: db.log})
 	if err != nil {
 		return fmt.Errorf("storage: checkpoint copy %s does not open read-only, so it %w. The live store is untouched. "+
 			"Check the filesystem that holds the copy for I/O errors and free space; if every attempt is refused, "+

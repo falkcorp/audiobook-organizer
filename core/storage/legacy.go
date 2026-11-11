@@ -1,7 +1,7 @@
 // file: core/storage/legacy.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e00c9cb-7614-4b45-814c-a6dac105888e
-// last-edited: 2026-11-07
+// last-edited: 2026-11-11
 
 package storage
 
@@ -95,7 +95,7 @@ func (r LegacyRange) Barrier(ctx context.Context) error {
 		return err
 	}
 	defer release()
-	if err := r.db.eng.DB().LogData(nil, cpebble.Sync); err != nil {
+	if err := r.db.engine().DB().LogData(nil, cpebble.Sync); err != nil {
 		return fmt.Errorf("storage: WAL barrier: %w", err)
 	}
 	return nil

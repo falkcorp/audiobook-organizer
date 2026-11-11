@@ -1,7 +1,7 @@
 // file: core/storage/tables.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0e9d24-8c13-4f7a-a6e2-1d9c4b7f3e80
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package storage
 
@@ -75,7 +75,7 @@ func (a *Admin) Tables(ctx context.Context, o TablesOptions) ([]TableInfo, error
 		return nil, err
 	}
 	defer release()
-	levels, err := a.db.eng.DB().SSTables(opts...)
+	levels, err := a.db.engine().DB().SSTables(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("storage: tables: %w", err)
 	}

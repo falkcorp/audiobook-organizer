@@ -1,7 +1,7 @@
 // file: core/storage/dryrun.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 40d09635-1676-462e-9a88-3dd03428e5a5
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -81,7 +81,7 @@ func (o *Opened) CopyForDryRun(ctx context.Context, dst string, rewrite bool) er
 		return err
 	}
 	defer release()
-	storeBytes, err := db.eng.DB().EstimateDiskUsage([]byte{0}, bytes.Repeat([]byte{0xff}, 8))
+	storeBytes, err := db.engine().DB().EstimateDiskUsage([]byte{0}, bytes.Repeat([]byte{0xff}, 8))
 	if err != nil {
 		return fmt.Errorf("storage: estimate the store's size: %w", err)
 	}

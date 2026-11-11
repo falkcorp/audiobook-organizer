@@ -1,5 +1,5 @@
 // file: core/kernel/cutover_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 09c631c4-1c2d-4d66-ae13-7ee32b295c1e
 // last-edited: 2026-11-11
 
@@ -1038,7 +1038,16 @@ func TestQuarantineGauge(t *testing.T) {
 	if s, o := gauge("true"), gauge("false"); s != 4 || o != 6 {
 		t.Errorf("quarantine_rows = %v sensitive, %v other; want 4 and 6", s, o)
 	}
-	if _, err := db.PurgeQuarantine(ctx, "gcpd.case-files", sf, nil); err != nil {
+	if _, err := db.PurgeQuarantine(ctx, "gcpd.case-files", sf, nil); err == nil || !strings.Contains(err.Error(), "audit") {
+		t.Fatalf("a purge with no audit event = %v, want refused", err)
+	}
+	if err := qg.Record(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if s, o := gauge("true"), gauge("false"); s != 4 || o != 6 {
+		t.Fatalf("after the refused purge quarantine_rows = %v sensitive, %v other; want 4 and 6 kept", s, o)
+	}
+	if _, err := db.PurgeQuarantine(ctx, "gcpd.case-files", sf, func(*storage.Batch, int) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := qg.Record(ctx, db); err != nil {
