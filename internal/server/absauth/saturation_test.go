@@ -1,5 +1,5 @@
 // file: internal/server/absauth/saturation_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4b91b557-13ea-4dba-b0b6-03391d4ac1bd
 // last-edited: 2026-11-10
 
@@ -33,18 +33,22 @@ func TestLoginSaturatedMark(t *testing.T) {
 func TestRefuseSaturatedLogin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var slept []time.Duration
-	delay := func(d time.Duration) { slept = append(slept, d) }
+	tr := coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, func(d time.Duration) { slept = append(slept, d) })
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	if RefuseSaturatedLogin(c, 0, delay) || LoginSaturationRefused(c) {
+	if RefuseSaturatedLogin(c, tr, "joker") || LoginSaturationRefused(c) {
 		t.Fatal("a fresh name must be delayed, not refused")
 	}
 	if len(slept) != 1 || slept[0] != coreauth.SaturationDelayBase {
 		t.Fatalf("slept %v", slept)
 	}
-	if !RefuseSaturatedLogin(c, coreauth.DefaultSoftThreshold, delay) || !LoginSaturationRefused(c) {
+	for range coreauth.DefaultSoftThreshold {
+		tr.RecordFailure("joker", "192.0.2.40")
+	}
+	slept = nil
+	if !RefuseSaturatedLogin(c, tr, "joker") || !LoginSaturationRefused(c) {
 		t.Fatal("a name at the threshold must be refused and the refusal recorded")
 	}
-	if len(slept) != 1 {
+	if len(slept) != 0 {
 		t.Fatal("a refusal is not delayed")
 	}
 	other, _ := gin.CreateTestContext(httptest.NewRecorder())

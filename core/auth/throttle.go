@@ -1,5 +1,5 @@
 // file: core/auth/throttle.go
-// version: 3.0.0
+// version: 3.1.0
 // guid: 3f9a1c86-2d57-4e0b-b843-9c60e5a7f218
 // last-edited: 2026-11-10
 
@@ -130,15 +130,34 @@ func NewThrottle(l ThrottleLimits, now func() time.Time, sleep func(time.Duratio
 	if sleep == nil {
 		sleep = time.Sleep
 	}
-	bySrc := newLRU[*failureCounter](l.MaxKeys)
-	bySrc.pinned = func(c *failureCounter) bool { return c.count >= l.MaxFailuresPerSource }
-	byAcct := newLRU[*failureCounter](l.MaxKeys)
-	byAcct.pinned = func(c *failureCounter) bool { return c.count >= l.SoftThreshold }
-	return &Throttle{lim: l, bySrc: bySrc, byAcct: byAcct, now: now, sleep: sleep}
+	t := &Throttle{lim: l, now: now, sleep: sleep}
+	// The pin rules read the limits in force (SetLimits); the tables only
+	// call them under t.mu.
+	t.bySrc = newLRU[*failureCounter](l.MaxKeys)
+	t.bySrc.pinned = func(c *failureCounter) bool { return c.count >= t.lim.MaxFailuresPerSource }
+	t.byAcct = newLRU[*failureCounter](l.MaxKeys)
+	t.byAcct.pinned = func(c *failureCounter) bool { return c.count >= t.lim.SoftThreshold }
+	return t
 }
 
 // Limits returns the policy in force.
-func (t *Throttle) Limits() ThrottleLimits { return t.lim }
+func (t *Throttle) Limits() ThrottleLimits {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lim
+}
+
+// SetLimits applies a new policy: core.auth.login.* are reloadable (05-authn
+// §8), so the service hands the throttle the settings in force on every
+// sign-in. A zero field takes its default, and MaxKeys keeps the value the
+// throttle was built with (its tables are sized once). Counters already
+// held are judged by the new limits from the next call on.
+func (t *Throttle) SetLimits(l ThrottleLimits) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	l.MaxKeys = t.lim.MaxKeys
+	t.lim = l.withDefaults()
+}
 
 // SetSleep replaces the delay function (HEAD's seam: a test injects a no-op
 // into a throttle another component built). A nil fn is ignored.
@@ -185,16 +204,38 @@ func (t *Throttle) SourceBlocked(source string) bool {
 // AccountFailures is the failures counted against accountKey in the current
 // window (0 for an unknown or expired key).
 func (t *Throttle) AccountFailures(accountKey string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.accountFailuresLocked(accountKey)
+}
+
+func (t *Throttle) accountFailuresLocked(accountKey string) int {
 	if accountKey == "" {
 		return 0
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	c, ok := t.byAcct.get(accountKey)
 	if !ok || t.now().Sub(c.firstAt) > t.lim.Window {
 		return 0
 	}
 	return c.count
+}
+
+// SaturationPolicy is what a saturated login (LoginAdmission.Saturated) on
+// accountKey gets before any password work (moved from ABO's
+// absauth/saturation.go): a delay of SaturationDelayBase plus
+// SaturationDelayStep per failure already counted on the account, capped at
+// SaturationDelayMax, or a refusal once the account has failed SoftThreshold
+// times. An unknown username has no failures of its own, so the answer is
+// decided by the SUBMITTED name and does not reveal whether it exists. The
+// failures and the threshold are read under one lock.
+func (t *Throttle) SaturationPolicy(accountKey string) (delay time.Duration, refuse bool) {
+	t.mu.Lock()
+	failures, threshold := t.accountFailuresLocked(accountKey), t.lim.SoftThreshold
+	t.mu.Unlock()
+	if failures >= threshold {
+		return 0, true
+	}
+	return min(SaturationDelayBase+time.Duration(failures)*SaturationDelayStep, SaturationDelayMax), false
 }
 
 // RecordFailure counts one failed attempt against the account (soft) and the

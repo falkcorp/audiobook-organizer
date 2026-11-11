@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth_saturation_test.go
-// version: 2.0.3
+// version: 2.0.4
 // guid: 145af753-2faf-4792-8784-654bedb37b46
 // last-edited: 2026-11-10
 
@@ -56,15 +56,12 @@ func TestLogin_SaturatedDelaysLowFailureAccountsAndRefusesSpentOnes(t *testing.T
 
 	// Saturated, account has 1 failure: delayed by the policy, not refused.
 	require.Equal(t, http.StatusUnauthorized, login("sat-user", true, "192.0.2.2:1"))
-	want, refuse := coreauth.SaturationPolicy(1)
-	require.False(t, refuse)
-	require.Equal(t, []time.Duration{want}, delays)
+	require.Equal(t, []time.Duration{coreauth.SaturationDelayBase + coreauth.SaturationDelayStep}, delays)
 
 	// An unknown username is delayed like an untouched account.
 	delays = nil
 	require.Equal(t, http.StatusUnauthorized, login("nobody-here", true, "192.0.2.3:1"))
-	base, _ := coreauth.SaturationPolicy(0)
-	require.Equal(t, []time.Duration{base}, delays)
+	require.Equal(t, []time.Duration{coreauth.SaturationDelayBase}, delays)
 
 	// Take the account to SoftThreshold failures, then it is refused while saturated.
 	for i := 0; i < coreauth.DefaultSoftThreshold; i++ {

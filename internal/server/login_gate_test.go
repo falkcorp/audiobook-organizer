@@ -1,5 +1,5 @@
 // file: internal/server/login_gate_test.go
-// version: 5.0.0
+// version: 5.0.1
 // guid: 47178e5a-1329-49cf-847d-f019456d21c6
 // last-edited: 2026-11-10
 
@@ -602,13 +602,19 @@ func TestLoginCeiling_SaturationRefusalCountsAsASaturatedFailure(t *testing.T) {
 	setTunnelConnectors(t, "")
 	l := newLoginCeiling()
 	fillCeiling(t, l, coreauth.LoginGlobalCeiling)
+	// An account that has already failed the soft threshold: refused while
+	// saturated.
+	spent := coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, func(time.Duration) {})
+	for range coreauth.DefaultSoftThreshold {
+		spent.RecordFailure("acct-a", "192.0.2.99")
+	}
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	reached := 0
 	r.POST("/login", loginCeilingMiddleware(l, nil, nil, nil), func(c *gin.Context) {
 		reached++
 		absauth.NoteLoginAccount(c, "acct-a")
-		if absauth.RefuseSaturatedLogin(c, coreauth.DefaultSoftThreshold, func(time.Duration) {}) {
+		if absauth.RefuseSaturatedLogin(c, spent, "acct-a") {
 			c.Status(http.StatusTooManyRequests)
 			return
 		}

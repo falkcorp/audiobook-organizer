@@ -1,5 +1,5 @@
 // file: core/auth/ceiling_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c74f922a-5136-4b51-93da-0108b945b37f
 // last-edited: 2026-11-10
 
@@ -17,7 +17,8 @@ import (
 
 // Ported from ABO's internal/server/login_ceiling_test.go (the cases that
 // read the ceiling's state rather than the gin middleware's answers) and
-// absauth/saturation_test.go (TestSaturationPolicy), F4-02. The middleware
+// absauth/saturation_test.go (TestSaturationPolicy, now TestThrottle_SaturationPolicy
+// in throttle_test.go), F4-02. The middleware
 // cases stay in ABO, driving this type through Admit.
 
 var ceilingT0 = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
@@ -668,27 +669,6 @@ func TestLoginCeiling_ConcurrentLoginsKeepExactCounts(t *testing.T) {
 		require.Zero(t, logins)
 		require.Zero(t, sat)
 	}
-}
-
-func TestSaturationPolicy(t *testing.T) {
-	for _, tt := range []struct {
-		failures int
-		delay    time.Duration
-		refuse   bool
-	}{
-		{0, SaturationDelayBase, false},
-		{1, SaturationDelayBase + SaturationDelayStep, false},
-		{DefaultSoftThreshold - 1, min(SaturationDelayBase+time.Duration(DefaultSoftThreshold-1)*SaturationDelayStep, SaturationDelayMax), false},
-		{DefaultSoftThreshold, 0, true},
-		{DefaultSoftThreshold + 7, 0, true},
-	} {
-		d, refuse := SaturationPolicy(tt.failures)
-		require.Equal(t, tt.delay, d, "failures %d", tt.failures)
-		require.Equal(t, tt.refuse, refuse, "failures %d", tt.failures)
-		require.LessOrEqual(t, d, SaturationDelayMax)
-	}
-	d, _ := SaturationPolicy(4)
-	require.Equal(t, SaturationDelayMax, d, "the cap applies below the threshold (1s + 4 x 500ms = 3s)")
 }
 
 func TestSaturatedLimitsValid(t *testing.T) {
