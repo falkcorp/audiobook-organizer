@@ -293,6 +293,9 @@ type auditFake struct {
 	mu       sync.Mutex
 	recorded []audit.Event
 	emitted  []audit.Event
+	// hold, when set, runs at the start of every RecordIn: the change's
+	// batch is staged but not committed, so a test can line writes up.
+	hold func(audit.Event)
 }
 
 func (a *auditFake) Record(context.Context, audit.Event) error {
@@ -302,6 +305,12 @@ func (a *auditFake) Record(context.Context, audit.Event) error {
 func (a *auditFake) RecordIn(_ context.Context, b *storage.Batch, e audit.Event) error {
 	if b == nil {
 		return errors.New("RecordIn without the change's batch")
+	}
+	a.mu.Lock()
+	hold := a.hold
+	a.mu.Unlock()
+	if hold != nil {
+		hold(e)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -344,6 +353,17 @@ func (j *journalFake) Gap(b *storage.Batch, _ time.Time) error {
 	defer j.mu.Unlock()
 	j.gaps++
 	return nil
+}
+
+// recordedActions lists the actions recorded in a batch, in order.
+func (a *auditFake) recordedActions() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, len(a.recorded))
+	for i, e := range a.recorded {
+		out[i] = e.Action
+	}
+	return out
 }
 
 func (j *journalFake) count(k journal.Kind) int {

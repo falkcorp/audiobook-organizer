@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,7 +53,7 @@ const (
 	refKindSession       = "session"
 	permUsersManage      = rbac.Permission("core:users.manage")
 	actionAPIKeyCreate   = "core.apikey.create"
-	actionAPIKeyStatus   = "core.apikey.status"
+	actionAPIKeyStatus   = "core.apikey.set_status"
 	actionSessionRevoke  = "core.session.revoke"
 	actionAuthenticate   = "core.auth.authenticate"
 	reasonNotInteractive = "not_interactive"
@@ -176,6 +177,10 @@ type Service struct {
 	now      func() time.Time
 	log      *slog.Logger
 	hasUsers atomic.Bool
+	// emailMu serialises every check that an e-mail is not verified on
+	// another account with the write that depends on it (HEAD's inviteMu):
+	// the store indexes usernames, not e-mails.
+	emailMu sync.Mutex
 
 	extensions []Extension
 	methods    map[Method]MethodSpec // registered extension and compat methods
