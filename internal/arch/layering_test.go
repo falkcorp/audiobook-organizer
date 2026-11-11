@@ -92,6 +92,7 @@ var layerOf = map[string]int{
 	"internal/audioext":              0, // table: leaf
 	"internal/audioutil":             0, // computed: imports no module package
 	"internal/authorname":            0, // table: leaf
+	"internal/books/cutover":         0, // computed: imports no module package (core only; its tests import internal/books/store)
 	"internal/cache":                 0, // table: leaf
 	"internal/cfaccesspolicy":        0, // computed: imports no module package
 	"internal/cfservicetoken":        0, // computed: imports no module package

@@ -1,0 +1,1993 @@
+# file: internal/books/cutover/testdata/rename_table.golden
+# version: 1.0.0
+# guid: 7024f723-334e-4210-95d6-bcd11fc9cd7d
+# last-edited: 2026-11-11
+#
+# Rename table (05-config §1.12.3), generated from the frozen HEAD Config by rename_table.go.
+# Regenerate: go test ./internal/books/cutover -run TestRenameTable_Golden -update
+# top-level rows: 173 (k=134 s=11 i=9 o=16 x=3); rows with two targets: 2
+# sub-key rows: 129; virtual rows: 3; removed-key rows: 23; process-name rows: 2; rows: 330
+# os.Getenv literals outside core/, internal/config/ and this package (05-config §1.12.4 "Not config at all"): 16
+#   getenv ABK_ALLOW_ENCRYPTION_KEY_REGEN
+#   getenv ABK_DISABLE_MEDIAINFO
+#   getenv ABK_HASH_BACKFILL_WORKERS
+#   getenv ABS_OIDC_REDIRECT_URIS
+#   getenv ALLOW_SERVER_DECODE
+#   getenv AO_FP_WORKER_ROOTS
+#   getenv AUDIOBOOK_API_KEY
+#   getenv AUDIOBOOK_API_URL
+#   getenv BASIC_AUTH_PASSWORD
+#   getenv HOME
+#   getenv OPENAI_BASE_URL
+#   getenv RECONCILE_VIA_SSH
+#   getenv UOS_DB_PATH
+#   getenv UOS_DB_TYPE
+#   getenv UOS_ROOT_DIR
+#   getenv UOS_SOCKET
+#   getenv with a non-constant name in internal/fingerprint/window_exec.go
+
+## root_dir
+top=true stored=blob class=i blob=root_dir admin=true fail-closed=false url=false
+target entry core.library.roots entry books-library (Path) convert=- list=core.library.roots env=ABO_CORE_LIBRARY_ROOTS
+retired file root_dir -> core.library.roots refuse
+retired env ROOT_DIR -> core.library.roots refuse
+
+## path_aliases
+top=true stored=blob class=i blob=path_aliases admin=true fail-closed=false url=false
+target entry core.library.roots entry books-library (Aliases) convert=- list=core.library.roots env=ABO_CORE_LIBRARY_ROOTS
+retired file path_aliases -> core.library.roots refuse
+retired env PATH_ALIASES -> core.library.roots refuse
+
+## database_path
+top=true stored=blob class=k blob=database_path admin=true fail-closed=false url=false
+target key core.storage.path convert=never-stored env=ABO_CORE_STORAGE_PATH
+note ProtectOperator: never stored
+retired file database_path -> core.storage.path refuse
+retired env DATABASE_PATH -> core.storage.path refuse
+
+## database_type
+top=true stored=blob class=x blob=database_type admin=true fail-closed=false url=false
+note Pebble only
+retired file database_type -> - warn
+retired env DATABASE_TYPE -> - warn
+
+## activity_backend
+top=true stored=blob class=k blob=activity_backend admin=true fail-closed=false url=false
+target key modules.books.activity.backend convert=- env=ABO_BOOKS_ACTIVITY_BACKEND
+retired file activity_backend -> modules.books.activity.backend refuse
+retired env ACTIVITY_BACKEND -> modules.books.activity.backend refuse
+
+## playlist_dir
+top=true stored=blob class=k blob=playlist_dir admin=true fail-closed=false url=false
+target key modules.books.playlist.dir convert=- env=ABO_BOOKS_PLAYLIST_DIR
+retired file playlist_dir -> modules.books.playlist.dir refuse
+retired env PLAYLIST_DIR -> modules.books.playlist.dir refuse
+
+## setup_complete
+top=true stored=blob class=k blob=setup_complete admin=false fail-closed=false url=false
+target key modules.books.setup.complete convert=- env=ABO_BOOKS_SETUP_COMPLETE
+retired file setup_complete -> modules.books.setup.complete warn
+retired env SETUP_COMPLETE -> modules.books.setup.complete warn
+
+## organization_strategy
+top=true stored=blob class=k blob=organization_strategy admin=false fail-closed=false url=false
+target key modules.books.organize.organization_strategy convert=- env=ABO_BOOKS_ORGANIZE_ORGANIZATION_STRATEGY
+retired file organization_strategy -> modules.books.organize.organization_strategy warn
+retired env ORGANIZATION_STRATEGY -> modules.books.organize.organization_strategy warn
+
+## scan_on_startup
+top=true stored=blob class=k blob=scan_on_startup admin=false fail-closed=false url=false
+target key modules.books.scan.on_startup convert=- env=ABO_BOOKS_SCAN_ON_STARTUP
+retired file scan_on_startup -> modules.books.scan.on_startup warn
+retired env SCAN_ON_STARTUP -> modules.books.scan.on_startup warn
+
+## auto_organize
+top=true stored=blob class=k blob=auto_organize admin=false fail-closed=false url=false
+target key modules.books.organize.auto_organize convert=- env=ABO_BOOKS_ORGANIZE_AUTO_ORGANIZE
+retired file auto_organize -> modules.books.organize.auto_organize warn
+retired env AUTO_ORGANIZE -> modules.books.organize.auto_organize warn
+
+## auto_scan_enabled
+top=true stored=blob class=k blob=auto_scan_enabled admin=false fail-closed=false url=false
+target key modules.books.scan.auto_scan_enabled convert=- env=ABO_BOOKS_SCAN_AUTO_SCAN_ENABLED
+retired file auto_scan_enabled -> modules.books.scan.auto_scan_enabled warn
+retired env AUTO_SCAN_ENABLED -> modules.books.scan.auto_scan_enabled warn
+
+## auto_scan_debounce_seconds
+top=true stored=blob class=k blob=auto_scan_debounce_seconds admin=false fail-closed=false url=false
+target key modules.books.scan.auto_scan_debounce_seconds convert=- env=ABO_BOOKS_SCAN_AUTO_SCAN_DEBOUNCE_SECONDS
+retired file auto_scan_debounce_seconds -> modules.books.scan.auto_scan_debounce_seconds warn
+retired env AUTO_SCAN_DEBOUNCE_SECONDS -> modules.books.scan.auto_scan_debounce_seconds warn
+
+## folder_naming_pattern
+top=true stored=blob class=k blob=folder_naming_pattern admin=true fail-closed=false url=false
+target key modules.books.organize.folder_naming_pattern convert=- env=ABO_BOOKS_ORGANIZE_FOLDER_NAMING_PATTERN
+retired file folder_naming_pattern -> modules.books.organize.folder_naming_pattern refuse
+retired env FOLDER_NAMING_PATTERN -> modules.books.organize.folder_naming_pattern refuse
+
+## file_naming_pattern
+top=true stored=blob class=k blob=file_naming_pattern admin=true fail-closed=false url=false
+target key modules.books.organize.file_naming_pattern convert=- env=ABO_BOOKS_ORGANIZE_FILE_NAMING_PATTERN
+retired file file_naming_pattern -> modules.books.organize.file_naming_pattern refuse
+retired env FILE_NAMING_PATTERN -> modules.books.organize.file_naming_pattern refuse
+
+## create_backups
+top=true stored=blob class=k blob=create_backups admin=false fail-closed=false url=false
+target key modules.books.tags.create_backups convert=- env=ABO_BOOKS_TAGS_CREATE_BACKUPS
+retired file create_backups -> modules.books.tags.create_backups warn
+retired env CREATE_BACKUPS -> modules.books.tags.create_backups warn
+
+## backup_dir
+top=true stored=blob class=k blob=backup_dir admin=true fail-closed=false url=false
+target key core.backup.dir convert=- env=ABO_CORE_BACKUP_DIR
+retired file backup_dir -> core.backup.dir refuse
+retired env BACKUP_DIR -> core.backup.dir refuse
+
+## backup_max_total_bytes
+top=true stored=blob class=k blob=backup_max_total_bytes admin=false fail-closed=false url=false
+target key core.backup.retention.max_total_bytes convert=- env=ABO_CORE_BACKUP_RETENTION_MAX_TOTAL_BYTES
+retired file backup_max_total_bytes -> core.backup.retention.max_total_bytes warn
+retired env BACKUP_MAX_TOTAL_BYTES -> core.backup.retention.max_total_bytes warn
+
+## backup_compression
+top=true stored=blob class=k blob=backup_compression admin=false fail-closed=false url=false
+target key core.backup.compression convert=- env=ABO_CORE_BACKUP_COMPRESSION
+retired file backup_compression -> core.backup.compression warn
+retired env BACKUP_COMPRESSION -> core.backup.compression warn
+
+## backup_compression_level
+top=true stored=blob class=k blob=backup_compression_level admin=false fail-closed=false url=false
+target key core.backup.compression_level convert=- env=ABO_CORE_BACKUP_COMPRESSION_LEVEL
+retired file backup_compression_level -> core.backup.compression_level warn
+retired env BACKUP_COMPRESSION_LEVEL -> core.backup.compression_level warn
+
+## enable_disk_quota
+top=true stored=blob class=k blob=enable_disk_quota admin=false fail-closed=false url=false
+target key modules.books.quota.enable_disk_quota convert=- env=ABO_BOOKS_QUOTA_ENABLE_DISK_QUOTA
+retired file enable_disk_quota -> modules.books.quota.enable_disk_quota warn
+retired env ENABLE_DISK_QUOTA -> modules.books.quota.enable_disk_quota warn
+
+## disk_quota_percent
+top=true stored=blob class=k blob=disk_quota_percent admin=false fail-closed=false url=false
+target key modules.books.quota.disk_quota_percent convert=- env=ABO_BOOKS_QUOTA_DISK_QUOTA_PERCENT
+retired file disk_quota_percent -> modules.books.quota.disk_quota_percent warn
+retired env DISK_QUOTA_PERCENT -> modules.books.quota.disk_quota_percent warn
+
+## enable_user_quotas
+top=true stored=blob class=k blob=enable_user_quotas admin=false fail-closed=false url=false
+target key modules.books.quota.enable_user_quotas convert=- env=ABO_BOOKS_QUOTA_ENABLE_USER_QUOTAS
+retired file enable_user_quotas -> modules.books.quota.enable_user_quotas warn
+retired env ENABLE_USER_QUOTAS -> modules.books.quota.enable_user_quotas warn
+
+## write_back_metadata
+top=true stored=blob class=k blob=write_back_metadata admin=false fail-closed=false url=false
+target key modules.books.tags.write_back_metadata convert=- env=ABO_BOOKS_TAGS_WRITE_BACK_METADATA
+retired file write_back_metadata -> modules.books.tags.write_back_metadata warn
+retired env WRITE_BACK_METADATA -> modules.books.tags.write_back_metadata warn
+
+## embed_cover_art
+top=true stored=blob class=k blob=embed_cover_art admin=false fail-closed=false url=false
+target key modules.books.tags.embed_cover_art convert=- env=ABO_BOOKS_TAGS_EMBED_COVER_ART
+retired file embed_cover_art -> modules.books.tags.embed_cover_art warn
+retired env EMBED_COVER_ART -> modules.books.tags.embed_cover_art warn
+
+## metadata_sources
+top=true stored=blob class=i blob=metadata_sources admin=false fail-closed=false url=false
+target instance metadata/<source id> instances convert=- env=-
+note credentials: `s` rows below
+retired file metadata_sources -> - warn
+retired env METADATA_SOURCES -> - warn
+retired env AUDIBLE_BASE_URL -> - warn
+retired env OPENLIBRARY_BASE_URL -> - warn
+retired env AUDNEXUS_BASE_URL -> - warn
+retired env GOOGLE_BOOKS_BASE_URL -> - warn
+
+## openlibrary_dump_enabled
+top=true stored=blob class=k blob=openlibrary_dump_enabled admin=false fail-closed=false url=false
+target key modules.books.openlibrary.dump_enabled convert=- env=ABO_BOOKS_OPENLIBRARY_DUMP_ENABLED
+retired file openlibrary_dump_enabled -> modules.books.openlibrary.dump_enabled warn
+retired env OPENLIBRARY_DUMP_ENABLED -> modules.books.openlibrary.dump_enabled warn
+
+## openlibrary_dump_dir
+top=true stored=blob class=k blob=openlibrary_dump_dir admin=true fail-closed=false url=false
+target key modules.books.openlibrary.dump_dir convert=- env=ABO_BOOKS_OPENLIBRARY_DUMP_DIR
+retired file openlibrary_dump_dir -> modules.books.openlibrary.dump_dir refuse
+retired env OPENLIBRARY_DUMP_DIR -> modules.books.openlibrary.dump_dir refuse
+
+## hardcover_api_token
+top=true stored=row class=s blob=- admin=false fail-closed=false url=false
+target secret integrations.metadata.hardcover.api_token convert=- passthrough env=ABO_INTEGRATIONS_METADATA_HARDCOVER_API_TOKEN
+note encrypted row
+retired file hardcover_api_token -> integrations.metadata.hardcover.api_token refuse Refuse
+retired env HARDCOVER_API_TOKEN -> integrations.metadata.hardcover.api_token refuse Refuse
+
+## google_books_api_key
+top=true stored=row class=s blob=- admin=false fail-closed=false url=false
+target secret integrations.metadata.google-books.api_key convert=- passthrough env=ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_API_KEY
+note encrypted row
+retired file google_books_api_key -> integrations.metadata.google-books.api_key refuse Refuse
+retired env GOOGLE_BOOKS_API_KEY -> integrations.metadata.google-books.api_key refuse Refuse
+
+## enable_ai_parsing
+top=true stored=blob class=k blob=enable_ai_parsing admin=false fail-closed=false url=false
+target key modules.books.ai.enable_ai_parsing convert=- env=ABO_BOOKS_AI_ENABLE_AI_PARSING
+retired file enable_ai_parsing -> modules.books.ai.enable_ai_parsing warn
+retired env ENABLE_AI_PARSING -> modules.books.ai.enable_ai_parsing warn
+
+## openai_api_key
+top=true stored=row class=s blob=- admin=false fail-closed=false url=false
+target secret integrations.ai.openai.api_key convert=- passthrough env=ABO_INTEGRATIONS_AI_OPENAI_API_KEY
+note encrypted row
+retired file openai_api_key -> integrations.ai.openai.api_key refuse Refuse
+retired env OPENAI_API_KEY -> integrations.ai.openai.api_key kept
+
+## acoustid_api_key
+top=true stored=blob class=s blob=acoustid_api_key admin=false fail-closed=false url=false
+target secret modules.books.acoustid.api_key convert=- env=ABO_BOOKS_ACOUSTID_API_KEY
+note plaintext in the blob
+retired file acoustid_api_key -> modules.books.acoustid.api_key refuse
+retired env ACOUSTID_API_KEY -> modules.books.acoustid.api_key refuse
+
+## fp_parallel_workers
+top=true stored=blob class=k blob=fp_parallel_workers admin=false fail-closed=false url=false
+target key modules.books.fingerprint.fp_parallel_workers convert=- env=ABO_BOOKS_FINGERPRINT_FP_PARALLEL_WORKERS
+retired file fp_parallel_workers -> modules.books.fingerprint.fp_parallel_workers warn
+retired env FP_PARALLEL_WORKERS -> modules.books.fingerprint.fp_parallel_workers warn
+
+## fingerprint_remote_workers_enabled
+top=true stored=blob class=k blob=fingerprint_remote_workers_enabled admin=false fail-closed=false url=false
+target key modules.books.fingerprint.remote_workers_enabled convert=- env=ABO_BOOKS_FINGERPRINT_REMOTE_WORKERS_ENABLED
+retired file fingerprint_remote_workers_enabled -> modules.books.fingerprint.remote_workers_enabled warn
+retired env FINGERPRINT_REMOTE_WORKERS_ENABLED -> modules.books.fingerprint.remote_workers_enabled warn
+
+## fingerprint_worker_tool_versions
+top=true stored=blob class=k blob=fingerprint_worker_tool_versions admin=false fail-closed=false url=false
+target key modules.books.fingerprint.worker_tool_versions convert=- env=ABO_BOOKS_FINGERPRINT_WORKER_TOOL_VERSIONS
+retired file fingerprint_worker_tool_versions -> modules.books.fingerprint.worker_tool_versions warn
+retired env FINGERPRINT_WORKER_TOOL_VERSIONS -> modules.books.fingerprint.worker_tool_versions warn
+
+## fingerprint_window_reference_tools
+top=true stored=blob class=k blob=fingerprint_window_reference_tools admin=false fail-closed=false url=false
+target key modules.books.fingerprint.window_reference_tools convert=- env=ABO_BOOKS_FINGERPRINT_WINDOW_REFERENCE_TOOLS
+retired file fingerprint_window_reference_tools -> modules.books.fingerprint.window_reference_tools warn
+retired env FINGERPRINT_WINDOW_REFERENCE_TOOLS -> modules.books.fingerprint.window_reference_tools warn
+
+## fingerprint_length_sec
+top=true stored=blob class=k blob=fingerprint_length_sec admin=false fail-closed=false url=false
+target key modules.books.fingerprint.length_sec convert=- env=ABO_BOOKS_FINGERPRINT_LENGTH_SEC
+retired file fingerprint_length_sec -> modules.books.fingerprint.length_sec warn
+retired env FINGERPRINT_LENGTH_SEC -> modules.books.fingerprint.length_sec warn
+retired env FP_LENGTH_SEC -> modules.books.fingerprint.length_sec warn
+
+## whisper_clip_cache_dir
+top=true stored=blob class=k blob=whisper_clip_cache_dir admin=true fail-closed=false url=false
+target key modules.books.whisper.clip_cache_dir convert=- env=ABO_BOOKS_WHISPER_CLIP_CACHE_DIR
+retired file whisper_clip_cache_dir -> modules.books.whisper.clip_cache_dir refuse
+retired env WHISPER_CLIP_CACHE_DIR -> modules.books.whisper.clip_cache_dir refuse
+
+## whisper_batch_sleep_ms
+top=true stored=blob class=k blob=whisper_batch_sleep_ms admin=false fail-closed=false url=false
+target key modules.books.whisper.batch_sleep_ms convert=- env=ABO_BOOKS_WHISPER_BATCH_SLEEP_MS
+retired file whisper_batch_sleep_ms -> modules.books.whisper.batch_sleep_ms warn
+retired env WHISPER_BATCH_SLEEP_MS -> modules.books.whisper.batch_sleep_ms warn
+
+## whisper_batch_size
+top=true stored=blob class=k blob=whisper_batch_size admin=false fail-closed=false url=false
+target key modules.books.whisper.batch_size convert=- env=ABO_BOOKS_WHISPER_BATCH_SIZE
+retired file whisper_batch_size -> modules.books.whisper.batch_size warn
+retired env WHISPER_BATCH_SIZE -> modules.books.whisper.batch_size warn
+
+## whisper_max_in_flight
+top=true stored=blob class=k blob=whisper_max_in_flight admin=false fail-closed=false url=false
+target key modules.books.whisper.max_in_flight convert=- env=ABO_BOOKS_WHISPER_MAX_IN_FLIGHT
+retired file whisper_max_in_flight -> modules.books.whisper.max_in_flight warn
+retired env WHISPER_MAX_IN_FLIGHT -> modules.books.whisper.max_in_flight warn
+
+## openai_base_url
+top=true stored=blob class=i blob=openai_base_url admin=false fail-closed=false url=false
+target passthrough integrations.ai.openai.base_url convert=- destination env=ABO_INTEGRATIONS_AI_OPENAI_BASE_URL
+retired file openai_base_url -> integrations.ai.openai.base_url refuse Refuse
+retired env OPENAI_BASE_URL -> integrations.ai.openai.base_url kept
+
+## abs_auth_probe_enabled
+top=true stored=blob class=k blob=abs_auth_probe_enabled admin=false fail-closed=false url=false
+target key modules.books.abs.auth_probe_enabled convert=- env=ABO_BOOKS_ABS_AUTH_PROBE_ENABLED
+retired file abs_auth_probe_enabled -> modules.books.abs.auth_probe_enabled warn
+retired env ABS_AUTH_PROBE_ENABLED -> modules.books.abs.auth_probe_enabled warn
+retired env ABS_AUTH_PROBE -> modules.books.abs.auth_probe_enabled warn
+
+## authority_evidence_enabled
+top=true stored=blob class=k blob=authority_evidence_enabled admin=false fail-closed=false url=false
+target key modules.books.metadata.authority_evidence_enabled convert=- env=ABO_BOOKS_METADATA_AUTHORITY_EVIDENCE_ENABLED
+retired file authority_evidence_enabled -> modules.books.metadata.authority_evidence_enabled warn
+retired env AUTHORITY_EVIDENCE_ENABLED -> modules.books.metadata.authority_evidence_enabled warn
+
+## retire_versions_apply_enabled
+top=true stored=blob class=k blob=retire_versions_apply_enabled admin=false fail-closed=false url=false
+target key modules.books.versions.retire_versions_apply_enabled convert=- env=ABO_BOOKS_VERSIONS_RETIRE_VERSIONS_APPLY_ENABLED
+retired file retire_versions_apply_enabled -> modules.books.versions.retire_versions_apply_enabled warn
+retired env RETIRE_VERSIONS_APPLY_ENABLED -> modules.books.versions.retire_versions_apply_enabled warn
+
+## kept_sweep_apply_enabled
+top=true stored=blob class=k blob=kept_sweep_apply_enabled admin=false fail-closed=false url=false
+target key modules.books.versions.kept_sweep_apply_enabled convert=- env=ABO_BOOKS_VERSIONS_KEPT_SWEEP_APPLY_ENABLED
+retired file kept_sweep_apply_enabled -> modules.books.versions.kept_sweep_apply_enabled warn
+retired env KEPT_SWEEP_APPLY_ENABLED -> modules.books.versions.kept_sweep_apply_enabled warn
+
+## abs_itunes_position_backfill_user_id
+top=true stored=blob class=k blob=abs_itunes_position_backfill_user_id admin=false fail-closed=false url=false
+target key modules.books.abs.itunes_position_backfill_user_id convert=- env=ABO_BOOKS_ABS_ITUNES_POSITION_BACKFILL_USER_ID
+retired file abs_itunes_position_backfill_user_id -> modules.books.abs.itunes_position_backfill_user_id warn
+retired env ABS_ITUNES_POSITION_BACKFILL_USER_ID -> modules.books.abs.itunes_position_backfill_user_id warn
+
+## otel_exporter_otlp_endpoint
+top=true stored=blob class=k blob=otel_exporter_otlp_endpoint admin=true fail-closed=false url=true
+target key core.tracing.otlp.endpoint convert=- env=ABO_CORE_TRACING_OTLP_ENDPOINT
+retired file otel_exporter_otlp_endpoint -> core.tracing.otlp.endpoint refuse
+retired env OTEL_EXPORTER_OTLP_ENDPOINT -> core.tracing.otlp.endpoint kept
+
+## otel_metrics_otlp_endpoint
+top=true stored=blob class=k blob=otel_metrics_otlp_endpoint admin=true fail-closed=false url=true
+target key core.metrics.otlp.endpoint convert=- env=ABO_CORE_METRICS_OTLP_ENDPOINT
+retired file otel_metrics_otlp_endpoint -> core.metrics.otlp.endpoint refuse
+retired env OTEL_METRICS_OTLP_ENDPOINT -> core.metrics.otlp.endpoint refuse
+retired env OTEL_EXPORTER_OTLP_METRICS_ENDPOINT -> core.metrics.otlp.endpoint kept
+
+## otel_metrics_otlp_interval
+top=true stored=blob class=k blob=otel_metrics_otlp_interval admin=false fail-closed=false url=false
+target key core.metrics.otlp.interval convert=- env=ABO_CORE_METRICS_OTLP_INTERVAL
+note bare integer = ms
+retired file otel_metrics_otlp_interval -> core.metrics.otlp.interval warn
+retired env OTEL_METRICS_OTLP_INTERVAL -> core.metrics.otlp.interval warn
+retired env OTEL_METRIC_EXPORT_INTERVAL -> core.metrics.otlp.interval kept
+
+## otel_metrics_otlp_insecure
+top=true stored=blob class=k blob=otel_metrics_otlp_insecure admin=true fail-closed=false url=false
+target key core.metrics.otlp.insecure convert=- env=ABO_CORE_METRICS_OTLP_INSECURE
+retired file otel_metrics_otlp_insecure -> core.metrics.otlp.insecure refuse
+retired env OTEL_METRICS_OTLP_INSECURE -> core.metrics.otlp.insecure refuse
+retired env OTEL_EXPORTER_OTLP_METRICS_INSECURE -> core.metrics.otlp.insecure kept
+
+## telemetry_environment
+top=true stored=blob class=k blob=telemetry_environment admin=false fail-closed=false url=false
+target key core.metrics.environment convert=- env=ABO_CORE_METRICS_ENVIRONMENT
+retired file telemetry_environment -> core.metrics.environment warn
+retired env TELEMETRY_ENVIRONMENT -> core.metrics.environment warn
+
+## list_warmer_heap_delta_mb
+top=true stored=blob class=k blob=list_warmer_heap_delta_mb admin=false fail-closed=false url=false
+target key modules.books.cache.list_warmer_heap_delta_mb convert=- env=ABO_BOOKS_CACHE_LIST_WARMER_HEAP_DELTA_MB
+retired file list_warmer_heap_delta_mb -> modules.books.cache.list_warmer_heap_delta_mb warn
+retired env LIST_WARMER_HEAP_DELTA_MB -> modules.books.cache.list_warmer_heap_delta_mb warn
+retired env LIST_WARMER_MAX_HEAP_MB -> modules.books.cache.list_warmer_heap_delta_mb warn
+
+## list_warmer_trickle_interval_ms
+top=true stored=blob class=k blob=list_warmer_trickle_interval_ms admin=false fail-closed=false url=false
+target key modules.books.cache.list_warmer_trickle_interval_ms convert=- env=ABO_BOOKS_CACHE_LIST_WARMER_TRICKLE_INTERVAL_MS
+retired file list_warmer_trickle_interval_ms -> modules.books.cache.list_warmer_trickle_interval_ms warn
+retired env LIST_WARMER_TRICKLE_INTERVAL_MS -> modules.books.cache.list_warmer_trickle_interval_ms warn
+
+## library_counts_cache_min_interval_seconds
+top=true stored=blob class=k blob=library_counts_cache_min_interval_seconds admin=false fail-closed=false url=false
+target key modules.books.cache.library_counts_cache_min_interval_seconds convert=- env=ABO_BOOKS_CACHE_LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS
+retired file library_counts_cache_min_interval_seconds -> modules.books.cache.library_counts_cache_min_interval_seconds warn
+retired env LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS -> modules.books.cache.library_counts_cache_min_interval_seconds warn
+
+## bleve_description_max_chars
+top=true stored=blob class=k blob=bleve_description_max_chars admin=false fail-closed=false url=false
+target key modules.books.search.bleve_description_max_chars convert=- env=ABO_BOOKS_SEARCH_BLEVE_DESCRIPTION_MAX_CHARS
+retired file bleve_description_max_chars -> modules.books.search.bleve_description_max_chars warn
+retired env BLEVE_DESCRIPTION_MAX_CHARS -> modules.books.search.bleve_description_max_chars warn
+
+## metadata_review_model
+top=true stored=blob class=k blob=metadata_review_model admin=false fail-closed=false url=false
+target key modules.books.metadata.review_model convert=- env=ABO_BOOKS_METADATA_REVIEW_MODEL
+retired file metadata_review_model -> modules.books.metadata.review_model warn
+retired env METADATA_REVIEW_MODEL -> modules.books.metadata.review_model warn
+
+## filename_parse_model
+top=true stored=blob class=k blob=filename_parse_model admin=false fail-closed=false url=false
+target key modules.books.ai.filename_parse_model convert=- env=ABO_BOOKS_AI_FILENAME_PARSE_MODEL
+retired file filename_parse_model -> modules.books.ai.filename_parse_model warn
+retired env FILENAME_PARSE_MODEL -> modules.books.ai.filename_parse_model warn
+
+## cover_art_model
+top=true stored=blob class=k blob=cover_art_model admin=false fail-closed=false url=false
+target key modules.books.ai.cover_art_model convert=- env=ABO_BOOKS_AI_COVER_ART_MODEL
+retired file cover_art_model -> modules.books.ai.cover_art_model warn
+retired env COVER_ART_MODEL -> modules.books.ai.cover_art_model warn
+
+## whisper_remote_url
+top=true stored=blob class=k blob=whisper_remote_url admin=false fail-closed=false url=true
+target key modules.books.whisper.remote_url convert=- env=ABO_BOOKS_WHISPER_REMOTE_URL
+retired file whisper_remote_url -> modules.books.whisper.remote_url warn
+retired env WHISPER_REMOTE_URL -> modules.books.whisper.remote_url warn
+
+## whisper_endpoints
+top=true stored=blob class=k blob=whisper_endpoints admin=false fail-closed=false url=false
+target key modules.books.whisper.endpoints convert=- env=ABO_BOOKS_WHISPER_ENDPOINTS
+retired file whisper_endpoints -> modules.books.whisper.endpoints warn
+retired env WHISPER_ENDPOINTS -> modules.books.whisper.endpoints warn
+
+## whisper_requires
+top=true stored=blob class=k blob=whisper_requires admin=false fail-closed=false url=false
+target key modules.books.whisper.requires convert=- env=ABO_BOOKS_WHISPER_REQUIRES
+retired file whisper_requires -> modules.books.whisper.requires warn
+retired env WHISPER_REQUIRES -> modules.books.whisper.requires warn
+
+## ai_endpoints
+top=true stored=blob class=i blob=ai_endpoints admin=false fail-closed=false url=false
+target instance ai/<row id> instances convert=- env=-
+note 05-ai §10
+retired file ai_endpoints -> - warn
+retired env AI_ENDPOINTS -> - warn
+
+## ai_endpoints_routing
+top=true stored=blob class=x blob=ai_endpoints_routing admin=false fail-closed=false url=false
+note not a router input (05-ai §10)
+retired file ai_endpoints_routing -> - warn
+retired env AI_ENDPOINTS_ROUTING -> - warn
+
+## concurrent_scans
+top=true stored=blob class=k blob=concurrent_scans admin=false fail-closed=false url=false
+target key modules.books.scan.concurrent_scans convert=- env=ABO_BOOKS_SCAN_CONCURRENT_SCANS
+retired file concurrent_scans -> modules.books.scan.concurrent_scans warn
+retired env CONCURRENT_SCANS -> modules.books.scan.concurrent_scans warn
+
+## scan_progress_every
+top=true stored=blob class=k blob=scan_progress_every admin=false fail-closed=false url=false
+target key modules.books.scan.progress_every convert=- env=ABO_BOOKS_SCAN_PROGRESS_EVERY
+retired file scan_progress_every -> modules.books.scan.progress_every warn
+retired env SCAN_PROGRESS_EVERY -> modules.books.scan.progress_every warn
+
+## scan_standdown_grace_seconds
+top=true stored=blob class=k blob=scan_standdown_grace_seconds admin=false fail-closed=false url=false
+target key modules.books.scan.standdown_grace_seconds convert=- env=ABO_BOOKS_SCAN_STANDDOWN_GRACE_SECONDS
+retired file scan_standdown_grace_seconds -> modules.books.scan.standdown_grace_seconds warn
+retired env SCAN_STANDDOWN_GRACE_SECONDS -> modules.books.scan.standdown_grace_seconds warn
+
+## chapter_consolidation_threshold_min
+top=true stored=blob class=k blob=chapter_consolidation_threshold_min admin=false fail-closed=false url=false
+target key modules.books.chapters.chapter_consolidation_threshold_min convert=- env=ABO_BOOKS_CHAPTERS_CHAPTER_CONSOLIDATION_THRESHOLD_MIN
+retired file chapter_consolidation_threshold_min -> modules.books.chapters.chapter_consolidation_threshold_min warn
+retired env CHAPTER_CONSOLIDATION_THRESHOLD_MIN -> modules.books.chapters.chapter_consolidation_threshold_min warn
+
+## repair_chapter_max_min
+top=true stored=blob class=k blob=repair_chapter_max_min admin=false fail-closed=false url=false
+target key modules.books.chapters.repair_chapter_max_min convert=- env=ABO_BOOKS_CHAPTERS_REPAIR_CHAPTER_MAX_MIN
+retired file repair_chapter_max_min -> modules.books.chapters.repair_chapter_max_min warn
+retired env REPAIR_CHAPTER_MAX_MIN -> modules.books.chapters.repair_chapter_max_min warn
+
+## fragment_window_containment_min
+top=true stored=blob class=k blob=fragment_window_containment_min admin=false fail-closed=false url=false
+target key modules.books.chapters.fragment_window_containment_min convert=- env=ABO_BOOKS_CHAPTERS_FRAGMENT_WINDOW_CONTAINMENT_MIN
+retired file fragment_window_containment_min -> modules.books.chapters.fragment_window_containment_min warn
+retired env FRAGMENT_WINDOW_CONTAINMENT_MIN -> modules.books.chapters.fragment_window_containment_min warn
+
+## metadata_candidate_fetch_workers
+top=true stored=blob class=k blob=metadata_candidate_fetch_workers admin=false fail-closed=false url=false
+target key modules.books.metadata.candidate_fetch_workers convert=- env=ABO_BOOKS_METADATA_CANDIDATE_FETCH_WORKERS
+retired file metadata_candidate_fetch_workers -> modules.books.metadata.candidate_fetch_workers warn
+retired env METADATA_CANDIDATE_FETCH_WORKERS -> modules.books.metadata.candidate_fetch_workers warn
+
+## identification_advance_enabled
+top=true stored=blob class=k blob=identification_advance_enabled admin=false fail-closed=false url=false
+target key modules.books.metadata.identification_advance_enabled convert=- env=ABO_BOOKS_METADATA_IDENTIFICATION_ADVANCE_ENABLED
+retired file identification_advance_enabled -> modules.books.metadata.identification_advance_enabled warn
+retired env IDENTIFICATION_ADVANCE_ENABLED -> modules.books.metadata.identification_advance_enabled warn
+
+## google_books_daily_limit
+top=true stored=blob class=k blob=google_books_daily_limit admin=false fail-closed=false url=false
+target key modules.books.metadata.google_books_daily_limit convert=- env=ABO_BOOKS_METADATA_GOOGLE_BOOKS_DAILY_LIMIT
+retired file google_books_daily_limit -> modules.books.metadata.google_books_daily_limit warn
+retired env GOOGLE_BOOKS_DAILY_LIMIT -> modules.books.metadata.google_books_daily_limit warn
+
+## google_books_background_daily_limit
+top=true stored=blob class=k blob=google_books_background_daily_limit admin=false fail-closed=false url=false
+target key modules.books.metadata.google_books_background_daily_limit convert=- env=ABO_BOOKS_METADATA_GOOGLE_BOOKS_BACKGROUND_DAILY_LIMIT
+retired file google_books_background_daily_limit -> modules.books.metadata.google_books_background_daily_limit warn
+retired env GOOGLE_BOOKS_BACKGROUND_DAILY_LIMIT -> modules.books.metadata.google_books_background_daily_limit warn
+
+## google_books_fallback_daily_limit
+top=true stored=blob class=k blob=google_books_fallback_daily_limit admin=false fail-closed=false url=false
+target key modules.books.metadata.google_books_fallback_daily_limit convert=- env=ABO_BOOKS_METADATA_GOOGLE_BOOKS_FALLBACK_DAILY_LIMIT
+retired file google_books_fallback_daily_limit -> modules.books.metadata.google_books_fallback_daily_limit warn
+retired env GOOGLE_BOOKS_FALLBACK_DAILY_LIMIT -> modules.books.metadata.google_books_fallback_daily_limit warn
+
+## coalesce_shattered_siblings
+top=true stored=blob class=k blob=coalesce_shattered_siblings admin=false fail-closed=false url=false
+target key modules.books.scan.coalesce_shattered_siblings convert=- env=ABO_BOOKS_SCAN_COALESCE_SHATTERED_SIBLINGS
+retired file coalesce_shattered_siblings -> modules.books.scan.coalesce_shattered_siblings warn
+retired env COALESCE_SHATTERED_SIBLINGS -> modules.books.scan.coalesce_shattered_siblings warn
+
+## operation_timeout_minutes
+top=true stored=blob class=k blob=operation_timeout_minutes admin=false fail-closed=false url=false
+target key modules.books.operations.stale_threshold_minutes convert=- env=ABO_BOOKS_OPERATIONS_STALE_THRESHOLD_MINUTES
+note read at HEAD only as the staleness threshold of books' GET /api/v1/operations/stale
+retired file operation_timeout_minutes -> modules.books.operations.stale_threshold_minutes warn
+retired env OPERATION_TIMEOUT_MINUTES -> modules.books.operations.stale_threshold_minutes warn
+
+## db_census_exact_read_mb_per_sec
+top=true stored=blob class=k blob=db_census_exact_read_mb_per_sec admin=false fail-closed=false url=false
+target key modules.books.db_census.exact_read_mb_per_sec convert=- env=ABO_BOOKS_DB_CENSUS_EXACT_READ_MB_PER_SEC
+retired file db_census_exact_read_mb_per_sec -> modules.books.db_census.exact_read_mb_per_sec warn
+retired env DB_CENSUS_EXACT_READ_MB_PER_SEC -> modules.books.db_census.exact_read_mb_per_sec warn
+
+## db_census_exact_cooldown_hours
+top=true stored=blob class=k blob=db_census_exact_cooldown_hours admin=false fail-closed=false url=false
+target key modules.books.db_census.exact_cooldown_hours convert=- env=ABO_BOOKS_DB_CENSUS_EXACT_COOLDOWN_HOURS
+retired file db_census_exact_cooldown_hours -> modules.books.db_census.exact_cooldown_hours warn
+retired env DB_CENSUS_EXACT_COOLDOWN_HOURS -> modules.books.db_census.exact_cooldown_hours warn
+
+## min_book_size_bytes
+top=true stored=blob class=k blob=min_book_size_bytes admin=false fail-closed=false url=false
+target key modules.books.scan.min_book_size_bytes convert=- env=ABO_BOOKS_SCAN_MIN_BOOK_SIZE_BYTES
+retired file min_book_size_bytes -> modules.books.scan.min_book_size_bytes warn
+retired env MIN_BOOK_SIZE_BYTES -> modules.books.scan.min_book_size_bytes warn
+
+## min_rescan_age_hours
+top=true stored=blob class=k blob=min_rescan_age_hours admin=false fail-closed=false url=false
+target key modules.books.scan.min_rescan_age_hours convert=- env=ABO_BOOKS_SCAN_MIN_RESCAN_AGE_HOURS
+retired file min_rescan_age_hours -> modules.books.scan.min_rescan_age_hours warn
+retired env MIN_RESCAN_AGE_HOURS -> modules.books.scan.min_rescan_age_hours warn
+
+## log_retention_days
+top=true stored=blob class=k blob=log_retention_days admin=false fail-closed=false url=false
+target key core.log.journal.retention_days convert=log-retention env=ABO_CORE_LOG_JOURNAL_RETENTION_DAYS
+note 0 -> 90, negative -> 0 (keep)
+retired file log_retention_days -> core.log.journal.retention_days warn
+retired env LOG_RETENTION_DAYS -> core.log.journal.retention_days warn
+
+## operation_log_retention_days
+top=true stored=blob class=k blob=operation_log_retention_days admin=false fail-closed=false url=false
+target key core.tasks.history_retention convert=days-to-duration env=ABO_CORE_TASKS_HISTORY_RETENTION
+note days -> duration
+retired file operation_log_retention_days -> core.tasks.history_retention warn
+retired env OPERATION_LOG_RETENTION_DAYS -> core.tasks.history_retention warn
+
+## activity_log_retention_change_days
+top=true stored=blob class=k blob=activity_log_retention_change_days admin=false fail-closed=false url=false
+target key modules.books.activity.log_retention_change_days convert=- env=ABO_BOOKS_ACTIVITY_LOG_RETENTION_CHANGE_DAYS
+retired file activity_log_retention_change_days -> modules.books.activity.log_retention_change_days warn
+retired env ACTIVITY_LOG_RETENTION_CHANGE_DAYS -> modules.books.activity.log_retention_change_days warn
+
+## activity_log_retention_debug_days
+top=true stored=blob class=k blob=activity_log_retention_debug_days admin=false fail-closed=false url=false
+target key modules.books.activity.log_retention_debug_days convert=- env=ABO_BOOKS_ACTIVITY_LOG_RETENTION_DEBUG_DAYS
+retired file activity_log_retention_debug_days -> modules.books.activity.log_retention_debug_days warn
+retired env ACTIVITY_LOG_RETENTION_DEBUG_DAYS -> modules.books.activity.log_retention_debug_days warn
+
+## activity_log_compaction_days
+top=true stored=blob class=k blob=activity_log_compaction_days admin=false fail-closed=false url=false
+target key modules.books.activity.log_compaction_days convert=- env=ABO_BOOKS_ACTIVITY_LOG_COMPACTION_DAYS
+retired file activity_log_compaction_days -> modules.books.activity.log_compaction_days warn
+retired env ACTIVITY_LOG_COMPACTION_DAYS -> modules.books.activity.log_compaction_days warn
+
+## activity_log_nightly_compaction_enabled
+top=true stored=blob class=k blob=activity_log_nightly_compaction_enabled admin=false fail-closed=false url=false
+target key modules.books.activity.log_nightly_compaction_enabled convert=- env=ABO_BOOKS_ACTIVITY_LOG_NIGHTLY_COMPACTION_ENABLED
+retired file activity_log_nightly_compaction_enabled -> modules.books.activity.log_nightly_compaction_enabled warn
+retired env ACTIVITY_LOG_NIGHTLY_COMPACTION_ENABLED -> modules.books.activity.log_nightly_compaction_enabled warn
+
+## activity_log_full_detail_days
+top=true stored=blob class=k blob=activity_log_full_detail_days admin=false fail-closed=false url=false
+target key modules.books.activity.log_full_detail_days convert=- env=ABO_BOOKS_ACTIVITY_LOG_FULL_DETAIL_DAYS
+retired file activity_log_full_detail_days -> modules.books.activity.log_full_detail_days warn
+retired env ACTIVITY_LOG_FULL_DETAIL_DAYS -> modules.books.activity.log_full_detail_days warn
+
+## ai_journal_retention_days
+top=true stored=blob class=k blob=ai_journal_retention_days admin=false fail-closed=false url=false
+target key core.ai.journal_retention convert=days-to-duration coined env=ABO_CORE_AI_JOURNAL_RETENTION
+note days -> duration
+retired file ai_journal_retention_days -> core.ai.journal_retention warn
+retired env AI_JOURNAL_RETENTION_DAYS -> core.ai.journal_retention warn
+
+## embedding
+top=true stored=blob class=k blob=embedding admin=false fail-closed=false url=false
+target key modules.books.embedding.* convert=- env=ABO_BOOKS_EMBEDDING
+retired file embedding -> modules.books.embedding warn
+retired env EMBEDDING -> modules.books.embedding warn
+
+## embedding.enabled
+top=false stored=blob class=k blob=embedding admin=false fail-closed=false url=false
+target key modules.books.embedding.enabled convert=- env=ABO_BOOKS_EMBEDDING_ENABLED
+retired env EMBEDDING.ENABLED -> modules.books.embedding.enabled warn
+retired env EMBEDDING_ENABLED -> modules.books.embedding.enabled warn
+
+## embedding.model
+top=false stored=blob class=k blob=embedding admin=false fail-closed=false url=false
+target key modules.books.embedding.model convert=- env=ABO_BOOKS_EMBEDDING_MODEL
+retired env EMBEDDING.MODEL -> modules.books.embedding.model warn
+retired env EMBEDDING_MODEL -> modules.books.embedding.model warn
+
+## embedding.dimensions
+top=false stored=blob class=k blob=embedding admin=false fail-closed=false url=false
+target key modules.books.embedding.dimensions convert=- env=ABO_BOOKS_EMBEDDING_DIMENSIONS
+retired env EMBEDDING.DIMENSIONS -> modules.books.embedding.dimensions warn
+retired env EMBEDDING_DIMENSIONS -> modules.books.embedding.dimensions warn
+
+## embedding.base_url
+top=false stored=blob class=k blob=embedding admin=false fail-closed=false url=true
+target key modules.books.embedding.base_url convert=- env=ABO_BOOKS_EMBEDDING_BASE_URL
+retired env EMBEDDING.BASE_URL -> modules.books.embedding.base_url warn
+retired env EMBEDDING_BASE_URL -> modules.books.embedding.base_url warn
+
+## embedding.vector_backend
+top=false stored=blob class=k blob=embedding admin=false fail-closed=false url=false
+target key modules.books.embedding.vector_backend convert=- env=ABO_BOOKS_EMBEDDING_VECTOR_BACKEND
+retired env EMBEDDING.VECTOR_BACKEND -> modules.books.embedding.vector_backend warn
+retired env VECTOR_INDEX_BACKEND -> modules.books.embedding.vector_backend warn
+
+## embedding.request_timeout_seconds
+top=false stored=blob class=k blob=embedding admin=false fail-closed=false url=false
+target key modules.books.embedding.request_timeout_seconds convert=- env=ABO_BOOKS_EMBEDDING_REQUEST_TIMEOUT_SECONDS
+retired env EMBEDDING.REQUEST_TIMEOUT_SECONDS -> modules.books.embedding.request_timeout_seconds warn
+retired env EMBEDDING_REQUEST_TIMEOUT_SECONDS -> modules.books.embedding.request_timeout_seconds warn
+
+## dedup
+top=true stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.* convert=- env=ABO_BOOKS_DEDUP
+retired file dedup -> modules.books.dedup warn
+retired env DEDUP -> modules.books.dedup warn
+
+## dedup.book_high_threshold
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.book_high_threshold convert=- env=ABO_BOOKS_DEDUP_BOOK_HIGH_THRESHOLD
+retired env DEDUP.BOOK_HIGH_THRESHOLD -> modules.books.dedup.book_high_threshold warn
+
+## dedup.book_low_threshold
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.book_low_threshold convert=- env=ABO_BOOKS_DEDUP_BOOK_LOW_THRESHOLD
+retired env DEDUP.BOOK_LOW_THRESHOLD -> modules.books.dedup.book_low_threshold warn
+
+## dedup.author_high_threshold
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.author_high_threshold convert=- env=ABO_BOOKS_DEDUP_AUTHOR_HIGH_THRESHOLD
+retired env DEDUP.AUTHOR_HIGH_THRESHOLD -> modules.books.dedup.author_high_threshold warn
+
+## dedup.author_low_threshold
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.author_low_threshold convert=- env=ABO_BOOKS_DEDUP_AUTHOR_LOW_THRESHOLD
+retired env DEDUP.AUTHOR_LOW_THRESHOLD -> modules.books.dedup.author_low_threshold warn
+
+## dedup.auto_merge_enabled
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.auto_merge_enabled convert=- env=ABO_BOOKS_DEDUP_AUTO_MERGE_ENABLED
+retired env DEDUP.AUTO_MERGE_ENABLED -> modules.books.dedup.auto_merge_enabled warn
+
+## dedup.embeddings_enabled
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.embeddings_enabled convert=- env=ABO_BOOKS_DEDUP_EMBEDDINGS_ENABLED
+retired env DEDUP.EMBEDDINGS_ENABLED -> modules.books.dedup.embeddings_enabled warn
+
+## dedup.llm_auto_merge_high_confidence
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.llm_auto_merge_high_confidence convert=- env=ABO_BOOKS_DEDUP_LLM_AUTO_MERGE_HIGH_CONFIDENCE
+retired env DEDUP.LLM_AUTO_MERGE_HIGH_CONFIDENCE -> modules.books.dedup.llm_auto_merge_high_confidence warn
+
+## dedup.auto_resolve_enabled
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.auto_resolve_enabled convert=- env=ABO_BOOKS_DEDUP_AUTO_RESOLVE_ENABLED
+retired env DEDUP.AUTO_RESOLVE_ENABLED -> modules.books.dedup.auto_resolve_enabled warn
+
+## dedup.on_import_via_scheduler
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.on_import_via_scheduler convert=- env=ABO_BOOKS_DEDUP_ON_IMPORT_VIA_SCHEDULER
+retired env DEDUP.ON_IMPORT_VIA_SCHEDULER -> modules.books.dedup.on_import_via_scheduler warn
+
+## dedup.review_model
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.review_model convert=- env=ABO_BOOKS_DEDUP_REVIEW_MODEL
+retired env DEDUP.REVIEW_MODEL -> modules.books.dedup.review_model warn
+
+## dedup.signals.band_certain_min
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.signals.band_certain_min convert=- env=ABO_BOOKS_DEDUP_SIGNALS_BAND_CERTAIN_MIN
+retired env DEDUP.SIGNALS.BAND_CERTAIN_MIN -> modules.books.dedup.signals.band_certain_min warn
+
+## dedup.signals.band_high_min
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.signals.band_high_min convert=- env=ABO_BOOKS_DEDUP_SIGNALS_BAND_HIGH_MIN
+retired env DEDUP.SIGNALS.BAND_HIGH_MIN -> modules.books.dedup.signals.band_high_min warn
+
+## dedup.signals.band_medium_min
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.signals.band_medium_min convert=- env=ABO_BOOKS_DEDUP_SIGNALS_BAND_MEDIUM_MIN
+retired env DEDUP.SIGNALS.BAND_MEDIUM_MIN -> modules.books.dedup.signals.band_medium_min warn
+
+## dedup.signals.band_review_min
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.signals.band_review_min convert=- env=ABO_BOOKS_DEDUP_SIGNALS_BAND_REVIEW_MIN
+retired env DEDUP.SIGNALS.BAND_REVIEW_MIN -> modules.books.dedup.signals.band_review_min warn
+
+## dedup.signals.confidence
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.signals.confidence convert=- env=ABO_BOOKS_DEDUP_SIGNALS_CONFIDENCE
+retired env DEDUP.SIGNALS.CONFIDENCE -> modules.books.dedup.signals.confidence warn
+
+## dedup.embedding_thresholds_by_model
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.embedding_thresholds_by_model convert=- env=ABO_BOOKS_DEDUP_EMBEDDING_THRESHOLDS_BY_MODEL
+retired env DEDUP.EMBEDDING_THRESHOLDS_BY_MODEL -> modules.books.dedup.embedding_thresholds_by_model warn
+
+## dedup.chromem_lazy
+top=false stored=blob class=k blob=dedup admin=false fail-closed=false url=false
+target key modules.books.dedup.chromem_lazy convert=- env=ABO_BOOKS_DEDUP_CHROMEM_LAZY
+retired env DEDUP.CHROMEM_LAZY -> modules.books.dedup.chromem_lazy warn
+retired env DEDUP_CHROMEM_LAZY -> modules.books.dedup.chromem_lazy warn
+
+## dedup_boilerplate
+top=true stored=blob class=k blob=dedup_boilerplate admin=false fail-closed=false url=false
+target key modules.books.dedup.boilerplate.* convert=- env=ABO_BOOKS_DEDUP_BOILERPLATE
+retired file dedup_boilerplate -> modules.books.dedup.boilerplate warn
+retired env DEDUP_BOILERPLATE -> modules.books.dedup.boilerplate warn
+
+## dedup_boilerplate.extra_title_patterns
+top=false stored=blob class=k blob=dedup_boilerplate admin=false fail-closed=false url=false
+target key modules.books.dedup.boilerplate.extra_title_patterns convert=- env=ABO_BOOKS_DEDUP_BOILERPLATE_EXTRA_TITLE_PATTERNS
+retired env DEDUP_BOILERPLATE.EXTRA_TITLE_PATTERNS -> modules.books.dedup.boilerplate.extra_title_patterns warn
+
+## dedup_boilerplate.extra_prefix_patterns
+top=false stored=blob class=k blob=dedup_boilerplate admin=false fail-closed=false url=false
+target key modules.books.dedup.boilerplate.extra_prefix_patterns convert=- env=ABO_BOOKS_DEDUP_BOILERPLATE_EXTRA_PREFIX_PATTERNS
+retired env DEDUP_BOILERPLATE.EXTRA_PREFIX_PATTERNS -> modules.books.dedup.boilerplate.extra_prefix_patterns warn
+
+## metadata_scoring
+top=true stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.* convert=- env=ABO_BOOKS_METADATA_SCORING
+retired file metadata_scoring -> modules.books.metadata.scoring warn
+retired env METADATA_SCORING -> modules.books.metadata.scoring warn
+
+## metadata_scoring.embedding_enabled
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.embedding_enabled convert=- env=ABO_BOOKS_METADATA_SCORING_EMBEDDING_ENABLED
+retired env METADATA_SCORING.EMBEDDING_ENABLED -> modules.books.metadata.scoring.embedding_enabled warn
+retired env METADATA_SCORING_EMBEDDING_ENABLED -> modules.books.metadata.scoring.embedding_enabled warn
+
+## metadata_scoring.embedding_min_score
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.embedding_min_score convert=- env=ABO_BOOKS_METADATA_SCORING_EMBEDDING_MIN_SCORE
+retired env METADATA_SCORING.EMBEDDING_MIN_SCORE -> modules.books.metadata.scoring.embedding_min_score warn
+retired env METADATA_SCORING_EMBEDDING_MIN_SCORE -> modules.books.metadata.scoring.embedding_min_score warn
+
+## metadata_scoring.embedding_best_match
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.embedding_best_match convert=- env=ABO_BOOKS_METADATA_SCORING_EMBEDDING_BEST_MATCH
+retired env METADATA_SCORING.EMBEDDING_BEST_MATCH -> modules.books.metadata.scoring.embedding_best_match warn
+retired env METADATA_SCORING_EMBEDDING_BEST_MATCH -> modules.books.metadata.scoring.embedding_best_match warn
+
+## metadata_scoring.llm_enabled
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.llm_enabled convert=- env=ABO_BOOKS_METADATA_SCORING_LLM_ENABLED
+retired env METADATA_SCORING.LLM_ENABLED -> modules.books.metadata.scoring.llm_enabled warn
+retired env METADATA_SCORING_LLM_ENABLED -> modules.books.metadata.scoring.llm_enabled warn
+
+## metadata_scoring.llm_rerank_epsilon
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.llm_rerank_epsilon convert=- env=ABO_BOOKS_METADATA_SCORING_LLM_RERANK_EPSILON
+retired env METADATA_SCORING.LLM_RERANK_EPSILON -> modules.books.metadata.scoring.llm_rerank_epsilon warn
+retired env METADATA_SCORING_LLM_RERANK_EPSILON -> modules.books.metadata.scoring.llm_rerank_epsilon warn
+
+## metadata_scoring.llm_rerank_top_k
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.llm_rerank_top_k convert=- env=ABO_BOOKS_METADATA_SCORING_LLM_RERANK_TOP_K
+retired env METADATA_SCORING.LLM_RERANK_TOP_K -> modules.books.metadata.scoring.llm_rerank_top_k warn
+retired env METADATA_SCORING_LLM_RERANK_TOP_K -> modules.books.metadata.scoring.llm_rerank_top_k warn
+
+## metadata_scoring.transcription_title_exact_boost
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.transcription_title_exact_boost convert=- env=ABO_BOOKS_METADATA_SCORING_TRANSCRIPTION_TITLE_EXACT_BOOST
+retired env METADATA_SCORING.TRANSCRIPTION_TITLE_EXACT_BOOST -> modules.books.metadata.scoring.transcription_title_exact_boost warn
+retired env METADATA_SCORING_TRANSCRIPTION_TITLE_EXACT_BOOST -> modules.books.metadata.scoring.transcription_title_exact_boost warn
+
+## metadata_scoring.transcription_title_substr_boost
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.transcription_title_substr_boost convert=- env=ABO_BOOKS_METADATA_SCORING_TRANSCRIPTION_TITLE_SUBSTR_BOOST
+retired env METADATA_SCORING.TRANSCRIPTION_TITLE_SUBSTR_BOOST -> modules.books.metadata.scoring.transcription_title_substr_boost warn
+retired env METADATA_SCORING_TRANSCRIPTION_TITLE_SUBSTR_BOOST -> modules.books.metadata.scoring.transcription_title_substr_boost warn
+
+## metadata_scoring.transcription_author_boost
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.transcription_author_boost convert=- env=ABO_BOOKS_METADATA_SCORING_TRANSCRIPTION_AUTHOR_BOOST
+retired env METADATA_SCORING.TRANSCRIPTION_AUTHOR_BOOST -> modules.books.metadata.scoring.transcription_author_boost warn
+retired env METADATA_SCORING_TRANSCRIPTION_AUTHOR_BOOST -> modules.books.metadata.scoring.transcription_author_boost warn
+
+## metadata_scoring.transcription_narrator_boost
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.transcription_narrator_boost convert=- env=ABO_BOOKS_METADATA_SCORING_TRANSCRIPTION_NARRATOR_BOOST
+retired env METADATA_SCORING.TRANSCRIPTION_NARRATOR_BOOST -> modules.books.metadata.scoring.transcription_narrator_boost warn
+retired env METADATA_SCORING_TRANSCRIPTION_NARRATOR_BOOST -> modules.books.metadata.scoring.transcription_narrator_boost warn
+
+## metadata_scoring.compilation_penalty
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.compilation_penalty convert=- env=ABO_BOOKS_METADATA_SCORING_COMPILATION_PENALTY
+retired env METADATA_SCORING.COMPILATION_PENALTY -> modules.books.metadata.scoring.compilation_penalty warn
+retired env METADATA_SCORING_COMPILATION_PENALTY -> modules.books.metadata.scoring.compilation_penalty warn
+
+## metadata_scoring.rich_metadata_field_bonus
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.rich_metadata_field_bonus convert=- env=ABO_BOOKS_METADATA_SCORING_RICH_METADATA_FIELD_BONUS
+retired env METADATA_SCORING.RICH_METADATA_FIELD_BONUS -> modules.books.metadata.scoring.rich_metadata_field_bonus warn
+retired env METADATA_SCORING_RICH_METADATA_FIELD_BONUS -> modules.books.metadata.scoring.rich_metadata_field_bonus warn
+
+## metadata_scoring.rich_metadata_bonus_cap
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.rich_metadata_bonus_cap convert=- env=ABO_BOOKS_METADATA_SCORING_RICH_METADATA_BONUS_CAP
+retired env METADATA_SCORING.RICH_METADATA_BONUS_CAP -> modules.books.metadata.scoring.rich_metadata_bonus_cap warn
+retired env METADATA_SCORING_RICH_METADATA_BONUS_CAP -> modules.books.metadata.scoring.rich_metadata_bonus_cap warn
+
+## metadata_scoring.f1_min_score
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.f1_min_score convert=- env=ABO_BOOKS_METADATA_SCORING_F1_MIN_SCORE
+retired env METADATA_SCORING.F1_MIN_SCORE -> modules.books.metadata.scoring.f1_min_score warn
+retired env METADATA_SCORING_F1_MIN_SCORE -> modules.books.metadata.scoring.f1_min_score warn
+
+## metadata_scoring.series_name_match_boost
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.series_name_match_boost convert=- env=ABO_BOOKS_METADATA_SCORING_SERIES_NAME_MATCH_BOOST
+retired env METADATA_SCORING.SERIES_NAME_MATCH_BOOST -> modules.books.metadata.scoring.series_name_match_boost warn
+retired env METADATA_SCORING_SERIES_NAME_MATCH_BOOST -> modules.books.metadata.scoring.series_name_match_boost warn
+
+## metadata_scoring.series_number_exact_boost
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.series_number_exact_boost convert=- env=ABO_BOOKS_METADATA_SCORING_SERIES_NUMBER_EXACT_BOOST
+retired env METADATA_SCORING.SERIES_NUMBER_EXACT_BOOST -> modules.books.metadata.scoring.series_number_exact_boost warn
+retired env METADATA_SCORING_SERIES_NUMBER_EXACT_BOOST -> modules.books.metadata.scoring.series_number_exact_boost warn
+
+## metadata_scoring.series_number_wrong_penalty
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.series_number_wrong_penalty convert=- env=ABO_BOOKS_METADATA_SCORING_SERIES_NUMBER_WRONG_PENALTY
+retired env METADATA_SCORING.SERIES_NUMBER_WRONG_PENALTY -> modules.books.metadata.scoring.series_number_wrong_penalty warn
+retired env METADATA_SCORING_SERIES_NUMBER_WRONG_PENALTY -> modules.books.metadata.scoring.series_number_wrong_penalty warn
+
+## metadata_scoring.duration_tier_multipliers
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.duration_tier_multipliers convert=- env=ABO_BOOKS_METADATA_SCORING_DURATION_TIER_MULTIPLIERS
+retired env METADATA_SCORING.DURATION_TIER_MULTIPLIERS -> modules.books.metadata.scoring.duration_tier_multipliers warn
+
+## metadata_scoring.duration_tier_scores
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.duration_tier_scores convert=- env=ABO_BOOKS_METADATA_SCORING_DURATION_TIER_SCORES
+retired env METADATA_SCORING.DURATION_TIER_SCORES -> modules.books.metadata.scoring.duration_tier_scores warn
+
+## metadata_scoring.bulk_fetch_workers
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.bulk_fetch_workers convert=- env=ABO_BOOKS_METADATA_SCORING_BULK_FETCH_WORKERS
+retired env METADATA_SCORING.BULK_FETCH_WORKERS -> modules.books.metadata.scoring.bulk_fetch_workers warn
+retired env METADATA_SCORING_BULK_FETCH_WORKERS -> modules.books.metadata.scoring.bulk_fetch_workers warn
+
+## metadata_scoring.write_back_workers
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.write_back_workers convert=- env=ABO_BOOKS_METADATA_SCORING_WRITE_BACK_WORKERS
+retired env METADATA_SCORING.WRITE_BACK_WORKERS -> modules.books.metadata.scoring.write_back_workers warn
+retired env METADATA_SCORING_WRITE_BACK_WORKERS -> modules.books.metadata.scoring.write_back_workers warn
+
+## metadata_scoring.source_fanout_workers
+top=false stored=blob class=k blob=metadata_scoring admin=false fail-closed=false url=false
+target key modules.books.metadata.scoring.source_fanout_workers convert=- env=ABO_BOOKS_METADATA_SCORING_SOURCE_FANOUT_WORKERS
+retired env METADATA_SCORING.SOURCE_FANOUT_WORKERS -> modules.books.metadata.scoring.source_fanout_workers warn
+
+## catalog
+top=true stored=blob class=k blob=catalog admin=false fail-closed=false url=false
+target key modules.books.catalog.* convert=- env=ABO_BOOKS_CATALOG
+retired file catalog -> modules.books.catalog warn
+retired env CATALOG -> modules.books.catalog warn
+
+## catalog.enabled
+top=false stored=blob class=k blob=catalog admin=false fail-closed=false url=false
+target key modules.books.catalog.enabled convert=- env=ABO_BOOKS_CATALOG_ENABLED
+retired env CATALOG.ENABLED -> modules.books.catalog.enabled warn
+
+## catalog.language
+top=false stored=blob class=k blob=catalog admin=false fail-closed=false url=false
+target key modules.books.catalog.language convert=- env=ABO_BOOKS_CATALOG_LANGUAGE
+retired env CATALOG.LANGUAGE -> modules.books.catalog.language warn
+
+## catalog.marketplace
+top=false stored=blob class=k blob=catalog admin=false fail-closed=false url=false
+target key modules.books.catalog.marketplace convert=- env=ABO_BOOKS_CATALOG_MARKETPLACE
+retired env CATALOG.MARKETPLACE -> modules.books.catalog.marketplace warn
+
+## catalog.harvest_rate_fraction
+top=false stored=blob class=k blob=catalog admin=false fail-closed=false url=false
+target key modules.books.catalog.harvest_rate_fraction convert=- env=ABO_BOOKS_CATALOG_HARVEST_RATE_FRACTION
+retired env CATALOG.HARVEST_RATE_FRACTION -> modules.books.catalog.harvest_rate_fraction warn
+
+## catalog.max_products_per_author
+top=false stored=blob class=k blob=catalog admin=false fail-closed=false url=false
+target key modules.books.catalog.max_products_per_author convert=- env=ABO_BOOKS_CATALOG_MAX_PRODUCTS_PER_AUTHOR
+retired env CATALOG.MAX_PRODUCTS_PER_AUTHOR -> modules.books.catalog.max_products_per_author warn
+
+## ai_backend
+top=true stored=blob class=x blob=ai_backend admin=false fail-closed=false url=false
+note its scalars are already folded into ai_endpoints by HEAD's codec (05-ai §10)
+retired file ai_backend -> - warn
+retired env AI_BACKEND -> - warn
+retired env AI_BACKEND_EMBEDDING_MODE -> - warn
+retired env AI_BACKEND_LLM_MODE -> - warn
+retired env AI_BACKEND_LOCAL_BASE_URL -> - warn
+retired env AI_BACKEND_LOCAL_EMBEDDING_MODEL -> - warn
+retired env AI_BACKEND_LOCAL_LLM_MODEL -> - warn
+retired env AI_BACKEND_PARSE_BATCH_SIZE -> - warn
+retired env AI_BACKEND_PARSE_BATCH_TIMEOUT_SECONDS -> - warn
+retired env AI_BACKEND_PARSE_BATCH_WORKERS -> - warn
+
+## api_rate_limit_per_minute
+top=true stored=blob class=k blob=api_rate_limit_per_minute admin=false fail-closed=false url=false
+target key core.http.rate_limit.per_minute convert=- env=ABO_CORE_HTTP_RATE_LIMIT_PER_MINUTE
+retired file api_rate_limit_per_minute -> core.http.rate_limit.per_minute warn
+retired env API_RATE_LIMIT_PER_MINUTE -> core.http.rate_limit.per_minute warn
+
+## json_body_limit_mb
+top=true stored=blob class=k blob=json_body_limit_mb admin=false fail-closed=false url=false
+target key core.http.body.json_max_bytes convert=mib-to-bytes env=ABO_CORE_HTTP_BODY_JSON_MAX_BYTES
+note MiB -> bytes
+retired file json_body_limit_mb -> core.http.body.json_max_bytes warn
+retired env JSON_BODY_LIMIT_MB -> core.http.body.json_max_bytes warn
+
+## upload_body_limit_mb
+top=true stored=blob class=k blob=upload_body_limit_mb admin=false fail-closed=false url=false
+target key core.http.body.upload_max_bytes convert=mib-to-bytes env=ABO_CORE_HTTP_BODY_UPLOAD_MAX_BYTES
+note MiB -> bytes
+retired file upload_body_limit_mb -> core.http.body.upload_max_bytes warn
+retired env UPLOAD_BODY_LIMIT_MB -> core.http.body.upload_max_bytes warn
+
+## master_list_retention
+top=true stored=blob class=k blob=master_list_retention admin=false fail-closed=false url=false
+target key modules.books.master_list.retention convert=- env=ABO_BOOKS_MASTER_LIST_RETENTION
+retired file master_list_retention -> modules.books.master_list.retention warn
+retired env MASTER_LIST_RETENTION -> modules.books.master_list.retention warn
+
+## enable_auth
+top=true stored=blob class=k blob=enable_auth admin=true fail-closed=true url=false
+target key core.auth.mode convert=auth-mode env=ABO_CORE_AUTH_MODE
+note true -> required, false -> disabled; fail-closed key
+retired file enable_auth -> core.auth.mode refuse
+retired env ENABLE_AUTH -> core.auth.mode refuse
+
+## enable_rate_limit
+top=true stored=blob class=k blob=enable_rate_limit admin=true fail-closed=false url=false
+target key core.http.rate_limit.enabled convert=- env=ABO_CORE_HTTP_RATE_LIMIT_ENABLED
+retired file enable_rate_limit -> core.http.rate_limit.enabled refuse
+retired env ENABLE_RATE_LIMIT -> core.http.rate_limit.enabled refuse
+
+## review_apply_enabled
+top=true stored=blob class=k blob=review_apply_enabled admin=false fail-closed=false url=false
+target key modules.books.review.review_apply_enabled convert=- env=ABO_BOOKS_REVIEW_REVIEW_APPLY_ENABLED
+retired file review_apply_enabled -> modules.books.review.review_apply_enabled warn
+retired env REVIEW_APPLY_ENABLED -> modules.books.review.review_apply_enabled warn
+
+## bulk_apply_max_items
+top=true stored=blob class=k blob=bulk_apply_max_items admin=false fail-closed=false url=false
+target key modules.books.review.bulk_apply_max_items convert=- env=ABO_BOOKS_REVIEW_BULK_APPLY_MAX_ITEMS
+retired file bulk_apply_max_items -> modules.books.review.bulk_apply_max_items warn
+retired env BULK_APPLY_MAX_ITEMS -> modules.books.review.bulk_apply_max_items warn
+
+## basic_auth_enabled
+top=true stored=blob class=k blob=basic_auth_enabled admin=true fail-closed=true url=false
+target key core.http.basic_gate.enabled convert=- env=ABO_CORE_HTTP_BASIC_GATE_ENABLED
+note fail-closed key
+retired file basic_auth_enabled -> core.http.basic_gate.enabled refuse
+retired env BASIC_AUTH_ENABLED -> core.http.basic_gate.enabled refuse
+
+## basic_auth_username
+top=true stored=blob class=k blob=basic_auth_username admin=true fail-closed=false url=false
+target key core.http.basic_gate.username convert=- env=ABO_CORE_HTTP_BASIC_GATE_USERNAME
+retired file basic_auth_username -> core.http.basic_gate.username refuse
+retired env BASIC_AUTH_USERNAME -> core.http.basic_gate.username refuse
+
+## basic_auth_password
+top=true stored=row class=s blob=- admin=true fail-closed=false url=false
+target secret core.http.basic_gate.password convert=- env=ABO_CORE_HTTP_BASIC_GATE_PASSWORD
+note encrypted row; empty = unset
+retired file basic_auth_password -> core.http.basic_gate.password refuse
+retired env BASIC_AUTH_PASSWORD -> core.http.basic_gate.password refuse
+
+## oauth_enabled
+top=true stored=blob class=k blob=oauth_enabled admin=true fail-closed=false url=false
+target fold core.auth.oidc.providers convert=oidc-fold list=core.auth.oidc.providers env=ABO_CORE_AUTH_OIDC_PROVIDERS
+note fold (05-authn)
+retired file oauth_enabled -> core.auth.oidc.providers refuse
+retired env OAUTH_ENABLED -> core.auth.oidc.providers refuse
+
+## oauth_github_client_id
+top=true stored=blob class=k blob=oauth_github_client_id admin=true fail-closed=false url=false
+target fold core.auth.oidc.providers entry github convert=oidc-fold list=core.auth.oidc.providers env=ABO_CORE_AUTH_OIDC_PROVIDERS
+note fold (05-authn)
+retired file oauth_github_client_id -> core.auth.oidc.providers refuse
+retired env OAUTH_GITHUB_CLIENT_ID -> core.auth.oidc.providers refuse
+
+## oauth_github_client_secret
+top=true stored=blob class=s blob=oauth_github_client_secret admin=true fail-closed=false url=false
+target secret core.auth.oidc.github.client_secret convert=- coined env=ABO_CORE_AUTH_OIDC_GITHUB_CLIENT_SECRET
+note the secret the github entry's client_secret ref names; plaintext in the blob
+retired file oauth_github_client_secret -> core.auth.oidc.github.client_secret refuse
+retired env OAUTH_GITHUB_CLIENT_SECRET -> core.auth.oidc.github.client_secret refuse
+
+## oauth_google_client_id
+top=true stored=blob class=k blob=oauth_google_client_id admin=true fail-closed=false url=false
+target fold core.auth.oidc.providers entry google convert=oidc-fold list=core.auth.oidc.providers env=ABO_CORE_AUTH_OIDC_PROVIDERS
+note fold (05-authn)
+retired file oauth_google_client_id -> core.auth.oidc.providers refuse
+retired env OAUTH_GOOGLE_CLIENT_ID -> core.auth.oidc.providers refuse
+
+## oauth_google_client_secret
+top=true stored=blob class=s blob=oauth_google_client_secret admin=true fail-closed=false url=false
+target secret core.auth.oidc.google.client_secret convert=- coined env=ABO_CORE_AUTH_OIDC_GOOGLE_CLIENT_SECRET
+note the secret the google entry's client_secret ref names; plaintext in the blob
+retired file oauth_google_client_secret -> core.auth.oidc.google.client_secret refuse
+retired env OAUTH_GOOGLE_CLIENT_SECRET -> core.auth.oidc.google.client_secret refuse
+
+## oauth_redirect_base_url
+top=true stored=blob class=k blob=oauth_redirect_base_url admin=true fail-closed=false url=true
+target key core.auth.oidc.redirect_base_url convert=- env=ABO_CORE_AUTH_OIDC_REDIRECT_BASE_URL
+retired file oauth_redirect_base_url -> core.auth.oidc.redirect_base_url refuse
+retired env OAUTH_REDIRECT_BASE_URL -> core.auth.oidc.redirect_base_url refuse
+
+## oauth_allowed_emails
+top=true stored=blob class=k blob=oauth_allowed_emails admin=true fail-closed=false url=false
+target fold core.auth.oidc.providers[].allowed_emails convert=oidc-fold list=core.auth.oidc.providers env=ABO_CORE_AUTH_OIDC_PROVIDERS
+target key modules.books.cfaccess.allowed_emails convert=- env=ABO_BOOKS_CFACCESS_ALLOWED_EMAILS
+note fold (05-authn); M2 also writes the value to the books key, because HEAD's internal/cfaccess reads it as the Cloudflare Access allow-list
+retired file oauth_allowed_emails -> core.auth.oidc.providers refuse
+retired env OAUTH_ALLOWED_EMAILS -> core.auth.oidc.providers refuse
+
+## oauth_default_role
+top=true stored=blob class=k blob=oauth_default_role admin=true fail-closed=false url=false
+target fold core.auth.oidc.providers[].default_role convert=oidc-fold list=core.auth.oidc.providers env=ABO_CORE_AUTH_OIDC_PROVIDERS
+note fold (05-authn)
+retired file oauth_default_role -> core.auth.oidc.providers refuse
+retired env OAUTH_DEFAULT_ROLE -> core.auth.oidc.providers refuse
+
+## cf_access_team_domain
+top=true stored=blob class=k blob=cf_access_team_domain admin=true fail-closed=false url=false
+target key modules.books.identity.cf_access_team_domain convert=- env=ABO_BOOKS_IDENTITY_CF_ACCESS_TEAM_DOMAIN
+retired file cf_access_team_domain -> modules.books.identity.cf_access_team_domain refuse
+retired env CF_ACCESS_TEAM_DOMAIN -> modules.books.identity.cf_access_team_domain refuse
+
+## cf_access_aud
+top=true stored=blob class=k blob=cf_access_aud admin=true fail-closed=false url=false
+target key modules.books.identity.cf_access_aud convert=- env=ABO_BOOKS_IDENTITY_CF_ACCESS_AUD
+retired file cf_access_aud -> modules.books.identity.cf_access_aud refuse
+retired env CF_ACCESS_AUD -> modules.books.identity.cf_access_aud refuse
+
+## owner_email
+top=true stored=blob class=k blob=owner_email admin=true fail-closed=false url=false
+target key modules.books.identity.owner_email convert=- env=ABO_BOOKS_IDENTITY_OWNER_EMAIL
+retired file owner_email -> modules.books.identity.owner_email refuse
+retired env OWNER_EMAIL -> modules.books.identity.owner_email refuse
+
+## abs_api_enabled
+top=true stored=blob class=k blob=abs_api_enabled admin=true fail-closed=false url=false
+target key modules.books.abs.api_enabled convert=- env=ABO_BOOKS_ABS_API_ENABLED
+retired file abs_api_enabled -> modules.books.abs.api_enabled refuse
+retired env ABS_API_ENABLED -> modules.books.abs.api_enabled refuse
+
+## abs_auth_modes
+top=true stored=blob class=k blob=abs_auth_modes admin=true fail-closed=false url=false
+target key modules.books.abs.auth_modes convert=- env=ABO_BOOKS_ABS_AUTH_MODES
+retired file abs_auth_modes -> modules.books.abs.auth_modes refuse
+retired env ABS_AUTH_MODES -> modules.books.abs.auth_modes refuse
+
+## abs_jwt_secret
+top=true stored=env/file class=s blob=- admin=false fail-closed=false url=false
+target secret modules.books.abs.jwt_secret convert=- env=ABO_BOOKS_ABS_JWT_SECRET
+retired file abs_jwt_secret -> modules.books.abs.jwt_secret refuse
+retired env ABS_JWT_SECRET -> modules.books.abs.jwt_secret refuse
+
+## abs_access_token_ttl
+top=true stored=blob class=k blob=abs_access_token_ttl admin=true fail-closed=false url=false
+target key modules.books.abs.access_token_ttl convert=- env=ABO_BOOKS_ABS_ACCESS_TOKEN_TTL
+retired file abs_access_token_ttl -> modules.books.abs.access_token_ttl refuse
+retired env ABS_ACCESS_TOKEN_TTL -> modules.books.abs.access_token_ttl refuse
+
+## abs_refresh_token_ttl
+top=true stored=blob class=k blob=abs_refresh_token_ttl admin=true fail-closed=false url=false
+target key modules.books.abs.refresh_token_ttl convert=- env=ABO_BOOKS_ABS_REFRESH_TOKEN_TTL
+retired file abs_refresh_token_ttl -> modules.books.abs.refresh_token_ttl refuse
+retired env ABS_REFRESH_TOKEN_TTL -> modules.books.abs.refresh_token_ttl refuse
+
+## abs_session_max_ttl
+top=true stored=blob class=k blob=abs_session_max_ttl admin=true fail-closed=false url=false
+target key modules.books.abs.session_max_ttl convert=- env=ABO_BOOKS_ABS_SESSION_MAX_TTL
+retired file abs_session_max_ttl -> modules.books.abs.session_max_ttl refuse
+retired env ABS_SESSION_MAX_TTL -> modules.books.abs.session_max_ttl refuse
+
+## abs_refresh_grace
+top=true stored=blob class=k blob=abs_refresh_grace admin=true fail-closed=false url=false
+target key modules.books.abs.refresh_grace convert=- env=ABO_BOOKS_ABS_REFRESH_GRACE
+retired file abs_refresh_grace -> modules.books.abs.refresh_grace refuse
+retired env ABS_REFRESH_GRACE -> modules.books.abs.refresh_grace refuse
+
+## abs_server_version
+top=true stored=blob class=k blob=abs_server_version admin=false fail-closed=false url=false
+target key modules.books.abs.server_version convert=- env=ABO_BOOKS_ABS_SERVER_VERSION
+retired file abs_server_version -> modules.books.abs.server_version warn
+retired env ABS_SERVER_VERSION -> modules.books.abs.server_version warn
+
+## abs_default_library_id
+top=true stored=blob class=k blob=abs_default_library_id admin=false fail-closed=false url=false
+target key modules.books.abs.default_library_id convert=- env=ABO_BOOKS_ABS_DEFAULT_LIBRARY_ID
+retired file abs_default_library_id -> modules.books.abs.default_library_id warn
+retired env ABS_DEFAULT_LIBRARY_ID -> modules.books.abs.default_library_id warn
+
+## smtp_host
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
+target passthrough integrations.notify.email.host convert=- destination env=ABO_INTEGRATIONS_NOTIFY_EMAIL_HOST
+retired file smtp_host -> integrations.notify.email.host refuse Refuse
+retired env SMTP_HOST -> integrations.notify.email.host refuse Refuse
+
+## smtp_port
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
+target passthrough integrations.notify.email.port convert=- destination env=ABO_INTEGRATIONS_NOTIFY_EMAIL_PORT
+retired file smtp_port -> integrations.notify.email.port refuse Refuse
+retired env SMTP_PORT -> integrations.notify.email.port refuse Refuse
+
+## smtp_username
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
+target passthrough integrations.notify.email.username convert=- env=ABO_INTEGRATIONS_NOTIFY_EMAIL_USERNAME
+retired file smtp_username -> integrations.notify.email.username warn
+retired env SMTP_USERNAME -> integrations.notify.email.username warn
+
+## smtp_password
+top=true stored=env/file class=s blob=- admin=false fail-closed=false url=false
+target secret integrations.notify.email.password convert=- passthrough env=ABO_INTEGRATIONS_NOTIFY_EMAIL_PASSWORD
+retired file smtp_password -> integrations.notify.email.password refuse Refuse
+retired env SMTP_PASSWORD -> integrations.notify.email.password refuse Refuse
+
+## smtp_from
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
+target passthrough integrations.notify.email.from convert=- env=ABO_INTEGRATIONS_NOTIFY_EMAIL_FROM
+retired file smtp_from -> integrations.notify.email.from warn
+retired env SMTP_FROM -> integrations.notify.email.from warn
+
+## public_base_url
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=true
+target key core.http.public_base_url convert=- coined env=ABO_CORE_HTTP_PUBLIC_BASE_URL
+retired file public_base_url -> core.http.public_base_url warn
+retired env PUBLIC_BASE_URL -> core.http.public_base_url warn
+
+## cf_account_id
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
+target key modules.books.cfguests.account_id convert=- env=ABO_BOOKS_CFGUESTS_ACCOUNT_ID
+retired file cf_account_id -> modules.books.cfguests.account_id warn
+retired env CF_ACCOUNT_ID -> modules.books.cfguests.account_id warn
+
+## cf_guests_policy_id
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
+target key modules.books.cfguests.guests_policy_id convert=- env=ABO_BOOKS_CFGUESTS_GUESTS_POLICY_ID
+retired file cf_guests_policy_id -> modules.books.cfguests.guests_policy_id warn
+retired env CF_GUESTS_POLICY_ID -> modules.books.cfguests.guests_policy_id warn
+
+## cf_policy_api_token
+top=true stored=env/file class=s blob=- admin=false fail-closed=false url=false
+target secret modules.books.cfguests.policy_api_token convert=- env=ABO_BOOKS_CFGUESTS_POLICY_API_TOKEN
+retired file cf_policy_api_token -> modules.books.cfguests.policy_api_token refuse
+retired env CF_POLICY_API_TOKEN -> modules.books.cfguests.policy_api_token refuse
+
+## cf_guest_service_tokens
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
+target key modules.books.cfguests.guest_service_tokens convert=- env=ABO_BOOKS_CFGUESTS_GUEST_SERVICE_TOKENS
+retired file cf_guest_service_tokens -> modules.books.cfguests.guest_service_tokens warn
+retired env CF_GUEST_SERVICE_TOKENS -> modules.books.cfguests.guest_service_tokens warn
+
+## cf_service_auth_policy_id
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
+target key modules.books.cfguests.service_auth_policy_id convert=- env=ABO_BOOKS_CFGUESTS_SERVICE_AUTH_POLICY_ID
+retired file cf_service_auth_policy_id -> modules.books.cfguests.service_auth_policy_id warn
+retired env CF_SERVICE_AUTH_POLICY_ID -> modules.books.cfguests.service_auth_policy_id warn
+
+## invite_email_service_token
+top=true stored=env/file class=o blob=- admin=false fail-closed=false url=false
+target key modules.books.cfguests.invite_email_service_token convert=- env=ABO_BOOKS_CFGUESTS_INVITE_EMAIL_SERVICE_TOKEN
+retired file invite_email_service_token -> modules.books.cfguests.invite_email_service_token warn
+retired env INVITE_EMAIL_SERVICE_TOKEN -> modules.books.cfguests.invite_email_service_token warn
+
+## tunnel_connector_addrs
+top=true stored=env/file class=o blob=- admin=true fail-closed=false url=false
+target key core.http.trusted_proxies convert=csv-list env=ABO_CORE_HTTP_TRUSTED_PROXIES
+note comma list -> list; a storable admin key from F3 (§1.3.7)
+retired file tunnel_connector_addrs -> core.http.trusted_proxies refuse
+retired env TUNNEL_CONNECTOR_ADDRS -> core.http.trusted_proxies refuse
+
+## allowed_peer_cidrs
+top=true stored=env/file class=o blob=- admin=true fail-closed=false url=false
+target key core.http.peer_allowlist convert=csv-list env=ABO_CORE_HTTP_PEER_ALLOWLIST
+note comma list -> list; a storable admin key from F3 (§1.3.7)
+retired file allowed_peer_cidrs -> core.http.peer_allowlist refuse
+retired env ALLOWED_PEER_CIDRS -> core.http.peer_allowlist refuse
+
+## login_saturated_rate
+top=true stored=env/file class=o blob=- admin=true fail-closed=false url=false
+target key core.auth.login.saturated_rate convert=- coined env=ABO_CORE_AUTH_LOGIN_SATURATED_RATE
+retired file login_saturated_rate -> core.auth.login.saturated_rate refuse
+retired env LOGIN_SATURATED_RATE -> core.auth.login.saturated_rate refuse
+
+## login_saturated_burst
+top=true stored=env/file class=o blob=- admin=true fail-closed=false url=false
+target key core.auth.login.saturated_burst convert=- coined env=ABO_CORE_AUTH_LOGIN_SATURATED_BURST
+retired file login_saturated_burst -> core.auth.login.saturated_burst refuse
+retired env LOGIN_SATURATED_BURST -> core.auth.login.saturated_burst refuse
+
+## cache_invalidate_on_book_update
+top=true stored=blob class=k blob=cache_invalidate_on_book_update admin=false fail-closed=false url=false
+target key modules.books.cache.invalidate_on_book_update convert=- env=ABO_BOOKS_CACHE_INVALIDATE_ON_BOOK_UPDATE
+retired file cache_invalidate_on_book_update -> modules.books.cache.invalidate_on_book_update warn
+retired env CACHE_INVALIDATE_ON_BOOK_UPDATE -> modules.books.cache.invalidate_on_book_update warn
+
+## metadata_fetch_cache_ttl_days
+top=true stored=blob class=k blob=metadata_fetch_cache_ttl_days admin=false fail-closed=false url=false
+target key modules.books.metadata.fetch_cache_ttl_days convert=- env=ABO_BOOKS_METADATA_FETCH_CACHE_TTL_DAYS
+retired file metadata_fetch_cache_ttl_days -> modules.books.metadata.fetch_cache_ttl_days warn
+retired env METADATA_FETCH_CACHE_TTL_DAYS -> modules.books.metadata.fetch_cache_ttl_days warn
+
+## metadata_fetch
+top=true stored=blob class=k blob=metadata_fetch admin=false fail-closed=false url=false
+target key modules.books.metadata.fetch.* convert=- env=ABO_BOOKS_METADATA_FETCH
+retired file metadata_fetch -> modules.books.metadata.fetch warn
+retired env METADATA_FETCH -> modules.books.metadata.fetch warn
+
+## metadata_fetch.shared_cache
+top=false stored=blob class=k blob=metadata_fetch admin=false fail-closed=false url=false
+target key modules.books.metadata.fetch.shared_cache convert=- env=ABO_BOOKS_METADATA_FETCH_SHARED_CACHE
+retired env METADATA_FETCH.SHARED_CACHE -> modules.books.metadata.fetch.shared_cache warn
+
+## metadata_fetch.catalog_stage
+top=false stored=blob class=k blob=metadata_fetch admin=false fail-closed=false url=false
+target key modules.books.metadata.fetch.catalog_stage convert=- env=ABO_BOOKS_METADATA_FETCH_CATALOG_STAGE
+retired env METADATA_FETCH.CATALOG_STAGE -> modules.books.metadata.fetch.catalog_stage warn
+
+## metadata_fetch.folder_parse_person_title
+top=false stored=blob class=k blob=metadata_fetch admin=false fail-closed=false url=false
+target key modules.books.metadata.fetch.folder_parse_person_title convert=- env=ABO_BOOKS_METADATA_FETCH_FOLDER_PARSE_PERSON_TITLE
+retired env METADATA_FETCH.FOLDER_PARSE_PERSON_TITLE -> modules.books.metadata.fetch.folder_parse_person_title warn
+
+## metadata_fetch.negative_ttl_days.audible
+top=false stored=blob class=k blob=metadata_fetch admin=false fail-closed=false url=false
+target key modules.books.metadata.fetch.negative_ttl_days.audible convert=- env=ABO_BOOKS_METADATA_FETCH_NEGATIVE_TTL_DAYS_AUDIBLE
+retired env METADATA_FETCH.NEGATIVE_TTL_DAYS.AUDIBLE -> modules.books.metadata.fetch.negative_ttl_days.audible warn
+
+## metadata_fetch.negative_ttl_days.audnexus
+top=false stored=blob class=k blob=metadata_fetch admin=false fail-closed=false url=false
+target key modules.books.metadata.fetch.negative_ttl_days.audnexus convert=- env=ABO_BOOKS_METADATA_FETCH_NEGATIVE_TTL_DAYS_AUDNEXUS
+retired env METADATA_FETCH.NEGATIVE_TTL_DAYS.AUDNEXUS -> modules.books.metadata.fetch.negative_ttl_days.audnexus warn
+
+## metadata_fetch.negative_ttl_days.openlibrary
+top=false stored=blob class=k blob=metadata_fetch admin=false fail-closed=false url=false
+target key modules.books.metadata.fetch.negative_ttl_days.openlibrary convert=- env=ABO_BOOKS_METADATA_FETCH_NEGATIVE_TTL_DAYS_OPENLIBRARY
+retired env METADATA_FETCH.NEGATIVE_TTL_DAYS.OPENLIBRARY -> modules.books.metadata.fetch.negative_ttl_days.openlibrary warn
+
+## metadata_fetch.negative_ttl_days.google
+top=false stored=blob class=k blob=metadata_fetch admin=false fail-closed=false url=false
+target key modules.books.metadata.fetch.negative_ttl_days.google convert=- env=ABO_BOOKS_METADATA_FETCH_NEGATIVE_TTL_DAYS_GOOGLE
+retired env METADATA_FETCH.NEGATIVE_TTL_DAYS.GOOGLE -> modules.books.metadata.fetch.negative_ttl_days.google warn
+
+## bootstrap_key_ttl
+top=true stored=env/file class=o blob=- admin=true fail-closed=false url=false
+target key core.auth.bootstrap.key_ttl convert=- shared env=ABO_CORE_AUTH_BOOTSTRAP_KEY_TTL
+retired file bootstrap_key_ttl -> core.auth.bootstrap.key_ttl refuse
+retired env BOOTSTRAP_KEY_TTL -> core.auth.bootstrap.key_ttl refuse
+
+## bootstrap_key_ttl_days
+top=true stored=env/file class=o blob=- admin=true fail-closed=false url=false
+target key core.auth.bootstrap.key_ttl convert=days-to-duration shared env=ABO_CORE_AUTH_BOOTSTRAP_KEY_TTL
+note days -> duration
+retired file bootstrap_key_ttl_days -> core.auth.bootstrap.key_ttl refuse
+retired env BOOTSTRAP_KEY_TTL_DAYS -> core.auth.bootstrap.key_ttl refuse
+
+## purge_soft_deleted_after_days
+top=true stored=blob class=k blob=purge_soft_deleted_after_days admin=false fail-closed=false url=false
+target key modules.books.purge.soft_deleted_after_days convert=- env=ABO_BOOKS_PURGE_SOFT_DELETED_AFTER_DAYS
+retired file purge_soft_deleted_after_days -> modules.books.purge.soft_deleted_after_days warn
+retired env PURGE_SOFT_DELETED_AFTER_DAYS -> modules.books.purge.soft_deleted_after_days warn
+
+## purge_soft_deleted_delete_files
+top=true stored=blob class=k blob=purge_soft_deleted_delete_files admin=false fail-closed=false url=false
+target key modules.books.purge.soft_deleted_delete_files convert=- env=ABO_BOOKS_PURGE_SOFT_DELETED_DELETE_FILES
+retired file purge_soft_deleted_delete_files -> modules.books.purge.soft_deleted_delete_files warn
+retired env PURGE_SOFT_DELETED_DELETE_FILES -> modules.books.purge.soft_deleted_delete_files warn
+
+## backup_retention_days
+top=true stored=blob class=k blob=backup_retention_days admin=false fail-closed=false url=false
+target key core.backup.retention.max_age convert=days-to-duration env=ABO_CORE_BACKUP_RETENTION_MAX_AGE
+note days -> duration
+retired file backup_retention_days -> core.backup.retention.max_age warn
+retired env BACKUP_RETENTION_DAYS -> core.backup.retention.max_age warn
+
+## log_level
+top=true stored=blob class=k blob=log_level admin=false fail-closed=false url=false
+target key core.log.level convert=- env=ABO_CORE_LOG_LEVEL
+retired file log_level -> core.log.level warn
+retired env LOG_LEVEL -> core.log.level warn
+
+## itunes
+top=true stored=blob class=k blob=itunes admin=false fail-closed=false url=false
+target key modules.books.itunes.* convert=- env=ABO_BOOKS_ITUNES
+retired file itunes -> modules.books.itunes refuse
+retired env ITUNES -> modules.books.itunes refuse
+
+## itunes.library_write_path
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.library_write_path convert=- env=ABO_BOOKS_ITUNES_LIBRARY_WRITE_PATH
+retired env ITUNES.LIBRARY_WRITE_PATH -> modules.books.itunes.library_write_path refuse
+
+## itunes.library_read_path
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.library_read_path convert=- env=ABO_BOOKS_ITUNES_LIBRARY_READ_PATH
+retired env ITUNES.LIBRARY_READ_PATH -> modules.books.itunes.library_read_path refuse
+
+## itunes.path_trim_enabled
+top=false stored=blob class=k blob=itunes admin=false fail-closed=false url=false
+target key modules.books.itunes.path_trim_enabled convert=- env=ABO_BOOKS_ITUNES_PATH_TRIM_ENABLED
+retired env ITUNES.PATH_TRIM_ENABLED -> modules.books.itunes.path_trim_enabled warn
+
+## itunes.windows_root_path
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.windows_root_path convert=- env=ABO_BOOKS_ITUNES_WINDOWS_ROOT_PATH
+retired env ITUNES.WINDOWS_ROOT_PATH -> modules.books.itunes.windows_root_path refuse
+
+## itunes.media_root
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.media_root convert=- env=ABO_BOOKS_ITUNES_MEDIA_ROOT
+retired env ITUNES.MEDIA_ROOT -> modules.books.itunes.media_root refuse
+
+## itunes.path_mappings
+top=false stored=blob class=i blob=itunes admin=false fail-closed=false url=false
+target entry core.library.mappings entries, Source: "itunes" convert=- list=core.library.mappings env=ABO_CORE_LIBRARY_MAPPINGS
+note 05-library §5L.10; core.library.mappings is ProtectInteractive, so its retired name warns although HEAD classed the field FieldServerPath
+retired env ITUNES.PATH_MAPPINGS -> core.library.mappings warn
+
+## itunes.libraries.original.itl_path
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.libraries.original.itl_path convert=- env=ABO_BOOKS_ITUNES_LIBRARIES_ORIGINAL_ITL_PATH
+retired env ITUNES.LIBRARIES.ORIGINAL.ITL_PATH -> modules.books.itunes.libraries.original.itl_path refuse
+
+## itunes.libraries.original.xml_path
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.libraries.original.xml_path convert=- env=ABO_BOOKS_ITUNES_LIBRARIES_ORIGINAL_XML_PATH
+retired env ITUNES.LIBRARIES.ORIGINAL.XML_PATH -> modules.books.itunes.libraries.original.xml_path refuse
+
+## itunes.libraries.original.frozen
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.libraries.original.frozen convert=- env=ABO_BOOKS_ITUNES_LIBRARIES_ORIGINAL_FROZEN
+retired env ITUNES.LIBRARIES.ORIGINAL.FROZEN -> modules.books.itunes.libraries.original.frozen refuse
+
+## itunes.libraries.ao.itl_path
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.libraries.ao.itl_path convert=- env=ABO_BOOKS_ITUNES_LIBRARIES_AO_ITL_PATH
+retired env ITUNES.LIBRARIES.AO.ITL_PATH -> modules.books.itunes.libraries.ao.itl_path refuse
+
+## itunes.libraries.ao.xml_path
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.libraries.ao.xml_path convert=- env=ABO_BOOKS_ITUNES_LIBRARIES_AO_XML_PATH
+retired env ITUNES.LIBRARIES.AO.XML_PATH -> modules.books.itunes.libraries.ao.xml_path refuse
+
+## itunes.libraries.ao.frozen
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.libraries.ao.frozen convert=- env=ABO_BOOKS_ITUNES_LIBRARIES_AO_FROZEN
+retired env ITUNES.LIBRARIES.AO.FROZEN -> modules.books.itunes.libraries.ao.frozen refuse
+
+## itunes.libraries.pointed_at
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.libraries.pointed_at convert=- env=ABO_BOOKS_ITUNES_LIBRARIES_POINTED_AT
+retired env ITUNES.LIBRARIES.POINTED_AT -> modules.books.itunes.libraries.pointed_at refuse
+
+## itunes.libraries.import_source
+top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
+target key modules.books.itunes.libraries.import_source convert=- env=ABO_BOOKS_ITUNES_LIBRARIES_IMPORT_SOURCE
+retired env ITUNES.LIBRARIES.IMPORT_SOURCE -> modules.books.itunes.libraries.import_source refuse
+
+## deluge_web_url
+top=true stored=blob class=i blob=deluge_web_url admin=false fail-closed=false url=false
+target passthrough integrations.download.deluge.url convert=- destination env=ABO_INTEGRATIONS_DOWNLOAD_DELUGE_URL
+retired file deluge_web_url -> integrations.download.deluge.url refuse Refuse
+retired env DELUGE_WEB_URL -> integrations.download.deluge.url refuse Refuse
+
+## deluge_web_password
+top=true stored=blob class=s blob=deluge_web_password admin=false fail-closed=false url=false
+target secret integrations.download.deluge.password convert=- passthrough env=ABO_INTEGRATIONS_DOWNLOAD_DELUGE_PASSWORD
+note plaintext in the blob
+retired file deluge_web_password -> integrations.download.deluge.password refuse Refuse
+retired env DELUGE_WEB_PASSWORD -> integrations.download.deluge.password refuse Refuse
+
+## deluge_discovery_label
+top=true stored=blob class=k blob=deluge_discovery_label admin=false fail-closed=false url=false
+target key modules.books.download.discovery_label convert=- env=ABO_BOOKS_DOWNLOAD_DISCOVERY_LABEL
+retired file deluge_discovery_label -> modules.books.download.discovery_label warn
+retired env DELUGE_DISCOVERY_LABEL -> modules.books.download.discovery_label warn
+
+## deluge_discovery_enabled
+top=true stored=blob class=k blob=deluge_discovery_enabled admin=false fail-closed=false url=false
+target key modules.books.download.discovery_enabled convert=- env=ABO_BOOKS_DOWNLOAD_DISCOVERY_ENABLED
+retired file deluge_discovery_enabled -> modules.books.download.discovery_enabled warn
+retired env DELUGE_DISCOVERY_ENABLED -> modules.books.download.discovery_enabled warn
+
+## deluge_move_enabled
+top=true stored=blob class=k blob=deluge_move_enabled admin=false fail-closed=false url=false
+target key modules.books.download.move_enabled convert=- env=ABO_BOOKS_DOWNLOAD_MOVE_ENABLED
+retired file deluge_move_enabled -> modules.books.download.move_enabled warn
+retired env DELUGE_MOVE_ENABLED -> modules.books.download.move_enabled warn
+
+## protected_paths
+top=true stored=blob class=i blob=protected_paths admin=true fail-closed=false url=false
+target key core.library.protected_paths convert=- env=ABO_CORE_LIBRARY_PROTECTED_PATHS
+note 05-library §5L.10
+retired file protected_paths -> core.library.protected_paths refuse
+retired env PROTECTED_PATHS -> core.library.protected_paths refuse
+
+## auto_update
+top=true stored=blob class=k blob=auto_update admin=false fail-closed=false url=false
+target key core.updater.* convert=- env=ABO_CORE_UPDATER
+note sub-key rows below
+retired file auto_update -> core.updater refuse
+retired env AUTO_UPDATE -> core.updater refuse
+
+## auto_update.enabled
+top=false stored=blob class=k blob=auto_update admin=true fail-closed=false url=false
+target key core.updater.mode convert=updater-mode env=ABO_CORE_UPDATER_MODE
+note true -> check (unattended apply stays check-only, 05-updater), false -> off
+retired env AUTO_UPDATE.ENABLED -> core.updater.mode refuse
+retired env AUTO_UPDATE_ENABLED -> core.updater.mode refuse
+
+## auto_update.channel
+top=false stored=blob class=k blob=auto_update admin=true fail-closed=false url=false
+target key core.updater.channel convert=updater-channel env=ABO_CORE_UPDATER_CHANNEL
+note develop -> prerelease
+retired env AUTO_UPDATE.CHANNEL -> core.updater.channel refuse
+retired env AUTO_UPDATE_CHANNEL -> core.updater.channel refuse
+
+## auto_update.check_minutes
+top=false stored=blob class=k blob=auto_update admin=false fail-closed=false url=false
+target key core.updater.schedules.check convert=updater-check env=ABO_CORE_UPDATER_SCHEDULES_CHECK
+note {enabled: true, every: <minutes>}
+retired env AUTO_UPDATE.CHECK_MINUTES -> core.updater.schedules.check warn
+retired env AUTO_UPDATE_CHECK_MINUTES -> core.updater.schedules.check warn
+
+## auto_update.window_start
+top=false stored=blob class=x blob=auto_update admin=false fail-closed=false url=false
+note read and ignored since HEAD's updater hotfix (05-updater)
+retired env AUTO_UPDATE.WINDOW_START -> - warn
+retired env AUTO_UPDATE_WINDOW_START -> - warn
+
+## auto_update.window_end
+top=false stored=blob class=x blob=auto_update admin=false fail-closed=false url=false
+note read and ignored since HEAD's updater hotfix (05-updater)
+retired env AUTO_UPDATE.WINDOW_END -> - warn
+retired env AUTO_UPDATE_WINDOW_END -> - warn
+
+## maintenance
+top=true stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key core.tasks.windows.nightly.* convert=- env=ABO_CORE_TASKS_WINDOWS_NIGHTLY
+target key modules.books.maintenance.* convert=- env=ABO_BOOKS_MAINTENANCE
+note sub-key rows below
+retired file maintenance -> core.tasks.windows.nightly warn
+retired env MAINTENANCE -> core.tasks.windows.nightly warn
+
+## maintenance.enabled
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key core.tasks.windows.nightly.enabled convert=- env=ABO_CORE_TASKS_WINDOWS_NIGHTLY_ENABLED
+retired env MAINTENANCE.ENABLED -> core.tasks.windows.nightly.enabled warn
+retired env MAINTENANCE_ENABLED -> core.tasks.windows.nightly.enabled warn
+
+## maintenance.window_start
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key core.tasks.windows.nightly.start convert=- env=ABO_CORE_TASKS_WINDOWS_NIGHTLY_START
+retired env MAINTENANCE.WINDOW_START -> core.tasks.windows.nightly.start warn
+retired env MAINTENANCE_WINDOW_START -> core.tasks.windows.nightly.start warn
+
+## maintenance.window_end
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key core.tasks.windows.nightly.end convert=- env=ABO_CORE_TASKS_WINDOWS_NIGHTLY_END
+retired env MAINTENANCE.WINDOW_END -> core.tasks.windows.nightly.end warn
+retired env MAINTENANCE_WINDOW_END -> core.tasks.windows.nightly.end warn
+
+## maintenance.dedup_refresh
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.dedup_refresh convert=- env=ABO_BOOKS_MAINTENANCE_DEDUP_REFRESH
+retired env MAINTENANCE.DEDUP_REFRESH -> modules.books.maintenance.dedup_refresh warn
+
+## maintenance.series_prune
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.series_prune convert=- env=ABO_BOOKS_MAINTENANCE_SERIES_PRUNE
+retired env MAINTENANCE.SERIES_PRUNE -> modules.books.maintenance.series_prune warn
+
+## maintenance.author_split
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.author_split convert=- env=ABO_BOOKS_MAINTENANCE_AUTHOR_SPLIT
+retired env MAINTENANCE.AUTHOR_SPLIT -> modules.books.maintenance.author_split warn
+
+## maintenance.tombstone_cleanup
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.tombstone_cleanup convert=- env=ABO_BOOKS_MAINTENANCE_TOMBSTONE_CLEANUP
+retired env MAINTENANCE.TOMBSTONE_CLEANUP -> modules.books.maintenance.tombstone_cleanup warn
+
+## maintenance.reconcile
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.reconcile convert=- env=ABO_BOOKS_MAINTENANCE_RECONCILE
+retired env MAINTENANCE.RECONCILE -> modules.books.maintenance.reconcile warn
+
+## maintenance.purge_deleted
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.purge_deleted convert=- env=ABO_BOOKS_MAINTENANCE_PURGE_DELETED
+retired env MAINTENANCE.PURGE_DELETED -> modules.books.maintenance.purge_deleted warn
+
+## maintenance.purge_old_logs
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.purge_old_logs convert=- env=ABO_BOOKS_MAINTENANCE_PURGE_OLD_LOGS
+retired env MAINTENANCE.PURGE_OLD_LOGS -> modules.books.maintenance.purge_old_logs warn
+
+## maintenance.db_optimize
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.db_optimize convert=- env=ABO_BOOKS_MAINTENANCE_DB_OPTIMIZE
+retired env MAINTENANCE.DB_OPTIMIZE -> modules.books.maintenance.db_optimize warn
+
+## maintenance.library_scan
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.library_scan convert=- env=ABO_BOOKS_MAINTENANCE_LIBRARY_SCAN
+retired env MAINTENANCE.LIBRARY_SCAN -> modules.books.maintenance.library_scan warn
+
+## maintenance.library_organize
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.library_organize convert=- env=ABO_BOOKS_MAINTENANCE_LIBRARY_ORGANIZE
+retired env MAINTENANCE.LIBRARY_ORGANIZE -> modules.books.maintenance.library_organize warn
+
+## maintenance.metadata_refresh
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.metadata_refresh convert=- env=ABO_BOOKS_MAINTENANCE_METADATA_REFRESH
+retired env MAINTENANCE.METADATA_REFRESH -> modules.books.maintenance.metadata_refresh warn
+
+## maintenance.library_size_refresh
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.library_size_refresh convert=- env=ABO_BOOKS_MAINTENANCE_LIBRARY_SIZE_REFRESH
+retired env MAINTENANCE.LIBRARY_SIZE_REFRESH -> modules.books.maintenance.library_size_refresh warn
+
+## maintenance.acoustid_online_lookup
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.acoustid_online_lookup convert=- env=ABO_BOOKS_MAINTENANCE_ACOUSTID_ONLINE_LOOKUP
+retired env MAINTENANCE.ACOUSTID_ONLINE_LOOKUP -> modules.books.maintenance.acoustid_online_lookup warn
+retired env MAINTENANCE_ACOUSTID_ONLINE_LOOKUP -> modules.books.maintenance.acoustid_online_lookup warn
+
+## maintenance.acoustid_nightly_limit
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.acoustid_nightly_limit convert=- env=ABO_BOOKS_MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT
+retired env MAINTENANCE.ACOUSTID_NIGHTLY_LIMIT -> modules.books.maintenance.acoustid_nightly_limit warn
+retired env MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT -> modules.books.maintenance.acoustid_nightly_limit warn
+
+## maintenance.acoustid_backfill
+top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
+target key modules.books.maintenance.acoustid_backfill convert=- env=ABO_BOOKS_MAINTENANCE_ACOUSTID_BACKFILL
+retired env MAINTENANCE.ACOUSTID_BACKFILL -> modules.books.maintenance.acoustid_backfill warn
+retired env MAINTENANCE_ACOUSTID_BACKFILL -> modules.books.maintenance.acoustid_backfill warn
+
+## download_client
+top=true stored=blob class=i blob=download_client admin=false fail-closed=false url=false
+target instance download/deluge instance convert=- env=-
+note sub-key rows below
+retired file download_client -> - warn
+retired env DOWNLOAD_CLIENT -> - warn
+
+## download_client.torrent.type
+top=false stored=blob class=i blob=download_client admin=false fail-closed=false url=false
+target instance download/deluge instance fields convert=- env=-
+note 05-download §10
+retired env DOWNLOAD_CLIENT.TORRENT.TYPE -> - warn
+
+## download_client.torrent.deluge.host
+top=false stored=blob class=i blob=download_client admin=false fail-closed=false url=false
+target instance download/deluge instance fields convert=- env=-
+note 05-download §10
+retired env DOWNLOAD_CLIENT.TORRENT.DELUGE.HOST -> - warn
+
+## download_client.torrent.deluge.port
+top=false stored=blob class=i blob=download_client admin=false fail-closed=false url=false
+target instance download/deluge instance fields convert=- env=-
+note 05-download §10
+retired env DOWNLOAD_CLIENT.TORRENT.DELUGE.PORT -> - warn
+
+## download_client.torrent.deluge.username
+top=false stored=blob class=i blob=download_client admin=false fail-closed=false url=false
+target instance download/deluge instance fields convert=- env=-
+note 05-download §10
+retired env DOWNLOAD_CLIENT.TORRENT.DELUGE.USERNAME -> - warn
+
+## download_client.torrent.deluge.password
+top=false stored=blob class=s blob=download_client admin=false fail-closed=false url=false
+target secret integrations.download.deluge.daemon_password convert=- coined passthrough env=ABO_INTEGRATIONS_DOWNLOAD_DELUGE_DAEMON_PASSWORD
+note plaintext in the blob
+retired env DOWNLOAD_CLIENT.TORRENT.DELUGE.PASSWORD -> integrations.download.deluge.daemon_password refuse Refuse
+
+## auto_rename_on_apply
+top=true stored=blob class=k blob=auto_rename_on_apply admin=false fail-closed=false url=false
+target key modules.books.organize.auto_rename_on_apply convert=- env=ABO_BOOKS_ORGANIZE_AUTO_RENAME_ON_APPLY
+retired file auto_rename_on_apply -> modules.books.organize.auto_rename_on_apply warn
+retired env AUTO_RENAME_ON_APPLY -> modules.books.organize.auto_rename_on_apply warn
+
+## auto_write_tags_on_apply
+top=true stored=blob class=k blob=auto_write_tags_on_apply admin=false fail-closed=false url=false
+target key modules.books.tags.auto_write_tags_on_apply convert=- env=ABO_BOOKS_TAGS_AUTO_WRITE_TAGS_ON_APPLY
+retired file auto_write_tags_on_apply -> modules.books.tags.auto_write_tags_on_apply warn
+retired env AUTO_WRITE_TAGS_ON_APPLY -> modules.books.tags.auto_write_tags_on_apply warn
+
+## verify_after_write
+top=true stored=blob class=k blob=verify_after_write admin=false fail-closed=false url=false
+target key modules.books.tags.verify_after_write convert=- env=ABO_BOOKS_TAGS_VERIFY_AFTER_WRITE
+retired file verify_after_write -> modules.books.tags.verify_after_write warn
+retired env VERIFY_AFTER_WRITE -> modules.books.tags.verify_after_write warn
+
+## scheduled
+top=true stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.* convert=- env=ABO_BOOKS_SCHEDULER_SCHEDULES
+note sub-key rows below
+retired file scheduled -> modules.books.scheduler.schedules warn
+retired env SCHEDULED -> modules.books.scheduler.schedules warn
+
+## scheduled.library_scan
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.library_scan convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_LIBRARY_SCAN
+retired env SCHEDULED.LIBRARY_SCAN -> modules.books.scheduler.schedules.library_scan warn
+retired env SCHEDULED_LIBRARY_SCAN_ENABLED -> modules.books.scheduler.schedules.library_scan warn
+retired env SCHEDULED_LIBRARY_SCAN_INTERVAL -> modules.books.scheduler.schedules.library_scan warn
+retired env SCHEDULED_LIBRARY_SCAN_ON_STARTUP -> modules.books.scheduler.schedules.library_scan warn
+
+## scheduled.library_scan_full
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.library_scan_full convert=schedule-full-scan env=ABO_BOOKS_SCHEDULER_SCHEDULES_LIBRARY_SCAN_FULL
+retired env SCHEDULED.LIBRARY_SCAN_FULL -> modules.books.scheduler.schedules.library_scan_full warn
+retired env SCHEDULED_LIBRARY_SCAN_FULL_ENABLED -> modules.books.scheduler.schedules.library_scan_full warn
+retired env SCHEDULED_LIBRARY_SCAN_FULL_INTERVAL -> modules.books.scheduler.schedules.library_scan_full warn
+retired env SCHEDULED_LIBRARY_SCAN_FULL_PERIOD_HOURS -> modules.books.scheduler.schedules.library_scan_full warn
+
+## scheduled.dedup_refresh
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.dedup_refresh convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_DEDUP_REFRESH
+retired env SCHEDULED.DEDUP_REFRESH -> modules.books.scheduler.schedules.dedup_refresh warn
+retired env SCHEDULED_DEDUP_REFRESH_ENABLED -> modules.books.scheduler.schedules.dedup_refresh warn
+retired env SCHEDULED_DEDUP_REFRESH_INTERVAL -> modules.books.scheduler.schedules.dedup_refresh warn
+retired env SCHEDULED_DEDUP_REFRESH_ON_STARTUP -> modules.books.scheduler.schedules.dedup_refresh warn
+
+## scheduled.acoustid_backfill
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.acoustid_backfill convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_ACOUSTID_BACKFILL
+retired env SCHEDULED.ACOUSTID_BACKFILL -> modules.books.scheduler.schedules.acoustid_backfill warn
+retired env SCHEDULED_ACOUSTID_BACKFILL_ENABLED -> modules.books.scheduler.schedules.acoustid_backfill warn
+retired env SCHEDULED_ACOUSTID_BACKFILL_INTERVAL -> modules.books.scheduler.schedules.acoustid_backfill warn
+retired env SCHEDULED_ACOUSTID_BACKFILL_ON_STARTUP -> modules.books.scheduler.schedules.acoustid_backfill warn
+
+## scheduled.label_refinement
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.label_refinement convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_LABEL_REFINEMENT
+retired env SCHEDULED.LABEL_REFINEMENT -> modules.books.scheduler.schedules.label_refinement warn
+retired env SCHEDULED_LABEL_REFINEMENT_ENABLED -> modules.books.scheduler.schedules.label_refinement warn
+retired env SCHEDULED_LABEL_REFINEMENT_INTERVAL -> modules.books.scheduler.schedules.label_refinement warn
+retired env SCHEDULED_LABEL_REFINEMENT_ON_STARTUP -> modules.books.scheduler.schedules.label_refinement warn
+
+## scheduled.author_split
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.author_split convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_AUTHOR_SPLIT
+retired env SCHEDULED.AUTHOR_SPLIT -> modules.books.scheduler.schedules.author_split warn
+retired env SCHEDULED_AUTHOR_SPLIT_ENABLED -> modules.books.scheduler.schedules.author_split warn
+retired env SCHEDULED_AUTHOR_SPLIT_INTERVAL -> modules.books.scheduler.schedules.author_split warn
+retired env SCHEDULED_AUTHOR_SPLIT_ON_STARTUP -> modules.books.scheduler.schedules.author_split warn
+
+## scheduled.db_optimize
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.db_optimize convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_DB_OPTIMIZE
+target key core.storage.schedules.compact convert=schedule-standard env=ABO_CORE_STORAGE_SCHEDULES_COMPACT
+note a second target: the same ScheduleConfig also seeds the core kind core.storage.compact's key
+retired env SCHEDULED.DB_OPTIMIZE -> modules.books.scheduler.schedules.db_optimize warn
+retired env SCHEDULED_DB_OPTIMIZE_ENABLED -> modules.books.scheduler.schedules.db_optimize warn
+retired env SCHEDULED_DB_OPTIMIZE_INTERVAL -> modules.books.scheduler.schedules.db_optimize warn
+retired env SCHEDULED_DB_OPTIMIZE_ON_STARTUP -> modules.books.scheduler.schedules.db_optimize warn
+
+## scheduled.metadata_refresh
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.metadata_refresh convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_METADATA_REFRESH
+retired env SCHEDULED.METADATA_REFRESH -> modules.books.scheduler.schedules.metadata_refresh warn
+retired env SCHEDULED_METADATA_REFRESH_ENABLED -> modules.books.scheduler.schedules.metadata_refresh warn
+retired env SCHEDULED_METADATA_REFRESH_INTERVAL -> modules.books.scheduler.schedules.metadata_refresh warn
+retired env SCHEDULED_METADATA_REFRESH_ON_STARTUP -> modules.books.scheduler.schedules.metadata_refresh warn
+
+## scheduled.resolve_production_authors
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.resolve_production_authors convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_RESOLVE_PRODUCTION_AUTHORS
+retired env SCHEDULED.RESOLVE_PRODUCTION_AUTHORS -> modules.books.scheduler.schedules.resolve_production_authors warn
+retired env SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_ENABLED -> modules.books.scheduler.schedules.resolve_production_authors warn
+retired env SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_INTERVAL -> modules.books.scheduler.schedules.resolve_production_authors warn
+
+## scheduled.series_prune
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.series_prune convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_SERIES_PRUNE
+retired env SCHEDULED.SERIES_PRUNE -> modules.books.scheduler.schedules.series_prune warn
+retired env SCHEDULED_SERIES_PRUNE_ENABLED -> modules.books.scheduler.schedules.series_prune warn
+retired env SCHEDULED_SERIES_PRUNE_INTERVAL -> modules.books.scheduler.schedules.series_prune warn
+retired env SCHEDULED_SERIES_PRUNE_ON_STARTUP -> modules.books.scheduler.schedules.series_prune warn
+
+## scheduled.ai_dedup_batch
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.ai_dedup_batch convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_AI_DEDUP_BATCH
+retired env SCHEDULED.AI_DEDUP_BATCH -> modules.books.scheduler.schedules.ai_dedup_batch warn
+retired env SCHEDULED_AI_DEDUP_BATCH_ENABLED -> modules.books.scheduler.schedules.ai_dedup_batch warn
+retired env SCHEDULED_AI_DEDUP_BATCH_INTERVAL -> modules.books.scheduler.schedules.ai_dedup_batch warn
+retired env SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP -> modules.books.scheduler.schedules.ai_dedup_batch warn
+
+## scheduled.reconcile
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.reconcile convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_RECONCILE
+retired env SCHEDULED.RECONCILE -> modules.books.scheduler.schedules.reconcile warn
+retired env SCHEDULED_RECONCILE_ENABLED -> modules.books.scheduler.schedules.reconcile warn
+retired env SCHEDULED_RECONCILE_INTERVAL -> modules.books.scheduler.schedules.reconcile warn
+retired env SCHEDULED_RECONCILE_ON_STARTUP -> modules.books.scheduler.schedules.reconcile warn
+
+## scheduled.metadata_upgrade
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.metadata_upgrade convert=schedule-interval env=ABO_BOOKS_SCHEDULER_SCHEDULES_METADATA_UPGRADE
+retired env SCHEDULED.METADATA_UPGRADE -> modules.books.scheduler.schedules.metadata_upgrade warn
+retired env SCHEDULED_METADATA_UPGRADE_INTERVAL -> modules.books.scheduler.schedules.metadata_upgrade warn
+retired env SCHEDULED_METADATA_UPGRADE_ON_STARTUP -> modules.books.scheduler.schedules.metadata_upgrade warn
+
+## scheduled.asin_backfill
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.asin_backfill convert=schedule-interval env=ABO_BOOKS_SCHEDULER_SCHEDULES_ASIN_BACKFILL
+retired env SCHEDULED.ASIN_BACKFILL -> modules.books.scheduler.schedules.asin_backfill warn
+retired env SCHEDULED_ASIN_BACKFILL_INTERVAL -> modules.books.scheduler.schedules.asin_backfill warn
+
+## scheduled.candidate_fetch
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.candidate_fetch convert=schedule-interval env=ABO_BOOKS_SCHEDULER_SCHEDULES_CANDIDATE_FETCH
+retired env SCHEDULED.CANDIDATE_FETCH -> modules.books.scheduler.schedules.candidate_fetch warn
+
+## scheduled.catalog_harvest
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scheduler.schedules.catalog_harvest convert=schedule-interval env=ABO_BOOKS_SCHEDULER_SCHEDULES_CATALOG_HARVEST
+retired env SCHEDULED.CATALOG_HARVEST -> modules.books.scheduler.schedules.catalog_harvest warn
+retired env SCHEDULED_CATALOG_HARVEST_INTERVAL -> modules.books.scheduler.schedules.catalog_harvest warn
+
+## plugins
+top=true stored=blob class=i blob=plugins admin=false fail-closed=false url=false
+target instance notify/webhook-<n> instances convert=- env=-
+note sub-key rows below
+retired file plugins -> - warn
+retired env PLUGINS -> - warn
+
+## supported_extensions
+top=true stored=blob class=k blob=supported_extensions admin=false fail-closed=false url=false
+target key modules.books.scan.supported_extensions convert=- env=ABO_BOOKS_SCAN_SUPPORTED_EXTENSIONS
+retired file supported_extensions -> modules.books.scan.supported_extensions warn
+retired env SUPPORTED_EXTENSIONS -> modules.books.scan.supported_extensions warn
+
+## exclude_patterns
+top=true stored=blob class=k blob=exclude_patterns admin=false fail-closed=false url=false
+target key modules.books.scan.exclude_patterns convert=- env=ABO_BOOKS_SCAN_EXCLUDE_PATTERNS
+retired file exclude_patterns -> modules.books.scan.exclude_patterns warn
+retired env EXCLUDE_PATTERNS -> modules.books.scan.exclude_patterns warn
+
+## tools
+top=true stored=blob class=k blob=tools admin=false fail-closed=false url=false
+target key modules.books.tools.* convert=- env=ABO_BOOKS_TOOLS
+retired file tools -> modules.books.tools refuse
+retired env TOOLS -> modules.books.tools refuse
+
+## tools.managed_dir
+top=false stored=blob class=k blob=tools admin=true fail-closed=false url=false
+target key modules.books.tools.managed_dir convert=- env=ABO_BOOKS_TOOLS_MANAGED_DIR
+retired env TOOLS.MANAGED_DIR -> modules.books.tools.managed_dir refuse
+
+## tools.ollama.mode
+top=false stored=blob class=k blob=tools admin=true fail-closed=false url=false
+target key modules.books.tools.ollama.mode convert=- env=ABO_BOOKS_TOOLS_OLLAMA_MODE
+retired env TOOLS.OLLAMA.MODE -> modules.books.tools.ollama.mode refuse
+
+## tools.ollama.custom_path
+top=false stored=blob class=k blob=tools admin=true fail-closed=false url=false
+target key modules.books.tools.ollama.custom_path convert=- env=ABO_BOOKS_TOOLS_OLLAMA_CUSTOM_PATH
+retired env TOOLS.OLLAMA.CUSTOM_PATH -> modules.books.tools.ollama.custom_path refuse
+
+## tools.fpcalc.mode
+top=false stored=blob class=k blob=tools admin=true fail-closed=false url=false
+target key modules.books.tools.fpcalc.mode convert=- env=ABO_BOOKS_TOOLS_FPCALC_MODE
+retired env TOOLS.FPCALC.MODE -> modules.books.tools.fpcalc.mode refuse
+
+## tools.fpcalc.custom_path
+top=false stored=blob class=k blob=tools admin=true fail-closed=false url=false
+target key modules.books.tools.fpcalc.custom_path convert=- env=ABO_BOOKS_TOOLS_FPCALC_CUSTOM_PATH
+retired env TOOLS.FPCALC.CUSTOM_PATH -> modules.books.tools.fpcalc.custom_path refuse
+
+## tools.allow_periodic_ollama
+top=false stored=blob class=k blob=tools admin=false fail-closed=false url=false
+target key modules.books.tools.allow_periodic_ollama convert=- env=ABO_BOOKS_TOOLS_ALLOW_PERIODIC_OLLAMA
+retired env TOOLS.ALLOW_PERIODIC_OLLAMA -> modules.books.tools.allow_periodic_ollama warn
+
+## tools.ollama_debounce_min
+top=false stored=blob class=k blob=tools admin=false fail-closed=false url=false
+target key modules.books.tools.ollama_debounce_min convert=- env=ABO_BOOKS_TOOLS_OLLAMA_DEBOUNCE_MIN
+retired env TOOLS.OLLAMA_DEBOUNCE_MIN -> modules.books.tools.ollama_debounce_min warn
+
+## write_startup_readonly_key
+top=true stored=blob class=k blob=write_startup_readonly_key admin=true fail-closed=false url=false
+target key core.auth.bootstrap.readonly_key.enabled convert=- env=ABO_CORE_AUTH_BOOTSTRAP_READONLY_KEY_ENABLED
+retired file write_startup_readonly_key -> core.auth.bootstrap.readonly_key.enabled refuse
+retired env WRITE_STARTUP_READONLY_KEY -> core.auth.bootstrap.readonly_key.enabled refuse
+
+## disable_per_user_search_filters
+top=true stored=blob class=k blob=disable_per_user_search_filters admin=false fail-closed=false url=false
+target key modules.books.search.disable_per_user_search_filters convert=- env=ABO_BOOKS_SEARCH_DISABLE_PER_USER_SEARCH_FILTERS
+retired file disable_per_user_search_filters -> modules.books.search.disable_per_user_search_filters warn
+retired env DISABLE_PER_USER_SEARCH_FILTERS -> modules.books.search.disable_per_user_search_filters warn
+
+## search
+top=true stored=blob class=k blob=search admin=false fail-closed=false url=false
+target key modules.books.search.* convert=- env=ABO_BOOKS_SEARCH
+retired file search -> modules.books.search warn
+retired env SEARCH -> modules.books.search warn
+
+## search.result_cache.enabled
+top=false stored=blob class=k blob=search admin=false fail-closed=false url=false
+target key modules.books.search.result_cache.enabled convert=- env=ABO_BOOKS_SEARCH_RESULT_CACHE_ENABLED
+retired env SEARCH.RESULT_CACHE.ENABLED -> modules.books.search.result_cache.enabled warn
+
+## search.result_cache.max_bytes
+top=false stored=blob class=k blob=search admin=false fail-closed=false url=false
+target key modules.books.search.result_cache.max_bytes convert=- env=ABO_BOOKS_SEARCH_RESULT_CACHE_MAX_BYTES
+retired env SEARCH.RESULT_CACHE.MAX_BYTES -> modules.books.search.result_cache.max_bytes warn
+
+## search.result_cache.wait_seconds
+top=false stored=blob class=k blob=search admin=false fail-closed=false url=false
+target key modules.books.search.result_cache.wait_seconds convert=- env=ABO_BOOKS_SEARCH_RESULT_CACHE_WAIT_SECONDS
+retired env SEARCH.RESULT_CACHE.WAIT_SECONDS -> modules.books.search.result_cache.wait_seconds warn
+
+## enabled_sort_indexes
+top=true stored=blob class=k blob=enabled_sort_indexes admin=false fail-closed=false url=false
+target key modules.books.search.enabled_sort_indexes convert=- env=ABO_BOOKS_SEARCH_ENABLED_SORT_INDEXES
+retired file enabled_sort_indexes -> modules.books.search.enabled_sort_indexes warn
+retired env ENABLED_SORT_INDEXES -> modules.books.search.enabled_sort_indexes warn
+
+## metadata_sources[].credentials.<k>
+top=false stored=blob class=s blob=metadata_sources admin=false fail-closed=false url=false
+target secret integrations.metadata.<source id>.credentials.<k> convert=- passthrough env=-
+note plaintext in the blob
+
+## plugins.webhook
+top=false stored=blob class=i blob=plugins admin=false fail-closed=false url=false
+target instance notify/webhook-<n> instances convert=- env=-
+note enabled, settings.urls, settings.events
+retired env PLUGINS.WEBHOOK -> - warn
+
+## plugins.webhook.settings.secret
+top=false stored=blob class=s blob=plugins admin=false fail-closed=false url=false
+target secret integrations.notify.webhook-<n>.secret convert=- passthrough env=-
+note plaintext; one record per instance n, the same value
+retired env PLUGINS.WEBHOOK.SETTINGS.SECRET -> - refuse Refuse
+
+## plugins.<id>
+top=false stored=blob class=s blob=plugins admin=true fail-closed=false url=false
+target secret modules.books.plugins.<id>.settings convert=- env=-
+note any other plugins.<id>: internal/plugin is retired (02 N4); the free-form map may hold credentials, so M2 keeps it as one encrypted record and reports it
+
+## ai_endpoints[]
+top=false stored=blob class=i blob=ai_endpoints admin=false fail-closed=false url=false
+target instance ai/<row id> instances convert=- env=-
+note no secret of their own (05-metadata M1.10)
+
+## enable_sqlite
+top=true stored=blob class=x blob=enable_sqlite admin=false fail-closed=false url=false
+retired file enable_sqlite -> - warn message="the enable_sqlite setting (the --enable-sqlite3-i-know-t..."
+retired env ENABLE_SQLITE -> - warn message="the enable_sqlite setting (the --enable-sqlite3-i-know-t..."
+
+## enable_sqlite3_i_know_the_risks
+top=true stored=blob class=x blob=enable_sqlite3_i_know_the_risks admin=false fail-closed=false url=false
+retired file enable_sqlite3_i_know_the_risks -> - warn message="the enable_sqlite setting (the --enable-sqlite3-i-know-t..."
+retired env ENABLE_SQLITE3_I_KNOW_THE_RISKS -> - warn message="the enable_sqlite setting (the --enable-sqlite3-i-know-t..."
+
+## auto_fetch_metadata
+top=true stored=blob class=x blob=auto_fetch_metadata admin=false fail-closed=false url=false
+retired file auto_fetch_metadata -> - warn message="the auto_fetch_metadata setting was removed: nothing eve..."
+retired env AUTO_FETCH_METADATA -> - warn message="the auto_fetch_metadata setting was removed: nothing eve..."
+
+## write_backup_before_tag_write
+top=true stored=blob class=x blob=write_backup_before_tag_write admin=false fail-closed=false url=false
+retired file write_backup_before_tag_write -> - warn message="the metadata_scoring.write_backup_before setting (former..."
+retired env WRITE_BACKUP_BEFORE_TAG_WRITE -> - warn message="the metadata_scoring.write_backup_before setting (former..."
+
+## metadata_scoring.write_backup_before
+top=true stored=blob class=x blob=metadata_scoring admin=false fail-closed=false url=false
+retired env METADATA_SCORING.WRITE_BACKUP_BEFORE -> - warn message="the metadata_scoring.write_backup_before setting (former..."
+
+## download_client.torrent.qbittorrent
+top=true stored=blob class=x blob=download_client admin=false fail-closed=false url=false
+retired env DOWNLOAD_CLIENT.TORRENT.QBITTORRENT -> - warn message="the qBittorrent and SABnzbd download-client settings wer..."
+
+## download_client.usenet
+top=true stored=blob class=x blob=download_client admin=false fail-closed=false url=false
+retired env DOWNLOAD_CLIENT.USENET -> - warn message="the qBittorrent and SABnzbd download-client settings wer..."
+
+## metadata_review_default_view
+top=true stored=blob class=x blob=metadata_review_default_view admin=false fail-closed=false url=false
+retired file metadata_review_default_view -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env METADATA_REVIEW_DEFAULT_VIEW -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## default_user_quota_gb
+top=true stored=blob class=x blob=default_user_quota_gb admin=false fail-closed=false url=false
+retired file default_user_quota_gb -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env DEFAULT_USER_QUOTA_GB -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## memory_limit_type
+top=true stored=blob class=x blob=memory_limit_type admin=false fail-closed=false url=false
+retired file memory_limit_type -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env MEMORY_LIMIT_TYPE -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## cache_size
+top=true stored=blob class=x blob=cache_size admin=false fail-closed=false url=false
+retired file cache_size -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env CACHE_SIZE -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## memory_limit_percent
+top=true stored=blob class=x blob=memory_limit_percent admin=false fail-closed=false url=false
+retired file memory_limit_percent -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env MEMORY_LIMIT_PERCENT -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## memory_limit_mb
+top=true stored=blob class=x blob=memory_limit_mb admin=false fail-closed=false url=false
+retired file memory_limit_mb -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env MEMORY_LIMIT_MB -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## log_format
+top=true stored=blob class=x blob=log_format admin=false fail-closed=false url=false
+retired file log_format -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env LOG_FORMAT -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## enable_json_logging
+top=true stored=blob class=x blob=enable_json_logging admin=false fail-closed=false url=false
+retired file enable_json_logging -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env ENABLE_JSON_LOGGING -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## auth_rate_limit_per_minute
+top=true stored=blob class=x blob=auth_rate_limit_per_minute admin=false fail-closed=false url=false
+retired file auth_rate_limit_per_minute -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env AUTH_RATE_LIMIT_PER_MINUTE -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## api_keys
+top=true stored=blob class=x blob=api_keys admin=false fail-closed=false url=false
+retired file api_keys -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env API_KEYS -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## language
+top=true stored=blob class=x blob=language admin=false fail-closed=false url=false
+retired file language -> - warn message="this setting was removed: it was stored and shown on the..."
+retired env LANGUAGE -> - warn message="this setting was removed: it was stored and shown on the..."
+
+## review_metadata_server_query
+top=true stored=blob class=x blob=review_metadata_server_query admin=false fail-closed=false url=false
+retired file review_metadata_server_query -> - warn message="the review_metadata_server_query setting was removed: th..."
+retired env REVIEW_METADATA_SERVER_QUERY -> - warn message="the review_metadata_server_query setting was removed: th..."
+
+## activity_db_path
+top=true stored=blob class=x blob=activity_db_path admin=false fail-closed=false url=false
+retired file activity_db_path -> - warn message="this setting was removed with the SQLite activity backen..."
+retired env ACTIVITY_DB_PATH -> - warn message="this setting was removed with the SQLite activity backen..."
+
+## activity_db_move_on_change
+top=true stored=blob class=x blob=activity_db_move_on_change admin=false fail-closed=false url=false
+retired file activity_db_move_on_change -> - warn message="this setting was removed with the SQLite activity backen..."
+retired env ACTIVITY_DB_MOVE_ON_CHANGE -> - warn message="this setting was removed with the SQLite activity backen..."
+
+## invite_cf_access_client_id
+top=true stored=blob class=x blob=invite_cf_access_client_id admin=false fail-closed=false url=false
+retired file invite_cf_access_client_id -> - warn message="the shared guest Cloudflare service token (INVITE_CF_ACC..."
+retired env INVITE_CF_ACCESS_CLIENT_ID -> - warn message="the shared guest Cloudflare service token (INVITE_CF_ACC..."
+
+## invite_cf_access_client_secret
+top=true stored=blob class=x blob=invite_cf_access_client_secret admin=false fail-closed=false url=false
+retired file invite_cf_access_client_secret -> - warn message="the shared guest Cloudflare service token (INVITE_CF_ACC..."
+retired env INVITE_CF_ACCESS_CLIENT_SECRET -> - warn message="the shared guest Cloudflare service token (INVITE_CF_ACC..."
+
+## ABK_STATE_DIR
+top=true stored=env/file class=o blob=- admin=true fail-closed=false url=false
+target key core.paths.state_dir convert=- env=ABO_CORE_PATHS_STATE_DIR
+note a process-environment name HEAD reads outside viper
+retired env ABK_STATE_DIR -> core.paths.state_dir refuse
+
+## ABK_ALLOW_ENCRYPTION_KEY_REGEN
+top=true stored=env/file class=o blob=- admin=true fail-closed=false url=false
+target key core.secrets.allow_key_regen convert=- env=ABO_CORE_SECRETS_ALLOW_KEY_REGEN
+note a process-environment name HEAD reads outside viper
+retired env ABK_ALLOW_ENCRYPTION_KEY_REGEN -> core.secrets.allow_key_regen refuse
