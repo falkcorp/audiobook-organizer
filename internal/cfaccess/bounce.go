@@ -256,7 +256,7 @@ func CFRecoveryURL(u *url.URL, marker bool) (string, bool) {
 	}
 	kept := make([]string, 0, 4)
 	if u.RawQuery != "" {
-		for _, pair := range strings.Split(u.RawQuery, "&") {
+		for pair := range strings.SplitSeq(u.RawQuery, "&") {
 			key, _, _ := strings.Cut(pair, "=")
 			if k, err := url.QueryUnescape(key); err == nil && k == CFResetParam {
 				continue

@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -108,7 +107,7 @@ func New(ctx context.Context, d Deps) (*Flow, error) {
 func buildProvider(ctx context.Context, cfg ProviderConfig, hc *http.Client) (Provider, error) {
 	switch cfg.Kind {
 	case KindGitHub:
-		return newGitHub(cfg, hc, defaultGitHub), nil
+		return newGitHub(cfg, hc, defaultGitHub()), nil
 	case KindOIDC:
 		return newOIDC(ctx, cfg, hc)
 	}
@@ -215,7 +214,19 @@ type Started struct {
 	MaxAge   int
 }
 
-var challengePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43,128}$`)
+// validChallenge reports whether s has the shape of a PKCE S256 challenge:
+// 43 to 128 base64url characters (RFC 7636 section 4.2 allows up to 128).
+func validChallenge(s string) bool {
+	if len(s) < 43 || len(s) > 128 {
+		return false
+	}
+	for i := range len(s) {
+		if c := s[i]; !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
 
 // Start begins a sign-in. With both of redirect_uri and code_challenge it is a
 // native-app sign-in: the redirect_uri must be one the hand-off allows
@@ -238,7 +249,7 @@ func (f *Flow) Start(ctx context.Context, req StartRequest) (*Started, error) {
 		if !f.appRedirectAllowed(app) {
 			return nil, ErrBadRedirect
 		}
-		if req.CodeChallengeMethod != "S256" || !challengePattern.MatchString(challenge) {
+		if req.CodeChallengeMethod != "S256" || !validChallenge(challenge) {
 			return nil, ErrBadChallenge
 		}
 		pl.AppRedirectURI, pl.AppChallenge, pl.AppState = app, challenge, req.AppState

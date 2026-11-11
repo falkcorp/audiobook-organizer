@@ -77,7 +77,11 @@ type githubURLs struct {
 	api      string
 }
 
-var defaultGitHub = githubURLs{endpoint: github.Endpoint, api: "https://api.github.com"}
+// defaultGitHub is GitHub's endpoints (a function: a package-level value would
+// be shared mutable state).
+func defaultGitHub() githubURLs {
+	return githubURLs{endpoint: github.Endpoint, api: "https://api.github.com"}
+}
 
 type githubProvider struct {
 	cfg  ProviderConfig

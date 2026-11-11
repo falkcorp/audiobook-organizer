@@ -174,7 +174,7 @@ func TestBuildProviderKinds(t *testing.T) {
 			t.Errorf("scopes %v -> %s, want [%s]", tc.scopes, got, tc.want)
 		}
 	}
-	gp := newGitHub(ProviderConfig{ID: "hub", Kind: KindGitHub, Scopes: []string{"read:user"}}, http.DefaultClient, defaultGitHub).(*githubProvider)
+	gp := newGitHub(ProviderConfig{ID: "hub", Kind: KindGitHub, Scopes: []string{"read:user"}}, http.DefaultClient, defaultGitHub()).(*githubProvider)
 	if got := fmt.Sprint(gp.oauthConfig("https://x.example.test/cb").Scopes); got != "[read:user]" {
 		t.Fatalf("github scopes = %s", got)
 	}

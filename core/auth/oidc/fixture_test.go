@@ -8,7 +8,6 @@ package oidc
 import (
 	"context"
 	"errors"
-	"net/http"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -300,8 +299,3 @@ func queryParam(t testing.TB, raw, key string) string {
 	}
 	return u.Query().Get(key)
 }
-
-// roundTrip is an http.RoundTripper made of a func.
-type roundTrip func(*http.Request) (*http.Response, error)
-
-func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
