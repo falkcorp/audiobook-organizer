@@ -1,7 +1,7 @@
-// file: internal/config/invite_config_test.go
-// version: 1.6.2
+// file: internal/config/env_only_settings_test.go
+// version: 1.7.0
 // guid: 8c2f4a19-7d3e-4b65-9e10-a5b7c3d9e2f1
-// last-edited: 2026-10-30
+// last-edited: 2026-11-10
 
 package config
 
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/spf13/viper"
 )
 
@@ -221,11 +222,11 @@ func TestLoginSaturatedLimits_DefaultsAndEnv(t *testing.T) {
 	var c Config
 	applyInviteEnv(&c, viper.GetViper())
 	rate, burst, err := parseLoginSaturatedLimits(c.LoginSaturatedRate, c.LoginSaturatedBurst)
-	if err != nil || rate != DefaultLoginSaturatedRate || burst != DefaultLoginSaturatedBurst {
-		t.Fatalf("unset keys: rate=%v burst=%d err=%v, want the defaults %v/%d", rate, burst, err, DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst)
+	if err != nil || rate != coreauth.DefaultSaturatedRate || burst != coreauth.DefaultSaturatedBurst {
+		t.Fatalf("unset keys: rate=%v burst=%d err=%v, want the defaults %v/%d", rate, burst, err, coreauth.DefaultSaturatedRate, coreauth.DefaultSaturatedBurst)
 	}
-	if DefaultLoginSaturatedRate != 2 || DefaultLoginSaturatedBurst != 8 {
-		t.Fatalf("defaults are documented as 2/s burst 8, got %v/%d", DefaultLoginSaturatedRate, DefaultLoginSaturatedBurst)
+	if coreauth.DefaultSaturatedRate != 2 || coreauth.DefaultSaturatedBurst != 8 {
+		t.Fatalf("defaults are documented as 2/s burst 8, got %v/%d", coreauth.DefaultSaturatedRate, coreauth.DefaultSaturatedBurst)
 	}
 
 	t.Setenv("LOGIN_SATURATED_RATE", " 0.5 ")

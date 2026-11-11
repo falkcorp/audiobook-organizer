@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.33.3
+// version: 3.33.4
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package config
 
@@ -547,7 +547,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 	}
 
 	// Invitation email and guest-access keys are environment-only and have no
-	// JSON field (invite_config.go). Refuse them by name so the caller learns
+	// JSON field (env_only_settings.go). Refuse them by name so the caller learns
 	// why, rather than getting the generic unknown-key error.
 	if msg, ok := inviteEnvOnlyKeyInUpdate(payload); ok {
 		return http.StatusBadRequest, map[string]any{"error": msg}
