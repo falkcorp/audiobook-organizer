@@ -117,7 +117,12 @@ type Deps struct {
 	// sorts them by Order).
 	Extensions []Extension
 	// Client returns a request's ClientInfo as httpapi resolved it
-	// (trusted-proxy aware); nil uses the TCP peer.
+	// (trusted-proxy aware); nil uses the TCP peer, and HTTPS only when the
+	// connection itself is TLS. A resolver sets HTTPS by the perimeter's
+	// rule (core/internal/httpmw headers.go: TLS, or X-Forwarded-Proto
+	// "https" from a configured trusted proxy), never from any peer's
+	// header: the session cookie's name follows HTTPS (§4.3), and a
+	// believed "http" would read the plain name a sibling origin can plant.
 	Client func(*http.Request) ClientInfo
 }
 
