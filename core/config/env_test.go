@@ -274,10 +274,14 @@ func TestEnv_StrictDecode(t *testing.T) {
 	}
 	// strconv's extras are not JSON numbers: they would reach the snapshot
 	// as raw text it cannot read (found by FuzzEnvDecode).
-	for _, v := range []string{"007", "+5", "0x10", "1_000", "1.5", "1e3", "-0x1"} {
+	for _, v := range []string{"007", "+5", "0x10", "1_000", "1.5", "1e3", "-0x1", "99999999999999999999"} {
 		r := fcRig(t, []string{"GOTHAM_CORE_BATCAVE_GADGET_COUNT=" + v}, "", nil)
-		if _, err := r.st.Boot(context.Background()); !errors.Is(err, config.ErrInvalid) {
-			t.Errorf("gadget.count %q: Boot err = %v, want ErrInvalid", v, err)
+		if _, err := r.st.Boot(context.Background()); !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), "env GOTHAM_CORE_BATCAVE_GADGET_COUNT") {
+			t.Errorf("gadget.count %q: Boot err = %v, want ErrInvalid naming the variable", v, err)
+		}
+		raw, err := config.TextJSON(r.st, kCount, v)
+		if _, typed := errors.AsType[*config.FieldError](err); !typed {
+			t.Errorf("gadget.count %q: the env decoder passed %s, want a *FieldError", v, raw)
 		}
 	}
 	r := fcRig(t, []string{

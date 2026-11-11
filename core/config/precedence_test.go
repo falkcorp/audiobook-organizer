@@ -99,6 +99,16 @@ func TestFailClosed_MoreRestrictiveWins(t *testing.T) {
 					t.Errorf("health %v gauge %d, want config_fail_closed_override and 1", r.st.HealthTokens(), config.FailClosedGauge(r.st))
 				}
 			})
+			t.Run("stored equal to env", func(t *testing.T) {
+				r := fcRig(t, []string{k.env + "=" + k.weakT}, "", map[config.Path]string{k.path: k.weak})
+				rep := r.start()
+				if ks := r.lookup(k.path); ks.Source != config.SourceEnv || len(rep.FailClosed) != 0 || rep.Ignored[k.path] != "env "+k.env {
+					t.Errorf("source %v FailClosed %v Ignored %v; an equal stored value is ignored, not reported as stricter", ks.Source, rep.FailClosed, rep.Ignored)
+				}
+				if config.FailClosedGauge(r.st) != 0 || r.logs.count("stricter than the operator value") != 0 {
+					t.Error("an equal stored value is reported as an override")
+				}
+			})
 			t.Run("stored stricter than file", func(t *testing.T) {
 				r := fcRig(t, nil, k.yml(k.weakT), map[config.Path]string{k.path: k.strict})
 				rep := r.start()
