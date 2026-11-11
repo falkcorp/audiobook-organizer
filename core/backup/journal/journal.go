@@ -1,7 +1,7 @@
 // file: core/backup/journal/journal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a78173c-7f1b-4b86-8611-64a3be499999
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package journal is the leaf of backup that auth and rbac import (COR2-9):
 // github.com/falkcorp/mediacore/backup/journal, L4, imports entity and storage
@@ -10,9 +10,10 @@
 // the c/backup/ storage.Spec the kernel registers from the identity flip (COR5-6).
 //
 // The types below are 05-backup §5B.3.2's package block. The file-backed
-// implementation (file.go) is the plain append of F4-04; the journal's
-// authenticated format (the header's fields, every line's kid and mac, the
-// install check), backup.location.json and c/backup/served_boot are F4-11's.
+// implementation (file.go) is F4-04's append made authenticated by F4-11: the
+// line format and its MAC chain (format.go), the verifier and the coverage
+// rule (chain.go), the install check, backup.location.json and
+// c/backup/served_boot (location.go, component.go).
 package journal
 
 import (

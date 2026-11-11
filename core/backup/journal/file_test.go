@@ -1,7 +1,7 @@
 // file: core/backup/journal/file_test.go
-// version: 1.0.1
+// version: 2.0.0
 // guid: b7a073e7-211a-4d06-8bf4-6befeb60e0d3
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package journal
 
@@ -19,139 +19,6 @@ import (
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/storage"
 )
-
-// authOwner stands in for core/auth, the revoking subsystem whose batch the
-// journal joins.
-const authOwner storage.Owner = "core/auth"
-
-// fixture is a store with c/backup/ and c/auth/, booted the way the kernel's
-// P2, P4a and P4b do (as coretest.Store does; coretest is not imported
-// because it imports kernel, which will import this package).
-type fixture struct {
-	db   *storage.DB
-	ks   storage.Keyspace // c/backup/
-	auth storage.Keyspace // c/auth/
-	path string           // the journal file
-}
-
-func newFixture(t *testing.T) *fixture {
-	t.Helper()
-	ctx := context.Background()
-	dir := t.TempDir()
-	o, err := storage.Open(ctx, storage.OpenOptions{
-		Path: filepath.Join(dir, "storage", "main.pebble"), Build: "batcomputer-1", FreeSpaceMargin: 1,
-		Owners: []storage.OwnerSpec{
-			{Owner: Owner, Spec: StorageSpec(), Enabled: true},
-			{Owner: authOwner, Spec: storage.Spec{Keyspace: true}, Enabled: true},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	db, err := o.Prepare(ctx)
-	if err == nil {
-		err = db.Migrate(ctx)
-	}
-	if err != nil {
-		t.Fatal(errors.Join(err, o.Close()))
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	ks, _ := db.Keyspace(Owner)
-	auth, _ := db.Keyspace(authOwner)
-	return &fixture{db: db, ks: ks, auth: auth, path: filepath.Join(dir, "backups", "gotham_revocations.journal")}
-}
-
-func (fx *fixture) open(t *testing.T) *File {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(fx.path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	j, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.ks, Source: "batcomputer-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = j.Close() })
-	return j
-}
-
-// head reads the committed c/backup/journal_head seq (0 when absent).
-func (fx *fixture) head(t *testing.T) uint64 {
-	t.Helper()
-	raw, err := fx.ks.Get(context.Background(), []byte(headKey))
-	if errors.Is(err, storage.ErrNotFound) {
-		return 0
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	seq, err := decodeSeq(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return seq
-}
-
-// lines reads the journal file's lines.
-func (fx *fixture) lines(t *testing.T) []string {
-	t.Helper()
-	b, err := os.ReadFile(fx.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
-}
-
-// openBroken opens fx.path expecting ErrCorrupt and checks the broken File
-// that comes with it (§5B.5: the app stays open on a broken journal): it
-// holds the lock, its Append fails with ErrCorrupt and stages nothing, and
-// its Gap records journal_gap/<since> so the revocation still commits.
-func (fx *fixture) openBroken(t *testing.T, what string) {
-	t.Helper()
-	ctx := context.Background()
-	j, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks})
-	if !errors.Is(err, ErrCorrupt) || j == nil {
-		if j != nil {
-			_ = j.Close()
-		}
-		t.Fatalf("%s: OpenFile = %v, %v; want a broken File and ErrCorrupt", what, j, err)
-	}
-	defer func() { must(t, j.Close()) }()
-	if j2, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrLocked) {
-		if j2 != nil {
-			_ = j2.Close()
-		}
-		t.Errorf("%s: a second opener of the broken journal: err = %v, want ErrLocked", what, err)
-	}
-	b := fx.auth.NewBatch()
-	must(t, b.Set([]byte("user/bane"), []byte("disabled")))
-	if err := j.Append(ctx, b, Revocation{Kind: UserDisabled}); !errors.Is(err, ErrCorrupt) {
-		t.Errorf("%s: Append on the broken journal: err = %v, want ErrCorrupt", what, err)
-	}
-	if b.Count() != 1 {
-		t.Errorf("%s: the refused Append staged into the batch: count %d", what, b.Count())
-	}
-	at := time.Date(2026, 11, 10, 4, 0, 0, 0, time.UTC)
-	must(t, j.Gap(b, at))
-	must(t, b.Commit(ctx, storage.Sync))
-	if v, err := fx.ks.Get(ctx, gapKey(at)); err != nil || !strings.Contains(string(v), `"reason":"append_failed"`) {
-		t.Errorf("%s: the gap record: %q, %v", what, v, err)
-	}
-}
-
-// revoke is a revoking batch of core/auth: the user row and the journal line.
-func (fx *fixture) revoke(t *testing.T, j RevocationJournal, user string) *storage.Batch {
-	t.Helper()
-	b := fx.auth.NewBatch()
-	if err := b.Set([]byte("user/"+user), []byte("disabled")); err != nil {
-		t.Fatal(err)
-	}
-	r := Revocation{At: time.Date(2026, 11, 10, 3, 0, 0, 0, time.UTC), Kind: UserDisabled,
-		Subject: entity.Ref{Module: "core", Kind: "user", ID: user}}
-	if err := j.Append(context.Background(), b, r); err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
 
 // TestStorageSpec_SerializedKeysAndPrefixes: c/backup/ is a keyspace whose
 // journal_head and served_boot are Serialized (exact keys) and whose gap
@@ -187,37 +54,35 @@ func TestJournal_AppendBeforeCommitHeadMonotone(t *testing.T) {
 	ctx := context.Background()
 
 	joker := fx.revoke(t, j, "joker")
-	if got := fx.lines(t); len(got) != 2 || got[0] != `{"seq":0}` || !strings.Contains(got[1], `"seq":1`) {
+	if got := fx.lines(t); len(got) != 2 || !strings.HasPrefix(got[0], `{"seq":0,"install_id":"`+installID+`"`) || !strings.Contains(got[1], `"seq":1`) {
 		t.Fatalf("before commit the file holds %q, want the header and line 1", got)
 	}
 	penguin := fx.revoke(t, j, "penguin")
 	must(t, penguin.Commit(ctx, storage.Sync))
-	if h := fx.head(t); h != 2 {
-		t.Fatalf("head = %d after seq 2 committed, want 2", h)
+	if h := fx.head(t); h.Seq != 2 || h.MAC != fx.chain(t).Lines[1].MAC {
+		t.Fatalf("head = %+v after seq 2 committed, want seq 2 and its mac", h)
 	}
 	if err := joker.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
 		t.Fatalf("the out-of-order commit: err = %v, want ErrConflict (the head moved since it was read)", err)
 	}
-	if h := fx.head(t); h != 2 {
-		t.Fatalf("head = %d after the stale commit, want still 2", h)
+	if h := fx.head(t); h.Seq != 2 {
+		t.Fatalf("head = %+v after the stale commit, want still seq 2", h)
 	}
 	// The caller retries the revoking batch, appending again.
 	must(t, storage.RetryOnConflict(ctx, 3, func(ctx context.Context) error {
 		return fx.revoke(t, j, "joker").Commit(ctx, storage.Sync)
 	}))
-	if h := fx.head(t); h != 3 {
-		t.Fatalf("head = %d after the retry, want 3", h)
+	if h := fx.head(t); h.Seq != 3 {
+		t.Fatalf("head = %+v after the retry, want seq 3", h)
 	}
 	if v, err := fx.auth.Get(ctx, []byte("user/joker")); err != nil || string(v) != "disabled" {
 		t.Errorf("the revocation itself: %q, %v", v, err)
 	}
-	got := fx.lines(t)
-	if len(got) != 4 {
-		t.Fatalf("file holds %d lines, want the header and 3", len(got))
+	c := fx.chain(t)
+	if c.Break != nil || len(c.Lines) != 3 {
+		t.Fatalf("the chain holds %d lines, break %v; want the header and 3 verified lines", len(c.Lines), c.Break)
 	}
-	r, err := decodeLine([]byte(got[3]))
-	must(t, err)
-	if r.Seq != 3 || r.Kind != UserDisabled || r.Subject != (entity.Ref{Module: "core", Kind: "user", ID: "joker"}) || r.Source != "batcomputer-1" {
+	if r := c.Lines[2]; r.Seq != 3 || r.Kind != UserDisabled || r.Subject != (entity.Ref{Module: "core", Kind: "user", ID: "joker"}) || r.Source != "batcomputer-1" || r.KID != "d1" {
 		t.Errorf("line 3 = %+v", r)
 	}
 
@@ -294,14 +159,24 @@ func TestJournal_AppendFailureStagesNothing(t *testing.T) {
 	if v, err := fx.ks.Get(ctx, gapKey(at)); err != nil || !strings.Contains(string(v), `"reason":"append_failed"`) {
 		t.Errorf("journal_gap record: %q, %v", v, err)
 	}
-	if h := fx.head(t); h != 0 {
-		t.Errorf("head = %d, want none", h)
+	if h := fx.head(t); h.Seq != 0 {
+		t.Errorf("head = %+v, want none", h)
 	}
 
+	// The next successful Append closes the gap in the same fsynced write: a
+	// gap line, then the revocation, numbered on without a hole, and the
+	// journal_gap/ record is deleted in the revoking batch.
 	ff.failWrite = false
 	must(t, fx.revoke(t, j, "penguin").Commit(ctx, storage.Sync))
-	if got := fx.lines(t); len(got) != 2 || !strings.Contains(got[1], `"seq":1`) {
-		t.Errorf("after the failure the file holds %q, want line 1 next", got)
+	c := fx.chain(t)
+	if c.Break != nil || len(c.Lines) != 2 || c.Lines[0].Kind != Gap || c.Lines[1].Kind != UserDisabled || c.Lines[1].Seq != 2 {
+		t.Fatalf("after the failure the chain is %+v (break %v), want a gap line then seq 2", c.Lines, c.Break)
+	}
+	if d := c.Lines[0].Detail; len(d) != 2 || d[0] != at.Format(time.RFC3339Nano) || d[1] != "append_failed" {
+		t.Errorf("the gap line's detail = %q, want [since, append_failed]", d)
+	}
+	if _, err := fx.ks.Get(ctx, gapKey(at)); !errors.Is(err, storage.ErrNotFound) {
+		t.Errorf("the closed interval's journal_gap/ record: err = %v, want deleted", err)
 	}
 
 	// A failure that cannot be cut back durably (the cut fails, or the
@@ -356,32 +231,36 @@ func TestOpenFile_HeaderAndRecovery(t *testing.T) {
 	must(t, fx.revoke(t, j2, "penguin").Commit(context.Background(), storage.Sync))
 	must(t, j2.Close())
 
-	must(t, os.WriteFile(fx.path, []byte("{\"seq\":0}\n{\"seq\":2}\n"), 0o600))
-	fx.openBroken(t, "seq gap")
-	must(t, os.WriteFile(fx.path, []byte("{\"seq\":0}\nnot json\n"), 0o600))
-	fx.openBroken(t, "garbage line")
-	if _, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.auth}); err == nil {
-		t.Error("OpenFile accepted another owner's keyspace")
-	}
-	if _, err := OpenFile(context.Background(), FileOptions{Keyspace: fx.ks}); err == nil {
-		t.Error("OpenFile accepted an empty path")
-	}
-	// An empty file for a store with no head gets the header (fx's store
-	// has head 2 by now, so a fresh store).
-	empty := filepath.Join(t.TempDir(), "empty.journal")
-	must(t, os.WriteFile(empty, nil, 0o600))
-	j3, err := OpenFile(context.Background(), FileOptions{Path: empty, Keyspace: newFixture(t).ks})
-	must(t, err)
-	must(t, j3.Close())
-	if b, _ := os.ReadFile(empty); string(b) != "{\"seq\":0}\n" {
-		t.Errorf("an empty file got %q, want the header", b)
-	}
-}
+	good := fx.lines(t)
+	fx.write(t, good[0], "not json")
+	fx.openBroken(t, "garbage line", ErrCorrupt)
+	fx.write(t, "{\"seq\":0}")
+	fx.openBroken(t, "a first line without a mac", ErrCorrupt)
 
-func must(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatal(err)
+	o := fx.opts()
+	for name, mut := range map[string]func(*FileOptions){
+		"another owner's keyspace": func(o *FileOptions) { o.Keyspace = fx.auth },
+		"an empty path":            func(o *FileOptions) { o.Path = "" },
+		"no keys":                  func(o *FileOptions) { o.Keys = nil },
+		"no install ID":            func(o *FileOptions) { o.InstallID = "" },
+	} {
+		oo := o
+		mut(&oo)
+		if j, err := OpenFile(context.Background(), oo); err == nil || j != nil {
+			t.Errorf("OpenFile accepted %s: %v, %v", name, j, err)
+		}
+	}
+
+	// An empty file for a store with no head gets the header.
+	fresh := newFixture(t)
+	must(t, os.MkdirAll(filepath.Dir(fresh.path), 0o700))
+	must(t, os.WriteFile(fresh.path, nil, 0o600))
+	j3 := fresh.open(t)
+	must(t, j3.Close())
+	hdr := fresh.chain(t)
+	if !hdr.HasHeader || hdr.Header.InstallID != installID || hdr.Header.App != "gotham" || hdr.Header.KID != "d1" ||
+		hdr.Header.BaseSeq != 0 || hdr.Header.BaseMAC != "" || !hdr.Header.StartedAt.Equal(time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)) || len(hdr.Lines) != 0 {
+		t.Errorf("an empty file got the header %+v", hdr.Header)
 	}
 }
 
@@ -400,8 +279,8 @@ func TestOpenFile_RefusesFileBehindHead(t *testing.T) {
 		must(t, fx.revoke(t, j, u).Commit(ctx, storage.Sync))
 	}
 	must(t, j.Close())
-	if h := fx.head(t); h != 3 {
-		t.Fatalf("head = %d, want 3", h)
+	if h := fx.head(t); h.Seq != 3 {
+		t.Fatalf("head = %+v, want seq 3", h)
 	}
 	full, err := os.ReadFile(fx.path)
 	must(t, err)
@@ -420,16 +299,23 @@ func TestOpenFile_RefusesFileBehindHead(t *testing.T) {
 			} else {
 				must(t, os.WriteFile(fx.path, content, 0o600))
 			}
-			fx.openBroken(t, name)
+			fx.openBroken(t, name, ErrCorrupt)
 			after, err := os.ReadFile(fx.path)
+			if name == "deleted" {
+				// The refused open created the (empty) file it locked; nothing was written to it.
+				if err != nil || len(after) != 0 {
+					t.Errorf("the refused open of a deleted journal left %q, %v", after, err)
+				}
+				return
+			}
 			must(t, err)
 			if !bytes.Equal(after, content) {
 				t.Errorf("the refused open wrote %q, want the file unchanged (%q)", after, content)
 			}
 		})
 	}
-	if h := fx.head(t); h != 3 {
-		t.Errorf("head = %d after the refusals, want 3", h)
+	if h := fx.head(t); h.Seq != 3 {
+		t.Errorf("head = %+v after the refusals, want seq 3", h)
 	}
 }
 
@@ -471,8 +357,8 @@ func TestAppend_NeverAtOrBelowHead(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Errorf("a refused append wrote %q", after[len(before):])
 	}
-	if h := fx.head(t); h != 5 {
-		t.Errorf("head = %d, want 5 (never lowered)", h)
+	if h := fx.head(t); h.Seq != 5 {
+		t.Errorf("head = %+v, want seq 5 (never lowered)", h)
 	}
 }
 
@@ -487,7 +373,7 @@ func TestOpenFile_SecondOpenerRefused(t *testing.T) {
 	must(t, fx.revoke(t, j, "joker").Commit(ctx, storage.Sync))
 	before, err := os.ReadFile(fx.path)
 	must(t, err)
-	if j2, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks}); !errors.Is(err, ErrLocked) {
+	if j2, err := OpenFile(ctx, fx.opts()); !errors.Is(err, ErrLocked) {
 		if j2 != nil {
 			_ = j2.Close()
 		}
@@ -500,7 +386,7 @@ func TestOpenFile_SecondOpenerRefused(t *testing.T) {
 	}
 	must(t, fx.revoke(t, j, "penguin").Commit(ctx, storage.Sync)) // the holder keeps writing
 	must(t, j.Close())
-	j2, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks})
+	j2, err := OpenFile(ctx, fx.opts())
 	must(t, err)
 	must(t, fx.revoke(t, j2, "riddler").Commit(ctx, storage.Sync))
 	must(t, j2.Close())
@@ -545,8 +431,9 @@ func (fx *fixture) gapStillWorks(t *testing.T, j *File, openErr error, user stri
 func TestOpenFile_HeaderWriteFailureStillGaps(t *testing.T) {
 	fx := newFixture(t)
 	must(t, os.MkdirAll(filepath.Dir(fx.path), 0o700))
-	j, err := OpenFile(context.Background(), FileOptions{Path: fx.path, Keyspace: fx.ks,
-		wrap: func(f lineFile) lineFile { return &failingFile{lineFile: f, failWrite: true} }})
+	o := fx.opts()
+	o.wrap = func(f lineFile) lineFile { return &failingFile{lineFile: f, failWrite: true} }
+	j, err := OpenFile(context.Background(), o)
 	if err == nil {
 		t.Fatal("OpenFile succeeded although the header write failed")
 	}
@@ -562,7 +449,7 @@ func TestOpenFile_LockedStillGaps(t *testing.T) {
 	ctx := context.Background()
 	fx := newFixture(t)
 	holder := fx.open(t)
-	j, err := OpenFile(ctx, FileOptions{Path: fx.path, Keyspace: fx.ks})
+	j, err := OpenFile(ctx, fx.opts())
 	if !errors.Is(err, ErrLocked) {
 		t.Fatalf("second opener: err = %v, want ErrLocked", err)
 	}
@@ -577,7 +464,9 @@ func TestOpenFile_LockedStillGaps(t *testing.T) {
 // directory is missing) still yields a broken File whose Gap works.
 func TestOpenFile_UnopenableStillGaps(t *testing.T) {
 	fx := newFixture(t)
-	j, err := OpenFile(context.Background(), FileOptions{Path: filepath.Join(t.TempDir(), "gone", "x.journal"), Keyspace: fx.ks})
+	o := fx.opts()
+	o.Path = filepath.Join(t.TempDir(), "gone", "x.journal")
+	j, err := OpenFile(context.Background(), o)
 	if err == nil {
 		t.Fatal("OpenFile succeeded in a missing directory")
 	}
