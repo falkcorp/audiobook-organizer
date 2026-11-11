@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/gate.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ec0c1bf4-fb0b-44a4-ac17-f2ca02f02f83
 // last-edited: 2026-11-11
 
@@ -8,6 +8,8 @@ package providerhttp
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,8 +32,35 @@ type gate struct {
 	// reach on a private network. Derived from Policy.Trust by the Registry and
 	// settable by nothing else.
 	private func(hostport string) bool
-	// qc is Policy.QueryCredential.
-	qc *integrations.QueryCredential
+	// qc is Policy.QueryCredential; qcOrigins are its Origins as
+	// "scheme://host:port" keys (endpoint form).
+	qc        *integrations.QueryCredential
+	qcOrigins map[string]struct{}
+}
+
+// qcApplies reports whether the query credential may be sent to u: it is set
+// and u's origin is one of the credential's Origins.
+func (g *gate) qcApplies(u *url.URL) bool {
+	if g.qc == nil || u == nil {
+		return false
+	}
+	_, ok := g.qcOrigins[strings.ToLower(u.Scheme)+"://"+endpoint(u)]
+	return ok
+}
+
+// originKeys parses "scheme://host[:port]" origins into the keys qcApplies
+// looks up; an entry that is not an http(s) origin with a host is dropped (it
+// can then match nothing).
+func originKeys(origins []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(origins))
+	for _, o := range origins {
+		u, err := url.Parse(strings.TrimSpace(o))
+		if err != nil || ValidateParsedURL(u) != nil {
+			continue
+		}
+		out[strings.ToLower(u.Scheme)+"://"+endpoint(u)] = struct{}{}
+	}
+	return out
 }
 
 var _ integrations.Gate = (*gate)(nil)
