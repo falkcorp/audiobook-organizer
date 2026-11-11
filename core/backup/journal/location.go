@@ -83,10 +83,6 @@ func ReadLocation(stateDir string) (Location, bool, error) {
 		Store: w.Store, ServedBoot: w.ServedBoot, Head: Head(w.Head)}, true, nil
 }
 
-// renameLocation is the rename WriteLocation ends with (a seam for the crash
-// test: a crash between the temp file and the rename).
-var renameLocation = os.Rename
-
 // WriteLocation writes l to <stateDir>/backup.location.json atomically and
 // durably: a temp file in the same directory (0600) is written and fsynced,
 // renamed over the file, and the directory is fsynced. A crash anywhere before
@@ -96,6 +92,13 @@ var renameLocation = os.Rename
 // the file and it holds one mutex across every read-modify-write (DATA7-14),
 // so the callers outside this package are the component's methods.
 func WriteLocation(stateDir string, l Location) error {
+	return writeLocation(stateDir, l, os.Rename)
+}
+
+// writeLocation is WriteLocation with the rename it ends with passed in: the
+// crash tests' seam for a crash between the temp file and the rename, an
+// argument and not a package variable so no state is shared between callers.
+func writeLocation(stateDir string, l Location, rename func(oldpath, newpath string) error) error {
 	raw, err := json.Marshal(locationWire{BackupDir: l.BackupDir, Journal: l.Journal, DBPath: l.DBPath, InstallID: l.InstallID,
 		Store: l.Store, ServedBoot: l.ServedBoot, Head: headRecord(l.Head)})
 	if err != nil {
@@ -118,7 +121,7 @@ func WriteLocation(stateDir string, l Location) error {
 	if err = errors.Join(err, f.Close()); err != nil {
 		return errors.Join(fmt.Errorf("journal: write %s: %w", tmp, err), os.Remove(tmp))
 	}
-	if err := renameLocation(tmp, final); err != nil {
+	if err := rename(tmp, final); err != nil {
 		return errors.Join(fmt.Errorf("journal: rename %s: %w", tmp, err), os.Remove(tmp))
 	}
 	return syncDir(stateDir)

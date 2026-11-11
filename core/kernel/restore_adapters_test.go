@@ -62,7 +62,7 @@ func TestRestoreAborted(t *testing.T) {
 	steps := &rxSteps{}
 	res, _ := s.boot(archiveBoot("restore-1", "arch-1", s.previous, steps), nil)
 	seq := res.RestoreLine
-	for i := 0; i < 2; i++ { // the second call finds the line already closed
+	for range 2 { // the second call finds the line already closed
 		if err := restoreAborted(s.ctx, s.comp, s.keys, "restore-1", s.clock.now()); err != nil {
 			t.Fatal(err)
 		}
@@ -194,7 +194,7 @@ func TestReapply_TailInSequentialBatches(t *testing.T) {
 	fx.boot(nil, nil)
 	robin := fx.user("tim-drake")
 	n := tailBatch + 3
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("key-robin-%03d", i)
 		fx.key(id, robin, auth.KeyActive)
 		fx.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef(id)})
@@ -220,7 +220,7 @@ func TestReapply_TailInSequentialBatches(t *testing.T) {
 	if got := fx.head().Seq; got != uint64(n) {
 		t.Errorf("head = %d, want %d", got, n)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if got := fx.keyStatus(fmt.Sprintf("key-robin-%03d", i)); got != auth.KeyRevoked {
 			t.Fatalf("key %d = %q", i, got)
 		}
@@ -234,7 +234,7 @@ func TestClassifyStore(t *testing.T) {
 	pair := journal.ServedBoot{N: 4, Nonce: "alfred"}
 	loc := journal.Location{DBPath: "/gotham", InstallID: "wayne", Store: id, ServedBoot: pair, Head: journal.Head{Seq: 2}}
 	line := func(seq uint64, k journal.Kind) journal.Line {
-		return journal.Line{Revocation: journal.Revocation{Seq: seq, Kind: k}}
+		return journal.Line{Seq: seq, Kind: k}
 	}
 	chain := func(lines ...journal.Line) *journal.Chain {
 		c := &journal.Chain{HasHeader: true, Lines: lines}

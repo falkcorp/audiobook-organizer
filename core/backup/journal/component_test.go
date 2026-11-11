@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -149,12 +150,7 @@ func TestRevocationStagesJournalHead(t *testing.T) {
 }
 
 func sliceHas(owners []storage.Owner, o storage.Owner) bool {
-	for _, x := range owners {
-		if x == o {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(owners, o)
 }
 
 // TestOfflineRevocationJournaled: an offline revoking write (for example
@@ -235,18 +231,14 @@ func TestLocationFileModeAndAtomicity(t *testing.T) {
 	next := prev
 	next.Head = Head{Seq: 9, MAC: "cd"}
 	next.ServedBoot = ServedBoot{N: 3, Nonce: "ee"}
-	orig := renameLocation
-	t.Cleanup(func() { renameLocation = orig })
-	renameLocation = func(string, string) error { panic("the Batcave lost power") }
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
 				t.Fatal("the simulated crash did not happen")
 			}
 		}()
-		_ = WriteLocation(fx.dir, next)
+		_ = writeLocation(fx.dir, next, func(string, string) error { panic("the Batcave lost power") })
 	}()
-	renameLocation = orig
 
 	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, original) {
 		t.Fatalf("after a crash before the rename the location file = %q, %v; want the previous content %q", got, err, original)
@@ -268,11 +260,9 @@ func TestLocationFileModeAndAtomicity(t *testing.T) {
 	}
 
 	// A rename that fails (not a crash) leaves the file and no temp behind.
-	renameLocation = func(string, string) error { return errors.New("read-only filesystem") }
-	if err := WriteLocation(fx.dir, prev); err == nil {
+	if err := writeLocation(fx.dir, prev, func(string, string) error { return errors.New("read-only filesystem") }); err == nil {
 		t.Error("WriteLocation reported success although the rename failed")
 	}
-	renameLocation = orig
 	if got := fx.location(t); got != next {
 		t.Errorf("a failed rename changed the file: %+v", got)
 	}

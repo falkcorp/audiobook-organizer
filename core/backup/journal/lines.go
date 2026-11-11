@@ -128,13 +128,13 @@ type hookedRecord struct {
 // MarkHooked records, synchronously, that the restore hooks of the restore line
 // seq ran to completion (05-backup §5B.3.4 step h: the journal's hooks_done).
 // A restore line without this record is resumed by the next boot.
-func MarkHooked(ctx context.Context, ks storage.Keyspace, seq uint64, at time.Time, counts map[string]int) error {
+func MarkHooked(ctx context.Context, ks storage.Keyspace, seq uint64, at time.Time, counts map[string]int) (err error) {
 	raw, err := json.Marshal(hookedRecord{At: at.UTC(), Counts: counts})
 	if err != nil {
 		return err
 	}
 	b := ks.NewBatch()
-	defer func() { _ = b.Close() }()
+	defer func() { err = errors.Join(err, b.Close()) }()
 	if err := b.In(ks).Set(hookedKey(seq), raw); err != nil {
 		return err
 	}
