@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -115,6 +115,10 @@ type Settings struct {
 	// InviteTTL is core.auth.invite.ttl: an invite's lifetime when its spec
 	// names none (§8, reloadable).
 	InviteTTL time.Duration
+	// OwnerRequired is core.auth.owner.required (§4.8): nil takes its
+	// default, true exactly when an OwnerVerifier extension is configured
+	// and reports an owner set (Service.ownerRequired).
+	OwnerRequired *bool
 }
 
 func (s Settings) withDefaults() Settings {
