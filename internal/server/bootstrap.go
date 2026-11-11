@@ -16,7 +16,7 @@ import (
 	"log/slog"
 	"slices"
 
-	authpw "github.com/falkcorp/mediacore/auth/password"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 
 	"net/http"
 	"os"
@@ -502,7 +502,7 @@ func findOrCreateAdminUser(store adminBootstrapStore) (*database.User, string, e
 	if err != nil {
 		return nil, "", fmt.Errorf("generate admin password: %w", err)
 	}
-	algo, hash, err := authpw.HashPassword(password)
+	algo, hash, err := absauth.Passwords.Hash(password)
 	if err != nil {
 		return nil, "", fmt.Errorf("hash password: %w", err)
 	}

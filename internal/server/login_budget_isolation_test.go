@@ -18,8 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+
 	coreauth "github.com/falkcorp/mediacore/auth"
-	authpw "github.com/falkcorp/mediacore/auth/password"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -42,7 +43,7 @@ func budgetFixture(t *testing.T) *credGuardFixture {
 
 func budgetUser(t *testing.T, fx *credGuardFixture, name, pw string) {
 	t.Helper()
-	algo, hash, err := authpw.HashPassword(pw)
+	algo, hash, err := absauth.Passwords.Hash(pw)
 	require.NoError(t, err)
 	_, err = fx.store.CreateUser(name, name+"@example.test", algo, hash, []string{auth.SeedRoleAdmin}, "active")
 	require.NoError(t, err)
@@ -81,7 +82,7 @@ func TestLoginBudget_DeadRefreshTokensDoNotSpendTheWebLoginBudget(t *testing.T) 
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.90:4000"
-	for i := 0; i < coreauth.MaxFailuresPerIP; i++ {
+	for i := 0; i < coreauth.DefaultMaxFailuresPerSource; i++ {
 		require.Equal(t, http.StatusUnauthorized, budgetRefresh(fx, v, i), "refresh %d", i)
 	}
 	require.Equal(t, http.StatusTooManyRequests, budgetRefresh(fx, v, 99), "refresh past its own budget")
@@ -93,7 +94,7 @@ func TestLoginBudget_WebTyposDoNotSpendTheRefreshBudget(t *testing.T) {
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.91:4000"
-	for i := 0; i < coreauth.MaxFailuresPerIP; i++ {
+	for i := 0; i < coreauth.DefaultMaxFailuresPerSource; i++ {
 		require.Equal(t, http.StatusUnauthorized, budgetLogin(fx, "/api/v1/auth/login", v, fmt.Sprintf("typo%d", i), "x"), "typo %d", i)
 	}
 	require.Equal(t, http.StatusTooManyRequests, budgetLogin(fx, "/api/v1/auth/login", v, "budget-eve", "eve-pw"), "web login past its budget")
@@ -107,7 +108,7 @@ func TestLoginBudget_SpentRefreshBudgetRefusesRefreshOnly(t *testing.T) {
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.92:4000"
-	for i := 0; i < coreauth.MaxFailuresPerIP; i++ {
+	for i := 0; i < coreauth.DefaultMaxFailuresPerSource; i++ {
 		budgetRefresh(fx, v, i)
 	}
 	require.Equal(t, http.StatusTooManyRequests, budgetRefresh(fx, v, 99), "the refresh budget is really spent")

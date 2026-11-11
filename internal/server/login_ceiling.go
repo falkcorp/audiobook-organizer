@@ -58,7 +58,7 @@ import (
 //     back for anything but a 401. A successful login (2xx) refunds only the
 //     failures that SAME visitor made against the SAME account (the handlers
 //     report the account with absauth.NoteLoginAccount: the normalised submitted
-//     username), from the last 15 minutes, at most coreauth.SoftThreshold of them.
+//     username), from the last 15 minutes, at most coreauth.DefaultSoftThreshold of them.
 //     Someone who mistyped and got in does not leave their misses counting
 //     against everyone; a caller with one valid account cannot log in to clear
 //     the count and keep guessing at other accounts, whose failures stay counted
@@ -75,7 +75,7 @@ import (
 //     and the handlers delay it before password work, progressively with the
 //     failures already on the submitted username, up to a few seconds (the delay
 //     holds no lock). Only a username that has already failed
-//     coreauth.SoftThreshold times, or a visitor past its own budget, is refused
+//     coreauth.DefaultSoftThreshold times, or a visitor past its own budget, is refused
 //     with 429 by the handlers, and the decision is the same whether or not the
 //     username exists. Admission of saturated requests is bounded in three ways:
 //     PER VISITOR (keyed on the visitor's address, a public IPv6 visitor per /48,
@@ -113,9 +113,9 @@ import (
 // read as an attack. HTTP Basic auth on the API is a separate path and is not
 // throttled here.
 const (
-	loginConnectorCeiling = 10 * coreauth.MaxFailuresPerIP
+	loginConnectorCeiling = 10 * coreauth.DefaultMaxFailuresPerSource
 	loginGlobalCeiling    = 500
-	loginCeilingWindow    = coreauth.Window
+	loginCeilingWindow    = coreauth.DefaultThrottleWindow
 	// loginBodyLimit caps a login body (the real one is a few hundred bytes).
 	loginBodyLimit = 4 << 10
 	// maxLoginInFlightPerVisitor is how many logins one visitor key may have in the
@@ -171,7 +171,7 @@ type loginVisitor struct {
 	// lastSeen is the last write; the table is in write order, so it decides expiry.
 	lastSeen time.Time
 	// byAccount are the refundable failures per account key, newest last, at most
-	// coreauth.SoftThreshold each. A failure with no account key is not recorded.
+	// coreauth.DefaultSoftThreshold each. A failure with no account key is not recorded.
 	byAccount map[string][]loginFailure
 	// satFailedAt is when the visitor last failed a login while saturated.
 	satFailedAt time.Time
@@ -227,7 +227,7 @@ func startupLoginSaturated() error {
 // so a guess at an account through either door counts toward the same
 // per-account counter and the same per-source budget.
 func (s *Server) loginThrottle() *coreauth.Throttle {
-	s.loginThrottleOnce.Do(func() { s.loginThrottleState = coreauth.NewThrottle() })
+	s.loginThrottleOnce.Do(func() { s.loginThrottleState = coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil) })
 	return s.loginThrottleState
 }
 
@@ -390,15 +390,15 @@ func (l *loginCeiling) failed(visitor, account string, t loginCeilingTicket) {
 		return // not refundable; still counted
 	}
 	fs := append(v.byAccount[account], loginFailure{at: l.now(), connKey: t.connKey, connStart: t.connStart, globalStart: t.globalStart})
-	if len(fs) > coreauth.SoftThreshold {
-		fs = fs[len(fs)-coreauth.SoftThreshold:]
+	if len(fs) > coreauth.DefaultSoftThreshold {
+		fs = fs[len(fs)-coreauth.DefaultSoftThreshold:]
 	}
 	v.byAccount[account] = fs
 }
 
 // succeeded hands back the success's own slot and, for the same visitor and the
 // same account only, the failures from the last window (at most
-// coreauth.SoftThreshold, into windows still open). Failures against any other
+// coreauth.DefaultSoftThreshold, into windows still open). Failures against any other
 // account stay counted.
 func (l *loginCeiling) succeeded(visitor, account string, t loginCeilingTicket) {
 	l.mu.Lock()
@@ -630,7 +630,7 @@ func (l *loginCeiling) middleware(match func(*gin.Context) bool, respond loginRe
 		ticket, ok, warn := l.reserve(loginCeilingConnectorKey(c))
 		if !ok {
 			if warn != "" {
-				clientTrustLog.Warn("login failure ceiling reached (%s): further password logins are delayed, and refused for a username past %d failures of its own, until its window ends", warn, coreauth.SoftThreshold)
+				clientTrustLog.Warn("login failure ceiling reached (%s): further password logins are delayed, and refused for a username past %d failures of its own, until its window ends", warn, coreauth.DefaultSoftThreshold)
 			}
 			// Saturated admission is keyed coarser than the per-visitor throttle
 			// (a public IPv6 visitor per /48) and decided HERE, before any handler

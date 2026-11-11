@@ -1,7 +1,11 @@
-// file: internal/util/email.go
-// version: 1.0.1
+// file: core/auth/email.go
+// version: 1.1.0
 // guid: a11d6c27-5ca8-4c72-b3cc-a9e585bc7dc8
-// last-edited: 2026-10-20
+// last-edited: 2026-11-10
+
+// Moved from ABO internal/util/email.go (05-authn §11; 04 §2.3 P3): e-mail
+// normalization is core auth's, because the username and e-mail indexes,
+// the invite allow-list and OIDC linking all key on it.
 
 package auth
 

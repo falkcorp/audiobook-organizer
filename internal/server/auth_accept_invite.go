@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	authpw "github.com/falkcorp/mediacore/auth/password"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
@@ -63,7 +63,7 @@ func (s *Server) handleAcceptInvite(c *gin.Context) {
 		return
 	}
 
-	algo, hash, err := authpw.HashPassword(req.Password)
+	algo, hash, err := absauth.Passwords.Hash(req.Password)
 	if err != nil {
 		httputil.InternalError(c, "hash password", err)
 		return

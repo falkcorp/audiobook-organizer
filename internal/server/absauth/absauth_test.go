@@ -457,15 +457,15 @@ func TestThrottle_PerIPHardBlockAfterBudget(t *testing.T) {
 	tr := NewThrottle()
 	tr.SetSleep(func(time.Duration) {})
 	for i := range MaxFailuresPerIP {
-		if tr.IPBlocked("1.2.3.4") {
+		if tr.SourceBlocked("1.2.3.4") {
 			t.Fatalf("blocked too early at failure %d", i)
 		}
 		tr.RecordFailure("acct", "1.2.3.4")
 	}
-	if !tr.IPBlocked("1.2.3.4") {
+	if !tr.SourceBlocked("1.2.3.4") {
 		t.Fatal("the source IP must be blocked once it exhausts its failure budget")
 	}
-	if tr.IPBlocked("5.6.7.8") {
+	if tr.SourceBlocked("5.6.7.8") {
 		t.Fatal("a different source IP must not be blocked")
 	}
 }
@@ -479,10 +479,10 @@ func TestThrottle_NeverHardLocksAnAccount(t *testing.T) {
 	for range MaxFailuresPerIP * 5 {
 		tr.RecordFailure("victim", "9.9.9.9")
 	}
-	if tr.IPBlocked("victim") {
+	if tr.SourceBlocked("victim") {
 		t.Fatal("the account id must not be treated as an IP key")
 	}
-	if tr.IPBlocked("10.0.0.1") {
+	if tr.SourceBlocked("10.0.0.1") {
 		t.Fatal("the real user's own source IP must be unaffected — accounts are never hard-locked")
 	}
 }
@@ -514,23 +514,23 @@ func TestThrottle_ClearRefundsOnlyTheSameAccountsFailuresCapped(t *testing.T) {
 	for range MaxFailuresPerIP {
 		tr.RecordFailure("acct", "3.3.3.3")
 	}
-	if !tr.IPBlocked("3.3.3.3") {
+	if !tr.SourceBlocked("3.3.3.3") {
 		t.Fatal("expected block")
 	}
 	tr.Clear("acct", "3.3.3.3")
 	// 15 failures, at most SoftThreshold (5) taken back: 10 remain, so the source is
 	// no longer at its budget but has NOT been reset.
-	if tr.IPBlocked("3.3.3.3") {
+	if tr.SourceBlocked("3.3.3.3") {
 		t.Fatal("5 refunded failures should take the source below its budget of 15")
 	}
 	for range MaxFailuresPerIP - (MaxFailuresPerIP - SoftThreshold) - 1 {
 		tr.RecordFailure("other", "3.3.3.3")
 	}
-	if tr.IPBlocked("3.3.3.3") {
+	if tr.SourceBlocked("3.3.3.3") {
 		t.Fatal("10 remaining + 4 more is still under 15")
 	}
 	tr.RecordFailure("other", "3.3.3.3")
-	if !tr.IPBlocked("3.3.3.3") {
+	if !tr.SourceBlocked("3.3.3.3") {
 		t.Fatal("the source was reset by a success: it should be at 15 again (10 + 5)")
 	}
 	if tr.AccountFailures("acct") != 0 {
@@ -552,7 +552,7 @@ func TestThrottle_SuccessOnOneAccountDoesNotResetGuessesAtOthers(t *testing.T) {
 		tr.RecordFailure("victim", src)
 		tr.RecordFailure("own", src)
 		tr.Clear("own", src) // log in to the attacker's own account
-		if tr.IPBlocked(src) {
+		if tr.SourceBlocked(src) {
 			break
 		}
 	}
@@ -617,7 +617,7 @@ func TestThrottle_ConcurrentUseIsRaceFree(t *testing.T) {
 			defer func() { done <- struct{}{} }()
 			for range 200 {
 				tr.RecordFailure("acct", "4.4.4.4")
-				_ = tr.IPBlocked("4.4.4.4")
+				_ = tr.SourceBlocked("4.4.4.4")
 				tr.Clear("acct", "4.4.4.4")
 			}
 		}()
