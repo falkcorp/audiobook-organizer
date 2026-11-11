@@ -1,7 +1,7 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -303,14 +303,7 @@ func (e *executor) claim(ctx context.Context, c candidate, ws []entity.Ref) {
 		}
 		return
 	}
-	e.mu.Lock()
-	shutting := e.shutting
-	e.mu.Unlock()
-	if shutting { // release claimed-not-started (5T.4 step 4)
-		e.release(a, rec)
-		return
-	}
-	e.startAttempt(a, rec)
+	e.startAttempt(a, rec) // releases the claim instead when Shutdown overtook it
 }
 
 // release returns a claimed run that never started to the queue.
@@ -333,7 +326,13 @@ func (e *executor) release(a *attempt, rec tasks.RunRecord) {
 }
 
 // startAttempt builds the attempt's context, clock and resume state and
-// starts its goroutine and supervisor.
+// starts its goroutine and supervisor. A claim that Shutdown overtook is
+// released instead (claimed-not-started, 5T.4 step 4). The shutdown check
+// and a.live are one decision under e.mu, the lock Shutdown takes its view
+// of the live attempts under: an attempt is either in that view (so
+// Shutdown cancels and stamps it) or never goes live. A check made before
+// this critical section would let an attempt go live just after Shutdown's
+// view and run on past Shutdown with its fence intact.
 func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	start := e.now()
 	deadline := start.Add(a.d.timeout)
@@ -345,6 +344,13 @@ func (e *executor) startAttempt(a *attempt, rec tasks.RunRecord) {
 	// callback read in one critical section: they read them under e.mu
 	// (or after taking the attempt from e.running under it).
 	e.mu.Lock()
+	if e.shutting {
+		e.mu.Unlock()
+		cancel(nil)
+		stop()
+		e.release(a, rec)
+		return
+	}
 	a.rec, a.n, a.fence = rec, rec.Attempt, rec.FenceEpoch
 	a.log = e.log.With("run_id", string(a.id), "kind", string(a.d.kind), "attempt", rec.Attempt)
 	a.start, a.deadline, a.zeroFrom = start, deadline, zeroFrom

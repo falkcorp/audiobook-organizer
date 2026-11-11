@@ -1,7 +1,7 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package executor
 
@@ -128,10 +128,12 @@ type heldFixture struct {
 	queued, interrupted, awaiting, done tasks.RunID
 }
 
-func arkhamDefs() []tasks.Definition {
+// arkhamDefs is the arkham module's kinds; intake and transfer signal
+// started when their body runs.
+func arkhamDefs(started chan<- tasks.RunID) []tasks.Definition {
 	return []tasks.Definition{
-		taskDef("arkham.intake", blockUntilCtx(nil)),
-		taskDef("arkham.transfer", blockUntilCtx(nil), withResume(tasks.ResumeAsk)),
+		taskDef("arkham.intake", blockUntilCtx(started)),
+		taskDef("arkham.transfer", blockUntilCtx(started), withResume(tasks.ResumeAsk)),
 		taskDef("arkham.release", okBody),
 	}
 }
@@ -140,21 +142,25 @@ func buildHeldFixture(t *testing.T) (*harness, heldFixture) {
 	t.Helper()
 	ctx := context.Background()
 	var f heldFixture
+	// A run's body is waited for, not its stored running state: a claim
+	// whose attempt is not live yet when Shutdown runs is released to the
+	// queue (5T.4 step 4), and the fixture needs the run interrupted.
+	started := make(chan tasks.RunID, 4)
 	// Boot 1: a terminal run, and a ResumeAsk run interrupted by shutdown.
-	h := newHarness(t, arkhamDefs(), nil)
+	h := newHarness(t, arkhamDefs(started), nil)
 	f.done = h.start("arkham.release", tasks.StartRequest{})
 	h.waitState(f.done, tasks.StateSucceeded)
 	f.awaiting = h.start("arkham.transfer", tasks.StartRequest{})
-	h.waitState(f.awaiting, tasks.StateRunning)
+	<-started
 	if err := h.x.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
 	// Boot 2: the ResumeAsk run becomes awaiting_decision; a run is left
 	// interrupted by shutdown and one queued behind the pause marker.
-	h = h.reboot(arkhamDefs(), nil)
+	h = h.reboot(arkhamDefs(started), nil)
 	h.waitState(f.awaiting, tasks.StateAwaitingDecision)
 	f.interrupted = h.start("arkham.intake", tasks.StartRequest{})
-	h.waitState(f.interrupted, tasks.StateRunning)
+	<-started
 	if err := h.x.Pause(ctx, "lockdown"); err != nil {
 		t.Fatal(err)
 	}
@@ -413,6 +419,47 @@ func TestCancel_ClaimedNotStartedTakesTheStop(t *testing.T) {
 		}
 		if r := h.waitState(id, tasks.StateCanceled, tasks.StateSucceeded, tasks.StateFailed); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
 			t.Fatalf("run ended %s/%q, want canceled/cancel", r.State, r.Reason)
+		}
+	})
+}
+
+// TestShutdown_ReleasesClaimNotYetLive (5T.4 step 4, synctest; added for
+// the shutdown invariants): a run whose claim committed but whose attempt
+// is not live when Shutdown takes its view of the live attempts is released
+// to the queue and its body never starts. Before the fix the claim checked
+// for a shutdown before the attempt went live, not in the same decision, so
+// an attempt that went live just after Shutdown's view ran on past
+// Shutdown: never canceled, never stamped, its fence intact.
+func TestShutdown_ReleasesClaimNotYetLive(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reached := make(chan tasks.RunID, 1)
+		release := make(chan struct{})
+		var ran atomic.Bool
+		def := taskDef("gotham.interrogation", func(rc *tasks.RC, _ noParams) (string, error) {
+			ran.Store(true)
+			<-rc.Context().Done()
+			return "", context.Cause(rc.Context())
+		})
+		h := newHarness(t, []tasks.Definition{def}, func(o *Options) {
+			synctestConfig(o)
+			o.NewBatch = o.Stores.Runs.(batchOpener).NewBatch
+			o.Stores.Runs = gatedRuns{RunStore: o.Stores.Runs, reached: reached, release: release}
+		})
+		id := h.start("gotham.interrogation", tasks.StartRequest{})
+		<-reached
+		done := make(chan error, 1)
+		go func() { done <- h.x.Shutdown(context.Background()) }()
+		synctest.Wait() // Shutdown has taken its view and waits for the parked dispatcher
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if ran.Load() {
+			t.Fatal("the body started after Shutdown took its view of the live attempts")
+		}
+		if r := h.get(id); r.State != tasks.StateQueued || r.Attempt != 0 {
+			t.Fatalf("after Shutdown: %s attempt %d, want queued attempt 0 (a claim not yet started is released)", r.State, r.Attempt)
 		}
 	})
 }
