@@ -10,9 +10,10 @@ import (
 	"fmt"
 	"strings"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // Sentinel errors so callers can map to the right HTTP status (both → 403, never 500).
@@ -81,7 +82,7 @@ func (c *Config) ResolveUser(store UserStore, claims IdentityClaims) (*database.
 		if user == nil {
 			return nil, fmt.Errorf("oauth resolve: linked identity %s points to missing user %s", id.ID, id.UserID)
 		}
-		if util.SameEmail(user.Email, claims.Email) {
+		if coreauth.SameEmail(user.Email, claims.Email) {
 			if m, ok := database.AsCapability[database.VerifiedEmailMarker](store); ok {
 				// Best-effort: the login itself is already decided. A failure
 				// only means the address stays unverified for now.

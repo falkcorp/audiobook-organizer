@@ -12,9 +12,10 @@ import (
 	"sync"
 	"testing"
 
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
 	"github.com/gin-gonic/gin"
@@ -76,7 +77,7 @@ func passwordSetter(t *testing.T, wantID, wantExpected string, events *[]string,
 	return &credsFake{setPassword: func(userID, expectedHash, algo, hash, keepSessionID string) (*database.User, error) {
 		require.Equal(t, wantID, userID)
 		require.Equal(t, wantExpected, expectedHash, "self-service passes the verified hash, admin reset passes \"\"")
-		require.Equal(t, absauth.AlgoArgon2id, algo, "every password writer hashes with absauth.HashPassword")
+		require.Equal(t, authpw.AlgoArgon2id, algo, "every password writer hashes with authpw.HashPassword")
 		require.NotEmpty(t, hash)
 		if events != nil {
 			*events = append(*events, "set-password")

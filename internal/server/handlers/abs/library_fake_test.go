@@ -1472,8 +1472,8 @@ func sourceAllowance() map[string]allowance {
 // any hand-edit on the next recapture -- so an edited number is both false
 // evidence and a test that breaks later for a reason nobody can reconstruct.
 func rateLimitAllowance() map[string]allowance {
-	const reason = "we advertise our own throttle (absauth.MaxFailuresPerIP over " +
-		"absauth.Window), not the oracle's ABS defaults; see dto.go buildServerSettings"
+	const reason = "we advertise our own throttle (coreauth.MaxFailuresPerIP over " +
+		"coreauth.Window), not the oracle's ABS defaults; see dto.go buildServerSettings"
 	return map[string]allowance{
 		"serverSettings.rateLimitLoginRequests": {Reason: reason},
 		"serverSettings.rateLimitLoginWindow":   {Reason: reason},

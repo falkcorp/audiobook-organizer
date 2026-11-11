@@ -7,7 +7,7 @@ package handlers
 
 import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	coreaudit "github.com/falkcorp/mediacore/audit"
 )
 
 // ABSSessionRevoker is the one ABS session capability the account-security
@@ -60,12 +60,12 @@ func RevokeAllABSSessions(r ABSSessionRevoker, userID, reason string) {
 		return
 	}
 	n, err := r.RevokeAllABSSessionsForUser(userID)
-	ev := absauth.AuditEvent{Action: "revoke-all", UserID: userID, Reason: reason, Outcome: absauth.OutcomeSuccess}
+	ev := coreaudit.AuditEvent{Action: "revoke-all", UserID: userID, Reason: reason, Outcome: coreaudit.OutcomeSuccess}
 	if err != nil {
-		ev.Outcome = absauth.OutcomeError
+		ev.Outcome = coreaudit.OutcomeError
 		ev.Reason = reason + "-revoke-failed"
 	}
 	if err != nil || n > 0 {
-		absauth.Audit(ev)
+		coreaudit.Audit(ev)
 	}
 }

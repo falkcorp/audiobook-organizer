@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -66,7 +69,7 @@ func TestLogin_SaturatedDelaysLowFailureAccountsAndRefusesSpentOnes(t *testing.T
 	require.Equal(t, []time.Duration{base}, delays)
 
 	// Take the account to SoftThreshold failures, then it is refused while saturated.
-	for i := 0; i < absauth.SoftThreshold; i++ {
+	for i := 0; i < coreauth.SoftThreshold; i++ {
 		login("sat-user", false, "198.51.100.1:1")
 	}
 	delays = nil
@@ -104,7 +107,7 @@ func TestLogin_SaturatedAnswerDoesNotRevealWhetherTheNameExists(t *testing.T) {
 		h.Login(c)
 		return w.Code, absauth.LoginSaturationRefused(c)
 	}
-	for i := 0; i < absauth.SoftThreshold; i++ {
+	for i := 0; i < coreauth.SoftThreshold; i++ {
 		for _, name := range []string{"Real-User", "ghost-user"} {
 			code, _ := login(name, false, "198.51.100.1:1")
 			require.Equal(t, http.StatusUnauthorized, code)
@@ -138,7 +141,7 @@ func TestLogin_SuccessDoesNotResetTheSourceBudget(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/auth.pebble")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	algo, hash, err := absauth.HashPassword("own-password-123")
+	algo, hash, err := authpw.HashPassword("own-password-123")
 	require.NoError(t, err)
 	_, err = store.CreateUser("own-account", "own@example.test", algo, hash, []string{"viewer"}, "active")
 	require.NoError(t, err)
@@ -183,7 +186,7 @@ func TestLogin_SuccessTakesBackOwnMistypes(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/auth.pebble")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	algo, hash, err := absauth.HashPassword("own-password-123")
+	algo, hash, err := authpw.HashPassword("own-password-123")
 	require.NoError(t, err)
 	_, err = store.CreateUser("own-account", "own@example.test", algo, hash, []string{"viewer"}, "active")
 	require.NoError(t, err)

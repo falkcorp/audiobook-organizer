@@ -8,9 +8,10 @@ package abs
 import (
 	"net/http"
 
+	coreaudit "github.com/falkcorp/mediacore/audit"
+
 	"github.com/gin-gonic/gin"
 
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -61,8 +62,8 @@ func (h *Handler) Authorize(c *gin.Context) {
 
 	progress, bookmarks, err := h.userPayload(user.ID)
 	if err != nil {
-		absauth.Audit(absauth.AuditEvent{
-			Action: "authorize", Outcome: absauth.OutcomeError,
+		coreaudit.Audit(coreaudit.AuditEvent{
+			Action: "authorize", Outcome: coreaudit.OutcomeError,
 			Mode: servermiddleware.ABSAuthMode(c), SourceIP: c.ClientIP(),
 			UserID: user.ID, Username: user.Username,
 			Reason: "user-data-unavailable", Path: c.Request.URL.Path,
@@ -86,8 +87,8 @@ func (h *Handler) Authorize(c *gin.Context) {
 		}
 	}
 
-	absauth.Audit(absauth.AuditEvent{
-		Action: "authorize", Outcome: absauth.OutcomeSuccess,
+	coreaudit.Audit(coreaudit.AuditEvent{
+		Action: "authorize", Outcome: coreaudit.OutcomeSuccess,
 		Mode: servermiddleware.ABSAuthMode(c), SourceIP: c.ClientIP(),
 		UserID: user.ID, Username: user.Username,
 		SessionID: servermiddleware.ABSSessionID(c),

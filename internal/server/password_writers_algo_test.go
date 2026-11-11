@@ -12,14 +12,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	authpw "github.com/falkcorp/mediacore/auth/password"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// Every password writer shares one hashing policy (absauth.HashPassword). These
+// Every password writer shares one hashing policy (authpw.HashPassword). These
 // tests read the stored row back and check it verifies with the algo it records.
 
 func TestAcceptInvite_StoresArgon2idHash(t *testing.T) {
@@ -42,8 +43,8 @@ func TestAcceptInvite_StoresArgon2idHash(t *testing.T) {
 	user, err := s.storeForWiring().GetUserByUsername("newbie")
 	require.NoError(t, err)
 	require.NotNil(t, user)
-	assert.Equal(t, absauth.AlgoArgon2id, user.PasswordHashAlgo)
-	ok, _ := absauth.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, "supersecret")
+	assert.Equal(t, authpw.AlgoArgon2id, user.PasswordHashAlgo)
+	ok, _ := authpw.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, "supersecret")
 	assert.True(t, ok)
 }
 
@@ -58,7 +59,7 @@ func TestFindOrCreateAdminUser_StoresArgon2idHash(t *testing.T) {
 	stored, err := s.storeForWiring().GetUserByID(user.ID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Equal(t, absauth.AlgoArgon2id, stored.PasswordHashAlgo)
-	ok, _ := absauth.VerifyPassword(stored.PasswordHashAlgo, stored.PasswordHash, generated)
+	assert.Equal(t, authpw.AlgoArgon2id, stored.PasswordHashAlgo)
+	ok, _ := authpw.VerifyPassword(stored.PasswordHashAlgo, stored.PasswordHash, generated)
 	assert.True(t, ok)
 }
