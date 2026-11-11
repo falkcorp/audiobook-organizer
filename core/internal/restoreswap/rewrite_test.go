@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/rewrite_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d92e319d-69bf-437e-a034-410415eaefa0
 // last-edited: 2026-11-11
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -52,7 +53,7 @@ func rewriteSwapped(t *testing.T, dbPath string) (*vfs.MemFS, *Swapper, restorej
 	for _, step := range []string{StepStaged, StepPreviousMoved, StepStagedMoved, StepSidecars, StepSwapped} {
 		rec := restorejournal.Record{Step: step}
 		if step == StepStaged {
-			rec.Note, rec.StepID = string(restorejournal.KindRewrite), rewriteStepID
+			rec = stagedRecord(in)
 		}
 		if err := s.appendRec(ctx, id, rec); err != nil {
 			t.Fatal(err)
@@ -443,7 +444,7 @@ func TestRewriteCopyThatWillNotOpenWritableIsSwappedBack(t *testing.T) {
 	if !hit() || !errors.Is(res.err, ErrSwappedBack) || !strings.Contains(res.err.Error(), "reopen the copy") {
 		t.Fatalf("the boot whose copy will not open writable = %v (injected %t), want ErrSwappedBack caused by the reopen", res.err, hit())
 	}
-	js, err := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite")
+	js, err := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite", db)
 	if err != nil || len(js) != 1 || js[0].last != StepSwappedBack {
 		t.Fatalf("journals = %+v, %v; want one ending at swapped_back", js, err)
 	}
@@ -451,6 +452,222 @@ func TestRewriteCopyThatWillNotOpenWritableIsSwappedBack(t *testing.T) {
 	if next.err != nil || next.runs != 1 || next.tag != "live" || next.rows != 40 || next.genAfter != next.genBefore {
 		t.Fatalf("the boot after the swap-back = %+v, want the original served and M8 finished", next)
 	}
+}
+
+// TestRewriteNewAttemptCountsNoEarlierSwapBack (§5S.3.13 "M8 never
+// loops"): M8 counts only its attempt's swap-backs. Two swap-backs refuse
+// the next boot of the same attempt; once that attempt's checkpoint is
+// gone (pruned), the next boot takes a new one, a new attempt, and M8 runs
+// once more and finishes.
+func TestRewriteNewAttemptCountsNoEarlierSwapBack(t *testing.T) {
+	mem := vfs.NewMem()
+	mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+	db := dbPathOf("state")
+	m8Store(t, mem, db, 30)
+	for i := range 2 {
+		fs, hit := failPlace(mem, db)
+		if res := m8Boot(t, fs, db); !hit() || !errors.Is(res.err, ErrSwappedBack) {
+			t.Fatalf("swap %d = %v (injected %t), want ErrSwappedBack", i+1, res.err, hit())
+		}
+	}
+	if res := m8Boot(t, mem, db); !errors.Is(res.err, storage.ErrRewriteSwappedBack) {
+		t.Fatalf("the same attempt's next boot = %v, want storage.ErrRewriteSwappedBack", res.err)
+	}
+	attempt := checkpointPointer(t, mem, db)
+	if err := errors.Join(mem.RemoveAll(filepath.Join(filepath.Dir(db), ".mediacore-checkpoints")),
+		mem.Remove(db+restorejournal.CheckpointSuffix)); err != nil {
+		t.Fatal(err)
+	}
+	next := m8Boot(t, mem, db)
+	if next.err != nil || next.runs != 1 || next.rows != 30 || next.tag != "live" {
+		t.Fatalf("the new attempt's boot = %+v, want M8 run once more and finished", next)
+	}
+	if got := checkpointPointer(t, mem, db); got == attempt {
+		t.Errorf("the boot reused the pruned attempt's checkpoint name %s", got)
+	}
+}
+
+// TestRewriteJournalsOfAReplacedStore (§5S.3.13 phases): M8's journals
+// say what moved, and M8's record on the live store says whether that
+// store is the copy. A finished M8's journal (applied) does not finish the
+// M8 of a store that replaced it (restored by any path): that store reads
+// pending, so M8 copies and swaps it again. A journal at swapped over a
+// store that is not the copy halts M8 (ErrJournalCorrupt) rather than
+// delete the set-aside and mark a store M8 never rewrote done.
+func TestRewriteJournalsOfAReplacedStore(t *testing.T) {
+	newStore := func(t *testing.T) (*vfs.MemFS, string) {
+		mem := vfs.NewMem()
+		mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+		db := dbPathOf("state")
+		m8Store(t, mem, db, 25)
+		return mem, db
+	}
+
+	t.Run("applied", func(t *testing.T) {
+		mem, db := newStore(t)
+		if res := m8Boot(t, mem, db); res.err != nil || res.runs != 1 {
+			t.Fatalf("the first M8 = %+v", res)
+		}
+		if err := mem.RemoveAll(db); err != nil {
+			t.Fatal(err)
+		}
+		m8Store(t, mem, db, 25) // a store from before M8, in its place
+		res := m8Boot(t, mem, db)
+		if res.err != nil || res.runs != 1 || res.rows != 25 {
+			t.Fatalf("the replaced store's M8 = %+v", res)
+		}
+		js, err := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite", db)
+		if err != nil || len(js) != 2 || js[0].last != StepApplied || js[1].last != StepApplied {
+			t.Errorf("journals = %+v, %v; want the replaced store copied and swapped again", js, err)
+		}
+	})
+
+	t.Run("swapped over a store that is not the copy", func(t *testing.T) {
+		mem, db := newStore(t)
+		s, err := New(Options{FS: mem, StateDir: stateDir, BuildID: testBuild, Clock: testNow, Owners: []storage.OwnerSpec{wayne(1)}, RewriteStep: "wayne.rewrite"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		in := restorejournal.Intent{ID: "rewrite-19390501T120000.000000000Z", Kind: restorejournal.KindRewrite, DBPath: db,
+			Targets:       []restorejournal.Target{{From: storage.RewriteDir(db), To: db}},
+			StagedByBuild: testBuild, ExpiresAt: testNow().Add(rewriteExpiry), RequestedBy: "core/storage wayne.rewrite",
+			RequestedAt: testNow(), StepID: "wayne.rewrite"}
+		journalOf(t, s, in, StepPreviousMoved, StepStagedMoved, StepSidecars, StepSwapped)
+		raw, err := json.Marshal(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writeFileAtomic(mem, s.inflightPath(in.ID), raw, privateFile); err != nil {
+			t.Fatal(err)
+		}
+		if res := m8Boot(t, mem, db); !errors.Is(res.err, ErrJournalCorrupt) || res.runs != 1 {
+			t.Fatalf("M8 over a store the swapped journal does not describe = %+v, want ErrJournalCorrupt", res)
+		}
+	})
+}
+
+// journalOf writes journal id under the swapper's state directory: its
+// staged record (for intent in) and then steps.
+func journalOf(t *testing.T, s *Swapper, in restorejournal.Intent, steps ...string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.mkdirDurable(s.journalDir(in.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.appendRec(ctx, in.ID, stagedRecord(in)); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range steps {
+		if err := s.appendRec(ctx, in.ID, restorejournal.Record{Step: step}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestRetireRewriteJournals (§5S.3.13 "M8 never loops", §5S.3.12 "In
+// place"): restore-offline retires every KindRewrite journal of the store
+// it replaced that ended (applied or swapped_back), whatever its step ID,
+// and no other: another store's, another kind's, a rejected one. M8 then
+// reads none of them. A journal that does not read is skipped when its
+// first record proves it is not M8's of this store, and halts M8 when it
+// may be.
+func TestRetireRewriteJournals(t *testing.T) {
+	ctx := context.Background()
+	db := dbPathOf("state")
+	other := filepath.Join(filepath.Dir(db), "arkham.pebble")
+	rw := func(id, dbPath, step string) restorejournal.Intent {
+		return restorejournal.Intent{ID: id, Kind: restorejournal.KindRewrite, DBPath: dbPath, StepID: step, Attempt: "19390501T120000Z-0000beef"}
+	}
+	setup := func(t *testing.T) (*vfs.MemFS, *Swapper) {
+		mem := vfs.NewMem()
+		s := newSwapper(t, mem, testBuild, testNow)
+		journalOf(t, s, rw("rewrite-a", db, "wayne.rewrite"), StepSwappedBack)
+		journalOf(t, s, rw("rewrite-b", db, "wayne.rewrite"), StepSwapped, StepOpened, StepApplied)
+		journalOf(t, s, rw("rewrite-c", db, "robin.rewrite"), StepSwappedBack)
+		journalOf(t, s, rw("rewrite-d", other, "wayne.rewrite"), StepSwappedBack)
+		journalOf(t, s, rw("rewrite-e", db, "wayne.rewrite"), StepRejected)
+		journalOf(t, s, restorejournal.Intent{ID: "restore-f", Kind: restorejournal.KindArchive, DBPath: db}, StepApplied)
+		return mem, s
+	}
+	last := func(t *testing.T, mem vfs.FS, id string) string {
+		t.Helper()
+		recs, err := ReadJournal(mem, stateDir, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return lastStep(recs)
+	}
+	// corrupt appends an undecodable line and then a good one to id's
+	// journal, so ReadJournal refuses it (ErrJournalCorrupt).
+	corrupt := func(t *testing.T, mem vfs.FS, id string) {
+		t.Helper()
+		p := journalPath(stateDir, id)
+		raw := readAll(t, mem, p) + "{the riddler was here\n" + `{"step":"swapped_back"}` + "\n"
+		if err := writeFileAtomic(mem, p, []byte(raw), privateFile); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("retires this store's ended journals", func(t *testing.T) {
+		mem, s := setup(t)
+		if err := s.retireRewriteJournals(ctx, db, "restore-x"); err != nil {
+			t.Fatal(err)
+		}
+		for id, want := range map[string]string{
+			"rewrite-a": StepRetired, "rewrite-b": StepRetired, "rewrite-c": StepRetired,
+			"rewrite-d": StepSwappedBack, "rewrite-e": StepRejected, "restore-f": StepApplied,
+		} {
+			if got := last(t, mem, id); got != want {
+				t.Errorf("%s ends %q after the retire, want %q", id, got, want)
+			}
+		}
+		if js, err := s.rewriteJournals("wayne.rewrite", db); err != nil || len(js) != 0 {
+			t.Errorf("M8 reads %+v, %v after the retire, want nothing", js, err)
+		}
+		if js, err := s.rewriteJournals("wayne.rewrite", other); err != nil || len(js) != 1 || js[0].id != "rewrite-d" {
+			t.Errorf("the other store's M8 reads %+v, %v, want its own journal", js, err)
+		}
+	})
+
+	t.Run("reads only this step and store", func(t *testing.T) {
+		_, s := setup(t)
+		js, err := s.rewriteJournals("wayne.rewrite", db+"/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, j := range js {
+			ids = append(ids, j.id)
+			if j.attempt != "19390501T120000Z-0000beef" {
+				t.Errorf("%s's attempt = %q", j.id, j.attempt)
+			}
+		}
+		slices.Sort(ids)
+		if !slices.Equal(ids, []string{"rewrite-a", "rewrite-b"}) {
+			t.Errorf("M8 wayne.rewrite of %s reads %v, want rewrite-a and rewrite-b", db, ids)
+		}
+	})
+
+	t.Run("an unreadable journal proven another's is skipped", func(t *testing.T) {
+		mem, s := setup(t)
+		for _, id := range []string{"rewrite-c", "rewrite-d", "restore-f"} {
+			corrupt(t, mem, id)
+		}
+		if js, err := s.rewriteJournals("wayne.rewrite", db); err != nil || len(js) != 2 {
+			t.Errorf("M8 reads %+v, %v beside unreadable journals of other steps, stores and kinds", js, err)
+		}
+	})
+
+	t.Run("an unreadable journal that may be M8's halts it", func(t *testing.T) {
+		mem, s := setup(t)
+		corrupt(t, mem, "rewrite-a")
+		if _, err := s.rewriteJournals("wayne.rewrite", db); !errors.Is(err, ErrJournalCorrupt) {
+			t.Errorf("M8 beside its own unreadable journal = %v, want ErrJournalCorrupt", err)
+		}
+		if err := s.retireRewriteJournals(ctx, db, "restore-x"); !errors.Is(err, ErrJournalCorrupt) {
+			t.Errorf("the retire beside an unreadable journal of this store = %v, want ErrJournalCorrupt", err)
+		}
+	})
 }
 
 // epochOf is the store generation in c/storage/epoch.
@@ -565,7 +782,7 @@ func TestCutoverRewriteLeavesNoOldFile(t *testing.T) {
 				t.Error("the copy's directory survived the swap")
 			}
 			s := newSwapper(t, mem, testBuild, testNow)
-			js, err := s.rewriteJournals("wayne.rewrite")
+			js, err := s.rewriteJournals("wayne.rewrite", db)
 			if err != nil || len(js) != 1 || js[0].last != StepApplied {
 				t.Fatalf("M8 journals = %+v, %v; want one applied", js, err)
 			}
@@ -636,7 +853,7 @@ func TestRewriteSwapBackMovesNoCheckpoint(t *testing.T) {
 		if next.err != nil || next.runs != 1 || next.tag != "live" || next.rows != 121 || next.genAfter != next.genBefore {
 			t.Fatalf("the boot after one swap-back = %+v, want M8 restarted from the compaction and finished with the late row", next)
 		}
-		js, err := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite")
+		js, err := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite", db)
 		if err != nil || len(js) != 2 || js[0].last != StepApplied || js[1].last != StepSwappedBack {
 			t.Errorf("journals = %+v, %v; want applied after swapped_back", js, err)
 		}
@@ -658,7 +875,7 @@ func TestRewriteSwapBackMovesNoCheckpoint(t *testing.T) {
 		if ok, _ := exists(mem, restorejournal.PendingPath(stateDir)); ok {
 			t.Error("the refusal staged an intent")
 		}
-		js, _ := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite")
+		js, _ := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite", db)
 		if len(js) != 2 {
 			t.Errorf("the refusal journaled: %+v", js)
 		}

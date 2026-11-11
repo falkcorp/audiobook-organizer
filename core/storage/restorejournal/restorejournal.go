@@ -1,7 +1,7 @@
 // file: core/storage/restorejournal/restorejournal.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 6c954a92-88a0-4242-b599-92db9a12cae7
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 // Package restorejournal holds the kinds, record types and intent of the one
 // journaled directory swap (05-backup's staged restore, revert and checkpoint
@@ -48,8 +48,12 @@ type Intent struct {
 	InstallID      string `json:"install_id,omitempty"`
 	ManifestSHA256 string `json:"manifest_sha256,omitempty"`
 	// KindRewrite (§5S.3.13 "M8"): the step ID of the M8 that staged it, so
-	// each M8 reads only its own journals.
-	StepID string `json:"step_id,omitempty"`
+	// each M8 reads only its own journals, and the name of the upgrade
+	// attempt's checkpoint it ran under (storage.DB.AttemptCheckpoint), so
+	// M8 counts only that attempt's swap-backs: a store restored since is a
+	// new attempt. Attempt is F3-04's.
+	StepID  string `json:"step_id,omitempty"`
+	Attempt string `json:"attempt,omitempty"`
 	// KindReset (05-storage §5S.3.15).
 	DeleteLibraryFiles bool     `json:"delete_library_files,omitempty"`
 	Delete             []string `json:"delete,omitempty"`
@@ -160,8 +164,12 @@ type Record struct {
 	// escape from a failed journal included, DATA-7); the next journaling
 	// boot runs them with the source's boundary (05-backup §5B.3.6).
 	HooksOwed bool `json:"hooks_owed,omitempty"`
-	// StepID (KindRewrite "staged" only): the staging M8's step ID, copied
-	// from the intent, so M8 finds its own journals after inflight.json is
-	// gone (§5S.3.13 "M8").
-	StepID string `json:"step_id,omitempty"`
+	// StepID, Attempt and DBPath (KindRewrite "staged" only): the staging
+	// M8's step ID, its attempt checkpoint and the store's path, copied from
+	// the intent, so M8 finds its own journals of this store after
+	// inflight.json is gone and counts its attempt's swap-backs (§5S.3.13
+	// "M8"). Attempt and DBPath are F3-04's.
+	StepID  string `json:"step_id,omitempty"`
+	Attempt string `json:"attempt,omitempty"`
+	DBPath  string `json:"db_path,omitempty"`
 }
