@@ -347,12 +347,16 @@ func TestCommittedHeadAnchorDetectsInPlaceCopy(t *testing.T) {
 	if loc := fx.location(t); loc.Head.Seq != 1 || loc.ServedBoot.N != 1 {
 		t.Errorf("a frozen anchor was rewritten: %+v", loc)
 	}
+	// A line written but not committed while the anchor lags the head (line 5)
+	// must not carry the anchor past the store's committed head when it thaws.
+	orphan := fx.revoke(t, c, "scarecrow")
 	c.SetFrozen(false)
 	must(t, c.SyncAnchor(ctx))
+	must(t, orphan.Close())
 	// The uncommitted line 2 stays in the file as an orphan; the next Append
 	// numbers past it, so riddler is line 3 and bane line 4.
 	if got := fx.location(t).Head; got != fx.head(t) || got.Seq != 4 {
-		t.Errorf("thawed anchor = %+v, want the committed head %+v (seq 4)", got, fx.head(t))
+		t.Errorf("thawed anchor = %+v, want the committed head %+v (seq 4), not the file's tail %+v", got, fx.head(t), c.Tail())
 	}
 
 	// Never lowered: a store whose head dropped (copied back in place) leaves

@@ -115,8 +115,13 @@ func TestRevocationJournal_TruncationDetected(t *testing.T) {
 		if c.Break != nil || c.IntactEnd() != 2 {
 			t.Fatalf("a truncated journal is intact up to its end: break %v, end %d", c.Break, c.IntactEnd())
 		}
-		if cov := c.Cover(installID, 1, head, false); cov.OK {
+		if cov := c.Cover(installID, 1, head, false); cov.OK || !strings.Contains(cov.Why, "below the pre-swap store's head") {
 			t.Errorf("Cover = %+v, want no coverage: the journal ends below the pre-swap store's head", cov)
+		}
+		// A head recorded without a mac has no line to compare with, so the
+		// journal's length alone has to refuse it.
+		if cov := c.Cover(installID, 1, Head{Seq: head.Seq}, false); cov.OK || !strings.Contains(cov.Why, "below the pre-swap store's head") {
+			t.Errorf("Cover with a head that has no mac = %+v, want no coverage", cov)
 		}
 		fx.openBroken(t, "truncated", ErrCorrupt)
 	})
