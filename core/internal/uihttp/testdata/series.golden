@@ -1,0 +1,13 @@
+# file: core/internal/uihttp/testdata/series.golden
+# version: 1.0.0
+# guid: 7c0e4a92-3b15-4d68-a9f7-5e2d8b1c6a30
+# last-edited: 2026-11-10
+#
+# The mediacore.ui scope's series (07 §7.16): family<TAB>type<TAB>labels,
+# checked by metricstest.AssertSeries in TestUISeries_Golden. This row's three
+# counters: manifest requests (registered by internal/modulehttp), diagnostics
+# and CSP reports (internal/uihttp). Every closed label set is exported from
+# zero. F9-01 adds mediacore_ui_build_info and mediacore_ui_responses_total.
+mediacore_ui_csp_reports_total	counter	directive
+mediacore_ui_diagnostics_total	counter	kind,module
+mediacore_ui_manifest_requests_total	counter	outcome
