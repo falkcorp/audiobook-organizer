@@ -6,15 +6,22 @@
 package restoreswap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/cockroachdb/pebble/v2/vfs/errorfs"
 
+	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/keys"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
@@ -169,4 +176,297 @@ func TestRewriteFinishRefusesAnotherIntent(t *testing.T) {
 			t.Fatalf("%s: the refusal deleted the set-aside", name)
 		}
 	}
+}
+
+// m8Store is a store on fs at db (wayne at level 1, tagged "live") holding
+// rows rows of Batman storylines, for M8's end-to-end runs.
+func m8Store(t *testing.T, fs vfs.FS, db string, rows int) {
+	t.Helper()
+	makeStore(t, fs, db, 1, "live")
+	ctx := bootseam.With(context.Background(), &bootseam.Seams{FS: fs})
+	op, err := storage.Open(ctx, storage.OpenOptions{Path: db, Build: testBuild, Owners: []storage.OwnerSpec{wayne(1)}, FreeSpaceMargin: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdb, err := op.Prepare(ctx)
+	if err == nil {
+		err = sdb.Migrate(ctx)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks, _ := sdb.Keyspace("wayne")
+	b := ks.NewBatch()
+	for n := range rows {
+		if err := b.Set(fmt.Appendf(nil, "story/%04d", n), fmt.Appendf(nil, "Hush, chapter %d", n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := errors.Join(b.Commit(ctx, storage.Sync), sdb.Close()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// m8Boot boots the store at db on fs with M8 (wayne.rewrite) as its one
+// data step, run by a Swapper over fs; before is called inside the step
+// before RunRewrite. It returns the boot's error, M8's runs and the store's
+// epoch generation and tag at the end of a successful boot.
+type m8Result struct {
+	err        error
+	runs       int
+	genBefore  uint64
+	genAfter   uint64
+	tag        string
+	rows       int
+	checkpoint string // the checkpoint area's tree hash as M8 started
+}
+
+func m8Boot(t *testing.T, fs vfs.FS, db string) m8Result {
+	t.Helper()
+	ctx := bootseam.With(context.Background(), &bootseam.Seams{FS: fs, BuildID: testBuild, Clock: testNow})
+	s, err := New(Options{FS: fs, StateDir: stateDir, BuildID: testBuild, Clock: testNow, Owners: []storage.OwnerSpec{wayne(1)}, RewriteStep: "wayne.rewrite"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res m8Result
+	if _, err := s.RunP0a(ctx); err != nil {
+		res.err = err
+		return res
+	}
+	step := storage.NewRewriteStep("wayne", "wayne.rewrite")
+	ds := storage.DataStep{Owner: "wayne", ID: step.ID, Cutover: true, Rewrite: true, Run: func(ctx context.Context, sdb *storage.DB) error {
+		res.runs++
+		res.genBefore = epochOf(t, sdb)
+		res.checkpoint = treeHash(t, fs, filepath.Join(filepath.Dir(db), ".mediacore-checkpoints"))
+		return s.RunRewrite(ctx, sdb, step)
+	}}
+	op, err := storage.Open(ctx, storage.OpenOptions{Path: db, Build: testBuild, Owners: []storage.OwnerSpec{wayne(1)}, FreeSpaceMargin: 1,
+		DataSteps: []storage.DataStep{ds}})
+	if err != nil {
+		res.err = err
+		return res
+	}
+	sdb, err := op.Prepare(ctx)
+	if err != nil {
+		res.err = errors.Join(err, op.Close())
+		return res
+	}
+	if err := sdb.Migrate(ctx); err != nil {
+		res.err = errors.Join(err, sdb.Close())
+		return res
+	}
+	res.genAfter = epochOf(t, sdb)
+	ks, _ := sdb.Keyspace("wayne")
+	tag, _ := ks.Get(ctx, []byte("tag"))
+	res.tag = string(tag)
+	for _, err := range ks.Scan(ctx, storage.ScanOptions{Start: []byte("story/"), End: []byte("story0"), KeysOnly: true}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.rows++
+	}
+	if err := sdb.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// epochOf is the store generation in c/storage/epoch.
+func epochOf(t *testing.T, db *storage.DB) uint64 {
+	t.Helper()
+	ks, _ := db.Keyspace("core/storage")
+	raw, err := ks.Get(context.Background(), keys.Join(keys.Str("epoch")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec struct {
+		Epoch uint64 `json:"epoch"`
+	}
+	if err := json.Unmarshal(raw[bytes.IndexByte(raw, '{'):], &rec); err != nil {
+		t.Fatalf("epoch record %q: %v", raw, err)
+	}
+	return rec.Epoch
+}
+
+// engineFiles is the content of each Pebble table and MANIFEST under dir.
+func engineFiles(t *testing.T, fs vfs.FS, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	names, err := fs.List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if !strings.HasSuffix(n, ".sst") && !strings.HasPrefix(n, "MANIFEST-") {
+			continue
+		}
+		out[n] = readAll(t, fs, filepath.Join(dir, n))
+	}
+	return out
+}
+
+func readAll(t *testing.T, fs vfs.FS, p string) string {
+	t.Helper()
+	f, err := fs.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(f)
+	if err := errors.Join(err, f.Close()); err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// anyFileHolds walks fs from root, outside the checkpoint area, for a file
+// whose content is one of contents; it returns the first such path.
+func anyFileHolds(t *testing.T, fs vfs.FS, root string, contents map[string]string) string {
+	t.Helper()
+	want := map[string]bool{}
+	for _, c := range contents {
+		want[c] = true
+	}
+	var found string
+	var walk func(p string)
+	walk = func(p string) {
+		if found != "" || filepath.Base(p) == ".mediacore-checkpoints" {
+			return
+		}
+		fi, err := fs.Stat(p)
+		if err != nil {
+			return
+		}
+		if !fi.IsDir() {
+			if want[readAll(t, fs, p)] {
+				found = p
+			}
+			return
+		}
+		names, _ := fs.List(p)
+		for _, n := range names {
+			walk(filepath.Join(p, n))
+		}
+	}
+	walk(root)
+	return found
+}
+
+// TestCutoverRewriteLeavesNoOldFile (05-storage §5S.3.13 "M8: the
+// rewrite"): M8 compacts, copies the store into a new directory and swaps it
+// in as KindRewrite; afterwards no table or MANIFEST of the old directory is
+// anywhere outside the checkpoint area (phase 4 deleted the set-aside), the
+// generation is unchanged, every row is there, the journal reads applied
+// with no in-flight file, and the attempt's checkpoint is still in place
+// for a restore. The next boot does not run M8 again.
+func TestCutoverRewriteLeavesNoOldFile(t *testing.T) {
+	for _, layout := range []string{"state", "outside"} {
+		t.Run(layout, func(t *testing.T) {
+			mem := vfs.NewMem()
+			mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+			db := dbPathOf(layout)
+			m8Store(t, mem, db, 300)
+			old := engineFiles(t, mem, db)
+			if len(old) == 0 {
+				t.Fatal("fixture: the old store has no engine files")
+			}
+			res := m8Boot(t, mem, db)
+			if res.err != nil {
+				t.Fatalf("M8 boot: %v", res.err)
+			}
+			if res.runs != 1 || res.genAfter != res.genBefore || res.genBefore == 0 || res.tag != "live" || res.rows != 300 {
+				t.Fatalf("M8 boot = %+v, want one run, the generation kept and every row", res)
+			}
+			if p := anyFileHolds(t, mem, "/", old); p != "" {
+				t.Errorf("%s holds a file of the old directory after M8", p)
+			}
+			if ok, _ := exists(mem, storage.RewriteDir(db)); ok {
+				t.Error("the copy's directory survived the swap")
+			}
+			s := newSwapper(t, mem, testBuild, testNow)
+			js, err := s.rewriteJournals("wayne.rewrite")
+			if err != nil || len(js) != 1 || js[0].last != StepApplied {
+				t.Fatalf("M8 journals = %+v, %v; want one applied", js, err)
+			}
+			if ok, _ := exists(mem, s.inflightPath(js[0].id)); ok {
+				t.Error("the in-flight file survived phase 4")
+			}
+			cps, err := mem.List(filepath.Join(filepath.Dir(db), ".mediacore-checkpoints"))
+			if err != nil || len(cps) == 0 {
+				t.Errorf("checkpoint area = %v, %v; want the attempt's checkpoint", cps, err)
+			}
+			again := m8Boot(t, mem, db)
+			if again.err != nil || again.runs != 0 || again.tag != "live" || again.rows != 300 {
+				t.Errorf("the next boot = %+v, want M8 done and the store intact", again)
+			}
+		})
+	}
+}
+
+// failPlace is fs over mem failing the first rename of the copy into the
+// store's path (step d of the KindRewrite swap), so the swap swaps back.
+func failPlace(mem *vfs.MemFS, db string) (vfs.FS, func() bool) {
+	return failOnce(mem, func(op errorfs.Op) bool {
+		return op.Kind == errorfs.OpRename && filepath.Clean(op.Path) == storage.RewriteDir(db)
+	})
+}
+
+// TestRewriteSwapBackMovesNoCheckpoint (05-backup §5B.3.4 KindRewrite rules;
+// §5S.3.13 "M8 never loops"): a swap that fails swaps back, the store is
+// the original with every row, and the checkpoint area is exactly as M8
+// found it (the swap-back moves no checkpoint and starts no clock). The
+// next boot restarts M8 once from the compaction and finishes; a second
+// consecutive swap-back refuses the boot with storage.ErrRewriteSwappedBack
+// and stages nothing.
+func TestRewriteSwapBackMovesNoCheckpoint(t *testing.T) {
+	newStore := func(t *testing.T) (*vfs.MemFS, string) {
+		mem := vfs.NewMem()
+		mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+		db := dbPathOf("state")
+		m8Store(t, mem, db, 120)
+		return mem, db
+	}
+	cpArea := func(db string) string { return filepath.Join(filepath.Dir(db), ".mediacore-checkpoints") }
+
+	t.Run("once, then finished", func(t *testing.T) {
+		mem, db := newStore(t)
+		fs, hit := failPlace(mem, db)
+		res := m8Boot(t, fs, db)
+		if !hit() || !errors.Is(res.err, ErrSwappedBack) {
+			t.Fatalf("the failing swap = %v (injected %t), want ErrSwappedBack", res.err, hit())
+		}
+		if got := treeHash(t, mem, cpArea(db)); got != res.checkpoint {
+			t.Error("the swap-back changed the checkpoint area")
+		}
+		next := m8Boot(t, mem, db)
+		if next.err != nil || next.runs != 1 || next.tag != "live" || next.rows != 120 || next.genAfter != next.genBefore {
+			t.Fatalf("the boot after one swap-back = %+v, want M8 restarted and finished over the original", next)
+		}
+		js, err := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite")
+		if err != nil || len(js) != 2 || js[0].last != StepApplied || js[1].last != StepSwappedBack {
+			t.Errorf("journals = %+v, %v; want applied after swapped_back", js, err)
+		}
+	})
+
+	t.Run("twice, then refused", func(t *testing.T) {
+		mem, db := newStore(t)
+		for i := range 2 {
+			fs, hit := failPlace(mem, db)
+			if res := m8Boot(t, fs, db); !hit() || !errors.Is(res.err, ErrSwappedBack) {
+				t.Fatalf("swap %d = %v (injected %t), want ErrSwappedBack", i+1, res.err, hit())
+			}
+		}
+		before := treeHash(t, mem, stateDir)
+		res := m8Boot(t, mem, db)
+		if !errors.Is(res.err, storage.ErrRewriteSwappedBack) {
+			t.Fatalf("the boot after two swap-backs = %v, want storage.ErrRewriteSwappedBack", res.err)
+		}
+		if ok, _ := exists(mem, restorejournal.PendingPath(stateDir)); ok {
+			t.Error("the refusal staged an intent")
+		}
+		js, _ := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite")
+		if len(js) != 2 {
+			t.Errorf("the refusal journaled: %+v", js)
+		}
+		_ = before
+	})
 }
