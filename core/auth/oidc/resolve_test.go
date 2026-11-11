@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
@@ -456,4 +457,59 @@ func anyString(v any) string {
 		return x
 	}
 	return ""
+}
+
+// A sign-in of an already linked subject writes nothing, so it does not queue
+// behind the e-mail lock that account creation holds; an unseen subject does.
+func TestOIDC_LinkedSignInTakesNoEmailLock(t *testing.T) {
+	f := newFx(t)
+	first, err := resolve(t, f, untrusting(), claims("sub-robin", "dick@wayne.example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock := f.svc.LockEmails()
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+	run := func(c Claims) chan error {
+		done := make(chan error, 1)
+		go func() {
+			_, err := f.resolver(nil).Resolve(context.Background(), untrusting(), c)
+			done <- err
+		}()
+		return done
+	}
+	linked := run(claims("sub-robin", "dick@wayne.example.test"))
+	select {
+	case err := <-linked:
+		if err != nil {
+			t.Fatalf("linked sign-in: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a linked sign-in waited for the e-mail lock")
+	}
+	unseen := run(claims("sub-nightwing", "jason@wayne.example.test"))
+	select {
+	case err := <-unseen:
+		t.Fatalf("an unseen subject decided while the e-mail lock was held: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	unlock = nil
+	select {
+	case err := <-unseen:
+		if err != nil {
+			t.Fatalf("unseen sign-in after unlock: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an unseen sign-in never finished after unlock")
+	}
+	// The fast path still applies the status gate.
+	u := f.user(string(first.ID))
+	u.Status, u.Version = auth.StatusDisabled, u.Version+1
+	f.put(u)
+	_, err = resolve(t, f, untrusting(), claims("sub-robin", "dick@wayne.example.test"))
+	mustIs(t, err, auth.ErrInactiveUser)
 }

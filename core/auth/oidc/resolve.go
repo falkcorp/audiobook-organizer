@@ -117,6 +117,12 @@ func (r *Resolver) Resolve(ctx context.Context, pol Policy, c Claims) (*auth.Use
 	if !ok {
 		return nil, ErrEmailNotAllowed
 	}
+	// A subject already linked, whose account needs no write, is decided
+	// without the e-mail lock: every Cloudflare Access request of a signed-in
+	// browser takes this path, and it must not queue behind account creation.
+	if u, done, err := r.linkedFast(ctx, pol, c, email); done || err != nil {
+		return u, err
+	}
 	// One lock for the whole decision: "no other account holds this address
 	// verified" holds only against every other creator (CreateUser,
 	// AcceptInvite) when they all take it.
@@ -190,8 +196,9 @@ func (r *Resolver) resolveLocked(ctx context.Context, pol Policy, c Claims, emai
 	return r.create(ctx, pol, c, email, unverified)
 }
 
-// linked is step 2: the user a (provider, subject) is linked to.
-func (r *Resolver) linked(ctx context.Context, id *auth.ExternalIdentity, email string) (*auth.User, error) {
+// linkedUser loads the user a linked identity points at and applies the
+// status gate.
+func (r *Resolver) linkedUser(ctx context.Context, id *auth.ExternalIdentity) (*auth.User, error) {
 	u, err := r.d.Store.GetUser(ctx, id.UserID)
 	if errors.Is(err, auth.ErrNotFound) || errors.Is(err, auth.ErrUndecodableRecord) {
 		return nil, fmt.Errorf("%w: a linked identity points at a missing account", auth.ErrInvalidCredentials)
@@ -202,7 +209,44 @@ func (r *Resolver) linked(ctx context.Context, id *auth.ExternalIdentity, email 
 	if err := mayEnter(u); err != nil {
 		return nil, err
 	}
-	if auth.SameEmail(u.Email, email) && !u.EmailVerified {
+	return u, nil
+}
+
+// needsVerifiedMark reports whether a linked account holds the address the
+// provider now vouches for, unverified: the one write the linked path makes.
+func needsVerifiedMark(u *auth.User, email string) bool {
+	return auth.SameEmail(u.Email, email) && !u.EmailVerified
+}
+
+// linkedFast is step 2 without the e-mail lock, for a sign-in that writes
+// nothing: it reports done when the subject is linked and the account needs
+// no verified mark, with the user or the refusal. Anything else (an unseen
+// subject, a mark to write) is left to the locked path, which decides again.
+func (r *Resolver) linkedFast(ctx context.Context, pol Policy, c Claims, email string) (u *auth.User, done bool, err error) {
+	id, err := r.d.Store.IdentityBySubject(ctx, pol.Provider, c.Subject)
+	switch {
+	case errors.Is(err, auth.ErrNotFound):
+		return nil, false, nil
+	case err != nil:
+		return nil, true, fmt.Errorf("%w: %w", auth.ErrStoreUnavailable, err)
+	}
+	u, err = r.linkedUser(ctx, id)
+	if err != nil {
+		return nil, true, err
+	}
+	if needsVerifiedMark(u, email) {
+		return nil, false, nil
+	}
+	return u, true, nil
+}
+
+// linked is step 2: the user a (provider, subject) is linked to.
+func (r *Resolver) linked(ctx context.Context, id *auth.ExternalIdentity, email string) (*auth.User, error) {
+	u, err := r.linkedUser(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if needsVerifiedMark(u, email) {
 		// The provider vouches for the address the account already holds:
 		// record it as verified, unless another account holds it verified
 		// (best effort: the sign-in is already decided).
