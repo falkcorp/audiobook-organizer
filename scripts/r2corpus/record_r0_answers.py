@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_answers.py
-# version: 1.2.0
+# version: 1.3.1
 # guid: 53d96275-057a-4a73-ae6a-625b8f810a3a
 # last-edited: 2026-11-10
 """Record the R0 binary's answers over R2's stage-1 fixture corpus (F2-12).
@@ -623,17 +623,25 @@ def record(args: argparse.Namespace) -> int:
     tag = args.tag or w.read_r0_tag()
     if manifest["r0_tag"] != tag:
         raise w.CorpusError(f"manifest r0_tag {manifest['r0_tag']} != {tag}")
+    # --binary-tag: a replay by another release (F2-15's pre-freeze binary over
+    # a corpus copy), whose answers are labelled with that tag, never R0's, and
+    # never written over the committed answers/.
+    foreign = args.allow_foreign_binary or bool(args.binary_tag)
+    if args.binary_tag and not args.binary:
+        raise w.CorpusError("--binary-tag needs --binary")
     if args.binary:
         binary = pathlib.Path(args.binary).resolve()
     else:
         binary = w.fetch_binary(tag, pathlib.Path(args.cache).expanduser())
     if not args.docker:
-        w.check_native_binary(binary, args.allow_foreign_binary)
-    if not args.allow_foreign_binary and w.sha256_file(binary) != manifest["r0_binary_sha256"]:
+        w.check_native_binary(binary, foreign)
+    if not foreign and w.sha256_file(binary) != manifest["r0_binary_sha256"]:
         raise w.CorpusError("this binary is not the one that wrote the corpus")
     answers_dir = pathlib.Path(args.out).resolve() if args.out else w.ANSWERS_DIR
-    if args.allow_foreign_binary and answers_dir == w.ANSWERS_DIR:
-        raise w.CorpusError("--allow-foreign-binary is for development: give --out")
+    if foreign and answers_dir == w.ANSWERS_DIR:
+        raise w.CorpusError("--allow-foreign-binary and --binary-tag record elsewhere: give --out")
+    if args.binary_tag:
+        tag = args.binary_tag
 
     layout = w.Layout(pathlib.Path(args.workdir))
     if layout.workdir.exists():
@@ -643,8 +651,12 @@ def record(args: argparse.Namespace) -> int:
     layout.home.mkdir(parents=True, exist_ok=True)
     layout.viper_yaml.write_text(w._yaml_dump(w.VIPER_YAML), encoding="utf-8")
 
-    w.check_outside_maintenance_window()
-    proc = w.R0Process(binary, layout, args.port, docker=args.docker)
+    window, extra_env = w.MAINTENANCE_WINDOW_UTC, {}
+    if args.shift_window or args.window_start is not None:
+        window = w.shifted_window(start=args.window_start)
+        extra_env = w.shifted_window_env(window)
+    w.check_outside_maintenance_window(window=window)
+    proc = w.R0Process(binary, layout, args.port, docker=args.docker, extra_env=extra_env)
     ctx = w.Ctx(client=w.Client(proc.base, user_agent=RECORDER_UA), proc=proc, layout=layout)
     rec = Recorder(ctx.client)
     proc.start()
@@ -708,6 +720,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SETTLE_TIMEOUT,
         help="seconds to wait for the boot-time runs to settle (a corpus with a run waiting on "
         "its dependencies needs more than R0's 5-minute deps sweep)",
+    )
+    ap.add_argument(
+        "--binary-tag",
+        help="label the answers with this release tag: a replay by another release's --binary "
+        "(F2-15's pre-freeze binary); needs --out",
+    )
+    ap.add_argument(
+        "--shift-window",
+        action="store_true",
+        help="boot in a time zone that puts the corpus' maintenance window twelve hours from now "
+        "(write_r0_corpus.shifted_window_env), so the replay runs at any hour with no window task",
+    )
+    ap.add_argument(
+        "--window-start",
+        type=int,
+        help="like --shift-window, with the window's UTC start hour given (a caller that boots "
+        "several times picks one, so every boot shares one time zone)",
     )
     ap.add_argument(
         "--allow-foreign-binary",

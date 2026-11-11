@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/write_r0_corpus.py
-# version: 1.1.0
+# version: 1.2.1
 # guid: 1d61ab28-ed55-47d1-bb8a-642fbeb8b343
 # last-edited: 2026-11-10
 """Write R2's fixture corpus, stage 1, with the R0 release binary itself (F2-12).
@@ -464,17 +464,62 @@ def lay_out_slow_tree(root: pathlib.Path, fanout: int = SLOW_TREE_FANOUT) -> int
     return fanout**3
 
 
-def check_outside_maintenance_window(now: _dt.datetime | None = None) -> None:
-    """Refuse to drive R0 inside the configured maintenance window (UTC)."""
+def check_outside_maintenance_window(
+    now: _dt.datetime | None = None, window: tuple[int, int] = MAINTENANCE_WINDOW_UTC
+) -> None:
+    """Refuse to drive R0 inside the configured maintenance window (UTC).
+
+    ``window`` is (start, end) in UTC hours, the end exclusive; a window that
+    wraps midnight (start > end) is handled, and so is the margin around it.
+    """
     now = now or _dt.datetime.now(_dt.timezone.utc)
-    start, end = MAINTENANCE_WINDOW_UTC
+    start, end = window
     lo, hi = start - WINDOW_MARGIN_HOURS, end + WINDOW_MARGIN_HOURS
-    if lo <= now.astimezone(_dt.timezone.utc).hour < hi:
+    span = (hi - lo) % 24 or 24
+    if (now.astimezone(_dt.timezone.utc).hour - lo) % 24 < span:
         raise CorpusError(
             f"it is {now:%H:%M} UTC: the corpus' maintenance window is "
             f"{start:02d}:00-{end:02d}:00 UTC and window tasks would run while R0 is "
             f"driven; start outside {lo:02d}:00-{hi:02d}:00 UTC"
         )
+
+
+def shifted_window(now: _dt.datetime | None = None, start: int | None = None) -> tuple[int, int]:
+    """The corpus' maintenance window as (start, end) UTC hours, moved twelve hours from now.
+
+    A replay that must run at any hour (F2-15's CI jobs) boots the binary with
+    shifted_window_env's time zone, which puts the corpus' stored window
+    (MAINTENANCE_WINDOW_UTC in local hours) at these UTC hours, so no window
+    task runs while it drives the binary. ``start`` fixes the window's UTC
+    start hour instead (F2-15's suite picks one per test process, so every
+    boot of a run shares one time zone).
+    """
+    length = MAINTENANCE_WINDOW_UTC[1] - MAINTENANCE_WINDOW_UTC[0]
+    if start is None:
+        now = now or _dt.datetime.now(_dt.timezone.utc)
+        start = (now.astimezone(_dt.timezone.utc).hour + 12) % 24
+    if not 0 <= start < 24:
+        raise CorpusError(f"window start {start} is not an hour (0-23)")
+    return start, (start + length) % 24
+
+
+def shifted_window_env(window: tuple[int, int]) -> dict[str, str]:
+    """The env layer that moves the corpus' maintenance window to ``window`` (UTC hours).
+
+    The window cannot be moved through its own keys: the corpus stores it in
+    the settings blob, which the binary loads over the env layer
+    (MAINTENANCE_WINDOW_START is ignored once a stored window exists). The
+    binary reads the window against local time (scheduler.IsInMaintenanceWindow
+    uses time.Now().Hour()), so the boot's TZ moves it instead: with local =
+    UTC + k, the stored local window [a, b) is the UTC window [a - k, b - k).
+    Etc/GMT zones carry the inverted POSIX sign (Etc/GMT-5 is UTC+5).
+    """
+    k = (MAINTENANCE_WINDOW_UTC[0] - window[0]) % 24
+    if k > 12:
+        k -= 24
+    if k == 0:
+        return {"TZ": "UTC"}
+    return {"TZ": f"Etc/GMT{'-' if k > 0 else '+'}{abs(k)}"}
 
 
 # ------------------------------------------------------------- the R0 process
@@ -489,11 +534,15 @@ class R0Process:
         layout: Layout,
         port: int,
         docker: bool = False,
+        extra_env: dict[str, str] | None = None,
     ) -> None:
         self.binary = binary
         self.layout = layout
         self.port = port
         self.docker = docker
+        # Replaces boot_env's values by name (F2-15's pre-freeze replays move
+        # the maintenance window away from the clock: shifted_window_env).
+        self.extra_env = dict(extra_env or {})
         self.proc: subprocess.Popen[bytes] | None = None
         self._log = None
         self.container = f"r2corpus-{os.getpid()}"
@@ -503,7 +552,7 @@ class R0Process:
         return f"http://127.0.0.1:{self.port}"
 
     def _command(self) -> tuple[list[str], dict[str, str]]:
-        env = boot_env(self.layout, self.port)
+        env = {**boot_env(self.layout, self.port), **self.extra_env}
         if not self.docker:
             argv = boot_argv(str(self.binary), self.layout, self.port)
             full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **env}

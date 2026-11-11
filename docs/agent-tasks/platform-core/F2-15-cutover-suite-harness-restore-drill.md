@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F2-15-cutover-suite-harness-restore-drill.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: d41c117c-6cdf-49d0-b491-b6dd9fd211bf -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-10 -->
 
 # F2-15 — R2 cutover-suite harness in `extraction-gates`: per-family count, ID and reference checks, the byte-identity check outside generated sub-prefix lists, and the restore drill with the pre-freeze release's binary
 
@@ -158,7 +158,7 @@ go test ./internal/books/ -run TestPrefreezeTagResolver -count=1                
 R2_PREFREEZE_BIN="$(bash scripts/ci/fetch_prefreeze_binary.sh "$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 --json tagName -q '.[0].tagName')")" \
   go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1 -v | grep -c '^--- PASS'   # 4
 R2_PREFREEZE_BIN=<the path above> \
-  go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1 -v | grep -cE '^ +--- PASS: [A-Za-z]+/prefreeze-written$'   # 4 (rule 10, none skipped)
+  go test ./internal/books/ -run 'TestCutoverOnR0Corpus|TestCutoverPreservesIDsAndReferences|TestCutoverLeavesOtherFamiliesByteIdentical|TestRollbackRestoreBootsPreviousBuild' -count=1 -v | grep -cE '^ +--- PASS: [A-Za-z]+/prefreeze-written \('   # 4 (rule 10, none skipped; PASS lines end with the duration)
 go test ./internal/books/ -run 'TestCutoverOnR0Corpus/selftest' -count=1   # ok (negative cases fail as designed)
 grep -c 'r2-cutover-suite' .github/workflows/extraction-gates.yml                         # >=1
 make ci                                                                                   # exit 0

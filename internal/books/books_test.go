@@ -1,7 +1,7 @@
 // file: internal/books/books_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7d3e9b14-2c6a-4f80-b5d1-8e0a4c97f2b3
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package books
 
@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -62,6 +63,25 @@ func withConfig(t *testing.T, c config.Config) {
 	orig := config.AppConfig
 	config.AppConfig = c
 	t.Cleanup(func() { config.AppConfig = orig })
+}
+
+// initConfigForTest runs config.InitConfig as serve does and puts back what
+// it changes for the whole process: config.AppConfig (withConfig) and the
+// process-wide viper. InitConfig registers every shipped default and env
+// binding on viper and nothing undoes them, so without the restore every
+// later boot in the package has LoadConfigFromDatabase overwrite stored
+// settings with defaults (abs_api_enabled reads as set, to false, and Register
+// refuses with errABSFlagDrift). viper cannot be snapshotted, so restoring it
+// means returning it to empty. The helper fails unless viper is empty when it
+// starts, which keeps the restore exact and catches the next test that leaks.
+func initConfigForTest(t *testing.T) {
+	t.Helper()
+	if keys := viper.AllKeys(); len(keys) > 0 {
+		t.Fatalf("viper already holds %d keys (%v...): an earlier test leaked its config", len(keys), keys[:min(len(keys), 5)])
+	}
+	withConfig(t, config.AppConfig)
+	t.Cleanup(viper.Reset)
+	config.InitConfig()
 }
 
 // semver parses MAJOR.MINOR.PATCH.
@@ -474,9 +494,8 @@ func TestR1Listen_NoServerUsesCoreListener(t *testing.T) {
 // provider, not the no-op one, so production traces survive the move to the
 // App's Provider.
 func TestTelemetry_TracerFromEnv(t *testing.T) {
-	withConfig(t, config.AppConfig)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://192.0.2.1:4317")
-	config.InitConfig()
+	initConfigForTest(t)
 	tel := telemetryFromConfig(config.Snapshot())
 	if tel.Tracing == nil || tel.Tracing.Endpoint != "http://192.0.2.1:4317" {
 		t.Fatalf("Telemetry.Tracing = %+v, want the env endpoint", tel.Tracing)
