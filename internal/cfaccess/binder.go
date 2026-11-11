@@ -1,5 +1,5 @@
 // file: internal/cfaccess/binder.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 8d1a4f92-3c07-4b56-9e28-6a0b5c2e7d41
 // last-edited: 2026-11-11
 
@@ -7,8 +7,8 @@ package cfaccess
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -55,6 +55,15 @@ type CFAccessAuthenticator struct {
 	cfg      *legacyoauth.Config
 	store    legacyoauth.UserStore
 	hooks    Hooks
+	warns    warnGate // one failure line per warnEvery: each bad request would otherwise log one
+}
+
+// warn logs reason (a class, never a token claim or an address) at most once per
+// warnEvery, with the number of lines held back.
+func (a *CFAccessAuthenticator) warn(reason string) {
+	if ok, held := a.warns.allow(time.Now()); ok {
+		cfBounceLog.Warn("cfaccess: %s (suppressed=%d)", reason, held)
+	}
 }
 
 // Hooks is what the gin binder takes from the gin auth chain it feeds, so this
@@ -137,14 +146,19 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 		}
 		if err != nil {
 			// Diagnostic: a JWT was present but did not verify (aud/issuer/keyset/expiry).
-			// Rate-limited-ish by being Warn; falls through to normal auth.
-			slog.Warn("cfaccess: Access JWT present but verification failed", "err", err)
+			// Rate limited, class only (the library's text can quote the token's
+			// claims); falls through to normal auth.
+			if errors.Is(err, ErrKeysUnavailable) {
+				a.warn("Access JWT present but the signing keys are unavailable")
+			} else {
+				a.warn("Access JWT present but verification failed")
+			}
 			c.Next()
 			return
 		}
 		user, err := a.cfg.ResolveUser(a.store, *claims)
 		if err != nil {
-			slog.Warn("cfaccess: verified identity not admitted", "email", claims.Email, "err", err)
+			a.warn("verified identity not admitted")
 			c.Next() // not allowlisted / not verified — normal auth will 401
 			return
 		}
