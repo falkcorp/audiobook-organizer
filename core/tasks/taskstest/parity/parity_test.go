@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/parity/parity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b96825f-95af-4625-bb3f-c9c627503912
 // last-edited: 2026-11-10
 
@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+
+	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/coretest"
 )
 
 // TestParity_ResumeCancelShutdown runs every ported HEAD test against core's
@@ -154,5 +157,16 @@ func TestParity_CoversEveryHeadTest(t *testing.T) {
 		case full[h]+partial[h]+cases[h] == 0:
 			t.Errorf("%s is neither a case nor excluded", h)
 		}
+	}
+}
+
+// TestExerciseInstruments (05-metrics §12's executor cell, F2-03): a
+// standalone executor with its instruments on records every one of its 18
+// instruments into the Provider it is given, and that Provider's gather
+// returns no error.
+func TestExerciseInstruments(t *testing.T) {
+	p := coretest.MetricsProvider(t, app.Options{MetricNamespace: "gotham"})
+	if fams := ExerciseInstruments(t, p); len(fams) == 0 {
+		t.Fatal("no ops family gathered")
 	}
 }
