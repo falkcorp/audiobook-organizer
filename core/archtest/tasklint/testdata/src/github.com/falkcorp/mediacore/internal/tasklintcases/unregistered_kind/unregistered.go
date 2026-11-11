@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/testdata/src/github.com/falkcorp/mediacore/internal/tasklintcases/unregistered_kind/unregistered.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 705d94f0-04f3-4c33-b047-d377eaebfebe
 // last-edited: 2026-11-10
 
@@ -32,8 +32,31 @@ func Kinds() []tasks.Definition {
 	return []tasks.Definition{tasks.Task("unreg.list", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common})} // want `tasks.Task definition in Kinds is not registered`
 }
 
+// build is a kind helper: each of its call sites is a kind site, so the
+// registered call below does not cover orphanBuilt's.
+func build(kind tasks.Kind) tasks.Definition {
+	return tasks.Task(kind, tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common})
+}
+
+// rebuild is a helper of a helper (found to a fixed point).
+func rebuild(kind tasks.Kind) tasks.Definition { return build(kind) }
+
+func orphanBuilt() tasks.Definition {
+	return build("unreg.orphan-built") // want `definition built by build in orphanBuilt is not registered`
+}
+
+func orphanRebuilt() []tasks.Definition {
+	return []tasks.Definition{rebuild("unreg.orphan-rebuilt")} // want `definition built by rebuild in orphanRebuilt is not registered`
+}
+
+// neverCalled is a helper with no call site: its own constructor is reported.
+func neverCalled() tasks.Definition {
+	return tasks.Task("unreg.never-called", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}) // want `tasks.Task definition in neverCalled is not registered`
+}
+
 func Register(r *module.Registrar) {
 	built := tasks.Task("unreg.built-not-passed", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}) // want `tasks.Task definition in Register is not registered`
 	_ = built
-	r.Tasks(listed, viaHelper(), tasks.Task("unreg.inline", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}))
+	r.Tasks(listed, viaHelper(), tasks.Task("unreg.inline", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}),
+		build("unreg.built"), rebuild("unreg.rebuilt"))
 }

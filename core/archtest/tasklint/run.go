@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/run.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3353e3e5-8aaf-477a-bffd-f8c6bf6de79c
 // last-edited: 2026-11-10
 
@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"go/token"
 	"os"
 	"os/exec"
 	"path"
@@ -128,7 +129,10 @@ func Run(t testing.TB, opts Options) {
 }
 
 // Analyze runs the analyzer over patterns and returns its findings, sorted,
-// with files relative to root, and the number of packages loaded.
+// with files relative to root, and the number of packages loaded. The
+// unregistered-kind rule runs once over every loaded package together, so a
+// kind is registered when any of them registers it: patterns must therefore
+// include each package that calls Registrar.Tasks for the kinds checked.
 func Analyze(cfg Config, root string, patterns []string) ([]Finding, int, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -150,24 +154,45 @@ func Analyze(cfg Config, root string, patterns []string) ([]Finding, int, error)
 	if len(pkgs) == 0 {
 		return nil, 0, errors.New("no package matched; the check would be vacuous")
 	}
+	cfg.wholeProgram = true
 	graph, err := checker.Analyze([]*analysis.Analyzer{New(cfg)}, pkgs, nil)
 	if err != nil {
 		return nil, 0, err
 	}
 	var out []Finding
+	add := func(fset *token.FileSet, p token.Pos, category, msg string) {
+		pos := fset.Position(p)
+		file := pos.Filename
+		if rel, err := filepath.Rel(root, file); err == nil && !strings.HasPrefix(rel, "..") {
+			file = rel
+		}
+		out = append(out, Finding{File: filepath.ToSlash(file), Line: pos.Line, Column: pos.Column,
+			Category: category, Message: msg})
+	}
 	for _, act := range graph.Roots {
 		if act.Err != nil {
 			return nil, 0, fmt.Errorf("%s: %w", act.Package.PkgPath, act.Err)
 		}
 		for _, d := range act.Diagnostics {
-			pos := act.Package.Fset.Position(d.Pos)
-			file := pos.Filename
-			if rel, err := filepath.Rel(root, file); err == nil && !strings.HasPrefix(rel, "..") {
-				file = rel
-			}
-			out = append(out, Finding{File: filepath.ToSlash(file), Line: pos.Line, Column: pos.Column,
-				Category: d.Category, Message: d.Message})
+			add(act.Package.Fset, d.Pos, d.Category, d.Message)
 		}
+	}
+	// packages.Load gives every package of one call the same FileSet.
+	var units []*unit
+	for _, p := range pkgs {
+		if !under(p.PkgPath, cfg.ModulePath) || under(p.PkgPath, cfg.TasksPath) || under(p.PkgPath, cfg.TasksTestPath) {
+			continue
+		}
+		u := &unit{path: p.PkgPath, info: p.TypesInfo}
+		for _, f := range p.Syntax {
+			if !strings.HasSuffix(p.Fset.File(f.Pos()).Name(), "_test.go") {
+				u.files = append(u.files, f)
+			}
+		}
+		units = append(units, u)
+	}
+	for _, f := range unregisteredKinds(&cfg, units, true) {
+		add(pkgs[0].Fset, f.pos, CatUnregisteredKind, f.msg)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {

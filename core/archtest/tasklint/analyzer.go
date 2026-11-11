@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/analyzer.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 48295d11-35d4-4ecf-b2e5-cb82b9451d3d
 // last-edited: 2026-11-10
 
@@ -10,11 +10,16 @@
 //
 // Its six rules, by diagnostic category:
 //
-//	unregistered-kind       a tasks.Task, tasks.Batch or tasks.Fixer call that no
-//	                        Registrar.Tasks argument of its package reaches (nor,
-//	                        with -list-funcs, a package-level func returning
-//	                        []tasks.Definition: 05-tasks §5T.8.2 rule 4's books
-//	                        list functions, until the F5 flip)
+//	unregistered-kind       a tasks.Task, tasks.Batch or tasks.Fixer call, or a
+//	                        call of a helper returning tasks.Definition that
+//	                        builds one, that no Registrar.Tasks argument reaches
+//	                        (nor, with -list-funcs, a called package-level func
+//	                        returning []tasks.Definition: 05-tasks §5T.8.2 rule
+//	                        4's books list functions, until the F5 flip). Run
+//	                        checks it over every loaded package at once
+//	                        (registration.go); this analyzer alone sees one
+//	                        package, so it also flags a kind another package
+//	                        registers
 //	writer-bypass           a write-named method call on a type declared in a
 //	                        store package (-stores) inside a definition body or a
 //	                        same-package function it calls (one level deep);
@@ -88,10 +93,15 @@ type Config struct {
 	// books sets it, until the F5 flip deletes HEAD's engine.
 	LegacyDefinitions []string
 	// ListFuncs makes every package-level func whose one result is
-	// []tasks.Definition a registration root (-list-funcs): books' list
-	// functions, which ABO passes to no Registrar.Tasks call before the F5 flip
-	// (05-tasks §5T.8.2 rule 4, §5T.8.4).
+	// []tasks.Definition a registration root when something calls it
+	// (-list-funcs): books' list functions, which ABO passes to no
+	// Registrar.Tasks call before the F5 flip (05-tasks §5T.8.2 rule 4,
+	// §5T.8.4).
 	ListFuncs bool
+
+	// wholeProgram is set by Analyze, which checks unregistered-kind over all
+	// loaded packages at once; the per-package passes then skip it.
+	wholeProgram bool
 }
 
 // DefaultConfig is core's own configuration: module and tasks paths of
@@ -192,7 +202,7 @@ func runPass(pass *analysis.Pass, cfg *Config) (any, error) {
 		return nil, nil
 	}
 	c := &lintState{pass: pass, cfg: cfg, decls: map[types.Object]ast.Node{},
-		locals: map[types.Object][]ast.Node{}, allows: map[string]map[int]string{}, stores: map[string]*types.Interface{}}
+		allows: map[string]map[int]string{}, stores: map[string]*types.Interface{}}
 	for _, f := range pass.Files {
 		name := pass.Fset.File(f.Pos()).Name()
 		if strings.HasSuffix(name, "_test.go") {
@@ -204,7 +214,11 @@ func runPass(pass *analysis.Pass, cfg *Config) (any, error) {
 	if len(c.files) == 0 {
 		return nil, nil
 	}
-	c.unregisteredKinds()
+	if !cfg.wholeProgram {
+		for _, f := range unregisteredKinds(cfg, []*unit{{path: path, files: c.files, info: pass.TypesInfo}}, false) {
+			pass.Report(analysis.Diagnostic{Pos: f.pos, Category: CatUnregisteredKind, Message: f.msg})
+		}
+	}
 	c.walkCalls()
 	c.specLiterals()
 	return nil, nil
@@ -218,10 +232,6 @@ type lintState struct {
 	// declaration: the *ast.FuncDecl, the var's own initializer expression,
 	// or the *ast.ValueSpec when one call initializes several vars.
 	decls map[types.Object]ast.Node
-	// locals maps each function-local variable to the expressions assigned
-	// to it, so a registration that passes a local (r.Tasks(defs...)) reaches
-	// what was put into it.
-	locals map[types.Object][]ast.Node
 	// allows maps file name -> line -> the text after //tasklint:allow.
 	allows map[string]map[int]string
 	// stores caches each store package's Store interface (nil when absent).
@@ -255,53 +265,6 @@ func (c *lintState) indexFile(f *ast.File, name string) {
 			}
 		}
 	}
-	// Function-local assignments.
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.AssignStmt:
-			for i, l := range n.Lhs {
-				id, ok := l.(*ast.Ident)
-				if !ok {
-					continue
-				}
-				obj := info.ObjectOf(id)
-				if obj == nil || obj.Parent() == c.pass.Pkg.Scope() {
-					continue
-				}
-				if len(n.Rhs) == len(n.Lhs) {
-					c.locals[obj] = append(c.locals[obj], n.Rhs[i])
-				} else {
-					for _, r := range n.Rhs {
-						c.locals[obj] = append(c.locals[obj], r)
-					}
-				}
-			}
-		case *ast.DeclStmt:
-			gd, ok := n.Decl.(*ast.GenDecl)
-			if !ok {
-				return true
-			}
-			for _, s := range gd.Specs {
-				vs, ok := s.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				for i, id := range vs.Names {
-					obj := info.Defs[id]
-					switch {
-					case obj == nil:
-					case len(vs.Values) == len(vs.Names):
-						c.locals[obj] = append(c.locals[obj], vs.Values[i])
-					default:
-						for _, v := range vs.Values {
-							c.locals[obj] = append(c.locals[obj], v)
-						}
-					}
-				}
-			}
-		}
-		return true
-	})
 	for _, cg := range f.Comments {
 		for _, cm := range cg.List {
 			if !strings.HasPrefix(cm.Text, allowDirective) {
@@ -343,8 +306,14 @@ func namedIn(t types.Type, path string) (*types.Named, bool) {
 // tasksFunc returns the name of the tasks package-level function call
 // invokes, or "".
 func (c *lintState) tasksFunc(call *ast.CallExpr) string {
-	fn, ok := typeutil.Callee(c.pass.TypesInfo, call).(*types.Func)
-	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != c.cfg.TasksPath {
+	fn, _ := typeutil.Callee(c.pass.TypesInfo, call).(*types.Func)
+	return tasksFuncName(fn, c.cfg.TasksPath)
+}
+
+// tasksFuncName returns fn's name when it is a package-level function of
+// package tasksPath, or "".
+func tasksFuncName(fn *types.Func, tasksPath string) string {
+	if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != tasksPath {
 		return ""
 	}
 	if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
@@ -356,7 +325,11 @@ func (c *lintState) tasksFunc(call *ast.CallExpr) string {
 // method returns the receiver's named type and the method a call invokes,
 // when it is a method of a type declared in package path.
 func (c *lintState) method(call *ast.CallExpr, path string) (recv string, name string) {
-	fn, ok := typeutil.Callee(c.pass.TypesInfo, call).(*types.Func)
+	return methodIn(c.pass.TypesInfo, call, path)
+}
+
+func methodIn(info *types.Info, call *ast.CallExpr, path string) (recv string, name string) {
+	fn, ok := typeutil.Callee(info, call).(*types.Func)
 	if !ok {
 		return "", ""
 	}
@@ -375,11 +348,11 @@ func isConstructor(name string) bool { return name == "Task" || name == "Batch" 
 
 // isListFunc reports a package-level func whose single result is
 // []tasks.Definition.
-func (c *lintState) isListFunc(fd *ast.FuncDecl) bool {
+func isListFunc(info *types.Info, tasksPath string, fd *ast.FuncDecl) bool {
 	if fd.Recv != nil {
 		return false
 	}
-	obj, ok := c.pass.TypesInfo.Defs[fd.Name].(*types.Func)
+	obj, ok := info.Defs[fd.Name].(*types.Func)
 	if !ok {
 		return false
 	}
@@ -391,99 +364,8 @@ func (c *lintState) isListFunc(fd *ast.FuncDecl) bool {
 	if !ok {
 		return false
 	}
-	n, ok := namedIn(sl.Elem(), c.cfg.TasksPath)
+	n, ok := namedIn(sl.Elem(), tasksPath)
 	return ok && n.Obj().Name() == "Definition"
-}
-
-// unregisteredKinds reports every constructor call outside what the package's
-// registration roots reach (rule unregistered-kind). The roots are the
-// arguments of each Registrar.Tasks call and, with ListFuncs, every list
-// function; reachability follows package-level funcs, methods and vars and
-// the assignments of function-local variables.
-func (c *lintState) unregisteredKinds() {
-	var queue []ast.Node
-	seenObj := map[types.Object]bool{}
-	for _, f := range c.files {
-		ast.Inspect(f, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if recv, name := c.method(call, c.cfg.RegistrarPath); recv == "Registrar" && name == "Tasks" {
-				for _, a := range call.Args {
-					queue = append(queue, a)
-				}
-			}
-			return true
-		})
-		if c.cfg.ListFuncs {
-			for _, d := range f.Decls {
-				if fd, ok := d.(*ast.FuncDecl); ok && c.isListFunc(fd) {
-					if obj := c.pass.TypesInfo.Defs[fd.Name]; obj != nil {
-						seenObj[obj] = true
-					}
-					queue = append(queue, fd)
-				}
-			}
-		}
-	}
-	var reached []ast.Node
-	for len(queue) > 0 {
-		n := queue[0]
-		queue = queue[1:]
-		reached = append(reached, n)
-		ast.Inspect(n, func(x ast.Node) bool {
-			id, ok := x.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			obj := c.pass.TypesInfo.Uses[id]
-			if fn, ok := obj.(*types.Func); ok {
-				obj = fn.Origin()
-			}
-			if obj == nil || seenObj[obj] {
-				return true
-			}
-			if d, ok := c.decls[obj]; ok {
-				seenObj[obj] = true
-				queue = append(queue, d)
-			} else if rhs, ok := c.locals[obj]; ok {
-				seenObj[obj] = true
-				queue = append(queue, rhs...)
-			}
-			return true
-		})
-	}
-	covered := func(p token.Pos) bool {
-		for _, n := range reached {
-			if p >= n.Pos() && p < n.End() {
-				return true
-			}
-		}
-		return false
-	}
-	why := "no Registrar.Tasks call in this package"
-	if c.cfg.ListFuncs {
-		why += " and no list function returning []tasks.Definition"
-	}
-	for _, f := range c.files {
-		for _, d := range f.Decls {
-			ast.Inspect(d, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				name := c.tasksFunc(call)
-				if !isConstructor(name) || covered(call.Pos()) {
-					return true
-				}
-				c.pass.Report(analysis.Diagnostic{Pos: call.Pos(), Category: CatUnregisteredKind,
-					Message: fmt.Sprintf("tasks.%s definition in %s is not registered: %s reaches it; pass it to Registrar.Tasks, directly or through a function the call reaches",
-						name, declName(d), why)})
-				return true
-			})
-		}
-	}
 }
 
 func declName(d ast.Decl) string {
