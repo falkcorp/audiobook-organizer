@@ -1,5 +1,5 @@
 // file: core/go.mod
-// version: 1.0.7
+// version: 1.0.8
 // guid: 423dec24-3ee4-45a5-a8ca-af9d6bc2b133
 // last-edited: 2026-11-11
 
@@ -22,6 +22,8 @@ ignore ./examples/hello/web
 
 require (
 	github.com/cockroachdb/pebble/v2 v2.1.7
+	github.com/coreos/go-oidc/v3 v3.21.0
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-logr/logr v1.4.4
 	github.com/go-logr/stdr v1.2.2
 	github.com/google/jsonschema-go v0.4.3
@@ -42,6 +44,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.1
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/crypto v0.58.0
+	golang.org/x/oauth2 v0.37.0
 	golang.org/x/text v0.43.0
 	golang.org/x/tools v0.52.0
 	google.golang.org/grpc v1.85.0
