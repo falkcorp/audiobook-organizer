@@ -1,5 +1,5 @@
 // file: core/internal/executor/executor.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: a39876a5-3dce-4f6d-9003-f07fdeb8a28d
 // last-edited: 2026-11-10
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -276,11 +277,19 @@ type editFunc func(cur tasks.RunRecord) (next tasks.RunRecord, ev tasks.RunEvent
 // terminal state, Options.OnTerminal in the same batch. A storage conflict
 // re-stages everything from a fresh read; a refused edit or a lost want
 // (ErrRunConflict) stops.
+//
+// When OnTerminal returns an error, that batch (and whatever the hook staged
+// into it) is discarded and the transition is staged once more without the
+// hook, with a notify_failed event and an error line in the run's log; the
+// error is also logged. A run therefore always reaches its terminal state:
+// a crash still commits both or neither, and a failing hook loses only its
+// notification, recorded on the run.
 func (e *executor) move(ctx context.Context, id tasks.RunID, edit editFunc,
 	extra func(ctx context.Context, b *storage.Batch, next tasks.RunRecord) error) (tasks.RunRecord, error) {
 	var out, prev tasks.RunRecord
+	var notifyErr error // OnTerminal's error: stage the terminal transition without the hook
 	var err error
-	for range moveAttempts {
+	for try := 0; try < moveAttempts; try++ {
 		err = e.write(ctx, func(ctx context.Context, b *storage.Batch) error {
 			cur, err := e.runs.Get(ctx, id)
 			if err != nil {
@@ -290,7 +299,11 @@ func (e *executor) move(ctx context.Context, id tasks.RunID, edit editFunc,
 			if err != nil {
 				return err
 			}
+			terminal := next.State.Terminal() && !cur.State.Terminal()
 			next.Seq.Event = cur.Seq.Event + 1
+			if terminal && notifyErr != nil {
+				next.Seq.Event++ // the notify_failed event follows the transition's
+			}
 			ev.From, ev.To, ev.Attempt, ev.FenceEpoch = cur.State, next.State, next.Attempt, next.FenceEpoch
 			if ev.At.IsZero() {
 				ev.At = e.now()
@@ -299,7 +312,7 @@ func (e *executor) move(ctx context.Context, id tasks.RunID, edit editFunc,
 			if err := e.runs.Transition(ctx, b, id, want, next); err != nil {
 				return err
 			}
-			if err := e.runs.AppendEvent(ctx, b, id, next.Seq.Event, ev); err != nil {
+			if err := e.runs.AppendEvent(ctx, b, id, cur.Seq.Event+1, ev); err != nil {
 				return err
 			}
 			if extra != nil {
@@ -307,14 +320,26 @@ func (e *executor) move(ctx context.Context, id tasks.RunID, edit editFunc,
 					return err
 				}
 			}
-			if next.State.Terminal() && !cur.State.Terminal() && e.opts.OnTerminal != nil {
+			switch {
+			case terminal && notifyErr != nil:
+				if err := e.stageNotifyFailed(ctx, b, next, notifyErr); err != nil {
+					return err
+				}
+			case terminal && e.opts.OnTerminal != nil:
 				if err := e.opts.OnTerminal(ctx, b, e.view(next)); err != nil {
-					return fmt.Errorf("executor: OnTerminal: %w", err)
+					return notifyError{fmt.Errorf("executor: OnTerminal: %w", err)}
 				}
 			}
 			prev, out = cur, next
 			return nil
 		})
+		var ne notifyError
+		if notifyErr == nil && errors.As(err, &ne) && ctx.Err() == nil {
+			notifyErr = ne.error
+			e.log.Error("task notification failed; the run ends without it", "run", id, "error", notifyErr)
+			try-- // the hook's failure is not a storage conflict: it spends no attempt
+			continue
+		}
 		var r refusal
 		if !errors.Is(err, tasks.ErrRunConflict) || errors.As(err, &r) {
 			break
@@ -325,6 +350,29 @@ func (e *executor) move(ctx context.Context, id tasks.RunID, edit editFunc,
 	}
 	e.moved(prev, out)
 	return out, nil
+}
+
+// notifyError is Options.OnTerminal's error inside move's batch.
+type notifyError struct{ error }
+
+func (n notifyError) Unwrap() error { return n.error }
+
+// eventNotifyFailed is the event move appends when OnTerminal failed and the
+// terminal transition committed without its notification.
+const eventNotifyFailed = "notify_failed"
+
+// stageNotifyFailed records on the run that its terminal transition
+// committed without OnTerminal's notification: a notify_failed event after
+// the transition's, and an error line in the run's log, numbered last in the
+// attempt's log page (the attempt's own lines count up from 1).
+func (e *executor) stageNotifyFailed(ctx context.Context, b *storage.Batch, next tasks.RunRecord, cause error) error {
+	ev := tasks.RunEvent{From: next.State, To: next.State, Event: eventNotifyFailed,
+		Attempt: next.Attempt, FenceEpoch: next.FenceEpoch, At: e.now()}
+	if err := e.runs.AppendEvent(ctx, b, next.ID, next.Seq.Event, ev); err != nil {
+		return err
+	}
+	line := tasks.LogLine{At: ev.At, Level: "error", Message: "the run's terminal notification was not sent: " + cause.Error()}
+	return e.runs.AppendLog(ctx, b, next.ID, uint64(next.Attempt)<<32|math.MaxUint32, line)
 }
 
 // errStale is an edit's refusal: the fresh read is not a run this move

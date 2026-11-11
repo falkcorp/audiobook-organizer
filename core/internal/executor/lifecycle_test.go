@@ -1,5 +1,5 @@
 // file: core/internal/executor/lifecycle_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6c72973b-69ac-4ea7-a160-44fe469187ed
 // last-edited: 2026-11-10
 
@@ -8,6 +8,8 @@ package executor
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -359,17 +361,21 @@ func TestUnknownKindRun_DroppedAtResume(t *testing.T) {
 }
 
 // TestOnTerminal_NotificationStagedInTerminalBatch (5T.4 step 3, COR2-3):
-// OnTerminal stages its write in the terminal transition's own batch: both
-// commit, or (when it fails) neither does.
+// OnTerminal stages its write in the terminal transition's own batch, so
+// both commit together. When the hook fails, nothing it staged commits, but
+// the run still reaches its terminal state, with a notify_failed event, an
+// error line in its log and an error in the executor's log.
 func TestOnTerminal_NotificationStagedInTerminalBatch(t *testing.T) {
 	subject := entity.Ref{Module: "gotham", Kind: "cases", ID: "ace"}
 	for _, fail := range []bool{false, true} {
-		name := map[bool]string{false: "commits with the transition", true: "an error aborts both"}[fail]
+		name := map[bool]string{false: "commits with the transition", true: "an error still ends the run"}[fail]
 		t.Run(name, func(t *testing.T) {
 			var h *harness
 			var calls int
 			var mu sync.Mutex
+			logs := &lockedBuffer{}
 			h = newHarness(t, []tasks.Definition{taskDef("gotham.closecase", okBody)}, func(o *Options) {
+				o.Logger = slog.New(slog.NewTextHandler(logs, nil))
 				o.OnTerminal = func(ctx context.Context, b *storage.Batch, v tasks.RunView) error {
 					mu.Lock()
 					calls++
@@ -387,27 +393,81 @@ func TestOnTerminal_NotificationStagedInTerminalBatch(t *testing.T) {
 				}
 			})
 			id := h.start("gotham.closecase", tasks.StartRequest{})
-			stampedNow := func() bool {
-				_, ok, err := h.stores.Runs.Stamped(context.Background(), subject, "gotham.closecase")
-				if err != nil {
-					t.Fatal(err)
-				}
-				return ok
+			r := h.waitState(id, tasks.StateSucceeded)
+			_, stamped, err := h.stores.Runs.Stamped(context.Background(), subject, "gotham.closecase")
+			if err != nil {
+				t.Fatal(err)
 			}
+			events := h.eventsOf(id)
 			if !fail {
-				h.waitState(id, tasks.StateSucceeded)
-				if !stampedNow() {
+				if !stamped {
 					t.Fatal("run succeeded without the stamp OnTerminal staged in its batch")
+				}
+				if slices.Contains(events, eventNotifyFailed) {
+					t.Fatalf("events %v record a notification failure that did not happen", events)
 				}
 				return
 			}
-			waitFor(t, "OnTerminal", func() bool { mu.Lock(); defer mu.Unlock(); return calls > 0 })
-			time.Sleep(100 * time.Millisecond) // the aborted commit has returned
-			if r := h.get(id); r.State.Terminal() || stampedNow() {
-				t.Fatalf("OnTerminal failed but the run is %s and stamp %v; want neither committed", r.State, stampedNow())
+			if stamped {
+				t.Fatal("OnTerminal failed but the write it staged committed")
+			}
+			mu.Lock()
+			n := calls
+			mu.Unlock()
+			if n != 1 {
+				t.Fatalf("OnTerminal called %d times, want once (the second staging skips it)", n)
+			}
+			if events[len(events)-1] != eventNotifyFailed || r.Seq.Event != uint64(len(events)) {
+				t.Fatalf("events %v (seq %d), want notify_failed last, after the terminal transition", events, r.Seq.Event)
+			}
+			var line string
+			for l, err := range h.x.Log(context.Background(), id, tasks.PageQuery{}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if l.Level == "error" {
+					line = l.Message
+				}
+			}
+			if !strings.Contains(line, "the signal is down") {
+				t.Fatalf("run log error line %q, want the hook's error", line)
+			}
+			if !strings.Contains(logs.String(), "the signal is down") {
+				t.Fatalf("executor log %q does not name the hook's error", logs.String())
 			}
 		})
 	}
+}
+
+// eventsOf lists a run's event names in order.
+func (h *harness) eventsOf(id tasks.RunID) []string {
+	h.t.Helper()
+	var out []string
+	for p, err := range h.stores.Runs.Pages(context.Background(), id, tasks.PageQuery{Page: tasks.PageEvents, Limit: 1000}) {
+		if err != nil {
+			h.t.Fatalf("events: %v", err)
+		}
+		out = append(out, p.Event.Event)
+	}
+	return out
+}
+
+// lockedBuffer is an io.Writer safe for a logger's concurrent writes.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 // waitFor polls cond for 10s of the test's clock.
