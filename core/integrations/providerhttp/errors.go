@@ -6,7 +6,6 @@
 package providerhttp
 
 import (
-	"context"
 	"errors"
 	"time"
 
@@ -100,7 +99,3 @@ func ReasonOf(err error) (Reason, bool) {
 	r := reasonOf(err)
 	return r, r != ""
 }
-
-// parentDone reports whether the caller's context ended (canceled or past its
-// deadline): the attempt says nothing about the remote.
-func parentDone(ctx context.Context) bool { return ctx.Err() != nil }
