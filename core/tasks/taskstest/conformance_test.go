@@ -1,5 +1,5 @@
 // file: core/tasks/taskstest/conformance_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 02f74c7d-36d4-4265-952a-e0ab50353814
 // last-edited: 2026-11-11
 
@@ -75,7 +75,7 @@ func batch(kind tasks.Kind, par tasks.Parallelism) tasks.Definition {
 }
 
 // TestConformance_SelfTest runs Conformance over one valid definition of each
-// shape and three broken ones, expecting failures only for the broken ones,
+// shape and four broken ones, expecting failures only for the broken ones,
 // each under the rule it breaks.
 func TestConformance_SelfTest(t *testing.T) {
 	task := tasks.Task("arkham.inmates.count", tasks.TaskSpec[struct{}, int]{
@@ -102,6 +102,7 @@ func TestConformance_SelfTest(t *testing.T) {
 		}),
 		batch("arkham.inmates.riot", tasks.Parallelism{}),
 		fixer("arkham.inmates.release", nil),
+		fixer("arkham.inmates.parole", &tasks.Approval{}), // an Approval that does not require a plan
 	}
 	r = newRecorder()
 	conformance(r, append(slices.Clone(valid), broken...)...)
@@ -112,6 +113,8 @@ func TestConformance_SelfTest(t *testing.T) {
 		"arkham.inmates.riot/" + AssertParallelismDeclared: false,
 		"arkham.inmates.release/" + AssertNoProblems:       false,
 		"arkham.inmates.release/" + AssertFixerApproval:    false,
+		"arkham.inmates.parole/" + AssertNoProblems:        false,
+		"arkham.inmates.parole/" + AssertFixerApproval:     false,
 	}
 	for _, f := range *r.fails {
 		path, _, _ := strings.Cut(f, ": ")
