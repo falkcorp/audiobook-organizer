@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.15
+// version: 1.0.16
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-11
 
@@ -97,6 +97,10 @@ var coreLayerOf = map[string]int{
 	// staging under integrations' NativeInstanceStore and NativeImporter
 	// (F7-01, 05-metadata M1.4), so it takes integrations' layer (R4).
 	"internal/instancestore": 4,
+	// internal/libfs is the byte-level filesystem layer under library
+	// (F7-06, 05-library 5L.3: the no-replace rename, FICLONE/clonefile,
+	// the chunked copy), so it takes library's layer (R4).
+	"internal/libfs": 4,
 	// L5
 	"acquire": 5,
 	// L6 (internal/<capability>http is coreFamily's pattern)
