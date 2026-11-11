@@ -16,8 +16,6 @@ import (
 	"log/slog"
 	"slices"
 
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
-
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 	ulid "github.com/oklog/ulid/v2"
 )
@@ -292,7 +291,7 @@ func hashBootstrapToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// --- rate-limit state for the bootstrap endpoint: see bootstrap_rate_limit.go ---
+// --- rate-limit state for the bootstrap endpoint: see bootstrap_gate.go (keying) and core/auth/bootstrap_limit.go (the limiter) ---
 
 // --- handler ---
 
@@ -321,7 +320,7 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	// directLANPeer).
 	limitKey, aggs, ip := bootstrapClientKey(c, tunnelConnectorPeers(), remoteAddrIsLocal)
 
-	if !bootstrapLimits.allow(limitKey, aggs...) {
+	if !bootstrapLimits.Allow(limitKey, aggs...) {
 		httputil.RespondWithError(c, http.StatusTooManyRequests, "too many bootstrap attempts — try again later", "TOO_MANY_REQUESTS")
 		return
 	}
