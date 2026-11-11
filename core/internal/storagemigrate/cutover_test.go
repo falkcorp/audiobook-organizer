@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/cutover_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 13f484bd-b5ea-4a6c-9a4b-5f5c3b2727e3
 // last-edited: 2026-11-10
 
@@ -15,13 +15,15 @@ import (
 	"github.com/falkcorp/mediacore/coretest/crashmatrix"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // gothamCutover is the harness's synthetic Cutover-shaped migration over
 // the module gotham: a few thousand case files under a retired claim,
 // four disjoint shards (05-storage §5S.3.13; F2-06's brief).
 func gothamCutover() crashmatrix.SyntheticCutover {
-	return crashmatrix.SyntheticCutover{Owner: "gotham", Spec: storage.Spec{Keyspace: true, Migrations: []storage.Migration{seed()}}}
+	return crashmatrix.SyntheticCutover{Owner: "gotham", Spec: storage.Spec{Keyspace: true, Migrations: []storage.Migration{seed()}},
+		Parallelism: tasks.Fixed(4, "test: four disjoint shards of the fixture, so every shard's chunks are broken")}
 }
 
 // TestCutoverCrashAtEveryChunk is the chunk-boundary crash matrix over the

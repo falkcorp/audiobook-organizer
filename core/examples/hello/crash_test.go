@@ -1,5 +1,5 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
 // last-edited: 2026-11-10
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"github.com/falkcorp/mediacore/storage/restorejournal/restorejournaltest"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // TestBootCrashMatrix is core's instance of the boot crash matrix (05-storage
@@ -71,7 +72,8 @@ type dataMigrationCell struct {
 func dataMigrationCells() []dataMigrationCell {
 	var out []dataMigrationCell
 	for _, l := range crashmatrix.DataMigrationLabels() {
-		s := crashmatrix.SyntheticCutover{Owner: "hello", Spec: hello.New().Manifest().Storage}.Scenario()
+		s := crashmatrix.SyntheticCutover{Owner: "hello", Spec: hello.New().Manifest().Storage,
+			Parallelism: tasks.Fixed(4, "test: four disjoint shards of the fixture, so every shard's chunks are broken")}.Scenario()
 		s.Labels = []string{l}
 		// The chunk's cell breaks every chunk boundary of every shard and a
 		// point inside each chunk; the plan's and the state's break their
