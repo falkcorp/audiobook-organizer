@@ -12,11 +12,10 @@ import (
 	"sort"
 	"strings"
 
-	coreaudit "github.com/falkcorp/mediacore/audit"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreaudit "github.com/falkcorp/mediacore/audit"
 	"github.com/gin-gonic/gin"
 )
 

@@ -17,9 +17,8 @@ import (
 	"sync"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/cockroachdb/pebble/v2"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // The storage half of the admin "merge user B into user A" tool

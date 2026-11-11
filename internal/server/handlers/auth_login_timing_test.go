@@ -12,13 +12,12 @@ import (
 	"testing"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-	authpw "github.com/falkcorp/mediacore/auth/password"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
+	coreauth "github.com/falkcorp/mediacore/auth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/stretchr/testify/require"
 )
 

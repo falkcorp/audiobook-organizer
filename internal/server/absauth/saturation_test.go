@@ -10,9 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
-
 	coreauth "github.com/falkcorp/mediacore/auth"
+	"github.com/gin-gonic/gin"
 )
 
 // TestSaturationPolicy moved to core/auth/ceiling_test.go with the policy (F4-02).

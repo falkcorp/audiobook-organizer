@@ -10,9 +10,8 @@ import (
 	"fmt"
 	"strings"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Footprint is the read-only view behind the "Sign-ins & data" drawer: one

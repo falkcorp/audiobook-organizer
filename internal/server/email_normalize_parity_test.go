@@ -8,9 +8,8 @@ package server
 import (
 	"testing"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // cfaccesspolicy repeats coreauth.NormalizeEmail because it imports no module

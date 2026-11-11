@@ -37,13 +37,12 @@ import (
 	texttemplate "text/template"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 )
