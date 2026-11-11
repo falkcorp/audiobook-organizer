@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/errors.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e3a9c1d4-52b7-4f06-8a1d-7c40b9e2f635
 // last-edited: 2026-11-11
 
@@ -34,8 +34,7 @@ func mapError(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, integrations.ErrForbidden):
-		return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied",
-			Detail: "this needs core:integrations.manage, and setting Local needs core:admin in an interactive session", Err: err}
+		return forbidden(err)
 	case errors.Is(err, integrations.ErrNotConfigured):
 		return &httpapi.Error{Status: http.StatusNotFound, Code: "not_found", Detail: "no such integration instance", Err: err}
 	case errors.Is(err, integrations.ErrFieldLocked):
@@ -64,6 +63,14 @@ func mapError(err error) error {
 	return err
 }
 
+// forbidden is the 403 of a caller that lacks core:integrations.manage (or
+// core:admin for Local); cause is the Registry's refusal, nil for the route's
+// own backstop. The text is fixed.
+func forbidden(cause error) error {
+	return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied",
+		Detail: "this needs core:integrations.manage, and setting Local needs core:admin in an interactive session", Err: cause}
+}
+
 // unauthenticated is the 401 a route answers when no principal reached it.
 // httpapi never passes a nil principal to a non-Public route (stage 13 turns
 // it away), so this is a backstop for a mounting mistake, not the check.
@@ -82,6 +89,23 @@ func (a *api) guard(p *auth.Principal) error {
 		return unauthenticated()
 	case a.reg == nil:
 		return httpapi.Unavailable("integrations are not available", 5*time.Second)
+	}
+	return nil
+}
+
+// guardManage is guard plus the permission check the Registry would make on
+// the write: the principal must hold core:integrations.manage (the predicate
+// of the Registry's writerOf: no checker, or a checker without it, is 403).
+// The router's Perm is the check that matters; this one is a backstop for a
+// mounting mistake, and the routes that answer 404 for a missing instance
+// run it first so that a caller without the permission is turned away
+// before the answer can say whether an instance exists.
+func (a *api) guardManage(p *auth.Principal) error {
+	if err := a.guard(p); err != nil {
+		return err
+	}
+	if p.Perms == nil || !p.Perms.Has(permManage) {
+		return forbidden(nil)
 	}
 	return nil
 }

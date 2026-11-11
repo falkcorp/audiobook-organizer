@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/env_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d2e8b40-a7c3-4f19-95e1-0c3b7a48d256
 // last-edited: 2026-11-11
 
@@ -152,11 +152,40 @@ func (r *recorder) recordCalls() int {
 	return r.calls
 }
 
-// fakeHolds is a HoldReleaser that records its calls.
+// fakeHolds is a HoldReleaser that records its calls. holdOn makes ref hold
+// scope; HeldScope answers from that table alone, as the real one answers
+// from the gate.
 type fakeHolds struct {
 	mu     sync.Mutex
+	held   map[integrations.Ref]string
+	asked  int
 	scopes []string
 	err    error
+}
+
+// holdOn makes ref's active hold be on scope.
+func (f *fakeHolds) holdOn(ref integrations.Ref, scope string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.held == nil {
+		f.held = map[integrations.Ref]string{}
+	}
+	f.held[ref] = scope
+}
+
+func (f *fakeHolds) HeldScope(ref integrations.Ref) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked++
+	scope, ok := f.held[ref]
+	return scope, ok
+}
+
+// heldScopeCalls is how many times HeldScope was asked.
+func (f *fakeHolds) heldScopeCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.asked
 }
 
 func (f *fakeHolds) ReleaseHold(_ context.Context, scope string) error {

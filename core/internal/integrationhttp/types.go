@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/types.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0b7f3a52-6c1e-4d0a-9b84-3f2a7e51c9d4
 // last-edited: 2026-11-11
 
@@ -43,7 +43,7 @@ type IntegrationInstance struct {
 	Local      bool               `json:"local"`
 	Settings   map[string]any     `json:"settings"`
 	SecretsSet map[string]bool    `json:"secrets_set"`
-	Limits     *IntegrationLimits `json:"limits,omitempty"`
+	Limits     *IntegrationLimits `json:"limits"`
 	Version    uint64             `json:"version"`
 	Updated    time.Time          `json:"updated,omitzero"`
 	Locked     map[string]string  `json:"locked,omitempty"`
@@ -134,7 +134,9 @@ type IntegrationHealth struct {
 
 // IntegrationInstanceBody is the body of POST (create), PUT (replace) and the
 // two test routes. It is the editable part of an instance: PUT replaces every
-// field of it, so a client sends the whole form back.
+// field of it, so a client sends the whole form back. PUT takes
+// IntegrationInstanceReplace, which is this body with the replace-required
+// fields made presence-checked.
 //
 // Secrets is write-only. A secret field the body omits, or sends empty, or
 // sends as an echoed or mask-shaped value, keeps its stored secret while no
@@ -156,6 +158,65 @@ type IntegrationInstanceBody struct {
 	// Version is the stored row's version, required on replace (at least 1);
 	// a create names none.
 	Version uint64 `json:"version,omitempty"`
+}
+
+// IntegrationInstanceReplace is the body of PUT. A replace sets every
+// editable field, so each one a client could leave out by mistake is a pointer
+// the route requires (like enabled): an absent or null name, priority, local
+// or limits is a 422, never a silent reset to a zero value. limits is
+// required because nil would erase every override; {} says "inherit
+// everything" and is what GET answers for an instance without overrides. The
+// route is Lenient so the read-only keys a GET answer carries (kind, origin,
+// secrets_set, locked, stored, updated) are accepted and ignored: an answer
+// edited and sent back is a valid body.
+type IntegrationInstanceReplace struct {
+	ID       string             `json:"id,omitempty"`
+	Adapter  string             `json:"adapter,omitempty"`
+	Name     *string            `json:"name"`
+	Enabled  *bool              `json:"enabled"`
+	Priority *int               `json:"priority"`
+	Local    *bool              `json:"local"`
+	Settings map[string]any     `json:"settings,omitempty"`
+	Secrets  map[string]string  `json:"secrets,omitempty"`
+	Limits   *IntegrationLimits `json:"limits"`
+	Version  uint64             `json:"version"`
+}
+
+// validate checks the body against the path's instance ID.
+func (r *IntegrationInstanceReplace) validate(pathID string) []httpapi.FieldError {
+	var errs []httpapi.FieldError
+	for _, f := range []struct {
+		missing bool
+		name    string
+	}{
+		{r.Name == nil, "name"}, {r.Priority == nil, "priority"}, {r.Local == nil, "local"}, {r.Limits == nil, "limits"},
+	} {
+		if f.missing {
+			errs = append(errs, httpapi.Field("/body/"+f.name, "required", f.name+" is required"))
+		}
+	}
+	b := r.body()
+	return append(errs, b.validate(modeReplace, pathID)...)
+}
+
+// body is r as the shared body type. An absent pointer is the zero value:
+// validate has already refused it, and nothing builds a config from a body
+// it refused.
+func (r *IntegrationInstanceReplace) body() IntegrationInstanceBody {
+	b := IntegrationInstanceBody{
+		ID: r.ID, Adapter: r.Adapter, Enabled: r.Enabled, Settings: r.Settings, Secrets: r.Secrets,
+		Limits: r.Limits, Version: r.Version,
+	}
+	if r.Name != nil {
+		b.Name = *r.Name
+	}
+	if r.Priority != nil {
+		b.Priority = *r.Priority
+	}
+	if r.Local != nil {
+		b.Local = *r.Local
+	}
+	return b
 }
 
 // Bounds the route applies before the Registry sees a body. They are sanity
@@ -311,7 +372,8 @@ func classes() []integrations.Class {
 	return out
 }
 
-// parseLimits reads a wire Limits. nil is nil (the instance inherits); every
+// parseLimits reads a wire Limits. nil and a Limits that sets nothing are nil
+// (the instance inherits); every
 // problem is a FieldError under at, with fixed text.
 func parseLimits(l *IntegrationLimits, at string) (*integrations.Limits, []httpapi.FieldError) {
 	if l == nil {
@@ -397,6 +459,10 @@ func parseLimits(l *IntegrationLimits, at string) (*integrations.Limits, []httpa
 	}
 	if len(errs) > 0 {
 		return nil, errs
+	}
+	if reflect.ValueOf(*out).IsZero() {
+		// {} overrides nothing: it is the same as no limits, and is stored as such.
+		return nil, nil
 	}
 	return out, nil
 }
@@ -510,13 +576,74 @@ func instanceView(cfg integrations.InstanceConfig, secretFields map[string]bool)
 		case isSecretShaped(val):
 			v.SecretsSet[f] = true
 		default:
-			v.Settings[f] = val
+			if safe, ok := withoutUserinfo(val); ok {
+				v.Settings[f] = safe
+			}
 		}
 	}
+	// limits is always answered: {} for an instance without overrides, so the
+	// answer edited and sent back satisfies PUT's required limits.
+	v.Limits = &IntegrationLimits{}
 	if cfg.Limits != nil {
-		v.Limits = limitsView(*cfg.Limits)
+		if l := limitsView(*cfg.Limits); l != nil {
+			v.Limits = l
+		}
 	}
 	return v
+}
+
+// withoutUserinfo is v with every URL that carries userinfo left out, ok
+// false when v itself is one. The Registry refuses userinfo in a Put, but an
+// operator-layer value is not a Put: a URL there can carry a credential, and
+// the settings answer is read with core:integrations.read. Leaving the value
+// out is safe for a client that sends the answer back: an operator-locked
+// field may be omitted from a PUT (M1.3 Put). Maps and lists are copied, not
+// edited, because cfg.Settings is the Registry's.
+func withoutUserinfo(v any) (out any, ok bool) {
+	switch x := v.(type) {
+	case string:
+		return v, !carriesUserinfo(x)
+	case []string:
+		kept := make([]string, 0, len(x))
+		for _, e := range x {
+			if !carriesUserinfo(e) {
+				kept = append(kept, e)
+			}
+		}
+		return kept, true
+	case []any:
+		kept := make([]any, 0, len(x))
+		for _, e := range x {
+			if s, ok := withoutUserinfo(e); ok {
+				kept = append(kept, s)
+			}
+		}
+		return kept, true
+	case map[string]any:
+		kept := make(map[string]any, len(x))
+		for k, e := range x {
+			if s, ok := withoutUserinfo(e); ok {
+				kept[k] = s
+			}
+		}
+		return kept, true
+	}
+	return v, true
+}
+
+// carriesUserinfo reports a "scheme://user@host" or "//user@host" shape: an
+// authority (the text after "//" up to "/", "?" or "#") that contains "@".
+// It reads the text and not url.Parse, so an unparsable URL is still caught.
+func carriesUserinfo(s string) bool {
+	i := strings.Index(s, "//")
+	if i < 0 || (i > 0 && s[i-1] != ':') {
+		return false
+	}
+	authority := s[i+2:]
+	if j := strings.IndexAny(authority, "/?#"); j >= 0 {
+		authority = authority[:j]
+	}
+	return strings.Contains(authority, "@") && !strings.ContainsFunc(authority, unicode.IsSpace)
 }
 
 // adapterView renders m.
