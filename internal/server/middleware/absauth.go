@@ -276,7 +276,7 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 			// fall-through path the request may still go on to authenticate as a
 			// real user via its bearer — at which point the token and the person
 			// appear together on one audit line, which is the pairing that makes an
-			// anomaly visible (see coreaudit.AuditEvent.ServiceToken).
+			// anomaly visible (see coreaudit.AuthAttempt.ServiceToken).
 			if cn := oauth.CFAssertionCommonName(err); cn != "" && c != nil {
 				c.Set(contextABSServiceTokenKey, cn)
 			}
@@ -392,15 +392,15 @@ func (r *ABSIdentityResolver) extendSession(c *gin.Context, session *database.AB
 		return
 	}
 	if _, err := r.store.ExtendABSSession(session.ID, now, target, window); err != nil {
-		ev := coreaudit.AuditEvent{
-			Action: "session-extend", Outcome: coreaudit.OutcomeError, Mode: ABSModeJWT,
+		ev := coreaudit.AuthAttempt{
+			Action: "session-extend", Outcome: coreaudit.Error, Mode: ABSModeJWT,
 			UserID: session.UserID, SessionID: session.ID, Reason: "session-extend-failed",
 		}
 		if c != nil && c.Request != nil {
 			ev.SourceIP = c.ClientIP()
 			ev.Path = c.Request.URL.Path
 		}
-		coreaudit.Audit(ev)
+		absauth.AttemptLog.Record(ev)
 	}
 }
 
@@ -604,9 +604,9 @@ func noteServiceTokenPairing(commonName string, id *ABSIdentity) {
 	if loaded && prev == id.User.ID {
 		return // already reported for this person
 	}
-	coreaudit.Audit(coreaudit.AuditEvent{
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
 		Action:       "service-token-pairing",
-		Outcome:      coreaudit.OutcomeSuccess,
+		Outcome:      coreaudit.Success,
 		Mode:         id.Mode,
 		UserID:       id.User.ID,
 		Username:     id.User.Username,
@@ -651,7 +651,7 @@ func AbortABSAuth(c *gin.Context, action string, e *ABSAuthError) {
 	if e == nil {
 		return
 	}
-	coreaudit.Audit(coreaudit.AuditEvent{
+	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
 		Action:    action,
 		Outcome:   absOutcomeForStatus(e.Status),
 		Mode:      e.Mode,
@@ -674,13 +674,13 @@ func AbortABSAuth(c *gin.Context, action string, e *ABSAuthError) {
 func absOutcomeForStatus(status int) coreaudit.Outcome {
 	switch {
 	case status >= 500:
-		return coreaudit.OutcomeError
+		return coreaudit.Error
 	case status == http.StatusForbidden:
-		return coreaudit.OutcomeDenied
+		return coreaudit.Denied
 	case status == http.StatusTooManyRequests:
-		return coreaudit.OutcomeThrottled
+		return coreaudit.Throttled
 	default:
-		return coreaudit.OutcomeFailure
+		return coreaudit.Failure
 	}
 }
 

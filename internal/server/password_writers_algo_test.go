@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+
 	authpw "github.com/falkcorp/mediacore/auth/password"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -44,7 +46,7 @@ func TestAcceptInvite_StoresArgon2idHash(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	assert.Equal(t, authpw.AlgoArgon2id, user.PasswordHashAlgo)
-	ok, _ := authpw.VerifyPassword(user.PasswordHashAlgo, user.PasswordHash, "supersecret")
+	ok, _ := absauth.Passwords.Verify(user.PasswordHashAlgo, user.PasswordHash, "supersecret")
 	assert.True(t, ok)
 }
 
@@ -60,6 +62,6 @@ func TestFindOrCreateAdminUser_StoresArgon2idHash(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, authpw.AlgoArgon2id, stored.PasswordHashAlgo)
-	ok, _ := authpw.VerifyPassword(stored.PasswordHashAlgo, stored.PasswordHash, generated)
+	ok, _ := absauth.Passwords.Verify(stored.PasswordHashAlgo, stored.PasswordHash, generated)
 	assert.True(t, ok)
 }

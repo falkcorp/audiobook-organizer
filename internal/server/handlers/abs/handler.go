@@ -31,7 +31,6 @@ import (
 	"time"
 
 	coreauth "github.com/falkcorp/mediacore/auth"
-	authpw "github.com/falkcorp/mediacore/auth/password"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
@@ -591,10 +590,10 @@ func New(o Options) (*Handler, error) {
 	if name == "" {
 		name = "Books"
 	}
-	authpw.WarmLoginDummy() // so the first login for an unknown name costs what any other does
+	absauth.Passwords.Warm() // so the first login for an unknown name costs what any other does
 	throttle := o.Throttle
 	if throttle == nil {
-		throttle = coreauth.NewThrottle()
+		throttle = coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil)
 	}
 	h := &Handler{
 		cfg:                     o.Config,

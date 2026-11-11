@@ -52,7 +52,7 @@ func failRefresh(t *testing.T, h *harness, visitor string) int {
 func TestLoginThrottle_DefaultKeyIsOneBucketPerPeer(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil)
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range coreauth.MaxFailuresPerIP {
+	for i := range coreauth.DefaultMaxFailuresPerSource {
 		if code := failLogin(t, h, "192.0.2.10"); code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: %d, want 401", i, code)
 		}
@@ -65,7 +65,7 @@ func TestLoginThrottle_DefaultKeyIsOneBucketPerPeer(t *testing.T) {
 func TestLoginThrottle_ThrottleKeySeparatesVisitorsBehindOnePeer(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey())
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range coreauth.MaxFailuresPerIP {
+	for i := range coreauth.DefaultMaxFailuresPerSource {
 		if code := failLogin(t, h, "192.0.2.10"); code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: %d, want 401", i, code)
 		}
@@ -86,7 +86,7 @@ func TestLoginThrottle_ThrottleKeySeparatesVisitorsBehindOnePeer(t *testing.T) {
 func TestRefreshThrottle_UsesTheSameVisitorKeyAsLogin(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey())
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range coreauth.MaxFailuresPerIP {
+	for i := range coreauth.DefaultMaxFailuresPerSource {
 		if code := failRefresh(t, h, "192.0.2.10"); code != http.StatusUnauthorized {
 			t.Fatalf("refresh attempt %d: %d, want 401", i, code)
 		}
@@ -112,7 +112,7 @@ func TestRefreshThrottle_UsesTheSameVisitorKeyAsLogin(t *testing.T) {
 func TestLoginThrottle_EmptyThrottleKeyFallsBackToThePeer(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey())
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for i := range coreauth.MaxFailuresPerIP {
+	for i := range coreauth.DefaultMaxFailuresPerSource {
 		if code := failLogin(t, h, ""); code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: %d, want 401", i, code)
 		}
@@ -124,7 +124,7 @@ func TestLoginThrottle_EmptyThrottleKeyFallsBackToThePeer(t *testing.T) {
 
 // quickThrottle is a shared Throttle whose failure delay is a no-op.
 func quickThrottle() *coreauth.Throttle {
-	t := coreauth.NewThrottle()
+	t := coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil)
 	t.SetSleep(func(time.Duration) {})
 	return t
 }
@@ -195,7 +195,7 @@ func TestLoginThrottle_SharedThrottleCountsFailuresFromElsewhere(t *testing.T) {
 	shared := quickThrottle()
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = shared })
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for range coreauth.MaxFailuresPerIP {
+	for range coreauth.DefaultMaxFailuresPerSource {
 		shared.RecordFailure(coreauth.AccountKey("owner"), "192.0.2.52") // as the web login would
 	}
 	if code := okLogin(h, t, "192.0.2.52", "owner", "pw-pw-pw-pw"); code != http.StatusTooManyRequests {

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+
 	authpw "github.com/falkcorp/mediacore/auth/password"
 )
 
@@ -30,7 +32,7 @@ import (
 // SetHashCostForTest panics outside a test binary and once the dummy hash is
 // built, so it must be the first thing here, before any test code runs.
 func TestMain(m *testing.M) {
-	authpw.SetHashCostForTest(1, 64)
+	absauth.Passwords = authpw.New(authpw.Options{Time: 1, MemoryKiB: 64})
 	os.Exit(m.Run())
 }
 
@@ -38,7 +40,7 @@ func TestMain(m *testing.M) {
 // speed-up this package's login-throttle tests depend on is otherwise silent,
 // and losing it would show up only as a package that runs 4x longer.
 func TestMainLoweredTheHashCost(t *testing.T) {
-	_, hash, err := authpw.HashPassword("Gotham")
+	_, hash, err := absauth.Passwords.Hash("Gotham")
 	if err != nil {
 		t.Fatal(err)
 	}
