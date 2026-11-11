@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/redact_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f1fdc2e-3b2b-4a8b-a3a5-2d8f9e0b7d11
 // last-edited: 2026-11-11
 
@@ -374,6 +374,8 @@ func TestWaitFor_NeverOverflows(t *testing.T) {
 		{1, 2, 500 * time.Millisecond},
 		{1, 1, time.Second},
 		{1e-12, 1000, 1}, // never zero: a taker that owes must wait
+		{0, 1, 1},        // nothing owed rounds to the minimum too
+		{-3, 1, 1},       // so does a negative debt
 		{1, 1e-300, maxBucketWait},
 		{1e18, 1, maxBucketWait},
 		{1, 0, maxBucketWait},
