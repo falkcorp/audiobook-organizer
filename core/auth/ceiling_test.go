@@ -644,9 +644,7 @@ func TestLoginCeiling_ConcurrentLoginsKeepExactCounts(t *testing.T) {
 	var wg sync.WaitGroup
 	const workers, each = 8, 20
 	for w := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			visitor := fmt.Sprintf("192.0.2.%d", w+1)
 			for i := range each {
 				outcome := LoginOther
@@ -658,7 +656,7 @@ func TestLoginCeiling_ConcurrentLoginsKeepExactCounts(t *testing.T) {
 					t.Errorf("visitor %s login %d refused %d", visitor, i, d.Refusal)
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	g, c := l.Failures("192.0.2.45")

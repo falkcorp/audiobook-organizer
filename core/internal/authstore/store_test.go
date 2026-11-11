@@ -153,8 +153,8 @@ func TestStoredKeyWithoutScopeIsUndecodable(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 	for name, scopes := range map[string][]rbac.Permission{"nil": nil, "empty": {}} {
-		rec := keyRecord{APIKey: auth.APIKey{ID: "01JK" + strings.ToUpper(name), Owner: "01JBRUCE", Scopes: scopes,
-			Status: auth.KeyActive, ExpiresAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)}, Hash: strings.Repeat("ab", 32)}
+		rec := keyRecord{ID: "01JK" + strings.ToUpper(name), Owner: "01JBRUCE", Scopes: scopes,
+			Status: auth.KeyActive, ExpiresAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), Hash: strings.Repeat("ab", 32)}
 		raw, err := codec.JSON[keyRecord](1).Encode(rec)
 		if err != nil {
 			t.Fatal(err)
@@ -171,8 +171,8 @@ func TestStoredKeyWithoutScopeIsUndecodable(t *testing.T) {
 // read as active (§4.4, early fix 3).
 func TestStoredKeyRevokedAtWithLiveStatusIsUndecodable(t *testing.T) {
 	st := newStore(t)
-	rec := keyRecord{APIKey: auth.APIKey{ID: "01JKBANE", Owner: "01JBRUCE", Scopes: []rbac.Permission{"gotham:patrol"},
-		Status: auth.KeyActive, RevokedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)},
+	rec := keyRecord{ID: "01JKBANE", Owner: "01JBRUCE", Scopes: []rbac.Permission{"gotham:patrol"},
+		Status: auth.KeyActive, RevokedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
 		Hash: strings.Repeat("cd", 32)}
 	raw, err := codec.JSON[keyRecord](1).Encode(rec)
 	if err != nil {

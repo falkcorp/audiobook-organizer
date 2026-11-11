@@ -439,8 +439,8 @@ func sessionNoToken(t *testing.T, fx Fixture) {
 func stringsOf(v any) string {
 	rv := reflect.Indirect(reflect.ValueOf(v))
 	var sb strings.Builder
-	for i := range rv.NumField() {
-		if f := rv.Field(i); f.Kind() == reflect.String {
+	for _, f := range rv.Fields() {
+		if f.Kind() == reflect.String {
 			sb.WriteString(f.String())
 			sb.WriteByte('|')
 		}
