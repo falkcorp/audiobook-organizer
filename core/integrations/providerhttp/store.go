@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ec22f9ca-2b95-466e-b63c-1d0ae214f66c
 // last-edited: 2026-11-11
 
@@ -36,6 +36,14 @@ type GateStore interface {
 	Holds(ctx context.Context) ([]integrations.Hold, error)
 	// PutHold stores h; a zero h.Until deletes the scope's record.
 	PutHold(ctx context.Context, h integrations.Hold) error
+	// Scopes lists the persisted ref-to-scope mappings: the scope every
+	// instance whose Policy.Scope is not the default names, so a hold on a
+	// shared or custom scope is found by ref (HoldFor, ReleaseAuthHold) before
+	// the instance is built again after a restart.
+	Scopes(ctx context.Context) (map[integrations.Ref]string, error)
+	// PutScope records ref's scope; an empty scope deletes the record (the
+	// default scope needs none).
+	PutScope(ctx context.Context, ref integrations.Ref, scope string) error
 	// Quota returns the newest stored day of the counter and its count;
 	// ("", 0, nil) when it has none.
 	Quota(ctx context.Context, scope, counter string) (day string, used int, err error)
@@ -52,9 +60,10 @@ const Owner storage.Owner = "core/providerhttp"
 func StorageSpec() storage.Spec { return storage.Spec{Keyspace: true} }
 
 const (
-	holdsSeg = "holds"
-	quotaSeg = "quota"
-	dayForm  = "2006-01-02"
+	holdsSeg  = "holds"
+	quotaSeg  = "quota"
+	scopesSeg = "scopes"
+	dayForm   = "2006-01-02"
 )
 
 // quotaCount is the value of c/providerhttp/quota/<scope>/<counter>/<day>.
@@ -67,6 +76,7 @@ type quotaCount struct {
 //
 //	holds/<scope>                  codec.JSON[integrations.Hold](1)
 //	quota/<scope>/<counter>/<day>  codec.JSON[quotaCount](1)
+//	scopes/<kind>/<instance>       codec.JSON[scopeRow](1)
 //
 // Each segment is one escaped key segment, so a scope or counter holding any
 // byte stays inside its own prefix.
@@ -75,6 +85,15 @@ func NativeGateStore(ks storage.Keyspace) GateStore { return nativeStore{ks: ks}
 type nativeStore struct{ ks storage.Keyspace }
 
 func holdKey(scope string) []byte { return keys.Join(keys.Str(holdsSeg), keys.Str(scope)) }
+
+// scopeRow is the value of c/providerhttp/scopes/<kind>/<instance>.
+type scopeRow struct {
+	Scope string `json:"scope"`
+}
+
+func scopeKey(ref integrations.Ref) []byte {
+	return keys.Join(keys.Str(scopesSeg), keys.Str(string(ref.Kind)), keys.Str(string(ref.Instance)))
+}
 
 func quotaPrefix(scope, counter string) []byte {
 	return keys.Prefix(keys.Str(quotaSeg), keys.Str(scope), keys.Str(counter))
@@ -113,6 +132,42 @@ func (s nativeStore) PutHold(ctx context.Context, h integrations.Hold) error {
 		return err
 	}
 	return s.ks.Set(ctx, holdKey(h.Scope), raw)
+}
+
+// Scopes skips a row it cannot decode or whose key is not a valid Ref: a
+// mapping is a lookup aid, and one damaged row must not hide the rest.
+func (s nativeStore) Scopes(ctx context.Context) (map[integrations.Ref]string, error) {
+	out := map[integrations.Ref]string{}
+	for kv, err := range s.ks.ScanPrefix(ctx, keys.Prefix(keys.Str(scopesSeg))) {
+		if err != nil {
+			return nil, fmt.Errorf("providerhttp: read scopes: %w", err)
+		}
+		segs, serr := keys.Split(kv.Key)
+		if serr != nil || len(segs) != 3 {
+			continue
+		}
+		ref := integrations.Ref{Kind: integrations.Kind(segs[1]), Instance: integrations.InstanceID(segs[2])}
+		row, derr := codec.JSON[scopeRow](1).Decode(kv.Value)
+		if derr != nil || row.Scope == "" || ref.Validate() != nil {
+			continue
+		}
+		out[ref] = row.Scope
+	}
+	return out, nil
+}
+
+func (s nativeStore) PutScope(ctx context.Context, ref integrations.Ref, scope string) error {
+	if err := ref.Validate(); err != nil {
+		return fmt.Errorf("providerhttp: scope record: %w", err)
+	}
+	if scope == "" {
+		return s.ks.Delete(ctx, scopeKey(ref))
+	}
+	raw, err := codec.JSON[scopeRow](1).Encode(scopeRow{Scope: scope})
+	if err != nil {
+		return err
+	}
+	return s.ks.Set(ctx, scopeKey(ref), raw)
 }
 
 // Quota reads the newest day; a row that cannot be decoded is an error (the
@@ -173,13 +228,32 @@ func (s nativeStore) PutQuota(ctx context.Context, scope, counter, day string, u
 
 // memStore is the in-memory GateStore of Options.Store == nil.
 type memStore struct {
-	mu    sync.Mutex
-	holds map[string]integrations.Hold
-	quota map[string]map[string]int // scope\x00counter -> day -> used
+	mu     sync.Mutex
+	holds  map[string]integrations.Hold
+	scopes map[integrations.Ref]string
+	quota  map[string]map[string]int // scope\x00counter -> day -> used
 }
 
 func newMemStore() *memStore {
-	return &memStore{holds: map[string]integrations.Hold{}, quota: map[string]map[string]int{}}
+	return &memStore{holds: map[string]integrations.Hold{}, scopes: map[integrations.Ref]string{},
+		quota: map[string]map[string]int{}}
+}
+
+func (m *memStore) Scopes(context.Context) (map[integrations.Ref]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.scopes), nil
+}
+
+func (m *memStore) PutScope(_ context.Context, ref integrations.Ref, scope string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if scope == "" {
+		delete(m.scopes, ref)
+		return nil
+	}
+	m.scopes[ref] = scope
+	return nil
 }
 
 func (m *memStore) Holds(context.Context) ([]integrations.Hold, error) {

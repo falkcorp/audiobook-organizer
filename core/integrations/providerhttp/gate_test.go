@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ed269bb8-8872-4b1a-8da7-6673ea480c40
 // last-edited: 2026-11-11
 
@@ -24,7 +24,7 @@ func TestBucketSharedAcrossClientsOfScope(t *testing.T) {
 	clk := newClock()
 	r := newRegistry(t, clk)
 	srv, _ := server(t, ok)
-	p := providerhttp.Policy{Limits: limits(1, 1), Private: anyPrivate, Scope: "gotham"}
+	p := providerhttp.Policy{Limits: limits(1, 1), Trust: lanTrust, Scope: "gotham"}
 	a, b := r.Client(ref("alfred"), p), r.Client(ref("barbara"), p)
 	for _, c := range []*providerhttp.Client{a, b, a, b} {
 		if _, err := get(t, c, srv.URL); err != nil {
@@ -36,7 +36,7 @@ func TestBucketSharedAcrossClientsOfScope(t *testing.T) {
 		t.Fatalf("waits = %v, want three of 1s from one shared bucket", got)
 	}
 	// Another scope has its own bucket.
-	c := r.Client(ref("selina"), providerhttp.Policy{Limits: limits(1, 1), Private: anyPrivate, Scope: "metropolis"})
+	c := r.Client(ref("selina"), providerhttp.Policy{Limits: limits(1, 1), Trust: lanTrust, Scope: "metropolis"})
 	if _, err := get(t, c, srv.URL); err != nil || len(clk.Sleeps()) != 3 {
 		t.Fatalf("a client of another scope must not wait: %v, waits %v", err, clk.Sleeps())
 	}
@@ -48,7 +48,7 @@ func TestSetLimitsMutatesInPlace(t *testing.T) {
 	clk := newClock()
 	r := newRegistry(t, clk)
 	srv, _ := server(t, ok)
-	p := providerhttp.Policy{Limits: limits(1, 1), Private: anyPrivate, Scope: "gotham"}
+	p := providerhttp.Policy{Limits: limits(1, 1), Trust: lanTrust, Scope: "gotham"}
 	a, b := r.Client(ref("alfred"), p), r.Client(ref("barbara"), p)
 	if _, err := get(t, a, srv.URL); err != nil { // spends the one token
 		t.Fatal(err)
@@ -75,8 +75,8 @@ func TestRebuildWithNewLimitsResizesInPlace(t *testing.T) {
 	clk := newClock()
 	r := newRegistry(t, clk)
 	srv, _ := server(t, ok)
-	old := r.Client(batcave, providerhttp.Policy{Limits: limits(1, 1), Private: anyPrivate})
-	_ = r.Client(batcave, providerhttp.Policy{Limits: limits(500, 500), Private: anyPrivate})
+	old := r.Client(batcave, providerhttp.Policy{Limits: limits(1, 1), Trust: lanTrust})
+	_ = r.Client(batcave, providerhttp.Policy{Limits: limits(500, 500), Trust: lanTrust})
 	clk.Advance(time.Second)
 	for range 10 {
 		if _, err := get(t, old, srv.URL); err != nil {
@@ -100,7 +100,7 @@ func TestHoldPersistsAcrossRegistryRestart(t *testing.T) {
 	gs := providerhttp.NativeGateStore(store(t))
 	r1 := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = gs })
 	srv, hits := server(t, rateLimited)
-	p := providerhttp.Policy{Limits: limits(100, 100), Private: anyPrivate}
+	p := providerhttp.Policy{Limits: limits(100, 100), Trust: lanTrust}
 	if resp, err := get(t, r1.Client(batcave, p), srv.URL); err != nil || resp.StatusCode != 429 {
 		t.Fatalf("first request = %v, %v", resp, err)
 	}
@@ -433,6 +433,7 @@ func TestQuotaDayRollsInZone(t *testing.T) {
 type failingStore struct {
 	providerhttp.GateStore
 	failQuota, failPut, failHolds atomic.Bool
+	holdReads                     atomic.Int64 // Holds calls, failed or not
 }
 
 var errStore = errors.New("the keyspace is gone")
@@ -452,6 +453,7 @@ func (f *failingStore) PutQuota(ctx context.Context, s, c, d string, n int) erro
 }
 
 func (f *failingStore) Holds(ctx context.Context) ([]integrations.Hold, error) {
+	f.holdReads.Add(1)
 	if f.failHolds.Load() {
 		return nil, errStore
 	}
@@ -467,7 +469,7 @@ func TestQuotaStoreReadFailureFailsClosed(t *testing.T) {
 	srv, hits := server(t, ok)
 	lim := limits(1000, 1000)
 	lim.Daily = daily(100, 100)
-	c := r.Client(batcave, providerhttp.Policy{Limits: lim, Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: lim, Trust: lanTrust})
 	fs.failQuota.Store(true)
 	_, err := get(t, c, srv.URL)
 	if !errors.Is(err, providerhttp.ErrBudgetUnavailable) || !refusedFor(err, providerhttp.ReasonQuota) {
@@ -501,7 +503,7 @@ func TestHoldStoreReadFailureFailsOpen(t *testing.T) {
 	fs.failHolds.Store(true)
 	r := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = fs })
 	srv, _ := server(t, rateLimited)
-	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Private: anyPrivate})
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Trust: lanTrust})
 	if _, err := get(t, c, srv.URL); err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +572,7 @@ func TestGate_DisabledRefusesBeforeDial(t *testing.T) {
 	srv, hits := server(t, ok)
 	lim := limits(100, 100)
 	lim.Daily = daily(10, 10)
-	p := providerhttp.Policy{Limits: lim, Private: anyPrivate}
+	p := providerhttp.Policy{Limits: lim, Trust: lanTrust}
 	c := r.Client(batcave, p)
 	disabled.Store(true)
 	for range 3 {

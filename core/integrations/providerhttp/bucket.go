@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/bucket.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a558073-47dd-4119-bd3a-734824d03325
 // last-edited: 2026-11-11
 
@@ -48,7 +48,22 @@ func (b *bucket) reserve() time.Duration {
 	if b.tokens >= 0 {
 		return 0
 	}
-	return time.Duration(math.Ceil(-b.tokens / b.rps * float64(time.Second)))
+	return waitFor(-b.tokens, b.rps)
+}
+
+// maxBucketWait caps one taker's wait: a limit so low that the wait would not
+// fit a time.Duration (or would outlive any caller) is an hour-scale stall, not
+// an overflow into a negative delay that lets the request through unpaced.
+const maxBucketWait = 24 * time.Hour
+
+// waitFor is how long owing tokens at rps takes to earn, clamped to
+// [1ns, maxBucketWait]; an rps that is not positive waits the maximum.
+func waitFor(owing, rps float64) time.Duration {
+	secs := owing / rps
+	if !(rps > 0) || math.IsNaN(secs) || secs >= maxBucketWait.Seconds() {
+		return maxBucketWait
+	}
+	return max(time.Duration(math.Ceil(secs*float64(time.Second))), 1)
 }
 
 // giveBack returns a reserved token whose taker gave up.

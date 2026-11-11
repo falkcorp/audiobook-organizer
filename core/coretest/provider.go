@@ -1,5 +1,5 @@
 // file: core/coretest/provider.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f6331f4a-648c-4e98-acfd-83f2e7a28010
 // last-edited: 2026-11-11
 
@@ -313,7 +313,7 @@ func (k *ProviderHTTPKit) URL() string { return k.Server.URL }
 func (k *ProviderHTTPKit) Host() string { return k.Server.Listener.Addr().String() }
 
 // Client builds ref's client with lim and the upstream trusted for private
-// addresses (it is on loopback).
+// addresses: its host:port is the Registry's lan_allow (it is on loopback).
 func (k *ProviderHTTPKit) Client(ref integrations.Ref, lim integrations.Limits) *providerhttp.Client {
-	return k.Registry.Client(ref, providerhttp.Policy{Limits: lim, Private: func(string) bool { return true }})
+	return k.Registry.Client(ref, providerhttp.Policy{Limits: lim})
 }

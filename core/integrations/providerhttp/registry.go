@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/registry.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 76674dec-435f-4e2d-a9aa-515d33dd8a4c
 // last-edited: 2026-11-11
 
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/internal/keyedmutex"
 )
 
 // Registry is per-App, never a package global (R5). It owns the gate state of
@@ -37,20 +38,32 @@ type Registry struct {
 	// request.
 	strict, lan *http.Transport
 
-	mu       sync.Mutex
-	scopes   map[string]*scopeState
-	refScope map[integrations.Ref]string
+	mu             sync.Mutex
+	scopes         map[string]*scopeState
+	refScope       map[integrations.Ref]string
+	scopePersisted map[integrations.Ref]string // what the store holds: "" = no record
 
-	hmu    sync.Mutex
-	holds  map[string]integrations.Hold
-	warned atomic.Bool
+	// The hold table (holdtable.go): hlock serialises one scope's hold writes,
+	// hmu guards the map and is never held across a store call; slock does the
+	// same for one ref's scope record.
+	hlock, slock keyedmutex.Mutex
+	hmu          sync.Mutex
+	holds        map[string]integrations.Hold
+	warned       atomic.Bool
+
+	// The lazy retry of the boot read (ensureState).
+	stateLoaded  atomic.Bool
+	loadMu       sync.Mutex
+	nextLoad     time.Time // guarded by loadMu
+	stateRetried bool      // guarded by loadMu
 }
 
 // New builds a Registry, loading the persisted holds before any instance is
 // built (M2.4). It does no network I/O.
 func New(opts Options) (*Registry, error) {
 	r := &Registry{o: opts, log: opts.Log, now: opts.Now, store: opts.Store,
-		scopes: map[string]*scopeState{}, refScope: map[integrations.Ref]string{}, holds: map[string]integrations.Hold{}}
+		scopes: map[string]*scopeState{}, refScope: map[integrations.Ref]string{},
+		scopePersisted: map[integrations.Ref]string{}, holds: map[string]integrations.Hold{}}
 	if r.log == nil {
 		r.log = slog.New(slog.DiscardHandler)
 	}
@@ -66,7 +79,7 @@ func New(opts Options) (*Registry, error) {
 	}
 	r.strict = r.newTransport(false)
 	r.lan = r.newTransport(true)
-	r.loadHolds()
+	r.ensureState()
 	return r, nil
 }
 
@@ -78,7 +91,10 @@ func (r *Registry) newTransport(allowPrivate bool) *http.Transport {
 	} else {
 		t = http.DefaultTransport.(*http.Transport).Clone()
 	}
-	d := &Dialer{AllowPrivate: allowPrivate, LookupIP: r.o.Resolver, DialAddr: r.o.DialAddr}
+	d := newGuard(allowPrivate, r.o.Resolver, r.o.DialAddr, r.log)
+	if t.TLSClientConfig != nil { // Clone gave this transport its own copy
+		t.TLSClientConfig.InsecureSkipVerify = false // a base that skips verification must not make every provider call unverified
+	}
 	t.Proxy = nil // a proxy would resolve and connect on the guard's behalf
 	t.DialContext = d.DialContext
 	t.DialTLSContext = nil
@@ -129,6 +145,7 @@ func (r *Registry) jitter(d time.Duration) time.Duration {
 // state on first use and applying p.Limits to it in place afterwards: a
 // rebuilt instance with new limits resizes the one bucket (HEAD defect 1).
 func (r *Registry) gateFor(ref integrations.Ref, p Policy) *gate {
+	r.ensureState()
 	name := p.Scope
 	if name == "" {
 		name = ref.String()
@@ -142,8 +159,15 @@ func (r *Registry) gateFor(ref integrations.Ref, p Policy) *gate {
 	}
 	r.refScope[ref] = name
 	r.mu.Unlock()
+	if r.stateLoaded.Load() { // before the first read the mapping is written by that read
+		r.persistScope(context.Background(), ref)
+	}
 	sc.setLimits(lim)
-	return &gate{r: r, ref: ref, pol: p, sc: sc}
+	scr := newScrubber(p.Redact)
+	if p.QueryCredential != nil {
+		scr = scr.withExtra(p.QueryCredential.Name)
+	}
+	return &gate{r: r, ref: ref, pol: p, sc: sc, scr: scr, private: r.privateFor(p.Trust), qc: p.QueryCredential}
 }
 
 // GateFor returns the gate alone, for SMTP and subprocess adapters.
@@ -165,14 +189,16 @@ func (r *Registry) Client(ref integrations.Ref, p Policy) *Client {
 // private address only on the origins its Trust lists and on lan_allow.
 func (r *Registry) Outbound(spec integrations.OutboundSpec) (integrations.HTTP, integrations.Gate) {
 	c := r.Client(spec.Ref, Policy{
-		Limits:  MergeLimits(spec.Limits, spec.Override),
-		Egress:  spec.Egress,
-		Private: r.privateFor(spec.Trust),
+		Limits:          MergeLimits(spec.Limits, spec.Override),
+		Egress:          spec.Egress,
+		Trust:           spec.Trust,
+		Redact:          spec.Redact,
+		QueryCredential: spec.QueryCredential,
 	})
 	return c, c.Gate()
 }
 
-// privateFor is the Policy.Private of an instance whose Trust is t.
+// privateFor is the per-request test of an instance whose Trust is t.
 func (r *Registry) privateFor(t integrations.Trust) func(string) bool {
 	bound := make(map[string]bool, len(t.PrivateOrigins))
 	for _, o := range t.PrivateOrigins {
