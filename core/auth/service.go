@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -136,6 +136,14 @@ type Settings struct {
 	// DisabledAllowRemote is core.auth.disabled_allow_remote: nil takes
 	// Options.DefaultDisabledAllowRemote. Read once, by New.
 	DisabledAllowRemote *bool
+	// BootstrapEnabled is core.auth.bootstrap.enabled (§4.6 item 1): nil takes
+	// the default, true. Read by BootWrites.
+	BootstrapEnabled *bool
+	// ReadOnlyKey and ReadOnlyKeyScopes are core.auth.bootstrap.readonly_key
+	// .enabled (default false) and .scopes (default ["core:system.view"]):
+	// the start-up read-only key BootWrites mints (§4.6 item 6).
+	ReadOnlyKey       bool
+	ReadOnlyKeyScopes []rbac.Permission
 }
 
 func (s Settings) withDefaults() Settings {
