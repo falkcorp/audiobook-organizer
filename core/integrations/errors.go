@@ -110,6 +110,14 @@ func (e *Error) Error() string {
 	return msg
 }
 
+// GoString is e for %#v without its Detail, which is replaced by its
+// length: a Go-syntax dump of an error must not carry the body excerpt
+// Error() leaves out.
+func (e *Error) GoString() string {
+	return fmt.Sprintf("&integrations.Error{Ref:%q, Op:%q, Class:%s, Status:%d, RetryAfter:%s, Detail:<%d bytes redacted>, Err:%v}",
+		e.Ref.String(), e.Op, e.Class, e.Status, e.RetryAfter, len(e.Detail), e.Err)
+}
+
 // Unwrap returns e.Err.
 func (e *Error) Unwrap() error { return e.Err }
 

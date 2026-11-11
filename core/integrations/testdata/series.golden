@@ -1,0 +1,13 @@
+# file: core/integrations/testdata/series.golden
+# version: 1.0.0
+# guid: d012e490-3c3b-483c-ac7f-51dd7eb041e3
+# last-edited: 2026-11-11
+#
+# The mediacore.integrations scope's series (05-metadata M1.8):
+# family<TAB>type<TAB>labels, checked by metricstest.AssertSeries in
+# TestIntegrationsSeries_Golden. The two gauges are observed from the
+# Registry's instance snapshot; health_probe carries no instance label (C5).
+mediacore_integrations_health_probe_seconds	histogram	adapter,kind
+mediacore_integrations_health_status	gauge	instance,kind
+mediacore_integrations_instances	gauge	adapter,kind,status
+mediacore_integrations_swaps_total	counter	instance,kind

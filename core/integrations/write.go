@@ -192,7 +192,7 @@ func readableSettings(stored *StoredInstance) map[string]any {
 
 // putPlan is one validated Put, ready to stage.
 type putPlan struct {
-	row           StoredInstance
+	row    StoredInstance
 	writes []secrets.Write
 	events []audit.Event
 	// newCredentials is set when the Put writes a secret value: the human
@@ -576,9 +576,15 @@ func (r *Registry) test(ctx context.Context, w writer, inst InstanceConfig, secr
 // runTest builds s, runs Health and the kind's extra test, and closes it.
 // The result carries only OK, the Class and a status (SEC-15).
 func (r *Registry) runTest(ctx context.Context, s *slot) TestResult {
+	if msg := r.secretFinding(ctx, s); msg != "" {
+		// The static findings Health reports come first: a required secret
+		// the test has nothing to send for is the config's fault.
+		c, _ := healthClass(HealthMisconfigured)
+		return TestResult{Class: c}
+	}
 	inst, err := r.build(ctx, s)
 	if err != nil {
-		return TestResult{Class: classOrInvalid(ctx, err)}
+		return TestResult{Class: buildClass(err)}
 	}
 	defer func() {
 		if err := inst.Close(); err != nil {
@@ -621,11 +627,12 @@ func healthClass(s HealthStatus) (Class, bool) {
 	return ClassUnknown, true
 }
 
-// classOrInvalid classifies a build failure: an unrecognised one is the
-// settings' fault (a build does no I/O, M1.4).
-func classOrInvalid(ctx context.Context, err error) Class {
-	if c := ClassOf(ctx, err); c != ClassUnknown {
-		return c
+// buildClass classifies a build failure: the adapter's own *Error gives
+// its Class; anything else is the settings' fault (a build does no I/O,
+// M1.4), never the Registry's wrapping of it.
+func buildClass(err error) Class {
+	if e, ok := errors.AsType[*Error](err); ok {
+		return e.Class
 	}
 	return ClassInvalid
 }
