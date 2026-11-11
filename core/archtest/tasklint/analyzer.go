@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/analyzer.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 48295d11-35d4-4ecf-b2e5-cb82b9451d3d
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package tasklint is the type-aware go/analysis check of core/tasks
 // definitions (05-tasks §5T.8.4), moved from ABO's tools/cmd/oplint (04 §8.2).
@@ -13,10 +13,11 @@
 //	unregistered-kind       a tasks.Task, tasks.Batch or tasks.Fixer call, or a
 //	                        call of a helper returning tasks.Definition that
 //	                        builds one, that no tasks.Definition argument of a
-//	                        Registrar.Tasks or Registrar.DerivedIndex call reaches,
-//	                        following what values are built from (a function
-//	                        stands for its returns, so a kind built and
-//	                        discarded is reported)
+//	                        Registrar.Tasks or Registrar.DerivedIndex call reaches
+//	                        (reaching a function covers its whole body), or one
+//	                        that is plainly thrown away wherever it is: a bare
+//	                        statement, an assignment to _, or a local read only
+//	                        by _ =
 //	                        (nor, with -list-funcs, a called package-level func
 //	                        returning []tasks.Definition: 05-tasks §5T.8.2 rule
 //	                        4's books list functions, until the F5 flip). Run
