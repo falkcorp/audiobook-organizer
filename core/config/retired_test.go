@@ -1,7 +1,7 @@
 // file: core/config/retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c9512284-cfd6-44bd-a433-5161ae2a9d20
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config_test
 
@@ -89,6 +89,35 @@ func TestRetiredName_ProtectedOrSecretRefusesBoot(t *testing.T) {
 		}
 		if err := r.st.Load(context.Background()); !errors.Is(err, config.ErrRetiredName) {
 			t.Errorf("Load: err = %v, want ErrRetiredName", err)
+		}
+	})
+
+	t.Run("missing key of an enabled module", func(t *testing.T) {
+		// The module registers sections, so a key the list names and no
+		// section declares is a defect of the list, as for core.
+		r := retiredRig(t, []string{"LAIR_WINDOW=open"}, "",
+			config.RetiredName{Name: "LAIR_WINDOW", Canonical: "modules.joker.lair.window"})
+		if _, err := config.Register(r.st.Registry(), config.Define("modules.joker.lair", lairFix{})); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.boots(); !errors.Is(err, config.ErrRetiredName) {
+			t.Errorf("boot err = %v, want ErrRetiredName", err)
+		}
+	})
+
+	t.Run("key of a module with no sections is unchecked", func(t *testing.T) {
+		r := retiredRig(t, []string{"PENGUIN_SECRET=umbrella"}, "",
+			config.RetiredName{Name: "PENGUIN_SECRET", Canonical: "modules.penguin.auth.secret"})
+		if err := r.boots(); err != nil {
+			t.Fatalf("boot err = %v: a disabled module's key refused boot", err)
+		}
+		want := []config.RetiredUse{{Name: "PENGUIN_SECRET", Canonical: "modules.penguin.auth.secret",
+			CanonicalEnv: "GOTHAM_PENGUIN_AUTH_SECRET", Unchecked: true}}
+		if got := r.st.RetiredSet(); !slices.Equal(got, want) {
+			t.Errorf("RetiredSet = %+v, want %+v", got, want)
+		}
+		if r.logs.count("unchecked=") != 1 {
+			t.Errorf("the warning does not say the use is unchecked:\n%s", r.logs.all())
 		}
 	})
 

@@ -1,7 +1,7 @@
 // file: core/config/types.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e2e5754c-03e1-42ea-83cb-5ae606cfee3a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config
 
@@ -87,6 +87,10 @@ type RetiredUse struct {
 	Canonical    Path   // "" for a dropped key
 	CanonicalEnv string // the canonical env name, "" for a dropped key
 	Refused      bool   // a protected or secret key: this boot was refused
+	// Unchecked: a module key of a module that registered no section (not
+	// enabled at this boot, or config check without the module's sections),
+	// so its class is unknown; the use is ignored with a warning.
+	Unchecked bool
 }
 
 // BootView exposes the resolved ReloadBoot and ProtectOperator keys of core

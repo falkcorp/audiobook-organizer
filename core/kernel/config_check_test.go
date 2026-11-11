@@ -1,13 +1,14 @@
 // file: core/kernel/config_check_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 69eef733-be91-4046-8c4b-c7d78d30e9e2
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
 import (
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -76,5 +77,39 @@ func TestCheckConfig_RetiredNames(t *testing.T) {
 	c.Config.Environ = []string{"GOTHAM_DAYS=30"}
 	if uses, err := CheckConfig(t.Context(), c); err != nil || len(uses) != 1 || uses[0].Refused {
 		t.Errorf("warn-only CheckConfig = %+v, %v", uses, err)
+	}
+}
+
+// TestBootConfig_RetiredRefusalCreatesNothing (05-config §1.3.6): a retired
+// name that refuses boot is judged before step 0 may create the state
+// directory, so a refused boot creates nothing.
+func TestBootConfig_RetiredRefusalCreatesNothing(t *testing.T) {
+	var made []string
+	in := configInput{
+		AppID:           "gotham",
+		Environ:         []string{"GOTHAM_DB=/srv/gotham/main.pebble"},
+		StateDirDefault: filepath.Join(t.TempDir(), "state"),
+		Retired:         []config.RetiredName{{Name: "GOTHAM_DB", Canonical: "core.storage.path"}},
+		Logger:          slog.New(slog.DiscardHandler),
+		Mkdir: func(d string) error {
+			made = append(made, d)
+			return os.MkdirAll(d, 0o700)
+		},
+	}
+	_, err := bootConfig(t.Context(), in)
+	if !errors.Is(err, config.ErrRetiredName) {
+		t.Fatalf("bootConfig err = %v, want ErrRetiredName", err)
+	}
+	if len(made) != 0 {
+		t.Errorf("a refused boot created %v", made)
+	}
+	in.Environ = nil
+	cb, err := bootConfig(t.Context(), in)
+	if err != nil {
+		t.Fatalf("bootConfig without the retired name: %v", err)
+	}
+	_ = cb.store.Close(t.Context())
+	if len(made) == 0 {
+		t.Error("the control boot called no Mkdir, so its silence above proves nothing")
 	}
 }

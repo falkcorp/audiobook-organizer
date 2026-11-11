@@ -1,7 +1,7 @@
 // file: core/app/offline_config_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 26a3e540-e2ae-454a-95cb-b251137091ff
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package app
 
@@ -94,8 +94,9 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 		{Name: "GOTHAM_JOURNAL_DAYS", Canonical: "core.log.journal.retention_days"},
 		{Name: "GOTHAM_BAT_SIGNAL", Message: "the signal moved to the roof"},
 		{Name: "GOTHAM_NOT_SET", Canonical: "core.log.journal.min_level"},
+		{Name: "GOTHAM_ORACLE_SECRET", Canonical: "modules.oracle.auth.secret"},
 	}
-	opts.Env = []string{"GOTHAM_DB_PATH=/srv/gotham/main.pebble", "GOTHAM_JOURNAL_DAYS=30", "GOTHAM_BAT_SIGNAL=on"}
+	opts.Env = []string{"GOTHAM_DB_PATH=/srv/gotham/main.pebble", "GOTHAM_JOURNAL_DAYS=30", "GOTHAM_BAT_SIGNAL=on", "GOTHAM_ORACLE_SECRET=barbara"}
 	rec := &recordingFS{FS: vfs.NewMem()}
 	opts.StorageFS = storage.FSOf(rec)
 	check := secretsCmd(t, OfflineCommands(opts, offlineKeeper()), "config check")
@@ -106,14 +107,15 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 		t.Errorf("config check err = %v, want a non-zero exit naming one refusing name", err)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 4 {
+	if len(lines) != 5 {
 		t.Fatalf("output has %d lines:\n%s", len(lines), out.String())
 	}
 	for i, want := range [][]string{
 		{"env GOTHAM_DB_PATH", "STOPS THE SERVICE FROM STARTING", "GOTHAM_CORE_STORAGE_PATH", "core.storage.path"},
+		{"env GOTHAM_ORACLE_SECRET", "NOT CHECKED", "GOTHAM_ORACLE_AUTH_SECRET", "modules.oracle.auth.secret"},
 		{"env GOTHAM_JOURNAL_DAYS", "ignored", "GOTHAM_CORE_LOG_JOURNAL_RETENTION_DAYS", "core.log.journal.retention_days"},
 		{"env GOTHAM_BAT_SIGNAL", "ignored", "removed", "the signal moved to the roof"},
-		{"3 retired config names set, 1 of them"},
+		{"4 retired config names set, 1 of them would stop the service from starting, 1 not checked"},
 	} {
 		for _, w := range want {
 			if !strings.Contains(lines[i], w) {
@@ -121,7 +123,10 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(out.String(), "GOTHAM_NOT_SET") || strings.Contains(out.String(), "/srv/gotham") {
+	if strings.Contains(lines[1], "ignored") {
+		t.Errorf("a module key config check cannot judge is reported ignored: %q", lines[1])
+	}
+	if strings.Contains(out.String(), "GOTHAM_NOT_SET") || strings.Contains(out.String(), "/srv/gotham") || strings.Contains(out.String(), "barbara") {
 		t.Errorf("the output lists an unset name or prints a value:\n%s", out.String())
 	}
 	if _, err := os.Stat(opts.StateDir); !os.IsNotExist(err) {
@@ -131,9 +136,17 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 		t.Errorf("config check touched the store's filesystem: %v", calls)
 	}
 
+	run := func(args ...string) error {
+		out.Reset()
+		return secretsCmd(t, OfflineCommands(opts, offlineKeeper()), "config check").Run(t.Context(), args, &out)
+	}
+	opts.Env = []string{"GOTHAM_ORACLE_SECRET=barbara"}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "not checked") {
+		t.Errorf("an unchecked name only: err = %v, want a non-zero exit", err)
+	}
+
 	opts.Env = []string{"GOTHAM_JOURNAL_DAYS=30"}
-	out.Reset()
-	if err := secretsCmd(t, OfflineCommands(opts, offlineKeeper()), "config check").Run(t.Context(), nil, &out); err != nil {
+	if err := run(); err != nil {
 		t.Errorf("warn-only config check = %v", err)
 	}
 	if !strings.Contains(out.String(), "1 retired config names set, 0 of them") {
@@ -141,9 +154,25 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 	}
 
 	opts.Env = []string{"GOTHAM_CORE_LOG_JOURNAL_RETENTION_DAYS=thirty"}
-	out.Reset()
-	if err := secretsCmd(t, OfflineCommands(opts, offlineKeeper()), "config check").Run(t.Context(), nil, &out); err == nil {
+	if err := run(); err == nil {
 		t.Error("config check accepted a value that does not decode")
+	}
+
+	// The service's flags, by config path, decode as a start decodes them.
+	opts.Env = nil
+	if err := run("--set", "core.log.journal.retention_days=thirty"); err == nil || !strings.Contains(err.Error(), "retention_days") {
+		t.Errorf("a flag that does not decode: err = %v", err)
+	}
+	if err := run("--set", "core.log.journal.retention_days=30"); err != nil {
+		t.Errorf("a flag that decodes: err = %v", err)
+	}
+	if err := run("--set", "core.batcave.nope=1"); err == nil {
+		t.Error("a flag naming no key was accepted")
+	}
+	for _, bad := range [][]string{{"--set", "retention_days"}, {"--set", "core.log.journal.retention_days=1", "--set", "core.log.journal.retention_days=2"}} {
+		if err := run(bad...); err == nil {
+			t.Errorf("config check %v was accepted", bad)
+		}
 	}
 
 	opts.Env = nil

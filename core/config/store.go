@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-11
 
@@ -961,9 +961,9 @@ func (s *Store) Keys() iter.Seq2[Path, KeyState] {
 }
 
 // RetiredSet lists the retired names set at this boot (05-config §1.3.6):
-// after Boot the uses of core keys and of dropped keys, after Load every
-// use, refused ones included (it is filled before a refused Boot or Load
-// returns, so config check can print it).
+// after Boot the uses of core keys and of dropped keys, after Load or a
+// refused Boot every use, refused ones included (it is filled before a
+// refused Boot or Load returns, so config check can print it).
 func (s *Store) RetiredSet() []RetiredUse {
 	s.mu.Lock()
 	defer s.mu.Unlock()

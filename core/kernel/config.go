@@ -1,7 +1,7 @@
 // file: core/kernel/config.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1f6c9e2a-7b40-4d85-9a3e-5c2b8d7f0e14
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -133,6 +133,26 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 		return nil, fmt.Errorf("kernel: config: register the core sections: %w", err)
 	}
 
+	// A retired name that refuses boot is judged before step 0, which may
+	// create the state directory: a refused boot creates nothing (05-config
+	// §1.3.6). The judgement runs on a scratch store over the same operator
+	// layers (the real one cannot judge core.paths before step 0 registers
+	// it); the real Boot judges again and warns.
+	if _, err := CheckConfig(ctx, ConfigCheck{
+		Config: config.Options{
+			AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
+			Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
+			Logger: slog.New(slog.DiscardHandler), Now: in.Now, OwnerSet: in.OwnerSet,
+		},
+		StateDirDefault: in.StateDirDefault, Modules: in.Modules,
+	}); err != nil {
+		if rerr, refused := errors.AsType[*config.RetiredNameError](err); refused {
+			return nil, fmt.Errorf("kernel: config boot: %w", rerr)
+		}
+		// Any other operator-layer error is the real store's to report, in
+		// its own words, below.
+	}
+
 	// Step 0 (05-config §1.7, OPS5-13).
 	explicit, err := operatorString(st, stateDirKey)
 	if err != nil {
@@ -232,7 +252,8 @@ func registerPathsAndModules(st *config.Store, stateDir string, mods []module.Mo
 // Secrets are ignored), the compiled default of core.paths.state_dir, the
 // app's modules, and the config.Define values of the modules' sections.
 // Until F3-07 hands module sections to the kernel nothing lists them, so a
-// caller passes none and a retired name of a module key is not judged.
+// caller passes none and a retired name of a module key is Unchecked (the
+// seam F3-07 fills, from app's config check).
 type ConfigCheck struct {
 	Config          config.Options
 	StateDirDefault string
@@ -246,9 +267,10 @@ type ConfigCheck struct {
 // store, reads no boot record and creates no directory. It returns every
 // retired name set; err is a *config.RetiredNameError when one would refuse
 // boot, or the operator layers' own error (a value that does not decode, an
-// unreadable file). A retired name of a module key whose section is not in
-// c.ModuleSections is judged as one of a module this boot does not enable:
-// ignored.
+// unreadable file). A retired name of a key of a module with no section in
+// c.ModuleSections is reported Unchecked (its class is unknown); one of a
+// module with sections there is judged as a start judges it. bootConfig also
+// runs it, before step 0, so a refused boot creates no directory.
 func CheckConfig(ctx context.Context, c ConfigCheck) (uses []config.RetiredUse, err error) {
 	o := c.Config
 	o.BootRecordRoot = nil
