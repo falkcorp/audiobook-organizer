@@ -1,5 +1,5 @@
 // file: core/examples/hello/crash_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: d2573b3f-2985-4783-baa2-5b0ee3888984
 // last-edited: 2026-11-10
 
@@ -82,7 +82,17 @@ func dataMigrationCells() []dataMigrationCell {
 		s.NoChunkStarts = !s.Inside
 		out = append(out, dataMigrationCell{label: l, ChunkScenario: s})
 	}
-	return out
+	// M8 (F3-04): a kill at every write of the store rewrite, over hello's
+	// storage spec, booted as F3-07's boot will run it (restoreswap's P0a
+	// with the Swapper serving M8, then the DAG with M8 last).
+	// The second cell starts after one swap-back: M8's one restart. Two
+	// consecutive swap-backs refuse the boot (storage.ErrRewriteSwappedBack,
+	// exit 78), which no cell of a completing boot can hold;
+	// internal/restoreswap's TestRewriteSwapBackMovesNoCheckpoint has it.
+	spec := hello.New().Manifest().Storage
+	return append(out,
+		dataMigrationCell{label: "m8-rewrite", ChunkScenario: crashmatrix.SyntheticRewrite{Owner: "hello", Spec: spec}.Scenario()},
+		dataMigrationCell{label: "m8-rewrite-after-swap-back", ChunkScenario: crashmatrix.SyntheticRewrite{Owner: "hello", Spec: spec, SwappedBack: true}.Scenario()})
 }
 
 // TestBootCrashMatrixCoversEveryWriter: every row of 06 §6.5.1's writer
