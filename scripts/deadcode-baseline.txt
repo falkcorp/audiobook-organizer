@@ -102,6 +102,7 @@ core/internal/configstore.Store.Load
 core/internal/configstore.Store.Stage
 core/internal/configstore.actor
 core/internal/configstore.decodeEnvelope
+core/internal/instancestore.StorageSpec
 core/internal/taskstore.SerializedPrefixes
 core/internal/taskstore.StorageSpec
 core/kernel.bootConfig
