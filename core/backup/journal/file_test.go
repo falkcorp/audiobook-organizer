@@ -472,3 +472,31 @@ func TestOpenFile_UnopenableStillGaps(t *testing.T) {
 	}
 	fx.gapStillWorks(t, j, err, "scarecrow")
 }
+
+// TestStageHead_NeverMovesBackwards: journal_head is max(head, h), read with
+// GetForUpdate, so a re-apply batch that carries an older head than the one
+// already committed leaves the committed one alone and a newer one advances it.
+func TestStageHead_NeverMovesBackwards(t *testing.T) {
+	ctx := context.Background()
+	fx := newFixture(t)
+	stage := func(h Head) {
+		t.Helper()
+		b := fx.auth.NewBatch()
+		defer func() { _ = b.Close() }()
+		must(t, StageHead(ctx, b, fx.ks, h))
+		must(t, b.Commit(ctx, storage.Sync))
+	}
+	stage(Head{Seq: 5, MAC: "robin"})
+	stage(Head{Seq: 3, MAC: "nightwing"})
+	if got := fx.head(t); got != (Head{Seq: 5, MAC: "robin"}) {
+		t.Errorf("head = %+v after staging an older one, want {5 robin}", got)
+	}
+	stage(Head{Seq: 5, MAC: "batgirl"})
+	if got := fx.head(t); got != (Head{Seq: 5, MAC: "robin"}) {
+		t.Errorf("head = %+v after staging the same seq with another mac, want it unchanged", got)
+	}
+	stage(Head{Seq: 6, MAC: "oracle"})
+	if got := fx.head(t); got != (Head{Seq: 6, MAC: "oracle"}) {
+		t.Errorf("head = %+v after staging a newer one, want {6 oracle}", got)
+	}
+}
