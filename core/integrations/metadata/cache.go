@@ -1,5 +1,5 @@
 // file: core/integrations/metadata/cache.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 72d542b0-8df4-46f9-8c64-b7e589f09c1b
 // last-edited: 2026-11-11
 
@@ -142,18 +142,21 @@ func (c *Cache[Q]) fingerprint(provider integrations.Ref) string {
 }
 
 // flightKey identifies the calls that may share one live call: the same
-// provider, configuration, Version and question, asked with the same cache
-// mode and the same gate flags (tier, hold bypass, counter). A struct, not a
-// joined string, so no field can be crafted to run into its neighbour.
+// provider, configuration and question, asked with the same cache mode and the
+// same gate flags (tier, hold bypass, counter). The flights map belongs to one
+// Cache, whose Version never changes, so Version is not part of the key. A
+// struct, not a joined string, so no field can be crafted to run into its
+// neighbour.
 type flightKey struct {
-	provider, version, fingerprint, question string
-	mode                                     cacheMode
-	interactive, bypassHold                  bool
-	counter                                  string
+	provider, fingerprint, question string
+	mode                            cacheMode
+	interactive, bypassHold         bool
+	counter                         string
 }
 
-// flight is one live call shared by the callers of one (provider, Version,
-// key, write mode). Its fields are written before done is closed.
+// flight is one live call shared by the callers of one (provider,
+// configuration, key, write mode, gate flags). Its fields are written before
+// done is closed.
 type flight struct {
 	done chan struct{}
 	// canceled: the leader's own context ended (or it panicked), so its
@@ -200,7 +203,7 @@ func cached[Q, R any](ctx context.Context, c *Cache[Q], p Provider[Q, R], q Q) (
 	// held scope must not hand that refusal to an interactive or hold-bypassing
 	// follower, which the gate would have let through (the flags are in it).
 	inter, bypass, counter := providerhttp.GateFlags(ctx)
-	fk := flightKey{provider: ref.String(), version: c.o.Version, fingerprint: c.fingerprint(ref), question: key,
+	fk := flightKey{provider: ref.String(), fingerprint: c.fingerprint(ref), question: key,
 		mode: mode & cacheReadOnly, interactive: inter, bypassHold: bypass, counter: counter}
 	for {
 		c.mu.Lock()

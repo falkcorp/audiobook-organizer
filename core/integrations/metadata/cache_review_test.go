@@ -1,5 +1,5 @@
 // file: core/integrations/metadata/cache_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7a1c0e-9f6d-4f0b-a1d2-5e8c4b6a7f90
 // last-edited: 2026-11-11
 
@@ -90,6 +90,32 @@ func TestCache_FlightsAreKeptApart(t *testing.T) {
 			eq(t, "two live calls", p.Calls(), 2)
 		})
 	}
+
+	t.Run("another provider", func(t *testing.T) {
+		clk := newClock()
+		h := newHarness(t, clk, nil, integrations.Limits{})
+		cache := newCache(t, h, clk, time.Hour, time.Hour)
+		a, entered, release := gatedProvider("a")
+		b := coretest.NewFakeProvider[query, book](ref("b"))
+		b.Script(func(context.Context, query) ([]book, error) {
+			entered <- struct{}{}
+			<-release
+			return answers("b", "x"), nil
+		})
+		var wg sync.WaitGroup
+		wg.Go(func() { _, _, _ = metadata.Cached[query, book](context.Background(), cache, a, query{"x"}) })
+		<-entered
+		wg.Go(func() { _, _, _ = metadata.Cached[query, book](context.Background(), cache, b, query{"x"}) })
+		select {
+		case <-entered: // provider b went live for itself
+		case <-time.After(3 * time.Second):
+			t.Fatal("one provider's live call was handed to another provider")
+		}
+		close(release)
+		wg.Wait()
+		eq(t, "provider a calls", a.Calls(), 1)
+		eq(t, "provider b calls", b.Calls(), 1)
+	})
 
 	t.Run("same flags still share", func(t *testing.T) {
 		clk := newClock()

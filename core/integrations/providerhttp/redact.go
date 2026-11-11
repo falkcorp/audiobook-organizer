@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/redact.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 8397d44b-b492-4bf1-aa16-cf162225a337
 // last-edited: 2026-11-11
 
@@ -30,9 +30,8 @@ const unparseableURL = "(unparseable URL)"
 //   - it ends in token, key, secret, password, passwd, pwd, signature,
 //     credential(s), cookie or auth (access_token, X-Plex-Token, refresh_token,
 //     client_secret, api-key, apikey, X-Api-Key, OAuth, Set-Cookie ...);
-//   - it starts with session or sig, or contains authoriz, credential,
-//     secret, password, passwd or session (Authorization, Proxy-Authorization,
-//     JSESSIONID);
+//   - it starts with sig, or contains authoriz, credential, secret, password,
+//     passwd or session (Authorization, Proxy-Authorization, JSESSIONID);
 //   - it is exactly auth, pass, pwd, sig or sid, or one of the extra names.
 //
 // "auth" is matched exactly or as a suffix, never as a prefix or substring:
@@ -61,16 +60,17 @@ func (s scrubber) withExtra(names ...string) scrubber {
 	return t
 }
 
-// maxNameWindow bounds how much of a name the rules look at: a longer name is
-// judged by its last maxNameWindow characters (the suffix rules), so the cost
-// of a hostile body stays linear.
-const maxNameWindow = 64
+// maxNameWindow bounds how much of a name the rules look at: a name longer than
+// this many bytes is judged by its last maxNameWindow bytes, with only the
+// suffix and contains rules (never the exact and prefix ones, which need the
+// whole name), so the cost of a hostile body stays linear.
+const maxNameWindow = 128
 
 // nameBuf is the scratch compactName works in.
-type nameBuf [2 * maxNameWindow]byte
+type nameBuf [maxNameWindow]byte
 
 // compactName lower-cases name and drops the separators - _ . and spaces,
-// keeping at most the last maxNameWindow characters. whole reports that
+// keeping at most the last maxNameWindow bytes of it. whole reports that
 // nothing was dropped for length.
 func compactName(name string, buf *nameBuf) (c string, whole bool) {
 	whole = true
@@ -88,9 +88,6 @@ func compactName(name string, buf *nameBuf) (c string, whole bool) {
 		}
 		buf[n] = ch
 		n++
-	}
-	if n > maxNameWindow {
-		return string(buf[n-maxNameWindow : n]), false
 	}
 	return string(buf[:n]), whole
 }
@@ -110,12 +107,13 @@ func (s scrubber) secret(name string) bool {
 		case "auth", "pass", "pwd", "passwd", "sig", "sid":
 			return true
 		}
-		if strings.HasPrefix(c, "session") || strings.HasPrefix(c, "sig") {
+		if strings.HasPrefix(c, "sig") { // session is a contains rule below
 			return true
 		}
 	}
-	for _, suf := range [...]string{"token", "key", "secret", "password", "passwd", "pwd", "signature",
-		"credential", "credentials", "cookie", "auth"} {
+	// secret, password, passwd and credential(s) are not suffixes here: the
+	// contains rules below take every name that ends in one.
+	for _, suf := range [...]string{"token", "key", "pwd", "signature", "cookie", "auth"} {
 		if strings.HasSuffix(c, suf) {
 			return true
 		}
