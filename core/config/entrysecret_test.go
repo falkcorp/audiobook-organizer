@@ -1,6 +1,6 @@
 // file: core/config/entrysecret_test.go
 // version: 1.0.0
-// guid: 3d0a6f8e-5b1c-4f27-9e43-8a2d7c61b5f4
+// guid: d87e4d85-933b-47a2-acce-30fd13cf619a
 // last-edited: 2026-11-10
 
 package config_test
