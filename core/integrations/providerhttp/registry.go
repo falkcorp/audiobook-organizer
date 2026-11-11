@@ -196,7 +196,7 @@ func (r *Registry) lanAllowed(hostport string) bool {
 	if err != nil {
 		return false
 	}
-	ip, _ := netip.ParseAddr(host)
+	ip, ipErr := netip.ParseAddr(host)
 	for _, e := range r.o.LANAllow() {
 		e = strings.ToLower(strings.TrimSpace(e))
 		switch {
@@ -204,7 +204,7 @@ func (r *Registry) lanAllowed(hostport string) bool {
 		case e == hostport || e == host:
 			return true
 		case strings.Contains(e, "/"):
-			if p, err := netip.ParsePrefix(e); err == nil && ip.IsValid() && p.Contains(ip.Unmap()) {
+			if p, err := netip.ParsePrefix(e); err == nil && ipErr == nil && p.Contains(ip.Unmap()) {
 				return true
 			}
 		}

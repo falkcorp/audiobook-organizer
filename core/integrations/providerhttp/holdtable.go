@@ -41,7 +41,11 @@ func (r *Registry) loadHolds() {
 	defer r.hmu.Unlock()
 	for _, h := range hs {
 		if !now.Before(h.Until) {
-			_ = r.store.PutHold(ctx, integrations.Hold{Scope: h.Scope}) // drop the expired record
+			// Drop the expired record; a store that cannot is no harm (the
+			// record is expired and is skipped again on the next load).
+			if err := r.store.PutHold(ctx, integrations.Hold{Scope: h.Scope}); err != nil {
+				r.warnStore("an expired hold could not be removed from the store", err)
+			}
 			continue
 		}
 		if latest := now.Add(hmax); h.Until.After(latest) {

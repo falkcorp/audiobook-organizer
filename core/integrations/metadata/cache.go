@@ -331,12 +331,13 @@ func (c *Cache[Q]) Sweep(ctx context.Context) (removed int, err error) {
 		b := c.o.Keyspace.NewBatch()
 		for _, k := range chunk {
 			if err := b.Delete(k); err != nil {
-				_ = b.Close()
-				return removed, fmt.Errorf("metadata: sweep: %w", err)
+				return removed, errors.Join(fmt.Errorf("metadata: sweep: %w", err), b.Close())
 			}
 		}
 		err := b.Commit(ctx, storage.NoSync)
-		_ = b.Close()
+		if cerr := b.Close(); err == nil {
+			err = cerr
+		}
 		if err != nil {
 			return removed, fmt.Errorf("metadata: sweep: %w", err)
 		}

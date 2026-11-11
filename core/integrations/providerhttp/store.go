@@ -139,7 +139,7 @@ func (s nativeStore) Quota(ctx context.Context, scope, counter string) (string, 
 	return day, used, nil
 }
 
-func (s nativeStore) PutQuota(ctx context.Context, scope, counter, day string, used int) error {
+func (s nativeStore) PutQuota(ctx context.Context, scope, counter, day string, used int) (err error) {
 	when, err := time.Parse(dayForm, day)
 	if err != nil {
 		return fmt.Errorf("providerhttp: quota day %q: %w", day, err)
@@ -150,7 +150,7 @@ func (s nativeStore) PutQuota(ctx context.Context, scope, counter, day string, u
 	}
 	cutoff := when.AddDate(0, 0, -1).Format(dayForm) // days before yesterday go
 	b := s.ks.NewBatch()
-	defer func() { _ = b.Close() }()
+	defer func() { err = errors.Join(err, b.Close()) }()
 	if err := b.Set(quotaKey(scope, counter, day), raw); err != nil {
 		return err
 	}
