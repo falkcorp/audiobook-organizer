@@ -1,5 +1,5 @@
 // file: core/archtest/testdata/guards/resume/fail/fail.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 922e1b1a-dd7e-4c5e-999d-0dcb29c00aa9
 // last-edited: 2026-11-10
 
@@ -21,6 +21,12 @@ func defs(c tasks.Common, spec tasks.TaskSpec[np, np]) []tasks.Definition {
 			Run: func(rc *tasks.RC, p np) (np, error) {
 				_, err := tasks.RunItems(rc, tasks.CPU(), []int{1}, func(ic *tasks.ItemRC, i int) error { return nil },
 					tasks.ItemsOptions[int]{Watermark: ""})
+				return np{}, err
+			}}),
+		tasks.Task("joker.blank-watermark", tasks.TaskSpec[np, np]{Common: cont, // want: reaches no rc.Checkpoint
+			Run: func(rc *tasks.RC, p np) (np, error) {
+				_, err := tasks.RunItems(rc, tasks.CPU(), []int{1}, func(ic *tasks.ItemRC, i int) error { return nil },
+					tasks.ItemsOptions[int]{Watermark: "  "})
 				return np{}, err
 			}}),
 		tasks.Task("joker.param-common", tasks.TaskSpec[np, np]{Common: c}), // want: Resume cannot be read
