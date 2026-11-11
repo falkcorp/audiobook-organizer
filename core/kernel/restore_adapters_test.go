@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 
+	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/rbac"
@@ -313,5 +315,50 @@ func TestClassifyStore(t *testing.T) {
 		if got, why := classifyStore(in); got != c.want {
 			t.Errorf("%s: class %q (%s), want %q", c.name, got, why, c.want)
 		}
+	}
+}
+
+// TestRestoreHooks_ReceivePreSwapStoreAndRestoreSeq: the hooks run against the
+// store the restore replaced, not only against the journal. A revocation the
+// journal never saw (a store written outside auth's path) survives the restore
+// because the pre-swap store held it ("the more restrictive of the restored and
+// the pre-swap state, whatever the journal held"); an audit record the archive
+// lacks is copied forward; and the audit records of the restore are filed under
+// the restore line's seq, so a second restore never finds this one's.
+func TestRestoreHooks_ReceivePreSwapStoreAndRestoreSeq(t *testing.T) {
+	s := newRestoreScene(t, func(g *gotham) {
+		k, err := g.auth.APIKeyByID(g.ctx, "key-batmobile")
+		if err != nil {
+			t.Fatal(err)
+		}
+		k.Status, k.RevokedAt, k.Version = auth.KeyRevoked, g.clock.now(), k.Version+1
+		g.commit(func(b *storage.Batch) error { return g.auth.PutAPIKey(b, k) })
+		if err := g.aud.Record(g.ctx, audit.Event{Action: "core.gotham.patrol", Outcome: audit.Success, Target: rxKeyRef("key-batmobile")}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	res, hres := s.boot(archiveBoot("restore-1", "arch-1", s.previous, &rxSteps{}), nil)
+	if !hres.Ran || res.RestoreLine == 0 {
+		t.Fatalf("hooks ran %v, restore line %d", hres.Ran, res.RestoreLine)
+	}
+	if got := s.keyStatus("key-batmobile"); got != auth.KeyRevoked {
+		t.Errorf("key-batmobile = %q: the pre-swap store revoked it and the journal never saw that", got)
+	}
+	find := func(prefix string) []audit.Record {
+		var out []audit.Record
+		for rec, err := range s.aud.Query(s.ctx, audit.Filter{ActionPrefix: prefix}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, rec)
+		}
+		return out
+	}
+	if got := find("core.gotham.patrol"); len(got) != 1 {
+		t.Errorf("the pre-swap store's audit record was copied forward %d times, want once", len(got))
+	}
+	applied := find("core.restore.apply")
+	if len(applied) != 1 || applied[0].Target.ID != strconv.FormatUint(res.RestoreLine, 10) {
+		t.Errorf("core.restore.apply records = %+v, want one for restore line %d", applied, res.RestoreLine)
 	}
 }
