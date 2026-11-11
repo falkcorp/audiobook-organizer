@@ -1,5 +1,5 @@
 // file: core/auth/authoff_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e2f4a67-1b3c-4d95-a0e8-5f6c7d9b1a42
 // last-edited: 2026-11-11
 
@@ -15,8 +15,6 @@ import (
 )
 
 // Auth-off mode (05-authn §4.11).
-
-func boolp(b bool) *bool { return &b }
 
 // offService builds a service over f's store in mode with the given reach and
 // settings; New's error is returned, not fatal.
@@ -128,8 +126,8 @@ func TestAuthDisabled_InteractiveGuardRefuses(t *testing.T) {
 func TestAuthDisabled_RefusesNonLoopbackOrProxyWithoutOptIn(t *testing.T) {
 	f := newFx(t)
 	off := auth.Settings{Mode: auth.ModeDisabled}
-	allow := auth.Settings{Mode: auth.ModeDisabled, DisabledAllowRemote: boolp(true)}
-	deny := auth.Settings{Mode: auth.ModeDisabled, DisabledAllowRemote: boolp(false)}
+	allow := auth.Settings{Mode: auth.ModeDisabled, DisabledAllowRemote: new(true)}
+	deny := auth.Settings{Mode: auth.ModeDisabled, DisabledAllowRemote: new(false)}
 	listener := func() auth.Reach { return auth.Reach{NonLoopbackListener: true} }
 	proxy := func() auth.Reach { return auth.Reach{TrustedProxy: true} }
 	for _, tc := range []struct {
