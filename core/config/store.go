@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-10
 
@@ -238,6 +238,15 @@ func (s *Store) checkOverlap(sec *section) error {
 		for _, a := range sec.claims() {
 			if under(o.path, a) {
 				return fmt.Errorf("%w: section %s's key %s holds section %s", ErrDuplicate, sec.path, a, o.path)
+			}
+		}
+		// An entry list's parent is an ID namespace: "<parent>.<id>.<ref>"
+		// is a secret key for any ID, so no other section may lie there.
+		for _, pair := range [][2]*section{{sec, o}, {o, sec}} {
+			for _, lk := range pair[0].entryLists {
+				if under(pair[1].path, lk.entryParent()) {
+					return fmt.Errorf("%w: section %s lies under %s, where section %s's list %s names its entries' secrets", ErrDuplicate, pair[1].path, lk.entryParent(), pair[0].path, lk.path(""))
+				}
 			}
 		}
 	}
@@ -737,28 +746,48 @@ func (s *Store) reindex() {
 	s.met.setRestartPending(pendingKeys)
 }
 
-// refreshSecrets re-reads the Meta of the secret keys named in only (every
-// secret key when nil) through the resolver.
-func (s *Store) refreshSecrets(ctx context.Context, only []Path) {
+// liveSecrets is every secret key the sections' last builds hold: the fixed
+// ones and each list entry's.
+func (s *Store) liveSecrets() map[Path]bool {
+	live := map[Path]bool{}
 	for _, sec := range s.sections {
-		for _, k := range sec.keys {
-			if !k.secret {
+		for _, b := range []*built{sec.eff, sec.pend} {
+			if b == nil {
 				continue
 			}
-			p := k.path("")
-			if only != nil && !slices.Contains(only, p) {
-				continue
-			}
-			m := secrets.Meta{Name: secrets.Name(p)}
-			if s.resolver != nil {
-				got, err := s.resolver.Meta(ctx, secrets.Name(p))
-				if err != nil {
-					got = secrets.Meta{Name: secrets.Name(p), Err: err}
+			for _, c := range b.keys {
+				if c.k.secret {
+					live[c.p] = true
 				}
-				m = got
 			}
-			s.secretMeta[p] = &m
 		}
+	}
+	return live
+}
+
+// refreshSecrets re-reads the Meta of the secret keys named in only (every
+// secret key when nil) through the resolver. A named key no build holds any
+// more (a removed list entry's) loses its Meta.
+func (s *Store) refreshSecrets(ctx context.Context, only []Path) {
+	live := s.liveSecrets()
+	for p := range s.secretMeta {
+		if !live[p] && (only == nil || slices.Contains(only, p)) {
+			delete(s.secretMeta, p)
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(live)) {
+		if only != nil && !slices.Contains(only, p) {
+			continue
+		}
+		m := secrets.Meta{Name: secrets.Name(p)}
+		if s.resolver != nil {
+			got, err := s.resolver.Meta(ctx, secrets.Name(p))
+			if err != nil {
+				got = secrets.Meta{Name: secrets.Name(p), Err: err}
+			}
+			m = got
+		}
+		s.secretMeta[p] = &m
 	}
 }
 
@@ -999,14 +1028,17 @@ func (s *Store) Operator(p Path) (OperatorValue, bool, error) {
 	return out, found, nil
 }
 
-// dropForFile reports the paths whose file values are secret: secret keys and
-// passthrough paths (integration-bound values may be credentials).
+// dropForFile reports the paths whose file values are secret: secret keys,
+// passthrough paths (integration-bound values may be credentials) and lists
+// whose entries hold secrets (fail closed: an operator may paste a secret
+// into the list in the file, which then refuses to boot but is still on disk
+// to be archived).
 func (s *Store) dropForFile(p Path) bool {
 	if s.passthrough(p) {
 		return true
 	}
 	c, ok := s.keyFor(p)
-	return ok && c.k.secret
+	return ok && (c.k.secret || len(c.k.entrySecrets) > 0)
 }
 
 // ConfigFileHasSecrets reports whether the operator file supplies a value for
