@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/rewrite_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d92e319d-69bf-437e-a034-410415eaefa0
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package restoreswap
 
@@ -223,6 +223,13 @@ type m8Result struct {
 
 func m8Boot(t *testing.T, fs vfs.FS, db string) m8Result {
 	t.Helper()
+	return m8BootWith(t, fs, db, nil)
+}
+
+// m8BootWith is m8Boot with before (nil: none) called inside the step
+// before RunRewrite.
+func m8BootWith(t *testing.T, fs vfs.FS, db string, before func(ctx context.Context, sdb *storage.DB) error) m8Result {
+	t.Helper()
 	ctx := bootseam.With(context.Background(), &bootseam.Seams{FS: fs, BuildID: testBuild, Clock: testNow})
 	s, err := New(Options{FS: fs, StateDir: stateDir, BuildID: testBuild, Clock: testNow, Owners: []storage.OwnerSpec{wayne(1)}, RewriteStep: "wayne.rewrite"})
 	if err != nil {
@@ -238,6 +245,11 @@ func m8Boot(t *testing.T, fs vfs.FS, db string) m8Result {
 		res.runs++
 		res.genBefore = epochOf(t, sdb)
 		res.checkpoint = treeHash(t, fs, filepath.Join(filepath.Dir(db), ".mediacore-checkpoints"))
+		if before != nil {
+			if err := before(ctx, sdb); err != nil {
+				return err
+			}
+		}
 		return s.RunRewrite(ctx, sdb, step)
 	}}
 	op, err := storage.Open(ctx, storage.OpenOptions{Path: db, Build: testBuild, Owners: []storage.OwnerSpec{wayne(1)}, FreeSpaceMargin: 1,
@@ -414,9 +426,12 @@ func failPlace(mem *vfs.MemFS, db string) (vfs.FS, func() bool) {
 // §5S.3.13 "M8 never loops"): a swap that fails swaps back, the store is
 // the original with every row, and the checkpoint area is exactly as M8
 // found it (the swap-back moves no checkpoint and starts no clock). The
-// next boot restarts M8 once from the compaction and finishes; a second
-// consecutive swap-back refuses the boot with storage.ErrRewriteSwappedBack
-// and stages nothing.
+// next boot restarts M8 once from the compaction and finishes, so a row
+// written to the original after the refused copy was taken is in the store
+// it swaps in (the refused copy, still beside the store when the failure was
+// its own rename into place, is never reused); a second consecutive
+// swap-back refuses the boot with storage.ErrRewriteSwappedBack and stages
+// nothing.
 func TestRewriteSwapBackMovesNoCheckpoint(t *testing.T) {
 	newStore := func(t *testing.T) (*vfs.MemFS, string) {
 		mem := vfs.NewMem()
@@ -437,9 +452,19 @@ func TestRewriteSwapBackMovesNoCheckpoint(t *testing.T) {
 		if got := treeHash(t, mem, cpArea(db)); got != res.checkpoint {
 			t.Error("the swap-back changed the checkpoint area")
 		}
-		next := m8Boot(t, mem, db)
-		if next.err != nil || next.runs != 1 || next.tag != "live" || next.rows != 120 || next.genAfter != next.genBefore {
-			t.Fatalf("the boot after one swap-back = %+v, want M8 restarted and finished over the original", next)
+		// A row the restarting boot writes before M8 (an earlier data step's,
+		// say) is not in the refused copy: the restart must copy again.
+		late := func(ctx context.Context, sdb *storage.DB) error {
+			ks, _ := sdb.Keyspace("wayne")
+			b := ks.NewBatch()
+			if err := b.Set([]byte("story/late"), []byte("Hush, epilogue")); err != nil {
+				return errors.Join(err, b.Close())
+			}
+			return b.Commit(ctx, storage.Sync)
+		}
+		next := m8BootWith(t, mem, db, late)
+		if next.err != nil || next.runs != 1 || next.tag != "live" || next.rows != 121 || next.genAfter != next.genBefore {
+			t.Fatalf("the boot after one swap-back = %+v, want M8 restarted from the compaction and finished with the late row", next)
 		}
 		js, err := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite")
 		if err != nil || len(js) != 2 || js[0].last != StepApplied || js[1].last != StepSwappedBack {
