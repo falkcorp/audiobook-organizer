@@ -1,7 +1,7 @@
 // file: core/auth/export_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 893eb259-d801-49c9-9efd-55a9ab60080d
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -23,3 +23,6 @@ func LoginCeilingOf(s *Service) *LoginCeiling { return s.ceiling }
 func SourceKeyOf(c ClientInfo) string    { return c.sourceKey() }
 func SaturatedKeyOf(c ClientInfo) string { return c.saturatedKey() }
 func ConnectorKeyOf(c ClientInfo) string { return c.connectorKey() }
+
+// OwnerSatisfied is §4.8's owner rule for p (Service.ownerSatisfied).
+func (s *Service) OwnerSatisfied(p *Principal) bool { return s.ownerSatisfied(p) }
