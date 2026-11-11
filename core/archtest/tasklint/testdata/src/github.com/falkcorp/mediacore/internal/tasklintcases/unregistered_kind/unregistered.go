@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/testdata/src/github.com/falkcorp/mediacore/internal/tasklintcases/unregistered_kind/unregistered.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 705d94f0-04f3-4c33-b047-d377eaebfebe
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package unregistered_kind: some kinds reach Registrar.Tasks, some do not.
 package unregistered_kind
@@ -55,11 +55,12 @@ func neverCalled() tasks.Definition {
 }
 
 // NewDerived is an exported kind constructor for other modules: nobody here
-// calls it, so its body is not a kind site.
+// calls it, so its body is not checked by coverage; a kind it discards still
+// is reported.
 //
 //tasklint:constructor modules pass the result to Registrar.DerivedIndex
 func NewDerived(name string) tasks.Definition {
-	_ = tasks.Task("unreg.discarded-in-constructor", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}) // want `tasks.Task definition in NewDerived is not registered`
+	_ = tasks.Task("unreg.discarded-in-constructor", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}) // want `tasks.Task definition in NewDerived is built and discarded`
 	return tasks.Task(tasks.Kind(name), tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common})
 }
 
@@ -74,25 +75,69 @@ func Unlisted() tasks.Definition { // want `//tasklint:constructor on Unlisted, 
 
 // withDiscard is a called helper that also builds a kind it throws away.
 func withDiscard(kind tasks.Kind) tasks.Definition {
-	_ = build("unreg.discarded-in-helper") // want `definition built by build in withDiscard is not registered`
+	_ = build("unreg.discarded-in-helper") // want `definition built by build in withDiscard is built and discarded`
 	return build(kind)
 }
 
-// Through a reached function, only what is returned counts.
+// A reached function is covered whole; what it builds and discards is not.
 func reachedList() []tasks.Definition {
 	kept := []tasks.Definition{build("unreg.kept")}
-	dropped := build("unreg.dropped") // want `definition built by build in reachedList is not registered`
+	dropped := build("unreg.dropped") // want `definition built by build in reachedList is built and discarded`
 	_ = dropped
-	return kept
+	build("unreg.bare")                       // want `definition built by build in reachedList is built and discarded`
+	_, err := pairBuild("unreg.pair-dropped") // want `definition built by pairBuild in reachedList is built and discarded`
+	_ = err
+	var reassigned tasks.Definition
+	reassigned = build("unreg.reassigned") // want `definition built by build in reachedList is built and discarded`
+	_ = reassigned
+	var _ = build("unreg.var-blank") // want `definition built by build in reachedList is built and discarded`
+	d, _ := pairBuild("unreg.pair-kept")
+	return append(kept, d)
 }
 
-// closures returns a kind; a closure's own return is not closures' return.
+// pairBuild is a kind helper with a second result.
+func pairBuild(kind tasks.Kind) (tasks.Definition, error) { return build(kind), nil }
+
+// closures: a closure in a reached function is covered with its body.
 func closures() tasks.Definition {
 	f := func() tasks.Definition {
-		return build("unreg.closure-only") // want `definition built by build in closures is not registered`
+		return build("unreg.closure-only")
 	}
 	_ = f
 	return build("unreg.closure-outer")
+}
+
+// fromMake fills a made slice by index.
+func fromMake(kinds []tasks.Kind) []tasks.Definition {
+	out := make([]tasks.Definition, len(kinds))
+	for i, k := range kinds {
+		out[i] = build(k)
+	}
+	out[0] = build("unreg.make-index")
+	return out
+}
+
+// fromAdder appends through an adder closure.
+func fromAdder() []tasks.Definition {
+	var out []tasks.Definition
+	add := func(d tasks.Definition) { out = append(out, d) }
+	add(build("unreg.adder"))
+	return out
+}
+
+// fromTable builds kinds in a table of rows and appends each row's.
+func fromTable() []tasks.Definition {
+	rows := []struct {
+		def  tasks.Definition
+		note string
+	}{
+		{def: build("unreg.table"), note: "t"},
+	}
+	var out []tasks.Definition
+	for _, row := range rows {
+		out = append(out, row.def)
+	}
+	return out
 }
 
 // named returns through a named result and a bare return.
@@ -116,7 +161,7 @@ func hidden() tasks.Definition { // want `//tasklint:constructor on hidden: only
 }
 
 func Register(r *module.Registrar) {
-	built := tasks.Task("unreg.built-not-passed", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}) // want `tasks.Task definition in Register is not registered`
+	built := tasks.Task("unreg.built-not-passed", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}) // want `tasks.Task definition in Register is built and discarded`
 	_ = built
 	r.Tasks(listed, viaHelper(), tasks.Task("unreg.inline", tasks.TaskSpec[tasks.NoParams, tasks.NoResult]{Common: common}),
 		build("unreg.built"), rebuild("unreg.rebuilt"))
@@ -124,6 +169,9 @@ func Register(r *module.Registrar) {
 	r.Tasks(withDiscard("unreg.with-discard"))
 	r.Tasks(reachedList()...)
 	r.Tasks(named(), closures())
+	r.Tasks(fromMake([]tasks.Kind{"unreg.make"})...)
+	r.Tasks(fromAdder()...)
+	r.Tasks(fromTable()...)
 	r.Other(build("unreg.other")) // want `definition built by build in Register is not registered`
 	r.Resources("unreg.resource")
 }
