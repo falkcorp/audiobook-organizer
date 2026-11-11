@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package tasklint_test
 
@@ -25,6 +25,7 @@ func TestTasklint_Core(t *testing.T) {
 		// constructors that other modules call. A new entry is reviewed here.
 		Constructors: []string{
 			core + "/storage/datamigrate.DerivedBuildTask", // modules pass it to Registrar.DerivedIndex (05-storage §5S.3.9)
+			core + "/internal/scheduler.WindowDefinition",  // the kernel registers one per core.tasks.windows entry (F2-04, F2-16)
 		}})
 }
 
