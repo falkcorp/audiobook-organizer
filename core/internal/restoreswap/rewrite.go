@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/rewrite.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e4287385-23de-4df7-b1bb-31ac3240dac4
 // last-edited: 2026-11-10
 
@@ -68,10 +68,11 @@ func (s *Swapper) rewriteJournals(stepID string) ([]rewriteJournal, error) {
 	dir := restorejournal.Dir(s.o.StateDir)
 	names, err := s.fs.List(dir)
 	if err != nil {
-		if ok, _ := exists(s.fs, dir); !ok {
-			return nil, nil
+		ok, xerr := exists(s.fs, dir)
+		if xerr == nil && !ok {
+			return nil, nil // no swap has ever journaled
 		}
-		return nil, fmt.Errorf("restoreswap: list %s: %w", dir, err)
+		return nil, errors.Join(fmt.Errorf("restoreswap: list %s: %w", dir, err), xerr)
 	}
 	var out []rewriteJournal
 	for _, n := range names {
