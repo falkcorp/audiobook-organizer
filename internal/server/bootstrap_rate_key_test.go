@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap_rate_key_test.go
-// version: 1.15.0
+// version: 2.0.0
 // guid: 5d0e8a47-6b3c-4f19-9a52-c7e1b4d30f68
-// last-edited: 2026-10-21
+// last-edited: 2026-11-10
 
 package server
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,8 +23,14 @@ import (
 // one when it ends.
 func resetBootstrapRate(t *testing.T) {
 	t.Helper()
-	bootstrapLimits = newBootstrapLimiter()
-	t.Cleanup(func() { bootstrapLimits = newBootstrapLimiter() })
+	bootstrapLimits = coreauth.NewBootstrapLimiter(coreauth.BootstrapLimits{}, nil)
+	t.Cleanup(func() { bootstrapLimits = coreauth.NewBootstrapLimiter(coreauth.BootstrapLimits{}, nil) })
+}
+
+// setBootstrapGlobalMax installs a fresh limiter with a global ceiling of
+// globalMax (resetBootstrapRate restores the default one when the test ends).
+func setBootstrapGlobalMax(globalMax int) {
+	bootstrapLimits = coreauth.NewBootstrapLimiter(coreauth.BootstrapLimits{GlobalMax: globalMax}, nil)
 }
 
 // setTunnelConnectors configures TUNNEL_CONNECTOR_ADDRS for the test.
@@ -60,17 +67,17 @@ func bootstrapAttemptStatus(t *testing.T, remote, cfIP string, verified bool) in
 	return w.Code
 }
 
-// exhaustBootstrap makes bootstrapMaxAttempts attempts (header from hdr(i)) and
+// exhaustBootstrap makes coreauth.BootstrapMaxAttempts attempts (header from hdr(i)) and
 // checks the next, from hdr(next), is refused.
 func exhaustBootstrap(t *testing.T, remote string, verified bool, hdr func(i int) string, next string) {
 	t.Helper()
-	for i := range bootstrapMaxAttempts {
+	for i := range coreauth.BootstrapMaxAttempts {
 		if code := bootstrapAttemptStatus(t, remote, hdr(i), verified); code == http.StatusTooManyRequests {
 			t.Fatalf("attempt %d from %q limited early", i, remote)
 		}
 	}
 	if code := bootstrapAttemptStatus(t, remote, next, verified); code != http.StatusTooManyRequests {
-		t.Fatalf("attempt %d from %q: %d, want 429", bootstrapMaxAttempts, remote, code)
+		t.Fatalf("attempt %d from %q: %d, want 429", coreauth.BootstrapMaxAttempts, remote, code)
 	}
 }
 
@@ -183,150 +190,10 @@ func TestBootstrapRateKey(t *testing.T) {
 }
 
 // testBootstrapLimiter builds a limiter on a controllable clock.
-func testBootstrapLimiter(maxKeys, globalMax int) (*bootstrapLimiter, *time.Time) {
+func testBootstrapLimiter(maxKeys, globalMax int) (*coreauth.BootstrapLimiter, *time.Time) {
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
-	l := newBootstrapLimiter()
-	l.maxKeys, l.globalMax = maxKeys, globalMax
-	l.now = func() time.Time { return now }
+	l := coreauth.NewBootstrapLimiter(coreauth.BootstrapLimits{MaxKeys: maxKeys, GlobalMax: globalMax}, func() time.Time { return now })
 	return l, &now
-}
-
-// bootstrapLimiterSize is the number of keys l tracks.
-func bootstrapLimiterSize(l *bootstrapLimiter) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.entries)
-}
-
-func TestBootstrapLimiter_PerKeyWindow(t *testing.T) {
-	l, now := testBootstrapLimiter(100, 1000)
-	for i := range bootstrapMaxAttempts {
-		if !l.allow("k") {
-			t.Fatalf("attempt %d refused early", i)
-		}
-	}
-	if l.allow("k") {
-		t.Fatal("attempt past the per-key cap admitted")
-	}
-	if !l.allow("other") {
-		t.Fatal("another key was refused")
-	}
-	*now = now.Add(bootstrapWindowDuration + time.Second)
-	if !l.allow("k") {
-		t.Fatal("the key's window ended but it is still refused")
-	}
-}
-
-// TestBootstrapLimiter_SweepsExpiredEntries: ended windows are dropped on the
-// next call, so the map does not hold them.
-func TestBootstrapLimiter_SweepsExpiredEntries(t *testing.T) {
-	l, now := testBootstrapLimiter(1000, 1000)
-	for i := range 50 {
-		l.allow(fmt.Sprintf("k%d", i))
-	}
-	if bootstrapLimiterSize(l) != 50 {
-		t.Fatalf("size = %d, want 50", bootstrapLimiterSize(l))
-	}
-	*now = now.Add(bootstrapWindowDuration/2 + time.Second)
-	l.allow("late") // a younger window that must survive the sweep below
-	*now = now.Add(bootstrapWindowDuration/2 + time.Second)
-	l.allow("trigger")
-	if bootstrapLimiterSize(l) != 2 {
-		t.Fatalf("size after the first 50 windows ended = %d, want 2 (late, trigger)", bootstrapLimiterSize(l))
-	}
-}
-
-// TestBootstrapLimiter_HardCapEvictsOldest: rotating keys cannot grow the map
-// past the cap; the oldest windows go first.
-func TestBootstrapLimiter_HardCapEvictsOldest(t *testing.T) {
-	const maxKeys = 8
-	l, now := testBootstrapLimiter(maxKeys, 1_000_000)
-	for i := range 10 * maxKeys {
-		*now = now.Add(time.Second)
-		l.allow(fmt.Sprintf("k%d", i))
-		if bootstrapLimiterSize(l) > maxKeys {
-			t.Fatalf("size = %d after %d keys, cap is %d", bootstrapLimiterSize(l), i+1, maxKeys)
-		}
-	}
-	if bootstrapLimiterSize(l) != maxKeys {
-		t.Fatalf("size = %d, want the cap %d", bootstrapLimiterSize(l), maxKeys)
-	}
-	l.mu.Lock()
-	_, oldest := l.entries["k0"]
-	_, newest := l.entries[fmt.Sprintf("k%d", 10*maxKeys-1)]
-	l.mu.Unlock()
-	if oldest || !newest {
-		t.Fatalf("eviction order wrong: oldest present=%v, newest present=%v", oldest, newest)
-	}
-}
-
-// TestBootstrapLimiter_GlobalCeiling: however many distinct keys appear, the
-// total admitted per window is bounded; refused attempts spend nothing.
-func TestBootstrapLimiter_GlobalCeiling(t *testing.T) {
-	const globalMax = 12
-	l, now := testBootstrapLimiter(1000, globalMax)
-	for i := range globalMax {
-		if !l.allow(fmt.Sprintf("k%d", i)) {
-			t.Fatalf("distinct key %d refused under the ceiling", i)
-		}
-	}
-	if l.allow("fresh") {
-		t.Fatal("a fresh key was admitted past the global ceiling")
-	}
-	if bootstrapLimiterSize(l) != globalMax {
-		t.Fatalf("a refused attempt created an entry: size = %d, want %d", bootstrapLimiterSize(l), globalMax)
-	}
-	*now = now.Add(bootstrapWindowDuration + time.Second)
-	if !l.allow("fresh") {
-		t.Fatal("the window ended but the global ceiling still refuses")
-	}
-
-	// A key refused by its OWN cap does not spend the global budget.
-	l, _ = testBootstrapLimiter(1000, bootstrapMaxAttempts+1)
-	for range bootstrapMaxAttempts {
-		l.allow("k")
-	}
-	for range 50 {
-		l.allow("k") // refused per key
-	}
-	if !l.allow("other") {
-		t.Fatal("per-key refusals spent the global budget")
-	}
-}
-
-// TestBootstrapLimiter_EveryKeyCountsAgainstTheGlobalCeiling: the global
-// ceiling has no exempt key. Until 2026-10-21 allow took an exemption flag for
-// a direct LAN peer that skipped the ceiling; "direct" only means a private
-// peer address with no Cloudflare header, which anything reaching the port
-// off-tunnel satisfies, so every key is refused once the ceiling is spent and
-// every admitted attempt spends it.
-func TestBootstrapLimiter_EveryKeyCountsAgainstTheGlobalCeiling(t *testing.T) {
-	const globalMax = 3
-	l, _ := testBootstrapLimiter(1000, globalMax)
-	for i := range globalMax {
-		if !l.allow(fmt.Sprintf("tunnel%d", i)) {
-			t.Fatalf("key %d refused under the ceiling", i)
-		}
-	}
-	if l.allow("tunnel-extra") {
-		t.Fatal("a key was admitted past the global ceiling")
-	}
-	// A key that has never been seen, with its whole per-key budget unspent
-	// (the shape of a direct LAN peer), is refused all the same.
-	if l.allow("direct:10.0.0.50") {
-		t.Fatal("a fresh direct-peer key escaped the global ceiling")
-	}
-
-	// And a direct peer's admitted attempts spend the budget everyone shares.
-	l2, _ := testBootstrapLimiter(1000, globalMax)
-	for i := range globalMax {
-		if !l2.allow("direct:10.0.0.50", bootstrapAgg{key: bootstrapDirectLANTotalKey, factor: bootstrapDirectLANTotalFactor}) {
-			t.Fatalf("direct attempt %d refused under the ceiling", i)
-		}
-	}
-	if l2.allow("tunnel0") {
-		t.Fatal("direct attempts did not spend the global budget: a tunnel key was admitted after globalMax direct attempts")
-	}
 }
 
 // TestHandleBootstrap_DirectPeerCountsAgainstTheGlobalCeiling: a flood from
@@ -335,7 +202,7 @@ func TestBootstrapLimiter_EveryKeyCountsAgainstTheGlobalCeiling(t *testing.T) {
 func TestHandleBootstrap_DirectPeerCountsAgainstTheGlobalCeiling(t *testing.T) {
 	resetBootstrapRate(t)
 	const globalMax = 6
-	bootstrapLimits.globalMax = globalMax
+	setBootstrapGlobalMax(globalMax)
 	setTunnelConnectors(t, bootstrapTestConnector)
 	remote := bootstrapTestConnector + ":4000"
 	for i := range globalMax {
@@ -356,7 +223,7 @@ func TestHandleBootstrap_DirectPeerCountsAgainstTheGlobalCeiling(t *testing.T) {
 
 	// The other way round: direct attempts spend the budget tunnel clients share.
 	resetBootstrapRate(t)
-	bootstrapLimits.globalMax = globalMax
+	setBootstrapGlobalMax(globalMax)
 	setTunnelConnectors(t, bootstrapTestConnector)
 	for i := range globalMax {
 		direct := fmt.Sprintf("10.0.0.%d:5000", 50+i)
@@ -377,7 +244,7 @@ func TestHandleBootstrap_LoopbackWithCFHeaderCountsAgainstGlobal(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			resetBootstrapRate(t)
 			const globalMax = 3
-			bootstrapLimits.globalMax = globalMax
+			setBootstrapGlobalMax(globalMax)
 			setTunnelConnectors(t, connectors)
 			// Verified Access gives each client its own key, so only the global
 			// ceiling can refuse the 4th.
@@ -516,13 +383,13 @@ func TestBootstrapClientKey_PiConnectors(t *testing.T) {
 
 // bootstrapAttemptFrom runs one direct (no Cloudflare markers, no connectors)
 // bootstrap attempt from remote through bootstrapClientKey and l.
-func bootstrapAttemptFrom(l *bootstrapLimiter, remote string) bool {
+func bootstrapAttemptFrom(l *coreauth.BootstrapLimiter, remote string) bool {
 	return bootstrapAttemptVia(l, remote, nil, nil)
 }
 
 // bootstrapAttemptVia is bootstrapAttemptFrom with configured connectors and
 // request headers.
-func bootstrapAttemptVia(l *bootstrapLimiter, remote string, connectors connectorPeers, hdr map[string]string) bool {
+func bootstrapAttemptVia(l *coreauth.BootstrapLimiter, remote string, connectors connectorPeers, hdr map[string]string) bool {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/bootstrap", nil)
 	req.RemoteAddr = remote
 	for k, v := range hdr {
@@ -531,7 +398,7 @@ func bootstrapAttemptVia(l *bootstrapLimiter, remote string, connectors connecto
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
 	key, aggs, _ := bootstrapClientKey(c, connectors, func(string) bool { return false })
-	return l.allow(key, aggs...)
+	return l.Allow(key, aggs...)
 }
 
 // LAN /64 aggregate (review MEDIUM): a direct LAN host rotating through 50
@@ -539,7 +406,7 @@ func bootstrapAttemptVia(l *bootstrapLimiter, remote string, connectors connecto
 // address shares the /64's aggregate window, which caps it.
 func TestBootstrapLimiter_LANSlash64RotationIsCappedByTheAggregate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	l, _ := testBootstrapLimiter(coreauth.BootstrapMaxTrackedKeys, coreauth.BootstrapGlobalMaxAttempts)
 	admitted := 0
 	for i := range 50 {
 		for range 2 {
@@ -548,7 +415,7 @@ func TestBootstrapLimiter_LANSlash64RotationIsCappedByTheAggregate(t *testing.T)
 			}
 		}
 	}
-	if want := bootstrapLANPrefixFactor * bootstrapMaxAttempts; admitted != want {
+	if want := coreauth.BootstrapLANPrefixFactor * coreauth.BootstrapMaxAttempts; admitted != want {
 		t.Fatalf("one LAN /64 rotating 50 addresses: %d attempts admitted, want the aggregate %d", admitted, want)
 	}
 	if !bootstrapAttemptFrom(l, "[fd12:3456:789a:2::1]:4000") {
@@ -563,16 +430,16 @@ func TestBootstrapLimiter_LANSlash64RotationIsCappedByTheAggregate(t *testing.T)
 // within the shared aggregate.
 func TestBootstrapLimiter_LANDevicesInOneSlash64EachGetTheirWindow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	l, _ := testBootstrapLimiter(coreauth.BootstrapMaxTrackedKeys, coreauth.BootstrapGlobalMaxAttempts)
 	for _, peer := range []string{"[fd12:3456:789a:1::a]:4000", "[fd12:3456:789a:1::b]:4000"} {
 		n := 0
-		for range bootstrapMaxAttempts + 3 {
+		for range coreauth.BootstrapMaxAttempts + 3 {
 			if bootstrapAttemptFrom(l, peer) {
 				n++
 			}
 		}
-		if n != bootstrapMaxAttempts {
-			t.Fatalf("%s: %d attempts admitted, want its own %d", peer, n, bootstrapMaxAttempts)
+		if n != coreauth.BootstrapMaxAttempts {
+			t.Fatalf("%s: %d attempts admitted, want its own %d", peer, n, coreauth.BootstrapMaxAttempts)
 		}
 	}
 }
@@ -584,7 +451,7 @@ func TestBootstrapLimiter_LANDevicesInOneSlash64EachGetTheirWindow(t *testing.T)
 // still gets its full window afterwards.
 func TestBootstrapLimiter_TunnelFloodFromLANConnectorsLeavesTheDirectAggregate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	l, _ := testBootstrapLimiter(coreauth.BootstrapMaxTrackedKeys, coreauth.BootstrapGlobalMaxAttempts)
 	listed, _ := parseConnectorPeers("fd12:3456:789a:1::11")
 	for i := range 60 {
 		bootstrapAttemptVia(l, "[fd12:3456:789a:1::11]:4000", listed,
@@ -592,20 +459,18 @@ func TestBootstrapLimiter_TunnelFloodFromLANConnectorsLeavesTheDirectAggregate(t
 		bootstrapAttemptVia(l, fmt.Sprintf("[fd12:3456:789a:1::%x]:4000", 0x100+i), listed,
 			map[string]string{"Cf-Ray": "x"}) // unlisted connector, rotating
 	}
-	l.mu.Lock()
-	spent := l.countLocked("direct-lan64:fd12:3456:789a:1::/64")
-	l.mu.Unlock()
+	spent := l.Count("direct-lan64:fd12:3456:789a:1::/64")
 	if spent != 0 {
 		t.Fatalf("the tunnel flood spent %d of the direct-lan64 aggregate, want 0", spent)
 	}
 	n := 0
-	for range bootstrapMaxAttempts + 2 {
+	for range coreauth.BootstrapMaxAttempts + 2 {
 		if bootstrapAttemptFrom(l, "[fd12:3456:789a:1::1]:4000") {
 			n++
 		}
 	}
-	if n != bootstrapMaxAttempts {
-		t.Fatalf("the owner's direct peer after the flood: %d attempts admitted, want %d", n, bootstrapMaxAttempts)
+	if n != coreauth.BootstrapMaxAttempts {
+		t.Fatalf("the owner's direct peer after the flood: %d attempts admitted, want %d", n, coreauth.BootstrapMaxAttempts)
 	}
 }
 
@@ -622,24 +487,24 @@ func TestBootstrapClientKey_ZonedLinkLocalIsDirect(t *testing.T) {
 // same /64 still gets its full window afterwards.
 func TestBootstrapLimiter_CfMarkedULARotationIsCapped(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, 1000) // a global ceiling the flood cannot reach
+	l, _ := testBootstrapLimiter(coreauth.BootstrapMaxTrackedKeys, 1000) // a global ceiling the flood cannot reach
 	admitted := 0
 	for i := range 250 {
 		if bootstrapAttemptVia(l, fmt.Sprintf("[fd12:3456:789a:1::%x]:4000", 0x100+i), nil, map[string]string{"Cf-Ray": "x"}) {
 			admitted++
 		}
 	}
-	if want := bootstrapLANPrefixFactor * bootstrapMaxAttempts; admitted != want {
+	if want := coreauth.BootstrapLANPrefixFactor * coreauth.BootstrapMaxAttempts; admitted != want {
 		t.Fatalf("Cf-marked ULA rotation: %d of 250 admitted, want the unlisted aggregate %d", admitted, want)
 	}
 	n := 0
-	for range bootstrapMaxAttempts + 2 {
+	for range coreauth.BootstrapMaxAttempts + 2 {
 		if bootstrapAttemptFrom(l, "[fd12:3456:789a:1::1]:4000") {
 			n++
 		}
 	}
-	if n != bootstrapMaxAttempts {
-		t.Fatalf("the owner's direct peer after the flood: %d admitted, want %d", n, bootstrapMaxAttempts)
+	if n != coreauth.BootstrapMaxAttempts {
+		t.Fatalf("the owner's direct peer after the flood: %d admitted, want %d", n, coreauth.BootstrapMaxAttempts)
 	}
 }
 
@@ -652,59 +517,35 @@ func TestBootstrapLimiter_CfMarkedIPv4AliasRotationIsCapped(t *testing.T) {
 	withFreshUnlistedWarnings(t)
 	cf := map[string]string{"Cf-Ray": "x"}
 
-	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, 1000)
+	l, _ := testBootstrapLimiter(coreauth.BootstrapMaxTrackedKeys, 1000)
 	admitted := 0
 	for i := range 150 {
 		if bootstrapAttemptVia(l, fmt.Sprintf("10.0.0.%d:4000", i+100), nil, cf) {
 			admitted++
 		}
 	}
-	if want := bootstrapLANPrefixFactor * bootstrapMaxAttempts; admitted != want {
+	if want := coreauth.BootstrapLANPrefixFactor * coreauth.BootstrapMaxAttempts; admitted != want {
 		t.Fatalf("Cf-marked rotation within one /24: %d of 150 admitted, want the /24 window %d", admitted, want)
 	}
 	n := 0
-	for range bootstrapMaxAttempts + 2 {
+	for range coreauth.BootstrapMaxAttempts + 2 {
 		if bootstrapAttemptFrom(l, "10.0.0.50:4000") {
 			n++
 		}
 	}
-	if n != bootstrapMaxAttempts {
-		t.Fatalf("the owner's direct peer after the rotation: %d admitted, want %d", n, bootstrapMaxAttempts)
+	if n != coreauth.BootstrapMaxAttempts {
+		t.Fatalf("the owner's direct peer after the rotation: %d admitted, want %d", n, coreauth.BootstrapMaxAttempts)
 	}
 
-	l, _ = testBootstrapLimiter(bootstrapMaxTrackedKeys, 1000)
+	l, _ = testBootstrapLimiter(coreauth.BootstrapMaxTrackedKeys, 1000)
 	admitted = 0
 	for i := range 150 {
 		if bootstrapAttemptVia(l, fmt.Sprintf("10.0.%d.9:4000", i), nil, cf) {
 			admitted++
 		}
 	}
-	if want := bootstrapUnlistedLANTotalFactor * bootstrapMaxAttempts; admitted != want {
+	if want := coreauth.BootstrapUnlistedLANTotalFactor * coreauth.BootstrapMaxAttempts; admitted != want {
 		t.Fatalf("Cf-marked rotation across 150 /24s: %d admitted, want the unlisted total %d", admitted, want)
-	}
-}
-
-// N-a: a refusal by any aggregate window records nothing anywhere, so a
-// rotation refused by the unlisted total leaves the per-key and global counts
-// exactly at what was admitted.
-func TestBootstrapLimiter_RefusedByAnAggregateSpendsNothing(t *testing.T) {
-	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, 1000)
-	total := bootstrapAgg{key: bootstrapUnlistedLANTotalKey, factor: 1}
-	for i := range bootstrapMaxAttempts {
-		if !l.allow(fmt.Sprintf("k%d", i), total) {
-			t.Fatalf("attempt %d refused before the total was reached", i)
-		}
-	}
-	if l.allow("fresh", total) {
-		t.Fatal("attempt past the total admitted")
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if got := l.countLocked("fresh"); got != 0 {
-		t.Fatalf("the refused attempt recorded %d against its own key, want 0", got)
-	}
-	if l.global.count != bootstrapMaxAttempts {
-		t.Fatalf("global count %d, want %d (the refused attempt spent it)", l.global.count, bootstrapMaxAttempts)
 	}
 }
 
@@ -717,31 +558,29 @@ func TestBootstrapLimiter_RefusedByAnAggregateSpendsNothing(t *testing.T) {
 // so it still gets its full window from what is left of the ceiling.
 func TestBootstrapLimiter_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	l, _ := testBootstrapLimiter(coreauth.BootstrapMaxTrackedKeys, coreauth.BootstrapGlobalMaxAttempts)
 	admitted := 0
 	for i := range 100 {
 		if bootstrapAttemptFrom(l, fmt.Sprintf("10.0.%d.%d:4000", i/200, i%200+1)) {
 			admitted++
 		}
 	}
-	if want := bootstrapDirectLANTotalFactor * bootstrapMaxAttempts; admitted != want {
+	if want := coreauth.BootstrapDirectLANTotalFactor * coreauth.BootstrapMaxAttempts; admitted != want {
 		t.Fatalf("direct IPv4 alias rotation: %d of 100 admitted, want the direct total %d", admitted, want)
 	}
-	l.mu.Lock()
-	global := l.global.count
-	l.mu.Unlock()
+	global := l.GlobalCount()
 	if global != admitted {
 		t.Fatalf("direct attempts spent %d of the global ceiling, want the %d admitted", global, admitted)
 	}
 	for _, lo := range []string{"127.0.0.1:4000", "[::1]:4000"} {
 		n := 0
-		for range bootstrapMaxAttempts + 2 {
+		for range coreauth.BootstrapMaxAttempts + 2 {
 			if bootstrapAttemptFrom(l, lo) {
 				n++
 			}
 		}
-		if n != bootstrapMaxAttempts {
-			t.Fatalf("loopback %s after the direct total was spent: %d admitted, want %d", lo, n, bootstrapMaxAttempts)
+		if n != coreauth.BootstrapMaxAttempts {
+			t.Fatalf("loopback %s after the direct total was spent: %d admitted, want %d", lo, n, coreauth.BootstrapMaxAttempts)
 		}
 	}
 }
@@ -750,7 +589,7 @@ func TestBootstrapLimiter_DirectIPv4AliasRotationIsCappedByTheDirectTotal(t *tes
 // window each time; the direct total is what stops it.
 func TestBootstrapLimiter_DirectRotationAcrossSlash64sIsCappedByTheDirectTotal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	l, _ := testBootstrapLimiter(bootstrapMaxTrackedKeys, bootstrapGlobalMaxAttempts)
+	l, _ := testBootstrapLimiter(coreauth.BootstrapMaxTrackedKeys, coreauth.BootstrapGlobalMaxAttempts)
 	admitted := 0
 	for i := range 60 {
 		for j := range 3 {
@@ -759,7 +598,7 @@ func TestBootstrapLimiter_DirectRotationAcrossSlash64sIsCappedByTheDirectTotal(t
 			}
 		}
 	}
-	if want := bootstrapDirectLANTotalFactor * bootstrapMaxAttempts; admitted != want {
+	if want := coreauth.BootstrapDirectLANTotalFactor * coreauth.BootstrapMaxAttempts; admitted != want {
 		t.Fatalf("direct rotation across 60 /64s: %d of 180 admitted, want the direct total %d", admitted, want)
 	}
 }
