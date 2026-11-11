@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/chunks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ca419ac2-8938-45ee-a04a-fe0d1930eb92
 // last-edited: 2026-11-10
 
@@ -226,7 +226,14 @@ type SyntheticCutover struct {
 	Spec  storage.Spec
 	// Rows is the fixture's size; 0 = 2 400.
 	Rows int
-	// Parallelism is the migration's; zero = tasks.Fixed(4, "test").
+	// Parallelism is the migration's, required: a tasks.Parallelism has no
+	// valid zero value (03 R7), and registration refuses an undeclared one
+	// (tasks.ErrNoParallelism). The matrix breaks every chunk commit of every
+	// shard, so a caller declares tasks.Fixed with more than one shard;
+	// Sequential would leave a single shard and drop the per-shard cells.
+	// boot validates it before anything is opened.
+	//
+	//mediacore:required
 	Parallelism tasks.Parallelism
 	// ChunkItems is core.storage.data_migration.chunk_items; 0 = 150.
 	ChunkItems int
@@ -248,9 +255,6 @@ func SyntheticID(owner storage.Owner) string { return string(owner) + ".case-fil
 func (c SyntheticCutover) defaults() SyntheticCutover {
 	if c.Rows == 0 {
 		c.Rows = 2400
-	}
-	if c.Parallelism == (tasks.Parallelism{}) {
-		c.Parallelism = tasks.Fixed(4, "test: four disjoint shards of the fixture")
 	}
 	if c.ChunkItems == 0 {
 		c.ChunkItems = 150
@@ -329,6 +333,9 @@ func quarantineKey(step string, key []byte) []byte {
 // migrates it (P2, P4a, P4b) and closes it.
 func (c SyntheticCutover) boot(ctx context.Context, fs vfs.FS, migs []datamigrate.DataMigration, h *handles) error {
 	c = c.defaults()
+	if err := c.Parallelism.Validate(); err != nil {
+		return fmt.Errorf("crashmatrix: SyntheticCutover.Parallelism is required: %w", err)
+	}
 	cfg := kernel.DataMigrationsConfig{ChunkItems: c.ChunkItems, Build: "batcomputer-2", Logger: slog.New(slog.DiscardHandler)}
 	if !c.NoQuarantineWriter {
 		cfg.Quarantine = func(_ context.Context, b *storage.Batch, step string, key, raw []byte, _ string, _ bool) error {
