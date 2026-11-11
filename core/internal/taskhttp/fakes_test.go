@@ -1,5 +1,5 @@
 // file: core/internal/taskhttp/fakes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ba1ee649-0c1e-4172-b3e6-7a16c5561b5e
 // last-edited: 2026-11-11
 
@@ -563,4 +563,13 @@ func (g *rig) doMulti(r req, name string, values ...string) *httptest.ResponseRe
 	rec := httptest.NewRecorder()
 	asPrincipal(r.as, g.h).ServeHTTP(rec, hr)
 	return rec
+}
+
+// decodeAsync is decode for goroutines other than the test's: it reports with
+// Errorf, since FailNow must run on the test goroutine.
+func decodeAsync(t *testing.T, rec *httptest.ResponseRecorder, v any) {
+	t.Helper()
+	if err := json.Unmarshal(rec.Body.Bytes(), v); err != nil {
+		t.Errorf("response %d is not JSON: %v\n%s", rec.Code, err, rec.Body.String())
+	}
 }

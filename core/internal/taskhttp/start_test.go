@@ -1,5 +1,5 @@
 // file: core/internal/taskhttp/start_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 99faaab6-513a-4a2b-b858-934b54651a82
 // last-edited: 2026-11-11
 
@@ -182,7 +182,7 @@ func TestStart_ConcurrentSameIdempotencyKeyOneRun(t *testing.T) {
 			rec := g.do(startReq(`{"mode":"live"}`, "joker-no-double-0007"))
 			codes[i], replayed[i] = rec.Code, rec.Header().Get("Idempotent-Replayed")
 			var v runDTO
-			decode(t, rec, &v)
+			decodeAsync(t, rec, &v)
 			ids[i] = v.ID
 		})
 	}

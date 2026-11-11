@@ -1,5 +1,5 @@
 // file: core/internal/taskhttp/executor_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0308922c-6326-415d-9f39-f9e663e1f391
 // last-edited: 2026-11-11
 
@@ -128,7 +128,7 @@ func TestExecutor_IdempotencyThroughHTTP(t *testing.T) {
 	do := func(key string) (int, string, string) {
 		rec := g.do(startReq(`{"mode": "live"}`, key))
 		var v runDTO
-		decode(t, rec, &v)
+		decodeAsync(t, rec, &v)
 		return rec.Code, v.ID, rec.Header().Get("Idempotent-Replayed")
 	}
 	c1, id1, h1 := do("scarecrow-1939")
