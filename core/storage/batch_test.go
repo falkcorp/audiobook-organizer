@@ -1,7 +1,7 @@
 // file: core/storage/batch_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c1fd20f4-e973-4127-8a09-c47f9835a7e6
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -165,6 +165,54 @@ func TestExpectConflictAppliesNothing(t *testing.T) {
 	wg.Wait()
 	if v, _ := ks.Get(ctx, []byte("n")); string(v) != strconv.Itoa(1+workers*each) {
 		t.Fatalf("counter = %s, want %d", v, 1+workers*each)
+	}
+}
+
+// TestGetForUpdateKeepsTheFirstReadsPrecondition (05-storage §5S.3.2,
+// "checked at commit"): a batch reads a key, another batch commits a new
+// value, and the first batch reads the key again before it commits. The
+// second read must not replace the first read's precondition, or the
+// batch's writes, built from the older value, would commit over the newer
+// one. Found by the task executor, whose transition reads the run row once
+// in Transition and again when it appends the transition's event: two
+// concurrent approvals of one plan both committed.
+func TestGetForUpdateKeepsTheFirstReadsPrecondition(t *testing.T) {
+	ctx := context.Background()
+	db := newEnv(t, serializedOwners()...).open()
+	ks, _ := db.Keyspace("core/tasks")
+	if err := put(ctx, ks, "n", "0"); err != nil {
+		t.Fatal(err)
+	}
+	for i, indexed := range []bool{false, true} {
+		newer := []string{"bane", "talia"}[i]
+		b := ks.NewBatch()
+		if indexed {
+			b = ks.NewIndexedBatch()
+		}
+		v, err := b.GetForUpdate(ctx, ks, []byte("n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Set([]byte("n"), append(slices.Clone(v), '+')); err != nil {
+			t.Fatal(err)
+		}
+		other := ks.NewBatch() // another writer commits in between
+		if _, err := other.GetForUpdate(ctx, ks, []byte("n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := other.Set([]byte("n"), []byte(newer)); err != nil {
+			t.Fatal(err)
+		}
+		if err := other.Commit(ctx, Sync); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.GetForUpdate(ctx, ks, []byte("n")); err != nil {
+			t.Fatal(err)
+		}
+		mustErrIs(t, b.Commit(ctx, Sync), ErrConflict)
+		if got, _ := ks.Get(ctx, []byte("n")); string(got) != newer {
+			t.Fatalf("indexed=%v: n = %q, want the other writer's %q kept", indexed, got, newer)
+		}
 	}
 }
 

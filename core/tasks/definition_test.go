@@ -1,7 +1,7 @@
 // file: core/tasks/definition_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 1173dc91-1e44-4449-bd9f-f6ef42138906
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package tasks_test
 
@@ -129,6 +129,31 @@ func TestBatch_ZeroParallelismRefusedAtRegister(t *testing.T) {
 		if len(ps) != 1 || !errors.Is(ps[0], tasks.ErrNoParallelism) {
 			t.Fatalf("%s problems = %v, want exactly one wrapping ErrNoParallelism", d.Kind(), ps)
 		}
+	}
+}
+
+// TestFixer_ApprovalNeedsPlanRequired (5T.3.7, HEAD's rule that every
+// Fixer requires a plan): a Fixer whose Approval leaves PlanRequired false
+// is a definition problem, so no Fixer can go Live without an approved plan.
+func TestFixer_ApprovalNeedsPlanRequired(t *testing.T) {
+	fixer := func(a *tasks.Approval) tasks.Definition {
+		c := writerCommon()
+		c.Approval = a
+		return tasks.Fixer("gotham.cases.fix", tasks.FixerSpec[struct{}, int]{
+			Common:      c,
+			Candidates:  func(*tasks.RC, struct{}) (tasks.Source[int], error) { return tasks.Source[int]{}, nil },
+			Load:        func(*tasks.RC, struct{}, string) (int, bool, error) { return 0, false, nil },
+			Evaluate:    func(*tasks.ItemRC, struct{}, int) (tasks.Row, error) { return tasks.Row{}, nil },
+			Apply:       func(*tasks.ItemRC, tasks.Writer, struct{}, tasks.Row) error { return nil },
+			Parallelism: tasks.Sequential("one evidence locker"),
+		})
+	}
+	if ps := tasks.Problems(fixer(&tasks.Approval{PlanRequired: true})); len(ps) != 0 {
+		t.Fatalf("a Fixer requiring a plan: %v, want no problem", ps)
+	}
+	ps := tasks.Problems(fixer(&tasks.Approval{MaxPlanAge: time.Hour}))
+	if len(ps) != 1 || !strings.Contains(ps[0].Error(), "PlanRequired") {
+		t.Fatalf("a Fixer whose Approval does not require a plan: %v, want one PlanRequired problem", ps)
 	}
 }
 
