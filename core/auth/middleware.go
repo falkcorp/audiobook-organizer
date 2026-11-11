@@ -1,5 +1,5 @@
 // file: core/auth/middleware.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9206232a-c4a5-4cca-be1f-569a0020e2c1
 // last-edited: 2026-11-11
 
@@ -350,6 +350,11 @@ func (s *Service) resolveKey(ctx context.Context, raw string, c ClientInfo, m Me
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if len(k.Scopes) == 0 {
+		// Never stored (R3-1); but a nil list is "every role permission" to
+		// PrincipalFor for any method but api_key, so it is refused here.
+		return nil, fmt.Errorf("%w: key %s has no scope", ErrInvalidCredentials, k.ID), nil
 	}
 	p, err = s.PrincipalFor(ctx, u, m, k.Scopes, u.CredentialEpoch)
 	if err != nil {
