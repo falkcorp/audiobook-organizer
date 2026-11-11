@@ -1,5 +1,5 @@
 // file: core/internal/executor/errors.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ee118157-68ed-4213-be77-f44028207038
 // last-edited: 2026-11-10
 
@@ -29,6 +29,18 @@ var (
 	ErrPlanInvalid = errors.New("executor: plan_ref does not name a succeeded preview run of this kind")
 	// ErrPlanTooOld: the plan finished longer ago than Approval.MaxPlanAge.
 	ErrPlanTooOld = errors.New("executor: the plan is older than the kind's maximum plan age")
+	// ErrApprovalRequired: a start names a plan_ref without coming through
+	// Approve; a plan's apply run starts only there.
+	ErrApprovalRequired = errors.New("executor: a run of a plan starts only through Approve")
+	// ErrPlanRejected: Approve of a plan that was rejected, or an apply run
+	// of one.
+	ErrPlanRejected = errors.New("executor: the plan was rejected")
+	// ErrNoApproval: a Live run that names a plan has no approval record;
+	// it applies nothing (fail closed).
+	ErrNoApproval = errors.New("executor: no approval recorded for this plan run; nothing applied")
+	// ErrReservedCheckpoint: a checkpoint name in the executor's reserved
+	// "core." namespace.
+	ErrReservedCheckpoint = errors.New("executor: checkpoint names starting with core. are reserved")
 	// ErrRowNotInPlan: Approve names a row the plan does not hold.
 	ErrRowNotInPlan = errors.New("executor: approved row is not in the plan")
 	// ErrNotAwaitingDecision: Decide on a run that is not awaiting_decision.

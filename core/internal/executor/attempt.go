@@ -1,5 +1,5 @@
 // file: core/internal/executor/attempt.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4ad76723-6fc7-4bac-840b-f169142b4af9
 // last-edited: 2026-11-10
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,11 +22,12 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 )
 
-// Reserved checkpoint names (never a module's: module names have no dot
-// prefix "core.").
+// Reserved checkpoint names: the executor's own records. storedName refuses
+// a run body any name with the "core." prefix.
 const (
 	ckptZero     = "core.zero"     // the attempt from which earlier checkpoints are void (ResumeFromZero)
 	ckptApproved = "core.approved" // a Fixer apply run's approved rows
+	ckptRC       = "core.rc"       // RC.Checkpoint's value (the SDK passes the name "", which the store refuses)
 	chunkAttempt = "core.attempt"  // Chunk.Counters entry: the attempt that wrote the chunk
 )
 
@@ -128,6 +130,10 @@ func (a *attempt) Phase(name string) (end func()) {
 // error fails a ResumeContinue run (resume would be unsound) and is a WARN
 // otherwise (5T.5).
 func (a *attempt) Checkpoint(name string, v any) error {
+	name, err := storedName(name)
+	if err != nil {
+		return err
+	}
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("executor: checkpoint %q: %w", name, err)
@@ -150,6 +156,20 @@ func (a *attempt) Checkpoint(name string, v any) error {
 	return a.ckptResult(a.flushLedger(a.ctx))
 }
 
+// storedName maps a run body's checkpoint name to the stored one: "" (the
+// name RC.Checkpoint and RC.Restore pass) is ckptRC, and a name in the
+// executor's reserved "core." space is refused, so a body can neither
+// forge nor read the executor's own records (an approval, the zero mark).
+func storedName(name string) (string, error) {
+	switch {
+	case name == "":
+		return ckptRC, nil
+	case strings.HasPrefix(name, "core."):
+		return "", fmt.Errorf("%w: %q", ErrReservedCheckpoint, name)
+	}
+	return name, nil
+}
+
 func (a *attempt) ckptResult(err error) error {
 	if err == nil {
 		return nil
@@ -164,6 +184,10 @@ func (a *attempt) ckptResult(err error) error {
 // Restore reads name: this attempt's newest pending value first, then the
 // stored one unless a ResumeFromZero voided it.
 func (a *attempt) Restore(name string, v any) (bool, error) {
+	name, err := storedName(name)
+	if err != nil {
+		return false, err
+	}
 	a.pmu.Lock()
 	env, ok := a.pending[name]
 	a.pmu.Unlock()

@@ -1,5 +1,5 @@
 // file: core/internal/executor/start.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 89eb5ff3-93fb-4a22-9970-d55b28fbbe40
 // last-edited: 2026-11-10
 
@@ -31,6 +31,7 @@ type startMode uint8
 const (
 	modeDefault  startMode = iota // HTTP route / Client.Start: rule 2 (Preview for writers, Live for ReadOnly)
 	modeRequired                  // StartIn: ErrModeUnset
+	modeApprove                   // Approve's apply run: Live, and the one start that may name a plan
 )
 
 // Start implements tasks.Client.Start: the caller is stamped from ctx
@@ -138,7 +139,7 @@ func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.Start
 	}
 	mode, ok := req.Mode.Mode()
 	if !ok {
-		if m == modeRequired {
+		if m != modeDefault {
 			return prepared{}, tasks.ErrModeUnset
 		}
 		mode = tasks.ModePreview // rule 2: omitted mode is Preview for writers
@@ -156,10 +157,18 @@ func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.Start
 	if _, err := e.writeSet(d, params); err != nil {
 		return prepared{}, err
 	}
-	if d.shape == tasks.ShapeFixer && mode == tasks.ModeLive {
+	// A plan's apply run starts only through Approve (fail closed): no other
+	// path may name a plan_ref, and a kind whose Approval requires a plan
+	// cannot go Live any other way.
+	switch {
+	case m == modeApprove:
 		if err := e.checkPlan(ctx, d, req.PlanRef); err != nil {
 			return prepared{}, err
 		}
+	case req.PlanRef != "":
+		return prepared{}, fmt.Errorf("%w: %s names plan %s", ErrApprovalRequired, d.kind, req.PlanRef)
+	case mode == tasks.ModeLive && d.c.Approval != nil && d.c.Approval.PlanRequired:
+		return prepared{}, fmt.Errorf("%w: %s", ErrPlanRequired, d.kind)
 	}
 	prio := req.Priority
 	if prio == 0 {
@@ -263,10 +272,7 @@ func declared(set []entity.Ref, r entity.Ref) bool {
 func (e *executor) checkPlan(ctx context.Context, d *def, ref tasks.RunID) error {
 	a := d.c.Approval
 	if ref == "" {
-		if a != nil && a.PlanRequired {
-			return fmt.Errorf("%w: %s", ErrPlanRequired, d.kind)
-		}
-		return nil
+		return fmt.Errorf("%w: %s", ErrPlanRequired, d.kind)
 	}
 	plan, err := e.runs.Get(ctx, ref)
 	if err != nil {
@@ -282,7 +288,38 @@ func (e *executor) checkPlan(ctx context.Context, d *def, ref tasks.RunID) error
 	if age := e.now().Sub(plan.Finished); age > maxAge {
 		return fmt.Errorf("%w: %s finished %s ago (max %s)", ErrPlanTooOld, ref, age.Round(time.Second), maxAge)
 	}
+	rejected, err := e.planRejected(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if rejected {
+		return fmt.Errorf("%w: %s", ErrPlanRejected, ref)
+	}
 	return nil
+}
+
+// eventReject is the event Approve records on a rejected plan.
+const eventReject = "reject"
+
+// planRejected reports whether a plan run carries a rejection event.
+func (e *executor) planRejected(ctx context.Context, id tasks.RunID) (bool, error) {
+	q := tasks.PageQuery{Page: tasks.PageEvents, Limit: 1000}
+	for {
+		n := 0
+		for p, err := range e.runs.Pages(ctx, id, q) {
+			if err != nil {
+				return false, err
+			}
+			n++
+			q.After = p.Key
+			if p.Event.Event == eventReject {
+				return true, nil
+			}
+		}
+		if n < 1000 {
+			return false, nil
+		}
+	}
 }
 
 // idemRecord is an idem/<kind>/<key> value.

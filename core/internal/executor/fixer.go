@@ -1,5 +1,5 @@
 // file: core/internal/executor/fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9689d192-751d-423a-b144-61fe27e2a8d1
 // last-edited: 2026-11-10
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -17,8 +18,29 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 )
 
-// planPrefix is the row prefix a Fixer plan writes (RunStore.ReplaceRows).
-const planPrefix = "plan"
+// planPrefix prefixes a Fixer plan's stored row IDs: a plan row is stored
+// as "plan:" + Row.ID, since RunStore.ReplaceRows replaces the rows whose
+// IDs begin with a prefix (taskstest's storesuite shape). planRows strips
+// it, so Approve, the marks and the apply run name the definition's Row.ID.
+const planPrefix = "plan:"
+
+// planRows reads a plan run's rows keyed by Row.ID (rows outside the plan
+// prefix are not the plan's).
+func (e *executor) planRows(ctx context.Context, id tasks.RunID) (map[string]tasks.Row, error) {
+	out := map[string]tasks.Row{}
+	for row, err := range e.runs.Rows(ctx, id) {
+		if err != nil {
+			return nil, err
+		}
+		rid, ok := strings.CutPrefix(row.ID, planPrefix)
+		if !ok {
+			continue
+		}
+		row.ID = rid
+		out[rid] = row
+	}
+	return out, nil
+}
 
 // fixerResult is a Fixer run's stored result.
 type fixerResult struct {
@@ -99,6 +121,24 @@ func (a *attempt) evaluate(rc *tasks.RC, p any) ([]tasks.Row, tasks.ItemsResult,
 	return rows, res, nil
 }
 
+// approval reads the approved row IDs Approve staged with this run. It is
+// read straight from the store, past the ResumeFromZero filter: a from-zero
+// resume voids progress, never the approval. No record fails closed.
+func (a *attempt) approval(ctx context.Context) ([]string, error) {
+	raw, found, err := a.e.runs.Checkpoint(ctx, a.id, ckptApproved)
+	if err != nil {
+		return nil, err
+	}
+	if !found || len(raw) == 0 {
+		return nil, fmt.Errorf("%w: run %s (plan %s)", ErrNoApproval, a.id, a.rec.PlanRef)
+	}
+	var rows []string
+	if err := json.Unmarshal(unwrapData(raw), &rows); err != nil {
+		return nil, fmt.Errorf("executor: approval record of %s: %w", a.id, err)
+	}
+	return rows, nil
+}
+
 func guard(gs []tasks.Guard, row tasks.Row) string {
 	for _, g := range gs {
 		if reason := g(row); reason != "" {
@@ -120,7 +160,11 @@ func (a *attempt) fixerPlan(rc *tasks.RC, p any) (json.RawMessage, error) {
 		return nil, tasks.ErrFenced
 	}
 	if err := a.e.runs.ReplaceRows(context.WithoutCancel(rc.Context()), a.id, planPrefix, len(rows),
-		func(i int) (tasks.Row, error) { return rows[i], nil }); err != nil {
+		func(i int) (tasks.Row, error) {
+			r := rows[i]
+			r.ID = planPrefix + r.ID
+			return r, nil
+		}); err != nil {
 		return nil, err
 	}
 	return json.Marshal(fixerResult{Rows: len(rows), Skipped: int(res.Skipped), Failed: int(res.Failed)})
@@ -132,24 +176,22 @@ func (a *attempt) fixerApply(rc *tasks.RC, p any) (json.RawMessage, error) {
 	plan := map[string]tasks.Row{}
 	var ids []string
 	if ref := a.rec.PlanRef; ref != "" {
-		for row, err := range a.e.runs.Rows(ctx, ref) {
-			if err != nil {
-				return nil, err
-			}
-			plan[row.ID] = row
+		var err error
+		if plan, err = a.e.planRows(ctx, ref); err != nil {
+			return nil, err
 		}
-		var approved []string
-		ok, err := a.Restore(ckptApproved, &approved)
+		rejected, err := a.e.planRejected(ctx, ref)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			ids = approved
-		} else {
-			for id := range plan {
-				ids = append(ids, id)
-			}
+		if rejected {
+			return nil, fmt.Errorf("%w: %s", ErrPlanRejected, ref)
 		}
+		approved, err := a.approval(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ids = approved
 	} else {
 		rows, _, err := a.evaluate(rc, p)
 		if err != nil {

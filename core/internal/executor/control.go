@@ -1,5 +1,5 @@
 // file: core/internal/executor/control.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e0da087e-cd1b-40dd-8ed9-97f8b015517f
 // last-edited: 2026-11-10
 
@@ -346,39 +346,50 @@ func (e *executor) Approve(ctx context.Context, id tasks.RunID, req tasks.Approv
 		return fmt.Errorf("%w: %s", ErrHeld, id)
 	}
 	d := e.defs[plan.Kind]
-	if d == nil || d.shape != tasks.ShapeFixer {
-		return fmt.Errorf("%w: %s is not a Fixer plan", ErrPlanInvalid, id)
+	if d == nil || d.c.Approval == nil {
+		return fmt.Errorf("%w: %s's kind takes no approval", ErrPlanInvalid, id)
+	}
+	// 5T.3.7: approve and reject need Perms.Approve (Perms.Start when a
+	// non-Fixer kind leaves it unset, as Decide); the verified-method half
+	// is the HTTP route's (F2-05). A caller with no identity is a
+	// kernel-internal call and acts as no one: never as the plan's actor.
+	actor, who := e.caller(ctx)
+	if who != nil {
+		need := d.c.Perms.Approve
+		if need.IsZero() {
+			need = d.c.Perms.Start
+		}
+		if !who.Satisfies(need) {
+			return fmt.Errorf("%w: approve %s", ErrNotPermitted, id)
+		}
 	}
 	if err := e.checkPlan(ctx, d, id); err != nil {
 		return err
 	}
-	actor, _ := e.caller(ctx)
+	var by *tasks.Actor
+	if actor != (tasks.Actor{}) {
+		by = &actor
+	}
 	if req.Reject {
 		_, err := e.move(ctx, id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
-			return cur, tasks.RunEvent{Event: "reject", Reason: req.Reason, Actor: &actor}, nil
+			return cur, tasks.RunEvent{Event: eventReject, Reason: req.Reason, Actor: by}, nil
 		}, nil)
 		return err
 	}
-	inPlan := map[string]bool{}
-	for row, err := range e.runs.Rows(ctx, id) {
-		if err != nil {
-			return err
-		}
-		inPlan[row.ID] = true
+	inPlan, err := e.planRows(ctx, id)
+	if err != nil {
+		return err
 	}
 	rows := slices.Clone(req.Rows)
 	slices.Sort(rows)
 	rows = slices.Compact(rows)
 	for _, r := range rows {
-		if !inPlan[r] {
+		if _, ok := inPlan[r]; !ok {
 			return fmt.Errorf("%w: %s", ErrRowNotInPlan, r)
 		}
 	}
-	if actor == (tasks.Actor{}) {
-		actor = plan.Actor
-	}
 	start := tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: plan.Params, PlanRef: id, Actor: actor, Trigger: tasks.TriggerManual}
-	prep, err := e.prepare(ctx, plan.Kind, start, nil, modeRequired)
+	prep, err := e.prepare(ctx, plan.Kind, start, who, modeApprove)
 	if err != nil {
 		return err
 	}
