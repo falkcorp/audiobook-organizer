@@ -44,6 +44,11 @@ var ErrUnknownCounter = errors.New("providerhttp: unknown quota counter")
 // truncation.
 var ErrResponseTooLarge = errors.New("providerhttp: response body exceeds the size limit")
 
+// ErrHoldChanged: ReleaseHoldIf found a different hold in force than the one
+// the caller saw (a longer one was set, or one replaced it), so it released
+// nothing. The caller re-reads (HoldFor) and decides again.
+var ErrHoldChanged = errors.New("providerhttp: the hold changed since it was read")
+
 // Refusal is the cause inside the *integrations.Error (ClassRefusedLocal) of
 // every attempt the gate refused before sending. Callers that need to tell a
 // hold from an open breaker (the metadata chain's Outcome) read Reason with
