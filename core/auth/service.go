@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -231,8 +231,12 @@ type Service struct {
 	setupMu sync.Mutex
 
 	extensions []Extension
-	methods    map[Method]MethodSpec // registered extension and compat methods
-	touches    touchTable
+	// methods are the registered extension and compat methods; compat
+	// methods join at P7 (RegisterCompat), while requests are not yet served
+	// but never assumed so, hence the lock.
+	methodsMu sync.RWMutex
+	methods   map[Method]MethodSpec
+	touches   touchTable
 
 	// The sign-in protections (§4.9): one instance each per Service, never
 	// package state (R5).
@@ -330,7 +334,9 @@ func (s *Service) interactive(m Method) bool {
 	if m.Interactive() {
 		return true
 	}
+	s.methodsMu.RLock()
 	spec, ok := s.methods[m]
+	s.methodsMu.RUnlock()
 	return ok && spec.Interactive
 }
 
@@ -342,7 +348,9 @@ func (s *Service) knownMethod(m Method) bool {
 	case MethodSession, MethodSessionDelegated, MethodAPIKey:
 		return true
 	}
+	s.methodsMu.RLock()
 	_, ok := s.methods[m]
+	s.methodsMu.RUnlock()
 	return ok
 }
 

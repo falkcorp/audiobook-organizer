@@ -1,5 +1,5 @@
 // file: core/auth/middleware.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9206232a-c4a5-4cca-be1f-569a0020e2c1
 // last-edited: 2026-11-11
 
@@ -302,40 +302,63 @@ func (s *Service) authenticateKey(r *http.Request, c ClientInfo) (*Principal, *F
 	if cred == nil {
 		return nil, nil, nil
 	}
-	fail := func(code string) (*Principal, *Failure, error) {
-		return nil, &Failure{Code: code, Cookie: cred.cookie}, nil
+	p, refusal, err := s.resolveKey(r.Context(), cred.raw, c, MethodAPIKey)
+	if err != nil {
+		return nil, nil, err
 	}
-	if strings.HasPrefix(cred.raw, string(KindKey)) {
-		if err := ParseCredential(KindKey, cred.raw); err != nil {
-			return fail(CodeInvalidCredential)
+	if refusal != nil {
+		return nil, &Failure{Code: failureCode(refusal), Cookie: cred.cookie}, nil
+	}
+	return p, nil, nil
+}
+
+// resolveKey applies every stage 12 key rule to the raw API key (an mck_ key
+// or an imported one) and builds its principal with method m: the key's
+// shape, its record, status and expiry, the owner's status, epoch and
+// SignInRestricted through PrincipalFor, and last-use tracking. A key that
+// does not parse, names no record or whose owner is gone is a refusal that
+// wraps ErrInvalidCredentials (which a compat surface charges to its
+// source); any other refusal wraps the sentinel of its cause (ErrRevoked,
+// ErrExpired, ErrInactiveUser, ErrStaleEpoch, ErrResetRequired). A store
+// failure is the third result: not a verdict on the key. m is MethodAPIKey
+// for stage 12 and a compat method for Compat.AuthenticateKey; a principal of
+// a compat method remembers its key, so CheckCredentialFor re-reads it.
+func (s *Service) resolveKey(ctx context.Context, raw string, c ClientInfo, m Method) (p *Principal, refusal, err error) {
+	if strings.HasPrefix(raw, string(KindKey)) {
+		if err := ParseCredential(KindKey, raw); err != nil {
+			return nil, fmt.Errorf("%w: malformed key", ErrInvalidCredentials), nil
 		}
+	} else if !hasImportedPrefix(s.opts.ImportedKeyPrefixes, raw) {
+		return nil, fmt.Errorf("%w: not an API key", ErrInvalidCredentials), nil
 	}
-	ctx := r.Context()
-	// A native key parsed above; an imported one matched its prefix in
-	// isKey. Either is now a bearer Token, looked up by its SHA-256.
-	k, err := s.d.Store.APIKeyByToken(ctx, Token(cred.raw))
+	// A native key parsed above; an imported one matched its prefix. Either
+	// is now a bearer Token, looked up by its SHA-256.
+	k, err := s.d.Store.APIKeyByToken(ctx, Token(raw))
 	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrUndecodableRecord) {
-		return fail(CodeInvalidCredential)
+		return nil, fmt.Errorf("%w: unknown key", ErrInvalidCredentials), nil
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 	now := s.now()
 	if err := keyUsable(k, now); err != nil {
-		return fail(failureCode(err))
+		return nil, err, nil
 	}
 	u, err := s.d.Store.GetUser(ctx, k.Owner)
 	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrUndecodableRecord) {
-		return fail(CodeInvalidCredential)
+		return nil, fmt.Errorf("%w: the key's owner is gone", ErrInvalidCredentials), nil
 	}
 	if err != nil {
 		return nil, nil, err
 	}
-	p, err := s.PrincipalFor(ctx, u, MethodAPIKey, k.Scopes, u.CredentialEpoch)
+	p, err = s.PrincipalFor(ctx, u, m, k.Scopes, u.CredentialEpoch)
 	if err != nil {
-		return fail(failureCode(err))
+		return nil, err, nil
 	}
 	p.CredentialID, p.AuthTime = k.ID, k.CreatedAt
+	if m != MethodAPIKey {
+		p.keyID = k.ID
+	}
 	s.touch(ctx, "k:"+k.ID, now, func(b *storage.Batch) error { return s.d.Store.TouchAPIKey(b, k.ID, now, c.Addr) })
 	return p, nil, nil
 }

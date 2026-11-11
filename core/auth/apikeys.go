@@ -1,5 +1,5 @@
 // file: core/auth/apikeys.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 61144126-f293-45db-8152-bf01124f696a
 // last-edited: 2026-11-11
 
@@ -298,10 +298,13 @@ func (s *Service) CheckCredentialFor(p *Principal, perm rbac.Requirement) error 
 	if p == nil || p.Perms == nil {
 		return fmt.Errorf("%w: no principal", ErrInvalidCredentials)
 	}
-	if p.Method == MethodAPIKey {
-		k, err := s.d.Store.APIKeyByID(context.Background(), p.CredentialID)
+	if keyID := p.keyID; p.Method == MethodAPIKey || keyID != "" {
+		if keyID == "" {
+			keyID = p.CredentialID
+		}
+		k, err := s.d.Store.APIKeyByID(context.Background(), keyID)
 		if errors.Is(err, ErrNotFound) {
-			return fmt.Errorf("%w: key %s", ErrRevoked, p.CredentialID)
+			return fmt.Errorf("%w: key %s", ErrRevoked, keyID)
 		}
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)

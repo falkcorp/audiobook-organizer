@@ -1,7 +1,7 @@
 // file: core/auth/login.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ee7aa4e7-d5e2-4977-8b7e-49faa860a120
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -84,71 +84,13 @@ func (s *Service) loginThrottle() *Throttle {
 // inactive, reset_required, busy). A malformed request and a store failure
 // are not sign-in attempts and record nothing.
 func (s *Service) Login(ctx context.Context, in LoginInput) (*IssuedSession, error) {
-	// Everything is keyed on the normalised SUBMITTED username, never on the
-	// user record, so a name that does not exist behaves exactly like one
-	// that does.
-	name := strings.TrimSpace(in.Username)
-	account := AccountKey(name)
-	source := in.Client.sourceKey()
-	adm, dec := s.ceiling.Admit(source, in.Client.saturatedKey, in.Client.connectorKey())
-	if dec.Warn != "" {
-		s.log.Warn("auth: login ceiling reached", "ceiling", dec.Warn)
-	}
-	if adm == nil {
-		s.loginRefused(ctx, in.Client, nil, reasonThrottled)
-		return nil, throttled(dec.RetryAfter)
-	}
-	outcome := LoginOther
-	defer func() { adm.Done(outcome, account) }()
-
-	if name == "" || in.Password == "" {
-		return nil, fmt.Errorf("%w: username and password are required", ErrBadInput)
-	}
-	th := s.loginThrottle()
-	if th.SourceBlocked(source) {
-		s.loginRefused(ctx, in.Client, nil, reasonThrottled)
-		return nil, throttled(LoginRetryAfter)
-	}
-	if adm.Saturated() {
-		d, refuse := th.SaturationPolicy(account)
-		if refuse {
-			outcome = LoginSaturationRefused
-			s.loginRefused(ctx, in.Client, nil, reasonThrottled)
-			return nil, throttled(LoginRetryAfter)
-		}
-		th.Delay(d)
-	}
-	u, hash, err := s.loginRecord(ctx, name)
+	pc, err := s.checkPassword(ctx, in, MethodSession)
 	if err != nil {
 		return nil, err
 	}
-	algo := ""
-	if u != nil {
-		algo = password.AlgoOf(hash)
-	}
-	ok, rehash, err := s.hasher.VerifyLoginWithin(ctx, loginHashWait, algo, hash, in.Password)
-	if errors.Is(err, password.ErrBusy) {
-		s.loginRefused(ctx, in.Client, u, reasonBusy)
-		return nil, ErrBusy
-	}
-	if err != nil {
-		return nil, err
-	}
-	if u == nil || !ok {
-		outcome = LoginFailed
-		s.loginRefused(ctx, in.Client, u, reasonInvalidCredentials)
-		th.Delay(th.RecordFailure(account, source))
-		return nil, ErrInvalidCredentials
-	}
-	if u.Status != StatusActive {
-		s.loginRefused(ctx, in.Client, u, reasonInactive)
-		return nil, fmt.Errorf("%w: %s", ErrInactiveUser, u.ID)
-	}
-	if u.PasswordResetRequired || u.SignInRestricted {
-		s.loginRefused(ctx, in.Client, u, reasonResetRequired)
-		return nil, fmt.Errorf("%w: %s", ErrResetRequired, u.ID)
-	}
-	th.Clear(account, source)
+	signedIn := false
+	defer func() { pc.finish(signedIn) }()
+	u := pc.u
 	// u is the record the password was just verified against, not a fresh
 	// read: a password change landing between the check and the session
 	// leaves the session with the old epoch, refused on first use.
@@ -164,11 +106,117 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*IssuedSession, err
 	if err != nil {
 		return nil, err
 	}
-	outcome = LoginSucceeded
-	if rehash {
-		s.rehashPassword(ctx, u, hash, in.Password)
+	signedIn = true
+	if pc.rehash {
+		s.rehashPassword(ctx, u, pc.hash, in.Password)
 	}
 	return sess, nil
+}
+
+// passwordCheck is a verified password sign-in that has not opened anything
+// yet: the user, the hash the password was verified against, whether that
+// hash wants a rehash, and the login ceilings' admission, which finish
+// releases.
+type passwordCheck struct {
+	u       *User
+	hash    string
+	rehash  bool
+	adm     *LoginAdmission
+	account string
+	outcome LoginOutcome
+}
+
+// finish releases the admission with the outcome of what the caller did with
+// the verified sign-in: succeeded, or not. Call it exactly once, deferred, so
+// a panic still frees the slot.
+func (pc *passwordCheck) finish(succeeded bool) {
+	if succeeded {
+		pc.outcome = LoginSucceeded
+	}
+	pc.adm.Done(pc.outcome, pc.account)
+}
+
+// checkPassword is steps 1 to 7 of Login and the first half of step 8: the
+// ceilings, validation, the source block, the saturated policy, the user
+// read, one verification for every outcome, failures charged and delayed,
+// status and reset or restriction, then the account and source cleared. It
+// is shared by Login and Compat.VerifyPassword, so a compat surface and the
+// web sign-in share one budget (§4.9). Refusals are audited as login
+// refusals with the actor's method m. On success the caller owns the
+// admission and must call finish.
+func (s *Service) checkPassword(ctx context.Context, in LoginInput, m Method) (*passwordCheck, error) {
+	// Everything is keyed on the normalised SUBMITTED username, never on the
+	// user record, so a name that does not exist behaves exactly like one that
+	// does.
+	name := strings.TrimSpace(in.Username)
+	account := AccountKey(name)
+	source := in.Client.sourceKey()
+	adm, dec := s.ceiling.Admit(source, in.Client.saturatedKey, in.Client.connectorKey())
+	if dec.Warn != "" {
+		s.log.Warn("auth: login ceiling reached", "ceiling", dec.Warn)
+	}
+	if adm == nil {
+		s.loginRefused(ctx, in.Client, m, nil, reasonThrottled)
+		return nil, throttled(dec.RetryAfter)
+	}
+	outcome := LoginOther
+	handedOver := false
+	defer func() {
+		if !handedOver {
+			adm.Done(outcome, account)
+		}
+	}()
+
+	if name == "" || in.Password == "" {
+		return nil, fmt.Errorf("%w: username and password are required", ErrBadInput)
+	}
+	th := s.loginThrottle()
+	if th.SourceBlocked(source) {
+		s.loginRefused(ctx, in.Client, m, nil, reasonThrottled)
+		return nil, throttled(LoginRetryAfter)
+	}
+	if adm.Saturated() {
+		d, refuse := th.SaturationPolicy(account)
+		if refuse {
+			outcome = LoginSaturationRefused
+			s.loginRefused(ctx, in.Client, m, nil, reasonThrottled)
+			return nil, throttled(LoginRetryAfter)
+		}
+		th.Delay(d)
+	}
+	u, hash, err := s.loginRecord(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	algo := ""
+	if u != nil {
+		algo = password.AlgoOf(hash)
+	}
+	ok, rehash, err := s.hasher.VerifyLoginWithin(ctx, loginHashWait, algo, hash, in.Password)
+	if errors.Is(err, password.ErrBusy) {
+		s.loginRefused(ctx, in.Client, m, u, reasonBusy)
+		return nil, ErrBusy
+	}
+	if err != nil {
+		return nil, err
+	}
+	if u == nil || !ok {
+		outcome = LoginFailed
+		s.loginRefused(ctx, in.Client, m, u, reasonInvalidCredentials)
+		th.Delay(th.RecordFailure(account, source))
+		return nil, ErrInvalidCredentials
+	}
+	if u.Status != StatusActive {
+		s.loginRefused(ctx, in.Client, m, u, reasonInactive)
+		return nil, fmt.Errorf("%w: %s", ErrInactiveUser, u.ID)
+	}
+	if u.PasswordResetRequired || u.SignInRestricted {
+		s.loginRefused(ctx, in.Client, m, u, reasonResetRequired)
+		return nil, fmt.Errorf("%w: %s", ErrResetRequired, u.ID)
+	}
+	th.Clear(account, source)
+	handedOver = true
+	return &passwordCheck{u: u, hash: hash, rehash: rehash, adm: adm, account: account, outcome: outcome}, nil
 }
 
 // The reasons a refused sign-in is audited with.
@@ -186,10 +234,10 @@ const (
 // only when the submitted name resolved to one; the submitted name itself is
 // never recorded, since a password typed into the name field would land in
 // the log.
-func (s *Service) loginRefused(ctx context.Context, c ClientInfo, u *User, reason string) {
+func (s *Service) loginRefused(ctx context.Context, c ClientInfo, m Method, u *User, reason string) {
 	e := audit.Event{
 		Action: actionLogin, Outcome: audit.Failure, Reason: reason,
-		Actor: audit.Actor{ClientAddr: addrString(c.Addr), UserAgent: c.UserAgent},
+		Actor: audit.Actor{Method: string(m), ClientAddr: addrString(c.Addr), UserAgent: c.UserAgent},
 	}
 	if u != nil {
 		e.Target = ref(refKindUser, string(u.ID))

@@ -1,7 +1,7 @@
 // file: core/auth/method.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 52a74e31-1d25-42c9-950d-3275d209be9e
-// last-edited: 2026-11-06
+// last-edited: 2026-11-11
 
 package auth
 
@@ -63,6 +63,10 @@ type Principal struct {
 	Assurance    Assurance
 	AuthTime     time.Time // when the credential was issued / sign-in happened
 	ClientAddr   netip.Addr
+	// keyID is the API key a compat surface's principal was built from
+	// (Compat.AuthenticateKey): its Method is the surface's, not
+	// MethodAPIKey, and CheckCredentialFor still has to re-read the key.
+	keyID string
 }
 
 // principalKey is the context key of WithPrincipal; unexported so only this
