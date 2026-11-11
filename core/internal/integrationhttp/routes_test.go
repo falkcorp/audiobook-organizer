@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/routes_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c8a14f73-2d6b-4e90-b5a7-91f0e3d2864b
 // last-edited: 2026-11-11
 
@@ -1027,7 +1027,10 @@ func TestIntegrationHTTP_SecretsAreMarkers(t *testing.T) {
 	if _, err := integrations.NativeInstanceStore(e.ks).Put(context.Background(), b, integrations.StoredInstance{
 		Config: integrations.InstanceConfig{
 			Ref: ref, Adapter: "hello.lazarus", Enabled: true, Origin: integrations.OriginUI,
-			Settings: map[string]any{"url": "http://192.0.2.40/", "password": secrets.RefTo("integrations.notify.lazarus-pit.password")},
+			Settings: map[string]any{
+				"url": "http://192.0.2.40/", "password": secrets.RefTo("integrations.notify.lazarus-pit.password"),
+				"mirror": "http://robin:grayson@192.0.2.41/", "note": "hello",
+			},
 		},
 		SecretsOrigin: "url=http://192.0.2.40:80",
 	}); err != nil {
@@ -1045,9 +1048,86 @@ func TestIntegrationHTTP_SecretsAreMarkers(t *testing.T) {
 	if !lazarus.SecretsSet["password"] {
 		t.Errorf("secrets_set = %+v", lazarus.SecretsSet)
 	}
-	assertNoLeak(t, "an unknown adapter's row", mustJSON(t, lazarus), "integrations.notify.lazarus-pit.password", `"secret"`)
+	assertNoLeak(t, "an unknown adapter's row", mustJSON(t, lazarus), "integrations.notify.lazarus-pit.password", `"secret"`, "robin", "grayson")
+	if _, ok := lazarus.Settings["mirror"]; ok || lazarus.Settings["url"] != "http://192.0.2.40/" || lazarus.Settings["note"] != "hello" {
+		t.Errorf("an unknown adapter's settings = %+v: want the userinfo URL withheld and the rest kept", lazarus.Settings)
+	}
 	if _, ok := lazarus.Settings["password"]; ok {
 		t.Errorf("settings = %+v", lazarus.Settings)
+	}
+	// An instance of an adapter this binary lacks cannot be replaced, and the
+	// refusal comes from the Registry, not from a panic on the missing schema.
+	name := "renamed"
+	_, err := e.api.updateInstance(ctx, in(ctx, updateReq{Kind: kindNotify, ID: "lazarus-pit", Body: IntegrationInstanceReplace{
+		Adapter: "hello.lazarus", Name: &name, Enabled: new(true), Version: 1,
+		Priority: new(int), Local: new(bool), Limits: &IntegrationLimits{},
+	}}))
+	if err == nil {
+		t.Error("a replace of an unknown adapter's instance succeeded")
+	}
+}
+
+// TestWithheldURLFields: which stored fields a PUT may not omit. Only an
+// unlocked, URL-typed, non-secret field whose value the view withholds under
+// the Registry's rule; the text check and the locked fields are not in it.
+func TestWithheldURLFields(t *testing.T) {
+	fi := &fieldInfo{
+		secret: map[string]bool{"token": true},
+		uri:    map[string]bool{"a": true, "b": true, "ok": true, "falsepos": true, "locked": true, "token": true, "ref": true, "unparsed": true},
+	}
+	cfg := integrations.InstanceConfig{
+		Settings: map[string]any{
+			"b":        "http://u:p@192.0.2.20/",
+			"a":        []any{"https://192.0.2.20/", "https://x:y@192.0.2.20/"},
+			"ok":       "http://192.0.2.20/",
+			"falsepos": "https://192.0.2.20/cb?next=https://u@x.example",
+			"locked":   "http://u:p@192.0.2.21/",
+			"token":    "http://u:p@192.0.2.22/",
+			"ref":      secrets.RefTo("a:b@c"),
+			"unparsed": "http://192.0.2.20:badport/",
+			"free":     "http://u:p@192.0.2.23/", // not URL-typed: never withheld
+		},
+		Locked: map[string]string{"locked": "env"},
+	}
+	if got, want := withheldURLFields(cfg, fi), []string{"a", "b", "unparsed"}; !slices.Equal(got, want) {
+		t.Errorf("withheld = %v, want %v", got, want)
+	}
+	if got := withheldURLFields(cfg, nil); len(got) != 0 {
+		t.Errorf("an unknown adapter's fields: %v", got)
+	}
+	if err := withheldOmitted(cfg, nil, map[string]any{}); err != nil {
+		t.Errorf("an unknown adapter: %v", err)
+	}
+	// Naming a field, however, satisfies it.
+	if err := withheldOmitted(cfg, fi, map[string]any{"a": nil, "b": "x", "unparsed": []any{}}); err != nil {
+		t.Errorf("all named: %v", err)
+	}
+	err := withheldOmitted(cfg, fi, map[string]any{"b": "x"})
+	he, _ := errors.AsType[*httpapi.Error](err)
+	if he == nil || len(he.Fields) != 2 || he.Fields[0].Field != "/body/settings/a" || he.Fields[1].Field != "/body/settings/unparsed" {
+		t.Errorf("fields = %+v", he)
+	}
+}
+
+// TestFieldsFor: a known adapter with a readable schema has fields; an
+// adapter the binary lacks, or one whose schema cannot be read, has none.
+func TestFieldsFor(t *testing.T) {
+	metas := map[integrations.AdapterID]integrations.Meta{}
+	if fieldsFor(metas, "hello.lazarus") != nil {
+		t.Error("an unknown adapter has fields")
+	}
+	if fieldsOfSchema(json.RawMessage(`{`)) != nil || fieldsOfSchema(json.RawMessage(`false`)) != nil {
+		t.Error("an unreadable schema has fields")
+	}
+	if fi := fieldsOfSchema(json.RawMessage(`{"properties":{"home":{"type":"string","format":"uri"}}}`)); fi == nil || !fi.uri["home"] || len(fi.secret) != 0 {
+		t.Errorf("a readable schema: %+v", fi)
+	}
+	e := newEnv(t)
+	for m := range e.reg.Adapters(integrations.KindNotify) {
+		fi := fieldsFor(map[integrations.AdapterID]integrations.Meta{m.ID: m}, m.ID)
+		if fi == nil || !fi.secret["password"] || !fi.uri["url"] {
+			t.Errorf("batsignal fields = %+v", fi)
+		}
 	}
 }
 
@@ -1066,7 +1146,7 @@ func TestInstanceView_NeverEmitsSecretShapedSettings(t *testing.T) {
 			"schema":  "declared secret",
 		},
 	}
-	v := instanceView(cfg, map[string]bool{"schema": true}, nil)
+	v := instanceView(cfg, &fieldInfo{secret: map[string]bool{"schema": true}})
 	if len(v.Settings) != 2 || v.Settings["plain"] != "ok" || v.Settings["nested"] == nil {
 		t.Errorf("settings = %+v", v.Settings)
 	}
@@ -1642,11 +1722,20 @@ func TestInstanceView_WithholdsUnsafeLockedAndURLFields(t *testing.T) {
 	// A URL-typed field is screened though no operator value locks it.
 	settings["uri-bad"] = "https://a:uribad1@192.0.2.58/"
 	settings["uri-ok"] = ok
+	// A URL-typed field is judged by the Registry's rule (url.Parse, userinfo),
+	// not by the text check: a "@" after the authority is not userinfo.
+	settings["uri-next"] = "https://192.0.2.40/cb?next=https://u@x.example"
+	settings["uri-slashes"] = "https://192.0.2.40/a//b@c"
+	settings["uri-unparsed"] = "http://192.0.2.40:badport/" // does not parse: withheld
+	settings["uri-list"] = []any{ok, "https://192.0.2.40/b"}
+	// A locked field of unknown type gets the aggressive text check instead.
+	settings["locked-next"] = "https://192.0.2.40/cb?next=https://u@x.example"
+	locked["locked-next"] = "env"
 	cfg := integrations.InstanceConfig{
 		Ref:      integrations.Ref{Kind: integrations.KindNotify, Instance: "x"},
 		Settings: settings, Locked: locked,
 	}
-	v := instanceView(cfg, nil, map[string]bool{"uri-bad": true, "uri-ok": true})
+	v := instanceView(cfg, &fieldInfo{secret: map[string]bool{}, uri: map[string]bool{"uri-bad": true, "uri-ok": true, "uri-next": true, "uri-slashes": true, "uri-unparsed": true, "uri-list": true}})
 	blob := mustJSON(t, v)
 	assertNoLeak(t, "the view", blob, "hunter2", "alfred:", "secret1", "grayson1", "drake1", "dent1", "kyle1", "gordon1", "mapstring1",
 		"keyed1", "refkey1", "anykey2", "maplist1", "named1", "ptr1", "bytes1", "intkey1", "struct1", "typed1", "anykey1", "listed1", "strings1", "uribad1")
@@ -1666,6 +1755,16 @@ func TestInstanceView_WithholdsUnsafeLockedAndURLFields(t *testing.T) {
 	}
 	if _, ok := v.Settings["uri-bad"]; ok {
 		t.Error("a URL-typed field holding userinfo was answered")
+	}
+	for _, k := range []string{"uri-next", "uri-slashes", "uri-list"} {
+		if _, ok := v.Settings[k]; !ok {
+			t.Errorf("%s (a URL with no userinfo) was withheld", k)
+		}
+	}
+	for _, k := range []string{"uri-unparsed", "locked-next"} {
+		if _, ok := v.Settings[k]; ok {
+			t.Errorf("%s was answered: %v", k, v.Settings[k])
+		}
 	}
 	if len(v.Locked) != len(locked) {
 		t.Errorf("locked = %v: the lock reasons are still answered", v.Locked)
@@ -1873,5 +1972,145 @@ func TestIntegrationHTTP_ScopedTestAuditNamesStoredAdapter(t *testing.T) {
 	slices.Sort(got)
 	if want := []string{"false " + string(batsignal), "true " + string(batsignal)}; !slices.Equal(got, want) {
 		t.Errorf("recorded (scoped adapter) = %q, want %q", got, want)
+	}
+}
+
+// TestInstanceView_UnknownAdapterScreensEveryString: every string-valued
+// setting of an instance whose adapter this binary lacks is judged as a
+// URL-typed field is (parse-based), wherever it sits.
+func TestInstanceView_UnknownAdapterScreensEveryString(t *testing.T) {
+	cfg := integrations.InstanceConfig{
+		Ref: integrations.Ref{Kind: integrations.KindNotify, Instance: "x"},
+		Settings: map[string]any{
+			"url":    "http://u:p@192.0.2.40/",
+			"other":  "https://a:b@192.0.2.40",
+			"list":   []any{"https://192.0.2.40/", "https://c:d@192.0.2.40/"},
+			"nested": map[string]any{"hook": "https://e:f@192.0.2.40/"},
+			"note":   "hello // @world", // not a URL with userinfo: kept
+			"clean":  "https://192.0.2.40/cb?next=https://u@x.example",
+			"num":    float64(5),
+		},
+	}
+	v := instanceView(cfg, nil)
+	for _, k := range []string{"url", "other", "list", "nested"} {
+		if _, ok := v.Settings[k]; ok {
+			t.Errorf("%s was answered: %v", k, v.Settings[k])
+		}
+	}
+	for _, k := range []string{"note", "clean", "num"} {
+		if _, ok := v.Settings[k]; !ok {
+			t.Errorf("%s was withheld", k)
+		}
+	}
+}
+
+// TestIntegrationHTTP_UrlTypedFalsePositivesRoundTrip: a URL with no userinfo
+// is answered and round-trips unchanged even when a later "@" or "//" would
+// have tripped a text check.
+func TestIntegrationHTTP_UrlTypedFalsePositivesRoundTrip(t *testing.T) {
+	e := newEnv(t)
+	ctx := adminCtx()
+	for id, url := range map[string]string{
+		"gcpd-roof":     "http://192.0.2.20/cb?next=https://u@x.example",
+		"gcpd-basement": "http://192.0.2.21/a//b@c",
+	} {
+		e.create(t, ctx, kindNotify, signalBody(id, url, "alfred-1"))
+		cur := e.get(t, ctx, kindNotify, id)
+		if cur.Settings["url"] != url {
+			t.Fatalf("%s: GET answered url = %v, want %q", id, cur.Settings["url"], url)
+		}
+		body, err := strictDecode(mustJSON(t, cur))
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := "renamed " + id
+		body.Name = &name
+		got, err := e.api.updateInstance(ctx, in(ctx, updateReq{Kind: kindNotify, ID: id, Body: body}))
+		if err != nil {
+			t.Fatalf("%s: round trip: %v", id, err)
+		}
+		cfg, _ := e.reg.Config(integrations.Ref{Kind: integrations.KindNotify, Instance: integrations.InstanceID(id)})
+		if got.Settings["url"] != url || cfg.Settings["url"] != url || e.secretValue(t, kindNotify, id, "password") != "alfred-1" {
+			t.Errorf("%s: after the round trip url = %v (answer), %v (stored)", id, got.Settings["url"], cfg.Settings["url"])
+		}
+	}
+}
+
+// TestIntegrationHTTP_LegacyUserinfoURLIsWithheldAndNeverClearedByOmission: a
+// stored URL with userinfo (a row from before the Registry refused it) is left
+// out of GET, and a PUT that omits it is a 422 withheld_field: the stored
+// URL and the stored secrets are untouched. A PUT that enters a clean URL
+// succeeds and keeps the secrets.
+func TestIntegrationHTTP_LegacyUserinfoURLIsWithheldAndNeverClearedByOmission(t *testing.T) {
+	const legacy = "http://waynecorp:hunter2@192.0.2.20/"
+	e := newEnv(t)
+	ctx := adminCtx()
+	e.create(t, ctx, kindNotify, signalBody(roofID, "http://192.0.2.20/", "alfred-1"))
+	ref := integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}
+
+	// Rewrite the stored row as an older build would have left it.
+	store := integrations.NativeInstanceStore(e.ks)
+	rows, err := store.Load(context.Background())
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %v, %v", rows, err)
+	}
+	row := rows[0]
+	row.Config.Settings = map[string]any{"url": legacy, "channel": "gcpd", "password": row.Config.Settings["password"]}
+	b := e.ks.NewBatch()
+	if _, err := store.Put(context.Background(), b, row); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(context.Background(), storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	e.reg = e.registry(t)
+	e.api.reg = e.reg
+
+	cur := e.get(t, ctx, kindNotify, roofID)
+	assertNoLeak(t, "the view", mustJSON(t, cur), "waynecorp", "hunter2")
+	if _, ok := cur.Settings["url"]; ok || cur.Settings["channel"] != "gcpd" || !cur.SecretsSet["password"] {
+		t.Fatalf("view = %+v", cur)
+	}
+	before, _ := e.reg.Config(ref)
+
+	// A rename that sends the answer back omits the URL: refused, nothing changes.
+	body, err := strictDecode(mustJSON(t, cur))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "renamed"
+	body.Name = &name
+	_, err = e.api.updateInstance(ctx, in(ctx, updateReq{Kind: kindNotify, ID: roofID, Body: body}))
+	wantStatus(t, err, http.StatusUnprocessableEntity, "withheld_field")
+	he, _ := errors.AsType[*httpapi.Error](err)
+	if he == nil || len(he.Fields) != 1 || he.Fields[0].Field != "/body/settings/url" || he.Fields[0].Code != "withheld_field" {
+		t.Errorf("fields = %+v", he)
+	}
+	assertNoLeak(t, "the 422", errBlob(t, err), "waynecorp", "hunter2")
+	after, _ := e.reg.Config(ref)
+	if after.Settings["url"] != legacy || after.Version != before.Version || after.Name != before.Name {
+		t.Errorf("the refused PUT changed the instance: %+v -> %+v", before, after)
+	}
+	if e.secretValue(t, kindNotify, roofID, "password") != "alfred-1" {
+		t.Error("the refused PUT touched the stored secret")
+	}
+
+	// An explicit null names the field: that is a clear the caller asked for.
+	// (Not sent here: it would clear the URL, which is what null means.)
+
+	// Entering a clean URL succeeds, and the secret stays: the origin is unchanged.
+	body.Settings = map[string]any{"url": "http://192.0.2.20/", "channel": "gcpd"}
+	got, err := e.api.updateInstance(ctx, in(ctx, updateReq{Kind: kindNotify, ID: roofID, Body: body}))
+	if err != nil {
+		t.Fatalf("PUT with a clean URL: %v", err)
+	}
+	if got.Settings["url"] != "http://192.0.2.20/" || got.Name != name || !got.SecretsSet["password"] {
+		t.Errorf("after the clean PUT: %+v", got)
+	}
+	if e.secretValue(t, kindNotify, roofID, "password") != "alfred-1" {
+		t.Error("the clean PUT lost the stored secret")
 	}
 }
