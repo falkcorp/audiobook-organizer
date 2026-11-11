@@ -1,5 +1,5 @@
 // file: core/internal/executor/start.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 89eb5ff3-93fb-4a22-9970-d55b28fbbe40
 // last-edited: 2026-11-11
 
@@ -138,6 +138,9 @@ func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.Start
 	if err := e.permitStart(d, req.Actor, s); err != nil {
 		return prepared{}, err
 	}
+	if err := e.permitWindow(d, s); err != nil {
+		return prepared{}, err
+	}
 	mode, ok := req.Mode.Mode()
 	if !ok {
 		if m != modeDefault {
@@ -225,6 +228,38 @@ func (e *executor) permitStart(d *def, actor tasks.Actor, s starter) error {
 	}
 	if s.who != nil && !s.who.Satisfies(d.c.Perms.Start) {
 		return fmt.Errorf("%w: start %s", ErrNotPermitted, d.kind)
+	}
+	return nil
+}
+
+// permitWindow is the extra start rule of a window kind. A window's run
+// starts its members through StartIn, each as its own module's system actor,
+// so the caller's permission to start the window (core:tasks.manage) says
+// nothing about the members' Perms.Start; started by a person, the window
+// would run kinds that person could not start. A start with a caller's
+// checker therefore also needs every current member's Perms.Start (the
+// scheduler's own start has no checker and is not asked). The check does not
+// look at req.Trigger: the caller states that, and a client-supplied
+// TriggerWindow must not skip it. It fails closed on a missing member list
+// and on a member with no definition. The membership is read at start; a
+// member that joins the window later runs under the schedule's authority
+// (the window is a schedule, 5T.3.8), which is how it already ran.
+func (e *executor) permitWindow(d *def, s starter) error {
+	name, ok := tasks.WindowName(d.kind)
+	if !ok || s.who == nil {
+		return nil
+	}
+	if e.opts.WindowMembers == nil {
+		return fmt.Errorf("%w: start %s: the executor was built without a window member list", ErrNotPermitted, d.kind)
+	}
+	for _, k := range e.opts.WindowMembers(name) {
+		m, ok := e.defs[k]
+		if !ok {
+			return fmt.Errorf("%w: start %s: member %s has no definition to check", ErrNotPermitted, d.kind, k)
+		}
+		if !s.who.Satisfies(m.c.Perms.Start) {
+			return fmt.Errorf("%w: start %s: the window runs %s, whose start requirement the caller does not hold", ErrNotPermitted, d.kind, k)
+		}
 	}
 	return nil
 }
