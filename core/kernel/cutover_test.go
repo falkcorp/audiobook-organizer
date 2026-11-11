@@ -1,5 +1,5 @@
 // file: core/kernel/cutover_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 09c631c4-1c2d-4d66-ae13-7ee32b295c1e
 // last-edited: 2026-11-11
 
@@ -22,6 +22,8 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/storagemigrate"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
@@ -749,6 +751,98 @@ func TestP4bOrder_LevelStepBeforeCutover(t *testing.T) {
 			}
 		}
 	})
+}
+
+// labelProbe is a bootseam.Labeler that keeps the open region's label the
+// way the crash-matrix kit does (the outer label wins), for a test to read
+// which writer a call runs as.
+type labelProbe struct {
+	mu    sync.Mutex
+	label string
+	depth int
+}
+
+func (p *labelProbe) Enter(label string) func() {
+	p.mu.Lock()
+	if p.depth == 0 {
+		p.label = label
+	}
+	p.depth++
+	p.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			p.mu.Lock()
+			if p.depth--; p.depth == 0 {
+				p.label = ""
+			}
+			p.mu.Unlock()
+		})
+	}
+}
+
+func (p *labelProbe) current() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.label
+}
+
+// TestQuarantineRunsAsTheChunksWrite (06 §6.5.1 "Boot writers"): the runner
+// calls the quarantine hook inside the chunk's crash-matrix region, so the
+// quarantine sequence's lease refill, its one write outside the chunk's
+// batch, is the chunk writer's (storagemigrate.LabelChunk). A label of its
+// own would be counted as whichever region a concurrent shard had open,
+// since a region is the boot's and not a goroutine's. One shard here, so a
+// hook outside the region would see no label at all.
+func TestQuarantineRunsAsTheChunksWrite(t *testing.T) {
+	mem := vfs.NewMem()
+	mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+	seedCutover(t, mem, cutoverRows(30, 2))
+	probe := &labelProbe{}
+	ctx := bootseam.With(context.Background(), &bootseam.Seams{FS: mem, Labels: probe})
+	h, sf := &cutoverHandles{}, &fakeSealer{}
+	m := cutoverMigration(h)
+	m.Parallelism = tasks.Sequential("test: one shard, so no other region is open")
+	var mu sync.Mutex
+	var labels []string
+	writer := storage.QuarantineWriter(sf)
+	quarantine := func(ctx context.Context, b *storage.Batch, step string, key, raw []byte, reason string, sensitive bool) error {
+		mu.Lock()
+		labels = append(labels, probe.current())
+		mu.Unlock()
+		return writer(ctx, b, step, key, raw, reason, sensitive)
+	}
+	owners := cutoverOwners(storage.ClaimRetired)
+	dms, err := NewDataMigrations(DataMigrationsConfig{ChunkItems: 7, Build: "batcomputer-2", Logger: slog.New(slog.DiscardHandler),
+		Quarantine: quarantine}, owners, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := storage.Open(ctx, storage.OpenOptions{Path: cutoverPath, FS: storage.FSOf(mem), Owners: owners,
+		Build: "batcomputer-2", FreeSpaceMargin: 1, DataSteps: dms.Steps()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := o.Prepare(ctx)
+	if err != nil {
+		t.Fatal(errors.Join(err, o.Close()))
+	}
+	h.ks, _ = db.Keyspace("gcpd")
+	sf.db = db
+	if err := errors.Join(db.Migrate(ctx), db.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if len(labels) != 8 {
+		t.Fatalf("the hook ran %d times, want 8 (6 undecodable rows, 2 sensitive)", len(labels))
+	}
+	for i, l := range labels {
+		if l != storagemigrate.LabelChunk {
+			t.Errorf("quarantine %d ran under %q, want the chunk's region %q", i+1, l, storagemigrate.LabelChunk)
+		}
+	}
+	if inChunkRegion(nil) != nil {
+		t.Error("inChunkRegion(nil) is not nil: a build with no quarantine writer must keep failing the chunk")
+	}
 }
 
 func isLevelTooNew(err error) bool {
