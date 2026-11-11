@@ -274,6 +274,17 @@ func TestRestoreBootWritesMarkersAfterHooks(t *testing.T) {
 		if got, end := s.head().Seq, s.chain().IntactEnd(); got < end-1 {
 			t.Errorf("head %d, journal end %d: the head must advance past the skipped lines", got, end)
 		}
+
+		// A second restore, with coverage, must not take the aborted restore's
+		// hook line for a revocation either: it is verified, in the journal after
+		// the boundary, and still never applied.
+		prev2 := s.snapshot("previous2")
+		s.restart()
+		s.swapIn(s.archive2)
+		s.boot(archiveBoot("restore-2", "arch-1", prev2, &rxSteps{}), nil)
+		if got := s.keyStatus("key-batmobile"); got != auth.KeyActive {
+			t.Errorf("after a second, covered restore key-batmobile = %q: the aborted restore's hook line was applied", got)
+		}
 	})
 
 	t.Run("a crash after the hooks resumes without running them", func(t *testing.T) {
