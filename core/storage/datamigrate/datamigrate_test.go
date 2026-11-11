@@ -1,5 +1,5 @@
 // file: core/storage/datamigrate/datamigrate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 72299917-b231-46be-ba88-bdff57fcb1e0
 // last-edited: 2026-11-10
 
@@ -18,7 +18,8 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 )
 
-// sink records every call a StepWriter forwards.
+// sink records every call a StepWriter forwards. It is a Sink and a
+// CutoverSink, as the runner's chunk is.
 type sink struct{ calls []string }
 
 func (s *sink) Set(k, v []byte) error { s.calls = append(s.calls, "set "+string(k)); return nil }
@@ -47,7 +48,7 @@ func (s *sink) Batch() *storage.Batch { s.calls = append(s.calls, "batch"); retu
 // chunk, and a StepWriter no runner built panics rather than drop a write.
 func TestStepWriterForwardsToItsChunk(t *testing.T) {
 	s := &sink{}
-	w := datamigrate.NewStepWriter(s)
+	w := datamigrate.NewStepWriter(s, s)
 	k := []byte("case:1")
 	_ = w.Set(k, nil)
 	_ = w.Delete(k)
@@ -65,13 +66,23 @@ func TestStepWriterForwardsToItsChunk(t *testing.T) {
 	if !slices.Equal(s.calls, want) {
 		t.Fatalf("calls = %q, want %q", s.calls, want)
 	}
-	defer func() {
-		if r := recover(); r == nil || !strings.Contains(r.(string), "outside a runner's chunk") {
-			t.Fatalf("zero StepWriter: recovered %v, want the outside-a-chunk panic", r)
-		}
-	}()
 	var zero datamigrate.StepWriter
-	_ = zero.Set(k, nil)
+	half := datamigrate.NewStepWriter(s, nil) // no CutoverSink
+	for name, call := range map[string]func(){
+		"zero Set":        func() { _ = zero.Set(k, nil) },
+		"zero Batch":      func() { _ = zero.Batch() },
+		"half Quarantine": func() { _ = half.Quarantine(k, nil, "Two-Face") },
+		"half Batch":      func() { _ = half.Batch() },
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r == nil || !strings.Contains(r.(string), "outside a runner's chunk") {
+					t.Errorf("%s: recovered %v, want the outside-a-chunk panic", name, r)
+				}
+			}()
+			call()
+		}()
+	}
 }
 
 func TestModeAndStates(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: core/storage/datamigrate/datamigrate.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1796b752-c949-4f2a-9ec8-9f61fcf89823
 // last-edited: 2026-11-10
 
@@ -91,9 +91,10 @@ type DataMigration struct {
 // shard's cursor in ONE batch every core.storage.data_migration.chunk_bytes
 // (default 4 MiB) or chunk_items (default 2 000).
 //
-// Its one field is the runner's chunk (Sink), so the runner, which lives in
-// core/internal/storagemigrate, can build one (NewStepWriter) while Step
-// sees only these methods. Keys are relative to the migration's source
+// Its fields are the runner's chunk, seen through two interfaces (Sink and
+// CutoverSink), so the runner, which lives in core/internal/storagemigrate,
+// can build one (NewStepWriter) while Step sees only these methods. Keys
+// are relative to the migration's source
 // handle: the owner's keyspace when Source lies in it, the owner's legacy
 // range (absolute keys) when Source lies in its claims.
 //
@@ -103,7 +104,10 @@ type DataMigration struct {
 // both pass and the second write would replace the first. Across chunks the
 // preconditions catch it (ErrConflict); a plain Set of one key by two items
 // of different chunks is a step defect the runner cannot see.
-type StepWriter struct{ s Sink }
+type StepWriter struct {
+	s   Sink
+	cut CutoverSink
+}
 
 // Set and Delete are refused (ErrNotSerialized) in an Online migration, whose
 // every write carries a precondition (COR4-5); deferred with that mode.
@@ -135,7 +139,7 @@ func (w *StepWriter) Count(outcome string) { w.sink().Count(outcome) }
 // that an importer refused, to c/storage/quarantine/ and deletes the source
 // key, both in the chunk's batch (§5S.3.13). Cutover only; outcome "quarantined".
 func (w *StepWriter) Quarantine(key, raw []byte, reason string) error {
-	return w.sink().Quarantine(key, raw, reason)
+	return w.cutover().Quarantine(key, raw, reason)
 }
 
 // Batch is the chunk's batch for an importer's participant staging (§5S.3.2):
@@ -151,22 +155,34 @@ func (w *StepWriter) Quarantine(key, raw []byte, reason string) error {
 // Serialized range needs an Expect (storage.ErrBlindWrite): a chunk's batch
 // is not a migration step's exclusive batch, a seam an importer over a
 // Serialized family will need.
-func (w *StepWriter) Batch() *storage.Batch { return w.sink().Batch() }
+func (w *StepWriter) Batch() *storage.Batch { return w.cutover().Batch() }
 
 // sink is the writer's chunk. A StepWriter only a runner can build has one;
 // the zero value has none, and every call on it is a defect: a write that
 // reached no chunk would be dropped in silence, so it panics instead.
 func (w *StepWriter) sink() Sink {
 	if w == nil || w.s == nil {
-		panic("datamigrate: StepWriter used outside a runner's chunk (build one with NewStepWriter)")
+		panic(outsideChunk)
 	}
 	return w.s
 }
 
-// Sink is a StepWriter's chunk: the runner implements it, one per chunk,
-// and enforces every rule the methods above state (the unvisited-write
-// refusal, Hold and Quarantine by mode, the commit unit). Name coined by
-// F2-06.
+// cutover is the writer's chunk for the two Cutover-only methods; a writer
+// without one panics as sink does.
+func (w *StepWriter) cutover() CutoverSink {
+	if w == nil || w.cut == nil {
+		panic(outsideChunk)
+	}
+	return w.cut
+}
+
+const outsideChunk = "datamigrate: StepWriter used outside a runner's chunk (build one with NewStepWriter)"
+
+// Sink is a StepWriter's chunk for the methods every mode has (§5S.3.6
+// lists them first: the writes, Hold and Count). The runner implements it,
+// one per chunk, and enforces every rule those methods state (the
+// unvisited-write refusal, the one-write-per-key rule, Hold refused in a
+// Cutover step, the commit unit). Name coined by F2-06.
 type Sink interface {
 	Set(key, value []byte) error
 	Delete(key []byte) error
@@ -175,13 +191,22 @@ type Sink interface {
 	DeleteIfUnchanged(key, expect []byte) error
 	Hold(key []byte, reason string)
 	Count(outcome string)
+}
+
+// CutoverSink is a StepWriter's chunk for the two methods §5S.3.6 marks
+// "Cutover only": Quarantine and Batch. The runner's chunk implements both
+// interfaces and refuses these two itself in any other step
+// (ErrCutoverOnly), so a misuse fails the chunk instead of panicking on a
+// missing half. Name coined by F2-06.
+type CutoverSink interface {
 	Quarantine(key, raw []byte, reason string) error
 	Batch() *storage.Batch
 }
 
-// NewStepWriter is the StepWriter over one chunk, for the runner. Name
-// coined by F2-06.
-func NewStepWriter(s Sink) *StepWriter { return &StepWriter{s: s} }
+// NewStepWriter is the StepWriter over one chunk, for the runner: s takes
+// the every-mode methods and cut the Cutover-only ones (the runner passes
+// its chunk as both). Name coined by F2-06.
+func NewStepWriter(s Sink, cut CutoverSink) *StepWriter { return &StepWriter{s: s, cut: cut} }
 
 type VerifyReport struct {
 	Read, Written, Held, Quarantined int64

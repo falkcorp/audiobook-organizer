@@ -1,5 +1,5 @@
 // file: core/internal/storagemigrate/chunk.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a463dd58-35aa-4d88-86e3-7d8bb405b11c
 // last-edited: 2026-11-10
 
@@ -14,8 +14,10 @@ import (
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
 
-// chunk is one chunk's datamigrate.Sink: the StepWriter's calls land in its
-// batch, which commits with the shard's cursor. Every rule a call breaks
+// chunk is one chunk's datamigrate.Sink and datamigrate.CutoverSink: the
+// StepWriter's calls land in its batch, which commits with the shard's
+// cursor. It is both in every step and refuses the Cutover-only methods
+// itself outside a Cutover step (datamigrate.ErrCutoverOnly). Every rule a call breaks
 // poisons the chunk (err), so nothing of it commits even when Step ignores
 // the returned error.
 type chunk struct {
@@ -29,7 +31,10 @@ type chunk struct {
 	err     error               // the first rule broken
 }
 
-var _ datamigrate.Sink = (*chunk)(nil)
+var (
+	_ datamigrate.Sink        = (*chunk)(nil)
+	_ datamigrate.CutoverSink = (*chunk)(nil)
+)
 
 // poison records err as the rule the chunk broke, unless it broke one
 // already: the first stays.
