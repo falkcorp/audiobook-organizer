@@ -485,11 +485,12 @@ def check_outside_maintenance_window(
 
 
 def shifted_window(now: _dt.datetime | None = None) -> tuple[int, int]:
-    """A maintenance window (start, end) UTC twelve hours away from now.
+    """The corpus' maintenance window as (start, end) UTC hours, moved twelve hours from now.
 
-    A replay that must run at any hour (F2-15's CI jobs) boots with this window
-    instead of MAINTENANCE_WINDOW_UTC, so no window task runs while it drives
-    the binary; shifted_window_env gives the boot's env layer for it.
+    A replay that must run at any hour (F2-15's CI jobs) boots the binary with
+    shifted_window_env's time zone, which puts the corpus' stored window
+    (MAINTENANCE_WINDOW_UTC in local hours) at these UTC hours, so no window
+    task runs while it drives the binary.
     """
     now = now or _dt.datetime.now(_dt.timezone.utc)
     length = MAINTENANCE_WINDOW_UTC[1] - MAINTENANCE_WINDOW_UTC[0]
@@ -498,8 +499,22 @@ def shifted_window(now: _dt.datetime | None = None) -> tuple[int, int]:
 
 
 def shifted_window_env(window: tuple[int, int]) -> dict[str, str]:
-    """The env layer that moves the maintenance window to ``window``."""
-    return {"MAINTENANCE_WINDOW_START": str(window[0]), "MAINTENANCE_WINDOW_END": str(window[1])}
+    """The env layer that moves the corpus' maintenance window to ``window`` (UTC hours).
+
+    The window cannot be moved through its own keys: the corpus stores it in
+    the settings blob, which the binary loads over the env layer
+    (MAINTENANCE_WINDOW_START is ignored once a stored window exists). The
+    binary reads the window against local time (scheduler.IsInMaintenanceWindow
+    uses time.Now().Hour()), so the boot's TZ moves it instead: with local =
+    UTC + k, the stored local window [a, b) is the UTC window [a - k, b - k).
+    Etc/GMT zones carry the inverted POSIX sign (Etc/GMT-5 is UTC+5).
+    """
+    k = (MAINTENANCE_WINDOW_UTC[0] - window[0]) % 24
+    if k > 12:
+        k -= 24
+    if k == 0:
+        return {"TZ": "UTC"}
+    return {"TZ": f"Etc/GMT{'-' if k > 0 else '+'}{abs(k)}"}
 
 
 # ------------------------------------------------------------- the R0 process

@@ -80,13 +80,26 @@ func TestRollbackRestoreBootsPreviousBuild(t *testing.T) {
 
 		t.Run("checkpoint", func(t *testing.T) {
 			work := copyCorpus(t, c)
-			upgradeAndMark(t, work)
-			cps := checkpoints(t, work)
-			if len(cps) == 0 {
-				t.Log("the boot took no checkpoint (nothing to run): the archive half still runs")
-				return
+			// Only a checkpoint the upgrade boot took: a store the pre-freeze
+			// release wrote already holds that release's own checkpoints,
+			// taken before it wrote rule 10's rows, and restoring one of
+			// those would lose them.
+			had := map[string]bool{}
+			for _, cp := range checkpoints(t, work) {
+				had[cp] = true
 			}
-			restoreOffline(t, work, "--checkpoint", cps[len(cps)-1], "--accept-loss")
+			upgradeAndMark(t, work)
+			var taken []string
+			for _, cp := range checkpoints(t, work) {
+				if !had[cp] {
+					taken = append(taken, cp)
+				}
+			}
+			if len(taken) == 0 {
+				require.Empty(t, steps, "a boot that runs cutover steps must take the pre-migration checkpoint")
+				t.Skip("the upgrade boot took no checkpoint (no step or legacy migration to run on this corpus): the archive half restores it")
+			}
+			restoreOffline(t, work, "--checkpoint", taken[len(taken)-1], "--accept-loss")
 			drillAfterRestore(t, c, pre, work, want)
 		})
 		t.Run("archive", func(t *testing.T) {
@@ -188,9 +201,10 @@ func drillProblems(pre, restored *storeScan, wrote *prefreezeRows) []string {
 
 // answersProblems compares every answer file of want with got after
 // normalizing what a replay at another time cannot reproduce beyond the
-// recorder's own volatile fields: the maintenance window (the suite's replays
-// move it away from the clock, record_r0_answers.py --shift-window) and a
-// task's last_run written by a boot the suite drove (at or after suiteStart).
+// recorder's own volatile fields: a task's last_run written by a boot the
+// suite drove (at or after suiteStart; a daily task's boot catch-up). The
+// maintenance window needs no normalization: the replays move it with the
+// boot's time zone (record_r0_answers.py --shift-window), not its settings.
 func answersProblems(t *testing.T, want, got string) []string {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(want, "*.json"))
@@ -222,19 +236,8 @@ func normalizeAnswerPair(want, got map[string]any) {
 	for i := range min(len(wx), len(gx)) {
 		we, _ := wx[i].(map[string]any)
 		ge, _ := gx[i].(map[string]any)
-		path := requestPath(ge)
-		wb, gb := responseBody(we), responseBody(ge)
-		switch {
-		case path == "/api/v1/maintenance-window/status":
-			maskWindow(dig(wb, "data"))
-			maskWindow(dig(gb, "data"))
-		case path == "/api/v1/config":
-			maskWindow(dig(dig(wb, "data"), "maintenance"))
-			maskWindow(dig(dig(gb, "data"), "maintenance"))
-			maskWindow(dig(dig(dig(wb, "data"), "config"), "maintenance"))
-			maskWindow(dig(dig(dig(gb, "data"), "config"), "maintenance"))
-		case path == "/api/v1/tasks":
-			maskBootRuns(wb, gb)
+		if requestPath(ge) == "/api/v1/tasks" {
+			maskBootRuns(responseBody(we), responseBody(ge))
 		}
 	}
 }
@@ -253,18 +256,6 @@ func responseBody(e map[string]any) any {
 func dig(v any, key string) any {
 	m, _ := v.(map[string]any)
 	return m[key]
-}
-
-func maskWindow(v any) {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return
-	}
-	for _, k := range []string{"window_start", "window_end"} {
-		if _, ok := m[k]; ok {
-			m[k] = "<window>"
-		}
-	}
 }
 
 // maskBootRuns drops a task's last_run from both answers when the replay's
@@ -682,7 +673,7 @@ func testDrillSelftest(t *testing.T, c corpus, pristine string) {
 }
 
 // testAnswersSelftest proves answersProblems bites on a changed answer and
-// lets through only what it normalizes (the moved window, a boot's last_run).
+// lets through only what it normalizes (a boot's last_run).
 func testAnswersSelftest(t *testing.T) {
 	want := r0Corpus(t).answers
 	for name, tc := range map[string]struct {
@@ -690,7 +681,7 @@ func testAnswersSelftest(t *testing.T) {
 		bites bool
 	}{
 		"identical": {edit: func(string, map[string]any) {}},
-		"window-moved": {edit: func(name string, v map[string]any) {
+		"the-window-moved": {bites: true, edit: func(name string, v map[string]any) {
 			if name == "schedules.json" {
 				for _, e := range v["exchanges"].([]any) {
 					if requestPath(e.(map[string]any)) == "/api/v1/maintenance-window/status" {
