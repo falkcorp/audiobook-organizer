@@ -1397,6 +1397,13 @@ func TestIntegrationHTTP_GetEditPutRoundTrip(t *testing.T) {
 				t.Errorf("%s: the answer lacks %s: %s", id, key, blob)
 			}
 		}
+		// A strict decoder refuses the answer's read-only keys: that is why
+		// the route is Lenient (updateRoute).
+		strict := json.NewDecoder(strings.NewReader(blob))
+		strict.DisallowUnknownFields()
+		if err := strict.Decode(&IntegrationInstanceReplace{}); err == nil {
+			t.Errorf("%s: a strict decode accepted the answer's read-only keys", id)
+		}
 		var body IntegrationInstanceReplace
 		if err := json.Unmarshal([]byte(blob), &body); err != nil {
 			t.Fatalf("%s: %v", id, err)
@@ -1453,34 +1460,55 @@ func TestIntegrationHTTP_GetEditPutRoundTrip(t *testing.T) {
 }
 
 // TestInstanceView_WithholdsUserinfoURLs: a URL carrying userinfo is left out
-// wherever it sits in settings; clean URLs and text that only looks similar
-// stay. The settings the view reads are not edited.
+// wherever it sits in settings, whatever the container; clean URLs and text
+// with no "//" authority holding "@" stay. The settings the view reads are
+// not edited.
 func TestInstanceView_WithholdsUserinfoURLs(t *testing.T) {
-	nested := map[string]any{"hook": "https://oracle:secret@192.0.2.40/x", "ok": "https://192.0.2.40/"}
+	type named string
+	nested := map[string]any{"hook": "https://oracle:secret@192.0.2.40/x", "ok": "https://192.0.2.40/", "https://k:anykey1@192.0.2.56/": 1}
 	cfg := integrations.InstanceConfig{
 		Ref: integrations.Ref{Kind: integrations.KindNotify, Instance: "x"},
 		Settings: map[string]any{
-			"url":       "https://alfred:hunter2@192.0.2.40:8443/path?x=1",
-			"relative":  "//alfred:hunter2@192.0.2.40/",
-			"unparsed":  "http://alfred:hunter2@192.0.2.40:badport/",
-			"clean":     "https://192.0.2.40/path?next=//a@b",
-			"text":      "ask //alfred about it @ noon",
-			"email":     "alfred@wayne.example",
-			"plainport": "http://192.0.2.40:8080/",
-			"nested":    nested,
-			"list":      []any{"https://192.0.2.41/", "https://a:b@192.0.2.42/"},
-			"strings":   []string{"https://192.0.2.41/", "https://a:b@192.0.2.42/"},
+			"url":        "https://alfred:hunter2@192.0.2.40:8443/path?x=1",
+			"relative":   "//alfred:hunter2@192.0.2.40/",
+			"unparsed":   "http://alfred:hunter2@192.0.2.40:badport/",
+			"second":     "note //x https://dick:grayson1@192.0.2.43/",
+			"third":      "a // b // c // https://tim:drake1@192.0.2.44",
+			"spaced":     "https://harvey:dent1 two@192.0.2.45/",
+			"backslash":  `https:\\selina:kyle1@192.0.2.46/`,
+			"query":      "https://192.0.2.40/path?next=//jim:gordon1@192.0.2.47",
+			"mapstring":  map[string]string{"ok": "https://192.0.2.40/", "bad": "https://a:mapstring1@192.0.2.48/", "https://k:keyed1@192.0.2.49/": "v"},
+			"maplist":    []map[string]any{{"bad": "https://a:maplist1@192.0.2.50/", "ok": "https://192.0.2.40/", "//k:refkey1@h": 1}, {"deep": []any{map[string]string{"bad": "//a:deep1@h"}}}},
+			"namedstr":   named("https://a:named1@192.0.2.51/"),
+			"ptr":        func() *string { s := "https://a:ptr1@192.0.2.52/"; return &s }(),
+			"bytes":      []byte("https://a:bytes1@192.0.2.53/"),
+			"int-keyed":  map[int]string{1: "https://a:intkey1@192.0.2.54/"},
+			"struct":     struct{ U string }{U: "https://a:struct1@192.0.2.55/"},
+			"fn":         func() {},
+			"clean":      "https://192.0.2.40/path",
+			"text":       "ask the commissioner about it @ noon",
+			"email":      "alfred@wayne.example",
+			"plainport":  "http://192.0.2.40:8080/",
+			"number":     float64(3),
+			"flag":       true,
+			"nothing":    nil,
+			"nested":     nested,
+			"list":       []any{"https://192.0.2.41/", "https://a:b@192.0.2.42/"},
+			"strings":    []string{"https://192.0.2.41/", "https://a:b@192.0.2.42/"},
+			"typedslice": []named{"https://192.0.2.41/", "https://a:typed1@192.0.2.42/"},
 		},
 	}
 	v := instanceView(cfg, nil)
 	blob := mustJSON(t, v)
-	assertNoLeak(t, "the view", blob, "hunter2", "alfred:", "oracle", "secret@", "a:b")
-	for _, k := range []string{"url", "relative", "unparsed"} {
+	assertNoLeak(t, "the view", blob, "hunter2", "alfred:", "oracle", "secret@", "a:b", "grayson1", "drake1", "dent1", "kyle1",
+		"gordon1", "mapstring1", "keyed1", "maplist1", "deep1", "named1", "ptr1", "bytes1", "intkey1", "struct1", "typed1", "anykey1", "refkey1")
+	for _, k := range []string{"url", "relative", "unparsed", "second", "third", "spaced", "backslash", "query", "namedstr", "ptr", "bytes",
+		"int-keyed", "struct", "fn"} {
 		if _, ok := v.Settings[k]; ok {
-			t.Errorf("%s was answered", k)
+			t.Errorf("%s was answered: %v", k, v.Settings[k])
 		}
 	}
-	for _, k := range []string{"clean", "text", "email", "plainport"} {
+	for _, k := range []string{"clean", "text", "email", "plainport", "number", "flag", "nothing"} {
 		if _, ok := v.Settings[k]; !ok {
 			t.Errorf("%s was dropped", k)
 		}
@@ -1494,8 +1522,47 @@ func TestInstanceView_WithholdsUserinfoURLs(t *testing.T) {
 	if got := v.Settings["strings"].([]string); len(got) != 1 || got[0] != "https://192.0.2.41/" {
 		t.Errorf("strings = %v", got)
 	}
-	if len(nested) != 2 {
+	if got := v.Settings["mapstring"].(map[string]string); len(got) != 1 || got["ok"] != "https://192.0.2.40/" {
+		t.Errorf("mapstring = %v", got)
+	}
+	got := v.Settings["maplist"].([]any)
+	if len(got) != 2 || len(got[0].(map[string]any)) != 1 || got[0].(map[string]any)["ok"] != "https://192.0.2.40/" {
+		t.Errorf("maplist = %v", got)
+	}
+	if deep := got[1].(map[string]any)["deep"].([]any); len(deep) != 1 || len(deep[0].(map[string]any)) != 0 {
+		t.Errorf("maplist deep = %v", deep)
+	}
+	if got := v.Settings["typedslice"].([]any); len(got) != 1 || got[0] != named("https://192.0.2.41/") {
+		t.Errorf("typedslice = %v", got)
+	}
+	if len(nested) != 3 {
 		t.Errorf("the view edited the Registry's settings: %v", nested)
+	}
+}
+
+// TestCarriesUserinfo pins the check on its own: every "//" is read, and
+// neither whitespace nor a backslash hides an authority.
+func TestCarriesUserinfo(t *testing.T) {
+	for s, want := range map[string]bool{
+		"https://u:p@h/":            true,
+		"//u@h":                     true,
+		"note //x https://u:p@h":    true, // the second "//"
+		"//x //y //u:p@h":           true,
+		"https:///u:p@h":            true, // overlapping "//": the second one opens "u:p@h"
+		"////u:p@h":                 true, // overlapping "//" are all read
+		"https://u:p with space@h/": true,
+		`https:\\u:p@h`:             true,
+		"https://h/path?x=//u:p@h":  true,
+		"https://h/path":            false,
+		"mail me@h":                 false,
+		"https://h/a@b":             false, // the "@" is in the path
+		"a:b@c":                     false,
+		"":                          false,
+		"//":                        false,
+	} {
+		if got := carriesUserinfo(s); got != want {
+			t.Errorf("carriesUserinfo(%q) = %v, want %v", s, got, want)
+		}
 	}
 }
 
@@ -1580,5 +1647,31 @@ func TestIntegrationHTTP_ScopedTestAuditNamesStoredAdapter(t *testing.T) {
 	slices.Sort(got)
 	if want := []string{"false " + string(batsignal), "true " + string(batsignal)}; !slices.Equal(got, want) {
 		t.Errorf("recorded (scoped adapter) = %q, want %q", got, want)
+	}
+}
+
+// TestIntegrationHTTP_UnlockedUserinfoValueIsDroppedOnRoundTrip pins a known
+// effect of withholding by dropping: a plain string field (no format=uri, so
+// the Registry's userinfo check never runs on it) may hold a credential-shaped
+// URL, the view leaves it out, and a GET-edit-PUT then omits the field, which
+// clears it. Masking instead would send a corrupted URL back into storage.
+func TestIntegrationHTTP_UnlockedUserinfoValueIsDroppedOnRoundTrip(t *testing.T) {
+	e := newEnv(t)
+	ctx := adminCtx()
+	b := signalBody(roofID, "http://192.0.2.20/", "alfred-1")
+	b.Settings["channel"] = "http://robin:grayson@192.0.2.50/"
+	got := e.create(t, ctx, kindNotify, b)
+	assertNoLeak(t, "the create answer", mustJSON(t, got), "robin", "grayson")
+	cur := e.get(t, ctx, kindNotify, roofID)
+	assertNoLeak(t, "the view", mustJSON(t, cur), "robin", "grayson")
+	var body IntegrationInstanceReplace
+	if err := json.Unmarshal([]byte(mustJSON(t, cur)), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.api.updateInstance(ctx, in(ctx, updateReq{Kind: kindNotify, ID: roofID, Body: body})); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := e.reg.Config(integrations.Ref{Kind: integrations.KindNotify, Instance: roofID}); cfg.Settings["channel"] != nil {
+		t.Errorf("channel = %v after the round trip, want it cleared", cfg.Settings["channel"])
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/types.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b7f3a52-6c1e-4d0a-9b84-3f2a7e51c9d4
 // last-edited: 2026-11-11
 
@@ -592,15 +592,27 @@ func instanceView(cfg integrations.InstanceConfig, secretFields map[string]bool)
 	return v
 }
 
-// withoutUserinfo is v with every URL that carries userinfo left out, ok
-// false when v itself is one. The Registry refuses userinfo in a Put, but an
-// operator-layer value is not a Put: a URL there can carry a credential, and
-// the settings answer is read with core:integrations.read. Leaving the value
-// out is safe for a client that sends the answer back: an operator-locked
-// field may be omitted from a PUT (M1.3 Put). Maps and lists are copied, not
-// edited, because cfg.Settings is the Registry's.
+// withoutUserinfo is v with everything that could carry a credential-bearing
+// URL left out, ok false when v itself must be. It fails closed:
+//
+//   - a string is withheld when any "//" in it opens an authority containing
+//     "@" (carriesUserinfo);
+//   - a map or list is rebuilt without its withheld elements and keys, whatever
+//     its Go type (the JSON shapes keep their types; any other string-keyed map
+//     or slice is rebuilt as map[string]any or []any);
+//   - a value of a kind that cannot be walked (a struct, a channel, a function,
+//     a map that is not keyed by strings) is withheld, never passed through.
+//
+// The Registry refuses userinfo in a Put, but an operator-layer value is not a
+// Put: a URL there can carry a credential, and the settings answer is read
+// with core:integrations.read. Leaving the value out is safe for a client that
+// sends the answer back: an operator-locked field may be omitted from a PUT
+// (M1.3 Put). Containers are copied, never edited, because cfg.Settings is
+// the Registry's.
 func withoutUserinfo(v any) (out any, ok bool) {
 	switch x := v.(type) {
+	case nil:
+		return nil, true
 	case string:
 		return v, !carriesUserinfo(x)
 	case []string:
@@ -608,6 +620,14 @@ func withoutUserinfo(v any) (out any, ok bool) {
 		for _, e := range x {
 			if !carriesUserinfo(e) {
 				kept = append(kept, e)
+			}
+		}
+		return kept, true
+	case map[string]string:
+		kept := make(map[string]string, len(x))
+		for k, e := range x {
+			if !carriesUserinfo(k) && !carriesUserinfo(e) {
+				kept[k] = e
 			}
 		}
 		return kept, true
@@ -622,28 +642,95 @@ func withoutUserinfo(v any) (out any, ok bool) {
 	case map[string]any:
 		kept := make(map[string]any, len(x))
 		for k, e := range x {
+			if carriesUserinfo(k) {
+				continue
+			}
 			if s, ok := withoutUserinfo(e); ok {
 				kept[k] = s
 			}
 		}
 		return kept, true
 	}
-	return v, true
+	return screenValue(reflect.ValueOf(v))
 }
 
-// carriesUserinfo reports a "scheme://user@host" or "//user@host" shape: an
-// authority (the text after "//" up to "/", "?" or "#") that contains "@".
-// It reads the text and not url.Parse, so an unparsable URL is still caught.
+// screenValue is withoutUserinfo for the shapes its type switch does not
+// name: named string types, typed slices and maps, and pointers to them.
+func screenValue(rv reflect.Value) (any, bool) {
+	switch rv.Kind() {
+	case reflect.String:
+		if carriesUserinfo(rv.String()) {
+			return nil, false
+		}
+		return rv.Interface(), true
+	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
+		return rv.Interface(), true
+	case reflect.Interface, reflect.Pointer:
+		if rv.IsNil() {
+			return nil, true
+		}
+		return screenValue(rv.Elem())
+	case reflect.Slice, reflect.Array:
+		if rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
+			// Bytes marshal as base64, which hides the text; screen the text.
+			if carriesUserinfo(string(rv.Bytes())) {
+				return nil, false
+			}
+			return rv.Interface(), true
+		}
+		kept := make([]any, 0, rv.Len())
+		for i := range rv.Len() {
+			if e, ok := screenValue(rv.Index(i)); ok {
+				kept = append(kept, e)
+			}
+		}
+		return kept, true
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			return nil, false
+		}
+		kept := make(map[string]any, rv.Len())
+		for it := rv.MapRange(); it.Next(); {
+			k := it.Key().String()
+			if carriesUserinfo(k) {
+				continue
+			}
+			if e, ok := screenValue(it.Value()); ok {
+				kept[k] = e
+			}
+		}
+		return kept, true
+	}
+	return nil, false
+}
+
+// carriesUserinfo reports whether s holds a "//" that opens an authority (the
+// text after it up to "/", "?" or "#") containing "@": "scheme://user@host",
+// "//user@host", or either one after other text. It looks at every "//", not
+// only the first, and whitespace does not end an authority or exempt it: it is
+// the check of a value that must not leave the server, so it errs toward
+// withholding (a sentence that happens to hold "//x ... a@b" is withheld too).
+// It reads the text and not url.Parse, so an unparsable URL is still caught,
+// and it reads a backslash as the slash a browser takes it for.
 func carriesUserinfo(s string) bool {
-	i := strings.Index(s, "//")
-	if i < 0 || (i > 0 && s[i-1] != ':') {
-		return false
+	s = strings.ReplaceAll(s, `\`, "/")
+	for rest := s; ; {
+		i := strings.Index(rest, "//")
+		if i < 0 {
+			return false
+		}
+		authority := rest[i+2:]
+		if j := strings.IndexAny(authority, "/?#"); j >= 0 {
+			authority = authority[:j]
+		}
+		if strings.Contains(authority, "@") {
+			return true
+		}
+		// Step one byte, not two: "///" and "////" hold overlapping "//".
+		rest = rest[i+1:]
 	}
-	authority := s[i+2:]
-	if j := strings.IndexAny(authority, "/?#"); j >= 0 {
-		authority = authority[:j]
-	}
-	return strings.Contains(authority, "@") && !strings.ContainsFunc(authority, unicode.IsSpace)
 }
 
 // adapterView renders m.
