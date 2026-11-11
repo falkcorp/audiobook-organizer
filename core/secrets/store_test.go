@@ -1,5 +1,5 @@
 // file: core/secrets/store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 45016034-b979-435e-b52a-6ddb35c3501c
 // last-edited: 2026-11-10
 
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -758,5 +759,55 @@ func TestMeta_StorageErrorIsAnError(t *testing.T) {
 	}
 	if _, err := s.Put(ctx, nameGate, NewValue(valueVengeance), byAlfred); err == nil {
 		t.Fatal("Put on a closed store succeeded")
+	}
+}
+
+// TestUnexportedKeys_ConcurrentWithClose (a test name coined by the F3-03
+// follow-up): UnexportedKeys running beside Close never digests key material
+// Close is wiping. A digest taken after the read lock is released reads the
+// keyring's memory while Close clears it; -race does not report that (clear
+// and the assembly SHA-256 are not instrumented, measured), but the digest of
+// zeroed bytes is not in the export record, so a fully exported keyring is
+// reported as unexported. So the test asserts the answer: each call says
+// "every key exported" or errClosed, nothing else. Run it with -race too.
+func TestUnexportedKeys_ConcurrentWithClose(t *testing.T) {
+	for round := range 10 {
+		e := newEnv(t)
+		s := e.open(t, nil)
+		if _, err := ExportKeyring(e.root, "", filepath.Join(t.TempDir(), "keyring.export"), e.clock.now()); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := s.UnexportedKeys(); err != nil || len(out) != 0 {
+			t.Fatalf("round %d: before Close: UnexportedKeys = %v, %v, want none", round, out, err)
+		}
+		// Close starts once every reader has answered once, so the readers
+		// are mid-loop when it wipes the keyring.
+		var running, wg sync.WaitGroup
+		running.Add(4)
+		for range 4 {
+			wg.Go(func() {
+				for i := 0; ; i++ {
+					out, err := s.UnexportedKeys()
+					if i == 0 {
+						running.Done()
+					}
+					switch {
+					case errors.Is(err, errClosed):
+						if i == 0 {
+							t.Errorf("round %d: UnexportedKeys returned errClosed before Close", round)
+						}
+						return
+					case err != nil || len(out) != 0:
+						t.Errorf("round %d: UnexportedKeys beside Close = %v, %v, want none or errClosed", round, out, err)
+						return
+					}
+				}
+			})
+		}
+		running.Wait()
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		wg.Wait()
 	}
 }

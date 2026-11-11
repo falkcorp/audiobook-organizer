@@ -1,5 +1,5 @@
 // file: core/secrets/store.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: be9e243c-f9df-4ff7-930d-10a5b90f2f49
 // last-edited: 2026-11-10
 
@@ -62,7 +62,8 @@ type Options struct {
 	Now       func() time.Time
 }
 
-// ephemeralValue is an operator-supplied value (env or file).
+// ephemeralValue is an operator-supplied value (env or file). The Store holds
+// it by pointer (Store.ephemeral): see Store.String for why.
 type ephemeralValue struct {
 	v   Value
 	src Source
@@ -84,9 +85,9 @@ type Store struct {
 
 	mu        sync.RWMutex
 	ring      *keyring
-	retired   map[string]bool // verify derive keys RetireUnused retired, this process only
-	blocked   []string        // verify derive keys past retire_after kept by the in-use check
-	ephemeral map[Name]ephemeralValue
+	retired   map[string]bool          // verify derive keys RetireUnused retired, this process only
+	blocked   []string                 // verify derive keys past retire_after kept by the in-use check
+	ephemeral map[Name]*ephemeralValue // pointers: see String
 	closed    bool
 
 	ctr counters
@@ -138,7 +139,7 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	s := &Store{
 		ks: o.Keyspace, appID: o.AppID, keyFile: keyFile, root: o.StateDir,
 		log: o.Logger, now: o.Now,
-		retired: map[string]bool{}, ephemeral: map[Name]ephemeralValue{},
+		retired: map[string]bool{}, ephemeral: map[Name]*ephemeralValue{},
 	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
@@ -299,7 +300,8 @@ func isTempSuffix(s string) bool {
 // rewrites it on a reset boot only. A new keyring is k<n> and d<n> with n
 // past every key number known: the sealed records' key IDs, c/secrets/meta's
 // max_key_id (m) and the export record's IDs. It is created exclusively,
-// never over a keyring that appeared meanwhile.
+// never over a keyring that appeared meanwhile, and never over an entry at
+// the path that Stat reads as absent (a dangling symbolic link).
 func (s *Store) resolveKeyring(ctx context.Context, o Options, m *storeMeta) (*keyringFile, error) {
 	_, statErr := s.root.Stat(s.keyFile)
 	switch {
@@ -307,6 +309,15 @@ func (s *Store) resolveKeyring(ctx context.Context, o Options, m *storeMeta) (*k
 		return s.loadKeyring(o)
 	case !errors.Is(statErr, fs.ErrNotExist):
 		return nil, fmt.Errorf("secrets: stat the keyring %s: %w", s.keyFile, statErr)
+	}
+	// Stat follows a symbolic link, so a dangling one reads as absent while
+	// its name is taken: the exclusive create below would fail as though a
+	// keyring had appeared meanwhile. Name what is there instead.
+	if fi, err := s.root.Lstat(s.keyFile); err == nil {
+		return nil, fmt.Errorf("secrets: the keyring path %s holds a dangling symbolic link or another entry that is not a regular file (mode %v) "+
+			"and it is never replaced: restore the file it names, or remove it so a new keyring is created", s.keyFile, fi.Mode())
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("secrets: lstat the keyring %s: %w", s.keyFile, err)
 	}
 	sealed, maxKID, err := s.countSealed(ctx)
 	if err != nil {
@@ -467,7 +478,7 @@ func (s *Store) lookup(ctx context.Context, n Name, withValue bool) (Value, Meta
 
 // ephemeralMeta is the Meta (and, for Get, a copy of the value) of an
 // operator value.
-func (s *Store) ephemeralMeta(n Name, eph ephemeralValue, withValue bool) (Value, Meta, error) {
+func (s *Store) ephemeralMeta(n Name, eph *ephemeralValue, withValue bool) (Value, Meta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.closed {
@@ -772,7 +783,7 @@ func (s *Store) Ephemeral(n Name, v Value, src Source) {
 	if old, ok := s.ephemeral[n]; ok {
 		clear(old.v.b)
 	}
-	s.ephemeral[n] = ephemeralValue{v: Value{b: v.Bytes()}, src: src}
+	s.ephemeral[n] = &ephemeralValue{v: Value{b: v.Bytes()}, src: src}
 }
 
 // All yields the Meta of every secret the store knows, sorted by name: each
@@ -893,6 +904,16 @@ func (s *Store) KeyIDs() []string {
 // String names the store's app and keyring file, never a value or a key:
 // the operator values and the keyring sit in unexported fields, which fmt
 // would print raw.
+//
+// String, GoString and Format cover the Store printed itself or through an
+// exported field. Through an unexported field (a wrapper such as the kernel's
+// kernelSecrets, or a bound Ref's resolver) fmt cannot call them: a pointer
+// printed with a verb it does not take (%s, %q) is reprinted with %v at
+// depth 0, which walks the Store's fields one level and prints every pointer
+// below as an address. So every field that holds secret bytes sits behind a
+// pointer: ring is a *keyring and ephemeral maps to *ephemeralValue. A field
+// holding a Value, a keyMaterial or a []byte of key material by value would
+// print it raw (TestStore_NeverFormatsInsideAWrapper).
 func (s *Store) String() string {
 	if s == nil {
 		return "secrets.Store(nil)"
@@ -922,14 +943,15 @@ func (s *Store) LogValue() slog.Value {
 // the record on every call, since export-keyring runs while the server
 // serves. An absent record leaves every key unexported; a record that cannot
 // be read does too, and its error is returned beside them.
+//
+// The digests are taken under the read lock: the key material is the
+// keyring's own memory, which Close wipes under the write lock, so hashing
+// it after the unlock would race with Close and could digest zeroed bytes.
 func (s *Store) UnexportedKeys() ([]string, error) {
-	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
-		return nil, errClosed
+	keys, err := s.loadedKeyDigests()
+	if err != nil {
+		return nil, err
 	}
-	keys := slices.Clone(s.ring.file.Keys)
-	s.mu.RUnlock()
 	ids := make([]string, len(keys))
 	for i, k := range keys {
 		ids[i] = k.ID
@@ -942,12 +964,27 @@ func (s *Store) UnexportedKeys() ([]string, error) {
 		return ids, err
 	}
 	var out []string
-	for i := range keys {
-		if !exported.covers(&keys[i]) {
-			out = append(out, keys[i].ID)
+	for _, k := range keys {
+		if !exported.covers(k) {
+			out = append(out, k.ID)
 		}
 	}
 	return out, nil
+}
+
+// loadedKeyDigests is every key of the loaded keyring as the export record
+// names it (ID and material digest), in file order, read under s.mu.
+func (s *Store) loadedKeyDigests() ([]exportedKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, errClosed
+	}
+	keys := make([]exportedKey, len(s.ring.file.Keys))
+	for i := range s.ring.file.Keys {
+		keys[i] = exportedKeyOf(&s.ring.file.Keys[i])
+	}
+	return keys, nil
 }
 
 // Close wipes the loaded key material and the operator values. It does not
