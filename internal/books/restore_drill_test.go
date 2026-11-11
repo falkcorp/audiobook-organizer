@@ -1,5 +1,5 @@
 // file: internal/books/restore_drill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c7e9a41-5f08-4d3b-b916-8e4a0d6c1f75
 // last-edited: 2026-11-10
 
@@ -7,6 +7,8 @@ package books
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -62,8 +65,8 @@ func TestRollbackRestoreBootsPreviousBuild(t *testing.T) {
 			t.Skip("the drill runs on r0 and prefreeze-written; the shaped store carries no answers")
 		}
 		if os.Getenv(r2PrefreezeBinEnv) == "" {
-			if inCI() {
-				t.Fatalf("%s is not set: the drill boots the pre-freeze binary", r2PrefreezeBinEnv)
+			if strictCutover() {
+				t.Fatalf("%s is not set and %s=1: the drill boots the pre-freeze binary", r2PrefreezeBinEnv, r2StrictEnv)
 			}
 			t.Skipf("%s is not set: no pre-freeze binary to boot after the restore", r2PrefreezeBinEnv)
 		}
@@ -80,26 +83,14 @@ func TestRollbackRestoreBootsPreviousBuild(t *testing.T) {
 
 		t.Run("checkpoint", func(t *testing.T) {
 			work := copyCorpus(t, c)
-			// Only a checkpoint the upgrade boot took: a store the pre-freeze
-			// release wrote already holds that release's own checkpoints,
-			// taken before it wrote rule 10's rows, and restoring one of
-			// those would lose them.
-			had := map[string]bool{}
-			for _, cp := range checkpoints(t, work) {
-				had[cp] = true
-			}
+			had := checkpoints(t, work)
 			upgradeAndMark(t, work)
-			var taken []string
-			for _, cp := range checkpoints(t, work) {
-				if !had[cp] {
-					taken = append(taken, cp)
-				}
-			}
-			if len(taken) == 0 {
-				require.Empty(t, steps, "a boot that runs cutover steps must take the pre-migration checkpoint")
+			cp, problem := upgradeCheckpoint(len(steps), had, checkpoints(t, work))
+			require.Empty(t, problem)
+			if cp == "" {
 				t.Skip("the upgrade boot took no checkpoint (no step or legacy migration to run on this corpus): the archive half restores it")
 			}
-			restoreOffline(t, work, "--checkpoint", taken[len(taken)-1], "--accept-loss")
+			restoreOffline(t, work, "--checkpoint", cp, "--accept-loss")
 			drillAfterRestore(t, c, pre, work, want)
 		})
 		t.Run("archive", func(t *testing.T) {
@@ -366,6 +357,66 @@ func TestPrefreezeTagResolver(t *testing.T) {
 	}
 }
 
+// TestPrefreezeFetchVerifiesChecksum: fetch_prefreeze_binary.sh installs the
+// binary only from an archive whose SHA-256 is the one the release's
+// checksums.txt lists (a fake gh hands it the release's files).
+func TestPrefreezeFetchVerifiesChecksum(t *testing.T) {
+	script := filepath.Join(r2RepoRoot(t), "scripts", "ci", "fetch_prefreeze_binary.sh")
+	uname := func(flag string) string {
+		out, err := exec.CommandContext(t.Context(), "uname", flag).Output()
+		require.NoError(t, err)
+		return strings.TrimSpace(string(out))
+	}
+	arch := uname("-m")
+	if arch == "aarch64" {
+		arch = "arm64"
+	}
+	bin := "audiobook-organizer_" + uname("-s") + "_" + arch
+	archive := "audiobook-organizer_0.1.0_" + uname("-s") + "_" + arch + ".tar.gz"
+	for name, tc := range map[string]struct {
+		sums    func(sum string) string // checksums.txt from the archive's real sum
+		refusal string                  // "" installs; else the refusal's stderr
+	}{
+		"listed-sum":   {sums: func(sum string) string { return sum + "  " + archive + "\n" }},
+		"wrong-sum":    {sums: func(string) string { return strings.Repeat("0", 64) + "  " + archive + "\n" }, refusal: "checksums.txt says"},
+		"not-listed":   {sums: func(sum string) string { return sum + "  audiobook-organizer_0.1.0_Plan9_mips.tar.gz\n" }, refusal: "checksums.txt lists no"},
+		"other-tarred": {sums: func(sum string) string { return sum + "  " + archive + ".sig\n" }, refusal: "checksums.txt lists no"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src, fakeBin, cache := t.TempDir(), t.TempDir(), t.TempDir()
+			payload := filepath.Join(src, bin)
+			require.NoError(t, os.WriteFile(payload, []byte("#!/bin/sh\necho batcomputer\n"), 0o755))
+			tarball := filepath.Join(src, archive)
+			require.NoError(t, exec.CommandContext(t.Context(), "tar", "-czf", tarball, "-C", src, bin).Run())
+			require.NoError(t, os.Remove(payload))
+			sum := sha256.New()
+			raw, err := os.ReadFile(tarball)
+			require.NoError(t, err)
+			sum.Write(raw)
+			require.NoError(t, os.WriteFile(filepath.Join(src, "checksums.txt"), []byte(tc.sums(hex.EncodeToString(sum.Sum(nil)))), 0o600))
+			gh := "#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do [ \"$1\" = -D ] && d=\"$2\"; shift; done\ncp \"$FAKE_GH_SRC\"/* \"$d\"/\n"
+			require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "gh"), []byte(gh), 0o755))
+			cmd := exec.CommandContext(t.Context(), "bash", script, "v0.1.0")
+			cmd.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"FAKE_GH_SRC="+src, "PREFREEZE_CACHE="+cache, "GITHUB_REPOSITORY=")
+			out, err := cmd.Output()
+			installed := filepath.Join(cache, "v0.1.0", bin)
+			if tc.refusal != "" {
+				var exit *exec.ExitError
+				require.ErrorAs(t, err, &exit, "installed %s", out)
+				require.Contains(t, string(exit.Stderr), tc.refusal)
+				require.NoFileExists(t, installed)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, installed+"\n", string(out))
+			got, err := os.ReadFile(installed)
+			require.NoError(t, err)
+			require.Contains(t, string(got), "batcomputer")
+		})
+	}
+}
+
 // ---------------------------------------------------------------- the selftest
 
 // selftestFamily is the family the fake cutover step moves: users, whose IDs
@@ -404,6 +455,11 @@ var fakeCases = []fakeCase{
 	{name: "quarantines-without-reporting-orphans", mut: "quarantine-unreported", bites: []string{"quarantine", "refs"}},
 	{name: "imports-a-quarantine-case", mut: "import-case", bites: []string{"quarantine"}},
 	{name: "drops-a-row-the-prefreeze-binary-wrote", mut: "drop-prefreeze", bites: []string{"ids"}},
+	{name: "adds-a-ledger-row-and-bumps-the-version", mut: "ledger-add"},
+	{name: "rewrites-a-ledger-row", mut: "ledger-rewrite", bites: []string{"bookkeeping"}},
+	{name: "deletes-a-ledger-row", mut: "ledger-delete", bites: []string{"bookkeeping"}},
+	{name: "lowers-the-schema-version", mut: "db-version-down", bites: []string{"bookkeeping"}},
+	{name: "lowers-the-preference-counter", mut: "counter-down", bites: []string{"bookkeeping"}},
 }
 
 // testCutoverSelftest proves every check of the suite fails when a cutover
@@ -416,8 +472,8 @@ func testCutoverSelftest(t *testing.T) {
 	switch {
 	case os.Getenv(r2PrefreezeBinEnv) != "":
 		cs = append(cs, prefreezeWrittenCorpus(t))
-	case inCI():
-		t.Fatalf("%s is not set: the selftest runs on prefreeze-written too", r2PrefreezeBinEnv)
+	case strictCutover():
+		t.Fatalf("%s is not set and %s=1: the selftest runs on prefreeze-written too", r2PrefreezeBinEnv, r2StrictEnv)
 	}
 	shared := loadSharedFamilies(t)
 	for _, c := range cs {
@@ -434,11 +490,12 @@ func testCutoverSelftest(t *testing.T) {
 					before, after := scanStore(t, storeDB(pristine), spec), scanStore(t, storeDB(work), spec)
 					steps := []cutoverStep{step}
 					got := map[string][]string{
-						"counts":     countProblems(steps, before, after),
-						"quarantine": quarantineProblems(steps, c.quarantineCases, after.Quarantine),
-						"ids":        idProblems(before, after),
-						"refs":       refProblems(steps, before, after),
-						"bytes":      byteProblems(before, after),
+						"counts":      countProblems(steps, before, after),
+						"quarantine":  quarantineProblems(steps, c.quarantineCases, after.Quarantine),
+						"ids":         idProblems(before, after),
+						"refs":        refProblems(t, storeDB(work), steps, before, after),
+						"bytes":       byteProblems(before, after),
+						"bookkeeping": bookkeepingProblems(before, after),
 					}
 					bites := fc.bites
 					if fc.mut == "drop-prefreeze" && referenced {
@@ -451,6 +508,148 @@ func testCutoverSelftest(t *testing.T) {
 		})
 	}
 	t.Run("answers", testAnswersSelftest)
+	t.Run("manifest", testManifestSelftest)
+	t.Run("references", testReferencesSelftest)
+	t.Run("id-resolution", testIDResolutionSelftest)
+	t.Run("checkpoint-guard", testCheckpointGuardSelftest)
+}
+
+// fakeDataMigration stands in for datamigrate.DataMigration in the manifest
+// selftest: the enumeration reads only its Cutover flag.
+type fakeDataMigration struct {
+	ID      string
+	Cutover bool
+}
+
+// testManifestSelftest proves cutoverStepsOf sees a step wherever a manifest
+// can register one, and only a cutover one.
+func testManifestSelftest(t *testing.T) {
+	type cutoverField struct{ Cutover []int }
+	type cutoverFunc struct{ Cutover func() }
+	type dms struct{ DataMigrations []fakeDataMigration }
+	type dmPtrs struct{ DataMigrations []*fakeDataMigration }
+	type dmFunc struct{ DataMigrations func() []fakeDataMigration }
+	type dmNoFlag struct{ DataMigrations []struct{ ID string } }
+	type both struct {
+		Cutover        []int
+		DataMigrations []fakeDataMigration
+	}
+	for name, tc := range map[string]struct {
+		manifest any
+		fails    bool
+	}{
+		"the-build":                     {manifest: Module().Manifest()},
+		"no-field":                      {manifest: struct{ ID string }{"books"}},
+		"empty-cutover":                 {manifest: cutoverField{}},
+		"a-cutover-step":                {manifest: cutoverField{Cutover: []int{1}}, fails: true},
+		"a-cutover-func":                {manifest: cutoverFunc{Cutover: func() {}}, fails: true},
+		"a-pointer-manifest":            {manifest: &cutoverField{Cutover: []int{1}}, fails: true},
+		"an-empty-pointer-manifest":     {manifest: &cutoverField{}},
+		"data-migrations-no-cutover":    {manifest: dms{DataMigrations: []fakeDataMigration{{ID: "books.batcave-index"}}}},
+		"a-cutover-data-migration":      {manifest: dms{DataMigrations: []fakeDataMigration{{ID: "books.batcave-index"}, {ID: "books.m3-users", Cutover: true}}}, fails: true},
+		"a-cutover-data-migration-ptr":  {manifest: dmPtrs{DataMigrations: []*fakeDataMigration{{ID: "books.m3-users", Cutover: true}}}, fails: true},
+		"data-migrations-built-by-func": {manifest: dmFunc{DataMigrations: func() []fakeDataMigration { return nil }}, fails: true},
+		"data-migrations-without-flag":  {manifest: dmNoFlag{DataMigrations: []struct{ ID string }{{"books.x"}}}, fails: true},
+		"both-empty":                    {manifest: both{}},
+		"nil":                           {manifest: (*cutoverField)(nil), fails: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			steps, err := cutoverStepsOf(tc.manifest)
+			if tc.fails {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Empty(t, steps)
+		})
+	}
+}
+
+// testReferencesSelftest proves each reference site referencedIDs reads, and
+// that it reads nothing else.
+func testReferencesSelftest(t *testing.T) {
+	const bruce, alfred = "01ARKHAM00000000000000BRUCE", "01ARKHAM0000000000000ALFRED"
+	ids := map[string]string{bruce: "user", alfred: "key", "admin": "role", "9": "import root"}
+	fi := newFamilyIndex()
+	for name, tc := range map[string]struct {
+		key, val string
+		want     []string
+	}{
+		"quoted-value-token":         {key: "sess:01SESSION", val: `{"user_id":"` + bruce + `"}`, want: []string{bruce}},
+		"unquoted-value-text":        {key: "sess:01SESSION", val: `{"note":"x` + bruce + `"}`},
+		"idx-key-segments":           {key: "idx:apikey:user:" + bruce + ":" + alfred, want: []string{bruce, alfred}},
+		"own-row-key":                {key: "u:" + bruce, val: `{"username":"bruce.wayne"}`},
+		"roles-field":                {key: "u:" + bruce, val: `{"roles":["admin"]}`, want: []string{"admin"}},
+		"role-id-field":              {key: "invite:wayne-manor", val: `{"role_id":"admin"}`, want: []string{"admin"}},
+		"short-id-in-another-field":  {key: "invite:wayne-manor", val: `{"username":"admin"}`},
+		"idx-whole-value":            {key: "idx:role:name:admin", val: `admin`, want: []string{"admin"}},
+		"import-root-path-index":     {key: "import_path:path:/gotham/archive", val: `9`, want: []string{"9"}},
+		"short-id-as-quoted-token":   {key: "book:01BOOK", val: `{"edition":"9"}`},
+		"short-id-as-a-plain-value":  {key: "counter:preference", val: `9`},
+		"long-id-in-roles-once-only": {key: "u:" + alfred, val: `{"roles":["` + bruce + `"]}`, want: []string{bruce}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := referencedIDs(fi.family([]byte(tc.key)), []byte(tc.key), []byte(tc.val), ids)
+			slices.Sort(got)
+			want := slices.Clone(tc.want)
+			slices.Sort(want)
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+// testIDResolutionSelftest proves an ID is kept only as a whole token of a
+// core key (the scan's add builds the tokens): an ID that is the start or
+// the end of a longer token is not, so a step that renames an ID by a
+// character still fails the ID check.
+func testIDResolutionSelftest(t *testing.T) {
+	const bruce = "01ARKHAM00000000000000BRUCE"
+	fi := newFamilyIndex()
+	for name, tc := range map[string]struct {
+		core []string
+		kept bool
+	}{
+		"a-whole-token":           {core: []string{"c/selftest/user/" + bruce}, kept: true},
+		"a-token-inside-the-key":  {core: []string{"c/selftest/user/" + bruce + "/profile"}, kept: true},
+		"the-start-of-a-token":    {core: []string{"c/selftest/user/" + bruce + "2"}},
+		"the-end-of-a-token":      {core: []string{"c/selftest/user/X" + bruce}},
+		"no-core-key-holds-it":    {core: []string{"c/selftest/user/01ARKHAM0000000000000ALFRED"}},
+		"a-books-row-is-not-core": {core: []string{"sess:" + bruce}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newStoreScan(scanSpec{})
+			for _, k := range tc.core {
+				s.add(fi, scanSpec{}, []byte(k), nil)
+			}
+			kept, q := idResolves("user", bruce, s)
+			require.Equal(t, tc.kept, kept)
+			require.False(t, q)
+		})
+	}
+}
+
+// testCheckpointGuardSelftest proves upgradeCheckpoint picks only the boot's
+// own checkpoint and refuses a boot that ran steps without one.
+func testCheckpointGuardSelftest(t *testing.T) {
+	had := []string{"20261110T113300Z-arkham"}
+	for name, tc := range map[string]struct {
+		steps   int
+		now     []string
+		want    string
+		refused bool
+	}{
+		"no-step-no-checkpoint":      {now: had},
+		"steps-no-checkpoint":        {steps: 2, now: had, refused: true},
+		"steps-and-a-checkpoint":     {steps: 2, now: append(slices.Clone(had), "20261111T020000Z-gotham"), want: "20261111T020000Z-gotham"},
+		"the-newest-new-one":         {now: append(slices.Clone(had), "20261111T020000Z-gotham", "20261111T030000Z-gotham"), want: "20261111T030000Z-gotham"},
+		"an-older-one-is-never-used": {steps: 1, now: []string{"20261110T113300Z-arkham"}, refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cp, problem := upgradeCheckpoint(tc.steps, had, tc.now)
+			require.Equal(t, tc.want, cp)
+			require.Equal(t, tc.refused, problem != "", problem)
+		})
+	}
 }
 
 // requireBites asserts the named checks report a problem and the others none.
@@ -570,6 +769,41 @@ func moveUsers(t *testing.T, dir, mut string, c corpus) (cutoverStep, bool) {
 		r.Imported--
 	case "double-count":
 		r.Imported++
+	case "ledger-add":
+		// What a legacy migration does: a new ledger row, and the preference
+		// counter and the schema version go up. Bookkeeping grows; it is not
+		// frozen, so the grow-only check must pass this.
+		require.NoError(t, b.Set([]byte("preference:migration_999"), []byte(`{"id":999,"key":"migration_999","value":"{}"}`), nil))
+		k, v := firstKey(t, db, "counter:preference")
+		require.Equal(t, "counter:preference", string(k))
+		n, ok := monotonicBookkeeping["counter:preference"](v)
+		require.True(t, ok, "counter:preference = %q", v)
+		require.NoError(t, b.Set(k, []byte(strconv.FormatInt(n+1, 10)), nil))
+		k, v = firstKey(t, db, "preference:db_version")
+		ver, ok := monotonicBookkeeping["preference:db_version"](v)
+		require.True(t, ok, "preference:db_version = %q", v)
+		var row map[string]any
+		require.NoError(t, json.Unmarshal(v, &row))
+		row["value"] = fmt.Sprintf(`{"version":%d,"updated_at":"2026-11-10T00:00:00Z"}`, ver+1)
+		raw, err := json.Marshal(row)
+		require.NoError(t, err)
+		require.NoError(t, b.Set(k, raw, nil))
+	case "ledger-rewrite":
+		k, v := firstKey(t, db, "preference:migration_")
+		require.NoError(t, b.Set(k, append(v, ' '), nil))
+	case "ledger-delete":
+		k, _ := firstKey(t, db, "preference:migration_")
+		require.NoError(t, b.Delete(k, nil))
+	case "db-version-down":
+		_, v := firstKey(t, db, "preference:db_version")
+		var row map[string]any
+		require.NoError(t, json.Unmarshal(v, &row))
+		row["value"] = `{"version":1,"updated_at":"2026-11-10T00:00:00Z"}`
+		raw, err := json.Marshal(row)
+		require.NoError(t, err)
+		require.NoError(t, b.Set([]byte("preference:db_version"), raw, nil))
+	case "counter-down":
+		require.NoError(t, b.Set([]byte("counter:preference"), []byte("1"), nil))
 	case "touch-outside":
 		k, v := firstKey(t, db, "author:")
 		require.NoError(t, b.Set(k, append(v, ' '), nil))
@@ -597,8 +831,9 @@ func flip(c byte) string {
 	return "Z"
 }
 
-// referencingFamilies counts, per books family, the rows whose value holds id
-// as a quoted string (the referential pass' rule), u: excluded.
+// referencingFamilies counts, per books family, the references to user id
+// the referential pass reads (referencedIDs), u: excluded: what a step that
+// quarantines that user reports as its orphaned_refs.
 func referencingFamilies(t *testing.T, db *pebble.DB, id string) map[string]int64 {
 	t.Helper()
 	it, err := db.NewIter(nil)
@@ -606,14 +841,15 @@ func referencingFamilies(t *testing.T, db *pebble.DB, id string) map[string]int6
 	defer func() { require.NoError(t, it.Close()) }()
 	fi := newFamilyIndex()
 	out := map[string]int64{}
-	needle := []byte(`"` + id + `"`)
+	ids := map[string]string{id: "user"}
 	for it.First(); it.Valid(); it.Next() {
 		f := fi.family(it.Key())
 		if f == selftestFamily || coreFamily(f) {
 			continue
 		}
-		if bytes.Contains(it.Value(), needle) {
-			out[f]++
+		out[f] += int64(len(referencedIDs(f, it.Key(), it.Value(), ids)))
+		if out[f] == 0 {
+			delete(out, f)
 		}
 	}
 	return out

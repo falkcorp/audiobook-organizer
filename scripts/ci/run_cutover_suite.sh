@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/ci/run_cutover_suite.sh
-# version: 1.0.0
+# version: 1.1.0
 # guid: cb3cc064-170c-4661-b9ad-f3d45d18b2b2
 # last-edited: 2026-11-10
 #
@@ -54,12 +54,24 @@ if [ -z "${R2_PREFREEZE_BIN:-}" ]; then
   export R2_PREFREEZE_BIN
 fi
 
+# Every corpus is required here: a test that cannot build one fails, never
+# skips (cutover_suite_test.go strictCutover).
+export R2_CUTOVER_STRICT=1
+
 tests='TestCutoverOnR0Corpus TestCutoverPreservesIDsAndReferences TestCutoverLeavesOtherFamiliesByteIdentical TestRollbackRestoreBootsPreviousBuild'
 want=()
 for t in $tests; do want+=("$t/$shard"); done
 run="^($(tr ' ' '|' <<<"$tests"))\$/^(${sub})\$"
+# The drill's halves. The checkpoint half on prefreeze-written skips while no
+# step or legacy migration runs on that corpus (nothing to checkpoint; the
+# archive half restores it), so only r0's is required.
+want+=("TestRollbackRestoreBootsPreviousBuild/$shard/archive")
 if [ "$shard" = r0 ]; then
-  want+=(TestCutoverOnR0Corpus/selftest/r0 TestCutoverOnR0Corpus/selftest/prefreeze-written TestCutoverOnR0Corpus/selftest/answers TestPrefreezeTagResolver)
+  want+=(TestRollbackRestoreBootsPreviousBuild/r0/checkpoint
+    TestCutoverOnR0Corpus/selftest/r0 TestCutoverOnR0Corpus/selftest/prefreeze-written
+    TestCutoverOnR0Corpus/selftest/answers TestCutoverOnR0Corpus/selftest/manifest
+    TestCutoverOnR0Corpus/selftest/references TestCutoverOnR0Corpus/selftest/checkpoint-guard
+    TestPrefreezeTagResolver TestPrefreezeFetchVerifiesChecksum)
   python3 scripts/ci/gen_shared_family_lists.py --check
 fi
 
@@ -67,7 +79,7 @@ fi
 rc=0
 out="$(go test ./internal/books/ -run "$run" -count=1 -v -timeout 22m 2>&1)" || rc=$?
 if [ "$shard" = r0 ] && [ "$rc" -eq 0 ]; then
-  out+=$'\n'"$(go test ./internal/books/ -run '^TestPrefreezeTagResolver$' -count=1 -v 2>&1)" || rc=$?
+  out+=$'\n'"$(go test ./internal/books/ -run '^(TestPrefreezeTagResolver|TestPrefreezeFetchVerifiesChecksum)$' -count=1 -v 2>&1)" || rc=$?
 fi
 grep -E -- '^\s*(--- |PASS|FAIL|ok)|_test\.go:[0-9]+: ' <<<"$out" || true
 if [ "$rc" -ne 0 ]; then

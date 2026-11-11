@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/write_prefreeze_rows.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 5e8b2d14-9a7c-4f03-b6e1-2c4d8f0a7b39
 # last-edited: 2026-11-10
 """Write a few rows into a corpus copy with the pre-freeze release's binary (F2-15).
@@ -14,7 +14,7 @@ calls this script to make such a store. It:
    writer's fixed work directory, as the recorder does (every path the store
    holds points inside it), never touching the committed bytes;
 2. boots the given binary there with the writer's boot spec, the maintenance
-   window moved twelve hours from now (``write_r0_corpus.shifted_window``) so
+   window moved twelve hours from now, or to ``--window-start`` (``write_r0_corpus.shifted_window``), so
    no window task runs while it is driven, on the given port;
 3. writes, **only through the binary's API**, after re-minting a key through
    the bootstrap exchange (the replay rule: never a recorded secret):
@@ -178,7 +178,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     shutil.copytree(corpus, layout.store)  # a copy: the committed bytes stay
     layout.home.mkdir(parents=True, exist_ok=True)
     layout.viper_yaml.write_text(w._yaml_dump(w.VIPER_YAML), encoding="utf-8")
-    window = w.shifted_window()
+    window = w.shifted_window(start=args.window_start)
     w.check_outside_maintenance_window(window=window)
     proc = w.R0Process(binary, layout, args.port, extra_env=w.shifted_window_env(window))
     ctx = w.Ctx(
@@ -200,6 +200,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--corpus", required=True, help="the corpus store directory to copy")
     ap.add_argument("--out", required=True, help="a new directory for the written store")
     ap.add_argument("--workdir", default=w.DEFAULT_WORKDIR)
+    ap.add_argument(
+        "--window-start",
+        type=int,
+        help="the maintenance window's UTC start hour for the boot (default: twelve hours from now)",
+    )
     ap.add_argument("--port", type=int, default=w.DEFAULT_PORT)
     args = ap.parse_args(argv)
     try:

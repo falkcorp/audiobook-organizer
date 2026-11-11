@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_answers.py
-# version: 1.3.0
+# version: 1.3.1
 # guid: 53d96275-057a-4a73-ae6a-625b8f810a3a
 # last-edited: 2026-11-10
 """Record the R0 binary's answers over R2's stage-1 fixture corpus (F2-12).
@@ -652,8 +652,8 @@ def record(args: argparse.Namespace) -> int:
     layout.viper_yaml.write_text(w._yaml_dump(w.VIPER_YAML), encoding="utf-8")
 
     window, extra_env = w.MAINTENANCE_WINDOW_UTC, {}
-    if args.shift_window:
-        window = w.shifted_window()
+    if args.shift_window or args.window_start is not None:
+        window = w.shifted_window(start=args.window_start)
         extra_env = w.shifted_window_env(window)
     w.check_outside_maintenance_window(window=window)
     proc = w.R0Process(binary, layout, args.port, docker=args.docker, extra_env=extra_env)
@@ -731,6 +731,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="boot in a time zone that puts the corpus' maintenance window twelve hours from now "
         "(write_r0_corpus.shifted_window_env), so the replay runs at any hour with no window task",
+    )
+    ap.add_argument(
+        "--window-start",
+        type=int,
+        help="like --shift-window, with the window's UTC start hour given (a caller that boots "
+        "several times picks one, so every boot shares one time zone)",
     )
     ap.add_argument(
         "--allow-foreign-binary",
