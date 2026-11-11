@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.13.16 -->
+<!-- version: 1.14.0 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
-<!-- last-edited: 2026-11-10 -->
+<!-- last-edited: 2026-11-11 -->
 
 # 05 — Config and secrets (`core/config`, `core/secrets`)
 
@@ -553,6 +553,14 @@ The declared keys are `core.auth.mode` ([05-authn](05-authn.md)) and `core.http.
 `ABO_CORE_HTTP_BASIC_GATE_ENABLED=false`, never opens a gate an admin closed in Settings, while an operator can
 always close one (14 E5). With authentication off the auth-disabled principal holds no `core:admin`, so it cannot
 store `core.auth.mode` at all (§1.3.7): auth is turned on by an operator value and a restart.
+A FailClosed key's own stored row keeps counting toward that choice when the rest of its section's stored rows are
+quarantined (§1.4 step 6): while it decodes on its own and is more restrictive than what the key would have without it
+(the operator value, else the default), it stays in play, so a sibling's bad row can only tighten a FailClosed key,
+never loosen it. A FailClosed key's row that does not decode (or holds a value outside the declared order) stops boot,
+naming the key and never its value, and so does a section that fails validation with such a kept row and passes
+without it: ignoring the row could open a gate an admin closed. `TestFailClosed_SurvivesSectionQuarantine` covers both.
+`Importer.Stage` stages a FailClosed key's value even when it equals the default, as `Apply` stores it (C4 does not
+apply), so R0's `enable_auth=true` (`required`, the default) still beats a stale `ABO_CORE_AUTH_MODE=disabled`.
 `TestFailClosed_MoreRestrictiveWins` covers both keys and both directions. The Basic gate's password is not
 FailClosed: an operator value locks `core.http.basic_gate.password` like any key, so
 `ABO_CORE_HTTP_BASIC_GATE_PASSWORD` wins over any stored password, an empty one included, which is core's form of
@@ -795,7 +803,8 @@ removed HEAD's keys from it).
 | Override rows unreadable (I/O) | fail-closed | running on defaults would let the next save overwrite stored config (`cmd/root.go:360-364`) |
 | State directory: default not creatable, no explicit value, database path relative or empty | fail-closed (boot), message names `<APP>_CORE_PATHS_STATE_DIR` | HEAD's fallback needs an absolute database path (`state_dir.go:144-147`) |
 | State directory: explicit value not usable | fail-closed (boot); never falls back | the operator named it (`state_dir.go:140-142`) |
-| Override row fails decode/validate | fail-open per section: quarantine (§1.4 step 6) | DB cannot be fixed without booting |
+| Override row fails decode/validate | fail-open per section: quarantine (§1.4 step 6), except that a FailClosed key's own row that decodes and is stricter stays in play (§1.3.5) | DB cannot be fixed without booting; a sibling's bad row must not open a gate |
+| FailClosed key's own override row does not decode, or its section fails validation only with it | fail-closed (boot), message names the key, never the value | ignoring a possibly stricter value could open a gate an admin closed (§1.3.5) |
 | Override row for unknown key | fail-open: retained, ignored, reported | a module this binary lacks may own it |
 | `Importer.Stage` refuses a value (unknown, operator-only, secret, invalid) | the cutover step quarantines the value and goes on; the key keeps its default (§1.12.2) | data is never dropped silently, and one bad field must not block the cutover |
 | M2 finds encrypted rows and no HEAD key file, no override | fail-closed (boot, nothing written), message names the file, the directories searched and `ABO_CORE_SECRETS_ALLOW_KEY_REGEN` | HEAD's guard (`cmd/root.go:726-783`): a missing key is usually a wrong mount, not a lost key |
@@ -1011,6 +1020,7 @@ the dependency as adopted.
 |---|---|
 | `TestPrecedence_Matrix` | table over every (default, file, env, flag, boot record, override) combination: effective value, `Source`, `LockedBy` |
 | `TestFailClosed_MoreRestrictiveWins` | for `core.auth.mode` and `core.http.basic_gate.enabled`: stored stricter + operator weaker → stored effective, `AttachReport.FailClosed`, one warning, health `config_fail_closed_override`; operator stricter → operator effective and locked; `Apply` of a value at least as strict as the operator's succeeds and is effective, a weaker one → `*LockedError`; `FailClosed` on a string key or with a missing value fails `Register` (14 E5) |
+| `TestFailClosed_SurvivesSectionQuarantine` | stored `core.http.basic_gate.enabled=true`, env `false` and a sibling row that does not decode (or fails validation) → the sibling quarantined, the gate stays closed and is reported in `AttachReport.FailClosed`; a FailClosed row no stricter than the operator value or default is quarantined with its section; a FailClosed row that does not decode, or with which its section fails validation, → boot error naming the key, not the value (§1.3.5) |
 | `TestEnv_EmptyValueIsUnset` | `ABO_X=""` supplies nothing: no lock, no value (as viper treats it at HEAD) |
 | `TestEnv_StrictDecode` | `ABO_CORE_AUTH_MODE=yes`, a bare integer for a duration, a space-separated list for an array → boot error naming the variable; the same through the file key |
 | `TestEnvBinding_EcosystemNames` | `OTEL_EXPORTER_OTLP_ENDPOINT` sets `core.tracing.otlp.endpoint`; with the canonical name also set and different: canonical wins on a `ProtectNone` key with `config_binding_conflict`, boot fails on a `ProtectAdmin` key naming both; a binding equal to a canonical name fails `Register` |

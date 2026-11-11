@@ -1,5 +1,5 @@
 // file: core/config/precedence_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0f72db87-b1b3-4bcb-9393-6594c50533ca
 // last-edited: 2026-11-11
 
@@ -33,6 +33,16 @@ type gateFix struct {
 
 type httpFix struct {
 	BasicGate gateFix `json:"basic_gate"`
+	N         int     `json:"n" schema:"maximum=50"`
+}
+
+// Validate refuses the Basic gate with N at 13, so a test can make the
+// section fail with a FailClosed value and pass without it.
+func (h *httpFix) Validate() error {
+	if h.BasicGate.Enabled && h.N == 13 {
+		return &config.FieldError{Path: kGate, Err: errors.New("the gate cannot open on 13")}
+	}
+	return nil
 }
 
 const (
@@ -579,4 +589,78 @@ func TestImporter_StagesFailClosedDefault(t *testing.T) {
 	if ks := r.lookup(kAuthMode); string(ks.Effective) != `"required"` || rep.FailClosed[kAuthMode] != "env GOTHAM_CORE_AUTH_MODE" {
 		t.Errorf("after the cutover: core.auth.mode %s, FailClosed %v; want the staged required over the stale env", ks.Effective, rep.FailClosed)
 	}
+}
+
+// TestFailClosed_SurvivesSectionQuarantine (05-config §1.3.5, §1.4 step 6,
+// owner-delegated decision of 2026-11-11): a FailClosed key's own stored row
+// keeps counting toward the more restrictive choice when its section's rows
+// are quarantined, whenever it decodes on its own; one that does not decode
+// stops boot, naming the key and never its value.
+func TestFailClosed_SurvivesSectionQuarantine(t *testing.T) {
+	const kN config.Path = "core.http.n"
+	for name, sibling := range map[string]string{"sibling does not decode": `"robin"`, "sibling fails validation": "99"} {
+		t.Run(name, func(t *testing.T) {
+			// The reviewer's probe: stored gate on, env off, a bad sibling.
+			r := fcRig(t, []string{"GOTHAM_CORE_HTTP_BASIC_GATE_ENABLED=false"}, "", map[config.Path]string{kGate: "true", kN: sibling})
+			rep := r.start()
+			if ks := r.lookup(kGate); string(ks.Effective) != "true" || ks.Source != config.SourceOverride {
+				t.Errorf("gate %s from %v: the bad sibling opened the gate", ks.Effective, ks.Source)
+			}
+			if rep.FailClosed[kGate] != "env GOTHAM_CORE_HTTP_BASIC_GATE_ENABLED" {
+				t.Errorf("AttachReport.FailClosed = %v", rep.FailClosed)
+			}
+			if _, q := rep.Quarantined[kN]; !q {
+				t.Errorf("the sibling was not quarantined: %v", rep.Quarantined)
+			}
+			if _, q := rep.Quarantined[kGate]; q {
+				t.Errorf("the FailClosed row was quarantined with its section: %v", rep.Quarantined)
+			}
+		})
+	}
+	t.Run("a row no stricter is quarantined with its section", func(t *testing.T) {
+		r := fcRig(t, nil, "", map[config.Path]string{kGate: "false", kN: `"robin"`})
+		rep := r.start()
+		if _, q := rep.Quarantined[kGate]; !q {
+			t.Errorf("Quarantined = %v: a row equal to the default stays in play", rep.Quarantined)
+		}
+	})
+	t.Run("the stricter row is kept when no operator layer sets the key", func(t *testing.T) {
+		r := fcRig(t, nil, "", map[config.Path]string{kGate: "true", kN: `"robin"`})
+		r.start()
+		if ks := r.lookup(kGate); string(ks.Effective) != "true" {
+			t.Errorf("gate %s: the quarantine loosened a FailClosed key past its stored value", ks.Effective)
+		}
+	})
+	for name, row := range map[config.Path]string{kGate: `"joker-maybe"`, kAuthMode: `"joker-sometimes"`} {
+		t.Run(string(name)+" does not decode", func(t *testing.T) {
+			r := fcRig(t, nil, "", map[config.Path]string{name: row})
+			ctx := context.Background()
+			if _, err := r.st.Boot(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.st.Load(ctx); err != nil {
+				t.Fatal(err)
+			}
+			_, err := r.st.Attach(ctx, r.mem, r.cm)
+			if !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), string(name)) || strings.Contains(err.Error(), "joker") {
+				t.Errorf("Attach err = %v, want ErrInvalid naming %s and not its value", err, name)
+			}
+			if strings.Contains(r.logs.all(), "joker") {
+				t.Error("the value reached the log")
+			}
+		})
+	}
+	t.Run("the stricter row fails its section's validation", func(t *testing.T) {
+		r := fcRig(t, []string{"GOTHAM_CORE_HTTP_BASIC_GATE_ENABLED=false", "GOTHAM_CORE_HTTP_N=13"}, "", map[config.Path]string{kGate: "true"})
+		ctx := context.Background()
+		if _, err := r.st.Boot(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.st.Load(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.st.Attach(ctx, r.mem, r.cm); !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), string(kGate)) {
+			t.Errorf("Attach err = %v, want ErrInvalid naming %s", err, kGate)
+		}
+	})
 }

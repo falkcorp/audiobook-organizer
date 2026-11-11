@@ -1,7 +1,7 @@
 // file: core/config/store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package config
 
@@ -495,20 +495,42 @@ func (s *Store) settle(sec *section, ph phase) error {
 		return nil
 	}
 	stripped := v
-	var held []Path
+	var held, kept []Path
 	switch ph {
 	case phaseBoot, phaseLoad:
 		stripped.boot = withoutSection(v.boot, sec, s)
 		held = sectionPaths(v.boot, sec, s)
 	case phaseAttach:
+		// A FailClosed key's stricter row survives the section's quarantine
+		// (05-config §1.3.5): only the other rows are held back.
 		stripped.live = withoutSection(v.live, sec, s)
+		for _, p := range sectionPaths(v.live, sec, s) {
+			if s.failClosedKeeps(p, v.live[p]) {
+				kept = append(kept, p)
+				stripped.live[p] = v.live[p]
+				continue
+			}
+			held = append(held, p)
+		}
 		stripped.restart = stripped.live
-		held = sectionPaths(v.live, sec, s)
 	}
-	if len(held) == 0 {
+	if len(held) == 0 && len(kept) == 0 {
 		return fmt.Errorf("config: section %s (%s): %w", sec.path, s.operatorSources(sec), invalid(err))
 	}
 	if err2 := try(stripped); err2 != nil {
+		if len(kept) > 0 {
+			bare := stripped
+			bare.live = withoutSection(v.live, sec, s)
+			bare.restart = bare.live
+			if try(bare) == nil {
+				// The section builds without the FailClosed rows and not with
+				// them: dropping them could open a gate, keeping them cannot
+				// build, so boot stops (§1.3.5).
+				return fmt.Errorf("%w: config: section %s fails validation with the stored value of the fail-closed key %s, "+
+					"which is stricter than the operator's or the default; boot stops rather than ignore it (05-config §1.3.5)",
+					ErrInvalid, sec.path, joinPaths(kept))
+			}
+		}
 		return fmt.Errorf("config: section %s (%s): %w", sec.path, s.operatorSources(sec), invalid(err2))
 	}
 	for _, p := range held {
@@ -527,8 +549,25 @@ func (s *Store) settle(sec *section, ph phase) error {
 	}
 	s.health[token] = fmt.Sprintf("section %s: %v", sec.path, err)
 	s.log.Warn("config: stored values of a section fail validation; they are kept and ignored",
-		"section", sec.path, "keys", held, "err", err)
+		"section", sec.path, "keys", held, "err", err, "fail_closed_kept", kept)
 	return nil
+}
+
+// failClosedKeeps reports whether p's decoded stored value stays in play when
+// its section's stored values are quarantined: p is a FailClosed key and raw
+// is more restrictive than what p would have without it, its operator value
+// or else its default (05-config §1.3.5). A quarantine can then only tighten
+// a FailClosed key, never loosen it.
+func (s *Store) failClosedKeeps(p Path, raw json.RawMessage) bool {
+	ck, ok := s.keyFor(p)
+	if !ok || ck.k.failOrder == nil {
+		return false
+	}
+	base := ck.def()
+	if op, locked := s.op[p]; locked {
+		base = op.raw
+	}
+	return ck.k.failRank(raw) < ck.k.failRank(base)
 }
 
 // sectionPaths lists m's paths owned by sec, sorted.
@@ -668,6 +707,17 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 			continue
 		}
 		v, err := ck.k.canonical(p, rows[p].Value)
+		if err == nil && ck.k.failOrder != nil && ck.k.failRank(v) == len(ck.k.failOrder) {
+			err = errors.New("a value outside the key's declared order") // Register makes the order list every allowed value
+		}
+		if err != nil && ck.k.failOrder != nil {
+			// A FailClosed key's row that does not decode cannot be weighed
+			// against the operator value, and dropping it could open what an
+			// admin closed: boot stops, naming the key and never the value
+			// (05-config §1.3.5).
+			return AttachReport{}, fmt.Errorf("%w: config: the stored value of the fail-closed key %s does not decode; "+
+				"boot stops rather than ignore a value that may be stricter than the operator's (05-config §1.3.5)", ErrInvalid, p)
+		}
 		if err != nil {
 			quar[p] = err
 			if _, seen := bad[ck.k.sec]; !seen {
@@ -680,18 +730,25 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 	// A row that does not decode is the section failing with its overrides:
 	// every row of that section is quarantined (05-config §1.4 step 6). It is
 	// never handed to the build, where a missing value would read as JSON
-	// null and decode to the zero value.
+	// null and decode to the zero value. A FailClosed key's own row that
+	// decodes and is stricter than what the key would otherwise have stays
+	// in play: a sibling's bad row must not open a gate (§1.3.5).
 	for _, sec := range s.sections {
 		first, ok := bad[sec]
 		if !ok {
 			continue
 		}
+		var kept []Path
 		for _, p := range sectionPaths(vals, sec, s) {
+			if s.failClosedKeeps(p, vals[p]) {
+				kept = append(kept, p)
+				continue
+			}
 			quar[p] = fmt.Errorf("quarantined with its section %s, whose row %s does not decode: %w", sec.path, first, quar[first])
 			delete(vals, p)
 		}
 		s.log.Warn("config: a stored row does not decode; its section's rows are kept and ignored",
-			"section", sec.path, "key", first, "err", quar[first])
+			"section", sec.path, "key", first, "err", quar[first], "fail_closed_kept", kept)
 	}
 	if len(quar) > 0 {
 		s.health[healthOverridesQuarantined] = fmt.Sprintf("%d stored overrides ignored", len(quar))
