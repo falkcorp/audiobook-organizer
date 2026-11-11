@@ -1,7 +1,7 @@
 // file: core/auth/users.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 41d0b787-5ce8-4a3f-9d8e-8c7b8380e2f0
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package auth
 
@@ -525,12 +525,14 @@ func (s *Service) deleteCredentials(ctx context.Context, b *storage.Batch, id Us
 }
 
 // leftUndecodable reports whether err is a scan's per-record
-// ErrUndecodableRecord, which a user delete leaves in place (logged).
+// ErrUndecodableRecord, which a user delete or a sign-out-everywhere leaves
+// in place (logged): it cannot be named for deletion, and auth already
+// refuses it.
 func (s *Service) leftUndecodable(kind string, id UserID, err error) bool {
 	if !errors.Is(err, ErrUndecodableRecord) {
 		return false
 	}
-	s.log.Warn("auth: undecodable record left by a user delete", "kind", kind, "user", string(id))
+	s.log.Warn("auth: undecodable record left in place", "kind", kind, "user", string(id))
 	return true
 }
 
