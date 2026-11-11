@@ -107,6 +107,32 @@ func equalDurations(a, b []time.Duration) bool {
 	return true
 }
 
+// TestProbeNeverRetries: the half-open probe is ONE request. A failing
+// instance with MaxRetries 3 costs four requests while the breaker is closed;
+// the probe that follows the cooldown costs one.
+func TestProbeNeverRetries(t *testing.T) {
+	clk := newClock()
+	r := newRegistry(t, clk)
+	srv, hits := server(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
+	lim := retryLimits(3)
+	lim.Breaker = integrations.BreakerPolicy{Threshold: 1, Cooldown: 10 * time.Second, ProbeTimeout: 5 * time.Second}
+	lim.Holds = integrations.HoldPolicy{Durations: map[integrations.Class]time.Duration{integrations.ClassTransient: time.Millisecond}}
+	c := r.Client(batcave, providerhttp.Policy{Limits: lim, Private: anyPrivate})
+	if _, err := get(t, c, srv.URL+"/a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := hits.Load(); got != 4 {
+		t.Fatalf("a closed breaker: %d requests, want 1 + 3 retries", got)
+	}
+	clk.Advance(11 * time.Second) // hold and cooldown are over
+	if _, err := get(t, c, srv.URL+"/b"); err != nil {
+		t.Fatal(err)
+	}
+	if got := hits.Load(); got != 5 {
+		t.Errorf("the probe sent %d requests, want exactly 1", got-4)
+	}
+}
+
 // TestRetryExhaustedReturnsLastAnswerAndHolds: retries are bounded; the last
 // answer reaches the caller and the REQUEST (not each attempt) is the one
 // failure that holds the scope.
@@ -226,6 +252,9 @@ func TestRedactsApikeyInURLError(t *testing.T) {
 		}
 		if !errors.Is(err, providerhttp.ErrBlockedAddress) || integrations.ClassOf(context.Background(), err) != integrations.ClassRefusedLocal {
 			t.Errorf("redaction lost the cause: %v", err)
+		}
+		if strings.Contains(u, "alfred:") && strings.Contains(err.Error(), "alfred") {
+			t.Errorf("error keeps the userinfo name: %v", err)
 		}
 		if !strings.Contains(err.Error(), "search") && strings.Contains(u, "search") {
 			t.Errorf("redaction removed the whole URL: %v", err)
