@@ -243,3 +243,81 @@ func TestNoRawCredentialStored(t *testing.T) {
 		t.Fatalf("scanned %d rows over %d credentials; the check looked at nothing", rows, len(raws))
 	}
 }
+
+// issueOneSession commits a user and one session for it and returns the raw
+// token and the record as issued.
+func issueOneSession(t *testing.T, st *Store) (string, *auth.SessionRecord) {
+	t.Helper()
+	ctx := context.Background()
+	b := st.NewBatch()
+	defer func() {
+		if err := b.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	u := &auth.User{ID: "01JDICK", Username: "nightwing", Status: auth.StatusActive, Version: 1}
+	if err := st.PutUser(b, u); err != nil {
+		t.Fatal(err)
+	}
+	rec := &auth.SessionRecord{UserID: u.ID, Origin: auth.OriginPassword, ExpiresAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)}
+	tok, err := st.IssueSession(b, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	return tok, rec
+}
+
+// TestSession_TokenNeverStored (05-authn §10): after IssueSession no stored
+// key or value contains the token's bytes, whole or as its secret.
+func TestSession_TokenNeverStored(t *testing.T) {
+	st := newStore(t)
+	tok, _ := issueOneSession(t, st)
+	if err := auth.ParseCredential(auth.KindSession, tok); err != nil {
+		t.Fatalf("the issued token is not a session credential: %v", err)
+	}
+	rows := 0
+	for kv, err := range st.ks.ScanPrefix(context.Background(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows++
+		for _, needle := range [][]byte{[]byte(tok), []byte(tok[4:47])} {
+			if bytes.Contains(kv.Key, needle) || bytes.Contains(kv.Value, needle) {
+				t.Fatalf("row %q holds the session token", kv.Key)
+			}
+		}
+	}
+	if rows < 2 {
+		t.Fatalf("scanned %d rows; the check looked at nothing", rows)
+	}
+}
+
+// TestSession_NativeOnlyRecord (05-authn §10): the record a session is read
+// back as holds no token, and a well-formed token whose hash is unknown is
+// refused.
+func TestSession_NativeOnlyRecord(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	tok, rec := issueOneSession(t, st)
+	got, err := st.SessionByToken(ctx, tok)
+	if err != nil {
+		t.Fatalf("SessionByToken: %v", err)
+	}
+	if got.PublicID != rec.PublicID || strings.Contains(got.PublicID, tok[4:47]) {
+		t.Fatalf("read back %+v", got)
+	}
+	byID, err := st.SessionByPublicID(ctx, rec.PublicID)
+	if err != nil || byID.UserID != rec.UserID {
+		t.Fatalf("SessionByPublicID = %+v, %v", byID, err)
+	}
+	unknown, err := auth.MintCredential(auth.KindSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SessionByToken(ctx, unknown); !errors.Is(err, auth.ErrNotFound) {
+		t.Fatalf("an unknown token: %v, want ErrNotFound", err)
+	}
+}
