@@ -44,7 +44,8 @@ type Assertion struct {
 }
 
 // Order is an authenticator's relative position; core's API-key and session
-// authenticators are fixed at OrderAPIKey and OrderSession.
+// authenticators are fixed at OrderAPIKey and OrderSession. An extension's
+// Order is above OrderAPIKey and not OrderSession (§4.2: the key wins).
 type Order int
 
 // Core's fixed authenticator positions (§3.3).
@@ -80,8 +81,13 @@ func checkExtension(e Extension) error {
 		return fmt.Errorf("%w: extension %q may not carry an app hand-off", ErrMethodSpec, e.Spec.Method)
 	case e.Spec.OwnerVerifier != (e.OwnerSet != nil):
 		return fmt.Errorf("%w: extension %q: OwnerSet is required exactly when OwnerVerifier is set", ErrMethodSpec, e.Spec.Method)
-	case e.Order == OrderAPIKey || e.Order == OrderSession:
-		return fmt.Errorf("%w: extension %q takes a core authenticator's order %d", ErrMethodSpec, e.Spec.Method, e.Order)
+	case e.Order <= OrderAPIKey:
+		// An API key presented anywhere wins, replacing anything else (§4.2
+		// item 2): no extension runs before the key authenticator.
+		return fmt.Errorf("%w: extension %q has order %d; extensions run after the API-key authenticator (%d)",
+			ErrMethodSpec, e.Spec.Method, e.Order, OrderAPIKey)
+	case e.Order == OrderSession:
+		return fmt.Errorf("%w: extension %q takes the session authenticator's order %d", ErrMethodSpec, e.Spec.Method, e.Order)
 	}
 	return nil
 }
