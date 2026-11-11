@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -128,6 +128,14 @@ type Settings struct {
 	// takes the default, true. False lets a local request (ClientInfo.Local)
 	// set up without the bootstrap token.
 	SetupRequiresToken *bool
+	// Mode is core.auth.mode (§4.11): empty or "required", or "disabled".
+	// Read once, by New: it is not reloadable, so a live change can never
+	// skip the start-up reachability rule. Any other value refuses to build
+	// the service.
+	Mode AuthMode
+	// DisabledAllowRemote is core.auth.disabled_allow_remote: nil takes
+	// Options.DefaultDisabledAllowRemote. Read once, by New.
+	DisabledAllowRemote *bool
 }
 
 func (s Settings) withDefaults() Settings {
@@ -208,6 +216,10 @@ type Deps struct {
 	// header: the session cookie's name follows HTTPS (§4.3), and a
 	// believed "http" would read the plain name a sibling origin can plant.
 	Client func(*http.Request) ClientInfo
+	// Reach reports whether a remote caller can reach the listeners (§4.11):
+	// read once, by New, and only when core.auth.mode is "disabled". Nil
+	// means unknown, which is treated as remote-reachable.
+	Reach func() Reach
 }
 
 // Service is core's authentication service (05-authn §3.2).
@@ -237,6 +249,11 @@ type Service struct {
 	methodsMu sync.RWMutex
 	methods   map[Method]MethodSpec
 	touches   touchTable
+
+	// Auth-off mode (§4.11), fixed by New.
+	authOff   bool
+	offRemote bool
+	off       offGate
 
 	// The sign-in protections (§4.9): one instance each per Service, never
 	// package state (R5).
@@ -275,6 +292,9 @@ func New(ctx context.Context, opts Options, d Deps) (*Service, error) {
 		s.log = slog.Default()
 	}
 	st := s.settings()
+	if err := s.checkMode(st); err != nil {
+		return nil, err
+	}
 	if !SaturatedLimitsValid(st.SaturatedRate, st.SaturatedBurst) {
 		return nil, fmt.Errorf("%w: core.auth.login.saturated_rate must be %v to %v logins per second and saturated_burst 1 to %d",
 			ErrBadInput, MinSaturatedRate, MaxSaturatedRate, MaxSaturatedBurst)
@@ -369,10 +389,6 @@ func checkImportedPrefixes(prefixes []string) error {
 	}
 	return nil
 }
-
-// authDisabledPrincipal is §4.11's auth-off binding; until auth-off mode
-// lands it binds nothing.
-func (s *Service) authDisabledPrincipal(ClientInfo) (*Principal, bool) { return nil, false }
 
 // journalLine appends r into b, the revoking batch, before it commits
 // (§4.12). An Append failure never blocks the revocation: the batch records
