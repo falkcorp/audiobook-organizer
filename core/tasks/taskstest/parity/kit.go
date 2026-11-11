@@ -1,7 +1,7 @@
 // file: core/tasks/taskstest/parity/kit.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: f9960b87-6628-4c89-97f3-68902d08625c
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package parity
 
@@ -495,6 +495,7 @@ type Hooks struct {
 	after  []*oneShot[TransitionEvent]
 	queued []func()
 	lists  []*oneShot[tasks.RunQuery]
+	claims []*claimHook
 	onCkpt func(id tasks.RunID, name string, v []byte)
 	onProg func(id tasks.RunID, done, total int, current string)
 }
@@ -528,6 +529,30 @@ func (h *Hooks) BeforeTransition(match func(TransitionEvent) bool, fn func(Trans
 func (h *Hooks) AfterTransition(match func(TransitionEvent) bool, fn func(TransitionEvent)) {
 	h.mu.Lock()
 	h.after = append(h.after, &oneShot[TransitionEvent]{match: match, fn: fn})
+	h.mu.Unlock()
+}
+
+// claimHook is one AfterClaimCommitted hook.
+type claimHook struct {
+	id      tasks.RunID
+	attempt int // the claim's attempt once its Transition is staged; 0 before
+	fn      func()
+	fired   bool
+}
+
+// AfterClaimCommitted runs fn once, inside the first checkpoint read of run
+// id made after the run's claim (queued -> running) committed, before that
+// read returns. The executor reads the run's resume state there, after the
+// claim's commit and before the attempt goes live, so fn runs while the run
+// is stored running and its body has not started: HEAD's pickup gate, where
+// a worker holds a registered handle for a run it has not started. fn may
+// park to hold the claim in that window; a case that parks must free it on
+// every path, or the cleanup's Shutdown waits on the parked dispatcher. A
+// case asserts that fn ran, so an executor that reads nothing in the window
+// fails the case instead of passing it vacuously.
+func (h *Hooks) AfterClaimCommitted(id tasks.RunID, fn func()) {
+	h.mu.Lock()
+	h.claims = append(h.claims, &claimHook{id: id, fn: fn})
 	h.mu.Unlock()
 }
 
@@ -571,8 +596,43 @@ func (r *hookedRuns) Transition(ctx context.Context, b *storage.Batch, id tasks.
 	ev := TransitionEvent{ID: id, Want: want, Next: next}
 	fire(r.h, r.snapshot(true), ev)
 	err := r.RunStore.Transition(ctx, b, id, want, next)
+	if err == nil && want.State == tasks.StateQueued && next.State == tasks.StateRunning {
+		r.h.mu.Lock()
+		for _, c := range r.h.claims {
+			if c.id == id && !c.fired {
+				c.attempt = next.Attempt
+			}
+		}
+		r.h.mu.Unlock()
+	}
 	fire(r.h, r.snapshot(false), ev)
 	return err
+}
+
+// Checkpoint fires an armed AfterClaimCommitted hook of id once the run's
+// stored record shows its claim committed (the claim's attempt is stored).
+func (r *hookedRuns) Checkpoint(ctx context.Context, id tasks.RunID, name string) ([]byte, bool, error) {
+	r.h.mu.Lock()
+	var armed *claimHook
+	for _, c := range r.h.claims {
+		if c.id == id && c.attempt > 0 && !c.fired {
+			armed = c
+			break
+		}
+	}
+	r.h.mu.Unlock()
+	if armed != nil {
+		if rec, err := r.RunStore.Get(ctx, id); err == nil && rec.Attempt == armed.attempt {
+			r.h.mu.Lock()
+			run := !armed.fired
+			armed.fired = true
+			r.h.mu.Unlock()
+			if run {
+				armed.fn()
+			}
+		}
+	}
+	return r.RunStore.Checkpoint(ctx, id, name)
 }
 
 func (r *hookedRuns) snapshot(before bool) []*oneShot[TransitionEvent] {

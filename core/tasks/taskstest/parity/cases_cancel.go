@@ -1,7 +1,7 @@
 // file: core/tasks/taskstest/parity/cases_cancel.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 472e70eb-50aa-44b3-9b02-6f9848ea070a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package parity
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +36,37 @@ func toState(id tasks.RunID, s tasks.RunState) func(TransitionEvent) bool {
 func claimOf(id tasks.RunID) func(TransitionEvent) bool {
 	return func(ev TransitionEvent) bool {
 		return ev.ID == id && ev.Want.State == tasks.StateQueued && ev.Next.State == tasks.StateRunning
+	}
+}
+
+// claimWindow bounds every wait for the claimed-not-started window, so an
+// interleaving that never happens fails the case at once instead of letting
+// it run into the package timeout.
+const claimWindow = 10 * time.Second
+
+// parkClaim holds run id's claim in the claimed-not-started window
+// (AfterClaimCommitted): parked is closed once it is held, and unpark (also
+// deferred by the caller, idempotent) lets the attempt go on.
+func (k *Kit) parkClaim(id tasks.RunID) (parked <-chan struct{}, unpark func()) {
+	p, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	k.Hooks().AfterClaimCommitted(id, func() {
+		close(p)
+		<-release
+	})
+	return p, func() { once.Do(func() { close(release) }) }
+}
+
+// wantNeverStarted asserts p's body did not start within the settle
+// period: a body that starts after a cancel committed in the claim window
+// runs with a live context, and this fails the case at once rather than
+// leaving it waiting on that body.
+func (k *Kit) wantNeverStarted(p *Probe) {
+	k.T.Helper()
+	select {
+	case id := <-p.Started:
+		k.T.Fatalf("%s: run %s started after a cancel committed before it went live", p.Kind, id)
+	case <-time.After(settle):
 	}
 }
 
@@ -135,7 +167,7 @@ func cancelCases() []Case {
 			Name: "CancelRacingAResumeThatBecameLive", Head: fr + "TestCancel_RequeueClaimedByWorkerBeforeTheCancelWriteCancelsTheRun",
 			Setup:    "an interrupted_quiesced run; just before Cancel's write lands, the run is re-queued and a worker claims and starts it",
 			Action:   "Cancel(id) with that interleaving armed",
-			Expected: "Cancel returns nil; the body ran once and its context ends with the cancel cause; the run ends canceled and stays canceled",
+			Expected: "Cancel returns nil; the body ran once and its context ends with the cancel cause; the run ends canceled and stays canceled. When the re-queued run is claimed but not started as Cancel writes, its body never runs and the run ends canceled",
 			Run: func(t *testing.T, k *Kit) {
 				p := k.Probe("gotham.patrol").Blocks()
 				id := k.Plant(p.Kind, tasks.StateInterruptedQuiesced)
@@ -154,6 +186,33 @@ func cancelCases() []Case {
 				k.WaitState(id, tasks.StateCanceled)
 				k.staysTerminal(id, tasks.StateCanceled)
 				wantCalls(t, k, p, 1)
+
+				k.Sub("the re-queued run is claimed but not started when Cancel's write lands", func(t *testing.T, k *Kit) {
+					p := k.Probe("gotham.patrol").Blocks()
+					id := k.Plant(p.Kind, tasks.StateInterruptedQuiesced)
+					k.PlantStandDown("gotham.patrol", id)
+					k.Boot(Defs(p.Def()))
+					k.WaitState(id, tasks.StateInterruptedQuiesced)
+					parked, unpark := k.parkClaim(id)
+					defer unpark()
+					k.Hooks().BeforeTransition(toState(id, tasks.StateCanceled), func(TransitionEvent) {
+						if err := k.Requeue(id); err != nil {
+							t.Errorf("requeue: %v", err)
+							return
+						}
+						select {
+						case <-parked:
+						case <-time.After(claimWindow):
+							t.Errorf("the re-queued run was not claimed within %s", claimWindow)
+						}
+					})
+					k.mustCancel(id)
+					unpark()
+					k.wantNeverStarted(p)
+					k.WaitState(id, tasks.StateCanceled)
+					k.staysTerminal(id, tasks.StateCanceled)
+					wantCalls(t, k, p, 0)
+				})
 			},
 		},
 		{
@@ -217,21 +276,41 @@ func cancelCases() []Case {
 		},
 		{
 			Name: "CancelAtTheClaimStillCancelsTheRun", Head: fc + "TestCancel_LiveHandleAtThePickupGateStillCancelsTheRow",
-			Setup:    "a queued run; Cancel is called at the instant the dispatcher claims it",
+			Setup:    "a queued run; the dispatcher's claim has committed and the run's body has not started (HEAD: a registered handle at the pickup gate) when Cancel is called",
 			Action:   "boot",
-			Expected: "Cancel returns nil; the run ends canceled; its body never runs; it is not resumed",
+			Expected: "Cancel returns nil; the run ends canceled; its body never runs; it is not resumed. The same holds for a Cancel at the claim's write",
 			Run: func(t *testing.T, k *Kit) {
 				p := k.Probe("gotham.patrol").Blocks()
 				id := k.Plant(p.Kind, tasks.StateQueued)
-				var cerr Box[error]
-				k.Hooks().BeforeTransition(claimOf(id), func(TransitionEvent) { cerr.Set(k.cancel(id)) })
+				cerr := make(chan error, 1)
+				k.Hooks().AfterClaimCommitted(id, func() { cerr <- k.cancel(id) })
 				k.Boot(Defs(p.Def()))
-				k.WaitState(id, tasks.StateCanceled)
-				if err, _ := cerr.Get(); err != nil {
-					t.Errorf("Cancel at the claim = %v, want nil", err)
+				select {
+				case err := <-cerr:
+					if err != nil {
+						t.Errorf("Cancel in the claim window = %v, want nil", err)
+					}
+				case <-time.After(claimWindow):
+					t.Fatalf("the run was not claimed within %s (the interleaving did not happen)", claimWindow)
 				}
+				k.wantNeverStarted(p)
+				k.WaitState(id, tasks.StateCanceled)
 				k.staysTerminal(id, tasks.StateCanceled)
 				wantCalls(t, k, p, 0)
+
+				k.Sub("Cancel at the claim's write", func(t *testing.T, k *Kit) {
+					p := k.Probe("gotham.patrol").Blocks()
+					id := k.Plant(p.Kind, tasks.StateQueued)
+					var cerr Box[error]
+					k.Hooks().BeforeTransition(claimOf(id), func(TransitionEvent) { cerr.Set(k.cancel(id)) })
+					k.Boot(Defs(p.Def()))
+					k.WaitState(id, tasks.StateCanceled)
+					if err, _ := cerr.Get(); err != nil {
+						t.Errorf("Cancel at the claim = %v, want nil", err)
+					}
+					k.staysTerminal(id, tasks.StateCanceled)
+					wantCalls(t, k, p, 0)
+				})
 			},
 		},
 		{
