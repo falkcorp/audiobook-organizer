@@ -171,7 +171,7 @@ Pending brief notes (2026-11-10), for briefs that agents are working from now an
 - F4-02 seams from F4-09: refuse nil or empty key scopes before `Compile`, and `auth` must never export a wrapper around the privileged constructors (`AuthDisabled`, `ForSystem`).
 - F2-03: add a Coordinator addition: spec 5T.3 needs `RunStore` readers for marks and strikes, and they are to land before F2-03 (found in the F2-02 re-verify).
 - Spec drift to note: 05-authn §3.2 still names `authsys.Principal`, found in the F4-09 re-verify; the spec text is to be reconciled.
-- F3-03 follow-up #4576 is merged. A separate core/config engine PR for an OIDC `Ref` in a list value is still to be filed (not a plan row).
+- F3-03 follow-up #4576 is merged. The core/config engine PR for an OIDC `Ref` in a list value is #4577 (not a plan row), in review fixes.
 
 Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as fast as possible. Woodpecker runs only staticcheck and test-native-taglib from #4439 on; PRs gate on the GitHub test shards.
 
