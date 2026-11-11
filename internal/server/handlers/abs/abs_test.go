@@ -19,15 +19,14 @@ import (
 	"testing"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-	authpw "github.com/falkcorp/mediacore/auth/password"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/conformance"
+	coreauth "github.com/falkcorp/mediacore/auth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )

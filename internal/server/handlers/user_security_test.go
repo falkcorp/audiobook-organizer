@@ -12,11 +12,10 @@ import (
 	"testing"
 	"time"
 
-	authpw "github.com/falkcorp/mediacore/auth/password"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

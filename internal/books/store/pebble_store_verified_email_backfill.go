@@ -12,9 +12,8 @@ import (
 	"slices"
 	"strings"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/cockroachdb/pebble/v2"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Verified email, computed live.

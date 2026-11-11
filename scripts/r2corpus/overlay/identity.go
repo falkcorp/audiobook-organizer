@@ -11,9 +11,8 @@ import (
 	"fmt"
 	"time"
 
-	authpw "github.com/falkcorp/mediacore/auth/password"
-
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 )
 
 // allAtoms is HEAD's thirteen atoms, in seed order (05-rbac §6.1; the stage-1

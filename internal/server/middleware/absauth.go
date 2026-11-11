@@ -13,13 +13,12 @@ import (
 	"sync"
 	"time"
 
-	coreaudit "github.com/falkcorp/mediacore/audit"
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	coreaudit "github.com/falkcorp/mediacore/audit"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 

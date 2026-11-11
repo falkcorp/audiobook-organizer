@@ -13,9 +13,8 @@ import (
 	"strings"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/cockroachdb/pebble/v2"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // ErrInviteEmailTaken is returned when another account already holds an

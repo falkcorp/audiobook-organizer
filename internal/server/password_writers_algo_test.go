@@ -12,11 +12,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
-
-	authpw "github.com/falkcorp/mediacore/auth/password"
-
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

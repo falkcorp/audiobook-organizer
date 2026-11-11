@@ -10,9 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	coreauth "github.com/falkcorp/mediacore/auth"
-
 	"github.com/cockroachdb/pebble/v2"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // OAuthIdentity links an external identity-provider account (GitHub, Google, or a
