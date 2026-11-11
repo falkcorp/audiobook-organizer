@@ -108,6 +108,7 @@ core/internal/configstore.actor
 core/internal/configstore.decodeEnvelope
 core/internal/executor.Reconfigure
 core/internal/executor.cpuBudget.resize
+core/internal/instancestore.StorageSpec
 core/internal/taskstore.SerializedPrefixes
 core/internal/taskstore.StorageSpec
 core/kernel.bootConfig
