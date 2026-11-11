@@ -1,5 +1,5 @@
 // file: core/auth/service.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: ca90483b-e984-4a46-b126-bc0bb9aba4a5
 // last-edited: 2026-11-11
 
@@ -119,6 +119,15 @@ type Settings struct {
 	// default, true exactly when an OwnerVerifier extension is configured
 	// and reports an owner set (Service.ownerRequired).
 	OwnerRequired *bool
+	// BootstrapKeyTTL is core.auth.bootstrap.key_ttl: the lifetime of the key
+	// a bootstrap redeem mints. Zero or negative takes the 8 h default and a
+	// value above MaxBootstrapKeyTTL is capped there, as HEAD's resolver did,
+	// so the key always expires (reloadable).
+	BootstrapKeyTTL time.Duration
+	// SetupRequiresToken is core.auth.setup_requires_token (§4.6 item 3): nil
+	// takes the default, true. False lets a local request (ClientInfo.Local)
+	// set up without the bootstrap token.
+	SetupRequiresToken *bool
 }
 
 func (s Settings) withDefaults() Settings {
@@ -137,6 +146,10 @@ func (s Settings) withDefaults() Settings {
 	if s.MinPasswordLength <= 0 {
 		s.MinPasswordLength = DefaultMinPasswordLength
 	}
+	if s.BootstrapKeyTTL <= 0 {
+		s.BootstrapKeyTTL = DefaultBootstrapKeyTTL
+	}
+	s.BootstrapKeyTTL = min(s.BootstrapKeyTTL, MaxBootstrapKeyTTL)
 	if s.TempLoginTTL <= 0 {
 		s.TempLoginTTL = DefaultTempLoginTTL
 	}
@@ -183,6 +196,10 @@ type Deps struct {
 	// production one (argon2id m=64 MiB, t=3, GOMAXPROCS permits). Coined by
 	// F4-02: a test passes a lowered-cost hasher it can count derivations on.
 	Hasher *password.Hasher
+	// StateFiles is the labelled state filesystem the bootstrap token file
+	// lives in (§3.2, COR10-7); nil writes and removes no file. Redeeming the
+	// token removes its file best effort.
+	StateFiles StateFiles
 	// Client returns a request's ClientInfo as httpapi resolved it
 	// (trusted-proxy aware); nil uses the TCP peer, and HTTPS only when the
 	// connection itself is TLS. A resolver sets HTTPS by the perimeter's
@@ -208,6 +225,10 @@ type Service struct {
 	// the username with the invite's own write: the store indexes users'
 	// names, not invites'.
 	inviteMu sync.Mutex
+	// setupMu serialises the two writers of a first admin, Setup and
+	// RedeemBootstrap, with each other: both check that no admin exists and
+	// then create one, and the store indexes usernames only.
+	setupMu sync.Mutex
 
 	extensions []Extension
 	methods    map[Method]MethodSpec // registered extension and compat methods
