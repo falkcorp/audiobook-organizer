@@ -1,5 +1,5 @@
 // file: core/internal/taskstore/store_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2d78def0-3849-42b2-8b19-419c3bee7249
 // last-edited: 2026-11-10
 
@@ -7,14 +7,17 @@ package taskstore
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
 	"time"
 
-	"github.com/falkcorp/mediacore/coretest"
+	"github.com/cockroachdb/pebble/v2/vfs"
+
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/keys"
 )
@@ -23,11 +26,50 @@ import (
 // registers it, and returns the staging layer over it.
 func boot(t *testing.T) *Store {
 	t.Helper()
-	ks := coretest.NewStore(t, storage.OwnerSpec{Owner: Owner, Spec: StorageSpec(), Enabled: true}).Keyspace(Owner)
+	ks := openKeyspace(t)
 	if ks.Prefix() != "c/tasks/" {
 		t.Fatalf("prefix %q", ks.Prefix())
 	}
 	return New(ks)
+}
+
+// openKeyspace boots an in-memory store as the kernel's P2, P4a and P4b do
+// (storage.Open, Prepare, Migrate) with c/tasks/ registered by StorageSpec,
+// returns that keyspace and closes the store at cleanup. It opens storage
+// itself instead of calling coretest.NewStore: coretest imports app, app
+// imports kernel and kernel's imports reach this package (through
+// internal/storagemigrate and tasks), so an in-package test that imports
+// coretest is an import cycle.
+func openKeyspace(t *testing.T) storage.Keyspace {
+	t.Helper()
+	ctx := context.Background()
+	o, err := storage.Open(ctx, storage.OpenOptions{
+		Path:            filepath.Join(t.TempDir(), "main.pebble"),
+		Owners:          []storage.OwnerSpec{{Owner: Owner, Spec: StorageSpec(), Enabled: true}},
+		Build:           "coretest+fixture",
+		FreeSpaceMargin: 1,
+		FS:              storage.FSOf(vfs.NewMem()),
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	db, err := o.Prepare(ctx)
+	if err == nil {
+		err = db.Migrate(ctx)
+	}
+	if err != nil {
+		t.Fatalf("boot: %v", errors.Join(err, o.Close()))
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	ks, ok := db.Keyspace(Owner)
+	if !ok {
+		t.Fatalf("owner %s has no keyspace", Owner)
+	}
+	return ks
 }
 
 func t0() time.Time { return time.Date(2026, time.March, 14, 21, 0, 0, 0, time.UTC) }

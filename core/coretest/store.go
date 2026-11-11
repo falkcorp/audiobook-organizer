@@ -1,7 +1,7 @@
 // file: core/coretest/store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: dbff53d4-dfb7-43f4-a120-4d14293d066d
-// last-edited: 2026-11-07
+// last-edited: 2026-11-10
 
 package coretest
 
@@ -25,6 +25,13 @@ const storeBuild = "coretest+fixture"
 // runs every Seed step, and a reboot takes the guard, the checkpoint and the
 // migrations of a real upgrade. The store lives in a real directory under
 // tb.TempDir(); tb's cleanup closes it. Do not close the DB yourself.
+//
+// An in-package test of a core package that kernel imports, directly or
+// through another package, cannot use Store: coretest imports app, app
+// imports kernel, so the test would be an import cycle. Such a test opens
+// storage itself (storage.Open, Prepare, Migrate), as tasks' and
+// internal/taskstore's in-package tests do; its external test package may
+// use Store.
 type Store struct {
 	tb   testing.TB
 	path string
