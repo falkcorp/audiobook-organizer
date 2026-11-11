@@ -1,5 +1,5 @@
 // file: core/storage/rewrite.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7959a601-c65e-4e8c-bdfe-6fedd766d21e
 // last-edited: 2026-11-11
 
@@ -57,9 +57,12 @@ func NewRewriteStep(owner Owner, id string, after ...StepRef) RewriteStep {
 	return RewriteStep{Owner: owner, ID: id, After: after}
 }
 
-// RewriteCopied is M8's record state between phases 2 and 4: the copy is
-// complete at RewriteDir. The DAG treats M8 as pending until
-// DataMigrationDone.
+// RewriteCopied is the M8 record state the copy carries (§5S.3.13 phase 2:
+// "The copy carries M8's state at phase copied"): the live store reads it
+// only once the copy serves, between the swap and phase 4. The original's
+// record stays pending until the swap, so a boot that did not swap always
+// copies again, from the store as it is then. The DAG treats M8 as pending
+// until DataMigrationDone.
 const RewriteCopied = "copied"
 
 // The crash-matrix labels of M8's storage half (06 §6.5.1's boot-writer
@@ -70,11 +73,44 @@ const (
 	LabelRewriteCopy    = "storage.rewrite.copy"
 	LabelRewriteClose   = "storage.rewrite.close"
 	LabelRewriteReopen  = "storage.rewrite.reopen"
+	// LabelRewriteCheckpoint: the attempt's checkpoint record, given the
+	// copy's identity before the swap and promoted to it after.
+	LabelRewriteCheckpoint = "storage.rewrite.checkpoint"
 )
 
 // RewriteLabels are every label of M8's storage half.
 func RewriteLabels() []string {
-	return []string{LabelRewriteState, LabelRewriteCompact, LabelRewriteCopy, LabelRewriteClose, LabelRewriteReopen}
+	return []string{LabelRewriteState, LabelRewriteCompact, LabelRewriteCopy, LabelRewriteClose, LabelRewriteReopen, LabelRewriteCheckpoint}
+}
+
+// AttemptCheckpoint is the name of this boot's upgrade-attempt checkpoint
+// (taken or reused at P4a; "" when Prepare took none). M8 names it in its
+// KindRewrite intent and counts only that attempt's swap-backs, so a store
+// restored from the checkpoint is a new attempt. Name coined by F3-04.
+func (db *DB) AttemptCheckpoint() string {
+	if db.boot == nil {
+		return ""
+	}
+	return db.boot.cpName
+}
+
+// rewriteCopyOwed reports whether P4a's headroom owes M8's copy
+// (§5S.3.12 "Free space"): the plan holds M8 and its record on the live
+// store is still pending. A store that reads copied is the copy, swapped in
+// by a boot a kill stopped before phase 4 (its KindRewrite journal at
+// swapped or opened): the copy's bytes are spent already.
+func (db *DB) rewriteCopyOwed(ctx context.Context) (bool, error) {
+	for _, n := range db.boot.plan {
+		if n.data == nil || !n.data.Rewrite {
+			continue
+		}
+		state, err := db.RewriteRecord(ctx, n.data.ID)
+		if err != nil {
+			return false, err
+		}
+		return state == "", nil
+	}
+	return false, nil
 }
 
 // RewriteDir is the finished copy's directory beside the store at dbPath:
@@ -140,22 +176,23 @@ type RewriteCopyStats struct {
 // final), a fresh store at the store's own format with c/storage/epoch
 // rewritten to this boot's generation and the new directory's identity
 // (which the renames keep), fsynced, then renamed to final and the parent
-// fsynced. The live store is read under one snapshot and never written. The
-// dry run copies into its own scratch directory the same way.
-func (db *DB) RewriteCopy(ctx context.Context, final string) (stats RewriteCopyStats, err error) {
+// fsynced. The copy also carries M8's record id at RewriteCopied. The live
+// store is read under one snapshot and never written. The dry run copies
+// into its own scratch directory the same way.
+func (db *DB) RewriteCopy(ctx context.Context, final, id string) (stats RewriteCopyStats, err error) {
 	st := db.boot
 	if st == nil || db.readOnly {
 		return stats, errors.New("storage: the store rewrite needs a writable boot")
 	}
 	err = db.labelled(LabelRewriteCopy, func() error {
 		var err error
-		stats, err = db.rewriteCopy(ctx, final)
+		stats, err = db.rewriteCopy(ctx, final, id)
 		return err
 	})
 	return stats, err
 }
 
-func (db *DB) rewriteCopy(ctx context.Context, final string) (stats RewriteCopyStats, err error) {
+func (db *DB) rewriteCopy(ctx context.Context, final, id string) (stats RewriteCopyStats, err error) {
 	st := db.boot
 	fs := st.opts.fs
 	tmp, ingest := final+".tmp", final+".ingest"
@@ -207,6 +244,14 @@ func (db *DB) rewriteCopy(ctx context.Context, final string) (stats RewriteCopyS
 	abs := append(append([]byte(nil), db.storageKS().prefix...), epochKey()...)
 	if err := dst.DB().Set(abs, raw, cpebble.Sync); err != nil {
 		return stats, fmt.Errorf("storage: rewrite: the copy's generation: %w", err)
+	}
+	m8, err := DataMigrationCodec().Encode(DataMigrationRecord{State: RewriteCopied, At: db.clock().UTC(), Build: db.buildID()})
+	if err != nil {
+		return stats, err
+	}
+	abs = append(append([]byte(nil), db.storageKS().prefix...), DataMigrationKey(id)...)
+	if err := dst.DB().Set(abs, m8, cpebble.Sync); err != nil {
+		return stats, fmt.Errorf("storage: rewrite: the copy's M8 record: %w", err)
 	}
 	if err := dst.DB().Flush(); err != nil {
 		return stats, fmt.Errorf("storage: rewrite: flush the copy: %w", err)
@@ -293,17 +338,30 @@ func (db *DB) writeTables(ctx context.Context, dst *ipebble.Engine, dir string, 
 	return paths, finish()
 }
 
-// RewriteSwap is M8's phase 3 around the swap itself: it closes the engine,
+// RewriteSwap is M8's phase 3 around the swap itself. Before anything
+// moves it stages the copy's directory identity (which the renames keep) as
+// the attempt checkpoint record's next identity; then it closes the engine,
 // runs swap (restoreswap's in-process KindRewrite: set aside, move into
-// place, sidecars), and reopens the engine at the store's path whatever swap
-// returned, so the DB serves the copy after a swap and the original after a
-// swap-back. After a swap the boot's generation keeps its epoch with the new
-// directory's identity, which the copy's c/storage/epoch already holds. The
-// DB refuses every call while the engine is closed.
-func (db *DB) RewriteSwap(ctx context.Context, swap func(ctx context.Context) error) error {
+// place, sidecars) and reopens the engine at the store's path, so the DB
+// serves the copy after a swap and the original after a swap-back. A copy
+// that is in place but does not open writable is swapped back at once
+// (swapBack, with the reopen's error as the cause) and the original
+// reopened: the call then returns swapBack's error, which wraps
+// restoreswap's ErrSwappedBack. After a swap the boot's generation keeps
+// its epoch with the new directory's identity, which the copy's
+// c/storage/epoch already holds, and the checkpoint record is promoted to
+// it. The DB refuses every call while the engine is closed.
+func (db *DB) RewriteSwap(ctx context.Context, swap func(ctx context.Context) error, swapBack func(ctx context.Context, cause error) error) error {
 	st := db.boot
 	if st == nil || db.readOnly || !st.migrated || st.finished {
 		return errors.New("storage: the store rewrite's swap runs inside a writable boot's Migrate")
+	}
+	fsid, ino, err := st.opts.dirIdentity(RewriteDir(st.opts.Path))
+	if err != nil {
+		return fmt.Errorf("storage: rewrite: the copy's identity: %w", err)
+	}
+	if err := db.labelled(LabelRewriteCheckpoint, func() error { return db.attemptIdentity(fsid, ino, false) }); err != nil {
+		return err
 	}
 	db.closed.Store(true)
 	if err := db.labelled(LabelRewriteClose, func() error { return db.eng.Close(db.set.closeTimeout) }); err != nil {
@@ -311,6 +369,42 @@ func (db *DB) RewriteSwap(ctx context.Context, swap func(ctx context.Context) er
 		return fmt.Errorf("storage: rewrite: close the store: %w", err)
 	}
 	swapErr := swap(ctx)
+	eng, err := db.reopenEngine()
+	if err != nil && swapErr == nil {
+		// The copy is in place and does not open writable: put the original
+		// back and serve it, so the boot fails with the store as it was.
+		cause := fmt.Errorf("storage: rewrite: reopen the copy at %s: %w", st.opts.Path, err)
+		backErr := swapBack(ctx, cause)
+		orig, err := db.reopenEngine()
+		if err != nil {
+			return errors.Join(cause, backErr, fmt.Errorf("storage: rewrite: reopen the original at %s: %w", st.opts.Path, err))
+		}
+		db.eng = orig
+		db.closed.Store(false)
+		return errors.Join(cause, backErr)
+	}
+	if err != nil {
+		return errors.Join(swapErr, fmt.Errorf("storage: rewrite: reopen %s: %w", st.opts.Path, err))
+	}
+	db.eng = eng
+	db.closed.Store(false)
+	if swapErr != nil {
+		return swapErr
+	}
+	if fsid, ino, err = st.opts.dirIdentity(st.opts.Path); err != nil {
+		return fmt.Errorf("storage: rewrite: the new directory's identity: %w", err)
+	}
+	// The copy wrote this generation with the new identity: nothing is owed
+	// at step 9.
+	st.epoch.DirFSID, st.epoch.DirIno = fsid, ino
+	st.epochNew = false
+	return db.labelled(LabelRewriteCheckpoint, func() error { return db.attemptIdentity(fsid, ino, true) })
+}
+
+// reopenEngine opens the engine at the store's path, as RewriteSwap does
+// after the swap.
+func (db *DB) reopenEngine() (*ipebble.Engine, error) {
+	st := db.boot
 	var eng *ipebble.Engine
 	err := db.labelled(LabelRewriteReopen, func() error {
 		var err error
@@ -320,33 +414,38 @@ func (db *DB) RewriteSwap(ctx context.Context, swap func(ctx context.Context) er
 		})
 		return err
 	})
-	if err != nil {
-		return errors.Join(swapErr, fmt.Errorf("storage: rewrite: reopen %s: %w", st.opts.Path, err))
-	}
-	db.eng = eng
-	db.closed.Store(false)
-	if swapErr != nil {
-		return swapErr
-	}
-	fsid, ino, err := st.opts.dirIdentity(st.opts.Path)
-	if err != nil {
-		return fmt.Errorf("storage: rewrite: the new directory's identity: %w", err)
-	}
-	// The copy wrote this generation with the new identity: nothing is owed
-	// at step 9.
-	st.epoch.DirFSID, st.epoch.DirIno = fsid, ino
-	st.epochNew = false
-	return nil
+	return eng, err
 }
 
-// planHoldsRewrite reports whether the boot's plan holds M8 pending.
-func (db *DB) planHoldsRewrite() bool {
-	for _, n := range db.boot.plan {
-		if n.data != nil && n.data.Rewrite {
-			return true
-		}
+// attemptIdentity rewrites the attempt checkpoint record (this boot's
+// cpName; nothing without one) for M8's swap: before it (promote false) the
+// copy's identity becomes the record's next identity, so a kill after the
+// copy moves into place still finds the record of this store (ofStore);
+// after it (promote true) the identity is the record's own and the next one
+// is cleared. The epoch is unchanged: a KindRewrite swap keeps the
+// generation (§5S.3.13 phase 3, §5S.3.12 "Sources").
+func (db *DB) attemptIdentity(fsid, ino uint64, promote bool) error {
+	st := db.boot
+	if st.cpName == "" {
+		return nil
 	}
-	return false
+	recs, err := db.checkpointRecords()
+	if err != nil {
+		return err
+	}
+	for _, r := range recs {
+		if r.name != st.cpName {
+			continue
+		}
+		if promote {
+			r.rec.DirFSID, r.rec.DirIno = fsid, ino
+			r.rec.NextDirFSID, r.rec.NextDirIno = 0, 0
+		} else {
+			r.rec.NextDirFSID, r.rec.NextDirIno = fsid, ino
+		}
+		return db.writeRecord(r.name, r.rec)
+	}
+	return fmt.Errorf("storage: rewrite: the attempt's checkpoint record %s is gone", st.cpName)
 }
 
 // Path is the store's directory, core.storage.path.

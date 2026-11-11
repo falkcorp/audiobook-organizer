@@ -1,7 +1,7 @@
 // file: core/internal/restoreswap/durable_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 849b3691-9d70-4ed4-a14a-5b121e9a9bb5
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package restoreswap
 
@@ -62,9 +62,10 @@ func syncAll(t *testing.T, fs *vfs.MemFS, dir string) {
 	}
 }
 
-// failOnce is fs wrapping mem, where the first operation fail accepts
-// returns EIO and does not run.
-func failOnce(mem *vfs.MemFS, fail func(errorfs.Op) bool) (vfs.FS, func() bool) {
+// failOnce is fs wrapping mem (in memory, or vfs.Default for the real
+// filesystem), where the first operation fail accepts returns EIO and does
+// not run.
+func failOnce(mem vfs.FS, fail func(errorfs.Op) bool) (vfs.FS, func() bool) {
 	var mu sync.Mutex
 	hit := false
 	fs := errorfs.Wrap(mem, errorfs.InjectorFunc(func(op errorfs.Op) error {
