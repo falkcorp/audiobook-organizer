@@ -413,6 +413,7 @@ func TestRetry_NonIdempotentOnlyWhenNothingWasSent(t *testing.T) {
 		{name: "POST 503 without Retry-After", method: "POST", status: 503, hits: 1},
 		{name: "POST 503 with Retry-After", method: "POST", status: 503, respHeader: map[string]string{"Retry-After": "1"}, hits: 4},
 		{name: "POST 429", method: "POST", status: 429, hits: 4},
+		{name: "POST 502 with X-Idempotency-Key", method: "POST", status: 502, reqHeader: map[string]string{"X-Idempotency-Key": "k"}, hits: 4},
 		{name: "POST 502 with Idempotency-Key", method: "POST", status: 502, reqHeader: map[string]string{"Idempotency-Key": "k"}, hits: 4},
 		{name: "GET reset", method: "GET", reset: true, hits: 4},
 		{name: "POST reset", method: "POST", reset: true, hits: 1},
@@ -492,5 +493,46 @@ func TestBucket_TinyRateIsClamped(t *testing.T) {
 		if d <= 0 || d > 24*time.Hour*time.Duration(i+1) {
 			t.Errorf("wait %d = %v, want a positive wait clamped to the day-per-request floor", i, d)
 		}
+	}
+}
+
+// TestRedirectHop_WithoutPreviousRequestCountsAsCrossing: a hop whose previous
+// response names no request cannot be shown to stay on the endpoint, so it gets
+// no private reach (and carries no credential).
+func TestRedirectHop_WithoutPreviousRequestCountsAsCrossing(t *testing.T) {
+	srv, _ := server(t, ok)
+	r := newRegistry(t, newClock())
+	c := r.Client(batcave, providerhttp.Policy{Limits: limits(100, 100), Trust: lanTrust})
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	req.Response = &http.Response{StatusCode: http.StatusFound} // Request is nil
+	resp, err := c.Client().Transport.RoundTrip(req)
+	if !blockedBy(err) {
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		t.Fatalf("err = %v: a hop that cannot be tied to its origin must not reach a private address", err)
+	}
+}
+
+// TestTransportError_EchoingTheInjectedCredentialIsScrubbed (M3): a provider
+// that answers with garbage naming the credential it was sent leaves it out of
+// the error the raw client returns.
+func TestTransportError_EchoingTheInjectedCredentialIsScrubbed(t *testing.T) {
+	const secret = "riddler-secret-777"
+	srv, _ := server(t, func(w http.ResponseWriter, r *http.Request) {
+		pin := r.URL.Query().Get("gotham_pin")
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		_, _ = conn.Write([]byte("HTTP/1.1 " + pin + " nope\r\n\r\n"))
+		_ = conn.Close()
+	})
+	r := newRegistry(t, newClock())
+	h, _ := r.Outbound(integrations.OutboundSpec{Ref: batcave, Limits: limits(100, 100), Trust: integrations.Trust{},
+		QueryCredential: &integrations.QueryCredential{Name: "gotham_pin", Value: func(context.Context) (string, error) { return secret, nil }}})
+	_, err := h.Client().Get(srv.URL)
+	if err == nil {
+		t.Fatal("garbage must fail")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("the error echoes the credential: %v", err)
 	}
 }
