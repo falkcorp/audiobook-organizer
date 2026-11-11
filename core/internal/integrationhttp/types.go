@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/types.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b7f3a52-6c1e-4d0a-9b84-3f2a7e51c9d4
 // last-edited: 2026-11-11
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -578,23 +579,97 @@ func isSecretShaped(v any) bool {
 	return false
 }
 
-// instanceView renders cfg. secretFields is the adapter's secret fields and
-// uriFields its URL-typed ones, nil when the adapter is not registered in this
-// binary (a row kept for another binary): its secret fields are then the ones
-// holding a Ref.
+// fieldInfo is what an adapter's settings schema says about its fields. A nil
+// *fieldInfo stands for an adapter this binary does not have (a row kept for
+// another binary) or whose schema cannot be read.
+type fieldInfo struct {
+	secret map[string]bool // x-mediacore-secret fields
+	uri    map[string]bool // format "uri" fields
+}
+
+// fieldsFor is the schema fields of adapter, nil when metas lacks it.
+func fieldsFor(metas map[integrations.AdapterID]integrations.Meta, adapter integrations.AdapterID) *fieldInfo {
+	m, ok := metas[adapter]
+	if !ok {
+		return nil
+	}
+	return fieldsOfSchema(m.Settings.JSON())
+}
+
+// fieldsOfSchema is fieldsFor over a settings schema's JSON: nil when the
+// schema cannot be read.
+func fieldsOfSchema(schema json.RawMessage) *fieldInfo {
+	secret, uri := schemaFieldsOf(schema)
+	if secret == nil {
+		return nil
+	}
+	return &fieldInfo{secret: secret, uri: uri}
+}
+
+// screenedOut reports whether field f's value must not be answered because it
+// could carry a URL's credentials, or cannot be shown not to (see
+// unsafeSetting). Three kinds of field are screened, and no other, so free
+// text such as a message template is answered as stored and a GET-edit-PUT
+// keeps it:
+//
+//   - a field an operator value locks (its type is not known to the view):
+//     the aggressive text check, every "//" and whitespace included;
+//   - a URL-typed field (format "uri"): the Registry's own rule, url.Parse and
+//     User != nil, with a value that does not parse withheld;
+//   - every field of an adapter this binary does not have (fi nil): the
+//     URL-typed rule. Such an instance cannot be edited, so no round trip is
+//     lost.
+//
+// A field that is both locked and URL-typed gets both checks.
+func screenedOut(f string, val any, locked bool, fi *fieldInfo) bool {
+	uriTyped := fi == nil || fi.uri[f]
+	if !locked && !uriTyped {
+		return false
+	}
+	w := screener{left: maxScreenNodes, text: locked, parse: uriTyped}
+	return w.value(val, 0)
+}
+
+// withheldURLFields are cfg's stored, unlocked, URL-typed fields that
+// screenedOut keeps out of the view, in name order: a legacy value that
+// carries userinfo (the Registry refuses one in a Put, so only a row written
+// before that rule has it). A PUT that omits such a field would clear it, so
+// updateInstance refuses the omission. It uses the function the view uses.
+func withheldURLFields(cfg integrations.InstanceConfig, fi *fieldInfo) []string {
+	if fi == nil {
+		return nil
+	}
+	var out []string
+	for f := range fi.uri {
+		val, ok := cfg.Settings[f]
+		if !ok || fi.secret[f] || isSecretShaped(val) {
+			continue
+		}
+		if _, locked := cfg.Locked[f]; !locked && screenedOut(f, val, false, fi) {
+			out = append(out, f)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// instanceView renders cfg. fi is the adapter's schema fields (nil, see
+// fieldInfo): without it the secret fields are the ones holding a Ref.
 //
 // Whatever the schema says, no Ref-shaped or Value-shaped setting is
-// answered: a secret leaves the server as a marker only. A field an operator
-// value locks, and a URL-typed field, is also left out whole when any part of
-// its value could carry a URL's credentials (see unsafeSetting); no other
-// field is screened, so free text such as a message template is answered as
-// stored and a GET-edit-PUT keeps it.
-func instanceView(cfg integrations.InstanceConfig, secretFields, uriFields map[string]bool) IntegrationInstance {
+// answered: a secret leaves the server as a marker only. A field screenedOut
+// reports is left out whole, never in part, so a locked field that was
+// omitted from a PUT still passes the Registry's locked-field rule.
+func instanceView(cfg integrations.InstanceConfig, fi *fieldInfo) IntegrationInstance {
 	v := IntegrationInstance{
 		Kind: string(cfg.Ref.Kind), ID: string(cfg.Ref.Instance), Adapter: string(cfg.Adapter),
 		Name: cfg.Name, Enabled: cfg.Enabled, Priority: cfg.Priority, Origin: string(cfg.Origin), Local: cfg.Local,
 		Settings: map[string]any{}, SecretsSet: map[string]bool{}, Version: cfg.Version, Updated: cfg.Updated,
 		Locked: cfg.Locked, Stored: cfg.Stored,
+	}
+	var secretFields map[string]bool
+	if fi != nil {
+		secretFields = fi.secret
 	}
 	for f := range secretFields {
 		v.SecretsSet[f] = isSecretShaped(cfg.Settings[f])
@@ -605,7 +680,7 @@ func instanceView(cfg integrations.InstanceConfig, secretFields, uriFields map[s
 		case secretFields[f]:
 		case isSecretShaped(val):
 			v.SecretsSet[f] = true
-		case (locked || uriFields[f]) && unsafeSetting(val):
+		case screenedOut(f, val, locked, fi):
 			// Left out whole: a locked field may be omitted from a PUT, so
 			// the answer still round-trips, while a field that lost only
 			// one element could not (409 field_locked).
@@ -624,7 +699,7 @@ func instanceView(cfg integrations.InstanceConfig, secretFields, uriFields map[s
 	return v
 }
 
-// The bounds of unsafeSetting's walk. A value nested deeper than the depth
+// The bounds of screenedOut's walk. A value nested deeper than the depth
 // cap, or larger than the node budget, is unsafe: a hand-built cycle or a
 // wide shared structure ends the walk instead of the process.
 const (
@@ -632,24 +707,35 @@ const (
 	maxScreenNodes = 1 << 16
 )
 
-// unsafeSetting reports whether v could carry a URL's credentials, or cannot
-// be shown not to: any string in it, or any key of a map in it, in which
-// carriesUserinfo holds; any value of a kind that cannot be walked (a struct,
-// a channel, a function, a map not keyed by strings); and anything nested
-// deeper than maxScreenDepth or larger than maxScreenNodes. It fails closed.
+// screener walks a settings value and reports whether any part of it could
+// carry a URL's credentials, or cannot be shown not to: any string, or any key
+// of a map, that bad reports; any value of a kind that cannot be walked (a
+// struct, a channel, a function, a map not keyed by strings); and anything
+// nested deeper than maxScreenDepth or larger than maxScreenNodes. It fails
+// closed. text selects the aggressive check (carriesUserinfo) and parse the
+// Registry's URL rule (parseUnsafe); either flags a string.
 //
 // The Registry refuses userinfo when a URL-typed field is written, but an
 // operator-layer value is not a Put, and the settings answer is read with
 // core:integrations.read.
-func unsafeSetting(v any) bool {
-	w := screener{left: maxScreenNodes}
-	return w.value(v, 0)
+type screener struct {
+	left        int
+	text, parse bool
 }
 
-// screener is one walk's node budget.
-type screener struct{ left int }
+// bad reports a string the walk must withhold.
+func (w *screener) bad(s string) bool {
+	return (w.text && carriesUserinfo(s)) || (w.parse && parseUnsafe(s))
+}
 
-// value is unsafeSetting for the JSON shapes (strings, lists, maps), by type
+// parseUnsafe is the Registry's URL rule (checkURL): a value that does not
+// parse, or that parses with userinfo.
+func parseUnsafe(s string) bool {
+	u, err := url.Parse(s)
+	return err != nil || u.User != nil
+}
+
+// value is the walk for the JSON shapes (strings, lists, maps), by type
 // switch; anything else goes to reflect.
 func (w *screener) value(v any, depth int) bool {
 	if w.left--; w.left < 0 || depth > maxScreenDepth {
@@ -659,12 +745,12 @@ func (w *screener) value(v any, depth int) bool {
 	case nil:
 		return false
 	case string:
-		return carriesUserinfo(x)
+		return w.bad(x)
 	case []string:
-		return slices.ContainsFunc(x, carriesUserinfo)
+		return slices.ContainsFunc(x, w.bad)
 	case map[string]string:
 		for k, e := range x {
-			if carriesUserinfo(k) || carriesUserinfo(e) {
+			if w.bad(k) || w.bad(e) {
 				return true
 			}
 		}
@@ -678,7 +764,7 @@ func (w *screener) value(v any, depth int) bool {
 		return false
 	case map[string]any:
 		for k, e := range x {
-			if carriesUserinfo(k) || w.value(e, depth+1) {
+			if w.bad(k) || w.value(e, depth+1) {
 				return true
 			}
 		}
@@ -695,7 +781,7 @@ func (w *screener) reflected(rv reflect.Value, depth int) bool {
 	}
 	switch rv.Kind() {
 	case reflect.String:
-		return carriesUserinfo(rv.String())
+		return w.bad(rv.String())
 	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
 		reflect.Float32, reflect.Float64:
@@ -705,7 +791,7 @@ func (w *screener) reflected(rv reflect.Value, depth int) bool {
 	case reflect.Slice, reflect.Array:
 		if rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
 			// Bytes marshal as base64, which hides the text; screen the text.
-			return carriesUserinfo(string(rv.Bytes()))
+			return w.bad(string(rv.Bytes()))
 		}
 		for i := range rv.Len() {
 			if w.reflected(rv.Index(i), depth+1) {
@@ -718,7 +804,7 @@ func (w *screener) reflected(rv reflect.Value, depth int) bool {
 			return true
 		}
 		for it := rv.MapRange(); it.Next(); {
-			if carriesUserinfo(it.Key().String()) || w.reflected(it.Value(), depth+1) {
+			if w.bad(it.Key().String()) || w.reflected(it.Value(), depth+1) {
 				return true
 			}
 		}

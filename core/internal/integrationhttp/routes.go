@@ -1,5 +1,5 @@
 // file: core/internal/integrationhttp/routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 91c5d7e2-3a84-4b1f-b6d0-58e2a4c7f193
 // last-edited: 2026-11-11
 
@@ -251,11 +251,7 @@ func (a *api) metasOf(kind integrations.Kind) map[integrations.AdapterID]integra
 
 // view renders cfg, with its adapter's secret fields when this binary has it.
 func view(cfg integrations.InstanceConfig, metas map[integrations.AdapterID]integrations.Meta) IntegrationInstance {
-	var secret, uriTyped map[string]bool
-	if m, ok := metas[cfg.Adapter]; ok {
-		secret, uriTyped = schemaFields(m)
-	}
-	return instanceView(cfg, secret, uriTyped)
+	return instanceView(cfg, fieldsFor(metas, cfg.Adapter))
 }
 
 // page is items[offset:offset+limit] as httpapi's default list shape.
@@ -355,8 +351,15 @@ func (a *api) updateInstance(ctx context.Context, in *httpapi.In[updateReq]) (In
 	// A replace never creates: the body's version is at least 1 (Validate),
 	// which no absent row can match, but 404 says what is wrong with a replace of
 	// an instance that does not exist.
-	if _, ok := a.reg.Config(ref); !ok {
+	cur, ok := a.reg.Config(ref)
+	if !ok {
 		return IntegrationInstance{}, errNoInstance()
+	}
+	// A stored URL the view withholds (a legacy value with userinfo) cannot be
+	// sent back by a client that never saw it; omitting it would clear it and
+	// with it the instance's stored secrets, so the omission is refused.
+	if err := withheldOmitted(cur, fieldsFor(a.metasOf(ref.Kind), cur.Adapter), in.Req.Body.Settings); err != nil {
+		return IntegrationInstance{}, err
 	}
 	body := in.Req.Body.body()
 	inst, secretsIn, err := body.config(ref, body.Version)
@@ -368,6 +371,25 @@ func (a *api) updateInstance(ctx context.Context, in *httpapi.In[updateReq]) (In
 		return IntegrationInstance{}, mapError(err)
 	}
 	return view(cfg, a.metasOf(ref.Kind)), nil
+}
+
+// withheldOmitted is the 422 withheld_field for a PUT whose settings omit a
+// field of cur that the view withholds (withheldURLFields). A field the body
+// names is not omitted, even as null (an explicit clear) or with a new value
+// (the Registry judges it).
+func withheldOmitted(cur integrations.InstanceConfig, fi *fieldInfo, settings map[string]any) error {
+	var fields []httpapi.FieldError
+	for _, f := range withheldURLFields(cur, fi) {
+		if _, named := settings[f]; !named {
+			fields = append(fields, httpapi.Field("/body/settings/"+escapePointer(f), "withheld_field",
+				"the stored value is not shown because it carries credentials in the URL; enter the field again without them"))
+		}
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	return &httpapi.Error{Status: http.StatusUnprocessableEntity, Code: "withheld_field",
+		Detail: "a stored field was withheld from the answer and the body leaves it out; sending it that way would clear it", Fields: fields}
 }
 
 func (a *api) deleteInstance(ctx context.Context, in *httpapi.In[instanceReq]) (httpapi.NoContent, error) {
