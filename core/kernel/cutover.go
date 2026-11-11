@@ -11,7 +11,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -168,25 +171,45 @@ func StorageHealth(ctx context.Context, db *storage.DB, orphaned map[string]int6
 	return health.Result{Status: health.StatusUp, Detail: QuarantineDetail(counts, orphaned), At: now}, nil
 }
 
-// RecordQuarantineMetrics records <ns>_storage_quarantine_rows{step,
-// sensitive} on storage's scope (§5S.8): per step, the sealed sensitive
-// rows and the others. A step with none of one kind records 0 for it, so a
-// purged step's series falls to 0.
-func RecordQuarantineMetrics(ctx context.Context, db *storage.DB, scope *metrics.Scope) error {
+// QuarantineGauge records <ns>_storage_quarantine_rows{step, sensitive} on
+// storage's scope (§5S.8): per step, the sealed sensitive rows and the
+// others. It remembers every step it has recorded, so a step whose records
+// are gone (a purge) records 0 for both instead of keeping its last value;
+// a step with none of one kind records 0 for it. The wiring (F3-07) builds
+// one per process and records after P4b and after a purge. Name coined by
+// F3-04.
+type QuarantineGauge struct {
+	g    metric.Int64Gauge
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+// NewQuarantineGauge registers the gauge on scope.
+func NewQuarantineGauge(scope *metrics.Scope) (*QuarantineGauge, error) {
+	g, err := scope.Meter().Int64Gauge(scope.Prefix()+".quarantine_rows",
+		metric.WithDescription("Quarantined rows of the cutover steps, by step and whether the row was sealed as sensitive (05-storage §5S.8)."))
+	if err != nil {
+		return nil, fmt.Errorf("kernel: quarantine rows gauge: %w", err)
+	}
+	return &QuarantineGauge{g: g, seen: map[string]bool{}}, nil
+}
+
+// Record records db's quarantine counts.
+func (q *QuarantineGauge) Record(ctx context.Context, db *storage.DB) error {
 	counts, err := db.QuarantineCounts(ctx)
 	if err != nil {
 		return fmt.Errorf("kernel: quarantine counts: %w", err)
 	}
-	g, err := scope.Meter().Int64Gauge(scope.Prefix()+".quarantine_rows",
-		metric.WithDescription("Quarantined rows of the cutover steps, by step and whether the row was sealed as sensitive (05-storage §5S.8)."))
-	if err != nil {
-		return fmt.Errorf("kernel: quarantine rows gauge: %w", err)
-	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	for _, s := range storage.QuarantineSteps(counts) {
+		q.seen[s] = true
+	}
+	for _, s := range slices.Sorted(maps.Keys(q.seen)) {
 		c := counts[s]
 		step := attribute.String("step", s)
-		g.Record(ctx, int64(c.Sensitive), metric.WithAttributes(step, attribute.String("sensitive", "true")))
-		g.Record(ctx, int64(c.Rows-c.Sensitive), metric.WithAttributes(step, attribute.String("sensitive", "false")))
+		q.g.Record(ctx, int64(c.Sensitive), metric.WithAttributes(step, attribute.String("sensitive", "true")))
+		q.g.Record(ctx, int64(c.Rows-c.Sensitive), metric.WithAttributes(step, attribute.String("sensitive", "false")))
 	}
 	return nil
 }
