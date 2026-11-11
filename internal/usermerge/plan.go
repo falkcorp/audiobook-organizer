@@ -1,7 +1,7 @@
 // file: internal/usermerge/plan.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: c4a82f17-5d93-4e60-9b2a-71f3d0e86a45
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package usermerge
 

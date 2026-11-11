@@ -1,7 +1,7 @@
 // file: internal/server/login_ceiling_test.go
-// version: 4.3.2
+// version: 4.3.3
 // guid: 47178e5a-1329-49cf-847d-f019456d21c6
-// last-edited: 2026-11-08
+// last-edited: 2026-11-10
 
 package server
 

@@ -1,77 +1,47 @@
-// file: internal/server/absauth/hash_cost_guard_test.go
-// version: 2.0.0
+// file: core/auth/password/hash_cost_guard_test.go
+// version: 3.0.0
 // guid: 6e0b7d24-91c3-4f8a-b5d6-3a28c4f1e907
-// last-edited: 2026-10-30
+// last-edited: 2026-11-10
 
 package password
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
 
-// The static guard that keeps non-test code from naming SetHashCostForTest
-// lives in internal/arch (TestHashCostSeamStaysInTests), which loads the whole
-// module, the root main package included. These tests cover the function's own
-// runtime guards and the cost it writes.
-
-func requirePanic(t *testing.T, want string, f func()) {
-	t.Helper()
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatalf("no panic, want one containing %q", want)
-		}
-		if msg, _ := r.(string); !strings.Contains(msg, want) {
-			t.Fatalf("panic %v, want one containing %q", r, want)
-		}
-	}()
-	f()
-}
-
-func TestSetHashCostForTestPanicsOutsideATestBinary(t *testing.T) {
-	oldFn, oldT, oldM := isTestBinary, hashTime, hashMemory
-	t.Cleanup(func() { isTestBinary, hashTime, hashMemory = oldFn, oldT, oldM })
-
-	isTestBinary = func() bool { return false }
-	requirePanic(t, "outside a test binary", func() { SetHashCostForTest(1, 64) })
-	if hashTime != oldT || hashMemory != oldM {
-		t.Fatalf("the refused call changed the cost to t=%d m=%d", hashTime, hashMemory)
-	}
-}
-
-func TestSetHashCostForTestPanicsOnceTheDummyHashIsBuilt(t *testing.T) {
-	oldT, oldM := hashTime, hashMemory
-	t.Cleanup(func() { hashTime, hashMemory = oldT, oldM })
-
-	WarmLoginDummy() // builds it at whatever cost is current; sticks for the process
-	if !LoginDummyReadyForTest() {
-		t.Fatal("the dummy hash was not built")
-	}
-	requirePanic(t, "after the dummy hash was built", func() { SetHashCostForTest(1, 64) })
-	if hashTime != oldT || hashMemory != oldM {
-		t.Fatalf("the refused call changed the cost to t=%d m=%d", hashTime, hashMemory)
-	}
-}
-
-func TestLoweredHashCostChangesWhatIsWrittenAndStillVerifies(t *testing.T) {
-	oldT, oldM := hashTime, hashMemory
-	t.Cleanup(func() { hashTime, hashMemory = oldT, oldM })
-
-	// Not through SetHashCostForTest: another test in this binary may already
-	// have built the dummy hash, which that function refuses.
-	hashTime, hashMemory = 1, 64
-	algo, hash, err := HashPassword("correct horse")
+// TestProductionCostIsTheZeroValue: Options{} writes HEAD's production
+// argon2id parameters (m=64 MiB, t=3, p=2; §4.5), so only a caller that sets
+// Time or MemoryKiB lowers them.
+func TestProductionCostIsTheZeroValue(t *testing.T) {
+	_, h, err := New(Options{}).Hash("pw")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if algo != AlgoArgon2id || !strings.Contains(hash, "m=64,t=1,p=2$") {
-		t.Fatalf("hash %q not written at the lowered cost", hash)
+	if want := "$argon2id$v=19$m=65536,t=3,p=2$"; !strings.HasPrefix(h, want) {
+		t.Fatalf("hash %q does not carry the production parameters %q", h, want)
 	}
-	if ok, _ := VerifyPassword(algo, hash, "correct horse"); !ok {
-		t.Fatal("a hash written at the lowered cost must verify")
+}
+
+// TestLoweredHashCostChangesWhatIsWrittenAndStillVerifies: a hash written at
+// a lowered cost carries that cost and verifies under any Hasher, because
+// verification reads the parameters stored in the hash.
+func TestLoweredHashCostChangesWhatIsWrittenAndStillVerifies(t *testing.T) {
+	cheap := New(Options{Time: 1, MemoryKiB: 8})
+	algo, h, err := cheap.Hash("pw")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if ok, _ := VerifyPassword(algo, hash, "wrong horse"); ok {
-		t.Fatal("a wrong password must still fail at the lowered cost")
+	if want := fmt.Sprintf("m=%d,t=%d,", 8, 1); !strings.Contains(h, want) {
+		t.Fatalf("hash %q does not carry the lowered cost %q", h, want)
+	}
+	for _, v := range []*Hasher{cheap, New(Options{})} {
+		if ok, rehash := v.Verify(algo, h, "pw"); !ok || rehash {
+			t.Fatalf("Verify = %v, %v; want true, false", ok, rehash)
+		}
+	}
+	if _, _, err := cheap.Hash(""); err != ErrEmpty {
+		t.Fatalf("Hash(\"\") = %v, want ErrEmpty", err)
 	}
 }

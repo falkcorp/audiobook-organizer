@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_password_algo_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 4f0c7a52-9d3e-4b86-a1c7-6e25b8d0f913
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers_test
 

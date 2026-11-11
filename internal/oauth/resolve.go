@@ -1,7 +1,7 @@
 // file: internal/oauth/resolve.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 6b0d3f81-9a27-4c54-8e16-2a5c7b9e0d43
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package oauth
 

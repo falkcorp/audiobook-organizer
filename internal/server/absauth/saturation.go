@@ -1,7 +1,7 @@
 // file: internal/server/absauth/saturation.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: f4881432-1772-4d8d-a653-33fde6815d7a
-// last-edited: 2026-10-22
+// last-edited: 2026-11-10
 
 package absauth
 

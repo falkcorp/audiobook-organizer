@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_saturation_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 145af753-2faf-4792-8784-654bedb37b46
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package handlers_test
 

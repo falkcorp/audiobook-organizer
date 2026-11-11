@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_auth.go
-// version: 1.28.1
+// version: 1.28.2
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-11-09
+// last-edited: 2026-11-10
 
 package store
 
