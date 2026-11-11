@@ -1,5 +1,5 @@
 // file: core/integrations/lease.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8db314c4-39fe-4242-974f-f95bb76ffdd4
 // last-edited: 2026-11-11
 
@@ -88,10 +88,26 @@ func (r *Registry) current(ref Ref) (*slot, *snapshot) {
 	}
 }
 
+// errSwappedOut is build's answer for a slot whose instance its closer
+// already Closed: the slot was retired and its drain timeout passed.
+var errSwappedOut = errors.New("swapped out")
+
 // lease is Lease without the type assertion. It returns the instance build
 // returned, never s.inst: a closer may clear s.inst under buildMu once the
-// drain timeout passes, so reading the field here would race with it.
+// drain timeout passes, so reading the field here would race with it. A
+// slot that is swapped out and force-closed between its lease and its build
+// is let go and the lease retried on the slot that replaced it.
 func (r *Registry) lease(ctx context.Context, ref Ref) (Instance, func(), error) {
+	for {
+		inst, release, err := r.leaseOnce(ctx, ref)
+		if !errors.Is(err, errSwappedOut) {
+			return inst, release, err
+		}
+	}
+}
+
+// leaseOnce is one attempt of lease.
+func (r *Registry) leaseOnce(ctx context.Context, ref Ref) (Instance, func(), error) {
 	if r.closed.Load() {
 		return nil, nil, ErrClosed
 	}
@@ -140,7 +156,7 @@ func (r *Registry) build(ctx context.Context, s *slot) (Instance, error) {
 	defer s.buildMu.Unlock()
 	if s.built {
 		if s.buildErr == nil && s.inst == nil {
-			return nil, fmt.Errorf("%w: %s was swapped out", ErrNotConfigured, s.cfg.Ref)
+			return nil, fmt.Errorf("%w: %s was %w", ErrNotConfigured, s.cfg.Ref, errSwappedOut)
 		}
 		return s.inst, s.buildErr
 	}
@@ -315,18 +331,22 @@ func (t guardTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // probe is s's health: the static findings first, then an active probe
 // bounded by core.integrations.probe_timeout. The caller holds a lease on s.
-func (r *Registry) probe(ctx context.Context, s *slot) Health {
-	h, probed, d := r.health(ctx, s)
+func (r *Registry) probe(ctx context.Context, s *slot) (Health, bool) {
+	h, probed, d, swapped := r.health(ctx, s)
+	if swapped {
+		return Health{}, false
+	}
 	r.observe(s, h, probed, d)
-	return h
+	return h, true
 }
 
 // health computes probe's answer; probed reports an active probe and d its
-// duration.
-func (r *Registry) health(ctx context.Context, s *slot) (h Health, probed bool, d time.Duration) {
+// duration. swapped reports a slot swapped out and force-closed before its
+// build: it has no answer, and nothing is recorded for it.
+func (r *Registry) health(ctx context.Context, s *slot) (h Health, probed bool, d time.Duration, swapped bool) {
 	now := r.now()
-	static := func(st HealthStatus, msg string) (Health, bool, time.Duration) {
-		return Health{Status: st, Message: msg, CheckedAt: now}, false, 0
+	static := func(st HealthStatus, msg string) (Health, bool, time.Duration, bool) {
+		return Health{Status: st, Message: msg, CheckedAt: now}, false, 0, false
 	}
 	switch {
 	case r.settings().Disabled:
@@ -340,7 +360,10 @@ func (r *Registry) health(ctx context.Context, s *slot) (h Health, probed bool, 
 		return static(HealthMisconfigured, msg)
 	}
 	inst, err := r.build(ctx, s)
-	if err != nil {
+	switch {
+	case errors.Is(err, errSwappedOut):
+		return Health{}, false, 0, true
+	case err != nil:
 		return static(HealthMisconfigured, ReasonBuildFailed)
 	}
 	pctx, cancel := context.WithTimeout(ctx, r.settings().ProbeTimeout)
@@ -367,7 +390,7 @@ func (r *Registry) health(ctx context.Context, s *slot) (h Health, probed bool, 
 		h.Status = HealthDegraded
 		h.Message = ReasonOperatorSecretWithheld + ": " + strings.Join(s.withheld, ",")
 	}
-	return h, true, d
+	return h, true, d, false
 }
 
 // secretFinding is the static secret finding of s (M1.5): a required secret

@@ -1,5 +1,5 @@
 // file: core/integrations/registry.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5291a2b4-f665-40ef-8c7f-d588aa319bec
 // last-edited: 2026-11-11
 
@@ -512,20 +512,27 @@ func (r *Registry) Test(ctx context.Context, inst InstanceConfig, secretsIn map[
 // Health is ref's health: the static findings (disabled, misconfigured, a
 // missing or withheld secret) and, for a buildable instance, an active probe
 // bounded by core.integrations.probe_timeout. While
-// core.integrations.disabled is set it probes nothing.
+// core.integrations.disabled is set it probes nothing. A slot swapped out
+// and force-closed before its probe could build it is let go and the slot
+// that replaced it probed instead.
 func (r *Registry) Health(ctx context.Context, ref Ref) (Health, error) {
-	s, snap := r.current(ref)
-	if s == nil {
-		switch {
-		case r.closed.Load():
-			return Health{}, ErrClosed
-		case snap.storeErr != nil && ref.Validate() == nil:
-			return Health{Status: HealthMisconfigured, Message: ReasonStoreUnavailable, CheckedAt: r.now()}, nil
+	for {
+		s, snap := r.current(ref)
+		if s == nil {
+			switch {
+			case r.closed.Load():
+				return Health{}, ErrClosed
+			case snap.storeErr != nil && ref.Validate() == nil:
+				return Health{Status: HealthMisconfigured, Message: ReasonStoreUnavailable, CheckedAt: r.now()}, nil
+			}
+			return Health{}, fmt.Errorf("%w: %s", ErrNotConfigured, ref)
 		}
-		return Health{}, fmt.Errorf("%w: %s", ErrNotConfigured, ref)
+		h, ok := r.probe(ctx, s)
+		s.release()
+		if ok {
+			return h, nil
+		}
 	}
-	defer s.release()
-	return r.probe(ctx, s), nil
 }
 
 // Lease returns the current built instance as T plus a release func; the

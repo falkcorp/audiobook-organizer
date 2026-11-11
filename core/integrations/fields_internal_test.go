@@ -1,5 +1,5 @@
 // file: core/integrations/fields_internal_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: dfaab137-5259-4293-befc-1800491e6971
 // last-edited: 2026-11-11
 
@@ -288,6 +288,11 @@ func TestAnalyze_RefusesHiddenDestinations(t *testing.T) {
 				Upstream struct {
 					Server string `json:"server"`
 				} `json:"upstream"`
+			}]()
+		},
+		"a map of secrets": func() (config.Schema, error) {
+			return config.SchemaFor[struct {
+				Keys map[string]secrets.Ref `json:"keys"`
 			}]()
 		},
 		"array of objects with a URL": func() (config.Schema, error) {

@@ -1,5 +1,5 @@
 // file: core/integrations/origin_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 394052ef-66a7-48bf-a8f2-6fb61af1e689
 // last-edited: 2026-11-11
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/integrations/integrationstest"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -87,10 +88,15 @@ func TestPut_PortChangeBesideOperatorHostDropsSecrets(t *testing.T) {
 		t.Fatalf("Health = %+v, stored secret sent %d times", h, sentWith(e, "alfred-1"))
 	}
 
+	// A Test of the unchanged config is at the destination the secret was
+	// written for, operator host included: it uses the stored secret.
+	if res, err := r.Test(manager(), current(t, r, oracleRef), nil); err != nil || !res.OK || sentWith(e, "alfred-1") != 2 {
+		t.Errorf("a Test at the stored destination = %+v, %v; stored secret sent %d times", res, err, sentWith(e, "alfred-1"))
+	}
 	if _, err := r.Test(manager(), withPort(current(t, r, oracleRef), 9443), nil); err != nil {
 		t.Fatal(err)
 	}
-	if n := sentWith(e, "alfred-1"); n != 1 {
+	if n := sentWith(e, "alfred-1"); n != 2 {
 		t.Errorf("a Test at a new port sent the stored secret (%d sends)", n)
 	}
 
@@ -105,7 +111,7 @@ func TestPut_PortChangeBesideOperatorHostDropsSecrets(t *testing.T) {
 		t.Errorf("origins after a manager's port change = %q / %v", row.SecretsOrigin, row.OperatorSecretOrigin)
 	}
 	_, _ = r.Health(ctx, oracleRef)
-	if n := sentWith(e, "alfred-1"); n != 1 {
+	if n := sentWith(e, "alfred-1"); n != 2 {
 		t.Errorf("the stored secret followed the port (%d sends)", n)
 	}
 }
@@ -322,9 +328,11 @@ func TestRegistry_EnvValueUnderStoredNameRefused(t *testing.T) {
 	}
 }
 
-// TestRegistry_LeaseRacesDrainTimeout (M1.6): leases taken while swaps
-// retire their slots and a zero-length drain timeout closes them race
-// nothing (run under -race).
+// TestRegistry_LeaseRacesDrainTimeout (M1.6): leases and probes taken
+// while swaps retire their slots and a zero-length drain timeout closes them
+// race nothing (run under -race), and a slot force-closed between its lease
+// and its build is retried on its replacement, never reported as missing or
+// misconfigured.
 func TestRegistry_LeaseRacesDrainTimeout(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
@@ -347,16 +355,32 @@ func TestRegistry_LeaseRacesDrainTimeout(t *testing.T) {
 			}
 		}
 	})
-	for range 300 {
-		inst, release, err := integrations.Lease[integrations.Instance](ctx, r, signalRef)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if fakeOf(t, inst).Config.Ref != signalRef {
-			t.Error("a lease got another instance")
-		}
-		release()
+	var lessees sync.WaitGroup
+	for range 4 {
+		lessees.Go(func() {
+			for range 500 {
+				inst, release, err := integrations.Lease[integrations.Instance](ctx, r, signalRef)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if f, ok := inst.(*integrationstest.FakeInstance); !ok || f.Config.Ref != signalRef {
+					t.Errorf("a lease got %T", inst)
+				}
+				release()
+			}
+		})
 	}
+	lessees.Go(func() {
+		for range 300 {
+			h, err := r.Health(ctx, signalRef)
+			if err != nil || h.Status == integrations.HealthMisconfigured {
+				t.Errorf("Health while swapping = %+v, %v", h, err)
+				return
+			}
+		}
+	})
+	lessees.Wait()
 	close(stop)
 	wg.Wait()
 }
@@ -521,5 +545,32 @@ func TestRegistry_ParkedSecretReadNeverGetsTheMovedSecret(t *testing.T) {
 	}
 	if _, err := held.Env.Secrets.Secret(ctx, "password"); err == nil || integrations.ClassOf(ctx, err) != integrations.ClassRefusedLocal {
 		t.Errorf("a read by the old instance after the move: %v", err)
+	}
+}
+
+// TestRegistry_LocalBoundToItsDestination (SEC-15, SEC2-7): Local trusts
+// the effective destination an admin granted it for; once the operator
+// moves the host, the new destination is not trusted through Local (the
+// pair is not wholly operator-set: the port is stored).
+func TestRegistry_LocalBoundToItsDestination(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	r := e.registry(t, nil, nil)
+	mustPut(t, admin(), r, integrations.InstanceConfig{
+		Ref: oracleRef, Adapter: oracle, Enabled: true, Local: true,
+		Settings: map[string]any{"host": "192.0.2.60", "port": 9000},
+	}, nil)
+	_, release := lease(t, r, oracleRef)
+	release()
+	if tr := lastSpec(t, e, oracleRef).Trust; !slices.Equal(tr.PrivateOrigins, []string{"smtp://192.0.2.60:9000"}) {
+		t.Fatalf("Local trust = %v", tr)
+	}
+	if err := r.SetOverlay(ctx, overlay("integrations.metadata.clocktower.host", "192.0.2.61")); err != nil {
+		t.Fatal(err)
+	}
+	_, release = lease(t, r, oracleRef)
+	release()
+	if tr := lastSpec(t, e, oracleRef).Trust; len(tr.PrivateOrigins) != 0 {
+		t.Errorf("Local followed the operator's host: %v", tr)
 	}
 }
