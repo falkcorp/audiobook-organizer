@@ -1,5 +1,5 @@
 // file: core/internal/restoreswap/rewrite_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d92e319d-69bf-437e-a034-410415eaefa0
 // last-edited: 2026-11-11
 
@@ -14,6 +14,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -230,8 +231,28 @@ func m8Boot(t *testing.T, fs vfs.FS, db string) m8Result {
 // before RunRewrite.
 func m8BootWith(t *testing.T, fs vfs.FS, db string, before func(ctx context.Context, sdb *storage.DB) error) m8Result {
 	t.Helper()
+	return m8BootIn(t, fs, m8Env{}, db, before)
+}
+
+// m8Env is where an M8 boot runs: its state directory ("" = stateDir) and
+// its free-space margin (0 = 1 byte).
+type m8Env struct {
+	state  string
+	margin uint64
+}
+
+// m8BootIn is m8BootWith in env.
+func m8BootIn(t *testing.T, fs vfs.FS, env m8Env, db string, before func(ctx context.Context, sdb *storage.DB) error) m8Result {
+	t.Helper()
+	state, margin := env.state, env.margin
+	if state == "" {
+		state = stateDir
+	}
+	if margin == 0 {
+		margin = 1
+	}
 	ctx := bootseam.With(context.Background(), &bootseam.Seams{FS: fs, BuildID: testBuild, Clock: testNow})
-	s, err := New(Options{FS: fs, StateDir: stateDir, BuildID: testBuild, Clock: testNow, Owners: []storage.OwnerSpec{wayne(1)}, RewriteStep: "wayne.rewrite"})
+	s, err := New(Options{FS: fs, StateDir: state, BuildID: testBuild, Clock: testNow, Owners: []storage.OwnerSpec{wayne(1)}, RewriteStep: "wayne.rewrite"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +273,7 @@ func m8BootWith(t *testing.T, fs vfs.FS, db string, before func(ctx context.Cont
 		}
 		return s.RunRewrite(ctx, sdb, step)
 	}}
-	op, err := storage.Open(ctx, storage.OpenOptions{Path: db, Build: testBuild, Owners: []storage.OwnerSpec{wayne(1)}, FreeSpaceMargin: 1,
+	op, err := storage.Open(ctx, storage.OpenOptions{Path: db, Build: testBuild, Owners: []storage.OwnerSpec{wayne(1)}, FreeSpaceMargin: margin,
 		DataSteps: []storage.DataStep{ds}})
 	if err != nil {
 		res.err = err
@@ -281,6 +302,155 @@ func m8BootWith(t *testing.T, fs vfs.FS, db string, before func(ctx context.Cont
 		t.Fatal(err)
 	}
 	return res
+}
+
+// checkpointPointer is the name <db>.migration-checkpoint holds.
+func checkpointPointer(t *testing.T, fs vfs.FS, db string) string {
+	t.Helper()
+	f, err := fs.Open(db + restorejournal.CheckpointSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(f)
+	if err = errors.Join(err, f.Close()); err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatal(err)
+	}
+	return p.Name
+}
+
+// checkpointRecords lists the checkpoint area's <name>.json records.
+func checkpointRecords(t *testing.T, fs vfs.FS, db string) []string {
+	t.Helper()
+	names, err := fs.List(filepath.Join(filepath.Dir(db), ".mediacore-checkpoints"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, n := range names {
+		if strings.HasSuffix(n, ".json") {
+			out = append(out, strings.TrimSuffix(n, ".json"))
+		}
+	}
+	return out
+}
+
+// TestRewriteRebootAfterSwapReusesTheCheckpoint (05-storage §5S.3.13 phase
+// 3, §5S.3.12 "Sources" and "Free space"), on the real filesystem, where the
+// copy moved into place has a new inode (MemFS reports every directory as
+// 0/0, so no in-memory test can see this): a boot killed after M8's swap,
+// in phase 4 or before the checkpoint record is promoted to the copy's
+// identity, is rebooted with a free-space margin no disk has, so a new
+// checkpoint would be refused. The reboot reuses the attempt's checkpoint
+// (one record, the pointer still naming it), M8 finishes, the store keeps
+// the generation it had before M8, and neither the copy nor the swap's
+// in-flight file is left.
+func TestRewriteRebootAfterSwapReusesTheCheckpoint(t *testing.T) {
+	kills := map[string]func(db string) func(errorfs.Op) bool{
+		"in phase 4": func(string) func(errorfs.Op) bool {
+			return func(op errorfs.Op) bool {
+				return op.Kind == errorfs.OpCreate && strings.HasPrefix(filepath.Base(op.Path), "."+rewriteDeleteStarted+".tmp-")
+			}
+		},
+		"before the promotion": func(db string) func(errorfs.Op) bool {
+			cp := filepath.Join(filepath.Dir(db), ".mediacore-checkpoints")
+			var mu sync.Mutex
+			swapped := false
+			return func(op errorfs.Op) bool {
+				mu.Lock()
+				defer mu.Unlock()
+				if op.Kind == errorfs.OpRename && filepath.Clean(op.Path) == storage.RewriteDir(db) {
+					swapped = true
+					return false
+				}
+				return swapped && op.Kind == errorfs.OpCreate && filepath.Dir(op.Path) == cp
+			}
+		},
+	}
+	for name, kill := range kills {
+		t.Run(name, func(t *testing.T) {
+			state := filepath.Join(t.TempDir(), "state")
+			db := filepath.Join(state, "main.pebble")
+			m8Store(t, vfs.Default, db, 60)
+			fs, hit := failOnce(vfs.Default, kill(db))
+			first := m8BootIn(t, fs, m8Env{state: state}, db, nil)
+			if !hit() || first.err == nil {
+				t.Fatalf("the killed boot = %v (injected %t), want it to fail after the swap", first.err, hit())
+			}
+			cp := checkpointPointer(t, vfs.Default, db)
+			next := m8BootIn(t, vfs.Default, m8Env{state: state, margin: 1 << 62}, db, nil)
+			if next.err != nil {
+				t.Fatalf("the reboot after the swap: %v", next.err)
+			}
+			if next.runs != 1 || next.tag != "live" || next.rows != 60 {
+				t.Errorf("the reboot = %+v, want M8 finished over the copy with every row", next)
+			}
+			if first.genBefore == 0 || next.genAfter != first.genBefore {
+				t.Errorf("generation %d before M8, %d after the reboot; a KindRewrite swap keeps it", first.genBefore, next.genAfter)
+			}
+			if got := checkpointPointer(t, vfs.Default, db); got != cp {
+				t.Errorf("the pointer names %s after the reboot, want the attempt's %s", got, cp)
+			}
+			if recs := checkpointRecords(t, vfs.Default, db); len(recs) != 1 || recs[0] != cp {
+				t.Errorf("checkpoint records = %v, want only the attempt's %s", recs, cp)
+			}
+			if ok, err := exists(vfs.Default, storage.RewriteDir(db)); err != nil || ok {
+				t.Errorf("the copy's directory is still beside the store (%v)", err)
+			}
+			if _, ok, err := InFlight(vfs.Default, state); err != nil || ok {
+				t.Errorf("a swap is still in flight (%v)", err)
+			}
+		})
+	}
+}
+
+// TestRewriteCopyThatWillNotOpenWritableIsSwappedBack (05-storage
+// §5S.3.13 phase 3, 05-backup §5B.3.4 KindRewrite rules): a copy moved into
+// place, which the swap's sidecar step opened, but which the engine cannot
+// reopen writable (its LOCK fails: the one write a Pebble open makes before
+// the first flush) is swapped back at once and the original
+// reopened, so the boot fails with ErrSwappedBack, the journal ends at
+// swapped_back, and the next boot finds the original with every row and
+// M8's record pending, and finishes M8.
+func TestRewriteCopyThatWillNotOpenWritableIsSwappedBack(t *testing.T) {
+	mem := vfs.NewMem()
+	mem.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+	db := dbPathOf("state")
+	m8Store(t, mem, db, 40)
+	// After the copy moves into place the swap's sidecar step opens it (its
+	// first LOCK); the engine's reopen is the second.
+	var mu sync.Mutex
+	placed, locks := false, 0
+	fs, hit := failOnce(mem, func(op errorfs.Op) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if op.Kind == errorfs.OpRename && filepath.Clean(op.Path) == storage.RewriteDir(db) {
+			placed = true
+			return false
+		}
+		if !placed || op.Kind != errorfs.OpLock || filepath.Dir(filepath.Clean(op.Path)) != db {
+			return false
+		}
+		locks++
+		return locks == 2
+	})
+	res := m8Boot(t, fs, db)
+	if !hit() || !errors.Is(res.err, ErrSwappedBack) || !strings.Contains(res.err.Error(), "reopen the copy") {
+		t.Fatalf("the boot whose copy will not open writable = %v (injected %t), want ErrSwappedBack caused by the reopen", res.err, hit())
+	}
+	js, err := newSwapper(t, mem, testBuild, testNow).rewriteJournals("wayne.rewrite")
+	if err != nil || len(js) != 1 || js[0].last != StepSwappedBack {
+		t.Fatalf("journals = %+v, %v; want one ending at swapped_back", js, err)
+	}
+	next := m8Boot(t, mem, db)
+	if next.err != nil || next.runs != 1 || next.tag != "live" || next.rows != 40 || next.genAfter != next.genBefore {
+		t.Fatalf("the boot after the swap-back = %+v, want the original served and M8 finished", next)
+	}
 }
 
 // epochOf is the store generation in c/storage/epoch.

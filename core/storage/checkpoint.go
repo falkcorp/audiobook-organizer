@@ -1,7 +1,7 @@
 // file: core/storage/checkpoint.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 32e3978a-4fec-4d22-bab1-48d0d64226d4
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -139,10 +139,18 @@ type stateFileRecord struct {
 // filesystem ID and the inode), the identity its epoch was read against: with
 // Epoch they name the store the copy came from.
 type checkpointRecord struct {
-	InstallID   string            `json:"install_id"`
-	Epoch       uint64            `json:"epoch"`
-	DirFSID     uint64            `json:"dir_fsid"`
-	DirIno      uint64            `json:"dir_ino"`
+	InstallID string `json:"install_id"`
+	Epoch     uint64 `json:"epoch"`
+	DirFSID   uint64 `json:"dir_fsid"`
+	DirIno    uint64 `json:"dir_ino"`
+	// NextDirFSID and NextDirIno are the identity of M8's copy (05-storage
+	// §5S.3.13), staged by RewriteSwap before the copy moves into place and
+	// promoted to DirFSID/DirIno once it serves: the KindRewrite swap keeps
+	// the generation, so the attempt's checkpoint stays this store's (reused
+	// by a reboot after the swap, served, kept by the sweeper) whichever side
+	// of the swap a kill lands on. Zero when no copy is staged.
+	NextDirFSID uint64            `json:"next_dir_fsid,omitempty"`
+	NextDirIno  uint64            `json:"next_dir_ino,omitempty"`
 	FromVector  vector            `json:"from_vector"`
 	FromRelease string            `json:"from_release"`
 	JournalSeq  uint64            `json:"journal_seq"`
@@ -170,9 +178,17 @@ func (r checkpointRecord) open() bool { return r.pending() && r.ReadyAt == nil }
 // swapped in at the path lands on the same epoch number (neither store has
 // an epoch row yet) but not on the directory's identity, so it never adopts
 // the record's install ID or reuses its checkpoint. Off unix the identity is
-// 0/0 and the match falls back to the epoch alone.
+// 0/0 and the match falls back to the epoch alone. M8's copy, staged as the
+// record's next identity, is the same store in the same generation, so it
+// matches too.
 func (r checkpointRecord) ofStore(e epochRecord) bool {
-	return r.Epoch == e.Epoch && r.DirFSID == e.DirFSID && r.DirIno == e.DirIno
+	if r.Epoch != e.Epoch {
+		return false
+	}
+	if r.DirFSID == e.DirFSID && r.DirIno == e.DirIno {
+		return true
+	}
+	return (r.NextDirFSID != 0 || r.NextDirIno != 0) && r.NextDirFSID == e.DirFSID && r.NextDirIno == e.DirIno
 }
 
 // checkpointPointer is <db path>.migration-checkpoint.
@@ -270,7 +286,11 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 		stateBytes += uint64(fi.Size())
 	}
 	var rewriteBytes uint64
-	if db.planHoldsRewrite() {
+	owed, err := db.rewriteCopyOwed(ctx)
+	if err != nil {
+		return err
+	}
+	if owed {
 		rewriteBytes = storeBytes // M8's copy beside the store (§5S.3.12 "Free space")
 	}
 	need := storeBytes + stateBytes + st.opts.FreeSpaceMargin + rewriteBytes
