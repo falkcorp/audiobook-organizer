@@ -1,5 +1,5 @@
 // file: core/internal/executor/harness_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 55b9c132-7bf2-4ee6-a4eb-7a9f061f9aef
 // last-edited: 2026-11-10
 
@@ -7,6 +7,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -256,3 +257,13 @@ func readyRegistry(t testing.TB) *health.Registry {
 }
 
 func isErr(err, target error) bool { return errors.Is(err, target) }
+
+// resultOf decodes a fixture Task run's string result.
+func resultOf(t testing.TB, r tasks.RunRecord) string {
+	t.Helper()
+	var s string
+	if err := json.Unmarshal(r.Result, &s); err != nil {
+		t.Fatalf("result of %s: %v (%s)", r.ID, err, r.Result)
+	}
+	return s
+}
