@@ -1,7 +1,7 @@
 // file: core/storage/iterator.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c2ad05d0-dbee-4feb-9f79-5b43cf95dcd3
-// last-edited: 2026-11-07
+// last-edited: 2026-11-11
 
 package storage
 
@@ -54,7 +54,7 @@ func (s handleOf) newIterator(ctx context.Context, opts ScanOptions, r reader) (
 			return nil, err
 		}
 		release = rel
-		r = s.db.eng.DB()
+		r = s.db.engine().DB()
 		if s.tx != nil {
 			// A migration reads through its indexed batch, created on first use.
 			if err := s.tx.b.ensure(); err != nil {
@@ -282,7 +282,7 @@ func newSnapshot(s handleOf) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Snapshot{scope: s, snap: s.db.eng.DB().NewSnapshot(), release: release, created: s.db.clock()}, nil
+	return &Snapshot{scope: s, snap: s.db.engine().DB().NewSnapshot(), release: release, created: s.db.clock()}, nil
 }
 
 // errSnapshotClosed: a read on a closed snapshot.

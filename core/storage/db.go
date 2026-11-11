@@ -1,7 +1,7 @@
 // file: core/storage/db.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 30500128-a267-4af7-ba39-fae150d4e708
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storage
 
@@ -87,10 +87,18 @@ type settings struct {
 	shadow        bool
 }
 
+// engine is the DB's current engine (eng): the store's, or after M8's swap
+// the copy's.
+func (db *DB) engine() *ipebble.Engine { return db.eng.Load() }
+
 // DB is the install's single system-of-record store. Only the kernel holds a
 // *DB; everyone else holds Keyspaces and LegacyRanges cut from it.
 type DB struct {
-	eng      *ipebble.Engine
+	// eng is the engine, behind an atomic pointer because M8's swap
+	// (RewriteSwap) replaces it while the boot holds the DB: a reader that
+	// loads it while closed is refused by the lease (closed), and never
+	// sees a torn or stale pointer. Read it through engine().
+	eng      atomic.Pointer[ipebble.Engine]
 	log      *slog.Logger
 	clock    func() time.Time
 	readOnly bool
@@ -497,7 +505,7 @@ func (db *DB) lease() (func(), error) {
 	if db.closed.Load() {
 		return nil, ErrClosed
 	}
-	release, err := db.eng.Lease()
+	release, err := db.engine().Lease()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrClosed, err)
 	}
@@ -512,7 +520,7 @@ func (db *DB) getCommitted(abs []byte) (value []byte, ok bool, err error) {
 		return nil, false, err
 	}
 	defer release()
-	return getFrom(db.eng.DB(), abs)
+	return getFrom(db.engine().DB(), abs)
 }
 
 func getFrom(r reader, abs []byte) ([]byte, bool, error) {
@@ -556,7 +564,7 @@ func (db *DB) Legacy(owner Owner) (LegacyRange, bool) {
 // the error says so; Close may be called again.
 func (db *DB) Close() error {
 	db.closed.Store(true)
-	return db.labelled(labelClose, func() error { return db.eng.Close(db.set.closeTimeout) })
+	return db.labelled(labelClose, func() error { return db.engine().Close(db.set.closeTimeout) })
 }
 
 // commitStripes locks the stripes of the absolute keys (or all of them) in

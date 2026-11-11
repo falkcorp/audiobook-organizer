@@ -1,7 +1,7 @@
 // file: core/storage/admin.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e760c156-0276-4ad3-9f53-76551e9860b5
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package storage
 
@@ -106,7 +106,7 @@ func (a *Admin) Checkpoint(ctx context.Context, dir string) error {
 			// Only a copy checkpointInto made and refused: any other failure
 			// left dir as Pebble left it, which may be a directory the caller
 			// already had.
-			if rerr := a.db.eng.FS().RemoveAll(dir); rerr != nil {
+			if rerr := a.db.engine().FS().RemoveAll(dir); rerr != nil {
 				err = errors.Join(err, fmt.Errorf("storage: remove the refused checkpoint copy %s: %w", dir, rerr))
 			}
 		}
@@ -129,7 +129,7 @@ func (a *Admin) Compact(ctx context.Context, start, end []byte) error {
 		return err
 	}
 	defer release()
-	if err := a.db.eng.DB().Compact(ctx, start, end, true); err != nil {
+	if err := a.db.engine().DB().Compact(ctx, start, end, true); err != nil {
 		return fmt.Errorf("storage: compact: %w", err)
 	}
 	return nil
@@ -158,7 +158,7 @@ func (a *Admin) CompactionStats() CompactionStats {
 		return CompactionStats{Absent: true}
 	}
 	defer release()
-	return compactionStatsFromMetrics(a.db.eng.DB().Metrics())
+	return compactionStatsFromMetrics(a.db.engine().DB().Metrics())
 }
 
 // EngineSample reads the engine's counters for an app's Pebble collector
@@ -171,7 +171,7 @@ func (a *Admin) EngineSample() (EngineSample, error) {
 		return EngineSample{}, err
 	}
 	defer release()
-	return engineSampleFromMetrics(a.db.eng.DB().Metrics()), nil
+	return engineSampleFromMetrics(a.db.engine().DB().Metrics()), nil
 }
 
 // Flush flushes the memtables to sstables, so that table properties and size
@@ -188,7 +188,7 @@ func (a *Admin) Flush(ctx context.Context) error {
 		return err
 	}
 	defer release()
-	if err := a.db.eng.DB().Flush(); err != nil {
+	if err := a.db.engine().DB().Flush(); err != nil {
 		return fmt.Errorf("storage: flush: %w", err)
 	}
 	return nil
@@ -205,7 +205,7 @@ func (a *Admin) EstimateDiskUsage(start, end []byte) (uint64, error) {
 		return 0, err
 	}
 	defer release()
-	n, err := a.db.eng.DB().EstimateDiskUsage(start, end)
+	n, err := a.db.engine().DB().EstimateDiskUsage(start, end)
 	if err != nil {
 		return 0, fmt.Errorf("storage: estimate: %w", err)
 	}
@@ -233,7 +233,7 @@ func (a *Admin) Census(ctx context.Context) ([]CensusEntry, error) {
 		return nil, err
 	}
 	defer release()
-	it, err := db.eng.DB().NewIter(nil)
+	it, err := db.engine().DB().NewIter(nil)
 	if err != nil {
 		return nil, fmt.Errorf("storage: census: %w", err)
 	}
@@ -303,15 +303,16 @@ func (a *Admin) OpenReadOnly(ctx context.Context, dir string) (*ReadOnlyDB, erro
 		return nil, fmt.Errorf("storage: read-only open of %q: not absolute", dir)
 	}
 	src := a.db
-	fs := src.eng.FS()
+	fs := src.engine().FS()
 	eng, err := ipebble.Open(dir, ipebble.Options{FS: fs, ReadOnly: true, ErrorIfNotExists: true, Logger: src.log})
 	if err != nil {
 		return nil, fmt.Errorf("storage: read-only open: %w", err)
 	}
 	db := &DB{
-		eng: eng, log: src.log, clock: src.clock, readOnly: true, set: src.set,
+		log: src.log, clock: src.clock, readOnly: true, set: src.set,
 		owners: src.owners, claims: src.claims,
 	}
+	db.eng.Store(eng)
 	return &ReadOnlyDB{db: db}, nil
 }
 
