@@ -1,11 +1,12 @@
 // file: core/internal/executor/batch_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: ff587c0b-7c81-4a29-8286-03cb21859652
 // last-edited: 2026-11-10
 
 package executor
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -166,12 +167,17 @@ func TestBatch_PartitionItemTimeoutPerItem(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var lateErr error
 		var lateRan atomic.Bool
+		var inFlight, peak atomic.Int64
 		s := tasks.BatchSpec[noParams, string, tasks.Summary]{
 			Common: common("gotham.stakeout"),
 			Source: func(*tasks.RC, noParams) (tasks.Source[string], error) {
 				return tasks.Source[string]{Items: []string{"post-1", "post-2", "post-3"}, Key: func(s string) string { return s }}, nil
 			},
 			Item: func(ic *tasks.ItemRC, _ noParams, post string) error {
+				cur := inFlight.Add(1)
+				defer inFlight.Add(-1)
+				for p := peak.Load(); cur > p && !peak.CompareAndSwap(p, cur); p = peak.Load() {
+				}
 				switch post {
 				case "post-2":
 					<-ic.Context().Done()
@@ -194,6 +200,9 @@ func TestBatch_PartitionItemTimeoutPerItem(t *testing.T) {
 		r := h.get(id)
 		if r.State != tasks.StateSucceeded {
 			t.Fatalf("run %s (%q), want succeeded under BatchContinue", r.State, r.Error)
+		}
+		if peak.Load() != 1 {
+			t.Fatalf("peak concurrency %d inside one partition, want 1", peak.Load())
 		}
 		if !lateRan.Load() || lateErr != nil {
 			t.Fatalf("item 3 ran %v with context error %v, want it started on a live clock of its own", lateRan.Load(), lateErr)
@@ -235,4 +244,104 @@ func TestFixer_ApplyPartitionBy(t *testing.T) {
 	if !slices.Equal(order, inmates) || peak.Load() != 1 {
 		t.Fatalf("applied %v with peak concurrency %d, want %v one at a time", order, peak.Load(), inmates)
 	}
+}
+
+// standsSink is a ChangeSink whose Stands says no for the rows in undone.
+type standsSink struct{ undone map[string]bool }
+
+func (s *standsSink) Record(context.Context, tasks.RunID, []tasks.Change) error { return nil }
+func (s *standsSink) Stands(_ context.Context, _ tasks.RunID, row string) (bool, error) {
+	return !s.undone[row], nil
+}
+
+// TestFixer_ResumedApplyReportsStandingRows (5T.3.7; HEAD's
+// appliedByEarlierAttempt): after a crash mid-apply, the resumed attempt
+// reports the rows the first attempt applied (their marks) in AfterApply and
+// Applied without writing them again, unless the module's ChangeSink says a
+// row's changes no longer stand: that row is skipped, not re-applied.
+func TestFixer_ResumedApplyReportsStandingRows(t *testing.T) {
+	for _, undone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stands", true: "undone"}[undone], func(t *testing.T) {
+			log := &applyLog{}
+			reached := make(chan struct{})
+			var once sync.Once
+			var amu sync.Mutex
+			var after []string
+			edit := func(blocking bool) fixerEdit {
+				return func(s *tasks.FixerSpec[noParams, string]) {
+					s.Apply = func(ic *tasks.ItemRC, _ tasks.Writer, _ noParams, row tasks.Row) error {
+						if blocking && row.ID == "penguin" {
+							once.Do(func() { close(reached) })
+							<-ic.Context().Done()
+							return ic.Context().Err()
+						}
+						log.add(row.ID)
+						return nil
+					}
+					s.AfterApply = func(_ *tasks.RC, applied []string) error {
+						amu.Lock()
+						after = slices.Clone(applied)
+						amu.Unlock()
+						return nil
+					}
+				}
+			}
+			sink := &standsSink{undone: map[string]bool{"joker": undone}}
+			withSink := func(o *Options) {
+				withPrincipal(o)
+				o.ChangeSinks = map[string]tasks.ChangeSink{"arkham": sink}
+			}
+			h := newHarness(t, []tasks.Definition{fixerDef(log, edit(true))}, withSink)
+			plan := h.plan()
+			if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun), plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
+				t.Fatalf("approve: %v", err)
+			}
+			apply := h.onlyApplyRun(plan).ID
+			<-reached
+			deadline := time.Now().Add(10 * time.Second)
+			for !h.marked(apply, "joker") {
+				if time.Now().After(deadline) {
+					t.Fatal("the first attempt never marked joker applied")
+				}
+				time.Sleep(2 * time.Millisecond)
+			}
+			next := h.crashBoot([]tasks.Definition{fixerDef(log, edit(false))}, withSink)
+			r := next.waitState(apply, tasks.StateSucceeded)
+			want := []string{"joker", "penguin", "riddler"}
+			if undone {
+				want = want[1:]
+			}
+			amu.Lock()
+			got := slices.Clone(after)
+			amu.Unlock()
+			if !slices.Equal(got, want) || result(t, r).Applied != len(want) {
+				t.Fatalf("AfterApply %v, result %+v, want %v", got, result(t, r), want)
+			}
+			log.mu.Lock()
+			jokers := 0
+			for _, id := range log.ids {
+				if id == "joker" {
+					jokers++
+				}
+			}
+			log.mu.Unlock()
+			if jokers != 1 {
+				t.Fatalf("joker applied %d times, want once (the resume never writes a marked row again)", jokers)
+			}
+		})
+	}
+}
+
+// marked reports whether the run carries row's applied mark.
+func (h *harness) marked(id tasks.RunID, row string) bool {
+	h.t.Helper()
+	for m, err := range h.stores.Runs.Marks(context.Background(), id) {
+		if err != nil {
+			h.t.Fatalf("marks: %v", err)
+		}
+		if m == row {
+			return true
+		}
+	}
+	return false
 }
