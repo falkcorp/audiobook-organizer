@@ -1,5 +1,5 @@
 // file: core/config/precedence_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0f72db87-b1b3-4bcb-9393-6594c50533ca
 // last-edited: 2026-11-11
 
@@ -25,6 +25,7 @@ import (
 // owners give them (05-authn §8, 05-http-api §10).
 type authFix struct {
 	Mode string `json:"mode" reload:"restart" protect:"owner" schema:"enum=required|disabled"`
+	Note int    `json:"note" schema:"maximum=50"`
 }
 
 type gateFix struct {
@@ -659,8 +660,24 @@ func TestFailClosed_SurvivesSectionQuarantine(t *testing.T) {
 		if err := r.st.Load(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.st.Attach(ctx, r.mem, r.cm); !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), string(kGate)) {
-			t.Errorf("Attach err = %v, want ErrInvalid naming %s", err, kGate)
+		if _, err := r.st.Attach(ctx, r.mem, r.cm); !errors.Is(err, config.ErrInvalid) || !strings.Contains(err.Error(), "the fail-closed key "+string(kGate)) {
+			t.Errorf("Attach err = %v, want ErrInvalid naming the fail-closed key %s", err, kGate)
+		}
+	})
+	t.Run("a stored default beats a weaker operator value", func(t *testing.T) {
+		// core.auth.mode stored "required" (the default) against env
+		// disabled: stricter than the operator value, so kept.
+		r := fcRig(t, []string{"GOTHAM_CORE_AUTH_MODE=disabled"}, "", map[config.Path]string{kAuthMode: `"required"`, "core.auth.note": "99"})
+		rep := r.start()
+		if ks := r.lookup(kAuthMode); string(ks.Effective) != `"required"` || rep.FailClosed[kAuthMode] == "" {
+			t.Errorf("auth mode %s, FailClosed %v: the sibling's quarantine let the env turn sign-in off", ks.Effective, rep.FailClosed)
+		}
+	})
+	t.Run("a row no stricter than the operator value is quarantined", func(t *testing.T) {
+		r := fcRig(t, []string{"GOTHAM_CORE_HTTP_BASIC_GATE_ENABLED=true"}, "", map[config.Path]string{kGate: "true", kN: `"robin"`})
+		rep := r.start()
+		if _, q := rep.Quarantined[kGate]; !q {
+			t.Errorf("Quarantined = %v: a row equal to the operator value stays in play", rep.Quarantined)
 		}
 	})
 }

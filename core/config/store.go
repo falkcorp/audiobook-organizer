@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-11
 
@@ -707,9 +707,6 @@ func (s *Store) Attach(ctx context.Context, o OverrideStore, c Committer) (Attac
 			continue
 		}
 		v, err := ck.k.canonical(p, rows[p].Value)
-		if err == nil && ck.k.failOrder != nil && ck.k.failRank(v) == len(ck.k.failOrder) {
-			err = errors.New("a value outside the key's declared order") // Register makes the order list every allowed value
-		}
 		if err != nil && ck.k.failOrder != nil {
 			// A FailClosed key's row that does not decode cannot be weighed
 			// against the operator value, and dropping it could open what an
