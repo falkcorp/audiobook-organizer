@@ -1,5 +1,5 @@
 // file: core/integrations/fields.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: cbc1be32-ff91-4789-be1d-70da64f29e97
 // last-edited: 2026-11-11
 
@@ -229,24 +229,31 @@ func analyze(s config.Schema) (fieldSet, error) {
 	return fs, nil
 }
 
-// destinationWords are the name parts that read as a destination, with
-// their plurals: where a request goes (url, endpoint, webhook, server, proxy)
-// or what a dialer is given (host, address, port).
-var destinationWords = map[string]bool{
-	"url": true, "urls": true, "uri": true, "uris": true,
-	"endpoint": true, "endpoints": true, "host": true, "hosts": true,
-	"hostname": true, "hostnames": true, "webhook": true, "webhooks": true,
-	"href": true, "hrefs": true, "server": true, "servers": true,
-	"proxy": true, "proxies": true, "address": true, "addresses": true,
-	"addr": true, "addrs": true, "port": true, "ports": true,
+// destinationWord reports a name part that reads as a destination, plurals
+// included: where a request goes (url, endpoint, webhook, server, proxy) or
+// what a dialer is given (host, address, port).
+func destinationWord(part string) bool {
+	switch part {
+	case "url", "urls", "uri", "uris",
+		"endpoint", "endpoints",
+		"host", "hosts", "hostname", "hostnames",
+		"webhook", "webhooks", "href", "hrefs",
+		"server", "servers",
+		"proxy", "proxies",
+		"address", "addresses",
+		"addr", "addrs",
+		"port", "ports":
+		return true
+	}
+	return false
 }
 
 // urlLike reports a property name that reads as a destination: a name, or
-// a '_'/'-' separated part of one, that is one of destinationWords, or that
-// ends in "url" or "uri" (baseurl, webhookurl, plurals included).
+// a '_'/'-' separated part of one, that is a destinationWord, or that ends
+// in "url" or "uri" (baseurl, webhookurl, plurals included).
 func urlLike(name string) bool {
 	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '_' || r == '-' }) {
-		if destinationWords[part] {
+		if destinationWord(part) {
 			return true
 		}
 		if p := strings.TrimSuffix(part, "s"); strings.HasSuffix(p, "url") || strings.HasSuffix(p, "uri") {

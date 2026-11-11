@@ -1,5 +1,5 @@
 // file: core/integrations/origin_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 394052ef-66a7-48bf-a8f2-6fb61af1e689
 // last-edited: 2026-11-11
 
