@@ -195,10 +195,6 @@ func TestFailClosed_MoreRestrictiveWins(t *testing.T) {
 // under env for a boot key, and a stored restart value under env: the
 // effective value, its Source and LockedBy.
 func TestPrecedence_Matrix(t *testing.T) {
-	type layer struct {
-		on  bool
-		val string
-	}
 	for mask := range 16 {
 		file, env, flag, row := mask&1 != 0, mask&2 != 0, mask&4 != 0, mask&8 != 0
 		t.Run(fmt.Sprintf("file=%v,env=%v,flag=%v,row=%v", file, env, flag, row), func(t *testing.T) {

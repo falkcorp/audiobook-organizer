@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -142,10 +143,7 @@ func TestEnvName_Derivation(t *testing.T) {
 	if got := r.cave.Get().Level; got != "info" {
 		t.Errorf("level = %s: a lower-case name was read", got)
 	}
-	pv := map[config.Path]config.OperatorValue{}
-	for p, v := range r.st.PassthroughValues() {
-		pv[p] = v
-	}
+	pv := maps.Collect(r.st.PassthroughValues())
 	if v := pv[ptAPIKey]; string(v.Value) != `"lucius"` || v.By != "env GOTHAM_INTEGRATIONS_AI_WAYNE_API_KEY" || v.Src != config.SourceEnv {
 		t.Errorf("passthrough %s = %+v", ptAPIKey, v)
 	}
