@@ -1,7 +1,7 @@
 // file: core/kernel/restore_hooks.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b84e1f27-6c93-4d05-8a7e-2f1d9c3b5e60
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -53,8 +53,13 @@ type hookEnv struct {
 	// restore (§5B.3.6 (3), DATA8-7).
 	Journal journal.RevocationJournal
 	// RestoreSeq is the seq of the restore line the run belongs to (0 when the
-	// journal could not take the line): audit's idempotency key.
+	// journal could not take the line): audit's idempotency key while it is not 0.
 	RestoreSeq uint64
+	// RunKey is the stored ID of this run of the hooks when there is no restore
+	// line to key on (RestoreSeq 0); empty otherwise. Seq 0 stands for "no line",
+	// not for one restore, so two such runs must not share a key: audit would
+	// take the second for a re-run of the first and write none of its records.
+	RunKey string
 	// Previous is the pre-swap store; nil when there was none (host loss, an
 	// external replacement, a HooksOwed run).
 	Previous previousView
@@ -144,7 +149,16 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 		}
 	}
 	if !done {
-		if res.Counts, err = in.run(ctx, &res.Report); err != nil {
+		// A run with no restore line has nothing to tell it from another such run
+		// (audit's idempotency key): it gets an ID that a crash and re-run of the
+		// same hooks find again, and that is gone once the run has finished.
+		runKey := ""
+		if r.RestoreLine == 0 {
+			if runKey, err = journal.EnsureHookRun(ctx, in.KS, in.now()); err != nil {
+				return res, fmt.Errorf("kernel: record the restore hooks' run ID: %w", err)
+			}
+		}
+		if res.Counts, err = in.run(ctx, &res.Report, runKey); err != nil {
 			return res, err
 		}
 		res.Ran = true
@@ -188,6 +202,16 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 			return res, fmt.Errorf("kernel: journal applied: %w", err)
 		}
 	}
+	// The run is over, so its ID goes: the next run with no restore line is a
+	// different restore. This is last on purpose; cleared before the markers, a
+	// crash would re-run the hooks under a new ID and write audit's records twice.
+	// Crashing between the markers and here leaves an ID behind that the next
+	// restore's store replaces (a restore swaps the whole store in).
+	if r.RestoreLine == 0 {
+		if err := journal.ClearHookRun(ctx, in.KS); err != nil {
+			return res, fmt.Errorf("kernel: clear the restore hooks' run ID: %w", err)
+		}
+	}
 	in.Journal.SetFrozen(false)
 	return res, nil
 }
@@ -216,7 +240,7 @@ func (in restoreHooksInput) writeMarkers(ctx context.Context) error {
 }
 
 // run builds the RestoreContext and runs the hooks in order.
-func (in restoreHooksInput) run(ctx context.Context, report *hookReport) (map[string]int, error) {
+func (in restoreHooksInput) run(ctx context.Context, report *hookReport, runKey string) (map[string]int, error) {
 	var prev previousView
 	if rb := in.Restore; rb != nil && rb.PreSwapDir != "" {
 		if in.OpenPrevious == nil {
@@ -238,7 +262,7 @@ func (in restoreHooksInput) run(ctx context.Context, report *hookReport) (map[st
 	if err != nil {
 		return nil, err
 	}
-	hooks, err := in.Hooks(hookEnv{Journal: stampRestore{in.Journal, in.Result.RestoreLine}, RestoreSeq: in.Result.RestoreLine, Previous: prev, Report: report})
+	hooks, err := in.Hooks(hookEnv{Journal: stampRestore{in.Journal, in.Result.RestoreLine}, RestoreSeq: in.Result.RestoreLine, RunKey: runKey, Previous: prev, Report: report})
 	if err != nil {
 		return nil, fmt.Errorf("kernel: build the restore hooks: %w", err)
 	}
@@ -453,7 +477,7 @@ func restoreHookList(s hookStores) func(env hookEnv) ([]journal.RestoreHook, err
 				env.Report.add(rep.KeptAdmins, rep.AdminsToReview)
 				return rep.Counts, nil
 			},
-			audit.RestoreHook(audit.RestoreDeps{Store: s.Audit, RestoreSeq: env.RestoreSeq, Log: s.Log}),
+			audit.RestoreHook(audit.RestoreDeps{Store: s.Audit, RestoreSeq: env.RestoreSeq, RunKey: env.RunKey, Log: s.Log}),
 		}, nil
 	}
 }
