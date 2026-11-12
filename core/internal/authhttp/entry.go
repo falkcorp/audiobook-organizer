@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/entry.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f6a8c41-9e03-4b75-a7d8-1c5b0e93f4a6
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -108,7 +109,7 @@ func (a *api) login(w http.ResponseWriter, r *http.Request, _ *auth.Principal) e
 	if err != nil {
 		return a.fail(r.Context(), specLogin(), nil, "", err)
 	}
-	writeSession(w, a.Cookies.SessionCookie(c, is.Token, is.ExpiresAt), SessionOpened{PublicID: is.PublicID, ExpiresAt: is.ExpiresAt})
+	a.writeSession(w, r, a.Cookies.SessionCookie(c, is.Token, is.ExpiresAt), SessionOpened{PublicID: is.PublicID, ExpiresAt: is.ExpiresAt})
 	return nil
 }
 
@@ -140,7 +141,7 @@ func (a *api) inviteAccept(w http.ResponseWriter, r *http.Request, _ *auth.Princ
 		return a.linkFail(r.Context(), specInviteAccept(), err)
 	}
 	ub := userBody(u)
-	writeSession(w, a.Cookies.SessionCookie(c, is.Token, is.ExpiresAt), SessionOpened{PublicID: is.PublicID, ExpiresAt: is.ExpiresAt, User: &ub})
+	a.writeSession(w, r, a.Cookies.SessionCookie(c, is.Token, is.ExpiresAt), SessionOpened{PublicID: is.PublicID, ExpiresAt: is.ExpiresAt, User: &ub})
 	return nil
 }
 
@@ -155,20 +156,20 @@ func (a *api) tempLoginConsume(w http.ResponseWriter, r *http.Request, _ *auth.P
 	if err != nil {
 		return a.linkFail(r.Context(), specTempLoginConsume(), err)
 	}
-	writeSession(w, a.Cookies.SessionCookie(c, is.Token, is.ExpiresAt), SessionOpened{PublicID: is.PublicID, ExpiresAt: is.ExpiresAt})
+	a.writeSession(w, r, a.Cookies.SessionCookie(c, is.Token, is.ExpiresAt), SessionOpened{PublicID: is.PublicID, ExpiresAt: is.ExpiresAt})
 	return nil
 }
 
 // writeSession answers a handler that opened a session: the cookie, no-store
 // (the response sets a credential), and the JSON body.
-func writeSession(w http.ResponseWriter, cookie *http.Cookie, body SessionOpened) {
+func (a *api) writeSession(w http.ResponseWriter, r *http.Request, cookie *http.Cookie, body SessionOpened) {
 	http.SetCookie(w, cookie)
-	writeJSON(w, http.StatusOK, body)
+	a.writeJSON(w, r, http.StatusOK, body)
 }
 
 // writeJSON writes a credential-bearing response: never cacheable, never
 // sniffed.
-func writeJSON(w http.ResponseWriter, status int, v any) {
+func (a *api) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
 	var sb strings.Builder
 	enc := json.NewEncoder(&sb)
 	enc.SetEscapeHTML(false)
@@ -181,7 +182,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(sb.String()))
+	if _, err := w.Write([]byte(sb.String())); err != nil {
+		// The status line is out; the client went away mid-body.
+		a.log.DebugContext(r.Context(), "authhttp: the response body was not delivered", slog.Any("error", err))
+	}
 }
 
 func specStatus() spec {

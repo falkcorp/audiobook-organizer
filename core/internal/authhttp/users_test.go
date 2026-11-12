@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/users_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 48b2d7f1-6e03-4c59-a1d4-9c5e30b7f862
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -15,7 +15,6 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
-	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -119,15 +118,15 @@ func TestUsers_ListAndReadCarryNoCredentialState(t *testing.T) {
 	_, err := call(specUsers(), a.users, selina, usersReq{})
 	wantErr(t, err, http.StatusForbidden, "permission_denied")
 	gordon := e.session(f.gordon)
-	page, err := call(specUsers(), a.users, gordon, usersReq{PageParams: httpapi.PageParams{Limit: 2}})
+	page, err := call(specUsers(), a.users, gordon, usersReq{Limit: 2})
 	if err != nil || page.Total != 4 || page.Count != 2 {
 		t.Fatalf("%+v %v", page, err)
 	}
-	page, err = call(specUsers(), a.users, gordon, usersReq{Role: string(rbac.RoleAdmin), PageParams: httpapi.PageParams{Limit: 50}})
+	page, err = call(specUsers(), a.users, gordon, usersReq{Role: string(rbac.RoleAdmin), Limit: 50})
 	if err != nil || page.Total != 1 || page.Items[0].Username != "bruce" {
 		t.Fatalf("role filter: %+v %v", page, err)
 	}
-	page, err = call(specUsers(), a.users, gordon, usersReq{Status: "disabled", PageParams: httpapi.PageParams{Limit: 50}})
+	page, err = call(specUsers(), a.users, gordon, usersReq{Status: "disabled", Limit: 50})
 	if err != nil || page.Total != 0 || page.Items == nil {
 		t.Fatalf("status filter: %+v %v", page, err)
 	}
@@ -154,7 +153,7 @@ func TestInvites_CreateListDeleteAndCanAssign(t *testing.T) {
 	if token == created.Body.Link || token == "" || !strings.HasSuffix(created.Location, created.Body.Invite.ID) {
 		t.Fatalf("%+v", created)
 	}
-	page, err := call(specInvites(), a.invites, gordon, listReq{PageParams: httpapi.PageParams{Limit: 50}})
+	page, err := call(specInvites(), a.invites, gordon, listReq{Limit: 50})
 	if err != nil || page.Total != 1 {
 		t.Fatalf("%+v %v", page, err)
 	}
@@ -187,7 +186,7 @@ func TestUserSessions_ListAndRevokeNeedDominanceAndMembership(t *testing.T) {
 	_, dicks := e.withSession(f.dick)
 	_, brucesS := e.withSession(f.bruce)
 	gordon := e.session(f.gordon)
-	page, err := call(specUserSessions(), a.userSessions, gordon, userSessionsReq{ID: string(f.dick.ID), PageParams: httpapi.PageParams{Limit: 50}})
+	page, err := call(specUserSessions(), a.userSessions, gordon, userSessionsReq{ID: string(f.dick.ID), Limit: 50})
 	if err != nil || page.Total != 1 || page.Items[0].PublicID != dicks.PublicID {
 		t.Fatalf("%+v %v", page, err)
 	}

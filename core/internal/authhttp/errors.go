@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/errors.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e91b6c3-0d27-4a58-9f3e-b8c71d5a2e04
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -42,8 +42,7 @@ func notFound() *httpapi.Error {
 // and withheld. s and target identify the dominance refusal for its audit
 // line (target is the user acted on, "" when not known).
 func (a *api) fail(ctx context.Context, s spec, p *auth.Principal, target string, err error) error {
-	var he *httpapi.Error
-	if errors.As(err, &he) {
+	if he, ok := errors.AsType[*httpapi.Error](err); ok {
 		return he
 	}
 	var thr *auth.ThrottledError

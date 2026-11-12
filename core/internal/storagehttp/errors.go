@@ -1,7 +1,7 @@
 // file: core/internal/storagehttp/errors.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f79b3917-b15b-4227-afd0-b62c9c801761
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package storagehttp
 
@@ -43,7 +43,7 @@ func (pb *problemBody) Error() string { return "storagehttp: " + pb.Code }
 
 // problem builds a *problemBody.
 func problem(status int, code, detail string, fields ...httpapi.FieldError) *problemBody {
-	return &problemBody{Problem: httpapi.Problem{Status: status, Code: code, Detail: detail, Errors: fields}}
+	return &problemBody{Status: status, Code: code, Detail: detail, Errors: fields}
 }
 
 // writeProblem completes pb as httpapi's writeProblem does (type, title,

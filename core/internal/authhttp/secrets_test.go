@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/secrets_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a5d3e816-4c27-4b90-b8e2-7f61c09d4a35
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -58,8 +58,7 @@ func TestSubmittedSecretsAreNeverEchoedOrLogged(t *testing.T) {
 		t.Fatal("a wrong current password changed the password")
 	}
 	bodies = append(bodies, err.Error())
-	var he *httpapi.Error
-	if errors.As(err, &he) {
+	if he, ok := errors.AsType[*httpapi.Error](err); ok {
 		bodies = append(bodies, he.Detail, he.Code)
 		for _, f := range he.Fields {
 			bodies = append(bodies, f.Field, f.Message, f.Code)

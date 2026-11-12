@@ -1,16 +1,20 @@
 // file: core/internal/authhttp/keys_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e1a47c60-3b92-4d58-8c0f-52f9b6d1a734
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -124,7 +128,7 @@ func TestKeyByID_WritesNeedDominanceAndAreAudited(t *testing.T) {
 
 func TestAllKeys_EveryOwnersKeysWithTheirUsernamesAndNoSecret(t *testing.T) {
 	f := newKeysFx(t)
-	page, err := call(specKeysAll(), f.a.allKeys, f.e.session(f.gordon), listReq{PageParams: httpapi.PageParams{Limit: 50}})
+	page, err := call(specKeysAll(), f.a.allKeys, f.e.session(f.gordon), listReq{Limit: 50})
 	if err != nil || page.Total != 2 {
 		t.Fatalf("%+v %v", page, err)
 	}
@@ -145,7 +149,7 @@ func TestUserKeys_ListAndMintForADominatedUserOnly(t *testing.T) {
 	f := newKeysFx(t)
 	a, e := f.a, f.e
 	gordon := e.session(f.gordon)
-	page, err := call(specUserKeys(), a.userKeys, gordon, userKeysReq{ID: string(f.dick.ID), PageParams: httpapi.PageParams{Limit: 50}})
+	page, err := call(specUserKeys(), a.userKeys, gordon, userKeysReq{ID: string(f.dick.ID), Limit: 50})
 	if err != nil || page.Total != 1 || page.Items[0].OwnerUsername != "dick" {
 		t.Fatalf("%+v %v", page, err)
 	}
@@ -201,5 +205,55 @@ func TestUserKeyCreate_ValidateRefusesWhatMeRefuses(t *testing.T) {
 	}
 	if err := (&userKeyCreateReq{ID: "u-dick", Body: KeyCreate{Name: "n", Scopes: []string{"gotham:patrol"}, ExpiresIn: "24h"}}).Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestKeySpec_RefusesABadExpiryItself: Validate refuses a bad expiry first,
+// but keySpec must not turn an unparseable one into the zero that means "the
+// default lifetime"; it answers the same 422 on its own.
+func TestKeySpec_RefusesABadExpiryItself(t *testing.T) {
+	for _, bad := range []string{"soon", "-1h", "0s"} {
+		_, err := KeyCreate{Name: "batphone", Scopes: []string{"core:self"}, ExpiresIn: bad}.keySpec("u-bruce")
+		if _, ok := errors.AsType[*httpapi.Error](err); !ok {
+			t.Errorf("expires_in %q: err = %v, want a validation problem", bad, err)
+		}
+	}
+	ks, err := KeyCreate{Name: "batphone", Scopes: []string{"core:self"}, ExpiresIn: "720h"}.keySpec("u-bruce")
+	if err != nil || ks.ExpiresIn != 720*time.Hour || ks.Owner != "u-bruce" {
+		t.Fatalf("keySpec = %+v, %v", ks, err)
+	}
+}
+
+// TestInviteCreate_RefusesABadTTLItself is the same rule for an invite's TTL.
+func TestInviteCreate_RefusesABadTTLItself(t *testing.T) {
+	f := newKeysFx(t)
+	_, err := call(specInviteNew(), f.a.createInvite, f.e.session(f.gordon), inviteCreateReq{Body: InviteCreate{Username: "barbara", Role: string(rbac.RoleViewer), TTL: "tomorrow"}})
+	if _, ok := errors.AsType[*httpapi.Error](err); !ok {
+		t.Fatalf("err = %v, want a validation problem", err)
+	}
+}
+
+// brokenBody is a ResponseWriter whose body write fails: the client went away
+// after the status line.
+type brokenBody struct{ h http.Header }
+
+func (b *brokenBody) Header() http.Header       { return b.h }
+func (b *brokenBody) WriteHeader(int)           {}
+func (b *brokenBody) Write([]byte) (int, error) { return 0, errors.New("client went away") }
+
+// TestWriteJSON_ALostClientIsLoggedNotSilent: a body that cannot be delivered
+// is logged at debug, and never panics or rewrites the status.
+func TestWriteJSON_ALostClientIsLoggedNotSilent(t *testing.T) {
+	f := newKeysFx(t)
+	var logs strings.Builder
+	a := *f.a
+	a.log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	a.writeJSON(&brokenBody{h: http.Header{}}, r, http.StatusOK, map[string]string{"ok": "yes"})
+	if !strings.Contains(logs.String(), "not delivered") {
+		t.Fatalf("log = %q", logs.String())
+	}
+	if strings.Contains(logs.String(), "yes") {
+		t.Fatalf("the body reached the log: %q", logs.String())
 	}
 }

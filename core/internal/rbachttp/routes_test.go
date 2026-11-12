@@ -1,7 +1,7 @@
 // file: core/internal/rbachttp/routes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 695e783a-feeb-4b32-97d7-a73f62a146d2
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package rbachttp
 
@@ -306,7 +306,7 @@ func TestCreateRole_ScopeEscalation(t *testing.T) {
 	lucius := svc.principal(auth.MethodSession, "custom.lucius")
 
 	// He can still list and read roles.
-	if _, err := a.list(ctx, in(lucius, listReq{PageParams: httpapi.PageParams{Limit: 50}})); err != nil {
+	if _, err := a.list(ctx, in(lucius, listReq{Limit: 50})); err != nil {
 		t.Fatalf("list as lucius: %v", err)
 	}
 	_, err := a.create(ctx, in(lucius, createReq{Body: RbacRoleCreate{Name: "custom.joker", Title: "Joker", Permissions: []string{"gotham:signal"}}}))
@@ -327,7 +327,7 @@ func TestCreateRole_ScopeEscalation(t *testing.T) {
 func TestListRoles_RealService(t *testing.T) {
 	ctx := context.Background()
 	a, svc := realAPI(t)
-	page, err := a.list(ctx, in(svc.admin(), listReq{PageParams: httpapi.PageParams{Limit: 50}}))
+	page, err := a.list(ctx, in(svc.admin(), listReq{Limit: 50}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -748,7 +748,7 @@ func TestList_PagesAndSkipsUndecodable(t *testing.T) {
 	}}
 	a := &api{roles: f, log: slog.New(slog.NewTextHandler(&logs, nil)), base: "/api/core/v1"}
 
-	got, err := a.list(ctx, in(p, listReq{PageParams: httpapi.PageParams{Limit: 2, Offset: 3}}))
+	got, err := a.list(ctx, in(p, listReq{Limit: 2, Offset: 3}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -759,12 +759,12 @@ func TestList_PagesAndSkipsUndecodable(t *testing.T) {
 		t.Errorf("the skipped row was not logged: %q", logs.String())
 	}
 	// Past the end: an empty page, items [] not null.
-	got, err = a.list(ctx, in(p, listReq{PageParams: httpapi.PageParams{Limit: 10, Offset: 99}}))
+	got, err = a.list(ctx, in(p, listReq{Limit: 10, Offset: 99}))
 	if err != nil || got.Items == nil || len(got.Items) != 0 || got.Total != 5 {
 		t.Errorf("past the end = %+v, %v", got, err)
 	}
 	// A negative offset or an oversize limit cannot panic a slice.
-	if _, err := a.list(ctx, in(p, listReq{PageParams: httpapi.PageParams{Limit: 1 << 30, Offset: -4}})); err != nil {
+	if _, err := a.list(ctx, in(p, listReq{Limit: 1 << 30, Offset: -4})); err != nil {
 		t.Errorf("unnormalised params: %v", err)
 	}
 
@@ -773,7 +773,7 @@ func TestList_PagesAndSkipsUndecodable(t *testing.T) {
 	f.rows = func(yield func(*rbac.Role, error) bool) {
 		yield(nil, errors.New("pebble: corrupt block at /var/lib/gotham"))
 	}
-	_, err = a.list(ctx, in(p, listReq{PageParams: httpapi.PageParams{Limit: 50}}))
+	_, err = a.list(ctx, in(p, listReq{Limit: 50}))
 	wantStatus(t, err, http.StatusServiceUnavailable, "unavailable")
 	if strings.Contains(errBlob(t, err), "pebble") || strings.Contains(errBlob(t, err), "/var/lib") {
 		t.Errorf("503 carries the cause: %s", errBlob(t, err))
