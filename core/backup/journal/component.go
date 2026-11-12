@@ -1,5 +1,5 @@
 // file: core/backup/journal/component.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3d9f6a0-71e4-4a52-8b0d-6f2e91a4c7b5
 // last-edited: 2026-11-11
 
@@ -220,12 +220,28 @@ func (c *Component) WriteLine(ctx context.Context, r Revocation) (Pending, error
 	return f.WriteLine(ctx, r)
 }
 
-// Refuse makes the bound file fail every later append with err (File.Refuse):
-// before Bind it does nothing. The boot uses it when the store's head must not
-// be moved past a line it left unapplied.
+// Refuse makes the bound file fail every later append with err (File.Refuse),
+// for good: before Bind it does nothing. The boot uses it when the store's head
+// must not be moved past a line it left unapplied.
 func (c *Component) Refuse(err error) {
 	if f := c.current(); f != nil {
 		f.Refuse(err)
+	}
+}
+
+// Hold makes the bound file fail every later append with err until Resume
+// (File.Hold): before Bind it does nothing. The boot holds the journal while a
+// replaced store's head waits for its hooks.
+func (c *Component) Hold(err error) {
+	if f := c.current(); f != nil {
+		f.Hold(err)
+	}
+}
+
+// Resume lifts a Hold (File.Resume). A Refuse and a break stay.
+func (c *Component) Resume() {
+	if f := c.current(); f != nil {
+		f.Resume()
 	}
 }
 

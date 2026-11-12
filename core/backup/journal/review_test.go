@@ -1,5 +1,5 @@
 // file: core/backup/journal/review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8a1c75-9d24-4f60-8b13-a5c7e2d09f48
 // last-edited: 2026-11-11
 
@@ -147,6 +147,114 @@ func TestFile_RefuseKeepsTheFirstFailure(t *testing.T) {
 	}
 	if st := j.Status(); !errors.Is(st.Broken, first) {
 		t.Errorf("Status().Broken = %v, want the first error", st.Broken)
+	}
+}
+
+// TestFile_HoldIsLiftedByResumeButNotABreakOrARefusal: a Hold is the refusal
+// that ends (a replaced store's head waits for its hooks), so Resume lifts it
+// and the journal takes lines again; a Refuse (a line this build cannot apply)
+// and a broken open outlast it, and Hold(nil) holds nothing.
+func TestFile_HoldIsLiftedByResumeButNotABreakOrARefusal(t *testing.T) {
+	ctx := context.Background()
+	line := func(j *File) error {
+		_, err := j.WriteLine(ctx, GapLine(time.Now(), GapAppendFailed))
+		return err
+	}
+	held, refused := errors.New("the hooks have not run"), errors.New("a newer build wrote a line this one cannot apply")
+
+	fx := newFixture(t)
+	j := fx.open(t)
+	j.Hold(nil)
+	if err := line(j); err != nil {
+		t.Fatalf("after Hold(nil): %v", err)
+	}
+	j.Hold(held)
+	j.Hold(errors.New("a second hold"))
+	if err := line(j); !errors.Is(err, held) {
+		t.Fatalf("held: %v, want the first hold's error", err)
+	}
+	if st := j.Status(); !errors.Is(st.Broken, held) {
+		t.Errorf("Status().Broken = %v while held, want the hold's error (health says unwritable)", st.Broken)
+	}
+	b := fx.auth.NewBatch()
+	if err := j.Append(ctx, b, Revocation{Kind: UserDisabled}); !errors.Is(err, held) {
+		t.Errorf("Append while held = %v, want the hold's error", err)
+	}
+	_ = b.Close()
+	j.Resume()
+	if err := line(j); err != nil {
+		t.Errorf("after Resume: %v", err)
+	}
+	if st := j.Status(); st.Broken != nil {
+		t.Errorf("Status().Broken = %v after Resume", st.Broken)
+	}
+
+	j.Hold(held)
+	j.Refuse(refused)
+	j.Resume()
+	if err := line(j); !errors.Is(err, refused) {
+		t.Errorf("after Resume of a hold that a Refuse outlasts: %v, want the refusal", err)
+	}
+
+	fx2 := newFixture(t)
+	fx2.write(t, "this is not a journal line")
+	broken, err := OpenFile(ctx, fx2.opts())
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("OpenFile = %v, want ErrCorrupt", err)
+	}
+	defer func() { must(t, broken.Close()) }()
+	broken.Hold(held)
+	broken.Resume()
+	if err := line(broken); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("a broken File after Hold and Resume: %v, want ErrCorrupt", err)
+	}
+
+	c := fx.component(t)
+	c.Hold(held) // before Bind: nothing to hold
+	c.Resume()
+}
+
+// TestReadFile_OverTheSizeCapIsCorrupt: the journal is read into memory whole,
+// so a file past maxJournalBytes is refused by its size, before any of it is
+// read, for the reader and for the writer's open alike.
+func TestReadFile_OverTheSizeCapIsCorrupt(t *testing.T) {
+	fx := newFixture(t)
+	must(t, os.MkdirAll(filepath.Dir(fx.path), 0o700))
+	f, err := os.Create(fx.path)
+	must(t, err)
+	must(t, f.Truncate(maxJournalBytes+1)) // sparse: nothing is written
+	must(t, f.Close())
+	if _, err := ReadFile(fx.path, fx.keys); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("ReadFile of a file over the cap = %v, want ErrCorrupt", err)
+	}
+	j, err := OpenFile(context.Background(), fx.opts())
+	if !errors.Is(err, ErrCorrupt) || j == nil {
+		t.Fatalf("OpenFile of a file over the cap = %v, %v, want a broken File and ErrCorrupt", j, err)
+	}
+	must(t, j.Close())
+}
+
+// TestReadLimited: the limit holds by the size alone and again while reading
+// (a file that grew after it was measured).
+func TestReadLimited(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		body        string
+		size, limit int64
+		ok          bool
+	}{
+		{"within", "0123456789", 10, 10, true},
+		{"measured over", "0123456789a", 11, 10, false},
+		{"grew while read", strings.Repeat("x", 20), 0, 10, false},
+		{"empty", "", 0, 10, true},
+	} {
+		got, err := readLimited(strings.NewReader(tc.body), "p", tc.size, tc.limit)
+		if (err == nil) != tc.ok || (err != nil && !errors.Is(err, ErrCorrupt)) {
+			t.Errorf("%s: err = %v, want ok %v (ErrCorrupt otherwise)", tc.name, err, tc.ok)
+		}
+		if tc.ok && string(got) != tc.body {
+			t.Errorf("%s: read %q", tc.name, got)
+		}
 	}
 }
 
