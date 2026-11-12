@@ -1,7 +1,7 @@
 // file: core/integrations/providerhttp/redact_internal_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f1fdc2e-3b2b-4a8b-a3a5-2d8f9e0b7d11
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package providerhttp
 
@@ -172,37 +172,66 @@ func TestScrubSecretRules(t *testing.T) {
 // TestScrub_HostileBodyIsBounded (M2): 16 MiB of every shape that was
 // quadratic or slow costs next to nothing through the excerpt path, and the
 // scrubber itself is linear on the raw input.
+//
+// Both properties are asserted as growth ratios, not wall-clock limits. Under
+// -race and coverage on a shared CI runner the scrubber runs about 150x slower
+// than a plain build, so an absolute budget either flakes there or is too loose
+// to catch anything locally. A ratio is independent of machine speed: the
+// excerpt path must not grow with the body at all, and text must grow about 4x
+// when the input grows 4x (a quadratic scrubber grows 16x).
 func TestScrub_HostileBodyIsBounded(t *testing.T) {
 	const size = 16 << 20
-	shapes := map[string]string{
-		"name run":            strings.Repeat("a", size),
-		"key=":                strings.Repeat("key=", size/4),
-		"quotes":              strings.Repeat(`"`, size),
-		"names, no value":     strings.Repeat("token ", size/6),
-		"separators":          strings.Repeat("a-", size/2),
-		"long names":          strings.Repeat(strings.Repeat("a", 200)+"=", size/201),
-		"authorization lines": strings.Repeat("Authorization: x\n", size/17),
-		"unterminated quote":  `{"key": "` + strings.Repeat("z", size),
-		"bearers":             strings.Repeat("Bearer ", size/7),
-		"urls":                strings.Repeat("http://a:b@c ", size/13),
+	shape := func(unit string, n int) string { return strings.Repeat(unit, n/len(unit)) }
+	shapes := map[string]func(n int) string{
+		"name run":            func(n int) string { return shape("a", n) },
+		"key=":                func(n int) string { return shape("key=", n) },
+		"quotes":              func(n int) string { return shape(`"`, n) },
+		"names, no value":     func(n int) string { return shape("token ", n) },
+		"separators":          func(n int) string { return shape("a-", n) },
+		"long names":          func(n int) string { return shape(strings.Repeat("a", 200)+"=", n) },
+		"authorization lines": func(n int) string { return shape("Authorization: x\n", n) },
+		"unterminated quote":  func(n int) string { return `{"key": "` + shape("z", n) },
+		"bearers":             func(n int) string { return shape("Bearer ", n) },
+		"urls":                func(n int) string { return shape("http://a:b@c ", n) },
 	}
 	for name, body := range shapes {
-		start := time.Now()
-		got := scrubber{}.bounded(body, integrationsMaxDetail)
-		if d := time.Since(start); d > 50*time.Millisecond {
-			t.Errorf("%s: bounded took %v, want < 50ms", name, d)
-		}
-		if len(got) > integrationsMaxDetail {
-			t.Errorf("%s: %d bytes, over the bound", name, len(got))
+		small, large := body(64<<10), body(size)
+		ts := fastest(3, func() { _ = scrubber{}.bounded(small, integrationsMaxDetail) })
+		tl := fastest(3, func() {
+			got := scrubber{}.bounded(large, integrationsMaxDetail)
+			if len(got) > integrationsMaxDetail {
+				t.Errorf("%s: %d bytes, over the bound", name, len(got))
+			}
+		})
+		// 256x the input must cost about the same; allow noise, not growth.
+		if tl > 8*ts+time.Millisecond {
+			t.Errorf("%s: bounded took %v on 16 MiB vs %v on 64 KiB: it grows with the body", name, tl, ts)
 		}
 	}
 	for name, body := range shapes {
-		start := time.Now()
-		_ = scrubber{}.text(body[:len(body)/4])
-		if d := time.Since(start); d > 10*time.Second {
-			t.Errorf("%s: text took %v on 16 MiB: not linear", name, d)
+		small, large := body(256<<10), body(1<<20)
+		ts := fastest(3, func() { _ = scrubber{}.text(small) })
+		tl := fastest(3, func() { _ = scrubber{}.text(large) })
+		// Linear is 4x; quadratic is 16x. 9x leaves room for cache and GC noise.
+		if tl > 9*ts+time.Millisecond {
+			t.Errorf("%s: text took %v on 1 MiB vs %v on 256 KiB (%.1fx for 4x the input): not linear",
+				name, tl, ts, float64(tl)/float64(ts))
 		}
 	}
+}
+
+// fastest is the quickest of n runs of f, which discards scheduler and GC
+// pauses that would otherwise make a timing ratio noisy.
+func fastest(n int, f func()) time.Duration {
+	best := time.Duration(math.MaxInt64)
+	for range n {
+		start := time.Now()
+		f()
+		if d := time.Since(start); d < best {
+			best = d
+		}
+	}
+	return best
 }
 
 const integrationsMaxDetail = integrations.MaxDetail
