@@ -1,0 +1,1 @@
+{"object":"list","data":[{"id":"gpt-batmobile","object":"model","created":1686935002,"owned_by":"wayne-enterprises"},{"id":"text-embedding-bat","object":"model","created":1686935003,"owned_by":"wayne-enterprises"},{"id":"whisper-1","object":"model","created":1686935004,"owned_by":"openai-internal"}]}

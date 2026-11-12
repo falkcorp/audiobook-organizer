@@ -1,0 +1,1 @@
+{"id":"chatcmpl-482","object":"chat.completion","created":1731000000,"model":"llama3.2:latest","system_fingerprint":"fp_ollama","choices":[{"index":0,"message":{"role":"assistant","content":"The Penguin."},"finish_reason":"stop"}],"usage":{"prompt_tokens":26,"completion_tokens":4,"total_tokens":30}}
