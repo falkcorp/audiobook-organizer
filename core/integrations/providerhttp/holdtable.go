@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/holdtable.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: 5e7ac18e-dc95-4438-b438-0ad09045a2f0
 // last-edited: 2026-11-11
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"iter"
 	"slices"
@@ -32,25 +33,50 @@ func (r *Registry) storeCtx(ctx context.Context) (context.Context, context.Cance
 // and not one per request.
 const holdRetryEvery = 30 * time.Second
 
-// ensureState loads the persisted holds and scope mappings if they have not
-// been read yet. New calls it once; a store that was unreadable then is tried
-// again, at most once per holdRetryEvery and by one caller at a time (the
-// others go on without waiting), from every path that reads the table, until a
-// read succeeds. Holds fail open meanwhile (M2.5): the table holds what this
-// process placed.
+// ensureState makes sure the persisted holds and scope mappings are read,
+// without ever making the caller wait for the store. New reads them once,
+// synchronously (loadNow). A store that was unreadable then is tried again from
+// every path that reads the table, at most once per holdRetryEvery, by one
+// background reader at a time (a request that finds a read under way, or not
+// yet due, goes on at once), until a read succeeds. Holds fail open meanwhile
+// (M2.5): the table holds what this process placed, and the late read merges
+// into it (adopt, mergeScopes).
 func (r *Registry) ensureState() {
-	if r.stateLoaded.Load() {
+	if r.stateLoaded.Load() || r.closed.Load() {
 		return
 	}
 	if !r.loadMu.TryLock() {
 		return
 	}
-	defer r.loadMu.Unlock()
-	if r.stateLoaded.Load() {
+	if r.stateLoaded.Load() || r.closed.Load() || !r.loadDue() {
+		r.loadMu.Unlock()
 		return
 	}
+	go func() { // loadMu stays held until the read ends; Close waits on it
+		defer r.loadMu.Unlock()
+		r.tryLoad()
+	}()
+}
+
+// loadNow reads the state in the caller's goroutine (New's boot read).
+func (r *Registry) loadNow() {
+	if !r.loadMu.TryLock() {
+		return
+	}
+	defer r.loadMu.Unlock()
+	r.tryLoad()
+}
+
+// loadDue reports that no retry is pending for later; the caller holds loadMu.
+func (r *Registry) loadDue() bool {
+	return r.nextLoad.IsZero() || !r.now().Before(r.nextLoad)
+}
+
+// tryLoad is one read of the store; the caller holds loadMu. A failure
+// schedules the next try, a success ends the retries.
+func (r *Registry) tryLoad() {
 	now := r.now()
-	if !r.nextLoad.IsZero() && now.Before(r.nextLoad) {
+	if !r.loadDue() {
 		return
 	}
 	if !r.loadState() {
@@ -363,6 +389,67 @@ func (r *Registry) scopeLocked(ref integrations.Ref) string {
 		return s
 	}
 	return ref.String()
+}
+
+// Forget drops everything this Registry and its store keep for ref, for an
+// instance that has been deleted (integrations.Options.Forget): its ref-to-scope
+// mapping and, when no other ref shares its scope, the scope itself, that is
+// its bucket, breaker, quota counters, hold and the rows the store holds for
+// them. A ref created again afterwards starts clean: a hold or a used-up daily
+// quota does not outlive the instance that earned it. Another ref on the same
+// scope (a shared API key) keeps all of it.
+//
+// The siblings are read from the store as well as from memory, so a scope whose
+// other refs have not been built since boot is still recognised as shared; a
+// store that cannot be read fails Forget (nothing is dropped from the store, and
+// the caller logs it) rather than risk deleting a shared scope's state. A
+// request still in flight on the deleted instance may write a hold or a count
+// back; they expire with their day or hold and the next Forget removes them.
+func (r *Registry) Forget(ctx context.Context, ref integrations.Ref) error {
+	unlock := r.slock.Lock(ref.String())
+	defer unlock()
+	sctx, cancel := r.storeCtx(ctx)
+	defer cancel()
+	persisted, err := r.store.Scopes(sctx)
+	if err != nil {
+		return fmt.Errorf("providerhttp: forget %s: %w", ref, err)
+	}
+	r.mu.Lock()
+	scope := ref.String()
+	if s, ok := r.refScope[ref]; ok {
+		scope = s
+	} else if s, ok := persisted[ref]; ok {
+		scope = s
+	}
+	shared := false
+	for other, s := range r.refScope {
+		shared = shared || other != ref && s == scope
+	}
+	for other, s := range persisted {
+		shared = shared || other != ref && s == scope
+	}
+	delete(r.refScope, ref)
+	delete(r.scopePersisted, ref)
+	if !shared {
+		delete(r.scopes, scope)
+	}
+	r.mu.Unlock()
+
+	var errs []error
+	if err := r.store.PutScope(sctx, ref, ""); err != nil {
+		errs = append(errs, fmt.Errorf("providerhttp: forget %s: scope record: %w", ref, err))
+	}
+	if !shared {
+		unlockHold := r.hlock.Lock(scope)
+		r.hmu.Lock()
+		delete(r.holds, scope)
+		r.hmu.Unlock()
+		if err := r.store.ForgetScope(sctx, scope); err != nil {
+			errs = append(errs, fmt.Errorf("providerhttp: forget %s: scope rows: %w", ref, err))
+		}
+		unlockHold()
+	}
+	return errors.Join(errs...)
 }
 
 // HoldFor is ref's active hold itself (its scope, class, start and end),

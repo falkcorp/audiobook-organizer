@@ -1,5 +1,5 @@
 // file: core/integrations/effective.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4cea2446-663d-448f-b1e5-1ba9259adfc6
 // last-edited: 2026-11-11
 
@@ -81,6 +81,9 @@ type slot struct {
 	// stored secret only while the committed row still carries this origin.
 	secretsOrigin string
 	trust         Trust
+	// origins is every effective destination origin, trusted or not (sorted):
+	// OutboundSpec.ConfiguredOrigins.
+	origins []string
 	// given holds a Test's re-supplied secret values by field; nil for a
 	// served instance.
 	given map[string]secrets.Value
@@ -329,6 +332,14 @@ func (r *Registry) bind(s *slot, opSource map[string]bool) {
 	}
 	slices.Sort(trusted)
 	s.trust = Trust{PrivateOrigins: slices.Compact(trusted)}
+	var all []string
+	for _, k := range keys {
+		if o, ok := eff[k]; ok && o != "" {
+			all = append(all, o)
+		}
+	}
+	slices.Sort(all)
+	s.origins = slices.Compact(all)
 }
 
 // fingerprint identifies a slot's effective state: the view, the trust, the

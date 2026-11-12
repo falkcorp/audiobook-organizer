@@ -1,12 +1,16 @@
 // file: core/integrations/providerhttp/review_edges_internal_test.go
-// version: 1.0.0
+// version: 1.3.0
 // guid: 074b0fd6-cb7c-47f2-ac1e-898cda0f5f32
 // last-edited: 2026-11-11
 
 package providerhttp
 
 import (
+	"bufio"
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -236,7 +240,7 @@ func TestPrivateFor_OriginsAreCaseInsensitive(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(r.Close)
-	priv := r.privateFor(integrations.Trust{PrivateOrigins: []string{"http://Batcave.Example.Test:8080", "not an origin", "http://"}})
+	priv := r.privateFor(integrations.Trust{PrivateOrigins: []string{"http://Batcave.Example.Test:8080", "not an origin", "http://"}}, integrations.EgressConfigured, nil)
 	for hp, want := range map[string]bool{
 		"batcave.example.test:8080": true,
 		"batcave.example.test:8081": false,
@@ -266,5 +270,151 @@ func TestMemStore_EmptyScopeDeletes(t *testing.T) {
 	}
 	if got, _ := m.Scopes(ctx); len(got) != 0 {
 		t.Fatalf("an empty scope must delete the record: %v", got)
+	}
+}
+
+// TestDropLiterals_NoFragmentAtTheCut (round-2 MINOR 2): every occurrence goes,
+// and a literal split by the cut that bounded the input leaves nothing.
+func TestDropLiterals_NoFragmentAtTheCut(t *testing.T) {
+	const v = "riddler-777"
+	for in, want := range map[string]string{
+		"a " + v + " b " + v:            "a REDACTED b REDACTED",
+		"x riddler-7":                   "x ",
+		"x r":                           "x ",
+		"x " + v[:len(v)-1]:             "x ",
+		"nothing here":                  "nothing here",
+		"ends in " + v + " and riddler": "ends in REDACTED and ",
+	} {
+		if got := dropLiterals(in, v, "riddler%2D777"); got != want {
+			t.Errorf("dropLiterals(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := dropLiterals("abc", ""); got != "abc" {
+		t.Errorf("an empty literal changed the text: %q", got)
+	}
+}
+
+// TestDialRefusalAfterWrite_KeepsTheBucketToken (round-2 NIT): net/http redials
+// a request whose reused connection died after the request was written; if that
+// dial is then refused, the request did reach the provider, so its token is not
+// given back. (A refusal before anything was written still gives it back.)
+func TestDialRefusalAfterWrite_KeepsTheBucketToken(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() { // one connection: answers the first request, reads the second and hangs up
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		br := bufio.NewReader(c)
+		readRequest := func() bool {
+			for {
+				line, err := br.ReadString('\n')
+				if err != nil {
+					return false
+				}
+				if line == "\r\n" {
+					return true
+				}
+			}
+		}
+		if !readRequest() {
+			return
+		}
+		_, _ = io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+		readRequest()
+	}()
+
+	r, err := New(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.Close)
+	dials := 0
+	r.strict = &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		dials++
+		if dials == 1 {
+			return (&net.Dialer{}).DialContext(ctx, network, ln.Addr().String())
+		}
+		return nil, fmt.Errorf("%w: the second dial", ErrBlockedAddress)
+	}}
+	c := r.Client(integrations.Ref{Kind: integrations.KindMetadata, Instance: "alfred"}, Policy{
+		Egress: integrations.EgressPublicOnly,
+		Limits: integrations.Limits{RPS: 0.0001, Burst: 5, MaxRetries: -1},
+	})
+	resp, err := c.Client().Get("http://indexer.example.test/one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if _, err := c.Client().Get("http://indexer.example.test/two"); err == nil {
+		t.Fatal("the second request succeeded; the scenario did not happen")
+	}
+	if dials != 2 {
+		t.Fatalf("dials = %d, want 2 (the original and net/http's redial)", dials)
+	}
+	c.sc.bk.mu.Lock()
+	tokens := c.sc.bk.tokens
+	c.sc.bk.mu.Unlock()
+	if tokens > 3.5 {
+		t.Fatalf("tokens = %.2f: the token of a request that was written was given back (want about 3)", tokens)
+	}
+
+	// A refusal of an attempt that wrote nothing still gives its token back.
+	before := tokens
+	r.strict = &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
+		return nil, fmt.Errorf("%w: refused", ErrBlockedAddress)
+	}}
+	if _, err := c.Client().Get("http://indexer.example.test/three"); err == nil {
+		t.Fatal("a refused dial succeeded")
+	}
+	c.sc.bk.mu.Lock()
+	after := c.sc.bk.tokens
+	c.sc.bk.mu.Unlock()
+	if after < before-0.5 {
+		t.Fatalf("tokens %.2f -> %.2f: a dial refusal before any write must give its token back", before, after)
+	}
+}
+
+// TestForget_PrunesTheMaps (round-2 MINOR 3 / N13): the in-memory scope maps
+// shrink with the instances that used them, and a shared scope survives until
+// its last ref goes.
+func TestForget_PrunesTheMaps(t *testing.T) {
+	ctx := context.Background()
+	r, err := New(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.Close)
+	a := integrations.Ref{Kind: integrations.KindMetadata, Instance: "alfred"}
+	b := integrations.Ref{Kind: integrations.KindMetadata, Instance: "barbara"}
+	c := integrations.Ref{Kind: integrations.KindMetadata, Instance: "selina"}
+	shared := Policy{Scope: "shared:s"}
+	r.GateFor(a, shared)
+	r.GateFor(b, shared)
+	r.GateFor(c, Policy{})
+	sizes := func() (int, int, int) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return len(r.scopes), len(r.refScope), len(r.scopePersisted)
+	}
+	if s, rs, sp := sizes(); s != 2 || rs != 3 || sp != 2 {
+		t.Fatalf("before: scopes=%d refScope=%d persisted=%d, want 2, 3, 2", s, rs, sp)
+	}
+	for _, step := range []struct {
+		ref  integrations.Ref
+		want [3]int
+	}{{a, [3]int{2, 2, 1}}, {b, [3]int{1, 1, 0}}, {c, [3]int{0, 0, 0}}} {
+		if err := r.Forget(ctx, step.ref); err != nil {
+			t.Fatal(err)
+		}
+		if s, rs, sp := sizes(); [3]int{s, rs, sp} != step.want {
+			t.Fatalf("after forgetting %v: scopes=%d refScope=%d persisted=%d, want %v", step.ref, s, rs, sp, step.want)
+		}
 	}
 }

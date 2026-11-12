@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/review_test.go
-// version: 1.1.0
+// version: 1.2.1
 // guid: 1ac0cd3e-0f0c-4b8e-9fb3-5d3d1f0f6a21
 // last-edited: 2026-11-11
 
@@ -137,6 +137,11 @@ func TestRedirectToOtherEndpoint_DropsCredentialHeaders(t *testing.T) {
 		if got.Get("X-Trace") != "robin-1" {
 			t.Errorf("%s: a harmless header was dropped too: %v", name, got)
 		}
+		// net/http adds the previous URL as Referer on every hop; across
+		// endpoints it names where the chain came from, query included.
+		if v := got.Get("Referer"); v != "" {
+			t.Errorf("%s: Referer = %q reached another host", name, v)
+		}
 		other = headerLog{}
 	}
 
@@ -148,6 +153,9 @@ func TestRedirectToOtherEndpoint_DropsCredentialHeaders(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 	got, _, _ := landed.get()
+	if got.Get("Referer") == "" {
+		t.Error("the test's premise failed: net/http sent no Referer within the endpoint")
+	}
 	for _, k := range []string{"X-Api-Key", "X-Plex-Token", "X-Batcave-Pin", "X-Refresh-Token"} {
 		if got.Get(k) != credentialHeaders[k] {
 			t.Errorf("same-endpoint redirect lost %s: the credential must follow within the endpoint", k)
@@ -163,7 +171,7 @@ func prev(scheme string, srv *httptest.Server, host string) *http.Response {
 
 // TestRedirect_HTTPSToHTTPRefused (M1): a redirect from https to http is
 // refused (the credentials of a request that left over TLS must not follow it
-// onto plain text), unless the instance's trust covers that private origin; a
+// onto plain text), and so is one that keeps the same host and port, whatever the trust; a
 // plain-to-plain hop is not touched.
 func TestRedirect_HTTPSToHTTPRefused(t *testing.T) {
 	srv, hits := server(t, ok)
@@ -192,12 +200,20 @@ func TestRedirect_HTTPSToHTTPRefused(t *testing.T) {
 		t.Fatalf("hits = %d, want the plain hop sent", hits.Load())
 	}
 
-	// A bound private origin may leave https for its own plain address.
+	// The same host and port with TLS stripped is only a downgrade: refused
+	// whatever the trust, even for a bound private origin.
 	rl := newRegistry(t, newClock(), noLAN)
 	trusted := rl.Client(batcave, providerhttp.Policy{Limits: limits(100, 100),
 		Trust: integrations.Trust{PrivateOrigins: []string{"http://" + hostOf(srv)}}})
-	if err := roundTrip(trusted, prev("https", srv, "127.0.0.1"), srv.URL+"/x"); err != nil {
-		t.Fatalf("a trusted private origin: %v", err)
+	if err := roundTrip(trusted, prev("https", srv, "127.0.0.1"), srv.URL+"/x"); !errors.Is(err, providerhttp.ErrInsecureRedirect) {
+		t.Fatalf("a trusted private origin, same host and port: %v, want the downgrade refused", err)
+	}
+	// Another endpoint on a trusted origin passes the downgrade rule; the hop is
+	// then a crossed one, which only the public-only transport carries, so the
+	// private address is refused at the dial instead.
+	other := &http.Response{StatusCode: http.StatusFound, Request: &http.Request{URL: &url.URL{Scheme: "https", Host: "127.0.0.1:1", Path: "/"}}}
+	if err := roundTrip(trusted, other, srv.URL+"/x"); errors.Is(err, providerhttp.ErrInsecureRedirect) || !errors.Is(err, providerhttp.ErrBlockedAddress) {
+		t.Fatalf("a trusted private origin on another endpoint: %v, want the dial refused, not the downgrade rule", err)
 	}
 	// ... but never for EgressPublicOnly, whose private reach is nil.
 	only := rl.Client(ref("alfred"), providerhttp.Policy{Limits: limits(100, 100), Egress: integrations.EgressPublicOnly,
@@ -205,8 +221,8 @@ func TestRedirect_HTTPSToHTTPRefused(t *testing.T) {
 	if err := roundTrip(only, prev("https", srv, "127.0.0.1"), srv.URL+"/x"); !errors.Is(err, providerhttp.ErrInsecureRedirect) {
 		t.Fatalf("public-only instance: %v, want the downgrade refused", err)
 	}
-	if hits.Load() != 2 {
-		t.Fatalf("hits = %d, want 2 (plain hop + trusted hop)", hits.Load())
+	if hits.Load() != 1 {
+		t.Fatalf("hits = %d, want 1 (the plain hop only)", hits.Load())
 	}
 }
 

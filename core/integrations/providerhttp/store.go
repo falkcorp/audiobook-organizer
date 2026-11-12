@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ec22f9ca-2b95-466e-b63c-1d0ae214f66c
 // last-edited: 2026-11-11
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +50,9 @@ type GateStore interface {
 	Quota(ctx context.Context, scope, counter string) (day string, used int, err error)
 	// PutQuota stores the count of day and deletes days before yesterday.
 	PutQuota(ctx context.Context, scope, counter, day string, used int) error
+	// ForgetScope deletes everything stored under scope: its hold and every
+	// quota counter row. Deleting what is absent is not an error.
+	ForgetScope(ctx context.Context, scope string) error
 }
 
 // Owner is the storage owner of the c/providerhttp/ keyspace (the name the
@@ -226,6 +230,24 @@ func (s nativeStore) PutQuota(ctx context.Context, scope, counter, day string, u
 	return b.Commit(ctx, storage.Sync)
 }
 
+// ForgetScope deletes the scope's hold and all its quota rows in one batch.
+func (s nativeStore) ForgetScope(ctx context.Context, scope string) (err error) {
+	b := s.ks.NewBatch()
+	defer func() { err = errors.Join(err, b.Close()) }()
+	if err := b.Delete(holdKey(scope)); err != nil {
+		return err
+	}
+	for kv, serr := range s.ks.ScanPrefix(ctx, keys.Prefix(keys.Str(quotaSeg), keys.Str(scope))) {
+		if serr != nil {
+			return fmt.Errorf("providerhttp: forget scope: %w", serr)
+		}
+		if err := b.Delete(bytes.Clone(kv.Key)); err != nil {
+			return err
+		}
+	}
+	return b.Commit(ctx, storage.Sync)
+}
+
 // memStore is the in-memory GateStore of Options.Store == nil.
 type memStore struct {
 	mu     sync.Mutex
@@ -302,6 +324,18 @@ func (m *memStore) PutQuota(_ context.Context, scope, counter, day string, used 
 			if d < cutoff {
 				delete(m.quota[k], d)
 			}
+		}
+	}
+	return nil
+}
+
+func (m *memStore) ForgetScope(_ context.Context, scope string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.holds, scope)
+	for k := range m.quota {
+		if strings.HasPrefix(k, scope+"\x00") {
+			delete(m.quota, k)
 		}
 	}
 	return nil

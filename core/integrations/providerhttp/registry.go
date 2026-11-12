@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/registry.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 76674dec-435f-4e2d-a9aa-515d33dd8a4c
 // last-edited: 2026-11-11
 
@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,8 +55,9 @@ type Registry struct {
 	// The lazy retry of the boot read (ensureState).
 	stateLoaded  atomic.Bool
 	loadMu       sync.Mutex
-	nextLoad     time.Time // guarded by loadMu
-	stateRetried bool      // guarded by loadMu
+	nextLoad     time.Time   // guarded by loadMu
+	stateRetried bool        // guarded by loadMu
+	closed       atomic.Bool // set by Close; the background retry then never starts
 }
 
 // New builds a Registry, loading the persisted holds before any instance is
@@ -79,7 +81,7 @@ func New(opts Options) (*Registry, error) {
 	}
 	r.strict = r.newTransport(false)
 	r.lan = r.newTransport(true)
-	r.ensureState()
+	r.loadNow()
 	return r, nil
 }
 
@@ -105,8 +107,16 @@ func (r *Registry) newTransport(allowPrivate bool) *http.Transport {
 
 // Close releases the idle connections of both transports.
 func (r *Registry) Close() {
+	r.closed.Store(true)
+	r.waitLoad()
 	r.strict.CloseIdleConnections()
 	r.lan.CloseIdleConnections()
+}
+
+// waitLoad returns when no background read of the store is under way.
+func (r *Registry) waitLoad() {
+	r.loadMu.Lock()
+	defer r.loadMu.Unlock()
 }
 
 func (r *Registry) settings() Settings {
@@ -169,7 +179,7 @@ func (r *Registry) gateFor(ref integrations.Ref, p Policy) *gate {
 		scr = scr.withExtra(p.QueryCredential.Name)
 		origins = originKeys(p.QueryCredential.Origins)
 	}
-	return &gate{r: r, ref: ref, pol: p, sc: sc, scr: scr, private: r.privateFor(p.Trust), qc: p.QueryCredential, qcOrigins: origins}
+	return &gate{r: r, ref: ref, pol: p, sc: sc, scr: scr, private: r.privateFor(p.Trust, p.Egress, p.ConfiguredOrigins), qc: p.QueryCredential, qcOrigins: origins}
 }
 
 // GateFor returns the gate alone, for SMTP and subprocess adapters.
@@ -191,26 +201,49 @@ func (r *Registry) Client(ref integrations.Ref, p Policy) *Client {
 // private address only on the origins its Trust lists and on lan_allow.
 func (r *Registry) Outbound(spec integrations.OutboundSpec) (integrations.HTTP, integrations.Gate) {
 	c := r.Client(spec.Ref, Policy{
-		Limits:          MergeLimits(spec.Limits, spec.Override),
-		Egress:          spec.Egress,
-		Trust:           spec.Trust,
-		Redact:          spec.Redact,
-		QueryCredential: spec.QueryCredential,
+		Limits:            MergeLimits(spec.Limits, spec.Override),
+		Egress:            spec.Egress,
+		Trust:             spec.Trust,
+		ConfiguredOrigins: spec.ConfiguredOrigins,
+		Redact:            spec.Redact,
+		QueryCredential:   spec.QueryCredential,
 	})
 	return c, c.Gate()
 }
 
-// privateFor is the per-request test of an instance whose Trust is t.
-func (r *Registry) privateFor(t integrations.Trust) func(string) bool {
-	bound := make(map[string]bool, len(t.PrivateOrigins))
-	for _, o := range t.PrivateOrigins {
-		if _, hp, ok := strings.Cut(o, "://"); ok && hp != "" {
-			bound[strings.ToLower(hp)] = true
-		}
-	}
+// privateFor is the per-request test of an instance whose Trust is t, whose
+// egress policy is egress and whose configured destinations are configured: the
+// endpoint (lower-case host:port) is bound by Trust, or on lan_allow. Under
+// EgressSameHostOrPublic lan_allow alone is not enough: the endpoint must also
+// be one of the instance's own configured origins, so an indexer's answer
+// cannot point a download at another host the operator allowed for another
+// instance (M1.3, SEC-15). pick and privateOK both ask this one predicate.
+func (r *Registry) privateFor(t integrations.Trust, egress integrations.EgressPolicy, configured []string) func(string) bool {
+	bound := hostPorts(t.PrivateOrigins)
+	own := hostPorts(configured)
 	return func(hostport string) bool {
-		return bound[hostport] || r.lanAllowed(hostport)
+		if bound[hostport] {
+			return true
+		}
+		if egress == integrations.EgressSameHostOrPublic && !own[hostport] {
+			return false
+		}
+		return r.lanAllowed(hostport)
 	}
+}
+
+// hostPorts is the set of lower-case host:port endpoints of origins
+// ("scheme://host[:port]"); an entry that names no host is dropped.
+func hostPorts(origins []string) map[string]bool {
+	out := make(map[string]bool, len(origins))
+	for _, o := range origins {
+		u, err := url.Parse(strings.TrimSpace(o))
+		if err != nil || u.Hostname() == "" {
+			continue
+		}
+		out[endpoint(u)] = true
+	}
+	return out
 }
 
 // lanAllowed reports whether hostport is on core.integrations.egress.lan_allow:
