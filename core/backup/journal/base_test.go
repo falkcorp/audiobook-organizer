@@ -1,5 +1,5 @@
 // file: core/backup/journal/base_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c19e4a3-5d80-4b27-a6f1-3e8d09b2c571
 // last-edited: 2026-11-11
 
@@ -113,6 +113,25 @@ func TestChain_FingerprintAndLatch(t *testing.T) {
 		if (b == a) != same {
 			t.Errorf("%s: fingerprint equal = %v, want %v", name, b == a, same)
 		}
+	}
+
+	// An unbroken chain is named by its line at the head, not its tail: a boot
+	// that appends a line (a gap, a restore line) keeps the state's fingerprint.
+	fx.write(t, lines[:2]...)
+	short := fx.chain(t)
+	fx.write(t, lines...)
+	long := fx.chain(t)
+	if short.Break != nil || long.Break != nil {
+		t.Fatalf("setup: breaks %v, %v", short.Break, long.Break)
+	}
+	if short.Fingerprint(Head{Seq: 1}, "forked") != long.Fingerprint(Head{Seq: 1}, "forked") {
+		t.Error("a line appended to a forked chain changed its fingerprint: the boot would fail closed again")
+	}
+	if short.Fingerprint(Head{Seq: 1}, "forked") == short.Fingerprint(Head{Seq: 1}, "") {
+		t.Error("the state tag is not part of the fingerprint")
+	}
+	if short.Fingerprint(Head{Seq: 1}, "forked") == short.Fingerprint(Head{Seq: 2}, "forked") {
+		t.Error("the head is not part of the fingerprint")
 	}
 
 	if got, err := ReadBrokenLatch(ctx, fx.ks); got != "" || err != nil {
