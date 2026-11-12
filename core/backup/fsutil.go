@@ -1,5 +1,5 @@
 // file: core/backup/fsutil.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a2b1f7e-d3c4-45e6-9f10-2b7c5e8d1a90
 // last-edited: 2026-11-12
 
@@ -7,6 +7,7 @@ package backup
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -25,10 +26,12 @@ import (
 
 // writeFileAtomic writes data to p through a temp file created O_EXCL with mode
 // 0600 from the start, fsynced, then renamed over p (a sidecar is never seen
-// half-written). It refuses to follow a link at either name.
+// half-written). It refuses to follow a link at either name. The temp file's
+// name is unique to the call, so a stale temp file of a crashed write (which the
+// catalogue scan reaps once it is old) never makes a later write of the same
+// name fail.
 func writeFileAtomic(p string, data []byte) (err error) {
-	tmp := p + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, tmp, err := createTemp(p)
 	if err != nil {
 		return err
 	}
@@ -55,6 +58,28 @@ func writeFileAtomic(p string, data []byte) (err error) {
 		return err
 	}
 	return os.Rename(tmp, p)
+}
+
+// createTemp creates "<p>.<random>.tmp" O_EXCL, 0600, and returns it with its
+// name. A name that already exists is another call's (or a stale file's): the
+// next random one is tried.
+func createTemp(p string) (*os.File, string, error) {
+	for range 8 {
+		var b [6]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return nil, "", err
+		}
+		tmp := p + "." + hex.EncodeToString(b[:]) + ".tmp"
+		f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		return f, tmp, nil
+	}
+	return nil, "", fmt.Errorf("backup: no free temporary name beside %s", filepath.Base(p))
 }
 
 // syncDir fsyncs a directory so a rename or create in it survives a crash.

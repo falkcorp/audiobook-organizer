@@ -1,5 +1,5 @@
 // file: core/backup/retention.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b3a64e29-f8d1-4c07-9e4a-5a0d7c28b1f3
 // last-edited: 2026-11-12
 
@@ -99,28 +99,52 @@ func (s *Svc) restoreRefs() map[ArchiveID]string {
 }
 
 // floors is the set of archives retention and Delete must keep, with the
-// reason: floor 1, the newest verified archive (an unverified newer archive
-// does not protect the last good one); floor 2, any archive a pending or
-// undo-able restore references.
+// reason: floor 1, the newest verified archive of this install (an unverified
+// newer archive does not protect the last good one); floor 2, any archive a
+// pending or undo-able restore references.
+//
+// Floor 1 considers Own archives only. A Foreign archive reaches the directory
+// by import or by hand, and a verification record beside it is a file anyone
+// who can write the directory can write: if it could take the floor, a stranger's
+// archive (or a forged record) would displace the install's own newest verified
+// archive, and retention would then be free to delete it. An archive from before
+// provenance (legacy-abo/0, HEAD's own) takes the floor only while no verified
+// Own archive exists, which is every install until its first backup under this
+// build: pruning all of HEAD's archives before the first new one verifies would
+// leave nothing to restore.
 func (s *Svc) floors(all []found) map[ArchiveID]string {
 	out := s.restoreRefs()
-	var best *found
+	var own, pre *found
 	for i := range all {
 		f := &all[i]
 		if f.Verified == nil || !f.Verified.OK || f.Verified.Level < VerifyEntries {
 			continue
 		}
-		if best == nil || f.CreatedAt.After(best.CreatedAt) {
-			best = f
+		switch f.Provenance {
+		case Own:
+			if own == nil || f.CreatedAt.After(own.CreatedAt) {
+				own = f
+			}
+		case PreProvenance:
+			if pre == nil || f.CreatedAt.After(pre.CreatedAt) {
+				pre = f
+			}
 		}
+	}
+	best := own
+	if best == nil {
+		best = pre
 	}
 	if best != nil {
 		if _, ok := out[best.ID]; !ok {
-			out[best.ID] = "it is the newest verified archive"
+			out[best.ID] = floorNewestVerified
 		}
 	}
 	return out
 }
+
+// floorNewestVerified is floor 1's reason; trimJournal compares against it.
+const floorNewestVerified = "it is the newest verified archive"
 
 // Prune is the prune task's body: the retention bounds with their floors.
 func (s *Svc) Prune(ctx context.Context) error {
@@ -189,7 +213,7 @@ func (s *Svc) trimJournal(ctx context.Context, prot map[ArchiveID]string) error 
 		return nil
 	}
 	for id, why := range prot {
-		if why != "it is the newest verified archive" {
+		if why != floorNewestVerified {
 			s.o.log().Debug("backup: journal not trimmed", "archive", id, "reason", why)
 			return nil
 		}
