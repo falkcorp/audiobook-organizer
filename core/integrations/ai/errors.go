@@ -108,13 +108,22 @@ func (e *ExhaustedError) Unwrap() []error {
 // unparseable reply, a refusal, a short result array, a failed validation. It
 // is ClassBadOutput and never fails over: another model would hide the
 // quality problem and double the load.
+//
+// The class is carried where integrations.ClassOf looks for it, not only in
+// the router's own classify: Unwrap puts an *integrations.Error of
+// ClassBadOutput ahead of the wrapped error, so a module, a task or the HTTP
+// surface that classifies the returned error reads BadOutput (integrations
+// cannot know this type), and it wins over the class of an error the wrapped
+// one itself carries.
 type QualityError struct{ Err error }
 
 // Error is the wrapped error's text.
 func (e *QualityError) Error() string { return e.Err.Error() }
 
-// Unwrap returns the wrapped error.
-func (e *QualityError) Unwrap() error { return e.Err }
+// Unwrap returns the bad-output marker and the wrapped error, in that order.
+func (e *QualityError) Unwrap() []error {
+	return []error{&integrations.Error{Op: "quality", Class: integrations.ClassBadOutput, Err: e.Err}}
+}
 
 // Quality marks err as a quality failure. Nil stays nil.
 func Quality(err error) error {
