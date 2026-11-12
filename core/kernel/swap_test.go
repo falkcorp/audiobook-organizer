@@ -1,7 +1,7 @@
 // file: core/kernel/swap_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: e61f321a-b5df-40c7-9f12-074b36c11a97
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -446,16 +447,17 @@ func TestCheckpointRestoreBookkeepingFailureRetries(t *testing.T) {
 		StagedByBuild: swapBuild, ExpiresAt: time.Now().Add(time.Hour), RequestedBy: "alfred", RequestedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	hit := false
+	// The errorfs callback runs on whichever goroutine does the file
+	// operation, Pebble's background ones included, so the flag is atomic.
+	var hit atomic.Bool
 	err = boot(func(ev bootseamtest.Event) error {
-		if !hit && ev.Label == "storage.finish.sidecars" && ev.Kind == errorfs.OpCreate {
-			hit = true
+		if ev.Label == "storage.finish.sidecars" && ev.Kind == errorfs.OpCreate && hit.CompareAndSwap(false, true) {
 			return syscall.ENOSPC
 		}
 		return nil
 	})
-	if !hit || !errors.Is(err, syscall.ENOSPC) || errors.Is(err, ErrCheckpointRestoreFailedHere) || errors.Is(err, ErrSwappedBack) {
-		t.Fatalf("restore boot with a failing finish sidecar = %v (injected %v), want the ENOSPC alone", err, hit)
+	if !hit.Load() || !errors.Is(err, syscall.ENOSPC) || errors.Is(err, ErrCheckpointRestoreFailedHere) || errors.Is(err, ErrSwappedBack) {
+		t.Fatalf("restore boot with a failing finish sidecar = %v (injected %v), want the ENOSPC alone", err, hit.Load())
 	}
 	recs, err := restoreswap.ReadJournal(mem, state, id)
 	if err != nil {
