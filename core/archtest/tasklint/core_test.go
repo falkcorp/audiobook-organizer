@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/core_test.go
 // version: 1.0.9
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package tasklint_test
 
@@ -31,6 +31,7 @@ func TestTasklint_Core(t *testing.T) {
 			core + "/health/diagnostics.ExportTask",              // the same, for InterimBackends.Export (F2-11, F5-18)
 			core + "/internal/bleveindex.Engine.RebuildTask",     // dark until the kernel registers core.index.rebuild when it wires the index engine (F7-09); delete with the directive
 			core + "/library.TransferRecoverTask",                // the kernel registers it when core.library is wired (F2-16, F7; F7-06)
+			core + "/outbox.Outbox.RelayDefinition",              // dark until F6-03 hands it to the executor's definition list (F6-01)
 		}})
 }
 

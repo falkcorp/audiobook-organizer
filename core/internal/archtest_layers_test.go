@@ -105,6 +105,10 @@ var coreLayerOf = map[string]int{
 	// (F7-06, 05-library 5L.3: the no-replace rename, FICLONE/clonefile,
 	// the chunked copy), so it takes library's layer (R4).
 	"internal/libfs": 4,
+	// internal/outboxstore is the c/outbox/ key layout, records and guard
+	// protocol under outbox's relay and operator operations (F6-01, 05-events
+	// §5E.5.2), so it takes outbox's layer (R4).
+	"internal/outboxstore": 4,
 	// L5
 	"acquire": 5,
 	// L6 (internal/<capability>http is coreFamily's pattern)
