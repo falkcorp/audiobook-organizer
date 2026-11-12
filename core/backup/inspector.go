@@ -7,6 +7,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"sort"
@@ -46,7 +47,7 @@ type StorageInspector struct {
 var _ Inspector = (*StorageInspector)(nil)
 
 // Inspect implements Inspector.
-func (si *StorageInspector) Inspect(ctx context.Context, dir string) (StoreInfo, error) {
+func (si *StorageInspector) Inspect(ctx context.Context, dir string) (_ StoreInfo, err error) {
 	opts := si.Base
 	opts.Path, opts.ReadOnly, opts.MustExist, opts.StateFiles = dir, true, true, nil
 	o, err := storage.Open(ctx, opts)
@@ -73,7 +74,7 @@ func (si *StorageInspector) Inspect(ctx context.Context, dir string) (StoreInfo,
 	if err != nil {
 		return StoreInfo{}, err
 	}
-	defer ro.Close()
+	defer func() { err = errors.Join(err, ro.Close()) }()
 	if err := si.count(ctx, ro, &info); err != nil {
 		return StoreInfo{}, err
 	}
@@ -112,13 +113,13 @@ func (si *StorageInspector) count(ctx context.Context, ro *storage.ReadOnlyDB, i
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(max(1, min(4, runtime.NumCPU())))
 	for _, os := range si.Base.Owners {
-		if !os.Spec.Keyspace {
-			continue
+		if !os.Spec.Keyspace || !os.Enabled {
+			continue // a disabled owner has no handle and no keys to count
 		}
 		g.Go(func() error {
 			ks, err := ro.Keyspace(os.Owner)
 			if err != nil {
-				return nil // a disabled owner has no handle
+				return fmt.Errorf("backup: count %s: %w", os.Owner, err)
 			}
 			var n int64
 			var b uint64

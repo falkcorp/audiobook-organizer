@@ -195,7 +195,7 @@ func TestRetentionBounds(t *testing.T) {
 	e := newEnv(t)
 	e.settings.VerifyAfterCreate = false
 	var as []backup.Archive
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		as = append(as, e.create("manual"))
 	}
 	// Age: archives older than MaxAge go, newest-verified aside (none is verified here).

@@ -69,7 +69,7 @@ const dbPrefix = "db"
 // Every read is bounded by the package's default limits (archive size, entry
 // count, entry and total size), symbolic links and special entries are
 // refused, and files are created 0600 in directories 0700.
-func ExtractStore(ctx context.Context, archive, storeDir string) (string, error) {
+func ExtractStore(ctx context.Context, archive, storeDir string) (id string, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -90,7 +90,11 @@ func ExtractStore(ctx context.Context, archive, storeDir string) (string, error)
 	a, err := openArchive(archive, lim)
 	switch {
 	case err == nil:
-		defer a.Close()
+		defer func() {
+			if cerr := a.Close(); cerr != nil {
+				id, err = "", errors.Join(err, fmt.Errorf("backup: extract store: %w", cerr))
+			}
+		}()
 		return extractCoreStore(ctx, archive, a, storeDir)
 	case errors.Is(err, ErrManifest):
 		return extractLegacyStore(ctx, archive, storeDir, lim, err)
@@ -101,7 +105,7 @@ func ExtractStore(ctx context.Context, archive, storeDir string) (string, error)
 
 // requireEmptyDir refuses a storeDir that is not an existing, empty directory
 // (a symbolic link to one included: the extractor is handed a real directory).
-func requireEmptyDir(dir string) error {
+func requireEmptyDir(dir string) (err error) {
 	lst, err := os.Lstat(dir)
 	if err != nil {
 		return fmt.Errorf("backup: extract store: %w", err)
@@ -113,7 +117,7 @@ func requireEmptyDir(dir string) error {
 	if err != nil {
 		return fmt.Errorf("backup: extract store: %w", err)
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 	if _, err := f.Readdirnames(1); err == nil {
 		return fmt.Errorf("backup: extract store: %s is not empty", dir)
 	} else if !errors.Is(err, io.EOF) {

@@ -37,10 +37,11 @@ import (
 
 const (
 	bhBruceID = "01GOTHAMBRUCEWAYNE0000000"
-	// bhArkham is a well-formed archive ID (a ULID shape).
-	bhArkham backup.ArchiveID = "01ARKHAMASYLUM0000000000AA"
-	bhBase                    = "/api/core/v1"
+	bhBase    = "/api/core/v1"
 )
+
+// bhArkham is a well-formed archive ID (a ULID shape).
+const bhArkham backup.ArchiveID = "01ARKHAMASYLUM0000000000AA"
 
 // bhChecker is an rbac.Checker holding exactly its permissions; core:admin
 // holds every one, as the real checker's does for an interactive principal.
@@ -887,6 +888,18 @@ func TestBackupImport(t *testing.T) {
 		rep := r.do(p, "POST", "/backups/import?name=x.tar.zst", mw.FormDataContentType(), buf.String())
 		if rep.status != 400 || bhProblem(t, rep).Code != "file_required" || r.ev.count("import") != 0 || len(r.rec.records) != 0 {
 			t.Errorf("= %d %s, want 400 file_required with nothing audited", rep.status, rep.body)
+		}
+	})
+	t.Run("a Content-Type that does not parse", func(t *testing.T) {
+		// Whether the body is a multipart wrapper or the archive is unknown, so
+		// the request is refused, not guessed at, and nothing is audited or read.
+		for _, ct := range []string{"multipart/form-data; boundary", "application/octet-stream; =x", "a b c"} {
+			r := newBHRig(t)
+			rep := r.do(p, "POST", "/backups/import?name=x.tar.zst", ct, "Year One")
+			if rep.status != 400 || bhProblem(t, rep).Code != "malformed_upload" {
+				t.Errorf("Content-Type %q = %d %s, want 400 malformed_upload", ct, rep.status, rep.body)
+			}
+			r.untouched("Content-Type " + ct)
 		}
 	})
 	t.Run("path-like names", func(t *testing.T) {

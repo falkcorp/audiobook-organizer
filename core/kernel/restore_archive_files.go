@@ -108,7 +108,7 @@ func copyOperatorFile(fs vfs.FS, src, dst string, max int64, private bool) (err 
 	if err != nil {
 		return fmt.Errorf("kernel: %w", err)
 	}
-	defer func() { _ = in.Close() }() // read side
+	defer func() { err = errors.Join(err, in.Close()) }()
 	if fi.Size() == 0 {
 		return fmt.Errorf("kernel: %s is empty", src)
 	}

@@ -32,10 +32,16 @@ func writeFileAtomic(p string, data []byte) (err error) {
 	if err != nil {
 		return err
 	}
+	closed := false
 	defer func() {
-		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmp)
+		if err == nil {
+			return
+		}
+		if !closed {
+			err = errors.Join(err, f.Close())
+		}
+		if rerr := os.Remove(tmp); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			err = errors.Join(err, rerr)
 		}
 	}()
 	if _, err = f.Write(data); err != nil {
@@ -44,6 +50,7 @@ func writeFileAtomic(p string, data []byte) (err error) {
 	if err = f.Sync(); err != nil {
 		return err
 	}
+	closed = true
 	if err = f.Close(); err != nil {
 		return err
 	}
@@ -56,8 +63,7 @@ func syncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
-	return d.Sync()
+	return errors.Join(d.Sync(), d.Close())
 }
 
 // mkdirPrivate makes dir and any missing parents mode 0700 from creation.
@@ -106,12 +112,12 @@ func (r *runDir) create(rel string) (*os.File, error) {
 // copyTree copies the regular files of dir into the run directory under
 // prefix. A link, device or any other non-regular file is an error: nothing is
 // followed and nothing is skipped silently.
-func (r *runDir) copyTree(ctx context.Context, dir, prefix string) error {
+func (r *runDir) copyTree(ctx context.Context, dir, prefix string) (err error) {
 	src, err := os.OpenRoot(dir)
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { err = errors.Join(err, src.Close()) }()
 	return fs.WalkDir(src.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -129,13 +135,12 @@ func (r *runDir) copyTree(ctx context.Context, dir, prefix string) error {
 		if err != nil {
 			return err
 		}
-		defer in.Close()
 		out, err := r.create(path.Join(prefix, p))
 		if err != nil {
-			return err
+			return errors.Join(err, in.Close())
 		}
 		_, cerr := io.Copy(out, ctxReader{ctx, in})
-		return errors.Join(cerr, out.Sync(), out.Close())
+		return errors.Join(cerr, out.Sync(), out.Close(), in.Close())
 	})
 }
 
@@ -152,13 +157,12 @@ func (r *runDir) copyFile(ctx context.Context, src, rel string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
 	out, err := r.create(rel)
 	if err != nil {
-		return err
+		return errors.Join(err, in.Close())
 	}
 	_, cerr := io.Copy(out, ctxReader{ctx, in})
-	return errors.Join(cerr, out.Sync(), out.Close())
+	return errors.Join(cerr, out.Sync(), out.Close(), in.Close())
 }
 
 // putBytes writes data as rel.
@@ -203,10 +207,9 @@ func (r *runDir) hashTree(ctx context.Context, workers int) ([]Entry, error) {
 			if err != nil {
 				return err
 			}
-			defer f.Close()
 			h := sha256.New()
 			n, err := io.Copy(h, ctxReader{gctx, f})
-			if err != nil {
+			if err := errors.Join(err, f.Close()); err != nil {
 				return err
 			}
 			out[i] = Entry{Path: p, Size: n, SHA256: hex.EncodeToString(h.Sum(nil))}
@@ -219,20 +222,44 @@ func (r *runDir) hashTree(ctx context.Context, workers int) ([]Entry, error) {
 	return out, nil
 }
 
-// dirSize sums the sizes of the regular files under dir (an estimate: a file
-// that vanishes mid-walk counts zero).
-func dirSize(dir string) int64 {
+// dirSize sums the sizes of the regular files under dir. It is an estimate for
+// the free-space check: a file or directory that vanishes mid-walk (or a dir
+// that does not exist yet) counts zero, but any other error (an unreadable
+// directory) is returned, so the check fails closed instead of undercounting.
+func dirSize(dir string) (int64, error) {
 	var n int64
-	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
 			return nil
 		}
-		if fi, err := d.Info(); err == nil && fi.Mode().IsRegular() {
+		fi, err := d.Info()
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if fi.Mode().IsRegular() {
 			n += fi.Size()
 		}
 		return nil
 	})
-	return n
+	return n, err
+}
+
+// closeRead closes a handle that was only read. A close error on one cannot
+// change what was read or verified, so it is logged instead of returned (a
+// writer's close error is always returned: it decides whether the bytes landed).
+func (s *Svc) closeRead(what string, c io.Closer) {
+	if err := c.Close(); err != nil {
+		s.o.log().Warn("backup: closing "+what, "error", err)
+	}
 }
 
 // copySum copies r to w and returns the SHA-256 of what it copied and its length.

@@ -45,20 +45,19 @@ var ErrChanged = errors.New("backuparchive: the archive changed between the scan
 // legacy archive is only ever extracted into staging, and only after this scan
 // and the sidecar check have passed, so a bad archive costs no extraction
 // beside the live store.
-func ScanLegacy(ctx context.Context, archive string, lim Limits) (LegacyInfo, error) {
-	var info LegacyInfo
+func ScanLegacy(ctx context.Context, archive string, lim Limits) (info LegacyInfo, err error) {
 	lim = lim.withDefaults()
 	f, st, err := OpenRegular(archive, lim.MaxArchiveBytes)
 	if err != nil {
 		return info, err
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 	h := sha256.New()
 	rd, err := NewReader(io.TeeReader(f, h), lim, true)
 	if err != nil {
 		return info, err
 	}
-	defer rd.Close()
+	defer func() { err = errors.Join(err, rd.Close()) }()
 	info.Codec = rd.Codec()
 	roots := map[string]struct{}{}
 	for {
@@ -109,7 +108,7 @@ func ScanLegacy(ctx context.Context, archive string, lim Limits) (LegacyInfo, er
 // SHA-256 must equal info's, so an archive swapped after the scan is refused.
 // Files are 0600 and directories 0700, every file is fsynced, and every
 // directory by the final Sync.
-func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDir string, lim Limits) error {
+func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDir string, lim Limits) (err error) {
 	lim = lim.withDefaults()
 	if entries, err := os.ReadDir(storeDir); err != nil {
 		return err
@@ -120,12 +119,12 @@ func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDi
 	if err != nil {
 		return err
 	}
-	defer ex.Close()
+	defer func() { err = errors.Join(err, ex.Close()) }()
 	f, st, err := OpenRegular(archive, lim.MaxArchiveBytes)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 	if st.Size() != info.scanned {
 		return ErrChanged
 	}
@@ -134,7 +133,7 @@ func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDi
 	if err != nil {
 		return err
 	}
-	defer rd.Close()
+	defer func() { err = errors.Join(err, rd.Close()) }()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
