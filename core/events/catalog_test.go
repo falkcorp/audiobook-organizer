@@ -1,7 +1,7 @@
 // file: core/events/catalog_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5bfb5801-39f4-4425-9ac3-dc5734ba40dd
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 package events_test
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -203,4 +204,19 @@ func TestCatalog_RejectsRealtimeOnDurable(t *testing.T) {
 	must(t, b.Declare("gotham", events.NewTopic[Sighting]("gotham.villain.spotted.v1").Spec(events.TopicSpec{
 		Permission: rbac.Need("gotham:view"), Realtime: &events.RealtimeMeta{},
 	})))
+}
+
+// TestTopicSpec_PayloadType: an entry built by Topic[T].Spec remembers T (the
+// outbox refuses a typed stage or consumer of another payload type against
+// it, 05-events §5E.4); an entry written by hand has no payload type.
+func TestTopicSpec_PayloadType(t *testing.T) {
+	if got := spec(escaped(), "gotham:view").PayloadType(); got != reflect.TypeFor[Sighting]() {
+		t.Fatalf("PayloadType = %v, want Sighting", got)
+	}
+	if got := spec(tripped(), "wayne:view").PayloadType(); got != reflect.TypeFor[Alarm]() {
+		t.Fatalf("PayloadType = %v, want Alarm", got)
+	}
+	if got := (events.TopicSpec{Name: "gotham.villain.escaped.v1"}).PayloadType(); got != nil {
+		t.Fatalf("a hand-built entry has payload type %v, want nil", got)
+	}
 }

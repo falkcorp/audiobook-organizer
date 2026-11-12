@@ -1,7 +1,7 @@
 // file: core/events/topic.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7bc84272-6a57-423a-8a0b-1db875b4b7d2
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 // Package events is core's in-process, notify-only event bus and the one
 // topic catalog of an App (05-events §5E.1, §5E.3). A topic is declared once,
@@ -91,6 +91,12 @@ type TopicSpec struct {
 	// schemaErr is the reflector's refusal of T, reported by Declare.
 	schemaErr error
 }
+
+// PayloadType is T when the entry came from Topic[T].Spec (outbox.Topic[T].Spec
+// goes through it), nil for an entry built by hand. The outbox reads it to
+// refuse a typed stage or consumer whose payload type differs from the
+// declared topic's (05-events §5E.4), as the bus does for a typed subscriber.
+func (s TopicSpec) PayloadType() reflect.Type { return s.payload }
 
 // VisibleFunc is an optional per-envelope filter on top of Permission.
 type VisibleFunc func(ctx context.Context, who rbac.Checker, e RawEnvelope) bool
