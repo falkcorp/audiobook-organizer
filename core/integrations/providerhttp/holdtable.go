@@ -1,7 +1,7 @@
 // file: core/integrations/providerhttp/holdtable.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5e7ac18e-dc95-4438-b438-0ad09045a2f0
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package providerhttp
 
@@ -84,9 +84,6 @@ func (r *Registry) tryLoad() {
 		return
 	}
 	r.stateLoaded.Store(true)
-	if r.stateRetried {
-		r.log.Info("providerhttp: the persisted holds were read after an earlier failure")
-	}
 }
 
 // loadState reads the persisted holds into the table (an expired one is
@@ -99,17 +96,22 @@ func (r *Registry) loadState() bool {
 	ctx, cancel := r.storeCtx(context.Background())
 	defer cancel()
 	hs, err := r.store.Holds(ctx)
+	var ss map[integrations.Ref]string
 	if err == nil {
-		var ss map[integrations.Ref]string
-		if ss, err = r.store.Scopes(ctx); err == nil {
-			r.mergeScopes(ctx, ss)
-		}
+		ss, err = r.store.Scopes(ctx)
 	}
 	if err != nil {
 		r.stateRetried = true
 		r.warnStore("the persisted holds could not be read; holds are kept in memory and the read is retried", err)
 		return false
 	}
+	// The recovery is logged before the read state is published below (mergeScopes
+	// fills refScope, adopt fills the table), so a caller that sees a persisted
+	// hold or scope is guaranteed to find this line already written.
+	if r.stateRetried {
+		r.log.Info("providerhttp: the persisted holds were read after an earlier failure")
+	}
+	r.mergeScopes(ctx, ss)
 	now := r.now()
 	hmax := r.settings().HoldMax
 	for _, h := range hs {
