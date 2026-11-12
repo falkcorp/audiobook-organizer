@@ -1,15 +1,19 @@
 // file: core/backup/internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3e5b17-6a02-4f9c-b1d4-0e7a9c2f5b36
 // last-edited: 2026-11-12
 
 package backup
 
 import (
+	"archive/tar"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -250,6 +254,81 @@ func TestRunDirAndAtomicFilesAreCreatedPrivate(t *testing.T) {
 		}
 		if got := fi.Mode().Perm(); got != want {
 			t.Errorf("%s mode = %04o, want %04o", filepath.Base(path), got, want)
+		}
+	}
+}
+
+// reasonOf is the closed set a verification failure is shown as. Each case is a
+// cause as the package really produces it, wrapped the way it wraps it.
+func TestReasonOf(t *testing.T) {
+	host := "/srv/gotham/wayne-manor/vault/000042.sst: permission denied"
+	for _, c := range []struct {
+		name string
+		err  error
+		want VerifyReason
+	}{
+		{"checksum", fmt.Errorf("verify: %w", ErrChecksumMismatch), VerifyReasonChecksumMismatch},
+		{"no sidecar", ErrNoChecksum, VerifyReasonNoChecksum},
+		{"unreadable sidecar", fmt.Errorf("%w: %v", ErrNoChecksum, os.ErrPermission), VerifyReasonNoChecksum},
+		{"manifest", fmt.Errorf("%w: %s", ErrManifest, host), VerifyReasonManifestMismatch},
+		{"entry digest", fmt.Errorf("verify: %w", backuparchive.ErrEntryMismatch), VerifyReasonManifestMismatch},
+		{"limit", fmt.Errorf("%w: %q: more than 3 entries", backuparchive.ErrLimit, "db/x"), VerifyReasonLimitExceeded},
+		{"entry name", backuparchive.ErrEntryName, VerifyReasonUnsafeContent},
+		{"entry type", backuparchive.ErrEntryType, VerifyReasonUnsafeContent},
+		{"duplicate entry", backuparchive.ErrDuplicateEntry, VerifyReasonUnsafeContent},
+		{"symlinked archive", fmt.Errorf("%w: %s is a symlink", backuparchive.ErrNotRegularFile, host), VerifyReasonUnsafeContent},
+		{"truncated", fmt.Errorf("backuparchive: read the next entry: %w", io.ErrUnexpectedEOF), VerifyReasonMalformed},
+		{"tar header", tar.ErrHeader, VerifyReasonMalformed},
+		{"gzip", gzip.ErrChecksum, VerifyReasonMalformed},
+		{"deflate", flate.CorruptInputError(9), VerifyReasonMalformed},
+		{"trailing data", backuparchive.ErrTrailingData, VerifyReasonMalformed},
+		{"too new", fmt.Errorf("%w: %w", ErrBackupTooNew, storage.ErrKeyspaceTooNew), VerifyReasonNeedsNewerBuild},
+		{"store does not open", openRefusal("the archived store does not open", errors.New(host)), VerifyReasonStoreUnopenable},
+		// A store whose own error wraps a stream error is still the store's.
+		{"store open over a stream error", openRefusal("the archived store does not open", io.ErrUnexpectedEOF), VerifyReasonStoreUnopenable},
+		// verifyLegacy joins a scan's error with the manifest's: the specific cause wins.
+		{"legacy scan, unsafe name", errors.Join(backuparchive.ErrEntryName, ErrManifest), VerifyReasonUnsafeContent},
+		{"legacy scan, limit", errors.Join(backuparchive.ErrLimit, ErrManifest), VerifyReasonLimitExceeded},
+		{"legacy scan, nothing specific", errors.Join(errors.New("two store directories"), ErrManifest), VerifyReasonManifestMismatch},
+		{"anything else", errors.New(host), VerifyReasonFailed},
+		{"inspector needed", errors.New("backup: verify at the open level needs an Inspector"), VerifyReasonFailed},
+	} {
+		got := reasonOf(c.err)
+		if got != c.want {
+			t.Errorf("%s: reasonOf = %q, want %q", c.name, got, c.want)
+		}
+		if !got.Valid() || got == VerifyReasonNone {
+			t.Errorf("%s: %q is not a failure code from the closed set", c.name, got)
+		}
+	}
+	if got := reasonOf(nil); got != VerifyReasonNone {
+		t.Errorf("reasonOf(nil) = %q, want none", got)
+	}
+}
+
+func TestVerifyReasonNormalize(t *testing.T) {
+	known := []VerifyReason{VerifyReasonChecksumMismatch, VerifyReasonNoChecksum, VerifyReasonManifestMismatch,
+		VerifyReasonUnsafeContent, VerifyReasonMalformed, VerifyReasonLimitExceeded, VerifyReasonNeedsNewerBuild,
+		VerifyReasonStoreUnopenable, VerifyReasonFailed}
+	seen := map[VerifyReason]bool{}
+	for _, r := range known {
+		if !r.Valid() || seen[r] || r == VerifyReasonNone {
+			t.Errorf("%q: valid=%v duplicate=%v", r, r.Valid(), seen[r])
+		}
+		seen[r] = true
+		if got := r.Normalize(false); got != r {
+			t.Errorf("Normalize(%q, false) = %q, want it unchanged", r, got)
+		}
+		if got := r.Normalize(true); got != VerifyReasonNone {
+			t.Errorf("Normalize(%q, true) = %q, a pass has no reason", r, got)
+		}
+	}
+	for _, odd := range []VerifyReason{"", "CHECKSUM_MISMATCH", "checksum_mismatch ", "../etc/passwd", "/srv/gotham: permission denied"} {
+		if got := odd.Normalize(false); got != VerifyReasonFailed {
+			t.Errorf("Normalize(%q, false) = %q, want the generic failure", odd, got)
+		}
+		if odd != VerifyReasonNone && odd.Valid() {
+			t.Errorf("%q is valid", odd)
 		}
 	}
 }

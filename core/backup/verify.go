@@ -1,5 +1,5 @@
 // file: core/backup/verify.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d41f0c73-7b2e-4e88-a6d5-0c9e3b1f5a27
 // last-edited: 2026-11-12
 
@@ -52,10 +52,14 @@ func (s *Svc) verifyWith(ctx context.Context, path string, id ArchiveID, l Verif
 	}
 	res := VerifyResult{At: s.o.now().UTC().Round(0), Level: l, OK: err == nil}
 	if err != nil {
+		res.Reason = reasonOf(err)
 		res.Detail = err.Error()
 		if len(res.Detail) > 500 {
 			res.Detail = res.Detail[:500]
 		}
+		// The text names host paths; it goes to the operator's log and the
+		// sidecar, and the reason code is what a caller may show.
+		s.o.log().Warn("backup: an archive failed verification", "archive", id, "level", l.String(), "reason", string(res.Reason), "error", err)
 	}
 	if werr := writeVerify(path+VerifySidecar, res); werr != nil {
 		s.o.log().Warn("backup: could not record the verification", "archive", id, "error", werr)
@@ -223,5 +227,5 @@ func openRefusal(what string, err error) error {
 	if errors.Is(err, storage.ErrKeyspaceTooNew) {
 		return fmt.Errorf("%w: %w", ErrBackupTooNew, err)
 	}
-	return fmt.Errorf("backup: %s: %w", what, err)
+	return &openFailure{what: what, err: err}
 }

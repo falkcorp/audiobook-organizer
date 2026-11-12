@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/routes_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 71e57c75-3bcb-4631-a4cb-85a8d13a48d1
 // last-edited: 2026-11-12
 
@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -696,6 +697,194 @@ func TestBackupReads(t *testing.T) {
 	}
 	if rep := r.do(view, "GET", "/backups/..%2Fetc", "", ""); rep.status != 404 || bhProblem(t, rep).Code != "archive_not_found" {
 		t.Errorf("malformed ID = %d %s, want 404 archive_not_found", rep.status, rep.body)
+	}
+}
+
+// bhHostText is the kind of free text a verification's error carries: a host
+// path and the errno of the file it could not read. No response may echo it.
+const bhHostText = "/srv/gotham/wayne-manor/vault/000042.sst: permission denied"
+
+// bhVerifiedKeys decodes a body and returns the members of every "verified"
+// object in it (a list's entries, one entry, or the verify route's own body,
+// which is the object itself), so a test can pin the exact member set.
+func bhVerifiedKeys(t *testing.T, body string) [][]string {
+	t.Helper()
+	var doc any
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("body is not JSON: %v: %s", err, body)
+	}
+	keysOf := func(m map[string]any) []string {
+		ks := make([]string, 0, len(m))
+		for k := range m {
+			ks = append(ks, k)
+		}
+		slices.Sort(ks)
+		return ks
+	}
+	var out [][]string
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			if vm, ok := x["verified"].(map[string]any); ok {
+				out = append(out, keysOf(vm))
+			}
+			for _, e := range x {
+				walk(e)
+			}
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		}
+	}
+	walk(doc)
+	return out
+}
+
+// A verification's error text names host paths and internal errors, so it must
+// not appear in any response: the API shows a reason code from a closed set.
+func TestBackupVerificationReasonNeverCarriesDetail(t *testing.T) {
+	at := time.Date(2026, 11, 2, 3, 0, 0, 0, time.UTC)
+	failed := func(reason backup.VerifyReason) *backup.VerifyResult {
+		return &backup.VerifyResult{At: at, Level: backup.VerifyOpen, OK: false, Detail: bhHostText, Reason: reason}
+	}
+	view := bhAs(auth.MethodAPIKey, permSystemView)
+	manage := bhAs(auth.MethodSession, permSystemManage)
+	id := string(bhArkham)
+
+	// Every route that renders an archive or a verification, driven with a
+	// failed verdict whose Detail is the canary.
+	routes := []struct {
+		name   string
+		arm    func(r *bhRig, v *backup.VerifyResult)
+		p      *auth.Principal
+		method string
+		target string
+		status int
+	}{
+		{"list", func(r *bhRig, v *backup.VerifyResult) { r.cat.archives[0].Verified = v }, view, "GET", "/backups", 200},
+		{"get", func(r *bhRig, v *backup.VerifyResult) { r.cat.archives[0].Verified = v }, view, "GET", "/backups/" + id, 200},
+		{"import", func(r *bhRig, v *backup.VerifyResult) { r.cat.importRes.Verified = v }, manage, "POST", "/backups/import?name=arkham.tar.zst", 201},
+		{"rewrap", func(r *bhRig, v *backup.VerifyResult) { r.rw.res.Verified = v }, manage, "POST", "/backups/" + id + "/rewrap", 200},
+		{"verify", func(r *bhRig, v *backup.VerifyResult) { r.cat.verifyRes = *v }, manage, "POST", "/backups/" + id + "/verify", 200},
+	}
+	for _, rt := range routes {
+		t.Run(rt.name, func(t *testing.T) {
+			r := newBHRig(t)
+			rt.arm(r, failed(backup.VerifyReasonChecksumMismatch))
+			ctype, body := "", ""
+			if rt.name == "import" {
+				ctype, body = "application/octet-stream", "Year One"
+			}
+			rep := r.do(rt.p, rt.method, rt.target, ctype, body)
+			if rep.status != rt.status {
+				t.Fatalf("%s = %d %s, want %d", rt.name, rep.status, rep.body, rt.status)
+			}
+			if strings.Contains(rep.body, bhHostText) || strings.Contains(rep.body, "permission denied") || strings.Contains(rep.body, "/srv/") {
+				t.Errorf("%s leaks the verification's error text: %s", rt.name, rep.body)
+			}
+			if strings.Contains(rep.body, `"detail"`) {
+				t.Errorf("%s has a detail member: %s", rt.name, rep.body)
+			}
+			if !strings.Contains(rep.body, `"reason":"checksum_mismatch"`) {
+				t.Errorf("%s has no reason code: %s", rt.name, rep.body)
+			}
+			// The verify route's body is the verification itself; the others nest it.
+			want := []string{"at", "level", "ok", "reason"}
+			if rt.name == "verify" {
+				var m map[string]any
+				if err := json.Unmarshal([]byte(rep.body), &m); err != nil {
+					t.Fatal(err)
+				}
+				got := make([]string, 0, len(m))
+				for k := range m {
+					got = append(got, k)
+				}
+				slices.Sort(got)
+				if !slices.Equal(got, []string{"archive_id", "at", "level", "ok", "reason"}) {
+					t.Errorf("verify body members = %v", got)
+				}
+				return
+			}
+			vs := bhVerifiedKeys(t, rep.body)
+			if len(vs) != 1 || !slices.Equal(vs[0], want) {
+				t.Errorf("verified members = %v, want exactly %v", vs, want)
+			}
+		})
+	}
+
+	// The reason is normalized at the boundary: a code this build does not know
+	// (or one a person put in the sidecar) is the generic failure, and a passing
+	// verdict shows none, whatever the Catalogue returned.
+	t.Run("normalized at the boundary", func(t *testing.T) {
+		for _, c := range []struct {
+			name   string
+			reason backup.VerifyReason
+			ok     bool
+			want   string
+		}{
+			{"unknown code", backup.VerifyReason(bhHostText), false, `"reason":"failed"`},
+			{"empty code on a failure", backup.VerifyReasonNone, false, `"reason":"failed"`},
+			{"a known code", backup.VerifyReasonLimitExceeded, false, `"reason":"limit_exceeded"`},
+			{"a code on a pass", backup.VerifyReasonChecksumMismatch, true, ""},
+		} {
+			r := newBHRig(t)
+			r.cat.archives[0].Verified = &backup.VerifyResult{At: at, Level: backup.VerifyEntries, OK: c.ok, Detail: bhHostText, Reason: c.reason}
+			rep := r.do(view, "GET", "/backups/"+id, "", "")
+			if rep.status != 200 || strings.Contains(rep.body, "/srv/") || strings.Contains(rep.body, "permission") {
+				t.Errorf("%s: %d %s", c.name, rep.status, rep.body)
+			}
+			if c.want != "" && !strings.Contains(rep.body, c.want) {
+				t.Errorf("%s: body %s lacks %s", c.name, rep.body, c.want)
+			}
+			// The archive has its own "reason" (why it was made); the verdict's
+			// members are the ones that matter here.
+			if c.want == "" {
+				if vs := bhVerifiedKeys(t, rep.body); len(vs) != 1 || !slices.Equal(vs[0], []string{"at", "level", "ok"}) {
+					t.Errorf("%s: a passing verdict's members = %v, want at, level and ok only", c.name, vs)
+				}
+			}
+		}
+	})
+
+	// A failed verification the route answers with a problem: whatever error
+	// text came with it stays out of the body.
+	t.Run("failed verify problem body", func(t *testing.T) {
+		for _, c := range []struct {
+			name string
+			err  error
+			want int
+		}{
+			{"checksum", fmt.Errorf("%w: %s", backup.ErrChecksumMismatch, bhHostText), 409},
+			{"manifest", fmt.Errorf("%w: %s", backup.ErrManifest, bhHostText), 409},
+			{"unclassified", errors.New(bhHostText), 500},
+		} {
+			r := newBHRig(t)
+			r.cat.verifyRes = *failed(backup.VerifyReasonFailed)
+			r.cat.verifyErr = c.err
+			rep := r.do(manage, "POST", "/backups/"+id+"/verify", "application/json", `{"level":"open"}`)
+			if rep.status != c.want {
+				t.Errorf("%s = %d %s, want %d", c.name, rep.status, rep.body, c.want)
+			}
+			if strings.Contains(rep.body, "/srv/") || strings.Contains(rep.body, "permission denied") {
+				t.Errorf("%s: the problem body leaks the error text: %s", c.name, rep.body)
+			}
+		}
+	})
+}
+
+// verifyDTO's members are the whole of what a verification may show. A new one
+// is a decision to make here, not a field to add: the error text a failed check
+// carries (backup.VerifyResult.Detail) must have no member to ride in.
+func TestVerifyDTOHasNoFreeTextMember(t *testing.T) {
+	var got []string
+	for field := range reflect.TypeFor[verifyDTO]().Fields() {
+		got = append(got, strings.Split(field.Tag.Get("json"), ",")[0])
+	}
+	slices.Sort(got)
+	if want := []string{"archive_id", "at", "level", "ok", "reason"}; !slices.Equal(got, want) {
+		t.Errorf("verifyDTO members = %v, want %v", got, want)
 	}
 }
 
