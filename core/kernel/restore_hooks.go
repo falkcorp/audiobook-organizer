@@ -1,5 +1,5 @@
 // file: core/kernel/restore_hooks.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b84e1f27-6c93-4d05-8a7e-2f1d9c3b5e60
 // last-edited: 2026-11-11
 
@@ -153,6 +153,14 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 		for _, l := range in.hookedLines() {
 			if err := journal.MarkHooked(ctx, in.KS, l, in.now(), res.Counts); err != nil {
 				return res, err
+			}
+		}
+		// A replaced store whose restore line could not be journaled held its
+		// head back (reapplyResult.Held): the completed hooks are the record that
+		// now says it, so the head moves here and never before.
+		if r.Held.Seq > 0 {
+			if err := journal.CommitHead(ctx, in.KS, r.Held); err != nil {
+				return res, fmt.Errorf("kernel: commit the held journal head: %w", err)
 			}
 		}
 	}
