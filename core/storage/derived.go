@@ -1,7 +1,7 @@
 // file: core/storage/derived.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6162657c-5114-44d6-a4bc-75bc350008ed
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package storage
 
@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -265,9 +266,28 @@ func StampArtifact(dir string, gen Generation) error {
 // 0600 (a marker or stamp is nobody else's business). It is the one marker and
 // stamp writer of the derived-index machinery.
 func WriteFileDurable(path string, data []byte) error {
-	// vfs creates files with the process umask's default mode, so the temp file
-	// is chmod-ed before the rename (the vfs.File interface has no Chmod).
-	return writeFileDurable(vfs.Default, path, data, func(tmp string) error { return os.Chmod(tmp, 0o600) })
+	// vfs creates files with the process umask's default mode and has no way to
+	// ask for another, so the temp file is created by the OS with 0600 itself:
+	// it is never readable by anyone else, not even before the rename.
+	return writeFileDurable(vfs.Default, path, data, createOwnerOnly)
+}
+
+// tempFile is what writeFileDurable needs of its temp file; a vfs.File and an
+// *os.File both are one.
+type tempFile interface {
+	io.Writer
+	Sync() error
+	io.Closer
+}
+
+// createOwnerOnly creates the file at name, mode 0600 from the first instant. A
+// leftover of a crashed write is removed first: a mode applies only to a file
+// that is created, so truncating a leftover that was 0644 would keep it 0644.
+func createOwnerOnly(name string) (tempFile, error) {
+	if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 }
 
 // RemoveFileDurable removes the file at path (an absent file is not an error)
@@ -288,11 +308,16 @@ func removeFileDurable(fsys vfs.FS, path string) error {
 	return errors.Join(d.Sync(), d.Close())
 }
 
-// writeFileDurable is WriteFileDurable over fsys; chmod, when set, runs on the
-// temp file after it was written and before it replaces path.
-func writeFileDurable(fsys vfs.FS, path string, data []byte, chmod func(tmp string) error) (err error) {
+// writeFileDurable is WriteFileDurable over fsys; create, when set, makes the
+// temp file (nil: fsys.Create).
+func writeFileDurable(fsys vfs.FS, path string, data []byte, create func(name string) (tempFile, error)) (err error) {
 	tmp := path + ".tmp"
-	f, err := fsys.Create(tmp, vfs.WriteCategoryUnspecified)
+	var f tempFile
+	if create != nil {
+		f, err = create(tmp)
+	} else {
+		f, err = fsys.Create(tmp, vfs.WriteCategoryUnspecified)
+	}
 	if err != nil {
 		return err
 	}
@@ -309,11 +334,6 @@ func writeFileDurable(fsys vfs.FS, path string, data []byte, chmod func(tmp stri
 	}
 	if err := f.Close(); err != nil {
 		return err
-	}
-	if chmod != nil {
-		if err := chmod(tmp); err != nil {
-			return err
-		}
 	}
 	if err := fsys.Rename(tmp, path); err != nil {
 		return err
