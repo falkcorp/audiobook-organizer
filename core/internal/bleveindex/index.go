@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/index.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b3a9e32-ac5d-4cae-9d75-8f2e4b7d9c33
 // last-edited: 2026-11-11
 
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/search"
 	"github.com/blevesearch/bleve/v2/search/query"
 
 	"github.com/falkcorp/mediacore/storage"
@@ -70,9 +71,14 @@ type idx struct {
 	failures   atomic.Int64 // documents a reconcile pass could not load or index
 
 	// afterGenerationRead is a test seam, nil in production: CopyTo calls it
-	// right after reading the generation, the window in which a write must leave
-	// the artifact rejected.
+	// between reading the generation and checking for pending marks, the window
+	// in which a mark written must be seen by the check.
 	afterGenerationRead func()
+
+	// afterQuiescenceCheck is a test seam, nil in production: CopyTo calls it
+	// right after the generation was read and no mark was found pending, the
+	// window in which a write must leave the artifact rejected.
+	afterQuiescenceCheck func()
 }
 
 func (i *idx) setState(s index.State) { i.state.Store(uint32(s)) }
@@ -88,25 +94,40 @@ func rebuildingMarkerPath(indexPath string) string { return indexPath + ".rebuil
 // failure of the index itself: that is Degraded (I4), so a corrupt or
 // unwritable index costs search, not boot.
 func (i *idx) open() {
+	if i.e.duringOpen != nil {
+		i.e.duringOpen(i)
+	}
 	cfg := i.cb.register(i.module, i.name)
 	if info, err := os.Stat(i.path); err == nil && info.IsDir() {
+		want := mappingStamp(i.spec)
 		stored := readMarker(mappingMarkerPath(i.path))
-		if stored == i.spec.MappingVersion {
+		if stored == want {
 			bi, err := bleve.OpenUsing(i.path, cfg)
-			if err != nil {
+			if err == nil {
+				i.bi = bi
+				if _, err := os.Stat(rebuildingMarkerPath(i.path)); err == nil {
+					i.setState(index.Rebuilding)
+				} else {
+					i.setState(index.Ready)
+				}
+				return
+			}
+			if _, merr := os.Stat(rebuildingMarkerPath(i.path)); merr != nil {
+				// A complete index that will not open: damage, not an interrupted
+				// create. It is left for the rebuild task (PendingRebuilds lists
+				// every Degraded index), never deleted unasked.
 				i.degrade(fmt.Errorf("open existing index: %w", err))
 				return
 			}
-			i.bi = bi
-			if _, err := os.Stat(rebuildingMarkerPath(i.path)); err == nil {
-				i.setState(index.Rebuilding)
-			} else {
-				i.setState(index.Ready)
-			}
-			return
+			// The rebuilding marker says this directory never held a complete
+			// index (a crash inside the create or the rebuild's recreate), so there
+			// is nothing in it worth keeping: recreate it, like a stale mapping.
+			i.log.Warn("an interrupted index create left an index that does not open; recreating it",
+				"module", i.module, "index", i.name, "err", err)
+		} else {
+			i.log.Warn("index mapping changed (version or field declaration); recreating the index; search falls back until the rebuild finishes",
+				"module", i.module, "index", i.name, "stored", firstLine(stored), "want", i.spec.MappingVersion)
 		}
-		i.log.Warn("index mapping version changed; recreating the index; search falls back until the rebuild finishes",
-			"module", i.module, "index", i.name, "stored", stored, "want", i.spec.MappingVersion)
 		if err := os.RemoveAll(i.path); err != nil {
 			i.degrade(fmt.Errorf("remove stale index: %w", err))
 			return
@@ -121,6 +142,12 @@ func (i *idx) open() {
 	if err := i.create(cfg); err != nil {
 		i.degrade(err)
 	}
+}
+
+// firstLine is the version line of a mapping marker, for the log.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }
 
 func (i *idx) degrade(err error) {
@@ -141,7 +168,9 @@ func (i *idx) create(cfg map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(i.path), 0o750); err != nil {
 		return fmt.Errorf("create index directory: %w", err)
 	}
-	if err := os.WriteFile(rebuildingMarkerPath(i.path), []byte("1\n"), 0o600); err != nil {
+	// Durable (temp file, fsync, rename, directory fsync): a marker lost to a
+	// crash would bring an index that never finished its rebuild back as Ready.
+	if err := storage.WriteFileDurable(rebuildingMarkerPath(i.path), []byte("1\n")); err != nil {
 		return fmt.Errorf("write rebuilding marker: %w", err)
 	}
 	m, err := buildMapping(i.spec)
@@ -154,7 +183,7 @@ func (i *idx) create(cfg map[string]any) error {
 	}
 	i.bi = bi
 	i.setState(index.Rebuilding)
-	if err := os.WriteFile(mappingMarkerPath(i.path), []byte(i.spec.MappingVersion+"\n"), 0o600); err != nil {
+	if err := storage.WriteFileDurable(mappingMarkerPath(i.path), []byte(mappingStamp(i.spec)+"\n")); err != nil {
 		i.log.Error("failed to write the index mapping marker; the index will be rebuilt on EVERY restart until this is fixed",
 			"marker", mappingMarkerPath(i.path), "err", err)
 	}
@@ -225,11 +254,16 @@ func (i *idx) Search(ctx context.Context, q index.Query, page index.Page) (index
 	if err != nil {
 		return index.Result{}, err
 	}
+	if err := i.checkSort(page.SortBy); err != nil {
+		return index.Result{}, err
+	}
 	bi, release, err := i.acquire()
 	if err != nil {
 		return index.Result{}, err
 	}
 	defer release()
+	ctx, cancel := i.callCtx(ctx)
+	defer cancel()
 	req := bleve.NewSearchRequestOptions(bq, size, page.From, false)
 	if len(page.SortBy) > 0 {
 		req.SortBy(page.SortBy)
@@ -283,6 +317,8 @@ func (i *idx) Count(ctx context.Context, q index.Query) (uint64, error) {
 		return 0, err
 	}
 	defer release()
+	ctx, cancel := i.callCtx(ctx)
+	defer cancel()
 	res, err := bi.SearchInContext(ctx, bleve.NewSearchRequestOptions(bq, 0, 0, false))
 	if err != nil {
 		return 0, fmt.Errorf("bleveindex: count %s/%s: %w", i.module, i.name, err)
@@ -313,6 +349,8 @@ func (i *idx) Facets(ctx context.Context, q index.Query, fields []string, size i
 		return nil, err
 	}
 	defer release()
+	ctx, cancel := i.callCtx(ctx)
+	defer cancel()
 	req := bleve.NewSearchRequestOptions(bq, 0, 0, false)
 	for _, f := range fields {
 		req.AddFacet(f, bleve.NewFacetRequest(f, size))
@@ -333,6 +371,34 @@ func (i *idx) Facets(ctx context.Context, q index.Query, fields []string, size i
 		out[f] = vals
 	}
 	return out, nil
+}
+
+// callCtx bounds one Search, Count or Facets call: bleve's term-searcher cap is
+// set on its context, so a prefix, wildcard or fuzzy term that would expand to
+// a huge part of the term dictionary fails fast with ErrTooManyTerms-style
+// error instead of allocating it, and a caller with no deadline gets the
+// engine's default.
+func (i *idx) callCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx = context.WithValue(ctx, search.MaxTermSearchersKey, i.e.maxTermSearchers())
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, i.e.searchTimeout())
+}
+
+// checkSort refuses a sort key that names no field of the Spec: "_score" and
+// "_id" are the engine's, a "-" prefix means descending.
+func (i *idx) checkSort(keys []string) error {
+	for _, k := range keys {
+		name := strings.TrimPrefix(k, "-")
+		if name == "_score" || name == "_id" {
+			continue
+		}
+		if _, ok := i.kinds[name]; !ok {
+			return fmt.Errorf("%w: sort key %q names no field of the index", index.ErrInvalidQuery, k)
+		}
+	}
+	return nil
 }
 
 func (i *idx) facetable(field string) bool {
@@ -459,19 +525,53 @@ func (i *idx) lag(now time.Time) time.Duration {
 }
 
 // CopyTo takes bleve's online copy of the index into dir, which must not hold
-// an index, and stamps it with the generation read BEFORE the copy
-// (storage.StampArtifact), so a touch that commits during the copy leaves the
-// artifact rejected rather than accepted with a document missing (§5S.3.9).
-// The generation is the index's, which MarkDirty touches, so an artifact
-// restored beside a store that has since seen any write to the index's source
-// does not match. Backups call it (05-backup).
+// an index, and stamps it with the generation (storage.StampArtifact) so that
+// storage.ArtifactAccepted later accepts it only while it still describes the
+// source (§5S.3.9). The order is the invariant:
+//
+//  1. opMu is held for the whole copy: no reconcile pass and no rebuild
+//     changes the index's content while it is copied.
+//  2. The index must be Ready: a Rebuilding index does not cover its source
+//     (and its .rebuilding marker is a sibling the copy does not carry, so the
+//     artifact would later load as Ready), a Degraded one has no handle.
+//  3. The generation is read BEFORE anything else is looked at: a write that
+//     commits after the read leaves a later value, so the artifact is
+//     rejected rather than accepted with a document missing.
+//  4. No mark may be pending. The generation moves when a mark is written and
+//     not when the reconciler indexes it, so a stamp taken while a mark is
+//     pending would also match the state after the drain, whose index holds a
+//     document the artifact lacks. A pending mark is ErrNotQuiescent; a pass
+//     drains it and the caller retries.
+//  5. Copy, then stamp the generation read in 3.
+//
+// The copy holds the index's read lock for its duration (searches continue,
+// Close and a rebuild's recreate wait). Backups call it (05-backup).
 func (i *idx) CopyTo(ctx context.Context, dir string) error {
+	if st := i.State(); st != index.Ready {
+		return fmt.Errorf("%w: %s/%s is %s", ErrNotReady, i.module, i.name, st)
+	}
+	i.opMu.Lock()
+	defer i.opMu.Unlock()
+	// A rebuild may have held opMu while we waited for it.
+	if st := i.State(); st != index.Ready {
+		return fmt.Errorf("%w: %s/%s is %s", ErrNotReady, i.module, i.name, st)
+	}
 	gen, err := i.derived.Current(ctx)
 	if err != nil {
 		return err
 	}
 	if i.afterGenerationRead != nil {
 		i.afterGenerationRead()
+	}
+	pending, err := i.dirty.Pending(ctx, 1)
+	if err != nil {
+		return err
+	}
+	if len(pending) > 0 {
+		return fmt.Errorf("%w: %s/%s", ErrNotQuiescent, i.module, i.name)
+	}
+	if i.afterQuiescenceCheck != nil {
+		i.afterQuiescenceCheck()
 	}
 	bi, release, err := i.acquire()
 	if err != nil {
@@ -489,4 +589,16 @@ func (i *idx) CopyTo(ctx context.Context, dir string) error {
 		return fmt.Errorf("bleveindex: copy %s/%s: %w", i.module, i.name, err)
 	}
 	return storage.StampArtifact(dir, gen)
+}
+
+// loadDoc calls the module's Document callback, turning a panic in it into an
+// error: a module's bug costs that one document its re-index (its mark stays
+// pending and is retried), not the reconciler goroutine.
+func (i *idx) loadDoc(ctx context.Context, id string) (doc index.Doc, found bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			doc, found, err = nil, false, fmt.Errorf("bleveindex: Document callback of %s/%s panicked for %q: %v", i.module, i.name, id, r)
+		}
+	}()
+	return i.spec.Document(ctx, id)
 }

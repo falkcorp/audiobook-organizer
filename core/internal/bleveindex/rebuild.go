@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/rebuild.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e6dc1c5-df80-4fdf-80a8-bc517a0ac0f6
 // last-edited: 2026-11-11
 
@@ -69,9 +69,10 @@ func (e *Engine) runRebuild(rc *tasks.RC, p RebuildParams) (RebuildResult, error
 	if err != nil {
 		return RebuildResult{}, err
 	}
-	if i.State() == index.Degraded {
-		return RebuildResult{}, fmt.Errorf("bleveindex: %s/%s: %w", p.Module, p.Index, index.ErrDegraded)
-	}
+	// A Degraded index is rebuilt too: the rebuild drops whatever is on disk and
+	// creates the index again, which is how an index that would not open is
+	// repaired (PendingRebuilds lists it). If the create fails the index stays
+	// Degraded and the task reports why.
 
 	// The rebuild holds the index's writer lock for its whole run, so no
 	// reconcile pass applies a mark while the index is dropped and refilled
@@ -104,7 +105,7 @@ func (e *Engine) rebuildLocked(rc *tasks.RC, i *idx) (int64, error) {
 	w := &rebuildWriter{ctx: ctx, ch: ch}
 	prod := make(chan error, 1)
 	go func() {
-		err := i.spec.Rebuild(ctx, w)
+		err := i.callRebuild(ctx, w)
 		if err == nil {
 			err = w.flush()
 		}
@@ -202,4 +203,15 @@ func (w *rebuildWriter) send(c []entry) error {
 	case <-w.ctx.Done():
 		return context.Cause(w.ctx)
 	}
+}
+
+// callRebuild runs the module's Rebuild callback, turning a panic in it into
+// the rebuild's error instead of a crash of the task executor's process.
+func (i *idx) callRebuild(ctx context.Context, w index.RebuildWriter) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("bleveindex: Rebuild callback of %s/%s panicked: %v", i.module, i.name, r)
+		}
+	}()
+	return i.spec.Rebuild(ctx, w)
 }

@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9f7ed2d6-e091-4ae0-91b9-cd628b1bd107
 // last-edited: 2026-11-11
 
@@ -114,16 +114,16 @@ func engineFor(t testing.TB, f *indextest.Fixture, dir string, opts ...func(*Opt
 	return e
 }
 
-func newRig(t *testing.T) *rig {
+func newRig(t *testing.T, opts ...func(*Options)) *rig {
 	t.Helper()
 	f := indextest.Open(t, storage.FSOf(vfs.NewMem()), dbPath)
-	return rigOn(t, f, t.TempDir(), "1")
+	return rigOn(t, f, t.TempDir(), "1", opts...)
 }
 
-func rigOn(t *testing.T, f *indextest.Fixture, dir, version string) *rig {
+func rigOn(t *testing.T, f *indextest.Fixture, dir, version string, opts ...func(*Options)) *rig {
 	t.Helper()
 	r := &rig{t: t, f: f, dir: dir}
-	r.e = engineFor(t, f, dir)
+	r.e = engineFor(t, f, dir, opts...)
 	r.spec = newSpec(f, version, &r.loads)
 	r.open()
 	return r
@@ -181,9 +181,16 @@ func (r *rig) remove(id string) {
 	}
 }
 
+// testWatchdog is how long one reconcile pass may take in a test. A drain that
+// stops making progress (a cursor that does not advance) then fails in seconds
+// with a context error instead of running to go test's ten-minute timeout.
+const testWatchdog = 20 * time.Second
+
 func (r *rig) reconcile() {
 	r.t.Helper()
-	if err := r.e.Reconcile(r.t.Context()); err != nil {
+	ctx, cancel := context.WithTimeout(r.t.Context(), testWatchdog)
+	defer cancel()
+	if err := r.e.Reconcile(ctx); err != nil {
 		r.t.Fatalf("reconcile: %v", err)
 	}
 }

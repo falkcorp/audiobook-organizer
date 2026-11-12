@@ -1,5 +1,5 @@
 // file: core/storage/index/index.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a0a113b9-331b-46fd-beef-f6cb060b8e0c
 // last-edited: 2026-11-11
 
@@ -91,6 +91,17 @@ type Index interface {
 	// the entity write, and touches the index's storage generation (§5S.3.9).
 	// It is the only write path modules use (G4: the index never depends on an
 	// in-memory event).
+	//
+	// The mark is a read-modify-write under a precondition (the dirty keyspace is
+	// Serialized): a concurrent mark of the same id, or the reconciler clearing
+	// the previous mark, can fail the batch's Commit with storage.ErrConflict.
+	// That is the price of never losing a mark, and the caller's answer is to
+	// rebuild the batch and commit again: wrap the whole write (the entity
+	// change, MarkDirty and Commit) in storage.RetryOnConflict.
+	//
+	// Every write to an indexed entity must call it in the write's own batch,
+	// DeleteRange and bulk import included (once per id they touch): a write that
+	// does not is a document the index never learns about.
 	MarkDirty(b *storage.Batch, id string) error
 	State() State // Ready, Rebuilding, Degraded (open failed; callers fall back)
 	Close() error
