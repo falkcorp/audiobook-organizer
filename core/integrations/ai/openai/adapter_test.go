@@ -104,12 +104,21 @@ func (r *rig) settings() map[string]any {
 // newRig builds an instance. edit may change the settings before the build.
 func newRig(t testing.TB, edit ...func(map[string]any)) *rig {
 	t.Helper()
+	kit := coretest.ProviderHTTP(t)
+	return newRigAt(t, kit, "http://"+kit.Host(), edit...)
+}
+
+// newRigAt builds an instance whose configured origin is origin and whose
+// outbound goes through kit's gate: kit's own server for a recorded run, or a
+// live server the kit's lan_allow admits.
+func newRigAt(t testing.TB, kit *coretest.ProviderHTTPKit, origin string, edit ...func(map[string]any)) *rig {
+	t.Helper()
 	d, err := Descriptor()
 	if err != nil {
 		t.Fatalf("Descriptor: %v", err)
 	}
 	meta := d.Meta()
-	r := &rig{t: t, kit: coretest.ProviderHTTP(t), mux: http.NewServeMux(), key: "sk-batarang-0001"}
+	r := &rig{t: t, kit: kit, mux: http.NewServeMux(), key: "sk-batarang-0001"}
 	r.kit.Handle(func(w http.ResponseWriter, req *http.Request) {
 		body, _ := io.ReadAll(req.Body)
 		req.Body = io.NopCloser(bytes.NewReader(body))
@@ -121,7 +130,7 @@ func newRig(t testing.TB, edit ...func(map[string]any)) *rig {
 	ref := integrations.Ref{Kind: integrations.KindAI, Instance: "arkham"}
 	h, g := r.kit.Registry.Outbound(integrations.OutboundSpec{
 		Ref: ref, Adapter: AdapterID, Egress: meta.Egress, Limits: meta.Limits,
-		ConfiguredOrigins: []string{"http://" + r.kit.Host()},
+		ConfiguredOrigins: []string{origin},
 	})
 	env := integrations.Env{Ref: ref, Log: slog.New(slog.DiscardHandler), HTTP: h, Gate: g, Secrets: r, Now: r.kit.Clock.Now}
 	settings := r.settings()
