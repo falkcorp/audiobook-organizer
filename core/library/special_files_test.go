@@ -1,5 +1,5 @@
 // file: core/library/special_files_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 30e22335-fdf1-410b-96fb-a7d369ea79d5
 // last-edited: 2026-11-11
 
@@ -151,5 +151,52 @@ func TestFIFOsDoNotWedgeTheTransferPool(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Errorf("the transfer pool is wedged by %d FIFOs: %v", defaultWorkers, err)
+	}
+}
+
+// A regular file that becomes a FIFO between the check and the open is not
+// waited on: the open does not block (O_NONBLOCK), and the descriptor, once open,
+// is what refuses it.
+func TestAFileSwappedForAFifoJustBeforeTheOpenDoesNotBlock(t *testing.T) {
+	var hook func(stage, name string)
+	r, _ := transferRig(t, rigOpts{seams: seams{fsRace: func(stage, name string) {
+		if hook != nil {
+			hook(stage, name)
+		}
+	}}})
+	r.put("import-1", "Arkham/clue.m4b", "a riddle")
+	root, err := r.m.Root("import-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys, err := root.FS(books)
+	if err != nil {
+		t.Fatal(err)
+	}
+	abs := r.abs("import-1", "Arkham/clue.m4b")
+	swapped := false
+	hook = func(stage, name string) {
+		if stage == "preopen" && name == "Arkham/clue.m4b" && !swapped {
+			swapped = true
+			if err := os.Remove(abs); err != nil {
+				t.Error(err)
+			}
+			if err := syscall.Mkfifo(abs, 0o644); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	err = within(t, r, "Open", func() error {
+		f, oerr := fsys.Open("Arkham/clue.m4b")
+		if oerr == nil {
+			return errors.Join(errors.New("Open of a FIFO succeeded"), f.Close())
+		}
+		return oerr
+	})
+	if !swapped {
+		t.Fatal("the hook never ran")
+	}
+	if !errors.Is(err, ErrNotSupported) {
+		t.Errorf("Open = %v, want ErrNotSupported", err)
 	}
 }
