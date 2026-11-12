@@ -1,5 +1,5 @@
 // file: core/internal/libfs/at_unix_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: f659f83a-171b-4adc-996b-b61e175f5807
 // last-edited: 2026-11-11
 
@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // The *At operations address one name relative to the directory descriptor. A
@@ -116,5 +118,105 @@ func TestMkdirAtRemoveAtSymlinkAtIdentityAt(t *testing.T) {
 		if err := MkdirAt(d, bad, 0o755); err == nil {
 			t.Errorf("MkdirAt accepted %q", bad)
 		}
+	}
+}
+
+// RenameOver is the one rename that replaces: the caller made the placeholder it
+// lands on. It carries a file over a file and a directory over an empty one.
+func TestRenameOverReplacesOnlyWhatItLandsOn(t *testing.T) {
+	r, dir := openRoot(t)
+	d := openDir(t, r, ".")
+	write(t, filepath.Join(dir, "tmp"), "bane")
+	write(t, filepath.Join(dir, "placeholder"), "")
+	if err := RenameOver(d, "tmp", d, "placeholder"); err != nil {
+		t.Fatalf("file over a placeholder: %v", err)
+	}
+	if read(t, filepath.Join(dir, "placeholder")) != "bane" {
+		t.Error("the bytes did not arrive")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "tmp")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the old name remains: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "full"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "reserved"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "full", "a.m4b"), "a")
+	if err := RenameOver(d, "full", d, "reserved"); err != nil {
+		t.Fatalf("directory over an empty directory: %v", err)
+	}
+	if read(t, filepath.Join(dir, "reserved", "a.m4b")) != "a" {
+		t.Error("the directory's content did not arrive")
+	}
+	for _, name := range []string{"../a", "x/y", "..", ""} {
+		if err := RenameOver(d, "placeholder", d, name); !errors.Is(err, ErrBadName) {
+			t.Errorf("RenameOver new %q: %v", name, err)
+		}
+	}
+}
+
+// The errnos that mean "this filesystem has no hard links" are classified, so a
+// caller can publish by rename; a link that fails for any other reason is not.
+func TestNoHardLinksClassification(t *testing.T) {
+	for _, e := range []unix.Errno{unix.EPERM, unix.ENOTSUP, unix.EOPNOTSUPP, unix.ENOSYS, unix.EMLINK} {
+		if !noHardLinks(e) {
+			t.Errorf("%v is not classified as no hard links", e)
+		}
+	}
+	for _, e := range []unix.Errno{unix.EEXIST, unix.EXDEV, unix.EACCES, unix.ENOENT, unix.ENOSPC} {
+		if noHardLinks(e) {
+			t.Errorf("%v is classified as no hard links", e)
+		}
+	}
+	if !errors.Is(ErrNoHardLinks, errors.ErrUnsupported) || !errors.Is(ErrNoAtomicRename, errors.ErrUnsupported) {
+		t.Error("the filesystem-support sentinels must be errors.ErrUnsupported")
+	}
+}
+
+// On a real filesystem without hard links (exFAT, FAT, an SMB share) a link is
+// ErrNoHardLinks, a no-replace rename is either atomic or ErrNoAtomicRename (never
+// a check-then-rename), and an existing name is still refused. Skipped unless
+// MEDIACORE_TEST_NOLINK_DIR names a directory on such a volume.
+func TestOnARealFilesystemWithoutHardLinks(t *testing.T) {
+	base := os.Getenv("MEDIACORE_TEST_NOLINK_DIR")
+	if base == "" {
+		t.Skip("MEDIACORE_TEST_NOLINK_DIR is not set")
+	}
+	dir, err := os.MkdirTemp(base, "libfs-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	d := openDir(t, root, ".")
+	write(t, filepath.Join(dir, "a"), "a")
+	if err := os.Link(filepath.Join(dir, "a"), filepath.Join(dir, "probe")); err == nil {
+		t.Skip("this filesystem has hard links")
+	}
+	if err := Link(d, "a", d, "b"); !errors.Is(err, ErrNoHardLinks) || !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("Link = %v, want ErrNoHardLinks", err)
+	}
+	if err := RenameNoReplace(d, "a", d, "c"); err != nil && !errors.Is(err, ErrNoAtomicRename) {
+		t.Errorf("RenameNoReplace of a file = %v, want success or ErrNoAtomicRename", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenameNoReplace(d, "dir", d, "dir2"); err != nil && !errors.Is(err, ErrNoAtomicRename) {
+		t.Errorf("RenameNoReplace of a directory = %v, want success or ErrNoAtomicRename", err)
+	}
+	write(t, filepath.Join(dir, "x"), "x")
+	write(t, filepath.Join(dir, "y"), "y")
+	if err := RenameNoReplace(d, "x", d, "y"); !errors.Is(err, fs.ErrExist) {
+		t.Errorf("RenameNoReplace onto an existing name = %v, want ErrExist", err)
+	}
+	if read(t, filepath.Join(dir, "y")) != "y" {
+		t.Error("an existing file was replaced")
 	}
 }
