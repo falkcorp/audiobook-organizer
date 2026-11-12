@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_strip.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: c7391f62-422d-4a79-8fa6-f679c490c72a
 // last-edited: 2026-11-11
 
@@ -77,9 +77,9 @@ import (
 // boot; F3-07 raises a health warning from the error or the report's Kept and
 // InPlace.
 
-// FileOps is the filesystem calls StripGapFill and the config.yaml read
-// make, so a test can fail each one in turn.
-type FileOps interface {
+// FileReader is the read half of FileOps: what StripGapFill and the config.yaml
+// read look at before they change anything.
+type FileReader interface {
 	ReadFile(path string) ([]byte, error)
 	// Resolve returns the file a write to path replaces: path itself, or the
 	// target of a symlink there. A symlink whose target cannot be resolved is
@@ -88,6 +88,13 @@ type FileOps interface {
 	// Stat returns the mode and owner of the file at path; ok is false when
 	// there is none.
 	Stat(path string) (meta FileMeta, ok bool, err error)
+	// ReadDir lists the names in dir.
+	ReadDir(dir string) ([]string, error)
+}
+
+// FileWriter is the write half of FileOps: the calls that replace, rewrite or
+// remove the file.
+type FileWriter interface {
 	// WriteTempFile creates a new file in dir named by pattern (os.CreateTemp's
 	// rules), writes data, syncs it, gives it meta's mode and, where the
 	// process may, owner, closes it, and returns its path.
@@ -98,8 +105,18 @@ type FileOps interface {
 	Rename(oldpath, newpath string) error
 	Remove(path string) error
 	SyncDir(dir string) error
-	// ReadDir lists the names in dir.
-	ReadDir(dir string) ([]string, error)
+}
+
+// FileOps is the filesystem calls StripGapFill and the config.yaml read
+// make, so a test can fail each one in turn.
+//
+// Split into FileReader and FileWriter on 2026-11-11 (the interface-width gate
+// allows 8 methods; FileOps had 9). This name is retained as their composition
+// so the method set is byte-identical and no consumer moves; the type checker
+// proves it.
+type FileOps interface {
+	FileReader
+	FileWriter
 }
 
 // FileMeta is an existing file's mode and owner.
