@@ -1,7 +1,7 @@
 // file: core/app/offline_restore.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 10f91970-5117-4c65-b504-d2c27759490c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package app
 
@@ -32,6 +32,14 @@ store, so it takes no lock and runs while the service runs.
 
   --checkpoint <name>  the checkpoint of the store's latest upgrade attempt
   --archive <file>     an archive (this app's backup format)
+  --keyring <file>     with --archive: the keyring export (secrets
+                       export-keyring) to put back as the state directory's
+                       keyring; it must be mode 0600, and the keyring it
+                       replaces is set aside, not deleted
+  --gap-fill <file>    with --archive: the config.yaml kept off-host with an
+                       archive from before the config cutover, installed
+                       beside the restored database; without it such an
+                       archive's gap-filled settings migrate empty
   --into <dir>         copy the source into a new directory inside the
                        checkpoint scratch area instead of replacing the store,
                        with the copy's own <dir>.storage-levels beside it
@@ -55,10 +63,12 @@ func restoreOfflineCommand(opts Options, mods []module.Module) Command {
 			fl := flag.NewFlagSet("storage restore-offline", flag.ContinueOnError)
 			checkpoint := fl.String("checkpoint", "", "the latest upgrade attempt's checkpoint, by name")
 			archive := fl.String("archive", "", "an archive file")
+			keyring := fl.String("keyring", "", "with --archive: the keyring export to put back")
+			gapFill := fl.String("gap-fill", "", "with --archive: the off-host config.yaml to install beside the database")
 			into := fl.String("into", "", "a new directory inside the checkpoint scratch area")
 			acceptLoss := fl.Bool("accept-loss", false, "discard every write made since the source was taken")
 			if help, err := parseFlags(fl, args, stdout,
-				"storage restore-offline (--checkpoint <name> | --archive <file>) [--into <dir>] [--accept-loss]", restoreOfflineLong); help || err != nil {
+				"storage restore-offline (--checkpoint <name> | --archive <file> [--keyring <file>] [--gap-fill <file>]) [--into <dir>] [--accept-loss]", restoreOfflineLong); help || err != nil {
 				return err
 			}
 			req := kernel.RestoreOfflineRequest{Checkpoint: *checkpoint, AcceptLoss: *acceptLoss, RequestedBy: "cli:storage restore-offline"}
@@ -67,6 +77,12 @@ func restoreOfflineCommand(opts Options, mods []module.Module) Command {
 				return err
 			}
 			if req.Into, err = absPath(*into); err != nil {
+				return err
+			}
+			if req.Keyring, err = absPath(*keyring); err != nil {
+				return err
+			}
+			if req.GapFill, err = absPath(*gapFill); err != nil {
 				return err
 			}
 			c, err := offlineConfig(opts, mods)

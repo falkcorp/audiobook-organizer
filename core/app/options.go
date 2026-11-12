@@ -1,7 +1,7 @@
 // file: core/app/options.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 package app
 
@@ -121,8 +121,10 @@ type Options struct {
 	R1BeforeSwap func(dbPath string) error
 	// R1ArchiveExtract extracts an archive's store into storeDir, an empty
 	// directory, for storage restore-offline --archive, and returns the
-	// archive's ID (ABO: HEAD's backup format). nil = --archive is refused.
-	// Release R1 only: F8's backup extractor replaces it.
+	// archive's ID (ABO: HEAD's backup format). nil = core's own extractor,
+	// backup.ExtractStore (mediacore-backup/1 and legacy-abo/0 archives).
+	// Release R1 only: an app that stores its backups in core's format sets
+	// nothing, and ABO's R2 flip deletes the field.
 	R1ArchiveExtract func(ctx context.Context, archive, storeDir string) (string, error)
 	// StorageFS is the filesystem core storage opens the store on; the zero
 	// value is the OS's. Tests only: coretest's harness passes
