@@ -1,5 +1,5 @@
 // file: core/library/hash.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c56e37d1-9700-479b-b762-71caca0f99ae
 // last-edited: 2026-11-11
 
@@ -23,7 +23,8 @@ import (
 // stops at a 1 MiB boundary when ctx is done and honours
 // core.library.hash.max_bytes_per_sec. Identity hashes with module-specific
 // algorithms stay in the module and use RootFS.Open.
-func (m *manager) Hash(ctx context.Context, p Path) (Digest, error) {
+func (m *manager) Hash(ctx context.Context, p Path) (_ Digest, err error) {
+	defer func() { m.ctr.refused(err) }()
 	if p.IsRoot() {
 		return Digest{}, fmt.Errorf("%w: a root directory has no digest", ErrBadTransfer)
 	}
