@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package tasklint_test
 
@@ -29,6 +29,7 @@ func TestTasklint_Core(t *testing.T) {
 			core + "/integrations/providerhttp.ReleaseHoldsTask", // the kernel registers it at P6 when the app sets InterimBackends.Holds (F2-11, F5-18)
 			core + "/integrations/ai.BatchPollTask",              // the same, for InterimBackends.Poll (F2-11, F5-18)
 			core + "/health/diagnostics.ExportTask",              // the same, for InterimBackends.Export (F2-11, F5-18)
+			core + "/outbox.Outbox.RelayDefinition",              // dark until F6-03 hands it to the executor's definition list (F6-01)
 		}})
 }
 
