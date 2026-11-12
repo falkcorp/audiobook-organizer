@@ -1,7 +1,7 @@
 // file: core/app/offline_open.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 03c6ad3e-f450-45b0-af00-36a0b6576dd6
-// last-edited: 2026-11-08
+// last-edited: 2026-11-12
 
 package app
 
@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/falkcorp/mediacore/backup"
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
 )
@@ -73,6 +74,9 @@ func offlineConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 	}
 	c.R1Values, c.Listen = nil, nil
 	c.BeforeSwap, c.ArchiveExtract = opts.R1BeforeSwap, opts.R1ArchiveExtract
+	if c.ArchiveExtract == nil {
+		c.ArchiveExtract = backup.ExtractStore
+	}
 	return c, nil
 }
 
