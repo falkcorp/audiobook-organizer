@@ -1,5 +1,5 @@
 // file: core/kernel/restore_review_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b2e9d47-3a15-4c80-b7f4-0d9a5e1c8b36
 // last-edited: 2026-11-11
 
@@ -784,6 +784,170 @@ func TestReapply_KnownLinesAfterAnUnknownKindAreStillApplied(t *testing.T) {
 					res.FailedClosed, res.Reapplied, fx.head().Seq, fx.userRow(selina).Status)
 			}
 		})
+	}
+}
+
+// TestReapply_AbortedHookLinesAfterAnUnknownKindAreNotApplied: the lines
+// applied after a stop are the same lines the prefix would apply, and a hook
+// line of an aborted restore is not one of them (it describes a store that was
+// swapped back from, and is verified and skipped everywhere else). A live
+// revocation after it still is.
+func TestReapply_AbortedHookLinesAfterAnUnknownKindAreNotApplied(t *testing.T) {
+	fx := newRxFx(t, nil)
+	fx.boot(nil, nil)
+	barbara, selina := fx.user("barbara"), fx.user("selina")
+	fx.key("key-batarang", barbara, auth.KeyActive)
+	fx.key("key-cowl", selina, auth.KeyActive)
+	// WriteLine, not Append: the lines reach the journal and nothing else, so the
+	// store's head stays at 0 as it would after a crash.
+	write := func(r journal.Revocation) uint64 {
+		t.Helper()
+		r.At = fx.clock.now()
+		if _, err := fx.comp.WriteLine(fx.ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		return fx.comp.Tail().Seq
+	}
+	write(journal.Revocation{Kind: "user.frozen", Subject: rxUserRef(barbara)}) // the stop
+	restore := write(journal.RestoreLineOf(journal.RestoreInfo{Kind: journal.RestoreArchive, Source: "arch-1", RestoreID: "restore-1"}, fx.clock.now()))
+	write(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-cowl"), RestoreSeq: restore}) // its hook line
+	write(journal.AbortedLine(restore, fx.clock.now()))
+	write(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-batarang")})
+	fx.restart()
+
+	res, _ := fx.boot(nil, nil)
+	if res.Reapplied != 1 || fx.head().Seq != 0 {
+		t.Errorf("re-applied %d, head %d, want 1 and 0", res.Reapplied, fx.head().Seq)
+	}
+	if got := fx.keyStatus("key-batarang"); got != auth.KeyRevoked {
+		t.Errorf("key-batarang = %q, want revoked: a live revocation after the stop is applied", got)
+	}
+	// The stop fails closed once, which leaves an active key needing confirmation;
+	// the aborted restore's hook line would have revoked it.
+	if got := fx.keyStatus("key-cowl"); got != auth.KeyNeedsConfirmation {
+		t.Errorf("key-cowl = %q, want needs_confirmation: a hook line of an aborted restore was applied after the stop", got)
+	}
+}
+
+// TestReapply_LastAdminKeptBesideAnUnknownKindIsRestricted: a role removal that
+// would leave no active core:admin holder is skipped by rbac as it is anywhere
+// in the tail, and the kernel restricts the kept holder after that batch
+// (SEC3-15, SEC4-12), whether the removal is journaled before a line this build
+// cannot apply or after it. The restriction is journaled by the re-apply itself,
+// and an append stages its own seq as the head: the journal must already refuse
+// by then (the restriction records a gap and still commits), or the head would
+// pass the line nothing applied.
+func TestReapply_LastAdminKeptBesideAnUnknownKindIsRestricted(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		unknownFirst bool
+		head         uint64 // the line below the unknown one, which the tail applied
+	}{
+		{"the removal after the unknown line", true, 0},
+		{"the removal before the unknown line", false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newRxFx(t, nil)
+			fx.boot(nil, nil)
+			const trustee rbac.RoleName = "custom.trustee"
+			b := fx.roles.NewBatch()
+			if err := fx.roles.PutRole(b, &rbac.Role{Name: trustee, Title: "Trustee", Origin: rbac.OriginCustom, Added: []rbac.Permission{"core:admin"}, Version: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Commit(fx.ctx, storage.Sync); err != nil {
+				t.Fatal(err)
+			}
+			_ = b.Close()
+			bruce := fx.user("bruce-wayne", trustee)
+			fx.key("key-batsignal", bruce, auth.KeyActive)
+			unknown := journal.Revocation{Kind: "user.frozen", Subject: rxUserRef(bruce)}
+			removal := journal.Revocation{Kind: journal.RoleUnassigned, Subject: rxUserRef(bruce), Object: rxRoleRef(string(trustee))}
+			if tc.unknownFirst {
+				fx.journalOnly(unknown)
+				fx.journalOnly(removal)
+			} else {
+				fx.journalOnly(removal)
+				fx.journalOnly(unknown)
+			}
+			ends := fx.comp.Tail().Seq
+			fx.restart()
+
+			res, _ := fx.boot(nil, nil)
+			if res.Reapplied != 1 || fx.head().Seq != tc.head {
+				t.Fatalf("re-applied %d, head %d, want 1 and %d: the restriction's own line moved the head past the unknown line", res.Reapplied, fx.head().Seq, tc.head)
+			}
+			if got := fx.comp.Tail().Seq; got != ends {
+				t.Errorf("journal ends at seq %d, want %d: a refused journal takes no line, the restriction records a gap instead", got, ends)
+			}
+			u := fx.userRow(bruce)
+			if !slices.Equal(u.Roles, []rbac.RoleName{trustee}) || !u.SignInRestricted {
+				t.Errorf("roles %v, sign-in restricted %v: the last admin keeps the role and is restricted", u.Roles, u.SignInRestricted)
+			}
+			if got := fx.keyStatus("key-batsignal"); got != auth.KeyNeedsConfirmation {
+				t.Errorf("key-batsignal = %q, want needs_confirmation (a restricted last admin's keys)", got)
+			}
+		})
+	}
+}
+
+// TestReapply_UnknownKindInAnUntrustedChainKeepsTheHeadBelowIt: the refusal does
+// not depend on the chain being trusted. A journal cut below the anchor is
+// untrusted and still applies its verified lines; when one of them is a kind
+// this build cannot apply and a later one keeps the last admin, the restriction
+// that follows is journaled by the boot, and its line must not take the store's
+// head past the unknown one.
+func TestReapply_UnknownKindInAnUntrustedChainKeepsTheHeadBelowIt(t *testing.T) {
+	fx := newRxFx(t, nil)
+	fx.boot(nil, nil)
+	const trustee rbac.RoleName = "custom.trustee"
+	b := fx.roles.NewBatch()
+	if err := fx.roles.PutRole(b, &rbac.Role{Name: trustee, Title: "Trustee", Origin: rbac.OriginCustom, Added: []rbac.Permission{"core:admin"}, Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(fx.ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	_ = b.Close()
+	bruce := fx.user("bruce-wayne", trustee)
+	fx.key("key-batsignal", bruce, auth.KeyActive)
+	fx.key("key-cowl", bruce, auth.KeyActive)
+	archive := fx.snapshot("archive") // head 0, bruce the only admin
+
+	// Lines 1 and 2 reach the journal with their heads; line 3 is the one the cut
+	// removes, and the anchor (the committed head) is 3.
+	for _, r := range []journal.Revocation{
+		{Kind: "user.frozen", Subject: rxUserRef(bruce)},
+		{Kind: journal.RoleUnassigned, Subject: rxUserRef(bruce), Object: rxRoleRef(string(trustee))},
+	} {
+		r.At = fx.clock.now()
+		bb := fx.auth.NewBatch()
+		if err := fx.comp.Append(fx.ctx, bb, r); err != nil {
+			t.Fatal(err)
+		}
+		if err := bb.Commit(fx.ctx, storage.Sync); err != nil {
+			t.Fatal(err)
+		}
+		_ = bb.Close()
+	}
+	fx.revokeKey("key-cowl") // line 3, head 3
+	fx.restart()
+	truncateJournal(t, fx.journalPath(), 2)
+	fx.swapIn(archive)
+
+	res, _ := fx.boot(nil, nil)
+	if res.Broken == nil || !res.FailedClosed {
+		t.Fatalf("broken %v, failed closed %v: the cut is below the anchor", res.Broken, res.FailedClosed)
+	}
+	if res.Reapplied != 1 || fx.head().Seq != 0 {
+		t.Fatalf("re-applied %d, head %d, want 1 and 0: the restriction's own line moved the head past the unknown line", res.Reapplied, fx.head().Seq)
+	}
+	// The swapped-in store reads as replaced, so the boot wrote its restore line
+	// (before the tail, with no head); the restriction wrote none.
+	if got, want := fx.kinds(), []journal.Kind{"user.frozen", journal.RoleUnassigned, journal.Restore}; !slices.Equal(got, want) {
+		t.Errorf("journal holds %v, want %v: a refused journal takes no line, the restriction records a gap instead", got, want)
+	}
+	if u := fx.userRow(bruce); !slices.Equal(u.Roles, []rbac.RoleName{trustee}) || !u.SignInRestricted {
+		t.Errorf("roles %v, sign-in restricted %v: the last admin keeps the role and is restricted", u.Roles, u.SignInRestricted)
 	}
 }
 
