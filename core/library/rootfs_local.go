@@ -1,5 +1,5 @@
 // file: core/library/rootfs_local.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
 // last-edited: 2026-11-11
 
@@ -47,12 +47,10 @@ type localFS struct {
 	skip     []string                   // rel dirs Walk never enters: AppDir, Quarantine, nested same-owner roots
 	mounted  func() error               // checked before any destructive operation; nil = always mounted
 	target   func(Path) (string, error) // Symlink: the absolute host path of a target the caller may read
-	// sealed, when set, refuses every mutation of a name it reports reserved
-	// (the root's AppDir and Quarantine area; carries = also a directory
-	// holding one, which a rename would carry along); hidden also refuses reads
-	// of such a name. Both are set on a view for anyone but core, never on the
-	// engine's own driver.
-	sealed func(rel string, carries bool) bool
+	// sealed refuses every mutation of a path that resolves into the root's
+	// AppDir or Quarantine area (reserved.go); hidden also refuses reads. Both
+	// are set on a view for anyone but core, never on the engine's own driver.
+	sealed bool
 	hidden bool
 }
 
@@ -91,7 +89,7 @@ func (l *localFS) name(op, n string) (string, error) {
 	if err := ValidateRel(n); err != nil {
 		return "", &fs.PathError{Op: op, Path: n, Err: err}
 	}
-	if l.hidden && l.sealed(n, false) {
+	if l.hidden && l.reserved(n, false) {
 		return "", &fs.PathError{Op: op, Path: n, Err: ErrReservedPath}
 	}
 	return n, nil
@@ -105,7 +103,7 @@ func (l *localFS) mut(op, n string) (string, error) {
 	if err := ValidateRel(n); err != nil {
 		return "", &fs.PathError{Op: op, Path: n, Err: err}
 	}
-	if l.sealed != nil && l.sealed(n, false) {
+	if l.sealed && l.reserved(n, false) {
 		return "", &fs.PathError{Op: op, Path: n, Err: ErrReservedPath}
 	}
 	// Every mutation is destructive in the 5L.5 sense: on an unmounted share it
@@ -236,7 +234,7 @@ func (l *localFS) renameNoReplaceInto(dst fsOps, oldname, newname string) error 
 	if err != nil {
 		return err
 	}
-	if l.sealed != nil && l.sealed(o, true) {
+	if l.sealed && l.reserved(o, true) {
 		// A directory that holds the AppDir or the Quarantine area carries it.
 		return &fs.PathError{Op: "rename", Path: o, Err: ErrReservedPath}
 	}
@@ -383,11 +381,19 @@ func (l *localFS) Walk(ctx context.Context, dir string, opts WalkOptions) iter.S
 			yield(Entry{}, pathErr("walk", dir, err))
 			return
 		}
+		// real is the symlink-free path of the directory: a directory reached
+		// through a followed link is excluded by where it is, not by the name
+		// of the link.
 		type frame struct {
 			rel  string
+			real string
 			info fs.FileInfo
 		}
-		stack := []frame{{rel: start, info: rootInfo}}
+		startReal := start
+		if r, ok := l.realRel(start, true); ok {
+			startReal = r
+		}
+		stack := []frame{{rel: start, real: startReal, info: rootInfo}}
 		visited := map[[2]uint64]bool{}
 		for len(stack) > 0 {
 			cur := stack[len(stack)-1]
@@ -447,7 +453,11 @@ func (l *localFS) Walk(ctx context.Context, dir string, opts WalkOptions) iter.S
 						continue
 					}
 					isDir := info.IsDir()
-					if isDir && (l.excluded(rel) || opts.SkipHidden && hiddenDir(de.Name())) {
+					realChild := de.Name()
+					if cur.real != "." && cur.real != "" {
+						realChild = cur.real + "/" + de.Name()
+					}
+					if isDir && (l.excluded(rel) || l.excluded(realChild) || opts.SkipHidden && hiddenDir(de.Name())) {
 						continue
 					}
 					if !isDir && info.Mode()&fs.ModeSymlink == 0 && !matchExt(exts, de.Name()) {
@@ -459,11 +469,21 @@ func (l *localFS) Walk(ctx context.Context, dir string, opts WalkOptions) iter.S
 					}
 					switch {
 					case isDir:
-						subdirs = append(subdirs, frame{rel: rel, info: info})
+						subdirs = append(subdirs, frame{rel: rel, real: realChild, info: info})
 					case info.Mode()&fs.ModeSymlink != 0 && opts.FollowLinks:
-						if target, terr := l.root.Stat(rel); terr == nil && target.IsDir() && !l.excluded(rel) {
-							subdirs = append(subdirs, frame{rel: rel, info: target})
+						target, terr := l.root.Stat(rel)
+						if terr != nil || !target.IsDir() || l.excluded(rel) {
+							break
 						}
+						// Where the link leads decides: a link into an area the
+						// walk never enters (the AppDir, the Quarantine area, a
+						// nested root, the application's own directory) is
+						// reported as the link it is and not followed.
+						real, ok := l.realRel(rel, true)
+						if !ok || l.excluded(real) || l.reservedInode(real, false) {
+							break
+						}
+						subdirs = append(subdirs, frame{rel: rel, real: real, info: target})
 					}
 				}
 				switch {
