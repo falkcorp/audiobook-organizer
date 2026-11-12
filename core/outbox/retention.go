@@ -1,5 +1,5 @@
 // file: core/outbox/retention.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6a1a7b3f-3f0e-4d9c-9b47-5f7a4c0f2b75
 // last-edited: 2026-11-12
 
@@ -114,6 +114,12 @@ func (r *relay) sweep(ctx context.Context) error {
 		if !r.partitionsOK(ti, hi, found) {
 			continue
 		}
+		// A topic that intake stopped on a row it cannot read is left alone too:
+		// the floors would be computed without that row. The two guards share
+		// topicStop and their order matters. partitionsOK sets topicStop for a
+		// partition stop and clears it when that stop lifts, so after it returns
+		// true what topicStop still holds is the unreadable-row cause alone; the
+		// other order would let a lifted partition stop freeze the sweep.
 		r.mu.Lock()
 		_, isStopped := r.topicStop[topic]
 		r.mu.Unlock()

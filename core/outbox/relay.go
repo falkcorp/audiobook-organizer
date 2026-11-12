@@ -1,5 +1,5 @@
 // file: core/outbox/relay.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 77b6d1de-9cf2-4c52-8f0b-7e9a5c2b6d11
 // last-edited: 2026-11-12
 
@@ -30,6 +30,7 @@ const (
 	passMaxMessages     = 256     // messages one pair delivers per pass
 	passBudget          = 2 * time.Second
 	stopRetryEvery      = 30 * time.Second // a topic or pair stopped on an unreadable row is looked at again
+	cursorRetryEvery    = 5 * time.Second  // a consumer whose cursors could not be created is tried again
 	statusEvery         = 15 * time.Second
 	settleAttempts      = 5
 )
@@ -50,15 +51,17 @@ type relay struct {
 	pairStop  map[outboxstore.Pair]time.Time // pair -> when it stopped on an unreadable row
 	topicStop map[string]time.Time
 	partStop  map[string]bool // topics stopped because their partition count changed
-	faults    map[string]faultNote
-	epoch     uint64 // Outbox.opsEpoch the idle and blocked maps were built under
+	epoch     uint64          // Outbox.opsEpoch the idle and blocked maps were built under
 
-	inited   map[string]bool
-	fast     []time.Duration
-	lastSwp  time.Time
-	lastStat time.Time
-	moved    atomic.Int64 // sequenced + delivered, for the loop's "busy" test
-	stopErr  error
+	inited map[string]bool
+	// cursorWait is when a consumer whose cursors could not be created is tried
+	// again; touched by the run's goroutine only.
+	cursorWait map[string]time.Time
+	fast       []time.Duration
+	lastSwp    time.Time
+	lastStat   time.Time
+	moved      atomic.Int64 // sequenced + delivered, for the loop's "busy" test
+	stopErr    error
 }
 
 // relayBody is the run of core.outbox.relay (05-events §5E.5.3): it sequences
@@ -86,7 +89,7 @@ func (o *Outbox) relayBody(rc *tasks.RC, _ struct{}) (struct{}, error) {
 		o: o, rc: rc, log: rc.Log(), cfg: cfg, regs: o.consumers(),
 		idle: map[outboxstore.Pair]uint64{}, blocked: map[outboxstore.Pair]time.Time{}, retries: map[outboxstore.Pair]time.Time{},
 		pairStop: map[outboxstore.Pair]time.Time{}, topicStop: map[string]time.Time{},
-		partStop: map[string]bool{}, faults: map[string]faultNote{},
+		partStop: map[string]bool{}, cursorWait: map[string]time.Time{},
 		inited: map[string]bool{}, epoch: o.opsEpoch.Load(),
 	}
 	o.health.setDisabled(false)
@@ -109,8 +112,8 @@ func (o *Outbox) relayBody(rc *tasks.RC, _ struct{}) (struct{}, error) {
 		r.intakeAll(ctx)
 		r.deliverAll(ctx)
 		r.maintain(ctx)
-		if r.stopErr != nil {
-			return struct{}{}, r.stopErr
+		if err := r.stopCause(); err != nil {
+			return struct{}{}, err
 		}
 		if !o.now().Before(deadline) {
 			return struct{}{}, nil
@@ -143,10 +146,14 @@ func (r *relay) setStop(err error) {
 	r.mu.Unlock()
 }
 
-func (r *relay) stopped() bool {
+func (r *relay) stopped() bool { return r.stopCause() != nil }
+
+// stopCause is the error that ended the run, or nil while it goes on; mu guards
+// it because the pair workers set it.
+func (r *relay) stopCause() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.stopErr != nil
+	return r.stopErr
 }
 
 // syncEpoch forgets what the relay believed about idle and blocked pairs when
@@ -214,15 +221,33 @@ func (r *relay) earliestBlocked() time.Time {
 // registered consumer that has none: at the topic's high-water mark ("now"), or
 // at zero with FromBeginning. It runs before the first intake scan, so a
 // message sequenced afterwards is above every new cursor and none is missed.
+//
+// A consumer whose cursors cannot be created is left alone for
+// cursorRetryEvery: the creation goes through the run's writer, which records
+// an intent row (a synced write) and renews the run's holds whatever the
+// function inside returns, so a failure retried every loop is a write per loop
+// for as long as it lasts. A topic stopped on a partition-count change costs a
+// read per loop instead, because the stamp is checked before the writer is
+// entered.
 func (r *relay) ensureCursors(ctx context.Context) {
 	o := r.o
 	for _, reg := range r.regs {
 		if r.inited[reg.name] || ctx.Err() != nil || r.stopped() {
 			continue
 		}
+		if at, ok := r.cursorWait[reg.name]; ok && o.now().Before(at) {
+			continue
+		}
 		ti, err := o.topic(reg.topic)
 		if err != nil {
+			r.cursorWait[reg.name] = o.now().Add(cursorRetryEvery)
 			r.log.Error("outbox: consumer's topic is unusable", slog.String("consumer", reg.name), slog.Any("err", err))
+			continue
+		}
+		// Not through partStop: that flag is what this call sets, and a guard on
+		// it would hold the stop after the stamp came right again. The stamp is
+		// read every loop, a read being cheap where the gate below is a write.
+		if hi, found, rerr := o.store.ReadHigh(ctx, ti.name); rerr == nil && !r.partitionsOK(ti, hi, found) {
 			continue
 		}
 		err = r.gate(ctx, "outbox.cursors", reg.name, func(ctx context.Context) error {
@@ -237,17 +262,19 @@ func (r *relay) ensureCursors(ctx context.Context) {
 			})
 		})
 		if errors.Is(err, outboxstore.ErrPartitionsChanged) {
-			// Cursors over the wrong partition set would strand messages: stop the
-			// topic (or, if the stamp matches after all, try again next loop).
+			// The stamp changed between the read above and the refusal: stop the
+			// topic now (or, if it matches after all, try again next loop).
 			if hi, found, rerr := o.store.ReadHigh(ctx, ti.name); rerr == nil {
 				r.partitionsOK(ti, hi, found)
 			}
 			continue
 		}
 		if err != nil {
+			r.cursorWait[reg.name] = o.now().Add(cursorRetryEvery)
 			r.fault("cursors of "+reg.name, err)
 			continue
 		}
+		delete(r.cursorWait, reg.name)
 		r.inited[reg.name] = true
 	}
 }
@@ -402,7 +429,7 @@ func (o *Outbox) RefreshStatus(ctx context.Context) {
 		// dead letters and the stops it did not get to read as gone, so the
 		// last good reading stands.
 		if ctx.Err() == nil {
-			o.log.Warn("outbox: status failed", errAttrs(err)...)
+			o.faultLog(o.log, "status", err)
 		}
 		return
 	}

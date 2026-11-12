@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/store.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 754dc428-ceb7-4876-824c-cde4fb15a4f3
 // last-edited: 2026-11-12
 
@@ -531,25 +531,56 @@ type CursorRow struct {
 
 // AllCursors lists every cursor, in key order: consumers x topics x
 // partitions, a small closed set. A row that fails to decode ends the scan
-// with the rows before it and the error.
+// with the rows before it and the error. Retention and the relay read the
+// cursors through it: a floor computed without a cursor would let a sweep
+// delete what that cursor still needs.
 func (s *Store) AllCursors(ctx context.Context) ([]CursorRow, error) {
+	rows, bad, err := s.scanCursors(ctx, false)
+	if err == nil && len(bad) > 0 {
+		err = bad[0].Err
+	}
+	return rows, err
+}
+
+// UnreadableCursor is a cursor row whose value did not decode: the pair it
+// belongs to (from its key) and the RowError.
+type UnreadableCursor struct {
+	Pair Pair
+	Err  error
+}
+
+// ReadCursors is AllCursors for a reader that has to go on past a bad row, an
+// operator's status read: a row whose value does not decode is left out of rows
+// and named in unreadable, and the scan continues. Only a failure of the store
+// itself, or of a key, ends it. Nothing that decides what to delete may use it.
+func (s *Store) ReadCursors(ctx context.Context) (rows []CursorRow, unreadable []UnreadableCursor, err error) {
+	return s.scanCursors(ctx, true)
+}
+
+// scanCursors is the one scan behind both: with skip it carries on past a row
+// that does not decode, without it it stops at the first one.
+func (s *Store) scanCursors(ctx context.Context, skip bool) (out []CursorRow, bad []UnreadableCursor, err error) {
 	root := CurRoot()
-	var out []CursorRow
 	for kv, serr := range s.ks.Scan(ctx, storage.ScanOptions{Start: root, End: keys.PrefixEnd(root)}) {
 		if serr != nil {
-			return out, serr
+			return out, bad, serr
 		}
 		c, t, pp, perr := ParseCurKey(kv.Key)
 		if perr != nil {
-			return out, perr
+			return out, bad, perr
 		}
+		pair := Pair{Consumer: c, Topic: t, PP: pp}
 		cur, derr := curCodec().Decode(kv.Value)
 		if derr != nil {
-			return out, rowErr(fmt.Sprintf("cursor row %s/%s/%02d", c, t, pp), derr)
+			bad = append(bad, UnreadableCursor{Pair: pair, Err: rowErr(fmt.Sprintf("cursor row %s/%s/%02d", c, t, pp), derr)})
+			if !skip {
+				return out, bad, nil
+			}
+			continue
 		}
-		out = append(out, CursorRow{Pair: Pair{Consumer: c, Topic: t, PP: pp}, Cur: cur})
+		out = append(out, CursorRow{Pair: pair, Cur: cur})
 	}
-	return out, nil
+	return out, bad, nil
 }
 
 // ---- dead letters

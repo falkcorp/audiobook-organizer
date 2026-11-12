@@ -1,5 +1,5 @@
 // file: core/kernel/outbox.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 61c0d9a4-2e7b-4b83-9f15-d3a8e0c47b92
 // last-edited: 2026-11-12
 
@@ -45,6 +45,12 @@ import (
 //     unregistered-kind rule reads a wrapper nobody calls as an orphan kind),
 //     then startNudger;
 //     the relay's own schedule tick starts the first run (Every(1m).OnStart());
+//     neither the nudger nor that tick may run before P7's declareConsumers,
+//     register and freeze have returned: the relay reads the registered set when
+//     it starts and its retention sweep reads the declared set on every pass,
+//     and a relay that saw fewer consumers than the build has would take a
+//     present consumer's cursors for a removed consumer's and start that
+//     consumer's orphan grace (Cursor.Absent) on them;
 //   - stop: stopNudger before the executor drains; the relay run is the
 //     executor's to stop, and an unfinished batch is simply not committed.
 type kernelOutbox struct {

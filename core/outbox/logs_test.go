@@ -1,5 +1,5 @@
 // file: core/outbox/logs_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7f507577-1d8d-4031-8266-e190b04b52d9
 // last-edited: 2026-11-12
 
@@ -253,6 +253,16 @@ func TestOutbox_FailureLogsCarryNoPayload(t *testing.T) {
 				}
 				if n := logs.count("level=ERROR"); n != 1 {
 					t.Errorf("%d error lines for one stop, want 1:\n%s", n, logs.text())
+				}
+				// The class of the failure is logged as "fault": the run's own
+				// logger already stamps every line with the run's "kind".
+				if logs.count("fault=corrupt_row")+logs.count("fault=unknown_version") == 0 {
+					t.Errorf("no line carries the fault token:\n%s", logs.text())
+				}
+				for _, line := range strings.Split(logs.text(), "\n") {
+					if strings.Count(line, "kind=") > 1 {
+						t.Errorf("a line carries two kind attributes: %s", line)
+					}
 				}
 				if n := logs.count("level=WARN"); n > 2 {
 					t.Errorf("%d warnings while a stopped topic waits, want a handful at most:\n%s", n, logs.text())
