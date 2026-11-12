@@ -1,5 +1,5 @@
 // file: core/backup/authorize.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d6a3f8e1-4b92-4c07-b5e0-9a1c7d2f3e58
 // last-edited: 2026-11-12
 
@@ -38,6 +38,18 @@ type RestoreProof struct {
 type proofKey struct{}
 
 // WithRestoreProof returns a context that carries p for the Service's gate.
+//
+// It is a trust boundary: the Service believes the proof it finds, because
+// nothing here can check one. The proof lives in the context, so any code that
+// holds a request's context (a middleware, a goroutine started from a handler,
+// a plugin handed the context) can mint a stronger one with this function, and
+// nothing in the type system stops it. Call it only from the code that has
+// itself enforced the route's guards, as the restore routes of
+// core/internal/backuphttp do, on the context passed straight to the Service
+// and never on one that outlives or is shared beyond that call. A task, a
+// scheduled job, a module's hook and a CLI that has not proved its caller must
+// not call it, and a review that finds another caller should treat it as an
+// authorization bypass.
 func WithRestoreProof(ctx context.Context, p RestoreProof) context.Context {
 	return context.WithValue(ctx, proofKey{}, p)
 }

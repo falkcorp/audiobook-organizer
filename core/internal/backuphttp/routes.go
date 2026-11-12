@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/routes.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0a0db04f-4bc6-4082-bcec-81463f47c6bb
 // last-edited: 2026-11-12
 
@@ -208,8 +208,9 @@ func (a *api) routeTable() []routeDef {
 			raw:     httpapi.RawDoc{Status: http.StatusNoContent}, handler: a.wrap(manageInteractive, a.remove)},
 		{method: http.MethodPost, path: "/backups/import", name: "importBackup", gate: manageInteractive,
 			summary: "Import an archive", maxBody: -1, rate: httpapi.RateExpensive,
-			doc: `The archive is the raw request body, or the "file" part of a multipart/form-data body; the file name is the "name" query parameter ` +
-				`(a plain name: no path separator, no ".."). The body is bounded (413 body_too_large). Audited as core.backup.import before the archive is read. ` +
+			doc: `The archive is the raw request body, or the "file" part of a multipart/form-data body. The "name" query parameter is required and checked ` +
+				`(a plain name: no path separator, no ".."), and is only a suggestion: the archive is stored under a name the service chooses, which the ` +
+				`response gives. The body is bounded (413 body_too_large). Audited as core.backup.import before the archive is read. ` +
 				`201 with the catalogue entry; its provenance says whether it is this install's.`,
 			raw: httpapi.RawDoc{Success: httpapi.BodyOf[archiveDTO](), Status: http.StatusCreated, Query: []string{"name"}}, handler: a.wrap(manageInteractive, a.importArchive)},
 		{method: http.MethodGet, path: "/backups/{id}/download", name: "downloadBackup", gate: download,
@@ -482,7 +483,8 @@ func (a *api) rewrap(w http.ResponseWriter, r *http.Request, c caller) {
 
 // importArchive reads the archive from the body (raw, or the "file" part of a
 // multipart body) through a bounded reader and hands it to Catalogue.Import
-// with the validated name. Nothing is buffered here: the service streams it to
+// with the validated name, which the service ignores (it stores the archive
+// under a name of its own). Nothing is buffered here: the service streams it to
 // disk.
 func (a *api) importArchive(w http.ResponseWriter, r *http.Request, c caller) {
 	if a.cat == nil || a.audit == nil {
