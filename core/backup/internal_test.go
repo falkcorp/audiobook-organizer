@@ -162,7 +162,7 @@ func TestWriteArchiveCancelLeavesNoPartial(t *testing.T) {
 		t.Fatalf("a canceled archive left %d files", len(ents))
 	}
 	// And the same archive, uncanceled, is written whole and 0600.
-	sp, out = spec(t, gz)
+	sp, _ = spec(t, gz)
 	sum, size, err := writeArchive(context.Background(), sp)
 	if err != nil || size == 0 || len(sum) != 64 {
 		t.Fatalf("writeArchive = %q, %d, %v", sum, size, err)

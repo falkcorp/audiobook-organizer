@@ -71,7 +71,10 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 		return Archive{}, err
 	}
 	// 3. Space check, then the same-device rule.
-	est := dirSize(s.o.DBPath)
+	est, err := dirSize(s.o.DBPath)
+	if err != nil {
+		return Archive{}, fmt.Errorf("backup: size of %s: %w", s.o.DBPath, err)
+	}
 	margin := set.SpaceMargin
 	if margin == 0 {
 		margin = uint64(2 * gib)
@@ -100,7 +103,13 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 	if err != nil {
 		return Archive{}, err
 	}
-	defer func() { _ = run.Close(); _ = os.RemoveAll(run.path) }()
+	defer func() {
+		// The archive is published (or the failure already reported) by now; a
+		// leftover run directory is swept by the next run's sweepStaging.
+		if cerr := errors.Join(run.Close(), os.RemoveAll(run.path)); cerr != nil {
+			s.o.log().Warn("backup: removing the run directory", "run", filepath.Base(run.path), "error", cerr)
+		}
+	}()
 
 	// 4. Boundaries first, the checkpoint, then the new content marker.
 	var b Boundaries
@@ -234,7 +243,7 @@ func (s *Svc) sweepStaging(root string) {
 // freshName is <prefix><YYYYMMDD_HHMMSS><ext>, moved to the next second while
 // any file of that name or its sidecars exists.
 func (s *Svc) freshName(now time.Time, ext string) (name, full string, err error) {
-	for i := 0; i < 3600; i++ {
+	for i := range 3600 {
 		t := now.Add(time.Duration(i) * time.Second)
 		name = s.o.Prefix + t.Format("20060102_150405") + ext
 		full = filepath.Join(s.o.Dir, name)
@@ -348,7 +357,11 @@ func (s *Svc) capture(ctx context.Context, run *runDir, co CreateOptions, set Se
 				return nil, false, fmt.Errorf("backup: artifact %s: %w", a.Name, err)
 			}
 			s.o.log().Warn("backup: derived item omitted", "artifact", a.Name, "error", err)
-			_ = run.root.RemoveAll(strings.TrimSuffix(prefix, "/"))
+			if rerr := run.root.RemoveAll(strings.TrimSuffix(prefix, "/")); rerr != nil {
+				// The omitted item is not in the manifest, so nothing of it is
+				// archived; the run directory goes whole when the run ends.
+				s.o.log().Warn("backup: removing an omitted derived item's files", "artifact", a.Name, "error", rerr)
+			}
 			continue
 		}
 		caps = append(caps, captured{prefix: prefix, class: a.Class, name: a.Name})

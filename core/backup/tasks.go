@@ -92,34 +92,26 @@ func Tasks(s *Svc) []tasks.Definition {
 	manage := tasks.Permissions{Start: rbac.Need("core:system.manage")}
 	return []tasks.Definition{
 		tasks.Task(KindCreate, tasks.TaskSpec[CreateParams, CreateResult]{
-			Common: tasks.Common{
-				Title: "Back up", Help: "Writes a verified archive of the database, the config file and the modules' own data into the backup directory, then applies retention.",
-				Effects: write, Perms: manage, Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 12 * time.Hour,
-				Schedule: tasks.ScheduleFromConfig(ScheduleCreateKey).Live(), Dedupe: tasks.DedupePolicy{AnyParams: true},
-			},
+			Title: "Back up", Help: "Writes a verified archive of the database, the config file and the modules' own data into the backup directory, then applies retention.",
+			Effects: write, Perms: manage, Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 12 * time.Hour,
+			Schedule: tasks.ScheduleFromConfig(ScheduleCreateKey).Live(), Dedupe: tasks.DedupePolicy{AnyParams: true},
 			Run: s.taskCreate,
 		}),
 		tasks.Task(KindVerify, tasks.TaskSpec[Empty, VerifyTaskResult]{
-			Common: tasks.Common{
-				Title: "Verify backups", Help: "Re-verifies the newest archives, opens the newest one, and re-signs archives made under a derivation key that is being retired.",
-				Effects: write, Perms: manage, Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
-				Schedule: tasks.ScheduleFromConfig(ScheduleVerifyKey).Live(),
-			},
-			Run: s.taskVerify,
+			Title: "Verify backups", Help: "Re-verifies the newest archives, opens the newest one, and re-signs archives made under a derivation key that is being retired.",
+			Effects: write, Perms: manage, Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
+			Schedule: tasks.ScheduleFromConfig(ScheduleVerifyKey).Live(),
+			Run:      s.taskVerify,
 		}),
 		tasks.Task(KindPrune, tasks.TaskSpec[Empty, Empty]{
-			Common: tasks.Common{
-				Title: "Prune backups", Help: "Applies the retention bounds to the backup directory, never deleting the newest verified archive or one a pending restore needs.",
-				Effects: write, Perms: manage, Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 30 * time.Minute,
-			},
+			Title: "Prune backups", Help: "Applies the retention bounds to the backup directory, never deleting the newest verified archive or one a pending restore needs.",
+			Effects: write, Perms: manage, Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 30 * time.Minute,
 			Run: s.taskPrune,
 		}),
 		tasks.Task(KindStageRestore, tasks.TaskSpec[StageParams, StageResult]{
-			Common: tasks.Common{
-				Title: "Stage a restore", Help: "Verifies an archive and stages it for the next start. The live data is not touched until the service restarts.",
-				Effects: write, Perms: tasks.Permissions{Start: rbac.Need("core:backup.restore")}, Resume: tasks.ResumeDrop,
-				ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
-			},
+			Title: "Stage a restore", Help: "Verifies an archive and stages it for the next start. The live data is not touched until the service restarts.",
+			Effects: write, Perms: tasks.Permissions{Start: rbac.Need("core:backup.restore")}, Resume: tasks.ResumeDrop,
+			ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
 			Run: s.taskStage,
 		}),
 	}

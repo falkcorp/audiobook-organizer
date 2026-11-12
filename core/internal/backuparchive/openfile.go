@@ -6,6 +6,7 @@
 package backuparchive
 
 import (
+	"errors"
 	"fmt"
 	"os"
 )
@@ -32,16 +33,13 @@ func OpenRegular(path string, maxBytes int64) (*os.File, os.FileInfo, error) {
 	}
 	fst, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return nil, nil, err
+		return nil, nil, errors.Join(err, f.Close())
 	}
 	if !fst.Mode().IsRegular() || !os.SameFile(lst, fst) {
-		_ = f.Close()
-		return nil, nil, fmt.Errorf("%w: %s changed while it was opened", ErrNotRegularFile, path)
+		return nil, nil, errors.Join(fmt.Errorf("%w: %s changed while it was opened", ErrNotRegularFile, path), f.Close())
 	}
 	if maxBytes > 0 && fst.Size() > maxBytes {
-		_ = f.Close()
-		return nil, nil, fmt.Errorf("%w: %s is %d bytes, the limit is %d", ErrLimit, path, fst.Size(), maxBytes)
+		return nil, nil, errors.Join(fmt.Errorf("%w: %s is %d bytes, the limit is %d", ErrLimit, path, fst.Size(), maxBytes), f.Close())
 	}
 	return f, fst, nil
 }
