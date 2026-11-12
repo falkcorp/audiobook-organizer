@@ -1,5 +1,5 @@
 // file: internal/books/cutover/stepids_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f6a3c0e-2c0d-4b64-9a0a-0f6b1b8e7a11
 // last-edited: 2026-11-11
 
@@ -64,7 +64,7 @@ func TestStepIDs_NoLiteralOutsideStepIDs(t *testing.T) {
 		}
 	}
 	// The ID of M2 reaches the migration through the constant.
-	m := ConfigStep(nil, nil, ConfigStepOptions{LevelStepVersion: 69})
+	m := ConfigStep(nil, nil, ConfigStepOptions{LevelStepVersion: 69, DatabasePath: rigStore})
 	if m.ID != ConfigCutoverID || m.Owner != BooksOwner {
 		t.Errorf("ConfigStep is %s of %s, want %s of %s", m.ID, m.Owner, ConfigCutoverID, BooksOwner)
 	}

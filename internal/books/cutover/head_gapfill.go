@@ -1,5 +1,5 @@
 // file: internal/books/cutover/head_gapfill.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 86ad29a6-334d-4bed-aa94-a282e32106c3
 // last-edited: 2026-11-11
 
@@ -8,6 +8,8 @@
 package cutover
 
 import (
+	"encoding/json"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -67,6 +69,62 @@ func headParseGapFill(data []byte) (headFileValues, map[string]bool, error) {
 		present["enable_ai_parsing"] = true
 	}
 	return v, present, nil
+}
+
+// headViperFileKeys are the managed keys, other than the gap-fill secrets and
+// root_dir, that configFromViper reads from a config.yaml: HEAD's root command
+// points viper at the file (cmd/root.go: SetConfigFile, ReadInConfig, and
+// docs/configuration.md documents --config at the file beside the database),
+// so with no settings blob they are the effective settings. enable_ai_parsing
+// is here as well as in the gap-fill five: with no blob its file value is
+// effective whichever way it points. database_path is not here: M2 never
+// stores it (the rename table's convert=never-stored, core.storage.path is
+// operator-layer), blob or no blob, and the store being cut over is already at
+// that path, so a file value of it loses nothing.
+var headViperFileKeys = []string{
+	"playlist_dir", "setup_complete", "organization_strategy", "scan_on_startup",
+	"auto_organize", "folder_naming_pattern", "file_naming_pattern",
+	"enable_ai_parsing", "concurrent_scans", "log_level",
+}
+
+// headParseFileSettings reads headViperFileKeys from config.yaml the way
+// viper does: a key matches case-insensitively, and a null is an unset key.
+// Each value is normalised through JSON (a YAML int becomes a float64) so
+// headIsDefault compares it with HEAD's default by value. An unparsable file
+// reads as empty, as HEAD ignores it. Names only are used by callers' reports,
+// never the value.
+func headParseFileSettings(data []byte) map[string]any {
+	var fileConfig map[string]any
+	if err := yaml.Unmarshal(data, &fileConfig); err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(fileConfig))
+	for k := range fileConfig {
+		names = append(names, k)
+	}
+	sort.Strings(names) // two spellings of one key: the later one wins, deterministically
+	out := map[string]any{}
+	for _, k := range names {
+		lower := strings.ToLower(k)
+		known := false
+		for _, want := range headViperFileKeys {
+			if lower == want {
+				known = true
+			}
+		}
+		if !known || fileConfig[k] == nil {
+			continue
+		}
+		raw, err := json.Marshal(fileConfig[k])
+		if err != nil {
+			continue
+		}
+		var v any
+		if json.Unmarshal(raw, &v) == nil {
+			out[lower] = v
+		}
+	}
+	return out
 }
 
 // headDeleteConfigKeyFold removes key from m, matching every path segment

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_plan.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0f2f4b87-3f6d-4a4c-8e0a-7c7f2c64b0d1
 // last-edited: 2026-11-11
 
@@ -98,7 +98,10 @@ type m2Input struct {
 	MaintSet bool // the maintenance_window_migrated marker row is "true"
 	File     headFileValues
 	FileHas  map[string]bool
-	Key      []byte // the settings key, nil when none was found
+	// FileSettings are config.yaml's viper-read settings (headViperFileKeys),
+	// by lower-case name with JSON-normalised values.
+	FileSettings map[string]any
+	Key          []byte // the settings key, nil when none was found
 }
 
 // secretWrite is one secret M2 imports.
@@ -393,16 +396,11 @@ func buildPlan(in *m2Input) (*plan, error) {
 		pl.gapFill()
 	} else {
 		pl.tree = map[string]any{}
-		// config.yaml's root_dir and enable_ai_parsing are applied to the blob
-		// (M6 and the key's stage take them from there), so without a blob they
-		// have nowhere to go.
-		var keys []string
-		for _, k := range []string{"root_dir", "enable_ai_parsing"} {
-			if in.FileHas[k] {
-				keys = append(keys, k)
-			}
-		}
-		if len(keys) > 0 {
+		// What config.yaml holds that HEAD reads as a setting (root_dir and the
+		// viper-read keys that differ from their defaults) is applied to the blob,
+		// where M6 and the keys' stages take it from, so without a blob it has
+		// nowhere to go.
+		if keys := fileBlobBound(in); len(keys) > 0 {
 			return nil, &noBlobError{Keys: keys}
 		}
 	}

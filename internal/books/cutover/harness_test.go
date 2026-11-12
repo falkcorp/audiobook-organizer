@@ -1,5 +1,5 @@
 // file: internal/books/cutover/harness_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f6d7b3a-71c4-4a7c-b6a3-1e4f2b9c0d05
 // last-edited: 2026-11-11
 
@@ -382,7 +382,8 @@ type rig struct {
 	stateDir string // a copy of the corpus's state directory: HEAD's key, then core's keyring
 	confFile string // a copy of the corpus's config.yaml ("" when it has none)
 	// databasePath is ConfigStepOptions.DatabasePath: HEAD's database path,
-	// whose directory is the second place its key is searched ("" = unset).
+	// whose directory is the second place its key is searched. It is required;
+	// newRig gives each rig an empty directory of its own.
 	databasePath string
 	h            *handles
 	logs         *lockedBuffer
@@ -410,6 +411,7 @@ func newRig(t testing.TB, name string, opts ...func(*rig)) *rig {
 	if err := copyTree(filepath.Join(src, "state"), r.stateDir); err != nil {
 		t.Fatalf("copy the corpus state directory: %v", err)
 	}
+	r.databasePath = filepath.Join(t.TempDir(), "audiobooks.pebble")
 	cfgDir := t.TempDir()
 	if raw, err := os.ReadFile(filepath.Join(r.srcDB, "config.yaml")); err == nil {
 		r.confFile = filepath.Join(cfgDir, "config.yaml")

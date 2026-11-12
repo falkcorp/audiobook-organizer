@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_strip.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c7391f62-422d-4a79-8fa6-f679c490c72a
 // last-edited: 2026-11-11
 
@@ -34,17 +34,27 @@ import (
 // are all managed is deleted. Every other key stays.
 //
 // A strip is one-way, so it deletes a copy only after the original is shown
-// to be somewhere else. Ten of the fifteen keys are values HEAD wrote and
-// never read back from the file; the other five are the ones HEAD's gap-fill
-// reads (the three secrets, root_dir and enable_ai_parsing) and so the only
-// ones whose value can exist nowhere but the file. Each of those five that
-// carries a usable value is stripped only when its destination already holds
-// a value (or, for a secret, an unreadable marker): M2a's import, or a value
-// the name held before. One whose destination holds nothing stays in the file
-// and is reported by name (StripReport.Kept); the strip never imports, because
-// it has no batch to import into and cannot quarantine, which only a
-// migration chunk can. M2a is what imports a gap-fill value, and its
-// Preflight refuses an upgrade in which no chunk would run.
+// to be somewhere else. Ten of the fifteen keys are settings HEAD wrote on a
+// save and, through viper (cmd/root.go reads the file --config names, which
+// docs/configuration.md points at the file beside the database), can read back
+// at startup. For every install M2 runs on, the settings blob shadows them, so
+// stripping them loses nothing; an install with no blob is the one in which a
+// file value is HEAD's effective setting, and M2a's Preflight refuses that
+// upgrade (the census) instead of letting this strip delete it. database_path
+// is the one of the ten the census leaves out: M2 never stores it, blob or no
+// blob, and the store being cut over is already open at that path; F3-07 must
+// make sure the boot after this strip still finds the database, because the
+// file's line goes. The other five
+// are the ones HEAD's gap-fill reads (the three secrets, root_dir and
+// enable_ai_parsing) and so the only ones whose value can exist nowhere but
+// the file even with a blob. Each of those five that carries a usable value is
+// stripped only when its destination already holds a value: M2a's import, or a
+// value the name held before (a secret's unreadable marker is not a value). One
+// whose destination holds nothing stays in the file and is reported by name
+// (StripReport.Kept); the strip never imports, because it has no batch to
+// import into and cannot quarantine, which only a migration chunk can. M2a is
+// what imports a gap-fill value, and its Preflight refuses an upgrade in which
+// no chunk would run.
 //
 // The write is HEAD's writeFileAtomic: a symlink is followed and its target
 // replaced, the file keeps its mode and (where the process may) its owner, the
@@ -224,9 +234,10 @@ type StripReport struct {
 
 // GapFillHolder reports whether the destination of one gap-fill key (a name
 // from headGapFillKeys) already holds what the file would have supplied: a
-// secret's name holds a value or an unreadable marker, root_dir is in books'
-// settings blob or core.library.roots lists a root, enable_ai_parsing's key
-// is effectively true. NewGapFillHolder builds it from core's stores.
+// secret's name holds a readable value (an unreadable marker, or a record
+// that does not decrypt, holds none), root_dir is in books' settings blob or
+// core.library.roots lists a root, enable_ai_parsing's key is effectively
+// true. NewGapFillHolder builds it from core's stores.
 type GapFillHolder func(ctx context.Context, key string) (held bool, err error)
 
 // headGapFillKeys are the five managed keys HEAD's gap-fill reads, in the
@@ -262,7 +273,10 @@ func NewGapFillHolder(sec SecretMeta, legacy storage.Reader, effective func(ctx 
 			if err != nil {
 				return false, fmt.Errorf("%w: read %s: %v", errConfigStep, path, errClass(err))
 			}
-			return m.Set, nil
+			// Set is true for an unreadable marker and for a record that fails to
+			// decrypt (Err is ErrKeyUnavailable or ErrCorrupt): neither holds a
+			// value, so a file value added later is kept and listed, not stripped.
+			return m.Set && m.Err == nil, nil
 		case "root_dir":
 			if legacy != nil {
 				raw, err := get(ctx, legacy, blobKey())
@@ -321,6 +335,9 @@ func StripGapFill(ctx context.Context, files FileOps, path string, holder GapFil
 	case err != nil:
 		return StripReport{}, fmt.Errorf("%w: read config.yaml: %v", errConfigStep, errClassFile(err))
 	}
+	// A symlink whose target does not exist reads as absent above (ReadFile
+	// follows the link), so this branch is reached only when the link or its
+	// target changes between the read and here: a race, not a state.
 	target, err := files.Resolve(path)
 	if err != nil {
 		return StripReport{}, fmt.Errorf("%w: config.yaml is a symlink whose target cannot be resolved; left unchanged: %v", errConfigStep, errClassFile(err))
