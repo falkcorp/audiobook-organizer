@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
 // last-edited: 2026-11-12
 
@@ -250,7 +250,7 @@ func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kin
 	if sched != nil {
 		c.Schedule = sched(kind)
 	}
-	shell := kindShell{kind: kind, job: job, deps: deps, liveOnly: !advertisesDryRun(job)}
+	shell := kindShell{kind: kind, job: job, deps: deps, liveOnly: !AdvertisedDryRunDefault(job)}
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, json.RawMessage]{Common: c, Run: shell.run})
 }
 
@@ -294,23 +294,6 @@ func startRequirement(job maintenance.MaintenanceJob) rbac.Requirement {
 		return rbac.AllOf(settingsManageScopes...)
 	}
 	return rbac.Requirement{}
-}
-
-// advertisesDryRun is the server's advertisedDryRunDefault (HEAD's wrapper
-// declares a Preview exactly when it holds): the job's DefaultParams carry
-// dry_run=true.
-func advertisesDryRun(job maintenance.MaintenanceJob) bool {
-	raw, err := json.Marshal(job.DefaultParams())
-	if err != nil {
-		return false
-	}
-	var dp struct {
-		DryRun *bool `json:"dry_run"`
-	}
-	if err := json.Unmarshal(raw, &dp); err != nil || dp.DryRun == nil {
-		return false
-	}
-	return *dp.DryRun
 }
 
 // jobWrites is rule R7's "Writes found": per job, the books resource kinds its

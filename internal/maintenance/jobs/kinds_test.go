@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 95f5ec58-0c87-4403-b2aa-b306523e06bd
 // last-edited: 2026-11-12
 
@@ -497,8 +497,8 @@ func TestKindShell_EffectsTable(t *testing.T) {
 		if fx.IsReadOnly() != (len(ws) == 0) {
 			t.Errorf("%s: IsReadOnly=%v with %d write kinds", job.ID(), fx.IsReadOnly(), len(ws))
 		}
-		if fx.IsReadOnly() == advertisesDryRun(job) {
-			t.Errorf("%s: ReadOnly=%v but advertisesDryRun=%v; HEAD gives a preview to exactly the writers", job.ID(), fx.IsReadOnly(), advertisesDryRun(job))
+		if fx.IsReadOnly() == AdvertisedDryRunDefault(job) {
+			t.Errorf("%s: ReadOnly=%v but AdvertisedDryRunDefault=%v; HEAD gives a preview to exactly the writers", job.ID(), fx.IsReadOnly(), AdvertisedDryRunDefault(job))
 		}
 		if fx.IsReadOnly() {
 			readOnly = append(readOnly, job.ID())

@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dispatcher.go
-// version: 2.5.3
+// version: 2.5.4
 // guid: 55555555-5555-5555-5555-555555555555
-// last-edited: 2026-10-15
+// last-edited: 2026-11-12
 
 package server
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	maintjobs "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/gin-gonic/gin"
 )
@@ -50,31 +51,6 @@ func (s *Server) listMaintenanceJobs(c *gin.Context) {
 	httputil.RespondWithOK(c, struct {
 		Jobs []jobDef `json:"jobs"`
 	}{Jobs: out})
-}
-
-// advertisedDryRunDefault reports the dry_run value this job publishes in its
-// DefaultParams(), which is what listMaintenanceJobs serves to clients as
-// `default_params`. Jobs that expose no dry_run key at all report false.
-//
-// It goes through JSON deliberately rather than reflecting over the struct.
-// DefaultParams() returns `any` — in practice an anonymous struct declared
-// inline in each job file — and JSON is the representation the client actually
-// received. Reading it the same way the client did is what keeps the advertised
-// default and the applied default from drifting apart again; a reflection-based
-// reader could disagree with the wire format over tags, embedding or casing,
-// which is the exact class of divergence this function exists to close.
-func advertisedDryRunDefault(job maintenance.MaintenanceJob) bool {
-	raw, err := json.Marshal(job.DefaultParams())
-	if err != nil {
-		return false
-	}
-	var dp struct {
-		DryRun *bool `json:"dry_run"`
-	}
-	if err := json.Unmarshal(raw, &dp); err != nil || dp.DryRun == nil {
-		return false
-	}
-	return *dp.DryRun
 }
 
 // runMaintenanceJob enqueues the named maintenance job as an async operation.
@@ -223,7 +199,7 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// exempt job's Run starts reading dryRun.
 	//
 	// A body that sends dry_run and dryRun with different values is a 400.
-	dryRun, modeErr := opmode.ResolveDryRunDefault(maintenanceOpID(jobID), reqDryRun, reqDryRunCamel, advertisedDryRunDefault(job))
+	dryRun, modeErr := opmode.ResolveDryRunDefault(maintenanceOpID(jobID), reqDryRun, reqDryRunCamel, maintjobs.AdvertisedDryRunDefault(job))
 	if modeErr != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body: "+modeErr.Error())
 		return
@@ -265,7 +241,7 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 	// enqueue that, rather than marshalling a fixed struct.
 	//
 	// job_id is the dispatcher's to set; a client cannot rename the run it asked
-	// for. dry_run is written back RESOLVED, because advertisedDryRunDefault may
+	// for. dry_run is written back RESOLVED, because maintjobs.AdvertisedDryRunDefault may
 	// have supplied it — a body with no dry_run must persist the advertised
 	// default, not an absent key, so that both resume paths (which copy
 	// row.Params verbatim) restore the operator's effective choice rather than

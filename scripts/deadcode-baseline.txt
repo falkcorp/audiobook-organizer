@@ -473,7 +473,6 @@ internal/itunes.xmlEscape
 internal/itunes/service.calculatePercent
 internal/itunes/service.remapWindowsPath
 internal/maintenance/jobs.Kinds
-internal/maintenance/jobs.advertisesDryRun
 internal/maintenance/jobs.effectsFor
 internal/maintenance/jobs.kindFor
 internal/maintenance/jobs.kindShell.run

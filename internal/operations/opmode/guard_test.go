@@ -1,7 +1,7 @@
 // file: internal/operations/opmode/guard_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4e03d07d-8575-4704-af45-0699789f2293
-// last-edited: 2026-10-30
+// last-edited: 2026-11-12
 
 package opmode
 
@@ -222,9 +222,9 @@ var allowSingleSpelling = map[string]string{
 	"internal/server/handlers/duplicates/handler.go:func DeduplicateSeriesHandler": "HTTP request body; omitted previews; forwarded into dedup.series-dedup, which accepts both spellings",
 
 	// Readers.
-	"internal/server/handlers/repairs/handler.go:OpRef":                      "response shape; DryRun echoes a stored apply result",
-	"internal/server/handlers/repairs/handler.go:func opRef":                 "decodes a stored result's summary, not a request",
-	"internal/server/maintenance_dispatcher.go:func advertisedDryRunDefault": "reads a maintenance job's advertised DefaultParams, not a request",
+	"internal/server/handlers/repairs/handler.go:OpRef":                           "response shape; DryRun echoes a stored apply result",
+	"internal/server/handlers/repairs/handler.go:func opRef":                      "decodes a stored result's summary, not a request",
+	"internal/maintenance/jobs/advertised_dryrun.go:func AdvertisedDryRunDefault": "reads a maintenance job's advertised DefaultParams, not a request",
 }
 
 type singleSpellingStruct struct {

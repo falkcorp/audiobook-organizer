@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/bulk_deluge_import.go
-// version: 1.14.2
+// version: 1.14.3
 // guid: a2b8c6d7-9e0f-1a2b-3c4d-5e6f7a8b9c0d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package jobs
 
@@ -65,7 +65,7 @@ func (j *bulkDelugeImportJob) Run(ctx context.Context, store maintenance.JobStor
 	// overwriting the resolved argument — including clobbering the advertised
 	// dry_run:true default with false whenever the blob omitted the key, which is
 	// precisely the preview-becomes-mutation failure the dispatcher's
-	// advertisedDryRunDefault exists to prevent. The argument is authoritative.
+	// AdvertisedDryRunDefault exists to prevent. The argument is authoritative.
 	maxBooks := 0
 	if raw := maintenance.RawParamsFromCtx(ctx); len(raw) > 0 {
 		var p bdi_params
