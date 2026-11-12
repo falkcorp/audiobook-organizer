@@ -1,5 +1,5 @@
 // file: internal/repairs/kinds_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7d2e9a40-5c1b-4f86-b3a7-0e4d8c6a1f52
 // last-edited: 2026-11-12
 
@@ -1564,7 +1564,14 @@ func TestRepairsKinds_LiveApplyRefusesWithoutStandDownKey(t *testing.T) {
 	kt.plan(context.Background())
 	kt.k.deps.StandDownKey = ""
 
-	rc, hold := liveRC(context.Background(), kt.kind())
+	// The live attempt gets its own context: the refusal is cached for the
+	// attempt under the run's id, and a FakeRun's id is fixed per kind, so the
+	// preview run below reuses that id. Ending this attempt first is what the
+	// executor does between attempts; without it the preview would be answered
+	// with this attempt's cached refusal.
+	liveCtx, endAttempt := context.WithCancel(context.Background())
+	defer endAttempt()
+	rc, hold := liveRC(liveCtx, kt.kind())
 	_, _, err := kt.k.load(rc, nil, "b1")
 	require.ErrorContains(t, err, "no scan stand-down key")
 	// The refusal is remembered for the attempt (TestRepairsKinds_RefusedRunStateIsKeptForTheAttempt)
@@ -1586,6 +1593,7 @@ func TestRepairsKinds_LiveApplyRefusesWithoutStandDownKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// A run that is not Live takes no stand-down, so none is needed.
+	endAttempt()
 	pv := &modeRun{FakeRun: taskstest.NewFakeRun(context.Background(), kt.kind()), mode: tasks.ModePreview}
 	_, err = kt.k.runState(tasks.NewRC(pv))
 	require.NoError(t, err)
