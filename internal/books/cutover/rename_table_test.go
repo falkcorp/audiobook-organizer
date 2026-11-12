@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_table_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b8c8f9e-e2d4-4c55-8d7b-6a0f0e1f8a52
 // last-edited: 2026-11-11
 
@@ -28,7 +28,7 @@ const goldenPath = "testdata/rename_table.golden"
 // bump goldenVersion and goldenEdited with every change to the table, and
 // regenerate with -update.
 const (
-	goldenVersion = "1.0.0"
+	goldenVersion = "1.1.0"
 	goldenGUID    = "7024f723-334e-4210-95d6-bcd11fc9cd7d"
 	goldenEdited  = "2026-11-11"
 )

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_plan.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f2f4b87-3f6d-4a4c-8e0a-7c7f2c64b0d1
 // last-edited: 2026-11-11
 
@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/falkcorp/mediacore/config"
@@ -42,6 +43,9 @@ const (
 	reasonOperatorSecret = "an operator-layer-only secret was found in the blob"
 	reasonWebhookNoURL   = "the webhook secret has no URL to attach to"
 	reasonPluginName     = "the plugin id is not a valid secret name segment"
+
+	reasonURLUnproven     = "the URL may carry a credential that could not be split out: nothing was staged"
+	reasonOAuthNoProvider = "oauth settings had no provider entry to attach to: no client id was set"
 )
 
 // The unreadable markers' reasons (secrets.Importer.ImportUnreadable): no key
@@ -237,10 +241,15 @@ func peekRootDir(blob []byte, fileRoot string) string {
 	return fileRoot
 }
 
-// keyDirs are the directories HEAD searches for the key file, in order: the
-// state directory, then <root_dir>/.appdata/ (settings.go:110-140).
-func keyDirs(stateDir, rootDir string) []string {
+// keyDirs are the directories searched for the key file, in order: the state
+// directory, then the database's directory (HEAD's bootSettings passes exactly
+// these two to FindEncryptionKey), then <root_dir>/.appdata/ as an extra
+// fallback. An empty directory is skipped.
+func keyDirs(stateDir, dbDir, rootDir string) []string {
 	dirs := []string{stateDir}
+	if dbDir != "" {
+		dirs = append(dirs, dbDir)
+	}
 	if rootDir != "" {
 		dirs = append(dirs, filepath.Join(rootDir, ".appdata"))
 	}
@@ -384,6 +393,18 @@ func buildPlan(in *m2Input) (*plan, error) {
 		pl.gapFill()
 	} else {
 		pl.tree = map[string]any{}
+		// config.yaml's root_dir and enable_ai_parsing are applied to the blob
+		// (M6 and the key's stage take them from there), so without a blob they
+		// have nowhere to go.
+		var keys []string
+		for _, k := range []string{"root_dir", "enable_ai_parsing"} {
+			if in.FileHas[k] {
+				keys = append(keys, k)
+			}
+		}
+		if len(keys) > 0 {
+			return nil, &noBlobError{Keys: keys}
+		}
 	}
 
 	pl.secretRows(rows)
@@ -457,6 +478,14 @@ func (pl *planner) secretRows(rows map[string]*rowState) {
 			if v != "" {
 				pl.p.Secrets = append(pl.p.Secrets, secretWrite{Name: name, Value: v, Source: source, FromFile: fromFile})
 				pl.imported[name] = true
+				if fromFile {
+					// HEAD parity (LoadConfigFromDatabase "will try config file
+					// fallback"): the row did not decrypt and config.yaml had the
+					// value. Counted and logged apart from an ordinary gap-fill,
+					// so an operator can see a secret came back from the file.
+					pl.p.Reported = append(pl.p.Reported, "secret "+r.Head+" recovered from config.yaml after an undecryptable row")
+					pl.p.count("recovered-from-config-yaml")
+				}
 			} else {
 				pl.p.Unreadable = append(pl.p.Unreadable, unreadableSecret{Name: name, Row: r.Head, Reason: rs.Marker})
 			}
@@ -606,22 +635,156 @@ func (pl *planner) keyMember(r *Row, val any) {
 	}
 }
 
-// stageKey plans one key, splitting userinfo out of a URL value first.
+// stageKey plans one key. A value that carries a URL has its userinfo split
+// out first (guardURLs); one that may carry a credential it cannot split out
+// is quarantined sealed and nothing is staged.
 func (pl *planner) stageKey(r *Row, t Target, out, original json.RawMessage) {
-	if r.URL {
-		var s string
-		if json.Unmarshal(out, &s) == nil && s != "" {
-			if u, err := url.Parse(s); err == nil && u.User != nil {
-				info := u.User.String()
-				u.User = nil
-				pl.addSecret(secrets.Name(t.Path+".userinfo"), info, r.Head)
-				pl.p.Reported = append(pl.p.Reported, "userinfo moved out of "+t.Path)
-				pl.p.count("userinfo-record")
-				out = marshalAt(u.String())
-			}
-		}
+	out, ok := pl.guardURLs(r, t, out, original)
+	if !ok {
+		return
 	}
 	pl.p.Stages = append(pl.p.Stages, stagedKey{Head: r.Head, Path: config.Path(t.Path), Value: out, Original: original, Member: r.Head})
+}
+
+// isURLName reports whether a leaf or field name holds a URL: url or endpoint,
+// or a name ending in _url or _endpoint (base_url, remote_url,
+// otlp_endpoint). The generator sets Row.URL from it, and guardURLs applies
+// it to the fields of a list or object value, so a URL inside an element is
+// found by the same rule as a URL key.
+func isURLName(name string) bool {
+	return name == "url" || name == "endpoint" || strings.HasSuffix(name, "_url") || strings.HasSuffix(name, "_endpoint")
+}
+
+// urlVerdict is what guarding one URL string found.
+type urlVerdict int
+
+const (
+	urlClean    urlVerdict = iota // no userinfo
+	urlSplit                      // userinfo found and removed
+	urlUnproven                   // a credential cannot be ruled out
+)
+
+// splitURLUserinfo removes the userinfo of s. Userinfo is delimited by an @, so
+// a string with none has none, whatever it parses as (a bare host:port is no
+// URL to net/url, and it is the usual form of an OTLP endpoint). With an @ it
+// returns urlUnproven when it cannot prove the userinfo is the one net/url
+// reports: the string does not parse, or it parses with no userinfo but an @
+// stands in its authority (a schemeless user:pw@host:port parses as an opaque
+// URL, so net/url reports no User).
+func splitURLUserinfo(s string) (clean, info string, v urlVerdict) {
+	if !strings.Contains(s, "@") {
+		return s, "", urlClean
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return s, "", urlUnproven
+	}
+	if u.User != nil {
+		info = u.User.String()
+		u.User = nil
+		return u.String(), info, urlSplit
+	}
+	if authorityHasAt(s) {
+		return s, "", urlUnproven
+	}
+	return s, "", urlClean
+}
+
+// authorityHasAt reports an @ in the part of s that would be its authority:
+// after the "://" of a scheme or the leading "//" of a network-path reference,
+// or from the start of a string with neither, up to the first of / ? #. An @
+// in a path or query is not userinfo.
+func authorityHasAt(s string) bool {
+	rest := s
+	if i := strings.Index(s, "://"); i > 0 && !strings.ContainsAny(s[:i], "/?#@") {
+		rest = s[i+3:]
+	} else if strings.HasPrefix(s, "//") {
+		rest = s[2:]
+	}
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+		rest = rest[:end]
+	}
+	return strings.Contains(rest, "@")
+}
+
+// userinfoAt is one userinfo found in a staged value: the element path (empty
+// for a scalar key) and the userinfo.
+type userinfoAt struct {
+	segs []string
+	info string
+}
+
+// guardURLs walks a value about to be staged and splits the userinfo out of
+// every URL-typed string leaf: the key's own value when the row is a URL key,
+// and the fields of list and object elements by name (isURLName). Each
+// userinfo goes to a secret named by position (<key>.userinfo for a scalar,
+// <key>.item-<n>.<field>.userinfo inside a list); the staged value keeps the
+// URL without it. A leaf that may carry a credential it cannot split out
+// quarantines the whole member sealed, and nothing is staged: false.
+func (pl *planner) guardURLs(r *Row, t Target, out, original json.RawMessage) (json.RawMessage, bool) {
+	dec := json.NewDecoder(bytes.NewReader(out))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return out, true // not a JSON value: config's validation refuses it
+	}
+	var (
+		found    []userinfoAt
+		unproven bool
+	)
+	var walk func(v any, segs []string, urlTyped bool) any
+	walk = func(v any, segs []string, urlTyped bool) any {
+		switch x := v.(type) {
+		case string:
+			if !urlTyped {
+				return x
+			}
+			clean, info, verdict := splitURLUserinfo(x)
+			switch verdict {
+			case urlUnproven:
+				unproven = true
+			case urlSplit:
+				found = append(found, userinfoAt{segs: slices.Clone(segs), info: info})
+				return clean
+			}
+			return x
+		case map[string]any:
+			names := make([]string, 0, len(x))
+			for k := range x {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+			for _, k := range names {
+				x[k] = walk(x[k], append(slices.Clone(segs), k), isURLName(k))
+			}
+			return x
+		case []any:
+			for i := range x {
+				x[i] = walk(x[i], append(slices.Clone(segs), "item-"+strconv.Itoa(i)), urlTyped)
+			}
+			return x
+		}
+		return v
+	}
+	v = walk(v, nil, r.URL)
+	if unproven {
+		pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey(r.Head), Raw: original, Reason: reasonURLUnproven})
+		return nil, false
+	}
+	if len(found) == 0 {
+		return out, true
+	}
+	for _, f := range found {
+		name, member := t.Path, r.Head
+		if len(f.segs) > 0 {
+			name += "." + strings.Join(f.segs, ".")
+			member += "." + strings.Join(f.segs, ".")
+		}
+		pl.addSecret(secrets.Name(name+".userinfo"), f.info, member)
+		pl.p.Reported = append(pl.p.Reported, "userinfo moved out of "+name)
+		pl.p.count("userinfo-record")
+	}
+	return marshalAt(v), true
 }
 
 // ---- the OIDC fold ----
@@ -692,7 +855,14 @@ func (pl *planner) fold() {
 			continue
 		}
 		if !f.enabled {
-			pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("oauth_" + p.id + "_client_id"), Raw: marshalAt(id), Reason: reasonOAuthDisabled})
+			// The client secret still moved to its name, which nothing references
+			// while sign-in is off: the record pairs the id with that name, so the
+			// operator can see they belong together.
+			pair := map[string]any{"client_id": id}
+			if pl.imported[secrets.Name(p.secret)] {
+				pair["client_secret_name"] = p.secret
+			}
+			pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("oauth_" + p.id + "_client_id"), Raw: marshalAt(pair), Reason: reasonOAuthDisabled})
 			continue
 		}
 		entry := map[string]any{"id": p.id, "kind": p.kind, "client_id": id}
@@ -711,6 +881,21 @@ func (pl *planner) fold() {
 		entries = append(entries, entry)
 	}
 	if len(entries) == 0 {
+		// The default role and the allowed emails ride on the provider entries
+		// (05-authn); with none to carry them they would vanish, so each is
+		// quarantined sealed.
+		reason := reasonOAuthNoProvider
+		if !f.enabled {
+			reason = reasonOAuthDisabled
+		}
+		// HEAD's blob always carries the role, "viewer" unless set: a default is
+		// no information, so it is not quarantined on every install.
+		if f.role != "" && !headIsDefault("oauth_default_role", f.role) {
+			pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("oauth_default_role"), Raw: marshalAt(f.role), Reason: reason})
+		}
+		if f.emails != "" {
+			pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("oauth_allowed_emails"), Raw: marshalAt(f.emails), Reason: reason})
+		}
 		return
 	}
 	raw := marshalAt(entries)

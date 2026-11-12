@@ -1,0 +1,2 @@
+- [ ] **Assert the rename table's `refuse` verdicts against `config`'s real ones (F3-07)** F3-06's golden generates each retired name's `refuse`/`warn` from the rows' admin flag and the two registered `FailClosed` keys' tags; it cannot compare with core's real verdict because `coreSections()` is unexported in `core/kernel` and F3-06 leaves `core/` alone. In F3-07's `TestRenameTable_EveryKeyRegistered`, add: for every key the real registry has, the golden's verdict equals `config`'s verdict for that path.
+  - Owner: F3-07.

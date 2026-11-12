@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_table.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f0dc15e-6a07-4d86-8d7f-28b5bd6aa771
 // last-edited: 2026-11-11
 
@@ -176,8 +176,21 @@ func (g *generator) add(r Row) {
 		g.fail("row %s is generated twice", r.Head)
 		return
 	}
+	// URL-ness is derived from the name, not listed: a leaf named url or
+	// endpoint, or ending in _url or _endpoint, holds a URL M2 must split
+	// userinfo out of (isURLName). A list-typed key's URLs are found by the
+	// same rule on the fields of its elements, when its value is staged.
+	r.URL = isURLName(lastSegment(r.Head))
 	g.idx[r.Head] = len(g.rows)
 	g.rows = append(g.rows, r)
+}
+
+// lastSegment is the last dotted segment of a HEAD name.
+func lastSegment(head string) string {
+	if i := strings.LastIndexByte(head, '.'); i >= 0 {
+		return head[i+1:]
+	}
+	return head
 }
 
 func generateTable() (*RenameTable, error) {
@@ -259,7 +272,7 @@ func (g *generator) topField(sf reflect.StructField) {
 	if e, ok := g.explicit[name]; ok {
 		g.used[name] = true
 		row = Row{Head: name, Top: true, Class: e.class, Stored: e.stored, Targets: slices.Clone(e.targets),
-			FailClosed: e.failClosed, Admin: e.admin, URL: e.url, Note: e.note, Container: isStruct}
+			FailClosed: e.failClosed, Admin: e.admin, Note: e.note, Container: isStruct}
 		if isStruct {
 			leaf = g.explicitLeaf(name)
 		}
@@ -273,7 +286,7 @@ func (g *generator) topField(sf reflect.StructField) {
 			g.fail("HEAD field %s matches no explicit row and no section", name)
 			return
 		}
-		row = Row{Head: name, Top: true, Container: isStruct, URL: urlRows[name]}
+		row = Row{Head: name, Top: true, Container: isStruct}
 		base := "modules.books." + sec + "." + lf
 		path := base
 		if whole {
@@ -347,7 +360,7 @@ func (g *generator) sectionLeaf(top, head, rel, base string) {
 		return
 	}
 	targets := []Target{{Kind: TargetKey, Path: base + "." + rel}}
-	g.add(Row{Head: head, Class: ClassKey, Stored: StoredBlob, BlobField: top, Admin: adminClass(head, false, targets), URL: urlRows[head], Targets: targets})
+	g.add(Row{Head: head, Class: ClassKey, Stored: StoredBlob, BlobField: top, Admin: adminClass(head, false, targets), Targets: targets})
 }
 
 // explicitLeaf is the leaf rule of an explicit struct row: a sub-key row for
@@ -371,7 +384,7 @@ func (g *generator) explicitLeaf(top string) func(head, rel string) {
 
 func (g *generator) addSub(top, head string, s subRow) {
 	g.add(Row{Head: head, Class: s.class, Stored: StoredBlob, BlobField: top, Targets: slices.Clone(s.targets), Note: s.note,
-		Admin: adminClass(head, s.admin, s.targets), URL: urlRows[head]})
+		Admin: adminClass(head, s.admin, s.targets)})
 }
 
 // scheduledRows generates one row per entry of the scheduled block.

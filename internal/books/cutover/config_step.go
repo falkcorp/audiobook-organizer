@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_step.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b15d3f6-9b1f-4a8b-8f43-50f9c0d2b9aa
 // last-edited: 2026-11-11
 
@@ -11,7 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -66,8 +69,14 @@ type ConfigStepOptions struct {
 	// this step runs behind; it must be above 0.
 	LevelStepVersion int
 	// StateDir is the secure state directory HEAD keeps its settings key in
-	// (core.paths.state_dir); <root_dir>/.appdata/ is searched after it.
+	// (core.paths.state_dir).
 	StateDir string
+	// DatabasePath is HEAD's database path (its DATABASE_PATH, config.yaml or
+	// stored database_path). HEAD searches [StateDir, filepath.Dir(DatabasePath)]
+	// for the key (bootSettings: legacyKeyDir), so M2 does too: an install whose
+	// key still sits beside its database keeps working. <root_dir>/.appdata/ is
+	// searched after both, as an extra fallback HEAD itself never had.
+	DatabasePath string
 	// ConfigFile is the operator's config.yaml next to the database ("" when
 	// there is none): M2 reads its gap-fill values; StripGapFill strips it.
 	ConfigFile string
@@ -91,6 +100,18 @@ type ConfigStepOptions struct {
 
 // errConfigStep wraps what M2 refuses outright.
 var errConfigStep = errors.New("cutover: config step")
+
+// ConfigFileError is a config.yaml that exists and could not be read. M2 imports
+// the gap-fill values that file holds and M2b later strips it, so a file M2
+// cannot read is not skipped: reading it as empty would make the strip delete
+// values nothing imported.
+type ConfigFileError struct{ Reason string }
+
+func (e *ConfigFileError) Error() string {
+	return fmt.Sprintf("%v: config.yaml exists but cannot be read (%s): M2 imports the values it holds, so the upgrade does not go on without it; make it readable by the service user, or move it aside", errConfigStep, e.Reason)
+}
+
+func (e *ConfigFileError) Unwrap() error { return errConfigStep }
 
 // KeyGuardError is the guard's refusal: a settings row holds an encrypted
 // value and no key file was found (or the key could not be read), so the
@@ -211,12 +232,18 @@ func (s *configStep) loadInputs(ctx context.Context, r storage.Reader) (*m2Input
 		}
 	}
 	if s.opts.ConfigFile != "" {
-		if data, err := s.opts.Files.ReadFile(s.opts.ConfigFile); err == nil {
+		data, err := s.opts.Files.ReadFile(s.opts.ConfigFile)
+		switch {
+		case err == nil:
 			in.File, in.FileHas, _ = headParseGapFill(data)
+		case errors.Is(err, fs.ErrNotExist):
+			// No file: HEAD gap-fills nothing.
+		default:
+			return nil, &ConfigFileError{Reason: errClassFile(err)}
 		}
 	}
 	if rowsNeedKey(raws) {
-		dirs := keyDirs(s.opts.StateDir, peekRootDir(in.Blob, in.File.RootDir))
+		dirs := keyDirs(s.opts.StateDir, s.dbDir(), peekRootDir(in.Blob, in.File.RootDir))
 		found := headFindKey(dirs...)
 		file := headKeyFileName
 		switch {
@@ -243,6 +270,14 @@ func (s *configStep) loadInputs(ctx context.Context, r storage.Reader) (*m2Input
 	return in, nil
 }
 
+// dbDir is HEAD's legacy key directory: the database's own.
+func (s *configStep) dbDir() string {
+	if s.opts.DatabasePath == "" {
+		return ""
+	}
+	return filepath.Dir(s.opts.DatabasePath)
+}
+
 func (s *configStep) allowRegen() bool { return s.opts.AllowKeyRegen != nil && s.opts.AllowKeyRegen() }
 
 // errClass names an error's class without its text (a storage error's text
@@ -261,25 +296,124 @@ func errClass(err error) string {
 
 // ---- Preflight ----
 
-// preflight stops the upgrade, writing nothing, for the two states HEAD
-// itself refuses to run in: a settings blob that does not decode (HEAD:
-// "refusing to run on defaults"), and an encrypted row with no key to read it
-// (the guard). Everything else M2 imports or quarantines.
+// preflight stops the upgrade, writing nothing, for the states M2 cannot take
+// on without losing a setting: a settings blob that does not decode (HEAD:
+// "refusing to run on defaults"), an encrypted row with no key to read it (the
+// guard), a config.yaml that cannot be read, and the shapes in which no chunk
+// would import what HEAD still reads (census). Everything else M2 imports or
+// quarantines.
 func (s *configStep) preflight(ctx context.Context, r storage.Reader) ([]datamigrate.Blocker, error) {
 	in, err := s.loadInputs(ctx, r)
-	var guard *KeyGuardError
+	var (
+		guard *KeyGuardError
+		file  *ConfigFileError
+	)
 	switch {
 	case errors.As(err, &guard):
 		return []datamigrate.Blocker{{Key: settingKey(headSecretRows()[0]), Family: "setting", Reason: "an encrypted settings row has no key to read it: " + guard.Reason,
 			Fix: fmt.Sprintf("restore %s in one of: %s; or set ABO_CORE_SECRETS_ALLOW_KEY_REGEN=true to go on with the rows unreadable", guard.File, strings.Join(guard.Searched, ", "))}}, nil
+	case errors.As(err, &file):
+		return []datamigrate.Blocker{{Key: []byte(headConfigFileName), Family: "file", Reason: "config.yaml exists but cannot be read (" + file.Reason + ")",
+			Fix: "make config.yaml readable by the service user, or move it aside: M2 imports the gap-fill values it holds before the strip removes them"}}, nil
 	case err != nil:
 		return nil, err
+	}
+	blockers, err := s.census(ctx, r, in)
+	if err != nil || len(blockers) > 0 {
+		return blockers, err
 	}
 	if _, err := buildPlan(in); err != nil {
 		return []datamigrate.Blocker{{Key: blobKey(), Family: "setting", Reason: err.Error(),
 			Fix: "repair or restore the settings blob on the pre-freeze release: it refuses to run on this blob too"}}, nil
 	}
 	return nil, nil
+}
+
+// headConfigFileName is the operator's file's name, the blocker key of an
+// unreadable one.
+const headConfigFileName = "config.yaml"
+
+// census is Preflight's read of the shapes the runner would walk past. The
+// runner steps M2 once per present source key (the blob and the four rows),
+// so an install with none of them never runs it, and one with a blob is
+// planned whole. Without a blob HEAD itself reads two things M2 does not
+// import: the per-key rows an install from before the blob stored
+// (LoadConfigFromDatabase's legacy path), and config.yaml's gap-fill values
+// where no row has a value. Each is a blocker, with a way out, instead of a
+// setting that quietly stops applying: HEAD's first settings save writes the
+// blob from both, after which M2 has something to move.
+func (s *configStep) census(ctx context.Context, r storage.Reader, in *m2Input) ([]datamigrate.Blocker, error) {
+	if in.Blob != nil {
+		return nil, nil
+	}
+	var blockers []datamigrate.Blocker
+	var legacy []string
+	for kv, err := range r.Scan(ctx, storage.ScanOptions{Start: []byte(settingsKeyPrefix), End: []byte("setting;"), KeysOnly: true}) {
+		if err != nil {
+			return nil, fmt.Errorf("%w: scan the settings rows: %v", errConfigStep, errClass(err))
+		}
+		if name := strings.TrimPrefix(string(kv.Key), settingsKeyPrefix); headLegacySettingKeys[name] {
+			legacy = append(legacy, name)
+		}
+	}
+	if len(legacy) > 0 {
+		slices.Sort(legacy)
+		shown := legacy
+		if len(shown) > 5 {
+			shown = shown[:5]
+		}
+		blockers = append(blockers, datamigrate.Blocker{Key: blobKey(), Family: "setting",
+			Reason: fmt.Sprintf("there is no settings blob, and %d per-key settings row(s) HEAD still reads (%s) would be left behind", len(legacy), strings.Join(shown, ", ")),
+			Fix:    "start the pre-freeze release and save the settings once (Settings, Save): it writes the settings blob from these rows, which M2 then moves; then upgrade again"})
+	}
+	if names := fileNeedsSource(in); len(names) > 0 {
+		blockers = append(blockers, noBlobBlocker(names))
+	}
+	return blockers, nil
+}
+
+// fileNeedsSource returns the gap-fill keys config.yaml holds that no chunk of
+// M2 would import: with no blob, root_dir and enable_ai_parsing have nowhere
+// to go, and when no row exists either, M2 does not run at all, so the three
+// secrets stay in the file too. Sorted names, never values.
+func fileNeedsSource(in *m2Input) []string {
+	if in.Blob != nil || len(in.FileHas) == 0 {
+		return nil
+	}
+	anyRow := false
+	for _, rs := range in.Rows {
+		if rs != nil && rs.Present {
+			anyRow = true
+		}
+	}
+	var names []string
+	for _, k := range headGapFillKeys {
+		if !in.FileHas[k] {
+			continue
+		}
+		if anyRow && k != "root_dir" && k != "enable_ai_parsing" {
+			continue // a secret: a row exists, so M2 runs and imports it
+		}
+		names = append(names, k)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// noBlobError is the planner's refusal to plan config.yaml's blob-bound values
+// without a blob. Preflight's census stops that shape first, so the planner
+// reaches it only on a resumed cutover, which skips Preflight; the chunk then
+// fails with this text and writes nothing.
+type noBlobError struct{ Keys []string }
+
+func (e *noBlobError) Error() string {
+	return "config.yaml holds " + strings.Join(e.Keys, ", ") + " and there is no settings blob to import them into"
+}
+
+func noBlobBlocker(names []string) datamigrate.Blocker {
+	return datamigrate.Blocker{Key: blobKey(), Family: "setting",
+		Reason: "there is no settings blob, and config.yaml holds " + strings.Join(names, ", ") + " that no step would import",
+		Fix:    "start the pre-freeze release and save the settings once (Settings, Save): it writes the settings blob and the secret rows from config.yaml, which M2 then moves; or remove those keys from config.yaml if they are stale; then upgrade again"}
 }
 
 // ---- Step ----
@@ -387,6 +521,11 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 			return fmt.Errorf("%w: blob rewrite failed: %v", errConfigStep, errClass(err))
 		}
 		w.Count("blob-rewritten")
+	}
+	for outcome, n := range p.Counts {
+		for range n {
+			w.Count(outcome)
+		}
 	}
 	for _, name := range p.Dropped {
 		s.log.Info("cutover: setting dropped by rule", "step", ConfigCutoverID, "setting", name)

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_data.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b874765a-43e8-4e15-a309-3879bf7e2e64
 // last-edited: 2026-11-11
 
@@ -73,7 +73,6 @@ type explicitRow struct {
 	// the real declarations.
 	admin      bool
 	failClosed bool
-	url        bool // a URL-valued key: M2 splits userinfo out of it
 	note       string
 }
 
@@ -116,8 +115,8 @@ var explicitRows = []explicitRow{
 	{head: "openai_api_key", class: ClassSecret, stored: StoredRow, targets: []Target{tpassSecret("integrations.ai.openai.api_key")}, note: "encrypted row"},
 	{head: "acoustid_api_key", class: ClassSecret, targets: []Target{ts("modules.books.acoustid.api_key")}, note: "plaintext in the blob"},
 	{head: "openai_base_url", class: ClassInput, targets: []Target{tpass("integrations.ai.openai.base_url", true)}},
-	{head: "otel_exporter_otlp_endpoint", targets: []Target{tk("core.tracing.otlp.endpoint", "")}, admin: true, url: true},
-	{head: "otel_metrics_otlp_endpoint", targets: []Target{tk("core.metrics.otlp.endpoint", "")}, admin: true, url: true},
+	{head: "otel_exporter_otlp_endpoint", targets: []Target{tk("core.tracing.otlp.endpoint", "")}, admin: true},
+	{head: "otel_metrics_otlp_endpoint", targets: []Target{tk("core.metrics.otlp.endpoint", "")}, admin: true},
 	{head: "otel_metrics_otlp_interval", targets: []Target{tk("core.metrics.otlp.interval", "")}, note: "bare integer = ms"},
 	{head: "otel_metrics_otlp_insecure", targets: []Target{tk("core.metrics.otlp.insecure", "")}, admin: true},
 	{head: "telemetry_environment", targets: []Target{tk("core.metrics.environment", "")}},
@@ -141,7 +140,7 @@ var explicitRows = []explicitRow{
 	{head: "oauth_github_client_secret", class: ClassSecret, targets: []Target{tsc("core.auth.oidc.github.client_secret")}, admin: true, note: "the secret the github entry's client_secret ref names; plaintext in the blob"},
 	{head: "oauth_google_client_id", targets: []Target{tfold("core.auth.oidc.providers entry google")}, admin: true, note: "fold (05-authn)"},
 	{head: "oauth_google_client_secret", class: ClassSecret, targets: []Target{tsc("core.auth.oidc.google.client_secret")}, admin: true, note: "the secret the google entry's client_secret ref names; plaintext in the blob"},
-	{head: "oauth_redirect_base_url", targets: []Target{tk("core.auth.oidc.redirect_base_url", "")}, admin: true, url: true},
+	{head: "oauth_redirect_base_url", targets: []Target{tk("core.auth.oidc.redirect_base_url", "")}, admin: true},
 	{head: "oauth_allowed_emails", targets: []Target{tfold("core.auth.oidc.providers[].allowed_emails"), tk("modules.books.cfaccess.allowed_emails", "")}, admin: true, note: "fold (05-authn); M2 also writes the value to the books key, because HEAD's internal/cfaccess reads it as the Cloudflare Access allow-list"},
 	{head: "oauth_default_role", targets: []Target{tfold("core.auth.oidc.providers[].default_role")}, admin: true, note: "fold (05-authn)"},
 	{head: "cf_access_team_domain", targets: []Target{tk("modules.books.identity.cf_access_team_domain", "")}, admin: true},
@@ -152,7 +151,7 @@ var explicitRows = []explicitRow{
 	{head: "smtp_username", targets: []Target{tpass("integrations.notify.email.username", false)}},
 	{head: "smtp_password", class: ClassSecret, targets: []Target{tpassSecret("integrations.notify.email.password")}},
 	{head: "smtp_from", targets: []Target{tpass("integrations.notify.email.from", false)}},
-	{head: "public_base_url", targets: []Target{tkc("core.http.public_base_url", "")}, url: true},
+	{head: "public_base_url", targets: []Target{tkc("core.http.public_base_url", "")}},
 	{head: "invite_email_service_token", targets: []Target{tk("modules.books.cfguests.invite_email_service_token", "")}},
 	{head: "tunnel_connector_addrs", targets: []Target{tk("core.http.trusted_proxies", ConvertCSVList)}, admin: true, note: "comma list -> list; a storable admin key from F3 (§1.3.7)"},
 	{head: "allowed_peer_cidrs", targets: []Target{tk("core.http.peer_allowlist", ConvertCSVList)}, admin: true, note: "comma list -> list; a storable admin key from F3 (§1.3.7)"},
@@ -262,12 +261,6 @@ var bindAlias = map[string]string{
 	"openlibrary_base_url":  "metadata_sources",
 	"audnexus_base_url":     "metadata_sources",
 	"google_books_base_url": "metadata_sources",
-}
-
-// urlRows are the section-derived rows whose value is a URL.
-var urlRows = map[string]bool{
-	"whisper_remote_url": true,
-	"embedding.base_url": true,
 }
 
 // headProtected are the HEAD names HEAD's configFieldRules classes
