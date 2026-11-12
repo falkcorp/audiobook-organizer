@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_atpath_index.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-11-12
 
@@ -217,8 +217,10 @@ type BookAtPathBackfillResult struct {
 	SampleUndecodable []string `json:"sample_undecodable,omitempty"`
 	// SkippedOverlongRows are decodable rows whose path or id exceeds the
 	// bookAtPathKey bound (maxBookAtPathLen / maxBookIDLen). They get no index
-	// key, are not counted in Scanned, and do not abort the pass; each is
-	// logged at WARN with its id and path length only.
+	// key (path-keyed) but DO get the id-keyed undecodable marker, so lookups
+	// still see the book (fail closed, never "path free"). They are not counted
+	// in Scanned, do not abort the pass, and each is logged at WARN with its id
+	// and path length only.
 	SkippedOverlongRows int `json:"skipped_overlong_rows"`
 }
 
@@ -414,6 +416,22 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 				// context.Canceled rather than as another worker's error.
 				return ctx.Err()
 			}
+			// stageMarker stages the id's book_atpath_undecodable: marker (noted
+			// in the in-memory set first, see above) and flushes a full chunk.
+			stageMarker := func(id string) error {
+				if err := p.noteUndecodableMarker(id); err != nil {
+					return fmt.Errorf("record undecodable marker for %s: %w", id, err)
+				}
+				stagedMarkers = append(stagedMarkers, id)
+				if err := batch.Set(bookAtPathUndecodableKey(id), []byte{}, nil); err != nil {
+					return fmt.Errorf("stage undecodable marker for %s: %w", id, err)
+				}
+				buffered++
+				if buffered >= bookAtPathBackfillChunk {
+					return flush()
+				}
+				return nil
+			}
 			for r := range rows {
 				if err := gctx.Err(); err != nil {
 					return err
@@ -426,31 +444,29 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 					// row. Instead stage its marker, which keeps
 					// LiveBookIDsAtPath failing closed while the row stays
 					// broken, and report it at Error below.
-					if err := p.noteUndecodableMarker(r.id); err != nil {
-						return fmt.Errorf("record undecodable marker for %s: %w", r.id, err)
+					if err := stageMarker(r.id); err != nil {
+						return err
 					}
-					stagedMarkers = append(stagedMarkers, r.id)
-					if err := batch.Set(bookAtPathUndecodableKey(r.id), []byte{}, nil); err != nil {
-						return fmt.Errorf("stage undecodable marker for %s: %w", r.id, err)
-					}
-					buffered++
 					undecMu.Lock()
 					undecodable = append(undecodable, r.id)
 					undecMu.Unlock()
-					if buffered >= bookAtPathBackfillChunk {
-						if err := flush(); err != nil {
-							return err
-						}
-					}
 					continue
 				}
 				key, err := bookAtPathKey(row.FilePath, r.id)
 				if errors.Is(err, errBookAtPathKeyTooLong) {
 					// One corrupt row must not abort the whole pass (every
-					// boot would stay on the full scan). It cannot be keyed:
-					// skip, count, warn.
+					// boot would stay on the full scan). It cannot be keyed, but
+					// it is a real book, so it must not read as "path free":
+					// stage the same id-keyed marker an undecodable row gets.
+					// The readers' marker path (undecodableMarkedMatching)
+					// point-reads the row, finds it decodable and returns it as
+					// a candidate at its own path, and LiveBookPathsUnderDir
+					// includes it, so no lookup misses it.
 					overlong.Add(1)
 					warnBookAtPathOverlong("book-atpath-backfill", r.id, len(row.FilePath))
+					if err := stageMarker(r.id); err != nil {
+						return err
+					}
 					continue
 				}
 				if err != nil {
@@ -524,8 +540,10 @@ type BookAtPathIndexReport struct {
 	// checked, so a report with any is incomplete.
 	UndecodableRows int `json:"undecodable_rows"`
 	// OverlongRows are decodable rows whose path or id exceeds the key bound.
-	// They can have no index key, so they are skipped rather than reported as
-	// MissingLive/MissingTrashed forever. Informational.
+	// They can have no index key, so they are not reported as
+	// MissingLive/MissingTrashed forever; they must carry an undecodable
+	// marker instead (the readers' fail-closed path), and one without it counts
+	// in UnmarkedUndecodable, which the backfill/rebuild fixes.
 	OverlongRows int `json:"overlong_rows"`
 
 	// MissingLive is the bug class: a live book with no key at its path, which
@@ -614,6 +632,7 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 	expected := make(map[pair]bool) // value: trashed
 	rowPath := make(map[string]string)
 	undecodable := make(map[string]bool)
+	overlong := make(map[string]bool)
 	n := 0
 	if err := forEachBookRow(snap, func(id string, v []byte) error {
 		n++
@@ -631,6 +650,7 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 		}
 		if len(row.FilePath) > maxBookAtPathLen || len(id) > maxBookIDLen {
 			rep.OverlongRows++
+			overlong[id] = true
 			warnBookAtPathOverlong("book-atpath-verify", id, len(row.FilePath))
 			return nil
 		}
@@ -685,7 +705,7 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 	var notInSet []string
 	for _, id := range onDisk {
 		markers[id] = true
-		if !undecodable[id] {
+		if !undecodable[id] && !overlong[id] {
 			rep.StaleMarkers++
 		}
 		if !inSet[id] {
@@ -700,10 +720,12 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 			len(notInSet), logger.SanitizeLogValue(fmt.Sprint(rep.SampleNotInSet)))
 	}
 	var unmarked []string
-	for id := range undecodable {
-		if !markers[id] {
-			rep.UnmarkedUndecodable++
-			unmarked = append(unmarked, id)
+	for _, set := range []map[string]bool{undecodable, overlong} {
+		for id := range set {
+			if !markers[id] {
+				rep.UnmarkedUndecodable++
+				unmarked = append(unmarked, id)
+			}
 		}
 	}
 	rep.SampleUnmarked = sampleSorted(unmarked)

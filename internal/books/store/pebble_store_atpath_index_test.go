@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_atpath_index_test.go
-// version: 1.7.4
+// version: 1.7.5
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
 // last-edited: 2026-11-12
 
@@ -1012,7 +1012,7 @@ func TestBackfillAndVerify_OverlongRowIsSkippedNotFatal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bad, err := json.Marshal(&Book{ID: "01OVERLONG", Title: "bad", FilePath: "/" + strings.Repeat("p", maxBookAtPathLen)})
+	bad, err := json.Marshal(&Book{ID: "01OVERLONG", Title: "bad", FilePath: "/lib/" + strings.Repeat("p", maxBookAtPathLen)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1035,11 +1035,28 @@ func TestBackfillAndVerify_OverlongRowIsSkippedNotFatal(t *testing.T) {
 		}
 	}
 
+	// Fail closed: the overlong row has the id-keyed marker, so a lookup of
+	// its own (overlong) path errors rather than returning "free", and the
+	// directory listing still includes it.
+	if !hasUndecodableMarker(t, s, "01OVERLONG") {
+		t.Fatal("backfill wrote no marker for the overlong row")
+	}
+	longPath := "/lib/" + strings.Repeat("p", maxBookAtPathLen)
+	if ids, err := s.LiveBookIDsAtPath(longPath); err == nil {
+		t.Fatalf("LiveBookIDsAtPath(overlong path) = %v, nil; want a fail-closed error, not empty", ids)
+	}
+	under, err := s.LiveBookPathsUnderDir("/lib")
+	if err != nil || len(under) != 1 || under["01OVERLONG"] != longPath {
+		t.Fatalf("LiveBookPathsUnderDir(/lib) = %d entries, err %v; want the overlong book listed", len(under), err)
+	}
+
+	// Verify counts the row without asking for a rebuild: it is marked, so
+	// nothing is unmarked, stale, or missing.
 	rep, err := s.VerifyBookAtPathIndex(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.OverlongRows != 1 || rep.MissingLive != 0 || rep.MissingTrashed != 0 {
-		t.Fatalf("verify = overlong %d missingLive %d missingTrashed %d, want 1 0 0", rep.OverlongRows, rep.MissingLive, rep.MissingTrashed)
+	if rep.OverlongRows != 1 || rep.MissingLive != 0 || rep.MissingTrashed != 0 || rep.UnmarkedUndecodable != 0 || rep.StaleMarkers != 0 || rep.MarkersNotInSet != 0 {
+		t.Fatalf("verify = %+v, want overlong 1 and no drift", rep)
 	}
 }
