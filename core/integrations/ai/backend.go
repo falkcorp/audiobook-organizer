@@ -137,7 +137,7 @@ type BatchOutcome struct {
 // schema must carry (JSON names).
 func endpointProps() []string {
 	return []string{"concurrency", "capabilities", "text_model", "embed_model", "transcribe_model",
-		"capability_models", "labels", "features", "require_gpu", "locality", "host_roots"}
+		"capability_models", "labels", "features", "require_gpu", "locality", "root_paths"}
 }
 
 // Adapter wraps an AI backend descriptor for Registrar.Adapter /
@@ -207,7 +207,12 @@ type EndpointSettings struct {
 	Features         []Feature         `json:"features,omitzero"`          // declared (vision, json_schema, batch_api); merged with measured
 	RequireGPU       bool              `json:"require_gpu,omitzero"`
 	Locality         Locality          `json:"locality,omitzero" schema:"enum=auto|local|cloud"` // auto (default) | local | cloud
-	HostRoots        map[string]string `json:"host_roots,omitzero"`                              // shared-fs root mapping
+	// HostRoots maps a library root ID to this endpoint's path for it (the
+	// shared-filesystem mapping). Its settings key is root_paths, not HEAD's
+	// host_roots: the Registry refuses any settings property whose name has a
+	// destination word ("host") unless it is a URL field (SEC-15), and this one
+	// holds paths, not a destination. The HEAD importer maps the old key.
+	HostRoots map[string]string `json:"root_paths,omitzero"`
 }
 
 // Locality says whether an endpoint keeps data on the operator's own network.
