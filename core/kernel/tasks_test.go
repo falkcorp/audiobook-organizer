@@ -1,5 +1,5 @@
 // file: core/kernel/tasks_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a2d94c7e-1b53-4f08-9e6a-3c7d0f5b8e12
 // last-edited: 2026-11-11
 
@@ -281,6 +281,53 @@ func TestKernelTasks_SnapshotWrittenOncePerChange(t *testing.T) {
 	}
 	if got, _, _ := k.tasks.st.Get(ctx, key); !bytes.Equal(got, want) {
 		t.Errorf("snapshot after the upsert = %s, want %s", got, want)
+	}
+}
+
+// TestKernelTasks_StoppedBeforeWorkers (06 §6.5.2; 05-tasks 5T.4 step 4): at
+// shutdown the scheduler stops and the executor drains before the module
+// workers are cancelled, the reverse of the start order (the tasks start
+// before the listener, the workers after it). A worker reads the executor's
+// state at the moment its context is cancelled.
+func TestKernelTasks_StoppedBeforeWorkers(t *testing.T) {
+	rec := &recorder{}
+	var k *Kernel
+	m := mod("gotham", func(r *module.Registrar) error {
+		r.Tasks(patrol())
+		r.Worker(module.Worker{Name: "patrol", Policy: module.DegradeOnExit, Run: func(ctx context.Context) error {
+			rec.add("worker")
+			<-ctx.Done()
+			k.tasks.mu.Lock()
+			stopped := k.tasks.stopped
+			k.tasks.mu.Unlock()
+			rec.add("worker-cancelled:tasks-stopped=%v", stopped)
+			return ctx.Err()
+		}})
+		return r.Err()
+	}).with(func(m *module.Manifest) { m.TaskLedger = []tasks.Kind{patrolKind} })
+	c := supervised(t, rec, m)
+	c.StoragePath, c.StorageFS = "/gotham/storage/main.pebble", storage.MemFS()
+	k = mustNew(t, c)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := run(ctx, k)
+	deadline := time.Now().Add(30 * time.Second)
+	for rec.index("worker") < 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the worker never started: %v", rec.list())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("Run did not return after cancel: %v", rec.list())
+	}
+	if got := rec.matching("worker-cancelled:"); len(got) != 1 || got[0] != "worker-cancelled:tasks-stopped=true" {
+		t.Errorf("worker cancelled as %v, want the tasks already stopped", got)
 	}
 }
 
