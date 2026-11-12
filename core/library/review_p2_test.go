@@ -1,11 +1,12 @@
 // file: core/library/review_p2_test.go
-// version: 1.1.1
+// version: 1.2.1
 // guid: a9d0b21f-80d1-4624-8e39-94f7e4871e5d
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package library
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -17,6 +18,32 @@ import (
 
 	"github.com/falkcorp/mediacore/internal/libfs"
 )
+
+// clockTick is longer than the timestamp granularity of the filesystems the
+// tests run on (a kernel tick of 4 ms on a coarse-clock Linux, a few ms on
+// others). A test that makes "another file" waits one before it does, so the
+// replacement's inode change time cannot tie with the original's: a tie within
+// a tick is the documented residual of the check, not something to assert on.
+const clockTick = 25 * time.Millisecond
+
+// stampOf is the stamp a transfer takes of src: the Lstat the transfer was
+// checked from, plus the descriptor facts, through the same row the live path
+// writes to the journal.
+func stampOf(t *testing.T, root *Root, abs string, src Path) srcStamp {
+	t.Helper()
+	st, err := os.Lstat(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := root.rw.local().factsOf(src.Rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, ino, _ := libfs.InodeOf(st)
+	row := transferRow{Size: st.Size(), SrcDev: dev, SrcIno: ino, SrcMTime: st.ModTime().UnixNano()}
+	row.recordFacts(facts)
+	return row.stamp()
+}
 
 // Every fact sourceUnchanged checks has a case in which it is the only one that
 // can tell, so none of them can be dropped without a test noticing.
@@ -31,17 +58,28 @@ func TestSourceUnchangedChecksEachFact(t *testing.T) {
 		if root, err = r.m.Root("import-1"); err != nil {
 			t.Fatal(err)
 		}
-		st, err := os.Lstat(abs)
-		if err != nil {
-			t.Fatal(err)
-		}
-		dev, ino, _ := libfs.InodeOf(st)
-		return r, root, abs, src, srcStamp{dev: dev, ino: ino, size: st.Size(), mtime: st.ModTime().UnixNano()}
+		return r, root, abs, src, stampOf(t, root, abs, src)
 	}
 	sha := sum(content)
 	check := func(t *testing.T, r *rig, root *Root, src Path, stamp srcStamp, strong bool) (bool, error) {
 		t.Helper()
 		return r.m.sourceUnchanged(ctxbg(), root.rw, src, stamp, sha, strong)
+	}
+	// replaceKeepingTime makes another file of the same bytes, size and
+	// modification time at abs: all the Lstat facts but the inode number match.
+	replaceKeepingTime := func(t *testing.T, abs string, mtime int64) {
+		t.Helper()
+		time.Sleep(clockTick)
+		if err := os.Remove(abs); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(content), 0o664); err != nil {
+			t.Fatal(err)
+		}
+		mt := time.Unix(0, mtime)
+		if err := os.Chtimes(abs, mt, mt); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	t.Run("unchanged", func(t *testing.T) {
@@ -77,19 +115,35 @@ func TestSourceUnchangedChecksEachFact(t *testing.T) {
 		}
 	})
 	t.Run("another file of the same size and time", func(t *testing.T) {
+		// Every fact the Lstat gave is the same except the inode number, and
+		// filesystems that free an inode number hand it to the next file made
+		// (ext4 does; this is the case the inode number alone cannot
+		// tell). What tells it is the inode change time, the creation time or the
+		// inode generation, whichever the platform reports.
 		r, root, abs, src, stamp := build(t)
-		if err := os.Remove(abs); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(abs, []byte(content), 0o664); err != nil {
-			t.Fatal(err)
-		}
-		mt := time.Unix(0, stamp.mtime)
-		if err := os.Chtimes(abs, mt, mt); err != nil {
-			t.Fatal(err)
-		}
+		replaceKeepingTime(t, abs, stamp.mtime)
 		if _, err := check(t, r, root, src, stamp, false); !errors.Is(err, ErrSourceChanged) {
 			t.Errorf("= %v, want ErrSourceChanged (another inode)", err)
+		}
+	})
+	t.Run("another file, told by the inode alone", func(t *testing.T) {
+		// The stamp records the device and inode but no time or generation: a
+		// platform that reports neither, or an old journal row. Hold the old inode
+		// open so its number cannot be reused: the replacement is another number.
+		r, root, abs, src, stamp := build(t)
+		held, err := os.Open(abs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := held.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		replaceKeepingTime(t, abs, stamp.mtime)
+		basic := srcStamp{dev: stamp.dev, ino: stamp.ino, size: stamp.size, mtime: stamp.mtime}
+		if _, err := check(t, r, root, src, basic, false); !errors.Is(err, ErrSourceChanged) {
+			t.Errorf("= %v, want ErrSourceChanged (inode number)", err)
 		}
 	})
 	t.Run("a different size, nothing else recorded", func(t *testing.T) {
@@ -107,13 +161,15 @@ func TestSourceUnchangedChecksEachFact(t *testing.T) {
 		if err := os.Chtimes(abs, later, later); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := check(t, r, root, src, stamp, false); !errors.Is(err, ErrSourceChanged) {
+		if _, err := check(t, r, root, src, srcStamp{size: stamp.size, mtime: stamp.mtime}, false); !errors.Is(err, ErrSourceChanged) {
 			t.Errorf("= %v, want ErrSourceChanged (mtime)", err)
 		}
 	})
 	t.Run("other bytes of the same size, inode and time", func(t *testing.T) {
-		// Written in place and the time put back: only the digest can tell.
+		// Written in place and the time put back: with only the Lstat facts
+		// recorded, only the digest can tell.
 		r, root, abs, src, stamp := build(t)
+		basic := srcStamp{dev: stamp.dev, ino: stamp.ino, size: stamp.size, mtime: stamp.mtime}
 		if err := os.WriteFile(abs, []byte(strings.ToUpper(content)), 0o664); err != nil {
 			t.Fatal(err)
 		}
@@ -121,13 +177,241 @@ func TestSourceUnchangedChecksEachFact(t *testing.T) {
 		if err := os.Chtimes(abs, mt, mt); err != nil {
 			t.Fatal(err)
 		}
-		if present, err := check(t, r, root, src, stamp, false); !present || err != nil {
+		if present, err := check(t, r, root, src, basic, false); !present || err != nil {
 			t.Fatalf("without the digest the file looks unchanged: %v, %v", present, err)
 		}
-		if _, err := check(t, r, root, src, stamp, true); !errors.Is(err, ErrSourceChanged) {
+		if _, err := check(t, r, root, src, basic, true); !errors.Is(err, ErrSourceChanged) {
 			t.Errorf("with the digest = %v, want ErrSourceChanged", err)
 		}
 	})
+	t.Run("rewritten in place with the time put back, told by the change time", func(t *testing.T) {
+		// The same rewrite, but the inode change time was recorded: the kernel
+		// moved it and no one can put it back, so no digest is needed.
+		r, root, abs, src, stamp := build(t)
+		if stamp.ctime == 0 {
+			t.Skip("this platform reports no inode change time")
+		}
+		time.Sleep(clockTick)
+		if err := os.WriteFile(abs, []byte(strings.ToUpper(content)), 0o664); err != nil {
+			t.Fatal(err)
+		}
+		mt := time.Unix(0, stamp.mtime)
+		if err := os.Chtimes(abs, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := check(t, r, root, src, stamp, false); !errors.Is(err, ErrSourceChanged) {
+			t.Errorf("= %v, want ErrSourceChanged (change time)", err)
+		}
+	})
+	t.Run("a change to the inode only", func(t *testing.T) {
+		// Nothing about the bytes, size or modification time moves: a permission
+		// change, a new hard link, an extended attribute. The inode change time
+		// does, and the source is kept (a cross-device Move removes the source
+		// only if it is exactly what was copied).
+		for name, touch := range map[string]func(t *testing.T, abs string){
+			"chmod": func(t *testing.T, abs string) {
+				if err := os.Chmod(abs, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			"hard link": func(t *testing.T, abs string) {
+				if err := os.Link(abs, abs+".also"); err != nil {
+					t.Fatal(err)
+				}
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				r, root, abs, src, stamp := build(t)
+				if stamp.ctime == 0 {
+					t.Skip("this platform reports no inode change time")
+				}
+				time.Sleep(clockTick)
+				touch(t, abs)
+				if _, err := check(t, r, root, src, stamp, true); !errors.Is(err, ErrSourceChanged) {
+					t.Errorf("= %v, want ErrSourceChanged (change time)", err)
+				}
+			})
+		}
+	})
+	t.Run("another file, told by the creation time alone", func(t *testing.T) {
+		r, root, abs, src, stamp := build(t)
+		if stamp.birth == 0 {
+			t.Skip("this platform reports no creation time")
+		}
+		replaceKeepingTime(t, abs, stamp.mtime)
+		only := srcStamp{size: stamp.size, birth: stamp.birth}
+		if _, err := check(t, r, root, src, only, false); !errors.Is(err, ErrSourceChanged) {
+			t.Errorf("= %v, want ErrSourceChanged (creation time)", err)
+		}
+	})
+	t.Run("another file, told by the generation alone", func(t *testing.T) {
+		r, root, abs, src, stamp := build(t)
+		if !stamp.hasGen {
+			t.Skip("this filesystem reports no inode generation")
+		}
+		replaceKeepingTime(t, abs, stamp.mtime)
+		only := srcStamp{size: stamp.size, gen: stamp.gen, hasGen: true}
+		if _, err := check(t, r, root, src, only, false); !errors.Is(err, ErrSourceChanged) {
+			t.Errorf("= %v, want ErrSourceChanged (generation)", err)
+		}
+	})
+	t.Run("replaced while it is read", func(t *testing.T) {
+		// The facts agree before the digest and the digest agrees with the copy:
+		// the file is swapped for another with the same bytes while it is being
+		// read. Only reading the facts again after the digest sees it. The old
+		// descriptor stays open through the swap, so the old inode number is
+		// not reused: the second reading is another number.
+		r, root, abs, src, stamp := build(t)
+		swapped := false
+		hooked := openHook{fsOps: root.rw, after: func() {
+			if swapped {
+				return
+			}
+			swapped = true
+			replaceKeepingTime(t, abs, stamp.mtime)
+		}}
+		_, err := r.m.sourceUnchanged(ctxbg(), hooked, src, stamp, sha, true)
+		if !swapped {
+			t.Fatal("the digest never opened the file")
+		}
+		if !errors.Is(err, ErrSourceChanged) {
+			t.Errorf("= %v, want ErrSourceChanged (replaced while it was read)", err)
+		}
+	})
+	t.Run("removed while it is read", func(t *testing.T) {
+		r, root, abs, src, stamp := build(t)
+		hooked := openHook{fsOps: root.rw, after: func() {
+			if err := os.Remove(abs); err != nil {
+				t.Error(err)
+			}
+		}}
+		present, err := r.m.sourceUnchanged(ctxbg(), hooked, src, stamp, sha, true)
+		if !present || !errors.Is(err, ErrSourceChanged) {
+			t.Errorf("= %v, %v; want the source reported present and ErrSourceChanged", present, err)
+		}
+	})
+}
+
+// openHook runs after once the file has been opened for reading, with the
+// descriptor still held: the moment a concurrent writer replaces the file under
+// a digest in progress.
+type openHook struct {
+	fsOps
+	after func()
+}
+
+func (h openHook) Open(name string) (fs.File, error) {
+	f, err := h.fsOps.Open(name)
+	if err == nil {
+		h.after()
+	}
+	return f, err
+}
+
+// The row a Move journals carries the source's facts, so recovery can tell the
+// source from a later file with the same inode number. A Copy never removes its
+// source, so it does not open it for them.
+func TestTransferJournalsTheSourceFactsOfAMoveOnly(t *testing.T) {
+	t.Run("Move", func(t *testing.T) {
+		r, _, _ := crossDeviceMoveKilledBeforeSourceRemoval(t)
+		rows, err := r.m.listTransfers(ctxbg())
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("listTransfers = %v, %v; want the one row the kill left", rows, err)
+		}
+		st, err := os.Lstat(r.abs("import-1", "Arkham/a.m4b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rows[0]; got.SrcCTime == 0 || got.SrcMTime != st.ModTime().UnixNano() || got.SrcIno == 0 {
+			t.Errorf("the row has ctime %d, mtime %d, inode %d; want the source's facts", got.SrcCTime, got.SrcMTime, got.SrcIno)
+		}
+	})
+	t.Run("Copy", func(t *testing.T) {
+		f := &faults{killAt: 3}
+		r, _ := transferRig(t, rigOpts{faults: f})
+		src := r.put("import-1", "Arkham/a.m4b", "the original bytes")
+		dst := Path{Root: "books-library", Rel: "a.m4b"}
+		if _, err := r.m.Transfer(ctxbg(), books, src, dst, copyOpts()); err == nil {
+			t.Fatal("the kill did not stop the copy")
+		}
+		rows, err := r.m.listTransfers(ctxbg())
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("listTransfers = %v, %v; want the one row the kill left", rows, err)
+		}
+		if got := rows[0]; got.SrcCTime != 0 || got.SrcBirth != 0 || got.SrcGen != nil {
+			t.Errorf("a Copy row holds facts it never uses: %+v", got)
+		}
+	})
+}
+
+// Each line of srcStamp.differs is one fact, so each has a case no other fact
+// can cover, whatever the platform reports.
+func TestSrcStampDifferences(t *testing.T) {
+	base := libfs.FileFacts{Dev: 7, Ino: 42, Size: 100, MTime: 1000, CTime: 2000, Birth: 3000, Gen: 5, HasGen: true, Regular: true}
+	full := srcStamp{dev: 7, ino: 42, size: 100, mtime: 1000, ctime: 2000, birth: 3000, gen: 5, hasGen: true}
+	for name, tc := range map[string]struct {
+		stamp  srcStamp
+		change func(f *libfs.FileFacts)
+		want   string // a part of the reason; "" is unchanged
+	}{
+		"the same file":                 {full, func(*libfs.FileFacts) {}, ""},
+		"not a regular file":            {full, func(f *libfs.FileFacts) { f.Regular = false }, "regular file"},
+		"another device":                {full, func(f *libfs.FileFacts) { f.Dev = 8 }, "another file"},
+		"another inode number":          {full, func(f *libfs.FileFacts) { f.Ino = 43 }, "another file"},
+		"another size":                  {full, func(f *libfs.FileFacts) { f.Size = 101 }, "bytes"},
+		"another modification time":     {full, func(f *libfs.FileFacts) { f.MTime = 1001 }, "modified"},
+		"another change time":           {full, func(f *libfs.FileFacts) { f.CTime = 2001 }, "change time"},
+		"no change time any more":       {full, func(f *libfs.FileFacts) { f.CTime = 0 }, "change time"},
+		"another creation time":         {full, func(f *libfs.FileFacts) { f.Birth = 3001 }, "created again"},
+		"another generation":            {full, func(f *libfs.FileFacts) { f.Gen = 6 }, "generation"},
+		"no generation any more":        {full, func(f *libfs.FileFacts) { f.HasGen = false; f.Gen = 0 }, "generation"},
+		"unrecorded facts are skipped":  {srcStamp{size: 100}, func(f *libfs.FileFacts) { f.Dev, f.Ino, f.MTime, f.CTime, f.Birth, f.HasGen = 9, 9, 9, 9, 9, false }, ""},
+		"generation zero is a recorded": {srcStamp{size: 100, hasGen: true}, func(f *libfs.FileFacts) { f.Gen = 1 }, "generation"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := base
+			tc.change(&got)
+			why := tc.stamp.differs(got)
+			if tc.want == "" {
+				if why != "" {
+					t.Errorf("differs = %q, want the same file", why)
+				}
+				return
+			}
+			if !strings.Contains(why, tc.want) {
+				t.Errorf("differs = %q, want it to say %q", why, tc.want)
+			}
+		})
+	}
+}
+
+// The facts survive the journal: a row written by one process names the same
+// stamp when the next one reads it, and a row from before the facts existed reads
+// as a stamp that skips them. A generation of zero is a generation, not an absent
+// one.
+func TestJournalRowKeepsTheSourceFacts(t *testing.T) {
+	zero := uint32(0)
+	row := transferRow{Size: 100, SrcDev: 7, SrcIno: 42, SrcMTime: 1000, SrcCTime: 2000, SrcBirth: 3000, SrcGen: &zero}
+	b, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back transferRow
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	want := srcStamp{dev: 7, ino: 42, size: 100, mtime: 1000, ctime: 2000, birth: 3000, hasGen: true}
+	if got := back.stamp(); got != want {
+		t.Errorf("stamp = %+v, want %+v", got, want)
+	}
+	old := `{"id":"x","size":100,"src_dev":7,"src_ino":42,"src_mtime_ns":1000}`
+	var legacy transferRow
+	if err := json.Unmarshal([]byte(old), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := legacy.stamp(), (srcStamp{dev: 7, ino: 42, size: 100, mtime: 1000}); got != want {
+		t.Errorf("a row without the new facts: stamp = %+v, want %+v", got, want)
+	}
 }
 
 // Recovery removes a cross-device Move's source only after reading it again: a

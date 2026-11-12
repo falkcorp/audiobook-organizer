@@ -1,7 +1,7 @@
 // file: core/internal/libfs/ops_unix.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 7ec76d18-20c0-48f2-9a57-c01b4e75498f
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 //go:build unix
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"golang.org/x/sys/unix"
@@ -267,17 +268,29 @@ func OpenFileAt(d *Dir, name string, flag int, perm fs.FileMode) (*os.File, erro
 	if err := errors.Join(require(d), checkName(name)); err != nil {
 		return nil, err
 	}
-	var nfd int
-	err := retry(func() error {
-		var oe error
-		nfd, oe = unix.Openat(fd(d), name, flag|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, uint32(perm.Perm()))
-		return oe
-	})
+	nfd, err := openat(fd(d), name, flag|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, uint32(perm.Perm()))
 	runtime.KeepAlive(d)
 	if err != nil {
 		return nil, &os.PathError{Op: "openat", Path: name, Err: err}
 	}
 	return os.NewFile(uintptr(nfd), name), nil
+}
+
+// openat is unix.Openat for the one path element name, retried on EINTR. It
+// refuses a name that is not local to the directory (filepath.IsLocal: empty, ".."
+// or rooted) in the function that makes the call, in addition to checkName at the
+// public entry: the open is the call that can reach a file outside the directory
+// the caller proved, so the refusal sits directly in front of it.
+func openat(dirfd int, name string, flag int, mode uint32) (int, error) {
+	if !filepath.IsLocal(name) {
+		return -1, fmt.Errorf("%w: %q", ErrBadName, name)
+	}
+	for {
+		nfd, err := unix.Openat(dirfd, name, flag, mode)
+		if err != unix.EINTR {
+			return nfd, err
+		}
+	}
 }
 
 // MkdirAt creates the single-component directory name in d. An existing name is

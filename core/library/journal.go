@@ -1,7 +1,7 @@
 // file: core/library/journal.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 643a2716-2f53-438c-aa2c-943654d74242
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package library
 
@@ -117,6 +117,13 @@ type transferRow struct {
 	SrcDev   uint64 `json:"src_dev,omitempty"`
 	SrcIno   uint64 `json:"src_ino,omitempty"`
 	SrcMTime int64  `json:"src_mtime_ns,omitempty"`
+	// The facts that tell a file from a later one that was given the same inode
+	// number (libfs.FileFacts): the inode change time and creation time in ns, and
+	// the inode generation where the filesystem has one. Zero or nil means the
+	// platform did not report it, and the check skips it.
+	SrcCTime int64   `json:"src_ctime_ns,omitempty"`
+	SrcBirth int64   `json:"src_birth_ns,omitempty"`
+	SrcGen   *uint32 `json:"src_gen,omitempty"`
 	// The temp file's device and inode, so recovery can tell that the final name
 	// is the temp (published by link or by rename) without reading it again.
 	TmpDev uint64 `json:"tmp_dev,omitempty"`

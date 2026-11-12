@@ -1,7 +1,7 @@
 // file: core/library/transfer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 534f60c5-c088-4e70-962c-8bcddbfafc71
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package library
 
@@ -223,11 +223,42 @@ func (x *xfer) recheck() error {
 	return nil
 }
 
+// recordSource adds the facts that tell the source from a later file with its
+// inode number to the row, read from a descriptor before the first byte is
+// copied. Only a Move can end by removing the source, so only a Move needs them
+// (every other mode never asks whether the source is still the file that was
+// copied, and is not made to open it). They must agree with the Lstat the
+// transfer was checked from: a source that changed between the check and now is
+// refused, with nothing made. A source that is not a regular file has none (a
+// link is moved as a link, never removed after a copy), and one that cannot be
+// opened for reading (no read permission, which a rename does not need) keeps
+// the basic stamp; a platform without descriptors does too.
+func (x *xfer) recordSource() error {
+	if x.opts.Mode != Move || !x.info.Mode().IsRegular() {
+		return nil
+	}
+	f, err := x.sfs.local().factsOf(x.src.Rel)
+	switch {
+	case errors.Is(err, errors.ErrUnsupported), errors.Is(err, fs.ErrPermission):
+		return nil
+	case err != nil:
+		return err
+	}
+	if dev, ino, ok := libfs.InodeOf(x.info); !f.Regular || f.Size != x.info.Size() || f.MTime != x.info.ModTime().UnixNano() || (ok && (f.Dev != dev || f.Ino != ino)) {
+		return fmt.Errorf("%w: %s changed before the copy started", ErrSourceChanged, x.src)
+	}
+	x.row.recordFacts(f)
+	return nil
+}
+
 func (x *xfer) run() (TransferResult, error) {
 	x.row = transferRow{ID: x.m.seam.newID(), State: stBegun, Mode: x.opts.Mode, Owner: x.caller, In: x.batch != nil,
 		Src: x.src, Dst: x.dst, Verify: x.opts.Verify, At: x.start.UTC(), Size: x.info.Size(), SrcMTime: x.info.ModTime().UnixNano()}
 	if dev, ino, ok := libfs.InodeOf(x.info); ok {
 		x.row.SrcDev, x.row.SrcIno = dev, ino
+	}
+	if err := x.recordSource(); err != nil {
+		return TransferResult{}, err
 	}
 	if x.opts.Replace != nil {
 		x.row.Expect = x.opts.Replace.ExpectSHA256
@@ -760,20 +791,71 @@ type srcStamp struct {
 	dev, ino uint64 // ino 0: not recorded
 	size     int64
 	mtime    int64 // ns; 0: not recorded
+	// ctime, birth and gen are the facts that separate a file from a later one given
+	// the same inode number (libfs.FileFacts); zero, zero and !hasGen: not recorded.
+	ctime, birth int64
+	gen          uint32
+	hasGen       bool
 }
 
 func (r transferRow) stamp() srcStamp {
-	return srcStamp{dev: r.SrcDev, ino: r.SrcIno, size: r.Size, mtime: r.SrcMTime}
+	s := srcStamp{dev: r.SrcDev, ino: r.SrcIno, size: r.Size, mtime: r.SrcMTime, ctime: r.SrcCTime, birth: r.SrcBirth}
+	if r.SrcGen != nil {
+		s.gen, s.hasGen = *r.SrcGen, true
+	}
+	return s
+}
+
+// recordFacts writes the facts of the file about to be copied into the row.
+func (r *transferRow) recordFacts(f libfs.FileFacts) {
+	r.SrcCTime, r.SrcBirth = f.CTime, f.Birth
+	if f.HasGen {
+		gen := f.Gen
+		r.SrcGen = &gen
+	}
+}
+
+// differs says how got is not the file s describes, or "" when it is that file as
+// far as the recorded facts can tell. A fact that was recorded and is not
+// reported now counts as different: the source is kept.
+func (s srcStamp) differs(got libfs.FileFacts) string {
+	switch {
+	case !got.Regular:
+		return "is no longer a regular file"
+	case s.ino != 0 && got.Ino != 0 && (got.Dev != s.dev || got.Ino != s.ino):
+		return "is another file"
+	case got.Size != s.size:
+		return fmt.Sprintf("is %d bytes, %d were copied", got.Size, s.size)
+	case s.mtime != 0 && got.MTime != s.mtime:
+		return "was modified"
+	case s.ctime != 0 && got.CTime != s.ctime:
+		return "was changed (its inode change time moved)"
+	case s.birth != 0 && got.Birth != s.birth:
+		return "was created again"
+	case s.hasGen && (!got.HasGen || got.Gen != s.gen):
+		return "is another inode (its generation differs)"
+	}
+	return ""
 }
 
 // sourceUnchanged reports whether src is still the file that was copied: a
-// regular file with the recorded device and inode, size and modification time
-// and (strong, with sha) the digest of the bytes that were copied. present is
-// false when it is gone, which is nothing to remove. A different file is
-// ErrSourceChanged; a source that cannot be examined is any other error, and
-// the caller keeps it. Both the live Move and recovery decide with this.
+// regular file with the recorded device and inode, size and modification time,
+// the facts that separate it from a later file given the same inode number
+// (change time, creation time, inode generation: libfs.FileFacts), and (strong,
+// with sha) the digest of the bytes that were copied. The facts are read from a
+// descriptor and read again after the digest, so a file replaced while it was
+// being read is seen too. present is false when it is gone, which is nothing to
+// remove. A different file is ErrSourceChanged; a source that cannot be
+// examined is any other error, and the caller keeps it. Both the live Move and
+// recovery decide with this.
+//
+// What it cannot see: a replacement made within one clock tick of the original's
+// last change, on a filesystem that reports no inode generation, shares the
+// change and creation times. The window is the tick (a few milliseconds) after
+// the file was last written, and the digest still has to match.
 func (m *manager) sourceUnchanged(ctx context.Context, fsys fsOps, src Path, want srcStamp, sha string, strong bool) (present bool, err error) {
-	st, err := fsys.Lstat(src.Rel)
+	lfs := fsys.local()
+	got, err := lfs.factsOf(src.Rel)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return false, nil
@@ -783,19 +865,8 @@ func (m *manager) sourceUnchanged(ctx context.Context, fsys fsOps, src Path, wan
 	changed := func(format string, a ...any) (bool, error) {
 		return true, fmt.Errorf("%w: %s %s", ErrSourceChanged, src, fmt.Sprintf(format, a...))
 	}
-	if !st.Mode().IsRegular() {
-		return changed("is no longer a regular file")
-	}
-	if want.ino != 0 {
-		if dev, ino, ok := libfs.InodeOf(st); ok && (dev != want.dev || ino != want.ino) {
-			return changed("is another file")
-		}
-	}
-	if st.Size() != want.size {
-		return changed("is %d bytes, %d were copied", st.Size(), want.size)
-	}
-	if want.mtime != 0 && st.ModTime().UnixNano() != want.mtime {
-		return changed("was modified")
+	if why := want.differs(got); why != "" {
+		return changed("%s", why)
 	}
 	if strong && sha != "" {
 		d, herr := m.hashVia(ctx, fsys, src.Rel, false)
@@ -804,6 +875,15 @@ func (m *manager) sourceUnchanged(ctx context.Context, fsys fsOps, src Path, wan
 		}
 		if d.SHA256 != sha {
 			return changed("holds other bytes")
+		}
+		again, aerr := lfs.factsOf(src.Rel)
+		switch {
+		case errors.Is(aerr, fs.ErrNotExist):
+			return changed("was removed while it was checked")
+		case aerr != nil:
+			return true, aerr
+		case again != got:
+			return changed("changed while it was checked")
 		}
 	}
 	return true, nil
