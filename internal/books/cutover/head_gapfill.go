@@ -1,5 +1,5 @@
 // file: internal/books/cutover/head_gapfill.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 86ad29a6-334d-4bed-aa94-a282e32106c3
 // last-edited: 2026-11-11
 
@@ -10,6 +10,7 @@ package cutover
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -87,12 +88,88 @@ var headViperFileKeys = []string{
 	"enable_ai_parsing", "concurrent_scans", "log_level",
 }
 
+// headViperKinds is the type configFromViper reads each headViperFileKeys key
+// as: v.GetString, v.GetBool or v.GetInt.
+var headViperKinds = map[string]string{
+	"playlist_dir": "string", "setup_complete": "bool", "organization_strategy": "string",
+	"scan_on_startup": "bool", "auto_organize": "bool", "folder_naming_pattern": "string",
+	"file_naming_pattern": "string", "enable_ai_parsing": "bool", "concurrent_scans": "int",
+	"log_level": "string",
+}
+
+// headViperCast converts a file value (decoded JSON: a float64 for any number)
+// to what configFromViper gets from it, which is spf13/cast's reading of it
+// through the key's typed getter: "yes" is false for a bool (ParseBool refuses
+// it), "10" is 10 for an int, a list is "" for a string. The blob member it
+// stands in for has that type, and the census compares that value with HEAD's
+// default, so a file that spells a default another way loses nothing and is
+// not refused.
+func headViperCast(key string, v any) any {
+	switch headViperKinds[key] {
+	case "bool":
+		switch x := v.(type) {
+		case bool:
+			return x
+		case string:
+			b, _ := strconv.ParseBool(x)
+			return b
+		case float64:
+			return x != 0
+		}
+		return false
+	case "int":
+		switch x := v.(type) {
+		case float64:
+			return float64(int(x))
+		case string:
+			n, err := strconv.ParseInt(headTrimZeroDecimal(x), 0, 0)
+			if err != nil {
+				return float64(0)
+			}
+			return float64(n)
+		case bool:
+			if x {
+				return float64(1)
+			}
+		}
+		return float64(0)
+	case "string":
+		switch x := v.(type) {
+		case string:
+			return x
+		case bool:
+			return strconv.FormatBool(x)
+		case float64:
+			return strconv.FormatFloat(x, 'f', -1, 64)
+		}
+		return ""
+	}
+	return v
+}
+
+// headTrimZeroDecimal drops a ".0", ".00" ... suffix, as spf13/cast does
+// before it parses an int from a string.
+func headTrimZeroDecimal(s string) string {
+	i := strings.LastIndex(s, ".")
+	if i < 0 {
+		return s
+	}
+	for _, c := range s[i+1:] {
+		if c != '0' {
+			return s
+		}
+	}
+	return s[:i]
+}
+
 // headParseFileSettings reads headViperFileKeys from config.yaml the way
 // viper does: a key matches case-insensitively, and a null is an unset key.
-// Each value is normalised through JSON (a YAML int becomes a float64) so
-// headIsDefault compares it with HEAD's default by value. An unparsable file
-// reads as empty, as HEAD ignores it. Names only are used by callers' reports,
-// never the value.
+// Each value is normalised through JSON (a YAML int becomes a float64) and
+// then cast to the type configFromViper reads the key as (headViperCast), so
+// headIsDefault compares it with HEAD's default by value and the planner can
+// stage it as the blob member it stands in for. An unparsable file reads as
+// empty, as HEAD ignores it. Names only are used by callers' reports, never
+// the value.
 func headParseFileSettings(data []byte) map[string]any {
 	var fileConfig map[string]any
 	if err := yaml.Unmarshal(data, &fileConfig); err != nil {
@@ -121,7 +198,7 @@ func headParseFileSettings(data []byte) map[string]any {
 		}
 		var v any
 		if json.Unmarshal(raw, &v) == nil {
-			out[lower] = v
+			out[lower] = headViperCast(lower, v)
 		}
 	}
 	return out

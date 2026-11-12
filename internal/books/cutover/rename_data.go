@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_data.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: b874765a-43e8-4e15-a309-3879bf7e2e64
 // last-edited: 2026-11-11
 
@@ -261,6 +261,23 @@ var bindAlias = map[string]string{
 	"openlibrary_base_url":  "metadata_sources",
 	"audnexus_base_url":     "metadata_sources",
 	"google_books_base_url": "metadata_sources",
+}
+
+// flatFileAlias maps a flat viper key that configFromViper reads, and that
+// heads no row of its own, to the row whose value it backfills: the
+// pre-Wave-4 flat iTunes path keys fill the nested library paths
+// (configFromViper's "Backward compatibility" block: itl_path and write_path
+// the ITL path, xml_path and read_path the read path). With bindAlias (the four
+// base URLs, which backfill metadata_sources[].base_url) these are the viper
+// keys HEAD reads from config.yaml and, through AutomaticEnv, from the
+// upper-cased environment name, and that no row name covers: a config.yaml
+// line or an environment variable under one of them was silently ignored by
+// the new build, so each retires as a file key and as an env name.
+var flatFileAlias = map[string]string{
+	"itunes_library_itl_path":   "itunes.library_write_path",
+	"itunes_library_write_path": "itunes.library_write_path",
+	"itunes_library_read_path":  "itunes.library_read_path",
+	"itunes_library_xml_path":   "itunes.library_read_path",
 }
 
 // headProtected are the HEAD names HEAD's configFieldRules classes
