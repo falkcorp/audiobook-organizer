@@ -1,7 +1,7 @@
 // file: core/kernel/kernel_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: c5a656df-cf96-4fcc-b1af-7a5f1be4cf7b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -541,7 +541,7 @@ func TestKernelFamiliesGathered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"P1", "P2", "P4a", "P4b", "P5", "P6", "P7", "P8"}; !slices.Equal(phases, want) {
+	if want := []string{"P1", "P2", "P4a", "P4b", "P4c", "P5", "P6", "P7", "P8"}; !slices.Equal(phases, want) {
 		t.Fatalf("boot phases recorded = %v, want %v", phases, want)
 	}
 }

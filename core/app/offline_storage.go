@@ -1,7 +1,7 @@
 // file: core/app/offline_storage.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8fbea565-1376-4d4b-a491-c6078aa8e4db
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package app
 
@@ -23,10 +23,11 @@ import (
 
 // The cutover's offline commands (05-storage §5S.3.6 "Dry run", §5S.3.13
 // "Quarantine"; 09 §9.2.3): storage migrate --dry-run and storage quarantine
-// list, export and purge. Until F2-16 and F3-07 wire the build's data
-// migrations and the keyring's seams, the dry run has no step to run, export
-// opens no sealed row and purge refuses a sealed row and a store without
-// core/audit (it is audited, fail-closed).
+// list, export and purge. F2-16 wired the build's data migrations (the dry run
+// runs the steps a manifest declares) and claimed core/audit in the store, so
+// purge is audited; until F3-07 wires the keyring's seams, export opens no
+// sealed row and purge refuses a sealed row, and a store without core/audit
+// refuses a purge (it is audited, fail-closed).
 
 const migrateLong = `Reports what the pending data migrations would do, without doing it.
 --dry-run is required: this build has no live storage migrate.

@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/rows.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: d18639c8-9b23-4ce6-a83c-4b77e83754c1
 // last-edited: 2026-11-11
 
@@ -74,6 +74,9 @@ func Rows() []Row {
 		{Phase: "P4b, last (M8)", Writer: "storage and restoreswap: the store rewrite's record, compaction and copy, the engine closed and reopened around the in-process KindRewrite swap (its intent staged, then the shared swap steps), and phase 4's deletion of the set-aside (05-storage §5S.3.13 \"M8: the rewrite\"; 05-backup §5B.3.4)", Labels: append(storage.RewriteLabels(), restoreswap.LabelRewriteStage, restoreswap.LabelRewriteDelete)},
 		{Phase: "P4b (KindCheckpoint restore boot)", Writer: "the kernel: journal failed when the restored checkpoint's migrations fail (DATA7-12)", Labels: []string{
 			"swap.journal.failed",
+		}},
+		{Phase: "P7 (tasks start rule held: a module registered a kind)", Writer: "the kernel: a definition snapshot c/tasks/def/<kind> for each registered definition, one batch per registration, written only when the stored snapshot differs (05-tasks 5T.4 step 1, 5T.3.11)", Labels: []string{
+			"tasks.def.upsert",
 		}},
 		{Phase: "P4d 1 (reset boot; R1: after P4b)", Writer: "the kernel: the delete entries, hook_done, inflight.json removed (COR8-4)", Labels: []string{
 			"swap.delete.remove", "swap.journal.hook_done", "swap.slot.remove",

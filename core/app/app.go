@@ -1,7 +1,7 @@
 // file: core/app/app.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package app is core's composition root (06 §6.4.5, 03 §3.3 row app): an
 // app's main builds Options and its modules and calls New, then Run. Signal
@@ -36,6 +36,7 @@ import (
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // App is one booted process: the kernel behind New.
@@ -176,6 +177,28 @@ func (a *App) Metrics() *metrics.Provider { return a.k.Provider() }
 // Options.Logger replaced the pipeline. The App owns it and closes it last in
 // shutdown (05-logging §4 step 4): a caller never calls Close.
 func (a *App) Logging() *log.Logging { return a.k.Logging() }
+
+// TaskClient is the client over the task executor, nil while the tasks start
+// rule has not held (no module registered a kind and c/tasks/ holds no run:
+// ABO's shape before F5). It is coretest's seam to start and read runs as the
+// context's principal (RunTask, held runs); a module is never handed it, its
+// Deps.Tasks is a per-module wrapper (F5). Not in 06 §6.4.5's App: F2-16's
+// seam, recorded in its seams file.
+func (a *App) TaskClient() tasks.Client { return a.k.TaskClient() }
+
+// TaskRecord is one run's stored record, result and error text included: what
+// RunResult reports and the Client's read model leaves out. It applies no
+// permission rule, so it is a test seam like TaskClient, F2-16's.
+func (a *App) TaskRecord(ctx context.Context, id tasks.RunID) (tasks.RunRecord, error) {
+	return a.k.TaskRecord(ctx, id)
+}
+
+// StartTasks starts the executor and the scheduler without Run, which a
+// harness that never runs the App (coretest) needs to dispatch a run. Run
+// starts them itself at its step (5); a second start does nothing, and Close
+// stops them. A no-op while the start rule has not held. F2-16's seam, with
+// TaskClient.
+func (a *App) StartTasks(ctx context.Context) error { return a.k.StartTasks(ctx) }
 
 // Modules reports each module's resolved state (enabled, disabled, reason),
 // in ID order.

@@ -1,7 +1,7 @@
 // file: core/kernel/kernel.go
-// version: 1.0.18
+// version: 1.0.19
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 // Package kernel is core's boot machinery (06 §6.4.6): the boot-phase runner
 // of 06 §6.5.1, the Registrar and Deps of each module, the collision checks
@@ -34,10 +34,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/ui"
 	"github.com/falkcorp/mediacore/version"
@@ -236,8 +239,23 @@ type Kernel struct {
 	handler   http.Handler
 
 	store *kernelStore // P2 on; nil when no store was opened (storage.go)
-	swap  *kernelSwap  // P0a on; nil when P0a did not run (swap.go)
-	build string       // the binary ID, once computed (swap.go)
+
+	// The F2 foundation's boot products (F2-16). Each is built where the
+	// phases of 06 §6.5.1 put it, and each is nil until then: rbacCat at P5
+	// (declareCoreCatalog), coreCfg at P5 (the defaults-only core config,
+	// taskconfig.go), audit after P4a and before P4b (buildAudit), healthReg and
+	// reporters at P4c (buildHealth), tasks at P4c (stores) and P7 (the start
+	// rule), dataMig when a manifest declares data migrations (storageOptions).
+	rbacCat   *rbac.Catalog
+	coreCfg   *coreConfig
+	audit     *audit.Store
+	auditSc   *metrics.Scope // "<namespace>.audit"
+	healthReg *health.Registry
+	reporters kernelReporters
+	tasks     *kernelTasks
+	dataMig   *DataMigrations
+	swap      *kernelSwap // P0a on; nil when P0a did not run (swap.go)
+	build     string      // the binary ID, once computed (swap.go)
 	// swapLock is the swap lock this kernel holds (exclusive through P0a
 	// and shared from its end, storage.LockSwapShared for an offline open,
 	// storage.LockSwapExclusive for an offline swap), released by closeCore
@@ -472,6 +490,10 @@ func (k *Kernel) catalog(describe bool) error {
 	}
 	slices.SortFunc(k.entries, func(a, b *entry) int { return strings.Compare(string(a.man.ID), string(b.man.ID)) })
 	probs = append(probs, resetHookProblems(k.entries)...)
+	// Every manifest's TaskLedger and DataMigrations, enabled or not: they stay
+	// known while the module is disabled (06 §6.4.2).
+	probs = append(probs, ledgerProblems(k.entries)...)
+	probs = append(probs, dataMigrationProblems(k.entries)...)
 	return joined(probs)
 }
 
@@ -568,7 +590,9 @@ func callRegister(m module.Module, r *module.Registrar) (err error) {
 // otherwise: their consumers (auth, the redactor's live rules, the journal)
 // land later.
 func (k *Kernel) consume() error {
-	var probs []module.Problem
+	// The registrations of Registrar.Tasks and Registrar.Resources are checked
+	// with the claims: every problem of P7 is reported together (tasks_checks.go).
+	probs := k.taskProblems()
 	// The router records each refusal for Build as well; P7 fails on the
 	// first report, so Build never repeats one.
 	//

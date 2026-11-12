@@ -1,7 +1,7 @@
 // file: core/kernel/swap.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -59,11 +59,14 @@ type kernelSwap struct {
 // no I/O and never opens the store (COR2-13).
 func (k *Kernel) swapWanted(describe bool) bool { return !describe && k.cfg.StateDir != "" }
 
-// storageOwners is every module that declares storage, as the store's
-// owners: enabled or not (a disabled module's claims stay validated and its
-// keyspace reserved).
+// storageOwners is the store's owners: core's own (the audit log, F2-07, and
+// the task keyspace, F2-03/F2-02, both enabled whatever the apps) and every
+// module that declares storage, enabled or not (a disabled module's claims stay
+// validated and its keyspace reserved). Core's two are claimed in every app's
+// store at its first P4b, whether or not tasks start: the keyspace is storage's
+// to register, the start rule is the kernel's (tasks.go).
 func (k *Kernel) storageOwners() []storage.OwnerSpec {
-	var owners []storage.OwnerSpec
+	owners := []storage.OwnerSpec{auditOwnerSpec(), taskOwnerSpec()}
 	for _, e := range k.entries {
 		if DeclaresStorage(e.man) {
 			owners = append(owners, storage.OwnerSpec{Owner: storage.Owner(e.man.ID), Spec: e.man.Storage, Enabled: e.enabled})

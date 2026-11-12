@@ -1,7 +1,7 @@
 // file: core/coretest/harness.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a95c80b7-1b2c-4c57-aa24-2ea9397da171
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 // Package coretest is core's public test kit (06 §6.4.8): an in-process App
 // harness that boots core through app.New, a client that sends requests to
@@ -22,8 +22,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2/vfs"
+
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/coretest/logcapture"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
@@ -50,6 +53,7 @@ type Harness struct {
 	app      *app.App
 	logs     *logcapture.Capture
 	stateDir string
+	fs       storage.FS                   // the in-memory store's filesystem, kept so Reboot reopens the same store
 	mods     map[module.ID]module.Module  // every module passed to WithModules, by ID (the first of a duplicate)
 	watched  map[module.ID]*watchedModule // the modules that boot disabled, as handed to app.New
 	users    map[string][]rbac.Permission // WithUser's principals
@@ -64,6 +68,7 @@ type settings struct {
 	disabled []module.ID
 	config   map[string]any
 	users    map[string][]rbac.Permission
+	runs     []bootseam.TaskRunSeed // WithRuns
 }
 
 // WithModules adds modules to the App, in order. With none, the harness boots
@@ -129,6 +134,13 @@ func New(t testing.TB, opts ...Option) *Harness {
 // comes back as the kernel's *module.ValidationError too.
 func Boot(t testing.TB, opts ...Option) (*Harness, error) {
 	t.Helper()
+	return boot(t, nil, "", opts)
+}
+
+// boot is Boot over fs and stateDir when a Reboot hands the previous
+// harness's (nil and "": a fresh in-memory store and a new temp directory).
+func boot(t testing.TB, fs *storage.FS, stateDir string, opts []Option) (*Harness, error) {
+	t.Helper()
 	var s settings
 	for _, o := range opts {
 		if o != nil {
@@ -191,7 +203,17 @@ func Boot(t testing.TB, opts ...Option) (*Harness, error) {
 		h.watched[id] = w
 		mods[i] = w
 	}
-	h.stateDir = t.TempDir()
+	h.stateDir = stateDir
+	if h.stateDir == "" {
+		h.stateDir = t.TempDir()
+	}
+	// Held so a Reboot reopens the same store (a fresh MemFS per call would
+	// be an empty one).
+	if fs != nil {
+		h.fs = *fs
+	} else {
+		h.fs = memFS()
+	}
 	appOpts := app.Options{
 		AppID:    harnessAppID,
 		StateDir: h.stateDir,
@@ -201,9 +223,15 @@ func Boot(t testing.TB, opts ...Option) (*Harness, error) {
 		Logger: h.logs.Logger(),
 		// In-memory Pebble (06 §6.4.8): a store hello's keyspace opens
 		// leaves nothing under the state directory.
-		StorageFS: storage.MemFS(),
+		StorageFS: h.fs,
 	}
-	a, err := app.New(t.Context(), appOpts, mods...)
+	ctx := t.Context()
+	if len(s.runs) > 0 {
+		// WithRuns: the kernel inserts them at P4c, before the tasks start
+		// rule looks for stored runs.
+		ctx = bootseam.With(ctx, &bootseam.Seams{TaskRuns: s.runs})
+	}
+	a, err := app.New(ctx, appOpts, mods...)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +241,42 @@ func Boot(t testing.TB, opts ...Option) (*Harness, error) {
 			t.Errorf("coretest: close: %v", err)
 		}
 	})
+	// Run's step (5) and (6) for a harness that never calls App.Run: the
+	// executor and scheduler start when the tasks start rule held, so RunTask
+	// has something to run on. Close stops them first. A held run is read-only
+	// and never dispatched, started or not (5T.3.11).
+	if err := a.StartTasks(t.Context()); err != nil {
+		return nil, errors.Join(fmt.Errorf("coretest: start tasks: %w", err), a.Close(context.Background()))
+	}
 	return h, nil
+}
+
+// memFS is an in-memory filesystem that reports ample free space. Pebble's
+// MemFS measures none, and P4a measures the filesystem when a boot will write
+// to a store that already exists (a pending migration, the pre-migration
+// checkpoint): a Reboot that enables a module over a store it left behind
+// would otherwise fail there.
+func memFS() storage.FS {
+	m := vfs.NewMem()
+	m.TestingSetDiskUsage(vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40})
+	return storage.FSOf(m)
+}
+
+// Reboot closes this harness's App and boots a new one over the same store
+// and state directory, with opts as the new App's options (the previous
+// ones are not repeated: pass WithModules again). It is how a test shows what
+// a restart does, such as the runs a re-enabled module resumes. It fails the
+// test on a boot error.
+func (h *Harness) Reboot(t testing.TB, opts ...Option) *Harness {
+	t.Helper()
+	if err := h.app.Close(context.Background()); err != nil {
+		t.Fatalf("coretest: reboot: close the previous App: %v", err)
+	}
+	nh, err := boot(t, &h.fs, h.stateDir, opts)
+	if err != nil {
+		t.Fatalf("coretest: reboot: %v", err)
+	}
+	return nh
 }
 
 // App returns the booted App.

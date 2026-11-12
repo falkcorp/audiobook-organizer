@@ -1,11 +1,15 @@
 // file: core/module/manifest.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f5448853-c265-4559-bf8c-4cb61f16fa24
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package module
 
-import "github.com/falkcorp/mediacore/storage"
+import (
+	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
+	"github.com/falkcorp/mediacore/tasks"
+)
 
 // Manifest is everything the kernel validates before any storage is opened,
 // and everything that must stay known while the module is disabled (06
@@ -49,6 +53,13 @@ type Manifest struct {
 	// "getGreeting" until core authentication lands (R2's identity flip).
 	PublicRoutes []string
 
+	// TaskLedger lists every task kind this module registers ("<ID>.<name>"),
+	// current names only: R2's tasks step renames HEAD's stored kinds through
+	// books' kind-rename map, so no former kind exists. It is readable while
+	// the module is disabled, so 05-tasks classifies the module's persisted
+	// runs as held instead of failing boot (5T.3.11, COR-13). A registered
+	// kind missing from it is a problem (ProblemTaskLedger).
+	TaskLedger []tasks.Kind
 	// Storage is the module's storage declaration (05-storage §5S.3.4,
 	// §5S.3.5): its keyspace m/<ID>/, its legacy claims and its versioned
 	// migrations, Seed steps included (a Seed step and every later step of
@@ -58,6 +69,21 @@ type Manifest struct {
 	// rows (03 R1). The zero value declares nothing; a module that declares
 	// anything boots only with core.storage.path set.
 	Storage storage.Spec
+
+	// DataMigrations are the module's large, resumable rewrites
+	// (05-storage §5S.3.6). They live outside storage.Spec because
+	// storage/datamigrate (L4) imports tasks and storage (L1) cannot. In
+	// R0–R3 every one is BootBlocking: it runs in process at P4b through
+	// tasks.ForEach with persisted shard cursors, with its dry run
+	// (05-storage). The Online mode (a run of the kernel-synthesised module
+	// kind "<ID>.datamigrate.<name>" after Run step 5, with its read adapters,
+	// Writes/RewritesInPlace and conditional-write steps, COR4-5, COR4-6) has
+	// no consumer in R0–R3 and is deferred-build: 05-storage §5S.3.14 lists its
+	// members, and it lands additively with its first consumer (SIMP5-7).
+	//
+	// Each migration's Owner is the module's own ID: P1 refuses a module that
+	// migrates another owner's rows (ProblemMigrationOrder).
+	DataMigrations []datamigrate.DataMigration
 
 	// ResetHook is the module's part of a factory reset (05-storage
 	// §5S.3.15 "The app's reset hook"): Plan runs when a reset is staged,

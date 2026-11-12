@@ -1,7 +1,7 @@
 // file: core/module/registrar.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: b007ae28-2b2a-42a1-aa5a-047aa14d3b77
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package module
 
@@ -15,14 +15,16 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // Registrar is handed to Module.Register (06 §6.4.3). It is not
 // goroutine-safe and is closed when Register returns; calls after that record
 // ProblemRegistrarClosed and take no effect. Methods record problems rather
 // than return errors (A4); Err reports them. Nothing recorded here takes
-// effect before P7 (A8). These are the R1 members; Tasks, Topics, Health and
-// the rest arrive with their packages (06 §6.4.10).
+// effect before P7 (A8). These are the R1 members and Tasks and Resources (F2);
+// Lanes, ChangeSink, Topics, Health and the rest arrive with their packages
+// (06 §6.4.10).
 type Registrar struct {
 	id            ID
 	ctx           context.Context
@@ -59,6 +61,11 @@ type Registrations struct {
 	OtherUserData log.OtherUserPredicate // nil when none was registered
 	Hooks         []Hook
 	Workers       []Worker
+	// Tasks are the definitions the module registered, in call order, and
+	// Resources the resource kinds it declared (F2): recorded only, checked
+	// at P7 (kernel/tasks.go).
+	Tasks     []tasks.Definition
+	Resources []string
 }
 
 // NewRegistrar returns the registrar of one module's Register call.
@@ -88,6 +95,8 @@ func (r *Registrar) Close() Registrations {
 	rec.PathRules = slices.Clone(rec.PathRules)
 	rec.Hooks = slices.Clone(rec.Hooks)
 	rec.Workers = slices.Clone(rec.Workers)
+	rec.Tasks = slices.Clone(rec.Tasks)
+	rec.Resources = slices.Clone(rec.Resources)
 	return rec
 }
 
@@ -238,6 +247,45 @@ func (r *Registrar) Worker(w Worker) {
 			r.problem(ProblemInvalidRegistration, "worker %q registered twice", w.Name)
 		default:
 			r.rec.Workers = append(r.rec.Workers, w)
+		}
+	})
+}
+
+// Tasks registers task definitions; kinds must be "<ID>.<name>". Schedules are
+// part of each definition (tasks.Common.Schedule, bound with
+// tasks.ScheduleFromConfig to a declared key in the module's own namespace,
+// modules.<ID>.<subsystem>.schedules.<name>, no hyphens; the one
+// schedule-key rule <owner>.<subsystem>.schedules.<name>, R2-7, 05-tasks
+// 5T.3.8); there is no second timer API. It only records (06 §6.5.1 P6):
+// P7 checks every kind against the manifest's TaskLedger and the
+// registration rules of 05-tasks 5T.3.1, and a nil definition is
+// ProblemInvalidRegistration.
+func (r *Registrar) Tasks(defs ...tasks.Definition) {
+	r.record("Tasks", func() {
+		for _, d := range defs {
+			if d == nil {
+				r.problem(ProblemInvalidRegistration, "Tasks: a nil definition")
+				continue
+			}
+			r.rec.Tasks = append(r.rec.Tasks, d)
+		}
+	})
+}
+
+// Resources declares the resource kinds this module owns (G8, 05-tasks
+// 5T.3.4): a definition's Effects may name only these, in this module. A
+// kind that is empty or declared twice is ProblemInvalidRegistration.
+func (r *Registrar) Resources(kinds ...string) {
+	r.record("Resources", func() {
+		for _, k := range kinds {
+			switch {
+			case k == "":
+				r.problem(ProblemInvalidRegistration, "Resources: an empty resource kind")
+			case slices.Contains(r.rec.Resources, k):
+				r.problem(ProblemInvalidRegistration, "Resources: kind %q declared twice", k)
+			default:
+				r.rec.Resources = append(r.rec.Resources, k)
+			}
 		}
 	})
 }

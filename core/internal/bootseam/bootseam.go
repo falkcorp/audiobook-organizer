@@ -1,7 +1,7 @@
 // file: core/internal/bootseam/bootseam.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 9d064296-a488-463e-93e9-38d3b21c9167
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 // Package bootseam is the per-boot seam of the crash-matrix kit
 // (coretest/crashmatrix, 05-storage §5S.3.16; 06 §6.4.8): a context value
@@ -53,6 +53,18 @@ type Seams struct {
 	// SwapLock wraps the hold a serve boot's P0a takes on the swap lock, so
 	// a test can make its Downgrade fail; nil = the hold as taken.
 	SwapLock func(SwapLock) SwapLock
+	// TaskRuns are queued runs the kernel inserts into c/tasks/ at P4c, before
+	// the tasks start rule runs: coretest's WithRuns, the way a test boots an
+	// app over stored runs of a kind (a disabled module's held runs, 05-tasks
+	// 5T.3.11). Plain strings, because bootseam sits below the tasks package;
+	// nil = none, as in every production boot.
+	TaskRuns []TaskRunSeed
+}
+
+// TaskRunSeed asks for N queued runs of Kind (Seams.TaskRuns).
+type TaskRunSeed struct {
+	Kind string
+	N    int
 }
 
 // SwapLock is the swap lock held exclusively, as storage.ExclusiveSwapLock
