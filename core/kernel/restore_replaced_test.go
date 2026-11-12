@@ -1,7 +1,7 @@
 // file: core/kernel/restore_replaced_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 1b7e4d93-a6c2-4f58-8e01-d93a5c7f2b64
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -16,20 +16,20 @@ import (
 	"github.com/falkcorp/mediacore/backup/journal"
 )
 
-// gotham is an install with some history: an archive of it taken at journal
+// batcave is an install with some history: an archive of it taken at journal
 // head 0 and a later revocation, so the live store and the archive differ.
-type gotham struct {
+type batcave struct {
 	*rxFx
 	robin    string // Tim Drake, the owner of the keys
 	archive  string // snapshot at head 0, served_boot n 1
 	archive2 string // a second copy of it, for a second restore
 }
 
-func newGotham(t *testing.T) *gotham {
+func newBatcave(t *testing.T) *batcave {
 	t.Helper()
 	fx := newRxFx(t, nil)
 	fx.boot(nil, nil) // served_boot 1
-	g := &gotham{rxFx: fx, robin: fx.user("tim-drake")}
+	g := &batcave{rxFx: fx, robin: fx.user("tim-drake")}
 	fx.key("key-redrobin", g.robin, auth.KeyActive)
 	fx.key("key-spoiler", g.robin, auth.KeyActive)
 	fx.key("key-batmobile", g.robin, auth.KeyActive)
@@ -63,7 +63,7 @@ func (fx *rxFx) externalLine() journal.Line {
 // no such evidence, runs none.
 func TestReplacedStoreRunsHooks(t *testing.T) {
 	t.Run("older content marker, head behind the journal", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		epoch := g.userRow(g.robin).CredentialEpoch
 		g.swapIn(g.archive)
 		headBefore := g.head()
@@ -107,7 +107,7 @@ func TestReplacedStoreRunsHooks(t *testing.T) {
 	})
 
 	t.Run("older content marker, head equal to the journal's end", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		late := g.snapshot("late") // after the revocation: head 1 == the journal's end
 		g.restart()
 		g.boot(nil, nil) // the pair moves past the snapshot's
@@ -125,7 +125,7 @@ func TestReplacedStoreRunsHooks(t *testing.T) {
 	})
 
 	t.Run("another generation with journal evidence", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-redrobin")}) // never reached the store
 		g.restart()
 		g.setLocation(func(l *journal.Location) { l.Store.Epoch += 3 })
@@ -140,7 +140,7 @@ func TestReplacedStoreRunsHooks(t *testing.T) {
 	})
 
 	t.Run("another generation without evidence is relocated", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.setLocation(func(l *journal.Location) { l.Store.Epoch += 3; l.Store.DirIno = 99 })
 		before := len(g.kinds())
 		res, hres := g.boot(nil, nil)
@@ -159,7 +159,7 @@ func TestReplacedStoreRunsHooks(t *testing.T) {
 	})
 
 	t.Run("the same store, whatever its head", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		res, hres := g.boot(nil, nil)
 		if res.Class != classSame || hres.Ran || g.keyStatus("key-redrobin") != auth.KeyActive {
 			t.Errorf("class %q (%s), hooks ran %v", res.Class, res.Why, hres.Ran)
@@ -167,7 +167,7 @@ func TestReplacedStoreRunsHooks(t *testing.T) {
 	})
 
 	t.Run("a location file for another store describes nothing", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.setLocation(func(l *journal.Location) {
 			l.DBPath, l.Journal = "/gotham/other.pebble", "/elsewhere/gotham_revocations.journal"
 			l.ServedBoot.N += 9
@@ -186,7 +186,7 @@ func TestReplacedStoreRunsHooks(t *testing.T) {
 // TestReplacedStore_RunsPostRestoreHook: the hook a replaced store runs gets
 // KindExternal, no previous store, no coverage and the boundary head_before.
 func TestReplacedStore_RunsPostRestoreHook(t *testing.T) {
-	g := newGotham(t)
+	g := newBatcave(t)
 	g.swapIn(g.archive)
 	var got []journal.RestoreContext
 	real := restoreHookList(g.stores())
@@ -224,7 +224,7 @@ func TestReplacedStore_RunsPostRestoreHook(t *testing.T) {
 // reports the journal broken: the store that held the head is gone, but
 // backup.location.json's committed head still says the journal had more.
 func TestReplacedStore_TruncatedJournalKeysNeedConfirmation(t *testing.T) {
-	g := newGotham(t)
+	g := newBatcave(t)
 	// Cut the revocation line off the journal: header only, a clean chain.
 	g.restart()
 	truncateJournal(t, g.journalPath(), 0)
@@ -262,7 +262,7 @@ func truncateJournal(t *testing.T, path string, n int) {
 // appends a second line nor skips the hooks, though the markers already read it
 // as the same store.
 func TestReplacedStore_CrashBeforeHooksResumes(t *testing.T) {
-	g := newGotham(t)
+	g := newBatcave(t)
 	g.swapIn(g.archive)
 	boom := errors.New("the hook crashed")
 	failing := func(hookEnv) ([]journal.RestoreHook, error) {
@@ -299,7 +299,7 @@ func TestReplacedStore_CrashBeforeHooksResumes(t *testing.T) {
 // anchor never leads the store: a revocation whose commit failed does not
 // move it. (The journal's half is in backup/journal.)
 func TestCommittedHeadAnchorDetectsInPlaceCopy(t *testing.T) {
-	g := newGotham(t)
+	g := newBatcave(t)
 	same := g.snapshot("same") // head 1, the pair the file will still carry
 	g.revokeKey("key-batmobile")
 	g.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-redrobin")}) // the commit failed
@@ -327,7 +327,7 @@ func TestCommittedHeadAnchorDetectsInPlaceCopy(t *testing.T) {
 // next boot; that boot finds the line that still owes its hooks and runs them,
 // and never appends a second line.
 func TestReplacedStore_CrashBeforeMarkersReusesLine(t *testing.T) {
-	g := newGotham(t)
+	g := newBatcave(t)
 	g.swapIn(g.archive)
 	boom := errors.New("the hook crashed")
 	failing := func(hookEnv) ([]journal.RestoreHook, error) {

@@ -1,7 +1,7 @@
 // file: core/kernel/restore_broken_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a4d6c28-3f71-4e05-b8d2-c15e7a0f3b49
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -16,12 +16,12 @@ import (
 	"github.com/falkcorp/mediacore/backup/journal"
 )
 
-// brokenScene is gotham with one more journaled revocation the store never
+// brokenScene is batcave with one more journaled revocation the store never
 // committed (line 2, key-redrobin), the journal closed: the shape in which a
 // broken chain hides a revocation the store lacks.
-func brokenScene(t *testing.T) *gotham {
+func brokenScene(t *testing.T) *batcave {
 	t.Helper()
-	g := newGotham(t)
+	g := newBatcave(t)
 	uncommitted(g)
 	g.restart()
 	return g
@@ -108,7 +108,7 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 	})
 
 	t.Run("the head at the end of the journal only reports", func(t *testing.T) {
-		g := newGotham(t) // head 1, journal end 1
+		g := newBatcave(t) // head 1, journal end 1
 		g.restart()
 		epoch := g.userRow(g.robin).CredentialEpoch
 		editJournalLine(t, g.journalPath(), 1, "key-spoiler", "key-batmobile")
@@ -122,7 +122,7 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 	})
 
 	t.Run("a journal truncated below the head reports and re-applies nothing", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.restart()
 		truncateJournal(t, g.journalPath(), 0)
 		res, _ := g.boot(nil, nil)
@@ -132,7 +132,7 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 	})
 
 	t.Run("a truncated journal is reported even when it cannot be opened for appends", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.restart()
 		truncateJournal(t, g.journalPath(), 0)
 		// Another holder of the journal's lock: Bind fails with the lock, not
@@ -174,7 +174,7 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 	})
 
 	t.Run("a verified chain that is not the one the store committed", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.restart()
 		// Another timeline of this install: the archive's store (the same
 		// install ID) journals a different revocation at seq 1, under the same
@@ -240,7 +240,7 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 	})
 
 	t.Run("a journal that cannot be read is not an empty one", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.restart()
 		epoch := g.userRow(g.robin).CredentialEpoch
 		if err := os.Remove(g.journalPath()); err != nil {
@@ -337,9 +337,9 @@ func TestJournalOfOtherInstallNotReplayed(t *testing.T) {
 		}
 		return raw
 	}
-	foreign := func(t *testing.T, g *gotham) []byte { return foreignWith(t, g.keys, true) }
+	foreign := func(t *testing.T, g *batcave) []byte { return foreignWith(t, g.keys, true) }
 	t.Run("set aside", func(t *testing.T) {
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.restart()
 		raw := foreign(t, g)
 		if err := os.WriteFile(g.journalPath(), raw, 0o600); err != nil {
@@ -380,7 +380,7 @@ func TestJournalOfOtherInstallNotReplayed(t *testing.T) {
 
 	t.Run("a restore boot gets no coverage from a reset journal", func(t *testing.T) {
 		s := newRestoreScene(t, nil)
-		raw := foreign(t, s.gotham)
+		raw := foreign(t, s.batcave)
 		if err := os.WriteFile(s.journalPath(), raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -397,7 +397,7 @@ func TestJournalOfOtherInstallNotReplayed(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root ignores directory permissions")
 		}
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.restart()
 		raw := foreign(t, g)
 		if err := os.WriteFile(g.journalPath(), raw, 0o600); err != nil {
@@ -423,7 +423,7 @@ func TestJournalOfOtherInstallNotReplayed(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root ignores directory permissions")
 		}
-		g := newGotham(t)
+		g := newBatcave(t)
 		g.restart()
 		// A journal of another install with no line at the store's head: it
 		// neither verifies the store's chain nor holds anything to compare.
@@ -472,11 +472,11 @@ func TestJournalOfOtherInstallNotReplayed(t *testing.T) {
 	})
 }
 
-// moveScene is gotham with its journal at the default directory and a second
+// moveScene is batcave with its journal at the default directory and a second
 // directory to move it to.
-func moveScene(t *testing.T) (*gotham, string) {
+func moveScene(t *testing.T) (*batcave, string) {
 	t.Helper()
-	g := newGotham(t)
+	g := newBatcave(t)
 	g.restart()
 	return g, filepath.Join(t.TempDir(), "offsite")
 }
