@@ -1,5 +1,5 @@
 // file: core/backup/manifest.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b0f3a62-7c1e-4a6e-9a0b-4f7d6b3c1e55
 // last-edited: 2026-11-12
 
@@ -197,8 +197,8 @@ func ValidArchiveID(s string) bool {
 		}
 		return true
 	}
-	if len(s) > len("legacy-") && len(s) <= 200 && s[:7] == "legacy-" {
-		for i := 7; i < len(s); i++ {
+	if len(s) > len(LegacyIDPrefix) && len(s) <= 200 && s[:len(LegacyIDPrefix)] == LegacyIDPrefix {
+		for i := len(LegacyIDPrefix); i < len(s); i++ {
 			c := s[i]
 			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
 				return false

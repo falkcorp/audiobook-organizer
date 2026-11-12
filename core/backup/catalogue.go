@@ -1,5 +1,5 @@
 // file: core/backup/catalogue.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0e5a7d12-41c8-4b6f-8d33-9c1ab2e07f65
 // last-edited: 2026-11-12
 
@@ -144,7 +144,7 @@ func (s *Svc) describe(name, rest string) (found, bool) {
 		f.ID, f.Format, f.Manifest, f.CreatedAt = m.ArchiveID, FormatMediacore, m, m.CreatedAt
 		f.Provenance = Classify(m, s.o.Keyring, live)
 	} else {
-		f.ID = ArchiveID("legacy-" + strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(name, ".zst"), ".gz"), ".tar"))
+		f.ID = legacyIDOf(name)
 		f.Format, f.Provenance = FormatLegacyABO, PreProvenance
 	}
 	f.Verified = readVerify(p + VerifySidecar)

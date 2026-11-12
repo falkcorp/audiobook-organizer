@@ -1,5 +1,5 @@
 // file: core/backup/verify.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d41f0c73-7b2e-4e88-a6d5-0c9e3b1f5a27
 // last-edited: 2026-11-12
 
@@ -187,7 +187,10 @@ func (s *Svc) scratch() (dir string, cleanup func(), err error) {
 
 // checkSum hashes the archive and compares it with its .sha256 sidecar
 // (sha256sum format: "<hex>  <name>").
-func (s *Svc) checkSum(ctx context.Context, path string) error {
+func (s *Svc) checkSum(ctx context.Context, path string) error { return checkSumFile(ctx, path) }
+
+// checkSumFile is checkSum without a service: the offline extractor has none.
+func checkSumFile(ctx context.Context, path string) error {
 	b, err := readBounded(path+ChecksumSidecar, maxSidecarBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return ErrNoChecksum
