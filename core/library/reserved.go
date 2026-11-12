@@ -1,5 +1,5 @@
 // file: core/library/reserved.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f5dd1d5d-73ad-4667-bbb4-561193fd1163
 // last-edited: 2026-11-11
 
@@ -161,6 +161,16 @@ func (l *localFS) resolve(rel string, followLast bool) (string, resolution) {
 	return strings.Join(done, "/"), resolved
 }
 
+// inode is st's device and inode. A test replaces it (the seams.inodeOf hook) to
+// fake two names for one directory, which a case-sensitive filesystem cannot
+// produce: only a case-insensitive volume or a bind mount does.
+func (l *localFS) inode(st fs.FileInfo) (dev, ino uint64, ok bool) {
+	if l.inodeOf != nil {
+		return l.inodeOf(st)
+	}
+	return libfs.InodeOf(st)
+}
+
 // areaIDs are the device and inode of the existing area directories (under) and
 // of every directory above them inside the root (above), for the by-inode test.
 func (l *localFS) areaIDs() (under, above map[[2]uint64]bool) {
@@ -172,7 +182,7 @@ func (l *localFS) areaIDs() (under, above map[[2]uint64]bool) {
 			if err != nil {
 				break
 			}
-			dev, ino, ok := libfs.InodeOf(st)
+			dev, ino, ok := l.inode(st)
 			if !ok {
 				break
 			}
@@ -204,7 +214,7 @@ func (l *localFS) reservedInode(real string, carries bool) bool {
 		if err != nil {
 			return false
 		}
-		dev, ino, ok := libfs.InodeOf(st)
+		dev, ino, ok := l.inode(st)
 		if !ok {
 			return false
 		}

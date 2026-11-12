@@ -1,5 +1,5 @@
 // file: core/library/manager.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3356d9de-7d9b-4473-880c-196e0a555910
 // last-edited: 2026-11-11
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"iter"
 	"log/slog"
 	"runtime"
@@ -193,8 +194,9 @@ type seams struct {
 	sleep     func(ctx context.Context, d time.Duration) error // the hash limiter's wait
 	newID     func() string
 	watchSrc  watchSourceFunc
-	noHandles bool                     // behave as a platform without directory-relative syscalls (Windows)
-	fsRace    func(stage, name string) // GuardedFS: a hidden view's read open calls it at "checked", "resolved", "parent" and "opened" (see localFS.race)
+	inodeOf   func(fs.FileInfo) (dev, ino uint64, ok bool) // the by-identity area test (localFS.inode)
+	noHandles bool                                         // behave as a platform without directory-relative syscalls (Windows)
+	fsRace    func(stage, name string)                     // GuardedFS: a hidden view's read open calls it at "checked", "resolved", "parent" and "opened" (see localFS.race)
 }
 
 // needHandles refuses a mutation on a platform without directory-relative
