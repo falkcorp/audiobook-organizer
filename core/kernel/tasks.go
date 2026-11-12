@@ -1,5 +1,5 @@
 // file: core/kernel/tasks.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c41f7a09-5d2e-4e83-b6a1-9a0d3f8e7c25
 // last-edited: 2026-11-11
 
@@ -355,9 +355,11 @@ func (k *Kernel) startTasks(ctx context.Context) error {
 		if err == nil {
 			return
 		}
-		// A stop that overtook this goroutine makes Run refuse to start
-		// ("Run after Stop"): that is the shutdown, not a fault, so it is not
-		// an ERROR. Anything else is, stopped or not.
+		// Once a stop is under way the only error Run returns is its refusal
+		// to start ("Run after Stop", a stop that overtook this goroutine):
+		// that is the shutdown, not a fault, so it is not an ERROR. The error
+		// is not a sentinel, so it is recognised by the state, not the text;
+		// before any stop, any error is a fault.
 		kt.mu.Lock()
 		stopped := kt.stopped
 		kt.mu.Unlock()

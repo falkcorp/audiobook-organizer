@@ -1,5 +1,5 @@
 // file: core/examples/hello/held_runs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4f8b2d61-7a39-4c05-b1e7-9d3a6c0e5f28
 // last-edited: 2026-11-11
 
@@ -51,8 +51,9 @@ func awaitRuns(t *testing.T, h *coretest.Harness, n int, state tasks.RunState) [
 // op ledger has no F2 equivalent.
 func TestDisabledModuleWithRunsBoots(t *testing.T) {
 	h := coretest.New(t, coretest.WithModules(hello.New()), coretest.WithDisabled(hello.ID), coretest.WithRuns(count, 3))
-	if h.App().TaskClient() == nil {
-		t.Fatal("three stored runs did not start the tasks")
+	// Runs fails the test when the App has no task executor.
+	if got := h.Runs(t, count); len(got) != 3 {
+		t.Fatalf("three stored runs did not start the tasks: Runs = %d", len(got))
 	}
 	time.Sleep(settle)
 	for _, v := range h.Runs(t, count) {
@@ -113,10 +114,7 @@ func TestHelloCount_RunsOnCoretest(t *testing.T) {
 	}
 
 	t.Run("TestNativeStores_RoundTrip_HelloCount", func(t *testing.T) {
-		rec, err := h.App().TaskRecord(t.Context(), res.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
+		rec := h.TaskRecord(t, res.ID)
 		if rec.Kind != count || rec.State != tasks.StateSucceeded || rec.Finished.IsZero() || rec.Held {
 			t.Errorf("stored run = %+v", rec.RunView)
 		}
@@ -127,10 +125,7 @@ func TestHelloCount_RunsOnCoretest(t *testing.T) {
 		if len(runs) != 1 || runs[0].ID != res.ID || runs[0].State != tasks.StateSucceeded {
 			t.Fatalf("runs after a restart = %+v, want the one succeeded run %s", runs, res.ID)
 		}
-		again, err := h2.App().TaskRecord(t.Context(), res.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
+		again := h2.TaskRecord(t, res.ID)
 		if string(again.Result) != string(rec.Result) {
 			t.Errorf("result after a restart = %s, was %s", again.Result, rec.Result)
 		}
