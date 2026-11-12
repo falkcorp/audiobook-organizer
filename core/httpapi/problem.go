@@ -1,7 +1,7 @@
 // file: core/httpapi/problem.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 58d791ab-c222-4ab1-b523-0444ce052274
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 package httpapi
 
@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/internal/httpmw"
@@ -202,9 +203,24 @@ func writeProblem(ctx context.Context, w http.ResponseWriter, r *http.Request, p
 func writeError(ctx context.Context, w http.ResponseWriter, r *http.Request, err error, log *slog.Logger) {
 	p, header, internal := problemFor(err)
 	if internal && log != nil {
-		log.ErrorContext(ctx, "httpapi: handler error", "error", err, "path", r.URL.Path, "request_id", RequestID(ctx))
+		cause := "<nil>"
+		if err != nil {
+			cause = err.Error()
+		}
+		log.ErrorContext(ctx, "httpapi: handler error", "error", oneLine(cause), "path", oneLine(r.URL.Path), "request_id", RequestID(ctx))
 	}
 	writeProblem(ctx, w, r, p, header, log)
+}
+
+// oneLine is s without its CR and LF characters. The text of a handler's error
+// can quote what the request carried (a name, an archive entry's name, a query
+// value) and the request's path is decoded (%0a is a newline in it), so a line
+// break in either would end the log record early and let the rest pose as a
+// record of its own. A structured handler quotes such a value; a plain one (and
+// anything that reads the output line by line) does not, and the record is not
+// the place to find out which is attached.
+func oneLine(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r", ""), "\n", "")
 }
 
 // legacyError is the legacy error envelope ({error, code, status}), the shape
