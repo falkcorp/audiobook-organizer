@@ -145,8 +145,9 @@ func decodeSettings(settings map[string]any) (EndpointSettings, error) {
 
 // ValidateEndpoint is the routing half of validating an ai instance's
 // settings, for the kernel to call from the integrations write path: the
-// concurrency is at least 1; a capability tick is never a wildcard; and a tick
-// the catalog does not know is refused unless the stored row already carried it
+// concurrency is at least 1; the locality is auto, local or cloud; each
+// declared feature is a known one; a capability tick is never a wildcard; and a
+// tick the catalog does not know is refused unless the stored row already carried it
 // (05-ai section 4, step 2: such a tick is kept and ignored, but a PUT cannot
 // add one). stored is the row being replaced, nil for a create. Every error
 // wraps ErrInvalidEndpoint.
@@ -157,6 +158,16 @@ func (r *Router) ValidateEndpoint(settings, stored map[string]any) error {
 	}
 	if set.Concurrency < 1 {
 		return fmt.Errorf("%w: concurrency must be at least 1, got %d", ErrInvalidEndpoint, set.Concurrency)
+	}
+	switch set.Locality {
+	case LocalityAuto, "auto", LocalityLocal, LocalityCloud:
+	default:
+		return fmt.Errorf("%w: locality %q is not auto, local or cloud", ErrInvalidEndpoint, oneLine(string(set.Locality)))
+	}
+	for _, f := range set.Features {
+		if !knownFeature(f) {
+			return fmt.Errorf("%w: feature %q is not one of %s", ErrInvalidEndpoint, oneLine(string(f)), featureList())
+		}
 	}
 	var prev EndpointSettings
 	if stored != nil {
@@ -174,6 +185,30 @@ func (r *Router) ValidateEndpoint(settings, stored map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// declaredFeatures are the features an operator may declare on an endpoint. The
+// settings schema cannot enumerate array items, so ValidateEndpoint checks them.
+func declaredFeatures() []Feature {
+	return []Feature{FeatureJSONSchema, FeatureJSONMode, FeatureVision, FeatureBatch, FeatureTools, FeatureTimestamps}
+}
+
+// knownFeature reports whether f is a declarable feature or a shared_fs:
+// feature naming a library root.
+func knownFeature(f Feature) bool {
+	if slices.Contains(declaredFeatures(), f) {
+		return true
+	}
+	return strings.HasPrefix(string(f), string(FeatureSharedFS)) && len(f) > len(FeatureSharedFS)
+}
+
+// featureList is the declarable features as one readable list.
+func featureList() string {
+	names := make([]string, 0, len(declaredFeatures())+1)
+	for _, f := range declaredFeatures() {
+		names = append(names, string(f))
+	}
+	return strings.Join(append(names, string(FeatureSharedFS)+"<root>"), ", ")
 }
 
 // ---- capability cache -----------------------------------------------------------

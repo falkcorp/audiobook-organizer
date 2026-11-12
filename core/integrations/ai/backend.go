@@ -206,52 +206,32 @@ type EndpointSettings struct {
 	Labels           []string          `json:"labels,omitzero"`            // declared (e.g. "unmetered"); merged with measured
 	Features         []Feature         `json:"features,omitzero"`          // declared (vision, json_schema, batch_api); merged with measured
 	RequireGPU       bool              `json:"require_gpu,omitzero"`
-	Locality         Locality          `json:"locality,omitzero"`   // LocalityAuto (default) | LocalityLocal | LocalityCloud
-	HostRoots        map[string]string `json:"host_roots,omitzero"` // shared-fs root mapping
+	Locality         Locality          `json:"locality,omitzero" schema:"enum=auto|local|cloud"` // auto (default) | local | cloud
+	HostRoots        map[string]string `json:"host_roots,omitzero"`                              // shared-fs root mapping
 }
 
 // Locality says whether an endpoint keeps data on the operator's own network.
-type Locality uint8
+// It is a string kind, not an integer with text methods, because the settings
+// schema reflects the Go kind: a uint8 renders as {"type":"integer"}, which
+// rejects the very spelling ("local") an operator writes and, were it to admit
+// a number, encoding/json cannot decode a number into a TextUnmarshaler.
+type Locality string
 
-// The localities.
+// The localities. The zero value is LocalityAuto, so an endpoint that sets
+// nothing is decided by the router's heuristic. Only "auto", "local" and
+// "cloud" are settable (the settings schema's enum); LocalityUnknown is what an
+// adapter reports when it can prove neither, and is never a setting.
 const (
-	LocalityAuto    Locality = iota // the router's heuristic over the instance's configured URLs
-	LocalityLocal                   //
-	LocalityCloud                   //
-	LocalityUnknown                 // an adapter that cannot prove either
+	LocalityAuto    Locality = ""        // the router's heuristic over the instance's configured URLs ("auto" is the same)
+	LocalityLocal   Locality = "local"   // data stays on the operator's network
+	LocalityCloud   Locality = "cloud"   // data leaves it
+	LocalityUnknown Locality = "unknown" // an adapter that cannot prove either
 )
 
-// String is the locality's settings spelling.
+// String is the locality's settings spelling; the zero value is "auto".
 func (l Locality) String() string {
-	switch l {
-	case LocalityAuto:
+	if l == LocalityAuto {
 		return "auto"
-	case LocalityLocal:
-		return "local"
-	case LocalityCloud:
-		return "cloud"
-	case LocalityUnknown:
-		return "unknown"
 	}
-	return fmt.Sprintf("locality(%d)", uint8(l))
-}
-
-// MarshalText renders the locality as its settings spelling.
-func (l Locality) MarshalText() ([]byte, error) { return []byte(l.String()), nil }
-
-// UnmarshalText reads a settings spelling; "" is LocalityAuto.
-func (l *Locality) UnmarshalText(b []byte) error {
-	switch string(b) {
-	case "", "auto":
-		*l = LocalityAuto
-	case "local":
-		*l = LocalityLocal
-	case "cloud":
-		*l = LocalityCloud
-	case "unknown":
-		*l = LocalityUnknown
-	default:
-		return fmt.Errorf("ai: locality %q is not auto, local or cloud", string(b))
-	}
-	return nil
+	return string(l)
 }
