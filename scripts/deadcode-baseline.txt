@@ -291,6 +291,7 @@ internal/books/cutover.flatKeys
 internal/books/cutover.generateTable
 internal/books/cutover.generator.add
 internal/books/cutover.generator.addSub
+internal/books/cutover.generator.attachFlatAliasRetired
 internal/books/cutover.generator.attachRetired
 internal/books/cutover.generator.bindingRow
 internal/books/cutover.generator.checkTargets
@@ -308,7 +309,9 @@ internal/books/cutover.get
 internal/books/cutover.getAt
 internal/books/cutover.headAssignWhisperIDs
 internal/books/cutover.headBuildMigratedAIEndpoints
+internal/books/cutover.headCastFileValue
 internal/books/cutover.headCheckConfigBlob
+internal/books/cutover.headComputedDefault
 internal/books/cutover.headDecodeBlob
 internal/books/cutover.headDecodeBlobFields
 internal/books/cutover.headDecrypt
@@ -322,6 +325,7 @@ internal/books/cutover.headFindKey
 internal/books/cutover.headHasConfigKey
 internal/books/cutover.headHasEncryptedValue
 internal/books/cutover.headInMigrationBaseline
+internal/books/cutover.headIntIsExact
 internal/books/cutover.headIsDefault
 internal/books/cutover.headJSONEqual
 internal/books/cutover.headKeyPath
@@ -409,6 +413,8 @@ internal/books/cutover.tpassSecret
 internal/books/cutover.tpassSecretCoined
 internal/books/cutover.ts
 internal/books/cutover.tsc
+internal/books/cutover.unrepresentableError.Error
+internal/books/cutover.unrepresentableLacking
 internal/books/cutover.virtualTop
 internal/books/store.CatalogKeyPrefixes
 internal/books/store.GetCachedMetadataFetch
