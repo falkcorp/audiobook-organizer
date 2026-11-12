@@ -1,5 +1,5 @@
 // file: core/library/rootfs_local.go
-// version: 1.4.0
+// version: 1.4.2
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
 // last-edited: 2026-11-11
 
@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"iter"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -43,6 +44,7 @@ type localFS struct {
 	root     *os.Root
 	abs      string                     // the root's resolved host path
 	spec     RootSpec                   // normalized
+	log      *slog.Logger               // handles that fail to close are logged here
 	readOnly bool                       // mutating methods return ErrReadOnlyRoot
 	skip     []string                   // rel dirs Walk never enters: AppDir, Quarantine, nested same-owner roots
 	mounted  func() error               // checked before any destructive operation; nil = always mounted
@@ -78,8 +80,7 @@ func pathErr(op, name string, err error) error {
 	if err == nil {
 		return nil
 	}
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*fs.PathError](err); ok {
 		err = pe.Err
 	}
 	if strings.Contains(err.Error(), "path escapes from parent") {
@@ -178,7 +179,7 @@ func (l *localFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	} else if d, err = l.root.Open(n); err != nil {
 		return nil, pathErr("readdir", name, err)
 	}
-	defer d.Close()
+	defer closeLogged(l.log, d, name)
 	ents, err := d.ReadDir(-1)
 	sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
 	return ents, pathErr("readdir", name, err)
@@ -276,12 +277,12 @@ func (l *localFS) renameNoReplaceInto(dst fsOps, oldname, newname string) error 
 	if err != nil {
 		return err
 	}
-	defer od.Close()
+	defer closeLogged(l.log, od, o)
 	nd, nb, err := d.parent("rename", n)
 	if err != nil {
 		return err
 	}
-	defer nd.Close()
+	defer closeLogged(l.log, nd, n)
 	return libfs.RenameNoReplace(od, ob, nd, nb)
 }
 
@@ -301,12 +302,12 @@ func (l *localFS) linkInto(dst fsOps, oldname, newname string) error {
 	if err != nil {
 		return err
 	}
-	defer od.Close()
+	defer closeLogged(l.log, od, o)
 	nd, nb, err := d.parent("link", n)
 	if err != nil {
 		return err
 	}
-	defer nd.Close()
+	defer closeLogged(l.log, nd, n)
 	return libfs.Link(od, ob, nd, nb)
 }
 
@@ -326,12 +327,12 @@ func (l *localFS) reflinkInto(dst fsOps, oldname, newname string) error {
 	if err != nil {
 		return err
 	}
-	defer od.Close()
+	defer closeLogged(l.log, od, o)
 	nd, nb, err := d.parent("reflink", n)
 	if err != nil {
 		return err
 	}
-	defer nd.Close()
+	defer closeLogged(l.log, nd, n)
 	return libfs.Reflink(od, ob, nd, nb, libfs.LibraryFileMode)
 }
 
@@ -365,7 +366,7 @@ func (l *localFS) SyncDir(name string) error {
 	if err != nil {
 		return pathErr("sync", name, err)
 	}
-	defer d.Close()
+	defer closeLogged(l.log, d, name)
 	return libfs.SyncDir(d)
 }
 
@@ -450,7 +451,7 @@ func (l *localFS) Walk(ctx context.Context, dir string, opts WalkOptions) iter.S
 			}
 			opened, serr := d.Stat()
 			if serr != nil || !os.SameFile(cur.info, opened) {
-				_ = d.Close()
+				closeLogged(l.log, d, cur.rel)
 				if serr == nil {
 					serr = fmt.Errorf("%w: %s changed during the walk", ErrEscapesRoot, cur.rel)
 				}
@@ -463,7 +464,7 @@ func (l *localFS) Walk(ctx context.Context, dir string, opts WalkOptions) iter.S
 			stop := false
 			for !stop {
 				if err := ctx.Err(); err != nil {
-					_ = d.Close()
+					closeLogged(l.log, d, cur.rel)
 					yield(Entry{}, err)
 					return
 				}
@@ -476,7 +477,7 @@ func (l *localFS) Walk(ctx context.Context, dir string, opts WalkOptions) iter.S
 					info, ierr := de.Info()
 					if ierr != nil {
 						if !yield(Entry{}, pathErr("walk", rel, ierr)) {
-							_ = d.Close()
+							closeLogged(l.log, d, cur.rel)
 							return
 						}
 						continue
@@ -493,7 +494,7 @@ func (l *localFS) Walk(ctx context.Context, dir string, opts WalkOptions) iter.S
 						continue
 					}
 					if !yield(Entry{Path: Path{Root: l.id, Rel: rel}, Info: info}, nil) {
-						_ = d.Close()
+						closeLogged(l.log, d, cur.rel)
 						return
 					}
 					switch {
@@ -521,16 +522,16 @@ func (l *localFS) Walk(ctx context.Context, dir string, opts WalkOptions) iter.S
 					stop = true
 				default:
 					if !yield(Entry{}, pathErr("walk", cur.rel, rerr)) {
-						_ = d.Close()
+						closeLogged(l.log, d, cur.rel)
 						return
 					}
 					stop = true
 				}
 			}
-			_ = d.Close()
+			closeLogged(l.log, d, cur.rel)
 			// Push in reverse so the stack pops the directories in listing order.
-			for i := len(subdirs) - 1; i >= 0; i-- {
-				stack = append(stack, subdirs[i])
+			for _, sd := range slices.Backward(subdirs) {
+				stack = append(stack, sd)
 			}
 		}
 	}

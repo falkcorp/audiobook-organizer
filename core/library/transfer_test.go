@@ -1,5 +1,5 @@
 // file: core/library/transfer_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1af0cfd3-c7e3-42bb-a439-7db2ac8dc820
 // last-edited: 2026-11-11
 
@@ -127,9 +127,7 @@ func TestTransferConcurrentWritersOneWinner(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range n {
 		src := r.put("import-1", "Arkham/copy"+string(rune('a'+i))+".m4b", strings.Repeat("x", 100+i))
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := r.m.Transfer(ctxbg(), books, src, dst, copyOpts())
 			switch {
 			case err == nil:
@@ -139,7 +137,7 @@ func TestTransferConcurrentWritersOneWinner(t *testing.T) {
 			default:
 				t.Errorf("Transfer: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if wins.Load() != 1 || exists.Load() != n-1 {
@@ -547,8 +545,8 @@ func TestTransferVerifyMismatchLeavesNothing(t *testing.T) {
 			}
 		},
 		"the written bytes differ from the read ones": func(r *rig, label string) {
-			if strings.HasPrefix(label, "sync:") {
-				_ = os.WriteFile(filepath.Join(r.dirs["books-library"], strings.TrimPrefix(label, "sync:")), []byte("bytes-OF-SAME-SIZE-!!!"[:len("original bytes")]), 0o664)
+			if rest, ok := strings.CutPrefix(label, "sync:"); ok {
+				_ = os.WriteFile(filepath.Join(r.dirs["books-library"], rest), []byte("bytes-OF-SAME-SIZE-!!!"[:len("original bytes")]), 0o664)
 			}
 		},
 	} {

@@ -1,5 +1,5 @@
 // file: core/library/config_roots_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0f5290ae-d4ce-4d30-b8bb-ced2d196b07b
 // last-edited: 2026-11-11
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"testing"
 	"time"
@@ -104,9 +105,7 @@ func (c *cfgRig) entry(id RootID, owner string, role Role, extra map[string]any)
 		c.roots[id] = c.t.TempDir()
 	}
 	m := map[string]any{"id": string(id), "path": c.roots[id], "role": role.String(), "owner": owner, "sentinel": "required"}
-	for k, v := range extra {
-		m[k] = v
-	}
+	maps.Copy(m, extra)
 	b, err := json.Marshal(m)
 	if err != nil {
 		c.t.Fatal(err)

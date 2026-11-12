@@ -1,5 +1,5 @@
 // file: core/library/hash.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c56e37d1-9700-479b-b762-71caca0f99ae
 // last-edited: 2026-11-11
 
@@ -47,7 +47,7 @@ func (m *manager) hashVia(ctx context.Context, fsys fs.FS, rel string, throttled
 	if err != nil {
 		return Digest{}, err
 	}
-	defer f.Close()
+	defer closeLogged(m.log, f, rel)
 	st, err := f.Stat()
 	if err != nil {
 		return Digest{}, err

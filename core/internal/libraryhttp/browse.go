@@ -1,5 +1,5 @@
 // file: core/internal/libraryhttp/browse.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 969840c6-2d7a-4a37-85c0-43a9e1298b2f
 // last-edited: 2026-11-11
 
@@ -123,7 +123,7 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	defer f.Close()
+	defer s.closeLogged(f, rel)
 	rd, ok := f.(fs.ReadDirFile)
 	if !ok {
 		s.fail(w, r, errors.New("libraryhttp: the root's files do not list"))
@@ -202,7 +202,18 @@ func (s *Server) listRoots(w http.ResponseWriter) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(append(b, '\n'))
+	if _, werr := w.Write(append(b, '\n')); werr != nil {
+		s.log.Warn("libraryhttp: write roots", "err", werr)
+	}
+}
+
+// closeLogged closes the directory a request listed and logs a failure: the
+// listing was already read, so a close error changes no answer, but it is
+// evidence about the disk and must not vanish.
+func (s *Server) closeLogged(c io.Closer, what string) {
+	if err := c.Close(); err != nil {
+		s.log.Warn("libraryhttp: could not close a directory", "dir", what, "err", err)
+	}
 }
 
 // json writes v as the 200 body.
@@ -244,7 +255,7 @@ func hiddenPath(spec library.RootSpec, rel string) *problem {
 		return nil
 	}
 	hidden := isReserved(spec, rel)
-	for _, c := range strings.Split(rel, "/") {
+	for c := range strings.SplitSeq(rel, "/") {
 		if strings.HasPrefix(c, ".") {
 			hidden = true
 		}
