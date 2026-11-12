@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"maps"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
+	"github.com/falkcorp/mediacore/integrations/providerhttp"
 )
 
 // maxBatchListPages bounds FindBatches' walk through the project's batches: at
@@ -88,13 +90,46 @@ func (i *instance) SubmitBatch(ctx context.Context, model string, items []ai.Bat
 		Metadata:         md,
 	})
 	if err != nil {
-		// The uploaded input is useless without its batch; do not leave it.
-		if _, derr := i.cl.Files.Delete(context.WithoutCancel(ctx), file.ID); derr != nil {
-			_ = derr // best effort: the batch error is the one that matters
+		ferr := i.fail(ctx, "batch create", err)
+		// The uploaded input is garbage only when the provider did NOT create
+		// the batch: a refusal (4xx), a request that was never sent, or an
+		// answer that was not the API's. After a 5xx, a cut connection or a 2xx
+		// this adapter could not read, the batch may exist and be reading that
+		// very file, so it stays; the router leaves the job Pending and its
+		// orphan reconcile finds the batch by its tag.
+		if i.notCreated(ferr) {
+			i.deleteInput(ctx, file.ID)
 		}
-		return "", i.fail(ctx, "batch create", err)
+		return "", ferr
+	}
+	if batch.ID == "" {
+		// A 2xx without a batch ID: the provider may well have created one.
+		return "", i.badOutput("batch create", "the provider answered the batch request without a batch ID")
 	}
 	return ai.BatchHandle(batch.ID), nil
+}
+
+// notCreated reports whether err, the mapped failure of a batch create, proves
+// the provider did not create the batch (ai.NotAccepted), or the answer did not
+// come from the API at all.
+func (i *instance) notCreated(err error) bool {
+	if _, ok := errors.AsType[*notAPIError](err); ok {
+		return true
+	}
+	e, ok := errors.AsType[*integrations.Error](err)
+	return ok && ai.NotAccepted(e.Class)
+}
+
+// deleteInput removes the input file of a batch that was not created. It is
+// best effort (the failure that matters is the batch's), runs after the caller
+// gave up, and passes through an active hold: the hold that a quota refusal
+// just set would otherwise refuse the very delete that tidies up after it.
+func (i *instance) deleteInput(ctx context.Context, fileID string) {
+	dctx := providerhttp.WithBypassHold(context.WithoutCancel(ctx))
+	if _, derr := i.cl.Files.Delete(dctx, fileID); derr != nil {
+		i.log.Debug("openai: could not delete the input file of a batch that was not created",
+			"file", fileID, "err", i.fail(dctx, "batch cleanup", derr))
+	}
 }
 
 // phaseOf maps the provider's batch status to the contract's phases.
@@ -186,7 +221,7 @@ func (i *instance) result(l resultLine) ai.BatchResult {
 	r := ai.BatchResult{CustomID: l.CustomID}
 	switch {
 	case l.Error != nil:
-		r.Err = l.Error.Code + ": " + l.Error.Message
+		r.Err = detail(l.Error.Code + ": " + l.Error.Message)
 	case l.Response == nil:
 		r.Err = "no response"
 	case l.Response.StatusCode != 200:
@@ -206,8 +241,12 @@ func (i *instance) result(l resultLine) ai.BatchResult {
 }
 
 // CancelBatch cancels a batch at the provider.
+//
+// A cancel passes through an active hold: it stops spend, so refusing it
+// because the provider was just rate limited would leave a paid batch running.
+// The breaker and the egress guard still apply.
 func (i *instance) CancelBatch(ctx context.Context, h ai.BatchHandle) error {
-	if _, err := i.cl.Batches.Cancel(ctx, string(h)); err != nil {
+	if _, err := i.cl.Batches.Cancel(providerhttp.WithBypassHold(ctx), string(h)); err != nil {
 		return i.fail(ctx, "batch cancel", err)
 	}
 	return nil

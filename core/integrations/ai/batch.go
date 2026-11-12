@@ -173,16 +173,17 @@ func (r *Router) SubmitBatch(ctx context.Context, c Capability, items []BatchIte
 			return id, r.recordHandle(ctx, id, ep, handle)
 		}
 		switch {
-		case class == integrations.ClassCanceled || !definite(class):
-			// The provider may have accepted it: leave the job Pending for the
-			// poll's orphan reconcile and tell the caller not to resubmit.
+		case class == integrations.ClassCanceled || !NotAccepted(class):
+			// The provider may have accepted it (a 5xx, a cut connection, a 2xx
+			// nobody could read): leave the job Pending for the poll's orphan
+			// reconcile and tell the caller not to resubmit.
 			return id, fmt.Errorf("%w: job %s: %w", ErrSubmitUnconfirmed, id, serr)
 		case failsOver(class):
 			failed = append(failed, AttemptError{Endpoint: ep.ref(), Class: class, Err: serr})
 			r.m.failedOver(ctx, c.id, ep.ref(), class)
 		default:
-			// Invalid, BadOutput, NotFound: the provider rejected the batch, and
-			// another would too.
+			// Invalid, NotFound: the provider rejected the batch, and another
+			// would too.
 			r.failPending(ctx, id)
 			return "", serr
 		}
@@ -191,13 +192,23 @@ func (r *Router) SubmitBatch(ctx context.Context, c Capability, items []BatchIte
 	return "", &ExhaustedError{Capability: c.id, Attempts: failed}
 }
 
-// definite reports a class that says the provider did NOT accept the request:
-// nothing was sent (RefusedLocal), or it answered with a refusal. Transient and
-// Unknown are ambiguous: the request may have been accepted before the failure.
-func definite(c integrations.Class) bool {
+// NotAccepted reports a class that says the provider did NOT create the batch:
+// nothing was sent (RefusedLocal), or it answered the request with a refusal
+// (a 4xx: rate limit, quota, auth, not found, invalid). An adapter reads it to
+// decide whether an input it uploaded is now garbage; the router reads it to
+// decide whether a Pending job can be failed.
+//
+// Everything else is ambiguous, because the provider may have created the
+// batch before the failure reached the caller: Transient (a 5xx, a cut or timed
+// out connection), Unknown, and BadOutput. BadOutput is the one that looks
+// like a refusal and is not: a 2xx the adapter could not decode, or one that
+// carried no batch ID, is a provider that said yes in words the adapter could
+// not read. The orphan reconcile, which finds the batch by its tag, is what
+// settles those.
+func NotAccepted(c integrations.Class) bool {
 	switch c {
 	case integrations.ClassRefusedLocal, integrations.ClassRateLimited, integrations.ClassQuota, integrations.ClassAuth,
-		integrations.ClassUnsupported, integrations.ClassInvalid, integrations.ClassBadOutput, integrations.ClassNotFound:
+		integrations.ClassUnsupported, integrations.ClassInvalid, integrations.ClassNotFound:
 		return true
 	}
 	return false

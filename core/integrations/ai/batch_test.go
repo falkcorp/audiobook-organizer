@@ -351,6 +351,58 @@ func TestBatch_SubmitFailoverAndAmbiguity(t *testing.T) {
 			t.Errorf("job = %+v, want Pending for the poll's reconcile", j)
 		}
 	})
+	// BadOutput on a create looks like a refusal and is not one: a 2xx the
+	// adapter could not decode, or one with no batch ID, is a provider that
+	// said yes in words nobody could read, so the batch may exist.
+	for name, class := range map[string]integrations.Class{
+		"an unreadable 2xx":   integrations.ClassBadOutput,
+		"an unclassified one": integrations.ClassUnknown,
+	} {
+		t.Run(name+" leaves the job Pending for the tag reconcile", func(t *testing.T) {
+			t.Parallel()
+			e := newBatchEnv(t)
+			e.f.FailSubmit(&integrations.Error{Class: class, Err: errors.New("the answer made no sense")})
+			second := fake()
+			set := textEndpoint("joker-7b", "gotham.riddle_batch")
+			set.Features = []ai.Feature{ai.FeatureBatch}
+			e.addEndpoint("blackgate", 2, set, second)
+			id, err := e.r.SubmitBatch(context.Background(), e.c, items(1), nil)
+			if !errors.Is(err, ai.ErrSubmitUnconfirmed) || id == "" {
+				t.Fatalf("id=%q err=%v, want the job ID with ErrSubmitUnconfirmed", id, err)
+			}
+			if second.BatchCallCount() != 0 {
+				t.Error("an unreadable answer failed over; the provider may already hold the batch")
+			}
+			if j := e.mustJob(id); j.State != ai.JobPending {
+				t.Errorf("job = %+v, want Pending: failing it would orphan a batch the provider accepted", j)
+			}
+		})
+	}
+}
+
+// NotAccepted is the one predicate for "the provider did not create the
+// batch", shared by the router (may the Pending job be failed?) and the adapter
+// (is the uploaded input garbage?). Only a refusal or a request never sent
+// counts; every class that can follow an accepted request does not.
+func TestNotAccepted(t *testing.T) {
+	t.Parallel()
+	for c, want := range map[integrations.Class]bool{
+		integrations.ClassRefusedLocal: true,
+		integrations.ClassRateLimited:  true,
+		integrations.ClassQuota:        true,
+		integrations.ClassAuth:         true,
+		integrations.ClassUnsupported:  true,
+		integrations.ClassInvalid:      true,
+		integrations.ClassNotFound:     true,
+		integrations.ClassTransient:    false,
+		integrations.ClassBadOutput:    false,
+		integrations.ClassUnknown:      false,
+		integrations.ClassCanceled:     false,
+	} {
+		if got := ai.NotAccepted(c); got != want {
+			t.Errorf("NotAccepted(%s) = %v, want %v", c, got, want)
+		}
+	}
 }
 
 // A submit whose answer was lost leaves a Pending job and a tagged remote
