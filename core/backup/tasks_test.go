@@ -19,7 +19,9 @@ import (
 
 func TestBackupTaskDefinitions(t *testing.T) {
 	e := newEnv(t)
-	defs := backup.Tasks(e.svc)
+	defs := []tasks.Definition{
+		backup.CreateTask(e.svc), backup.VerifyTask(e.svc), backup.PruneTask(e.svc), backup.StageRestoreTask(e.svc),
+	}
 	taskstest.Conformance(t, defs...)
 	if len(defs) != 4 {
 		t.Fatalf("%d definitions, want create, verify, prune and stage-restore", len(defs))
@@ -49,6 +51,22 @@ func TestBackupTaskDefinitions(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Errorf("kinds missing: %v", want)
+	}
+}
+
+// A constructor over a nil service yields a definition whose registration fails
+// (tasks.Problems reports "Task has no Run"), not one that panics when started.
+func TestBackupTasksOverNilServiceFailRegistration(t *testing.T) {
+	for _, d := range []tasks.Definition{
+		backup.CreateTask(nil), backup.VerifyTask(nil), backup.PruneTask(nil), backup.StageRestoreTask(nil),
+	} {
+		var has bool
+		for _, err := range tasks.Problems(d) {
+			has = has || strings.Contains(err.Error(), "no Run")
+		}
+		if !has {
+			t.Errorf("%s over a nil service: problems %v, want Task has no Run", d.Kind(), tasks.Problems(d))
+		}
 	}
 }
 

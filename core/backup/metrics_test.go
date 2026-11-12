@@ -23,7 +23,7 @@ func TestBackupSeriesGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	sc, err := p.Core("backup", backup.ScopeAttributes...)
+	sc, err := p.Core("backup", backup.ScopeAttributes()...)
 	if err != nil {
 		t.Fatal(err)
 	}
