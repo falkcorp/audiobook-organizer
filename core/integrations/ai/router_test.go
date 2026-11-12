@@ -603,69 +603,177 @@ func TestRouter_SlotReleasedOnPanic(t *testing.T) {
 	}
 }
 
-// A kind cap of 1 is given back by every way a call can end. The endpoint has
-// room for four, so only the kind's own count can refuse the last call: a panic
-// or a failed call that kept its kind slot would starve every later call of the
-// kind, and that must fail here in seconds rather than hang a suite.
+// A kind cap of 1 is given back by every way a call can end once its slot is
+// taken. The endpoints have room for four each, so only the kind's own count can
+// refuse the probe call that follows each exit: a slot kept by a panic, by a
+// failure, by a failover or by a canceled caller would starve every later call
+// of the kind, and that must fail here in seconds (the probe's deadline) rather
+// than hang a suite.
 func TestRouter_KindSlotReleasedOnEveryExit(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
-	h.setConfig(ai.Config{KindLimits: map[ai.Kind]int{ai.KindText: 1}})
-	c := h.capability("riddle")
-	f := fake()
-	f.ScriptText(coretest.FakeAIStep{Text: "fine"})
-	set := textEndpoint("joker-7b", "gotham.riddle")
-	set.Concurrency = 4
-	h.addEndpoint("arkham", 1, set, f)
-
-	// Every call carries the deadline: a leaked kind slot makes the NEXT call
-	// wait for it, so it is that call that has to give up, not the test binary.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Error("the panic did not propagate to the caller")
+	ok := func(context.Context, ai.Target) (string, ai.Usage, error) { return "fine", ai.Usage{}, nil }
+	exits := []struct {
+		name string
+		// run makes one call end in the way under test.
+		run func(t *testing.T, ctx context.Context, h *harness, c ai.Capability)
+	}{
+		{"a panic", func(t *testing.T, ctx context.Context, h *harness, c ai.Capability) {
+			defer func() {
+				if recover() == nil {
+					t.Error("the panic did not propagate to the caller")
+				}
+			}()
+			_, _ = ai.Call(ctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
+				panic("the Joker pulled the fire alarm")
+			})
+		}},
+		{"a failure returned as is", func(t *testing.T, ctx context.Context, h *harness, c ai.Capability) {
+			ran := false
+			_, err := ai.Call(ctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
+				ran = true
+				return "", ai.Usage{}, errors.New("the Riddler answered with a riddle")
+			})
+			if !ran || err == nil {
+				t.Fatalf("ran = %v, err = %v; want a failing call that ran", ran, err)
 			}
-		}()
-		_, _ = ai.Call(ctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
-			panic("the Joker pulled the fire alarm")
+		}},
+		{"a failover to the next endpoint", func(t *testing.T, ctx context.Context, h *harness, c ai.Capability) {
+			// The second attempt needs the kind's one slot, which only the first
+			// attempt's release can have freed.
+			var tried []integrations.Ref
+			got, err := ai.Call(ctx, h.r, c, func(_ context.Context, tg ai.Target) (string, ai.Usage, error) {
+				tried = append(tried, tg.Endpoint)
+				if len(tried) == 1 {
+					return "", ai.Usage{}, classErr(integrations.ClassTransient)
+				}
+				return "the Penguin", ai.Usage{}, nil
+			})
+			if err != nil || got != "the Penguin" || len(tried) != 2 {
+				t.Fatalf("got %q, %v after trying %v; want the second endpoint's answer", got, err, tried)
+			}
+		}},
+		{"every endpoint failing over", func(t *testing.T, ctx context.Context, h *harness, c ai.Capability) {
+			_, err := ai.Call(ctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
+				return "", ai.Usage{}, classErr(integrations.ClassTransient)
+			})
+			if _, ok := errors.AsType[*ai.ExhaustedError](err); !ok {
+				t.Fatalf("err = %v, want ExhaustedError", err)
+			}
+		}},
+		{"a lease that fails after a failover", func(t *testing.T, ctx context.Context, h *harness, c ai.Capability) {
+			// The first attempt fails over and, while it runs, the next endpoint
+			// (already selected) is deleted: the second attempt takes its slot
+			// and then cannot lease the instance.
+			attempts := 0
+			_, err := ai.Call(ctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
+				attempts++
+				if derr := h.reg.Delete(admin(), aiRef("blackgate")); derr != nil {
+					t.Errorf("Delete blackgate: %v", derr)
+				}
+				return "", ai.Usage{}, classErr(integrations.ClassTransient)
+			})
+			if attempts != 1 || err == nil {
+				t.Fatalf("%d attempt(s), err = %v; want one attempt, then the second endpoint's lease failing", attempts, err)
+			}
+		}},
+		{"a caller that gives up mid-call", func(t *testing.T, ctx context.Context, h *harness, c ai.Capability) {
+			cctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			in := make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				_, err := ai.Call(cctx, h.r, c, func(fctx context.Context, _ ai.Target) (string, ai.Usage, error) {
+					close(in)
+					<-fctx.Done()
+					return "", ai.Usage{}, fctx.Err()
+				})
+				done <- err
+			}()
+			<-in
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want the caller's cancellation", err)
+			}
+		}},
+		{"a caller that gives up while waiting for the slot", func(t *testing.T, ctx context.Context, h *harness, c ai.Capability) {
+			hold, in, held := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(held)
+				_, _ = ai.Call(ctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
+					close(in)
+					<-hold
+					return "fine", ai.Usage{}, nil
+				})
+			}()
+			<-in // the kind's one slot is now taken
+			wctx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+			defer cancel()
+			ran := false
+			_, err := ai.Call(wctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
+				ran = true
+				return "fine", ai.Usage{}, nil
+			})
+			if ran || !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("ran = %v, err = %v; want the waiter to give up without running", ran, err)
+			}
+			close(hold)
+			<-held
+		}},
+	}
+	for _, exit := range exits {
+		t.Run(exit.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.setConfig(ai.Config{KindLimits: map[ai.Kind]int{ai.KindText: 1}})
+			c := h.capability("riddle")
+			for i, name := range []string{"arkham", "blackgate"} {
+				set := textEndpoint("joker-7b", "gotham.riddle")
+				set.Concurrency = 4
+				h.addEndpoint(name, i+1, set, fake())
+			}
+			// Every call carries the deadline: a leaked kind slot makes the NEXT
+			// call wait for it, so it is that call that has to give up.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			exit.run(t, ctx, h, c)
+			h.clk.Advance(time.Hour) // out of any bench the exit caused
+
+			if _, err := ai.Call(ctx, h.r, c, ok); err != nil {
+				t.Fatalf("the call after %s never got the kind's one slot: %v", exit.name, err)
+			}
 		})
-	}()
-
-	ran := false
-	_, err := ai.Call(ctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
-		ran = true
-		return "", ai.Usage{}, errors.New("the Riddler answered with a riddle")
-	})
-	if !ran {
-		t.Fatalf("the call after a panic never got the kind's one slot: %v", err)
-	}
-	if err == nil {
-		t.Fatal("a failing call reported success")
-	}
-
-	if _, err := h.r.Generate(ctx, c, text("who?")); err != nil {
-		t.Fatalf("the call after a failed call never got the kind's one slot: %v", err)
 	}
 }
 
 // core.ai.kind_limits.<kind> is the pool-wide in-flight cap of a kind, and it
 // is read from the live config on every call (HEAD had no production setter for
 // whisper_max_in_flight).
+//
+// No assertion here depends on a fixed sleep. A call the cap allows is awaited
+// by its own entry (waitFor, bounded), so a slow machine only makes the test
+// longer. A call the cap must refuse is proved refused by its outcome: the first
+// call is held in flight while the others run under a deadline, and a cap that
+// works leaves each of them waiting for the slot until that deadline, so none
+// ever runs, while a cap that does not work lets them into the gate beside the
+// first call, where the peak shows it. A loaded machine can only make a refused
+// call give up before it reaches the slot, never make it run, so slowness can
+// hide a broken cap from this test but cannot fail a working one; the slot
+// accounting itself is pinned without any goroutine in slots_test.go.
 func TestRouter_KindCapProductionSetter(t *testing.T) {
 	t.Parallel()
-	run := func(t *testing.T, limits map[ai.Kind]int) (maxInFlight int) {
+	const callers = 4
+	run := func(t *testing.T, limits map[ai.Kind]int, capped bool) (peak int) {
 		h := newHarness(t)
 		h.setConfig(ai.Config{KindLimits: limits})
 		c := h.capability("riddle")
 		release := make(chan struct{})
 		var mu sync.Mutex
-		inFlight, peak := 0, 0
+		inFlight, entered := 0, 0
 		gate := func(ctx context.Context, tg ai.Target) (string, ai.Usage, error) {
 			mu.Lock()
 			inFlight++
+			entered++
 			peak = max(peak, inFlight)
 			mu.Unlock()
 			defer func() { mu.Lock(); inFlight--; mu.Unlock() }()
@@ -683,31 +791,50 @@ func TestRouter_KindCapProductionSetter(t *testing.T) {
 		if got := h.r.Capacity(c); got != min(8, firstPositive(limits[ai.KindText], 8)) {
 			t.Errorf("Capacity = %d, with limits %v", got, limits)
 		}
-		var wg sync.WaitGroup
-		for range 4 {
-			wg.Go(func() { ; _, _ = ai.Call(context.Background(), h.r, c, gate) })
-		}
-		waitFor(t, func() bool {
+		current := func() int {
 			mu.Lock()
 			defer mu.Unlock()
-			return inFlight >= 1
-		})
-		time.Sleep(50 * time.Millisecond) // let any call that is allowed in get in
+			return inFlight
+		}
+		var first, others sync.WaitGroup
+		first.Go(func() { _, _ = ai.Call(context.Background(), h.r, c, gate) })
+		waitFor(t, func() bool { return current() >= 1 })
+
+		wctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if capped {
+			wctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+		}
+		for range callers - 1 {
+			others.Go(func() { _, _ = ai.Call(wctx, h.r, c, gate) })
+		}
+		if capped {
+			others.Wait() // each ended on its deadline, still waiting for the slot
+			mu.Lock()
+			if entered != 1 {
+				t.Errorf("%d calls ran with kind_limits.text=1 while the first was in flight, want only the first", entered)
+			}
+			mu.Unlock()
+		} else {
+			waitFor(t, func() bool { return current() == callers })
+		}
 		mu.Lock()
 		observed := peak
 		mu.Unlock()
 		close(release)
-		wg.Wait()
+		first.Wait()
+		others.Wait()
 		return observed
 	}
-	if got := run(t, nil); got < 3 {
-		t.Errorf("with no kind limit the peak in flight was %d, want the endpoints' own capacity to let several in", got)
+	if got := run(t, nil, false); got != callers {
+		t.Errorf("with no kind limit the peak in flight was %d, want all %d: the endpoints' own capacity lets them in", got, callers)
 	}
-	if got := run(t, map[ai.Kind]int{ai.KindText: 1}); got != 1 {
+	if got := run(t, map[ai.Kind]int{ai.KindText: 1}, true); got != 1 {
 		t.Errorf("with kind_limits.text=1 the peak in flight was %d, want 1 across both endpoints", got)
 	}
-	if got := run(t, map[ai.Kind]int{ai.KindEmbed: 1}); got < 3 {
-		t.Errorf("a limit on embed capped text work: peak %d", got)
+	if got := run(t, map[ai.Kind]int{ai.KindEmbed: 1}, false); got != callers {
+		t.Errorf("a limit on embed capped text work: peak %d, want %d", got, callers)
 	}
 }
 

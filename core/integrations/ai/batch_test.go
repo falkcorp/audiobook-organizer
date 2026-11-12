@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"iter"
 	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +23,8 @@ import (
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
+	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/keys"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -793,4 +797,43 @@ func series(t *testing.T, g prometheus.Gatherer, family string, want map[string]
 		t.Fatalf("no series %s%v", family, want)
 	}
 	return 0
+}
+
+// A job row the store cannot read ends the open listing there, after the jobs
+// before it. The poll advances those jobs and then returns the error: before,
+// one damaged row meant nothing was polled at all, so every job listed ahead of
+// it stopped advancing too. Every write is a compare-and-set from the state the
+// poll read, so acting on the partial list is safe.
+func TestBatchPoll_AdvancesTheJobsListedBeforeADamagedRow(t *testing.T) {
+	t.Parallel()
+	e := newBatchEnv(t)
+	ids := []ai.BatchJobID{e.submit(1), e.submit(1), e.submit(1)}
+	slices.Sort(ids) // Open lists in ID order
+	for _, h := range e.f.RemoteBatches() {
+		e.f.CompleteBatch(h)
+	}
+
+	ctx := context.Background()
+	row := keys.Join(keys.Str("jobs"), keys.Str(string(ids[1])))
+	err := commit(t, e.ks, func(b *storage.Batch) error {
+		b.Bind(e.ks)
+		if _, err := b.GetForUpdate(ctx, e.ks, row); err != nil {
+			return err
+		}
+		return b.In(e.ks).Set(row, []byte("{not json"))
+	})
+	if err != nil {
+		t.Fatalf("damage the second job's row: %v", err)
+	}
+
+	res, err := e.poll()
+	if err == nil || !strings.Contains(err.Error(), "list open jobs") {
+		t.Fatalf("PollBatches = %+v, %v; want the listing error returned", res, err)
+	}
+	if res.Polled != 1 || res.ApplyStaged != 1 {
+		t.Errorf("PollBatches = %+v, want the one job listed before the damage polled and its apply run staged", res)
+	}
+	if j := e.mustJob(ids[0]); j.State != ai.JobApplying {
+		t.Errorf("the job listed before the damaged row is %s, want Applying: it must not wait on the damage", j.State)
+	}
 }
