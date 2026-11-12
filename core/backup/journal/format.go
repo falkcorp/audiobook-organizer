@@ -1,5 +1,5 @@
 // file: core/backup/journal/format.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3327485a-f95b-499f-bda1-dca7958d7feb
 // last-edited: 2026-11-11
 
@@ -281,4 +281,20 @@ func IsRevocation(k Kind) bool {
 		return false
 	}
 	return true
+}
+
+// KnownKind reports whether this build knows the kind k: the revocation kinds
+// its appliers (auth's and rbac's StageReapply) handle and the three
+// bookkeeping kinds. IsRevocation counts a kind it does not know as a
+// revocation so that a newer build's line is never skipped; KnownKind is how a
+// re-apply tells that it holds one it cannot apply, and so must stop before it
+// rather than pass it (the head never moves over a line nothing applied).
+func KnownKind(k Kind) bool {
+	switch k {
+	case APIKeyRevoked, APIKeyDisabled, UserDisabled, UserDeleted, CredentialEpochBumped, PasswordChanged,
+		IdentityUnlinked, SessionRevoked, RoleUnassigned, RoleNarrowed, RoleDeleted,
+		Restore, Gap, RestoreAborted:
+		return true
+	}
+	return false
 }

@@ -1,5 +1,5 @@
 // file: core/backup/journal/move.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a2c7e19-0b3d-4f86-a4d1-9e7c6b1f3a28
 // last-edited: 2026-11-11
 
@@ -34,13 +34,16 @@ var ErrMoveRefused = errors.New("journal: the journal move was refused")
 // the destination gets a new journal when the component binds it. A
 // destination that exists is accepted only when it verifies and holds the
 // source's last line unchanged; any other file there is ErrMoveRefused and is
-// never overwritten.
+// never overwritten. Neither end is ever a link: a source that is not a regular
+// file, or a destination that exists and is not one, is ErrMoveRefused, and the
+// temp file is created fresh (a leftover of an earlier crash, or a name someone
+// planted on the share, is removed first and never written through).
 func MoveFile(from, to string, keys Keys) (err error) {
 	if from == to {
 		return nil
 	}
 	// openJournal creates a missing file, which a move must not do.
-	if _, err := os.Stat(from); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(from); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	f, data, err := openJournal(from)
@@ -57,13 +60,20 @@ func MoveFile(from, to string, keys Keys) (err error) {
 	if len(data) == 0 {
 		return nil // an empty journal holds nothing to move
 	}
-	if existing, err := os.ReadFile(to); err == nil {
+	switch fi, err := os.Lstat(to); {
+	case err == nil && !fi.Mode().IsRegular():
+		return fmt.Errorf("%w: %w: %s is a %s", ErrMoveRefused, ErrNotRegular, to, fileKind(fi.Mode()))
+	case err == nil:
+		existing, err := os.ReadFile(to)
+		if err != nil {
+			return fmt.Errorf("%w: read %s: %w", ErrMoveRefused, to, err)
+		}
 		if !holdsMoved(ReadChain(existing, keys), src) {
 			return fmt.Errorf("%w: %s already holds another journal", ErrMoveRefused, to)
 		}
 		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: read %s: %w", ErrMoveRefused, to, err)
+	case !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("%w: stat %s: %w", ErrMoveRefused, to, err)
 	}
 
 	dir := filepath.Dir(to)
@@ -71,6 +81,12 @@ func MoveFile(from, to string, keys Keys) (err error) {
 		return fmt.Errorf("%w: %w", ErrMoveRefused, err)
 	}
 	tmp := to + ".moving"
+	// Whatever is at the temp name is ours to replace, never to write through: a
+	// regular file is a crash's leftover, anything else a name planted on the
+	// share (removing a link removes the link). The create below is exclusive.
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: clear %s: %w", ErrMoveRefused, tmp, err)
+	}
 	if err := writeDurable(tmp, data); err != nil {
 		return errors.Join(fmt.Errorf("%w: %w", ErrMoveRefused, err), os.Remove(tmp))
 	}
@@ -103,9 +119,10 @@ func holdsMoved(dst, src *Chain) bool {
 	return ok && macEqual(mac, src.PrevMAC())
 }
 
-// writeDurable writes data to path (0600, replacing what is there) and fsyncs.
+// writeDurable creates path (0600, exclusively: it fails when anything, a
+// symbolic link included, is already there), writes data and fsyncs.
 func writeDurable(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|openNoFollow, 0o600)
 	if err != nil {
 		return err
 	}

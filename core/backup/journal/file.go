@@ -1,5 +1,5 @@
 // file: core/backup/journal/file.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: b701597d-6d06-4dd4-af78-0e0d6a9983ca
 // last-edited: 2026-11-11
 
@@ -71,6 +71,14 @@ var ErrLocked = errors.New("journal: another writer holds the revocation journal
 
 // ErrClosed is returned by Append after Close.
 var ErrClosed = errors.New("journal: the revocation journal is closed")
+
+// ErrNotRegular reports a journal path that is not a regular file: a symbolic
+// link, a directory, a device or a pipe. The journal usually sits on a share
+// other hosts can write to, so a name planted there must never make the boot
+// open, cut or extend whatever it points at (05-backup §5B.3.6 row "Format and
+// integrity"): the journal is read and written only as a regular file reached
+// without following a link at its last component.
+var ErrNotRegular = errors.New("journal: the journal path is not a regular file")
 
 // FileOptions is what the kernel opens the file journal with (coined: the
 // spec names no constructor).
@@ -278,12 +286,16 @@ func (j *File) fail(err error) (*File, error) {
 }
 
 // openJournal is the one place the journal file is opened: read-write,
-// append-only writes, created 0600, locked exclusively (lockJournal) before
+// append-only writes, created 0600, never through a symbolic link, required to
+// be a regular file (ErrNotRegular), locked exclusively (lockJournal) before
 // anything is read, and its current content.
 func openJournal(path string) (*os.File, []byte, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND|openNoFollow, 0o600)
 	if err != nil {
-		return nil, nil, fmt.Errorf("journal: open %s: %w", path, err)
+		return nil, nil, openError("open", path, err)
+	}
+	if err := regularFile(f); err != nil {
+		return nil, nil, errors.Join(err, f.Close())
 	}
 	if err := lockJournal(f); err != nil {
 		return nil, nil, errors.Join(err, f.Close())
@@ -293,6 +305,47 @@ func openJournal(path string) (*os.File, []byte, error) {
 		return nil, nil, errors.Join(fmt.Errorf("journal: read %s: %w", path, err), f.Close())
 	}
 	return f, data, nil
+}
+
+// openError is the error of failing to open path for op: a symbolic link at the
+// path (the open refuses to follow it) is ErrNotRegular, anything else is the
+// open's own error.
+func openError(op, path string, err error) error {
+	if fi, lerr := os.Lstat(path); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s is a symbolic link", ErrNotRegular, path)
+	}
+	return fmt.Errorf("journal: %s %s: %w", op, path, err)
+}
+
+// regularFile reports ErrNotRegular for an open file that is not a regular
+// file. It runs on the descriptor, after the open, so the check and the use are
+// of the same object.
+func regularFile(f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("journal: stat %s: %w", f.Name(), err)
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s is a %s", ErrNotRegular, f.Name(), fileKind(fi.Mode()))
+	}
+	return nil
+}
+
+// fileKind names a non-regular mode for an error.
+func fileKind(m os.FileMode) string {
+	switch {
+	case m.IsDir():
+		return "directory"
+	case m&os.ModeSymlink != 0:
+		return "symbolic link"
+	case m&os.ModeNamedPipe != 0:
+		return "named pipe"
+	case m&os.ModeSocket != 0:
+		return "socket"
+	case m&os.ModeDevice != 0:
+		return "device"
+	}
+	return "special file"
 }
 
 func syncDir(dir string) error {
@@ -543,39 +596,98 @@ func (j *File) AppendLine(ctx context.Context, r Revocation) (Head, error) {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	switch {
-	case j.closed:
-		return Head{}, ErrClosed
-	case j.broken != nil:
-		return Head{}, j.broken
-	}
-	data, closed, h, err := j.prepare(r)
+	p, err := j.writeLineLocked(ctx, r)
 	if err != nil {
 		return Head{}, err
 	}
-	stale, err := j.liveClosing(ctx)
-	if err != nil {
-		return Head{}, err
+	return p.head, p.Commit(ctx)
+}
+
+// Pending is a bookkeeping line WriteLine made durable whose head is not in the
+// store yet: the head to commit, and the journal_gap/ records the line closed
+// (their deletes ride with the head). Staging or committing it is the caller's
+// to decide, which is the whole point: a boot that must not move the store's
+// head before something durable says why can write the line first and move the
+// head last (05-backup §5B.3.6 "Boot re-apply" (3)-(5): the head lags the
+// file, never the other way round).
+type Pending struct {
+	ks      storage.Keyspace
+	head    Head
+	deletes []time.Time
+}
+
+// Head is the head the line gives: what Stage and Commit write.
+func (p Pending) Head() Head { return p.head }
+
+// Stage stages c/backup/journal_head = max(its head, the line's) and the deletes
+// of the gap records the line closed into b. StageHead reads the head with
+// GetForUpdate, so a head never moves backwards however batches commit, and a
+// conflict retries the caller's batch.
+func (p Pending) Stage(ctx context.Context, b *storage.Batch) error {
+	if err := StageHead(ctx, b, p.ks, p.head); err != nil {
+		return err
 	}
-	if err := j.writeLine(data); err != nil {
-		return Head{}, err
-	}
-	j.commitLines(h, stale, closed)
-	err = storage.RetryOnConflict(ctx, 5, func(ctx context.Context) (err error) {
-		b := j.ks.NewBatch()
+	return stageGapDeletes(b, p.ks, p.deletes)
+}
+
+// Commit commits Stage in a batch of its own, retried on a conflict.
+func (p Pending) Commit(ctx context.Context) error {
+	err := storage.RetryOnConflict(ctx, 5, func(ctx context.Context) (err error) {
+		b := p.ks.NewBatch()
 		defer func() { err = errors.Join(err, b.Close()) }()
-		if err := StageHead(ctx, b, j.ks, h); err != nil {
-			return err
-		}
-		if err := stageGapDeletes(b, j.ks, append(slices.Clone(stale), closed...)); err != nil {
+		if err := p.Stage(ctx, b); err != nil {
 			return err
 		}
 		return b.Commit(ctx, storage.Sync)
 	})
 	if err != nil {
-		return h, fmt.Errorf("journal: commit %s for seq %d: %w", headKey, h.Seq, err)
+		return fmt.Errorf("journal: commit %s for seq %d: %w", headKey, p.head.Seq, err)
 	}
-	return h, nil
+	return nil
+}
+
+// CommitHead commits c/backup/journal_head = max(its value, h) in a batch of
+// its own: the head a boot held back (Pending without the line).
+func CommitHead(ctx context.Context, ks storage.Keyspace, h Head) error {
+	return Pending{ks: ks, head: h}.Commit(ctx)
+}
+
+// WriteLine writes r like AppendLine, one fsynced line, and leaves the head to
+// the caller: it returns the Pending that stages or commits it. Until then the
+// store's head lags the file, which a boot reads as a store that has not seen
+// the line, and nothing else changes. An open Gap's closing line is written
+// first, as for any line.
+func (j *File) WriteLine(ctx context.Context, r Revocation) (Pending, error) {
+	if err := ctx.Err(); err != nil {
+		return Pending{}, err
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.writeLineLocked(ctx, r)
+}
+
+// writeLineLocked is the line write both AppendLine and WriteLine make; j.mu is
+// held.
+func (j *File) writeLineLocked(ctx context.Context, r Revocation) (Pending, error) {
+	switch {
+	case j.closed:
+		return Pending{}, ErrClosed
+	case j.broken != nil:
+		return Pending{}, j.broken
+	}
+	data, closed, h, err := j.prepare(r)
+	if err != nil {
+		return Pending{}, err
+	}
+	stale, err := j.liveClosing(ctx)
+	if err != nil {
+		return Pending{}, err
+	}
+	if err := j.writeLine(data); err != nil {
+		return Pending{}, err
+	}
+	j.commitLines(h, stale, closed)
+	return Pending{ks: j.ks, head: h, deletes: append(slices.Clone(stale), closed...)}, nil
 }
 
 // gapRecord is a journal_gap/<since> value.
@@ -671,6 +783,20 @@ func (j *File) Status() Status {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return Status{Broken: j.broken, OpenGaps: len(j.gaps)}
+}
+
+// Refuse makes every later append fail with err, as a File whose open failed
+// does, and keeps an earlier failure. The boot calls it when the store's head
+// has to stay below a line it could not apply (a kind only a newer build
+// knows) or below a verdict not yet durable: every Append stages its own seq as
+// the head, so one would move the head past the line the boot left unapplied.
+// The revoking callers record gaps instead, as for any append failure.
+func (j *File) Refuse(err error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.broken == nil && err != nil {
+		j.broken = err
+	}
 }
 
 // Path is the journal file's path.
