@@ -20,6 +20,10 @@ import (
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
 
+// LogJournalRewritten is the message of the one line the step logs for each
+// merge journal whose invite tokens it hashed (the journal's ID, never a token).
+const LogJournalRewritten = "m3: a merge journal's invite tokens were hashed"
+
 // Outcomes M3 counts beside the runner's "quarantined".
 const (
 	OutcomeImported  = "imported"          // a record staged into core's stores
@@ -463,6 +467,7 @@ func (m *Migration) rewriteOutside(ctx context.Context, w *datamigrate.StepWrite
 			return err
 		}
 		w.Count(OutcomeRewritten)
+		m.log.Info(LogJournalRewritten, "step", m.cfg.StepID, "journal", strings.TrimPrefix(string(kv.Key), JournalPrefix))
 	}
 	switch _, err := m.legacy().Get(ctx, []byte(expiryDoneKey)); {
 	case errors.Is(err, storage.ErrNotFound):

@@ -9,7 +9,10 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m3"
 )
 
 // tokenImageOf is what a raw token becomes in a rewritten journal.
@@ -58,6 +61,11 @@ func TestIdentityCutover_JournalTokensHashedOnce(t *testing.T) {
 			if len(k) > len("usermerge:journal:") && k[:len("usermerge:journal:")] == "usermerge:journal:" {
 				outs[i][k] = string(v)
 			}
+		}
+		// One journal names a token, and it is rewritten once however many chunks
+		// the step takes; the one that names none is never written.
+		if n := strings.Count(r.logs.String(), m3.LogJournalRewritten); n != 1 {
+			t.Errorf("chunk size %d: %d journals were rewritten, want exactly the one that names a token\n%s", chunk, n, r.logs.String())
 		}
 		got := []byte(outs[i]["usermerge:journal:01M7ZZZJOURNALTOKEN00001A"])
 		if len(got) == 0 {
