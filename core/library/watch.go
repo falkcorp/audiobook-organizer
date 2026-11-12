@@ -1,5 +1,5 @@
 // file: core/library/watch.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 06785e21-5df4-4d22-b086-1c461887e004
 // last-edited: 2026-11-11
 
@@ -318,7 +318,7 @@ func (w *watcher) hiddenOrExcluded(dir string) bool {
 	if w.r.base.excluded(dir) {
 		return true
 	}
-	for _, seg := range strings.Split(dir, "/") {
+	for seg := range strings.SplitSeq(dir, "/") {
 		if hiddenDir(seg) {
 			return true
 		}

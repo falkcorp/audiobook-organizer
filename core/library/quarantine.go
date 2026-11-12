@@ -1,5 +1,5 @@
 // file: core/library/quarantine.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: dbac77ed-fee6-451d-9dbc-7065c15ea39f
 // last-edited: 2026-11-11
 
@@ -92,12 +92,10 @@ func (m *manager) Quarantine(ctx context.Context, caller storage.Owner, p Path, 
 	}
 	bg := context.WithoutCancel(ctx)
 	if err := r.rw.MkdirAll(path.Dir(held.Rel), DirMode); err != nil {
-		_ = m.qrn.remove(bg, string(id))
-		return "", err
+		return "", withRollback(err, "the quarantine record", m.qrn.remove(bg, string(id)))
 	}
 	if err := r.rw.RenameNoReplace(p.Rel, held.Rel); err != nil {
-		_ = m.qrn.remove(bg, string(id))
-		return "", err
+		return "", withRollback(err, "the quarantine record", m.qrn.remove(bg, string(id)))
 	}
 	row.State = qHeld
 	if err := m.qrn.put(bg, string(id), row); err != nil {

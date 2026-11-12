@@ -1,5 +1,5 @@
 // file: core/internal/libfs/dir.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e1038704-5e43-4928-8fc7-b6e806cfdfb8
 // last-edited: 2026-11-11
 
@@ -29,12 +29,10 @@ func OpenDir(root *os.Root, rel string) (*Dir, error) {
 	}
 	fi, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return nil, err
+		return nil, CloseAfter(f, err)
 	}
 	if !fi.IsDir() {
-		_ = f.Close()
-		return nil, &os.PathError{Op: "opendir", Path: rel, Err: syscall.ENOTDIR}
+		return nil, CloseAfter(f, &os.PathError{Op: "opendir", Path: rel, Err: syscall.ENOTDIR})
 	}
 	return &Dir{f: f}, nil
 }

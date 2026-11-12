@@ -1,5 +1,5 @@
 // file: core/internal/libraryhttp/routes_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7529d641-2d0b-4ac5-8a2c-fb770d54c388
 // last-edited: 2026-11-11
 
@@ -602,7 +602,7 @@ func TestBrowse_DisabledRoot_503(t *testing.T) {
 func TestBrowse_Truncated(t *testing.T) {
 	r := newRig(t, rootSpec("books-library", library.RoleLibrary))
 	d := r.dirs["books-library"]
-	for i := 0; i < maxEntries+3; i++ {
+	for i := range maxEntries + 3 {
 		mkdirs(t, d, fmt.Sprintf("Gotham/gargoyle-%05d", i))
 	}
 	l := list(t, r, q("root", "books-library", "rel", "Gotham"))
@@ -624,7 +624,7 @@ func TestBrowse_Truncated(t *testing.T) {
 	}
 	// Exactly at the cap is not truncated.
 	mkdirs(t, d, "Arkham")
-	for i := 0; i < maxEntries; i++ {
+	for i := range maxEntries {
 		mkdirs(t, d, fmt.Sprintf("Arkham/cell-%05d", i))
 	}
 	l = list(t, r, q("root", "books-library", "rel", "Arkham"))

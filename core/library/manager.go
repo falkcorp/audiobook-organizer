@@ -1,5 +1,5 @@
 // file: core/library/manager.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3356d9de-7d9b-4473-880c-196e0a555910
 // last-edited: 2026-11-11
 
@@ -426,8 +426,8 @@ func (m *manager) lockPaths(paths ...Path) (unlock func()) {
 		unlocks = append(unlocks, m.locks.Lock(k))
 	}
 	return func() {
-		for i := len(unlocks) - 1; i >= 0; i-- {
-			unlocks[i]()
+		for _, unlock := range slices.Backward(unlocks) {
+			unlock()
 		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/library/registry.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 363acb46-296b-4fe8-bd5c-6b1160ab673b
 // last-edited: 2026-11-11
 
@@ -388,7 +388,7 @@ func (m *manager) makeRoot(c *candidate, old *Root, set settings) *Root {
 		return r
 	}
 	r.os = osr
-	r.base = &localFS{id: c.spec.ID, root: osr, abs: c.abs, spec: c.spec, skip: c.skip,
+	r.base = &localFS{id: c.spec.ID, root: osr, abs: c.abs, spec: c.spec, skip: c.skip, log: m.log,
 		mounted: func() error { return r.Mounted(context.Background()) },
 		// The engine has checked the caller may read the target's root.
 		target: m.Abs}
@@ -652,11 +652,11 @@ func (r *Root) retire() {
 		}
 		r.appMu.Lock()
 		for _, a := range r.app {
-			_ = a.root.Close()
+			closeLogged(r.m.log, a.root, "an app directory handle")
 		}
 		clear(r.app)
 		r.appMu.Unlock()
-		_ = r.os.Close()
+		closeLogged(r.m.log, r.os, "the root handle")
 	})
 }
 
@@ -870,7 +870,7 @@ func (r *Root) readSentinel() (sentinelFile, error) {
 	if err != nil {
 		return sentinelFile{}, err
 	}
-	defer f.Close()
+	defer closeLogged(r.m.log, f, "the sentinel")
 	var sf sentinelFile
 	dec := json.NewDecoder(io.LimitReader(f, 4096))
 	if err := dec.Decode(&sf); err != nil {
@@ -904,12 +904,13 @@ func (r *Root) writeSentinel() error {
 		werr = cerr
 	}
 	if werr != nil {
-		_ = r.os.Remove(r.sentinelRel())
-		return werr
+		return withRollback(werr, "the partial sentinel", r.os.Remove(r.sentinelRel()))
 	}
 	if d, derr := libfs.OpenDir(r.os, r.spec.AppDir); derr == nil {
-		_ = libfs.SyncDir(d)
-		_ = d.Close()
+		if serr := libfs.SyncDir(d); serr != nil {
+			r.m.log.Warn("library: could not sync the app directory after writing the sentinel", "root", r.spec.ID, "err", serr)
+		}
+		closeLogged(r.m.log, d, "the app directory")
 	}
 	return nil
 }
@@ -1033,7 +1034,7 @@ func (r *Root) AppDir(ctx context.Context, name string) (RootFS, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &localFS{id: r.spec.ID, root: sub, abs: filepath.Join(r.abs, filepath.FromSlash(rel)), spec: r.spec,
+	a := &localFS{id: r.spec.ID, root: sub, abs: filepath.Join(r.abs, filepath.FromSlash(rel)), spec: r.spec, log: r.m.log,
 		mounted: func() error { return r.Mounted(context.Background()) }}
 	r.app[name] = a
 	return a, nil

@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_unix.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7ec76d18-20c0-48f2-9a57-c01b4e75498f
 // last-edited: 2026-11-11
 
@@ -103,8 +103,8 @@ func RenameNoReplaceFallback(od *Dir, oldName string, nd *Dir, newName string) e
 				// The new name exists and the old one could not be removed:
 				// both names reach the same bytes, which loses nothing. Undo
 				// the new name so the rename is all or nothing.
-				_ = retry(func() error { return unix.Unlinkat(fd(nd), newName, 0) })
-				return linkErr("rename", oldName, newName, uerr)
+				rerr := retry(func() error { return unix.Unlinkat(fd(nd), newName, 0) })
+				return joinErr(linkErr("rename", oldName, newName, uerr), rollbackFailed("remove", newName, rerr))
 			}
 			return nil
 		case errors.Is(err, unix.EEXIST):
@@ -160,7 +160,9 @@ func Ancestry(f *os.File, stop ID) ([]ID, error) {
 		cur, owned := int(u), false
 		defer func() {
 			if owned {
-				_ = unix.Close(cur)
+				if cerr := unix.Close(cur); cerr != nil {
+					walkErr = joinErr(walkErr, &os.PathError{Op: "close", Path: f.Name(), Err: cerr})
+				}
 			}
 		}()
 		for range MaxAncestry {
@@ -191,10 +193,14 @@ func Ancestry(f *os.File, stop ID) ([]ID, error) {
 				walkErr = &os.PathError{Op: "ancestry", Path: f.Name(), Err: e}
 				return
 			}
-			if owned {
-				_ = unix.Close(cur)
+			prev, prevOwned := cur, owned
+			cur, owned = parent, true // the deferred close now owns the parent
+			if prevOwned {
+				if cerr := unix.Close(prev); cerr != nil {
+					walkErr = &os.PathError{Op: "close", Path: f.Name(), Err: cerr}
+					return
+				}
 			}
-			cur, owned = parent, true
 		}
 		walkErr = fmt.Errorf("libfs: more than %d directories above %s", MaxAncestry, f.Name())
 	}); err != nil {
