@@ -1,11 +1,12 @@
 // file: core/internal/bleveindex/reconcile.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d5cb0b4-ce7f-4ece-bf97-ab406d9fbee5
 // last-edited: 2026-11-11
 
 package bleveindex
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -111,15 +112,15 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 }
 
 // drain applies i's pending marks, page by page. It is skipped, not queued,
-// while a rebuild holds the index (opMu), and for a Degraded or closed one.
+// while a rebuild holds the index (the writer lock), and for a Degraded or closed one.
 func (e *Engine) drain(ctx context.Context, i *idx) error {
 	if i.State() == index.Degraded {
 		return nil
 	}
-	if !i.opMu.TryLock() {
+	if !i.op.TryLock() {
 		return nil
 	}
-	defer i.opMu.Unlock()
+	defer i.op.Unlock()
 	i.mu.RLock()
 	closed := i.closed
 	i.mu.RUnlock()
@@ -128,7 +129,14 @@ func (e *Engine) drain(ctx context.Context, i *idx) error {
 	}
 	started := time.Now()
 	budget := e.passBudget()
-	after := ""
+	// A pass resumes where the previous one yielded (i.resumeAfter, kept in
+	// memory, touched only under the writer lock): marks that fail stay at the
+	// head of the set, so a pass that restarted from the first mark every time
+	// would spend its budget on the same poison head and never reach the healthy
+	// marks behind it.
+	start := i.resumeAfter
+	after := start
+	now := e.clock()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -140,35 +148,48 @@ func (e *Engine) drain(ctx context.Context, i *idx) error {
 		if len(marks) == 0 {
 			break
 		}
-		if marks[0].ID == after {
-			// PendingAfter starts strictly after the cursor; a first mark equal to
-			// it means the cursor does not advance, and looping would spin.
-			return fmt.Errorf("dirty set cursor did not advance past %q", after)
+		if after != "" && bytes.Compare([]byte(marks[0].ID), []byte(after)) <= 0 {
+			// PendingAfter starts strictly after the cursor; a first mark at or
+			// before it means the cursor does not advance, and looping would spin.
+			return fmt.Errorf("dirty set cursor did not advance past %q (first mark %q)", after, marks[0].ID)
 		}
 		i.dirtySince.CompareAndSwap(0, time.Now().UnixNano())
-		after = marks[len(marks)-1].ID
-		if err := e.applyPage(ctx, i, marks); err != nil {
-			return err
+		last := marks[len(marks)-1].ID
+		if due := i.due(marks, now); len(due) > 0 {
+			if err := e.applyPage(ctx, i, due); err != nil {
+				return err
+			}
 		}
+		after = last
 		if len(marks) < pageSize {
 			break
 		}
 		if time.Since(started) >= budget {
 			// One index with a huge backlog must not starve the others: yield after
-			// at least one page, and let the next pass resume (the cursor restarts
-			// at the first pending mark, which is the one that failed or arrived).
+			// at least one page, remember where we were, and let the loop take the
+			// next pass at once.
+			i.resumeAfter = after
 			e.yielded.Store(true)
 			return nil
 		}
+	}
+	i.resumeAfter = ""
+	if start != "" {
+		// This pass began mid-set, so the marks before the cursor (the ones that
+		// failed, and the ones that arrived behind it) were not looked at: take
+		// the next pass at once, from the head.
+		e.yielded.Store(true)
+		return nil
 	}
 	rest, err := i.dirty.Pending(ctx, 1)
 	if err != nil {
 		return err
 	}
 	if len(rest) > 0 {
-		return nil // marks arrived behind the cursor, or failed: the next pass takes them
+		return nil // marks arrived behind the cursor, failed, or are backing off: the next pass takes them
 	}
 	i.dirtySince.Store(0)
+	i.forgetFailures()
 	if i.State() == index.Rebuilding && i.rebuilt.Load() {
 		return i.markReady()
 	}
@@ -179,7 +200,7 @@ func (e *Engine) drain(ctx context.Context, i *idx) error {
 // distinct ids, hence distinct dirty rows and distinct bleve documents, and
 // each worker takes a disjoint slice of them, so no two workers ever touch the
 // same row or document; the index's one writer at a time is guaranteed by
-// opMu, which drain holds.
+// the writer lock, which drain holds.
 func (e *Engine) applyPage(ctx context.Context, i *idx, marks []index.Mark) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(e.workers())
@@ -208,7 +229,8 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 				return ctx.Err()
 			}
 			i.failures.Add(1)
-			i.log.Warn("index document failed to load; its mark stays pending",
+			i.recordFailure(m.ID)
+			i.log.Warn("index document failed to load; its mark stays pending and is retried with backoff",
 				"module", i.module, "index", i.name, "id", m.ID, "err", err)
 			continue
 		}
@@ -242,6 +264,7 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 		if _, err := i.dirty.Clear(ctx, m); err != nil {
 			return err
 		}
+		i.recordSuccess(m.ID)
 	}
 	return nil
 }
@@ -251,20 +274,25 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 // batchErr when none did.
 func (i *idx) applyEach(ctx context.Context, entries []entry, marks []index.Mark, batchErr error) ([]index.Mark, error) {
 	var ok []index.Mark
+	var refused []string
 	for n, e := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if err := i.applyBatch([]entry{e}); err != nil {
 			i.failures.Add(1)
-			i.log.Warn("index refused a document; its mark stays pending",
+			refused = append(refused, e.id)
+			i.log.Warn("index refused a document; its mark stays pending and is retried with backoff",
 				"module", i.module, "index", i.name, "id", e.id, "err", err)
 			continue
 		}
 		ok = append(ok, marks[n])
 	}
 	if len(ok) == 0 {
-		return nil, batchErr
+		return nil, batchErr // the index is failing, not one document: no backoff for any of them
+	}
+	for _, id := range refused {
+		i.recordFailure(id)
 	}
 	return ok, nil
 }

@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/review_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a21dcba-39eb-4d8d-ab72-f47d2f10ccd2
 // last-edited: 2026-11-11
 
@@ -8,11 +8,13 @@ package bleveindex
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/index"
 	"github.com/falkcorp/mediacore/storage/index/indextest"
+	"github.com/falkcorp/mediacore/tasks/taskstest"
 )
 
 // artifactDocCount opens a copied artifact and counts its documents.
@@ -421,16 +424,27 @@ func TestQueryShapeIsBounded(t *testing.T) {
 	}
 	deep := index.Query(index.Term("alias", "clown"))
 	for range maxQueryDepth + 8 {
-		deep = index.Not(deep)
+		deep = index.And(deep)
 	}
 	ok := index.Query(index.Term("alias", "clown"))
 	for range maxQueryDepth - 4 {
-		ok = index.Not(ok)
+		ok = index.And(ok)
+	}
+	nots := func(n int) index.Query {
+		qs := make([]index.Query, n)
+		for i := range qs {
+			qs[i] = index.Not(index.Term("alias", "clown"))
+		}
+		return index.Or(qs...)
 	}
 	for name, q := range map[string]index.Query{
 		"too many nodes": index.Or(many...),
 		"too deep":       deep,
 		"long text":      index.Match("name", strings.Repeat("x", maxQueryStringBytes+1)),
+		// A Not is a match-all first, so it weighs notCost nodes: 510 of them
+		// (about 1.6s over 20k documents) are under 1024 nodes by count alone.
+		"510 nots":                      nots(510),
+		"nots past the weighted budget": nots(maxQueryNodes/notCost + 1),
 	} {
 		if _, err := r.ix.Search(t.Context(), q, index.Page{}); !errors.Is(err, index.ErrInvalidQuery) {
 			t.Errorf("%s: %v, want ErrInvalidQuery", name, err)
@@ -438,6 +452,23 @@ func TestQueryShapeIsBounded(t *testing.T) {
 	}
 	if _, err := r.ix.Search(t.Context(), ok, index.Page{}); err != nil {
 		t.Errorf("a query inside the limits: %v", err)
+	}
+	if _, err := r.ix.Search(t.Context(), nots(maxQueryNodes/notCost-1), index.Page{}); err != nil {
+		t.Errorf("a few nots inside the weighted budget: %v", err)
+	}
+	if _, err := r.ix.Search(t.Context(), index.QueryString(strings.Repeat("-alias:bird ", 20)), index.Page{}); err != nil {
+		t.Errorf("a query string of negations is one match-all, not twenty: %v", err)
+	}
+	// bleve's query-string parser has no grouping, so a string is one BooleanQuery
+	// with at most one must-not clause (one match-all): it is charged notCost
+	// once, which decides a string near the clause budget. 1000 plain clauses fit;
+	// the same 1000 with a negation do not.
+	plain := strings.Repeat("b ", 1000)
+	if _, err := r.ix.Search(t.Context(), index.QueryString(plain), index.Page{}); err != nil {
+		t.Errorf("1000 plain clauses: %v", err)
+	}
+	if _, err := r.ix.Search(t.Context(), index.QueryString(plain+"-bat"), index.Page{}); !errors.Is(err, index.ErrInvalidQuery) {
+		t.Errorf("1000 clauses and a negation: %v, want ErrInvalidQuery", err)
 	}
 }
 
@@ -558,6 +589,7 @@ func TestReconcileYieldsAfterItsBudget(t *testing.T) {
 
 func TestPanickingDocumentCallbackIsAFailedLoad(t *testing.T) {
 	r := seeded(t)
+	clk := r.useClock()
 	i := r.e.mustIdx(t, indextest.Signal)
 	inner := i.spec.Document
 	var mu sync.Mutex
@@ -582,6 +614,7 @@ func TestPanickingDocumentCallbackIsAFailedLoad(t *testing.T) {
 	mu.Lock()
 	boom = false
 	mu.Unlock()
+	clk.Advance(failBackoffBase + time.Second)
 	r.reconcile()
 	if got := r.ids(index.Match("name", "scarecrow")); !slices.Equal(got, []string{"scarecrow"}) {
 		t.Fatalf("the retry: %v", got)
@@ -597,4 +630,285 @@ func TestPanickingRebuildCallbackFailsTheRebuild(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "panicked") {
 		t.Fatalf("rebuild with a panicking callback: %v", err)
 	}
+}
+
+// ---- round 2: starvation, backoff, waiting under a context, copy hygiene ----
+
+// markMany marks ids in batches, with no entity row behind them.
+func (r *rig) markMany(ids []string) {
+	r.t.Helper()
+	for lo := 0; lo < len(ids); lo += 500 {
+		part := ids[lo:min(lo+500, len(ids))]
+		err := storage.RetryOnConflict(r.t.Context(), 8, func(ctx context.Context) error {
+			b := r.f.Module.NewBatch()
+			defer b.Close()
+			for _, id := range part {
+				if err := r.ix.MarkDirty(b, id); err != nil {
+					return err
+				}
+			}
+			return b.Commit(ctx, storage.NoSync)
+		})
+		if err != nil {
+			r.t.Fatal(err)
+		}
+	}
+}
+
+// TestPoisonHeadDoesNotStarveHealthyMarks: marks that fail stay at the head of
+// the dirty set. A pass that yielded its budget and restarted from the head
+// would re-run the same poison page forever; the resume cursor carries the next
+// pass past it, and the failure backoff keeps the poison from being retried hot
+// once the cursor wraps.
+func TestPoisonHeadDoesNotStarveHealthyMarks(t *testing.T) {
+	r := seeded(t, func(o *Options) { o.PassBudget = time.Nanosecond }) // one page per pass
+	clk := r.useClock()
+	i := r.e.mustIdx(t, indextest.Signal)
+	inner := i.spec.Document
+	var poisoned atomic.Bool
+	poisoned.Store(true)
+	i.spec.Document = func(ctx context.Context, id string) (index.Doc, bool, error) {
+		if strings.HasPrefix(id, "a") && poisoned.Load() {
+			return nil, false, errors.New("the Arkham records are sealed")
+		}
+		return inner(ctx, id)
+	}
+	poison := make([]string, 2600) // more than two pages of poison ahead of the healthy marks
+	for k := range poison {
+		poison[k] = fmt.Sprintf("a%05d", k)
+	}
+	r.markMany(poison)
+	r.save("zed1", "Zed One", "clown", 1990)
+	r.save("zed2", "Zed Two", "clown", 1991)
+	healthy := func() bool {
+		return slices.Equal(r.ids(index.Match("name", "zed")), []string{"zed1", "zed2"})
+	}
+	for pass := 0; pass < 6 && !healthy(); pass++ {
+		r.reconcile()
+	}
+	if !healthy() {
+		t.Fatalf("the healthy marks behind %d poison marks were not indexed after 6 passes", len(poison))
+	}
+	// The poison heals: after its backoff the cursor wraps to the head and the
+	// whole set drains.
+	poisoned.Store(false)
+	clk.Advance(failBackoffMax + time.Second)
+	for pass := 0; pass < 12 && r.dirtyCount() > 0; pass++ {
+		r.reconcile()
+	}
+	if n := r.dirtyCount(); n != 0 {
+		t.Fatalf("%d marks left after the poison healed: the cursor never wrapped to the head", n)
+	}
+}
+
+// TestFailedMarksBackOffThenRetry: a failing mark is attempted once per backoff
+// window (2s, then 4s, ...), not once per pass, and is retried when the window is
+// over; a success forgets it.
+func TestFailedMarksBackOffThenRetry(t *testing.T) {
+	r := seeded(t)
+	clk := r.useClock()
+	i := r.e.mustIdx(t, indextest.Signal)
+	inner := i.spec.Document
+	var calls atomic.Int64
+	var broken atomic.Bool
+	broken.Store(true)
+	i.spec.Document = func(ctx context.Context, id string) (index.Doc, bool, error) {
+		if id == "scarecrow" && broken.Load() {
+			calls.Add(1)
+			return nil, false, errors.New("the Arkham records are sealed")
+		}
+		return inner(ctx, id)
+	}
+	r.save("scarecrow", "Scarecrow", "fear", 1941)
+	r.save("harley", "Harley Quinn", "clown", 1992)
+	attempts := func(want int64, when string) {
+		t.Helper()
+		if got := calls.Load(); got != want {
+			t.Fatalf("%s: %d attempts at the failing mark, want %d", when, got, want)
+		}
+	}
+	r.reconcile()
+	attempts(1, "first pass")
+	if got := r.ids(index.Match("name", "harley")); !slices.Equal(got, []string{"harley"}) {
+		t.Fatalf("the healthy neighbour: %v", got)
+	}
+	r.reconcile()
+	r.reconcile()
+	attempts(1, "two more passes inside the window")
+	clk.Advance(failBackoffBase - time.Second) // t = 1s
+	r.reconcile()
+	attempts(1, "1s into a 2s window")
+	clk.Advance(2 * time.Second) // t = 3s: retried, fails again, the window doubles to 4s
+	r.reconcile()
+	attempts(2, "after the first window")
+	clk.Advance(3 * time.Second) // t = 6s, inside 3s+4s
+	r.reconcile()
+	attempts(2, "inside the doubled window")
+	clk.Advance(2 * time.Second) // t = 8s
+	r.reconcile()
+	attempts(3, "after the doubled window")
+	broken.Store(false)
+	clk.Advance(failBackoffMax)
+	r.reconcile()
+	if got := r.ids(index.Match("name", "scarecrow")); !slices.Equal(got, []string{"scarecrow"}) || r.dirtyCount() != 0 {
+		t.Fatalf("the healed mark: %v, pending %d", got, r.dirtyCount())
+	}
+	i.failMu.Lock()
+	left := len(i.fails)
+	i.failMu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d backoff entries left after every mark succeeded", left)
+	}
+}
+
+func TestOpLock(t *testing.T) {
+	l := newOpLock()
+	if err := l.Lock(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if l.TryLock() {
+		t.Fatal("TryLock took a held lock")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := l.Lock(ctx); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
+		t.Fatalf("Lock under a deadline: %v after %s", err, time.Since(start))
+	}
+	l.Unlock()
+	done, stop := context.WithCancel(t.Context())
+	stop()
+	// A select with two ready cases picks at random, so one try proves nothing.
+	for n := range 200 {
+		if err := l.Lock(done); err == nil {
+			t.Fatalf("an ended context took a free lock (try %d)", n)
+		}
+	}
+	if !l.TryLock() {
+		t.Fatal("the lock was left held by a refused Lock")
+	}
+}
+
+// TestCopyToWaitEndsWithItsContext: CopyTo waits for a running reconcile pass or
+// rebuild, and gives up when its context ends instead of blocking behind it.
+func TestCopyToWaitEndsWithItsContext(t *testing.T) {
+	r := seeded(t)
+	i := r.e.mustIdx(t, indextest.Signal)
+	if !i.op.TryLock() { // a pass or rebuild holds the index
+		t.Fatal("setup: the writer lock is held")
+	}
+	defer i.op.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- r.e.CopyTo(ctx, string(indextest.Module), indextest.Signal, filepath.Join(t.TempDir(), "copy"))
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("CopyTo behind a held writer lock: %v, want the deadline", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("CopyTo is still blocked 3s after its 300ms deadline")
+	}
+}
+
+func TestRebuildWaitEndsWithItsContext(t *testing.T) {
+	r := seeded(t)
+	i := r.e.mustIdx(t, indextest.Signal)
+	if !i.op.TryLock() {
+		t.Fatal("setup: the writer lock is held")
+	}
+	defer i.op.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.e.runRebuild(taskstest.NewFakeRun(ctx, RebuildKind).RC(),
+			RebuildParams{Module: string(indextest.Module), Index: indextest.Signal})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("rebuild behind a held writer lock: %v, want the deadline", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the rebuild is still blocked 3s after its context ended")
+	}
+}
+
+// TestFailedCopyLeavesNoPartialArtifact and its siblings: a failed copy removes
+// what it wrote, and a destination that already holds something (a stale
+// generation stamp, another index) is refused untouched.
+func TestFailedCopyLeavesNoPartialArtifact(t *testing.T) {
+	failAfterBleve := func(r *rig) {
+		r.e.mustIdx(t, indextest.Signal).afterBleveCopy = func(dir string) error {
+			if n := len(mustReadDir(t, dir)); n == 0 {
+				t.Error("bleve's copy wrote nothing, so this does not test a partial artifact")
+			}
+			return errors.New("the Batcomputer lost power mid-copy")
+		}
+	}
+	t.Run("a directory the copy created is removed", func(t *testing.T) {
+		r := seeded(t)
+		failAfterBleve(r)
+		dir := filepath.Join(t.TempDir(), "copy")
+		if err := r.e.CopyTo(t.Context(), string(indextest.Module), indextest.Signal, dir); err == nil {
+			t.Fatal("the copy did not fail")
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("the failed copy left %s behind: %v", dir, err)
+		}
+	})
+	t.Run("an existing empty directory is emptied, not removed", func(t *testing.T) {
+		r := seeded(t)
+		failAfterBleve(r)
+		dir := t.TempDir()
+		if err := r.e.CopyTo(t.Context(), string(indextest.Module), indextest.Signal, dir); err == nil {
+			t.Fatal("the copy did not fail")
+		}
+		if n := len(mustReadDir(t, dir)); n != 0 {
+			t.Fatalf("the failed copy left %d entries in the reused directory", n)
+		}
+	})
+	t.Run("a failed stamp removes the copy too", func(t *testing.T) {
+		r := seeded(t)
+		// A directory where the stamp file goes makes the stamp's rename fail
+		// after bleve's copy succeeded.
+		r.e.mustIdx(t, indextest.Signal).afterBleveCopy = func(dir string) error {
+			return os.Mkdir(filepath.Join(dir, storage.ArtifactGenerationFile), 0o750)
+		}
+		dir := filepath.Join(t.TempDir(), "copy")
+		if err := r.e.CopyTo(t.Context(), string(indextest.Module), indextest.Signal, dir); err == nil {
+			t.Fatal("the copy did not fail with an unstampable destination")
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("the unstamped copy was left behind: %v", err)
+		}
+	})
+	t.Run("a destination that is not empty is refused untouched", func(t *testing.T) {
+		r := seeded(t)
+		dir := t.TempDir()
+		stale := filepath.Join(dir, storage.ArtifactGenerationFile)
+		if err := os.WriteFile(stale, []byte("stale\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.e.CopyTo(t.Context(), string(indextest.Module), indextest.Signal, dir); err == nil {
+			t.Fatal("a copy into a directory holding a stale stamp was not refused")
+		}
+		if b, err := os.ReadFile(stale); err != nil || string(b) != "stale\n" {
+			t.Fatalf("the refused copy touched the destination: %q %v", b, err)
+		}
+	})
+}
+
+func mustReadDir(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+	es, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return es
 }

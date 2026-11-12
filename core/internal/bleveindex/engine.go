@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/engine.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c4bafa3-bd6e-4dbf-ae86-9a3f5c8eadd4
 // last-edited: 2026-11-11
 
@@ -113,6 +113,8 @@ type Engine struct {
 	// duringOpen is a test seam, nil in production: idx.open calls it first, the
 	// window in which the index must not be visible to the reconciler.
 	duringOpen func(*idx)
+	// now is the clock of the failure backoff; nil means time.Now (a test sets it).
+	now func() time.Time
 	// yielded is set when a pass left marks behind because an index used up its
 	// budget: Run starts the next pass at once instead of waiting.
 	yielded atomic.Bool
@@ -240,6 +242,7 @@ func (e *Engine) open(ctx context.Context, module string, s index.Spec) (index.I
 		path:  filepath.Join(e.o.Dir, module, s.Name+".bleve"),
 		kinds: make(map[string]index.FieldKind, len(s.Fields)),
 		log:   e.log,
+		op:    newOpLock(),
 	}
 	for _, f := range s.Fields {
 		i.kinds[f.Name] = f.Kind
