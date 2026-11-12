@@ -1,7 +1,7 @@
 // file: internal/aidispatch/guard_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 978462ae-b706-482d-b878-4b12387747d8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package aidispatch
 
@@ -92,9 +92,23 @@ var guardAllowlist = map[string]string{
 const guardAllowlistCeiling = 14
 
 // guardExemptDirs are permanent exemptions, not ratchet entries.
-// internal/aidispatch is the dispatcher itself: classify.go imports openai-go
-// to recognise the SDK's error type, which is the one place that must.
-var guardExemptDirs = []string{"internal/aidispatch/"}
+//
+//   - internal/aidispatch is the dispatcher itself: classify.go imports
+//     openai-go to recognise the SDK's error type, which is the one place that
+//     must.
+//   - core/integrations/ai/openai is the platform core's OpenAI-compatible
+//     adapter, the transport beneath core's own router (platform-core F7-03).
+//     It is the one directory of the core module that may hold the SDK, and
+//     core enforces that itself: archtest.NoAISDKOutsideAdapters fails when any
+//     other core package imports openai-go, and fails when this directory stops
+//     importing it, so the exemption cannot go stale unnoticed. The exemption
+//     is the directory only (a trailing slash, see TestGuard_ExemptDirsAreExact):
+//     the rest of core/ stays under every rule here, so a raw .Chat.Completions
+//     call or an /api/tags literal anywhere else in core still fails.
+var guardExemptDirs = []string{
+	"internal/aidispatch/",
+	"core/integrations/ai/openai/",
+}
 
 var guardSkipDirs = map[string]bool{
 	".git": true, ".worktrees": true, "node_modules": true, "web": true,
@@ -213,6 +227,30 @@ func f(c client) { c.Chat.Messages.List(); http.Get(route) }`
 	}
 	if v := guardViolations(f); len(v) > 0 {
 		t.Errorf("clean source flagged: %v", v)
+	}
+}
+
+// TestGuard_ExemptDirsAreExact pins what the exemptions cover. The scan test
+// above cannot: nothing else under core/ violates a rule today, so an
+// exemption widened to "core/" would still pass it.
+func TestGuard_ExemptDirsAreExact(t *testing.T) {
+	for rel, want := range map[string]bool{
+		"internal/aidispatch/classify.go":              true,
+		"core/integrations/ai/openai/adapter.go":       true,
+		"core/integrations/ai/openai/batch.go":         true,
+		"core/integrations/ai/router.go":               false, // the router itself talks to Backend, not the SDK
+		"core/integrations/ai/openaix/adapter.go":      false, // a look-alike sibling, the trailing slash matters
+		"core/integrations/ai/openai.go":               false,
+		"core/integrations/providerhttp/client.go":     false,
+		"core/archtest/ai_sdk.go":                      false,
+		"internal/ai/openai_batch.go":                  false, // ratchet entry, not an exemption
+		"internal/aidispatchx/dispatch.go":             false,
+		"cmd/dedup_bench.go":                           false,
+		"other/core/integrations/ai/openai/adapter.go": false, // anchored at the repo root
+	} {
+		if got := guardIsExempt(rel); got != want {
+			t.Errorf("guardIsExempt(%q) = %v, want %v", rel, got, want)
+		}
 	}
 }
 
