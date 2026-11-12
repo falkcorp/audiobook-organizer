@@ -44,8 +44,8 @@ func openaiHarness(t *testing.T) (*harness, *coretest.ProviderHTTPKit) {
 func compatConfig(t *testing.T, ref integrations.Ref, url string, local bool, version uint64, edit ...func(map[string]any)) integrations.InstanceConfig {
 	t.Helper()
 	raw, err := json.Marshal(openai.Settings{
-		EndpointSettings: ai.EndpointSettings{Concurrency: 1, TextModel: "gpt-batmobile"},
-		URL:              url,
+		Concurrency: 1, TextModel: "gpt-batmobile",
+		URL: url,
 	})
 	if err != nil {
 		t.Fatal(err)

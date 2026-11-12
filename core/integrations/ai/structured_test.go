@@ -223,8 +223,7 @@ func TestGenerateJSON_RepairThenQualityError(t *testing.T) {
 		h.addEndpoint("blackgate", 2, set2, second)
 
 		_, _, err := ai.GenerateJSON[verdict](context.Background(), h.r, c, text("who?"))
-		var q *ai.QualityError
-		if !errors.As(err, &q) {
+		if _, ok := errors.AsType[*ai.QualityError](err); !ok {
 			t.Fatalf("err = %v, want a QualityError", err)
 		}
 		if got := integrations.ClassOf(context.Background(), err); got != integrations.ClassBadOutput {
@@ -249,8 +248,7 @@ func TestGenerateJSON_RepairThenQualityError(t *testing.T) {
 			f := structEndpoint(h, ai.FeatureJSONSchema)
 			f.ScriptText(coretest.FakeAIStep{Text: `nope`})
 			_, _, err := ai.GenerateJSON[verdict](context.Background(), h.r, c, text("who?"))
-			var q *ai.QualityError
-			if !errors.As(err, &q) {
+			if _, ok := errors.AsType[*ai.QualityError](err); !ok {
 				t.Fatalf("repairs=%d: err = %v", repairs, err)
 			}
 			if n := len(f.Calls()); n != wantCalls {
@@ -288,8 +286,7 @@ func TestGenerateJSON_UnknownFieldRejected(t *testing.T) {
 			f := structEndpoint(h, ai.FeatureJSONSchema)
 			f.ScriptText(coretest.FakeAIStep{Text: answer})
 			_, _, err := ai.GenerateJSON[verdict](context.Background(), h.r, c, text("who?"))
-			var q *ai.QualityError
-			if !errors.As(err, &q) {
+			if _, ok := errors.AsType[*ai.QualityError](err); !ok {
 				t.Fatalf("answer %q: err = %v, want a QualityError", answer, err)
 			}
 		})
