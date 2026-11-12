@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_unix.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7ec76d18-20c0-48f2-9a57-c01b4e75498f
 // last-edited: 2026-11-11
 
@@ -219,13 +219,21 @@ func Ancestry(f *os.File, stop ID) ([]ID, error) {
 // caller can look at what it is). The result is the file the directory d really
 // holds under that name at this instant.
 func OpenAt(d *Dir, name string, flag int) (*os.File, error) {
+	return OpenFileAt(d, name, flag, 0)
+}
+
+// OpenFileAt is OpenAt for a file that is created or written: flag may carry
+// O_CREATE, O_EXCL and the write bits, and perm is the creation mode. Like OpenAt
+// it addresses the name relative to the directory descriptor and never follows a
+// symlink in it, so what is created or opened is in the directory d really is.
+func OpenFileAt(d *Dir, name string, flag int, perm fs.FileMode) (*os.File, error) {
 	if err := errors.Join(require(d), checkName(name)); err != nil {
 		return nil, err
 	}
 	var nfd int
 	err := retry(func() error {
 		var oe error
-		nfd, oe = unix.Openat(fd(d), name, flag|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+		nfd, oe = unix.Openat(fd(d), name, flag|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, uint32(perm.Perm()))
 		return oe
 	})
 	runtime.KeepAlive(d)
@@ -233,6 +241,71 @@ func OpenAt(d *Dir, name string, flag int) (*os.File, error) {
 		return nil, &os.PathError{Op: "openat", Path: name, Err: err}
 	}
 	return os.NewFile(uintptr(nfd), name), nil
+}
+
+// MkdirAt creates the single-component directory name in d. An existing name is
+// fs.ErrExist.
+func MkdirAt(d *Dir, name string, perm fs.FileMode) error {
+	if err := errors.Join(require(d), checkName(name)); err != nil {
+		return err
+	}
+	err := retry(func() error { return unix.Mkdirat(fd(d), name, uint32(perm.Perm())) })
+	runtime.KeepAlive(d)
+	if err != nil {
+		return &os.PathError{Op: "mkdirat", Path: name, Err: err}
+	}
+	return nil
+}
+
+// RemoveAt deletes the file, link or empty directory name in d (a link is
+// removed itself, never followed).
+func RemoveAt(d *Dir, name string) error {
+	if err := errors.Join(require(d), checkName(name)); err != nil {
+		return err
+	}
+	defer runtime.KeepAlive(d)
+	err := retry(func() error { return unix.Unlinkat(fd(d), name, 0) })
+	if errors.Is(err, unix.EISDIR) || errors.Is(err, unix.EPERM) {
+		// unlink(2) of a directory is EISDIR on Linux and EPERM on the BSDs; a
+		// directory needs AT_REMOVEDIR. A name that is not a directory keeps the
+		// first error.
+		if derr := retry(func() error { return unix.Unlinkat(fd(d), name, unix.AT_REMOVEDIR) }); !errors.Is(derr, unix.ENOTDIR) {
+			err = derr
+		}
+	}
+	if err != nil {
+		return &os.PathError{Op: "unlinkat", Path: name, Err: err}
+	}
+	return nil
+}
+
+// SymlinkAt creates the symlink name in d pointing at target. An existing name
+// is fs.ErrExist.
+func SymlinkAt(target string, d *Dir, name string) error {
+	if err := errors.Join(require(d), checkName(name)); err != nil {
+		return err
+	}
+	err := retry(func() error { return unix.Symlinkat(target, fd(d), name) })
+	runtime.KeepAlive(d)
+	if err != nil {
+		return &os.LinkError{Op: "symlinkat", Old: target, New: name, Err: err}
+	}
+	return nil
+}
+
+// IdentityAt is the device and inode of the entry name in d, without following a
+// symlink, and whether it is a directory. A missing name is fs.ErrNotExist.
+func IdentityAt(d *Dir, name string) (id ID, isDir bool, err error) {
+	if err := errors.Join(require(d), checkName(name)); err != nil {
+		return ID{}, false, err
+	}
+	var st unix.Stat_t
+	err = retry(func() error { return unix.Fstatat(fd(d), name, &st, unix.AT_SYMLINK_NOFOLLOW) })
+	runtime.KeepAlive(d)
+	if err != nil {
+		return ID{}, false, &os.PathError{Op: "fstatat", Path: name, Err: err}
+	}
+	return ID{Dev: uint64(st.Dev), Ino: uint64(st.Ino)}, st.Mode&unix.S_IFMT == unix.S_IFDIR, nil
 }
 
 // InodeOf is the inode of a file, with its device: the pair identifies a

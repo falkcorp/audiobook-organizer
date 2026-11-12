@@ -1,5 +1,5 @@
 // file: core/library/quarantine.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: dbac77ed-fee6-451d-9dbc-7065c15ea39f
 // last-edited: 2026-11-11
 
@@ -94,7 +94,9 @@ func (m *manager) Quarantine(ctx context.Context, caller storage.Owner, p Path, 
 	if err := r.rw.MkdirAll(path.Dir(held.Rel), DirMode); err != nil {
 		return "", withRollback(err, "the quarantine record", m.qrn.remove(bg, string(id)))
 	}
-	if err := r.rw.RenameNoReplace(p.Rel, held.Rel); err != nil {
+	// The caller's side of the rename is sealed (judged from the descriptor of the
+	// directory holding p, not from its name); the held side is core's own area.
+	if err := r.engineFS(caller).renameNoReplaceInto(r.rw, p.Rel, held.Rel); err != nil {
 		return "", withRollback(err, "the quarantine record", m.qrn.remove(bg, string(id)))
 	}
 	row.State = qHeld
@@ -176,12 +178,13 @@ func (m *manager) Release(ctx context.Context, caller storage.Owner, id Quaranti
 	}
 	bg := context.WithoutCancel(ctx)
 	if target.Dir().Rel != "" {
-		if err := dr.rw.MkdirAll(target.Dir().Rel, DirMode); err != nil {
+		if err := dr.engineFS(caller).MkdirAll(target.Dir().Rel, DirMode); err != nil {
 			m.revertRelease(bg, row)
 			return Path{}, err
 		}
 	}
-	if err := sr.rw.renameNoReplaceInto(dr.rw, row.Held.Rel, target.Rel); err != nil {
+	// The held side is core's own area; the target the caller named is sealed.
+	if err := sr.rw.renameNoReplaceInto(dr.engineFS(caller), row.Held.Rel, target.Rel); err != nil {
 		m.revertRelease(bg, row)
 		return Path{}, err
 	}
