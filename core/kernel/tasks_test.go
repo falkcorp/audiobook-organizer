@@ -1,7 +1,7 @@
 // file: core/kernel/tasks_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a2d94c7e-1b53-4f08-9e6a-3c7d0f5b8e12
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -631,8 +631,15 @@ func TestKernelBoot_F2CallsInOrder(t *testing.T) {
 	if _, ok := k.rbacCat.Lookup(rbac.CoreAdmin); !ok {
 		t.Error("the catalog lacks core:admin")
 	}
+	// This boot registers no kind and finds no run, so the core config was not
+	// built (TestLazyCoreConfig_BuiltOnlyWhenTasksNeedIt); the sections are
+	// checked over the store the first reader would get.
+	cfg, err := k.coreConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, p := range []config.Path{"core.tasks.workers", "core.audit.schedules.prune", "core.log.level"} {
-		if _, ok := k.coreCfg.store.Lookup(p); !ok {
+		if _, ok := cfg.store.Lookup(p); !ok {
 			t.Errorf("the core sections lack %s", p)
 		}
 	}

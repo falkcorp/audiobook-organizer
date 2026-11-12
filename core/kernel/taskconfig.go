@@ -1,7 +1,7 @@
 // file: core/kernel/taskconfig.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0c9d52-6f3a-4a8e-9c47-2e1d8b7a4f60
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -30,8 +30,9 @@ import (
 // below do not change when it does, because they read through Handle.Get and
 // Lookup, which see a later layer's values.
 //
-// It performs no I/O: it is built in P5, also for Describe, and closed by
-// closeCore.
+// It performs no I/O: it is built at P7 by Kernel.coreConfig, and only when
+// the tasks wiring reads it (a registered definition, or the start rule
+// holding), also for Describe, and closed by closeCore.
 type coreConfig struct {
 	store *config.Store
 	tasks *config.Handle[tasksSettings]
@@ -45,6 +46,24 @@ type coreConfig struct {
 type cfgLeaf struct {
 	schedule bool
 	read     func() tasks.ScheduleConfig
+}
+
+// coreConfig is the defaults-only core config, built on the first call and
+// kept. Boot calls it at P7, which is single-threaded, from the two places
+// that read it: taskProblems when a definition exists (the schedule keys it
+// declares) and constructTasks when the start rule held (the executor's and
+// the scheduler's settings). A boot that registers no kind and finds no run
+// never calls it, so ABO's boot skips the build entirely; closeCore closes
+// the store only when it was built.
+func (k *Kernel) coreConfig() (*coreConfig, error) {
+	if k.coreCfg == nil {
+		c, err := newCoreConfig(k.cfg.AppID)
+		if err != nil {
+			return nil, err
+		}
+		k.coreCfg = c
+	}
+	return k.coreCfg, nil
 }
 
 // newCoreConfig builds the defaults-only store over coreSections().

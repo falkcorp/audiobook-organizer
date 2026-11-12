@@ -1,7 +1,7 @@
 // file: core/kernel/boot.go
-// version: 1.0.14
+// version: 1.0.15
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -253,13 +253,12 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	k.provider = p
 	// The scope catalog (05-rbac §5 item 3): declared once, from core's own
 	// scopes, and kept. Nothing enforces with it before F4; the executor's
-	// system actors are built over it. And the defaults-only core config the
-	// executor, scheduler and task routes read (taskconfig.go). Both are
-	// pure: Describe builds them too.
+	// system actors are built over it. The defaults-only core config the
+	// executor, scheduler and task routes read (taskconfig.go) is not built
+	// here: it costs about 14 ms a boot (130 to 240 ms under -race) and only
+	// the tasks wiring reads it, so P7 builds it when tasks need it
+	// (Kernel.coreConfig). Both are pure: Describe builds them too.
 	if k.rbacCat, err = declareCoreCatalog(); err != nil {
-		return err
-	}
-	if k.coreCfg, err = newCoreConfig(k.cfg.AppID); err != nil {
 		return err
 	}
 	if k.scope, err = p.Core("kernel", "phase", "step"); err != nil {

@@ -1,7 +1,7 @@
 // file: core/kernel/tasks.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c41f7a09-5d2e-4e83-b6a1-9a0d3f8e7c25
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -264,13 +264,17 @@ func heldKinds(ms []executor.Manifest) func(tasks.Kind) bool {
 // context carries.
 func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) error {
 	kt := k.tasks
+	cfg, err := k.coreConfig()
+	if err != nil {
+		return err
+	}
 	ops, err := k.provider.Core("ops", executor.Attributes()...)
 	if err != nil {
 		return fmt.Errorf("kernel: tasks: ops metrics scope: %w", err)
 	}
 	manifests := k.executorManifests()
 	x, err := executor.New(executor.Options{
-		Config:      k.coreCfg.executorConfig(),
+		Config:      cfg.executorConfig(),
 		Stores:      kt.stores,
 		NewBatch:    kt.st.NewBatch,
 		Keyspace:    &kt.ks,
@@ -292,7 +296,7 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 	if err != nil {
 		return fmt.Errorf("kernel: tasks: executor: %w", err)
 	}
-	loc, err := k.coreCfg.location()
+	loc, err := cfg.location()
 	if err != nil {
 		return err
 	}
@@ -301,8 +305,8 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 		Starter:     x,
 		NewBatch:    kt.st.NewBatch,
 		Definitions: defs,
-		Config:      schedulerConfig{c: k.coreCfg},
-		Poll:        k.coreCfg.schedulePoll(),
+		Config:      schedulerConfig{c: cfg},
+		Poll:        cfg.schedulePoll(),
 		Location:    loc,
 		Held:        heldKinds(manifests),
 		Metrics:     executor.Schedules(x),
@@ -317,7 +321,7 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 		Approver:    x,
 		Runs:        kt.stores.Runs,
 		Definitions: defs,
-		Config:      k.coreCfg.store,
+		Config:      cfg.store,
 		Audit:       k.audit,
 		Log:         k.coreLog("taskhttp"),
 	})
