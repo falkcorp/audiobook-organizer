@@ -1,5 +1,5 @@
 // file: core/backup/publish_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 12ec280e-1941-42c2-966e-f694e2ff48ae
 // last-edited: 2026-11-12
 
@@ -515,29 +515,46 @@ func within[T any](t *testing.T, ch <-chan T, what string) T {
 	select {
 	case v := <-ch:
 		return v
-	case <-time.After(60 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("timed out waiting for %s", what)
 		panic("unreachable")
 	}
 }
 
+// settle is how long the second import of the test below is given to get past a
+// lock that is not there. It is a window for a bug to show itself in, not a
+// measurement: on correct code the import waits at the lock for as long as it is
+// held, whatever the machine's speed, and a machine slower than this only fails
+// to see a bug, it never reports one that is not there.
+const settle = time.Second
+
 // Two imports of one archive must store it once. The interleaving is forced:
 // the first import is held at its link (it has passed both of its duplicate
 // checks and holds the import lock), the second is let run until its first
-// duplicate check has passed (the first's archive has no name yet, so it does),
-// and only then is the first let go. Without a second check under the lock the
-// second import then publishes a second copy, the catalogue lists one of the two,
+// duplicate check has passed (the first's archive has no name yet, so it does)
+// and is then given the time to reach a link of its own, which it can do only if
+// nothing makes it wait, and only then is the first let go. Without a second
+// check under the lock the second import publishes a second copy; without the
+// lock it checks while the first is between its own check and its link, finds
+// nothing, and publishes as well. Either way the catalogue lists one of the two,
 // and deleting that one brings the other back under the same ID.
 func TestConcurrentImportsOfOneArchiveStoreItOnce(t *testing.T) {
 	e := newEnv(t)
 	sc := &scanCounter{Store: e.opts.Store, reached: make(chan struct{})}
 	e.opts.Store = sc
 	var armed, held atomic.Bool
-	atLink, release := make(chan struct{}), make(chan struct{})
+	atLink, release, secondLink := make(chan struct{}), make(chan struct{}), make(chan struct{}, 1)
 	e.opts.Disk = backup.Disk{Link: func(oldname, newname string) error {
-		if armed.Load() && held.CompareAndSwap(false, true) {
-			close(atLink)
-			<-release
+		if armed.Load() {
+			if held.CompareAndSwap(false, true) {
+				close(atLink)
+				<-release
+			} else {
+				select {
+				case secondLink <- struct{}{}:
+				default:
+				}
+			}
 		}
 		return os.Link(oldname, newname)
 	}}
@@ -565,6 +582,12 @@ func TestConcurrentImportsOfOneArchiveStoreItOnce(t *testing.T) {
 	sc.target.Store(sc.calls.Load() + 1)
 	second := start()
 	within(t, sc.reached, "the second import to pass its first duplicate check")
+	select {
+	case <-secondLink:
+		close(release) // let both finish, so that nothing is left running
+		t.Fatal("the second import reached its link while the first was held at its own: nothing made it wait")
+	case <-time.After(settle):
+	}
 	close(release)
 
 	a, b := within(t, first, "the first import"), within(t, second, "the second import")
