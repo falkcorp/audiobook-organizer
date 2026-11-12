@@ -1,5 +1,5 @@
 // file: core/kernel/restore_adapters_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c37a5e82-1d96-4b40-a2f8-5e0b9c3d7a14
 // last-edited: 2026-11-11
 
@@ -187,8 +187,8 @@ func TestReapply_LastAdminKept(t *testing.T) {
 }
 
 // TestReapply_TailInSequentialBatches: a tail longer than one batch is applied
-// in order in several batches, each also writing the head, so the head never
-// passes a line not yet applied.
+// in order in several chunks, each in auth's batch and then rbac's, which also
+// writes the head, so the head never passes a line not yet applied.
 func TestReapply_TailInSequentialBatches(t *testing.T) {
 	fx := newRxFx(t, nil)
 	fx.boot(nil, nil)
@@ -211,11 +211,11 @@ func TestReapply_TailInSequentialBatches(t *testing.T) {
 			return inner()
 		}
 	})
-	if res.Reapplied != n || batches != 2 {
-		t.Fatalf("re-applied %d of %d in %d batch(es), want 2 batches", res.Reapplied, n, batches)
+	if res.Reapplied != n || batches != 4 {
+		t.Fatalf("re-applied %d of %d in %d batch(es), want 4 batches (two chunks, two batches each)", res.Reapplied, n, batches)
 	}
-	if !slices.Equal(heads, []uint64{0, uint64(tailBatch)}) {
-		t.Errorf("the head at the start of each batch = %v, want [0 %d]: it advances with each batch", heads, tailBatch)
+	if !slices.Equal(heads, []uint64{0, 0, uint64(tailBatch), uint64(tailBatch)}) {
+		t.Errorf("the head at the start of each batch = %v, want [0 0 %d %d]: it advances with each chunk's second batch", heads, tailBatch, tailBatch)
 	}
 	if got := fx.head().Seq; got != uint64(n) {
 		t.Errorf("head = %d, want %d", got, n)

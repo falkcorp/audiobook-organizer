@@ -1,5 +1,5 @@
 // file: core/kernel/restore_broken_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4d6c28-3f71-4e05-b8d2-c15e7a0f3b49
 // last-edited: 2026-11-11
 
@@ -71,7 +71,10 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 		if res.FailedClosed || g.userRow(g.robin).CredentialEpoch != bumped || !g.hasHealth(journal.HealthBroken) {
 			t.Errorf("second boot: failed closed %v, epoch %d (was %d), broken health %v", res.FailedClosed, g.userRow(g.robin).CredentialEpoch, bumped, g.hasHealth(journal.HealthBroken))
 		}
-		// A different broken state is a new failure, and fails closed again.
+		// A forged line appended after the break claims a longer journal but
+		// changes nothing that verifies: it is the same broken state, so it does
+		// not fail closed again (an attacker could otherwise mint a new state at
+		// every boot and bump every epoch each time).
 		f, err := os.OpenFile(g.journalPath(), os.O_APPEND|os.O_WRONLY, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -80,6 +83,14 @@ func TestBootReapply_ChainBreakFailsClosed(t *testing.T) {
 		if err = errors.Join(err, f.Close()); err != nil {
 			t.Fatal(err)
 		}
+		g.restart()
+		res, _ = g.boot(nil, nil)
+		if res.FailedClosed || g.userRow(g.robin).CredentialEpoch != bumped {
+			t.Errorf("a forged claim of a longer journal: failed closed %v, epoch %d (was %d)", res.FailedClosed, g.userRow(g.robin).CredentialEpoch, bumped)
+		}
+		// A different broken state (the break moves to line 1) is a new failure,
+		// and fails closed again.
+		editJournalLine(t, g.journalPath(), 1, "key-spoiler", "key-batmobile")
 		g.restart()
 		res, _ = g.boot(nil, nil)
 		if !res.FailedClosed || g.userRow(g.robin).CredentialEpoch <= bumped {
