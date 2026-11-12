@@ -1,5 +1,5 @@
 // file: core/kernel/lazycoreconfig_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1b69ef8e-ed2c-4179-bffa-8f9bede4fe1a
 // last-edited: 2026-11-12
 
@@ -68,7 +68,7 @@ func TestLazyCoreConfig_BuiltOnlyWhenTasksNeedIt(t *testing.T) {
 // builds is the one coreConfig keeps, and the build itself, which a boot with
 // no kind no longer runs, still succeeds over the core sections.
 func TestLazyCoreConfig_StillBuildsAndKeepsOneStore(t *testing.T) {
-	c, err := newCoreConfig("batcave")
+	c, err := newCoreConfig("batcave", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
