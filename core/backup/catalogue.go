@@ -1,5 +1,5 @@
 // file: core/backup/catalogue.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0e5a7d12-41c8-4b6f-8d33-9c1ab2e07f65
 // last-edited: 2026-11-12
 
@@ -30,6 +30,13 @@ type found struct {
 }
 
 const maxSidecarBytes = 64 << 10
+
+// stalePartialAge is how long a .partial or .tmp file of the backup directory
+// must go unwritten before the catalogue scan removes it as a crashed run's
+// leftover. Every run that owns one keeps its time moving while it writes (an
+// archive stream, an upload, a sidecar), and Import does not hold the backup
+// resource, so a younger file is never touched.
+const stalePartialAge = 6 * time.Hour
 
 // archiveExt matches what follows the catalogue prefix of an archive's name. A
 // function, not a variable: core forbids package-level mutable state (03 R5).
@@ -73,7 +80,10 @@ func (s *Svc) scan(ctx context.Context) ([]found, error) {
 	for _, e := range ents {
 		have[e.Name()] = true
 	}
-	var out []found
+	var (
+		out []found
+		now time.Time // read once, and only when there is a temporary file to judge
+	)
 	for _, e := range ents {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -93,13 +103,28 @@ func (s *Svc) scan(ctx context.Context) ([]found, error) {
 			}
 			continue
 		}
-		for _, suf := range []string{ChecksumSidecar, ManifestSidecar, VerifySidecar, ".tmp"} {
-			if base, cut := strings.CutSuffix(name, suf); cut && ext.MatchString(strings.TrimPrefix(strings.TrimSuffix(base, ".tmp"), s.o.Prefix)) && !have[base] {
+		if e.Type().IsRegular() && (strings.HasSuffix(name, ".partial") || strings.HasSuffix(name, ".tmp")) {
+			if fi, err := e.Info(); err == nil {
+				if now.IsZero() {
+					now = s.o.now()
+				}
+				if now.Sub(fi.ModTime()) > stalePartialAge {
+					s.o.log().Warn("backup: removing a stale temporary file", "name", name)
+					if err := os.Remove(filepath.Join(s.o.Dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+						s.o.log().Warn("backup: could not remove a stale temporary file", "name", name, "error", err)
+					}
+				}
+			}
+			continue
+		}
+		for _, suf := range []string{ChecksumSidecar, ManifestSidecar, VerifySidecar} {
+			if base, cut := strings.CutSuffix(name, suf); cut && ext.MatchString(strings.TrimPrefix(base, s.o.Prefix)) && !have[base] {
 				s.o.log().Warn("backup: removing an orphaned sidecar", "name", name)
 				_ = os.Remove(filepath.Join(s.o.Dir, name))
 			}
 		}
 	}
+	out = s.dropDuplicateIDs(out)
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
 			return out[i].CreatedAt.After(out[j].CreatedAt)
@@ -108,6 +133,30 @@ func (s *Svc) scan(ctx context.Context) ([]found, error) {
 	})
 	s.recordCatalogue(ctx, out)
 	return out, nil
+}
+
+// dropDuplicateIDs keeps one file per archive ID. Two files can carry one ID
+// (an archive copied into the directory by hand, or a legacy .tar and .tar.gz of
+// one stem), and every operation addresses an archive by its ID: listing both
+// would let find, Delete and Verify act on whichever came first. The file whose
+// name sorts first is kept, so the answer is the same on every scan, and each of
+// the others is named once in the log. Import refuses an ID already in the
+// catalogue, so only a file placed outside the service gets here.
+func (s *Svc) dropDuplicateIDs(in []found) []found {
+	sort.Slice(in, func(i, j int) bool { return in[i].Name < in[j].Name })
+	kept := make(map[ArchiveID]string, len(in))
+	out := in[:0]
+	for _, f := range in {
+		if first, dup := kept[f.ID]; dup {
+			if _, seen := s.warned.LoadOrStore(f.Name, struct{}{}); !seen {
+				s.o.log().Warn("backup: an archive has the ID of another file and is not listed", "name", f.Name, "kept", first)
+			}
+			continue
+		}
+		kept[f.ID] = f.Name
+		out = append(out, f)
+	}
+	return out
 }
 
 func (s *Svc) recordCatalogue(ctx context.Context, all []found) {
@@ -303,9 +352,14 @@ func (s *Svc) Delete(ctx context.Context, id ArchiveID) error {
 // 0600, and accepted only when it is a well-formed archive: a
 // mediacore-backup/1 archive must pass VerifyEntries and a legacy-abo/0
 // archive must be one store directory. Its provenance then decides Own or
-// Foreign, exactly as for an archive found in the directory. name is a hint:
-// it is kept only when it is a plain file name in this app's pattern and free.
-func (s *Svc) Import(ctx context.Context, name string, r io.Reader) (_ Archive, err error) {
+// Foreign, exactly as for an archive found in the directory.
+//
+// The name is the caller's suggestion and is ignored (it is in the signature
+// because the Catalogue's is): the archive is stored under a fresh name of this
+// app's pattern, <prefix><timestamp><codec extension>. A name that arrived with
+// a request is text a stranger chose, and keeping it would make it a path under
+// the backup directory and a string in every log line that names the file.
+func (s *Svc) Import(ctx context.Context, _ string, r io.Reader) (_ Archive, err error) {
 	if err := mkdirPrivate(s.o.Dir); err != nil {
 		return Archive{}, err
 	}
@@ -371,7 +425,7 @@ func (s *Svc) Import(ctx context.Context, name string, r io.Reader) (_ Archive, 
 	if err != nil {
 		return Archive{}, err
 	}
-	final, fname, err := s.importName(name, ext)
+	fname, final, err := s.freshName(s.o.now().UTC(), ext)
 	if err != nil {
 		return Archive{}, err
 	}
@@ -417,24 +471,6 @@ func extensionOf(p string) (ext string, err error) {
 		return "", fmt.Errorf("%w: not a tar archive", ErrManifest)
 	}
 	return c.Extension(), nil
-}
-
-// importName picks the stored name: the caller's when it is a plain,
-// pattern-conforming and free name, else a fresh timestamped one.
-func (s *Svc) importName(hint, ext string) (full, name string, err error) {
-	if hint != "" && filepath.Base(hint) == hint && strings.HasPrefix(hint, s.o.Prefix) && archiveExt().MatchString(strings.TrimPrefix(hint, s.o.Prefix)) && strings.HasSuffix(hint, ext) {
-		taken := false
-		for _, suf := range []string{"", ChecksumSidecar, ManifestSidecar, VerifySidecar} {
-			if _, e := os.Lstat(filepath.Join(s.o.Dir, hint+suf)); e == nil {
-				taken = true
-			}
-		}
-		if !taken {
-			return filepath.Join(s.o.Dir, hint), hint, nil
-		}
-	}
-	name, full, err = s.freshName(s.o.now().UTC(), ext)
-	return full, name, err
 }
 
 func idTaken(all []found, id ArchiveID) bool {

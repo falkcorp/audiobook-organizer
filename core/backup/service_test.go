@@ -1,5 +1,5 @@
 // file: core/backup/service_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b2c9d4e6-5a17-4e38-8f20-3d6b1a9c7e45
 // last-edited: 2026-11-12
 
@@ -149,7 +149,7 @@ func TestImportRefusals(t *testing.T) {
 	if l := leftovers(); len(l) != 0 {
 		t.Fatalf("refused imports left %v", l)
 	}
-	// A path-like or foreign-pattern name hint is never used.
+	// A path-like or foreign-pattern name hint is never used either.
 	for _, hint := range []string{"../escape.tar.gz", "/etc/gotham_20261112_000000.tar.gz", "other_20261112_000000.tar.gz", "gotham_x.tar.gz"} {
 		imp, err := e.svc.Import(ctx, hint, bytes.NewReader(good))
 		if err != nil {
@@ -165,10 +165,16 @@ func TestImportRefusals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A conformant, free hint is kept; the same archive twice is refused.
-	imp, err := e.svc.Import(ctx, "gotham_20250101_000000.tar.gz", bytes.NewReader(good))
-	if err != nil || imp.Name != "gotham_20250101_000000.tar.gz" {
-		t.Fatalf("Import = %+v, %v", imp, err)
+	// Not even a conformant, free hint names the stored file (the name is the
+	// service's, never text that arrived with the request); the same archive
+	// twice is refused.
+	const conformant = "gotham_20250101_000000.tar.gz"
+	imp, err := e.svc.Import(ctx, conformant, bytes.NewReader(good))
+	if err != nil || imp.Name == conformant || !strings.HasPrefix(imp.Name, "gotham_") {
+		t.Fatalf("Import = %+v, %v; the hint must not name the stored file", imp, err)
+	}
+	if _, err := os.Stat(filepath.Join(e.backupDir, conformant)); err == nil {
+		t.Fatal("a conformant hint named a stored file")
 	}
 	if _, err := e.svc.Import(ctx, "", bytes.NewReader(good)); !errors.Is(err, backup.ErrManifest) {
 		t.Fatalf("a second import of the same archive: %v, want ErrManifest (duplicate ID)", err)

@@ -1,5 +1,5 @@
 // file: core/backup/tasks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a8d3f71-0b26-4c94-9e1d-2f7c6b0a4e83
 // last-edited: 2026-11-12
 
@@ -180,9 +180,13 @@ func (s *Svc) taskCreate(rc *tasks.RC, p CreateParams) (CreateResult, error) {
 }
 
 // taskVerify re-verifies the newest VerifyKeep archives at the entries level,
-// the newest at the open level, and re-signs every Own archive made under a
-// derivation key that is no longer the active one (SEC2-24). Every archive is
-// attempted; any failed verification fails the run, after the rest were tried.
+// the newest Own one at the open level, and re-signs every Own archive made
+// under a derivation key that is no longer the active one (SEC2-24). Only an
+// Own archive is ever opened here: the open level hands the archive's store to
+// Pebble, and an archive that is not provably this install's (a Foreign import,
+// a legacy file) is opened only when someone asks for that one archive by name.
+// Every archive is attempted; any failed verification fails the run, after the
+// rest were tried.
 func (s *Svc) taskVerify(rc *tasks.RC, _ Empty) (VerifyTaskResult, error) {
 	ctx := WithProgress(rc.Context(), rc)
 	var res VerifyTaskResult
@@ -192,6 +196,7 @@ func (s *Svc) taskVerify(rc *tasks.RC, _ Empty) (VerifyTaskResult, error) {
 	}
 	keep := max(1, s.o.settings().VerifyKeep)
 	var errs []error
+	opened := false
 	for i, a := range all { // newest first
 		if i >= keep {
 			break
@@ -200,8 +205,8 @@ func (s *Svc) taskVerify(rc *tasks.RC, _ Empty) (VerifyTaskResult, error) {
 			return res, err
 		}
 		level := VerifyEntries
-		if i == 0 {
-			level = VerifyOpen
+		if !opened && a.Provenance == Own {
+			level, opened = VerifyOpen, true
 		}
 		if _, err := s.Verify(ctx, a.ID, level); err != nil {
 			res.Failed++

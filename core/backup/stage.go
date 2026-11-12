@@ -1,5 +1,5 @@
 // file: core/backup/stage.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: a9c2e5f1-3d70-4b84-8f6a-2e1d9b7c4a03
 // last-edited: 2026-11-12
 
@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/backup/journal"
@@ -328,11 +327,29 @@ func (s *Svc) compat(m *Manifest) (warnings []string, err error) {
 // extractCore writes every entry of the archive into staging, each checked
 // against the manifest as it streams, then the manifest itself beside them (step
 // b's anchor), everything fsynced. It returns the manifest's SHA-256.
+//
+// The declared sizes (the manifest's entries and the manifest itself) are
+// checked against the free space of staging's filesystem, margin included,
+// before the first byte is written, and the extractor stops at that total: the
+// archive's own size and the reader's limits say what it costs to decode, not
+// what it costs to keep.
 func (s *Svc) extractCore(ctx context.Context, a *openedArchive, staging string) (string, error) {
+	declared, err := declaredBytes(a.Manifest.Entries, "")
+	if err != nil {
+		return "", err
+	}
+	total, ok := addBytes(declared, uint64(len(a.ManifestBytes)))
+	if !ok {
+		return "", fmt.Errorf("%w: the declared sizes overflow", ErrInsufficientSpace)
+	}
+	if err := s.requireSpace(spaceClaim{dir: staging, bytes: total}); err != nil {
+		return "", err
+	}
 	ex, err := backuparchive.NewExtractor(staging)
 	if err != nil {
 		return "", err
 	}
+	ex.SetBudget(budgetOf(total))
 	cerr := a.consume(ctx, ex, "")
 	if cerr == nil {
 		_, cerr = ex.WriteFile(ManifestName, bytes.NewReader(a.ManifestBytes), nil)
@@ -361,6 +378,11 @@ const legacyManifestName = "legacy-manifest.json"
 func (s *Svc) extractLegacy(ctx context.Context, archive, staging string) (string, error) {
 	info, err := backuparchive.ScanLegacy(ctx, archive, s.limits())
 	if err != nil {
+		return "", err
+	}
+	// The scan counted the bytes the extraction will write; they must fit before
+	// any is written (ExtractLegacy stops at the same figure).
+	if err := s.requireSpace(spaceClaim{dir: staging, bytes: uint64(info.Bytes)}); err != nil {
 		return "", err
 	}
 	db := filepath.Join(staging, "db")
@@ -403,27 +425,41 @@ func (s *Svc) extractLegacy(ctx context.Context, archive, staging string) (strin
 	return SumManifest(b), nil
 }
 
+// UnreadableSecretsError is ErrUnreadableSecrets with how many distinct keys the
+// archive's secret records need that the keyring lacks. It carries the count and
+// never the key IDs: a key ID names a secret's key, so it stays out of the error
+// text, the logs, the warnings and the API, which is why the one number is all
+// a caller has to show. errors.Is(err, ErrUnreadableSecrets) holds for it.
+type UnreadableSecretsError struct{ Count int }
+
+func (e *UnreadableSecretsError) Error() string {
+	return fmt.Sprintf("%s (%d distinct keys)", ErrUnreadableSecrets.Error(), e.Count)
+}
+
+// Is matches ErrUnreadableSecrets.
+func (e *UnreadableSecretsError) Is(target error) bool { return target == ErrUnreadableSecrets }
+
 // checkSecrets is step 5: every key ID the staged store's secret records
-// reference must be in the keyring, unless the caller accepts the loss.
+// reference must be in the keyring, unless the caller accepts the loss. The
+// refusal and the warning count the missing keys; neither names one.
 func (s *Svc) checkSecrets(info StoreInfo, o RestoreOptions) (warnings []string, err error) {
 	have := map[string]bool{}
 	for _, id := range s.o.Keyring.KeyIDs() {
 		have[id] = true
 	}
-	var missing []string
+	missing := map[string]struct{}{}
 	for _, id := range info.SecretKeyIDs {
 		if !have[id] {
-			missing = append(missing, id)
+			missing[id] = struct{}{}
 		}
 	}
 	if len(missing) == 0 {
 		return nil, nil
 	}
-	sort.Strings(missing)
 	if !o.AcceptUnreadableSecrets {
-		return nil, fmt.Errorf("%w: key %s", ErrUnreadableSecrets, strings.Join(missing, ", "))
+		return nil, &UnreadableSecretsError{Count: len(missing)}
 	}
-	return []string{"secrets sealed under keys this install does not hold (" + strings.Join(missing, ", ") + ") are unreadable and must be re-entered"}, nil
+	return []string{fmt.Sprintf("secrets sealed under %d key(s) this install does not hold are unreadable and must be re-entered", len(missing))}, nil
 }
 
 // configTargets places the archive's config file and boot record when the

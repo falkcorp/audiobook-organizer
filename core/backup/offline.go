@@ -1,5 +1,5 @@
 // file: core/backup/offline.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1d6a52-0b0e-4c21-9c4e-2f7a3d1e5b94
 // last-edited: 2026-11-12
 
@@ -67,9 +67,20 @@ const dbPrefix = "db"
 // an archive that arrives through the API (StageRestore, 05-backup §5B.3.7).
 //
 // Every read is bounded by the package's default limits (archive size, entry
-// count, entry and total size), symbolic links and special entries are
-// refused, and files are created 0600 in directories 0700.
+// count, entry and total size), symbolic links, special entries and sparse
+// files are refused, the declared bytes must fit the free space of storeDir's
+// filesystem before the first is written (and the extraction stops at them),
+// and files are created 0600 in directories 0700.
 func ExtractStore(ctx context.Context, archive, storeDir string) (id string, err error) {
+	return extractStore(ctx, archive, storeDir, Disk{})
+}
+
+// extractStore is ExtractStore over disk, which answers the free-space check.
+// The offline restore has no service and no settings, so the check keeps no
+// headroom beyond the archive's declared bytes (margin 0): nothing else is
+// running to starve, and an extraction that fills the volume to the byte still
+// fits.
+func extractStore(ctx context.Context, archive, storeDir string, disk Disk) (id string, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -95,9 +106,9 @@ func ExtractStore(ctx context.Context, archive, storeDir string) (id string, err
 				id, err = "", errors.Join(err, fmt.Errorf("backup: extract store: %w", cerr))
 			}
 		}()
-		return extractCoreStore(ctx, archive, a, storeDir)
+		return extractCoreStore(ctx, archive, a, storeDir, disk)
 	case errors.Is(err, ErrManifest):
-		return extractLegacyStore(ctx, archive, storeDir, lim, err)
+		return extractLegacyStore(ctx, archive, storeDir, lim, disk, err)
 	default:
 		return "", fmt.Errorf("backup: extract store: %w", err)
 	}
@@ -126,7 +137,7 @@ func requireEmptyDir(dir string) (err error) {
 	return nil
 }
 
-func extractCoreStore(ctx context.Context, archive string, a *openedArchive, storeDir string) (string, error) {
+func extractCoreStore(ctx context.Context, archive string, a *openedArchive, storeDir string, disk Disk) (string, error) {
 	if side, err := readBounded(archive+ManifestSidecar, MaxManifestBytes); err == nil {
 		if !bytes.Equal(side, a.ManifestBytes) {
 			return "", fmt.Errorf("backup: extract store: %w: the manifest sidecar differs from the archive's manifest", ErrManifest)
@@ -144,10 +155,20 @@ func extractCoreStore(ctx context.Context, archive string, a *openedArchive, sto
 	if !holdsStore {
 		return "", fmt.Errorf("backup: extract store: %w: the manifest lists no entry under %s/", ErrManifest, dbPrefix)
 	}
+	// Only the entries under db/ are written; their declared bytes must fit the
+	// target's filesystem first, and the extractor stops at them.
+	declared, err := declaredBytes(a.Manifest.Entries, dbPrefix+"/")
+	if err != nil {
+		return "", fmt.Errorf("backup: extract store: %w", err)
+	}
+	if err := requireSpace(disk, 0, spaceClaim{dir: storeDir, bytes: declared}); err != nil {
+		return "", fmt.Errorf("backup: extract store: %w", err)
+	}
 	ex, err := backuparchive.NewExtractor(storeDir)
 	if err != nil {
 		return "", fmt.Errorf("backup: extract store: %w", err)
 	}
+	ex.SetBudget(budgetOf(declared))
 	cerr := a.consume(ctx, ex, dbPrefix)
 	if serr := errors.Join(ex.Sync(), ex.Close()); cerr == nil {
 		cerr = serr
@@ -158,10 +179,13 @@ func extractCoreStore(ctx context.Context, archive string, a *openedArchive, sto
 	return string(a.Manifest.ArchiveID), nil
 }
 
-func extractLegacyStore(ctx context.Context, archive, storeDir string, lim backuparchive.Limits, why error) (string, error) {
+func extractLegacyStore(ctx context.Context, archive, storeDir string, lim backuparchive.Limits, disk Disk, why error) (string, error) {
 	info, err := backuparchive.ScanLegacy(ctx, archive, lim)
 	if err != nil {
 		return "", fmt.Errorf("backup: extract store: %w", errors.Join(err, why))
+	}
+	if err := requireSpace(disk, 0, spaceClaim{dir: storeDir, bytes: uint64(info.Bytes)}); err != nil {
+		return "", fmt.Errorf("backup: extract store: %w", err)
 	}
 	if err := backuparchive.ExtractLegacy(ctx, archive, info, storeDir, lim); err != nil {
 		return "", fmt.Errorf("backup: extract store: %w", err)

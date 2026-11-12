@@ -1,5 +1,5 @@
 // file: internal/books/legacy_restore_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0b8a63-1e47-4c92-b7f5-3a6c9e2d8f14
 // last-edited: 2026-11-12
 
@@ -8,6 +8,7 @@ package books
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/mediacore/app"
 	corebackup "github.com/falkcorp/mediacore/backup"
+	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
@@ -27,6 +29,30 @@ import (
 // The staging half of TestLegacyArchiveRestoreThenMigrate (05-backup §5B.9;
 // F8-01 invariant I6; F8-04 owns the test and extends it to the migrated
 // store and the corpus' per-family counts).
+
+// legacyMarkers is the journal boundary Create reads and advances. This test
+// lists and stages archives and never creates one, so nothing may call it: a
+// call is a test failure, not a quiet zero.
+type legacyMarkers struct{}
+
+var errMarkersUnused = errors.New("legacy restore test: Create was reached, which this test does not exercise")
+
+func (legacyMarkers) Read(context.Context) (corebackup.Boundaries, error) {
+	return corebackup.Boundaries{}, errMarkersUnused
+}
+
+func (legacyMarkers) Advance(context.Context) (journal.ServedBoot, error) {
+	return journal.ServedBoot{}, errMarkersUnused
+}
+
+// legacySettings is the Service's settings with a one-byte free-space margin: the
+// default keeps 2 GiB beyond the archive's bytes free before staging, which is a
+// property of the machine running the test and not of the restore under test.
+func legacySettings() corebackup.Settings {
+	s := corebackup.DefaultSettings()
+	s.SpaceMargin = 1
+	return s
+}
 
 // legacyKeys is a keyring that holds nothing: a legacy archive carries no
 // provenance and no secret records for core's keyring to cover.
@@ -96,7 +122,8 @@ func stageWithCore(t *testing.T, work, archive string) string {
 	svc, err := corebackup.New(corebackup.Options{
 		AppID: AppID, AppVersion: telemetry.Version(), CoreVersion: "test", BuildID: build,
 		Prefix: m[1], Dir: filepath.Dir(archive), StateDir: stateDir, DBPath: storeDB(work),
-		Owners: owners, Keyring: legacyKeys{}, Stager: slotStager{stateDir},
+		Owners: owners, Keyring: legacyKeys{}, Markers: legacyMarkers{}, Stager: slotStager{stateDir},
+		Settings:  legacySettings,
 		Inspector: &corebackup.StorageInspector{Base: storage.OpenOptions{Owners: owners, Build: build}},
 	})
 	require.NoError(t, err)
