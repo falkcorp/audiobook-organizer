@@ -1,6 +1,6 @@
 // file: internal/metadata/taglib_cgo.go
-// version: 1.10.0
-// last-edited: 2026-10-11
+// version: 1.11.0
+// last-edited: 2026-11-12
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 //
 // Native CGO bindings to TagLib C API for high-performance tag writing.
@@ -106,6 +106,12 @@ func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]interfa
 // If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
 // refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
 func writeSingleTagWithTaglib(ctx context.Context, filePath, tagName, value string) error {
+	return writeSingleTagWithTaglibVia(ctx, bookFileHashStore(), filePath, tagName, value)
+}
+
+// writeSingleTagWithTaglibVia is writeSingleTagWithTaglib recording through rec
+// (nil: no recording) instead of the installed hash store.
+func writeSingleTagWithTaglibVia(ctx context.Context, rec fileops.BookFileHashRecorder, filePath, tagName, value string) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		return fmt.Errorf("taglib abs: %w", err)
@@ -116,14 +122,14 @@ func writeSingleTagWithTaglib(ctx context.Context, filePath, tagName, value stri
 		return fmt.Errorf("taglib single-tag resolve: %w", err)
 	}
 
-	opts := writeOptions(ctx, effectivePath)
+	opts := writeOptionsVia(ctx, rec, effectivePath)
 	_, postHash, err := fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeSingleTagToPath(effectivePath, tmpPath, tagName, value)
 	}, opts)
 	if err != nil {
 		return fmt.Errorf("taglib single-tag: %w", err)
 	}
-	if err := verifyNativeWrite(effectivePath, map[string][]string{tagName: {value}}, opts.BookFileID, postHash); err != nil {
+	if err := verifyNativeWriteVia(rec, effectivePath, map[string][]string{tagName: {value}}, opts.BookFileID, postHash); err != nil {
 		return fmt.Errorf("taglib single-tag: %w", err)
 	}
 	return nil
@@ -165,6 +171,16 @@ func writePropertiesWithTaglib(ctx context.Context, abs string, tags map[string]
 // tagger.WriteTagsSafe.
 func verifyNativeWrite(path string, want map[string][]string, bookFileID, postHash string) error {
 	return WithBookFileHashes(packageSafeWriteDeps).VerifyWritten(path, want, bookFileID, postHash)
+}
+
+// verifyNativeWriteVia is verifyNativeWrite with rec (nil: none) as the hash
+// store and provenance recorder instead of the installed one.
+func verifyNativeWriteVia(rec fileops.BookFileHashRecorder, path string, want map[string][]string, bookFileID, postHash string) error {
+	deps := packageSafeWriteDeps
+	if rec != nil {
+		deps.HashStore = rec
+	}
+	return deps.VerifyWritten(path, want, bookFileID, postHash)
 }
 
 func writeTagMapWithTaglib(effectivePath, tmpPath string, tags map[string][]string) error {
@@ -243,7 +259,15 @@ func resolvePathForWrite(ctx context.Context, abs string) (string, error) {
 // writeOptions is BookFileHashOptions plus the create_backups decision for
 // ctx, the native writer's counterpart of tagger's own writeOptions.
 func writeOptions(ctx context.Context, effectivePath string) fileops.WriteTagsSafeOptions {
-	o := BookFileHashOptions(effectivePath)
+	return writeOptionsVia(ctx, bookFileHashStore(), effectivePath)
+}
+
+// writeOptionsVia is writeOptions recording through rec (nil: no recording).
+func writeOptionsVia(ctx context.Context, rec fileops.BookFileHashRecorder, effectivePath string) fileops.WriteTagsSafeOptions {
+	var o fileops.WriteTagsSafeOptions
+	if rec != nil {
+		o = fileops.HashOptionsForPath(rec, effectivePath)
+	}
 	o.KeepBackup = tagger.BackupWanted(ctx)
 	return o
 }

@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/recompute_book_aggregates.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 // Maintenance job: recompute-book-aggregates
 //
@@ -157,7 +157,13 @@ func (j *recomputeBookAggregatesJob) Run(
 	opID := maintenance.OperationIDFromCtx(ctx)
 	resumeIndex := 0
 	if opID != "" {
-		if cp, _ := operations.LoadCheckpoint(store, opID); cp != nil {
+		var cp *operations.OperationState
+		if ck := checkpointerFrom(ctx); ck != nil {
+			cp, _ = ck.Load()
+		} else {
+			cp, _ = operations.LoadCheckpoint(store, opID)
+		}
+		if cp != nil {
 			if cp.Phase == "scanning" {
 				resumeIndex = cp.PhaseIndex
 				slog.Info("recompute-book-aggregates resuming", "from_index", resumeIndex)
@@ -227,7 +233,11 @@ func (j *recomputeBookAggregatesJob) Run(
 
 		// Periodic checkpoint every 100 books so we can resume after a restart.
 		if opID != "" && i%100 == 0 {
-			_ = operations.SaveCheckpoint(store, opID, "maintenance:recompute-book-aggregates", "scanning", i, total)
+			if ck := checkpointerFrom(ctx); ck != nil {
+				_ = ck.Save("maintenance:recompute-book-aggregates", "scanning", i, total)
+			} else {
+				_ = operations.SaveCheckpoint(store, opID, "maintenance:recompute-book-aggregates", "scanning", i, total)
+			}
 		}
 	}
 

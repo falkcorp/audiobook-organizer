@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package jobs
 
@@ -19,6 +19,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -69,6 +70,21 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 		if jerr := json.Unmarshal(raw, &p); jerr == nil && p.FixMode != "" {
 			fixMode = p.FixMode
 		}
+	}
+
+	// A tag write records the file's new hashes on its book_file row. It does so
+	// through the store this run was handed, not the package-level store
+	// internal/metadata has installed since startup (05-tasks conversion rule 3).
+	// A store that cannot record them refuses a live run before any file is
+	// rewritten: a rewritten file whose row keeps its old hash is read as
+	// replaced by the next scan.
+	var hashRecorder fileops.BookFileHashRecorder
+	if !dryRun {
+		rec, ok := store.(fileops.BookFileHashRecorder)
+		if !ok {
+			return fmt.Errorf("scan-composer-tags: the run's store cannot record file hashes (fileops.BookFileHashRecorder); refusing to rewrite files")
+		}
+		hashRecorder = rec
 	}
 
 	allBooks, err := store.GetAllBooksCore(0, 0)
@@ -204,7 +220,7 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 					if !dryRun && category != "ok" && willWrite != composer {
 						// A library-wide tag fix keeps no .bak-* sibling per
 						// file (owner decision D69, as for bulk write-back).
-						if writeErr := metadata.WriteSingleTagContext(tagger.WithoutBackup(ctx), w.filePath, "COMPOSER", willWrite); errors.Is(writeErr, tagger.ErrProtectedPathWrite) {
+						if writeErr := metadata.WriteSingleTagContextVia(tagger.WithoutBackup(ctx), hashRecorder, w.filePath, "COMPOSER", willWrite); errors.Is(writeErr, tagger.ErrProtectedPathWrite) {
 							// Keep the category (what is wrong with the tag) and
 							// flag that the fix was not written because the file is
 							// protected. Overwriting the category lost the finding.
