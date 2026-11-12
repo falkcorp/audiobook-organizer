@@ -1,5 +1,5 @@
 // file: core/internal/audithttp/routes.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b7ba0d64-88a0-4182-aa62-18009112fbcf
 // last-edited: 2026-11-10
 
@@ -10,9 +10,10 @@
 //
 // The audit log holds user names, client addresses and credential ids, so the
 // routes refuse the auth-disabled principal with 401 authentication_required
-// (05-authn §4.11) and withhold a record about authentication or about
-// another user (action core.auth.* or core.user.*) from a caller who does not
-// hold core:users.manage. Exporting is itself audited: the route records
+// (05-authn §4.11) and show a caller who does not hold core:users.manage only
+// the records whose action core classifies as safe for every audit viewer
+// (audit.VisibilityOf); a credential or identity action, and an action core
+// does not classify, are withheld. Exporting is itself audited: the route records
 // core.audit.export synchronously before the first byte and streams nothing if
 // that record cannot be written.
 //
@@ -29,7 +30,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -88,7 +88,7 @@ func Register(g *httpapi.Group, deps Deps) {
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/audit", Name: "listAudit", Perm: perm, Tags: tags,
 		Summary: "Query the audit log, newest first",
-		Doc:     "Filters: since and until (RFC 3339), actor (a user id), action (a prefix such as core.auth.), outcome (success, failure, denied, error) and target (module, module/kind or module/kind/id). The cursor continues a query with the same filters. A record about authentication or about another user (core.auth.*, core.user.*) is left out unless the caller holds core:users.manage. The auth-disabled principal is refused with 401.",
+		Doc:     "Filters: since and until (RFC 3339), actor (a user id), action (a prefix such as core.auth.), outcome (success, failure, denied, error) and target (module, module/kind or module/kind/id). The cursor continues a query with the same filters. A record whose action is about an identity or a credential (core.auth.*, core.user.*, core.apikey.*, core.session.*, core.invite.*, core.templogin.*, core.identity.*, core.bootstrap.*, core.permission.deny and the like), and a record whose action core does not classify (a module's own), is left out unless the caller holds core:users.manage. The auth-disabled principal is refused with 401.",
 	}, a.list)
 	httpapi.HandleRaw(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/audit/export", Name: "exportAudit", Perm: perm, Tags: tags, RateClass: httpapi.RateExpensive,
@@ -277,29 +277,17 @@ func (a *api) records(ctx context.Context, f audit.Filter, batch int, keep func(
 	}
 }
 
-// visibleTo is the rule 05-rbac §7.6 sets: a record whose action is core.auth.*
-// or core.user.* is seen by a holder of core:users.manage, and by anyone else
-// only when it is about themselves. "About themselves" is a target that is
-// their own user record or, when the record names no user target, an actor
-// that is them. Everything else is visible to every holder of core:audit.view.
-// A withheld record is left out whole, never partly masked.
+// visibleTo is the rule 05-rbac §7.6 sets, default-deny: a holder of
+// core:users.manage sees every record; anyone else sees only a record whose
+// action core's table classifies VisibleToAll. An action about an identity or a
+// credential (core.auth.*, core.user.*, core.apikey.*, core.session.*, ...) is
+// withheld, and so is one the table does not list: a module's own action, or a
+// core action added without a classification. A withheld record is left out
+// whole, never partly masked.
 func visibleTo(p *auth.Principal) func(audit.Record) bool {
 	manager := p != nil && p.Perms != nil && p.Perms.Has(permUsers)
-	me := ""
-	if p != nil && p.User != nil {
-		me = string(p.User.ID)
-	}
 	return func(r audit.Record) bool {
-		if !strings.HasPrefix(r.Action, "core.auth.") && !strings.HasPrefix(r.Action, "core.user.") {
-			return true
-		}
-		if manager {
-			return true
-		}
-		if r.Target.Module == "core" && r.Target.Kind == "user" {
-			return me != "" && r.Target.ID == me
-		}
-		return me != "" && r.Actor.UserID == me
+		return manager || audit.VisibilityOf(r.Action) == audit.VisibleToAll
 	}
 }
 

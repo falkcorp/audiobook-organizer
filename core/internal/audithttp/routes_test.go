@@ -1,5 +1,5 @@
 // file: core/internal/audithttp/routes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c6e2210-19b1-49c9-b95e-ffcd88ee48e6
 // last-edited: 2026-11-10
 
@@ -397,7 +397,7 @@ func TestList_Filters(t *testing.T) {
 		{"action prefix", listReq{Action: "core.auth."}, []string{"dick-logout-noTarget", "anon-fail", "dick-login"}},
 		{"outcome", listReq{Outcome: "denied"}, []string{"alfred-denied"}},
 		{"outcome failure", listReq{Outcome: "failure"}, []string{"anon-fail"}},
-		{"target module", listReq{Target: "books"}, []string{"patrol"}},
+		{"target module", listReq{Target: "core/role"}, []string{"patrol"}},
 		{"target module and kind", listReq{Target: "core/user"}, []string{"barbara-update", "bruce-disables-selina", "dick-login"}},
 		{"target full", listReq{Target: "core/user/u-selina"}, []string{"bruce-disables-selina"}},
 		{"since", listReq{Since: at(6)}, []string{"dick-logout-noTarget", "alfred-denied"}},
@@ -599,11 +599,12 @@ func records(n int) []audit.Record {
 
 // ---- visibility -----------------------------------------------------------
 
-// TestVisibility_AuthAndUserRecords is 05-rbac §7.6's rule: a record whose
-// action is core.auth.* or core.user.* is visible to a holder of
-// core:users.manage, and to anyone else only when it is about themselves;
-// everything else is visible to every audit viewer. A withheld record is
-// absent whole, from the list and the export alike.
+// TestVisibility_AuthAndUserRecords is 05-rbac §7.6's rule, default-deny: a
+// holder of core:users.manage sees every record; anyone else sees only a
+// record whose action core classifies as visible to every audit viewer. A
+// credential or identity action is withheld whoever it is about, the viewer
+// themselves included, and so is an action core does not list. A withheld
+// record is absent whole, from the list and the export alike.
 func TestVisibility_AuthAndUserRecords(t *testing.T) {
 	e := newEnv(t)
 	s := e.roster(t)
@@ -626,16 +627,14 @@ func TestVisibility_AuthAndUserRecords(t *testing.T) {
 		want []string
 	}{
 		{"commissioner sees all", commissioner(), []string{"dick-logout-noTarget", "alfred-denied", "barbara-update", "anon-fail", "bruce-disables-selina", "patrol", "dick-login"}},
-		// dick: his own login (target him), his own logout (no user target,
-		// actor him), the patrol and the denial (not auth or user actions).
-		{"dick sees his own", auditor("u-dick", "dick"), []string{"dick-logout-noTarget", "alfred-denied", "patrol", "dick-login"}},
-		// barbara: her own update (target her) and the non-auth records; not
-		// dick's login or the anonymous failure.
-		{"barbara sees her own", auditor("u-barbara", "barbara"), []string{"alfred-denied", "barbara-update", "patrol"}},
-		// selina is the target of a disable done by someone else: about her.
-		{"selina sees the disable about her", auditor("u-selina", "selina"), []string{"alfred-denied", "bruce-disables-selina", "patrol"}},
-		// alfred has nothing about himself in the user or auth records.
-		{"alfred sees none", auditor("u-alfred", "alfred"), []string{"alfred-denied", "patrol"}},
+		// An audit viewer sees the one record the table classifies as safe
+		// for everyone: not a login, a logout or a user change even when it is
+		// theirs or about them, and not the permission denial (it names who was
+		// refused what).
+		{"dick sees only the safe record", auditor("u-dick", "dick"), []string{"patrol"}},
+		{"barbara sees only the safe record", auditor("u-barbara", "barbara"), []string{"patrol"}},
+		{"selina sees only the safe record", auditor("u-selina", "selina"), []string{"patrol"}},
+		{"alfred sees only the safe record", auditor("u-alfred", "alfred"), []string{"patrol"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			for _, limit := range []int{1, 2, 100} {
@@ -672,11 +671,11 @@ func TestVisibility_AuthAndUserRecords(t *testing.T) {
 // visible ones beyond a long withheld run.
 func TestVisibility_WithheldRecordsDoNotUseUpAPage(t *testing.T) {
 	e := newEnv(t)
-	first := e.write(t, audit.Event{Action: "books.library.scan", Outcome: audit.Success, Actor: actor("u-dick", "dick")})
+	first := e.write(t, audit.Event{Action: "core.role.update", Outcome: audit.Success, Actor: actor("u-dick", "dick")})
 	for i := 0; i < 12; i++ {
 		e.write(t, audit.Event{Action: "core.auth.login", Outcome: audit.Success, Actor: actor("u-selina", "selina"), Target: userRef("u-selina")})
 	}
-	last := e.write(t, audit.Event{Action: "books.library.scan", Outcome: audit.Success, Actor: actor("u-dick", "dick")})
+	last := e.write(t, audit.Event{Action: "core.role.update", Outcome: audit.Success, Actor: actor("u-dick", "dick")})
 	a := newAPI(e.store, nil)
 	p := auditor("u-dick", "dick")
 
@@ -722,7 +721,7 @@ func TestExport_StreamsNDJSONAndRecordsItself(t *testing.T) {
 		t.Errorf("Cache-Control = %q", got)
 	}
 	got := seqsOf(lines(t, rr))
-	want := []uint64{s["dick-logout-noTarget"], s["barbara-update"], s["bruce-disables-selina"], s["dick-login"]}
+	want := []uint64{s["dick-logout-noTarget"], s["barbara-update"], s["bruce-disables-selina"], s["patrol"], s["dick-login"]}
 	if !slices.Equal(got, want) {
 		t.Errorf("exported seqs = %v, want %v", got, want)
 	}
@@ -944,5 +943,33 @@ func TestRecords_PagesThroughBatches(t *testing.T) {
 	}
 	if n != 2 || rd.callCount() != 1 {
 		t.Errorf("seq-0 batch: %d records in %d queries", n, rd.callCount())
+	}
+}
+
+// TestVisibility_DefaultDeny: an action nobody classified is withheld from a
+// viewer who is not a user manager, and a user manager sees it. Credential and
+// identity actions under prefixes other than core.auth and core.user are
+// withheld too; a classified-safe action is shown.
+func TestVisibility_DefaultDeny(t *testing.T) {
+	e := newEnv(t)
+	safe := e.write(t, audit.Event{Action: "core.settings.update", Outcome: audit.Success, Actor: actor("u-dick", "dick")})
+	module := e.write(t, audit.Event{Action: "books.user.merge", Outcome: audit.Success, Actor: actor("u-dick", "dick")})
+	future := e.write(t, audit.Event{Action: "core.future.thing", Outcome: audit.Success, Actor: actor("u-dick", "dick")})
+	var sensitive []uint64
+	for _, act := range []string{"core.session.revoke", "core.apikey.create", "core.templogin.mint", "core.identity.link", "core.invite.create", "core.bootstrap.redeem", "core.permission.deny", "core.secret.rotate"} {
+		sensitive = append(sensitive, e.write(t, audit.Event{Action: act, Outcome: audit.Success, Actor: actor("u-dick", "dick"), Target: userRef("u-dick")}))
+	}
+	a := newAPI(e.store, &recorder{})
+	got := seqsOf(get(t, a, auditor("u-dick", "dick"), listReq{CursorParams: Limit0(100)}).Items)
+	if !slices.Equal(got, []uint64{safe}) {
+		t.Errorf("an audit viewer sees %v, want only the classified-safe record %d (module %d, future %d, sensitive %v withheld)", got, safe, module, future, sensitive)
+	}
+	all := seqsOf(get(t, a, commissioner(), listReq{CursorParams: Limit0(100)}).Items)
+	if len(all) != 3+len(sensitive) {
+		t.Errorf("a user manager sees %d records, want all %d", len(all), 3+len(sensitive))
+	}
+	rr := exportOf(a, auditor("u-dick", "dick"), "")
+	if strings.Contains(rr.Body.String(), "core.session.revoke") || strings.Contains(rr.Body.String(), "books.user.merge") || strings.Contains(rr.Body.String(), "core.future.thing") {
+		t.Errorf("the export carries a withheld record: %s", rr.Body)
 	}
 }
