@@ -1,7 +1,7 @@
 // file: core/kernel/audit.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e2c47a96-3b18-4f5d-a07e-8d1b6c9f3a24
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -69,6 +69,18 @@ func buildAudit(ctx context.Context, db *storage.DB, log *slog.Logger, now func(
 		return nil, fmt.Errorf("kernel: audit store: %w", err)
 	}
 	return s, nil
+}
+
+// OpenAudit builds the audit store over db's core/audit keyspace, the way a
+// boot does (buildAudit), for a caller that holds a *storage.DB and no boot:
+// the offline quarantine purge, which records its audit event in the purge's
+// own batch (PurgeQuarantine), and a test reading back the events an offline
+// command recorded. It reads the system clock; a nil log discards. It exists so
+// such a caller does not restate the keyspace's owner or its sequence's name
+// (auditSeqName), which are this file's to define. The store it returns has no
+// async writer running, so there is nothing to stop.
+func OpenAudit(ctx context.Context, db *storage.DB, log *slog.Logger) (*audit.Store, error) {
+	return buildAudit(ctx, db, log, time.Now)
 }
 
 // auditMetrics registers the store's instruments on the core "audit" scope

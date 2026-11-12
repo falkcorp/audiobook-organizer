@@ -1,7 +1,7 @@
 // file: core/app/offline_storage_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1805cd97-f796-434f-9fa0-32dc6931c03b
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package app
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -162,11 +163,7 @@ func TestQuarantineCommandsCLI(t *testing.T) {
 	if left, err := db.Quarantine(ctx, "gcpd.case-files"); err != nil || len(left) != 0 {
 		t.Errorf("quarantine after the purge = %d records, %v; want none", len(left), err)
 	}
-	aks, ok := db.Keyspace("core/audit")
-	if !ok {
-		t.Fatal("the store has no core/audit keyspace")
-	}
-	as, err := audit.New(ctx, audit.Options{}, audit.Deps{Keyspace: aks, Seq: aks.Sequence("seq")})
+	as, err := kernel.OpenAudit(ctx, db, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
