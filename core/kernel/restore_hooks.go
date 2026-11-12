@@ -1,5 +1,5 @@
 // file: core/kernel/restore_hooks.go
-// version: 1.4.0
+// version: 1.4.2
 // guid: b84e1f27-6c93-4d05-8a7e-2f1d9c3b5e60
 // last-edited: 2026-11-12
 
@@ -417,8 +417,8 @@ func reapplyApplyFor(s hookStores) reapplyApply {
 			rep, err := rbac.StageReapply(ctx, roleDeps, b, lines)
 			return rep.KeptAdmins, err
 		},
-		RestrictLastAdmin: func(ctx context.Context, id string) error {
-			_, err := auth.RestrictLastAdmin(ctx, authDeps, auth.UserID(id))
+		RestrictLastAdmins: func(ctx context.Context, ids []string) error {
+			_, err := auth.RestrictLastAdmins(ctx, authDeps, userIDs(ids))
 			return err
 		},
 		FailClosed: func(ctx context.Context) (map[string]int, error) {
@@ -426,6 +426,15 @@ func reapplyApplyFor(s hookStores) reapplyApply {
 			return c, err
 		},
 	}
+}
+
+// userIDs is ids as auth's user IDs.
+func userIDs(ids []string) []auth.UserID {
+	users := make([]auth.UserID, len(ids))
+	for i, id := range ids {
+		users[i] = auth.UserID(id)
+	}
+	return users
 }
 
 // restoreHookList is the Hooks builder over live P4c handles: auth's
@@ -439,8 +448,8 @@ func restoreHookList(s hookStores) func(env hookEnv) ([]journal.RestoreHook, err
 		roleDeps := rbac.RestoreDeps{
 			Store: s.Roles, NewBatch: s.Roles.NewBatch, Users: &restoreUsers{store: s.Auth, now: s.Clock},
 			Revocations: env.Journal, Clock: s.Clock, Log: s.Log,
-			RestrictLastAdmin: func(ctx context.Context, id string) (map[string]int, error) {
-				c, err := auth.RestrictLastAdmin(ctx, authDeps, auth.UserID(id))
+			RestrictLastAdmins: func(ctx context.Context, ids []string) (map[string]int, error) {
+				c, err := auth.RestrictLastAdmins(ctx, authDeps, userIDs(ids))
 				return c, err
 			},
 		}
