@@ -1,5 +1,5 @@
 // file: core/internal/authstore/store.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: a7b06243-983e-42c3-9979-3aacdb3d3374
 // last-edited: 2026-11-12
 
@@ -1689,12 +1689,12 @@ func (s *Store) ImportIdentity(b *storage.Batch, id *auth.ExternalIdentity) erro
 		return err
 	}
 	if err := s.ownerPresent(b, id.UserID); err != nil {
-		return reject("identity %s/%s: %v", id.Provider, id.Subject, err)
+		return reject("identity of provider %s: %v", id.Provider, err)
 	}
 	if cur, err := s.committed(identityKey(id.Provider, id.Subject)); err != nil {
 		return reject("%v", err)
 	} else if cur != nil {
-		return reject("identity %s/%s is already stored", id.Provider, id.Subject)
+		return reject("an identity of provider %s with this subject is already stored", id.Provider)
 	}
 	if err := s.stageIdentity(b, id); err != nil {
 		return reject("%v", err)
