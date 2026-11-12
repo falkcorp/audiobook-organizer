@@ -1,5 +1,5 @@
 // file: core/realtime/hub_synctest_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b3e81d54-2f67-4c09-a1d8-6e5f0c7a9b32
 // last-edited: 2026-11-12
 
@@ -121,6 +121,9 @@ type pipe struct {
 	open     chan struct{}
 	deadline time.Time
 	moved    chan struct{} // a buffered signal: the deadline changed
+	// deaf makes a gated write ignore deadlines altogether: a connection that
+	// neither reads nor honours SetWriteDeadline.
+	deaf bool
 }
 
 func newPipe(gateFrom int) *pipe {
@@ -150,10 +153,14 @@ func (p *pipe) Write(b []byte) (int, error) {
 		p.mu.Lock()
 		dl := p.deadline
 		p.mu.Unlock()
-		if !dl.After(time.Now()) {
+		if !p.deaf && !dl.After(time.Now()) {
 			return 0, os.ErrDeadlineExceeded
 		}
-		timer := time.NewTimer(time.Until(dl))
+		wait := time.Until(dl)
+		if p.deaf {
+			wait = time.Hour
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-p.open:
 			timer.Stop()
@@ -635,6 +642,9 @@ func TestHub_ShutdownDrainsWithinBudget(t *testing.T) {
 			if d := time.Since(start); d != 0 {
 				t.Errorf("Close took %v", d)
 			}
+			// Close returns when the last stream is released; the handlers return
+			// a moment after that.
+			synctest.Wait()
 			for i, w := range pipes {
 				if !hasFinished(dones[i]) || closedReason(t, w.text()) != "shutdown" {
 					t.Errorf("stream %d:\n%s", i, w.text())
@@ -658,12 +668,12 @@ func TestHub_ShutdownDrainsWithinBudget(t *testing.T) {
 			w := newPipe(2) // the closed frame is its second write, and blocks
 			done := b.serve(t.Context(), principal("bruce", scopeView), w, "/events")
 			synctest.Wait()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 			start := time.Now()
 			err := b.hub.Close(ctx)
-			if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) != time.Second {
-				t.Errorf("Close = %v after %v, want the deadline error at 1s", err, time.Since(start))
+			if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) != 500*time.Millisecond {
+				t.Errorf("Close = %v after %v, want the deadline error at 500ms", err, time.Since(start))
 			}
 			time.Sleep(20 * time.Second)
 			synctest.Wait()
@@ -676,7 +686,9 @@ func TestHub_ShutdownDrainsWithinBudget(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			b := newBubble(t, realtime.Options{WriteTimeout: time.Minute}, realtime.Deps{}, nil)
 			defer b.stop()
-			b.serve(t.Context(), principal("bruce", scopeView), newPipe(2), "/events")
+			w := newPipe(2) // the closed frame is its second write and blocks...
+			w.deaf = true   // ...and the connection honours no deadline
+			b.serve(t.Context(), principal("bruce", scopeView), w, "/events")
 			synctest.Wait()
 			ctx, cancel := context.WithCancel(context.Background())
 			var runErr atomic.Value
@@ -692,7 +704,7 @@ func TestHub_ShutdownDrainsWithinBudget(t *testing.T) {
 			if err, _ := runErr.Load().(error); err == nil {
 				t.Error("Run reported a clean drain with a stream still open")
 			}
-			time.Sleep(time.Minute) // the stuck write expires and the stream ends
+			close(w.open) // the client finally reads: the stream ends
 			synctest.Wait()
 		})
 	})
@@ -892,9 +904,10 @@ func TestHub_DroppedTopicsDoNotFillTheQueue(t *testing.T) {
 }
 
 // TestHub_ShutdownInterruptsAWriteInFlight: a client that stopped reading
-// holds a write; Close moves that write's deadline to now, so the stream ends
-// at once with the shutdown reason instead of waiting out WriteTimeout, and
-// Close returns without using its budget.
+// holds a write; Close moves that write's deadline to a short grace in the
+// future (never to the past, which resets an HTTP/2 stream), so the stream ends
+// with the shutdown reason after the grace instead of waiting out WriteTimeout,
+// and Close returns without using its budget.
 func TestHub_ShutdownInterruptsAWriteInFlight(t *testing.T) {
 	for name, end := range map[string]func(b *bubble, ctx context.Context) error{
 		"Close": func(b *bubble, ctx context.Context) error { return b.hub.Close(ctx) },
@@ -923,8 +936,8 @@ func TestHub_ShutdownInterruptsAWriteInFlight(t *testing.T) {
 				if err := end(b, t.Context()); err != nil {
 					t.Fatalf("%s = %v", name, err)
 				}
-				if d := time.Since(start); d != 0 {
-					t.Errorf("%s took %v of fake time with a write in flight", name, d)
+				if d := time.Since(start); d != time.Second {
+					t.Errorf("%s took %v of fake time with a write in flight, want the 1s interrupt grace (WriteTimeout is 50s)", name, d)
 				}
 				synctest.Wait()
 				if !hasFinished(done) {
@@ -933,6 +946,89 @@ func TestHub_ShutdownInterruptsAWriteInFlight(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestHub_RefreshMustAnswerForTheSameCredential: Refresh supplies rights, not
+// identity. An answer for another credential, or another method, ends the
+// stream permission_revoked; an answer for the same credential narrows rights
+// and Revalidate keeps checking the principal the request authenticated as,
+// never the one Refresh returned.
+func TestHub_RefreshMustAnswerForTheSameCredential(t *testing.T) {
+	for name, mod := range map[string]func(p *auth.Principal){
+		"another credential": func(p *auth.Principal) { p.CredentialID = "k-robin" },
+		"another method":     func(p *auth.Principal) { p.Method = auth.MethodAPIKey },
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				b := newBubble(t, realtime.Options{Heartbeat: 15 * time.Second}, realtime.Deps{
+					Refresh: func(_ context.Context, old *auth.Principal) (*auth.Principal, error) {
+						np := *old
+						mod(&np)
+						return &np, nil
+					},
+				}, nil)
+				defer b.stop()
+				w := newPipe(0)
+				done := b.serve(t.Context(), principal("bruce", scopeView), w, "/events")
+				synctest.Wait()
+				time.Sleep(15 * time.Second)
+				synctest.Wait()
+				if !hasFinished(done) || closedReason(t, w.text()) != "permission_revoked" {
+					t.Errorf("a Refresh for %s did not end the stream permission_revoked:\n%s", name, w.text())
+				}
+			})
+		})
+	}
+	t.Run("the same credential keeps the stream and is what Revalidate checks", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var mu sync.Mutex
+			var seen, askedAbout []*auth.Principal
+			orig := principal("bruce", scopeView, scopeRun)
+			b := newBubble(t, realtime.Options{Heartbeat: 15 * time.Second}, realtime.Deps{
+				Auth: revalFunc(func(_ context.Context, p *auth.Principal) error {
+					mu.Lock()
+					seen = append(seen, p)
+					mu.Unlock()
+					return nil
+				}),
+				Refresh: func(_ context.Context, old *auth.Principal) (*auth.Principal, error) {
+					mu.Lock()
+					askedAbout = append(askedAbout, old)
+					mu.Unlock()
+					np := *old
+					np.Perms = principal("bruce", scopeView).Perms // same credential, fewer rights
+					return &np, nil
+				},
+			}, nil)
+			defer b.stop()
+			w := newPipe(0)
+			done := b.serve(t.Context(), orig, w, "/events")
+			synctest.Wait()
+			time.Sleep(45 * time.Second)
+			synctest.Wait()
+			if hasFinished(done) {
+				t.Fatalf("a same-credential Refresh ended the stream:\n%s", w.text())
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(seen) < 3 {
+				t.Fatalf("Revalidate ran %d times over three heartbeats", len(seen))
+			}
+			for i, p := range seen {
+				if p != orig {
+					t.Errorf("Revalidate call %d got a different principal than the request's", i)
+				}
+			}
+			if len(askedAbout) < 3 {
+				t.Fatalf("Refresh ran %d times over three heartbeats", len(askedAbout))
+			}
+			for i, p := range askedAbout {
+				if p != orig {
+					t.Errorf("Refresh call %d was asked about a principal other than the request's", i)
+				}
+			}
+		})
+	})
 }
 
 // TestHub_CheckPanicEndsTheStream: a panic in Refresh or Revalidate (both the

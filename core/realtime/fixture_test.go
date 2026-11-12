@@ -1,5 +1,5 @@
 // file: core/realtime/fixture_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ea2c4934-b4a3-4e4c-ac47-4a7c90f8f521
 // last-edited: 2026-11-12
 
@@ -436,6 +436,13 @@ func (r *roster) get(name string) *auth.Principal {
 
 func (e *env) serve(t testing.TB, h http.Handler) (*httptest.Server, *roster) {
 	t.Helper()
+	return e.serveProto(t, h, false)
+}
+
+// serveProto is serve over TLS with HTTP/2 negotiated when h2 is set (the
+// production transport), and plain HTTP/1.1 otherwise.
+func (e *env) serveProto(t testing.TB, h http.Handler, h2 bool) (*httptest.Server, *roster) {
+	t.Helper()
 	ro := &roster{}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p := ro.get(r.Header.Get("X-Test-Principal")); p != nil {
@@ -443,7 +450,12 @@ func (e *env) serve(t testing.TB, h http.Handler) (*httptest.Server, *roster) {
 		}
 		h.ServeHTTP(w, r)
 	}))
-	srv.Start()
+	if h2 {
+		srv.EnableHTTP2 = true
+		srv.StartTLS()
+	} else {
+		srv.Start()
+	}
 	t.Cleanup(srv.Close)
 	return srv, ro
 }

@@ -1,5 +1,5 @@
 // file: core/realtime/realtime.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 213444a2-5f76-43a9-984f-548693fefa25
 // last-edited: 2026-11-12
 
@@ -156,6 +156,13 @@ type Deps struct {
 	// a store failure is retried on each heartbeat, withholds every event
 	// while it persists, and ends the stream permission_revoked on the third
 	// in a row.
+	//
+	// The answer must be for the SAME credential: its Method and CredentialID
+	// must equal the request principal's, else the stream ends
+	// permission_revoked. Only its rights are used; Revalidate keeps checking
+	// the request principal's own credential. A key principal must therefore
+	// be rebuilt over the key's own scopes (never over the owner's full role
+	// set), or the stream would see more than the key may.
 	Refresh func(ctx context.Context, p *auth.Principal) (*auth.Principal, error)
 }
 

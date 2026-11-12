@@ -1,5 +1,5 @@
 // file: core/internal/sse/broker.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9889a9af-4387-41da-9d7a-db513446cc95
 // last-edited: 2026-11-12
 
@@ -85,9 +85,9 @@ type Hooks struct {
 	Reset   func(reason string) // a core.stream.reset.v1 frame was written
 	Dropped func(n int)         // n queued entries were dropped on overflow
 	Closed  func(reason string) // a stream ended
-	// InterruptFailed is called when ending a stream could not move its write
-	// deadline to now (so a write in flight runs to its own deadline); it runs
-	// on the goroutine that ended the stream, under the broker's lock.
+	// InterruptFailed is called when ending a stream could not shorten the
+	// deadline of a write in flight (so it runs to its own deadline); it runs on
+	// the goroutine that ended the stream, after the broker's lock is released.
 	InterruptFailed func(err error)
 }
 
@@ -313,14 +313,17 @@ func (b *Broker) Subscribe(req Subscription) (*Subscriber, error) {
 // their own goroutines.
 func (b *Broker) End(match func(meta any) bool, reason string) int {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	n := 0
+	var ended []*Subscriber
 	for s := range b.subs {
 		if match(s.meta) && s.end(reason) {
-			n++
+			ended = append(ended, s)
 		}
 	}
-	return n
+	b.mu.Unlock()
+	for _, s := range ended {
+		s.interrupt()
+	}
+	return len(ended)
 }
 
 // WakeAll wakes every subscriber so each runs its judge's Check on its own
@@ -354,12 +357,18 @@ func (b *Broker) OldestAge() time.Duration {
 // It is idempotent. Wait reports when the last stream has returned.
 func (b *Broker) Close() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.closed = true
+	var ended []*Subscriber
 	for s := range b.subs {
-		s.end(CloseShutdown)
+		if s.end(CloseShutdown) {
+			ended = append(ended, s)
+		}
 	}
 	b.signalIdleLocked()
+	b.mu.Unlock()
+	for _, s := range ended {
+		s.interrupt()
+	}
 }
 
 // Wait returns when the broker is closed and its last subscriber has left, or
