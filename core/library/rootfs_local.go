@@ -1,5 +1,5 @@
 // file: core/library/rootfs_local.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
 // last-edited: 2026-11-11
 
@@ -31,6 +31,12 @@ import (
 type fsOps interface {
 	RootFS
 	renameNoReplaceInto(dst fsOps, oldname, newname string) error
+	// renameOverInto replaces whatever is at newname. Only the placeholder
+	// protocol (placeholder.go) calls it, on a name it created itself.
+	renameOverInto(dst fsOps, oldname, newname string) error
+	// mkdirExclusive creates the one directory newname; any existing entry is
+	// fs.ErrExist (MkdirAll treats an existing directory as success).
+	mkdirExclusive(name string, perm fs.FileMode) error
 	linkInto(dst fsOps, oldname, newname string) error
 	reflinkInto(dst fsOps, oldname, newname string) error
 	local() *localFS
@@ -399,6 +405,16 @@ func (l *localFS) RenameNoReplace(oldname, newname string) error {
 }
 
 func (l *localFS) renameNoReplaceInto(dst fsOps, oldname, newname string) error {
+	return l.renameInto(dst, oldname, newname, false)
+}
+
+func (l *localFS) renameOverInto(dst fsOps, oldname, newname string) error {
+	return l.renameInto(dst, oldname, newname, true)
+}
+
+// renameInto is the rename of oldname in l to newname in dst, with every check a
+// mutation has. over lets it replace; it is for the placeholder protocol only.
+func (l *localFS) renameInto(dst fsOps, oldname, newname string, over bool) error {
 	o, err := l.mut("rename", oldname)
 	if err != nil {
 		return err
@@ -429,7 +445,28 @@ func (l *localFS) renameNoReplaceInto(dst fsOps, oldname, newname string) error 
 		return err
 	}
 	defer closeLogged(l.log, nd, n)
+	if over {
+		return libfs.RenameOver(od, ob, nd, nb)
+	}
 	return libfs.RenameNoReplace(od, ob, nd, nb)
+}
+
+// mkdirExclusive creates the single directory name. Like every mutation it is
+// judged from the descriptor of the directory that holds it on a sealed view.
+func (l *localFS) mkdirExclusive(name string, perm fs.FileMode) error {
+	n, err := l.mut("mkdir", name)
+	if err != nil {
+		return err
+	}
+	if l.sealed {
+		d, base, err := l.mutParent("mkdir", n)
+		if err != nil {
+			return err
+		}
+		defer closeLogged(l.log, d, "the directory holding "+name)
+		return pathErr("mkdir", name, libfs.MkdirAt(d, base, perm))
+	}
+	return pathErr("mkdir", name, l.root.Mkdir(n, perm))
 }
 
 func (l *localFS) Link(oldname, newname string) error { return l.linkInto(l, oldname, newname) }

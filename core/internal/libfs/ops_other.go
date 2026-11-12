@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_other.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a83c203b-ea72-45f4-acb5-0a216009d1da
 // last-edited: 2026-11-11
 
@@ -11,44 +11,33 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path/filepath"
 )
 
-// This file keeps the package compiling and usable on platforms without
-// directory-relative syscalls (Windows). Names resolve against the directory's
-// path instead of its descriptor, so the confinement the unix build gets from
-// the descriptor is the caller's here; core targets unix first (13 §13.2) and
-// 05-library 5L.3.2 names MoveFileEx for the Windows no-replace rename, which
-// is the follow-up this fallback stands in for.
+// This file keeps the package compiling on platforms without directory-relative
+// syscalls (Windows). Everything that mutates through a directory, or names two
+// of them, refuses with errors.ErrUnsupported: a path-based stand-in cannot be
+// confined to the directory the caller proved, and the no-replace rename it
+// would need (MoveFileEx without REPLACE_EXISTING, which 05-library 5L.3.2
+// names) is the handle-based follow-up. Core targets unix first (13 section 13.2).
 
-// Link makes newName in nd a hard link to oldName in od. An existing newName is
-// fs.ErrExist.
-func Link(od *Dir, oldName string, nd *Dir, newName string) error {
-	if err := errors.Join(require(od, nd), checkName(oldName), checkName(newName)); err != nil {
-		return err
-	}
-	return os.Link(filepath.Join(od.f.Name(), oldName), filepath.Join(nd.f.Name(), newName))
-}
+// HasHandles is false: the operations below that name a directory descriptor
+// refuse, and with them every transfer.
+const HasHandles = false
 
-// RenameNoReplace is the checked rename: Lstat the destination, then rename. It
-// has a time-of-check/time-of-use window.
-func RenameNoReplace(od *Dir, oldName string, nd *Dir, newName string) error {
-	if err := errors.Join(require(od, nd), checkName(oldName), checkName(newName)); err != nil {
-		return err
-	}
-	return RenameNoReplaceFallback(od, oldName, nd, newName)
-}
+// Link is refused: a path-based link cannot be confined to the directory the
+// caller proved, so nothing links here.
+func Link(*Dir, string, *Dir, string) error { return errNoHandles }
 
-// RenameNoReplaceFallback is the checked rename.
-func RenameNoReplaceFallback(od *Dir, oldName string, nd *Dir, newName string) error {
-	oldPath, newPath := filepath.Join(od.f.Name(), oldName), filepath.Join(nd.f.Name(), newName)
-	if _, err := os.Lstat(newPath); err == nil {
-		return &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: fs.ErrExist}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return os.Rename(oldPath, newPath)
-}
+// RenameNoReplace is refused: its stand-in, Lstat then os.Rename, replaces a
+// file another writer created in between, and MoveFileEx without
+// REPLACE_EXISTING (the follow-up 05-library 5L.3.2 names) is not wired yet.
+func RenameNoReplace(*Dir, string, *Dir, string) error { return errNoHandles }
+
+// RenameNoReplaceFallback is refused, like RenameNoReplace.
+func RenameNoReplaceFallback(*Dir, string, *Dir, string) error { return errNoHandles }
+
+// RenameOver is refused.
+func RenameOver(*Dir, string, *Dir, string) error { return errNoHandles }
 
 // SyncDir is a no-op: Windows has no directory fsync.
 func SyncDir(d *Dir) error { return require(d) }

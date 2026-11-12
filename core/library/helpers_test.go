@@ -1,5 +1,5 @@
 // file: core/library/helpers_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 34ac2131-b6fb-47d9-b049-9f60d823773c
 // last-edited: 2026-11-11
 
@@ -170,6 +170,20 @@ func (w faultFS) renameNoReplaceInto(dst fsOps, o, n string) error {
 	return w.fsOps.renameNoReplaceInto(dst, o, n)
 }
 
+func (w faultFS) renameOverInto(dst fsOps, o, n string) error {
+	if err := w.f.step(w.lab("renameover", o+"->"+n)); err != nil {
+		return err
+	}
+	return w.fsOps.renameOverInto(dst, o, n)
+}
+
+func (w faultFS) mkdirExclusive(name string, perm fs.FileMode) error {
+	if err := w.f.step(w.lab("mkdirx", name)); err != nil {
+		return err
+	}
+	return w.fsOps.mkdirExclusive(name, perm)
+}
+
 func (w faultFS) linkInto(dst fsOps, o, n string) error {
 	if err := w.f.step(w.lab("link", o+"->"+n)); err != nil {
 		return err
@@ -216,6 +230,15 @@ func (w faultFile) Sync() error {
 		return err
 	}
 	return w.File.Sync()
+}
+
+// Close is a step too: the placeholder protocol closes the empty file it just
+// made, and a test swaps the entry for a foreign one at that instant.
+func (w faultFile) Close() error {
+	if err := w.f.step("close:" + w.name); err != nil {
+		return errors.Join(err, w.File.Close()) // the descriptor must not leak because the process "died"
+	}
+	return w.File.Close()
 }
 
 // faultStore counts and can kill the durable journal writes.

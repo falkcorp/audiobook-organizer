@@ -1,5 +1,5 @@
 // file: core/library/recover.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 806040d6-fa0f-435b-bd89-14287546fc22
 // last-edited: 2026-11-11
 
@@ -185,6 +185,9 @@ func (m *manager) recoverTransfer(ctx context.Context, row transferRow) (outcome
 	if _, rs.asideOK, err = peek(rs.dfs, row.Aside); err != nil {
 		return outBlocked, err
 	}
+	if err := rs.dropPlaceholder(ctx); err != nil {
+		return outBlocked, err
+	}
 	var out outcome
 	switch row.State {
 	case stBegun:
@@ -199,6 +202,38 @@ func (m *manager) recoverTransfer(ctx context.Context, row transferRow) (outcome
 		return outConflict, m.dropRow(ctx, row, fmt.Errorf("unknown state %q", row.State))
 	}
 	return out, err
+}
+
+// markPlacing journals a placeholder rename of recovery's own (the same row the
+// transfer wrote, so a crash during recovery finds it again).
+func (rs *recoverState) markPlacing(ctx context.Context, p *Path) error {
+	rs.row.Placing = p
+	return rs.m.jrn.put(ctx, rs.row.ID, rs.row)
+}
+
+// dropPlaceholder removes the empty entry a crashed placeholder rename left at
+// the destination (placeholder.go): the row says one may exist, and the path
+// that was being renamed there is still where it was. The state's view of the
+// destination is refreshed when the entry goes.
+func (rs *recoverState) dropPlaceholder(ctx context.Context) error {
+	p := rs.row.Placing
+	if p == nil || !rs.dstOK {
+		return nil
+	}
+	from := rs.dfs
+	if p.Root == rs.row.Src.Root && p.Root != rs.row.Dst.Root {
+		from = rs.sfs
+	}
+	freed, err := rs.m.dropPlaceholder(from, p.Rel, rs.dfs, rs.row.Dst.Rel)
+	if err != nil {
+		return err
+	}
+	if freed {
+		rs.dstSt, rs.dstOK = nil, false
+		// The mark has done its job; a crash from here finds the destination free.
+		return rs.markPlacing(ctx, nil)
+	}
+	return nil
 }
 
 // rowProblem is why a journal row cannot be trusted to name files, or nil.
@@ -330,7 +365,7 @@ func (rs *recoverState) fromReplacing(ctx context.Context) (outcome, error) {
 	case newInPlace:
 		return rs.forward(ctx)
 	case rs.asideOK && !rs.dstOK:
-		if err := rs.dfs.RenameNoReplace(row.Aside, row.Dst.Rel); err != nil {
+		if err := rs.restoreAside(ctx); err != nil {
 			return outRolledBack, err
 		}
 		return rs.rollBack(ctx)
@@ -396,8 +431,9 @@ func (rs *recoverState) forward(ctx context.Context) (outcome, error) {
 // while it is not there: the directory entry did not survive. What is left is
 // put to the best use that loses nothing.
 //
-//   - The temp is there: it holds the verified bytes, so it is linked to the
-//     final name again and the transfer goes on from there.
+//   - The temp is there: it holds the verified bytes, so it is published to the
+//     final name again (a link, or a no-replace rename where there are no links)
+//     and the transfer goes on from there.
 //   - The temp is gone and the replaced file is set aside: the old file goes
 //     back to its name and the transfer is undone (the source is still there: it
 //     is removed only after the aside is).
@@ -406,7 +442,7 @@ func (rs *recoverState) forwardWithoutDestination(ctx context.Context) (outcome,
 	row, m := rs.row, rs.m
 	switch {
 	case rs.tmpOK:
-		if err := rs.dfs.Link(rs.tmp, row.Dst.Rel); err != nil {
+		if err := rs.m.publishTemp(ctx, rs.markPlacing, rs.dfs, row.Dst.Root, rs.tmp, row.Dst.Rel); err != nil {
 			if errors.Is(err, fs.ErrExist) {
 				return outConflict, m.dropRow(ctx, row, errors.New("the destination name was taken after the publish was lost; the temp and the replaced file are kept"))
 			}
@@ -418,12 +454,19 @@ func (rs *recoverState) forwardWithoutDestination(ctx context.Context) (outcome,
 		}
 		return rs.forward(ctx)
 	case rs.asideOK:
-		if err := rs.dfs.RenameNoReplace(row.Aside, row.Dst.Rel); err != nil {
+		if err := rs.restoreAside(ctx); err != nil {
 			return outRolledBack, err
 		}
 		return rs.rollBack(ctx)
 	}
 	return outConflict, m.dropRow(ctx, row, errors.New("the journal says the destination was published; it is not there and no temp or replaced file remains"))
+}
+
+// restoreAside puts the replaced file back at the destination, never replacing
+// what has appeared there since.
+func (rs *recoverState) restoreAside(ctx context.Context) error {
+	aside := Path{Root: rs.row.Dst.Root, Rel: rs.row.Aside}
+	return rs.m.renameExclusive(ctx, rs.markPlacing, rs.dfs, aside, rs.dfs, rs.row.Dst.Rel, false)
 }
 
 // ---- quarantine ----
@@ -434,7 +477,11 @@ func (m *manager) recoverQuarantine(ctx context.Context, q quarantineRow) (outco
 	if err != nil {
 		return outBlocked, nil
 	}
-	unlock := m.lockPaths(q.Original, q.Held)
+	paths := []Path{q.Original, q.Held}
+	if q.To != nil {
+		paths = append(paths, *q.To)
+	}
+	unlock := m.lockPaths(paths...)
 	defer unlock()
 	_, heldOK, err := peek(r.rw, q.Held.Rel)
 	if err != nil {
@@ -449,7 +496,16 @@ func (m *manager) recoverQuarantine(ctx context.Context, q quarantineRow) (outco
 		return outRolledBack, m.qrn.remove(ctx, string(q.ID))
 	case qReleasing:
 		if heldOK {
-			q.State, q.To = qHeld, nil
+			// A Release that stopped between reserving its target and renaming
+			// onto it left an empty placeholder there.
+			if q.Placing != nil && q.To != nil {
+				if tr, terr := m.rootForRecovery(ctx, q.To.Root); terr == nil {
+					if _, derr := m.dropPlaceholder(r.rw, q.Held.Rel, tr.rw, q.To.Rel); derr != nil {
+						return outBlocked, derr
+					}
+				}
+			}
+			q.State, q.To, q.Placing = qHeld, nil, nil
 			return outRolledBack, m.qrn.put(ctx, string(q.ID), q)
 		}
 		m.tidyQuarantineDir(r, q)

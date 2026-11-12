@@ -1,5 +1,5 @@
 // file: core/library/transfer.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 534f60c5-c088-4e70-962c-8bcddbfafc71
 // last-edited: 2026-11-11
 
@@ -108,6 +108,9 @@ func (m *manager) transfer(ctx context.Context, b *storage.Batch, caller storage
 // check is step 0 and the mount half of step 1: paths, rights, protection.
 func (x *xfer) check() error {
 	m := x.m
+	if err := m.needHandles(); err != nil {
+		return err
+	}
 	if x.src.IsRoot() || x.dst.IsRoot() {
 		return fmt.Errorf("%w: a root directory is not a transfer endpoint", ErrBadTransfer)
 	}
@@ -255,6 +258,7 @@ func (x *xfer) run() (TransferResult, error) {
 		// already undone what it could, and settle keeps the row when something
 		// is still on disk that only recovery can find.
 		x.settle()
+		err = classifyUnsupported(err)
 		if errors.Is(err, ErrRecoveryPending) && x.published {
 			part := x.res
 			part.Did = x.row.Did
@@ -283,10 +287,17 @@ func (x *xfer) persist(ctx context.Context, st rowState) error {
 // still set aside, and no temp file may remain. A row that is kept names the
 // work Recover owes; deleting it would orphan the replaced file or the temp.
 func (x *xfer) settle() {
-	if x.published || x.row.Aside != "" || x.tmpLeft {
+	if x.published || x.row.Aside != "" || x.tmpLeft || x.row.Placing != nil {
 		return
 	}
 	x.abandon()
+}
+
+// markPlacing journals that a placeholder may exist at the destination (see
+// placeholder.go), or withdraws it. It writes the row in the state it is in.
+func (x *xfer) markPlacing(ctx context.Context, p *Path) error {
+	x.row.Placing = p
+	return x.persist(ctx, x.row.State)
 }
 
 // abandon deletes the row of a transfer that changed nothing (or whose partial
@@ -315,8 +326,13 @@ func (x *xfer) pending(err error) error {
 func (x *xfer) unwind(cause error, tmp string) error {
 	var errs []error
 	errs = append(errs, x.restoreAside())
-	if tmp != "" && x.tmpLeft {
+	// While a placeholder may remain at the destination the temp stays too: it is
+	// what recovery recognises the placeholder by (placeholder.go).
+	if tmp != "" && x.tmpLeft && x.row.Placing == nil {
 		errs = append(errs, x.removeTemp(tmp))
+	}
+	if x.row.Placing != nil {
+		errs = append(errs, errors.New("a placeholder may remain at the destination"))
 	}
 	if rerr := errors.Join(errs...); rerr != nil {
 		return x.pending(withRollback(cause, "the failed transfer", rerr))
@@ -396,7 +412,7 @@ func (x *xfer) doMove() error {
 			return x.unwind(err, "")
 		}
 	}
-	err := x.sfs.renameNoReplaceInto(x.dfs, x.src.Rel, x.dst.Rel)
+	err := x.m.renameExclusive(x.ctx, x.markPlacing, x.sfs, x.src, x.dfs, x.dst.Rel, x.info.IsDir())
 	switch {
 	case err == nil:
 		x.published = true
@@ -531,9 +547,12 @@ func (x *xfer) copyPath(did TransferMode, clone, removeSrc bool) error {
 			return x.unwind(err, tmp)
 		}
 	}
-	// Publish: Link refuses an existing name, so a creator that got there first
-	// wins and our temp goes (never a rename over it).
-	if err := x.dfs.Link(tmp, x.dst.Rel); err != nil {
+	// Publish: a link, or a no-replace rename, refuses an existing name, so a
+	// creator that got there first wins and our temp goes (never a rename over it).
+	// Where the filesystem makes no hard links the publish is a no-replace rename
+	// (or, with no atomic rename either, a rename over a placeholder this
+	// transfer made); the temp is then consumed and removeTemp finds it gone.
+	if err := x.m.publishTemp(x.ctx, x.markPlacing, x.dfs, x.dst.Root, tmp, x.dst.Rel); err != nil {
 		return x.unwind(err, tmp)
 	}
 	x.published = true
@@ -853,7 +872,7 @@ func (x *xfer) replaceAside() error {
 		x.row.Aside = ""
 		return err
 	}
-	if err := x.dfs.RenameNoReplace(x.dst.Rel, aside); err != nil {
+	if err := x.m.renameFresh(x.dfs, x.dst.Rel, x.dfs, aside); err != nil {
 		// A refused rename moved nothing, so no file is set aside. One that stopped
 		// half way (a link made, the old name not yet removed) left a name there,
 		// and the row keeps pointing at it.
@@ -879,7 +898,8 @@ func (x *xfer) restoreAside() error {
 	if x.row.Aside == "" {
 		return nil
 	}
-	if err := x.dfs.RenameNoReplace(x.row.Aside, x.dst.Rel); err != nil {
+	aside := Path{Root: x.dst.Root, Rel: x.row.Aside}
+	if err := x.m.renameExclusive(x.bg, x.markPlacing, x.dfs, aside, x.dfs, x.dst.Rel, false); err != nil {
 		x.m.log.Error("library: could not restore a replaced file; recovery will try", "root", x.dst.Root, "aside", x.row.Aside, "err", err)
 		return err
 	}
