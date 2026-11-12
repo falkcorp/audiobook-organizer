@@ -44,10 +44,15 @@ func pending(id ai.BatchJobID) ai.StoredJob {
 	}
 }
 
-// write stages fn into a fresh batch and commits it.
-func write(ctx context.Context, fx JobStoreFixture, fn func(b *storage.Batch) error) error {
+// write stages fn into a fresh batch and commits it. A failed Close is the
+// error when nothing else failed, as in core's rbac service.
+func write(ctx context.Context, fx JobStoreFixture, fn func(b *storage.Batch) error) (err error) {
 	b := fx.NewBatch()
-	defer func() { _ = b.Close() }()
+	defer func() {
+		if cerr := b.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close batch: %w", cerr)
+		}
+	}()
 	if err := fn(b); err != nil {
 		return err
 	}
@@ -189,7 +194,11 @@ func JobStoreSuite(t *testing.T, factory func(t *testing.T) JobStoreFixture) {
 		if !errors.Is(err, ai.ErrJobConflict) {
 			t.Fatalf("Transition from the wrong state = %v, want ErrJobConflict", err)
 		}
-		if got, _ := fx.Store.Get(ctx, cur.ID); got.State != ai.JobPending {
+		got, err := fx.Store.Get(ctx, cur.ID)
+		if err != nil {
+			t.Fatalf("Get after a failed Transition: %v", err)
+		}
+		if got.State != ai.JobPending {
 			t.Fatalf("a failed Transition changed the job to %s", got.State)
 		}
 		if err := move(ctx, fx, "riddler-404", ai.JobPending, to(cur, ai.JobSubmitted, 0)); err == nil {
@@ -218,7 +227,11 @@ func JobStoreSuite(t *testing.T, factory func(t *testing.T) JobStoreFixture) {
 		if err := move(ctx, fx, cur.ID, ai.JobApplying, to(cur, ai.JobApplying, 3)); err != nil {
 			t.Fatal(err)
 		}
-		if got, _ := fx.Store.Get(ctx, cur.ID); got.State != ai.JobApplying || got.ApplyAttempts != 3 {
+		got, err := fx.Store.Get(ctx, cur.ID)
+		if err != nil {
+			t.Fatalf("Get after the Transition: %v", err)
+		}
+		if got.State != ai.JobApplying || got.ApplyAttempts != 3 {
 			t.Fatalf("Get = %+v, want Applying with 3 attempts", got)
 		}
 	})
@@ -227,7 +240,11 @@ func JobStoreSuite(t *testing.T, factory func(t *testing.T) JobStoreFixture) {
 		fx := factory(t)
 		cur := seed(ctx, t, fx, "riddler-001", ai.JobSubmitted)
 		stale := fx.NewBatch()
-		defer func() { _ = stale.Close() }()
+		defer func() {
+			if err := stale.Close(); err != nil {
+				t.Errorf("close the stale batch: %v", err)
+			}
+		}()
 		if err := fx.Store.Transition(ctx, stale, cur.ID, ai.JobSubmitted, to(cur, ai.JobApplying, 0)); err != nil {
 			t.Fatal(err)
 		}
@@ -237,7 +254,11 @@ func JobStoreSuite(t *testing.T, factory func(t *testing.T) JobStoreFixture) {
 		if err := stale.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
 			t.Fatalf("a batch built from a read another writer superseded: Commit = %v, want storage.ErrConflict", err)
 		}
-		if got, _ := fx.Store.Get(ctx, cur.ID); got.State != ai.JobCanceled {
+		got, err := fx.Store.Get(ctx, cur.ID)
+		if err != nil {
+			t.Fatalf("Get after the stale commit lost: %v", err)
+		}
+		if got.State != ai.JobCanceled {
 			t.Fatalf("the stale batch reverted the cancel: state %s", got.State)
 		}
 	})
@@ -274,8 +295,12 @@ func JobStoreSuite(t *testing.T, factory func(t *testing.T) JobStoreFixture) {
 					if err := bb.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
 						t.Fatalf("%s: the second writer (%s -> %s) overlapped the first (-> %s): Commit = %v, want storage.ErrConflict", cur.ID, e.from, second, first, err)
 					}
-					_ = ba.Close()
-					_ = bb.Close()
+					if err := ba.Close(); err != nil {
+						t.Fatalf("%s: close the first batch: %v", cur.ID, err)
+					}
+					if err := bb.Close(); err != nil {
+						t.Fatalf("%s: close the second batch: %v", cur.ID, err)
+					}
 					got, err := fx.Store.Get(ctx, cur.ID)
 					if err != nil || got.State != first || got.ApplyAttempts != 1 {
 						t.Fatalf("%s: stored %+v (%v), want the first writer's %s with 1 attempt: the loser's batch must not land", cur.ID, got, err, first)
@@ -342,7 +367,10 @@ func JobStoreSuite(t *testing.T, factory func(t *testing.T) JobStoreFixture) {
 			for _, w := range wins {
 				canceled = canceled || w == 1
 			}
-			got, _ := fx.Store.Get(ctx, cur.ID)
+			got, err := fx.Store.Get(ctx, cur.ID)
+			if err != nil {
+				t.Fatalf("%s: Get after the race: %v", cur.ID, err)
+			}
 			switch {
 			case canceled && got.State != ai.JobCanceled:
 				t.Fatalf("round %d: the cancel committed (%v) but the job is %s: a same-state write reverted it", round, wins, got.State)

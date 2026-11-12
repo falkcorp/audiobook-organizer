@@ -61,10 +61,15 @@ func (r *Router) newJobID() (BatchJobID, error) {
 }
 
 // commitJob opens a fresh indexed batch over the job store's keyspace, runs
-// stage, and commits it with storage.Sync. A failed commit applies nothing.
-func (r *Router) commitJob(ctx context.Context, stage func(ctx context.Context, b *storage.Batch) error) error {
+// stage, and commits it with storage.Sync. A failed commit applies nothing. A
+// failed Close is the error when nothing else failed, as in core's rbac service.
+func (r *Router) commitJob(ctx context.Context, stage func(ctx context.Context, b *storage.Batch) error) (err error) {
 	b := r.newBatch()
-	defer func() { _ = b.Close() }()
+	defer func() {
+		if cerr := b.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("ai: close job batch: %w", cerr)
+		}
+	}()
 	if err := stage(ctx, b); err != nil {
 		return err
 	}

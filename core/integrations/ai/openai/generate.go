@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -258,10 +259,19 @@ func (i *instance) Transcribe(ctx context.Context, model string, req ai.Transcri
 
 func seconds(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }
 
-// drain reads and closes a response body.
-func drain(rc io.ReadCloser) {
-	if rc != nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(rc, 1<<20))
-		_ = rc.Close()
+// drain reads at most 1 MiB of a response body and closes it, so a short
+// leftover does not cost the pooled connection. The call it follows is already
+// decided and neither step can change that, so a failure is logged at debug: a
+// body that cannot be read to its end is closed unread, which drops the
+// connection and is all a failed drain needs.
+func drain(log *slog.Logger, rc io.ReadCloser) {
+	if rc == nil {
+		return
+	}
+	if _, err := io.Copy(io.Discard, io.LimitReader(rc, 1<<20)); err != nil {
+		log.Debug("openai: drain a response body", "err", err)
+	}
+	if err := rc.Close(); err != nil {
+		log.Debug("openai: close a response body", "err", err)
 	}
 }

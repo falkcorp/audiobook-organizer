@@ -339,7 +339,11 @@ func silence() []byte {
 		Data: [4]byte{'d', 'a', 't', 'a'}, DataSize: uint32(len(pcm)),
 	}
 	var b bytes.Buffer
-	_ = binary.Write(&b, binary.LittleEndian, h)
+	// A fixed-size struct into a bytes.Buffer cannot fail; a failure here is a
+	// bug in wavHeader, not a runtime condition, so it stops the run.
+	if err := binary.Write(&b, binary.LittleEndian, h); err != nil {
+		panic("aitest: encode the WAV header: " + err.Error())
+	}
 	b.Write(pcm)
 	return b.Bytes()
 }

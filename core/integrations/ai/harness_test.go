@@ -353,7 +353,11 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
-	t.Cleanup(r.Close)
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Errorf("Router.Close: %v", err)
+		}
+	})
 	h.r = r
 	return h
 }
