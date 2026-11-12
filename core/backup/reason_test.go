@@ -1,5 +1,5 @@
 // file: core/backup/reason_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9fc71041-93b7-46d4-9a79-99298c8e2c54
 // last-edited: 2026-11-12
 
@@ -180,7 +180,10 @@ func TestCreateRefusesAManifestItsOwnCatalogueCannotRead(t *testing.T) {
 
 // A re-signed archive is held to the same test: a key ID the reader would refuse
 // (here one over the bound, as the keyring's new active key) makes the rewrap
-// fail before the new archive is streamed, and the original stays.
+// fail before the new archive is streamed and published, and the original stays.
+// The verification that follows a rewrap would refuse such an archive too, but
+// only after every byte of it was written and named; the link is the witness
+// that it never got that far.
 func TestRewrapRefusesAManifestItsOwnCatalogueCannotRead(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
@@ -190,9 +193,15 @@ func TestRewrapRefusesAManifestItsOwnCatalogueCannotRead(t *testing.T) {
 	e.rebuild()
 	old := e.create("manual")
 	e.keys.active = longID
+	var links int
+	e.opts.Disk = backup.Disk{Link: func(oldname, newname string) error { links++; return os.Link(oldname, newname) }}
+	e.rebuild()
 	_, err := e.svc.Rewrap(ctx, old.ID)
 	if !errors.Is(err, backup.ErrManifest) {
 		t.Fatalf("Rewrap = %v, want ErrManifest", err)
+	}
+	if links != 0 {
+		t.Errorf("the refused manifest was streamed and given a name (%d link calls)", links)
 	}
 	if err != nil && strings.Contains(err.Error(), longID) {
 		t.Errorf("the error quotes the key ID")
