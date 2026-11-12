@@ -1,5 +1,5 @@
 // file: core/library/placeholder_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9017606e-094c-466d-aee1-92253f306dc0
 // last-edited: 2026-11-11
 
@@ -54,7 +54,7 @@ func TestPublishWithoutHardLinksRenamesTheTemp(t *testing.T) {
 	r, f := transferRig(t, rigOpts{})
 	f.inject = noHardLinks
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	res, err := r.m.Transfer(ctxbg(), books, src, dst, withMkdir(copyOpts()))
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestPublishWithoutHardLinksRenamesTheTemp(t *testing.T) {
 	if !r.exists(src.Root, src.Rel) || len(r.strays()) != 0 || r.journalRows() != 0 {
 		t.Errorf("source kept %v, strays %v, rows %d", r.exists(src.Root, src.Rel), r.strays(), r.journalRows())
 	}
-	if len(f.labelsOf(":create:Moore/joke.m4b")) != 0 || len(f.labelsOf(":renameover:")) != 0 {
+	if len(f.labelsOf(":create:Gordon/joke.m4b")) != 0 || len(f.labelsOf(":renameover:")) != 0 {
 		t.Errorf("a rename that works needs no placeholder: %v", f.labels)
 	}
 	if len(f.labelsOf(":rename:")) == 0 {
@@ -83,13 +83,13 @@ func TestPublishWithNeitherReservesTheNameAndJournalsIt(t *testing.T) {
 	r, f := transferRig(t, rigOpts{})
 	var seen []*Path
 	f.inject = func(label string) error {
-		if label == "books-library:create:Moore/joke.m4b" {
+		if label == "books-library:create:Gordon/joke.m4b" {
 			seen = r.placingRows()
 		}
 		return neither(label)
 	}
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	if _, err := r.m.Transfer(ctxbg(), books, src, dst, withMkdir(copyOpts())); err != nil {
 		t.Fatal(err)
 	}
@@ -115,10 +115,10 @@ func TestPublishWithNeitherReservesTheNameAndJournalsIt(t *testing.T) {
 func TestPlaceholderIsNeverRenamedOverAForeignFile(t *testing.T) {
 	r, f := transferRig(t, rigOpts{})
 	const penguin = "the Penguin got here first"
-	dstPath := r.abs("books-library", "Moore/joke.m4b")
+	dstPath := r.abs("books-library", "Gordon/joke.m4b")
 	swapped := false
 	f.inject = func(label string) error {
-		if label == "close:Moore/joke.m4b" && !swapped {
+		if label == "close:Gordon/joke.m4b" && !swapped {
 			swapped = true
 			if err := os.Remove(dstPath); err != nil {
 				t.Fatal(err)
@@ -130,7 +130,7 @@ func TestPlaceholderIsNeverRenamedOverAForeignFile(t *testing.T) {
 		return neither(label)
 	}
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	_, err := r.m.Transfer(ctxbg(), books, src, dst, withMkdir(copyOpts()))
 	if !swapped {
 		t.Fatal("the swap never ran")
@@ -159,7 +159,7 @@ func TestFailedRenameOverRemovesThePlaceholder(t *testing.T) {
 		return neither(label)
 	}
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	if _, err := r.m.Transfer(ctxbg(), books, src, dst, withMkdir(copyOpts())); err == nil {
 		t.Fatal("Transfer succeeded")
 	}
@@ -177,13 +177,13 @@ func TestFailedRenameOverRemovesThePlaceholder(t *testing.T) {
 func TestPlaceholderThatCannotBeRemovedIsLeftToRecovery(t *testing.T) {
 	r, f := transferRig(t, rigOpts{})
 	f.inject = func(label string) error {
-		if strings.Contains(label, ":renameover:") || label == "books-library:remove:Moore/joke.m4b" {
+		if strings.Contains(label, ":renameover:") || label == "books-library:remove:Gordon/joke.m4b" {
 			return errors.New("the Batcave is on fire")
 		}
 		return neither(label)
 	}
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	_, err := r.m.Transfer(ctxbg(), books, src, dst, withMkdir(copyOpts()))
 	if !errors.Is(err, ErrRecoveryPending) {
 		t.Fatalf("Transfer = %v, want ErrRecoveryPending", err)
@@ -207,11 +207,11 @@ func TestRecoveryLeavesAForeignFileWhereAPlaceholderWasJournaled(t *testing.T) {
 	dry, df := transferRig(t, rigOpts{})
 	df.inject = neither
 	dsrc := dry.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	if _, err := dry.m.Transfer(ctxbg(), books, dsrc, dst, withMkdir(copyOpts())); err != nil {
 		t.Fatal(err)
 	}
-	kill := slices.Index(df.labels, "books-library:create:Moore/joke.m4b") + 1
+	kill := slices.Index(df.labels, "books-library:create:Gordon/joke.m4b") + 1
 	if kill == 0 {
 		t.Fatalf("no placeholder create in %v", df.labels)
 	}
@@ -429,7 +429,7 @@ func heldRel(t *testing.T, r *rig, id QuarantineID) string {
 func TestNoHandlesRefusesBeforeAnythingHappens(t *testing.T) {
 	r, _ := transferRig(t, rigOpts{seams: seams{noHandles: true}})
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	for _, m := range []TransferMode{Copy, Move, Hardlink, Symlink, Auto, Reflink} {
 		o := withMkdir(NewTransferOptions(m, PermLibrary, VerifySize))
 		if _, err := r.m.Transfer(ctxbg(), books, src, dst, o); !errors.Is(err, ErrNotSupported) {
@@ -453,7 +453,7 @@ func TestHardlinkWithoutHardLinksIsNotSupported(t *testing.T) {
 	r, f := transferRig(t, rigOpts{})
 	f.inject = noHardLinks
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	_, err := r.m.Transfer(ctxbg(), books, src, dst, withMkdir(NewTransferOptions(Hardlink, PermLibrary, VerifySize)))
 	if !errors.Is(err, ErrNotSupported) || !errors.Is(err, libfs.ErrNoHardLinks) || !errors.Is(err, syscall.EPERM) {
 		t.Errorf("Transfer = %v, want ErrNotSupported wrapping the cause", err)
@@ -501,7 +501,7 @@ func TestOnARealFilesystemWithoutHardLinks(t *testing.T) {
 	// Copy, then Auto (clone and link both unavailable), publish without a link.
 	for _, mode := range []TransferMode{Copy, Auto} {
 		src := r.put("import-1", fmt.Sprintf("Arkham/%v.m4b", mode), gas)
-		dst := Path{Root: "books-library", Rel: fmt.Sprintf("Moore/%v.m4b", mode)}
+		dst := Path{Root: "books-library", Rel: fmt.Sprintf("Gordon/%v.m4b", mode)}
 		if _, err := r.m.Transfer(ctxbg(), books, src, dst, withMkdir(NewTransferOptions(mode, PermLibrary, VerifySHA256))); err != nil {
 			t.Fatalf("%v: %v", mode, err)
 		}
@@ -511,7 +511,7 @@ func TestOnARealFilesystemWithoutHardLinks(t *testing.T) {
 	}
 	// A Move on one volume and a Move of a directory.
 	msrc := r.put("import-1", "Arkham/move.m4b", gas)
-	if _, err := r.m.Transfer(ctxbg(), books, msrc, Path{Root: "books-library", Rel: "Moore/move.m4b"}, withMkdir(move())); err != nil {
+	if _, err := r.m.Transfer(ctxbg(), books, msrc, Path{Root: "books-library", Rel: "Gordon/move.m4b"}, withMkdir(move())); err != nil {
 		t.Fatalf("Move: %v", err)
 	}
 	r.put("import-1", "Wing/Cells/two-face.m4b", "heads")
@@ -522,13 +522,13 @@ func TestOnARealFilesystemWithoutHardLinks(t *testing.T) {
 		t.Errorf("the moved directory holds %q", got)
 	}
 	// Replace.
-	r.put("books-library", "Moore/old.m4b", "the old edition")
+	r.put("books-library", "Gordon/old.m4b", "the old edition")
 	ro := withMkdir(copyOpts())
 	ro.Replace = &ReplaceSpec{ExpectSHA256: sum("the old edition")}
-	if _, err := r.m.Transfer(ctxbg(), books, r.put("import-1", "Arkham/new.m4b", gas), Path{Root: "books-library", Rel: "Moore/old.m4b"}, ro); err != nil {
+	if _, err := r.m.Transfer(ctxbg(), books, r.put("import-1", "Arkham/new.m4b", gas), Path{Root: "books-library", Rel: "Gordon/old.m4b"}, ro); err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
-	if got, _ := r.read("books-library", "Moore/old.m4b"); got != gas {
+	if got, _ := r.read("books-library", "Gordon/old.m4b"); got != gas {
 		t.Errorf("Replace left %q", got)
 	}
 	// Quarantine and Release.
@@ -547,11 +547,11 @@ func TestOnARealFilesystemWithoutHardLinks(t *testing.T) {
 		t.Errorf("strays %v, rows %d", r.strays(), r.journalRows())
 	}
 	// An existing destination is still refused.
-	_, err = r.m.Transfer(ctxbg(), books, r.put("import-1", "Arkham/again.m4b", "two"), Path{Root: "books-library", Rel: "Moore/Copy.m4b"}, withMkdir(copyOpts()))
+	_, err = r.m.Transfer(ctxbg(), books, r.put("import-1", "Arkham/again.m4b", "two"), Path{Root: "books-library", Rel: "Gordon/Copy.m4b"}, withMkdir(copyOpts()))
 	if !errors.Is(err, fs.ErrExist) {
 		t.Errorf("a transfer onto an existing name = %v, want ErrExist", err)
 	}
-	if got, _ := r.read("books-library", "Moore/Copy.m4b"); got != gas {
+	if got, _ := r.read("books-library", "Gordon/Copy.m4b"); got != gas {
 		t.Errorf("an existing file was changed: %q", got)
 	}
 }
