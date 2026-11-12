@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid_flow_test.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 4f0b6c2e-9a71-4d38-b5e2-7c1d93a8f046
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package abs_test
 
@@ -19,7 +19,8 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 
@@ -64,16 +65,16 @@ func newOIDCHarness(t *testing.T, opts ...harnessOpt) *harness {
 	if err := h.router.SetTrustedProxies(nil); err != nil {
 		t.Fatal(err)
 	}
-	h.verifier.byToken[oidcPersonAssertion] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|owner",
+	h.verifier.byToken[oidcPersonAssertion] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|owner",
 		Email: "owner@example.com", EmailVerified: true,
 	}
-	h.verifier.byToken[oidcStrangerAssert] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|stranger",
+	h.verifier.byToken[oidcStrangerAssert] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|stranger",
 		Email: "stranger@example.com", EmailVerified: true,
 	}
-	h.verifier.byToken[oidcSecondPerson] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|second",
+	h.verifier.byToken[oidcSecondPerson] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|second",
 		Email: "second@example.com", EmailVerified: true,
 	}
 	h.verifier.serviceTokens[oidcServiceAssertion] = "family"
@@ -104,7 +105,7 @@ func authorizePath(challenge, state string) string {
 func (h *harness) hop1From(t *testing.T, assertion, deviceIP string) *httptest.ResponseRecorder {
 	t.Helper()
 	w, _ := h.do(t, request{method: http.MethodGet, path: authorizePath(s256(oidcVerifier), ""), headers: map[string]string{
-		oauth.CFAccessHeader: assertion, "Cf-Connecting-Ip": deviceIP, "X-Forwarded-For": deviceIP,
+		cfaccess.CFAccessHeader: assertion, "Cf-Connecting-Ip": deviceIP, "X-Forwarded-For": deviceIP,
 	}})
 	return w
 }
@@ -113,7 +114,7 @@ func (h *harness) get(t *testing.T, path, assertion string) *httptest.ResponseRe
 	t.Helper()
 	headers := map[string]string{}
 	if assertion != "" {
-		headers[oauth.CFAccessHeader] = assertion
+		headers[cfaccess.CFAccessHeader] = assertion
 	}
 	// Hop 2 is opened in a real browser, which always sends these; hop 1 and
 	// the rest are the app's URLSession and do not.
@@ -135,7 +136,7 @@ func (h *harness) getWithCookie(t *testing.T, path, assertion, cfCookie string) 
 		"Cookie":         "CF_Authorization=" + cfCookie,
 	}
 	if assertion != "" {
-		headers[oauth.CFAccessHeader] = assertion
+		headers[cfaccess.CFAccessHeader] = assertion
 	}
 	w, _ := h.do(t, request{method: http.MethodGet, path: path, headers: headers})
 	return w
@@ -344,7 +345,7 @@ func (h *harness) postConsent(t *testing.T, req, csrf, decision, assertion strin
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Origin", "https://example.com")
 	if assertion != "" {
-		r.Header.Set(oauth.CFAccessHeader, assertion)
+		r.Header.Set(cfaccess.CFAccessHeader, assertion)
 	}
 	for k, v := range extra {
 		switch {
@@ -714,7 +715,7 @@ func TestOpenIDHop2_ServiceTokenBouncesWithoutSecFetchHeaders(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
 	w, _ := h.do(t, request{method: http.MethodGet, path: browser,
-		headers: map[string]string{oauth.CFAccessHeader: oidcServiceAssertion}})
+		headers: map[string]string{cfaccess.CFAccessHeader: oidcServiceAssertion}})
 	next := assertHop2Bounce(t, w, "1", false)
 	if q := h.allow(t, next, oidcPersonAssertion); q.Get("code") == "" {
 		t.Fatalf("params %v: want a code after the bounce", q)
@@ -727,8 +728,8 @@ func TestOpenIDHop2_ExcludedRequestsAreNotBounced(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "")
 	for name, hdrs := range map[string]map[string]string{
-		"api key":        {oauth.CFAccessHeader: oidcServiceAssertion, "Authorization": "Bearer abk_0123456789"},
-		"AppleCoreMedia": {oauth.CFAccessHeader: oidcServiceAssertion, "User-Agent": "AppleCoreMedia/1.0.0.21A329 (iPhone; U; CPU OS 17_0 like Mac OS X; en_us)"},
+		"api key":        {cfaccess.CFAccessHeader: oidcServiceAssertion, "Authorization": "Bearer abk_0123456789"},
+		"AppleCoreMedia": {cfaccess.CFAccessHeader: oidcServiceAssertion, "User-Agent": "AppleCoreMedia/1.0.0.21A329 (iPhone; U; CPU OS 17_0 like Mac OS X; en_us)"},
 		"no assertion":   {},
 	} {
 		w, _ := h.do(t, request{method: http.MethodGet, path: browser, headers: hdrs})
@@ -1017,7 +1018,7 @@ func TestOpenIDConsent_HostWithDefaultPortMatchesOrigin(t *testing.T) {
 	h := newOIDCHarness(t)
 	r := httptest.NewRequest(http.MethodGet, authorizePath(s256(oidcVerifier), ""), nil)
 	r.Host = "Example.COM:443"
-	r.Header.Set(oauth.CFAccessHeader, oidcServiceAssertion)
+	r.Header.Set(cfaccess.CFAccessHeader, oidcServiceAssertion)
 	w := httptest.NewRecorder()
 	h.router.ServeHTTP(w, r)
 	browser := assertBrowserHopLocation(t, w).RequestURI()

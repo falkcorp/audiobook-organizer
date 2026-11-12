@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.37.2
+// version: 1.37.3
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package server
 
@@ -15,9 +15,10 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -414,9 +415,9 @@ func (s *Server) wireABSRoutes() {
 	// buildOAuthWiring's verifier so the ABS group is not coupled to the /api/v1
 	// passthrough, and with context.Background() because the remote keyset refreshes
 	// lazily in the background as Cloudflare rotates signing keys.
-	var verifier servermiddleware.CFAssertionVerifier
-	oauthCfg := oauth.New(oauth.Config{
-		AllowedEmails:    oauth.ParseAllowedEmails(snap.OAuthAllowedEmails),
+	var verifier cfaccess.CFAssertionVerifier
+	oauthCfg := legacyoauth.New(legacyoauth.Config{
+		AllowedEmails:    legacyoauth.ParseAllowedEmails(snap.OAuthAllowedEmails),
 		DefaultRole:      snap.OAuthDefaultRole,
 		ExtraAllowed:     inviteGrantAllowed(s.storeForWiring()),
 		OnEmailDisplaced: s.recordEmailDisplaced,
@@ -432,7 +433,7 @@ func (s *Server) wireABSRoutes() {
 			}
 			slog.Warn("abs: Cloudflare Access mode is enabled but CF_ACCESS_TEAM_DOMAIN/CF_ACCESS_AUD are unset — " +
 				"assertions cannot be verified, so only the JWT resolver will authenticate")
-		} else if v, verr := oauth.NewCFAccessVerifier(context.Background(), snap.CFAccessTeamDomain, snap.CFAccessAUD); verr == nil {
+		} else if v, verr := cfaccess.NewCFAccessVerifier(context.Background(), snap.CFAccessTeamDomain, snap.CFAccessAUD); verr == nil {
 			verifier = v
 			if len(oauthCfg.AllowedEmails) == 0 {
 				// Fail-closed consequence worth shouting about: with an empty allowlist

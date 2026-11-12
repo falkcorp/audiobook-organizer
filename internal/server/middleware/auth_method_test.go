@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth_method_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5e2b7c19-0d4a-4f86-b3e1-9a6c8d2f7041
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -18,7 +18,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 )
 
 // authMethodStore serves one session per origin ("sess-<origin>", and
@@ -132,24 +133,24 @@ func TestCloudflareAccess_HumanIsInteractive_ServiceTokenIsNot(t *testing.T) {
 	cfStore := newFakeABSStore()
 	cfStore.addUser(activeUser("owner", "owner"))
 	verifier := &fakeCFVerifier{
-		byToken: map[string]*oauth.IdentityClaims{
-			"human": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
+		byToken: map[string]*legacyoauth.IdentityClaims{
+			"human": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
 		},
 		nonIdentity: map[string]bool{"svc": true},
 	}
-	cf := &CFAccessAuthenticator{verifier: verifier, cfg: oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com"}}), store: cfStore}
+	cf := cfaccess.NewCFAccessAuthenticatorWithVerifier(verifier, legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com"}}), cfStore, CFAccessHooks(cfStore))
 
 	run := func(assertion, token string) (int, auth.Method) {
 		r := gin.New()
 		var got auth.Method
-		r.Use(CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
+		r.Use(cfaccess.CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
 		r.GET("/protected", func(c *gin.Context) {
 			got = CurrentAuthMethod(c)
 			c.Status(http.StatusOK)
 		})
 		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 		if assertion != "" {
-			req.Header.Set(oauth.CFAccessHeader, assertion)
+			req.Header.Set(cfaccess.CFAccessHeader, assertion)
 		}
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
@@ -186,10 +187,10 @@ func TestCloudflareAccess_APIKeyWins(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfStore := newFakeABSStore()
 	cfStore.addUser(activeUser("owner", "owner"))
-	verifier := &fakeCFVerifier{byToken: map[string]*oauth.IdentityClaims{
-		"human": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
+	verifier := &fakeCFVerifier{byToken: map[string]*legacyoauth.IdentityClaims{
+		"human": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
 	}}
-	cf := &CFAccessAuthenticator{verifier: verifier, cfg: oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com"}}), store: cfStore}
+	cf := cfaccess.NewCFAccessAuthenticatorWithVerifier(verifier, legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com"}}), cfStore, CFAccessHooks(cfStore))
 	cases := map[string]func(r *http.Request){
 		"bearer key":                func(r *http.Request) { r.Header.Set("Authorization", "Bearer abk_secret") },
 		"key in the session cookie": func(r *http.Request) { r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "abk_secret"}) },
@@ -198,7 +199,7 @@ func TestCloudflareAccess_APIKeyWins(t *testing.T) {
 			r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "abk_secret"})
 		},
 		"access cookie + bearer key": func(r *http.Request) {
-			r.Header.Del(oauth.CFAccessHeader)
+			r.Header.Del(cfaccess.CFAccessHeader)
 			r.AddCookie(&http.Cookie{Name: "CF_Authorization", Value: "human"})
 			r.Header.Set("Authorization", "Bearer abk_secret")
 		},
@@ -207,13 +208,13 @@ func TestCloudflareAccess_APIKeyWins(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := gin.New()
 			var got auth.Method
-			r.Use(CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
+			r.Use(cfaccess.CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
 			r.GET("/protected", func(c *gin.Context) {
 				got = CurrentAuthMethod(c)
 				c.Status(http.StatusOK)
 			})
 			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
-			req.Header.Set(oauth.CFAccessHeader, "human")
+			req.Header.Set(cfaccess.CFAccessHeader, "human")
 			add(req)
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
@@ -270,20 +271,20 @@ func TestOwnerProof_OnlyAVerifiedAccessJWT(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfStore := newFakeABSStore()
 	cfStore.addUser(activeUser("owner", "owner"))
-	verifier := &fakeCFVerifier{byToken: map[string]*oauth.IdentityClaims{
-		"owner-jwt": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
-		"other-jwt": {Provider: oauth.ProviderCFAccess, Subject: "sub-other", Email: "other@example.com", EmailVerified: true},
+	verifier := &fakeCFVerifier{byToken: map[string]*legacyoauth.IdentityClaims{
+		"owner-jwt": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
+		"other-jwt": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-other", Email: "other@example.com", EmailVerified: true},
 		// A different IdP account whose address uses U+212A KELVIN SIGN.
-		"kelvin-jwt": {Provider: oauth.ProviderCFAccess, Subject: "sub-kelvin", Email: "\u212Aate@example.com", EmailVerified: true},
-		"kate-jwt":   {Provider: oauth.ProviderCFAccess, Subject: "sub-kate", Email: "kate@example.com", EmailVerified: true},
+		"kelvin-jwt": {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-kelvin", Email: "\u212Aate@example.com", EmailVerified: true},
+		"kate-jwt":   {Provider: legacyoauth.ProviderCFAccess, Subject: "sub-kate", Email: "kate@example.com", EmailVerified: true},
 	}}
-	cf := &CFAccessAuthenticator{verifier: verifier,
-		cfg: oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com", "other@example.com", "kate@example.com"}}), store: cfStore}
+	cf := cfaccess.NewCFAccessAuthenticatorWithVerifier(verifier,
+		legacyoauth.New(legacyoauth.Config{AllowedEmails: []string{"owner@example.com", "other@example.com", "kate@example.com"}}), cfStore, CFAccessHooks(cfStore))
 	ownerEmail := "owner@example.com"
 	run := func(set func(r *http.Request)) string {
 		r := gin.New()
 		why := "unreached"
-		r.Use(CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
+		r.Use(cfaccess.CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
 		r.GET("/x", func(c *gin.Context) {
 			why = auth.OwnerProofWhyNot(c.Request.Context(), ownerEmail, "books.example.com")
 			c.Status(http.StatusOK)
@@ -293,20 +294,20 @@ func TestOwnerProof_OnlyAVerifiedAccessJWT(t *testing.T) {
 		r.ServeHTTP(httptest.NewRecorder(), req)
 		return why
 	}
-	assert.Empty(t, run(func(r *http.Request) { r.Header.Set(oauth.CFAccessHeader, "owner-jwt") }), "the owner's verified JWT")
-	assert.NotEmpty(t, run(func(r *http.Request) { r.Header.Set(oauth.CFAccessHeader, "other-jwt") }), "another person's JWT")
+	assert.Empty(t, run(func(r *http.Request) { r.Header.Set(cfaccess.CFAccessHeader, "owner-jwt") }), "the owner's verified JWT")
+	assert.NotEmpty(t, run(func(r *http.Request) { r.Header.Set(cfaccess.CFAccessHeader, "other-jwt") }), "another person's JWT")
 	assert.NotEmpty(t, run(func(r *http.Request) {
 		r.Header.Set("Cf-Access-Authenticated-User-Email", "owner@example.com")
 		r.Header.Set("Authorization", "Bearer sess-password")
 	}), "the unsigned email header with a password session")
 	assert.NotEmpty(t, run(func(r *http.Request) {
-		r.Header.Set(oauth.CFAccessHeader, "owner-jwt")
+		r.Header.Set(cfaccess.CFAccessHeader, "owner-jwt")
 		r.Header.Set("Authorization", "Bearer abk_secret")
 	}), "an API key riding along with the owner's JWT")
 
 	// 2026-10-07 review: strings.EqualFold folded the Kelvin sign onto "k",
 	// so this other account passed as the owner.
 	ownerEmail = "kate@example.com"
-	assert.Empty(t, run(func(r *http.Request) { r.Header.Set(oauth.CFAccessHeader, "kate-jwt") }), "the owner kate's verified JWT")
-	assert.NotEmpty(t, run(func(r *http.Request) { r.Header.Set(oauth.CFAccessHeader, "kelvin-jwt") }), "a Kelvin-sign lookalike of the owner's email")
+	assert.Empty(t, run(func(r *http.Request) { r.Header.Set(cfaccess.CFAccessHeader, "kate-jwt") }), "the owner kate's verified JWT")
+	assert.NotEmpty(t, run(func(r *http.Request) { r.Header.Set(cfaccess.CFAccessHeader, "kelvin-jwt") }), "a Kelvin-sign lookalike of the owner's email")
 }

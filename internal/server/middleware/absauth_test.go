@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: b41e6d09-8a37-4f52-9c10-25d7b8e0f346
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -17,7 +17,8 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/gin-gonic/gin"
 )
@@ -29,7 +30,7 @@ const absTestSecret = "0123456789abcdef0123456789abcdef"
 type fakeCFVerifier struct {
 	// byToken maps a raw assertion to the identity it verifies to. Anything not in
 	// the map fails verification, which is what a forged/malformed header looks like.
-	byToken map[string]*oauth.IdentityClaims
+	byToken map[string]*legacyoauth.IdentityClaims
 	// nonIdentity holds assertions that are cryptographically VALID but carry no
 	// email claim -- the shape Cloudflare mints for a service token. Distinct from
 	// "not in byToken", which means the token did not verify at all. nil by default,
@@ -39,14 +40,14 @@ type fakeCFVerifier struct {
 	mu          sync.Mutex
 }
 
-func (f *fakeCFVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityClaims, error) {
+func (f *fakeCFVerifier) Verify(_ context.Context, raw string) (*legacyoauth.IdentityClaims, error) {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
 	if f.nonIdentity[raw] {
 		// Mirrors the real verifier: signature/issuer/aud all PASSED, there is simply
 		// no person named in the token.
-		return nil, fmt.Errorf("%w (sub=%q)", oauth.ErrNonIdentityAssertion, "svc-token")
+		return nil, fmt.Errorf("%w (sub=%q)", cfaccess.ErrNonIdentityAssertion, "svc-token")
 	}
 	if c, ok := f.byToken[raw]; ok {
 		return c, nil
@@ -201,8 +202,8 @@ func newABSHarness(t *testing.T, modes string, allowed []string) *absHarness {
 		t.Fatalf("absauth.Load: %v", err)
 	}
 	store := newFakeABSStore()
-	verifier := &fakeCFVerifier{byToken: map[string]*oauth.IdentityClaims{}}
-	oauthCfg := oauth.New(oauth.Config{AllowedEmails: allowed, DefaultRole: "viewer"})
+	verifier := &fakeCFVerifier{byToken: map[string]*legacyoauth.IdentityClaims{}}
+	oauthCfg := legacyoauth.New(legacyoauth.Config{AllowedEmails: allowed, DefaultRole: "viewer"})
 
 	resolver := NewABSIdentityResolver(cfg, verifier, oauthCfg, store)
 	r := gin.New()
@@ -246,7 +247,7 @@ func activeUser(id, username string) *database.User {
 // ── MANDATED SECURITY TEST: no fail-open on the ABS surface ─────────────────
 
 // TestABSAuth_InvalidAssertionIsHard401_NotFailOpen is the mandated security test
-// (spec §3.0.1 final bullet). The existing CloudflareAccessAuth middleware on
+// (spec §3.0.1 final bullet). The existing cfaccess.CloudflareAccessAuth middleware on
 // /api/v1 is FAIL-OPEN by design: an unverifiable assertion simply falls through.
 // On the ABS surface that behaviour would be an authentication bypass, because there
 // is no second gate behind it. A malformed, forged, expired or wrong-AUD assertion
@@ -261,7 +262,7 @@ func TestABSAuth_InvalidAssertionIsHard401_NotFailOpen(t *testing.T) {
 		"a.b.c",
 		"   ",
 	} {
-		w := h.do(http.MethodGet, "/api/me", map[string]string{oauth.CFAccessHeader: assertion})
+		w := h.do(http.MethodGet, "/api/me", map[string]string{cfaccess.CFAccessHeader: assertion})
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("assertion %q: got %d, want 401 — a fail-open path here is an authentication bypass (body: %s)",
 				assertion, w.Code, w.Body.String())
@@ -283,8 +284,8 @@ func TestABSAuth_InvalidAssertionDoesNotFallThroughToValidBearer(t *testing.T) {
 	bearer := h.mintAccess(t, "u1", "s1")
 
 	w := h.do(http.MethodGet, "/api/me", map[string]string{
-		oauth.CFAccessHeader: "forged",
-		"Authorization":      "Bearer " + bearer,
+		cfaccess.CFAccessHeader: "forged",
+		"Authorization":         "Bearer " + bearer,
 	})
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d, want 401: an invalid assertion must not silently fall through to the bearer path", w.Code)
@@ -312,12 +313,12 @@ func TestABSAuth_SpoofableEmailHeaderIsNeverTrusted(t *testing.T) {
 // rule: verified is NOT authorized.
 func TestABSAuth_NonAllowlistedEmailIs403AndNeverProvisions(t *testing.T) {
 	h := newABSHarness(t, "cf,jwt", []string{"owner@example.com"})
-	h.verifier.byToken["good-stranger"] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|stranger",
+	h.verifier.byToken["good-stranger"] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|stranger",
 		Email: "stranger@example.com", EmailVerified: true,
 	}
 
-	w := h.do(http.MethodGet, "/api/me", map[string]string{oauth.CFAccessHeader: "good-stranger"})
+	w := h.do(http.MethodGet, "/api/me", map[string]string{cfaccess.CFAccessHeader: "good-stranger"})
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("got %d, want 403 for a verified-but-not-allowlisted email", w.Code)
 	}
@@ -330,12 +331,12 @@ func TestABSAuth_NonAllowlistedEmailIs403AndNeverProvisions(t *testing.T) {
 
 func TestABSAuth_VerifiedAssertionJITProvisionsAllowlistedUser(t *testing.T) {
 	h := newABSHarness(t, "cf,jwt", []string{"owner@example.com"})
-	h.verifier.byToken["good"] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|owner",
+	h.verifier.byToken["good"] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|owner",
 		Email: "owner@example.com", EmailVerified: true,
 	}
 
-	w := h.do(http.MethodGet, "/api/me", map[string]string{oauth.CFAccessHeader: "good"})
+	w := h.do(http.MethodGet, "/api/me", map[string]string{cfaccess.CFAccessHeader: "good"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200: %s", w.Code, w.Body.String())
 	}
@@ -354,7 +355,7 @@ func TestABSAuth_VerifiedAssertionJITProvisionsAllowlistedUser(t *testing.T) {
 	}
 
 	// Second request must reuse the same user, not mint another.
-	w2 := h.do(http.MethodGet, "/api/me", map[string]string{oauth.CFAccessHeader: "good"})
+	w2 := h.do(http.MethodGet, "/api/me", map[string]string{cfaccess.CFAccessHeader: "good"})
 	if w2.Code != http.StatusOK {
 		t.Fatalf("second request got %d", w2.Code)
 	}
@@ -368,14 +369,14 @@ func TestABSAuth_AssertionWinsOverBearer(t *testing.T) {
 	cfUser := h.store.addUser(activeUser("cf-user", "owner"))
 	h.store.addUser(activeUser("jwt-user", "someoneelse"))
 	h.store.addSession(liveABSSession("s1", "jwt-user"))
-	h.verifier.byToken["good"] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|owner",
+	h.verifier.byToken["good"] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|owner",
 		Email: cfUser.Email, EmailVerified: true,
 	}
 
 	w := h.do(http.MethodGet, "/api/me", map[string]string{
-		oauth.CFAccessHeader: "good",
-		"Authorization":      "Bearer " + h.mintAccess(t, "jwt-user", "s1"),
+		cfaccess.CFAccessHeader: "good",
+		"Authorization":         "Bearer " + h.mintAccess(t, "jwt-user", "s1"),
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
@@ -523,15 +524,15 @@ func TestABSAuth_JWTOnlyModeIgnoresAssertion(t *testing.T) {
 	h := newABSHarness(t, "jwt", []string{"owner@example.com"})
 	h.store.addUser(activeUser("u1", "owner"))
 	h.store.addSession(liveABSSession("s1", "u1"))
-	h.verifier.byToken["good"] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|owner",
+	h.verifier.byToken["good"] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|owner",
 		Email: "owner@example.com", EmailVerified: true,
 	}
 	// With cf disabled the assertion is not consulted at all, so a valid bearer wins
 	// and a lone assertion is a 401.
 	w := h.do(http.MethodGet, "/api/me", map[string]string{
-		oauth.CFAccessHeader: "good",
-		"Authorization":      "Bearer " + h.mintAccess(t, "u1", "s1"),
+		cfaccess.CFAccessHeader: "good",
+		"Authorization":         "Bearer " + h.mintAccess(t, "u1", "s1"),
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
@@ -539,7 +540,7 @@ func TestABSAuth_JWTOnlyModeIgnoresAssertion(t *testing.T) {
 	if h.verifier.calls != 0 {
 		t.Fatal("cf resolver is disabled; the verifier must not be called")
 	}
-	if w := h.do(http.MethodGet, "/api/me", map[string]string{oauth.CFAccessHeader: "good"}); w.Code != http.StatusUnauthorized {
+	if w := h.do(http.MethodGet, "/api/me", map[string]string{cfaccess.CFAccessHeader: "good"}); w.Code != http.StatusUnauthorized {
 		t.Fatalf("assertion-only request in jwt-only mode should 401, got %d", w.Code)
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/oauth_login.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 2e9c0b47-6a31-4d58-8f04-1b5a7c2e9d63
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package handlers
 
@@ -16,7 +16,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 
@@ -29,13 +29,13 @@ const oauthStateCookie = "oauth_state"
 // time (Google needs OIDC discovery), keyed by provider name.
 type OAuthHandler struct {
 	store     oauthHandlerStore
-	cfg       *oauth.Config
-	codec     *oauth.StateCodec
-	providers map[string]oauth.Provider
+	cfg       *legacyoauth.Config
+	codec     *legacyoauth.StateCodec
+	providers map[string]legacyoauth.Provider
 }
 
 // NewOAuthHandler constructs the handler. providers may be empty (all disabled).
-func NewOAuthHandler(store oauthHandlerStore, cfg *oauth.Config, codec *oauth.StateCodec, providers map[string]oauth.Provider) *OAuthHandler {
+func NewOAuthHandler(store oauthHandlerStore, cfg *legacyoauth.Config, codec *legacyoauth.StateCodec, providers map[string]legacyoauth.Provider) *OAuthHandler {
 	return &OAuthHandler{store: store, cfg: cfg, codec: codec, providers: providers}
 }
 
@@ -63,12 +63,12 @@ func (h *OAuthHandler) Start(c *gin.Context) {
 		httputil.RespondWithInternalError(c, "oauth redirect URI not configured")
 		return
 	}
-	state, err := oauth.GenerateState()
+	state, err := legacyoauth.GenerateState()
 	if err != nil {
 		httputil.RespondWithInternalError(c, "oauth state")
 		return
 	}
-	verifier, err := oauth.GenerateCodeVerifier()
+	verifier, err := legacyoauth.GenerateCodeVerifier()
 	if err != nil {
 		httputil.RespondWithInternalError(c, "oauth verifier")
 		return
@@ -78,7 +78,7 @@ func (h *OAuthHandler) Start(c *gin.Context) {
 		return // appDeepLinkParams already answered
 	}
 
-	blob, err := h.codec.Encode(oauth.StatePayload{
+	blob, err := h.codec.Encode(legacyoauth.StatePayload{
 		State: state, Verifier: verifier, Provider: provider, Return: sanitizeReturn(c.Query("return")),
 		// Empty unless the caller is a registered native client (see
 		// appDeepLinkParams). The two PKCE exchanges are kept apart here: Verifier
@@ -90,7 +90,7 @@ func (h *OAuthHandler) Start(c *gin.Context) {
 		return
 	}
 	setOAuthStateCookie(c, blob)
-	http.Redirect(c.Writer, c.Request, p.AuthCodeURL(state, oauth.CodeChallengeS256(verifier), redirectURI), http.StatusFound)
+	http.Redirect(c.Writer, c.Request, p.AuthCodeURL(state, legacyoauth.CodeChallengeS256(verifier), redirectURI), http.StatusFound)
 }
 
 // Callback handles GET /auth/oauth/:provider/callback — it verifies the CSRF state,
@@ -136,7 +136,7 @@ func (h *OAuthHandler) Callback(c *gin.Context) {
 	}
 	user, err := h.cfg.ResolveUser(h.store, *claims)
 	if err != nil {
-		if errors.Is(err, oauth.ErrEmailNotAllowed) || errors.Is(err, oauth.ErrEmailNotVerified) {
+		if errors.Is(err, legacyoauth.ErrEmailNotAllowed) || errors.Is(err, legacyoauth.ErrEmailNotVerified) {
 			redirectToLogin(c, "oauth_not_authorized")
 			return
 		}
@@ -277,11 +277,11 @@ func sanitizeReturn(ret string) string {
 	return ret
 }
 
-// oauthHandlerStore is what the login flow needs: oauth.Config.ResolveUser
-// declares oauth.UserStore, and the handler itself creates the session. It was
+// oauthHandlerStore is what the login flow needs: legacyoauth.Config.ResolveUser
+// declares legacyoauth.UserStore, and the handler itself creates the session. It was
 // database.Store -- 398 methods -- until 2026-08-19.
 type oauthHandlerStore interface {
-	oauth.UserStore
+	legacyoauth.UserStore
 
 	CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string, credentialEpoch int64) (*database.Session, error)
 }

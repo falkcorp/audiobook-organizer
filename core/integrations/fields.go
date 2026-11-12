@@ -1,5 +1,5 @@
 // file: core/integrations/fields.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: cbc1be32-ff91-4789-be1d-70da64f29e97
 // last-edited: 2026-11-11
 
@@ -412,7 +412,10 @@ func originOf(raw string) string {
 func checkURL(field, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Hostname() == "" {
-		return invalidf("settings field %q: %q is not an absolute URL with a host", field, raw)
+		// The submitted text is never quoted: a URL that fails to parse may
+		// still carry a credential (a pasted user:pass@host), and this error
+		// reaches routes, logs and audit details.
+		return invalidf("settings field %q is not an absolute URL with a host", field)
 	}
 	if u.User != nil {
 		return invalidf("settings field %q: a URL must not carry userinfo; put the credential in the instance's secret field", field)

@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access_test.go
-// version: 1.12.2
+// version: 1.12.3
 // guid: 7a4c2e91-5d38-4b06-8f1a-c9e3b6d2a457
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package server
 
@@ -24,7 +24,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 )
 
 // fakeGuestPolicy records EnsureEmail and RemoveEmail calls. When entered
@@ -118,9 +118,9 @@ func TestAcceptInvite_SetsEmailGrantsSSOAndSyncsGuestPolicy(t *testing.T) {
 	if allowed("someone-else@example.com") {
 		t.Fatal("an email nobody accepted an invite with must not be allowed")
 	}
-	cfg := oauth.New(oauth.Config{ExtraAllowed: allowed})
+	cfg := legacyoauth.New(legacyoauth.Config{ExtraAllowed: allowed})
 	if !cfg.IsEmailAllowed("guest@example.com") {
-		t.Fatal("oauth.Config must consult ExtraAllowed")
+		t.Fatal("legacyoauth.Config must consult ExtraAllowed")
 	}
 
 	if len(fake.emails) != 1 || fake.emails[0] != "guest@example.com" {
@@ -274,7 +274,7 @@ func TestRevokeGuestAccess_KeepsSharedOwnerAndAllowlistedEmails(t *testing.T) {
 		setup func(t *testing.T, store database.Store)
 	}{
 		{"another active user holds it, verified by an identity provider", func(t *testing.T, store database.Store) {
-			// What oauth.ResolveUser records when a linked identity's verified
+			// What legacyoauth.ResolveUser records when a linked identity's verified
 			// email equals the account's.
 			twin := claimGuestEmailAfterMove(t, store)
 			m, ok := database.AsCapability[database.VerifiedEmailMarker](store)

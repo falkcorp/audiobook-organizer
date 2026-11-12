@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_nonidentity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3f07c5-1b96-4e2a-a740-6f5c93b1e082
-// last-edited: 2026-08-01
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,7 +22,7 @@ import (
 //
 // The original bug collapsed "valid but anonymous" into "invalid", so every Mode B
 // request was a terminal 401 even when it carried a perfectly good bearer alongside.
-// The fix distinguishes the two with oauth.ErrNonIdentityAssertion. The danger in a
+// The fix distinguishes the two with cfaccess.ErrNonIdentityAssertion. The danger in a
 // fix like this is over-correcting into a fail-open, so the tests below pin BOTH
 // edges: the non-identity case falls through, and every other verification failure
 // stays a hard 401.
@@ -48,8 +48,8 @@ func TestABSAuth_NonIdentity_ForgedAssertionStillHard401(t *testing.T) {
 
 	for _, forged := range []string{"not-a-jwt", "a.b.c", "forged", svcTokenAssertion + "-tampered"} {
 		w := h.do(http.MethodGet, "/api/me", map[string]string{
-			oauth.CFAccessHeader: forged,
-			"Authorization":      "Bearer " + bearer,
+			cfaccess.CFAccessHeader: forged,
+			"Authorization":         "Bearer " + bearer,
 		})
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("forged assertion %q: got %d, want 401 — a bad credential must never be rescued by a second one (body: %s)",
@@ -67,8 +67,8 @@ func TestABSAuth_NonIdentity_WithBearerIsAdmitted(t *testing.T) {
 	bearer := h.mintAccess(t, "u1", "s1")
 
 	w := h.do(http.MethodGet, "/api/me", map[string]string{
-		oauth.CFAccessHeader: svcTokenAssertion,
-		"Authorization":      "Bearer " + bearer,
+		cfaccess.CFAccessHeader: svcTokenAssertion,
+		"Authorization":         "Bearer " + bearer,
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200 — a service-token assertion carries no identity and must fall through to the bearer (body: %s)",
@@ -92,7 +92,7 @@ func TestABSAuth_NonIdentity_WithoutBearerIs401(t *testing.T) {
 	h.store.addUser(activeUser("u1", "owner"))
 
 	w := h.do(http.MethodGet, "/api/me", map[string]string{
-		oauth.CFAccessHeader: svcTokenAssertion,
+		cfaccess.CFAccessHeader: svcTokenAssertion,
 	})
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d, want 401 — a service token is not an identity; falling through must not mean admitting (body: %s)",
@@ -110,7 +110,7 @@ func TestABSAuth_NonIdentity_LoginReachesPasswordPath(t *testing.T) {
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/login", nil)
-	c.Request.Header.Set(oauth.CFAccessHeader, svcTokenAssertion)
+	c.Request.Header.Set(cfaccess.CFAccessHeader, svcTokenAssertion)
 
 	identity, authErr := h.resolver.ResolveCFAssertion(c)
 	if authErr != nil {
@@ -129,7 +129,7 @@ func TestABSAuth_NonIdentity_LoginStillRejectsForgedAssertion(t *testing.T) {
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/login", nil)
-	c.Request.Header.Set(oauth.CFAccessHeader, "forged")
+	c.Request.Header.Set(cfaccess.CFAccessHeader, "forged")
 
 	identity, authErr := h.resolver.ResolveCFAssertion(c)
 	if authErr == nil {

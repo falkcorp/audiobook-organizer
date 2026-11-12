@@ -1,7 +1,7 @@
 // file: internal/server/oauth_app_code_epoch_integration_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 73e84ab1-70b7-4eb5-b510-17c02d35d030
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package server
 
@@ -17,7 +17,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
@@ -34,8 +34,8 @@ func (appCodeIdP) Name() string { return "google" }
 func (appCodeIdP) AuthCodeURL(state, _, _ string) string {
 	return "https://idp.example/authorize?state=" + url.QueryEscape(state)
 }
-func (appCodeIdP) Exchange(context.Context, string, string, string) (*oauth.IdentityClaims, error) {
-	return &oauth.IdentityClaims{Provider: "google", Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true}, nil
+func (appCodeIdP) Exchange(context.Context, string, string, string) (*legacyoauth.IdentityClaims, error) {
+	return &legacyoauth.IdentityClaims{Provider: "google", Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true}, nil
 }
 
 const appCodeDeepLink = "audiobooth://oauth"
@@ -46,20 +46,20 @@ const appCodeDeepLink = "audiobooth://oauth"
 // REAL store.
 type appCodeRig struct {
 	router *gin.Engine
-	codec  *oauth.StateCodec
+	codec  *legacyoauth.StateCodec
 }
 
 func newAppCodeRig(t *testing.T, s *Server) *appCodeRig {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	t.Setenv(abshandler.OIDCRedirectURIsEnvVar, "")
-	codec, err := oauth.NewStateCodec(10 * time.Minute)
+	codec, err := legacyoauth.NewStateCodec(10 * time.Minute)
 	require.NoError(t, err)
-	oauthCfg := oauth.New(oauth.Config{
+	oauthCfg := legacyoauth.New(legacyoauth.Config{
 		Enabled: true, GoogleClientID: "cid", GoogleClientSecret: "secret",
 		RedirectBaseURL: "https://books.example.com", AllowedEmails: []string{"owner@example.com"}, DefaultRole: "viewer",
 	})
-	oh := handlers.NewOAuthHandler(s.storeForWiring(), oauthCfg, codec, map[string]oauth.Provider{"google": appCodeIdP{}})
+	oh := handlers.NewOAuthHandler(s.storeForWiring(), oauthCfg, codec, map[string]legacyoauth.Provider{"google": appCodeIdP{}})
 
 	absCfg, err := absauth.Load(absauth.Settings{Enabled: true, JWTSecret: "0123456789abcdef0123456789abcdef", AuthModes: "jwt"})
 	require.NoError(t, err)

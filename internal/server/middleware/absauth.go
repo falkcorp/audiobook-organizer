@@ -1,12 +1,11 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package middleware
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -15,7 +14,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	coreaudit "github.com/falkcorp/mediacore/audit"
 	coreauth "github.com/falkcorp/mediacore/auth"
@@ -48,17 +48,10 @@ const (
 	ABSModeAPIKey = "apikey"
 )
 
-// CFAssertionVerifier is the slice of *oauth.CFAccessVerifier this middleware needs.
-// Declared as an interface so tests can inject a verifier without standing up
-// Cloudflare's JWKS endpoint.
-type CFAssertionVerifier interface {
-	Verify(ctx context.Context, rawJWT string) (*oauth.IdentityClaims, error)
-}
-
 // ABSIdentityStore is the narrow store slice the ABS identity resolver needs.
 // database.Store satisfies it (PebbleStore implements GetABSSession).
 type ABSIdentityStore interface {
-	oauth.UserStore
+	legacyoauth.UserStore
 	GetRoleByID(id string) (*database.Role, error)
 	GetABSSession(id string) (*database.ABSSession, error)
 	// ExtendABSSession is how authenticated use keeps a session alive (sliding
@@ -81,7 +74,7 @@ type ABSIdentityStore interface {
 //     GET (Mode B).
 //  3. Else 401.
 //
-// WHY THIS IS NOT CloudflareAccessAuth: that middleware is FAIL-OPEN on /api/v1 — an
+// WHY THIS IS NOT cfaccess.CloudflareAccessAuth: that middleware is FAIL-OPEN on /api/v1 — an
 // unverifiable assertion falls through to RequireAuth, which then enforces a session
 // or API key. On the ABS surface there is no such second gate, so falling through
 // would be an authentication bypass. Here every failure mode is terminal:
@@ -98,8 +91,8 @@ type ABSIdentityStore interface {
 // trivially forged on a direct-to-origin request. The signed JWT is the only anchor.
 type ABSIdentityResolver struct {
 	cfg      *absauth.Config
-	verifier CFAssertionVerifier
-	oauthCfg *oauth.Config
+	verifier cfaccess.CFAssertionVerifier
+	oauthCfg *legacyoauth.Config
 	store    ABSIdentityStore
 	// now is the clock for token expiry, session liveness and session extension.
 	// time.Now until UseClock binds it (abs.New binds it to the ABS handler's
@@ -109,7 +102,7 @@ type ABSIdentityResolver struct {
 
 // NewABSIdentityResolver wires the resolver. A nil cfg, or a cfg whose ABS API is
 // disabled, makes every request 401 — a wiring mistake must never open a door.
-func NewABSIdentityResolver(cfg *absauth.Config, verifier CFAssertionVerifier, oauthCfg *oauth.Config, store ABSIdentityStore) *ABSIdentityResolver {
+func NewABSIdentityResolver(cfg *absauth.Config, verifier cfaccess.CFAssertionVerifier, oauthCfg *legacyoauth.Config, store ABSIdentityStore) *ABSIdentityResolver {
 	return &ABSIdentityResolver{cfg: cfg, verifier: verifier, oauthCfg: oauthCfg, store: store, now: time.Now}
 }
 
@@ -172,11 +165,11 @@ func (r *ABSIdentityResolver) Enabled() bool {
 // ServiceTokenBouncer returns the service-token browser-recovery helper on this
 // resolver's Cloudflare Access verifier, or nil when CF assertions are not enabled
 // (the SSO browser hop then has nothing to recover with). See cfbounce.go.
-func (r *ABSIdentityResolver) ServiceTokenBouncer() *CFServiceTokenBouncer {
+func (r *ABSIdentityResolver) ServiceTokenBouncer() *cfaccess.CFServiceTokenBouncer {
 	if !r.CFAssertionsEnabled() {
 		return nil
 	}
-	return NewCFServiceTokenBouncer(r.verifier)
+	return cfaccess.NewCFServiceTokenBouncer(r.verifier, KeyPresented)
 }
 
 // Config exposes the resolved ABS config to handlers wired alongside the resolver.
@@ -222,8 +215,8 @@ func (r *ABSIdentityResolver) CFCallerKey(c *gin.Context) (string, bool) {
 	}
 	claims, err := r.verifier.Verify(c.Request.Context(), raw)
 	if err != nil {
-		if errors.Is(err, oauth.ErrNonIdentityAssertion) {
-			cn := strings.TrimSpace(oauth.CFAssertionCommonName(err))
+		if errors.Is(err, cfaccess.ErrNonIdentityAssertion) {
+			cn := strings.TrimSpace(cfaccess.CFAssertionCommonName(err))
 			if cn == "" {
 				return "", false
 			}
@@ -269,21 +262,21 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 		// Note this does NOT widen access: falling through lands on the bearer path,
 		// which is itself fail-closed. A request with a service token and no bearer
 		// still gets 401 — it has simply not proven who it is.
-		if errors.Is(err, oauth.ErrNonIdentityAssertion) {
+		if errors.Is(err, cfaccess.ErrNonIdentityAssertion) {
 			// Record WHICH service token this was before falling through. It is the
 			// only attribution a machine credential ever carries, and on the
 			// fall-through path the request may still go on to authenticate as a
 			// real user via its bearer — at which point the token and the person
 			// appear together on one audit line, which is the pairing that makes an
 			// anomaly visible (see coreaudit.AuthAttempt.ServiceToken).
-			if cn := oauth.CFAssertionCommonName(err); cn != "" && c != nil {
+			if cn := cfaccess.CFAssertionCommonName(err); cn != "" && c != nil {
 				c.Set(contextABSServiceTokenKey, cn)
 			}
 			return nil, nil
 		}
 		// Everything else FAILS CLOSED — forged signature, wrong issuer, wrong aud,
 		// expired. This is the single most important difference from
-		// CloudflareAccessAuth: no c.Next(), no fall-through to the bearer path. A
+		// cfaccess.CloudflareAccessAuth: no c.Next(), no fall-through to the bearer path. A
 		// bad credential must not be rescued by presenting a second one.
 		return nil, absErr(http.StatusUnauthorized, "assertion-invalid",
 			"invalid Cloudflare Access assertion", ABSModeCF)
@@ -294,7 +287,7 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 		// A verified identity that is not on the allowlist is 403 and provisions
 		// nothing. Anything else is a store failure, which is a 500 — reporting it as
 		// 401/403 would tell the client its credential is dead when it is not.
-		if errors.Is(err, oauth.ErrEmailNotAllowed) || errors.Is(err, oauth.ErrEmailNotVerified) {
+		if errors.Is(err, legacyoauth.ErrEmailNotAllowed) || errors.Is(err, legacyoauth.ErrEmailNotVerified) {
 			return nil, &ABSAuthError{
 				Status: http.StatusForbidden, Reason: "email-not-allowed",
 				Message: "identity is not authorized for this server",
@@ -706,7 +699,7 @@ func ABSAuthMode(c *gin.Context) string {
 // absAssertionFromRequest reads the signed Cloudflare Access assertion.
 //
 // Header only, deliberately: the CF_Authorization cookie fallback that
-// CloudflareAccessAuth keeps for browser flows is irrelevant to native ABS clients
+// cfaccess.CloudflareAccessAuth keeps for browser flows is irrelevant to native ABS clients
 // (iOS sandboxes the browser cookie jar away from an app's URLSession), and
 // Cloudflare's own guidance for API clients is to validate this header. Fewer inputs,
 // smaller surface.
@@ -714,7 +707,7 @@ func absAssertionFromRequest(c *gin.Context) string {
 	if c == nil || c.Request == nil {
 		return ""
 	}
-	return strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader))
+	return strings.TrimSpace(c.GetHeader(cfaccess.CFAccessHeader))
 }
 
 // absBearerFromRequest reads our own access token from Authorization: Bearer, or from

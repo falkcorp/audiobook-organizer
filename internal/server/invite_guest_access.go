@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.12.3
+// version: 1.12.4
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package server
 
@@ -15,9 +15,9 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccesspolicy"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	coreauth "github.com/falkcorp/mediacore/auth"
 )
@@ -27,7 +27,7 @@ var inviteAccessLog = logger.New("server.invites")
 // guestPolicySyncTimeout bounds one accept-time Cloudflare sync (GET + PUT).
 const guestPolicySyncTimeout = 30 * time.Second
 
-// inviteGrantAllowed returns the oauth.Config.ExtraAllowed check for SSO
+// inviteGrantAllowed returns the legacyoauth.Config.ExtraAllowed check for SSO
 // grants written by accepted invites, or nil when the store cannot answer.
 //
 // Why not edit OAuthAllowedEmails: that setting is environment-authoritative
@@ -392,7 +392,7 @@ func (s *Server) keepGuestPolicyEmail(userID, email string) string {
 	if coreauth.SameEmail(snap.OwnerEmail, email) {
 		return "it is the owner's email"
 	}
-	for _, allowed := range oauth.ParseAllowedEmails(snap.OAuthAllowedEmails) {
+	for _, allowed := range legacyoauth.ParseAllowedEmails(snap.OAuthAllowedEmails) {
 		if coreauth.SameEmail(allowed, email) {
 			return "it is on OAUTH_ALLOWED_EMAILS"
 		}
@@ -411,7 +411,7 @@ func (s *Server) keepGuestPolicyEmail(userID, email string) string {
 // when an accepted emailed invitation, not an SSO login, took the address.
 const emailDisplacedByInvite = "invite"
 
-// recordEmailDisplaced is oauth.Config.OnEmailDisplaced, and is also called
+// recordEmailDisplaced is legacyoauth.Config.OnEmailDisplaced, and is also called
 // by handleAcceptInvite: it writes an audit activity entry when a verified SSO
 // login or an accepted emailed invitation took its address back from accounts
 // that held it unverified, so an admin can see whose profile lost its email

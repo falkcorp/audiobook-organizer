@@ -1,7 +1,7 @@
 // file: internal/server/cf_recovery.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a4c2e91-5b3d-4f08-a6e2-1d9c0b8f3e57
-// last-edited: 2026-10-20
+// last-edited: 2026-11-11
 
 package server
 
@@ -9,9 +9,10 @@ import (
 	"path"
 	"strings"
 
-	"github.com/gin-gonic/gin"
-
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+
+	"github.com/gin-gonic/gin"
 )
 
 // cfRecoveryExcludedPrefixes are path prefixes the web-UI service-token recovery
@@ -62,6 +63,6 @@ func isCFRecoverySPAPath(p string) bool {
 // newCFRecoveryMiddleware is the web-UI service-token browser recovery on v, the
 // verifier CloudflareAccessAuth uses. See middleware/cfbounce.go for the failure
 // it recovers and the rules for what it may touch.
-func newCFRecoveryMiddleware(v servermiddleware.CFAssertionVerifier) gin.HandlerFunc {
-	return servermiddleware.CFServiceTokenRecovery(servermiddleware.NewCFServiceTokenBouncer(v), isCFRecoverySPAPath)
+func newCFRecoveryMiddleware(v cfaccess.CFAssertionVerifier) gin.HandlerFunc {
+	return cfaccess.CFServiceTokenRecovery(cfaccess.NewCFServiceTokenBouncer(v, servermiddleware.KeyPresented), isCFRecoverySPAPath)
 }
