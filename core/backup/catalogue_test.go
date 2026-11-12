@@ -343,7 +343,7 @@ func TestBackupTaskExclusive(t *testing.T) {
 	}
 }
 
-func TestCreateCancelRemovesStaging(t *testing.T) {
+func TestCreateCancelRemovesPartial(t *testing.T) {
 	e := newEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	e.opts.Artifacts = func() []backup.Artifact {
