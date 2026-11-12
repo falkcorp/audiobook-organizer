@@ -1,7 +1,7 @@
 // file: core/go.mod
-// version: 1.0.8
+// version: 1.0.9
 // guid: 423dec24-3ee4-45a5-a8ca-af9d6bc2b133
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 module github.com/falkcorp/mediacore
 
@@ -30,6 +30,7 @@ require (
 	github.com/go-logr/stdr v1.2.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/klauspost/compress v1.20.3
+	github.com/openai/openai-go/v3 v3.96.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.73.1
@@ -87,6 +88,7 @@ require (
 	github.com/cockroachdb/redact v1.1.8 // indirect
 	github.com/cockroachdb/swiss v0.0.0-20260820225851-333444432258 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20250429170803-42689b6311bb // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/getsentry/sentry-go v0.49.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
@@ -104,6 +106,10 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
+	github.com/tidwall/gjson v1.20.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	go.etcd.io/bbolt v1.5.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.47.0 // indirect
