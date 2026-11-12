@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_atpath_index_test.go
-// version: 1.7.5
+// version: 1.7.6
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
 // last-edited: 2026-11-12
 
@@ -1058,5 +1058,115 @@ func TestBackfillAndVerify_OverlongRowIsSkippedNotFatal(t *testing.T) {
 	}
 	if rep.OverlongRows != 1 || rep.MissingLive != 0 || rep.MissingTrashed != 0 || rep.UnmarkedUndecodable != 0 || rep.StaleMarkers != 0 || rep.MarkersNotInSet != 0 {
 		t.Fatalf("verify = %+v, want overlong 1 and no drift", rep)
+	}
+}
+
+// seedOverlongBook writes a decodable book row whose path is past the key
+// bound (CreateBook refuses it, so it stands for a row from before the bound),
+// then runs the backfill so the row carries its marker.
+func seedOverlongBook(t *testing.T, s *PebbleStore, id string) (longPath string) {
+	t.Helper()
+	longPath = "/lib/" + strings.Repeat("p", maxBookAtPathLen)
+	raw, err := json.Marshal(&Book{ID: id, Title: "legacy", FilePath: longPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Set([]byte("book:"+id), raw, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	resetAtPathIndex(t, s)
+	res, err := s.BackfillBookAtPathIndex(context.Background(), nil)
+	if err != nil || res.SkippedOverlongRows != 1 {
+		t.Fatalf("backfill = %+v, %v; want 1 skipped overlong row", res, err)
+	}
+	if !hasUndecodableMarker(t, s, id) {
+		t.Fatal("overlong row has no marker")
+	}
+	return longPath
+}
+
+// TestOverlongBook_DeleteSucceedsAndDropsMarker: an existing overlong row has
+// no index key, so deleting it must not fail on building one.
+func TestOverlongBook_DeleteSucceedsAndDropsMarker(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	seedOverlongBook(t, s, "01LEGACY")
+	if err := s.DeleteBook("01LEGACY"); err != nil {
+		t.Fatalf("DeleteBook of an overlong row: %v", err)
+	}
+	if hasUndecodableMarker(t, s, "01LEGACY") {
+		t.Fatal("marker survived the delete")
+	}
+}
+
+// TestOverlongBook_MetadataUpdateKeepsMarker: a no-path-change update of a
+// legacy overlong book succeeds, and the marker stays so lookups still fail
+// closed.
+func TestOverlongBook_MetadataUpdateKeepsMarker(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	longPath := seedOverlongBook(t, s, "01LEGACY")
+	b, err := s.GetBookByID("01LEGACY")
+	if err != nil || b == nil {
+		t.Fatalf("GetBookByID: %v %v", b, err)
+	}
+	b.Title = "renamed"
+	if _, err := s.UpdateBook("01LEGACY", b); err != nil {
+		t.Fatalf("metadata-only update of an overlong row: %v", err)
+	}
+	if !hasUndecodableMarker(t, s, "01LEGACY") {
+		t.Fatal("marker was dropped although the row still cannot be keyed")
+	}
+	if ids, err := s.LiveBookIDsAtPath(longPath); err == nil {
+		t.Fatalf("LiveBookIDsAtPath(overlong) = %v, nil; want fail closed", ids)
+	}
+}
+
+// TestOverlongBook_ShorteningThePathWritesKeyAndClearsMarker, and a NEW
+// overlong path is still refused.
+func TestOverlongBook_ShorteningThePathWritesKeyAndClearsMarker(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	seedOverlongBook(t, s, "01LEGACY")
+	b, err := s.GetBookByID("01LEGACY")
+	if err != nil || b == nil {
+		t.Fatalf("GetBookByID: %v %v", b, err)
+	}
+
+	worse := *b
+	worse.FilePath = b.FilePath + "x"
+	if _, err := s.UpdateBook("01LEGACY", &worse); !errors.Is(err, errBookAtPathKeyTooLong) {
+		t.Fatalf("moving to a new overlong path: err = %v, want errBookAtPathKeyTooLong", err)
+	}
+
+	b.FilePath = "/short"
+	if _, err := s.UpdateBook("01LEGACY", b); err != nil {
+		t.Fatalf("shortening the path: %v", err)
+	}
+	if hasUndecodableMarker(t, s, "01LEGACY") {
+		t.Fatal("marker survived the shortening")
+	}
+	ids, err := s.LiveBookIDsAtPath("/short")
+	if err != nil || len(ids) != 1 || ids[0] != "01LEGACY" {
+		t.Fatalf("LiveBookIDsAtPath(/short) = %v, %v; want [01LEGACY]", ids, err)
+	}
+}
+
+// TestVerify_StaleKeyOfOverlongRowIsReported: a key an old binary left for a
+// row that is now overlong must be reported as an extra of an existing row,
+// not vanish.
+func TestVerify_StaleKeyOfOverlongRowIsReported(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	longPath := seedOverlongBook(t, s, "01LEGACY")
+	if err := s.db.Set([]byte(bookAtPathPrefix+longPath+"\x0001LEGACY"), []byte{}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.OverlongRows != 1 || rep.ExtraRowMoved != 1 || rep.ExtraRowGone != 0 || len(rep.SampleExtra) != 1 {
+		t.Fatalf("verify = %+v, want overlong 1 and the stale key as 1 extra (moved)", rep)
 	}
 }

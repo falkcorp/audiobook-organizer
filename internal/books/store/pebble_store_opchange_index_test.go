@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_opchange_index_test.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
 // last-edited: 2026-11-12
 
@@ -1427,13 +1427,16 @@ func TestOpchangeKey_OperandBounds(t *testing.T) {
 }
 
 // TestOpchangeBackfillAndVerify_OverlongRowIsSkippedNotFatal: a journal row
-// whose book id is past the key bound (written raw, since the write path
+// whose key suffix is past the key bound (written raw, since the write path
 // refuses it) must not abort the backfill or leave the verify reporting a
 // missing entry forever. The other rows are indexed; the one skip is counted.
 func TestOpchangeBackfillAndVerify_OverlongRowIsSkippedNotFatal(t *testing.T) {
 	p := newOpChangeTestStore(t)
-	for i, bookID := range []string{"b1", strings.Repeat("b", maxOpChangeBookIDLen+1), "b2"} {
-		c := &OperationChange{ID: fmt.Sprintf("c%d", i), OperationID: "op1", BookID: bookID, ChangeType: "metadata_update"}
+	// The skipped row has a normal book id but an overlong key suffix: an
+	// overlong book id is simply not indexable (reads scan), so it never
+	// reaches the key builder.
+	for i, opID := range []string{"op1", strings.Repeat("o", maxOpChangeSuffixLen), "op2"} {
+		c := &OperationChange{ID: fmt.Sprintf("c%d", i), OperationID: opID, BookID: "b1", ChangeType: "metadata_update"}
 		raw, err := json.Marshal(c)
 		if err != nil {
 			t.Fatal(err)
@@ -1455,5 +1458,99 @@ func TestOpchangeBackfillAndVerify_OverlongRowIsSkippedNotFatal(t *testing.T) {
 	}
 	if rep.OverlongRows != 1 || rep.Indexable != 2 || rep.MissingEntries != 0 {
 		t.Fatalf("verify = overlong %d indexable %d missing %d, want 1 2 0", rep.OverlongRows, rep.Indexable, rep.MissingEntries)
+	}
+}
+
+func seedRawOpChange(t *testing.T, p *PebbleStore, opID, id, bookID string) {
+	t.Helper()
+	c := &OperationChange{ID: id, OperationID: opID, BookID: bookID, ChangeType: "metadata_update"}
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.Set(opChangeKey(opID, id), raw, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGetBookChanges_OverlongBookIDIsFoundByScan: a legacy row whose book id is
+// over the bound is not indexable, so reads of that book scan and return it,
+// while the index stays trusted for everyone else.
+func TestGetBookChanges_OverlongBookIDIsFoundByScan(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	longID := strings.Repeat("b", maxOpChangeBookIDLen+1)
+	seedRawOpChange(t, p, "op1", "c1", "b1")
+	seedRawOpChange(t, p, "op1", "c2", longID)
+	mustTrustOpChange(t, p)
+	got, err := p.GetBookChanges(longID)
+	if err != nil || len(got) != 1 || got[0].ID != "c2" {
+		t.Fatalf("GetBookChanges(overlong id) = %v, %v; want [c2]", changeIDs(got), err)
+	}
+	got, err = p.GetBookChanges("b1")
+	if err != nil || len(got) != 1 || got[0].ID != "c1" {
+		t.Fatalf("GetBookChanges(b1) = %v, %v; want [c1]", changeIDs(got), err)
+	}
+}
+
+// TestGetBookChanges_OverlongSuffixKeepsIndexUntrustedSoReadsScan: a legacy row
+// with a normal book id but an overlong key suffix can have no entry, so the
+// index must not be trusted (an indexed read would omit it) and GetBookChanges
+// must return every row.
+func TestGetBookChanges_OverlongSuffixKeepsIndexUntrustedSoReadsScan(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	longOp := strings.Repeat("o", maxOpChangeSuffixLen)
+	seedRawOpChange(t, p, "op1", "c1", "b1")
+	seedRawOpChange(t, p, longOp, "c2", "b1")
+	res, err := p.EnsureOpChangeByBookIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if res.Trusted || p.opChangeByBookIndexTrusted() {
+		t.Fatalf("ensure = %+v; index must stay untrusted while an overlong-suffix row exists", res)
+	}
+	if res.Rebuilt {
+		t.Fatalf("ensure rebuilt (%+v); a rebuild cannot add what cannot be keyed", res)
+	}
+	if res.Verify.OverlongRows != 1 {
+		t.Fatalf("verify overlong = %d, want 1", res.Verify.OverlongRows)
+	}
+	got, err := p.GetBookChanges("b1")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("GetBookChanges(b1) = %v, %v; want both rows", changeIDs(got), err)
+	}
+}
+
+// TestCreateOperationChange_RefusesNewOverlongButRewritesExisting.
+func TestCreateOperationChange_RefusesNewOverlongButRewritesExisting(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	err := p.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: strings.Repeat("b", maxOpChangeBookIDLen+1), ChangeType: "metadata_update"})
+	if !errors.Is(err, errOpChangeKeyTooLong) {
+		t.Fatalf("new overlong book id: err = %v, want errOpChangeKeyTooLong", err)
+	}
+	err = p.CreateOperationChange(&OperationChange{ID: "c1", OperationID: strings.Repeat("o", maxOpChangeSuffixLen), BookID: "b1", ChangeType: "metadata_update"})
+	if !errors.Is(err, errOpChangeKeyTooLong) {
+		t.Fatalf("new overlong suffix: err = %v, want errOpChangeKeyTooLong", err)
+	}
+
+	longOp := strings.Repeat("o", maxOpChangeSuffixLen)
+	seedRawOpChange(t, p, longOp, "c2", "b1")
+	if err := p.CreateOperationChange(&OperationChange{ID: "c2", OperationID: longOp, BookID: "b1", ChangeType: "metadata_update"}); err != nil {
+		t.Fatalf("rewriting an existing overlong-suffix row: %v", err)
+	}
+}
+
+// TestPruneOperationChanges_OverlongRowsAreDeleted: a row with no index entry
+// (overlong id or suffix) must be deleted by the prune, not wedge it.
+func TestPruneOperationChanges_OverlongRowsAreDeleted(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	seedRawOpChange(t, p, "op1", "c1", "b1")
+	seedRawOpChange(t, p, "op1", "c2", strings.Repeat("b", maxOpChangeBookIDLen+1))
+	seedRawOpChange(t, p, strings.Repeat("o", maxOpChangeSuffixLen), "c3", "b1")
+	n, err := p.PruneOperationChanges(context.Background(), time.Now().Add(time.Hour), nil)
+	if err != nil {
+		t.Fatalf("prune over overlong rows: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("pruned %d rows, want 3", n)
 	}
 }

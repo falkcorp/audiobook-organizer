@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.239.4
+// version: 1.239.5
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-12
 
@@ -3127,14 +3127,13 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 			batch.Close()
 			return nil, err
 		}
-		oldAtPathKey, err := bookAtPathKey(oldBook.FilePath, id)
-		if err != nil {
-			batch.Close()
-			return nil, err
-		}
-		if err := batch.Delete(oldAtPathKey, nil); err != nil {
-			batch.Close()
-			return nil, err
+		// The old side of an update tolerates an existing overlong path: it has
+		// no index key to remove.
+		if oldAtPathKey, ok := bookAtPathKeyExisting(oldBook.FilePath, id); ok {
+			if err := batch.Delete(oldAtPathKey, nil); err != nil {
+				batch.Close()
+				return nil, err
+			}
 		}
 	}
 
@@ -3147,12 +3146,23 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// closes that window, but the unconditional Set stays: it is one small
 	// idempotent write, and it self-heals any key lost for any other reason
 	// (a pre-index row, a partial commit) on the book's next write.
+	// Only a NEW overlong path is refused. A legacy row that keeps its overlong
+	// path (or whose id is already overlong, with a bounded path) cannot be
+	// keyed, so it gets no key and KEEPS its marker, which is what makes
+	// lookups fail closed for it. Shortening the path writes the key and clears
+	// the marker below.
+	keepMarker := false
 	atPathKey, err := bookAtPathKey(book.FilePath, id)
-	if err != nil {
-		batch.Close()
-		return nil, err
-	}
-	if err := batch.Set(atPathKey, []byte{}, nil); err != nil {
+	switch {
+	case err == nil:
+		if err := batch.Set(atPathKey, []byte{}, nil); err != nil {
+			batch.Close()
+			return nil, err
+		}
+	case errors.Is(err, errBookAtPathKeyTooLong) &&
+		(oldBook.FilePath == book.FilePath || len(book.FilePath) <= maxBookAtPathLen):
+		keepMarker = true
+	default:
 		batch.Close()
 		return nil, err
 	}
@@ -3164,6 +3174,9 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// (pebble_store_atpath_markers.go). The id leaves the in-memory set only
 	// after the commit below succeeds.
 	markerGen, markerMayExist := p.undecodableMarkerMayExist(id)
+	if keepMarker {
+		markerMayExist = false
+	}
 	if markerMayExist {
 		if err := batch.Delete(bookAtPathUndecodableKey(id), nil); err != nil {
 			batch.Close()
@@ -3840,14 +3853,13 @@ func (p *PebbleStore) deleteBook(id string, opts deleteBookOpts) error {
 			return err
 		}
 	}
-	atPathKey, err := bookAtPathKey(book.FilePath, id)
-	if err != nil {
-		batch.Close()
-		return err
-	}
-	if err := batch.Delete(atPathKey, nil); err != nil {
-		batch.Close()
-		return err
+	// An existing overlong row has no index key to remove (its marker, dropped
+	// above, was all the index held for it).
+	if atPathKey, ok := bookAtPathKeyExisting(book.FilePath, id); ok {
+		if err := batch.Delete(atPathKey, nil); err != nil {
+			batch.Close()
+			return err
+		}
 	}
 
 	// Delete version-group index (PERF-VERSIONS).

@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_opchange_index.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
 // last-edited: 2026-11-12
 
@@ -177,8 +177,12 @@ func opChangeKey(operationID, changeID string) []byte {
 // the id must be non-empty and free of ':' (see the file comment for why a ':'
 // would make index keys collide). Every writer, the backfill, the verify and
 // GetBookChanges use this one test.
+//
+// A book id over maxOpChangeBookIDLen is not indexable either: it cannot be
+// keyed, so its rows get no entry and every read of that book scans, which
+// finds them all. (Without this an indexed read would silently omit them.)
 func opChangeIndexable(bookID string) bool {
-	return bookID != "" && !strings.Contains(bookID, ":")
+	return bookID != "" && len(bookID) <= maxOpChangeBookIDLen && !strings.Contains(bookID, ":")
 }
 
 // Upper bounds on the operands of an opchange index key, checked before any
@@ -197,16 +201,14 @@ const (
 var errOpChangeKeyTooLong = errors.New("opchange index key operand too long")
 
 // opChangeKeySuffix returns primary without its family prefix, or an error when
-// primary is shorter than the prefix or the remainder exceeds the bound.
+// primary is shorter than the prefix. It does NOT bound the suffix: each
+// builder checks that inline, right before its make, so the bound dominates
+// the allocation.
 func opChangeKeySuffix(primary []byte) ([]byte, error) {
 	if len(primary) < len(opChangeKeyPrefix) {
 		return nil, fmt.Errorf("%w: primary key is %d bytes, shorter than its %d-byte prefix", errOpChangeKeyTooLong, len(primary), len(opChangeKeyPrefix))
 	}
-	suffix := primary[len(opChangeKeyPrefix):]
-	if len(suffix) > maxOpChangeSuffixLen {
-		return nil, fmt.Errorf("%w: key suffix is %d bytes, limit %d", errOpChangeKeyTooLong, len(suffix), maxOpChangeSuffixLen)
-	}
-	return suffix, nil
+	return primary[len(opChangeKeyPrefix):], nil
 }
 
 // opChangeByBookKey is the index key for the row at primary key primary,
@@ -220,6 +222,9 @@ func opChangeByBookKey(bookID string, primary []byte) ([]byte, error) {
 	suffix, err := opChangeKeySuffix(primary)
 	if err != nil {
 		return nil, err
+	}
+	if len(suffix) > maxOpChangeSuffixLen {
+		return nil, fmt.Errorf("%w: key suffix is %d bytes, limit %d", errOpChangeKeyTooLong, len(suffix), maxOpChangeSuffixLen)
 	}
 	k := make([]byte, 0, len(opChangeByBookPrefix)+len(bookID)+1+len(suffix))
 	k = append(k, opChangeByBookPrefix...)
@@ -240,6 +245,9 @@ func opChangeUndecodableKey(primary []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(suffix) > maxOpChangeSuffixLen {
+		return nil, fmt.Errorf("%w: key suffix is %d bytes, limit %d", errOpChangeKeyTooLong, len(suffix), maxOpChangeSuffixLen)
+	}
 	k := make([]byte, 0, len(opChangeUndecodablePrefix)+len(suffix))
 	k = append(k, opChangeUndecodablePrefix...)
 	return append(k, suffix...), nil
@@ -252,6 +260,12 @@ func stageOpChangeIndex(batch *GatedBatch, bookID string, primary []byte) error 
 		return nil
 	}
 	key, err := opChangeByBookKey(bookID, primary)
+	if errors.Is(err, errOpChangeKeyTooLong) {
+		// An EXISTING row with an overlong key suffix (a new one is refused at
+		// CreateOperationChanges) has no entry to write; verify keeps the index
+		// untrusted while one exists, so reads scan and still find it.
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("build opchange_by_book entry: %w", err)
 	}
@@ -267,6 +281,9 @@ func unstageOpChangeIndex(batch *GatedBatch, bookID string, primary []byte) erro
 		return nil
 	}
 	key, err := opChangeByBookKey(bookID, primary)
+	if errors.Is(err, errOpChangeKeyTooLong) {
+		return nil // no entry exists for an overlong row; still delete/prune it
+	}
 	if err != nil {
 		return fmt.Errorf("build opchange_by_book delete: %w", err)
 	}
@@ -600,6 +617,15 @@ func (p *PebbleStore) EnsureOpChangeByBookIndexWith(ctx context.Context, opts Op
 		logOpChangeVerifyYield(rep)
 		return out, nil
 	}
+	if rep.SentinelSet && rep.Complete && rep.MissingEntries == 0 && rep.UnmarkedUndecodable == 0 && rep.OverlongRows > 0 {
+		// Rows with an overlong key suffix can have neither an entry nor a
+		// marker, so an indexed read would silently omit them. Leave the index
+		// untrusted (GetBookChanges scans, which finds every row). No rebuild:
+		// it could not add what cannot be keyed.
+		opChangeIndexLog.Warn("opchange-index-ensure: %d row(s) have a key suffix over the bound and cannot be indexed; readers stay on the full scan",
+			rep.OverlongRows)
+		return out, nil
+	}
 	if rep.SentinelSet && rep.Complete && rep.MissingEntries == 0 && rep.UnmarkedUndecodable == 0 {
 		p.opChangeByBookTrustedAt.Store(gen + 1)
 		p.publishOpChangeTrust()
@@ -797,7 +823,10 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 	res.Commits++
 	gen := p.opChangeByBookGen.Load()
 	p.opChangeByBookBuiltAt.Store(gen + 1)
-	if force {
+	if force && res.SkippedOverlong > 0 {
+		opChangeIndexLog.Warn("opchange-index-backfill: %d row(s) have a key suffix over the bound and cannot be indexed; readers stay on the full scan",
+			res.SkippedOverlong)
+	} else if force {
 		// The rebuild visited every row after clearing trust, and every row
 		// written since was written by this binary with its entry, so the
 		// index is complete for this generation.

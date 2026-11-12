@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_operations.go
-// version: 1.14.2
+// version: 1.14.3
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
 // last-edited: 2026-11-09
 
@@ -606,11 +606,27 @@ func (p *PebbleStore) CreateOperationChanges(changes []*OperationChange) error {
 		// ULID), and the store cannot tell a fresh id from a reused one, so in
 		// practice nearly every call pays one point read; for a fresh id it is a
 		// miss.
+		found := false
+		var old *OperationChange
 		if supplied {
-			old, found, err := p.storedOpChange(key)
+			var err error
+			old, found, err = p.storedOpChange(key)
 			if err != nil {
 				return err
 			}
+		}
+		// Refuse a NEW overlong value: a row that is not stored yet, or one that
+		// moves to an over-limit book id. An EXISTING overlong row (legacy) may
+		// be rewritten as-is; it simply has no index entry.
+		if !found || old.BookID != change.BookID {
+			if len(change.BookID) > maxOpChangeBookIDLen {
+				return fmt.Errorf("%w: book id is %d bytes, limit %d", errOpChangeKeyTooLong, len(change.BookID), maxOpChangeBookIDLen)
+			}
+		}
+		if !found && len(key)-len(opChangeKeyPrefix) > maxOpChangeSuffixLen {
+			return fmt.Errorf("%w: key suffix is %d bytes, limit %d", errOpChangeKeyTooLong, len(key)-len(opChangeKeyPrefix), maxOpChangeSuffixLen)
+		}
+		if supplied {
 			if found && old.BookID != change.BookID {
 				if err := unstageOpChangeIndex(batch, old.BookID, key); err != nil {
 					return err

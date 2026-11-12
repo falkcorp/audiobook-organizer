@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_atpath_index.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-11-12
 
@@ -137,6 +137,16 @@ func bookAtPathKey(path, id string) ([]byte, error) {
 	k = append(k, 0)
 	k = append(k, id...)
 	return k, nil
+}
+
+// bookAtPathKeyExisting is bookAtPathKey for a row that ALREADY exists (delete,
+// the old-path side of an update, a signature migration): ok is false when the
+// row's path or id is over the bound, meaning the row has no index key to
+// write or remove (the backfill marked it instead). Only a NEW overlong value
+// is refused, and that is bookAtPathKey's job.
+func bookAtPathKeyExisting(path, id string) (key []byte, ok bool) {
+	key, err := bookAtPathKey(path, id)
+	return key, err == nil
 }
 
 // bookAtPathBounds is the scan range holding exactly path's keys:
@@ -682,7 +692,10 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 			delete(expected, k)
 			return nil
 		}
-		if _, exists := rowPath[id]; exists {
+		// An overlong row is not in rowPath (it can have no key at any path), but
+		// it exists: a key left for it by a binary that predates the bound is an
+		// extra of an existing row, not of a gone one.
+		if _, exists := rowPath[id]; exists || overlong[id] {
 			rep.ExtraRowMoved++
 		} else {
 			rep.ExtraRowGone++
