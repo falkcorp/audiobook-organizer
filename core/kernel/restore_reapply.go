@@ -1,5 +1,5 @@
 // file: core/kernel/restore_reapply.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 2f6d8a14-c3e7-4b95-a018-9d4e7b1c5f36
 // last-edited: 2026-11-12
 
@@ -52,8 +52,7 @@ import (
 // other line, and the first boot of a build that knows the kind applies it and
 // deletes the entry in the same batch (drainUnapplied). Holding the head below
 // the line instead made every later boot re-apply the lines after it, undoing an
-// admin's re-enable or a new password, refuse the journal for good, and fail
-// closed again each time.
+// admin's re-enable or a new password, and refuse the journal for good.
 //
 // A kept last admin's restriction is a journal append, and an append stages its
 // own seq as the head: seq above every line of the journal. So nothing that can
