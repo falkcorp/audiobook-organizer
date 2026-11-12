@@ -1,7 +1,7 @@
 // file: core/internal/libraryhttp/problem.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c85aad69-5513-477a-bf33-3ec7375c8eb3
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package libraryhttp
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/rbac"
@@ -68,10 +69,20 @@ func forbidden(need rbac.Requirement) problem {
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	p, ok := mapError(err)
 	if !ok {
-		s.log.Error("libraryhttp: unmapped error", "method", r.Method, "path", r.URL.Path, "err", err)
+		s.log.Error("libraryhttp: unmapped error", "method", oneLine(r.Method), "path", oneLine(r.URL.Path), "err", oneLine(err.Error()))
 		p = problem{Status: http.StatusInternalServerError, Code: "internal"}
 	}
 	s.write(w, r, p)
+}
+
+// oneLine is s with its line breaks written out as \r and \n, so a request path
+// or an error that repeats it cannot end a log line and start a forged one
+// (go/log-injection). The core log handler escapes every control character
+// already; this is the guard at the call that logs what a client sent.
+func oneLine(s string) string {
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	return s
 }
 
 // mapError maps the library's refusals to problems. It matches by errors.Is,

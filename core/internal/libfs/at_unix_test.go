@@ -1,7 +1,7 @@
 // file: core/internal/libfs/at_unix_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f659f83a-171b-4adc-996b-b61e175f5807
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 //go:build unix
 
@@ -268,5 +268,15 @@ func TestLinkFailureClassification(t *testing.T) {
 	}
 	if err := linkFailure("a", "b", nil); err != nil {
 		t.Errorf("linkFailure(nil) = %v", err)
+	}
+}
+
+// openat refuses a name that is not local to the directory before it reaches the
+// system call, whatever checkName at the public entry already said.
+func TestOpenatRefusesANameThatIsNotLocal(t *testing.T) {
+	for _, name := range []string{"", "..", "../Batcave", "/etc/passwd"} {
+		if nfd, err := openat(-1, name, unix.O_RDONLY, 0); !errors.Is(err, ErrBadName) || nfd != -1 {
+			t.Errorf("openat(%q) = %d, %v; want -1 and ErrBadName", name, nfd, err)
+		}
 	}
 }

@@ -1,7 +1,7 @@
 // file: core/library/rootfs_local.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package library
 
@@ -208,6 +208,38 @@ func (l *localFS) Lstat(name string) (fs.FileInfo, error) {
 	}
 	fi, err := l.root.Lstat(n)
 	return fi, pathErr("lstat", name, err)
+}
+
+// factsOf reads the identity facts (libfs.FileFacts) of the entry name from a
+// descriptor: the parent directory is opened through the root and the leaf
+// relative to it with O_NOFOLLOW, so the facts are those of the file the name holds
+// at this instant and a link is never followed. A name that is gone is
+// fs.ErrNotExist. A link, FIFO, device or directory is reported with Regular
+// false. It is how a transfer records the source it is about to copy and how it
+// asks later whether that is still the file there: a read, so it takes no part in
+// the reserved-area decisions that guard mutations.
+func (l *localFS) factsOf(name string) (libfs.FileFacts, error) {
+	n, err := l.name("stat", name)
+	if err != nil {
+		return libfs.FileFacts{}, err
+	}
+	d, err := libfs.OpenDir(l.root, path.Dir(n))
+	if err != nil {
+		return libfs.FileFacts{}, pathErr("stat", name, err)
+	}
+	defer closeLogged(l.log, d, "the directory holding "+name)
+	f, err := libfs.OpenAt(d, path.Base(n), os.O_RDONLY)
+	switch {
+	case errors.Is(err, syscall.ELOOP):
+		return libfs.FileFacts{}, nil // a symbolic link
+	case err != nil:
+		return libfs.FileFacts{}, pathErr("stat", name, err)
+	}
+	facts, ferr := libfs.FactsOf(f)
+	if cerr := f.Close(); cerr != nil && ferr == nil {
+		ferr = cerr
+	}
+	return facts, pathErr("stat", name, ferr)
 }
 
 func (l *localFS) ReadDir(name string) ([]fs.DirEntry, error) {

@@ -1,7 +1,7 @@
 // file: core/library/transfer_review_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: af173944-fc53-437c-9cc7-c9e516a3410d
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package library
 
@@ -188,6 +188,7 @@ func TestMoveKeepsASourceThatChangedAfterTheCopy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			time.Sleep(clockTick) // see clockTick: no tie with the original's change time
 			if err := os.Remove(abs); err != nil {
 				t.Fatal(err)
 			}
@@ -255,6 +256,7 @@ func TestRecoveryKeepsASourceThatIsAnotherInode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	time.Sleep(clockTick) // see clockTick: no tie with the original's change time
 	if err := os.Remove(abs); err != nil {
 		t.Fatal(err)
 	}

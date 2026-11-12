@@ -1,7 +1,7 @@
 // file: core/internal/libraryhttp/browse.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 969840c6-2d7a-4a37-85c0-43a9e1298b2f
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package libraryhttp
 
@@ -231,7 +231,7 @@ func (s *Server) listRoots(w http.ResponseWriter) {
 // evidence about the disk and must not vanish.
 func (s *Server) closeLogged(c io.Closer, what string) {
 	if err := c.Close(); err != nil {
-		s.log.Warn("libraryhttp: could not close a directory", "dir", what, "err", err)
+		s.log.Warn("libraryhttp: could not close a directory", "dir", oneLine(what), "err", oneLine(err.Error()))
 	}
 }
 
