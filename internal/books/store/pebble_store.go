@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.239.5
+// version: 1.239.6
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-12
 
@@ -3162,6 +3162,18 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	case errors.Is(err, errBookAtPathKeyTooLong) &&
 		(oldBook.FilePath == book.FilePath || len(book.FilePath) <= maxBookAtPathLen):
 		keepMarker = true
+		// Write the marker defensively: a legacy row the backfill never saw (or
+		// whose marker was lost) must still fail closed. Idempotent. The id is
+		// noted in the in-memory set BEFORE the batch can commit, as the set's
+		// invariant requires.
+		if err := p.noteUndecodableMarker(id); err != nil {
+			batch.Close()
+			return nil, err
+		}
+		if err := batch.Set(bookAtPathUndecodableKey(id), []byte{}, nil); err != nil {
+			batch.Close()
+			return nil, err
+		}
 	default:
 		batch.Close()
 		return nil, err

@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_opchange_index.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
 // last-edited: 2026-11-12
 
@@ -10,6 +10,7 @@
 //	opchange:<opID>:<changeID>                      -> OperationChange JSON (primary row)
 //	opchange_by_book:<bookID>:<opID>:<changeID>     -> (empty value)
 //	opchange_undecodable:<opID>:<changeID>          -> (empty value)
+//	opchange_overlong:<hex sha256 of primary key>   -> primary key (rows whose key suffix is over the bound)
 //
 // The index key is the book id followed by the primary key with its
 // "opchange:" prefix removed, so within one book the index sorts in exactly
@@ -114,6 +115,8 @@ package store
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -133,6 +136,7 @@ const (
 	opChangeKeyPrefix          = "opchange:"
 	opChangeByBookPrefix       = "opchange_by_book:"
 	opChangeUndecodablePrefix  = "opchange_undecodable:"
+	opChangeOverlongPrefix     = "opchange_overlong:"
 	opChangeScanUpperBound     = "opchange;" // ':' + 1
 	opChangeByBookBackfillKey  = "system:backfill:opchange_by_book_index_v1_done"
 	opChangeByBookCursorKey    = "system:backfill:opchange_by_book_index_v1_cursor"
@@ -239,6 +243,18 @@ func opChangeByBookBookPrefix(bookID string) []byte {
 	return []byte(opChangeByBookPrefix + bookID + ":")
 }
 
+// opChangeOverlongKey is the durable marker for a row whose key suffix is over
+// the bound and so can have no index entry: the family prefix plus the hex
+// sha256 of the primary key (a bounded key for an unbounded input), with the
+// primary key itself as the value so a reader can find the row. The boot
+// verify is cursor-based and a later boot walks only the tail, so it cannot
+// rediscover such a row below the cursor; it counts live markers instead
+// (countLiveOpChangeOverlong) and withholds trust while any exist.
+func opChangeOverlongKey(primary []byte) []byte {
+	sum := sha256.Sum256(primary)
+	return []byte(opChangeOverlongPrefix + hex.EncodeToString(sum[:]))
+}
+
 // opChangeUndecodableKey is the marker key for the undecodable row at primary.
 func opChangeUndecodableKey(primary []byte) ([]byte, error) {
 	suffix, err := opChangeKeySuffix(primary)
@@ -262,8 +278,11 @@ func stageOpChangeIndex(batch *GatedBatch, bookID string, primary []byte) error 
 	key, err := opChangeByBookKey(bookID, primary)
 	if errors.Is(err, errOpChangeKeyTooLong) {
 		// An EXISTING row with an overlong key suffix (a new one is refused at
-		// CreateOperationChanges) has no entry to write; verify keeps the index
-		// untrusted while one exists, so reads scan and still find it.
+		// CreateOperationChanges) has no entry to write. Keep its durable
+		// marker so the verify withholds trust while it exists and reads scan.
+		if err := batch.Set(opChangeOverlongKey(primary), primary, nil); err != nil {
+			return fmt.Errorf("stage opchange_overlong marker: %w", err)
+		}
 		return nil
 	}
 	if err != nil {
@@ -282,7 +301,12 @@ func unstageOpChangeIndex(batch *GatedBatch, bookID string, primary []byte) erro
 	}
 	key, err := opChangeByBookKey(bookID, primary)
 	if errors.Is(err, errOpChangeKeyTooLong) {
-		return nil // no entry exists for an overlong row; still delete/prune it
+		// No entry exists for an overlong row; drop its marker with the row (or
+		// with a move to another book, where the stage re-Sets it if needed).
+		if err := batch.Delete(opChangeOverlongKey(primary), nil); err != nil {
+			return fmt.Errorf("stage opchange_overlong marker delete: %w", err)
+		}
+		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("build opchange_by_book delete: %w", err)
@@ -865,6 +889,10 @@ func (p *PebbleStore) opChangeBackfillChunk(lower, upper []byte, chunk int, res 
 			if errors.Is(err, errOpChangeKeyTooLong) {
 				overlong++
 				warnOpChangeOverlong("opchange-index-backfill", -1, len(k))
+				if err := batch.Set(opChangeOverlongKey(k), bytes.Clone(k), nil); err != nil {
+					iter.Close()
+					return 0, nil, err
+				}
 			} else if err != nil {
 				iter.Close()
 				return 0, nil, err
@@ -880,6 +908,10 @@ func (p *PebbleStore) opChangeBackfillChunk(lower, upper []byte, chunk int, res 
 			if errors.Is(err, errOpChangeKeyTooLong) {
 				overlong++
 				warnOpChangeOverlong("opchange-index-backfill", len(c.BookID), len(k))
+				if err := batch.Set(opChangeOverlongKey(k), bytes.Clone(k), nil); err != nil {
+					iter.Close()
+					return 0, nil, err
+				}
 			} else if err != nil {
 				iter.Close()
 				return 0, nil, err
