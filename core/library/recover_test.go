@@ -1,5 +1,5 @@
 // file: core/library/recover_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: d6fba451-bfd4-4e6c-bd41-649146b9f034
 // last-edited: 2026-11-11
 
@@ -30,6 +30,7 @@ type scenario struct {
 	oldDst   string // the destination's bytes before a Replace; "" = none
 	isMove   bool
 	isLink   bool
+	clone    bool // needs a filesystem that clones: skipped where it does not
 }
 
 func matrixScenarios() []scenario {
@@ -53,6 +54,10 @@ func matrixScenarios() []scenario {
 	mv.MkdirAll = true
 	link := NewTransferOptions(Hardlink, PermLibrary, VerifySize)
 	link.MkdirAll = true
+	auto := withMkdir(NewTransferOptions(Auto, PermLibrary, VerifySHA256))
+	reflink := withMkdir(NewTransferOptions(Reflink, PermLibrary, VerifySHA256))
+	reflinkSize := withMkdir(NewTransferOptions(Reflink, PermLibrary, VerifySize))
+	symlink := withMkdir(NewTransferOptions(Symlink, PermLibrary, VerifySize))
 	return []scenario{
 		{name: "move across a device boundary", setup: mk(""), src: src, dst: dst, opts: mv, inject: crossRoots, orig: orig, isMove: true},
 		{name: "move by rename", setup: mk(""), src: src, dst: dst, opts: mv, orig: orig, isMove: true},
@@ -61,7 +66,36 @@ func matrixScenarios() []scenario {
 		{name: "cross-device move replacing", setup: mk("the old edition of the Joke"), src: src, dst: dst, opts: withMkdir(replMove), inject: crossRoots, orig: orig, oldDst: "the old edition of the Joke", isMove: true},
 		{name: "move by rename replacing", setup: mk("the old edition of the Joke"), src: src, dst: dst, opts: withMkdir(replMove), orig: orig, oldDst: "the old edition of the Joke", isMove: true},
 		{name: "hardlink", setup: mk(""), src: src, dst: dst, opts: link, orig: orig, isLink: true},
+		// Auto, Reflink and Symlink were not in the matrix. Auto's fallbacks keep one
+		// journal row from the first attempt to the last (a row dropped between two
+		// leaked the temp of a crash in the fallback copy).
+		{name: "auto", setup: mk(""), src: src, dst: dst, opts: auto, orig: orig},
+		{name: "auto falling back to hardlink", setup: mk(""), src: src, dst: dst, opts: auto, inject: noReflink, orig: orig},
+		{name: "auto falling back to copy", setup: mk(""), src: src, dst: dst, opts: auto, inject: noReflinkNoLink, orig: orig},
+		{name: "reflink with a digest", setup: mk(""), src: src, dst: dst, opts: reflink, orig: orig, clone: true},
+		{name: "reflink by size", setup: mk(""), src: src, dst: dst, opts: reflinkSize, orig: orig, clone: true},
+		{name: "symlink", setup: mk(""), src: src, dst: dst, opts: symlink, orig: orig},
 	}
+}
+
+// noReflink and noReflinkNoLink steer Auto down its fallbacks on any
+// filesystem: the clone is unsupported, and (second) the hard link crosses a
+// device. The temp's own publish link inside the destination root is untouched.
+func noReflink(label string) error {
+	if strings.Contains(label, ":reflink:") {
+		return ErrReflinkUnsupported
+	}
+	return nil
+}
+
+func noReflinkNoLink(label string) error {
+	if err := noReflink(label); err != nil {
+		return err
+	}
+	if strings.Contains(label, ":link:Arkham/") {
+		return ErrCrossDevice
+	}
+	return nil
 }
 
 // crossRoots makes only the no-clobber rename out of the import root report a
@@ -187,6 +221,9 @@ func TestTransferRecoveryFromJournal(t *testing.T) {
 			dry := &faults{}
 			dr := s.newRig(t, dry)
 			if _, err := dr.m.Transfer(ctxbg(), books, s.src, s.dst, s.opts); err != nil {
+				if s.clone && errors.Is(err, ErrReflinkUnsupported) {
+					t.Skipf("this filesystem does not clone: %v", err)
+				}
 				t.Fatalf("dry run: %v", err)
 			}
 			n := dry.steps()
@@ -229,6 +266,9 @@ func TestTransferRecoveryIsCrashSafe(t *testing.T) {
 			dry := &faults{}
 			dr := s.newRig(t, dry)
 			if _, err := dr.m.Transfer(ctxbg(), books, s.src, s.dst, s.opts); err != nil {
+				if s.clone && errors.Is(err, ErrReflinkUnsupported) {
+					t.Skipf("this filesystem does not clone: %v", err)
+				}
 				t.Fatal(err)
 			}
 			n := dry.steps()
