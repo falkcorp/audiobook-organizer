@@ -2192,6 +2192,9 @@
    "core/internal/authstore/store.go",
    "core/internal/authstore/rewrite_test.go",
    "core/internal/rbacstore/store.go",
+   "core/internal/rbacstore/store_test.go",
+   "core/backup/journal/review_unix_test.go",
+   "todo.d/2026-11-11-f4-11-journal-forward-compat.md",
    "todo.d/2026-11-11-f4-11-spec-reapply-order.md",
    "docs/agent-tasks/platform-core/seams.d/F4-11.md"
   ],
