@@ -1,5 +1,5 @@
 // file: core/backup/space.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4a7e19d-6b25-4f83-a0d1-3e9b7c52f860
 // last-edited: 2026-11-12
 
@@ -7,6 +7,7 @@ package backup
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"math/bits"
 	"strings"
@@ -59,16 +60,65 @@ func requireSpace(d Disk, margin uint64, claims ...spaceClaim) error {
 	}
 	for _, dev := range order {
 		n := byDevice[dev]
-		avail, err := d.avail(n.dir)
-		if err != nil {
-			return fmt.Errorf("backup: the free space of an extraction directory: %w", err)
-		}
-		total, carry := bits.Add64(n.bytes, margin, 0)
-		if carry != 0 || avail < total {
-			return fmt.Errorf("%w: %d bytes free, %d needed", ErrInsufficientSpace, avail, total)
+		if err := requireRoom(d, margin, n.dir, n.bytes); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// requireRoom is the check requireSpace makes of one device: dir's filesystem
+// must have bytes and margin free. It does not ask which device that is, so it
+// is the check for a write with nothing to be summed with (an upload's next
+// interval) on a platform where the device cannot be named; the errors are
+// requireSpace's, naming no path.
+func requireRoom(d Disk, margin uint64, dir string, bytes uint64) error {
+	avail, err := d.avail(dir)
+	if err != nil {
+		return fmt.Errorf("backup: the free space of a directory: %w", err)
+	}
+	total, carry := bits.Add64(bytes, margin, 0)
+	if carry != 0 || avail < total {
+		return fmt.Errorf("%w: %d bytes free, %d needed", ErrInsufficientSpace, avail, total)
+	}
+	return nil
+}
+
+// uploadCheckBytes is how many bytes an upload writes between two looks at the
+// free space of the backup directory: each look asks for room for the next
+// interval beyond the margin, so the volume cannot be driven under the margin
+// by more than the writes of one interval, whatever the upload's length (which
+// nobody knows until it ends).
+const uploadCheckBytes = 32 << 20
+
+// spaceWriter writes to w and, before it writes more than the room it has
+// already been promised, asks check for more: room for the next window bytes (or
+// for this one write, if that is larger). A check that fails fails the write,
+// with that error, before the bytes go anywhere. window bytes are promised to
+// it when it is made: the caller's own check, made before the file was opened,
+// is the first one.
+type spaceWriter struct {
+	w      io.Writer
+	check  func(bytes uint64) error
+	window uint64
+	left   uint64 // bytes of the last promise not yet written
+}
+
+func newSpaceWriter(w io.Writer, window uint64, check func(bytes uint64) error) *spaceWriter {
+	return &spaceWriter{w: w, check: check, window: window, left: window}
+}
+
+func (s *spaceWriter) Write(p []byte) (int, error) {
+	if uint64(len(p)) > s.left {
+		need := max(uint64(len(p)), s.window)
+		if err := s.check(need); err != nil {
+			return 0, err
+		}
+		s.left = need
+	}
+	n, err := s.w.Write(p)
+	s.left -= min(uint64(n), s.left)
+	return n, err
 }
 
 // requireSpace is the package-level check with the service's disk and the
