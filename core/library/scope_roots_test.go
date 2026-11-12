@@ -225,8 +225,7 @@ func TestModuleSurfaceHasNoCallerOrDriverHandle(t *testing.T) {
 	}
 	owner := reflect.TypeFor[storage.Owner]()
 	check := func(what string, ty reflect.Type, skipRecv bool) {
-		for i := range ty.NumMethod() {
-			m := ty.Method(i)
+		for m := range ty.Methods() {
 			if !m.IsExported() {
 				continue
 			}

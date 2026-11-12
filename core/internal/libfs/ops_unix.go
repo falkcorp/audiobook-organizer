@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_unix.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 7ec76d18-20c0-48f2-9a57-c01b4e75498f
 // last-edited: 2026-11-11
 
@@ -214,9 +214,10 @@ func Ancestry(f *os.File, stop ID) ([]ID, error) {
 
 // OpenAt opens the single-component name in d for reading, relative to the
 // directory descriptor, never following a symlink in the name (the open fails
-// with ELOOP). flag must not create or write; O_NOFOLLOW and O_CLOEXEC are
-// added. The result is the file the directory d really holds under that name
-// at this instant.
+// with ELOOP). flag must not create or write; O_NOFOLLOW, O_CLOEXEC and
+// O_NONBLOCK are added (a FIFO named here is opened, not waited on, so the
+// caller can look at what it is). The result is the file the directory d really
+// holds under that name at this instant.
 func OpenAt(d *Dir, name string, flag int) (*os.File, error) {
 	if err := errors.Join(require(d), checkName(name)); err != nil {
 		return nil, err
@@ -224,7 +225,7 @@ func OpenAt(d *Dir, name string, flag int) (*os.File, error) {
 	var nfd int
 	err := retry(func() error {
 		var oe error
-		nfd, oe = unix.Openat(fd(d), name, flag|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		nfd, oe = unix.Openat(fd(d), name, flag|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 		return oe
 	})
 	runtime.KeepAlive(d)

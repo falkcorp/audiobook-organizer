@@ -190,8 +190,14 @@ func (x *xfer) recheck() error {
 	}
 	regular := info.Mode().IsRegular()
 	switch {
-	case x.opts.Mode == Symlink, x.opts.Mode == Move:
-		// A link, a file or (same filesystem) a directory.
+	case x.opts.Mode == Symlink:
+		// A link names any source; nothing opens it.
+	case x.opts.Mode == Move:
+		// A file, a link or (same filesystem) a directory. A FIFO, a socket or a
+		// device is not library content, and the copy path would wait on it.
+		if !regular && !info.IsDir() && info.Mode()&fs.ModeSymlink == 0 {
+			return fmt.Errorf("%w: %s is not a file, a directory or a link", ErrNotSupported, x.src)
+		}
 	case !regular:
 		return fmt.Errorf("%w: %s is not a regular file", ErrNotSupported, x.src)
 	}
