@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/holds_review_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0d6f3b0a-6a5c-4a43-8c3e-7d9b5b1f2e44
 // last-edited: 2026-11-11
 
@@ -267,7 +267,11 @@ func TestHolds_LateReadKeepsWhatThisProcessBuilt(t *testing.T) {
 	if err := gs.PutScope(ctx, alfred, "old:scope"); err != nil {
 		t.Fatal(err)
 	}
-	fs := &failingStore{GateStore: gs}
+	// The outage swallows hold writes too, so the persisted hold stays the old
+	// one while the table moves on.
+	mute := &muteHolds{GateStore: gs}
+	mute.on.Store(true)
+	fs := &failingStore{GateStore: mute}
 	fs.failHolds.Store(true)
 	r := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = fs })
 
@@ -276,6 +280,7 @@ func TestHolds_LateReadKeepsWhatThisProcessBuilt(t *testing.T) {
 	holdOn(t, r, alfred, providerhttp.Policy{Limits: limits(100, 100), Scope: "new:scope"}, integrations.ClassAuth)
 
 	fs.failHolds.Store(false)
+	mute.on.Store(false)
 	clk.Advance(31 * time.Second)
 	h, ok := r.HoldFor(batcave)
 	if !ok || h.Class != integrations.ClassAuth || !h.Until.After(persistedUntil) {
@@ -288,6 +293,19 @@ func TestHolds_LateReadKeepsWhatThisProcessBuilt(t *testing.T) {
 	if sc, err := gs.Scopes(ctx); err != nil || sc[alfred] != "new:scope" {
 		t.Fatalf("the stale record must be rewritten: %v, %v", sc, err)
 	}
+}
+
+// muteHolds accepts hold writes and drops them while on.
+type muteHolds struct {
+	providerhttp.GateStore
+	on atomic.Bool
+}
+
+func (m *muteHolds) PutHold(ctx context.Context, h integrations.Hold) error {
+	if m.on.Load() {
+		return nil
+	}
+	return m.GateStore.PutHold(ctx, h)
 }
 
 // countingScopes counts PutScope calls.
