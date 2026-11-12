@@ -1,5 +1,5 @@
 // file: core/backup/stage.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a9c2e5f1-3d70-4b84-8f6a-2e1d9b7c4a03
 // last-edited: 2026-11-12
 
@@ -237,10 +237,18 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 	// 9. Restart, when asked. The restore is staged either way.
 	if o.Restart && s.o.Restart != nil {
 		if err := s.o.Restart(ctx); err != nil {
-			pr.Warnings = append(pr.Warnings, "the restart request failed: "+err.Error())
+			pr.Warnings = append(pr.Warnings, s.restartWarning(err))
 		}
 	}
 	return pr, nil
+}
+
+// restartWarning is the warning for a failed restart request. The error's text
+// is the operator's (it can name a unit, a socket or a process), so it goes to
+// the log and the warning, which reaches API bodies, stays fixed.
+func (s *Svc) restartWarning(err error) string {
+	s.o.log().Warn("backup: the restart request failed; the restore stays staged", "error", err)
+	return "the restart request failed; the restore is staged and applies at the next start"
 }
 
 func pendingOf(in restorejournal.Intent, warnings []string) PendingRestore {
@@ -452,7 +460,9 @@ func (s *Svc) configTargets(staging, rid string, m *Manifest, o RestoreOptions) 
 		if err := restorejournal.Validate(s.probe(), moves); err == nil {
 			return moves, warnings, nil
 		} else {
-			warnings = append(warnings, "the config file or boot record cannot be swapped by rename here ("+err.Error()+"); they are staged for you to merge")
+			// The refusal names the files and the filesystem; the log keeps it.
+			s.o.log().Warn("backup: the config file or boot record cannot be swapped by rename; staging them for the operator", "restore", rid, "error", err)
+			warnings = append(warnings, "the config file or boot record cannot be swapped by rename here; they are staged for you to merge")
 		}
 	}
 	dst := filepath.Join(restorejournal.JournalDir(s.o.StateDir, rid), "config.restored")
@@ -468,7 +478,10 @@ func (s *Svc) configTargets(staging, rid string, m *Manifest, o RestoreOptions) 
 			return nil, nil, err
 		}
 	}
-	warnings = append(warnings, "the archive's config files are in "+dst)
+	// The warning names the directory relative to the state directory, not the
+	// host path; the log has the full one.
+	s.o.log().Info("backup: the archive's config files are staged for the operator to merge", "restore", rid, "dir", dst)
+	warnings = append(warnings, "the archive's config files are in <state_dir>/restore/"+rid+"/config.restored")
 	return nil, warnings, nil
 }
 
@@ -588,7 +601,7 @@ func (s *Svc) RevertLastRestore(ctx context.Context, o RestoreOptions) (PendingR
 	pr := pendingOf(in, warnings)
 	if o.Restart && s.o.Restart != nil {
 		if err := s.o.Restart(ctx); err != nil {
-			pr.Warnings = append(pr.Warnings, "the restart request failed: "+err.Error())
+			pr.Warnings = append(pr.Warnings, s.restartWarning(err))
 		}
 	}
 	return pr, nil

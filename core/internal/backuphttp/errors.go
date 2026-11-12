@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/errors.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6608474f-18e9-44e0-a1fe-7233ad5bc90b
 // last-edited: 2026-11-12
 
@@ -48,13 +48,16 @@ type archiveDTO struct {
 	Verified    *verifyDTO `json:"verified,omitempty"`
 }
 
-// verifyDTO is a verification's result.
+// verifyDTO is a verification's result. A failure is a Reason, one code from
+// the closed set backup.VerifyReason defines; the failure's error text
+// (backup.VerifyResult.Detail) quotes host paths and internal errors and stays
+// in the operator's log, so this body has no member that could carry it.
 type verifyDTO struct {
 	ArchiveID string `json:"archive_id,omitempty"`
 	At        string `json:"at"`
 	Level     string `json:"level"`
 	OK        bool   `json:"ok"`
-	Detail    string `json:"detail,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // createResponse is the 202 of POST /backups.
@@ -93,8 +96,12 @@ func archiveOf(a backup.Archive) archiveDTO {
 	return d
 }
 
+// verifyOf maps a verification to its body. The reason is normalized here, at
+// the boundary, whatever the Catalogue returned: a code this build does not
+// know (or one on a passing result) never reaches the wire.
 func verifyOf(id backup.ArchiveID, v backup.VerifyResult) verifyDTO {
-	return verifyDTO{ArchiveID: string(id), At: v.At.UTC().Format(time.RFC3339), Level: v.Level.String(), OK: v.OK, Detail: v.Detail}
+	return verifyDTO{ArchiveID: string(id), At: v.At.UTC().Format(time.RFC3339), Level: v.Level.String(), OK: v.OK,
+		Reason: string(v.Reason.Normalize(v.OK))}
 }
 
 func pendingOf(p backup.PendingRestore) pendingDTO {
