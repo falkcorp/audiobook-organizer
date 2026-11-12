@@ -1,7 +1,7 @@
 // file: core/storage/datamigrate/datamigrate.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1796b752-c949-4f2a-9ec8-9f61fcf89823
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 // Package datamigrate declares data migrations: rewrites too large for one
 // batch, run in chunks over a persisted shard plan with persisted shard
@@ -145,6 +145,11 @@ func (w *StepWriter) Quarantine(key, raw []byte, reason string) error {
 // Batch is the chunk's batch for an importer's participant staging (§5S.3.2):
 // the importer binds its own handle, and its writes commit with the chunk and
 // the shard cursor. Cutover only.
+//
+// The batch is indexed: a read through it sees what the chunk staged before,
+// so an importer that reads before it writes (an API key's owner staged by an
+// earlier item of the same chunk, a run the batch already holds) works however
+// the runner cut the chunks. The index costs memory for one chunk's entries.
 //
 // The batch is for staging. A step that commits or closes it fails its
 // chunk with a StepError wrapping storage.ErrBatchDone, and what it

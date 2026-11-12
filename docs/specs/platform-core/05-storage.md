@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-storage.md -->
-<!-- version: 1.14.5 -->
+<!-- version: 1.14.6 -->
 <!-- guid: 940ce8be-6f86-4450-b43a-77bf78827b12 -->
-<!-- last-edited: 2026-11-11 -->
+<!-- last-edited: 2026-11-12 -->
 
 # 05 — Storage (`storage`, `storage/index`, `storage/datamigrate`)
 
@@ -879,7 +879,8 @@ func (w *StepWriter) Count(outcome string)           // "converted", "already-cu
 func (w *StepWriter) Quarantine(key, raw []byte, reason string) error
 // Batch is the chunk's batch for an importer's participant staging (§5S.3.2):
 // the importer binds its own handle, and its writes commit with the chunk and
-// the shard cursor. Cutover only.
+// the shard cursor. Cutover only. The batch is indexed (reads see the chunk's
+// own writes), so an owner and its keys may share a chunk (F4-06).
 func (w *StepWriter) Batch() *storage.Batch
 
 type VerifyReport struct {
