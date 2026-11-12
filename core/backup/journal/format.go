@@ -1,5 +1,5 @@
 // file: core/backup/journal/format.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3327485a-f95b-499f-bda1-dca7958d7feb
 // last-edited: 2026-11-11
 
@@ -46,6 +46,23 @@ const macHexLen = 2 * sha256.Size
 
 // macMember is what precedes the mac's hex in a stored line.
 const macMember = `,"mac":"`
+
+// maxLineBytes bounds one stored line, its newline included. A line is a few
+// hundred bytes, so no revocation comes near it; it exists so that every buffer
+// sized from a line's length (seal, unseal) is sized from a value that was
+// checked first, and so that the journal never writes a line it would refuse to
+// read.
+const maxLineBytes = 1 << 20
+
+// sealOverhead is what seal adds to a canonical object: the mac member, the mac,
+// the closing quote and brace and the newline, less the object's own closing
+// brace, which the member replaces.
+const sealOverhead = len(macMember) + macHexLen + 2
+
+// ErrLineTooLarge reports a line over maxLineBytes: one the journal will not
+// write (the revoking caller records a gap, as for any append failure) and a
+// stored one it reads as a malformed line, which breaks the chain there.
+var ErrLineTooLarge = errors.New("journal: a line is over the line size cap")
 
 // Keys is how the journal reaches the derive key without importing secrets
 // (05-backup §5B.3.2's import list; the kernel adapts *secrets.Store to it).
@@ -129,20 +146,29 @@ func macEqual(a, b string) bool { return hmac.Equal([]byte(a), []byte(b)) }
 
 // seal turns canonical (a JSON object) and its mac into the stored line,
 // newline-terminated: the object with the mac as its last member.
-func seal(canonical []byte, mac string) []byte {
-	out := make([]byte, 0, len(canonical)+len(macMember)+macHexLen+3)
+// It refuses an object that would make a line over maxLineBytes (ErrLineTooLarge),
+// before it sizes anything from the object's length.
+func seal(canonical []byte, mac string) ([]byte, error) {
+	if len(canonical) > maxLineBytes-sealOverhead {
+		return nil, fmt.Errorf("%w: %d bytes of JSON, the cap is %d for the whole line", ErrLineTooLarge, len(canonical), maxLineBytes)
+	}
+	out := make([]byte, 0, len(canonical)+sealOverhead)
 	out = append(out, canonical[:len(canonical)-1]...)
 	out = append(out, macMember...)
 	out = append(out, mac...)
-	return append(out, '"', '}', '\n')
+	return append(out, '"', '}', '\n'), nil
 }
 
 // errNoMAC is a complete line whose tail is not a well-formed mac member.
 var errNoMAC = errors.New("the line does not end in a mac member")
 
 // unseal splits a stored line (without its newline) into its canonical bytes
-// and its mac: the exact inverse of seal.
+// and its mac: the exact inverse of seal. A line that, with its newline, is over
+// maxLineBytes is refused before anything is sized from it (ErrLineTooLarge).
 func unseal(line []byte) (canonical []byte, mac string, err error) {
+	if len(line) >= maxLineBytes {
+		return nil, "", fmt.Errorf("%w: %d bytes, the cap is %d for the whole line", ErrLineTooLarge, len(line)+1, maxLineBytes)
+	}
 	tail := len(macMember) + macHexLen + 2
 	if len(line) < tail+1 || line[len(line)-2] != '"' || line[len(line)-1] != '}' {
 		return nil, "", errNoMAC
@@ -212,7 +238,11 @@ func sealHeader(keys Keys, h Header) ([]byte, Header, error) {
 		return nil, h, err
 	}
 	h.MAC = sign(key, h.BaseMAC, body)
-	return seal(body, h.MAC), h, nil
+	line, err := seal(body, h.MAC)
+	if err != nil {
+		return nil, h, err
+	}
+	return line, h, nil
 }
 
 // sealLine signs r (numbered r.Seq) under the active derive key, chaining
@@ -228,7 +258,11 @@ func sealLine(keys Keys, prevMAC string, r Revocation) (line []byte, mac string,
 		return nil, "", err
 	}
 	mac = sign(key, prevMAC, body)
-	return seal(body, mac), mac, nil
+	line, err = seal(body, mac)
+	if err != nil {
+		return nil, "", fmt.Errorf("journal: seal line %d: %w", r.Seq, err)
+	}
+	return line, mac, nil
 }
 
 // decodeSeq reads a line's seq, which every line (the header included) has,
