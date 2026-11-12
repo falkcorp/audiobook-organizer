@@ -2188,6 +2188,11 @@
    "core/internal/restoreswap/swapper.go",
    "core/storage/admin.go",
    "core/storage/admin_identity_test.go",
+   "core/kernel/restore_review_test.go",
+   "core/internal/authstore/store.go",
+   "core/internal/authstore/rewrite_test.go",
+   "core/internal/rbacstore/store.go",
+   "todo.d/2026-11-11-f4-11-spec-reapply-order.md",
    "docs/agent-tasks/platform-core/seams.d/F4-11.md"
   ],
   "spec": "05-backup §5B.3.6, §5B.9; 06 §6.5.1 P4d steps 2-3, §6.10; 05-storage §5S.10 TestPostDAGReconcilerOrder; SEC-16",
