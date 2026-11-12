@@ -2196,7 +2196,9 @@
    "core/backup/journal/review_unix_test.go",
    "core/backup/journal/linecap_test.go",
    "core/kernel/restore_runkey_test.go",
-   "todo.d/2026-11-11-f4-11-journal-forward-compat.md",
+   "core/kernel/restore_unapplied_test.go",
+   "core/kernel/restore_keptadmin_test.go",
+   "todo.d/2026-11-12-f4-11-spec-unapplied-queue.md",
    "todo.d/2026-11-11-f4-11-spec-reapply-order.md",
    "docs/agent-tasks/platform-core/seams.d/F4-11.md"
   ],
