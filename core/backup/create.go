@@ -1,0 +1,450 @@
+// file: core/backup/create.go
+// version: 1.0.0
+// guid: 6e7c41d8-9a30-4d1b-a2c5-17b0f3d9e6a4
+// last-edited: 2026-11-12
+
+package backup
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/falkcorp/mediacore/internal/backuparchive"
+)
+
+const stagingDirName = ".backup-staging"
+
+// Create is §5B.3.5's creation, in the order the spec fixes: codec before any
+// work, retention before the space check, the journal boundaries before the
+// checkpoint and the new content marker right after it, the archive streamed
+// to a .partial and renamed, the sidecars, then the optional verification.
+func (s *Svc) Create(ctx context.Context, o CreateOptions) (a Archive, err error) {
+	release, err := s.acquire()
+	if err != nil {
+		return Archive{}, err
+	}
+	defer release()
+	reason := o.Reason
+	if reason == "" {
+		reason = "manual"
+	}
+	defer func() {
+		out := "ok"
+		switch {
+		case errors.Is(err, context.Canceled):
+			out = "canceled"
+		case err != nil && a.ID == "":
+			out = "error"
+		case err != nil:
+			out = "unverified"
+		}
+		s.o.Metrics.Run(context.WithoutCancel(ctx), reason, out)
+	}()
+	return s.create(ctx, o, reason)
+}
+
+func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Archive, error) {
+	set := s.o.settings()
+	// 1. Configuration errors before any work.
+	codec, err := backuparchive.Resolve(set.Compression)
+	if err != nil {
+		return Archive{}, err
+	}
+	if err := backuparchive.ValidateLevel(codec, set.CompressionLevel); err != nil {
+		return Archive{}, err
+	}
+	if s.o.Store == nil || s.o.Inspector == nil {
+		return Archive{}, errors.New("backup: create needs a Store and an Inspector")
+	}
+	if err := mkdirPrivate(s.o.Dir); err != nil {
+		return Archive{}, err
+	}
+	// 2. Retention before the space check: a full disk is the case it exists for.
+	if err := s.prune(ctx, set); err != nil {
+		return Archive{}, err
+	}
+	// 3. Space check, then the same-device rule.
+	est := dirSize(s.o.DBPath)
+	margin := set.SpaceMargin
+	if margin == 0 {
+		margin = uint64(2 * gib)
+	}
+	avail, err := s.o.Disk.avail(s.o.Dir)
+	if err != nil {
+		return Archive{}, fmt.Errorf("backup: free space of %s: %w", s.o.Dir, err)
+	}
+	if avail < uint64(est)+margin {
+		return Archive{}, fmt.Errorf("%w: %d bytes free, %d needed", ErrInsufficientSpace, avail, uint64(est)+margin)
+	}
+	now := s.o.now().UTC().Round(0)
+	id, err := NewArchiveID(now)
+	if err != nil {
+		return Archive{}, err
+	}
+	stagingRoot := filepath.Join(filepath.Dir(s.o.DBPath), stagingDirName)
+	if err := mkdirPrivate(stagingRoot); err != nil {
+		return Archive{}, err
+	}
+	if err := s.sameDevice(stagingRoot); err != nil {
+		return Archive{}, err
+	}
+	s.sweepStaging(stagingRoot)
+	run, err := newRunDir(filepath.Join(stagingRoot, string(id)))
+	if err != nil {
+		return Archive{}, err
+	}
+	defer func() { _ = run.Close(); _ = os.RemoveAll(run.path) }()
+
+	// 4. Boundaries first, the checkpoint, then the new content marker.
+	var b Boundaries
+	if s.o.Markers != nil {
+		if b, err = s.o.Markers.Read(ctx); err != nil {
+			return Archive{}, fmt.Errorf("backup: read journal boundaries: %w", err)
+		}
+	}
+	t0 := time.Now()
+	if err := s.o.Store.Checkpoint(ctx, filepath.Join(run.path, "db")); err != nil {
+		return Archive{}, fmt.Errorf("backup: checkpoint: %w", err)
+	}
+	s.o.Metrics.Phase(ctx, "checkpoint", time.Since(t0))
+	if s.o.Markers != nil {
+		if _, err := s.o.Markers.Advance(ctx); err != nil {
+			return Archive{}, fmt.Errorf("backup: advance the content marker: %w", err)
+		}
+	}
+	info, err := s.o.Inspector.Inspect(ctx, filepath.Join(run.path, "db"))
+	if err != nil {
+		return Archive{}, fmt.Errorf("backup: read the checkpoint: %w", err)
+	}
+
+	// 5. Capture, hash, manifest, provenance.
+	t0 = time.Now()
+	caps, redacted, err := s.capture(ctx, run, co, set)
+	if err != nil {
+		return Archive{}, err
+	}
+	entries, err := run.hashTree(ctx, set.HashWorkers)
+	if err != nil {
+		return Archive{}, err
+	}
+	for i := range entries {
+		entries[i].Class = classOf(caps, entries[i].Path)
+		if entries[i].Class == Secret || entries[i].Class == ClassInvalid {
+			return Archive{}, fmt.Errorf("%w: %s", ErrUnencryptedSecrets, entries[i].Path)
+		}
+	}
+	m := &Manifest{
+		Format: FormatMediacore, ArchiveID: id, App: s.o.AppID, AppVersion: s.o.AppVersion,
+		CoreVersion: s.o.CoreVersion, InstallID: s.o.Store.InstallID(), CreatedAt: now, Reason: reason,
+		JournalSeq: b.JournalSeq, AuditHighWater: b.AuditHighWater, ServedBoot: b.ServedBoot,
+		Levels: info.Levels, LegacyStorageFormat: info.LegacyFormat, PebbleFormat: info.PebbleFormat,
+		Keyspaces: keyspaces(info), Modules: s.o.Modules, Entries: entries, ConfigRedacted: redacted,
+	}
+	if m.Derived, err = s.derived(ctx, caps, info); err != nil {
+		return Archive{}, err
+	}
+	if err := Sign(m, s.o.Keyring); err != nil {
+		return Archive{}, fmt.Errorf("backup: sign the manifest: %w", err)
+	}
+	mb, err := MarshalManifest(m)
+	if err != nil {
+		return Archive{}, err
+	}
+	s.o.Metrics.Phase(ctx, "archive", time.Since(t0))
+
+	// 5b/6. Stream, rename, sidecars.
+	name, final, err := s.freshName(now, codec.Extension())
+	if err != nil {
+		return Archive{}, err
+	}
+	t0 = time.Now()
+	sum, size, err := writeArchive(ctx, archiveSpec{
+		Partial: final + ".partial", Codec: codec, Level: set.CompressionLevel,
+		Manifest: mb, Created: now, Entries: entries, RunDir: run.path,
+	})
+	if err != nil {
+		return Archive{}, err
+	}
+	if err := os.Rename(final+".partial", final); err != nil {
+		_ = os.Remove(final + ".partial")
+		return Archive{}, err
+	}
+	t1 := time.Now()
+	if err := s.writeSidecars(final, name, sum, mb); err != nil {
+		removeArchive(final)
+		return Archive{}, err
+	}
+	s.o.Metrics.Phase(ctx, "checksum", time.Since(t1))
+	_ = t0
+	a := Archive{
+		ID: id, Name: name, Size: size, CreatedAt: now, Format: FormatMediacore, Provenance: Own, Manifest: m,
+	}
+	s.o.Metrics.Created(ctx, size, now)
+
+	// 7. Verification after create.
+	if set.VerifyAfterCreate {
+		t2 := time.Now()
+		res, verr := s.verifyArchive(ctx, final, a.ID, VerifyOpen)
+		s.o.Metrics.Phase(ctx, "verify", time.Since(t2))
+		a.Verified = &res
+		if verr != nil {
+			return a, fmt.Errorf("backup: the new archive %s failed verification: %w", a.ID, verr)
+		}
+	}
+	return a, nil
+}
+
+// sameDevice refuses a staging root that is not on the database's filesystem:
+// the checkpoint hard-links its files, so across devices it would silently copy
+// gigabytes (§5B.5).
+func (s *Svc) sameDevice(stagingRoot string) error {
+	db, err := s.o.Disk.device(s.o.DBPath)
+	if err != nil {
+		return fmt.Errorf("backup: device of %s: %w", s.o.DBPath, err)
+	}
+	st, err := s.o.Disk.device(stagingRoot)
+	if err != nil {
+		return fmt.Errorf("backup: device of %s: %w", stagingRoot, err)
+	}
+	if db != st {
+		return fmt.Errorf("%w: the database is on device %d and %s on device %d", ErrCrossDevice, db, stagingRoot, st)
+	}
+	return nil
+}
+
+// sweepStaging removes what an earlier crashed run left in the staging root.
+// The caller holds the backup resource, so nothing in it is live.
+func (s *Svc) sweepStaging(root string) {
+	ents, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		s.o.log().Warn("backup: removing a stale staging directory", "name", e.Name())
+		_ = os.RemoveAll(filepath.Join(root, e.Name()))
+	}
+}
+
+// freshName is <prefix><YYYYMMDD_HHMMSS><ext>, moved to the next second while
+// any file of that name or its sidecars exists.
+func (s *Svc) freshName(now time.Time, ext string) (name, full string, err error) {
+	for i := 0; i < 3600; i++ {
+		t := now.Add(time.Duration(i) * time.Second)
+		name = s.o.Prefix + t.Format("20060102_150405") + ext
+		full = filepath.Join(s.o.Dir, name)
+		taken := false
+		for _, suf := range []string{"", ChecksumSidecar, ManifestSidecar, VerifySidecar, ".partial"} {
+			if _, err := os.Lstat(full + suf); err == nil {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			return name, full, nil
+		}
+	}
+	return "", "", errors.New("backup: no free archive name")
+}
+
+func (s *Svc) writeSidecars(final, name, sum string, manifest []byte) error {
+	if err := writeFileAtomic(final+ChecksumSidecar, []byte(sum+"  "+name+"\n")); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(final+ManifestSidecar, manifest); err != nil {
+		return err
+	}
+	return syncDir(s.o.Dir)
+}
+
+// removeArchive deletes an archive and its sidecars.
+func removeArchive(final string) {
+	for _, suf := range []string{"", ChecksumSidecar, ManifestSidecar, VerifySidecar, ".partial"} {
+		_ = os.Remove(final + suf)
+	}
+}
+
+// captured is one capture root of the run directory and its class.
+type captured struct {
+	prefix string // archive path prefix, "db/" style
+	class  Class
+	name   string // the artifact's name, for derived items
+}
+
+func classOf(caps []captured, rel string) Class {
+	for _, c := range caps {
+		if rel == strings.TrimSuffix(c.prefix, "/") || strings.HasPrefix(rel, c.prefix) {
+			return c.class
+		}
+	}
+	return ClassInvalid
+}
+
+// capture gathers everything but the checkpoint into the run directory:
+// the config file (redacted when it holds secrets) and boot record, then each
+// registered artifact. A secret-class artifact is skipped (an archive is
+// plaintext); a system-of-record artifact that fails aborts the archive; a
+// derived or recreatable one that fails is omitted.
+func (s *Svc) capture(ctx context.Context, run *runDir, co CreateOptions, set Settings) (caps []captured, redacted bool, err error) {
+	caps = append(caps, captured{prefix: "db/", class: SystemOfRecord})
+	if s.o.ConfigPath != "" {
+		caps = append(caps, captured{prefix: "config/", class: SystemOfRecord})
+		base := filepath.Base(s.o.ConfigPath)
+		switch {
+		case s.o.Config.ConfigFileHasSecrets():
+			b, err := s.o.Config.RedactedConfigFile()
+			if err != nil {
+				return nil, false, fmt.Errorf("backup: redact the config file: %w", err)
+			}
+			if err := run.putBytes("config/"+base, b); err != nil {
+				return nil, false, err
+			}
+			redacted = true
+		default:
+			if err := run.copyFile(ctx, s.o.ConfigPath, "config/"+base); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, false, fmt.Errorf("backup: capture the config file: %w", err)
+			}
+		}
+		if s.o.BootRecordPath != "" {
+			if err := run.copyFile(ctx, s.o.BootRecordPath, "config/"+filepath.Base(s.o.BootRecordPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, false, fmt.Errorf("backup: capture the boot record: %w", err)
+			}
+		}
+	}
+	if s.o.Artifacts == nil {
+		return caps, redacted, nil
+	}
+	for _, a := range s.o.Artifacts() {
+		prefix, ok := artifactPrefix(a)
+		if !ok {
+			return nil, false, fmt.Errorf("backup: artifact %q has an unusable name or owner", a.Name)
+		}
+		switch a.Class {
+		case Secret, Cache:
+			s.o.log().Info("backup: artifact not archived", "artifact", a.Name, "class", classString(a.Class))
+			continue
+		case Derived:
+			if !(co.IncludeDerived || set.IncludeDerived) {
+				continue
+			}
+		case Recreatable:
+			if !(co.IncludeRecreatable || set.IncludeRecreatable) {
+				continue
+			}
+		case SystemOfRecord:
+			if a.Consistency == ConsistencyInvalid {
+				return nil, false, fmt.Errorf("backup: system-of-record artifact %q declares no consistency", a.Name)
+			}
+		default:
+			return nil, false, fmt.Errorf("backup: artifact %q has no valid class", a.Name)
+		}
+		if err := s.captureArtifact(ctx, run, a, prefix); err != nil {
+			if a.Class == SystemOfRecord {
+				return nil, false, fmt.Errorf("backup: artifact %s: %w", a.Name, err)
+			}
+			s.o.log().Warn("backup: derived item omitted", "artifact", a.Name, "error", err)
+			_ = run.root.RemoveAll(strings.TrimSuffix(prefix, "/"))
+			continue
+		}
+		caps = append(caps, captured{prefix: prefix, class: a.Class, name: a.Name})
+	}
+	return caps, redacted, nil
+}
+
+func (s *Svc) captureArtifact(ctx context.Context, run *runDir, a Artifact, prefix string) error {
+	switch {
+	case a.Snapshot != nil:
+		w := &prefixWriter{run: run, prefix: prefix}
+		return a.Snapshot(ctx, w)
+	case a.Dir != "":
+		if err := run.root.MkdirAll(strings.TrimSuffix(prefix, "/"), 0o700); err != nil {
+			return err
+		}
+		return run.copyTree(ctx, a.Dir, strings.TrimSuffix(prefix, "/"))
+	}
+	return errors.New("neither a Dir nor a Snapshot hook")
+}
+
+type prefixWriter struct {
+	run    *runDir
+	prefix string
+}
+
+func (w *prefixWriter) Create(rel string, mode os.FileMode) (io.WriteCloser, error) {
+	return w.run.Create(path.Join(w.prefix, rel), mode)
+}
+
+func artifactPrefix(a Artifact) (string, bool) {
+	for _, seg := range append(strings.Split(string(a.Owner), "/"), a.Name) {
+		if seg == "" || seg == "." || seg == ".." || strings.ContainsAny(seg, `\`) || strings.Contains(seg, "..") {
+			return "", false
+		}
+	}
+	switch a.Class {
+	case Derived:
+		return "derived/" + a.Name + "/", true
+	case Recreatable:
+		return "aux/" + string(a.Owner) + "/" + a.Name + "/", true
+	}
+	return "artifacts/" + string(a.Owner) + "/" + a.Name + "/", true
+}
+
+func classString(c Class) string {
+	switch c {
+	case SystemOfRecord:
+		return "system_of_record"
+	case Secret:
+		return "secret"
+	case Derived:
+		return "derived"
+	case Cache:
+		return "cache"
+	case Recreatable:
+		return "recreatable"
+	}
+	return "invalid"
+}
+
+func keyspaces(info StoreInfo) map[string]KSInfo {
+	out := make(map[string]KSInfo, len(info.Levels)+len(info.Keys))
+	add := func(o string) {
+		out[o] = KSInfo{Version: info.Versions[o], Keys: info.Keys[o], Bytes: info.Bytes[o]}
+	}
+	for o := range info.Versions {
+		add(o)
+	}
+	for o := range info.Keys {
+		add(o)
+	}
+	return out
+}
+
+// derived records each captured derived item's checkpoint generation and
+// whether its live source moved since (stale: never offered on restore).
+func (s *Svc) derived(ctx context.Context, caps []captured, info StoreInfo) (map[string]DerivedInfo, error) {
+	var out map[string]DerivedInfo
+	for _, c := range caps {
+		if c.class != Derived {
+			continue
+		}
+		cp := info.Generations[c.name]
+		stale := cp == ""
+		if !stale && s.o.DerivedGeneration != nil {
+			live, err := s.o.DerivedGeneration(ctx, c.name)
+			stale = err != nil || live != cp
+		} else if s.o.DerivedGeneration == nil {
+			stale = true
+		}
+		if out == nil {
+			out = map[string]DerivedInfo{}
+		}
+		out[c.name] = DerivedInfo{Generation: cp, Stale: stale}
+	}
+	return out, nil
+}
