@@ -1,5 +1,5 @@
 // file: core/internal/backuparchive/sparse_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d2e91c4-5a03-4b68-9c1f-e84b30a6d172
 // last-edited: 2026-11-12
 
@@ -130,6 +130,30 @@ func TestScanLegacyRefusesSparse(t *testing.T) {
 	p := paxSparseTar(t, "audiobooks.pebble/000007.sst", int64(1)<<30)
 	if _, err := backuparchive.ScanLegacy(t.Context(), p, backuparchive.Limits{}); !errors.Is(err, backuparchive.ErrEntryType) {
 		t.Fatalf("ScanLegacy = %v, want ErrEntryType", err)
+	}
+}
+
+// The extraction writes no more than the scan counted: a scan figure that is one
+// byte short for the archive (the scan and the archive disagree) is refused at
+// the header that would cross it, as a change, before that file is written.
+func TestExtractLegacyWritesNoMoreThanTheScanCounted(t *testing.T) {
+	p := buildTar(t, backuparchive.None,
+		ent{name: "audiobooks.pebble/f", body: "Dick Grayson"},
+		ent{name: "audiobooks.pebble/g", body: "Tim Drake"})
+	info, err := backuparchive.ScanLegacy(t.Context(), p, backuparchive.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Bytes != int64(len("Dick Grayson")+len("Tim Drake")) {
+		t.Fatalf("fixture: the scan counted %d bytes", info.Bytes)
+	}
+	info.Bytes--
+	store := t.TempDir()
+	if err := backuparchive.ExtractLegacy(t.Context(), p, info, store, backuparchive.Limits{}); !errors.Is(err, backuparchive.ErrChanged) {
+		t.Fatalf("err = %v, want ErrChanged", err)
+	}
+	if _, err := os.Lstat(filepath.Join(store, "g")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the file that crossed the scan's figure was written: %v", err)
 	}
 }
 
