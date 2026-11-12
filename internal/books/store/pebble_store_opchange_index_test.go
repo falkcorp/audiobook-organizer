@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_opchange_index_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package store
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -807,7 +808,7 @@ func TestOpchangeIndex_DanglingEntrySkipped(t *testing.T) {
 	if err := p.CreateOperationChange(keep); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.db.Set(opChangeByBookKey("b1", opChangeKey("op0", "gone")), nil, pebble.Sync); err != nil {
+	if err := p.db.Set(mustOpChangeByBookKey(t, "b1", opChangeKey("op0", "gone")), nil, pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
 	got, err := p.GetBookChanges("b1")
@@ -1378,4 +1379,49 @@ func TestOpchangeIndex_EnsureCancelMidStep(t *testing.T) {
 			t.Fatalf("next ensure = %+v, want the resumed backfill to complete the index without another rebuild", res)
 		}
 	})
+}
+
+func mustOpChangeByBookKey(t *testing.T, bookID string, primary []byte) []byte {
+	t.Helper()
+	k, err := opChangeByBookKey(bookID, primary)
+	if err != nil {
+		t.Fatalf("opChangeByBookKey(%q): %v", bookID, err)
+	}
+	return k
+}
+
+// TestOpchangeKey_OperandBounds pins the bound that keeps the index keys' size
+// arithmetic from overflowing: over-limit operands are errors, at-limit and
+// normal operands build the same keys as before.
+func TestOpchangeKey_OperandBounds(t *testing.T) {
+	primary := opChangeKey("op1", "c1")
+	k, err := opChangeByBookKey("b1", primary)
+	if err != nil || string(k) != opChangeByBookPrefix+"b1:op1:c1" {
+		t.Fatalf("normal by-book key = %q, %v", k, err)
+	}
+	u, err := opChangeUndecodableKey(primary)
+	if err != nil || string(u) != opChangeUndecodablePrefix+"op1:c1" {
+		t.Fatalf("normal undecodable key = %q, %v", u, err)
+	}
+
+	atLimit := []byte(opChangeKeyPrefix + strings.Repeat("s", maxOpChangeSuffixLen))
+	over := []byte(opChangeKeyPrefix + strings.Repeat("s", maxOpChangeSuffixLen+1))
+	if _, err := opChangeByBookKey(strings.Repeat("b", maxOpChangeBookIDLen), atLimit); err != nil {
+		t.Fatalf("at-limit by-book operands: %v", err)
+	}
+	if _, err := opChangeUndecodableKey(atLimit); err != nil {
+		t.Fatalf("at-limit undecodable operand: %v", err)
+	}
+	if _, err := opChangeByBookKey(strings.Repeat("b", maxOpChangeBookIDLen+1), primary); !errors.Is(err, errOpChangeKeyTooLong) {
+		t.Fatalf("over-limit book id: err = %v", err)
+	}
+	if _, err := opChangeByBookKey("b1", over); !errors.Is(err, errOpChangeKeyTooLong) {
+		t.Fatalf("over-limit suffix: err = %v", err)
+	}
+	if _, err := opChangeUndecodableKey(over); !errors.Is(err, errOpChangeKeyTooLong) {
+		t.Fatalf("over-limit undecodable suffix: err = %v", err)
+	}
+	if _, err := opChangeByBookKey("b1", []byte("short")); !errors.Is(err, errOpChangeKeyTooLong) {
+		t.Fatalf("primary shorter than prefix: err = %v", err)
+	}
 }

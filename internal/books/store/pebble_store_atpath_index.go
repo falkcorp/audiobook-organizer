@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_atpath_index.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 // The book_atpath: multi-valued path index.
 //
@@ -107,27 +107,52 @@ var bookAtPathBackfillAfterChunk func(commits int)
 // on another goroutine instead, which is what proves it now waits.
 var updateBookAfterOldReadHook func(id string)
 
-// bookAtPathKey is the index key for one (path, book) pair.
-func bookAtPathKey(path, id string) []byte {
+// Upper bounds on the operands of a book_atpath: key. Both are checked before
+// any size arithmetic so an absurd operand is an error, never a huge or
+// wrapped allocation (CodeQL go/allocation-size-overflow).
+//
+// maxBookAtPathLen is PATH_MAX (4096 on Linux, the longest path the library
+// filesystem can hold; macOS is 1024). maxBookIDLen is generous for the ids the
+// store mints (26-char ULIDs, 36-char UUIDs).
+const (
+	maxBookAtPathLen = 4096
+	maxBookIDLen     = 128
+)
+
+// errBookAtPathKeyTooLong is returned when a path or book id exceeds its bound.
+var errBookAtPathKeyTooLong = errors.New("book_atpath key operand too long")
+
+// bookAtPathKey is the index key for one (path, book) pair. It errors, rather
+// than truncating, when path or id exceeds its bound.
+func bookAtPathKey(path, id string) ([]byte, error) {
+	if len(path) > maxBookAtPathLen {
+		return nil, fmt.Errorf("%w: path is %d bytes, limit %d", errBookAtPathKeyTooLong, len(path), maxBookAtPathLen)
+	}
+	if len(id) > maxBookIDLen {
+		return nil, fmt.Errorf("%w: book id is %d bytes, limit %d", errBookAtPathKeyTooLong, len(id), maxBookIDLen)
+	}
 	k := make([]byte, 0, len(bookAtPathPrefix)+len(path)+1+len(id))
 	k = append(k, bookAtPathPrefix...)
 	k = append(k, path...)
 	k = append(k, 0)
 	k = append(k, id...)
-	return k
+	return k, nil
 }
 
 // bookAtPathBounds is the scan range holding exactly path's keys:
 // [book_atpath:P\x00, book_atpath:P\x01). POSIX paths cannot contain NUL, so no
 // other real path's key falls inside it; a corrupt NUL-bearing path can only
 // add a spurious candidate, which the reader recognises and skips.
-func bookAtPathBounds(path string) (lower, upper []byte) {
+func bookAtPathBounds(path string) (lower, upper []byte, err error) {
+	if len(path) > maxBookAtPathLen {
+		return nil, nil, fmt.Errorf("%w: path is %d bytes, limit %d", errBookAtPathKeyTooLong, len(path), maxBookAtPathLen)
+	}
 	lower = make([]byte, 0, len(bookAtPathPrefix)+len(path)+1)
 	lower = append(lower, bookAtPathPrefix...)
 	lower = append(lower, path...)
 	upper = append(append([]byte{}, lower...), 1)
 	lower = append(lower, 0)
-	return lower, upper
+	return lower, upper, nil
 }
 
 // splitBookAtPathKey recovers (path, id) from a full index key. Book ids never
@@ -400,7 +425,11 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 					}
 					continue
 				}
-				if err := batch.Set(bookAtPathKey(row.FilePath, r.id), []byte{}, nil); err != nil {
+				key, err := bookAtPathKey(row.FilePath, r.id)
+				if err != nil {
+					return fmt.Errorf("build index key for %s: %w", r.id, err)
+				}
+				if err := batch.Set(key, []byte{}, nil); err != nil {
 					return fmt.Errorf("stage index key for %s: %w", r.id, err)
 				}
 				buffered++

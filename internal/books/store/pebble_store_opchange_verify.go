@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_opchange_verify.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 95b3e380-e3be-4545-a68c-842559a84058
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 // The resumable verify of the opchange_by_book: index (TODO 04-P7).
 //
@@ -297,7 +297,11 @@ func (p *PebbleStore) verifyOpChangeRange(ctx context.Context, run opChangeVerif
 		var c OperationChange
 		if json.Unmarshal(v, &c) != nil {
 			rep.Undecodable++
-			ok, err := present(opChangeUndecodableKey(k))
+			ukey, err := opChangeUndecodableKey(k)
+			if err != nil {
+				return err
+			}
+			ok, err := present(ukey)
 			if err != nil {
 				return err
 			}
@@ -310,7 +314,11 @@ func (p *PebbleStore) verifyOpChangeRange(ctx context.Context, run opChangeVerif
 			return nil
 		}
 		rep.Indexable++
-		ok, err := present(opChangeByBookKey(c.BookID, k))
+		ikey, err := opChangeByBookKey(c.BookID, k)
+		if err != nil {
+			return err
+		}
+		ok, err := present(ikey)
 		if err != nil {
 			return err
 		}

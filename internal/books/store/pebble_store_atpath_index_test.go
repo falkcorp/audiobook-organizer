@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_atpath_index_test.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package store
 
@@ -98,9 +98,9 @@ func checkAgainstOracle(t fataler, s *PebbleStore, paths []string) {
 
 func TestBookAtPathKey_BoundsAreExact(t *testing.T) {
 	for _, p := range hostilePaths {
-		lo, hi := bookAtPathBounds(p)
+		lo, hi := mustBookAtPathBounds(t, p)
 		for _, q := range hostilePaths {
-			k := bookAtPathKey(q, "01ID")
+			k := mustBookAtPathKey(t, q, "01ID")
 			in := string(k) >= string(lo) && string(k) < string(hi)
 			// The only way another path's key lands in P's range is a NUL at
 			// position len(P) in Q, i.e. the corrupt "/a\x00b" under "/a".
@@ -111,7 +111,7 @@ func TestBookAtPathKey_BoundsAreExact(t *testing.T) {
 			}
 		}
 	}
-	path, id, ok := splitBookAtPathKey(bookAtPathKey("/a\x00b", "X1"))
+	path, id, ok := splitBookAtPathKey(mustBookAtPathKey(t, "/a\x00b", "X1"))
 	if !ok || path != "/a\x00b" || id != "X1" {
 		t.Fatalf("split = %q %q %v", path, id, ok)
 	}
@@ -751,7 +751,7 @@ func TestLiveBookIDsAtPath_ReaderFailsClosedAndSkipsExtras(t *testing.T) {
 	}
 
 	// Extra for a hard-deleted book: skipped, not an error.
-	if err := s.db.Set(bookAtPathKey("/p", "01GONE"), []byte{}, pebble.Sync); err != nil {
+	if err := s.db.Set(mustBookAtPathKey(t, "/p", "01GONE"), []byte{}, pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
 	ids, err := s.LiveBookIDsAtPath("/p")
@@ -768,7 +768,7 @@ func TestLiveBookIDsAtPath_ReaderFailsClosedAndSkipsExtras(t *testing.T) {
 	}
 
 	// Undecodable candidate row: error.
-	if err := s.db.Set(bookAtPathKey("/u", "01UNDECODABLE"), []byte{}, pebble.Sync); err != nil {
+	if err := s.db.Set(mustBookAtPathKey(t, "/u", "01UNDECODABLE"), []byte{}, pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.Set([]byte("book:01UNDECODABLE"), []byte("{"), pebble.Sync); err != nil {
@@ -804,15 +804,15 @@ func TestVerifyBookAtPathIndex_ClassifiesEveryDefect(t *testing.T) {
 	trashed, _ := s.CreateBook(&Book{Title: "t", FilePath: "/trash", MarkedForDeletion: &tr})
 	moved, _ := s.CreateBook(&Book{Title: "m", FilePath: "/now"})
 
-	for _, k := range [][]byte{bookAtPathKey("/live", live.ID), bookAtPathKey("/trash", trashed.ID)} {
+	for _, k := range [][]byte{mustBookAtPathKey(t, "/live", live.ID), mustBookAtPathKey(t, "/trash", trashed.ID)} {
 		if err := s.db.Delete(k, pebble.Sync); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, k := range [][]byte{
-		bookAtPathKey("/was", moved.ID),     // row moved
-		bookAtPathKey("/gone", "01NOBOOK"),  // row gone
-		[]byte(bookAtPathPrefix + "no-nul"), // malformed
+		mustBookAtPathKey(t, "/was", moved.ID),    // row moved
+		mustBookAtPathKey(t, "/gone", "01NOBOOK"), // row gone
+		[]byte(bookAtPathPrefix + "no-nul"),       // malformed
 	} {
 		if err := s.db.Set(k, []byte{}, pebble.Sync); err != nil {
 			t.Fatal(err)
@@ -931,5 +931,67 @@ func TestBackfill_ReportsProgressPerChunk(t *testing.T) {
 		if got[len(got)-1] != res.Scanned {
 			t.Fatalf("force=%t: last report = %d, want the final scanned count %d (%v)", force, got[len(got)-1], res.Scanned, got)
 		}
+	}
+}
+
+func mustBookAtPathKey(t *testing.T, path, id string) []byte {
+	t.Helper()
+	k, err := bookAtPathKey(path, id)
+	if err != nil {
+		t.Fatalf("bookAtPathKey(%q, %q): %v", path, id, err)
+	}
+	return k
+}
+
+func mustBookAtPathBounds(t *testing.T, path string) (lower, upper []byte) {
+	t.Helper()
+	lower, upper, err := bookAtPathBounds(path)
+	if err != nil {
+		t.Fatalf("bookAtPathBounds(%q): %v", path, err)
+	}
+	return lower, upper
+}
+
+// TestBookAtPathKey_OperandBounds pins the bound that keeps the key's size
+// arithmetic from overflowing: an over-limit operand is an error, and an
+// operand exactly at the limit still builds the same key as before.
+func TestBookAtPathKey_OperandBounds(t *testing.T) {
+	longPath := "/" + strings.Repeat("p", maxBookAtPathLen-1)
+	longID := strings.Repeat("i", maxBookIDLen)
+
+	k, err := bookAtPathKey(longPath, longID)
+	if err != nil {
+		t.Fatalf("operands at the limit: %v", err)
+	}
+	if want := bookAtPathPrefix + longPath + "\x00" + longID; string(k) != want {
+		t.Fatalf("key for at-limit operands changed")
+	}
+	if k, err := bookAtPathKey("/a/b", "01ID"); err != nil || string(k) != bookAtPathPrefix+"/a/b\x0001ID" {
+		t.Fatalf("normal key = %q, %v", k, err)
+	}
+
+	if _, err := bookAtPathKey(longPath+"x", "01ID"); !errors.Is(err, errBookAtPathKeyTooLong) {
+		t.Fatalf("over-limit path: err = %v, want errBookAtPathKeyTooLong", err)
+	}
+	if _, err := bookAtPathKey("/a", longID+"x"); !errors.Is(err, errBookAtPathKeyTooLong) {
+		t.Fatalf("over-limit id: err = %v, want errBookAtPathKeyTooLong", err)
+	}
+
+	if _, _, err := bookAtPathBounds(longPath + "x"); !errors.Is(err, errBookAtPathKeyTooLong) {
+		t.Fatalf("bounds over-limit path: err = %v, want errBookAtPathKeyTooLong", err)
+	}
+	lo, hi, err := bookAtPathBounds(longPath)
+	if err != nil || string(lo) != bookAtPathPrefix+longPath+"\x00" || string(hi) != bookAtPathPrefix+longPath+"\x01" {
+		t.Fatalf("at-limit bounds = %q %q %v", lo, hi, err)
+	}
+}
+
+// TestCreateBook_OverlongPathIsRejected shows the bound reaches the write path:
+// a path past the limit fails the create instead of building an index key.
+func TestCreateBook_OverlongPathIsRejected(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	_, err := s.CreateBook(&Book{Title: "x", FilePath: "/" + strings.Repeat("p", maxBookAtPathLen)})
+	if !errors.Is(err, errBookAtPathKeyTooLong) {
+		t.Fatalf("err = %v, want errBookAtPathKeyTooLong", err)
 	}
 }
