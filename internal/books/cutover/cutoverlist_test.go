@@ -1,5 +1,5 @@
 // file: internal/books/cutover/cutoverlist_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c2d5a52-4b8e-45a8-9e3d-8a2d6a5e9d02
 // last-edited: 2026-11-11
 
@@ -27,7 +27,7 @@ func dataStep(id string, owner storage.Owner, level int, after ...storage.StepRe
 // validList is 03 §3.8's order over this package's constructors: books' level
 // step, core's, M2, M8.
 func validList() CutoverList {
-	m2 := ConfigStep(nil, nil, ConfigStepOptions{LevelStepVersion: booksLevelVersion})
+	m2 := ConfigStep(nil, nil, ConfigStepOptions{LevelStepVersion: booksLevelVersion, DatabasePath: rigStore})
 	return CutoverList{
 		Target:       storage.Levels{BooksOwner: BooksCutoverLevel, "core": 1},
 		FirstVersion: storage.Levels{BooksOwner: booksLevelVersion},
@@ -112,7 +112,7 @@ func TestCutoverList_LevelsFirstContiguousOneM8Last(t *testing.T) {
 
 	t.Run("a data step that does not name the level step in its After", func(t *testing.T) {
 		l := validList()
-		l.Entries[2] = DataEntry(ConfigStep(nil, nil, ConfigStepOptions{LevelStepVersion: booksLevelVersion + 5}))
+		l.Entries[2] = DataEntry(ConfigStep(nil, nil, ConfigStepOptions{LevelStepVersion: booksLevelVersion + 5, DatabasePath: rigStore}))
 		wantProblem(t, l, "does not name books.level-1")
 	})
 

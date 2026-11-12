@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_step.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b15d3f6-9b1f-4a8b-8f43-50f9c0d2b9aa
 // last-edited: 2026-11-11
 
@@ -72,10 +72,13 @@ type ConfigStepOptions struct {
 	// (core.paths.state_dir).
 	StateDir string
 	// DatabasePath is HEAD's database path (its DATABASE_PATH, config.yaml or
-	// stored database_path). HEAD searches [StateDir, filepath.Dir(DatabasePath)]
-	// for the key (bootSettings: legacyKeyDir), so M2 does too: an install whose
-	// key still sits beside its database keeps working. <root_dir>/.appdata/ is
-	// searched after both, as an extra fallback HEAD itself never had.
+	// stored database_path), and is required: ConfigStep panics without it, as
+	// it does without LevelStepVersion. HEAD searches
+	// [StateDir, filepath.Dir(DatabasePath)] for the key (bootSettings:
+	// legacyKeyDir), so M2 does too: an install whose key still sits beside its
+	// database keeps working, and one left out would refuse an upgrade HEAD
+	// itself would have booted. <root_dir>/.appdata/ is searched after both, as
+	// an extra fallback HEAD itself never had.
 	DatabasePath string
 	// ConfigFile is the operator's config.yaml next to the database ("" when
 	// there is none): M2 reads its gap-fill values; StripGapFill strips it.
@@ -147,6 +150,9 @@ type configStep struct {
 func ConfigStep(cfg config.Importer, sec secrets.Importer, opts ConfigStepOptions) datamigrate.DataMigration {
 	if opts.LevelStepVersion <= 0 {
 		panic("cutover: ConfigStepOptions.LevelStepVersion is books' version of its level step")
+	}
+	if opts.DatabasePath == "" {
+		panic("cutover: ConfigStepOptions.DatabasePath is HEAD's database path: its directory is where HEAD's key may sit, and a key search without it refuses upgrades HEAD would have booted")
 	}
 	if opts.Files == nil {
 		opts.Files = osFiles{}
@@ -236,6 +242,7 @@ func (s *configStep) loadInputs(ctx context.Context, r storage.Reader) (*m2Input
 		switch {
 		case err == nil:
 			in.File, in.FileHas, _ = headParseGapFill(data)
+			in.FileSettings = headParseFileSettings(data)
 		case errors.Is(err, fs.ErrNotExist):
 			// No file: HEAD gap-fills nothing.
 		default:
@@ -336,12 +343,16 @@ const headConfigFileName = "config.yaml"
 // census is Preflight's read of the shapes the runner would walk past. The
 // runner steps M2 once per present source key (the blob and the four rows),
 // so an install with none of them never runs it, and one with a blob is
-// planned whole. Without a blob HEAD itself reads two things M2 does not
-// import: the per-key rows an install from before the blob stored
-// (LoadConfigFromDatabase's legacy path), and config.yaml's gap-fill values
-// where no row has a value. Each is a blocker, with a way out, instead of a
-// setting that quietly stops applying: HEAD's first settings save writes the
-// blob from both, after which M2 has something to move.
+// planned whole. Without a blob HEAD itself reads things M2 does not import:
+// the per-key rows an install from before the blob stored
+// (LoadConfigFromDatabase's legacy path), and what config.yaml holds, which
+// HEAD reads through viper (the settings below) and through its gap-fill (the
+// secrets, root_dir) where no row has a value. Each is a blocker, with a way
+// out, instead of a setting that quietly stops applying: HEAD's first
+// settings save writes the blob from both, after which M2 has something to
+// move. It runs in Preflight only, which the kernel skips once a step has
+// started (kernel/cutover.go); the planner refuses the blob-bound part of it
+// again for that case (buildPlan).
 func (s *configStep) census(ctx context.Context, r storage.Reader, in *m2Input) ([]datamigrate.Blocker, error) {
 	if in.Blob != nil {
 		return nil, nil
@@ -372,29 +383,47 @@ func (s *configStep) census(ctx context.Context, r storage.Reader, in *m2Input) 
 	return blockers, nil
 }
 
-// fileNeedsSource returns the gap-fill keys config.yaml holds that no chunk of
-// M2 would import: with no blob, root_dir and enable_ai_parsing have nowhere
-// to go, and when no row exists either, M2 does not run at all, so the three
-// secrets stay in the file too. Sorted names, never values.
+// fileBlobBound returns the keys config.yaml holds that, with no settings
+// blob, are HEAD's effective settings and have nowhere to go: root_dir (a
+// usable value, HEAD's gap-fill) and each viper-read key (headViperFileKeys)
+// whose value differs from HEAD's default. A value equal to the default loses
+// nothing, so enable_ai_parsing: true (the default) is no reason to refuse and
+// enable_ai_parsing: false is. Sorted names, never values.
+func fileBlobBound(in *m2Input) []string {
+	var names []string
+	if in.FileHas["root_dir"] {
+		names = append(names, "root_dir")
+	}
+	for _, k := range headViperFileKeys {
+		if v, ok := in.FileSettings[k]; ok && !headIsDefault(k, v) {
+			names = append(names, k)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// fileNeedsSource returns the keys config.yaml holds that no chunk of M2 would
+// import: with no blob, the blob-bound ones (fileBlobBound), and when no row
+// exists either, M2 does not run at all, so the three secrets stay in the file
+// too. Sorted names, never values.
 func fileNeedsSource(in *m2Input) []string {
-	if in.Blob != nil || len(in.FileHas) == 0 {
+	if in.Blob != nil {
 		return nil
 	}
+	names := fileBlobBound(in)
 	anyRow := false
 	for _, rs := range in.Rows {
 		if rs != nil && rs.Present {
 			anyRow = true
 		}
 	}
-	var names []string
-	for _, k := range headGapFillKeys {
-		if !in.FileHas[k] {
-			continue
+	if !anyRow { // a row means M2 runs and imports the file's secrets
+		for _, k := range []string{"openai_api_key", "google_books_api_key", "hardcover_api_token"} {
+			if in.FileHas[k] {
+				names = append(names, k)
+			}
 		}
-		if anyRow && k != "root_dir" && k != "enable_ai_parsing" {
-			continue // a secret: a row exists, so M2 runs and imports it
-		}
-		names = append(names, k)
 	}
 	slices.Sort(names)
 	return names

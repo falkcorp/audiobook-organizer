@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_cutover_secrets_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3a8e5c71-2d90-4c6b-b5f4-7e1a9d3c4b08
 // last-edited: 2026-11-11
 
@@ -423,14 +423,25 @@ func TestConfigCutover_KeySearchOrder(t *testing.T) {
 		gateReads(t, r)
 	})
 
-	t.Run("with the database path unset the same layout refuses", func(t *testing.T) {
-		dbDir := t.TempDir()
-		r := guardRig(t, keyOnlyAt(dbDir, headKey))
+	t.Run("a key in a directory that is not searched refuses", func(t *testing.T) {
+		elsewhere := t.TempDir()
+		r := guardRig(t, keyOnlyAt(elsewhere, headKey)) // the rig's database directory is another, empty one
 		mem := r.newMem(t)
 		_, err := r.runOn(t, mem)
 		if !errors.Is(err, storage.ErrCutoverBlocked) {
 			t.Fatalf("boot error = %v, want storage.ErrCutoverBlocked", err)
 		}
+	})
+
+	t.Run("a step built without the database path panics", func(t *testing.T) {
+		defer func() {
+			msg, _ := recover().(string)
+			if !strings.Contains(msg, "ConfigStepOptions.DatabasePath") {
+				t.Errorf("panic = %q, want it to name ConfigStepOptions.DatabasePath", msg)
+			}
+		}()
+		ConfigStep(nil, nil, ConfigStepOptions{LevelStepVersion: 1})
+		t.Error("ConfigStep accepted an empty DatabasePath")
 	})
 
 	t.Run("the refusal names the database directory beside the state directory", func(t *testing.T) {
