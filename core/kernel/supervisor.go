@@ -1,7 +1,7 @@
 // file: core/kernel/supervisor.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: e84396f3-c126-49af-a149-17cc1398aeac
-// last-edited: 2026-11-08
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -217,9 +217,12 @@ func (k *Kernel) Run(ctx context.Context) error {
 		started = append(started, k.awaitLateStart(ctx, late, deadline)...)
 		return errors.Join(err, k.stopHooks(ctx, started, deadline), k.closeCore(ctx, deadline))
 	}
-	// (3) Module workers. Steps (3a) to (6) arrive with storage, health,
-	// events and tasks.
+	// (3) Module workers. Steps (3a) and (4) arrive with health and events.
 	ws := k.startWorkers(ctx)
+	// (5) The task executor and (6) the scheduler, only when the start rule
+	// held at P7 (tasks.go); then step (7)'s first member, the audit writer,
+	// before any listener can queue a record for it (F2-16).
+	coreErr := k.startCoreServices(ctx)
 	// (7) Listeners: R1Values once (05-config §1.12.1), the perimeter
 	// values handed to the router, then the listener.
 	v, err := k.r1Values()
@@ -234,6 +237,8 @@ func (k *Kernel) Run(ctx context.Context) error {
 	// §8, TestFamilyTaken_ThroughGlobalProvider).
 	familyErr := k.familyTaken("before the listener opened")
 	switch {
+	case coreErr != nil:
+		err = coreErr
 	case familyErr != nil:
 		err = familyErr
 	case err != nil:
@@ -248,7 +253,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 	}
 	if err != nil {
 		deadline := time.Now().Add(budget)
-		return errors.Join(err, k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline),
+		return errors.Join(err, k.stopCoreServices(ctx, deadline), k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline),
 			k.closeCore(ctx, deadline))
 	}
 	served := make(chan error, 1)
@@ -328,6 +333,10 @@ func (k *Kernel) stop(ctx context.Context, deadline time.Time, srv Server, serve
 			k.log.WarnContext(ctx, "kernel: listener returned an error while stopping", "err", err)
 		}
 	}
+	// The scheduler stops, the executor drains, then the audit writer drains
+	// into the still-open store: the reverse of steps (5) to (7), before the
+	// workers and hooks that started earlier (06 §6.5.2; 05-tasks 5T.4 step 4).
+	errs = append(errs, k.stopCoreServices(ctx, deadline))
 	errs = append(errs, k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline), k.closeCore(ctx, deadline))
 	return errors.Join(errs...)
 }

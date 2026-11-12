@@ -1,7 +1,7 @@
 // file: core/kernel/storage.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -111,10 +112,16 @@ func (k *Kernel) storageOptions(ctx context.Context) (storage.OpenOptions, error
 	if err != nil {
 		return storage.OpenOptions{}, fmt.Errorf("kernel: binary ID for the store's build fields: %w", err)
 	}
+	owners := k.storageOwners()
+	steps, err := k.dataSteps(owners, build, bootClock(ctx))
+	if err != nil {
+		return storage.OpenOptions{}, err
+	}
 	return storage.OpenOptions{
 		Path:         k.cfg.StoragePath,
 		FS:           k.cfg.StorageFS,
-		Owners:       k.storageOwners(),
+		Owners:       owners,
+		DataSteps:    steps,
 		Build:        build,
 		Logger:       k.coreLog("storage"),
 		ExtendStart:  k.extendStart(coreOwner),
@@ -124,16 +131,58 @@ func (k *Kernel) storageOptions(ctx context.Context) (storage.OpenOptions, error
 	}, nil
 }
 
+// dataSteps builds the data-migration runner over every manifest's
+// DataMigrations, enabled or not (a disabled module's migration still blocks
+// its owner's later steps, 05-storage 5S.3.5), and returns its P4b steps. It
+// keeps the runner for P4a's preflight and P5's metrics. No manifest declaring
+// a migration is no runner: ABO's shape, before F3-07, adds nothing to the
+// plan. Quarantine, LevelStep, Preflight and M8 are F3-04's and F3-07's seams
+// (DataMigrationsConfig says which): until they land a migration that drops a
+// row or raises a level fails closed.
+func (k *Kernel) dataSteps(owners []storage.OwnerSpec, build string, clock func() time.Time) ([]storage.DataStep, error) {
+	var migs []datamigrate.DataMigration
+	for _, e := range k.entries {
+		migs = append(migs, e.man.DataMigrations...)
+	}
+	if len(migs) == 0 {
+		k.dataMig = nil
+		return nil, nil
+	}
+	dm, err := NewDataMigrations(DataMigrationsConfig{
+		Build: build, Logger: k.coreLog("storage"), Clock: clock, ExtendStart: k.extendStart(coreOwner),
+	}, owners, migs...)
+	if err != nil {
+		return nil, err
+	}
+	k.dataMig = dm
+	return dm.Steps(), nil
+}
+
 // prepareStorage is P4a (06 §6.5.1; 05-storage §5S.4 steps 6-7): on an
 // empty store the one fresh-install batch; otherwise, when the boot will
 // write, the garbage sweep, the headroom check and the pre-migration
 // checkpoint, then the install marker. Nothing reaches the store before it.
+//
+// Around Prepare the F2 foundation adds two calls (F2-16): the data
+// migrations' cutover preflight before it (a nil hook, as F2-06 leaves it
+// until F3-04, does nothing), and the audit store after it, once the c/audit/
+// keyspace exists and before P4b writes anything the audit log could record
+// (05-rbac §5 item 7). Building the audit store writes nothing.
 func (k *Kernel) prepareStorage(ctx context.Context) error {
+	if k.dataMig != nil {
+		if err := k.dataMig.Preflight(ctx, k.store.opened); err != nil {
+			return err
+		}
+	}
 	db, err := k.store.opened.Prepare(ctx)
 	if err != nil {
 		return fmt.Errorf("kernel: prepare storage (P4a): %w", err)
 	}
 	k.store.db = db
+	if k.audit, err = buildAudit(ctx, db, k.coreLog("audit"), bootClock(ctx)); err != nil {
+		return err
+	}
+	k.coreLog("audit").DebugContext(ctx, "kernel: audit store built (P4a, before the P4b migrations)")
 	return nil
 }
 
@@ -238,6 +287,12 @@ func (k *Kernel) storageMetrics(ctx context.Context) error {
 	}
 	k.store.checkpoint = checkpoint
 	k.recordCheckpointBytes(ctx)
+	// The data migrations' series, on the scope just made (F2-06's seam).
+	if k.dataMig != nil {
+		if err := k.dataMig.RecordMetrics(ctx, db, scope, k.bootPhase); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

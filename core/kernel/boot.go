@@ -1,7 +1,7 @@
 // file: core/kernel/boot.go
-// version: 1.0.13
+// version: 1.0.14
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -94,6 +94,10 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 		if err := k.phase(phaseP4b, k.swapPhase(ctx, phaseP4b, func() error { return k.migrateStorage(ctx) })); err != nil {
 			return nil, err
 		}
+		// P4c (06 §6.5.1): the stores built over the migrated keyspaces.
+		if err := k.phase(phaseP4c, func() error { return k.buildStores(ctx) }); err != nil {
+			return nil, err
+		}
 	}
 	// The fake migration of the unit-lifecycle job (fakemigration_hook.go):
 	// no step exists in any build without the unitlifecycle tag. It runs
@@ -110,13 +114,34 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	if err := k.storageMetrics(ctx); err != nil {
 		return nil, err
 	}
+	// The audit store's instruments, once P5 built the Provider the store
+	// could not take at construction (audit.go: it was built before P4b).
+	if k.audit != nil {
+		sc, err := auditMetrics(k.provider, k.audit)
+		if err != nil {
+			return nil, err
+		}
+		k.auditSc = sc
+	}
 	// The checkpoint sweeper (05-storage §5S.4 step 15): registered on the
 	// open store once its gauge exists; Run starts it after readiness.
 	k.newSweeper()
 	if err := k.phase(phaseP6, func() error { return k.register(ctx) }); err != nil {
 		return nil, err
 	}
-	if err := k.phase(phaseP7, k.consume); err != nil {
+	// P7: the registrations are consumed and checked (problems of every kind
+	// are reported together), then the tasks start rule runs over what was
+	// registered (tasks.go). Describe opens no store, so it checks and builds
+	// nothing.
+	if err := k.phase(phaseP7, func() error {
+		if err := k.consume(); err != nil {
+			return err
+		}
+		if describe {
+			return nil
+		}
+		return k.buildTasks(ctx)
+	}); err != nil {
 		return nil, err
 	}
 	if describe {
@@ -226,6 +251,17 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 		return fmt.Errorf("kernel: metrics provider: %w", err)
 	}
 	k.provider = p
+	// The scope catalog (05-rbac §5 item 3): declared once, from core's own
+	// scopes, and kept. Nothing enforces with it before F4; the executor's
+	// system actors are built over it. And the defaults-only core config the
+	// executor, scheduler and task routes read (taskconfig.go). Both are
+	// pure: Describe builds them too.
+	if k.rbacCat, err = declareCoreCatalog(); err != nil {
+		return err
+	}
+	if k.coreCfg, err = newCoreConfig(k.cfg.AppID); err != nil {
+		return err
+	}
 	if k.scope, err = p.Core("kernel", "phase", "step"); err != nil {
 		return fmt.Errorf("kernel: metrics scope: %w", err)
 	}
@@ -476,6 +512,13 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		cctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), atLeastFloor(deadline))
 		defer cancel()
 		var errs []error
+		// Whatever Run (or coretest) started stops first, scheduler before
+		// executor before the audit writer (06 §6.5.2), while storage is open;
+		// a no-op for a boot that started none, or when Run's stop order
+		// already did.
+		if err := k.stopCoreServices(cctx, atLeastFloor(deadline)); err != nil {
+			errs = append(errs, err)
+		}
 		if k.provider != nil {
 			if err := k.provider.Shutdown(cctx); err != nil {
 				errs = append(errs, fmt.Errorf("kernel: metrics shutdown: %w", err))
@@ -486,6 +529,12 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		}
 		if err := k.closeStorage(); err != nil {
 			errs = append(errs, err)
+		}
+		// No deadline: the defaults-only store has no subscriber to drain, so
+		// this returns at once, and an expired budget must not turn that into
+		// "subscribers still running".
+		if err := k.coreCfg.close(context.WithoutCancel(ctx)); err != nil {
+			errs = append(errs, fmt.Errorf("kernel: core config close: %w", err))
 		}
 		if k.logging != nil {
 			if err := k.logging.Close(cctx); err != nil {
@@ -498,4 +547,17 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		k.closeErr = errors.Join(errs...)
 	})
 	return k.closeErr
+}
+
+// buildStores is P4c (06 §6.5.1): what is built over the store once P4b has
+// migrated it. The health registry with core.storage and core.secrets comes
+// first, so the executor's Ready wait has the registry it reads (F2-10); then
+// the native task stores (tasks.go). Neither starts a goroutine or writes.
+func (k *Kernel) buildStores(ctx context.Context) error {
+	reg, rep, err := buildHealth(k.store.db.Admin())
+	if err != nil {
+		return err
+	}
+	k.healthReg, k.reporters = reg, rep
+	return k.buildTaskStores(ctx)
 }

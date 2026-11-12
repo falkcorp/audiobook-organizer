@@ -1,7 +1,7 @@
 // file: core/examples/hello/specblocks_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: e51de200-5290-46a4-a134-5fb0ab239104
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package hello_test
 
@@ -119,9 +119,6 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 		helloMissing := []string{
 			"module.Manifest.Permissions", // no owning row yet
 			"module.Manifest.Settings",    // no owning row yet
-			"module.Manifest.TaskLedger",  // F2-16/F5-18
-			"module.Registrar.Resources",  // F2-16/F5-18
-			"module.Registrar.Tasks",      // F2-17
 			"module.Setting",              // no owning row yet
 			"module.Settings",             // no owning row yet
 			"module.SettingsSection",      // no owning row yet

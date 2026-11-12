@@ -1,7 +1,7 @@
 // file: core/app/offline_storage_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1805cd97-f796-434f-9fa0-32dc6931c03b
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package app
 
@@ -31,9 +31,10 @@ func command(t *testing.T, cmds []Command, name string) Command {
 // --from-archive, and a dry run prints its report and leaves the live store's
 // files as they were; storage quarantine list prints no value (here: none);
 // export writes a new 0600 file and refuses one that exists; purge requires
-// --step and --confirm and is audited, fail-closed, so a store opened
-// without core/audit refuses it. The quarantine's behaviour over records is
-// kernel's TestQuarantineCommands.
+// --step and --confirm and is audited, fail-closed (kernel's cutover test
+// covers a store opened without core/audit). A store the kernel served has
+// core/audit claimed since F2-16, so the purge of an empty step succeeds. The
+// quarantine's behaviour over records is kernel's TestQuarantineCommands.
 func TestQuarantineCommandsCLI(t *testing.T) {
 	opts := offlineOpts(t)
 	keeper := offlineKeeper()
@@ -92,7 +93,7 @@ func TestQuarantineCommandsCLI(t *testing.T) {
 	if err := purge.Run(ctx, []string{"--step", "gcpd.case-files"}, &out); err == nil || !strings.Contains(err.Error(), "--confirm is required") {
 		t.Errorf("purge without --confirm = %v", err)
 	}
-	if err := purge.Run(ctx, []string{"--step", "gcpd.case-files", "--confirm"}, &out); err == nil || !strings.Contains(err.Error(), "audited") {
-		t.Errorf("purge over a store without core/audit = %v, want the audited refusal", err)
+	if err := purge.Run(ctx, []string{"--step", "gcpd.case-files", "--confirm"}, &out); err != nil {
+		t.Errorf("purge over a served store, which has core/audit = %v, want it audited and done", err)
 	}
 }

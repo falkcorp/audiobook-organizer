@@ -1,7 +1,7 @@
 // file: core/coretest/assert.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 59cf8223-d373-45d6-8bc7-8a8068d0d1ed
-// last-edited: 2026-11-07
+// last-edited: 2026-11-11
 
 package coretest
 
@@ -41,7 +41,9 @@ func AssertRoutesHavePermissions(t testing.TB, h *Harness) {
 //     recorded, let alone run (06 §6.3 A5);
 //   - no route of the built router is the module's;
 //   - no request answers anything but 404 (not 403) under /api/<id>/ or
-//     under its Manifest.LegacyPrefixes.
+//     under its Manifest.LegacyPrefixes;
+//   - its persisted runs, every kind of its TaskLedger, are listed as held
+//     and none was dispatched (F2-16; the cell is empty without runs).
 //
 // It never calls the module's code: when the first three cells find the
 // module live, it sends no request, because its handlers would run. Its
@@ -50,9 +52,11 @@ func AssertRoutesHavePermissions(t testing.TB, h *Harness) {
 // hello's greeting.
 //
 // The spec's other cells need subsystems R1 does not have, and the rows that
-// land them add them here: task kinds and schedules, held runs and WithRuns
-// (F2-16), GET /api/core/v1/modules, RecordingFS, the outbox backlog, the
-// op-ledger gate (COR-13) and an unchanged keyspace (storage, R1-20).
+// land them add them here: task schedules, GET /api/core/v1/modules,
+// RecordingFS, the outbox backlog, the op-ledger gate (COR-13: HEAD's op
+// ledger has no F2 equivalent) and an unchanged keyspace (storage, R1-20).
+// The held runs are listed through the Client, not GET /api/core/v1/tasks/runs,
+// which is not mounted yet (F2-16's notes).
 func AssertModuleInert(t testing.TB, h *Harness, id module.ID) {
 	t.Helper()
 	m, ok := h.mods[id]
@@ -82,6 +86,7 @@ func AssertModuleInert(t testing.TB, h *Harness, id module.ID) {
 		t.Errorf("coretest: AssertModuleInert(%q): the module is live, so no request was sent to its paths", id)
 		return
 	}
+	assertHeldRuns(t, h, id, m.Manifest())
 	client := h.Anonymous()
 	for _, p := range inertProbes(id, m.Manifest()) {
 		req, err := http.NewRequestWithContext(t.Context(), p.method, p.path, nil)

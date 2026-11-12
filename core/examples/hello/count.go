@@ -1,5 +1,5 @@
 // file: core/examples/hello/count.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1b89cd69-630b-4f09-9c3d-c5b86b40ba47
 // last-edited: 2026-11-11
 
@@ -53,13 +53,3 @@ func countTask(s *service) tasks.Definition {
 		},
 	})
 }
-
-// CountTask is countTask for the registration that does not exist yet: the
-// kernel wiring row (F2-16) adds Registrar.Tasks(countTask(svc)) to hello.go,
-// and this wrapper, its tasklint allowlist entry in archtest/tasklint/core_test.go
-// and the directive below go with that call. Until then nothing registers
-// hello.count (F2-05 is dark), and tasklint's unregistered-kind rule would
-// refuse the definition.
-//
-//tasklint:constructor hello.go passes countTask(svc) to Registrar.Tasks once the kernel wiring row (F2-16) lands; this wrapper is deleted then
-func CountTask(s *service) tasks.Definition { return countTask(s) }
