@@ -1,7 +1,7 @@
 // file: core/internal/bleveindex/rebuild.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8e6dc1c5-df80-4fdf-80a8-bc517a0ac0f6
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package bleveindex
 
@@ -82,8 +82,10 @@ func (e *Engine) runRebuild(rc *tasks.RC, p RebuildParams) (RebuildResult, error
 	if err := i.op.Lock(rc.Context()); err != nil {
 		return RebuildResult{}, fmt.Errorf("bleveindex: rebuild %s/%s: waiting for the index's writer: %w", p.Module, p.Index, err)
 	}
-	n, runErr := e.rebuildLocked(rc, i)
-	i.op.Unlock()
+	n, runErr := func() (int64, error) {
+		defer i.op.Unlock() // a panic in the rebuild must not leave the index locked
+		return e.rebuildLocked(rc, i)
+	}()
 	if runErr != nil {
 		return RebuildResult{}, runErr
 	}
@@ -96,6 +98,9 @@ func (e *Engine) runRebuild(rc *tasks.RC, p RebuildParams) (RebuildResult, error
 }
 
 func (e *Engine) rebuildLocked(rc *tasks.RC, i *idx) (int64, error) {
+	if i.duringRebuild != nil {
+		i.duringRebuild()
+	}
 	if err := i.recreate(); err != nil {
 		return 0, err
 	}

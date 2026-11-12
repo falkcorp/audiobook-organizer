@@ -1,7 +1,7 @@
 // file: core/internal/bleveindex/index.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b3a9e32-ac5d-4cae-9d75-8f2e4b7d9c33
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package bleveindex
 
@@ -64,6 +64,8 @@ type idx struct {
 
 	failMu sync.Mutex
 	fails  map[string]failure // marks backing off, see backoff.go
+	// sweptAt is when makeRoom last dropped the expired entries (under failMu).
+	sweptAt time.Time
 
 	// rebuilt is set when a full rebuild ran to completion. The index leaves
 	// Rebuilding only after that AND a reconcile pass that found the dirty
@@ -81,6 +83,10 @@ type idx struct {
 	// between reading the generation and checking for pending marks, the window
 	// in which a mark written must be seen by the check.
 	afterGenerationRead func()
+
+	// duringRebuild is a test seam, nil in production: it runs inside the
+	// rebuild with the writer lock held, where a test can make it panic.
+	duringRebuild func()
 
 	// afterBleveCopy is a test seam, nil in production: it runs after bleve's copy
 	// succeeded and may fail it, so a failure with a partial index on disk can be
