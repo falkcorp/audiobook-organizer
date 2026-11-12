@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/redact_internal_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f1fdc2e-3b2b-4a8b-a3a5-2d8f9e0b7d11
 // last-edited: 2026-11-12
 
@@ -169,20 +169,12 @@ func TestScrubSecretRules(t *testing.T) {
 	}
 }
 
-// TestScrub_HostileBodyIsBounded (M2): 16 MiB of every shape that was
-// quadratic or slow costs next to nothing through the excerpt path, and the
-// scrubber itself is linear on the raw input.
-//
-// Both properties are asserted as growth ratios, not wall-clock limits. Under
-// -race and coverage on a shared CI runner the scrubber runs about 150x slower
-// than a plain build, so an absolute budget either flakes there or is too loose
-// to catch anything locally. A ratio is independent of machine speed: the
-// excerpt path must not grow with the body at all, and text must grow about 32x
-// when the input grows 32x (a quadratic scrubber grows about 1024x).
-func TestScrub_HostileBodyIsBounded(t *testing.T) {
-	const size = 16 << 20
+// hostileShapes are the bodies that were quadratic or slow in an earlier
+// scrubber, plus the shapes that would make a rescan or an unbounded look-ahead
+// visible: every one of them makes a different branch of text do its work.
+func hostileShapes() map[string]func(n int) string {
 	shape := func(unit string, n int) string { return strings.Repeat(unit, n/len(unit)) }
-	shapes := map[string]func(n int) string{
+	return map[string]func(n int) string{
 		"name run":            func(n int) string { return shape("a", n) },
 		"key=":                func(n int) string { return shape("key=", n) },
 		"quotes":              func(n int) string { return shape(`"`, n) },
@@ -193,48 +185,65 @@ func TestScrub_HostileBodyIsBounded(t *testing.T) {
 		"unterminated quote":  func(n int) string { return `{"key": "` + shape("z", n) },
 		"bearers":             func(n int) string { return shape("Bearer ", n) },
 		"urls":                func(n int) string { return shape("http://a:b@c ", n) },
+		"urls, no userinfo":   func(n int) string { return shape("http://", n) },
+		"urls, no stop":       func(n int) string { return shape("a://", n) },
+		"quoted values":       func(n int) string { return shape(`key="`, n) },
+		"basic values":        func(n int) string { return shape("key=basic ", n) },
 	}
-	for name, body := range shapes {
-		small, large := body(64<<10), body(size)
-		ts := fastest(3, func() { _ = scrubber{}.bounded(small, integrationsMaxDetail) })
-		tl := fastest(3, func() {
-			got := scrubber{}.bounded(large, integrationsMaxDetail)
-			if len(got) > integrationsMaxDetail {
-				t.Errorf("%s: %d bytes, over the bound", name, len(got))
-			}
-		})
-		// 256x the input must cost about the same; allow noise, not growth.
-		if tl > 8*ts+time.Millisecond {
-			t.Errorf("%s: bounded took %v on 16 MiB vs %v on 64 KiB: it grows with the body", name, tl, ts)
+}
+
+// maxWorkPerByte is the most bytes text may examine per input byte. The
+// scanner reads each byte a handful of times (the main loop, the scan of a
+// name, the scan of its value, the second walk over a URL authority), and the
+// worst shape measures well under it. A quadratic scanner examines about n/2
+// bytes per input byte, so even the small inputs below are hundreds of times over this.
+const maxWorkPerByte = 4
+
+// TestScrub_HostileBodyIsBounded (M2): 16 MiB of every shape that was
+// quadratic or slow costs next to nothing through the excerpt path, and the
+// scrubber itself is linear on the raw input.
+//
+// Both properties are asserted by counting the bytes the scanner examines
+// (scrubber.meter), never by timing it. A wall-clock ratio flaked three times
+// on CI: under -race and coverage, cache and GC effects at 1 MiB move a linear
+// scanner by more than any bound that is still far enough below quadratic to
+// mean something. The count does not depend on the machine.
+func TestScrub_HostileBodyIsBounded(t *testing.T) {
+	const size = 16 << 20
+	for name, body := range hostileShapes() {
+		// The excerpt path cuts to a margin first, so a 16 MiB body costs what a
+		// 1 KiB one does: its work is bounded by that margin, not by the body.
+		var m workMeter
+		got := scrubber{meter: &m}.bounded(body(size), integrationsMaxDetail)
+		if len(got) > integrationsMaxDetail {
+			t.Errorf("%s: %d bytes, over the bound", name, len(got))
+		}
+		if limit := maxWorkPerByte * (4*integrationsMaxDetail + 256); m.n > limit {
+			t.Errorf("%s: bounded examined %d bytes of a 16 MiB body, over %d: it grows with the body", name, m.n, limit)
 		}
 	}
-	for name, body := range shapes {
-		small, large := body(32<<10), body(1<<20)
-		ts := fastest(5, func() { _ = scrubber{}.text(small) })
-		tl := fastest(3, func() { _ = scrubber{}.text(large) })
-		// 32x the input: linear costs about 32x, quadratic about 1024x. The
-		// bound of 128x tolerates 4x of cache, GC and shared-runner noise
-		// (a 4x step left too little room: 9.8x was seen for linear code
-		// under -race on CI) and is still 8x below quadratic.
-		if tl > 128*ts+time.Millisecond {
-			t.Errorf("%s: text took %v on 1 MiB vs %v on 32 KiB (%.1fx for 32x the input): not linear",
-				name, tl, ts, float64(tl)/float64(ts))
+	for name, body := range hostileShapes() {
+		for _, n := range []int{4 << 10, 16 << 10} {
+			in := body(n)
+			var m workMeter
+			_ = scrubber{meter: &m}.text(in)
+			if limit := maxWorkPerByte * len(in); m.n > limit {
+				t.Errorf("%s: text examined %d bytes of %d (%.1f per byte, over %d): not linear",
+					name, m.n, len(in), float64(m.n)/float64(len(in)), maxWorkPerByte)
+			}
 		}
 	}
 }
 
-// fastest is the quickest of n runs of f, which discards scheduler and GC
-// pauses that would otherwise make a timing ratio noisy.
-func fastest(n int, f func()) time.Duration {
-	best := time.Duration(math.MaxInt64)
-	for range n {
-		start := time.Now()
-		f()
-		if d := time.Since(start); d < best {
-			best = d
-		}
+// TestScrub_WorkMeterSeesEveryByte guards the guard: text must report work, so
+// the linearity test above cannot pass by counting nothing.
+func TestScrub_WorkMeterSeesEveryByte(t *testing.T) {
+	in := strings.Repeat("a=b ", 1000)
+	var m workMeter
+	_ = scrubber{meter: &m}.text(in)
+	if m.n < len(in) {
+		t.Fatalf("meter counted %d bytes for a %d byte input", m.n, len(in))
 	}
-	return best
 }
 
 const integrationsMaxDetail = integrations.MaxDetail
