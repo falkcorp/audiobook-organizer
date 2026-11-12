@@ -1,5 +1,5 @@
 // file: core/library/hash.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: c56e37d1-9700-479b-b762-71caca0f99ae
 // last-edited: 2026-11-11
 
@@ -32,6 +32,10 @@ func (m *manager) Hash(ctx context.Context, p Path) (_ Digest, err error) {
 	if err != nil {
 		return Digest{}, err
 	}
+	if err := m.hashSlots.acquire(ctx); err != nil {
+		return Digest{}, err
+	}
+	defer m.hashSlots.release()
 	d, err := m.hashVia(ctx, r.rw, p.Rel, true)
 	if err == nil {
 		m.ctr.addHashBytes(r.spec.ID, d.Size)

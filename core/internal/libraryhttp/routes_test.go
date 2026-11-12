@@ -1,5 +1,5 @@
 // file: core/internal/libraryhttp/routes_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7529d641-2d0b-4ac5-8a2c-fb770d54c388
 // last-edited: 2026-11-11
 
@@ -23,6 +23,7 @@ import (
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/internal/authz"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
@@ -671,5 +672,38 @@ func TestMapError(t *testing.T) {
 	}
 	if _, ok := mapError(errors.New("boom")); ok {
 		t.Error("an unknown error mapped")
+	}
+}
+
+// The fake checker in the cells above answers what the test tells it to. This
+// one is the real compiled checker, so the route's requirement meets the
+// semantics the kernel will give it: a key confined to another module's scope,
+// a key with an empty scope list and a session whose roles grant nothing hold
+// nothing, however many role patterns the roles carry.
+func TestBrowse_RealCheckerDecides(t *testing.T) {
+	cat, err := rbac.NewCatalog(append(rbac.CoreScopes(), rbac.PermissionSpec{Name: "books:fingerprint.worker", Confining: true})...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newRig(t, rootSpec("books-library", library.RoleLibrary))
+	for name, c := range map[string]struct {
+		in   rbac.CompileInput
+		code int
+	}{
+		"key confined to a worker scope":      {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{"books:fingerprint.worker"}, RolePatterns: []rbac.Permission{"books:fingerprint.worker"}}, 403},
+		"key with an empty scope list":        {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{}, RolePatterns: []rbac.Permission{"core:*"}}, 403},
+		"key naming the scope, roles lack it": {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{scopeBrowse}, RolePatterns: []rbac.Permission{"core:tasks.view"}}, 403},
+		"key naming the scope, roles grant":   {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{scopeBrowse}, RolePatterns: []rbac.Permission{"core:*"}}, 200},
+		"session without role patterns":       {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true}, 403},
+		"session with another scope":          {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: []rbac.Permission{"core:tasks.view"}}, 403},
+		"session with core:*":                 {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: []rbac.Permission{"core:*"}}, 200},
+		"session with the scope":              {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: []rbac.Permission{scopeBrowse}}, 200},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := &auth.Principal{User: &auth.User{ID: "lucius", Username: "lucius"}, Method: auth.MethodSession, CredentialID: "cred-lucius", Perms: authz.Compile(c.in, cat)}
+			if res := r.get(p, nil); res.code != c.code {
+				t.Errorf("= %d %s, want %d", res.code, res.body, c.code)
+			}
+		})
 	}
 }
