@@ -1,7 +1,7 @@
 // file: core/realtime/hub_rights_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b9e5c70-6d21-4f48-8a0c-91e7f2b4d615
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package realtime_test
 
@@ -136,25 +136,6 @@ func TestHub_RightsChangedRefusals(t *testing.T) {
 	}
 }
 
-// TestHub_RightsChangedWithoutRefreshEndsStreams: with no Refresh hook the hub
-// cannot know what a stream may still see, so a generation bump ends every
-// stream with permission_revoked and the client reconnects (fail closed).
-func TestHub_RightsChangedWithoutRefreshEndsStreams(t *testing.T) {
-	c := newCast(t, hubOptions{})
-	a := c.open(t, "lucius", "/events")
-	a.expectOpened()
-	b := c.open(t, "dick", "/events?topic="+tSignal)
-	b.expectOpened()
-	c.rbacChanged(2)
-	for _, rd := range []*reader{a, b} {
-		if reason := rd.drainUntilClosed(); reason != "permission_revoked" {
-			t.Errorf("closed with %q", reason)
-		}
-	}
-	// The reconnect works and sees the rights as they stand now.
-	c.open(t, "lucius", "/events").expectOpened()
-}
-
 // TestHub_ResetOnRestartNonce: an id from another process (a restart) is not
 // resumed; the stream says reset{restart} first, replays nothing and carries on
 // live. A reset is a normal frame, not an error status.
@@ -248,7 +229,7 @@ func TestHub_ErrorsBeforeSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub, err := realtime.NewHub(realtime.Options{}, realtime.Deps{Auth: e.svc, Catalog: bus.Catalog()})
+	hub, err := realtime.NewHub(realtime.Options{AllowNoControlTopics: true}, realtime.Deps{Auth: e.svc, Catalog: bus.Catalog(), Refresh: e.refresh})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,20 +257,173 @@ func TestHub_ErrorsBeforeSubscriptions(t *testing.T) {
 		t.Errorf("after Close: %d %+v", resp.StatusCode, p)
 	}
 
+	ok := realtime.Deps{Auth: e.svc, Catalog: bus.Catalog(), Refresh: e.refresh}
 	for name, tc := range map[string]struct {
 		o realtime.Options
 		d realtime.Deps
 	}{
-		"no Auth":           {d: realtime.Deps{Catalog: bus.Catalog()}},
-		"no Catalog":        {d: realtime.Deps{Auth: e.svc}},
-		"negative ring":     {o: realtime.Options{RingSize: -1}, d: realtime.Deps{Auth: e.svc, Catalog: bus.Catalog()}},
-		"oversized buffer":  {o: realtime.Options{ClientBuffer: 1 << 20}, d: realtime.Deps{Auth: e.svc, Catalog: bus.Catalog()}},
-		"negative duration": {o: realtime.Options{Heartbeat: -time.Second}, d: realtime.Deps{Auth: e.svc, Catalog: bus.Catalog()}},
-		"huge payload cap":  {o: realtime.Options{MaxPayload: 1 << 30}, d: realtime.Deps{Auth: e.svc, Catalog: bus.Catalog()}},
+		"no Auth":            {d: realtime.Deps{Catalog: bus.Catalog(), Refresh: e.refresh}},
+		"no Catalog":         {d: realtime.Deps{Auth: e.svc, Refresh: e.refresh}},
+		"no Refresh":         {d: realtime.Deps{Auth: e.svc, Catalog: bus.Catalog()}},
+		"negative ring":      {o: realtime.Options{RingSize: -1}, d: ok},
+		"oversized buffer":   {o: realtime.Options{ClientBuffer: 1 << 20}, d: ok},
+		"negative duration":  {o: realtime.Options{Heartbeat: -time.Second}, d: ok},
+		"huge payload cap":   {o: realtime.Options{MaxPayload: 1 << 30}, d: ok},
+		"huge heartbeat":     {o: realtime.Options{Heartbeat: 24 * time.Hour}, d: ok},
+		"huge write timeout": {o: realtime.Options{WriteTimeout: time.Hour}, d: ok},
 	} {
 		if _, err := realtime.NewHub(tc.o, tc.d); err == nil {
 			t.Errorf("NewHub(%s) = nil error", name)
 		}
 	}
 	_ = errors.New
+}
+
+// TestHub_BoundariesOfTheCeilings: a heartbeat and a write timeout at their
+// ceiling are accepted (the ceiling bounds the revocation cut-off), one past it
+// is not.
+func TestHub_BoundariesOfTheCeilings(t *testing.T) {
+	e := newAuth(t)
+	bus, err := events.NewBus(events.BusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := realtime.Deps{Auth: e.svc, Catalog: bus.Catalog(), Refresh: e.refresh}
+	if _, err := realtime.NewHub(realtime.Options{Heartbeat: time.Minute, WriteTimeout: time.Minute}, d); err != nil {
+		t.Errorf("at the ceiling: %v", err)
+	}
+	for _, o := range []realtime.Options{{Heartbeat: time.Minute + 1}, {WriteTimeout: time.Minute + 1}} {
+		if _, err := realtime.NewHub(o, d); err == nil {
+			t.Errorf("%+v accepted", o)
+		}
+	}
+}
+
+// TestHub_SubscriptionsRefuseAnUndeclaredControlTopic: a catalog without
+// core.principal.invalidated.v1 or core.rbac.changed.v1 is an error, naming the
+// topic, unless the caller opts out; with the opt-out the stream still works.
+func TestHub_SubscriptionsRefuseAnUndeclaredControlTopic(t *testing.T) {
+	for _, drop := range []string{topicInval.Name(), topicRBAC.Name()} {
+		t.Run(drop, func(t *testing.T) {
+			e := newAuth(t)
+			bus, err := events.NewBus(events.BusOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			core, batcave, arkham := topicSpecs()
+			core = slices.DeleteFunc(core, func(s events.TopicSpec) bool { return s.Name == drop })
+			for _, d := range []struct {
+				owner string
+				specs []events.TopicSpec
+			}{{"core", core}, {"batcave", batcave}, {"arkham", arkham}} {
+				if err := bus.Declare(d.owner, d.specs...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			deps := realtime.Deps{Auth: e.svc, Catalog: bus.Catalog(), Refresh: e.refresh}
+			hub, err := realtime.NewHub(realtime.Options{}, deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := hub.Subscriptions(); err == nil || !strings.Contains(err.Error(), drop) {
+				t.Fatalf("Subscriptions = %v, want an error naming %s", err, drop)
+			}
+			hub2, err := realtime.NewHub(realtime.Options{AllowNoControlTopics: true}, deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := hub2.Subscriptions(); err != nil {
+				t.Errorf("with the opt-out: %v", err)
+			}
+		})
+	}
+}
+
+// TestHub_RoleChangeReachesAnOpenStream: auth.SetRoles moves neither the
+// credential epoch nor the rbac generation and nothing publishes a control
+// topic for it, so only the per-heartbeat refresh can notice. A demoted user's
+// wildcard stream loses the topic its role no longer covers within a heartbeat
+// and keeps the rest; one that named the topic exactly is ended.
+func TestHub_RoleChangeReachesAnOpenStream(t *testing.T) {
+	c := newCast(t, hubOptions{opts: hubHeartbeat(50 * time.Millisecond)})
+	wild := c.open(t, "lucius", "/events?topic=batcave.*")
+	wild.expectOpened()
+	named := c.open(t, "lucius", "/events?topic="+tCell+"&topic="+tSignal)
+	named.expectOpened()
+	c.signal(topicCell, "", "before-demotion", "x")
+	if en, _ := wild.nextData(); en.Topic != tCell {
+		t.Fatalf("before the demotion the wildcard stream saw %+v", en)
+	}
+	if err := c.svc.SetRoles(context.Background(), c.ro.get("bruce"), c.lucius.ID, []rbac.RoleName{"batcave.watcher"}); err != nil {
+		t.Fatal(err)
+	}
+	if reason := named.drainUntilClosed(); reason != "permission_revoked" {
+		t.Errorf("the stream that named the topic closed with %q, want permission_revoked", reason)
+	}
+	// The wildcard stream refreshes on its own heartbeat; four beats on, it has
+	// been cut over to what the watcher role holds.
+	time.Sleep(200 * time.Millisecond)
+	c.signal(topicCell, "", "after-demotion", "x")
+	c.signal(topicSignal, "", "visible", "public")
+	for {
+		en, _ := wild.nextData()
+		if en.Topic == tCell && strings.Contains(string(en.Data), "after-demotion") {
+			t.Fatalf("LEAK: the demoted user still receives %s: %s", tCell, en.Data)
+		}
+		if en.Topic == tSignal {
+			break
+		}
+	}
+}
+
+// TestHub_RegrantAfterDropStaysDroppedUntilReconnect: a topic dropped by a
+// narrowing is not picked up again if the same rights come back; the stream's
+// set only ever shrinks, so a widening never shows a stream more than it asked
+// for at subscribe, and a reconnect gets it.
+func TestHub_RegrantAfterDropStaysDroppedUntilReconnect(t *testing.T) {
+	ref := &refresher{}
+	c := newCast(t, hubOptions{deps: func(d *realtime.Deps) { d.Refresh = ref.hook }})
+	var regranted atomic.Bool
+	ref.set(func(_ context.Context, p *auth.Principal) (*auth.Principal, error) {
+		if regranted.Load() {
+			return c.narrowed(t, c.lucius, p, scopeView, scopeRun), nil
+		}
+		return c.narrowed(t, c.lucius, p, scopeView), nil
+	})
+	rd := c.open(t, "lucius", "/events?topic=batcave.*")
+	rd.expectOpened()
+	c.rbacChanged(2) // the cell topic is dropped
+	waitFor(t, func() bool { return ref.calls.Load() >= 1 })
+	regranted.Store(true)
+	c.rbacChanged(3) // and the right is back
+	waitFor(t, func() bool { return ref.calls.Load() >= 2 })
+	c.signal(topicSignal, "", "marker", "public")
+	for {
+		en, _ := rd.nextData()
+		if en.Topic == tCell {
+			t.Fatalf("a dropped topic came back on a live stream: %+v", en)
+		}
+		if en.Topic == tSignal {
+			break
+		}
+	}
+	c.signal(topicCell, "", "after-regrant", "x")
+	c.signal(topicSignal, "", "marker-2", "public")
+	for {
+		en, _ := rd.nextData()
+		if en.Topic == tCell {
+			t.Fatalf("a dropped topic came back on a live stream: %+v", en)
+		}
+		if en.Topic == tSignal {
+			break
+		}
+	}
+	// A reconnect sees what lucius holds now.
+	ref.set(func(_ context.Context, p *auth.Principal) (*auth.Principal, error) { return p, nil })
+	again := c.open(t, "lucius", "/events?topic=batcave.*")
+	again.expectOpened()
+	c.signal(topicCell, "", "for-the-reconnect", "x")
+	if en, _ := again.nextData(); en.Topic != tCell {
+		t.Errorf("the reconnected stream saw %+v", en)
+	}
 }

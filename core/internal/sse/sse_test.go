@@ -1,7 +1,7 @@
 // file: core/internal/sse/sse_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1e4b93-5d28-4a6f-9b07-e2a3c8d41f56
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package sse_test
 
@@ -924,4 +924,163 @@ func TestEnd_AnEndedStreamQueuesNothingMore(t *testing.T) {
 		t.Errorf("an ended stream counted %d overflow drops", dropped.Load())
 	}
 	s.Release()
+}
+
+func TestSetInterest_StopsQueueingARemovedTopic(t *testing.T) {
+	var dropped atomic.Int64
+	b := broker(t, func(o *sse.Options) {
+		o.ClientBuffer = 2
+		o.Hooks.Dropped = func(n int) { dropped.Add(int64(n)) }
+	})
+	s, _ := sub(t, b, nil) // a.x and a.y
+	if got := s.Topics(); !slices.Equal(got, []string{"a.x", "a.y"}) {
+		t.Fatalf("Topics = %v", got)
+	}
+	s.SetInterest([]string{"a.y"})
+	if got := s.Topics(); !slices.Equal(got, []string{"a.y"}) {
+		t.Fatalf("Topics after narrowing = %v", got)
+	}
+	for range 20 {
+		pub(b, "a.x", "") // removed: must neither queue nor overflow
+	}
+	if dropped.Load() != 0 {
+		t.Errorf("a removed topic overflowed the queue: %d drops", dropped.Load())
+	}
+	pub(b, "a.y", "")
+	rec, done := run(t.Context(), s)
+	rec.awaitText(t, nonce+"-21")
+	if got := ids(rec.text()); !slices.Equal(got, []string{nonce + "-21"}) {
+		t.Errorf("ids = %v", got)
+	}
+	if strings.Contains(rec.text(), "core.stream.reset.v1") {
+		t.Errorf("a reset for a topic the stream no longer wants:\n%s", rec.text())
+	}
+	b.Close()
+	finished(t, done)
+}
+
+func TestRequestReset_IsWrittenBeforeTheNextEntry(t *testing.T) {
+	b := broker(t, nil)
+	s, _ := sub(t, b, nil)
+	rec, done := run(t.Context(), s)
+	rec.awaitText(t, "core.stream.opened.v1")
+	s.RequestReset(sse.ResetGap)
+	s.RequestReset(sse.ResetRestart) // one is owed: the first reason stands
+	rec.awaitText(t, `"reason":"gap"`)
+	pub(b, "a.x", "")
+	rec.awaitText(t, nonce+"-1")
+	if strings.Count(rec.text(), "core.stream.reset.v1") != 1 || strings.Contains(rec.text(), `"reason":"restart"`) {
+		t.Errorf("resets:\n%s", rec.text())
+	}
+	b.Close()
+	finished(t, done)
+}
+
+// stuckRecorder blocks every write after the first until its deadline passes.
+type stuckRecorder struct {
+	*recorder
+	mu       sync.Mutex
+	deadline time.Time
+	moved    chan struct{}
+	writes   int
+}
+
+func (r *stuckRecorder) SetWriteDeadline(t time.Time) error {
+	r.mu.Lock()
+	r.deadline = t
+	r.mu.Unlock()
+	select {
+	case r.moved <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (r *stuckRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	r.writes++
+	stuck := r.writes > 1
+	r.mu.Unlock()
+	for stuck {
+		r.mu.Lock()
+		dl := r.deadline
+		r.mu.Unlock()
+		if !dl.After(time.Now()) {
+			return 0, os.ErrDeadlineExceeded
+		}
+		select {
+		case <-r.moved:
+		case <-time.After(time.Until(dl)):
+		}
+	}
+	return r.recorder.Write(p)
+}
+
+func TestEnd_InterruptsAWriteInFlight(t *testing.T) {
+	for name, end := range map[string]func(b *sse.Broker){
+		"End":   func(b *sse.Broker) { b.End(func(any) bool { return true }, sse.CloseCredentialRevoked) },
+		"Close": func(b *sse.Broker) { b.Close() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := broker(t, func(o *sse.Options) { o.WriteTimeout = time.Minute })
+			s, _ := sub(t, b, nil)
+			w := &stuckRecorder{recorder: newRecorder(), moved: make(chan struct{}, 1)}
+			done := make(chan string, 1)
+			go func() { done <- s.Serve(t.Context(), w) }()
+			pub(b, "a.x", "") // its write blocks: the client is not reading
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				w.mu.Lock()
+				n := w.writes
+				w.mu.Unlock()
+				if n >= 2 || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			start := time.Now()
+			end(b)
+			r := finished(t, done)
+			if time.Since(start) > 3*time.Second {
+				t.Errorf("the stream took %v to stop with a write in flight and a 1m deadline", time.Since(start))
+			}
+			want := sse.CloseCredentialRevoked
+			if name == "Close" {
+				want = sse.CloseShutdown
+			}
+			if r != want {
+				t.Errorf("reason %q, want the end reason %q, not a write timeout", r, want)
+			}
+		})
+	}
+}
+
+// pastRefuser refuses a write deadline that is not in the future, as a writer
+// whose connection cannot take an interrupt would.
+type pastRefuser struct{ *recorder }
+
+func (r pastRefuser) SetWriteDeadline(t time.Time) error {
+	if !t.After(time.Now().Add(time.Second)) {
+		return errors.New("deadline refused")
+	}
+	return r.recorder.SetWriteDeadline(t)
+}
+
+func TestEnd_ReportsAnInterruptItCouldNotDeliver(t *testing.T) {
+	var got atomic.Value
+	b := broker(t, func(o *sse.Options) {
+		o.Hooks.InterruptFailed = func(err error) { got.Store(err) }
+	})
+	s, _ := sub(t, b, nil)
+	w := pastRefuser{newRecorder()}
+	done := make(chan string, 1)
+	go func() { done <- s.Serve(t.Context(), w) }()
+	w.awaitText(t, "core.stream.opened.v1")
+	b.End(func(any) bool { return true }, sse.CloseCredentialRevoked)
+	if r := finished(t, done); r != sse.CloseCredentialRevoked {
+		t.Errorf("reason %q", r)
+	}
+	if err, _ := got.Load().(error); err == nil || !strings.Contains(err.Error(), "deadline refused") {
+		t.Errorf("InterruptFailed = %v", err)
+	}
 }

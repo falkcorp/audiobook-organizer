@@ -1,7 +1,7 @@
 // file: core/internal/eventhttp/eventhttp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f4c9a27-83d1-4e5b-b6a2-91c7d3e8f054
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package eventhttp
 
@@ -43,7 +43,7 @@ func hub(t testing.TB) *realtime.Hub {
 	if err := bus.Declare("batcave", spec); err != nil {
 		t.Fatal(err)
 	}
-	h, err := realtime.NewHub(realtime.Options{}, realtime.Deps{Auth: okRevalidator{}, Catalog: bus.Catalog()})
+	h, err := realtime.NewHub(realtime.Options{}, realtime.Deps{Auth: okRevalidator{}, Catalog: bus.Catalog(), Refresh: func(_ context.Context, p *auth.Principal) (*auth.Principal, error) { return p, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

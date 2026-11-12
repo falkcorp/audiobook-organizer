@@ -1,7 +1,7 @@
 // file: core/realtime/hub_synctest_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b3e81d54-2f67-4c09-a1d8-6e5f0c7a9b32
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package realtime_test
 
@@ -110,7 +110,8 @@ func (s *script) count() int { s.mu.Lock(); defer s.mu.Unlock(); return s.calls 
 
 // pipe is the ResponseWriter of a bubble stream. After gateFrom writes it
 // blocks every write until open is closed or the write deadline passes, which
-// is what a client that stopped reading looks like to the server.
+// is what a client that stopped reading looks like to the server. A deadline
+// moved while a write is blocked is honoured at once, as a net.Conn does.
 type pipe struct {
 	mu       sync.Mutex
 	hdr      http.Header
@@ -119,10 +120,11 @@ type pipe struct {
 	gateFrom int
 	open     chan struct{}
 	deadline time.Time
+	moved    chan struct{} // a buffered signal: the deadline changed
 }
 
 func newPipe(gateFrom int) *pipe {
-	return &pipe{hdr: http.Header{}, gateFrom: gateFrom, open: make(chan struct{})}
+	return &pipe{hdr: http.Header{}, gateFrom: gateFrom, open: make(chan struct{}), moved: make(chan struct{}, 1)}
 }
 
 func (p *pipe) Header() http.Header { return p.hdr }
@@ -132,6 +134,10 @@ func (p *pipe) SetWriteDeadline(t time.Time) error {
 	p.mu.Lock()
 	p.deadline = t
 	p.mu.Unlock()
+	select {
+	case p.moved <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
@@ -139,13 +145,22 @@ func (p *pipe) Write(b []byte) (int, error) {
 	p.mu.Lock()
 	p.writes++
 	gated := p.gateFrom > 0 && p.writes >= p.gateFrom
-	dl := p.deadline
 	p.mu.Unlock()
-	if gated {
+	for gated {
+		p.mu.Lock()
+		dl := p.deadline
+		p.mu.Unlock()
+		if !dl.After(time.Now()) {
+			return 0, os.ErrDeadlineExceeded
+		}
+		timer := time.NewTimer(time.Until(dl))
 		select {
 		case <-p.open:
-		case <-time.After(time.Until(dl)):
-			return 0, os.ErrDeadlineExceeded
+			timer.Stop()
+			gated = false
+		case <-p.moved:
+			timer.Stop()
+		case <-timer.C:
 		}
 	}
 	p.mu.Lock()
@@ -225,7 +240,7 @@ type bubble struct {
 	cor events.Scope
 }
 
-func newBubble(t *testing.T, o realtime.Options, d realtime.Deps, mod func(core, batcave, arkham *[]events.TopicSpec)) *bubble {
+func newBubble(t *testing.T, o realtime.Options, d realtime.Deps, mod func(core, batcave, arkham *[]events.TopicSpec), extra ...events.Subscription) *bubble {
 	t.Helper()
 	bus, err := events.NewBus(events.BusOptions{})
 	if err != nil {
@@ -244,6 +259,9 @@ func newBubble(t *testing.T, o realtime.Options, d realtime.Deps, mod func(core,
 		}
 	}
 	d.Catalog = bus.Catalog()
+	if d.Refresh == nil {
+		d.Refresh = func(_ context.Context, p *auth.Principal) (*auth.Principal, error) { return p, nil }
+	}
 	if d.Auth == nil {
 		d.Auth = revalFunc(func(context.Context, *auth.Principal) error { return nil })
 	}
@@ -257,6 +275,11 @@ func newBubble(t *testing.T, o realtime.Options, d realtime.Deps, mod func(core,
 	}
 	if err := bus.Subscribe("core", subs...); err != nil {
 		t.Fatal(err)
+	}
+	if len(extra) > 0 {
+		if err := bus.Subscribe("batcave", extra...); err != nil {
+			t.Fatal(err)
+		}
 	}
 	bus.Freeze()
 	if err := bus.Open(); err != nil {
@@ -357,7 +380,7 @@ func TestHub_SlowSubscriberDoesNotBlockPublisher(t *testing.T) {
 // beside it is untouched.
 func TestHub_WriteDeadlineDisconnects(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		b := newBubble(t, realtime.Options{WriteTimeout: 10 * time.Second, Heartbeat: time.Hour}, realtime.Deps{}, nil)
+		b := newBubble(t, realtime.Options{WriteTimeout: 10 * time.Second, Heartbeat: time.Minute}, realtime.Deps{}, nil)
 		defer b.stop()
 		bruce := principal("bruce", scopeView)
 		stuck, fine := newPipe(2), newPipe(0)
@@ -395,7 +418,7 @@ func TestHub_WriteDeadlineDisconnects(t *testing.T) {
 // window opens a new one. Events without a key are not held back.
 func TestHub_CoalesceLatestPerKey(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		b := newBubble(t, realtime.Options{Heartbeat: time.Hour}, realtime.Deps{}, nil)
+		b := newBubble(t, realtime.Options{Heartbeat: time.Minute}, realtime.Deps{}, nil)
 		defer b.stop()
 		w := newPipe(0)
 		b.serve(t.Context(), principal("bruce", scopeView), w, "/events?topic="+topicBeacon.Name())
@@ -554,16 +577,16 @@ func TestHub_RefreshStrikes(t *testing.T) {
 			}
 		})
 	})
-	t.Run("a success ends the retrying", func(t *testing.T) {
+	t.Run("a success ends the retrying but the heartbeat refresh goes on", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			calls, ended, _, step := run(t, []error{down, nil})
 			step(15 * time.Second)
 			if calls() != 2 || ended() {
 				t.Fatalf("%d calls, ended %v", calls(), ended())
 			}
-			step(60 * time.Second)
-			if calls() != 2 {
-				t.Errorf("Refresh was asked again (%d calls) with no new generation", calls())
+			step(60 * time.Second) // four more heartbeats
+			if calls() != 6 || ended() {
+				t.Errorf("%d calls, ended %v: want one Refresh per heartbeat (6) and a live stream", calls(), ended())
 			}
 		})
 	})
@@ -731,7 +754,7 @@ func (l *liveChecker) Concrete() []rbac.Permission       { return l.cur.Load().C
 // stream stays open), and one sent after it is back is delivered.
 func TestHub_DeliverRechecksThePermissionNow(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		b := newBubble(t, realtime.Options{Heartbeat: time.Hour}, realtime.Deps{}, nil)
+		b := newBubble(t, realtime.Options{Heartbeat: time.Minute}, realtime.Deps{}, nil)
 		defer b.stop()
 		live := &liveChecker{}
 		live.set(scopeView)
@@ -753,6 +776,265 @@ func TestHub_DeliverRechecksThePermissionNow(t *testing.T) {
 		}
 		if b.hub.Subscribers() != 1 {
 			t.Error("the stream ended instead of withholding the event")
+		}
+	})
+}
+
+// TestHub_FailsClosedWhileRefreshFails: when a stream's rights cannot be
+// re-resolved (the store is down) what it may see is unknown, so the stream
+// stays open and delivers nothing until Refresh answers again; then it is told
+// to refetch (reset gap), because the withheld events are not replayed, and
+// carries on.
+func TestHub_FailsClosedWhileRefreshFails(t *testing.T) {
+	down := fmt.Errorf("store: %w", auth.ErrStoreUnavailable)
+	synctest.Test(t, func(t *testing.T) {
+		sc := &script{errs: []error{down, down, nil}}
+		b := newBubble(t, realtime.Options{Heartbeat: 15 * time.Second}, realtime.Deps{
+			Refresh: func(_ context.Context, p *auth.Principal) (*auth.Principal, error) {
+				if err := sc.next(p); err != nil {
+					return nil, err
+				}
+				return p, nil
+			},
+		}, nil)
+		defer b.stop()
+		w := newPipe(0)
+		done := b.serve(t.Context(), principal("bruce", scopeView), w, "/events?topic="+tSignal)
+		synctest.Wait()
+		b.signal(topicSignal, "", "before")
+		synctest.Wait()
+		events.Publish(b.cor, context.Background(), topicRBAC, "", RBACChanged{Generation: 1}) // Refresh fails (1)
+		synctest.Wait()
+		b.signal(topicSignal, "", "during-1")
+		time.Sleep(15 * time.Second) // Refresh fails again (2)
+		synctest.Wait()
+		b.signal(topicSignal, "", "during-2")
+		synctest.Wait()
+		if got := lampsIn(t, wires(t, w.text()), tSignal); !slices.Equal(got, []string{"before"}) {
+			t.Fatalf("lamps while Refresh fails = %v, want only the one before", got)
+		}
+		if hasFinished(done) {
+			t.Fatal("the stream ended on two failures")
+		}
+		time.Sleep(15 * time.Second) // Refresh answers
+		synctest.Wait()
+		b.signal(topicSignal, "", "after")
+		synctest.Wait()
+		ws := wires(t, w.text())
+		if got := lampsIn(t, ws, tSignal); !slices.Equal(got, []string{"before", "after"}) {
+			t.Errorf("lamps = %v, want before and after", got)
+		}
+		resets := 0
+		for _, x := range ws {
+			if x.Topic == "core.stream.reset.v1" {
+				resets++
+				if !strings.Contains(string(x.Data), `"reason":"gap"`) {
+					t.Errorf("reset = %s", x.Data)
+				}
+			}
+		}
+		if resets != 1 {
+			t.Errorf("%d reset frames, want one after recovery", resets)
+		}
+		// A recovery with nothing withheld owes no reset.
+		time.Sleep(15 * time.Second)
+		synctest.Wait()
+		n := 0
+		for _, x := range wires(t, w.text()) {
+			if x.Topic == "core.stream.reset.v1" {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%d reset frames after a quiet heartbeat", n)
+		}
+	})
+}
+
+// TestHub_DroppedTopicsDoNotFillTheQueue: after a rights change drops a topic,
+// its entries stop being queued for the stream, so a busy topic the stream
+// may no longer see cannot overflow it into a reset.
+func TestHub_DroppedTopicsDoNotFillTheQueue(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var narrowed atomic.Bool
+		b := newBubble(t, realtime.Options{ClientBuffer: 4, RingSize: 64, Heartbeat: time.Minute}, realtime.Deps{
+			Refresh: func(_ context.Context, p *auth.Principal) (*auth.Principal, error) {
+				if narrowed.Load() {
+					return principal("bruce", scopeView), nil
+				}
+				return p, nil
+			},
+		}, nil)
+		defer b.stop()
+		w := newPipe(0)
+		b.serve(t.Context(), principal("bruce", scopeView, scopeRun), w, "/events?topic=batcave.*")
+		synctest.Wait()
+		narrowed.Store(true)
+		events.Publish(b.cor, context.Background(), topicRBAC, "", RBACChanged{Generation: 1})
+		synctest.Wait()
+		// The stream is slow for these: park its writer, then flood the topic
+		// it lost.
+		for i := range 30 {
+			events.Publish(b.pub, context.Background(), topicCell, "", Signal{Lamp: fmt.Sprintf("cell-%d", i)})
+		}
+		b.signal(topicSignal, "", "visible")
+		synctest.Wait()
+		ws := wires(t, w.text())
+		if got := lampsIn(t, ws, tSignal); !slices.Equal(got, []string{"visible"}) {
+			t.Errorf("lamps = %v", got)
+		}
+		for _, x := range ws {
+			if x.Topic == "core.stream.reset.v1" || x.Topic == tCell {
+				t.Errorf("unexpected frame %s %s", x.Topic, x.Data)
+			}
+		}
+	})
+}
+
+// TestHub_ShutdownInterruptsAWriteInFlight: a client that stopped reading
+// holds a write; Close moves that write's deadline to now, so the stream ends
+// at once with the shutdown reason instead of waiting out WriteTimeout, and
+// Close returns without using its budget.
+func TestHub_ShutdownInterruptsAWriteInFlight(t *testing.T) {
+	for name, end := range map[string]func(b *bubble, ctx context.Context) error{
+		"Close": func(b *bubble, ctx context.Context) error { return b.hub.Close(ctx) },
+		"Run": func(b *bubble, ctx context.Context) error {
+			rctx, cancel := context.WithCancel(ctx)
+			done := make(chan error, 1)
+			go func() { done <- b.hub.Run(rctx) }()
+			synctest.Wait()
+			cancel()
+			return <-done
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				b := newBubble(t, realtime.Options{WriteTimeout: 50 * time.Second}, realtime.Deps{}, nil)
+				defer b.stop()
+				w := newPipe(2) // the first event's write blocks
+				done := b.serve(t.Context(), principal("bruce", scopeView), w, "/events?topic="+tSignal)
+				synctest.Wait()
+				b.signal(topicSignal, "", "stuck")
+				synctest.Wait() // the stream is blocked in the write
+				if hasFinished(done) {
+					t.Fatal("ended before the shutdown")
+				}
+				start := time.Now()
+				if err := end(b, t.Context()); err != nil {
+					t.Fatalf("%s = %v", name, err)
+				}
+				if d := time.Since(start); d != 0 {
+					t.Errorf("%s took %v of fake time with a write in flight", name, d)
+				}
+				synctest.Wait()
+				if !hasFinished(done) {
+					t.Error("the blocked write was not interrupted")
+				}
+			})
+		})
+	}
+}
+
+// TestHub_CheckPanicEndsTheStream: a panic in Refresh or Revalidate (both the
+// kernel's) ends that stream permission_revoked and nothing else.
+func TestHub_CheckPanicEndsTheStream(t *testing.T) {
+	for name, deps := range map[string]func(boom *atomic.Bool) realtime.Deps{
+		"Refresh": func(boom *atomic.Bool) realtime.Deps {
+			return realtime.Deps{Refresh: func(_ context.Context, p *auth.Principal) (*auth.Principal, error) {
+				if boom.Load() {
+					panic("a Joker card in Refresh")
+				}
+				return p, nil
+			}}
+		},
+		"Revalidate": func(boom *atomic.Bool) realtime.Deps {
+			return realtime.Deps{Auth: revalFunc(func(context.Context, *auth.Principal) error {
+				if boom.Load() {
+					panic("a Joker card in Revalidate")
+				}
+				return nil
+			})}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var boom atomic.Bool
+				b := newBubble(t, realtime.Options{Heartbeat: 15 * time.Second}, deps(&boom), nil)
+				defer b.stop()
+				w := newPipe(0)
+				done := b.serve(t.Context(), principal("bruce", scopeView), w, "/events?topic="+tSignal)
+				time.Sleep(15 * time.Second)
+				synctest.Wait()
+				if hasFinished(done) {
+					t.Fatal("ended before the panic")
+				}
+				boom.Store(true)
+				time.Sleep(15 * time.Second)
+				synctest.Wait()
+				if !hasFinished(done) || closedReason(t, w.text()) != "permission_revoked" {
+					t.Errorf("a panicking check did not end the stream permission_revoked:\n%s", w.text())
+				}
+				boom.Store(false) // the hub itself is intact
+				w2 := newPipe(0)
+				b.serve(t.Context(), principal("dick", scopeView), w2, "/events?topic="+tSignal)
+				synctest.Wait()
+				b.signal(topicSignal, "", "alive")
+				synctest.Wait()
+				if got := lampsIn(t, wires(t, w2.text()), tSignal); !slices.Equal(got, []string{"alive"}) {
+					t.Errorf("a new stream got %v", got)
+				}
+			})
+		})
+	}
+}
+
+// TestHub_IngestCopiesTheBusPayload: the ring keeps its own copy of an event's
+// bytes. Another subscriber of the same topic that edits the payload it was
+// handed, after the hub has stored it, must not change what a later resume
+// replays.
+func TestHub_IngestCopiesTheBusPayload(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// The mutator waits for the test to have seen both events delivered, which
+		// orders the hub's own reads of the bytes before the mutator's writes (a
+		// real subscriber that edits shared bytes races the hub only if the hub
+		// still holds the bus's slice).
+		release := make(chan struct{})
+		mutator := events.OnRaw(topicSignal.Name(), "batcave.mutator", func(_ context.Context, e events.RawEnvelope) {
+			<-release
+			for i := range e.Payload {
+				e.Payload[i] = '#'
+			}
+		})
+		b := newBubble(t, realtime.Options{Heartbeat: time.Minute}, realtime.Deps{}, nil, mutator)
+		defer b.stop()
+		p := principal("bruce", scopeView)
+		first := newPipe(0)
+		b.serve(t.Context(), p, first, "/events?topic="+tSignal)
+		synctest.Wait()
+		b.signal(topicSignal, "", "one")
+		synctest.Wait()
+		b.signal(topicSignal, "", "two")
+		synctest.Wait()
+		if got := lampsIn(t, wires(t, first.text()), tSignal); !slices.Equal(got, []string{"one", "two"}) {
+			t.Fatalf("first stream = %v", got)
+		}
+		close(release) // now the mutator edits both payloads
+		synctest.Wait()
+		id := ""
+		for l := range strings.SplitSeq(first.text(), "\n") {
+			if v, ok := strings.CutPrefix(l, "id: "); ok {
+				id = v
+				break
+			}
+		}
+		if id == "" {
+			t.Fatalf("no id in\n%s", first.text())
+		}
+		late := newPipe(0)
+		b.serve(t.Context(), p, late, "/events?topic="+tSignal+"&last_event_id="+id)
+		synctest.Wait()
+		if got := lampsIn(t, wires(t, late.text()), tSignal); !slices.Equal(got, []string{"two"}) {
+			t.Errorf("the replay after another subscriber edited the payload = %v, want [two]\n%s", got, late.text())
 		}
 	})
 }

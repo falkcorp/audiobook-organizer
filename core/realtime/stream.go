@@ -1,7 +1,7 @@
 // file: core/realtime/stream.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 296e9d57-e9d7-4a07-895f-152672e4463d
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package realtime
 
@@ -40,6 +40,13 @@ type stream struct {
 	seenGen      uint64 // the rbac generation allowed was computed at
 	revalFails   int    // consecutive Revalidate store failures
 	refreshFails int    // consecutive Refresh store failures
+
+	// sub is the stream's own registration, set once after Subscribe and before
+	// Serve. The judge narrows its interest and owes it a reset through it.
+	sub *sse.Subscriber
+	// staleWithheld is set when Deliver withheld an event only because Refresh
+	// was failing; the next successful Refresh owes the client a reset.
+	staleWithheld bool
 }
 
 var _ sse.Judge = (*stream)(nil)
@@ -63,6 +70,15 @@ func (st *stream) Deliver(ctx context.Context, e *sse.Entry) (data []byte, ok bo
 	spec, allowed := st.allowed[e.Topic]
 	if !isItem || !allowed {
 		st.h.m.filtered(e.Topic, "perm")
+		return nil, false
+	}
+	if st.refreshFails > 0 {
+		// The stream's rights could not be re-resolved on the last try, so what
+		// it may see is unknown: fail closed, keep the stream open, and owe the
+		// client a reset once Refresh answers again (these events are not
+		// replayed).
+		st.staleWithheld = true
+		st.h.m.filtered(e.Topic, "stale")
 		return nil, false
 	}
 	verdict := ""
@@ -117,15 +133,25 @@ func transient(err error) bool {
 	return errors.Is(err, auth.ErrStoreUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-// Check runs on every wake and every heartbeat (05-realtime §4.6). A changed
-// rbac generation re-resolves the principal on the next wake; a heartbeat
-// asks auth whether the credential still stands, which also covers the
-// session simply expiring.
-func (st *stream) Check(ctx context.Context, beat bool) string {
+// Check runs on every wake and every heartbeat (05-realtime §4.6). On a
+// heartbeat the principal is re-resolved whether or not an rbac generation
+// came in (a role assignment change moves neither the epoch nor the
+// generation, so only a fresh build sees it) and the credential is revalidated,
+// which also covers the session simply expiring. Off a heartbeat a new
+// generation re-resolves the principal at once. A panic in either hook (both
+// are the kernel's) ends the stream rather than leaving it on stale rights.
+func (st *stream) Check(ctx context.Context, beat bool) (reason string) {
+	defer func() {
+		if recover() != nil {
+			st.h.warnOnce("(check)", "realtime: a stream's rights or credential check panicked; the stream is ended (logged once per minute)")
+			reason = sse.ClosePermissionRevoked
+		}
+	}()
 	if ctx.Err() != nil {
 		return ""
 	}
-	if g := st.h.gen.Load(); g != st.seenGen && (st.refreshFails == 0 || beat) {
+	g := st.h.gen.Load()
+	if beat || (g != st.seenGen && st.refreshFails == 0) {
 		if r := st.rightsChanged(ctx, g); r != "" {
 			return r
 		}
@@ -157,24 +183,22 @@ func (st *stream) revalidate(ctx context.Context) string {
 	return ""
 }
 
-// rightsChanged reacts to a new rbac generation g. Without a Refresh hook the
-// stream cannot know what it may still see, so it ends and the client
-// reconnects. With one, the principal is rebuilt: topics it may no longer see
-// are dropped from the set, and losing one it named exactly ends the stream
-// with permission_revoked (05-realtime §4.6). Topics it has gained are not
-// added: the set is fixed at subscribe, so a widening never exposes more
-// than the request asked for.
+// rightsChanged re-resolves the principal through Deps.Refresh (generation g
+// is the one the answer is current for). Topics the new principal no longer
+// holds are dropped from the stream's set and from its broker interest, and
+// losing one it named exactly ends the stream with permission_revoked
+// (05-realtime §4.6). Topics it has gained are not added: the set is fixed at
+// subscribe, so a widening never exposes more than the request asked for; the
+// client reconnects to see it. A failure to refresh is handled by the caller's
+// retry on the next heartbeat; until it succeeds Deliver withholds everything.
 func (st *stream) rightsChanged(ctx context.Context, g uint64) string {
-	refresh := st.h.d.Refresh
-	if refresh == nil {
-		return sse.ClosePermissionRevoked
-	}
-	np, err := refresh(ctx, st.p)
+	np, err := st.h.d.Refresh(ctx, st.p)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return ""
 	case err != nil && transient(err):
 		st.refreshFails++
+		st.h.log.Warn("realtime: rights refresh unavailable", "strikes", st.refreshFails)
 		if st.refreshFails >= strikes {
 			return sse.ClosePermissionRevoked
 		}
@@ -186,18 +210,26 @@ func (st *stream) rightsChanged(ctx context.Context, g uint64) string {
 	}
 	st.refreshFails = 0
 	st.p, st.seenGen = np, g
-	lost := false
+	lost, narrowed := false, false
 	for _, name := range slices.Sorted(maps.Keys(st.allowed)) {
 		if holds(np, st.allowed[name].Permission) {
 			continue
 		}
 		delete(st.allowed, name)
+		narrowed = true
 		if _, named := st.explicit[name]; named {
 			lost = true
 		}
 	}
 	if lost {
 		return sse.ClosePermissionRevoked
+	}
+	if narrowed {
+		st.sub.SetInterest(slices.Sorted(maps.Keys(st.allowed)))
+	}
+	if st.staleWithheld {
+		st.staleWithheld = false
+		st.sub.RequestReset(sse.ResetGap)
 	}
 	return ""
 }
