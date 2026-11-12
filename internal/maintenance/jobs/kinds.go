@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
 // last-edited: 2026-11-12
 
@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -239,7 +241,7 @@ func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kin
 		Help:     job.Description(),
 		Effects:  effectsFor(id),
 		Perms:    tasks.Permissions{Start: startRequirement(job)},
-		Resume:   resumeFor(pol.ResumePolicy),
+		Resume:   resumeForJob(id, pol.ResumePolicy),
 		Priority: tasks.PriorityNormal,
 		Timeout:  pol.Timeout,
 		Ready:    []tasks.ReadySignal{signalMemDB},
@@ -250,7 +252,7 @@ func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kin
 	if sched != nil {
 		c.Schedule = sched(kind)
 	}
-	shell := kindShell{kind: kind, job: job, deps: deps, liveOnly: !AdvertisedDryRunDefault(job)}
+	shell := kindShell{kind: kind, job: job, deps: deps, liveOnly: !AdvertisedDryRunDefault(job), derivesApply: declaresApplyKey(job)}
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, json.RawMessage]{Common: c, Run: shell.run})
 }
 
@@ -268,6 +270,30 @@ func resumeFor(p opsregistry.ResumePolicy) tasks.ResumePolicy {
 		return tasks.ResumeAsk
 	}
 	return 0
+}
+
+// checkpointingJobs are the jobs whose Run restores a checkpoint through
+// checkpointerFrom (backfill-file-hashes and recompute-book-aggregates).
+// TestJobKinds_ResumeContinueMeansCheckpoint derives the set from the code and
+// fails when this one drifts.
+var checkpointingJobs = map[string]bool{
+	"backfill-file-hashes":      true,
+	"recompute-book-aggregates": true,
+}
+
+// resumeForJob is resumeFor, except that HEAD's ResumeRestart on a job that
+// never checkpoints becomes ResumeFromZero. At HEAD such a run is re-entered
+// from the top with nothing to restore (the watchdog even strikes it as
+// "uncheckpointed"); ResumeContinue says "restore a checkpoint", which these
+// five (bulk-deluge-import, cleanup-empty-folders, refetch-missing-authors,
+// retention-and-hygiene, scan-composer-tags) never write, so the kind says what
+// the run does: the same RunID, from zero. 05-tasks 5T.3.6.
+func resumeForJob(id string, p opsregistry.ResumePolicy) tasks.ResumePolicy {
+	r := resumeFor(p)
+	if r == tasks.ResumeContinue && !checkpointingJobs[id] {
+		return tasks.ResumeFromZero
+	}
+	return r
 }
 
 // settingsManageScopes is the route requirement of HEAD's settings.manage atom
@@ -313,7 +339,7 @@ var jobWrites = map[string][]string{
 	"backfill-merge-undo-pointers":    {"operations"},
 	"backfill-metadata-source-hash":   {"books"},
 	"backfill-sync-ids":               {"sync_identity"},
-	"bulk-deluge-import":              {"book_files", "operations"},
+	"bulk-deluge-import":              {"book_files", "files", "operations"},
 	"cleanup-empty-folders":           {"files"},
 	"cleanup-organize-mess":           {"files"},
 	"cleanup-series":                  {"books", "series"},
@@ -367,6 +393,12 @@ type kindShell struct {
 	// declares no Preview at HEAD, and keeps refusing a preview here (rule R7,
 	// "Live-only writer").
 	liveOnly bool
+	// derivesApply is a job whose params declare an "apply" switch beside
+	// dry_run (repoint-version-primary). Native, a run's mode is the one switch:
+	// the shell sets apply from it and refuses an apply key in params, so a live
+	// run cannot be a silent preview (HEAD's two-switch rule stays in its own
+	// wrapper until F5-18 deletes it).
+	derivesApply bool
 }
 
 // run is the native TaskSpec.Run of every maintenance kind (05-tasks 5T.8.2).
@@ -374,8 +406,28 @@ func (k kindShell) run(rc *tasks.RC, raw json.RawMessage) (json.RawMessage, erro
 	if k.liveOnly && rc.Mode() != tasks.ModeLive {
 		return nil, fmt.Errorf("%s: preview not supported; start with mode live", k.kind)
 	}
-	if err := refuseModeKeys(k.kind, raw); err != nil {
+	live := rc.Mode() == tasks.ModeLive
+	modeKeys := []string{"dry_run", "dryRun"}
+	if k.derivesApply {
+		modeKeys = append(modeKeys, "apply")
+	}
+	if err := refuseModeKeys(k.kind, raw, modeKeys...); err != nil {
 		return nil, err
+	}
+	if k.derivesApply {
+		var err error
+		if raw, err = setParamBool(k.kind, raw, "apply", live); err != nil {
+			return nil, err
+		}
+	}
+	// HEAD's dispatcher calls a job's ParamsValidator before it queues a run.
+	// core has no start-time hook for it, so the shell calls it before the job
+	// touches a store: a bad request fails the run first thing, with the same
+	// error the dispatcher would have answered.
+	if pv, ok := k.job.(maintenance.ParamsValidator); ok {
+		if err := pv.ValidateParams(raw, !live); err != nil {
+			return nil, err
+		}
 	}
 	if k.deps.NewStore == nil {
 		return nil, fmt.Errorf("%s: KindDeps.NewStore is not set", k.kind)
@@ -395,7 +447,7 @@ func (k kindShell) run(rc *tasks.RC, raw json.RawMessage) (json.RawMessage, erro
 	// The write direction is never the default: only an explicit live mode
 	// writes (a requeue or resume reaches here with the mode the run was
 	// started with, never Go's zero value).
-	dryRun := rc.Mode() != tasks.ModeLive
+	dryRun := !live
 	runErr := k.job.Run(ctx, store, newRCProgress(rc), dryRun)
 
 	out, merr := res.marshal()
@@ -405,9 +457,11 @@ func (k kindShell) run(rc *tasks.RC, raw json.RawMessage) (json.RawMessage, erro
 	if runErr != nil && out != nil {
 		// HEAD stores a failed run's result on its row (merge-chapter-groups
 		// persists a cancelled merge's outcomes and journal IDs on purpose).
-		// core/tasks discards the result of a Run that returns an error, so until
-		// it keeps one the payload is written to the run's log rather than lost.
-		rc.Log().Warn("run failed; its partial result follows", "kind", string(k.kind), "result", string(out))
+		// core/tasks discards the result of a Run that returns an error. The log
+		// records only that a result existed and its size: the payload is the
+		// job's own data (paths, titles, counts) and can be megabytes, so it is
+		// neither copied into the log nor truncated into it.
+		rc.Log().Warn("run failed; core drops the partial result a job had set", "kind", string(k.kind), "result_bytes", len(out))
 	}
 	if errors.Is(runErr, maintenance.ErrContinueInPlace) {
 		// The job's "restart this same run" is core's ErrContinueInPlace.
@@ -418,24 +472,68 @@ func (k kindShell) run(rc *tasks.RC, raw json.RawMessage) (json.RawMessage, erro
 
 // refuseModeKeys is 05-tasks 5T.3.7 mode contract item 1: a dry_run or dryRun
 // key in params is refused (the start route answers 400 first; this is the
-// backstop). Keys are compared case-insensitively because the jobs decode their
-// params with encoding/json, which matches field names that way. Empty and
-// null params are fine: a requeue starts with none.
-func refuseModeKeys(kind tasks.Kind, raw json.RawMessage) error {
-	t := bytes.TrimSpace(raw)
-	if len(t) == 0 || bytes.Equal(t, []byte("null")) {
-		return nil
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(t, &m); err != nil {
-		return fmt.Errorf("%s: decode params: %w", kind, err)
+// backstop), and so is any other key the shell derives from the mode (keys).
+// Keys are compared case-insensitively because the jobs decode their params
+// with encoding/json, which matches field names that way. Empty and null
+// params are fine: a requeue starts with none.
+func refuseModeKeys(kind tasks.Kind, raw json.RawMessage, keys ...string) error {
+	m, err := paramObject(kind, raw)
+	if err != nil {
+		return err
 	}
 	for key := range m {
-		if strings.EqualFold(key, "dry_run") || strings.EqualFold(key, "dryRun") {
-			return fmt.Errorf("%s: params carry %q; the run's mode comes from the start request, not params", kind, key)
+		for _, banned := range keys {
+			if strings.EqualFold(key, banned) {
+				return fmt.Errorf("%s: params carry %q; the run's mode comes from the start request, not params", kind, key)
+			}
 		}
 	}
 	return nil
+}
+
+// paramObject decodes params as a JSON object; empty and null params are an
+// empty object.
+func paramObject(kind tasks.Kind, raw json.RawMessage) (map[string]json.RawMessage, error) {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 || bytes.Equal(t, []byte("null")) {
+		return nil, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(t, &m); err != nil {
+		return nil, fmt.Errorf("%s: decode params: %w", kind, err)
+	}
+	return m, nil
+}
+
+// setParamBool returns params with key set to v.
+func setParamBool(kind tasks.Kind, raw json.RawMessage, key string, v bool) (json.RawMessage, error) {
+	m, err := paramObject(kind, raw)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]json.RawMessage{}
+	}
+	m[key] = json.RawMessage(strconv.FormatBool(v))
+	return json.Marshal(m)
+}
+
+// declaresApplyKey reports whether the job's Policy().Params names an "apply"
+// switch (repoint-version-primary's second mode key).
+func declaresApplyKey(job maintenance.MaintenanceJob) bool {
+	t := reflect.TypeOf(job.Policy().Params)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return false
+	}
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name == "apply" {
+			return true
+		}
+	}
+	return false
 }
 
 // resultBox captures the value a job passes to maintenance.SetResult.

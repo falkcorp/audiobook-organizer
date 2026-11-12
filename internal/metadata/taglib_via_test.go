@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_via_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 97d5ff02-e20c-43ac-9288-7ba40141cbc4
 // last-edited: 2026-11-12
 
@@ -71,23 +71,6 @@ func TestWriteSingleTagContextVia_NilRecorderRecordsNothing(t *testing.T) {
 			got, err := installed.GetBookFileByPath(path)
 			require.NoError(t, err)
 			require.Equal(t, installedRow.FileHash, got.FileHash, "a nil recorder fell back to the installed store")
-		})
-	}
-}
-
-// WriteSingleTagContext is WriteSingleTagContextVia over the installed store.
-func TestWriteSingleTagContext_StillRecordsThroughTheInstalledStore(t *testing.T) {
-	setVerifyAfterWrite(t, true)
-	for _, name := range fixtureNames {
-		t.Run(name, func(t *testing.T) {
-			path, installed, row := hashedFixture(t, name)
-			require.NoError(t, WriteSingleTagContext(context.Background(), path, "COMPOSER", "Harvey Dent"))
-			after, err := filehash.BookFileHash(path)
-			require.NoError(t, err)
-			require.NotEqual(t, row.FileHash, after)
-			got, err := installed.GetBookFileByPath(path)
-			require.NoError(t, err)
-			require.Equal(t, after, got.FileHash)
 		})
 	}
 }

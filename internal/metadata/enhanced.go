@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.31.2
+// version: 1.31.3
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package metadata
 
@@ -483,7 +483,7 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 
 // WriteMetadataToFileContext writes metadata to filePath, with ctx reaching
 // the protected-path guard, the native writer and the create_backups
-// decision for the CLI fallback, as WriteSingleTagContext does for a single
+// decision for the CLI fallback, as WriteSingleTagContextVia does for a single
 // tag.
 //
 // The protected-path guard runs FIRST, for every writer below: the path is

@@ -1,7 +1,7 @@
 // file: internal/metadata/verify_write_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 2f6a8d13-4c79-4b05-8e1a-96d0b3f7c524
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package metadata
 
@@ -47,7 +47,7 @@ func noSafeWriteDeps(t *testing.T) {
 var unrepresentableTrack = map[string]any{"title": "T", "track": "side A"}
 
 // The metafetch/PATCH write-back writes ALBUM:[""] when a series has no album,
-// and WriteSingleTag(..., "") clears a tag; taglib treats both as a delete, so
+// and WriteSingleTagContextVia(..., "") clears a tag; taglib treats both as a delete, so
 // verification must expect the key to be absent, not "".
 func TestWriters_VerifyAfterWrite_EmptyValueDeletesVerify(t *testing.T) {
 	setVerifyAfterWrite(t, true)
@@ -59,8 +59,8 @@ func TestWriters_VerifyAfterWrite_EmptyValueDeletesVerify(t *testing.T) {
 			require.NoError(t, WriteMetadataToFileContext(ctx, path, map[string]any{"title": "T", "series": "S"}, fileops.OperationConfig{}),
 				"series without album writes ALBUM:[\"\"]")
 
-			require.NoError(t, WriteSingleTagContext(ctx, path, "COMPOSER", "Someone"))
-			require.NoError(t, WriteSingleTagContext(ctx, path, "COMPOSER", ""), "clearing a tag")
+			require.NoError(t, WriteSingleTagContextVia(ctx, nil, path, "COMPOSER", "Someone"))
+			require.NoError(t, WriteSingleTagContextVia(ctx, nil, path, "COMPOSER", ""), "clearing a tag")
 			raw, err := readTagsWithTaglib(path)
 			require.NoError(t, err)
 			require.Empty(t, raw["COMPOSER"])
@@ -176,9 +176,9 @@ func TestWriters_VerifyAfterWrite_FullProductionTagMap(t *testing.T) {
 			cfg := fileops.OperationConfig{}
 			require.NoError(t, WriteMetadataToFileContext(ctx, path, full, cfg), "full map")
 			require.NoError(t, WriteMetadataToFileContext(ctx, path, map[string]any{"title": "T", "series": "S"}, cfg), "series without album")
-			require.NoError(t, WriteSingleTagContext(ctx, path, "COMPOSER", ""), "clear composer")
+			require.NoError(t, WriteSingleTagContextVia(ctx, nil, path, "COMPOSER", ""), "clear composer")
 			require.NoError(t, WriteMetadataToFileContext(ctx, path, map[string]any{"track": "03"}, cfg), "zero-padded track")
-			require.NoError(t, WriteSingleTagContext(ctx, path, "TITLE", "T "), "trailing space")
+			require.NoError(t, WriteSingleTagContextVia(ctx, nil, path, "TITLE", "T "), "trailing space")
 		})
 	}
 }
@@ -205,14 +205,14 @@ func TestWriteTagProperties_LossyPropertyFailsWithTheSettingOff(t *testing.T) {
 	}
 }
 
-// WriteSingleTag is verified like the other writers (the native build's
+// WriteSingleTagContextVia is verified like the other writers (the native build's
 // writeSingleTagWithTaglib has its own call to the read-back): TRACKNUMBER
 // "side A" is not an integer an MP4 atom can hold.
 func TestWriteSingleTag_LossyValueFailsVerification(t *testing.T) {
 	setVerifyAfterWrite(t, true)
 	noSafeWriteDeps(t)
 	path := copyFixture(t, "test_sample.m4b")
-	err := WriteSingleTagContext(context.Background(), path, "TRACKNUMBER", "side A")
+	err := WriteSingleTagContextVia(context.Background(), nil, path, "TRACKNUMBER", "side A")
 	require.ErrorIs(t, err, tagger.ErrVerifyAfterWrite)
 	var vae *tagger.VerifyAfterWriteError
 	require.True(t, errors.As(err, &vae))
@@ -220,7 +220,7 @@ func TestWriteSingleTag_LossyValueFailsVerification(t *testing.T) {
 
 	// Flag off: the write is not checked.
 	setVerifyAfterWrite(t, false)
-	require.NoError(t, WriteSingleTagContext(context.Background(), copyFixture(t, "test_sample.m4b"), "TRACKNUMBER", "side A"))
+	require.NoError(t, WriteSingleTagContextVia(context.Background(), nil, copyFixture(t, "test_sample.m4b"), "TRACKNUMBER", "side A"))
 }
 
 // hashedFixture copies a fixture, gives it a book_file row in a real store,
