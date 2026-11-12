@@ -1,5 +1,5 @@
 // file: core/library/quarantine.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: dbac77ed-fee6-451d-9dbc-7065c15ea39f
 // last-edited: 2026-11-11
 
@@ -62,16 +62,24 @@ func (m *manager) Quarantine(ctx context.Context, caller storage.Owner, p Path, 
 	if !m.enabled(r.spec.Owner) {
 		return "", fmt.Errorf("%w: %s", ErrOwnerDisabled, r.spec.Owner)
 	}
-	if protected, perr := m.protectedForMove(ctx, p); protected {
-		return "", errors.Join(fmt.Errorf("%w: %s", ErrSourceProtected, p), perr)
+	// A directory that holds the AppDir or the Quarantine area carries it into
+	// the quarantine, so it is refused like the areas themselves.
+	if err := m.refuseReserved(caller, r, p, true); err != nil {
+		return "", err
 	}
 	unlock := m.lockPaths(p)
 	defer unlock()
 	if err := r.Mounted(ctx); err != nil {
 		return "", err
 	}
-	if _, err := r.rw.Lstat(p.Rel); err != nil {
+	st, err := r.rw.Lstat(p.Rel)
+	if err != nil {
 		return "", err
+	}
+	// Asked under the lock, with the type that will move: a directory takes its
+	// whole subtree, so every oracle must answer for the subtree.
+	if protected, perr := m.protectedForMove(ctx, p, st.IsDir()); protected {
+		return "", errors.Join(fmt.Errorf("%w: %s", ErrSourceProtected, p), perr)
 	}
 	id := QuarantineID(m.seam.newID())
 	held := Path{Root: p.Root, Rel: path.Join(r.spec.Quarantine, string(id), p.Rel)}
@@ -150,6 +158,11 @@ func (m *manager) Release(ctx context.Context, caller storage.Owner, id Quaranti
 	if target.IsRoot() {
 		return Path{}, fmt.Errorf("%w: a root directory is not a release target", ErrBadTransfer)
 	}
+	// A release goes back to the library, never into the AppDir or the
+	// quarantine area itself.
+	if err := m.refuseReserved(caller, dr, target, false); err != nil {
+		return Path{}, err
+	}
 	unlock := m.lockPaths(row.Held, target)
 	defer unlock()
 	if err := errors.Join(sr.Mounted(ctx), dr.Mounted(ctx)); err != nil {
@@ -175,8 +188,15 @@ func (m *manager) Release(ctx context.Context, caller storage.Owner, id Quaranti
 	if err := m.qrn.remove(bg, string(id)); err != nil {
 		return target, fmt.Errorf("%w: %w", ErrJournal, err)
 	}
+	// Sync the directories the rename changed while both still exist, then tidy
+	// the emptied holding directories and sync the quarantine area they were
+	// removed from (a directory that tidy removed cannot be synced).
+	serr := errors.Join(syncDir(dr.rw, target.Dir().Rel), syncDir(sr.rw, path.Dir(row.Held.Rel)))
 	m.tidyQuarantineDir(sr, row)
-	return target, errors.Join(syncDir(dr.rw, target.Dir().Rel), syncDir(sr.rw, path.Dir(row.Held.Rel)))
+	if err := syncDir(sr.rw, sr.spec.Quarantine); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		serr = errors.Join(serr, err)
+	}
+	return target, serr
 }
 
 // revertRelease puts the record back to held after a release that moved nothing.
