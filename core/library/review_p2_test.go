@@ -1,5 +1,5 @@
 // file: core/library/review_p2_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a9d0b21f-80d1-4624-8e39-94f7e4871e5d
 // last-edited: 2026-11-11
 
@@ -177,7 +177,7 @@ func TestTempThatCannotBeRemovedKeepsTheRow(t *testing.T) {
 		return nil
 	}
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	_, err := r.m.Transfer(ctxbg(), books, src, dst, withMkdir(copyOpts()))
 	if !errors.Is(err, ErrRecoveryPending) {
 		t.Fatalf("Transfer = %v, want ErrRecoveryPending", err)
@@ -199,13 +199,13 @@ func TestTempThatCannotBeRemovedKeepsTheRow(t *testing.T) {
 func TestMoveWhosePlaceholderCannotBeRemovedKeepsTheRow(t *testing.T) {
 	r, f := transferRig(t, rigOpts{})
 	f.inject = func(label string) error {
-		if strings.Contains(label, ":renameover:") || label == "books-library:remove:Moore/joke.m4b" {
+		if strings.Contains(label, ":renameover:") || label == "books-library:remove:Gordon/joke.m4b" {
 			return errors.New("the Batcave is on fire")
 		}
 		return noAtomicRename(label)
 	}
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	_, err := r.m.Transfer(ctxbg(), books, src, dst, withMkdir(move()))
 	if !errors.Is(err, ErrRecoveryPending) {
 		t.Fatalf("Transfer = %v, want ErrRecoveryPending", err)
@@ -233,9 +233,9 @@ func TestReplaceRestoresThroughAPlaceholder(t *testing.T) {
 		return neither(label)
 	}
 	const old = "the old edition of the Joke"
-	r.put("books-library", "Moore/joke.m4b", old)
+	r.put("books-library", "Gordon/joke.m4b", old)
 	src := r.put("import-1", "Arkham/joke.m4b", gas)
-	dst := Path{Root: "books-library", Rel: "Moore/joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/joke.m4b"}
 	ro := withMkdir(copyOpts())
 	ro.Replace = &ReplaceSpec{ExpectSHA256: sum(old)}
 	if _, err := r.m.Transfer(ctxbg(), books, src, dst, ro); err == nil {
