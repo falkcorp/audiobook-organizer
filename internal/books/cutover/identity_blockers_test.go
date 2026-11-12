@@ -28,43 +28,6 @@ import (
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
 
-// fsDigest hashes every file under dir on fsys: the store and its directory,
-// for the byte-identical assertions.
-func fsDigest(t testing.TB, fsys vfs.FS, dir string) map[string]string {
-	t.Helper()
-	out := map[string]string{}
-	var walk func(p string)
-	walk = func(p string) {
-		names, err := fsys.List(p)
-		if err != nil {
-			t.Fatalf("list %s: %v", p, err)
-		}
-		for _, n := range names {
-			full := fsys.PathJoin(p, n)
-			fi, err := fsys.Stat(full)
-			if err != nil {
-				t.Fatalf("stat %s: %v", full, err)
-			}
-			if fi.IsDir() {
-				walk(full)
-				continue
-			}
-			f, err := fsys.Open(full)
-			if err != nil {
-				t.Fatalf("open %s: %v", full, err)
-			}
-			raw, err := io.ReadAll(f)
-			if err := errors.Join(err, f.Close()); err != nil {
-				t.Fatalf("read %s: %v", full, err)
-			}
-			sum := sha256.Sum256(raw)
-			out[full] = hex.EncodeToString(sum[:])
-		}
-	}
-	walk(dir)
-	return out
-}
-
 // offers is storage cutover-blockers' reading of a blocker's Fix text: it
 // offers an action when the text names the command followed by the actions it
 // offers, separated by "|" (kernel.blockerOffers, which the command applies).
