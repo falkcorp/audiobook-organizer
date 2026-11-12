@@ -1,5 +1,5 @@
 // file: core/outbox/logs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f507577-1d8d-4031-8266-e190b04b52d9
 // last-edited: 2026-11-12
 
@@ -14,8 +14,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/outboxstore"
 	"github.com/falkcorp/mediacore/outbox"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // logSentinel stands for a payload value. Every scenario below makes the
@@ -183,6 +187,77 @@ func TestOutbox_FailureLogsCarryNoPayload(t *testing.T) {
 		must(t, err)
 		if len(letters) != 1 || letters[0].Token != "schema" {
 			t.Fatalf("dead letters %+v", letters)
+		}
+	})
+
+	// A row that does not decode, at intake or in the sequenced messages, stops
+	// the topic (or the pair) with a health signal and one log line, and
+	// neither the log nor the health detail quotes the decoder's text: it
+	// repeats the value it rejected, which is a payload. The stop is not
+	// retried into a stream of warnings.
+	t.Run("rows that do not decode", func(t *testing.T) {
+		shapes := []struct {
+			name   string
+			intake bool
+			row    string
+		}{
+			{"intake unknown encoding", true, `zNEWER-BUILD-ENCODING-` + logSentinel},
+			{"intake payload syntax", true, `j{"v":1,"id":"X","key":"wayne-manor","payload":{"villain":` + logSentinel + `},"staged_at":"2026-01-01T00:00:00Z","producer":"core"}`},
+			{"intake staged_at", true, `j{"v":1,"id":"X","key":"wayne-manor","payload":{"villain":"Joker"},"staged_at":"` + logSentinel + `","producer":"core"}`},
+			{"message staged_at", false, `j{"v":1,"id":"X","key":"wayne-manor","payload":{"villain":"Joker"},"staged_at":"` + logSentinel + `","producer":"core"}`},
+			{"message key number", false, `j{"v":1,"id":"X","key":` + logNumber + `,"payload":{"villain":"Joker"},"staged_at":"2026-01-01T00:00:00Z","producer":"core"}`},
+			{"message unknown encoding", false, `zNEWER-BUILD-ENCODING-` + logSentinel},
+		}
+		for _, sh := range shapes {
+			t.Run(sh.name, func(t *testing.T) {
+				logs := &logCapture{}
+				r := newRig(t, rigOpts{log: logs.logger(), register: consumeInto(&recorder{}, consumerN)})
+				ctx := context.Background()
+				// A consumer's cursors start at the topic's high-water mark, so a
+				// row staged before they exist is one it never takes.
+				eventually(t, "the consumer's cursors", func() bool { return r.cursors(consumerN) == 2 })
+				if sh.intake {
+					b := r.outKS.NewBatch()
+					must(t, b.Set(outboxstore.InKey(noticeName, "00000000000000000000000000"), []byte(sh.row)))
+					must(t, b.Commit(ctx, storage.Sync))
+					b.Close()
+					r.stage("wayne-manor", Dispatch{Villain: "Joker"})
+				} else {
+					st := outboxstore.New(r.outKS)
+					b := st.OpenBatch()
+					_, err := st.StageSequence(ctx, b, noticeName, 2, []outboxstore.IntakeRow{{ID: "X", Intake: outboxstore.Intake{
+						ID: "X", Key: "wayne-manor", Payload: []byte(`{}`), StagedAt: time.Now(), Producer: "core"}}})
+					must(t, err)
+					must(t, b.In(r.outKS).Set(outboxstore.MsgKey(noticeName, outboxstore.Partition("wayne-manor", 2), 1), []byte(sh.row)))
+					must(t, b.Commit(ctx, storage.Sync))
+					b.Close()
+					r.ob.Wake() // staged by hand: nothing else tells the relay
+				}
+				eventually(t, "the stop to be reported", func() bool {
+					h := r.healthOf()
+					return h.Status == health.StatusDegraded && h.Reason == "delivery_stopped"
+				})
+				for range 30 {
+					r.ob.Wake()
+					time.Sleep(5 * time.Millisecond)
+				}
+				time.Sleep(200 * time.Millisecond)
+				h := r.healthOf()
+				if !strings.Contains(h.Detail, "corrupt_row") && !strings.Contains(h.Detail, "unknown_version") {
+					t.Errorf("the health detail names no cause: %q", h.Detail)
+				}
+				for _, text := range []string{logs.text(), h.Detail} {
+					if strings.Contains(text, logSentinel) || strings.Contains(text, logNumber) {
+						t.Fatalf("a row's value reached the log or the health detail:\n%s\n%s", logs.text(), h.Detail)
+					}
+				}
+				if n := logs.count("level=ERROR"); n != 1 {
+					t.Errorf("%d error lines for one stop, want 1:\n%s", n, logs.text())
+				}
+				if n := logs.count("level=WARN"); n > 2 {
+					t.Errorf("%d warnings while a stopped topic waits, want a handful at most:\n%s", n, logs.text())
+				}
+			})
 		}
 	})
 }

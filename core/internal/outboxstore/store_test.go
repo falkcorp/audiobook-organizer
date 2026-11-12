@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a6f2d813-3c9e-47b0-8d51-0e7b4a9c2f68
 // last-edited: 2026-11-12
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/mediacore/internal/outboxstore"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/keys"
 )
 
 // The store is opened through storage.Open/Prepare/Migrate over MemFS, never
@@ -80,8 +81,8 @@ func TestKeys_RoundTripAndOrder(t *testing.T) {
 	if c, tp, seq, err := outboxstore.ParseDeadKey(outboxstore.DeadKey(consumer, topic, 9)); err != nil || c != consumer || tp != topic || seq != 9 {
 		t.Fatalf("dead key: %q %q %d %v", c, tp, seq, err)
 	}
-	if tp, err := outboxstore.ParseSeqKey(outboxstore.SeqKey(topic)); err != nil || tp != topic {
-		t.Fatalf("seq key: %q %v", tp, err)
+	if segs, err := keys.Split(outboxstore.SeqKey(topic)); err != nil || len(segs) != 2 || string(segs[0]) != "seq" || string(segs[1]) != topic {
+		t.Fatalf("seq key: %q %v", segs, err)
 	}
 
 	if bytes.Compare(outboxstore.MsgKey(topic, 1, 9), outboxstore.MsgKey(topic, 1, 10)) >= 0 {
@@ -91,7 +92,7 @@ func TestKeys_RoundTripAndOrder(t *testing.T) {
 		t.Fatal("partition 2 sorts after partition 10")
 	}
 	long := topic + "x"
-	if bytes.HasPrefix(outboxstore.MsgKey(long, 0, 1), outboxstore.MsgTopicPrefix(topic)) {
+	if bytes.HasPrefix(outboxstore.MsgKey(long, 0, 1), keys.Prefix(keys.Str("m"), keys.Str(topic))) {
 		t.Fatal("one topic's prefix covers a longer topic's keys")
 	}
 	if !bytes.HasPrefix(outboxstore.MsgKey(topic, 5, 1), outboxstore.MsgPrefix(topic, 5)) ||

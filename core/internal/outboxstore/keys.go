@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/keys.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 47a4a283-dcad-4da8-b454-90f24d1d624d
 // last-edited: 2026-11-12
 
@@ -123,22 +123,13 @@ func MsgPrefix(topic string, pp int) []byte {
 	return keys.Prefix(keys.Str(famMsg), keys.Str(topic), pp2(pp))
 }
 
-// MsgTopicPrefix is m/<topic>/.
-func MsgTopicPrefix(topic string) []byte { return keys.Prefix(keys.Str(famMsg), keys.Str(topic)) }
-
 // SeqKey is seq/<topic>.
 func SeqKey(topic string) []byte { return keys.Join(keys.Str(famSeq), keys.Str(topic)) }
-
-// SeqRoot is the seq/ family.
-func SeqRoot() []byte { return keys.Prefix(keys.Str(famSeq)) }
 
 // CurKey is cur/<consumer>/<topic>/<pp>.
 func CurKey(consumer, topic string, pp int) []byte {
 	return keys.Join(keys.Str(famCur), keys.Str(consumer), keys.Str(topic), pp2(pp))
 }
-
-// CurPrefix is cur/<consumer>/.
-func CurPrefix(consumer string) []byte { return keys.Prefix(keys.Str(famCur), keys.Str(consumer)) }
 
 // CurRoot is the cur/ family.
 func CurRoot() []byte { return keys.Prefix(keys.Str(famCur)) }
@@ -239,13 +230,4 @@ func ParseDeadKey(rel []byte) (consumer, topic string, seq uint64, err error) {
 		return "", "", 0, err
 	}
 	return s[1], s[2], seq, nil
-}
-
-// ParseSeqKey splits seq/<topic>.
-func ParseSeqKey(rel []byte) (topic string, err error) {
-	s, err := splitKey(rel, famSeq, 2)
-	if err != nil {
-		return "", err
-	}
-	return s[1], nil
 }

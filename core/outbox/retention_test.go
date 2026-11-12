@@ -1,5 +1,5 @@
 // file: core/outbox/retention_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b8f5a21-6d4c-4e90-a7b2-1c9e0f3d8a65
 // last-edited: 2026-11-12
 
@@ -15,9 +15,24 @@ import (
 	"github.com/falkcorp/mediacore/outbox"
 )
 
-func (r *rig) messages(topic string) int { return r.count(outboxstore.MsgTopicPrefix(topic)) }
+func (r *rig) messages(topic string) int { return r.count(msgTopicPrefix(topic)) }
 
-func (r *rig) cursors(consumer string) int { return r.count(outboxstore.CurPrefix(consumer)) }
+func (r *rig) cursors(consumer string) int { return r.count(curPrefix(consumer)) }
+
+// absent is how many of consumer's cursors carry an absence mark.
+func (r *rig) absent(consumer string) int {
+	rows, err := outboxstore.New(r.outKS).AllCursors(context.Background())
+	if err != nil {
+		r.t.Fatalf("reading the cursors: %v", err)
+	}
+	n := 0
+	for _, c := range rows {
+		if c.Pair.Consumer == consumer && !c.Cur.Absent.IsZero() {
+			n++
+		}
+	}
+	return n
+}
 
 // sweepFast is the retention interval the tests use.
 const sweepFast = 15 * time.Millisecond
@@ -237,4 +252,43 @@ func TestOutbox_RemovedConsumerExpires(t *testing.T) {
 	clk.advance(2 * time.Hour)
 	eventually(t, "the removed consumer's cursors to expire", func() bool { return r2.cursors(consumerN3) == 0 })
 	eventually(t, "the message only it held to be dropped", func() bool { return r2.messages(noticeName) == 0 })
+}
+
+// A topic with only its core consumer (the notice topic and core.notify.deliver
+// alone) keeps its message while the consumer has not taken it over: the
+// retention sweeps and the whole orphan window pass before the consumer
+// succeeds, and nothing is deleted until its cursor passes the message.
+func TestCoreOnlyTopicRetainedUntilAck(t *testing.T) {
+	clk := &skew{}
+	var open atomic.Bool
+	rc := &recorder{}
+	r := newRig(t, rigOpts{
+		now: clk.now, sweep: sweepFast, core: []string{consumerN},
+		cfg: func(c *outbox.Config) {
+			c.RelayRotate = 24 * time.Hour
+			c.OrphanRetention = time.Hour
+			c.MaxAttempts = 100000
+		},
+		register: func(testing.TB, *rig) []registration {
+			return []registration{{owner: "core", hs: []outbox.Handler{outbox.Consume(notice(), consumerN,
+				func(ctx context.Context, m outbox.Message[Dispatch]) error {
+					if !open.Load() {
+						return context.DeadlineExceeded // the consumer has not got to it
+					}
+					return rc.handler(consumerN)(ctx, m)
+				})}}}
+		},
+	})
+	r.stage("wayne-manor", Dispatch{Villain: "Joker"})
+	eventually(t, "the message to be sequenced", func() bool { return r.messages(noticeName) == 1 })
+
+	clk.advance(2 * time.Hour) // the orphan window passes, with the sweep running every few milliseconds
+	stays(t, "the message kept past the orphan window", 500*time.Millisecond, func() bool {
+		return r.messages(noticeName) == 1 && rc.count() == 0
+	})
+
+	open.Store(true)
+	clk.advance(time.Hour) // the retry that was waiting for its backoff is due
+	eventually(t, "the consumer to take it over", func() bool { return rc.count() == 1 })
+	eventually(t, "the sweep to delete it once the cursor passed", func() bool { return r.messages(noticeName) == 0 })
 }

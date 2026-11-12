@@ -1,5 +1,5 @@
 // file: core/outbox/health.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f6a4c2c-9f56-4a53-8c5f-0f3c6c1a6a40
 // last-edited: 2026-11-12
 
@@ -111,7 +111,7 @@ func (h *healthState) report(now time.Time) {
 		}
 		slices.Sort(subjects)
 		res.Reason = reasonStopped
-		parts = append(parts, "stopped on an unreadable row: "+strings.Join(subjects, "; "))
+		parts = append(parts, "delivery stopped: "+strings.Join(subjects, "; "))
 	}
 	if h.disabled {
 		res.Reason = reasonRelayDisabled
