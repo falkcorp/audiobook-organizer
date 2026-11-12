@@ -1,7 +1,7 @@
 // file: core/kernel/restore.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: df7b5c69-060a-442f-82e8-4d31243a2ea3
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -39,11 +39,17 @@ var (
 
 // RestoreOfflineRequest is storage restore-offline's flags (05-storage
 // §5S.3.12): exactly one of Checkpoint and Archive (an absolute path), and
-// Into for the rehearsal copy. --keyring and --gap-fill are F8-01's.
+// Into for the rehearsal copy. Keyring and GapFill (--keyring, --gap-fill;
+// absolute paths) are the files an archive does not carry: the keyring export
+// that puts the install's secrets key back (05-config §2.4) and the off-host
+// gap-fill config.yaml (05-config §1.12.2). A checkpoint holds its own copies
+// of both, so they go with Archive only.
 type RestoreOfflineRequest struct {
 	Checkpoint  string
 	Archive     string
 	Into        string
+	Keyring     string
+	GapFill     string
 	AcceptLoss  bool
 	RequestedBy string
 }
@@ -68,7 +74,14 @@ type RestoreOfflineResult struct {
 //     than the live store's is refused;
 //   - --archive restores an archive through Config.ArchiveExtract into the
 //     swap's staging directory, refused when the extracted store does not
-//     open read-only;
+//     open read-only. --keyring and --gap-fill (archive only) bring back
+//     the files an archive does not carry: the operator's copy of the
+//     keyring export and of the off-host gap-fill config.yaml, each staged
+//     under its state-file label and replacing the live file of that label,
+//     set aside like every replaced state file; a source with no such file
+//     never removes or replaces the live one. A legacy archive restored
+//     without --gap-fill warns what then migrates empty. In --into they
+//     are copied to <into>.state/<label>;
 //   - every form, in place or --into, refuses before anything else unless
 //     this process is the state directory's owner (storage.ErrNotStateDirOwner,
 //     R1-25 review B-1): the journal directories, the state files it puts
@@ -116,6 +129,9 @@ func RestoreOffline(ctx context.Context, c Config, req RestoreOfflineRequest) (r
 	}
 	if req.Archive != "" && !filepath.IsAbs(req.Archive) {
 		return res, fmt.Errorf("kernel: --archive %q is not an absolute path", req.Archive)
+	}
+	if err := checkArchiveFiles(req); err != nil {
+		return res, err
 	}
 	if err := storage.RefuseNotStateDirOwner(ctx, c.StateDir, "storage restore-offline"); err != nil {
 		return res, err
@@ -250,10 +266,11 @@ func (k *Kernel) restoreInPlace(ctx context.Context, fs vfs.FS, sw *restoreswap.
 	}
 	id := restoreswap.NewID(bootClock(ctx)())
 	staging := restorejournal.StagingDir(dbPath, id)
-	src, err := k.stageSource(ctx, fs, cp, req, id, staging)
+	src, warns, err := k.stageSource(ctx, fs, cp, req, id, staging)
 	if err != nil {
 		return res, errors.Join(err, removeIfExists(fs, filepath.Dir(staging)))
 	}
+	res.Warnings = append(res.Warnings, warns...)
 	if src.InstallID == "" {
 		src.InstallID = installID
 	}
@@ -284,10 +301,10 @@ func (k *Kernel) restoreInPlace(ctx context.Context, fs vfs.FS, sw *restoreswap.
 // against its SHA-256, or an archive extracted into staging/db and opened
 // read-only.
 func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoint, req RestoreOfflineRequest,
-	id, staging string) (restoreswap.OfflineSource, error) {
-	src := restoreswap.OfflineSource{ID: id}
+	id, staging string) (src restoreswap.OfflineSource, warnings []string, err error) {
+	src = restoreswap.OfflineSource{ID: id}
 	if err := mkdirPrivate(fs, staging); err != nil {
-		return src, err
+		return src, nil, err
 	}
 	if cp.Name != "" {
 		// The checkpoint's store copy opens with this build's guard, as an
@@ -296,39 +313,52 @@ func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoi
 		// the swap refuses a missing source.
 		if _, err := fs.Stat(cp.Store()); err == nil {
 			if err := k.verifyStore(ctx, cp.Store()); err != nil {
-				return src, err
+				return src, nil, err
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return src, fmt.Errorf("kernel: checkpoint %s: %w", cp.Name, err)
+			return src, nil, fmt.Errorf("kernel: checkpoint %s: %w", cp.Name, err)
 		}
 		src.Kind, src.Store, src.HooksOwed, src.InstallID = restorejournal.KindCheckpoint, cp.Store(), cp.HooksOwed, cp.InstallID
 		if len(cp.StateFiles) > 0 {
 			if err := mkdirPrivate(fs, filepath.Join(staging, "state")); err != nil {
-				return src, err
+				return src, nil, err
 			}
 		}
 		for _, f := range cp.StateFiles {
 			staged := filepath.Join(staging, "state", f.Label)
 			if err := copyVerified(fs, cp.StateCopy(f.Label), staged, f.SHA256); err != nil {
-				return src, err
+				return src, nil, err
 			}
 			src.StateFiles = append(src.StateFiles, restorejournal.Target{From: staged, To: f.Path})
 		}
-		return src, nil
+		return src, nil, nil
 	}
 	store := filepath.Join(staging, "db")
 	if err := mkdirPrivate(fs, store); err != nil {
-		return src, err
+		return src, nil, err
 	}
 	archiveID, err := k.cfg.ArchiveExtract(ctx, req.Archive, store)
 	if err != nil {
-		return src, fmt.Errorf("kernel: extract %s: %w", req.Archive, err)
+		return src, nil, fmt.Errorf("kernel: extract %s: %w", req.Archive, err)
 	}
 	if err := k.verifyStore(ctx, store); err != nil {
-		return src, err
+		return src, nil, err
 	}
 	src.Kind, src.Store, src.ArchiveID = restorejournal.KindArchive, store, archiveID
-	return src, nil
+	files, warnings := k.archiveStateFiles(archiveID, req)
+	if len(files) > 0 {
+		if err := mkdirPrivate(fs, filepath.Join(staging, "state")); err != nil {
+			return src, nil, err
+		}
+	}
+	for _, f := range files {
+		staged := filepath.Join(staging, "state", f.label)
+		if err := copyOperatorFile(fs, f.from, staged, f.max, f.private); err != nil {
+			return src, nil, err
+		}
+		src.StateFiles = append(src.StateFiles, restorejournal.Target{From: staged, To: f.to})
+	}
+	return src, warnings, nil
 }
 
 // verifyStore opens a source store (an extracted archive, a checkpoint's
@@ -442,12 +472,22 @@ func (k *Kernel) restoreInto(ctx context.Context, fs vfs.FS, cps *storage.Checkp
 		if err := mkdirPrivate(fs, into); err != nil {
 			return res, err
 		}
-		if _, err := k.cfg.ArchiveExtract(ctx, req.Archive, into); err != nil {
+		archiveID, err := k.cfg.ArchiveExtract(ctx, req.Archive, into)
+		if err != nil {
 			return res, fmt.Errorf("kernel: extract %s: %w", req.Archive, err)
 		}
 		if err := mkdirPrivate(fs, state); err != nil {
 			return res, err
 		}
+		// The files an archive does not carry, beside the copy as a
+		// checkpoint's state files are: <into>.state/<label>.
+		files, warnings := k.archiveStateFiles(archiveID, req)
+		for _, f := range files {
+			if err := copyOperatorFile(fs, f.from, filepath.Join(state, f.label), f.max, f.private); err != nil {
+				return res, err
+			}
+		}
+		res.Warnings = append(res.Warnings, warnings...)
 	}
 	if err := chmodTree(fs, into); err != nil {
 		return res, err
