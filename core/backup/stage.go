@@ -1,5 +1,5 @@
 // file: core/backup/stage.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a9c2e5f1-3d70-4b84-8f6a-2e1d9b7c4a03
 // last-edited: 2026-11-12
 
@@ -92,6 +92,10 @@ func (s *Svc) slot() (pending *restorejournal.Intent, taken bool, inflight []str
 // only under <db parent>/.mediacore-restore/<id>/ and <state_dir>/restore/;
 // the live store is never opened for writing (TestRestoreNeverWritesLiveStore).
 func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) (pr PendingRestore, err error) {
+	if err := authorizeOptions(ctx, o); err != nil {
+		s.o.Metrics.Restore(ctx, "rejected", o.Foreign)
+		return PendingRestore{}, err
+	}
 	release, err := s.acquire()
 	if err != nil {
 		return PendingRestore{}, err
@@ -520,6 +524,9 @@ func (s *Svc) CancelRestore(ctx context.Context) error {
 // previous/ directory placed back as the live store, through the same swap,
 // with kind revert (§5B.3.4 "Undo").
 func (s *Svc) RevertLastRestore(ctx context.Context, o RestoreOptions) (PendingRestore, error) {
+	if err := authorizeOptions(ctx, o); err != nil {
+		return PendingRestore{}, err
+	}
 	release, err := s.acquire()
 	if err != nil {
 		return PendingRestore{}, err
