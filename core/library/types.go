@@ -1,5 +1,5 @@
 // file: core/library/types.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a5bb8543-563b-49d6-a0ce-f53cebd0d920
 // last-edited: 2026-11-11
 
@@ -132,6 +132,17 @@ type TransferRecord struct {
 // protected for Move and Remove.
 type ProtectionOracle interface {
 	Protected(ctx context.Context, p Path) (protected, loaded bool, err error)
+}
+
+// SubtreeOracle is a ProtectionOracle that can also answer for a whole
+// directory: ProtectedUnder reports whether p or anything under it is
+// protected, with the same loaded=false meaning "unknown". Moving or
+// quarantining a directory carries everything under it, so an oracle that does
+// not implement this cannot vouch for one: a directory Move or Quarantine is
+// refused while any such oracle is registered (5L.5: closed).
+type SubtreeOracle interface {
+	ProtectionOracle
+	ProtectedUnder(ctx context.Context, dir Path) (protected, loaded bool, err error)
 }
 
 // Digest is a file's SHA-256 and the size of the bytes that were hashed.
