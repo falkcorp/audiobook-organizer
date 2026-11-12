@@ -1,5 +1,5 @@
 // file: core/backup/catalogue.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 0e5a7d12-41c8-4b6f-8d33-9c1ab2e07f65
 // last-edited: 2026-11-12
 
@@ -141,7 +141,9 @@ func (s *Svc) scan(ctx context.Context) ([]found, error) {
 // would let find, Delete and Verify act on whichever came first. The file whose
 // name sorts first is kept, so the answer is the same on every scan, and each of
 // the others is named once in the log. Import refuses an ID already in the
-// catalogue, so only a file placed outside the service gets here.
+// catalogue (checked again under importMu just before it publishes, so two
+// imports of one archive cannot both be stored), so only a file placed outside
+// the service gets here.
 func (s *Svc) dropDuplicateIDs(in []found) []found {
 	sort.Slice(in, func(i, j int) bool { return in[i].Name < in[j].Name })
 	kept := make(map[ArchiveID]string, len(in))
@@ -369,8 +371,8 @@ func (s *Svc) Import(ctx context.Context, _ string, r io.Reader) (_ Archive, err
 	}
 	// The upload's length is not known until it ends, and it is bounded only by
 	// MaxArchiveBytes: ask for room for its first interval before a file is made,
-	// and for each next one as it is written (spaceWriter), so an upload stops at
-	// the margin instead of at a full volume.
+	// and for each next one as it is written (spaceWriter), so an upload stops
+	// near the margin instead of at a full volume (near: see uploadCheckBytes).
 	claim := func(n uint64) error {
 		return requireRoom(s.o.Disk, s.o.settings().margin(), s.o.Dir, n)
 	}
@@ -409,15 +411,20 @@ func (s *Svc) Import(ctx context.Context, _ string, r io.Reader) (_ Archive, err
 	}
 	var ext string
 	var man []byte
+	var id ArchiveID // a mediacore archive's own ID; "" for a legacy one, which is named by its file
 	if a, oerr := openArchive(tmp, lim); oerr == nil {
-		man = a.ManifestBytes
+		man, id = a.ManifestBytes, a.Manifest.ArchiveID
+		// The fast refusal: a duplicate is turned away before the upload is read
+		// through. It is not the guard, since another import of the same archive
+		// can be at this very point and neither has a name yet; install checks
+		// again under the lock that publishes.
 		existing, serr := s.scan(ctx)
 		if serr != nil {
 			// The duplicate check needs the catalogue: fail closed.
 			return Archive{}, errors.Join(serr, a.Close())
 		}
-		if idTaken(existing, a.Manifest.ArchiveID) {
-			return Archive{}, errors.Join(fmt.Errorf("%w: an archive with ID %s is already in the catalogue", ErrManifest, a.Manifest.ArchiveID), a.Close())
+		if idTaken(existing, id) {
+			return Archive{}, errors.Join(errDuplicateID(id), a.Close())
 		}
 		if cerr := errors.Join(a.consume(ctx, nil, ""), a.Close()); cerr != nil {
 			return Archive{}, cerr
@@ -434,21 +441,11 @@ func (s *Svc) Import(ctx context.Context, _ string, r io.Reader) (_ Archive, err
 	if err != nil {
 		return Archive{}, err
 	}
-	fname, final, err := s.publish(tmp, s.o.now().UTC(), ext)
+	fname, err := s.install(ctx, tmp, ext, h, man, id)
 	if err != nil {
-		return Archive{}, err
+		return Archive{}, err // tmp is gone or is removed by the deferred cleanup
 	}
 	done = true
-	if err := writeFileAtomic(final+ChecksumSidecar, []byte(h+"  "+fname+"\n")); err != nil {
-		removeArchive(final)
-		return Archive{}, err
-	}
-	if man != nil {
-		if err := writeFileAtomic(final+ManifestSidecar, man); err != nil {
-			removeArchive(final)
-			return Archive{}, err
-		}
-	}
 	if err := syncDir(s.o.Dir); err != nil {
 		return Archive{}, err
 	}
@@ -458,6 +455,57 @@ func (s *Svc) Import(ctx context.Context, _ string, r io.Reader) (_ Archive, err
 		return Archive{}, ErrNotFound
 	}
 	return got.Archive, nil
+}
+
+// errDuplicateID is the refusal of an import whose archive ID the catalogue
+// already lists.
+func errDuplicateID(id ArchiveID) error {
+	return fmt.Errorf("%w: an archive with ID %s is already in the catalogue", ErrManifest, id)
+}
+
+// install is the end of an Import, one import at a time: it checks that the
+// archive's ID (id, "" for a legacy archive) is not in the catalogue, gives the
+// finished upload its name and writes its sidecars. The check at the top of
+// Import is a fast refusal and cannot be the guard: two imports of one archive
+// both pass it, because neither has a name yet, and both would then be stored
+// under one ID. The catalogue lists one of the two files, and deleting that one
+// brings the other back. So the check is made again here, under importMu, and
+// the lock is held through publish and the sidecars: a second import's check
+// then finds the first's archive whole, or (when its sidecars failed and it was
+// removed) not at all.
+//
+// The lock is not held while the upload is read or verified, which can take
+// hours and would queue every import behind one, and it is not the backup
+// resource, which Import never takes. Taking it is not cancelled by ctx; what
+// waits behind it is a scan, a link and two small files. A legacy archive needs
+// no check: its ID is its file's name, and publish never gives one name twice.
+func (s *Svc) install(ctx context.Context, tmp, ext, sum string, man []byte, id ArchiveID) (string, error) {
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
+	if id != "" {
+		existing, err := s.scan(ctx)
+		if err != nil {
+			return "", err // fail closed, as at the first check
+		}
+		if idTaken(existing, id) {
+			return "", errDuplicateID(id)
+		}
+	}
+	fname, final, err := s.publish(tmp, s.o.now().UTC(), ext)
+	if err != nil {
+		return "", err
+	}
+	if err := writeFileAtomic(final+ChecksumSidecar, []byte(sum+"  "+fname+"\n")); err != nil {
+		removeArchive(final)
+		return "", err
+	}
+	if man != nil {
+		if err := writeFileAtomic(final+ManifestSidecar, man); err != nil {
+			removeArchive(final)
+			return "", err
+		}
+	}
+	return fname, nil
 }
 
 // extensionOf is the codec extension of the archive at p, from its magic bytes.

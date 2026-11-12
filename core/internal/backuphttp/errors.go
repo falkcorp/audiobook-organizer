@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/errors.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 6608474f-18e9-44e0-a1fe-7233ad5bc90b
 // last-edited: 2026-11-12
 
@@ -293,9 +293,19 @@ func cleanReason(s string) (string, error) {
 		return "manual", nil
 	}
 	if err := backup.ValidReason(s); err != nil {
-		return "", httpapi.Invalid(httpapi.Field("/body/reason", "invalid", fmt.Sprintf("must be valid text of at most %d bytes with no control character", backup.MaxReasonBytes)))
+		return "", invalidReason()
 	}
 	return s, nil
+}
+
+// invalidReason is the one answer to a reason the manifest cannot carry: a 422
+// validation_failed on the body's reason field, the status of every other
+// invalid body field of this API. The route's own check (cleanReason) and the
+// mapping of the service's ErrInvalidReason (mapError) both return it, so the
+// caller sees the same answer whichever of the two caught the reason. It never
+// carries the text.
+func invalidReason() *httpapi.Error {
+	return httpapi.Invalid(httpapi.Field("/body/reason", "invalid", fmt.Sprintf("must be valid text of at most %d bytes with no control character", backup.MaxReasonBytes)))
 }
 
 // maxNameBytes bounds an import's file name.
@@ -383,7 +393,7 @@ func mapError(err error) (*httpapi.Error, bool) {
 	case errors.Is(err, backup.ErrNotFound):
 		return p(http.StatusNotFound, "archive_not_found", "no archive has that ID")
 	case errors.Is(err, backup.ErrInvalidReason):
-		return p(http.StatusBadRequest, "invalid_reason", "the reason cannot be recorded in an archive")
+		return invalidReason(), true
 	case errors.Is(err, backup.ErrNoUndoPoint):
 		return p(http.StatusNotFound, "no_undo_point", "there is no applied restore to undo")
 	case errors.Is(err, backup.ErrForeignArchive):
