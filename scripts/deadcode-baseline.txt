@@ -479,10 +479,12 @@ internal/itunes.xmlEscape
 internal/itunes/service.calculatePercent
 internal/itunes/service.remapWindowsPath
 internal/maintenance/jobs.Kinds
+internal/maintenance/jobs.declaresApplyKey
 internal/maintenance/jobs.effectsFor
 internal/maintenance/jobs.kindFor
 internal/maintenance/jobs.kindShell.run
 internal/maintenance/jobs.newRCProgress
+internal/maintenance/jobs.paramObject
 internal/maintenance/jobs.rcCheckpointer.Load
 internal/maintenance/jobs.rcCheckpointer.Save
 internal/maintenance/jobs.rcProgress.Increment
@@ -494,6 +496,8 @@ internal/maintenance/jobs.refuseModeKeys
 internal/maintenance/jobs.resultBox.marshal
 internal/maintenance/jobs.resultBox.set
 internal/maintenance/jobs.resumeFor
+internal/maintenance/jobs.resumeForJob
+internal/maintenance/jobs.setParamBool
 internal/maintenance/jobs.startRequirement
 internal/maintenance/jobs.withCheckpointer
 internal/metadata.BookFileHashOptions
@@ -502,11 +506,8 @@ internal/metadata.NewGoogleBooksClientWithBaseURL
 internal/metadata.ReadTagValues
 internal/metadata.SetMetadataExtractor
 internal/metadata.WriteMetadataToFile
-internal/metadata.WriteSingleTag
-internal/metadata.WriteSingleTagContext
 internal/metadata.WriteTagProperties
 internal/metadata.samePropertyValue
-internal/metadata.writeSingleTagWithTaglib
 internal/metadata/dailyquota.DailyBudget.SetClock
 internal/metadata/providerhttp.HasOverride
 internal/metadata/providerhttp.KnownProviders
