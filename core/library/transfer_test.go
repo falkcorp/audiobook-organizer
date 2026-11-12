@@ -1,5 +1,5 @@
 // file: core/library/transfer_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1af0cfd3-c7e3-42bb-a439-7db2ac8dc820
 // last-edited: 2026-11-11
 
@@ -872,4 +872,79 @@ func TestTransferDurationAndBytesAreRecorded(t *testing.T) {
 		t.Errorf("refusal tallies = %+v", s)
 	}
 	_ = bytes.Equal
+}
+
+// A creator that appears while the temp is still being written, long before the
+// publish, keeps the name too: the publish is a link, which refuses an existing
+// name, and nothing on the way removes the name first. (The race test above
+// plants its winner at the link itself, so it cannot tell a link from a remove
+// followed by a link.)
+func TestTransferPublishNeverRemovesARivalThatAppearedEarlier(t *testing.T) {
+	for name, c := range map[string]struct {
+		opts   TransferOptions
+		inject func(label string) error
+	}{
+		"copy":              {opts: copyOpts()},
+		"cross-device move": {opts: withMkdir(move()), inject: crossRoots},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, f := transferRig(t, rigOpts{})
+			src := r.put("import-1", "Arkham/Year One.m4b", "the bytes we carry")
+			dst := Path{Root: "books-library", Rel: "Frank Miller/Year One.m4b"}
+			fired := false
+			f.inject = func(label string) error {
+				if !fired && strings.HasPrefix(label, "books-library:create:") {
+					fired = true
+					return os.WriteFile(r.abs("books-library", dst.Rel), []byte("the rival"), 0o664)
+				}
+				if c.inject != nil {
+					return c.inject(label)
+				}
+				return nil
+			}
+			if _, err := r.m.Transfer(ctxbg(), books, src, dst, c.opts); !errors.Is(err, fs.ErrExist) {
+				t.Fatalf("Transfer beaten to the name = %v, want fs.ErrExist", err)
+			}
+			if !fired {
+				t.Fatal("the rival was never planted: the test did not reach the temp's creation")
+			}
+			if got, _ := r.read("books-library", dst.Rel); got != "the rival" {
+				t.Errorf("the rival's file = %q; the publish removed or replaced it", got)
+			}
+			if got, ok := r.read("import-1", src.Rel); !ok || got != "the bytes we carry" {
+				t.Errorf("the source = %q, %v; a transfer that lost the name must keep it", got, ok)
+			}
+			if l := r.strays(); len(l) != 0 {
+				t.Errorf("strays %v", l)
+			}
+			if r.journalRows() != 0 {
+				t.Errorf("journal rows = %d", r.journalRows())
+			}
+		})
+	}
+}
+
+// A stale expectation is refused by the first digest comparison, before the
+// destination is touched. The later re-hash of the file that was set aside would
+// also refuse it and put the file back, so the refusal alone cannot show the
+// first comparison exists: the rename that sets the file aside must never be
+// attempted.
+func TestTransferReplaceChecksTheDigestBeforeMovingAnythingAside(t *testing.T) {
+	r, f := transferRig(t, rigOpts{})
+	dst := r.put("books-library", "Batman/Hush.m4b", "the old edition")
+	src := r.put("import-1", "Arkham/Hush.m4b", "the new edition")
+	o := NewTransferOptions(Copy, PermLibrary, VerifySHA256)
+	o.Replace = &ReplaceSpec{ExpectSHA256: sum("an edition that is not there")}
+	if _, err := r.m.Transfer(ctxbg(), books, src, Path{Root: "books-library", Rel: dst.Rel}, o); !errors.Is(err, ErrReplaceMismatch) {
+		t.Fatalf("Replace with a stale digest = %v, want ErrReplaceMismatch", err)
+	}
+	if i := indexOf(f.labels, ":rename:"); i >= 0 {
+		t.Errorf("the destination was moved aside before its digest was compared: %v", f.labels)
+	}
+	if got, _ := r.read("books-library", dst.Rel); got != "the old edition" {
+		t.Errorf("dst = %q", got)
+	}
+	if len(r.strays()) != 0 || r.journalRows() != 0 {
+		t.Errorf("strays %v, journal rows %d", r.strays(), r.journalRows())
+	}
 }
