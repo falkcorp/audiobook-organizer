@@ -80,10 +80,6 @@ func Resolve(name string) (Codec, error) {
 	}
 }
 
-// Extensions are every suffix an archive can carry, so archives written under
-// a since-changed setting stay listed and restorable.
-func Extensions() []string { return []string{".tar.gz", ".tar.zst", ".tar"} }
-
 // ValidateLevel rejects a level the codec cannot use, before anything
 // destructive runs.
 func ValidateLevel(c Codec, level int) error {
