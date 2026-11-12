@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package tasklint_test
 
@@ -30,6 +30,10 @@ func TestTasklint_Core(t *testing.T) {
 			core + "/integrations/ai.BatchPollTask",              // the same, for InterimBackends.Poll (F2-11, F5-18)
 			core + "/health/diagnostics.ExportTask",              // the same, for InterimBackends.Export (F2-11, F5-18)
 			core + "/internal/bleveindex.Engine.RebuildTask",     // dark until the kernel registers core.index.rebuild when it wires the index engine (F7-09); delete with the directive
+			core + "/backup.CreateTask",                          // the four core.backup.* kinds: dark until the kernel registers them at P6 when the app opts into core backup (F8-04); delete with the directives
+			core + "/backup.VerifyTask",                          // as CreateTask
+			core + "/backup.PruneTask",                           // as CreateTask
+			core + "/backup.StageRestoreTask",                    // as CreateTask
 		}})
 }
 
