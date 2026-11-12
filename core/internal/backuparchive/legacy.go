@@ -1,5 +1,5 @@
 // file: core/internal/backuparchive/legacy.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3879a968-243a-4935-b0f7-3e82b7eb7bb0
 // last-edited: 2026-11-12
 
@@ -107,7 +107,8 @@ func ScanLegacy(ctx context.Context, archive string, lim Limits) (info LegacyInf
 // entries land directly in storeDir. The archive is read again and its
 // SHA-256 must equal info's, so an archive swapped after the scan is refused.
 // Files are 0600 and directories 0700, every file is fsynced, and every
-// directory by the final Sync.
+// directory by the final Sync. The extraction writes at most info.Bytes (the
+// scan's total): the caller checks that figure against the free space first.
 func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDir string, lim Limits) (err error) {
 	lim = lim.withDefaults()
 	if entries, err := os.ReadDir(storeDir); err != nil {
@@ -120,6 +121,10 @@ func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDi
 		return err
 	}
 	defer func() { err = errors.Join(err, ex.Close()) }()
+	// The scan counted info.Bytes and the caller checked that against the free
+	// space; the extraction may write no more than that.
+	ex.SetBudget(info.Bytes)
+	remaining := info.Bytes
 	f, st, err := OpenRegular(archive, lim.MaxArchiveBytes)
 	if err != nil {
 		return err
@@ -144,6 +149,12 @@ func ExtractLegacy(ctx context.Context, archive string, info LegacyInfo, storeDi
 		}
 		if err != nil {
 			return err
+		}
+		if !hd.Dir {
+			if hd.Size > remaining {
+				return fmt.Errorf("%w: it holds more bytes than the scan counted", ErrChanged)
+			}
+			remaining -= hd.Size
 		}
 		var rel string
 		switch {
