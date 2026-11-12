@@ -1,5 +1,5 @@
 // file: core/library/task.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c1ca96d-27c7-48fa-9e0e-837a3808fcc9
 // last-edited: 2026-11-11
 
@@ -56,6 +56,9 @@ func TransferRecoverTask(m Manager) tasks.Definition {
 		run = func(rc *tasks.RC, _ TransferRecoverParams) (TransferRecoverResult, error) {
 			rep, err := rec.Recover(rc.Context())
 			res := TransferRecoverResult(rep)
+			// The executor stores a result only for a run that succeeded, so
+			// the status line is where a failed pass's counts survive.
+			rc.Progress().Note(rep.String())
 			if err != nil {
 				return res, errors.Join(errors.New("library: transfer recovery"), err)
 			}

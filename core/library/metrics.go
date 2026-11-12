@@ -1,5 +1,5 @@
 // file: core/library/metrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: be17e4e1-84d1-4523-8afd-27fe5f683cef
 // last-edited: 2026-11-11
 
@@ -45,7 +45,9 @@ func refusalReason(err error) string {
 		return reasonEscape
 	case errors.Is(err, fs.ErrExist):
 		return reasonExists
-	case errors.Is(err, ErrSourceProtected):
+	case errors.Is(err, ErrSourceProtected), errors.Is(err, ErrReservedPath):
+		// A reserved area (a root's AppDir or Quarantine) is a protected path
+		// to a caller that may not touch it; the label set is 5L.8's.
 		return reasonProtected
 	case errors.Is(err, ErrInsufficientSpace):
 		return reasonSpace

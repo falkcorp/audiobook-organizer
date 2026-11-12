@@ -1,5 +1,5 @@
 // file: core/library/registry.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 363acb46-296b-4fe8-bd5c-6b1160ab673b
 // last-edited: 2026-11-11
 
@@ -155,13 +155,12 @@ func (m *manager) Reload(ctx context.Context) error {
 
 // candidate is one entry on its way to becoming a Root.
 type candidate struct {
-	spec     RootSpec
-	abs      string
-	id       fileID
-	chain    []fileID // self, parent, ... the filesystem root
-	skip     []string // rel dirs walkers never enter
-	why      error    // non-nil: disabled
-	reusable *Root
+	spec  RootSpec
+	abs   string
+	id    fileID
+	chain []fileID // self, parent, ... the filesystem root
+	skip  []string // rel dirs walkers never enter
+	why   error    // non-nil: disabled
 }
 
 func (m *manager) apply(ctx context.Context, set settings) error {
