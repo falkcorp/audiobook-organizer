@@ -1,5 +1,5 @@
 // file: core/backup/types.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 57a7b5b9-8d91-4be9-b34d-06a2bc8b8eeb
 // last-edited: 2026-11-12
 
@@ -209,11 +209,17 @@ func (l VerifyLevel) String() string {
 }
 
 // VerifyResult is the last verification of an archive (<archive>.verify.json).
+//
+// Detail is the failure's error text: free text that quotes host paths and the
+// errors of the files and the store the check touched. It is for the operator
+// (the sidecar, the CLI); a surface that leaves the process, an API body or a UI,
+// shows Reason instead, a code from a closed set (VerifyReason).
 type VerifyResult struct {
 	At     time.Time
 	Level  VerifyLevel
 	OK     bool
 	Detail string
+	Reason VerifyReason // none when OK; always a code this build knows when not
 }
 
 // CreateOptions is what one Create asks for.
