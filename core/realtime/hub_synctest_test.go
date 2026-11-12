@@ -164,7 +164,7 @@ type wire struct {
 func wires(t testing.TB, text string) []wire {
 	t.Helper()
 	var out []wire
-	for _, l := range strings.Split(text, "\n") {
+	for l := range strings.SplitSeq(text, "\n") {
 		if d, ok := strings.CutPrefix(l, "data: "); ok {
 			var w wire
 			if err := json.Unmarshal([]byte(d), &w); err != nil {

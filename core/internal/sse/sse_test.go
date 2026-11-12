@@ -168,7 +168,7 @@ func finished(t *testing.T, done <-chan string) string {
 
 func ids(text string) []string {
 	var out []string
-	for _, l := range strings.Split(text, "\n") {
+	for l := range strings.SplitSeq(text, "\n") {
 		if v, ok := strings.CutPrefix(l, "id: "); ok {
 			out = append(out, v)
 		}
@@ -297,9 +297,7 @@ func TestSubscribe_NoEntryReplayedTwiceOrMissed(t *testing.T) {
 	}
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -309,7 +307,7 @@ func TestSubscribe_NoEntryReplayedTwiceOrMissed(t *testing.T) {
 				time.Sleep(50 * time.Microsecond)
 			}
 		}
-	}()
+	})
 	s, _ := sub(t, b, func(r *sse.Subscription) { r.LastEventID = nonce + "-50" })
 	rec, done := run(t.Context(), s)
 	time.Sleep(50 * time.Millisecond)
@@ -502,7 +500,7 @@ func TestServe_FrameShapeAndOrder(t *testing.T) {
 		t.Errorf("opened frame lacks the sorted topics:\n%s", text)
 	}
 	// A control frame never carries an id: it must not move the resume point.
-	for _, block := range strings.Split(text, "\n\n") {
+	for block := range strings.SplitSeq(text, "\n\n") {
 		if strings.Contains(block, "core.stream.") && strings.Contains(block, "id:") {
 			t.Errorf("a control frame carries an id: %q", block)
 		}
@@ -807,7 +805,7 @@ func TestServe_FramesAreOneDataLine(t *testing.T) {
 		}
 		// Every non-blank line of the stream is a recognised field: nothing
 		// the payload held became a field of its own.
-		for _, l := range strings.Split(rec.text(), "\n") {
+		for l := range strings.SplitSeq(rec.text(), "\n") {
 			if l != "" && !strings.HasPrefix(l, "data: ") && !strings.HasPrefix(l, "id: ") && !strings.HasPrefix(l, "retry: ") && !strings.HasPrefix(l, ": ") {
 				t.Errorf("%s: stray line %q", name, l)
 			}
@@ -893,16 +891,13 @@ func TestPublish_ConcurrentRaceFree(t *testing.T) {
 		dones = append(dones, d)
 	}
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 200 {
 				pub(b, "a.x", "")
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() { defer wg.Done(); b.WakeAll(); b.Len(); b.OldestAge() }()
+	wg.Go(func() { ; b.WakeAll(); b.Len(); b.OldestAge() })
 	wg.Wait()
 	b.Close()
 	for _, d := range dones {
