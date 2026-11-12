@@ -1,5 +1,5 @@
 // file: core/internal/sse/sse_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c1e4b93-5d28-4a6f-9b07-e2a3c8d41f56
 // last-edited: 2026-11-12
 
@@ -969,10 +969,14 @@ func TestSetInterest_StopsQueueingARemovedTopic(t *testing.T) {
 func TestRequestReset_IsWrittenBeforeTheNextEntry(t *testing.T) {
 	b := broker(t, nil)
 	s, _ := sub(t, b, nil)
-	rec, done := run(t.Context(), s)
-	rec.awaitText(t, "core.stream.opened.v1")
+	// Both requests land before the stream loop exists, so neither can be
+	// taken (and cleared) between them: a reset is "owed" only until it is
+	// written, and a request made after that owes a fresh frame. With the
+	// loop live the second call raced take() and sometimes produced a second
+	// frame, which is correct behaviour, not the coalescing under test.
 	s.RequestReset(sse.ResetGap)
 	s.RequestReset(sse.ResetRestart) // one is owed: the first reason stands
+	rec, done := run(t.Context(), s)
 	rec.awaitText(t, `"reason":"gap"`)
 	pub(b, "a.x", "")
 	rec.awaitText(t, nonce+"-1")
