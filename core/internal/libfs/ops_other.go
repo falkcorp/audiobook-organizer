@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_other.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a83c203b-ea72-45f4-acb5-0a216009d1da
 // last-edited: 2026-11-11
 
@@ -55,6 +55,17 @@ func SyncDir(d *Dir) error { return require(d) }
 
 // DeviceOf reports no device: the platform's FileInfo carries none.
 func DeviceOf(fs.FileInfo) (uint64, bool) { return 0, false }
+
+// Ancestry is not available without directory descriptors: the caller must
+// treat the answer as unknown.
+func Ancestry(*os.File, ID) ([]ID, error) {
+	return nil, errors.Join(errors.ErrUnsupported, errors.New("libfs: no directory-descriptor walk on this platform"))
+}
+
+// OpenAt is not available without directory descriptors.
+func OpenAt(*Dir, string, int) (*os.File, error) {
+	return nil, errors.Join(errors.ErrUnsupported, errors.New("libfs: no directory-relative open on this platform"))
+}
 
 // InodeOf reports no inode.
 func InodeOf(fs.FileInfo) (dev, ino uint64, ok bool) { return 0, 0, false }
