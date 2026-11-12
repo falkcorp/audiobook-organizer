@@ -1,5 +1,5 @@
 // file: core/kernel/restore_reapply.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 2f6d8a14-c3e7-4b95-a018-9d4e7b1c5f36
 // last-edited: 2026-11-12
 
@@ -136,10 +136,13 @@ type reapplyApply struct {
 	// would have left without an active core:admin holder (rbac.StageReapply:
 	// that line is skipped, KeptAdmins).
 	RBAC func(ctx context.Context, b *storage.Batch, lines []journal.Revocation) (kept []string, err error)
-	// RestrictLastAdmin restricts a kept admin (auth.RestrictLastAdmin), once the
-	// whole tail is applied: its journal line stages the head at the top of the
-	// journal, which no line may be left below.
-	RestrictLastAdmin func(ctx context.Context, userID string) error
+	// RestrictLastAdmins restricts every kept admin in one batch
+	// (auth.RestrictLastAdmins), once the whole tail is applied: its journal lines
+	// stage the head at the top of the journal, which no line may be left below,
+	// and one commit for all of them leaves no point at which the head is up and
+	// an admin the journal proved demoted is not yet restricted. A user a later
+	// line deleted is skipped.
+	RestrictLastAdmins func(ctx context.Context, userIDs []string) error
 	// FailClosed is auth's restore fallback with no coverage and no pre-swap
 	// store (auth.PostRestore): every key needs_confirmation, every credential
 	// epoch bumped, every session deleted.
@@ -212,7 +215,7 @@ func (in reapplyInput) ready() error {
 		return errReapplyNotReady
 	case in.Journal == nil, in.Install == "", in.DBPath == "", in.StateDir == "", in.JournalPath == "":
 		return errors.New("kernel: the journal re-apply is missing its inputs")
-	case in.Apply.NewBatch == nil || in.Apply.Auth == nil || in.Apply.RBAC == nil || in.Apply.RestrictLastAdmin == nil || in.Apply.FailClosed == nil:
+	case in.Apply.NewBatch == nil || in.Apply.Auth == nil || in.Apply.RBAC == nil || in.Apply.RestrictLastAdmins == nil || in.Apply.FailClosed == nil:
 		return errors.New("kernel: the journal re-apply is missing its appliers")
 	}
 	return nil
@@ -899,9 +902,12 @@ func (in reapplyInput) drainUnapplied(ctx context.Context, chain *journal.Chain,
 
 // keptAdmins is what the re-apply owes the last admins it kept: rbac skips a line
 // that would leave no active core:admin holder and reports the holder, and the
-// holder is then restricted (auth.RestrictLastAdmin, journaled, so an append that
-// stages the head at the top of the journal). That is why it waits for the end of
-// the tail, and why what the kept line would have completed waits with it.
+// holders are then restricted (auth.RestrictLastAdmins, journaled, so an append that
+// stages the head at the top of the journal). That is why they wait for the end of
+// the tail, and why what the kept line would have completed waits with them. One
+// line can keep several: when it would leave no active admin, rbac keeps the role
+// and reports every active holder, so the restriction is one call for all of them
+// and one batch, never a loop of commits.
 type keptAdmins struct {
 	// Users are the admins kept, in the order they were, each once.
 	Users []string
@@ -933,9 +939,9 @@ func (k *keptAdmins) keep(users []string) {
 // a journal that cannot take the line records a gap and leaves the head where it
 // is, and the commit never moves it back.
 func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tailPlan, after journal.Head) error {
-	for _, u := range owe.Users {
-		if err := in.Apply.RestrictLastAdmin(ctx, u); err != nil {
-			return fmt.Errorf("kernel: restrict the last admin %s: %w", u, err)
+	if len(owe.Users) > 0 {
+		if err := in.Apply.RestrictLastAdmins(ctx, owe.Users); err != nil {
+			return fmt.Errorf("kernel: restrict the last admins %v: %w", owe.Users, err)
 		}
 	}
 	if len(owe.Dequeue) > 0 {

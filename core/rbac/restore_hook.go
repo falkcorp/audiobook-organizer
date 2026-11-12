@@ -1,7 +1,7 @@
 // file: core/rbac/restore_hook.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 29379f80-62fb-4914-a76a-8b10fd95585b
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package rbac
 
@@ -74,16 +74,19 @@ type RestoreDeps struct {
 	Previous      Store                     // read-only pre-swap role store (writes fail ErrReadOnly); nil when none
 	PreviousUsers RestoreUsers              // read-only pre-swap users; nil exactly when Previous is nil
 	Revocations   journal.RevocationJournal // derived restrictions are journaled, as auth does
-	// RestrictLastAdmin restricts user id as 05-authn §4.14's restricted last
-	// admin (the kernel closes it over auth.RestrictLastAdmin; rbac cannot
-	// import auth). It is idempotent and returns auth's counts.
-	RestrictLastAdmin func(ctx context.Context, userID string) (map[string]int, error)
-	Clock             func() time.Time // nil = time.Now
-	Log               *slog.Logger     // nil discards
+	// RestrictLastAdmins restricts every user in userIDs as 05-authn §4.14's
+	// restricted last admin, in one batch (the kernel closes it over
+	// auth.RestrictLastAdmins; rbac cannot import auth). It is idempotent and
+	// returns auth's counts. One call for every holder a kept line reports, never
+	// one per holder: a commit each leaves a point at which the first is restricted
+	// and the rest are not.
+	RestrictLastAdmins func(ctx context.Context, userIDs []string) (map[string]int, error)
+	Clock              func() time.Time // nil = time.Now
+	Log                *slog.Logger     // nil discards
 }
 
 // The count families (the keys of RestoreReport.Counts). A family with a zero
-// count is absent from the map. The counts RestrictLastAdmin returns are
+// count is absent from the map. The counts RestrictLastAdmins returns are
 // added under their own keys.
 const (
 	CountRolesDeleted    = "roles_deleted"
@@ -147,8 +150,8 @@ func (d RestoreDeps) checkHook() error {
 	if d.Revocations == nil {
 		missing = append(missing, "Revocations")
 	}
-	if d.RestrictLastAdmin == nil {
-		missing = append(missing, "RestrictLastAdmin")
+	if d.RestrictLastAdmins == nil {
+		missing = append(missing, "RestrictLastAdmins")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("rbac: restore: missing deps %v", missing)
@@ -609,7 +612,7 @@ func roleLines(lines iter.Seq[journal.Revocation]) []journal.Revocation {
 // derived. The result is committed in one batch, retried on conflict with the
 // state read again. When it would leave no active core:admin holder, the
 // admin-granting state is kept and every active holder is restricted through
-// RestrictLastAdmin after the commit (reported in KeptAdmins). It is
+// one RestrictLastAdmins call after the commit (reported in KeptAdmins). It is
 // idempotent: the kernel re-runs it after a crash before the restore journal
 // reaches "applied", and a second run over the same inputs changes and
 // journals nothing.
@@ -672,17 +675,17 @@ func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) 
 		return RestoreReport{}, err
 	}
 
-	for _, id := range rep.KeptAdmins {
-		got, err := d.RestrictLastAdmin(ctx, id)
-		if err != nil {
-			return rep, fmt.Errorf("rbac: restore: restrict the kept admin %s: %w", id, err)
-		}
-		for k, n := range got {
-			rep.Counts[k] += n
-		}
-		d.log().Warn("rbac: restore: an admin-granting role was kept to avoid a lockout; the account is restricted", "user", id)
-	}
 	if n := len(rep.KeptAdmins); n > 0 {
+		got, err := d.RestrictLastAdmins(ctx, rep.KeptAdmins)
+		if err != nil {
+			return rep, fmt.Errorf("rbac: restore: restrict the kept admins %v: %w", rep.KeptAdmins, err)
+		}
+		for k, c := range got {
+			rep.Counts[k] += c
+		}
+		for _, id := range rep.KeptAdmins {
+			d.log().Warn("rbac: restore: an admin-granting role was kept to avoid a lockout; the account is restricted", "user", id)
+		}
 		rep.Counts[CountLastAdminKept] = n
 	}
 	if prev == nil {

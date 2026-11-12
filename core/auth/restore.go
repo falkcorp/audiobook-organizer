@@ -1,7 +1,7 @@
 // file: core/auth/restore.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b7d94e1-6a30-4c58-b9f2-e41c8d05a763
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package auth
 
@@ -20,7 +20,7 @@ import (
 
 // Post-restore hook and every-boot writes (05-authn §3.2, §4.14, SEC-16).
 
-// RestoreDeps are the collaborators of PostRestore, RestrictLastAdmin and
+// RestoreDeps are the collaborators of PostRestore, RestrictLastAdmins and
 // BootWrites. They run at P4d, before rbac.Service and auth.New exist, so
 // they take the Store and the few service-level pieces they need directly.
 // NewBatch, Settings, RoleGrantsAdmin and Log are coined by F4-02b
@@ -663,18 +663,43 @@ func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) 
 	return counts, nil
 }
 
-// RestrictLastAdmin restricts user id as §4.14's restricted last admin: the
-// password hash blanked with a reset required, API keys needs_confirmation,
+// RestrictLastAdmins restricts every user in ids as §4.14's restricted last admin:
+// the password hash blanked with a reset required, API keys needs_confirmation,
 // SignInRestricted set so every authenticator (password, OIDC, identity
 // extensions, compat) refuses it until an owner-verified reset link or the
 // offline reset-password command clears it, and its external-identity links
-// deleted; each restriction is journaled. rbac's restore hook, which decides
-// that a re-applied demotion would remove the last active core:admin holder
-// and keeps the role, calls it through the kernel's adapter (rbac cannot
-// import auth). It is idempotent.
-func RestrictLastAdmin(ctx context.Context, d RestoreDeps, id UserID) (RestoreCounts, error) {
+// deleted; each restriction is journaled. rbac's restore hook and the boot
+// re-apply, which decide that a re-applied demotion would remove the last active
+// core:admin holder and keep the role, call it through the kernel's adapters (rbac
+// cannot import auth).
+//
+// It restricts the whole list in ONE batch: one commit holds every user's change,
+// every journal line and the head those lines stage (an append stages its own seq
+// as the head, so the head is staged once, at the last line). That is the point of
+// a list. rbac keeps every active holder of a role when one line would leave none,
+// so a kept line can name several admins, and restricting them one commit at a time
+// leaves a window after the first, with the head already at the top of the journal
+// and the line that kept them below it, in which a crash leaves the others
+// unrestricted and nothing to replay them from.
+//
+// It is idempotent, and ids may repeat (each user is restricted once). An id with
+// no user is skipped: a kept admin that a later line deleted is stricter than
+// restricted, and failing the boot for it would only repeat the pass. The system
+// user is never skipped; it is ErrBadInput and nothing commits.
+func RestrictLastAdmins(ctx context.Context, d RestoreDeps, ids []UserID) (RestoreCounts, error) {
 	if err := d.check("Revocations"); err != nil {
 		return nil, err
+	}
+	var order []UserID
+	seen := map[UserID]bool{}
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			order = append(order, id)
+		}
+	}
+	if len(order) == 0 {
+		return RestoreCounts{}, nil
 	}
 	var counts RestoreCounts
 	err := d.commit(ctx, func(b *storage.Batch) error {
@@ -682,8 +707,14 @@ func RestrictLastAdmin(ctx context.Context, d RestoreDeps, id UserID) (RestoreCo
 		if err != nil {
 			return err
 		}
-		if err := p.restrictUser(id); err != nil {
-			return err
+		for _, id := range order {
+			if err := p.restrictUser(id); err != nil {
+				if errors.Is(err, ErrNotFound) {
+					d.log().Info("auth: a kept last admin no longer exists; nothing to restrict (a deleted user is stricter)", "user", id)
+					continue
+				}
+				return err
+			}
 		}
 		if err := p.stage(ctx, b); err != nil {
 			return err
@@ -692,7 +723,7 @@ func RestrictLastAdmin(ctx context.Context, d RestoreDeps, id UserID) (RestoreCo
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("auth: restrict last admin: %w", err)
+		return nil, fmt.Errorf("auth: restrict last admins: %w", err)
 	}
 	return counts, nil
 }

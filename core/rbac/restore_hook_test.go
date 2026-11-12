@@ -1,7 +1,7 @@
 // file: core/rbac/restore_hook_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1ac0d500-ed52-4d8e-8183-8705fc2a5199
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package rbac_test
 
@@ -281,21 +281,32 @@ func (w *world) snapshot() string {
 	return sb.String()
 }
 
-// restrictor records RestrictLastAdmin calls.
+// restrictor records RestrictLastAdmins calls: calls is every user it was asked
+// to restrict, flat and in order; batches is one entry per call.
 type restrictor struct {
-	mu    sync.Mutex
-	calls []string
-	err   error
+	mu      sync.Mutex
+	calls   []string
+	batches [][]string
+	err     error
+	// failures is how many calls fail (after being recorded) before the rest
+	// succeed, when err is nil: a restriction that errors once and works on the
+	// re-run.
+	failures int
 }
 
-func (r *restrictor) fn(_ context.Context, id string) (map[string]int, error) {
+func (r *restrictor) fn(_ context.Context, ids []string) (map[string]int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, id)
+	r.calls = append(r.calls, ids...)
+	r.batches = append(r.batches, slices.Clone(ids))
 	if r.err != nil {
 		return nil, r.err
 	}
-	return map[string]int{"users_restricted": 1}, nil
+	if r.failures > 0 {
+		r.failures--
+		return nil, errors.New("auth store unavailable once")
+	}
+	return map[string]int{"users_restricted": len(ids)}, nil
 }
 
 func (r *restrictor) called() []string {
@@ -304,11 +315,18 @@ func (r *restrictor) called() []string {
 	return slices.Clone(r.calls)
 }
 
+// batchesOf is the ids of each call, in order.
+func (r *restrictor) batchesOf() [][]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.batches)
+}
+
 // deps wires the hook over w with a fresh journal and restrictor.
 func (w *world) deps(j journal.RevocationJournal, r *restrictor) rbac.RestoreDeps {
 	return rbac.RestoreDeps{
 		Store: w.store, NewBatch: w.store.NewBatch, Users: w.users,
-		Revocations: j, RestrictLastAdmin: r.fn,
+		Revocations: j, RestrictLastAdmins: r.fn,
 		Clock: func() time.Time { return restoreNow },
 	}
 }
@@ -730,8 +748,28 @@ func TestRestoreHook_LastAdminKeptAndRestricted(t *testing.T) {
 		wantEqual(t, "bruce", w.rolesOf(bruce), []rbac.RoleName{trustee})
 		wantEqual(t, "harvey", w.rolesOf(harvey), []rbac.RoleName{trustee})
 		wantEqual(t, "restricted", r.called(), []string{bruce, harvey})
+		wantEqual(t, "one call for both holders", r.batchesOf(), [][]string{{bruce, harvey}})
 		wantEqual(t, "KeptAdmins", rep.KeptAdmins, []string{bruce, harvey})
 		wantEqual(t, "last_admin_kept", rep.Counts[rbac.CountLastAdminKept], 2)
+		wantEqual(t, "users_restricted", rep.Counts["users_restricted"], 2)
+	})
+	t.Run("a_failed_restriction_of_a_pair_is_redone_for_both_on_the_re_run", func(t *testing.T) {
+		w := lastAdminWorld(t)
+		w.user(harvey, true, trustee)
+		r := &restrictor{failures: 1}
+		lines := []journal.Revocation{unassigned(harvey, trustee), unassigned(bruce, trustee)}
+		if _, err := rbac.PostRestore(context.Background(), w.deps(&revJournal{}, r), rcOf(lines)); err == nil {
+			t.Fatal("the failed restriction must fail the hook")
+		}
+		// The role state was committed before the restriction: both holders keep
+		// the role, so the re-run (the hook is re-run until the restore is hooked)
+		// finds the same two holders and restricts them again, together.
+		wantEqual(t, "bruce keeps the role", w.rolesOf(bruce), []rbac.RoleName{trustee})
+		wantEqual(t, "harvey keeps the role", w.rolesOf(harvey), []rbac.RoleName{trustee})
+		rep := mustHook(t, w.deps(&revJournal{}, r), lines)
+		wantEqual(t, "KeptAdmins on the re-run", rep.KeptAdmins, []string{bruce, harvey})
+		wantEqual(t, "one call per run, both holders each time", r.batchesOf(), [][]string{{bruce, harvey}, {bruce, harvey}})
+		wantEqual(t, "users_restricted", rep.Counts["users_restricted"], 2)
 	})
 	t.Run("second_active_admin_lets_the_demotion_apply", func(t *testing.T) {
 		w := lastAdminWorld(t)
@@ -835,7 +873,7 @@ func TestRestoreHook_Idempotent(t *testing.T) {
 			t.Errorf("the second run changed the store")
 		}
 		wantEqual(t, "KeptAdmins", rep.KeptAdmins, []string{bruce})
-		wantEqual(t, "RestrictLastAdmin runs again (it is idempotent)", r.called(), []string{bruce, bruce})
+		wantEqual(t, "RestrictLastAdmins runs again (it is idempotent)", r.called(), []string{bruce, bruce})
 	})
 }
 
@@ -1038,7 +1076,7 @@ func TestRestoreHook_ErrorsFailTheHook(t *testing.T) {
 		"no users":                  func(d *rbac.RestoreDeps) { d.Users = nil },
 		"no batch":                  func(d *rbac.RestoreDeps) { d.NewBatch = nil },
 		"no journal":                func(d *rbac.RestoreDeps) { d.Revocations = nil },
-		"no restrict":               func(d *rbac.RestoreDeps) { d.RestrictLastAdmin = nil },
+		"no restrict":               func(d *rbac.RestoreDeps) { d.RestrictLastAdmins = nil },
 		"previous without users":    func(d *rbac.RestoreDeps) { d.Previous = w.store },
 		"previous users without it": func(d *rbac.RestoreDeps) { d.PreviousUsers = w.users },
 	} {
@@ -1120,7 +1158,7 @@ func TestStageReapply_SkipsLastAdminRemovalAndReportsIt(t *testing.T) {
 	w.user(harvey, true, trustee) // a second active admin, until a line demotes him
 	r := &restrictor{}
 	d := reapplyDeps(w)
-	d.RestrictLastAdmin = r.fn
+	d.RestrictLastAdmins = r.fn
 	rep, err := stageAndCommit(t, w, d, []journal.Revocation{
 		unassigned(harvey, trustee),         // fine: bruce is still an admin
 		unassigned(bruce, trustee),          // would remove the last one: skipped

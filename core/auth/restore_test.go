@@ -1,7 +1,7 @@
 // file: core/auth/restore_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f3a9c52-0e6d-4b81-a4c7-d2158e90b6f3
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package auth_test
 
@@ -456,7 +456,7 @@ func TestRestrictedLastAdmin_SSORefused(t *testing.T) {
 	f.linkIdentity(bruce, "google", "sub-bruce")
 	f.jrnl.lines = nil
 
-	counts, err := auth.RestrictLastAdmin(ctx, f.restoreDeps(nil, nil), bruce.ID)
+	counts, err := auth.RestrictLastAdmins(ctx, f.restoreDeps(nil, nil), []auth.UserID{bruce.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,11 +493,161 @@ func TestRestrictedLastAdmin_SSORefused(t *testing.T) {
 	wantErr(t, "a session principal", err, auth.ErrResetRequired)
 
 	// Idempotent; and the system user cannot be restricted.
-	if _, err := auth.RestrictLastAdmin(ctx, f.restoreDeps(nil, nil), bruce.ID); err != nil {
+	if _, err := auth.RestrictLastAdmins(ctx, f.restoreDeps(nil, nil), []auth.UserID{bruce.ID}); err != nil {
 		t.Fatalf("a second restriction: %v", err)
 	}
-	if _, err := auth.RestrictLastAdmin(ctx, f.restoreDeps(nil, nil), "u-ghost"); !errors.Is(err, auth.ErrNotFound) {
-		t.Fatalf("an unknown user: %v", err)
+}
+
+// kindsBySubject counts the journaled lines by kind for one user or key.
+func kindsBySubject(lines []journal.Revocation, id string) map[journal.Kind]int {
+	out := map[journal.Kind]int{}
+	for _, l := range lines {
+		if l.Subject.ID == id {
+			out[l.Kind]++
+		}
+	}
+	return out
+}
+
+// TestRestrictLastAdmins_RestrictsEveryAdminInOneBatch: rbac keeps a role and
+// reports every active holder when one line would leave none, so the re-apply
+// restricts several admins at once. They are restricted in ONE batch: one
+// NewBatch, so one commit holds both users' changes, both users' journal lines and
+// the head those lines stage. Two commits (the admins restricted one at a time)
+// leave a window after the first, with the head already at the top of the journal,
+// in which a crash leaves the second unrestricted with nothing to replay it.
+func TestRestrictLastAdmins_RestrictsEveryAdminInOneBatch(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	bruce := f.withPassword(f.user("bruce-wayne", rbac.RoleAdmin), "i-am-the-night-1")
+	alfred := f.withPassword(f.user("alfred-pennyworth", rbac.RoleAdmin), "tea-and-crumpets-2")
+	importKey(t, f, "key-cowl", bruce.ID, auth.KeyActive, "core:admin")
+	importKey(t, f, "key-teapot", alfred.ID, auth.KeyActive, "core:admin")
+	f.jrnl.lines = nil
+
+	d := f.restoreDeps(nil, nil)
+	batches, newBatch := 0, d.NewBatch
+	d.NewBatch = func() *storage.Batch {
+		batches++
+		return newBatch()
+	}
+	counts, err := auth.RestrictLastAdmins(ctx, d, []auth.UserID{alfred.ID, bruce.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batches != 1 {
+		t.Errorf("%d batches, want 1: every admin's restriction commits together", batches)
+	}
+	for _, u := range []*auth.User{bruce, alfred} {
+		got := f.reload(u.ID)
+		if !got.SignInRestricted || !got.PasswordResetRequired || got.HasPassword {
+			t.Errorf("%s: %+v, want restricted with the password blanked", u.Username, got)
+		}
+		if k := kindsBySubject(f.jrnl.lines, string(u.ID)); k[journal.PasswordChanged] != 1 {
+			t.Errorf("%s: journaled %v, want its password change once", u.Username, k)
+		}
+	}
+	for id, owner := range map[string]string{"key-cowl": "bruce", "key-teapot": "alfred"} {
+		if got := f.status(id); got != auth.KeyNeedsConfirmation {
+			t.Errorf("%s (%s's) = %q, want needs_confirmation", id, owner, got)
+		}
+		if k := kindsBySubject(f.jrnl.lines, id); k[journal.APIKeyDisabled] != 1 {
+			t.Errorf("%s: journaled %v, want its disable once", id, k)
+		}
+	}
+	if counts[auth.CountUsersRestricted] != 2 || counts[auth.CountKeysUnconfirmed] != 2 {
+		t.Errorf("counts %v, want 2 users restricted and 2 keys unconfirmed", counts)
+	}
+
+	// Idempotent: a second run restricts nobody again, unconfirms no key again and
+	// leaves every account restricted. (It does journal the password change once
+	// more per user: blankPassword's "already blank" memory is per plan, not per
+	// store. That is how the one-user function behaved and is not this change's.)
+	f.jrnl.lines = nil
+	again, err := auth.RestrictLastAdmins(ctx, f.restoreDeps(nil, nil), []auth.UserID{bruce.ID, alfred.ID})
+	if err != nil {
+		t.Fatalf("a second restriction: %v", err)
+	}
+	if again[auth.CountUsersRestricted] != 0 || again[auth.CountKeysUnconfirmed] != 0 {
+		t.Errorf("a second run counted %v, want nobody restricted and no key unconfirmed again", again)
+	}
+	for _, id := range []string{"key-cowl", "key-teapot"} {
+		if k := kindsBySubject(f.jrnl.lines, id); k[journal.APIKeyDisabled] != 0 {
+			t.Errorf("%s: a second run journaled %v, want no second key disable", id, k)
+		}
+	}
+	for _, u := range []*auth.User{bruce, alfred} {
+		if got := f.reload(u.ID); !got.SignInRestricted || !got.PasswordResetRequired || got.HasPassword {
+			t.Errorf("%s after a second run: %+v, want still restricted", u.Username, got)
+		}
+	}
+}
+
+// TestRestrictLastAdmins_ADeletedAdminIsSkippedAndTheOthersAreRestricted: a kept
+// admin that a later line of the tail deleted has nothing left to restrict (a
+// deleted user is stricter), and it must not stop the others from being
+// restricted or fail the boot.
+func TestRestrictLastAdmins_ADeletedAdminIsSkippedAndTheOthersAreRestricted(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	bruce := f.withPassword(f.user("bruce-wayne", rbac.RoleAdmin), "i-am-the-night-1")
+	f.jrnl.lines = nil
+
+	counts, err := auth.RestrictLastAdmins(ctx, f.restoreDeps(nil, nil), []auth.UserID{"u-ghost", bruce.ID})
+	if err != nil {
+		t.Fatalf("a deleted admin in the list: %v", err)
+	}
+	if !f.reload(bruce.ID).SignInRestricted || counts[auth.CountUsersRestricted] != 1 {
+		t.Errorf("bruce restricted %v, counts %v, want restricted and 1 user counted", f.reload(bruce.ID).SignInRestricted, counts)
+	}
+
+	f.jrnl.lines = nil
+	counts, err = auth.RestrictLastAdmins(ctx, f.restoreDeps(nil, nil), []auth.UserID{"u-ghost", "u-another-ghost"})
+	if err != nil || len(counts) != 0 || len(f.jrnl.lines) != 0 {
+		t.Errorf("only deleted admins: err %v, counts %v, %d lines, want nothing done and no error", err, counts, len(f.jrnl.lines))
+	}
+}
+
+// TestRestrictLastAdmins_ListsAreDedupedAndEmptyListsAreNoOps: the same admin kept
+// by two lines is restricted once, and an empty list opens no batch.
+func TestRestrictLastAdmins_ListsAreDedupedAndEmptyListsAreNoOps(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	bruce := f.withPassword(f.user("bruce-wayne", rbac.RoleAdmin), "i-am-the-night-1")
+	f.jrnl.lines = nil
+
+	counts, err := auth.RestrictLastAdmins(ctx, f.restoreDeps(nil, nil), []auth.UserID{bruce.ID, bruce.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := kindsBySubject(f.jrnl.lines, string(bruce.ID)); k[journal.PasswordChanged] != 1 || counts[auth.CountUsersRestricted] != 1 {
+		t.Errorf("journaled %v, counts %v, want bruce restricted and journaled once", k, counts)
+	}
+
+	d := f.restoreDeps(nil, nil)
+	batches, newBatch := 0, d.NewBatch
+	d.NewBatch = func() *storage.Batch {
+		batches++
+		return newBatch()
+	}
+	if counts, err := auth.RestrictLastAdmins(ctx, d, nil); err != nil || len(counts) != 0 || batches != 0 {
+		t.Errorf("an empty list: err %v, counts %v, %d batches, want none of them", err, counts, batches)
+	}
+}
+
+// TestRestrictLastAdmins_TheSystemUserFailsTheWholeBatch: only a missing user is
+// skipped. The system user cannot be restricted, and that is an error that commits
+// nothing, not even for the admins listed before it.
+func TestRestrictLastAdmins_TheSystemUserFailsTheWholeBatch(t *testing.T) {
+	f := newFx(t)
+	bruce := f.withPassword(f.user("bruce-wayne", rbac.RoleAdmin), "i-am-the-night-1")
+	robin := f.edit(f.user("robin"), func(u *auth.User) { u.Status = auth.StatusSystem })
+	f.jrnl.lines = nil
+
+	_, err := auth.RestrictLastAdmins(context.Background(), f.restoreDeps(nil, nil), []auth.UserID{bruce.ID, robin.ID})
+	wantErr(t, "the system user in the list", err, auth.ErrBadInput)
+	if f.reload(bruce.ID).SignInRestricted || len(f.jrnl.lines) != 0 {
+		t.Errorf("bruce restricted %v, %d lines journaled, want a batch that committed nothing", f.reload(bruce.ID).SignInRestricted, len(f.jrnl.lines))
 	}
 }
 
