@@ -133,6 +133,10 @@ func TestChain_FingerprintAndLatch(t *testing.T) {
 	if short.Fingerprint(Head{Seq: 1}, "forked") == short.Fingerprint(Head{Seq: 2}, "forked") {
 		t.Error("the head is not part of the fingerprint")
 	}
+	prunedAt := func(base uint64) *Chain { return &Chain{HasHeader: true, Header: Header{BaseSeq: base}} }
+	if prunedAt(5).Fingerprint(Head{Seq: 1}, "") == prunedAt(9).Fingerprint(Head{Seq: 1}, "") {
+		t.Error("two pruned journals that start at different seqs share a fingerprint")
+	}
 
 	if got, err := ReadBrokenLatch(ctx, fx.ks); got != "" || err != nil {
 		t.Fatalf("latch before = %q, %v", got, err)
