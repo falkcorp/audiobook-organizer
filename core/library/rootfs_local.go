@@ -1,5 +1,5 @@
 // file: core/library/rootfs_local.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
 // last-edited: 2026-11-11
 
@@ -140,11 +140,41 @@ func (l *localFS) Open(name string) (fs.File, error) {
 		}
 		return f, nil
 	}
-	f, err := l.root.Open(n)
+	f, err := l.openRead("open", name, n, os.O_RDONLY)
 	if err != nil {
-		return nil, pathErr("open", name, err)
+		return nil, err
 	}
 	return f, nil
+}
+
+// openRead opens n for reading and never waits on a special file. A FIFO opened
+// for reading blocks until a writer appears, uninterruptibly (ctx cannot reach
+// it), and four of them would hold every transfer slot and path lock the
+// library has; so a name that is not a regular file or a directory is refused
+// before it is opened (an open can have effects on a device node), and the open
+// itself is O_NONBLOCK with the descriptor examined afterwards, the check no
+// swap can race.
+func (l *localFS) openRead(op, name, n string, flag int) (*os.File, error) {
+	if st, err := l.root.Stat(n); err == nil && !st.Mode().IsRegular() && !st.IsDir() {
+		return nil, notReadable(op, name)
+	}
+	f, err := l.root.OpenFile(n, flag|openNonblock, 0)
+	if err != nil {
+		return nil, pathErr(op, name, err)
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return nil, libfs.CloseAfter(f, pathErr(op, name, err))
+	}
+	if !st.Mode().IsRegular() && !st.IsDir() {
+		return nil, libfs.CloseAfter(f, notReadable(op, name))
+	}
+	return f, nil
+}
+
+// notReadable is the refusal of a FIFO, socket or device where a file is read.
+func notReadable(op, name string) error {
+	return &fs.PathError{Op: op, Path: name, Err: fmt.Errorf("%w: not a regular file or a directory", ErrNotSupported)}
 }
 
 func (l *localFS) Stat(name string) (fs.FileInfo, error) {
@@ -176,8 +206,8 @@ func (l *localFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-	} else if d, err = l.root.Open(n); err != nil {
-		return nil, pathErr("readdir", name, err)
+	} else if d, err = l.openRead("readdir", name, n, os.O_RDONLY); err != nil {
+		return nil, err
 	}
 	defer closeLogged(l.log, d, name)
 	ents, err := d.ReadDir(-1)
@@ -201,6 +231,13 @@ func (l *localFS) OpenFile(name string, flag int, perm fs.FileMode) (File, error
 	}
 	if l.hidden && flag&writeFlags == 0 {
 		f, err := l.guardedOpen("open", name, n)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	}
+	if flag&writeFlags == 0 {
+		f, err := l.openRead("open", name, n, flag)
 		if err != nil {
 			return nil, err
 		}
