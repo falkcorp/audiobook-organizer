@@ -1,7 +1,7 @@
 // file: core/kernel/audit_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 94d1b7e3-6a50-4c28-8f3e-0b5a2d7c9e41
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -122,6 +122,44 @@ func TestAudit_KernelBuildNeedsTheOwner(t *testing.T) {
 	}
 	if _, err := buildAudit(context.Background(), nil, nil, nil); err == nil {
 		t.Error("buildAudit(nil db) succeeded")
+	}
+}
+
+// TestAudit_OpenAuditSharesTheBootSequence: the store OpenAudit builds over a
+// db is the one a boot builds: a record written through each is read back by
+// the other, in allocation order, and a missing owner fails with the boot's
+// message.
+func TestAudit_OpenAuditSharesTheBootSequence(t *testing.T) {
+	ctx := context.Background()
+	db := bootAuditDB(t, auditOwnerSpec())
+	boot, err := buildAudit(ctx, db, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := OpenAudit(ctx, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := boot.Record(ctx, audit.Event{Action: "core.auth.setup", Outcome: audit.Success}); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Record(ctx, audit.Event{Action: "core.auth.login", Outcome: audit.Success}); err != nil {
+		t.Fatal(err)
+	}
+	for name, s := range map[string]*audit.Store{"boot": boot, "opened": opened} {
+		var seqs []uint64
+		for rec, err := range s.Query(ctx, audit.Filter{}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			seqs = append(seqs, rec.Seq)
+		}
+		if len(seqs) != 2 || seqs[0] <= seqs[1] {
+			t.Errorf("%s store reads seqs %v, want two, newest first and strictly increasing in allocation order", name, seqs)
+		}
+	}
+	if _, err := OpenAudit(ctx, bootAuditDB(t), nil); err == nil || !strings.Contains(err.Error(), "auditOwnerSpec") {
+		t.Errorf("OpenAudit without the owner = %v, want an error naming auditOwnerSpec", err)
 	}
 }
 

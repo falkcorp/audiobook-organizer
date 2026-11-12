@@ -1,7 +1,7 @@
 // file: core/kernel/cutover.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: aa530b78-4ec9-41a1-85a3-d0075f9bcdff
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -243,7 +243,7 @@ func PurgeQuarantine(ctx context.Context, db *storage.DB, step string, del stora
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	as, err := buildAudit(ctx, db, log, time.Now)
+	as, err := OpenAudit(ctx, db, log)
 	if err != nil {
 		return 0, fmt.Errorf("kernel: quarantine purge is audited: %w", err)
 	}
