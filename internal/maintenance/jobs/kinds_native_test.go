@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds_native_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2745473-88af-4f8a-a81d-54e5e9a3b2d2
 // last-edited: 2026-11-12
 
@@ -290,6 +290,10 @@ func TestJobKinds_MatchHEADWrapper(t *testing.T) {
 		opsregistry.ResumeRestart: tasks.ResumeContinue, opsregistry.ResumeRequeue: tasks.ResumeFromZero,
 		opsregistry.ResumeDrop: tasks.ResumeDrop, opsregistry.ResumeAsk: tasks.ResumeAsk,
 	}
+	checkpoints := map[string]bool{}
+	for id, j := range oracleJobs(t) {
+		checkpoints[id] = j.checkpoints
+	}
 	var readOnly []string
 	for i, job := range all {
 		id := "maintenance." + job.ID()
@@ -301,7 +305,13 @@ func TestJobKinds_MatchHEADWrapper(t *testing.T) {
 		assert.Equal(t, tasks.Kind("books."+id), d.Kind(), id)
 		assert.Equal(t, head.DisplayName, c.Title, id)
 		assert.Equal(t, head.Description, c.Help, id)
-		assert.Equal(t, resume[head.ResumePolicy], c.Resume, "%s: resume", id)
+		wantResume := resume[head.ResumePolicy]
+		if head.ResumePolicy == opsregistry.ResumeRestart && !checkpoints[job.ID()] {
+			// HEAD re-enters a restarted job that never checkpoints from the
+			// top; that is ResumeFromZero, not "restore a checkpoint".
+			wantResume = tasks.ResumeFromZero
+		}
+		assert.Equal(t, wantResume, c.Resume, "%s: resume", id)
 		assert.Equal(t, head.Timeout, c.Timeout, "%s: timeout", id)
 		assert.Equal(t, tasks.PriorityNormal, c.Priority, "%s: HEAD's priority is Normal", id)
 		assert.Equal(t, []tasks.ReadySignal{"books.memdb"}, c.Ready, "%s: HEAD waits for warmup", id)

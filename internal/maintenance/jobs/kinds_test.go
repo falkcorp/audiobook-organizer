@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 95f5ec58-0c87-4403-b2aa-b306523e06bd
 // last-edited: 2026-11-12
 
@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
 )
@@ -286,8 +287,12 @@ func TestJobKinds_StoreFromRCWriter(t *testing.T) {
 			if id := maintenance.OperationIDFromCtx(job.ctx); id != string(rc.RunID()) {
 				t.Errorf("job ctx operation ID = %q, want the run ID %q", id, rc.RunID())
 			}
-			if raw := maintenance.RawParamsFromCtx(job.ctx); string(raw) != params {
-				t.Errorf("job ctx params = %s, want %s", raw, params)
+			wantParams := params
+			if declaresApplyKey(real) { // the shell sets the job's apply switch from the live mode
+				wantParams = `{"apply":true,"path_prefix":"/Gotham"}`
+			}
+			if raw := maintenance.RawParamsFromCtx(job.ctx); string(raw) != wantParams {
+				t.Errorf("job ctx params = %s, want %s", raw, wantParams)
 			}
 			if ck := checkpointerFrom(job.ctx); ck == nil {
 				t.Error("job ctx carries no checkpointer")
@@ -335,7 +340,7 @@ func TestKindShell_ResultAndErrors(t *testing.T) {
 	boom := errors.New("alfred is out of tea")
 	var h *kindHost
 	failing := &probeJob{MaintenanceJob: realJob(t, "scan-chapter-groups"), body: func(ctx context.Context, _ maintenance.ProgressReporter) error {
-		_ = maintenance.SetResult(ctx, "partial")
+		_ = maintenance.SetResult(ctx, "gotham-ledger-"+strings.Repeat("x", 1<<20))
 		return boom
 	}}
 	fdef := kindFor(failing, d.deps(), nil)
@@ -348,8 +353,11 @@ func TestKindShell_ResultAndErrors(t *testing.T) {
 	h.mu.Lock()
 	logs := slices.Clone(h.logs)
 	h.mu.Unlock()
-	if len(logs) != 1 || !strings.Contains(logs[0], "partial") || !strings.Contains(logs[0], "WARN") {
-		t.Errorf("a failed run's partial result was not kept in the run log: %q", logs)
+	if len(logs) != 1 || !strings.HasPrefix(logs[0], "WARN") || !strings.Contains(logs[0], "result_bytes=1048592") {
+		t.Errorf("a failed run's dropped result is not recorded by size in the run log: %q", logs)
+	}
+	if len(logs) == 1 && (strings.Contains(logs[0], "gotham-ledger") || len(logs[0]) > 300) {
+		t.Errorf("the failed-run log line carries the payload or is unbounded (%d bytes)", len(logs[0]))
 	}
 	_, err = run(func(context.Context, maintenance.ProgressReporter) error {
 		return fmt.Errorf("backfill-file-hashes: %w", maintenance.ErrContinueInPlace)
@@ -524,8 +532,15 @@ func TestKindShell_EffectsTable(t *testing.T) {
 
 func TestKindShell_ResumeMapping(t *testing.T) {
 	for id, want := range map[string]tasks.ResumePolicy{
-		"backfill-file-hashes": tasks.ResumeContinue, // HEAD ResumeRestart
-		"dedup-books":          tasks.ResumeDrop,     // HEAD ResumeDrop
+		"backfill-file-hashes":      tasks.ResumeContinue, // HEAD ResumeRestart, and it checkpoints
+		"recompute-book-aggregates": tasks.ResumeContinue, // HEAD ResumeRestart, and it checkpoints
+		// HEAD ResumeRestart, no checkpoint: re-entered from the top, i.e. from zero.
+		"bulk-deluge-import":      tasks.ResumeFromZero,
+		"cleanup-empty-folders":   tasks.ResumeFromZero,
+		"refetch-missing-authors": tasks.ResumeFromZero,
+		"retention-and-hygiene":   tasks.ResumeFromZero,
+		"scan-composer-tags":      tasks.ResumeFromZero,
+		"dedup-books":             tasks.ResumeDrop, // HEAD ResumeDrop
 	} {
 		if got := tasks.CommonOf(kindFor(realJob(t, id), KindDeps{}, nil)).Resume; got != want {
 			t.Errorf("%s resume = %v, want %v", id, got, want)
@@ -533,5 +548,93 @@ func TestKindShell_ResumeMapping(t *testing.T) {
 	}
 	if got := resumeFor(0); got != 0 {
 		t.Errorf("an unspecified policy mapped to %v, want it left zero for registration to refuse", got)
+	}
+	// An explicit requeue and ask keep their own meaning, checkpoint or not.
+	if got := resumeForJob("dedup-books", opsregistry.ResumeRequeue); got != tasks.ResumeFromZero {
+		t.Errorf("requeue = %v, want from zero", got)
+	}
+	if got := resumeForJob("dedup-books", opsregistry.ResumeAsk); got != tasks.ResumeAsk {
+		t.Errorf("ask = %v, want ask", got)
+	}
+}
+
+// TestKindShell_ApplyDerivedFromMode: repoint-version-primary declares an
+// apply switch beside dry_run. Native, the run's mode is the one switch: a live
+// run applies, a preview does not, and a supplied apply key is refused in any
+// spelling. Other jobs' params are passed through untouched.
+func TestKindShell_ApplyDerivedFromMode(t *testing.T) {
+	d := &depsProbe{ret: &probeStore{}}
+	repoint := &probeJob{MaintenanceJob: realJob(t, "repoint-version-primary")}
+	rk := kindFor(repoint, d.deps(), nil)
+	seen := func() string { return string(maintenance.RawParamsFromCtx(repoint.ctx)) }
+
+	for _, c := range []struct {
+		mode   tasks.Mode
+		params string
+		want   string
+	}{
+		{tasks.ModeLive, "", `{"apply":true}`},
+		{tasks.ModeLive, `{"min_files":3}`, `{"apply":true,"min_files":3}`},
+		{tasks.ModePreview, "", `{"apply":false}`},
+		{tasks.ModePreview, `null`, `{"apply":false}`},
+	} {
+		repoint.calls = 0
+		_, rc := newKindRC(rk.Kind(), c.mode, &fakeWriter{})
+		if _, err := runKind(t, rk, rc, c.params); err != nil {
+			t.Fatalf("mode %v params %q: %v", c.mode, c.params, err)
+		}
+		if repoint.calls != 1 || seen() != c.want || repoint.dryRun != (c.mode != tasks.ModeLive) {
+			t.Errorf("mode %v params %q: calls=%d params seen %s dryRun=%v, want %s", c.mode, c.params, repoint.calls, seen(), repoint.dryRun, c.want)
+		}
+	}
+	for _, params := range []string{`{"apply":true}`, `{"apply":false}`, `{"Apply":true}`, `{"APPLY":false,"min_files":2}`} {
+		repoint.calls = 0
+		_, rc := newKindRC(rk.Kind(), tasks.ModeLive, &fakeWriter{})
+		_, err := runKind(t, rk, rc, params)
+		if err == nil || !strings.Contains(err.Error(), "mode comes from the start request") {
+			t.Errorf("params %s: err = %v, want the mode-key refusal", params, err)
+		}
+		if repoint.calls != 0 {
+			t.Errorf("params %s: the job ran despite the refusal", params)
+		}
+	}
+
+	other := &probeJob{MaintenanceJob: realJob(t, "dedup-books")}
+	ok := kindFor(other, d.deps(), nil)
+	_, rc := newKindRC(ok.Kind(), tasks.ModeLive, &fakeWriter{})
+	if _, err := runKind(t, ok, rc, `{"apply":true}`); err != nil {
+		t.Fatalf("a job with no apply switch refused an apply key: %v", err)
+	}
+	if got := string(maintenance.RawParamsFromCtx(other.ctx)); got != `{"apply":true}` {
+		t.Errorf("a job with no apply switch saw params %s, want them untouched", got)
+	}
+}
+
+// TestKindShell_ParamsValidatorRunsBeforeTheStore: HEAD's dispatcher calls a
+// job's ParamsValidator before it queues a run, and core has no such hook, so
+// the shell calls it first thing. merge-chapter-groups refuses a live run with
+// no reviewed group list; the job must not even be handed a store.
+func TestKindShell_ParamsValidatorRunsBeforeTheStore(t *testing.T) {
+	d := &depsProbe{ret: &probeStore{}}
+	merge := realJob(t, "merge-chapter-groups")
+	if _, ok := merge.(maintenance.ParamsValidator); !ok {
+		t.Fatal("merge-chapter-groups lost its ParamsValidator; pick another validating job")
+	}
+	def := kindFor(merge, d.deps(), nil)
+
+	_, rc := newKindRC(def.Kind(), tasks.ModeLive, &fakeWriter{})
+	_, err := runKind(t, def, rc, "")
+	if !errors.Is(err, errChapterMergeNoGroups) {
+		t.Fatalf("live run with no groups: err = %v, want errChapterMergeNoGroups", err)
+	}
+	if d.calls != 0 {
+		t.Errorf("NewStore ran %d time(s) before the validator refused the params", d.calls)
+	}
+	_, rc = newKindRC(def.Kind(), tasks.ModeLive, &fakeWriter{})
+	if _, err := runKind(t, def, rc, `{"groups":`); err == nil {
+		t.Error("malformed params reached the job")
+	}
+	if d.calls != 0 {
+		t.Errorf("NewStore ran %d time(s) for malformed params", d.calls)
 	}
 }

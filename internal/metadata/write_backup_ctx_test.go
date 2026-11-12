@@ -1,7 +1,7 @@
 // file: internal/metadata/write_backup_ctx_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8f385b95-1f2d-4e61-9a15-32b784f3abc7
-// last-edited: 2026-10-11
+// last-edited: 2026-11-12
 
 package metadata
 
@@ -42,7 +42,7 @@ func TestWriteSingleTagContext_BackupFollowsContext(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := makeTestAudioExt(t, "m4a", map[string][]string{"COMPOSER": {"Old Value"}})
-			require.NoError(t, WriteSingleTagContext(tc.ctx, path, "COMPOSER", "New Value"))
+			require.NoError(t, WriteSingleTagContextVia(tc.ctx, nil, path, "COMPOSER", "New Value"))
 
 			baks, err := filepath.Glob(path + ".bak-*")
 			require.NoError(t, err)

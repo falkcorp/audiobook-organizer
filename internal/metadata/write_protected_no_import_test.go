@@ -1,7 +1,7 @@
 // file: internal/metadata/write_protected_no_import_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d8b2e41-9c7a-4f63-a0e5-1b3f6c9d2a78
-// last-edited: 2026-09-14
+// last-edited: 2026-11-12
 
 package metadata
 
@@ -53,8 +53,8 @@ func TestPackageWrites_ProtectedPathRefusedNeverImported(t *testing.T) {
 	}
 
 	writes := map[string]func() error{
-		"WriteSingleTag":      func() error { return WriteSingleTag(f, "COMPOSER", "x") },
-		"WriteMetadataToFile": func() error { return WriteMetadataToFile(f, map[string]any{"title": "T"}, fileops.OperationConfig{}) },
+		"WriteSingleTagContextVia": func() error { return WriteSingleTagContextVia(context.Background(), nil, f, "COMPOSER", "x") },
+		"WriteMetadataToFile":      func() error { return WriteMetadataToFile(f, map[string]any{"title": "T"}, fileops.OperationConfig{}) },
 	}
 	for name, write := range writes {
 		if err := write(); !errors.Is(err, tagger.ErrProtectedPathWrite) {

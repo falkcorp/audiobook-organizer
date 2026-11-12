@@ -1,5 +1,5 @@
 // file: internal/metadata/taglib_cgo.go
-// version: 1.11.0
+// version: 1.12.0
 // last-edited: 2026-11-12
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 //
@@ -100,17 +100,12 @@ func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]interfa
 	return nil
 }
 
-// writeSingleTagWithTaglib writes one tag property without touching others.
-// Pass value="" to clear the property.
+// writeSingleTagWithTaglibVia writes one tag property without touching others,
+// recording the new hashes through rec (nil: no recording). Pass value="" to
+// clear the property.
 //
 // If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
 // refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
-func writeSingleTagWithTaglib(ctx context.Context, filePath, tagName, value string) error {
-	return writeSingleTagWithTaglibVia(ctx, bookFileHashStore(), filePath, tagName, value)
-}
-
-// writeSingleTagWithTaglibVia is writeSingleTagWithTaglib recording through rec
-// (nil: no recording) instead of the installed hash store.
 func writeSingleTagWithTaglibVia(ctx context.Context, rec fileops.BookFileHashRecorder, filePath, tagName, value string) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
