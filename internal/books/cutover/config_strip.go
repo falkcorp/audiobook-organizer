@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_strip.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c7391f62-422d-4a79-8fa6-f679c490c72a
 // last-edited: 2026-11-11
 
@@ -37,14 +37,17 @@ import (
 // to be somewhere else. Ten of the fifteen keys are settings HEAD wrote on a
 // save and, through viper (cmd/root.go reads the file --config names, which
 // docs/configuration.md points at the file beside the database), can read back
-// at startup. For every install M2 runs on, the settings blob shadows them, so
-// stripping them loses nothing; an install with no blob is the one in which a
-// file value is HEAD's effective setting, and M2a's Preflight refuses that
-// upgrade (the census) instead of letting this strip delete it. database_path
-// is the one of the ten the census leaves out: M2 never stores it, blob or no
-// blob, and the store being cut over is already open at that path; F3-07 must
-// make sure the boot after this strip still finds the database, because the
-// file's line goes. The other five
+// at startup. For nine of them, on every install M2 runs on, the settings blob
+// shadows the file, so stripping them loses nothing; an install with no blob is
+// the one in which a file value is HEAD's effective setting, and M2a's
+// Preflight refuses that upgrade (the census) instead of letting this strip
+// delete it. database_path is the tenth and the exception: the blob cannot be
+// where HEAD finds it (the database must be open before the blob can be read),
+// and M2 never stores it, so nothing shadows the file's line and the census
+// leaves it out. This strip deletes it all the same, because the store being
+// cut over is already open at that path; F3-07 must make sure the boot after
+// the strip still finds the database, or this strip must keep the key
+// (seams.d/F3-06.md, F3-07 item 6). The other five
 // are the ones HEAD's gap-fill reads (the three secrets, root_dir and
 // enable_ai_parsing) and so the only ones whose value can exist nowhere but
 // the file even with a blob. Each of those five that carries a usable value is
