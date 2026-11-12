@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.239.3
+// version: 1.239.4
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package store
 
@@ -2747,7 +2747,12 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 
 	// Multi-valued path index, same batch as the row (completeness invariant:
 	// pebble_store_atpath_index.go). Every book, trashed or not.
-	if err := batch.Set(bookAtPathKey(book.FilePath, book.ID), []byte{}, nil); err != nil {
+	atPathKey, err := bookAtPathKey(book.FilePath, book.ID)
+	if err != nil {
+		batch.Close()
+		return nil, err
+	}
+	if err := batch.Set(atPathKey, []byte{}, nil); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -3122,7 +3127,12 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 			batch.Close()
 			return nil, err
 		}
-		if err := batch.Delete(bookAtPathKey(oldBook.FilePath, id), nil); err != nil {
+		oldAtPathKey, err := bookAtPathKey(oldBook.FilePath, id)
+		if err != nil {
+			batch.Close()
+			return nil, err
+		}
+		if err := batch.Delete(oldAtPathKey, nil); err != nil {
 			batch.Close()
 			return nil, err
 		}
@@ -3137,7 +3147,12 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// closes that window, but the unconditional Set stays: it is one small
 	// idempotent write, and it self-heals any key lost for any other reason
 	// (a pre-index row, a partial commit) on the book's next write.
-	if err := batch.Set(bookAtPathKey(book.FilePath, id), []byte{}, nil); err != nil {
+	atPathKey, err := bookAtPathKey(book.FilePath, id)
+	if err != nil {
+		batch.Close()
+		return nil, err
+	}
+	if err := batch.Set(atPathKey, []byte{}, nil); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -3825,7 +3840,12 @@ func (p *PebbleStore) deleteBook(id string, opts deleteBookOpts) error {
 			return err
 		}
 	}
-	if err := batch.Delete(bookAtPathKey(book.FilePath, id), nil); err != nil {
+	atPathKey, err := bookAtPathKey(book.FilePath, id)
+	if err != nil {
+		batch.Close()
+		return err
+	}
+	if err := batch.Delete(atPathKey, nil); err != nil {
 		batch.Close()
 		return err
 	}

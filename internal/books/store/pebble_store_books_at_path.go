@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_books_at_path.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: ae16bae9-c3ef-4063-8cbc-7353bb345e55
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package store
 
@@ -107,7 +107,10 @@ func (p *PebbleStore) bookIDsAtPathIndex(path string, includeTrashed bool) ([]st
 		return nil, fmt.Errorf("books at path: %w", err)
 	}
 
-	lower, upper := bookAtPathBounds(path)
+	lower, upper, err := bookAtPathBounds(path)
+	if err != nil {
+		return nil, fmt.Errorf("books at path: %w", err)
+	}
 	var candidates []string
 	err = forEachKeyInRange(snap, lower, upper, func(key, _ []byte) error {
 		rest := key[len(lower):]

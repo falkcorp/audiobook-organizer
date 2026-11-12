@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_opchange_index.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 // The opchange_by_book: secondary index over the operation-change journal. Its
 // sibling opchange_by_list: indexes the user-content rows by the collection or
@@ -181,15 +181,51 @@ func opChangeIndexable(bookID string) bool {
 	return bookID != "" && !strings.Contains(bookID, ":")
 }
 
-// opChangeByBookKey is the index key for the row at primary key primary,
-// filed under bookID. Callers must have checked opChangeIndexable(bookID).
-func opChangeByBookKey(bookID string, primary []byte) []byte {
+// Upper bounds on the operands of an opchange index key, checked before any
+// size arithmetic so an absurd operand is an error, never a huge or wrapped
+// allocation (CodeQL go/allocation-size-overflow).
+//
+// maxOpChangeBookIDLen matches the store's book ids (26-char ULIDs, 36-char
+// UUIDs). maxOpChangeSuffixLen bounds "<operationID>:<changeID>", two ids plus
+// the separator; operation ids are ULIDs or short slugs.
+const (
+	maxOpChangeBookIDLen = 128
+	maxOpChangeSuffixLen = 512
+)
+
+// errOpChangeKeyTooLong is returned when a key operand exceeds its bound.
+var errOpChangeKeyTooLong = errors.New("opchange index key operand too long")
+
+// opChangeKeySuffix returns primary without its family prefix, or an error when
+// primary is shorter than the prefix or the remainder exceeds the bound.
+func opChangeKeySuffix(primary []byte) ([]byte, error) {
+	if len(primary) < len(opChangeKeyPrefix) {
+		return nil, fmt.Errorf("%w: primary key is %d bytes, shorter than its %d-byte prefix", errOpChangeKeyTooLong, len(primary), len(opChangeKeyPrefix))
+	}
 	suffix := primary[len(opChangeKeyPrefix):]
+	if len(suffix) > maxOpChangeSuffixLen {
+		return nil, fmt.Errorf("%w: key suffix is %d bytes, limit %d", errOpChangeKeyTooLong, len(suffix), maxOpChangeSuffixLen)
+	}
+	return suffix, nil
+}
+
+// opChangeByBookKey is the index key for the row at primary key primary,
+// filed under bookID. Callers must have checked opChangeIndexable(bookID). It
+// errors, rather than truncating, when bookID or primary's suffix exceeds its
+// bound.
+func opChangeByBookKey(bookID string, primary []byte) ([]byte, error) {
+	if len(bookID) > maxOpChangeBookIDLen {
+		return nil, fmt.Errorf("%w: book id is %d bytes, limit %d", errOpChangeKeyTooLong, len(bookID), maxOpChangeBookIDLen)
+	}
+	suffix, err := opChangeKeySuffix(primary)
+	if err != nil {
+		return nil, err
+	}
 	k := make([]byte, 0, len(opChangeByBookPrefix)+len(bookID)+1+len(suffix))
 	k = append(k, opChangeByBookPrefix...)
 	k = append(k, bookID...)
 	k = append(k, ':')
-	return append(k, suffix...)
+	return append(k, suffix...), nil
 }
 
 // opChangeByBookBookPrefix is the scan prefix holding bookID's entries. For an
@@ -199,11 +235,14 @@ func opChangeByBookBookPrefix(bookID string) []byte {
 }
 
 // opChangeUndecodableKey is the marker key for the undecodable row at primary.
-func opChangeUndecodableKey(primary []byte) []byte {
-	suffix := primary[len(opChangeKeyPrefix):]
+func opChangeUndecodableKey(primary []byte) ([]byte, error) {
+	suffix, err := opChangeKeySuffix(primary)
+	if err != nil {
+		return nil, err
+	}
 	k := make([]byte, 0, len(opChangeUndecodablePrefix)+len(suffix))
 	k = append(k, opChangeUndecodablePrefix...)
-	return append(k, suffix...)
+	return append(k, suffix...), nil
 }
 
 // stageOpChangeIndex adds the row's index entry to batch. Rows whose book id
@@ -212,7 +251,11 @@ func stageOpChangeIndex(batch *GatedBatch, bookID string, primary []byte) error 
 	if !opChangeIndexable(bookID) {
 		return nil
 	}
-	if err := batch.Set(opChangeByBookKey(bookID, primary), nil, nil); err != nil {
+	key, err := opChangeByBookKey(bookID, primary)
+	if err != nil {
+		return fmt.Errorf("build opchange_by_book entry: %w", err)
+	}
+	if err := batch.Set(key, nil, nil); err != nil {
 		return fmt.Errorf("stage opchange_by_book entry: %w", err)
 	}
 	return nil
@@ -223,7 +266,11 @@ func unstageOpChangeIndex(batch *GatedBatch, bookID string, primary []byte) erro
 	if !opChangeIndexable(bookID) {
 		return nil
 	}
-	if err := batch.Delete(opChangeByBookKey(bookID, primary), nil); err != nil {
+	key, err := opChangeByBookKey(bookID, primary)
+	if err != nil {
+		return fmt.Errorf("build opchange_by_book delete: %w", err)
+	}
+	if err := batch.Delete(key, nil); err != nil {
 		return fmt.Errorf("stage opchange_by_book delete: %w", err)
 	}
 	return nil
@@ -781,13 +828,23 @@ func (p *PebbleStore) opChangeBackfillChunk(lower, upper []byte, chunk int, res 
 		k := iter.Key()
 		var c OperationChange
 		if json.Unmarshal(iter.Value(), &c) != nil {
-			if err := batch.Set(opChangeUndecodableKey(k), nil, nil); err != nil {
+			ukey, err := opChangeUndecodableKey(k)
+			if err != nil {
+				iter.Close()
+				return 0, nil, err
+			}
+			if err := batch.Set(ukey, nil, nil); err != nil {
 				iter.Close()
 				return 0, nil, err
 			}
 			undecodable++
 		} else if opChangeIndexable(c.BookID) {
-			if err := batch.Set(opChangeByBookKey(c.BookID, k), nil, nil); err != nil {
+			ikey, err := opChangeByBookKey(c.BookID, k)
+			if err != nil {
+				iter.Close()
+				return 0, nil, err
+			}
+			if err := batch.Set(ikey, nil, nil); err != nil {
 				iter.Close()
 				return 0, nil, err
 			}

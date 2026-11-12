@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_booksig_migrate.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 6a4e2f18-7d05-4b93-8c61-9f2a0e75d3b8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package store
 
@@ -377,7 +377,11 @@ func (p *PebbleStore) commitBookSigMigration(
 	// accepted lost update). Without this Set that leaves a live book at A with
 	// no A key, which LiveBookIDsAtPath reports as a free path. With it, the
 	// only residue is the B key, an extra the reader drops.
-	if err := batch.Set(bookAtPathKey(filePath, id), []byte{}, nil); err != nil {
+	atPathKey, err := bookAtPathKey(filePath, id)
+	if err != nil {
+		return BookSigMigrateNotCandidate, fmt.Errorf("build book_atpath key %q: %w", id, err)
+	}
+	if err := batch.Set(atPathKey, []byte{}, nil); err != nil {
 		return BookSigMigrateNotCandidate, fmt.Errorf("stage book_atpath key %q: %w", id, err)
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
