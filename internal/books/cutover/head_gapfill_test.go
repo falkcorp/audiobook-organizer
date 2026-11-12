@@ -1,5 +1,5 @@
 // file: internal/books/cutover/head_gapfill_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 28813d37-3158-4d74-b977-a1df6e7d55f9
 // last-edited: 2026-11-11
 
@@ -121,7 +121,21 @@ func TestHeadParseGapFillUnparsableFile(t *testing.T) {
 	}
 }
 
-func TestHeadDropManagedKeysDropsAllFifteenCaseInsensitively(t *testing.T) {
+// dropManagedAndRemoved is HEAD's SaveConfigToFile merge over a decoded
+// config.yaml: every removed key, then every managed key, matched
+// case-insensitively. The strip itself (StripGapFill) drops only the managed
+// keys; this exercises headDeleteConfigKeyFold and the removed-key table
+// against HEAD's own rule.
+func dropManagedAndRemoved(m map[string]any) {
+	for _, rk := range headRemovedKeys {
+		headDeleteConfigKeyFold(m, rk.key)
+	}
+	for _, k := range headManagedFileKeys {
+		headDeleteConfigKeyFold(m, k)
+	}
+}
+
+func TestDropManagedAndRemovedDropsAllFifteenCaseInsensitively(t *testing.T) {
 	m := map[string]any{}
 	for i, k := range headManagedFileKeys {
 		if i%2 == 0 {
@@ -134,13 +148,13 @@ func TestHeadDropManagedKeysDropsAllFifteenCaseInsensitively(t *testing.T) {
 	m["ROOT_DIRS"] = "stays"
 	m["my_own_key"] = "stays"
 	m["log_levels"] = "stays"
-	headDropManagedKeys(m)
+	dropManagedAndRemoved(m)
 	if len(m) != 3 || m["ROOT_DIRS"] != "stays" || m["my_own_key"] != "stays" || m["log_levels"] != "stays" {
 		t.Fatalf("remaining = %v", m)
 	}
 }
 
-func TestHeadDropManagedKeysRemovedKeysAndNested(t *testing.T) {
+func TestDropManagedAndRemovedRemovedKeysAndNested(t *testing.T) {
 	var m map[string]any
 	if err := yaml.Unmarshal([]byte(`
 enable_sqlite: false
@@ -162,7 +176,7 @@ operator_note: keep me
 `), &m); err != nil {
 		t.Fatal(err)
 	}
-	headDropManagedKeys(m)
+	dropManagedAndRemoved(m)
 	if _, ok := m["enable_sqlite"]; ok {
 		t.Error("enable_sqlite kept")
 	}
@@ -192,7 +206,7 @@ operator_note: keep me
 	}
 	// A map left empty by a nested removal is removed too.
 	n := map[string]any{"metadata_scoring": map[string]any{"write_backup_before": true}}
-	headDropManagedKeys(n)
+	dropManagedAndRemoved(n)
 	if len(n) != 0 {
 		t.Fatalf("empty parent kept: %v", n)
 	}

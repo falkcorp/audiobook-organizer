@@ -1,5 +1,5 @@
 # file: internal/books/cutover/testdata/rename_table.golden
-# version: 1.0.0
+# version: 1.1.0
 # guid: 7024f723-334e-4210-95d6-bcd11fc9cd7d
 # last-edited: 2026-11-11
 #
@@ -284,7 +284,7 @@ retired file whisper_max_in_flight -> modules.books.whisper.max_in_flight warn
 retired env WHISPER_MAX_IN_FLIGHT -> modules.books.whisper.max_in_flight warn
 
 ## openai_base_url
-top=true stored=blob class=i blob=openai_base_url admin=false fail-closed=false url=false
+top=true stored=blob class=i blob=openai_base_url admin=false fail-closed=false url=true
 target passthrough integrations.ai.openai.base_url convert=- destination env=ABO_INTEGRATIONS_AI_OPENAI_BASE_URL
 retired file openai_base_url -> integrations.ai.openai.base_url refuse Refuse
 retired env OPENAI_BASE_URL -> integrations.ai.openai.base_url kept
@@ -1378,7 +1378,7 @@ target key modules.books.itunes.libraries.import_source convert=- env=ABO_BOOKS_
 retired env ITUNES.LIBRARIES.IMPORT_SOURCE -> modules.books.itunes.libraries.import_source refuse
 
 ## deluge_web_url
-top=true stored=blob class=i blob=deluge_web_url admin=false fail-closed=false url=false
+top=true stored=blob class=i blob=deluge_web_url admin=false fail-closed=false url=true
 target passthrough integrations.download.deluge.url convert=- destination env=ABO_INTEGRATIONS_DOWNLOAD_DELUGE_URL
 retired file deluge_web_url -> integrations.download.deluge.url refuse Refuse
 retired env DELUGE_WEB_URL -> integrations.download.deluge.url refuse Refuse

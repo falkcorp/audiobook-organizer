@@ -1,5 +1,5 @@
 // file: internal/books/cutover/head_gapfill.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 86ad29a6-334d-4bed-aa94-a282e32106c3
 // last-edited: 2026-11-11
 
@@ -67,18 +67,6 @@ func headParseGapFill(data []byte) (headFileValues, map[string]bool, error) {
 		present["enable_ai_parsing"] = true
 	}
 	return v, present, nil
-}
-
-// headDropManagedKeys removes from m every managed key and every removed key,
-// matching case-insensitively (HEAD's SaveConfigToFile merge: an operator's
-// "ROOT_DIR" does not survive beside the managed "root_dir").
-func headDropManagedKeys(m map[string]any) {
-	for _, rk := range headRemovedKeys {
-		headDeleteConfigKeyFold(m, rk.key)
-	}
-	for _, k := range headManagedFileKeys {
-		headDeleteConfigKeyFold(m, k)
-	}
 }
 
 // headDeleteConfigKeyFold removes key from m, matching every path segment

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/head_blob.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e39cb0ac-723d-4ee7-889c-aea084c9d4e6
 // last-edited: 2026-11-11
 
@@ -91,8 +91,8 @@ func headInMigrationBaseline(c string) bool {
 // headAIEndpointsSeed carries what the ai_endpoints migration needs beyond
 // the blob itself (HEAD: aiEndpointsSeed). HEAD's Base field, the live
 // Snapshot the blob is unmarshalled onto, is gone: environment and config
-// file are not inputs of the cutover read, so the base is always the zero
-// headConfig and the migration starts from &headConfig{}. The two Env
+// file are not inputs of the cutover read, so the base is always HEAD's
+// defaults (headDefaultConfig) and the migration starts from them. The two Env
 // fields are likewise never set by headDecodeBlob (nil), because they come
 // from the environment; they stay so the migration body is HEAD's.
 type headAIEndpointsSeed struct {
@@ -364,7 +364,9 @@ func headMigrateAIEndpointsBlob(blob string, seed headAIEndpointsSeed) (string, 
 		return blob, false
 	}
 
-	cfg := &headConfig{}
+	// HEAD unmarshals the blob onto the live config, which holds the viper
+	// defaults at boot (aiEndpointsSeed.Base); the base here is those defaults.
+	cfg, _ := headDefaultConfig()
 	if err := json.Unmarshal([]byte(blob), cfg); err != nil {
 		return blob, false
 	}

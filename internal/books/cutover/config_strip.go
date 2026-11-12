@@ -1,20 +1,27 @@
 // file: internal/books/cutover/config_strip.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c7391f62-422d-4a79-8fa6-f679c490c72a
 // last-edited: 2026-11-11
 
 package cutover
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
@@ -24,26 +31,66 @@ import (
 // so the file no longer holds a stale copy of a secret M2a moved or a value
 // R2 no longer reads. It runs on every boot until the file is clean, and is
 // idempotent: a file with none of the keys is left alone, and one whose keys
-// are all managed is deleted. Every other key stays; the new file is written
-// beside the old one, synced, renamed over it and the directory synced, mode
-// 0600, so a crash leaves the old file or the new one, never a partial one.
+// are all managed is deleted. Every other key stays.
+//
+// A strip is one-way, so it deletes a copy only after the original is shown
+// to be somewhere else. Ten of the fifteen keys are values HEAD wrote and
+// never read back from the file; the other five are the ones HEAD's gap-fill
+// reads (the three secrets, root_dir and enable_ai_parsing) and so the only
+// ones whose value can exist nowhere but the file. Each of those five that
+// carries a usable value is stripped only when its destination already holds
+// a value (or, for a secret, an unreadable marker): M2a's import, or a value
+// the name held before. One whose destination holds nothing stays in the file
+// and is reported by name (StripReport.Kept); the strip never imports, because
+// it has no batch to import into and cannot quarantine, which only a
+// migration chunk can. M2a is what imports a gap-fill value, and its
+// Preflight refuses an upgrade in which no chunk would run.
+//
+// The write is HEAD's writeFileAtomic: a symlink is followed and its target
+// replaced, the file keeps its mode and (where the process may) its owner, the
+// new file is written beside the old one, synced, renamed over it and the
+// directory synced, and a directory the process cannot write falls back to an
+// in-place write (not atomic, and reported). A temp file an interrupted strip
+// left is removed by the next run.
 //
 // It is not a data step: it touches a file, not the store, so the
 // migration runner never sees it. F3-07 calls StripGapFill once
 // ConfigCutoverDone says M2a committed (the gap-fill values it reads live
 // in the file M2a is still reading until then), at every boot, and lists it
-// in the boot-writer table.
+// in the boot-writer table. A strip that fails or refuses is not fatal to the
+// boot; F3-07 raises a health warning from the error or the report's Kept and
+// InPlace.
 
 // FileOps is the filesystem calls StripGapFill and the config.yaml read
 // make, so a test can fail each one in turn.
 type FileOps interface {
 	ReadFile(path string) ([]byte, error)
+	// Resolve returns the file a write to path replaces: path itself, or the
+	// target of a symlink there. A symlink whose target cannot be resolved is
+	// an error.
+	Resolve(path string) (string, error)
+	// Stat returns the mode and owner of the file at path; ok is false when
+	// there is none.
+	Stat(path string) (meta FileMeta, ok bool, err error)
 	// WriteTempFile creates a new file in dir named by pattern (os.CreateTemp's
-	// rules), writes data, syncs it, closes it with mode, and returns its path.
-	WriteTempFile(dir, pattern string, data []byte, mode fs.FileMode) (string, error)
+	// rules), writes data, syncs it, gives it meta's mode and, where the
+	// process may, owner, closes it, and returns its path.
+	WriteTempFile(dir, pattern string, data []byte, meta FileMeta) (string, error)
+	// WriteInPlace truncates and rewrites the existing file at path, keeping
+	// its inode, mode and owner. It is not atomic.
+	WriteInPlace(path string, data []byte) error
 	Rename(oldpath, newpath string) error
 	Remove(path string) error
 	SyncDir(dir string) error
+	// ReadDir lists the names in dir.
+	ReadDir(dir string) ([]string, error)
+}
+
+// FileMeta is an existing file's mode and owner.
+type FileMeta struct {
+	Mode     fs.FileMode
+	UID, GID int
+	HasOwner bool
 }
 
 // osFiles is the OS filesystem.
@@ -51,7 +98,28 @@ type osFiles struct{}
 
 func (osFiles) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
-func (osFiles) WriteTempFile(dir, pattern string, data []byte, mode fs.FileMode) (string, error) {
+func (osFiles) Resolve(path string) (string, error) {
+	li, err := os.Lstat(path)
+	if err != nil || li.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	return filepath.EvalSymlinks(path)
+}
+
+func (osFiles) Stat(path string) (FileMeta, bool, error) {
+	info, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return FileMeta{}, false, nil
+	case err != nil:
+		return FileMeta{}, false, err
+	}
+	m := FileMeta{Mode: info.Mode().Perm()}
+	m.UID, m.GID, m.HasOwner = fileOwner(info)
+	return m, true, nil
+}
+
+func (osFiles) WriteTempFile(dir, pattern string, data []byte, meta FileMeta) (string, error) {
 	f, err := os.CreateTemp(dir, pattern)
 	if err != nil {
 		return "", err
@@ -63,16 +131,31 @@ func (osFiles) WriteTempFile(dir, pattern string, data []byte, mode fs.FileMode)
 	if _, err := f.Write(data); err != nil {
 		return fail(err)
 	}
-	if err := f.Chmod(mode); err != nil {
-		return fail(err)
-	}
 	if err := f.Sync(); err != nil {
 		return fail(err)
+	}
+	if err := f.Chmod(meta.Mode); err != nil {
+		return fail(err)
+	}
+	if meta.HasOwner {
+		keepOwner(f, meta.UID, meta.GID)
 	}
 	if err := f.Close(); err != nil {
 		return "", errors.Join(err, os.Remove(name))
 	}
 	return name, nil
+}
+
+func (osFiles) WriteInPlace(path string, data []byte) (err error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 func (osFiles) Rename(oldpath, newpath string) error { return os.Rename(oldpath, newpath) }
@@ -87,68 +170,267 @@ func (osFiles) SyncDir(dir string) error {
 	return errors.Join(d.Sync(), d.Close())
 }
 
+func (osFiles) ReadDir(dir string) ([]string, error) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(ents))
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	return names, nil
+}
+
+// keepOwner gives the temp file the original's owner and group so the rename
+// does not change who owns config.yaml. It is skipped when they already match
+// and when the process is not permitted (a non-root process cannot chown to
+// another user), which is expected (HEAD: keepOwner).
+func keepOwner(f *os.File, uid, gid int) {
+	info, err := f.Stat()
+	if err != nil {
+		return
+	}
+	if curUID, curGID, ok := fileOwner(info); ok && curUID == uid && curGID == gid {
+		return
+	}
+	_ = f.Chown(uid, gid)
+}
+
 // StripResult is what StripGapFill did.
 type StripResult string
 
 const (
 	StripAbsent     StripResult = "absent"     // there is no file
-	StripClean      StripResult = "clean"      // the file holds none of the keys
-	StripStripped   StripResult = "stripped"   // the keys were removed, the file rewritten
+	StripClean      StripResult = "clean"      // the file holds none of the keys it may strip
+	StripStripped   StripResult = "stripped"   // keys were removed, the file rewritten
 	StripDeleted    StripResult = "deleted"    // the keys were all it held, the file was removed
 	StripUnparsable StripResult = "unparsable" // not YAML: HEAD ignored it too, and it is left alone
 )
 
-// StripGapFill strips the fifteen managed keys from the file at path. An
-// error means the strip did not finish and the file is as it was (or, after
-// the rename, already stripped): run it again. It never writes the file
-// when nothing is to be stripped, and never reads or reports a value.
-func StripGapFill(files FileOps, path string) (StripResult, error) {
+// StripReport is what one StripGapFill did and left. It carries names, never
+// values.
+type StripReport struct {
+	Result StripResult
+	// Kept names the gap-fill keys left in the file because their destination
+	// holds no value: the file's copy is the only one. Sorted.
+	Kept []string
+	// InPlace is true when the directory could not be written and the file
+	// was rewritten in place (not atomic).
+	InPlace bool
+	// TempsRemoved counts temp files an interrupted strip had left.
+	TempsRemoved int
+}
+
+// GapFillHolder reports whether the destination of one gap-fill key (a name
+// from headGapFillKeys) already holds what the file would have supplied: a
+// secret's name holds a value or an unreadable marker, root_dir is in books'
+// settings blob or core.library.roots lists a root, enable_ai_parsing's key
+// is effectively true. NewGapFillHolder builds it from core's stores.
+type GapFillHolder func(ctx context.Context, key string) (held bool, err error)
+
+// headGapFillKeys are the five managed keys HEAD's gap-fill reads, in the
+// order headParseGapFill reads them: the keys whose value can be only in the
+// file.
+var headGapFillKeys = []string{"openai_api_key", "google_books_api_key", "hardcover_api_token", "root_dir", "enable_ai_parsing"}
+
+// SecretMeta is the part of core's secrets store the holder reads
+// (*secrets.Store).
+type SecretMeta interface {
+	Meta(ctx context.Context, n secrets.Name) (secrets.Meta, error)
+}
+
+// NewGapFillHolder is the holder over core's stores: sec for the three
+// secrets, legacy (books' legacy range) for root_dir while the settings blob
+// still holds it, and effective for the config keys: the key's effective JSON
+// value, its stored override or else its default. enable_ai_parsing is held
+// when that is true and core.library.roots when it lists a root. It is the
+// effective value, not "an override is stored", because the importer skips a
+// value equal to its default (C4): HEAD's default for enable_ai_parsing is
+// true, so a file's "true" is imported as no row at all, and testing for a row
+// would keep that line in the file, and its retired-name warning, forever.
+func NewGapFillHolder(sec SecretMeta, legacy storage.Reader, effective func(ctx context.Context, p config.Path) (json.RawMessage, error)) GapFillHolder {
+	return func(ctx context.Context, key string) (bool, error) {
+		row, ok := Table().Row(key)
+		if !ok || len(row.Targets) == 0 {
+			return false, fmt.Errorf("%w: %s is not a gap-fill key", errConfigStep, key)
+		}
+		path := row.Targets[0].Path
+		switch key {
+		case "openai_api_key", "google_books_api_key", "hardcover_api_token":
+			m, err := sec.Meta(ctx, secrets.Name(path))
+			if err != nil {
+				return false, fmt.Errorf("%w: read %s: %v", errConfigStep, path, errClass(err))
+			}
+			return m.Set, nil
+		case "root_dir":
+			if legacy != nil {
+				raw, err := get(ctx, legacy, blobKey())
+				if err != nil {
+					return false, fmt.Errorf("%w: read the settings blob: %v", errConfigStep, errClass(err))
+				}
+				if root := blobRootDir(raw); root != "" {
+					return true, nil
+				}
+			}
+			// root_dir's target is an entry of a list-valued key: Path describes the
+			// entry, List is the key.
+			list := row.Targets[0].List
+			v, err := effective(ctx, config.Path(list))
+			if err != nil {
+				return false, fmt.Errorf("%w: read %s: %v", errConfigStep, list, errClass(err))
+			}
+			var roots []json.RawMessage
+			return json.Unmarshal(v, &roots) == nil && len(roots) > 0, nil
+		default:
+			v, err := effective(ctx, config.Path(path))
+			if err != nil {
+				return false, fmt.Errorf("%w: read %s: %v", errConfigStep, path, errClass(err))
+			}
+			var on bool
+			return json.Unmarshal(v, &on) == nil && on, nil
+		}
+	}
+}
+
+// blobRootDir reads root_dir from a stored blob row without HEAD's transforms.
+func blobRootDir(blob []byte) string {
+	if blob == nil {
+		return ""
+	}
+	return peekRootDir(blob, "")
+}
+
+// errMultiDocument is a config.yaml with more than one YAML document.
+var errMultiDocument = fmt.Errorf("%w: config.yaml holds more than one YAML document; HEAD reads only the first, and a rewrite would drop the rest, so its managed keys were not stripped: merge the documents into one", errConfigStep)
+
+// StripGapFill strips the managed keys from the file at path, except a
+// gap-fill key whose destination holds nothing (holder; a nil holder keeps
+// every gap-fill key). An error means the strip did not finish and the file is
+// as it was (or, after the rename, already stripped): run it again. It never
+// writes the file when nothing is to be stripped, and never reads or reports a
+// value.
+func StripGapFill(ctx context.Context, files FileOps, path string, holder GapFillHolder) (StripReport, error) {
 	if files == nil {
 		files = osFiles{}
 	}
 	data, err := files.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return StripAbsent, nil
+		return StripReport{Result: StripAbsent}, nil
 	case err != nil:
-		return "", fmt.Errorf("%w: read config.yaml: %v", errConfigStep, errClassFile(err))
+		return StripReport{}, fmt.Errorf("%w: read config.yaml: %v", errConfigStep, errClassFile(err))
 	}
+	target, err := files.Resolve(path)
+	if err != nil {
+		return StripReport{}, fmt.Errorf("%w: config.yaml is a symlink whose target cannot be resolved; left unchanged: %v", errConfigStep, errClassFile(err))
+	}
+	rep := StripReport{}
+	dir := filepath.Dir(target)
+	tempPrefix := "." + filepath.Base(target) + ".strip-"
+	// A temp file an interrupted strip left holds what was about to replace
+	// the file (the file less its managed keys): never a secret, but clutter.
+	names, err := files.ReadDir(dir)
+	if err != nil {
+		return StripReport{}, fmt.Errorf("%w: list the config.yaml directory: %v", errConfigStep, errClassFile(err))
+	}
+	for _, n := range names {
+		if strings.HasPrefix(n, tempPrefix) {
+			if err := files.Remove(filepath.Join(dir, n)); err != nil {
+				return StripReport{}, fmt.Errorf("%w: remove a temp file a strip left: %v", errConfigStep, errClassFile(err))
+			}
+			rep.TempsRemoved++
+		}
+	}
+
 	var m map[string]any
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return StripUnparsable, nil
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&m); err != nil && !errors.Is(err, io.EOF) {
+		rep.Result = StripUnparsable
+		return rep, nil
 	}
+	var next yaml.Node
+	if err := dec.Decode(&next); !errors.Is(err, io.EOF) {
+		return rep, errMultiDocument
+	}
+
+	// A gap-fill key HEAD would read a value from is kept unless its
+	// destination holds one.
+	_, present, _ := headParseGapFill(data)
+	var keep []string
+	for _, k := range headGapFillKeys {
+		if !present[k] {
+			continue
+		}
+		held := false
+		if holder != nil {
+			if held, err = holder(ctx, k); err != nil {
+				return StripReport{}, err
+			}
+		}
+		if !held {
+			keep = append(keep, k)
+		}
+	}
+	slices.Sort(keep)
+	rep.Kept = keep
+
 	before := len(flatKeys(m))
 	for _, k := range headManagedFileKeys {
+		if slices.Contains(keep, k) {
+			continue
+		}
 		headDeleteConfigKeyFold(m, k)
 	}
 	if len(flatKeys(m)) == before {
-		return StripClean, nil
+		rep.Result = StripClean
+		return rep, nil
 	}
-	dir := filepath.Dir(path)
-	if len(m) == 0 {
+
+	symlinked := target != path
+	if len(m) == 0 && !symlinked {
 		if err := files.Remove(path); err != nil {
-			return "", fmt.Errorf("%w: remove config.yaml: %v", errConfigStep, errClassFile(err))
+			return StripReport{}, fmt.Errorf("%w: remove config.yaml: %v", errConfigStep, errClassFile(err))
 		}
 		if err := files.SyncDir(dir); err != nil {
-			return "", fmt.Errorf("%w: sync the config.yaml directory: %v", errConfigStep, errClassFile(err))
+			return StripReport{}, fmt.Errorf("%w: sync the config.yaml directory: %v", errConfigStep, errClassFile(err))
 		}
-		return StripDeleted, nil
+		rep.Result = StripDeleted
+		return rep, nil
 	}
+	// A symlink that would end up empty is rewritten as an empty document, not
+	// removed: removing its target would leave the link dangling.
 	out, err := yaml.Marshal(m)
 	if err != nil {
-		return "", fmt.Errorf("%w: marshal config.yaml", errConfigStep)
+		return StripReport{}, fmt.Errorf("%w: marshal config.yaml", errConfigStep)
 	}
-	tmp, err := files.WriteTempFile(dir, ".config.yaml.strip-*", out, 0o600)
+	meta, exists, err := files.Stat(target)
 	if err != nil {
-		return "", fmt.Errorf("%w: write the stripped config.yaml: %v", errConfigStep, errClassFile(err))
+		return StripReport{}, fmt.Errorf("%w: stat config.yaml: %v", errConfigStep, errClassFile(err))
 	}
-	if err := files.Rename(tmp, path); err != nil {
-		return "", errors.Join(fmt.Errorf("%w: rename the stripped config.yaml: %v", errConfigStep, errClassFile(err)), files.Remove(tmp))
+	if !exists {
+		meta = FileMeta{Mode: 0o600}
+	}
+	tmp, err := files.WriteTempFile(dir, tempPrefix+"*", out, meta)
+	switch {
+	case err == nil:
+	case exists && errors.Is(err, fs.ErrPermission):
+		if err := files.WriteInPlace(target, out); err != nil {
+			return StripReport{}, fmt.Errorf("%w: write the stripped config.yaml in place: %v", errConfigStep, errClassFile(err))
+		}
+		rep.Result, rep.InPlace = StripStripped, true
+		return rep, nil
+	default:
+		return StripReport{}, fmt.Errorf("%w: write the stripped config.yaml: %v", errConfigStep, errClassFile(err))
+	}
+	if err := files.Rename(tmp, target); err != nil {
+		return StripReport{}, errors.Join(fmt.Errorf("%w: rename the stripped config.yaml: %v", errConfigStep, errClassFile(err)), files.Remove(tmp))
 	}
 	if err := files.SyncDir(dir); err != nil {
-		return "", fmt.Errorf("%w: sync the config.yaml directory: %v", errConfigStep, errClassFile(err))
+		return StripReport{}, fmt.Errorf("%w: sync the config.yaml directory: %v", errConfigStep, errClassFile(err))
 	}
-	return StripStripped, nil
+	rep.Result = StripStripped
+	return rep, nil
 }
 
 // flatKeys counts the keys of a nested map (every key at every depth), so a
@@ -176,6 +458,8 @@ func errClassFile(err error) string {
 		return "permission denied"
 	case errors.Is(err, fs.ErrExist):
 		return "already exists"
+	case errors.Is(err, fs.ErrNotExist):
+		return "does not exist"
 	}
 	return "file operation failed"
 }

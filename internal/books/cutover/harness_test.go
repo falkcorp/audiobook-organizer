@@ -1,5 +1,5 @@
 // file: internal/books/cutover/harness_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6d7b3a-71c4-4a7c-b6a3-1e4f2b9c0d05
 // last-edited: 2026-11-11
 
@@ -381,8 +381,11 @@ type rig struct {
 	srcDB    string // the corpus's db/ directory
 	stateDir string // a copy of the corpus's state directory: HEAD's key, then core's keyring
 	confFile string // a copy of the corpus's config.yaml ("" when it has none)
-	h        *handles
-	logs     *lockedBuffer
+	// databasePath is ConfigStepOptions.DatabasePath: HEAD's database path,
+	// whose directory is the second place its key is searched ("" = unset).
+	databasePath string
+	h            *handles
+	logs         *lockedBuffer
 
 	chunkItems int
 	refuse     map[string]error
@@ -505,6 +508,7 @@ func (r *rig) migration() datamigrate.DataMigration {
 	opts := ConfigStepOptions{
 		LevelStepVersion: r.levelVersion(),
 		StateDir:         r.stateDir,
+		DatabasePath:     r.databasePath,
 		ConfigFile:       r.confFile,
 		Legacy:           func() storage.Reader { _, _, l := r.h.get(); return l },
 		AllowKeyRegen:    func() bool { return r.allowRegen },

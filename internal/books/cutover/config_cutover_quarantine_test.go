@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_cutover_quarantine_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6b1d7e24-9c53-4a08-8f6e-2d4a7c91b350
 // last-edited: 2026-11-11
 
@@ -25,7 +25,7 @@ import (
 func reasonConstants() []string {
 	return []string{reasonUnmapped, reasonRefusedUnknown, reasonRefusedStore, reasonRefusedValue, reasonNotConvertible,
 		reasonUnreadableRow, reasonSecretConflict, reasonSecretName, reasonOAuthDisabled, reasonOperatorSecret,
-		reasonWebhookNoURL, reasonPluginName}
+		reasonWebhookNoURL, reasonPluginName, reasonURLUnproven, reasonOAuthNoProvider}
 }
 
 // checkQuarantined asserts what every quarantine record must satisfy: sealed,

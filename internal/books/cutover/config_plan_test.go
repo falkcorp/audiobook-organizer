@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_plan_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5a1c730-8b42-4d19-a6f3-0d97b2c48e15
 // last-edited: 2026-11-11
 
@@ -212,4 +212,203 @@ func TestConfigPlan_NoPlaceToGoIsQuarantined(t *testing.T) {
 		t.Error("the operator-only secret is still in the blob")
 	}
 	checkQuarantined(t, r, snap)
+}
+
+// TestConfigPlan_OIDCFoldLeftovers: the default role and the allowed emails
+// ride on the provider entries (05-authn). When no entry is built, whether
+// sign-in is off or no client id was ever set, they have nothing to ride on
+// and are quarantined sealed instead of dropped (the review's probe
+// TestProbeOIDCFoldDrops). The role HEAD's blob always carries ("viewer") is a
+// default and is not information to keep.
+func TestConfigPlan_OIDCFoldLeftovers(t *testing.T) {
+	const (
+		role   = "role-Nightwing-0601"
+		emails = "robin-0602@batcave.example"
+	)
+	setup := func(enabled bool, withIDs bool, defaultRole string) func(*rig) {
+		return mutateBlob(func(tree map[string]any) {
+			tree["oauth_enabled"] = enabled
+			tree["oauth_default_role"] = defaultRole
+			tree["oauth_allowed_emails"] = emails
+			if defaultRole == "viewer" {
+				tree["oauth_allowed_emails"] = ""
+			}
+			if withIDs {
+				tree["oauth_github_client_id"] = "robin-github-client"
+				tree["oauth_github_client_secret"] = fxGitHub
+				tree["oauth_google_client_id"] = "batgirl-google-client"
+				tree["oauth_google_client_secret"] = fxGoogleO
+			} else {
+				tree["oauth_github_client_id"] = ""
+				tree["oauth_google_client_id"] = ""
+			}
+		})
+	}
+	roleKey, emailsKey := "setting:config_blob#oauth_default_role", "setting:config_blob#oauth_allowed_emails"
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		ids     bool
+		reason  string
+	}{
+		{"disabled with client ids", false, true, reasonOAuthDisabled},
+		{"disabled, no client ids", false, false, reasonOAuthDisabled},
+		{"enabled, no client ids", true, false, reasonOAuthNoProvider},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t, "stage1", setup(tc.enabled, tc.ids, role))
+			snap, err := r.run(t)
+			if err != nil {
+				t.Fatalf("M2: %v", err)
+			}
+			if _, ok := stagedValue(snap, "core.auth.oidc.providers"); ok {
+				t.Error("provider entries were staged with no client id (or with sign-in off)")
+			}
+			for key, want := range map[string]string{roleKey: role, emailsKey: emails} {
+				q, ok := quarantineFor(snap, key)
+				if !ok || q.Reason != tc.reason || !q.Sealed {
+					t.Errorf("%s: quarantined %v, reason %q, sealed %v; want reason %q sealed", key, ok, q.Reason, q.Sealed, tc.reason)
+					continue
+				}
+				if strings.Trim(q.Value, `"`) != want {
+					t.Errorf("%s: the value is not recoverable from the quarantine", key)
+				}
+			}
+			checkQuarantined(t, r, snap)
+		})
+	}
+
+	t.Run("disabled: the client id's record names the secret it belongs with", func(t *testing.T) {
+		snap, err := newRig(t, "stage1", setup(false, true, role)).run(t)
+		if err != nil {
+			t.Fatalf("M2: %v", err)
+		}
+		for id, want := range map[string]struct{ clientID, secret string }{
+			"github": {"robin-github-client", "core.auth.oidc.github.client_secret"},
+			"google": {"batgirl-google-client", "core.auth.oidc.google.client_secret"},
+		} {
+			q, ok := quarantineFor(snap, "setting:config_blob#oauth_"+id+"_client_id")
+			if !ok {
+				t.Fatalf("%s: not quarantined: %+v", id, snap.Quarantine)
+			}
+			var pair map[string]string
+			if err := json.Unmarshal([]byte(q.Value), &pair); err != nil {
+				t.Fatalf("%s: the record is not a client_id/secret-name pair: %q", id, q.Value)
+			}
+			if pair["client_id"] != want.clientID || pair["client_secret_name"] != want.secret {
+				t.Errorf("%s: record = %v, want client_id %q and client_secret_name %q", id, pair, want.clientID, want.secret)
+			}
+			if strings.Contains(q.Value, fxGitHub) || strings.Contains(q.Value, fxGoogleO) {
+				t.Errorf("%s: the record holds a client secret", id)
+			}
+		}
+	})
+
+	t.Run("disabled with no client secret set: the record has no secret name", func(t *testing.T) {
+		r := newRig(t, "stage1", mutateBlob(func(tree map[string]any) {
+			tree["oauth_enabled"] = false
+			tree["oauth_github_client_id"] = "robin-github-client"
+			tree["oauth_github_client_secret"] = ""
+		}))
+		snap, err := r.run(t)
+		if err != nil {
+			t.Fatalf("M2: %v", err)
+		}
+		q, ok := quarantineFor(snap, "setting:config_blob#oauth_github_client_id")
+		if !ok || strings.Contains(q.Value, "client_secret_name") {
+			t.Errorf("record %q (found %v) names a secret that was never imported", q.Value, ok)
+		}
+	})
+
+	t.Run("the default role alone is not information", func(t *testing.T) {
+		r := newRig(t, "stage1", setup(false, false, "viewer"))
+		snap, err := r.run(t)
+		if err != nil {
+			t.Fatalf("M2: %v", err)
+		}
+		for _, key := range []string{roleKey, emailsKey} {
+			if q, ok := quarantineFor(snap, key); ok {
+				t.Errorf("%s was quarantined (%+v) though it holds only the default", key, q)
+			}
+		}
+	})
+
+	t.Run("enabled with client ids: nothing is left over", func(t *testing.T) {
+		snap, err := newRig(t, "stage1", setup(true, true, role)).run(t)
+		if err != nil {
+			t.Fatalf("M2: %v", err)
+		}
+		for _, key := range []string{roleKey, emailsKey} {
+			if _, ok := quarantineFor(snap, key); ok {
+				t.Errorf("%s was quarantined though the provider entries carry it", key)
+			}
+		}
+	})
+}
+
+// TestConfigPlan_RecoveredFromConfigYAMLIsCountedApart: HEAD parity
+// (LoadConfigFromDatabase's "will try config file fallback"): a row that does
+// not decrypt while config.yaml holds the value is recovered from the file.
+// 05-config §1.12.2 is not silent on an undecryptable row, and M2 keeps
+// HEAD's behavior; what it adds is a distinct count and log line, so an
+// operator can see that a secret came back from a file rather than from its
+// row, apart from an ordinary gap-fill.
+func TestConfigPlan_RecoveredFromConfigYAMLIsCountedApart(t *testing.T) {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	row := func(name, value string, secret bool) *rowState {
+		return readRow(name, settingRow(name, value, "string", secret), key)
+	}
+	planFor := func(rows map[string]*rowState, file headFileValues) *plan {
+		t.Helper()
+		p, err := buildPlan(&m2Input{Rows: rows, Blob: settingRow(blobRowName, "{}", "json", false), File: file, FileHas: map[string]bool{}, Key: key})
+		if err != nil {
+			t.Fatalf("buildPlan: %v", err)
+		}
+		return p
+	}
+	const recovered = "recovered from config.yaml after an undecryptable row"
+	reported := func(p *plan) []string {
+		var out []string
+		for _, n := range p.Reported {
+			if strings.HasSuffix(n, recovered) {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+
+	t.Run("an undecryptable row and a file value", func(t *testing.T) {
+		p := planFor(map[string]*rowState{"openai_api_key": row("openai_api_key", "not-a-valid-ciphertext", true)}, headFileValues{OpenAIAPIKey: fxFileOpenAI})
+		if p.Counts["recovered-from-config-yaml"] != 1 {
+			t.Errorf("recovered-from-config-yaml = %d, want 1 (counts %v)", p.Counts["recovered-from-config-yaml"], p.Counts)
+		}
+		if got := reported(p); len(got) != 1 || got[0] != "secret openai_api_key "+recovered {
+			t.Errorf("reported %q, want one line naming openai_api_key", got)
+		}
+		for _, n := range p.Reported {
+			if strings.Contains(n, fxFileOpenAI) {
+				t.Error("the log line carries the value")
+			}
+		}
+	})
+
+	t.Run("an undecryptable row and no file value is unreadable, not recovered", func(t *testing.T) {
+		p := planFor(map[string]*rowState{"openai_api_key": row("openai_api_key", "not-a-valid-ciphertext", true)}, headFileValues{})
+		if p.Counts["recovered-from-config-yaml"] != 0 || len(reported(p)) != 0 {
+			t.Errorf("recovered counted with no file value: %v %q", p.Counts, reported(p))
+		}
+		if len(p.Unreadable) != 1 || p.Unreadable[0].Row != "openai_api_key" {
+			t.Errorf("unreadable = %+v, want openai_api_key marked", p.Unreadable)
+		}
+	})
+
+	t.Run("a readable row with a file value is no recovery", func(t *testing.T) {
+		p := planFor(map[string]*rowState{"openai_api_key": row("openai_api_key", "", false)}, headFileValues{OpenAIAPIKey: fxFileOpenAI})
+		if p.Counts["recovered-from-config-yaml"] != 0 || len(reported(p)) != 0 {
+			t.Errorf("an ordinary gap-fill was counted as a recovery: %v %q", p.Counts, reported(p))
+		}
+	})
 }

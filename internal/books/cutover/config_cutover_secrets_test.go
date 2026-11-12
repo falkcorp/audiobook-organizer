@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_cutover_secrets_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a8e5c71-2d90-4c6b-b5f4-7e1a9d3c4b08
 // last-edited: 2026-11-11
 
@@ -377,4 +377,110 @@ func changedOnly(before, after map[string][]byte) (same bool, diff []string) {
 	c, r, a := legacyDiff(before, after)
 	diff = slices.Concat(c, r, a)
 	return len(diff) == 0, diff
+}
+
+// keyOnlyAt moves the rig's key out of the state directory and into dir, once
+// the store is seeded.
+func keyOnlyAt(dir string, key func(r *rig) []byte) func(*rig) {
+	return func(r *rig) {
+		prev := r.afterSeed
+		r.afterSeed = func(t testing.TB, state string) {
+			if prev != nil {
+				prev(t, state)
+			}
+			if err := os.WriteFile(filepath.Join(dir, ".encryption_key"), key(r), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(state, ".encryption_key")); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+// TestConfigCutover_KeySearchOrder: HEAD finds its key in the state directory,
+// then in the directory of its database path (bootSettings passes both to
+// FindEncryptionKey, and guardAgainstKeyRegeneration searches the same two).
+// An install from before the state directory keeps the key beside the
+// database, and <root_dir>/.appdata/ is an extra place M2 looks that HEAD does
+// not. The first directory holding a key file wins, readable or not.
+func TestConfigCutover_KeySearchOrder(t *testing.T) {
+	headKey := func(r *rig) []byte { return r.headKey }
+	gateReads := func(t *testing.T, r *rig) {
+		t.Helper()
+		snap, err := r.run(t)
+		if err != nil {
+			t.Fatalf("M2: %v", err)
+		}
+		if got := snap.Secrets["core.http.basic_gate.password"]; got != fxGate {
+			t.Errorf("the gate password does not read back (readable: %v)", got != "")
+		}
+	}
+
+	t.Run("a key beside the database is found", func(t *testing.T) {
+		dbDir := t.TempDir()
+		r := guardRig(t, keyOnlyAt(dbDir, headKey), func(r *rig) { r.databasePath = filepath.Join(dbDir, "audiobooks.pebble") })
+		gateReads(t, r)
+	})
+
+	t.Run("with the database path unset the same layout refuses", func(t *testing.T) {
+		dbDir := t.TempDir()
+		r := guardRig(t, keyOnlyAt(dbDir, headKey))
+		mem := r.newMem(t)
+		_, err := r.runOn(t, mem)
+		if !errors.Is(err, storage.ErrCutoverBlocked) {
+			t.Fatalf("boot error = %v, want storage.ErrCutoverBlocked", err)
+		}
+	})
+
+	t.Run("the refusal names the database directory beside the state directory", func(t *testing.T) {
+		dbDir := t.TempDir()
+		r := guardRig(t, withoutKey, func(r *rig) { r.databasePath = filepath.Join(dbDir, "audiobooks.pebble") })
+		_, err := r.run(t)
+		if !errors.Is(err, storage.ErrCutoverBlocked) {
+			t.Fatalf("boot error = %v, want storage.ErrCutoverBlocked", err)
+		}
+		report := err.Error() + r.logs.String()
+		stateAt, dbAt := strings.Index(report, r.stateDir), strings.Index(report, dbDir)
+		if stateAt < 0 || dbAt <= stateAt {
+			t.Errorf("the refusal does not list the state directory and then %s:\n%s", dbDir, report)
+		}
+	})
+
+	t.Run("the state directory wins over the database directory", func(t *testing.T) {
+		dbDir := t.TempDir()
+		wrong := []byte("0123456789abcdef0123456789abcdef")
+		if err := os.WriteFile(filepath.Join(dbDir, ".encryption_key"), wrong, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		r := guardRig(t, func(r *rig) { r.databasePath = filepath.Join(dbDir, "audiobooks.pebble") })
+		gateReads(t, r)
+	})
+
+	t.Run("the first directory holding a key file wins even when it is unusable", func(t *testing.T) {
+		dbDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dbDir, ".encryption_key"), []byte("short"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		r := guardRig(t, withoutKey, func(r *rig) { r.databasePath = filepath.Join(dbDir, "audiobooks.pebble") })
+		// withoutKey removed the state directory's key, so the short one beside
+		// the database is the first found. HEAD would stop there too.
+		if _, err := r.run(t); !errors.Is(err, storage.ErrCutoverBlocked) {
+			t.Fatalf("boot error = %v, want storage.ErrCutoverBlocked", err)
+		}
+		if !strings.Contains(r.logs.String(), "32-byte key") {
+			t.Errorf("the refusal does not say the key is unusable:\n%s", r.logs.String())
+		}
+	})
+
+	t.Run("the database directory comes before the root's .appdata", func(t *testing.T) {
+		got := keyDirs("/batcave/state", "/batcave/db", "/mnt/gotham")
+		want := []string{"/batcave/state", "/batcave/db", "/mnt/gotham/.appdata"}
+		if !slices.Equal(got, want) {
+			t.Errorf("keyDirs = %v, want %v", got, want)
+		}
+		if got := keyDirs("/batcave/state", "", ""); !slices.Equal(got, []string{"/batcave/state"}) {
+			t.Errorf("keyDirs with nothing else = %v", got)
+		}
+	})
 }
