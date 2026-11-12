@@ -1,5 +1,5 @@
 // file: core/storage/derived.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6162657c-5114-44d6-a4bc-75bc350008ed
 // last-edited: 2026-11-11
 
@@ -261,13 +261,36 @@ func StampArtifact(dir string, gen Generation) error {
 // WriteFileDurable replaces the file at path with data so that a crash leaves
 // the old content or the new, never a torn or empty file, and so that a
 // success means the new content survives one: it writes a sibling temp file,
-// fsyncs it, renames it over path and fsyncs the directory. It is the one
-// marker and stamp writer of the derived-index machinery.
+// fsyncs it, renames it over path and fsyncs the directory. The file is mode
+// 0600 (a marker or stamp is nobody else's business). It is the one marker and
+// stamp writer of the derived-index machinery.
 func WriteFileDurable(path string, data []byte) error {
-	return writeFileDurable(vfs.Default, path, data)
+	// vfs creates files with the process umask's default mode, so the temp file
+	// is chmod-ed before the rename (the vfs.File interface has no Chmod).
+	return writeFileDurable(vfs.Default, path, data, func(tmp string) error { return os.Chmod(tmp, 0o600) })
 }
 
-func writeFileDurable(fsys vfs.FS, path string, data []byte) (err error) {
+// RemoveFileDurable removes the file at path (an absent file is not an error)
+// and fsyncs the directory, so a success means the removal survives a crash.
+// Removing a marker unsynced would bring it back after one.
+func RemoveFileDurable(path string) error {
+	return removeFileDurable(vfs.Default, path)
+}
+
+func removeFileDurable(fsys vfs.FS, path string) error {
+	if err := fsys.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	d, err := fsys.OpenDir(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	return errors.Join(d.Sync(), d.Close())
+}
+
+// writeFileDurable is WriteFileDurable over fsys; chmod, when set, runs on the
+// temp file after it was written and before it replaces path.
+func writeFileDurable(fsys vfs.FS, path string, data []byte, chmod func(tmp string) error) (err error) {
 	tmp := path + ".tmp"
 	f, err := fsys.Create(tmp, vfs.WriteCategoryUnspecified)
 	if err != nil {
@@ -286,6 +309,11 @@ func writeFileDurable(fsys vfs.FS, path string, data []byte) (err error) {
 	}
 	if err := f.Close(); err != nil {
 		return err
+	}
+	if chmod != nil {
+		if err := chmod(tmp); err != nil {
+			return err
+		}
 	}
 	if err := fsys.Rename(tmp, path); err != nil {
 		return err

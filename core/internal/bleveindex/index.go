@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/index.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b3a9e32-ac5d-4cae-9d75-8f2e4b7d9c33
 // last-edited: 2026-11-11
 
@@ -51,12 +51,19 @@ type idx struct {
 
 	state atomic.Uint32 // index.State
 
-	// opMu serialises the two writers of the index's contents: a reconcile pass
+	// op serialises the two writers of the index's contents: a reconcile pass
 	// (TryLock, skipped while busy) and a full rebuild (Lock, for its whole
 	// run). A reconcile pass that applied marks while a rebuild dropped and
 	// refilled the index would let the rebuild overwrite a newer document with
 	// the older one it read, and clear the mark: a stale document forever.
-	opMu sync.Mutex
+	op opLock
+	// resumeAfter is the id the next reconcile pass starts after ("" = from the
+	// first mark): where the previous pass yielded its budget. Only the holder of
+	// the writer lock reads or writes it.
+	resumeAfter string
+
+	failMu sync.Mutex
+	fails  map[string]failure // marks backing off, see backoff.go
 
 	// rebuilt is set when a full rebuild ran to completion. The index leaves
 	// Rebuilding only after that AND a reconcile pass that found the dirty
@@ -74,6 +81,11 @@ type idx struct {
 	// between reading the generation and checking for pending marks, the window
 	// in which a mark written must be seen by the check.
 	afterGenerationRead func()
+
+	// afterBleveCopy is a test seam, nil in production: it runs after bleve's copy
+	// succeeded and may fail it, so a failure with a partial index on disk can be
+	// tested.
+	afterBleveCopy func(dir string) error
 
 	// afterQuiescenceCheck is a test seam, nil in production: CopyTo calls it
 	// right after the generation was read and no mark was found pending, the
@@ -495,7 +507,7 @@ type entry struct {
 
 // markReady ends Rebuilding: coverage was seeded and the dirty set drained.
 func (i *idx) markReady() error {
-	if err := os.Remove(rebuildingMarkerPath(i.path)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := storage.RemoveFileDurable(rebuildingMarkerPath(i.path)); err != nil {
 		return fmt.Errorf("remove rebuilding marker: %w", err)
 	}
 	i.setState(index.Ready)
@@ -529,8 +541,9 @@ func (i *idx) lag(now time.Time) time.Duration {
 // storage.ArtifactAccepted later accepts it only while it still describes the
 // source (§5S.3.9). The order is the invariant:
 //
-//  1. opMu is held for the whole copy: no reconcile pass and no rebuild
-//     changes the index's content while it is copied.
+//  1. The writer lock (op) is held for the whole copy: no reconcile pass and
+//     no rebuild changes the index's content while it is copied. Waiting for it
+//     ends with ctx.
 //  2. The index must be Ready: a Rebuilding index does not cover its source
 //     (and its .rebuilding marker is a sibling the copy does not carry, so the
 //     artifact would later load as Ready), a Degraded one has no handle.
@@ -550,9 +563,11 @@ func (i *idx) CopyTo(ctx context.Context, dir string) error {
 	if st := i.State(); st != index.Ready {
 		return fmt.Errorf("%w: %s/%s is %s", ErrNotReady, i.module, i.name, st)
 	}
-	i.opMu.Lock()
-	defer i.opMu.Unlock()
-	// A rebuild may have held opMu while we waited for it.
+	if err := i.op.Lock(ctx); err != nil {
+		return fmt.Errorf("bleveindex: copy %s/%s: waiting for the index's writer: %w", i.module, i.name, err)
+	}
+	defer i.op.Unlock()
+	// A rebuild may have held the writer lock while we waited for it.
 	if st := i.State(); st != index.Ready {
 		return fmt.Errorf("%w: %s/%s is %s", ErrNotReady, i.module, i.name, st)
 	}
@@ -582,13 +597,58 @@ func (i *idx) CopyTo(ctx context.Context, dir string) error {
 	if !ok {
 		return errors.New("bleveindex: the index backend cannot copy online")
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("bleveindex: copy destination: %w", err)
+	created, err := prepareCopyDir(dir)
+	if err != nil {
+		return err
 	}
-	if err := cp.CopyTo(bleve.FileSystemDirectory(dir)); err != nil {
-		return fmt.Errorf("bleveindex: copy %s/%s: %w", i.module, i.name, err)
+	copyErr := cp.CopyTo(bleve.FileSystemDirectory(dir))
+	if copyErr == nil && i.afterBleveCopy != nil {
+		copyErr = i.afterBleveCopy(dir)
 	}
-	return storage.StampArtifact(dir, gen)
+	if copyErr != nil {
+		return errors.Join(fmt.Errorf("bleveindex: copy %s/%s: %w", i.module, i.name, copyErr), discardCopy(dir, created))
+	}
+	if err := storage.StampArtifact(dir, gen); err != nil {
+		return errors.Join(err, discardCopy(dir, created))
+	}
+	return nil
+}
+
+// prepareCopyDir makes the destination ready: it must be absent or empty (an
+// index copied over another, or beside a stale generation stamp, would be a
+// mixture no stamp describes). It reports whether it created the directory.
+func prepareCopyDir(dir string) (created bool, err error) {
+	entries, err := os.ReadDir(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return false, fmt.Errorf("bleveindex: copy destination: %w", err)
+		}
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("bleveindex: copy destination: %w", err)
+	case len(entries) > 0:
+		return false, fmt.Errorf("bleveindex: copy destination %s is not empty", filepath.Base(dir))
+	}
+	return false, nil
+}
+
+// discardCopy removes what a failed copy left behind: the whole directory when
+// the copy created it, its contents when it was an existing empty one, so a
+// partial index never sits in a directory that might be loaded or stamped later.
+func discardCopy(dir string, created bool) error {
+	if created {
+		return os.RemoveAll(dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range entries {
+		errs = append(errs, os.RemoveAll(filepath.Join(dir, e.Name())))
+	}
+	return errors.Join(errs...)
 }
 
 // loadDoc calls the module's Document callback, turning a panic in it into an

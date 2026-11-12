@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/mapping.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4a2f8d21-9b4c-4b9f-8c64-7e1d3a6c8b22
 // last-edited: 2026-11-11
 
@@ -108,6 +108,18 @@ func translate(kinds map[string]index.FieldKind, n index.Node) (query.Query, err
 	return translateNode(kinds, n)
 }
 
+// notCost is what a Not node counts in the node budget: it is translated to
+// "match all, except", so each one scans every document (1.6s over 20k documents
+// for an Or of 510 of them), where a Term or a Match costs a dictionary lookup.
+const notCost = 64
+
+func nodeCost(op index.Op) int {
+	if op == index.OpNot {
+		return notCost
+	}
+	return 1
+}
+
 // checkShape bounds a query tree: at most maxQueryNodes nodes, maxQueryDepth
 // levels, and maxQueryStringBytes of text in any one node. It is iterative in
 // its depth only up to the cap, so a deeply nested query is refused before the
@@ -116,9 +128,9 @@ func checkShape(n index.Node, depth int, nodes *int) error {
 	if depth > maxQueryDepth {
 		return fmt.Errorf("%w: query nests deeper than %d levels", index.ErrInvalidQuery, maxQueryDepth)
 	}
-	*nodes++
+	*nodes += nodeCost(n.Op)
 	if *nodes > maxQueryNodes {
-		return fmt.Errorf("%w: query has more than %d nodes", index.ErrInvalidQuery, maxQueryNodes)
+		return fmt.Errorf("%w: query is over its budget of %d nodes (a Not counts as %d: it matches every document first)", index.ErrInvalidQuery, maxQueryNodes, notCost)
 	}
 	if len(n.Text) > maxQueryStringBytes {
 		return fmt.Errorf("%w: query text is %d bytes, over %d", index.ErrInvalidQuery, len(n.Text), maxQueryStringBytes)
@@ -321,14 +333,17 @@ func checkParsed(q query.Query, depth int, nodes *int) error {
 		return bad("query string nests deeper than %d levels", maxQueryDepth)
 	}
 	*nodes++
+	if b, ok := q.(*query.BooleanQuery); ok && b != nil && b.MustNot != nil {
+		*nodes += notCost - 1 // a must-not clause is a match-all, like Not
+	}
 	if *nodes > maxQueryNodes {
-		return bad("query string has more than %d clauses", maxQueryNodes)
+		return bad("query string is over its budget of %d clauses (a negation counts as %d)", maxQueryNodes, notCost)
 	}
 	switch v := q.(type) {
 	case *query.RegexpQuery:
 		return bad("regular expressions are not allowed in a query string")
 	case *query.WildcardQuery:
-		if v != nil && strings.HasPrefix(v.Wildcard, "*") || strings.HasPrefix(v.Wildcard, "?") {
+		if v != nil && (strings.HasPrefix(v.Wildcard, "*") || strings.HasPrefix(v.Wildcard, "?")) {
 			return bad("a wildcard may not start with * or ?")
 		}
 	case *query.ConjunctionQuery:

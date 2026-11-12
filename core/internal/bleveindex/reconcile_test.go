@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/reconcile_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b19af4f8-02b3-4c02-b3db-ef84ad3df329
 // last-edited: 2026-11-11
 
@@ -182,6 +182,7 @@ func (failingIndex) Batch(*bleve.Batch) error { return errors.New("the Batcave i
 // its mark, the rest of the page is applied, and a later pass retries it.
 func TestReconcileLeavesAFailedDocumentPending(t *testing.T) {
 	r := seeded(t)
+	clk := r.useClock()
 	broken := true
 	var mu sync.Mutex
 	i := r.e.mustIdx(t, indextest.Signal)
@@ -209,6 +210,7 @@ func TestReconcileLeavesAFailedDocumentPending(t *testing.T) {
 	mu.Lock()
 	broken = false
 	mu.Unlock()
+	clk.Advance(failBackoffBase + time.Second) // the failed mark is retried once its backoff is over
 	r.reconcile()
 	if got := r.ids(index.Match("name", "scarecrow")); !slices.Equal(got, []string{"scarecrow"}) {
 		t.Fatalf("the retry: %v", got)
@@ -523,7 +525,7 @@ func TestRebuildRefusals(t *testing.T) {
 }
 
 // TestReconcileSkipsAnIndexWhileItIsRebuilding: a pass that arrives mid-rebuild
-// applies nothing, because it would race the drop and refill (opMu).
+// applies nothing, because it would race the drop and refill (the writer lock).
 func TestReconcileSkipsAnIndexWhileItIsRebuilding(t *testing.T) {
 	r := seeded(t)
 	i := r.e.mustIdx(t, indextest.Signal)
