@@ -28,10 +28,12 @@
     "internal/versionprimary": 3,
     "internal/versions": 3
   },
-  "estimated": [],
+  "estimated": [
+    "internal/plugins/maintenance"
+  ],
   "weights": {
     "internal/server": 1174,
-    "internal/plugins/maintenance": 884,
+    "internal/plugins/maintenance": 1034,
     "internal/undo": 771,
     "internal/books/store": 670,
     "internal/server/handlers": 472,
