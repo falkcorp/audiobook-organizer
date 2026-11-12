@@ -221,6 +221,7 @@ func TestSubscribe_ResumeBoundaries(t *testing.T) {
 		{nonce + "-1", "gap", nil},                       // last+1 < oldest: seq 2 is gone
 		{nonce + "-0", "gap", nil},                       //
 		{"otherboot-3", "restart", nil},                  // another process
+		{strings.Repeat("x", 50) + "-3", "gap", nil},     // too long to be any process's id: malformed, not a restart
 		{"", "", nil},                                    // no id: live only
 		{"garbage", "gap", nil},                          // no dash
 		{nonce + "-", "gap", nil},                        // empty seq
@@ -903,4 +904,24 @@ func TestPublish_ConcurrentRaceFree(t *testing.T) {
 	for _, d := range dones {
 		finished(t, d)
 	}
+}
+
+// TestEnd_AnEndedStreamQueuesNothingMore: once a stream is ended, later
+// publishes neither fill its queue nor count as overflow drops, however many
+// arrive before its goroutine returns.
+func TestEnd_AnEndedStreamQueuesNothingMore(t *testing.T) {
+	var dropped atomic.Int64
+	b := broker(t, func(o *sse.Options) {
+		o.ClientBuffer = 2
+		o.Hooks.Dropped = func(n int) { dropped.Add(int64(n)) }
+	})
+	s, _ := sub(t, b, nil)
+	b.End(func(any) bool { return true }, sse.CloseCredentialRevoked)
+	for range 10 {
+		pub(b, "a.x", "")
+	}
+	if dropped.Load() != 0 {
+		t.Errorf("an ended stream counted %d overflow drops", dropped.Load())
+	}
+	s.Release()
 }

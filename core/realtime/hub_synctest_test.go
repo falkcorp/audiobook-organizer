@@ -708,3 +708,51 @@ func TestHub_FanOutStartsNoGoroutinePerEvent(t *testing.T) {
 }
 
 func goroutines() int { return runtime.NumGoroutine() }
+
+// liveChecker is a checker whose answers change under a running stream, as a
+// principal's would if its rights were narrowed in place.
+type liveChecker struct{ cur atomic.Pointer[perms] }
+
+func (l *liveChecker) set(ps ...rbac.Permission) {
+	m := map[rbac.Permission]bool{}
+	for _, s := range ps {
+		m[s] = true
+	}
+	l.cur.Store(&perms{has: m})
+}
+func (l *liveChecker) Has(s rbac.Permission) bool        { return l.cur.Load().Has(s) }
+func (l *liveChecker) Satisfies(r rbac.Requirement) bool { return l.cur.Load().Satisfies(r) }
+func (l *liveChecker) Confined() bool                    { return l.cur.Load().Confined() }
+func (l *liveChecker) Concrete() []rbac.Permission       { return l.cur.Load().Concrete() }
+
+// TestHub_DeliverRechecksThePermissionNow: the per-event filter asks the
+// principal's checker as it stands when the event is sent, not as it stood at
+// subscribe. An event sent while the permission is gone is withheld (the
+// stream stays open), and one sent after it is back is delivered.
+func TestHub_DeliverRechecksThePermissionNow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newBubble(t, realtime.Options{Heartbeat: time.Hour}, realtime.Deps{}, nil)
+		defer b.stop()
+		live := &liveChecker{}
+		live.set(scopeView)
+		p := principal("bruce", scopeView)
+		p.Perms = live
+		w := newPipe(0)
+		b.serve(t.Context(), p, w, "/events?topic="+tSignal)
+		synctest.Wait()
+		b.signal(topicSignal, "", "first")
+		synctest.Wait()
+		live.set("core:self")
+		b.signal(topicSignal, "", "withheld")
+		synctest.Wait()
+		live.set(scopeView)
+		b.signal(topicSignal, "", "last")
+		synctest.Wait()
+		if got := lampsIn(t, wires(t, w.text()), tSignal); !slices.Equal(got, []string{"first", "last"}) {
+			t.Errorf("lamps = %v, want first and last only", got)
+		}
+		if b.hub.Subscribers() != 1 {
+			t.Error("the stream ended instead of withholding the event")
+		}
+	})
+}

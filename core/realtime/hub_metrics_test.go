@@ -89,23 +89,26 @@ func TestRealtimeSeries_Golden(t *testing.T) {
 		t.Fatalf("a topic dick may not stream: %d", resp.StatusCode)
 	}
 
+	// The alarm goes first and is awaited before the flood: dick's queue holds
+	// two entries, so a flood ahead of it could overflow the alarm away before
+	// the judge ever saw it.
+	c.signal(topicAlarm, "", "quiet", "private") // dick: not visible
+	waitFor(t, func() bool {
+		return series(t, g, "mediacore_realtime_events_filtered_total", map[string]string{"topic": tAlarm, "reason": "visible"}) == 1
+	})
 	c.signal(topicSignal, "", "lit", "public")
-	c.signal(topicAlarm, "", "quiet", "private")                   // dick: not visible
+	waitFor(t, func() bool {
+		return series(t, g, "mediacore_realtime_events_delivered_total", map[string]string{"topic": tSignal}) >= 1
+	})
 	c.signal(topicSignal, "", string(make([]byte, 300)), "public") // oversize
-	for range 12 {                                                 // far more than the ring: a resume below gets a gap
+	waitFor(t, func() bool {
+		return series(t, g, "mediacore_realtime_events_dropped_total", map[string]string{"reason": "oversize"}) == 1
+	})
+	for range 12 { // far more than the ring and the queues
 		c.signal(topicSignal, "", "again", "public")
 	}
 	waitFor(t, func() bool {
 		return series(t, g, "mediacore_realtime_events_published_total", map[string]string{"topic": tSignal}) >= 13
-	})
-	if got := series(t, g, "mediacore_realtime_events_delivered_total", map[string]string{"topic": tSignal}); got < 1 {
-		t.Errorf("delivered = %v", got)
-	}
-	waitFor(t, func() bool {
-		return series(t, g, "mediacore_realtime_events_filtered_total", map[string]string{"topic": tAlarm, "reason": "visible"}) == 1
-	})
-	waitFor(t, func() bool {
-		return series(t, g, "mediacore_realtime_events_dropped_total", map[string]string{"reason": "oversize"}) == 1
 	})
 	if got := series(t, g, "mediacore_realtime_stream_refusals_total", map[string]string{"reason": "bucket_cap"}); got != 1 {
 		t.Errorf("bucket_cap refusals = %v", got)
