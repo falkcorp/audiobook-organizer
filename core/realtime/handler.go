@@ -1,7 +1,7 @@
 // file: core/realtime/handler.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 92294d19-9b17-417a-ac8b-ebeb60b136f0
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package realtime
 
@@ -185,6 +185,7 @@ func (h *Hub) open(p *auth.Principal, q query) (*sse.Subscriber, error) {
 	case err != nil:
 		return nil, err
 	}
+	st.sub = sub // before Serve starts: the judge is its only other user
 	return sub, nil
 }
 

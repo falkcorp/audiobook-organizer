@@ -1,7 +1,7 @@
 // file: core/realtime/metrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c360e829-39c4-440b-a689-5de1ca6ce8f9
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package realtime
 
@@ -22,7 +22,7 @@ import (
 //	<ns>_realtime_subscribers
 //	<ns>_realtime_events_published_total{topic}
 //	<ns>_realtime_events_delivered_total{topic}
-//	<ns>_realtime_events_filtered_total{topic,reason}   reason: perm, visible
+//	<ns>_realtime_events_filtered_total{topic,reason}   reason: perm, visible, stale
 //	<ns>_realtime_events_dropped_total{reason}          reason: overflow, decode, filter_panic, oversize, redact
 //	<ns>_realtime_resets_total{reason}                  reason: restart, gap, overflow
 //	<ns>_realtime_stream_refusals_total{reason}         reason: global_cap, bucket_cap, denied
@@ -56,7 +56,7 @@ func newInstruments(sc *metrics.Scope, h *Hub) (*instruments, error) {
 	}
 	in.publishedC = counter("events_published", "Events appended to the resume ring, by topic.")
 	in.deliveredC = counter("events_delivered", "Events written to a stream, by topic.")
-	in.filteredC = counter("events_filtered", "Events withheld from a subscriber at send time: perm or visible.")
+	in.filteredC = counter("events_filtered", "Events withheld from a subscriber at send time: perm, visible or stale (rights could not be refreshed).")
 	in.droppedC = counter("events_dropped", "Events never delivered: overflow, decode, filter_panic, oversize or redact.")
 	in.resetsC = counter("resets", "core.stream.reset.v1 frames written: restart, gap or overflow.")
 	in.refusalsC = counter("stream_refusals", "Streams refused before they started: global_cap, bucket_cap or denied.")

@@ -1,7 +1,7 @@
 // file: core/internal/sse/serve.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 05e0a1b8-cca8-4e9d-9c48-f3af45a1a26e
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package sse
 
@@ -10,10 +10,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"maps"
 	"net/http"
 	"os"
-	"slices"
 	"time"
 )
 
@@ -63,6 +61,9 @@ func (s *Subscriber) Serve(ctx context.Context, w http.ResponseWriter) (reason s
 		}
 	}()
 	rc := http.NewResponseController(w)
+	s.mu.Lock()
+	s.rc = rc
+	s.mu.Unlock()
 	hd := w.Header()
 	hd.Set("Content-Type", "text/event-stream")
 	hd.Set("Cache-Control", "no-store")
@@ -71,7 +72,7 @@ func (s *Subscriber) Serve(ctx context.Context, w http.ResponseWriter) (reason s
 
 	var buf bytes.Buffer
 	buf.WriteString(retryFrame)
-	s.control(&buf, TopicOpened, map[string]any{"topics": slices.Sorted(maps.Keys(s.interest))})
+	s.control(&buf, TopicOpened, map[string]any{"topics": s.Topics()})
 	if r := s.write(rc, w, &buf); r != "" {
 		return r
 	}
@@ -188,6 +189,8 @@ func (s *Subscriber) write(rc *http.ResponseController, w http.ResponseWriter, b
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, os.ErrDeadlineExceeded) && s.endedReason() != "":
+		return s.endedReason() // end() moved the deadline to interrupt this write
 	case errors.Is(err, os.ErrDeadlineExceeded):
 		return CloseWriteTimeout
 	default:

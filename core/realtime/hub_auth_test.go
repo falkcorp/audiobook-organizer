@@ -1,7 +1,7 @@
 // file: core/realtime/hub_auth_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f3a1d52-0e84-4c36-b9a7-2d1c5e6f8a40
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package realtime_test
 
@@ -101,7 +101,10 @@ func TestHub_ConfinedAndEmptyPrincipalsNeverStream(t *testing.T) {
 	c.ro.set("robin-key", key)
 	c.ro.set("nil-perms", &nilPerms)
 	for _, who := range []string{"robin-key", "oswald", "nil-perms"} {
-		for _, path := range []string{"/events", "/events?topic=" + tRetired, "/events?topic=*&exclude=" + tCell} {
+		// The last path is over the 8 KiB query bound: a caller who may not
+		// stream is told so (403) before the query is looked at (it would be a
+		// 400), so nothing about its shape is probed by a refused caller.
+		for _, path := range []string{"/events", "/events?topic=" + tRetired, "/events?topic=*&exclude=" + tCell, "/events?key=" + strings.Repeat("k", 9000)} {
 			c.refused(t, who, path, 403, "permission_denied")
 		}
 	}

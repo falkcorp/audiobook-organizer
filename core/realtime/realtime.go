@@ -1,7 +1,7 @@
 // file: core/realtime/realtime.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 213444a2-5f76-43a9-984f-548693fefa25
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // Package realtime is core's one server-push channel: a permission-filtered,
 // resumable SSE hub per App (05-realtime). It declares no topics and no
@@ -27,6 +27,7 @@
 package realtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -57,6 +58,12 @@ type Options struct {
 	// keeps RingSize of them, so this is what bounds the hub's memory; an
 	// event over it is dropped and counted, never truncated.
 	MaxPayload int
+	// AllowNoControlTopics lets Subscriptions succeed when the catalog does
+	// not declare core.principal.invalidated.v1 or core.rbac.changed.v1. Off
+	// (the default) it is an error: a hub that cannot hear them reacts to a
+	// revocation or a role change only on the next heartbeat. It exists for a
+	// catalog that is deliberately smaller (a test, an App with no auth).
+	AllowNoControlTopics bool
 }
 
 // Option defaults and ceilings.
@@ -71,6 +78,11 @@ const (
 	defaultMaxPayload   = 256 << 10
 	maxCount            = 1 << 16 // ceiling of every count option
 	maxMaxPayload       = 4 << 20
+	// maxHeartbeat bounds the revocation cut-off (a stream is revalidated and
+	// its rights refreshed on every heartbeat) and maxWriteTimeout how long a
+	// client that stopped reading can hold a stream's goroutine.
+	maxHeartbeat    = time.Minute
+	maxWriteTimeout = time.Minute
 
 	// closeBudget bounds how long Run waits for streams to drain when its
 	// context ends.
@@ -102,14 +114,15 @@ func (o Options) resolve() (Options, error) {
 		name string
 		v    *time.Duration
 		def  time.Duration
+		max  time.Duration
 	}{
-		{"Heartbeat", &o.Heartbeat, defaultHeartbeat},
-		{"WriteTimeout", &o.WriteTimeout, defaultWriteTimeout},
-		{"RetryAfter", &o.RetryAfter, defaultRetryAfter},
+		{"Heartbeat", &o.Heartbeat, defaultHeartbeat, maxHeartbeat},
+		{"WriteTimeout", &o.WriteTimeout, defaultWriteTimeout, maxWriteTimeout},
+		{"RetryAfter", &o.RetryAfter, defaultRetryAfter, time.Hour},
 	} {
 		switch {
-		case *c.v < 0:
-			return o, fmt.Errorf("realtime: Options.%s %v is negative", c.name, *c.v)
+		case *c.v < 0 || *c.v > c.max:
+			return o, fmt.Errorf("realtime: Options.%s %v outside [0, %v]", c.name, *c.v, c.max)
 		case *c.v == 0:
 			*c.v = c.def
 		}
@@ -132,13 +145,17 @@ type Deps struct {
 	Log     *slog.Logger
 	Metrics *metrics.Scope // the core "realtime" scope, labels topic and reason (05-metrics); nil records nothing
 	Clock   func() time.Time
-	// Refresh re-resolves a stream's principal after core.rbac.changed.v1: it
-	// returns the principal as it would be built now, with a fresh checker.
-	// auth exports no such call (a key principal's scopes and a method's
-	// interactivity are the kernel's to rebuild), so the kernel supplies it
-	// (F6-03). Nil is the safe default: a generation change ends every stream
-	// with permission_revoked, and the client reconnects with its Last-Event-ID
-	// and gets the topics it may see now.
+	// Refresh re-resolves a stream's principal: it returns the principal as it
+	// would be built now, with a fresh checker. It is REQUIRED (NewHub refuses
+	// nil): the hub calls it after core.rbac.changed.v1 and on every
+	// heartbeat, because a role assignment change (auth.SetRoles) moves
+	// neither the credential epoch nor the rbac generation, so only a fresh
+	// build notices it. auth exports no such call (a key principal's scopes and
+	// a method's interactivity are the kernel's to rebuild), so the kernel
+	// supplies it (F6-03). A definite error ends the stream credential_revoked;
+	// a store failure is retried on each heartbeat, withholds every event
+	// while it persists, and ends the stream permission_revoked on the third
+	// in a row.
 	Refresh func(ctx context.Context, p *auth.Principal) (*auth.Principal, error)
 }
 
@@ -196,6 +213,8 @@ func NewHub(o Options, d Deps) (*Hub, error) {
 		return nil, errors.New("realtime: Deps.Auth is required")
 	case d.Catalog == nil:
 		return nil, errors.New("realtime: Deps.Catalog is required")
+	case d.Refresh == nil:
+		return nil, errors.New("realtime: Deps.Refresh is required: without it a role change would reach an open stream only when it reconnects")
 	}
 	h := &Hub{opt: opt, d: d, log: d.Log, warnedAt: map[string]time.Time{}}
 	if h.log == nil {
@@ -207,7 +226,12 @@ func NewHub(o Options, d Deps) (*Hub, error) {
 	if h.br, err = sse.NewBroker(sse.Options{
 		RingSize: opt.RingSize, ClientBuffer: opt.ClientBuffer, MaxClients: opt.MaxClients,
 		MaxPerBucket: opt.MaxPerBucket, Heartbeat: opt.Heartbeat, WriteTimeout: opt.WriteTimeout,
-		Now: d.Clock, Hooks: sse.Hooks{Reset: h.m.reset, Dropped: h.m.overflowed, Closed: h.m.closed},
+		Now: d.Clock, Hooks: sse.Hooks{
+			Reset: h.m.reset, Dropped: h.m.overflowed, Closed: h.m.closed,
+			InterruptFailed: func(err error) {
+				h.log.Warn("realtime: could not interrupt a stream's write on shutdown or revocation; it ends at its write deadline", "err", err)
+			},
+		},
 	}); err != nil {
 		return nil, err
 	}
@@ -229,7 +253,8 @@ type invalidation struct {
 
 // Subscriptions builds the raw bus subscriptions the hub needs: one per
 // catalog topic with Realtime metadata, coalesced by the topic's own window,
-// and one each for the two control topics when the catalog declares them. The
+// and one each for the two control topics (an error if the catalog does not
+// declare them, unless Options.AllowNoControlTopics). The
 // kernel registers them with Bus.Subscribe("core", ...) after every Declare
 // and before Freeze (events.Bus refuses a subscription once frozen, so the hub
 // cannot subscribe itself at P7). It reads the catalog once, fixing the topic
@@ -252,15 +277,22 @@ func (h *Hub) Subscriptions() ([]events.Subscription, error) {
 		tab.names = append(tab.names, spec.Name)
 	}
 	slices.Sort(tab.names)
-	if _, ok := h.d.Catalog.Lookup(topicInvalidated); ok {
-		subs = append(subs, events.OnRaw(topicInvalidated, "core.realtime.principal-invalidated", h.onInvalidated))
-	} else {
-		h.log.Warn("realtime: the catalog does not declare core.principal.invalidated.v1; streams end on the heartbeat revalidation only")
-	}
-	if _, ok := h.d.Catalog.Lookup(topicRBACChanged); ok {
-		subs = append(subs, events.OnRaw(topicRBACChanged, "core.realtime.rbac-changed", h.onRBACChanged))
-	} else {
-		h.log.Warn("realtime: the catalog does not declare core.rbac.changed.v1; a role change reaches streams only when they reconnect")
+	for _, c := range []struct {
+		topic, name string
+		fn          func(context.Context, events.RawEnvelope)
+		effect      string
+	}{
+		{topicInvalidated, "core.realtime.principal-invalidated", h.onInvalidated, "a revoked credential would end a stream only on its next heartbeat"},
+		{topicRBACChanged, "core.realtime.rbac-changed", h.onRBACChanged, "a rights change would reach a stream only on its next heartbeat"},
+	} {
+		if _, ok := h.d.Catalog.Lookup(c.topic); ok {
+			subs = append(subs, events.OnRaw(c.topic, c.name, c.fn))
+			continue
+		}
+		if !h.opt.AllowNoControlTopics {
+			return nil, fmt.Errorf("realtime: the catalog does not declare %s, so %s (declare it, or set Options.AllowNoControlTopics)", c.topic, c.effect)
+		}
+		h.log.Warn("realtime: the catalog does not declare a control topic: "+c.effect, "topic", c.topic)
 	}
 	if !h.table.CompareAndSwap(nil, tab) {
 		return nil, errors.New("realtime: Subscriptions may be called once")
@@ -288,6 +320,11 @@ func (h *Hub) onEvent(_ context.Context, e events.RawEnvelope) {
 		h.m.dropped("oversize")
 		h.warnOnce(e.Topic, "realtime: an event over MaxPayload was dropped (counted; logged once per topic per minute)")
 		return
+	}
+	// The ring outlives the call and the bus's bytes are the bus's, shared
+	// with every other subscriber of the topic: keep our own.
+	e.Payload = bytes.Clone(e.Payload)
+	switch {
 	case !json.Valid(e.Payload):
 		h.m.dropped("decode")
 		h.warnOnce(e.Topic, "realtime: an event whose payload is not JSON was dropped (counted; logged once per topic per minute)")
