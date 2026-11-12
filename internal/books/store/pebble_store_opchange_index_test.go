@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_opchange_index_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
 // last-edited: 2026-11-12
 
@@ -1423,5 +1423,37 @@ func TestOpchangeKey_OperandBounds(t *testing.T) {
 	}
 	if _, err := opChangeByBookKey("b1", []byte("short")); !errors.Is(err, errOpChangeKeyTooLong) {
 		t.Fatalf("primary shorter than prefix: err = %v", err)
+	}
+}
+
+// TestOpchangeBackfillAndVerify_OverlongRowIsSkippedNotFatal: a journal row
+// whose book id is past the key bound (written raw, since the write path
+// refuses it) must not abort the backfill or leave the verify reporting a
+// missing entry forever. The other rows are indexed; the one skip is counted.
+func TestOpchangeBackfillAndVerify_OverlongRowIsSkippedNotFatal(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	for i, bookID := range []string{"b1", strings.Repeat("b", maxOpChangeBookIDLen+1), "b2"} {
+		c := &OperationChange{ID: fmt.Sprintf("c%d", i), OperationID: "op1", BookID: bookID, ChangeType: "metadata_update"}
+		raw, err := json.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.db.Set(opChangeKey(c.OperationID, c.ID), raw, pebble.Sync); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := p.BackfillOpChangeByBookIndex(context.Background())
+	if err != nil {
+		t.Fatalf("an overlong row must not fail the backfill: %v", err)
+	}
+	if res.SkippedOverlong != 1 || res.Indexed != 2 || res.Scanned != 3 {
+		t.Fatalf("backfill = scanned %d indexed %d skipped %d, want 3 2 1", res.Scanned, res.Indexed, res.SkippedOverlong)
+	}
+	rep, err := p.VerifyOpChangeByBookIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.OverlongRows != 1 || rep.Indexable != 2 || rep.MissingEntries != 0 {
+		t.Fatalf("verify = overlong %d indexable %d missing %d, want 1 2 0", rep.OverlongRows, rep.Indexable, rep.MissingEntries)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_opchange_index.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
 // last-edited: 2026-11-12
 
@@ -478,7 +478,11 @@ type OpChangeByBookBackfillResult struct {
 	Indexed      int    `json:"indexed"`
 	// Undecodable rows got an opchange_undecodable: marker instead of an entry.
 	Undecodable int `json:"undecodable"`
-	Commits     int `json:"commits"`
+	// SkippedOverlong rows have a book id or key suffix over the key bound, so
+	// they can get neither an entry nor a marker. They are skipped, counted
+	// here and logged at WARN (lengths only); they do not abort the pass.
+	SkippedOverlong int `json:"skipped_overlong"`
+	Commits         int `json:"commits"`
 }
 
 // BackfillOpChangeByBookIndex builds the opchange_by_book: index once, gated by
@@ -822,33 +826,41 @@ func (p *PebbleStore) opChangeBackfillChunk(lower, upper []byte, chunk int, res 
 	batch := p.db.NewBatch()
 	defer batch.Close()
 
-	n, indexed, undecodable := 0, 0, 0
+	n, indexed, undecodable, overlong := 0, 0, 0, 0
 	var last []byte
 	for iter.First(); iter.Valid() && n < chunk; iter.Next() {
 		k := iter.Key()
 		var c OperationChange
 		if json.Unmarshal(iter.Value(), &c) != nil {
 			ukey, err := opChangeUndecodableKey(k)
-			if err != nil {
+			if errors.Is(err, errOpChangeKeyTooLong) {
+				overlong++
+				warnOpChangeOverlong("opchange-index-backfill", -1, len(k))
+			} else if err != nil {
 				iter.Close()
 				return 0, nil, err
+			} else {
+				if err := batch.Set(ukey, nil, nil); err != nil {
+					iter.Close()
+					return 0, nil, err
+				}
+				undecodable++
 			}
-			if err := batch.Set(ukey, nil, nil); err != nil {
-				iter.Close()
-				return 0, nil, err
-			}
-			undecodable++
 		} else if opChangeIndexable(c.BookID) {
 			ikey, err := opChangeByBookKey(c.BookID, k)
-			if err != nil {
+			if errors.Is(err, errOpChangeKeyTooLong) {
+				overlong++
+				warnOpChangeOverlong("opchange-index-backfill", len(c.BookID), len(k))
+			} else if err != nil {
 				iter.Close()
 				return 0, nil, err
+			} else {
+				if err := batch.Set(ikey, nil, nil); err != nil {
+					iter.Close()
+					return 0, nil, err
+				}
+				indexed++
 			}
-			if err := batch.Set(ikey, nil, nil); err != nil {
-				iter.Close()
-				return 0, nil, err
-			}
-			indexed++
 		}
 		n++
 		last = append(last[:0], k...)
@@ -872,7 +884,15 @@ func (p *PebbleStore) opChangeBackfillChunk(lower, upper []byte, chunk int, res 
 	res.Scanned += n
 	res.Indexed += indexed
 	res.Undecodable += undecodable
+	res.SkippedOverlong += overlong
 	return n, last, nil
+}
+
+// warnOpChangeOverlong logs one skipped overlong row. Lengths only: the key
+// carries ids and the book id is the unbounded operand, so neither is printed.
+func warnOpChangeOverlong(pass string, bookIDLen, keyLen int) {
+	opChangeIndexLog.Warn("%s: skipping row whose book id or key is over the key bound: book_id_len=%d (-1: row undecodable) key_len=%d",
+		pass, bookIDLen, keyLen)
 }
 
 // opChangeByBookSampleCap bounds the sample list in the verify report.
@@ -893,6 +913,10 @@ type OpChangeByBookIndexReport struct {
 	// marker, so the indexed reader does not fail closed on them.
 	Undecodable         int `json:"undecodable"`
 	UnmarkedUndecodable int `json:"unmarked_undecodable"`
+	// OverlongRows have a book id or key suffix over the key bound, so no
+	// entry or marker can exist for them; they are skipped, not counted as
+	// MissingEntries/UnmarkedUndecodable.
+	OverlongRows int `json:"overlong_rows"`
 	// SampleMissing holds up to opChangeByBookSampleCap primary keys.
 	SampleMissing []string `json:"sample_missing,omitempty"`
 
