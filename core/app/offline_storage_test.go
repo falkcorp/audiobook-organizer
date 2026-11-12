@@ -1,5 +1,5 @@
 // file: core/app/offline_storage_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1805cd97-f796-434f-9fa0-32dc6931c03b
 // last-edited: 2026-11-11
 
@@ -7,12 +7,46 @@ package app
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/storage"
 )
+
+// quarantineBuild is the binary ID the test hands the kernel through bootseam,
+// so the direct opens below agree with the offline commands' on the store's
+// build fields without hashing the test binary.
+const quarantineBuild = "batcomputer-r1"
+
+// quarantineStore opens the served store's directory for a test's own reads
+// and writes: core/storage and core/audit are all it names, so the keeper's
+// keyspace is dormant. The kernel's offline open and this one are never open
+// together (Pebble's lock).
+func quarantineStore(ctx context.Context, t *testing.T, opts Options) *storage.DB {
+	t.Helper()
+	o, err := storage.Open(ctx, storage.OpenOptions{
+		Path:      filepath.Join(opts.StateDir, "storage", "main.pebble"),
+		Owners:    []storage.OwnerSpec{{Owner: "core/audit", Spec: storage.Spec{Keyspace: true}, Enabled: true}},
+		Build:     quarantineBuild,
+		MustExist: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := o.Offline()
+	if err != nil {
+		_ = o.Close()
+		t.Fatal(err)
+	}
+	return db
+}
 
 // command is the offline command name among cmds.
 func command(t *testing.T, cmds []Command, name string) Command {
@@ -33,14 +67,22 @@ func command(t *testing.T, cmds []Command, name string) Command {
 // export writes a new 0600 file and refuses one that exists; purge requires
 // --step and --confirm and is audited, fail-closed (kernel's cutover test
 // covers a store opened without core/audit). A store the kernel served has
-// core/audit claimed since F2-16, so the purge of an empty step succeeds. The
-// quarantine's behaviour over records is kernel's TestQuarantineCommands.
+// core/audit claimed since F2-16, so the purge of a step with a record
+// succeeds and its audit event is in the store (a step with no record commits
+// nothing, event included). The quarantine's behaviour over records is
+// kernel's TestQuarantineCommands.
 func TestQuarantineCommandsCLI(t *testing.T) {
 	opts := offlineOpts(t)
 	keeper := offlineKeeper()
-	served(t, opts, keeper)
+	ctx := bootseam.With(t.Context(), &bootseam.Seams{BuildID: quarantineBuild})
+	a, err := New(ctx, opts, keeper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	cmds := OfflineCommands(opts, keeper)
-	ctx := t.Context()
 
 	migrate := command(t, cmds, "storage migrate")
 	var out bytes.Buffer
@@ -93,7 +135,51 @@ func TestQuarantineCommandsCLI(t *testing.T) {
 	if err := purge.Run(ctx, []string{"--step", "gcpd.case-files"}, &out); err == nil || !strings.Contains(err.Error(), "--confirm is required") {
 		t.Errorf("purge without --confirm = %v", err)
 	}
+	// A purge of a step with no record commits nothing, audit event included
+	// (storage.DB.PurgeQuarantine), so the audited purge needs a row to
+	// delete: one is quarantined into the served store first.
+	db := quarantineStore(ctx, t, opts)
+	ks, ok := db.Keyspace("core/storage")
+	if !ok {
+		t.Fatal("the store has no core/storage keyspace")
+	}
+	b := ks.NewBatch()
+	if err := storage.QuarantineWriter(nil)(ctx, b, "gcpd.case-files", []byte("case:harvey_dent"), []byte("two-face"), "unknown mode", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(b.Close(), db.Close()); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
 	if err := purge.Run(ctx, []string{"--step", "gcpd.case-files", "--confirm"}, &out); err != nil {
-		t.Errorf("purge over a served store, which has core/audit = %v, want it audited and done", err)
+		t.Fatalf("purge over a served store, which has core/audit = %v, want it audited and done", err)
+	}
+	db = quarantineStore(ctx, t, opts)
+	defer func() { _ = db.Close() }()
+	if left, err := db.Quarantine(ctx, "gcpd.case-files"); err != nil || len(left) != 0 {
+		t.Errorf("quarantine after the purge = %d records, %v; want none", len(left), err)
+	}
+	aks, ok := db.Keyspace("core/audit")
+	if !ok {
+		t.Fatal("the store has no core/audit keyspace")
+	}
+	as, err := audit.New(ctx, audit.Options{}, audit.Deps{Keyspace: aks, Seq: aks.Sequence("seq")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events int
+	for rec, err := range as.Query(ctx, audit.Filter{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.Action == "core.storage.quarantine_purge" && rec.Reason == "operator_purge" && rec.Actor.Method == "offline" {
+			events++
+		}
+	}
+	if events != 1 {
+		t.Errorf("core.storage.quarantine_purge audit events = %d, want 1", events)
 	}
 }
