@@ -42,6 +42,7 @@ const (
 	kindAllow    = "allow"
 	kindRole     = "role"
 	kindEvent    = "event"
+	kindSealed   = "sealed"
 )
 
 func dkey(kind string, parts ...string) []byte {
@@ -73,8 +74,23 @@ func (s *idAuth) committed(key []byte) ([]byte, error) {
 	return raw, err
 }
 
+// errDoubleWrite is authstore's ErrDoubleWrite: a second write to a record one
+// batch already changed. It is a programming error, not a rejection of the row.
+var errDoubleWrite = errors.New("a record is written twice in one batch")
+
 func (s *idAuth) set(b *storage.Batch, key, raw []byte) error {
 	b.Bind(s.ks)
+	if b.Indexed() {
+		// authstore's refuseRewrite: an indexed batch reads its own writes, so a
+		// record this batch already staged is a second write to it (two keys
+		// with one token hash, two identities with one (provider, subject)).
+		switch _, err := b.GetForUpdate(context.Background(), s.ks, key); {
+		case err == nil:
+			return fmt.Errorf("%w: %d-byte key", errDoubleWrite, len(key))
+		case !errors.Is(err, storage.ErrNotFound):
+			return err
+		}
+	}
 	if err := b.Expect(s.ks, key, nil); err != nil {
 		return err
 	}
@@ -145,7 +161,11 @@ func (s *idAuth) ImportIdentity(b *storage.Batch, id *auth.ExternalIdentity) err
 		return err
 	}
 	if err := s.ownerPresent(b, id.UserID); err != nil {
-		return rejectf("identity %s/%s: %v", id.Provider, id.Subject, err)
+		return rejectf("identity of provider %s: %v", id.Provider, err)
+	}
+	// authstore's ImportIdentity: a (provider, subject) that is already stored.
+	if cur, err := s.committed(dkey(kindIdent, id.Provider, id.Subject)); err != nil || cur != nil {
+		return rejectf("an identity of provider %s with this subject is already stored", id.Provider)
 	}
 	raw, err := json.Marshal(id)
 	if err != nil {
@@ -257,6 +277,20 @@ func (a *idAudit) RecordIn(ctx context.Context, b *storage.Batch, e audit.Event)
 
 func (a *idAudit) Record(context.Context, audit.Event) error { return errors.New("not used by M3") }
 func (a *idAudit) Emit(context.Context, audit.Event)         {}
+
+// idSealer is the storage.QuarantineSealer double: Seal stages the sealed row's
+// plaintext in the chunk's batch, so a crash that loses the chunk loses the
+// sealed copy with its quarantine record (the real adapter over the keyring's
+// importer stages the same way). The record of a sealed row carries only the
+// secret's name.
+type idSealer struct {
+	ks storage.Keyspace
+}
+
+func (s *idSealer) Seal(_ context.Context, b *storage.Batch, name string, raw []byte) error {
+	b.Bind(s.ks)
+	return b.In(s.ks).Set(dkey(kindSealed, name), bytes.Clone(raw))
+}
 
 // dumpDouble reads every row of ks into a map keyed by its decoded segments.
 func dumpDouble(t testing.TB, ctx context.Context, ks storage.Keyspace) map[string][]byte {

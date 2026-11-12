@@ -46,6 +46,8 @@ const (
 	idOwnerAuth  = "core/auth"
 	idOwnerRBAC  = "core/rbac"
 	idOwnerAudit = "core/audit"
+	// idOwnerSealed is the keyspace the quarantine sealer double writes to.
+	idOwnerSealed = "core/secrets"
 )
 
 var idNow = time.Date(2026, 11, 12, 6, 0, 0, 0, time.UTC)
@@ -115,6 +117,7 @@ type idHandles struct {
 	auth   *idAuth
 	roles  *idRoles
 	audit  *idAudit
+	sealer *idSealer
 	legacy storage.Reader
 }
 
@@ -122,6 +125,18 @@ func (h *idHandles) get() (*idAuth, *idRoles, *idAudit, storage.Reader) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.auth, h.roles, h.audit, h.legacy
+}
+
+// lazySealer is the quarantine sealer the data-migration config is built with
+// before the store is open; the double it reaches is bound between Prepare and
+// Migrate like the others.
+type lazySealer struct{ h *idHandles }
+
+func (l lazySealer) Seal(ctx context.Context, b *storage.Batch, name string, raw []byte) error {
+	l.h.mu.RLock()
+	s := l.h.sealer
+	l.h.mu.RUnlock()
+	return s.Seal(ctx, b, name, raw)
 }
 
 type lazyAuth struct{ h *idHandles }
@@ -241,6 +256,7 @@ func (r *idRig) owners(cutover bool) []storage.OwnerSpec {
 		// Audit's own keyspace is not Serialized: its rows are appended, never
 		// updated, so a write carries no Expect (the real audit store's shape).
 		{Owner: idOwnerAudit, Spec: storage.Spec{Keyspace: true}, Enabled: true},
+		{Owner: idOwnerSealed, Spec: storage.Spec{Keyspace: true}, Enabled: true},
 	}
 }
 
@@ -315,6 +331,7 @@ func (r *idRig) newMem(t testing.TB) *vfs.MemFS {
 type idEnv struct {
 	db                 *storage.DB
 	authKS, rbacKS, au storage.Keyspace
+	sealKS             storage.Keyspace
 	h                  *idHandles
 }
 
@@ -324,7 +341,7 @@ type idEnv struct {
 func (r *idRig) open(ctx context.Context, fsys vfs.FS, migs []datamigrate.DataMigration) (*storage.Opened, error) {
 	owners := r.owners(true)
 	cfg := kernel.DataMigrationsConfig{ChunkItems: r.chunkItems, Build: rigBuildNew, Logger: slog.New(slog.DiscardHandler),
-		Quarantine: storage.QuarantineWriter(nil), Preflight: kernel.CutoverPreflight(slog.New(slog.NewTextHandler(r.logs, nil)))}
+		Quarantine: storage.QuarantineWriter(lazySealer{r.h}), Preflight: kernel.CutoverPreflight(slog.New(slog.NewTextHandler(r.logs, nil)))}
 	dms, err := kernel.NewDataMigrations(cfg, owners, migs...)
 	if err != nil {
 		return nil, err
@@ -368,14 +385,16 @@ func (r *idRig) bind(db *storage.DB) *idEnv {
 	aks, _ := db.Keyspace(idOwnerAuth)
 	rks, _ := db.Keyspace(idOwnerRBAC)
 	uks, _ := db.Keyspace(idOwnerAudit)
+	sks, _ := db.Keyspace(idOwnerSealed)
 	lr, _ := db.Legacy(BooksOwner)
 	r.h.mu.Lock()
 	r.h.auth = &idAuth{ks: aks}
 	r.h.roles = &idRoles{ks: rks, cat: idCatalog(r.t)}
 	r.h.audit = &idAudit{ks: uks}
+	r.h.sealer = &idSealer{ks: sks}
 	r.h.legacy = lr
 	r.h.mu.Unlock()
-	return &idEnv{db: db, authKS: aks, rbacKS: rks, au: uks, h: r.h}
+	return &idEnv{db: db, authKS: aks, rbacKS: rks, au: uks, sealKS: sks, h: r.h}
 }
 
 // ---- reading a store back ----
@@ -390,6 +409,7 @@ type idSnap struct {
 	Allow      []string
 	Events     []string
 	Quarantine []quarantinedRow
+	Sealed     map[string][]byte // a sealed quarantined row's secret name -> its plaintext
 	State      string
 	Verify     datamigrate.VerifyReport
 	raw        map[string]map[string][]byte // owner -> rows, for byte comparisons
@@ -406,7 +426,7 @@ func idRead(ctx context.Context, t testing.TB, e *idEnv, dm datamigrate.DataMigr
 		}
 		s.Legacy[string(kv.Key)] = bytes.Clone(kv.Value)
 	}
-	for name, ks := range map[string]storage.Keyspace{"auth": e.authKS, "rbac": e.rbacKS, "audit": e.au} {
+	for name, ks := range map[string]storage.Keyspace{"auth": e.authKS, "rbac": e.rbacKS, "audit": e.au, "sealed": e.sealKS} {
 		s.raw[name] = dumpDouble(t, ctx, ks)
 	}
 	for k, v := range s.raw["auth"] {
@@ -432,6 +452,10 @@ func idRead(ctx context.Context, t testing.TB, e *idEnv, dm datamigrate.DataMigr
 		var role rbac.Role
 		decodeInto(t, v, &role)
 		s.Roles[splitKey(t, []byte(k))[1]] = role
+	}
+	s.Sealed = map[string][]byte{}
+	for k, v := range s.raw["sealed"] {
+		s.Sealed[splitKey(t, []byte(k))[1]] = v
 	}
 	for k := range s.raw["audit"] {
 		segs := splitKey(t, []byte(k))

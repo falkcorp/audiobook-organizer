@@ -20,8 +20,9 @@ import (
 // rejectingAuth is core's importer for every row but one that it refuses the
 // way the real one refuses a record that breaks a Store invariant: a row the
 // preflight's own mirror of the importer's rules passed, which only a rule the
-// two disagree on can produce. The refusal's text quotes a value, as the real
-// one's does.
+// two disagree on can produce. A user's and a key's refusal quote a value; an
+// identity's names its subject WITHOUT quoting it, as authstore's ImportIdentity
+// text once did, which a redaction of quoted text does not catch.
 type rejectingAuth struct {
 	auth.Importer
 	user, key, subject string
@@ -43,7 +44,7 @@ func (r rejectingAuth) ImportAPIKey(b *storage.Batch, k *auth.APIKey, sum [32]by
 
 func (r rejectingAuth) ImportIdentity(b *storage.Batch, id *auth.ExternalIdentity) error {
 	if id.Subject == r.subject {
-		return fmt.Errorf("auth: import identity %q: %w", id.Subject, auth.ErrImportRejected)
+		return fmt.Errorf("auth: import identity %s/%s: %w", id.Provider, id.Subject, auth.ErrImportRejected)
 	}
 	return r.Importer.ImportIdentity(b, id)
 }
@@ -83,9 +84,10 @@ func TestIdentityCutover_StepRefusalIsABlockerNeverAQuarantine(t *testing.T) {
 				t.Fatalf("blockers %+v, want exactly the refused row", cbe.Blockers)
 			}
 			b := cbe.Blockers[0]
+			// The reason is a fixed class, never the importer's text.
 			if !strings.HasPrefix(string(b.Key), c.key) || b.Family != c.family || b.Step != IdentityCutoverID ||
-				!strings.Contains(b.Reason, "importer rejects") || !offers(b.Fix, "fix") || !offers(b.Fix, "delete") {
-				t.Errorf("blocker %+v: want the row %s, the importer's refusal and fix|delete", b, c.key)
+				b.Reason != "the importer rejects the row" || !offers(b.Fix, "fix") || !offers(b.Fix, "delete") {
+				t.Errorf("blocker %+v: want the row %s, the fixed class \"the importer rejects the row\" and fix|delete", b, c.key)
 			}
 			text := strings.Join(storage.CutoverBlockerReport(cbe.Blockers), "\n") + b.Reason + r.logs.String()
 			if strings.Contains(text, c.secret) {

@@ -109,6 +109,11 @@ type Migration struct {
 	chunkUsers map[auth.UserID][]rbac.RoleName
 	chunkRoles map[rbac.RoleName][]rbac.Permission
 	chunkNames map[string]string // folded username -> user ID, this chunk
+	// chunkPulled is the key of every role and user row begin handled for this
+	// chunk (imported, deleted by rule or quarantined). The runner may hand one
+	// of them to Step as the chunk's first item, after begin pulled it forward;
+	// that item has nothing left to do.
+	chunkPulled map[string]struct{}
 }
 
 // New validates cfg and builds M3. It never writes.
@@ -156,8 +161,15 @@ func New(cfg Config) (*Migration, error) {
 		}
 		m.seeds[s.ID] = s
 	}
-	if _, ok := m.seeds["admin"]; !ok {
+	admin, ok := m.seeds["admin"]
+	if !ok {
 		return nil, errors.New("m3: Config.SeedRoles has no admin role: an admin's keys cannot be told apart")
+	}
+	if !rbac.GrantsAdmin(admin.Permissions) {
+		// keyScopes decides who is an admin by this set: a seed that does not
+		// grant core:admin would make no owner an admin, and every admin's
+		// every-atom key would silently lose core:admin.
+		return nil, errors.New("m3: Config.SeedRoles admin does not grant core:admin")
 	}
 	return m, nil
 }

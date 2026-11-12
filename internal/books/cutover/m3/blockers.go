@@ -22,9 +22,15 @@ import (
 // to stage into, so "the importer's validation without staging" is the
 // importer's own record rules (auth.CheckImport*, which authstore calls too)
 // applied to the mapped record, plus what a store would decide from the rows
-// it holds (an owner that is stored, a username that is free), decided here
-// from HEAD's rows. A blocker names the row by key and the reason by a fixed
-// class, never by a value.
+// it holds, decided here from HEAD's rows: an owner that is stored, a username
+// that is free, an (provider, subject) pair no earlier identity holds and a
+// token hash no earlier key holds. HEAD can hold the last two (neither
+// CreateOAuthIdentity nor CreateAPIKey checks for a twin, and a concurrent
+// first sign-in creates a second identity), and the importers refuse both: a
+// row the preflight let through would fail the step at every boot, with
+// nothing for `storage cutover-blockers` to list. A blocker names the row by
+// key and the reason by a fixed class, never by a value; a duplicate names
+// the row that holds the value by its ID.
 
 // JournalFamily is the family name of a merge-journal blocker. A merge in
 // progress is finished or undone on the pre-freeze release, so
@@ -46,16 +52,21 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 		return nil, err
 	}
 	outcomes := map[string]roleVerdict{}
+	byName := map[rbac.RoleName][]rbac.Permission{}
+	// taken is the step's rule (pullRoles): a name an earlier role of this pass
+	// holds. The step also asks core's role store, which holds none of these
+	// names before the cutover starts, and an importer's own refusal of a role
+	// (a quarantine) is not known from HEAD's rows; both leave this set as the
+	// step's, never larger.
+	taken := func(name rbac.RoleName) bool { _, ok := byName[name]; return ok }
 	for _, kv := range roleRows {
 		// A role that does not decode is quarantined by the step, never a blocker.
 		if h, derr := decodeRole(string(kv.Key), kv.Value); derr == nil {
-			outcomes[h.ID] = m.verdictOf(h, nil)
-		}
-	}
-	byName := map[rbac.RoleName][]rbac.Permission{}
-	for _, v := range outcomes {
-		if v.kind == verdictImport {
-			byName[v.name] = v.perms
+			v := m.verdictOf(h, taken)
+			outcomes[h.ID] = v
+			if v.kind == verdictImport {
+				byName[v.name] = v.perms
+			}
 		}
 	}
 	lookup := func(_ context.Context, name rbac.RoleName) ([]rbac.Permission, bool, error) {
@@ -95,6 +106,7 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 	if err != nil {
 		return nil, err
 	}
+	holdersByHash := map[[32]byte]string{} // token hash -> the key ID that holds it
 	for _, kv := range keyRows {
 		key := string(kv.Key)
 		h, derr := decodeKey(key, kv.Value)
@@ -123,13 +135,22 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 		}
 		if err := auth.CheckImportAPIKey(&k, hash); err != nil {
 			add(key, prefixKey, "the importer rejects the row: "+redact(err), fixHint)
+			continue
 		}
+		// authstore's stageNewKey refuses a hash that is already stored, and a
+		// twin staged in the same chunk is a double write.
+		if other, dup := holdersByHash[hash]; dup {
+			add(key, prefixKey, "the importer rejects the row: the token hash is held by key "+other, fixHint)
+			continue
+		}
+		holdersByHash[hash] = h.ID
 	}
 
 	identRows, err := scanRows(ctx, r, prefixIdentity)
 	if err != nil {
 		return nil, err
 	}
+	holdersByIdentity := map[[2]string]string{} // (provider, subject) -> the identity ID that holds it
 	for _, kv := range identRows {
 		key := string(kv.Key)
 		h, derr := decodeIdentity(key, kv.Value)
@@ -137,13 +158,23 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 			add(key, prefixIdentity, "the row does not decode: "+derr.Error(), fixHint)
 			continue
 		}
-		if err := auth.CheckImportIdentity(mapIdentity(h)); err != nil {
+		id := mapIdentity(h)
+		if err := auth.CheckImportIdentity(id); err != nil {
 			add(key, prefixIdentity, "the importer rejects the row: "+redact(err), fixHint)
 			continue
 		}
 		if _, ok := users[h.UserID]; !ok {
 			add(key, prefixIdentity, "the identity's user is not stored", fixHint)
+			continue
 		}
+		// authstore's ImportIdentity refuses a (provider, subject) pair that is
+		// already stored, and a twin staged in the same chunk is a double write.
+		pair := [2]string{id.Provider, id.Subject}
+		if other, dup := holdersByIdentity[pair]; dup {
+			add(key, prefixIdentity, "the importer rejects the row: its provider and subject are held by identity "+other, fixHint)
+			continue
+		}
+		holdersByIdentity[pair] = h.ID
 	}
 
 	journals, err := scanRows(ctx, r, JournalPrefix)

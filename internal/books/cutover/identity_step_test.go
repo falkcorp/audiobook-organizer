@@ -42,7 +42,9 @@ func TestIdentityStep_Declaration(t *testing.T) {
 	if want := m3.SensitivePrefixes(); !slices.Equal(dm.Sensitive, want) {
 		t.Errorf("Sensitive = %v, want %v", dm.Sensitive, want)
 	}
-	for _, p := range []string{"u:", "apikey:", "oauthid:"} {
+	// inviteallow: rows hold the raw invite token their accept recorded, and a
+	// quarantined one keeps the row as it was.
+	for _, p := range []string{"u:", "apikey:", "oauthid:", "inviteallow:"} {
 		if !slices.Contains(dm.Sensitive, p) {
 			t.Errorf("%s holds credentials and is not Sensitive", p)
 		}

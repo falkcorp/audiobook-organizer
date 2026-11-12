@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -157,10 +158,7 @@ func userStatus(raw string) (auth.UserStatus, string) {
 	case "inactive":
 		return auth.StatusDisabled, ""
 	}
-	if len(norm) > 32 {
-		norm = norm[:32]
-	}
-	return auth.StatusDisabled, norm
+	return auth.StatusDisabled, clip(norm, maxStatusLen)
 }
 
 // trustedEmailSource is HEAD's trustedEmailSource: the sources that prove the
@@ -216,10 +214,7 @@ func keyStatus(raw string, revokedAt *time.Time) (status auth.KeyStatus, odd str
 	case norm == "" || norm == "active":
 		return auth.KeyActive, ""
 	}
-	if len(norm) > 32 {
-		norm = norm[:32]
-	}
-	return auth.KeyDisabled, norm
+	return auth.KeyDisabled, clip(norm, maxStatusLen)
 }
 
 // keyScopes is an imported key's native scopes (05-rbac §6.3): the effective
@@ -356,8 +351,12 @@ func mapIdentity(h *headIdentity) *auth.ExternalIdentity {
 // ---- owners ----
 
 // ownerPerms is the native permission patterns of the roles a user holds: a
-// seed role's set, a custom role's imported permissions. roleLookup resolves a
-// custom role (a role of this chunk, or one a committed chunk imported).
+// seed role's set, a custom role's imported permissions. lookup resolves a
+// custom role (a role of this chunk, or one a committed chunk imported). A
+// custom role that lookup cannot resolve is an error, never an empty grant: a
+// user's role list names only roles this step imported (roleList drops the
+// rest), so a role that is nowhere means the step's own bookkeeping is wrong,
+// and an owner set silently missing a role would narrow every key it owns.
 func (m *Migration) ownerPerms(ctx context.Context, roles []rbac.RoleName, lookup func(context.Context, rbac.RoleName) ([]rbac.Permission, bool, error)) ([]rbac.Permission, error) {
 	var out []rbac.Permission
 	for _, r := range roles {
@@ -369,9 +368,10 @@ func (m *Migration) ownerPerms(ctx context.Context, roles []rbac.RoleName, looku
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			out = append(out, perms...)
+		if !ok {
+			return nil, fmt.Errorf("m3: the custom role %s of a user is neither imported by this chunk nor stored", r)
 		}
+		out = append(out, perms...)
 	}
 	return out, nil
 }

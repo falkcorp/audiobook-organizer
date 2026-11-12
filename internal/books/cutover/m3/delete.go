@@ -117,13 +117,28 @@ func (m *Migration) deleteIdentityRowsIn(ctx context.Context, set *rowSet, id st
 	return nil
 }
 
-// deleteUserRows stages the deletion of a user's row, its index rows and
-// every key and identity the user owns (by row or by index entry), appending
-// their IDs to ids.
+// deleteUserRows stages the deletion of a user's row, its index rows, every
+// key and identity the user owns (by row or by index entry) and the invite
+// allow-list grants recorded for it, appending the IDs of the keys and
+// identities to ids. A grant is an e-mail address the user's accept put on the
+// list (its user_id names that user); core's list is by address alone, so a
+// grant left behind would keep a deleted user's address allowed.
 func (m *Migration) deleteUserRows(ctx context.Context, b *storage.Batch, id string, ids *[]string) error {
 	set := newRowSet(b)
 	if err := set.delete(prefixUser + id); err != nil {
 		return err
+	}
+	grants, err := m.scan(ctx, prefixInviteAllow)
+	if err != nil {
+		return err
+	}
+	for _, kv := range grants {
+		// A grant that does not decode names no user: the step quarantines it.
+		if g, derr := decodeInviteGrant(kv.Value); derr == nil && g.UserID == id {
+			if err := set.delete(string(kv.Key)); err != nil {
+				return err
+			}
+		}
 	}
 	idx, err := m.scan(ctx, idxUser)
 	if err != nil {
