@@ -1,5 +1,5 @@
 // file: tools/fixerstores/main.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e7c1a93-d2b8-4f60-8a15-6c3b9e0d7f24
 // last-edited: 2026-11-12
 
@@ -39,10 +39,16 @@
 // A func value or an interface value that a call hands out is followed
 // directly, for every call (static, interface or dynamic): a function literal
 // or named function becomes an edge to its body; a maintenance type made into
-// an interface for a function outside the module contributes its methods. A
-// func argument that is a parameter of the caller is the caller's caller's
-// business and is followed there. Any other func argument (loaded from a field,
-// returned by a call) cannot be followed and is reported as unresolved.
+// an interface for a function outside the module contributes its methods; and
+// the funcs stored in a struct literal passed by value, or in the slice a
+// variadic call builds (registry.RunItemsOptions: Label, CheckpointFn,
+// CheckpointStateFn), are followed as if they had been passed bare. A func
+// argument that is a parameter of the caller is the caller's caller's business
+// and is followed there. Any other func argument, or func stored in such a
+// literal (loaded from a field, returned by a call), cannot be followed and is
+// reported as unresolved. A struct that is not a literal here (a parameter, a
+// call result, a copy loaded through a pointer) is not looked into: it was
+// built elsewhere, where its funcs are followed or reported.
 //
 // Only the join points are pruned: the module's registry.RunItems, whose
 // call-graph edges join every caller to every callback its other callers pass.
@@ -547,6 +553,94 @@ func (a *analysis) method(fn *ssa.Function, m *types.Func, recv types.Type, pos 
 	depCallers[name][a.name(fn)] = true
 }
 
+// onlyRead reports whether every use of the address v is a load or a further
+// field address that is only loaded (or a capture by a closure that only reads).
+func (a *analysis) onlyRead(v ssa.Value, depth int) bool {
+	if depth > 4 {
+		return false
+	}
+	refs := v.Referrers()
+	if refs == nil {
+		return true
+	}
+	for _, r := range *refs {
+		switch r := r.(type) {
+		case *ssa.UnOp:
+			if r.Op != token.MUL {
+				return false
+			}
+		case *ssa.DebugRef:
+		case *ssa.FieldAddr:
+			if !a.onlyRead(r, depth+1) {
+				return false
+			}
+		case *ssa.MakeClosure:
+			clo := r.Fn.(*ssa.Function)
+			for i, b := range r.Bindings {
+				if b == v && (i >= len(clo.FreeVars) || !a.onlyRead(clo.FreeVars[i], depth+1)) {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// fieldOfParamCopy reports whether addr is the address of a field (at any
+// depth) of a local variable that holds nothing but a by-value parameter: the
+// callee's copy of a struct its caller built.
+func (a *analysis) fieldOfParamCopy(addr ssa.Value, depth int) bool {
+	if depth > 4 {
+		return false
+	}
+	fa, ok := addr.(*ssa.FieldAddr)
+	if !ok {
+		return false
+	}
+	switch x := fa.X.(type) {
+	case *ssa.FieldAddr:
+		return a.fieldOfParamCopy(x, depth+1)
+	case *ssa.Alloc:
+		stores := 0
+		for _, r := range *x.Referrers() {
+			switch r := r.(type) {
+			case *ssa.Store:
+				if r.Addr != ssa.Value(x) {
+					return false
+				}
+				if _, isParam := r.Val.(*ssa.Parameter); !isParam {
+					return false
+				}
+				stores++
+			case *ssa.FieldAddr:
+				// a field of the copy: only loads of it keep it a copy
+				for _, rr := range *r.Referrers() {
+					switch rr.(type) {
+					case *ssa.UnOp, *ssa.DebugRef, *ssa.FieldAddr:
+					default:
+						return false
+					}
+				}
+			case *ssa.UnOp, *ssa.DebugRef:
+			case *ssa.MakeClosure:
+				// captured by reference: fine while the closure only reads it
+				clo := r.Fn.(*ssa.Function)
+				for i, b := range r.Bindings {
+					if b == ssa.Value(x) && (i >= len(clo.FreeVars) || !a.onlyRead(clo.FreeVars[i], 0)) {
+						return false
+					}
+				}
+			default:
+				return false
+			}
+		}
+		return stores == 1
+	}
+	return false
+}
+
 // allocOf finds the variable a pointer value addresses: the Alloc itself, or
 // the one a closure captured by reference.
 func (a *analysis) allocOf(x ssa.Value, depth int) *ssa.Alloc {
@@ -585,6 +679,145 @@ func (a *analysis) allocOf(x ssa.Value, depth int) *ssa.Alloc {
 	return nil
 }
 
+// addUnresolved records a func (or func-carrying aggregate) argument the pass
+// could not follow, once per caller, callee and argument description.
+func (a *analysis) addUnresolved(rep *report, seen map[string]bool, fn *ssa.Function, callName string, call ssa.CallInstruction, v ssa.Value) {
+	u := unresolve{Caller: a.name(fn), Callee: callName, Pos: a.pos(call.Pos()), Arg: a.describe(v)}
+	key := u.Caller + " -> " + u.Callee + " [" + u.Arg + "]"
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+	rep.Unresolved = append(rep.Unresolved, u)
+}
+
+// carriesFunc reports whether a value of type t, passed by value, can hold a
+// func: a func-typed field of a struct (looked at to a small depth), or a slice
+// of such structs (the slice a variadic call builds). Pointers are not
+// followed: a pointer to a big struct is not a literal that holds callbacks.
+func (a *analysis) carriesFunc(t types.Type, depth int) bool {
+	if depth > 3 {
+		return false
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			ft := u.Field(i).Type()
+			if _, ok := ft.Underlying().(*types.Signature); ok {
+				return true
+			}
+			if a.carriesFunc(ft, depth+1) {
+				return true
+			}
+		}
+	case *types.Slice:
+		_, isStruct := u.Elem().Underlying().(*types.Struct)
+		return isStruct && a.carriesFunc(u.Elem(), depth+1)
+	}
+	return false
+}
+
+// resolveAggregate finds the function bodies stored into a struct value or a
+// slice of struct values built in a literal: the values stored into the
+// variable it was loaded from, field by field and element by element. ok is
+// false only when a func stored in the literal is one resolveFunc cannot
+// follow. An aggregate that is not a literal here (a parameter, a nil slice, a
+// call result, a copy loaded through a pointer or field) resolves to nothing,
+// resolved: it was built elsewhere.
+func (a *analysis) resolveAggregate(v ssa.Value, depth int) (fns []*ssa.Function, ok bool) {
+	if depth > 8 {
+		return nil, false
+	}
+	if _, isFn := v.Type().Underlying().(*types.Signature); isFn {
+		return a.resolveFunc(v, 0) // its own depth budget: the aggregate's was spent reaching it
+	}
+	if !a.carriesFunc(v.Type(), 0) {
+		return nil, true
+	}
+	switch v := v.(type) {
+	case *ssa.Const, *ssa.Parameter:
+		return nil, true
+	case *ssa.UnOp:
+		if v.Op == token.MUL {
+			if a.allocOf(v.X, 0) == nil {
+				// A copy loaded through a pointer or a field: the value was
+				// built where it was stored, not here, so there is no literal
+				// to read. Not followed, and not reported (a stated limit).
+				return nil, true
+			}
+			return a.storesInto(v.X, depth+1)
+		}
+	case *ssa.Slice:
+		if a.allocOf(v.X, 0) == nil {
+			return nil, true
+		}
+		return a.storesInto(v.X, depth+1)
+	case *ssa.Phi:
+		ok = true
+		for _, e := range v.Edges {
+			f, eok := a.resolveAggregate(e, depth+1)
+			fns = append(fns, f...)
+			ok = ok && eok
+		}
+		return fns, ok
+	}
+	// Any other source (a call result, a field, a tuple element): the aggregate
+	// was built where it came from, not in a literal here. Not followed and not
+	// reported; the funcs inside it are followed or reported where it was built.
+	return nil, true
+}
+
+// storesInto finds what is stored into the variable at addr and, through
+// FieldAddr and IndexAddr, into its fields and elements, resolving each stored
+// value. An address that goes anywhere else (passed to a call, stored away)
+// is not followed.
+func (a *analysis) storesInto(addr ssa.Value, depth int) (fns []*ssa.Function, ok bool) {
+	if depth > 10 {
+		return nil, false
+	}
+	refs := addr.Referrers()
+	if refs == nil {
+		return nil, true
+	}
+	ok = true
+	for _, r := range *refs {
+		switch r := r.(type) {
+		case *ssa.Store:
+			if r.Addr != addr {
+				return nil, false // the address itself is stored somewhere
+			}
+			f, sok := a.resolveAggregate(r.Val, depth+1)
+			fns = append(fns, f...)
+			ok = ok && sok
+		case *ssa.FieldAddr:
+			f, sok := a.storesInto(r, depth+1)
+			fns = append(fns, f...)
+			ok = ok && sok
+		case *ssa.IndexAddr:
+			f, sok := a.storesInto(r, depth+1)
+			fns = append(fns, f...)
+			ok = ok && sok
+		case *ssa.UnOp, *ssa.DebugRef, *ssa.Slice:
+			// a load, debug info, or the slice built over the array
+		case *ssa.MakeClosure:
+			// Captured by reference: what the closure stores through its free
+			// variable is stored into the variable too.
+			clo := r.Fn.(*ssa.Function)
+			for i, b := range r.Bindings {
+				if b != addr || i >= len(clo.FreeVars) {
+					continue
+				}
+				f, sok := a.storesInto(clo.FreeVars[i], depth+1)
+				fns = append(fns, f...)
+				ok = ok && sok
+			}
+		default:
+			return nil, false
+		}
+	}
+	return fns, ok
+}
+
 // describe says what a func value is, for the report: the field it was read
 // from, the call that returned it, or the SSA form.
 func (a *analysis) describe(v ssa.Value) string {
@@ -597,18 +830,18 @@ func (a *analysis) describe(v ssa.Value) string {
 				}
 			}
 		}
-		return "load " + v.X.Name()
+		return "load of " + typeName(v.Type(), a.maint)
 	case *ssa.Call:
 		if c := v.Call.StaticCallee(); c != nil {
 			return "result of " + c.RelString(a.maint)
 		}
 		return "result of a dynamic call"
 	case *ssa.FreeVar:
-		return "captured " + v.Name()
+		return "captured variable of type " + typeName(v.Type(), a.maint)
 	case *ssa.Extract:
 		return "extract from a call result"
 	}
-	return fmt.Sprintf("%T", v)
+	return fmt.Sprintf("%T of type %s", v, typeName(v.Type(), a.maint))
 }
 
 // resolveFunc finds the function bodies a func-typed value can be: a function
@@ -638,6 +871,12 @@ func (a *analysis) resolveFunc(v ssa.Value, depth int) (fns []*ssa.Function, ok 
 		// it. A load through a field or anything else is not looked through.
 		if v.Op != token.MUL {
 			return nil, false
+		}
+		if a.fieldOfParamCopy(v.X, 0) {
+			// A func field of a struct that came in as a parameter (by value, so
+			// the callee holds a copy): the callback was put there where the
+			// struct was built, and is followed there.
+			return nil, true
 		}
 		alloc := a.allocOf(v.X, 0)
 		if alloc == nil {
@@ -800,13 +1039,21 @@ func (a *analysis) passedValues(fn *ssa.Function, call ssa.CallInstruction, push
 			// module's other packages forwards what it was given, which was
 			// followed at the call that gave it.
 			if !ok && a.inMaint(fn) {
-				key := a.name(fn) + " -> " + callName
-				if !unresolvedSeen[key] {
-					unresolvedSeen[key] = true
-					rep.Unresolved = append(rep.Unresolved, unresolve{
-						Caller: a.name(fn), Callee: callName, Pos: a.pos(call.Pos()), Arg: a.describe(v),
-					})
-				}
+				a.addUnresolved(rep, unresolvedSeen, fn, callName, call, v)
+			}
+			continue
+		}
+		if a.carriesFunc(v.Type(), 0) {
+			// A struct passed by value, or the slice built for variadic
+			// arguments, that holds func fields (registry.RunItemsOptions: Label,
+			// CheckpointFn, CheckpointStateFn): the funcs stored into it are
+			// callbacks of ours as much as a bare func argument is.
+			fns, ok := a.resolveAggregate(v, 0)
+			for _, f := range fns {
+				push(f, fn)
+			}
+			if !ok && a.inMaint(fn) {
+				a.addUnresolved(rep, unresolvedSeen, fn, callName, call, v)
 			}
 			continue
 		}

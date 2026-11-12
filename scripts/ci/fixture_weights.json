@@ -17,7 +17,6 @@
     "internal/organizer": 3,
     "internal/playlist": 3,
     "internal/plugins/dedup": 3,
-    "internal/plugins/maintenance": 3,
     "internal/realtime": 3,
     "internal/reconcile": 3,
     "internal/scanner": 3,
