@@ -1,5 +1,5 @@
 // file: core/internal/bootseam/bootseam.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 9d064296-a488-463e-93e9-38d3b21c9167
 // last-edited: 2026-11-11
 
@@ -59,6 +59,13 @@ type Seams struct {
 	// 5T.3.11). Plain strings, because bootseam sits below the tasks package;
 	// nil = none, as in every production boot.
 	TaskRuns []TaskRunSeed
+	// Built is called by app.New with the *kernel.Kernel it built, once
+	// kernel.New succeeded: coretest's way to the kernel-internal task seams
+	// (the executor's Client, a run's stored record, the start without Run)
+	// without any member on app.App, which a module is handed. Typed any
+	// because bootseam sits below kernel; nil, and so never called, in every
+	// production boot.
+	Built func(kernel any)
 }
 
 // TaskRunSeed asks for N queued runs of Kind (Seams.TaskRuns).

@@ -1,5 +1,5 @@
 // file: core/coretest/harness.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: a95c80b7-1b2c-4c57-aa24-2ea9397da171
 // last-edited: 2026-11-11
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
@@ -51,6 +52,7 @@ const harnessAppID = "coretest"
 type Harness struct {
 	tb       testing.TB
 	app      *app.App
+	k        *kernel.Kernel // the App's kernel, from bootseam.Seams.Built: the task seams no App member offers
 	logs     *logcapture.Capture
 	stateDir string
 	fs       storage.FS                   // the in-memory store's filesystem, kept so Reboot reopens the same store
@@ -225,17 +227,23 @@ func boot(t testing.TB, fs *storage.FS, stateDir string, opts []Option) (*Harnes
 		// leaves nothing under the state directory.
 		StorageFS: h.fs,
 	}
-	ctx := t.Context()
-	if len(s.runs) > 0 {
-		// WithRuns: the kernel inserts them at P4c, before the tasks start
-		// rule looks for stored runs.
-		ctx = bootseam.With(ctx, &bootseam.Seams{TaskRuns: s.runs})
-	}
+	// TaskRuns (WithRuns): the kernel inserts them at P4c, before the tasks
+	// start rule looks for stored runs. Built hands the harness the kernel,
+	// so RunTask and its siblings reach the executor's Client and a run's
+	// stored record without a member on app.App, which a module is handed:
+	// both are raw (no principal, no permission rule, no redaction).
+	ctx := bootseam.With(t.Context(), &bootseam.Seams{
+		TaskRuns: s.runs,
+		Built:    func(k any) { h.k, _ = k.(*kernel.Kernel) },
+	})
 	a, err := app.New(ctx, appOpts, mods...)
 	if err != nil {
 		return nil, err
 	}
 	h.app = a
+	if h.k == nil {
+		return nil, errors.Join(errors.New("coretest: app.New did not hand the harness its kernel (bootseam.Seams.Built)"), a.Close(context.Background()))
+	}
 	t.Cleanup(func() {
 		if err := a.Close(context.Background()); err != nil {
 			t.Errorf("coretest: close: %v", err)
@@ -245,7 +253,7 @@ func boot(t testing.TB, fs *storage.FS, stateDir string, opts []Option) (*Harnes
 	// executor and scheduler start when the tasks start rule held, so RunTask
 	// has something to run on. Close stops them first. A held run is read-only
 	// and never dispatched, started or not (5T.3.11).
-	if err := a.StartTasks(t.Context()); err != nil {
+	if err := h.k.StartTasks(t.Context()); err != nil {
 		return nil, errors.Join(fmt.Errorf("coretest: start tasks: %w", err), a.Close(context.Background()))
 	}
 	return h, nil

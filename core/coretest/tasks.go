@@ -1,5 +1,5 @@
 // file: core/coretest/tasks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e7a1c58-9d04-4b6f-8a2e-5c1f0b9d7e43
 // last-edited: 2026-11-11
 
@@ -58,7 +58,7 @@ type RunResult struct {
 // AssertPermission when authentication lands (R2).
 func (h *Harness) RunTask(t testing.TB, kind tasks.Kind, params any) RunResult {
 	t.Helper()
-	c := h.app.TaskClient()
+	c := h.k.TaskClient()
 	if c == nil {
 		t.Fatalf("coretest: RunTask(%q): the App has no task executor: no module registered a kind and no run is stored (05-tasks 5T.4 step 1)", kind)
 		return RunResult{}
@@ -102,13 +102,25 @@ func (h *Harness) RunTask(t testing.TB, kind tasks.Kind, params any) RunResult {
 func (h *Harness) result(ctx context.Context, t testing.TB, v tasks.RunView) RunResult {
 	t.Helper()
 	out := RunResult{ID: v.ID, State: v.State, Succeeded: v.State == tasks.StateSucceeded}
-	rec, err := h.app.TaskRecord(ctx, v.ID)
+	rec, err := h.k.TaskRecord(ctx, v.ID)
 	if err != nil {
 		t.Fatalf("coretest: read the record of run %s: %v", v.ID, err)
 		return out
 	}
 	out.Result, out.Error = rec.Result, rec.Error
 	return out
+}
+
+// TaskRecord is the stored record of run id, result and error text included,
+// which the Client's read model leaves out. It applies no permission rule and
+// no redaction: a test seam, never reachable from a request or a module.
+func (h *Harness) TaskRecord(t testing.TB, id tasks.RunID) tasks.RunRecord {
+	t.Helper()
+	rec, err := h.k.TaskRecord(admin(t.Context()), id)
+	if err != nil {
+		t.Fatalf("coretest: TaskRecord(%s): %v", id, err)
+	}
+	return rec
 }
 
 // Runs lists the runs of kinds (every kind when none is named) newest first, as
@@ -118,7 +130,7 @@ func (h *Harness) result(ctx context.Context, t testing.TB, v tasks.RunView) Run
 // task executor.
 func (h *Harness) Runs(t testing.TB, kinds ...tasks.Kind) []tasks.RunView {
 	t.Helper()
-	c := h.app.TaskClient()
+	c := h.k.TaskClient()
 	if c == nil {
 		t.Fatalf("coretest: Runs: the App has no task executor (05-tasks 5T.4 step 1)")
 		return nil
@@ -141,7 +153,7 @@ func (h *Harness) Runs(t testing.TB, kinds ...tasks.Kind) []tasks.RunView {
 // hold).
 func assertHeldRuns(t testing.TB, h *Harness, id module.ID, man module.Manifest) {
 	t.Helper()
-	if h.app.TaskClient() == nil || len(man.TaskLedger) == 0 {
+	if h.k.TaskClient() == nil || len(man.TaskLedger) == 0 {
 		return
 	}
 	for _, v := range h.Runs(t, man.TaskLedger...) {
