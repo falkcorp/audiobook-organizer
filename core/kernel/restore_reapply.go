@@ -1,5 +1,5 @@
 // file: core/kernel/restore_reapply.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2f6d8a14-c3e7-4b95-a018-9d4e7b1c5f36
 // last-edited: 2026-11-12
 
@@ -54,6 +54,17 @@ import (
 // the line instead made every later boot re-apply the lines after it, undoing an
 // admin's re-enable or a new password, refuse the journal for good, and fail
 // closed again each time.
+//
+// A kept last admin's restriction is a journal append, and an append stages its
+// own seq as the head: seq above every line of the journal. So nothing that can
+// append runs before every line after the store's head, and every queued line this
+// build can now apply, has been applied, queued or stepped over (a restriction
+// first let the head pass lines that were not, and a crash right after it lost
+// them for good), and the line that kept the admin does not complete (its head, its
+// queue entry's removal) before the restriction ran (the restriction was a separate
+// commit after it, so a crash between the two left an admin the journal proved was
+// demoted with the role, unrestricted, and nothing to replay it). keptAdmins is
+// what waits.
 
 // errReapplyNotReady is a re-apply called before its prerequisites exist.
 var errReapplyNotReady = errors.New("kernel: the journal re-apply needs the DB overrides attached and the keyring open")
@@ -126,8 +137,9 @@ type reapplyApply struct {
 	// would have left without an active core:admin holder (rbac.StageReapply:
 	// that line is skipped, KeptAdmins).
 	RBAC func(ctx context.Context, b *storage.Batch, lines []journal.Revocation) (kept []string, err error)
-	// RestrictLastAdmin restricts a kept admin after the batch committed
-	// (auth.RestrictLastAdmin).
+	// RestrictLastAdmin restricts a kept admin (auth.RestrictLastAdmin), once the
+	// whole tail is applied: its journal line stages the head at the top of the
+	// journal, which no line may be left below.
 	RestrictLastAdmin func(ctx context.Context, userID string) error
 	// FailClosed is auth's restore fallback with no coverage and no pre-swap
 	// store (auth.PostRestore): every key needs_confirmation, every credential
@@ -164,9 +176,10 @@ type reapplyInput struct {
 	// nil is journal.KnownKind. The tests set it to play an older build against a
 	// journal a newer one wrote, and then the same journal under this one.
 	Known func(journal.Kind) bool
-	// QueueBatch opens the batch queueUnapplied stages its entries into: nil is
-	// KS.NewBatch. The crash tests wrap it, as they wrap Apply.NewBatch, to end a
-	// boot between two chunks of the queue.
+	// QueueBatch opens the batches of the unapplied queue's own writes, the
+	// entries queueUnapplied stages and the removal of the entries of drained lines
+	// that kept an admin (restrictKept): nil is KS.NewBatch. The crash tests wrap
+	// it, as they wrap Apply.NewBatch, to end a boot between two of them.
 	QueueBatch func() *storage.Batch
 	Clock      func() time.Time
 	Log        *slog.Logger
@@ -339,10 +352,12 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	// First the queue: a line an earlier boot could not apply and this build can
 	// is applied now and its entry deleted with it. Then the lines after the head
 	// that this build cannot apply are queued, all of them, before the first batch
-	// that can move the head: every append stages its own seq as the head, and
-	// the re-apply's own journaled lines (a kept last admin's restriction) are
-	// appends too, so no line may pass an unknown one that is not recorded yet.
-	if res.Drained, err = in.drainUnapplied(ctx, chain, aborted, !untrusted); err != nil {
+	// that can move the head. No restriction of a kept last admin runs until the
+	// whole tail is done (an append stages its own seq as the head, which would
+	// pass every line not yet handled): the drain and the tail record the admins
+	// they kept in owe, and restrictKept answers them last.
+	var owe keptAdmins
+	if res.Drained, err = in.drainUnapplied(ctx, chain, aborted, !untrusted, &owe); err != nil {
 		return res, err
 	}
 	lines := in.tailLines(chain, headBefore, untrusted)
@@ -350,7 +365,7 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 		return res, err
 	}
 	plan := tailPlan{Lines: lines, Aborted: aborted, Pending: pend, Hold: hold}
-	if res.Reapplied, err = in.applyTail(ctx, plan); err != nil {
+	if res.Reapplied, err = in.applyTail(ctx, plan, &owe); err != nil {
 		return res, err
 	}
 	after := headBefore
@@ -359,6 +374,9 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	}
 	if plan.Pending != nil && plan.Pending.Head().Seq > after.Seq {
 		after = plan.Pending.Head()
+	}
+	if err := in.restrictKept(ctx, &owe, plan, after); err != nil {
+		return res, err
 	}
 	if hold && after.Seq > headBefore.Seq {
 		res.Held = after
@@ -820,15 +838,19 @@ func (in reapplyInput) queueUnapplied(ctx context.Context, lines []journal.Line,
 // drainUnapplied applies the queued lines this build can now apply, and deletes
 // each one's entry in the batch that applies it, so a line is applied and
 // dequeued together or neither (a crash between the two batches of one chunk
-// re-applies it, which narrows and is idempotent). The journal says what to
-// apply: an entry names a line, and only the verified chain's line at that seq
-// with that mac is ever applied. An entry whose kind this build still does not
-// know stays; so does one the verified chain does not hold (retention dropped
-// it, or the journal is another history), which is reported, not failed on again;
-// and nothing is applied from a chain that is not trusted. A line that is now a
-// known bookkeeping kind, or the hook line of an aborted restore, is owed
-// nothing and its entry goes. It returns the number of entries removed.
-func (in reapplyInput) drainUnapplied(ctx context.Context, chain *journal.Chain, aborted map[uint64]bool, trusted bool) (int, error) {
+// re-applies it, which narrows and is idempotent). A chunk that kept a last admin
+// does not delete its entries yet: the restriction is still owed, and the entries
+// are all there is to replay it from, so they wait in owe until restrictKept ran
+// it. The journal says what to apply: an entry names a line, and only the verified
+// chain's line at that seq with that mac is ever applied. An entry whose kind this
+// build still does not know stays; so does one the verified chain does not hold
+// (retention dropped it, or the journal is another history), which is reported,
+// not failed on again; and nothing is applied from a chain that is not trusted
+// (the entries were answered when they were queued, and the boot's other rules
+// already report and fail closed for the chain). A line that is now a known
+// bookkeeping kind, or the hook line of an aborted restore, is owed nothing and
+// its entry goes. It returns the number of lines applied.
+func (in reapplyInput) drainUnapplied(ctx context.Context, chain *journal.Chain, aborted map[uint64]bool, trusted bool, owe *keptAdmins) (int, error) {
 	entries, err := journal.ReadUnapplied(ctx, in.KS)
 	if err != nil {
 		return 0, fmt.Errorf("kernel: read the unapplied-revocation queue: %w", err)
@@ -858,14 +880,15 @@ func (in reapplyInput) drainUnapplied(ctx context.Context, chain *journal.Chain,
 			}
 			return nil
 		}
-		kept, err := in.commitTail(ctx, revs, dequeue)
+		kept, completed, err := in.commitTail(ctx, revs, dequeue, false)
 		if err != nil {
 			return drained, fmt.Errorf("kernel: apply the queued revocation lines up to seq %d: %w", part[len(part)-1].Seq, err)
 		}
 		drained += len(part)
-		for _, u := range kept {
-			if err := in.Apply.RestrictLastAdmin(ctx, u); err != nil {
-				return drained, fmt.Errorf("kernel: restrict the last admin %s: %w", u, err)
+		owe.keep(kept)
+		if !completed {
+			for _, l := range part {
+				owe.Dequeue = append(owe.Dequeue, l.Seq)
 			}
 		}
 	}
@@ -873,6 +896,77 @@ func (in reapplyInput) drainUnapplied(ctx context.Context, chain *journal.Chain,
 		in.log().Info("kernel: applied revocation lines a newer build wrote, queued by an earlier boot", "lines", drained)
 	}
 	return drained, nil
+}
+
+// keptAdmins is what the re-apply owes the last admins it kept: rbac skips a line
+// that would leave no active core:admin holder and reports the holder, and the
+// holder is then restricted (auth.RestrictLastAdmin, journaled, so an append that
+// stages the head at the top of the journal). That is why it waits for the end of
+// the tail, and why what the kept line would have completed waits with it.
+type keptAdmins struct {
+	// Users are the admins kept, in the order they were, each once.
+	Users []string
+	// Dequeue are the seqs of drained lines whose entry is not deleted yet.
+	Dequeue []uint64
+	// Head is true once a tail chunk's head was withheld: that chunk and every one
+	// after it stage none, so the head cannot pass the chunk that kept an admin
+	// before the restriction ran, and restrictKept commits it.
+	Head bool
+}
+
+// keep adds the admins a batch kept.
+func (k *keptAdmins) keep(users []string) {
+	for _, u := range users {
+		if !slices.Contains(k.Users, u) {
+			k.Users = append(k.Users, u)
+		}
+	}
+}
+
+// restrictKept restricts the admins the drain and the tail kept, once the whole
+// tail has been applied, and then completes what waited for them: the queue
+// entries of the drained lines that kept one and the head a chunk withheld. A
+// crash anywhere before this re-applies the chunks that kept an admin at the next
+// boot (their head and their entries are still below), which keeps the admin
+// again; a crash after the restriction has the head at the top of the journal
+// when the journal took its line, and every line below it handled by then.
+// The head is committed here whether or not the restriction's own append moved it:
+// a journal that cannot take the line records a gap and leaves the head where it
+// is, and the commit never moves it back.
+func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tailPlan, after journal.Head) error {
+	for _, u := range owe.Users {
+		if err := in.Apply.RestrictLastAdmin(ctx, u); err != nil {
+			return fmt.Errorf("kernel: restrict the last admin %s: %w", u, err)
+		}
+	}
+	if len(owe.Dequeue) > 0 {
+		err := func() (err error) {
+			b := in.queueBatch()
+			defer func() { err = errors.Join(err, b.Close()) }()
+			for _, seq := range owe.Dequeue {
+				if err := journal.StageUnappliedDelete(b, in.KS, seq); err != nil {
+					return err
+				}
+			}
+			return b.Commit(ctx, storage.Sync)
+		}()
+		if err != nil {
+			return fmt.Errorf("kernel: remove the applied lines from the unapplied-revocation queue: %w", err)
+		}
+	}
+	if !owe.Head || p.Hold {
+		return nil
+	}
+	if p.Pending != nil {
+		if err := p.Pending.Commit(ctx); err != nil {
+			return fmt.Errorf("kernel: commit the journal head: %w", err)
+		}
+		return nil
+	}
+	if err := journal.CommitHead(ctx, in.KS, after); err != nil {
+		return fmt.Errorf("kernel: commit the journal head: %w", err)
+	}
+	return nil
 }
 
 // settleUnapplied reports what the queue holds once the tail is done and answers
@@ -935,11 +1029,13 @@ type tailPlan struct {
 
 // applyTail applies p.Lines in order, in batches of in.TailBatch, each batch
 // moving the head with its last write; it returns the number of revocations it
-// applied. A line this build cannot apply (queued by queueUnapplied already) and
-// the hook line of an aborted restore are stepped over, not applied. The head
-// never passes a line that is neither applied nor queued. A run of lines that
-// is empty still commits the pending line's head.
-func (in reapplyInput) applyTail(ctx context.Context, p tailPlan) (int, error) {
+// applied. A batch that kept a last admin moves no head, and neither does any
+// batch after it (owe.Head): the restriction is owed and restrictKept commits the
+// head once it ran. A line this build cannot apply (queued by queueUnapplied
+// already) and the hook line of an aborted restore are stepped over, not applied.
+// The head never passes a line that is neither applied nor queued. A run of lines
+// that is empty still commits the pending line's head.
+func (in reapplyInput) applyTail(ctx context.Context, p tailPlan, owe *keptAdmins) (int, error) {
 	parts := slices.Collect(slices.Chunk(p.Lines, in.tailSize()))
 	applied := 0
 	for i, part := range parts {
@@ -959,15 +1055,14 @@ func (in reapplyInput) applyTail(ctx context.Context, p tailPlan) (int, error) {
 			h := journal.Head{Seq: last.Seq, MAC: last.MAC}
 			head = func(ctx context.Context, b *storage.Batch) error { return journal.StageHead(ctx, b, in.KS, h) }
 		}
-		kept, err := in.commitTail(ctx, revs, head)
+		kept, completed, err := in.commitTail(ctx, revs, head, owe.Head)
 		if err != nil {
 			return applied, fmt.Errorf("kernel: re-apply the revocation journal up to seq %d: %w", last.Seq, err)
 		}
 		applied += len(revs)
-		for _, u := range kept {
-			if err := in.Apply.RestrictLastAdmin(ctx, u); err != nil {
-				return applied, fmt.Errorf("kernel: restrict the last admin %s: %w", u, err)
-			}
+		owe.keep(kept)
+		if head != nil && !completed {
+			owe.Head = true
 		}
 	}
 	if len(parts) == 0 && p.Pending != nil && !p.Hold {
@@ -978,16 +1073,21 @@ func (in reapplyInput) applyTail(ctx context.Context, p tailPlan) (int, error) {
 	return applied, nil
 }
 
-// commitTail applies revs in two batches and stages the head into the second:
-// auth's revocations commit first, alone, and then rbac's, which read the users
-// auth's changed, with head. Staged into one batch, rbac's write of a user row
-// (built from a snapshot read before auth's was committed) replaced auth's, so
-// the head moved past a disable, a delete or a password blank that never took
-// effect, and the last-admin guard could not see a disable staged beside it. A
-// crash between the two re-applies the chunk, which is idempotent: the head
-// moves with the second. Each batch is retried with a fresh one on a conflict
-// (the stagers re-read what they decide on).
-func (in reapplyInput) commitTail(ctx context.Context, revs []journal.Revocation, head func(context.Context, *storage.Batch) error) (kept []string, err error) {
+// commitTail applies revs in two batches and stages complete into the second
+// (the head of a tail chunk, the dequeue of a drained one): auth's revocations
+// commit first, alone, and then rbac's, which read the users auth's changed, with
+// complete. Staged into one batch, rbac's write of a user row (built from a
+// snapshot read before auth's was committed) replaced auth's, so the head moved
+// past a disable, a delete or a password blank that never took effect, and the
+// last-admin guard could not see a disable staged beside it. A crash between the
+// two re-applies the chunk, which is idempotent: complete goes with the second.
+// Each batch is retried with a fresh one on a conflict (the stagers re-read what
+// they decide on).
+//
+// complete is left out when withhold is set and when rbac kept an admin (the
+// restriction is owed, and completing first would let a crash between the two
+// leave it with nothing to replay it): completed reports whether it was staged.
+func (in reapplyInput) commitTail(ctx context.Context, revs []journal.Revocation, complete func(context.Context, *storage.Batch) error, withhold bool) (kept []string, completed bool, err error) {
 	if len(revs) > 0 {
 		err := storage.RetryOnConflict(ctx, 5, func(ctx context.Context) (err error) {
 			b := in.Apply.NewBatch()
@@ -1001,29 +1101,30 @@ func (in reapplyInput) commitTail(ctx context.Context, revs []journal.Revocation
 			return b.Commit(ctx, storage.Sync)
 		})
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	err = storage.RetryOnConflict(ctx, 5, func(ctx context.Context) (err error) {
 		b := in.Apply.NewBatch()
 		defer func() { err = errors.Join(err, b.Close()) }()
-		kept = nil
+		kept, completed = nil, false
 		if len(revs) > 0 {
 			if kept, err = in.Apply.RBAC(ctx, b, revs); err != nil {
 				return err
 			}
 		}
-		if head != nil {
-			if err := head(ctx, b); err != nil {
+		if complete != nil && !withhold && len(kept) == 0 {
+			if err := complete(ctx, b); err != nil {
 				return err
 			}
+			completed = true
 		}
 		if b.Count() == 0 {
 			return nil
 		}
 		return b.Commit(ctx, storage.Sync)
 	})
-	return kept, err
+	return kept, completed, err
 }
 
 // writeBookkeeping writes the lines this boot owes the journal before it moves

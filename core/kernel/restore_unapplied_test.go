@@ -1,5 +1,5 @@
 // file: core/kernel/restore_unapplied_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f7a08fa0-5661-48d2-8e67-284ca3838859
 // last-edited: 2026-11-12
 
@@ -626,7 +626,7 @@ func TestUnappliedQueue_AnUntrustedChainQueuesAndAppliesWhatItVerifies(t *testin
 // TestUnappliedQueue_AnEntryIsAppliedOnlyForTheLineTheVerifiedChainHolds: an
 // entry names a line by seq and mac, and the line applied is the verified chain's.
 // An entry with another mac, one past the chain's end, and every entry when the
-// chain is not trusted, stay: nothing is applied from them, and none of it fails
+// chain is not whole, stay: nothing is applied from them, and none of it fails
 // closed again.
 func TestUnappliedQueue_AnEntryIsAppliedOnlyForTheLineTheVerifiedChainHolds(t *testing.T) {
 	setup := func() (*rxFx, string, journal.Line) {
@@ -684,12 +684,33 @@ func TestUnappliedQueue_AnEntryIsAppliedOnlyForTheLineTheVerifiedChainHolds(t *t
 			t.Errorf("queue = %v, want [99]", got)
 		}
 	})
-	t.Run("a chain that is not trusted", func(t *testing.T) {
+	t.Run("a chain that does not verify at the line", func(t *testing.T) {
 		fx, sel, _ := setup()
 		editJournalLine(t, fx.journalPath(), 1, "u-selina", "u-barbara") // a hand edit the MAC catches
 		res, _ := fx.boot(nil, nil)
 		if res.Broken == nil || res.Drained != 0 || res.Unapplied != 1 || fx.userRow(sel).Status != auth.StatusActive {
-			t.Errorf("broken %v, drained %d, unapplied %d, selina %q: nothing is drained from a chain that does not verify", res.Broken, res.Drained, res.Unapplied, fx.userRow(sel).Status)
+			t.Errorf("broken %v, drained %d, unapplied %d, selina %q: the chain does not hold the line the entry names", res.Broken, res.Drained, res.Unapplied, fx.userRow(sel).Status)
+		}
+	})
+	// The approved design: nothing is drained from a journal that is not whole,
+	// even a line the verified part of it holds. The entries were answered when
+	// they were queued, the boot reports the break and fails closed for it on its
+	// own, and the entries wait for a journal that verifies.
+	t.Run("a chain that breaks after the line", func(t *testing.T) {
+		fx := newRxFx(t, nil)
+		fx.boot(nil, nil)
+		sel, har := fx.user("selina"), fx.user("harley")
+		fx.journalOnly(journal.Revocation{Kind: journal.UserDisabled, Subject: rxUserRef(sel), Epoch: 1})
+		fx.journalOnly(journal.Revocation{Kind: journal.UserDisabled, Subject: rxUserRef(har), Epoch: 1})
+		fx.restart()
+		if res, _ := fx.boot(nil, uqOldBuild); res.Queued != 2 { // queues 1 and 2
+			t.Fatalf("queued %d, want 2", res.Queued)
+		}
+		fx.restart()
+		editJournalLine(t, fx.journalPath(), 2, "u-harley", "u-barbara") // line 2 no longer verifies; line 1 still does
+		res, _ := fx.boot(nil, nil)
+		if res.Broken == nil || res.Drained != 0 || res.Unapplied != 2 || fx.userRow(sel).Status != auth.StatusActive || fx.userRow(har).Status != auth.StatusActive {
+			t.Errorf("broken %v, drained %d, unapplied %d, selina %q, harley %q: a chain that is not whole drains nothing, not even the verified line", res.Broken, res.Drained, res.Unapplied, fx.userRow(sel).Status, fx.userRow(har).Status)
 		}
 	})
 }
