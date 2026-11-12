@@ -1129,7 +1129,7 @@ func TestFindBatches_Wire(t *testing.T) {
 		if classOf(err) != integrations.ClassBadOutput {
 			t.Errorf("err = %v (class %v), want BadOutput: absence from a truncated listing proves nothing", err, classOf(err))
 		}
-		if got != nil && len(got) != 0 {
+		if len(got) != 0 {
 			t.Errorf("got %v", got)
 		}
 	})

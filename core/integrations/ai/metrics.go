@@ -173,10 +173,14 @@ func (r *Router) observeGauges(o metric.Observer, inflight, benched, jobs metric
 }
 
 // close unregisters the gauge callback.
-func (in *instruments) close() {
-	if in != nil && in.gauges != nil {
-		_ = in.gauges.Unregister()
+func (in *instruments) close() error {
+	if in == nil || in.gauges == nil {
+		return nil
 	}
+	if err := in.gauges.Unregister(); err != nil {
+		return fmt.Errorf("ai: unregister the job gauge: %w", err)
+	}
+	return nil
 }
 
 // modelLabel bounds the model label to the configured models plus "other"

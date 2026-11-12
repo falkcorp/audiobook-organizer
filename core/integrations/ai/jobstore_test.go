@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -190,6 +191,64 @@ func TestNativeJobStore_RoundTrip(t *testing.T) {
 	}
 	if err := commit(t, ks, func(b *storage.Batch) error { return st.Transition(ctx, b, "z-404", ai.JobPending, next) }); !errors.Is(err, ai.ErrJobNotFound) {
 		t.Errorf("Transition of an unknown job = %v", err)
+	}
+}
+
+// Open lists the open jobs it could read, then ends with the error: a poll that
+// cannot read a job must not treat it as absent, and must not lose the jobs
+// before it either. The damage is a real write that carries its Expect (the job
+// row is read for update first), so the keyspace's own rules stay on and only
+// the row's content is wrong.
+func TestNativeJobStore_OpenYieldsReadableJobsThenTheError(t *testing.T) {
+	t.Parallel()
+	row := keys.Join(keys.Str("jobs"), keys.Str("b-02"))
+	for _, tc := range []struct {
+		name, wantErr string
+		damage        func(in storage.BatchWriter) error
+	}{
+		{"an index row whose job row is missing", "b-02", func(in storage.BatchWriter) error { return in.Delete(row) }},
+		{"a job row that does not decode", "decode a job row", func(in storage.BatchWriter) error { return in.Set(row, []byte("{not json")) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ks := openAIKeyspace(t)
+			st := ai.NativeJobStore(ks)
+			ctx := context.Background()
+			for _, id := range []string{"a-01", "b-02", "c-03"} {
+				if err := commit(t, ks, func(b *storage.Batch) error { return st.Create(ctx, b, newJob(id)) }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			damage := func(b *storage.Batch) error {
+				b.Bind(ks)
+				if _, err := b.GetForUpdate(ctx, ks, row); err != nil {
+					return err
+				}
+				return tc.damage(b.In(ks))
+			}
+			if err := commit(t, ks, damage); err != nil {
+				t.Fatalf("damage the store: %v", err)
+			}
+
+			var ids []ai.BatchJobID
+			var failure error
+			for j, err := range st.Open(ctx) {
+				switch {
+				case failure != nil:
+					t.Fatalf("Open yielded (%s, %v) after its error %v", j.ID, err, failure)
+				case err != nil:
+					failure = err
+				default:
+					ids = append(ids, j.ID)
+				}
+			}
+			if fmt.Sprint(ids) != "[a-01]" {
+				t.Errorf("Open yielded %v before the error, want [a-01]: the job read before the damage must not be lost", ids)
+			}
+			if failure == nil || !strings.Contains(failure.Error(), tc.wantErr) {
+				t.Errorf("Open ended with %v, want an error naming %q", failure, tc.wantErr)
+			}
+		})
 	}
 }
 

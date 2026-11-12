@@ -221,13 +221,18 @@ type nativeStore struct{ ks storage.Keyspace }
 // committed value it derives from.
 func NativeJobStore(ks storage.Keyspace) JobStore { return nativeStore{ks: ks} }
 
-// Get returns the job with its payload; ErrJobNotFound when absent.
-func (s nativeStore) Get(ctx context.Context, id BatchJobID) (StoredJob, error) {
+// Get returns the job with its payload; ErrJobNotFound when absent. A failed
+// snapshot Close is the error when nothing else failed.
+func (s nativeStore) Get(ctx context.Context, id BatchJobID) (out StoredJob, err error) {
 	snap, err := s.ks.Snapshot()
 	if err != nil {
 		return StoredJob{}, fmt.Errorf("ai: read job %s: %w", id, err)
 	}
-	defer func() { _ = snap.Close() }()
+	defer func() {
+		if cerr := snap.Close(); cerr != nil && err == nil {
+			out, err = StoredJob{}, fmt.Errorf("ai: read job %s: close snapshot: %w", id, cerr)
+		}
+	}()
 	raw, err := snap.Get(ctx, jobKey(id))
 	if errors.Is(err, storage.ErrNotFound) {
 		return StoredJob{}, fmt.Errorf("%w: %s", ErrJobNotFound, id)
@@ -250,45 +255,61 @@ func (s nativeStore) Get(ctx context.Context, id BatchJobID) (StoredJob, error) 
 	return j, nil
 }
 
-// Open yields the non-terminal jobs in ID order, payload omitted, from one
-// snapshot, so a job is never listed twice or half moved. An index row whose
-// job row is missing, or a row that cannot be decoded, ends the sequence with
-// an error: a poll that cannot read a job must not treat it as absent.
+// Open yields the non-terminal jobs in ID order, payload omitted, read from one
+// snapshot so a job is never listed twice or half moved. The snapshot is closed
+// before the first job is yielded: a poll that calls a provider for each job
+// holds no storage lease while it does, and a failed Close still has a consumer
+// to be reported to. An index row whose job row is missing, or a row that
+// cannot be decoded, ends the sequence with an error after the jobs before it:
+// a poll that cannot read a job must not treat it as absent.
 func (s nativeStore) Open(ctx context.Context) iter.Seq2[StoredJob, error] {
 	return func(yield func(StoredJob, error) bool) {
-		snap, err := s.ks.Snapshot()
-		if err != nil {
-			yield(StoredJob{}, fmt.Errorf("ai: list open jobs: %w", err))
-			return
-		}
-		defer func() { _ = snap.Close() }()
-		prefix := openPrefix()
-		for kv, err := range snap.Scan(ctx, storage.ScanOptions{Start: prefix, End: keys.PrefixEnd(prefix)}) {
-			if err != nil {
-				yield(StoredJob{}, fmt.Errorf("ai: list open jobs: %w", err))
-				return
-			}
-			segs, err := keys.Split(kv.Key)
-			if err != nil || len(segs) != 3 {
-				yield(StoredJob{}, fmt.Errorf("ai: open index key %q is not an index row", kv.Key))
-				return
-			}
-			id := BatchJobID(segs[2])
-			raw, err := snap.Get(ctx, jobKey(id))
-			if err != nil {
-				yield(StoredJob{}, fmt.Errorf("ai: open index row of job %s has no readable job: %w", id, err))
-				return
-			}
-			j, err := decodeJob(raw)
-			if err != nil {
-				yield(StoredJob{}, err)
-				return
-			}
+		jobs, err := s.readOpen(ctx)
+		for _, j := range jobs {
 			if !yield(j, nil) {
 				return
 			}
 		}
+		if err != nil {
+			yield(StoredJob{}, err)
+		}
 	}
+}
+
+// readOpen reads the open jobs from one snapshot and closes it. It returns the
+// jobs read before the first failure together with that failure; a failed Close
+// is the error when nothing else failed.
+func (s nativeStore) readOpen(ctx context.Context) (jobs []StoredJob, err error) {
+	snap, err := s.ks.Snapshot()
+	if err != nil {
+		return nil, fmt.Errorf("ai: list open jobs: %w", err)
+	}
+	defer func() {
+		if cerr := snap.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("ai: list open jobs: close snapshot: %w", cerr)
+		}
+	}()
+	prefix := openPrefix()
+	for kv, serr := range snap.Scan(ctx, storage.ScanOptions{Start: prefix, End: keys.PrefixEnd(prefix)}) {
+		if serr != nil {
+			return jobs, fmt.Errorf("ai: list open jobs: %w", serr)
+		}
+		segs, kerr := keys.Split(kv.Key)
+		if kerr != nil || len(segs) != 3 {
+			return jobs, fmt.Errorf("ai: open index key %q is not an index row", kv.Key)
+		}
+		id := BatchJobID(segs[2])
+		raw, gerr := snap.Get(ctx, jobKey(id))
+		if gerr != nil {
+			return jobs, fmt.Errorf("ai: open index row of job %s has no readable job: %w", id, gerr)
+		}
+		j, derr := decodeJob(raw)
+		if derr != nil {
+			return jobs, derr
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, nil
 }
 
 // Create stages j, its payload and its open-index row into b, expecting the

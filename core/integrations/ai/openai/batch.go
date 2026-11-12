@@ -157,7 +157,7 @@ func (i *instance) BatchResults(ctx context.Context, h ai.BatchHandle) (iter.Seq
 		sc := bufio.NewScanner(resp.Body)
 		sc.Buffer(make([]byte, 0, 64<<10), maxResultLine())
 		bodies = append(bodies, sc)
-		closers = append(closers, func() { drain(resp.Body) })
+		closers = append(closers, func() { drain(i.log, resp.Body) })
 	}
 	return func(yield func(ai.BatchResult, error) bool) {
 		defer cleanup()

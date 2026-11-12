@@ -101,7 +101,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 }
 
 // Close unregisters the router's gauge callback. Calls in flight finish.
-func (r *Router) Close() { r.m.close() }
+func (r *Router) Close() error { return r.m.close() }
 
 // config is the live core.ai section with its defaults applied.
 func (r *Router) config() Config {
