@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -238,25 +237,10 @@ func (s *idRoles) GetRole(ctx context.Context, name rbac.RoleName) (*rbac.Role, 
 	return &r, nil
 }
 
-// idNative is the NativeReader over the two doubles.
-type idNative struct {
-	a *idAuth
-	r *idRoles
-}
-
-func (n idNative) GetUser(ctx context.Context, id auth.UserID) (*auth.User, error) {
-	return n.a.GetUser(ctx, id)
-}
-
-func (n idNative) GetRole(ctx context.Context, name rbac.RoleName) (*rbac.Role, error) {
-	return n.r.GetRole(ctx, name)
-}
-
 // idAudit is the audit.Logger double: RecordIn stages one row in the chunk's
 // batch, so a crash that loses the chunk loses its audit rows with it.
 type idAudit struct {
 	ks storage.Keyspace
-	n  atomic.Uint64
 }
 
 func (a *idAudit) RecordIn(ctx context.Context, b *storage.Batch, e audit.Event) error {
