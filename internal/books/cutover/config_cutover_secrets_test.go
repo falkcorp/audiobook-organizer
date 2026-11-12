@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_cutover_secrets_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3a8e5c71-2d90-4c6b-b5f4-7e1a9d3c4b08
 // last-edited: 2026-11-11
 
@@ -442,6 +442,17 @@ func TestConfigCutover_KeySearchOrder(t *testing.T) {
 		}()
 		ConfigStep(nil, nil, ConfigStepOptions{LevelStepVersion: 1})
 		t.Error("ConfigStep accepted an empty DatabasePath")
+	})
+
+	t.Run("a step built without the level step version panics", func(t *testing.T) {
+		defer func() {
+			msg, _ := recover().(string)
+			if !strings.Contains(msg, "ConfigStepOptions.LevelStepVersion") {
+				t.Errorf("panic = %q, want it to name ConfigStepOptions.LevelStepVersion", msg)
+			}
+		}()
+		ConfigStep(nil, nil, ConfigStepOptions{DatabasePath: filepath.Join(t.TempDir(), "audiobooks.pebble")})
+		t.Error("ConfigStep accepted a zero LevelStepVersion")
 	})
 
 	t.Run("the refusal names the database directory beside the state directory", func(t *testing.T) {

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_cutover_gapfill_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c47a9e03-5b18-4d62-a0f7-83e1d6b25c94
 // last-edited: 2026-11-11
 
@@ -32,8 +32,9 @@ const (
 
 // TestConfigCutover_GapFillStripped: M2a consumes what config.yaml gap-fills
 // (the three secrets, root_dir, enable_ai_parsing) without touching the file;
-// the strip M2b performs removes the fifteen managed keys, case-insensitively,
-// keeps everything else, and survives a failure at every file operation.
+// the strip M2b performs removes fourteen of the fifteen managed keys,
+// case-insensitively, keeps database_path and everything else, and survives a
+// failure at every file operation.
 func TestConfigCutover_GapFillStripped(t *testing.T) {
 	t.Run("M2a consumes the gap-fill and leaves the file alone", func(t *testing.T) {
 		r := newRig(t, "stage1", func(r *rig) {
@@ -300,15 +301,15 @@ func TestStripGapFill(t *testing.T) {
 		}
 	})
 
-	t.Run("the fifteen managed keys go, case-insensitively, and nothing else", func(t *testing.T) {
+	t.Run("the fourteen strippable managed keys go, case-insensitively; database_path and the rest stay", func(t *testing.T) {
 		p := write(t, managedFile())
 		rep, err := StripGapFill(ctx, nil, p, holdAll)
-		if err != nil || rep.Result != StripStripped || len(rep.Kept) != 0 {
-			t.Fatalf("= %+v, %v; want stripped, nothing kept", rep, err)
+		if err != nil || rep.Result != StripStripped || !slices.Equal(rep.Kept, []string{"database_path"}) {
+			t.Fatalf("= %+v, %v; want stripped, database_path kept", rep, err)
 		}
 		got := yamlKeys(t, p)
-		if len(got) != 2 || got["operator_note"] != "keep-me" {
-			t.Errorf("left %v, want only operator_note and tuning", slices.Sorted(keysOf(got)))
+		if len(got) != 3 || got["operator_note"] != "keep-me" || got["Database_Path"] != "/batcave/db" {
+			t.Errorf("left %v, want only Database_Path (in its own case), operator_note and tuning", slices.Sorted(keysOf(got)))
 		}
 		if tuning, _ := got["tuning"].(map[string]any); tuning["gotham_threads"] != 7 {
 			t.Errorf("the nested key was not kept: %v", got["tuning"])
@@ -326,9 +327,9 @@ func TestStripGapFill(t *testing.T) {
 		if names := dirNames(t, filepath.Dir(p)); !slices.Equal(names, []string{"config.yaml"}) {
 			t.Errorf("the directory holds %v, want only config.yaml", names)
 		}
-		// A second strip finds nothing.
-		if rep, err := StripGapFill(ctx, nil, p, holdAll); err != nil || rep.Result != StripClean {
-			t.Errorf("second strip = %v, %v; want clean", rep.Result, err)
+		// A second strip finds nothing to remove, and still reports the kept key.
+		if rep, err := StripGapFill(ctx, nil, p, holdAll); err != nil || rep.Result != StripClean || !slices.Equal(rep.Kept, []string{"database_path"}) {
+			t.Errorf("second strip = %+v, %v; want clean with database_path kept", rep, err)
 		}
 	})
 
@@ -387,7 +388,7 @@ func TestStripGapFill(t *testing.T) {
 				t.Errorf("fail at op %d: rerun = %v, %v", failAt, rep.Result, err)
 			}
 			final := yamlKeys(t, p)
-			if len(final) != 2 {
+			if len(final) != 3 {
 				t.Errorf("fail at op %d: after the rerun the file holds %v", failAt, slices.Sorted(keysOf(final)))
 			}
 			if names := dirNames(t, filepath.Dir(p)); !slices.Equal(names, []string{"config.yaml"}) {
@@ -457,30 +458,32 @@ func TestStripGapFill_VerifiesTheDestinationBeforeDeleting(t *testing.T) {
 				}
 			}
 			rep, err := StripGapFill(ctx, nil, p, holdOnly(held...))
-			if err != nil || rep.Result != StripStripped || !slices.Equal(rep.Kept, []string{key}) {
-				t.Fatalf("= %+v, %v; want stripped with %s kept", rep, err, key)
+			wantKept := []string{"database_path", key}
+			slices.Sort(wantKept)
+			if err != nil || rep.Result != StripStripped || !slices.Equal(rep.Kept, wantKept) {
+				t.Fatalf("= %+v, %v; want stripped with %v kept", rep, err, wantKept)
 			}
 			got := yamlKeys(t, p)
 			for _, k := range headManagedFileKeys {
 				_, in := got[k]
-				if in != (k == key) {
-					t.Errorf("%s in the file after the strip = %v, want %v", k, in, k == key)
+				if want := k == key || k == "database_path"; in != want {
+					t.Errorf("%s in the file after the strip = %v, want %v", k, in, want)
 				}
 			}
 			// Once the destination holds it, the next run strips it.
-			if rep, err := StripGapFill(ctx, nil, p, holdAll); err != nil || rep.Result != StripDeleted && rep.Result != StripStripped || len(rep.Kept) != 0 {
+			if rep, err := StripGapFill(ctx, nil, p, holdAll); err != nil || rep.Result != StripStripped || !slices.Equal(rep.Kept, []string{"database_path"}) {
 				t.Errorf("rerun with the destination held = %+v, %v", rep, err)
 			}
-			if got := yamlKeys(t, p); len(got) != 2 {
+			if got := yamlKeys(t, p); len(got) != 3 {
 				t.Errorf("the file holds %v after the rerun", slices.Sorted(keysOf(got)))
 			}
 		})
 	}
 
-	t.Run("no holder keeps all five and strips the ten HEAD never reads back", func(t *testing.T) {
+	t.Run("no holder keeps all five and database_path, and strips the nine others HEAD never reads back", func(t *testing.T) {
 		p := file(t)
 		rep, err := StripGapFill(ctx, nil, p, nil)
-		if err != nil || rep.Result != StripStripped || len(rep.Kept) != 5 {
+		if err != nil || rep.Result != StripStripped || len(rep.Kept) != 6 || !slices.Contains(rep.Kept, "database_path") {
 			t.Fatalf("= %+v, %v", rep, err)
 		}
 		got := yamlKeys(t, p)
@@ -489,9 +492,62 @@ func TestStripGapFill_VerifiesTheDestinationBeforeDeleting(t *testing.T) {
 				t.Errorf("%s was stripped with nothing to show it is held", k)
 			}
 		}
-		for _, k := range []string{"database_path", "playlist_dir", "setup_complete", "organization_strategy", "log_level"} {
+		for _, k := range []string{"playlist_dir", "setup_complete", "organization_strategy", "log_level"} {
 			if _, in := got[k]; in {
 				t.Errorf("%s stayed: HEAD never reads it back from the file", k)
+			}
+		}
+		if _, in := got["database_path"]; !in {
+			t.Error("database_path was stripped with nothing to show it is stored anywhere")
+		}
+	})
+
+	t.Run("database_path is kept whatever the holder says, in any case, and is reported", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			holder GapFillHolder
+		}{{"no holder", nil}, {"a holder that holds everything", holdAll}, {"a holder that holds nothing", holdNone}} {
+			for _, key := range []string{"database_path", "Database_Path", "DATABASE_PATH"} {
+				p := filepath.Join(t.TempDir(), "config.yaml")
+				content := key + ": /batcave/db\noperator_note: keep-me\n"
+				if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				rep, err := StripGapFill(ctx, nil, p, tc.holder)
+				raw, _ := os.ReadFile(p)
+				if err != nil || rep.Result != StripClean || !slices.Equal(rep.Kept, []string{"database_path"}) || string(raw) != content {
+					t.Errorf("%s, %s: = %+v, %v, file %q; want clean, database_path kept, file untouched", tc.name, key, rep, err, raw)
+				}
+			}
+		}
+	})
+
+	t.Run("a file whose only managed key is database_path is never removed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(p, []byte("root_dir: "+fxFileRoot+"\ndatabase_path: /batcave/db\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rep, err := StripGapFill(ctx, nil, p, holdAll)
+		if err != nil || rep.Result != StripStripped || !slices.Equal(rep.Kept, []string{"database_path"}) {
+			t.Fatalf("= %+v, %v; want stripped with database_path kept", rep, err)
+		}
+		if got := yamlKeys(t, p); len(got) != 1 || got["database_path"] != "/batcave/db" {
+			t.Errorf("the file holds %v, want database_path alone", slices.Sorted(keysOf(got)))
+		}
+	})
+
+	t.Run("a null or empty database_path says nothing and is removed", func(t *testing.T) {
+		for _, line := range []string{"database_path:\n", "database_path: \"\"\n", "database_path: '  '\n"} {
+			p := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(p, []byte(line+"operator_note: keep-me\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			rep, err := StripGapFill(ctx, nil, p, holdAll)
+			if err != nil || rep.Result != StripStripped || len(rep.Kept) != 0 {
+				t.Errorf("%q: = %+v, %v; want stripped, nothing kept", line, rep, err)
+			}
+			if got := yamlKeys(t, p); len(got) != 1 {
+				t.Errorf("%q: the file holds %v, want only operator_note", line, slices.Sorted(keysOf(got)))
 			}
 		}
 	})
@@ -686,8 +742,8 @@ func TestStripGapFill_WritesLikeHEAD(t *testing.T) {
 		if err != nil || rep.Result != StripStripped || !rep.InPlace {
 			t.Fatalf("= %+v, %v; want stripped in place", rep, err)
 		}
-		if got := yamlKeys(t, p); len(got) != 2 {
-			t.Errorf("the file holds %v", slices.Sorted(keysOf(got)))
+		if got := yamlKeys(t, p); len(got) != 3 {
+			t.Errorf("the file holds %v, want database_path, operator_note and tuning", slices.Sorted(keysOf(got)))
 		}
 		if st, _ := os.Stat(p); st.Mode().Perm() != 0o640 {
 			t.Errorf("mode %v, want 0640", st.Mode().Perm())
@@ -704,8 +760,8 @@ func TestStripGapFill_WritesLikeHEAD(t *testing.T) {
 		if err != nil || !rep.InPlace || !denied.inPlace {
 			t.Fatalf("= %+v, %v, in place %v", rep, err, denied.inPlace)
 		}
-		if got := yamlKeys(t, p); len(got) != 2 {
-			t.Errorf("the file holds %v", slices.Sorted(keysOf(got)))
+		if got := yamlKeys(t, p); len(got) != 3 {
+			t.Errorf("the file holds %v, want database_path, operator_note and tuning", slices.Sorted(keysOf(got)))
 		}
 
 		p2 := filepath.Join(t.TempDir(), "config.yaml")

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_cutover_sources_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4a1e7c20-9d36-4b58-b2f4-6c80d1e39a57
 // last-edited: 2026-11-11
 
@@ -461,7 +461,9 @@ func realHolder(e *bootEnv) GapFillHolder {
 // NewGapFillHolder over core's real stores, answers false before M2a has
 // imported anything (the strip keeps the file's copy of each secret and of
 // enable_ai_parsing) and true for every gap-fill key once it has (the strip
-// removes them). The corpus's config.yaml holds all five gap-fill keys, and its
+// removes them). database_path is kept either way: M2 never stores it, so no
+// destination can hold it. The corpus's config.yaml holds all five gap-fill
+// keys, and its
 // enable_ai_parsing is HEAD's default (true), which the importer stores as no
 // row at all: the holder reads the effective value, so that line is still
 // stripped.
@@ -501,19 +503,20 @@ func TestStripGapFill_HolderOverRealStores(t *testing.T) {
 		t.Fatalf("boot: %v", err)
 	}
 	// Before M2a the three secrets' destinations are empty: the strip keeps
-	// the file's copy. enable_ai_parsing's effective value is already the
-	// file's (true is the default), so there is nothing to lose.
-	if want := []string{"google_books_api_key", "hardcover_api_token", "openai_api_key"}; !slices.Equal(before.Kept, want) {
+	// the file's copy, and database_path's. enable_ai_parsing's effective value
+	// is already the file's (true is the default), so there is nothing to lose.
+	if want := []string{"database_path", "google_books_api_key", "hardcover_api_token", "openai_api_key"}; !slices.Equal(before.Kept, want) {
 		t.Errorf("before M2a the strip kept %v, want %v", before.Kept, want)
 	}
-	// Every managed key of the corpus's file is gone once M2a imported them,
-	// and the file held nothing else the strip would leave: it is removed.
-	if len(after.Kept) != 0 || (after.Result != StripStripped && after.Result != StripDeleted) {
-		t.Errorf("after M2a the strip = %+v, want stripped or deleted with nothing kept", after)
+	// Every managed key of the corpus's file but database_path is gone once M2a
+	// imported them. database_path stays, listed as kept, so the file is
+	// rewritten, not removed.
+	if !slices.Equal(after.Kept, []string{"database_path"}) || after.Result != StripStripped {
+		t.Errorf("after M2a the strip = %+v, want stripped with only database_path kept", after)
 	}
 	for _, key := range headManagedFileKeys {
-		if strings.Contains(string(afterFile), key+":") {
-			t.Errorf("the file still holds %s after M2a and the strip", key)
+		if has := strings.Contains(string(afterFile), key+":"); has != (key == "database_path") {
+			t.Errorf("the file holds %s = %v after M2a and the strip, want %v", key, has, key == "database_path")
 		}
 	}
 }
