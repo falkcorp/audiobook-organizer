@@ -1,5 +1,5 @@
 // file: core/library/transfer.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 534f60c5-c088-4e70-962c-8bcddbfafc71
 // last-edited: 2026-11-11
 
@@ -521,7 +521,7 @@ func (x *xfer) fillTemp(tmp string, clone bool) (sha string, size int64, err err
 	if err != nil {
 		return "", 0, err
 	}
-	defer src.Close()
+	defer closeLogged(x.m.log, src, x.src.String())
 	sst, err := src.Stat()
 	if err != nil {
 		return "", 0, err

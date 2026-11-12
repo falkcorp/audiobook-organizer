@@ -1,5 +1,5 @@
 // file: core/library/guardedopen.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e84d1a36-7b52-4c09-9f1e-2a6c05d8b7f3
 // last-edited: 2026-11-11
 
@@ -62,7 +62,7 @@ func (l *localFS) guardedOpen(op, name, n string) (*os.File, error) {
 	if err != nil {
 		return nil, pathErr(op, name, err)
 	}
-	defer parent.Close()
+	defer closeLogged(l.log, parent, "the directory holding "+name)
 	l.hook("parent", n)
 	under, err := l.areaIdentities(parent)
 	if err != nil {
@@ -78,12 +78,10 @@ func (l *localFS) guardedOpen(op, name, n string) (*os.File, error) {
 	l.hook("opened", n)
 	st, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return nil, pathErr(op, name, err)
+		return nil, libfs.CloseAfter(f, pathErr(op, name, err))
 	}
 	if dev, ino, ok := libfs.InodeOf(st); !ok || under[libfs.ID{Dev: dev, Ino: ino}] {
-		_ = f.Close()
-		return nil, refuse(fmt.Errorf("%w: %s", ErrReservedPath, name))
+		return nil, libfs.CloseAfter(f, refuse(fmt.Errorf("%w: %s", ErrReservedPath, name)))
 	}
 	return f, nil
 }

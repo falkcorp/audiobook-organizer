@@ -1,5 +1,5 @@
 // file: core/library/metrics.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: be17e4e1-84d1-4523-8afd-27fe5f683cef
 // last-edited: 2026-11-11
 
@@ -285,9 +285,7 @@ func (m *manager) instrument(sc *metrics.Scope) error {
 			counts[r.spec.Owner] += 0 // an owner with a root exports 0 until something is held
 		}
 		if recs, err := m.heldByOwner(ctx); err == nil {
-			for owner, n := range recs {
-				counts[owner] = n
-			}
+			maps.Copy(counts, recs)
 		}
 		for owner, n := range counts {
 			o.ObserveInt64(quarantined, n, metric.WithAttributes(attribute.String("owner", string(owner))))
