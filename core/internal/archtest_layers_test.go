@@ -1,7 +1,7 @@
 // file: core/internal/archtest_layers_test.go
 // version: 1.0.16
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // Package internal holds core's R4 layer guard (03 §3.5.1 item 2), the
 // redesigned successor of ABO's internal/arch/layering_test.go for core. It
@@ -101,6 +101,10 @@ var coreLayerOf = map[string]int{
 	// §5S.3.8) and builds the rebuild's tasks.Definition, so it is a bridge: the
 	// layer of its highest import, tasks (R4).
 	"internal/bleveindex": 4,
+	// internal/outboxstore is the c/outbox/ key layout, records and guard
+	// protocol under outbox's relay and operator operations (F6-01, 05-events
+	// §5E.5.2), so it takes outbox's layer (R4).
+	"internal/outboxstore": 4,
 	// L5
 	"acquire": 5,
 	// L6 (internal/<capability>http is coreFamily's pattern)
