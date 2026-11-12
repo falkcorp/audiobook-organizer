@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-12-revocation-journal-queue-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b16666c5-1612-427e-8069-5808a92bac5e -->
 <!-- last-edited: 2026-11-12 -->
 
@@ -100,7 +100,13 @@ store out starts fresh.
 - Entries left on the waiting list have no clearing command yet, and no health
   alert reports a non-empty list. Both are filed for the change that wires the
   replay in.
-- One narrow gap remains by design: if a single start ever kept two different
-  administrators, a crash between their two restrictions would leave the second
-  unrestricted. The role rules make that practically unreachable, and restricting
-  a list in one step is the fix if it ever is reachable.
+- When one log entry would lock out every administrator, the server keeps all the
+  administrators of that role and restricts each of them. A first version of this
+  fix did that one administrator at a time, so a crash after the first left the
+  second with full access. That case needs only one log entry, not two, and the
+  reviewers found it. All the kept administrators are now restricted in a single
+  step. A kept administrator that a later entry deletes no longer stops the start.
+- Two limits remain, both for the change that wires the replay in. A re-enable
+  made by an administrator is not in the log, so an old entry applied by a newer
+  version can undo it, however long the wait was. An entry that cannot be read at
+  all stops every start until someone removes it, and nothing removes it yet.
