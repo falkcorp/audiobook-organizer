@@ -625,6 +625,18 @@ func TestCapsAndHealth(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a key that cannot be read is ours, not the server's rejection", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		r.setKey("", errors.New("the secret store is locked"))
+		h := r.inst.Health(ctx)
+		if h.Status != integrations.HealthMisconfigured || h.Message != integrations.ReasonSecretMissing {
+			t.Errorf("Health = %+v, want misconfigured (%s): the server was never asked", h, integrations.ReasonSecretMissing)
+		}
+		if r.kit.Hits() != 0 {
+			t.Errorf("%d request(s) went out without the key", r.kit.Hits())
+		}
+	})
 	t.Run("a withheld operator secret is misconfigured, and nothing is sent", func(t *testing.T) {
 		t.Parallel()
 		r := newRig(t)
