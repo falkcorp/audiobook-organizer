@@ -1,3 +1,0 @@
-### Fixed
-
-- core/tests: `TestScrub_HostileBodyIsBounded` (providerhttp) no longer flakes on CI. It asserted linearity with a 10-second wall-clock budget for 4 MiB, but under `-race` and coverage on a shared runner the scrubber runs about 150x slower than a plain build and took 15.3 s, failing `core-ci` on unrelated PRs. The scrubber itself is linear (measured: time doubles as input doubles, plain and under `-race`). The test now asserts growth ratios, which do not depend on machine speed: the excerpt path must not grow from 64 KiB to 16 MiB, and `text` must grow under 9x when the input grows 4x (linear is 4x, quadratic 16x). It is also about 3x faster under `-race` (12.5 s vs 37.5 s).

@@ -1,3 +1,0 @@
-### Fixed
-
-- books: the cutover suite's drill selftest (`TestCutoverOnR0Corpus/selftest/<corpus>/drill/prefreeze-row-lost`) no longer flakes the whole `internal/books` test binary. On the r0 corpus the case skips itself, but it skipped while its pebble store was open; the skip never reached `Close`, `t.TempDir` removed the store's files under the live database, and pebble's background table-stats job hit the missing sstable, logged "on-disk corruption" and exited the process. The skip now happens before the store is opened, and the mutation helper closes the store in a `defer`, so a failing or skipping mutation cannot leave one open. Test-only; no production code changed.

@@ -1,8 +1,0 @@
-### Changed
-
-- core: the kernel builds the core config store (the defaults-only store the core sections, the executor and the scheduler read) when the tasks wiring needs it, at P7, instead of at P5 in every boot. A boot builds it when a module registered a task definition, or the tasks start rule holds (a stored run with no definition counts); a boot with neither, which is ABO's shape today, builds none of it and closes none. With definitions the behaviour is unchanged, and a module's kind schedule key a section does not declare is still refused (fail-closed). Measured: building the store costs 14.6 ms plain and 154 ms under `-race` per call, so a boot with no tasks skips that. It does not speed up `TestBootCrashMatrix` in `examples/hello`: hello registers a task definition, so every one of its boots still builds the store (user plus system CPU for the `level-step` cell under `-race`: 36.2 s on main, 36.5 s with this change, 5.2 s before the F2-16 wiring). That cost is `config.RegisterSections` over `coreSections()`; the PR notes carry the profile and a proposal.
-
-### Added
-
-- core: `kernel.OpenAudit(ctx, db, log)` builds the audit store over a `*storage.DB` the way a boot does. `PurgeQuarantine` uses it, and so does the test that reads back an offline command's audit events, which no longer restates the keyspace's owner and the sequence's name.
-- core: `archtest.BootseamHookCallers` fails when a non-test file outside `core/app`, `core/coretest` (and its sub-packages) and `core/internal/bootseam` calls `bootseam.With` or touches `Seams.Built`, the kernel's raw task seams, through any import name, a dot import or a `//go:linkname`.
