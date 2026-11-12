@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/backoff_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 48f5c24b-72f0-47f6-83e3-3203447f8515
 // last-edited: 2026-11-12
 
@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/blevesearch/bleve/v2"
 
 	"github.com/falkcorp/mediacore/storage/index"
 	"github.com/falkcorp/mediacore/storage/index/indextest"
@@ -258,47 +260,157 @@ func TestBackoffEvictionRules(t *testing.T) {
 	}
 }
 
-// TestRefusedDocumentBacksOffByItsToken: a document the index itself refuses
-// (the per-document fallback) backs off like one that cannot load, keyed on its
-// mark's token: not retried inside its window, retried once the window is over
-// and at once when the entity is written again.
-func TestRefusedDocumentBacksOffByItsToken(t *testing.T) {
-	r := seeded(t)
-	clk := r.useClock()
-	i := r.e.mustIdx(t, indextest.Signal)
+// refusingIndex refuses any batch that carries one of ids (a document the index
+// itself will not take) and applies every other batch, a probe write included.
+type refusingIndex struct {
+	bleveIndex
+	ids []string
+}
+
+func (p refusingIndex) Batch(b *bleve.Batch) error {
+	for _, id := range p.ids {
+		if strings.Contains(b.String(), "'"+id+"'") { // Batch.String lists each id as 'id'
+			return errors.New("the index refuses this document")
+		}
+	}
+	return p.bleveIndex.Batch(b)
+}
+
+// downIndex is an index that takes no write at all, and counts the attempts.
+type downIndex struct {
+	bleveIndex
+	calls *atomic.Int64
+}
+
+func (d downIndex) Batch(*bleve.Batch) error {
+	d.calls.Add(1)
+	return errors.New("the Batcave is flooded")
+}
+
+// wrapIndex swaps the index's backend for the test and restores it after.
+func wrapIndex(t *testing.T, i *idx, wrap func(bleveIndex) bleveIndex) {
+	t.Helper()
 	i.mu.Lock()
 	real := i.bi
-	i.bi = poisonIndex{real}
+	i.bi = wrap(real)
 	i.mu.Unlock()
 	t.Cleanup(func() {
 		i.mu.Lock()
 		i.bi = real
 		i.mu.Unlock()
 	})
+}
+
+// TestLoneRefusedDocumentBacksOffByItsToken: a document the index refuses, alone
+// in its chunk (no healthy neighbour to prove the index works), backs off like
+// one that cannot load, keyed on its mark's token. It does not fail the pass
+// (r.reconcile fails the test on an error), it is not retried inside its window,
+// it is retried when the window is over, and a new write retries it at once and
+// starts its backoff again at the first window.
+func TestLoneRefusedDocumentBacksOffByItsToken(t *testing.T) {
+	r := seeded(t)
+	clk := r.useClock()
+	i := r.e.mustIdx(t, indextest.Signal)
+	wrapIndex(t, i, func(real bleveIndex) bleveIndex { return refusingIndex{real, []string{"scarecrow"}} })
 	failures := func(want int64, when string) {
 		t.Helper()
 		if got := i.failures.Load(); got != want {
 			t.Fatalf("%s: %d refusals, want %d", when, got, want)
 		}
 	}
-	// A chunk whose every document is refused is the index failing, not a poison
-	// mark, and records no backoff; so a healthy neighbour is written again
-	// before each pass that retries the refused mark.
 	r.save("scarecrow", "Scarecrow", "fear", 1941)
-	r.save("harley", "Harley Quinn", "clown", 1992)
 	r.reconcile()
 	failures(1, "first pass")
+	if n := r.dirtyCount(); n != 1 {
+		t.Fatalf("pending = %d, want the refused mark kept", n)
+	}
 	r.reconcile()
-	failures(1, "second pass inside the window: the refused mark must be backing off")
+	failures(1, "second pass inside the window: the lone refused mark must be backing off")
 	clk.Advance(failBackoffBase + time.Second)
-	r.save("harley", "Harley Quinn Two", "clown", 1993)
 	r.reconcile()
 	failures(2, "after the window")
-	r.save("harley", "Harley Quinn Three", "clown", 1994)
+	clk.Advance(time.Second) // 1s into the second (4s) window
 	r.reconcile()
-	failures(2, "inside the second (4s) window")
+	failures(2, "inside the second window")
 	r.save("scarecrow", "Scarecrow Again", "fear", 1942) // a new write: a new token
-	r.save("harley", "Harley Quinn Four", "clown", 1995)
 	r.reconcile()
-	failures(3, "right after a rewrite, inside the window")
+	failures(3, "right after a rewrite, inside the old window")
+	clk.Advance(failBackoffBase + 100*time.Millisecond) // past a restarted first window, not past the old second one
+	r.reconcile()
+	failures(4, "the rewrite's own backoff restarted at the first window")
+}
+
+// TestAllRefusedChunkBacksOffEveryMark: a chunk in which the index refuses every
+// document is the documents' fault, not the index's: the pass does not fail, every
+// mark stays pending with an entry of its own, and none is retried inside its
+// window.
+func TestAllRefusedChunkBacksOffEveryMark(t *testing.T) {
+	r := seeded(t)
+	clk := r.useClock()
+	i := r.e.mustIdx(t, indextest.Signal)
+	wrapIndex(t, i, func(real bleveIndex) bleveIndex {
+		return refusingIndex{real, []string{"scarecrow", "riddler", "penguin"}}
+	})
+	r.save("scarecrow", "Scarecrow", "fear", 1941)
+	r.save("riddler", "Riddler", "riddle", 1948)
+	r.save("penguin", "Penguin", "bird", 1941)
+	r.reconcile() // fails the test on any error
+	if got := i.failures.Load(); got != 3 {
+		t.Fatalf("%d refusals, want 3", got)
+	}
+	if n := r.dirtyCount(); n != 3 {
+		t.Fatalf("pending = %d, want all three marks kept", n)
+	}
+	if got := i.backoffEntries(); got != 3 {
+		t.Fatalf("%d backoff entries, want one per refused mark", got)
+	}
+	r.reconcile()
+	if got := i.failures.Load(); got != 3 {
+		t.Fatalf("%d refusals after a second pass: the marks must be backing off", got)
+	}
+	clk.Advance(failBackoffBase + time.Second)
+	r.reconcile()
+	if got := i.failures.Load(); got != 6 {
+		t.Fatalf("%d refusals once the windows are over, want 6", got)
+	}
+}
+
+// TestIndexThatTakesNoWriteIsNotARefusal: when the index cannot take any write,
+// the pass fails, no mark is blamed (no backoff, no refusal counted), and the
+// documents are not retried one by one against a dead index. Once the index
+// works again the marks drain at once, with no window to wait out.
+func TestIndexThatTakesNoWriteIsNotARefusal(t *testing.T) {
+	r := seeded(t)
+	r.useClock()
+	i := r.e.mustIdx(t, indextest.Signal)
+	r.save("scarecrow", "Scarecrow", "fear", 1941)
+	r.save("riddler", "Riddler", "riddle", 1948)
+	r.save("penguin", "Penguin", "bird", 1941)
+	calls := new(atomic.Int64)
+	i.mu.Lock()
+	real := i.bi
+	i.bi = downIndex{real, calls}
+	i.mu.Unlock()
+	if err := r.e.Reconcile(t.Context()); err == nil {
+		t.Fatal("a pass over an index that takes no write did not fail")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("%d writes against a dead index, want 2 (the chunk and the probe): the documents must not be retried one by one", got)
+	}
+	if got := i.failures.Load(); got != 0 {
+		t.Fatalf("%d documents counted as refused by an index that is down", got)
+	}
+	if got := i.backoffEntries(); got != 0 {
+		t.Fatalf("%d backoff entries for an index that is down: no mark is to blame", got)
+	}
+	if n := r.dirtyCount(); n != 3 {
+		t.Fatalf("pending = %d, want all three marks kept", n)
+	}
+	i.mu.Lock()
+	i.bi = real
+	i.mu.Unlock()
+	r.reconcile()
+	if n := r.dirtyCount(); n != 0 {
+		t.Fatalf("%d marks left after the index came back: nothing may hold them back", n)
+	}
 }

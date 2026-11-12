@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/index.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5b3a9e32-ac5d-4cae-9d75-8f2e4b7d9c33
 // last-edited: 2026-11-12
 
@@ -501,6 +501,28 @@ func (i *idx) applyBatch(entries []entry) error {
 	}
 	if err := bi.Batch(b); err != nil {
 		return fmt.Errorf("bleveindex: apply batch to %s/%s: %w", i.module, i.name, err)
+	}
+	return nil
+}
+
+// probeKey is the internal (non-document) key probeWrite touches.
+const probeKey = "bleveindex/probe"
+
+// probeWrite reports whether the index takes a write at all: it applies a batch
+// that deletes an internal key that does not exist, which touches no document
+// and leaves nothing behind. A batch that failed and then a probe that fails
+// too mean the index is failing; a probe that goes in means the batch failed
+// because of a document in it.
+func (i *idx) probeWrite() error {
+	bi, release, err := i.acquire()
+	if err != nil {
+		return err
+	}
+	defer release()
+	b := bi.NewBatch()
+	b.DeleteInternal([]byte(probeKey))
+	if err := bi.Batch(b); err != nil {
+		return fmt.Errorf("bleveindex: probe write to %s/%s: %w", i.module, i.name, err)
 	}
 	return nil
 }
