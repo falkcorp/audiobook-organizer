@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_unix.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7ec76d18-20c0-48f2-9a57-c01b4e75498f
 // last-edited: 2026-11-11
 
@@ -16,6 +16,10 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+// HasHandles reports that this platform has the directory-relative operations the
+// transfer engine acts through. Where it is false they all refuse.
+const HasHandles = true
 
 // fd is the descriptor of d for one syscall. Callers must keep d reachable
 // until the call returns (runtime.KeepAlive).
@@ -40,6 +44,9 @@ func Link(od *Dir, oldName string, nd *Dir, newName string) error {
 	err := retry(func() error { return unix.Linkat(fd(od), oldName, fd(nd), newName, 0) })
 	runtime.KeepAlive(od)
 	runtime.KeepAlive(nd)
+	if err != nil && noHardLinks(err) {
+		return linkErr("link", oldName, newName, fmt.Errorf("%w: %w", ErrNoHardLinks, err))
+	}
 	return mapLinkErr("link", oldName, newName, err)
 }
 
@@ -52,6 +59,15 @@ func mapLinkErr(op, oldName, newName string, err error) error {
 		return linkErr(op, oldName, newName, fmt.Errorf("%w: %w", ErrCrossDevice, err))
 	}
 	return linkErr(op, oldName, newName, err)
+}
+
+// noHardLinks reports the errnos that mean "this filesystem does not make hard
+// links": EPERM (FAT, exFAT, SMB), ENOTSUP and EOPNOTSUPP, ENOSYS, and EMLINK (a
+// file at its link limit cannot be linked again, and publishing by rename needs
+// no link).
+func noHardLinks(err error) bool {
+	return errors.Is(err, unix.EPERM) || errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EOPNOTSUPP) ||
+		errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EMLINK)
 }
 
 // SyncDir fsyncs a directory so that a newly created or renamed NAME is
@@ -80,9 +96,10 @@ func SyncDir(d *Dir) error {
 //     name atomically) and then unlinked from the old one, so the no-clobber
 //     check is still atomic;
 //   - anything else (a directory, a symlink, or a filesystem that refuses hard
-//     links) takes the checked rename: Lstat the destination, then rename.
-//     That has a time-of-check/time-of-use window, accepted only here, as
-//     internal/versions did.
+//     links) is ErrNoAtomicRename and nothing changes. The check-then-rename
+//     that stood here before has a window in which another writer's file is
+//     replaced; the caller reserves the name and renames over its own
+//     placeholder (RenameOver) or refuses.
 //
 // It is exported so a test can drive it on a filesystem that has the flag.
 func RenameNoReplaceFallback(od *Dir, oldName string, nd *Dir, newName string) error {
@@ -95,37 +112,41 @@ func RenameNoReplaceFallback(od *Dir, oldName string, nd *Dir, newName string) e
 	if err := retry(func() error { return unix.Fstatat(fd(od), oldName, &st, unix.AT_SYMLINK_NOFOLLOW) }); err != nil {
 		return linkErr("rename", oldName, newName, err)
 	}
-	if st.Mode&unix.S_IFMT == unix.S_IFREG {
-		err := retry(func() error { return unix.Linkat(fd(od), oldName, fd(nd), newName, 0) })
-		switch {
-		case err == nil:
-			if uerr := retry(func() error { return unix.Unlinkat(fd(od), oldName, 0) }); uerr != nil {
-				// The new name exists and the old one could not be removed:
-				// both names reach the same bytes, which loses nothing. Undo
-				// the new name so the rename is all or nothing.
-				rerr := retry(func() error { return unix.Unlinkat(fd(nd), newName, 0) })
-				return joinErr(linkErr("rename", oldName, newName, uerr), rollbackFailed("remove", newName, rerr))
-			}
-			return nil
-		case errors.Is(err, unix.EEXIST):
-			return linkErr("rename", oldName, newName, err)
-		case errors.Is(err, unix.EXDEV):
-			return mapLinkErr("rename", oldName, newName, err)
-		case errors.Is(err, unix.EPERM), errors.Is(err, unix.ENOTSUP), errors.Is(err, unix.EOPNOTSUPP),
-			errors.Is(err, unix.EMLINK), errors.Is(err, unix.ENOSYS):
-			// This filesystem has no hard links: the checked rename below.
-		default:
-			return linkErr("rename", oldName, newName, err)
-		}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+		return linkErr("rename", oldName, newName, ErrNoAtomicRename)
 	}
-	var dst unix.Stat_t
-	switch err := retry(func() error { return unix.Fstatat(fd(nd), newName, &dst, unix.AT_SYMLINK_NOFOLLOW) }); {
+	err := retry(func() error { return unix.Linkat(fd(od), oldName, fd(nd), newName, 0) })
+	switch {
 	case err == nil:
-		return linkErr("rename", oldName, newName, fs.ErrExist)
-	case !errors.Is(err, unix.ENOENT):
+		if uerr := retry(func() error { return unix.Unlinkat(fd(od), oldName, 0) }); uerr != nil {
+			// The new name exists and the old one could not be removed:
+			// both names reach the same bytes, which loses nothing. Undo
+			// the new name so the rename is all or nothing.
+			rerr := retry(func() error { return unix.Unlinkat(fd(nd), newName, 0) })
+			return joinErr(linkErr("rename", oldName, newName, uerr), rollbackFailed("remove", newName, rerr))
+		}
+		return nil
+	case errors.Is(err, unix.EEXIST):
 		return linkErr("rename", oldName, newName, err)
+	case errors.Is(err, unix.EXDEV):
+		return mapLinkErr("rename", oldName, newName, err)
+	case noHardLinks(err):
+		return linkErr("rename", oldName, newName, fmt.Errorf("%w: no hard links here: %w", ErrNoAtomicRename, err))
+	}
+	return linkErr("rename", oldName, newName, err)
+}
+
+// RenameOver renames oldName in od to newName in nd, replacing whatever is
+// there (renameat). It is for one caller only: one that has just created newName
+// itself as a placeholder and checked it is still its own, on a filesystem where
+// RenameNoReplace answered ErrNoAtomicRename. Nothing else may use it.
+func RenameOver(od *Dir, oldName string, nd *Dir, newName string) error {
+	if err := errors.Join(require(od, nd), checkName(oldName), checkName(newName)); err != nil {
+		return err
 	}
 	err := retry(func() error { return unix.Renameat(fd(od), oldName, fd(nd), newName) })
+	runtime.KeepAlive(od)
+	runtime.KeepAlive(nd)
 	return mapRenameErr(oldName, newName, err)
 }
 

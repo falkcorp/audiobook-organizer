@@ -1,5 +1,5 @@
 // file: core/library/recover_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d6fba451-bfd4-4e6c-bd41-649146b9f034
 // last-edited: 2026-11-11
 
@@ -13,8 +13,10 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/falkcorp/mediacore/internal/libfs"
 	"github.com/falkcorp/mediacore/internal/scheduler"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -31,6 +33,10 @@ type scenario struct {
 	isMove   bool
 	isLink   bool
 	clone    bool // needs a filesystem that clones: skipped where it does not
+	// placeholder: the scenario publishes through a placeholder, so for an instant
+	// the destination holds an empty entry the transfer made. That is the protocol
+	// (placeholder.go), not a partial write, and recovery must remove it.
+	placeholder bool
 }
 
 func matrixScenarios() []scenario {
@@ -75,6 +81,49 @@ func matrixScenarios() []scenario {
 		{name: "reflink with a digest", setup: mk(""), src: src, dst: dst, opts: reflink, orig: orig, clone: true},
 		{name: "reflink by size", setup: mk(""), src: src, dst: dst, opts: reflinkSize, orig: orig, clone: true},
 		{name: "symlink", setup: mk(""), src: src, dst: dst, opts: symlink, orig: orig},
+		// A filesystem without hard links publishes a copy by a no-replace rename;
+		// one with neither primitive reserves the name and renames over its own
+		// placeholder (exFAT, FAT, SMB without links).
+		{name: "copy without hard links", setup: mk(""), src: src, dst: dst, opts: copyOpts(), inject: noHardLinks, orig: orig},
+		{name: "copy replacing without hard links", setup: mk("the old edition of the Joke"), src: src, dst: dst, opts: replace, inject: noHardLinks, orig: orig, oldDst: "the old edition of the Joke"},
+		{name: "auto without hard links", setup: mk(""), src: src, dst: dst, opts: auto, inject: chain(noReflink, noHardLinks), orig: orig},
+		{name: "copy with neither link nor atomic rename", setup: mk(""), src: src, dst: dst, opts: copyOpts(), inject: neither, orig: orig, placeholder: true},
+		{name: "copy replacing with neither", setup: mk("the old edition of the Joke"), src: src, dst: dst, opts: replace, inject: neither, orig: orig, oldDst: "the old edition of the Joke", placeholder: true},
+		{name: "move by rename without an atomic rename", setup: mk(""), src: src, dst: dst, opts: mv, inject: noAtomicRename, orig: orig, isMove: true, placeholder: true},
+		{name: "move replacing without an atomic rename", setup: mk("the old edition of the Joke"), src: src, dst: dst, opts: withMkdir(replMove), inject: noAtomicRename, orig: orig, oldDst: "the old edition of the Joke", isMove: true, placeholder: true},
+		{name: "cross-device move with neither", setup: mk(""), src: src, dst: dst, opts: mv, inject: chain(crossRoots, neither), orig: orig, isMove: true, placeholder: true},
+	}
+}
+
+// noHardLinks makes every hard link answer as a filesystem without them does
+// (exFAT: EPERM), classified the way libfs classifies it. noAtomicRename makes
+// every no-replace rename answer ErrNoAtomicRename: the flag is missing and the
+// file cannot be linked and unlinked either. neither is both.
+func noHardLinks(label string) error {
+	if strings.Contains(label, ":link:") {
+		return &os.LinkError{Op: "link", Old: "a", New: "b", Err: fmt.Errorf("%w: %w", libfs.ErrNoHardLinks, syscall.EPERM)}
+	}
+	return nil
+}
+
+func noAtomicRename(label string) error {
+	if strings.Contains(label, ":rename:") {
+		return &os.LinkError{Op: "rename", Old: "a", New: "b", Err: libfs.ErrNoAtomicRename}
+	}
+	return nil
+}
+
+func neither(label string) error { return chain(noHardLinks, noAtomicRename)(label) }
+
+// chain is the first injector that answers.
+func chain(fns ...func(string) error) func(string) error {
+	return func(label string) error {
+		for _, f := range fns {
+			if err := f(label); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 }
 
@@ -147,7 +196,11 @@ func (s scenario) checkSafe(t *testing.T, r *rig, label string) {
 			t.Errorf("%s: the replaced file's bytes are gone and the new bytes are not in place", label)
 		}
 	}
-	if got, ok := r.read(s.dst.Root, s.dst.Rel); ok && got != s.orig && got != s.oldDst {
+	got, ok := r.read(s.dst.Root, s.dst.Rel)
+	if ok && s.placeholder && got == "" {
+		return // the protocol's empty placeholder, until recovery removes it
+	}
+	if ok && got != s.orig && got != s.oldDst {
 		t.Errorf("%s: the destination holds partial or foreign bytes %q", label, got)
 	}
 }
@@ -183,7 +236,11 @@ func (s scenario) checkSettled(t *testing.T, r *rig, label string) {
 		}
 	}
 	if !done {
-		// Rolled back: the destination is what it was.
+		// Rolled back: the destination is what it was. An unreadable entry counts
+		// too (a placeholder has mode 0): it must not be there at all.
+		if _, err := os.Lstat(r.abs(s.dst.Root, s.dst.Rel)); s.oldDst == "" && err == nil {
+			t.Errorf("%s: a rolled back transfer left an entry at the destination (a placeholder?)", label)
+		}
 		if s.oldDst == "" && dstOK {
 			t.Errorf("%s: a rolled back transfer left a destination: %q", label, dstGot)
 		}
