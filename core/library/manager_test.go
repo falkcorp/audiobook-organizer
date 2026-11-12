@@ -1,5 +1,5 @@
 // file: core/library/manager_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 424ad437-d2db-4df6-a85b-72352e053fb2
 // last-edited: 2026-11-11
 
@@ -11,6 +11,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/storage"
@@ -107,6 +109,69 @@ func TestRootFSWalkRefusesDirectorySwappedForSymlink(t *testing.T) {
 	}
 	if len(walkErrs) == 0 {
 		t.Errorf("the swap was not reported; saw %v", seen)
+	}
+}
+
+// A directory swapped, between the listing and the descent, for something that
+// stays INSIDE the root is not entered either. os.Root already refuses a link
+// that leaves the root (the test above), so only the comparison of the opened
+// directory with the listed one stops these: a link to another directory of the
+// root, and a different directory under the same name. Either would otherwise be
+// reported under the old name, and a link could lead into a reserved area.
+func TestRootFSWalkRefusesADirectorySwappedForAnotherInsideTheRoot(t *testing.T) {
+	for name, swap := range map[string]func(t *testing.T, r *rig){
+		"a link to another directory of the root": func(t *testing.T, r *rig) {
+			if err := os.Rename(r.abs("books-library", "sub"), r.abs("books-library", "sub.moved")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("other", r.abs("books-library", "sub")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a different directory of the same name": func(t *testing.T, r *rig) {
+			if err := os.Rename(r.abs("books-library", "sub"), r.abs("books-library", "sub.moved")); err != nil {
+				t.Fatal(err)
+			}
+			r.put("books-library", "sub/decoy.m4b", "decoy")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, newStore(t), rigOpts{}, spec("books-library", books, RoleLibrary))
+			r.put("books-library", "sub/inside.m4b", "audio")
+			r.put("books-library", "other/elsewhere.m4b", "audio")
+			root, _ := r.m.Root("books-library")
+			fsys, err := root.FS(books)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var seen []string
+			var walkErrs []error
+			for e, err := range fsys.Walk(ctxbg(), ".", WalkOptions{}) {
+				if err != nil {
+					walkErrs = append(walkErrs, err)
+					continue
+				}
+				seen = append(seen, e.Path.Rel)
+				if e.Path.Rel == "sub" {
+					swap(t, r)
+				}
+			}
+			for _, s := range seen {
+				if strings.HasPrefix(s, "sub/") {
+					t.Errorf("the walk entered the swapped directory and reported %q (saw %v)", s, seen)
+				}
+			}
+			found := false
+			for _, err := range walkErrs {
+				found = found || errors.Is(err, ErrEscapesRoot)
+			}
+			if !found {
+				t.Errorf("the swap was not reported as a change during the walk: %v", walkErrs)
+			}
+			if !slices.Contains(seen, "other/elsewhere.m4b") {
+				t.Errorf("the walk stopped short of the untouched sibling: saw %v", seen)
+			}
+		})
 	}
 }
 
