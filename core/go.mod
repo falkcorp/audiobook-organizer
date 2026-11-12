@@ -1,5 +1,5 @@
 // file: core/go.mod
-// version: 1.0.9
+// version: 1.0.10
 // guid: 423dec24-3ee4-45a5-a8ca-af9d6bc2b133
 // last-edited: 2026-11-12
 
@@ -107,7 +107,7 @@ require (
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/tidwall/gjson v1.20.0 // indirect
-	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	go.etcd.io/bbolt v1.5.0 // indirect
