@@ -1,7 +1,7 @@
 # file: core/archtest/thirdparty_allow.txt
-# version: 1.0.14
+# version: 1.0.15
 # guid: cb537e35-a463-43d1-b870-3ea941cf278d
-# last-edited: 2026-11-11
+# last-edited: 2026-11-12
 #
 # The third-party import paths core may use (03 R1(b), TestCoreImportsOnlyCore).
 # One import-path prefix per line; a prefix also admits its sub-packages
@@ -122,3 +122,10 @@ golang.org/x/sync/errgroup
 # network-filesystem check. Only the unix package.
 github.com/fsnotify/fsnotify
 =golang.org/x/sys/unix
+
+# F7-03: integrations/ai/openai, the one OpenAI-compatible adapter behind the AI
+# Backend contract (05-ai section 9; 13 section 13.5.2), at the root's version
+# (check_module_skew.py). The line admits the SDK and its sub-packages (option,
+# packages/param, shared); archtest.NoAISDKOutsideAdapters pins the import to
+# integrations/ai/openai, so no other core package may name an SDK type.
+github.com/openai/openai-go/v3
