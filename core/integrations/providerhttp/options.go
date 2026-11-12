@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/options.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4b3c95ad-7828-4971-b0b8-f48428f4b0e4
 // last-edited: 2026-11-11
 
@@ -156,6 +156,15 @@ type Policy struct {
 	// consulted for EgressPublicOnly, for a redirect to another endpoint, nor
 	// for link-local addresses. The zero Trust still admits lan_allow.
 	Trust integrations.Trust
+	// ConfiguredOrigins lists every destination the instance is configured
+	// for ("scheme://host[:port]"), trusted or not (integrations.OutboundSpec).
+	// For EgressSameHostOrPublic a private endpoint is admitted only if Trust
+	// binds it, or it is on lan_allow AND is one of these: a download link an
+	// indexer's answer names reaches the indexer's own host and public
+	// addresses, never another host lan_allow happens to admit. The other
+	// policies ignore it (EgressConfigured is the instance's own URLs already;
+	// EgressPublicOnly never reaches a private address).
+	ConfiguredOrigins []string
 	// MaxBody caps a response body; 0 takes the default (32 MiB). A read past
 	// the cap fails with ErrResponseTooLarge.
 	MaxBody int64

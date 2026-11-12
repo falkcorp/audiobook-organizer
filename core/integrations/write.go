@@ -1,5 +1,5 @@
 // file: core/integrations/write.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 29ac02ee-bf78-408e-a1cf-db1779640943
 // last-edited: 2026-11-11
 
@@ -592,7 +592,15 @@ func (r *Registry) delete(ctx context.Context, w writer, ref Ref) (err error) {
 	if err := r.stage(ctx, b, writes, []audit.Event{ev}); err != nil {
 		return err
 	}
-	return r.commitAndPublish(ctx, b, ref, nil)
+	if err := r.commitAndPublish(ctx, b, ref, nil); err != nil {
+		return err
+	}
+	if r.o.Forget != nil {
+		if err := r.o.Forget(ctx, ref); err != nil {
+			r.log.Warn("integrations: the instance was deleted but its outbound state was not dropped", "instance", ref.String(), "error", err)
+		}
+	}
+	return nil
 }
 
 // test is Test's body: it builds a throwaway slot as the Put would leave

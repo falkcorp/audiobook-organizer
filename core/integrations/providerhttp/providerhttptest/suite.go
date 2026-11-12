@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/providerhttptest/suite.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: aa23d90d-18ca-4cc2-9bdc-69dc1a2a2e7b
 // last-edited: 2026-11-11
 
@@ -152,6 +152,49 @@ func GateStoreSuite(t *testing.T, factory Factory) {
 		}
 		if err := s.PutScope(ctx, a, ""); err != nil {
 			t.Fatalf("deleting an absent record: %v", err)
+		}
+	})
+
+	t.Run("ForgetScope", func(t *testing.T) {
+		s := factory(t)
+		until := time.Date(2039, 4, 1, 23, 0, 0, 0, time.UTC)
+		for _, scope := range []string{"gotham", "arkham"} {
+			if err := s.PutHold(ctx, integrations.Hold{Scope: scope, Class: integrations.ClassAuth, Until: until, SetAt: until.Add(-time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			for _, counter := range []string{"query", "grab"} {
+				if err := s.PutQuota(ctx, scope, counter, "2039-04-01", 3); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := s.ForgetScope(ctx, "gotham"); err != nil {
+			t.Fatal(err)
+		}
+		hs, err := s.Holds(ctx)
+		if err != nil || len(hs) != 1 || hs[0].Scope != "arkham" {
+			t.Fatalf("holds after ForgetScope = %v, %v; want only the other scope's", hs, err)
+		}
+		for _, counter := range []string{"query", "grab"} {
+			if day, used, err := s.Quota(ctx, "gotham", counter); err != nil || day != "" || used != 0 {
+				t.Fatalf("gotham %s after ForgetScope = %q, %d, %v; want none", counter, day, used, err)
+			}
+			if day, used, err := s.Quota(ctx, "arkham", counter); err != nil || day != "2039-04-01" || used != 3 {
+				t.Fatalf("arkham %s = %q, %d, %v; the other scope must be untouched", counter, day, used, err)
+			}
+		}
+		// A scope whose name is a prefix of another's takes only its own rows.
+		if err := s.PutQuota(ctx, "arkham-annex", "query", "2039-04-01", 9); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ForgetScope(ctx, "arkham"); err != nil {
+			t.Fatal(err)
+		}
+		if _, used, err := s.Quota(ctx, "arkham-annex", "query"); err != nil || used != 9 {
+			t.Fatalf("a scope sharing a name prefix lost its rows: %d, %v", used, err)
+		}
+		if err := s.ForgetScope(ctx, "absent"); err != nil {
+			t.Fatalf("forgetting an absent scope: %v", err)
 		}
 	})
 

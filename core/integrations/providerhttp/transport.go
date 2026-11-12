@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/transport.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 251805ba-baff-4a97-b673-26771486637d
 // last-edited: 2026-11-11
 
@@ -72,7 +72,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// credential of this instance (M1): net/http itself drops Authorization
 	// and Cookie across hosts, not X-Api-Key, X-Plex-Token or the rest.
 	crossHop := t.crossesEndpoint(req)
-	if downgrades(req) && !t.privateOK(req) {
+	if t.downgradeRefused(req) {
 		r.met.refused(g.ref, ReasonEgress)
 		return fail(refuse(g.ref, "http", ReasonEgress, time.Time{}, ErrInsecureRedirect))
 	}
@@ -152,7 +152,9 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 			if isEgressRefusal(rerr) {
 				r.met.refused(g.ref, ReasonEgress)
-				g.sc.bk.giveBack() // refused at the dial: it did not use the provider's pace either
+				if !tr.sent() { // refused at the dial of an attempt that wrote nothing: it did not use the provider's pace either
+					g.sc.bk.giveBack()
+				}
 				if haveLast {
 					tk.finish(last) // an earlier attempt's 503 still teaches the breaker and the hold
 				} else {
@@ -262,6 +264,20 @@ func downgrades(req *http.Request) bool {
 		strings.EqualFold(res.Request.URL.Scheme, "https") && strings.EqualFold(req.URL.Scheme, "http")
 }
 
+// downgradeRefused reports a redirect hop from https to http that must not be
+// followed: one to the SAME host and port (the service with TLS stripped: no
+// proxy terminates anything, so it is only a downgrade, whatever the trust),
+// and one to an endpoint the instance may not reach on a private network.
+func (t *transport) downgradeRefused(req *http.Request) bool {
+	if !downgrades(req) {
+		return false
+	}
+	if endpoint(req.Response.Request.URL) == endpoint(req.URL) {
+		return true
+	}
+	return !t.privateOK(req)
+}
+
 // privateOK reports that req's endpoint is one the instance may reach on a
 // private network: the only case in which a redirect may leave https for http
 // (a LAN service behind a TLS-terminating proxy that redirects to its plain
@@ -272,11 +288,12 @@ func (t *transport) privateOK(req *http.Request) bool {
 }
 
 // dropCredentialHeaders deletes every header that carries a credential: the
-// named ones and any whose name the scrubber's rules call secret.
+// named ones and any whose name the scrubber's rules call secret, and Referer,
+// which names the URL (and so the query) the chain came from.
 func dropCredentialHeaders(h http.Header, s scrubber) {
 	for k := range h {
 		switch http.CanonicalHeaderKey(k) {
-		case "Authorization", "Cookie", "Proxy-Authorization":
+		case "Authorization", "Cookie", "Proxy-Authorization", "Referer":
 			delete(h, k)
 		default:
 			if s.secret(k) {

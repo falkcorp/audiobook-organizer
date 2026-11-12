@@ -1,5 +1,5 @@
 // file: core/integrations/lease.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8db314c4-39fe-4242-974f-f95bb76ffdd4
 // last-edited: 2026-11-11
 
@@ -193,7 +193,7 @@ func (r *Registry) env(s *slot) Env {
 	if r.o.Outbound != nil {
 		h, g = r.o.Outbound(OutboundSpec{
 			Ref: ref, Adapter: s.ad.desc.meta.ID, Egress: s.ad.desc.meta.Egress,
-			Limits: s.ad.desc.meta.Limits, Override: s.cfg.Limits, Trust: s.trust,
+			Limits: s.ad.desc.meta.Limits, Override: s.cfg.Limits, Trust: s.trust, ConfiguredOrigins: s.origins,
 		})
 	}
 	if g == nil {

@@ -1,5 +1,5 @@
 // file: core/integrations/registry.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 5291a2b4-f665-40ef-8c7f-d588aa319bec
 // last-edited: 2026-11-11
 
@@ -89,6 +89,14 @@ type OutboundSpec struct {
 	Limits   Limits  // the adapter's Meta.Limits
 	Override *Limits // the instance's own (zero fields inherit)
 	Trust    Trust
+	// ConfiguredOrigins lists every destination the instance is configured
+	// for, from all layers ("scheme://host:port", the port always explicit,
+	// sorted): the same effective origins Trust is judged from, but all of
+	// them, trusted or not. EgressSameHostOrPublic admits a private endpoint
+	// only if it is one of these (and on lan_allow) or bound by Trust: a link
+	// found in an indexer's answer reaches the indexer's own host and public
+	// addresses, never another host that lan_allow happens to admit.
+	ConfiguredOrigins []string
 	// Redact names extra query, header and JSON-field names the outbound
 	// layer must redact from errors, logs and excerpts, beyond its built-in
 	// rules (an adapter whose provider calls its credential something unusual).
@@ -132,6 +140,12 @@ type Options struct {
 	// called after a Put that wrote a new secret value commits (F7-01: a
 	// cleared or dropped secret is not new credentials). nil = none.
 	ReleaseAuthHold func(ctx context.Context, ref Ref) error
+	// Forget drops the outbound layer's state for ref (providerhttp's
+	// Registry.Forget): its scope mapping and, when no other instance shares
+	// the scope, the scope's hold, quota counters, bucket and breaker. It is
+	// called after a Delete commits, so a re-created ref starts clean; a
+	// failure is logged, never returned. nil = none.
+	Forget func(ctx context.Context, ref Ref) error
 	// HealthChanged is called when a probe changes an instance's status:
 	// the kernel publishes core.integration.health.changed.v1 from it
 	// (M1.4 step 5). nil = none.
