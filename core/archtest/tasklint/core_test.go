@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
 // last-edited: 2026-11-11
 
@@ -30,6 +30,7 @@ func TestTasklint_Core(t *testing.T) {
 			core + "/integrations/ai.BatchPollTask",              // the same, for InterimBackends.Poll (F2-11, F5-18)
 			core + "/health/diagnostics.ExportTask",              // the same, for InterimBackends.Export (F2-11, F5-18)
 			core + "/examples/hello.CountTask",                   // dark until F2-16 registers hello.count; delete with the wrapper (F2-05)
+			core + "/library.TransferRecoverTask",                // the kernel registers it when core.library is wired (F2-16, F7; F7-06)
 		}})
 }
 
