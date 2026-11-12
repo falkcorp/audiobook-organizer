@@ -1,7 +1,7 @@
 // file: core/auth/authtest/storesuite.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8cf164e8-2a54-46de-8eed-b0912673891b
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // Package authtest is the conformance kit of auth.Store and auth.Importer
 // (05-authn §3.4, §10 TestNativeStore_RoundTrip): StoreSuite runs every case
@@ -1106,8 +1106,16 @@ func importIdentityAllow(t *testing.T, fx Fixture) {
 	}
 	err := importOne(t, fx, func(b *storage.Batch) error { return fx.Importer.ImportIdentity(b, identity("01JBRUCE")) })
 	errIs(t, "ImportIdentity(already stored)", err, auth.ErrImportRejected)
+	// A refusal names the record by provider and ID, never by its subject: the
+	// text reaches an operator's blocker report and the logs.
+	if err != nil && strings.Contains(err.Error(), "sub-1939") {
+		t.Errorf("ImportIdentity(already stored) names the subject: %v", err)
+	}
 	err = importOne(t, fx, func(b *storage.Batch) error { return fx.Importer.ImportIdentity(b, identity("01JGHOST")) })
 	errIs(t, "ImportIdentity(user not imported)", err, auth.ErrImportRejected)
+	if err != nil && strings.Contains(err.Error(), "sub-1939") {
+		t.Errorf("ImportIdentity(user not imported) names the subject: %v", err)
+	}
 	must(t, "ImportInviteAllow", importOne(t, fx, func(b *storage.Batch) error {
 		return fx.Importer.ImportInviteAllow(b, " Alfred.Pennyworth@Gotham.Example ")
 	}))
