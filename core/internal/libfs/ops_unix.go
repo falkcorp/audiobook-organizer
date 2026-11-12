@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_unix.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7ec76d18-20c0-48f2-9a57-c01b4e75498f
 // last-edited: 2026-11-11
 
@@ -139,16 +139,6 @@ func mapRenameErr(oldName, newName string, err error) error {
 func noReplaceUnsupported(err error) bool {
 	return errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS) ||
 		errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EOPNOTSUPP)
-}
-
-// DeviceOf is the device ID of the filesystem a file lives on. ok is false
-// when the platform's FileInfo carries none.
-func DeviceOf(fi fs.FileInfo) (dev uint64, ok bool) {
-	st, ok := fi.Sys().(*unixStat)
-	if !ok || st == nil {
-		return 0, false
-	}
-	return uint64(st.Dev), true
 }
 
 // Ancestry returns the identity of the directory f and of every directory above
