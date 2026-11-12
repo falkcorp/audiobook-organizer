@@ -1,5 +1,5 @@
 // file: core/library/recover_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d6fba451-bfd4-4e6c-bd41-649146b9f034
 // last-edited: 2026-11-11
 
@@ -195,24 +195,27 @@ func TestTransferRecoveryFromJournal(t *testing.T) {
 			}
 			s.checkSettled(t, dr, "dry run")
 			for k := 1; k <= n; k++ {
-				f := &faults{killAt: k}
-				r := s.newRig(t, f)
-				_, err := r.m.Transfer(ctxbg(), books, s.src, s.dst, s.opts)
-				label := fmt.Sprintf("killed at step %d/%d (%s)", k, n, f.labels[len(f.labels)-1])
-				if err == nil && k < n-1 {
-					// Only the journal's final delete may fail without failing the call.
-					t.Errorf("%s: Transfer reported success", label)
-				}
-				s.checkSafe(t, r, label+" before recovery")
-				r.m = r.build(rigOpts{}) // a new process over what the old one left
-				rep, rerr := r.m.Recover(ctxbg())
-				if rerr != nil || rep.Failed != 0 || rep.Conflicts != 0 || rep.Blocked != 0 {
-					t.Errorf("%s: Recover = %v, %v", label, rep, rerr)
-				}
-				s.checkSettled(t, r, label+" after recovery")
-				if rep2, err := r.m.Recover(ctxbg()); err != nil || rep2 != (RecoverReport{}) {
-					t.Errorf("%s: a second Recover found work: %v, %v", label, rep2, err)
-				}
+				t.Run(fmt.Sprintf("kill-%02d", k), func(t *testing.T) {
+					t.Parallel() // each kill point is its own rig, store and directories
+					f := &faults{killAt: k}
+					r := s.newRig(t, f)
+					_, err := r.m.Transfer(ctxbg(), books, s.src, s.dst, s.opts)
+					label := fmt.Sprintf("killed at step %d/%d (%s)", k, n, f.labels[len(f.labels)-1])
+					if err == nil && k < n-1 {
+						// Only the journal's final delete may fail without failing the call.
+						t.Errorf("%s: Transfer reported success", label)
+					}
+					s.checkSafe(t, r, label+" before recovery")
+					r.m = r.build(rigOpts{}) // a new process over what the old one left
+					rep, rerr := r.m.Recover(ctxbg())
+					if rerr != nil || rep.Failed != 0 || rep.Conflicts != 0 || rep.Blocked != 0 {
+						t.Errorf("%s: Recover = %v, %v", label, rep, rerr)
+					}
+					s.checkSettled(t, r, label+" after recovery")
+					if rep2, err := r.m.Recover(ctxbg()); err != nil || rep2 != (RecoverReport{}) {
+						t.Errorf("%s: a second Recover found work: %v, %v", label, rep2, err)
+					}
+				})
 			}
 		})
 	}
@@ -230,32 +233,34 @@ func TestTransferRecoveryIsCrashSafe(t *testing.T) {
 			}
 			n := dry.steps()
 			for k := 1; k <= n; k++ {
-				// Crash the transfer at k, then crash the first recovery at j.
-				probe := &faults{killAt: k}
-				pr := s.newRig(t, probe)
-				_, _ = pr.m.Transfer(ctxbg(), books, s.src, s.dst, s.opts)
-				pr.m = pr.build(rigOpts{faults: &faults{}})
-				recFaults := &faults{}
-				pr.m = pr.build(rigOpts{faults: recFaults})
-				if _, err := pr.m.Recover(ctxbg()); err != nil {
-					t.Fatalf("k=%d: probe recovery: %v", k, err)
-				}
-				m := recFaults.steps()
-				for j := 1; j <= m; j++ {
-					f := &faults{killAt: k}
-					r := s.newRig(t, f)
-					_, _ = r.m.Transfer(ctxbg(), books, s.src, s.dst, s.opts)
-					rf := &faults{killAt: j}
-					r.m = r.build(rigOpts{faults: rf})
-					_, _ = r.m.Recover(ctxbg())
-					label := fmt.Sprintf("transfer killed at %d, recovery killed at %d/%d", k, j, m)
-					s.checkSafe(t, r, label+" mid-recovery")
-					r.m = r.build(rigOpts{})
-					if rep, err := r.m.Recover(ctxbg()); err != nil || rep.Failed != 0 || rep.Conflicts != 0 {
-						t.Errorf("%s: final Recover = %v, %v", label, rep, err)
+				t.Run(fmt.Sprintf("kill-%02d", k), func(t *testing.T) {
+					t.Parallel()
+					// Crash the transfer at k, then crash the first recovery at j.
+					probe := &faults{killAt: k}
+					pr := s.newRig(t, probe)
+					_, _ = pr.m.Transfer(ctxbg(), books, s.src, s.dst, s.opts)
+					recFaults := &faults{}
+					pr.m = pr.build(rigOpts{faults: recFaults})
+					if _, err := pr.m.Recover(ctxbg()); err != nil {
+						t.Fatalf("k=%d: probe recovery: %v", k, err)
 					}
-					s.checkSettled(t, r, label)
-				}
+					m := recFaults.steps()
+					for j := 1; j <= m; j++ {
+						f := &faults{killAt: k}
+						r := s.newRig(t, f)
+						_, _ = r.m.Transfer(ctxbg(), books, s.src, s.dst, s.opts)
+						rf := &faults{killAt: j}
+						r.m = r.build(rigOpts{faults: rf})
+						_, _ = r.m.Recover(ctxbg())
+						label := fmt.Sprintf("transfer killed at %d, recovery killed at %d/%d", k, j, m)
+						s.checkSafe(t, r, label+" mid-recovery")
+						r.m = r.build(rigOpts{})
+						if rep, err := r.m.Recover(ctxbg()); err != nil || rep.Failed != 0 || rep.Conflicts != 0 {
+							t.Errorf("%s: final Recover = %v, %v", label, rep, err)
+						}
+						s.checkSettled(t, r, label)
+					}
+				})
 			}
 		})
 	}
