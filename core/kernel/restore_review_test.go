@@ -1,5 +1,5 @@
 // file: core/kernel/restore_review_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6b2e9d47-3a15-4c80-b7f4-0d9a5e1c8b36
 // last-edited: 2026-11-11
 
@@ -967,7 +967,7 @@ func TestReapply_ReplacedStoreWithAnUnknownKindFailsClosedOnce(t *testing.T) {
 	fx.swapIn(archive)
 	var epochs []int64
 	var closed []bool
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		res, _ := fx.boot(nil, nil)
 		closed = append(closed, res.FailedClosed)
 		fx.restart()
