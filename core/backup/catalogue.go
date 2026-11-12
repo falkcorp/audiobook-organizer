@@ -151,13 +151,13 @@ func (s *Svc) describe(name, rest string) (found, bool) {
 	return f, true
 }
 
-func readBounded(p string, max int64) ([]byte, error) {
+func readBounded(p string, max int64) (b []byte, err error) {
 	f, fi, err := backuparchive.OpenRegular(p, max)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	b := make([]byte, fi.Size())
+	defer func() { err = errors.Join(err, f.Close()) }()
+	b = make([]byte, fi.Size())
 	_, err = io.ReadFull(f, b)
 	return b, err
 }
@@ -175,7 +175,9 @@ func (s *Svc) peekManifest(p string, fi os.FileInfo) *Manifest {
 	var m *Manifest
 	if a, err := openArchive(p, s.limits()); err == nil {
 		m = a.Manifest
-		_ = a.Close()
+		if cerr := a.Close(); cerr != nil {
+			s.o.log().Warn("backup: closing an archive after reading its manifest", "name", filepath.Base(p), "error", cerr)
+		}
 	}
 	s.cache.Store(p, kindEntry{size: fi.Size(), mod: fi.ModTime(), core: m != nil, m: m})
 	return m
@@ -292,7 +294,7 @@ func (s *Svc) Delete(ctx context.Context, id ArchiveID) error {
 // archive must be one store directory. Its provenance then decides Own or
 // Foreign, exactly as for an archive found in the directory. name is a hint:
 // it is kept only when it is a plain file name in this app's pattern and free.
-func (s *Svc) Import(ctx context.Context, name string, r io.Reader) (Archive, error) {
+func (s *Svc) Import(ctx context.Context, name string, r io.Reader) (_ Archive, err error) {
 	if err := mkdirPrivate(s.o.Dir); err != nil {
 		return Archive{}, err
 	}
@@ -305,11 +307,16 @@ func (s *Svc) Import(ctx context.Context, name string, r io.Reader) (Archive, er
 	if err != nil {
 		return Archive{}, err
 	}
-	done := false
+	done, fClosed := false, false
 	defer func() {
-		if !done {
-			_ = f.Close()
-			_ = os.Remove(tmp)
+		if done {
+			return
+		}
+		if !fClosed {
+			err = errors.Join(err, f.Close())
+		}
+		if rerr := os.Remove(tmp); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			err = errors.Join(err, rerr)
 		}
 	}()
 	h, n, err := copySum(ctxReader{ctx, io.LimitReader(r, lim.MaxArchiveBytes+1)}, f)
@@ -322,6 +329,7 @@ func (s *Svc) Import(ctx context.Context, name string, r io.Reader) (Archive, er
 	if err := f.Sync(); err != nil {
 		return Archive{}, err
 	}
+	fClosed = true
 	if err := f.Close(); err != nil {
 		return Archive{}, err
 	}
@@ -329,13 +337,15 @@ func (s *Svc) Import(ctx context.Context, name string, r io.Reader) (Archive, er
 	var man []byte
 	if a, oerr := openArchive(tmp, lim); oerr == nil {
 		man = a.ManifestBytes
-		if existing, _ := s.scan(ctx); idTaken(existing, a.Manifest.ArchiveID) {
-			_ = a.Close()
-			return Archive{}, fmt.Errorf("%w: an archive with ID %s is already in the catalogue", ErrManifest, a.Manifest.ArchiveID)
+		existing, serr := s.scan(ctx)
+		if serr != nil {
+			// The duplicate check needs the catalogue: fail closed.
+			return Archive{}, errors.Join(serr, a.Close())
 		}
-		cerr := a.consume(ctx, nil, "")
-		_ = a.Close()
-		if cerr != nil {
+		if idTaken(existing, a.Manifest.ArchiveID) {
+			return Archive{}, errors.Join(fmt.Errorf("%w: an archive with ID %s is already in the catalogue", ErrManifest, a.Manifest.ArchiveID), a.Close())
+		}
+		if cerr := errors.Join(a.consume(ctx, nil, ""), a.Close()); cerr != nil {
 			return Archive{}, cerr
 		}
 	} else if errors.Is(oerr, ErrManifest) {
@@ -371,13 +381,8 @@ func (s *Svc) Import(ctx context.Context, name string, r io.Reader) (Archive, er
 	if err := syncDir(s.o.Dir); err != nil {
 		return Archive{}, err
 	}
-	fi, err := os.Lstat(final)
-	if err != nil {
-		return Archive{}, err
-	}
 	rest := strings.TrimPrefix(fname, s.o.Prefix)
 	got, ok := s.describe(fname, rest)
-	_ = fi
 	if !ok {
 		return Archive{}, ErrNotFound
 	}
@@ -385,14 +390,17 @@ func (s *Svc) Import(ctx context.Context, name string, r io.Reader) (Archive, er
 }
 
 // extensionOf is the codec extension of the archive at p, from its magic bytes.
-func extensionOf(p string) (string, error) {
+func extensionOf(p string) (ext string, err error) {
 	f, _, err := backuparchive.OpenRegular(p, 0)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { err = errors.Join(err, f.Close()) }()
 	var magic [8]byte
-	n, _ := io.ReadFull(f, magic[:])
+	n, rerr := io.ReadFull(f, magic[:])
+	if rerr != nil && !errors.Is(rerr, io.EOF) && !errors.Is(rerr, io.ErrUnexpectedEOF) {
+		return "", rerr // a short file is not a tar; a failing read is not "not a tar"
+	}
 	c := backuparchive.Sniff(magic[:n])
 	if c == nil {
 		return "", fmt.Errorf("%w: not a tar archive", ErrManifest)

@@ -125,7 +125,7 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 		if open, err = openArchive(f.Path, s.limits()); err != nil {
 			return PendingRestore{}, err
 		}
-		defer open.Close()
+		defer s.closeRead("the archive being staged", open)
 		man = open.Manifest
 	}
 	class := PreProvenance
@@ -371,7 +371,10 @@ func (s *Svc) extractLegacy(ctx context.Context, archive, staging string) (strin
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(staging, p)
+		rel, err := filepath.Rel(staging, p)
+		if err != nil {
+			return err
+		}
 		ents = append(ents, Entry{Path: filepath.ToSlash(rel), Size: fi.Size(), Class: SystemOfRecord})
 		return nil
 	})
@@ -692,9 +695,7 @@ func Recheck(rehash func() bool) func(ctx context.Context, in restorejournal.Int
 				if err != nil {
 					return err
 				}
-				herr := hashEntry(ctxReader{ctx, f}, e)
-				_ = f.Close()
-				if herr != nil {
+				if herr := errors.Join(hashEntry(ctxReader{ctx, f}, e), f.Close()); herr != nil {
 					return herr
 				}
 			}

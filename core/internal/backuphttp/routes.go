@@ -499,7 +499,15 @@ func (a *api) importArchive(w http.ResponseWriter, r *http.Request, c caller) {
 		return
 	}
 	var src io.Reader = http.MaxBytesReader(w, r.Body, a.maxImport)
-	if mt, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "multipart/form-data" {
+	// A Content-Type that does not parse leaves it unknown whether the body is a
+	// multipart wrapper or the archive itself; the request is refused rather
+	// than guessed at.
+	mt, params, perr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if perr != nil && r.Header.Get("Content-Type") != "" {
+		a.fail(w, r, &httpapi.Error{Status: http.StatusBadRequest, Code: "malformed_upload", Detail: "the Content-Type header could not be parsed"})
+		return
+	}
+	if mt == "multipart/form-data" {
 		part, err := filePart(src, params["boundary"])
 		if err != nil {
 			a.fail(w, r, err)
@@ -703,7 +711,7 @@ func (a *api) recordFirst(ctx context.Context, r *http.Request, c caller, action
 // request already answers the action's error, and the first record stands.
 func (a *api) recordFailure(ctx context.Context, ev audit.Event, cause error) {
 	ev.Outcome, ev.Reason = audit.Failure, "refused"
-	if _, ok := mapError(cause); !ok {
+	if !isRefusal(cause) {
 		ev.Outcome, ev.Reason = audit.Error, "failed"
 	}
 	if err := a.audit.Record(ctx, ev); err != nil {

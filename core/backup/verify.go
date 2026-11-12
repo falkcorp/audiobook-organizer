@@ -80,7 +80,7 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 		}
 		return s.verifyLegacy(ctx, path, l, err)
 	}
-	defer a.Close()
+	defer s.closeRead("the archive being verified", a)
 	if side, err := readBounded(path+ManifestSidecar, MaxManifestBytes); err == nil && !bytes.Equal(side, a.ManifestBytes) {
 		return fmt.Errorf("%w: the manifest sidecar differs from the archive's manifest", ErrManifest)
 	}
@@ -206,9 +206,9 @@ func checkSumFile(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	h := sha256.New()
-	if _, err := io.Copy(h, ctxReader{ctx, f}); err != nil {
+	_, err = io.Copy(h, ctxReader{ctx, f})
+	if err := errors.Join(err, f.Close()); err != nil {
 		return err
 	}
 	if !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), want) {

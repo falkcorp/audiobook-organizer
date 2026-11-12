@@ -39,7 +39,7 @@ func (s *Svc) Rewrap(ctx context.Context, id ArchiveID) (Archive, error) {
 	if err != nil {
 		return Archive{}, err
 	}
-	defer src.Close()
+	defer s.closeRead("the archive being re-signed", src)
 	live := ""
 	if s.o.Store != nil {
 		live = s.o.Store.InstallID()
@@ -71,7 +71,11 @@ func (s *Svc) Rewrap(ctx context.Context, id ArchiveID) (Archive, error) {
 	if err != nil {
 		return Archive{}, err
 	}
-	defer func() { _ = run.Close(); _ = os.RemoveAll(run.path) }()
+	defer func() {
+		if cerr := errors.Join(run.Close(), os.RemoveAll(run.path)); cerr != nil {
+			s.o.log().Warn("backup: removing the run directory", "run", filepath.Base(run.path), "error", cerr)
+		}
+	}()
 	ex, err := backuparchive.NewExtractor(run.path)
 	if err != nil {
 		return Archive{}, err

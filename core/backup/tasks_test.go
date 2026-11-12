@@ -100,7 +100,7 @@ func TestVerifyTaskVerifiesRewrapsAndFails(t *testing.T) {
 	e.rebuild()
 	e.settings.VerifyKeep = 2
 	var made []backup.Archive
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		made = append(made, e.create("manual"))
 	}
 	rc := taskstest.NewFakeRun(ctx, backup.KindVerify).RC()
