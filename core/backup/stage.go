@@ -1,5 +1,5 @@
 // file: core/backup/stage.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a9c2e5f1-3d70-4b84-8f6a-2e1d9b7c4a03
 // last-edited: 2026-11-12
 
@@ -186,7 +186,7 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 	}
 	info, err := s.o.Inspector.Inspect(ctx, filepath.Join(staging, "db"))
 	if err != nil {
-		return PendingRestore{}, fmt.Errorf("backup: the staged store does not open: %w", err)
+		return PendingRestore{}, openRefusal("the staged store does not open", err)
 	}
 	w, err := s.checkSecrets(info, o)
 	if err != nil {

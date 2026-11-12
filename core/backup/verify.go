@@ -1,5 +1,5 @@
 // file: core/backup/verify.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d41f0c73-7b2e-4e88-a6d5-0c9e3b1f5a27
 // last-edited: 2026-11-12
 
@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/mediacore/internal/backuparchive"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 const verifyScratchDir = ".backup-verify"
@@ -107,7 +108,7 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 	}
 	info, err := s.o.Inspector.Inspect(ctx, scratch)
 	if err != nil {
-		return fmt.Errorf("backup: the archived store does not open: %w", err)
+		return openRefusal("the archived store does not open", err)
 	}
 	return matchManifest(a.Manifest, info)
 }
@@ -166,7 +167,7 @@ func (s *Svc) verifyLegacy(ctx context.Context, path string, l VerifyLevel, why 
 		return err
 	}
 	if _, err := s.o.Inspector.Inspect(ctx, scratch); err != nil {
-		return fmt.Errorf("backup: the archived store does not open: %w", err)
+		return openRefusal("the archived store does not open", err)
 	}
 	return nil
 }
@@ -211,4 +212,13 @@ func (s *Svc) checkSum(ctx context.Context, path string) error {
 		return ErrChecksumMismatch
 	}
 	return nil
+}
+
+// openRefusal wraps what storage.Open refused. A Breaking step above the build
+// is a build mismatch, "too new", not a damaged archive.
+func openRefusal(what string, err error) error {
+	if errors.Is(err, storage.ErrKeyspaceTooNew) {
+		return fmt.Errorf("%w: %w", ErrBackupTooNew, err)
+	}
+	return fmt.Errorf("backup: %s: %w", what, err)
 }
