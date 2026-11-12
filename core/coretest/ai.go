@@ -41,8 +41,11 @@ type FakeAI struct {
 	batches       map[ai.BatchHandle]*fakeBatch
 	nextBatch     int
 	loseSubmit    bool
+	submitErrs    []error // consumed one per SubmitBatch call; the last repeats
+	submitNext    int
 	batchItemFunc func(ai.BatchItem) ai.BatchResult
 	cancels       []ai.BatchHandle
+	batchCalls    int
 }
 
 // FakeAICall is one call a FakeAI received.
@@ -283,6 +286,25 @@ func (f *FakeAI) LoseSubmitResponse(on bool) *FakeAI {
 	return f
 }
 
+// FailSubmit scripts SubmitBatch's failures: the call consumes one error per
+// call, the last repeating, and a nil entry lets that call succeed. Nothing
+// reaches the remote store for a call that fails this way (the provider
+// refused the batch). It replaces any earlier script; no arguments clears it.
+func (f *FakeAI) FailSubmit(errs ...error) *FakeAI {
+	f.mu.Lock()
+	f.submitErrs, f.submitNext = slices.Clone(errs), 0
+	f.mu.Unlock()
+	return f
+}
+
+// BatchCallCount is how many batch API calls (submit, status, results, cancel,
+// find) the endpoint received.
+func (f *FakeAI) BatchCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.batchCalls
+}
+
 // AnswerBatchItems sets how a finished batch answers each item; the default
 // echoes the item's custom ID as the reply text.
 func (f *FakeAI) AnswerBatchItems(fn func(ai.BatchItem) ai.BatchResult) *FakeAI {
@@ -296,6 +318,14 @@ func (f *FakeAI) AnswerBatchItems(fn func(ai.BatchItem) ai.BatchResult) *FakeAI 
 func (f *FakeAI) SubmitBatch(_ context.Context, _ string, items []ai.BatchItem, tags map[string]string) (ai.BatchHandle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.batchCalls++
+	if len(f.submitErrs) > 0 {
+		err := f.submitErrs[min(f.submitNext, len(f.submitErrs)-1)]
+		f.submitNext++
+		if err != nil {
+			return "", err
+		}
+	}
 	f.nextBatch++
 	h := ai.BatchHandle(fmt.Sprintf("batch_%d", f.nextBatch))
 	f.batches[h] = &fakeBatch{tags: maps.Clone(tags), items: slices.Clone(items), phase: ai.BatchInProgress}
@@ -309,6 +339,7 @@ func (f *FakeAI) SubmitBatch(_ context.Context, _ string, items []ai.BatchItem, 
 func (f *FakeAI) BatchStatus(_ context.Context, h ai.BatchHandle) (ai.BatchState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.batchCalls++
 	b, ok := f.batches[h]
 	if !ok {
 		return ai.BatchState{}, &integrations.Error{Op: "batch status", Class: integrations.ClassNotFound, Err: fmt.Errorf("no batch %s", h)}
@@ -319,6 +350,7 @@ func (f *FakeAI) BatchStatus(_ context.Context, h ai.BatchHandle) (ai.BatchState
 // BatchResults yields one result per item of a completed batch.
 func (f *FakeAI) BatchResults(_ context.Context, h ai.BatchHandle) (iter.Seq2[ai.BatchResult, error], error) {
 	f.mu.Lock()
+	f.batchCalls++
 	b, ok := f.batches[h]
 	if !ok {
 		f.mu.Unlock()
@@ -350,6 +382,7 @@ func (f *FakeAI) BatchResults(_ context.Context, h ai.BatchHandle) (iter.Seq2[ai
 func (f *FakeAI) CancelBatch(_ context.Context, h ai.BatchHandle) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.batchCalls++
 	f.cancels = append(f.cancels, h)
 	b, ok := f.batches[h]
 	if !ok {
@@ -363,6 +396,7 @@ func (f *FakeAI) CancelBatch(_ context.Context, h ai.BatchHandle) error {
 func (f *FakeAI) FindBatches(_ context.Context, tags map[string]string) ([]ai.BatchHandle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.batchCalls++
 	var out []ai.BatchHandle
 	for _, h := range slices.Sorted(maps.Keys(f.batches)) {
 		match := true
