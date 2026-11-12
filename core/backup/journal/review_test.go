@@ -13,6 +13,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -234,6 +235,14 @@ func TestReadFile_OverTheSizeCapIsCorrupt(t *testing.T) {
 	must(t, j.Close())
 }
 
+// failRead fails the test if it is read.
+type failRead struct{ t *testing.T }
+
+func (f failRead) Read([]byte) (int, error) {
+	f.t.Error("a file measured over the limit was read")
+	return 0, io.EOF
+}
+
 // TestReadLimited: the limit holds by the size alone and again while reading
 // (a file that grew after it was measured).
 func TestReadLimited(t *testing.T) {
@@ -248,7 +257,11 @@ func TestReadLimited(t *testing.T) {
 		{"grew while read", strings.Repeat("x", 20), 0, 10, false},
 		{"empty", "", 0, 10, true},
 	} {
-		got, err := readLimited(strings.NewReader(tc.body), "p", tc.size, tc.limit)
+		var r io.Reader = strings.NewReader(tc.body)
+		if tc.size > tc.limit {
+			r = failRead{t} // refused by its size alone: none of it is read
+		}
+		got, err := readLimited(r, "p", tc.size, tc.limit)
 		if (err == nil) != tc.ok || (err != nil && !errors.Is(err, ErrCorrupt)) {
 			t.Errorf("%s: err = %v, want ok %v (ErrCorrupt otherwise)", tc.name, err, tc.ok)
 		}

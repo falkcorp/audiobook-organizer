@@ -759,6 +759,7 @@ func TestReapply_KnownLinesAfterAnUnknownKindAreStillApplied(t *testing.T) {
 			fx.key("key-batarang", barbara, auth.KeyActive)
 			fx.journalOnly(journal.Revocation{Kind: "user.frozen", Subject: rxUserRef(barbara)})
 			fx.journalOnly(journal.Revocation{Kind: journal.UserDisabled, Subject: rxUserRef(selina), Epoch: 1})
+			fx.journalOnly(journal.Revocation{Kind: "user.thawed", Subject: rxUserRef(barbara)}) // a second line it cannot apply: skipped, not counted
 			fx.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-batarang")})
 			fx.restart()
 			mut := func(in *reapplyInput) { in.TailBatch = batch }
