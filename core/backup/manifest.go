@@ -1,5 +1,5 @@
 // file: core/backup/manifest.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2b0f3a62-7c1e-4a6e-9a0b-4f7d6b3c1e55
 // last-edited: 2026-11-12
 
@@ -114,6 +114,25 @@ const (
 	maxManifestText = 256
 	maxManifestKeys = 4096
 )
+
+// MaxReasonBytes is the longest reason an archive's manifest can carry. It is the
+// bound ParseManifest applies to every free string of a manifest, in bytes, not
+// characters: a text of 100 CJK characters is 300 bytes.
+const MaxReasonBytes = maxManifestText
+
+// ValidReason is nil when reason can be written into a manifest and read back
+// out of it: valid UTF-8, at most MaxReasonBytes bytes, no control character (a
+// CR or LF in it would split a log line). It is the test ParseManifest applies
+// to the same member, so a reason that passes here is one the archive's own
+// catalogue accepts. Create refuses with it before any work, and the HTTP route
+// answers its 400 with it, so neither keeps a copy of the rule. The error names
+// no value: a reason is free text.
+func ValidReason(reason string) error {
+	if !validText(reason, MaxReasonBytes) {
+		return fmt.Errorf("%w: it must be valid text of at most %d bytes with no control character", ErrInvalidReason, MaxReasonBytes)
+	}
+	return nil
+}
 
 // validText reports whether s is a valid UTF-8 string of at most limit bytes
 // with no control character (a CR or LF in it would split a log line).

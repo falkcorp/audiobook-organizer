@@ -1,5 +1,5 @@
 // file: core/backup/rewrap.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1c7e9a64-5b3f-4d28-a0e1-8d4c6f2b9e17
 // last-edited: 2026-11-12
 
@@ -108,19 +108,20 @@ func (s *Svc) Rewrap(ctx context.Context, id ArchiveID) (Archive, error) {
 	if err != nil {
 		return Archive{}, err
 	}
-	name, final, err := s.freshName(now, codec.Extension())
-	if err != nil {
+	if err := checkReadsBack(mb); err != nil {
 		return Archive{}, err
 	}
+	partial := s.partialPath("rewrap", string(newID))
 	sum, size, err := writeArchive(ctx, archiveSpec{
-		Partial: final + ".partial", Codec: codec, Level: set.CompressionLevel,
+		Partial: partial, Codec: codec, Level: set.CompressionLevel,
 		Manifest: mb, Created: m.CreatedAt, Entries: m.Entries, RunDir: run.path,
 	})
 	if err != nil {
 		return Archive{}, err
 	}
-	if err := os.Rename(final+".partial", final); err != nil {
-		_ = os.Remove(final + ".partial")
+	name, final, err := s.publish(partial, now, codec.Extension())
+	if err != nil {
+		_ = os.Remove(partial)
 		return Archive{}, err
 	}
 	if err := s.writeSidecars(final, name, sum, mb); err != nil {

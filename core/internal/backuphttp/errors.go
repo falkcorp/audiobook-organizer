@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/errors.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 6608474f-18e9-44e0-a1fe-7233ad5bc90b
 // last-edited: 2026-11-12
 
@@ -282,18 +282,18 @@ func errNotFound() *httpapi.Error {
 	return &httpapi.Error{Status: http.StatusNotFound, Code: "archive_not_found", Detail: "no archive has that ID"}
 }
 
-// maxReasonRunes bounds a create's free-text reason.
-const maxReasonRunes = 128
-
-// cleanReason defaults the reason to "manual" and refuses control characters
-// and an over-long text.
+// cleanReason defaults the reason to "manual" and refuses what the manifest
+// cannot carry. The rule is backup.ValidReason's, the one Create applies and
+// ParseManifest reads back with: valid text of at most backup.MaxReasonBytes
+// bytes, bytes and not characters (100 CJK characters are 300 bytes), with no
+// control character. The body does not echo the text.
 func cleanReason(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "manual", nil
 	}
-	if len([]rune(s)) > maxReasonRunes || strings.IndexFunc(s, unicode.IsControl) >= 0 {
-		return "", httpapi.Invalid(httpapi.Field("/body/reason", "invalid", fmt.Sprintf("must be at most %d characters with no control character", maxReasonRunes)))
+	if err := backup.ValidReason(s); err != nil {
+		return "", httpapi.Invalid(httpapi.Field("/body/reason", "invalid", fmt.Sprintf("must be valid text of at most %d bytes with no control character", backup.MaxReasonBytes)))
 	}
 	return s, nil
 }
@@ -382,6 +382,8 @@ func mapError(err error) (*httpapi.Error, bool) {
 	switch {
 	case errors.Is(err, backup.ErrNotFound):
 		return p(http.StatusNotFound, "archive_not_found", "no archive has that ID")
+	case errors.Is(err, backup.ErrInvalidReason):
+		return p(http.StatusBadRequest, "invalid_reason", "the reason cannot be recorded in an archive")
 	case errors.Is(err, backup.ErrNoUndoPoint):
 		return p(http.StatusNotFound, "no_undo_point", "there is no applied restore to undo")
 	case errors.Is(err, backup.ErrForeignArchive):

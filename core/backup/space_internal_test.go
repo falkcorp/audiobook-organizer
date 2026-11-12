@@ -1,11 +1,12 @@
 // file: core/backup/space_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ff438145-7358-41b2-a0e6-168f2d12a0af
 // last-edited: 2026-11-12
 
 package backup
 
 import (
+	"bytes"
 	"errors"
 	"math"
 	"os"
@@ -223,5 +224,93 @@ func TestWriteFileAtomicLeavesNoTemporaryFile(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(p); string(b) != "two" {
 		t.Fatalf("content = %q", b)
+	}
+}
+
+// A spaceWriter asks for room again only when it has written what the last
+// check promised, and asks for the larger of the window and the write in hand;
+// a refusal stops the write before a byte of it goes through.
+func TestSpaceWriterAsksAgainEveryWindow(t *testing.T) {
+	var asked []uint64
+	var sink bytes.Buffer
+	w := newSpaceWriter(&sink, 4, func(n uint64) error { asked = append(asked, n); return nil })
+	for range 4 { // the first window was promised by the caller's own check
+		if _, err := w.Write([]byte("a")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(asked) != 0 {
+		t.Fatalf("asked %v before the promised window was written", asked)
+	}
+	if _, err := w.Write([]byte("b")); err != nil || len(asked) != 1 || asked[0] != 4 {
+		t.Fatalf("the fifth byte: asked %v, %v; want one ask for the window (4)", asked, err)
+	}
+	for range 3 {
+		if _, err := w.Write([]byte("c")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(asked) != 1 {
+		t.Fatalf("asked %v inside a window", asked)
+	}
+	if _, err := w.Write([]byte("d")); err != nil || len(asked) != 2 {
+		t.Fatalf("the next window: asked %v, %v", asked, err)
+	}
+	// A write larger than the window asks for itself.
+	if _, err := w.Write(make([]byte, 10)); err != nil || asked[len(asked)-1] != 10 {
+		t.Fatalf("a 10-byte write: asked %v, %v; want the last ask to be 10", asked, err)
+	}
+}
+
+func TestSpaceWriterStopsBeforeTheBytesGo(t *testing.T) {
+	var sink bytes.Buffer
+	boom := errors.New("no room")
+	n := 0
+	w := newSpaceWriter(&sink, 2, func(uint64) error {
+		n++
+		if n > 1 {
+			return boom
+		}
+		return nil
+	})
+	if _, err := w.Write([]byte("ab")); err != nil { // the promised window
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("cd")); err != nil { // the first ask: granted
+		t.Fatal(err)
+	}
+	wrote, err := w.Write([]byte("ef")) // the second: refused
+	if !errors.Is(err, boom) || wrote != 0 {
+		t.Fatalf("Write = %d, %v; want 0 and the check's error", wrote, err)
+	}
+	if got := sink.String(); got != "abcd" {
+		t.Fatalf("the sink holds %q, want abcd: a refused write must not reach it", got)
+	}
+}
+
+// requireRoom is requireSpace's per-device check without the device lookup: the
+// same boundary and the same errors, and a platform that cannot name a device
+// (disk_other.go) can still ask whether an upload's next interval fits.
+func TestRequireRoomNeedsNoDevice(t *testing.T) {
+	boom := errors.New("batcave sensor offline")
+	noDevice := func(avail uint64) Disk {
+		return Disk{Device: func(string) (uint64, error) { return 0, boom }, Avail: func(string) (uint64, error) { return avail, nil }}
+	}
+	if err := requireRoom(noDevice(101), 1, "/a/x", 100); err != nil {
+		t.Fatalf("exactly enough with the margin: %v", err)
+	}
+	if err := requireRoom(noDevice(100), 1, "/a/x", 100); !errors.Is(err, ErrInsufficientSpace) {
+		t.Fatalf("one byte short = %v, want ErrInsufficientSpace", err)
+	}
+	if err := requireRoom(noDevice(math.MaxUint64), 1, "/a/x", math.MaxUint64); !errors.Is(err, ErrInsufficientSpace) {
+		t.Fatalf("a need that overflows = %v, want ErrInsufficientSpace", err)
+	}
+	availFails := Disk{Avail: func(string) (uint64, error) { return 0, boom }}
+	if err := requireRoom(availFails, 0, "/a/x", 1); !errors.Is(err, boom) || errors.Is(err, ErrInsufficientSpace) {
+		t.Fatalf("a failed free-space query = %v, want the cause and not a shortage", err)
+	}
+	err := requireRoom(noDevice(1), 0, "/a/operator/private/state", 5)
+	if strings.Contains(err.Error(), "operator") || strings.Contains(err.Error(), "/") {
+		t.Fatalf("the error names a path: %v", err)
 	}
 }

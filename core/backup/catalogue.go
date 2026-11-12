@@ -1,5 +1,5 @@
 // file: core/backup/catalogue.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 0e5a7d12-41c8-4b6f-8d33-9c1ab2e07f65
 // last-edited: 2026-11-12
 
@@ -367,8 +367,17 @@ func (s *Svc) Import(ctx context.Context, _ string, r io.Reader) (_ Archive, err
 	if lim.MaxArchiveBytes <= 0 {
 		lim.MaxArchiveBytes = backuparchive.DefaultMaxArchiveBytes
 	}
-	tmp := filepath.Join(s.o.Dir, fmt.Sprintf("%simport-%d.partial", s.o.Prefix, s.o.now().UnixNano()))
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// The upload's length is not known until it ends, and it is bounded only by
+	// MaxArchiveBytes: ask for room for its first interval before a file is made,
+	// and for each next one as it is written (spaceWriter), so an upload stops at
+	// the margin instead of at a full volume.
+	claim := func(n uint64) error {
+		return requireRoom(s.o.Disk, s.o.settings().margin(), s.o.Dir, n)
+	}
+	if err := claim(uploadCheckBytes); err != nil {
+		return Archive{}, err
+	}
+	f, tmp, err := createTemp(filepath.Join(s.o.Dir, s.o.Prefix+"import-upload"))
 	if err != nil {
 		return Archive{}, err
 	}
@@ -384,7 +393,7 @@ func (s *Svc) Import(ctx context.Context, _ string, r io.Reader) (_ Archive, err
 			err = errors.Join(err, rerr)
 		}
 	}()
-	h, n, err := copySum(ctxReader{ctx, io.LimitReader(r, lim.MaxArchiveBytes+1)}, f)
+	h, n, err := copySum(ctxReader{ctx, io.LimitReader(r, lim.MaxArchiveBytes+1)}, newSpaceWriter(f, uploadCheckBytes, claim))
 	if err != nil {
 		return Archive{}, err
 	}
@@ -425,11 +434,8 @@ func (s *Svc) Import(ctx context.Context, _ string, r io.Reader) (_ Archive, err
 	if err != nil {
 		return Archive{}, err
 	}
-	fname, final, err := s.freshName(s.o.now().UTC(), ext)
+	fname, final, err := s.publish(tmp, s.o.now().UTC(), ext)
 	if err != nil {
-		return Archive{}, err
-	}
-	if err := os.Rename(tmp, final); err != nil {
 		return Archive{}, err
 	}
 	done = true
