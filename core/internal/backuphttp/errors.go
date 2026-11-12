@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/errors.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6608474f-18e9-44e0-a1fe-7233ad5bc90b
 // last-edited: 2026-11-12
 
@@ -388,6 +388,8 @@ func mapError(err error) (*httpapi.Error, bool) {
 		return p(http.StatusConflict, "backup_in_progress", "another backup or restore is running")
 	case errors.Is(err, backup.ErrInsufficientSpace):
 		return p(http.StatusInsufficientStorage, "insufficient_space", "there is not enough disk space")
+	case errors.Is(err, backup.ErrRestoreNotAuthorized):
+		return p(http.StatusForbidden, "restore_option_not_authorized", "a restore option needs proof the caller did not give; nothing was staged")
 	case errors.Is(err, backup.ErrRestoreStale):
 		return p(http.StatusConflict, "restore_stale", "the staged restore expired or was staged by another build; stage it again")
 	case errors.Is(err, restorejournal.ErrRenameRefused):

@@ -26,6 +26,13 @@ import (
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
+// asOwner is a context carrying the proof the restore route establishes after
+// its interactive and owner guards (backup.RestoreProof): the options that need
+// proof are only reachable with it.
+func asOwner(ctx context.Context) context.Context {
+	return backup.WithRestoreProof(ctx, backup.RestoreProof{Owner: true, Admin: true})
+}
+
 func shaHex(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
 // liveFiles is the live store directory's immutable files (tables and the
@@ -218,7 +225,7 @@ func madeElsewhere(t *testing.T, e *env, mutate func(other *env)) backup.Archive
 }
 
 func TestForeignArchiveNeedsFlag(t *testing.T) {
-	ctx := context.Background()
+	ctx := asOwner(context.Background())
 	cases := map[string]func(other *env){
 		"another install, same derivation key": nil,
 		"another derivation key": func(o *env) {
@@ -254,7 +261,7 @@ func TestForeignArchiveNeedsFlag(t *testing.T) {
 }
 
 func TestUnreadableSecretsRefused(t *testing.T) {
-	ctx := context.Background()
+	ctx := asOwner(context.Background())
 	e := newEnv(t)
 	a := e.create("manual")
 	e.keys.referenced = []string{"d1", "ra-s-al-ghul-key"}
@@ -339,7 +346,7 @@ func (bindProbe) DirDev(string) (uint64, error) { return 1, nil }
 func (bindProbe) Writable(string) error         { return nil }
 
 func TestRenamePrecheckRefusesBindMountedConfig(t *testing.T) {
-	ctx := context.Background()
+	ctx := asOwner(context.Background())
 	confDir := t.TempDir()
 	cfg, boot := filepath.Join(confDir, "mediacore.yaml"), filepath.Join(confDir, "config.boot.json")
 	for p, body := range map[string]string{cfg: "library: gotham\n", boot: `{"storage":"x"}`} {
@@ -405,7 +412,7 @@ func targetsOf(in restorejournal.Intent) string {
 }
 
 func TestRedactedConfigIsNeverSwappedIn(t *testing.T) {
-	ctx := context.Background()
+	ctx := asOwner(context.Background())
 	confDir := t.TempDir()
 	cfg := filepath.Join(confDir, "mediacore.yaml")
 	if err := os.WriteFile(cfg, []byte("openai_key: "+canaryKey+"\n"), 0o600); err != nil {
@@ -614,7 +621,7 @@ func legacyArchive(t *testing.T, e *env, codec string, sidecar bool) (name strin
 }
 
 func TestLegacyABOArchiveRestores(t *testing.T) {
-	ctx := context.Background()
+	ctx := asOwner(context.Background())
 	for _, codec := range []string{"gzip", "zstd", "none"} {
 		for _, sidecar := range []bool{true, false} {
 			name := codec + "/sidecar"
@@ -684,7 +691,7 @@ func TestLegacyABOArchiveRestores(t *testing.T) {
 }
 
 func TestLegacyArchiveWithBadSidecarRefused(t *testing.T) {
-	ctx := context.Background()
+	ctx := asOwner(context.Background())
 	e := newEnv(t)
 	fname := legacyArchive(t, e, "gzip", true)
 	bad := strings.Repeat("0", 64) + "  " + fname + "\n"
