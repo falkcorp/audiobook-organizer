@@ -47,8 +47,7 @@ func isTime(t reflect.Type) bool { return t == reflect.TypeFor[time.Time]() }
 // embedded struct that carries no json tag, as encoding/json does.
 func structFields(t reflect.Type) []fieldInfo {
 	var out []fieldInfo
-	for i := range t.NumField() {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		tag, hasTag := f.Tag.Lookup("json")
 		if tag == "-" {
 			continue
