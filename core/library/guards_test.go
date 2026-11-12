@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/storage"
@@ -227,7 +228,7 @@ func TestReservedAreasAreReachableByCoreOnly(t *testing.T) {
 		"the sentinel":              {Root: "books-library", Rel: DefaultAppDir + "/root.json"},
 		"the quarantine area":       {Root: "books-library", Rel: DefaultQuarantine},
 		"a directory holding both":  {Root: "books-nested", Rel: "state"},
-		"through a symlink to both": {Root: "books-library", Rel: "backdoor"},
+		"through a symlink to both": {Root: "books-library", Rel: "backdoor/root.json"},
 	} {
 		if _, err := r.m.Quarantine(ctxbg(), books, p, "x"); !errors.Is(err, ErrReservedPath) {
 			t.Errorf("Quarantine of %s = %v, want ErrReservedPath", name, err)
@@ -353,5 +354,252 @@ func TestFilesystemViewsSealTheReservedAreas(t *testing.T) {
 	f.Close()
 	if err := core.Remove(DefaultAppDir + "/core-state"); err != nil {
 		t.Errorf("core removing from its AppDir: %v", err)
+	}
+}
+
+// linksRig is reservedRig plus symlinks inside the roots that lead into the
+// areas: straight to the AppDir, to a subdirectory of it, to the quarantine
+// area, through a chain of links, by an absolute path, and (nested roots) to a
+// directory that holds both areas.
+func linksRig(t *testing.T) *rig {
+	t.Helper()
+	r := reservedRig(t)
+	r.put("books-library", "Gotham/01.m4b", "audio")
+	r.put("books-library", DefaultAppDir+"/sub/state.json", "state")
+	r.put("books-nested", "Gotham/01.m4b", "audio")
+	r.put("books-nested", "state/other/keep.txt", "an ordinary sibling of the areas")
+	r.put("books-nested", "state/held/x/held.m4b", "held")
+	if _, err := r.m.Quarantine(ctxbg(), books, Path{Root: "books-library", Rel: "Gotham/01.m4b"}, "x"); err != nil {
+		t.Fatal(err)
+	}
+	link := func(root RootID, name, target string) {
+		t.Helper()
+		if err := os.Symlink(target, r.abs(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link("books-library", "toApp", DefaultAppDir)
+	link("books-library", "toSub", DefaultAppDir+"/sub")
+	link("books-library", "toHeld", DefaultQuarantine)
+	link("books-library", "chain2", "chain1")
+	link("books-library", "chain1", "toApp")
+	link("books-library", "viaDots", "Gotham/../"+DefaultAppDir)
+	link("books-library", "abs", r.abs("books-library", DefaultAppDir))
+	link("books-nested", "toState", "state")
+	return r
+}
+
+func TestSymlinkIntoAReservedAreaIsRefusedByEveryView(t *testing.T) {
+	r := linksRig(t)
+	sealed := func(err error) bool { return errors.Is(err, ErrReservedPath) }
+	view := func(id RootID, o storage.Owner) RootFS {
+		root, err := r.m.Root(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fsys, err := root.FS(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fsys
+	}
+	own := view("books-library", books)
+	for _, via := range []string{"toApp", "toSub", "chain2", "viaDots", "abs", "toHeld"} {
+		target := via + "/root.json"
+		if via == "toSub" {
+			target = via + "/state.json"
+		}
+		if _, err := own.CreateExclusive(via+"/planted", 0o644); !sealed(err) {
+			t.Errorf("owner: create through %s = %v, want ErrReservedPath", via, err)
+		}
+		if err := own.Remove(target); !sealed(err) {
+			t.Errorf("owner: remove through %s = %v, want ErrReservedPath", via, err)
+		}
+		if err := own.MkdirAll(via+"/d", 0o755); !sealed(err) {
+			t.Errorf("owner: mkdir through %s = %v, want ErrReservedPath", via, err)
+		}
+		if err := own.RenameNoReplace(target, "taken"); !sealed(err) {
+			t.Errorf("owner: rename out through %s = %v, want ErrReservedPath", via, err)
+		}
+		if _, err := own.OpenFile(target, os.O_WRONLY, 0); !sealed(err) {
+			t.Errorf("owner: open for writing through %s = %v, want ErrReservedPath", via, err)
+		}
+	}
+	// The owner still reads through a link (reads of its own areas are open),
+	// and a link to an ordinary directory is an ordinary path.
+	if f, err := own.Open("toApp/root.json"); err != nil {
+		t.Errorf("owner reading through a link: %v", err)
+	} else {
+		f.Close()
+	}
+	// A reader that is not the owner is refused reads through the same links.
+	dlRoot := r.abs("dl-1", "complete")
+	if err := os.MkdirAll(dlRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(DefaultAppDir, r.abs("dl-1", "toApp")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("complete", r.abs("dl-1", "toComplete")); err != nil {
+		t.Fatal(err)
+	}
+	r.put("dl-1", "complete/Gotham.m4b", "audio")
+	dl := view("dl-1", tv)
+	if _, err := dl.Open("toApp/root.json"); !sealed(err) {
+		t.Errorf("download reader opening through a link into the AppDir = %v, want ErrReservedPath", err)
+	}
+	if _, err := dl.ReadDir("toApp"); !sealed(err) {
+		t.Errorf("download reader listing a link into the AppDir = %v, want ErrReservedPath", err)
+	}
+	if f, err := dl.Open("toComplete/Gotham.m4b"); err != nil {
+		t.Errorf("download reader through a link to an ordinary directory: %v", err)
+	} else {
+		f.Close()
+	}
+	// A symlink may not be made to the areas, by any non-core view.
+	for _, target := range []Path{{Root: "books-library", Rel: DefaultAppDir}, {Root: "books-library", Rel: DefaultAppDir + "/sub"}, {Root: "books-library", Rel: DefaultQuarantine}, {Root: "books-library", Rel: "toApp"}} {
+		if err := own.Symlink(target, "mk"); !sealed(err) {
+			t.Errorf("owner: Symlink to %s = %v, want ErrReservedPath", target, err)
+		}
+	}
+	if err := own.Symlink(Path{Root: "books-library", Rel: "Gotham"}, "ok"); err != nil {
+		t.Errorf("owner: Symlink to an ordinary directory: %v", err)
+	}
+	// Core's view is open through the link.
+	if err := os.Symlink(DefaultAppDir, r.abs("dl-1", "coreLink")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := view("dl-1", CoreOwner).CreateExclusive("coreLink/core-state", 0o644)
+	if err != nil {
+		t.Errorf("core creating through a link into its AppDir: %v", err)
+	} else {
+		f.Close()
+	}
+	// And the engine: a transfer through a link is refused too.
+	cp := NewTransferOptions(Copy, PermLibrary, VerifySize)
+	cp.MkdirAll = true
+	for _, via := range []string{"toApp", "toSub", "chain2", "viaDots", "abs", "toHeld"} {
+		if _, err := r.m.Transfer(ctxbg(), books, Path{Root: "books-nested", Rel: "Gotham/01.m4b"}, Path{Root: "books-library", Rel: via + "/planted"}, cp); !sealed(err) {
+			t.Errorf("Transfer into %s = %v, want ErrReservedPath", via, err)
+		}
+		if _, err := r.m.Transfer(ctxbg(), books, Path{Root: "books-library", Rel: via + "/state.json"}, Path{Root: "books-library", Rel: "leak-" + via}, cp); !sealed(err) {
+			t.Errorf("Transfer out of %s = %v, want ErrReservedPath", via, err)
+		}
+	}
+	// The nested roots' link to the directory above both areas: a Move of it
+	// would carry them.
+	if _, err := r.m.Transfer(ctxbg(), books, Path{Root: "books-nested", Rel: "toState"}, Path{Root: "books-nested", Rel: "moved"}, move()); err != nil {
+		// Moving the link itself moves only the link: allowed.
+		t.Errorf("moving a link to a directory: %v", err)
+	}
+	if !r.exists("books-nested", "state/app/root.json") {
+		t.Fatal("a sentinel is gone")
+	}
+}
+
+func TestWalkDoesNotFollowALinkIntoAReservedArea(t *testing.T) {
+	r := linksRig(t)
+	walk := func(id RootID, start string) (rels []string) {
+		root, err := r.m.Root(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fsys, err := root.FS(books)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for e, err := range fsys.Walk(ctxbg(), start, WalkOptions{FollowLinks: true}) {
+			if err != nil {
+				t.Errorf("walk %s: %v", id, err)
+				continue
+			}
+			rels = append(rels, e.Path.Rel)
+		}
+		return rels
+	}
+	under := func(rels []string, prefixes ...string) (hits []string) {
+		for _, rel := range rels {
+			for _, p := range prefixes {
+				if strings.HasPrefix(rel, p+"/") {
+					hits = append(hits, rel)
+				}
+			}
+		}
+		return hits
+	}
+	rels := walk("books-library", ".")
+	if hits := under(rels, "toApp", "toSub", "toHeld", "chain1", "chain2", "viaDots", "abs", DefaultAppDir); len(hits) != 0 {
+		t.Errorf("the walk entered a reserved area through a link: %v", hits)
+	}
+	has := func(rels []string, want string) bool {
+		for _, rel := range rels {
+			if rel == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, link := range []string{"toApp", "toSub", "toHeld", "chain2", "abs"} {
+		if !has(rels, link) {
+			t.Errorf("the link %s is not reported as an entry: %v", link, rels)
+		}
+	}
+	// A link to a directory that holds both areas is followed for the rest.
+	nested := walk("books-nested", ".")
+	if hits := under(nested, "toState/app", "toState/held", "state/app", "state/held"); len(hits) != 0 {
+		t.Errorf("the walk entered a reserved area through the parent link: %v", hits)
+	}
+	// The directory is walked once, by whichever name reaches it first.
+	if !has(nested, "toState/other/keep.txt") && !has(nested, "state/other/keep.txt") {
+		t.Errorf("the walk missed ordinary content: %v", nested)
+	}
+}
+
+// reservedInode and realRel work on the resolved path, not the spelling.
+func TestResolvedReservedPathHelpers(t *testing.T) {
+	r := linksRig(t)
+	root, _ := r.m.Root("books-library")
+	l := root.base
+	for rel, want := range map[string]string{
+		"toApp/root.json":   DefaultAppDir + "/root.json",
+		"chain2":            DefaultAppDir,
+		"toSub/state.json":  DefaultAppDir + "/sub/state.json",
+		"viaDots":           DefaultAppDir,
+		"abs/root.json":     DefaultAppDir + "/root.json",
+		"Gotham/not-yet.x":  "Gotham/not-yet.x",
+		"toApp/nope/deeper": DefaultAppDir + "/nope/deeper",
+	} {
+		if got, ok := l.realRel(rel, true); !ok || got != want {
+			t.Errorf("realRel(%q) = %q, %v; want %q", rel, got, ok, want)
+		}
+	}
+	// A loop of links is not resolved, and a link out of the root is not
+	// either: os.Root refuses the operation itself.
+	if err := os.Symlink("loopB", r.abs("books-library", "loopA")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("loopA", r.abs("books-library", "loopB")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../..", r.abs("books-library", "out")); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"loopA/x", "out/x"} {
+		if got, ok := l.realRel(rel, true); ok {
+			t.Errorf("realRel(%q) = %q, want it unresolved", rel, got)
+		}
+		if l.reserved(rel, true) {
+			t.Errorf("%q reported reserved", rel)
+		}
+	}
+	if !l.reservedInode(DefaultAppDir+"/x", false) || !l.reservedInode(DefaultQuarantine, false) {
+		t.Error("the areas are not recognised by identity")
+	}
+	if l.reservedInode("Gotham", false) || l.reservedInode("Gotham/.mediacorex", false) {
+		t.Error("an ordinary directory is recognised as an area")
+	}
+	nroot, _ := r.m.Root("books-nested")
+	if !nroot.base.reservedInode("state", true) || nroot.base.reservedInode("state", false) || nroot.base.reservedInode("state/other", true) {
+		t.Error("the directory holding both areas is recognised wrongly (carries)")
 	}
 }
