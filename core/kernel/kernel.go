@@ -1,7 +1,7 @@
 // file: core/kernel/kernel.go
-// version: 1.0.19
+// version: 1.0.20
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // Package kernel is core's boot machinery (06 §6.4.6): the boot-phase runner
 // of 06 §6.5.1, the Registrar and Deps of each module, the collision checks
@@ -242,10 +242,11 @@ type Kernel struct {
 
 	// The F2 foundation's boot products (F2-16). Each is built where the
 	// phases of 06 §6.5.1 put it, and each is nil until then: rbacCat at P5
-	// (declareCoreCatalog), coreCfg at P5 (the defaults-only core config,
-	// taskconfig.go), audit after P4a and before P4b (buildAudit), healthReg and
-	// reporters at P4c (buildHealth), tasks at P4c (stores) and P7 (the start
-	// rule), dataMig when a manifest declares data migrations (storageOptions).
+	// (declareCoreCatalog), coreCfg at P7 and only when tasks need it (the
+	// defaults-only core config, taskconfig.go, Kernel.coreConfig), audit
+	// after P4a and before P4b (buildAudit), healthReg and reporters at P4c
+	// (buildHealth), tasks at P4c (stores) and P7 (the start rule), dataMig
+	// when a manifest declares data migrations (storageOptions).
 	rbacCat   *rbac.Catalog
 	coreCfg   *coreConfig
 	audit     *audit.Store

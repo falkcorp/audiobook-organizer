@@ -1,7 +1,7 @@
 // file: core/kernel/tasks_checks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3a6f17-2c94-4b5e-a1d0-7f6e9c2b5a38
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -109,8 +109,16 @@ func (k *Kernel) taskProblems() []module.Problem {
 		}
 		probs = append(probs, k.moduleTaskProblems(e)...)
 	}
-	if k.coreCfg != nil {
-		if err := scheduler.ValidateSchedules(k.taskDefinitions(), k.coreCfg.declared); err != nil {
+	// ValidateSchedules judges the registered definitions' schedules over the
+	// declared keys, so with no definition there is nothing to judge and the
+	// config store is not built (Kernel.coreConfig). With one, a module kind's
+	// schedule key is still refused: declared knows core's keys only.
+	if defs := k.taskDefinitions(); len(defs) > 0 {
+		cfg, err := k.coreConfig()
+		if err != nil {
+			return append(probs, module.NewProblem("", module.ProblemInvalidRegistration, err))
+		}
+		if err := scheduler.ValidateSchedules(defs, cfg.declared); err != nil {
 			probs = append(probs, module.NewProblem("", module.ProblemInvalidRegistration, err))
 		}
 	}
