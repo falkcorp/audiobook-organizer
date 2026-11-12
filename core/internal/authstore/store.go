@@ -1,7 +1,7 @@
 // file: core/internal/authstore/store.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a7b06243-983e-42c3-9979-3aacdb3d3374
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // Package authstore is core's one implementation of auth.Store and
 // auth.Importer (05-authn §3.4, §11 "Native store"): every identity record in
@@ -1613,16 +1613,8 @@ func (s *Store) ImportUser(b *storage.Batch, u *auth.User, passwordHash string) 
 	if b == nil {
 		return reject("no batch")
 	}
-	if u == nil || u.ID == "" || strings.TrimSpace(u.Username) == "" {
-		return reject("a user needs an ID and a username")
-	}
-	if !validStatus(u.Status) {
-		return reject("user %s has status %q", u.ID, u.Status)
-	}
-	if passwordHash != "" {
-		if a := password.AlgoOf(passwordHash); a != password.AlgoArgon2id && a != password.AlgoBcrypt {
-			return reject("user %s: password hash is not argon2id or bcrypt", u.ID)
-		}
+	if err := auth.CheckImportUser(u, passwordHash); err != nil {
+		return err
 	}
 	if cur, err := s.committed(userKey(u.ID)); err != nil {
 		return reject("%v", err)
@@ -1669,17 +1661,8 @@ func (s *Store) ImportAPIKey(b *storage.Batch, k *auth.APIKey, tokenSHA256 [32]b
 	if b == nil {
 		return reject("no batch")
 	}
-	if k == nil || k.ID == "" {
-		return reject("a key needs an ID")
-	}
-	if err := checkScopes(k.Scopes); err != nil {
-		return reject("apikey %s: %v", k.ID, err)
-	}
-	if !validKeyStatus(k.Status) {
-		return reject("apikey %s has status %q", k.ID, k.Status)
-	}
-	if tokenSHA256 == ([32]byte{}) {
-		return reject("apikey %s has no token hash", k.ID)
+	if err := auth.CheckImportAPIKey(k, tokenSHA256); err != nil {
+		return err
 	}
 	in := *k
 	if !in.RevokedAt.IsZero() {
@@ -1687,9 +1670,6 @@ func (s *Store) ImportAPIKey(b *storage.Batch, k *auth.APIKey, tokenSHA256 [32]b
 	}
 	if in.Status == auth.KeyRevoked && in.RevokedAt.IsZero() {
 		in.RevokedAt = s.now().UTC()
-	}
-	if in.Status != auth.KeyRevoked && in.ExpiresAt.IsZero() {
-		return reject("apikey %s has no expiry", k.ID)
 	}
 	if err := s.ownerPresent(b, in.Owner); err != nil {
 		return reject("apikey %s: %v", k.ID, err)
@@ -1705,8 +1685,8 @@ func (s *Store) ImportIdentity(b *storage.Batch, id *auth.ExternalIdentity) erro
 	if b == nil {
 		return reject("no batch")
 	}
-	if err := validIdentity(id); err != nil {
-		return reject("%v", err)
+	if err := auth.CheckImportIdentity(id); err != nil {
+		return err
 	}
 	if err := s.ownerPresent(b, id.UserID); err != nil {
 		return reject("identity %s/%s: %v", id.Provider, id.Subject, err)
