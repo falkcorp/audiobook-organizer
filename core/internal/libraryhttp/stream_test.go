@@ -1,11 +1,12 @@
 // file: core/internal/libraryhttp/stream_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c47be12-6d3a-4e18-b0f2-83a51d9ce7a4
 // last-edited: 2026-11-11
 
 package libraryhttp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -94,7 +95,7 @@ func TestReadDirsStopsReadingAtTheCap(t *testing.T) {
 		all = append(all, fakeDirEntry{fmt.Sprintf("gargoyle-%06d", i), fs.ModeDir})
 	}
 	d := &fakeDir{ents: all}
-	got, truncated, err := readDirs(d, plainSpec(), "", 3)
+	got, truncated, err := readDirs(context.Background(), d, plainSpec(), "", 3, maxExamined)
 	if err != nil || !truncated || len(got) != 3 {
 		t.Fatalf("readDirs = %d entries, truncated %v, %v", len(got), truncated, err)
 	}
@@ -121,7 +122,7 @@ func TestReadDirsCountsOnlyShownEntries(t *testing.T) {
 		}
 	}
 	d := &fakeDir{ents: all}
-	got, truncated, err := readDirs(d, plainSpec(), "Gotham", 3)
+	got, truncated, err := readDirs(context.Background(), d, plainSpec(), "Gotham", 3, maxExamined)
 	if err != nil || !truncated || len(got) != 3 {
 		t.Fatalf("readDirs = %v, truncated %v, %v", entryNames(got), truncated, err)
 	}
@@ -137,7 +138,7 @@ func TestReadDirsCountsOnlyShownEntries(t *testing.T) {
 // directory to know that. Entries come back sorted whatever the disk's order.
 func TestReadDirsExactFitAndSortedOutput(t *testing.T) {
 	d := &fakeDir{ents: dirs("Zatanna", "Arkham", "Metropolis", "Gotham")}
-	got, truncated, err := readDirs(d, plainSpec(), "", 4)
+	got, truncated, err := readDirs(context.Background(), d, plainSpec(), "", 4, maxExamined)
 	if err != nil || truncated {
 		t.Fatalf("at the cap: truncated %v, %v", truncated, err)
 	}
@@ -150,7 +151,7 @@ func TestReadDirsExactFitAndSortedOutput(t *testing.T) {
 	// One over the cap truncates, and the kept ones are still sorted: the first
 	// three in the disk's order.
 	d = &fakeDir{ents: dirs("Zatanna", "Arkham", "Metropolis", "Gotham")}
-	got, truncated, err = readDirs(d, plainSpec(), "", 3)
+	got, truncated, err = readDirs(context.Background(), d, plainSpec(), "", 3, maxExamined)
 	if err != nil || !truncated {
 		t.Fatalf("over the cap: truncated %v, %v", truncated, err)
 	}
@@ -164,14 +165,14 @@ func TestReadDirsExactFitAndSortedOutput(t *testing.T) {
 func TestReadDirsHidesTheAreas(t *testing.T) {
 	sp := library.RootSpec{ID: "books-nested", AppDir: "state/app", Quarantine: "state/held"}
 	d := &fakeDir{ents: dirs("app", "APP", "held", "kept", ".git")}
-	got, truncated, err := readDirs(d, sp, "state", 10)
+	got, truncated, err := readDirs(context.Background(), d, sp, "state", 10, maxExamined)
 	if err != nil || truncated {
 		t.Fatal(truncated, err)
 	}
 	if want := []string{"kept"}; !slices.Equal(entryNames(got), want) {
 		t.Errorf("names under the state directory = %v, want %v", entryNames(got), want)
 	}
-	empty, truncated, err := readDirs(&fakeDir{}, plainSpec(), "", 5)
+	empty, truncated, err := readDirs(context.Background(), &fakeDir{}, plainSpec(), "", 5, maxExamined)
 	if err != nil || truncated || empty == nil || len(empty) != 0 {
 		t.Errorf("an empty directory = %#v, truncated %v, %v; want an empty, non-nil slice", empty, truncated, err)
 	}
@@ -185,7 +186,7 @@ func TestReadDirsPropagatesAReadError(t *testing.T) {
 	for i := range 2 * dirReadChunk {
 		all = append(all, fakeDirEntry{fmt.Sprintf("d-%d", i), fs.ModeDir})
 	}
-	got, truncated, err := readDirs(&fakeDir{ents: all, failAt: 2, err: boom}, plainSpec(), "", maxEntries)
+	got, truncated, err := readDirs(context.Background(), &fakeDir{ents: all, failAt: 2, err: boom}, plainSpec(), "", maxEntries, maxExamined)
 	if !errors.Is(err, boom) || got != nil || truncated {
 		t.Errorf("readDirs = %v, %v, %v; want the read error and nothing else", got, truncated, err)
 	}
@@ -239,4 +240,70 @@ func TestRequestReadsNeverTakeAnUnguardedView(t *testing.T) {
 	if coreOwner != 1 {
 		t.Errorf("library.CoreOwner appears %d times, want once (registryCaller)", coreOwner)
 	}
+}
+
+type plainFile struct{}
+
+func (plainFile) Name() string               { return "Batman Begins.m4b" }
+func (plainFile) IsDir() bool                { return false }
+func (plainFile) Type() fs.FileMode          { return 0 }
+func (plainFile) Info() (fs.FileInfo, error) { return nil, io.EOF }
+
+// The review probe: a directory of millions of plain files keeps nothing, so
+// the keep-count cap never fired and the whole directory was read.
+func TestReadDirsStopsAfterExaminingTheCap(t *testing.T) {
+	d := &fakeFiles{n: 2_000_000}
+	entries, truncated, err := readDirs(context.Background(), d, library.RootSpec{}, "", maxEntries, maxExamined)
+	if err != nil || !truncated || len(entries) != 0 {
+		t.Fatalf("readDirs = %d entries, truncated %v, %v", len(entries), truncated, err)
+	}
+	if d.served > maxExamined+dirReadChunk {
+		t.Errorf("read %d entries of %d; the examination cap is %d", d.served, d.n, maxExamined)
+	}
+	// A directory just under the cap is read whole and is not truncated.
+	d = &fakeFiles{n: maxExamined}
+	if _, truncated, err := readDirs(context.Background(), d, library.RootSpec{}, "", maxEntries, maxExamined); err != nil || truncated {
+		t.Errorf("a directory of exactly the cap: truncated %v, %v", truncated, err)
+	}
+}
+
+// A client that has gone stops the read at the next chunk.
+func TestReadDirsStopsWhenTheRequestIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &fakeFiles{n: 1_000_000, onRead: func(served int) {
+		if served >= 4*dirReadChunk {
+			cancel()
+		}
+	}}
+	_, _, err := readDirs(ctx, d, library.RootSpec{}, "", maxEntries, maxExamined)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("readDirs = %v, want context.Canceled", err)
+	}
+	if d.served > 5*dirReadChunk {
+		t.Errorf("read %d entries after the request was cancelled", d.served)
+	}
+}
+
+type fakeFiles struct {
+	n, served int
+	onRead    func(served int)
+}
+
+func (f *fakeFiles) Stat() (fs.FileInfo, error) { return nil, io.EOF }
+func (f *fakeFiles) Read([]byte) (int, error)   { return 0, io.EOF }
+func (f *fakeFiles) Close() error               { return nil }
+func (f *fakeFiles) ReadDir(n int) ([]fs.DirEntry, error) {
+	if f.served >= f.n {
+		return nil, io.EOF
+	}
+	k := min(n, f.n-f.served)
+	f.served += k
+	if f.onRead != nil {
+		f.onRead(f.served)
+	}
+	out := make([]fs.DirEntry, k)
+	for i := range out {
+		out[i] = plainFile{}
+	}
+	return out, nil
 }

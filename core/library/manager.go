@@ -1,5 +1,5 @@
 // file: core/library/manager.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3356d9de-7d9b-4473-880c-196e0a555910
 // last-edited: 2026-11-11
 
@@ -12,6 +12,7 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -224,6 +225,10 @@ type manager struct {
 	mapper atomic.Pointer[pathMapper]
 	slots  atomic.Pointer[slotPool]
 	reload sync.Mutex // serializes Reload
+	// hashSlots bounds concurrent Hash calls to the CPU count: each reads a whole
+	// file and runs a SHA-256, and a caller fanning out over a library must not
+	// open one reader per book.
+	hashSlots *slotPool
 
 	locks    keyedmutex.Mutex // striped per-path locks (5L.6)
 	jrn      rowStore         // c/library/transfer/
@@ -275,6 +280,7 @@ func newManager(opts Options, sm seams) (*manager, error) {
 	m.reg.Store(emptyRegistry())
 	m.mapper.Store(newPathMapper(nil, nil))
 	m.slots.Store(newSlotPool(defaultWorkers))
+	m.hashSlots = newSlotPool(runtime.NumCPU())
 	if opts.Metrics != nil {
 		if err := m.instrument(opts.Metrics); err != nil {
 			return nil, err
