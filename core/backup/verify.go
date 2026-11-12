@@ -1,5 +1,5 @@
 // file: core/backup/verify.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: d41f0c73-7b2e-4e88-a6d5-0c9e3b1f5a27
 // last-edited: 2026-11-12
 
@@ -16,24 +16,52 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/falkcorp/mediacore/internal/backuparchive"
 	"github.com/falkcorp/mediacore/storage"
 )
 
-const verifyScratchDir = ".backup-verify"
+const (
+	verifyScratchDir = ".backup-verify"
+	// maxDetailBytes bounds VerifyResult.Detail, the failure's text.
+	maxDetailBytes = 500
+	// staleScratchAge is how old a verification's scratch directory must be
+	// before the next verification removes it as a crashed run's leftover. A
+	// verification takes hours at most, and the directory's time moves with
+	// every file extracted into it.
+	staleScratchAge = 24 * time.Hour
+)
+
+// truncateUTF8 cuts s to at most n bytes at a rune boundary, so the text a
+// sidecar or an API body carries is never an invalid UTF-8 string.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
 
 // Verify checks an archive at the given level and records the result in
 // <archive>.verify.json. A failed check returns the failed result together
 // with its error (ErrChecksumMismatch, ErrNoChecksum, ErrManifest, or the
 // Inspector's); a canceled one returns the context's error and records
-// nothing, because cancellation is not a verdict.
+// nothing, because cancellation is not a verdict. Neither is a shortage of disk
+// space for the open level's scratch copy: that check (ErrInsufficientSpace) says
+// nothing about the archive, and a failed record written for it would take the
+// archive out from under the newest-verified floor.
 func (s *Svc) Verify(ctx context.Context, id ArchiveID, l VerifyLevel) (VerifyResult, error) {
 	f, err := s.find(ctx, id)
 	if err != nil {
 		return VerifyResult{}, err
 	}
-	return s.verifyArchive(ctx, f.Path, id, l)
+	// f.ID is the catalogue's own ID of the archive found, not the caller's text:
+	// the logs below name the archive by it.
+	return s.verifyArchive(ctx, f.Path, f.ID, l)
 }
 
 func (s *Svc) verifyArchive(ctx context.Context, path string, id ArchiveID, l VerifyLevel) (VerifyResult, error) {
@@ -47,16 +75,13 @@ func (s *Svc) verifyWith(ctx context.Context, path string, id ArchiveID, l Verif
 		return VerifyResult{}, fmt.Errorf("backup: unknown verify level %d", l)
 	}
 	err := s.runVerify(ctx, path, l, skipSum)
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrInsufficientSpace) {
 		return VerifyResult{}, err
 	}
 	res := VerifyResult{At: s.o.now().UTC().Round(0), Level: l, OK: err == nil}
 	if err != nil {
 		res.Reason = reasonOf(err)
-		res.Detail = err.Error()
-		if len(res.Detail) > 500 {
-			res.Detail = res.Detail[:500]
-		}
+		res.Detail = truncateUTF8(err.Error(), maxDetailBytes)
 		// The text names host paths; it goes to the operator's log and the
 		// sidecar, and the reason code is what a caller may show.
 		s.o.log().Warn("backup: an archive failed verification", "archive", id, "level", l.String(), "reason", string(res.Reason), "error", err)
@@ -94,7 +119,13 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 	if s.o.Inspector == nil {
 		return errors.New("backup: verify at the open level needs an Inspector")
 	}
-	scratch, cleanup, err := s.scratch()
+	// The open level extracts the store: its declared bytes must fit beside the
+	// database first, and the extractor stops at them.
+	declared, err := declaredBytes(a.Manifest.Entries, dbPrefix+"/")
+	if err != nil {
+		return err
+	}
+	scratch, cleanup, err := s.scratch(declared)
 	if err != nil {
 		return err
 	}
@@ -103,7 +134,8 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 	if err != nil {
 		return err
 	}
-	cerr := a.consume(ctx, ex, "db")
+	ex.SetBudget(budgetOf(declared))
+	cerr := a.consume(ctx, ex, dbPrefix)
 	if serr := errors.Join(ex.Sync(), ex.Close()); cerr == nil {
 		cerr = serr
 	}
@@ -162,7 +194,7 @@ func (s *Svc) verifyLegacy(ctx context.Context, path string, l VerifyLevel, why 
 	if s.o.Inspector == nil {
 		return errors.New("backup: verify at the open level needs an Inspector")
 	}
-	scratch, cleanup, err := s.scratch()
+	scratch, cleanup, err := s.scratch(uint64(info.Bytes))
 	if err != nil {
 		return err
 	}
@@ -176,10 +208,19 @@ func (s *Svc) verifyLegacy(ctx context.Context, path string, l VerifyLevel, why 
 	return nil
 }
 
-// scratch is a private empty directory on the database's filesystem.
-func (s *Svc) scratch() (dir string, cleanup func(), err error) {
+// scratch is a private empty directory on the database's filesystem, for an
+// extraction of declared bytes. It first removes what a crashed verification
+// left (a v-* directory untouched for staleScratchAge), then checks that the
+// declared bytes fit the filesystem, margin included, so a verification of an
+// archive too large for the disk is refused (ErrInsufficientSpace) before it
+// writes a byte rather than filling the volume the database lives on.
+func (s *Svc) scratch(declared uint64) (dir string, cleanup func(), err error) {
 	root := filepath.Join(filepath.Dir(s.o.DBPath), verifyScratchDir)
 	if err := mkdirPrivate(root); err != nil {
+		return "", nil, err
+	}
+	s.sweepScratch(root)
+	if err := s.requireSpace(spaceClaim{dir: root, bytes: declared}); err != nil {
 		return "", nil, err
 	}
 	dir, err = os.MkdirTemp(root, "v-")
@@ -187,6 +228,38 @@ func (s *Svc) scratch() (dir string, cleanup func(), err error) {
 		return "", nil, err
 	}
 	return dir, func() { _ = os.RemoveAll(dir) }, nil
+}
+
+// sweepScratch removes the v-* directories of root that nothing has touched for
+// staleScratchAge. A verification that is still running keeps its directory's
+// time moving (every file it extracts into the top level is a change), and
+// verifications of other archives run beside each other, so a younger directory
+// is never touched.
+func (s *Svc) sweepScratch(root string) {
+	ents, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	var now time.Time // read once, and only when there is a directory to judge
+	for _, e := range ents {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "v-") {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if now.IsZero() {
+			now = s.o.now()
+		}
+		if now.Sub(fi.ModTime()) <= staleScratchAge {
+			continue
+		}
+		s.o.log().Warn("backup: removing a stale verification directory", "name", e.Name())
+		if err := os.RemoveAll(filepath.Join(root, e.Name())); err != nil {
+			s.o.log().Warn("backup: could not remove a stale verification directory", "name", e.Name(), "error", err)
+		}
+	}
 }
 
 // checkSum hashes the archive and compares it with its .sha256 sidecar

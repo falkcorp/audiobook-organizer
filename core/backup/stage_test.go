@@ -1,5 +1,5 @@
 // file: core/backup/stage_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6c1f9a3e-2b84-4d70-a5e9-8f3b0d7c4a12
 // last-edited: 2026-11-12
 
@@ -264,14 +264,29 @@ func TestForeignArchiveNeedsFlag(t *testing.T) {
 func TestUnreadableSecretsRefused(t *testing.T) {
 	ctx := asOwner(context.Background())
 	e := newEnv(t)
+	var logs bytes.Buffer
+	e.opts.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	e.rebuild()
 	a := e.create("manual")
-	e.keys.referenced = []string{"d1", "ra-s-al-ghul-key"}
+	// d1 is the keyring's. Two others are not, one of them referenced twice: the
+	// refusal counts distinct keys and names none.
+	missing := []string{"ra-s-al-ghul-key", "hush-key"}
+	e.keys.referenced = []string{"d1", missing[0], missing[1], missing[0]}
 	_, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{})
 	if !errors.Is(err, backup.ErrUnreadableSecrets) {
 		t.Fatalf("err = %v, want ErrUnreadableSecrets", err)
 	}
-	if !strings.Contains(err.Error(), "ra-s-al-ghul-key") || strings.Contains(err.Error(), "d1,") {
-		t.Fatalf("the refusal must name the missing key and only it: %v", err)
+	var ue *backup.UnreadableSecretsError
+	if !errors.As(err, &ue) || ue.Count != 2 {
+		t.Fatalf("err = %v, want an *UnreadableSecretsError counting 2 distinct keys", err)
+	}
+	for _, id := range append([]string{"d1"}, missing...) {
+		if strings.Contains(err.Error(), id) {
+			t.Fatalf("the refusal names key %q: %v", id, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "2") {
+		t.Fatalf("the refusal does not give the count: %v", err)
 	}
 	if len(e.stager.staged) != 0 {
 		t.Fatal("an intent was created for an unreadable-secrets restore")
@@ -283,8 +298,19 @@ func TestUnreadableSecretsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(pr.Warnings, "|"), "re-entered") {
-		t.Fatalf("no warning about unreadable secrets: %v", pr.Warnings)
+	warned := strings.Join(pr.Warnings, "|")
+	if !strings.Contains(warned, "re-entered") || !strings.Contains(warned, "2 key(s)") {
+		t.Fatalf("no count-only warning about unreadable secrets: %v", pr.Warnings)
+	}
+	// What Pending reports later is the stage note's copy of the same warnings.
+	pend, err := e.svc.Pending(ctx)
+	if err != nil || pend == nil {
+		t.Fatalf("Pending = %+v, %v", pend, err)
+	}
+	for _, id := range missing {
+		if strings.Contains(warned, id) || strings.Contains(strings.Join(pend.Warnings, "|"), id) || strings.Contains(logs.String(), id) {
+			t.Fatalf("key %q reached a warning or the log: %v / %v / %s", id, pr.Warnings, pend.Warnings, logs.String())
+		}
 	}
 }
 

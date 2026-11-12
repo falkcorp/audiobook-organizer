@@ -1,5 +1,5 @@
 // file: core/backup/rewrap.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1c7e9a64-5b3f-4d28-a0e1-8d4c6f2b9e17
 // last-edited: 2026-11-12
 
@@ -63,6 +63,17 @@ func (s *Svc) Rewrap(ctx context.Context, id ArchiveID) (Archive, error) {
 	if err := s.sameDevice(stagingRoot); err != nil {
 		return Archive{}, err
 	}
+	// The re-signing extracts every entry into the staging root and writes the
+	// new archive into the backup directory (never larger than the entries it
+	// holds, plus tar framing the margin covers): both must fit, and where the
+	// two directories share a device they are summed.
+	declared, err := declaredBytes(src.Manifest.Entries, "")
+	if err != nil {
+		return Archive{}, err
+	}
+	if err := s.requireSpace(spaceClaim{dir: stagingRoot, bytes: declared}, spaceClaim{dir: s.o.Dir, bytes: declared}); err != nil {
+		return Archive{}, err
+	}
 	newID, err := NewArchiveID(now)
 	if err != nil {
 		return Archive{}, err
@@ -80,6 +91,7 @@ func (s *Svc) Rewrap(ctx context.Context, id ArchiveID) (Archive, error) {
 	if err != nil {
 		return Archive{}, err
 	}
+	ex.SetBudget(budgetOf(declared))
 	cerr := src.consume(ctx, ex, "")
 	if serr := errors.Join(ex.Sync(), ex.Close()); cerr == nil {
 		cerr = serr

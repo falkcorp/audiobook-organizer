@@ -1,5 +1,5 @@
 // file: core/backup/manifest.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b0f3a62-7c1e-4a6e-9a0b-4f7d6b3c1e55
 // last-edited: 2026-11-12
 
@@ -15,9 +15,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/falkcorp/mediacore/backup/journal"
+	"github.com/falkcorp/mediacore/internal/backuparchive"
 )
 
 // ManifestName is the archive's first entry; ManifestSidecar is the suffix of
@@ -69,20 +74,113 @@ func ParseManifest(b []byte) (*Manifest, error) {
 	if m.Format != FormatMediacore {
 		return nil, fmt.Errorf("%w: format %q", ErrManifest, m.Format)
 	}
-	if m.ArchiveID == "" || m.InstallID == "" && m.Provenance.MAC != "" {
-		return nil, fmt.Errorf("%w: no archive or install ID", ErrManifest)
+	if m.InstallID == "" && m.Provenance.MAC != "" {
+		return nil, fmt.Errorf("%w: no install ID", ErrManifest)
+	}
+	if err := m.validateText(); err != nil {
+		return nil, err
 	}
 	seen := make(map[string]bool, len(m.Entries))
+	var total int64
 	for _, e := range m.Entries {
-		if e.Path == "" || e.Size < 0 || len(e.SHA256) != 64 || seen[e.Path] || e.Path == ManifestName {
+		// The path is judged before it is quoted: a foreign manifest may carry a
+		// path as long as the manifest itself.
+		if len(e.Path) > backuparchive.MaxNameBytes {
+			return nil, fmt.Errorf("%w: an entry path is over %d bytes", ErrManifest, backuparchive.MaxNameBytes)
+		}
+		if _, err := backuparchive.CleanName(e.Path, false); err != nil {
+			return nil, fmt.Errorf("%w: entry %q is not a clean relative path", ErrManifest, e.Path)
+		}
+		if e.Size < 0 || len(e.SHA256) != 64 || seen[e.Path] || e.Path == ManifestName {
 			return nil, fmt.Errorf("%w: entry %q", ErrManifest, e.Path)
 		}
 		if _, err := hex.DecodeString(e.SHA256); err != nil {
 			return nil, fmt.Errorf("%w: entry %q digest", ErrManifest, e.Path)
 		}
+		if e.Size > math.MaxInt64-total {
+			return nil, fmt.Errorf("%w: the entries' sizes overflow", ErrManifest)
+		}
+		total += e.Size
 		seen[e.Path] = true
 	}
 	return &m, nil
+}
+
+// Bounds on the text of a manifest. A manifest that arrives through an import is
+// a stranger's: every string in it is bounded and free of control characters
+// before anything quotes it into a log, a warning or a catalogue row, and a map
+// is bounded in size.
+const (
+	maxManifestText = 256
+	maxManifestKeys = 4096
+)
+
+// validText reports whether s is a valid UTF-8 string of at most limit bytes
+// with no control character (a CR or LF in it would split a log line).
+func validText(s string, limit int) bool {
+	return len(s) <= limit && utf8.ValidString(s) && strings.IndexFunc(s, unicode.IsControl) < 0
+}
+
+// validateText checks the manifest's ID and every free string and map key of it.
+// The errors name the member, never its value.
+func (m *Manifest) validateText() error {
+	bad := func(what string) error {
+		return fmt.Errorf("%w: %s is not valid text of at most %d bytes", ErrManifest, what, maxManifestText)
+	}
+	if !isULID(string(m.ArchiveID)) {
+		return fmt.Errorf("%w: the archive ID is not a ULID", ErrManifest)
+	}
+	for _, f := range []struct{ name, v string }{
+		{"app", m.App}, {"app_version", m.AppVersion}, {"core_version", m.CoreVersion},
+		{"install_id", m.InstallID}, {"reason", m.Reason},
+		{"provenance.alg", m.Provenance.Alg}, {"provenance.key_id", m.Provenance.KeyID}, {"provenance.mac", m.Provenance.MAC},
+	} {
+		if !validText(f.v, maxManifestText) {
+			return bad(f.name)
+		}
+	}
+	if m.ServedBoot != nil && !validText(m.ServedBoot.Nonce, maxManifestText) {
+		return bad("served_boot.nonce")
+	}
+	if len(m.Levels) > maxManifestKeys || len(m.Keyspaces) > maxManifestKeys || len(m.Modules) > maxManifestKeys || len(m.Derived) > maxManifestKeys {
+		return fmt.Errorf("%w: a member lists more than %d names", ErrManifest, maxManifestKeys)
+	}
+	for k := range m.Levels {
+		if !validText(k, maxManifestText) {
+			return bad("a levels key")
+		}
+	}
+	for k := range m.Keyspaces {
+		if !validText(k, maxManifestText) {
+			return bad("a keyspaces key")
+		}
+	}
+	for k, v := range m.Modules {
+		if !validText(k, maxManifestText) || !validText(v, maxManifestText) {
+			return bad("a modules member")
+		}
+	}
+	for k, v := range m.Derived {
+		if !validText(k, maxManifestText) || !validText(v.Generation, maxManifestText) {
+			return bad("a derived member")
+		}
+	}
+	return nil
+}
+
+// isULID reports whether s is an ID NewArchiveID could have issued: 26 Crockford
+// base32 characters whose first is at most 7 (128 bits). A "legacy-" ID is not
+// one: a legacy archive has no manifest, so no manifest carries one.
+func isULID(s string) bool {
+	if len(s) != 26 || s[0] > '7' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if strings.IndexByte(crockford, s[i]) < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // canonical is the MAC'd bytes: the manifest with Provenance.MAC empty.

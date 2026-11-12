@@ -1,5 +1,5 @@
 // file: core/backup/options.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7f8ad2c3-31d0-4b0e-b0c5-6a0f3a1d8e44
 // last-edited: 2026-11-12
 
@@ -124,9 +124,11 @@ type ConfigFile interface {
 	RedactedConfigFile() ([]byte, error)
 }
 
-// Disk answers the two questions about the filesystem Create and staging ask:
-// whether two paths share a device, and how much a path's filesystem has free.
-// The zero value uses the operating system; tests replace it.
+// Disk answers the two questions about the filesystem every write of this
+// package asks first (Create, staging, verification, rewrap, the offline
+// extraction): whether two paths share a device, and how much a path's
+// filesystem has free. The zero value uses the operating system; tests replace
+// it.
 type Disk struct {
 	Device func(path string) (uint64, error)
 	Avail  func(path string) (uint64, error)
@@ -175,8 +177,13 @@ type Options struct {
 	// (§5B.3.5 step 5). nil = no derived item is ever fresh.
 	DerivedGeneration func(ctx context.Context, name string) (string, error)
 
-	Store     Store
-	Keyring   Keyring
+	Store   Store
+	Keyring Keyring
+	// Markers is required: Create reads the journal boundaries before its
+	// checkpoint and advances the content marker right after it, and an archive
+	// made without them would carry boundaries it never read (the revocation
+	// journal could then be trimmed past what the archive needs). New refuses a
+	// nil Markers; a service that never creates still binds one.
 	Markers   Markers
 	Stager    Stager
 	Inspector Inspector
@@ -252,6 +259,9 @@ func (o *Options) validate() error {
 	if o.Keyring == nil {
 		missing = append(missing, "Keyring")
 	}
+	if o.Markers == nil {
+		missing = append(missing, "Markers")
+	}
 	if o.ConfigPath != "" && o.Config == nil {
 		missing = append(missing, "Config (needed to archive ConfigPath without its secrets)")
 	}
@@ -270,7 +280,8 @@ type Svc struct {
 	o    Options
 	hold sync.Mutex // the backup resource
 
-	cache sync.Map // classification cache: name -> cachedKind
+	cache  sync.Map // classification cache: name -> cachedKind
+	warned sync.Map // file names already reported as duplicate IDs, so a polled listing logs each once
 }
 
 // New builds the Service. It validates the options and creates nothing.

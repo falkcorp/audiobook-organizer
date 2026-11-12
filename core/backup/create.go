@@ -1,5 +1,5 @@
 // file: core/backup/create.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6e7c41d8-9a30-4d1b-a2c5-17b0f3d9e6a4
 // last-edited: 2026-11-12
 
@@ -45,9 +45,22 @@ func (s *Svc) Create(ctx context.Context, o CreateOptions) (a Archive, err error
 		case err != nil:
 			out = "unverified"
 		}
-		s.o.Metrics.Run(context.WithoutCancel(ctx), reason, out)
+		s.o.Metrics.Run(context.WithoutCancel(ctx), runReasonLabel(reason), out)
 	}()
 	return s.create(ctx, o, reason)
+}
+
+// runReasonLabel is the reason label of the runs counter: one of a fixed set,
+// never the reason itself. A reason is free text the caller chose (a task's
+// parameter, a module's "pre:" tag, a route's body), and a label value that
+// follows it would grow the series without bound. The reason itself is recorded
+// in the manifest.
+func runReasonLabel(reason string) string {
+	switch reason {
+	case "schedule", "manual":
+		return reason
+	}
+	return "other"
 }
 
 func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Archive, error) {
@@ -75,10 +88,7 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 	if err != nil {
 		return Archive{}, fmt.Errorf("backup: size of %s: %w", s.o.DBPath, err)
 	}
-	margin := set.SpaceMargin
-	if margin == 0 {
-		margin = uint64(2 * gib)
-	}
+	margin := set.margin()
 	avail, err := s.o.Disk.avail(s.o.Dir)
 	if err != nil {
 		return Archive{}, fmt.Errorf("backup: free space of %s: %w", s.o.Dir, err)
@@ -112,20 +122,16 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 	}()
 
 	// 4. Boundaries first, the checkpoint, then the new content marker.
-	var b Boundaries
-	if s.o.Markers != nil {
-		if b, err = s.o.Markers.Read(ctx); err != nil {
-			return Archive{}, fmt.Errorf("backup: read journal boundaries: %w", err)
-		}
+	b, err := s.o.Markers.Read(ctx)
+	if err != nil {
+		return Archive{}, fmt.Errorf("backup: read journal boundaries: %w", err)
 	}
 	endPhase := s.phase(ctx, "checkpoint")
 	if err := s.o.Store.Checkpoint(ctx, filepath.Join(run.path, "db")); err != nil {
 		return Archive{}, fmt.Errorf("backup: checkpoint: %w", err)
 	}
-	if s.o.Markers != nil {
-		if _, err := s.o.Markers.Advance(ctx); err != nil {
-			return Archive{}, fmt.Errorf("backup: advance the content marker: %w", err)
-		}
+	if _, err := s.o.Markers.Advance(ctx); err != nil {
+		return Archive{}, fmt.Errorf("backup: advance the content marker: %w", err)
 	}
 	info, err := s.o.Inspector.Inspect(ctx, filepath.Join(run.path, "db"))
 	if err != nil {
