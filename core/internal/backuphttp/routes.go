@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/routes.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0a0db04f-4bc6-4082-bcec-81463f47c6bb
 // last-edited: 2026-11-12
 
@@ -624,7 +624,7 @@ func (a *api) restore(w http.ResponseWriter, r *http.Request, c caller) {
 		a.fail(w, r, err)
 		return
 	}
-	p, err := a.rst.StageRestore(audit.WithActor(r.Context(), c.actor(r)), id, opts)
+	p, err := a.rst.StageRestore(a.restoreCtx(r, c), id, opts)
 	if err != nil {
 		a.refuse(w, r, err)
 		return
@@ -650,7 +650,7 @@ func (a *api) revert(w http.ResponseWriter, r *http.Request, c caller) {
 		a.fail(w, r, unavailable("restore"))
 		return
 	}
-	p, err := a.rst.RevertLastRestore(audit.WithActor(r.Context(), c.actor(r)), opts)
+	p, err := a.rst.RevertLastRestore(a.restoreCtx(r, c), opts)
 	if err != nil {
 		a.refuse(w, r, err)
 		return
@@ -668,6 +668,18 @@ func (a *api) cancel(w http.ResponseWriter, r *http.Request, c caller) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// restoreCtx is the context a restore route hands the service: the audit actor
+// and the proof the route established. authorise has already required an
+// interactive credential and the owner's assurance (or, once the owner is not
+// required, core:admin), so the proof is owner-level; Admin says whether the
+// person also holds core:admin, which a foreign restore needs. The service's
+// gate (backup.ErrRestoreNotAuthorized) is the one every caller, this route and
+// the stage-restore task alike, passes.
+func (a *api) restoreCtx(r *http.Request, c caller) context.Context {
+	ctx := audit.WithActor(r.Context(), c.actor(r))
+	return backup.WithRestoreProof(ctx, backup.RestoreProof{Owner: true, Admin: holds(c.p, rbac.CoreAdmin)})
 }
 
 // ---- audit ----------------------------------------------------------------

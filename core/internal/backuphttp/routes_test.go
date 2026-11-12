@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/routes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 71e57c75-3bcb-4631-a4cb-85a8d13a48d1
 // last-edited: 2026-11-12
 
@@ -172,21 +172,22 @@ func (c *bhCat) Delete(context.Context, backup.ArchiveID) error {
 }
 
 type bhRst struct {
-	ev         *bhEvents
-	stageRes   backup.PendingRestore
-	stageErr   error
-	stageID    backup.ArchiveID
-	stageOpts  backup.RestoreOptions
-	revertOpts backup.RestoreOptions
-	revertErr  error
-	cancelErr  error
-	pend       *backup.PendingRestore
-	pendErr    error
+	ev                      *bhEvents
+	stageRes                backup.PendingRestore
+	stageErr                error
+	stageID                 backup.ArchiveID
+	stageOpts               backup.RestoreOptions
+	revertOpts              backup.RestoreOptions
+	stageProof, revertProof backup.RestoreProof
+	revertErr               error
+	cancelErr               error
+	pend                    *backup.PendingRestore
+	pendErr                 error
 }
 
-func (s *bhRst) StageRestore(_ context.Context, id backup.ArchiveID, o backup.RestoreOptions) (backup.PendingRestore, error) {
+func (s *bhRst) StageRestore(ctx context.Context, id backup.ArchiveID, o backup.RestoreOptions) (backup.PendingRestore, error) {
 	s.ev.add("stage")
-	s.stageID, s.stageOpts = id, o
+	s.stageID, s.stageOpts, s.stageProof = id, o, backup.RestoreProofFrom(ctx)
 	return s.stageRes, s.stageErr
 }
 
@@ -197,9 +198,9 @@ func (s *bhRst) Pending(context.Context) (*backup.PendingRestore, error) {
 	return s.pend, s.pendErr
 }
 
-func (s *bhRst) RevertLastRestore(_ context.Context, o backup.RestoreOptions) (backup.PendingRestore, error) {
+func (s *bhRst) RevertLastRestore(ctx context.Context, o backup.RestoreOptions) (backup.PendingRestore, error) {
 	s.ev.add("revert")
-	s.revertOpts = o
+	s.revertOpts, s.revertProof = o, backup.RestoreProofFrom(ctx)
 	return s.stageRes, s.revertErr
 }
 
@@ -506,12 +507,21 @@ func TestBackupRoutesRestoreForeign(t *testing.T) {
 		if rep.status != 202 || r.ev.count("stage") != 1 || r.rst.stageOpts.Foreign {
 			t.Errorf("foreign=false = %d (stage calls %d, Foreign %v), want 202 and one non-foreign stage", rep.status, r.ev.count("stage"), r.rst.stageOpts.Foreign)
 		}
+		// The route passed the owner proof it established, and no more: this
+		// holder is not core:admin, so the service's own gate refuses a foreign
+		// restore whatever else reaches it.
+		if got := r.rst.stageProof; got != (backup.RestoreProof{Owner: true}) {
+			t.Errorf("proof = %+v, want owner without admin", got)
+		}
 	})
 	t.Run("with admin", func(t *testing.T) {
 		r := newBHRig(t)
 		rep := r.do(bhOwner(rbac.CoreAdmin), "POST", target, "application/json", `{"foreign":true}`)
 		if rep.status != 202 || !r.rst.stageOpts.Foreign {
 			t.Errorf("= %d (Foreign %v), want 202 with Foreign", rep.status, r.rst.stageOpts.Foreign)
+		}
+		if got := r.rst.stageProof; got != (backup.RestoreProof{Owner: true, Admin: true}) {
+			t.Errorf("proof = %+v, want owner and admin", got)
 		}
 	})
 }
@@ -573,6 +583,9 @@ func TestBackupRestoreOptionsFlow(t *testing.T) {
 	rep = r2.do(pr, "POST", "/restore/revert", "application/json", `{"foreign":true,"restart":true}`)
 	if rep.status != 202 || r2.rst.revertOpts.Foreign || !r2.rst.revertOpts.Restart || r2.rst.revertOpts.Verify != backup.VerifyOpen {
 		t.Errorf("revert = %d opts %+v, want 202, Foreign dropped, Restart kept", rep.status, r2.rst.revertOpts)
+	}
+	if got := r2.rst.revertProof; got != (backup.RestoreProof{Owner: true}) {
+		t.Errorf("revert proof = %+v, want owner without admin", got)
 	}
 	if got := r2.rec.records; len(got) != 0 {
 		t.Errorf("%d route audit records, want none (the service audits)", len(got))
@@ -720,6 +733,7 @@ func TestBackupErrorMapping(t *testing.T) {
 	}{
 		{"not found", wrap(backup.ErrNotFound), 404, "archive_not_found", ""},
 		{"foreign", wrap(backup.ErrForeignArchive), 403, "foreign_archive_requires_flag", ""},
+		{"option without proof", wrap(backup.ErrRestoreNotAuthorized), 403, "restore_option_not_authorized", ""},
 		{"floor protected", wrap(backup.ErrProtectedByFloor), 409, "protected_by_floor", ""},
 		{"checksum", wrap(backup.ErrChecksumMismatch), 409, "archive_verification_failed", ""},
 		{"manifest", wrap(backup.ErrManifest), 409, "archive_verification_failed", ""},
