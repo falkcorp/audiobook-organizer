@@ -1,5 +1,5 @@
 // file: core/internal/backuparchive/reader.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 35b4ef6e-c480-4b6e-af58-f7a4310e450f
 // last-edited: 2026-11-12
 
@@ -15,6 +15,9 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// paxSparsePrefix starts every PAX record GNU tar uses for a sparse file.
+const paxSparsePrefix = "GNU.sparse."
 
 // Header is one validated entry of an archive.
 type Header struct {
@@ -88,6 +91,16 @@ func (r *Reader) next() (Header, error) {
 			return Header{}, io.EOF
 		}
 		return Header{}, fmt.Errorf("backuparchive: read the next entry: %w", err)
+	}
+	// A PAX sparse file (GNU.sparse.*, formats 0.0, 0.1 and 1.0) reaches here as
+	// TypeReg with its logical size and the holes read back as zeros, so it
+	// would write its whole logical size from a few bytes of archive. An old
+	// GNU sparse entry (TypeGNUSparse) is refused by the switch below. No
+	// archive this package writes holds a sparse file.
+	for k := range hdr.PAXRecords {
+		if strings.HasPrefix(k, paxSparsePrefix) {
+			return Header{}, refuse(ErrEntryType, hdr.Name, "a sparse file")
+		}
 	}
 	var h Header
 	switch hdr.Typeflag {

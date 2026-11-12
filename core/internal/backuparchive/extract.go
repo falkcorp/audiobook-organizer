@@ -1,5 +1,5 @@
 // file: core/internal/backuparchive/extract.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9772cca4-e04e-4fb0-b01e-8201936fa4f0
 // last-edited: 2026-11-12
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -39,9 +40,11 @@ type Written struct {
 // every directory by Sync. A name that already exists is an error, never an
 // overwrite.
 type Extractor struct {
-	dst  string
-	root *os.Root
-	dirs map[string]struct{}
+	dst      string
+	root     *os.Root
+	dirs     map[string]struct{}
+	budget   int64 // bytes the extractor may still write; meaningful only with budgeted
+	budgeted bool
 }
 
 // NewExtractor opens dst, which must exist and be a directory (not a symlink to
@@ -62,6 +65,17 @@ func NewExtractor(dst string) (*Extractor, error) {
 		return nil, err
 	}
 	return &Extractor{dst: dst, root: root, dirs: map[string]struct{}{}}, nil
+}
+
+// SetBudget caps the bytes this extractor writes, over every file, at n: a
+// source that yields more than the declared sizes it was admitted under (a
+// header that lied, a codec that expands past what the scan counted) fails the
+// write with ErrLimit and the file is removed. The caller sets it to what it
+// checked against the free space (backup's requireSpace), so the space check
+// and the writes can never disagree. An extractor with no budget set writes
+// whatever its callers pass; every extraction in this module sets one.
+func (e *Extractor) SetBudget(n int64) {
+	e.budget, e.budgeted = max(n, 0), true
 }
 
 // WriteFile writes the entry name (already validated by Reader or CleanName)
@@ -86,8 +100,21 @@ func (e *Extractor) WriteFile(name string, r io.Reader, want *Expect) (Written, 
 		return Written{}, fmt.Errorf("backuparchive: create %s: %w", name, err)
 	}
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), r)
+	// The source is read for at most one byte more than the file may hold, from
+	// the entry's declared size and the budget left: that byte is how a source
+	// longer than it declared is told apart from one that ended exactly on it.
+	limit, byBudget := int64(math.MaxInt64-1), false
+	if e.budgeted {
+		limit, byBudget = e.budget, true
+	}
+	if want != nil && want.Size < limit {
+		limit, byBudget = want.Size, false
+	}
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(r, limit+1))
 	w := Written{Name: name, Size: n, SHA256: hex.EncodeToString(h.Sum(nil))}
+	if err == nil && n > limit && byBudget {
+		err = refuse(ErrLimit, name, "the extraction's byte budget is spent")
+	}
 	if err == nil {
 		err = f.Sync()
 	}
@@ -97,6 +124,9 @@ func (e *Extractor) WriteFile(name string, r io.Reader, want *Expect) (Written, 
 	}
 	if err != nil {
 		return w, errors.Join(err, e.root.Remove(name))
+	}
+	if e.budgeted {
+		e.budget -= n // n <= limit <= budget: only a file that stayed is charged
 	}
 	return w, nil
 }
