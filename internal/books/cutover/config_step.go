@@ -1,7 +1,7 @@
 // file: internal/books/cutover/config_step.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6b15d3f6-9b1f-4a8b-8f43-50f9c0d2b9aa
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package cutover
 
@@ -242,7 +242,7 @@ func (s *configStep) loadInputs(ctx context.Context, r storage.Reader) (*m2Input
 		switch {
 		case err == nil:
 			in.File, in.FileHas, _ = headParseGapFill(data)
-			in.FileSettings = headParseFileSettings(data)
+			in.FileSettings, in.FileUnrepresentable = headParseFileSettings(data)
 		case errors.Is(err, fs.ErrNotExist):
 			// No file: HEAD gap-fills nothing.
 		default:
@@ -329,7 +329,11 @@ func (s *configStep) preflight(ctx context.Context, r storage.Reader) ([]datamig
 	if err != nil || len(blockers) > 0 {
 		return blockers, err
 	}
-	if _, err := buildPlan(in); err != nil {
+	var unrep *unrepresentableError
+	if _, err := buildPlan(in); errors.As(err, &unrep) {
+		return []datamigrate.Blocker{{Key: []byte(headConfigFileName), Family: "file", Reason: err.Error(),
+			Fix: "give each of those keys a plain value in config.yaml (a whole number for concurrent_scans), or remove the line: the settings blob does not hold them, so nothing else would carry the setting"}}, nil
+	} else if err != nil {
 		return []datamigrate.Blocker{{Key: blobKey(), Family: "setting", Reason: err.Error(),
 			Fix: "repair or restore the settings blob on the pre-freeze release: it refuses to run on this blob too"}}, nil
 	}
@@ -386,16 +390,17 @@ func (s *configStep) census(ctx context.Context, r storage.Reader, in *m2Input) 
 // fileBlobBound returns the keys config.yaml holds that, with no settings
 // blob, are HEAD's effective settings and have nowhere to go: root_dir (a
 // usable value, HEAD's gap-fill) and each viper-read key (headViperFileKeys)
-// whose value differs from HEAD's default. A value equal to the default loses
-// nothing, so enable_ai_parsing: true (the default) is no reason to refuse and
-// enable_ai_parsing: false is. Sorted names, never values.
+// whose value differs from HEAD's default, or cannot be carried exactly
+// (FileUnrepresentable: it can be compared with no default). A value equal to
+// the default loses nothing, so enable_ai_parsing: true (the default) is no
+// reason to refuse and enable_ai_parsing: false is. Sorted names, never values.
 func fileBlobBound(in *m2Input) []string {
 	var names []string
 	if in.FileHas["root_dir"] {
 		names = append(names, "root_dir")
 	}
 	for _, k := range headViperFileKeys {
-		if v, ok := in.FileSettings[k]; ok && !headIsDefault(k, v) {
+		if v, ok := in.FileSettings[k]; (ok && !headIsDefault(k, v)) || in.FileUnrepresentable[k] {
 			names = append(names, k)
 		}
 	}
@@ -437,6 +442,32 @@ type noBlobError struct{ Keys []string }
 
 func (e *noBlobError) Error() string {
 	return "config.yaml holds " + strings.Join(e.Keys, ", ") + " and there is no settings blob to import them into"
+}
+
+// unrepresentableLacking returns the viper-read keys whose config.yaml value
+// cannot be carried exactly and that the blob (tree) does not hold, absent or
+// null: HEAD's effective value for each is the file's, which M2 cannot stage.
+// A key the blob holds is the blob's, the file's value is shadowed and nothing
+// is lost. Sorted names, never values.
+func unrepresentableLacking(in *m2Input, tree map[string]any) []string {
+	var names []string
+	for _, k := range headViperFileKeys {
+		if in.FileUnrepresentable[k] && tree[k] == nil {
+			names = append(names, k)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// unrepresentableError is the planner's refusal of a config.yaml value M2
+// cannot carry over exactly when the blob does not hold the key. The strip
+// would delete the line, so the chunk stops (Preflight reports it first) and
+// writes nothing.
+type unrepresentableError struct{ Keys []string }
+
+func (e *unrepresentableError) Error() string {
+	return "config.yaml holds " + strings.Join(e.Keys, ", ") + " as a number M2 cannot carry over exactly (not finite, or beyond 2^53), and the settings blob does not hold it"
 }
 
 func noBlobBlocker(names []string) datamigrate.Blocker {

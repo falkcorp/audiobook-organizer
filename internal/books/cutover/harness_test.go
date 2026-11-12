@@ -1,7 +1,7 @@
 // file: internal/books/cutover/harness_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f6d7b3a-71c4-4a7c-b6a3-1e4f2b9c0d05
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package cutover
 
@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -69,11 +70,13 @@ const rigHostCPUs = 10
 
 func init() { headNumCPU = func() int { return rigHostCPUs } }
 
-// pinHostCPUs makes the tests' host report n CPUs until the test ends. The
-// package runs no parallel test, so the variable is not shared with another
-// goroutine that reads it.
+// pinHostCPUs makes the tests' host report n CPUs until the test ends. It
+// writes a package variable, so it must not run in a parallel test: the t.Setenv
+// below panics under t.Parallel (called before or after), which makes that a
+// failure instead of a data race. The variable it sets is never read.
 func pinHostCPUs(t testing.TB, n int) {
 	t.Helper()
+	t.Setenv("ABO_CUTOVER_TEST_HOST_CPUS", strconv.Itoa(n))
 	prev := headNumCPU
 	headNumCPU = func() int { return n }
 	t.Cleanup(func() { headNumCPU = prev })

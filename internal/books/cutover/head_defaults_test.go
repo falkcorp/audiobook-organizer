@@ -1,7 +1,7 @@
 // file: internal/books/cutover/head_defaults_test.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: b04c7e19-6a25-4d83-9f10-3c58e2a7d614
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package cutover
 
@@ -109,7 +109,7 @@ func TestHeadDefault_PlaylistDirIsTheFlagDefault(t *testing.T) {
 	if cfg, _ := headDefaultConfig(); cfg.PlaylistDir != "playlists" {
 		t.Errorf("headDefaultConfig().PlaylistDir = %q, want playlists", cfg.PlaylistDir)
 	}
-	if got := headParseFileSettings([]byte("playlist_dir: \"\"\n")); got["playlist_dir"] != "" {
+	if got, _ := headParseFileSettings([]byte("playlist_dir: \"\"\n")); got["playlist_dir"] != "" {
 		t.Errorf("an explicit empty playlist_dir read as %v, want the empty string kept", got)
 	}
 	in := &m2Input{FileSettings: map[string]any{"playlist_dir": ""}}
@@ -120,4 +120,19 @@ func TestHeadDefault_PlaylistDirIsTheFlagDefault(t *testing.T) {
 	if got := fileBlobBound(in); len(got) != 0 {
 		t.Errorf("fileBlobBound with playlist_dir at its default = %v, want nothing", got)
 	}
+}
+
+// pinHostCPUs writes a package variable, so a parallel test must not call it:
+// the guard is t.Setenv, which panics under t.Parallel. This pins the guard, so
+// removing it fails here instead of racing silently in some later test.
+func TestPinHostCPUs_RefusesAParallelTest(t *testing.T) {
+	t.Run("parallel", func(t *testing.T) {
+		t.Parallel()
+		defer func() {
+			if recover() == nil {
+				t.Error("pinHostCPUs ran in a parallel test without panicking")
+			}
+		}()
+		pinHostCPUs(t, 4)
+	})
 }

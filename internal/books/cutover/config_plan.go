@@ -1,7 +1,7 @@
 // file: internal/books/cutover/config_plan.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 0f2f4b87-3f6d-4a4c-8e0a-7c7f2c64b0d1
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package cutover
 
@@ -99,9 +99,14 @@ type m2Input struct {
 	File     headFileValues
 	FileHas  map[string]bool
 	// FileSettings are config.yaml's viper-read settings (headViperFileKeys),
-	// by lower-case name with JSON-normalised values.
+	// by lower-case name, each cast to the type configFromViper reads the key as
+	// (headCastFileValue): a float64 for the int key, a bool or a string.
 	FileSettings map[string]any
-	Key          []byte // the settings key, nil when none was found
+	// FileUnrepresentable names the viper-read keys whose file value cannot be
+	// carried exactly (an int that is not finite or beyond 2^53); they are not in
+	// FileSettings, and a key the blob lacks is refused, never read as absent.
+	FileUnrepresentable map[string]bool
+	Key                 []byte // the settings key, nil when none was found
 }
 
 // secretWrite is one secret M2 imports.
@@ -393,6 +398,11 @@ func buildPlan(in *m2Input) (*plan, error) {
 		}
 		pl.tree = tree
 		headEffectiveTree(pl.tree, in.MaintSet)
+		// A file value M2 cannot carry exactly is HEAD's effective setting when
+		// the blob lacks the key, and the strip would delete it: refuse by name.
+		if keys := unrepresentableLacking(in, pl.tree); len(keys) > 0 {
+			return nil, &unrepresentableError{Keys: keys}
+		}
 		pl.gapFill()
 	} else {
 		pl.tree = map[string]any{}

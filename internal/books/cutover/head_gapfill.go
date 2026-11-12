@@ -1,18 +1,19 @@
 // file: internal/books/cutover/head_gapfill.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 86ad29a6-334d-4bed-aa94-a282e32106c3
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // FROZEN COPY of HEAD (748fd787a) config.yaml gap-fill reader and managed-key strip; read-only; deleted in R3 with the other HEAD-format readers (05-config §1.12.2, 03 §3.8).
 
 package cutover
 
 import (
-	"encoding/json"
+	"math"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
+	"github.com/spf13/cast"
 	"gopkg.in/yaml.v3"
 )
 
@@ -97,111 +98,101 @@ var headViperKinds = map[string]string{
 	"log_level": "string",
 }
 
-// headViperCast converts a file value (decoded JSON: a float64 for any number)
-// to what configFromViper gets from it, which is spf13/cast's reading of it
-// through the key's typed getter: "yes" is false for a bool (ParseBool refuses
-// it), "10" is 10 for an int, a list is "" for a string. The blob member it
-// stands in for has that type, and the census compares that value with HEAD's
+// headMaxExactInt is the largest magnitude a float64 holds exactly. The plan's
+// tree carries every number as a float64, so an int beyond it cannot be staged
+// as the value HEAD read.
+const headMaxExactInt = 1 << 53
+
+// headCastFileValue returns what configFromViper gets for key from the decoded
+// YAML value raw. viper's v.GetString, v.GetBool and v.GetInt are
+// cast.ToString, cast.ToBool and cast.ToInt of the file's value (viper v1.21.0
+// over spf13/cast v1.10.0), so this calls the same functions rather than
+// porting them: "10.7" is 10, "yes" is false for a bool, a list is "" for a
+// string, a YAML timestamp is time.Time's String form. The blob member it
+// stands in for has that type, and the census compares the result with HEAD's
 // default, so a file that spells a default another way loses nothing and is
-// not refused.
-func headViperCast(key string, v any) any {
+// not refused. ok is false for an int the plan's float64 tree cannot hold
+// exactly (headIntIsExact); such a value is refused, never read as absent.
+func headCastFileValue(key string, raw any) (v any, ok bool) {
 	switch headViperKinds[key] {
 	case "bool":
-		switch x := v.(type) {
-		case bool:
-			return x
-		case string:
-			b, _ := strconv.ParseBool(x)
-			return b
-		case float64:
-			return x != 0
-		}
-		return false
+		return cast.ToBool(raw), true
 	case "int":
-		switch x := v.(type) {
-		case float64:
-			return float64(int(x))
-		case string:
-			n, err := strconv.ParseInt(headTrimZeroDecimal(x), 0, 0)
-			if err != nil {
-				return float64(0)
-			}
-			return float64(n)
-		case bool:
-			if x {
-				return float64(1)
-			}
+		n := cast.ToInt(raw)
+		if !headIntIsExact(raw, n) {
+			return nil, false
 		}
-		return float64(0)
+		return float64(n), true
 	case "string":
-		switch x := v.(type) {
-		case string:
-			return x
-		case bool:
-			return strconv.FormatBool(x)
-		case float64:
-			return strconv.FormatFloat(x, 'f', -1, 64)
-		}
-		return ""
+		return cast.ToString(raw), true
 	}
-	return v
+	return raw, true
 }
 
-// headTrimZeroDecimal drops a ".0", ".00" ... suffix, as spf13/cast does
-// before it parses an int from a string.
-func headTrimZeroDecimal(s string) string {
-	i := strings.LastIndex(s, ".")
-	if i < 0 {
-		return s
-	}
-	for _, c := range s[i+1:] {
-		if c != '0' {
-			return s
+// headIntIsExact reports whether n, cast.ToInt's reading of raw, is the value
+// HEAD read and fits a float64 exactly. A float that is not finite, or beyond
+// 2^53, converts to an int by the platform's rule (Go leaves it
+// implementation-defined), and a uint64 past 2^53 wraps, so none of them is a
+// faithful number; an int string cast.ToInt cannot parse reads 0 on every
+// platform and is faithful as it is.
+func headIntIsExact(raw any, n int) bool {
+	switch x := raw.(type) {
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) || math.Abs(x) > headMaxExactInt {
+			return false
+		}
+	case float32:
+		if f := float64(x); math.IsNaN(f) || math.IsInf(f, 0) || math.Abs(f) > headMaxExactInt {
+			return false
+		}
+	case uint:
+		if x > headMaxExactInt {
+			return false
+		}
+	case uint64:
+		if x > headMaxExactInt {
+			return false
 		}
 	}
-	return s[:i]
+	return n >= -headMaxExactInt && n <= headMaxExactInt
 }
 
 // headParseFileSettings reads headViperFileKeys from config.yaml the way
 // viper does: a key matches case-insensitively, and a null is an unset key.
-// Each value is normalised through JSON (a YAML int becomes a float64) and
-// then cast to the type configFromViper reads the key as (headViperCast), so
-// headIsDefault compares it with HEAD's default by value and the planner can
-// stage it as the blob member it stands in for. An unparsable file reads as
-// empty, as HEAD ignores it. Names only are used by callers' reports, never
-// the value.
-func headParseFileSettings(data []byte) map[string]any {
+// Each value is cast to the type configFromViper reads the key as
+// (headCastFileValue), so headIsDefault compares it with HEAD's default by
+// value and the planner can stage it as the blob member it stands in for. A
+// key whose value cannot be carried exactly is not in the settings and is
+// named in unrepresentable instead: a caller must refuse it, because reading
+// it as absent would let the strip delete a value nothing stored. An
+// unparsable file reads as empty, as HEAD ignores it. Names only are used by
+// callers' reports, never the value.
+func headParseFileSettings(data []byte) (settings map[string]any, unrepresentable map[string]bool) {
 	var fileConfig map[string]any
 	if err := yaml.Unmarshal(data, &fileConfig); err != nil {
-		return nil
+		return nil, nil
 	}
 	names := make([]string, 0, len(fileConfig))
 	for k := range fileConfig {
 		names = append(names, k)
 	}
 	sort.Strings(names) // two spellings of one key: the later one wins, deterministically
-	out := map[string]any{}
+	settings = map[string]any{}
+	unrepresentable = map[string]bool{}
 	for _, k := range names {
 		lower := strings.ToLower(k)
-		known := false
-		for _, want := range headViperFileKeys {
-			if lower == want {
-				known = true
-			}
-		}
-		if !known || fileConfig[k] == nil {
+		if !slices.Contains(headViperFileKeys, lower) || fileConfig[k] == nil {
 			continue
 		}
-		raw, err := json.Marshal(fileConfig[k])
-		if err != nil {
-			continue
-		}
-		var v any
-		if json.Unmarshal(raw, &v) == nil {
-			out[lower] = headViperCast(lower, v)
+		delete(settings, lower)
+		delete(unrepresentable, lower)
+		if v, ok := headCastFileValue(lower, fileConfig[k]); ok {
+			settings[lower] = v
+		} else {
+			unrepresentable[lower] = true
 		}
 	}
-	return out
+	return settings, unrepresentable
 }
 
 // headDeleteConfigKeyFold removes key from m, matching every path segment
