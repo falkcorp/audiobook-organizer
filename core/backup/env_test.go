@@ -21,10 +21,9 @@ import (
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
-const (
-	gothamOwner storage.Owner = "core/auth" // a keyspace the fixture fills
-	canaryKey                 = "ROBIN-KEYRING-CANARY-0d3f"
-)
+const gothamOwner storage.Owner = "core/auth" // a keyspace the fixture fills
+
+const canaryKey = "ROBIN-KEYRING-CANARY-0d3f"
 
 // eventLog records the order of the seams' calls.
 type eventLog struct {

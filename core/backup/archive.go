@@ -69,15 +69,27 @@ func writeArchive(ctx context.Context, sp archiveSpec) (sum string, size int64, 
 	if err != nil {
 		return "", 0, fmt.Errorf("backup: create %s: %w", sp.Partial, err)
 	}
+	closed, zwClosed := false, false
+	var zw io.WriteCloser
 	defer func() {
-		if err != nil {
-			_ = f.Close()
-			_ = os.Remove(sp.Partial)
+		if err == nil {
+			return
+		}
+		// The codec's writer owns goroutines (zstd's encoder), so a failed or
+		// canceled stream closes it too before the partial file goes.
+		if zw != nil && !zwClosed {
+			err = errors.Join(err, zw.Close())
+		}
+		if !closed {
+			err = errors.Join(err, f.Close())
+		}
+		if rerr := os.Remove(sp.Partial); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			err = errors.Join(err, rerr)
 		}
 	}()
 	outer := sha256.New()
 	cw := &countWriter{w: io.MultiWriter(f, outer)}
-	zw, err := sp.Codec.NewWriter(cw, sp.Level)
+	zw, err = sp.Codec.NewWriter(cw, sp.Level)
 	if err != nil {
 		return "", 0, err
 	}
@@ -103,7 +115,7 @@ func writeArchive(ctx context.Context, sp archiveSpec) (sum string, size int64, 
 	if err != nil {
 		return "", 0, err
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	for _, e := range sp.Entries {
 		if err = ctx.Err(); err != nil {
 			return "", 0, err
@@ -115,12 +127,14 @@ func writeArchive(ctx context.Context, sp archiveSpec) (sum string, size int64, 
 	if err = tw.Close(); err != nil {
 		return "", 0, err
 	}
+	zwClosed = true
 	if err = zw.Close(); err != nil {
 		return "", 0, err
 	}
 	if err = f.Sync(); err != nil {
 		return "", 0, err
 	}
+	closed = true
 	if err = f.Close(); err != nil {
 		return "", 0, err
 	}
@@ -129,7 +143,7 @@ func writeArchive(ctx context.Context, sp archiveSpec) (sum string, size int64, 
 
 // streamEntry copies one run-directory file into the tar, checking it is the
 // regular file the hash pass saw and that its bytes still hash to the manifest.
-func streamEntry(root *os.Root, e Entry, put func(string, int64, io.Reader) error) error {
+func streamEntry(root *os.Root, e Entry, put func(string, int64, io.Reader) error) (err error) {
 	fi, err := root.Lstat(e.Path)
 	if err != nil {
 		return err
@@ -141,7 +155,7 @@ func streamEntry(root *os.Root, e Entry, put func(string, int64, io.Reader) erro
 	if err != nil {
 		return err
 	}
-	defer fh.Close()
+	defer func() { err = errors.Join(err, fh.Close()) }()
 	if st, err := fh.Stat(); err != nil || !os.SameFile(fi, st) {
 		return fmt.Errorf("backup: %s was replaced while it was being archived", e.Path)
 	}
@@ -173,18 +187,21 @@ func openArchive(path string, lim backuparchive.Limits) (a *openedArchive, err e
 	if err != nil {
 		return nil, err
 	}
+	var rd *backuparchive.Reader
 	defer func() {
 		if err != nil {
-			_ = f.Close()
+			if rd != nil {
+				err = errors.Join(err, rd.Close())
+			}
+			err = errors.Join(err, f.Close())
 		}
 	}()
-	rd, err := backuparchive.NewReader(f, lim, false)
+	rd, err = backuparchive.NewReader(f, lim, false)
 	if err != nil {
 		return nil, err
 	}
 	h, err := rd.Next()
 	if err != nil {
-		_ = rd.Close()
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("%w: the archive is empty", ErrManifest)
 		}
@@ -197,17 +214,14 @@ func openArchive(path string, lim backuparchive.Limits) (a *openedArchive, err e
 		return nil, err
 	}
 	if h.Name != ManifestName || h.Size > MaxManifestBytes {
-		_ = rd.Close()
 		return nil, fmt.Errorf("%w: the first entry is %q, not %s", ErrManifest, h.Name, ManifestName)
 	}
 	raw := make([]byte, h.Size)
 	if _, err = io.ReadFull(rd, raw); err != nil {
-		_ = rd.Close()
 		return nil, fmt.Errorf("%w: %v", ErrManifest, err)
 	}
 	m, err := ParseManifest(raw)
 	if err != nil {
-		_ = rd.Close()
 		return nil, err
 	}
 	return &openedArchive{f: f, rd: rd, Manifest: m, ManifestBytes: raw}, nil

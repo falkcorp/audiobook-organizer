@@ -144,7 +144,10 @@ func Classify(m *Manifest, keys journal.Keys, liveInstall string) ProvenanceClas
 	if err != nil {
 		return Foreign
 	}
-	wantB, _ := hex.DecodeString(want)
+	wantB, err := hex.DecodeString(want)
+	if err != nil {
+		return Foreign
+	}
 	if !hmac.Equal(got, wantB) {
 		return Foreign
 	}
@@ -162,7 +165,7 @@ const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 func NewArchiveID(now time.Time) (ArchiveID, error) {
 	var b [16]byte
 	ms := uint64(now.UnixMilli())
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		b[i] = byte(ms >> (8 * (5 - i)))
 	}
 	if _, err := rand.Read(b[6:]); err != nil {
@@ -173,7 +176,7 @@ func NewArchiveID(now time.Time) (ArchiveID, error) {
 	// character is at most '7', as the ULID spec has it.
 	var acc uint16
 	bits, n := 2, 0
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		acc = acc<<8 | uint16(b[i])
 		bits += 8
 		for bits >= 5 {

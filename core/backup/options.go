@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"runtime"
@@ -318,7 +317,3 @@ func (s *Svc) acquire() (release func(), err error) {
 	}
 	return s.hold.Unlock, nil
 }
-
-var errNotRegular = errors.New("backup: not a regular file")
-
-var _ fs.FileInfo = nil

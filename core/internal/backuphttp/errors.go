@@ -346,6 +346,13 @@ func dispositionOf(a backup.Archive) string {
 
 // ---- the service's refusals -----------------------------------------------
 
+// isRefusal reports whether err is one the service refuses with (mapError's
+// second result), as opposed to an unexpected failure.
+func isRefusal(err error) bool {
+	pe, ok := mapError(err)
+	return ok && pe != nil
+}
+
 // mapError maps the sentinels of the backup service to the statuses and codes
 // 05-backup §5B.5 fixes. Every text here is fixed: the errors' own text can
 // carry a path or a key ID and is never sent. A second result of false means
