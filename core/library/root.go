@@ -1,5 +1,5 @@
 // file: core/library/root.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d4890dba-7685-4e14-8535-91e4d166edd9
 // last-edited: 2026-11-11
 
@@ -307,10 +307,13 @@ func ValidateRel(rel string) error {
 		return fmt.Errorf("%w: empty", ErrBadRel)
 	case strings.IndexByte(rel, 0) >= 0:
 		return fmt.Errorf("%w: contains NUL", ErrBadRel)
+	// An absolute rel and a ".." rel are escapes (05-library 5L.5: confinement
+	// is the point), so they also match ErrEscapesRoot and are counted as the
+	// "escape" refusal; every other malformed rel is only ErrBadRel.
 	case strings.HasPrefix(rel, "/"):
-		return fmt.Errorf("%w: absolute", ErrBadRel)
+		return fmt.Errorf("%w: absolute: %w", ErrBadRel, ErrEscapesRoot)
 	case rel == ".." || strings.HasPrefix(rel, "../"):
-		return fmt.Errorf("%w: escapes the root", ErrBadRel)
+		return fmt.Errorf("%w: escapes the root: %w", ErrBadRel, ErrEscapesRoot)
 	case path.Clean(rel) != rel || rel == ".":
 		return fmt.Errorf("%w: not clean", ErrBadRel)
 	}

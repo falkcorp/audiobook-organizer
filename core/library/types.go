@@ -1,5 +1,5 @@
 // file: core/library/types.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a5bb8543-563b-49d6-a0ce-f53cebd0d920
 // last-edited: 2026-11-11
 
@@ -39,8 +39,9 @@ func modeNames() [7]string {
 
 // String is the mode's metrics and log label.
 func (m TransferMode) String() string {
-	if int(m) < len(modeNames()) {
-		return modeNames()[m]
+	names := modeNames()
+	if int(m) < len(names) {
+		return names[m]
 	}
 	return fmt.Sprintf("mode(%d)", uint8(m))
 }
