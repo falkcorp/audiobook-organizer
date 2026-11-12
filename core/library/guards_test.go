@@ -1,5 +1,5 @@
 // file: core/library/guards_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 00f78c64-25d1-4cc1-b1f0-153883e12400
 // last-edited: 2026-11-11
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -531,16 +532,8 @@ func TestWalkDoesNotFollowALinkIntoAReservedArea(t *testing.T) {
 	if hits := under(rels, "toApp", "toSub", "toHeld", "chain1", "chain2", "viaDots", "abs", DefaultAppDir); len(hits) != 0 {
 		t.Errorf("the walk entered a reserved area through a link: %v", hits)
 	}
-	has := func(rels []string, want string) bool {
-		for _, rel := range rels {
-			if rel == want {
-				return true
-			}
-		}
-		return false
-	}
 	for _, link := range []string{"toApp", "toSub", "toHeld", "chain2", "abs"} {
-		if !has(rels, link) {
+		if !slices.Contains(rels, link) {
 			t.Errorf("the link %s is not reported as an entry: %v", link, rels)
 		}
 	}
@@ -550,7 +543,7 @@ func TestWalkDoesNotFollowALinkIntoAReservedArea(t *testing.T) {
 		t.Errorf("the walk entered a reserved area through the parent link: %v", hits)
 	}
 	// The directory is walked once, by whichever name reaches it first.
-	if !has(nested, "toState/other/keep.txt") && !has(nested, "state/other/keep.txt") {
+	if !slices.Contains(nested, "toState/other/keep.txt") && !slices.Contains(nested, "state/other/keep.txt") {
 		t.Errorf("the walk missed ordinary content: %v", nested)
 	}
 }
