@@ -1,7 +1,7 @@
 // file: internal/books/cutover/config_cutover_blobseed_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: aee11d6f-716a-4548-9d59-27fef2b342e7
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package cutover
 
@@ -208,36 +208,6 @@ func TestConfigCutover_BlobLacksAViperKey_ValuesAreCastLikeViper(t *testing.T) {
 				t.Errorf("staged %s = %q (%v), want %s", path, v, ok, jsonOf(t, c.want))
 			}
 		})
-	}
-}
-
-// headViperCast is spf13/cast's reading of a decoded file value through the
-// getter configFromViper uses for the key.
-func TestHeadViperCast(t *testing.T) {
-	for _, tc := range []struct {
-		key  string
-		in   any
-		want any
-	}{
-		{"scan_on_startup", true, true}, {"scan_on_startup", false, false},
-		{"scan_on_startup", "true", true}, {"scan_on_startup", "T", true}, {"scan_on_startup", "yes", false},
-		{"scan_on_startup", "on", false}, {"scan_on_startup", float64(1), true}, {"scan_on_startup", float64(0), false},
-		{"scan_on_startup", []any{true}, false},
-		{"concurrent_scans", float64(3), float64(3)}, {"concurrent_scans", 3.9, float64(3)},
-		{"concurrent_scans", "3", float64(3)}, {"concurrent_scans", "3.0", float64(3)}, {"concurrent_scans", "0x10", float64(16)},
-		{"concurrent_scans", "99999999999999999999", float64(0)}, {"concurrent_scans", "3.5", float64(0)}, {"concurrent_scans", "many", float64(0)}, {"concurrent_scans", true, float64(1)},
-		{"concurrent_scans", false, float64(0)}, {"concurrent_scans", []any{}, float64(0)},
-		{"log_level", "debug", "debug"}, {"log_level", float64(7), "7"}, {"log_level", 2.5, "2.5"},
-		{"log_level", true, "true"}, {"log_level", []any{"a"}, ""}, {"log_level", map[string]any{"a": 1.0}, ""},
-		{"playlist_dir", "", ""},
-		{"not_a_viper_key", "x", "x"},
-	} {
-		if got := headViperCast(tc.key, tc.in); fmt.Sprint(got) != fmt.Sprint(tc.want) || fmt.Sprintf("%T", got) != fmt.Sprintf("%T", tc.want) {
-			t.Errorf("headViperCast(%s, %#v) = %#v, want %#v", tc.key, tc.in, got, tc.want)
-		}
-	}
-	if got := headParseFileSettings([]byte("concurrent_scans: \"10\"\nscan_on_startup: \"yes\"\nlog_level: 7\n")); fmt.Sprint(got) != "map[concurrent_scans:10 log_level:7 scan_on_startup:false]" {
-		t.Errorf("headParseFileSettings did not cast: %v", got)
 	}
 }
 

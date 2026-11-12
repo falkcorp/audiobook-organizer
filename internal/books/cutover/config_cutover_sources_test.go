@@ -1,7 +1,7 @@
 // file: internal/books/cutover/config_cutover_sources_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a1e7c20-9d36-4b58-b2f4-6c80d1e39a57
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package cutover
 
@@ -703,16 +703,19 @@ func TestStripGapFill_UnreadableMarkerKeepsALaterFileSecret(t *testing.T) {
 // and neither are the secrets or root_dir (the gap-fill keys have their own
 // census).
 func TestHeadParseFileSettings(t *testing.T) {
-	got := headParseFileSettings([]byte("Log_Level: debug\nCONCURRENT_SCANS: 3\nplaylist_dir:\nscan_on_startup: true\ndatabase_path: /batcave/db\nroot_dir: /mnt/gotham\nopenai_api_key: " + fxFileOpenAI + "\noperator_note: keep-me\n"))
+	got, unrep := headParseFileSettings([]byte("Log_Level: debug\nCONCURRENT_SCANS: 3\nplaylist_dir:\nscan_on_startup: true\ndatabase_path: /batcave/db\nroot_dir: /mnt/gotham\nopenai_api_key: " + fxFileOpenAI + "\noperator_note: keep-me\n"))
 	want := map[string]any{"log_level": "debug", "concurrent_scans": float64(3), "scan_on_startup": true}
 	if !maps.Equal(got, want) {
 		t.Errorf("headParseFileSettings = %v, want %v", got, want)
 	}
-	if got := headParseFileSettings([]byte(": : [not yaml\n")); len(got) != 0 {
-		t.Errorf("an unparsable file read as %v, want empty", got)
+	if len(unrep) != 0 {
+		t.Errorf("headParseFileSettings refused %v, want nothing", unrep)
 	}
-	if got := headParseFileSettings(nil); len(got) != 0 {
-		t.Errorf("no file read as %v, want empty", got)
+	if got, unrep := headParseFileSettings([]byte(": : [not yaml\n")); len(got) != 0 || len(unrep) != 0 {
+		t.Errorf("an unparsable file read as %v (refused %v), want empty", got, unrep)
+	}
+	if got, unrep := headParseFileSettings(nil); len(got) != 0 || len(unrep) != 0 {
+		t.Errorf("no file read as %v (refused %v), want empty", got, unrep)
 	}
 	if slices.Contains(headViperFileKeys, "database_path") {
 		t.Error("database_path is in headViperFileKeys: M2 never stores it, so a file's value loses nothing")

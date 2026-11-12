@@ -1,7 +1,7 @@
 // file: internal/books/cutover/config_strip.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: c7391f62-422d-4a79-8fa6-f679c490c72a
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package cutover
 
@@ -42,28 +42,33 @@ import (
 // used is stored: the blob's own member wins over the file (HEAD decodes the
 // blob onto viper's view, config.yaml included), and a member the blob lacks
 // keeps the file's value, which M2a seeds into its plan and stages like a blob
-// member (planner.gapFill, mirroring Snapshot()). An install with no blob is
-// the one in which a file value is HEAD's effective setting with nothing to
-// stage it from, and M2a's Preflight refuses that upgrade (the census) instead
-// of letting this strip delete it. database_path is the tenth and the
-// exception: the blob cannot be where HEAD finds it (the database must be open
-// before the blob can be read), and M2 never stores it, so nothing holds the
-// file's line and no destination can be shown to hold the value. The strip therefore always keeps it
+// member (planner.gapFill, mirroring Snapshot()). Two shapes have no such
+// destination, and M2a's Preflight refuses both instead of letting this strip
+// delete the value: an install with no blob, where a file value is HEAD's
+// effective setting with nothing to stage it from (the census), and a file
+// value M2a cannot carry exactly (an int that is not finite or is beyond 2^53)
+// for a key the blob lacks (unrepresentableLacking). A refused M2a never
+// commits, so this strip does not run after it.
+//
+// database_path is the tenth key and the exception: the blob cannot be where
+// HEAD finds it (the database must be open before the blob can be read), and
+// M2 never stores it, so nothing holds the file's line and no destination can
+// be shown to hold the value. The strip therefore always keeps it
 // (headNeverStrippedKeys) and lists it in StripReport.Kept, until the operator
 // layer reads core.storage.path from that source; F3-07 may then drop it from
 // the list (seams.d/F3-06.md, F3-07 item 6). The census leaves it out for the
-// same reason: M2 never stores it, so a file value is no reason to refuse. The
-// other five
-// are the ones HEAD's gap-fill reads (the three secrets, root_dir and
-// enable_ai_parsing) and so the only ones whose value can exist nowhere but
-// the file even with a blob. Each of those five that carries a usable value is
-// stripped only when its destination already holds a value: M2a's import, or a
-// value the name held before (a secret's unreadable marker is not a value). One
-// whose destination holds nothing stays in the file and is reported by name
-// (StripReport.Kept); the strip never imports, because it has no batch to
-// import into and cannot quarantine, which only a migration chunk can. M2a is
-// what imports a gap-fill value, and its Preflight refuses an upgrade in which
-// no chunk would run.
+// same reason: M2 never stores it, so a file value is no reason to refuse.
+//
+// The other five keys are the ones HEAD's gap-fill reads (the three secrets,
+// root_dir and enable_ai_parsing), and so the only ones whose value can exist
+// nowhere but the file even with a blob. Each of those five that carries a
+// usable value is stripped only when its destination already holds a value:
+// M2a's import, or a value the name held before (a secret's unreadable marker
+// is not a value). One whose destination holds nothing stays in the file and is
+// reported by name (StripReport.Kept); the strip never imports, because it has
+// no batch to import into and cannot quarantine, which only a migration chunk
+// can. M2a is what imports a gap-fill value, and its Preflight refuses an
+// upgrade in which no chunk would run.
 //
 // The write is HEAD's writeFileAtomic: a symlink is followed and its target
 // replaced, the file keeps its mode and (where the process may) its owner, the
