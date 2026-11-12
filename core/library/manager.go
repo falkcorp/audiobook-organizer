@@ -1,5 +1,5 @@
 // file: core/library/manager.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3356d9de-7d9b-4473-880c-196e0a555910
 // last-edited: 2026-11-11
 
@@ -191,7 +191,7 @@ type seams struct {
 	sleep     func(ctx context.Context, d time.Duration) error // the hash limiter's wait
 	newID     func() string
 	watchSrc  watchSourceFunc
-	fsRace    func(stage, name string) // GuardedFS: runs between the name check and the open, and after the open
+	fsRace    func(stage, name string) // GuardedFS: a hidden view's read open calls it at "checked", "resolved", "parent" and "opened" (see localFS.race)
 }
 
 // Settings defaults (05-library 5L.7).
