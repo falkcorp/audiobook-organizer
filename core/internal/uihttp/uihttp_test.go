@@ -1,7 +1,7 @@
 // file: core/internal/uihttp/uihttp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d9f1b27-8c3a-4e56-b7d0-2a6e5c8f1b93
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package uihttp
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -264,5 +265,34 @@ func TestReportDiagnostic_AcceptOff(t *testing.T) {
 	send()
 	if v, _ := sample(t, p.Gatherer(), "mediacore_ui_diagnostics_total", map[string]string{"kind": "ui-missing", "module": "other"}); v != "1" {
 		t.Errorf("an accepted diagnostic = %s, want 1", v)
+	}
+}
+
+// TestReportDiagnostic_NeedsAnAuthenticatedPrincipal: the handler applies
+// AnyAuthenticated itself until stage 13 exists. No principal is 401; a
+// principal with no compiled permission set, and a Confined key, are 403, and
+// neither is counted nor logged.
+func TestReportDiagnostic_NeedsAnAuthenticatedPrincipal(t *testing.T) {
+	log, lines := capture()
+	a, err := newAPI(Deps{ModuleIDs: []string{"batman"}, Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		p      *auth.Principal
+		status int
+	}{
+		"no principal":               {nil, http.StatusUnauthorized},
+		"no compiled permission set": {&auth.Principal{Method: auth.MethodSession}, http.StatusForbidden},
+		"confined key":               {confinedKey(), http.StatusForbidden},
+	} {
+		_, err := a.reportDiagnostic(context.Background(), in(c.p, reportDiagnosticReq{Body: UIDiagnostic{Kind: "ui-missing"}}))
+		he, ok := errors.AsType[*httpapi.Error](err)
+		if !ok || he.Status != c.status {
+			t.Errorf("%s: err = %v, want status %d", name, err, c.status)
+		}
+	}
+	if got := lines.String(); strings.Contains(got, "ui diagnostic") {
+		t.Errorf("a refused report was logged: %q", got)
 	}
 }

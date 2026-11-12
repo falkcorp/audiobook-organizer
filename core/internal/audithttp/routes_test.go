@@ -1,5 +1,5 @@
 // file: core/internal/audithttp/routes_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4c6e2210-19b1-49c9-b95e-ffcd88ee48e6
 // last-edited: 2026-11-11
 
@@ -971,5 +971,95 @@ func TestVisibility_DefaultDeny(t *testing.T) {
 	rr := exportOf(a, auditor("u-dick", "dick"), "")
 	if strings.Contains(rr.Body.String(), "core.session.revoke") || strings.Contains(rr.Body.String(), "books.user.merge") || strings.Contains(rr.Body.String(), "core.future.thing") {
 		t.Errorf("the export carries a withheld record: %s", rr.Body)
+	}
+}
+
+// TestList_AViewerRequestReadsABoundedNumberOfRecords: the store filters by one
+// action prefix only, so a viewer who is not a user manager has withheld
+// records read and dropped here. One request reads at most scanCap of them and
+// then answers with what it has and a cursor, so a log that is mostly
+// identity traffic cannot make one request walk it whole. Following the
+// cursors still reaches the visible record at the far end, and a manager,
+// who has nothing withheld, is never cut short.
+func TestList_AViewerRequestReadsABoundedNumberOfRecords(t *testing.T) {
+	recs := records(40) // core.session.create: withheld from a plain viewer
+	// The visible ones sit just past each request's bound (the cap is 8, so a
+	// request reads 40..33, then 32..25 and so on), where a cursor that lands
+	// one record off would lose one.
+	for i := range recs {
+		switch recs[i].Seq {
+		case 32, 24, 16, 8, 1:
+			recs[i].Action = "core.role.update"
+		}
+	}
+	rd := &fakeReader{recs: recs}
+	a := newAPI(rd, nil)
+	a.scanCap = 8
+	p := auditor("u-dick", "dick")
+
+	var got []uint64
+	req := listReq{CursorParams: Limit0(5)}
+	requests := 0
+	for ; ; requests++ {
+		if requests > 20 {
+			t.Fatal("the walk never ended")
+		}
+		before := rd.scanned()
+		page := get(t, a, p, req)
+		if read := rd.scanned() - before; read > a.scanCap {
+			t.Fatalf("request %d read %d records, want at most %d", requests, read, a.scanCap)
+		}
+		got = append(got, seqsOf(page.Items)...)
+		if page.NextCursor == "" {
+			break
+		}
+		req.Cursor = page.NextCursor
+	}
+	if want := []uint64{32, 24, 16, 8, 1}; !slices.Equal(got, want) {
+		t.Errorf("records = %v, want %v: a cursor lost or repeated one", got, want)
+	}
+	if requests < 4 {
+		t.Errorf("%d requests for 40 records at a cap of 8: one request read more than its bound", requests+1)
+	}
+
+	// A manager is not cut short: every record is its own, and the page bounds the read.
+	m := newAPI(&fakeReader{recs: records(40)}, nil)
+	m.scanCap = 8
+	page := get(t, m, commissioner(), listReq{CursorParams: Limit0(30)})
+	if len(page.Items) != 30 || page.NextCursor == "" {
+		t.Errorf("manager page = %d items, cursor %q, want 30 and a cursor", len(page.Items), page.NextCursor)
+	}
+}
+
+// TestList_AViewerDoesNotSeeWhichKeyOrAddress: the credential ID and client
+// address of a row are for user managers; a viewer gets the row without them,
+// in the list and in the export, and a manager gets them.
+func TestList_AViewerDoesNotSeeWhichKeyOrAddress(t *testing.T) {
+	e := newEnv(t)
+	e.write(t, audit.Event{
+		Action: "core.role.update", Outcome: audit.Success,
+		Actor: audit.Actor{UserID: "u-dick", Username: "dick", Method: "api_key", CredentialID: "key-batarang", ClientAddr: "192.0.2.44", UserAgent: "batcomputer"},
+	})
+	a := newAPI(e.store, &recorder{})
+	for name, c := range map[string]struct {
+		p    *auth.Principal
+		want bool
+	}{"viewer": {auditor("u-dick", "dick"), false}, "manager": {commissioner(), true}} {
+		page := get(t, a, c.p, listReq{CursorParams: Limit0(10)})
+		if len(page.Items) != 1 {
+			t.Fatalf("%s: %d items", name, len(page.Items))
+		}
+		act := page.Items[0].Actor
+		if has := act.CredentialID != "" && act.ClientAddr != ""; has != c.want {
+			t.Errorf("%s: credential %q addr %q, visible = %v, want %v", name, act.CredentialID, act.ClientAddr, has, c.want)
+		}
+		if act.Username != "dick" || act.Method != "api_key" {
+			t.Errorf("%s: who and how were dropped too: %+v", name, act)
+		}
+		rr := exportOf(a, c.p, "")
+		body := rr.Body.String()
+		if has := strings.Contains(body, "key-batarang") || strings.Contains(body, "192.0.2.44"); has != c.want {
+			t.Errorf("%s: export carries them = %v, want %v: %s", name, has, c.want, body)
+		}
 	}
 }

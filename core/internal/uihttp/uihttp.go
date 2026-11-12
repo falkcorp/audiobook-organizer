@@ -1,7 +1,7 @@
 // file: core/internal/uihttp/uihttp.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a4c2f17-6d3b-49e0-b1a5-c7d90e3f6b28
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package uihttp is the HTTP surface the shell reports back through
 // (05-http-api §5 item 2; 07 §5.2, §7.6.2, §7.16): POST /api/core/v1/ui/
@@ -162,9 +162,14 @@ func (r *reportDiagnosticReq) Validate() error {
 }
 
 func (a *api) reportDiagnostic(ctx context.Context, in *httpapi.In[reportDiagnosticReq]) (httpapi.NoContent, error) {
-	if in.Principal == nil {
-		// Stage 13 answers this first once it exists (F4-08).
+	// Stage 13 answers this first once it exists (F4-08). Until then the
+	// handler applies AnyAuthenticated itself: no principal is 401; one with no
+	// compiled permission set, or a Confined one (05-rbac 4.10), is 403.
+	switch p := in.Principal; {
+	case p == nil:
 		return httpapi.NoContent{}, &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "sign in to use this route"}
+	case p.Perms == nil || !p.Perms.Satisfies(rbac.AnyAuthenticated):
+		return httpapi.NoContent{}, &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "this route needs a signed-in caller"}
 	}
 	if !a.accept() {
 		return httpapi.NoContent{}, nil

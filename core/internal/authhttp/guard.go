@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/guard.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a3f9d12-6c85-4e0b-a1d7-93b8e5c2f046
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -63,13 +63,12 @@ func (s spec) admit(p *auth.Principal) error {
 }
 
 // holds reports whether p's checker satisfies need. A principal with no
-// checker holds nothing.
+// checker holds nothing, and AnyAuthenticated is no exception: it is "core:self
+// or a non-Confining scope" (05-rbac 4.10), so a Confined principal (a
+// fingerprint-worker or arr-facade key) never satisfies it.
 func holds(p *auth.Principal, need rbac.Requirement) bool {
-	switch need.Kind() {
-	case rbac.KindPublic:
+	if need.Kind() == rbac.KindPublic {
 		return true
-	case rbac.KindAuthenticated:
-		return p != nil
 	}
 	return p != nil && p.Perms != nil && p.Perms.Satisfies(need)
 }

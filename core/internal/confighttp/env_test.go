@@ -1,7 +1,7 @@
 // file: core/internal/confighttp/env_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: aee43407-160f-4883-ad9b-997aadb09143
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package confighttp
 
@@ -54,6 +54,8 @@ func (c checker) Satisfies(r rbac.Requirement) bool {
 	switch r.Kind() {
 	case rbac.KindPublic:
 		return true
+	case rbac.KindAuthenticated:
+		return len(c) > 0 // core:self or a non-Confining scope (05-rbac 4.10)
 	case rbac.KindAllOf:
 		return len(ps) > 0 && !slices.ContainsFunc(ps, func(p rbac.Permission) bool { return !c.Has(p) })
 	case rbac.KindAnyOf:
@@ -63,6 +65,13 @@ func (c checker) Satisfies(r rbac.Requirement) bool {
 }
 func (checker) Confined() bool                { return false }
 func (c checker) Concrete() []rbac.Permission { return slices.Clone(c) }
+
+// confinedChecker is a Confined key's checker: it names scopes, never
+// satisfies AnyAuthenticated, and holds none of the settings scopes.
+type confinedChecker struct{ checker }
+
+func (confinedChecker) Satisfies(r rbac.Requirement) bool { return r.Kind() == rbac.KindPublic }
+func (confinedChecker) Confined() bool                    { return true }
 
 // The principals the cases act as.
 const (

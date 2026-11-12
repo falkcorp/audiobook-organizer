@@ -1,7 +1,7 @@
 // file: core/internal/uihttp/helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e7a2b9c4-1d58-4f36-a0c3-6b9d4e8f2a15
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package uihttp
 
@@ -36,6 +36,18 @@ func (perms) Satisfies(r rbac.Requirement) bool {
 }
 func (perms) Confined() bool              { return false }
 func (perms) Concrete() []rbac.Permission { return nil }
+
+// confined is a checker that is not AnyAuthenticated: a Confined key
+// (a worker or facade key, 05-rbac 4.10).
+type confined struct{ perms }
+
+func (confined) Satisfies(rbac.Requirement) bool { return false }
+func (confined) Confined() bool                  { return true }
+
+// confinedKey is an API key principal holding only Confining scopes.
+func confinedKey() *auth.Principal {
+	return &auth.Principal{Method: auth.MethodAPIKey, CredentialID: "key-robin", Perms: confined{}}
+}
 
 // session is a signed-in browser session.
 func session() *auth.Principal {

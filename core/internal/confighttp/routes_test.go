@@ -1,7 +1,7 @@
 // file: core/internal/confighttp/routes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f580d63-302c-489d-b44a-681a95e044f6
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package confighttp
 
@@ -72,7 +72,7 @@ func TestSettingsRoutes_StatusCodes(t *testing.T) {
 
 	t.Run("403 section permission carries need", func(t *testing.T) {
 		r := newRig(t, config.Options{})
-		rep := r.patch(as(auth.MethodSession), `{"set":{"core.batcave.level":"warn"}}`)
+		rep := r.patch(as(auth.MethodSession, coreSelf), `{"set":{"core.batcave.level":"warn"}}`)
 		if rep.status != http.StatusForbidden {
 			t.Fatalf("status = %d: %s", rep.status, rep.body)
 		}
@@ -310,7 +310,6 @@ func TestGetSettings_FiltersBySectionReadPerm(t *testing.T) {
 		{"core only", as(auth.MethodSession, permManage), []string{string(configtest.BatcavePath)}},
 		{"module only", as(auth.MethodSession, permGotham), []string{string(configtest.WatchPath)}},
 		{"neither", as(auth.MethodSession, rbac.CoreAdmin), nil},
-		{"no checker", &auth.Principal{Method: auth.MethodSession, User: &auth.User{ID: dickID}}, nil},
 	}
 	for _, c := range cases {
 		if got := sections(get(c.p)); !slices.Equal(got, c.want) {
@@ -375,7 +374,7 @@ func TestGetSchema_FiltersBySectionReadPerm(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	all, core, none := props(manager()), props(as(auth.MethodSession, permManage)), props(as(auth.MethodSession))
+	all, core, none := props(manager()), props(as(auth.MethodSession, permManage)), props(as(auth.MethodSession, coreSelf))
 	if len(all) == 0 || len(core) == 0 || len(core) >= len(all) || len(none) != 0 {
 		t.Errorf("properties: both %v, core only %v, none %v", all, core, none)
 	}
@@ -440,7 +439,7 @@ func TestPatch_ActorIsFilledFromThePrincipal(t *testing.T) {
 		{"api key", as(auth.MethodAPIKey, permManage), bruceID, false, false, permManage, rbac.CoreAdmin},
 		{"owner", owner, bruceID, true, true, permManage, rbac.CoreAdmin},
 		{"auth disabled", as(auth.MethodAuthDisabled, permManage), authDisabledSubject, false, false, permManage, rbac.CoreAdmin},
-		{"no checker", &auth.Principal{Method: auth.MethodSession, User: &auth.User{ID: dickID}}, dickID, true, false, "", permManage},
+		{"self only", &auth.Principal{Method: auth.MethodSession, User: &auth.User{ID: dickID}, Perms: checker{coreSelf}}, dickID, true, false, coreSelf, permManage},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -785,5 +784,43 @@ func TestRegister_BuildFailsOnlyForWantOfAuth(t *testing.T) {
 		if !errors.Is(p, httpapi.ErrNoAuthService) {
 			t.Errorf("Build reported %v, want only ErrNoAuthService", p)
 		}
+	}
+}
+
+const coreSelf = rbac.Permission("core:self")
+
+// TestGuard_AppliesAnyAuthenticated: every route is rbac.AnyAuthenticated, which
+// the handler applies itself until stage 13 exists (05-rbac 4.10). A principal
+// with no checker, one that holds nothing, and a Confined key are 403 on every
+// route and reach neither the store nor a section; a principal holding
+// core:self passes.
+func TestGuard_AppliesAnyAuthenticated(t *testing.T) {
+	ctx := context.Background()
+	for name, p := range map[string]*auth.Principal{
+		"no checker":    {Method: auth.MethodSession, User: &auth.User{ID: dickID}},
+		"holds nothing": as(auth.MethodSession),
+		"confined key":  {Method: auth.MethodAPIKey, User: &auth.User{ID: dickID}, Perms: confinedChecker{checker{permManage}}},
+	} {
+		rs := &recStore{}
+		a := &api{store: rs, read: func(config.Path) (rbac.Permission, bool) { return permManage, true }}
+		in := &httpapi.In[noReq]{Principal: p}
+		_, e1 := a.getSettings(ctx, in)
+		_, e2 := a.getSchema(ctx, in)
+		for i, err := range []error{e1, e2} {
+			he, ok := errors.AsType[*httpapi.Error](err)
+			if !ok || he.Status != http.StatusForbidden || he.Code != "permission_denied" {
+				t.Errorf("%s: read route %d err = %v, want 403 permission_denied", name, i, err)
+			}
+		}
+		if rep := rigOver(t, a).patch(p, `{}`); rep.status != http.StatusForbidden || problemOf(t, rep).Code != "permission_denied" {
+			t.Errorf("%s: patch = %d %s, want 403 permission_denied", name, rep.status, rep.body)
+		}
+		if rs.calls != 0 {
+			t.Errorf("%s: %d Apply calls", name, rs.calls)
+		}
+	}
+	a := &api{store: &recStore{}}
+	if err := a.guard(as(auth.MethodSession, coreSelf)); err != nil {
+		t.Errorf("a principal holding core:self was refused: %v", err)
 	}
 }

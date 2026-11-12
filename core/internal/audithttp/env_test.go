@@ -1,7 +1,7 @@
 // file: core/internal/audithttp/env_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6d7005e2-ed4b-444a-a9c3-60d66b5fec9d
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package audithttp
 
@@ -193,6 +193,8 @@ type fakeReader struct {
 	err   error          // yielded after failAfter records of the first call
 	after int
 	calls []audit.Filter
+	// yielded counts the records handed out, for bounds on a request's read.
+	yielded int
 }
 
 func (f *fakeReader) Query(_ context.Context, flt audit.Filter) iter.Seq2[audit.Record, error] {
@@ -210,6 +212,9 @@ func (f *fakeReader) Query(_ context.Context, flt audit.Filter) iter.Seq2[audit.
 				yield(audit.Record{}, err)
 				return
 			}
+			f.mu.Lock()
+			f.yielded++
+			f.mu.Unlock()
 			if !yield(r, nil) {
 				return
 			}
@@ -221,6 +226,13 @@ func (f *fakeReader) Query(_ context.Context, flt audit.Filter) iter.Seq2[audit.
 			yield(audit.Record{}, err)
 		}
 	}
+}
+
+// scanned is how many records the reader has yielded across all calls.
+func (f *fakeReader) scanned() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.yielded
 }
 
 func (f *fakeReader) callCount() int {

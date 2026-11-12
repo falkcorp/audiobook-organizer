@@ -1,5 +1,5 @@
 // file: core/internal/audithttp/routes.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b7ba0d64-88a0-4182-aa62-18009112fbcf
 // last-edited: 2026-11-11
 
@@ -73,6 +73,23 @@ type api struct {
 	rec    Recorder
 	log    *slog.Logger
 	base   string // the group's base path, for the export record's route
+	// scanCap bounds the records one GET /audit request reads for a viewer who
+	// is not a user manager; 0 is defaultScanCap. Tests lower it.
+	scanCap int
+}
+
+// defaultScanCap is how many records one GET /audit request reads, for a
+// viewer who is not a user manager, before it answers with what it has and a
+// cursor to go on from. The store filters by one action prefix only, so the
+// withheld records of a log that is mostly identity traffic are read and
+// dropped here; without a bound a single request could walk the whole log.
+const defaultScanCap = 10_000
+
+func (a *api) scanLimit() int {
+	if a.scanCap > 0 {
+		return a.scanCap
+	}
+	return defaultScanCap
 }
 
 // Register registers the audit routes on g, which must be the router's
@@ -88,7 +105,7 @@ func Register(g *httpapi.Group, deps Deps) {
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/audit", Name: "listAudit", Perm: perm, Tags: tags,
 		Summary: "Query the audit log, newest first",
-		Doc:     "Filters: since and until (RFC 3339), actor (a user id), action (a prefix such as core.auth.), outcome (success, failure, denied, error) and target (module, module/kind or module/kind/id). The cursor continues a query with the same filters. A record whose action is about an identity or a credential (core.auth.*, core.user.*, core.apikey.*, core.session.*, core.invite.*, core.templogin.*, core.identity.*, core.bootstrap.*, core.permission.deny and the like), and a record whose action core does not classify (a module's own), is left out unless the caller holds core:users.manage. The auth-disabled principal is refused with 401.",
+		Doc:     "Filters: since and until (RFC 3339), actor (a user id), action (a prefix such as core.auth.), outcome (success, failure, denied, error) and target (module, module/kind or module/kind/id). The cursor continues a query with the same filters. A record whose action is about an identity or a credential (core.auth.*, core.user.*, core.apikey.*, core.session.*, core.invite.*, core.templogin.*, core.identity.*, core.bootstrap.*, core.permission.deny and the like), and a record whose action core does not classify (a module's own), is left out unless the caller holds core:users.manage, who also alone sees actor.credential_id and actor.client_addr. A caller without core:users.manage has withheld records read and dropped by the query, at most 10,000 per request: a page may then be short or empty with a next_cursor, and the client follows cursors until there is none. The auth-disabled principal is refused with 401.",
 	}, a.list)
 	httpapi.HandleRaw(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/audit/export", Name: "exportAudit", Perm: perm, Tags: tags, RateClass: httpapi.RateExpensive,
@@ -124,18 +141,37 @@ func (a *api) list(ctx context.Context, in *httpapi.In[listReq]) (httpapi.Cursor
 	// page is in hand when this one is full. The loop in records is correct for
 	// any size; this one avoids reading a page twice.
 	batch := min(max(r.Limit, 1)+1, audit.MaxQueryLimit)
+	manager := isManager(in.Principal)
+	// A manager's records are all kept, so what it reads is what it returns and
+	// the page bounds the read. Anyone else's are filtered here, so the read
+	// itself is bounded: see defaultScanCap.
+	var budget *scanBudget
+	if !manager {
+		budget = &scanBudget{left: a.scanLimit()}
+	}
 	seq := func(yield func(httpapi.Positioned[AuditRecord], error) bool) {
-		for rec, err := range a.records(ctx, f, batch, visibleTo(in.Principal)) {
+		for rec, err := range a.scan(ctx, f, batch, visibleTo(in.Principal), budget) {
 			if err != nil {
 				yield(httpapi.Positioned[AuditRecord]{}, a.storeError(ctx, err))
 				return
 			}
-			if !yield(httpapi.Positioned[AuditRecord]{Pos: cursorPos(rec.Seq), Item: wire(rec)}, nil) {
+			if !yield(httpapi.Positioned[AuditRecord]{Pos: cursorPos(rec.Seq), Item: wireFor(rec, manager)}, nil) {
 				return
 			}
 		}
 	}
-	return httpapi.PaginateCursor(ctx, r.CursorParams, seq, hash)
+	page, err := httpapi.PaginateCursor(ctx, r.CursorParams, seq, hash)
+	if err != nil {
+		return zero, err
+	}
+	// The read stopped at its bound with the page not full: the records beyond
+	// the last one read are unread, not absent, so say where to go on from. The
+	// page may then be short or empty with a cursor; a client follows cursors
+	// until there is none.
+	if page.NextCursor == "" && budget.stopped() {
+		page.NextCursor = httpapi.EncodeCursor(cursorPos(budget.last-1), hash)
+	}
+	return page, nil
 }
 
 // ---- GET /audit/export ----------------------------------------------------
@@ -152,6 +188,7 @@ func (a *api) export(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, r, err, a.log)
 		return
 	}
+	manager := isManager(p)
 	next, stop := iter.Pull2(a.records(ctx, q.filter, audit.MaxQueryLimit, visibleTo(p)))
 	defer stop()
 	// The first record is read before anything is recorded or sent, so a store
@@ -200,7 +237,7 @@ func (a *api) export(w http.ResponseWriter, r *http.Request) {
 			a.flushEnd(ctx, rc) // best effort: the stream ends here either way
 			return
 		}
-		if err := enc.Encode(wire(first)); err != nil {
+		if err := enc.Encode(wireFor(first, manager)); err != nil {
 			// The client went away; there is nobody to tell.
 			return
 		}
@@ -257,6 +294,25 @@ func queryOf(v url.Values) (query, error) {
 // loop therefore asks again, from the last seq it saw, until a batch comes
 // back short. It ends at the first error, after yielding it.
 func (a *api) records(ctx context.Context, f audit.Filter, batch int, keep func(audit.Record) bool) iter.Seq2[audit.Record, error] {
+	return a.scan(ctx, f, batch, keep, nil)
+}
+
+// scanBudget bounds how many records one request reads. A nil budget is
+// unbounded. After the read, stopped says it ended on the bound, and last is
+// the seq of the last record read: everything newer was read, everything older
+// was not.
+type scanBudget struct {
+	left int
+	last uint64
+	hit  bool
+}
+
+// stopped reports whether the read ended on the bound with records left to
+// read: a continuation cursor is owed, and there is something older than last.
+func (b *scanBudget) stopped() bool { return b != nil && b.hit && b.last > 1 }
+
+// scan is records with a budget; see records.
+func (a *api) scan(ctx context.Context, f audit.Filter, batch int, keep func(audit.Record) bool, budget *scanBudget) iter.Seq2[audit.Record, error] {
 	return func(yield func(audit.Record, error) bool) {
 		for {
 			if err := ctx.Err(); err != nil {
@@ -275,6 +331,13 @@ func (a *api) records(ctx context.Context, f audit.Filter, batch int, keep func(
 				if keep(rec) && !yield(rec, nil) {
 					return
 				}
+				if budget != nil {
+					budget.last = rec.Seq
+					if budget.left--; budget.left <= 0 {
+						budget.hit = true
+						return
+					}
+				}
 			}
 			// A short batch is the end. A last seq of 0 would make BeforeSeq 0,
 			// which the store reads as "no bound": stop rather than start over.
@@ -286,6 +349,12 @@ func (a *api) records(ctx context.Context, f audit.Filter, batch int, keep func(
 	}
 }
 
+// isManager reports whether p holds core:users.manage: the viewer who sees
+// every record whole.
+func isManager(p *auth.Principal) bool {
+	return p != nil && p.Perms != nil && p.Perms.Has(permUsers)
+}
+
 // visibleTo is the rule 05-rbac §7.6 sets, default-deny: a holder of
 // core:users.manage sees every record; anyone else sees only a record whose
 // action core's table classifies VisibleToAll. An action about an identity or a
@@ -294,7 +363,7 @@ func (a *api) records(ctx context.Context, f audit.Filter, batch int, keep func(
 // core action added without a classification. A withheld record is left out
 // whole, never partly masked.
 func visibleTo(p *auth.Principal) func(audit.Record) bool {
-	manager := p != nil && p.Perms != nil && p.Perms.Has(permUsers)
+	manager := isManager(p)
 	return func(r audit.Record) bool {
 		return manager || audit.VisibilityOf(r.Action) == audit.VisibleToAll
 	}

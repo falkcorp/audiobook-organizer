@@ -1,7 +1,7 @@
 // file: core/internal/modulehttp/metrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 32893b2c-9f60-4a20-a0e3-a65343fa99f6
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package modulehttp
 
@@ -22,7 +22,7 @@ import (
 const (
 	outcomeOK              = "ok"              // 200 without disabled_modules (the caller lacks core:admin)
 	outcomeAdmin           = "admin"           // 200 with disabled_modules (the caller holds core:admin)
-	outcomeUnauthenticated = "unauthenticated" // 401 from the handler's own check (stage 13 normally answers first)
+	outcomeUnauthenticated = "unauthenticated" // 401 or 403 from the handler's own AnyAuthenticated check (stage 13 normally answers first): no principal, or one that is not authenticated for this route
 	outcomeError           = "error"           // 503: the view could not produce a snapshot
 )
 

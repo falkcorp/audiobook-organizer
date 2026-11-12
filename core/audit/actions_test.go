@@ -1,7 +1,7 @@
 // file: core/audit/actions_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0f93b6a2-8c4d-4e17-a5d9-3e2b7c1f4a60
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // An external test package: archtest imports rbac, which imports audit
 // (rbac.Deps.Audit is an audit.Logger, 05-rbac §3.4), so an in-package test
@@ -217,7 +217,7 @@ func TestCoreActions_CredentialAndIdentityActionsAreUserScoped(t *testing.T) {
 		"core.auth.login", "core.auth.logout", "core.auth.setup",
 		"core.bootstrap.redeem",
 		"core.identity.displace", "core.identity.link", "core.identity.unlink",
-		"core.integration.change_url", "core.integration.write_secret",
+		"core.integration.change_url", "core.integration.local_migrated", "core.integration.write_secret",
 		"core.invite.accept", "core.invite.create",
 		"core.oidc_provider.create", "core.oidc_provider.delete", "core.oidc_provider.update",
 		"core.permission.deny",

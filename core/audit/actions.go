@@ -1,7 +1,7 @@
 // file: core/audit/actions.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d49c3aba-d467-42d9-9205-66ce8b49640f
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package audit
 
@@ -20,7 +20,8 @@ const (
 	// may see: it names no credential, identity or security decision.
 	VisibleToAll
 	// UserScoped is an action about identities, credentials, sessions or
-	// security decisions: only a holder of core:users.manage sees it.
+	// security decisions, or one whose details carry a destination (a URL or
+	// an origin): only a holder of core:users.manage sees it.
 	UserScoped
 )
 
@@ -55,7 +56,7 @@ func coreActionTable() []actionRow {
 		{"core.integration.change_url", UserScoped},
 		{"core.integration.create", VisibleToAll},
 		{"core.integration.delete", VisibleToAll},
-		{"core.integration.local_migrated", VisibleToAll},
+		{"core.integration.local_migrated", UserScoped}, // its details carry the destination the Local grant was made for
 		{"core.integration.test", VisibleToAll},
 		{"core.integration.update", VisibleToAll},
 		{"core.integration.write_secret", UserScoped},

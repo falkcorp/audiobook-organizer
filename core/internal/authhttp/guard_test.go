@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d6a4b92-8e15-4c37-9fa2-c1b7e30d5a68
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -296,12 +296,45 @@ func TestAdmit_InteractiveFollowsMayChangeCredentials(t *testing.T) {
 	wantErr(t, s.admit(e.principal(bruce, auth.MethodAPIKey, "core:self")), http.StatusForbidden, "interactive_required")
 }
 
-// A principal with no checker holds nothing.
+// A principal with no checker holds nothing, AnyAuthenticated included: it is
+// "core:self or a non-Confining scope" (05-rbac 4.10), so a nil principal, a
+// principal with no checker and a Confined key (a fingerprint-worker or
+// arr-facade key) all fail it, and a signed-in user and an ordinary key pass.
 func TestHolds_NoCheckerHoldsNothing(t *testing.T) {
 	if holds(&auth.Principal{}, needSelf()) {
 		t.Fatal("a principal with no checker satisfied core:self")
 	}
-	if !holds(&auth.Principal{}, rbac.AnyAuthenticated) || holds(nil, rbac.AnyAuthenticated) {
-		t.Fatal("AnyAuthenticated is satisfied by exactly a non-nil principal")
+	e := newEnv(t)
+	bruce := e.user("bruce", "", rbac.RoleViewer, roleWorker)
+	cases := map[string]struct {
+		p    *auth.Principal
+		want bool
+	}{
+		"nil principal":        {nil, false},
+		"no checker":           {&auth.Principal{}, false},
+		"session":              {e.session(bruce), true},
+		"key naming core:self": {e.principal(bruce, auth.MethodAPIKey, "core:self"), true},
+		"confined worker key":  {e.principal(bruce, auth.MethodAPIKey, "gotham:arr.read"), false},
 	}
+	for name, c := range cases {
+		if got := holds(c.p, rbac.AnyAuthenticated); got != c.want {
+			t.Errorf("%s: holds(AnyAuthenticated) = %v, want %v", name, got, c.want)
+		}
+	}
+	if !holds(nil, rbac.Public) {
+		t.Error("Public is satisfied by anyone")
+	}
+}
+
+// TestAdmit_AnyAuthenticatedRefusesAConfinedKey: the same rule through admit,
+// the guard every route runs: a confined key on the logout route is 403, not
+// served.
+func TestAdmit_AnyAuthenticatedRefusesAConfinedKey(t *testing.T) {
+	e := newEnv(t)
+	bruce := e.user("bruce", "", rbac.RoleViewer, roleWorker)
+	s := specLogout()
+	if err := s.admit(e.principal(bruce, auth.MethodSession)); err != nil {
+		t.Fatalf("a session was refused: %v", err)
+	}
+	wantErr(t, s.admit(e.principal(bruce, auth.MethodAPIKey, "gotham:arr.read")), http.StatusForbidden, "permission_denied")
 }

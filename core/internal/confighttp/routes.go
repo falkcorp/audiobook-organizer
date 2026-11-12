@@ -1,7 +1,7 @@
 // file: core/internal/confighttp/routes.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a168e9f4-eec0-4f65-bc30-ad205a114b82
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package confighttp is the HTTP surface of core's settings (05-config
 // §1.3.4, F4-05): GET /api/core/v1/settings/schema, GET
@@ -133,6 +133,10 @@ func (a *api) guard(p *auth.Principal) error {
 	switch {
 	case p == nil:
 		return unauthenticated()
+	case p.Perms == nil || !p.Perms.Satisfies(rbac.AnyAuthenticated):
+		// AnyAuthenticated, as stage 13 will apply it (F4-08): a principal
+		// with no checker, or a Confined key (05-rbac 4.10), never satisfies it.
+		return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "this route needs a signed-in caller"}
 	case a.store == nil:
 		return httpapi.Unavailable("settings are not available", 5*time.Second)
 	}

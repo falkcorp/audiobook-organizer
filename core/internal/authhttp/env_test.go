@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/env_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91c4e2a7-5d38-4b06-8f1a-e7b3029d6c45
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -90,6 +90,10 @@ func (e *env) clock() time.Time {
 // roleCommissioner manages users without being an admin.
 const roleCommissioner rbac.RoleName = "custom.commissioner"
 
+// roleWorker holds only a Confining scope: a key scoped to it is Confined
+// (05-rbac 4.10), as a fingerprint-worker or arr-facade key is.
+const roleWorker rbac.RoleName = "gotham.worker"
+
 // roleDetective is a module role a commissioner holds every scope of.
 const roleDetective rbac.RoleName = "gotham.detective"
 
@@ -98,6 +102,7 @@ var gothamPerms = []rbac.PermissionSpec{
 	{Name: "gotham:signal", Title: "Bat-Signal", DefaultGrants: []rbac.RoleName{rbac.RoleEditor}},
 	{Name: "gotham:cave.manage", Title: "Batcave", Sensitive: true},
 	{Name: "gotham:cases.read", Title: "Case files", Class: rbac.ClassView},
+	{Name: "gotham:arr.read", Title: "Facade reads", Confining: true},
 }
 
 func newEnv(t testing.TB) *env {
@@ -149,6 +154,9 @@ func newEnv(t testing.TB) *env {
 	}
 	d := e.rb.Declarer("gotham")
 	if err := d.Permissions(gothamPerms...); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Roles(rbac.RoleSeed{Name: roleWorker, Title: "Worker", Permissions: []rbac.Permission{"gotham:arr.read"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Roles(rbac.RoleSeed{Name: roleDetective, Title: "Detective", Permissions: []rbac.Permission{"gotham:patrol", "gotham:cases.read"}}); err != nil {
