@@ -1,7 +1,7 @@
 # file: .github/workflows/core-ci.yml
-# version: 1.0.1
+# version: 1.1.0
 # guid: 86d3ec85-7629-46f7-9682-c011fb888337
-# last-edited: 2026-11-06
+# last-edited: 2026-11-12
 
 # core's merge gate (09 §9.2.1 core-ci row; 12 SC4). `./...` from the root
 # never reaches the nested core/ module, so core's own `make -C core ci` runs
@@ -37,7 +37,11 @@ jobs:
   core-ci:
     name: core-ci
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A cold runner spends ~7 min downloading modules and ~7 min vetting before
+    # the tests start, and a green warm run already takes ~25 min, so 30 cancelled
+    # about 1 run in 4. A cancelled run never saves the Go cache, so the next run
+    # is cold too; the headroom (and the restore-keys below) break that loop.
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -53,9 +57,23 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.3'
-          cache-dependency-path: |
-            go.sum
-            core/go.sum
+          # Manual cache below: setup-go's built-in cache restores on an exact
+          # key only, so every go.sum change (core/go.sum changes often) was a
+          # full cold start with no fallback.
+          cache: false
+
+      # Prefix fallback (restore-keys): a go.sum change restores the previous
+      # module and build cache and re-downloads only the difference. Key
+      # prefix is core-specific so ci.yml's cache is not shared or evicted.
+      - name: Restore Go cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-core-ci-go-1.27-${{ hashFiles('go.sum', 'core/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-core-ci-go-1.27-
 
       - name: Pin
         run: echo "GOTOOLCHAIN=$(make -s -C core print-toolchain)" >> "$GITHUB_ENV"
