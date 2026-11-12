@@ -1,5 +1,5 @@
 // file: internal/books/cutover/harness_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f6d7b3a-71c4-4a7c-b6a3-1e4f2b9c0d05
 // last-edited: 2026-11-11
 
@@ -59,6 +59,25 @@ const (
 	rigBuildNew = "batcomputer-2"
 	corpusRel   = "internal/books/testdata/r2corpus"
 )
+
+// rigHostCPUs is the CPU count every test runs as: the host that recorded
+// testdata/head_defaults.json (concurrent_scans 10 = max(NumCPU, 4)). HEAD
+// computes that default from the machine it runs on and M2 compares against it
+// at call time (headNumCPU), so without a pin a test's verdict would depend on
+// the machine running it. A test that needs another host calls pinHostCPUs.
+const rigHostCPUs = 10
+
+func init() { headNumCPU = func() int { return rigHostCPUs } }
+
+// pinHostCPUs makes the tests' host report n CPUs until the test ends. The
+// package runs no parallel test, so the variable is not shared with another
+// goroutine that reads it.
+func pinHostCPUs(t testing.TB, n int) {
+	t.Helper()
+	prev := headNumCPU
+	headNumCPU = func() int { return n }
+	t.Cleanup(func() { headNumCPU = prev })
+}
 
 func rigDiskUsage() vfs.DiskUsage {
 	return vfs.DiskUsage{AvailBytes: 1 << 40, TotalBytes: 1 << 41, UsedBytes: 1 << 40}

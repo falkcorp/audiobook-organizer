@@ -1,5 +1,5 @@
 // file: internal/books/cutover/head_defaults.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: ea8d2a0e-bf7a-49fb-b3f7-30318998436f
 // last-edited: 2026-11-11
 
@@ -10,7 +10,9 @@ package cutover
 import (
 	_ "embed"
 	"encoding/json"
+	"maps"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -33,8 +35,39 @@ var headDefaultsTable = sync.OnceValue(func() map[string]any {
 	return m
 })
 
+// headNumCPU is the host's CPU count, which HEAD's registerConfigDefaults
+// reads when it registers concurrent_scans. It is a variable so a test can pin
+// the host: M2 runs on the machine HEAD ran on, so the default it compares a
+// file or blob value against is the one that machine computed.
+var headNumCPU = runtime.NumCPU
+
+// headComputedDefaultNames are the keys whose HEAD default is not a constant
+// of the recorded table; headComputedDefault answers them.
+var headComputedDefaultNames = []string{"concurrent_scans", "playlist_dir"}
+
+// headComputedDefault returns the default of a key the recorded table cannot
+// hold, read at call time:
+//   - concurrent_scans: max(runtime.NumCPU(), 4) (config.go registerConfigDefaults),
+//     so the table's recorded 10 is only the recording host's value.
+//   - playlist_dir: "playlists", the flag default cmd/root.go binds (the
+//     key has no SetDefault, so the table omits it), which is what viper
+//     returns for a key the file does not set. An explicit "" in the file is
+//     therefore a value, not the default.
+func headComputedDefault(name string) (any, bool) {
+	switch name {
+	case "concurrent_scans":
+		return float64(max(headNumCPU(), 4)), true
+	case "playlist_dir":
+		return "playlists", true
+	}
+	return nil, false
+}
+
 // headDefault returns HEAD's default for the viper key name.
 func headDefault(name string) (any, bool) {
+	if v, ok := headComputedDefault(name); ok {
+		return v, true
+	}
 	v, ok := headDefaultsTable()[name]
 	return v, ok
 }
@@ -93,8 +126,12 @@ func headNumber(v any) (float64, bool) {
 // whisper_endpoints is the empty string of its environment form, which HEAD's
 // configFromViper parses separately (ParseWhisperEndpoints).
 func headDefaultConfig() (cfg *headConfig, misfit []string) {
+	defaults := maps.Clone(headDefaultsTable())
+	for _, name := range headComputedDefaultNames {
+		defaults[name], _ = headComputedDefault(name)
+	}
 	tree := map[string]any{}
-	for name, v := range headDefaultsTable() {
+	for name, v := range defaults {
 		cur := tree
 		segs := strings.Split(name, ".")
 		for _, s := range segs[:len(segs)-1] {

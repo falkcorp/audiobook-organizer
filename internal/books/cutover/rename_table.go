@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_table.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5f0dc15e-6a07-4d86-8d7f-28b5bd6aa771
 // last-edited: 2026-11-11
 
@@ -667,6 +667,44 @@ func (g *generator) attachRetired() {
 				continue
 			}
 			push(r, RetiredEntry{Name: env, Canonical: canon, Verdict: verdict, Refuse: rf, Message: msg})
+		}
+	}
+	g.attachFlatAliasRetired(push, eco)
+}
+
+// attachFlatAliasRetired retires the flat viper keys no row is named for
+// (bindAlias and flatFileAlias) under the row they backfill: the file key, and
+// the upper-cased environment name AutomaticEnv reads. The verdict, canonical
+// path and Refuse are the aliased row's, as for its own names. The four base
+// URLs' env names are already the row's through BindEnv; push drops the repeat.
+func (g *generator) attachFlatAliasRetired(push func(*Row, RetiredEntry), eco map[string]bool) {
+	aliases := map[string]string{}
+	for key, head := range bindAlias {
+		aliases[key] = head
+	}
+	for key, head := range flatFileAlias {
+		aliases[key] = head
+	}
+	keys := make([]string, 0, len(aliases))
+	for key := range aliases {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		i, ok := g.idx[aliases[key]]
+		if !ok {
+			g.fail("the flat viper key %s backfills %s, which is no row of the table", key, aliases[key])
+			continue
+		}
+		r := &g.rows[i]
+		verdict := VerdictWarn
+		if r.refuses(g.rows) {
+			verdict = VerdictRefuse
+		}
+		canon, rf := r.canonical(), r.passthroughRefuse()
+		push(r, RetiredEntry{Name: key, File: true, Canonical: canon, Verdict: verdict, Refuse: rf})
+		if env := strings.ToUpper(key); !eco[env] {
+			push(r, RetiredEntry{Name: env, Canonical: canon, Verdict: verdict, Refuse: rf})
 		}
 	}
 }

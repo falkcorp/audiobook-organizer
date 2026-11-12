@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_cutover_sources_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 4a1e7c20-9d36-4b58-b2f4-6c80d1e39a57
 // last-edited: 2026-11-11
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"maps"
@@ -218,6 +219,8 @@ func TestConfigCutover_NoBlobFileSettings(t *testing.T) {
 		{"auto_organize off its default", "auto_organize: false\n", []string{"auto_organize"}, nil},
 		{"auto_organize at its default", "auto_organize: true\n", nil, nil},
 		{"playlist_dir set", "playlist_dir: /mnt/gotham-playlists\n", []string{"playlist_dir"}, nil},
+		{"playlist_dir at HEAD's flag default", "playlist_dir: playlists\n", nil, nil},
+		{"playlist_dir set to an explicit empty string", "playlist_dir: \"\"\n", []string{"playlist_dir"}, nil},
 		{"setup_complete set", "setup_complete: true\n", []string{"setup_complete"}, nil},
 		{"folder_naming_pattern off its default", "folder_naming_pattern: '{author}/{title}'\n", []string{"folder_naming_pattern"}, nil},
 		{"file_naming_pattern off its default", "file_naming_pattern: '{title}'\n", []string{"file_naming_pattern"}, nil},
@@ -272,6 +275,36 @@ func TestConfigCutover_NoBlobFileSettings(t *testing.T) {
 			t.Errorf("the file changed under a refused upgrade (err %v)", err)
 		}
 	})
+}
+
+// TestConfigCutover_NoBlobConcurrentScansFollowsTheHost: concurrent_scans'
+// default is max(NumCPU, 4) on the machine HEAD ran on, so the census compares
+// a file's value against that host's default, not the recording host's 10.
+func TestConfigCutover_NoBlobConcurrentScansFollowsTheHost(t *testing.T) {
+	for _, tc := range []struct {
+		cpus    int
+		value   int
+		blocked bool
+	}{
+		{4, 4, false}, {4, 10, true}, {4, 3, true},
+		{2, 4, false}, // the floor: fewer than four CPUs still default to four
+		{10, 10, false}, {10, 4, true},
+		{16, 16, false}, {16, 10, true},
+	} {
+		t.Run(fmt.Sprintf("%d CPUs, concurrent_scans %d", tc.cpus, tc.value), func(t *testing.T) {
+			pinHostCPUs(t, tc.cpus)
+			r := newRig(t, "stage1", dropSources(), withFile(fmt.Sprintf("concurrent_scans: %d\n", tc.value)))
+			if tc.blocked {
+				if report := requireBlocked(t, r); !strings.Contains(report, "concurrent_scans") {
+					t.Errorf("the refusal does not name concurrent_scans:\n%s", report)
+				}
+				return
+			}
+			if snap, err := r.run(t); err != nil || snap.State != "done" {
+				t.Fatalf("M2 refused a default value (state %v): %v", snap, err)
+			}
+		})
+	}
 }
 
 // TestConfigCutover_LegacyPerKeyRows: HEAD reads per-key rows when there is no

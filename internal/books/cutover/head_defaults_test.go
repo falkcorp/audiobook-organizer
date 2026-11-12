@@ -1,11 +1,12 @@
 // file: internal/books/cutover/head_defaults_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b04c7e19-6a25-4d83-9f10-3c58e2a7d614
 // last-edited: 2026-11-11
 
 package cutover
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 )
@@ -54,5 +55,69 @@ func TestHeadMigrateAIEndpointsBlob_StartsFromDefaults(t *testing.T) {
 	caps, _ := openai["capability_models"].(map[string]any)
 	if caps["llm.filename_parse"] != "gpt-5-mini" {
 		t.Errorf("capability_models = %v, want the filename_parse_model default on llm.filename_parse", openai["capability_models"])
+	}
+}
+
+// concurrent_scans' HEAD default is max(runtime.NumCPU(), 4), computed on the
+// host (config.go registerConfigDefaults), not the recorded table's 10: the
+// table holds the recording host's value. M2 compares against the machine HEAD
+// ran on, through headNumCPU.
+func TestHeadDefault_ConcurrentScansFollowsTheHost(t *testing.T) {
+	for _, tc := range []struct {
+		cpus int
+		want float64
+	}{{1, 4}, {2, 4}, {4, 4}, {10, 10}, {16, 16}} {
+		t.Run(fmt.Sprintf("%d CPUs", tc.cpus), func(t *testing.T) {
+			pinHostCPUs(t, tc.cpus)
+			if got, ok := headDefault("concurrent_scans"); !ok || got != tc.want {
+				t.Fatalf("headDefault = %v, %v; want %v", got, ok, tc.want)
+			}
+			for _, v := range []any{4.0, 10.0, 16.0, 3.0} {
+				if got, want := headIsDefault("concurrent_scans", v), v == tc.want; got != want {
+					t.Errorf("headIsDefault(concurrent_scans, %v) = %v on %d CPUs, want %v", v, got, tc.cpus, want)
+				}
+			}
+			cfg, _ := headDefaultConfig()
+			if float64(cfg.ConcurrentScans) != tc.want {
+				t.Errorf("headDefaultConfig().ConcurrentScans = %d on %d CPUs, want %v", cfg.ConcurrentScans, tc.cpus, tc.want)
+			}
+		})
+	}
+	t.Run("the recorded table still says 10, and is not what answers", func(t *testing.T) {
+		if rec := headDefaultsTable()["concurrent_scans"]; rec != 10.0 {
+			t.Fatalf("the recorded table holds %v, want the recording host's 10", rec)
+		}
+		pinHostCPUs(t, 16)
+		if got, _ := headDefault("concurrent_scans"); got == 10.0 {
+			t.Error("headDefault answered from the recorded table on a 16-CPU host")
+		}
+	})
+}
+
+// playlist_dir has no SetDefault: its default is the flag default cmd/root.go
+// binds, "playlists", which is what viper returns for a key the file does not
+// set. An explicit empty string in the file is a value, not the default.
+func TestHeadDefault_PlaylistDirIsTheFlagDefault(t *testing.T) {
+	if got, ok := headDefault("playlist_dir"); !ok || got != "playlists" {
+		t.Fatalf("headDefault(playlist_dir) = %v, %v; want playlists", got, ok)
+	}
+	for v, want := range map[string]bool{"playlists": true, "": false, "/mnt/gotham-playlists": false, "Playlists": false} {
+		if got := headIsDefault("playlist_dir", v); got != want {
+			t.Errorf("headIsDefault(playlist_dir, %q) = %v, want %v", v, got, want)
+		}
+	}
+	if cfg, _ := headDefaultConfig(); cfg.PlaylistDir != "playlists" {
+		t.Errorf("headDefaultConfig().PlaylistDir = %q, want playlists", cfg.PlaylistDir)
+	}
+	if got := headParseFileSettings([]byte("playlist_dir: \"\"\n")); got["playlist_dir"] != "" {
+		t.Errorf("an explicit empty playlist_dir read as %v, want the empty string kept", got)
+	}
+	in := &m2Input{FileSettings: map[string]any{"playlist_dir": ""}}
+	if got := fileBlobBound(in); !slices.Equal(got, []string{"playlist_dir"}) {
+		t.Errorf("fileBlobBound with an explicit empty playlist_dir = %v, want it named", got)
+	}
+	in.FileSettings["playlist_dir"] = "playlists"
+	if got := fileBlobBound(in); len(got) != 0 {
+		t.Errorf("fileBlobBound with playlist_dir at its default = %v, want nothing", got)
 	}
 }
