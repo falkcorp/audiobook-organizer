@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 92d3d884-998e-42de-94e1-451dd63836fb -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-12 -->
 
 # F7-09 — F7 flip, one PR: integrations, AI jobs, provider gates, library roots and notify wired, M6 registered, internal/plugin and the webhook plugin deleted, deliveries in core's format, the AI families renamed with their dashboards, the late-owner holds and poll on their native bodies
 
@@ -71,6 +71,25 @@ Announce the move window one working day ahead, naming every 04 row listed under
    replaced by `<namespace>_ai_*` with every reference in `deploy/grafana/dashboards/*.json` and
    `deploy/prometheus/{alert-rules,recording-rules,alert-rules.test}.yml` updated in this PR (05-ai §8; 09 §9.2.7);
    `/api/v1/ai/capabilities`, `/ai/endpoints/status`, `/ai/test-connection` deleted, the SPA on the core routes.
+   **Two router hooks F7-03 shipped that nothing calls** (F7-03's `seams.d/F7-03.md`; F7-09 owns the kernel's boot and
+   the ai Put path, so wiring them is this PR's, and a flip that omits either is a regression, not a deferral):
+   - **`ai.Router.ValidateEndpoint(settings, stored)` on every Put of an `ai`-kind instance**, create and update
+     (`stored` is the row being replaced, nil for a create), before anything is stored. The Registry has no per-kind
+     validation hook and the adapter's schema cannot express a wildcard capability tick, an unknown tick, a locality
+     or a declared feature, so without this call `"capabilities": ["*"]` is stored and silently never honoured. An
+     error wraps `ai.ErrInvalidEndpoint` and reaches the client as the route's existing 422 `validation_failed`
+     (`core/internal/integrationhttp/errors.go`), with nothing stored. If the lead decides the larger fix F7-03's
+     seams note describes (a descriptor-level validation hook in `integrations`), this obligation becomes that hook's
+     registration and the acceptance test below stays as written.
+   - **`ai.Router.ClearBench(ref)` from the `core.integrations.health` task.** 05-ai section 4 step 4: the health task
+     probes benched endpoints with `GET /v1/models` and clears the bench on success. F7-03 made the probe able to
+     succeed (the adapter's `Health` passes through the gate's hold, so a success also clears the hold), but nothing
+     clears the router's bench: until the task calls `ClearBench` on `HealthOK`, a recovered endpoint sits out its
+     whole cooldown. **Caveat the call must handle:** `GET /v1/models` succeeds on a spent balance, so clearing a
+     quota bench (`core.ai.quota_cooldown`, 30 minutes) on `HealthOK` sends traffic back to an endpoint that refuses
+     it again, every health interval. Clear a bench only when `BenchedUntil` is within `core.ai.cooldown_max`, or
+     give `ClearBench` the bench's class so it leaves a quota bench in place (a change in
+     `core/integrations/ai/health.go`, about 15 lines); an operator's explicit Test may clear either.
 5. **Provider gates**: HEAD's `internal/metadata/providerhttp`, `dailyquota`, `throttle*`, `circuitbreaker` replaced by
    core `providerhttp`; the metadata chain on `integrations/metadata` (the `switch src.ID` deleted, 05-metadata M3.10);
    `/api/v1/metadata/providers/throttles` deleted, the SPA and scripts on instance health and `DELETE …/hold`.
@@ -253,6 +272,13 @@ app.Options{
   `POST /api/v1/deluge/test-connection` and `/api/v1/ai/test-connection` are gone (name coined here:
   `TestHEADTestConnectionRoutesGone`).
 - `TestNoHEADAIFamilies` (05-ai §9).
+- `TestAIInstancePut_WildcardCapabilityRefused` (name coined here): through the mounted kernel route, a `PUT` of an
+  `ai`-kind instance whose settings carry `"capabilities": ["*"]` answers 422 `validation_failed` and stores nothing;
+  the same `PUT` without the wildcard answers 200; an update that keeps a tick the catalog no longer knows is accepted
+  and one that adds an unknown tick is refused (the `stored` argument).
+- `TestAIHealthTaskClearsTheBench` (name coined here): an endpoint benched by a transient failure and then probed
+  `HealthOK` by `core.integrations.health` is no longer benched (`Router.BenchedUntil` false) and its next call
+  reaches the server; an endpoint benched for quota stays benched after the same probe.
 - The dashboard-reference test and `promtool test rules` after the AI renames.
 - `TestABOMetricsGatherNoDuplicate` (unchanged).
 - `TestCutoverRefusedByOlderBuilds` and the R2 cutover suite with M6 registered.
@@ -290,7 +316,7 @@ grep -c 'needs stage 13: F4-08' core/internal/integrationhttp/routes_test.go
 (cd core && go test -count=1 -race ./internal/integrationhttp/...)
 
 # Gate tests. Expected: ok
-go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed|TestDerivedIndexHooksAfterRegister|TestDepsScoping|TestCoreRoutesReplaceGin' ./...
+go test -count=1 -run 'TestBooksIndexRebuiltAtCutover|TestDerivedIndexRebuildTriggers|TestHEADTestConnectionRoutesGone|TestRootsCutover_FromHEADFixture|TestWebhookMigration_InstancesAndRule|TestIntegrationsMigration_EveryInstanceAndID|TestAIJobMigration_EveryJobAndState|TestNoHEADAIFamilies|TestAIInstancePut_WildcardCapabilityRefused|TestAIHealthTaskClearsTheBench|TestABOMetricsGatherNoDuplicate|TestCutoverRefusedByOlderBuilds|TestDeployReferencedSeriesServed|TestDerivedIndexHooksAfterRegister|TestDepsScoping|TestCoreRoutesReplaceGin' ./...
 (cd core && go test -count=1 -run 'TestWebhook_JSONBodyGolden|TestWebhook_SignatureWithTimestamp' ./integrations/notify/...)
 
 # Builds, frontend and e2e. Expected: exit 0; green
