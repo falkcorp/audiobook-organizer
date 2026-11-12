@@ -1,5 +1,5 @@
 // file: core/backup/journal/component.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d9f6a0-71e4-4a52-8b0d-6f2e91a4c7b5
 // last-edited: 2026-11-11
 
@@ -206,6 +206,27 @@ func (c *Component) AppendLine(ctx context.Context, r Revocation) (Head, error) 
 		return Head{}, ErrNotBound
 	}
 	return f.AppendLine(ctx, r)
+}
+
+// WriteLine writes a bookkeeping line like AppendLine but leaves the head
+// uncommitted: it returns the Pending the caller stages into its own batch or
+// commits (File.WriteLine). The boot writes the replaced store's restore line
+// this way before the re-apply, so the store's head moves last.
+func (c *Component) WriteLine(ctx context.Context, r Revocation) (Pending, error) {
+	f := c.current()
+	if f == nil {
+		return Pending{}, ErrNotBound
+	}
+	return f.WriteLine(ctx, r)
+}
+
+// Refuse makes the bound file fail every later append with err (File.Refuse):
+// before Bind it does nothing. The boot uses it when the store's head must not
+// be moved past a line it left unapplied.
+func (c *Component) Refuse(err error) {
+	if f := c.current(); f != nil {
+		f.Refuse(err)
+	}
 }
 
 // Tail is the last line of the bound file (zero before Bind).

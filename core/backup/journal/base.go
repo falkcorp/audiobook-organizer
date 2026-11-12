@@ -1,5 +1,5 @@
 // file: core/backup/journal/base.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d1e85b74-2c39-4a06-9f7b-8a3e0c5d1f62
 // last-edited: 2026-11-11
 
@@ -59,16 +59,20 @@ func CreateBased(path string, keys Keys, hdr Header, base Head) error {
 }
 
 // Fingerprint identifies a broken journal state: where the chain breaks (or
-// that the store's committed line is not on it), the last mac it verified,
-// where it claims to end and the store's head. The boot fails closed on a
-// broken journal once per fingerprint, so the same broken journal does not
-// bump every credential epoch at every restart.
-func (c *Chain) Fingerprint(head Head, forked bool) string {
+// that the store's committed line is not on it), the last mac it verified (the
+// verified prefix, which is all of the file that can be trusted), the store's
+// head and a state tag for what the chain itself cannot say (a forked journal,
+// a line of a kind this build cannot apply). The file's claimed end is not part
+// of it: it is whatever a forged seq says, so an attacker could mint a new
+// fingerprint per boot and bump every credential epoch each time. The boot
+// fails closed on a broken journal once per fingerprint, so the same broken
+// journal does not bump every credential epoch at every restart.
+func (c *Chain) Fingerprint(head Head, state string) string {
 	seq, reason := uint64(0), BreakReason("")
 	if c.Break != nil {
 		seq, reason = c.Break.Seq, c.Break.Reason
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("v1|%d|%s|%s|%d|%d|%t", seq, reason, c.PrevMAC(), c.ClaimedEnd, head.Seq, forked)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("v2|%d|%s|%s|%d|%s", seq, reason, c.PrevMAC(), head.Seq, state)))
 	return hex.EncodeToString(sum[:])
 }
 

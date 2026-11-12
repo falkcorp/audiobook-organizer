@@ -1,5 +1,5 @@
 // file: core/backup/journal/location.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8f35a1c2-5d4e-4b7a-9c63-2e1f0d8a7b54
 // last-edited: 2026-11-11
 
@@ -54,9 +54,14 @@ type locationWire struct {
 // Describes reports whether the file describes the store at dbPath with this
 // install ID (§5B.3.6 row "Where": `db_path` equals the resolved
 // core.storage.path and `install_id` equals the store's marker). Only then are
-// its store, served_boot and head members evidence about that store.
+// its store, served_boot and head members evidence about that store. The paths
+// are compared cleaned (a doubled or trailing separator, a `.` or `..`
+// element), not resolved through symbolic links: a link repointed at another
+// store would otherwise turn the evidence into "describes another store". A
+// path that is empty on either side never matches.
 func (l Location) Describes(dbPath, installID string) bool {
-	return l.DBPath != "" && l.DBPath == dbPath && l.InstallID != "" && l.InstallID == installID
+	return l.DBPath != "" && dbPath != "" && filepath.Clean(l.DBPath) == filepath.Clean(dbPath) &&
+		l.InstallID != "" && l.InstallID == installID
 }
 
 // HasServedBoot reports whether the file records a content marker (a file
@@ -65,8 +70,10 @@ func (l Location) HasServedBoot() bool { return l.ServedBoot.N > 0 }
 
 // ReadLocation reads <stateDir>/backup.location.json. A missing file is
 // (zero, false, nil): the boot then reads "no marker" for this store and
-// writes the file. A file that does not decode is an error; callers treat it
-// as absent for evidence and rewrite it.
+// writes the file. A file that does not decode is an error, and so is one that
+// decodes to no db_path or no install_id (`{}`, `null`: every file this package
+// writes names both), because it may have held the evidence that the store was
+// replaced; callers treat it as unreadable evidence and rewrite it.
 func ReadLocation(stateDir string) (Location, bool, error) {
 	raw, err := os.ReadFile(filepath.Join(stateDir, LocationFile))
 	switch {
@@ -78,6 +85,9 @@ func ReadLocation(stateDir string) (Location, bool, error) {
 	var w locationWire
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return Location{}, false, fmt.Errorf("journal: decode %s: %w", LocationFile, err)
+	}
+	if w.DBPath == "" || w.InstallID == "" {
+		return Location{}, false, fmt.Errorf("journal: %s names no db_path or no install_id", LocationFile)
 	}
 	return Location{BackupDir: w.BackupDir, Journal: w.Journal, DBPath: w.DBPath, InstallID: w.InstallID,
 		Store: w.Store, ServedBoot: w.ServedBoot, Head: Head(w.Head)}, true, nil
