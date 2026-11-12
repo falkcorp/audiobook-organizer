@@ -1,7 +1,7 @@
 // file: core/backup/journal/component.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d9f6a0-71e4-4a52-8b0d-6f2e91a4c7b5
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package journal
 
@@ -99,6 +99,7 @@ type Component struct {
 	frozen  bool
 	reset   bool
 	broken  error // a chain break the boot found and failed closed on (NoteBroken)
+	held    error // Hold: no line is taken until Resume; a state of the component, so it outlives a Bind
 	closed  bool
 	started bool
 	quit    chan struct{}
@@ -185,6 +186,9 @@ func (c *Component) Append(ctx context.Context, b *storage.Batch, r Revocation) 
 	if err := c.SyncAnchor(ctx); err != nil {
 		c.o.Log.Warn("journal: the committed-head anchor was not rewritten", "err", err)
 	}
+	if err := c.holding(f); err != nil {
+		return err
+	}
 	return f.Append(ctx, b, r)
 }
 
@@ -205,6 +209,9 @@ func (c *Component) AppendLine(ctx context.Context, r Revocation) (Head, error) 
 	if f == nil {
 		return Head{}, ErrNotBound
 	}
+	if err := c.holding(f); err != nil {
+		return Head{}, err
+	}
 	return f.AppendLine(ctx, r)
 }
 
@@ -217,32 +224,47 @@ func (c *Component) WriteLine(ctx context.Context, r Revocation) (Pending, error
 	if f == nil {
 		return Pending{}, ErrNotBound
 	}
+	if err := c.holding(f); err != nil {
+		return Pending{}, err
+	}
 	return f.WriteLine(ctx, r)
 }
 
-// Refuse makes the bound file fail every later append with err (File.Refuse),
-// for good: before Bind it does nothing. The boot uses it when the store's head
-// must not be moved past a line it left unapplied.
-func (c *Component) Refuse(err error) {
-	if f := c.current(); f != nil {
-		f.Refuse(err)
-	}
-}
-
-// Hold makes the bound file fail every later append with err until Resume
-// (File.Hold): before Bind it does nothing. The boot holds the journal while a
-// replaced store's head waits for its hooks.
+// Hold makes the component fail every later Append, AppendLine and WriteLine
+// with err until Resume, and Health report the journal unwritable meanwhile; the
+// first Hold's error is kept, and Hold(nil) holds nothing. The boot holds the
+// journal while a replaced store's head waits for its hooks: every append stages
+// its own seq as the head, which would move it before anything durable says why
+// it may. The revoking callers record gaps instead, as for any append failure.
+//
+// The hold is the component's own state, not the bound file's: it is set before
+// or after Bind, and a Bind (which replaces the file) leaves it in place. A
+// broken file reports its own error first, so a Resume never hides a break.
 func (c *Component) Hold(err error) {
-	if f := c.current(); f != nil {
-		f.Hold(err)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.held == nil && err != nil {
+		c.held = err
 	}
 }
 
-// Resume lifts a Hold (File.Resume). A Refuse and a break stay.
+// Resume lifts a Hold. A journal that is broken still refuses.
 func (c *Component) Resume() {
-	if f := c.current(); f != nil {
-		f.Resume()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.held = nil
+}
+
+// holding is the error a line is refused with while the component is held: nil
+// when it is not, and nil when the file is broken, so the file's own error (the
+// cause an operator needs) is the one Append returns.
+func (c *Component) holding(f *File) error {
+	if f.Status().Broken != nil {
+		return nil
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.held
 }
 
 // Tail is the last line of the bound file (zero before Bind).
@@ -432,7 +454,7 @@ func (c *Component) Close(ctx context.Context) error {
 // and writes nothing.
 func (c *Component) Health() []Health {
 	c.mu.Lock()
-	f, path, reset, broken := c.file, c.path, c.reset, c.broken
+	f, path, reset, broken, held := c.file, c.path, c.reset, c.broken, c.held
 	c.mu.Unlock()
 	var out []Health
 	if broken != nil {
@@ -447,6 +469,8 @@ func (c *Component) Health() []Health {
 			}
 		case st.Broken != nil:
 			out = append(out, Health{HealthUnwritable, SeverityDegraded, st.Broken.Error()})
+		case held != nil:
+			out = append(out, Health{HealthUnwritable, SeverityDegraded, held.Error()})
 		case st.OpenGaps > 0:
 			out = append(out, Health{HealthUnwritable, SeverityDegraded, fmt.Sprintf("%d interval(s) may hold a revocation the journal lacks", st.OpenGaps)})
 		}

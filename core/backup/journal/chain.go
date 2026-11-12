@@ -1,7 +1,7 @@
 // file: core/backup/journal/chain.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1da2b496-21d3-4218-8a94-2e19379880f4
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package journal
 
@@ -107,6 +107,20 @@ func (c *Chain) MACAt(seq uint64) (string, bool) {
 		return c.Lines[i].MAC, true
 	}
 	return "", false
+}
+
+// LineAt is the verified line at seq. It is false for the header and for a seq
+// retention dropped (at or below base_seq), and for one past the verified end:
+// the chain says nothing about a line it does not hold, which is what a queued
+// entry whose line is gone must be told.
+func (c *Chain) LineAt(seq uint64) (Line, bool) {
+	if !c.HasHeader || seq <= c.Header.BaseSeq {
+		return Line{}, false
+	}
+	if i := seq - c.Header.BaseSeq - 1; i < uint64(len(c.Lines)) {
+		return c.Lines[i], true
+	}
+	return Line{}, false
 }
 
 // Behind reports whether a store whose committed head is head may lack a
