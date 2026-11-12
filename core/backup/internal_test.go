@@ -212,3 +212,44 @@ func TestWriteArchiveRefusesAnInputThatChanged(t *testing.T) {
 		t.Fatal("an existing .partial was removed or rewritten")
 	}
 }
+
+// Everything core/backup creates is private from creation: the run directory and
+// the directories made in it are 0700, its files and a sidecar's temp file 0600,
+// whatever the process umask (the run directory holds a checkpoint of the store).
+func TestRunDirAndAtomicFilesAreCreatedPrivate(t *testing.T) {
+	root := t.TempDir()
+	rd, err := newRunDir(filepath.Join(root, "run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rd.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	w, err := rd.Create("db/000001.sst", 0o644) // the mode asked for is ignored
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	side := filepath.Join(root, "arkham.tar.gz.sha256")
+	if err := writeFileAtomic(side, []byte("0123")); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{
+		rd.path:                                 0o700,
+		filepath.Join(rd.path, "db"):            0o700,
+		filepath.Join(rd.path, "db/000001.sst"): 0o600,
+		side:                                    0o600,
+	} {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %04o, want %04o", filepath.Base(path), got, want)
+		}
+	}
+}
