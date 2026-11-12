@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 // Repairs-lane fixer "duplicate-copies": merge whole copies of one book that
 // live as separate books, so a chapter fragment that matches every copy has a
@@ -460,9 +460,9 @@ type dcParams struct {
 	BookIDs []string `json:"book_ids,omitempty"`
 }
 
-func (f *duplicateCopiesFixer) stores() (OpsStore, FragmentRepairReader, error) {
-	store := f.p.deps.OpsStore()
-	hist := f.p.deps.FragmentRepairReader()
+func (f *duplicateCopiesFixer) storesVia(st FixerStores) (OpsStore, FragmentRepairReader, error) {
+	store := st.OpsStore()
+	hist := st.FragmentRepairReader()
 	if store == nil || hist == nil {
 		return nil, nil, fmt.Errorf("database not initialized")
 	}
@@ -624,17 +624,18 @@ type dcPlan struct {
 
 // Plan reads the library once and judges every seeded pair.
 func (f *duplicateCopiesFixer) Plan(ctx context.Context, raw json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
+	st := f.p.fixerStores(ctx)
 	var params dcParams
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return nil, fmt.Errorf("%s: invalid params: %w", dcFixerID, err)
 		}
 	}
-	store, _, err := f.stores()
+	store, _, err := f.storesVia(st)
 	if err != nil {
 		return nil, err
 	}
-	notDup, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store, nil)
+	notDup, err := dcOwnerVerdicts(st.DedupVerdictReader(), store, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -865,7 +866,7 @@ func (f *duplicateCopiesFixer) rowsFor(ctx context.Context, rep registry.Reporte
 	var read atomic.Int64
 	if err := registry.RunItems(ctx, rep, fbIndexes(len(ids)), func(_ context.Context, i int) error {
 		defer read.Add(1)
-		return f.detail(store, run, run.books[ids[i]])
+		return f.detailVia(f.p.fixerStores(ctx), store, run, run.books[ids[i]])
 	}, registry.RunItemsOptions{
 		Concurrency: runtime.NumCPU(),
 		ErrMode:     registry.ErrModeCollect,
@@ -895,7 +896,7 @@ func (f *duplicateCopiesFixer) rowsFor(ctx context.Context, rep registry.Reporte
 
 // detail reads one book's on-disk and per-book state. Failures to read are
 // recorded as doubt (the row is then skipped), never guessed.
-func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) error {
+func (f *duplicateCopiesFixer) detailVia(st FixerStores, store OpsStore, run *dcRun, b *dcBook) error {
 	id := b.Core.ID
 	b.detailed = true
 	b.Present = map[string]bool{}
@@ -947,7 +948,7 @@ func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) err
 			b.Manual = w
 		}
 	}
-	if tr := f.p.deps.BookTagReader(); tr != nil {
+	if tr := st.BookTagReader(); tr != nil {
 		tags, terr := tr.GetBookTagsDetailed(id)
 		if terr != nil {
 			b.Doubt = fmt.Sprintf("tags of %s unreadable: %v", id, terr)
@@ -969,7 +970,7 @@ func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) err
 	} else {
 		b.Doubt = "tag store unavailable"
 	}
-	if um := f.p.deps.MergeUserStateStore(); um != nil {
+	if um := st.MergeUserStateStore(); um != nil {
 		has, perr := merge.BookHasUserProgress(um, id)
 		if perr != nil {
 			b.Doubt = fmt.Sprintf("listening progress of %s unreadable: %v", id, perr)
@@ -988,6 +989,11 @@ func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) err
 	}
 	b.Signals = s
 	return nil
+}
+
+// kept for the fixer's tests, which call it with no shell
+func (f *duplicateCopiesFixer) detail(store OpsStore, run *dcRun, b *dcBook) error {
+	return f.detailVia(f.p.fixerStores(context.Background()), store, run, b)
 }
 
 // dcQuiet is the reporter of a Replan's pools: there is no operation to
@@ -1658,7 +1664,7 @@ func (f *duplicateCopiesFixer) Replan(ctx context.Context, _ json.RawMessage, pl
 	if err := json.Unmarshal(planned.State, &st); err != nil || len(st.Members) == 0 {
 		return changedRow(planned, "the plan carries no stored members; plan again"), nil
 	}
-	store, _, err := f.stores()
+	store, _, err := f.storesVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -1757,7 +1763,7 @@ func (f *duplicateCopiesFixer) Replan(ctx context.Context, _ json.RawMessage, pl
 		loaded = append(loaded, id)
 	}
 	sort.Strings(loaded)
-	notDup, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store, loaded)
+	notDup, err := dcOwnerVerdicts(f.p.fixerStores(ctx).DedupVerdictReader(), store, loaded)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -1792,7 +1798,8 @@ func dcMoveRow(lib *fbLib, id, from, to string) {
 // the fingerprint, elect each led version group's heir (refusing before any
 // write), repoint, fold, hand off primacy, then retire every loser.
 func (f *duplicateCopiesFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
-	store, _, err := f.stores()
+	st := f.p.fixerStores(ctx)
+	store, _, err := f.storesVia(st)
 	if err != nil {
 		return err
 	}
@@ -1890,7 +1897,7 @@ func (f *duplicateCopiesFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		// itunesWouldBeWritten just checked the group, but the crown asks
 		// again under its group lock about exactly the members it writes,
 		// so a flag that changed in between is refused, never written.
-		did, err := f.fb.handOff(store, w, plan.Losers, gid, heirs[gid], itunesguard.MayWrite(store, gid))
+		did, err := f.fb.handOffVia(st, store, w, plan.Losers, gid, heirs[gid], itunesguard.MayWrite(store, gid))
 		steps += did
 		if err != nil {
 			return partial(err)

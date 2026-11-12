@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 0583655e-5bf4-4704-8046-c880bf7522b6
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -118,7 +118,8 @@ type lostCandidateInput struct {
 // Plan lists every live, unapplied book whose latest fetch matched and whose
 // candidate cache is empty now.
 func (f *lostCandidatesFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store, cache := f.p.deps.OpsStore(), f.p.deps.MetadataCacheStore()
+	st := f.p.fixerStores(ctx)
+	store, cache := st.OpsStore(), st.MetadataCacheStore()
 	if store == nil || cache == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -185,8 +186,9 @@ func (f *lostCandidatesFixer) Plan(ctx context.Context, _ json.RawMessage, rep r
 // Replan re-reads the book, its latest outcome and its cache row. A book that
 // was applied, refetched or deleted since comes back skipped with a different
 // fingerprint (changed_since_plan).
-func (f *lostCandidatesFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store, cache := f.p.deps.OpsStore(), f.p.deps.MetadataCacheStore()
+func (f *lostCandidatesFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	st := f.p.fixerStores(ctx)
+	store, cache := st.OpsStore(), st.MetadataCacheStore()
 	if store == nil || cache == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}

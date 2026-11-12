@@ -1,5 +1,5 @@
 // file: internal/repairs/kinds_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7d2e9a40-5c1b-4f86-b3a7-0e4d8c6a1f52
 // last-edited: 2026-11-12
 
@@ -114,8 +114,6 @@ func testScopes(atom auth.Permission) ([]rbac.Permission, bool) {
 	}
 	return nil, false
 }
-
-type kitStoresKey struct{}
 
 // kit is one fixer's definition callbacks over a test store.
 type kit struct {
@@ -1242,7 +1240,7 @@ func TestRepairsKinds_RegistryKindsFollowTheLaneOrder(t *testing.T) {
 }
 
 func TestRepairsKinds_StoresRoundTripByType(t *testing.T) {
-	type other struct{ n int }
+	type other struct{}
 	ctx := WithStores(context.Background(), "shell")
 	got, ok := StoresFrom[string](ctx)
 	require.True(t, ok)
@@ -1251,7 +1249,8 @@ func TestRepairsKinds_StoresRoundTripByType(t *testing.T) {
 	require.False(t, ok, "another type's stores are absent, never converted")
 	_, ok = StoresFrom[string](context.Background())
 	require.False(t, ok)
-	_, ok = StoresFrom[string](nil) //nolint:staticcheck // a nil context is the case under test
+	//lint:ignore SA1012 a nil context is the case under test
+	_, ok = StoresFrom[string](nil)
 	require.False(t, ok)
 	var none fmt.Stringer
 	_, ok = StoresFrom[fmt.Stringer](WithStores(context.Background(), none))
@@ -1288,4 +1287,119 @@ func TestRcReporter_RunAndItem(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
+}
+
+// A re-plan that holds the row, with the same fingerprint, is not applied: the
+// row is no longer applicable, whatever else it says.
+type holdingFixer struct {
+	*trimFixer
+	hold atomic.Bool
+}
+
+func (f *holdingFixer) ID() string { return "holding" }
+func (f *holdingFixer) Replan(ctx context.Context, p json.RawMessage, planned Row, rep registry.Reporter) (Row, error) {
+	r, err := f.trimFixer.Replan(ctx, p, planned, rep)
+	if f.hold.Load() {
+		r.Skipped, r.SkipReason = "now_held", "a hold appeared"
+	}
+	return r, err
+}
+
+func TestRepairsKinds_ReplanHoldWithSameFingerprintIsNotApplied(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	f := &holdingFixer{trimFixer: &trimFixer{s: s}}
+	kt := newKit(t, s, f)
+	kt.plan(context.Background())
+	f.hold.Store(true)
+	res := kt.apply(context.Background(), []string{"b1"})
+	require.Empty(t, res.Applied)
+	require.Empty(t, kt.w.writes)
+	require.Equal(t, " One ", s.title("b1"))
+}
+
+// The follow-up gets the books sorted and unique whatever order the rows were
+// applied in.
+func TestRepairsKinds_FollowUpBooksAreSortedAndUnique(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	f := &probeFixer{trimFixer: &trimFixer{s: s}}
+	kt := newKit(t, s, f)
+	rows := kt.plan(context.Background())
+	require.NotEmpty(t, rows)
+	kt.rows.mu.Lock()
+	// Two rows naming overlapping books.
+	for id, books := range map[string][]string{"b2": {"b9", "b2"}, "b1": {"b1", "b9"}} {
+		r := Row{RowID: id, BookIDs: books}
+		mapped, err := PlanRowOf(r)
+		require.NoError(t, err)
+		kt.rows.rows[id] = mapped
+	}
+	kt.rows.mu.Unlock()
+	rc := taskstest.NewFakeRun(context.Background(), kt.kind()).RC()
+	require.NoError(t, kt.k.afterApply(rc, []string{"b2", "b1"}))
+	require.Equal(t, []string{"b1", "b2", "b9"}, f.afterIDs)
+}
+
+func TestRepairsKinds_CandidatesAreSortedByRowID(t *testing.T) {
+	s := newMemStore()
+	for i := 20; i > 0; i-- {
+		s.add(fmt.Sprintf("s%02d", i), " Alfred ", fmt.Sprintf("/lib/Bat/S%02d/s.m4b", i), nil)
+	}
+	kt := newKit(t, s, &trimFixer{s: s})
+	rc := taskstest.NewFakeRun(context.Background(), kt.kind()).RC()
+	src, err := kt.k.candidates(rc, nil)
+	require.NoError(t, err)
+	ids := make([]string, len(src.Items))
+	for i, c := range src.Items {
+		ids[i] = c.row.RowID
+		require.Equal(t, c.row.RowID, src.Key(c))
+	}
+	require.True(t, slices.IsSorted(ids), "the plan's candidates are in row id order: %v", ids)
+	require.Equal(t, tasks.Snapshot, src.Order)
+}
+
+// Every permission a fixer names must resolve: one that does not leaves the
+// kind unregistrable even when the others do, so it is never gated by less
+// than HEAD gates it.
+type twoAtomFixer struct{ *trimFixer }
+
+func (f *twoAtomFixer) ID() string { return "two-atoms" }
+func (f *twoAtomFixer) RequiredPermissions() []auth.Permission {
+	return []auth.Permission{auth.PermLibraryEditMetadata, "nobody.has.this"}
+}
+
+func TestRepairsKinds_OneUnresolvedPermissionAmongSeveralFailsClosed(t *testing.T) {
+	s := newMemStore()
+	defs := Kinds([]Fixer{&twoAtomFixer{&trimFixer{s: s}}}, KindDeps{Guard: s, Scopes: testScopes})
+	require.NotEmpty(t, tasks.Problems(defs[0]))
+}
+
+// A run state whose build failed is not kept: the next attempt of the run
+// (same run id) builds it again.
+func TestRepairsKinds_FailedRunStateIsNotKept(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	var fail atomic.Bool
+	fail.Store(true)
+	k := newKind(&trimFixer{s: s}, KindDeps{Guard: s, PlanRows: &fakePlanRows{},
+		NewWriter: func(context.Context, tasks.RunID, Fixer) (*Writer, error) {
+			if fail.Load() {
+				return nil, errors.New("store closed")
+			}
+			return NewWriter(s, s, "trim-titles", "bulk_update", "rp-"), nil
+		}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rc := taskstest.NewFakeRun(ctx, "books.repairs.trim-titles").RC()
+	_, err := k.runState(rc)
+	require.ErrorContains(t, err, "store closed")
+	fail.Store(false)
+	rs, err := k.runState(rc)
+	require.NoError(t, err, "the failed build is not remembered")
+	require.NotNil(t, rs.writer)
+	// And the same state is shared by every row of the run.
+	again, err := k.runState(rc)
+	require.NoError(t, err)
+	require.Same(t, rs, again)
 }

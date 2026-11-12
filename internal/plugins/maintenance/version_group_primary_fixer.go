@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 2c7e5a19-8b43-4f06-9d21-4e8b0c6a3f75
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -107,7 +107,7 @@ func (f *vgPrimaryFixer) Plan(ctx context.Context, raw json.RawMessage, rep regi
 		return nil, err
 	}
 	prober := f.prober(func(msg string) { _ = rep.Log(slog.LevelWarn, msg) })
-	report, err := f.p.versionGroupPrimaryRepair(ctx, vgPrimaryRepairParams{
+	report, err := f.p.withFixerStores(f.p.fixerStores(ctx)).versionGroupPrimaryRepair(ctx, vgPrimaryRepairParams{
 		GroupIDs: fp.GroupIDs, Limit: fp.Limit, noDetailCap: true,
 	}, config.AppConfig.RootDir, prober, rep)
 	if err != nil {
@@ -115,7 +115,7 @@ func (f *vgPrimaryFixer) Plan(ctx context.Context, raw json.RawMessage, rep regi
 	}
 	rows := make([]repairs.Row, 0, len(report.Groups))
 	for i := range report.Groups {
-		r := f.row(&report.Groups[i])
+		r := f.rowVia(f.p.fixerStores(ctx), &report.Groups[i])
 		// Detail carries a group from Replan to Apply; a stored plan never
 		// needs it, and dropping it lets each group's member rows go.
 		r.Detail = nil
@@ -126,8 +126,9 @@ func (f *vgPrimaryFixer) Plan(ctx context.Context, raw json.RawMessage, rep regi
 
 // Replan plans one group now, as the op's per-group planner would.
 func (f *vgPrimaryFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, rep registry.Reporter) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
-	vps := f.p.deps.VersionPrimaryStore()
+	st := f.p.fixerStores(ctx)
+	store := st.OpsStore()
+	vps := st.VersionPrimaryStore()
 	if store == nil || vps == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
@@ -139,7 +140,7 @@ func (f *vgPrimaryFixer) Replan(ctx context.Context, _ json.RawMessage, planned 
 	loader := versionprimary.Loader{Files: store, Chapters: vps, RootDir: config.AppConfig.RootDir,
 		Probe: f.prober(func(msg string) { _ = rep.Log(slog.LevelWarn, msg) })}
 	g := a.planGroup(ctx, loader, planned.RowID)
-	r := f.row(&g)
+	r := f.rowVia(st, &g)
 	if r.Fingerprint != planned.Fingerprint {
 		if n, ok := f.resumesOwnWrite(store, planned, &g); ok {
 			// The group differs from the plan only by writes this fixer made
@@ -154,7 +155,7 @@ func (f *vgPrimaryFixer) Replan(ctx context.Context, _ json.RawMessage, planned 
 }
 
 // Apply writes one fresh group through the op's writer.
-func (f *vgPrimaryFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *vgPrimaryFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	g, ok := fresh.Detail.(*vgRepairGroupReport)
 	if !ok || g == nil {
 		return fmt.Errorf("%s: row %s carries no group plan", vgPrimaryFixerID, fresh.RowID)
@@ -162,7 +163,7 @@ func (f *vgPrimaryFixer) Apply(_ context.Context, w *repairs.Writer, fresh repai
 	if !vgWritable(g.Kind) || g.Error != "" {
 		return fmt.Errorf("%s: group %s is not writable (%s)", vgPrimaryFixerID, g.GroupID, g.Kind)
 	}
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -215,7 +216,7 @@ func (f *vgPrimaryFixer) series(store OpsStore) (map[int]string, error) {
 }
 
 // row turns one group report into a Repairs row.
-func (f *vgPrimaryFixer) row(g *vgRepairGroupReport) repairs.Row {
+func (f *vgPrimaryFixer) rowVia(st FixerStores, g *vgRepairGroupReport) repairs.Row {
 	r := repairs.Row{RowID: g.GroupID, Risk: repairs.RiskLow, Detail: g, Fingerprint: vgFingerprint(g)}
 	var primaries []string
 	byID := map[string]*database.Book{}
@@ -237,7 +238,7 @@ func (f *vgPrimaryFixer) row(g *vgRepairGroupReport) repairs.Row {
 	}
 	if show != nil {
 		r.Title = show.Title
-		r.Author = f.authorName(show)
+		r.Author = f.authorNameVia(st, show)
 	}
 	r.Current = map[string]string{
 		"primaries":           strings.Join(primaries, ", "),
@@ -285,11 +286,11 @@ func (f *vgPrimaryFixer) row(g *vgRepairGroupReport) repairs.Row {
 	return r
 }
 
-func (f *vgPrimaryFixer) authorName(b *database.Book) string {
+func (f *vgPrimaryFixer) authorNameVia(st FixerStores, b *database.Book) string {
 	if b.AuthorID == nil {
 		return ""
 	}
-	store := f.p.deps.OpsStore()
+	store := st.OpsStore()
 	if store == nil {
 		return ""
 	}

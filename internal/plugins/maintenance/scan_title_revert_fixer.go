@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/scan_title_revert_fixer.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: beeafd36-1bf8-48f8-b62c-bd5e1be4135c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -179,7 +179,8 @@ func parseSTRParams(raw json.RawMessage) (strParams, error) {
 
 // Plan builds one row per listed book.
 func (f *scanTitleRevertFixer) Plan(ctx context.Context, raw json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	if f.p.deps == nil || f.p.deps.OpsStore() == nil {
+	st := f.p.fixerStores(ctx)
+	if st == nil || st.OpsStore() == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
 	params, err := parseSTRParams(raw)
@@ -191,7 +192,7 @@ func (f *scanTitleRevertFixer) Plan(ctx context.Context, raw json.RawMessage, re
 	// Each worker writes only rows[i] for its own i; the ids are unique.
 	runErr := registry.RunItems(ctx, rep, indexesOf(len(params.ids)), func(_ context.Context, i int) error {
 		defer done.Add(1)
-		rows[i] = f.rowOrError(params.ids[i], params)
+		rows[i] = f.rowOrErrorVia(st, params.ids[i], params)
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: titleRepairWorkers(),
@@ -209,8 +210,8 @@ func (f *scanTitleRevertFixer) Plan(ctx context.Context, raw json.RawMessage, re
 }
 
 // rowOrError is evaluate, with a read failure listed as an "error" row.
-func (f *scanTitleRevertFixer) rowOrError(id string, params strParams) repairs.Row {
-	r, err := f.evaluate(id, params)
+func (f *scanTitleRevertFixer) rowOrErrorVia(st FixerStores, id string, params strParams) repairs.Row {
+	r, err := f.evaluateVia(st, id, params)
 	if err != nil {
 		r = repairs.Row{RowID: id, BookIDs: []string{id}, Skipped: "error", SkipReason: err.Error(),
 			Reason: err.Error(), Risk: repairs.RiskReview}
@@ -220,15 +221,16 @@ func (f *scanTitleRevertFixer) rowOrError(id string, params strParams) repairs.R
 }
 
 // Replan re-reads the book and its snapshots with the plan's own params.
-func (f *scanTitleRevertFixer) Replan(_ context.Context, raw json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	if f.p.deps == nil || f.p.deps.OpsStore() == nil {
+func (f *scanTitleRevertFixer) Replan(ctx context.Context, raw json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	st := f.p.fixerStores(ctx)
+	if st == nil || st.OpsStore() == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
 	params, err := parseSTRParams(raw)
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	return f.evaluate(planned.RowID, params)
+	return f.evaluateVia(st, planned.RowID, params)
 }
 
 // strDecision is what Apply writes for one row: the title it expects to find
@@ -343,8 +345,8 @@ func strTitleLock(store OpsStore, bookID string) (bool, string, error) {
 // evaluate builds the row of one listed book. Plan and Replan both call it,
 // so a row planned and re-planned from the same state carry the same
 // fingerprint.
-func (f *scanTitleRevertFixer) evaluate(id string, params strParams) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *scanTitleRevertFixer) evaluateVia(st FixerStores, id string, params strParams) (repairs.Row, error) {
+	store := st.OpsStore()
 	r := repairs.Row{RowID: id, BookIDs: []string{id}, Risk: repairs.RiskLow}
 	if params.SourceOpID != "" {
 		r.Evidence = append(r.Evidence, "source operation "+params.SourceOpID)
@@ -471,12 +473,12 @@ func strFingerprint(r repairs.Row, extra string) string {
 // happened is the ledger-before-write bug class; a journal failure after the
 // write is reported partially_applied, and "undo last apply" still restores
 // the book from its history row.
-func (f *scanTitleRevertFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *scanTitleRevertFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*strDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", scanTitleRevertFixerID, fresh.RowID)
 	}
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	changed, err := w.Modify(d.bookID, func(cur *database.Book) error {
 		if cur.Title != d.current {
 			return fmt.Errorf("%w: title is now %q", repairs.ErrChangedSincePlan, cur.Title)

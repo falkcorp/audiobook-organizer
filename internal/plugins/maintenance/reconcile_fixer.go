@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile_fixer.go
-// version: 2.10.1
+// version: 2.11.0
 // guid: 4e4de696-418a-4936-9e25-23a68ff19562
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -256,8 +256,8 @@ type rmReader interface {
 // reader returns the store evaluate reads. Production's OpsStore() is the
 // server's database.Store, which satisfies rmReader (asserted at compile time
 // in reconcile_fixer_test.go). A store that does not refuses the fixer.
-func (f *reconcileFixer) reader() (rmReader, error) {
-	store := f.p.deps.OpsStore()
+func (f *reconcileFixer) readerVia(st FixerStores) (rmReader, error) {
+	store := st.OpsStore()
 	if store == nil {
 		return nil, errors.New("database not initialized")
 	}
@@ -266,6 +266,11 @@ func (f *reconcileFixer) reader() (rmReader, error) {
 		return nil, fmt.Errorf("%s: store %T cannot tell who holds a file path; refusing", reconcileFixerID, store)
 	}
 	return rd, nil
+}
+
+// kept for the fixer's tests, which call it with no shell
+func (f *reconcileFixer) reader() (rmReader, error) {
+	return f.readerVia(f.p.fixerStores(context.Background()))
 }
 
 // rmCandidates turns a scan into one candidate per book: its matches, then
@@ -346,7 +351,7 @@ func (f *reconcileFixer) Plan(ctx context.Context, _ json.RawMessage, rep regist
 		}
 		return nil, fmt.Errorf("%s: %s", reconcileFixerID, msg)
 	}
-	rd, err := f.reader()
+	rd, err := f.readerVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +404,7 @@ func (f *reconcileFixer) Replan(ctx context.Context, _ json.RawMessage, planned 
 	if err := json.Unmarshal(planned.State, &c); err != nil {
 		return repairs.Row{}, fmt.Errorf("%s: row %s: unreadable plan state: %w", reconcileFixerID, planned.RowID, err)
 	}
-	rd, err := f.reader()
+	rd, err := f.readerVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -879,12 +884,12 @@ func rmErrorRow(c rmCandidate, err error) repairs.Row {
 // (see APPLY on reconcileFixer). It re-reads, right before writing, what a
 // write could otherwise get wrong between the re-plan and now; every refusal
 // before the first write leaves nothing written.
-func (f *reconcileFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *reconcileFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*rmDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no match", reconcileFixerID, fresh.RowID)
 	}
-	rd, err := f.reader()
+	rd, err := f.readerVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return err
 	}

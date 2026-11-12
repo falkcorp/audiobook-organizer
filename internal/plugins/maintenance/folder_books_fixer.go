@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.28.2
+// version: 2.29.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 // Repairs-lane fixer "folder-books": retire book rows that are really whole
 // author, series or library folders, and give each file only such a row held a
@@ -1627,9 +1627,9 @@ func decodeFBParams(raw json.RawMessage) (fbParams, error) {
 	return p, nil
 }
 
-func (f *folderBooksFixer) store() (OpsStore, FragmentRepairReader, error) {
-	store := f.p.deps.OpsStore()
-	hist := f.p.deps.FragmentRepairReader()
+func (f *folderBooksFixer) storeVia(st FixerStores) (OpsStore, FragmentRepairReader, error) {
+	store := st.OpsStore()
+	hist := st.FragmentRepairReader()
 	if store == nil || hist == nil {
 		return nil, nil, fmt.Errorf("database not initialized")
 	}
@@ -1715,11 +1715,12 @@ func (p *fbPlan) link(key string) *fbLink {
 // Plan evaluates every candidate on a bounded pool and builds one row per
 // set of folder-books sharing a file set, also on a bounded pool.
 func (f *folderBooksFixer) Plan(ctx context.Context, raw json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
+	st := f.p.fixerStores(ctx)
 	params, err := decodeFBParams(raw)
 	if err != nil {
 		return nil, err
 	}
-	store, _, err := f.store()
+	store, _, err := f.storeVia(st)
 	if err != nil {
 		return nil, err
 	}
@@ -1773,7 +1774,7 @@ func (f *folderBooksFixer) Plan(ctx context.Context, raw json.RawMessage, rep re
 	// buildRow's own reads (external ids, listening progress) are point reads.
 	if err := registry.RunItems(ctx, rep, fbIndexes(len(groups)), func(_ context.Context, i int) error {
 		defer built.Add(1)
-		rows[i] = f.buildRow(lib, store, ev, groups[i], nil)
+		rows[i] = f.buildRowVia(st, lib, store, ev, groups[i], nil)
 		if rows[i].Skipped == fbSkipCutOffLive {
 			// A live book of this row's own cut-off apply holds files the
 			// shared library counts as proper: plan the row as Apply will see
@@ -1888,7 +1889,7 @@ func fbPrimary(b database.BookCore) bool { return b.IsPrimaryVersion == nil || *
 // buildRow classifies every path of the row and decides what apply writes.
 // carried is the plan's state on a Replan (nil on Plan, which decides the
 // duplicate-title verdict from lib.titles).
-func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fbEval, members []string, carried *fbState) repairs.Row {
+func (f *folderBooksFixer) buildRowVia(st FixerStores, lib *fbLib, store OpsStore, ev map[string]fbEval, members []string, carried *fbState) repairs.Row {
 	lead := ev[members[0]]
 	head := lib.books[members[0]]
 	set := lib.sets[members[0]]
@@ -2365,14 +2366,14 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	if lead.BaseTier != lead.Tier {
 		fp = append(fp, "base="+lead.BaseTier)
 	}
-	st, err := json.Marshal(fbState{Members: members, DupTitles: dup, DupSingle: dupSingle, Links: plan.Links})
+	stateJSON, err := json.Marshal(fbState{Members: members, DupTitles: dup, DupSingle: dupSingle, Links: plan.Links})
 	if err != nil {
 		row.Skipped, row.SkipReason = fbSkipUnreadable, fmt.Sprintf("encode the row's state: %v", err)
 		// Unique per row like every other fingerprint, never a shared constant.
 		row.Fingerprint = "unencodable:" + fbRowID(members)
 		return row
 	}
-	row.State = st
+	row.State = stateJSON
 	row.Proposed = map[string]string{"held": strconv.Itoa(held), "held_by_folder_row": strconv.Itoa(byFolder),
 		"missing_orphans": strconv.Itoa(missingOrphans), "new_books": strconv.Itoa(len(plan.Groups)),
 		"retire": strings.Join(members, ",")}
@@ -2546,7 +2547,7 @@ func (f *folderBooksFixer) buildRow(lib *fbLib, store OpsStore, ev map[string]fb
 	// already: their store reads cannot change a row's skip kind (the first
 	// block wins), only whether an owner click may resolve what is left.
 	if fbAllOwnerOK(blocks) {
-		kind, why, ownerOK := f.refusal(lib, store, members)
+		kind, why, ownerOK := f.refusalVia(st, lib, store, members)
 		if kind != "" {
 			block(kind, why, ownerOK)
 		}
@@ -2745,8 +2746,8 @@ func fbFirst(s []string, n int) []string {
 // recoverable, and the new books start at 0. It never blocks a plain apply.
 // An iTunes id is a hard refusal and wins over progress on any member, so
 // every member is checked before progress is reported.
-func (f *folderBooksFixer) refusal(lib *fbLib, store OpsStore, members []string) (kind, why string, ownerOK bool) {
-	um := f.p.deps.MergeUserStateStore()
+func (f *folderBooksFixer) refusalVia(st FixerStores, lib *fbLib, store OpsStore, members []string) (kind, why string, ownerOK bool) {
+	um := st.MergeUserStateStore()
 	var withProgress []string
 	for _, m := range members {
 		b := lib.books[m]
@@ -2832,7 +2833,7 @@ func (f *folderBooksFixer) planWithoutOwn(ctx context.Context, store OpsStore, r
 	if got := fbRowID(members); got != rowID {
 		return repairs.Row{}, fmt.Errorf("row id %s is not the members' %s", rowID, got)
 	}
-	row := f.buildRow(lib, store, ev, members, nil)
+	row := f.buildRowVia(f.p.fixerStores(ctx), lib, store, ev, members, nil)
 	if !row.Applicable() && !row.OwnerApplicable {
 		return row, nil
 	}
@@ -2902,12 +2903,12 @@ func fbEvaluateAll(ctx context.Context, lib *fbLib) (map[string]fbEval, error) {
 }
 
 // Replan re-reads only the row's neighbourhood (loadPartial) and rebuilds it.
-func (f *folderBooksFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+func (f *folderBooksFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
 	var st fbState
 	if err := json.Unmarshal(planned.State, &st); err != nil || len(st.Members) == 0 {
 		return repairs.Row{}, fmt.Errorf("%s: row %s carries no members", fbFixerID, planned.RowID)
 	}
-	store, hist, err := f.store()
+	store, hist, err := f.storeVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -2960,7 +2961,7 @@ func (f *folderBooksFixer) Replan(_ context.Context, _ json.RawMessage, planned 
 	if fbRowID(members) != planned.RowID {
 		return gone("another folder-book with this file set now sorts first"), nil
 	}
-	return f.buildRow(lib, store, ev, members, &st), nil
+	return f.buildRowVia(f.p.fixerStores(ctx), lib, store, ev, members, &st), nil
 }
 
 // Apply writes one row under the merge lock: elect each version group's heir
@@ -2968,7 +2969,8 @@ func (f *folderBooksFixer) Replan(_ context.Context, _ json.RawMessage, planned 
 // orphan group's book, hand primacy to the heir, then retire every
 // folder-book.
 func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
-	store, _, err := f.store()
+	st := f.p.fixerStores(ctx)
+	store, _, err := f.storeVia(st)
 	if err != nil {
 		return err
 	}
@@ -3047,7 +3049,7 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	for _, gid := range gids {
 		// No iTunes guard: the owner cleared this fixer for the rows of
 		// books under books/itunes/** (2026-10-01; see handOff).
-		did, err := f.handOff(store, w, plan.Members, gid, heirs[gid], nil)
+		did, err := f.handOffVia(st, store, w, plan.Members, gid, heirs[gid], nil)
 		steps += did
 		if err != nil {
 			return partial(err)
@@ -3073,7 +3075,7 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 // notHeir, when set, keeps a member out of the election (the duplicate-copies
 // fixer never crowns an iTunes copy); nil lets every other member stand.
 func (f *folderBooksFixer) electHeirs(ctx context.Context, store OpsStore, members []string, notHeir func(id string) bool) (map[string]string, error) {
-	vps := f.p.deps.VersionPrimaryStore()
+	vps := f.p.fixerStores(ctx).VersionPrimaryStore()
 	heirs := map[string]string{}
 	for _, m := range members {
 		b, err := store.GetBookByID(m)
@@ -3132,8 +3134,8 @@ func (f *folderBooksFixer) electHeirs(ctx context.Context, store OpsStore, membe
 // itunesguard.MayWrite. The folder-books fixer passes nil: the owner cleared
 // it (2026-10-01, repairs.ITunesDatabaseOnly) to write the database rows of
 // books under books/itunes/**, primary flags included.
-func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []string, gid, heir string, mayWrite func(*database.Book) error) (int, error) {
-	vps := f.p.deps.VersionPrimaryStore()
+func (f *folderBooksFixer) handOffVia(st FixerStores, store OpsStore, w *repairs.Writer, members []string, gid, heir string, mayWrite func(*database.Book) error) (int, error) {
+	vps := st.VersionPrimaryStore()
 	if vps == nil {
 		return 0, errors.New("version-primary store unavailable")
 	}
@@ -3197,6 +3199,11 @@ func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []
 		}
 	}
 	return 1, nil
+}
+
+// kept for the fixer's tests, which call it with no shell
+func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []string, gid, heir string, mayWrite func(*database.Book) error) (int, error) {
+	return f.handOffVia(f.p.fixerStores(context.Background()), store, w, members, gid, heir, mayWrite)
 }
 
 // wroteFalseOf reports whether the hand-off res demoted id (wrote its

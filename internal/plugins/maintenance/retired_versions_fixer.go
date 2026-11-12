@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.9.2
+// version: 1.10.0
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -503,8 +503,9 @@ type retiredShared struct {
 // owner-manual check cannot see a Doctor Who book whose path does not say so,
 // so a failed read fails the run (the plan op does the same).
 func (f *retiredVersionsFixer) loadShared(ctx context.Context) (*retiredShared, error) {
-	ops := f.p.deps.OpsStore()
-	users := f.p.deps.MergeUserStateStore()
+	st := f.p.fixerStores(ctx)
+	ops := st.OpsStore()
+	users := st.MergeUserStateStore()
 	if ops == nil || users == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -512,7 +513,7 @@ func (f *retiredVersionsFixer) loadShared(ctx context.Context) (*retiredShared, 
 	if err != nil {
 		return nil, fmt.Errorf("%s: list series for the owner-manual check: %w", retiredVersionsFixerID, err)
 	}
-	journals := f.p.deps.CombineJournals()
+	journals := st.CombineJournals()
 	if journals == nil {
 		return nil, fmt.Errorf("%s: the combine journal cannot be read on this server; refusing to plan without it", retiredVersionsFixerID)
 	}
@@ -562,8 +563,9 @@ func (r *retiredRun) loadVetoes(ctx context.Context) error {
 // buildRun is the run without the owner's rejects loaded; newRunWithMinAge adds
 // the load.
 func (f *retiredVersionsFixer) buildRun(ctx context.Context, minAge time.Duration) (*retiredRun, error) {
-	ops := f.p.deps.OpsStore()
-	paths := f.p.deps.FragmentRepairReader()
+	st := f.p.fixerStores(ctx)
+	ops := st.OpsStore()
+	paths := st.FragmentRepairReader()
 	if ops == nil || paths == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -582,7 +584,7 @@ func (f *retiredVersionsFixer) buildRun(ctx context.Context, minAge time.Duratio
 	}
 	// The reader is handed over fresh and unloaded (OwnerVetoes); see loadVetoes
 	// for why each run loads its own.
-	vetoes := f.p.deps.OwnerVetoes()
+	vetoes := st.OwnerVetoes()
 	if vetoes == nil {
 		return nil, fmt.Errorf("%s: the owner's rejects cannot be read on this server; refusing to plan without them", retiredVersionsFixerID)
 	}
@@ -599,7 +601,7 @@ func (f *retiredVersionsFixer) buildRun(ctx context.Context, minAge time.Duratio
 		bound = 15 * time.Second
 	}
 	run := &retiredRun{f: f, store: ops, paths: paths, probe: sh.probe, vetoes: vetoes, journals: sh.journal,
-		resolver: repairs.NewPathResolver(), guard: ops, tags: f.p.repairsGuardTags(), series: sh.series,
+		resolver: repairs.NewPathResolver(), guard: ops, tags: f.p.withFixerStores(f.p.fixerStores(ctx)).repairsGuardTags(), series: sh.series,
 		minAge: minAge, now: now(), plans: &sh.plans,
 		stat: stat, bound: bound, maxAbandoned: retiredStatMaxAbandoned}
 	if sess != nil {

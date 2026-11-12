@@ -1,0 +1,7 @@
+### Added
+
+- repairs: every Repairs fixer is now also a native `tasks.Fixer` definition of kind `books.repairs.<fixer-id>`, dark (nothing registers them until the F5 flip, so the Repairs lane behaves exactly as before). `repairs.Kinds` / `Registry.Kinds` build the 22 definitions: the fixer's own `Plan` and `Replan` run unchanged, the framework guards (iTunes, Doctor Who / Big Finish / Torchwood, credits, tags) run inside the row evaluation and hold a row rather than drop it, an apply re-evaluates every row from a fresh `Replan` with every check `RunApply` makes and applies only a row whose fingerprint still matches the plan, each row is one gated write, and rows that share a book never apply at once. `repairs.PlanRowOf` is the one mapping from a repairs row to the executor's row, so the import of HEAD's stored plan rows at the flip reads the same bytes. The fixers take their stores from the shell through `FixerStores` instead of capturing them (F5-02).
+
+### Changed
+
+- repairs: `RunPlan`'s guard and settle steps are now helpers the native shell shares; HEAD's plan and apply behave as before (F5-02).

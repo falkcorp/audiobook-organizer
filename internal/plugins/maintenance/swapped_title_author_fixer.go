@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -180,8 +180,8 @@ type swapAuthorIndex struct {
 	names map[int]string
 }
 
-func (f *swappedTitleAuthorFixer) buildAuthorIndex() (*swapAuthorIndex, error) {
-	store := f.p.deps.OpsStore()
+func (f *swappedTitleAuthorFixer) buildAuthorIndexVia(st FixerStores) (*swapAuthorIndex, error) {
+	store := st.OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -199,13 +199,13 @@ func (f *swappedTitleAuthorFixer) buildAuthorIndex() (*swapAuthorIndex, error) {
 	return idx, nil
 }
 
-func (f *swappedTitleAuthorFixer) cachedAuthorIndex() (*swapAuthorIndex, error) {
+func (f *swappedTitleAuthorFixer) cachedAuthorIndexVia(st FixerStores) (*swapAuthorIndex, error) {
 	f.authMu.Lock()
 	defer f.authMu.Unlock()
 	if f.auth != nil && time.Since(f.authBuiltAt) < swapIndexTTL {
 		return f.auth, nil
 	}
-	idx, err := f.buildAuthorIndex()
+	idx, err := f.buildAuthorIndexVia(st)
 	if err != nil {
 		return nil, err
 	}
@@ -231,14 +231,15 @@ func (idx *swapAuthorIndex) variants(name string, exclude int) []database.Author
 // when it writes the title first): applicable when the provider also
 // recorded a usable author, held otherwise.
 func (f *swappedTitleAuthorFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	idx, cands, all, err := f.junk.buildJunkIndexSnapshot()
+	st := f.p.fixerStores(ctx)
+	idx, cands, all, err := f.junk.buildJunkIndexSnapshotVia(st)
 	if err != nil {
 		return nil, err
 	}
 	f.junk.idxMu.Lock()
 	f.junk.idx, f.junk.idxBuiltAt = idx, time.Now()
 	f.junk.idxMu.Unlock()
-	aidx, err := f.buildAuthorIndex()
+	aidx, err := f.buildAuthorIndexVia(st)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +258,7 @@ func (f *swappedTitleAuthorFixer) Plan(ctx context.Context, _ json.RawMessage, r
 	journal := newSwapOpJournalMemo()
 	runErr := registry.RunItems(ctx, rep, indexesOf(len(cands)), func(_ context.Context, i int) error {
 		defer done.Add(1)
-		r, swapped, err := f.evaluate(idx, aidx, journal, cands[i])
+		r, swapped, err := f.evaluateVia(st, idx, aidx, journal, cands[i])
 		if err != nil {
 			r = repairs.Row{RowID: cands[i].ID, BookIDs: []string{cands[i].ID}, Title: cands[i].Title,
 				Skipped: "error", SkipReason: err.Error(), Reason: err.Error(), Risk: repairs.RiskReview}
@@ -330,8 +331,9 @@ func swapAuthorOnlyCandidates(all []database.BookCore, aidx *swapAuthorIndex) []
 // skipped row whose fingerprint differs, so the engine reports
 // changed_since_plan, and a re-run of an interrupted apply passes over the
 // rows it already wrote.
-func (f *swappedTitleAuthorFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *swappedTitleAuthorFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	st := f.p.fixerStores(ctx)
+	store := st.OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
@@ -345,17 +347,17 @@ func (f *swappedTitleAuthorFixer) Replan(_ context.Context, _ json.RawMessage, p
 		r.Fingerprint = fingerprintStrings("gone", planned.RowID)
 		return r, nil
 	}
-	idx, err := f.junk.cachedIndex()
+	idx, err := f.junk.cachedIndexVia(st)
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	aidx, err := f.cachedAuthorIndex()
+	aidx, err := f.cachedAuthorIndexVia(st)
 	if err != nil {
 		return repairs.Row{}, err
 	}
 	// No journal memo: a re-plan reads the journal fresh (a row voided or
 	// reverted since the plan must be seen).
-	r, _, err := f.evaluate(idx, aidx, nil, b.Core())
+	r, _, err := f.evaluateVia(st, idx, aidx, nil, b.Core())
 	return r, err
 }
 
@@ -390,12 +392,12 @@ type swapDecision struct {
 // Nothing that another row's apply changes goes into the fingerprint: whether
 // an author with the provider's name already exists flips when a sibling row
 // creates it, so the fingerprint carries the names, never their ids.
-func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex, journal *swapOpJournalMemo, b database.BookCore) (repairs.Row, bool, error) {
-	store := f.p.deps.OpsStore()
+func (f *swappedTitleAuthorFixer) evaluateVia(st FixerStores, idx *junkIndex, aidx *swapAuthorIndex, journal *swapOpJournalMemo, b database.BookCore) (repairs.Row, bool, error) {
+	store := st.OpsStore()
 	if store == nil {
 		return repairs.Row{}, false, fmt.Errorf("database not initialized")
 	}
-	author := f.junk.authorName(idx, b.AuthorID)
+	author := f.junk.authorNameVia(st, idx, b.AuthorID)
 	oldAuthorID := 0
 	if b.AuthorID != nil {
 		oldAuthorID = *b.AuthorID
@@ -575,7 +577,7 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 	// the junk-title fixer's fragment check when its title was written, and
 	// its title is not junk, which is what that check reads.
 	if !authorOnly {
-		skip, why, err := f.junk.fragmentReason(idx, b, kind, "", paths)
+		skip, why, err := f.junk.fragmentReasonVia(st, idx, b, kind, "", paths)
 		if err != nil {
 			return repairs.Row{}, false, err
 		}
@@ -1184,12 +1186,13 @@ func swapAuthorNames(raw string) (names []string, skip, why string) {
 // again; the repair's author lock does not hold the row. Cut after the
 // credit move: author-only with creditsDone, whose apply sets the primary
 // only. Nothing is left that no plan lists.
-func (f *swappedTitleAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *swappedTitleAuthorFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
+	st := f.p.fixerStores(ctx)
 	d, ok := fresh.Detail.(*swapDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", swappedFixerID, fresh.RowID)
 	}
-	store := f.p.deps.OpsStore()
+	store := st.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -1222,7 +1225,7 @@ func (f *swappedTitleAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fr
 	if !sameCreditList(cur, d.credits) {
 		return fmt.Errorf("%w: book %s credits changed", repairs.ErrChangedSincePlan, id)
 	}
-	aidx, err := f.cachedAuthorIndex()
+	aidx, err := f.cachedAuthorIndexVia(st)
 	if err != nil {
 		return err
 	}

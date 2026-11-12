@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reparse_folder_names_fixer.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: ac1c25d1-3594-43f6-9254-90bf2ab0b284
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -155,7 +155,8 @@ type reparseDecision struct {
 
 // Plan lists every field row over every live book.
 func (f *reparseFolderNamesFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+	st := f.p.fixerStores(ctx)
+	store := st.OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -178,7 +179,7 @@ func (f *reparseFolderNamesFixer) Plan(ctx context.Context, _ json.RawMessage, r
 	// Each worker writes only perBook[i] for its own i; names is locked.
 	runErr := registry.RunItems(ctx, rep, indexesOf(len(books)), func(_ context.Context, i int) error {
 		defer done.Add(1)
-		rows, err := f.evaluate(books[i], names)
+		rows, err := f.evaluateVia(st, books[i], names)
 		if err != nil {
 			r := repairs.Row{RowID: books[i].ID, BookIDs: []string{books[i].ID}, Title: books[i].Title,
 				Skipped: "error", SkipReason: err.Error(), Reason: err.Error(), Risk: repairs.RiskReview}
@@ -204,8 +205,9 @@ func (f *reparseFolderNamesFixer) Plan(ctx context.Context, _ json.RawMessage, r
 
 // Replan re-reads the book and returns the row with the same id as a plan
 // made now would, or a skipped row when the field no longer qualifies.
-func (f *reparseFolderNamesFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *reparseFolderNamesFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	st := f.p.fixerStores(ctx)
+	store := st.OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
@@ -224,7 +226,7 @@ func (f *reparseFolderNamesFixer) Replan(_ context.Context, _ json.RawMessage, p
 	if names.ev, err = reparseEvidence(store); err != nil {
 		return repairs.Row{}, err
 	}
-	rows, err := f.evaluate(b.Core(), names)
+	rows, err := f.evaluateVia(st, b.Core(), names)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -241,8 +243,8 @@ func (f *reparseFolderNamesFixer) Replan(_ context.Context, _ json.RawMessage, p
 }
 
 // evaluate returns one row per field the new parse would rewrite on b.
-func (f *reparseFolderNamesFixer) evaluate(b database.BookCore, names *reparseNames) ([]repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *reparseFolderNamesFixer) evaluateVia(st FixerStores, b database.BookCore, names *reparseNames) ([]repairs.Row, error) {
+	store := st.OpsStore()
 	stored := reparseStored{Title: b.Title, Author: names.author(b.AuthorID), Series: names.series(b.SeriesID)}
 	if b.SeriesSequence != nil {
 		stored.Position = *b.SeriesSequence
@@ -305,12 +307,12 @@ func (f *reparseFolderNamesFixer) evaluate(b database.BookCore, names *reparseNa
 }
 
 // Apply writes one approved row.
-func (f *reparseFolderNamesFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *reparseFolderNamesFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*reparseDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", reparseFolderNamesFixerID, fresh.RowID)
 	}
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	switch d.change.Class {
 	case reparseClassTitle:
 		return writeTitleOnly(w, store, d.bookID, d.change.From, d.change.To)
