@@ -1,0 +1,20 @@
+# file: core/integrations/ai/testdata/series.golden
+# version: 1.0.0
+# guid: 9b2e5d70-3a84-4c16-8e0f-4d7a1c6b2f35
+# last-edited: 2026-11-12
+#
+# The "ai" scope's series (05-ai section 8): family<TAB>type<TAB>labels,
+# checked by metricstest.AssertSeries in TestAISeries_Golden. Histograms carry
+# no instance label (rule C5). Not here: the persisted usage ledger, the
+# monthly token cap and cost estimates, deferred by 05-ai section 11.
+mediacore_ai_audio_seconds_total	counter	capability,instance
+mediacore_ai_batch_jobs	gauge	state
+mediacore_ai_endpoint_benched	gauge	instance
+mediacore_ai_failovers_total	counter	capability,class,instance
+mediacore_ai_inflight	gauge	instance
+mediacore_ai_no_capable_total	counter	capability
+mediacore_ai_request_seconds	histogram	capability,kind
+mediacore_ai_requests_total	counter	capability,class,instance,model
+mediacore_ai_slot_wait_seconds	histogram	kind
+mediacore_ai_structured_repairs_total	counter	capability,result
+mediacore_ai_tokens_total	counter	capability,direction,instance,mode,model
