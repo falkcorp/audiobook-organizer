@@ -48,7 +48,9 @@ func testMigrationOver(t testing.TB, native NativeReader, legacy func() storage.
 	if err != nil {
 		t.Fatal(err)
 	}
-	viewer := []rbac.Permission{"core:self", "core:tasks.view", "core:metrics.read", "books:reading", "books:view"}
+	// The member set includes core:system.status, which no atom of the table
+	// names and which is not ambient: an empty-list key keeps it (the owner's set).
+	viewer := []rbac.Permission{"core:self", "core:tasks.view", "core:system.status", "core:metrics.read", "books:reading", "books:view"}
 	m, err := New(Config{
 		StepID: "books/identity-cutover",
 		Atoms: []AtomRow{
@@ -307,7 +309,7 @@ func TestKeyScopes(t *testing.T) {
 		{"admin owner, every atom: the same", all, []rbac.Permission{rbac.CoreAdmin}, with(append([]string{"core:admin"}, every...)...), nil},
 		{"admin owner, one atom: that atom's scopes only", []string{"library.view"}, []rbac.Permission{rbac.CoreAdmin}, with("books:view", "core:tasks.view"), nil},
 		{"admin owner, all but one atom: no core:admin", all[1:], []rbac.Permission{rbac.CoreAdmin}, with("books:edit", "core:roles.view", "core:users.manage", "books:fingerprint.worker"), nil},
-		{"viewer owner, empty list: the owner's set", nil, viewer, with("books:view", "core:tasks.view"), nil},
+		{"viewer owner, empty list: the owner's whole set, atoms or not", nil, viewer, with("books:view", "core:tasks.view", "core:system.status"), nil},
 		{"viewer owner, every atom: cut to the owner's set, never core:admin", all, viewer, with("books:view", "core:tasks.view"), nil},
 		{"editor owner, an atom the owner holds partly", []string{"library.edit_metadata", "users.manage"}, editor, with("books:edit"), nil},
 		{"viewer owner, a core-bound atom the owner lacks: ambient only", []string{"users.manage"}, viewer, with(), nil},

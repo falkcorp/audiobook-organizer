@@ -1,7 +1,7 @@
 // file: core/storage/preflight_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b88f1741-7844-41f6-9051-5428a480a207
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package storage
 
@@ -47,6 +47,12 @@ func TestCutoverBlockedErrorAndReport(t *testing.T) {
 	}
 	if !strings.Contains(lines[2], "blocked by 2 row(s)") || !strings.Contains(lines[2], "storage cutover-blockers") {
 		t.Errorf("last line = %s", lines[2])
+	}
+	// The command is an R2 offline command (05-storage 5S.3.13): it runs on the
+	// release that refused the upgrade, never on the pre-freeze one, which does
+	// not have it.
+	if !strings.Contains(lines[2], "on this release") || strings.Contains(lines[2], "pre-freeze") {
+		t.Errorf("the last line sends the operator to the wrong release: %s", lines[2])
 	}
 	if got := CutoverBlockerReport(nil); got != nil {
 		t.Errorf("an empty blocker list renders %q, want nothing", got)

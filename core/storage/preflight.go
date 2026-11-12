@@ -1,7 +1,7 @@
 // file: core/storage/preflight.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 17127bd3-ef79-4077-aaf5-aac159db016d
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package storage
 
@@ -77,7 +77,7 @@ func CutoverBlockerReport(blockers []CutoverBlocker) []string {
 		out = append(out, fmt.Sprintf("blocker: step=%s key=%s family=%s reason=%q fix=%q",
 			b.Step, printableKey(b.Key), b.Family, b.Reason, b.Fix))
 	}
-	out = append(out, fmt.Sprintf("the cutover is blocked by %d row(s): run `storage cutover-blockers` on the pre-freeze release to list, fix or delete them, then upgrade again", len(blockers)))
+	out = append(out, fmt.Sprintf("the cutover is blocked by %d row(s): run `storage cutover-blockers` on this release, with the service stopped, to list, fix or delete them, then start it again", len(blockers)))
 	return out
 }
 

@@ -368,6 +368,36 @@ func TestIdentityCutover_WorkerKeyStaysConfined(t *testing.T) {
 	}
 }
 
+// TestIdentityCutover_EmptyListKeyIsTheOwnersWholeSet (05-rbac 6.3): a key whose
+// scope list is empty (HEAD's "everything my owner may do") is imported with
+// its non-admin owner's whole role set, scopes no atom names included, plus the
+// ambient scopes, and never with core:admin.
+func TestIdentityCutover_EmptyListKeyIsTheOwnersWholeSet(t *testing.T) {
+	const kEmptyViewer = "01M7ZZZKEYEMPTYVIEWER00001"
+	r := newIDRig(t, "stage1", idRows(headKeyRows(kEmptyViewer, uBarbara, "mck-oracle-empty-0001", []string{}, "active")...))
+	snap, err := r.run(t)
+	if err != nil {
+		t.Fatalf("M3: %v\n%s", err, r.logs.String())
+	}
+	var viewer []rbac.Permission
+	for _, s := range idSeedRoles() {
+		if s.ID == "viewer" {
+			viewer = s.Permissions
+		}
+	}
+	got := scopeStrings(snap.Keys[kEmptyViewer].Key.Scopes)
+	want := withAmbientScopes(scopeStrings(viewer)...)
+	if !slices.Equal(got, want) {
+		t.Errorf("the viewer's empty-list key holds %v, want its owner's set and the ambient scopes %v", got, want)
+	}
+	if !slices.Contains(got, "core:system.status") {
+		t.Errorf("a scope no atom names but the owner holds (core:system.status) was dropped: %v", got)
+	}
+	if slices.Contains(got, string(rbac.CoreAdmin)) {
+		t.Errorf("a non-admin owner's key holds core:admin")
+	}
+}
+
 // TestUnknownAtom_ReportedNotGranted (05-rbac §6.3, SEC4-13): an atom outside
 // the table grants nothing and is reported by role ID or key ID; a role whose
 // every atom is unknown is quarantined with the entries naming it; a key whose

@@ -137,8 +137,8 @@ func runBlockersList(ctx context.Context, opts Options, mods []module.Module, ar
 		_, err = io.WriteString(stdout, "No blocking rows: the cutover preflight is clean.\n")
 		return err
 	}
-	// The report's own last line points at the pre-freeze release; this
-	// command runs on the cutover build, so only its blocker lines are used.
+	// The report's last line names this command; the operator is running it,
+	// so only the blocker lines are used and the line below says what is next.
 	lines := storage.CutoverBlockerReport(blockers)
 	var b strings.Builder
 	for i, bl := range blockers {
