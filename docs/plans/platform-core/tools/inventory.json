@@ -3245,10 +3245,11 @@
    "core/go.sum",
    "go.sum",
    "core/archtest/thirdparty_allow.txt",
-   "core/archtest/ai_sdk.go"
+   "core/archtest/ai_sdk.go",
+   "core/archtest/tasklint/core_test.go"
   ],
   "spec": "05-ai §3-§8, §10; 04 §8.1 F7, §8.5 F7 (dispatch.go cuts); 05-metrics §13 item 3 (AI rows)",
-  "notes": "Tier: the AI router and durable batch jobs, with secret origin rules. The adapter package is core/integrations/ai/openai, which 05-ai's NoAISDKOutsideAdapters archtest names; coretest.FakeAI lives in core/coretest/ai.go. Depends on F7-06 because both edit core/go.mod. 04 keys: F7 grow mediacore/integrations/ai; F7 create mediacore/integrations/ai/aitest; F7 create mediacore/integrations/ai/openai."
+  "notes": "Tier: the AI router and durable batch jobs, with secret origin rules. The adapter package is core/integrations/ai/openai, which 05-ai's NoAISDKOutsideAdapters archtest names; coretest.FakeAI lives in core/coretest/ai.go. Depends on F7-06 because both edit core/go.mod. core/archtest/tasklint/core_test.go gains one Constructors entry for BatchApplyTask (added at build, F2-11 owns the file). 04 keys: F7 grow mediacore/integrations/ai; F7 create mediacore/integrations/ai/aitest; F7 create mediacore/integrations/ai/openai."
  },
  {
   "id": "F7-08",

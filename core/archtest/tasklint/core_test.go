@@ -1,7 +1,7 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package tasklint_test
 
@@ -28,6 +28,7 @@ func TestTasklint_Core(t *testing.T) {
 			core + "/internal/scheduler.WindowDefinition",        // the kernel registers one per core.tasks.windows entry (F2-04, F2-16)
 			core + "/integrations/providerhttp.ReleaseHoldsTask", // the kernel registers it at P6 when the app sets InterimBackends.Holds (F2-11, F5-18)
 			core + "/integrations/ai.BatchPollTask",              // the same, for InterimBackends.Poll (F2-11, F5-18)
+			core + "/integrations/ai.BatchApplyTask",             // a module passes it to Registrar.Tasks in its Register, one per batch capability; core registers none (F7-03)
 			core + "/health/diagnostics.ExportTask",              // the same, for InterimBackends.Export (F2-11, F5-18)
 			core + "/internal/bleveindex.Engine.RebuildTask",     // dark until the kernel registers core.index.rebuild when it wires the index engine (F7-09); delete with the directive
 			core + "/library.TransferRecoverTask",                // the kernel registers it when core.library is wired (F2-16, F7; F7-06)
