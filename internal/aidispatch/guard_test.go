@@ -1,5 +1,5 @@
 // file: internal/aidispatch/guard_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 978462ae-b706-482d-b878-4b12387747d8
 // last-edited: 2026-11-12
 
@@ -102,8 +102,10 @@ const guardAllowlistCeiling = 14
 //     core enforces that itself: archtest.NoAISDKOutsideAdapters fails when any
 //     other core package imports openai-go, and fails when this directory stops
 //     importing it, so the exemption cannot go stale unnoticed. The exemption
-//     is the directory only (a trailing slash, see TestGuard_ExemptDirsAreExact):
-//     the rest of core/ stays under every rule here, so a raw .Chat.Completions
+//     is the directory subtree (a trailing slash and a prefix match, see
+//     TestGuard_ExemptDirsAreExact): the adapter's files and those of any
+//     subdirectory of it are exempt, a sibling such as openaix/ is not, and the
+//     rest of core/ stays under every rule here, so a raw .Chat.Completions
 //     call or an /api/tags literal anywhere else in core still fails.
 var guardExemptDirs = []string{
 	"internal/aidispatch/",
@@ -238,6 +240,7 @@ func TestGuard_ExemptDirsAreExact(t *testing.T) {
 		"internal/aidispatch/classify.go":              true,
 		"core/integrations/ai/openai/adapter.go":       true,
 		"core/integrations/ai/openai/batch.go":         true,
+		"core/integrations/ai/openai/internal/x.go":    true,  // the directory subtree, not just its own files
 		"core/integrations/ai/router.go":               false, // the router itself talks to Backend, not the SDK
 		"core/integrations/ai/openaix/adapter.go":      false, // a look-alike sibling, the trailing slash matters
 		"core/integrations/ai/openai.go":               false,

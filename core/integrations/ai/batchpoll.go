@@ -1,5 +1,5 @@
 // file: core/integrations/ai/batchpoll.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: dadc6b9e-28c7-46cd-825b-259db75f2454
 // last-edited: 2026-11-12
 
@@ -133,8 +133,17 @@ func (r *Router) setOpenCounts(open []StoredJob) {
 // (the apply run does, so one writer owns it). Every job write is a
 // compare-and-set from the state the poll read; a job that moved meanwhile is
 // skipped until the next pass. While core.integrations.disabled is set it makes
-// no remote call and changes no job. A job store that cannot be read fails the
-// poll with nothing staged.
+// no remote call and changes no job.
+//
+// A job row the store cannot read ends the listing there (JobStore.Open yields
+// the jobs before it, then the error). The poll still advances those jobs and
+// then returns the error: a partial list is safe to act on because every write
+// is a compare-and-set from the state read, and an unlisted job simply waits, so
+// one damaged row does not stop every job listed ahead of it. The jobs after it
+// in ID order are not listed, and so wait, until the row is repaired; the
+// batch_jobs gauge keeps its last complete value rather than report a partial
+// count. A store that yields nothing before its error fails the poll with
+// nothing staged.
 func (r *Router) PollBatches(rc *tasks.RC, _ BatchPollParams) (BatchPollResult, error) {
 	var res BatchPollResult
 	if r.isDisabled() {
@@ -145,13 +154,17 @@ func (r *Router) PollBatches(rc *tasks.RC, _ BatchPollParams) (BatchPollResult, 
 	}
 	ctx := rc.Context()
 	var open []StoredJob
+	var listErr error
 	for j, err := range r.jobs.Open(ctx) {
 		if err != nil {
-			return res, fmt.Errorf("ai: batch poll: list open jobs: %w", err)
+			listErr = fmt.Errorf("ai: batch poll: list open jobs: %w", err)
+			break
 		}
 		open = append(open, j)
 	}
-	r.setOpenCounts(open)
+	if listErr == nil {
+		r.setOpenCounts(open)
+	}
 	cfg := r.config()
 
 	var polled, staged, failed atomic.Int64
@@ -176,11 +189,11 @@ func (r *Router) PollBatches(rc *tasks.RC, _ BatchPollParams) (BatchPollResult, 
 		}, tasks.ItemsOptions[StoredJob]{OnError: tasks.Collect})
 	res = BatchPollResult{Polled: int(polled.Load()), ApplyStaged: int(staged.Load()), Failed: int(failed.Load())}
 	if err != nil {
-		return res, err
+		return res, errors.Join(listErr, err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	return res, errors.Join(errs...)
+	return res, errors.Join(append([]error{listErr}, errs...)...)
 }
 
 // pollOne advances one open job; it reports whether an apply run was staged and
