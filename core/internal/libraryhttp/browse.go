@@ -1,11 +1,12 @@
 // file: core/internal/libraryhttp/browse.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 969840c6-2d7a-4a37-85c0-43a9e1298b2f
 // last-edited: 2026-11-11
 
 package libraryhttp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -23,6 +24,12 @@ import (
 // the cost of a request is bounded whatever the size of the directory, and the
 // entries after the cap are not the alphabetically later ones.
 const maxEntries = 5000
+
+// maxExamined caps how many directory entries one listing LOOKS at, kept or not.
+// maxEntries bounds what is returned; without this a directory of millions of
+// plain files, none of them a directory, would be read to the end for a listing
+// that keeps nothing. Reaching it also answers truncated: true.
+const maxExamined = 100_000
 
 // dirReadChunk is how many entries one ReadDir call reads, so a directory of
 // millions of entries streams instead of being held whole.
@@ -129,7 +136,7 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, errors.New("libraryhttp: the root's files do not list"))
 		return
 	}
-	entries, truncated, err := readDirs(rd, root.Spec(), rel, maxEntries)
+	entries, truncated, err := readDirs(r.Context(), rd, root.Spec(), rel, maxEntries, maxExamined)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -140,14 +147,26 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 // readDirs streams the directories directly under rel (the directory d lists),
 // dirReadChunk entries at a time, keeping only what the picker shows: a real
 // directory (a symlink is not one, whatever it points at), not dot-prefixed, not
-// the root's AppDir or Quarantine area. It stops reading as soon as one more
-// than limit has been kept, and reports truncated, so the work is bounded by the
-// cap and not by the directory. The kept entries are sorted by name.
-func readDirs(d fs.ReadDirFile, spec library.RootSpec, rel string, limit int) (entries []dirEntry, truncated bool, err error) {
+// the root's AppDir or Quarantine area. Its work is bounded twice, so a request
+// costs the same whatever the directory holds: it stops as soon as one more than
+// limit entries have been kept, and as soon as more than examineLimit entries
+// have been looked at, kept or not, and either way reports truncated (the first
+// entries in the disk's own order, not the alphabetically first). It looks at ctx
+// between chunks, so a client that has gone stops the read. The kept entries
+// are sorted by name.
+func readDirs(ctx context.Context, d fs.ReadDirFile, spec library.RootSpec, rel string, limit, examineLimit int) (entries []dirEntry, truncated bool, err error) {
 	entries = []dirEntry{}
+	examined := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		ents, rerr := d.ReadDir(dirReadChunk)
 		for _, e := range ents {
+			if examined++; examined > examineLimit {
+				sortEntries(entries)
+				return entries, true, nil
+			}
 			name := e.Name()
 			// DirEntry.Type comes from the directory read without following
 			// links, so a symlink (to a directory or not) is not IsDir.

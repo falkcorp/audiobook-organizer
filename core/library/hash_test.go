@@ -1,5 +1,5 @@
 // file: core/library/hash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: efbd1161-5225-460f-a129-0d983b1cf9f2
 // last-edited: 2026-11-11
 
@@ -119,5 +119,32 @@ func TestHashThrottleAndCancel(t *testing.T) {
 	stop()
 	if _, err := r.m.Hash(dead, p); !errors.Is(err, context.Canceled) {
 		t.Errorf("Hash with a dead context = %v, want context.Canceled", err)
+	}
+}
+
+// Hash takes one of a fixed number of slots (the CPU count): callers fanning out
+// over a library queue behind the readers already running, and a caller whose
+// context ends while queued gives up without reading a byte.
+func TestHashIsBoundedByTheHashSlots(t *testing.T) {
+	r, _ := transferRig(t, rigOpts{})
+	p := r.put("books-library", "Gotham/01.m4b", "the bytes of chapter one")
+	slots := r.m.hashSlots
+	for range cap(slots.ch) {
+		if err := slots.acquire(ctxbg()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctxbg(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := r.m.Hash(ctx, p); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Hash with every slot taken = %v, want the context's deadline", err)
+	}
+	slots.release()
+	d, err := r.m.Hash(ctxbg(), p)
+	if err != nil || d.SHA256 != sum("the bytes of chapter one") {
+		t.Fatalf("Hash with a slot free = %+v, %v", d, err)
+	}
+	if len(slots.ch) != cap(slots.ch)-1 {
+		t.Errorf("Hash left %d slots taken, want %d (the ones this test holds)", len(slots.ch), cap(slots.ch)-1)
 	}
 }
