@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_unix.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7ec76d18-20c0-48f2-9a57-c01b4e75498f
 // last-edited: 2026-11-11
 
@@ -149,6 +149,93 @@ func DeviceOf(fi fs.FileInfo) (dev uint64, ok bool) {
 		return 0, false
 	}
 	return uint64(st.Dev), true
+}
+
+// Ancestry returns the identity of the directory f and of every directory above
+// it, nearest first, up to and including the one identified by stop. It walks
+// the descriptor itself with openat(fd, ".."), so the answer is about the
+// directory f really is and where it really lies, whatever names, symlinks or
+// swaps led to it; no name is resolved again. Any failure is an error and the
+// caller must treat it as "unknown": f is not a directory, a step fails, the
+// walk reaches the top of the filesystem without meeting stop (ErrNotUnder), or
+// it exceeds MaxAncestry.
+func Ancestry(f *os.File, stop ID) ([]ID, error) {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	var out []ID
+	var walkErr error
+	if err := rc.Control(func(u uintptr) {
+		cur, owned := int(u), false
+		defer func() {
+			if owned {
+				_ = unix.Close(cur)
+			}
+		}()
+		for range MaxAncestry {
+			var st unix.Stat_t
+			if e := retry(func() error { return unix.Fstat(cur, &st) }); e != nil {
+				walkErr = e
+				return
+			}
+			if st.Mode&unix.S_IFMT != unix.S_IFDIR {
+				walkErr = &os.PathError{Op: "ancestry", Path: f.Name(), Err: unix.ENOTDIR}
+				return
+			}
+			id := ID{Dev: uint64(st.Dev), Ino: uint64(st.Ino)}
+			if n := len(out); n > 0 && out[n-1] == id {
+				walkErr = fmt.Errorf("%w: reached the top of the filesystem", ErrNotUnder)
+				return
+			}
+			out = append(out, id)
+			if id == stop {
+				return
+			}
+			var parent int
+			if e := retry(func() error {
+				var oe error
+				parent, oe = unix.Openat(cur, "..", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+				return oe
+			}); e != nil {
+				walkErr = &os.PathError{Op: "ancestry", Path: f.Name(), Err: e}
+				return
+			}
+			if owned {
+				_ = unix.Close(cur)
+			}
+			cur, owned = parent, true
+		}
+		walkErr = fmt.Errorf("libfs: more than %d directories above %s", MaxAncestry, f.Name())
+	}); err != nil {
+		return nil, err
+	}
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	return out, nil
+}
+
+// OpenAt opens the single-component name in d for reading, relative to the
+// directory descriptor, never following a symlink in the name (the open fails
+// with ELOOP). flag must not create or write; O_NOFOLLOW and O_CLOEXEC are
+// added. The result is the file the directory d really holds under that name
+// at this instant.
+func OpenAt(d *Dir, name string, flag int) (*os.File, error) {
+	if err := errors.Join(require(d), checkName(name)); err != nil {
+		return nil, err
+	}
+	var nfd int
+	err := retry(func() error {
+		var oe error
+		nfd, oe = unix.Openat(fd(d), name, flag|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		return oe
+	})
+	runtime.KeepAlive(d)
+	if err != nil {
+		return nil, &os.PathError{Op: "openat", Path: name, Err: err}
+	}
+	return os.NewFile(uintptr(nfd), name), nil
 }
 
 // InodeOf is the inode of a file, with its device: the pair identifies a
