@@ -210,13 +210,13 @@ func TestModuleSurfaceHasNoCallerOrDriverHandle(t *testing.T) {
 			}
 			return reaches(ty.Elem(), seen)
 		case reflect.Func:
-			for i := range ty.NumIn() {
-				if b, ok := reaches(ty.In(i), seen); ok {
+			for in := range ty.Ins() {
+				if b, ok := reaches(in, seen); ok {
 					return b, true
 				}
 			}
-			for i := range ty.NumOut() {
-				if b, ok := reaches(ty.Out(i), seen); ok {
+			for out := range ty.Outs() {
+				if b, ok := reaches(out, seen); ok {
 					return b, true
 				}
 			}

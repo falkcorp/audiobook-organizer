@@ -1,5 +1,5 @@
 // file: core/library/journal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 643a2716-2f53-438c-aa2c-943654d74242
 // last-edited: 2026-11-11
 
@@ -111,8 +111,18 @@ type transferRow struct {
 	SrcSHA    string        `json:"src_sha256,omitempty"`
 	Size      int64         `json:"size,omitempty"`
 	RemoveSrc bool          `json:"remove_src,omitempty"` // the source's removal is owed after publish
-	Verify    VerifyLevel   `json:"verify"`
-	At        time.Time     `json:"at"`
+	// The source as it was before the first byte was read (Lstat): its device and
+	// inode and its modification time in ns. The cross-device Move's source is
+	// removed only while it is still this file; zero means "not recorded".
+	SrcDev   uint64 `json:"src_dev,omitempty"`
+	SrcIno   uint64 `json:"src_ino,omitempty"`
+	SrcMTime int64  `json:"src_mtime_ns,omitempty"`
+	// The temp file's device and inode, so recovery can tell that the final name
+	// is the temp (published by link or by rename) without reading it again.
+	TmpDev uint64      `json:"tmp_dev,omitempty"`
+	TmpIno uint64      `json:"tmp_ino,omitempty"`
+	Verify VerifyLevel `json:"verify"`
+	At     time.Time   `json:"at"`
 }
 
 func (r transferRow) record() TransferRecord {
