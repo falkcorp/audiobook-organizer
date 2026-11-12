@@ -7,14 +7,12 @@ package backup
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/falkcorp/mediacore/backup/journal"
@@ -146,26 +144,6 @@ func (d Disk) avail(p string) (uint64, error) {
 		return d.Avail(p)
 	}
 	return osAvail(p)
-}
-
-func osDevice(p string) (uint64, error) {
-	fi, err := osStat(p)
-	if err != nil {
-		return 0, err
-	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, errors.New("backup: no device ID on this platform")
-	}
-	return uint64(st.Dev), nil
-}
-
-func osAvail(p string) (uint64, error) {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(p, &st); err != nil {
-		return 0, err
-	}
-	return uint64(st.Bavail) * uint64(st.Bsize), nil
 }
 
 // Options are everything a Service needs. Every seam is a small interface the
