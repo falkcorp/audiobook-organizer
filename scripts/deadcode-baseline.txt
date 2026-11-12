@@ -223,6 +223,7 @@ core/kernel.stampRestore.Append
 core/kernel.startAudit
 core/kernel.stopAudit
 core/kernel.syncDirOf
+core/kernel.userIDs
 core/kernel.writeStoreMarkers
 internal/ai.NewEmbeddingClient
 internal/ai.modelLabelSet.reset
