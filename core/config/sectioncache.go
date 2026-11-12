@@ -1,5 +1,5 @@
 // file: core/config/sectioncache.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e92e6553-a421-4c45-84ef-2bc4c13c0d65
 // last-edited: 2026-11-12
 
@@ -128,7 +128,16 @@ func (c *templateCache) section(sp *sectionSpec) (*section, error) {
 	e.once.Do(func() {
 		defer func() {
 			if e.tpl == nil && e.err == nil {
+				// The build panicked. Callers already waiting on this entry
+				// get an error; the panic leaves this goroutine without
+				// reaching the cleanup below, so drop the entry here, and a
+				// caller that arrives later builds again.
 				e.err = errTemplatePanicked
+				c.mu.Lock()
+				if c.m[key] == e {
+					delete(c.m, key)
+				}
+				c.mu.Unlock()
 			}
 		}()
 		c.builds.Add(1)

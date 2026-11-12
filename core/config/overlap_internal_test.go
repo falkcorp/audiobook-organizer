@@ -1,5 +1,5 @@
 // file: core/config/overlap_internal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8b1d6e43-2a95-4f7c-9e60-d4c3a7b15f28
 // last-edited: 2026-11-12
 
@@ -35,6 +35,7 @@ func TestOverlap_Cases(t *testing.T) {
 	mapsec := func(p Path) any { return Define(p, map[string]int{}) }
 	nested := func(p Path) any { return Define(p, nestedAB{}) }
 	beacons := func(p Path) any { return Define(p, cacheBeacons{}) }
+	empty := func(p Path) any { return Define(p, struct{}{}) }
 	type step struct {
 		sec  any
 		want string // "" registers; otherwise a substring of the ErrDuplicate text
@@ -114,6 +115,14 @@ func TestOverlap_Cases(t *testing.T) {
 			{leaf("core.t.b.zed"), ""},
 			{beacons("core.t.b"), "section core.t.b.zed lies under core.t.b, where section core.t.b's list core.t.b.beacons names its entries' secrets"},
 		}},
+		{"a keyless section under a registered claim", []step{
+			{leaf("core.zz"), ""},
+			{empty("core.zz.empty"), "section core.zz.empty lies under section core.zz's key core.zz"},
+		}},
+		{"a registered keyless section under the new claim, other order", []step{
+			{empty("core.zz.empty"), ""},
+			{leaf("core.zz"), "section core.zz's key core.zz holds section core.zz.empty"},
+		}},
 		{"a sibling of an entry list's parent", []step{
 			{beacons("core.t.b"), ""},
 			{leaf("core.t.bz"), ""},
@@ -189,6 +198,7 @@ func TestOverlap_IndexMatchesFullScan(t *testing.T) {
 		func(p Path) any { return Define(p, map[string]int{}) },
 		func(p Path) any { return Define(p, cacheBeacons{}) },
 		func(p Path) any { return Define(p, nestedAB{}) },
+		func(p Path) any { return Define(p, struct{}{}) },
 	}
 	// Build once per (path, kind): the pool the trials draw from.
 	type cand struct {

@@ -1,5 +1,5 @@
 // file: core/config/sectioncache_internal_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5a0d1c52-63f0-4c77-b9a4-0a9e1f7e3b61
 // last-edited: 2026-11-12
 
@@ -8,7 +8,6 @@ package config
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -17,7 +16,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/falkcorp/mediacore/secrets"
 )
@@ -488,29 +486,16 @@ func TestSectionCache_ConcurrentStores(t *testing.T) {
 	}
 }
 
-// TestSectionCache_SecondBuildIsCheaper: registering sections the cache has
-// built costs a fraction of the first time. Only a ratio is asserted, never a
-// duration: the first build of this set is the reference, the fastest of three
-// later ones must be under a third of it.
-func TestSectionCache_SecondBuildIsCheaper(t *testing.T) {
+// TestSectionCache_SecondBuildIsCached: registering a set of sections the cache
+// has built builds nothing again. The build count is the proof; no duration is
+// asserted, since a wall-clock ratio is flaky under -race and coverage.
+func TestSectionCache_SecondBuildIsCached(t *testing.T) {
 	c := newTemplateCache(maxSectionTemplates)
-	register := func(appID string) time.Duration {
-		s := newCacheStore(t, appID, c)
-		start := time.Now()
-		registerSet(t, s)
-		return time.Since(start)
-	}
-	first := register("gotham")
-	fastest := time.Duration(1<<63 - 1)
-	for i := range 3 {
-		fastest = min(fastest, register(fmt.Sprintf("gotham%d", i)))
-	}
-	t.Logf("first build %v, fastest of the next three %v (%.1fx)", first, fastest, float64(first)/float64(fastest))
-	if fastest*3 >= first {
-		t.Errorf("fastest later build %v is not under a third of the first %v: the cache does not save the build", fastest, first)
-	}
-	if got := c.builds.Load(); got != sectionSetSize {
-		t.Errorf("builds = %d, want %d", got, sectionSetSize)
+	for _, appID := range []string{"gotham", "gotham0", "gotham1", "gotham2"} {
+		registerSet(t, newCacheStore(t, appID, c))
+		if got := c.builds.Load(); got != sectionSetSize {
+			t.Fatalf("after store %q builds = %d, want %d", appID, got, sectionSetSize)
+		}
 	}
 }
 
@@ -560,8 +545,8 @@ func (b blink) MarshalJSON() ([]byte, error) {
 }
 
 // TestSectionCache_PanickedBuildIsNotServed: a build that panics reaches only
-// its own goroutine; the next caller gets an error, not a nil template, and the
-// entry is dropped so a later caller builds again.
+// its own goroutine, and its entry is dropped on the way out, so the next
+// caller (not concurrent with the panic) builds again instead of being refused.
 func TestSectionCache_PanickedBuildIsNotServed(t *testing.T) {
 	c := newTemplateCache(maxSectionTemplates)
 	var calls atomic.Int32
@@ -576,15 +561,18 @@ func TestSectionCache_PanickedBuildIsNotServed(t *testing.T) {
 		}()
 		_, _ = c.section(spec())
 	}()
-	if _, err := c.section(spec()); !errors.Is(err, errTemplatePanicked) {
-		t.Fatalf("after a panicked build err = %v, want errTemplatePanicked", err)
-	}
 	if got := c.size(); got != 0 {
 		t.Errorf("cache holds %d templates after a panicked build, want 0", got)
 	}
 	sec, err := c.section(spec())
 	if err != nil || sec == nil {
-		t.Fatalf("a later caller got (%v, %v), want a fresh build", sec, err)
+		t.Fatalf("the next caller got (%v, %v), want a fresh build", sec, err)
+	}
+	if got := c.builds.Load(); got != 2 {
+		t.Errorf("builds = %d, want 2 (the panicked one and the rebuild)", got)
+	}
+	if got := c.size(); got != 1 {
+		t.Errorf("cache holds %d templates after the rebuild, want 1", got)
 	}
 }
 
