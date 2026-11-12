@@ -1,5 +1,5 @@
 // file: core/backup/types.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 57a7b5b9-8d91-4be9-b34d-06a2bc8b8eeb
 // last-edited: 2026-11-12
 
@@ -88,7 +88,7 @@ type ArtifactReader interface {
 
 // Manifest is the archive's first entry and its .manifest.json sidecar.
 type Manifest struct {
-	Format      string    `json:"format"`       // "mediacore-backup/1"
+	Format      string    `json:"format"` // "mediacore-backup/1"
 	ArchiveID   ArchiveID `json:"archive_id"`
 	App         string    `json:"app"` // app.Options.AppID
 	AppVersion  string    `json:"app_version"`
@@ -149,9 +149,9 @@ type ProvenanceClass uint8
 
 const (
 	ProvenanceInvalid ProvenanceClass = iota
-	Own                                // MAC verifies with this install's derivation key KeyID and InstallID matches (or there is no live store)
-	Foreign                            // MAC missing or wrong, KeyID retired or unknown, or another install's ID
-	PreProvenance                      // legacy-abo/0: made before provenance existed; restored only as Foreign
+	Own                               // MAC verifies with this install's derivation key KeyID and InstallID matches (or there is no live store)
+	Foreign                           // MAC missing or wrong, KeyID retired or unknown, or another install's ID
+	PreProvenance                     // legacy-abo/0: made before provenance existed; restored only as Foreign
 )
 
 // String is the class's name in logs, metrics labels and API bodies.
@@ -266,8 +266,8 @@ type Catalogue interface {
 	List(ctx context.Context) ([]Archive, error) // the catalogue derived from the backup directory (§5B.3.5); never hashes files
 	Verify(ctx context.Context, id ArchiveID, l VerifyLevel) (VerifyResult, error)
 	Import(ctx context.Context, name string, r io.Reader) (Archive, error) // provenance decides Own vs Foreign
-	Download(ctx context.Context, id ArchiveID) (io.ReadCloser, error)    // the archive as stored
-	Delete(ctx context.Context, id ArchiveID) error                       // refused for archives protected by a retention floor
+	Download(ctx context.Context, id ArchiveID) (io.ReadCloser, error)     // the archive as stored
+	Delete(ctx context.Context, id ArchiveID) error                        // refused for archives protected by a retention floor
 }
 
 // Restorer is the restore half of Service: stage, cancel, report and undo.
