@@ -97,11 +97,14 @@ func isLoss(err error) bool {
 
 // JobStoreSuite runs the store conformance of 05-ai section 9 against a store
 // built by factory. It asserts the commit-time preconditions: Create of an
-// existing ID and a Transition from a state the job is not in both fail, two
-// concurrent transitions of one job never both commit (a same-state Transition
-// and a cancel included, so a cancel is never reverted), a batch built from a
-// stale read loses at commit, and every write the store stages is accepted by a
-// keyspace that refuses a write without its Expect.
+// existing ID and a Transition from a state the job is not in both fail; two
+// transitions whose read-to-commit windows overlap never both commit (a
+// same-state Transition and a cancel included, so a cancel is never reverted);
+// free-running writers serialize (at most one of them changes the state, and a
+// write that read the job after another committed is a valid later write, so
+// "exactly one" is asserted only where the overlap is forced); a batch built
+// from a stale read loses at commit; and every write the store stages is
+// accepted by a keyspace that refuses a write without its Expect.
 func JobStoreSuite(t *testing.T, factory func(t *testing.T) JobStoreFixture) {
 	t.Helper()
 	ctx := context.Background()
@@ -239,7 +242,56 @@ func JobStoreSuite(t *testing.T, factory func(t *testing.T) JobStoreFixture) {
 		}
 	})
 
-	t.Run("concurrent_transitions_one_wins", func(t *testing.T) {
+	t.Run("overlapping_windows_one_wins", func(t *testing.T) {
+		// Both writers read the job before either commits, so neither can have
+		// seen the other: whichever commits first, the second must lose at
+		// commit and nothing of its batch may land. Every ordered pair of
+		// (state-keeping, state-changing) writers, from every open state.
+		fx := factory(t)
+		edges := []struct {
+			from ai.JobState
+			outs []ai.JobState // every legal next state, the state-keeping one first
+		}{
+			{ai.JobSubmitted, []ai.JobState{ai.JobSubmitted, ai.JobApplying, ai.JobCanceled, ai.JobFailed}},
+			{ai.JobApplying, []ai.JobState{ai.JobApplying, ai.JobCompleted, ai.JobCanceled, ai.JobFailed}},
+		}
+		n := 0
+		for _, e := range edges {
+			for _, first := range e.outs {
+				for _, second := range e.outs {
+					n++
+					cur := seed(ctx, t, fx, jobID(n), e.from)
+					ba, bb := fx.NewBatch(), fx.NewBatch()
+					if err := fx.Store.Transition(ctx, ba, cur.ID, e.from, to(cur, first, 1)); err != nil {
+						t.Fatalf("%s: stage %s -> %s: %v", cur.ID, e.from, first, err)
+					}
+					if err := fx.Store.Transition(ctx, bb, cur.ID, e.from, to(cur, second, 2)); err != nil {
+						t.Fatalf("%s: stage %s -> %s: %v", cur.ID, e.from, second, err)
+					}
+					if err := ba.Commit(ctx, storage.Sync); err != nil {
+						t.Fatalf("%s: the first commit (%s -> %s): %v", cur.ID, e.from, first, err)
+					}
+					if err := bb.Commit(ctx, storage.Sync); !errors.Is(err, storage.ErrConflict) {
+						t.Fatalf("%s: the second writer (%s -> %s) overlapped the first (-> %s): Commit = %v, want storage.ErrConflict", cur.ID, e.from, second, first, err)
+					}
+					_ = ba.Close()
+					_ = bb.Close()
+					got, err := fx.Store.Get(ctx, cur.ID)
+					if err != nil || got.State != first || got.ApplyAttempts != 1 {
+						t.Fatalf("%s: stored %+v (%v), want the first writer's %s with 1 attempt: the loser's batch must not land", cur.ID, got, err, first)
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("concurrent_transitions_serialize", func(t *testing.T) {
+		// Writers released together do not necessarily overlap: one may commit
+		// before another reads, and that one then reads the committed row, finds
+		// its own from state still true (a same-state write keeps it) and
+		// commits after it. That is a valid serial order, so the asserted
+		// invariants are the serializable ones: some writer commits, at most
+		// one of them changes the state, and the stored state is that writer's.
 		fx := factory(t)
 		for round := range 20 {
 			cur := seed(ctx, t, fx, jobID(round), ai.JobSubmitted)
@@ -248,31 +300,54 @@ func JobStoreSuite(t *testing.T, factory func(t *testing.T) JobStoreFixture) {
 				to(cur, ai.JobSubmitted, 0), to(cur, ai.JobApplying, 0), to(cur, ai.JobCanceled, 0),
 			}
 			wins := race(ctx, fx, cur.ID, ai.JobSubmitted, targets)
-			if len(wins) != 1 {
-				t.Fatalf("round %d: %d transitions of one job committed (%v), want exactly 1", round, len(wins), wins)
+			changed := -1
+			for _, w := range wins {
+				if targets[w].State == ai.JobSubmitted {
+					continue
+				}
+				if changed >= 0 {
+					t.Fatalf("round %d: writers %d and %d both changed the state and committed (%v)", round, changed, w, wins)
+				}
+				changed = w
+			}
+			if len(wins) == 0 {
+				t.Fatalf("round %d: no writer committed; the first to commit cannot lose", round)
+			}
+			want := ai.JobSubmitted
+			if changed >= 0 {
+				want = targets[changed].State
 			}
 			got, err := fx.Store.Get(ctx, cur.ID)
-			if err != nil || got.State != targets[wins[0]].State {
-				t.Fatalf("round %d: stored %s (%v), want the winner's %s", round, got.State, err, targets[wins[0]].State)
+			if err != nil || got.State != want {
+				t.Fatalf("round %d: stored %s (%v), want %s (committed writers %v)", round, got.State, err, want, wins)
 			}
 		}
 	})
 
 	t.Run("same_state_write_never_reverts_cancel", func(t *testing.T) {
+		// A same-state write that commits before the cancel reads is followed by
+		// the cancel (both commit, the job ends Canceled); one that read first
+		// loses at commit if the cancel got in between. In no order may the
+		// job end anywhere but where the last committed writer left it, and a
+		// cancel that committed is never undone.
 		fx := factory(t)
 		for round := range 20 {
 			cur := seed(ctx, t, fx, jobID(round), ai.JobApplying)
 			targets := []ai.StoredJob{to(cur, ai.JobApplying, 2), to(cur, ai.JobCanceled, 0)}
 			wins := race(ctx, fx, cur.ID, ai.JobApplying, targets)
-			if len(wins) != 1 {
-				t.Fatalf("round %d: %d writers committed (%v), want exactly 1", round, len(wins), wins)
+			if len(wins) == 0 {
+				t.Fatalf("round %d: no writer committed", round)
+			}
+			canceled := false
+			for _, w := range wins {
+				canceled = canceled || w == 1
 			}
 			got, _ := fx.Store.Get(ctx, cur.ID)
-			if wins[0] == 1 && got.State != ai.JobCanceled {
-				t.Fatalf("round %d: the cancel committed but the job is %s: a same-state write reverted it", round, got.State)
-			}
-			if wins[0] == 0 && (got.State != ai.JobApplying || got.ApplyAttempts != 2) {
-				t.Fatalf("round %d: the same-state write committed but the job is %+v", round, got)
+			switch {
+			case canceled && got.State != ai.JobCanceled:
+				t.Fatalf("round %d: the cancel committed (%v) but the job is %s: a same-state write reverted it", round, wins, got.State)
+			case !canceled && (got.State != ai.JobApplying || got.ApplyAttempts != 2):
+				t.Fatalf("round %d: only the same-state write committed but the job is %+v", round, got)
 			}
 		}
 	})
