@@ -1,5 +1,5 @@
 // file: core/library/registry.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 363acb46-296b-4fe8-bd5c-6b1160ab673b
 // last-edited: 2026-11-11
 
@@ -993,7 +993,11 @@ func (r *Root) ensureDir(rel string) error {
 }
 
 // AppDir returns a confined directory under <root>/<AppDir>/<name>, created
-// owner-only-writable, refusing a symlink or a foreign-owned directory.
+// owner-only-writable, refusing a symlink or a foreign-owned directory. It is
+// core's: a name that leads into the root's Quarantine area is ErrReservedPath,
+// and the view it returns is writable whatever owner the root has. A module
+// reaches its own through ModuleRoot.AppDir, which names the directory for the
+// module and checks that the module may write the root.
 func (r *Root) AppDir(ctx context.Context, name string) (RootFS, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1003,6 +1007,11 @@ func (r *Root) AppDir(ctx context.Context, name string) (RootFS, error) {
 	}
 	if err := ValidateRel(name); err != nil {
 		return nil, err
+	}
+	// The quarantine area lives under the AppDir by default, so <AppDir>/quarantine
+	// IS the area: a writable view of it would let its holder delete a held file.
+	if want, q := path.Join(r.spec.AppDir, name), r.spec.Quarantine; relWithinFold(want, q) || relWithinFold(q, want) {
+		return nil, fmt.Errorf("%w: %s is the root's quarantine area", ErrReservedPath, want)
 	}
 	if err := r.checkIdentity(); err != nil {
 		return nil, err

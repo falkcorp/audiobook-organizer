@@ -1,5 +1,5 @@
 // file: core/library/scope.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: baa18613-7fdd-4016-b9a4-ee85102dc70c
 // last-edited: 2026-11-11
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -28,6 +29,93 @@ type scopeHost interface {
 func (m *manager) mayRead(r *Root, caller storage.Owner) bool { return m.canRead(r, caller) }
 
 var _ scopeHost = (*manager)(nil)
+
+// ModuleRoot is a root as one module sees it. Root itself belongs to core: its
+// FS takes the caller as an argument and its AppDir is any name, so a module
+// holding a *Root could act as core or as another module. A ModuleRoot carries
+// the module's owner as a field and no method takes another, and none returns a
+// *Root or an unguarded driver; the owner cannot be changed from outside the
+// package.
+type ModuleRoot struct {
+	r     *Root
+	owner storage.Owner
+}
+
+// root is the wrapped root; a zero ModuleRoot has none.
+func (m *ModuleRoot) root() (*Root, error) {
+	if m == nil || m.r == nil {
+		return nil, fmt.Errorf("%w: a ModuleRoot comes from Scope.Roots", ErrInvalidOptions)
+	}
+	return m.r, nil
+}
+
+// ID is the root's ID.
+func (m *ModuleRoot) ID() RootID {
+	if r, err := m.root(); err == nil {
+		return r.ID()
+	}
+	return ""
+}
+
+// Spec is the normalized spec the root was registered from.
+func (m *ModuleRoot) Spec() RootSpec {
+	if r, err := m.root(); err == nil {
+		return r.Spec()
+	}
+	return RootSpec{}
+}
+
+// Disabled reports why the root is disabled, or nil.
+func (m *ModuleRoot) Disabled() error {
+	r, err := m.root()
+	if err != nil {
+		return err
+	}
+	return r.Disabled()
+}
+
+// Usage is the capacity of the filesystem holding the root.
+func (m *ModuleRoot) Usage(ctx context.Context) (Usage, error) {
+	r, err := m.root()
+	if err != nil {
+		return Usage{}, err
+	}
+	return r.Usage(ctx)
+}
+
+// Mounted verifies the root's identity and sentinel (Root.Mounted).
+func (m *ModuleRoot) Mounted(ctx context.Context) error {
+	r, err := m.root()
+	if err != nil {
+		return err
+	}
+	return r.Mounted(ctx)
+}
+
+// FS is the confined filesystem for the module's owner: read-only unless the
+// owner may write the root, ErrNotReadable when it may not read it.
+func (m *ModuleRoot) FS() (RootFS, error) {
+	r, err := m.root()
+	if err != nil {
+		return nil, err
+	}
+	return r.FS(m.owner)
+}
+
+// AppDir is the module's own directory under <root>/<AppDir>, named for its
+// owner (path-escaped, so no owner's directory lies inside another's), created
+// owner-only-writable. Only a module that may write the root gets one: on a
+// root it merely reads (a download root) there is nothing to create.
+func (m *ModuleRoot) AppDir(ctx context.Context) (RootFS, error) {
+	r, err := m.root()
+	if err != nil {
+		return nil, err
+	}
+	if !r.m.canWrite(r, m.owner) || !r.m.enabled(m.owner) {
+		return nil, fmt.Errorf("%w: %s", ErrReadOnlyRoot, r.ID())
+	}
+	return r.AppDir(ctx, url.PathEscape(string(m.owner)))
+}
 
 // scope is the Scope: a manager with one owner bound in. The owner is a field
 // of this value and no method takes another, so a module holding a Scope cannot
@@ -52,11 +140,17 @@ func NewScope(m Manager, owner storage.Owner) (Scope, error) {
 
 func (s *scope) Owner() storage.Owner { return s.owner }
 
-// Roots lists the roots the owner owns or may read, narrowed by f.
-func (s *scope) Roots(f RootFilter) []*Root {
-	out := s.m.Roots(RootFilter{Owner: s.owner, Readable: true, Role: f.Role})
-	if f.Owner != "" {
-		out = slices.DeleteFunc(out, func(r *Root) bool { return r.Spec().Owner != f.Owner })
+// Roots lists the roots the owner owns or may read, narrowed by f. Each comes
+// back as a ModuleRoot: the root with the owner bound in, so what a module can
+// do through it is what its owner can do and no more.
+func (s *scope) Roots(f RootFilter) []*ModuleRoot {
+	roots := s.m.Roots(RootFilter{Owner: s.owner, Readable: true, Role: f.Role})
+	out := make([]*ModuleRoot, 0, len(roots))
+	for _, r := range roots {
+		if f.Owner != "" && r.Spec().Owner != f.Owner {
+			continue
+		}
+		out = append(out, &ModuleRoot{r: r, owner: s.owner})
 	}
 	return out
 }
