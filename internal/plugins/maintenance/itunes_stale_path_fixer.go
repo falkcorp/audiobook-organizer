@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_stale_path_fixer.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 2b2165f1-de86-4181-9a6d-4ed73bb98fbc
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 // Repairs-lane fixer "stale-itunes-path": clear an itunes_path that no iTunes
 // track backs (plan: docs/plans/2026-10-07-stale-itunes-path.md).
@@ -307,7 +307,7 @@ type staleITPInput struct {
 }
 
 func (f *staleITunesPathFixer) Plan(ctx context.Context, raw json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -515,7 +515,7 @@ func staleITPFingerprint(parts ...string) string {
 // ---- replan / apply -------------------------------------------------------
 
 func (f *staleITunesPathFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}

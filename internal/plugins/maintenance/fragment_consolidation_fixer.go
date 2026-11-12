@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.55.1
+// version: 1.56.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -1006,11 +1006,11 @@ type fragWindowPair struct {
 // fragEvWindowContainment opens the containment evidence line.
 const fragEvWindowContainment = "window containment"
 
-func (f *fragmentFixer) windowIndex() fragWindowIndexReader {
-	if f.p == nil || f.p.deps == nil {
+func windowIndexVia(st FixerStores) fragWindowIndexReader {
+	if st == nil {
 		return nil
 	}
-	r, ok := database.AsCapability[fragWindowIndexReader](f.p.deps.OpsStore())
+	r, ok := database.AsCapability[fragWindowIndexReader](st.OpsStore())
 	if !ok {
 		return nil
 	}
@@ -1039,11 +1039,11 @@ func (f *fragmentFixer) windowIndex() fragWindowIndexReader {
 //
 // A member-list read error drops that pair's line and is logged at Warn: the
 // line is informational, so skipping it cannot change any row's decision.
-func (f *fragmentFixer) addWindowContainment(r *repairs.Row, pairs []fragWindowPair) {
+func (f *fragmentFixer) addWindowContainment(lib *fragLibrary, r *repairs.Row, pairs []fragWindowPair) {
 	if len(pairs) == 0 {
 		return
 	}
-	idx := f.windowIndex()
+	idx := lib.window
 	if idx == nil {
 		return
 	}
@@ -1096,13 +1096,21 @@ func (f *fragmentFixer) addWindowContainment(r *repairs.Row, pairs []fragWindowP
 
 // ---- stores ---------------------------------------------------------------
 
-func (f *fragmentFixer) stores() (OpsStore, FragmentRepairReader, error) {
-	store := f.p.deps.OpsStore()
-	hist := f.p.deps.FragmentRepairReader()
+func (f *fragmentFixer) storesVia(st FixerStores) (OpsStore, FragmentRepairReader, error) {
+	if st == nil {
+		return nil, nil, fmt.Errorf("database not initialized")
+	}
+	store := st.OpsStore()
+	hist := st.FragmentRepairReader()
 	if store == nil || hist == nil {
 		return nil, nil, fmt.Errorf("database not initialized")
 	}
 	return store, hist, nil
+}
+
+// stores is storesVia over the plugin's own deps, kept for the fixer's tests, which call it with no shell.
+func (f *fragmentFixer) stores() (OpsStore, FragmentRepairReader, error) {
+	return f.storesVia(f.p.fixerStores(context.Background()))
 }
 
 // importPathOf returns the path the book's file had when it was imported:
@@ -1211,7 +1219,10 @@ type fragLibrary struct {
 	// no-parent row: which book survives and which books were set aside as
 	// copies. A re-plan then keeps the files the plan kept instead of
 	// re-electing them from flags the apply itself changes (see fragPin).
-	pin     *fragPin
+	pin *fragPin
+	// window reads the window-containment evidence of a fragment/parent pair;
+	// set by Plan and replanWith from the shell's stores (nil: no evidence).
+	window  fragWindowIndexReader
 	books   map[string]fragBook
 	files   map[string][]fragFile // by book id
 	series  map[int]string
@@ -1528,7 +1539,8 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	if err != nil {
 		return nil, err
 	}
-	store, hist, err := f.stores()
+	st := f.p.fixerStores(ctx)
+	store, hist, err := f.storesVia(st)
 	if err != nil {
 		return nil, err
 	}
@@ -1543,6 +1555,7 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	if err != nil {
 		return nil, err
 	}
+	lib.window = windowIndexVia(st)
 	intr, err := f.continueInterrupted(ctx, lib, store, hist, only)
 	if err != nil {
 		return nil, err
@@ -1714,7 +1727,7 @@ func (f *fragmentFixer) resolveITunesParents(ctx context.Context, rep registry.R
 	}
 	sort.Strings(ids)
 	if len(ids) > 0 {
-		f.loadVerdicts(store, lib, nil)
+		f.loadVerdictsVia(f.p.fixerStores(ctx), store, lib, nil)
 	}
 	type verdict struct {
 		why   string
@@ -1751,8 +1764,8 @@ func (f *fragmentFixer) resolveITunesParents(ctx context.Context, rep registry.R
 // identity gate honours: the whole library's (ids nil, Plan) or those of ids
 // (a Replan). A read failure turns the rule off; it is logged once here and
 // named on each row the rule would have acted on.
-func (f *fragmentFixer) loadVerdicts(store OpsStore, lib *fragLibrary, ids []string) {
-	v, err := dcOwnerVerdicts(f.p.deps.DedupVerdictReader(), store, ids)
+func (f *fragmentFixer) loadVerdictsVia(st FixerStores, store OpsStore, lib *fragLibrary, ids []string) {
+	v, err := dcOwnerVerdicts(st.DedupVerdictReader(), store, ids)
 	if err != nil {
 		lib.verdictsErr = err.Error()
 		fragLog.Warn("%s: the owner's dedup verdicts are unreadable, so the iTunes-parent rule is off for this plan: %s",
@@ -2145,7 +2158,7 @@ func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, h
 	}
 	pj := &fragPlanJournal{mergedInto: map[string]string{}, mergedID: map[string]string{},
 		demote: map[string]string{}, handOff: map[string]string{}}
-	ours := f.newFragJournal()
+	ours := newFragJournalVia(f.p.fixerStores(ctx))
 	pj.ops = ours.ops
 	pj.owner = owner
 	pj.merged = map[string]*database.OperationChange{}
@@ -3635,7 +3648,7 @@ func (f *fragmentFixer) holdRow(lib *fragLibrary, c *fragCandidate, idPrefix, cl
 			}
 		}
 	}
-	f.addWindowContainment(&r, winPairs)
+	f.addWindowContainment(lib, &r, winPairs)
 	if k, _ := f.guard(lib, books, map[string][]string{c.Book.ID: {c.ImportPath}}); k != "" {
 		r.Class = fragClassManual
 	}
@@ -3897,7 +3910,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 	for _, p := range pairs {
 		winPairs = append(winPairs, fragWindowPair{fragFile: p.Frag.File, parentRow: p.Parent})
 	}
-	f.addWindowContainment(&r, winPairs)
+	f.addWindowContainment(lib, &r, winPairs)
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
 	}
@@ -6237,11 +6250,13 @@ func (f *fragmentFixer) replan(ctx context.Context, planned repairs.Row, beat fu
 // replanWith is replan with pre, a journal already read for the row's books
 // (nil reads it here when needed).
 func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, beat func(string) error, pre *fragJournal) (repairs.Row, error) {
-	store, hist, err := f.stores()
+	st := f.p.fixerStores(ctx)
+	store, hist, err := f.storesVia(st)
 	if err != nil {
 		return repairs.Row{}, err
 	}
 	lib := newFragLibrary()
+	lib.window = windowIndexVia(st)
 	all, err := store.GetAllSeries()
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("list series: %w", err)
@@ -6382,7 +6397,7 @@ func (f *fragmentFixer) rebuildParentRows(ctx context.Context, store OpsStore, l
 		}
 	}
 	if len(ps.IgnoredITunes) > 0 {
-		f.loadVerdicts(store, lib, append([]string{parentID}, ps.IgnoredITunes...))
+		f.loadVerdictsVia(f.p.fixerStores(ctx), store, lib, append([]string{parentID}, ps.IgnoredITunes...))
 	}
 	for _, id := range append(append([]string(nil), ps.CoOwners...), parentID) {
 		if _, loaded := lib.books[id]; loaded {
@@ -7055,9 +7070,9 @@ type opChangeIndexReporter interface {
 const fragJournalBeatEvery = 20000
 
 // newFragJournal is an empty journal view wired to the op-row reader.
-func (f *fragmentFixer) newFragJournal() *fragJournal {
+func newFragJournalVia(st FixerStores) *fragJournal {
 	jr := &fragJournal{byBook: map[string][]*database.OperationChange{}, opOurs: map[string]bool{}}
-	if r, ok := f.p.deps.OperationQueueStore().(repairs.OpReader); ok {
+	if r, ok := st.OperationQueueStore().(repairs.OpReader); ok {
 		jr.ops = r
 	}
 	return jr
@@ -7071,7 +7086,8 @@ func (f *fragmentFixer) newFragJournal() *fragJournal {
 // merge lock during an apply, so it renews the stand-down lease (beat) as it
 // goes rather than let a long journal outlast it.
 func (f *fragmentFixer) loadJournal(ctx context.Context, hist FragmentRepairReader, ids map[string]bool, beat func(string) error) (*fragJournal, error) {
-	jr := f.newFragJournal()
+	st := f.p.fixerStores(ctx)
+	jr := newFragJournalVia(st)
 	tick := func(what string) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -7089,7 +7105,7 @@ func (f *fragmentFixer) loadJournal(ctx context.Context, hist FragmentRepairRead
 	indexed := indexStillUsable(hist)
 	_, scannable := database.AsCapability[opChangeScanner](hist)
 	if scannable && !indexed {
-		return f.scanJournal(hist, ids, tick)
+		return f.scanJournalVia(st, hist, ids, tick)
 	}
 	for id := range ids {
 		if err := tick("the journal read of " + id); err != nil {
@@ -7099,7 +7115,7 @@ func (f *fragmentFixer) loadJournal(ctx context.Context, hist FragmentRepairRead
 			// The index stopped being usable mid-read (a rebuild cleared its
 			// trust): each further GetBookChanges would scan the whole
 			// journal under the merge lock. Read it in one pass instead.
-			return f.scanJournal(hist, ids, tick)
+			return f.scanJournalVia(st, hist, ids, tick)
 		}
 		cs, err := hist.GetBookChanges(id)
 		if err != nil {
@@ -7121,12 +7137,12 @@ func indexStillUsable(hist FragmentRepairReader) bool {
 
 // scanJournal is loadJournal's one-pass read: every opchange row, keeping
 // those of books ids. hist must resolve opChangeScanner.
-func (f *fragmentFixer) scanJournal(hist FragmentRepairReader, ids map[string]bool, tick func(string) error) (*fragJournal, error) {
+func (f *fragmentFixer) scanJournalVia(st FixerStores, hist FragmentRepairReader, ids map[string]bool, tick func(string) error) (*fragJournal, error) {
 	sc, ok := database.AsCapability[opChangeScanner](hist)
 	if !ok {
 		return nil, fmt.Errorf("%s: the store cannot scan the operation journal", fragFixerID)
 	}
-	jr := f.newFragJournal()
+	jr := newFragJournalVia(st)
 	n := 0
 	err := sc.ScanOperationChanges(func(c *database.OperationChange) error {
 		if n++; n%fragJournalBeatEvery == 0 {
@@ -7385,7 +7401,7 @@ func (jr *fragJournal) liveFlagsExplained(b fragBook, fl fragPlannedFlags, crown
 // primary now set back to false (a crown is the only write that raises one).
 // "" when there is no hand-off store (no hand-off ever ran) or it would hold.
 func (f *fragmentFixer) replayHandOff(ctx context.Context, store OpsStore, gid string, planned map[string]fragPlannedFlags) (string, error) {
-	vps := f.p.deps.VersionPrimaryStore()
+	vps := f.p.fixerStores(ctx).VersionPrimaryStore()
 	if vps == nil {
 		return "", nil
 	}
@@ -7928,7 +7944,7 @@ func changedRow(planned repairs.Row, why string) repairs.Row {
 // between the check and the writes. Every step is compare-and-set and
 // journaled first; a step already done (by a run cut off mid-row) is skipped.
 func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
-	store, _, err := f.stores()
+	store, _, err := f.storesVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return err
 	}

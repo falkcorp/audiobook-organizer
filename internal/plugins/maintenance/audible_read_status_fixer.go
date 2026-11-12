@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 36d6036c-05ce-48d1-9997-a65d6a8b67ce
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -233,12 +233,12 @@ func (t arsTarget) key() []string {
 		strconv.FormatFloat(t.durationSec, 'f', -1, 64), strconv.FormatBool(t.gone), strings.Join(t.related, ",")}
 }
 
-func (f *audibleReadStatusFixer) store() (OpsStore, UserReadStateStore, error) {
-	store := f.p.deps.OpsStore()
+func (f *audibleReadStatusFixer) storeVia(st FixerStores) (OpsStore, UserReadStateStore, error) {
+	store := st.OpsStore()
 	if store == nil {
 		return nil, nil, fmt.Errorf("database not initialized")
 	}
-	us := f.p.deps.UserReadStateStore()
+	us := st.UserReadStateStore()
 	if us == nil {
 		return nil, nil, fmt.Errorf("%s: the store cannot read and write user listening state with its own timestamps", audibleReadStatusFixerID)
 	}
@@ -278,7 +278,7 @@ func parseARSParams(raw json.RawMessage, users UserReadStateStore) (arsParams, e
 // Plan matches every export item against the library and decides each
 // matched one against the target user's state. Read-only.
 func (f *audibleReadStatusFixer) Plan(ctx context.Context, raw json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store, us, err := f.store()
+	store, us, err := f.storeVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -932,8 +932,8 @@ func arsDisplay(s *database.UserBookState) map[string]string {
 
 // Replan re-reads the target book and the user's state and decides the row
 // again from the item the plan stored. Only applicable rows are re-planned.
-func (f *audibleReadStatusFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store, us, err := f.store()
+func (f *audibleReadStatusFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	store, us, err := f.storeVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return repairs.Row{}, err
 	}

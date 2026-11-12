@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -241,9 +241,9 @@ type vtReaders struct {
 	res     *repairs.PathResolver
 }
 
-func (f *versionTwinFixer) readers(res *repairs.PathResolver) (vtReaders, error) {
-	r := vtReaders{store: f.p.deps.OpsStore(), cache: f.p.deps.MetadataCacheStore(),
-		svc: f.p.deps.VersionTwinMetadataService(), hash: f.p.deps.BooksWithMetadataSourceHash,
+func (f *versionTwinFixer) readersVia(st FixerStores, res *repairs.PathResolver) (vtReaders, error) {
+	r := vtReaders{store: st.OpsStore(), cache: st.MetadataCacheStore(),
+		svc: st.VersionTwinMetadataService(), hash: f.p.deps.BooksWithMetadataSourceHash,
 		memHash: f.p.deps.BooksWithMetadataSourceHashInMemory, ids: f.p.deps.BookIDsWithIdentifiers, res: res}
 	if r.store == nil || r.cache == nil {
 		return r, fmt.Errorf("database not initialized")
@@ -252,6 +252,11 @@ func (f *versionTwinFixer) readers(res *repairs.PathResolver) (vtReaders, error)
 		return r, fmt.Errorf("metadata fetch service not initialized")
 	}
 	return r, nil
+}
+
+// kept for the fixer's tests, which call it with no shell
+func (f *versionTwinFixer) readers(res *repairs.PathResolver) (vtReaders, error) {
+	return f.readersVia(f.p.fixerStores(context.Background()), res)
 }
 
 // vtLive reports whether b is a live member: not trashed, not merged away.
@@ -275,7 +280,7 @@ func vtNoMatch(b *database.BookCore) bool { return metafetch.IsMarkedNoMatch(b.M
 // Plan lists every version group whose one primary needs metadata and has a
 // twin to take it from.
 func (f *versionTwinFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	rd, err := f.readers(repairs.NewPathResolver())
+	rd, err := f.readersVia(f.p.fixerStores(ctx), repairs.NewPathResolver())
 	if err != nil {
 		return nil, err
 	}
@@ -355,8 +360,8 @@ func (f *versionTwinFixer) Plan(ctx context.Context, _ json.RawMessage, rep regi
 // fingerprint (changed_since_plan), except a row THIS op already wrote before
 // a restart cut off its journal row (vtResumed): that comes back as planned,
 // and Apply records only the journal row.
-func (f *versionTwinFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, rep registry.Reporter) (repairs.Row, error) {
-	rd, err := f.readers(repairs.NewPathResolver())
+func (f *versionTwinFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, rep registry.Reporter) (repairs.Row, error) {
+	rd, err := f.readersVia(f.p.fixerStores(ctx), repairs.NewPathResolver())
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -1558,7 +1563,7 @@ func vtHistorySource(d *vtDetail) string {
 // the resumed run of the same op: Replan recognises the op's own write
 // (vtResumed) and Apply records only the missing journal row. A journal
 // failure is reported as repairs.ErrPartiallyApplied.
-func (f *versionTwinFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *versionTwinFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*vtDetail)
 	if !ok || d == nil {
 		return fmt.Errorf("row %s: no apply detail from the re-plan", fresh.RowID)
@@ -1569,7 +1574,7 @@ func (f *versionTwinFixer) Apply(_ context.Context, w *repairs.Writer, fresh rep
 	if d.resume {
 		return vtJournalResumed(w, d)
 	}
-	rd, err := f.readers(repairs.NewPathResolver())
+	rd, err := f.readersVia(f.p.fixerStores(ctx), repairs.NewPathResolver())
 	if err != nil {
 		return err
 	}

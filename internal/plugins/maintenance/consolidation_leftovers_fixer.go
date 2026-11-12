@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.13.2
+// version: 1.14.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -259,7 +259,7 @@ func (s *leftoverSource) stat(p string) leftoverStat {
 	return st
 }
 
-func (f *consolidationLeftoversFixer) newSource(store OpsStore) (*leftoverSource, error) {
+func (f *consolidationLeftoversFixer) newSourceVia(st FixerStores, store OpsStore) (*leftoverSource, error) {
 	shelves, err := leftoverShelves(store, f.p.deps.RootDir())
 	if err != nil {
 		return nil, err
@@ -269,7 +269,7 @@ func (f *consolidationLeftoversFixer) newSource(store OpsStore) (*leftoverSource
 	// rule the hand-off itself runs (versionprimary, through the same store
 	// and root retireHandOff uses).
 	src.primary = func(ctx context.Context, members []database.Book) (string, error) {
-		vps := f.p.deps.VersionPrimaryStore()
+		vps := st.VersionPrimaryStore()
 		if vps == nil {
 			return "", errLeftoverNoVersionPrimaryStore
 		}
@@ -284,6 +284,11 @@ func (f *consolidationLeftoversFixer) newSource(store OpsStore) (*leftoverSource
 		return versionprimary.ChooseSinglePrimary(ctx, es, members, versionprimary.Env{RootDir: f.p.deps.RootDir()})
 	}
 	return src, nil
+}
+
+// kept for the fixer's tests, which call it with no shell
+func (f *consolidationLeftoversFixer) newSource(store OpsStore) (*leftoverSource, error) {
+	return f.newSourceVia(f.p.fixerStores(context.Background()), store)
 }
 
 // leftoverShelves are the library root (the plugin's deps.RootDir) and every
@@ -992,7 +997,8 @@ func (f *consolidationLeftoversFixer) sizeIndex(store OpsStore) (map[int64][]dat
 
 // Plan lists every leftover in the library.
 func (f *consolidationLeftoversFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+	st := f.p.fixerStores(ctx)
+	store := st.OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -1006,7 +1012,7 @@ func (f *consolidationLeftoversFixer) Plan(ctx context.Context, _ json.RawMessag
 	f.idxMu.Lock()
 	idx := f.idx
 	f.idxMu.Unlock()
-	src, err := f.newSource(store)
+	src, err := f.newSourceVia(st, store)
 	if err != nil {
 		return nil, err
 	}
@@ -1083,7 +1089,7 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 			return changedRow(planned, "the row's stored state is unreadable; plan again"), nil
 		}
 	}
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
@@ -1094,7 +1100,7 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	src, err := f.newSource(store)
+	src, err := f.newSourceVia(f.p.fixerStores(ctx), store)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -1160,7 +1166,7 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 // the fingerprint, refuse a hand-off that would write an iTunes member, mark
 // each dead row Missing, then retire the leftover into the combined book.
 func (f *consolidationLeftoversFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

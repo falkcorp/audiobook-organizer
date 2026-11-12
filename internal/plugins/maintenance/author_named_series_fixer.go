@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_named_series_fixer.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 51518f40-1a71-43e8-bb8c-bb056522bedd
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -155,7 +155,8 @@ type ansSeries struct {
 // Plan judges every series row whose name letters-equals an author row's and
 // lists the books credited to that author.
 func (f *authorNamedSeriesFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+	st := f.p.fixerStores(ctx)
+	store := st.OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -170,7 +171,7 @@ func (f *authorNamedSeriesFixer) Plan(ctx context.Context, _ json.RawMessage, re
 	// series, so no two workers produce a row for the same book.
 	runErr := registry.RunItems(ctx, rep, indexesOf(len(cands)), func(_ context.Context, i int) error {
 		defer done.Add(1)
-		rows, empties, err := f.planSeries(cands[i])
+		rows, empties, err := f.planSeriesVia(st, cands[i])
 		if err != nil {
 			s := cands[i].Series
 			r := repairs.Row{RowID: "series-" + strconv.Itoa(s.ID), Title: s.Name, Skipped: "error",
@@ -206,8 +207,8 @@ func (f *authorNamedSeriesFixer) Plan(ctx context.Context, _ json.RawMessage, re
 
 // judgeSeries reads one series row's books and makes the series-level
 // decisions every row of it shares.
-func (f *authorNamedSeriesFixer) judgeSeries(s database.Series, ids map[int]bool) (ansSeries, []database.BookCore, error) {
-	store := f.p.deps.OpsStore()
+func (f *authorNamedSeriesFixer) judgeSeriesVia(st FixerStores, s database.Series, ids map[int]bool) (ansSeries, []database.BookCore, error) {
+	store := st.OpsStore()
 	books, err := store.GetBooksBySeriesIDCore(s.ID)
 	if err != nil {
 		return ansSeries{}, nil, fmt.Errorf("books of series %d: %w", s.ID, err)
@@ -218,7 +219,7 @@ func (f *authorNamedSeriesFixer) judgeSeries(s database.Series, ids map[int]bool
 	}
 	js := ansSeries{series: s, ids: ids, verdict: verdict, numbered: ansNumbered(books)}
 	if verdict == foldernames.SeriesRowAuthorJunk {
-		if js.outside, err = f.distinctOutside(s.ID, ids, books); err != nil {
+		if js.outside, err = f.distinctOutsideVia(st, s.ID, ids, books); err != nil {
 			return ansSeries{}, nil, err
 		}
 	}
@@ -228,8 +229,8 @@ func (f *authorNamedSeriesFixer) judgeSeries(s database.Series, ids map[int]bool
 // planSeries returns the rows of one author-named series row, and whether
 // every live book in it is an applicable row (applying them all would leave
 // the row empty).
-func (f *authorNamedSeriesFixer) planSeries(c foldernames.AuthorNamedSeries) ([]repairs.Row, bool, error) {
-	js, books, err := f.judgeSeries(c.Series, c.AuthorIDs)
+func (f *authorNamedSeriesFixer) planSeriesVia(st FixerStores, c foldernames.AuthorNamedSeries) ([]repairs.Row, bool, error) {
+	js, books, err := f.judgeSeriesVia(st, c.Series, c.AuthorIDs)
 	if err != nil {
 		return nil, false, err
 	}
@@ -245,7 +246,7 @@ func (f *authorNamedSeriesFixer) planSeries(c foldernames.AuthorNamedSeries) ([]
 			// not a row.
 			continue
 		}
-		r, err := f.evaluate(b, js)
+		r, err := f.evaluateVia(st, b, js)
 		if err != nil {
 			r = repairs.Row{RowID: b.ID, BookIDs: []string{b.ID}, Title: b.Title, Skipped: "error",
 				SkipReason: err.Error(), Reason: err.Error(), Risk: repairs.RiskReview}
@@ -262,8 +263,8 @@ func (f *authorNamedSeriesFixer) planSeries(c foldernames.AuthorNamedSeries) ([]
 // distinctOutside reports whether a same-named author has a live book,
 // primary-credited to them, outside series seriesID, whose title is not a
 // near-duplicate of a title in the series (inSeries).
-func (f *authorNamedSeriesFixer) distinctOutside(seriesID int, ids map[int]bool, inSeries []database.BookCore) (bool, error) {
-	store := f.p.deps.OpsStore()
+func (f *authorNamedSeriesFixer) distinctOutsideVia(st FixerStores, seriesID int, ids map[int]bool, inSeries []database.BookCore) (bool, error) {
+	store := st.OpsStore()
 	keys := make([]string, 0, len(inSeries))
 	for _, b := range inSeries {
 		if k := personname.LettersKey(b.Title); k != "" {
@@ -327,8 +328,8 @@ func ansNumbered(books []database.BookCore) bool {
 // them again against the author rows the plan named (Row.State), so a row
 // whose link, credits, locks or verdict moved comes back with a different
 // fingerprint (changed_since_plan).
-func (f *authorNamedSeriesFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *authorNamedSeriesFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
@@ -366,16 +367,16 @@ func (f *authorNamedSeriesFixer) Replan(_ context.Context, _ json.RawMessage, pl
 	if s == nil {
 		return held(ansSkipNotLinked, fmt.Sprintf("series %d no longer exists", st.SeriesID)), nil
 	}
-	js, _, err := f.judgeSeries(*s, ids)
+	js, _, err := f.judgeSeriesVia(f.p.fixerStores(ctx), *s, ids)
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	return f.evaluate(b.Core(), js)
+	return f.evaluateVia(f.p.fixerStores(ctx), b.Core(), js)
 }
 
 // evaluate builds the row of book b in the judged series js.
-func (f *authorNamedSeriesFixer) evaluate(b database.BookCore, js ansSeries) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *authorNamedSeriesFixer) evaluateVia(st FixerStores, b database.BookCore, js ansSeries) (repairs.Row, error) {
+	store := st.OpsStore()
 	s, ids := js.series, js.ids
 	credits, err := store.GetBookAuthors(b.ID)
 	if err != nil {
@@ -501,12 +502,12 @@ var errNoSeriesHolder = errors.New("the store cannot hold series rows")
 // ledger-before-write bug class; a journal failure after the write is
 // reported partially_applied, and "undo last apply" still restores the book
 // from its history rows.
-func (f *authorNamedSeriesFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *authorNamedSeriesFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*ansDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", authorNamedSeriesFixerID, fresh.RowID)
 	}
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	holder := database.AsSeriesHolder(store)
 	if holder == nil {
 		return fmt.Errorf("%s: row %s: %w", authorNamedSeriesFixerID, fresh.RowID, errNoSeriesHolder)

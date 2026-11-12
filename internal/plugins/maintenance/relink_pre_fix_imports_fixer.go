@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_pre_fix_imports_fixer.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: a5cfbf11-cb27-4747-a0e3-d1536081ba52
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -222,8 +222,8 @@ func (f *relinkPreFixFixer) Meta() repairs.Meta {
 }
 
 // pfrStores returns the fixer's two store views.
-func (f *relinkPreFixFixer) pfrStores() (OpsStore, versions.IngestStore, error) {
-	store, vs := f.p.deps.OpsStore(), f.p.deps.IngestVersionStore()
+func (f *relinkPreFixFixer) pfrStoresVia(st FixerStores) (OpsStore, versions.IngestStore, error) {
+	store, vs := st.OpsStore(), st.IngestVersionStore()
 	if store == nil || vs == nil {
 		return nil, nil, fmt.Errorf("database not initialized")
 	}
@@ -263,7 +263,7 @@ func (d *pfrDecision) links() bool {
 // Plan lists every book_file row of every live book that has a version or a
 // row naming one, classified.
 func (f *relinkPreFixFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store, vs, err := f.pfrStores()
+	store, vs, err := f.pfrStoresVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -393,8 +393,8 @@ func pfrErrorRows(bookID string, cores []database.BookFileCore, cause error) []r
 }
 
 // Replan re-classifies the planned row's book now and returns the row.
-func (f *relinkPreFixFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	_, vs, err := f.pfrStores()
+func (f *relinkPreFixFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	_, vs, err := f.pfrStoresVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -934,7 +934,7 @@ func pfrRow(d *pfrDecision) repairs.Row {
 // Apply links one fresh would_link or same_book_version row (see the type
 // comment for the order of the hash, the locks and the write).
 func (f *relinkPreFixFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
-	_, vs, err := f.pfrStores()
+	_, vs, err := f.pfrStoresVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return err
 	}

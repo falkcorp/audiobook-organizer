@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_author_fixer.go
-// version: 1.26.1
+// version: 1.27.0
 // guid: 7a5912c0-2834-48bf-9378-8daadf7755fa
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -2050,7 +2050,7 @@ func (f *junkAuthorFixer) Plan(ctx context.Context, raw json.RawMessage, rep reg
 	if err != nil {
 		return nil, err
 	}
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -2210,8 +2210,8 @@ func (f *junkAuthorFixer) Plan(ctx context.Context, raw json.RawMessage, rep reg
 // index. The author's class comes from the name again (strong) or from the
 // stored row (weak: its library evidence was confirmed over every book of
 // the row at plan time and is not re-derived per row).
-func (f *junkAuthorFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *junkAuthorFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
@@ -2281,7 +2281,7 @@ func (f *junkAuthorFixer) Replan(_ context.Context, _ json.RawMessage, planned r
 // Apply writes one fresh row through w: an author row created first when the
 // decision needs one (journaled), then the credit move (journaled inside the
 // author lock), then the primary, then the series link (journaled).
-func (f *junkAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *junkAuthorFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*junkAuthorBookDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", junkAuthorFixerID, fresh.RowID)
@@ -2289,7 +2289,7 @@ func (f *junkAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repa
 	if d.Skip != "" || d.ReadErr != nil {
 		return fmt.Errorf("%s: row %s is not applicable (%s)", junkAuthorFixerID, fresh.RowID, d.Skip)
 	}
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

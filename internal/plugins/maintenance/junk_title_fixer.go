@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.24.2
+// version: 1.25.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -340,17 +340,22 @@ func narratorsOf(n *string) []string {
 
 // buildJunkIndex lists every book once (one consistent snapshot) and returns
 // the index plus the junk-titled candidates.
-func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, error) {
-	idx, cands, _, err := f.buildJunkIndexSnapshot()
+func (f *junkTitleFixer) buildJunkIndexVia(st FixerStores) (*junkIndex, []database.BookCore, error) {
+	idx, cands, _, err := f.buildJunkIndexSnapshotVia(st)
 	return idx, cands, err
+}
+
+// kept for the fixer's tests, which call it with no shell
+func (f *junkTitleFixer) buildJunkIndex() (*junkIndex, []database.BookCore, error) {
+	return f.buildJunkIndexVia(f.p.fixerStores(context.Background()))
 }
 
 // buildJunkIndexSnapshot is buildJunkIndex that also returns the whole book
 // listing it was built from, so the swapped title/author fixer can pick its
 // author-only candidates (real titles) from the same snapshot instead of
 // listing every book a second time.
-func (f *junkTitleFixer) buildJunkIndexSnapshot() (*junkIndex, []database.BookCore, []database.BookCore, error) {
-	store := f.p.deps.OpsStore()
+func (f *junkTitleFixer) buildJunkIndexSnapshotVia(st FixerStores) (*junkIndex, []database.BookCore, []database.BookCore, error) {
+	store := st.OpsStore()
 	if store == nil {
 		return nil, nil, nil, fmt.Errorf("database not initialized")
 	}
@@ -538,13 +543,13 @@ func (f *junkTitleFixer) buildJunkIndexSnapshot() (*junkIndex, []database.BookCo
 	return idx, cands, all, nil
 }
 
-func (f *junkTitleFixer) cachedIndex() (*junkIndex, error) {
+func (f *junkTitleFixer) cachedIndexVia(st FixerStores) (*junkIndex, error) {
 	f.idxMu.Lock()
 	defer f.idxMu.Unlock()
 	if f.idx != nil && time.Since(f.idxBuiltAt) < junkIndexTTL {
 		return f.idx, nil
 	}
-	idx, _, err := f.buildJunkIndex()
+	idx, _, err := f.buildJunkIndexVia(st)
 	if err != nil {
 		return nil, err
 	}
@@ -556,7 +561,8 @@ func (f *junkTitleFixer) cachedIndex() (*junkIndex, error) {
 // was found, skipped (fragment / possible_fragment / needs_manual /
 // user_locked / owner-manual) otherwise.
 func (f *junkTitleFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	idx, cands, err := f.buildJunkIndex()
+	st := f.p.fixerStores(ctx)
+	idx, cands, err := f.buildJunkIndexVia(st)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +576,7 @@ func (f *junkTitleFixer) Plan(ctx context.Context, _ json.RawMessage, rep regist
 	// apart from the author-name cache, which authorName locks.
 	runErr := registry.RunItems(ctx, rep, indexesOf(len(cands)), func(_ context.Context, i int) error {
 		defer done.Add(1)
-		r, err := f.evaluate(idx, cands[i])
+		r, err := f.evaluateVia(st, idx, cands[i])
 		if err != nil {
 			r = repairs.Row{RowID: cands[i].ID, BookIDs: []string{cands[i].ID}, Title: cands[i].Title,
 				Skipped: "error", SkipReason: err.Error(), Reason: err.Error(), Risk: repairs.RiskReview}
@@ -645,8 +651,9 @@ func indexesOf(n int) []int {
 // longer junk comes back as a skipped row whose fingerprint differs, so the
 // engine reports changed_since_plan rather than failed, and a re-run of an
 // interrupted apply passes over the rows it already wrote.
-func (f *junkTitleFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *junkTitleFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	st := f.p.fixerStores(ctx)
+	store := st.OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
@@ -660,11 +667,11 @@ func (f *junkTitleFixer) Replan(_ context.Context, _ json.RawMessage, planned re
 		r.Fingerprint = junkFingerprint(r, "gone")
 		return r, nil
 	}
-	idx, err := f.cachedIndex()
+	idx, err := f.cachedIndexVia(st)
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	return f.evaluate(idx, b.Core())
+	return f.evaluateVia(st, idx, b.Core())
 }
 
 // junkDecision travels from Replan to Apply in Row.Detail.
@@ -677,12 +684,12 @@ type junkDecision struct {
 
 // Apply writes the title, and only the title, while it is still the junk one
 // the replacement was derived from and no user lock has appeared.
-func (f *junkTitleFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *junkTitleFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*junkDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", junkTitlesFixerID, fresh.RowID)
 	}
-	return writeTitleOnly(w, f.p.deps.OpsStore(), d.bookID, d.oldTitle, d.newTitle)
+	return writeTitleOnly(w, f.p.fixerStores(ctx).OpsStore(), d.bookID, d.oldTitle, d.newTitle)
 }
 
 // titleStateReader reads a book's field provenance, rows and pre-migration
@@ -756,7 +763,7 @@ func writeTitleOnly(w *repairs.Writer, states titleStateReader, bookID, oldTitle
 	return nil
 }
 
-func (f *junkTitleFixer) authorName(idx *junkIndex, id *int) string {
+func (f *junkTitleFixer) authorNameVia(st FixerStores, idx *junkIndex, id *int) string {
 	if id == nil {
 		return ""
 	}
@@ -766,7 +773,7 @@ func (f *junkTitleFixer) authorName(idx *junkIndex, id *int) string {
 	if ok {
 		return n
 	}
-	if store := f.p.deps.OpsStore(); store != nil {
+	if store := st.OpsStore(); store != nil {
 		if a, err := store.GetAuthorByID(*id); err == nil && a != nil {
 			n = a.Name
 		}
@@ -787,12 +794,12 @@ var (
 
 // evaluate decides one book. Plan and Replan both call it, so a row planned
 // and a row re-planned from the same state carry the same fingerprint.
-func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *junkTitleFixer) evaluateVia(st FixerStores, idx *junkIndex, b database.BookCore) (repairs.Row, error) {
+	store := st.OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
-	author := f.authorName(idx, b.AuthorID)
+	author := f.authorNameVia(st, idx, b.AuthorID)
 	r := repairs.Row{RowID: b.ID, BookIDs: []string{b.ID}, Title: b.Title, Author: author, Risk: repairs.RiskReview,
 		Current: map[string]string{"title": b.Title}}
 	finish := func(skip, why string) (repairs.Row, error) {
@@ -929,7 +936,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	runtimeSec, runtimeKnown := bookRuntimeSec(b, files)
 
 	// ---- fragments: a chapter file of a bigger book is not retitled ----
-	skip, why, err := f.fragmentReason(idx, b, kind, author, paths)
+	skip, why, err := f.fragmentReasonVia(st, idx, b, kind, author, paths)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -952,7 +959,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	}
 	for _, l := range links {
 		id := l.AuthorID
-		people = append(people, f.authorName(idx, &id))
+		people = append(people, f.authorNameVia(st, idx, &id))
 	}
 	// What a filename's " - <name>" tail may be stripped as (derive.go): the
 	// book's own people, minus a stored author that is junk (a chapter label
@@ -1103,7 +1110,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	// candidateTitle gates each candidate through CandidateIdentityStale,
 	// which reads the book's ID and ASIN; ToBook carries both.
 	full := b.ToBook()
-	t, score, ok, candErr := f.candidateTitle(&full, author)
+	t, score, ok, candErr := f.candidateTitleVia(st, &full, author)
 	if candErr != nil {
 		// Fail closed: with the owner's rejections unreadable, any cached
 		// candidate may be one the owner turned down for this book.
@@ -1418,7 +1425,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		ownerFetchedAuthor = ""
 	}
 	owner := f.proposalOwner(idx, b, author, ownerFetchedAuthor, paths)
-	if f.titleTaken(idx, owner, best.title) {
+	if f.titleTakenVia(st, idx, owner, best.title) {
 		who := "this author already has"
 		if owner.junk {
 			who = "a book by " + owner.describe() + " already has"
@@ -1825,8 +1832,8 @@ func (pc junkProposalCheck) isPathRoot(c string) bool {
 // of another book holds it); junkSkipPossibleFragment for the shapes that
 // suggest it; junkSkipNeedsManual for a bare unpadded number, which is as
 // likely a real title ("13", "300"); "" when the book stands on its own.
-func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kind metadata.JunkTitleKind, author string, paths []string) (skip, why string, err error) {
-	store := f.p.deps.OpsStore()
+func (f *junkTitleFixer) fragmentReasonVia(st FixerStores, idx *junkIndex, b database.BookCore, kind metadata.JunkTitleKind, author string, paths []string) (skip, why string, err error) {
+	store := st.OpsStore()
 	for _, p := range paths {
 		owners := append([]string(nil), idx.owners[p]...)
 		sort.Strings(owners)
@@ -1956,7 +1963,7 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 // so the re-rank that moves a rejected candidate down is no help here. An
 // unreadable rejection list is returned as err (the caller fails the row
 // closed); no title is chosen then. A nil book offers nothing.
-func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string, float64, bool, error) {
+func (f *junkTitleFixer) candidateTitleVia(st FixerStores, b *database.Book, author string) (string, float64, bool, error) {
 	if b == nil {
 		return "", 0, false, nil
 	}
@@ -1968,7 +1975,7 @@ func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string
 	if a == "" || authorname.IsPlaceholderAuthor(a) {
 		return "", 0, false, nil
 	}
-	store := f.p.deps.OpsStore()
+	store := st.OpsStore()
 	if store == nil {
 		return "", 0, false, fmt.Errorf("read owner rejections: database not initialized")
 	}
@@ -2010,6 +2017,11 @@ func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string
 		}
 	}
 	return best, bestScore, found, nil
+}
+
+// kept for the fixer's tests, which call it with no shell
+func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string, float64, bool, error) {
+	return f.candidateTitleVia(f.p.fixerStores(context.Background()), b, author)
 }
 
 // catalogEditionRe is a bracketed edition marker on a catalog title:
@@ -2204,13 +2216,13 @@ func folderAuthor(idx *junkIndex, paths []string) string {
 // author id, of a duplicate row of the same person under another id, or one
 // whose author is junk or missing (an unknown owner: it may be the very book
 // this one is) counts. A skipped row costs far less than a duplicate.
-func (f *junkTitleFixer) titleTaken(idx *junkIndex, o junkOwner, title string) bool {
+func (f *junkTitleFixer) titleTakenVia(st FixerStores, idx *junkIndex, o junkOwner, title string) bool {
 	for _, id := range idx.titleAuthors[util.TitleSortKey(title)] {
 		holder := junkOwner{id: &id}
 		if id != 0 {
 			// A holder with no real author name (a placeholder, a credit line)
 			// is an unknown owner.
-			if n := f.authorName(idx, &id); !junkStoredAuthor(n) {
+			if n := f.authorNameVia(st, idx, &id); !junkStoredAuthor(n) {
 				holder.name = strings.TrimSpace(n)
 			}
 		}

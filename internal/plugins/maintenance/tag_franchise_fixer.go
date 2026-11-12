@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 8c8a3b12-5d98-45d2-9751-c25bf96df34e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -235,8 +235,8 @@ func (ix tfIndex) weakFor(b database.BookCore, files []database.BookFileCore) []
 	return out
 }
 
-func (f *tagFranchiseFixer) reader() (tfReader, error) {
-	store := f.p.deps.OpsStore()
+func (f *tagFranchiseFixer) readerVia(st FixerStores) (tfReader, error) {
+	store := st.OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -246,11 +246,12 @@ func (f *tagFranchiseFixer) reader() (tfReader, error) {
 // Plan evaluates every live book. A row is emitted for each book with any
 // signal; books with none produce no row.
 func (f *tagFranchiseFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store, err := f.reader()
+	st := f.p.fixerStores(ctx)
+	store, err := f.readerVia(st)
 	if err != nil {
 		return nil, err
 	}
-	tags := f.p.deps.BookTagReader()
+	tags := st.BookTagReader()
 	if tags == nil {
 		return nil, fmt.Errorf("%s: no tag store", tagFranchiseFixerID)
 	}
@@ -321,12 +322,12 @@ func (f *tagFranchiseFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 // plan stored (Row.State): they come from a library-wide index a single row
 // cannot rebuild. A book that is gone, or that lost every signal, comes back
 // skipped with a different fingerprint (changed_since_plan).
-func (f *tagFranchiseFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store, err := f.reader()
+func (f *tagFranchiseFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	store, err := f.readerVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	tags := f.p.deps.BookTagReader()
+	tags := f.p.fixerStores(ctx).BookTagReader()
 	if tags == nil {
 		return repairs.Row{}, fmt.Errorf("%s: no tag store", tagFranchiseFixerID)
 	}

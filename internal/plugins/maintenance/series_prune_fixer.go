@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_prune_fixer.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 3aa1a5a7-404c-42f9-9a8d-b6213e7b09f2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -176,8 +176,8 @@ type spInputs struct {
 // candidates. Both counts fail CLOSED: a store that cannot answer the
 // unfiltered question plans nothing rather than offering deletes decided on a
 // filtered count.
-func (f *seriesPruneFixer) spLoad() (OpsStore, []dedup.SeriesPruneCandidate, map[int]int, error) {
-	store := f.p.deps.OpsStore()
+func (f *seriesPruneFixer) spLoadVia(st FixerStores) (OpsStore, []dedup.SeriesPruneCandidate, map[int]int, error) {
+	store := st.OpsStore()
 	if store == nil {
 		return nil, nil, nil, fmt.Errorf("database not initialized")
 	}
@@ -217,7 +217,7 @@ func spMembers(store OpsStore, cands []dedup.SeriesPruneCandidate) (database.Ser
 
 // Plan lists every candidate and decides each with evaluate.
 func (f *seriesPruneFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store, cands, refs, err := f.spLoad()
+	store, cands, refs, err := f.spLoadVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -316,8 +316,8 @@ type spSnapshot struct {
 	orphans map[int]*dedup.SeriesPruneCandidate
 }
 
-func (f *seriesPruneFixer) loadSnapshot() (*spSnapshot, error) {
-	store, cands, refs, err := f.spLoad()
+func (f *seriesPruneFixer) loadSnapshotVia(st FixerStores) (*spSnapshot, error) {
+	store, cands, refs, err := f.spLoadVia(st)
 	if err != nil {
 		return nil, err
 	}
@@ -379,11 +379,12 @@ func spSessionOf(ctx context.Context) *spApplySession {
 
 // snapshotFor returns the run's snapshot, or a fresh one outside a run.
 func (f *seriesPruneFixer) snapshotFor(ctx context.Context) (*spSnapshot, error) {
+	st := f.p.fixerStores(ctx)
 	s := spSessionOf(ctx)
 	if s == nil {
-		return f.loadSnapshot()
+		return f.loadSnapshotVia(st)
 	}
-	s.once.Do(func() { s.snap, s.err = f.loadSnapshot() })
+	s.once.Do(func() { s.snap, s.err = f.loadSnapshotVia(st) })
 	return s.snap, s.err
 }
 
@@ -702,7 +703,7 @@ func (f *seriesPruneFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", seriesPruneFixerID, fresh.RowID)
 	}
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

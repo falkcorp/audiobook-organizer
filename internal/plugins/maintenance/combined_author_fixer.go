@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combined_author_fixer.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 5c0f4a3e-2b7d-4e61-9a8c-3f1d6b2e7a90
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -304,7 +304,7 @@ func (idx *combinedAuthorIndex) isCombinedName(id int, name string) bool {
 // lease and read the lists without waiting, which is safe because the
 // authority lines are display only and never in the fingerprint.
 func (f *combinedAuthorFixer) buildIndex(ctx context.Context, await bool) (*combinedAuthorIndex, error) {
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -377,7 +377,7 @@ func (f *combinedAuthorFixer) cachedIndex() (*combinedAuthorIndex, error) {
 // Plan lists every live book (every version) that credits a combined record
 // in an author role or holds one as its primary author.
 func (f *combinedAuthorFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -462,8 +462,8 @@ func (f *combinedAuthorFixer) Plan(ctx context.Context, _ json.RawMessage, rep r
 // Replan re-reads the book and decides it again; it always returns
 // planned.RowID, so a book that is gone or no longer credits a combined
 // record comes back as a skipped row whose fingerprint differs.
-func (f *combinedAuthorFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
-	store := f.p.deps.OpsStore()
+func (f *combinedAuthorFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
@@ -1308,12 +1308,12 @@ func combinedRewrite(cur []database.BookAuthor, bookID string, recIDs []int, tar
 // none exists, journaled), the credit list rewritten under the book's author
 // lock (compare-and-set, journaled first), then the primary moved. Every
 // check that can refuse the row runs before the first write.
-func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *combinedAuthorFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*combinedDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", combinedAuthorFixerID, fresh.RowID)
 	}
-	store := f.p.deps.OpsStore()
+	store := f.p.fixerStores(ctx).OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}

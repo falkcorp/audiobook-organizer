@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_import_fixer.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 4b0c5f4a-6d0a-4f0e-9d8e-3f1f7a9a52c1
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -203,20 +203,20 @@ type mlRowState struct {
 	UploadedBy string `json:"uploaded_by,omitempty"`
 }
 
-func (f *masterListImportFixer) deps() (OpsStore, UserReadStateStore, MasterListStore, ExternalIDBookLookup, error) {
-	store := f.p.deps.OpsStore()
+func (f *masterListImportFixer) depsVia(st FixerStores) (OpsStore, UserReadStateStore, MasterListStore, ExternalIDBookLookup, error) {
+	store := st.OpsStore()
 	if store == nil {
 		return nil, nil, nil, nil, fmt.Errorf("database not initialized")
 	}
-	us := f.p.deps.UserReadStateStore()
+	us := st.UserReadStateStore()
 	if us == nil {
 		return nil, nil, nil, nil, fmt.Errorf("%s: the store cannot read user listening state", masterListImportFixerID)
 	}
-	lists := f.p.deps.MasterLists()
+	lists := st.MasterLists()
 	if lists == nil {
 		return nil, nil, nil, nil, fmt.Errorf("%s: the store cannot keep master lists", masterListImportFixerID)
 	}
-	ext := f.p.deps.ExternalIDBooks()
+	ext := st.ExternalIDBooks()
 	if ext == nil {
 		return nil, nil, nil, nil, fmt.Errorf("%s: the store cannot look books up by external id", masterListImportFixerID)
 	}
@@ -344,7 +344,7 @@ func (f *masterListImportFixer) elsewhereFor(ctx context.Context) *mlElsewhereIn
 // Plan matches every list row against the library, then decides each matched
 // or unmatched-for-good row against the target user's state. Read-only.
 func (f *masterListImportFixer) Plan(ctx context.Context, raw json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
-	store, us, lists, ext, err := f.deps()
+	store, us, lists, ext, err := f.depsVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +450,7 @@ func (f *masterListImportFixer) Replan(ctx context.Context, _ json.RawMessage, p
 	if planned.Skipped != "" {
 		return planned, nil // not applicable: nothing to re-check
 	}
-	store, us, lists, ext, err := f.deps()
+	store, us, lists, ext, err := f.depsVia(f.p.fixerStores(ctx))
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -463,7 +463,7 @@ func (f *masterListImportFixer) Replan(ctx context.Context, _ json.RawMessage, p
 	}
 	// parseMLParams' check of the target user, repeated: the plan stored the id,
 	// and a dry run should not report would_apply for a user that is gone.
-	if err := f.recheckUser(st.User); err != nil {
+	if err := f.recheckUserVia(f.p.fixerStores(ctx), st.User); err != nil {
 		return repairs.Row{}, fmt.Errorf("row %s: %w", planned.RowID, err)
 	}
 	m, err := f.matcherFor(ctx, store, ext)
@@ -503,9 +503,10 @@ func (f *masterListImportFixer) Replan(ctx context.Context, _ json.RawMessage, p
 // on another copy that lands between that Replan and the write is not caught.
 // The window is one Replan wide.
 func (f *masterListImportFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
+	st := f.p.fixerStores(ctx)
 	switch d := fresh.Detail.(type) {
 	case *mlDecision:
-		if err := w.SetUserStateChecked(ctx, d.user, d.book, d.expect, d.next, func() error { return f.recheckTarget(d.user, d.book) }); err != nil {
+		if err := w.SetUserStateChecked(ctx, d.user, d.book, d.expect, d.next, func() error { return f.recheckTargetVia(st, d.user, d.book) }); err != nil {
 			if errors.Is(err, repairs.ErrChangedSincePlan) || errors.Is(err, repairs.ErrPartiallyApplied) {
 				return err
 			}
@@ -513,7 +514,7 @@ func (f *masterListImportFixer) Apply(ctx context.Context, w *repairs.Writer, fr
 		}
 		return nil
 	case *mlElsewhereDecision:
-		return f.applyElsewhere(w, fresh, d)
+		return f.applyElsewhereVia(st, w, fresh, d)
 	}
 	return fmt.Errorf("%s: row %s carries no decision", masterListImportFixerID, fresh.RowID)
 }
@@ -538,11 +539,11 @@ func (f *masterListImportFixer) Apply(ctx context.Context, w *repairs.Writer, fr
 // repairs.ErrChangedSincePlan, so the row reports changed_since_plan with the
 // reason. (The framework guard does not cover this: it skips a trashed book as
 // having nothing left to protect, it does not refuse it.)
-func (f *masterListImportFixer) recheckTarget(user, book string) error {
-	if err := f.recheckUser(user); err != nil {
+func (f *masterListImportFixer) recheckTargetVia(st FixerStores, user, book string) error {
+	if err := f.recheckUserVia(st, user); err != nil {
 		return err
 	}
-	store := f.p.deps.OpsStore()
+	store := st.OpsStore()
 	if store == nil {
 		return fmt.Errorf("%s: database not initialized", masterListImportFixerID)
 	}
@@ -562,8 +563,8 @@ func (f *masterListImportFixer) recheckTarget(user, book string) error {
 
 // recheckUser: the target user still exists, and is still not the iTunes sync
 // user (the plan checked both; Replan keeps the plan's user from the row).
-func (f *masterListImportFixer) recheckUser(user string) error {
-	us := f.p.deps.UserReadStateStore()
+func (f *masterListImportFixer) recheckUserVia(st FixerStores, user string) error {
+	us := st.UserReadStateStore()
 	if us == nil {
 		return fmt.Errorf("%s: the store cannot read user listening state", masterListImportFixerID)
 	}
@@ -586,15 +587,15 @@ func (f *masterListImportFixer) recheckUser(user string) error {
 // book. A record that appeared since the re-check (another apply of a list
 // with the same row) is not overwritten: the journal row is voided (the write
 // failed) and the row reports changed_since_plan.
-func (f *masterListImportFixer) applyElsewhere(w *repairs.Writer, fresh repairs.Row, d *mlElsewhereDecision) error {
-	lists := f.p.deps.MasterLists()
+func (f *masterListImportFixer) applyElsewhereVia(st FixerStores, w *repairs.Writer, fresh repairs.Row, d *mlElsewhereDecision) error {
+	lists := st.MasterLists()
 	if lists == nil {
 		return fmt.Errorf("%s: the store cannot keep master lists", masterListImportFixerID)
 	}
 	// The record names the target user: one that was removed since the plan
 	// gets none. (Nothing is locked here, so the check is as close to the write
 	// as the store allows; the create itself is atomic.)
-	if err := f.recheckUser(d.rec.UserID); err != nil {
+	if err := f.recheckUserVia(st, d.rec.UserID); err != nil {
 		return err
 	}
 	rec := d.rec
