@@ -32,10 +32,37 @@ func writeAIModule(t *testing.T, files map[string]string) string {
 	return dir
 }
 
-// TestArchtest_NoAISDKOutsideAdapters_RealCore runs the check over the real
-// core module: the SDK is imported by integrations/ai/openai and nowhere else.
-func TestArchtest_NoAISDKOutsideAdapters_RealCore(t *testing.T) {
-	NoAISDKOutsideAdapters(t, coreRoot(t))
+// TestArchtest_NoAISDKOutsideAdapters is the check's self-test (F7-03): over
+// core's own packages it reports nothing, the SDK being imported by
+// integrations/ai/openai and nowhere else, and over a synthetic module with one
+// importer outside the adapter it reports that importer exactly once.
+func TestArchtest_NoAISDKOutsideAdapters(t *testing.T) {
+	t.Run("core_packages_no_report", func(t *testing.T) {
+		NoAISDKOutsideAdapters(t, coreRoot(t))
+	})
+	t.Run("synthetic_outside_importer_one_report", func(t *testing.T) {
+		imp := "package %s\nimport \"github.com/openai/openai-go/v3\"\nvar _ = openai.F\n"
+		dir := writeAIModule(t, map[string]string{
+			"integrations/ai/openai/adapter.go": fmt.Sprintf(imp, "openai"),
+			"arkham/asylum.go":                  fmt.Sprintf(imp, "arkham"),
+		})
+		rec := &bcryptRecorder{TB: t}
+		NoAISDKOutsideAdapters(rec, dir)
+		if len(rec.errs) != 1 {
+			t.Fatalf("want exactly one report, got %d: %v", len(rec.errs), rec.errs)
+		}
+		for _, want := range []string{
+			"1 import(s) of the OpenAI SDK outside integrations/ai/openai",
+			"arkham/asylum.go:2: imports github.com/openai/openai-go/v3",
+		} {
+			if !strings.Contains(rec.errs[0], want) {
+				t.Errorf("the report lacks %q:\n%s", want, rec.errs[0])
+			}
+		}
+		if strings.Contains(rec.errs[0], "integrations/ai/openai/adapter.go") {
+			t.Errorf("the adapter's own import was reported:\n%s", rec.errs[0])
+		}
+	})
 }
 
 // TestAISDKImports_Detection reads one file at a time: the plain, alias, blank
