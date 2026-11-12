@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -172,12 +173,17 @@ func TestExtractStoreRefusesWhatTheManifestDoesNotDescribe(t *testing.T) {
 	a := e.create("manual")
 	src := e.path(a)
 	entries := entriesOf(t, src)
+	// The smallest-named non-empty store entry: a map walk could pick an empty
+	// file, which the same-size mutation below would leave unchanged.
 	var dbName string
-	for n := range entries {
-		if strings.HasPrefix(n, "db/") {
+	for _, n := range slices.Sorted(maps.Keys(entries)) {
+		if strings.HasPrefix(n, "db/") && len(entries[n]) > 0 {
 			dbName = n
 			break
 		}
+	}
+	if dbName == "" {
+		t.Fatalf("fixture: no non-empty db entry in %v", keysOf(entries))
 	}
 	for _, tc := range []struct {
 		name   string
