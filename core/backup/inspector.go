@@ -1,5 +1,5 @@
 // file: core/backup/inspector.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 94d2b6e1-0a7c-4f35-8e19-6b3a1c5d7f08
 // last-edited: 2026-11-12
 
@@ -82,7 +82,18 @@ func (si *StorageInspector) Inspect(ctx context.Context, dir string) (StoreInfo,
 		if so == "" {
 			so = "core/secrets"
 		}
-		if ks, err := ro.Keyspace(so); err == nil {
+		// A build that does not declare the owner has no secret records to check;
+		// one that does must be able to read them: an error here is a refusal, never
+		// "no keys needed".
+		declared := false
+		for _, os := range si.Base.Owners {
+			declared = declared || (os.Owner == so && os.Enabled)
+		}
+		if declared {
+			ks, err := ro.Keyspace(so)
+			if err != nil {
+				return StoreInfo{}, fmt.Errorf("backup: the store's secret records cannot be read: %w", err)
+			}
 			if info.SecretKeyIDs, err = si.Secrets.KeyIDsReferenced(ctx, ks); err != nil {
 				return StoreInfo{}, fmt.Errorf("backup: key IDs the store's secrets need: %w", err)
 			}

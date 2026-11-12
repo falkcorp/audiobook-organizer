@@ -1,5 +1,5 @@
 // file: core/backup/env_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e5b0c7d2-8a41-4f93-b6d7-2a9c1e4f8b60
 // last-edited: 2026-11-12
 
@@ -185,7 +185,7 @@ func (e *env) build() {
 		Store: recStore{admin: admin, log: e.log}, Keyring: e.keys, Markers: e.markers, Stager: e.stager,
 		Inspector: &backup.StorageInspector{
 			Base:  storage.OpenOptions{Owners: e.owners, Build: "test-build", FreeSpaceMargin: 1},
-			Admin: admin, Secrets: e.keys,
+			Admin: admin, Secrets: e.keys, SecretsOwner: gothamOwner,
 		},
 		Clock: e.now,
 	}
