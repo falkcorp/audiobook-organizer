@@ -1,5 +1,5 @@
 # file: internal/plugins/maintenance/testdata/fixer_stores_allowlist.txt
-# version: 1.1.0
+# version: 1.2.0
 # guid: 6a3e8d21-9c47-4f15-b2e0-1d7c5a9f3b68
 # last-edited: 2026-11-12
 #
@@ -45,12 +45,16 @@ dep LatestReconcileScan # reconcileFixer.Plan reads the latest reconcile scan th
 # ---- a service call, not a store
 dep RefetchMetadataCandidates # lostCandidatesFixer.Apply runs the provider chain and writes the candidate cache through f.p.deps; no FixerStores accessor or repairs.Writer path covers it. Owner question 1 in seams.d/F5-02.md
 
-# ---- func values read from struct fields, which the pass cannot see through
-# ---- (the limit the header of the test states). Each is a plain injected
-# ---- function, set by the constructor to a standard-library function and swapped by tests.
-unresolved (*consolidationLeftoversFixer).Apply -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.retireIntoExpecting # f.now, the clock: time.Now from newConsolidationLeftoversFixer
-unresolved (*duplicateCopiesFixer).Apply -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.retireIntoAllowingITunesPath # f.now, the clock: time.Now from newDuplicateCopiesFixer
-unresolved (*fragmentFixer).retire -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.retireIntoITunesDatabaseOnly # f.now, the clock: time.Now from newFragmentFixer
-unresolved (*fragmentFixer).hashCopyGate -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.fileSig # f.statFn: os.Stat from newFragmentFixer
-unresolved (*retiredRun).ownerManual -> github.com/falkcorp/audiobook-organizer/internal/repairs.GuardOwnerManualBooks # r.series: the series-name lookup retiredShared builds with repairs.SeriesNamesFrom over a series listing read when the run's shared state is built
-unresolved (*vgPrimaryFixer).Plan -> (*github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.Plugin).versionGroupPrimaryRepair # f.prober(...): f.probe when a test set one, else versionprimary.FFprobeChapterCounter, an ffprobe counter that reads no store
+# ---- func values read from struct fields or returned by a call the pass cannot
+# ---- see through (the limit the header of the test states), bare or inside a
+# ---- struct literal. Each is a plain injected function, set by the constructor to a
+# ---- standard-library function and swapped by tests. Keyed on caller, callee and
+# ---- the argument's description.
+unresolved (*consolidationLeftoversFixer).Apply -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.retireIntoExpecting [field consolidationLeftoversFixer.now] # f.now, the clock: time.Now from newConsolidationLeftoversFixer
+unresolved (*duplicateCopiesFixer).Apply -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.retireIntoAllowingITunesPath [field duplicateCopiesFixer.now] # f.now, the clock: time.Now from newDuplicateCopiesFixer
+unresolved (*duplicateCopiesFixer).detailVia -> (github.com/falkcorp/audiobook-organizer/internal/versionprimary.Loader).Load [load of versionprimary.Loader] # a Loader literal whose Stat is f.statFn: os.Stat from newDuplicateCopiesFixer
+unresolved (*fragmentFixer).retire -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.retireIntoITunesDatabaseOnly [field fragmentFixer.now] # f.now, the clock: time.Now from newFragmentFixer
+unresolved (*fragmentFixer).hashCopyGate -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.fileSig [field fragmentFixer.statFn] # f.statFn: os.Stat from newFragmentFixer
+unresolved (*retiredRun).ownerManual -> github.com/falkcorp/audiobook-organizer/internal/repairs.GuardOwnerManualBooks [field retiredRun.series] # r.series: the series-name lookup retiredShared builds with repairs.SeriesNamesFrom over a series listing read when the run's shared state is built
+unresolved (*vgPrimaryFixer).Plan -> (*github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.Plugin).versionGroupPrimaryRepair [result of (*vgPrimaryFixer).prober] # f.prober(...): f.probe when a test set one, else versionprimary.FFprobeChapterCounter, an ffprobe counter that reads no store
+unresolved (*vgPrimaryFixer).Replan -> (*github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.vgApplier).planGroup [load of versionprimary.Loader] # a Loader literal whose Probe is f.prober(...): f.probe when a test set one, else the ffprobe counter, which reads no store

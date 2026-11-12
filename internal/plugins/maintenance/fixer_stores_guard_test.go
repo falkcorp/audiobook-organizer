@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fixer_stores_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91c6e2a7-3d84-4b05-a1f9-7e0c5d2b8a43
 // last-edited: 2026-11-12
 
@@ -34,8 +34,12 @@ import (
 //   - every conversion of the plugin's deps (or a plugin type) into a
 //     store-family interface (a store sink named convert:From->To),
 //   - every other ServerDeps method (a dep), and
-//   - every func argument the maintenance package passes that the pass cannot
-//     follow (unresolved).
+//   - every func argument the maintenance package passes, bare or inside a
+//     struct literal or the slice built for variadic arguments
+//     (registry.RunItemsOptions: Label, CheckpointFn, CheckpointStateFn), that
+//     the pass cannot follow (unresolved; keyed on caller, callee and a
+//     description of the argument, so a second unfollowable argument to the same
+//     call is a new report).
 //
 // Every report must be on the allowlist, testdata/fixer_stores_allowlist.txt,
 // with a reason, and every allowlist entry must still be reported, so the
@@ -129,7 +133,7 @@ func TestFixerStores_NoFixerReachesAStoreExceptThroughTheShell(t *testing.T) {
 	// reads a store: it fails until a reviewer has said what it is.
 	seenUnresolved := map[string]bool{}
 	for _, u := range rep.Unresolved {
-		key := u.Caller + " -> " + u.Callee
+		key := u.Caller + " -> " + u.Callee + " [" + u.Arg + "]"
 		seenUnresolved[key] = true
 		if _, ok := allow["unresolved"][key]; !ok {
 			t.Errorf("the pass cannot follow a func argument: %s passes %s to %s (%s).\n"+
