@@ -1,5 +1,5 @@
 // file: core/outbox/partitions_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e10c5bfb-43c5-423f-8265-428e0f871145
 // last-edited: 2026-11-12
 
@@ -225,5 +225,60 @@ func TestOutbox_PartitionStopWritesNoLedgerRowsPerLoop(t *testing.T) {
 	}
 	if seen.count() != 0 || r.cursors(consumerN2) != 0 {
 		t.Fatalf("the stopped topic delivered %d times and made %d cursors for the new consumer, want none", seen.count(), r.cursors(consumerN2))
+	}
+}
+
+// A stop for a changed partition count belongs to partitionsOK, which reads the
+// stamp and lifts the stop itself. The intake pass must not clear it: when the
+// relay's loops are more than stopRetryEvery apart (a stalled store, a
+// suspended host; here a clock that jumps 31 s between rounds) the intake looks
+// at a stopped topic again, finds nothing due to sequence, and used to clear
+// the topic's health, so the next delivery pass reported the stop a second
+// time. The stop is logged once and health reads degraded after every round,
+// with and without a consumer registered for the topic (a registered consumer
+// refreshes the stop on every loop, one without relies on the sweep).
+func TestOutbox_PartitionStopSurvivesLongGapsBetweenLoops(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		register func(testing.TB, *rig) []registration
+	}{
+		{"no consumer registered", func(testing.TB, *rig) []registration { return nil }},
+		{"one consumer registered", func(testing.TB, *rig) []registration {
+			return []registration{{owner: "core", hs: []outbox.Handler{
+				outbox.ConsumeRaw(signalName, consumerN, (&payloads{}).handler(consumerN)),
+			}}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cp, _ := strandedFour(t)
+			clk := &skew{}
+			logs := &logCapture{}
+			r := newRig(t, rigOpts{fs: cp.fs, partitions: 2, now: clk.now, log: logs.logger(), sweep: sweepFast,
+				cfg:      func(c *outbox.Config) { c.RelayRotate = 24 * time.Hour },
+				register: tc.register})
+			eventually(t, "the stop to be reported", func() bool { return r.healthOf().Reason == "delivery_stopped" })
+
+			// A delayed intake row, so the intake pass has something to scan and
+			// nothing due.
+			b := r.gothamKS.NewBatch()
+			must(t, outbox.Stage(r.ob.Writer("gotham"), b, signal(), "bat-delayed", Dispatch{Villain: "Riddler"},
+				outbox.NotBefore(clk.now().Add(24*time.Hour))))
+			must(t, b.Commit(context.Background(), storage.Sync))
+			b.Close()
+
+			for round := range 4 {
+				clk.advance(31 * time.Second)
+				for range 10 {
+					r.ob.Wake()
+					time.Sleep(10 * time.Millisecond)
+				}
+				if h := r.healthOf(); h.Status != health.StatusDegraded || h.Reason != "delivery_stopped" {
+					t.Fatalf("round %d: health %v %q, want degraded delivery_stopped", round, h.Status, h.Reason)
+				}
+				if n := logs.count("its partition count changed"); n != 1 {
+					t.Fatalf("round %d: the stop was logged %d times, want once:\n%s", round, n, logs.text())
+				}
+			}
+		})
 	}
 }

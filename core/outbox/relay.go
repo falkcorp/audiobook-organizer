@@ -1,5 +1,5 @@
 // file: core/outbox/relay.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 77b6d1de-9cf2-4c52-8f0b-7e9a5c2b6d11
 // last-edited: 2026-11-12
 
@@ -333,6 +333,17 @@ func (r *relay) intakeTopic(ctx context.Context, topic string) {
 	}
 	if isStopped {
 		r.mu.Lock()
+		if r.partStop[topic] {
+			// A partition-count stop is partitionsOK's: it reads the stamp and
+			// lifts the stop itself when the declaration matches again, and a scan
+			// that found nothing to sequence says nothing about the stamp. Clearing
+			// here would report the topic healthy until the next delivery pass
+			// stopped it again, and log the stop a second time. Wait another
+			// stopRetryEvery before looking at the intake again.
+			r.topicStop[topic] = o.now()
+			r.mu.Unlock()
+			return
+		}
 		delete(r.topicStop, topic)
 		r.mu.Unlock()
 		o.health.clear(subject)
