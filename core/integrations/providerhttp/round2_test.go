@@ -32,10 +32,9 @@ func TestGetJSON_EchoedQueryCredentialNotInDetail(t *testing.T) {
 		_, _ = fmt.Fprint(w, strings.Repeat(" ", 4*integrations.MaxDetail), "tail "+secret)
 	})
 	r := newRegistry(t, newClock())
-	read := 0
 	c := r.Client(ref("riddler"), providerhttp.Policy{Limits: limits(100, 100), Redact: nil,
 		QueryCredential: &integrations.QueryCredential{Name: "gotham_pin", Origins: []string{srv.URL},
-			Value: func(context.Context) (string, error) { read++; return secret, nil }}})
+			Value: func(context.Context) (string, error) { return secret, nil }}})
 	err := c.GetJSON(context.Background(), srv.URL+"/x?q=1", &struct{}{})
 	var ie *integrations.Error
 	if !errors.As(err, &ie) || ie.Status != http.StatusInternalServerError {
@@ -50,11 +49,18 @@ func TestGetJSON_EchoedQueryCredentialNotInDetail(t *testing.T) {
 		t.Errorf("Detail = %q, want the echoed value replaced", ie.Detail)
 	}
 
-	// An origin the credential is not bound to is not asked for it at all.
-	other, _ := server(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
-	before := read
-	_ = c.GetJSON(context.Background(), other.URL+"/x", &struct{}{})
-	if read != before {
-		t.Error("the credential was read for an origin it is not bound to")
+	// An origin the credential is not bound to is not asked for it at all (a
+	// fresh instance: the one above has its breaker open after the 500s).
+	other, _ := server(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) })
+	reads := 0
+	c2 := r.Client(ref("riddler2"), providerhttp.Policy{Limits: limits(100, 100),
+		QueryCredential: &integrations.QueryCredential{Name: "gotham_pin", Origins: []string{srv.URL},
+			Value: func(context.Context) (string, error) { reads++; return secret, nil }}})
+	var ie2 *integrations.Error
+	if err := c2.GetJSON(context.Background(), other.URL+"/x", &struct{}{}); !errors.As(err, &ie2) || ie2.Status != http.StatusBadRequest {
+		t.Fatalf("the request to an unbound origin: %v, want a classified 400", err)
+	}
+	if reads != 0 {
+		t.Errorf("the credential was read %d times for an origin it is not bound to", reads)
 	}
 }

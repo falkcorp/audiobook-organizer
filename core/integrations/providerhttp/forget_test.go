@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/forget_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ae91cda8-42d5-49c4-8dd7-b672dca0337f
 // last-edited: 2026-11-11
 
@@ -110,30 +110,52 @@ func TestForget_DropsAnInstancesStateAndOnlyItsOwn(t *testing.T) {
 	}
 }
 
-// TestForget_SiblingNotBuiltSinceBoot: a sibling known only from the store
-// still keeps the shared scope's state.
+// TestForget_SiblingNotBuiltSinceBoot: with the boot read of the store failed,
+// this process knows no mappings but the store does; Forget reads them there. A
+// sibling known only from the store keeps the shared scope's state; the last ref
+// found only in the store takes it with it.
 func TestForget_SiblingNotBuiltSinceBoot(t *testing.T) {
 	ctx := context.Background()
-	clk := newClock()
-	gs := providerhttp.NativeGateStore(store(t))
 	const shared = "google-books:feedfacecafe"
 	alfred, barbara := ref("alfred"), ref("barbara")
 	custom := providerhttp.Policy{Limits: limits(100, 100), Scope: shared}
-	r1 := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = gs })
-	holdOn(t, r1, alfred, custom, integrations.ClassAuth)
-	r1.GateFor(barbara, custom)
-	seed(t, gs, shared)
+	setup := func(t *testing.T) (providerhttp.GateStore, *providerhttp.Registry) {
+		clk := newClock()
+		gs := providerhttp.NativeGateStore(store(t))
+		r1 := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = gs })
+		holdOn(t, r1, alfred, custom, integrations.ClassAuth)
+		r1.GateFor(barbara, custom)
+		seed(t, gs, shared)
+		fs := &failingStore{GateStore: gs}
+		fs.failHolds.Store(true) // the restart cannot read its holds: nothing is in memory
+		return gs, newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = fs })
+	}
 
-	r2 := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = gs }) // restart: nothing built
-	if err := r2.Forget(ctx, alfred); err != nil {
-		t.Fatal(err)
-	}
-	if !holdScopes(t, gs)[shared] || quotaOf(t, gs, shared) != 4 {
-		t.Fatal("a scope shared with a ref not built since boot was dropped")
-	}
-	if h, ok := r2.HoldFor(barbara); !ok || h.Scope != shared {
-		t.Fatalf("barbara cannot find the shared hold after alfred was forgotten: %+v, %v", h, ok)
-	}
+	t.Run("a sibling in the store", func(t *testing.T) {
+		gs, r2 := setup(t)
+		if err := r2.Forget(ctx, alfred); err != nil {
+			t.Fatal(err)
+		}
+		if !holdScopes(t, gs)[shared] || quotaOf(t, gs, shared) != 4 {
+			t.Fatal("a scope shared with a ref known only from the store was dropped")
+		}
+		if sc, _ := gs.Scopes(ctx); len(sc) != 1 || sc[barbara] != shared {
+			t.Fatalf("scope records = %v, want only barbara's", sc)
+		}
+	})
+
+	t.Run("the last ref, known only from the store", func(t *testing.T) {
+		gs, r2 := setup(t)
+		if err := gs.PutScope(ctx, barbara, ""); err != nil { // alfred is the only ref left on it
+			t.Fatal(err)
+		}
+		if err := r2.Forget(ctx, alfred); err != nil {
+			t.Fatal(err)
+		}
+		if holdScopes(t, gs)[shared] || quotaOf(t, gs, shared) != 0 {
+			t.Fatal("the scope of a ref known only from the store outlived Forget")
+		}
+	})
 }
 
 // brokenScopes fails Scopes on demand.
