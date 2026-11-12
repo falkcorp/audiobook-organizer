@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/mapping.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4a2f8d21-9b4c-4b9f-8c64-7e1d3a6c8b22
 // last-edited: 2026-11-11
 
@@ -99,13 +99,16 @@ func analyzerName(name, def string) (string, error) {
 // fields. A field the Spec does not declare is ErrInvalidQuery, never a silent
 // match-nothing: a typo in a field name is a bug, not an empty result. The tree
 // is bounded first (nodes, depth, text size), so a hostile query cannot cost
-// more than a fixed amount before it is refused.
+// more than a fixed amount before it is refused. The query strings inside the
+// tree are parsed during the translation, and what each costs is added to the
+// same node budget checkShape started (nodes), not to a fresh one per string: a
+// tree of a thousand OpString leaves must not get a thousand budgets.
 func translate(kinds map[string]index.FieldKind, n index.Node) (query.Query, error) {
 	nodes := 0
 	if err := checkShape(n, 1, &nodes); err != nil {
 		return nil, err
 	}
-	return translateNode(kinds, n)
+	return translateNode(kinds, n, 1, &nodes)
 }
 
 // notCost is what a Not node counts in the node budget: it is translated to
@@ -143,7 +146,10 @@ func checkShape(n index.Node, depth int, nodes *int) error {
 	return nil
 }
 
-func translateNode(kinds map[string]index.FieldKind, n index.Node) (query.Query, error) {
+// translateNode translates n, which sits at depth in the tree. nodes is the
+// budget shared by the whole query: it holds what checkShape counted and grows
+// by what each parsed query string costs.
+func translateNode(kinds map[string]index.FieldKind, n index.Node, depth int, nodes *int) (query.Query, error) {
 	bad := func(format string, a ...any) error {
 		return fmt.Errorf("%w: %s", index.ErrInvalidQuery, fmt.Sprintf(format, a...))
 	}
@@ -215,7 +221,7 @@ func translateNode(kinds map[string]index.FieldKind, n index.Node) (query.Query,
 	case index.OpAnd, index.OpOr:
 		qs := make([]query.Query, 0, len(n.Children))
 		for _, c := range n.Children {
-			q, err := translateNode(kinds, c)
+			q, err := translateNode(kinds, c, depth+1, nodes)
 			if err != nil {
 				return nil, err
 			}
@@ -229,7 +235,7 @@ func translateNode(kinds map[string]index.FieldKind, n index.Node) (query.Query,
 		if len(n.Children) != 1 {
 			return nil, bad("not takes one query")
 		}
-		c, err := translateNode(kinds, n.Children[0])
+		c, err := translateNode(kinds, n.Children[0], depth+1, nodes)
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +245,7 @@ func translateNode(kinds map[string]index.FieldKind, n index.Node) (query.Query,
 		q.AddMustNot(c)
 		return q, nil
 	case index.OpString:
-		return translateString(n.Text)
+		return translateString(n.Text, depth, nodes)
 	}
 	return nil, bad("operator %d", n.Op)
 }
@@ -306,8 +312,10 @@ func when(v any) (time.Time, error) {
 // to refuse: regular expressions, and a wildcard that starts with * or ? (it
 // has no literal prefix to narrow the term dictionary scan, so it expands to
 // every term of the field). A trailing wildcard (cap*) is allowed and counted
-// against the term-searcher cap like a Prefix.
-func translateString(s string) (query.Query, error) {
+// against the term-searcher cap like a Prefix. What the parsed query costs is
+// added to nodes, the budget of the whole query (a string at depth levels deep
+// starts its own depth count there), so the strings of one query share one cap.
+func translateString(s string, depth int, nodes *int) (query.Query, error) {
 	bad := func(format string, a ...any) error {
 		return fmt.Errorf("%w: %s", index.ErrInvalidQuery, fmt.Sprintf(format, a...))
 	}
@@ -318,8 +326,7 @@ func translateString(s string) (query.Query, error) {
 	if err != nil {
 		return nil, bad("query string: %v", err)
 	}
-	nodes := 0
-	if err := checkParsed(parsed, 1, &nodes); err != nil {
+	if err := checkParsed(parsed, depth+1, nodes); err != nil {
 		return nil, err
 	}
 	return parsed, nil
@@ -337,7 +344,7 @@ func checkParsed(q query.Query, depth int, nodes *int) error {
 		*nodes += notCost - 1 // a must-not clause is a match-all, like Not
 	}
 	if *nodes > maxQueryNodes {
-		return bad("query string is over its budget of %d clauses (a negation counts as %d)", maxQueryNodes, notCost)
+		return bad("query is over its budget of %d nodes (a negation in a query string counts as %d)", maxQueryNodes, notCost)
 	}
 	switch v := q.(type) {
 	case *query.RegexpQuery:
