@@ -1,5 +1,5 @@
 // file: core/library/rootfs_local.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
 // last-edited: 2026-11-11
 
@@ -52,6 +52,10 @@ type localFS struct {
 	// are set on a view for anyone but core, never on the engine's own driver.
 	sealed bool
 	hidden bool
+	// race is a test hook, nil outside tests: it runs on a hidden view between
+	// the name check ("checked") and after the open ("opened"), where a test
+	// swaps a symlink to prove the descriptor is examined, not only the name.
+	race func(stage, name string)
 }
 
 var _ fsOps = (*localFS)(nil)
@@ -92,7 +96,37 @@ func (l *localFS) name(op, n string) (string, error) {
 	if l.hidden && l.reserved(n, false) {
 		return "", &fs.PathError{Op: op, Path: n, Err: ErrReservedPath}
 	}
+	if l.hidden && l.race != nil {
+		l.race("checked", n)
+	}
 	return n, nil
+}
+
+// confirmOpen is the second half of a hidden view's read check. name judged the
+// spelling and where its symlinks led, but a symlink swapped in between that
+// check and the open sends the open elsewhere, so the descriptor itself is
+// examined: the name must still reach the very file that was opened, and must
+// not lead into an area now. A name that moved meanwhile is refused too; for a
+// view that hides the areas a spurious refusal costs a retry, a missed one
+// reads core's state.
+func (l *localFS) confirmOpen(op, name, n string, f fs.File) error {
+	if !l.hidden {
+		return nil
+	}
+	if l.race != nil {
+		l.race("opened", n)
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return pathErr(op, name, err)
+	}
+	if cur, err := l.root.Stat(n); err != nil || !os.SameFile(st, cur) {
+		return &fs.PathError{Op: op, Path: name, Err: fmt.Errorf("%w: %s changed while it was opened", ErrReservedPath, name)}
+	}
+	if l.reserved(n, false) {
+		return &fs.PathError{Op: op, Path: name, Err: ErrReservedPath}
+	}
+	return nil
 }
 
 // mut validates a name for a mutation: never "." and never on a read-only view.
@@ -126,6 +160,10 @@ func (l *localFS) Open(name string) (fs.File, error) {
 	if err != nil {
 		return nil, pathErr("open", name, err)
 	}
+	if err := l.confirmOpen("open", name, n, f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	return f, nil
 }
 
@@ -157,6 +195,9 @@ func (l *localFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		return nil, pathErr("readdir", name, err)
 	}
 	defer d.Close()
+	if err := l.confirmOpen("readdir", name, n, d); err != nil {
+		return nil, err
+	}
 	ents, err := d.ReadDir(-1)
 	sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
 	return ents, pathErr("readdir", name, err)
@@ -179,6 +220,12 @@ func (l *localFS) OpenFile(name string, flag int, perm fs.FileMode) (File, error
 	f, err := l.root.OpenFile(n, flag, perm)
 	if err != nil {
 		return nil, pathErr("open", name, err)
+	}
+	if flag&writeFlags == 0 {
+		if err := l.confirmOpen("open", name, n, f); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
 	}
 	return f, nil
 }
