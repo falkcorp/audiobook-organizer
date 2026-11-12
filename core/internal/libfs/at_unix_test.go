@@ -1,5 +1,5 @@
 // file: core/internal/libfs/at_unix_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f659f83a-171b-4adc-996b-b61e175f5807
 // last-edited: 2026-11-11
 
@@ -218,5 +218,55 @@ func TestOnARealFilesystemWithoutHardLinks(t *testing.T) {
 	}
 	if read(t, filepath.Join(dir, "y")) != "y" {
 		t.Error("an existing file was replaced")
+	}
+}
+
+// The errno of a failed link decides what a caller does next, so each class is
+// pinned without needing a filesystem that produces it: a missing hard link
+// facility is classified (and the errno stays in the chain), a device boundary
+// and an existing name are not, and the fallback rename answers
+// ErrNoAtomicRename only where no atomic way to refuse an existing name is left.
+func TestLinkFailureClassification(t *testing.T) {
+	noLinks := []unix.Errno{unix.EPERM, unix.ENOTSUP, unix.EOPNOTSUPP, unix.ENOSYS, unix.EMLINK}
+	for _, e := range noLinks {
+		err := linkFailure("a", "b", e)
+		if !errors.Is(err, ErrNoHardLinks) || !errors.Is(err, errors.ErrUnsupported) || !errors.Is(err, e) {
+			t.Errorf("link failure %v = %v, want ErrNoHardLinks wrapping the errno", e, err)
+		}
+		if errors.Is(err, ErrNoAtomicRename) || errors.Is(err, ErrCrossDevice) {
+			t.Errorf("link failure %v is mistaken for another class: %v", e, err)
+		}
+		ferr := fallbackLinkFailure("a", "b", e)
+		if !errors.Is(ferr, ErrNoAtomicRename) || !errors.Is(ferr, errors.ErrUnsupported) || !errors.Is(ferr, e) {
+			t.Errorf("fallback link failure %v = %v, want ErrNoAtomicRename wrapping the errno", e, ferr)
+		}
+		if errors.Is(ferr, ErrNoHardLinks) {
+			t.Errorf("the fallback's failure %v is reported as a link failure: %v", e, ferr)
+		}
+	}
+	for name, c := range map[string]struct {
+		errno unix.Errno
+		is    error
+	}{
+		"an existing name":  {unix.EEXIST, fs.ErrExist},
+		"a device boundary": {unix.EXDEV, ErrCrossDevice},
+		"a missing source":  {unix.ENOENT, fs.ErrNotExist},
+		"no permission":     {unix.EACCES, fs.ErrPermission},
+		"no space":          {unix.ENOSPC, unix.ENOSPC},
+	} {
+		for form, err := range map[string]error{
+			"link":     linkFailure("a", "b", c.errno),
+			"fallback": fallbackLinkFailure("a", "b", c.errno),
+		} {
+			if !errors.Is(err, c.is) {
+				t.Errorf("%s of %s = %v, want %v in the chain", form, name, err, c.is)
+			}
+			if errors.Is(err, ErrNoHardLinks) || errors.Is(err, ErrNoAtomicRename) {
+				t.Errorf("%s of %s is classified as missing hard links: %v", form, name, err)
+			}
+		}
+	}
+	if err := linkFailure("a", "b", nil); err != nil {
+		t.Errorf("linkFailure(nil) = %v", err)
 	}
 }

@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_unix.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7ec76d18-20c0-48f2-9a57-c01b4e75498f
 // last-edited: 2026-11-11
 
@@ -44,6 +44,13 @@ func Link(od *Dir, oldName string, nd *Dir, newName string) error {
 	err := retry(func() error { return unix.Linkat(fd(od), oldName, fd(nd), newName, 0) })
 	runtime.KeepAlive(od)
 	runtime.KeepAlive(nd)
+	return linkFailure(oldName, newName, err)
+}
+
+// linkFailure is the error of a linkat: nil, ErrCrossDevice for EXDEV,
+// ErrNoHardLinks (and the errno) where the filesystem makes no hard links, the
+// errno otherwise.
+func linkFailure(oldName, newName string, err error) error {
 	if err != nil && noHardLinks(err) {
 		return linkErr("link", oldName, newName, fmt.Errorf("%w: %w", ErrNoHardLinks, err))
 	}
@@ -116,16 +123,25 @@ func RenameNoReplaceFallback(od *Dir, oldName string, nd *Dir, newName string) e
 		return linkErr("rename", oldName, newName, ErrNoAtomicRename)
 	}
 	err := retry(func() error { return unix.Linkat(fd(od), oldName, fd(nd), newName, 0) })
+	if err != nil {
+		return fallbackLinkFailure(oldName, newName, err)
+	}
+	if uerr := retry(func() error { return unix.Unlinkat(fd(od), oldName, 0) }); uerr != nil {
+		// The new name exists and the old one could not be removed: both names
+		// reach the same bytes, which loses nothing. Undo the new name so the
+		// rename is all or nothing.
+		rerr := retry(func() error { return unix.Unlinkat(fd(nd), newName, 0) })
+		return joinErr(linkErr("rename", oldName, newName, uerr), rollbackFailed("remove", newName, rerr))
+	}
+	return nil
+}
+
+// fallbackLinkFailure is the error of the link that RenameNoReplaceFallback makes
+// first: an existing name is ErrExist and nothing changed, a device boundary is
+// ErrCrossDevice, a filesystem without hard links is ErrNoAtomicRename (there is
+// no atomic way left to refuse an existing name), anything else is the errno.
+func fallbackLinkFailure(oldName, newName string, err error) error {
 	switch {
-	case err == nil:
-		if uerr := retry(func() error { return unix.Unlinkat(fd(od), oldName, 0) }); uerr != nil {
-			// The new name exists and the old one could not be removed:
-			// both names reach the same bytes, which loses nothing. Undo
-			// the new name so the rename is all or nothing.
-			rerr := retry(func() error { return unix.Unlinkat(fd(nd), newName, 0) })
-			return joinErr(linkErr("rename", oldName, newName, uerr), rollbackFailed("remove", newName, rerr))
-		}
-		return nil
 	case errors.Is(err, unix.EEXIST):
 		return linkErr("rename", oldName, newName, err)
 	case errors.Is(err, unix.EXDEV):

@@ -1,5 +1,5 @@
 // file: core/library/rootfs_local.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
 // last-edited: 2026-11-11
 
@@ -172,6 +172,7 @@ func (l *localFS) openRead(op, name, n string, flag int) (*os.File, error) {
 	if st, err := l.root.Stat(n); err == nil && !st.Mode().IsRegular() && !st.IsDir() {
 		return nil, notReadable(op, name)
 	}
+	l.hook("preopen", n) // a test swaps the file for a FIFO here
 	f, err := l.root.OpenFile(n, flag|openNonblock, 0)
 	if err != nil {
 		return nil, pathErr(op, name, err)
