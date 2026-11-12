@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/redact.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 8397d44b-b492-4bf1-aa16-cf162225a337
 // last-edited: 2026-11-11
 
@@ -436,4 +436,25 @@ func dropLiteral(err error, v string) error {
 		return err
 	}
 	return &scrubbedError{msg: strings.ReplaceAll(msg, v, redacted), err: err}
+}
+
+// dropLiterals replaces every occurrence of each literal in in with redacted,
+// and removes a prefix of a literal left dangling at the very end (the cut that
+// bounded the input may have split one), so no fragment of a value survives.
+func dropLiterals(in string, lits ...string) string {
+	for _, l := range lits {
+		if l == "" {
+			continue
+		}
+		in = strings.ReplaceAll(in, l, redacted)
+	}
+	for _, l := range lits {
+		for k := len(l) - 1; k >= 1; k-- {
+			if strings.HasSuffix(in, l[:k]) {
+				in = in[:len(in)-k]
+				break
+			}
+		}
+	}
+	return in
 }

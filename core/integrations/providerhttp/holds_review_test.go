@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/holds_review_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 0d6f3b0a-6a5c-4a43-8c3e-7d9b5b1f2e44
 // last-edited: 2026-11-11
 
@@ -17,6 +17,19 @@ import (
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/providerhttp"
 )
+
+// eventually polls f until it is true; the background retry of the boot read
+// finishes within milliseconds against a local store.
+func eventually(t testing.TB, what string, f func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !f() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 // holdOn places a ClassAuth hold on ref's scope under p.
 func holdOn(t testing.TB, r *providerhttp.Registry, ref integrations.Ref, p providerhttp.Policy, class integrations.Class) {
@@ -228,9 +241,10 @@ func TestHolds_BootReadRetriedLazily(t *testing.T) {
 		t.Fatal("retried before the period elapsed")
 	}
 	clk.Advance(31 * time.Second)
-	h, ok := r.HoldFor(batcave)
-	if !ok || h.Class != integrations.ClassAuth {
-		t.Fatalf("after the period: %+v, %v; want the persisted hold", h, ok)
+	var h integrations.Hold
+	eventually(t, "the retried read", func() bool { var ok bool; h, ok = r.HoldFor(batcave); return ok })
+	if h.Class != integrations.ClassAuth {
+		t.Fatalf("after the period: %+v; want the persisted hold", h)
 	}
 	if _, ok := r.HoldFor(ref("selina")); !ok {
 		t.Fatal("the hold placed during the outage was lost by the late read")
@@ -282,6 +296,11 @@ func TestHolds_LateReadKeepsWhatThisProcessBuilt(t *testing.T) {
 	fs.failHolds.Store(false)
 	mute.on.Store(false)
 	clk.Advance(31 * time.Second)
+	eventually(t, "the retried read", func() bool {
+		r.HoldFor(batcave)
+		sc, err := gs.Scopes(ctx)
+		return err == nil && sc[alfred] == "new:scope"
+	})
 	h, ok := r.HoldFor(batcave)
 	if !ok || h.Class != integrations.ClassAuth || !h.Until.After(persistedUntil) {
 		t.Fatalf("the late read replaced a longer hold: %+v, %v (persisted until %v)", h, ok, persistedUntil)
@@ -344,4 +363,52 @@ func TestScopeRecord_WrittenOnceUntilItChanges(t *testing.T) {
 	if sc, err := cs.Scopes(context.Background()); err != nil || len(sc) != 0 {
 		t.Fatalf("the default scope needs no record: %v, %v", sc, err)
 	}
+}
+
+// slowHolds fails or stalls Holds on demand.
+type slowHolds struct {
+	providerhttp.GateStore
+	fail, block atomic.Bool
+	release     chan struct{}
+	started     chan struct{}
+}
+
+func (s *slowHolds) Holds(ctx context.Context) ([]integrations.Hold, error) {
+	if s.fail.Load() {
+		return nil, errStore
+	}
+	if s.block.Load() {
+		select {
+		case s.started <- struct{}{}:
+		default:
+		}
+		<-s.release
+	}
+	return s.GateStore.Holds(ctx)
+}
+
+// TestHolds_RetryNeverBlocksARequest (MINOR 5): the retry of a boot read runs in
+// the background, so a store that has stalled costs the request that found the
+// retry due nothing, and Close waits for the reader.
+func TestHolds_RetryNeverBlocksARequest(t *testing.T) {
+	clk := newClock()
+	ss := &slowHolds{GateStore: providerhttp.NativeGateStore(store(t)), release: make(chan struct{}), started: make(chan struct{}, 1)}
+	if err := ss.PutHold(context.Background(), integrations.Hold{Scope: batcave.String(), Class: integrations.ClassAuth,
+		Until: clk.Now().Add(time.Hour), SetAt: clk.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	ss.fail.Store(true)
+	r := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = ss })
+	ss.fail.Store(false)
+	ss.block.Store(true)
+	clk.Advance(31 * time.Second)
+	within(t, 2*time.Second, "HoldFor while the retried read is stalled", func() {
+		if _, ok := r.HoldFor(batcave); ok {
+			t.Error("found a hold the stalled read has not delivered")
+		}
+	})
+	<-ss.started // the read is under way in the background
+	within(t, 2*time.Second, "a second HoldFor", func() { r.HoldFor(batcave) })
+	close(ss.release)
+	eventually(t, "the stalled read to land", func() bool { _, ok := r.HoldFor(batcave); return ok })
 }

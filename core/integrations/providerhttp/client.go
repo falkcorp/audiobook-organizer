@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/client.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 435ee04d-8b14-43d6-9462-be6a491eb852
 // last-edited: 2026-11-11
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 
 	"github.com/falkcorp/mediacore/integrations"
 )
@@ -79,7 +80,7 @@ func (c *Client) GetJSON(ctx context.Context, url string, out any) error {
 	}
 	if resp.StatusCode >= 400 {
 		return &integrations.Error{Ref: c.ref, Op: "get", Class: classifyStatus(resp.StatusCode, body[:min(len(body), classifyBodyMax)]),
-			Status: resp.StatusCode, RetryAfter: retryAfterOf(resp.Header, c.r.now()), Detail: c.excerpt(body)}
+			Status: resp.StatusCode, RetryAfter: retryAfterOf(resp.Header, c.r.now()), Detail: c.excerpt(ctx, resp.Request.URL, body)}
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return &integrations.Error{Ref: c.ref, Op: "get", Class: integrations.ClassBadOutput, Status: resp.StatusCode,
@@ -89,7 +90,21 @@ func (c *Client) GetJSON(ctx context.Context, url string, out any) error {
 }
 
 // excerpt is body's first MaxDetail bytes, scrubbed of credentials; it looks
-// at a bounded prefix only, so a 16 MiB body costs what a 1 KiB one does.
-func (c *Client) excerpt(body []byte) string {
-	return c.scr.bounded(string(body[:min(len(body), 4*integrations.MaxDetail+256)]), integrations.MaxDetail)
+// at a bounded prefix only, so a 16 MiB body costs what a 1 KiB one does. A
+// provider that echoes the query back (an error page that prints the request)
+// would print the credential the transport added, in a form no name rule sees,
+// so when the request's origin takes the query credential, its value (and the
+// query-escaped form) is removed from the prefix first.
+func (c *Client) excerpt(ctx context.Context, u *url.URL, body []byte) string {
+	var lits []string
+	if c.qc != nil && c.qcApplies(u) {
+		if v, err := c.qc.Value(ctx); err == nil && v != "" {
+			lits = []string{v, url.QueryEscape(v)}
+		}
+	}
+	n := 4*integrations.MaxDetail + 256
+	for _, l := range lits {
+		n += len(l)
+	}
+	return c.scr.bounded(dropLiterals(string(body[:min(len(body), n)]), lits...), integrations.MaxDetail)
 }
