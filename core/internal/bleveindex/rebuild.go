@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/rebuild.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e6dc1c5-df80-4fdf-80a8-bc517a0ac0f6
 // last-edited: 2026-11-11
 
@@ -10,11 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/index"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -76,12 +76,14 @@ func (e *Engine) runRebuild(rc *tasks.RC, p RebuildParams) (RebuildResult, error
 
 	// The rebuild holds the index's writer lock for its whole run, so no
 	// reconcile pass applies a mark while the index is dropped and refilled
-	// (see idx.opMu). Marks written meanwhile stay in the durable dirty set and
+	// (see idx.op). Marks written meanwhile stay in the durable dirty set and
 	// drain after the rebuild, which converges: every write after the
 	// rebuild's read of a document marked it.
-	i.opMu.Lock()
+	if err := i.op.Lock(rc.Context()); err != nil {
+		return RebuildResult{}, fmt.Errorf("bleveindex: rebuild %s/%s: waiting for the index's writer: %w", p.Module, p.Index, err)
+	}
 	n, runErr := e.rebuildLocked(rc, i)
-	i.opMu.Unlock()
+	i.op.Unlock()
 	if runErr != nil {
 		return RebuildResult{}, runErr
 	}
@@ -145,7 +147,7 @@ func (e *Engine) rebuildLocked(rc *tasks.RC, i *idx) (int64, error) {
 	// Coverage is complete: from here a crash comes back as a normal index with
 	// whatever marks are durable, so the rebuilding marker goes, and the state
 	// stays Rebuilding in memory until a drain finds the dirty set empty.
-	if err := os.Remove(rebuildingMarkerPath(i.path)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := storage.RemoveFileDurable(rebuildingMarkerPath(i.path)); err != nil {
 		return 0, fmt.Errorf("bleveindex: remove rebuilding marker: %w", err)
 	}
 	i.rebuilt.Store(true)

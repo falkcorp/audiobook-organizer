@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/helpers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9f7ed2d6-e091-4ae0-91b9-cd628b1bd107
 // last-edited: 2026-11-11
 
@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -193,6 +194,31 @@ func (r *rig) reconcile() {
 	if err := r.e.Reconcile(ctx); err != nil {
 		r.t.Fatalf("reconcile: %v", err)
 	}
+}
+
+// fakeClock is the failure backoff's time source in tests.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// useClock replaces the engine's backoff clock with one the test advances.
+func (r *rig) useClock() *fakeClock {
+	c := &fakeClock{t: time.Unix(1_700_000_000, 0)}
+	r.e.now = c.Now
+	return c
 }
 
 func (r *rig) dirtyCount() int {
