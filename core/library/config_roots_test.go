@@ -199,22 +199,30 @@ func TestConfigEntryRoots_RoundTrip(t *testing.T) {
 	if r2 == other || r2.Spec().Watch != WatchPoll {
 		t.Errorf("a changed entry kept its old root: %+v", r2.Spec())
 	}
-	select {
-	case <-other.gone:
-	default:
-		t.Error("the replaced root was not retired")
-	}
+	// apply publishes the new registry and then retires what it replaced, so
+	// retirement is waited for, not read the instant the new root is visible.
+	c.waitFor("the replaced root to retire", func() bool {
+		select {
+		case <-other.gone:
+			return true
+		default:
+			return false
+		}
+	})
 	// Removing an entry removes the root.
 	c.set("core.library.roots", []json.RawMessage{lib})
 	c.waitFor("the removal", func() bool { _, err := c.m.Root("import-1"); return err != nil })
 	if _, err := c.m.Root("import-1"); err == nil {
 		t.Error("a removed entry is still registered")
 	}
-	select {
-	case <-r2.gone:
-	default:
-		t.Error("the removed root was not retired")
-	}
+	c.waitFor("the removed root to retire", func() bool {
+		select {
+		case <-r2.gone:
+			return true
+		default:
+			return false
+		}
+	})
 	// The other keys apply live too.
 	if got := c.m.reg.Load().set.debounce; got != 9*time.Second {
 		t.Errorf("debounce = %v, want 9s", got)

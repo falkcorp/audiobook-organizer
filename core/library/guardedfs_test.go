@@ -1,5 +1,5 @@
 // file: core/library/guardedfs_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a1d8f5c-92b4-4c7e-8a35-6f0e9b2d41c8
 // last-edited: 2026-11-11
 
@@ -8,6 +8,9 @@ package library
 import (
 	"errors"
 	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -23,6 +26,7 @@ func guardedRig(t *testing.T) (*rig, *Root, *func(stage, name string)) {
 	}}}, spec("books-library", books, RoleLibrary))
 	r.put("books-library", "Gotham/01.m4b", "audio")
 	r.put("books-library", "swapme/readme.txt", "a directory about to be swapped")
+	r.put("books-library", "swapme/inner/note.txt", "a directory under the one about to be swapped")
 	root, err := r.m.Root("books-library")
 	if err != nil {
 		t.Fatal(err)
@@ -96,10 +100,110 @@ func TestGuardedFSHidesTheAreasAndWritesNothing(t *testing.T) {
 	_ = r
 }
 
-// A symlink swapped in after the name was judged, so that the open lands in the
-// AppDir, is refused: the opened descriptor is examined and the name is judged
-// again. The swap is made by the test hook between the check and the open.
+// swapStage runs swap the first time the hook reaches stage for name.
+func swapStage(hook *func(stage, name string), stage, name string, swap func()) *bool {
+	done := new(bool)
+	*hook = func(st, n string) {
+		if st == stage && n == name && !*done {
+			*done = true
+			swap()
+		}
+	}
+	return done
+}
+
+// A symlink swapped in after the name was judged, so that the open would land
+// in the AppDir, is refused: the decision comes from the descriptors.
 func TestGuardedFSRefusesALinkSwappedInAfterTheCheck(t *testing.T) {
+	r, root, hook := guardedRig(t)
+	g, err := root.GuardedFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := swapStage(hook, "checked", "swapme", func() { swapForLink(t, r, "swapme", DefaultAppDir) })
+	if _, err := g.ReadDir("swapme"); !errors.Is(err, ErrReservedPath) || !*done {
+		t.Fatalf("ReadDir through a link swapped in after the check = %v (swapped %v), want ErrReservedPath", err, *done)
+	}
+	// The same swap for a file read: a benign file under a plain directory, then
+	// the directory becomes a link to the AppDir.
+	r.put("books-library", "swapme2/"+sentinelName, "a benign file with the sentinel's name")
+	done = swapStage(hook, "checked", "swapme2/"+sentinelName, func() { swapForLink(t, r, "swapme2", DefaultAppDir) })
+	f, err := g.Open("swapme2/" + sentinelName)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("Open of the sentinel through a swapped link succeeded")
+	}
+	if !errors.Is(err, ErrReservedPath) || !*done {
+		t.Fatalf("Open through a swapped link = %v (swapped %v), want ErrReservedPath", err, *done)
+	}
+	// And through OpenFile, the read-only open a caller may also use.
+	r.put("books-library", "swapme3/"+sentinelName, "another benign file with the sentinel's name")
+	done = swapStage(hook, "checked", "swapme3/"+sentinelName, func() { swapForLink(t, r, "swapme3", DefaultAppDir) })
+	of, err := g.OpenFile("swapme3/"+sentinelName, os.O_RDONLY, 0)
+	if err == nil {
+		_ = of.Close()
+		t.Fatal("OpenFile of the sentinel through a swapped link succeeded")
+	}
+	if !errors.Is(err, ErrReservedPath) || !*done {
+		t.Fatalf("OpenFile through a swapped link = %v (swapped %v), want ErrReservedPath", err, *done)
+	}
+}
+
+// A symlink swapped in after the name was resolved, at every place it can
+// stand: the last component (the open refuses to follow it), a directory above
+// it (the directory that is opened is walked up and found in the area), and a
+// directory below an area, not only the area itself.
+func TestGuardedFSRefusesALinkSwappedInAfterTheNameWasResolved(t *testing.T) {
+	r, root, hook := guardedRig(t)
+	g, err := root.GuardedFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := filepath.Join(r.abs("books-library", DefaultQuarantine), "01HELD", "inner")
+	if err := os.MkdirAll(held, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		read   func() error
+		target string
+	}{
+		"the last component, a directory": {read: func() error { _, err := g.ReadDir("swapme"); return err }, target: DefaultAppDir},
+		"the last component, a file": {read: func() error {
+			f, err := g.Open("swapme/readme.txt")
+			if f != nil {
+				_ = f.Close()
+			}
+			return err
+		}, target: DefaultAppDir},
+		"a directory above, into the AppDir": {read: func() error { _, err := g.ReadDir("swapme/inner"); return err },
+			target: DefaultAppDir},
+		"a directory above, into a directory below the quarantine area": {read: func() error { _, err := g.ReadDir("swapme/inner"); return err },
+			target: DefaultQuarantine + "/01HELD"},
+	} {
+		r.put("books-library", "swapme/readme.txt", "a directory about to be swapped")
+		r.put("books-library", "swapme/inner/note.txt", "a directory under the one about to be swapped")
+		stage, key := "resolved", "swapme"
+		if strings.Contains(name, "above") {
+			key = "swapme/inner"
+		}
+		if strings.HasPrefix(name, "the last component, a file") {
+			key = "swapme/readme.txt"
+		}
+		done := swapStage(hook, stage, key, func() { swapForLink(t, r, "swapme", c.target) })
+		if err := c.read(); !errors.Is(err, ErrReservedPath) || !*done {
+			t.Errorf("%s: read = %v (swapped %v), want ErrReservedPath", name, err, *done)
+		}
+		if err := os.RemoveAll(r.abs("books-library", "swapme")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The decision is the descriptor's: a link swapped in so that the directory is
+// opened inside the AppDir, and swapped back before anything looks at a name,
+// is still refused. A check that resolved the name again would find a plain
+// directory and let the read through.
+func TestGuardedFSDecidesFromTheDescriptorNotTheName(t *testing.T) {
 	r, root, hook := guardedRig(t)
 	g, err := root.GuardedFS()
 	if err != nil {
@@ -107,68 +211,89 @@ func TestGuardedFSRefusesALinkSwappedInAfterTheCheck(t *testing.T) {
 	}
 	swapped := false
 	*hook = func(stage, name string) {
-		if stage == "checked" && name == "swapme" && !swapped {
+		if name != "swapme/inner" {
+			return
+		}
+		switch stage {
+		case "resolved":
+			swapForLink(t, r, "swapme", DefaultAppDir) // the directory is opened inside the AppDir
+		case "parent":
+			if err := os.Remove(r.abs("books-library", "swapme")); err != nil { // the name is a plain directory again
+				t.Error(err)
+			}
+			r.put("books-library", "swapme/inner/note.txt", "a benign directory again")
 			swapped = true
-			swapForLink(t, r, "swapme", DefaultAppDir)
 		}
 	}
-	if _, err := g.ReadDir("swapme"); !errors.Is(err, ErrReservedPath) {
-		t.Fatalf("ReadDir through a link swapped in after the check = %v, want ErrReservedPath", err)
-	}
-	if !swapped {
-		t.Fatal("the hook never ran")
-	}
-	// The same swap for a file read: the name is judged benign (a file under a
-	// plain directory), then the directory becomes a link to the AppDir.
-	r.put("books-library", "swapme2/"+sentinelName, "a benign file with the sentinel's name")
-	again := false
-	*hook = func(stage, name string) {
-		if stage == "checked" && name == "swapme2/"+sentinelName && !again {
-			again = true
-			swapForLink(t, r, "swapme2", DefaultAppDir)
-		}
-	}
-	f, err := g.Open("swapme2/" + sentinelName)
-	if err == nil {
-		_ = f.Close()
-		t.Fatal("Open of the sentinel through a swapped link succeeded")
-	}
-	if !errors.Is(err, ErrReservedPath) || !again {
-		t.Fatalf("Open through a swapped link = %v (hook ran %v), want ErrReservedPath", err, again)
+	if _, err := g.ReadDir("swapme/inner"); !errors.Is(err, ErrReservedPath) || !swapped {
+		t.Fatalf("ReadDir with the link swapped back = %v (swapped back %v), want ErrReservedPath", err, swapped)
 	}
 }
 
-// A link swapped in so that the open lands in the AppDir, and swapped back
-// before the name is judged again, is refused too: the name no longer reaches
-// the descriptor that was opened.
-func TestGuardedFSRefusesALinkSwappedBackAfterTheOpen(t *testing.T) {
+// When the place of the directory cannot be established the read is refused:
+// here the directory is moved out of the root after it was opened, so the walk
+// up from it never meets the root.
+func TestGuardedFSRefusesWhenTheWalkUpFails(t *testing.T) {
 	r, root, hook := guardedRig(t)
 	g, err := root.GuardedFS()
 	if err != nil {
 		t.Fatal(err)
 	}
-	*hook = func(stage, name string) {
-		if name != "swapme" {
-			return
+	outside := t.TempDir()
+	done := swapStage(hook, "parent", "swapme/inner", func() {
+		if err := os.Rename(r.abs("books-library", "swapme"), filepath.Join(outside, "swapme")); err != nil {
+			t.Fatal(err)
 		}
-		switch stage {
-		case "checked":
-			swapForLink(t, r, "swapme", DefaultAppDir) // the open lands in the AppDir
-		case "opened":
-			if err := os.Remove(r.abs("books-library", "swapme")); err != nil {
-				t.Error(err)
-			}
-			r.put("books-library", "swapme/readme.txt", "a benign directory again") // the name is judged benign
-		}
-	}
-	if _, err := g.ReadDir("swapme"); !errors.Is(err, ErrReservedPath) {
-		t.Fatalf("ReadDir with the link swapped back after the open = %v, want ErrReservedPath", err)
+	})
+	_, err = g.ReadDir("swapme/inner")
+	if !errors.Is(err, ErrReservedPath) || !strings.Contains(err.Error(), "cannot tell where the directory lies") || !*done {
+		t.Fatalf("ReadDir of a directory moved out of the root = %v (moved %v), want a refusal that says the place is unknown", err, *done)
 	}
 }
 
-// With nothing swapped, a plain directory reads and the hook sees both stages.
-func TestGuardedFSReadsAPlainDirectoryAndRunsBothStages(t *testing.T) {
-	_, root, hook := guardedRig(t)
+// The checks on the descriptors stand on their own, whatever the spelling of the
+// name: guardedOpen is called directly, past the name check, with the areas'
+// own names, as a second name for an area (a bind mount) would present them. The
+// leaf's identity and the identity of every directory above it are compared
+// with the areas.
+func TestGuardedOpenJudgesDescriptorsWithoutTheSpelling(t *testing.T) {
+	r, root, _ := guardedRig(t)
+	if err := os.MkdirAll(filepath.Join(r.abs("books-library", DefaultQuarantine), "01HELD", "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := root.base.readOnlyView()
+	c.sealed, c.hidden = true, true
+	for _, n := range []string{
+		DefaultAppDir,                       // the leaf is an area
+		DefaultQuarantine,                   // the leaf is the nested area
+		DefaultAppDir + "/" + sentinelName,  // a file whose parent is an area
+		DefaultQuarantine + "/01HELD",       // a leaf below an area
+		DefaultQuarantine + "/01HELD/inner", // two levels below an area
+	} {
+		f, err := c.guardedOpen("open", n, n)
+		if err == nil {
+			_ = f.Close()
+			t.Errorf("guardedOpen(%q) succeeded", n)
+			continue
+		}
+		if !errors.Is(err, ErrReservedPath) {
+			t.Errorf("guardedOpen(%q) = %v, want ErrReservedPath", n, err)
+		}
+	}
+	for _, n := range []string{".", "Gotham", "Gotham/01.m4b", "swapme/inner", "swapme/inner/note.txt"} {
+		f, err := c.guardedOpen("open", n, n)
+		if err != nil {
+			t.Errorf("guardedOpen(%q) = %v, want it opened", n, err)
+			continue
+		}
+		_ = f.Close()
+	}
+}
+
+// With nothing swapped, plain names read, benign symlinks are followed, and the
+// hook sees the four stages in order.
+func TestGuardedFSReadsPlainNamesAndFollowsBenignLinks(t *testing.T) {
+	r, root, hook := guardedRig(t)
 	g, err := root.GuardedFS()
 	if err != nil {
 		t.Fatal(err)
@@ -180,11 +305,45 @@ func TestGuardedFSReadsAPlainDirectoryAndRunsBothStages(t *testing.T) {
 		}
 	}
 	ents, err := g.ReadDir("swapme")
-	if err != nil || len(ents) != 1 {
+	if err != nil || len(ents) != 2 {
 		t.Fatalf("ReadDir = %d entries, %v", len(ents), err)
 	}
-	if len(stages) != 2 || stages[0] != "checked" || stages[1] != "opened" {
-		t.Errorf("stages = %v, want [checked opened]", stages)
+	if want := []string{"checked", "resolved", "parent", "opened"}; !slices.Equal(stages, want) {
+		t.Errorf("stages = %v, want %v", stages, want)
+	}
+	*hook = nil
+	// A directory link and a file link that stay in the plain part of the root.
+	if err := os.Symlink("swapme", r.abs("books-library", "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("swapme/readme.txt", r.abs("books-library", "flink")); err != nil {
+		t.Fatal(err)
+	}
+	if ents, err := g.ReadDir("alias/inner"); err != nil || len(ents) != 1 {
+		t.Errorf("ReadDir through a directory link = %d entries, %v", len(ents), err)
+	}
+	for _, n := range []string{"alias/readme.txt", "flink"} {
+		f, err := g.Open(n)
+		if err != nil {
+			t.Errorf("Open(%q) = %v", n, err)
+			continue
+		}
+		buf := make([]byte, 64)
+		if k, _ := f.Read(buf); !strings.Contains(string(buf[:k]), "about to be swapped") {
+			t.Errorf("Open(%q) read %q", n, buf[:k])
+		}
+		_ = f.Close()
+	}
+	// A missing name is not found, not refused.
+	if _, err := g.ReadDir("swapme/missing"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("ReadDir of a missing directory = %v, want not-exist", err)
+	}
+	// A link that leaves the root is refused as escaping, not followed.
+	if err := os.Symlink(t.TempDir(), r.abs("books-library", "out")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.ReadDir("out"); err == nil {
+		t.Error("ReadDir through a link that leaves the root succeeded")
 	}
 }
 

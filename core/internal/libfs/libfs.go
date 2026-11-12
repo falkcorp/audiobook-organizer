@@ -1,5 +1,5 @@
 // file: core/internal/libfs/libfs.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 90ca9fee-7d93-4cef-b3cd-8e044edd56b2
 // last-edited: 2026-11-11
 
@@ -51,6 +51,18 @@ var ErrCrossDevice = errors.New("library: hardlink across filesystems")
 
 // ErrBadName reports a name that is not one path component.
 var ErrBadName = errors.New("libfs: name is not a single path component")
+
+// ID is a file's device and inode: the pair names one directory whatever the
+// names that lead to it (a symlink, a bind mount, a second path).
+type ID struct{ Dev, Ino uint64 }
+
+// MaxAncestry bounds the walk of Ancestry: no directory tree is this deep.
+const MaxAncestry = 4096
+
+// ErrNotUnder reports an Ancestry walk that reached the top of the filesystem
+// without meeting the directory it was to stop at: the descriptor is not below
+// it (the directory was moved out of the tree, or the tree was replaced).
+var ErrNotUnder = errors.New("libfs: the directory is not under the root")
 
 // checkName refuses anything but one ordinary path component. The *at calls
 // would follow ".." and treat a name with a separator as a path, which would
