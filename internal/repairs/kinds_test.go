@@ -1,5 +1,5 @@
 // file: internal/repairs/kinds_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7d2e9a40-5c1b-4f86-b3a7-0e4d8c6a1f52
 // last-edited: 2026-11-12
 
@@ -1556,7 +1556,7 @@ func TestRepairsKinds_RefusesWithoutBindStores(t *testing.T) {
 
 // A live apply of a fixer that writes library rows without a scan stand-down
 // key would run under a library scan: refused, with nothing written and no
-// state kept.
+// usable run state.
 func TestRepairsKinds_LiveApplyRefusesWithoutStandDownKey(t *testing.T) {
 	s := newMemStore()
 	seed(s)
@@ -1567,8 +1567,9 @@ func TestRepairsKinds_LiveApplyRefusesWithoutStandDownKey(t *testing.T) {
 	rc, hold := liveRC(context.Background(), kt.kind())
 	_, _, err := kt.k.load(rc, nil, "b1")
 	require.ErrorContains(t, err, "no scan stand-down key")
-	_, kept := kt.k.runs.Load(rc.RunID())
-	require.False(t, kept, "a refused build is not kept")
+	// The refusal is remembered for the attempt (TestRepairsKinds_RefusedRunStateIsKeptForTheAttempt)
+	// but no run state came of it: nothing can apply, and nothing was held.
+	require.Nil(t, kt.k.runStateOfRun(rc.RunID()), "a refused build leaves no usable run state")
 	require.EqualValues(t, 0, hold.released.Load())
 
 	res := kt.apply(context.Background(), []string{"b1", "b2"})
