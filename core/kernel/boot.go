@@ -1,5 +1,5 @@
 // file: core/kernel/boot.go
-// version: 1.0.15
+// version: 1.0.16
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
 // last-edited: 2026-11-12
 
@@ -259,6 +259,12 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	// the tasks wiring reads it, so P7 builds it when tasks need it
 	// (Kernel.coreConfig). Both are pure: Describe builds them too.
 	if k.rbacCat, err = declareCoreCatalog(); err != nil {
+		return err
+	}
+	// The section cache a test handed this boot (bootseam.Seams.SectionCache),
+	// kept for the core config the tasks wiring builds at P7; nil in every
+	// production boot.
+	if k.sectionCache, err = bootSectionCache(ctx); err != nil {
 		return err
 	}
 	if k.scope, err = p.Core("kernel", "phase", "step"); err != nil {

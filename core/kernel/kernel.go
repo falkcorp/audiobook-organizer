@@ -1,5 +1,5 @@
 // file: core/kernel/kernel.go
-// version: 1.0.20
+// version: 1.0.21
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
 // last-edited: 2026-11-12
 
@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
@@ -247,16 +248,20 @@ type Kernel struct {
 	// after P4a and before P4b (buildAudit), healthReg and reporters at P4c
 	// (buildHealth), tasks at P4c (stores) and P7 (the start rule), dataMig
 	// when a manifest declares data migrations (storageOptions).
-	rbacCat   *rbac.Catalog
-	coreCfg   *coreConfig
-	audit     *audit.Store
-	auditSc   *metrics.Scope // "<namespace>.audit"
-	healthReg *health.Registry
-	reporters kernelReporters
-	tasks     *kernelTasks
-	dataMig   *DataMigrations
-	swap      *kernelSwap // P0a on; nil when P0a did not run (swap.go)
-	build     string      // the binary ID, once computed (swap.go)
+	rbacCat *rbac.Catalog
+	coreCfg *coreConfig
+	// sectionCache is the section cache a test handed the boot in its
+	// bootseam.Seams (read at P5), for the core config built at P7; nil in
+	// every production boot.
+	sectionCache *config.SectionCache
+	audit        *audit.Store
+	auditSc      *metrics.Scope // "<namespace>.audit"
+	healthReg    *health.Registry
+	reporters    kernelReporters
+	tasks        *kernelTasks
+	dataMig      *DataMigrations
+	swap         *kernelSwap // P0a on; nil when P0a did not run (swap.go)
+	build        string      // the binary ID, once computed (swap.go)
 	// swapLock is the swap lock this kernel holds (exclusive through P0a
 	// and shared from its end, storage.LockSwapShared for an offline open,
 	// storage.LockSwapExclusive for an offline swap), released by closeCore

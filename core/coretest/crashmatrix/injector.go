@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/injector.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 81489850-3e9c-4d6d-a657-d875036d118e
-// last-edited: 2026-11-08
+// last-edited: 2026-11-12
 
 package crashmatrix
 
@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
 	"github.com/falkcorp/mediacore/module"
@@ -55,12 +56,18 @@ type Injector struct {
 	stop  context.CancelFunc // ends the Run in progress (finish)
 }
 
-// newInjector is a boot over rec, or over fsys with no recorder.
-func newInjector(f Fixture, rec *bootseamtest.Recorder, fsys vfs.FS) *Injector {
+// newInjector is a boot over rec, or over fsys with no recorder. cache, when
+// non-nil, is the section cache the boot's core config store builds through:
+// the boots of one run share it, so the core sections are built once and not
+// once per boot (a cell boots the kernel hundreds of times).
+func newInjector(f Fixture, rec *bootseamtest.Recorder, fsys vfs.FS, cache *config.SectionCache) *Injector {
 	s := &bootseam.Seams{FS: fsys, BuildID: BuildID, Clock: Now}
 	if rec != nil {
 		s = rec.Seams()
 		s.BuildID, s.Clock = BuildID, Now
+	}
+	if cache != nil {
+		s.SectionCache = cache
 	}
 	return &Injector{f: f, seams: s, rec: rec}
 }

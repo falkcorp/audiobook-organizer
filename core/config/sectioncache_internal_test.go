@@ -1,5 +1,5 @@
 // file: core/config/sectioncache_internal_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5a0d1c52-63f0-4c77-b9a4-0a9e1f7e3b61
 // last-edited: 2026-11-12
 
@@ -496,6 +496,57 @@ func TestSectionCache_SecondBuildIsCached(t *testing.T) {
 		if got := c.builds.Load(); got != sectionSetSize {
 			t.Fatalf("after store %q builds = %d, want %d", appID, got, sectionSetSize)
 		}
+	}
+}
+
+// TestSectionCache_OptionsWiring: Options.SectionCache is what shares builds,
+// and a store given none builds every section itself (no package-level cache
+// stands behind it).
+func TestSectionCache_OptionsWiring(t *testing.T) {
+	newStore := func(appID string, sc *SectionCache) *Store {
+		t.Helper()
+		s, err := NewStore(Options{AppID: appID, Environ: []string{}, SectionCache: sc})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close(context.Background()) })
+		return s
+	}
+
+	sc := NewSectionCache()
+	a, b := newStore("gotham", sc), newStore("arkham", sc)
+	registerSet(t, a)
+	registerSet(t, b)
+	if got := sc.templates().builds.Load(); got != sectionSetSize {
+		t.Errorf("two stores sharing a cache built %d sections, want %d", got, sectionSetSize)
+	}
+	if a.builds != sc.templates() || b.builds != sc.templates() {
+		t.Error("a store does not build through Options.SectionCache")
+	}
+
+	// No cache: nothing is shared, and the stores still register and differ.
+	x, y := newStore("gotham", nil), newStore("arkham", nil)
+	if x.builds != nil {
+		t.Fatal("a store with no Options.SectionCache holds a cache")
+	}
+	registerSet(t, x)
+	registerSet(t, y)
+	if got := sc.templates().builds.Load(); got != sectionSetSize {
+		t.Errorf("stores with no cache moved the shared cache's build count to %d", got)
+	}
+
+	// A separate cache is a separate set of templates.
+	other := NewSectionCache()
+	registerSet(t, newStore("gotham", other))
+	if got := other.templates().builds.Load(); got != sectionSetSize {
+		t.Errorf("a second cache built %d sections, want %d", got, sectionSetSize)
+	}
+	var none *SectionCache
+	if none.templates() != nil || none.Len() != 0 {
+		t.Error("a nil *SectionCache has templates")
+	}
+	if got := sc.Len(); got != sectionSetSize {
+		t.Errorf("Len = %d, want %d", got, sectionSetSize)
 	}
 }
 

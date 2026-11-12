@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/kit_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 67d91a53-bcd6-4094-acf4-c145ba475897
-// last-edited: 2026-11-08
+// last-edited: 2026-11-12
 
 package crashmatrix
 
@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/module"
@@ -525,5 +526,17 @@ func TestIsCheckpointName(t *testing.T) {
 		if got := isCheckpointName(n); got != want {
 			t.Errorf("isCheckpointName(%q) = %v, want %v", n, got, want)
 		}
+	}
+}
+
+// TestNewInjector_SectionCache: the boots of a run share one section cache
+// through the seam the kernel reads; an injector made without one carries none.
+func TestNewInjector_SectionCache(t *testing.T) {
+	cache := config.NewSectionCache()
+	if got := newInjector(Fixture{}, nil, vfs.NewMem(), cache).seams.SectionCache; got != cache {
+		t.Errorf("Seams.SectionCache = %v, want the run's cache", got)
+	}
+	if got := newInjector(Fixture{}, nil, vfs.NewMem(), nil).seams.SectionCache; got != nil {
+		t.Errorf("Seams.SectionCache = %v with no cache given, want nil", got)
 	}
 }
