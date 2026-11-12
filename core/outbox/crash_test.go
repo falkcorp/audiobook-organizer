@@ -1,5 +1,5 @@
 // file: core/outbox/crash_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b4f7a8d1-2c6a-4f0e-9f35-1a3e5c7d9b21
 // last-edited: 2026-11-12
 
@@ -28,6 +28,12 @@ type crashPoints struct {
 	fs     *vfs.MemFS
 	mu     sync.Mutex
 	clones map[string][]*vfs.MemFS
+	// ready, when set, holds every crash point back until it is closed. A test
+	// closes it once its producer's commit has returned: the relay can read a
+	// batch the producer committed before that commit's fsync finished (the data
+	// is visible to readers first), and a clone taken in that window would
+	// predate the message the test is about.
+	ready chan struct{}
 }
 
 func newCrashPoints() *crashPoints {
@@ -35,6 +41,9 @@ func newCrashPoints() *crashPoints {
 }
 
 func (p *crashPoints) hit(name string) {
+	if p.ready != nil {
+		<-p.ready
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, done := p.clones[name]; done {
@@ -115,21 +124,26 @@ func TestOutbox_RedeliveryAfterCrashBeforeAck(t *testing.T) {
 // seq 1 once and number the next message 2.
 func TestOutbox_IntakeCrashNoReissue(t *testing.T) {
 	cp := newCrashPoints()
+	cp.ready = make(chan struct{})
 	rc1 := &recorder{}
 	r1 := newRig(t, rigOpts{fs: cp.fs, hooks: cp.hooks(), register: consumeInto(rc1, consumerN)})
 	r1.stage("batmobile", Dispatch{Villain: "Bane"})
+	close(cp.ready) // the producer's commit is durable: crash points may be taken
 	eventually(t, "the first message", func() bool { return rc1.count() == 1 && cp.reached("intake-after-commit") })
 
 	for _, point := range []string{"intake-before-commit", "intake-after-commit"} {
 		for i, clone := range cp.at(t, point) {
 			t.Run(point+"/"+string(rune('a'+i)), func(t *testing.T) {
-				rc2 := &recorder{}
-				r2 := newRig(t, rigOpts{fs: clone, register: consumeInto(rc2, consumerN), noRelay: true})
-				st := outboxstore.New(r2.outKS)
-				hi, _, err := st.ReadHigh(context.Background(), noticeName)
+				// Read what the crash left with no executor in the way: the cloned
+				// task store holds the relay's run as it was when the clone was
+				// taken, and an executor resumes it at once (a few ms after it
+				// starts), so a relay would be sequencing under the three reads.
+				cold := newRig(t, rigOpts{fs: clone, noExec: true, register: consumeInto(&recorder{}, consumerN)})
+				hi, _, err := outboxstore.New(cold.outKS).ReadHigh(context.Background(), noticeName)
 				must(t, err)
-				intake := r2.count(outboxstore.InPrefix(noticeName))
-				msgs := r2.count(outboxstore.MsgTopicPrefix(noticeName))
+				intake := cold.count(outboxstore.InPrefix(noticeName))
+				msgs := cold.count(msgTopicPrefix(noticeName))
+				cold.close()
 				switch point {
 				case "intake-before-commit":
 					if hi.High != 0 || intake != 1 || msgs != 0 {
@@ -140,6 +154,10 @@ func TestOutbox_IntakeCrashNoReissue(t *testing.T) {
 						t.Fatalf("after the commit: high=%d intake=%d messages=%d", hi.High, intake, msgs)
 					}
 				}
+				// The executor resumes the crash-time relay run on its own once the
+				// rig is up; startRelay waits for that run (or starts one).
+				rc2 := &recorder{}
+				r2 := newRig(t, rigOpts{fs: clone, register: consumeInto(rc2, consumerN), noRelay: true})
 				r2.startRelay()
 				eventually(t, "the delivery", func() bool { return rc2.count() == 1 })
 				if got := rc2.all()[0]; got.Seq != 1 || got.Villain != "Bane" {

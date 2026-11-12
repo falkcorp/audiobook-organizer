@@ -1,5 +1,5 @@
 // file: core/outbox/stage_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d1c6f4e-3bb4-4a7b-9f6e-4f0ab7c1d902
 // last-edited: 2026-11-12
 
@@ -63,7 +63,7 @@ func TestOutbox_DiscardLeavesNothing(t *testing.T) {
 	must(t, b.Set([]byte("case/batmobile"), []byte("open")))
 	must(t, b.Close())
 	stays(t, "an empty outbox", 80*time.Millisecond, func() bool {
-		return rc.count() == 0 && r.count(outboxstore.InRoot()) == 0 && r.count(outboxstore.MsgTopicPrefix(noticeName)) == 0
+		return rc.count() == 0 && r.count(outboxstore.InRoot()) == 0 && r.count(msgTopicPrefix(noticeName)) == 0
 	})
 	if _, err := r.gothamKS.Get(context.Background(), []byte("case/batmobile")); !errIs(err, storage.ErrNotFound) {
 		t.Fatalf("the discarded producer write is visible: %v", err)

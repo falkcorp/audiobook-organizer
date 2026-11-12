@@ -1,5 +1,5 @@
 // file: core/outbox/retention.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a1a7b3f-3f0e-4d9c-9b47-5f7a4c0f2b75
 // last-edited: 2026-11-12
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/falkcorp/mediacore/internal/outboxstore"
 	"github.com/falkcorp/mediacore/storage"
@@ -22,7 +23,7 @@ const retentionScan = 256
 // holder is one consumer holding a topic's messages.
 type holder struct {
 	name string
-	// expired: an orphan (declared nowhere) whose cursor outlived
+	// expired: an orphan (declared nowhere) that has been gone for
 	// orphan_retention; it holds nothing and its cursor is dropped.
 	expired bool
 }
@@ -34,9 +35,17 @@ type holder struct {
 // and every disabled consumer that has cursors, whose messages are therefore
 // kept while its module is off. A declared consumer that never ran has no
 // cursor and holds nothing. A topic nobody holds is not "acked by everyone":
-// its messages are kept for orphan_retention. Only the cursors of consumer
-// names in neither set (removed from the build) expire after orphan_retention,
-// and the messages they alone held are dropped and counted.
+// its messages are kept for orphan_retention (by the message's own age). Only
+// the cursors of consumer names in neither set (removed from the build) expire,
+// orphan_retention after the first sweep that saw the name absent, and the
+// messages they alone held are then dropped and counted.
+//
+// "Absent since" is persisted in the cursor (Cursor.Absent): the cursor's last
+// write says when the consumer last ran, not when it left the build, and a
+// consumer that sat idle on a quiet topic for longer than orphan_retention
+// would otherwise lose its place the moment a build without it booted. While
+// the grace period runs the orphan holds everything above its cursor like any
+// other holder, and a consumer that comes back has the mark cleared.
 //
 // A holder's floor is its cursor, or one before its earliest retry entry: an
 // unordered consumer's cursor passes a message that is still being retried,
@@ -57,11 +66,12 @@ func (r *relay) sweep(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reading cursors: %w", err)
 	}
-	now := o.now()
 	registered := map[string]*consumerReg{}
 	for _, reg := range r.regs {
 		registered[reg.name] = reg
 	}
+	r.reconcileAbsence(ctx, cursors, registered)
+	now := o.now()
 	// Index the cursors by topic and consumer.
 	byTopic := map[string]map[string][]outboxstore.CursorRow{}
 	for _, c := range cursors {
@@ -77,7 +87,7 @@ func (r *relay) sweep(ctx context.Context) error {
 			return false
 		}
 		for _, c := range rows {
-			if now.Sub(c.Cur.At) < r.cfg.OrphanRetention {
+			if !absentLongEnough(c.Cur, now, r.cfg.OrphanRetention) {
 				return false
 			}
 		}
@@ -91,6 +101,17 @@ func (r *relay) sweep(ctx context.Context) error {
 		}
 		ti, err := o.topic(topic)
 		if err != nil {
+			continue
+		}
+		hi, found, err := o.store.ReadHigh(ctx, topic)
+		if err != nil {
+			r.fault("reading the high-water mark of "+topic, err)
+			continue
+		}
+		// A topic whose messages were spread over another partition count is
+		// stopped, and the sweep leaves it alone: it would delete by the wrong
+		// partitions.
+		if !r.partitionsOK(ti, hi, found) {
 			continue
 		}
 		r.mu.Lock()
@@ -164,18 +185,73 @@ func (r *relay) dropPair(ctx context.Context, p outboxstore.Pair) error {
 }
 
 // stageDropIfExpired stages the removal of an orphan's pair if the cursor read
-// through b is still older than orphan_retention; a cursor touched since the
-// sweep decided (an operator's purge) is kept and fails the batch.
+// through b has still been absent for orphan_retention; a cursor that changed
+// since the sweep decided (the consumer came back and its mark was cleared)
+// is kept and fails the batch.
 func (r *relay) stageDropIfExpired(ctx context.Context, b *storage.Batch, p outboxstore.Pair) error {
 	o := r.o
 	st, err := o.store.LoadPair(ctx, b, p)
 	if err != nil {
 		return err
 	}
-	if st.Has && o.now().Sub(st.Cur.At) < r.cfg.OrphanRetention {
+	if st.Has && !absentLongEnough(st.Cur, o.now(), r.cfg.OrphanRetention) {
 		return storage.ErrConflict
 	}
 	return o.store.StageDropPair(ctx, b, p)
+}
+
+// absentLongEnough says whether the cursor's consumer has been out of the
+// build for the whole orphan grace period.
+func absentLongEnough(c outboxstore.Cursor, now time.Time, grace time.Duration) bool {
+	return !c.Absent.IsZero() && now.Sub(c.Absent) >= grace
+}
+
+// reconcileAbsence keeps every cursor's Absent mark true: a cursor whose
+// consumer is in neither the registered nor the declared set is stamped with
+// the time of this sweep (the start of its grace period), and a cursor whose
+// consumer is back loses the stamp. Each change is its own guarded batch, so a
+// writer that got there first fails it and the next sweep looks again. cursors
+// is updated in place for what this sweep goes on to decide.
+func (r *relay) reconcileAbsence(ctx context.Context, cursors []outboxstore.CursorRow, registered map[string]*consumerReg) {
+	o := r.o
+	for i := range cursors {
+		c := &cursors[i]
+		present := registered[c.Pair.Consumer] != nil || o.Declared(c.Pair.Consumer)
+		if present == c.Cur.Absent.IsZero() {
+			continue
+		}
+		if ctx.Err() != nil || r.stopped() {
+			return
+		}
+		var want time.Time
+		if !present {
+			want = o.now().UTC()
+		}
+		err := r.gate(ctx, "outbox.retention", c.Pair.Topic, func(ctx context.Context) (err error) {
+			b := o.store.OpenBatch()
+			defer closeBatch(b, &err)
+			st, err := o.store.LoadPair(ctx, b, c.Pair)
+			if err != nil {
+				return err
+			}
+			if !st.Has || st.Cur.Absent.IsZero() == want.IsZero() {
+				return nil // gone, or already as wanted
+			}
+			st.Cur.Absent = want
+			if err := o.store.StagePair(b, c.Pair, st, o.now()); err != nil {
+				return err
+			}
+			return b.Commit(ctx, storage.Sync)
+		})
+		switch {
+		case err == nil:
+			c.Cur.Absent = want
+		case errors.Is(err, storage.ErrConflict):
+			// Another writer moved the cursor: the next sweep reconciles it.
+		default:
+			r.fault(fmt.Sprintf("marking the absence of %s/%s/%02d", c.Pair.Consumer, c.Pair.Topic, c.Pair.PP), err)
+		}
+	}
 }
 
 // floor is a holder's effective cursor on one partition: the highest seq it no
