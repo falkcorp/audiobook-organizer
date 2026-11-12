@@ -1,7 +1,7 @@
 // file: core/integrations/providerhttp/transport_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e41f8797-cbc5-47da-9318-e0b625e78606
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package providerhttp_test
 
@@ -473,6 +473,7 @@ func TestClassify(t *testing.T) {
 	}
 	google403 := `{"error":{"code":403,"errors":[{"reason":"rateLimitExceeded"}]}}`
 	dayQuota := `{"error":{"message":"Quota exceeded for quota metric 'Queries' and limit 'Queries per day'"}}`
+	openaiQuota := `{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}`
 	cases := []struct {
 		name   string
 		status int
@@ -486,6 +487,10 @@ func TestClassify(t *testing.T) {
 		{"daily quota body beats 429", 429, dayQuota, integrations.ClassQuota},
 		{"daily quota body beats 403", 403, dayQuota, integrations.ClassQuota},
 		{"dailyLimitExceeded", 403, `{"reason":"dailyLimitExceeded"}`, integrations.ClassQuota},
+		{"openai insufficient_quota beats 429", 429, openaiQuota, integrations.ClassQuota},
+		{"credit_balance_exhausted beats 429", 429, `{"error":{"type":"credit_balance_exhausted"}}`, integrations.ClassQuota},
+		{"openai insufficient_quota words in a 400 mean nothing", 400, openaiQuota, integrations.ClassInvalid},
+		{"openai rate_limit_exceeded stays a rate limit", 429, `{"error":{"code":"rate_limit_exceeded"}}`, integrations.ClassRateLimited},
 		{"plain 429 is rate limited", 429, "", integrations.ClassRateLimited},
 		{"daily words in a 400 mean nothing", 400, dayQuota, integrations.ClassInvalid},
 		{"500", 500, "", integrations.ClassTransient},
