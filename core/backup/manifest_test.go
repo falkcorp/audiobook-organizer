@@ -1,5 +1,5 @@
 // file: core/backup/manifest_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4ad03fd1-6db8-4bd8-86a6-7e6ac0a60d02
 // last-edited: 2026-11-12
 
@@ -37,21 +37,25 @@ func TestProvenanceBindsInstallAndEntries(t *testing.T) {
 	}
 
 	cases := map[string]func(*backup.Manifest){
-		"edited entry hash":    func(m *backup.Manifest) { m.Entries[0].SHA256 = hexOf("planted") },
-		"edited entry size":    func(m *backup.Manifest) { m.Entries[0].Size++ },
-		"swapped entry hashes": func(m *backup.Manifest) { m.Entries[0].SHA256, m.Entries[1].SHA256 = m.Entries[1].SHA256, m.Entries[0].SHA256 },
-		"dropped entry":        func(m *backup.Manifest) { m.Entries = m.Entries[:1] },
-		"added entry":          func(m *backup.Manifest) { m.Entries = append(m.Entries, backup.Entry{Path: "db/x", SHA256: hexOf("x")}) },
-		"edited install ID":    func(m *backup.Manifest) { m.InstallID = "install-arkham" },
-		"edited journal seq":   func(m *backup.Manifest) { m.JournalSeq = 0 },
-		"edited levels":        func(m *backup.Manifest) { m.Levels["core"] = 0 },
-		"edited key ID":        func(m *backup.Manifest) { m.Provenance.KeyID = "d2" },
-		"edited app":           func(m *backup.Manifest) { m.App = "arkham" },
-		"edited reason":        func(m *backup.Manifest) { m.Reason = "pre-update" },
-		"cleared MAC":          func(m *backup.Manifest) { m.Provenance.MAC = "" },
-		"truncated MAC":        func(m *backup.Manifest) { m.Provenance.MAC = m.Provenance.MAC[:10] },
-		"non-hex MAC":          func(m *backup.Manifest) { m.Provenance.MAC = strings.Repeat("z", 64) },
-		"unknown algorithm":    func(m *backup.Manifest) { m.Provenance.Alg = "none" },
+		"edited entry hash": func(m *backup.Manifest) { m.Entries[0].SHA256 = hexOf("planted") },
+		"edited entry size": func(m *backup.Manifest) { m.Entries[0].Size++ },
+		"swapped entry hashes": func(m *backup.Manifest) {
+			m.Entries[0].SHA256, m.Entries[1].SHA256 = m.Entries[1].SHA256, m.Entries[0].SHA256
+		},
+		"dropped entry": func(m *backup.Manifest) { m.Entries = m.Entries[:1] },
+		"added entry": func(m *backup.Manifest) {
+			m.Entries = append(m.Entries, backup.Entry{Path: "db/x", SHA256: hexOf("x")})
+		},
+		"edited install ID":  func(m *backup.Manifest) { m.InstallID = "install-arkham" },
+		"edited journal seq": func(m *backup.Manifest) { m.JournalSeq = 0 },
+		"edited levels":      func(m *backup.Manifest) { m.Levels["core"] = 0 },
+		"edited key ID":      func(m *backup.Manifest) { m.Provenance.KeyID = "d2" },
+		"edited app":         func(m *backup.Manifest) { m.App = "arkham" },
+		"edited reason":      func(m *backup.Manifest) { m.Reason = "pre-update" },
+		"cleared MAC":        func(m *backup.Manifest) { m.Provenance.MAC = "" },
+		"truncated MAC":      func(m *backup.Manifest) { m.Provenance.MAC = m.Provenance.MAC[:10] },
+		"non-hex MAC":        func(m *backup.Manifest) { m.Provenance.MAC = strings.Repeat("z", 64) },
+		"unknown algorithm":  func(m *backup.Manifest) { m.Provenance.Alg = "none" },
 	}
 	for name, edit := range cases {
 		t.Run(name, func(t *testing.T) {

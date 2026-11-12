@@ -1,5 +1,5 @@
 // file: core/backup/catalogue.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e5a7d12-41c8-4b6f-8d33-9c1ab2e07f65
 // last-edited: 2026-11-12
 
@@ -132,10 +132,10 @@ func (s *Svc) describe(name, rest string) (found, bool) {
 			f.Bytes += si.Size()
 		}
 	}
-	m := s.readManifestSidecar(p)
-	if m == nil {
-		m = s.peekManifest(p, fi)
-	}
+	// The archive's own first entry is the source of truth: a sidecar can be
+	// swapped, replaced or stale, and the catalogue must never list one archive
+	// under another's ID or provenance. Verify compares the sidecar with it.
+	m := s.peekManifest(p, fi)
 	live := ""
 	if s.o.Store != nil {
 		live = s.o.Store.InstallID()
@@ -151,20 +151,6 @@ func (s *Svc) describe(name, rest string) (found, bool) {
 	return f, true
 }
 
-// readManifestSidecar reads and parses <archive>.manifest.json, bounded; nil
-// when absent or unparseable (the catalogue then looks at the archive).
-func (s *Svc) readManifestSidecar(archive string) *Manifest {
-	b, err := readBounded(archive+ManifestSidecar, MaxManifestBytes)
-	if err != nil {
-		return nil
-	}
-	m, err := ParseManifest(b)
-	if err != nil {
-		return nil
-	}
-	return m
-}
-
 func readBounded(p string, max int64) ([]byte, error) {
 	f, fi, err := backuparchive.OpenRegular(p, max)
 	if err != nil {
@@ -176,9 +162,10 @@ func readBounded(p string, max int64) ([]byte, error) {
 	return b, err
 }
 
-// peekManifest looks at an archive that has no manifest sidecar: when its first
-// entry is the manifest it is a mediacore-backup/1 archive (a sidecar lost or
-// never copied), else it is a legacy-abo/0 archive. The result is cached.
+// peekManifest reads the first entry of an archive: when it is the manifest
+// the archive is mediacore-backup/1, else a legacy-abo/0 one (or unreadable,
+// which is listed as legacy and fails verification). The result is cached by
+// the file's size and time, so a listing reads each archive's head once.
 func (s *Svc) peekManifest(p string, fi os.FileInfo) *Manifest {
 	if v, ok := s.cache.Load(p); ok {
 		if k := v.(kindEntry); k.size == fi.Size() && k.mod.Equal(fi.ModTime()) {

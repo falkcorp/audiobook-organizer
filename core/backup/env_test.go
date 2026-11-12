@@ -1,5 +1,5 @@
 // file: core/backup/env_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5b0c7d2-8a41-4f93-b6d7-2a9c1e4f8b60
 // last-edited: 2026-11-12
 
@@ -109,7 +109,7 @@ type fakeConfig struct {
 	redacted []byte
 }
 
-func (c *fakeConfig) ConfigFileHasSecrets() bool            { return c.secrets }
+func (c *fakeConfig) ConfigFileHasSecrets() bool          { return c.secrets }
 func (c *fakeConfig) RedactedConfigFile() ([]byte, error) { return c.redacted, nil }
 
 // secretKeys is the keyring: derivation keys plus the key IDs a restored
@@ -234,4 +234,8 @@ func (e *env) names() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func storageBase(e *env) storage.OpenOptions {
+	return storage.OpenOptions{Owners: e.owners, Build: "test-build", FreeSpaceMargin: 1}
 }

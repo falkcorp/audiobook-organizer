@@ -1,5 +1,5 @@
 // file: core/backup/verify.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d41f0c73-7b2e-4e88-a6d5-0c9e3b1f5a27
 // last-edited: 2026-11-12
 
@@ -126,6 +126,9 @@ func matchManifest(m *Manifest, info StoreInfo) error {
 	}
 	if info.InstallID != "" && info.InstallID != m.InstallID {
 		return fmt.Errorf("%w: the store's install marker is not the manifest's", ErrManifest)
+	}
+	if info.Keys == nil {
+		return nil // an inspector with no live admin cannot count; the store opened and its levels match
 	}
 	for o, ks := range m.Keyspaces {
 		if got := info.Keys[o]; got != ks.Keys {
