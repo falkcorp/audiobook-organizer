@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/reconcile.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d5cb0b4-ce7f-4ece-bf97-ab406d9fbee5
 // last-edited: 2026-11-11
 
@@ -51,6 +51,14 @@ func (e *Engine) Run(ctx context.Context) error {
 	for {
 		if err := e.Reconcile(ctx); err != nil && ctx.Err() == nil {
 			e.log.Error("index reconcile pass failed", "err", err)
+		}
+		if e.yielded.Swap(false) {
+			// An index used up its pass budget with marks left: take the next pass
+			// now rather than after the interval.
+			if ctx.Err() != nil {
+				return nil
+			}
+			continue
 		}
 		select {
 		case <-ctx.Done():
@@ -118,14 +126,24 @@ func (e *Engine) drain(ctx context.Context, i *idx) error {
 	if closed {
 		return nil
 	}
+	started := time.Now()
+	budget := e.passBudget()
 	after := ""
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		marks, err := i.dirty.PendingAfter(ctx, after, pageSize)
 		if err != nil {
 			return err
 		}
 		if len(marks) == 0 {
 			break
+		}
+		if marks[0].ID == after {
+			// PendingAfter starts strictly after the cursor; a first mark equal to
+			// it means the cursor does not advance, and looping would spin.
+			return fmt.Errorf("dirty set cursor did not advance past %q", after)
 		}
 		i.dirtySince.CompareAndSwap(0, time.Now().UnixNano())
 		after = marks[len(marks)-1].ID
@@ -134,6 +152,13 @@ func (e *Engine) drain(ctx context.Context, i *idx) error {
 		}
 		if len(marks) < pageSize {
 			break
+		}
+		if time.Since(started) >= budget {
+			// One index with a huge backlog must not starve the others: yield after
+			// at least one page, and let the next pass resume (the cursor restarts
+			// at the first pending mark, which is the one that failed or arrived).
+			e.yielded.Store(true)
+			return nil
 		}
 	}
 	rest, err := i.dirty.Pending(ctx, 1)
@@ -177,7 +202,7 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 	entries := make([]entry, 0, len(marks))
 	kept := make([]index.Mark, 0, len(marks))
 	for _, m := range marks {
-		doc, found, err := i.spec.Document(ctx, m.ID)
+		doc, found, err := i.loadDoc(ctx, m.ID)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -201,7 +226,17 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 		return nil
 	}
 	if err := i.applyBatch(entries); err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// One document the index refuses must not keep its neighbours out: apply
+		// the chunk one document at a time, leave the refused ones pending (counted
+		// and logged) and clear the rest. If every document is refused the fault is
+		// the index's, not a poison mark's, and the pass reports it.
+		kept, err = i.applyEach(ctx, entries, kept, err)
+		if err != nil {
+			return err
+		}
 	}
 	for _, m := range kept {
 		if _, err := i.dirty.Clear(ctx, m); err != nil {
@@ -209,4 +244,27 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 		}
 	}
 	return nil
+}
+
+// applyEach is applyMarks' fallback for a chunk whose batch failed: it applies
+// each entry alone and returns the marks of those that went in. It returns
+// batchErr when none did.
+func (i *idx) applyEach(ctx context.Context, entries []entry, marks []index.Mark, batchErr error) ([]index.Mark, error) {
+	var ok []index.Mark
+	for n, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := i.applyBatch([]entry{e}); err != nil {
+			i.failures.Add(1)
+			i.log.Warn("index refused a document; its mark stays pending",
+				"module", i.module, "index", i.name, "id", e.id, "err", err)
+			continue
+		}
+		ok = append(ok, marks[n])
+	}
+	if len(ok) == 0 {
+		return nil, batchErr
+	}
+	return ok, nil
 }

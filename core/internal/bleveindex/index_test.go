@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/index_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a08fe3e7-f1a2-4bf1-a2ca-de739c2ce218
 // last-edited: 2026-11-11
 
@@ -24,9 +24,9 @@ import (
 // seeded is a rig whose index holds five villains and has left Rebuilding.
 //
 //go:fix inline
-func seeded(t *testing.T) *rig {
+func seeded(t *testing.T, opts ...func(*Options)) *rig {
 	t.Helper()
-	r := newRig(t)
+	r := newRig(t, opts...)
 	r.save("joker", "The Joker", "clown", 1940)
 	r.save("penguin", "The Penguin", "bird", 1941)
 	r.save("riddler", "The Riddler", "puzzle", 1948)
@@ -195,7 +195,9 @@ func TestIndexOpenFailureDegrades(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(path, "index_meta.json"), []byte("{not json"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(mappingMarkerPath(path), []byte("1\n"), 0o600); err != nil {
+		// A complete index that will not open: the mapping marker matches and there
+		// is no rebuilding marker, so this is damage, not an interrupted create.
+		if err := os.WriteFile(mappingMarkerPath(path), []byte(mappingStamp(newSpec(f, "1", nil))+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		r := rigOn(t, f, dir, "1") // Open must not fail
@@ -236,7 +238,7 @@ func TestIndexOpenFailureDegrades(t *testing.T) {
 			t.Fatalf("state = %v, want Degraded", got)
 		}
 	})
-	t.Run("a rebuild of a degraded index is refused", func(t *testing.T) {
+	t.Run("a rebuild that cannot create the index reports it Degraded", func(t *testing.T) {
 		f := indextest.Open(t, storage.FSOf(vfs.NewMem()), dbPath)
 		blocker := filepath.Join(t.TempDir(), "file")
 		if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {

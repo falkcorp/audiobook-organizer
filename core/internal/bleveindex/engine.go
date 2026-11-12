@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/engine.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c4bafa3-bd6e-4dbf-ae86-9a3f5c8eadd4
 // last-edited: 2026-11-11
 
@@ -39,6 +39,37 @@ const defaultChunk = 64
 // pageSize is how many marks a reconcile pass reads at a time.
 const pageSize = 1024
 
+// Query limits. A query's cost is set by the terms its wildcards, prefixes and
+// fuzzy matches expand to, not by its size, so the engine bounds the expansion
+// itself (bleve's term-searcher cap, set on every Search, Count and Facets),
+// the time one call may take when its caller set no deadline, and the size and
+// shape of the query it will translate.
+const (
+	// DefaultMaxTermSearchers is the most leaf term searchers one search may
+	// create (Options.MaxTermSearchers). A prefix over a large field fails fast
+	// at this bound instead of allocating gigabytes.
+	DefaultMaxTermSearchers = 1024
+	// DefaultSearchTimeout bounds a call whose context has no deadline.
+	DefaultSearchTimeout = 30 * time.Second
+	// DefaultPassBudget is how long one reconcile pass spends on one index
+	// before it yields to the next (it always applies at least one page).
+	DefaultPassBudget = 10 * time.Second
+
+	maxQueryStringBytes = 4 << 10 // a QueryString and any one query text
+	maxQueryNodes       = 1024    // nodes in one query tree
+	maxQueryDepth       = 32      // nesting of And, Or and Not
+)
+
+// ErrNotReady: CopyTo of an index that is not Ready (Rebuilding, Degraded):
+// its content does not cover its source, so no artifact is taken from it.
+var ErrNotReady = errors.New("bleveindex: index is not ready")
+
+// ErrNotQuiescent: CopyTo while marks are pending. The generation does not move
+// when the reconciler indexes a mark, so an artifact stamped now would be
+// accepted after the drain with a content that lags its source. Retry after a
+// reconcile pass.
+var ErrNotQuiescent = errors.New("bleveindex: index has pending dirty marks")
+
 // ErrAlreadyOpen: the index is already open in this engine.
 var ErrAlreadyOpen = errors.New("bleveindex: index already open")
 
@@ -54,6 +85,10 @@ type Options struct {
 	Workers  func() int                                         // core.index.reconcile.workers; nil = runtime.NumCPU(); read on every pass, so a hot reload applies
 	Interval func() time.Duration                               // core.index.reconcile.interval; nil = DefaultInterval; read on every wait
 	Chunk    int                                                // marks per bleve batch; 0 = 64
+
+	SearchTimeout    time.Duration // bounds a Search, Count or Facets whose context has no deadline; 0 = DefaultSearchTimeout
+	MaxTermSearchers int           // leaf term searchers one search may create; 0 = DefaultMaxTermSearchers
+	PassBudget       time.Duration // time one reconcile pass spends on one index before yielding; 0 = DefaultPassBudget
 }
 
 // Engine opens indexes and reconciles them. Its methods are safe for
@@ -62,8 +97,9 @@ type Engine struct {
 	o   Options
 	log *slog.Logger
 
-	mu   sync.Mutex
-	idxs map[string]*idx // "<module>/<name>"
+	mu      sync.Mutex
+	idxs    map[string]*idx     // "<module>/<name>", OPEN indexes only: an index is published here after its open finished
+	opening map[string]struct{} // keys being opened, the duplicate guard
 
 	wake chan struct{} // buffered(1): a MarkDirty nudge
 
@@ -74,6 +110,12 @@ type Engine struct {
 	done    chan struct{}
 
 	passes atomic.Int64
+	// duringOpen is a test seam, nil in production: idx.open calls it first, the
+	// window in which the index must not be visible to the reconciler.
+	duringOpen func(*idx)
+	// yielded is set when a pass left marks behind because an index used up its
+	// budget: Run starts the next pass at once instead of waiting.
+	yielded atomic.Bool
 }
 
 // New builds an Engine. It opens nothing and writes nothing.
@@ -91,12 +133,13 @@ func New(o Options) (*Engine, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Engine{
-		o:    o,
-		log:  log,
-		idxs: map[string]*idx{},
-		wake: make(chan struct{}, 1),
-		stop: make(chan struct{}),
-		done: make(chan struct{}),
+		o:       o,
+		log:     log,
+		idxs:    map[string]*idx{},
+		opening: map[string]struct{}{},
+		wake:    make(chan struct{}, 1),
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
 	}, nil
 }
 
@@ -116,6 +159,27 @@ func (e *Engine) interval() time.Duration {
 		}
 	}
 	return DefaultInterval
+}
+
+func (e *Engine) searchTimeout() time.Duration {
+	if e.o.SearchTimeout > 0 {
+		return e.o.SearchTimeout
+	}
+	return DefaultSearchTimeout
+}
+
+func (e *Engine) maxTermSearchers() int {
+	if e.o.MaxTermSearchers > 0 {
+		return e.o.MaxTermSearchers
+	}
+	return DefaultMaxTermSearchers
+}
+
+func (e *Engine) passBudget() time.Duration {
+	if e.o.PassBudget > 0 {
+		return e.o.PassBudget
+	}
+	return DefaultPassBudget
 }
 
 func (e *Engine) chunk() int {
@@ -189,13 +253,21 @@ func (e *Engine) open(ctx context.Context, module string, s index.Spec) (index.I
 	}
 	key := module + "/" + s.Name
 	e.mu.Lock()
-	if _, dup := e.idxs[key]; dup {
+	_, dup := e.idxs[key]
+	if _, busy := e.opening[key]; dup || busy {
 		e.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", ErrAlreadyOpen, key)
 	}
-	e.idxs[key] = i // reserved before the (slow) open, so a second Open cannot race it
+	e.opening[key] = struct{}{} // reserved before the (slow) open, so a second Open cannot race it
 	e.mu.Unlock()
+	// The open runs before the index is published: the reconciler, Stats and
+	// CopyTo only ever see an index whose handle and state are final, and the
+	// mutex hand-off below orders every write open() made before their reads.
 	i.open()
+	e.mu.Lock()
+	delete(e.opening, key)
+	e.idxs[key] = i
+	e.mu.Unlock()
 	e.nudge() // a pending mark of a freshly opened index drains without waiting a tick
 	return i, nil
 }
@@ -224,6 +296,9 @@ func (e *Engine) snapshot() []*idx {
 	e.mu.Lock()
 	out := make([]*idx, 0, len(e.idxs))
 	for _, i := range e.idxs {
+		if i.State() == index.StateInvalid {
+			continue // not opened yet (never published that way; a guard, not a rule)
+		}
 		out = append(out, i)
 	}
 	e.mu.Unlock()
@@ -249,15 +324,16 @@ func compareStr(a, b string) int {
 // Ref names one index.
 type Ref struct{ Module, Index string }
 
-// PendingRebuilds lists the open indexes that are Rebuilding and have not had a
-// full rebuild run to completion in this process: a fresh index (the first R2
-// boot finds no state for it), one recreated for a mapping change, or one whose
-// rebuild a restart interrupted. The kernel enqueues RebuildKind for each at
-// Run start (F7-09).
+// PendingRebuilds lists the open indexes that need a full rebuild: those
+// Rebuilding that have not had one run to completion in this process (a fresh
+// index, one recreated for a mapping change, or one whose rebuild a restart
+// interrupted), and every Degraded one, because the rebuild is what recreates
+// an index that would not open. The kernel enqueues RebuildKind for each at Run
+// start (F7-09).
 func (e *Engine) PendingRebuilds() []Ref {
 	var out []Ref
 	for _, i := range e.snapshot() {
-		if i.State() == index.Rebuilding && !i.rebuilt.Load() {
+		if st := i.State(); st == index.Degraded || (st == index.Rebuilding && !i.rebuilt.Load()) {
 			out = append(out, Ref{i.module, i.name})
 		}
 	}
