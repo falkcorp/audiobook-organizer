@@ -1,5 +1,5 @@
 // file: core/outbox/logs_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7f507577-1d8d-4031-8266-e190b04b52d9
 // last-edited: 2026-11-12
 
@@ -259,7 +259,7 @@ func TestOutbox_FailureLogsCarryNoPayload(t *testing.T) {
 				if logs.count("fault=corrupt_row")+logs.count("fault=unknown_version") == 0 {
 					t.Errorf("no line carries the fault token:\n%s", logs.text())
 				}
-				for _, line := range strings.Split(logs.text(), "\n") {
+				for line := range strings.SplitSeq(logs.text(), "\n") {
 					if strings.Count(line, "kind=") > 1 {
 						t.Errorf("a line carries two kind attributes: %s", line)
 					}

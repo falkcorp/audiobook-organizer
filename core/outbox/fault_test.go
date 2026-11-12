@@ -1,5 +1,5 @@
 // file: core/outbox/fault_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b2e4c0d-91a3-4f56-8d17-6c0a5e3f2b94
 // last-edited: 2026-11-12
 
@@ -109,7 +109,7 @@ func TestOutbox_StatusFailureWarningIsRateLimited(t *testing.T) {
 	if n := logs.count("outbox: status failed"); n != 1 {
 		t.Fatalf("%d status warnings for 50 failed refreshes, want 1:\n%s", n, logs.text())
 	}
-	for _, line := range strings.Split(logs.text(), "\n") {
+	for line := range strings.SplitSeq(logs.text(), "\n") {
 		if strings.Contains(line, "status failed") && !strings.Contains(line, "fault=error") {
 			t.Fatalf("the warning does not carry the fault token: %s", line)
 		}
