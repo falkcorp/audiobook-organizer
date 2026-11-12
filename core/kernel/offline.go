@@ -1,7 +1,7 @@
 // file: core/kernel/offline.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 299eb4da-a345-4039-9962-8ce819af3f0f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -72,14 +72,42 @@ type Offline struct {
 // lock then locks the owner's file as it is, or refuses, and never creates
 // or changes it.
 func OpenOffline(ctx context.Context, c Config, readOnly bool) (_ *Offline, err error) {
+	k, o, err := openOfflineStore(ctx, c, readOnly)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, k.closeOffline(ctx))
+		}
+	}()
+	db, err := o.Offline()
+	if err != nil {
+		return nil, fmt.Errorf("kernel: offline open: %w", err)
+	}
+	k.store.db = db
+	return &Offline{k: k, db: db}, nil
+}
+
+// openOfflineStore is OpenOffline's guards and storage's open steps, up to
+// but not including Opened.Offline: the state directory's owner for a
+// read-write open, the offline kernel (P1 and logging), the shared swap lock,
+// the busy-slot refusal and storage.Open over the build's owners and data
+// steps. It returns the kernel, which holds the store (k.store.opened) and
+// the swap lock, and the unprepared *storage.Opened; on error everything it
+// took is released. The caller closes the kernel with closeOffline. Two
+// callers choose what to do with the store: OpenOffline (Opened.Offline,
+// which never migrates) and OpenCutoverBlockers (Opened.BeginCutoverBlockers,
+// the one open that tolerates pending cutover steps).
+func openOfflineStore(ctx context.Context, c Config, readOnly bool) (_ *Kernel, _ *storage.Opened, err error) {
 	if !readOnly {
 		if err := storage.RefuseNotStateDirOwner(ctx, c.StateDir, "a read-write offline open"); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	k, err := offlineKernel(c)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() {
 		if err != nil {
@@ -89,27 +117,22 @@ func OpenOffline(ctx context.Context, c Config, readOnly bool) (_ *Offline, err 
 	// The swap lock, shared until Close, as a serve boot holds it: no
 	// offline restore or reset moves the store while this open may use it.
 	if err := k.lockSwap(ctx, false); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := k.refuseBusySlot(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	opts, err := k.storageOptions(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	opts.ReadOnly, opts.MustExist = readOnly, true
 	o, err := storage.Open(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("kernel: offline open: %w", err)
+		return nil, nil, fmt.Errorf("kernel: offline open: %w", err)
 	}
 	k.store = &kernelStore{opened: o}
-	db, err := o.Offline()
-	if err != nil {
-		return nil, fmt.Errorf("kernel: offline open: %w", err)
-	}
-	k.store.db = db
-	return &Offline{k: k, db: db}, nil
+	return k, o, nil
 }
 
 // Storage is module id's StorageHandles as P4c builds them: its keyspace

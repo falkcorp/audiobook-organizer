@@ -1,5 +1,5 @@
 // file: core/kernel/cutover.go
-// version: 1.0.1
+// version: 1.1.1
 // guid: aa530b78-4ec9-41a1-85a3-d0075f9bcdff
 // last-edited: 2026-11-12
 
@@ -113,17 +113,28 @@ func cutoverBlockers(ctx context.Context, o *storage.Opened, cutover []datamigra
 	if started {
 		return nil, true, nil
 	}
+	blockers, err = runPreflights(ctx, cutover, o.PreflightSource)
+	if err != nil {
+		return nil, false, err
+	}
+	return blockers, false, nil
+}
+
+// runPreflights calls every cutover step's Preflight over its owner's source
+// (the read-only Reader source returns) and collects the blockers, a step
+// that left Blocker.Step empty named after the migration. It writes nothing.
+func runPreflights(ctx context.Context, cutover []datamigrate.DataMigration, source func(storage.Owner) (storage.Reader, error)) (blockers []storage.CutoverBlocker, err error) {
 	for _, m := range cutover {
 		if m.Preflight == nil {
 			continue
 		}
-		src, err := o.PreflightSource(m.Owner)
+		src, err := source(m.Owner)
 		if err != nil {
-			return nil, false, fmt.Errorf("kernel: cutover preflight of %s: %w", m.ID, err)
+			return nil, fmt.Errorf("kernel: cutover preflight of %s: %w", m.ID, err)
 		}
 		found, err := m.Preflight(ctx, src)
 		if err != nil {
-			return nil, false, fmt.Errorf("kernel: cutover preflight of %s: %w", m.ID, err)
+			return nil, fmt.Errorf("kernel: cutover preflight of %s: %w", m.ID, err)
 		}
 		for _, b := range found {
 			step := b.Step
@@ -133,7 +144,7 @@ func cutoverBlockers(ctx context.Context, o *storage.Opened, cutover []datamigra
 			blockers = append(blockers, storage.CutoverBlocker{Step: step, Key: b.Key, Family: b.Family, Reason: b.Reason, Fix: b.Fix})
 		}
 	}
-	return blockers, false, nil
+	return blockers, nil
 }
 
 // QuarantineDetail is the storage_quarantine part of core.storage's health

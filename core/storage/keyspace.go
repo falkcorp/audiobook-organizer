@@ -1,7 +1,7 @@
 // file: core/storage/keyspace.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 19622090-dcb6-4a27-9fdc-56c0a74d93af
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package storage
 
@@ -239,6 +239,9 @@ func (s handleOf) single(ctx context.Context, op opKind, key, value []byte, dr *
 
 // handle rebuilds the Handle value of a scope.
 func (s handleOf) handle() Handle {
+	if s.fix != nil {
+		return blockerRange{db: s.db, owner: s.owner, fix: s.fix}
+	}
 	if s.legacy {
 		return LegacyRange{db: s.db, owner: s.owner, tx: s.tx, ro: s.ro}
 	}
