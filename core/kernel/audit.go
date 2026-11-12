@@ -1,7 +1,7 @@
 // file: core/kernel/audit.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2c47a96-3b18-4f5d-a07e-8d1b6c9f3a24
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package kernel
 
@@ -85,8 +85,10 @@ func auditMetrics(p *metrics.Provider, s *audit.Store) (*metrics.Scope, error) {
 	return sc, nil
 }
 
-// startAudit launches the store's async writer. ctx is the app context: its
-// end stops the writer as stopAudit does.
+// startAudit launches the store's async writer. ctx is the context the writer
+// runs under, and its end stops the writer as stopAudit does; the kernel
+// passes one that Run's cancellation does not reach (startCoreServices), so
+// the writer outlives the listener's and the executor's drain.
 func startAudit(ctx context.Context, s *audit.Store) error {
 	if err := s.Start(ctx); err != nil {
 		return fmt.Errorf("kernel: audit writer: %w", err)

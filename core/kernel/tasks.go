@@ -1,5 +1,5 @@
 // file: core/kernel/tasks.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c41f7a09-5d2e-4e83-b6a1-9a0d3f8e7c25
 // last-edited: 2026-11-11
 
@@ -46,6 +46,18 @@ func taskOwnerSpec() storage.OwnerSpec {
 	return storage.OwnerSpec{Owner: taskstore.Owner, Spec: taskstore.StorageSpec(), Enabled: true}
 }
 
+// taskScheduler is what the kernel asks of the scheduler: its goroutine, its
+// stop and the window members the executor's lanes read. *scheduler.Scheduler
+// is the one production implementation; the stop-order test substitutes a
+// recorder, so the order is observed rather than inferred from timing.
+type taskScheduler interface {
+	Run(ctx context.Context) error
+	Stop(ctx context.Context) error
+	Members(window string) []tasks.Kind
+}
+
+var _ taskScheduler = (*scheduler.Scheduler)(nil)
+
 // kernelTasks is what the tasks wiring holds. The native stores exist from P4c
 // whenever a store is open (they only wrap a keyspace and start nothing); the
 // executor, the scheduler and the routes exist only when the start rule
@@ -58,8 +70,8 @@ type kernelTasks struct {
 	// Set at P7 when the rule holds, never changed after: the goroutines
 	// that read them start after the build.
 	defs   []tasks.Definition
-	exec   tasks.Executor
-	sched  *scheduler.Scheduler
+	exec   tasks.Executor // Run and Shutdown are the lifecycle; the rest is the Client
+	sched  taskScheduler
 	server *taskhttp.Server
 	ops    *metrics.Scope
 
@@ -336,11 +348,24 @@ func (k *Kernel) startTasks(ctx context.Context) error {
 	}
 	kt.started = true
 	kt.schedEnd = make(chan struct{})
+	end := kt.schedEnd
 	go func() {
-		defer close(kt.schedEnd)
-		if err := kt.sched.Run(ctx); err != nil {
-			k.coreLog("scheduler").Error("kernel: scheduler stopped with an error", "err", err)
+		defer close(end)
+		err := kt.sched.Run(ctx)
+		if err == nil {
+			return
 		}
+		// A stop that overtook this goroutine makes Run refuse to start
+		// ("Run after Stop"): that is the shutdown, not a fault, so it is not
+		// an ERROR. Anything else is, stopped or not.
+		kt.mu.Lock()
+		stopped := kt.stopped
+		kt.mu.Unlock()
+		if stopped {
+			k.coreLog("scheduler").Debug("kernel: scheduler did not run: tasks already stopped", "err", err)
+			return
+		}
+		k.coreLog("scheduler").Error("kernel: scheduler stopped with an error", "err", err)
 	}()
 	return nil
 }
@@ -379,28 +404,57 @@ func (k *Kernel) stopTasks(ctx context.Context) error {
 }
 
 // startCoreServices is Run's steps (5), (6) and the audit writer of step (7),
-// before the listener opens.
+// before the listener opens. The writer is started under a context that
+// outlives Run's: Run's context ends when the process is told to stop, and a
+// writer bound to it would stop then, before the listener has drained and the
+// executor has finished its runs, so every record they emit afterwards would
+// be dropped. Only stopAudit ends the writer.
 func (k *Kernel) startCoreServices(ctx context.Context) error {
 	if err := k.startTasks(ctx); err != nil {
 		return err
 	}
 	if k.audit != nil {
-		return startAudit(ctx, k.audit)
+		return startAudit(context.WithoutCancel(ctx), k.audit)
 	}
 	return nil
 }
 
+// auditStopSlice is the longest the kernel lets the audit writer drain at
+// stop. The writer has a drain budget of its own (5 s); this is the kernel's,
+// below it, so a store that cannot take the queue never costs the module
+// workers and hooks that stop after it more than this (05-health §5H.4: each
+// stop step has a slice, none is handed the whole remainder).
+const auditStopSlice = 3 * time.Second
+
 // stopCoreServices stops what startCoreServices started, in reverse: the
-// scheduler, the executor's drain, then the audit writer (it drains the
-// records the executor's last transitions queued, so it stops after the
-// executor and while storage is still open). Safe to call twice.
+// scheduler, the executor's drain, then the audit writer. The writer stops
+// last because it records what the scheduler's and the executor's last
+// transitions emit, and while storage is still open, since it drains into it.
+// Safe to call twice.
 func (k *Kernel) stopCoreServices(ctx context.Context, deadline time.Time) error {
-	ctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
-	defer cancel()
-	errs := []error{k.stopTasks(ctx)}
+	auditStop := func(context.Context) error { return nil }
 	if k.audit != nil {
-		errs = append(errs, stopAudit(ctx, k.audit))
+		auditStop = func(ctx context.Context) error { return stopAudit(ctx, k.audit) }
 	}
+	return runCoreStops(ctx, deadline, k.stopTasks, auditStop)
+}
+
+// runCoreStops is stopCoreServices' order and its budget: the tasks stop
+// within what remains of deadline, then the audit writer within the lesser of
+// auditStopSlice and what remains after them, so a writer that cannot drain
+// leaves the workers and hooks their share.
+func runCoreStops(ctx context.Context, deadline time.Time, stopTasks, stopAuditWriter func(context.Context) error) error {
+	ctx = context.WithoutCancel(ctx)
+	tctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	errs := []error{stopTasks(tctx)}
+	slice := time.Now().Add(auditStopSlice)
+	if deadline.Before(slice) {
+		slice = deadline
+	}
+	actx, acancel := context.WithDeadline(ctx, slice)
+	defer acancel()
+	errs = append(errs, stopAuditWriter(actx))
 	return errors.Join(errs...)
 }
 
