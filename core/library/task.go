@@ -1,5 +1,5 @@
 // file: core/library/task.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1ca96d-27c7-48fa-9e0e-837a3808fcc9
 // last-edited: 2026-11-11
 
@@ -44,7 +44,7 @@ type TransferRecoverResult struct {
 // kernel registers it when the library is wired (F2-16, F7); it runs once at
 // start (OnStart) and then on the key's interval, and finds nothing to do when
 // no transfer was interrupted. Writes on core's own library resource;
-// ResumeFromZero, because a pass is idempotent (every row is decided from the
+// Live (a scheduled writer states its mode, D8), ResumeFromZero, because a pass is idempotent (every row is decided from the
 // journal and from what is on disk); core:library.manage to start. A manager
 // that cannot recover yields a definition whose Run is nil, which
 // tasks.Problems reports, so registration fails closed.
@@ -69,7 +69,7 @@ func TransferRecoverTask(m Manager) tasks.Definition {
 		Perms:    tasks.Permissions{Start: rbac.Need("core:library.manage")},
 		Resume:   tasks.ResumeFromZero,
 		Timeout:  TransferRecoverTimeout,
-		Schedule: tasks.ScheduleFromConfig(TransferRecoverScheduleKey).OnStart(),
+		Schedule: tasks.ScheduleFromConfig(TransferRecoverScheduleKey).OnStart().Live(),
 		Run:      run,
 	})
 }
