@@ -153,13 +153,13 @@ type Envelope struct {
 // Errors the hub returns before a stream starts; the handler maps each to a
 // status (05-realtime §6).
 var (
-	ErrTooManyClients = errors.New("realtime: too many event streams")          // 503
-	ErrTooManyForUser = errors.New("realtime: too many event streams for user") // 429
-	ErrUnknownTopic   = errors.New("realtime: unknown topic")                   // 400
-	ErrTopicDenied    = errors.New("realtime: topic not permitted")             // 403 (explicit topic only)
+	ErrTooManyClients = errors.New("realtime: too many event streams")           // 503
+	ErrTooManyForUser = errors.New("realtime: too many event streams for user")  // 429
+	ErrUnknownTopic   = errors.New("realtime: unknown topic")                    // 400
+	ErrTopicDenied    = errors.New("realtime: topic not permitted")              // 403 (explicit topic only)
 	ErrNotPermitted   = errors.New("realtime: the caller may not open a stream") // 403
-	ErrNotReady       = errors.New("realtime: the hub has no topics yet")       // 503 (Subscriptions not called)
-	ErrClosed         = errors.New("realtime: the hub is closed")               // 503
+	ErrNotReady       = errors.New("realtime: the hub has no topics yet")        // 503 (Subscriptions not called)
+	ErrClosed         = errors.New("realtime: the hub is closed")                // 503
 )
 
 // topicTable is the realtime topics of the frozen catalog, read once.
@@ -369,6 +369,10 @@ func (h *Hub) onRBACChanged(context.Context, events.RawEnvelope) {
 	h.gen.Add(1)
 	h.br.WakeAll()
 }
+
+// Subscribers is the number of open streams: the value of the
+// <ns>_realtime_subscribers gauge.
+func (h *Hub) Subscribers() int { return h.br.Len() }
 
 // Run holds the hub's lifetime: it returns when ctx ends, after closing every
 // stream within closeBudget. The raw subscriptions run on the bus's own
