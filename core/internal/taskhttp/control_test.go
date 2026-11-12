@@ -1,5 +1,5 @@
 // file: core/internal/taskhttp/control_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3b59f28b-7bb8-4285-b43e-2e7ed3a77861
 // last-edited: 2026-11-11
 
@@ -33,8 +33,10 @@ func planRun(g *rig, id string) {
 
 // TestApprove_RequiresVerifiedMethodAndPermission: approve needs the
 // definition's Perms.Approve AND a verified method (SEC-24). The matrix is
-// every credential class against both rules; the cells that need core auth's
-// live identity data are skipped for F4-05.
+// every credential class against both rules. The cells over real core auth
+// principals (the interactive extension, the key naming the scope, core:admin
+// implication, a module method, a forwarded header) are
+// TestApprove_OverCoreAuth in realauth_test.go.
 func TestApprove_RequiresVerifiedMethodAndPermission(t *testing.T) {
 	cells := []struct {
 		name     string
@@ -88,13 +90,6 @@ func TestApprove_RequiresVerifiedMethodAndPermission(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("extension-interactive authenticator", func(t *testing.T) {
-		t.Skip("needs core auth (F4-05): an app authenticator whose MethodSpec.Interactive is true")
-	})
-	t.Run("api key whose scopes name the approval scope", func(t *testing.T) {
-		t.Skip("needs core auth (F4-05): key scopes and the explicit-scope rule")
-	})
 }
 
 // TestApprove_RejectAndBody: a rejection records core.task.reject and names no rows;
