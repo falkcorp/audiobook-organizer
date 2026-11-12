@@ -1,5 +1,5 @@
 // file: core/backup/inspector.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 94d2b6e1-0a7c-4f35-8e19-6b3a1c5d7f08
 // last-edited: 2026-11-12
 
@@ -116,6 +116,11 @@ func (si *StorageInspector) count(ctx context.Context, ro *storage.ReadOnlyDB, i
 		if !os.Spec.Keyspace || !os.Enabled {
 			continue // a disabled owner has no handle and no keys to count
 		}
+		// A keyspace is a logical key prefix over the live build's owner registry
+		// (ro shares it), not a structure in the archived store: the handle exists
+		// for every owner enabled in this build, whatever the archive holds, and an
+		// owner an older archive lacks scans to zero keys. So a failure here is a
+		// wiring fault, and it refuses rather than counting nothing.
 		g.Go(func() error {
 			ks, err := ro.Keyspace(os.Owner)
 			if err != nil {
