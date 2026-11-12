@@ -1,7 +1,7 @@
 // file: core/integrations/providerhttp/redact.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 8397d44b-b492-4bf1-aa16-cf162225a337
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package providerhttp
 
@@ -262,6 +262,9 @@ const lineStop = "&\r\n\"',;<>"
 func (s scrubber) text(in string) string {
 	var b strings.Builder
 	n := len(in)
+	// The output is the input with some values replaced by a short marker, so
+	// it is about len(in): size it once instead of regrowing a large body.
+	b.Grow(n)
 	i := 0
 	for i < n {
 		if !isNameByte(in[i]) {
