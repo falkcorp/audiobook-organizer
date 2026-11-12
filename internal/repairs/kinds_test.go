@@ -1,5 +1,5 @@
 // file: internal/repairs/kinds_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d2e9a40-5c1b-4f86-b3a7-0e4d8c6a1f52
 // last-edited: 2026-11-12
 
@@ -1408,35 +1408,95 @@ func TestRepairsKinds_OneUnresolvedPermissionAmongSeveralFailsClosed(t *testing.
 	require.NotEmpty(t, tasks.Problems(defs[0]))
 }
 
-// A run state whose build failed is not kept: the next attempt of the run
-// (same run id) builds it again.
-func TestRepairsKinds_FailedRunStateIsNotKept(t *testing.T) {
+// A refused run state is kept for the attempt that was refused: the build ran
+// once, every row of the attempt gets the same error (the executor records one
+// failure per row with it), the refusal is logged once, and the stand-down is
+// not asked for again per row. A resumed attempt (a new context) builds again.
+func TestRepairsKinds_RefusedRunStateIsKeptForTheAttempt(t *testing.T) {
 	s := newMemStore()
 	seed(s)
 	var fail atomic.Bool
 	fail.Store(true)
+	var builds, standDowns atomic.Int64
+	var standDownBusy atomic.Bool
 	k := newKind(&trimFixer{s: s}, KindDeps{Guard: s, PlanRows: &fakePlanRows{},
 		BindStores:   func(ctx context.Context) context.Context { return ctx },
 		StandDownKey: "books.scan",
 		NewWriter: func(context.Context, tasks.RunID, Fixer) (*Writer, error) {
+			builds.Add(1)
 			if fail.Load() {
 				return nil, errors.New("store closed")
 			}
 			return NewWriter(s, s, "trim-titles", "bulk_update", "rp-"), nil
 		}})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	rc, _ := liveRC(ctx, "books.repairs.trim-titles")
+	var buf bytes.Buffer
+	rcFor := func(ctx context.Context) *tasks.RC {
+		run := &modeRun{FakeRun: taskstest.NewFakeRun(ctx, tasks.Kind(KindPrefix+"trim-titles")), mode: tasks.ModeLive,
+			standDown: func(tasks.Key) (tasks.Hold, error) {
+				standDowns.Add(1)
+				if standDownBusy.Load() {
+					return nil, errors.New("scan stand-down is busy")
+				}
+				return &recordedHold{}, nil
+			},
+			log: slog.New(slog.NewTextHandler(&buf, nil))}
+		return tasks.NewRC(run)
+	}
+
+	first, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	rc := rcFor(first)
+	// Ten rows of the attempt: every one gets the refusal, the build ran once.
+	for range 10 {
+		_, err := k.runState(rc)
+		require.ErrorContains(t, err, "store closed")
+	}
+	require.EqualValues(t, 1, builds.Load(), "the refusal is built once for the attempt, not once per row")
+	require.EqualValues(t, 1, strings.Count(buf.String(), "the apply run state was refused"), "and logged once")
+	require.Contains(t, buf.String(), "store closed")
+
+	// Even if the cause went away mid-attempt the attempt keeps its answer.
+	fail.Store(false)
 	_, err := k.runState(rc)
 	require.ErrorContains(t, err, "store closed")
-	fail.Store(false)
-	rs, err := k.runState(rc)
-	require.NoError(t, err, "the failed build is not remembered")
+	require.EqualValues(t, 1, builds.Load())
+
+	// A resumed attempt has its own context: it builds again and succeeds, and
+	// the state is shared by every row of that attempt.
+	cancelFirst()
+	second, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	rc2 := rcFor(second)
+	rs, err := k.runState(rc2)
+	require.NoError(t, err, "a new attempt is not held to the refusal of the last one")
 	require.NotNil(t, rs.writer)
-	// And the same state is shared by every row of the run.
-	again, err := k.runState(rc)
+	require.EqualValues(t, 2, builds.Load())
+	again, err := k.runState(rc2)
 	require.NoError(t, err)
 	require.Same(t, rs, again)
+
+	// A refusal that is the stand-down's own is asked for once per attempt, not
+	// once per row.
+	cancelSecond()
+	standDownBusy.Store(true)
+	before := standDowns.Load()
+	third, cancelThird := context.WithCancel(context.Background())
+	defer cancelThird()
+	rc3 := rcFor(third)
+	for range 10 {
+		_, err := k.runState(rc3)
+		require.ErrorContains(t, err, "scan stand-down is busy")
+	}
+	require.EqualValues(t, 1, standDowns.Load()-before, "the stand-down was asked for once, not once per row")
+
+	// No slot outlives its attempt: ending the attempts removes the built state
+	// and the refused one.
+	cancelThird()
+	require.Eventually(t, func() bool {
+		n := 0
+		k.runs.Range(func(_, _ any) bool { n++; return true })
+		return n == 0
+	}, 2*time.Second, 5*time.Millisecond, "no run slot is left behind")
 }
 
 // ---- refusals that fail closed ----

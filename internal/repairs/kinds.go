@@ -1,5 +1,5 @@
 // file: internal/repairs/kinds.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0f3a6c1e-2b7d-4d58-9a41-6c8e5b2d7f13
 // last-edited: 2026-11-12
 
@@ -634,8 +634,16 @@ func (k *repairKind) runState(rc *tasks.RC) (*runState, error) {
 		defer slot.done.Store(true)
 		slot.rs, slot.err = k.newRunState(rc)
 		if slot.err != nil {
-			// A failed build is not kept: a resumed attempt of the run tries again.
-			k.runs.CompareAndDelete(run, slot)
+			// A refused build is kept for the attempt: every row of it answers
+			// the same error without asking again (a refusal that took the
+			// stand-down would otherwise knock on it once per row), and the
+			// refusal is logged once, here, not once per row. The executor
+			// still records one failure per row, with that error. A resumed
+			// attempt has its own context, so it replaces this slot (above) and
+			// builds again; the slot leaves the map when the attempt ends.
+			rc.Log().Error("repairs: the apply run state was refused; every row of this attempt fails with the same error",
+				"fixer", k.f.ID(), "err", slot.err)
+			context.AfterFunc(ctx, func() { k.runs.CompareAndDelete(run, slot) })
 			return
 		}
 		slot.rs.slot = slot
@@ -804,6 +812,10 @@ func (rs *runState) leave() {
 // kept rows go once no callback is inside a row, which is at once when none is
 // and otherwise when the last one leaves (HEAD held the stand-down until
 // RunApply returned, workers drained). Safe to call more than once.
+//
+// TestRepairsKinds_RunEndWaitsForRowsInFlight is the test of the "otherwise":
+// a row held inside Apply keeps the scope and the stand-down alive past the
+// run's context, and the last leave ends them.
 func (rs *runState) release() {
 	rs.life.Lock()
 	rs.closing = true
