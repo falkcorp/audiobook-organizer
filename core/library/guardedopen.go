@@ -1,5 +1,5 @@
 // file: core/library/guardedopen.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e84d1a36-7b52-4c09-9f1e-2a6c05d8b7f3
 // last-edited: 2026-11-11
 
@@ -82,6 +82,10 @@ func (l *localFS) guardedOpen(op, name, n string) (*os.File, error) {
 	}
 	if dev, ino, ok := libfs.InodeOf(st); !ok || under[libfs.ID{Dev: dev, Ino: ino}] {
 		return nil, libfs.CloseAfter(f, refuse(fmt.Errorf("%w: %s", ErrReservedPath, name)))
+	}
+	if !st.Mode().IsRegular() && !st.IsDir() {
+		// OpenAt does not block on a FIFO (O_NONBLOCK); it is not a thing to read.
+		return nil, libfs.CloseAfter(f, notReadable(op, name))
 	}
 	return f, nil
 }
