@@ -1,15 +1,11 @@
 // file: internal/repairs/kinds_fixers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e5b2d71-4a8c-4e03-b6f9-1d3c7a0e5b84
 // last-edited: 2026-11-12
 
 package repairs_test
 
 import (
-	"context"
-	"encoding/json"
-	"log/slog"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -20,12 +16,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/books"
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
-	"github.com/falkcorp/audiobook-organizer/internal/versions"
 )
 
 // These tests build the real maintenance plugin's registry, as that package's
@@ -41,113 +33,11 @@ func atomScopes(atom auth.Permission) ([]rbac.Permission, bool) {
 	return nil, false
 }
 
-// noDeps is a plugin whose every store accessor fails the test: nothing the
-// shell runs may reach the plugin's own stores.
-type noDeps struct {
-	maintenance.ServerDeps
-	t *testing.T
-}
-
-func (d noDeps) hit(name string) {
-	d.t.Errorf("a fixer reached the plugin's own %s instead of the shell's stores", name)
-}
-func (d noDeps) OpsStore() maintenance.OpsStore { d.hit("OpsStore"); return nil }
-func (d noDeps) OperationQueueStore() maintenance.OpQueueReader {
-	d.hit("OperationQueueStore")
-	return nil
-}
-func (d noDeps) UserReadStateStore() maintenance.UserReadStateStore {
-	d.hit("UserReadStateStore")
-	return nil
-}
-func (d noDeps) MergeUserStateStore() merge.UserStateRepairStore {
-	d.hit("MergeUserStateStore")
-	return nil
-}
-func (d noDeps) VersionPrimaryStore() maintenance.VersionPrimaryStore {
-	d.hit("VersionPrimaryStore")
-	return nil
-}
-func (d noDeps) IngestVersionStore() versions.IngestStore { d.hit("IngestVersionStore"); return nil }
-func (d noDeps) FragmentRepairReader() maintenance.FragmentRepairReader {
-	d.hit("FragmentRepairReader")
-	return nil
-}
-func (d noDeps) DedupVerdictReader() maintenance.DedupVerdictReader {
-	d.hit("DedupVerdictReader")
-	return nil
-}
-func (d noDeps) BookTagReader() maintenance.BookTagReader { d.hit("BookTagReader"); return nil }
-func (d noDeps) MasterLists() maintenance.MasterListStore { d.hit("MasterLists"); return nil }
-func (d noDeps) ExternalIDBooks() maintenance.ExternalIDBookLookup {
-	d.hit("ExternalIDBooks")
-	return nil
-}
-func (d noDeps) OwnerVetoes() maintenance.OwnerVetoReader { d.hit("OwnerVetoes"); return nil }
-func (d noDeps) CombineJournals() maintenance.CombineJournalScanner {
-	d.hit("CombineJournals")
-	return nil
-}
-func (d noDeps) MetadataCacheStore() database.MetadataCacheStore {
-	d.hit("MetadataCacheStore")
-	return nil
-}
-func (d noDeps) VersionTwinMetadataService() maintenance.VersionTwinMetadataService {
-	d.hit("VersionTwinMetadataService")
-	return nil
-}
-
-// shellStores is the shell's FixerStores: every accessor is counted and hands
-// back no store.
-type shellStores struct{ hits *atomic.Int64 }
-
-var _ maintenance.FixerStores = shellStores{}
-
-func (s shellStores) OpsStore() maintenance.OpsStore { s.hits.Add(1); return nil }
-func (s shellStores) OperationQueueStore() maintenance.OpQueueReader {
-	s.hits.Add(1)
-	return nil
-}
-func (s shellStores) UserReadStateStore() maintenance.UserReadStateStore {
-	s.hits.Add(1)
-	return nil
-}
-func (s shellStores) MergeUserStateStore() merge.UserStateRepairStore {
-	s.hits.Add(1)
-	return nil
-}
-func (s shellStores) VersionPrimaryStore() maintenance.VersionPrimaryStore {
-	s.hits.Add(1)
-	return nil
-}
-func (s shellStores) IngestVersionStore() versions.IngestStore { s.hits.Add(1); return nil }
-func (s shellStores) FragmentRepairReader() maintenance.FragmentRepairReader {
-	s.hits.Add(1)
-	return nil
-}
-func (s shellStores) DedupVerdictReader() maintenance.DedupVerdictReader {
-	s.hits.Add(1)
-	return nil
-}
-func (s shellStores) BookTagReader() maintenance.BookTagReader { s.hits.Add(1); return nil }
-func (s shellStores) MasterLists() maintenance.MasterListStore { s.hits.Add(1); return nil }
-func (s shellStores) ExternalIDBooks() maintenance.ExternalIDBookLookup {
-	s.hits.Add(1)
-	return nil
-}
-func (s shellStores) OwnerVetoes() maintenance.OwnerVetoReader { s.hits.Add(1); return nil }
-func (s shellStores) CombineJournals() maintenance.CombineJournalScanner {
-	s.hits.Add(1)
-	return nil
-}
-func (s shellStores) MetadataCacheStore() database.MetadataCacheStore {
-	s.hits.Add(1)
-	return nil
-}
-func (s shellStores) VersionTwinMetadataService() maintenance.VersionTwinMetadataService {
-	s.hits.Add(1)
-	return nil
-}
+// noDeps is a plugin with no deps at all: building the registry reads none, and
+// the tests here only ask what the fixers become. (What the fixers read when
+// they run is TestFixers_PlanReplanAndApplyReadOnlyTheShellStores in the
+// maintenance package, with working stores.)
+type noDeps struct{ maintenance.ServerDeps }
 
 // retiredAtBase are the fixers `52e732a28` retired after `ac4368bdb`: the
 // brief's 25 are 22 at this base.
@@ -155,7 +45,7 @@ var retiredAtBase = []string{"maintenance.normalize-letter-l-ordinals", "mainten
 
 func registryAt(t *testing.T) *repairs.Registry {
 	t.Helper()
-	return maintenance.New(noDeps{t: t}).Repairs()
+	return maintenance.New(noDeps{}).Repairs()
 }
 
 func TestRepairsKinds_Count(t *testing.T) {
@@ -207,80 +97,4 @@ func TestRepairsKinds_EveryFixersGateResolves(t *testing.T) {
 		require.ElementsMatch(t, want, c.Perms.Approve.Permissions(), f.ID())
 		require.ElementsMatch(t, want, c.Perms.View.Permissions(), f.ID())
 	}
-}
-
-// quietReporter is a reporter for calls that report nothing.
-type quietReporter struct{}
-
-func (quietReporter) UpdateProgress(_, _ int, _ string) error          { return nil }
-func (quietReporter) Log(_ slog.Level, _ string, _ ...slog.Attr) error { return nil }
-func (quietReporter) Logger() *slog.Logger                             { return slog.Default() }
-func (quietReporter) Checkpoint(any) error                             { return nil }
-func (quietReporter) IsCanceled() bool                                 { return false }
-func (r quietReporter) RunPhase(ctx context.Context, _ string, fn func(context.Context, registry.Reporter) error) error {
-	return fn(ctx, r)
-}
-func (quietReporter) Trigger(context.Context, string, any) error { return nil }
-func (quietReporter) SetCurrentItem(string)                      {}
-
-// call runs fn and swallows a panic: a fixer handed a nil store (the fake
-// below has none) may dereference it; what the test asks is only where it
-// looked for the store.
-func call(fn func()) {
-	defer func() { _ = recover() }()
-	fn()
-}
-
-// Invariant 7: with the shell's stores on the context, no fixer reaches the
-// plugin's own. noDeps fails the test on any such access.
-func TestRepairsKinds_FixersUseShellStores(t *testing.T) {
-	reg := registryAt(t)
-	for _, f := range reg.List() {
-		t.Run(f.ID(), func(t *testing.T) {
-			var hits atomic.Int64
-			ctx := repairs.WithStores[maintenance.FixerStores](context.Background(), shellStores{hits: &hits})
-			if sc, ok := f.(repairs.ApplyScoped); ok {
-				call(func() {
-					scoped, end := sc.BeginApply(ctx, true)
-					defer end()
-					ctx = scoped
-				})
-			}
-			call(func() { _, _ = f.Plan(ctx, json.RawMessage(`{}`), quietReporter{}) })
-			call(func() {
-				_, _ = f.Replan(ctx, json.RawMessage(`{}`), repairs.Row{RowID: "r", BookIDs: []string{"b"}, State: json.RawMessage(`{}`)}, quietReporter{})
-			})
-			call(func() {
-				_ = f.Apply(ctx, nil, repairs.Row{RowID: "r", BookIDs: []string{"b"}, State: json.RawMessage(`{}`)})
-			})
-			if aa, ok := f.(repairs.AfterApplier); ok {
-				call(func() { _, _ = aa.AfterApply(ctx, []string{"b"}) })
-			}
-			t.Logf("%s: %d shell store reads", f.ID(), hits.Load())
-		})
-	}
-}
-
-// Without the shell a fixer reads HEAD's stores: the plugin's own accessors.
-// The fixers' own tests rely on it; the native shell never takes this path.
-func TestRepairsKinds_FixersFallBackToPluginStoresWithoutShell(t *testing.T) {
-	reached := atomic.Int64{}
-	deps := countingDeps{reached: &reached}
-	reg := maintenance.New(deps).Repairs()
-	f, ok := reg.Get("maintenance.tag-franchise")
-	require.True(t, ok)
-	call(func() { _, _ = f.Plan(context.Background(), json.RawMessage(`{}`), quietReporter{}) })
-	require.Positive(t, reached.Load(), "with no shell stores on the context the fixer reads the plugin's, as at HEAD")
-}
-
-// countingDeps counts the accessors instead of failing.
-type countingDeps struct {
-	maintenance.ServerDeps
-	reached *atomic.Int64
-}
-
-func (d countingDeps) OpsStore() maintenance.OpsStore { d.reached.Add(1); return nil }
-func (d countingDeps) BookTagReader() maintenance.BookTagReader {
-	d.reached.Add(1)
-	return nil
 }

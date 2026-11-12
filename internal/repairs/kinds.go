@@ -1,5 +1,5 @@
 // file: internal/repairs/kinds.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f3a6c1e-2b7d-4d58-9a41-6c8e5b2d7f13
 // last-edited: 2026-11-12
 
@@ -85,7 +85,11 @@ type KindDeps struct {
 	PlanRows PlannedRows
 	// BindStores puts the fixer stores (WithStores) on a context. The fixers
 	// read their stores from the context, never from what they captured
-	// (conversion rule 3), so this is what hands them the shell's.
+	// (conversion rule 3), so this is what hands them the shell's. Required:
+	// without it a plan and an apply are refused, because a fixer that finds no
+	// stores on its context reads the legacy plugin's own, which the native
+	// shell must never do. (The fallback is for the v2 repairs operations,
+	// which do not go through this file.)
 	BindStores func(ctx context.Context) context.Context
 	// Scopes resolves a HEAD permission atom to the native scopes it needs
 	// (books' atom table, which repairs cannot import). An atom it does not
@@ -94,7 +98,9 @@ type KindDeps struct {
 	Scopes func(atom auth.Permission) ([]rbac.Permission, bool)
 	// StandDownKey is the concurrency key the library scan runs under. An
 	// apply holds a stand-down of it for its writes, as HEAD's RunApply
-	// holds the scan stand-down. Empty: no stand-down is taken.
+	// holds the scan stand-down. Required for a live apply of any fixer that
+	// writes library rows (every fixer but a NoScanStandDown one): empty, such
+	// an apply is refused, never run without the stand-down.
 	StandDownKey tasks.Key
 	// Concurrency is the apply and guard worker count; 0 means
 	// defaultApplyConcurrency.
@@ -206,12 +212,24 @@ func (k *repairKind) requirement() rbac.Requirement {
 	return rbac.AllOf(scopes...)
 }
 
-// bind puts the fixer stores on ctx.
+// bind puts the fixer stores on ctx. Every entry that reaches a fixer checks
+// requireBind first (candidates, load), so BindStores is set here; a nil one
+// would hand the fixer a context with no stores and let it fall back to the
+// legacy plugin's own.
 func (k *repairKind) bind(ctx context.Context) context.Context {
 	if k.deps.BindStores == nil {
 		return ctx
 	}
 	return k.deps.BindStores(ctx)
+}
+
+// requireBind refuses a plan or an apply when the shell has no stores to hand
+// the fixers (KindDeps.BindStores).
+func (k *repairKind) requireBind(what string) error {
+	if k.deps.BindStores == nil {
+		return fmt.Errorf("repairs: %s %s: no fixer stores to bind; refusing to run on the plugin's own", what, k.f.ID())
+	}
+	return nil
 }
 
 // --- plan ---
@@ -223,6 +241,9 @@ func (k *repairKind) candidates(rc *tasks.RC, params json.RawMessage) (tasks.Sou
 	f := k.f
 	if k.deps.Guard == nil {
 		return tasks.Source[candidate]{}, fmt.Errorf("repairs: plan %s: no guard reader", f.ID())
+	}
+	if err := k.requireBind("plan"); err != nil {
+		return tasks.Source[candidate]{}, err
 	}
 	rows, err := f.Plan(k.bind(rc.Context()), params, newRCReporter(rc))
 	if err != nil {
@@ -252,6 +273,9 @@ func (k *repairKind) candidates(rc *tasks.RC, params json.RawMessage) (tasks.Sou
 func (k *repairKind) load(rc *tasks.RC, params json.RawMessage, rowID string) (candidate, bool, error) {
 	if k.deps.PlanRows == nil {
 		return candidate{}, false, fmt.Errorf("repairs: apply %s: no plan row reader", k.f.ID())
+	}
+	if err := k.requireBind("apply"); err != nil {
+		return candidate{}, false, err
 	}
 	ctx := rc.Context()
 	state, found, err := k.deps.PlanRows.PlannedRow(ctx, rc.RunID(), rowID)
@@ -313,6 +337,14 @@ func (k *repairKind) evaluatePlan(ic *tasks.ItemRC, row Row) (tasks.Row, error) 
 
 func (k *repairKind) evaluateApply(ic *tasks.ItemRC, params json.RawMessage, c candidate) (tasks.Row, error) {
 	f, rs, planned := k.f, c.run, c.row
+	// The run state's scope and stand-down are held while this row is in
+	// flight (see runState.enter): a run that was stopped finishes the row it
+	// is inside before they end.
+	leave, ok := rs.enter()
+	if !ok {
+		return tasks.Row{}, fmt.Errorf("repairs: apply %s: row %q: the run has ended", f.ID(), planned.RowID)
+	}
+	defer leave()
 	ctx := rs.bind(ic.Context())
 	refuse := func(outcome, why string) (tasks.Row, error) {
 		ic.Log().Info("repairs row refused at apply", "fixer", f.ID(), "row", planned.RowID, "outcome", outcome, "why", why)
@@ -390,9 +422,11 @@ func (k *repairKind) applyRow(r Row, rs *runState) (tasks.Row, error) {
 }
 
 // apply writes one row the executor found unchanged, through the run's
-// repairs.Writer, as one gated write of the run's tasks.Writer: Preview
-// records the intent and writes nothing (the fixer is not called), Live fences
-// the write when the run is stopped.
+// repairs.Writer, as one gated write of the run's tasks.Writer. The write is
+// fenced when the run is stopped. The executor routes a Preview run to the plan
+// and never applies in it, so this callback runs Live only; were the Writer
+// ever to answer tasks.ErrPreview, the gate records the intent and the fixer is
+// not called.
 func (k *repairKind) apply(ic *tasks.ItemRC, w tasks.Writer, params json.RawMessage, row tasks.Row) error {
 	f := k.f
 	rs := k.runStateOf(row)
@@ -409,6 +443,11 @@ func (k *repairKind) apply(ic *tasks.ItemRC, w tasks.Writer, params json.RawMess
 	if IsPlanOnly(f) {
 		return ErrPlanOnly
 	}
+	leave, ok := rs.enter()
+	if !ok {
+		return fmt.Errorf("repairs: apply %s: row %q: the run has ended; refusing to write it", f.ID(), row.ID)
+	}
+	defer leave()
 	ctx := rs.bind(ic.Context())
 	subject := tasks.ResID("books", "books", row.ID)
 	if len(held.row.BookIDs) > 0 {
@@ -463,6 +502,18 @@ func (k *repairKind) afterApply(rc *tasks.RC, applied []string) error {
 	}
 	if k.deps.PlanRows == nil {
 		return fmt.Errorf("repairs: apply %s: no plan row reader for the follow-up", f.ID())
+	}
+	if err := k.requireBind("apply"); err != nil {
+		return err
+	}
+	if rs != nil {
+		// The follow-up runs inside the run's scope, so the run state stays
+		// until it returns; one that has already ended is not used.
+		if leave, ok := rs.enter(); ok {
+			defer leave()
+		} else {
+			rs = nil
+		}
 	}
 	// Not rc.Context(): a cancelled apply still leaves the books its finished
 	// rows wrote, and their follow-up is owed all the same.
@@ -540,7 +591,14 @@ type runState struct {
 	endFn  func()          // ends the fixer's scope
 	slot   *runSlot        // where k.runs keeps this state
 	hold   tasks.Hold      // the library-scan stand-down, or nil
-	once   sync.Once       // release
+	once   sync.Once       // finish
+
+	// life guards the state's end of life: callbacks that are inside a row
+	// (enter .. leave) keep it alive, and release only takes effect once the
+	// last of them has left.
+	life     sync.Mutex
+	inflight int
+	closing  bool
 
 	mu   sync.Mutex
 	rows map[string]heldRow
@@ -549,12 +607,26 @@ type runState struct {
 // runState returns the state of rc's run, building it on the first row: the
 // writer, the fixer's ApplyScoped scope (once per run, not per row, as HEAD's
 // RunApply calls BeginApply) and, for a Live run of a fixer that writes
-// library rows, the scan stand-down. It is released when the run's context
-// ends (or, sooner, in afterApply).
+// library rows, the scan stand-down. It ends when the run's context ends, once
+// the rows still in flight have left (or, sooner, in afterApply).
+//
+// The slot of a run whose attempt has ended (its context is done) is not
+// reused: a resumed attempt of the same run builds its own state, with its own
+// writer, fence and stand-down, while the earlier attempt's state finishes
+// ending behind it.
 func (k *repairKind) runState(rc *tasks.RC) (*runState, error) {
 	run := rc.RunID()
-	v, _ := k.runs.LoadOrStore(run, &runSlot{})
-	slot := v.(*runSlot)
+	ctx := rc.Context()
+	var slot *runSlot
+	for {
+		v, loaded := k.runs.LoadOrStore(run, &runSlot{ctx: ctx})
+		slot = v.(*runSlot)
+		if loaded && ctx.Err() == nil && slot.ctx.Err() != nil {
+			k.runs.CompareAndSwap(run, slot, &runSlot{ctx: ctx})
+			continue
+		}
+		break
+	}
 	// Every worker that loads a row of the run comes here at once: the first
 	// builds the state (BeginApply, the writer, the stand-down) and the others
 	// wait for it, so each of those happens once per run.
@@ -567,13 +639,14 @@ func (k *repairKind) runState(rc *tasks.RC) (*runState, error) {
 			return
 		}
 		slot.rs.slot = slot
-		context.AfterFunc(rc.Context(), slot.rs.release)
+		context.AfterFunc(ctx, slot.rs.release)
 	})
 	return slot.rs, slot.err
 }
 
-// runSlot is one run's place in repairKind.runs: filled once.
+// runSlot is one run attempt's place in repairKind.runs: filled once.
 type runSlot struct {
+	ctx  context.Context // the attempt's context
 	once sync.Once
 	done atomic.Bool // rs and err are set
 	rs   *runState
@@ -610,13 +683,23 @@ func (k *repairKind) newRunState(rc *tasks.RC) (*runState, error) {
 			return nil
 		})
 		prov := ApplyProvenance{ActorUserID: rc.Actor().UserID}
-		if plan, perr := k.deps.PlanRows.PlanOf(ctx, rc.RunID()); perr == nil {
+		if plan, perr := k.deps.PlanRows.PlanOf(ctx, rc.RunID()); perr != nil {
+			// A label's provenance never fails a run (HEAD's rule), but a
+			// record with no plan op is not silent: the failure is logged
+			// (the error is the store's, it carries no row text).
+			rc.Log().Warn("repairs: the plan op of the apply was not read; its records will not name it",
+				"fixer", f.ID(), "err", perr)
+		} else {
 			prov.PlanOpID = plan
 		}
 		w.setProvenance(prov)
 		if SkipsScanStandDown(f) {
 			w.restrictToNothing()
-		} else if k.deps.StandDownKey != "" {
+		} else if k.deps.StandDownKey == "" {
+			// No key means no stand-down, which is a library scan writing
+			// under an apply: refused, as an unreadable guard is.
+			return nil, fmt.Errorf("repairs: apply %s: no scan stand-down key; a live apply of a fixer that writes library rows does not run without one", f.ID())
+		} else {
 			hold, err := rc.StandDown(k.deps.StandDownKey)
 			if err != nil {
 				return nil, fmt.Errorf("repairs: apply %s: scan stand-down: %w", f.ID(), err)
@@ -694,8 +777,45 @@ func (rs *runState) bind(ctx context.Context) context.Context {
 	return scopedContext{Context: ctx, scope: rs.scope}
 }
 
-// release ends everything the run state holds. Safe to call more than once.
+// enter marks a callback as inside a row of the run. It reports false once the
+// run state has been asked to end, when its scope may already be gone and the
+// callback must not use it. leave must be called when the callback is done.
+func (rs *runState) enter() (leave func(), ok bool) {
+	rs.life.Lock()
+	defer rs.life.Unlock()
+	if rs.closing {
+		return nil, false
+	}
+	rs.inflight++
+	return rs.leave, true
+}
+
+func (rs *runState) leave() {
+	rs.life.Lock()
+	rs.inflight--
+	last := rs.closing && rs.inflight == 0
+	rs.life.Unlock()
+	if last {
+		rs.finish()
+	}
+}
+
+// release asks the run state to end: the fixer's scope, the stand-down and the
+// kept rows go once no callback is inside a row, which is at once when none is
+// and otherwise when the last one leaves (HEAD held the stand-down until
+// RunApply returned, workers drained). Safe to call more than once.
 func (rs *runState) release() {
+	rs.life.Lock()
+	rs.closing = true
+	idle := rs.inflight == 0
+	rs.life.Unlock()
+	if idle {
+		rs.finish()
+	}
+}
+
+// finish ends everything the run state holds, once.
+func (rs *runState) finish() {
 	rs.once.Do(func() {
 		rs.k.runs.CompareAndDelete(rs.run, rs.slot)
 		if rs.endFn != nil {

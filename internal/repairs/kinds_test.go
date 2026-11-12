@@ -1,15 +1,17 @@
 // file: internal/repairs/kinds_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2e9a40-5c1b-4f86-b3a7-0e4d8c6a1f52
 // last-edited: 2026-11-12
 
 package repairs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -45,9 +47,17 @@ type fakePlanRows struct {
 	rows    map[string]tasks.Row
 	bytes   map[string]json.RawMessage // overrides rows: HEAD's stored bytes
 	readErr error
+	planErr error // PlanOf fails
 }
 
-func (p *fakePlanRows) PlanOf(context.Context, tasks.RunID) (string, error) { return "plan-1", nil }
+func (p *fakePlanRows) PlanOf(context.Context, tasks.RunID) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.planErr != nil {
+		return "", p.planErr
+	}
+	return "plan-1", nil
+}
 
 func (p *fakePlanRows) PlannedRow(_ context.Context, _ tasks.RunID, id string) (json.RawMessage, bool, error) {
 	p.mu.Lock()
@@ -140,10 +150,21 @@ func newKit(t *testing.T, s *memStore, f Fixer) *kit {
 			kt.bound.Add(1)
 			return WithStores(ctx, "shell")
 		},
-		Scopes:      testScopes,
-		Concurrency: 4,
+		Scopes:       testScopes,
+		StandDownKey: "books.scan",
+		Concurrency:  4,
 	})
 	return kt
+}
+
+// liveRC is the RC of a Live run whose scan stand-down the executor grants:
+// the hold is returned so a test can see it released. The fake run on its own
+// refuses a stand-down.
+func liveRC(ctx context.Context, kind tasks.Kind) (*tasks.RC, *recordedHold) {
+	hold := &recordedHold{}
+	run := &modeRun{FakeRun: taskstest.NewFakeRun(ctx, kind), mode: tasks.ModeLive,
+		standDown: func(tasks.Key) (tasks.Hold, error) { return hold, nil }}
+	return tasks.NewRC(run), hold
 }
 
 func (kt *kit) kind() tasks.Kind { return tasks.Kind(KindPrefix + kt.k.f.ID()) }
@@ -195,7 +216,7 @@ func (kt *kit) apply(ctx context.Context, ids []string) applyResult {
 	kt.t.Helper()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	rc := taskstest.NewFakeRun(ctx, kt.kind()).RC()
+	rc, _ := liveRC(ctx, kt.kind())
 	res := applyResult{Skipped: map[string]string{}, Failed: map[string]error{}}
 	var mu sync.Mutex
 	opts := tasks.ItemsOptions[string]{
@@ -468,7 +489,7 @@ func TestRepairsKinds_ApplyRowTakenOnce(t *testing.T) {
 	seed(s)
 	kt := newKit(t, s, &trimFixer{s: s})
 	kt.plan(context.Background())
-	rc := taskstest.NewFakeRun(context.Background(), kt.kind()).RC()
+	rc, _ := liveRC(context.Background(), kt.kind())
 
 	var applied, secondErr error
 	_, err := tasks.RunItems(rc, tasks.Fixed(1, "test"), []string{"b1"}, func(ic *tasks.ItemRC, id string) error {
@@ -492,7 +513,7 @@ func TestRepairsKinds_ApplyWithoutEvaluateWritesNothing(t *testing.T) {
 	seed(s)
 	kt := newKit(t, s, &trimFixer{s: s})
 	rows := kt.plan(context.Background())
-	rc := taskstest.NewFakeRun(context.Background(), kt.kind()).RC()
+	rc, _ := liveRC(context.Background(), kt.kind())
 	_, err := tasks.RunItems(rc, tasks.Fixed(1, "test"), []string{"b1"}, func(ic *tasks.ItemRC, _ string) error {
 		var planned tasks.Row
 		for _, r := range rows {
@@ -514,7 +535,7 @@ func TestRepairsKinds_LoadNeedsPlanRows(t *testing.T) {
 	s := newMemStore()
 	seed(s)
 	kt := newKit(t, s, &trimFixer{s: s})
-	rc := taskstest.NewFakeRun(context.Background(), kt.kind()).RC()
+	rc, _ := liveRC(context.Background(), kt.kind())
 
 	noRows := newKind(&trimFixer{s: s}, KindDeps{Guard: s})
 	_, _, err := noRows.load(rc, nil, "b1")
@@ -823,7 +844,11 @@ func TestRepairsKinds_ApplyErrorsAreMapped(t *testing.T) {
 	require.False(t, errors.Is(mapApplyError(other), tasks.ErrFenced))
 }
 
-func TestRepairsKinds_PreviewWritesNothing(t *testing.T) {
+// The executor routes a Preview run to the plan stage and never applies in it,
+// so no run reaches apply in Preview. This pins what the callback does if its
+// Writer ever answers tasks.ErrPreview: the intent is recorded and the fixer is
+// not called.
+func TestRepairsKinds_WriterAnsweringPreviewWritesNothing(t *testing.T) {
 	s := newMemStore()
 	seed(s)
 	f := &trimFixer{s: s}
@@ -832,7 +857,7 @@ func TestRepairsKinds_PreviewWritesNothing(t *testing.T) {
 	kt.w.preview = true
 	res := kt.apply(context.Background(), []string{"b1"})
 	require.Equal(t, []string{"b1"}, res.Applied, "the executor counts a previewed row, as HEAD's would_apply")
-	require.Equal(t, " One ", s.title("b1"), "the fixer's Apply is not called in Preview")
+	require.Equal(t, " One ", s.title("b1"), "the fixer's Apply is not called when the Writer answers Preview")
 	require.Len(t, kt.w.writes, 1, "the intent is recorded")
 }
 
@@ -860,7 +885,7 @@ func TestRepairsKinds_WriterFenceFollowsTheRunContext(t *testing.T) {
 	kt.plan(context.Background())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	rc := taskstest.NewFakeRun(ctx, kt.kind()).RC()
+	rc, _ := liveRC(ctx, kt.kind())
 	rs, err := kt.k.runState(rc)
 	require.NoError(t, err)
 	_, err = rs.writer.Modify("b1", func(b *database.Book) error { b.Title = "Edited"; return nil })
@@ -989,6 +1014,14 @@ type modeRun struct {
 	*taskstest.FakeRun
 	mode      tasks.Mode
 	standDown func(tasks.Key) (tasks.Hold, error)
+	log       *slog.Logger // nil: the fake's
+}
+
+func (r *modeRun) Log() *slog.Logger {
+	if r.log != nil {
+		return r.log
+	}
+	return r.FakeRun.Log()
 }
 
 func (r *modeRun) Mode() tasks.Mode { return r.mode }
@@ -1383,6 +1416,8 @@ func TestRepairsKinds_FailedRunStateIsNotKept(t *testing.T) {
 	var fail atomic.Bool
 	fail.Store(true)
 	k := newKind(&trimFixer{s: s}, KindDeps{Guard: s, PlanRows: &fakePlanRows{},
+		BindStores:   func(ctx context.Context) context.Context { return ctx },
+		StandDownKey: "books.scan",
 		NewWriter: func(context.Context, tasks.RunID, Fixer) (*Writer, error) {
 			if fail.Load() {
 				return nil, errors.New("store closed")
@@ -1391,7 +1426,7 @@ func TestRepairsKinds_FailedRunStateIsNotKept(t *testing.T) {
 		}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rc := taskstest.NewFakeRun(ctx, "books.repairs.trim-titles").RC()
+	rc, _ := liveRC(ctx, "books.repairs.trim-titles")
 	_, err := k.runState(rc)
 	require.ErrorContains(t, err, "store closed")
 	fail.Store(false)
@@ -1402,4 +1437,243 @@ func TestRepairsKinds_FailedRunStateIsNotKept(t *testing.T) {
 	again, err := k.runState(rc)
 	require.NoError(t, err)
 	require.Same(t, rs, again)
+}
+
+// ---- refusals that fail closed ----
+
+// countingFixer counts the calls that reach the fixer.
+type countingFixer struct {
+	*trimFixer
+	plans, replans atomic.Int64
+}
+
+func (f *countingFixer) ID() string { return "counting" }
+func (f *countingFixer) Plan(ctx context.Context, p json.RawMessage, rep registry.Reporter) ([]Row, error) {
+	f.plans.Add(1)
+	return f.trimFixer.Plan(ctx, p, rep)
+}
+func (f *countingFixer) Replan(ctx context.Context, p json.RawMessage, planned Row, rep registry.Reporter) (Row, error) {
+	f.replans.Add(1)
+	return f.trimFixer.Replan(ctx, p, planned, rep)
+}
+
+// A shell with no way to bind the fixer stores refuses a plan and an apply: the
+// fixers would otherwise fall back to the legacy plugin's own stores and the
+// native run would silently read and write through them.
+func TestRepairsKinds_RefusesWithoutBindStores(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	f := &countingFixer{trimFixer: &trimFixer{s: s}}
+	kt := newKit(t, s, f)
+	kt.plan(context.Background())
+	plans := f.plans.Load()
+	require.EqualValues(t, 1, plans)
+	kt.k.deps.BindStores = nil
+
+	_, err := kt.k.candidates(taskstest.NewFakeRun(context.Background(), kt.kind()).RC(), nil)
+	require.ErrorContains(t, err, "no fixer stores to bind")
+	require.EqualValues(t, plans, f.plans.Load(), "the fixer's Plan was not called")
+
+	rc, hold := liveRC(context.Background(), kt.kind())
+	_, _, err = kt.k.load(rc, nil, "b1")
+	require.ErrorContains(t, err, "no fixer stores to bind")
+	_, kept := kt.k.runs.Load(rc.RunID())
+	require.False(t, kept, "no run state was built")
+	require.EqualValues(t, 0, hold.released.Load())
+	res := kt.apply(context.Background(), []string{"b1"})
+	require.Empty(t, res.Applied)
+	require.Len(t, res.Failed, 1)
+	require.EqualValues(t, 0, f.replans.Load(), "the fixer's Replan was not called")
+	require.Equal(t, " One ", s.title("b1"))
+
+	// The follow-up is refused too: it would run the fixer on an unbound context.
+	pf := &probeFixer{trimFixer: &trimFixer{s: s}}
+	pk := newKit(t, s, pf)
+	pk.k.deps.BindStores = nil
+	require.ErrorContains(t, pk.k.afterApply(rc, []string{"b1"}), "no fixer stores to bind")
+	require.False(t, pf.afterSeen)
+}
+
+// A live apply of a fixer that writes library rows without a scan stand-down
+// key would run under a library scan: refused, with nothing written and no
+// state kept.
+func TestRepairsKinds_LiveApplyRefusesWithoutStandDownKey(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	kt := newKit(t, s, &trimFixer{s: s})
+	kt.plan(context.Background())
+	kt.k.deps.StandDownKey = ""
+
+	rc, hold := liveRC(context.Background(), kt.kind())
+	_, _, err := kt.k.load(rc, nil, "b1")
+	require.ErrorContains(t, err, "no scan stand-down key")
+	_, kept := kt.k.runs.Load(rc.RunID())
+	require.False(t, kept, "a refused build is not kept")
+	require.EqualValues(t, 0, hold.released.Load())
+
+	res := kt.apply(context.Background(), []string{"b1", "b2"})
+	require.Empty(t, res.Applied)
+	require.Len(t, res.Failed, 2)
+	require.Empty(t, kt.w.writes)
+	require.Equal(t, " One ", s.title("b1"))
+
+	// A NoScanStandDown fixer writes nothing a scan writes: no key needed.
+	nk := newKit(t, s, &noStandDownFixer{trimFixer: &trimFixer{s: s}})
+	nk.k.deps.StandDownKey = ""
+	nrc, _ := liveRC(context.Background(), nk.kind())
+	_, err = nk.k.runState(nrc)
+	require.NoError(t, err)
+
+	// A run that is not Live takes no stand-down, so none is needed.
+	pv := &modeRun{FakeRun: taskstest.NewFakeRun(context.Background(), kt.kind()), mode: tasks.ModePreview}
+	_, err = kt.k.runState(tasks.NewRC(pv))
+	require.NoError(t, err)
+}
+
+// ---- the end of a run's state ----
+
+// blockingFixer holds its Replan or its Apply (where) until released and counts
+// the ends of its scope.
+type blockingFixer struct {
+	*trimFixer
+	where      string // "replan" or "apply"
+	entered    chan struct{}
+	unblock    chan struct{}
+	scopeEnded atomic.Int64
+}
+
+func (f *blockingFixer) ID() string { return "blocking" }
+func (f *blockingFixer) BeginApply(ctx context.Context, _ bool) (context.Context, func()) {
+	return ctx, func() { f.scopeEnded.Add(1) }
+}
+func (f *blockingFixer) Replan(ctx context.Context, p json.RawMessage, planned Row, rep registry.Reporter) (Row, error) {
+	if f.where == "replan" {
+		close(f.entered)
+		<-f.unblock
+	}
+	return f.trimFixer.Replan(ctx, p, planned, rep)
+}
+func (f *blockingFixer) Apply(ctx context.Context, w *Writer, fresh Row) error {
+	if f.where == "apply" {
+		close(f.entered)
+		<-f.unblock
+	}
+	return f.trimFixer.Apply(ctx, w, fresh)
+}
+
+// A stopped run does not end its scope or let go of the scan stand-down while a
+// worker is still inside Replan (Evaluate) or Apply: HEAD held both until
+// RunApply returned.
+func TestRepairsKinds_RunEndWaitsForRowsInFlight(t *testing.T) {
+	for _, where := range []string{"replan", "apply"} {
+		t.Run(where, func(t *testing.T) {
+			s := newMemStore()
+			seed(s)
+			f := &blockingFixer{trimFixer: &trimFixer{s: s}, where: where, entered: make(chan struct{}), unblock: make(chan struct{})}
+			kt := newKit(t, s, f)
+			kt.plan(context.Background())
+			rc, hold := liveRC(context.Background(), kt.kind())
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := tasks.RunItems(rc, tasks.Fixed(1, "test"), []string{"b1"}, func(ic *tasks.ItemRC, id string) error {
+					c, ok, err := kt.k.load(rc, nil, id)
+					if err != nil || !ok {
+						return fmt.Errorf("load: %v %v", ok, err)
+					}
+					row, err := kt.k.evaluate(ic, nil, c)
+					if err != nil {
+						return err
+					}
+					return kt.k.apply(ic, kt.w, nil, row)
+				})
+				done <- err
+			}()
+			<-f.entered
+			rs := kt.k.runStateOfRun(rc.RunID())
+			require.NotNil(t, rs)
+
+			rs.release() // what the run's context ending does
+			require.EqualValues(t, 0, hold.released.Load(), "the stand-down is held while the row is in flight")
+			require.EqualValues(t, 0, f.scopeEnded.Load(), "the scope is not ended under the row")
+			_, ok := rs.enter()
+			require.False(t, ok, "no new row starts once the state is ending")
+
+			close(f.unblock)
+			// The row that was inside Replan finds the run ended when it reaches
+			// Apply and is refused; the row inside Apply finishes.
+			err := <-done
+			if where == "apply" {
+				require.NoError(t, err)
+			}
+			require.EqualValues(t, 1, hold.released.Load(), "released when the last row left")
+			require.EqualValues(t, 1, f.scopeEnded.Load())
+			_, kept := kt.k.runs.Load(rc.RunID())
+			require.False(t, kept)
+			rs.release()
+			require.EqualValues(t, 1, hold.released.Load(), "and only once")
+		})
+	}
+}
+
+// A resumed attempt of a run gets state of its own while the earlier attempt's
+// state is still finishing: it neither inherits the old writer, fence and
+// stand-down nor has its slot deleted when the old one ends.
+func TestRepairsKinds_ResumedAttemptDoesNotReuseAPendingSlot(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	kt := newKit(t, s, &trimFixer{s: s})
+	kt.plan(context.Background())
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	rc1, hold1 := liveRC(ctx1, kt.kind())
+	rs1, err := kt.k.runState(rc1)
+	require.NoError(t, err)
+	leave, ok := rs1.enter() // a row still in flight when the attempt is cut off
+	require.True(t, ok)
+	cancel1()
+	require.Eventually(t, func() bool {
+		rs1.life.Lock()
+		defer rs1.life.Unlock()
+		return rs1.closing
+	}, 2*time.Second, 5*time.Millisecond, "the attempt's end asks its state to end")
+
+	rc2, hold2 := liveRC(context.Background(), kt.kind())
+	require.Equal(t, rc1.RunID(), rc2.RunID(), "the same run, a later attempt")
+	rs2, err := kt.k.runState(rc2)
+	require.NoError(t, err)
+	require.NotSame(t, rs1, rs2, "the pending slot is not reused")
+	require.EqualValues(t, 0, hold1.released.Load())
+
+	leave()
+	require.EqualValues(t, 1, hold1.released.Load(), "the old state finished ending")
+	require.EqualValues(t, 0, hold2.released.Load())
+	again, err := kt.k.runState(rc2)
+	require.NoError(t, err)
+	require.Same(t, rs2, again, "and took the new attempt's slot with it")
+}
+
+// A plan op that cannot be read does not fail the run (a record's provenance is
+// a label), but it is logged, and the writer's provenance names no plan.
+func TestRepairsKinds_PlanOfErrorIsLogged(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	kt := newKit(t, s, &trimFixer{s: s})
+	kt.rows.planErr = errors.New("plan store down")
+	var buf bytes.Buffer
+	run := &modeRun{FakeRun: taskstest.NewFakeRun(context.Background(), kt.kind()), mode: tasks.ModeLive,
+		standDown: func(tasks.Key) (tasks.Hold, error) { return &recordedHold{}, nil },
+		log:       slog.New(slog.NewTextHandler(&buf, nil))}
+	rs, err := kt.k.runState(tasks.NewRC(run))
+	require.NoError(t, err)
+	require.Empty(t, rs.writer.Provenance().PlanOpID)
+	require.Contains(t, buf.String(), "the plan op of the apply was not read")
+	require.Contains(t, buf.String(), "plan store down")
+
+	// With the plan readable the writer names it.
+	kt2 := newKit(t, s, &trimFixer{s: s})
+	rc2, _ := liveRC(context.Background(), kt2.kind())
+	rs2, err := kt2.k.runState(rc2)
+	require.NoError(t, err)
+	require.Equal(t, "plan-1", rs2.writer.Provenance().PlanOpID)
 }
