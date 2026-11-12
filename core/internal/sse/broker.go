@@ -1,7 +1,7 @@
 // file: core/internal/sse/broker.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9889a9af-4387-41da-9d7a-db513446cc95
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // Package sse is the engine under core's realtime hub (05-realtime §3, §4.2,
 // §4.3, §4.5, §7): a numbered ring for Last-Event-ID resume, one bounded queue
@@ -85,6 +85,10 @@ type Hooks struct {
 	Reset   func(reason string) // a core.stream.reset.v1 frame was written
 	Dropped func(n int)         // n queued entries were dropped on overflow
 	Closed  func(reason string) // a stream ended
+	// InterruptFailed is called when ending a stream could not move its write
+	// deadline to now (so a write in flight runs to its own deadline); it runs
+	// on the goroutine that ended the stream, under the broker's lock.
+	InterruptFailed func(err error)
 }
 
 // Options configure NewBroker. Every size must be positive.
