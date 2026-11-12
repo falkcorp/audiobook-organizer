@@ -1,7 +1,7 @@
 // file: core/kernel/restore_boot_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6e2c9b15-d478-4a30-b7f1-0a5d3e8c1f92
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -22,21 +22,21 @@ import (
 // revocation journaled but never committed anywhere (key-redrobin), and the
 // archive swapped in.
 type restoreScene struct {
-	*gotham
+	*batcave
 	previous string
 	original string // the live store before the swap, for a swap-back
 	archived journal.ServedBoot
 	before   journal.Location
 }
 
-func newRestoreScene(t *testing.T, prep func(*gotham)) *restoreScene {
+func newRestoreScene(t *testing.T, prep func(*batcave)) *restoreScene {
 	t.Helper()
-	g := newGotham(t)
+	g := newBatcave(t)
 	if prep != nil {
 		prep(g)
 	}
 	g.restart()
-	s := &restoreScene{gotham: g, previous: g.snapshot("previous"), original: g.snapshot("original")}
+	s := &restoreScene{batcave: g, previous: g.snapshot("previous"), original: g.snapshot("original")}
 	g.swapIn(g.archive)
 	s.archived, s.before = g.pair(), g.location()
 	return s
@@ -55,7 +55,7 @@ func (s *restoreScene) restoreLineSeq(restoreID string) uint64 {
 
 // uncommitted journals a revocation of key-redrobin (line 2) that never reached
 // any store: a crash between the line's fsync and its batch.
-func uncommitted(g *gotham) {
+func uncommitted(g *batcave) {
 	g.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-redrobin")})
 }
 
@@ -107,7 +107,7 @@ func TestPostRestoreReappliesRevocations(t *testing.T) {
 		// An archive whose store has seen the journal up to 1: a source seq above
 		// it is capped by the head, one below it wins.
 		for _, c := range []struct{ source, want uint64 }{{0, 0}, {1, 1}, {7, 1}} {
-			g := newGotham(t)
+			g := newBatcave(t)
 			late := g.snapshot("late")
 			g.restart()
 			prev := g.snapshot("previous")
@@ -121,7 +121,7 @@ func TestPostRestoreReappliesRevocations(t *testing.T) {
 	})
 
 	t.Run("a journal gap after the boundary", func(t *testing.T) {
-		s := newRestoreScene(t, func(g *gotham) {
+		s := newRestoreScene(t, func(g *batcave) {
 			uncommitted(g)
 			if _, err := g.comp.AppendLine(g.ctx, journal.GapLine(g.clock.now(), journal.GapAppendFailed)); err != nil {
 				t.Fatal(err)
@@ -159,7 +159,7 @@ func TestPostRestoreReappliesRevocations(t *testing.T) {
 	t.Run("hook lines carry the restore line's seq", func(t *testing.T) {
 		// An unjournaled revocation in the pre-swap store (its Append failed):
 		// the hook derives it from the store and journals it.
-		s := newRestoreScene(t, func(g *gotham) {
+		s := newRestoreScene(t, func(g *batcave) {
 			uncommitted(g)
 			k, err := g.auth.APIKeyByID(g.ctx, "key-batmobile")
 			if err != nil {

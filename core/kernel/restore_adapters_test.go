@@ -1,7 +1,7 @@
 // file: core/kernel/restore_adapters_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c37a5e82-1d96-4b40-a2f8-5e0b9c3d7a14
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -27,7 +27,7 @@ import (
 // fail closed once and the file is rewritten); a store that never has reads
 // the same.
 func TestReapply_UnreadableLocationFile(t *testing.T) {
-	g := newGotham(t)
+	g := newBatcave(t)
 	g.restart()
 	if err := os.WriteFile(filepath.Join(g.state, journal.LocationFile), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
@@ -326,7 +326,7 @@ func TestClassifyStore(t *testing.T) {
 // lacks is copied forward; and the audit records of the restore are filed under
 // the restore line's seq, so a second restore never finds this one's.
 func TestRestoreHooks_ReceivePreSwapStoreAndRestoreSeq(t *testing.T) {
-	s := newRestoreScene(t, func(g *gotham) {
+	s := newRestoreScene(t, func(g *batcave) {
 		k, err := g.auth.APIKeyByID(g.ctx, "key-batmobile")
 		if err != nil {
 			t.Fatal(err)
