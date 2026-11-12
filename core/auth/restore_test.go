@@ -1,15 +1,18 @@
 // file: core/auth/restore_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7f3a9c52-0e6d-4b81-a4c7-d2158e90b6f3
 // last-edited: 2026-11-12
 
 package auth_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"iter"
+	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -622,6 +625,20 @@ func TestRestrictLastAdmins_ListsAreDedupedAndEmptyListsAreNoOps(t *testing.T) {
 	}
 	if k := kindsBySubject(f.jrnl.lines, string(bruce.ID)); k[journal.PasswordChanged] != 1 || counts[auth.CountUsersRestricted] != 1 {
 		t.Errorf("journaled %v, counts %v, want bruce restricted and journaled once", k, counts)
+	}
+
+	// A repeated id is handled once even where the repeat could be seen: restricting
+	// a user twice in one plan changes nothing (the counts and the journal above), but
+	// a missing user is reported each time it is met, so the log shows how many times
+	// the list was walked for it.
+	var logged bytes.Buffer
+	dl := f.restoreDeps(nil, nil)
+	dl.Log = slog.New(slog.NewTextHandler(&logged, nil))
+	if _, err := auth.RestrictLastAdmins(ctx, dl, []auth.UserID{"u-ghost", bruce.ID, "u-ghost", "u-ghost"}); err != nil {
+		t.Fatalf("a repeated missing user: %v", err)
+	}
+	if n := strings.Count(logged.String(), "user=u-ghost"); n != 1 {
+		t.Errorf("a missing user listed three times was reported %d times, want once:\n%s", n, logged.String())
 	}
 
 	d := f.restoreDeps(nil, nil)
