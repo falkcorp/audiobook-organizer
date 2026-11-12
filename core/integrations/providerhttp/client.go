@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/client.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 435ee04d-8b14-43d6-9462-be6a491eb852
 // last-edited: 2026-11-11
 
@@ -102,9 +102,8 @@ func (c *Client) excerpt(ctx context.Context, u *url.URL, body []byte) string {
 			lits = []string{v, url.QueryEscape(v)}
 		}
 	}
+	// A literal the prefix cut splits leaves a fragment at its very end, which
+	// dropLiterals removes, so the prefix needs no margin for it.
 	n := 4*integrations.MaxDetail + 256
-	for _, l := range lits {
-		n += len(l)
-	}
 	return c.scr.bounded(dropLiterals(string(body[:min(len(body), n)]), lits...), integrations.MaxDetail)
 }
