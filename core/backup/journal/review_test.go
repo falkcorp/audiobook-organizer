@@ -128,6 +128,28 @@ func TestFile_WriteLineOnABrokenFile(t *testing.T) {
 	}
 }
 
+// TestFile_RefuseKeepsTheFirstFailure: Refuse stops later appends with its
+// error, a second Refuse does not replace the first (the first is the cause an
+// operator needs), and Refuse(nil) refuses nothing.
+func TestFile_RefuseKeepsTheFirstFailure(t *testing.T) {
+	ctx := context.Background()
+	fx := newFixture(t)
+	j := fx.open(t)
+	j.Refuse(nil)
+	if _, err := j.WriteLine(ctx, GapLine(time.Now(), GapAppendFailed)); err != nil {
+		t.Fatalf("WriteLine after Refuse(nil): %v", err)
+	}
+	first, second := errors.New("a newer build wrote a line this one cannot apply"), errors.New("the keyring is gone")
+	j.Refuse(first)
+	j.Refuse(second)
+	if _, err := j.WriteLine(ctx, GapLine(time.Now(), GapAppendFailed)); !errors.Is(err, first) || errors.Is(err, second) {
+		t.Errorf("WriteLine after two Refuse calls: %v, want the first error only", err)
+	}
+	if st := j.Status(); !errors.Is(st.Broken, first) {
+		t.Errorf("Status().Broken = %v, want the first error", st.Broken)
+	}
+}
+
 // TestCommitHead_NeverLowers: a held head commits when the store's is below it
 // and is a no-op when the store's has passed it.
 func TestCommitHead_NeverLowers(t *testing.T) {
@@ -273,8 +295,19 @@ func TestOpenFile_RefusesAnythingButARegularFile(t *testing.T) {
 	if j != nil {
 		must(t, j.Close())
 	}
-	if _, err := ReadFile(fx.path, fx.keys); !errors.Is(err, ErrNotRegular) && err == nil {
+	if _, err := ReadFile(fx.path, fx.keys); err == nil {
 		t.Errorf("ReadFile of a directory = %v", err)
+	}
+
+	// A device opens read-write without complaint, so only the check on the
+	// descriptor refuses it: the lines would go to the device.
+	dev := newFixture(t)
+	if fi, err := os.Stat(os.DevNull); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		dev.path = os.DevNull
+		openRefused(t, dev, "a device")
+		if _, err := ReadFile(os.DevNull, dev.keys); !errors.Is(err, ErrNotRegular) {
+			t.Errorf("ReadFile of a device = %v, want ErrNotRegular", err)
+		}
 	}
 }
 
@@ -379,6 +412,13 @@ func TestLocation_DescribesComparesCleanedPaths(t *testing.T) {
 	}
 	if (Location{}).Describes("", "") || (Location{DBPath: "/x"}).Describes("/x", "") {
 		t.Error("an empty record describes a store")
+	}
+	// An empty path cleans to ".", so two empty paths (or a record of "." against
+	// no path) would compare equal without the explicit check.
+	for _, rec := range []Location{{InstallID: "wayne"}, {DBPath: ".", InstallID: "wayne"}} {
+		if rec.Describes("", "wayne") {
+			t.Errorf("the record %+v describes a store at no path", rec)
+		}
 	}
 }
 
