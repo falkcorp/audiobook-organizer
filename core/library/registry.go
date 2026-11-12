@@ -684,7 +684,20 @@ func (r *Root) FS(caller storage.Owner) (RootFS, error) {
 }
 
 func (r *Root) viewFor(caller storage.Owner) fsOps {
-	target := func(p Path) (string, error) { return r.m.absFor(caller, p) }
+	target := func(p Path) (string, error) {
+		abs, err := r.m.absFor(caller, p)
+		if err != nil {
+			return "", err
+		}
+		// A link into the AppDir or the quarantine area would reach them by a
+		// name the views do not guard.
+		if caller != CoreOwner {
+			if tr, nerr := r.m.need(p); nerr == nil && tr.reservedHit(p, false) {
+				return "", fmt.Errorf("%w: %s", ErrReservedPath, p)
+			}
+		}
+		return abs, nil
+	}
 	// Only core touches the root's AppDir and Quarantine area through a
 	// filesystem view. A module may read its own (the held files, its own app
 	// directories are reached through Root.AppDir), never write them; a reader
@@ -692,7 +705,7 @@ func (r *Root) viewFor(caller storage.Owner) fsOps {
 	guard := func(c *localFS) {
 		c.target = target
 		if caller != CoreOwner {
-			c.sealed = r.reservedRel
+			c.sealed = true
 			c.hidden = caller != r.spec.Owner
 		}
 	}
@@ -710,51 +723,15 @@ func (r *Root) viewFor(caller storage.Owner) fsOps {
 	return c
 }
 
-// reservedRel reports whether rel names the root's AppDir or Quarantine area
-// by name: equal to one, inside one, or (carries) a directory that contains one
-// and so carries it along. The comparison folds case: on a case-insensitive
-// filesystem (the default on macOS and Windows) ".MediaCore" is the AppDir, and
-// folding on a case-sensitive one only refuses a directory nobody should be
-// creating beside it.
-func (r *Root) reservedRel(rel string, carries bool) bool {
-	for _, dir := range [...]string{r.spec.AppDir, r.spec.Quarantine} {
-		if relWithinFold(rel, dir) || (carries && relWithinFold(dir, rel)) {
-			return true
-		}
-	}
-	return false
-}
-
-// relWithinFold: rel equals dir or lies under it, ignoring case.
-func relWithinFold(rel, dir string) bool {
-	if dir == "" {
-		return false
-	}
-	if len(rel) < len(dir) {
-		return false
-	}
-	if !strings.EqualFold(rel[:len(dir)], dir) {
-		return false
-	}
-	return len(rel) == len(dir) || rel[len(dir)] == '/'
-}
-
-// reservedHit is reservedRel for a Path of this root, and also by resolved
-// location, so a symlink inside the root that points into the AppDir or the
-// Quarantine area does not open them. carries: a directory that contains one of
-// them counts (a Move or Quarantine carries it).
+// reservedHit reports whether p is in this root's AppDir or Quarantine area,
+// by spelling, by where its symlinks lead and by directory identity
+// (localFS.reserved). carries: a directory that contains one of them counts (a
+// Move or Quarantine carries it).
 func (r *Root) reservedHit(p Path, carries bool) bool {
-	if r.reservedRel(p.Rel, carries) {
-		return true
+	if r.base == nil {
+		return false
 	}
-	resolved := filepath.Clean(resolveExistingPrefix(filepath.Join(r.abs, filepath.FromSlash(p.Rel))))
-	for _, dir := range [...]string{r.spec.AppDir, r.spec.Quarantine} {
-		d := filepath.Clean(resolveExistingPrefix(filepath.Join(r.abs, filepath.FromSlash(dir))))
-		if isWithinRoot(resolved, d) || (carries && isWithinRoot(d, resolved)) {
-			return true
-		}
-	}
-	return false
+	return r.base.reserved(p.Rel, carries)
 }
 
 // refuseReserved is ErrReservedPath when caller (anyone but core) names the
