@@ -1,5 +1,5 @@
 // file: core/library/recover_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d6fba451-bfd4-4e6c-bd41-649146b9f034
 // last-edited: 2026-11-11
 
@@ -41,7 +41,7 @@ type scenario struct {
 
 func matrixScenarios() []scenario {
 	src := Path{Root: "import-1", Rel: "Arkham/The Killing Joke.m4b"}
-	dst := Path{Root: "books-library", Rel: "Alan Moore/The Killing Joke.m4b"}
+	dst := Path{Root: "books-library", Rel: "Gordon/The Killing Joke.m4b"}
 	replace := NewTransferOptions(Copy, PermLibrary, VerifySHA256)
 	replace.Replace = &ReplaceSpec{ExpectSHA256: sum("the old edition of the Joke")}
 	replace.MkdirAll = true
