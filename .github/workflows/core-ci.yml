@@ -1,5 +1,5 @@
 # file: .github/workflows/core-ci.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: 86d3ec85-7629-46f7-9682-c011fb888337
 # last-edited: 2026-11-12
 
@@ -12,11 +12,26 @@
 #
 # Required check (D15, 14 Q-I), so it also runs on the merge queue's
 # merge_group event.
+#
+# push to main exists only to seed the Go cache. GitHub scopes a cache to the
+# ref that saved it: a pull_request run saves under refs/pull/N/merge and a
+# merge_group run under its temporary queue ref, and neither is readable by any
+# other PR. Only a cache saved on main is visible to every PR, so without this
+# trigger each PR's first run was cold ("Cache not found" even with
+# restore-keys). Pushes to main are never cancelled, so a busy merge day still
+# finishes a run and saves.
 
 name: Core CI
 
 on:
   pull_request:
+    branches: [main]
+    paths:
+      - 'core/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/core-ci.yml'
+  push:
     branches: [main]
     paths:
       - 'core/**'
@@ -31,7 +46,7 @@ permissions:
 
 concurrency:
   group: core-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   core-ci:
