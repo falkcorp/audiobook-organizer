@@ -1,5 +1,5 @@
 // file: core/backup/types.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 57a7b5b9-8d91-4be9-b34d-06a2bc8b8eeb
 // last-edited: 2026-11-12
 
@@ -309,6 +309,11 @@ var (
 	ErrUnreadableSecrets  = errors.New("backup: the keyring lacks keys the archive's secret records need")
 	ErrUnencryptedSecrets = errors.New("backup: refusing to write secret material into an unencrypted archive")
 	ErrProtectedByFloor   = errors.New("backup: archive is protected by a retention floor")
+	// ErrInvalidReason: the reason a create was asked to record is not text a
+	// manifest can carry and read back (see ValidReason). It is the caller's
+	// input that is unfit, so the answer is a 400 at the API, and nothing was
+	// written.
+	ErrInvalidReason = errors.New("backup: the reason is not valid for an archive")
 	// ErrNotFound: no archive of that ID is in the backup directory (the
 	// catalogue is derived from the directory, so this is also the answer for an
 	// archive deleted outside the service).

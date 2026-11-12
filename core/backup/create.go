@@ -1,5 +1,5 @@
 // file: core/backup/create.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6e7c41d8-9a30-4d1b-a2c5-17b0f3d9e6a4
 // last-edited: 2026-11-12
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,15 +27,24 @@ const stagingDirName = ".backup-staging"
 // checkpoint and the new content marker right after it, the archive streamed
 // to a .partial and renamed, the sidecars, then the optional verification.
 func (s *Svc) Create(ctx context.Context, o CreateOptions) (a Archive, err error) {
+	reason := o.Reason
+	if reason == "" {
+		reason = "manual"
+	}
+	// The reason is signed into the manifest and read back by ParseManifest with
+	// a bound; a reason the read side would refuse is refused here, before the
+	// resource is taken and before any file is made, so no archive is written
+	// that its own catalogue cannot list. A refusal is a caller's mistake, not a
+	// run, and records no run (a configuration error found later, in create,
+	// does).
+	if err := ValidReason(reason); err != nil {
+		return Archive{}, err
+	}
 	release, err := s.acquire()
 	if err != nil {
 		return Archive{}, err
 	}
 	defer release()
-	reason := o.Reason
-	if reason == "" {
-		reason = "manual"
-	}
 	defer func() {
 		out := "ok"
 		switch {
@@ -173,23 +183,24 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 	if err != nil {
 		return Archive{}, err
 	}
-	endPhase()
-
-	// 5b/6. Stream, rename, sidecars.
-	endPhase = s.phase(ctx, "archive")
-	name, final, err := s.freshName(now, codec.Extension())
-	if err != nil {
+	if err := checkReadsBack(mb); err != nil {
 		return Archive{}, err
 	}
+	endPhase()
+
+	// 5b/6. Stream, publish under a free name, sidecars.
+	endPhase = s.phase(ctx, "archive")
+	partial := s.partialPath("create", string(id))
 	sum, size, err := writeArchive(ctx, archiveSpec{
-		Partial: final + ".partial", Codec: codec, Level: set.CompressionLevel,
+		Partial: partial, Codec: codec, Level: set.CompressionLevel,
 		Manifest: mb, Created: now, Entries: entries, RunDir: run.path,
 	})
 	if err != nil {
 		return Archive{}, err
 	}
-	if err := os.Rename(final+".partial", final); err != nil {
-		_ = os.Remove(final + ".partial")
+	name, final, err := s.publish(partial, now, codec.Extension())
+	if err != nil {
+		_ = os.Remove(partial)
 		return Archive{}, err
 	}
 	if err := s.writeSidecars(final, name, sum, mb); err != nil {
@@ -246,25 +257,78 @@ func (s *Svc) sweepStaging(root string) {
 	}
 }
 
-// freshName is <prefix><YYYYMMDD_HHMMSS><ext>, moved to the next second while
-// any file of that name or its sidecars exists.
-func (s *Svc) freshName(now time.Time, ext string) (name, full string, err error) {
+// checkReadsBack is the write side's copy of the read side's test: the manifest
+// bytes about to be signed into an archive must parse as ParseManifest parses
+// them. Every string of a manifest that does not come from the caller of Create
+// (the install ID, the journal's nonce, the inspector's level and keyspace
+// names, the options' module names, the keyring's key ID) and the manifest's
+// total size are bounded on the way in by ParseManifest and nowhere on the way
+// out; without this an archive could be written, reported as made and listed
+// by nothing. ErrManifest, because that is what the manifest is.
+func checkReadsBack(manifest []byte) error {
+	if _, err := ParseManifest(manifest); err != nil {
+		return fmt.Errorf("backup: the manifest this build wrote does not read back: %w", err)
+	}
+	return nil
+}
+
+// partialPath is where an archive of this run is streamed before it has a name:
+// <prefix><kind>-<id>.partial in the backup directory. The ID is the run's own
+// and unique, so the name needs no check, and it is not an archive's name, so
+// nothing listed can be mistaken for it or collide with it.
+func (s *Svc) partialPath(kind, id string) string {
+	return filepath.Join(s.o.Dir, s.o.Prefix+kind+"-"+id+".partial")
+}
+
+// errNoFreeName is publish running out of candidate names.
+var errNoFreeName = errors.New("backup: no free archive name")
+
+// publish gives the finished file src the name of an archive: <prefix>
+// <YYYYMMDD_HHMMSS><ext>, the first such name at or after at (a second apart)
+// that nothing holds, and returns it. src is gone on success, and the archive
+// is whole at its name from the first moment it has one.
+//
+// It never replaces a file. The name is taken by hard-linking src to it, which
+// fails with fs.ErrExist if anything, a finished archive included, is there
+// already, and that is the one test: a lookup first and a rename after leaves a
+// window in which two writers (two imports in the same second, an import and a
+// create) both find the name free, and the second rename replaces an archive
+// that was already reported made. A name whose sidecar is present while its
+// archive is not (a crashed run's, or another writer between its two steps) is
+// skipped too, since the sidecars written next would overwrite those.
+func (s *Svc) publish(src string, at time.Time, ext string) (name, full string, err error) {
 	for i := range 3600 {
-		t := now.Add(time.Duration(i) * time.Second)
+		t := at.Add(time.Duration(i) * time.Second)
 		name = s.o.Prefix + t.Format("20060102_150405") + ext
 		full = filepath.Join(s.o.Dir, name)
-		taken := false
-		for _, suf := range []string{"", ChecksumSidecar, ManifestSidecar, VerifySidecar, ".partial"} {
-			if _, err := os.Lstat(full + suf); err == nil {
-				taken = true
-				break
-			}
+		if sidecarHeld(full) {
+			continue
 		}
-		if !taken {
+		switch err := s.o.Disk.publish(src, full); {
+		case err == nil:
+			if rerr := os.Remove(src); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				// The archive is published; the leftover is a second name for the
+				// same file, swept as a stale temporary file later.
+				s.o.log().Warn("backup: removing the temporary name of a published archive", "name", filepath.Base(src), "error", rerr)
+			}
 			return name, full, nil
+		case errors.Is(err, fs.ErrExist):
+			continue
+		default:
+			return "", "", err
 		}
 	}
-	return "", "", errors.New("backup: no free archive name")
+	return "", "", errNoFreeName
+}
+
+// sidecarHeld reports whether any sidecar of the archive at full exists.
+func sidecarHeld(full string) bool {
+	for _, suf := range []string{ChecksumSidecar, ManifestSidecar, VerifySidecar} {
+		if _, err := os.Lstat(full + suf); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Svc) writeSidecars(final, name, sum string, manifest []byte) error {
@@ -279,7 +343,7 @@ func (s *Svc) writeSidecars(final, name, sum string, manifest []byte) error {
 
 // removeArchive deletes an archive and its sidecars.
 func removeArchive(final string) {
-	for _, suf := range []string{"", ChecksumSidecar, ManifestSidecar, VerifySidecar, ".partial"} {
+	for _, suf := range []string{"", ChecksumSidecar, ManifestSidecar, VerifySidecar} {
 		_ = os.Remove(final + suf)
 	}
 }

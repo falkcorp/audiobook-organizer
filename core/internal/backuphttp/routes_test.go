@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/routes_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 71e57c75-3bcb-4631-a4cb-85a8d13a48d1
 // last-edited: 2026-11-12
 
@@ -617,12 +617,33 @@ func TestBackupCreateFlow(t *testing.T) {
 	})
 	t.Run("a bad reason is refused unrecorded", func(t *testing.T) {
 		r := newBHRig(t)
-		for _, body := range []string{`{"reason":"a\nb"}`, `{"reason":"` + strings.Repeat("x", 129) + `"}`} {
-			if rep := r.do(p, "POST", "/backups", "application/json", body); rep.status != 422 {
-				t.Errorf("%q = %d, want 422", body, rep.status)
+		// The bound is the manifest's, in bytes: 257 ASCII bytes, and 100 CJK
+		// characters (300 bytes, which the old rune count let through and which
+		// the archive's own catalogue then could not read back).
+		for _, body := range []string{
+			`{"reason":"a\nb"}`,
+			`{"reason":"` + strings.Repeat("x", 257) + `"}`,
+			`{"reason":"` + strings.Repeat("蝙", 100) + `"}`,
+			`{"reason":"` + strings.Repeat("蝙", 85) + `ab"}`,
+		} {
+			rep := r.do(p, "POST", "/backups", "application/json", body)
+			if rep.status != 422 || !strings.Contains(rep.body, "/body/reason") {
+				t.Errorf("%.40q = %d %s, want 422 on /body/reason", body, rep.status, rep.body)
+			}
+			if strings.Contains(rep.body, "蝙") {
+				t.Errorf("the body echoes the reason: %s", rep.body)
 			}
 		}
 		r.untouched("bad reason")
+	})
+	t.Run("a reason at the bound is accepted", func(t *testing.T) {
+		for _, reason := range []string{strings.Repeat("x", backup.MaxReasonBytes), strings.Repeat("蝙", 85)} {
+			r := newBHRig(t)
+			rep := r.do(p, "POST", "/backups", "application/json", `{"reason":"`+reason+`"}`)
+			if rep.status != 202 || r.enq.opts.Reason != reason {
+				t.Errorf("a %d-byte reason = %d (enqueued %d bytes), want 202 with the reason whole", len(reason), rep.status, len(r.enq.opts.Reason))
+			}
+		}
 	})
 	t.Run("a failed audit write stops it", func(t *testing.T) {
 		r := newBHRig(t)
@@ -644,6 +665,14 @@ func TestBackupCreateFlow(t *testing.T) {
 		}
 		if len(r.rec.records) != 2 || r.rec.records[1].Outcome != audit.Failure {
 			t.Errorf("records = %+v, want the request and a failure record", r.rec.records)
+		}
+	})
+	t.Run("a reason the service refuses is the caller's, a 400", func(t *testing.T) {
+		r := newBHRig(t)
+		r.enq.err = fmt.Errorf("%w: it is the Joker's", backup.ErrInvalidReason)
+		rep := r.do(p, "POST", "/backups", "", "")
+		if rep.status != 400 || bhProblem(t, rep).Code != "invalid_reason" || strings.Contains(rep.body, "Joker") {
+			t.Errorf("= %d %s, want 400 invalid_reason without the cause", rep.status, rep.body)
 		}
 	})
 }

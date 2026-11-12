@@ -1,5 +1,5 @@
 // file: core/backup/options.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7f8ad2c3-31d0-4b0e-b0c5-6a0f3a1d8e44
 // last-edited: 2026-11-12
 
@@ -7,8 +7,11 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -127,11 +130,15 @@ type ConfigFile interface {
 // Disk answers the two questions about the filesystem every write of this
 // package asks first (Create, staging, verification, rewrap, the offline
 // extraction): whether two paths share a device, and how much a path's
-// filesystem has free. The zero value uses the operating system; tests replace
-// it.
+// filesystem has free. It also makes the one filesystem change a finished
+// archive's publication needs, a hard link (Link). The zero value uses the
+// operating system; tests replace it.
 type Disk struct {
 	Device func(path string) (uint64, error)
 	Avail  func(path string) (uint64, error)
+	// Link makes newname another name for the file oldname, failing with an
+	// error that satisfies fs.ErrExist when newname exists (os.Link's contract).
+	Link func(oldname, newname string) error
 }
 
 func (d Disk) device(p string) (uint64, error) {
@@ -146,6 +153,49 @@ func (d Disk) avail(p string) (uint64, error) {
 		return d.Avail(p)
 	}
 	return osAvail(p)
+}
+
+func (d Disk) link(oldname, newname string) error {
+	if d.Link != nil {
+		return d.Link(oldname, newname)
+	}
+	return os.Link(oldname, newname)
+}
+
+// publish gives the finished file src the name dst without ever replacing a
+// file that is already called dst: it fails with an error that satisfies
+// fs.ErrExist when one is. src is left in place on success when a link made the
+// name (the caller removes it) and renamed away on the fallback.
+//
+// The name is taken by a hard link, which is atomic and leaves the archive whole
+// at its name from the first moment. A filesystem that cannot link (FAT and
+// exFAT, some network and container mounts) answers with an error that is not
+// fs.ErrExist; the name is then claimed by creating it exclusively, 0600, and
+// src is renamed over the claim, which is the service's own and so replaces
+// nothing. The claim is visible, empty, for the instant between the two calls,
+// where a link never is; it is what lets a backup directory on such a volume
+// work at all.
+func (d Disk) publish(src, dst string) error {
+	lerr := d.link(src, dst)
+	if lerr == nil || errors.Is(lerr, fs.ErrExist) {
+		return lerr
+	}
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		return errors.Join(lerr, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := os.Rename(src, dst); err != nil {
+		_ = os.Remove(dst)
+		return err
+	}
+	return nil
 }
 
 // Options are everything a Service needs. Every seam is a small interface the
@@ -264,6 +314,26 @@ func (o *Options) validate() error {
 	}
 	if o.ConfigPath != "" && o.Config == nil {
 		missing = append(missing, "Config (needed to archive ConfigPath without its secrets)")
+	}
+	// What Create writes into every manifest is judged here, once, by the test
+	// ParseManifest applies on the way back in: an option that fails it would
+	// make every archive this service writes one its own catalogue cannot read.
+	// The names are reported, never the values.
+	for _, f := range []struct{ name, v string }{
+		{"AppID", o.AppID}, {"AppVersion", o.AppVersion}, {"CoreVersion", o.CoreVersion},
+	} {
+		if !validText(f.v, maxManifestText) {
+			missing = append(missing, fmt.Sprintf("%s (not valid text of at most %d bytes)", f.name, maxManifestText))
+		}
+	}
+	if len(o.Modules) > maxManifestKeys {
+		missing = append(missing, fmt.Sprintf("Modules (more than %d names)", maxManifestKeys))
+	}
+	for k, v := range o.Modules {
+		if !validText(k, maxManifestText) || !validText(v, maxManifestText) {
+			missing = append(missing, fmt.Sprintf("Modules (a name or version that is not valid text of at most %d bytes)", maxManifestText))
+			break
+		}
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("backup: options: %s", strings.Join(missing, ", "))
