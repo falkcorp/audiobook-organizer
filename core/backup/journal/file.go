@@ -1,7 +1,7 @@
 // file: core/backup/journal/file.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: b701597d-6d06-4dd4-af78-0e0d6a9983ca
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package journal
 
@@ -27,13 +27,18 @@ const Owner storage.Owner = "core/backup"
 
 // The c/backup/ keys of this package (05-backup §5B.3.6), relative to the
 // keyspace and written as the spec names them. restore_hooked/<seq> (a
-// hook run's completion record) is the kernel's writer; it is declared here
-// because StorageSpec carries it.
+// hook run's completion record), journal_unapplied/<seq> (the queue of lines this
+// build could not apply) and restore_run are the kernel's writers; they are
+// declared here because StorageSpec carries them.
 const (
-	headKey         = "journal_head"    // Serialized: Head {seq, mac}, staged by Append through GetForUpdate
-	servedBootKey   = "served_boot"     // Serialized: ServedBoot {n, nonce}, every write a GetForUpdate (COR6-6)
-	gapPrefix       = "journal_gap/"    // journal_gap/<since>: an interval whose revocation the journal may lack
-	hookedPrefix    = "restore_hooked/" // restore_hooked/<seq>: the hooks of the restore line <seq> ran to completion
+	headKey       = "journal_head"    // Serialized: Head {seq, mac}, staged by Append through GetForUpdate
+	servedBootKey = "served_boot"     // Serialized: ServedBoot {n, nonce}, every write a GetForUpdate (COR6-6)
+	gapPrefix     = "journal_gap/"    // journal_gap/<since>: an interval whose revocation the journal may lack
+	hookedPrefix  = "restore_hooked/" // restore_hooked/<seq>: the hooks of the restore line <seq> ran to completion
+	// unappliedPrefix: journal_unapplied/<seq> is a revocation line of a kind this build cannot
+	// apply, queued so the head can pass it (unapplied.go): the first build that knows the kind
+	// applies it. restore_run (hookrun.go) is the ID of a restore hook run that has no restore line.
+	unappliedPrefix = "journal_unapplied/"
 	brokenLatchKey  = "journal_broken_closed"
 	gapReasonAppend = "append_failed"
 )
@@ -41,8 +46,9 @@ const (
 // StorageSpec returns the c/backup/ storage.Spec the kernel registers from the
 // identity flip (COR5-6; 06 §6.4.10 F4 row): a keyspace whose journal_head and
 // served_boot are Serialized, so every write of either carries an Expect, and
-// whose other families, journal_gap/<since> and restore_hooked/<seq>, are
-// plain writes. No migration: the keyspace is new in R2.
+// whose other families, journal_gap/<since>, restore_hooked/<seq>,
+// journal_unapplied/<seq> and restore_run, are plain writes. No migration: the
+// keyspace is new in R2.
 func StorageSpec() storage.Spec {
 	return storage.Spec{Keyspace: true, Serialized: []string{headKey, servedBootKey}}
 }
@@ -134,8 +140,6 @@ type File struct {
 	now     func() time.Time
 	header  Header
 	broken  error // a failed append that could not be rolled back, or an open that failed: every later Append fails
-	refused error // Refuse: the boot will not let a line stage a head, for good (until the process ends)
-	held    error // Hold: the same for now; Resume lifts it
 	closed  bool
 
 	// gaps are the starts of the intervals Gap recorded that no line has
@@ -515,8 +519,8 @@ func (j *File) Append(ctx context.Context, b *storage.Batch, r Revocation) error
 	switch {
 	case j.closed:
 		return ErrClosed
-	case j.refusal() != nil:
-		return j.refusal()
+	case j.broken != nil:
+		return j.broken
 	}
 	if err := bind(b, j.ks); err != nil {
 		return err
@@ -708,8 +712,8 @@ func (j *File) writeLineLocked(ctx context.Context, r Revocation) (Pending, erro
 	switch {
 	case j.closed:
 		return Pending{}, ErrClosed
-	case j.refusal() != nil:
-		return Pending{}, j.refusal()
+	case j.broken != nil:
+		return Pending{}, j.broken
 	}
 	data, closed, h, err := j.prepare(r)
 	if err != nil {
@@ -818,53 +822,7 @@ type Status struct {
 func (j *File) Status() Status {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return Status{Broken: j.refusal(), OpenGaps: len(j.gaps)}
-}
-
-// refusal is the error every append fails with, nil when it can take a line:
-// a break, then a Refuse, then a Hold. j.mu is held.
-func (j *File) refusal() error {
-	switch {
-	case j.broken != nil:
-		return j.broken
-	case j.refused != nil:
-		return j.refused
-	}
-	return j.held
-}
-
-// Refuse makes every later append fail with err, as a File whose open failed
-// does, until the process ends, and keeps an earlier failure. The boot calls it
-// when the store's head has to stay below a line it could not apply (a kind only
-// a newer build knows): every Append stages its own seq as the head, so one would
-// move the head past the line the boot left unapplied. The revoking callers
-// record gaps instead, as for any append failure. Nothing lifts it: the head
-// stays below that line until a build that knows it runs.
-func (j *File) Refuse(err error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.refused == nil && err != nil {
-		j.refused = err
-	}
-}
-
-// Hold is Refuse for a refusal that ends: the boot holds the journal while the
-// store's head must not move yet (a replaced store whose restore line could not
-// be written, until the hooks have completed), and Resume lifts it. It does not
-// touch a break or a Refuse, which outlast it.
-func (j *File) Hold(err error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.held == nil && err != nil {
-		j.held = err
-	}
-}
-
-// Resume lifts a Hold. A journal that is broken or Refused still refuses.
-func (j *File) Resume() {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	j.held = nil
+	return Status{Broken: j.broken, OpenGaps: len(j.gaps)}
 }
 
 // Path is the journal file's path.

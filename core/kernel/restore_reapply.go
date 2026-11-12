@@ -1,7 +1,7 @@
 // file: core/kernel/restore_reapply.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f6d8a14-c3e7-4b95-a018-9d4e7b1c5f36
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -45,6 +45,15 @@ import (
 // which the next boot resumes) is written before the first batch and its head is
 // what the last batch commits; when the line cannot be written the head is held
 // until the hooks have run (reapplyResult.Held).
+//
+// A revocation line of a kind this build does not know (a newer build wrote it)
+// is not a reason to stop. It is recorded in c/backup/journal_unapplied/<seq>
+// before anything can move the head past it, the head then passes it like any
+// other line, and the first boot of a build that knows the kind applies it and
+// deletes the entry in the same batch (drainUnapplied). Holding the head below
+// the line instead made every later boot re-apply the lines after it, undoing an
+// admin's re-enable or a new password, refuse the journal for good, and fail
+// closed again each time.
 
 // errReapplyNotReady is a re-apply called before its prerequisites exist.
 var errReapplyNotReady = errors.New("kernel: the journal re-apply needs the DB overrides attached and the keyring open")
@@ -151,8 +160,16 @@ type reapplyInput struct {
 	// TailBatch is how many journal lines one re-apply batch carries: zero is
 	// tailBatch. The crash tests set it to 1 so every line is its own batch.
 	TailBatch int
-	Clock     func() time.Time
-	Log       *slog.Logger
+	// Known tells whether this build can apply a revocation line of that kind;
+	// nil is journal.KnownKind. The tests set it to play an older build against a
+	// journal a newer one wrote, and then the same journal under this one.
+	Known func(journal.Kind) bool
+	// QueueBatch opens the batch queueUnapplied stages its entries into: nil is
+	// KS.NewBatch. The crash tests wrap it, as they wrap Apply.NewBatch, to end a
+	// boot between two chunks of the queue.
+	QueueBatch func() *storage.Batch
+	Clock      func() time.Time
+	Log        *slog.Logger
 }
 
 func (in reapplyInput) now() time.Time {
@@ -160,6 +177,14 @@ func (in reapplyInput) now() time.Time {
 		return in.Clock().UTC()
 	}
 	return time.Now().UTC()
+}
+
+// known is Known, defaulting to journal.KnownKind.
+func (in reapplyInput) known(k journal.Kind) bool {
+	if in.Known != nil {
+		return in.Known(k)
+	}
+	return journal.KnownKind(k)
 }
 
 func (in reapplyInput) log() *slog.Logger {
@@ -194,6 +219,14 @@ type reapplyResult struct {
 	Chain     *journal.Chain
 	Reapplied int            // revocation lines re-applied
 	Counts    map[string]int // auth's counts of a fail-closed fallback
+	// Queued is the number of revocation lines after the store's head that this
+	// build cannot apply (a kind only a newer build knows) and recorded in the
+	// unapplied queue this boot; the head passed them. Drained is the number of
+	// queued lines of earlier boots that this build applied and removed from it;
+	// Unapplied the entries still in the queue when the boot ended (a kind this
+	// build still does not know, or a line the verified journal no longer holds).
+	// A queued line is not a broken journal: Broken stays nil for it.
+	Queued, Drained, Unapplied int
 	// RestoreLine is this boot's restore line (a restore boot's, or a replaced
 	// store's external line); RestoreBoundary the boundary it records.
 	RestoreLine     uint64
@@ -301,22 +334,22 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	// (3) re-apply what the store has not seen: the verified tail after
 	// head_before, narrowing and idempotent. A bind failure does not stop it.
 	// A chain that does not verify still yields the lines that did (the store
-	// lacks nothing of what they hold, whatever the rest of the file is); a line
-	// this build cannot apply stops it, and the head stays below that line.
-	lines, later, stopped := in.tailLines(chain, headBefore, aborted, untrusted)
-	plan := tailPlan{Lines: lines, Later: later, Aborted: aborted, Pending: pend, Hold: hold}
-	var stopErr error
-	if stopped != nil {
-		plan.Pending = nil // the head must not pass the line nothing applied
-		stopErr = fmt.Errorf("the journal holds a %q line at seq %d that this build cannot re-apply (a newer build wrote it): the head stays below it, so a build that knows it applies it", stopped.Kind, stopped.Seq)
-		// Every append stages its own seq as the head: one would move it past the
-		// line left unapplied, so the journal takes none until a build applies it.
-		// That includes the lines the re-apply itself writes (a kept last admin's
-		// restriction is journaled), so the refusal comes before the tail is
-		// applied, not after; those writers record a gap instead, as for any
-		// refused append, and their restriction still commits.
-		in.Journal.Refuse(stopErr)
+	// lacks nothing of what they hold, whatever the rest of the file is).
+	//
+	// First the queue: a line an earlier boot could not apply and this build can
+	// is applied now and its entry deleted with it. Then the lines after the head
+	// that this build cannot apply are queued, all of them, before the first batch
+	// that can move the head: every append stages its own seq as the head, and
+	// the re-apply's own journaled lines (a kept last admin's restriction) are
+	// appends too, so no line may pass an unknown one that is not recorded yet.
+	if res.Drained, err = in.drainUnapplied(ctx, chain, aborted, !untrusted); err != nil {
+		return res, err
 	}
+	lines := in.tailLines(chain, headBefore, untrusted)
+	if res.Queued, err = in.queueUnapplied(ctx, lines, aborted); err != nil {
+		return res, err
+	}
+	plan := tailPlan{Lines: lines, Aborted: aborted, Pending: pend, Hold: hold}
 	if res.Reapplied, err = in.applyTail(ctx, plan); err != nil {
 		return res, err
 	}
@@ -331,20 +364,17 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 		res.Held = after
 	}
 
-	switch {
-	case untrusted:
+	if untrusted {
 		// A store that may lack what the file holds or held fails closed.
 		if err := in.failClosedIfBehind(ctx, chain, headBefore, after, restoring, &res); err != nil {
 			return res, err
 		}
-	case stopped != nil:
-		res.Broken = stopErr
-		if !restoring {
-			state := fmt.Sprintf("unknown:%d:%s:%s", stopped.Seq, stopped.Kind, stopped.MAC)
-			if err := in.failClosedOnce(ctx, chain.Fingerprint(after, state), &res); err != nil {
-				return res, err
-			}
-		}
+	}
+	// A line this build could not apply may have been a revocation the store
+	// lacks, and fail-closed is what answers that until a build that knows the
+	// kind applies it; once per entry, never again at every boot.
+	if err := in.settleUnapplied(ctx, restoring, &res); err != nil {
+		return res, err
 	}
 	if res.Broken == nil {
 		res.Broken = bindErr
@@ -688,20 +718,11 @@ func journalShowsReplaced(chain *journal.Chain, head journal.Head, aborted map[u
 // tailBatch is how many lines one re-apply batch carries.
 const tailBatch = 128
 
-// tailLines are the lines the re-apply applies: the verified lines after head,
-// split at the first revocation of a kind this build cannot apply (stopped:
-// KnownKind is how it tells; IsRevocation counts an unknown kind so that a
-// newer build's line is never skipped, and the head never moves over it).
-//
-// lines are those before it: applied with the head, which ends below the stop.
-// later are the revocations of a kind this build does know that come after it:
-// they are applied too (a narrowing a newer build journaled after its own kind is
-// no less owed to the store: a disable that follows the line this build cannot
-// read must not wait for a build that can), but with no head staged, so the head
-// stays below the line nothing applied and the next boot, which stops at the same
-// line, applies them again (they narrow and are idempotent). A hook line of an
-// aborted restore is in neither (verified, part of the chain, never applied: the
-// store it narrowed was swapped away, DATA8-7 (a)).
+// tailLines are the lines the re-apply goes through: every verified line after
+// head, in order. That includes a revocation of a kind this build cannot apply
+// (queueUnapplied records it before anything moves the head, and applyTail steps
+// over it) and the hook line of an aborted restore (verified, part of the chain,
+// never applied: the store it narrowed was swapped away, DATA8-7 (a)).
 //
 // On a chain that does not verify the lines are its verified prefix up to the
 // break, which Chain.Lines already is: they are authentic revocations after the
@@ -715,35 +736,197 @@ const tailBatch = 128
 // store's own head is on them. A journal that starts above the store's head
 // (pruned) has only the lines it holds, applied; the interval between is what the
 // fail-closed fallback is for.
-func (in reapplyInput) tailLines(chain *journal.Chain, head journal.Head, aborted map[uint64]bool, untrusted bool) (lines, later []journal.Line, stopped *journal.Line) {
+func (in reapplyInput) tailLines(chain *journal.Chain, head journal.Head, untrusted bool) []journal.Line {
 	if untrusted && (otherInstall(chain, in.Install) || forkedAt(chain, head)) {
-		return nil, nil, nil
+		return nil
 	}
-	for l := range chain.After(head.Seq) {
-		abortedHook := l.RestoreSeq != 0 && aborted[l.RestoreSeq]
-		switch {
-		case stopped == nil && journal.IsRevocation(l.Kind) && !journal.KnownKind(l.Kind) && !abortedHook:
-			stopped = &l
-		case stopped == nil:
-			lines = append(lines, l)
-		case journal.IsRevocation(l.Kind) && journal.KnownKind(l.Kind) && !abortedHook:
-			later = append(later, l)
+	return slices.Collect(chain.After(head.Seq))
+}
+
+// tailSize is how many lines one re-apply batch carries.
+func (in reapplyInput) tailSize() int {
+	if in.TailBatch < 1 {
+		return tailBatch
+	}
+	return in.TailBatch
+}
+
+// hookOfAborted reports whether l is a line a restore's hooks wrote and that
+// restore was aborted.
+func hookOfAborted(l journal.Line, aborted map[uint64]bool) bool {
+	return l.RestoreSeq != 0 && aborted[l.RestoreSeq]
+}
+
+// applicable reports whether the re-apply applies l: a revocation of a kind this
+// build knows that is not the hook line of an aborted restore.
+func (in reapplyInput) applicable(l journal.Line, aborted map[uint64]bool) bool {
+	return journal.IsRevocation(l.Kind) && in.known(l.Kind) && !hookOfAborted(l, aborted)
+}
+
+// owed reports whether l is a revocation this build cannot apply and that the
+// store is owed anyway: a kind only a newer build knows. IsRevocation counts an
+// unknown kind as one so a newer build's line is never skipped.
+func (in reapplyInput) owed(l journal.Line, aborted map[uint64]bool) bool {
+	return journal.IsRevocation(l.Kind) && !in.known(l.Kind) && !hookOfAborted(l, aborted)
+}
+
+// queueBatch is QueueBatch, defaulting to a batch of the c/backup/ keyspace.
+func (in reapplyInput) queueBatch() *storage.Batch {
+	if in.QueueBatch != nil {
+		return in.QueueBatch()
+	}
+	return in.KS.NewBatch()
+}
+
+// queueUnapplied records every line of lines this build cannot apply in
+// c/backup/journal_unapplied/<seq>, durably and in batches of in.TailBatch,
+// before applyTail's first batch: the head may then pass them, and the first
+// build that knows their kind applies them (drainUnapplied). It returns how many
+// there were. Staging a line already queued (an earlier boot crashed after this
+// step) changes nothing.
+func (in reapplyInput) queueUnapplied(ctx context.Context, lines []journal.Line, aborted map[uint64]bool) (int, error) {
+	var owed []journal.Line
+	for _, l := range lines {
+		if in.owed(l, aborted) {
+			owed = append(owed, l)
 		}
 	}
-	return lines, later, stopped
+	if len(owed) == 0 {
+		return 0, nil
+	}
+	for part := range slices.Chunk(owed, in.tailSize()) {
+		err := func() (err error) {
+			b := in.queueBatch()
+			defer func() { err = errors.Join(err, b.Close()) }()
+			for _, l := range part {
+				if err := journal.StageUnapplied(ctx, b, in.KS, journal.UnappliedOf(l, false)); err != nil {
+					return err
+				}
+			}
+			if b.Count() == 0 {
+				return nil // every one is queued already
+			}
+			return b.Commit(ctx, storage.Sync)
+		}()
+		if err != nil {
+			return 0, fmt.Errorf("kernel: queue the revocation lines this build cannot apply, up to seq %d: %w", part[len(part)-1].Seq, err)
+		}
+	}
+	in.log().Warn("kernel: the journal holds revocation lines of a kind only a newer build knows: queued for it, the head passes them",
+		"lines", len(owed), "first_seq", owed[0].Seq, "first_kind", owed[0].Kind)
+	return len(owed), nil
+}
+
+// drainUnapplied applies the queued lines this build can now apply, and deletes
+// each one's entry in the batch that applies it, so a line is applied and
+// dequeued together or neither (a crash between the two batches of one chunk
+// re-applies it, which narrows and is idempotent). The journal says what to
+// apply: an entry names a line, and only the verified chain's line at that seq
+// with that mac is ever applied. An entry whose kind this build still does not
+// know stays; so does one the verified chain does not hold (retention dropped
+// it, or the journal is another history), which is reported, not failed on again;
+// and nothing is applied from a chain that is not trusted. A line that is now a
+// known bookkeeping kind, or the hook line of an aborted restore, is owed
+// nothing and its entry goes. It returns the number of entries removed.
+func (in reapplyInput) drainUnapplied(ctx context.Context, chain *journal.Chain, aborted map[uint64]bool, trusted bool) (int, error) {
+	entries, err := journal.ReadUnapplied(ctx, in.KS)
+	if err != nil {
+		return 0, fmt.Errorf("kernel: read the unapplied-revocation queue: %w", err)
+	}
+	if len(entries) == 0 || !trusted {
+		return 0, nil
+	}
+	var ready []journal.Line
+	for _, e := range entries {
+		if l, ok := chain.LineAt(e.Seq); ok && l.MAC == e.MAC && in.known(l.Kind) {
+			ready = append(ready, l)
+		}
+	}
+	drained := 0
+	for part := range slices.Chunk(ready, in.tailSize()) {
+		var revs []journal.Revocation
+		for _, l := range part {
+			if in.applicable(l, aborted) {
+				revs = append(revs, l.Revocation)
+			}
+		}
+		dequeue := func(_ context.Context, b *storage.Batch) error {
+			for _, l := range part {
+				if err := journal.StageUnappliedDelete(b, in.KS, l.Seq); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		kept, err := in.commitTail(ctx, revs, dequeue)
+		if err != nil {
+			return drained, fmt.Errorf("kernel: apply the queued revocation lines up to seq %d: %w", part[len(part)-1].Seq, err)
+		}
+		drained += len(part)
+		for _, u := range kept {
+			if err := in.Apply.RestrictLastAdmin(ctx, u); err != nil {
+				return drained, fmt.Errorf("kernel: restrict the last admin %s: %w", u, err)
+			}
+		}
+	}
+	if drained > 0 {
+		in.log().Info("kernel: applied revocation lines a newer build wrote, queued by an earlier boot", "lines", drained)
+	}
+	return drained, nil
+}
+
+// settleUnapplied reports what the queue holds once the tail is done and answers
+// the lines this build queued: a revocation it could not read may be one the
+// store lacks, so a plain boot fails closed (auth's fallback), once for each
+// entry (Closed, set after the pass: a crash between the two repeats the pass at
+// the next boot), never again at every boot. A restore boot does not: its hooks
+// do their own fallback, and the entries stay open for the next plain boot, as
+// the stopped re-apply it replaces did. Nothing here is a break: the journal
+// takes lines and the head has moved.
+func (in reapplyInput) settleUnapplied(ctx context.Context, restoring bool, res *reapplyResult) error {
+	entries, err := journal.ReadUnapplied(ctx, in.KS)
+	if err != nil {
+		return fmt.Errorf("kernel: read the unapplied-revocation queue: %w", err)
+	}
+	res.Unapplied = len(entries)
+	if len(entries) == 0 {
+		return nil
+	}
+	in.log().Warn("kernel: revocation lines of a newer build are still waiting for a build that can apply them",
+		"waiting", len(entries), "first_seq", entries[0].Seq, "first_kind", entries[0].Kind, "queued_now", res.Queued, "applied_now", res.Drained)
+	if restoring {
+		return nil
+	}
+	var open []journal.Unapplied
+	for _, e := range entries {
+		if !e.Closed {
+			open = append(open, e)
+		}
+	}
+	if len(open) == 0 {
+		return nil
+	}
+	if !res.FailedClosed {
+		in.log().Error("kernel: the store may lack revocations this build cannot read: failing closed", "entries", len(open), "first_seq", open[0].Seq, "first_kind", open[0].Kind)
+		counts, err := in.Apply.FailClosed(ctx)
+		if err != nil {
+			return fmt.Errorf("kernel: fail closed for revocation lines this build cannot apply: %w", err)
+		}
+		res.Counts, res.FailedClosed = counts, true
+	}
+	if err := journal.MarkUnappliedClosed(ctx, in.KS, open); err != nil {
+		return fmt.Errorf("kernel: record the fail-closed pass for the unapplied revocation lines: %w", err)
+	}
+	return nil
 }
 
 // tailPlan is what applyTail applies and the head it moves.
 type tailPlan struct {
-	Lines []journal.Line
-	// Later are known revocations after a line this build cannot apply: applied
-	// in batches of their own with no head (tailLines).
-	Later   []journal.Line
+	Lines   []journal.Line
 	Aborted map[uint64]bool
 	// Pending is the line this boot wrote before the re-apply (a restore line,
 	// or the gap line of a new journal): the last batch commits its head, which
-	// is above the last line's. Nil when none, and when the re-apply stopped
-	// before a line (the head must not pass it).
+	// is above the last line's.
 	Pending *journal.Pending
 	// Hold stages no head at all: nothing durable yet says why the store's head
 	// may move, so the caller commits it after the hooks (reapplyResult.Held).
@@ -751,21 +934,18 @@ type tailPlan struct {
 }
 
 // applyTail applies p.Lines in order, in batches of in.TailBatch, each batch
-// moving the head with its last write, then p.Later the same way with no head;
-// it returns the number of revocations it applied. The head never passes a line
-// not yet applied. A run of lines that is empty still commits the pending line's
-// head.
+// moving the head with its last write; it returns the number of revocations it
+// applied. A line this build cannot apply (queued by queueUnapplied already) and
+// the hook line of an aborted restore are stepped over, not applied. The head
+// never passes a line that is neither applied nor queued. A run of lines that
+// is empty still commits the pending line's head.
 func (in reapplyInput) applyTail(ctx context.Context, p tailPlan) (int, error) {
-	size := in.TailBatch
-	if size < 1 {
-		size = tailBatch
-	}
-	parts := slices.Collect(slices.Chunk(p.Lines, size))
+	parts := slices.Collect(slices.Chunk(p.Lines, in.tailSize()))
 	applied := 0
 	for i, part := range parts {
 		var revs []journal.Revocation
 		for _, l := range part {
-			if journal.IsRevocation(l.Kind) && !(l.RestoreSeq != 0 && p.Aborted[l.RestoreSeq]) {
+			if in.applicable(l, p.Aborted) {
 				revs = append(revs, l.Revocation)
 			}
 		}
@@ -793,22 +973,6 @@ func (in reapplyInput) applyTail(ctx context.Context, p tailPlan) (int, error) {
 	if len(parts) == 0 && p.Pending != nil && !p.Hold {
 		if err := p.Pending.Commit(ctx); err != nil {
 			return applied, fmt.Errorf("kernel: commit the journal head: %w", err)
-		}
-	}
-	for part := range slices.Chunk(p.Later, size) {
-		var revs []journal.Revocation
-		for _, l := range part {
-			revs = append(revs, l.Revocation)
-		}
-		kept, err := in.commitTail(ctx, revs, nil)
-		if err != nil {
-			return applied, fmt.Errorf("kernel: re-apply the revocations after seq %d, which this build cannot apply: %w", part[len(part)-1].Seq, err)
-		}
-		applied += len(revs)
-		for _, u := range kept {
-			if err := in.Apply.RestrictLastAdmin(ctx, u); err != nil {
-				return applied, fmt.Errorf("kernel: restrict the last admin %s: %w", u, err)
-			}
 		}
 	}
 	return applied, nil

@@ -1,5 +1,5 @@
 // file: core/backup/journal/hookrun.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 615fe5fe-cd99-4083-af97-16b095ea11d6
 // last-edited: 2026-11-12
 
@@ -74,8 +74,11 @@ func HookRunID(ctx context.Context, ks storage.Reader) (string, error) {
 		return "", fmt.Errorf("journal: read %s: %w", hookRunKey, err)
 	}
 	var rec hookRunRecord
-	if err := json.Unmarshal(raw, &rec); err != nil || rec.ID == "" {
-		return "", fmt.Errorf("journal: %s does not hold a run ID: %v", hookRunKey, errors.Join(err))
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return "", fmt.Errorf("journal: %s does not decode: %w", hookRunKey, err)
+	}
+	if rec.ID == "" {
+		return "", fmt.Errorf("journal: %s holds no run ID", hookRunKey)
 	}
 	return rec.ID, nil
 }
