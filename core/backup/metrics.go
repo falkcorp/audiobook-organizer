@@ -1,5 +1,5 @@
 // file: core/backup/metrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c0d5d6a2-6e2c-4a87-8c61-90a3f6d6b2f8
 // last-edited: 2026-11-12
 
@@ -55,12 +55,16 @@ func NewMetrics(sc *metrics.Scope) (*Metrics, error) {
 	counter(&out.verify, "verify", "Archive verifications, by level and outcome.")
 	counter(&out.restore, "restore", "Restore events by stage (staged, applied, rejected, swapped_back, reverted) and whether foreign.")
 	counter(&out.reapplied, "revocation.reapplied", "Revocations re-applied, by kind and cause (boot, restore).")
-	gauge(&out.size, "size", "By", "Size of the newest archive.")
+	gauge(&out.size, "bytes", "", "Size in bytes of the newest archive.")
 	gauge(&out.lastOK, "last_success_timestamp", "s", "Unix time of the last successful backup.")
 	gauge(&out.lastVerified, "last_verified_timestamp", "s", "Unix time of the last successful verification.")
 	gauge(&out.archives, "archives", "", "Archives in the catalogue, by format and provenance.")
 	gauge(&out.retained, "retained", "By", "Bytes the catalogue retains, sidecars included.")
 	gauge(&out.gaps, "revocation.journal_gaps", "", "Open gaps in the revocation journal.")
+	if err == nil {
+		// Phases run from sub-second (sidecars) to hours (a library-scale archive).
+		err = sc.View(p+".duration", 0.5, 2, 10, 30, 120, 600, 1800, 7200, 21600)
+	}
 	if err == nil {
 		out.duration, err = m.Float64Histogram(p+".duration", metric.WithUnit("s"),
 			metric.WithDescription("Backup phase durations (checkpoint, archive, checksum, verify)."))
