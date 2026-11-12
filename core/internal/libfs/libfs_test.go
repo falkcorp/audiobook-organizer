@@ -1,5 +1,5 @@
 // file: core/internal/libfs/libfs_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1f6e7a3c-52b8-4a6e-9d0b-3c8f4e5a6b71
 // last-edited: 2026-11-11
 
@@ -152,22 +152,39 @@ func TestRenameNoReplaceNeverClobbers(t *testing.T) {
 				t.Errorf("dangling symlink changed: %q %v", got, err)
 			}
 
-			// A directory source renames to a free name.
+			// A directory source renames to a free name, and a symlink source as the
+			// link itself. The fallback cannot make either check atomic (it links and
+			// unlinks a regular file): it refuses with ErrNoAtomicRename and changes
+			// nothing, rather than check and then rename over a racing creator.
 			if err := os.Mkdir(filepath.Join(dir, "gotham"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := rename(d, "gotham", d, "metropolis"); err != nil {
-				t.Fatalf("directory rename: %v", err)
-			}
-			// A symlink source renames as the link itself.
 			if err := os.Symlink("wayne.m4b", filepath.Join(dir, "alias")); err != nil {
 				t.Fatal(err)
 			}
-			if err := rename(d, "alias", d, "alias2"); err != nil {
-				t.Fatalf("symlink rename: %v", err)
-			}
-			if got, err := os.Readlink(filepath.Join(dir, "alias2")); err != nil || got != "wayne.m4b" {
-				t.Errorf("symlink moved wrong: %q %v", got, err)
+			if form == "fallback" {
+				for _, name := range []string{"gotham", "alias"} {
+					err := rename(d, name, d, name+"-moved")
+					if !errors.Is(err, ErrNoAtomicRename) || !errors.Is(err, errors.ErrUnsupported) {
+						t.Errorf("fallback rename of %s = %v, want ErrNoAtomicRename", name, err)
+					}
+					if _, lerr := os.Lstat(filepath.Join(dir, name+"-moved")); lerr == nil {
+						t.Errorf("a refused fallback rename created %s-moved", name)
+					}
+					if _, lerr := os.Lstat(filepath.Join(dir, name)); lerr != nil {
+						t.Errorf("a refused fallback rename lost %s: %v", name, lerr)
+					}
+				}
+			} else {
+				if err := rename(d, "gotham", d, "metropolis"); err != nil {
+					t.Fatalf("directory rename: %v", err)
+				}
+				if err := rename(d, "alias", d, "alias2"); err != nil {
+					t.Fatalf("symlink rename: %v", err)
+				}
+				if got, err := os.Readlink(filepath.Join(dir, "alias2")); err != nil || got != "wayne.m4b" {
+					t.Errorf("symlink moved wrong: %q %v", got, err)
+				}
 			}
 
 			// A missing source is ErrNotExist, nothing is created.

@@ -1,5 +1,5 @@
 // file: core/internal/libfs/libfs.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 90ca9fee-7d93-4cef-b3cd-8e044edd56b2
 // last-edited: 2026-11-11
 
@@ -48,6 +48,21 @@ var ErrReflinkUnsupported = errors.New("library: reflink not supported on this f
 
 // ErrCrossDevice reports a hard link or a rename that would cross filesystems.
 var ErrCrossDevice = errors.New("library: hardlink across filesystems")
+
+// ErrNoHardLinks reports that the filesystem does not make hard links (exFAT,
+// FAT, SMB and FUSE mounts without them answer EPERM, ENOTSUP, EMLINK or
+// ENOSYS). It wraps errors.ErrUnsupported and the errno. It is the cue to publish
+// by rename instead; it says nothing about the destination name.
+var ErrNoHardLinks = fmt.Errorf("libfs: this filesystem does not make hard links: %w", errors.ErrUnsupported)
+
+// ErrNoAtomicRename reports a rename that cannot be made without replacing: the
+// kernel or filesystem has no no-replace flag and the file cannot be linked and
+// unlinked either (a directory, a symlink, or a filesystem without hard links).
+// The check-then-rename that would stand in has a window another writer can use
+// to lose a file, so nothing is renamed. Nothing changed. It wraps
+// errors.ErrUnsupported; a caller that must go on reserves the name first and
+// renames over its own placeholder (RenameOver).
+var ErrNoAtomicRename = fmt.Errorf("libfs: no atomic no-replace rename here: %w", errors.ErrUnsupported)
 
 // ErrBadName reports a name that is not one path component.
 var ErrBadName = errors.New("libfs: name is not a single path component")

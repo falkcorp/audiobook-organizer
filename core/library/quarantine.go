@@ -1,5 +1,5 @@
 // file: core/library/quarantine.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: dbac77ed-fee6-451d-9dbc-7065c15ea39f
 // last-edited: 2026-11-11
 
@@ -39,6 +39,9 @@ type quarantineRow struct {
 	Reason   string          `json:"reason,omitempty"`
 	At       time.Time       `json:"at"`
 	To       *Path           `json:"to,omitempty"`
+	// Placing: a Release onto To is under way through a placeholder; it names the
+	// held path being renamed there (see transferRow.Placing).
+	Placing *Path `json:"placing,omitempty"`
 }
 
 func (r quarantineRow) record() QuarantineRecord {
@@ -55,6 +58,9 @@ func (m *manager) Quarantine(ctx context.Context, caller storage.Owner, p Path, 
 	}
 	r, err := m.need(p)
 	if err != nil {
+		return "", err
+	}
+	if err := m.needHandles(); err != nil {
 		return "", err
 	}
 	if !m.canWrite(r, caller) {
@@ -96,7 +102,9 @@ func (m *manager) Quarantine(ctx context.Context, caller storage.Owner, p Path, 
 	}
 	// The caller's side of the rename is sealed (judged from the descriptor of the
 	// directory holding p, not from its name); the held side is core's own area.
-	if err := r.engineFS(caller).renameNoReplaceInto(r.rw, p.Rel, held.Rel); err != nil {
+	// The held name is a fresh ULID path: nobody else is creating it, so a
+	// filesystem without an atomic no-replace rename needs no placeholder.
+	if err := m.renameFresh(r.engineFS(caller), p.Rel, r.rw, held.Rel); err != nil {
 		return "", withRollback(err, "the quarantine record", m.qrn.remove(bg, string(id)))
 	}
 	row.State = qHeld
@@ -138,6 +146,9 @@ func (m *manager) Release(ctx context.Context, caller storage.Owner, id Quaranti
 	}
 	if row.State != qHeld && row.State != qReleasing {
 		return Path{}, fmt.Errorf("%w: quarantine record %s is %s", ErrUnknownQuarantine, id, row.State)
+	}
+	if err := m.needHandles(); err != nil {
+		return Path{}, err
 	}
 	target := row.Original
 	if to != nil {
@@ -183,10 +194,24 @@ func (m *manager) Release(ctx context.Context, caller storage.Owner, id Quaranti
 			return Path{}, err
 		}
 	}
-	// The held side is core's own area; the target the caller named is sealed.
-	if err := sr.rw.renameNoReplaceInto(dr.engineFS(caller), row.Held.Rel, target.Rel); err != nil {
+	// The held side is core's own area; the target the caller named is sealed. The
+	// target is a name the caller chose, so a filesystem without an atomic
+	// no-replace rename reserves it first, and the record says so (Placing).
+	heldSt, err := sr.rw.Lstat(row.Held.Rel)
+	if err != nil {
 		m.revertRelease(bg, row)
 		return Path{}, err
+	}
+	mark := func(ctx context.Context, p *Path) error {
+		row.Placing = p
+		if err := m.qrn.put(ctx, string(id), row); err != nil {
+			return fmt.Errorf("%w: %w", ErrJournal, err)
+		}
+		return nil
+	}
+	if err := m.renameExclusive(ctx, mark, sr.rw, row.Held, dr.engineFS(caller), target.Rel, heldSt.IsDir()); err != nil {
+		m.revertRelease(bg, row)
+		return Path{}, classifyUnsupported(err)
 	}
 	if err := m.qrn.remove(bg, string(id)); err != nil {
 		return target, fmt.Errorf("%w: %w", ErrJournal, err)
@@ -204,6 +229,12 @@ func (m *manager) Release(ctx context.Context, caller storage.Owner, id Quaranti
 
 // revertRelease puts the record back to held after a release that moved nothing.
 func (m *manager) revertRelease(ctx context.Context, row quarantineRow) {
+	if row.Placing != nil {
+		// A placeholder could not be taken away: the record stays "releasing" and
+		// recovery removes it (a record that says "held" would leave it there).
+		m.log.Warn("library: a release left a placeholder at its target; recovery will remove it", "id", row.ID)
+		return
+	}
 	row.State, row.To = qHeld, nil
 	if err := m.qrn.put(ctx, string(row.ID), row); err != nil {
 		m.log.Warn("library: could not restore a quarantine record after a refused release; recovery will", "id", row.ID, "err", err)

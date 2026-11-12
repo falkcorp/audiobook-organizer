@@ -1,5 +1,5 @@
 // file: core/library/manager.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3356d9de-7d9b-4473-880c-196e0a555910
 // last-edited: 2026-11-11
 
@@ -20,6 +20,7 @@ import (
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/keyedmutex"
+	"github.com/falkcorp/mediacore/internal/libfs"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -192,7 +193,21 @@ type seams struct {
 	sleep     func(ctx context.Context, d time.Duration) error // the hash limiter's wait
 	newID     func() string
 	watchSrc  watchSourceFunc
+	noHandles bool                     // behave as a platform without directory-relative syscalls (Windows)
 	fsRace    func(stage, name string) // GuardedFS: a hidden view's read open calls it at "checked", "resolved", "parent" and "opened" (see localFS.race)
+}
+
+// needHandles refuses a mutation on a platform without directory-relative
+// syscalls (Windows). Everything a transfer, a quarantine or a release does goes
+// through them: a path-based stand-in is not confined to the directory the caller
+// proved, and its no-replace rename replaces what another writer created in
+// between. The handle-based Windows follow-up (MoveFileEx without
+// REPLACE_EXISTING) lifts this.
+func (m *manager) needHandles() error {
+	if libfs.HasHandles && !m.seam.noHandles {
+		return nil
+	}
+	return fmt.Errorf("%w: this platform has no directory-relative operations, so nothing is transferred, quarantined or released", ErrNotSupported)
 }
 
 // Settings defaults (05-library 5L.7).
