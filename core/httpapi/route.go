@@ -1,7 +1,7 @@
 // file: core/httpapi/route.go
-// version: 1.0.3
+// version: 1.0.5
 // guid: 0e02f805-1af9-41bb-87b2-82fc71cc65f0
-// last-edited: 2026-11-07
+// last-edited: 2026-11-10
 
 // Package httpapi is core's HTTP surface (05-http-api): routes and groups,
 // typed handlers with a required permission, the problem+json error shape and
@@ -29,6 +29,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/jsonschemax"
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -161,14 +162,15 @@ type routeEntry struct {
 	errs    []error // registration errors found at Handle time
 
 	// native routes only
-	binding  *binding
-	bodyName string // component name of the JSON request body
-	bodyType reflect.Type
-	bodySch  *jsonschema.Schema
-	respName string // component name of the success body, "" for no body
-	respType reflect.Type
-	respSch  *jsonschema.Schema
-	status   int
+	binding   *binding
+	rawParams []paramDesc // HandleRaw routes: the path wildcards and RawDoc.Query
+	bodyName  string      // component name of the JSON request body
+	bodyType  reflect.Type
+	bodySch   *jsonschema.Schema
+	respName  string // component name of the success body, "" for no body
+	respType  reflect.Type
+	respSch   *jsonschema.Schema
+	status    int
 }
 
 // routeName is the lowerCamel rule for Route.Name.
@@ -390,10 +392,11 @@ func (e *routeEntry) reflectResponse(owner string, t reflect.Type, sch *jsonsche
 }
 
 // schemaOverrides are httpapi's reflector entries on top of jsonschemax.Base
-// (05-http-api §7): rbac.Permission and json.RawMessage. config.Overrides
-// joins when config lands (R2, F3).
+// (05-http-api §7, SIMP3-1): config.Overrides (config.Duration and the other
+// settings types render as the settings schema does), then rbac.Permission and
+// json.RawMessage.
 func schemaOverrides() jsonschemax.Overrides {
-	return jsonschemax.Base().With(jsonschemax.Overrides{
+	return jsonschemax.Base().With(config.Overrides()).With(jsonschemax.Overrides{
 		reflect.TypeFor[rbac.Permission](): {Type: "string",
 			Pattern: `^[a-z][a-z0-9]{1,15}:[a-z][a-z0-9_]{0,31}(\.[a-z][a-z0-9_]{0,31})?$`},
 		reflect.TypeFor[json.RawMessage](): {},

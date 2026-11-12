@@ -1,5 +1,5 @@
 // file: core/httpapi/corefixed.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 92e0747b-5722-4eae-b386-250870d1015f
 // last-edited: 2026-11-10
 
@@ -98,7 +98,7 @@ func (r *Router) fixedBases() []string {
 // CoreGroup route never does, because a fixed base inside /api/core/ is
 // refused. r.mu is held.
 func (r *Router) isFixedRoute(e *routeEntry) bool {
-	if e.info.Owner != "core" || e.info.Kind != RouteKindNative {
+	if e.info.Owner != "core" || (e.info.Kind != RouteKindNative && e.info.Kind != RouteKindRaw) {
 		return false
 	}
 	return slices.ContainsFunc(r.fixedBases(), func(b string) bool {

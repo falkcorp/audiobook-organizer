@@ -1,5 +1,5 @@
 // file: core/internal/taskhttp/routes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ef0e55e6-6121-4380-9813-14e66641663b
 // last-edited: 2026-11-11
 
@@ -80,7 +80,8 @@ func TestRoutes_Table(t *testing.T) {
 // TestRoutes_PermissionTable: every route against every credential class.
 // No principal is 401; a principal short of the floor is 403 naming it; a
 // principal at the floor passes the front door. The session and key cells
-// need core authentication and are F4-05's.
+// over real core auth are TestRoutes_PermissionTableOverCoreAuth in
+// realauth_test.go.
 func TestRoutes_PermissionTable(t *testing.T) {
 	g := newRig(t)
 	g.client.add(view("run-1", kindSweep, tasks.StateSucceeded, "bruce"))
@@ -114,8 +115,6 @@ func TestRoutes_PermissionTable(t *testing.T) {
 			}
 		})
 	}
-	t.Run("session cells", func(t *testing.T) { t.Skip("needs core auth (F4-05)") })
-	t.Run("api key cells", func(t *testing.T) { t.Skip("needs core auth (F4-05)") })
 }
 
 func TestNew_RefusesAMissingDependency(t *testing.T) {
