@@ -19,6 +19,8 @@ core/internal/instancestore.StorageSpec
 core/internal/scheduler.ValidateSchedules
 core/internal/scheduler.joinKinds
 core/internal/scheduler.ownerName
+core/internal/taskhttp.Server.Handler
+core/internal/taskhttp.Server.Routes
 core/kernel.CutoverPreflight
 core/kernel.DataMigrations.Preflight
 core/kernel.DataMigrations.RecordMetrics
