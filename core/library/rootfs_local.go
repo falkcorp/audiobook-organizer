@@ -1,5 +1,5 @@
 // file: core/library/rootfs_local.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
 // last-edited: 2026-11-11
 
@@ -47,6 +47,13 @@ type localFS struct {
 	skip     []string                   // rel dirs Walk never enters: AppDir, Quarantine, nested same-owner roots
 	mounted  func() error               // checked before any destructive operation; nil = always mounted
 	target   func(Path) (string, error) // Symlink: the absolute host path of a target the caller may read
+	// sealed, when set, refuses every mutation of a name it reports reserved
+	// (the root's AppDir and Quarantine area; carries = also a directory
+	// holding one, which a rename would carry along); hidden also refuses reads
+	// of such a name. Both are set on a view for anyone but core, never on the
+	// engine's own driver.
+	sealed func(rel string, carries bool) bool
+	hidden bool
 }
 
 var _ fsOps = (*localFS)(nil)
@@ -84,6 +91,9 @@ func (l *localFS) name(op, n string) (string, error) {
 	if err := ValidateRel(n); err != nil {
 		return "", &fs.PathError{Op: op, Path: n, Err: err}
 	}
+	if l.hidden && l.sealed(n, false) {
+		return "", &fs.PathError{Op: op, Path: n, Err: ErrReservedPath}
+	}
 	return n, nil
 }
 
@@ -94,6 +104,9 @@ func (l *localFS) mut(op, n string) (string, error) {
 	}
 	if err := ValidateRel(n); err != nil {
 		return "", &fs.PathError{Op: op, Path: n, Err: err}
+	}
+	if l.sealed != nil && l.sealed(n, false) {
+		return "", &fs.PathError{Op: op, Path: n, Err: ErrReservedPath}
 	}
 	// Every mutation is destructive in the 5L.5 sense: on an unmounted share it
 	// would write to the wrong volume or act on an absent tree. Reads are not
@@ -222,6 +235,10 @@ func (l *localFS) renameNoReplaceInto(dst fsOps, oldname, newname string) error 
 	o, err := l.mut("rename", oldname)
 	if err != nil {
 		return err
+	}
+	if l.sealed != nil && l.sealed(o, true) {
+		// A directory that holds the AppDir or the Quarantine area carries it.
+		return &fs.PathError{Op: "rename", Path: o, Err: ErrReservedPath}
 	}
 	d := dst.local()
 	n, err := d.mut("rename", newname)

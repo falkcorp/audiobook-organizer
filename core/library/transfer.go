@@ -1,5 +1,5 @@
 // file: core/library/transfer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 534f60c5-c088-4e70-962c-8bcddbfafc71
 // last-edited: 2026-11-11
 
@@ -125,6 +125,15 @@ func (x *xfer) check() error {
 	if !m.canWrite(x.dr, x.caller) {
 		return fmt.Errorf("%w: %s", ErrReadOnlyRoot, x.dst.Root)
 	}
+	// The AppDir (sentinel, app state) and Quarantine area are core's: no other
+	// caller names them as a source or a destination, and a Move does not
+	// carry them inside a directory.
+	if err := m.refuseReserved(x.caller, x.sr, x.src, x.opts.Mode == Move); err != nil {
+		return err
+	}
+	if err := m.refuseReserved(x.caller, x.dr, x.dst, false); err != nil {
+		return err
+	}
 	if !m.enabled(x.dr.spec.Owner) {
 		return fmt.Errorf("%w: %s", ErrOwnerDisabled, x.dr.spec.Owner)
 	}
@@ -141,8 +150,12 @@ func (x *xfer) check() error {
 		if x.sr.spec.Role == RoleExternal {
 			return fmt.Errorf("%w: %s is an external root", ErrSourceProtected, x.src.Root)
 		}
-		if protected, perr := m.protectedForMove(x.ctx, x.src); protected {
-			return errors.Join(fmt.Errorf("%w: %s", ErrSourceProtected, x.src), perr)
+		// Early refusal; recheck asks again under the locks, where the source's
+		// type is the one that will move.
+		if st, serr := x.sr.rw.Lstat(x.src.Rel); serr == nil {
+			if protected, perr := m.protectedForMove(x.ctx, x.src, st.IsDir()); protected {
+				return errors.Join(fmt.Errorf("%w: %s", ErrSourceProtected, x.src), perr)
+			}
 		}
 	}
 	x.sfs, x.dfs = x.sr.rw, x.dr.rw
@@ -165,6 +178,11 @@ func (x *xfer) recheck() error {
 		return err
 	}
 	x.info = info
+	if x.opts.Mode == Move {
+		if protected, perr := x.m.protectedForMove(x.ctx, x.src, info.IsDir()); protected {
+			return errors.Join(fmt.Errorf("%w: %s", ErrSourceProtected, x.src), perr)
+		}
+	}
 	regular := info.Mode().IsRegular()
 	switch {
 	case x.opts.Mode == Symlink, x.opts.Mode == Move:

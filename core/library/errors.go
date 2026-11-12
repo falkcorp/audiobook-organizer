@@ -1,5 +1,5 @@
 // file: core/library/errors.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 70a43d37-5dd5-4868-b9d1-c1b69a14827d
 // last-edited: 2026-11-11
 
@@ -57,6 +57,11 @@ var (
 	// ErrNotSupported: the operation is not available on this root's
 	// filesystem or platform.
 	ErrNotSupported = errors.New("library: operation not supported")
+	// ErrReservedPath: the path is, is under, or (for a move) contains the
+	// root's AppDir or Quarantine area, which only core touches (the sentinel
+	// and the held files live there; a module reaches them through
+	// Root.AppDir, Quarantine and Release).
+	ErrReservedPath = errors.New("library: path is in the root's app or quarantine area")
 )
 
 // The transfer sentinels of 05-library 5L.3.3.
