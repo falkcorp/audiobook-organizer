@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/redact.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 8397d44b-b492-4bf1-aa16-cf162225a337
 // last-edited: 2026-11-12
 
@@ -40,6 +40,8 @@ const unparseableURL = "(unparseable URL)"
 // are one name.
 type scrubber struct {
 	extra []string // lower-case, separators removed
+	// meter counts the bytes text examines. Only a test sets it.
+	meter *workMeter
 }
 
 func newScrubber(extra []string) scrubber {
@@ -251,14 +253,77 @@ const valueStop = "& \t\r\n\"',;<>)"
 // lineStop ends the value of a name whose value holds spaces (Authorization).
 const lineStop = "&\r\n\"',;<>"
 
+// urlStop ends the authority of a URL in text.
+const urlStop = "/?# \t\r\n\"'<>"
+
+// workMeter counts the bytes text examines, so a test can assert that the
+// scanner does O(len(in)) work by counting instead of by timing it (a timing
+// ratio flaked on shared CI runners under -race, three times). It is nil in
+// production: every scrubber outside the test has none, and add on a nil
+// meter does nothing.
+//
+// Every forward scan in text goes through scanName, skipSpaces, scanTo,
+// scanToByte or the one-byte step of the main loop, and each reports the bytes
+// it walked. A new scan loop must do the same, or the meter cannot see it.
+type workMeter struct{ n int }
+
+func (w *workMeter) add(n int) {
+	if w != nil {
+		w.n += n
+	}
+}
+
+// scanName returns the end of the run of name bytes that starts at i.
+func (s scrubber) scanName(in string, i int) int {
+	j := i
+	for j < len(in) && isNameByte(in[j]) {
+		j++
+	}
+	s.meter.add(j - i)
+	return j
+}
+
+// skipSpaces returns the index of the first byte at or after i that is not a
+// space.
+func (s scrubber) skipSpaces(in string, i int) int {
+	k := i
+	for k < len(in) && in[k] == ' ' {
+		k++
+	}
+	s.meter.add(k - i)
+	return k
+}
+
+// scanTo returns the index of the first byte at or after from that is in stop
+// (an ASCII set), or len(in) when there is none.
+func (s scrubber) scanTo(in string, from int, stop string) int {
+	e := len(in)
+	if x := strings.IndexAny(in[from:], stop); x >= 0 {
+		e = from + x
+	}
+	s.meter.add(e - from)
+	return e
+}
+
+// scanToByte returns the index of the first c at or after from, or len(in).
+func (s scrubber) scanToByte(in string, from int, c byte) int {
+	e := len(in)
+	if x := strings.IndexByte(in[from:], c); x >= 0 {
+		e = from + x
+	}
+	s.meter.add(e - from)
+	return e
+}
+
 // text replaces the value of every "name=value", "name: value" and
 // "name": "value" pair in in whose name is a secret (quoted with " or ', or
 // bare), every "Bearer <token>" and the userinfo of every URL, for text that
 // may echo a request (a remote error body, a transport error). One pass,
 // linear in len(in): each name is judged once, by at most maxNameWindow
-// bytes. It is a best-effort filter: a secret the remote reformats is not
-// found, which is why error and log paths also never carry the whole body
-// (Detail is bounded, M1.3).
+// bytes, and no scan starts before the byte the previous one ended on, which
+// the work meter checks. It is a best-effort filter: a secret the remote
+// reformats is not found, which is why error and log paths also never carry
+// the whole body (Detail is bounded, M1.3).
 func (s scrubber) text(in string) string {
 	var b strings.Builder
 	n := len(in)
@@ -267,23 +332,20 @@ func (s scrubber) text(in string) string {
 	b.Grow(n)
 	i := 0
 	for i < n {
+		s.meter.add(1)
 		if !isNameByte(in[i]) {
 			b.WriteByte(in[i])
 			i++
 			continue
 		}
-		j := i
-		for j < n && isNameByte(in[j]) {
-			j++
-		}
+		j := s.scanName(in, i)
 		name := in[i:j]
 		// userinfo of a URL: scheme://user:pass@host
 		if strings.HasPrefix(in[j:], "://") {
-			m := j + 3
-			for m < n && !strings.ContainsRune("/?# \t\r\n\"'<>", rune(in[m])) {
-				m++
-			}
-			if at := strings.LastIndexByte(in[j+3:m], '@'); at >= 0 {
+			m := s.scanTo(in, j+3, urlStop)
+			at := strings.LastIndexByte(in[j+3:m], '@')
+			s.meter.add(m - (j + 3)) // the second walk over the authority
+			if at >= 0 {
 				b.WriteString(in[i : j+3])
 				b.WriteString(redacted + "@")
 				i = j + 3 + at + 1
@@ -292,14 +354,8 @@ func (s scrubber) text(in string) string {
 		}
 		// Bearer <token>
 		if len(name) == 6 && strings.EqualFold(name, "bearer") && j < n && in[j] == ' ' {
-			k := j
-			for k < n && in[k] == ' ' {
-				k++
-			}
-			e := k
-			for e < n && !strings.ContainsRune(valueStop, rune(in[e])) {
-				e++
-			}
+			k := s.skipSpaces(in, j)
+			e := s.scanTo(in, k, valueStop)
 			b.WriteString(in[i:k])
 			if e > k {
 				b.WriteString(redacted)
@@ -311,25 +367,17 @@ func (s scrubber) text(in string) string {
 		if k < n && (in[k] == '"' || in[k] == '\'') { // "name": or 'name':
 			k++
 		}
-		for k < n && in[k] == ' ' {
-			k++
-		}
+		k = s.skipSpaces(in, k)
 		if k >= n || (in[k] != '=' && in[k] != ':') || !s.secret(name) {
 			b.WriteString(name)
 			i = j
 			continue
 		}
-		k++
-		for k < n && in[k] == ' ' {
-			k++
-		}
+		k = s.skipSpaces(in, k+1)
 		b.WriteString(in[i:k])
 		if k < n && (in[k] == '"' || in[k] == '\'') {
 			q := in[k]
-			e := k + 1
-			for e < n && in[e] != q {
-				e++
-			}
+			e := s.scanToByte(in, k+1, q)
 			b.WriteByte(q)
 			b.WriteString(redacted)
 			if e < n {
@@ -343,19 +391,12 @@ func (s scrubber) text(in string) string {
 		if wholeValue(name) {
 			stop = lineStop
 		}
-		e := k
-		for e < n && !strings.ContainsRune(stop, rune(in[e])) {
-			e++
-		}
+		e := s.scanTo(in, k, stop)
 		// "credentials: Bearer abc": the value is a scheme and a token even
 		// where the name is not Authorization.
 		if v := in[k:e]; len(v) <= 6 && (strings.EqualFold(v, "bearer") || strings.EqualFold(v, "basic")) && e < n && in[e] == ' ' {
-			for e < n && in[e] == ' ' {
-				e++
-			}
-			for e < n && !strings.ContainsRune(valueStop, rune(in[e])) {
-				e++
-			}
+			e = s.skipSpaces(in, e)
+			e = s.scanTo(in, e, valueStop)
 		}
 		b.WriteString(redacted)
 		i = e
