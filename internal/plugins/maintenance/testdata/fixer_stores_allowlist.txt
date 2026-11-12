@@ -1,0 +1,43 @@
+# file: internal/plugins/maintenance/testdata/fixer_stores_allowlist.txt
+# version: 1.0.0
+# guid: 6a3e8d21-9c47-4f15-b2e0-1d7c5a9f3b68
+# last-edited: 2026-11-12
+#
+# Reviewed exceptions for TestFixerStores_NoFixerReachesAStoreExceptThroughTheShell
+# (fixer_stores_guard_test.go; the pass is tools/fixerstores).
+#
+# Format, one per line:   kind name # reason
+#   store-sink <function>   a function a fixer reaches that calls a FixerStores
+#                           accessor on something other than FixerStores
+#   dep <Method>            a ServerDeps method, not one of the 15 accessors,
+#                           that a fixer reaches through the plugin's captured deps
+# The reason is required. An entry the pass no longer reports fails the test
+# (delete it), so this file only shrinks. Adding a line is a review decision,
+# not a way to make the test pass: a fixer that reads a store through the
+# plugin's deps reads HEAD's store, not the one the native shell bound to ctx.
+
+# ---- store sinks: both are bodies shared with an operation, called on a plugin
+# ---- built by withFixerStores, whose deps answer the 15 accessors from the shell.
+store-sink (*Plugin).repairsGuardTags # called on f.p.withFixerStores(f.p.fixerStores(ctx)) (retired_versions_fixer.go buildRun), so its BookTagReader comes from the shell; the other callers are operations
+store-sink (*Plugin).versionGroupPrimaryRepair # called on f.p.withFixerStores(f.p.fixerStores(ctx)) (vgPrimaryFixer.Plan), so its OpsStore and VersionPrimaryStore come from the shell; the operation calls it on the plugin itself
+
+# ---- deps that are not stores
+dep RootDir # the configured library root, a string; nothing is read or written through it
+dep EnqueueOp # AfterApply follow-ups enqueue another operation by definition id; the queue is not one of FixerStores' accessors
+dep InvalidateDedupCache # drops an in-memory cache after series rows changed; reads and writes no store
+dep InvalidateSeriesCache # drops an in-memory cache after series rows changed; reads and writes no store
+dep RenewScanStandDown # renews the legacy stand-down lease inside versionGroupPrimaryRepair, only when params.Apply is set; Plan passes a dry run, and the shell holds the stand-down through rc.StandDown
+
+# ---- deps that read a store the shell does not hand out. These are real reads
+# ---- through the plugin's own deps, not the shell's; they are listed, not
+# ---- excused. See seams.d/F5-02.md, "Owner questions", for what moving them costs.
+dep BookIDsWithIdentifiers # versionTwinFixer.readersVia binds it from f.p.deps: a read-only identifier index lookup; not one of FixerStores' 15
+dep BooksWithMetadataSourceHash # versionTwinFixer.readersVia binds it from f.p.deps: a read-only book lookup by metadata source hash; not one of FixerStores' 15
+dep BooksWithMetadataSourceHashInMemory # versionTwinFixer.readersVia binds it from f.p.deps: the in-memory variant of the hash lookup; not one of FixerStores' 15
+dep CachedMetadataCandidates # junkTitleFixer.candidateTitleVia reads one book's metadata candidate cache entry through f.p.deps; not one of FixerStores' 15
+dep LatestCandidateFetchOutcome # lostCandidatesFixer.Replan reads one book's last candidate fetch outcome through f.p.deps; not one of FixerStores' 15
+dep LatestCandidateFetchOutcomes # lostCandidatesFixer.Plan reads every book's last candidate fetch outcome through f.p.deps; not one of FixerStores' 15
+dep LatestReconcileScan # reconcileFixer.Plan reads the latest reconcile scan through f.p.deps; not one of FixerStores' 15
+
+# ---- a service call, not a store
+dep RefetchMetadataCandidates # lostCandidatesFixer.Apply runs the provider chain and writes the candidate cache through f.p.deps; no FixerStores accessor or repairs.Writer path covers it. Owner question 1 in seams.d/F5-02.md
