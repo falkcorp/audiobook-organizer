@@ -1,5 +1,5 @@
 // file: core/outbox/partitions_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e10c5bfb-43c5-423f-8265-428e0f871145
 // last-edited: 2026-11-12
 
@@ -25,6 +25,14 @@ import (
 // the declaration finds. keyFor names a key for each partition.
 func strandedFour(t *testing.T) (cp *crashPoints, keyFor map[int]string) {
 	t.Helper()
+	return stranded(t, 0, 1, 2, 3)
+}
+
+// stranded is strandedFour with a message on the named partitions only. Its
+// villains are "pp<n>", and every one is delivered to nobody: the one consumer
+// blocks.
+func stranded(t *testing.T, pps ...int) (cp *crashPoints, keyFor map[int]string) {
+	t.Helper()
 	cp = newCrashPoints()
 	keyFor = map[int]string{}
 	for i := 0; len(keyFor) < 4; i++ {
@@ -36,10 +44,10 @@ func strandedFour(t *testing.T) (cp *crashPoints, keyFor map[int]string) {
 			func(ctx context.Context, _ outbox.RawMessage) error { <-ctx.Done(); return ctx.Err() })}}}
 	}})
 	eventually(t, "the consumer's four cursors", func() bool { return r1.cursors(consumerN) == 4 })
-	for pp := range 4 {
+	for _, pp := range pps {
 		r1.stageGotham(keyFor[pp], Dispatch{Villain: fmt.Sprintf("pp%d", pp)})
 	}
-	eventually(t, "four messages sequenced", func() bool { return r1.messages(signalName) == 4 })
+	eventually(t, "the messages sequenced", func() bool { return r1.messages(signalName) == len(pps) })
 	r1.close()
 	return cp, keyFor
 }
@@ -126,22 +134,40 @@ func TestOutbox_PartitionCountChangeStopsTheTopic(t *testing.T) {
 	}
 	r2.close()
 
-	// Third build: the declaration matches the stamp again, and the stranded
-	// messages are delivered.
+	// Third build: the declaration is back at the stamp's count, the way out of
+	// a change that nobody meant (the other way out is a migration that
+	// re-sequences the messages, which this row does not have). Every stranded
+	// message is delivered, the ones on partitions 2 and 3 included, and the stop
+	// is gone.
 	seen3 := &payloads{}
 	r3 := newRig(t, rigOpts{fs: cp.fs, partitions: 4, register: func(testing.TB, *rig) []registration {
 		return []registration{{owner: "core", hs: []outbox.Handler{outbox.ConsumeRaw(signalName, consumerN, seen3.handler(consumerN))}}}
 	}})
-	eventually(t, "all four messages delivered once the count matches", func() bool { return seen3.count() == 4 })
+	eventually(t, "all four messages delivered once the declaration is restored", func() bool {
+		return seen3.has("pp0") && seen3.has("pp1") && seen3.has("pp2") && seen3.has("pp3")
+	})
+	if n := seen3.count(); n != 4 {
+		t.Fatalf("%d distinct deliveries, want exactly the four stranded messages", n)
+	}
 	eventually(t, "health to be up", func() bool { return r3.healthOf().Status == health.StatusUp })
 }
 
 // The stop lifts by itself, in the running relay, once the stamp and the
-// declaration agree again (here the stamp is rewritten by hand to the declared
-// count, the way an operator repairing the store would): health returns to Up
-// and delivery resumes.
+// declaration agree again, and intake and delivery resume at once. A running
+// relay's declaration is fixed for its build, so the only way the two come back
+// into line under it is an edit of the seq row, and this test makes one. That is
+// not a repair: it is safe here only because both messages sit on partitions (0
+// and 1) that are the same under 2 and under 4, so nothing is stranded by it.
+// Over any other layout it would hide the messages of the partitions that the
+// smaller count does not have (TestOutbox_PartitionCountChangeStopsTheTopic
+// shows the way out of that: restore the declaration).
 func TestOutbox_PartitionStopLiftsWhenTheStampMatchesAgain(t *testing.T) {
-	cp, _ := strandedFour(t)
+	cp, keyFor := stranded(t, 0, 1)
+	for pp := range 2 {
+		if outboxstore.Partition(keyFor[pp], 2) != pp {
+			t.Fatalf("key %q is on partition %d under two, not %d: the layout this test relies on is gone", keyFor[pp], outboxstore.Partition(keyFor[pp], 2), pp)
+		}
+	}
 	seen := &payloads{}
 	r := newRig(t, rigOpts{fs: cp.fs, partitions: 2, register: func(testing.TB, *rig) []registration {
 		return []registration{{owner: "core", hs: []outbox.Handler{outbox.ConsumeRaw(signalName, consumerN, seen.handler(consumerN))}}}
@@ -155,16 +181,49 @@ func TestOutbox_PartitionStopLiftsWhenTheStampMatchesAgain(t *testing.T) {
 	b.Bind(r.outKS)
 	_, err := b.GetForUpdate(ctx, r.outKS, outboxstore.SeqKey(signalName))
 	must(t, err)
-	must(t, b.In(r.outKS).Set(outboxstore.SeqKey(signalName), []byte(`j{"v":1,"high":4,"partitions":2}`)))
+	must(t, b.In(r.outKS).Set(outboxstore.SeqKey(signalName), []byte(`j{"v":1,"high":2,"partitions":2}`)))
 	must(t, b.Commit(ctx, storage.Sync))
 	b.Close()
 	r.ob.Wake()
 
 	eventually(t, "health to return to up", func() bool { return r.healthOf().Status == health.StatusUp })
-	eventually(t, "delivery to resume", func() bool { return seen.count() > 0 })
+	eventually(t, "both stranded messages to be delivered", func() bool { return seen.has("pp0") && seen.has("pp1") })
 
 	// Intake lifted too, at once and not after the stopped topic's 30 s retry
 	// pause: a message staged now is sequenced and delivered.
 	r.stageGotham("bat-after", Dispatch{Villain: "Scarecrow"})
 	eventually(t, "a message staged after the lift to be delivered", func() bool { return seen.has("Scarecrow") })
+}
+
+// A topic stopped on a partition-count change costs the relay reads, not
+// writes. Cursor creation goes through the run's writer, which records an intent
+// row (a synced write) and renews the run's holds whatever the function inside
+// returns, so a consumer that is refused and tried again on every loop would
+// write for as long as the stop lasts, days if nobody acts. The stamp is checked
+// before the writer is entered. Asserted as a ratio of ledger rows to wakes, not
+// as a time: the relay loops several times for each wake.
+func TestOutbox_PartitionStopWritesNoLedgerRowsPerLoop(t *testing.T) {
+	cp, _ := strandedFour(t)
+	seen := &payloads{}
+	r := newRig(t, rigOpts{fs: cp.fs, partitions: 2, register: func(testing.TB, *rig) []registration {
+		return []registration{{owner: "core", hs: []outbox.Handler{
+			outbox.ConsumeRaw(signalName, consumerN, seen.handler(consumerN)),
+			outbox.ConsumeRaw(signalName, consumerN2, seen.handler(consumerN2)),
+		}}}
+	}})
+	eventually(t, "the stop to be reported", func() bool { return r.healthOf().Reason == "delivery_stopped" })
+	time.Sleep(100 * time.Millisecond) // the loop that reported the stop finishes
+	before := r.intentRows()
+	const wakes = 200
+	for range wakes {
+		r.ob.Wake()
+		time.Sleep(3 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if grown := r.intentRows() - before; grown*10 > wakes {
+		t.Fatalf("%d ledger rows written over %d wakes of a stopped topic, want at most a tenth as many", grown, wakes)
+	}
+	if seen.count() != 0 || r.cursors(consumerN2) != 0 {
+		t.Fatalf("the stopped topic delivered %d times and made %d cursors for the new consumer, want none", seen.count(), r.cursors(consumerN2))
+	}
 }

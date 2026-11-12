@@ -1,5 +1,5 @@
 // file: core/outbox/fault.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 41666c62-b0eb-40fc-ab35-17a0619edae8
 // last-edited: 2026-11-12
 
@@ -9,7 +9,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/falkcorp/mediacore/internal/outboxstore"
@@ -23,13 +26,18 @@ import (
 // and a row's value is a payload (a handler's error and panic are held to the
 // same rule, see errType). A log line names what failed (the consumer, topic,
 // partition and, for a row, which row), a closed token for the class of
-// failure (faultKind) and the Go type of the error, and that is all.
+// failure (faultKind, logged as "fault": the run logger already stamps every
+// line with the run's own "kind") and the Go type of the error, and that is
+// all.
 
 // faultEvery is how often the relay repeats the same fault in its log; the
 // ones in between are counted into the next line.
 const faultEvery = time.Minute
 
-// faultKind is the closed token for the class of err.
+// faultKind is the closed token for the class of err. A failure of the store
+// is told apart by what the operator can do about it (free disk, look at the
+// device, fix a mode), through the sentinels the standard library and the
+// storage package expose, never through the error's text.
 func faultKind(err error) string {
 	switch {
 	case errors.Is(err, codec.ErrUnknownVersion):
@@ -46,6 +54,18 @@ func faultKind(err error) string {
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT):
+		return "no_space"
+	case errors.Is(err, syscall.EIO):
+		return "io"
+	case errors.Is(err, fs.ErrPermission):
+		return "permission"
+	case errors.Is(err, storage.ErrClosed), errors.Is(err, fs.ErrClosed):
+		return "closed"
+	case errors.Is(err, storage.ErrReadOnly):
+		return "read_only"
+	case errors.Is(err, storage.ErrBatchTooLarge):
+		return "too_large"
 	}
 	return "error"
 }
@@ -53,7 +73,7 @@ func faultKind(err error) string {
 // errAttrs are the log attributes that describe err without quoting it: its
 // class, its Go type and, for a row that did not decode, which row.
 func errAttrs(err error) []any {
-	attrs := []any{slog.String("kind", faultKind(err)), slog.String("err_type", errType(err))}
+	attrs := []any{slog.String("fault", faultKind(err)), slog.String("err_type", errType(err))}
 	if re, ok := errors.AsType[*outboxstore.RowError](err); ok {
 		attrs = append(attrs, slog.String("row", re.Where))
 	}
@@ -66,20 +86,43 @@ type faultNote struct {
 	suppressed int
 }
 
-// faultDue says whether the fault named what should be logged now, and how
-// many identical ones were held back since the last line.
-func (r *relay) faultDue(what string) (due bool, suppressed int) {
-	now := r.o.now()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n, ok := r.faults[what]
+// faultLimiter lets one line a minute through for each named fault. The
+// Outbox owns one, so the relay's loop and an operator's RefreshStatus draw on
+// the same allowance.
+type faultLimiter struct {
+	mu    sync.Mutex
+	notes map[string]faultNote
+}
+
+// due says whether the fault named what should be logged at now, and how many
+// identical ones were held back since the last line.
+func (l *faultLimiter) due(now time.Time, what string) (due bool, suppressed int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.notes == nil {
+		l.notes = map[string]faultNote{}
+	}
+	n, ok := l.notes[what]
 	if ok && now.Sub(n.at) < faultEvery {
 		n.suppressed++
-		r.faults[what] = n
+		l.notes[what] = n
 		return false, 0
 	}
-	r.faults[what] = faultNote{at: now}
+	l.notes[what] = faultNote{at: now}
 	return true, n.suppressed
+}
+
+// faultLog logs a failed what on log, once a minute per what.
+func (o *Outbox) faultLog(log *slog.Logger, what string, err error) {
+	due, suppressed := o.faults.due(o.now(), what)
+	if !due {
+		return
+	}
+	attrs := errAttrs(err)
+	if suppressed > 0 {
+		attrs = append(attrs, slog.Int("repeats_since_last", suppressed))
+	}
+	log.Warn("outbox: "+what+" failed", attrs...)
 }
 
 // fault logs an error that is neither a cancellation nor an expected race,
@@ -88,15 +131,7 @@ func (r *relay) fault(what string, err error) {
 	if err == nil || r.rc.Context().Err() != nil || r.stopped() {
 		return
 	}
-	due, suppressed := r.faultDue(what)
-	if !due {
-		return
-	}
-	attrs := errAttrs(err)
-	if suppressed > 0 {
-		attrs = append(attrs, slog.Int("repeats_since_last", suppressed))
-	}
-	r.log.Warn("outbox: "+what+" failed", attrs...)
+	r.o.faultLog(r.log, what, err)
 }
 
 // partitionsOK says whether a topic may be worked on: its messages were

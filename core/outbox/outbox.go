@@ -1,5 +1,5 @@
 // file: core/outbox/outbox.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b3c4366-8534-4dc4-870f-850dfab2b120
 // last-edited: 2026-11-12
 
@@ -222,6 +222,7 @@ type Outbox struct {
 	opsEpoch   atomic.Uint64 // bumped by every operator action; the relay forgets what it knew
 	sweepEvery time.Duration // retention sweep interval
 	hooks      hooks
+	faults     faultLimiter // one logged line a minute per repeating failure, for the relay and RefreshStatus alike
 	topicsMu   sync.Mutex
 	topicsMem  map[string]*topicInfo
 }

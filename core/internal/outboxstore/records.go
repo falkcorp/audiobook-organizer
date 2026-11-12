@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/records.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5f394976-e7d8-4f5e-be83-5afd62ff5595
 // last-edited: 2026-11-12
 
@@ -54,6 +54,10 @@ type High struct {
 // state (cursor, try, dead letters); each one reads the cursor with
 // GetForUpdate and writes it back with Rev+1, so a stale writer's commit
 // fails.
+//
+// At is when the pair's state was last written (StagePair sets it to the
+// commit's clock). It is audit data for someone reading the store: no decision
+// reads it (the orphan grace runs from Absent, not from At).
 //
 // Absent is when retention first saw the cursor's consumer in neither the
 // registered nor the declared set (a consumer removed from the build); the zero
