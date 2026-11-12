@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/holds_review_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0d6f3b0a-6a5c-4a43-8c3e-7d9b5b1f2e44
 // last-edited: 2026-11-11
 
@@ -409,6 +409,18 @@ func TestHolds_RetryNeverBlocksARequest(t *testing.T) {
 	})
 	<-ss.started // the read is under way in the background
 	within(t, 2*time.Second, "a second HoldFor", func() { r.HoldFor(batcave) })
+	closed := make(chan struct{})
+	go func() { r.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a background read was still under way")
+	case <-time.After(150 * time.Millisecond):
+	}
 	close(ss.release)
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return after the read ended")
+	}
 	eventually(t, "the stalled read to land", func() bool { _, ok := r.HoldFor(batcave); return ok })
 }
