@@ -1,5 +1,5 @@
 // file: core/backup/catalogue.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0e5a7d12-41c8-4b6f-8d33-9c1ab2e07f65
 // last-edited: 2026-11-12
 
@@ -196,6 +196,7 @@ type verifyFile struct {
 	Level  string    `json:"level"`
 	OK     bool      `json:"ok"`
 	Detail string    `json:"detail"`
+	Reason string    `json:"reason,omitempty"`
 }
 
 func readVerify(p string) *VerifyResult {
@@ -213,11 +214,15 @@ func readVerify(p string) *VerifyResult {
 			l = c
 		}
 	}
-	return &VerifyResult{At: v.At, Level: l, OK: v.OK, Detail: v.Detail}
+	// The sidecar sits in a directory an operator or a network share may write
+	// to, so its reason is read as untrusted: only a code this build knows
+	// survives, and a sidecar from before reason codes (or one with a made-up
+	// code) reads as the generic failure.
+	return &VerifyResult{At: v.At, Level: l, OK: v.OK, Detail: v.Detail, Reason: VerifyReason(v.Reason).Normalize(v.OK)}
 }
 
 func writeVerify(p string, r VerifyResult) error {
-	b, err := json.Marshal(verifyFile{At: r.At.UTC(), Level: r.Level.String(), OK: r.OK, Detail: r.Detail})
+	b, err := json.Marshal(verifyFile{At: r.At.UTC(), Level: r.Level.String(), OK: r.OK, Detail: r.Detail, Reason: string(r.Reason)})
 	if err != nil {
 		return err
 	}

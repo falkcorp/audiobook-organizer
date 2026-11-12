@@ -1,5 +1,5 @@
 // file: core/backup/stage_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1f9a3e-2b84-4d70-a5e9-8f3b0d7c4a12
 // last-edited: 2026-11-12
 
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -399,6 +400,85 @@ func TestRenamePrecheckRefusesBindMountedConfig(t *testing.T) {
 	kept, err := os.ReadFile(cfg)
 	if err != nil || string(kept) != "library: gotham\n" {
 		t.Fatalf("the live config changed: %q, %v", kept, err)
+	}
+}
+
+// The warnings of a staged restore reach API bodies, so they carry fixed text:
+// the error of a failed restart request, the refusal of the rename pre-check and
+// the place the config copy went are host text that belongs in the operator's
+// log. The existing phrases the operator reads stay.
+func TestStageWarningsCarryNoHostText(t *testing.T) {
+	ctx := asOwner(context.Background())
+	const restartText = "dial unix /srv/gotham/batcave/restart.sock: connection refused"
+	confDir := t.TempDir()
+	cfg, boot := filepath.Join(confDir, "mediacore.yaml"), filepath.Join(confDir, "config.boot.json")
+	for p, body := range map[string]string{cfg: "library: gotham\n", boot: `{"storage":"x"}`} {
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logs bytes.Buffer
+	setup := func(p restorejournal.Probe) *env {
+		e := newEnv(t)
+		e.opts.Config, e.opts.ConfigPath, e.opts.BootRecordPath, e.opts.Probe = e.cfg, cfg, boot, p
+		e.opts.Restart = func(context.Context) error { return errors.New(restartText) }
+		e.opts.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+		e.rebuild()
+		return e
+	}
+	noHostText := func(what string, e *env, warnings []string) {
+		t.Helper()
+		all := strings.Join(warnings, "|")
+		for _, leak := range []string{restartText, "/srv/", confDir, e.stateDir, e.dbParent} {
+			if strings.Contains(all, leak) {
+				t.Errorf("%s: a warning carries host text %q: %v", what, leak, warnings)
+			}
+		}
+	}
+
+	// A restart that fails after the archive was staged, with the config copy
+	// left for the operator: the pointers are fixed text.
+	e := setup(nil)
+	a := e.create("manual")
+	pr, err := e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{Restart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noHostText("stage", e, pr.Warnings)
+	all := strings.Join(pr.Warnings, "|")
+	if !strings.Contains(all, "the restart request failed") || !strings.Contains(all, "<state_dir>/restore/") || !strings.Contains(all, "config.restored") {
+		t.Errorf("the warnings lost the phrases the operator acts on: %v", pr.Warnings)
+	}
+	if out := logs.String(); !strings.Contains(out, restartText) || !strings.Contains(out, e.stateDir) {
+		t.Errorf("the operator's log lacks the restart error or the config copy's location: %s", out)
+	}
+
+	// The rename pre-check's refusal names files; the warning keeps the phrase only.
+	logs.Reset()
+	e = setup(bindProbe{bound: "mediacore.yaml"})
+	a = e.create("manual")
+	pr, err = e.svc.StageRestore(ctx, a.ID, backup.RestoreOptions{ReplaceConfig: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noHostText("rename refused", e, pr.Warnings)
+	if !strings.Contains(strings.Join(pr.Warnings, "|"), "cannot be swapped by rename") {
+		t.Errorf("warnings = %v", pr.Warnings)
+	}
+	if out := logs.String(); !strings.Contains(out, "cannot be swapped by rename") || !strings.Contains(out, "single-file bind mount") || !strings.Contains(out, e.dbParent) {
+		t.Errorf("the operator's log lacks the refusal and the files it names: %s", out)
+	}
+
+	// The same for a revert whose restart fails.
+	e = setup(nil)
+	revertFixture(t, e, "20261111T030000Z-dddddddd", "applied", true)
+	pr, err = e.svc.RevertLastRestore(ctx, backup.RestoreOptions{Restart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noHostText("revert", e, pr.Warnings)
+	if !strings.Contains(strings.Join(pr.Warnings, "|"), "the restart request failed") {
+		t.Errorf("revert warnings = %v", pr.Warnings)
 	}
 }
 

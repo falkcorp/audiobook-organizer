@@ -1,5 +1,5 @@
 // file: core/backup/verify_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3e5a17-6c20-4f9b-b4a8-1f7c0d2e9a55
 // last-edited: 2026-11-12
 
@@ -11,11 +11,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/backup"
+	"github.com/falkcorp/mediacore/internal/backuparchive"
 )
 
 const joker = "THE-JOKER-WAS-HERE-0123456789"
@@ -166,5 +169,151 @@ func TestVerifyOpenCountsKeys(t *testing.T) {
 	e.rebuild()
 	if r, err := e.svc.Verify(ctx, a.ID, backup.VerifyOpen); err != nil || !r.OK {
 		t.Fatalf("open-only inspector: %+v, %v", r, err)
+	}
+}
+
+// A failed verification is shown as a code from a closed set; its error text
+// (host paths, internal errors) stays in the sidecar and the operator's log.
+func TestVerifyFailureCarriesAReasonCode(t *testing.T) {
+	e := newEnv(t)
+	e.settings.Compression, e.settings.VerifyAfterCreate = "none", false
+	var logs bytes.Buffer
+	e.opts.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	e.withJokerArtifact()
+	ctx := context.Background()
+	readSidecar := func(a backup.Archive) string {
+		t.Helper()
+		b, err := os.ReadFile(e.path(a) + backup.VerifySidecar)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+
+	// A pass has no reason, in the result and in the sidecar.
+	ok := e.create("manual")
+	r, err := e.svc.Verify(ctx, ok.ID, backup.VerifyEntries)
+	if err != nil || !r.OK || r.Reason != backup.VerifyReasonNone || strings.Contains(readSidecar(ok), `"reason"`) {
+		t.Fatalf("a good archive: %+v, %v, sidecar %s", r, err, readSidecar(ok))
+	}
+	if strings.Contains(logs.String(), "failed verification") {
+		t.Errorf("a pass was logged as a failure: %s", logs.String())
+	}
+
+	// One flipped bit: the outer checksum, then (sidecar fixed up) the manifest.
+	a := e.create("manual")
+	p := e.path(a)
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := bytes.Index(raw, []byte(joker))
+	if i < 0 {
+		t.Fatal("the artifact's bytes are not in the plain tar")
+	}
+	raw[i+3] ^= 0x01
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err = e.svc.Verify(ctx, a.ID, backup.VerifyChecksum)
+	if !errors.Is(err, backup.ErrChecksumMismatch) || r.Reason != backup.VerifyReasonChecksumMismatch {
+		t.Fatalf("checksum level: %+v, %v", r, err)
+	}
+	refreshSum(t, p)
+	r, err = e.svc.Verify(ctx, a.ID, backup.VerifyEntries)
+	if !errors.Is(err, backup.ErrManifest) || r.Reason != backup.VerifyReasonManifestMismatch {
+		t.Fatalf("entries level: %+v, %v", r, err)
+	}
+	if r.Detail == "" {
+		t.Error("the operator's Detail was dropped from the result")
+	}
+	// The catalogue shows the code; the sidecar keeps both.
+	list, err := e.svc.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed *backup.VerifyResult
+	for _, x := range list {
+		if x.ID == a.ID {
+			listed = x.Verified
+		}
+	}
+	if listed == nil || listed.OK || listed.Reason != backup.VerifyReasonManifestMismatch {
+		t.Fatalf("listed verification = %+v", listed)
+	}
+	if side := readSidecar(a); !strings.Contains(side, `"reason":"manifest_mismatch"`) || !strings.Contains(side, `"detail":"`) {
+		t.Errorf("sidecar = %s", side)
+	}
+	// The error text went to the operator's log, with the code.
+	out := logs.String()
+	if !strings.Contains(out, "an archive failed verification") || !strings.Contains(out, "reason=manifest_mismatch") ||
+		!strings.Contains(out, "does not match its recorded digest") {
+		t.Errorf("the failure was not logged with its reason and text: %s", out)
+	}
+
+	// A missing checksum sidecar.
+	if err := os.Remove(p + backup.ChecksumSidecar); err != nil {
+		t.Fatal(err)
+	}
+	if r, err = e.svc.Verify(ctx, a.ID, backup.VerifyChecksum); !errors.Is(err, backup.ErrNoChecksum) || r.Reason != backup.VerifyReasonNoChecksum {
+		t.Fatalf("no checksum: %+v, %v", r, err)
+	}
+
+	// A tar cut off inside an entry (the sidecar fixed up, so only the stream can say).
+	cut := e.create("manual")
+	cp := e.path(cut)
+	raw, err = os.ReadFile(cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i = bytes.Index(raw, []byte(joker))
+	if i < 0 {
+		t.Fatal("the artifact's bytes are not in the plain tar")
+	}
+	if err := os.WriteFile(cp, raw[:i+3], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refreshSum(t, cp)
+	if r, err = e.svc.Verify(ctx, cut.ID, backup.VerifyEntries); err == nil || r.Reason != backup.VerifyReasonMalformed {
+		t.Fatalf("a truncated tar: %+v, %v", r, err)
+	}
+
+	// An archive past a limit the build was started with.
+	e.opts.Limits = backuparchive.Limits{MaxEntries: 1}
+	e.rebuild()
+	if r, err = e.svc.Verify(ctx, ok.ID, backup.VerifyEntries); !errors.Is(err, backuparchive.ErrLimit) || r.Reason != backup.VerifyReasonLimitExceeded {
+		t.Fatalf("over the entry limit: %+v, %v", r, err)
+	}
+}
+
+// The sidecar lives where an operator or a network share can write, so what it
+// says about a reason is read as untrusted: only a code this build knows
+// comes back, and a pass has none.
+func TestVerifySidecarReasonIsReadAsUntrusted(t *testing.T) {
+	e := newEnv(t)
+	e.settings.VerifyAfterCreate = false
+	a := e.create("manual")
+	ctx := context.Background()
+	side := e.path(a) + backup.VerifySidecar
+	for _, c := range []struct {
+		name, body string
+		ok         bool
+		want       backup.VerifyReason
+	}{
+		{"known code", `{"at":"2026-11-12T01:00:00Z","level":"entries","ok":false,"detail":"x","reason":"limit_exceeded"}`, false, backup.VerifyReasonLimitExceeded},
+		{"a sidecar from before reason codes", `{"at":"2026-11-12T01:00:00Z","level":"entries","ok":false,"detail":"/srv/gotham: permission denied"}`, false, backup.VerifyReasonFailed},
+		{"made-up code", `{"at":"2026-11-12T01:00:00Z","level":"entries","ok":false,"detail":"x","reason":"/srv/gotham: permission denied"}`, false, backup.VerifyReasonFailed},
+		{"a code on a pass", `{"at":"2026-11-12T01:00:00Z","level":"entries","ok":true,"detail":"","reason":"checksum_mismatch"}`, true, backup.VerifyReasonNone},
+	} {
+		if err := os.WriteFile(side, []byte(c.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		list, err := e.svc.List(ctx)
+		if err != nil || len(list) != 1 || list[0].Verified == nil {
+			t.Fatalf("%s: %v %+v", c.name, err, list)
+		}
+		if v := list[0].Verified; v.OK != c.ok || v.Reason != c.want {
+			t.Errorf("%s: read as %+v, want ok=%v reason %q", c.name, v, c.ok, c.want)
+		}
 	}
 }
