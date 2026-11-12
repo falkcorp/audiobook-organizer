@@ -1,5 +1,5 @@
 // file: core/internal/libraryhttp/routes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7529d641-2d0b-4ac5-8a2c-fb770d54c388
 // last-edited: 2026-11-11
 
@@ -535,10 +535,19 @@ func TestBrowse_SymlinkToDirectoryIsNotADirectory(t *testing.T) {
 	if got := names(list(t, r, q("root", "books-library"))); !slices.Equal(got, []string{"Gotham"}) {
 		t.Fatalf("names = %v, a symlink is not a directory and is not listed", got)
 	}
-	for _, rel := range []string{"Gotham-Link", "Gotham-Link/Real Alley", "Cave-Link"} {
+	for _, rel := range []string{"Gotham-Link", "Gotham-Link/Real Alley"} {
 		res := r.get(browser, q("root", "books-library", "rel", rel))
 		if res.code != 400 || res.problem(t).Code != "library.not_a_directory" {
 			t.Errorf("rel %q = %d %s", rel, res.code, res.body)
+		}
+	}
+	// A link into the AppDir is refused by the guarded view where it is read,
+	// before the handler can call it a link: it is hidden, not merely not a
+	// directory.
+	for _, rel := range []string{"Cave-Link", "Cave-Link/root.json"} {
+		res := r.get(browser, q("root", "books-library", "rel", rel))
+		if res.code != 403 || res.problem(t).Code != "library.path_hidden" {
+			t.Errorf("rel %q = %d %s, want 403 library.path_hidden", rel, res.code, res.body)
 		}
 	}
 }
@@ -600,8 +609,18 @@ func TestBrowse_Truncated(t *testing.T) {
 	if len(l.Entries) != maxEntries || !l.Truncated {
 		t.Fatalf("entries = %d truncated = %v", len(l.Entries), l.Truncated)
 	}
-	if l.Entries[0].Name != "gargoyle-00000" || l.Entries[maxEntries-1].Name != fmt.Sprintf("gargoyle-%05d", maxEntries-1) {
-		t.Errorf("first/last = %s / %s", l.Entries[0].Name, l.Entries[maxEntries-1].Name)
+	// A truncated listing is the first maxEntries in the disk's own order, so
+	// which names are kept is the disk's choice: they are real, distinct and
+	// sorted.
+	seen := map[string]bool{}
+	for i, e := range l.Entries {
+		if !strings.HasPrefix(e.Name, "gargoyle-") || e.Rel != "Gotham/"+e.Name || seen[e.Name] {
+			t.Fatalf("entry %d = %+v (seen before: %v)", i, e, seen[e.Name])
+		}
+		seen[e.Name] = true
+		if i > 0 && l.Entries[i-1].Name >= e.Name {
+			t.Fatalf("entries are not sorted: %s before %s", l.Entries[i-1].Name, e.Name)
+		}
 	}
 	// Exactly at the cap is not truncated.
 	mkdirs(t, d, "Arkham")

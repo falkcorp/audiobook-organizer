@@ -1,5 +1,5 @@
 // file: core/library/registry.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 363acb46-296b-4fe8-bd5c-6b1160ab673b
 // last-edited: 2026-11-11
 
@@ -680,6 +680,23 @@ func (r *Root) FS(caller storage.Owner) (RootFS, error) {
 		return nil, fmt.Errorf("%w: %s", ErrNotReadable, r.spec.ID)
 	}
 	return r.viewFor(caller), nil
+}
+
+// GuardedFS returns a read-only view for a read made on a person's behalf, such
+// as the directory picker: the root's AppDir and Quarantine area are hidden and
+// refused whoever owns the root, a symlink that leads into them is refused where
+// it is read (the opened descriptor is examined, not only the name), and every
+// mutating method returns ErrReadOnlyRoot. Core's own code reads through
+// FS(CoreOwner), which is unguarded because core's own code is trusted; a
+// request is not core, so a request-driven read never takes that view.
+func (r *Root) GuardedFS() (RootReader, error) {
+	if err := r.usable(); err != nil {
+		return nil, err
+	}
+	c := r.base.readOnlyView()
+	c.sealed, c.hidden = true, true
+	c.race = r.m.seam.fsRace
+	return c, nil
 }
 
 func (r *Root) viewFor(caller storage.Owner) fsOps {
