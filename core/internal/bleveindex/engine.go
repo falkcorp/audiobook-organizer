@@ -1,7 +1,7 @@
 // file: core/internal/bleveindex/engine.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6c4bafa3-bd6e-4dbf-ae86-9a3f5c8eadd4
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // Package bleveindex implements storage/index on bleve's scorch backend
 // (05-storage §5S.3.8). One Engine serves every module's indexes: it opens
@@ -89,6 +89,8 @@ type Options struct {
 	SearchTimeout    time.Duration // bounds a Search, Count or Facets whose context has no deadline; 0 = DefaultSearchTimeout
 	MaxTermSearchers int           // leaf term searchers one search may create; 0 = DefaultMaxTermSearchers
 	PassBudget       time.Duration // time one reconcile pass spends on one index before yielding; 0 = DefaultPassBudget
+
+	MaxBackoffEntries int // marks of one index that back off after a failed load or apply; past it new failing marks are retried on every pass; 0 = DefaultMaxBackoffEntries
 }
 
 // Engine opens indexes and reconciles them. Its methods are safe for

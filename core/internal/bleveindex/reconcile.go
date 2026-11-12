@@ -1,7 +1,7 @@
 // file: core/internal/bleveindex/reconcile.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7d5cb0b4-ce7f-4ece-bf97-ab406d9fbee5
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package bleveindex
 
@@ -229,7 +229,7 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 				return ctx.Err()
 			}
 			i.failures.Add(1)
-			i.recordFailure(m.ID)
+			i.recordFailure(m)
 			i.log.Warn("index document failed to load; its mark stays pending and is retried with backoff",
 				"module", i.module, "index", i.name, "id", m.ID, "err", err)
 			continue
@@ -274,14 +274,14 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 // batchErr when none did.
 func (i *idx) applyEach(ctx context.Context, entries []entry, marks []index.Mark, batchErr error) ([]index.Mark, error) {
 	var ok []index.Mark
-	var refused []string
+	var refused []index.Mark
 	for n, e := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if err := i.applyBatch([]entry{e}); err != nil {
 			i.failures.Add(1)
-			refused = append(refused, e.id)
+			refused = append(refused, marks[n])
 			i.log.Warn("index refused a document; its mark stays pending and is retried with backoff",
 				"module", i.module, "index", i.name, "id", e.id, "err", err)
 			continue
@@ -291,8 +291,8 @@ func (i *idx) applyEach(ctx context.Context, entries []entry, marks []index.Mark
 	if len(ok) == 0 {
 		return nil, batchErr // the index is failing, not one document: no backoff for any of them
 	}
-	for _, id := range refused {
-		i.recordFailure(id)
+	for _, m := range refused {
+		i.recordFailure(m)
 	}
 	return ok, nil
 }
