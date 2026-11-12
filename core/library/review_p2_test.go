@@ -1,5 +1,5 @@
 // file: core/library/review_p2_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a9d0b21f-80d1-4624-8e39-94f7e4871e5d
 // last-edited: 2026-11-11
 
@@ -7,9 +7,11 @@ package library
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -338,5 +340,94 @@ func TestRenameSourceSwappedAfterItsNameCheckIsRefusedByDescriptor(t *testing.T)
 	}
 	if !r.exists("books-library", "x/held.m4b") || r.exists("books-library", "elsewhere") {
 		t.Error("the area moved")
+	}
+}
+
+// A directory that HOLDS an area is carried along by a rename, so the leaf of a
+// rename is refused by identity at the act as well as by name before it: a name
+// swapped for the area-holding directory after the name check. The identity is
+// faked (a second name for the directory a case-insensitive volume or a bind
+// mount would give) only once the name check has passed, so only the act's own
+// check can see it.
+func TestRenameLeafHoldingAnAreaIsRefusedByIdentityAtTheAct(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "state", "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var armed atomic.Bool
+	leaf := filepath.Join(dir, "x")
+	seam := func(i fs.FileInfo) (uint64, uint64, bool) {
+		if armed.Load() && i.Name() == "state" {
+			// "state" now answers with the identity of x: x is a second name for it.
+			st, err := os.Lstat(leaf)
+			if err != nil {
+				return 0, 0, false
+			}
+			return libfs.InodeOf(st)
+		}
+		return libfs.InodeOf(i)
+	}
+	s := spec("books-library", books, RoleLibrary)
+	s.Path, s.AppDir = dir, "state/app"
+	r := newRig(t, newStore(t), rigOpts{seams: seams{inodeOf: seam, fsRace: func(stage, name string) {
+		if stage == "checked" && name == "elsewhere" {
+			armed.Store(true)
+		}
+	}}}, s)
+	for _, d := range []string{"x", "y"} {
+		if err := os.Mkdir(r.abs("books-library", d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, err := r.m.Root("books-library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys, err := root.FS(books)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsys.RenameNoReplace("y", "z"); err != nil { // an ordinary directory moves
+		t.Fatalf("rename of an ordinary directory = %v", err)
+	}
+	if err := fsys.RenameNoReplace("x", "elsewhere"); !errors.Is(err, ErrReservedPath) {
+		t.Fatalf("rename of a leaf that is a second name for the area's holder = %v, want ErrReservedPath", err)
+	}
+	if !armed.Load() {
+		t.Fatal("the hook never ran")
+	}
+	if !r.exists("books-library", "x") || r.exists("books-library", "elsewhere") {
+		t.Error("the directory moved")
+	}
+}
+
+// renameFresh is for a name nobody else can be making (a ULID names it), and
+// where the filesystem has no atomic no-replace rename it checks the name is
+// absent: it never replaces a name that is there.
+func TestRenameFreshNeverReplacesAnExistingName(t *testing.T) {
+	r, f := transferRig(t, rigOpts{})
+	f.inject = noAtomicRename
+	r.put("books-library", "Gotham/held.m4b", "the one being moved")
+	r.put("books-library", "Gotham/taken.m4b", "a name that must keep its bytes")
+	root, err := r.m.Root("books-library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.m.renameFresh(root.rw, "Gotham/held.m4b", root.rw, "Gotham/taken.m4b")
+	if !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("renameFresh onto an existing name = %v, want fs.ErrExist", err)
+	}
+	if got, _ := r.read("books-library", "Gotham/taken.m4b"); got != "a name that must keep its bytes" {
+		t.Errorf("the existing name was replaced: %q", got)
+	}
+	if !r.exists("books-library", "Gotham/held.m4b") {
+		t.Error("the source was moved")
+	}
+	// Where the name is free it is a plain rename, with no placeholder made.
+	if err := r.m.renameFresh(root.rw, "Gotham/held.m4b", root.rw, "Gotham/free.m4b"); err != nil {
+		t.Fatalf("renameFresh onto a free name = %v", err)
+	}
+	if got, _ := r.read("books-library", "Gotham/free.m4b"); got != "the one being moved" || r.exists("books-library", "Gotham/held.m4b") {
+		t.Errorf("free name holds %q, source still there %v", got, r.exists("books-library", "Gotham/held.m4b"))
 	}
 }
