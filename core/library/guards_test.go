@@ -1,5 +1,5 @@
 // file: core/library/guards_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 00f78c64-25d1-4cc1-b1f0-153883e12400
 // last-edited: 2026-11-11
 
@@ -601,5 +601,137 @@ func TestResolvedReservedPathHelpers(t *testing.T) {
 	nroot, _ := r.m.Root("books-nested")
 	if !nroot.base.reservedInode("state", true) || nroot.base.reservedInode("state", false) || nroot.base.reservedInode("state/other", true) {
 		t.Error("the directory holding both areas is recognised wrongly (carries)")
+	}
+}
+
+// The areas are found by the directory's identity, not only by the spelling of a
+// path or where its symlinks lead. Here the AppDir is spelled through a link
+// ("state" is a link to "vault"), so a path that reaches the same directory as
+// "vault/app" is spelled differently from the AppDir even after its own links
+// are expanded; only the device and inode of the directories tell them apart
+// from an ordinary sibling.
+func TestReservedAreaIsFoundByIdentityWhenItIsSpelledThroughALink(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "vault", "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("vault", filepath.Join(dir, "state")); err != nil {
+		t.Fatal(err)
+	}
+	lib := spec("books-library", books, RoleLibrary)
+	lib.Path = dir
+	lib.AppDir, lib.Quarantine = "state/app", "state/held"
+	r := newRig(t, newStore(t), rigOpts{}, lib, spec("import-1", books, RoleImport))
+	root, err := r.m.Root("books-library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		rel     string
+		carries bool
+		want    bool
+	}{
+		"the AppDir by its real name":         {"vault/app", false, true},
+		"a file inside it by the real name":   {"vault/app/root.json", false, true},
+		"a sibling of the AppDir":             {"vault/other/x.m4b", false, false},
+		"the directory holding it, moved":     {"vault", true, true},
+		"the directory holding it, not moved": {"vault", false, false},
+		"an unrelated directory, moved":       {"Gotham", true, false},
+	} {
+		if got := root.base.reserved(c.rel, c.carries); got != c.want {
+			t.Errorf("reserved(%s: %q, carries=%v) = %v, want %v", name, c.rel, c.carries, got, c.want)
+		}
+	}
+	src := r.put("import-1", "Arkham/a.m4b", "bytes")
+	if _, err := r.m.Transfer(ctxbg(), books, src, Path{Root: "books-library", Rel: "vault/app/planted.m4b"}, copyOpts()); !errors.Is(err, ErrReservedPath) {
+		t.Errorf("Transfer into the AppDir by its real name = %v, want ErrReservedPath", err)
+	}
+	if r.exists("books-library", "vault/app/planted.m4b") {
+		t.Error("the refused transfer wrote into the AppDir")
+	}
+	if _, err := r.m.Transfer(ctxbg(), books, src, Path{Root: "books-library", Rel: "vault/other/a.m4b"}, copyOpts()); err != nil {
+		t.Errorf("Transfer into an ordinary sibling of the AppDir: %v", err)
+	}
+}
+
+// relWithinFold is a path-component prefix test that ignores case: ".MediaCore"
+// is the AppDir on a case-insensitive filesystem, but "statement" is not inside
+// "state".
+func TestRelWithinFold(t *testing.T) {
+	for _, c := range []struct {
+		rel, dir string
+		want     bool
+	}{
+		{"state/app", "state/app", true},
+		{"state/app/root.json", "state/app", true},
+		{"State/APP/root.json", "state/app", true},
+		{"state/app/root.json", "STATE/App", true},
+		{"state/apple", "state/app", false},
+		{"statement/a", "state", false},
+		{"state", "state/app", false},
+		{"state/app", "", false},
+		{"", "state", false},
+	} {
+		if got := relWithinFold(c.rel, c.dir); got != c.want {
+			t.Errorf("relWithinFold(%q, %q) = %v, want %v", c.rel, c.dir, got, c.want)
+		}
+	}
+}
+
+// A source that does not exist cannot be told from a protected path by
+// directory identity, so its protection rests on the spelling alone: a protected
+// path below it still protects it (a move of a directory carries the subtree),
+// and a sibling that only shares a prefix does not.
+func TestProtectedForMoveByNameWhenTheSourceDoesNotExist(t *testing.T) {
+	r, _ := transferRig(t, rigOpts{})
+	r.put("import-1", "Elsewhere/One.m4b", "bytes")
+	setProtected(t, r, filepath.Join(r.dirs["import-1"], "Arkham", "Nope", "Seeding"))
+	for name, c := range map[string]struct {
+		rel  string
+		want bool
+	}{
+		"the directory holding the protected path": {"Arkham/Nope", true},
+		"a grandparent of the protected path":      {"Arkham", true},
+		"the protected path itself":                {"Arkham/Nope/Seeding", true},
+		"a path below the protected one":           {"Arkham/Nope/Seeding/deeper", true},
+		"a sibling that shares a prefix":           {"Arkham/No", false},
+		"an unrelated directory":                   {"Elsewhere", false},
+	} {
+		got, err := r.m.protectedForMove(ctxbg(), Path{Root: "import-1", Rel: c.rel}, true)
+		if err != nil || got != c.want {
+			t.Errorf("protectedForMove(%s: %q) = %v, %v; want %v", name, c.rel, got, err, c.want)
+		}
+	}
+}
+
+// On a filesystem that folds case, two spellings of one directory differ by
+// name; only the directories' device and inode say they are the same. The
+// protected list names a directory by an upper-case spelling and the source is
+// that directory's parent by the lower-case one.
+func TestProtectedForMoveByIdentityWhenTheSpellingsDiffer(t *testing.T) {
+	probe := t.TempDir()
+	if err := os.Mkdir(filepath.Join(probe, "Fold"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(probe, "fold")); err != nil {
+		t.Skip("the filesystem is case-sensitive, so two spellings are two directories")
+	}
+	r, _ := transferRig(t, rigOpts{})
+	r.put("import-1", "Arkham/Seeding/Gotham.m4b", "seeding bytes")
+	r.put("import-1", "Arkham/Done/Gotham.m4b", "finished bytes")
+	for name, c := range map[string]struct {
+		listed string
+		rel    string
+		want   bool
+	}{
+		"a protected directory below the source":   {"ARKHAM/Seeding", "Arkham", true},
+		"a protected directory holding the source": {"ARKHAM", "Arkham/Seeding", true},
+		"another directory of the same parent":     {"ARKHAM/Seeding", "Arkham/Done", false},
+	} {
+		setProtected(t, r, filepath.Join(r.dirs["import-1"], filepath.FromSlash(c.listed)))
+		got, err := r.m.protectedForMove(ctxbg(), Path{Root: "import-1", Rel: c.rel}, true)
+		if err != nil || got != c.want {
+			t.Errorf("protectedForMove(%s: listed %q, source %q) = %v, %v; want %v", name, c.listed, c.rel, got, err, c.want)
+		}
 	}
 }
