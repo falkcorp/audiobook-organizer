@@ -470,7 +470,9 @@ internal/books/cutover/m3.SensitivePrefixes
 internal/books/cutover/m3.SourceKeys
 internal/books/cutover/m3.SourcePrefixes
 internal/books/cutover/m3.SourceRanges
+internal/books/cutover/m3.boundedAtoms
 internal/books/cutover/m3.bytesMember
+internal/books/cutover/m3.clip
 internal/books/cutover/m3.containsRole
 internal/books/cutover/m3.decodeIdentity
 internal/books/cutover/m3.decodeInviteGrant
