@@ -1,0 +1,18 @@
+# file: core/outbox/testdata/series.golden
+# version: 1.0.0
+# guid: ec86813c-c72b-4e1a-a9b0-fd4eca0c8ede
+# last-edited: 2026-11-12
+#
+# The mediacore.outbox scope's series (05-events §5E.10, 05-metrics §6 item 5):
+# family<TAB>type<TAB>labels, checked by metricstest.AssertSeries in
+# TestOutboxMetrics_SeriesGolden.
+mediacore_outbox_dead_letters	gauge	consumer
+mediacore_outbox_delivered_total	counter	consumer,topic
+mediacore_outbox_filtered_total	counter	consumer,topic
+mediacore_outbox_intake_age_seconds	gauge	topic
+mediacore_outbox_intake_pending	gauge	topic
+mediacore_outbox_lag_seconds	gauge	consumer
+mediacore_outbox_orphans_dropped_total	counter	topic
+mediacore_outbox_pending	gauge	consumer,state
+mediacore_outbox_retries_total	counter	consumer,topic
+mediacore_outbox_staged_total	counter	topic
