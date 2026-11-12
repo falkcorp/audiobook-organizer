@@ -1,5 +1,5 @@
 // file: core/config/sectioncache.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e92e6553-a421-4c45-84ef-2bc4c13c0d65
 // last-edited: 2026-11-12
 
@@ -48,6 +48,8 @@ import (
 //   - keyInfo.resolved is a *jsonschema.Resolved, read through Validate only.
 //     Validate allocates its own state per call and writes to no schema, so any
 //     number of stores may validate with one concurrently.
+//   - section.claimPaths is assigned once, by buildSection, and read by
+//     checkOverlap and the overlap index, which only range over it.
 //   - The one writer of a published section is Store.register (sec.bind) and
 //     Store.install (sec.eff, sec.pend): both write the instance, never the
 //     template.
@@ -232,6 +234,9 @@ func (t *section) instantiate(sp *sectionSpec) *section {
 		schema:    t.schema, // shared: frozen once built
 		defaults:  slices.Clone(t.defaults),
 		elemZero:  slices.Clone(t.elemZero),
+		// shared: the claimed paths are strings in a slice nothing writes
+		// after the build (computeClaims; every reader only ranges over it).
+		claimPaths: t.claimPaths,
 	}
 	copies := make(map[*keyInfo]*keyInfo, len(t.keys))
 	var cp func(k *keyInfo) *keyInfo
