@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/review_edges_internal_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 074b0fd6-cb7c-47f2-ac1e-898cda0f5f32
 // last-edited: 2026-11-11
 
@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/integrations"
 )
@@ -416,5 +417,49 @@ func TestForget_PrunesTheMaps(t *testing.T) {
 		if s, rs, sp := sizes(); [3]int{s, rs, sp} != step.want {
 			t.Fatalf("after forgetting %v: scopes=%d refScope=%d persisted=%d, want %v", step.ref, s, rs, sp, step.want)
 		}
+	}
+}
+
+// TestHostPorts_NormalisesOrigins (round-2 MAJOR 1): an origin becomes the
+// lower-case host:port every endpoint is compared as, the default port filled
+// in; an entry that names no host is dropped.
+func TestHostPorts_NormalisesOrigins(t *testing.T) {
+	got := hostPorts([]string{"HTTP://Nas.Example.Test", "https://nas.example.test", "smtp://Relay.Example.Test:25", " http://spaced.example.test:8080 ", "bad", "http://", "://x"})
+	want := map[string]bool{"nas.example.test:80": true, "nas.example.test:443": true, "relay.example.test:25": true, "spaced.example.test:8080": true}
+	if len(got) != len(want) {
+		t.Fatalf("hostPorts = %v, want %v", got, want)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("hostPorts = %v, missing %q", got, k)
+		}
+	}
+}
+
+// TestMemStore_ForgetScope: the in-memory store drops a scope's hold and quota
+// rows and only that scope's, even where another scope's name extends it.
+func TestMemStore_ForgetScope(t *testing.T) {
+	ctx := context.Background()
+	m := newMemStore()
+	until := time.Date(2039, 4, 1, 23, 0, 0, 0, time.UTC)
+	for _, sc := range []string{"gotham", "gotham-annex"} {
+		if err := m.PutHold(ctx, integrations.Hold{Scope: sc, Class: integrations.ClassAuth, Until: until}); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.PutQuota(ctx, sc, "query", "2039-04-01", 6); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.ForgetScope(ctx, "gotham"); err != nil {
+		t.Fatal(err)
+	}
+	if hs, _ := m.Holds(ctx); len(hs) != 1 || hs[0].Scope != "gotham-annex" {
+		t.Fatalf("holds = %v", hs)
+	}
+	if _, used, _ := m.Quota(ctx, "gotham", "query"); used != 0 {
+		t.Fatalf("gotham quota = %d, want gone", used)
+	}
+	if _, used, _ := m.Quota(ctx, "gotham-annex", "query"); used != 6 {
+		t.Fatalf("a scope whose name extends the forgotten one lost its quota: %d", used)
 	}
 }
