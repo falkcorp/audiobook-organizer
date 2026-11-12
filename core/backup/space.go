@@ -1,5 +1,5 @@
 // file: core/backup/space.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c4a7e19d-6b25-4f83-a0d1-3e9b7c52f860
 // last-edited: 2026-11-12
 
@@ -86,9 +86,15 @@ func requireRoom(d Disk, margin uint64, dir string, bytes uint64) error {
 
 // uploadCheckBytes is how many bytes an upload writes between two looks at the
 // free space of the backup directory: each look asks for room for the next
-// interval beyond the margin, so the volume cannot be driven under the margin
-// by more than the writes of one interval, whatever the upload's length (which
-// nobody knows until it ends).
+// interval beyond the margin, so where the free-space figure keeps up with the
+// writes the volume is not driven under the margin by more than one interval of
+// them, whatever the upload's length (which nobody knows until it ends).
+//
+// That is a bound on what is asked, not a promise about the volume. A
+// filesystem that reports free space late (ZFS counts a write when its
+// transaction group commits, a network mount when its cache is flushed) can
+// take more than an interval before the figure falls; the margin is the
+// cushion there, and the interval says only how often the figure is read.
 const uploadCheckBytes = 32 << 20
 
 // spaceWriter writes to w and, before it writes more than the room it has
@@ -96,7 +102,10 @@ const uploadCheckBytes = 32 << 20
 // for this one write, if that is larger). A check that fails fails the write,
 // with that error, before the bytes go anywhere. window bytes are promised to
 // it when it is made: the caller's own check, made before the file was opened,
-// is the first one.
+// is the first one. It limits the writes made between looks at a free-space
+// figure, as that figure shows them; what a filesystem whose figure lags its
+// writes lets through in between is uploadCheckBytes's caveat, not this
+// type's to close.
 type spaceWriter struct {
 	w      io.Writer
 	check  func(bytes uint64) error

@@ -1,5 +1,5 @@
 // file: core/backup/publish_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 12ec280e-1941-42c2-966e-f694e2ff48ae
 // last-edited: 2026-11-12
 
@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -337,6 +338,58 @@ func TestPublishOnAFilesystemWithoutHardLinks(t *testing.T) {
 	})
 }
 
+// The fallback is a different way to publish, with a visible empty claim for an
+// instant, so the operator is told once that the volume is on it. Once, not per
+// archive: a backup every night would otherwise say it every night. And never
+// with the two paths a *os.LinkError carries, and never when links work.
+func TestPublishSaysOnceThatTheVolumeCannotLink(t *testing.T) {
+	warnings := func(logs string) (n int) {
+		for line := range strings.SplitSeq(logs, "\n") {
+			if strings.Contains(line, "level=WARN") && strings.Contains(line, "hard link") {
+				n++
+			}
+		}
+		return n
+	}
+	t.Run("links work", func(t *testing.T) {
+		e := newEnv(t)
+		var logs bytes.Buffer
+		e.opts.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+		e.rebuild()
+		e.create("manual")
+		if _, err := e.svc.Import(context.Background(), "", bytes.NewReader(archivesFromElsewhere(t, 1)[0])); err != nil {
+			t.Fatal(err)
+		}
+		if n := warnings(logs.String()); n != 0 {
+			t.Fatalf("%d hard-link warnings on a volume that links:\n%s", n, logs.String())
+		}
+	})
+	t.Run("links do not", func(t *testing.T) {
+		e := newEnv(t)
+		var logs bytes.Buffer
+		e.opts.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+		e.opts.Disk = backup.Disk{Link: func(oldname, newname string) error {
+			return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: errors.ErrUnsupported}
+		}}
+		e.rebuild()
+		e.create("manual")
+		for range 2 { // three archives in all: the warning is per service, not per archive
+			if _, err := e.svc.Import(context.Background(), "", bytes.NewReader(archivesFromElsewhere(t, 1)[0])); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if n := warnings(logs.String()); n != 1 {
+			t.Fatalf("%d hard-link warnings for three archives, want one:\n%s", n, logs.String())
+		}
+		if strings.Contains(logs.String(), e.backupDir) || strings.Contains(logs.String(), filepath.Base(e.backupDir)+string(filepath.Separator)) {
+			t.Errorf("the warning names the operator's directory:\n%s", logs.String())
+		}
+		if !strings.Contains(logs.String(), "unsupported operation") {
+			t.Errorf("the warning does not say why:\n%s", logs.String())
+		}
+	})
+}
+
 // Two uploads in the same second, with the clock held still, each keep their
 // archive: every one is under a name of its own and holds its own bytes.
 func TestImportsInTheSameSecondEachKeepTheirArchive(t *testing.T) {
@@ -433,5 +486,136 @@ func TestImportStopsWhenTheVolumeFillsMidUpload(t *testing.T) {
 	}
 	if names := e.names(); len(names) != 0 {
 		t.Fatalf("a stopped import left %v", names)
+	}
+}
+
+// scanCounter is the Store of a test that must know when the catalogue scan of
+// an import has run. Every scan describes each archive it lists, and describe
+// asks the Store for the live install ID once per archive, so with one archive
+// in the directory each scan is one call. When the call numbered target comes,
+// reached is closed.
+type scanCounter struct {
+	backup.Store
+	calls   atomic.Int64
+	target  atomic.Int64
+	reached chan struct{}
+}
+
+func (c *scanCounter) InstallID() string {
+	if c.calls.Add(1) == c.target.Load() {
+		close(c.reached)
+	}
+	return c.Store.InstallID()
+}
+
+// within fails the test if ch is not closed (or sent on) in a generous time. It
+// is a guard against a deadlock, not a measurement.
+func within[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(60 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		panic("unreachable")
+	}
+}
+
+// Two imports of one archive must store it once. The interleaving is forced:
+// the first import is held at its link (it has passed both of its duplicate
+// checks and holds the import lock), the second is let run until its first
+// duplicate check has passed (the first's archive has no name yet, so it does),
+// and only then is the first let go. Without a second check under the lock the
+// second import then publishes a second copy, the catalogue lists one of the two,
+// and deleting that one brings the other back under the same ID.
+func TestConcurrentImportsOfOneArchiveStoreItOnce(t *testing.T) {
+	e := newEnv(t)
+	sc := &scanCounter{Store: e.opts.Store, reached: make(chan struct{})}
+	e.opts.Store = sc
+	var armed, held atomic.Bool
+	atLink, release := make(chan struct{}), make(chan struct{})
+	e.opts.Disk = backup.Disk{Link: func(oldname, newname string) error {
+		if armed.Load() && held.CompareAndSwap(false, true) {
+			close(atLink)
+			<-release
+		}
+		return os.Link(oldname, newname)
+	}}
+	e.rebuild()
+	seed := e.create("manual") // one archive, so that every scan makes one describe call
+	blob := archivesFromElsewhere(t, 1)[0]
+	armed.Store(true)
+
+	type outcome struct {
+		a   backup.Archive
+		err error
+	}
+	start := func() <-chan outcome {
+		ch := make(chan outcome, 1)
+		go func() {
+			a, err := e.svc.Import(context.Background(), "", bytes.NewReader(blob))
+			ch <- outcome{a, err}
+		}()
+		return ch
+	}
+	first := start()
+	within(t, atLink, "the first import to reach its link")
+	// The second import runs while the first holds the lock: reading its upload
+	// and its first check must not wait for it.
+	sc.target.Store(sc.calls.Load() + 1)
+	second := start()
+	within(t, sc.reached, "the second import to pass its first duplicate check")
+	close(release)
+
+	a, b := within(t, first, "the first import"), within(t, second, "the second import")
+	if a.err != nil {
+		t.Fatalf("the first import: %v", a.err)
+	}
+	if !errors.Is(b.err, backup.ErrManifest) || !strings.Contains(b.err.Error(), "already in the catalogue") {
+		t.Fatalf("the second import = %+v, %v; want the duplicate refusal", b.a, b.err)
+	}
+	if l := leftovers(e); len(l) != 0 {
+		t.Fatalf("leftover %v", l)
+	}
+	files := 0
+	for _, n := range e.names() {
+		if strings.HasSuffix(n, ".tar.gz") || strings.HasSuffix(n, ".tar") || strings.HasSuffix(n, ".tar.zst") {
+			files++
+		}
+	}
+	if files != 2 {
+		t.Fatalf("%d archive files %v, want the seed and one import", files, e.names())
+	}
+	// The symptom of the stored duplicate: delete the import, and it is still
+	// listed.
+	if err := e.svc.Delete(context.Background(), a.a.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, err := e.svc.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != seed.ID {
+		t.Fatalf("after deleting the import the catalogue lists %d archives, want the seed alone", len(list))
+	}
+}
+
+// The first duplicate check refuses before the upload is read through: an
+// archive whose ID is listed is turned away on its manifest, the first entry.
+// The copy here is cut short, so reading it through would fail some other way,
+// and that is what the answer would be without the early check.
+func TestImportRefusesADuplicateBeforeReadingItThrough(t *testing.T) {
+	e := newEnv(t)
+	blob := archivesFromElsewhere(t, 1)[0]
+	if _, err := e.svc.Import(context.Background(), "", bytes.NewReader(blob)); err != nil {
+		t.Fatal(err)
+	}
+	cut := blob[:len(blob)-len(blob)/4]
+	_, err := e.svc.Import(context.Background(), "", bytes.NewReader(cut))
+	if !errors.Is(err, backup.ErrManifest) || !strings.Contains(err.Error(), "already in the catalogue") {
+		t.Fatalf("a truncated copy of a listed archive = %v, want the duplicate refusal", err)
+	}
+	if l := leftovers(e); len(l) != 0 {
+		t.Fatalf("leftover %v", l)
 	}
 }
