@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_vetoes.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: d3a96b50-1e87-4f2c-8a64-b05c7e19f3d2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -211,7 +211,8 @@ func mergeSurvivorPathResolver(store retiredVetoReaderStore, follows map[string]
 // recordRetiredVersionApplied writes the `applied` decision record of one
 // retired-versions row. The Apply calls it (recordApplied) after the row's
 // retire has committed, with the store it already holds
-// (fixer.p.deps.OpsStore()). The revert writes the `undone` record itself
+// (the fixer stores on the apply's context, FixerStores.OpsStore). The
+// revert writes the `undone` record itself
 // (audiobooks.RevertService.recordRetireUndone), as the undo does not reach
 // into this package. The record is a label: it vetoes nothing. A retry that
 // finds the same record already there writes nothing

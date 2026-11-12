@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 0c4f7b92-6d18-4a35-b8e1-3f95a27d4c60
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -34,7 +34,7 @@ func (rf *retiredFixture) enableApply() {
 // planAll runs the engine's plan (guards included) and returns the result.
 func (rf *retiredFixture) planAll() *repairs.PlanResult {
 	rf.t.Helper()
-	res, err := repairs.RunPlan(context.Background(), rf.f, nil, repairs.PlanDeps{Guard: rf.st}, &fakeReporter{})
+	res, err := repairs.RunPlan(rf.cx(), rf.f, nil, repairs.PlanDeps{Guard: rf.st}, &fakeReporter{})
 	require.NoError(rf.t, err)
 	return res
 }
@@ -50,7 +50,7 @@ func (rf *retiredFixture) applyRows(f repairs.Fixer, res *repairs.PlanResult, id
 func (rf *retiredFixture) applyRowsAs(f repairs.Fixer, res *repairs.PlanResult, ids []string, dry bool, opID, planOpID, actorUserID string) *repairs.ApplyResult {
 	rf.t.Helper()
 	w := repairs.NewWriter(rf.st, rf.st, f.ID(), "bulk_update", "repairs-").WithJournal(rf.st, rf.st, opID).WithFieldStates(rf.st)
-	out, err := repairs.RunApply(context.Background(), f, res, planOpID, ids, dry,
+	out, err := repairs.RunApply(rf.cx(), f, res, planOpID, ids, dry,
 		repairs.ApplyDeps{Guard: rf.st, Writer: w, OpID: opID, StandDown: &countingStandDown{}, ActorUserID: actorUserID}, &fakeReporter{})
 	require.NoError(rf.t, err)
 	return out
@@ -304,8 +304,8 @@ func TestRetiredApply_ResumeFinishesTheTail(t *testing.T) {
 	ids := []string{rf.ids["would-retire"]}
 	var armed atomic.Bool
 	armed.Store(true)
-	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
-		inner, err := rf.f.newJournaledRetireWriter(w)
+	rf.f.retireWriterFor = func(ctx context.Context, w *repairs.Writer) (retireWriter, error) {
+		inner, err := rf.f.newJournaledRetireWriter(ctx, w)
 		return failingExternalIDs{inner, &armed}, err
 	}
 	wr, holder := rf.ids["would-retire"], rf.ids["primary"]
@@ -539,8 +539,8 @@ func TestRetiredApply_FreshPlanFinishesACutOffRetire(t *testing.T) {
 	res := rf.planAll()
 	var armed atomic.Bool
 	armed.Store(true)
-	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
-		inner, err := rf.f.newJournaledRetireWriter(w)
+	rf.f.retireWriterFor = func(ctx context.Context, w *repairs.Writer) (retireWriter, error) {
+		inner, err := rf.f.newJournaledRetireWriter(ctx, w)
 		return failingExternalIDs{inner, &armed}, err
 	}
 	wr, holder := rf.ids["would-retire"], rf.ids["primary"]
@@ -700,7 +700,7 @@ func TestRetiredApply_SetMergedIntoThatSkipsIsNotAWrite(t *testing.T) {
 	rf.mergedInto("shell", "primary")
 	opID := "op-merged-skip"
 	w := repairs.NewWriter(rf.st, rf.st, rf.f.ID(), "bulk_update", "repairs-").WithJournal(rf.st, rf.st, opID).WithFieldStates(rf.st)
-	rw, err := rf.f.newJournaledRetireWriter(w)
+	rw, err := rf.f.newJournaledRetireWriter(context.Background(), w)
 	require.NoError(t, err)
 	jw := rw.(*journaledRetireWriter)
 	jw.books = staleMergedIntoReader{real: jw.books}

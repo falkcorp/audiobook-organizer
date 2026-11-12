@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_fixer_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 8fc253d1-c085-4eca-a2f9-52cf09ca04b0
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -32,6 +32,17 @@ type retiredFixture struct {
 	now  time.Time
 	ids  map[string]string // fixture name -> book id
 	f    *retiredVersionsFixer
+	// ctx is the context every plan and apply of the fixture runs under; nil
+	// is context.Background(). shellOnly sets it.
+	ctx context.Context
+}
+
+// cx is the fixture's context.
+func (rf *retiredFixture) cx() context.Context {
+	if rf.ctx != nil {
+		return rf.ctx
+	}
+	return context.Background()
 }
 
 func newRetiredFixture(t *testing.T) *retiredFixture {
@@ -105,7 +116,7 @@ func (rf *retiredFixture) absent(rel string) string { return filepath.Join(rf.ro
 
 func (rf *retiredFixture) plan() map[string]repairs.Row {
 	rf.t.Helper()
-	rows, err := rf.f.Plan(context.Background(), nil, &fakeReporter{})
+	rows, err := rf.f.Plan(rf.cx(), nil, &fakeReporter{})
 	require.NoError(rf.t, err)
 	out := map[string]repairs.Row{}
 	for _, r := range rows {

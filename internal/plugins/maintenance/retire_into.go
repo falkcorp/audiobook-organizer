@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.23.1
+// version: 1.23.2
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -223,7 +223,7 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 	}
 	steps := 0
 	// 1. listening state
-	did, err := followUserStateInto(p, w, target, id, slice)
+	did, err := followUserStateInto(ctx, p, w, target, id, slice)
 	steps += did
 	if err != nil {
 		return steps, fmt.Errorf("carry listening state of %s: %w", id, err)
@@ -341,8 +341,13 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 // left to do. A store that cannot follow refuses only a book somebody has
 // listened to. The count is the snapshots journaled, also on an error: a
 // persisted before-snapshot is a written step.
-func followUserStateInto(p *Plugin, w *repairs.Writer, target, id string, slice *merge.SliceMapping) (int, error) {
-	um := p.deps.MergeUserStateStore()
+func followUserStateInto(ctx context.Context, p *Plugin, w *repairs.Writer, target, id string, slice *merge.SliceMapping) (int, error) {
+	// The user-state store is the run's own (the fixer stores on ctx), never the
+	// plugin's: the three fixers that retire through here run under the shell.
+	var um merge.UserStateRepairStore
+	if st := p.fixerStores(ctx); st != nil {
+		um = st.MergeUserStateStore()
+	}
 	if um == nil {
 		return 0, errors.New("user-state store unavailable")
 	}
@@ -431,7 +436,11 @@ func followUserStateInto(p *Plugin, w *repairs.Writer, target, id string, slice 
 // its first write (a failed read, or a failed guard read) is noted the same
 // way: it wrote nothing either.
 func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, groupID string, rules handOffRules) error {
-	vps := p.deps.VersionPrimaryStore()
+	st := p.fixerStores(ctx)
+	if st == nil {
+		return nil
+	}
+	vps := st.VersionPrimaryStore()
 	if vps == nil {
 		return nil
 	}

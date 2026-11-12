@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_apply.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 5e8a2c71-3b94-4d06-a1f7-92c06d3e8b15
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -430,8 +430,12 @@ type journaledRetireWriter struct {
 	ext   retiredExternalIDMover
 }
 
-func (f *retiredVersionsFixer) newJournaledRetireWriter(w *repairs.Writer) (retireWriter, error) {
-	ops := f.p.deps.OpsStore()
+func (f *retiredVersionsFixer) newJournaledRetireWriter(ctx context.Context, w *repairs.Writer) (retireWriter, error) {
+	st := f.p.fixerStores(ctx)
+	if st == nil {
+		return nil, errors.New("database not initialized")
+	}
+	ops := st.OpsStore()
 	if ops == nil {
 		return nil, errors.New("database not initialized")
 	}
@@ -678,7 +682,7 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 	if w == nil {
 		return fmt.Errorf("%s: no writer", retiredVersionsFixerID)
 	}
-	rw, err := f.retireWriterFor(w)
+	rw, err := f.retireWriterFor(ctx, w)
 	if err != nil {
 		// The Writer's own refusal of a run that had no stand-down (the flag
 		// flipped as the run started) is the first thing the constructor can
@@ -735,7 +739,7 @@ func (f *retiredVersionsFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		// tail is still pending: a retire with nothing left to finish
 		// (already_retired) never comes here, and its missing record stays
 		// missing (todo.d/2026-10-28-retired-versions-decision-record-gaps.md).
-		f.recordAppliedForVersions(w, run, ld.shell.ID, ld.holder, ld.versionIDs)
+		f.recordAppliedForVersions(ctx, w, run, ld.shell.ID, ld.holder, ld.versionIDs)
 		return f.finishRetire(ctx, rw, run, ld.shell.ID, ld.holder, 0, ld.planned)
 	}
 	if locked.RetryLater {
@@ -847,7 +851,7 @@ func (f *retiredVersionsFixer) retire(ctx context.Context, w *repairs.Writer, rw
 	steps++
 	// The retire has committed: write its decision record. It is a label, so
 	// the tail below runs whether or not it lands.
-	f.recordApplied(w.Provenance(), w.OpID(), shell, holder, versionID)
+	f.recordApplied(ctx, w.Provenance(), w.OpID(), shell, holder, versionID)
 	return f.finishRetire(ctx, rw, run, shell, holder, steps, planned)
 }
 
@@ -870,8 +874,15 @@ var retiredApplyLog = logger.New("maintenance")
 // Provenance for this run's own retire, retireOpProvenance for the retire of an
 // earlier op): the record says which plan it came from and who ran it. A retire
 // with no actor, one a system enqueued, is recorded as automatic.
-func (f *retiredVersionsFixer) recordApplied(prov repairs.ApplyProvenance, opID, shell, holder, versionID string) {
-	_, err := recordRetiredVersionApplied(f.p.deps.OpsStore(), decisions.RetiredVersionsEvent{
+func (f *retiredVersionsFixer) recordApplied(ctx context.Context, prov repairs.ApplyProvenance, opID, shell, holder, versionID string) {
+	// The record is written through the run's own store (the fixer stores on
+	// ctx), like every other write of the row; a nil store is the same refusal
+	// recordRetiredVersionApplied has always answered.
+	var ops OpsStore
+	if st := f.p.fixerStores(ctx); st != nil {
+		ops = st.OpsStore()
+	}
+	_, err := recordRetiredVersionApplied(ops, decisions.RetiredVersionsEvent{
 		ShellID: shell, TargetID: holder, VersionID: versionID, OpID: opID, PlanRowID: shell,
 		PlanOpID: prov.PlanOpID, ActorUserID: prov.ActorUserID, ActorName: prov.ActorName,
 		ReasonText: "the shell's files were retired under its holder",
@@ -897,7 +908,7 @@ func (f *retiredVersionsFixer) recordApplied(prov repairs.ApplyProvenance, opID,
 // The record names the holder as it is now, which can differ from the holder of
 // the original op if the version was rehomed since. Dedup is by (version, op)
 // and unaffected; only the recorded provenance of the target differs.
-func (f *retiredVersionsFixer) recordAppliedForVersions(w *repairs.Writer, run *retiredRun, shell, holder string, versionIDs []string) {
+func (f *retiredVersionsFixer) recordAppliedForVersions(ctx context.Context, w *repairs.Writer, run *retiredRun, shell, holder string, versionIDs []string) {
 	if len(versionIDs) == 0 {
 		return
 	}
@@ -911,9 +922,9 @@ func (f *retiredVersionsFixer) recordAppliedForVersions(w *repairs.Writer, run *
 		if v := &vs[i]; v.RetireOpID != "" && slices.Contains(versionIDs, v.ID) {
 			prov := w.Provenance()
 			if v.RetireOpID != w.OpID() {
-				prov = f.retireOpProvenance(v.RetireOpID)
+				prov = f.retireOpProvenance(ctx, v.RetireOpID)
 			}
-			f.recordApplied(prov, v.RetireOpID, shell, holder, v.ID)
+			f.recordApplied(ctx, prov, v.RetireOpID, shell, holder, v.ID)
 		}
 	}
 }
@@ -923,8 +934,12 @@ func (f *retiredVersionsFixer) recordAppliedForVersions(w *repairs.Writer, run *
 // the zero provenance (an automatic record) when the row cannot be read, as a
 // discarded op's cannot, or names none. A label's provenance never fails the
 // tail, so a read failure is logged and the record is written without it.
-func (f *retiredVersionsFixer) retireOpProvenance(opID string) repairs.ApplyProvenance {
-	reader, ok := f.p.deps.OperationQueueStore().(repairs.OpReader)
+func (f *retiredVersionsFixer) retireOpProvenance(ctx context.Context, opID string) repairs.ApplyProvenance {
+	st := f.p.fixerStores(ctx)
+	if st == nil {
+		return repairs.ApplyProvenance{}
+	}
+	reader, ok := st.OperationQueueStore().(repairs.OpReader)
 	if !ok {
 		return repairs.ApplyProvenance{}
 	}
