@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/run.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 20df00da-4b40-4e5b-9987-4ef6293f76dd
-// last-edited: 2026-11-08
+// last-edited: 2026-11-12
 
 package crashmatrix
 
@@ -25,6 +25,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/cockroachdb/pebble/v2/vfs/errorfs"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
@@ -110,8 +111,11 @@ func run(tb testing.TB, rep reporter, s Scenario, m mode) map[string]bool {
 		}
 	}
 	observed := map[string]bool{}
+	// One cache for every boot of this run: the kernel builds the same core
+	// sections each time, and the cache is the run's own, not process state.
+	cache := config.NewSectionCache()
 	for _, f := range s.Fixtures {
-		fr := &fixtureRun{tb: tb, rep: rep, s: s, f: f, registered: registered, retried: retried, observed: observed, nestedSeen: map[[sha256.Size]byte]bool{}}
+		fr := &fixtureRun{tb: tb, rep: rep, s: s, f: f, cache: cache, registered: registered, retried: retried, observed: observed, nestedSeen: map[[sha256.Size]byte]bool{}}
 		fr.run(m)
 	}
 	return observed
@@ -123,6 +127,7 @@ type fixtureRun struct {
 	rep        reporter
 	s          Scenario
 	f          Fixture
+	cache      *config.SectionCache // shared by every boot of the run (newInjector)
 	registered map[string]bool
 	retried    map[string]bool // the labels of Row.Retried writers
 
@@ -561,7 +566,7 @@ var errPanicked = errors.New("crashmatrix: the boot panicked")
 
 // boot is one boot of Build over rec, to readiness and a clean stop.
 func (fr *fixtureRun) boot(rec *bootseamtest.Recorder) (err error) {
-	inj := newInjector(fr.f, rec, nil)
+	inj := newInjector(fr.f, rec, nil, fr.cache)
 	defer func() {
 		if p := recover(); p != nil {
 			err = fmt.Errorf("%w: %v", errPanicked, p)

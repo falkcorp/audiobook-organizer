@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/fixture.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 127402ea-7c81-40e4-a90a-159f4d64dcdc
-// last-edited: 2026-11-08
+// last-edited: 2026-11-12
 
 package crashmatrix
 
@@ -136,7 +136,7 @@ func KillAt(tb testing.TB, f Fixture, build func(testing.TB, *Injector) error, l
 		tb.Fatal(err)
 	}
 	rec := bootseamtest.New(mem, bootseamtest.Options{Clones: true, Stores: []string{f.dbPath()}})
-	inj := newInjector(f, rec, nil)
+	inj := newInjector(f, rec, nil, nil)
 	berr := build(tb, inj)
 	ferr := inj.finish(context.Background())
 	var killed *vfs.MemFS
@@ -264,7 +264,7 @@ func Boot(t testing.TB, build func(testing.TB, *Injector) error, f Fixture) erro
 	if err != nil {
 		return err
 	}
-	inj := newInjector(f, nil, mem)
+	inj := newInjector(f, nil, mem, nil)
 	berr := build(t, inj)
 	ferr := inj.finish(context.Background())
 	if err := save(mem, f); err != nil {

@@ -1,7 +1,7 @@
 // file: core/config/types.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: e2e5754c-03e1-42ea-83cb-5ae606cfee3a
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package config
 
@@ -51,9 +51,14 @@ type Options struct {
 	// (retired.go); RetiredSet lists what is set.
 	Retired []RetiredName
 	Logger  *slog.Logger
-	Metrics *metrics.Scope   // core scope "mediacore.config" (05-metrics); or Store.Instrument later
-	Secrets secrets.Resolver // may be nil until secrets opens; Refs resolve after SetSecrets
-	Now     func() time.Time
+	// SectionCache, when set, is where Register gets a section built: the
+	// stores that share one build each distinct section once. nil = no
+	// sharing; every Register builds its own. The cache is the caller's to
+	// create and keep (NewSectionCache); config holds none of its own.
+	SectionCache *SectionCache
+	Metrics      *metrics.Scope   // core scope "mediacore.config" (05-metrics); or Store.Instrument later
+	Secrets      secrets.Resolver // may be nil until secrets opens; Refs resolve after SetSecrets
+	Now          func() time.Time
 	// OwnerSet reports whether an owner identity is set and an owner verifier
 	// is configured (name coined by F3-01: 05-config §1.3.7 checks
 	// ProtectOwner with Actor.Owner only then, and neither Options nor Actor

@@ -1,5 +1,5 @@
 // file: core/config/sectioncache.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: e92e6553-a421-4c45-84ef-2bc4c13c0d65
 // last-edited: 2026-11-12
 
@@ -25,8 +25,12 @@ import (
 // store on every boot, so a test that boots two hundred kernels built the
 // same sections two hundred times (F2-16 follow-up).
 //
-// Each distinct spec is therefore built once per process, into a template no
-// store ever sees, and every Register takes its own instance of that template.
+// Each distinct spec is therefore built once per SectionCache, into a template
+// no store ever sees, and every Register of a store given that cache takes its
+// own instance of the template. The cache is an instance the caller owns and
+// passes in (Options.SectionCache), never package state (03 R5): a store with
+// no cache builds every section itself, as it always did, and callers that
+// make many stores (a test that boots two hundred kernels) share one.
 // An instance is a fresh *section with fresh *keyInfo values (the store-owned,
 // mutable parts: bind, eff and pend on the section; the sec, list and
 // entrySecrets links and every byte slice, map and slice on a key) that shares
@@ -70,8 +74,39 @@ import (
 // four templates is two orders of magnitude over a real app's sections.
 const maxSectionTemplates = 1024
 
-// sharedTemplates is the process-wide cache Store.register builds through.
-var sharedTemplates = newTemplateCache(maxSectionTemplates)
+// SectionCache holds the built form of every section spec its stores have
+// registered, so a caller that makes many stores over the same sections (the
+// kernel's boot makes one for its core config, and a crash-matrix cell boots
+// the kernel two hundred times) builds each section once. Hand one to
+// Options.SectionCache; a nil *SectionCache means no sharing: every Register
+// builds its own section. It is safe for concurrent use and bounded
+// (maxSectionTemplates), and the stores that share it stay independent: each
+// Register takes private copies of everything a store writes or hands out.
+// The zero value is not usable; use NewSectionCache.
+type SectionCache struct{ c *templateCache }
+
+// NewSectionCache returns an empty cache.
+func NewSectionCache() *SectionCache {
+	return &SectionCache{c: newTemplateCache(maxSectionTemplates)}
+}
+
+// Len is the number of distinct section specs the cache holds a build of; 0 for
+// a nil cache. A test uses it to see that the stores it made went through the
+// cache, and that a second set of them built nothing new.
+func (sc *SectionCache) Len() int {
+	if sc == nil {
+		return 0
+	}
+	return sc.c.size()
+}
+
+// templates is the cache a store builds through; nil for no sharing.
+func (sc *SectionCache) templates() *templateCache {
+	if sc == nil {
+		return nil
+	}
+	return sc.c
+}
 
 // errTemplatePanicked is what a caller that lost the single-flight race to a
 // build that panicked sees; the panic itself reaches only the goroutine that
@@ -109,6 +144,9 @@ func newTemplateCache(max int) *templateCache {
 // owns. A failed build is not cached (it is deterministic, so a retry fails the
 // same way, and a failure leaves nothing to share).
 func (c *templateCache) section(sp *sectionSpec) (*section, error) {
+	if c == nil {
+		return buildSection(sp)
+	}
 	key, ok := keyOfSpec(sp)
 	if !ok {
 		return buildSection(sp)
