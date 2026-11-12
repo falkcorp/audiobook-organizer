@@ -1,5 +1,5 @@
 // file: core/kernel/restore_reapply.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f6d8a14-c3e7-4b95-a018-9d4e7b1c5f36
 // last-edited: 2026-11-11
 
@@ -305,8 +305,17 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	// this build cannot apply stops it, and the head stays below that line.
 	lines, later, stopped := in.tailLines(chain, headBefore, aborted, untrusted)
 	plan := tailPlan{Lines: lines, Later: later, Aborted: aborted, Pending: pend, Hold: hold}
+	var stopErr error
 	if stopped != nil {
 		plan.Pending = nil // the head must not pass the line nothing applied
+		stopErr = fmt.Errorf("the journal holds a %q line at seq %d that this build cannot re-apply (a newer build wrote it): the head stays below it, so a build that knows it applies it", stopped.Kind, stopped.Seq)
+		// Every append stages its own seq as the head: one would move it past the
+		// line left unapplied, so the journal takes none until a build applies it.
+		// That includes the lines the re-apply itself writes (a kept last admin's
+		// restriction is journaled), so the refusal comes before the tail is
+		// applied, not after; those writers record a gap instead, as for any
+		// refused append, and their restriction still commits.
+		in.Journal.Refuse(stopErr)
 	}
 	if res.Reapplied, err = in.applyTail(ctx, plan); err != nil {
 		return res, err
@@ -329,10 +338,7 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 			return res, err
 		}
 	case stopped != nil:
-		res.Broken = fmt.Errorf("the journal holds a %q line at seq %d that this build cannot re-apply (a newer build wrote it): the head stays below it, so a build that knows it applies it", stopped.Kind, stopped.Seq)
-		// Every append stages its own seq as the head: one would move it past the
-		// line left unapplied, so the journal takes none until a build applies it.
-		in.Journal.Refuse(res.Broken)
+		res.Broken = stopErr
 		if !restoring {
 			state := fmt.Sprintf("unknown:%d:%s:%s", stopped.Seq, stopped.Kind, stopped.MAC)
 			if err := in.failClosedOnce(ctx, chain.Fingerprint(after, state), &res); err != nil {
