@@ -108,10 +108,20 @@ type Config struct {
 	LogNoCapableEvery     time.Duration // core.ai.log_no_capable_every (1m)
 }
 
-// The defaults of section 7.
+// DefaultCooldownBase and DefaultCooldownMax are the router's bench cooldown
+// ladder when core.ai.cooldown_base and core.ai.cooldown_max are unset: a
+// failing endpoint sits out consecutive-failures times the base (30s, 1m,
+// 1m30s, ...) and never more than the max (5m). They are exported so an
+// adapter can size its own providerhttp hold policy against them: a hold
+// longer than the first rung would keep the endpoint out of rotation after the
+// router already says it may be tried again.
 const (
-	defaultCooldownBase      = 30 * time.Second
-	defaultCooldownMax       = 5 * time.Minute
+	DefaultCooldownBase = 30 * time.Second
+	DefaultCooldownMax  = 5 * time.Minute
+)
+
+// The other defaults of section 7.
+const (
 	defaultQuotaCooldown     = 30 * time.Minute
 	defaultDeadlineFailovers = 1
 	defaultRepairAttempts    = 1
@@ -123,10 +133,10 @@ const (
 
 func (c Config) withDefaults() Config {
 	if c.CooldownBase <= 0 {
-		c.CooldownBase = defaultCooldownBase
+		c.CooldownBase = DefaultCooldownBase
 	}
 	if c.CooldownMax <= 0 {
-		c.CooldownMax = defaultCooldownMax
+		c.CooldownMax = DefaultCooldownMax
 	}
 	if c.QuotaCooldown <= 0 {
 		c.QuotaCooldown = defaultQuotaCooldown

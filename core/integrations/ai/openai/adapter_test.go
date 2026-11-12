@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
+	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/secrets"
 )
@@ -232,6 +234,33 @@ func TestDescriptor_SchemaCarriesRoutingProps(t *testing.T) {
 	}
 	if _, ok := doc.Properties["api_key"]; !ok {
 		t.Error("api_key is not in the schema")
+	}
+}
+
+// The router, not the gate, owns an endpoint's cooldown (05-ai section 4 step
+// 4): the adapter's hold policy must not outlast the router's first rung, or
+// the gate refuses the very call the router just decided to try. The gate's own
+// defaults (a 5xx for 30m, a rate limit for 15m, quota for 4h) did exactly that.
+func TestDescriptor_HoldsYieldToTheRouter(t *testing.T) {
+	t.Parallel()
+	d, err := Descriptor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	holds := d.Meta().Limits.Holds
+	if holds.Max != ai.DefaultCooldownMax {
+		t.Errorf("Holds.Max = %v, want the router's cooldown cap %v: it is the only clamp on a Retry-After", holds.Max, ai.DefaultCooldownMax)
+	}
+	for _, c := range []integrations.Class{integrations.ClassTransient, integrations.ClassRateLimited, integrations.ClassQuota} {
+		if got := holds.Durations[c]; got <= 0 || got > ai.DefaultCooldownBase {
+			t.Errorf("Holds.Durations[%s] = %v, want a positive duration no longer than the router's first rung %v", c, got, ai.DefaultCooldownBase)
+		}
+	}
+	if got := holds.Durations[integrations.ClassAuth]; got <= 0 || got > ai.DefaultCooldownMax {
+		t.Errorf("Holds.Durations[auth] = %v, want a positive duration within the router's cap %v", got, ai.DefaultCooldownMax)
+	}
+	if holds.Persist {
+		t.Error("Holds.Persist = true: a hold that outlives a restart is the router's to own")
 	}
 }
 
@@ -634,6 +663,93 @@ func TestCapsAndHealth(t *testing.T) {
 			}
 		})
 	}
+	// switchable answers GET /v1/models with the status the test last set.
+	switchable := func(status *atomic.Int32) http.HandlerFunc {
+		return func(w http.ResponseWriter, req *http.Request) {
+			if s := int(status.Load()); s != 200 {
+				writeJSON(t, w, s, `{"error":{"message":"no","type":"x","code":"y"}}`)
+				return
+			}
+			models(w, req)
+		}
+	}
+	t.Run("a hold does not stop the probe, and a probe that succeeds ends the hold", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		var status atomic.Int32
+		status.Store(503)
+		r.on("GET /v1/models", switchable(&status))
+		if h := r.inst.Health(ctx); h.Status != integrations.HealthDown {
+			t.Fatalf("Health = %+v, want down", h)
+		}
+		held, ok := r.kit.Registry.HoldFor(r.inst.ref)
+		if !ok {
+			t.Fatal("a 503 did not put the instance on hold")
+		}
+		if d := held.Until.Sub(r.kit.Clock.Now()); d > ai.DefaultCooldownBase {
+			t.Errorf("the hold runs %v, longer than the router's first cooldown rung (%v)", d, ai.DefaultCooldownBase)
+		}
+		// The router's capability refresh keeps the hold: it must not probe
+		// through a stand-off the router itself set.
+		hits := r.kit.Hits()
+		if _, err := r.inst.Caps(ctx); classOf(err) != integrations.ClassRefusedLocal {
+			t.Errorf("Caps during a hold = %v, want RefusedLocal", err)
+		}
+		if r.kit.Hits() != hits {
+			t.Error("Caps sent a request through the hold")
+		}
+		// Health and Test are the ways a hold ends: they pass through it.
+		if err := r.inst.Test(ctx); err == nil {
+			t.Error("Test passed against a failing server")
+		}
+		if r.kit.Hits() != hits+1 {
+			t.Errorf("Test sent %d request(s) during the hold, want 1", r.kit.Hits()-hits)
+		}
+		status.Store(200)
+		if h := r.inst.Health(ctx); h.Status != integrations.HealthOK {
+			t.Fatalf("Health after the server recovered = %+v, want ok", h)
+		}
+		if h, ok := r.kit.Registry.HoldFor(r.inst.ref); ok {
+			t.Errorf("a successful probe left the hold in force: %+v", h)
+		}
+	})
+	t.Run("an open breaker is degraded, not misconfigured", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		var status atomic.Int32
+		status.Store(503)
+		r.on("GET /v1/models", switchable(&status))
+		for range 5 { // the breaker's default threshold of consecutive failures
+			if h := r.inst.Health(ctx); h.Status != integrations.HealthDown {
+				t.Fatalf("Health = %+v, want down while the breaker is closed", h)
+			}
+		}
+		h := r.inst.Health(ctx)
+		if h.Status != integrations.HealthDegraded || !strings.Contains(h.Message, "breaker") {
+			t.Errorf("Health with the breaker open = %+v, want degraded naming the breaker", h)
+		}
+		if r.kit.Hits() != 5 {
+			t.Errorf("%d request(s) reached the server, want 5: the open breaker sends nothing", r.kit.Hits())
+		}
+		r.kit.Clock.Advance(time.Minute) // past the breaker's cooldown: the probe goes out again
+		status.Store(200)
+		if h := r.inst.Health(ctx); h.Status != integrations.HealthOK {
+			t.Errorf("Health after the cooldown = %+v, want ok", h)
+		}
+	})
+	t.Run("an egress refusal is misconfigured and says so", func(t *testing.T) {
+		t.Parallel()
+		// A loopback server other than the rig's own is a private destination:
+		// the gate refuses it without Local, and nothing is dialed.
+		r := newRig(t, func(m map[string]any) { m["url"] = "http://127.0.0.1:1/v1" })
+		h := r.inst.Health(ctx)
+		if h.Status != integrations.HealthMisconfigured || !strings.Contains(h.Message, "egress guard") {
+			t.Errorf("Health = %+v, want misconfigured naming the egress guard", h)
+		}
+		if r.kit.Hits() != 0 {
+			t.Errorf("%d request(s) reached the server", r.kit.Hits())
+		}
+	})
 	t.Run("a key that cannot be read is ours, not the server's rejection", func(t *testing.T) {
 		t.Parallel()
 		r := newRig(t)
@@ -871,49 +987,120 @@ func TestSubmitBatch_Wire(t *testing.T) {
 	}
 }
 
-// A batch that cannot be created takes its uploaded input file with it: the
-// provider's file store is not a place to leave a job's prompts behind. The
-// cleanup goes through the same gate as every call, so after a failure that
-// puts the instance on hold (a 429, quota included) it is refused locally and
-// the file stays at the provider: the caller still gets the create's error,
-// never the cleanup's.
+// A batch the provider did NOT create takes its uploaded input file with it:
+// the provider's file store is not a place to leave a job's prompts behind. A
+// batch it MAY have created keeps its input: after a 5xx, a cut connection or a
+// 2xx the adapter could not read, the batch can exist and be reading that very
+// file, and the router leaves the job Pending for its tag reconcile to settle.
+//
+// What proves "not created" is a refusal (a 4xx), a request the gate never
+// sent, or an answer that was not the API's at all (a web page). The cleanup
+// passes through an active hold, so the hold that a quota refusal just set does
+// not refuse the delete that tidies up after it.
 func TestSubmitBatch_CreateFailureDeletesTheUpload(t *testing.T) {
 	t.Parallel()
 	items := []ai.BatchItem{{CustomID: "q", Request: ai.TextRequest{System: "x"}}}
-	rigFor := func(t *testing.T, createStatus int, createBody string) *rig {
+	const html = `<html><body>Sign in to the Wayne Enterprises network</body></html>`
+	rigFor := func(t *testing.T, create http.HandlerFunc) *rig {
 		r := newRig(t)
 		r.on("POST /v1/files", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(t, w, 200, `{"id":"file-in-9","object":"file","bytes":1,"created_at":1,"filename":"batch.jsonl","purpose":"batch"}`)
 		})
-		r.on("POST /v1/batches", func(w http.ResponseWriter, _ *http.Request) { writeJSON(t, w, createStatus, createBody) })
+		r.on("POST /v1/batches", create)
 		r.on("DELETE /v1/files/{id}", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(t, w, 200, `{"id":"file-in-9","object":"file","deleted":true}`)
 		})
 		return r
 	}
+	answer := func(status int, body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) { writeJSON(t, w, status, body) }
+	}
 
-	t.Run("a rejected create deletes the upload", func(t *testing.T) {
+	rows := []struct {
+		name       string
+		create     http.HandlerFunc
+		wantClass  integrations.Class
+		wantDelete bool
+	}{
+		{"a rejected create (4xx)", answer(400, apiError("invalid_request_error", "", "bad batch")), integrations.ClassInvalid, true},
+		{"a rate limit (429)", answer(429, apiError("rate_limit_error", "rate_limit_exceeded", "slow down")), integrations.ClassRateLimited, true},
+		{"a quota refusal, through the hold it set", answer(429, apiError("x", "insufficient_quota", "no credit")), integrations.ClassQuota, true},
+		{"a reply that is not the API's (200 text/html)", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, html)
+		}, integrations.ClassBadOutput, true},
+		{"a 5xx", answer(503, apiError("server_error", "", "overloaded")), integrations.ClassTransient, false},
+		{"a 2xx cut off mid-body", answer(200, `{"id":"batch_1",`), integrations.ClassTransient, false},
+		{"a 2xx with an empty body", answer(200, ``), integrations.ClassBadOutput, false},
+		{"a 2xx without a batch ID", answer(200, `{"object":"batch"}`), integrations.ClassBadOutput, false},
+	}
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := rigFor(t, tc.create)
+			handle, err := r.inst.SubmitBatch(context.Background(), "m", items, nil)
+			if handle != "" {
+				t.Errorf("handle = %q, want none", handle)
+			}
+			if e := asIntegrationsError(t, err); e.Class != tc.wantClass || e.Op != "batch create" {
+				t.Errorf("error = %+v, want class %s from batch create", e, tc.wantClass)
+			}
+			want := []string{"POST /v1/files", "POST /v1/batches"}
+			if tc.wantDelete {
+				want = append(want, "DELETE /v1/files/file-in-9")
+			}
+			if got := paths(r.requests()); strings.Join(got, "; ") != strings.Join(want, "; ") {
+				t.Errorf("requests = %v, want %v (the input file must be deleted: %v)", got, want, tc.wantDelete)
+			}
+		})
+	}
+
+	t.Run("a create the gate refused before sending", func(t *testing.T) {
 		t.Parallel()
-		r := rigFor(t, 400, apiError("invalid_request_error", "", "bad batch"))
+		// The upload succeeds, and a failure of another call puts the instance
+		// on hold before the create is sent: the create is refused locally,
+		// nothing of it was sent, and the delete still reaches the provider.
+		r := newRig(t)
+		r.on("POST /v1/files", func(w http.ResponseWriter, _ *http.Request) {
+			// The gate releases, on a success, only a hold that was set before
+			// the succeeding attempt started; the rig's clock stands still, so
+			// move it for the hold to count as set during the upload.
+			r.kit.Clock.Advance(time.Millisecond)
+			if _, err := r.inst.Caps(context.Background()); err == nil {
+				t.Error("the models request should have failed and set a hold")
+			}
+			writeJSON(t, w, 200, `{"id":"file-in-9","object":"file","bytes":1,"created_at":1,"filename":"batch.jsonl","purpose":"batch"}`)
+		})
+		r.on("GET /v1/models", answer(503, apiError("server_error", "", "overloaded")))
+		r.on("POST /v1/batches", answer(200, `{"id":"batch_1"}`))
+		r.on("DELETE /v1/files/{id}", answer(200, `{"id":"file-in-9","object":"file","deleted":true}`))
 		_, err := r.inst.SubmitBatch(context.Background(), "m", items, nil)
-		if e := asIntegrationsError(t, err); e.Class != integrations.ClassInvalid || e.Op != "batch create" {
-			t.Errorf("error = %+v", e)
+		if e := asIntegrationsError(t, err); e.Class != integrations.ClassRefusedLocal {
+			t.Fatalf("error = %+v, want the gate's RefusedLocal", e)
 		}
-		reqs := r.requests()
-		if len(reqs) != 3 || reqs[2].Method != "DELETE" || reqs[2].Path != "/v1/files/file-in-9" {
-			t.Errorf("requests = %d, want upload, create, then the delete of the upload: %v", len(reqs), paths(reqs))
+		if reason, _ := providerhttp.ReasonOf(err); reason != providerhttp.ReasonHold {
+			t.Fatalf("refused for %q, want the hold", reason)
+		}
+		want := "POST /v1/files; GET /v1/models; DELETE /v1/files/file-in-9"
+		if got := strings.Join(paths(r.requests()), "; "); got != want {
+			t.Errorf("requests = %s, want %s: the create was never sent and the input must go", got, want)
 		}
 	})
 
-	t.Run("a quota failure holds the instance, so the cleanup is refused locally and the create's error stands", func(t *testing.T) {
+	t.Run("a create the caller gave up on keeps the upload", func(t *testing.T) {
 		t.Parallel()
-		r := rigFor(t, 429, apiError("x", "insufficient_quota", "no credit"))
-		_, err := r.inst.SubmitBatch(context.Background(), "m", items, nil)
-		if e := asIntegrationsError(t, err); e.Class != integrations.ClassQuota || e.Op != "batch create" {
-			t.Errorf("error = %+v, want the create's Quota error", e)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		r := rigFor(t, func(_ http.ResponseWriter, req *http.Request) {
+			cancel()
+			<-req.Context().Done() // the client has gone: the provider may still create it
+		})
+		_, err := r.inst.SubmitBatch(ctx, "m", items, nil)
+		if e := asIntegrationsError(t, err); e.Class != integrations.ClassCanceled {
+			t.Errorf("error = %+v, want Canceled", e)
 		}
-		if reqs := r.requests(); len(reqs) != 2 {
-			t.Errorf("requests = %v: the cleanup should not have reached a held instance", paths(reqs))
+		if got := strings.Join(paths(r.requests()), "; "); got != "POST /v1/files; POST /v1/batches" {
+			t.Errorf("requests = %s: a canceled create is ambiguous and must not delete the input", got)
 		}
 	})
 
@@ -1007,6 +1194,36 @@ func TestBatchResults_Wire(t *testing.T) {
 		t.Errorf("row 3 = %+v", got[2])
 	}
 
+	t.Run("a row's error is one bounded line", func(t *testing.T) {
+		t.Parallel()
+		noisy := `{"id":"r4","custom_id":"q4","response":null,"error":{"code":"bad\ncode","message":"` +
+			strings.Repeat(`Gotham\u0007\n`, 2*integrations.MaxDetail) + `"}}`
+		r := newRig(t)
+		r.on("GET /v1/batches/{id}", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(t, w, 200, batchAnswer("completed", "", "file-err-1"))
+		})
+		r.on("GET /v1/files/{id}/content", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, noisy+"\n") })
+		seq, err := r.inst.BatchResults(context.Background(), "batch_7")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rows []ai.BatchResult
+		for res, err := range seq {
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows = append(rows, res)
+		}
+		if len(rows) != 1 || rows[0].Err == "" {
+			t.Fatalf("rows = %+v, want the one error row", rows)
+		}
+		if len(rows[0].Err) > integrations.MaxDetail {
+			t.Errorf("Err is %d bytes, want at most %d", len(rows[0].Err), integrations.MaxDetail)
+		}
+		if strings.ContainsFunc(rows[0].Err, func(r rune) bool { return r < ' ' || r == 0x7f }) {
+			t.Errorf("Err carries a control character: %q", rows[0].Err[:40])
+		}
+	})
 	t.Run("a batch that is not completed has no results", func(t *testing.T) {
 		t.Parallel()
 		r := newRig(t)
@@ -1071,6 +1288,29 @@ func TestCancelBatch_Wire(t *testing.T) {
 	if err := r2.inst.CancelBatch(context.Background(), "batch_x"); classOf(err) != integrations.ClassNotFound || asIntegrationsError(t, err).Op != "batch cancel" {
 		t.Errorf("err = %v", err)
 	}
+
+	// A cancel stops spend, so a hold set by an earlier rate limit or quota
+	// refusal must not keep a paid batch running.
+	t.Run("a hold does not stop a cancel", func(t *testing.T) {
+		t.Parallel()
+		r := newRig(t)
+		r.on("GET /v1/models", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(t, w, 429, apiError("x", "insufficient_quota", "no credit"))
+		})
+		r.on("POST /v1/batches/{id}/cancel", func(w http.ResponseWriter, _ *http.Request) { writeJSON(t, w, 200, batchAnswer("cancelling", "", "")) })
+		if _, err := r.inst.Caps(context.Background()); classOf(err) != integrations.ClassQuota {
+			t.Fatalf("Caps = %v, want the quota refusal that sets the hold", err)
+		}
+		if _, ok := r.kit.Registry.HoldFor(r.inst.ref); !ok {
+			t.Fatal("the quota refusal did not put the instance on hold")
+		}
+		if err := r.inst.CancelBatch(context.Background(), "batch_7"); err != nil {
+			t.Fatalf("CancelBatch during a hold = %v, want it sent", err)
+		}
+		if got := strings.Join(paths(r.requests()), "; "); got != "GET /v1/models; POST /v1/batches/batch_7/cancel" {
+			t.Errorf("requests = %s", got)
+		}
+	})
 }
 
 // batchListing answers GET /v1/batches pages of n rows each, with the job tag

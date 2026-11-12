@@ -38,6 +38,7 @@ import (
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
+	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/secrets"
 )
 
@@ -82,8 +83,42 @@ func Descriptor() (integrations.Descriptor, error) {
 		// MaxRetries -1: no transport retry. The router owns failover and the
 		// bench, and a transport that retried a 429 or a 5xx on the same
 		// endpoint would hide the failure from both.
-		Limits: integrations.Limits{RPS: 20, Burst: 20, MaxRetries: -1, Timeout: callTimeout},
+		Limits: integrations.Limits{RPS: 20, Burst: 20, MaxRetries: -1, Timeout: callTimeout, Holds: holdPolicy()},
 	}, build), nil
+}
+
+// holdPolicy is the providerhttp stand-off the adapter asks for (a function,
+// not a package variable, so no two descriptors share the map). The router,
+// not the gate, owns an endpoint's cooldown (spec section 4 step 4): it benches
+// a failing endpoint for 30s growing to 5m and lets a success clear it. The
+// gate's own defaults (a 5xx for 30m, a rate limit for 15m, quota for 4h)
+// would sit under the router's bench and refuse the call it had just decided
+// to try, so one 503 would lock a configured endpoint out for half an hour and
+// the router's ladder would never run. Every class a transient provider
+// condition produces is therefore held for no longer than the router's first
+// rung; Max also caps a Retry-After, which the gate honours for a rate limit
+// but never clamps itself.
+//
+// Auth is the exception: a rejected key does not heal in seconds, so it stays
+// out for the router's longest rung rather than being retried every 30s.
+//
+// Persist is false because a hold that outlives a restart is exactly the
+// stand-off the router is meant to own. The gate does not read the flag yet:
+// providerhttp writes every hold to the store unconditionally and merges the
+// field with an OR, so false cannot be expressed. The value documents the
+// intent; it does not change behaviour, and the durations above are what keep
+// a persisted hold harmless (it expires within five minutes of a restart).
+func holdPolicy() integrations.HoldPolicy {
+	return integrations.HoldPolicy{
+		Durations: map[integrations.Class]time.Duration{
+			integrations.ClassTransient:   ai.DefaultCooldownBase, // 5xx and transport failures
+			integrations.ClassRateLimited: ai.DefaultCooldownBase, // raised to Retry-After, capped by Max
+			integrations.ClassQuota:       ai.DefaultCooldownBase,
+			integrations.ClassAuth:        ai.DefaultCooldownMax,
+		},
+		Max:     ai.DefaultCooldownMax,
+		Persist: false,
+	}
 }
 
 // instance is one OpenAI-compatible endpoint.
@@ -214,10 +249,19 @@ func responseGuard(env integrations.Env) option.Middleware {
 		drain(log, resp.Body)
 		return nil, &integrations.Error{
 			Ref: env.Ref, Status: resp.StatusCode, Class: integrations.ClassBadOutput,
-			Err: fmt.Errorf("the server answered %d with content type %q, not JSON; check that the url setting points at the API", resp.StatusCode, detail(mt)),
+			Err: &notAPIError{fmt.Sprintf("the server answered %d with content type %q, not JSON; check that the url setting points at the API", resp.StatusCode, detail(mt))},
 		}
 	}
 }
+
+// notAPIError is the cause of a reply the guard refused: whatever answered is
+// not the API (a web page, a proxy's login screen), so it created nothing. That
+// is what lets SubmitBatch tell this ClassBadOutput from the other two, a body
+// that would not decode and a reply without a batch ID, where the provider may
+// have created the batch.
+type notAPIError struct{ msg string }
+
+func (e *notAPIError) Error() string { return e.msg }
 
 // Close releases nothing: the connection pool belongs to the instance's HTTP.
 func (*instance) Close() error { return nil }
@@ -226,7 +270,13 @@ func (*instance) Close() error { return nil }
 // feature: structured output, vision and batch support differ by server
 // version, so the operator declares them on the endpoint (05-ai section 11,
 // item 1). Locality is left for the router to decide.
-func (i *instance) Caps(ctx context.Context) (ai.BackendCaps, error) {
+//
+// The router refreshes capabilities on its own schedule, so Caps keeps the
+// gate's hold: a stand-off the router already set must not be probed through.
+func (i *instance) Caps(ctx context.Context) (ai.BackendCaps, error) { return i.models(ctx) }
+
+// models is the GET /v1/models behind Caps, Health and Test.
+func (i *instance) models(ctx context.Context) (ai.BackendCaps, error) {
 	page, err := i.cl.Models.List(ctx)
 	if err != nil {
 		return ai.BackendCaps{}, i.fail(ctx, "caps", err)
@@ -239,9 +289,13 @@ func (i *instance) Caps(ctx context.Context) (ai.BackendCaps, error) {
 }
 
 // Health asks for the model list: one request, no tokens spent, no remote
-// state changed.
+// state changed. It passes through an active hold (providerhttp.WithBypassHold)
+// because the probe is how a hold ends: a success clears the hold the gate set,
+// and a probe the hold refused could never tell the operator, or the router's
+// bench, that the endpoint is back. The breaker, the egress guard and the
+// disabled switch still apply.
 func (i *instance) Health(ctx context.Context) integrations.Health {
-	_, err := i.Caps(ctx)
+	_, err := i.models(providerhttp.WithBypassHold(ctx))
 	switch {
 	case err == nil:
 		return integrations.Health{Status: integrations.HealthOK}
@@ -254,18 +308,49 @@ func (i *instance) Health(ctx context.Context) integrations.Health {
 	case integrations.ClassAuth:
 		return integrations.Health{Status: integrations.HealthAuthFailed, Message: "the server rejected the API key"}
 	case integrations.ClassRefusedLocal:
-		// The gate refused it: the egress guard (a private url without Local),
-		// a hold or an open breaker. The Registry adds the hold and breaker
-		// detail; "secret missing" here would send the operator after the wrong
-		// cause.
-		return integrations.Health{Status: integrations.HealthMisconfigured, Message: "the request was refused before it was sent (egress guard, hold or open breaker)"}
+		return refusedHealth(err)
 	}
 	return integrations.Health{Status: integrations.HealthDown, Message: "the server did not answer usefully"}
 }
 
-// Test is the extra test of Registry.Test: the caps fetch.
+// refusedHealth is the health of a probe the gate refused before sending. A
+// hold or an open breaker (a bypassed probe meets only the breaker) is a
+// stand-off the gate set after real failures and lifts itself: the endpoint is
+// degraded, and "misconfigured" would send the operator to settings that are
+// fine. Only the egress guard, a url that names a destination this instance may
+// not dial, is a settings problem.
+func refusedHealth(err error) integrations.Health {
+	if refusal, ok := errors.AsType[*providerhttp.Refusal](err); ok {
+		switch refusal.Reason {
+		case providerhttp.ReasonHold, providerhttp.ReasonBreaker, providerhttp.ReasonQuota:
+			msg := "the endpoint is standing off after recent failures (" + string(refusal.Reason) + ")"
+			if !refusal.Until.IsZero() {
+				msg += " until " + refusal.Until.UTC().Format(time.RFC3339)
+			}
+			return integrations.Health{Status: integrations.HealthDegraded, Message: msg}
+		}
+	}
+	if isEgressRefusal(err) {
+		return integrations.Health{Status: integrations.HealthMisconfigured,
+			Message: "the egress guard refused the url: it names a private or blocked destination; mark the instance local to allow a LAN server"}
+	}
+	return integrations.Health{Status: integrations.HealthDown, Message: "the request was refused before it was sent"}
+}
+
+// isEgressRefusal reports whether err is the egress guard refusing the
+// destination: the gate's own reason, or the dial guard's causes.
+func isEgressRefusal(err error) bool {
+	if reason, ok := providerhttp.ReasonOf(err); ok && reason == providerhttp.ReasonEgress {
+		return true
+	}
+	return errors.Is(err, providerhttp.ErrBlockedAddress) || errors.Is(err, providerhttp.ErrBlockedScheme) ||
+		errors.Is(err, providerhttp.ErrInvalidURL)
+}
+
+// Test is the extra test of Registry.Test: the caps fetch. An operator asked,
+// so it passes through a hold like Health does.
 func (i *instance) Test(ctx context.Context) error {
-	_, err := i.Caps(ctx)
+	_, err := i.models(providerhttp.WithBypassHold(ctx))
 	return err
 }
 
