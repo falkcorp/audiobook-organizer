@@ -1,5 +1,5 @@
 // file: core/backup/options.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7f8ad2c3-31d0-4b0e-b0c5-6a0f3a1d8e44
 // last-edited: 2026-11-12
 
@@ -290,7 +290,7 @@ func (o *Options) validate() error {
 // while another holder has it (§5B.6; the tasks layer holds the same resource
 // by declaration, so this is the guard for direct callers such as Ensure).
 type Svc struct {
-	o   Options
+	o    Options
 	hold sync.Mutex // the backup resource
 
 	cache sync.Map // classification cache: name -> cachedKind
