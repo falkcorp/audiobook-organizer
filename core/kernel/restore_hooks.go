@@ -1,5 +1,5 @@
 // file: core/kernel/restore_hooks.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b84e1f27-6c93-4d05-8a7e-2f1d9c3b5e60
 // last-edited: 2026-11-12
 
@@ -179,8 +179,8 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 		}
 		// The hold the boot put on the journal (reapplyRevocations) ends with the
 		// hooks: a line appended from here on stages a head that no longer passes
-		// anything left unapplied. A refusal for a line this build cannot apply
-		// stays.
+		// anything left unapplied. A line this build cannot apply is not one of
+		// those: it is queued, and the journal takes lines regardless.
 		in.Journal.Resume()
 	}
 

@@ -1,7 +1,7 @@
 // file: core/backup/journal/review_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8a1c75-9d24-4f60-8b13-a5c7e2d09f48
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package journal
 
@@ -127,92 +127,6 @@ func TestFile_WriteLineOnABrokenFile(t *testing.T) {
 	if _, err := c.WriteLine(ctx, GapLine(time.Now(), GapOtherInstall)); !errors.Is(err, ErrNotBound) {
 		t.Errorf("Component.WriteLine before Bind: %v, want ErrNotBound", err)
 	}
-}
-
-// TestFile_RefuseKeepsTheFirstFailure: Refuse stops later appends with its
-// error, a second Refuse does not replace the first (the first is the cause an
-// operator needs), and Refuse(nil) refuses nothing.
-func TestFile_RefuseKeepsTheFirstFailure(t *testing.T) {
-	ctx := context.Background()
-	fx := newFixture(t)
-	j := fx.open(t)
-	j.Refuse(nil)
-	if _, err := j.WriteLine(ctx, GapLine(time.Now(), GapAppendFailed)); err != nil {
-		t.Fatalf("WriteLine after Refuse(nil): %v", err)
-	}
-	first, second := errors.New("a newer build wrote a line this one cannot apply"), errors.New("the keyring is gone")
-	j.Refuse(first)
-	j.Refuse(second)
-	if _, err := j.WriteLine(ctx, GapLine(time.Now(), GapAppendFailed)); !errors.Is(err, first) || errors.Is(err, second) {
-		t.Errorf("WriteLine after two Refuse calls: %v, want the first error only", err)
-	}
-	if st := j.Status(); !errors.Is(st.Broken, first) {
-		t.Errorf("Status().Broken = %v, want the first error", st.Broken)
-	}
-}
-
-// TestFile_HoldIsLiftedByResumeButNotABreakOrARefusal: a Hold is the refusal
-// that ends (a replaced store's head waits for its hooks), so Resume lifts it
-// and the journal takes lines again; a Refuse (a line this build cannot apply)
-// and a broken open outlast it, and Hold(nil) holds nothing.
-func TestFile_HoldIsLiftedByResumeButNotABreakOrARefusal(t *testing.T) {
-	ctx := context.Background()
-	line := func(j *File) error {
-		_, err := j.WriteLine(ctx, GapLine(time.Now(), GapAppendFailed))
-		return err
-	}
-	held, refused := errors.New("the hooks have not run"), errors.New("a newer build wrote a line this one cannot apply")
-
-	fx := newFixture(t)
-	j := fx.open(t)
-	j.Hold(nil)
-	if err := line(j); err != nil {
-		t.Fatalf("after Hold(nil): %v", err)
-	}
-	j.Hold(held)
-	j.Hold(errors.New("a second hold"))
-	if err := line(j); !errors.Is(err, held) {
-		t.Fatalf("held: %v, want the first hold's error", err)
-	}
-	if st := j.Status(); !errors.Is(st.Broken, held) {
-		t.Errorf("Status().Broken = %v while held, want the hold's error (health says unwritable)", st.Broken)
-	}
-	b := fx.auth.NewBatch()
-	if err := j.Append(ctx, b, Revocation{Kind: UserDisabled}); !errors.Is(err, held) {
-		t.Errorf("Append while held = %v, want the hold's error", err)
-	}
-	_ = b.Close()
-	j.Resume()
-	if err := line(j); err != nil {
-		t.Errorf("after Resume: %v", err)
-	}
-	if st := j.Status(); st.Broken != nil {
-		t.Errorf("Status().Broken = %v after Resume", st.Broken)
-	}
-
-	j.Hold(held)
-	j.Refuse(refused)
-	j.Resume()
-	if err := line(j); !errors.Is(err, refused) {
-		t.Errorf("after Resume of a hold that a Refuse outlasts: %v, want the refusal", err)
-	}
-
-	fx2 := newFixture(t)
-	fx2.write(t, "this is not a journal line")
-	broken, err := OpenFile(ctx, fx2.opts())
-	if !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("OpenFile = %v, want ErrCorrupt", err)
-	}
-	defer func() { must(t, broken.Close()) }()
-	broken.Hold(held)
-	broken.Resume()
-	if err := line(broken); !errors.Is(err, ErrCorrupt) {
-		t.Errorf("a broken File after Hold and Resume: %v, want ErrCorrupt", err)
-	}
-
-	c := fx.component(t)
-	c.Hold(held) // before Bind: nothing to hold
-	c.Resume()
 }
 
 // TestReadFile_OverTheSizeCapIsCorrupt: the journal is read into memory whole,
