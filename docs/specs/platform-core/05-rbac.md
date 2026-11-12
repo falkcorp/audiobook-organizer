@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.13.10 -->
+<!-- version: 1.13.11 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
-<!-- last-edited: 2026-11-10 -->
+<!-- last-edited: 2026-11-11 -->
 
 # 05 — Authorization (`core/rbac`) and audit (`core/audit`)
 
@@ -1214,12 +1214,17 @@ record whose action is `UserScoped` (everything about an identity, a credential,
 one-time link, a sign-in provider or a security decision: `core.auth.*`, `core.user.*`,
 `core.apikey.*`, `core.session.*`, `core.invite.*`, `core.templogin.*`, `core.identity.*`,
 `core.bootstrap.*`, `core.oidc_provider.*`, `core.permission.deny`, `core.secret.rotate`,
-`core.restore.revoke`, `core.integration.write_secret`, `core.integration.change_url`) or whose action
+`core.restore.revoke`, `core.integration.write_secret`, `core.integration.change_url`, and `core.integration.local_migrated`, whose details name the destination a Local grant was made for) or whose action
 the table does not list (a module's own action, or a core action added without a classification)
 is withheld whole, never partly masked. This is stricter than today's activity-log rule
 (`internal/activity/user_data.go:78-90`, `core.auth.*` and `core.user.*` about another user), which
 let a user see rows about themselves and every other prefix. `TestCoreActions_EveryActionIsClassified`
-fails a table entry nobody classified.
+fails a table entry nobody classified. A row shown to a viewer who does not hold `core:users.manage`
+also lacks `actor.credential_id` and `actor.client_addr` (which key or session did it, and from
+where, is for user managers). The store filters by one action prefix only, so the query reads and
+drops a non-manager's withheld records itself: one request reads at most 10,000 records and then
+answers with the records it has (possibly none) and a `next_cursor` to go on from; a client follows
+cursors until there is none.
 
 ### 7.7 Redaction
 

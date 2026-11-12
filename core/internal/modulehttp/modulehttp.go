@@ -1,7 +1,7 @@
 // file: core/internal/modulehttp/modulehttp.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bff56a15-dc5f-476c-8aea-4d0f3836947f
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package modulehttp is the HTTP surface of the module catalog and of the
 // served OpenAPI documents (05-http-api §5 item 2 and §7; 07 §7.5.1; FE3-16):
@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/rbac"
@@ -209,11 +210,29 @@ func errUnauthenticated() error {
 	return &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "sign in to use this route"}
 }
 
+// errNotSignedIn is the 403 of a principal that is not AnyAuthenticated.
+func errNotSignedIn() error {
+	return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "this route needs a signed-in caller"}
+}
+
+// signedIn applies rbac.AnyAuthenticated to p as stage 13 will (F4-08): no
+// principal is 401; a principal with no compiled permission set, or one that
+// does not satisfy it (a Confined key never does, 05-rbac 4.10), is 403.
+func signedIn(p *auth.Principal) error {
+	switch {
+	case p == nil:
+		return errUnauthenticated()
+	case p.Perms == nil || !p.Perms.Satisfies(rbac.AnyAuthenticated):
+		return errNotSignedIn()
+	}
+	return nil
+}
+
 func (a *api) listModules(ctx context.Context, in *httpapi.In[listModulesReq]) (ModulesResponse, error) {
 	p := in.Principal
-	if p == nil {
+	if err := signedIn(p); err != nil {
 		a.metrics.record(ctx, outcomeUnauthenticated)
-		return ModulesResponse{}, errUnauthenticated()
+		return ModulesResponse{}, err
 	}
 	snap, err := a.view.Snapshot(ctx)
 	if err != nil {

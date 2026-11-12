@@ -1,7 +1,7 @@
 // file: core/internal/audithttp/types.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b9e9bb7e-8645-47b1-a871-1a1305a27406
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package audithttp
 
@@ -63,7 +63,19 @@ type AuditTarget struct {
 	ID     string `json:"id"`
 }
 
-// wire renders rec.
+// wireFor renders rec for a viewer. Anyone but a user manager gets the row
+// without the credential ID and the client address: which key or session did
+// it, and from where, is for the people who manage users; a viewer needs what
+// was done and by whom.
+func wireFor(rec audit.Record, manager bool) AuditRecord {
+	w := wire(rec)
+	if !manager {
+		w.Actor.CredentialID, w.Actor.ClientAddr = "", ""
+	}
+	return w
+}
+
+// wire renders rec whole.
 func wire(rec audit.Record) AuditRecord {
 	return AuditRecord{
 		Seq: rec.Seq, ID: rec.ID, Time: rec.Time, Action: rec.Action, Outcome: string(rec.Outcome),

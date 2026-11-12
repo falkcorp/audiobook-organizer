@@ -1,5 +1,5 @@
 // file: core/internal/modulehttp/openapi.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2608b4b5-3c38-43b4-9f93-421aecbf9687
 // last-edited: 2026-11-11
 
@@ -109,14 +109,8 @@ func (a *api) openAPIAccess(r *http.Request) error {
 	if a.public() {
 		return nil
 	}
-	p, ok := auth.PrincipalFrom(r.Context())
-	if !ok {
-		return errUnauthenticated()
-	}
-	if p.Perms == nil || !p.Perms.Satisfies(rbac.AnyAuthenticated) {
-		return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "this route needs a signed-in caller"}
-	}
-	return nil
+	p, _ := auth.PrincipalFrom(r.Context())
+	return signedIn(p)
 }
 
 // errNoDocument is the one 404 of the route: an owner with no document, a name

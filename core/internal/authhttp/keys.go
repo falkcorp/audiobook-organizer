@@ -1,12 +1,13 @@
 // file: core/internal/authhttp/keys.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f1a3c84-2e9d-4b07-a5c8-1d4e7b920a63
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/falkcorp/mediacore/auth"
@@ -33,7 +34,45 @@ func (a *api) allKeys(ctx context.Context, p *auth.Principal, in *httpapi.In[lis
 	if err != nil {
 		return httpapi.Page[APIKey]{}, a.fail(ctx, specKeysAll(), p, "", err)
 	}
-	return pageOf(all, in.Req.PageParams), nil
+	// Every sibling route holds a read of another user's key metadata (scopes,
+	// last-used address, use count) to dominance over the owner; the list-all
+	// does too. The filter runs before the page is cut, so neither Total nor
+	// where a page ends says how many keys were withheld.
+	seen, err := a.dominatedKeys(ctx, p, all)
+	if err != nil {
+		return httpapi.Page[APIKey]{}, a.fail(ctx, specKeysAll(), p, "", err)
+	}
+	return pageOf(seen, in.Req.PageParams), nil
+}
+
+// dominatedKeys keeps the keys p may read: its own, and those of an owner whose
+// roles p dominates (rbac.Service.Dominates, the rule the sibling routes use).
+// A key whose owner no longer exists is kept only for a caller holding
+// core:admin, who dominates every role. The decision is made once per distinct
+// owner.
+func (a *api) dominatedKeys(ctx context.Context, p *auth.Principal, keys []APIKey) ([]APIKey, error) {
+	own := string(p.User.ID)
+	verdict := map[string]bool{own: true}
+	out := make([]APIKey, 0, len(keys))
+	for _, k := range keys {
+		ok, known := verdict[k.Owner]
+		if !known {
+			u, err := a.Users.User(ctx, auth.UserID(k.Owner))
+			switch {
+			case errors.Is(err, auth.ErrNotFound):
+				ok = p.Perms != nil && p.Perms.Has(rbac.CoreAdmin)
+			case err != nil:
+				return nil, err
+			default:
+				ok = a.Dominance.Dominates(p.Perms, u.Roles) == nil
+			}
+			verdict[k.Owner] = ok
+		}
+		if ok {
+			out = append(out, k)
+		}
+	}
+	return out, nil
 }
 
 // keyByID finds a key among every owner's.
@@ -165,7 +204,7 @@ func (a *api) createUserKey(ctx context.Context, p *auth.Principal, in *httpapi.
 func needManage() rbac.Requirement { return rbac.Need(scopeUsersManage) }
 
 func specKeysAll() spec {
-	return spec{method: http.MethodGet, path: "/api-keys", name: "listAllAPIKeys", perm: needManage(), needUser: true, summary: "List every user's API keys", doc: "Each key carries its owner's username. Never the key or its hash."}
+	return spec{method: http.MethodGet, path: "/api-keys", name: "listAllAPIKeys", perm: needManage(), needUser: true, summary: "List every user's API keys", doc: "Each key carries its owner's username. Never the key or its hash. Lists the caller's own keys and those of owners whose roles the caller dominates; the rest are left out before the page is cut, so the total does not count them. A key whose owner no longer exists needs core:admin."}
 }
 
 func specKeyGet() spec {

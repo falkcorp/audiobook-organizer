@@ -1,5 +1,5 @@
 // file: core/internal/authhttp/errors.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4e91b6c3-0d27-4a58-9f3e-b8c71d5a2e04
 // last-edited: 2026-11-11
 
@@ -46,6 +46,9 @@ func (a *api) fail(ctx context.Context, s spec, p *auth.Principal, target string
 		return he
 	}
 	var thr *auth.ThrottledError
+	if he := authedCredentialFailure(s, err); he != nil {
+		return he
+	}
 	// The Service wraps a bad bootstrap token's error with
 	// ErrInvalidCredentials too: the more specific sentinel is matched first.
 	switch {
@@ -92,6 +95,29 @@ func (a *api) fail(ctx context.Context, s spec, p *auth.Principal, target string
 	}
 	a.log.ErrorContext(ctx, "authhttp: unmapped error", "route", s.method+" "+s.path, "error", err)
 	return err
+}
+
+// authedCredentialFailure is the answer to a credential or account failure on a
+// route whose caller is already signed in (any route that is not Public). A 401
+// there reads as a dead session to the SPA, which signs the user out, when the
+// session is fine and the Service refused something else: the account behind
+// the request was deactivated or restricted, or a password the request
+// supplied is wrong. So these are 409 and 422, never 401. Sign-in routes
+// (Public) keep 401: there it is the answer to the credential presented.
+// nil means err is not one of these, or the route is a sign-in route.
+func authedCredentialFailure(s spec, err error) *httpapi.Error {
+	if s.perm.Kind() == rbac.KindPublic {
+		return nil
+	}
+	switch {
+	case errors.Is(err, auth.ErrResetRequired):
+		return &httpapi.Error{Status: http.StatusConflict, Code: "password_reset_required", Detail: "this account must reset its password with a reset link"}
+	case errors.Is(err, auth.ErrInactiveUser):
+		return &httpapi.Error{Status: http.StatusConflict, Code: "inactive_user", Detail: "this account is not active"}
+	case errors.Is(err, auth.ErrInvalidCredentials):
+		return &httpapi.Error{Status: http.StatusUnprocessableEntity, Code: "invalid_credentials", Detail: "the password or credential supplied is wrong"}
+	}
+	return nil
 }
 
 // linkFail is fail for a call that spends a one-time token (a temp-login or

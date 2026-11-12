@@ -1,5 +1,5 @@
 // file: core/internal/authhttp/entry.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2f6a8c41-9e03-4b75-a7d8-1c5b0e93f4a6
 // last-edited: 2026-11-11
 
@@ -196,7 +196,7 @@ func specStatus() spec {
 func specSetup() spec {
 	return spec{method: http.MethodPost, path: "/auth/setup", name: "setupFirstAdmin", perm: rbac.Public, rate: httpapi.RateAuth,
 		summary: "Create the first administrator",
-		doc:     "Open only while no user exists, and then only with the bootstrap token or from a local request (05-authn §4.6). Every refusal is the same 403 setup_closed."}
+		doc:     "Open only while no user exists, and then only with the bootstrap token or from a local request (05-authn §4.6). Once setup is closed (a user exists, or the caller may not use it) the answer is 403 setup_closed whatever the body says, so a closed setup reveals nothing. While it is open, a wrong, expired or spent bootstrap token is 401 bootstrap_invalid."}
 }
 
 func specBootstrap() spec {

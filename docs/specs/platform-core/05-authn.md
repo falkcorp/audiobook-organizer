@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.10 -->
+<!-- version: 1.13.11 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
-<!-- last-edited: 2026-11-10 -->
+<!-- last-edited: 2026-11-11 -->
 
 # 05 — Authentication (`core/auth`)
 
@@ -1187,7 +1187,7 @@ PR deletes books' gin handlers for both, and the two patterns are the only core 
 | `PUT /me/password` (self only: `{current, new}`; no target-user field) | `core:self` | user required; Interactive |
 | `GET /me/sessions`, `DELETE /me/sessions/{publicID}` | `core:self` | user required; `DELETE`: Interactive |
 | `GET/POST /me/api-keys`, `PATCH/DELETE /me/api-keys/{id}` | `core:self` | user required; key may manage only keys it may create (§4.4) |
-| `GET /api-keys` (every user's keys, each with its owner's username; HEAD's admin list `GET /api/v1/auth/api-keys?all=true`, `internal/server/handlers/apikeys.go:258-303` @748fd787a) | `core:users.manage` | user required (§4.11, SEC-3) |
+| `GET /api-keys` (every user's keys, each with its owner's username; HEAD's admin list `GET /api/v1/auth/api-keys?all=true`, `internal/server/handlers/apikeys.go:258-303` @748fd787a) | `core:users.manage` | user required (§4.11, SEC-3); lists only the caller's own keys and those of owners whose roles the caller dominates (the filter runs before the page is cut, so `total` does not count what is withheld; a key whose owner no longer exists needs `core:admin`), the same reach as `GET /api-keys/{id}` and `/users/{id}/api-keys` |
 | `GET /api-keys/{id}`, `PATCH /api-keys/{id}`, `DELETE /api-keys/{id}` (any key by ID) | `core:self` | user required; the key's owner, or a principal holding `core:users.manage` with dominance over the owner (HEAD's rule, `apikeys.go:323,353,402`); writes Interactive as on `/me/api-keys/{id}`; a key may manage only keys it may create (§4.4) |
 | `GET /users`, `GET /users/{id}` | `core:users.view` | — |
 | `POST /users/invites`, `DELETE /users/invites/{id}` | `core:users.manage` | Interactive; invite role via `CanAssign` |

@@ -1,5 +1,5 @@
 // file: core/internal/authhttp/keys_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e1a47c60-3b92-4d58-8c0f-52f9b6d1a734
 // last-edited: 2026-11-11
 
@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // keysFx is bruce (admin), gordon (a commissioner: users.manage, below admin),
@@ -128,7 +131,7 @@ func TestKeyByID_WritesNeedDominanceAndAreAudited(t *testing.T) {
 
 func TestAllKeys_EveryOwnersKeysWithTheirUsernamesAndNoSecret(t *testing.T) {
 	f := newKeysFx(t)
-	page, err := call(specKeysAll(), f.a.allKeys, f.e.session(f.gordon), listReq{Limit: 50})
+	page, err := call(specKeysAll(), f.a.allKeys, f.e.session(f.bruce), listReq{Limit: 50})
 	if err != nil || page.Total != 2 {
 		t.Fatalf("%+v %v", page, err)
 	}
@@ -142,6 +145,74 @@ func TestAllKeys_EveryOwnersKeysWithTheirUsernamesAndNoSecret(t *testing.T) {
 	b, _ := json.Marshal(page)
 	if strings.Contains(string(b), f.dickRaw) || strings.Contains(string(b), f.bruceRawText) {
 		t.Fatalf("the list carries a key: %s", b)
+	}
+}
+
+// TestAllKeys_HoldsEachOwnersKeysToDominance: a manager below admin lists the
+// keys of the users it dominates, and its own, and nobody else's: the admin's
+// key, whose scopes and last-used address /users/{id}/api-keys and GET
+// /api-keys/{id} refuse the same caller, is not in the list. The filter runs
+// before the page is cut, so Total and the page boundaries do not count what
+// is withheld.
+func TestAllKeys_HoldsEachOwnersKeysToDominance(t *testing.T) {
+	f := newKeysFx(t)
+	gordon := f.e.session(f.gordon)
+	_, gordonsKey := f.e.mint(gordon, f.gordon.ID, "core:self")
+
+	page, err := call(specKeysAll(), f.a.allKeys, gordon, listReq{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, k := range page.Items {
+		ids[k.ID] = true
+	}
+	if page.Total != 2 || len(page.Items) != 2 || !ids[f.dicksKey.ID] || !ids[gordonsKey.ID] || ids[f.brucesKey.ID] {
+		t.Fatalf("gordon sees %v (total %d), want dick's and his own and not the admin's", ids, page.Total)
+	}
+	b, _ := json.Marshal(page)
+	if strings.Contains(string(b), f.brucesKey.ID) || strings.Contains(string(b), "bruce") {
+		t.Fatalf("the admin's key leaked into gordon's list: %s", b)
+	}
+	small, err := call(specKeysAll(), f.a.allKeys, gordon, listReq{Limit: 1})
+	if err != nil || small.Total != 2 || len(small.Items) != 1 {
+		t.Fatalf("a page of one: total %d, %d items, %v", small.Total, len(small.Items), err)
+	}
+
+	admin, err := call(specKeysAll(), f.a.allKeys, f.e.session(f.bruce), listReq{Limit: 50})
+	if err != nil || admin.Total != 3 {
+		t.Fatalf("the admin sees %d keys, want all 3: %v", admin.Total, err)
+	}
+}
+
+// TestAllKeys_AKeyOfADeletedOwnerIsAnAdminsToSee: a key whose owner no longer
+// exists has no roles to dominate, so only core:admin lists it.
+func TestAllKeys_AKeyOfADeletedOwnerIsAnAdminsToSee(t *testing.T) {
+	f := newKeysFx(t)
+	harvey := f.e.user("harvey", "", rbac.RoleViewer)
+	_, orphan := f.e.mint(f.e.session(harvey), harvey.ID, "core:self")
+	f.e.commit(func(b *storage.Batch) error { return f.e.st.DeleteUser(b, harvey) })
+	if _, err := f.e.st.APIKeyByID(context.Background(), orphan.ID); err != nil {
+		t.Skipf("deleting a user also deletes its keys here: %v", err)
+	}
+	for name, c := range map[string]struct {
+		p    *auth.Principal
+		want bool
+	}{
+		"admin":  {f.e.session(f.bruce), true},
+		"gordon": {f.e.session(f.gordon), false},
+	} {
+		page, err := call(specKeysAll(), f.a.allKeys, c.p, listReq{Limit: 50})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		found := false
+		for _, k := range page.Items {
+			found = found || k.ID == orphan.ID
+		}
+		if found != c.want {
+			t.Errorf("%s: orphaned key listed = %v, want %v", name, found, c.want)
+		}
 	}
 }
 
@@ -255,5 +326,85 @@ func TestWriteJSON_ALostClientIsLoggedNotSilent(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "yes") {
 		t.Fatalf("the body reached the log: %q", logs.String())
+	}
+}
+
+// TestFail_AnAuthenticatedRouteNeverAnswers401ForAnAccountFailure: on a route
+// whose caller is signed in, a deactivated account, a restricted one and a
+// wrong password are 409 and 422, because a 401 there reads as a dead session
+// and signs the user out. The sign-in routes keep their 401.
+func TestFail_AnAuthenticatedRouteNeverAnswers401ForAnAccountFailure(t *testing.T) {
+	f := newKeysFx(t)
+	p := f.e.session(f.dick)
+	for _, c := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{auth.ErrInactiveUser, http.StatusConflict, "inactive_user"},
+		{auth.ErrResetRequired, http.StatusConflict, "password_reset_required"},
+		{auth.ErrInvalidCredentials, http.StatusUnprocessableEntity, "invalid_credentials"},
+	} {
+		for _, s := range []spec{specMeKeyCreate(), specKeyRevoke(), specUserKeyNew(), specMePassword()} {
+			wantErr(t, f.a.fail(context.Background(), s, p, "", fmt.Errorf("wrapped: %w", c.err)), c.status, c.code)
+		}
+		wantErr(t, f.a.fail(context.Background(), specLogin(), nil, "", c.err), http.StatusUnauthorized, c.code)
+	}
+}
+
+// TestMintKey_ADeactivatedCallerIsNotASignedOutCaller is the same rule through
+// a real route: the session is fine, the account was deactivated since.
+func TestMintKey_ADeactivatedCallerIsNotASignedOutCaller(t *testing.T) {
+	f := newKeysFx(t)
+	p := f.e.session(f.dick)
+	cur := f.e.reload(f.dick.ID)
+	cur.Status = auth.StatusDisabled
+	cur.Version++
+	f.e.commit(func(b *storage.Batch) error { return f.e.st.PutUser(b, cur) })
+	_, err := call(specMeKeyCreate(), f.a.createMyKey, p, createKeyReq{Body: KeyCreate{Name: "grapple", Scopes: []string{"core:self"}}})
+	he, ok := errors.AsType[*httpapi.Error](err)
+	if !ok || he.Status == http.StatusUnauthorized || he.Status < 400 || he.Status >= 500 {
+		t.Fatalf("err = %v, want a 4xx that is not 401", err)
+	}
+}
+
+// countingUsers counts the user lookups dominatedKeys makes.
+type countingUsers struct {
+	UserLookup
+	n map[auth.UserID]int
+}
+
+func (c *countingUsers) User(ctx context.Context, id auth.UserID) (*auth.User, error) {
+	c.n[id]++
+	return c.UserLookup.User(ctx, id)
+}
+
+// TestDominatedKeys_DecidesOncePerOwnerAndKeepsOrder: the verdict on an owner is
+// made once however many keys it has and does not leak onto another owner,
+// whichever order the keys come in; the caller's own keys are never looked up.
+func TestDominatedKeys_DecidesOncePerOwnerAndKeepsOrder(t *testing.T) {
+	f := newKeysFx(t)
+	cu := &countingUsers{UserLookup: f.a.Users, n: map[auth.UserID]int{}}
+	a := *f.a
+	a.Users = cu
+	gordon := f.e.session(f.gordon)
+	key := func(id string, owner *auth.User) APIKey { return APIKey{ID: id, Owner: string(owner.ID)} }
+	in := []APIKey{
+		key("k1", f.bruce), key("k2", f.gordon), key("k3", f.bruce), key("k4", f.dick),
+		key("k5", f.gordon), key("k6", f.dick), key("k7", f.bruce),
+	}
+	got, err := a.dominatedKeys(context.Background(), gordon, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, k := range got {
+		ids = append(ids, k.ID)
+	}
+	if want := []string{"k2", "k4", "k5", "k6"}; !slices.Equal(ids, want) {
+		t.Errorf("kept %v, want %v", ids, want)
+	}
+	if cu.n[f.bruce.ID] != 1 || cu.n[f.dick.ID] != 1 || cu.n[f.gordon.ID] != 0 {
+		t.Errorf("lookups = %v, want one each for bruce and dick and none for gordon", cu.n)
 	}
 }

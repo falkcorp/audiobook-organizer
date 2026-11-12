@@ -1,7 +1,7 @@
 // file: core/internal/modulehttp/modulehttp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b81ed3a-71eb-4116-9762-264f23af72d2
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package modulehttp
 
@@ -261,13 +261,31 @@ func TestListModules_DisabledModulesOnlyForAdmin(t *testing.T) {
 		t.Errorf("admin with nothing disabled: disabled_modules = %v, want []", jsonOf(t, got)["disabled_modules"])
 	}
 
-	bare := &auth.Principal{Method: auth.MethodSession}
-	got, err := a.listModules(ctx, in(bare, listModulesReq{}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.DisabledModules != nil {
-		t.Error("a principal with no permission set was treated as an admin")
+}
+
+// TestListModules_NeedsAnAuthenticatedPrincipal: GET /modules is
+// AnyAuthenticated, which the handler applies itself until stage 13 exists
+// (05-rbac 4.10). No principal is 401. A principal with no compiled permission
+// set holds nothing, and a Confined key (a worker or facade key) never
+// satisfies it: both are 403, and neither reaches the view or sees a module.
+func TestListModules_NeedsAnAuthenticatedPrincipal(t *testing.T) {
+	view := &fakeView{snap: gotham()}
+	a := &api{view: view, log: discard()}
+	ctx := context.Background()
+	for name, c := range map[string]struct {
+		p      *auth.Principal
+		status int
+		code   string
+	}{
+		"no principal":               {nil, http.StatusUnauthorized, "authentication_required"},
+		"no compiled permission set": {&auth.Principal{Method: auth.MethodSession}, http.StatusForbidden, "permission_denied"},
+		"confined key":               {confinedKey(), http.StatusForbidden, "permission_denied"},
+	} {
+		got, err := a.listModules(ctx, in(c.p, listModulesReq{}))
+		wantStatus(t, err, c.status, c.code)
+		if len(got.Modules) != 0 || got.DisabledModules != nil {
+			t.Errorf("%s: the refusal carried a manifest: %+v", name, got)
+		}
 	}
 }
 
