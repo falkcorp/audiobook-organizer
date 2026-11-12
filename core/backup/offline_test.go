@@ -17,6 +17,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -164,6 +165,111 @@ func TestExtractStoreCoreArchiveWritesOnlyTheStore(t *testing.T) {
 	}
 }
 
+// manifestFirstArchive writes a gzip archive whose first entry is named first and
+// holds the manifest bytes, followed by every other entry of src.
+func manifestFirstArchive(t *testing.T, src, dst, first string, manifest []byte) {
+	t.Helper()
+	got := entriesOf(t, src)
+	names := make([]string, 0, len(got))
+	for n := range got {
+		if n != backup.ManifestName {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	put := func(name string, b []byte) {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(b))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(first, manifest)
+	for _, n := range names {
+		put(n, []byte(got[n]))
+	}
+	if err := errors.Join(tw.Close(), zw.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The manifest is the first entry by rule: a valid manifest under any other
+// first-entry name is not read as one, so an archive cannot name its own manifest.
+func TestExtractStoreRefusesAFirstEntryThatIsNotTheManifest(t *testing.T) {
+	e := newEnv(t)
+	a := e.create("manual")
+	src := e.path(a)
+	raw := []byte(entriesOf(t, src)[backup.ManifestName])
+	// Control: the same bytes under the right name extract.
+	ok := filepath.Join(t.TempDir(), "gotham_20261112_030000.tar.gz")
+	manifestFirstArchive(t, src, ok, backup.ManifestName, raw)
+	if _, err := backup.ExtractStore(t.Context(), ok, emptyDir(t)); err != nil {
+		t.Fatalf("control: the manifest under its own name = %v", err)
+	}
+	bad := filepath.Join(t.TempDir(), "gotham_20261112_040000.tar.gz")
+	manifestFirstArchive(t, src, bad, "notes.json", raw)
+	dir := emptyDir(t)
+	if _, err := backup.ExtractStore(t.Context(), bad, dir); !errors.Is(err, backup.ErrManifest) {
+		t.Fatalf("ExtractStore with the manifest under another name = %v, want ErrManifest", err)
+	}
+	if got := extracted(t, dir); len(got) != 0 {
+		t.Errorf("a refused archive left %d files in the store directory", len(got))
+	}
+}
+
+// The manifest is bounded twice: ParseManifest refuses bytes over the cap, and
+// the archive reader refuses a first entry that claims more before it sizes a
+// buffer for it (the only difference between the two is the allocation, which
+// the second half measures).
+func TestManifestByteCapsAreEnforced(t *testing.T) {
+	e := newEnv(t)
+	a := e.create("manual")
+	raw := []byte(entriesOf(t, e.path(a))[backup.ManifestName])
+	pad := func(n int) []byte { return append(append([]byte{}, raw...), bytes.Repeat([]byte(" "), n-len(raw))...) }
+
+	t.Run("ParseManifest", func(t *testing.T) {
+		if _, err := backup.ParseManifest(pad(backup.MaxManifestBytes)); err != nil {
+			t.Fatalf("control: a manifest of exactly the cap (padded with white space) = %v", err)
+		}
+		if _, err := backup.ParseManifest(pad(backup.MaxManifestBytes + 1)); !errors.Is(err, backup.ErrManifest) {
+			t.Fatalf("a manifest one byte over the cap = %v, want ErrManifest", err)
+		}
+	})
+	t.Run("a first entry that claims more than the cap", func(t *testing.T) {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(zw)
+		// Only the header is written: the claimed size is 1 GiB.
+		if err := tw.WriteHeader(&tar.Header{Name: backup.ManifestName, Typeflag: tar.TypeReg, Mode: 0o600, Size: 1 << 30}); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "gotham_20261112_050000.tar.gz")
+		if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := backup.ExtractStore(t.Context(), path, emptyDir(t))
+		runtime.ReadMemStats(&after)
+		if !errors.Is(err, backup.ErrManifest) {
+			t.Fatalf("ExtractStore = %v, want ErrManifest", err)
+		}
+		if grew := after.TotalAlloc - before.TotalAlloc; grew > 128<<20 {
+			t.Errorf("refusing the oversize manifest allocated %d MiB: a buffer was sized from the header before the cap was checked", grew>>20)
+		}
+	})
+}
+
 func contains(s []string, v string) bool {
 	return slices.Contains(s, v)
 }
@@ -297,14 +403,21 @@ func TestExtractStoreRefusesBadPaths(t *testing.T) {
 	e := newEnv(t)
 	a := e.create("manual")
 	src := e.path(a)
+	// Each relative name below resolves from the working directory, so a refusal
+	// proves the absolute-path rule, not that the file happened to be missing.
 	t.Run("relative archive", func(t *testing.T) {
-		if _, err := backup.ExtractStore(t.Context(), a.Name, emptyDir(t)); err == nil {
-			t.Fatal("a relative archive path was accepted")
+		t.Chdir(filepath.Dir(src))
+		if _, err := backup.ExtractStore(t.Context(), a.Name, emptyDir(t)); err == nil || !strings.Contains(err.Error(), "absolute") {
+			t.Fatalf("a relative archive path = %v, want a refusal naming absolute paths", err)
 		}
 	})
 	t.Run("relative store", func(t *testing.T) {
-		if _, err := backup.ExtractStore(t.Context(), src, "store"); err == nil {
-			t.Fatal("a relative store path was accepted")
+		t.Chdir(t.TempDir())
+		if err := os.Mkdir("store", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := backup.ExtractStore(t.Context(), src, "store"); err == nil || !strings.Contains(err.Error(), "absolute") {
+			t.Fatalf("a relative store path = %v, want a refusal naming absolute paths", err)
 		}
 	})
 	t.Run("store with files", func(t *testing.T) {
