@@ -1,5 +1,5 @@
 // file: core/backup/retention.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b3a64e29-f8d1-4c07-9e4a-5a0d7c28b1f3
 // last-edited: 2026-11-12
 
@@ -244,7 +244,14 @@ func (s *Svc) trimJournal(ctx context.Context, prot map[ArchiveID]string) error 
 // Ensure is "archive unless one verified within maxAge" (organizer's
 // pre-organize backup): a verified archive no older than maxAge is returned as
 // is; otherwise a new one is made with reason.
+//
+// The reason is judged first, whether or not it will be used: a caller whose
+// reason Create would refuse is told so now, not on the day no recent archive
+// exists (an empty reason is legal, and Create defaults it).
 func (s *Svc) Ensure(ctx context.Context, maxAge time.Duration, reason string) (Archive, bool, error) {
+	if err := ValidReason(reason); err != nil {
+		return Archive{}, false, err
+	}
 	all, err := s.scan(ctx)
 	if err != nil {
 		return Archive{}, false, err

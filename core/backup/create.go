@@ -1,5 +1,5 @@
 // file: core/backup/create.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 6e7c41d8-9a30-4d1b-a2c5-17b0f3d9e6a4
 // last-edited: 2026-11-12
 
@@ -304,7 +304,14 @@ func (s *Svc) publish(src string, at time.Time, ext string) (name, full string, 
 		if sidecarHeld(full) {
 			continue
 		}
-		switch err := s.o.Disk.publish(src, full); {
+		fellBack, err := s.o.Disk.publish(src, full)
+		if fellBack != nil {
+			s.noLinks.Do(func() {
+				s.o.log().Warn("backup: a hard link could not be made in the backup directory (usually a filesystem without hard links), so archives are published by claiming the name and renaming over the claim, which shows an empty file at the name for an instant; this is logged once",
+					"cause", linkCause(fellBack))
+			})
+		}
+		switch {
 		case err == nil:
 			if rerr := os.Remove(src); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 				// The archive is published; the leftover is a second name for the

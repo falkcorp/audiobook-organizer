@@ -1,5 +1,5 @@
 // file: core/internal/backuphttp/routes_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 71e57c75-3bcb-4631-a4cb-85a8d13a48d1
 // last-edited: 2026-11-12
 
@@ -667,12 +667,21 @@ func TestBackupCreateFlow(t *testing.T) {
 			t.Errorf("records = %+v, want the request and a failure record", r.rec.records)
 		}
 	})
-	t.Run("a reason the service refuses is the caller's, a 400", func(t *testing.T) {
+	t.Run("a reason the service refuses is answered as the route answers one", func(t *testing.T) {
+		// Whichever of the two catches a bad reason, the caller gets the same
+		// status, code and field: the route's own refusal (above) is the
+		// reference, the service's sentinel must map to an identical problem.
+		route := newBHRig(t)
+		want := route.do(p, "POST", "/backups", "application/json", `{"reason":"a\nb"}`)
+		if want.status != 422 {
+			t.Fatalf("the route's refusal = %d %s, want 422", want.status, want.body)
+		}
 		r := newBHRig(t)
 		r.enq.err = fmt.Errorf("%w: it is the Joker's", backup.ErrInvalidReason)
 		rep := r.do(p, "POST", "/backups", "", "")
-		if rep.status != 400 || bhProblem(t, rep).Code != "invalid_reason" || strings.Contains(rep.body, "Joker") {
-			t.Errorf("= %d %s, want 400 invalid_reason without the cause", rep.status, rep.body)
+		got, ref := bhProblem(t, rep), bhProblem(t, want)
+		if rep.status != want.status || got.Code != ref.Code || got.Code != "validation_failed" || !strings.Contains(rep.body, "/body/reason") || strings.Contains(rep.body, "Joker") {
+			t.Errorf("= %d %s, want %d %s without the cause", rep.status, rep.body, want.status, want.body)
 		}
 	})
 }

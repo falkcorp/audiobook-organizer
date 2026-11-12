@@ -1,5 +1,5 @@
 // file: core/backup/reason_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9fc71041-93b7-46d4-9a79-99298c8e2c54
 // last-edited: 2026-11-12
 
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/backup"
 )
@@ -167,6 +168,14 @@ func TestCreateRefusesAManifestItsOwnCatalogueCannotRead(t *testing.T) {
 	if !errors.Is(err, backup.ErrManifest) {
 		t.Fatalf("Create = %v, want ErrManifest", err)
 	}
+	// The manifest does not exist before the content marker is advanced (it
+	// carries the new marker), so the refusal comes after exactly one advance:
+	// the run failed, and what it leaves is a marker moved once and no archive.
+	// A check moved ahead of the advance would show as none, one moved to the
+	// end as an archive in the directory.
+	if n := len(e.markers.advances); n != 1 {
+		t.Errorf("the marker was advanced %d times, want once before the refusal", n)
+	}
 	if names := e.names(); len(names) != 0 {
 		t.Errorf("a create that could not read its own manifest left %v", names)
 	}
@@ -212,5 +221,41 @@ func TestRewrapRefusesAManifestItsOwnCatalogueCannotRead(t *testing.T) {
 	}
 	if l := leftovers(e); len(l) != 0 {
 		t.Fatalf("leftover %v", l)
+	}
+}
+
+// Ensure returns an archive it finds instead of making one, and then never
+// touches its reason. It judges the reason first all the same: a caller with a
+// reason Create would refuse must learn that on a day when a recent archive
+// exists, not on the day none does.
+func TestEnsureRefusesAReasonTheCatalogueCouldNotRead(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	recent := e.create("manual") // verified, Own and recent: Ensure would hand it back
+	for name, reason := range map[string]string{
+		"257 bytes":               strings.Repeat("x", 257),
+		"a CJK text of 300 bytes": batName(100),
+		"a CR and LF":             "pre-update\r\nERROR forged by the reason",
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, created, err := e.svc.Ensure(ctx, time.Hour, reason)
+			if !errors.Is(err, backup.ErrInvalidReason) || created || a.ID != "" {
+				t.Fatalf("Ensure = %q, created=%v, %v; want ErrInvalidReason and no archive", a.ID, created, err)
+			}
+			if strings.Contains(err.Error(), "ERROR forged") || strings.Contains(err.Error(), "蝙") {
+				t.Errorf("the error quotes the reason: %q", err)
+			}
+		})
+	}
+	if list, err := e.svc.List(ctx); err != nil || len(list) != 1 {
+		t.Fatalf("catalogue = %d archives, %v; the refusals must make none", len(list), err)
+	}
+	// What is legal still finds the archive: a reason of the longest length, and
+	// none at all (Create would default it).
+	for _, reason := range []string{"pre:books.organize", strings.Repeat("x", backup.MaxReasonBytes), ""} {
+		a, created, err := e.svc.Ensure(ctx, time.Hour, reason)
+		if err != nil || created || a.ID != recent.ID {
+			t.Fatalf("Ensure(%d-byte reason) = %s, created=%v, %v; want the recent archive", len(reason), a.ID, created, err)
+		}
 	}
 }

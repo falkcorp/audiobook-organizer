@@ -1,5 +1,5 @@
 // file: core/backup/options.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7f8ad2c3-31d0-4b0e-b0c5-6a0f3a1d8e44
 // last-edited: 2026-11-12
 
@@ -165,7 +165,10 @@ func (d Disk) link(oldname, newname string) error {
 // publish gives the finished file src the name dst without ever replacing a
 // file that is already called dst: it fails with an error that satisfies
 // fs.ErrExist when one is. src is left in place on success when a link made the
-// name (the caller removes it) and renamed away on the fallback.
+// name (the caller removes it) and renamed away on the fallback. fellBack is
+// the error that made it leave the link for the fallback (nil when the link was
+// tried and was not why it failed), so the caller can say once that the volume
+// does not link.
 //
 // The name is taken by a hard link, which is atomic and leaves the archive whole
 // at its name from the first moment. A filesystem that cannot link (FAT and
@@ -175,27 +178,37 @@ func (d Disk) link(oldname, newname string) error {
 // nothing. The claim is visible, empty, for the instant between the two calls,
 // where a link never is; it is what lets a backup directory on such a volume
 // work at all.
-func (d Disk) publish(src, dst string) error {
+func (d Disk) publish(src, dst string) (fellBack, err error) {
 	lerr := d.link(src, dst)
 	if lerr == nil || errors.Is(lerr, fs.ErrExist) {
-		return lerr
+		return nil, lerr
 	}
 	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
-			return err
+			return lerr, err
 		}
-		return errors.Join(lerr, err)
+		return lerr, errors.Join(lerr, err)
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(dst)
-		return err
+		return lerr, err
 	}
 	if err := os.Rename(src, dst); err != nil {
 		_ = os.Remove(dst)
-		return err
+		return lerr, err
 	}
-	return nil
+	return lerr, nil
+}
+
+// linkCause is why a link failed, without the two paths an *os.LinkError
+// carries: the operator's directories are not for the log line that says the
+// volume cannot link.
+func linkCause(err error) error {
+	if le, ok := errors.AsType[*os.LinkError](err); ok {
+		return le.Err
+	}
+	return err
 }
 
 // Options are everything a Service needs. Every seam is a small interface the
@@ -349,6 +362,15 @@ func (o *Options) validate() error {
 type Svc struct {
 	o    Options
 	hold sync.Mutex // the backup resource
+
+	// importMu is held by an Import from its last duplicate check through its
+	// publication and sidecars (install), never while it reads the upload.
+	importMu sync.Mutex
+
+	// noLinks makes the log say once, not at every archive, that the backup
+	// directory's filesystem cannot hard-link and archives are published by the
+	// claim-and-rename fallback.
+	noLinks sync.Once
 
 	cache  sync.Map // classification cache: name -> cachedKind
 	warned sync.Map // file names already reported as duplicate IDs, so a polled listing logs each once
