@@ -603,6 +603,54 @@ func TestRouter_SlotReleasedOnPanic(t *testing.T) {
 	}
 }
 
+// A kind cap of 1 is given back by every way a call can end. The endpoint has
+// room for four, so only the kind's own count can refuse the last call: a panic
+// or a failed call that kept its kind slot would starve every later call of the
+// kind, and that must fail here in seconds rather than hang a suite.
+func TestRouter_KindSlotReleasedOnEveryExit(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.setConfig(ai.Config{KindLimits: map[ai.Kind]int{ai.KindText: 1}})
+	c := h.capability("riddle")
+	f := fake()
+	f.ScriptText(coretest.FakeAIStep{Text: "fine"})
+	set := textEndpoint("joker-7b", "gotham.riddle")
+	set.Concurrency = 4
+	h.addEndpoint("arkham", 1, set, f)
+
+	// Every call carries the deadline: a leaked kind slot makes the NEXT call
+	// wait for it, so it is that call that has to give up, not the test binary.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the panic did not propagate to the caller")
+			}
+		}()
+		_, _ = ai.Call(ctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
+			panic("the Joker pulled the fire alarm")
+		})
+	}()
+
+	ran := false
+	_, err := ai.Call(ctx, h.r, c, func(context.Context, ai.Target) (string, ai.Usage, error) {
+		ran = true
+		return "", ai.Usage{}, errors.New("the Riddler answered with a riddle")
+	})
+	if !ran {
+		t.Fatalf("the call after a panic never got the kind's one slot: %v", err)
+	}
+	if err == nil {
+		t.Fatal("a failing call reported success")
+	}
+
+	if _, err := h.r.Generate(ctx, c, text("who?")); err != nil {
+		t.Fatalf("the call after a failed call never got the kind's one slot: %v", err)
+	}
+}
+
 // core.ai.kind_limits.<kind> is the pool-wide in-flight cap of a kind, and it
 // is read from the live config on every call (HEAD had no production setter for
 // whisper_max_in_flight).

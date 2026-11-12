@@ -90,10 +90,9 @@ func (s *fakeScript) take() FakeAIStep {
 }
 
 type fakeBatch struct {
-	tags    map[string]string
-	items   []ai.BatchItem
-	phase   ai.BatchPhase
-	results []ai.BatchResult
+	tags  map[string]string
+	items []ai.BatchItem
+	phase ai.BatchPhase
 }
 
 // NewFakeAI is an endpoint with no caps, an empty script for every kind and an

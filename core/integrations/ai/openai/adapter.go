@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -89,6 +90,16 @@ func Descriptor() (integrations.Descriptor, error) {
 type instance struct {
 	ref integrations.Ref
 	cl  oai.Client
+	log *slog.Logger // never nil: logOf supplies a discarding logger
+}
+
+// logOf is env's logger, or one that discards when the host supplied none, so
+// an adapter built from a bare Env (a test's) never dereferences nil.
+func logOf(env integrations.Env) *slog.Logger {
+	if env.Log != nil {
+		return env.Log
+	}
+	return slog.New(slog.DiscardHandler)
 }
 
 var (
@@ -118,7 +129,7 @@ func build(_ context.Context, env integrations.Env, cfg integrations.InstanceCon
 	if hasKey(cfg.Settings) {
 		opts = append(opts, option.WithMiddleware(keyMiddleware(env)))
 	}
-	return &instance{ref: env.Ref, cl: oai.NewClient(opts...)}, nil
+	return &instance{ref: env.Ref, cl: oai.NewClient(opts...), log: logOf(env)}, nil
 }
 
 // baseURL validates the configured URL and gives it the trailing slash the SDK
@@ -184,16 +195,23 @@ func keyMiddleware(env integrations.Env) option.Middleware {
 // unknown, and the operator would not learn what came back. The only 2xx the
 // API answers without JSON is a file's content (the batch result files).
 func responseGuard(env integrations.Env) option.Middleware {
+	log := logOf(env)
 	return func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 		resp, err := next(req)
 		if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode > 299 || strings.HasSuffix(req.URL.Path, "/content") {
 			return resp, err
 		}
-		mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		// mt is empty when the type does not parse and is still the media type
+		// when only a parameter is malformed (mime.ErrInvalidMediaParameter), so
+		// mt alone decides; the parse error only explains a refusal.
+		mt, _, perr := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if mt == "application/json" || strings.HasSuffix(mt, "+json") {
 			return resp, nil
 		}
-		drain(resp.Body)
+		if perr != nil {
+			log.Debug("openai: the content type of a non-JSON reply does not parse", "err", perr)
+		}
+		drain(log, resp.Body)
 		return nil, &integrations.Error{
 			Ref: env.Ref, Status: resp.StatusCode, Class: integrations.ClassBadOutput,
 			Err: fmt.Errorf("the server answered %d with content type %q, not JSON; check that the url setting points at the API", resp.StatusCode, detail(mt)),

@@ -113,10 +113,3 @@ func (s *slots) depth(ref integrations.Ref) int {
 	defer s.mu.Unlock()
 	return s.used[ref]
 }
-
-// kindDepth is how many slots of kind are held now.
-func (s *slots) kindDepth(kind Kind) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.byKind[kind]
-}
