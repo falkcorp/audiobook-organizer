@@ -1,7 +1,7 @@
 // file: core/audit/restore_hook.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e19562d3-4a41-481f-afb2-7fdc551fac2c
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package audit
 
@@ -38,10 +38,32 @@ const (
 type RestoreDeps struct {
 	Store *Store // the live (just restored) audit store
 	// RestoreSeq is the seq of the revocation journal's restore line this run
-	// belongs to (0 when none). It is the idempotency key of the records the
-	// hook appends.
+	// belongs to (0 when the journal could not take one). Unless RunKey is set it
+	// is the idempotency key of the records the hook appends, and 0 is never a
+	// key: two restores that both had no line must not share one.
 	RestoreSeq uint64
-	Log        *slog.Logger // nil discards
+	// RunKey identifies this run when there is no restore line: a value that is
+	// the same for every re-run of one restore (hooks re-run after a crash) and
+	// differs between restores. The kernel records one durably with the run
+	// (journal.EnsureHookRun). When set it is the idempotency key and RestoreSeq
+	// is only reported; the hook fails before writing anything when both are
+	// unset.
+	RunKey string
+	Log    *slog.Logger // nil discards
+}
+
+// restoreTargetID is the id of the core.restore target the run's records are
+// keyed on: the run key when there is one, else the restore line's seq. A run
+// with neither has nothing to tell it from another, and deduplicating on a zero
+// seq would silently drop the records of every restore after the first.
+func (d RestoreDeps) restoreTargetID() (string, error) {
+	switch {
+	case d.RunKey != "":
+		return d.RunKey, nil
+	case d.RestoreSeq != 0:
+		return strconv.FormatUint(d.RestoreSeq, 10), nil
+	}
+	return "", errors.New("audit: restore hook: no restore line and no run key to tell this restore from another")
 }
 
 // RestoreHook returns audit's journal.RestoreHook (run third, after auth and
@@ -61,6 +83,10 @@ func RestoreHook(d RestoreDeps) journal.RestoreHook {
 		if d.Store == nil {
 			return nil, errors.New("audit: restore hook: RestoreDeps.Store is nil")
 		}
+		target, err := d.restoreTargetID()
+		if err != nil {
+			return nil, err
+		}
 		log := d.Log
 		if log == nil {
 			log = slog.New(slog.DiscardHandler)
@@ -73,11 +99,11 @@ func RestoreHook(d RestoreDeps) journal.RestoreHook {
 			}
 			copied = n
 		}
-		appended, err := appendRestoreRecords(ctx, d, rc, copied)
+		appended, err := appendRestoreRecords(ctx, d, target, rc, copied)
 		if err != nil {
 			return nil, err
 		}
-		log.Info("audit restore hook done", "copied", copied, "appended", appended, "restore_seq", d.RestoreSeq)
+		log.Info("audit restore hook done", "copied", copied, "appended", appended, "restore_seq", d.RestoreSeq, "run", target)
 		return map[string]int{CountRecordsCopied: copied, CountRecordsAppended: appended}, nil
 	}
 }
@@ -191,8 +217,8 @@ func copyForward(ctx context.Context, s *Store, rc journal.RestoreContext) (_ in
 // appendRestoreRecords writes the stage, revoke and apply records through the
 // store's normal Record path, skipping any that already exist for this
 // restore. It returns how many it wrote.
-func appendRestoreRecords(ctx context.Context, d RestoreDeps, rc journal.RestoreContext, copied int) (int, error) {
-	target := entity.Ref{Module: "core", Kind: "restore", ID: strconv.FormatUint(d.RestoreSeq, 10)}
+func appendRestoreRecords(ctx context.Context, d RestoreDeps, targetID string, rc journal.RestoreContext, copied int) (int, error) {
+	target := entity.Ref{Module: "core", Kind: "restore", ID: targetID}
 	kind := restoreKindName(rc.Kind)
 	appended := 0
 	write := func(action string, details map[string]any) error {
