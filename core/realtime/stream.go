@@ -1,5 +1,5 @@
 // file: core/realtime/stream.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 296e9d57-e9d7-4a07-895f-152672e4463d
 // last-edited: 2026-11-12
 
@@ -30,7 +30,14 @@ const strikes = 3
 // the one exception is user and cred, which are written before Subscribe and
 // only read afterwards (End's matcher).
 type stream struct {
-	h        *Hub
+	h *Hub
+	// req is the principal the request authenticated as. It never changes: it is
+	// the identity Revalidate checks and Refresh is asked about, so a Refresh
+	// that answered with another credential's principal cannot move the stream
+	// onto that credential's validity.
+	req *auth.Principal
+	// p is the principal whose rights the stream is filtered by: req at first,
+	// then each successful Refresh's answer. It only ever supplies rights.
 	p        *auth.Principal
 	user     auth.UserID // "" for the auth-disabled principal
 	cred     string
@@ -165,7 +172,7 @@ func (st *stream) Check(ctx context.Context, beat bool) (reason string) {
 // revalidate is auth.Service.Revalidate on a heartbeat: a definite refusal
 // ends the stream at once, a store failure only after strikes in a row.
 func (st *stream) revalidate(ctx context.Context) string {
-	err := st.h.d.Auth.Revalidate(ctx, st.p)
+	err := st.h.d.Auth.Revalidate(ctx, st.req)
 	switch {
 	case err == nil:
 		st.revalFails = 0
@@ -192,7 +199,7 @@ func (st *stream) revalidate(ctx context.Context) string {
 // client reconnects to see it. A failure to refresh is handled by the caller's
 // retry on the next heartbeat; until it succeeds Deliver withholds everything.
 func (st *stream) rightsChanged(ctx context.Context, g uint64) string {
-	np, err := st.h.d.Refresh(ctx, st.p)
+	np, err := st.h.d.Refresh(ctx, st.req)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return ""
@@ -206,6 +213,12 @@ func (st *stream) rightsChanged(ctx context.Context, g uint64) string {
 	case err != nil:
 		return sse.CloseCredentialRevoked
 	case !holds(np, rbac.AnyAuthenticated), userOf(np) != st.user:
+		return sse.ClosePermissionRevoked
+	case np.Method != st.req.Method, np.CredentialID != st.cred:
+		// The answer is for another credential (or another way of presenting
+		// it): its rights are not this stream's, and Revalidate would be
+		// checking the wrong credential for the rest of the stream's life.
+		st.h.warnOnce("(refresh)", "realtime: Deps.Refresh answered with a principal for a different credential; the stream is ended (logged once per minute)")
 		return sse.ClosePermissionRevoked
 	}
 	st.refreshFails = 0

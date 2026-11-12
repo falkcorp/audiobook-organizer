@@ -1,5 +1,5 @@
 // file: core/internal/sse/serve.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 05e0a1b8-cca8-4e9d-9c48-f3af45a1a26e
 // last-edited: 2026-11-12
 
@@ -61,9 +61,9 @@ func (s *Subscriber) Serve(ctx context.Context, w http.ResponseWriter) (reason s
 		}
 	}()
 	rc := http.NewResponseController(w)
-	s.mu.Lock()
+	s.wmu.Lock()
 	s.rc = rc
-	s.mu.Unlock()
+	s.wmu.Unlock()
 	hd := w.Header()
 	hd.Set("Content-Type", "text/event-stream")
 	hd.Set("Cache-Control", "no-store")
@@ -73,7 +73,7 @@ func (s *Subscriber) Serve(ctx context.Context, w http.ResponseWriter) (reason s
 	var buf bytes.Buffer
 	buf.WriteString(retryFrame)
 	s.control(&buf, TopicOpened, map[string]any{"topics": s.Topics()})
-	if r := s.write(rc, w, &buf); r != "" {
+	if r := s.write(rc, w, &buf, false); r != "" {
 		return r
 	}
 	hb := time.NewTicker(b.opt.Heartbeat)
@@ -110,7 +110,7 @@ func (s *Subscriber) Serve(ctx context.Context, w http.ResponseWriter) (reason s
 				continue
 			}
 			if buf.Len() >= flushBytes {
-				if r := s.write(rc, w, &buf); r != "" {
+				if r := s.write(rc, w, &buf, false); r != "" {
 					return r
 				}
 			}
@@ -118,7 +118,7 @@ func (s *Subscriber) Serve(ctx context.Context, w http.ResponseWriter) (reason s
 		if beat {
 			buf.WriteString(": hb\n\n")
 		}
-		if r := s.write(rc, w, &buf); r != "" {
+		if r := s.write(rc, w, &buf, false); r != "" {
 			return r
 		}
 		if more {
@@ -130,7 +130,7 @@ func (s *Subscriber) Serve(ctx context.Context, w http.ResponseWriter) (reason s
 // finish writes the closed frame for reason and returns reason.
 func (s *Subscriber) finish(rc *http.ResponseController, w http.ResponseWriter, buf *bytes.Buffer, reason string) string {
 	s.control(buf, TopicClosed, map[string]string{"reason": reason})
-	if r := s.write(rc, w, buf); r != "" {
+	if r := s.write(rc, w, buf, true); r != "" {
 		return r
 	}
 	return reason
@@ -168,17 +168,41 @@ func (s *Subscriber) frame(buf *bytes.Buffer, id string, data []byte) bool {
 }
 
 // write sends and clears buf under one per-write deadline, then flushes, and
-// returns "" on success or the reason the stream is over. A writer that
-// cannot take a deadline or a flush (a test recorder) is tolerated; any other
-// failure ends the stream.
-func (s *Subscriber) write(rc *http.ResponseController, w http.ResponseWriter, buf *bytes.Buffer) string {
+// returns "" on success or the reason the stream is over. The deadline is set
+// before the write and cleared after it: a deadline left standing would, on
+// HTTP/2, reset an idle stream when it expired. A writer that cannot take a
+// deadline or a flush (a test recorder) is tolerated; any other failure ends
+// the stream.
+//
+// A stream that has been ended writes nothing more except its final closed
+// frame (final, bounded by interruptGrace rather than WriteTimeout): the
+// buffered frames are dropped, the caller loops, and the next take sees the end
+// and sends the closed frame. Checking this and setting
+// the deadline happen under wmu, which interrupt also takes, so an interrupt
+// can neither be lost between the two nor land on the final write.
+func (s *Subscriber) write(rc *http.ResponseController, w http.ResponseWriter, buf *bytes.Buffer, final bool) string {
 	if buf.Len() == 0 {
 		return ""
 	}
-	if err := rc.SetWriteDeadline(time.Now().Add(s.b.opt.WriteTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+	s.wmu.Lock()
+	if !final && s.endedReason() != "" {
+		s.wmu.Unlock()
+		buf.Reset()
+		return ""
+	}
+	limit := s.b.opt.WriteTimeout
+	if final {
+		// The closed frame is a few bytes to a client that is reading; a client
+		// that is not must not hold the stream open for a whole WriteTimeout.
+		limit = min(limit, interruptGrace)
+	}
+	err := rc.SetWriteDeadline(time.Now().Add(limit))
+	s.writing = err == nil && !final
+	s.wmu.Unlock()
+	if err != nil && !errors.Is(err, http.ErrNotSupported) {
 		return CloseClient
 	}
-	_, err := w.Write(buf.Bytes())
+	_, err = w.Write(buf.Bytes())
 	buf.Reset()
 	if err == nil {
 		err = rc.Flush()
@@ -186,11 +210,23 @@ func (s *Subscriber) write(rc *http.ResponseController, w http.ResponseWriter, b
 			err = nil
 		}
 	}
+	s.wmu.Lock()
+	s.writing = false
+	var cerr error
+	if err == nil && !final {
+		cerr = rc.SetWriteDeadline(time.Time{})
+		if errors.Is(cerr, http.ErrNotSupported) {
+			cerr = nil
+		}
+	}
+	s.wmu.Unlock()
 	switch {
-	case err == nil:
+	case err == nil && cerr == nil:
 		return ""
+	case err == nil:
+		return CloseClient
 	case errors.Is(err, os.ErrDeadlineExceeded) && s.endedReason() != "":
-		return s.endedReason() // end() moved the deadline to interrupt this write
+		return s.endedReason() // interrupt shortened this write's deadline
 	case errors.Is(err, os.ErrDeadlineExceeded):
 		return CloseWriteTimeout
 	default:

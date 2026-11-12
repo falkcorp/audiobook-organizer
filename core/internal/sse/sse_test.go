@@ -1,15 +1,18 @@
 // file: core/internal/sse/sse_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c1e4b93-5d28-4a6f-9b07-e2a3c8d41f56
 // last-edited: 2026-11-12
 
 package sse_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
@@ -530,8 +533,12 @@ func TestServe_EveryWriteHasADeadline(t *testing.T) {
 	pub(b, "a.x", "")
 	rec.awaitText(t, nonce+"-1")
 	rec.mu.Lock()
-	n := len(rec.deadlines)
+	n := 0
 	for _, d := range rec.deadlines {
+		if d.IsZero() { // the clear after a finished write
+			continue
+		}
+		n++
 		if rem := time.Until(d); rem <= 0 || rem > 3*time.Second {
 			t.Errorf("deadline %v away, want within (0, 3s]", rem)
 		}
@@ -976,18 +983,40 @@ func TestRequestReset_IsWrittenBeforeTheNextEntry(t *testing.T) {
 	finished(t, done)
 }
 
-// stuckRecorder blocks every write after the first until its deadline passes.
+// stuckRecorder blocks every write after the first until its deadline passes,
+// and records every deadline it was given.
 type stuckRecorder struct {
 	*recorder
-	mu       sync.Mutex
-	deadline time.Time
-	moved    chan struct{}
-	writes   int
+	mu        sync.Mutex
+	deadline  time.Time
+	moved     chan struct{}
+	writes    int
+	deadlines []time.Time // as set, with the time they were set at
+	setAt     []time.Time
+	refuse    func(time.Time) error // optional: refuse a deadline
+	// onDeadline, if set, runs inside SetWriteDeadline for the nth non-zero
+	// deadline (1-based), before it is recorded.
+	onDeadline func(n int, t time.Time)
+	nonZero    int
 }
 
 func (r *stuckRecorder) SetWriteDeadline(t time.Time) error {
+	if r.refuse != nil {
+		if err := r.refuse(t); err != nil {
+			return err
+		}
+	}
+	if !t.IsZero() && r.onDeadline != nil {
+		r.mu.Lock()
+		r.nonZero++
+		n := r.nonZero
+		r.mu.Unlock()
+		r.onDeadline(n, t)
+	}
 	r.mu.Lock()
 	r.deadline = t
+	r.deadlines = append(r.deadlines, t)
+	r.setAt = append(r.setAt, time.Now())
 	r.mu.Unlock()
 	select {
 	case r.moved <- struct{}{}:
@@ -999,7 +1028,7 @@ func (r *stuckRecorder) SetWriteDeadline(t time.Time) error {
 func (r *stuckRecorder) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	r.writes++
-	stuck := r.writes > 1
+	stuck := r.writes > 1 && !strings.Contains(string(p), "core.stream.closed.v1")
 	r.mu.Unlock()
 	for stuck {
 		r.mu.Lock()
@@ -1016,11 +1045,37 @@ func (r *stuckRecorder) Write(p []byte) (int, error) {
 	return r.recorder.Write(p)
 }
 
+func (r *stuckRecorder) awaitWrites(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		got := r.writes
+		r.mu.Unlock()
+		if got >= n {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("never saw write %d", n)
+}
+
+// endFuncs are the two ways a stream is ended from outside.
+var endFuncs = map[string]struct {
+	end  func(b *sse.Broker)
+	want string
+}{
+	"End":   {func(b *sse.Broker) { b.End(func(any) bool { return true }, sse.CloseCredentialRevoked) }, sse.CloseCredentialRevoked},
+	"Close": {func(b *sse.Broker) { b.Close() }, sse.CloseShutdown},
+}
+
+// TestEnd_InterruptsAWriteInFlight: a stream ended while a write is stuck
+// (the client stopped reading) stops within the interrupt grace, not after the
+// whole 1m WriteTimeout, and reports the end reason rather than write_timeout.
+// The interrupt moves the deadline to a point in the FUTURE: a deadline in the
+// past resets an HTTP/2 stream at once and the closed frame could not be sent.
 func TestEnd_InterruptsAWriteInFlight(t *testing.T) {
-	for name, end := range map[string]func(b *sse.Broker){
-		"End":   func(b *sse.Broker) { b.End(func(any) bool { return true }, sse.CloseCredentialRevoked) },
-		"Close": func(b *sse.Broker) { b.Close() },
-	} {
+	for name, c := range endFuncs {
 		t.Run(name, func(t *testing.T) {
 			b := broker(t, func(o *sse.Options) { o.WriteTimeout = time.Minute })
 			s, _ := sub(t, b, nil)
@@ -1028,59 +1083,414 @@ func TestEnd_InterruptsAWriteInFlight(t *testing.T) {
 			done := make(chan string, 1)
 			go func() { done <- s.Serve(t.Context(), w) }()
 			pub(b, "a.x", "") // its write blocks: the client is not reading
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				w.mu.Lock()
-				n := w.writes
-				w.mu.Unlock()
-				if n >= 2 || time.Now().After(deadline) {
-					break
-				}
-				time.Sleep(time.Millisecond)
-			}
+			w.awaitWrites(t, 2)
 			start := time.Now()
-			end(b)
+			c.end(b)
 			r := finished(t, done)
 			if time.Since(start) > 3*time.Second {
 				t.Errorf("the stream took %v to stop with a write in flight and a 1m deadline", time.Since(start))
 			}
-			want := sse.CloseCredentialRevoked
-			if name == "Close" {
-				want = sse.CloseShutdown
+			if r != c.want {
+				t.Errorf("reason %q, want the end reason %q, not a write timeout", r, c.want)
 			}
-			if r != want {
-				t.Errorf("reason %q, want the end reason %q, not a write timeout", r, want)
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			for i, d := range w.deadlines {
+				if !d.IsZero() && !d.After(w.setAt[i]) {
+					t.Errorf("deadline %d was set to %v, not after the time it was set (%v): a past deadline resets an HTTP/2 stream", i, d, w.setAt[i])
+				}
 			}
 		})
 	}
 }
 
-// pastRefuser refuses a write deadline that is not in the future, as a writer
-// whose connection cannot take an interrupt would.
-type pastRefuser struct{ *recorder }
+// TestEnd_AnIdleStreamKeepsItsDeadlineAndSendsItsClosedFrame: ending a stream
+// that has no write in flight touches no deadline at all and delivers the
+// closed frame.
+func TestEnd_AnIdleStreamKeepsItsDeadlineAndSendsItsClosedFrame(t *testing.T) {
+	for name, c := range endFuncs {
+		t.Run(name, func(t *testing.T) {
+			b := broker(t, nil)
+			s, _ := sub(t, b, nil)
+			rec, done := run(t.Context(), s)
+			rec.awaitText(t, "core.stream.opened.v1")
+			rec.mu.Lock()
+			before := len(rec.deadlines)
+			rec.mu.Unlock()
+			c.end(b)
+			if r := finished(t, done); r != c.want {
+				t.Fatalf("reason %q, want %q", r, c.want)
+			}
+			if !strings.Contains(rec.text(), `"reason":"`+c.want+`"`) {
+				t.Errorf("no closed frame for %q:\n%s", c.want, rec.text())
+			}
+			rec.mu.Lock()
+			defer rec.mu.Unlock()
+			// Only the closed frame's own deadline was set after the end, and it
+			// is in the future and no longer than the grace.
+			if len(rec.deadlines) != before+1 {
+				t.Fatalf("deadlines after end = %d, want exactly the closed frame's one (%d before)", len(rec.deadlines)-before, before)
+			}
+			if d := time.Until(rec.deadlines[before]); d <= 0 || d > 2*time.Second {
+				t.Errorf("closed frame deadline in %v, want in (0, 2s]", d)
+			}
+		})
+	}
+}
 
-func (r pastRefuser) SetWriteDeadline(t time.Time) error {
-	if !t.After(time.Now().Add(time.Second)) {
-		return errors.New("deadline refused")
+// TestEnd_AnEndedStreamWritesNothingButItsClosedFrame: frames already taken
+// into a write that has not started are dropped when the stream is ended in
+// between, and the interrupt cannot be lost in the gap.
+func TestEnd_AnEndedStreamWritesNothingButItsClosedFrame(t *testing.T) {
+	b := broker(t, func(o *sse.Options) { o.WriteTimeout = time.Minute })
+	s, j := sub(t, b, nil)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	// Deliver runs after take and before the write: end the stream there.
+	j.refuse = func(*sse.Entry) bool {
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+		return false
+	}
+	rec, done := run(t.Context(), s)
+	rec.awaitText(t, "core.stream.opened.v1")
+	pub(b, "a.x", "")
+	<-entered
+	b.End(func(any) bool { return true }, sse.CloseCredentialRevoked)
+	close(release)
+	if r := finished(t, done); r != sse.CloseCredentialRevoked {
+		t.Fatalf("reason %q", r)
+	}
+	if strings.Contains(rec.text(), "id: ") {
+		t.Errorf("a frame was written after the stream was ended:\n%s", rec.text())
+	}
+	if !strings.Contains(rec.text(), `"reason":"credential_revoked"`) {
+		t.Errorf("no closed frame:\n%s", rec.text())
+	}
+}
+
+// TestEnd_TheClosedFrameWriteIsBounded: the judge ends the stream, its closed
+// frame is stuck in Write, and an End/Close arrives meanwhile: that moves no
+// deadline (the closed frame is never marked interruptible), and a client that
+// never reads the frame cannot hold the stream for the whole WriteTimeout.
+func TestEnd_TheClosedFrameWriteIsBounded(t *testing.T) {
+	b := broker(t, func(o *sse.Options) { o.WriteTimeout = time.Minute })
+	s, j := sub(t, b, nil)
+	w := &stuckClosed{stuckRecorder: &stuckRecorder{recorder: newRecorder(), moved: make(chan struct{}, 1)}}
+	done := make(chan string, 1)
+	go func() { done <- s.Serve(t.Context(), w) }()
+	w.awaitWrites(t, 1)
+	start := time.Now()
+	j.close.Store(sse.ClosePermissionRevoked)
+	b.WakeAll()
+	w.awaitWrites(t, 2) // the closed frame is now stuck in Write
+	b.Close()           // an end arrives while it is in flight
+	r := finished(t, done)
+	if time.Since(start) > 3*time.Second {
+		t.Errorf("a stuck closed frame held the stream for %v with a 1m WriteTimeout", time.Since(start))
+	}
+	if r != sse.CloseShutdown && r != sse.ClosePermissionRevoked && r != sse.CloseWriteTimeout {
+		t.Errorf("reason %q", r)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	// Exactly three deadline calls: the opened frame's set and clear, and the
+	// closed frame's set. The end that arrived with the closed frame in flight
+	// moved no deadline.
+	if n := len(w.deadlines); n != 3 {
+		t.Fatalf("deadline calls = %d, want 3: %v", n, w.deadlines)
+	}
+	last := w.deadlines[2]
+	if d := last.Sub(w.setAt[2]); d > 2*time.Second || d <= 0 {
+		t.Errorf("closed frame deadline was %v after it was set, want within the grace", d)
+	}
+}
+
+// TestEnd_AnInterruptIsNotLostBetweenTheDeadlineAndTheWrite: an End that lands
+// after a write has set its deadline but before the write is in flight must
+// still shorten that write (the deadline set and the interrupt are one critical
+// section), not leave it to run its whole WriteTimeout.
+func TestEnd_AnInterruptIsNotLostBetweenTheDeadlineAndTheWrite(t *testing.T) {
+	b := broker(t, func(o *sse.Options) { o.WriteTimeout = time.Minute })
+	s, _ := sub(t, b, nil)
+	w := &stuckRecorder{recorder: newRecorder(), moved: make(chan struct{}, 1)}
+	// The second write's deadline is the stuck write's. The End starts as that
+	// deadline is set and has time to run to its interrupt before the write
+	// begins: with the check and the set in one critical section it waits for
+	// the write to be marked in flight; without, it finds nothing to interrupt.
+	w.onDeadline = func(n int, _ time.Time) {
+		if n == 2 {
+			go b.End(func(any) bool { return true }, sse.CloseCredentialRevoked)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	done := make(chan string, 1)
+	go func() { done <- s.Serve(t.Context(), w) }()
+	w.awaitWrites(t, 1)
+	start := time.Now()
+	pub(b, "a.x", "")
+	r := finished(t, done)
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("the write ran %v with a 1m WriteTimeout: the interrupt was lost", d)
+	}
+	if r != sse.CloseCredentialRevoked {
+		t.Errorf("reason %q, want the end reason", r)
+	}
+}
+
+// stuckClosed is a stuckRecorder whose closed frame write is stuck too.
+type stuckClosed struct{ *stuckRecorder }
+
+func (r *stuckClosed) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	r.writes++
+	n := r.writes
+	r.mu.Unlock()
+	for n > 1 {
+		r.mu.Lock()
+		dl := r.deadline
+		r.mu.Unlock()
+		if !dl.After(time.Now()) {
+			return 0, os.ErrDeadlineExceeded
+		}
+		select {
+		case <-r.moved:
+		case <-time.After(time.Until(dl)):
+		}
+	}
+	return r.recorder.Write(p)
+}
+
+// TestEnd_ReportsAnInterruptItCouldNotDeliver: a writer that refuses the
+// interrupt deadline is reported through Hooks.InterruptFailed, and the write
+// then runs to its own deadline (here: until the test releases it). A writer
+// that does not support deadlines at all (ErrNotSupported) is not an error.
+func TestEnd_ReportsAnInterruptItCouldNotDeliver(t *testing.T) {
+	for name, c := range map[string]struct {
+		refuseWith error
+		reported   bool
+	}{
+		"refused":       {errors.New("deadline refused"), true},
+		"not supported": {http.ErrNotSupported, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got atomic.Value
+			b := broker(t, func(o *sse.Options) {
+				o.WriteTimeout = time.Minute
+				o.Hooks.InterruptFailed = func(err error) { got.Store(err) }
+			})
+			s, _ := sub(t, b, nil)
+			w := &stuckRecorder{recorder: newRecorder(), moved: make(chan struct{}, 1)}
+			w.refuse = func(t time.Time) error {
+				if !t.IsZero() && time.Until(t) < 30*time.Second {
+					return c.refuseWith
+				}
+				return nil
+			}
+			done := make(chan string, 1)
+			go func() { done <- s.Serve(t.Context(), w) }()
+			pub(b, "a.x", "")
+			w.awaitWrites(t, 2)
+			b.End(func(any) bool { return true }, sse.CloseCredentialRevoked)
+			err, _ := got.Load().(error)
+			if c.reported && (err == nil || !strings.Contains(err.Error(), "deadline refused")) {
+				t.Errorf("InterruptFailed = %v", err)
+			}
+			if !c.reported && err != nil {
+				t.Errorf("InterruptFailed = %v for a writer without deadlines", err)
+			}
+			// Release the stuck write the way its own deadline would.
+			w.mu.Lock()
+			w.deadline = time.Now().Add(-time.Second)
+			w.mu.Unlock()
+			select {
+			case w.moved <- struct{}{}:
+			default:
+			}
+			if r := finished(t, done); r != sse.CloseCredentialRevoked && r != sse.CloseClient {
+				t.Errorf("reason %q", r)
+			}
+		})
+	}
+}
+
+// TestServe_ClearsTheWriteDeadlineAfterEachWrite: a standing deadline would
+// reset an idle HTTP/2 stream when it expired.
+func TestServe_ClearsTheWriteDeadlineAfterEachWrite(t *testing.T) {
+	b := broker(t, nil)
+	s, _ := sub(t, b, nil)
+	rec, done := run(t.Context(), s)
+	rec.awaitText(t, "core.stream.opened.v1")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rec.mu.Lock()
+		n := len(rec.deadlines)
+		last := time.Now()
+		if n > 0 {
+			last = rec.deadlines[n-1]
+		}
+		rec.mu.Unlock()
+		if n >= 2 && last.IsZero() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("deadlines after the opened frame: %d, last zero=%v", n, last.IsZero())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	b.Close()
+	finished(t, done)
+}
+
+// h2Cases serves a Subscriber over a real listener, as HTTP/1.1 and as HTTP/2
+// (the production transport), and returns the first response and a cleanup.
+func serveOver(t *testing.T, proto string, s *sse.Subscriber) *http.Response {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.Serve(r.Context(), w)
+	}))
+	if proto == "h2" {
+		srv.EnableHTTP2 = true
+		srv.StartTLS()
+	} else {
+		srv.Start()
+	}
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	wantMajor := 1
+	if proto == "h2" {
+		wantMajor = 2
+	}
+	if resp.ProtoMajor != wantMajor {
+		t.Fatalf("negotiated HTTP/%d, want HTTP/%d", resp.ProtoMajor, wantMajor)
+	}
+	return resp
+}
+
+// TestEnd_DeliversTheClosedFrameOverHTTP1AndHTTP2: an idle stream ended by
+// End or by Close delivers its closed frame to the client, on both protocols.
+// Over HTTP/2 a write deadline in the past resets the stream (INTERNAL_ERROR)
+// before the frame is sent, so this is the cell that fails if the end path
+// ever moves the deadline to now.
+func TestEnd_DeliversTheClosedFrameOverHTTP1AndHTTP2(t *testing.T) {
+	for _, proto := range []string{"h1", "h2"} {
+		for name, c := range endFuncs {
+			t.Run(proto+"/"+name, func(t *testing.T) {
+				b := broker(t, nil)
+				s, _ := sub(t, b, nil)
+				resp := serveOver(t, proto, s)
+				br := bufio.NewReader(resp.Body)
+				readUntil(t, br, "core.stream.opened.v1")
+				c.end(b)
+				body, err := io.ReadAll(br)
+				if !strings.Contains(string(body), "core.stream.closed.v1") || !strings.Contains(string(body), `"reason":"`+c.want+`"`) {
+					t.Fatalf("no closed frame for %q (read err %v):\n%s", c.want, err, body)
+				}
+			})
+		}
+	}
+}
+
+// readUntil reads lines until one contains sub.
+func readUntil(t *testing.T, br *bufio.Reader, sub string) {
+	t.Helper()
+	for {
+		line, err := br.ReadString('\n')
+		if strings.Contains(line, sub) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("stream ended before %q: %v", sub, err)
+		}
+	}
+}
+
+// TestServe_ARefusedDeadlineClearEndsTheStream: a connection that took the
+// write deadline but cannot clear it is broken; the stream ends as a client
+// error rather than going on with a deadline that will reset it.
+func TestServe_ARefusedDeadlineClearEndsTheStream(t *testing.T) {
+	b := broker(t, nil)
+	s, _ := sub(t, b, nil)
+	rec := newRecorder()
+	w := &clearRefuser{recorder: rec}
+	done := make(chan string, 1)
+	go func() { done <- s.Serve(t.Context(), w) }()
+	if r := finished(t, done); r != sse.CloseClient {
+		t.Errorf("reason %q, want %q", r, sse.CloseClient)
+	}
+}
+
+type clearRefuser struct{ *recorder }
+
+func (r *clearRefuser) SetWriteDeadline(t time.Time) error {
+	if t.IsZero() {
+		return errors.New("connection reset")
 	}
 	return r.recorder.SetWriteDeadline(t)
 }
 
-func TestEnd_ReportsAnInterruptItCouldNotDeliver(t *testing.T) {
-	var got atomic.Value
-	b := broker(t, func(o *sse.Options) {
-		o.Hooks.InterruptFailed = func(err error) { got.Store(err) }
-	})
-	s, _ := sub(t, b, nil)
-	w := pastRefuser{newRecorder()}
-	done := make(chan string, 1)
-	go func() { done <- s.Serve(t.Context(), w) }()
-	w.awaitText(t, "core.stream.opened.v1")
-	b.End(func(any) bool { return true }, sse.CloseCredentialRevoked)
-	if r := finished(t, done); r != sse.CloseCredentialRevoked {
-		t.Errorf("reason %q", r)
-	}
-	if err, _ := got.Load().(error); err == nil || !strings.Contains(err.Error(), "deadline refused") {
-		t.Errorf("InterruptFailed = %v", err)
+// TestEnd_RunsItsInterruptHookOutsideTheBrokerLock: Hooks.InterruptFailed
+// (and the SetWriteDeadline behind it) run after End and Close have released
+// the broker's lock, so a hook that calls back into the broker cannot
+// deadlock it.
+func TestEnd_RunsItsInterruptHookOutsideTheBrokerLock(t *testing.T) {
+	for name, c := range endFuncs {
+		t.Run(name, func(t *testing.T) {
+			var b *sse.Broker
+			called := make(chan struct{}, 1)
+			b = broker(t, func(o *sse.Options) {
+				o.WriteTimeout = time.Minute
+				o.Hooks.InterruptFailed = func(error) {
+					pub(b, "a.x", "") // takes the broker's lock
+					select {
+					case called <- struct{}{}:
+					default:
+					}
+				}
+			})
+			s, _ := sub(t, b, nil)
+			w := &stuckRecorder{recorder: newRecorder(), moved: make(chan struct{}, 1)}
+			w.refuse = func(t time.Time) error {
+				if !t.IsZero() && time.Until(t) < 30*time.Second {
+					return errors.New("deadline refused")
+				}
+				return nil
+			}
+			done := make(chan string, 1)
+			go func() { done <- s.Serve(t.Context(), w) }()
+			pub(b, "a.x", "")
+			w.awaitWrites(t, 2)
+			ended := make(chan struct{})
+			go func() { c.end(b); close(ended) }()
+			select {
+			case <-ended:
+			case <-time.After(5 * time.Second):
+				t.Fatal("End/Close deadlocked: the interrupt hook ran under the broker's lock")
+			}
+			select {
+			case <-called:
+			default:
+				t.Error("the interrupt hook was not called")
+			}
+			w.mu.Lock()
+			w.deadline = time.Now().Add(-time.Second)
+			w.mu.Unlock()
+			select {
+			case w.moved <- struct{}{}:
+			default:
+			}
+			finished(t, done)
+		})
 	}
 }
