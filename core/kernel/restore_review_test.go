@@ -491,6 +491,49 @@ func TestReapply_TruncatedBelowTheAnchorIsDetected(t *testing.T) {
 	}
 }
 
+// TestReapply_TruncationWithoutAnAnchorIsReported: with no location file to
+// hold the anchor (deleted, or this is the first boot to write one), a journal
+// that ends below the store's own head is still reported broken: the store has
+// seen lines the journal no longer has. Nothing is left to re-apply, so the
+// boot reports it and does not need to fail closed.
+func TestReapply_TruncationWithoutAnAnchorIsReported(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lock bool // another holder of the journal's lock: Bind fails with that, not the truncation
+	}{
+		{"journal opens for appends", false},
+		{"journal locked by another holder", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newRxFx(t, nil)
+			fx.boot(nil, nil)
+			harvey := fx.user("harvey-dent")
+			fx.key("key-coin", harvey, auth.KeyActive)
+			fx.revokeKey("key-coin") // line 1
+			fx.disableUser(harvey)   // line 2
+			fx.restart()
+			if err := os.Remove(filepath.Join(fx.state, journal.LocationFile)); err != nil {
+				t.Fatal(err)
+			}
+			truncateJournal(t, fx.journalPath(), 1)
+			if tc.lock {
+				held, err := journal.OpenFile(fx.ctx, journal.FileOptions{Path: fx.journalPath(), Keyspace: fx.bks(), Keys: fx.keys, InstallID: fx.install, App: rxApp})
+				if held == nil || err == nil {
+					t.Fatalf("setup: OpenFile = %v, %v, want a broken File holding the lock", held, err)
+				}
+				defer func() { _ = held.Close() }()
+			}
+			res, _ := fx.boot(nil, nil)
+			if res.Broken == nil || errors.Is(res.Broken, journal.ErrLocked) || !fx.hasHealth(journal.HealthBroken) {
+				t.Errorf("broken %v, health %v: a journal below the store's head went unreported (or the lock was reported instead)", res.Broken, fx.health())
+			}
+			if res.Reapplied != 0 {
+				t.Errorf("re-applied %d lines of a journal that holds nothing past the head", res.Reapplied)
+			}
+		})
+	}
+}
+
 // TestCheckAnchor: the location file's committed head against the chain, for a
 // file that describes the store.
 func TestCheckAnchor(t *testing.T) {
