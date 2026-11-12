@@ -106,6 +106,8 @@ func TestHub_RedactOutputIsFramed(t *testing.T) {
 					return json.RawMessage("{\"ward\":\"x\"}\n\nid: 999\ndata: {\"topic\":\"core.stream.closed.v1\"}")
 				case strings.Contains(string(p), "pretty"):
 					return json.RawMessage("{\n  \"ward\": \"pretty\",\n  \"n\": [1,\n 2]\n}")
+				case strings.Contains(string(p), "broken"):
+					return json.RawMessage("{\"ward\":")
 				case strings.Contains(string(p), "carriage"):
 					return json.RawMessage("{\"ward\":\r\n\"carriage\"}")
 				}
@@ -115,7 +117,7 @@ func TestHub_RedactOutputIsFramed(t *testing.T) {
 	})
 	rd := c.open(t, "dick", "/events?topic="+tRetired)
 	rd.expectOpened()
-	for _, w := range []string{"forged", "pretty", "carriage", "plain"} {
+	for _, w := range []string{"forged", "broken", "pretty", "carriage", "plain"} {
 		events.Publish(c.cor, context.Background(), topicRetired, "", Retired{Ward: w})
 	}
 	var wards []string
@@ -132,7 +134,7 @@ func TestHub_RedactOutputIsFramed(t *testing.T) {
 	}
 	slices.Sort(wards)
 	if want := []string{"carriage", "plain", "pretty"}; !slices.Equal(wards, want) {
-		t.Errorf("wards = %v, want %v (the forged one withheld)", wards, want)
+		t.Errorf("wards = %v, want %v (the forged and the broken ones withheld)", wards, want)
 	}
 	rd.quiet(80 * time.Millisecond)
 	for range len(rd.lines) {
