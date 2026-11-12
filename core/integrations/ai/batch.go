@@ -449,24 +449,22 @@ func BatchApplyTask(c Capability, h BatchHandler, effects tasks.Effects) tasks.D
 		}
 	}
 	return tasks.Task(kind, tasks.TaskSpec[BatchApplyParams, BatchApplyResult]{
-		Common: tasks.Common{
-			Title:   "Apply AI batch results",
-			Help:    "Applies the finished provider batch of one job through the module's handler and marks the job completed.",
-			Effects: effects,
-			Perms:   tasks.Permissions{Start: rbac.Need("core:integrations.manage")},
-			Resume:  tasks.ResumeFromZero,
-			Timeout: applyTimeout(),
-			// A poll that finds the job still Applying stages another run; a
-			// start that finds one QUEUED for the same job folds into it. A
-			// running run is never folded into, so the new one queues behind it.
-			Dedupe: tasks.DedupePolicy{Key: func(params json.RawMessage) (string, error) {
-				var p BatchApplyParams
-				if err := json.Unmarshal(params, &p); err != nil {
-					return "", err
-				}
-				return string(p.Job), nil
-			}},
-		},
+		Title:   "Apply AI batch results",
+		Help:    "Applies the finished provider batch of one job through the module's handler and marks the job completed.",
+		Effects: effects,
+		Perms:   tasks.Permissions{Start: rbac.Need("core:integrations.manage")},
+		Resume:  tasks.ResumeFromZero,
+		Timeout: applyTimeout(),
+		// A poll that finds the job still Applying stages another run; a
+		// start that finds one QUEUED for the same job folds into it. A
+		// running run is never folded into, so the new one queues behind it.
+		Dedupe: tasks.DedupePolicy{Key: func(params json.RawMessage) (string, error) {
+			var p BatchApplyParams
+			if err := json.Unmarshal(params, &p); err != nil {
+				return "", err
+			}
+			return string(p.Job), nil
+		}},
 		Run: run,
 	})
 }

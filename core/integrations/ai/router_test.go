@@ -637,8 +637,7 @@ func TestRouter_KindCapProductionSetter(t *testing.T) {
 		}
 		var wg sync.WaitGroup
 		for range 4 {
-			wg.Add(1)
-			go func() { defer wg.Done(); _, _ = ai.Call(context.Background(), h.r, c, gate) }()
+			wg.Go(func() { ; _, _ = ai.Call(context.Background(), h.r, c, gate) })
 		}
 		waitFor(t, func() bool {
 			mu.Lock()

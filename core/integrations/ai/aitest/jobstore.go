@@ -365,9 +365,7 @@ func race(ctx context.Context, fx JobStoreFixture, id ai.BatchJobID, from ai.Job
 	)
 	start := make(chan struct{})
 	for i, next := range targets {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			err := move(ctx, fx, id, from, next)
 			mu.Lock()
@@ -378,7 +376,7 @@ func race(ctx context.Context, fx JobStoreFixture, id ai.BatchJobID, from ai.Job
 			case !isLoss(err):
 				other = append(other, err)
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

@@ -309,8 +309,7 @@ func TestBatch_SubmitFailoverAndAmbiguity(t *testing.T) {
 		e := newBatchEnv(t)
 		e.f.FailSubmit(rate)
 		_, err := e.r.SubmitBatch(context.Background(), e.c, items(1), nil)
-		var ex *ai.ExhaustedError
-		if !errors.As(err, &ex) {
+		if _, ok := errors.AsType[*ai.ExhaustedError](err); !ok {
 			t.Fatalf("err = %v, want ExhaustedError", err)
 		}
 		for j, jerr := range e.jobs.Open(context.Background()) {

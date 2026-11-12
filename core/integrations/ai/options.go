@@ -7,6 +7,7 @@ package ai
 
 import (
 	"log/slog"
+	"maps"
 	"slices"
 	"time"
 
@@ -156,9 +157,7 @@ func (c Config) withDefaults() Config {
 	}
 	if c.KindLimits != nil {
 		kl := make(map[Kind]int, len(c.KindLimits))
-		for k, v := range c.KindLimits {
-			kl[k] = v
-		}
+		maps.Copy(kl, c.KindLimits)
 		c.KindLimits = kl
 	}
 	return c
