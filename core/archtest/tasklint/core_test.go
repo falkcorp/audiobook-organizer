@@ -1,5 +1,5 @@
 // file: core/archtest/tasklint/core_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 033d7131-0d90-4946-aecb-74c2016a00b0
 // last-edited: 2026-11-12
 
