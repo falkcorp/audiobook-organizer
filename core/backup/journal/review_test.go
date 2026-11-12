@@ -217,7 +217,7 @@ func TestKnownKind_CoversEveryDeclaredKind(t *testing.T) {
 // line after the boundary is of a kind the hooks would skip.
 func TestCover_RefusesALineItCannotApply(t *testing.T) {
 	line := func(seq uint64, k Kind) Line {
-		return Line{Revocation: Revocation{Seq: seq, Kind: k}, MAC: fmt.Sprint("m", seq)}
+		return Line{Seq: seq, Kind: k, MAC: fmt.Sprint("m", seq)}
 	}
 	c := &Chain{HasHeader: true, Header: Header{InstallID: installID}, Lines: []Line{line(1, UserDisabled), line(2, "user.frozen")}, ClaimedEnd: 2}
 	if got := c.Cover(installID, 0, Head{Seq: 2, MAC: "m2"}, false); got.OK || !strings.Contains(got.Why, "cannot apply") {
