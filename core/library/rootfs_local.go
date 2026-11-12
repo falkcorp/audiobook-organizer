@@ -1,5 +1,5 @@
 // file: core/library/rootfs_local.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
 // last-edited: 2026-11-11
 
@@ -63,6 +63,8 @@ type localFS struct {
 	hidden bool
 	// areas remembers the identities of the root's areas, shared by every view.
 	areas *areaMemory
+	// inodeOf replaces libfs.InodeOf in the by-identity area test; nil outside tests.
+	inodeOf func(fs.FileInfo) (dev, ino uint64, ok bool)
 	// race is a test hook, nil outside tests. A hidden view's read open (guardedOpen)
 	// calls it at "checked" (the name was judged), "resolved" (the symlinks were
 	// expanded), "parent" (the directory holding the name is open, not yet
