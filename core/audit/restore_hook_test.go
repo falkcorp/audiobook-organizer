@@ -1,7 +1,7 @@
 // file: core/audit/restore_hook_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d5e89bb-8fe9-451d-b08f-dbe1d525d934
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package audit
 
@@ -297,4 +297,93 @@ func seqOfAnyKey(k string) (uint64, error) {
 		return 0, errors.New("not an audit row")
 	}
 	return seqOfIndexKey([]byte(k))
+}
+
+// runKeyed runs the hook with a restore line's seq and a run key.
+func (sc *restoreScenario) runKeyed(t *testing.T, restoreSeq uint64, runKey string) map[string]int {
+	t.Helper()
+	counts, err := RestoreHook(RestoreDeps{Store: sc.liveS, RestoreSeq: restoreSeq, RunKey: runKey})(context.Background(), sc.rc)
+	if err != nil {
+		t.Fatalf("hook (seq %d, key %q): %v", restoreSeq, runKey, err)
+	}
+	return counts
+}
+
+// applyTargets is the target id of every core.restore.apply record, sorted.
+func applyTargets(t *testing.T, s *Store) []string {
+	t.Helper()
+	var ids []string
+	for _, r := range restoreRecords(t, s) {
+		if r.Action == "core.restore.apply" {
+			ids = append(ids, r.Target.ID)
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// TestRestoreHookRunKey_TwoRestoresWithoutALineBothWriteTheirRecords: a restore
+// whose journal line could not be written has RestoreSeq 0. Keyed on that, the
+// second such restore (one run from an archive taken after the first) found the
+// first's apply record, and its stage, revoke and apply records were never
+// written. Each run key gets its own records, and a re-run of one stays
+// idempotent.
+func TestRestoreHookRunKey_TwoRestoresWithoutALineBothWriteTheirRecords(t *testing.T) {
+	sc := newRestoreScenario(t)
+	if got := sc.runKeyed(t, 0, "run:cowl")[CountRecordsAppended]; got != 3 {
+		t.Fatalf("first restore appended %d records, want 3", got)
+	}
+	if got := sc.runKeyed(t, 0, "run:cape")[CountRecordsAppended]; got != 3 {
+		t.Errorf("second restore with no line appended %d records, want 3: its records were taken for the first's", got)
+	}
+	if got := len(restoreRecords(t, sc.liveS)); got != 6 {
+		t.Errorf("%d restore records after two restores, want 6", got)
+	}
+	if got := applyTargets(t, sc.liveS); !slices.Equal(got, []string{"run:cape", "run:cowl"}) {
+		t.Errorf("apply records name %v, want one per run key", got)
+	}
+	// A re-run of either restore (the hooks run again after a crash) adds nothing.
+	for _, key := range []string{"run:cowl", "run:cape"} {
+		if got := sc.runKeyed(t, 0, key)[CountRecordsAppended]; got != 0 {
+			t.Errorf("re-run of %s appended %d records, want 0", key, got)
+		}
+	}
+	if got := len(restoreRecords(t, sc.liveS)); got != 6 {
+		t.Errorf("%d restore records after the re-runs, want 6", got)
+	}
+}
+
+// TestRestoreHookRunKey_TheRunKeyOutranksTheLineSeq: with both set the records
+// are keyed on the run key, and the seq is only reported.
+func TestRestoreHookRunKey_TheRunKeyOutranksTheLineSeq(t *testing.T) {
+	sc := newRestoreScenario(t)
+	sc.runKeyed(t, 7, "run:robin")
+	if got := applyTargets(t, sc.liveS); !slices.Equal(got, []string{"run:robin"}) {
+		t.Fatalf("apply records name %v, want [run:robin]", got)
+	}
+	if got := sc.runKeyed(t, 9, "run:robin")[CountRecordsAppended]; got != 0 {
+		t.Errorf("the same run key under another seq appended %d records, want 0", got)
+	}
+}
+
+// TestRestoreHookRunKey_NothingToKeyOnWritesNothing: no restore line and no run
+// key means there is no telling this restore from another, so the hook fails
+// before it copies or appends anything.
+func TestRestoreHookRunKey_NothingToKeyOnWritesNothing(t *testing.T) {
+	sc := newRestoreScenario(t)
+	_, err := RestoreHook(RestoreDeps{Store: sc.liveS})(context.Background(), sc.rc)
+	if err == nil {
+		t.Fatal("the hook ran with no restore line and no run key")
+	}
+	if got := len(restoreRecords(t, sc.liveS)); got != 0 {
+		t.Errorf("%d restore records written, want 0", got)
+	}
+	for k, v := range dumpKS(t, sc.live.ks) {
+		if sc.before[k] != v {
+			t.Errorf("row %q changed although the hook refused to run", k)
+		}
+	}
+	if got := len(dumpKS(t, sc.live.ks)); got != len(sc.before) {
+		t.Errorf("the live store holds %d rows, want the %d it had", got, len(sc.before))
+	}
 }
