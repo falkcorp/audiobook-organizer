@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/reconcile_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b19af4f8-02b3-4c02-b3db-ef84ad3df329
 // last-edited: 2026-11-11
 
@@ -587,7 +587,7 @@ func TestCopyToStampsTheGenerationReadBeforeTheCopy(t *testing.T) {
 // would stamp the newer generation on a copy that lacks the write.
 func TestCopyToRejectsAnArtifactWhenAWriteCommitsDuringTheCopy(t *testing.T) {
 	r := seeded(t)
-	r.e.mustIdx(t, indextest.Signal).afterGenerationRead = func() {
+	r.e.mustIdx(t, indextest.Signal).afterQuiescenceCheck = func() {
 		r.save("riddler", "The Riddler Unmasked", "puzzle", 1948)
 	}
 	dir := t.TempDir() + "/copy"

@@ -1,13 +1,16 @@
 // file: core/internal/bleveindex/mapping.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a2f8d21-9b4c-4b9f-8c64-7e1d3a6c8b22
 // last-edited: 2026-11-11
 
 package bleveindex
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
@@ -60,6 +63,22 @@ func buildMapping(s index.Spec) (mapping.IndexMapping, error) {
 	return im, nil
 }
 
+// mappingStamp is the content of the mapping marker: the Spec's MappingVersion
+// and a fingerprint of its field declarations, so a Fields change that forgot
+// the version bump still recreates the index instead of serving documents under
+// a mapping the Spec no longer describes. The fingerprint hashes the
+// declaration (name, kind, analyzer, store, facet, in order), not bleve's
+// marshalled mapping, so a bleve upgrade does not by itself force a
+// library-scale rebuild.
+func mappingStamp(s index.Spec) string {
+	var decl []byte
+	for _, f := range s.Fields {
+		decl = fmt.Appendf(decl, "%q %d %q %t %t\n", f.Name, f.Kind, f.Analyzer, f.Store, f.Facet)
+	}
+	sum := sha256.Sum256(decl)
+	return s.MappingVersion + "\n" + hex.EncodeToString(sum[:])
+}
+
 // analyzerName resolves a Field.Analyzer: "" is the kind's default, and
 // "standard" and "keyword" are bleve's stock analyzers. A module-registered
 // analyzer needs a registration surface the contract does not have yet, so any
@@ -78,8 +97,41 @@ func analyzerName(name, def string) (string, error) {
 
 // translate turns an engine-neutral query into a bleve query over this index's
 // fields. A field the Spec does not declare is ErrInvalidQuery, never a silent
-// match-nothing: a typo in a field name is a bug, not an empty result.
+// match-nothing: a typo in a field name is a bug, not an empty result. The tree
+// is bounded first (nodes, depth, text size), so a hostile query cannot cost
+// more than a fixed amount before it is refused.
 func translate(kinds map[string]index.FieldKind, n index.Node) (query.Query, error) {
+	nodes := 0
+	if err := checkShape(n, 1, &nodes); err != nil {
+		return nil, err
+	}
+	return translateNode(kinds, n)
+}
+
+// checkShape bounds a query tree: at most maxQueryNodes nodes, maxQueryDepth
+// levels, and maxQueryStringBytes of text in any one node. It is iterative in
+// its depth only up to the cap, so a deeply nested query is refused before the
+// translation recurses.
+func checkShape(n index.Node, depth int, nodes *int) error {
+	if depth > maxQueryDepth {
+		return fmt.Errorf("%w: query nests deeper than %d levels", index.ErrInvalidQuery, maxQueryDepth)
+	}
+	*nodes++
+	if *nodes > maxQueryNodes {
+		return fmt.Errorf("%w: query has more than %d nodes", index.ErrInvalidQuery, maxQueryNodes)
+	}
+	if len(n.Text) > maxQueryStringBytes {
+		return fmt.Errorf("%w: query text is %d bytes, over %d", index.ErrInvalidQuery, len(n.Text), maxQueryStringBytes)
+	}
+	for _, c := range n.Children {
+		if err := checkShape(c, depth+1, nodes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func translateNode(kinds map[string]index.FieldKind, n index.Node) (query.Query, error) {
 	bad := func(format string, a ...any) error {
 		return fmt.Errorf("%w: %s", index.ErrInvalidQuery, fmt.Sprintf(format, a...))
 	}
@@ -151,7 +203,7 @@ func translate(kinds map[string]index.FieldKind, n index.Node) (query.Query, err
 	case index.OpAnd, index.OpOr:
 		qs := make([]query.Query, 0, len(n.Children))
 		for _, c := range n.Children {
-			q, err := translate(kinds, c)
+			q, err := translateNode(kinds, c)
 			if err != nil {
 				return nil, err
 			}
@@ -165,7 +217,7 @@ func translate(kinds map[string]index.FieldKind, n index.Node) (query.Query, err
 		if len(n.Children) != 1 {
 			return nil, bad("not takes one query")
 		}
-		c, err := translate(kinds, n.Children[0])
+		c, err := translateNode(kinds, n.Children[0])
 		if err != nil {
 			return nil, err
 		}
@@ -175,7 +227,7 @@ func translate(kinds map[string]index.FieldKind, n index.Node) (query.Query, err
 		q.AddMustNot(c)
 		return q, nil
 	case index.OpString:
-		return bleve.NewQueryStringQuery(n.Text), nil
+		return translateString(n.Text)
 	}
 	return nil, bad("operator %d", n.Op)
 }
@@ -235,4 +287,80 @@ func when(v any) (time.Time, error) {
 		return x, nil
 	}
 	return time.Time{}, fmt.Errorf("bound %T is not a time", v)
+}
+
+// translateString parses a user query string now, not at search time, and
+// refuses the shapes whose cost the term-searcher cap alone cannot make cheap
+// to refuse: regular expressions, and a wildcard that starts with * or ? (it
+// has no literal prefix to narrow the term dictionary scan, so it expands to
+// every term of the field). A trailing wildcard (cap*) is allowed and counted
+// against the term-searcher cap like a Prefix.
+func translateString(s string) (query.Query, error) {
+	bad := func(format string, a ...any) error {
+		return fmt.Errorf("%w: %s", index.ErrInvalidQuery, fmt.Sprintf(format, a...))
+	}
+	if len(s) > maxQueryStringBytes {
+		return nil, bad("query string is %d bytes, over %d", len(s), maxQueryStringBytes)
+	}
+	parsed, err := query.NewQueryStringQuery(s).Parse()
+	if err != nil {
+		return nil, bad("query string: %v", err)
+	}
+	nodes := 0
+	if err := checkParsed(parsed, 1, &nodes); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func checkParsed(q query.Query, depth int, nodes *int) error {
+	bad := func(format string, a ...any) error {
+		return fmt.Errorf("%w: %s", index.ErrInvalidQuery, fmt.Sprintf(format, a...))
+	}
+	if depth > maxQueryDepth {
+		return bad("query string nests deeper than %d levels", maxQueryDepth)
+	}
+	*nodes++
+	if *nodes > maxQueryNodes {
+		return bad("query string has more than %d clauses", maxQueryNodes)
+	}
+	switch v := q.(type) {
+	case *query.RegexpQuery:
+		return bad("regular expressions are not allowed in a query string")
+	case *query.WildcardQuery:
+		if v != nil && strings.HasPrefix(v.Wildcard, "*") || strings.HasPrefix(v.Wildcard, "?") {
+			return bad("a wildcard may not start with * or ?")
+		}
+	case *query.ConjunctionQuery:
+		if v == nil { // a typed nil inside BooleanQuery's interface fields
+			return nil
+		}
+		for _, c := range v.Conjuncts {
+			if err := checkParsed(c, depth+1, nodes); err != nil {
+				return err
+			}
+		}
+	case *query.DisjunctionQuery:
+		if v == nil {
+			return nil
+		}
+		for _, c := range v.Disjuncts {
+			if err := checkParsed(c, depth+1, nodes); err != nil {
+				return err
+			}
+		}
+	case *query.BooleanQuery:
+		if v == nil {
+			return nil
+		}
+		for _, c := range []query.Query{v.Must, v.Should, v.MustNot} {
+			if c == nil {
+				continue
+			}
+			if err := checkParsed(c, depth+1, nodes); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

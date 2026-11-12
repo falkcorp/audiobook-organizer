@@ -1,5 +1,5 @@
 // file: core/storage/derived.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6162657c-5114-44d6-a4bc-75bc350008ed
 // last-edited: 2026-11-11
 
@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/storage/codec"
 	"github.com/falkcorp/mediacore/storage/keys"
@@ -238,44 +240,63 @@ const ArtifactGenerationFile = "generation"
 // follows: read Derived.Current BEFORE exporting, export, then stamp that
 // token. A touch that commits during the export leaves a later value, so the
 // artifact is rejected rather than accepted with a missing document. The file
-// is written by temp file, fsync and rename, so a crash leaves the old stamp or
-// the new one and never a torn one; an artifact without a stamp is rejected.
-func StampArtifact(dir string, gen Generation) (err error) {
+// is written by WriteFileDurable, so a crash leaves the old stamp or the new
+// one and never a torn one; an artifact without a stamp is rejected.
+//
+// The token only names the SOURCE's state. An index whose content can lag its
+// source (a full-text index with a dirty set: the reconciler changes the index
+// without touching the generation) must also be quiescent when it reads the
+// token, or the stamp vouches for a content the artifact does not hold:
+// internal/bleveindex refuses to copy while any mark is pending.
+func StampArtifact(dir string, gen Generation) error {
 	if gen.IsZero() {
 		return errors.New("storage: refusing to stamp an artifact with the zero generation")
 	}
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("storage: stamp artifact: %w", err)
-		}
-	}()
-	tmp, err := os.CreateTemp(dir, ArtifactGenerationFile+".tmp-*")
+	if err := WriteFileDurable(filepath.Join(dir, ArtifactGenerationFile), []byte(gen.String()+"\n")); err != nil {
+		return fmt.Errorf("storage: stamp artifact: %w", err)
+	}
+	return nil
+}
+
+// WriteFileDurable replaces the file at path with data so that a crash leaves
+// the old content or the new, never a torn or empty file, and so that a
+// success means the new content survives one: it writes a sibling temp file,
+// fsyncs it, renames it over path and fsyncs the directory. It is the one
+// marker and stamp writer of the derived-index machinery.
+func WriteFileDurable(path string, data []byte) error {
+	return writeFileDurable(vfs.Default, path, data)
+}
+
+func writeFileDurable(fsys vfs.FS, path string, data []byte) (err error) {
+	tmp := path + ".tmp"
+	f, err := fsys.Create(tmp, vfs.WriteCategoryUnspecified)
 	if err != nil {
 		return err
 	}
-	name := tmp.Name()
-	if err := writeSynced(tmp, gen.String()+"\n"); err != nil {
-		return errors.Join(err, os.Remove(name))
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, fsys.Remove(tmp))
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		return errors.Join(err, f.Close())
 	}
-	if err := os.Rename(name, filepath.Join(dir, ArtifactGenerationFile)); err != nil {
-		return errors.Join(err, os.Remove(name))
+	if err := f.Sync(); err != nil {
+		return errors.Join(err, f.Close())
 	}
-	d, err := os.Open(dir)
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := fsys.Rename(tmp, path); err != nil {
+		return err
+	}
+	d, err := fsys.OpenDir(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
 	// The directory sync makes the rename durable; without it a crash may
-	// bring back the previous stamp or none, and either is a rejection.
+	// bring back the previous file or none.
 	return errors.Join(d.Sync(), d.Close())
-}
-
-// writeSynced writes s to f, syncs it and closes it, reporting every failure.
-func writeSynced(f *os.File, s string) error {
-	_, werr := f.WriteString(s)
-	if werr == nil {
-		werr = f.Sync()
-	}
-	return errors.Join(werr, f.Close())
 }
 
 // ArtifactAccepted is the generation half of a Load hook's rule: it reports
