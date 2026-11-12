@@ -1,5 +1,5 @@
 // file: core/backup/archive.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d1b3c8e-24a7-4f0c-b1d9-3b6a0c94d7e2
 // last-edited: 2026-11-12
 
@@ -187,6 +187,12 @@ func openArchive(path string, lim backuparchive.Limits) (a *openedArchive, err e
 		_ = rd.Close()
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("%w: the archive is empty", ErrManifest)
+		}
+		// HEAD's archives open with the store directory's own entry: a first entry
+		// of another type is "not a mediacore-backup/1 archive", which the callers
+		// treat as a candidate legacy-abo/0 archive and scan as one.
+		if errors.Is(err, backuparchive.ErrEntryType) {
+			return nil, fmt.Errorf("%w: the first entry is not the manifest: %v", ErrManifest, err)
 		}
 		return nil, err
 	}
