@@ -1,5 +1,5 @@
 // file: core/internal/sse/subscriber.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e12e66a-6a25-4459-a95e-5a5525a86b94
 // last-edited: 2026-11-12
 
@@ -13,6 +13,11 @@ import (
 	"sync"
 	"time"
 )
+
+// interruptGrace is how long a write in flight is given once its stream is
+// ended: long enough for a healthy write to finish, short enough that a stuck
+// one does not hold the shutdown.
+const interruptGrace = time.Second
 
 // Subscriber is one stream's registration: its interest, its bounded queue and
 // its wake channel. All queue state is guarded by mu; the broker takes mu only
@@ -32,14 +37,20 @@ type Subscriber struct {
 	// under mu). It is a superset of what the judge delivers: the judge still
 	// decides each entry at send time.
 	interest map[string]struct{}
-	// rc interrupts a write in flight when the stream is ended (Serve sets it).
-	rc     *http.ResponseController
-	replay []*Entry // the ring's wanted entries after the resume id; drained first
-	rpos   int
-	q      []*Entry // circular, len ClientBuffer
-	qh, qn int
-	reset  string // pending core.stream.reset.v1 reason, "" none
-	ended  string // pending close reason, "" none; the first reason wins
+	replay   []*Entry // the ring's wanted entries after the resume id; drained first
+	rpos     int
+	q        []*Entry // circular, len ClientBuffer
+	qh, qn   int
+	reset    string // pending core.stream.reset.v1 reason, "" none
+	ended    string // pending close reason, "" none; the first reason wins
+
+	// wmu serialises the stream's write deadline between its writer (write) and
+	// interrupt. It is never held across a write and never taken by offer or
+	// Publish, so a ResponseController that is slow to take a deadline cannot
+	// hold up a publisher.
+	wmu     sync.Mutex
+	rc      *http.ResponseController // set by Serve before its first write
+	writing bool                     // a non-final write holds a deadline right now
 
 	released sync.Once
 }
@@ -88,33 +99,42 @@ func (s *Subscriber) signal() {
 }
 
 // end records the reason the stream must stop and wakes it; the first reason
-// wins. It reports whether this call set it.
-//
-// A write already in flight is interrupted too: the stream's write deadline is
-// moved to now, so a client that stopped reading cannot hold a shutdown or a
-// revocation for a whole WriteTimeout (a ResponseController that cannot set a
-// deadline leaves the bound at WriteTimeout).
+// wins. It reports whether this call set it. It touches only the queue state,
+// so it is safe under the broker's lock; the caller then calls interrupt, after
+// it has released that lock.
 func (s *Subscriber) end(reason string) bool {
 	s.mu.Lock()
 	first := s.ended == ""
 	if first {
 		s.ended = reason
 	}
-	rc := s.rc
 	s.mu.Unlock()
 	if first {
-		if rc != nil {
-			// ErrNotSupported is a writer that has no deadlines at all (a test
-			// recorder), which Serve tolerates everywhere; any other failure is
-			// reported, because the write in flight then stays bounded only by
-			// WriteTimeout.
-			if err := rc.SetWriteDeadline(time.Now()); err != nil && !errors.Is(err, http.ErrNotSupported) && s.b.opt.Hooks.InterruptFailed != nil {
-				s.b.opt.Hooks.InterruptFailed(err)
-			}
-		}
 		s.signal()
 	}
 	return first
+}
+
+// interrupt cuts short a write that is in flight when the stream has been
+// ended, so a client that stopped reading cannot hold a shutdown or a
+// revocation for a whole WriteTimeout. It moves that write's deadline to a
+// short grace in the FUTURE (never to the past: on HTTP/2 a deadline in the
+// past resets the stream at once, and the closed frame could no longer be
+// sent). A stream with no write in flight is left alone: it is idle and its
+// final frame goes out normally. A ResponseController that cannot set a
+// deadline leaves the write bounded by WriteTimeout (ErrNotSupported is
+// tolerated everywhere, as a test recorder has no deadlines); any other failure
+// is reported through Hooks.InterruptFailed.
+func (s *Subscriber) interrupt() {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if !s.writing || s.rc == nil {
+		return
+	}
+	grace := min(s.b.opt.WriteTimeout, interruptGrace)
+	if err := s.rc.SetWriteDeadline(time.Now().Add(grace)); err != nil && !errors.Is(err, http.ErrNotSupported) && s.b.opt.Hooks.InterruptFailed != nil {
+		s.b.opt.Hooks.InterruptFailed(err)
+	}
 }
 
 // endedReason is the reason the stream was ended with, "" if it was not.

@@ -1,5 +1,5 @@
 // file: core/realtime/handler.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 92294d19-9b17-417a-ac8b-ebeb60b136f0
 // last-edited: 2026-11-12
 
@@ -152,7 +152,7 @@ func (h *Hub) open(p *auth.Principal, q query) (*sse.Subscriber, error) {
 		return nil, ErrNotReady
 	case h.closed.Load():
 		return nil, ErrClosed
-	case !holds(p, rbac.AnyAuthenticated):
+	case !holds(p, rbac.AnyAuthenticated): // serve already refuses this; open repeats it so it is safe on its own
 		return nil, ErrNotPermitted
 	}
 	bucket, ok := bucketOf(p)
@@ -161,7 +161,7 @@ func (h *Hub) open(p *auth.Principal, q query) (*sse.Subscriber, error) {
 	}
 	// The generation is read before rights are computed, so a change that
 	// lands during the expansion is seen by the first Check.
-	st := &stream{h: h, p: p, user: userOf(p), cred: p.CredentialID, seenGen: h.gen.Load(), explicit: map[string]struct{}{}}
+	st := &stream{h: h, req: p, p: p, user: userOf(p), cred: p.CredentialID, seenGen: h.gen.Load(), explicit: map[string]struct{}{}}
 	var err error
 	if st.allowed, err = h.expand(tab, p, q, st.explicit); err != nil {
 		if errors.Is(err, ErrTopicDenied) {

@@ -1,5 +1,5 @@
 // file: core/realtime/hub_auth_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7f3a1d52-0e84-4c36-b9a7-2d1c5e6f8a40
 // last-edited: 2026-11-12
 
@@ -277,5 +277,43 @@ func TestHub_RevalidateOnHeartbeat(t *testing.T) {
 	c.signal(topicSignal, "", "still", "public")
 	if en, _ := steady.nextData(); en.Topic != tSignal {
 		t.Errorf("steady stream saw %+v", en)
+	}
+}
+
+// TestHub_ClosedFrameReachesTheClientOverHTTP1AndHTTP2: an idle stream ended
+// by Close (shutdown) or by an invalidation (credential_revoked) delivers its
+// closed frame, over HTTP/1.1 and over HTTP/2, the production transport. A
+// write deadline moved into the past resets an HTTP/2 stream before the frame
+// is sent, so the cell fails if the end path ever interrupts an idle stream
+// that way.
+func TestHub_ClosedFrameReachesTheClientOverHTTP1AndHTTP2(t *testing.T) {
+	for _, proto := range []string{"h1", "h2"} {
+		for _, end := range []string{"shutdown", "credential_revoked"} {
+			t.Run(proto+"/"+end, func(t *testing.T) {
+				c := newCast(t, hubOptions{})
+				srv, ro := c.serveProto(t, c.hub.Handler(), proto == "h2")
+				ro.set("lucius", c.session(c.lucius))
+				rd, resp := open(t, srv, "lucius", "/events")
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("status %d", resp.StatusCode)
+				}
+				if want := map[string]int{"h1": 1, "h2": 2}[proto]; resp.ProtoMajor != want {
+					t.Fatalf("negotiated HTTP/%d, want HTTP/%d", resp.ProtoMajor, want)
+				}
+				rd.expectOpened()
+				if end == "shutdown" {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := c.hub.Close(ctx); err != nil {
+						t.Fatalf("Close = %v", err)
+					}
+				} else {
+					events.Publish(c.cor, context.Background(), topicInval, "", Invalidated{UserID: string(c.lucius.ID), Reason: "test"})
+				}
+				if got := rd.drainUntilClosed(); got != end {
+					t.Errorf("closed frame reason %q, want %q", got, end)
+				}
+			})
+		}
 	}
 }
