@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer_test.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 569aec15-d845-4f39-9a8e-63ba7e93162a
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -136,7 +136,7 @@ func (l *arsLib) apply(plan *repairs.PlanResult, rowIDs []string) map[string]rep
 	w := repairs.NewWriter(l.store, l.store, l.fixer.ID(), "bulk_update", "repairs-").
 		WithJournal(l.store, l.store, arsTestApplyOp).WithUserState(l.p.deps.UserReadStateStore())
 	res, err := repairs.RunApply(context.Background(), l.fixer, plan, arsTestPlanOp, rowIDs, false,
-		repairs.ApplyDeps{Guard: l.store, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), Writer: w, OpID: arsTestApplyOp}, &fakeReporter{})
+		repairs.ApplyDeps{Guard: l.store, Tags: repairsGuardTags(l.p.deps), Series: repairs.SeriesNamesFrom(series), Writer: w, OpID: arsTestApplyOp}, &fakeReporter{})
 	require.NoError(l.t, err)
 	out := map[string]repairs.RowResult{}
 	for _, r := range res.Rows {

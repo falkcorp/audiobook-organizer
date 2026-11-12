@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair.go
-// version: 1.5.7
+// version: 1.5.8
 // guid: 1cfccfec-8289-4d6a-8e2f-8a935d9ca4a5
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -332,7 +332,7 @@ func (p *Plugin) runVersionGroupPrimaryRepair(ctx context.Context, rawParams jso
 			"version-group-primary-repair: ffprobe unavailable (%v); chapter counts come from the chapter table", perr))
 		prober = nil
 	}
-	report, err := p.versionGroupPrimaryRepair(ctx, params, config.AppConfig.RootDir, prober, reporter)
+	report, err := p.versionGroupPrimaryRepair(ctx, p.deps, params, config.AppConfig.RootDir, prober, reporter)
 	if report != nil {
 		if serr := registry.ReporterSetResult(reporter, report); serr != nil {
 			reporter.Logger().Warn("version-group-primary-repair: report not persisted", "err", serr)
@@ -368,10 +368,18 @@ func normalizeGroupIDs(ids []string) []string {
 	return out
 }
 
-func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, params vgPrimaryRepairParams, rootDir string,
+// vgPrimaryStores are the two stores versionGroupPrimaryRepair reads and writes.
+// The operation passes its deps; the fixer passes the stores the shell bound
+// (FixerStores), so the repair body never decides where its stores come from.
+type vgPrimaryStores interface {
+	OpsStore() OpsStore
+	VersionPrimaryStore() VersionPrimaryStore
+}
+
+func (p *Plugin) versionGroupPrimaryRepair(ctx context.Context, st vgPrimaryStores, params vgPrimaryRepairParams, rootDir string,
 	prober versionprimary.ChapterProber, reporter sdk.Reporter) (*vgRepairReport, error) {
-	store := p.deps.OpsStore()
-	vps := p.deps.VersionPrimaryStore()
+	store := st.OpsStore()
+	vps := st.VersionPrimaryStore()
 	if store == nil || vps == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}

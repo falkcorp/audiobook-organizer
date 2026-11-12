@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.14.2
+// version: 1.14.3
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -224,11 +224,18 @@ func (p *Plugin) pruneSupersededRefresh(fixerID, prevID string, newParams repair
 	reporter.Logger().Info("repairs.plan: pruned the rows of the refresh this one replaced", "fixer", fixerID, "plan_op_id", prevID)
 }
 
+// guardTagSource is the one accessor repairsGuardTags reads. An operation
+// passes its deps; a fixer passes the stores the shell bound (FixerStores), so
+// the body never decides where its tags come from.
+type guardTagSource interface {
+	BookTagReader() BookTagReader
+}
+
 // repairsGuardTags is the tag reader the framework guard reads franchise
 // tags through. A book tagged franchise:* is held even after its title or
 // path stops naming the library, so production must always pass one.
-func (p *Plugin) repairsGuardTags() repairs.GuardTagReader {
-	if tr := p.deps.BookTagReader(); tr != nil {
+func repairsGuardTags(src guardTagSource) repairs.GuardTagReader {
+	if tr := src.BookTagReader(); tr != nil {
 		return tr
 	}
 	return nil
@@ -236,7 +243,7 @@ func (p *Plugin) repairsGuardTags() repairs.GuardTagReader {
 
 // repairsPlanDeps is the plan op's guard input.
 func (p *Plugin) repairsPlanDeps(store OpsStore, all []database.Series) repairs.PlanDeps {
-	return repairs.PlanDeps{Guard: store, Tags: p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(all)}
+	return repairs.PlanDeps{Guard: store, Tags: repairsGuardTags(p.deps), Series: repairs.SeriesNamesFrom(all)}
 }
 
 func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
@@ -298,7 +305,7 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 		return repairs.ErrNoHolderID
 	}
 	deps := repairs.ApplyDeps{
-		Guard: store, Tags: p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(all),
+		Guard: store, Tags: repairsGuardTags(p.deps), Series: repairs.SeriesNamesFrom(all),
 		StandDown: p.deps, OpID: opID, Wait: p.standDownWait,
 		Resumed: params.Resume,
 		Owner:   owner,

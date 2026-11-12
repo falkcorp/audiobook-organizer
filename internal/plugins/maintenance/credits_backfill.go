@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.5.5
+// version: 1.5.6
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -578,7 +578,7 @@ type creditsBackfillParams struct {
 // creditsBackfillStore is the op's store surface. creditCensusStore (all
 // reads) plus the guard's reads, field locks, narrator creation, the journal
 // and the series names. The guard's tag reader comes from its own accessor
-// (Plugin.repairsGuardTags), as for every Repairs guard. The credit write itself is ModifyBookCredits,
+// (repairsGuardTags), as for every Repairs guard. The credit write itself is ModifyBookCredits,
 // resolved separately (database.AsCapability), so a store without it can still
 // dry-run.
 type creditsBackfillStore interface {
@@ -805,7 +805,7 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 	env := creditsBackfillEnv{
 		store:   store,
 		mod:     mod,
-		tags:    p.repairsGuardTags(),
+		tags:    repairsGuardTags(p.deps),
 		scan:    p.deps,
 		opID:    registry.ReporterOpID(reporter),
 		workers: runtime.NumCPU(),

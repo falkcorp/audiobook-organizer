@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -126,7 +126,7 @@ func (l *lcLib) apply(plan *repairs.PlanResult, dry bool, keys ...string) *repai
 	for _, k := range keys {
 		rowIDs = append(rowIDs, l.ids[k])
 	}
-	deps := repairs.ApplyDeps{Guard: l.st, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), OpID: lcTestOpID}
+	deps := repairs.ApplyDeps{Guard: l.st, Tags: repairsGuardTags(l.p.deps), Series: repairs.SeriesNamesFrom(series), OpID: lcTestOpID}
 	if !dry {
 		deps.Writer = repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, lcTestOpID)
 	}

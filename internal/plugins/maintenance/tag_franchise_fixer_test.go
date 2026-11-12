@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 9f3a6c28-1e74-4b5d-8c02-7a6e4d9b1f35
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -85,7 +85,7 @@ func (l *tfLib) apply(plan *repairs.PlanResult, rowIDs []string) *repairs.ApplyR
 	w := repairs.NewWriter(l.store, l.store, l.fixer.ID(), "bulk_update", "repairs-").
 		WithJournal(l.store, l.store, tfTestOpID).WithTags(l.p.deps.BookTagWriter())
 	res, err := repairs.RunApply(context.Background(), l.fixer, plan, "op-tag-franchise-plan", rowIDs, false,
-		repairs.ApplyDeps{Guard: l.store, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), Writer: w, OpID: tfTestOpID}, &fakeReporter{})
+		repairs.ApplyDeps{Guard: l.store, Tags: repairsGuardTags(l.p.deps), Series: repairs.SeriesNamesFrom(series), Writer: w, OpID: tfTestOpID}, &fakeReporter{})
 	require.NoError(l.t, err)
 	return res
 }
@@ -167,7 +167,7 @@ func TestTagFranchise_PlanApplyRevert(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	k, _, err := repairs.GuardBooks(l.store, l.p.repairsGuardTags(), nil, repairs.NewPathResolver(), []string{l.ids["dw"]})
+	k, _, err := repairs.GuardBooks(l.store, repairsGuardTags(l.p.deps), nil, repairs.NewPathResolver(), []string{l.ids["dw"]})
 	require.NoError(t, err)
 	require.Equal(t, repairs.SkipOwnerManual, k)
 
@@ -203,7 +203,7 @@ func TestTagFranchise_ProdWiring(t *testing.T) {
 	require.True(t, ok, "maintenance.tag-franchise not registered")
 	deps := l.p.repairsPlanDeps(l.store, nil)
 	require.NotNil(t, deps.Tags, "the plan guard must read franchise tags")
-	require.NotNil(t, l.p.repairsGuardTags())
+	require.NotNil(t, repairsGuardTags(l.p.deps))
 	require.True(t, repairs.AllowsBookTagsOnly(l.fixer))
 }
 

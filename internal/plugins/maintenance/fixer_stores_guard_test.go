@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fixer_stores_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c6e2a7-3d84-4b05-a1f9-7e0c5d2b8a43
 // last-edited: 2026-11-12
 
@@ -26,31 +26,49 @@ import (
 // of the shell-stores contract. The tripwire tests in stores_fixer_test.go
 // run each fixer with deps that fail the test on any store accessor, and prove
 // the paths they execute; this pass walks the call graph from every fixer's
-// Plan, Replan, Apply, BeginApply and AfterApply and reports every call of a
-// FixerStores accessor on anything but FixerStores, and every other ServerDeps
-// method, that those methods can reach (tools/fixerstores explains how).
+// Plan, Replan, Apply, Meta, BeginApply, AfterApply, RequiredPermissions and
+// PlanOnly and reports (tools/fixerstores explains how)
+//
+//   - every FixerStores accessor called on anything but a store-family
+//     interface (a store sink),
+//   - every conversion of the plugin's deps (or a plugin type) into a
+//     store-family interface (a store sink named convert:From->To),
+//   - every other ServerDeps method (a dep), and
+//   - every func argument the maintenance package passes that the pass cannot
+//     follow (unresolved).
 //
 // Every report must be on the allowlist, testdata/fixer_stores_allowlist.txt,
 // with a reason, and every allowlist entry must still be reported, so the
-// list only shrinks: a fixer that starts reading a plugin store, or reaching a
-// new dep, fails here until someone has looked at it.
+// list only shrinks. A store sink is keyed on the function and the accessor
+// together: a new accessor call inside an allowlisted function is a new
+// report. A shared body that used to read p.deps now takes its stores as a
+// parameter (repairsGuardTags, versionGroupPrimaryRepair), so what the pass
+// protects is the conversion that fills the parameter, not a promise in a
+// comment.
 //
 // It complements the tripwire tests and does not replace them. The pass is
 // variable type analysis (VTA): it is unsound for reflection (a call made
 // through reflect or found by name is not an edge) and imprecise for function
 // values stored in struct fields (it can add callees that never run, which
-// the allowlist records as false positives, and miss ones that do). What it
-// adds over the tripwires is the code they do not execute; what the tripwires
-// add over it is every call that really happens, whatever it went through.
+// the allowlist records as false positives, and miss ones that do; a func read
+// from a field and passed on is an unresolved argument). It does not walk code
+// outside the module, and a store read through a variable typed as a
+// store-family interface is judged by that type, not by what filled it. What
+// it adds over the tripwires is the code they do not execute; what the
+// tripwires add over it is every call that really happens, whatever it went
+// through.
 //
 // Where it runs: the test skips under -short, so `make test-short` and the
 // short Go jobs never see it. Its package already calls testing.Short(), so
 // scripts/ci/fixture_test_packages.py selects it for `make test-fixtures`, the
 // "Fixture Tests (no -short, race)" jobs (1/3, 2/3, 3/3) of ci.yml, which run
 // without -short; the maintenance tests are split across the three by test
-// name and this one lands in whichever shard its name hashes to. The pass
-// needs the Go toolchain and the x/tools module pinned in tools/fixerstores
-// (a module of its own, so x/tools stays out of the root go.mod).
+// name and this one lands in whichever shard its name hashes to, weighed in
+// scripts/ci/fixture_weights.json. It needs the Go toolchain and the x/tools
+// module pinned in tools/fixerstores (a module of its own, so x/tools stays out
+// of the root go.mod): the runner's module cache must hold it, or have network
+// to fetch it. It runs `go run` in that directory, whose build cache and module
+// cache are the ones the job already has.
 func TestFixerStores_NoFixerReachesAStoreExceptThroughTheShell(t *testing.T) {
 	if testing.Short() {
 		t.Skip("walks the whole call graph of the plugin (minutes, several GB); runs in the fixture tests, without -short")
@@ -76,12 +94,12 @@ func TestFixerStores_NoFixerReachesAStoreExceptThroughTheShell(t *testing.T) {
 
 	seenSinks := map[string]bool{}
 	for _, s := range rep.StoreSinks {
-		key := s.Func
+		key := s.Func + " " + s.Accessor
 		seenSinks[key] = true
 		if _, ok := allow["store-sink"][key]; !ok {
-			t.Errorf("fixer code reaches the store accessor %s on a plugin store, not the shell's, in %s (%s).\n"+
+			t.Errorf("fixer code reaches a store other than through the shell: %s in %s (%s).\n"+
 				"  call path: %s\n"+
-				"  Read it from the FixerStores of ctx (p.fixerStores(ctx)), or, if the call is safe (the receiver is the shell's, or the path is not real), add\n"+
+				"  Read it from the FixerStores of ctx (p.fixerStores(ctx)) or take the stores as a parameter, or, if the report is safe (the path is not real), add\n"+
 				"  `store-sink %s # reason` to testdata/fixer_stores_allowlist.txt",
 				s.Accessor, s.Func, s.Pos, strings.Join(s.Path, " -> "), key)
 		}
@@ -107,11 +125,22 @@ func TestFixerStores_NoFixerReachesAStoreExceptThroughTheShell(t *testing.T) {
 		}
 	}
 
-	// What the pass could not follow is not an error (an argument that is a
-	// parameter or a field has no body to look at); it is in the log so a
-	// reviewer sees how much of the graph the pass took on trust.
+	// A func argument the pass cannot follow could be a callback of ours that
+	// reads a store: it fails until a reviewer has said what it is.
+	seenUnresolved := map[string]bool{}
 	for _, u := range rep.Unresolved {
-		t.Logf("unresolved func argument: %s passes one to %s (%s)", u.Caller, u.Callee, u.Pos)
+		key := u.Caller + " -> " + u.Callee
+		seenUnresolved[key] = true
+		if _, ok := allow["unresolved"][key]; !ok {
+			t.Errorf("the pass cannot follow a func argument: %s passes %s to %s (%s).\n"+
+				"  Pass a function literal or named function, or add `unresolved %s # reason` to testdata/fixer_stores_allowlist.txt",
+				u.Caller, u.Arg, u.Callee, u.Pos, key)
+		}
+	}
+	for key, reason := range allow["unresolved"] {
+		if !seenUnresolved[key] {
+			t.Errorf("stale allowlist entry `unresolved %s # %s`: the pass no longer reports it; delete the line", key, reason)
+		}
 	}
 }
 
@@ -135,6 +164,7 @@ type fixerStoresReport struct {
 		Caller string `json:"caller"`
 		Callee string `json:"callee"`
 		Pos    string `json:"pos"`
+		Arg    string `json:"arg"`
 	} `json:"unresolved"`
 }
 
@@ -161,7 +191,7 @@ func readFixerStoresAllowlist(t *testing.T, path string) map[string]map[string]s
 	f, err := os.Open(path)
 	require.NoError(t, err)
 	defer f.Close()
-	out := map[string]map[string]string{"store-sink": {}, "dep": {}}
+	out := map[string]map[string]string{"store-sink": {}, "dep": {}, "unresolved": {}}
 	sc := bufio.NewScanner(f)
 	for n := 1; sc.Scan(); n++ {
 		line := strings.TrimSpace(sc.Text())
@@ -174,7 +204,7 @@ func readFixerStoresAllowlist(t *testing.T, path string) map[string]map[string]s
 		require.Truef(t, ok, "%s:%d: want `kind name # reason`", path, n)
 		kind, name = strings.TrimSpace(kind), strings.TrimSpace(name)
 		set, known := out[kind]
-		require.Truef(t, known, "%s:%d: unknown kind %q (want store-sink or dep)", path, n, kind)
+		require.Truef(t, known, "%s:%d: unknown kind %q (want store-sink, dep or unresolved)", path, n, kind)
 		_, dup := set[name]
 		require.Falsef(t, dup, "%s:%d: %s %s is listed twice", path, n, kind, name)
 		set[name] = strings.TrimSpace(reason)
