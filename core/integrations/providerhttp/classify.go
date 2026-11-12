@@ -1,7 +1,7 @@
 // file: core/integrations/providerhttp/classify.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c73c6078-09b3-4cb0-943f-440eb98114f5
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package providerhttp
 
@@ -36,9 +36,14 @@ func Classify(ctx context.Context, resp *http.Response, body []byte, err error) 
 }
 
 // dailyQuotaMarkers are the phrases providers use for an exhausted per-day
-// allowance, as opposed to a burst limit (throttle.go:71-77).
+// allowance, as opposed to a burst limit (throttle.go:71-77). insufficient_quota
+// and credit_balance_exhausted are the AI providers' codes for a spent balance:
+// a 429 like a burst limit that does not clear by waiting. They are the words
+// integrations/ai shares between its router and its adapters (quotaMarkers), so
+// the gate holds the same endpoint for the same reason the router benches it.
 func dailyQuotaMarkers() []string {
-	return []string{"per day", "daily limit", "dailylimitexceeded", "quota exceeded for quota metric", "quotaexceeded"}
+	return []string{"per day", "daily limit", "dailylimitexceeded", "quota exceeded for quota metric", "quotaexceeded",
+		"insufficient_quota", "credit_balance_exhausted"}
 }
 
 // rateLimitMarkers are the machine-readable reasons for a BURST overrun
