@@ -1,5 +1,5 @@
 // file: core/library/reserved.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f5dd1d5d-73ad-4667-bbb4-561193fd1163
 // last-edited: 2026-11-11
 
@@ -21,10 +21,15 @@ import (
 // (Lstat, Readlink, Stat), so it cannot leave the root and a link that points
 // outside is left for os.Root to refuse.
 
-// maxLinkHops bounds the symlinks one resolution expands. It is os.Root's own
-// limit (255): a chain this resolution gives up on is one os.Root would give up
-// on too, and a shorter limit would answer "not reserved" for a chain os.Root
-// still follows into an area.
+// maxLinkHops bounds the symlinks one resolution expands; a chain that is longer
+// is undecided and refused. It is NOT os.Root's limit: os.Root follows 8
+// (rootMaxSymlinks) and applies that to the reads it does itself (Stat, Lstat,
+// Open of a plain view). A mutation is carried out on the path this resolution
+// expanded, so it can follow a chain os.Root would refuse for a read, and it is
+// this limit, not os.Root's, that decides how long a chain a mutation can be
+// reached through. Nothing depends on the value being large: exhaustion refuses,
+// so a lower limit would only turn more long chains into refusals. 255 is
+// headroom well above anything a layout needs.
 const maxLinkHops = 255
 
 // resolution is how realRel ended.
