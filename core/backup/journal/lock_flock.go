@@ -1,5 +1,5 @@
 // file: core/backup/journal/lock_flock.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 75a49a61-111f-44fd-a9f3-316c5c6ebe2a
 // last-edited: 2026-11-11
 
@@ -17,6 +17,12 @@ import (
 // openNoFollow makes an open fail on a symbolic link at the last component of
 // the path (O_NOFOLLOW) instead of following it.
 const openNoFollow = syscall.O_NOFOLLOW
+
+// openNoBlock makes an open of a named pipe return at once (O_NONBLOCK): a
+// read-only open of a FIFO otherwise waits for a writer, before the check that
+// the path is a regular file can refuse it. Reading a regular file is not
+// affected.
+const openNoBlock = syscall.O_NONBLOCK
 
 // lockJournal takes flock(2) LOCK_EX on the open journal, without waiting.
 // The lock belongs to this open file description, so a second OpenFile of

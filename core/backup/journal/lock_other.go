@@ -1,5 +1,5 @@
 // file: core/backup/journal/lock_other.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8aeea5b5-d059-4280-9e81-f5727253ea95
 // last-edited: 2026-11-11
 
@@ -19,6 +19,10 @@ import (
 // regular-file check on the open descriptor still refuses a link's target
 // that is not a file.
 const openNoFollow = 0
+
+// openNoBlock is 0 where O_NONBLOCK is not portable: the journal cannot be
+// opened for writing there at all.
+const openNoBlock = 0
 
 // lockJournal fails closed where flock(2) is absent: without an exclusive
 // lock a second writer could reuse seqs, so OpenFile returns a broken File

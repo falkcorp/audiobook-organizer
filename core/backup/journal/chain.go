@@ -1,5 +1,5 @@
 // file: core/backup/journal/chain.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1da2b496-21d3-4218-8a94-2e19379880f4
 // last-edited: 2026-11-11
 
@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"iter"
 	"os"
 	"time"
@@ -267,9 +266,10 @@ func claimedEnd(c *Chain, rest [][]byte, want uint64) uint64 {
 // is an error satisfying os.ErrNotExist; an empty one yields an empty Chain; a
 // path that is not a regular file, or is a symbolic link, is ErrNotRegular (the
 // journal is never read through a link planted on its share, for the same
-// reason it is never written through one).
+// reason it is never written through one, and a named pipe is refused without
+// waiting for a writer); a file over maxJournalBytes is ErrCorrupt.
 func ReadFile(path string, keys Keys) (c *Chain, err error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow|openNoBlock, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, err
@@ -280,9 +280,9 @@ func ReadFile(path string, keys Keys) (c *Chain, err error) {
 	if err := regularFile(f); err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(f)
+	data, err := readCapped(f, path)
 	if err != nil {
-		return nil, fmt.Errorf("journal: read %s: %w", path, err)
+		return nil, err
 	}
 	return ReadChain(data, keys), nil
 }

@@ -1,5 +1,5 @@
 // file: core/backup/journal/file.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: b701597d-6d06-4dd4-af78-0e0d6a9983ca
 // last-edited: 2026-11-11
 
@@ -134,6 +134,8 @@ type File struct {
 	now     func() time.Time
 	header  Header
 	broken  error // a failed append that could not be rolled back, or an open that failed: every later Append fails
+	refused error // Refuse: the boot will not let a line stage a head, for good (until the process ends)
+	held    error // Hold: the same for now; Resume lifts it
 	closed  bool
 
 	// gaps are the starts of the intervals Gap recorded that no line has
@@ -300,11 +302,45 @@ func openJournal(path string) (*os.File, []byte, error) {
 	if err := lockJournal(f); err != nil {
 		return nil, nil, errors.Join(err, f.Close())
 	}
-	data, err := io.ReadAll(f)
+	data, err := readCapped(f, path)
 	if err != nil {
-		return nil, nil, errors.Join(fmt.Errorf("journal: read %s: %w", path, err), f.Close())
+		return nil, nil, errors.Join(err, f.Close())
 	}
 	return f, data, nil
+}
+
+// maxJournalBytes is the largest journal file the boot reads. A line is a few
+// hundred bytes, so this is hundreds of thousands of revocations; a file past it
+// is not a journal this build wrote, and reading it whole (it is read into
+// memory, in a boot that has not yet bound the journal) would take the process
+// down with it. It is an ErrCorrupt, which the boot treats like any chain it
+// cannot read: it fails closed once and reports the journal broken.
+const maxJournalBytes = 256 << 20
+
+// readCapped reads f whole, refusing more than maxJournalBytes.
+func readCapped(f *os.File, path string) ([]byte, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("journal: stat %s: %w", path, err)
+	}
+	return readLimited(f, path, fi.Size(), maxJournalBytes)
+}
+
+// readLimited reads r whole, which is size bytes by its own account, and
+// refuses it past limit: by the size alone (nothing is read), and again while
+// reading, for a file that grew since it was measured.
+func readLimited(r io.Reader, path string, size, limit int64) ([]byte, error) {
+	if size > limit {
+		return nil, fmt.Errorf("%w: %s is %d bytes, over the %d-byte limit", ErrCorrupt, path, size, limit)
+	}
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("journal: read %s: %w", path, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%w: %s grew past the %d-byte limit while it was read", ErrCorrupt, path, limit)
+	}
+	return data, nil
 }
 
 // openError is the error of failing to open path for op: a symbolic link at the
@@ -479,8 +515,8 @@ func (j *File) Append(ctx context.Context, b *storage.Batch, r Revocation) error
 	switch {
 	case j.closed:
 		return ErrClosed
-	case j.broken != nil:
-		return j.broken
+	case j.refusal() != nil:
+		return j.refusal()
 	}
 	if err := bind(b, j.ks); err != nil {
 		return err
@@ -672,8 +708,8 @@ func (j *File) writeLineLocked(ctx context.Context, r Revocation) (Pending, erro
 	switch {
 	case j.closed:
 		return Pending{}, ErrClosed
-	case j.broken != nil:
-		return Pending{}, j.broken
+	case j.refusal() != nil:
+		return Pending{}, j.refusal()
 	}
 	data, closed, h, err := j.prepare(r)
 	if err != nil {
@@ -782,21 +818,53 @@ type Status struct {
 func (j *File) Status() Status {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return Status{Broken: j.broken, OpenGaps: len(j.gaps)}
+	return Status{Broken: j.refusal(), OpenGaps: len(j.gaps)}
+}
+
+// refusal is the error every append fails with, nil when it can take a line:
+// a break, then a Refuse, then a Hold. j.mu is held.
+func (j *File) refusal() error {
+	switch {
+	case j.broken != nil:
+		return j.broken
+	case j.refused != nil:
+		return j.refused
+	}
+	return j.held
 }
 
 // Refuse makes every later append fail with err, as a File whose open failed
-// does, and keeps an earlier failure. The boot calls it when the store's head
-// has to stay below a line it could not apply (a kind only a newer build
-// knows) or below a verdict not yet durable: every Append stages its own seq as
-// the head, so one would move the head past the line the boot left unapplied.
-// The revoking callers record gaps instead, as for any append failure.
+// does, until the process ends, and keeps an earlier failure. The boot calls it
+// when the store's head has to stay below a line it could not apply (a kind only
+// a newer build knows): every Append stages its own seq as the head, so one would
+// move the head past the line the boot left unapplied. The revoking callers
+// record gaps instead, as for any append failure. Nothing lifts it: the head
+// stays below that line until a build that knows it runs.
 func (j *File) Refuse(err error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.broken == nil && err != nil {
-		j.broken = err
+	if j.refused == nil && err != nil {
+		j.refused = err
 	}
+}
+
+// Hold is Refuse for a refusal that ends: the boot holds the journal while the
+// store's head must not move yet (a replaced store whose restore line could not
+// be written, until the hooks have completed), and Resume lifts it. It does not
+// touch a break or a Refuse, which outlast it.
+func (j *File) Hold(err error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.held == nil && err != nil {
+		j.held = err
+	}
+}
+
+// Resume lifts a Hold. A journal that is broken or Refused still refuses.
+func (j *File) Resume() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.held = nil
 }
 
 // Path is the journal file's path.
