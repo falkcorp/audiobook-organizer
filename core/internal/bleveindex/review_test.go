@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/review_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5a21dcba-39eb-4d8d-ab72-f47d2f10ccd2
 // last-edited: 2026-11-11
 
@@ -469,6 +469,66 @@ func TestQueryShapeIsBounded(t *testing.T) {
 	}
 	if _, err := r.ix.Search(t.Context(), index.QueryString(plain+"-bat"), index.Page{}); !errors.Is(err, index.ErrInvalidQuery) {
 		t.Errorf("1000 clauses and a negation: %v, want ErrInvalidQuery", err)
+	}
+}
+
+// TestQueryStringsShareTheQueryBudget: each OpString leaf is parsed inside the
+// translation, and what it costs is added to the budget of the whole query. With
+// a budget of its own per string, a tree of leaves that each fit alone (and each
+// carry a negation, which is a match-all) would cost their sum many times over.
+func TestQueryStringsShareTheQueryBudget(t *testing.T) {
+	r := seeded(t)
+	// About 300 clauses and one negation: 360-odd nodes, inside the budget alone.
+	leaf := index.QueryString(strings.Repeat("b ", 300) + "-bat")
+	for name, q := range map[string]index.Query{
+		"one leaf alone": leaf,
+		"two leaves":     index.Or(leaf, leaf),
+	} {
+		if _, err := r.ix.Search(t.Context(), q, index.Page{}); err != nil {
+			t.Errorf("%s fits the budget: %v", name, err)
+		}
+	}
+	leaves := func(n int) index.Query {
+		qs := make([]index.Query, n)
+		for i := range qs {
+			qs[i] = leaf
+		}
+		return index.Or(qs...)
+	}
+	for name, q := range map[string]index.Query{
+		"three leaves, each under the per-string budget": leaves(3),
+		"a hundred leaves": leaves(100),
+		// A string below a Not is charged to the same budget as one below an And.
+		"three negated leaves": index.Or(index.Not(leaf), index.Not(leaf), index.Not(leaf)),
+		// Each of these is one match-all (64 nodes with its one clause) and nothing
+		// else: 1024 of them were 1024 budgets, each holding a full-index scan.
+		"a thousand negation strings": func() index.Query {
+			qs := make([]index.Query, maxQueryNodes)
+			for i := range qs {
+				qs[i] = index.QueryString("-bat")
+			}
+			return index.Or(qs...)
+		}(),
+	} {
+		if _, err := r.ix.Search(t.Context(), q, index.Page{}); !errors.Is(err, index.ErrInvalidQuery) {
+			t.Errorf("%s: %v, want ErrInvalidQuery", name, err)
+		}
+	}
+	// The depth is shared too: a string starts its own depth count at its leaf, so
+	// a leaf the outer cap still allows is refused when its parsed tree reaches
+	// past the cap.
+	wrap := func(n int) index.Query {
+		q := index.Query(leaf)
+		for range n {
+			q = index.And(q)
+		}
+		return q
+	}
+	if _, err := r.ix.Search(t.Context(), wrap(maxQueryDepth/2), index.Page{}); err != nil {
+		t.Errorf("a string leaf well inside the depth cap: %v", err)
+	}
+	if _, err := r.ix.Search(t.Context(), wrap(maxQueryDepth-2), index.Page{}); !errors.Is(err, index.ErrInvalidQuery) {
+		t.Errorf("a string leaf whose parsed tree passes the depth cap: %v, want ErrInvalidQuery", err)
 	}
 }
 
