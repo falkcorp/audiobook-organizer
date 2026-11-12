@@ -1,5 +1,5 @@
 // file: core/kernel/restore_reapply.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f6d8a14-c3e7-4b95-a018-9d4e7b1c5f36
 // last-edited: 2026-11-11
 
@@ -293,8 +293,9 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	hold := !restoring && res.Class == classReplaced && res.RestoreLine == 0
 	if hold {
 		// The hooks' own journal lines would stage their seqs as the head, which
-		// is what the hold keeps back until they have completed.
-		in.Journal.Refuse(errors.New("the journal could not take the restore line of a replaced store, so it takes no line until the hooks have run"))
+		// is what the hold keeps back; runRestoreHooks lifts it (Resume) once they
+		// have completed and the held head is committed.
+		in.Journal.Hold(errors.New("the journal could not take the restore line of a replaced store, so it takes no line until the hooks have run"))
 	}
 
 	// (3) re-apply what the store has not seen: the verified tail after
@@ -302,8 +303,8 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	// A chain that does not verify still yields the lines that did (the store
 	// lacks nothing of what they hold, whatever the rest of the file is); a line
 	// this build cannot apply stops it, and the head stays below that line.
-	lines, stopped := in.tailLines(chain, headBefore, aborted, untrusted)
-	plan := tailPlan{Lines: lines, Aborted: aborted, Pending: pend, Hold: hold}
+	lines, later, stopped := in.tailLines(chain, headBefore, aborted, untrusted)
+	plan := tailPlan{Lines: lines, Later: later, Aborted: aborted, Pending: pend, Hold: hold}
 	if stopped != nil {
 		plan.Pending = nil // the head must not pass the line nothing applied
 	}
@@ -500,7 +501,9 @@ const (
 // have: the verified lines before it are still used, and the store, if it is
 // behind the anchor, fails closed for what it may lack (ClaimedEnd is raised to
 // the anchor so Chain.Behind says so). It returns chain itself when the anchor
-// is on it, the file does not describe this store, or has no committed head.
+// is on it, the file does not describe this store, or has no committed head. A
+// forked_anchor chain still applies its verified lines after the store's head
+// (tailLines; forkedAt, which applies nothing, is about the store's own head).
 func (in reapplyInput) checkAnchor(chain *journal.Chain, loc journal.Location, describes bool) *journal.Chain {
 	if !describes || loc.Head.Seq == 0 {
 		return chain
@@ -534,7 +537,11 @@ func otherInstall(chain *journal.Chain, install string) bool {
 // forkedAt reports a journal that is not the one the store committed: its
 // verified line at the store's head differs. A chain that breaks later still
 // answers (MACAt speaks only for the lines that verified); one that breaks
-// before the head cannot, and is reported by its break.
+// before the head cannot, and is reported by its break. It is the verdict under
+// which nothing is applied: the lines are another history. Not to be confused
+// with checkAnchor's forked_anchor, where the journal does hold the store's head
+// but not the line the location file recorded further on: those verified lines
+// after the store's head are applied.
 func forkedAt(chain *journal.Chain, head journal.Head) bool {
 	if head.MAC == "" {
 		return false
@@ -676,36 +683,56 @@ func journalShowsReplaced(chain *journal.Chain, head journal.Head, aborted map[u
 const tailBatch = 128
 
 // tailLines are the lines the re-apply applies: the verified lines after head,
-// cut before the first revocation of a kind this build cannot apply (stopped:
+// split at the first revocation of a kind this build cannot apply (stopped:
 // KnownKind is how it tells; IsRevocation counts an unknown kind so that a
-// newer build's line is never skipped, and the head never moves over it). A hook
-// line of an aborted restore is not one (verified, part of the chain, never
-// applied: the store it narrowed was swapped away, DATA8-7 (a)).
+// newer build's line is never skipped, and the head never moves over it).
+//
+// lines are those before it: applied with the head, which ends below the stop.
+// later are the revocations of a kind this build does know that come after it:
+// they are applied too (a narrowing a newer build journaled after its own kind is
+// no less owed to the store: a disable that follows the line this build cannot
+// read must not wait for a build that can), but with no head staged, so the head
+// stays below the line nothing applied and the next boot, which stops at the same
+// line, applies them again (they narrow and are idempotent). A hook line of an
+// aborted restore is in neither (verified, part of the chain, never applied: the
+// store it narrowed was swapped away, DATA8-7 (a)).
 //
 // On a chain that does not verify the lines are its verified prefix up to the
 // break, which Chain.Lines already is: they are authentic revocations after the
 // store's head, narrowing-only, and the store lacks nothing less for the rest of
 // the file being doubtful. They are not applied when they are not this store's
 // history: a journal of another install, or one that verifies but does not hold
-// the line the store committed at its head (forked). A journal that starts above
-// the store's head (pruned) has only the lines it holds, applied; the interval
-// between is what the fail-closed fallback is for.
-func (in reapplyInput) tailLines(chain *journal.Chain, head journal.Head, aborted map[uint64]bool, untrusted bool) (lines []journal.Line, stopped *journal.Line) {
+// the line the store committed at its head (forkedAt, whatever Break says). That
+// is the one place an untrusted chain applies nothing; a journal the location
+// file's anchor contradicts (forked_anchor, below_anchor) and a pruned or
+// truncated one do apply their verified lines after the store's head, because the
+// store's own head is on them. A journal that starts above the store's head
+// (pruned) has only the lines it holds, applied; the interval between is what the
+// fail-closed fallback is for.
+func (in reapplyInput) tailLines(chain *journal.Chain, head journal.Head, aborted map[uint64]bool, untrusted bool) (lines, later []journal.Line, stopped *journal.Line) {
 	if untrusted && (otherInstall(chain, in.Install) || forkedAt(chain, head)) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for l := range chain.After(head.Seq) {
-		if journal.IsRevocation(l.Kind) && !journal.KnownKind(l.Kind) && !(l.RestoreSeq != 0 && aborted[l.RestoreSeq]) {
-			return lines, &l
+		abortedHook := l.RestoreSeq != 0 && aborted[l.RestoreSeq]
+		switch {
+		case stopped == nil && journal.IsRevocation(l.Kind) && !journal.KnownKind(l.Kind) && !abortedHook:
+			stopped = &l
+		case stopped == nil:
+			lines = append(lines, l)
+		case journal.IsRevocation(l.Kind) && journal.KnownKind(l.Kind) && !abortedHook:
+			later = append(later, l)
 		}
-		lines = append(lines, l)
 	}
-	return lines, nil
+	return lines, later, stopped
 }
 
 // tailPlan is what applyTail applies and the head it moves.
 type tailPlan struct {
-	Lines   []journal.Line
+	Lines []journal.Line
+	// Later are known revocations after a line this build cannot apply: applied
+	// in batches of their own with no head (tailLines).
+	Later   []journal.Line
 	Aborted map[uint64]bool
 	// Pending is the line this boot wrote before the re-apply (a restore line,
 	// or the gap line of a new journal): the last batch commits its head, which
@@ -718,9 +745,10 @@ type tailPlan struct {
 }
 
 // applyTail applies p.Lines in order, in batches of in.TailBatch, each batch
-// moving the head with its last write; it returns the number of revocations it
-// applied. The head never passes a line not yet applied. A run of lines that is
-// empty still commits the pending line's head.
+// moving the head with its last write, then p.Later the same way with no head;
+// it returns the number of revocations it applied. The head never passes a line
+// not yet applied. A run of lines that is empty still commits the pending line's
+// head.
 func (in reapplyInput) applyTail(ctx context.Context, p tailPlan) (int, error) {
 	size := in.TailBatch
 	if size < 1 {
@@ -759,6 +787,22 @@ func (in reapplyInput) applyTail(ctx context.Context, p tailPlan) (int, error) {
 	if len(parts) == 0 && p.Pending != nil && !p.Hold {
 		if err := p.Pending.Commit(ctx); err != nil {
 			return applied, fmt.Errorf("kernel: commit the journal head: %w", err)
+		}
+	}
+	for part := range slices.Chunk(p.Later, size) {
+		var revs []journal.Revocation
+		for _, l := range part {
+			revs = append(revs, l.Revocation)
+		}
+		kept, err := in.commitTail(ctx, revs, nil)
+		if err != nil {
+			return applied, fmt.Errorf("kernel: re-apply the revocations after seq %d, which this build cannot apply: %w", part[len(part)-1].Seq, err)
+		}
+		applied += len(revs)
+		for _, u := range kept {
+			if err := in.Apply.RestrictLastAdmin(ctx, u); err != nil {
+				return applied, fmt.Errorf("kernel: restrict the last admin %s: %w", u, err)
+			}
 		}
 	}
 	return applied, nil
