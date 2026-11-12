@@ -1,7 +1,7 @@
 // file: core/internal/rbacstore/store.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 6f1c9a3e-28d4-4b7e-a5f0-93e1d27c4b85
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package rbacstore is core's one implementation of rbac.Store and
 // rbac.Importer (05-rbac §3.4, §6.3 "Native store"): roles kept in the core
@@ -17,6 +17,7 @@
 package rbacstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -346,12 +347,39 @@ func (s *Store) committed(key []byte) ([]byte, error) {
 	return raw, nil
 }
 
+// ErrDoubleWrite is a second write to a role one batch already changed (the
+// write is derived from the committed bytes, so it would replace the first
+// without having seen it). Only a batch that reads its own writes can tell; a
+// programming error, not a conflict, never retried.
+var ErrDoubleWrite = errors.New("rbacstore: a record is written twice in one batch")
+
 // stage binds the role keyspace to b, records the Expect (want nil: the key
-// must be absent) and stages the write (raw nil: a delete).
+// must be absent) and stages the write (raw nil: a delete). On an indexed batch
+// (the kernel's re-apply batch is one) it refuses a second write to key.
 func (s *Store) stage(b *storage.Batch, key, want, raw []byte) error {
 	b.Bind(s.ks)
 	if err := b.Expect(s.ks, key, want); err != nil {
 		return fmt.Errorf("rbacstore: expect %q: %w", key, err)
+	}
+	if b.Indexed() {
+		view, err := b.GetForUpdate(context.Background(), s.ks, key)
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			view = nil
+		case err != nil:
+			return fmt.Errorf("rbacstore: read %q through the batch: %w", key, err)
+		}
+		if !bytes.Equal(view, want) {
+			// This batch's own write, or a commit that landed since the caller read
+			// (the commit's Expect reports that as a conflict and the caller retries).
+			now, err := s.committed(key)
+			if err != nil {
+				return err
+			}
+			if bytes.Equal(now, want) {
+				return fmt.Errorf("%w: %q", ErrDoubleWrite, key)
+			}
+		}
 	}
 	w := b.In(s.ks)
 	if raw == nil {
