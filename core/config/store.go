@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.1.6
+// version: 1.1.7
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-12
 
@@ -56,6 +56,11 @@ type Store struct {
 	// of frozen templates (sectioncache.go). Tests swap it to isolate a cache
 	// or, with newTemplateCache(0), to build every section from scratch.
 	builds *templateCache
+	// claimed indexes the registered sections' claims, paths and entry-list
+	// parents, so a Register compares only the sections it could collide with
+	// (overlap.go). Written under mu, with sections, at the one place a
+	// section is added.
+	claimed *overlapIndex
 	// canonNames are the registered struct keys' canonical env names;
 	// appBindings is Options.EnvBindings (05-config §1.3.6).
 	canonNames  map[string]Path
@@ -168,7 +173,7 @@ func NewStore(o Options) (*Store, error) {
 		appBindings[b.Name] = b.Path
 	}
 	s := &Store{
-		o: o, prefix: prefix, log: o.Logger, now: o.Now, builds: sharedTemplates,
+		o: o, prefix: prefix, log: o.Logger, now: o.Now, builds: sharedTemplates, claimed: newOverlapIndex(),
 		canonNames: map[string]Path{}, appBindings: appBindings, envVars: parseEnviron(o.Environ),
 		conflictLogged: map[Path]bool{}, fcWins: map[Path]string{}, fcLogged: map[Path]bool{}, retiredLogged: map[retiredKey]bool{},
 		opSecrets: map[Path]OperatorValue{},
@@ -246,6 +251,7 @@ func (s *Store) register(sp *sectionSpec) (*binding, error) {
 	}
 	maps.Copy(s.envNames, names)
 	s.sections = append(s.sections, sec)
+	s.claimed.add(sec)
 	slices.SortFunc(s.sections, func(a, b *section) int { return strings.Compare(string(a.path), string(b.path)) })
 	s.install(sec, built, built, s.gen.Load(), true)
 	s.reindex()
@@ -259,41 +265,9 @@ func (s *Store) register(sp *sectionSpec) (*binding, error) {
 
 // checkOverlap refuses a section whose path or keys collide with a
 // registered one (05-config §1.3.1: a section path may extend another only at
-// a segment the parent's type does not declare).
-func (s *Store) checkOverlap(sec *section) error {
-	for _, o := range s.sections {
-		if o.path == sec.path {
-			return fmt.Errorf("%w: section %s is registered twice", ErrDuplicate, sec.path)
-		}
-		for _, a := range sec.claims() {
-			for _, b := range o.claims() {
-				if overlaps(a, b) {
-					return fmt.Errorf("%w: section %s's key %s overlaps section %s's key %s", ErrDuplicate, sec.path, a, o.path, b)
-				}
-			}
-		}
-		for _, b := range o.claims() {
-			if under(sec.path, b) {
-				return fmt.Errorf("%w: section %s lies under section %s's key %s", ErrDuplicate, sec.path, o.path, b)
-			}
-		}
-		for _, a := range sec.claims() {
-			if under(o.path, a) {
-				return fmt.Errorf("%w: section %s's key %s holds section %s", ErrDuplicate, sec.path, a, o.path)
-			}
-		}
-		// An entry list's parent is an ID namespace: "<parent>.<id>.<ref>"
-		// is a secret key for any ID, so no other section may lie there.
-		for _, pair := range [][2]*section{{sec, o}, {o, sec}} {
-			for _, lk := range pair[0].entryLists {
-				if under(pair[1].path, lk.entryParent()) {
-					return fmt.Errorf("%w: section %s lies under %s, where section %s's list %s names its entries' secrets", ErrDuplicate, pair[1].path, lk.entryParent(), pair[0].path, lk.path(""))
-				}
-			}
-		}
-	}
-	return nil
-}
+// a segment the parent's type does not declare). The overlap index names the
+// registered sections that could collide; only those are compared.
+func (s *Store) checkOverlap(sec *section) error { return s.claimed.check(sec) }
 
 // effectiveView is what Get reads (05-config §1.4): boot keys as of Load,
 // restart keys as of Attach, live keys current.
