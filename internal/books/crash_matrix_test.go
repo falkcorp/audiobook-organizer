@@ -1,5 +1,5 @@
 // file: internal/books/crash_matrix_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 1a6f3d82-9c4e-4b17-8e25-7d0b5c9a2f61
 // last-edited: 2026-11-11
 
@@ -282,7 +282,11 @@ func aboUnreachedLabels() map[string]string {
 		"storage.rewrite.checkpoint": noM8,
 		"swap.rewrite.stage":         noM8,
 		"swap.rewrite.delete":        noM8,
-		"storage.checkpoint.ready":   "needs an upgrade whose step failed, leaving its checkpoint open, then a boot with nothing to run; no books step fails on a store HEAD wrote",
+		// F2-16 wires the definition snapshot writer, but books registers no
+		// task kind until F5, so no ABO boot has a definition to upsert.
+		// hello registers hello.count, and its matrix breaks the writer.
+		"tasks.def.upsert":         "books registers no task kind until F5, so an ABO boot upserts no definition snapshot; hello's matrix breaks it over hello.count",
+		"storage.checkpoint.ready": "needs an upgrade whose step failed, leaving its checkpoint open, then a boot with nothing to run; no books step fails on a store HEAD wrote",
 		// The kit's clock is fixed (crashmatrix.Now) and a fixture's files
 		// are copied into memory with the host's current time as their
 		// mtime, so no scratch entry is 7 days old at a kit boot. Storage's
