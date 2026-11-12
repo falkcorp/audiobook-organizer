@@ -1,5 +1,5 @@
 // file: internal/books/cutover/rename_table_structure_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d7b2c10-93aa-4a33-8f0f-6c6a1d2e5b04
 // last-edited: 2026-11-11
 
@@ -138,6 +138,94 @@ func TestRenameTable_RetiredEnvNamesNeverCollideWithCanonicalOnes(t *testing.T) 
 	if !slices.IsSorted(CanonicalEnvNames()) {
 		t.Error("CanonicalEnvNames is not sorted")
 	}
+}
+
+// TestRenameTable_FlatViperKeysAreRetired: configFromViper reads eight flat keys
+// that head no row of the table: the four per-source base URLs (backfilling
+// metadata_sources[].base_url) and the four pre-Wave-4 flat iTunes path keys
+// (backfilling the nested library paths). A config.yaml line or an environment
+// variable under one of them was silently ignored by the new build, because
+// the retired list held only row names. Each now retires as a file key (and
+// the iTunes ones as an env name too: the base URLs' env names come from their
+// BindEnv), with the verdict, canonical path and Refuse of the row they fill.
+func TestRenameTable_FlatViperKeysAreRetired(t *testing.T) {
+	type entry struct {
+		name      string
+		file      bool
+		canonical config.Path
+		verdict   Verdict
+	}
+	const (
+		write = config.Path("modules.books.itunes.library_write_path")
+		read  = config.Path("modules.books.itunes.library_read_path")
+	)
+	want := []entry{
+		{"audible_base_url", true, "", VerdictWarn},
+		{"audnexus_base_url", true, "", VerdictWarn},
+		{"google_books_base_url", true, "", VerdictWarn},
+		{"openlibrary_base_url", true, "", VerdictWarn},
+		{"AUDIBLE_BASE_URL", false, "", VerdictWarn},
+		{"AUDNEXUS_BASE_URL", false, "", VerdictWarn},
+		{"GOOGLE_BOOKS_BASE_URL", false, "", VerdictWarn},
+		{"OPENLIBRARY_BASE_URL", false, "", VerdictWarn},
+		{"itunes_library_itl_path", true, write, VerdictRefuse},
+		{"itunes_library_write_path", true, write, VerdictRefuse},
+		{"itunes_library_read_path", true, read, VerdictRefuse},
+		{"itunes_library_xml_path", true, read, VerdictRefuse},
+		{"ITUNES_LIBRARY_ITL_PATH", false, write, VerdictRefuse},
+		{"ITUNES_LIBRARY_WRITE_PATH", false, write, VerdictRefuse},
+		{"ITUNES_LIBRARY_READ_PATH", false, read, VerdictRefuse},
+		{"ITUNES_LIBRARY_XML_PATH", false, read, VerdictRefuse},
+	}
+	got := map[string]config.RetiredName{}
+	for _, r := range RetiredConfigNames() {
+		if _, dup := got[strings.ToLower(r.Name)+boolKey(r.File)]; dup {
+			t.Errorf("retired name %s (file=%v) is listed twice", r.Name, r.File)
+		}
+		got[strings.ToLower(r.Name)+boolKey(r.File)] = r
+	}
+	verdicts := map[string]Verdict{}
+	for _, row := range Table().Rows {
+		for _, e := range row.Retired {
+			verdicts[strings.ToLower(e.Name)+boolKey(e.File)] = e.Verdict
+		}
+	}
+	for _, w := range want {
+		k := strings.ToLower(w.name) + boolKey(w.file)
+		r, ok := got[k]
+		if !ok {
+			t.Errorf("%s (file=%v) is not a retired name", w.name, w.file)
+			continue
+		}
+		if r.Name != w.name || r.Canonical != w.canonical || verdicts[k] != w.verdict {
+			t.Errorf("%s (file=%v) = {name %s canonical %q verdict %s}, want {canonical %q verdict %s}", w.name, w.file, r.Name, r.Canonical, verdicts[k], w.canonical, w.verdict)
+		}
+	}
+
+	// Every key of both alias maps is covered, so a key added to one is retired
+	// without another list to remember; one that fills no row fails the generator.
+	for key := range bindAlias {
+		if _, ok := got[key+boolKey(true)]; !ok {
+			t.Errorf("bindAlias key %s has no retired file entry", key)
+		}
+	}
+	for key := range flatFileAlias {
+		if _, ok := got[key+boolKey(true)]; !ok {
+			t.Errorf("flatFileAlias key %s has no retired file entry", key)
+		}
+	}
+	flatFileAlias["itunes_library_bogus_path"] = "itunes.no_such_leaf"
+	t.Cleanup(func() { delete(flatFileAlias, "itunes_library_bogus_path") })
+	if _, err := generateTable(); err == nil || !strings.Contains(err.Error(), "itunes_library_bogus_path") {
+		t.Errorf("generateTable with an alias to no row = %v, want an error naming the key", err)
+	}
+}
+
+func boolKey(file bool) string {
+	if file {
+		return "|file"
+	}
+	return "|env"
 }
 
 // TestRenameTable_TargetsAreWellFormed: every key and secret target is a valid

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_strip.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: c7391f62-422d-4a79-8fa6-f679c490c72a
 // last-edited: 2026-11-11
 
@@ -38,14 +38,17 @@ import (
 // to be somewhere else. Ten of the fifteen keys are settings HEAD wrote on a
 // save and, through viper (cmd/root.go reads the file --config names, which
 // docs/configuration.md points at the file beside the database), can read back
-// at startup. For nine of them, on every install M2 runs on, the settings blob
-// shadows the file, so stripping them loses nothing; an install with no blob is
-// the one in which a file value is HEAD's effective setting, and M2a's
-// Preflight refuses that upgrade (the census) instead of letting this strip
-// delete it. database_path is the tenth and the exception: the blob cannot be
-// where HEAD finds it (the database must be open before the blob can be read),
-// and M2 never stores it, so nothing shadows the file's line and no destination
-// can be shown to hold the value. The strip therefore always keeps it
+// at startup. For nine of them, by the time this strip runs the value HEAD
+// used is stored: the blob's own member wins over the file (HEAD decodes the
+// blob onto viper's view, config.yaml included), and a member the blob lacks
+// keeps the file's value, which M2a seeds into its plan and stages like a blob
+// member (planner.gapFill, mirroring Snapshot()). An install with no blob is
+// the one in which a file value is HEAD's effective setting with nothing to
+// stage it from, and M2a's Preflight refuses that upgrade (the census) instead
+// of letting this strip delete it. database_path is the tenth and the
+// exception: the blob cannot be where HEAD finds it (the database must be open
+// before the blob can be read), and M2 never stores it, so nothing holds the
+// file's line and no destination can be shown to hold the value. The strip therefore always keeps it
 // (headNeverStrippedKeys) and lists it in StripReport.Kept, until the operator
 // layer reads core.storage.path from that source; F3-07 may then drop it from
 // the list (seams.d/F3-06.md, F3-07 item 6). The census leaves it out for the

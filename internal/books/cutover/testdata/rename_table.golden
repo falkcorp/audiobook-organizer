@@ -1,5 +1,5 @@
 # file: internal/books/cutover/testdata/rename_table.golden
-# version: 1.1.0
+# version: 1.2.0
 # guid: 7024f723-334e-4210-95d6-bcd11fc9cd7d
 # last-edited: 2026-11-11
 #
@@ -181,6 +181,10 @@ retired env AUDIBLE_BASE_URL -> - warn
 retired env OPENLIBRARY_BASE_URL -> - warn
 retired env AUDNEXUS_BASE_URL -> - warn
 retired env GOOGLE_BOOKS_BASE_URL -> - warn
+retired file audible_base_url -> - warn
+retired file audnexus_base_url -> - warn
+retired file google_books_base_url -> - warn
+retired file openlibrary_base_url -> - warn
 
 ## openlibrary_dump_enabled
 top=true stored=blob class=k blob=openlibrary_dump_enabled admin=false fail-closed=false url=false
@@ -1310,11 +1314,19 @@ retired env ITUNES -> modules.books.itunes refuse
 top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
 target key modules.books.itunes.library_write_path convert=- env=ABO_BOOKS_ITUNES_LIBRARY_WRITE_PATH
 retired env ITUNES.LIBRARY_WRITE_PATH -> modules.books.itunes.library_write_path refuse
+retired file itunes_library_itl_path -> modules.books.itunes.library_write_path refuse
+retired env ITUNES_LIBRARY_ITL_PATH -> modules.books.itunes.library_write_path refuse
+retired file itunes_library_write_path -> modules.books.itunes.library_write_path refuse
+retired env ITUNES_LIBRARY_WRITE_PATH -> modules.books.itunes.library_write_path refuse
 
 ## itunes.library_read_path
 top=false stored=blob class=k blob=itunes admin=true fail-closed=false url=false
 target key modules.books.itunes.library_read_path convert=- env=ABO_BOOKS_ITUNES_LIBRARY_READ_PATH
 retired env ITUNES.LIBRARY_READ_PATH -> modules.books.itunes.library_read_path refuse
+retired file itunes_library_read_path -> modules.books.itunes.library_read_path refuse
+retired env ITUNES_LIBRARY_READ_PATH -> modules.books.itunes.library_read_path refuse
+retired file itunes_library_xml_path -> modules.books.itunes.library_read_path refuse
+retired env ITUNES_LIBRARY_XML_PATH -> modules.books.itunes.library_read_path refuse
 
 ## itunes.path_trim_enabled
 top=false stored=blob class=k blob=itunes admin=false fail-closed=false url=false

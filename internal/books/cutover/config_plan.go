@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_plan.go
-// version: 1.2.0
+// version: 1.3.1
 // guid: 0f2f4b87-3f6d-4a4c-8e0a-7c7f2c64b0d1
 // last-edited: 2026-11-11
 
@@ -426,7 +426,29 @@ func buildPlan(in *m2Input) (*plan, error) {
 // where the stored value is empty, enable_ai_parsing where the stored value
 // is false and the file says true. (The three file secrets are applied with
 // the secret rows.)
+//
+// It also mirrors the seeding LoadConfigFromDatabase gets from Snapshot():
+// HEAD decodes the blob onto the live config, which at that point holds
+// viper's view, config.yaml included, so a member the blob lacks keeps the
+// file's value. For each key configFromViper reads from the file
+// (headViperFileKeys) that the blob lacks (absent or null: json.Unmarshal
+// leaves a field alone for either), the file's value, cast to the key's type,
+// is planted in the tree; the key stage then stages it like a blob member and
+// the strip can remove the line. A value equal to HEAD's default is planted
+// too: the key stage stages a blob member at its default (keyMember has no
+// default check) and the registry skips a default-equal value
+// (Importer.Stage), so a file value is held to the same rule, and where core's
+// default is not HEAD's (concurrent_scans follows the host) a pinned value
+// survives as it does for a blob member. Without this the strip deleted a
+// value nothing stored.
 func (pl *planner) gapFill() {
+	for _, k := range headViperFileKeys {
+		v, ok := pl.in.FileSettings[k]
+		if !ok || pl.tree[k] != nil {
+			continue
+		}
+		pl.tree[k] = v
+	}
 	if pl.in.File.RootDir != "" {
 		if cur, _ := asString(pl.tree["root_dir"]); cur == "" {
 			pl.tree["root_dir"] = pl.in.File.RootDir
