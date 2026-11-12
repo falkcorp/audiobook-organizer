@@ -1,5 +1,5 @@
 // file: core/library/recover_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d6fba451-bfd4-4e6c-bd41-649146b9f034
 // last-edited: 2026-11-11
 
@@ -266,15 +266,15 @@ func TestTransferRecoveryIsCrashSafe(t *testing.T) {
 	}
 }
 
-// A cross-device Move whose source changed after the copy keeps the source:
-// the destination is verified, and the source is removed only if it still has
-// the digest that was copied.
-func TestTransferRecoveryKeepsAChangedSource(t *testing.T) {
+// crossDeviceMoveKilledBeforeSourceRemoval leaves a cross-device Move that died
+// right after the publish was journaled and before the source went: both
+// copies exist and the journal row is live.
+func crossDeviceMoveKilledBeforeSourceRemoval(t *testing.T) (r *rig, src, dst Path) {
+	t.Helper()
 	r, f := transferRig(t, rigOpts{faults: &faults{}})
 	f.inject = crossRoots
-	src := r.put("import-1", "Arkham/a.m4b", "the original bytes")
-	dst := Path{Root: "books-library", Rel: "a.m4b"}
-	// Die right after the publish is journaled: before the source goes.
+	src = r.put("import-1", "Arkham/a.m4b", "the original bytes")
+	dst = Path{Root: "books-library", Rel: "a.m4b"}
 	pub := 0
 	dry, _ := transferRig(t, rigOpts{faults: &faults{}})
 	dry.f.inject = crossRoots
@@ -297,6 +297,14 @@ func TestTransferRecoveryKeepsAChangedSource(t *testing.T) {
 	if !r.exists("import-1", "Arkham/a.m4b") || !r.exists("books-library", "a.m4b") {
 		t.Fatalf("setup: both copies should exist (src %v, dst %v)", r.exists("import-1", "Arkham/a.m4b"), r.exists("books-library", "a.m4b"))
 	}
+	return r, src, dst
+}
+
+// A cross-device Move whose source changed after the copy keeps the source:
+// the destination is verified, and the source is removed only if it still has
+// the digest that was copied.
+func TestTransferRecoveryKeepsAChangedSource(t *testing.T) {
+	r, _, _ := crossDeviceMoveKilledBeforeSourceRemoval(t)
 	// Someone appends to the source before recovery runs.
 	if err := os.WriteFile(r.abs("import-1", "Arkham/a.m4b"), []byte("the original bytes, and a new chapter"), 0o664); err != nil {
 		t.Fatal(err)
@@ -311,6 +319,31 @@ func TestTransferRecoveryKeepsAChangedSource(t *testing.T) {
 	}
 	if got, _ := r.read("books-library", "a.m4b"); got != "the original bytes" {
 		t.Errorf("dst = %q", got)
+	}
+	if r.journalRows() != 0 {
+		t.Error("the undecidable row was not dropped")
+	}
+}
+
+// The same Move whose destination no longer holds the copied bytes (something
+// replaced it between the crash and the recovery) keeps the source: recovery
+// removes a source only against a destination it has just proved holds the
+// copy, so the one good copy is never the one it deletes.
+func TestTransferRecoveryKeepsTheSourceOfADamagedDestination(t *testing.T) {
+	r, _, _ := crossDeviceMoveKilledBeforeSourceRemoval(t)
+	if err := os.WriteFile(r.abs("books-library", "a.m4b"), []byte("bytes that are not the copy"), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	r.m = r.build(rigOpts{})
+	rep, err := r.m.Recover(ctxbg())
+	if err != nil || rep.Conflicts != 1 {
+		t.Fatalf("Recover = %v, %v; want one conflict", rep, err)
+	}
+	if got, ok := r.read("import-1", "Arkham/a.m4b"); !ok || got != "the original bytes" {
+		t.Errorf("the source was removed or changed although the destination is damaged: %q, %v", got, ok)
+	}
+	if got, _ := r.read("books-library", "a.m4b"); got != "bytes that are not the copy" {
+		t.Errorf("recovery rewrote the destination: %q", got)
 	}
 	if r.journalRows() != 0 {
 		t.Error("the undecidable row was not dropped")
