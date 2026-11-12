@@ -1,5 +1,5 @@
 // file: core/config/sectioncache_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a0d1c52-63f0-4c77-b9a4-0a9e1f7e3b61
 // last-edited: 2026-11-12
 
@@ -170,8 +170,8 @@ func fingerprint(t testing.TB, s *Store) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintf(&b, "section %s map=%v read=%s write=%s defaults=%s zero=%s schema=%s lists=%d\n",
-			sec.path, sec.isMap, sec.permRead, sec.permWrite, sec.defaults, sec.elemZero, schema, len(sec.entryLists))
+		fmt.Fprintf(&b, "section %s map=%v read=%s write=%s defaults=%s zero=%s schema=%s lists=%d claims=%v\n",
+			sec.path, sec.isMap, sec.permRead, sec.permWrite, sec.defaults, sec.elemZero, schema, len(sec.entryLists), sec.claims())
 		var all []*keyInfo
 		for _, k := range sec.keys {
 			all = append(all, k)
@@ -647,7 +647,7 @@ func TestSectionCache_FieldsAreClassified(t *testing.T) {
 	sectionFields := map[string]class{
 		"path": value, "spec": caller, "isMap": value, "keys": private, "byRel": private,
 		"permRead": value, "permWrite": value, "schema": shared, "defaults": private, "elemZero": private,
-		"bind": store, "eff": store, "pend": store, "entryLists": private,
+		"bind": store, "eff": store, "pend": store, "entryLists": private, "claimPaths": shared,
 	}
 	keyFields := map[string]class{
 		"sec": private, "rel": private, "index": private, "typ": value, "reload": value, "protect": value,
@@ -681,7 +681,7 @@ func TestSectionCache_FieldsAreClassified(t *testing.T) {
 			fa, fb := a.FieldByName(name), b.FieldByName(name)
 			switch cl {
 			case shared:
-				if fa.Kind() == reflect.Pointer && !fa.IsNil() {
+				if (fa.Kind() == reflect.Pointer && !fa.IsNil()) || (fa.Kind() == reflect.Slice && fa.Len() > 0) {
 					exercised[owner+"."+name] = true
 					if fa.Pointer() != fb.Pointer() {
 						t.Errorf("%s.%s is not shared with the template: every store would pay to rebuild it", owner, name)

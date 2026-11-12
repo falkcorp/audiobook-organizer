@@ -1,5 +1,5 @@
 // file: core/config/registry.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 74ce6316-8927-42d8-ac4f-38c9f6a04ebe
 // last-edited: 2026-11-12
 
@@ -96,14 +96,23 @@ type section struct {
 	// "Entry secrets"): their derived keys are not in keys, because they are
 	// no part of the section's JSON and exist once per entry.
 	entryLists []*keyInfo
+
+	// claimPaths is claims() computed once at build: the paths the section
+	// owns. Frozen with the rest of the build, so a cached template's
+	// instances share it; nothing may write to it.
+	claimPaths []Path
 }
 
 // core reports whether the section is a core section.
 func (s *section) core() bool { return s.path == "core" || strings.HasPrefix(string(s.path), "core.") }
 
 // claims are the paths the section owns: its keys, or for a map section its
-// whole subtree (the section path).
-func (s *section) claims() []Path {
+// whole subtree (the section path). The slice is built once, by buildSection,
+// and shared read-only: callers must not modify it.
+func (s *section) claims() []Path { return s.claimPaths }
+
+// computeClaims is claims() from the key table.
+func (s *section) computeClaims() []Path {
 	if s.isMap {
 		return []Path{s.path}
 	}
@@ -184,6 +193,7 @@ func buildSection(sp *sectionSpec) (*section, error) {
 	if err := sec.reserveEntryIDs(); err != nil {
 		return nil, err
 	}
+	sec.claimPaths = sec.computeClaims()
 	if sec.defaults, err = json.Marshal(sp.defaults); err != nil {
 		return nil, fmt.Errorf("%w: section %s defaults: %w", ErrInvalid, sp.path, err)
 	}
