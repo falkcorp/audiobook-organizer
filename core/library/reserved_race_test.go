@@ -1,5 +1,5 @@
 // file: core/library/reserved_race_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: a09c077a-859d-454e-a263-3867a490db97
 // last-edited: 2026-11-11
 
@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -70,6 +69,14 @@ func TestTransferIntoAnAreaAfterTheCheckIsRefused(t *testing.T) {
 			_, err := r.m.Transfer(ctxbg(), books, src, Path{Root: "books-library", Rel: "a/planted.m4b"}, c.opts)
 			if !errors.Is(err, ErrReservedPath) {
 				t.Errorf("Transfer = %v, want ErrReservedPath", err)
+			}
+			// Nothing was made, so nothing is owed: no recovery is pending and no
+			// cleanup went looking for a temp that was never created.
+			if errors.Is(err, ErrRecoveryPending) {
+				t.Errorf("Transfer = %v: nothing is owed to recovery", err)
+			}
+			if got := f.labelsOf(":remove:"); len(got) != 0 {
+				t.Errorf("a cleanup removed something that was never made: %v", got)
 			}
 			if got := areaNames(t, r); !slices.Equal(got, before) {
 				t.Errorf("the AppDir holds %v, was %v", got, before)
@@ -343,12 +350,19 @@ func TestRenameOfAnAreaRenamedAwayIsRefusedByIdentity(t *testing.T) {
 	}
 }
 
-// A chain of links is followed up to os.Root's own limit, so one that is longer
-// than the old 40 but ends in the AppDir is still seen to; beyond os.Root's limit
-// the resolution is undecided and refused. The review probe wrote through a
-// 45-link chain into the AppDir.
+// osRootMaxLinks is os.Root's own limit on the links it follows in one lookup
+// (os.rootMaxSymlinks): the reads it performs itself give up past it with ELOOP.
+const osRootMaxLinks = 8
+
+// A mutation is carried out on the path the resolution expanded, so it is the
+// resolution, not os.Root, that must see a long chain end in the AppDir; the
+// review probe wrote through a 45-link chain into it. Past maxLinkHops the chain
+// is undecided and refused too. The mutation is made through the view directly:
+// a Transfer through a chain longer than os.Root's limit fails earlier, at its
+// own read of the destination, which would make this test pass without the
+// resolution doing anything.
 func TestLongLinkChainsToAnAreaAreRefused(t *testing.T) {
-	for _, hops := range []int{30, 45, 100, 254, 255, 300} {
+	for _, hops := range []int{3, osRootMaxLinks, osRootMaxLinks + 1, 30, 45, 100, maxLinkHops - 1, maxLinkHops, maxLinkHops + 1, 300} {
 		t.Run(fmt.Sprintf("hops=%d", hops), func(t *testing.T) {
 			r, _ := transferRig(t, rigOpts{})
 			src := r.put("import-1", "Arkham/joke.m4b", "bytes")
@@ -362,16 +376,34 @@ func TestLongLinkChainsToAnAreaAreRefused(t *testing.T) {
 				}
 			}
 			before := areaNames(t, r)
-			dst := Path{Root: "books-library", Rel: fmt.Sprintf("l%d/planted.m4b", hops)}
-			_, err := r.m.Transfer(ctxbg(), books, src, dst, copyOpts())
+			rel := fmt.Sprintf("l%d/planted.m4b", hops)
+
+			mr, err := r.m.Root("books-library")
+			if err != nil {
+				t.Fatal(err)
+			}
+			fsys, err := mr.FS(books)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := fsys.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 			if err == nil {
-				t.Error("a non-core Copy through a link chain to the AppDir succeeded")
+				err = errors.Join(errors.New("the create succeeded"), f.Close())
+			}
+			if !errors.Is(err, ErrReservedPath) {
+				t.Errorf("create through a %d-link chain to the AppDir = %v, want ErrReservedPath", hops, err)
+			}
+
+			// Where os.Root itself can follow the chain, a whole Transfer reaches the
+			// check and is refused by it.
+			if hops <= osRootMaxLinks {
+				dst := Path{Root: "books-library", Rel: rel}
+				if _, err := r.m.Transfer(ctxbg(), books, src, dst, copyOpts()); !errors.Is(err, ErrReservedPath) {
+					t.Errorf("Copy through a %d-link chain to the AppDir = %v, want ErrReservedPath", hops, err)
+				}
 			}
 			if got := areaNames(t, r); !slices.Equal(got, before) {
 				t.Errorf("the AppDir holds %v, was %v", got, before)
-			}
-			if hops > maxLinkHops && !errors.Is(err, ErrReservedPath) && !errors.Is(err, syscall.ELOOP) {
-				t.Errorf("a chain past the limit failed with %v, want a refusal", err)
 			}
 		})
 	}
