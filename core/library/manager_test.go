@@ -1,5 +1,5 @@
 // file: core/library/manager_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 424ad437-d2db-4df6-a85b-72352e053fb2
 // last-edited: 2026-11-11
 
@@ -647,5 +647,43 @@ func TestRootSpecJSONMinFree(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(`{"id":"books-library","path":"/x","role":"sideways","owner":"books"}`), &s); err == nil {
 		t.Error("an unknown role decoded")
+	}
+}
+
+// CreateExclusive is O_EXCL: an existing name is fs.ErrExist and the file that
+// holds it keeps its bytes. The transfer's no-clobber guarantee for its temp
+// file rests on this.
+func TestCreateExclusiveRefusesAnExistingName(t *testing.T) {
+	r, _ := transferRig(t, rigOpts{})
+	r.put("books-library", "Gotham/Court of Owls.txt", "the first writer's bytes")
+	root, err := r.m.Root("books-library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys, err := root.FS(books)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := fsys.CreateExclusive("Gotham/Court of Owls.txt", 0o644)
+	if err == nil {
+		f.Close()
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("CreateExclusive of an existing name = %v, want fs.ErrExist", err)
+	}
+	if got, _ := r.read("books-library", "Gotham/Court of Owls.txt"); got != "the first writer's bytes" {
+		t.Errorf("the existing file = %q", got)
+	}
+	// A free name is created, once.
+	g, err := fsys.CreateExclusive("Gotham/Talons.txt", 0o644)
+	if err != nil {
+		t.Fatalf("CreateExclusive of a free name: %v", err)
+	}
+	g.Close()
+	if h, err := fsys.CreateExclusive("Gotham/Talons.txt", 0o644); !errors.Is(err, fs.ErrExist) {
+		if err == nil {
+			h.Close()
+		}
+		t.Errorf("the second CreateExclusive of the same name = %v, want fs.ErrExist", err)
 	}
 }
