@@ -192,13 +192,35 @@ type harness struct {
 	backends map[integrations.InstanceID]ai.Backend
 }
 
-type harnessOptions struct{ metrics, noStager bool }
+type harnessOptions struct {
+	metrics, noStager bool
+	outbound          func(integrations.OutboundSpec) (integrations.HTTP, integrations.Gate)
+	adapters          []adapterReg
+}
+
+// adapterReg is an adapter the harness registers besides its fake one.
+type adapterReg struct {
+	origin string
+	d      integrations.Descriptor
+}
 
 // harnessOption configures newHarness.
 type harnessOption func(*harnessOptions)
 
 // withMetrics gives the router the core "ai" scope of a real Provider.
 func withMetrics() harnessOption { return func(o *harnessOptions) { o.metrics = true } }
+
+// withOutbound replaces the Registry's outbound builder (the default hands every
+// instance a fake HTTP): a real providerhttp gate, for a test of the egress
+// guard.
+func withOutbound(f func(integrations.OutboundSpec) (integrations.HTTP, integrations.Gate)) harnessOption {
+	return func(o *harnessOptions) { o.outbound = f }
+}
+
+// withAdapter registers a real adapter beside the harness's fake one.
+func withAdapter(origin string, d integrations.Descriptor) harnessOption {
+	return func(o *harnessOptions) { o.adapters = append(o.adapters, adapterReg{origin, d}) }
+}
 
 // withoutStager builds the router with no Stager, as a service that cannot
 // start module runs would be.
@@ -257,9 +279,13 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 		t.Fatalf("open audit: %v", err)
 	}
 	iks := keyspaceOf(t, db, instancestore.Owner)
+	outbound := (&integrationstest.Outbound{}).Func()
+	if ho.outbound != nil {
+		outbound = ho.outbound
+	}
 	reg, err := integrations.New(integrations.Options{
 		Store: integrations.NativeInstanceStore(iks), NewBatch: iks.NewBatch,
-		Secrets: sec, Audit: au, Outbound: (&integrationstest.Outbound{}).Func(), Now: clk.Now,
+		Secrets: sec, Audit: au, Outbound: outbound, Now: clk.Now,
 	})
 	if err != nil {
 		t.Fatalf("New registry: %v", err)
@@ -276,6 +302,11 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 			return nil, fmt.Errorf("the harness has no backend for %s", cfg.Ref)
 		}
 		return b, nil
+	}
+	for _, a := range ho.adapters {
+		if err := reg.Register(a.origin, a.d); err != nil {
+			t.Fatalf("Register %s: %v", a.origin, err)
+		}
 	}
 	if err := reg.Register("gotham", ai.Adapter(integrations.Meta{ID: fakeAdapter, DisplayName: "Bat-AI", Version: "1.0.0", Settings: schema}, build)); err != nil {
 		t.Fatalf("Register: %v", err)
