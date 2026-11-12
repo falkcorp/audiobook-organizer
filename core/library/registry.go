@@ -1,5 +1,5 @@
 // file: core/library/registry.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 363acb46-296b-4fe8-bd5c-6b1160ab673b
 // last-edited: 2026-11-11
 
@@ -388,7 +388,7 @@ func (m *manager) makeRoot(c *candidate, old *Root, set settings) *Root {
 		return r
 	}
 	r.os = osr
-	r.base = &localFS{id: c.spec.ID, root: osr, abs: c.abs, spec: c.spec, skip: c.skip, log: m.log, areas: new(areaMemory),
+	r.base = &localFS{id: c.spec.ID, root: osr, abs: c.abs, spec: c.spec, skip: c.skip, log: m.log, areas: new(areaMemory), inodeOf: m.seam.inodeOf,
 		mounted: func() error { return r.Mounted(context.Background()) },
 		// The engine has checked the caller may read the target's root.
 		target: m.Abs}
