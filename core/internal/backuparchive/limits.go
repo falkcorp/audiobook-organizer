@@ -1,5 +1,5 @@
 // file: core/internal/backuparchive/limits.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5bb5bf41-6a4b-4ad1-85be-b441f0967ac1
 // last-edited: 2026-11-12
 
@@ -13,8 +13,12 @@ import (
 // Limits bound every read of an archive: its size on disk, the number of
 // entries, each entry's size and the sum of all of them (decompressed). A
 // header's size is checked against them before anything is read or sized from
-// it, so a hostile or corrupt archive costs a refusal, never memory or disk.
-// A zero field takes the package default.
+// it, so a hostile or corrupt archive costs a refusal, not unbounded CPU, memory
+// or time. They do not bound disk by themselves: a compressed or sparse entry
+// declares a size far above what it costs to ship, so every extraction also
+// checks its declared bytes against the free space of the filesystem it writes
+// to before it writes one (backup's requireSpace), and the Extractor stops at a
+// byte budget. A zero field takes the package default.
 type Limits struct {
 	MaxArchiveBytes int64 // the file on disk
 	MaxEntries      int
@@ -22,14 +26,18 @@ type Limits struct {
 	MaxTotalBytes   int64 // the sum of the entries' sizes
 }
 
-// The defaults are far above any real store (a Pebble checkpoint of a 40 GiB
-// library is some hundreds of files of at most a few GiB) and far below what
-// a bomb needs to hurt.
+// The defaults sit far above any real store (a Pebble checkpoint of a 40 GiB
+// library is some hundreds of files of at most a few GiB; 05-backup's own
+// default retention is 40 GiB of archives) and a long way below what one
+// request could otherwise ask a host to decode: 4 TiB of declared content, 256
+// GiB in one entry, 262144 entries, a 4 TiB file. An operator with a larger
+// store sets Options.Limits; the free-space check and the Extractor's byte
+// budget are what hold an extraction to the size it declared, not these.
 const (
-	DefaultMaxArchiveBytes = int64(16) << 40
-	DefaultMaxEntries      = 1 << 20
-	DefaultMaxEntryBytes   = int64(1) << 40
-	DefaultMaxTotalBytes   = int64(16) << 40
+	DefaultMaxArchiveBytes = int64(4) << 40
+	DefaultMaxEntries      = 1 << 18
+	DefaultMaxEntryBytes   = int64(256) << 30
+	DefaultMaxTotalBytes   = int64(4) << 40
 )
 
 // MaxNameBytes bounds an entry's name.
@@ -62,7 +70,9 @@ var (
 	// element, an empty or doubled element, a backslash, a NUL, too long).
 	ErrEntryName = errors.New("backuparchive: entry name is not a safe relative path")
 	// ErrEntryType: an entry that is not a regular file (or, for a legacy
-	// archive, a directory): a symlink, hardlink, device, FIFO or sparse map.
+	// archive, a directory): a symlink, hardlink, device, FIFO or a sparse file
+	// (GNU old-format or PAX), whose logical size costs nothing to ship and the
+	// whole of it to write.
 	ErrEntryType = errors.New("backuparchive: entry is not a regular file")
 	// ErrLimit: the archive, an entry or the entry count passes a Limits bound.
 	ErrLimit = errors.New("backuparchive: archive exceeds a limit")
