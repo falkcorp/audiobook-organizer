@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/redact_internal_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f1fdc2e-3b2b-4a8b-a3a5-2d8f9e0b7d11
 // last-edited: 2026-11-12
 
@@ -177,8 +177,8 @@ func TestScrubSecretRules(t *testing.T) {
 // -race and coverage on a shared CI runner the scrubber runs about 150x slower
 // than a plain build, so an absolute budget either flakes there or is too loose
 // to catch anything locally. A ratio is independent of machine speed: the
-// excerpt path must not grow with the body at all, and text must grow about 4x
-// when the input grows 4x (a quadratic scrubber grows 16x).
+// excerpt path must not grow with the body at all, and text must grow about 32x
+// when the input grows 32x (a quadratic scrubber grows about 1024x).
 func TestScrub_HostileBodyIsBounded(t *testing.T) {
 	const size = 16 << 20
 	shape := func(unit string, n int) string { return strings.Repeat(unit, n/len(unit)) }
@@ -209,12 +209,15 @@ func TestScrub_HostileBodyIsBounded(t *testing.T) {
 		}
 	}
 	for name, body := range shapes {
-		small, large := body(256<<10), body(1<<20)
-		ts := fastest(3, func() { _ = scrubber{}.text(small) })
+		small, large := body(32<<10), body(1<<20)
+		ts := fastest(5, func() { _ = scrubber{}.text(small) })
 		tl := fastest(3, func() { _ = scrubber{}.text(large) })
-		// Linear is 4x; quadratic is 16x. 9x leaves room for cache and GC noise.
-		if tl > 9*ts+time.Millisecond {
-			t.Errorf("%s: text took %v on 1 MiB vs %v on 256 KiB (%.1fx for 4x the input): not linear",
+		// 32x the input: linear costs about 32x, quadratic about 1024x. The
+		// bound of 128x tolerates 4x of cache, GC and shared-runner noise
+		// (a 4x step left too little room: 9.8x was seen for linear code
+		// under -race on CI) and is still 8x below quadratic.
+		if tl > 128*ts+time.Millisecond {
+			t.Errorf("%s: text took %v on 1 MiB vs %v on 32 KiB (%.1fx for 32x the input): not linear",
 				name, tl, ts, float64(tl)/float64(ts))
 		}
 	}
