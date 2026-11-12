@@ -1,5 +1,5 @@
 // file: core/kernel/restore_archive_files.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e8f5a17-9c42-4d0b-b6a1-7f2d0e9c4a58
 // last-edited: 2026-11-12
 
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -115,9 +116,14 @@ func copyOperatorFile(fs vfs.FS, src, dst string, max int64, private bool) (err 
 	if private && fi.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("kernel: %s is readable by group or others (mode %04o) and holds the secrets key: chmod 600 it and rerun", src, fi.Mode().Perm())
 	}
-	out, err := fs.Create(dst, vfs.WriteCategoryUnspecified)
+	out, err := createPrivate(fs, dst)
 	if err != nil {
 		return fmt.Errorf("kernel: stage %s: %w", dst, err)
+	}
+	// A file that was already there keeps the mode it had: make it private before
+	// a byte is written (nothing is, on a new one, which was born 0600).
+	if err := restorejournal.ChmodFS(fs, dst, 0o600); err != nil {
+		return errors.Join(err, out.Close(), removeIfExists(fs, dst))
 	}
 	n, cerr := io.Copy(out, io.LimitReader(in, max+1))
 	if cerr == nil && n > max {
@@ -126,12 +132,34 @@ func copyOperatorFile(fs vfs.FS, src, dst string, max int64, private bool) (err 
 	if err := errors.Join(cerr, out.Sync(), out.Close()); err != nil {
 		return errors.Join(fmt.Errorf("kernel: stage %s: %w", dst, err), removeIfExists(fs, dst))
 	}
-	if err := restorejournal.ChmodFS(fs, dst, 0o600); err != nil {
-		return err
-	}
 	d, err := fs.OpenDir(filepath.Dir(dst))
 	if err != nil {
 		return err
 	}
 	return errors.Join(d.Sync(), d.Close())
+}
+
+// createPrivate creates dst empty and writable, mode 0600 from the moment it
+// exists. On the real filesystem that is os.OpenFile with the mode, then the
+// file is opened through fs for writing: vfs.FS has no mode on Create, which
+// would leave the file at the umask's mode (0644 usually) until a later chmod,
+// and a process that opens it in that window keeps a handle that reads the
+// secrets key written next. Any other filesystem (an in-memory one keeps no
+// modes) creates it through fs.
+func createPrivate(fs vfs.FS, dst string) (vfs.File, error) {
+	if vfs.Root(fs) != vfs.Default {
+		return fs.Create(dst, vfs.WriteCategoryUnspecified)
+	}
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, errors.Join(err, os.Remove(dst))
+	}
+	out, err := fs.OpenReadWrite(dst, vfs.WriteCategoryUnspecified)
+	if err != nil {
+		return nil, errors.Join(err, os.Remove(dst))
+	}
+	return out, nil
 }
