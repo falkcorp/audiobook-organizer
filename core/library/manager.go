@@ -1,5 +1,5 @@
 // file: core/library/manager.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 3356d9de-7d9b-4473-880c-196e0a555910
 // last-edited: 2026-11-11
 
@@ -88,8 +88,8 @@ type Manager interface {
 // ScopeRoots is the root-facing half of Scope.
 type ScopeRoots interface {
 	Owner() storage.Owner
-	Roots(filter RootFilter) []*Root // roots the module owns or may read
-	FS(id RootID) (RootFS, error)    // = Root.FS(Owner()): read-only unless the module may write the root
+	Roots(filter RootFilter) []*ModuleRoot // roots the module owns or may read, each bound to the module's owner
+	FS(id RootID) (RootFS, error)          // read-only unless the module may write the root
 	Resolve(abs string) (Path, error)
 	Abs(p Path) (string, error)
 }
