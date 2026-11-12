@@ -1,5 +1,5 @@
 // file: core/kernel/restore_keptadmin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 409dcde0-998e-4c55-8b60-bda571d2d6ab
 // last-edited: 2026-11-12
 
@@ -252,5 +252,29 @@ func TestKeptAdminRestriction_AnAdminKeptTwiceIsRestrictedOnce(t *testing.T) {
 	}
 	if !s.bruceRestricted() || len(fx.uqQueue()) != 0 || fx.head().Seq < 2 {
 		t.Errorf("restricted %v, queue %v, head %d, want true, empty and at least 2", s.bruceRestricted(), uqSeqs(fx.uqQueue()), fx.head().Seq)
+	}
+}
+
+// TestKeptAdminRestriction_AJournalThatTakesNoLineStillGetsItsHead: the
+// restriction's own append is what usually carries the head to the top of the
+// journal. When the journal cannot take it (the component is held, a gap is
+// recorded instead) the restriction still commits and the head withheld from the
+// chunks is committed by restrictKept at the last line's seq, not left at 0.
+func TestKeptAdminRestriction_AJournalThatTakesNoLineStillGetsItsHead(t *testing.T) {
+	s := newKaScene(t)
+	fx := s.fx
+	fx.journalOnly(s.removal) // 1
+	disabled := fx.journalOnly(s.disable)
+	fx.restart()
+	fx.comp.Hold(errors.New("the journal takes no line in this test"))
+
+	if _, _, err := fx.tryBoot(nil, uqTail(1), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !s.bruceRestricted() || !s.selinaDisabled() {
+		t.Errorf("bruce restricted %v, selina disabled %v, want both: the restriction commits without its journal line", s.bruceRestricted(), s.selinaDisabled())
+	}
+	if got := fx.head().Seq; got != disabled {
+		t.Errorf("head = %d, want %d, the last line: the head withheld from the chunks is committed after the restriction", got, disabled)
 	}
 }

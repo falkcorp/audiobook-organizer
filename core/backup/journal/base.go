@@ -1,7 +1,7 @@
 // file: core/backup/journal/base.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d1e85b74-2c39-4a06-9f7b-8a3e0c5d1f62
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package journal
 
@@ -61,7 +61,7 @@ func CreateBased(path string, keys Keys, hdr Header, base Head) error {
 // Fingerprint identifies a broken journal state: where the chain breaks (or
 // that the store's committed line is not on it), what ties the state to the
 // file, the store's head and a state tag for what the chain itself cannot say (a
-// forked journal, a line of a kind this build cannot apply). The file's claimed
+// forked journal). The file's claimed
 // end is not part of it: it is whatever a forged seq says, so an attacker could
 // mint a new fingerprint per boot and bump every credential epoch each time. The
 // boot fails closed on a broken journal once per fingerprint, so the same broken
@@ -69,7 +69,7 @@ func CreateBased(path string, keys Keys, hdr Header, base Head) error {
 //
 // What ties the state to the file is the last mac that verified before the break
 // for a chain that breaks (the verified prefix, which the break keeps fixed), and
-// for a chain that does not (forked, pruned, an unknown kind) the mac of its line
+// for a chain that does not (forked, pruned) the mac of its line
 // at the store's head and the seq its header starts from: not its tail, because a
 // boot appends lines (a gap, a restore line) that move the tail, and the same
 // state must keep the same fingerprint across that boot and the next.
