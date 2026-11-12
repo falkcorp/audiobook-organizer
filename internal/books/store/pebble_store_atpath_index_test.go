@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_atpath_index_test.go
-// version: 1.7.3
+// version: 1.7.4
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
 // last-edited: 2026-11-12
 
@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -993,5 +994,52 @@ func TestCreateBook_OverlongPathIsRejected(t *testing.T) {
 	_, err := s.CreateBook(&Book{Title: "x", FilePath: "/" + strings.Repeat("p", maxBookAtPathLen)})
 	if !errors.Is(err, errBookAtPathKeyTooLong) {
 		t.Fatalf("err = %v, want errBookAtPathKeyTooLong", err)
+	}
+}
+
+// TestBackfillAndVerify_OverlongRowIsSkippedNotFatal: one row whose path is
+// past the key bound (written raw, since CreateBook refuses it) must not abort
+// the backfill or wedge the verify. The other rows are indexed, and both
+// results report the one skipped row.
+func TestBackfillAndVerify_OverlongRowIsSkippedNotFatal(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	a, err := s.CreateBook(&Book{Title: "a", FilePath: "/a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.CreateBook(&Book{Title: "b", FilePath: "/b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad, err := json.Marshal(&Book{ID: "01OVERLONG", Title: "bad", FilePath: "/" + strings.Repeat("p", maxBookAtPathLen)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Set([]byte("book:01OVERLONG"), bad, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	resetAtPathIndex(t, s)
+
+	res, err := s.BackfillBookAtPathIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("an overlong row must not fail the backfill: %v", err)
+	}
+	if res.SkippedOverlongRows != 1 || res.Scanned != 2 {
+		t.Fatalf("backfill = scanned %d skipped %d, want 2 and 1", res.Scanned, res.SkippedOverlongRows)
+	}
+	for _, bk := range []*Book{a, b} {
+		ids, err := s.LiveBookIDsAtPath(bk.FilePath)
+		if err != nil || len(ids) != 1 || ids[0] != bk.ID {
+			t.Fatalf("path %q: ids=%v err=%v, want [%s]", bk.FilePath, ids, err, bk.ID)
+		}
+	}
+
+	rep, err := s.VerifyBookAtPathIndex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.OverlongRows != 1 || rep.MissingLive != 0 || rep.MissingTrashed != 0 {
+		t.Fatalf("verify = overlong %d missingLive %d missingTrashed %d, want 1 0 0", rep.OverlongRows, rep.MissingLive, rep.MissingTrashed)
 	}
 }

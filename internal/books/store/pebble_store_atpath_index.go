@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_atpath_index.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 3f6c1b8e-9a42-4d7e-b5c1-0e8a7d2f4c93
 // last-edited: 2026-11-12
 
@@ -215,7 +215,26 @@ type BookAtPathBackfillResult struct {
 	// to bookAtPathSampleCap of their ids, sorted.
 	UndecodableRows   int      `json:"undecodable_rows"`
 	SampleUndecodable []string `json:"sample_undecodable,omitempty"`
+	// SkippedOverlongRows are decodable rows whose path or id exceeds the
+	// bookAtPathKey bound (maxBookAtPathLen / maxBookIDLen). They get no index
+	// key, are not counted in Scanned, and do not abort the pass; each is
+	// logged at WARN with its id and path length only.
+	SkippedOverlongRows int `json:"skipped_overlong_rows"`
 }
+
+// warnBookAtPathOverlong logs one skipped overlong row: the id (only when the
+// id itself is within bound) and the lengths, never the path text.
+func warnBookAtPathOverlong(pass, id string, pathLen int) {
+	if len(id) > maxBookIDLen {
+		bookAtPathLog.Warn("%s: skipping row whose book id is over the key bound: id_len=%d path_len=%d", pass, len(id), pathLen)
+		return
+	}
+	bookAtPathLog.Warn("%s: skipping row whose path or id is over the key bound: book_id=%s path_len=%d",
+		pass, logger.SanitizeLogValue(id), pathLen)
+}
+
+// bookAtPathLog routes the skipped-row warnings through internal/logger.
+var bookAtPathLog = logger.New("database.book-atpath")
 
 // BookAtPathProgress receives progress from a book_atpath: backfill or rebuild
 // so the op running it can keep its liveness clock fresh through a long first
@@ -330,7 +349,7 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 	slog.Info("book-atpath-backfill: starting", "mode", mode,
 		"chunk", bookAtPathBackfillChunk, "workers", workers)
 
-	var scanned, commits atomic.Int64
+	var scanned, commits, overlong atomic.Int64
 	// undecodable is appended to by every worker, so it has its own lock.
 	var (
 		undecMu     sync.Mutex
@@ -426,6 +445,14 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 					continue
 				}
 				key, err := bookAtPathKey(row.FilePath, r.id)
+				if errors.Is(err, errBookAtPathKeyTooLong) {
+					// One corrupt row must not abort the whole pass (every
+					// boot would stay on the full scan). It cannot be keyed:
+					// skip, count, warn.
+					overlong.Add(1)
+					warnBookAtPathOverlong("book-atpath-backfill", r.id, len(row.FilePath))
+					continue
+				}
 				if err != nil {
 					return fmt.Errorf("build index key for %s: %w", r.id, err)
 				}
@@ -454,6 +481,7 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 	res.Scanned = int(scanned.Load())
 	res.Commits = int(commits.Load())
 	res.UndecodableRows = len(undecodable)
+	res.SkippedOverlongRows = int(overlong.Load())
 	res.SampleUndecodable = sampleSorted(undecodable)
 	if res.UndecodableRows > 0 {
 		slog.Error("book-atpath-backfill: book:<id> cannot be decoded; LiveBookIDsAtPath refuses "+
@@ -480,7 +508,7 @@ func (p *PebbleStore) backfillBookAtPath(ctx context.Context, force bool, progre
 	res.Commits++
 	p.bookAtPathBuilt.Store(true)
 	slog.Info("book-atpath-backfill: complete", "mode", mode, "scanned", res.Scanned,
-		"commits", res.Commits, "undecodable", res.UndecodableRows, "duration", time.Since(start).Round(time.Millisecond).String())
+		"commits", res.Commits, "undecodable", res.UndecodableRows, "skipped_overlong", res.SkippedOverlongRows, "duration", time.Since(start).Round(time.Millisecond).String())
 	return res, nil
 }
 
@@ -495,6 +523,10 @@ type BookAtPathIndexReport struct {
 	// UndecodableRows are book rows whose JSON did not decode. They cannot be
 	// checked, so a report with any is incomplete.
 	UndecodableRows int `json:"undecodable_rows"`
+	// OverlongRows are decodable rows whose path or id exceeds the key bound.
+	// They can have no index key, so they are skipped rather than reported as
+	// MissingLive/MissingTrashed forever. Informational.
+	OverlongRows int `json:"overlong_rows"`
 
 	// MissingLive is the bug class: a live book with no key at its path, which
 	// LiveBookIDsAtPath and BookIDsAtPath would report as free once the
@@ -595,6 +627,11 @@ func (p *PebbleStore) VerifyBookAtPathIndex(ctx context.Context) (BookAtPathInde
 		if err := json.Unmarshal(v, &row); err != nil {
 			rep.UndecodableRows++
 			undecodable[id] = true
+			return nil
+		}
+		if len(row.FilePath) > maxBookAtPathLen || len(id) > maxBookIDLen {
+			rep.OverlongRows++
+			warnBookAtPathOverlong("book-atpath-verify", id, len(row.FilePath))
 			return nil
 		}
 		expected[pair{row.FilePath, id}] = markedForDeletionFlag(row.MarkedForDeletion)
