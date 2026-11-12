@@ -155,6 +155,10 @@ func hasKey(settings map[string]any) bool {
 	return true
 }
 
+// errKeyUnreadable is the cause of a request the adapter stopped because the
+// API key could not be read; Health tells it from a refusal by the gate.
+var errKeyUnreadable = errors.New("the API key could not be read")
+
 // keyMiddleware sets the Authorization header from the secret at each request.
 // A key that cannot be read stops the request before it is sent: never an
 // unauthenticated request to a server that expects a key.
@@ -166,7 +170,7 @@ func keyMiddleware(env integrations.Env) option.Middleware {
 			if class == integrations.ClassUnknown {
 				class = integrations.ClassAuth // a referenced key that is unset or unreadable
 			}
-			return nil, &integrations.Error{Ref: env.Ref, Op: "secret", Class: class, Err: errors.New("the API key could not be read")}
+			return nil, &integrations.Error{Ref: env.Ref, Op: "secret", Class: class, Err: errKeyUnreadable}
 		}
 		req.Header.Set("Authorization", "Bearer "+v.Reveal())
 		return next(req)
@@ -219,16 +223,26 @@ func (i *instance) Caps(ctx context.Context) (ai.BackendCaps, error) {
 // Health asks for the model list: one request, no tokens spent, no remote
 // state changed.
 func (i *instance) Health(ctx context.Context) integrations.Health {
-	if _, err := i.Caps(ctx); err != nil {
-		switch integrations.ClassOf(ctx, err) {
-		case integrations.ClassAuth:
-			return integrations.Health{Status: integrations.HealthAuthFailed, Message: "the server rejected the API key"}
-		case integrations.ClassRefusedLocal:
-			return integrations.Health{Status: integrations.HealthMisconfigured, Message: integrations.ReasonSecretMissing}
-		}
-		return integrations.Health{Status: integrations.HealthDown, Message: "the server did not answer usefully"}
+	_, err := i.Caps(ctx)
+	switch {
+	case err == nil:
+		return integrations.Health{Status: integrations.HealthOK}
+	case errors.Is(err, errKeyUnreadable):
+		// Ours, not the server's: the server was never asked, whatever class
+		// the secret reader's failure carried.
+		return integrations.Health{Status: integrations.HealthMisconfigured, Message: integrations.ReasonSecretMissing}
 	}
-	return integrations.Health{Status: integrations.HealthOK}
+	switch integrations.ClassOf(ctx, err) {
+	case integrations.ClassAuth:
+		return integrations.Health{Status: integrations.HealthAuthFailed, Message: "the server rejected the API key"}
+	case integrations.ClassRefusedLocal:
+		// The gate refused it: the egress guard (a private url without Local),
+		// a hold or an open breaker. The Registry adds the hold and breaker
+		// detail; "secret missing" here would send the operator after the wrong
+		// cause.
+		return integrations.Health{Status: integrations.HealthMisconfigured, Message: "the request was refused before it was sent (egress guard, hold or open breaker)"}
+	}
+	return integrations.Health{Status: integrations.HealthDown, Message: "the server did not answer usefully"}
 }
 
 // Test is the extra test of Registry.Test: the caps fetch.
