@@ -566,16 +566,6 @@ func (r *reader) quiet(d time.Duration) {
 	}
 }
 
-// ended reports whether the stream's body ended within the time.
-func (r *reader) ended() bool {
-	select {
-	case _, ok := <-r.frames:
-		return !ok
-	case <-time.After(5 * time.Second):
-		return false
-	}
-}
-
 // drainUntilClosed reads frames until the stream ends and returns the closed
 // frame's reason ("" when no closed frame came).
 func (r *reader) drainUntilClosed() string {
@@ -620,8 +610,6 @@ func readProblem(t testing.TB, resp *http.Response) problem {
 	}
 	return p
 }
-
-func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // logs is a goroutine-safe log sink.
 type logs struct {
