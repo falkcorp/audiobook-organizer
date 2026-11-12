@@ -7,6 +7,16 @@ package backup
 
 import (
 	"os"
+
+	"github.com/falkcorp/mediacore/library"
 )
 
 func osStat(p string) (os.FileInfo, error) { return os.Stat(p) }
+
+// osAvail is the bytes an unprivileged process can still write to the
+// filesystem holding p (library.Stats: available to the service user, not the
+// root reserve), with the Windows implementation the library already has.
+func osAvail(p string) (uint64, error) {
+	_, free, err := library.Stats(p)
+	return free, err
+}
