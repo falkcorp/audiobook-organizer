@@ -1,5 +1,5 @@
 // file: core/internal/archtest_layers_test.go
-// version: 1.0.15
+// version: 1.0.16
 // guid: 2d3bc73d-ccb4-47c7-92d8-0d5c18bcfb8a
 // last-edited: 2026-11-11
 
@@ -36,7 +36,7 @@ const corePath = "github.com/falkcorp/mediacore"
 // internal/sdnotify entry, R1-21's internal/bootseam entry, F4-01's
 // internal/rbacstore entry, F3-01's internal/configstore entry, F4-09's
 // internal/authz entry, F4-02's internal/authstore entry and F2-04's
-// internal/schedspec entry, R4 packages the
+// internal/schedspec entry and F6-02's internal/sse entry, R4 packages the
 // table missed.
 var coreLayerOf = map[string]int{
 	// L0
@@ -104,6 +104,10 @@ var coreLayerOf = map[string]int{
 	// internal/openapi implements httpapi's OpenAPI (05-http-api §3, §7): R4
 	// gives an internal package the layer of the public package it implements.
 	"internal/openapi": 6,
+	// internal/sse is the engine under realtime's stream (F6-02, 05-realtime
+	// §3): the ring, the subscriber queues and the frame writer, so it takes
+	// realtime's layer (R4).
+	"internal/sse": 6,
 	// internal/httpmw implements httpapi's perimeter stages (05-http-api §3,
 	// §4.2; R1-17), the same rule.
 	"internal/httpmw": 6,
