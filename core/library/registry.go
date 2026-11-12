@@ -1,5 +1,5 @@
 // file: core/library/registry.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 363acb46-296b-4fe8-bd5c-6b1160ab673b
 // last-edited: 2026-11-11
 
@@ -388,7 +388,7 @@ func (m *manager) makeRoot(c *candidate, old *Root, set settings) *Root {
 		return r
 	}
 	r.os = osr
-	r.base = &localFS{id: c.spec.ID, root: osr, abs: c.abs, spec: c.spec, skip: c.skip, log: m.log,
+	r.base = &localFS{id: c.spec.ID, root: osr, abs: c.abs, spec: c.spec, skip: c.skip, log: m.log, areas: new(areaMemory),
 		mounted: func() error { return r.Mounted(context.Background()) },
 		// The engine has checked the caller may read the target's root.
 		target: m.Abs}
@@ -720,6 +720,7 @@ func (r *Root) viewFor(caller storage.Owner) fsOps {
 	// that is not the owner (the download capability) sees neither.
 	guard := func(c *localFS) {
 		c.target = target
+		c.race = r.m.seam.fsRace
 		if caller != CoreOwner {
 			c.sealed = true
 			c.hidden = caller != r.spec.Owner
@@ -737,6 +738,28 @@ func (r *Root) viewFor(caller storage.Owner) fsOps {
 	c := r.base.readOnlyView()
 	guard(c)
 	return c
+}
+
+// engineFS is the driver the transfer engine and quarantine use for one side of
+// an operation by caller: the root's full-rights driver for core, and for anyone
+// else a copy of it that is sealed (every mutation is judged from the descriptor
+// of the directory it acts in, never from a name that could be swapped between
+// the judgement and the act) and, for a caller that does not own the root,
+// hidden. The engine has already checked what the caller may do with the root,
+// so the copy is not read-only the way a module's own view of a root it cannot
+// write is.
+func (r *Root) engineFS(caller storage.Owner) fsOps {
+	if caller == CoreOwner {
+		return r.rw
+	}
+	c := *r.base
+	c.sealed = true
+	c.hidden = caller != r.spec.Owner
+	c.race = r.m.seam.fsRace
+	if r.m.seam.wrapFS != nil {
+		return r.m.seam.wrapFS(r.spec.ID, &c)
+	}
+	return &c
 }
 
 // reservedHit reports whether p is in this root's AppDir or Quarantine area,
@@ -816,6 +839,9 @@ func (r *Root) Mounted(ctx context.Context) error {
 	if err := r.checkIdentity(); err != nil {
 		return err
 	}
+	// The areas as they are while the volume is verified: their identities are
+	// remembered for the life of the root (reserved.go).
+	r.base.areaIDs()
 	if r.spec.Role == RoleExternal {
 		return r.heuristic()
 	}

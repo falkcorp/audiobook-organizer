@@ -1,5 +1,5 @@
 // file: core/library/guards_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 00f78c64-25d1-4cc1-b1f0-153883e12400
 // last-edited: 2026-11-11
 
@@ -567,7 +567,9 @@ func TestResolvedReservedPathHelpers(t *testing.T) {
 		}
 	}
 	// A loop of links is not resolved, and a link out of the root is not
-	// either: os.Root refuses the operation itself.
+	// either. They differ in what follows: os.Root refuses a link out of the
+	// root itself, so it reaches no area; a loop is a resolution that gave up, a
+	// failure to know, and is treated as reserved.
 	if err := os.Symlink("loopB", r.abs("books-library", "loopA")); err != nil {
 		t.Fatal(err)
 	}
@@ -577,12 +579,12 @@ func TestResolvedReservedPathHelpers(t *testing.T) {
 	if err := os.Symlink("../../..", r.abs("books-library", "out")); err != nil {
 		t.Fatal(err)
 	}
-	for _, rel := range []string{"loopA/x", "out/x"} {
+	for rel, reserved := range map[string]bool{"loopA/x": true, "out/x": false} {
 		if got, ok := l.realRel(rel, true); ok {
 			t.Errorf("realRel(%q) = %q, want it unresolved", rel, got)
 		}
-		if l.reserved(rel, true) {
-			t.Errorf("%q reported reserved", rel)
+		if l.reserved(rel, true) != reserved {
+			t.Errorf("reserved(%q) = %v, want %v", rel, !reserved, reserved)
 		}
 	}
 	if !l.reservedInode(DefaultAppDir+"/x", false) || !l.reservedInode(DefaultQuarantine, false) {

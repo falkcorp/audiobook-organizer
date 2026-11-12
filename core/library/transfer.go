@@ -1,5 +1,5 @@
 // file: core/library/transfer.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 534f60c5-c088-4e70-962c-8bcddbfafc71
 // last-edited: 2026-11-11
 
@@ -62,7 +62,7 @@ type xfer struct {
 	src    Path
 	dst    Path
 	sr, dr *Root
-	sfs    fsOps // each root's full-rights driver; the engine has checked the caller's rights
+	sfs    fsOps // each root's driver for the caller (Root.engineFS); the engine has checked the caller's rights
 	dfs    fsOps
 	opts   TransferOptions
 	row    transferRow
@@ -163,7 +163,7 @@ func (x *xfer) check() error {
 			}
 		}
 	}
-	x.sfs, x.dfs = x.sr.rw, x.dr.rw
+	x.sfs, x.dfs = x.sr.engineFS(x.caller), x.dr.engineFS(x.caller)
 	return nil
 }
 
@@ -315,7 +315,7 @@ func (x *xfer) pending(err error) error {
 func (x *xfer) unwind(cause error, tmp string) error {
 	var errs []error
 	errs = append(errs, x.restoreAside())
-	if tmp != "" {
+	if tmp != "" && x.tmpLeft {
 		errs = append(errs, x.removeTemp(tmp))
 	}
 	if rerr := errors.Join(errs...); rerr != nil {
@@ -508,7 +508,12 @@ func (x *xfer) copyPath(did TransferMode, clone, removeSrc bool) error {
 		return err
 	}
 	tmp := x.row.Tmp
-	x.tmpLeft = true // from here a temp file may exist
+	// A clone may leave a partial temp when it fails, so from here one may exist.
+	// A streamed copy owes nothing until its exclusive create has succeeded: a
+	// create that was refused made no file, and a cleanup that went looking for it
+	// could only be refused again (the directory may have been swapped for a link
+	// to an area), which would keep the row for a file that never existed.
+	x.tmpLeft = clone
 	sha, size, err := x.fillTemp(tmp, clone)
 	if err != nil {
 		return x.unwind(err, tmp)
@@ -597,6 +602,7 @@ func (x *xfer) fillTemp(tmp string, clone bool) (sha string, size int64, err err
 	if err != nil {
 		return "", 0, err
 	}
+	x.tmpLeft = true
 	h := sha256.New()
 	n, err := libfs.Copy(f, src, libfs.CopyOptions{Hash: h, Check: x.ctx.Err})
 	if err == nil && x.opts.Perm == PermFromSource {

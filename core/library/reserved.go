@@ -1,5 +1,5 @@
 // file: core/library/reserved.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f5dd1d5d-73ad-4667-bbb4-561193fd1163
 // last-edited: 2026-11-11
 
@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/mediacore/internal/libfs"
 )
@@ -20,8 +21,57 @@ import (
 // (Lstat, Readlink, Stat), so it cannot leave the root and a link that points
 // outside is left for os.Root to refuse.
 
-// maxLinkHops bounds the symlinks one resolution expands (Linux allows 40).
-const maxLinkHops = 40
+// maxLinkHops bounds the symlinks one resolution expands. It is os.Root's own
+// limit (255): a chain this resolution gives up on is one os.Root would give up
+// on too, and a shorter limit would answer "not reserved" for a chain os.Root
+// still follows into an area.
+const maxLinkHops = 255
+
+// resolution is how realRel ended.
+type resolution uint8
+
+const (
+	// resolved: the path with its symlinks expanded inside the root.
+	resolved resolution = iota
+	// leavesRoot: the expansion leaves the root; os.Root refuses the operation
+	// itself, so nothing is reached.
+	leavesRoot
+	// undecided: the expansion gave up (too many links, a link that cannot be
+	// read). os.Root may still follow it, so the path is treated as reserved.
+	undecided
+)
+
+// areaMemory is every directory identity the root's AppDir and Quarantine area
+// have been seen with, kept for the life of the root and shared by every view of
+// it. An area renamed away by someone with access to the disk is still the area
+// by inode, so it stays refused under whatever name it has.
+type areaMemory struct {
+	mu  sync.Mutex
+	ids map[[2]uint64]bool
+}
+
+func (a *areaMemory) remember(id [2]uint64) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.ids == nil {
+		a.ids = map[[2]uint64]bool{}
+	}
+	a.ids[id] = true
+}
+
+func (a *areaMemory) each(fn func(id [2]uint64)) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id := range a.ids {
+		fn(id)
+	}
+}
 
 // relWithinFold reports whether rel equals dir or lies under it, ignoring
 // case. The fold matters on a case-insensitive filesystem (the default on macOS
@@ -52,14 +102,19 @@ func (l *localFS) reservedName(rel string, carries bool) bool {
 // realRel is rel with every symlink expanded inside the root: the path the
 // operating system will actually touch. A component that does not exist yet
 // ends the expansion (the rest is as written). ok is false when the expansion
-// leaves the root or exceeds maxLinkHops; the operation itself then fails (os.Root
-// refuses the escape), so a caller treats that as "not reserved".
+// could not be completed (resolve says why).
 //
 // followLast says whether a symlink in the LAST component is expanded. An
 // operation on the entry itself (a rename or a move of it, a quarantine) acts on
 // the link, not on what it points at, so those pass false; an operation that
 // opens, creates or lists through the name passes true.
 func (l *localFS) realRel(rel string, followLast bool) (string, bool) {
+	real, how := l.resolve(rel, followLast)
+	return real, how == resolved
+}
+
+// resolve is realRel with the reason it gave up.
+func (l *localFS) resolve(rel string, followLast bool) (string, resolution) {
 	var done []string
 	todo := strings.Split(rel, "/")
 	hops := 0
@@ -71,7 +126,7 @@ func (l *localFS) realRel(rel string, followLast bool) (string, bool) {
 			continue
 		case "..":
 			if len(done) == 0 {
-				return "", false
+				return "", leavesRoot
 			}
 			done = done[:len(done)-1]
 			continue
@@ -79,31 +134,31 @@ func (l *localFS) realRel(rel string, followLast bool) (string, bool) {
 		next := strings.Join(append(append([]string(nil), done...), c), "/")
 		st, err := l.root.Lstat(next)
 		if err != nil {
-			return strings.Join(append(append(append([]string(nil), done...), c), todo...), "/"), true
+			return strings.Join(append(append(append([]string(nil), done...), c), todo...), "/"), resolved
 		}
 		if st.Mode()&fs.ModeSymlink == 0 || (len(todo) == 0 && !followLast) {
 			done = append(done, c)
 			continue
 		}
 		if hops++; hops > maxLinkHops {
-			return "", false
+			return "", undecided
 		}
 		target, err := l.root.Readlink(next)
 		if err != nil {
-			return "", false
+			return "", undecided
 		}
 		if filepath.IsAbs(target) {
 			// An absolute target is inside the root only if it names the root
 			// (resolved) or something below it.
 			inside, err := filepath.Rel(l.abs, filepath.Clean(resolveExistingPrefix(target)))
 			if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
-				return "", false
+				return "", leavesRoot
 			}
 			target, done = inside, nil
 		}
 		todo = append(strings.Split(filepath.ToSlash(target), "/"), todo...)
 	}
-	return strings.Join(done, "/"), true
+	return strings.Join(done, "/"), resolved
 }
 
 // areaIDs are the device and inode of the existing area directories (under) and
@@ -123,11 +178,13 @@ func (l *localFS) areaIDs() (under, above map[[2]uint64]bool) {
 			}
 			if i == len(parts)-1 {
 				under[[2]uint64{dev, ino}] = true
+				l.areas.remember([2]uint64{dev, ino})
 			} else {
 				above[[2]uint64{dev, ino}] = true
 			}
 		}
 	}
+	l.areas.each(func(id [2]uint64) { under[id] = true })
 	return under, above
 }
 
@@ -169,9 +226,12 @@ func (l *localFS) reserved(rel string, carries bool) bool {
 	if l.reservedName(rel, carries) {
 		return true
 	}
-	real, ok := l.realRel(rel, !carries)
-	if !ok {
-		return false
+	real, how := l.resolve(rel, !carries)
+	switch how {
+	case leavesRoot:
+		return false // os.Root refuses the operation itself
+	case undecided:
+		return true // a failure to know is a refusal
 	}
 	if real != rel && l.reservedName(real, carries) {
 		return true

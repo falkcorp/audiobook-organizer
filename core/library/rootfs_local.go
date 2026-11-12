@@ -1,5 +1,5 @@
 // file: core/library/rootfs_local.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: cfc2969c-52ad-41ef-9e76-85efd9ec2a3e
 // last-edited: 2026-11-11
 
@@ -19,6 +19,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/falkcorp/mediacore/internal/libfs"
 )
@@ -54,6 +55,8 @@ type localFS struct {
 	// are set on a view for anyone but core, never on the engine's own driver.
 	sealed bool
 	hidden bool
+	// areas remembers the identities of the root's areas, shared by every view.
+	areas *areaMemory
 	// race is a test hook, nil outside tests. A hidden view's read open (guardedOpen)
 	// calls it at "checked" (the name was judged), "resolved" (the symlinks were
 	// expanded), "parent" (the directory holding the name is open, not yet
@@ -116,6 +119,9 @@ func (l *localFS) mut(op, n string) (string, error) {
 	}
 	if l.sealed && l.reserved(n, false) {
 		return "", &fs.PathError{Op: op, Path: n, Err: ErrReservedPath}
+	}
+	if l.sealed {
+		l.hook("checked", n) // the name was judged; the descriptor judgement comes next
 	}
 	// Every mutation is destructive in the 5L.5 sense: on an unmounted share it
 	// would write to the wrong volume or act on an absent tree. Reads are not
@@ -243,9 +249,29 @@ func (l *localFS) OpenFile(name string, flag int, perm fs.FileMode) (File, error
 		}
 		return f, nil
 	}
+	if l.sealed {
+		return l.openAt("open", name, n, flag, perm)
+	}
 	f, err := l.root.OpenFile(n, flag, perm)
 	if err != nil {
 		return nil, pathErr("open", name, err)
+	}
+	return f, nil
+}
+
+// openAt opens or creates n on a sealed view from the descriptor of the
+// directory that holds it, after that directory was found to lie outside the
+// root's areas, so a name swapped for a link meanwhile cannot move the write
+// into one. A link in the last component is not followed.
+func (l *localFS) openAt(op, name, n string, flag int, perm fs.FileMode) (File, error) {
+	d, base, err := l.mutParent(op, n)
+	if err != nil {
+		return nil, err
+	}
+	defer closeLogged(l.log, d, "the directory holding "+name)
+	f, err := libfs.OpenFileAt(d, base, flag, perm)
+	if err != nil {
+		return nil, pathErr(op, name, err)
 	}
 	return f, nil
 }
@@ -254,6 +280,9 @@ func (l *localFS) CreateExclusive(name string, perm fs.FileMode) (File, error) {
 	n, err := l.mut("create", name)
 	if err != nil {
 		return nil, err
+	}
+	if l.sealed {
+		return l.openAt("create", name, n, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
 	}
 	f, err := l.root.OpenFile(n, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
@@ -267,7 +296,37 @@ func (l *localFS) MkdirAll(name string, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
+	if l.sealed {
+		return l.mkdirAllSealed(name, n, perm)
+	}
 	return pathErr("mkdir", name, l.root.MkdirAll(n, perm))
+}
+
+// mkdirAllSealed creates each missing component from the descriptor of the
+// directory that holds it, so no component is created inside an area through a
+// name that was swapped after the check.
+func (l *localFS) mkdirAllSealed(name, n string, perm fs.FileMode) error {
+	parts := strings.Split(n, "/")
+	for i := range parts {
+		p := strings.Join(parts[:i+1], "/")
+		d, base, err := l.mutParent("mkdir", p)
+		if err != nil {
+			return err
+		}
+		merr := libfs.MkdirAt(d, base, perm)
+		closeLogged(l.log, d, "the directory holding "+p)
+		if merr != nil && !errors.Is(merr, fs.ErrExist) {
+			return pathErr("mkdir", name, merr)
+		}
+	}
+	st, err := l.root.Stat(n)
+	if err != nil {
+		return pathErr("mkdir", name, err)
+	}
+	if !st.IsDir() {
+		return &fs.PathError{Op: "mkdir", Path: name, Err: syscall.ENOTDIR}
+	}
+	return nil
 }
 
 // Remove deletes a file or an empty directory. Like every mutation it refuses
@@ -277,6 +336,14 @@ func (l *localFS) Remove(name string) error {
 	n, err := l.mut("remove", name)
 	if err != nil {
 		return err
+	}
+	if l.sealed {
+		d, base, err := l.mutParent("remove", n)
+		if err != nil {
+			return err
+		}
+		defer closeLogged(l.log, d, "the directory holding "+name)
+		return pathErr("remove", name, libfs.RemoveAt(d, base))
 	}
 	return pathErr("remove", name, l.root.Remove(n))
 }
@@ -290,6 +357,41 @@ func (l *localFS) parent(op, rel string) (*libfs.Dir, string, error) {
 		return nil, "", pathErr(op, rel, err)
 	}
 	return d, path.Base(rel), nil
+}
+
+// mutParent is parent for a mutation. On a sealed view the directory that holds
+// rel is judged from its descriptor: if it, or any directory above it up to the
+// root, is one of the root's areas, the mutation is refused. The caller then
+// acts through that descriptor, so the decision and the act are about the same
+// directory whatever happens to the names (a failure to know is a refusal).
+func (l *localFS) mutParent(op, rel string) (*libfs.Dir, string, error) {
+	d, base, err := l.parent(op, rel)
+	if err != nil {
+		return nil, "", err
+	}
+	if l.sealed {
+		if _, aerr := l.areaIdentities(d); aerr != nil {
+			closeLogged(l.log, d, rel)
+			return nil, "", &fs.PathError{Op: op, Path: rel, Err: aerr}
+		}
+	}
+	return d, base, nil
+}
+
+// leafReserved reports whether the entry base of dir is, by identity and not by
+// name, one of the root's areas, or (carries) holds one: moving it would carry
+// the area along. A name that is not there is nothing to protect.
+func (l *localFS) leafReserved(dir *libfs.Dir, base string, carries bool) (bool, error) {
+	id, _, err := libfs.IdentityAt(dir, base)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return true, err
+	}
+	under, above := l.areaIDs()
+	key := [2]uint64{id.Dev, id.Ino}
+	return under[key] || (carries && above[key]), nil
 }
 
 func (l *localFS) RenameNoReplace(oldname, newname string) error {
@@ -310,12 +412,19 @@ func (l *localFS) renameNoReplaceInto(dst fsOps, oldname, newname string) error 
 	if err != nil {
 		return err
 	}
-	od, ob, err := l.parent("rename", o)
+	od, ob, err := l.mutParent("rename", o)
 	if err != nil {
 		return err
 	}
 	defer closeLogged(l.log, od, o)
-	nd, nb, err := d.parent("rename", n)
+	if l.sealed {
+		// The entry itself, from the descriptor: an area, or a directory holding
+		// one (a Move carries it), whatever name led here.
+		if hit, lerr := l.leafReserved(od, ob, true); hit || lerr != nil {
+			return &fs.PathError{Op: "rename", Path: o, Err: errors.Join(ErrReservedPath, lerr)}
+		}
+	}
+	nd, nb, err := d.mutParent("rename", n)
 	if err != nil {
 		return err
 	}
@@ -335,12 +444,12 @@ func (l *localFS) linkInto(dst fsOps, oldname, newname string) error {
 	if err != nil {
 		return err
 	}
-	od, ob, err := l.parent("link", o)
+	od, ob, err := l.mutParent("link", o)
 	if err != nil {
 		return err
 	}
 	defer closeLogged(l.log, od, o)
-	nd, nb, err := d.parent("link", n)
+	nd, nb, err := d.mutParent("link", n)
 	if err != nil {
 		return err
 	}
@@ -360,12 +469,12 @@ func (l *localFS) reflinkInto(dst fsOps, oldname, newname string) error {
 	if err != nil {
 		return err
 	}
-	od, ob, err := l.parent("reflink", o)
+	od, ob, err := l.mutParent("reflink", o)
 	if err != nil {
 		return err
 	}
 	defer closeLogged(l.log, od, o)
-	nd, nb, err := d.parent("reflink", n)
+	nd, nb, err := d.mutParent("reflink", n)
 	if err != nil {
 		return err
 	}
@@ -387,6 +496,14 @@ func (l *localFS) Symlink(target Path, newname string) error {
 	abs, err := l.target(target)
 	if err != nil {
 		return &fs.PathError{Op: "symlink", Path: newname, Err: err}
+	}
+	if l.sealed {
+		d, base, err := l.mutParent("symlink", n)
+		if err != nil {
+			return err
+		}
+		defer closeLogged(l.log, d, "the directory holding "+newname)
+		return pathErr("symlink", newname, libfs.SymlinkAt(abs, d, base))
 	}
 	return pathErr("symlink", newname, l.root.Symlink(abs, n))
 }
