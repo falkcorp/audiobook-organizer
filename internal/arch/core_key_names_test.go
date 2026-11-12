@@ -1,7 +1,7 @@
 // file: internal/arch/core_key_names_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: abe6650e-8365-489d-8e43-6c768e14351c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package arch
 
@@ -571,6 +571,78 @@ func TestCoreHoldsNoAppKeyNames_Cases(t *testing.T) {
 	}
 	if why := without.match("library.organize-when-scanned"); why != "" {
 		t.Fatalf("library.organize-when-scanned was caught by another name: %s", why)
+	}
+}
+
+// TestLibraryErrorsPassKeyNameGate is MOD5-3, a case of the key-name gate for
+// core's library packages (05-library 5L.5): the "library: ..." sentinels carry
+// a space after the colon and so are error text, not the books key family
+// "library:"; a key literal such as "library:" + id still fails it. The gate
+// runs over the real library, libfs and libraryhttp sources, with positive
+// controls that the scan saw the sentinels.
+func TestLibraryErrorsPassKeyNameGate(t *testing.T) {
+	root := repoRoot(t)
+	names := loadAppNames(t, root)
+	if !containsStr(names.families, "library:") {
+		t.Fatal("the name set is broken: family \"library:\" missing")
+	}
+	pkgs, err := archtest.Load(archtest.LoadOptions{
+		Dir:      filepath.Join(root, "core"),
+		Patterns: []string{"./library/...", "./internal/libfs/...", "./internal/libraryhttp/..."},
+		TagSets:  archtest.TagSets(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	for _, p := range pkgs {
+		files = append(files, p.GoFiles...)
+	}
+	if len(files) == 0 {
+		t.Fatal("the loader is broken, not the code: no non-test library file")
+	}
+	if found := findAppKeyNames(t, names, files); len(found) > 0 {
+		var lines []string
+		for _, f := range found {
+			lines = append(lines, fmt.Sprintf("%s: %q %s", f.pos, f.lit, f.why))
+		}
+		t.Errorf("a library literal is an app key name:\n  %s", strings.Join(lines, "\n  "))
+	}
+	// Positive control: the sentinels exist and each is "library: " + text.
+	sentinels := 0
+	fset := token.NewFileSet()
+	for _, file := range files {
+		f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		for _, l := range scanLiterals(fset, f) {
+			if strings.HasPrefix(l[1], "library: ") {
+				sentinels++
+				if why := names.match(l[1]); why != "" {
+					t.Errorf("%s: sentinel %q fails the gate: %s", l[0], l[1], why)
+				}
+			}
+		}
+	}
+	if sentinels < 20 {
+		t.Errorf("the scan saw %d \"library: \" literals, want at least 20: the sources were not read", sentinels)
+	}
+	// The same gate fails a key built from the family prefix.
+	dir := t.TempDir()
+	for i, src := range []string{
+		`func k(id string) string { return "library:" + id }`,
+		`func k(id string) string { return fmt.Sprintf("library:%s", id) }`,
+		`const k = "library:root:books-library"`,
+	} {
+		file := filepath.Join(dir, fmt.Sprintf("key%d.go", i))
+		if err := os.WriteFile(file, []byte("package fixture\n\nimport \"fmt\"\n\nvar _ = fmt.Sprint\n\n"+src+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		found := findAppKeyNames(t, names, []string{file})
+		if len(found) == 0 || !strings.Contains(found[0].why, `family "library:"`) {
+			t.Errorf("%s: want a finding on the family \"library:\", got %+v", src, found)
+		}
 	}
 }
 
