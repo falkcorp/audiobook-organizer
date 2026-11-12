@@ -17,8 +17,11 @@ import (
 )
 
 // ScopeAttributes are the label keys the backup scope declares: pass them to
-// metrics.Provider.Core("backup", ScopeAttributes...).
-var ScopeAttributes = []attribute.Key{"reason", "outcome", "phase", "format", "provenance", "level", "stage", "foreign", "kind", "cause"}
+// metrics.Provider.Core("backup", ScopeAttributes()...). A function, not a
+// variable: core forbids package-level mutable state (03 R5).
+func ScopeAttributes() []attribute.Key {
+	return []attribute.Key{"reason", "outcome", "phase", "format", "provenance", "level", "stage", "foreign", "kind", "cause"}
+}
 
 // Metrics are 05-backup §5B.8's series. A nil *Metrics records nothing, so a
 // Service built without a scope runs unchanged. The two revocation-journal

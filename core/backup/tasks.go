@@ -81,40 +81,86 @@ type StageResult struct {
 // Empty is an empty parameter or result.
 type Empty struct{}
 
-// Tasks returns the four core.backup.* definitions over s. The kernel passes
+// The four core.backup.* definitions, one constructor each. The kernel passes
 // them to Registrar.Tasks at P6 once the app opts into core backup (F8-04);
-// until then nothing registers them (ABO keeps its own backup task).
+// until then nothing registers them (ABO keeps its own backup task). Each is
+// 05-backup B8's row over s; a nil s yields a definition whose Run is nil,
+// which tasks.Problems reports ("Task has no Run"), so registration fails
+// closed instead of panicking when a task starts.
+
+// CreateTask is core.backup.create: it writes a verified archive, then applies
+// retention, on the app's schedule (ScheduleCreateKey).
 //
 //tasklint:constructor the kernel passes the result to Registrar.Tasks at P6 from F8-04; this package registers nothing
-func Tasks(s *Svc) []tasks.Definition {
-	res := Resource()
-	write := tasks.Writes(res)
-	manage := tasks.Permissions{Start: rbac.Need("core:system.manage")}
-	return []tasks.Definition{
-		tasks.Task(KindCreate, tasks.TaskSpec[CreateParams, CreateResult]{
-			Title: "Back up", Help: "Writes a verified archive of the database, the config file and the modules' own data into the backup directory, then applies retention.",
-			Effects: write, Perms: manage, Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 12 * time.Hour,
-			Schedule: tasks.ScheduleFromConfig(ScheduleCreateKey).Live(), Dedupe: tasks.DedupePolicy{AnyParams: true},
-			Run: s.taskCreate,
-		}),
-		tasks.Task(KindVerify, tasks.TaskSpec[Empty, VerifyTaskResult]{
-			Title: "Verify backups", Help: "Re-verifies the newest archives, opens the newest one, and re-signs archives made under a derivation key that is being retired.",
-			Effects: write, Perms: manage, Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
-			Schedule: tasks.ScheduleFromConfig(ScheduleVerifyKey).Live(),
-			Run:      s.taskVerify,
-		}),
-		tasks.Task(KindPrune, tasks.TaskSpec[Empty, Empty]{
-			Title: "Prune backups", Help: "Applies the retention bounds to the backup directory, never deleting the newest verified archive or one a pending restore needs.",
-			Effects: write, Perms: manage, Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 30 * time.Minute,
-			Run: s.taskPrune,
-		}),
-		tasks.Task(KindStageRestore, tasks.TaskSpec[StageParams, StageResult]{
-			Title: "Stage a restore", Help: "Verifies an archive and stages it for the next start. The live data is not touched until the service restarts.",
-			Effects: write, Perms: tasks.Permissions{Start: rbac.Need("core:backup.restore")}, Resume: tasks.ResumeDrop,
-			ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
-			Run: s.taskStage,
-		}),
+func CreateTask(s *Svc) tasks.Definition {
+	var run func(*tasks.RC, CreateParams) (CreateResult, error)
+	if s != nil {
+		run = s.taskCreate
 	}
+	return tasks.Task(KindCreate, tasks.TaskSpec[CreateParams, CreateResult]{
+		Title: "Back up", Help: "Writes a verified archive of the database, the config file and the modules' own data into the backup directory, then applies retention.",
+		Effects: tasks.Writes(Resource()), Perms: manageBackups(), Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 12 * time.Hour,
+		Schedule: tasks.ScheduleFromConfig(ScheduleCreateKey).Live(), Dedupe: tasks.DedupePolicy{AnyParams: true},
+		Run: run,
+	})
+}
+
+// VerifyTask is core.backup.verify: it re-verifies the newest archives, opens
+// the newest, and re-signs archives made under a retiring key, on the app's
+// schedule (ScheduleVerifyKey).
+//
+//tasklint:constructor the kernel passes the result to Registrar.Tasks at P6 from F8-04; this package registers nothing
+func VerifyTask(s *Svc) tasks.Definition {
+	var run func(*tasks.RC, Empty) (VerifyTaskResult, error)
+	if s != nil {
+		run = s.taskVerify
+	}
+	return tasks.Task(KindVerify, tasks.TaskSpec[Empty, VerifyTaskResult]{
+		Title: "Verify backups", Help: "Re-verifies the newest archives, opens the newest one, and re-signs archives made under a derivation key that is being retired.",
+		Effects: tasks.Writes(Resource()), Perms: manageBackups(), Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
+		Schedule: tasks.ScheduleFromConfig(ScheduleVerifyKey).Live(),
+		Run:      run,
+	})
+}
+
+// PruneTask is core.backup.prune: it applies the retention bounds.
+//
+//tasklint:constructor the kernel passes the result to Registrar.Tasks at P6 from F8-04; this package registers nothing
+func PruneTask(s *Svc) tasks.Definition {
+	var run func(*tasks.RC, Empty) (Empty, error)
+	if s != nil {
+		run = s.taskPrune
+	}
+	return tasks.Task(KindPrune, tasks.TaskSpec[Empty, Empty]{
+		Title: "Prune backups", Help: "Applies the retention bounds to the backup directory, never deleting the newest verified archive or one a pending restore needs.",
+		Effects: tasks.Writes(Resource()), Perms: manageBackups(), Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 30 * time.Minute,
+		Run: run,
+	})
+}
+
+// StageRestoreTask is core.backup.stage-restore: it verifies an archive and
+// stages it for the next start. It is started with core:backup.restore, and
+// the privileged options of StageParams are refused on this path (the service
+// requires a RestoreProof only an owner-checked route can set).
+//
+//tasklint:constructor the kernel passes the result to Registrar.Tasks at P6 from F8-04; this package registers nothing
+func StageRestoreTask(s *Svc) tasks.Definition {
+	var run func(*tasks.RC, StageParams) (StageResult, error)
+	if s != nil {
+		run = s.taskStage
+	}
+	return tasks.Task(KindStageRestore, tasks.TaskSpec[StageParams, StageResult]{
+		Title: "Stage a restore", Help: "Verifies an archive and stages it for the next start. The live data is not touched until the service restarts.",
+		Effects: tasks.Writes(Resource()), Perms: tasks.Permissions{Start: rbac.Need("core:backup.restore")}, Resume: tasks.ResumeDrop,
+		ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
+		Run: run,
+	})
+}
+
+// manageBackups is the permission the create, verify and prune tasks start
+// with.
+func manageBackups() tasks.Permissions {
+	return tasks.Permissions{Start: rbac.Need("core:system.manage")}
 }
 
 func (s *Svc) taskCreate(rc *tasks.RC, p CreateParams) (CreateResult, error) {

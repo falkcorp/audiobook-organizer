@@ -31,7 +31,12 @@ type found struct {
 
 const maxSidecarBytes = 64 << 10
 
-var archiveExt = regexp.MustCompile(`^\d{8}_\d{6}(\.tar|\.tar\.gz|\.tar\.zst)$`)
+// archiveExt matches what follows the catalogue prefix of an archive's name. A
+// function, not a variable: core forbids package-level mutable state (03 R5).
+// A caller that matches in a loop calls it once, before the loop.
+func archiveExt() *regexp.Regexp {
+	return regexp.MustCompile(`^\d{8}_\d{6}(\.tar|\.tar\.gz|\.tar\.zst)$`)
+}
 
 // stampOf parses a name's timestamp.
 func stampOf(rest string) (time.Time, bool) {
@@ -63,6 +68,7 @@ func (s *Svc) scan(ctx context.Context) ([]found, error) {
 	if err != nil {
 		return nil, fmt.Errorf("backup: read %s: %w", s.o.Dir, err)
 	}
+	ext := archiveExt()
 	have := make(map[string]bool, len(ents))
 	for _, e := range ents {
 		have[e.Name()] = true
@@ -77,7 +83,7 @@ func (s *Svc) scan(ctx context.Context) ([]found, error) {
 		if !ok {
 			continue
 		}
-		if archiveExt.MatchString(rest) {
+		if ext.MatchString(rest) {
 			if !e.Type().IsRegular() {
 				continue // a link or directory named like an archive is never listed
 			}
@@ -88,7 +94,7 @@ func (s *Svc) scan(ctx context.Context) ([]found, error) {
 			continue
 		}
 		for _, suf := range []string{ChecksumSidecar, ManifestSidecar, VerifySidecar, ".tmp"} {
-			if base, cut := strings.CutSuffix(name, suf); cut && archiveExt.MatchString(strings.TrimPrefix(strings.TrimSuffix(base, ".tmp"), s.o.Prefix)) && !have[base] {
+			if base, cut := strings.CutSuffix(name, suf); cut && ext.MatchString(strings.TrimPrefix(strings.TrimSuffix(base, ".tmp"), s.o.Prefix)) && !have[base] {
 				s.o.log().Warn("backup: removing an orphaned sidecar", "name", name)
 				_ = os.Remove(filepath.Join(s.o.Dir, name))
 			}
@@ -411,7 +417,7 @@ func extensionOf(p string) (ext string, err error) {
 // importName picks the stored name: the caller's when it is a plain,
 // pattern-conforming and free name, else a fresh timestamped one.
 func (s *Svc) importName(hint, ext string) (full, name string, err error) {
-	if hint != "" && filepath.Base(hint) == hint && strings.HasPrefix(hint, s.o.Prefix) && archiveExt.MatchString(strings.TrimPrefix(hint, s.o.Prefix)) && strings.HasSuffix(hint, ext) {
+	if hint != "" && filepath.Base(hint) == hint && strings.HasPrefix(hint, s.o.Prefix) && archiveExt().MatchString(strings.TrimPrefix(hint, s.o.Prefix)) && strings.HasSuffix(hint, ext) {
 		taken := false
 		for _, suf := range []string{"", ChecksumSidecar, ManifestSidecar, VerifySidecar} {
 			if _, e := os.Lstat(filepath.Join(s.o.Dir, hint+suf)); e == nil {
