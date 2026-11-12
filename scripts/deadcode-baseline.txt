@@ -16,10 +16,6 @@ core/internal/configstore.decodeEnvelope
 core/internal/executor.Reconfigure
 core/internal/executor.cpuBudget.resize
 core/internal/instancestore.StorageSpec
-core/internal/outboxstore.CurPrefix
-core/internal/outboxstore.MsgTopicPrefix
-core/internal/outboxstore.ParseSeqKey
-core/internal/outboxstore.SeqRoot
 core/internal/outboxstore.SerializedPrefixes
 core/internal/outboxstore.StorageSpec
 core/internal/scheduler.ValidateSchedules
