@@ -1,5 +1,5 @@
 // file: core/library/scope.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: baa18613-7fdd-4016-b9a4-ee85102dc70c
 // last-edited: 2026-11-11
 
@@ -20,6 +20,7 @@ import (
 type scopeHost interface {
 	Manager
 	mayRead(r *Root, caller storage.Owner) bool
+	hiddenFrom(caller storage.Owner, r *Root, p Path) bool
 	absFor(caller storage.Owner, p Path) (string, error)
 	PendingTransfers(ctx context.Context, owner storage.Owner) ([]TransferRecord, error)
 }
@@ -76,6 +77,9 @@ func (s *scope) readable(p Path) error {
 	}
 	if !s.m.mayRead(r, s.owner) {
 		return fmt.Errorf("%w: %s", ErrNotReadable, p.Root)
+	}
+	if s.m.hiddenFrom(s.owner, r, p) {
+		return fmt.Errorf("%w: %s", ErrReservedPath, p)
 	}
 	return nil
 }

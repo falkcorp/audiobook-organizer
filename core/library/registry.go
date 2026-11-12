@@ -1,5 +1,5 @@
 // file: core/library/registry.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 363acb46-296b-4fe8-bd5c-6b1160ab673b
 // last-edited: 2026-11-11
 
@@ -455,15 +455,45 @@ func (m *manager) absFor(caller storage.Owner, p Path) (string, error) {
 	if !m.canRead(r, caller) {
 		return "", fmt.Errorf("%w: %s", ErrNotReadable, p.Root)
 	}
+	if m.hiddenFrom(caller, r, p) {
+		return "", fmt.Errorf("%w: %s", ErrReservedPath, p)
+	}
 	return m.Abs(p)
 }
 
+// hiddenFrom reports whether p is in r's AppDir or Quarantine area and caller is
+// a reader that is neither the owner nor core: it may not see them.
+func (m *manager) hiddenFrom(caller storage.Owner, r *Root, p Path) bool {
+	return caller != CoreOwner && caller != r.spec.Owner && r.reservedHit(p, false)
+}
+
 // staticOracle is the core.library.protected_paths list as a ProtectionOracle:
-// a file under any listed path is protected. A path that cannot be resolved is
-// protected (fail closed, 5L.5).
+// a path under a listed path, a listed path under the path (moving a directory
+// carries its whole subtree), or a path that IS a listed path, is protected.
+// Each test is made by name after symlink resolution and by device+inode, so a
+// bind mount or a second name for the same directory counts. A path that
+// cannot be resolved is protected (fail closed, 5L.5).
 type staticOracle struct {
 	m     *manager
 	paths []string
+}
+
+// inodeChain is the device+inode of path and of every ancestor of it that
+// exists.
+func inodeChain(path string) []fileID {
+	var chain []fileID
+	for cur := path; ; {
+		if st, serr := os.Stat(cur); serr == nil {
+			if dev, ino, ok := libfs.InodeOf(st); ok {
+				chain = append(chain, fileID{dev, ino})
+			}
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return chain
+		}
+		cur = parent
+	}
 }
 
 // Protected implements ProtectionOracle. loaded is always true: the list is
@@ -477,25 +507,22 @@ func (o *staticOracle) Protected(_ context.Context, p Path) (protected, loaded b
 		return true, true, err
 	}
 	resolved := filepath.Clean(resolveExistingPrefix(abs))
-	var chain []fileID
-	for cur := resolved; ; {
-		if st, serr := os.Stat(cur); serr == nil {
-			if dev, ino, ok := libfs.InodeOf(st); ok {
-				chain = append(chain, fileID{dev, ino})
-			}
+	chain := inodeChain(resolved)
+	var self fileID
+	haveSelf := false
+	if st, serr := os.Stat(resolved); serr == nil {
+		if dev, ino, ok := libfs.InodeOf(st); ok {
+			self, haveSelf = fileID{dev, ino}, true
 		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			break
-		}
-		cur = parent
 	}
 	for _, e := range o.paths {
 		if !filepath.IsAbs(e) {
 			return true, true, fmt.Errorf("library: protected path %q is not absolute", e)
 		}
 		ex := filepath.Clean(resolveExistingPrefix(e))
-		if isWithinRoot(resolved, ex) {
+		// The path is, or is inside, a protected path; or a protected path is
+		// inside the path (a directory carries its subtree along).
+		if isWithinRoot(resolved, ex) || isWithinRoot(ex, resolved) {
 			return true, true, nil
 		}
 		if st, serr := os.Stat(ex); serr == nil {
@@ -503,16 +530,38 @@ func (o *staticOracle) Protected(_ context.Context, p Path) (protected, loaded b
 				return true, true, nil
 			}
 		}
+		// The same two tests by inode, for the second direction: the path's own
+		// inode among the protected path's ancestors.
+		if haveSelf && slices.Contains(inodeChain(ex), self) {
+			return true, true, nil
+		}
 	}
 	return false, true, nil
 }
 
+// ProtectedUnder implements SubtreeOracle: the list answers for a whole
+// directory because Protected already tests both directions.
+func (o *staticOracle) ProtectedUnder(ctx context.Context, dir Path) (bool, bool, error) {
+	return o.Protected(ctx, dir)
+}
+
 // protectedForMove asks every oracle (the static list first); protected, or
-// unknown, or an error, all refuse a Move (5L.3.3, 5L.5).
-func (m *manager) protectedForMove(ctx context.Context, p Path) (bool, error) {
+// unknown, or an error, all refuse a Move or a Quarantine (5L.3.3, 5L.5). dir
+// says the source is a directory: the whole subtree moves, so each oracle must
+// be able to answer for a subtree (SubtreeOracle), and one that cannot refuses.
+func (m *manager) protectedForMove(ctx context.Context, p Path, dir bool) (bool, error) {
 	oracles := append([]ProtectionOracle{m.reg.Load().protected}, m.opt.Oracles...)
 	for _, o := range oracles {
-		protected, loaded, err := o.Protected(ctx, p)
+		var protected, loaded bool
+		var err error
+		switch so, isSub := o.(SubtreeOracle); {
+		case dir && isSub:
+			protected, loaded, err = so.ProtectedUnder(ctx, p)
+		case dir:
+			return true, fmt.Errorf("library: a protection oracle (%T) cannot answer for the directory %s; it is not moved", o, p)
+		default:
+			protected, loaded, err = o.Protected(ctx, p)
+		}
 		if err != nil || !loaded || protected {
 			return true, err
 		}
@@ -636,20 +685,85 @@ func (r *Root) FS(caller storage.Owner) (RootFS, error) {
 
 func (r *Root) viewFor(caller storage.Owner) fsOps {
 	target := func(p Path) (string, error) { return r.m.absFor(caller, p) }
+	// Only core touches the root's AppDir and Quarantine area through a
+	// filesystem view. A module may read its own (the held files, its own app
+	// directories are reached through Root.AppDir), never write them; a reader
+	// that is not the owner (the download capability) sees neither.
+	guard := func(c *localFS) {
+		c.target = target
+		if caller != CoreOwner {
+			c.sealed = r.reservedRel
+			c.hidden = caller != r.spec.Owner
+		}
+	}
 	if r.m.canWrite(r, caller) && r.m.enabled(r.spec.Owner) {
+		c := *r.base
+		guard(&c)
 		if r.m.seam.wrapFS != nil {
 			// A test seam wraps the shared driver; give it the caller's target too.
-			c := *r.base
-			c.target = target
 			return r.m.seam.wrapFS(r.spec.ID, &c)
 		}
-		c := *r.base
-		c.target = target
 		return &c
 	}
 	c := r.base.readOnlyView()
-	c.target = target
+	guard(c)
 	return c
+}
+
+// reservedRel reports whether rel names the root's AppDir or Quarantine area
+// by name: equal to one, inside one, or (carries) a directory that contains one
+// and so carries it along. The comparison folds case: on a case-insensitive
+// filesystem (the default on macOS and Windows) ".MediaCore" is the AppDir, and
+// folding on a case-sensitive one only refuses a directory nobody should be
+// creating beside it.
+func (r *Root) reservedRel(rel string, carries bool) bool {
+	for _, dir := range [...]string{r.spec.AppDir, r.spec.Quarantine} {
+		if relWithinFold(rel, dir) || (carries && relWithinFold(dir, rel)) {
+			return true
+		}
+	}
+	return false
+}
+
+// relWithinFold: rel equals dir or lies under it, ignoring case.
+func relWithinFold(rel, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	if len(rel) < len(dir) {
+		return false
+	}
+	if !strings.EqualFold(rel[:len(dir)], dir) {
+		return false
+	}
+	return len(rel) == len(dir) || rel[len(dir)] == '/'
+}
+
+// reservedHit is reservedRel for a Path of this root, and also by resolved
+// location, so a symlink inside the root that points into the AppDir or the
+// Quarantine area does not open them. carries: a directory that contains one of
+// them counts (a Move or Quarantine carries it).
+func (r *Root) reservedHit(p Path, carries bool) bool {
+	if r.reservedRel(p.Rel, carries) {
+		return true
+	}
+	resolved := filepath.Clean(resolveExistingPrefix(filepath.Join(r.abs, filepath.FromSlash(p.Rel))))
+	for _, dir := range [...]string{r.spec.AppDir, r.spec.Quarantine} {
+		d := filepath.Clean(resolveExistingPrefix(filepath.Join(r.abs, filepath.FromSlash(dir))))
+		if isWithinRoot(resolved, d) || (carries && isWithinRoot(d, resolved)) {
+			return true
+		}
+	}
+	return false
+}
+
+// refuseReserved is ErrReservedPath when caller (anyone but core) names the
+// root's own areas.
+func (m *manager) refuseReserved(caller storage.Owner, r *Root, p Path, carries bool) error {
+	if caller == CoreOwner || !r.reservedHit(p, carries) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrReservedPath, p)
 }
 
 // Usage is the capacity of the filesystem holding the root.
