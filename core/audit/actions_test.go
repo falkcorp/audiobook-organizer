@@ -1,5 +1,5 @@
 // file: core/audit/actions_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0f93b6a2-8c4d-4e17-a5d9-3e2b7c1f4a60
 // last-edited: 2026-11-10
 
@@ -188,4 +188,57 @@ func TestNoGlobals(t *testing.T) {
 		t.Fatal(err)
 	}
 	archtest.NoInit(t, root, "./audit/...")
+}
+
+// TestCoreActions_EveryActionIsClassified: every entry of the action table says
+// who may see its records, so a new action cannot land unclassified and be
+// shown to every audit viewer by omission. An action outside the table, a
+// module's own included, is unknown and withheld.
+func TestCoreActions_EveryActionIsClassified(t *testing.T) {
+	for _, a := range audit.CoreActions() {
+		if audit.VisibilityOf(a) == audit.VisibilityUnknown {
+			t.Errorf("%s is in the action table and unclassified", a)
+		}
+	}
+	for _, a := range []string{"books.user.merge", "core.future.thing", "", "core.auth", "core.auth.login.extra", "Core.auth.login"} {
+		if got := audit.VisibilityOf(a); got != audit.VisibilityUnknown {
+			t.Errorf("VisibilityOf(%q) = %v, want unknown", a, got)
+		}
+	}
+}
+
+// TestCoreActions_CredentialAndIdentityActionsAreUserScoped: every action about
+// an identity, a credential, a session, a one-time link, a sign-in provider or
+// a security decision is for user managers, whatever its prefix. The list is
+// written out here, not derived from the table, so moving one fails a test.
+func TestCoreActions_CredentialAndIdentityActionsAreUserScoped(t *testing.T) {
+	scoped := []string{
+		"core.apikey.create", "core.apikey.require_confirmation", "core.apikey.revoke", "core.apikey.set_status",
+		"core.auth.login", "core.auth.logout", "core.auth.setup",
+		"core.bootstrap.redeem",
+		"core.identity.displace", "core.identity.link", "core.identity.unlink",
+		"core.integration.change_url", "core.integration.write_secret",
+		"core.invite.accept", "core.invite.create",
+		"core.oidc_provider.create", "core.oidc_provider.delete", "core.oidc_provider.update",
+		"core.permission.deny",
+		"core.restore.revoke",
+		"core.secret.rotate",
+		"core.session.revoke",
+		"core.templogin.consume", "core.templogin.mint",
+		"core.user.create", "core.user.delete", "core.user.disable", "core.user.enable", "core.user.reset_password", "core.user.set_roles",
+	}
+	for _, a := range scoped {
+		if got := audit.VisibilityOf(a); got != audit.UserScoped {
+			t.Errorf("VisibilityOf(%s) = %v, want UserScoped", a, got)
+		}
+	}
+	table := audit.CoreActions()
+	for _, a := range table {
+		if audit.VisibilityOf(a) == audit.VisibleToAll && slices.Contains(scoped, a) {
+			t.Errorf("%s is listed as user-scoped and visible to all", a)
+		}
+		if audit.VisibilityOf(a) == audit.UserScoped && !slices.Contains(scoped, a) {
+			t.Errorf("%s is user-scoped in the table and not in this test's list", a)
+		}
+	}
 }

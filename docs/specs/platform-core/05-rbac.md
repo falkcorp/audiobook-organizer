@@ -1,5 +1,5 @@
 <!-- file: docs/specs/platform-core/05-rbac.md -->
-<!-- version: 1.13.9 -->
+<!-- version: 1.13.10 -->
 <!-- guid: c07c6c34-fabe-451c-ae99-262b2c83232f -->
 <!-- last-edited: 2026-11-10 -->
 
@@ -1207,9 +1207,19 @@ a record.
 `GET /api/core/v1/audit?since=&until=&actor=&action=&outcome=&target=&cursor=&limit=`
 (`core:audit.view`; one of the opt-in cursor routes of 05-http-api §4.4, cursor over `seq`
 descending), `GET /api/core/v1/audit/export` (NDJSON stream, `core:audit.view`, `RateExpensive`,
-audited `core.audit.export`). Records whose action is `core.auth.*` or `core.user.*` about
-**another** user are visible only to `core:users.manage` holders as well (today's activity-log rule,
-`internal/activity/user_data.go:78-90`).
+audited `core.audit.export`). Visibility is default-deny: `core/audit` classifies every action of the
+§7.1 table (`audit.VisibilityOf`) as `VisibleToAll` or `UserScoped`. A `core:users.manage` holder
+sees every record; any other `core:audit.view` holder sees only the `VisibleToAll` ones, and a
+record whose action is `UserScoped` (everything about an identity, a credential, a session, a
+one-time link, a sign-in provider or a security decision: `core.auth.*`, `core.user.*`,
+`core.apikey.*`, `core.session.*`, `core.invite.*`, `core.templogin.*`, `core.identity.*`,
+`core.bootstrap.*`, `core.oidc_provider.*`, `core.permission.deny`, `core.secret.rotate`,
+`core.restore.revoke`, `core.integration.write_secret`, `core.integration.change_url`) or whose action
+the table does not list (a module's own action, or a core action added without a classification)
+is withheld whole, never partly masked. This is stricter than today's activity-log rule
+(`internal/activity/user_data.go:78-90`, `core.auth.*` and `core.user.*` about another user), which
+let a user see rows about themselves and every other prefix. `TestCoreActions_EveryActionIsClassified`
+fails a table entry nobody classified.
 
 ### 7.7 Redaction
 

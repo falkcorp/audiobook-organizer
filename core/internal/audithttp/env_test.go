@@ -1,5 +1,5 @@
 // file: core/internal/audithttp/env_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d7005e2-ed4b-444a-a9c3-60d66b5fec9d
 // last-edited: 2026-11-10
 
@@ -133,7 +133,7 @@ func (e *env) roster(t testing.TB) map[string]uint64 {
 		ev    audit.Event
 	}{
 		{"dick-login", audit.Event{Action: "core.auth.login", Outcome: audit.Success, Actor: actor("u-dick", "dick"), Target: userRef("u-dick")}},
-		{"patrol", audit.Event{Action: "books.library.scan", Outcome: audit.Success, Actor: actor("u-barbara", "barbara"), Target: entity.Ref{Module: "books", Kind: "library", ID: "gotham"}}},
+		{"patrol", audit.Event{Action: "core.role.update", Outcome: audit.Success, Actor: actor("u-barbara", "barbara"), Target: entity.Ref{Module: "core", Kind: "role", ID: "gotham"}}},
 		{"bruce-disables-selina", audit.Event{Action: "core.user.disable", Outcome: audit.Success, Actor: actor("u-bruce", "bruce"), Target: userRef("u-selina")}},
 		{"anon-fail", audit.Event{Action: "core.auth.login_failed", Outcome: audit.Failure, Actor: audit.Actor{ClientAddr: "192.0.2.99"}}},
 		{"barbara-update", audit.Event{Action: "core.user.update", Outcome: audit.Success, Actor: actor("u-barbara", "barbara"), Target: userRef("u-barbara")}},
