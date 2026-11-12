@@ -1,5 +1,5 @@
 // file: core/kernel/tasks_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a2d94c7e-1b53-4f08-9e6a-3c7d0f5b8e12
 // last-edited: 2026-11-11
 
@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/internal/taskstore"
 	"github.com/falkcorp/mediacore/metrics/metricstest"
 	"github.com/falkcorp/mediacore/module"
@@ -218,18 +220,87 @@ func TestKernelTasks_StartsWhenAKindIsRegistered(t *testing.T) {
 	}
 }
 
-// TestKernelTasks_SnapshotWrittenOncePerChange: a boot over a store that holds
-// the current snapshot writes nothing, so the matrix's one region fires only
-// when a definition is new or changed.
+// regionCount is a bootseam.Labeler that counts the entries of one label.
+type regionCount struct {
+	label string
+	n     atomic.Int64
+}
+
+func (r *regionCount) Enter(label string) func() {
+	if label == r.label {
+		r.n.Add(1)
+	}
+	return func() {}
+}
+
+// TestKernelTasks_SnapshotWrittenOncePerChange: the snapshot is written when a
+// definition is new or its stored snapshot differs, and a boot over a store
+// that holds the current one writes nothing, so the crash matrix's region
+// (tasks.def.upsert) fires once per write and never otherwise.
 func TestKernelTasks_SnapshotWrittenOncePerChange(t *testing.T) {
 	c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol()))
-	k := mustNew(t, c)
+	writes := &regionCount{label: labelDefUpsert}
+	ctx := bootseam.With(t.Context(), &bootseam.Seams{Labels: writes})
+	k, err := New(ctx, c)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := k.closeCore(context.Background(), time.Now().Add(defaultShutdownBudget)); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	if got := writes.n.Load(); got != 1 {
+		t.Fatalf("the first boot wrote %d snapshots, want 1", got)
+	}
+	key := taskstore.DefKey(string(patrolKind))
+	want, found, err := k.tasks.st.Get(ctx, key)
+	if err != nil || !found {
+		t.Fatalf("snapshot of %s = %q, %v, %v", patrolKind, want, found, err)
+	}
 	before := taskKeys(t, k)
-	if err := k.upsertDefinitions(t.Context(), k.tasks.defs); err != nil {
+	if err := k.upsertDefinitions(ctx, k.tasks.defs); err != nil {
 		t.Fatal(err)
+	}
+	if got := writes.n.Load(); got != 1 {
+		t.Errorf("an unchanged second upsert wrote: %d writes, want 1", got)
 	}
 	if after := taskKeys(t, k); !slices.Equal(before, after) {
 		t.Errorf("a second upsert changed c/tasks/: %q -> %q", before, after)
+	}
+
+	// A stored snapshot that differs (an older build's) is replaced, once.
+	if err := k.commitTaskBatch(ctx, func(b *storage.Batch) error { return k.tasks.st.Set(b, key, []byte(`{"v":0}`)) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.upsertDefinitions(ctx, k.tasks.defs); err != nil {
+		t.Fatal(err)
+	}
+	if got := writes.n.Load(); got != 2 {
+		t.Errorf("a changed snapshot: %d writes, want 2", got)
+	}
+	if got, _, _ := k.tasks.st.Get(ctx, key); !bytes.Equal(got, want) {
+		t.Errorf("snapshot after the upsert = %s, want %s", got, want)
+	}
+}
+
+// TestHeldKinds: the scheduler does not poll the clock of a disabled module's
+// kind, whether its ledger lists the kind or only its module is known, and does
+// poll an enabled module's.
+func TestHeldKinds(t *testing.T) {
+	held := heldKinds([]executor.Manifest{
+		{Module: "gotham", Enabled: true, TaskLedger: []tasks.Kind{"gotham.patrol"}},
+		{Module: "arkham", Enabled: false, TaskLedger: []tasks.Kind{"arkham.escape"}},
+	})
+	for kind, want := range map[tasks.Kind]bool{
+		"gotham.patrol": false, // enabled
+		"arkham.escape": true,  // disabled, listed
+		"arkham.riddle": true,  // disabled, unlisted: the module is what is held
+		"krypton.fall":  false, // unknown module
+	} {
+		if got := held(kind); got != want {
+			t.Errorf("held(%s) = %v, want %v", kind, got, want)
+		}
 	}
 }
 

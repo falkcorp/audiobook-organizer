@@ -1,5 +1,5 @@
 // file: core/kernel/tasks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c41f7a09-5d2e-4e83-b6a1-9a0d3f8e7c25
 // last-edited: 2026-11-11
 
@@ -191,10 +191,9 @@ func snapshotOf(d tasks.Definition) ([]byte, error) {
 
 // upsertDefinitions writes def/<kind> for each registered definition, one
 // batch per registration, only when the stored snapshot differs: a boot over
-// an unchanged build writes nothing.
+// an unchanged build writes nothing, and the crash-matrix region fires around
+// each write only.
 func (k *Kernel) upsertDefinitions(ctx context.Context, defs []tasks.Definition) error {
-	exit := bootseam.Region(ctx, labelDefUpsert)
-	defer exit()
 	for _, d := range defs {
 		val, err := snapshotOf(d)
 		if err != nil {
@@ -208,7 +207,10 @@ func (k *Kernel) upsertDefinitions(ctx context.Context, defs []tasks.Definition)
 		if found && bytes.Equal(old, val) {
 			continue
 		}
-		if err := k.commitTaskBatch(ctx, func(b *storage.Batch) error { return k.tasks.st.Set(b, key, val) }); err != nil {
+		exit := bootseam.Region(ctx, labelDefUpsert)
+		err = k.commitTaskBatch(ctx, func(b *storage.Batch) error { return k.tasks.st.Set(b, key, val) })
+		exit()
+		if err != nil {
 			return fmt.Errorf("kernel: tasks: write the snapshot of %s: %w", d.Kind(), err)
 		}
 	}
