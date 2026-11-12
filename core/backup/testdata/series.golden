@@ -1,0 +1,20 @@
+# file: core/backup/testdata/series.golden
+# version: 1.0.0
+# guid: af62546b-7452-4a91-930b-790b5e010523
+# last-edited: 2026-11-12
+#
+# The mediacore.backup scope's series (05-backup §5B.8): family<TAB>type<TAB>labels,
+# checked by metricstest.AssertSeries in TestBackupSeriesGolden. The two
+# revocation_* families are fed by the journal component and the boot re-apply
+# (F4-11 binds them at F8-04); the rest by the Service.
+mediacore_backup_archives	gauge	format,provenance
+mediacore_backup_bytes	gauge	
+mediacore_backup_duration_seconds	histogram	phase
+mediacore_backup_last_success_timestamp_seconds	gauge	
+mediacore_backup_last_verified_timestamp_seconds	gauge	
+mediacore_backup_restore_total	counter	foreign,stage
+mediacore_backup_retained_bytes	gauge	
+mediacore_backup_revocation_journal_gaps	gauge	
+mediacore_backup_revocation_reapplied_total	counter	cause,kind
+mediacore_backup_runs_total	counter	outcome,reason
+mediacore_backup_verify_total	counter	level,outcome
