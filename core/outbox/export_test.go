@@ -1,5 +1,5 @@
 // file: core/outbox/export_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3f2f7d8-6a5e-4c61-b8a8-0b2d0b9c4e11
 // last-edited: 2026-11-12
 
@@ -43,6 +43,9 @@ func (o *Outbox) SetSweepEvery(d time.Duration) { o.sweepEvery = d }
 func BackoffDelay(attempt int, lo, hi time.Duration, u float64) time.Duration {
 	return backoffDelay(attempt, lo, hi, u)
 }
+
+// FaultKind exposes faultKind.
+func FaultKind(err error) string { return faultKind(err) }
 
 // Running reports whether a relay run is in its loop.
 func (o *Outbox) Running() bool { return o.running.Load() }

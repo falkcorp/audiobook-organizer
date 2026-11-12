@@ -1,18 +1,21 @@
 // file: core/outbox/status.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0b7f0c06-1d5b-4e3c-9a64-2f0f9d3a8e64
 // last-edited: 2026-11-12
 
 package outbox
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/internal/outboxstore"
+	"github.com/falkcorp/mediacore/storage/codec"
 )
 
 // statCap bounds every count Status makes: a backlog past it is reported as
@@ -27,6 +30,32 @@ type Status struct {
 	At        time.Time
 	Topics    []TopicStatus
 	Consumers []ConsumerStatus
+	// Stopped lists what the relay will not work on until an operator acts: a
+	// row this read could not decode (it is left out of the counts, and the
+	// counts it touches are marked "at least") and a topic whose partition count
+	// changed. A status read survives a bad row so that it can say so.
+	Stopped []StoppedStatus
+}
+
+// StoppedStatus is one stopped topic or pair. Consumer is empty for a topic;
+// Partition is meaningful for a pair only. Cause is a closed token:
+// "corrupt_row", "unknown_version" (a row of a newer build) or
+// "partitions_changed".
+type StoppedStatus struct {
+	Topic     string
+	Consumer  string
+	Partition int
+	Cause     string
+}
+
+// rowCause is the closed token for an error that is a row which did not decode
+// (a corrupt one, or one a newer build wrote), and false for any other error: a
+// failure of the store itself is not something a status read steps over.
+func rowCause(err error) (string, bool) {
+	if errors.Is(err, codec.ErrUnknownVersion) || errors.Is(err, outboxstore.ErrCorruptRow) {
+		return faultKind(err), true
+	}
+	return "", false
 }
 
 // TopicStatus is one durable topic's intake.
@@ -61,9 +90,19 @@ type ConsumerStatus struct {
 	RetainedBacklog int
 }
 
-// Status reads the outbox's state. Every count is bounded by statCap.
+// Status reads the outbox's state. Every count is bounded by statCap. A row
+// that does not decode does not fail the read: it is named in Stopped and the
+// counts that needed it are marked as "at least"; only a failure of the store
+// returns an error.
 func (o *Outbox) Status(ctx context.Context) (Status, error) {
 	st := Status{At: o.now()}
+	stopped := map[StoppedStatus]bool{}
+	stop := func(s StoppedStatus) {
+		if !stopped[s] {
+			stopped[s] = true
+			st.Stopped = append(st.Stopped, s)
+		}
+	}
 	intake := map[string]TopicStatus{}
 	for _, name := range o.sortedTopics() {
 		ti, err := o.topic(name)
@@ -71,14 +110,27 @@ func (o *Outbox) Status(ctx context.Context) (Status, error) {
 			continue
 		}
 		ts := TopicStatus{Topic: name, Partitions: ti.partitions}
-		hi, _, err := o.store.ReadHigh(ctx, name)
-		if err != nil {
+		hi, found, err := o.store.ReadHigh(ctx, name)
+		switch cause, rowFault := rowCause(err); {
+		case err == nil:
+			ts.High = hi.High
+			if found && hi.Partitions != ti.partitions {
+				stop(StoppedStatus{Topic: name, Cause: "partitions_changed"})
+			}
+		case rowFault:
+			stop(StoppedStatus{Topic: name, Cause: cause})
+		default:
 			return st, fmt.Errorf("status of %s: %w", name, err)
 		}
-		ts.High = hi.High
 		n, capped, oldest, err := o.store.IntakeStats(ctx, name, statCap)
 		if err != nil {
-			return st, fmt.Errorf("intake of %s: %w", name, err)
+			cause, rowFault := rowCause(err)
+			if !rowFault {
+				return st, fmt.Errorf("intake of %s: %w", name, err)
+			}
+			// The count stopped at the bad row: what it holds is a floor.
+			stop(StoppedStatus{Topic: name, Cause: cause})
+			capped = true
 		}
 		ts.IntakePending, ts.IntakeCapped = n, capped
 		if n > 0 {
@@ -88,9 +140,13 @@ func (o *Outbox) Status(ctx context.Context) (Status, error) {
 		intake[name] = ts
 	}
 
-	cursors, err := o.store.AllCursors(ctx)
+	cursors, unreadable, err := o.store.ReadCursors(ctx)
 	if err != nil {
 		return st, fmt.Errorf("status: cursors: %w", err)
+	}
+	for _, u := range unreadable {
+		cause, _ := rowCause(u.Err)
+		stop(StoppedStatus{Topic: u.Pair.Topic, Consumer: u.Pair.Consumer, Partition: u.Pair.PP, Cause: cause})
 	}
 	dead, err := o.store.DeadCounts(ctx)
 	if err != nil {
@@ -141,7 +197,13 @@ func (o *Outbox) Status(ctx context.Context) (Status, error) {
 			}
 			n, capped, first, below, retrying, tryOldest, err := o.pairBacklog(ctx, c)
 			if err != nil {
-				return st, fmt.Errorf("status of %s: %w", name, err)
+				cause, rowFault := rowCause(err)
+				if !rowFault {
+					return st, fmt.Errorf("status of %s: %w", name, err)
+				}
+				stop(StoppedStatus{Topic: c.Pair.Topic, Consumer: name, Partition: c.Pair.PP, Cause: cause})
+				cs.PendingCapped = true // this pair's share is missing: what is counted is a floor
+				continue
 			}
 			cs.Pending += n + below
 			cs.PendingCapped = cs.PendingCapped || capped
@@ -163,6 +225,9 @@ func (o *Outbox) Status(ctx context.Context) (Status, error) {
 		}
 		st.Consumers = append(st.Consumers, cs)
 	}
+	slices.SortFunc(st.Stopped, func(a, b StoppedStatus) int {
+		return cmp.Or(cmp.Compare(a.Topic, b.Topic), cmp.Compare(a.Consumer, b.Consumer), cmp.Compare(a.Partition, b.Partition), cmp.Compare(a.Cause, b.Cause))
+	})
 	return st, nil
 }
 
