@@ -1,5 +1,5 @@
 // file: core/integrations/providerhttp/holds_review_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 0d6f3b0a-6a5c-4a43-8c3e-7d9b5b1f2e44
 // last-edited: 2026-11-11
 
@@ -423,4 +423,23 @@ func TestHolds_RetryNeverBlocksARequest(t *testing.T) {
 		t.Fatal("Close did not return after the read ended")
 	}
 	eventually(t, "the stalled read to land", func() bool { _, ok := r.HoldFor(batcave); return ok })
+}
+
+// TestHolds_NoRetryAfterClose: a closed Registry starts no more background
+// reads of the store.
+func TestHolds_NoRetryAfterClose(t *testing.T) {
+	clk := newClock()
+	fs := &failingStore{GateStore: providerhttp.NativeGateStore(store(t))}
+	fs.failHolds.Store(true)
+	r := newRegistry(t, clk, func(o *providerhttp.Options) { o.Store = fs })
+	r.Close()
+	fs.failHolds.Store(false)
+	clk.Advance(31 * time.Second)
+	for range 20 {
+		r.HoldFor(batcave)
+		time.Sleep(time.Millisecond)
+	}
+	if n := fs.holdReads.Load(); n != 1 {
+		t.Fatalf("the store was read %d times; a closed Registry must read it only at boot", n)
+	}
 }
