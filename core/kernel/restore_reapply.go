@@ -1,5 +1,5 @@
 // file: core/kernel/restore_reapply.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6d8a14-c3e7-4b95-a018-9d4e7b1c5f36
 // last-edited: 2026-11-11
 
@@ -37,6 +37,14 @@ import (
 // store's head, which must not pass a line not yet applied. It is not a
 // full-library loop: the tail is the lines since the store's last committed
 // head, normally none.
+//
+// The store's head moves last, and only once something durable says why. The
+// head below the location file's anchor, and the journal's lines after the
+// head, are the evidence a store was replaced; moving the head to the journal's
+// end erases both. So a replaced store's verdict (the external restore line,
+// which the next boot resumes) is written before the first batch and its head is
+// what the last batch commits; when the line cannot be written the head is held
+// until the hooks have run (reapplyResult.Held).
 
 // errReapplyNotReady is a re-apply called before its prerequisites exist.
 var errReapplyNotReady = errors.New("kernel: the journal re-apply needs the DB overrides attached and the keyring open")
@@ -140,8 +148,11 @@ type reapplyInput struct {
 	// nor evidence.
 	SwappedBack func(restoreID string) bool
 	Apply       reapplyApply
-	Clock       func() time.Time
-	Log         *slog.Logger
+	// TailBatch is how many journal lines one re-apply batch carries: zero is
+	// tailBatch. The crash tests set it to 1 so every line is its own batch.
+	TailBatch int
+	Clock     func() time.Time
+	Log       *slog.Logger
 }
 
 func (in reapplyInput) now() time.Time {
@@ -202,6 +213,10 @@ type reapplyResult struct {
 	// (a crash before the hooks finish would otherwise read as the same store
 	// next boot, with nothing left to resume the hooks from).
 	Deferred bool
+	// Held is the head a replaced store's boot did not commit because nothing
+	// durable yet says the store was replaced; step 3 commits it once the hooks
+	// have completed. Zero when none is held.
+	Held journal.Head
 }
 
 // reapplyRevocations is P4d step 2.
@@ -240,12 +255,14 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 
 	// (0) install check, before any line is used.
 	chain := in.readChain(res.Path, headBefore)
-	if chain.HasHeader && chain.Header.InstallID != in.Install {
+	if otherInstall(chain, in.Install) {
 		if res.Reset, err = in.setAside(ctx, res.Path, headBefore); err != nil {
 			log.Error("kernel: another install's revocation journal could not be set aside", "path", res.Path, "err", err)
 		} else {
 			chain = &journal.Chain{}
 		}
+	} else {
+		chain = in.checkAnchor(chain, loc, describes)
 	}
 	res.Chain = chain
 
@@ -265,26 +282,61 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	log.Info("kernel: classified the store", "class", string(res.Class), "why", res.Why)
 
 	untrusted := in.untrusted(chain, headBefore, &res)
+
+	// The lines this boot owes the journal come before any head moves: what
+	// the verdict that the store was replaced is made durable by.
+	pend, err := in.writeBookkeeping(ctx, chain, aborted, bindErr == nil, &res)
+	if err != nil {
+		return res, err
+	}
+	// A verdict nothing durable records holds the head back until the hooks ran.
+	hold := !restoring && res.Class == classReplaced && res.RestoreLine == 0
+	if hold {
+		// The hooks' own journal lines would stage their seqs as the head, which
+		// is what the hold keeps back until they have completed.
+		in.Journal.Refuse(errors.New("the journal could not take the restore line of a replaced store, so it takes no line until the hooks have run"))
+	}
+
+	// (3) re-apply what the store has not seen: the verified tail after
+	// head_before, narrowing and idempotent. A bind failure does not stop it.
+	// A chain that does not verify still yields the lines that did (the store
+	// lacks nothing of what they hold, whatever the rest of the file is); a line
+	// this build cannot apply stops it, and the head stays below that line.
+	lines, stopped := in.tailLines(chain, headBefore, aborted, untrusted)
+	plan := tailPlan{Lines: lines, Aborted: aborted, Pending: pend, Hold: hold}
+	if stopped != nil {
+		plan.Pending = nil // the head must not pass the line nothing applied
+	}
+	if res.Reapplied, err = in.applyTail(ctx, plan); err != nil {
+		return res, err
+	}
+	after := headBefore
+	if n := len(lines); n > 0 {
+		after = journal.Head{Seq: lines[n-1].Seq, MAC: lines[n-1].MAC}
+	}
+	if plan.Pending != nil && plan.Pending.Head().Seq > after.Seq {
+		after = plan.Pending.Head()
+	}
+	if hold && after.Seq > headBefore.Seq {
+		res.Held = after
+	}
+
 	switch {
-	case res.Reset && bindErr == nil:
-		// A new journal starts with a gap line, and nothing is re-applied from
-		// the other install's (DATA4-15); the restore hooks, if any, get no
-		// coverage because the journal has no header of this install's.
-		if _, err := in.Journal.AppendLine(ctx, journal.GapLine(in.now(), journal.GapOtherInstall)); err != nil {
-			return res, fmt.Errorf("kernel: start the new journal with a gap line: %w", err)
-		}
-		in.Journal.NoteReset()
 	case untrusted:
-		// Nothing is re-applied from a chain that does not verify, but a store
-		// that may lack what it held fails closed.
-		if err := in.failClosedIfBehind(ctx, chain, headBefore, restoring, &res); err != nil {
+		// A store that may lack what the file holds or held fails closed.
+		if err := in.failClosedIfBehind(ctx, chain, headBefore, after, restoring, &res); err != nil {
 			return res, err
 		}
-	default:
-		// (3) re-apply the verified tail after head_before, narrowing and
-		// idempotent. A bind failure does not stop it.
-		if res.Reapplied, err = in.reapplyTail(ctx, chain, headBefore, aborted); err != nil {
-			return res, err
+	case stopped != nil:
+		res.Broken = fmt.Errorf("the journal holds a %q line at seq %d that this build cannot re-apply (a newer build wrote it): the head stays below it, so a build that knows it applies it", stopped.Kind, stopped.Seq)
+		// Every append stages its own seq as the head: one would move it past the
+		// line left unapplied, so the journal takes none until a build applies it.
+		in.Journal.Refuse(res.Broken)
+		if !restoring {
+			state := fmt.Sprintf("unknown:%d:%s:%s", stopped.Seq, stopped.Kind, stopped.MAC)
+			if err := in.failClosedOnce(ctx, chain.Fingerprint(after, state), &res); err != nil {
+				return res, err
+			}
 		}
 	}
 	if res.Broken == nil {
@@ -294,10 +346,13 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 		in.Journal.NoteBroken(res.Broken)
 	}
 
-	// (4) and (5): the restore line (a restore boot's, a replaced store's) and
-	// the unfinished hooks of an earlier boot's.
-	if err := in.bookkeeping(ctx, chain, aborted, &res); err != nil {
-		return res, err
+	// (4) a restore boot's restore line, after the tail: nothing reads the head
+	// of a restore boot as evidence (R6-4), and its restore journal is the
+	// durable verdict.
+	if restoring {
+		if err := in.restoreLine(ctx, chain, aborted, &res); err != nil {
+			return res, err
+		}
 	}
 
 	res.Deferred = restoring || (res.Class == classReplaced && res.RestoreLine == 0)
@@ -361,6 +416,14 @@ const breakUnreadable journal.BreakReason = "unreadable"
 // continues after the store's head (journal.CreateBased), so the store's head
 // still lies on its chain. It returns true when the new journal exists.
 func (in reapplyInput) setAside(ctx context.Context, path string, head journal.Head) (bool, error) {
+	// Only a regular file is renamed: a link planted at the journal's name is not
+	// the journal, and moving it would take whatever it points at out of the
+	// share's reach.
+	if fi, err := os.Lstat(path); err != nil {
+		return false, fmt.Errorf("kernel: set the other install's journal aside: %w", err)
+	} else if !fi.Mode().IsRegular() {
+		return false, fmt.Errorf("kernel: set the other install's journal aside: %w: %s", journal.ErrNotRegular, path)
+	}
 	aside := path + ".other-install-" + in.now().Format("20060102T150405Z")
 	for n := 2; ; n++ {
 		if _, err := os.Lstat(aside); errors.Is(err, os.ErrNotExist) {
@@ -417,44 +480,105 @@ func (in reapplyInput) untrusted(chain *journal.Chain, head journal.Head, res *r
 	return true
 }
 
+// The Break reasons of a chain the location file's anchor contradicts.
+const (
+	// breakBelowAnchor: the journal ends below the committed head backup.location.json
+	// recorded: lines were cut off the end, or the file was replaced by a shorter one.
+	breakBelowAnchor journal.BreakReason = "below_anchor"
+	// breakForkedAnchor: the line the file recorded at its committed head is not the
+	// one the journal holds at that seq: the file is another history.
+	breakForkedAnchor journal.BreakReason = "forked_anchor"
+)
+
+// checkAnchor reads the journal against backup.location.json's committed head
+// (05-backup §5B.3.6 row "Head in the store"), the one record that says how far
+// the journal had got that does not live in the store a copy can replace. When
+// the file describes this store, a journal that ends below that head has lost
+// lines (a cut at a line boundary verifies as a shorter chain, so nothing in the
+// chain says so), and one that holds another line at that seq is not the journal
+// the file recorded. Either is a break at the first line the journal should
+// have: the verified lines before it are still used, and the store, if it is
+// behind the anchor, fails closed for what it may lack (ClaimedEnd is raised to
+// the anchor so Chain.Behind says so). It returns chain itself when the anchor
+// is on it, the file does not describe this store, or has no committed head.
+func (in reapplyInput) checkAnchor(chain *journal.Chain, loc journal.Location, describes bool) *journal.Chain {
+	if !describes || loc.Head.Seq == 0 {
+		return chain
+	}
+	c := *chain
+	switch {
+	case chain.IntactEnd() < loc.Head.Seq:
+		c.ClaimedEnd = max(c.ClaimedEnd, loc.Head.Seq)
+		if c.Break == nil {
+			c.Break = &journal.Break{Seq: chain.IntactEnd() + 1, Reason: breakBelowAnchor,
+				Err: fmt.Errorf("the journal ends at seq %d, below the committed head %d backup.location.json recorded (lines were cut off, or the file was replaced)", chain.IntactEnd(), loc.Head.Seq)}
+		}
+	case loc.Head.MAC != "" && chain.Break == nil:
+		mac, ok := chain.MACAt(loc.Head.Seq)
+		if !ok || mac == loc.Head.MAC {
+			return chain
+		}
+		c.Break = &journal.Break{Seq: loc.Head.Seq, Reason: breakForkedAnchor,
+			Err: fmt.Errorf("the journal holds another line at seq %d than backup.location.json recorded (the file was replaced)", loc.Head.Seq)}
+	default:
+		return chain
+	}
+	return &c
+}
+
 // otherInstall reports a verified header that names another install.
 func otherInstall(chain *journal.Chain, install string) bool {
 	return chain.HasHeader && chain.Header.InstallID != install
 }
 
-// forkedAt reports a journal that verifies but is not the one the store
-// committed: the line at the store's head differs.
+// forkedAt reports a journal that is not the one the store committed: its
+// verified line at the store's head differs. A chain that breaks later still
+// answers (MACAt speaks only for the lines that verified); one that breaks
+// before the head cannot, and is reported by its break.
 func forkedAt(chain *journal.Chain, head journal.Head) bool {
-	if head.MAC == "" || chain.Break != nil {
+	if head.MAC == "" {
 		return false
 	}
 	mac, ok := chain.MACAt(head.Seq)
 	return ok && mac != head.MAC
 }
 
-// failClosedIfBehind reacts to a chain that cannot be re-applied from. When the
-// store may lack a revocation the journal holds or held, the boot cannot know
-// what it skipped, so it fails closed through auth's restore fallback (every
-// API key needs_confirmation, every credential epoch bumped) and reports
+// failClosedIfBehind reacts to a chain that cannot be trusted whole. The lines
+// of it that verify were re-applied first (tailLines); what the store may still
+// lack is what the rest of the file held, which the boot cannot know, so when
+// the store may lack a revocation the journal holds or held it fails closed
+// through auth's restore fallback (every API key needs_confirmation, every
+// credential epoch bumped, every session deleted) and reports
 // revocation_journal_broken. "May lack" is every way the store can be behind or
 // unrelated to the journal: the chain's end (for a chain that does not verify,
-// everything it claims) is above the store's head, the file is not the one the
-// store committed or starts above its head, or it is another install's while the
-// store has a head (its own journal is gone). Another install's journal never
-// answers "is the store behind it": its seqs are not this store's, so a store
-// that has never journaled (head 0) has lost nothing to it, however many lines
-// it holds. It happens once per broken state (journal.Chain.Fingerprint), so a
+// everything it claims, or the anchor the location file recorded) is above the
+// store's head, the file is not the one the store committed or starts above its
+// head, or it is another install's while the store has a head (its own journal
+// is gone). Another install's journal never answers "is the store behind it":
+// its seqs are not this store's, so a store that has never journaled (head 0) has
+// lost nothing to it, however many lines it holds. It happens once per broken
+// state (journal.Chain.Fingerprint, keyed on the head after the re-apply, so the
+// re-apply's own head move does not make the next boot's state look new), so a
 // restart does not bump every epoch again. On a restore boot the hooks do their
 // own fallback with no coverage.
-func (in reapplyInput) failClosedIfBehind(ctx context.Context, chain *journal.Chain, head journal.Head, restoring bool, res *reapplyResult) error {
+func (in reapplyInput) failClosedIfBehind(ctx context.Context, chain *journal.Chain, before, after journal.Head, restoring bool, res *reapplyResult) error {
 	foreign := otherInstall(chain, in.Install)
-	forked := forkedAt(chain, head) || (foreign && head.Seq > 0)
-	pruned := chain.Break == nil && chain.HasHeader && head.Seq < chain.Header.BaseSeq
-	behind := !foreign && chain.Behind(head.Seq)
+	forked := forkedAt(chain, before) || (foreign && before.Seq > 0)
+	pruned := chain.Break == nil && chain.HasHeader && before.Seq < chain.Header.BaseSeq
+	behind := !foreign && chain.Behind(before.Seq)
 	if restoring || !(forked || pruned || behind) {
 		return nil
 	}
-	fp := chain.Fingerprint(head, forked)
+	state := ""
+	if forked {
+		state = "forked"
+	}
+	return in.failClosedOnce(ctx, chain.Fingerprint(after, state), res)
+}
+
+// failClosedOnce runs auth's fail-closed fallback unless the broken state fp
+// was already failed closed on, and latches fp.
+func (in reapplyInput) failClosedOnce(ctx context.Context, fp string, res *reapplyResult) error {
 	latched, err := journal.ReadBrokenLatch(ctx, in.KS)
 	if err != nil {
 		return fmt.Errorf("kernel: read the broken-journal latch: %w", err)
@@ -551,25 +675,77 @@ func journalShowsReplaced(chain *journal.Chain, head journal.Head, aborted map[u
 // tailBatch is how many lines one re-apply batch carries.
 const tailBatch = 128
 
-// reapplyTail re-applies every verified line after head, except a hook line of
-// an aborted restore (verified, part of the chain, never applied: the store it
-// narrowed was swapped away, DATA8-7 (a)), in batches that also write the new
-// head. It returns the number of revocation lines it applied.
-func (in reapplyInput) reapplyTail(ctx context.Context, chain *journal.Chain, head journal.Head, aborted map[uint64]bool) (int, error) {
-	var tail []journal.Line
-	for l := range chain.After(head.Seq) {
-		tail = append(tail, l)
+// tailLines are the lines the re-apply applies: the verified lines after head,
+// cut before the first revocation of a kind this build cannot apply (stopped:
+// KnownKind is how it tells; IsRevocation counts an unknown kind so that a
+// newer build's line is never skipped, and the head never moves over it). A hook
+// line of an aborted restore is not one (verified, part of the chain, never
+// applied: the store it narrowed was swapped away, DATA8-7 (a)).
+//
+// On a chain that does not verify the lines are its verified prefix up to the
+// break, which Chain.Lines already is: they are authentic revocations after the
+// store's head, narrowing-only, and the store lacks nothing less for the rest of
+// the file being doubtful. They are not applied when they are not this store's
+// history: a journal of another install, or one that verifies but does not hold
+// the line the store committed at its head (forked). A journal that starts above
+// the store's head (pruned) has only the lines it holds, applied; the interval
+// between is what the fail-closed fallback is for.
+func (in reapplyInput) tailLines(chain *journal.Chain, head journal.Head, aborted map[uint64]bool, untrusted bool) (lines []journal.Line, stopped *journal.Line) {
+	if untrusted && (otherInstall(chain, in.Install) || forkedAt(chain, head)) {
+		return nil, nil
 	}
+	for l := range chain.After(head.Seq) {
+		if journal.IsRevocation(l.Kind) && !journal.KnownKind(l.Kind) && !(l.RestoreSeq != 0 && aborted[l.RestoreSeq]) {
+			return lines, &l
+		}
+		lines = append(lines, l)
+	}
+	return lines, nil
+}
+
+// tailPlan is what applyTail applies and the head it moves.
+type tailPlan struct {
+	Lines   []journal.Line
+	Aborted map[uint64]bool
+	// Pending is the line this boot wrote before the re-apply (a restore line,
+	// or the gap line of a new journal): the last batch commits its head, which
+	// is above the last line's. Nil when none, and when the re-apply stopped
+	// before a line (the head must not pass it).
+	Pending *journal.Pending
+	// Hold stages no head at all: nothing durable yet says why the store's head
+	// may move, so the caller commits it after the hooks (reapplyResult.Held).
+	Hold bool
+}
+
+// applyTail applies p.Lines in order, in batches of in.TailBatch, each batch
+// moving the head with its last write; it returns the number of revocations it
+// applied. The head never passes a line not yet applied. A run of lines that is
+// empty still commits the pending line's head.
+func (in reapplyInput) applyTail(ctx context.Context, p tailPlan) (int, error) {
+	size := in.TailBatch
+	if size < 1 {
+		size = tailBatch
+	}
+	parts := slices.Collect(slices.Chunk(p.Lines, size))
 	applied := 0
-	for part := range slices.Chunk(tail, tailBatch) {
+	for i, part := range parts {
 		var revs []journal.Revocation
 		for _, l := range part {
-			if journal.IsRevocation(l.Kind) && !(l.RestoreSeq != 0 && aborted[l.RestoreSeq]) {
+			if journal.IsRevocation(l.Kind) && !(l.RestoreSeq != 0 && p.Aborted[l.RestoreSeq]) {
 				revs = append(revs, l.Revocation)
 			}
 		}
 		last := part[len(part)-1]
-		kept, err := in.commitTail(ctx, revs, journal.Head{Seq: last.Seq, MAC: last.MAC})
+		var head func(context.Context, *storage.Batch) error
+		switch {
+		case p.Hold:
+		case i == len(parts)-1 && p.Pending != nil:
+			head = p.Pending.Stage
+		default:
+			h := journal.Head{Seq: last.Seq, MAC: last.MAC}
+			head = func(ctx context.Context, b *storage.Batch) error { return journal.StageHead(ctx, b, in.KS, h) }
+		}
+		kept, err := in.commitTail(ctx, revs, head)
 		if err != nil {
 			return applied, fmt.Errorf("kernel: re-apply the revocation journal up to seq %d: %w", last.Seq, err)
 		}
@@ -580,66 +756,113 @@ func (in reapplyInput) reapplyTail(ctx context.Context, chain *journal.Chain, he
 			}
 		}
 	}
+	if len(parts) == 0 && p.Pending != nil && !p.Hold {
+		if err := p.Pending.Commit(ctx); err != nil {
+			return applied, fmt.Errorf("kernel: commit the journal head: %w", err)
+		}
+	}
 	return applied, nil
 }
 
-// commitTail stages revs into one batch with the head and commits it, again
-// with a fresh batch on a conflict (the stagers re-read what they decide on).
-func (in reapplyInput) commitTail(ctx context.Context, revs []journal.Revocation, head journal.Head) (kept []string, err error) {
+// commitTail applies revs in two batches and stages the head into the second:
+// auth's revocations commit first, alone, and then rbac's, which read the users
+// auth's changed, with head. Staged into one batch, rbac's write of a user row
+// (built from a snapshot read before auth's was committed) replaced auth's, so
+// the head moved past a disable, a delete or a password blank that never took
+// effect, and the last-admin guard could not see a disable staged beside it. A
+// crash between the two re-applies the chunk, which is idempotent: the head
+// moves with the second. Each batch is retried with a fresh one on a conflict
+// (the stagers re-read what they decide on).
+func (in reapplyInput) commitTail(ctx context.Context, revs []journal.Revocation, head func(context.Context, *storage.Batch) error) (kept []string, err error) {
+	if len(revs) > 0 {
+		err := storage.RetryOnConflict(ctx, 5, func(ctx context.Context) (err error) {
+			b := in.Apply.NewBatch()
+			defer func() { err = errors.Join(err, b.Close()) }()
+			if err := in.Apply.Auth(ctx, b, revs); err != nil {
+				return err
+			}
+			if b.Count() == 0 {
+				return nil
+			}
+			return b.Commit(ctx, storage.Sync)
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	err = storage.RetryOnConflict(ctx, 5, func(ctx context.Context) (err error) {
 		b := in.Apply.NewBatch()
 		defer func() { err = errors.Join(err, b.Close()) }()
 		kept = nil
 		if len(revs) > 0 {
-			if err := in.Apply.Auth(ctx, b, revs); err != nil {
-				return err
-			}
 			if kept, err = in.Apply.RBAC(ctx, b, revs); err != nil {
 				return err
 			}
 		}
-		if err := journal.StageHead(ctx, b, in.KS, head); err != nil {
-			return err
+		if head != nil {
+			if err := head(ctx, b); err != nil {
+				return err
+			}
+		}
+		if b.Count() == 0 {
+			return nil
 		}
 		return b.Commit(ctx, storage.Sync)
 	})
 	return kept, err
 }
 
-// bookkeeping is steps (4) and (5)'s lines: the restore line of a restore boot
-// (found, never appended twice) or of a replaced store (an external line,
-// unless one an earlier boot appended still owes its hooks), each with its head
-// update in its own batch (File.AppendLine).
-func (in reapplyInput) bookkeeping(ctx context.Context, chain *journal.Chain, aborted map[uint64]bool, res *reapplyResult) error {
+// writeBookkeeping writes the lines this boot owes the journal before it moves
+// the store's head, and returns the Pending whose head the re-apply commits
+// last: the gap line a new journal starts with after another install's was set
+// aside, and, on a plain boot of a replaced store, the external restore line
+// (unless one an earlier boot appended still owes its hooks: never duplicated).
+// The restore line is the durable verdict: a crash anywhere after it leaves a
+// journal the next boot reads as a replaced store with unfinished hooks, and
+// resumes. When it cannot be written (a journal that cannot take a line) the
+// hooks still run, and res.RestoreLine stays 0, which is what holds the head
+// (reapplyResult.Held). A restore boot's line is restoreLine's, after the tail.
+func (in reapplyInput) writeBookkeeping(ctx context.Context, chain *journal.Chain, aborted map[uint64]bool, bound bool, res *reapplyResult) (*journal.Pending, error) {
+	var pend *journal.Pending
+	if res.Reset && bound {
+		// A new journal starts with a gap line, and nothing is re-applied from the
+		// other install's (DATA4-15); the restore hooks, if any, get no coverage
+		// because the journal has no header of this install's.
+		p, err := in.Journal.WriteLine(ctx, journal.GapLine(in.now(), journal.GapOtherInstall))
+		if err != nil {
+			return nil, fmt.Errorf("kernel: start the new journal with a gap line: %w", err)
+		}
+		pend = &p
+		in.Journal.NoteReset()
+	}
 	if in.Restore != nil {
-		return in.restoreLine(ctx, chain, aborted, res)
+		return pend, nil
 	}
 	owed, err := in.unhookedExternal(ctx, chain, aborted)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	res.Owed = owed
 	switch {
 	case res.Class == classReplaced && len(owed) == 0:
 		res.RestoreBoundary = res.HeadBefore.Seq
 		line := journal.RestoreLineOf(journal.RestoreInfo{Kind: journal.RestoreExternal, Boundary: res.RestoreBoundary}, in.now())
-		h, err := in.Journal.AppendLine(ctx, line)
+		p, err := in.Journal.WriteLine(ctx, line)
 		if err != nil {
-			// The hooks still run (they fail closed); only the record that
-			// resumes them after a crash is missing.
 			in.log().Error("kernel: the restore line of a replaced store could not be appended", "err", err)
-			return nil
+			return pend, nil
 		}
-		line.Seq = h.Seq
-		res.RestoreLine = h.Seq
-		res.Owed = []journal.Line{{Revocation: line, MAC: h.MAC}}
+		line.Seq = p.Head().Seq
+		res.RestoreLine = line.Seq
+		res.Owed = []journal.Line{{Revocation: line, MAC: p.Head().MAC}}
+		pend = &p
 	case len(owed) > 0:
 		res.RestoreLine = owed[0].Seq
 		if info, ok := owed[0].RestoreInfo(); ok {
 			res.RestoreBoundary = info.Boundary
 		}
 	}
-	return nil
+	return pend, nil
 }
 
 // unhookedExternal lists the external restore lines whose hooks have not

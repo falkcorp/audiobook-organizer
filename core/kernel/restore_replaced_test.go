@@ -1,5 +1,5 @@
 // file: core/kernel/restore_replaced_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1b7e4d93-a6c2-4f58-8e01-d93a5c7f2b64
 // last-edited: 2026-11-11
 
@@ -220,8 +220,9 @@ func TestReplacedStore_RunsPostRestoreHook(t *testing.T) {
 
 // TestReplacedStore_TruncatedJournalKeysNeedConfirmation: a store copied back
 // to an older generation whose journal was truncated after the archive, and
-// verifies cleanly, still has every key set to needs_confirmation: nothing
-// anchors the journal's end once the store that held the head is gone.
+// verifies cleanly, still has every key set to needs_confirmation, and the boot
+// reports the journal broken: the store that held the head is gone, but
+// backup.location.json's committed head still says the journal had more.
 func TestReplacedStore_TruncatedJournalKeysNeedConfirmation(t *testing.T) {
 	g := newGotham(t)
 	// Cut the revocation line off the journal: header only, a clean chain.
@@ -229,8 +230,11 @@ func TestReplacedStore_TruncatedJournalKeysNeedConfirmation(t *testing.T) {
 	truncateJournal(t, g.journalPath(), 0)
 	g.swapIn(g.archive)
 	res, hres := g.boot(nil, nil)
-	if res.Class != classReplaced || !hres.Ran || res.Broken != nil || res.Reapplied != 0 {
-		t.Fatalf("class %q (%s), hooks ran %v, broken %v, re-applied %d", res.Class, res.Why, hres.Ran, res.Broken, res.Reapplied)
+	if res.Class != classReplaced || !hres.Ran || res.Broken == nil || res.Reapplied != 0 {
+		t.Fatalf("class %q (%s), hooks ran %v, broken %v, re-applied %d: want a replaced store and a journal reported below the anchor", res.Class, res.Why, hres.Ran, res.Broken, res.Reapplied)
+	}
+	if !g.hasHealth(journal.HealthBroken) {
+		t.Errorf("health %v lacks %s", g.health(), journal.HealthBroken)
 	}
 	for _, id := range []string{"key-redrobin", "key-batmobile", "key-spoiler"} {
 		if got := g.keyStatus(id); got != auth.KeyNeedsConfirmation {
