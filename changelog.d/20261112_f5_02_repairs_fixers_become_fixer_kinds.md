@@ -5,3 +5,4 @@
 ### Changed
 
 - repairs: `RunPlan`'s guard and settle steps are now helpers the native shell shares; HEAD's plan and apply behave as before (F5-02).
+- repairs: the native shell refuses a plan, an apply or a follow-up without fixer stores to bind, refuses a Live apply of a fixer that writes library rows without a scan stand-down key, ends a run's scope and stand-down only after the rows still in flight have left, and gives a resumed attempt its own run state. Retired-versions' retire writer, `applied` decision record and provenance read, and the retire shared by the fragment, duplicate-copies and consolidation-leftovers fixers, read the run's stores instead of the plugin's (F5-02).

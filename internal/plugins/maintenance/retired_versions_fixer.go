@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-11-12
 
@@ -301,8 +301,9 @@ type retiredVersionsFixer struct {
 	// RLock accessor); tests swap it so they never touch the global config.
 	applyEnabled func() bool
 	// retireWriterFor builds the journaled write surface of one retire from the
-	// run's Writer; tests wrap it. See retireWriter.
-	retireWriterFor func(w *repairs.Writer) (retireWriter, error)
+	// run's Writer, reading its store from ctx's fixer stores; tests wrap it.
+	// See retireWriter.
+	retireWriterFor func(ctx context.Context, w *repairs.Writer) (retireWriter, error)
 }
 
 func newRetiredVersionsFixer(p *Plugin) *retiredVersionsFixer {

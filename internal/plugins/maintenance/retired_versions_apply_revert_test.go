@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/retired_versions_apply_revert_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 9b2e5d74-1c38-4f06-a7d9-6e0b3f8a2c51
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
 import (
+	"context"
 	"encoding/json"
 	"sync/atomic"
 	"testing"
@@ -30,8 +31,8 @@ func cutOffThenFinishedByAFreshPlan(t *testing.T, rf *retiredFixture) (shell, ho
 	res := rf.planAll()
 	var armed atomic.Bool
 	armed.Store(true)
-	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
-		inner, err := rf.f.newJournaledRetireWriter(w)
+	rf.f.retireWriterFor = func(ctx context.Context, w *repairs.Writer) (retireWriter, error) {
+		inner, err := rf.f.newJournaledRetireWriter(ctx, w)
 		return failingExternalIDs{inner, &armed}, err
 	}
 	shell, holder = rf.ids["would-retire"], rf.ids["primary"]
@@ -115,8 +116,8 @@ func TestRetiredApply_TailMovesOnlyThePlannedExternalIDs(t *testing.T) {
 	res := rf.planAll()
 	var armed atomic.Bool
 	armed.Store(true)
-	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
-		inner, err := rf.f.newJournaledRetireWriter(w)
+	rf.f.retireWriterFor = func(ctx context.Context, w *repairs.Writer) (retireWriter, error) {
+		inner, err := rf.f.newJournaledRetireWriter(ctx, w)
 		return failingExternalIDs{inner, &armed}, err
 	}
 	shell, holder := rf.ids["would-retire"], rf.ids["primary"]

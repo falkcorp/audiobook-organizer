@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_versions_decision_records_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 4e7d92b1-5a38-4c06-b2f9-8d1a63c0e745
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -151,8 +151,8 @@ func TestRetiredApply_TailFinishWritesTheAppliedRecordACutOffRetireMissed(t *tes
 	rf.seedApplyLibrary()
 	res := rf.planAll()
 	orig := rf.f.retireWriterFor
-	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
-		inner, err := orig(w)
+	rf.f.retireWriterFor = func(ctx context.Context, w *repairs.Writer) (retireWriter, error) {
+		inner, err := orig(ctx, w)
 		return cutAfterRetireRows{inner}, err
 	}
 	shell := rf.ids["would-retire"]
@@ -258,8 +258,8 @@ func TestRetiredApply_TailFinishNamesTheRetireOpsUserNotTheFinishers(t *testing.
 	rf.seedApplyLibrary()
 	res := rf.planAll()
 	orig := rf.f.retireWriterFor
-	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
-		inner, err := orig(w)
+	rf.f.retireWriterFor = func(ctx context.Context, w *repairs.Writer) (retireWriter, error) {
+		inner, err := orig(ctx, w)
 		return cutAfterRetireRows{inner}, err
 	}
 	shell := rf.ids["would-retire"]
@@ -289,8 +289,8 @@ func TestRetiredApply_TailFinishWithNoRetireOpRowIsAutomatic(t *testing.T) {
 	rf.seedApplyLibrary()
 	res := rf.planAll()
 	orig := rf.f.retireWriterFor
-	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
-		inner, err := orig(w)
+	rf.f.retireWriterFor = func(ctx context.Context, w *repairs.Writer) (retireWriter, error) {
+		inner, err := orig(ctx, w)
 		return cutAfterRetireRows{inner}, err
 	}
 	shell := rf.ids["would-retire"]
@@ -362,8 +362,8 @@ func TestRetiredApply_TailFinishByTheSameOpUsesItsOwnProvenance(t *testing.T) {
 	rf.seedApplyLibrary()
 	res := rf.planAll()
 	orig := rf.f.retireWriterFor
-	rf.f.retireWriterFor = func(w *repairs.Writer) (retireWriter, error) {
-		inner, err := orig(w)
+	rf.f.retireWriterFor = func(ctx context.Context, w *repairs.Writer) (retireWriter, error) {
+		inner, err := orig(ctx, w)
 		return cutAfterRetireRows{inner}, err
 	}
 	shell := rf.ids["would-retire"]
