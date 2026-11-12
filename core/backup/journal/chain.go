@@ -1,5 +1,5 @@
 // file: core/backup/journal/chain.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1da2b496-21d3-4218-8a94-2e19379880f4
 // last-edited: 2026-11-11
 
@@ -264,13 +264,22 @@ func claimedEnd(c *Chain, rest [][]byte, want uint64) uint64 {
 }
 
 // ReadFile reads and verifies the journal at path. A file that does not exist
-// is an error satisfying os.ErrNotExist; an empty one yields an empty Chain.
+// is an error satisfying os.ErrNotExist; an empty one yields an empty Chain; a
+// path that is not a regular file, or is a symbolic link, is ErrNotRegular (the
+// journal is never read through a link planted on its share, for the same
+// reason it is never written through one).
 func ReadFile(path string, keys Keys) (c *Chain, err error) {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow, 0)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		return nil, openError("open", path, err)
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
+	if err := regularFile(f); err != nil {
+		return nil, err
+	}
 	data, err := io.ReadAll(f)
 	if err != nil {
 		return nil, fmt.Errorf("journal: read %s: %w", path, err)
@@ -292,9 +301,9 @@ type Covered struct {
 // boundary only when the journal's install_id equals installID, the chain
 // verifies from boundary to the pre-swap store's journal_head (it is intact,
 // keeps every line after boundary, is not truncated below that head and holds
-// the line the store committed there), and no gap lies after boundary (a gap
+// the line the store committed there), no gap lies after boundary (a gap
 // line in the journal, or an open journal_gap/ record in the pre-swap store:
-// gapOpen). Foreign, host-loss and external restores have no pre-swap store
+// gapOpen), and no line after it is of a kind this build cannot apply. Foreign, host-loss and external restores have no pre-swap store
 // and never call it: they get nil without asking.
 func (c *Chain) Cover(installID string, boundary uint64, preSwap Head, gapOpen bool) Covered {
 	switch {
@@ -318,6 +327,11 @@ func (c *Chain) Cover(installID string, boundary uint64, preSwap Head, gapOpen b
 	}
 	if c.Has(boundary, func(l Line) bool { return l.Kind == Gap }) {
 		return Covered{Why: "a gap line lies after the boundary"}
+	}
+	if c.Has(boundary, func(l Line) bool { return IsRevocation(l.Kind) && !KnownKind(l.Kind) }) {
+		// A hook applies the lines it is given and skips what it does not know:
+		// a line of a newer build's kind would be silently dropped.
+		return Covered{Why: "a line after the boundary is of a kind this build cannot apply"}
 	}
 	var out []Line
 	for l := range c.After(boundary) {

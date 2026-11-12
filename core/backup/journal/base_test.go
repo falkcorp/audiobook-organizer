@@ -1,5 +1,5 @@
 // file: core/backup/journal/base_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c19e4a3-5d80-4b27-a6f1-3e8d09b2c571
 // last-edited: 2026-11-11
 
@@ -7,6 +7,7 @@ package journal
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,7 +84,9 @@ func TestCreateBased_StartsBelowAStoreHead(t *testing.T) {
 }
 
 // TestChain_FingerprintAndLatch: the fingerprint of a broken journal state
-// changes with the break, the head and the fork flag, and the latch stores one.
+// changes with the break, the head and the state tag, not with the file's
+// claimed end (a forged seq would mint a new fingerprint every boot), and the
+// latch stores one.
 func TestChain_FingerprintAndLatch(t *testing.T) {
 	ctx := context.Background()
 	fx := newFixture(t)
@@ -95,16 +98,20 @@ func TestChain_FingerprintAndLatch(t *testing.T) {
 	fx.write(t, lines[0], edited[1], lines[2])
 	other := fx.chain(t)
 
-	a := broken.Fingerprint(Head{Seq: 1}, false)
+	a := broken.Fingerprint(Head{Seq: 1}, "")
+	claimsMore := *broken
+	claimsMore.ClaimedEnd = math.MaxUint64
 	for name, b := range map[string]string{
-		"another head":       broken.Fingerprint(Head{Seq: 2}, false),
-		"forked":             broken.Fingerprint(Head{Seq: 1}, true),
-		"another break":      other.Fingerprint(Head{Seq: 1}, false),
-		"an intact chain":    (&Chain{}).Fingerprint(head, false),
+		"another head":       broken.Fingerprint(Head{Seq: 2}, ""),
+		"forked":             broken.Fingerprint(Head{Seq: 1}, "forked"),
+		"another break":      other.Fingerprint(Head{Seq: 1}, ""),
+		"an intact chain":    (&Chain{}).Fingerprint(head, ""),
 		"the same, repeated": a,
+		"a longer claim":     claimsMore.Fingerprint(Head{Seq: 1}, ""),
 	} {
-		if (b == a) != (name == "the same, repeated") {
-			t.Errorf("%s: fingerprint equal = %v", name, b == a)
+		same := name == "the same, repeated" || name == "a longer claim"
+		if (b == a) != same {
+			t.Errorf("%s: fingerprint equal = %v, want %v", name, b == a, same)
 		}
 	}
 

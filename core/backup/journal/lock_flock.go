@@ -1,7 +1,7 @@
 // file: core/backup/journal/lock_flock.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 75a49a61-111f-44fd-a9f3-316c5c6ebe2a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 //go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly
 
@@ -13,6 +13,10 @@ import (
 	"os"
 	"syscall"
 )
+
+// openNoFollow makes an open fail on a symbolic link at the last component of
+// the path (O_NOFOLLOW) instead of following it.
+const openNoFollow = syscall.O_NOFOLLOW
 
 // lockJournal takes flock(2) LOCK_EX on the open journal, without waiting.
 // The lock belongs to this open file description, so a second OpenFile of
