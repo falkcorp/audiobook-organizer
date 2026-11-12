@@ -1,7 +1,7 @@
 // file: core/internal/storagemigrate/run.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 98f094d6-2e4a-420d-b36c-e26822f5cc4d
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 package storagemigrate
 
@@ -437,13 +437,33 @@ func (run *shardRun) chunk(ctx context.Context, s *shardState, items []item) err
 
 // newBatch is a chunk's batch: from the source handle, with c/storage/
 // bound for the cursor and the held-item records.
+//
+// A Cutover step's batch is indexed (reads see the chunk's own writes). The
+// step hands it to importers through StepWriter.Batch, and an importer
+// that reads before it writes needs that: auth.Importer refuses a key whose
+// owner is not stored and finds one staged earlier in the same chunk only
+// through an indexed batch (authstore.ownerPresent), and tasks.NativeImporter
+// refuses a plain batch outright (tasks.ErrBatchNotIndexed). A chunk holds up
+// to ChunkItems source rows, so an owner and its keys routinely share one. The
+// index costs memory for the entries of one chunk (at most ChunkBytes of
+// staged writes plus an importer's), which a cutover step pays once. Every
+// other step's batch stays write-only.
 func (run *shardRun) newBatch() *storage.Batch {
 	var b *storage.Batch
+	indexed := run.mg.m.Cutover
 	switch h := run.src.(type) {
 	case storage.LegacyRange:
-		b = h.NewBatch()
+		if indexed {
+			b = h.NewIndexedBatch()
+		} else {
+			b = h.NewBatch()
+		}
 	case storage.Keyspace:
-		b = h.NewBatch()
+		if indexed {
+			b = h.NewIndexedBatch()
+		} else {
+			b = h.NewBatch()
+		}
 	}
 	return b.Bind(run.sks)
 }

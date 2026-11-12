@@ -1,7 +1,7 @@
 // file: core/internal/storagemigrate/modes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e528233b-da81-41a8-ac2d-88da078cb86c
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 package storagemigrate_test
 
@@ -84,6 +84,24 @@ func TestStepWriterModeRules(t *testing.T) {
 			_ = w.Batch().Commit(ctx, storage.Sync) // a careless importer: the chunk's batch is for staging
 			return nil
 		}), storage.ErrBatchDone)
+	})
+	t.Run("a cutover chunk's batch is indexed", func(t *testing.T) {
+		// An importer that reads before it writes (auth.Importer's owner check,
+		// tasks.NativeImporter) finds what an earlier item of the chunk staged
+		// only through an indexed batch, and an owner and its keys share a chunk.
+		var steps, plain int
+		m := cutStep(func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+			steps++
+			if !w.Batch().Indexed() {
+				plain++
+			}
+			return w.Delete(kv.Key)
+		})
+		e := legacy(t)
+		e.mustBoot(e.runner(storagemigrate.Options{}, m))
+		if steps != 20 || plain != 0 {
+			t.Fatalf("%d of %d steps saw a plain chunk batch, want every Batch() indexed", plain, steps)
+		}
 	})
 	t.Run("Set in a retired claim", func(t *testing.T) {
 		failsWith(t, legacy(t), cutStep(func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
