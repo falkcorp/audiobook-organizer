@@ -1,0 +1,211 @@
+// file: internal/cfaccess/verifier.go
+// version: 1.2.3
+// guid: 3a7e0c92-8b41-4d56-9f08-1c6b2a5d7e39
+// last-edited: 2026-11-11
+
+// Package cfaccess is ABO's Cloudflare Access adapter (04 §2.4, G11: deployment-
+// specific): the Access JWT verifier, the gin binder and the service-token
+// recovery HEAD's gin chain still uses, the owner-guard route middleware and,
+// from F4-03, the auth.Extension core's stage 12 runs once F4-08 registers it.
+// Core ships no Cloudflare code.
+package cfaccess
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	oidc "github.com/coreos/go-oidc/v3/oidc"
+
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
+)
+
+// ErrNonIdentityAssertion reports an Access token that is cryptographically VALID —
+// correct signature, issuer, expiry and aud — but carries no identity, i.e. no email
+// claim. Cloudflare mints exactly this shape for a service token, where the caller is
+// a machine credential rather than a person.
+//
+// It is a distinct sentinel because "no identity in this token" and "this token is
+// not trustworthy" demand opposite handling. A forged or expired token must be a
+// terminal 401: the credential is bad and no other credential should rescue it. A
+// non-identity token is merely silent about who the caller is, so the request should
+// fall through to whatever other credential it carries — for us, the ABS bearer token
+// — instead of being rejected outright. Collapsing the two (the original bug) made a
+// service token fatal even when the request also presented a perfectly valid bearer,
+// which is precisely the Mode B topology the edge is configured for.
+//
+// Callers MUST match with errors.Is, not string comparison; it is returned wrapped.
+var ErrNonIdentityAssertion = errors.New("cfaccess: assertion carries no identity (no email claim)")
+
+// NonIdentityAssertionError is ErrNonIdentityAssertion plus the claims worth logging.
+//
+// 🔴 CommonName IS NOT IDENTITY AND MUST NEVER RESOLVE A USER. It names a
+// CREDENTIAL (a Cloudflare service token's Client ID), not a person: the owner mints
+// several group-scoped tokens — friends, family, other, testing — so that revoking
+// one affects only that group. Several people share one token and one person may
+// carry different tokens on different devices. Identity comes from SSO and nowhere
+// else. This value exists ONLY so per-group activity is visible in the audit log
+// ("has the testing token been used in three weeks?") and so a token↔person pairing
+// that changes is noticeable.
+type NonIdentityAssertionError struct {
+	Subject    string
+	CommonName string
+}
+
+func (e *NonIdentityAssertionError) Error() string {
+	return fmt.Sprintf("%s (sub=%q common_name=%q)", ErrNonIdentityAssertion.Error(), e.Subject, e.CommonName)
+}
+
+// Unwrap keeps errors.Is(err, ErrNonIdentityAssertion) working for every existing
+// caller — the fall-through-to-bearer branch in ResolveCFAssertion depends on it.
+func (e *NonIdentityAssertionError) Unwrap() error { return ErrNonIdentityAssertion }
+
+// CFAssertionCommonName recovers the service-token common_name from an error
+// returned by Verify, or "" when the error is not a non-identity assertion.
+func CFAssertionCommonName(err error) string {
+	if nie, ok := errors.AsType[*NonIdentityAssertionError](err); ok {
+		return nie.CommonName
+	}
+	return ""
+}
+
+// ErrKeysUnavailable reports that Cloudflare's signing keys could not be
+// fetched, so the token could not be judged either way. It is not "the token
+// is invalid": a caller must not refuse a request on it as it would for a
+// forged token, and must not accept one either (fail closed: no identity is
+// granted). Match with errors.Is; it is returned wrapped and carries no URL.
+var ErrKeysUnavailable = errors.New("cfaccess: signing keys unavailable")
+
+// CFAssertionVerifier is the slice of *CFAccessVerifier the ABS identity
+// resolver, the gin binder and the service-token bouncer need. Declared as an
+// interface so tests can inject a verifier without standing up Cloudflare's
+// JWKS endpoint. It moved here from internal/server/middleware/absauth.go
+// (04 §2.4), so the import runs absauth -> cfaccess and never back.
+type CFAssertionVerifier interface {
+	Verify(ctx context.Context, rawJWT string) (*legacyoauth.IdentityClaims, error)
+}
+
+// CFAccessHeader is the request header Cloudflare Access injects with the signed
+// application token once a user has authenticated at the edge.
+const CFAccessHeader = "Cf-Access-Jwt-Assertion"
+
+// CFAccessVerifier verifies a Cloudflare Access application JWT against the team's
+// public JWKS and the expected AUD (Access application audience) tag. The JWT — NOT
+// the convenience Cf-Access-Authenticated-User-Email header — is the trust anchor:
+// the header is unsigned and spoofable to a direct-to-origin request.
+type CFAccessVerifier struct {
+	verifier *oidc.IDTokenVerifier
+}
+
+// NewCFAccessVerifier builds a verifier bound to the team domain (e.g.
+// "myteam.cloudflareaccess.com") and the Access application AUD tag. Its keys
+// come from a keyCache: fetched on first use, refreshed hourly, and refetched
+// for an unknown kid at most once per half minute, so a caller choosing kids
+// cannot make it fetch, and a key Cloudflare withdraws stops verifying.
+//
+// A fetch that fails (the network, any status other than 200 including a
+// redirect, a body that is not a key set) surfaces as ErrKeysUnavailable and
+// never as "this token is forged": the extension opens to the next method on
+// the first and refuses on the second.
+func NewCFAccessVerifier(ctx context.Context, teamDomain, aud string) (*CFAccessVerifier, error) {
+	return newCFAccessVerifier(ctx, teamDomain, aud, verifierOptions{})
+}
+
+// keysTimeout bounds one key-set fetch.
+const keysTimeout = 10 * time.Second
+
+// verifierOptions are the seams a test sets; production passes the zero value
+// (the default HTTP client, the real clock). A struct, not option functions: a
+// function only a test calls is dead code to the deadcode ratchet.
+type verifierOptions struct {
+	hc  *http.Client     // the client the key fetch uses (a test's trusts its fake team domain)
+	now func() time.Time // the key cache's clock
+}
+
+func newCFAccessVerifier(ctx context.Context, teamDomain, aud string, o verifierOptions) (*CFAccessVerifier, error) {
+	teamDomain = strings.TrimSpace(teamDomain)
+	aud = strings.TrimSpace(aud)
+	if teamDomain == "" || aud == "" {
+		return nil, fmt.Errorf("cfaccess: team domain and AUD are required")
+	}
+	if o.hc == nil {
+		o.hc = &http.Client{}
+	}
+	if o.now == nil {
+		o.now = time.Now
+	}
+	issuer := "https://" + teamDomain
+	keySet := newKeyCache(ctx, issuer+"/cdn-cgi/access/certs", o.hc, o.now)
+	verifier := oidc.NewVerifier(issuer, keySet, &oidc.Config{ClientID: aud}) // ClientID = expected aud
+	return &CFAccessVerifier{verifier: verifier}, nil
+}
+
+// VerifiedAssertion is a verified Access token: the identity, and when
+// Cloudflare issued the token.
+type VerifiedAssertion struct {
+	Claims *legacyoauth.IdentityClaims
+	// IssuedAt is the token's iat; zero when the token has none. It is when
+	// Cloudflare authenticated the user, which is what an auth time means.
+	IssuedAt time.Time
+}
+
+// Verify checks the signature, issuer, expiry, and aud of a Cloudflare Access JWT and
+// returns the verified identity. Cloudflare only mints this token after its own IdP
+// login, so the email is verified.
+func (v *CFAccessVerifier) Verify(ctx context.Context, rawJWT string) (*legacyoauth.IdentityClaims, error) {
+	va, err := v.VerifyIssued(ctx, rawJWT)
+	if err != nil {
+		return nil, err
+	}
+	return va.Claims, nil
+}
+
+// VerifyIssued is Verify that also returns the token's issue time.
+func (v *CFAccessVerifier) VerifyIssued(ctx context.Context, rawJWT string) (*VerifiedAssertion, error) {
+	pr := &keyProbe{}
+	tok, err := v.verifier.Verify(context.WithValue(ctx, keyProbeKey{}, pr), rawJWT)
+	if err != nil {
+		if pr.unavailable.Load() {
+			// go-oidc wraps a key-set error with %v, which drops the chain
+			// errors.Is would follow; the probe saw it first-hand.
+			return nil, fmt.Errorf("cfaccess: verify jwt: %w", ErrKeysUnavailable)
+		}
+		return nil, fmt.Errorf("cfaccess: verify jwt: %w", err)
+	}
+	var claims struct {
+		Email string `json:"email"`
+		Sub   string `json:"sub"`
+		// CommonName is the service token's Client ID. Cloudflare sets it on
+		// machine credentials and never on a human login, so it is the ONLY
+		// attribution available for a service-token request — see
+		// NonIdentityAssertionError.
+		CommonName string `json:"common_name"`
+	}
+	if err := tok.Claims(&claims); err != nil {
+		return nil, fmt.Errorf("cfaccess: parse claims: %w", err)
+	}
+	if claims.Email == "" {
+		// Wrapped in a TYPED error, not a bare one, so the caller can recover the
+		// common_name for logging while errors.Is(err, ErrNonIdentityAssertion) still
+		// matches. Reaching here means the signature/issuer/aud checks above all
+		// PASSED — this is a trusted token that simply names no person.
+		return nil, &NonIdentityAssertionError{Subject: claims.Sub, CommonName: claims.CommonName}
+	}
+	subject := claims.Sub
+	if subject == "" {
+		subject = claims.Email // fall back to email as the stable id
+	}
+	return &VerifiedAssertion{
+		Claims: &legacyoauth.IdentityClaims{
+			Provider:      legacyoauth.ProviderCFAccess,
+			Subject:       subject,
+			Email:         claims.Email,
+			EmailVerified: true,
+			Name:          "",
+		},
+		IssuedAt: tok.IssuedAt,
+	}, nil
+}

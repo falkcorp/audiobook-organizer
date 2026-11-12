@@ -243,6 +243,11 @@ internal/books/store.boolInt
 internal/books/store.dbGate.closing
 internal/books/store.setRowScanFault
 internal/books/store.setRowScanFaultWithClose
+internal/cfaccess.Extension
+internal/cfaccess.extension.Authenticate
+internal/cfaccess.extension.Name
+internal/cfaccess.extension.authenticate
+internal/cfaccess.extension.warn
 internal/decisions.AuthorTombstoneResolver
 internal/decisions.MaterialHash
 internal/decisions.Prefixes

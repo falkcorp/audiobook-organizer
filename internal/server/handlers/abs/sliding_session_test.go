@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/sliding_session_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: e1047d7e-5e2b-4df6-aa64-51878f896f74
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 package abs_test
 
@@ -13,7 +13,8 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 )
 
 const sDay = 24 * time.Hour
@@ -96,14 +97,14 @@ func TestRefresh_GraceReplaySlidesSessionExpiry(t *testing.T) {
 
 func TestRefresh_CFReuseSlidesSessionExpiry(t *testing.T) {
 	ch := newClockedHarness(t, []string{"owner@example.com"})
-	ch.verifier.byToken["good"] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|owner", Email: "owner@example.com", EmailVerified: true,
+	ch.verifier.byToken["good"] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|owner", Email: "owner@example.com", EmailVerified: true,
 	}
 	refresh := str(t, userObj(t, ch.login(t, "owner", "pw-pw-pw-pw")), "refreshToken")
 	sessionID := ch.onlySession(t).ID
 
 	ch.now = ch.t0.Add(40 * sDay)
-	if code, _, _ := ch.refresh(t, refresh, map[string]string{oauth.CFAccessHeader: "good"}); code != http.StatusOK {
+	if code, _, _ := ch.refresh(t, refresh, map[string]string{cfaccess.CFAccessHeader: "good"}); code != http.StatusOK {
 		t.Fatalf("CF refresh got %d", code)
 	}
 	s := ch.onlySession(t)
@@ -303,14 +304,14 @@ func TestRefresh_StaleCredentialEpochIsRefusedBeforeAnyWrite(t *testing.T) {
 // mints a fresh one under the current epoch instead.
 func TestRefresh_CFDoesNotReuseAStaleEpochSession(t *testing.T) {
 	ch := newClockedHarness(t, []string{"owner@example.com"})
-	ch.verifier.byToken["good"] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|owner", Email: "owner@example.com", EmailVerified: true,
+	ch.verifier.byToken["good"] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|owner", Email: "owner@example.com", EmailVerified: true,
 	}
 	refresh := str(t, userObj(t, ch.login(t, "owner", "pw-pw-pw-pw")), "refreshToken")
 	old := ch.onlySession(t)
 	ch.setCredentialEpoch(1)
 
-	if code, _, _ := ch.refresh(t, refresh, map[string]string{oauth.CFAccessHeader: "good"}); code != http.StatusOK {
+	if code, _, _ := ch.refresh(t, refresh, map[string]string{cfaccess.CFAccessHeader: "good"}); code != http.StatusOK {
 		t.Fatalf("CF refresh got %d", code)
 	}
 	ch.store.mu.Lock()

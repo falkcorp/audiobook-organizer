@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.9
+// version: 1.5.10
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -189,6 +189,8 @@ var layerOf = map[string]int{
 	"internal/identification":           3, // computed: max of imports=2 (database), floored at 3
 	"internal/itunes":                   3, // table: domain
 	"internal/itunesguard":              3, // computed: max of imports=3, floored at 3
+	"internal/cfaccess":                 3, // computed: max of imports=3 (auth, legacyoauth), floored at 3. 04 §2.4 says 5: that holds once internal/httputil computes to 5 (§8.4 note 3, R1); at BASE it is a layer-0 leaf, and the layering test refuses a layer above the computed one
+	"internal/legacyoauth":              3, // computed: max of imports=2, floored at 3; the HEAD gin-chain OAuth and ResolveUser over database.Store, deleted at F4-08 with the routes that call it
 	"internal/mail/mailtest":            3, // computed: max of imports=0, floored at 3
 	"internal/mediainfo":                3, // computed: max of imports=0, floored at 3
 	"internal/merge":                    3, // table: domain
@@ -197,7 +199,6 @@ var layerOf = map[string]int{
 	"internal/metadata/providerhttp":    3, // computed: max of imports=0, floored at 3
 	"internal/metafetch":                3, // table: domain
 	"internal/metrics/metricstest":      3, // computed: max of imports=0, floored at 3
-	"internal/oauth":                    3, // computed: max of imports=2, floored at 3
 	"internal/operations":               3, // computed: max of imports=0, floored at 3
 	"internal/operations/childop":       3, // computed: max of imports=2, floored at 3
 	"internal/operations/opswriter":     3, // computed: max of imports=3 (undo, pkg/ops), floored at 3

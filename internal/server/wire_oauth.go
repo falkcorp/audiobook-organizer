@@ -1,7 +1,7 @@
 // file: internal/server/wire_oauth.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5c2e8b04-7a19-4d63-8f05-3b6a0c9e2d47
-// last-edited: 2026-10-21
+// last-edited: 2026-11-11
 
 package server
 
@@ -12,8 +12,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
@@ -22,12 +23,12 @@ import (
 // the Access middleware. Set only by tests in this package (before
 // NewServer), so the real router can be driven with Access identities
 // without Cloudflare's keys; production never assigns it.
-var cfAccessVerifierOverride servermiddleware.CFAssertionVerifier
+var cfAccessVerifierOverride cfaccess.CFAssertionVerifier
 
 // buildOAuthWiring constructs the OAuth login handler and the Cloudflare Access
 // middleware from config. Returns (nil-safe handler, cfMiddleware-or-nil,
 // recoveryMiddleware-or-nil). The recovery middleware is the web UI's
-// service-token browser recovery (servermiddleware.CFServiceTokenRecovery) built
+// service-token browser recovery (cfaccess.CFServiceTokenRecovery) built
 // on the same verifier as cfMW, so it exists exactly when cfMW does; it belongs on
 // the SPA page routes, not the API. Nothing is enabled unless configured, and a
 // provider/verifier that fails to initialize is logged and skipped rather than
@@ -43,14 +44,14 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 	if redirectBase == "" {
 		redirectBase = s.externalURL
 	}
-	cfg := oauth.New(oauth.Config{
+	cfg := legacyoauth.New(legacyoauth.Config{
 		Enabled:            cfgSnap.OAuthEnabled,
 		GitHubClientID:     cfgSnap.OAuthGithubClientID,
 		GitHubClientSecret: cfgSnap.OAuthGithubClientSecret,
 		GoogleClientID:     cfgSnap.OAuthGoogleClientID,
 		GoogleClientSecret: cfgSnap.OAuthGoogleClientSecret,
 		RedirectBaseURL:    redirectBase,
-		AllowedEmails:      oauth.ParseAllowedEmails(cfgSnap.OAuthAllowedEmails),
+		AllowedEmails:      legacyoauth.ParseAllowedEmails(cfgSnap.OAuthAllowedEmails),
 		DefaultRole:        cfgSnap.OAuthDefaultRole,
 		CFAccessTeamDomain: cfgSnap.CFAccessTeamDomain,
 		CFAccessAUD:        cfgSnap.CFAccessAUD,
@@ -58,7 +59,7 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 		OnEmailDisplaced:   s.recordEmailDisplaced,
 	})
 
-	codec, err := oauth.NewStateCodec(10 * time.Minute)
+	codec, err := legacyoauth.NewStateCodec(10 * time.Minute)
 	if err != nil {
 		slog.Error("oauth: state codec init failed — OAuth login disabled", "err", err)
 		return nil, nil, nil
@@ -68,14 +69,14 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 	discoveryCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	providers := map[string]oauth.Provider{}
-	if cfg.ProviderEnabled(oauth.ProviderGitHub) {
-		providers[oauth.ProviderGitHub] = oauth.NewGitHubProvider(cfg.GitHubClientID, cfg.GitHubClientSecret)
+	providers := map[string]legacyoauth.Provider{}
+	if cfg.ProviderEnabled(legacyoauth.ProviderGitHub) {
+		providers[legacyoauth.ProviderGitHub] = legacyoauth.NewGitHubProvider(cfg.GitHubClientID, cfg.GitHubClientSecret)
 		slog.Info("oauth: GitHub login enabled")
 	}
-	if cfg.ProviderEnabled(oauth.ProviderGoogle) {
-		if g, gerr := oauth.NewGoogleProvider(discoveryCtx, cfg.GoogleClientID, cfg.GoogleClientSecret); gerr == nil {
-			providers[oauth.ProviderGoogle] = g
+	if cfg.ProviderEnabled(legacyoauth.ProviderGoogle) {
+		if g, gerr := legacyoauth.NewGoogleProvider(discoveryCtx, cfg.GoogleClientID, cfg.GoogleClientSecret); gerr == nil {
+			providers[legacyoauth.ProviderGoogle] = g
 			slog.Info("oauth: Google login enabled")
 		} else {
 			slog.Error("oauth: Google OIDC discovery failed — Google login disabled", "err", gerr)
@@ -92,14 +93,14 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 	// discovery timeout context above.
 	var cfMW, cfRecoveryMW gin.HandlerFunc
 	if cfAccessVerifierOverride != nil {
-		cfMW = servermiddleware.CloudflareAccessAuth(
-			servermiddleware.NewCFAccessAuthenticatorWithVerifier(cfAccessVerifierOverride, cfg, s.storeForWiring()))
+		cfMW = cfaccess.CloudflareAccessAuth(
+			cfaccess.NewCFAccessAuthenticatorWithVerifier(cfAccessVerifierOverride, cfg, s.storeForWiring(), servermiddleware.CFAccessHooks(s.storeForWiring())))
 		cfRecoveryMW = newCFRecoveryMiddleware(cfAccessVerifierOverride)
 		s.loginCeilingExempt = newAccessExemption(cfAccessVerifierOverride, cfg)
 	} else if cfg.CFAccessTeamDomain != "" && cfg.CFAccessAUD != "" {
-		if v, verr := oauth.NewCFAccessVerifier(context.Background(), cfg.CFAccessTeamDomain, cfg.CFAccessAUD); verr == nil {
-			cfMW = servermiddleware.CloudflareAccessAuth(
-				servermiddleware.NewCFAccessAuthenticator(v, cfg, s.storeForWiring()))
+		if v, verr := cfaccess.NewCFAccessVerifier(context.Background(), cfg.CFAccessTeamDomain, cfg.CFAccessAUD); verr == nil {
+			cfMW = cfaccess.CloudflareAccessAuth(
+				cfaccess.NewCFAccessAuthenticator(v, cfg, s.storeForWiring(), servermiddleware.CFAccessHooks(s.storeForWiring())))
 			cfRecoveryMW = newCFRecoveryMiddleware(v)
 			s.loginCeilingExempt = newAccessExemption(v, cfg)
 			slog.Info("oauth: Cloudflare Access identity passthrough enabled", "team", cfg.CFAccessTeamDomain)

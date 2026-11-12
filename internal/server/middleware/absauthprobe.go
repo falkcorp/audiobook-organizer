@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauthprobe.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c9f21a7-3e64-48db-b0d2-9a8e7c4f6103
-// last-edited: 2026-10-20
+// last-edited: 2026-11-11
 
 package middleware
 
@@ -11,8 +11,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
 // ABSAuthProbeEnvVar gates the probe. Unset/empty = the middleware is never
@@ -46,7 +46,7 @@ const ABSAuthProbeEnvVar = "ABS_AUTH_PROBE"
 // is an explicit act, and leaving it on is visible in the unit file.
 func ABSAuthProbe() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		assertion := strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader))
+		assertion := strings.TrimSpace(c.GetHeader(cfaccess.CFAccessHeader))
 		authz := strings.TrimSpace(c.GetHeader("Authorization"))
 
 		// The edge cookie. Its presence is the whole question: it means the app's API
@@ -70,7 +70,7 @@ func ABSAuthProbe() gin.HandlerFunc {
 			if strings.HasPrefix(strings.ToUpper(ck.Name), "CF_") {
 				cfCookieLen += len(ck.Value)
 			}
-			if strings.EqualFold(ck.Name, CFAuthorizationCookie) {
+			if strings.EqualFold(ck.Name, cfaccess.CFAuthorizationCookie) {
 				cfAuthLen += len(ck.Value)
 			}
 		}

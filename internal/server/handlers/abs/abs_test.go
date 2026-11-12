@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/abs_test.go
-// version: 1.10.3
+// version: 1.10.4
 // guid: 2c07b5e9-4d16-48fa-b930-71e5c8a04f6d
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package abs_test
 
@@ -20,7 +20,8 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -302,7 +303,7 @@ func (f *fakeStore) RevokeAllABSSessionsForUser(userID string) (int, error) {
 // ── fake CF verifier ────────────────────────────────────────────────────────
 
 type fakeVerifier struct {
-	byToken map[string]*oauth.IdentityClaims
+	byToken map[string]*legacyoauth.IdentityClaims
 	// serviceTokens maps a raw assertion to a service token's common_name. Such
 	// an assertion verifies but names no person, which is exactly what Cloudflare
 	// mints for a request admitted on a service token (the shape SSO hop 1 and,
@@ -310,12 +311,12 @@ type fakeVerifier struct {
 	serviceTokens map[string]string
 }
 
-func (f *fakeVerifier) Verify(_ context.Context, raw string) (*oauth.IdentityClaims, error) {
+func (f *fakeVerifier) Verify(_ context.Context, raw string) (*legacyoauth.IdentityClaims, error) {
 	if c, ok := f.byToken[raw]; ok {
 		return c, nil
 	}
 	if cn, ok := f.serviceTokens[raw]; ok {
-		return nil, &oauth.NonIdentityAssertionError{Subject: "", CommonName: cn}
+		return nil, &cfaccess.NonIdentityAssertionError{Subject: "", CommonName: cn}
 	}
 	return nil, errors.New("cfaccess: verify jwt: signature is invalid")
 }
@@ -387,8 +388,8 @@ func newHarness(t *testing.T, modes string, allowed []string, opts ...harnessOpt
 		t.Fatalf("absauth.Load: %v", err)
 	}
 	store := newFakeStore()
-	verifier := &fakeVerifier{byToken: map[string]*oauth.IdentityClaims{}, serviceTokens: map[string]string{}}
-	resolver := servermiddleware.NewABSIdentityResolver(cfg, verifier, oauth.New(oauth.Config{AllowedEmails: allowed, DefaultRole: "viewer"}), store)
+	verifier := &fakeVerifier{byToken: map[string]*legacyoauth.IdentityClaims{}, serviceTokens: map[string]string{}}
+	resolver := servermiddleware.NewABSIdentityResolver(cfg, verifier, legacyoauth.New(legacyoauth.Config{AllowedEmails: allowed, DefaultRole: "viewer"}), store)
 
 	o := abshandler.Options{Config: cfg, Store: store, Resolver: resolver}
 	for _, fn := range opts {
@@ -922,15 +923,15 @@ func TestLogin_MalformedBodyIs400NotPanic(t *testing.T) {
 
 func TestLogin_VerifiedAssertionSkipsPasswordCheck(t *testing.T) {
 	h := newHarness(t, "cf,jwt", []string{"owner@example.com"})
-	h.verifier.byToken["good"] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|owner",
+	h.verifier.byToken["good"] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|owner",
 		Email: "owner@example.com", EmailVerified: true,
 	}
 	w, body := h.do(t, request{
 		method: http.MethodPost, path: "/login",
 		// No password at all: the edge already authenticated a real person.
 		body:    map[string]any{},
-		headers: map[string]string{oauth.CFAccessHeader: "good"},
+		headers: map[string]string{cfaccess.CFAccessHeader: "good"},
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200: %s", w.Code, w.Body.String())
@@ -953,7 +954,7 @@ func TestLogin_InvalidAssertionIsHard401EvenWithGoodPassword(t *testing.T) {
 	w, _ := h.do(t, request{
 		method: http.MethodPost, path: "/login",
 		body:    map[string]any{"username": "owner", "password": "pw-pw-pw-pw"},
-		headers: map[string]string{oauth.CFAccessHeader: "forged"},
+		headers: map[string]string{cfaccess.CFAccessHeader: "forged"},
 	})
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d want 401 — a forged assertion must not fall through to password login", w.Code)
@@ -962,12 +963,12 @@ func TestLogin_InvalidAssertionIsHard401EvenWithGoodPassword(t *testing.T) {
 
 func TestLogin_NonAllowlistedAssertionIs403AndProvisionsNothing(t *testing.T) {
 	h := newHarness(t, "cf,jwt", []string{"owner@example.com"})
-	h.verifier.byToken["stranger"] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|stranger",
+	h.verifier.byToken["stranger"] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|stranger",
 		Email: "stranger@example.com", EmailVerified: true,
 	}
 	w, _ := h.do(t, request{method: http.MethodPost, path: "/login",
-		headers: map[string]string{oauth.CFAccessHeader: "stranger"}})
+		headers: map[string]string{cfaccess.CFAccessHeader: "stranger"}})
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("got %d want 403", w.Code)
 	}
@@ -1181,13 +1182,13 @@ func TestRefresh_AcceptsBodyForm(t *testing.T) {
 // — even with no refresh token at all.
 func TestRefresh_WithVerifiedAssertionAlwaysSucceeds(t *testing.T) {
 	h := newHarness(t, "cf,jwt", []string{"owner@example.com"})
-	h.verifier.byToken["good"] = &oauth.IdentityClaims{
-		Provider: oauth.ProviderCFAccess, Subject: "cf|owner",
+	h.verifier.byToken["good"] = &legacyoauth.IdentityClaims{
+		Provider: legacyoauth.ProviderCFAccess, Subject: "cf|owner",
 		Email: "owner@example.com", EmailVerified: true,
 	}
 	for _, hdrs := range []map[string]string{
-		{oauth.CFAccessHeader: "good"},
-		{oauth.CFAccessHeader: "good", "x-refresh-token": "abr_totally-bogus"},
+		{cfaccess.CFAccessHeader: "good"},
+		{cfaccess.CFAccessHeader: "good", "x-refresh-token": "abr_totally-bogus"},
 	} {
 		w, body := h.do(t, request{method: http.MethodPost, path: "/auth/refresh", headers: hdrs})
 		if w.Code != http.StatusOK {

@@ -1,7 +1,7 @@
 // file: internal/server/invite_gate_test.go
-// version: 1.29.3
+// version: 1.29.4
 // guid: a4acf753-a843-41d6-8769-4d28540be7e1
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package server
 
@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
@@ -58,7 +60,7 @@ func newInviteLimitHarness(t *testing.T, localPeer bool) *inviteLimitHarness {
 	r.Use(captureRawResponseController())
 	r.Use(func(c *gin.Context) {
 		if c.GetHeader("X-Test-Verified") != "" {
-			servermiddleware.MarkCFAccessVerified(c)
+			cfaccess.MarkCFAccessVerified(c)
 		}
 	})
 	r.GET("/invite/:token", limits.middleware(inviteTokenFromParam), func(c *gin.Context) { c.String(http.StatusOK, "ok") })
@@ -495,7 +497,7 @@ func TestTrustedClientIP(t *testing.T) {
 			}
 			r.Use(func(c *gin.Context) {
 				if tt.verified {
-					servermiddleware.MarkCFAccessVerified(c)
+					cfaccess.MarkCFAccessVerified(c)
 				}
 			})
 			var gotIP string

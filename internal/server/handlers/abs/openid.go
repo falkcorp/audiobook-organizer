@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/openid.go
-// version: 2.10.3
+// version: 2.10.4
 // guid: 3b8e5a14-70c9-4f26-9d51-a2c60f7b8e93
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package abs
 
@@ -25,8 +25,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreaudit "github.com/falkcorp/mediacore/audit"
@@ -167,7 +167,7 @@ import (
 //
 // The strict-OFF case is recovered server-side (2026-10-20), and a plain 302
 // cannot do it: a redirect cannot shed a cookie. A service-token browser
-// navigation is instead answered with a static page (middleware.WriteCFBouncePage)
+// navigation is instead answered with a static page (cfaccess.WriteCFBouncePage)
 // that meta-refreshes to hop 2 with reauth=N+1, and expires the poisoned
 // CF_Authorization cookie so that refresh reaches Cloudflare's identity login:
 //
@@ -181,7 +181,7 @@ import (
 // (middleware.InspectBrowserHop): requiring them would add no safety and would
 // deny the first load if the sheet did not send them. It still excludes API-key
 // and AppleCoreMedia requests and requires a service-token assertion. The same
-// helper recovers the web UI's own pages (middleware.CFServiceTokenRecovery),
+// helper recovers the web UI's own pages (cfaccess.CFServiceTokenRecovery),
 // which share paths with fetch and so DO require a browser navigation, and which
 // the same poisoned cookie locks out of the login.
 //
@@ -777,7 +777,7 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 	// The gate is Inspect's own test (a verified assertion with no email), not the
 	// log classification above: that one also needs a non-empty common_name.
 	if noPerson && reauthStage < oidcMaxReauth {
-		if info := h.resolver.ServiceTokenBouncer().InspectBrowserHop(c); info.Kind == servermiddleware.CFNavServiceToken {
+		if info := h.resolver.ServiceTokenBouncer().InspectBrowserHop(c); info.Kind == cfaccess.CFNavServiceToken {
 			if origin, ok := h.oidcOrigin(c); ok {
 				// Stage 0 expires only a cookie that is verifiably the service-token
 				// session. Stage 1 means that cookie (or one we could not classify)
@@ -786,17 +786,17 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 				expire := info.CookiePoisoned || (reauthStage >= 1 && !info.CookieIsPerson)
 				if reauthStage >= 1 {
 					oidcLog.Warn("openid browser hop reauth load still carried a service-token assertion: service_token=%s cf_cookies=%s caller=%s",
-						servermiddleware.CFLogName(servermiddleware.ABSServiceToken(c)), cfCookies,
+						cfaccess.CFLogName(servermiddleware.ABSServiceToken(c)), cfCookies,
 						logger.SanitizeLogValue(pending.CallerKey))
 				}
 				// Sec-Fetch values are logged because they are not required here
 				// (this route is browser-only) and nobody has yet confirmed what
 				// the ASWebAuthenticationSession sheet sends. "-" means absent.
 				oidcLog.Info("openid browser hop bouncing a service-token navigation: next_reauth=%d expire_cookie=%t service_token=%s sec_fetch_mode=%s sec_fetch_dest=%s caller=%s",
-					reauthStage+1, expire, servermiddleware.CFLogName(info.CommonName),
-					servermiddleware.CFLogHeader(info.SecFetchMode), servermiddleware.CFLogHeader(info.SecFetchDest),
+					reauthStage+1, expire, cfaccess.CFLogName(info.CommonName),
+					cfaccess.CFLogHeader(info.SecFetchMode), cfaccess.CFLogHeader(info.SecFetchDest),
 					logger.SanitizeLogValue(pending.CallerKey))
-				servermiddleware.WriteCFBouncePage(c, oidcBrowserURL(origin, reqID, reauthStage+1), expire)
+				cfaccess.WriteCFBouncePage(c, oidcBrowserURL(origin, reqID, reauthStage+1), expire)
 				return
 			}
 		}
@@ -807,7 +807,7 @@ func (h *Handler) OpenIDBrowser(c *gin.Context) {
 		// (the owner's fix is Cloudflare's own logout page), then deny below.
 		oidcLog.Warn("openid browser hop still carried a service-token assertion after recovery: service_token=%s cf_cookies=%s reauth=%d caller=%s; "+
 			"the browser's CF_Authorization session is a service token. Opening /cdn-cgi/access/logout on this host clears it",
-			servermiddleware.CFLogName(servermiddleware.ABSServiceToken(c)), cfCookies, reauthStage,
+			cfaccess.CFLogName(servermiddleware.ABSServiceToken(c)), cfCookies, reauthStage,
 			logger.SanitizeLogValue(pending.CallerKey))
 	}
 
@@ -1411,7 +1411,7 @@ const (
 // oidcAssertionKind classifies what Cloudflare forwarded on a hop-2 load.
 func oidcAssertionKind(c *gin.Context, identity *servermiddleware.ABSIdentity, authErr *servermiddleware.ABSAuthError) string {
 	switch {
-	case strings.TrimSpace(c.GetHeader(oauth.CFAccessHeader)) == "":
+	case strings.TrimSpace(c.GetHeader(cfaccess.CFAccessHeader)) == "":
 		return oidcAssertionNone
 	case authErr != nil:
 		return oidcAssertionRejected

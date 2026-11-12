@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.16.2
+// version: 1.16.3
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-11-09
+// last-edited: 2026-11-11
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -58,6 +58,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 
 	"github.com/gin-gonic/gin"
 
@@ -181,7 +183,7 @@ func (h *Handler) ownerWhyNot(c *gin.Context) string {
 	if h.ownerEmail != nil {
 		email = h.ownerEmail()
 	}
-	return auth.OwnerProofWhyNot(c.Request.Context(), email, servermiddleware.OwnerPublicHost(c.Request))
+	return auth.OwnerProofWhyNot(c.Request.Context(), email, cfaccess.OwnerPublicHost(c.Request))
 }
 
 // OwnerStatus is GET /repairs/owner-status: whether this request may apply
