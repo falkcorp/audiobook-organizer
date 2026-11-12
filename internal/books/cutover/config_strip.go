@@ -1,5 +1,5 @@
 // file: internal/books/cutover/config_strip.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: c7391f62-422d-4a79-8fa6-f679c490c72a
 // last-edited: 2026-11-11
 
@@ -26,12 +26,13 @@ import (
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
 
-// M2b (05-config §1.12.2): after M2a committed, the fifteen keys HEAD's
-// SaveConfigToFile managed in <db parent>/config.yaml are stripped from it,
-// so the file no longer holds a stale copy of a secret M2a moved or a value
-// R2 no longer reads. It runs on every boot until the file is clean, and is
-// idempotent: a file with none of the keys is left alone, and one whose keys
-// are all managed is deleted. Every other key stays.
+// M2b (05-config §1.12.2): after M2a committed, fourteen of the fifteen keys
+// HEAD's SaveConfigToFile managed in <db parent>/config.yaml are stripped from
+// it, so the file no longer holds a stale copy of a secret M2a moved or a value
+// R2 no longer reads. The fifteenth, database_path, stays (below). It runs on
+// every boot until the file is clean, and is idempotent: a file with none of
+// the keys is left alone, and one whose only keys are managed and strippable
+// is deleted. Every other key stays.
 //
 // A strip is one-way, so it deletes a copy only after the original is shown
 // to be somewhere else. Ten of the fifteen keys are settings HEAD wrote on a
@@ -43,11 +44,13 @@ import (
 // Preflight refuses that upgrade (the census) instead of letting this strip
 // delete it. database_path is the tenth and the exception: the blob cannot be
 // where HEAD finds it (the database must be open before the blob can be read),
-// and M2 never stores it, so nothing shadows the file's line and the census
-// leaves it out. This strip deletes it all the same, because the store being
-// cut over is already open at that path; F3-07 must make sure the boot after
-// the strip still finds the database, or this strip must keep the key
-// (seams.d/F3-06.md, F3-07 item 6). The other five
+// and M2 never stores it, so nothing shadows the file's line and no destination
+// can be shown to hold the value. The strip therefore always keeps it
+// (headNeverStrippedKeys) and lists it in StripReport.Kept, until the operator
+// layer reads core.storage.path from that source; F3-07 may then drop it from
+// the list (seams.d/F3-06.md, F3-07 item 6). The census leaves it out for the
+// same reason: M2 never stores it, so a file value is no reason to refuse. The
+// other five
 // are the ones HEAD's gap-fill reads (the three secrets, root_dir and
 // enable_ai_parsing) and so the only ones whose value can exist nowhere but
 // the file even with a blob. Each of those five that carries a usable value is
@@ -225,8 +228,10 @@ const (
 // values.
 type StripReport struct {
 	Result StripResult
-	// Kept names the gap-fill keys left in the file because their destination
-	// holds no value: the file's copy is the only one. Sorted.
+	// Kept names the keys left in the file because the file's copy is the only
+	// one: the gap-fill keys whose destination holds no value, and database_path
+	// whenever the file holds a value for it (M2 never stores it, so nothing can
+	// be shown to hold it; headNeverStrippedKeys). Sorted.
 	Kept []string
 	// InPlace is true when the directory could not be written and the file
 	// was rewritten in place (not atomic).
@@ -247,6 +252,36 @@ type GapFillHolder func(ctx context.Context, key string) (held bool, err error)
 // order headParseGapFill reads them: the keys whose value can be only in the
 // file.
 var headGapFillKeys = []string{"openai_api_key", "google_books_api_key", "hardcover_api_token", "root_dir", "enable_ai_parsing"}
+
+// headNeverStrippedKeys are managed keys the strip keeps whatever the holder
+// says: M2 never stores them (the rename table's convert=never-stored), and no
+// shadow of theirs exists, so no destination can be shown to hold the value.
+// database_path is HEAD's database location: the database has to be open
+// before the settings blob can be read, so the file (with the environment and
+// the flag) is where HEAD finds it, and core.storage.path is read from the
+// operator layer, not from this file. The list may shrink once F3-07 has wired
+// core.storage.path from the same source.
+var headNeverStrippedKeys = []string{"database_path"}
+
+// fileHoldsValueFold reports whether m has a top-level key matching name
+// case-insensitively (as viper reads it) with a value that is neither null nor
+// an empty string: a null or empty line says nothing, so deleting it loses
+// nothing.
+func fileHoldsValueFold(m map[string]any, name string) bool {
+	for k, v := range m {
+		if !strings.EqualFold(k, name) {
+			continue
+		}
+		if v == nil {
+			continue
+		}
+		if str, ok := v.(string); ok && strings.TrimSpace(str) == "" {
+			continue
+		}
+		return true
+	}
+	return false
+}
 
 // SecretMeta is the part of core's secrets store the holder reads
 // (*secrets.Store).
@@ -389,6 +424,11 @@ func StripGapFill(ctx context.Context, files FileOps, path string, holder GapFil
 			}
 		}
 		if !held {
+			keep = append(keep, k)
+		}
+	}
+	for _, k := range headNeverStrippedKeys {
+		if fileHoldsValueFold(m, k) {
 			keep = append(keep, k)
 		}
 	}
