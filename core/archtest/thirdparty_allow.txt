@@ -1,5 +1,5 @@
 # file: core/archtest/thirdparty_allow.txt
-# version: 1.0.13
+# version: 1.0.14
 # guid: cb537e35-a463-43d1-b870-3ea941cf278d
 # last-edited: 2026-11-11
 #
@@ -113,3 +113,12 @@ golang.org/x/oauth2
 # own review.
 github.com/blevesearch/bleve/v2
 golang.org/x/sync/errgroup
+
+# F7-06: library (05-library 5L.3.7, 5L.3.2), at the root's versions. fsnotify is
+# the directory watcher behind Manager.Watch (a test seam stands in for it).
+# x/sys/unix gives internal/libfs the primitives the standard library lacks:
+# renameat2 RENAME_NOREPLACE, renameatx_np RENAME_EXCL, linkat and the
+# directory-relative *at calls, FICLONE, clonefileat, and statfs for the
+# network-filesystem check. Only the unix package.
+github.com/fsnotify/fsnotify
+=golang.org/x/sys/unix
