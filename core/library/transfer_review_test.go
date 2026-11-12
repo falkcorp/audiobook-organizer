@@ -1,5 +1,5 @@
 // file: core/library/transfer_review_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: af173944-fc53-437c-9cc7-c9e516a3410d
 // last-edited: 2026-11-11
 
@@ -22,7 +22,7 @@ const (
 )
 
 func jokePaths() (src, dst Path) {
-	return Path{Root: "import-1", Rel: "Arkham/Joke.m4b"}, Path{Root: "books-library", Rel: "Moore/Joke.m4b"}
+	return Path{Root: "import-1", Rel: "Arkham/Joke.m4b"}, Path{Root: "books-library", Rel: "Gordon/Joke.m4b"}
 }
 
 func replaceCopy() TransferOptions {
@@ -461,11 +461,11 @@ func TestCrossDeviceMoveOfADirectoryIsNotSupported(t *testing.T) {
 	r.put("import-1", "Arkham/Joke/01.m4b", jokeNew)
 	mv := move()
 	mv.MkdirAll = true
-	_, err := r.m.Transfer(ctxbg(), books, Path{Root: "import-1", Rel: "Arkham/Joke"}, Path{Root: "books-library", Rel: "Moore/Joke"}, mv)
+	_, err := r.m.Transfer(ctxbg(), books, Path{Root: "import-1", Rel: "Arkham/Joke"}, Path{Root: "books-library", Rel: "Gordon/Joke"}, mv)
 	if !errors.Is(err, ErrNotSupported) || errors.Is(err, ErrVerifyFailed) {
 		t.Fatalf("Transfer = %v, want ErrNotSupported", err)
 	}
-	if !r.exists("import-1", "Arkham/Joke/01.m4b") || r.exists("books-library", "Moore/Joke") || r.journalRows() != 0 || len(r.strays()) != 0 {
+	if !r.exists("import-1", "Arkham/Joke/01.m4b") || r.exists("books-library", "Gordon/Joke") || r.journalRows() != 0 || len(r.strays()) != 0 {
 		t.Errorf("the refused move left rows %d, strays %v", r.journalRows(), r.strays())
 	}
 }
@@ -476,15 +476,15 @@ func TestCrossDeviceMoveOfADirectoryIsNotSupported(t *testing.T) {
 func TestRecoveryRefusesARowThatNamesAForeignFile(t *testing.T) {
 	src, dst := jokePaths()
 	for name, edit := range map[string]func(*transferRow){
-		"an id that is a path":             func(r *transferRow) { r.ID = "../../Moore/Joke" },
-		"an aside that is another file":    func(r *transferRow) { r.Aside = "Moore/Other.m4b" },
+		"an id that is a path":             func(r *transferRow) { r.ID = "../../Gordon/Joke" },
+		"an aside that is another file":    func(r *transferRow) { r.Aside = "Gordon/Other.m4b" },
 		"an aside that climbs out of root": func(r *transferRow) { r.Aside = dst.Rel + asideInfix + "../../x" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, _ := transferRig(t, rigOpts{})
 			r.put("import-1", src.Rel, jokeNew)
 			r.put("books-library", dst.Rel, jokeOld)
-			r.put("books-library", "Moore/Other.m4b", "someone else's file")
+			r.put("books-library", "Gordon/Other.m4b", "someone else's file")
 			row := transferRow{ID: r.m.seam.newID(), State: stPublished, Mode: Copy, Did: Copy, Src: src, Dst: dst}
 			edit(&row)
 			if rowProblem(row) == nil {
@@ -497,7 +497,7 @@ func TestRecoveryRefusesARowThatNamesAForeignFile(t *testing.T) {
 			if err != nil || rep.Conflicts != 1 {
 				t.Fatalf("Recover = %v, %v", rep, err)
 			}
-			for rel, want := range map[string]string{"Moore/Joke.m4b": jokeOld, "Moore/Other.m4b": "someone else's file"} {
+			for rel, want := range map[string]string{"Gordon/Joke.m4b": jokeOld, "Gordon/Other.m4b": "someone else's file"} {
 				if got, _ := r.read("books-library", rel); got != want {
 					t.Errorf("%s holds %q", rel, got)
 				}
