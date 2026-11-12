@@ -1,5 +1,5 @@
 // file: core/outbox/relay.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 77b6d1de-9cf2-4c52-8f0b-7e9a5c2b6d11
 // last-edited: 2026-11-12
 
@@ -49,6 +49,8 @@ type relay struct {
 	retries   map[outboxstore.Pair]time.Time // unordered pair -> its earliest retry (a wake-up, never a skip)
 	pairStop  map[outboxstore.Pair]time.Time // pair -> when it stopped on an unreadable row
 	topicStop map[string]time.Time
+	partStop  map[string]bool // topics stopped because their partition count changed
+	faults    map[string]faultNote
 	epoch     uint64 // Outbox.opsEpoch the idle and blocked maps were built under
 
 	inited   map[string]bool
@@ -84,6 +86,7 @@ func (o *Outbox) relayBody(rc *tasks.RC, _ struct{}) (struct{}, error) {
 		o: o, rc: rc, log: rc.Log(), cfg: cfg, regs: o.consumers(),
 		idle: map[outboxstore.Pair]uint64{}, blocked: map[outboxstore.Pair]time.Time{}, retries: map[outboxstore.Pair]time.Time{},
 		pairStop: map[outboxstore.Pair]time.Time{}, topicStop: map[string]time.Time{},
+		partStop: map[string]bool{}, faults: map[string]faultNote{},
 		inited: map[string]bool{}, epoch: o.opsEpoch.Load(),
 	}
 	o.health.setDisabled(false)
@@ -233,6 +236,14 @@ func (r *relay) ensureCursors(ctx context.Context) {
 				return b.Commit(ctx, storage.Sync)
 			})
 		})
+		if errors.Is(err, outboxstore.ErrPartitionsChanged) {
+			// Cursors over the wrong partition set would strand messages: stop the
+			// topic (or, if the stamp matches after all, try again next loop).
+			if hi, found, rerr := o.store.ReadHigh(ctx, ti.name); rerr == nil {
+				r.partitionsOK(ti, hi, found)
+			}
+			continue
+		}
 		if err != nil {
 			r.fault("cursors of "+reg.name, err)
 			continue
@@ -336,9 +347,17 @@ func (r *relay) intakeFault(ctx context.Context, topic, subject string, err erro
 	case errors.Is(err, storage.ErrConflict):
 		r.log.Debug("outbox: intake lost a race; rescanning", slog.String("topic", topic))
 	case errors.Is(err, outboxstore.ErrPartitionsChanged):
+		if ti, terr := r.o.topic(topic); terr == nil {
+			if hi, found, rerr := r.o.store.ReadHigh(ctx, topic); rerr == nil {
+				r.partitionsOK(ti, hi, found)
+				return
+			}
+		}
 		r.stopTopic(topic, subject, "partitions_changed", err)
 	case errors.Is(err, codec.ErrUnknownVersion):
 		r.stopTopic(topic, subject, "unknown_version", err)
+	case errors.Is(err, outboxstore.ErrCorruptRow):
+		r.stopTopic(topic, subject, "corrupt_row", err)
 	default:
 		r.fault("intake of "+topic, err)
 	}
@@ -349,16 +368,9 @@ func (r *relay) stopTopic(topic, subject, why string, err error) {
 	r.topicStop[topic] = r.o.now()
 	r.mu.Unlock()
 	if r.o.health.stop(subject, why) {
-		r.log.Error("outbox: topic stopped; it is not skipped", slog.String("topic", topic), slog.String("why", why), slog.Any("err", err))
+		r.log.Error("outbox: topic stopped; it is not skipped",
+			append([]any{slog.String("topic", topic), slog.String("why", why)}, errAttrs(err)...)...)
 	}
-}
-
-// fault logs an error that is neither a cancellation nor an expected race.
-func (r *relay) fault(what string, err error) {
-	if err == nil || r.rc.Context().Err() != nil || r.stopped() {
-		return
-	}
-	r.log.Warn("outbox: "+what+" failed", slog.Any("err", err))
 }
 
 // ---- maintenance
@@ -386,7 +398,13 @@ func (r *relay) maintain(ctx context.Context) {
 func (o *Outbox) RefreshStatus(ctx context.Context) {
 	st, err := o.Status(ctx)
 	if err != nil {
-		o.log.Warn("outbox: status failed", slog.Any("err", err))
+		// A failed Status is a partial one: publishing it would report the
+		// dead letters and the stops it did not get to read as gone, so the
+		// last good reading stands.
+		if ctx.Err() == nil {
+			o.log.Warn("outbox: status failed", errAttrs(err)...)
+		}
+		return
 	}
 	o.inst.publish(&st)
 	dead := make(map[string]int, len(st.Consumers))

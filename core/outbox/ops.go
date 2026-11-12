@@ -1,5 +1,5 @@
 // file: core/outbox/ops.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b1a1f7a-0a62-4d4e-8f1d-8d2a0b5f7c33
 // last-edited: 2026-11-12
 
@@ -211,6 +211,11 @@ func (o *Outbox) PurgeBacklog(ctx context.Context, consumer string) (skipped int
 	}
 	ti, err := o.topic(topic)
 	if err != nil {
+		return 0, fmt.Errorf("outbox: cannot purge %s: %w", consumer, err)
+	}
+	// Purging by the declared partitions would skip some partitions' messages
+	// and leave the rest: refuse until the declaration matches what was sequenced.
+	if err := o.checkPartitions(ctx, ti); err != nil {
 		return 0, fmt.Errorf("outbox: cannot purge %s: %w", consumer, err)
 	}
 	for pp := range ti.partitions {

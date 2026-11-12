@@ -1,5 +1,5 @@
 // file: core/outbox/metrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1d4cb2b8-5f9f-4b3e-8a0c-0f4a8ee3f8a1
 // last-edited: 2026-11-12
 
@@ -29,14 +29,15 @@ import (
 //	<ns>_outbox_pending{consumer,state}        state: enabled | disabled
 //	<ns>_outbox_lag_seconds{consumer}          age of the oldest unacked message
 //	<ns>_outbox_filtered_total{topic,consumer} acked by a Where filter
+//	<ns>_outbox_folded_total{topic,consumer}   acked after a run start folded into an existing run
 //	<ns>_outbox_orphans_dropped_total{topic}
 //
 // topic and consumer are closed sets (declared at boot, disabled modules'
 // consumer names included), so cardinality is bounded. The gauges read the
 // last Status the relay computed.
 type Instruments struct {
-	stagedC, deliveredC, retriesC, filteredC, orphansC metric.Int64Counter
-	snap                                               atomic.Pointer[Status]
+	stagedC, deliveredC, retriesC, filteredC, foldedC, orphansC metric.Int64Counter
+	snap                                                        atomic.Pointer[Status]
 }
 
 // NewInstruments registers the outbox families on sc (nil: nothing records).
@@ -62,6 +63,7 @@ func NewInstruments(sc *metrics.Scope) (*Instruments, error) {
 	in.deliveredC = counter("delivered", "Messages a consumer took over: handler returned nil, or the run was started.")
 	in.retriesC = counter("retries", "Deliveries that failed and were scheduled for another try.")
 	in.filteredC = counter("filtered", "Messages acked without running because the consumer's Where rejected them.")
+	in.foldedC = counter("folded", "Deliveries acked after a run start folded into an existing run instead of queueing one.")
 	in.orphansC = counter("orphans_dropped", "Messages dropped because only a removed consumer still held them.")
 	if err != nil {
 		return nil, fmt.Errorf("outbox: counter: %w", err)
@@ -146,6 +148,12 @@ func (in *Instruments) retried(topic, consumer string) {
 func (in *Instruments) filtered(topic, consumer string) {
 	if in != nil {
 		in.filteredC.Add(context.Background(), 1, pairAttr(topic, consumer))
+	}
+}
+
+func (in *Instruments) folded(topic, consumer string) {
+	if in != nil {
+		in.foldedC.Add(context.Background(), 1, pairAttr(topic, consumer))
 	}
 }
 

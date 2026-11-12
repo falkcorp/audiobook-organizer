@@ -1,5 +1,5 @@
 // file: core/outbox/version_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1e9b44-2a85-4f6d-93a0-b5d8e2f17c39
 // last-edited: 2026-11-12
 
@@ -45,7 +45,7 @@ func (r *rig) putRaw(key, raw []byte) {
 // cur/, dead/), which refuses blind writes; the other families take plain writes.
 func (r *rig) guard(ctx context.Context, b *storage.Batch, key []byte) {
 	r.t.Helper()
-	if !bytes.HasPrefix(key, outboxstore.SeqRoot()) && !bytes.HasPrefix(key, outboxstore.CurRoot()) && !bytes.HasPrefix(key, outboxstore.DeadRoot()) {
+	if !bytes.HasPrefix(key, seqRoot()) && !bytes.HasPrefix(key, outboxstore.CurRoot()) && !bytes.HasPrefix(key, outboxstore.DeadRoot()) {
 		return
 	}
 	if _, err := b.GetForUpdate(ctx, r.outKS, key); err != nil && !errors.Is(err, storage.ErrNotFound) {

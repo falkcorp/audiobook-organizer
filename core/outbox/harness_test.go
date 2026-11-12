@@ -1,5 +1,5 @@
 // file: core/outbox/harness_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1e7fbb59-5fbb-4c44-9df0-2d6b9f8a1c70
 // last-edited: 2026-11-12
 
@@ -491,6 +491,33 @@ func (rs *responder) def() tasks.Definition {
 	})
 }
 
+// blockingDef is def with a run that waits for release, so a start made while
+// it waits meets a run that exists.
+func (rs *responder) blockingDef(release <-chan struct{}) tasks.Definition {
+	return tasks.Task(runKind, tasks.TaskSpec[respondParams, string]{
+		Title:   "Respond to a signal, slowly",
+		Effects: tasks.Writes(tasks.Res("gotham", "cases")),
+		Perms:   tasks.Permissions{Start: rbac.Need("gotham:run")},
+		Resume:  tasks.ResumeFromZero,
+		Run: func(rc *tasks.RC, p respondParams) (string, error) {
+			rs.add(p)
+			select {
+			case <-release:
+			case <-rc.Context().Done():
+			}
+			return "answered", nil
+		},
+	})
+}
+
+// respondInto registers consumerC as Gotham's task-starting consumer of the signal topic.
+func respondInto(testing.TB, *rig) []registration {
+	h := outbox.ConsumeIntoTask(signal(), consumerC, runKind, func(m outbox.Message[Dispatch]) (any, error) {
+		return respondParams{Villain: m.Payload.Villain, Block: m.Payload.Block}, nil
+	}, outbox.Live())
+	return []registration{{owner: "gotham", hs: []outbox.Handler{h}}}
+}
+
 // rawJSON encodes v.
 func rawJSON(t testing.TB, v any) json.RawMessage {
 	t.Helper()
@@ -528,6 +555,13 @@ func (r *rig) runsOf(kind tasks.Kind) []tasks.RunRecord {
 
 // tryRoot is the try/ family's prefix (keys are tuple-encoded, not slash-joined).
 func tryRoot() []byte { return keys.Prefix(keys.Str("try")) }
+
+// msgTopicPrefix is m/<topic>/, curPrefix cur/<consumer>/ and seqRoot seq/: the
+// tests build them here rather than the production package carrying helpers
+// only they call.
+func msgTopicPrefix(topic string) []byte { return keys.Prefix(keys.Str("m"), keys.Str(topic)) }
+func curPrefix(consumer string) []byte   { return keys.Prefix(keys.Str("cur"), keys.Str(consumer)) }
+func seqRoot() []byte                    { return keys.Prefix(keys.Str("seq")) }
 
 func prefixEnd(p []byte) []byte {
 	out := append([]byte(nil), p...)

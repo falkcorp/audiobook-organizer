@@ -1,5 +1,5 @@
 # file: core/outbox/testdata/series.golden
-# version: 1.0.0
+# version: 1.0.1
 # guid: ec86813c-c72b-4e1a-a9b0-fd4eca0c8ede
 # last-edited: 2026-11-12
 #
@@ -9,6 +9,7 @@
 mediacore_outbox_dead_letters	gauge	consumer
 mediacore_outbox_delivered_total	counter	consumer,topic
 mediacore_outbox_filtered_total	counter	consumer,topic
+mediacore_outbox_folded_total	counter	consumer,topic
 mediacore_outbox_intake_age_seconds	gauge	topic
 mediacore_outbox_intake_pending	gauge	topic
 mediacore_outbox_lag_seconds	gauge	consumer
