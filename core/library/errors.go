@@ -1,5 +1,5 @@
 // file: core/library/errors.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 70a43d37-5dd5-4868-b9d1-c1b69a14827d
 // last-edited: 2026-11-11
 
@@ -70,6 +70,17 @@ var (
 	ErrInsufficientSpace = errors.New("library: destination would drop below its root's free-space floor")
 	ErrVerifyFailed      = errors.New("library: destination does not match source after transfer")
 	ErrReplaceMismatch   = errors.New("library: destination changed; refusing to replace")
+	// ErrSourceChanged: a Move that crossed a device boundary copied its source,
+	// and by the time the source was to be removed it was no longer the file that
+	// was copied (another file, another size or time, other bytes). The
+	// destination holds the copy; the source is kept and nothing is pending.
+	ErrSourceChanged = errors.New("library: source changed after it was copied; it was kept")
+	// ErrRecoveryPending: the transfer's file work is in place but some of its
+	// tidy-up is not done: the destination is published and the temp file, the
+	// directory sync, a replaced file's removal or the source's removal is left
+	// in the journal, or a replaced file could not be put back and is still set
+	// aside. Recover settles it; the caller must not repeat the transfer.
+	ErrRecoveryPending = errors.New("library: transfer left work for recovery")
 	// ErrUnmapped: a remote path matches no mapping and no root.
 	ErrUnmapped = errors.New("library: remote path matches no mapping and no root")
 )

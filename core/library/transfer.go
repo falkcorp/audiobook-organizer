@@ -1,5 +1,5 @@
 // file: core/library/transfer.go
-// version: 1.1.1
+// version: 1.2.1
 // guid: 534f60c5-c088-4e70-962c-8bcddbfafc71
 // last-edited: 2026-11-11
 
@@ -70,6 +70,11 @@ type xfer struct {
 	start  time.Time
 	res    TransferResult
 	begun  bool
+	// published: the final name now holds the transfer's bytes. tmpLeft: a temp
+	// file may still exist. A row whose transfer failed is deleted only when
+	// neither is true and no replaced file is set aside (settle).
+	published bool
+	tmpLeft   bool
 }
 
 func (m *manager) transfer(ctx context.Context, b *storage.Batch, caller storage.Owner, src, dst Path, opts TransferOptions) (res TransferResult, err error) {
@@ -190,9 +195,16 @@ func (x *xfer) recheck() error {
 	case !regular:
 		return fmt.Errorf("%w: %s is not a regular file", ErrNotSupported, x.src)
 	}
-	if _, derr := x.dfs.Lstat(x.dst.Rel); derr == nil {
+	if dst, derr := x.dfs.Lstat(x.dst.Rel); derr == nil {
 		if x.opts.Replace == nil {
 			return &fs.PathError{Op: "transfer", Path: x.dst.String(), Err: fs.ErrExist}
+		}
+		// A Replace sets the old file aside and removes it: files under protected
+		// paths are never moved or deleted, so one that is protected is not
+		// replaced. (A Move INTO a protected subtree is allowed: protection is of
+		// what already lies there.)
+		if protected, perr := x.m.protectedForMove(x.ctx, x.dst, dst.IsDir()); protected {
+			return errors.Join(fmt.Errorf("%w: %s is the file to be replaced", ErrSourceProtected, x.dst), perr)
 		}
 	} else if !errors.Is(derr, fs.ErrNotExist) {
 		return derr
@@ -204,7 +216,10 @@ func (x *xfer) recheck() error {
 
 func (x *xfer) run() (TransferResult, error) {
 	x.row = transferRow{ID: x.m.seam.newID(), State: stBegun, Mode: x.opts.Mode, Owner: x.caller, In: x.batch != nil,
-		Src: x.src, Dst: x.dst, Verify: x.opts.Verify, At: x.start.UTC(), Size: x.info.Size()}
+		Src: x.src, Dst: x.dst, Verify: x.opts.Verify, At: x.start.UTC(), Size: x.info.Size(), SrcMTime: x.info.ModTime().UnixNano()}
+	if dev, ino, ok := libfs.InodeOf(x.info); ok {
+		x.row.SrcDev, x.row.SrcIno = dev, ino
+	}
 	if x.opts.Replace != nil {
 		x.row.Expect = x.opts.Replace.ExpectSHA256
 	}
@@ -230,6 +245,15 @@ func (x *xfer) run() (TransferResult, error) {
 		err = x.doAuto()
 	}
 	if err != nil {
+		// One place decides whether the row goes: every failure path above has
+		// already undone what it could, and settle keeps the row when something
+		// is still on disk that only recovery can find.
+		x.settle()
+		if errors.Is(err, ErrRecoveryPending) && x.published {
+			part := x.res
+			part.Did = x.row.Did
+			return part, err
+		}
 		return TransferResult{}, err
 	}
 	return x.finish()
@@ -248,14 +272,50 @@ func (x *xfer) persist(ctx context.Context, st rowState) error {
 	return nil
 }
 
+// settle ends the row of a transfer that failed, but only if the failure left
+// nothing for recovery: the final name was not published, no replaced file is
+// still set aside, and no temp file may remain. A row that is kept names the
+// work Recover owes; deleting it would orphan the replaced file or the temp.
+func (x *xfer) settle() {
+	if x.published || x.row.Aside != "" || x.tmpLeft {
+		return
+	}
+	x.abandon()
+}
+
 // abandon deletes the row of a transfer that changed nothing (or whose partial
-// work was cleaned up), so recovery has nothing to do for it.
+// work was cleaned up), so recovery has nothing to do for it. Callers outside
+// settle use it only when the transfer's outcome is final and nothing is owed.
 func (x *xfer) abandon() {
 	if x.begun && x.opts.Journal {
 		if err := x.m.jrn.remove(x.bg, x.row.ID); err != nil {
 			x.m.log.Warn("library: could not delete an abandoned transfer row; recovery will", "id", x.row.ID, "err", err)
 		}
 	}
+}
+
+// pending marks err as left for recovery: the transfer's effect is in place (or a
+// replaced file could not be put back) and the journal row says what remains.
+func (x *xfer) pending(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", err, ErrRecoveryPending)
+}
+
+// unwind is the way back from a failure before the final name was published: a
+// replaced file is put back and the temp file goes. cause comes back as it is
+// when both worked, and marked for recovery when one did not.
+func (x *xfer) unwind(cause error, tmp string) error {
+	var errs []error
+	errs = append(errs, x.restoreAside())
+	if tmp != "" {
+		errs = append(errs, x.removeTemp(tmp))
+	}
+	if rerr := errors.Join(errs...); rerr != nil {
+		return x.pending(withRollback(cause, "the failed transfer", rerr))
+	}
+	return cause
 }
 
 // finish is step 6: Transfer deletes the row in its own commit; TransferIn marks
@@ -323,33 +383,33 @@ func syncDir(fsys fsOps, rel string) error {
 func (x *xfer) doMove() error {
 	x.row.Did = Move
 	if err := x.mkdirDst(); err != nil {
-		x.abandon()
 		return err
 	}
 	if x.opts.Replace != nil {
 		if err := x.replaceAside(); err != nil {
-			x.abandon()
-			return err
+			return x.unwind(err, "")
 		}
 	}
 	err := x.sfs.renameNoReplaceInto(x.dfs, x.src.Rel, x.dst.Rel)
 	switch {
 	case err == nil:
+		x.published = true
 		if err := x.syncAfterRename(); err != nil {
-			return err
+			return x.pending(err)
 		}
-		return x.dropAside()
+		return x.pending(x.dropAside())
 	case errors.Is(err, ErrCrossDevice):
-		if x.opts.Replace != nil {
-			x.restoreAside()
+		if rerr := x.restoreAside(); rerr != nil {
+			return x.pending(withRollback(err, "the replaced file", rerr))
+		}
+		if !x.info.Mode().IsRegular() {
+			// The copy path moves bytes of a regular file; a directory or a link
+			// that crosses a device boundary has none to verify.
+			return fmt.Errorf("%w: %s is not a regular file and cannot move across devices", ErrNotSupported, x.src)
 		}
 		return x.copyPath(Move, false, true)
 	default:
-		if x.opts.Replace != nil {
-			x.restoreAside()
-		}
-		x.abandon()
-		return err
+		return x.unwind(err, "")
 	}
 }
 
@@ -368,50 +428,49 @@ func (x *xfer) syncAfterRename() error {
 func (x *xfer) doLink() error {
 	x.row.Did = Hardlink
 	if err := x.mkdirDst(); err != nil {
-		x.abandon()
 		return err
 	}
 	if err := x.sfs.linkInto(x.dfs, x.src.Rel, x.dst.Rel); err != nil {
-		x.abandon()
 		return err
 	}
-	return syncDir(x.dfs, x.dstDir())
+	x.published = true
+	return x.pending(syncDir(x.dfs, x.dstDir()))
 }
 
 // doSymlink is Symlink: one atomic create.
 func (x *xfer) doSymlink() error {
 	x.row.Did = Symlink
 	if err := x.mkdirDst(); err != nil {
-		x.abandon()
 		return err
 	}
 	if err := x.dfs.Symlink(x.src, x.dst.Rel); err != nil {
-		x.abandon()
 		return err
 	}
-	return syncDir(x.dfs, x.dstDir())
+	x.published = true
+	return x.pending(syncDir(x.dfs, x.dstDir()))
 }
 
 // doAuto is reflink, then hardlink, then copy: each fallback only on the one
-// error that means "not here", so a real failure is not masked.
+// error that means "not here", so a real failure is not masked. The journal row
+// stays across the fallbacks: a crash between two of them finds the row, and its
+// temp, rather than a temp nobody knows about.
 func (x *xfer) doAuto() error {
 	err := x.copyPath(Reflink, true, false)
-	if err == nil || !errors.Is(err, ErrReflinkUnsupported) {
+	if err == nil || !errors.Is(err, ErrReflinkUnsupported) || errors.Is(err, ErrRecoveryPending) {
 		return err
 	}
 	if err := x.mkdirDst(); err != nil {
-		x.abandon()
 		return err
 	}
 	lerr := x.sfs.linkInto(x.dfs, x.src.Rel, x.dst.Rel)
 	switch {
 	case lerr == nil:
 		x.row.Did = Hardlink
-		return syncDir(x.dfs, x.dstDir())
+		x.published = true
+		return x.pending(syncDir(x.dfs, x.dstDir()))
 	case linkUnavailable(lerr):
 		return x.copyPath(Copy, false, false)
 	default:
-		x.abandon()
 		return lerr
 	}
 }
@@ -427,11 +486,12 @@ func linkUnavailable(err error) bool {
 // copyPath is steps 3 to 5: the temp, the verify, the no-clobber publish, and
 // (Move) the source's removal. clone makes the temp by clone instead of by
 // reading; a clone that is not available is ErrReflinkUnsupported and leaves no
-// trace.
+// trace. Every failure before the final name exists goes through unwind, so the
+// temp is gone and a replaced file is back (or the row stays and says so); every
+// failure after it is ErrRecoveryPending.
 func (x *xfer) copyPath(did TransferMode, clone, removeSrc bool) error {
 	if !clone {
 		if err := x.checkSpace(x.info.Size()); err != nil {
-			x.abandon()
 			return err
 		}
 	}
@@ -439,15 +499,13 @@ func (x *xfer) copyPath(did TransferMode, clone, removeSrc bool) error {
 	x.row.RemoveSrc = removeSrc
 	x.row.Tmp = path2(x.dstDir(), tmpPrefix+x.row.ID)
 	if err := x.mkdirDst(); err != nil {
-		x.abandon()
 		return err
 	}
 	tmp := x.row.Tmp
+	x.tmpLeft = true // from here a temp file may exist
 	sha, size, err := x.fillTemp(tmp, clone)
 	if err != nil {
-		x.removeTemp(tmp)
-		x.abandon()
-		return err
+		return x.unwind(err, tmp)
 	}
 	x.row.SrcSHA, x.row.Size = sha, size
 	x.res.Bytes = size
@@ -455,37 +513,30 @@ func (x *xfer) copyPath(did TransferMode, clone, removeSrc bool) error {
 		x.res.SHA256 = sha
 	}
 	if err := x.persist(x.ctx, stCopied); err != nil {
-		x.removeTemp(tmp)
-		return err
+		return x.unwind(err, tmp)
 	}
 	if x.opts.Replace != nil {
 		if err := x.replaceAside(); err != nil {
-			x.removeTemp(tmp)
-			x.abandon()
-			return err
+			return x.unwind(err, tmp)
 		}
 	}
 	// Publish: Link refuses an existing name, so a creator that got there first
 	// wins and our temp goes (never a rename over it).
 	if err := x.dfs.Link(tmp, x.dst.Rel); err != nil {
-		if x.opts.Replace != nil {
-			x.restoreAside()
-		}
-		x.removeTemp(tmp)
-		x.abandon()
-		return err
+		return x.unwind(err, tmp)
 	}
+	x.published = true
 	if err := x.persist(x.ctx, stPublished); err != nil {
-		return err
+		return x.pending(err)
 	}
-	if err := x.dfs.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+	if err := x.removeTemp(tmp); err != nil {
+		return x.pending(err)
 	}
 	if err := syncDir(x.dfs, x.dstDir()); err != nil {
-		return err
+		return x.pending(err)
 	}
 	if err := x.dropAside(); err != nil {
-		return err
+		return x.pending(err)
 	}
 	if removeSrc {
 		return x.removeSource()
@@ -501,12 +552,15 @@ func path2(dir, name string) string {
 	return dir + "/" + name
 }
 
-// removeTemp deletes a temp file, best effort on a path that is already a
-// rollback: the journal still names it, so recovery retries.
-func (x *xfer) removeTemp(tmp string) {
+// removeTemp deletes the temp file. A failure is returned, and the temp stays
+// owed to recovery (the journal still names it).
+func (x *xfer) removeTemp(tmp string) error {
 	if err := x.dfs.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		x.m.log.Warn("library: could not remove a transfer temp file; recovery will", "root", x.dst.Root, "err", err)
+		return err
 	}
+	x.tmpLeft = false
+	return nil
 }
 
 // fillTemp creates the temp file next to the destination and fills it, by clone
@@ -558,6 +612,14 @@ func (x *xfer) fillTemp(tmp string, clone bool) (sha string, size int64, err err
 	return sha, n, nil
 }
 
+// noteTmp records the temp file's identity in the row, so recovery can tell that
+// the final name is the temp (linked or renamed there) without reading it.
+func (x *xfer) noteTmp(st fs.FileInfo) {
+	if dev, ino, ok := libfs.InodeOf(st); ok {
+		x.row.TmpDev, x.row.TmpIno = dev, ino
+	}
+}
+
 // chmodIfDifferent sets the file's permission bits only when they differ from
 // want (the umask may have already produced them), as fileops did.
 func chmodIfDifferent(f File, want fs.FileMode) error {
@@ -584,6 +646,7 @@ func (x *xfer) cloneTemp(tmp string) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
+	x.noteTmp(st)
 	var sha string
 	if x.opts.Verify == VerifySHA256 {
 		want, herr := x.m.hashVia(x.ctx, x.sfs, x.src.Rel, false)
@@ -615,6 +678,7 @@ func (x *xfer) verify(tmp string, sst fs.FileInfo, n int64, sha string) error {
 	if err != nil {
 		return err
 	}
+	x.noteTmp(st)
 	if st.Size() != n {
 		return bad("the temp file is %d bytes, %d were read", st.Size(), n)
 	}
@@ -638,12 +702,80 @@ func (x *xfer) verify(tmp string, sst fs.FileInfo, n int64, sha string) error {
 }
 
 // removeSource is step 5 of a cross-device Move: only now, after the destination
-// is published, fsynced and verified, the source goes.
+// is published, fsynced and verified, the source goes, and only if it is still
+// the file that was copied (sourceUnchanged, the check recovery makes too). A
+// source that changed meanwhile is kept: the destination holds the copy, nothing
+// is owed, and the caller is told.
 func (x *xfer) removeSource() error {
-	if err := x.sfs.Remove(x.src.Rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	present, err := x.m.sourceUnchanged(x.ctx, x.sfs, x.src, x.row.stamp(), x.row.SrcSHA, x.opts.Verify == VerifySHA256)
+	switch {
+	case errors.Is(err, ErrSourceChanged):
+		x.m.log.Warn("library: a moved file changed after it was copied; the source is kept", "src", x.src.String(), "dst", x.dst.String(), "why", err)
+		x.abandon()
 		return err
+	case err != nil:
+		return x.pending(err)
+	case !present:
+		return nil
 	}
-	return syncDir(x.sfs, x.srcDirPath())
+	if err := x.sfs.Remove(x.src.Rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return x.pending(err)
+	}
+	return x.pending(syncDir(x.sfs, x.srcDirPath()))
+}
+
+// srcStamp is a source as a transfer first saw it, before it read a byte.
+type srcStamp struct {
+	dev, ino uint64 // ino 0: not recorded
+	size     int64
+	mtime    int64 // ns; 0: not recorded
+}
+
+func (r transferRow) stamp() srcStamp {
+	return srcStamp{dev: r.SrcDev, ino: r.SrcIno, size: r.Size, mtime: r.SrcMTime}
+}
+
+// sourceUnchanged reports whether src is still the file that was copied: a
+// regular file with the recorded device and inode, size and modification time
+// and (strong, with sha) the digest of the bytes that were copied. present is
+// false when it is gone, which is nothing to remove. A different file is
+// ErrSourceChanged; a source that cannot be examined is any other error, and
+// the caller keeps it. Both the live Move and recovery decide with this.
+func (m *manager) sourceUnchanged(ctx context.Context, fsys fsOps, src Path, want srcStamp, sha string, strong bool) (present bool, err error) {
+	st, err := fsys.Lstat(src.Rel)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return true, err
+	}
+	changed := func(format string, a ...any) (bool, error) {
+		return true, fmt.Errorf("%w: %s %s", ErrSourceChanged, src, fmt.Sprintf(format, a...))
+	}
+	if !st.Mode().IsRegular() {
+		return changed("is no longer a regular file")
+	}
+	if want.ino != 0 {
+		if dev, ino, ok := libfs.InodeOf(st); ok && (dev != want.dev || ino != want.ino) {
+			return changed("is another file")
+		}
+	}
+	if st.Size() != want.size {
+		return changed("is %d bytes, %d were copied", st.Size(), want.size)
+	}
+	if want.mtime != 0 && st.ModTime().UnixNano() != want.mtime {
+		return changed("was modified")
+	}
+	if strong && sha != "" {
+		d, herr := m.hashVia(ctx, fsys, src.Rel, false)
+		if herr != nil {
+			return true, herr
+		}
+		if d.SHA256 != sha {
+			return changed("holds other bytes")
+		}
+	}
+	return true, nil
 }
 
 // ---- space ----
@@ -710,29 +842,37 @@ func (x *xfer) replaceAside() error {
 		return err
 	}
 	if err := x.dfs.RenameNoReplace(x.dst.Rel, aside); err != nil {
+		// A refused rename moved nothing, so no file is set aside. One that stopped
+		// half way (a link made, the old name not yet removed) left a name there,
+		// and the row keeps pointing at it.
+		if _, there, perr := peek(x.dfs, aside); perr == nil && !there {
+			x.row.Aside = ""
+		}
 		return err
 	}
 	moved, err := x.m.hashVia(x.ctx, x.dfs, aside, false)
 	if err != nil || moved.SHA256 != x.opts.Replace.ExpectSHA256 {
-		x.restoreAside()
-		if err != nil {
-			return err
+		cause := err
+		if cause == nil {
+			cause = fmt.Errorf("%w: %s changed while it was being replaced", ErrReplaceMismatch, x.dst)
 		}
-		return fmt.Errorf("%w: %s changed while it was being replaced", ErrReplaceMismatch, x.dst)
+		return withRollback(cause, "the replaced file", x.restoreAside())
 	}
 	return nil
 }
 
 // restoreAside puts the replaced file back when the replacement did not happen.
-func (x *xfer) restoreAside() {
+// A failure keeps Aside set: the row then names the file recovery must restore.
+func (x *xfer) restoreAside() error {
 	if x.row.Aside == "" {
-		return
+		return nil
 	}
 	if err := x.dfs.RenameNoReplace(x.row.Aside, x.dst.Rel); err != nil {
-		x.m.log.Error("library: could not restore a replaced file; recovery will try", "root", x.dst.Root, "err", err)
-		return
+		x.m.log.Error("library: could not restore a replaced file; recovery will try", "root", x.dst.Root, "aside", x.row.Aside, "err", err)
+		return err
 	}
 	x.row.Aside = ""
+	return nil
 }
 
 // dropAside removes the kept old file once the new one is durable.
