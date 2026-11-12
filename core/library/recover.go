@@ -1,5 +1,5 @@
 // file: core/library/recover.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 806040d6-fa0f-435b-bd89-14287546fc22
 // last-edited: 2026-11-11
 
@@ -226,7 +226,9 @@ func (rs *recoverState) rollBack(ctx context.Context) (outcome, error) {
 	if err := rs.removeTmp(); err != nil {
 		return outRolledBack, err
 	}
-	if err := syncDir(rs.dfs, rs.row.Dst.Dir().Rel); err != nil {
+	// A crash after the journal row but before MkdirAll leaves no destination
+	// directory: nothing to sync, and the row must still settle.
+	if err := syncDir(rs.dfs, rs.row.Dst.Dir().Rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return outRolledBack, err
 	}
 	return outRolledBack, rs.del(ctx)
