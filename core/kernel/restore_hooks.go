@@ -1,5 +1,5 @@
 // file: core/kernel/restore_hooks.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b84e1f27-6c93-4d05-8a7e-2f1d9c3b5e60
 // last-edited: 2026-11-11
 
@@ -163,6 +163,11 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 				return res, fmt.Errorf("kernel: commit the held journal head: %w", err)
 			}
 		}
+		// The hold the boot put on the journal (reapplyRevocations) ends with the
+		// hooks: a line appended from here on stages a head that no longer passes
+		// anything left unapplied. A refusal for a line this build cannot apply
+		// stays.
+		in.Journal.Resume()
 	}
 
 	if restoring && in.Restore.Steps != nil {

@@ -1,5 +1,5 @@
 // file: core/kernel/restore_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b2e9d47-3a15-4c80-b7f4-0d9a5e1c8b36
 // last-edited: 2026-11-11
 
@@ -400,8 +400,16 @@ func TestReapply_HeldHeadCommitsAfterTheHooks(t *testing.T) {
 	if got := fx.head().Seq; got != res.Held.Seq || got != 1 {
 		t.Errorf("head = %d, held %d: the hooks completed, so the held head is committed", got, res.Held.Seq)
 	}
-	fx.restart()
+	// The hold ends with the hooks: once the fault is over the journal takes
+	// lines again and health stops reporting it unwritable.
 	fx.keys.(*rxKeys).active = "d1"
+	if _, err := fx.comp.AppendLine(fx.ctx, journal.GapLine(fx.clock.now(), journal.GapAppendFailed)); err != nil {
+		t.Errorf("a line after the hooks completed and the head was committed: %v", err)
+	}
+	if fx.hasHealth(journal.HealthUnwritable) {
+		t.Errorf("health %v still reports the journal unwritable after the hold ended", fx.health())
+	}
+	fx.restart()
 	if res, hres := fx.boot(nil, nil); res.Class != classSame || hres.Ran {
 		t.Errorf("next boot: class %q (%s), hooks ran %v, want the same store", res.Class, res.Why, hres.Ran)
 	}
@@ -623,9 +631,10 @@ func TestReapply_SymlinkedForeignJournalIsNotRenamed(t *testing.T) {
 // MAJOR 2: a line this build cannot apply.
 
 // TestReapply_UnknownKindStopsTheTail: a newer build's revocation kind is not
-// skipped and the head does not pass it. The lines before it are applied, the
-// boot reports the journal broken and fails closed once (not at every boot),
-// and a build that knows the kind applies it later.
+// skipped and the head does not pass it. The lines before it are applied with
+// the head, the known lines after it without one, the boot reports the journal
+// broken and fails closed once (not at every boot), and a build that knows the
+// kind applies it later.
 func TestReapply_UnknownKindStopsTheTail(t *testing.T) {
 	fx := newRxFx(t, nil)
 	fx.boot(nil, nil)
@@ -638,8 +647,8 @@ func TestReapply_UnknownKindStopsTheTail(t *testing.T) {
 	fx.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-two")})
 	fx.restart()
 	res, _ := fx.boot(nil, nil)
-	if res.Reapplied != 1 || fx.head().Seq != 1 {
-		t.Errorf("re-applied %d, head %d, want 1 and 1: the head must stay below the line it cannot apply", res.Reapplied, fx.head().Seq)
+	if res.Reapplied != 2 || fx.head().Seq != 1 {
+		t.Errorf("re-applied %d, head %d, want 2 and 1: the head must stay below the line it cannot apply, the known line after it is applied", res.Reapplied, fx.head().Seq)
 	}
 	if res.Broken == nil || !res.FailedClosed || !fx.hasHealth(journal.HealthBroken) {
 		t.Errorf("broken %v, failed closed %v, health %v", res.Broken, res.FailedClosed, fx.health())
@@ -647,8 +656,8 @@ func TestReapply_UnknownKindStopsTheTail(t *testing.T) {
 	if got := fx.keyStatus("key-one"); got != auth.KeyRevoked {
 		t.Errorf("key-one = %q, want revoked (the line before the stop)", got)
 	}
-	if got := fx.keyStatus("key-two"); got == auth.KeyActive {
-		t.Errorf("key-two = %q: the fail-closed fallback leaves no active key", got)
+	if got := fx.keyStatus("key-two"); got != auth.KeyRevoked {
+		t.Errorf("key-two = %q, want revoked (the known line after the stop)", got)
 	}
 	epoch := fx.userRow(owner).CredentialEpoch
 
@@ -732,5 +741,74 @@ func TestReapply_RoleStoreRefusesASecondWriteInTheReapplyBatch(t *testing.T) {
 	err := fx.roles.PutRole(b, &rbac.Role{Name: trustee, Title: "Warden", Origin: rbac.OriginCustom, Added: []rbac.Permission{"core:admin"}, Version: 2})
 	if !errors.Is(err, rbacstore.ErrDoubleWrite) {
 		t.Fatalf("the second write of one role in one batch: err = %v, want rbacstore.ErrDoubleWrite", err)
+	}
+}
+
+// TestReapply_KnownLinesAfterAnUnknownKindAreStillApplied: a revocation this
+// build does know, journaled after one it does not, is applied. Fail-closed
+// never disables a user, so a disable that waits for a build that knows the
+// kind before it leaves the user signed in (the journal is the only record). The
+// head stays below the unknown line and the later lines are applied again at
+// every boot until a build that knows it runs, which is harmless: they narrow.
+func TestReapply_KnownLinesAfterAnUnknownKindAreStillApplied(t *testing.T) {
+	for _, batch := range []int{0, 1} { // one chunk, and one line to a chunk
+		t.Run(fmt.Sprintf("batch %d", batch), func(t *testing.T) {
+			fx := newRxFx(t, nil)
+			fx.boot(nil, nil)
+			barbara, selina := fx.user("barbara"), fx.user("selina")
+			fx.key("key-batarang", barbara, auth.KeyActive)
+			fx.journalOnly(journal.Revocation{Kind: "user.frozen", Subject: rxUserRef(barbara)})
+			fx.journalOnly(journal.Revocation{Kind: journal.UserDisabled, Subject: rxUserRef(selina), Epoch: 1})
+			fx.journalOnly(journal.Revocation{Kind: journal.APIKeyRevoked, Subject: rxKeyRef("key-batarang")})
+			fx.restart()
+			mut := func(in *reapplyInput) { in.TailBatch = batch }
+			res, _ := fx.boot(nil, mut)
+			if res.Reapplied != 2 || fx.head().Seq != 0 {
+				t.Errorf("re-applied %d, head %d, want 2 and 0", res.Reapplied, fx.head().Seq)
+			}
+			if got := fx.userRow(selina).Status; got != auth.StatusDisabled {
+				t.Errorf("selina = %q: a disable after a line this build cannot apply was not applied", got)
+			}
+			if got := fx.keyStatus("key-batarang"); got != auth.KeyRevoked {
+				t.Errorf("key-batarang = %q, want revoked", got)
+			}
+			if res.Broken == nil || !res.FailedClosed {
+				t.Errorf("broken %v, failed closed %v: the stop is still reported and fails closed once", res.Broken, res.FailedClosed)
+			}
+
+			fx.restart()
+			res, _ = fx.boot(nil, mut)
+			if res.FailedClosed || res.Reapplied != 2 || fx.head().Seq != 0 || fx.userRow(selina).Status != auth.StatusDisabled {
+				t.Errorf("second boot: failed closed %v, re-applied %d, head %d, selina %q: want no new fail-closed, the same two re-applied, head 0",
+					res.FailedClosed, res.Reapplied, fx.head().Seq, fx.userRow(selina).Status)
+			}
+		})
+	}
+}
+
+// TestReapply_ReplacedStoreWithAnUnknownKindFailsClosedOnce: the boot that
+// finds a replaced store appends its restore line after the unknown line, which
+// moves the chain's tail; the broken state is the same one the next boot sees,
+// so the latch holds and the credential epochs are bumped once, not twice.
+func TestReapply_ReplacedStoreWithAnUnknownKindFailsClosedOnce(t *testing.T) {
+	fx := newRxFx(t, nil)
+	fx.boot(nil, nil)
+	owner := fx.user("alfred")
+	fx.key("key-a", owner, auth.KeyActive)
+	archive := fx.snapshot("archive")
+	fx.revokeKey("key-a")
+	fx.journalOnly(journal.Revocation{Kind: "user.frozen", Subject: rxUserRef(owner)})
+	fx.restart()
+	fx.swapIn(archive)
+	var epochs []int64
+	var closed []bool
+	for i := 0; i < 3; i++ {
+		res, _ := fx.boot(nil, nil)
+		closed = append(closed, res.FailedClosed)
+		fx.restart()
+		epochs = append(epochs, fx.userRow(owner).CredentialEpoch)
+	}
+	if !slices.Equal(closed, []bool{true, false, false}) || epochs[1] != epochs[0] || epochs[2] != epochs[0] {
+		t.Errorf("failed closed per boot %v, credential epochs %v: want one fail-closed and one bump", closed, epochs)
 	}
 }
