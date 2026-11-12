@@ -1,7 +1,7 @@
 // file: core/storage/batch.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 95428f24-dcaf-4b52-bcb8-b5a04189097c
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package storage
 
@@ -412,6 +412,9 @@ func (b *Batch) stageRangeChecked(s handleOf, start, end []byte) error {
 	}
 	if s.ro {
 		return ErrReadOnly
+	}
+	if s.fix != nil {
+		return fmt.Errorf("storage: DeleteRange by a cutover-blocker edit of %s: the edit sets or deletes the one row: %w", s.owner, ErrOutsideKeyspace)
 	}
 	var lo, hi []byte
 	if s.legacy {

@@ -1,7 +1,7 @@
 // file: core/storage/db.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 30500128-a267-4af7-ba39-fae150d4e708
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package storage
 
@@ -245,6 +245,7 @@ type handleOf struct {
 	prefix []byte // keyspace prefix; nil for a legacy range
 	tx     *MigrationTx
 	ro     bool
+	fix    *blockerSpans // a cutover-blocker edit's scope (blockerRange); nil for every other handle
 }
 
 func (k Keyspace) scope() handleOf {
@@ -261,13 +262,15 @@ func scopeOf(h Handle) (handleOf, bool) {
 		return v.scope(), v.db != nil
 	case LegacyRange:
 		return v.scope(), v.db != nil
+	case blockerRange:
+		return v.scope(), v.db != nil
 	}
 	return handleOf{}, false
 }
 
 // same reports whether two scopes are the same capability.
 func (s handleOf) same(o handleOf) bool {
-	return s.db == o.db && s.owner == o.owner && s.legacy == o.legacy && bytes.Equal(s.prefix, o.prefix)
+	return s.db == o.db && s.owner == o.owner && s.legacy == o.legacy && bytes.Equal(s.prefix, o.prefix) && s.fix == o.fix
 }
 
 // check validates the scope before an operation.
@@ -290,6 +293,18 @@ func (s handleOf) absolute(key []byte, op opKind) (abs []byte, serialized bool, 
 		abs = append(slices.Clone(s.prefix), key...)
 		info := s.db.owners[s.owner]
 		return abs, info != nil && info.isSerialized(abs), nil
+	}
+	if s.fix != nil && op != opRead {
+		// A cutover-blocker edit (blockerRange): a write is refused outside
+		// the step's Source and outside the owner's claims before the claim
+		// check runs, so the shadow dial can never admit it.
+		iv, ok := s.db.claims.resolve(key)
+		if !s.fix.contains(key) || !ok || iv.owner != s.owner {
+			return nil, false, fmt.Errorf("storage: %s %s by a cutover-blocker edit of %s: not a key of the step's Source: %w", op, s.db.keyRef(key), s.owner, ErrOutsideKeyspace)
+		}
+		if op == opSet && iv.mode == ClaimRetired {
+			return slices.Clone(key), iv.serialized, nil // the one Set a retired claim admits
+		}
 	}
 	iv, ok := s.db.claims.resolve(key)
 	if !ok || iv.owner != s.owner {

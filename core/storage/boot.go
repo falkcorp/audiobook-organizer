@@ -1,7 +1,7 @@
 // file: core/storage/boot.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 34d5477f-2cd4-4e60-b7cc-876d94c85db0
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package storage
 
@@ -283,7 +283,11 @@ type bootState struct {
 	attempt   string // c/storage/attempt's checkpoint, read at step 5: an attempt a kill left uncompleted
 	prepared  bool
 	migrated  bool
-	finished  bool // Migrate ran every step and step 9: the boot may reach readiness
+	// blockersOnly: BeginCutoverBlockers opened this store for `storage
+	// cutover-blockers`, which runs no step and never prepares it; Prepare
+	// and Offline refuse afterwards.
+	blockersOnly bool
+	finished     bool // Migrate ran every step and step 9: the boot may reach readiness
 }
 
 // Opened is a store after §5S.4 steps 1-5 (06 P2): open, guarded and
@@ -427,6 +431,9 @@ func (o *Opened) Offline() (*DB, error) {
 	st := db.boot
 	if st.prepared {
 		return nil, errors.New("storage: Offline after Prepare")
+	}
+	if st.blockersOnly {
+		return nil, errors.New("storage: Offline after BeginCutoverBlockers")
 	}
 	refuse := func(reason string) (*DB, error) { return nil, &OfflinePendingError{Reason: reason} }
 	switch {
@@ -1036,6 +1043,9 @@ func (o *Opened) Prepare(ctx context.Context) (*DB, error) {
 	st := db.boot
 	if st.prepared {
 		return nil, errors.New("storage: Prepare called twice, or after Offline")
+	}
+	if st.blockersOnly {
+		return nil, errors.New("storage: Prepare after BeginCutoverBlockers: a store opened for storage cutover-blockers is never prepared")
 	}
 	if db.readOnly {
 		return nil, fmt.Errorf("storage: Prepare on a read-only open: %w", ErrReadOnly)
