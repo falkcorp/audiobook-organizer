@@ -145,6 +145,7 @@ internal/books/cutover.flatKeys
 internal/books/cutover.generateTable
 internal/books/cutover.generator.add
 internal/books/cutover.generator.addSub
+internal/books/cutover.generator.attachFlatAliasRetired
 internal/books/cutover.generator.attachRetired
 internal/books/cutover.generator.bindingRow
 internal/books/cutover.generator.checkTargets
@@ -163,6 +164,7 @@ internal/books/cutover.getAt
 internal/books/cutover.headAssignWhisperIDs
 internal/books/cutover.headBuildMigratedAIEndpoints
 internal/books/cutover.headCheckConfigBlob
+internal/books/cutover.headComputedDefault
 internal/books/cutover.headDecodeBlob
 internal/books/cutover.headDecodeBlobFields
 internal/books/cutover.headDecrypt
@@ -199,6 +201,8 @@ internal/books/cutover.headRemapScheduledKeys
 internal/books/cutover.headRemovedKeyMessage
 internal/books/cutover.headSecretRows
 internal/books/cutover.headTick
+internal/books/cutover.headTrimZeroDecimal
+internal/books/cutover.headViperCast
 internal/books/cutover.isBelow
 internal/books/cutover.isConcretePath
 internal/books/cutover.isFieldError
