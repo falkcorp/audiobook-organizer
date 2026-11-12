@@ -1,5 +1,5 @@
 // file: core/integrations/registry.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 5291a2b4-f665-40ef-8c7f-d588aa319bec
 // last-edited: 2026-11-11
 
@@ -89,6 +89,31 @@ type OutboundSpec struct {
 	Limits   Limits  // the adapter's Meta.Limits
 	Override *Limits // the instance's own (zero fields inherit)
 	Trust    Trust
+	// Redact names extra query, header and JSON-field names the outbound
+	// layer must redact from errors, logs and excerpts, beyond its built-in
+	// rules (an adapter whose provider calls its credential something unusual).
+	Redact []string
+	// QueryCredential, when non-nil, supplies a credential the provider takes
+	// in the URL query. The outbound layer adds it to its own copy of the
+	// request URL on every attempt, so the URL an adapter builds, logs or sees
+	// in an error never holds it. nil: the adapter sends no query credential.
+	QueryCredential *QueryCredential
+}
+
+// QueryCredential is a credential carried in a URL query parameter (a
+// provider that offers no header form). Name is the parameter; Value is read
+// per attempt, so a rotated secret applies without a rebuild. A Value error
+// refuses the request before anything is sent. Name is always redacted.
+//
+// Origins binds the credential to the instance's configured destinations
+// ("scheme://host[:port]", the default port implied): it is added to a request
+// only when the request's own origin is listed, so a URL built from data (a
+// cover link a provider returned, a redirect) never receives it, whatever the
+// instance's egress policy. An empty Origins sends the credential nowhere.
+type QueryCredential struct {
+	Name    string
+	Origins []string
+	Value   func(ctx context.Context) (string, error)
 }
 
 // Options configures New (name coined by F7-01: M1.3 declares Registry

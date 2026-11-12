@@ -1,14 +1,8 @@
 // file: core/integrations/providerhttp/holds.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9458aaad-d25b-4455-b4f8-535c65819b12
 // last-edited: 2026-11-11
 
-// Package providerhttp is the instance-scoped provider HTTP layer of
-// 05-metadata M2. Until the integrations flip (F7) it holds only the minimal
-// owner registration of the kind core.integrations.release-holds: the kind's
-// final TaskSpec over the one-method interim backend InterimHolds (05-tasks
-// 5T.8.2). F7 extends ReleaseHoldsTask with the native body over the gate
-// store and deletes InterimHolds.
 package providerhttp
 
 import (
