@@ -1,5 +1,5 @@
 // file: core/internal/bleveindex/reconcile.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7d5cb0b4-ce7f-4ece-bf97-ab406d9fbee5
 // last-edited: 2026-11-12
 
@@ -251,11 +251,20 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// One document the index refuses must not keep its neighbours out: apply
-		// the chunk one document at a time, leave the refused ones pending (counted
-		// and logged) and clear the rest. If every document is refused the fault is
-		// the index's, not a poison mark's, and the pass reports it.
-		kept, err = i.applyEach(ctx, entries, kept, err)
+		// A failed batch is one of two things, and they are told apart by asking
+		// the index, not by counting how many documents then fail alone: either
+		// the index cannot take a write (closed, its writer broken), which is the
+		// pass's error and no mark's fault, or it can and some document in the
+		// chunk is refused, which is that mark's fault. A write that touches no
+		// document (probeWrite) decides it before any document is retried.
+		if perr := i.probeWrite(); perr != nil {
+			return errors.Join(err, perr)
+		}
+		// The index works, so a document that fails alone is refused: it must not
+		// keep its neighbours out, so apply the chunk one document at a time,
+		// leave the refused ones pending (counted, logged, backing off by token)
+		// and clear the rest, whether one document went in or none did.
+		kept, err = i.applyEach(ctx, entries, kept)
 		if err != nil {
 			return err
 		}
@@ -269,10 +278,13 @@ func (i *idx) applyMarks(ctx context.Context, marks []index.Mark) error {
 	return nil
 }
 
-// applyEach is applyMarks' fallback for a chunk whose batch failed: it applies
-// each entry alone and returns the marks of those that went in. It returns
-// batchErr when none did.
-func (i *idx) applyEach(ctx context.Context, entries []entry, marks []index.Mark, batchErr error) ([]index.Mark, error) {
+// applyEach is applyMarks' fallback for a chunk whose batch failed on an index
+// that takes writes (probeWrite): it applies each entry alone and returns the
+// marks of those that went in. Every entry that does not is a refused document:
+// its mark stays pending and backs off, keyed on its token, however many of the
+// chunk's documents it was, one of them included. The pass is not failed by a
+// refused document; it is counted (failures) and logged.
+func (i *idx) applyEach(ctx context.Context, entries []entry, marks []index.Mark) ([]index.Mark, error) {
 	var ok []index.Mark
 	var refused []index.Mark
 	for n, e := range entries {
@@ -287,9 +299,6 @@ func (i *idx) applyEach(ctx context.Context, entries []entry, marks []index.Mark
 			continue
 		}
 		ok = append(ok, marks[n])
-	}
-	if len(ok) == 0 {
-		return nil, batchErr // the index is failing, not one document: no backoff for any of them
 	}
 	for _, m := range refused {
 		i.recordFailure(m)
