@@ -1,5 +1,5 @@
 // file: core/backup/journal/unapplied.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5382e06d-ca9d-4f14-bb33-01b6760604b6
 // last-edited: 2026-11-12
 
@@ -20,8 +20,8 @@ import (
 // A revocation line of a kind this build does not know was written by a newer
 // build. This build cannot apply it, but it must not stop: holding the store's
 // head below that line would make every later boot re-apply the lines after it
-// (undoing an admin's re-enable, a new password, a re-enabled key), refuse the
-// journal for good and fail closed again each time. So the head passes the line,
+// (undoing an admin's re-enable, a new password, a re-enabled key) and refuse the
+// journal for good. So the head passes the line,
 // and the line is recorded here first, durably, so that nothing is lost by
 // that: the first boot of a build that knows its kind applies it and deletes
 // the entry in the same batch (the kernel's drain). An entry is a pointer into
