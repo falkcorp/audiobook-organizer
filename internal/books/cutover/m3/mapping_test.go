@@ -7,6 +7,7 @@ package m3
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -393,12 +394,33 @@ func TestOwnerPerms(t *testing.T) {
 		}
 		return nil, false, nil
 	}
-	got, err := m.ownerPerms(context.Background(), []rbac.RoleName{"viewer", "custom.role-x", "custom.role-missing"}, lookup)
+	got, err := m.ownerPerms(context.Background(), []rbac.RoleName{"viewer", "custom.role-x"}, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(got, "books:view") || !slices.Contains(got, "books:edit") || slices.Contains(got, rbac.CoreAdmin) {
 		t.Errorf("owner perms = %v", got)
+	}
+}
+
+// TestOwnerPerms_UnresolvedRoleIsAnError: a custom role that is neither in the
+// chunk nor stored does not silently grant nothing (that would narrow every key
+// its user owns); the step fails and retries instead. A lookup error is passed
+// up as well.
+func TestOwnerPerms_UnresolvedRoleIsAnError(t *testing.T) {
+	m := testMigration(t)
+	none := func(context.Context, rbac.RoleName) ([]rbac.Permission, bool, error) { return nil, false, nil }
+	got, err := m.ownerPerms(context.Background(), []rbac.RoleName{"viewer", "custom.role-missing"}, none)
+	if err == nil || !strings.Contains(err.Error(), "custom.role-missing") {
+		t.Fatalf("an unresolved custom role: perms %v, err %v; want an error naming the role", got, err)
+	}
+	if got != nil {
+		t.Errorf("an unresolved custom role returned perms %v alongside the error", got)
+	}
+	boom := errors.New("native read failed")
+	failing := func(context.Context, rbac.RoleName) ([]rbac.Permission, bool, error) { return nil, false, boom }
+	if _, err := m.ownerPerms(context.Background(), []rbac.RoleName{"custom.role-x"}, failing); !errors.Is(err, boom) {
+		t.Errorf("a lookup error: %v, want it passed up", err)
 	}
 }
 
@@ -418,7 +440,15 @@ func TestNewRefusesAnIncompleteConfig(t *testing.T) {
 		"a scopeless atom":  func(c *Config) { c.Atoms = append(slices.Clone(c.Atoms), AtomRow{Name: "empty"}) },
 		"a repeated atom":   func(c *Config) { c.Atoms = append(slices.Clone(c.Atoms), c.Atoms[0]) },
 		"no admin seed":     func(c *Config) { c.SeedRoles = c.SeedRoles[1:] },
-		"a nameless seed":   func(c *Config) { c.SeedRoles = append(slices.Clone(c.SeedRoles), SeedRole{}) },
+		"an admin seed that grants no core:admin": func(c *Config) {
+			c.SeedRoles = slices.Clone(c.SeedRoles)
+			c.SeedRoles[0] = SeedRole{ID: "admin", Permissions: []rbac.Permission{"books:view"}}
+		},
+		"an empty admin seed": func(c *Config) {
+			c.SeedRoles = slices.Clone(c.SeedRoles)
+			c.SeedRoles[0] = SeedRole{ID: "admin"}
+		},
+		"a nameless seed": func(c *Config) { c.SeedRoles = append(slices.Clone(c.SeedRoles), SeedRole{}) },
 	} {
 		cfg := good
 		mut(&cfg)

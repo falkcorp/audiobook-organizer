@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // identityFamilies are the legacy prefixes M3's Source drains.
@@ -122,9 +123,25 @@ func TestIdentityCutover_OverlayCells(t *testing.T) {
 		var got []string
 		for _, q := range snap.Quarantine {
 			got = append(got, q.Key)
-			if q.Sealed {
-				t.Errorf("%s is sealed: M3 quarantines no credential", q.Key)
+			// An allow-list row can hold the raw invite token its grant
+			// recorded, and a row that does not decode cannot be told from one
+			// that does, so it is quarantined sealed (a Sensitive prefix): the
+			// record carries the secret's name, never the row. No other
+			// quarantined row is a credential.
+			if want := strings.HasPrefix(q.Key, "inviteallow:"); q.Sealed != want {
+				t.Errorf("%s: sealed %v, want %v (only an allow-list row is sealed)", q.Key, q.Sealed, want)
 			}
+			if q.Sealed {
+				if q.Value != "" {
+					t.Errorf("%s: the quarantine record carries the row, want only the secret's name", q.Key)
+				}
+				if raw, ok := snap.Sealed[storage.QuarantineSecretName(q.N)]; !ok || len(raw) == 0 {
+					t.Errorf("%s: the sealed copy %s is missing", q.Key, storage.QuarantineSecretName(q.N))
+				}
+			}
+		}
+		if n := len(snap.Sealed); n != 1 {
+			t.Errorf("%d sealed rows, want exactly the allow-list row's", n)
 		}
 		want := sortedStrings("role:"+roleCorrupt, "role:"+roleAllUnk, "inviteallow:owlman@court-of-owls.invalid")
 		slices.Sort(got)

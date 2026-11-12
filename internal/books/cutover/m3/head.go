@@ -89,9 +89,11 @@ func SourcePrefixes() []string { return append([]string(nil), identityPrefixes..
 func SourceKeys() []string { return append([]string(nil), identityKeys...) }
 
 // SensitivePrefixes are the Source prefixes whose quarantined rows may hold
-// credentials (05-storage §5S.3.13 Sensitive; DATA-14).
+// credentials (05-storage §5S.3.13 Sensitive; DATA-14). An allow-list row
+// holds the raw invite token its accept recorded, and a quarantined one keeps
+// the row as it was.
 func SensitivePrefixes() []string {
-	return []string{prefixUser, idxUserByMail, prefixKey, prefixIdentity}
+	return []string{prefixUser, idxUserByMail, prefixKey, prefixIdentity, prefixInviteAllow}
 }
 
 // ---- HEAD's rows, frozen ----

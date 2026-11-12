@@ -26,7 +26,37 @@ const (
 	pRowNoId = "01M7ZZZPREFLIGHTROWI000007"
 	pJrnl    = "01M7ZZZPREFLIGHTJRNL000008"
 	pJrnlOK  = "01M7ZZZPREFLIGHTJRNL000009"
+	// Two rows that carry one value, first in key order and the twin the
+	// preflight must hold back: the twins of one token hash and of one
+	// (provider, subject).
+	pTwinKeyA = "01M7ZZZPREFLIGHTTWNK000010"
+	pTwinKeyB = "01M7ZZZPREFLIGHTTWNK000011"
+	pTwinIdA  = "01M7ZZZPREFLIGHTTWNI000012"
+	pTwinIdB  = "01M7ZZZPREFLIGHTTWNI000013"
+	// A raw value of the twin keys and the subject of the twin identities:
+	// neither may appear in any report.
+	pTwinRaw     = "mck-twin-hash-0001"
+	pTwinSubject = "mck-twin-subject"
 )
+
+// twinKeys are two HEAD keys that share one stored token hash, as a restore
+// or a double create leaves them (CreateAPIKey checks no hash).
+func twinKeys() []seedRow {
+	return rowsOf(
+		headKeyRows(pTwinKeyA, uBarbara, pTwinRaw, []string{"library.view"}, "active"),
+		headKeyRows(pTwinKeyB, uBarbara, pTwinRaw, []string{"library.view"}, "active"),
+	)
+}
+
+func twinIdentityRow(id string) seedRow {
+	return seedRow{"oauthid:" + id, map[string]any{"id": id, "provider": "github", "subject": pTwinSubject, "email": "", "user_id": uBarbara, "created_at": "2026-11-10T11:00:00Z"}}
+}
+
+// twinIdentities are two HEAD identities of one (provider, subject): a
+// concurrent first sign-in creates both (CreateOAuthIdentity checks no twin).
+func twinIdentities() []seedRow {
+	return []seedRow{twinIdentityRow(pTwinIdA), twinIdentityRow(pTwinIdB)}
+}
 
 // TestIdentityPreflight_Classes: what the preflight decides from HEAD's rows
 // alone, each in its own cell over the clean R0 corpus plus the cell's rows.
@@ -64,6 +94,16 @@ func TestIdentityPreflight_Classes(t *testing.T) {
 			rows: []seedRow{{"apikey:" + pRowHash, map[string]any{"id": pRowHash, "user_id": uBarbara, "name": "bad-hash", "token_hash": "zz-not-a-digest",
 				"scopes": []string{"library.view"}, "status": "active", "created_at": "2026-11-10T11:00:00Z", "expires_at": "2027-11-10T11:00:00Z"}}},
 			want: []want{{"apikey:" + pRowHash, "apikey:", "token hash"}},
+		},
+		{
+			name: "two keys of one token hash: the later is held back and names the first by ID",
+			rows: twinKeys(),
+			want: []want{{"apikey:" + pTwinKeyB, "apikey:", "held by key " + pTwinKeyA}},
+		},
+		{
+			name: "two identities of one provider and subject: the later is held back and names the first by ID",
+			rows: twinIdentities(),
+			want: []want{{"oauthid:" + pTwinIdB, "oauthid:", "held by identity " + pTwinIdA}},
 		},
 		{
 			name: "an OAuth identity the importer rejects (no provider)",
@@ -110,7 +150,7 @@ func TestIdentityPreflight_Classes(t *testing.T) {
 				}
 			}
 			text := strings.Join(storage.CutoverBlockerReport(got), "\n") + "\n" + r.logs.String()
-			for _, v := range append(credentialValues(legacy), "slade.wilson", "Slade", "zz-not-a-digest", "mck-subject") {
+			for _, v := range append(credentialValues(legacy), "slade.wilson", "Slade", "zz-not-a-digest", "mck-subject", pTwinSubject, pTwinRaw, idDigest(pTwinRaw)) {
 				if strings.Contains(text, v) {
 					t.Errorf("the report or the log carries the value %q", v)
 				}

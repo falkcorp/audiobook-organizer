@@ -82,8 +82,14 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 		w.Count(OutcomeDeleted)
 		return w.Delete(kv.Key)
 	case strings.HasPrefix(key, prefixUser), strings.HasPrefix(key, prefixRole):
-		// begin pulled every one of them into this chunk; reaching one here
-		// is a row that appeared after the pull, which nothing writes.
+		// begin pulled every one of them into this chunk, with its delete
+		// staged. A chunk's first item can be one of them (a store with no row
+		// that sorts before the first role or user): begin has just handled it,
+		// and there is nothing left to do. A row begin did not see appeared
+		// after the pull, which nothing writes.
+		if _, ok := m.chunkPulled[key]; ok {
+			return nil
+		}
 		return fmt.Errorf("m3: the row %q was not pulled forward with its chunk", key)
 	}
 	for _, p := range []string{idxUser, idxRoleName, idxKey, idxInvite, idxOAuth, idxSessByUser} {
@@ -105,6 +111,7 @@ func (m *Migration) begin(ctx context.Context, w *datamigrate.StepWriter) error 
 	m.chunkUsers = map[auth.UserID][]rbac.RoleName{}
 	m.chunkRoles = map[rbac.RoleName][]rbac.Permission{}
 	m.chunkNames = map[string]string{}
+	m.chunkPulled = map[string]struct{}{}
 	outcomes, err := m.pullRoles(ctx, w)
 	if err != nil {
 		return err
@@ -139,15 +146,24 @@ func scanRows(ctx context.Context, r storage.Reader, prefix string) ([]storage.K
 
 var quoted = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
 
-// redact is an importer's refusal without anything it quotes: a username or a
-// status in the text is a value, and a blocker names a row, never one.
+// redact is a refusal of auth.CheckImport* without anything it quotes: a
+// status or a scope in the text is a value, and a blocker names a row, never
+// one. Those messages name a record by ID and quote every value; text from a
+// store's own importer is not covered (see refused).
 func redact(err error) string { return quoted.ReplaceAllString(err.Error(), `"…"`) }
+
+// refusedClass is the reason of a blocker the step raises from an importer's
+// refusal. It is a fixed class, not the importer's text: a store's refusal can
+// name a value without quoting it (an OAuth subject, a username), and a
+// blocker carries a key and a class, never a value. The preflight has already
+// given the precise reason for every rule it can decide from HEAD's rows.
+const refusedClass = "the importer rejects the row"
 
 // refused turns an importer's refusal of an identity row into the blocker
 // that stops the upgrade; any other error is the step's own failure.
 func (m *Migration) refused(err error, key, family string) error {
 	if errors.Is(err, auth.ErrImportRejected) {
-		return m.blocked(key, family, "the importer rejects the row: "+redact(err), fixHint)
+		return m.blocked(key, family, refusedClass, fixHint)
 	}
 	return err
 }
@@ -173,6 +189,7 @@ func (m *Migration) pullRoles(ctx context.Context, w *datamigrate.StepWriter) (m
 	}
 	for _, kv := range rows {
 		key := string(kv.Key)
+		m.chunkPulled[key] = struct{}{}
 		h, derr := decodeRole(key, kv.Value)
 		if derr != nil {
 			m.log.Warn("m3: a role row does not decode and is quarantined", "step", m.cfg.StepID, "key", key, "reason", derr.Error())
@@ -184,7 +201,7 @@ func (m *Migration) pullRoles(ctx context.Context, w *datamigrate.StepWriter) (m
 		v := m.verdictOf(h, taken)
 		if len(v.unknown) > 0 {
 			w.Count(OutcomeReported)
-			m.log.Warn("m3: a role names atoms outside the atom table; they grant nothing", "step", m.cfg.StepID, "role", h.ID, "atoms", v.unknown)
+			m.log.Warn("m3: a role names atoms outside the atom table; they grant nothing", "step", m.cfg.StepID, "role", h.ID, "atoms", boundedAtoms(v.unknown))
 		}
 		switch v.kind {
 		case verdictSeed:
@@ -276,6 +293,7 @@ func (m *Migration) pullUsers(ctx context.Context, w *datamigrate.StepWriter, ou
 	b := w.Batch()
 	for _, kv := range rows {
 		key := string(kv.Key)
+		m.chunkPulled[key] = struct{}{}
 		h, derr := decodeUser(key, kv.Value)
 		if derr != nil {
 			return m.blocked(key, prefixUser, "the row does not decode: "+derr.Error(), fixHint)
@@ -387,7 +405,7 @@ func (m *Migration) reportKey(w *datamigrate.StepWriter, id string, n keyNotes) 
 	}
 	if len(n.unknown) > 0 {
 		w.Count(OutcomeReported)
-		m.log.Warn("m3: a key names atoms outside the atom table; they grant nothing", "step", m.cfg.StepID, "key", id, "atoms", n.unknown)
+		m.log.Warn("m3: a key names atoms outside the atom table; they grant nothing", "step", m.cfg.StepID, "key", id, "atoms", boundedAtoms(n.unknown))
 	}
 	if n.stamped {
 		m.log.Info("m3: a key with no expiry got the one-shot expiry stamp", "step", m.cfg.StepID, "key", id)
