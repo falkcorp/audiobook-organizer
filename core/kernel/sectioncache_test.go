@@ -1,5 +1,5 @@
 // file: core/kernel/sectioncache_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9e049097-4cad-41aa-a27d-ddd611ce22d0
 // last-edited: 2026-11-12
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // TestBootSectionCache: a boot gets the section cache a test put in its
@@ -73,16 +74,18 @@ func TestNewCoreConfig_SharedCache(t *testing.T) {
 }
 
 // TestKernelBoot_CoreConfigUsesSeamCache: a boot over a context carrying a
-// section cache builds the core config sections through it (the cache holds
-// them afterwards), and a second boot over it adds none: the wiring the
-// crash matrix relies on to build the core sections once per run, not once per
+// section cache builds the core config sections through it when the tasks
+// wiring reads the core config (a registered definition: the config is built
+// lazily at P7), so the cache holds them afterwards, and a second boot over it adds none:
+// the wiring the crash matrix relies on to build the core sections once per run, not once per
 // boot. A boot with no cache leaves it alone.
 func TestKernelBoot_CoreConfigUsesSeamCache(t *testing.T) {
 	cache := config.NewSectionCache()
 	ctx := bootseam.With(t.Context(), &bootseam.Seams{SectionCache: cache})
 	boot := func(ctx context.Context) {
 		t.Helper()
-		k, err := New(ctx, testConfig(t))
+		c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol()))
+		k, err := New(ctx, c)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
