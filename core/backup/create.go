@@ -1,5 +1,5 @@
 // file: core/backup/create.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6e7c41d8-9a30-4d1b-a2c5-17b0f3d9e6a4
 // last-edited: 2026-11-12
 
@@ -109,11 +109,10 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 			return Archive{}, fmt.Errorf("backup: read journal boundaries: %w", err)
 		}
 	}
-	t0 := time.Now()
+	endPhase := s.phase(ctx, "checkpoint")
 	if err := s.o.Store.Checkpoint(ctx, filepath.Join(run.path, "db")); err != nil {
 		return Archive{}, fmt.Errorf("backup: checkpoint: %w", err)
 	}
-	s.o.Metrics.Phase(ctx, "checkpoint", time.Since(t0))
 	if s.o.Markers != nil {
 		if _, err := s.o.Markers.Advance(ctx); err != nil {
 			return Archive{}, fmt.Errorf("backup: advance the content marker: %w", err)
@@ -124,12 +123,14 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 		return Archive{}, fmt.Errorf("backup: read the checkpoint: %w", err)
 	}
 
-	// 5. Capture, hash, manifest, provenance.
-	t0 = time.Now()
+	// 5. Capture, hash, manifest, provenance. The capture belongs to the
+	// checkpoint phase: every input is read from the one consistent point.
 	caps, redacted, err := s.capture(ctx, run, co, set)
 	if err != nil {
 		return Archive{}, err
 	}
+	endPhase()
+	endPhase = s.phase(ctx, "checksum")
 	entries, err := run.hashTree(ctx, set.HashWorkers)
 	if err != nil {
 		return Archive{}, err
@@ -157,14 +158,14 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 	if err != nil {
 		return Archive{}, err
 	}
-	s.o.Metrics.Phase(ctx, "archive", time.Since(t0))
+	endPhase()
 
 	// 5b/6. Stream, rename, sidecars.
+	endPhase = s.phase(ctx, "archive")
 	name, final, err := s.freshName(now, codec.Extension())
 	if err != nil {
 		return Archive{}, err
 	}
-	t0 = time.Now()
 	sum, size, err := writeArchive(ctx, archiveSpec{
 		Partial: final + ".partial", Codec: codec, Level: set.CompressionLevel,
 		Manifest: mb, Created: now, Entries: entries, RunDir: run.path,
@@ -176,13 +177,11 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 		_ = os.Remove(final + ".partial")
 		return Archive{}, err
 	}
-	t1 := time.Now()
 	if err := s.writeSidecars(final, name, sum, mb); err != nil {
 		removeArchive(final)
 		return Archive{}, err
 	}
-	s.o.Metrics.Phase(ctx, "checksum", time.Since(t1))
-	_ = t0
+	endPhase()
 	a := Archive{
 		ID: id, Name: name, Size: size, CreatedAt: now, Format: FormatMediacore, Provenance: Own, Manifest: m,
 	}
@@ -190,9 +189,9 @@ func (s *Svc) create(ctx context.Context, co CreateOptions, reason string) (Arch
 
 	// 7. Verification after create.
 	if set.VerifyAfterCreate {
-		t2 := time.Now()
+		endVerify := s.phase(ctx, "verify")
 		res, verr := s.verifyArchive(ctx, final, a.ID, VerifyOpen)
-		s.o.Metrics.Phase(ctx, "verify", time.Since(t2))
+		endVerify()
 		a.Verified = &res
 		if verr != nil {
 			return a, fmt.Errorf("backup: the new archive %s failed verification: %w", a.ID, verr)
