@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.27.1
+// version: 1.28.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package repairs
 
@@ -94,18 +94,9 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	if err != nil {
 		return nil, fmt.Errorf("repairs: plan %s: %w", f.ID(), err)
 	}
-	// The wire format promises book_ids and rows are arrays, never null: a
-	// fixer that returns no rows, or builds a row without BookIDs, would
-	// otherwise marshal null and break the lane's iteration over them.
-	if rows == nil {
-		rows = []Row{}
-	}
-	seen := make(map[string]bool, len(rows))
-	for i := range rows {
-		if rows[i].RowID == "" || seen[rows[i].RowID] {
-			return nil, fmt.Errorf("repairs: plan %s: empty or duplicate row id %q", f.ID(), rows[i].RowID)
-		}
-		seen[rows[i].RowID] = true
+	rows, err = checkPlanRows(f, rows)
+	if err != nil {
+		return nil, err
 	}
 	// The guard runs over every applicable row and over every owner row
 	// (skipped, but one the owner may apply): a guard the fixer's own check
@@ -129,24 +120,7 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	// row, so the slice needs no lock.
 	gerr := registry.RunItems(ctx, reporter, idx, func(_ context.Context, i int) error {
 		defer done.Add(1)
-		// An owner row's OwnerITunesDatabaseOnly books get the one lifted
-		// check (GuardRowBooksFor); an applicable row gets none.
-		kind, why, err := GuardRowBooksFor(f, deps.Guard, deps.Tags, deps.Series, paths, rows[i], nil, true)
-		if err != nil {
-			kind, why = SkipGuardUnreadable, err.Error()
-		}
-		switch {
-		case kind == "":
-		case !rows[i].Applicable():
-			// An owner row: it stays skipped as the fixer said, and loses
-			// the owner's Apply with the guard's reason.
-			rows[i].OwnerApplicable, rows[i].OwnerApplyReason = false, ""
-			rows[i].SkipReason += "; not owner-applicable: " + why
-			rows[i].Holds = append(rows[i].Holds, RowHold{Kind: kind, Why: why})
-		default:
-			rows[i].Skipped, rows[i].SkipReason = kind, why
-			rows[i].Holds = append(rows[i].Holds, RowHold{Kind: kind, Why: why})
-		}
+		guardPlanRow(f, deps.Guard, deps.Tags, deps.Series, paths, &rows[i])
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: conc,
@@ -161,10 +135,11 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	res := &PlanResult{FixerID: f.ID(), Params: params, PlannedAt: time.Now().UTC(), Total: len(rows),
 		SkippedByKind: map[string]int{}, Rows: rows}
 	for i := range rows {
+		if ferr := settlePlanRow(&rows[i]); ferr != nil {
+			return nil, fmt.Errorf("repairs: plan %s: row %q: %w", f.ID(), rows[i].RowID, ferr)
+		}
 		if rows[i].Applicable() {
 			res.Applicable++
-			// A fixer marks only skipped rows owner-applicable.
-			rows[i].OwnerApplicable, rows[i].OwnerApplyReason = false, ""
 		} else {
 			res.SkippedByKind[rows[i].Skipped]++
 			if rows[i].OwnerApplicable {
@@ -177,12 +152,7 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 			}
 			res.ByClass[c]++
 		}
-		flags, ferr := normalizeFlags(rows[i].Flags)
-		if ferr != nil {
-			return nil, fmt.Errorf("repairs: plan %s: row %q: %w", f.ID(), rows[i].RowID, ferr)
-		}
-		rows[i].Flags = flags
-		for _, fl := range flags {
+		for _, fl := range rows[i].Flags {
 			if res.ByFlag == nil {
 				res.ByFlag = map[string]int{}
 			}
@@ -191,6 +161,70 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	}
 	res.normalize()
 	return res, nil
+}
+
+// checkPlanRows is RunPlan's check of the rows a fixer planned: never nil, and
+// every row has an id no other row has. The native shell (kinds.go) makes the
+// same check, so a plan reads the same rows in either engine.
+func checkPlanRows(f Fixer, rows []Row) ([]Row, error) {
+	// The wire format promises book_ids and rows are arrays, never null: a
+	// fixer that returns no rows, or builds a row without BookIDs, would
+	// otherwise marshal null and break the lane's iteration over them.
+	if rows == nil {
+		rows = []Row{}
+	}
+	seen := make(map[string]bool, len(rows))
+	for i := range rows {
+		if rows[i].RowID == "" || seen[rows[i].RowID] {
+			return nil, fmt.Errorf("repairs: plan %s: empty or duplicate row id %q", f.ID(), rows[i].RowID)
+		}
+		seen[rows[i].RowID] = true
+	}
+	return rows, nil
+}
+
+// guardPlanRow is RunPlan's guard step for one row: the framework guards run
+// over every book of an applicable row, and over every owner row (skipped, but
+// one the owner may apply). The row is changed in place; a book the guard
+// cannot read holds it (SkipGuardUnreadable, fail closed). Safe for concurrent
+// use over distinct rows.
+func guardPlanRow(f Fixer, g GuardReader, tags GuardTagReader, series SeriesNamer, paths *PathResolver, row *Row) {
+	if !row.Applicable() && !row.OwnerApplicable {
+		return
+	}
+	// An owner row's OwnerITunesDatabaseOnly books get the one lifted
+	// check (GuardRowBooksFor); an applicable row gets none.
+	kind, why, err := GuardRowBooksFor(f, g, tags, series, paths, *row, nil, true)
+	if err != nil {
+		kind, why = SkipGuardUnreadable, err.Error()
+	}
+	switch {
+	case kind == "":
+	case !row.Applicable():
+		// An owner row: it stays skipped as the fixer said, and loses
+		// the owner's Apply with the guard's reason.
+		row.OwnerApplicable, row.OwnerApplyReason = false, ""
+		row.SkipReason += "; not owner-applicable: " + why
+		row.Holds = append(row.Holds, RowHold{Kind: kind, Why: why})
+	default:
+		row.Skipped, row.SkipReason = kind, why
+		row.Holds = append(row.Holds, RowHold{Kind: kind, Why: why})
+	}
+}
+
+// settlePlanRow is RunPlan's last step over a guarded row: a fixer marks only
+// skipped rows owner-applicable, so an applicable row loses the mark, and the
+// row's flags are sorted and de-duplicated.
+func settlePlanRow(row *Row) error {
+	if row.Applicable() {
+		row.OwnerApplicable, row.OwnerApplyReason = false, ""
+	}
+	flags, err := normalizeFlags(row.Flags)
+	if err != nil {
+		return err
+	}
+	row.Flags = flags
+	return nil
 }
 
 // normalizeFlags sorts and de-duplicates a row's flags and refuses a name the
