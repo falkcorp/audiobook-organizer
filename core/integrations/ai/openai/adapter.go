@@ -20,8 +20,11 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -110,6 +113,7 @@ func build(_ context.Context, env integrations.Env, cfg integrations.InstanceCon
 		// router ever saw it, defeating its failover and bench.
 		option.WithMaxRetries(0),
 		option.WithHTTPClient(env.HTTP.Client()),
+		option.WithMiddleware(responseGuard(env)),
 	}
 	if hasKey(cfg.Settings) {
 		opts = append(opts, option.WithMiddleware(keyMiddleware(env)))
@@ -126,6 +130,12 @@ func baseURL(raw string) (string, error) {
 	}
 	if u.User != nil {
 		return "", errors.New("the url setting must not carry credentials; set api_key instead")
+	}
+	// The SDK joins request paths onto the base and drops its query, so a
+	// credential pasted there would never be sent and would sit in plaintext in
+	// the stored settings: refuse it where the operator can see why.
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return "", errors.New("the url setting must not carry a query or fragment; set api_key for a credential")
 	}
 	if !strings.HasSuffix(u.Path, "/") {
 		u.Path += "/"
@@ -160,6 +170,30 @@ func keyMiddleware(env integrations.Env) option.Middleware {
 		}
 		req.Header.Set("Authorization", "Bearer "+v.Reveal())
 		return next(req)
+	}
+}
+
+// responseGuard turns a 2xx answer that cannot be a JSON reply into
+// ClassBadOutput before the SDK tries to decode it. The usual cause is a url
+// that reaches a web page or a proxy's login screen (200, text/html) instead of
+// the API; the SDK reports that as a bare string error, which would class as
+// unknown, and the operator would not learn what came back. The only 2xx the
+// API answers without JSON is a file's content (the batch result files).
+func responseGuard(env integrations.Env) option.Middleware {
+	return func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		resp, err := next(req)
+		if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode > 299 || strings.HasSuffix(req.URL.Path, "/content") {
+			return resp, err
+		}
+		mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		if mt == "application/json" || strings.HasSuffix(mt, "+json") {
+			return resp, nil
+		}
+		drain(resp.Body)
+		return nil, &integrations.Error{
+			Ref: env.Ref, Status: resp.StatusCode, Class: integrations.ClassBadOutput,
+			Err: fmt.Errorf("the server answered %d with content type %q, not JSON; check that the url setting points at the API", resp.StatusCode, detail(mt)),
+		}
 	}
 }
 
@@ -234,9 +268,14 @@ func (i *instance) fail(ctx context.Context, op string, err error) error {
 		return nil
 	}
 	if e, ok := errors.AsType[*integrations.Error](err); ok {
-		if e.Ref == (integrations.Ref{}) {
+		if e.Ref == (integrations.Ref{}) || e.Op == "" {
 			c := *e
-			c.Ref = i.ref
+			if c.Ref == (integrations.Ref{}) {
+				c.Ref = i.ref
+			}
+			if c.Op == "" {
+				c.Op = op
+			}
 			return &c
 		}
 		return e
@@ -256,7 +295,30 @@ func (i *instance) fail(ctx context.Context, op string, err error) error {
 		}
 		return e
 	}
+	if _, transport := errors.AsType[*url.Error](err); !transport {
+		switch {
+		case isDecodeError(err):
+			return i.badOutput(op, "the server's answer is not the JSON the API defines")
+		case errors.Is(err, io.ErrUnexpectedEOF):
+			return &integrations.Error{Ref: i.ref, Op: op, Class: integrations.ClassTransient, Err: errors.New("the server's answer was cut off")}
+		}
+	}
 	return &integrations.Error{Ref: i.ref, Op: op, Class: integrations.ClassOf(ctx, err), Err: scrubbed(err)}
+}
+
+// isDecodeError reports whether err is the SDK failing to decode a 2xx body as
+// JSON: a syntax error, a value of the wrong type, or an empty body. The SDK
+// wraps these with %w, so they are recognized by type, not by its message. The
+// caller has already ruled out a transport error (a *url.Error), whose io.EOF
+// means the connection closed before any answer.
+func isDecodeError(err error) bool {
+	if _, ok := errors.AsType[*json.SyntaxError](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[*json.UnmarshalTypeError](err); ok {
+		return true
+	}
+	return errors.Is(err, io.EOF)
 }
 
 // scrubbed is err's class text without the URL a *url.Error names.

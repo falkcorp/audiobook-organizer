@@ -179,22 +179,25 @@ func (i *instance) Embed(ctx context.Context, model string, req ai.EmbedRequest)
 // defaultTranscribeModel is asked for when the endpoint names none.
 const defaultTranscribeModel = "whisper-1"
 
-// audioName gives the upload a file name whose extension carries the format
-// (the server identifies the audio by it).
-func audioName(mime string) string {
-	switch strings.ToLower(strings.TrimSpace(mime)) {
+// audioUpload gives the upload a file name whose extension carries the format
+// (the server identifies the audio by it) and the content type to send with it.
+// A MIME type the adapter does not know, or none, is uploaded as mp3: the
+// extension is what the server reads, and the content type must still be a
+// valid media type, because the SDK refuses to encode the upload without one.
+func audioUpload(mimeType string) (name, contentType string) {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
 	case "audio/wav", "audio/x-wav", "audio/wave":
-		return "audio.wav"
+		return "audio.wav", "audio/wav"
 	case "audio/flac", "audio/x-flac":
-		return "audio.flac"
+		return "audio.flac", "audio/flac"
 	case "audio/ogg", "audio/opus":
-		return "audio.ogg"
+		return "audio.ogg", "audio/ogg"
 	case "audio/mp4", "audio/m4a", "audio/x-m4a":
-		return "audio.m4a"
+		return "audio.m4a", "audio/mp4"
 	case "audio/webm":
-		return "audio.webm"
+		return "audio.webm", "audio/webm"
 	}
-	return "audio.mp3"
+	return "audio.mp3", "audio/mpeg"
 }
 
 // transcription is the verbose_json reply, read from the raw body so the
@@ -222,8 +225,9 @@ func (i *instance) Transcribe(ctx context.Context, model string, req ai.Transcri
 	if model == "" {
 		model = defaultTranscribeModel
 	}
+	name, contentType := audioUpload(req.Audio.MIME)
 	p := oai.AudioTranscriptionNewParams{
-		File:           oai.File(bytes.NewReader(req.Audio.Data), audioName(req.Audio.MIME), req.Audio.MIME),
+		File:           oai.File(bytes.NewReader(req.Audio.Data), name, contentType),
 		Model:          oai.AudioModel(model),
 		ResponseFormat: oai.AudioResponseFormatVerboseJSON,
 	}
