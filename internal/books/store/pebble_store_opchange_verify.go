@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_opchange_verify.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 95b3e380-e3be-4545-a68c-842559a84058
 // last-edited: 2026-11-12
 
@@ -302,7 +302,7 @@ func (p *PebbleStore) verifyOpChangeRange(ctx context.Context, run opChangeVerif
 				rep.Undecodable--
 				rep.OverlongRows++
 				warnOpChangeOverlong("opchange-index-verify", -1, len(k))
-				return nil
+				return p.db.Set(opChangeOverlongKey(k), bytes.Clone(k), pebble.Sync)
 			}
 			if err != nil {
 				return err
@@ -323,7 +323,8 @@ func (p *PebbleStore) verifyOpChangeRange(ctx context.Context, run opChangeVerif
 		if errors.Is(err, errOpChangeKeyTooLong) {
 			rep.OverlongRows++
 			warnOpChangeOverlong("opchange-index-verify", len(c.BookID), len(k))
-			return nil
+			// Durable, so a later boot that walks only the tail still knows.
+			return p.db.Set(opChangeOverlongKey(k), bytes.Clone(k), pebble.Sync)
 		}
 		if err != nil {
 			return err
@@ -531,8 +532,38 @@ func (p *PebbleStore) verifyOpChangeByBookResumable(ctx context.Context, opts Op
 	if walked.Undecodable, err = p.countLiveOpChangeUndecodable(); err != nil {
 		return walked, err
 	}
+	// Same for overlong-suffix rows: the tail walk saw only its own, the marker
+	// family is the journal's. Trust is withheld while any live one exists.
+	if walked.OverlongRows, err = p.countLiveOpChangeOverlong(); err != nil {
+		return walked, err
+	}
 	walked.Complete = true
 	return walked, nil
+}
+
+// countLiveOpChangeOverlong counts the opchange_overlong: markers whose row is
+// still present: the overlong-suffix rows of the whole journal, which a tail
+// verify cannot count itself. A marker whose row is gone is stale and ignored.
+func (p *PebbleStore) countLiveOpChangeOverlong() (int, error) {
+	lower := []byte(opChangeOverlongPrefix)
+	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: prefixEnd(lower)})
+	if err != nil {
+		return 0, err
+	}
+	defer iter.Close()
+	n := 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		_, closer, err := p.db.Get(iter.Value())
+		if errors.Is(err, pebble.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		closer.Close()
+		n++
+	}
+	return n, iter.Error()
 }
 
 // logOpChangeVerifyYield is the Info line of a verify that stopped for its

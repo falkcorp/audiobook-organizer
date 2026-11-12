@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store_opchange_index_test.go
-// version: 1.8.5
+// version: 1.8.6
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
 // last-edited: 2026-11-12
 
@@ -1552,5 +1552,54 @@ func TestPruneOperationChanges_OverlongRowsAreDeleted(t *testing.T) {
 	}
 	if n != 3 {
 		t.Fatalf("pruned %d rows, want 3", n)
+	}
+}
+
+// TestOverlongSuffix_StaysUntrustedAcrossResumedVerifyUntilRowIsGone: the boot
+// verify is cursor-based, so a later boot walks only the tail and cannot see a
+// legacy overlong-suffix row below the cursor. The durable marker family must
+// keep the index untrusted (and GetBookChanges scanning) until the row is gone.
+func TestOverlongSuffix_StaysUntrustedAcrossResumedVerifyUntilRowIsGone(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	longOp := strings.Repeat("o", maxOpChangeSuffixLen)
+	seedRawOpChange(t, p, "op1", "c1", "b1")
+	seedRawOpChange(t, p, longOp, "c2", "b1")
+
+	res, err := p.EnsureOpChangeByBookIndex(context.Background(), nil)
+	if err != nil || res.Trusted {
+		t.Fatalf("first boot = %+v, %v; want untrusted", res, err)
+	}
+
+	// Second boot: the first walk was complete, so this one starts after the
+	// cursor and does not re-read the rows below it, the overlong one included.
+	// Add a properly indexed row after the cursor so the walk is a non-empty,
+	// clean tail.
+	if err := p.CreateOperationChange(&OperationChange{ID: "c3", OperationID: "zzz", BookID: "b2", ChangeType: "metadata_update"}); err != nil {
+		t.Fatal(err)
+	}
+	p.opChangeByBookTrustedAt.Store(0) // a new process has no trust yet
+	res, err = p.EnsureOpChangeByBookIndex(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("second boot: %v", err)
+	}
+	if res.Verify.ResumedAfter == "" {
+		t.Fatalf("second boot did not resume from a cursor: %+v", res.Verify)
+	}
+	if res.Trusted || p.opChangeByBookIndexTrusted() || res.Verify.OverlongRows != 1 {
+		t.Fatalf("second boot = trusted %t overlong %d; want untrusted with the marked row counted", res.Trusted, res.Verify.OverlongRows)
+	}
+	got, err := p.GetBookChanges("b1")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("GetBookChanges(b1) = %v, %v; want both rows", changeIDs(got), err)
+	}
+
+	// Delete the row: the next boot trusts the index again.
+	if err := p.db.Delete(opChangeKey(longOp, "c2"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	p.opChangeByBookTrustedAt.Store(0)
+	res, err = p.EnsureOpChangeByBookIndex(context.Background(), nil)
+	if err != nil || !res.Trusted || !p.opChangeByBookIndexTrusted() {
+		t.Fatalf("boot after the row is gone = %+v, %v; want trusted", res, err)
 	}
 }
