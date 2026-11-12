@@ -1,0 +1,6 @@
+# file: ci/prefreeze_release.txt
+# version: 1.0.0
+# guid: f5674aa0-d5ef-48f2-94de-b75bf2397299
+# last-edited: 2026-11-12
+# The pre-freeze release (09 §9.2.1): the last production release before F3 merged. One tag line; lines starting with '#' are comments.
+v0.227.0
