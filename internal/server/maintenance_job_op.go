@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_job_op.go
-// version: 3.9.0
+// version: 3.9.1
 // guid: 7f3a9c21-4b8e-4d56-a123-0e5f6c7d8e9f
-// last-edited: 2026-10-26
+// last-edited: 2026-11-12
 
 package server
 
@@ -14,6 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	maintjobs "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
@@ -182,7 +183,7 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 					return fmt.Errorf("%s: decode params: %w", maintenanceOpID(jobID), err)
 				}
 			}
-			resolved, err := opmode.ResolveDryRunDefault(maintenanceOpID(jobID), dry.DryRun, dry.DryRunCamel, advertisedDryRunDefault(job))
+			resolved, err := opmode.ResolveDryRunDefault(maintenanceOpID(jobID), dry.DryRun, dry.DryRunCamel, maintjobs.AdvertisedDryRunDefault(job))
 			if err != nil {
 				return err
 			}
@@ -303,7 +304,7 @@ func (s *Server) registerMaintenanceJobOp(reg *opsregistry.Registry, job mainten
 // job with a second mode key); for the dry_run-only jobs it rests on the run
 // closure handing job.Run the resolved dry_run.
 func maintenanceJobPreview(job maintenance.MaintenanceJob, policy maintenance.ExecutionPolicy) opsregistry.PreviewSpec {
-	if !advertisedDryRunDefault(job) {
+	if !maintjobs.AdvertisedDryRunDefault(job) {
 		return opsregistry.PreviewSpec{}
 	}
 	if policy.Params != nil {

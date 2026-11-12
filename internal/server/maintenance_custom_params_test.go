@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_custom_params_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e1b7d38-92a5-4c06-8f31-6a0d5b3ce271
-// last-edited: 2026-08-29
+// last-edited: 2026-11-12
 
 package server
 
@@ -211,7 +211,7 @@ func TestRunMaintenanceJob_CustomParamsAbsentWhenNotSent(t *testing.T) {
 // zero value is DESTRUCTIVE.
 //
 // This probe advertises dry_run:true in DefaultParams, so a body that omits
-// dry_run must resolve to true via advertisedDryRunDefault — and that resolved
+// dry_run must resolve to true via maintjobs.AdvertisedDryRunDefault — and that resolved
 // value must be written INTO the params blob, not merely passed as the argument.
 // Both registry resume paths copy row.Params verbatim, so a blob missing the key
 // would resume decoding dry_run as Go's zero value: false. That turns an

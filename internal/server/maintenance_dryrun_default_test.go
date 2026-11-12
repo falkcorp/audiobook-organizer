@@ -1,7 +1,7 @@
 // file: internal/server/maintenance_dryrun_default_test.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 6c1d84af-97b2-4e30-8f55-2b70e9c14d63
-// last-edited: 2026-09-25
+// last-edited: 2026-11-12
 
 package server
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	maintjobs "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/gin-gonic/gin"
 )
 
@@ -128,7 +129,7 @@ func init() {
 
 // normalizeParamKey folds a JSON key to a form that collapses `dry_run`,
 // `dryRun` and `DryRun` onto the same string. A struct field declared without a
-// json tag marshals as `DryRun`, which advertisedDryRunDefault (matching the tag
+// json tag marshals as `DryRun`, which maintjobs.AdvertisedDryRunDefault (matching the tag
 // `dry_run`) would NOT bind — encoding/json's case-insensitive fallback matches
 // on case, not on punctuation. That job would then advertise dry_run:true to the
 // UI while the handler applied false: the exact advertised-vs-applied
@@ -157,8 +158,8 @@ func TestAdvertisedDryRunDefault_AgreesWithEveryRegisteredJob(t *testing.T) {
 			if err != nil {
 				// A job whose defaults do not marshal cannot advertise a
 				// dry_run at all, so false is the only answer available.
-				if got := advertisedDryRunDefault(job); got {
-					t.Fatalf("DefaultParams() does not marshal (%v) yet advertisedDryRunDefault returned true", err)
+				if got := maintjobs.AdvertisedDryRunDefault(job); got {
+					t.Fatalf("DefaultParams() does not marshal (%v) yet maintjobs.AdvertisedDryRunDefault returned true", err)
 				}
 				return
 			}
@@ -166,8 +167,8 @@ func TestAdvertisedDryRunDefault_AgreesWithEveryRegisteredJob(t *testing.T) {
 			var asMap map[string]any
 			if err := json.Unmarshal(raw, &asMap); err != nil {
 				// Not a JSON object (nil, scalar, array): no dry_run key.
-				if got := advertisedDryRunDefault(job); got {
-					t.Fatalf("DefaultParams() marshals to non-object %s yet advertisedDryRunDefault returned true", raw)
+				if got := maintjobs.AdvertisedDryRunDefault(job); got {
+					t.Fatalf("DefaultParams() marshals to non-object %s yet maintjobs.AdvertisedDryRunDefault returned true", raw)
 				}
 				return
 			}
@@ -186,10 +187,10 @@ func TestAdvertisedDryRunDefault_AgreesWithEveryRegisteredJob(t *testing.T) {
 				advertisedKey = k
 			}
 
-			got := advertisedDryRunDefault(job)
+			got := maintjobs.AdvertisedDryRunDefault(job)
 			if advertised == nil {
 				if got {
-					t.Fatalf("job advertises no dry_run key (%s) yet advertisedDryRunDefault returned true", raw)
+					t.Fatalf("job advertises no dry_run key (%s) yet maintjobs.AdvertisedDryRunDefault returned true", raw)
 				}
 				return
 			}
@@ -201,7 +202,7 @@ func TestAdvertisedDryRunDefault_AgreesWithEveryRegisteredJob(t *testing.T) {
 					"Add a `json:\"dry_run\"` tag to the DefaultParams field.", advertisedKey, raw, got)
 			}
 			if got != *advertised {
-				t.Fatalf("catalogue advertises dry_run=%v (%s) but advertisedDryRunDefault returned %v", *advertised, raw, got)
+				t.Fatalf("catalogue advertises dry_run=%v (%s) but maintjobs.AdvertisedDryRunDefault returned %v", *advertised, raw, got)
 			}
 		})
 	}
@@ -234,8 +235,8 @@ func TestAdvertisedDryRunDefault_PinnedRealJobs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("maintenance.Get(%q): %v", tc.jobID, err)
 		}
-		if got := advertisedDryRunDefault(job); got != tc.want {
-			t.Errorf("advertisedDryRunDefault(%q) = %v, want %v", tc.jobID, got, tc.want)
+		if got := maintjobs.AdvertisedDryRunDefault(job); got != tc.want {
+			t.Errorf("maintjobs.AdvertisedDryRunDefault(%q) = %v, want %v", tc.jobID, got, tc.want)
 		}
 	}
 }
