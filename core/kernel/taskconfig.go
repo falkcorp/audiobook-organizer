@@ -1,7 +1,7 @@
 // file: core/kernel/taskconfig.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b0c9d52-6f3a-4a8e-9c47-2e1d8b7a4f60
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/internal/scheduler"
 	"github.com/falkcorp/mediacore/tasks"
@@ -47,12 +48,14 @@ type cfgLeaf struct {
 	read     func() tasks.ScheduleConfig
 }
 
-// newCoreConfig builds the defaults-only store over coreSections().
-func newCoreConfig(appID string) (*coreConfig, error) {
+// newCoreConfig builds the defaults-only store over coreSections(). cache, when
+// non-nil, is where it gets its sections built (config.Options.SectionCache).
+func newCoreConfig(appID string, cache *config.SectionCache) (*coreConfig, error) {
 	st, err := config.NewStore(config.Options{
-		AppID:   appID,
-		Environ: []string{}, // no environment layer: os.Environ is not read
-		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		AppID:        appID,
+		Environ:      []string{}, // no environment layer: os.Environ is not read
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		SectionCache: cache,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("kernel: core config: %w", err)
@@ -210,4 +213,18 @@ func (c *coreConfig) location() (*time.Location, error) {
 // schedulePoll is core.tasks.schedule_poll.
 func (c *coreConfig) schedulePoll() time.Duration {
 	return time.Duration(c.tasks.Get().SchedulePoll)
+}
+
+// bootSectionCache is the section cache a test handed the boot through
+// bootseam.Seams.SectionCache, nil when it handed none (every production boot).
+func bootSectionCache(ctx context.Context) (*config.SectionCache, error) {
+	s := bootseam.From(ctx)
+	if s == nil || s.SectionCache == nil {
+		return nil, nil
+	}
+	c, ok := s.SectionCache.(*config.SectionCache)
+	if !ok {
+		return nil, fmt.Errorf("kernel: bootseam.Seams.SectionCache is a %T, want *config.SectionCache", s.SectionCache)
+	}
+	return c, nil
 }

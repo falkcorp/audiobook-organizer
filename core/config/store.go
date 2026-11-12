@@ -1,5 +1,5 @@
 // file: core/config/store.go
-// version: 1.1.7
+// version: 1.1.8
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
 // last-edited: 2026-11-12
 
@@ -52,9 +52,10 @@ type Store struct {
 	mu       sync.Mutex
 	sections []*section      // sorted by path
 	envNames map[string]Path // the sections' EnvBinding names
-	// builds is where Register gets a section built: the process-wide cache
-	// of frozen templates (sectioncache.go). Tests swap it to isolate a cache
-	// or, with newTemplateCache(0), to build every section from scratch.
+	// builds is where Register gets a section built: the cache of frozen
+	// templates Options.SectionCache named (sectioncache.go), or nil, which
+	// builds every section from scratch. Tests swap it to isolate a cache or,
+	// with newTemplateCache(0), to build every section from scratch.
 	builds *templateCache
 	// claimed indexes the registered sections' claims, paths and entry-list
 	// parents, so a Register compares only the sections it could collide with
@@ -173,7 +174,7 @@ func NewStore(o Options) (*Store, error) {
 		appBindings[b.Name] = b.Path
 	}
 	s := &Store{
-		o: o, prefix: prefix, log: o.Logger, now: o.Now, builds: sharedTemplates, claimed: newOverlapIndex(),
+		o: o, prefix: prefix, log: o.Logger, now: o.Now, builds: o.SectionCache.templates(), claimed: newOverlapIndex(),
 		canonNames: map[string]Path{}, appBindings: appBindings, envVars: parseEnviron(o.Environ),
 		conflictLogged: map[Path]bool{}, fcWins: map[Path]string{}, fcLogged: map[Path]bool{}, retiredLogged: map[retiredKey]bool{},
 		opSecrets: map[Path]OperatorValue{},

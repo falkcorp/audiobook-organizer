@@ -1,7 +1,7 @@
 // file: core/internal/bootseam/bootseam.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 9d064296-a488-463e-93e9-38d3b21c9167
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // Package bootseam is the per-boot seam of the crash-matrix kit
 // (coretest/crashmatrix, 05-storage §5S.3.16; 06 §6.4.8): a context value
@@ -66,6 +66,13 @@ type Seams struct {
 	// because bootseam sits below kernel; nil, and so never called, in every
 	// production boot.
 	Built func(kernel any)
+	// SectionCache is the *config.SectionCache the kernel's core config store
+	// builds its sections through, so a test that boots the kernel many times
+	// in one process (the crash matrix) builds the core sections once instead
+	// of once per boot. Typed any because bootseam sits below config; a value
+	// of any other type fails the boot. nil, and so no sharing, in every
+	// production boot.
+	SectionCache any
 }
 
 // TaskRunSeed asks for N queued runs of Kind (Seams.TaskRuns).

@@ -1,7 +1,7 @@
 // file: core/kernel/boot.go
-// version: 1.0.14
+// version: 1.0.15
 // guid: 0c2d259d-1f0d-46d8-a42f-e27deea9ec56
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 package kernel
 
@@ -259,7 +259,11 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	if k.rbacCat, err = declareCoreCatalog(); err != nil {
 		return err
 	}
-	if k.coreCfg, err = newCoreConfig(k.cfg.AppID); err != nil {
+	cache, err := bootSectionCache(ctx)
+	if err != nil {
+		return err
+	}
+	if k.coreCfg, err = newCoreConfig(k.cfg.AppID, cache); err != nil {
 		return err
 	}
 	if k.scope, err = p.Core("kernel", "phase", "step"); err != nil {
