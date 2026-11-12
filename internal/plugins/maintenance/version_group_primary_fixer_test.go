@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 7b2d9e46-0c81-4a37-b5f9-1e6c3a8d4f20
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -487,7 +487,7 @@ func TestVGPrimaryRepair_ApplyPausesARunningScanInsteadOfRefusing(t *testing.T) 
 	f.seed(t)
 	scan := &scriptedScan{renewsLeft: -1, running: true, failAcquires: 2}
 	p := f.plugin(scanDeps{store: f.s, scan: scan})
-	rep, err := p.versionGroupPrimaryRepair(context.Background(), vgPrimaryRepairParams{
+	rep, err := p.versionGroupPrimaryRepair(context.Background(), p.deps, vgPrimaryRepairParams{
 		Apply: true, GroupIDs: []string{"vg-double"},
 	}, f.root, f.probe, &opIDReporter{id: "op-vgpr"})
 	require.NoError(t, err)
@@ -502,7 +502,7 @@ func TestVGPrimaryRepair_LeaseLapseAborts(t *testing.T) {
 	f.seed(t)
 	scan := &scriptedScan{renewsLeft: 0}
 	p := f.plugin(scanDeps{store: f.s, scan: scan})
-	rep, err := p.versionGroupPrimaryRepair(context.Background(), vgPrimaryRepairParams{
+	rep, err := p.versionGroupPrimaryRepair(context.Background(), p.deps, vgPrimaryRepairParams{
 		Apply: true, GroupIDs: []string{"vg-double"},
 	}, f.root, f.probe, &opIDReporter{id: "op-vgpr"})
 	require.ErrorIs(t, err, errVGRepairStandDownLost)

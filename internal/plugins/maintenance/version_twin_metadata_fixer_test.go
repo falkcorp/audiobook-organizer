@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -142,7 +142,7 @@ func (l *vtLib) apply(plan *repairs.PlanResult, dry bool, groups ...string) *rep
 	l.t.Helper()
 	series, err := l.st.GetAllSeries()
 	require.NoError(l.t, err)
-	deps := repairs.ApplyDeps{Guard: l.st, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), OpID: vtTestOpID}
+	deps := repairs.ApplyDeps{Guard: l.st, Tags: repairsGuardTags(l.p.deps), Series: repairs.SeriesNamesFrom(series), OpID: vtTestOpID}
 	if !dry {
 		deps.Writer = repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, vtTestOpID)
 	}

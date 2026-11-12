@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/master_list_import_apply_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2f6a9c13-d874-4e05-b1a7-83c5e0d94f68
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -67,7 +67,7 @@ func (l *mlLab) applyWith(f repairs.Fixer, plan *repairs.PlanResult, rowIDs []st
 	w := repairs.NewWriter(l.store, l.store, f.ID(), "bulk_update", "repairs-").
 		WithJournal(l.store, l.store, mlTestApplyOp).WithUserState(l.p.deps.UserReadStateStore())
 	res, err := repairs.RunApply(context.Background(), f, plan, mlTestPlanOp, rowIDs, dryRun,
-		repairs.ApplyDeps{Guard: l.store, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), Writer: w, OpID: mlTestApplyOp}, &fakeReporter{})
+		repairs.ApplyDeps{Guard: l.store, Tags: repairsGuardTags(l.p.deps), Series: repairs.SeriesNamesFrom(series), Writer: w, OpID: mlTestApplyOp}, &fakeReporter{})
 	require.NoError(l.t, err)
 	out := map[string]repairs.RowResult{}
 	for _, r := range res.Rows {

@@ -1,5 +1,5 @@
 # file: internal/plugins/maintenance/testdata/fixer_stores_allowlist.txt
-# version: 1.0.0
+# version: 1.1.0
 # guid: 6a3e8d21-9c47-4f15-b2e0-1d7c5a9f3b68
 # last-edited: 2026-11-12
 #
@@ -7,26 +7,29 @@
 # (fixer_stores_guard_test.go; the pass is tools/fixerstores).
 #
 # Format, one per line:   kind name # reason
-#   store-sink <function>   a function a fixer reaches that calls a FixerStores
-#                           accessor on something other than FixerStores
-#   dep <Method>            a ServerDeps method, not one of the 15 accessors,
-#                           that a fixer reaches through the plugin's captured deps
+#   store-sink <function> <accessor>   a FixerStores accessor a fixer reaches on a
+#                           receiver that is not a store-family interface, or a
+#                           conversion into one (convert:From->To), in <function>.
+#                           Keyed on both: a new accessor in the same function is a
+#                           new report.
+#   dep <Method>            a ServerDeps method, not one of the 15 accessors, that
+#                           a fixer reaches through the plugin's captured deps
+#   unresolved <caller> -> <callee>   a func argument the pass cannot follow
 # The reason is required. An entry the pass no longer reports fails the test
 # (delete it), so this file only shrinks. Adding a line is a review decision,
 # not a way to make the test pass: a fixer that reads a store through the
 # plugin's deps reads HEAD's store, not the one the native shell bound to ctx.
 
-# ---- store sinks: both are bodies shared with an operation, called on a plugin
-# ---- built by withFixerStores, whose deps answer the 15 accessors from the shell.
-store-sink (*Plugin).repairsGuardTags # called on f.p.withFixerStores(f.p.fixerStores(ctx)) (retired_versions_fixer.go buildRun), so its BookTagReader comes from the shell; the other callers are operations
-store-sink (*Plugin).versionGroupPrimaryRepair # called on f.p.withFixerStores(f.p.fixerStores(ctx)) (vgPrimaryFixer.Plan), so its OpsStore and VersionPrimaryStore come from the shell; the operation calls it on the plugin itself
+# ---- store sinks
+store-sink (*Plugin).fixerStores convert:pluginFixerStores->FixerStores # the fallback for a caller that runs a fixer without the shell (HEAD's repairs.plan / repairs.apply ops and the fixers' own tests); the native shell always binds the stores (KindDeps.BindStores is required) and fixerStores answers from ctx first. TestFixers_FallBackToPluginStoresWithoutShell covers it. Goes with the HEAD path
 
 # ---- deps that are not stores
 dep RootDir # the configured library root, a string; nothing is read or written through it
 dep EnqueueOp # AfterApply follow-ups enqueue another operation by definition id; the queue is not one of FixerStores' accessors
 dep InvalidateDedupCache # drops an in-memory cache after series rows changed; reads and writes no store
 dep InvalidateSeriesCache # drops an in-memory cache after series rows changed; reads and writes no store
-dep RenewScanStandDown # renews the legacy stand-down lease inside versionGroupPrimaryRepair, only when params.Apply is set; Plan passes a dry run, and the shell holds the stand-down through rc.StandDown
+dep AcquireScanStandDown # reached from versionGroupPrimaryRepair only when params.Apply is set (repairs.AcquireStandDownWaiting); vgPrimaryFixer.Plan passes a dry run, and the shell holds the stand-down through rc.StandDown
+dep RenewScanStandDown # the same legacy stand-down lease, renewed inside versionGroupPrimaryRepair only when params.Apply is set (scanStandDownLostForApply, ScanStandDownHold.Beat); Plan passes a dry run
 
 # ---- deps that read a store the shell does not hand out. These are real reads
 # ---- through the plugin's own deps, not the shell's; they are listed, not
@@ -41,3 +44,13 @@ dep LatestReconcileScan # reconcileFixer.Plan reads the latest reconcile scan th
 
 # ---- a service call, not a store
 dep RefetchMetadataCandidates # lostCandidatesFixer.Apply runs the provider chain and writes the candidate cache through f.p.deps; no FixerStores accessor or repairs.Writer path covers it. Owner question 1 in seams.d/F5-02.md
+
+# ---- func values read from struct fields, which the pass cannot see through
+# ---- (the limit the header of the test states). Each is a plain injected
+# ---- function, set by the constructor to a standard-library function and swapped by tests.
+unresolved (*consolidationLeftoversFixer).Apply -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.retireIntoExpecting # f.now, the clock: time.Now from newConsolidationLeftoversFixer
+unresolved (*duplicateCopiesFixer).Apply -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.retireIntoAllowingITunesPath # f.now, the clock: time.Now from newDuplicateCopiesFixer
+unresolved (*fragmentFixer).retire -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.retireIntoITunesDatabaseOnly # f.now, the clock: time.Now from newFragmentFixer
+unresolved (*fragmentFixer).hashCopyGate -> github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.fileSig # f.statFn: os.Stat from newFragmentFixer
+unresolved (*retiredRun).ownerManual -> github.com/falkcorp/audiobook-organizer/internal/repairs.GuardOwnerManualBooks # r.series: the series-name lookup retiredShared builds with repairs.SeriesNamesFrom over a series listing read when the run's shared state is built
+unresolved (*vgPrimaryFixer).Plan -> (*github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance.Plugin).versionGroupPrimaryRepair # f.prober(...): f.probe when a test set one, else versionprimary.FFprobeChapterCounter, an ffprobe counter that reads no store

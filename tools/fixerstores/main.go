@@ -5,33 +5,55 @@
 
 // Command fixerstores answers one question about the repairs fixers of
 // internal/plugins/maintenance: which of the plugin's store accessors can a
-// fixer's Plan, Replan, Apply, BeginApply or AfterApply reach other than
-// through the shell's FixerStores?
+// fixer's entry methods reach other than through the shell's FixerStores?
 //
 // A fixer that runs under the native shell must read and write only the stores
 // the shell bound to its context (FixerStores). The plugin's own deps
 // (ServerDeps) hand out the same accessors, and a fixer that calls one of them
 // reads HEAD's store instead of the shell's. The tripwire tests in
 // stores_fixer_test.go catch that for the paths they execute; this pass is the
-// static complement that covers the paths a test does not reach.
+// static complement that looks at the paths a test does not execute.
 //
 // How: it loads the maintenance package and everything it imports, builds SSA
 // and a call graph with variable type analysis (VTA, seeded by CHA), and walks
-// from the roots (the five methods above, of every concrete type that
-// implements repairs.Fixer). Every reachable function of the maintenance
-// package is searched for calls (or method values) of
+// from the roots: the Plan, Replan, Apply, BeginApply, AfterApply, Meta,
+// RequiredPermissions and PlanOnly methods of every concrete type that
+// implements repairs.Fixer. The walk follows every function of this module
+// (not only the maintenance package) and every wrapper the compiler made.
+// Every reached, hand-written function of the module is searched for
 //
-//   - one of the FixerStores accessors on anything that is not FixerStores: a
-//     "store sink", reported with the call path that reaches it, and
-//   - any other ServerDeps method: a "dep", which is not a store but is still
-//     something a fixer reaches through the plugin's captured deps and not
-//     through the shell.
+//   - a call (or method value) of one of the FixerStores accessors on anything
+//     that is not a "store family" interface (FixerStores, its two halves, or
+//     an interface made only of accessors, such as a narrow parameter type): a
+//     store sink;
+//   - a conversion into a store-family interface of a value that is not one:
+//     ServerDeps handed over as the stores (a ChangeInterface or type
+//     assertion), or a maintenance type made into FixerStores (pluginFixerStores
+//     in fixerStores, the fallback for callers without the shell). Narrowing
+//     the signature of a shared body to a store-family parameter does not make
+//     the body safe; it moves the question to whoever converts, and this is the
+//     check of that conversion;
+//   - a call of any other ServerDeps method: a dep, which is not a store but is
+//     still reached through the plugin's captured deps and not the shell.
+//
+// A func value or an interface value that a call hands out is followed
+// directly, for every call (static, interface or dynamic): a function literal
+// or named function becomes an edge to its body; a maintenance type made into
+// an interface for a function outside the module contributes its methods. A
+// func argument that is a parameter of the caller is the caller's caller's
+// business and is followed there. Any other func argument (loaded from a field,
+// returned by a call) cannot be followed and is reported as unresolved.
+//
+// Only the join points are pruned: the module's registry.RunItems, whose
+// call-graph edges join every caller to every callback its other callers pass.
+// What a join point calls is reached through the callbacks named at each call.
 //
 // The output is JSON for the guard test in internal/plugins/maintenance, which
-// compares it with a reviewed allowlist.
+// compares it with a reviewed allowlist; an unresolved func argument fails the
+// test until it is allowlisted with a reason.
 //
-// Limits, which is why this complements the tripwire tests and does not
-// replace them:
+// What this does not do, which is why it complements the tripwire tests and
+// does not replace them:
 //
 //   - VTA is unsound for reflection: a call made through reflect, or a method
 //     found by name, is not an edge.
@@ -39,17 +61,15 @@
 //     stored in a field and called later has every func of its type as a
 //     possible callee or, for some shapes, none. It can both add callees that
 //     never run (false positives, which the allowlist records with a reason)
-//     and miss ones that do.
-//   - Traversal stops at the first function outside the maintenance package.
-//     What such a function calls back is found only where a func value reaches
-//     it as an argument and that argument is statically a function literal or
-//     a named function (see passedFuncs); an argument that is a parameter or a
-//     field is reported as unresolved, not followed.
-//   - The generic and synchronisation helpers (sync.Once.Do, errgroup,
-//     registry.RunItems, context.AfterFunc) are exactly such functions. The
-//     call graph's own edges through them join every caller to every
-//     callback, so they are not followed at all: the argument rule connects
-//     the caller to the callbacks it names, and nothing else.
+//     and miss ones that do. A func read from a field and passed on is an
+//     unresolved argument, not a followed one.
+//   - Code outside the module (the standard library, third-party packages and
+//     the mediacore module) is not walked: what it calls back is reached only
+//     through the func and interface values handed to it at a call we scan.
+//   - A receiver is judged by its static type. A store read through a variable
+//     typed as a store-family interface is not a sink even if it was filled
+//     from the plugin's deps; the conversion check above is what catches that
+//     fill, and only where the conversion is a visible instruction.
 package main
 
 import (
@@ -77,9 +97,20 @@ const (
 	repairsPkg     = modulePath + "/internal/repairs"
 )
 
-// rootMethods are the fixer entry points: the repairs.Fixer methods and the
-// optional ApplyScoped / follow-up hooks the shell calls.
-var rootMethods = []string{"Plan", "Replan", "Apply", "BeginApply", "AfterApply"}
+// rootMethods are the methods of a fixer the shell or the lane calls: the
+// repairs.Fixer methods that can run code (Plan, Replan, Apply, Meta), the
+// optional ApplyScoped (BeginApply), follow-up (AfterApply), PermissionScoped
+// (RequiredPermissions) and PlanOnly hooks. A type that lacks a hook simply
+// has no such root.
+var rootMethods = []string{"Plan", "Replan", "Apply", "Meta", "BeginApply", "AfterApply", "RequiredPermissions", "PlanOnly"}
+
+// joinPoints are functions of this module that run a callback they were given
+// for many different callers. The call graph joins every caller to every
+// callback (and every callback to every caller), so their edges are not
+// followed; the callbacks named at each call are (see passedFuncs).
+var joinPoints = map[string]bool{
+	modulePath + "/internal/operations/registry.RunItems": true,
+}
 
 // storeFamily are the interface names whose methods are the shell's stores:
 // calling an accessor on one of these is the correct way to read a store.
@@ -112,6 +143,7 @@ type unresolve struct {
 	Caller string `json:"caller"`
 	Callee string `json:"callee"`
 	Pos    string `json:"pos"`
+	Arg    string `json:"arg"` // what the func argument is, for the reviewer
 }
 
 func main() {
@@ -263,20 +295,68 @@ func (a *analysis) inMaint(fn *ssa.Function) bool {
 	return fn != nil && fn.Pkg != nil && fn.Pkg.Pkg == a.maint
 }
 
-// traversable is a function the walk follows: one of the maintenance package,
-// or a wrapper the compiler made (a promoted method, a bound method value),
-// which has no package of its own and only forwards.
-func (a *analysis) traversable(fn *ssa.Function) bool {
-	return a.inMaint(fn) || (fn != nil && fn.Pkg == nil && fn.Synthetic != "")
+// inModule reports whether fn is a function of this module.
+func (a *analysis) inModule(fn *ssa.Function) bool {
+	if fn == nil || fn.Pkg == nil || fn.Pkg.Pkg == nil {
+		return false
+	}
+	path := fn.Pkg.Pkg.Path()
+	return path == modulePath || strings.HasPrefix(path, modulePath+"/")
 }
 
-// isSearched reports whether fn's own body is searched for sinks: a function
-// of the maintenance package that the compiler did not synthesize. A wrapper
-// for a promoted method (pluginFixerStores.OpsStore) calls the accessor on
-// ServerDeps by construction; that is the fallback the shell replaces, not a
-// call a fixer wrote.
+// isJoinPoint is a function of the joinPoints list.
+func (a *analysis) isJoinPoint(fn *ssa.Function) bool {
+	if fn == nil || !a.inModule(fn) {
+		return false
+	}
+	o := fn
+	if og := fn.Origin(); og != nil {
+		o = og
+	}
+	return joinPoints[o.Pkg.Pkg.Path()+"."+o.Name()]
+}
+
+// traversable is a function the walk follows: one of this module (but not a
+// join point), or a wrapper the compiler made (a promoted method, a bound
+// method value), which has no package of its own and only forwards.
+func (a *analysis) traversable(fn *ssa.Function) bool {
+	if fn == nil {
+		return false
+	}
+	if a.inModule(fn) {
+		return !a.isJoinPoint(fn)
+	}
+	return fn.Pkg == nil && fn.Synthetic != ""
+}
+
+// isSearched reports whether fn's own body is searched for sinks: a function of
+// this module that the compiler did not synthesize. A wrapper for a promoted
+// method (pluginFixerStores.OpsStore) calls the accessor on ServerDeps by
+// construction; that is the fallback, which the conversion check (in
+// fixerStores) is what reports.
 func (a *analysis) isSearched(fn *ssa.Function) bool {
-	return a.inMaint(fn) && fn.Synthetic == ""
+	return a.inModule(fn) && fn.Synthetic == ""
+}
+
+// isStoreFamily reports whether t is an interface through which a store is the
+// shell's to give: FixerStores, either half of it, or an interface made only of
+// FixerStores accessors (a narrow parameter type).
+func (a *analysis) isStoreFamily(t types.Type) bool {
+	for _, si := range a.storeIfaces {
+		if types.Identical(t, si) {
+			return true
+		}
+	}
+	iface, ok := t.Underlying().(*types.Interface)
+	if !ok || iface.NumMethods() == 0 {
+		return false
+	}
+	for i := 0; i < iface.NumMethods(); i++ {
+		if !a.accessors[iface.Method(i).Name()] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *analysis) walk(graph *callgraph.Graph, roots []*ssa.Function) *report {
@@ -298,6 +378,7 @@ func (a *analysis) walk(graph *callgraph.Graph, roots []*ssa.Function) *report {
 	rep := &report{Roots: len(roots)}
 	depCallers := map[string]map[string]bool{}
 	sinkSeen := map[string]bool{}
+	unresolvedSeen := map[string]bool{}
 
 	for len(queue) > 0 {
 		fn := queue[0]
@@ -305,9 +386,6 @@ func (a *analysis) walk(graph *callgraph.Graph, roots []*ssa.Function) *report {
 
 		if node := graph.Nodes[fn]; node != nil {
 			for _, e := range node.Out {
-				// Only functions of the maintenance package are followed (see
-				// traversable): the join points outside it connect every
-				// caller to every callback, which passedFuncs does precisely.
 				push(e.Callee.Func, fn)
 			}
 		}
@@ -316,7 +394,7 @@ func (a *analysis) walk(graph *callgraph.Graph, roots []*ssa.Function) *report {
 		}
 		for _, b := range fn.Blocks {
 			for _, in := range b.Instrs {
-				a.scan(fn, in, push, rep, depCallers, sinkSeen, parent)
+				a.scan(fn, in, push, rep, depCallers, sinkSeen, unresolvedSeen, parent)
 			}
 		}
 	}
@@ -346,8 +424,8 @@ func (a *analysis) walk(graph *callgraph.Graph, roots []*ssa.Function) *report {
 	}
 	sort.Slice(rep.Deps, func(i, j int) bool { return rep.Deps[i].Method < rep.Deps[j].Method })
 	sort.Slice(rep.Unresolved, func(i, j int) bool {
-		if rep.Unresolved[i].Pos != rep.Unresolved[j].Pos {
-			return rep.Unresolved[i].Pos < rep.Unresolved[j].Pos
+		if rep.Unresolved[i].Caller != rep.Unresolved[j].Caller {
+			return rep.Unresolved[i].Caller < rep.Unresolved[j].Caller
 		}
 		return rep.Unresolved[i].Callee < rep.Unresolved[j].Callee
 	})
@@ -355,21 +433,40 @@ func (a *analysis) walk(graph *callgraph.Graph, roots []*ssa.Function) *report {
 }
 
 // scan searches one instruction of a searched function: accessor and dep
-// calls, and the func values it passes out to functions of other packages.
+// calls, conversions into a store-family interface, and the func and interface
+// values it passes out.
 func (a *analysis) scan(fn *ssa.Function, in ssa.Instruction, push func(fn, from *ssa.Function),
-	rep *report, depCallers map[string]map[string]bool, sinkSeen map[string]bool, parent map[*ssa.Function]*ssa.Function) {
+	rep *report, depCallers map[string]map[string]bool, sinkSeen map[string]bool,
+	unresolvedSeen map[string]bool, parent map[*ssa.Function]*ssa.Function) {
 
 	pos := func() string { return a.pos(in.Pos()) }
 
-	// A call (or go / defer) through an interface method.
 	if call, ok := in.(ssa.CallInstruction); ok {
 		cc := call.Common()
 		if cc.IsInvoke() {
 			a.method(fn, cc.Method, cc.Value.Type(), pos(), rep, depCallers, sinkSeen, parent)
-		} else {
-			a.passedFuncs(fn, call, push, rep)
+		}
+		a.passedValues(fn, call, push, rep, unresolvedSeen)
+	}
+
+	switch v := in.(type) {
+	case *ssa.ChangeInterface:
+		if a.isStoreFamily(v.Type()) && !a.isStoreFamily(v.X.Type()) {
+			a.conversion(fn, "convert:"+typeName(v.X.Type(), a.maint)+"->"+typeName(v.Type(), a.maint), pos(), rep, sinkSeen, parent)
+		}
+	case *ssa.TypeAssert:
+		// An assertion from an interface the plugin's deps satisfy. An assertion
+		// from `any` is how the shell's stores come off a context.
+		if x, ok := v.X.Type().Underlying().(*types.Interface); ok && x.NumMethods() > 0 &&
+			a.isStoreFamily(v.AssertedType) && !a.isStoreFamily(v.X.Type()) && types.AssignableTo(a.depsType, v.X.Type()) {
+			a.conversion(fn, "convert:"+typeName(v.X.Type(), a.maint)+"->"+typeName(v.AssertedType, a.maint), pos(), rep, sinkSeen, parent)
+		}
+	case *ssa.MakeInterface:
+		if a.isStoreFamily(v.Type()) && a.isMaintType(v.X.Type()) {
+			a.conversion(fn, "convert:"+typeName(v.X.Type(), a.maint)+"->"+typeName(v.Type(), a.maint), pos(), rep, sinkSeen, parent)
 		}
 	}
+
 	// A method value or expression of an interface method (p.deps.OpsStore
 	// used as a func value), which is a call waiting to happen.
 	var ops [10]*ssa.Value
@@ -391,17 +488,43 @@ func (a *analysis) scan(fn *ssa.Function, in ssa.Instruction, push func(fn, from
 	}
 }
 
+func typeName(t types.Type, from *types.Package) string {
+	return types.TypeString(t, func(p *types.Package) string {
+		if p == from {
+			return ""
+		}
+		return p.Name()
+	})
+}
+
+// isMaintType reports whether t (or what it points to) is a named type of the
+// maintenance package.
+func (a *analysis) isMaintType(t types.Type) bool {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	n, ok := t.(*types.Named)
+	return ok && n.Obj().Pkg() == a.maint
+}
+
+func (a *analysis) conversion(fn *ssa.Function, what, pos string, rep *report, sinkSeen map[string]bool, parent map[*ssa.Function]*ssa.Function) {
+	key := a.name(fn) + "|" + what
+	if sinkSeen[key] {
+		return
+	}
+	sinkSeen[key] = true
+	rep.StoreSinks = append(rep.StoreSinks, sink{Func: a.name(fn), Accessor: what, Pos: pos, Path: a.path(fn, parent)})
+}
+
 // method classifies a call of interface method m on a receiver of type recv.
 func (a *analysis) method(fn *ssa.Function, m *types.Func, recv types.Type, pos string,
 	rep *report, depCallers map[string]map[string]bool, sinkSeen map[string]bool, parent map[*ssa.Function]*ssa.Function) {
 
-	for _, si := range a.storeIfaces {
-		if types.Identical(recv, si) {
-			return // the shell's own stores: the right way to read one
-		}
-	}
 	name := m.Name()
 	if a.accessors[name] {
+		if a.isStoreFamily(recv) {
+			return // the shell's own stores: the right way to read one
+		}
 		key := a.name(fn) + "|" + name
 		if sinkSeen[key] {
 			return
@@ -424,40 +547,274 @@ func (a *analysis) method(fn *ssa.Function, m *types.Func, recv types.Type, pos 
 	depCallers[name][a.name(fn)] = true
 }
 
-// passedFuncs connects a call to the func values it passes. A call of a
-// function outside the maintenance package (registry.RunItems, errgroup.Go,
-// sync.Once.Do, context.AfterFunc) runs the callback its caller wrote, but the
-// call graph cannot say which callbacks reach which caller of a shared generic
-// or synchronising helper, so the callbacks the call names are followed
-// directly: a function literal (MakeClosure) or a named function. An argument
-// that is neither is reported.
-func (a *analysis) passedFuncs(fn *ssa.Function, call ssa.CallInstruction, push func(fn, from *ssa.Function), rep *report) {
+// allocOf finds the variable a pointer value addresses: the Alloc itself, or
+// the one a closure captured by reference.
+func (a *analysis) allocOf(x ssa.Value, depth int) *ssa.Alloc {
+	if depth > 6 {
+		return nil
+	}
+	switch x := x.(type) {
+	case *ssa.Alloc:
+		return x
+	case *ssa.FreeVar:
+		fn := x.Parent()
+		idx := -1
+		for i, fv := range fn.FreeVars {
+			if fv == x {
+				idx = i
+			}
+		}
+		parent := fn.Parent()
+		if idx < 0 || parent == nil {
+			return nil
+		}
+		var out *ssa.Alloc
+		for _, b := range parent.Blocks {
+			for _, in := range b.Instrs {
+				if mc, ok := in.(*ssa.MakeClosure); ok && mc.Fn == fn {
+					al := a.allocOf(mc.Bindings[idx], depth+1)
+					if al == nil || (out != nil && al != out) {
+						return nil
+					}
+					out = al
+				}
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// describe says what a func value is, for the report: the field it was read
+// from, the call that returned it, or the SSA form.
+func (a *analysis) describe(v ssa.Value) string {
+	switch v := v.(type) {
+	case *ssa.UnOp:
+		if fa, ok := v.X.(*ssa.FieldAddr); ok {
+			if st, ok := fa.X.Type().Underlying().(*types.Pointer); ok {
+				if s, ok := st.Elem().Underlying().(*types.Struct); ok {
+					return "field " + typeName(st.Elem(), a.maint) + "." + s.Field(fa.Field).Name()
+				}
+			}
+		}
+		return "load " + v.X.Name()
+	case *ssa.Call:
+		if c := v.Call.StaticCallee(); c != nil {
+			return "result of " + c.RelString(a.maint)
+		}
+		return "result of a dynamic call"
+	case *ssa.FreeVar:
+		return "captured " + v.Name()
+	case *ssa.Extract:
+		return "extract from a call result"
+	}
+	return fmt.Sprintf("%T", v)
+}
+
+// resolveFunc finds the function bodies a func-typed value can be: a function
+// literal or named function, the branches of a phi, the operand of a func type
+// conversion, and a captured variable's value at the closure's creation. A
+// parameter resolves to nothing, resolved: it is followed where the caller's
+// own caller passed it. ok is false when some source of the value is a field,
+// a call result or anything else this does not look through.
+func (a *analysis) resolveFunc(v ssa.Value, depth int) (fns []*ssa.Function, ok bool) {
+	if depth > 6 {
+		return nil, false
+	}
+	switch v := v.(type) {
+	case *ssa.MakeClosure:
+		return []*ssa.Function{v.Fn.(*ssa.Function)}, true
+	case *ssa.Function:
+		return []*ssa.Function{v}, true
+	case *ssa.Const, *ssa.Parameter:
+		return nil, true
+	case *ssa.ChangeType:
+		return a.resolveFunc(v.X, depth+1)
+	case *ssa.Convert:
+		return a.resolveFunc(v.X, depth+1)
+	case *ssa.UnOp:
+		// A load of a local variable that escaped to the heap (captured by a
+		// closure, or address-taken): what it can hold is what is stored into
+		// it. A load through a field or anything else is not looked through.
+		if v.Op != token.MUL {
+			return nil, false
+		}
+		alloc := a.allocOf(v.X, 0)
+		if alloc == nil {
+			return nil, false
+		}
+		ok = true
+		for _, r := range *alloc.Referrers() {
+			switch r := r.(type) {
+			case *ssa.Store:
+				if r.Addr == ssa.Value(alloc) {
+					f, sok := a.resolveFunc(r.Val, depth+1)
+					fns = append(fns, f...)
+					ok = ok && sok
+				}
+			case *ssa.UnOp, *ssa.DebugRef:
+				// a load, or debug info
+			case *ssa.MakeClosure:
+				// Captured by reference: the closure's own stores through the
+				// free variable are stores into the variable too.
+				for i, b := range r.Bindings {
+					if b != ssa.Value(alloc) {
+						continue
+					}
+					clo := r.Fn.(*ssa.Function)
+					if i >= len(clo.FreeVars) {
+						return nil, false
+					}
+					for _, blk := range clo.Blocks {
+						for _, in := range blk.Instrs {
+							switch in := in.(type) {
+							case *ssa.Store:
+								if in.Addr == ssa.Value(clo.FreeVars[i]) {
+									f, sok := a.resolveFunc(in.Val, depth+1)
+									fns = append(fns, f...)
+									ok = ok && sok
+								}
+							case *ssa.MakeClosure:
+								for _, bb := range in.Bindings {
+									if bb == ssa.Value(clo.FreeVars[i]) {
+										return nil, false // captured again, deeper
+									}
+								}
+							}
+						}
+					}
+				}
+			default:
+				return nil, false // its address goes somewhere this does not follow
+			}
+		}
+		return fns, ok
+	case *ssa.Call:
+		c := v.Call.StaticCallee()
+		if c == nil || v.Call.IsInvoke() {
+			return nil, false
+		}
+		if !a.inModule(c) {
+			// A function outside the module can hand back only what it was
+			// given or made itself: with no func or interface argument there
+			// is none of ours in it.
+			for _, arg := range v.Call.Args {
+				u := arg.Type().Underlying()
+				if _, isFn := u.(*types.Signature); isFn {
+					return nil, false
+				}
+				if types.IsInterface(arg.Type()) {
+					return nil, false
+				}
+			}
+			return nil, true
+		}
+		if len(c.Blocks) == 0 {
+			return nil, false
+		}
+		ok = true
+		for _, b := range c.Blocks {
+			if r, isRet := b.Instrs[len(b.Instrs)-1].(*ssa.Return); isRet {
+				if len(r.Results) != 1 {
+					return nil, false
+				}
+				f, rok := a.resolveFunc(r.Results[0], depth+1)
+				fns = append(fns, f...)
+				ok = ok && rok
+			}
+		}
+		return fns, ok
+	case *ssa.Phi:
+		ok = true
+		for _, e := range v.Edges {
+			f, eok := a.resolveFunc(e, depth+1)
+			fns = append(fns, f...)
+			ok = ok && eok
+		}
+		return fns, ok
+	case *ssa.FreeVar:
+		fn := v.Parent()
+		idx := -1
+		for i, fv := range fn.FreeVars {
+			if fv == v {
+				idx = i
+			}
+		}
+		parent := fn.Parent()
+		if idx < 0 || parent == nil {
+			return nil, false
+		}
+		found, ok := false, true
+		for _, b := range parent.Blocks {
+			for _, in := range b.Instrs {
+				mc, isMC := in.(*ssa.MakeClosure)
+				if !isMC || mc.Fn != fn {
+					continue
+				}
+				found = true
+				f, fok := a.resolveFunc(mc.Bindings[idx], depth+1)
+				fns = append(fns, f...)
+				ok = ok && fok
+			}
+		}
+		return fns, found && ok
+	}
+	return nil, false
+}
+
+// passedValues connects a call to the func and interface values it passes out,
+// for every kind of call. The call graph cannot say which callbacks reach which
+// caller of a shared helper (registry.RunItems, errgroup.Go, sync.Once.Do,
+// context.AfterFunc, or a store's Update(func(tx) ...)), so the values the call
+// names are followed directly:
+//
+//   - a function literal (MakeClosure) or a named function: an edge to its body;
+//   - a func that is a parameter of the caller: skipped, it is followed where
+//     the caller's own caller passed it;
+//   - a maintenance value made into an interface for a function outside the
+//     module: an edge to every method of its type, since that function may call
+//     any of them;
+//   - any other func argument (read from a field, returned by a call, a captured
+//     variable): reported as unresolved.
+func (a *analysis) passedValues(fn *ssa.Function, call ssa.CallInstruction, push func(fn, from *ssa.Function),
+	rep *report, unresolvedSeen map[string]bool) {
+
 	cc := call.Common()
 	callee := cc.StaticCallee()
-	if callee != nil && a.inMaint(callee) {
-		return // followed by the call graph
-	}
+	external := callee == nil || !a.inModule(callee)
 	callName := "(dynamic)"
-	if callee != nil {
+	switch {
+	case callee != nil:
 		callName = callee.String()
+	case cc.IsInvoke():
+		callName = "(" + typeName(cc.Value.Type(), a.maint) + ")." + cc.Method.Name()
 	}
-	var args []ssa.Value
-	args = append(args, cc.Args...)
-	for _, v := range args {
-		if _, isFunc := v.Type().Underlying().(*types.Signature); !isFunc {
+	for _, v := range cc.Args {
+		if _, isFunc := v.Type().Underlying().(*types.Signature); isFunc {
+			fns, ok := a.resolveFunc(v, 0)
+			for _, f := range fns {
+				push(f, fn)
+			}
+			// Only the maintenance package's own code is held to resolving
+			// what it passes: it is where our callbacks are made. Code of the
+			// module's other packages forwards what it was given, which was
+			// followed at the call that gave it.
+			if !ok && a.inMaint(fn) {
+				key := a.name(fn) + " -> " + callName
+				if !unresolvedSeen[key] {
+					unresolvedSeen[key] = true
+					rep.Unresolved = append(rep.Unresolved, unresolve{
+						Caller: a.name(fn), Callee: callName, Pos: a.pos(call.Pos()), Arg: a.describe(v),
+					})
+				}
+			}
 			continue
 		}
-		switch v := v.(type) {
-		case *ssa.MakeClosure:
-			push(v.Fn.(*ssa.Function), fn)
-		case *ssa.Function:
-			push(v, fn)
-		case *ssa.Const:
-			// nil
-		default:
-			rep.Unresolved = append(rep.Unresolved, unresolve{
-				Caller: a.name(fn), Callee: callName, Pos: a.pos(call.Pos()),
-			})
+		if mi, ok := v.(*ssa.MakeInterface); ok && external && a.isMaintType(mi.X.Type()) {
+			ms := a.prog.MethodSets.MethodSet(mi.X.Type())
+			for i := 0; i < ms.Len(); i++ {
+				push(a.prog.MethodValue(ms.At(i)), fn)
+			}
 		}
 	}
 }

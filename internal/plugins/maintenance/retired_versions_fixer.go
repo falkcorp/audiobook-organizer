@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_versions_fixer.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: b1bac43f-5852-47a1-abc2-fe00e90a031a
 // last-edited: 2026-11-12
 
@@ -602,7 +602,7 @@ func (f *retiredVersionsFixer) buildRun(ctx context.Context, minAge time.Duratio
 		bound = 15 * time.Second
 	}
 	run := &retiredRun{f: f, store: ops, paths: paths, probe: sh.probe, vetoes: vetoes, journals: sh.journal,
-		resolver: repairs.NewPathResolver(), guard: ops, tags: f.p.withFixerStores(f.p.fixerStores(ctx)).repairsGuardTags(), series: sh.series,
+		resolver: repairs.NewPathResolver(), guard: ops, tags: repairsGuardTags(f.p.fixerStores(ctx)), series: sh.series,
 		minAge: minAge, now: now(), plans: &sh.plans,
 		stat: stat, bound: bound, maxAbandoned: retiredStatMaxAbandoned}
 	if sess != nil {

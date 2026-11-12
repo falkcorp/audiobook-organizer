@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_review2_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: d63428b5-a8b1-4678-86f0-28e71e7b90a9
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -329,7 +329,7 @@ func TestVersionTwinFixer_Review2_S3_OtherOpsCopyIsNotResumed(t *testing.T) {
 	const opB = "op-version-twin-apply-b"
 	series, err := l.st.GetAllSeries()
 	require.NoError(t, err)
-	deps := repairs.ApplyDeps{Guard: l.st, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), OpID: opB,
+	deps := repairs.ApplyDeps{Guard: l.st, Tags: repairsGuardTags(l.p.deps), Series: repairs.SeriesNamesFrom(series), OpID: opB,
 		Writer: repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, opB)}
 	resB, err := repairs.RunApply(context.Background(), l.fixer, plan, "op-version-twin-plan", []string{"gs3d"}, false, deps,
 		&repairsOpReporter{id: opB})
@@ -582,7 +582,7 @@ func TestVersionTwinFixer_StaleCopyIsNotResumedByAnotherOp(t *testing.T) {
 	const opB = "op-version-twin-apply-stale-b"
 	series, err := l.st.GetAllSeries()
 	require.NoError(t, err)
-	deps := repairs.ApplyDeps{Guard: l.st, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), OpID: opB,
+	deps := repairs.ApplyDeps{Guard: l.st, Tags: repairsGuardTags(l.p.deps), Series: repairs.SeriesNamesFrom(series), OpID: opB,
 		Writer: repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, opB)}
 	resB, err := repairs.RunApply(context.Background(), l.fixer, plan, "op-version-twin-plan", []string{"gs3s"}, false, deps,
 		&repairsOpReporter{id: opB})

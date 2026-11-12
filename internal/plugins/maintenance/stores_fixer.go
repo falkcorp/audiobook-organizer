@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/stores_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b8f1d27-6a4e-4c95-8d02-5e7a9c1b4f68
 // last-edited: 2026-11-12
 
@@ -79,56 +79,4 @@ func (p *Plugin) fixerStores(ctx context.Context) FixerStores {
 		return nil
 	}
 	return pluginFixerStores{p.deps}
-}
-
-// shellDeps is the plugin's deps with the shell's stores in place of its own:
-// the 15 store accessors answer from st, everything else from the embedded
-// deps. It is how a fixer calls a body shared with an operation (outside the
-// fixer files) so that body, too, reads the shell's stores.
-type shellDeps struct {
-	ServerDeps
-	st FixerStores
-}
-
-func (d shellDeps) OpsStore() OpsStore                 { return d.st.OpsStore() }
-func (d shellDeps) OperationQueueStore() OpQueueReader { return d.st.OperationQueueStore() }
-func (d shellDeps) UserReadStateStore() UserReadStateStore {
-	return d.st.UserReadStateStore()
-}
-func (d shellDeps) MergeUserStateStore() merge.UserStateRepairStore {
-	return d.st.MergeUserStateStore()
-}
-func (d shellDeps) VersionPrimaryStore() VersionPrimaryStore { return d.st.VersionPrimaryStore() }
-func (d shellDeps) IngestVersionStore() versions.IngestStore { return d.st.IngestVersionStore() }
-func (d shellDeps) FragmentRepairReader() FragmentRepairReader {
-	return d.st.FragmentRepairReader()
-}
-func (d shellDeps) DedupVerdictReader() DedupVerdictReader { return d.st.DedupVerdictReader() }
-func (d shellDeps) BookTagReader() BookTagReader           { return d.st.BookTagReader() }
-func (d shellDeps) MasterLists() MasterListStore           { return d.st.MasterLists() }
-func (d shellDeps) ExternalIDBooks() ExternalIDBookLookup  { return d.st.ExternalIDBooks() }
-func (d shellDeps) OwnerVetoes() OwnerVetoReader           { return d.st.OwnerVetoes() }
-func (d shellDeps) CombineJournals() CombineJournalScanner { return d.st.CombineJournals() }
-func (d shellDeps) MetadataCacheStore() database.MetadataCacheStore {
-	return d.st.MetadataCacheStore()
-}
-func (d shellDeps) VersionTwinMetadataService() VersionTwinMetadataService {
-	return d.st.VersionTwinMetadataService()
-}
-
-// withFixerStores is a plugin value whose deps hand out st's stores, for a
-// fixer that calls a plugin method shared with an operation. Its fields are
-// copied one by one (the plugin holds a sync.Once); the registry is not
-// carried, nothing reached through it needs it.
-func (p *Plugin) withFixerStores(st FixerStores) *Plugin {
-	if p == nil || p.deps == nil || st == nil {
-		return p
-	}
-	return &Plugin{
-		deps:               shellDeps{ServerDeps: p.deps, st: st},
-		standDownWait:      p.standDownWait,
-		reflinkFile:        p.reflinkFile,
-		itunesLibraryPaths: p.itunesLibraryPaths,
-		ownerEmail:         p.ownerEmail,
-	}
 }

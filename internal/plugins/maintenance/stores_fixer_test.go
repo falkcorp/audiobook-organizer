@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/stores_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d2a9f41-8c53-4b17-a0e6-3f7b1d94c285
 // last-edited: 2026-11-12
 
@@ -246,30 +246,14 @@ func (s recStores) VersionTwinMetadataService() VersionTwinMetadataService {
 
 var _ FixerStores = recStores{}
 
-// shellDeps answers every FixerStores accessor from the shell's stores and none
-// from the plugin's: the method-set check that keeps a new FixerStores method
-// from falling through to the embedded deps. Each accessor of the interface is
-// called by name on a shellDeps whose embedded deps report any call; recStores
-// is a FixerStores with every method, so adding a method to FixerStores breaks
-// the build here until this test knows it, and a method shellDeps does not
-// override reaches the embedded deps and fails the test.
-func TestShellDeps_EveryFixerStoreAccessorAnswersFromTheShell(t *testing.T) {
+// pluginFixerStores is the plugin's deps accessor for accessor: the fallback for
+// a caller that runs a fixer without the shell. recStores is a FixerStores with
+// every method, so adding a method to FixerStores breaks the build here until
+// this test knows it.
+func TestPluginFixerStores_IsThePluginsDepsAccessorForAccessor(t *testing.T) {
 	log := &tripLog{}
-	rec := recStores{mu: &sync.Mutex{}, hits: map[string]int{}}
-	d := shellDeps{ServerDeps: tripDeps{log: log}, st: rec}
-
 	typ := reflect.TypeOf((*FixerStores)(nil)).Elem()
 	require.Equal(t, 15, typ.NumMethod(), "the accessors the fixers read their stores through")
-	for i := 0; i < typ.NumMethod(); i++ {
-		name := typ.Method(i).Name
-		m := reflect.ValueOf(d).MethodByName(name)
-		require.True(t, m.IsValid(), "shellDeps has %s", name)
-		m.Call(nil)
-		require.Equal(t, 1, rec.hits[name], "%s answers from the shell's stores", name)
-	}
-	require.Zero(t, log.count(), "no accessor fell through to the plugin's own deps: %v", log.names)
-
-	// The plugin's own set, for the callers that run a fixer without the shell.
 	pf := pluginFixerStores{ServerDeps: tripDeps{log: log}}
 	for i := 0; i < typ.NumMethod(); i++ {
 		reflect.ValueOf(pf).MethodByName(typ.Method(i).Name).Call(nil)

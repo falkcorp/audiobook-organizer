@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2c7e5a19-8b43-4f06-9d21-4e8b0c6a3f75
 // last-edited: 2026-11-12
 
@@ -107,7 +107,7 @@ func (f *vgPrimaryFixer) Plan(ctx context.Context, raw json.RawMessage, rep regi
 		return nil, err
 	}
 	prober := f.prober(func(msg string) { _ = rep.Log(slog.LevelWarn, msg) })
-	report, err := f.p.withFixerStores(f.p.fixerStores(ctx)).versionGroupPrimaryRepair(ctx, vgPrimaryRepairParams{
+	report, err := f.p.versionGroupPrimaryRepair(ctx, f.p.fixerStores(ctx), vgPrimaryRepairParams{
 		GroupIDs: fp.GroupIDs, Limit: fp.Limit, noDetailCap: true,
 	}, config.AppConfig.RootDir, prober, rep)
 	if err != nil {

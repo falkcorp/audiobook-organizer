@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_repair_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: b6c88f6f-930b-4ea7-bded-52290d5a52aa
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package maintenance
 
@@ -117,7 +117,7 @@ func (f *vgRepairFixture) seed(t *testing.T) {
 func (f *vgRepairFixture) run(t *testing.T, deps fakeDeps, params vgPrimaryRepairParams) (*vgRepairReport, error) {
 	t.Helper()
 	p := &Plugin{deps: deps}
-	return p.versionGroupPrimaryRepair(context.Background(), params, f.root, f.probe, &opIDReporter{id: "op-vgpr-test"})
+	return p.versionGroupPrimaryRepair(context.Background(), p.deps, params, f.root, f.probe, &opIDReporter{id: "op-vgpr-test"})
 }
 
 func TestVGPrimaryRepair_DryRunReportsAndWritesNothing(t *testing.T) {
