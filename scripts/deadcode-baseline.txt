@@ -137,6 +137,7 @@ internal/books/cutover.delAt
 internal/books/cutover.errClass
 internal/books/cutover.errClassFile
 internal/books/cutover.fieldName
+internal/books/cutover.fileBlobBound
 internal/books/cutover.fileNeedsSource
 internal/books/cutover.fileOwner
 internal/books/cutover.flatKeys
@@ -189,6 +190,7 @@ internal/books/cutover.headMigrateMaintenanceBlob
 internal/books/cutover.headMigrateMetadataScoringBlob
 internal/books/cutover.headMigrateScheduledBlob
 internal/books/cutover.headNumber
+internal/books/cutover.headParseFileSettings
 internal/books/cutover.headParseGapFill
 internal/books/cutover.headProtectedName
 internal/books/cutover.headReadKey
