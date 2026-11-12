@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.239.6
+// version: 1.239.7
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-12
 
@@ -83,6 +83,7 @@ func serializeBookForIndex(book *Book) ([]byte, error) {
 // - operationlog:<operation_id>:<timestamp>:<seq> -> OperationLog JSON
 // - opchange:<operation_id>:<change_id> -> OperationChange JSON (undo journal)
 // - opchange_by_book:<book_id>:<operation_id>:<change_id> -> empty (by-book index; see pebble_store_opchange_index.go)
+// - opchange_overlong:<hex sha256 of the primary key> -> primary key (journal rows whose key suffix is over the bound; they cannot be indexed)
 // - opchange_undecodable:<operation_id>:<change_id> -> empty (journal rows the index backfill could not decode)
 // - preference:<key>           -> UserPreference JSON
 // - playlist:<id>              -> Playlist JSON

@@ -1,7 +1,7 @@
 // file: internal/books/store/keyfamilies.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package store
 
@@ -278,6 +278,7 @@ var keyFamilies = []KeyFamily{
 	{"opchange:", "operation change journal", "internal/books/store/pebble_store_operations.go"},
 	{"opchange_by_book:", "operation change index by book", "internal/books/store/pebble_store_opchange_index.go"},
 	{"opchange_by_list:", "operation change index by list (carry rows of collections and playlists)", "internal/books/store/pebble_store_opchange_list_index.go"},
+	{"opchange_overlong:", "overlong-suffix operation change markers (rows that cannot be indexed; keep the by-book index untrusted)", "internal/books/store/pebble_store_opchange_index.go"},
 	{"opchange_undecodable:", "undecodable operation change markers", "internal/books/store/pebble_store_opchange_index.go"},
 	{"operation:", "v1 operation rows", "internal/books/store/pebble_store_operations.go"},
 	{"operationlog:", "v1 operation logs", "internal/books/store/pebble_store_operations.go"},
