@@ -1,5 +1,5 @@
 // file: core/outbox/deliver.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2a6ad2a4-6bc1-4f3b-b7f1-0ee9e2bb7d3f
 // last-edited: 2026-11-12
 
@@ -220,19 +220,25 @@ func (r *relay) unblock(p outboxstore.Pair) {
 }
 
 // pairFault handles an error reading a pair's state or messages: a row of a
-// newer build stops the pair (never skipped, never marked done), anything else
-// is logged and tried again next loop.
+// newer build, or one that does not decode at all, stops the pair (never
+// skipped, never marked done) and reports it; anything else is logged and tried
+// again next loop.
 func (r *relay) pairFault(ctx context.Context, p outboxstore.Pair, err error) {
 	if err == nil || ctx.Err() != nil || r.stopped() {
 		return
 	}
-	if errors.Is(err, codec.ErrUnknownVersion) {
+	unknown := errors.Is(err, codec.ErrUnknownVersion)
+	if unknown || errors.Is(err, outboxstore.ErrCorruptRow) {
+		why := "corrupt_row"
+		if unknown {
+			why = "unknown_version"
+		}
 		r.mu.Lock()
 		r.pairStop[p] = r.o.now()
 		r.mu.Unlock()
-		if r.o.health.stop(pairSubject(p), "unknown_version") {
-			r.log.Error("outbox: delivery stopped on a row of a newer build; it is not skipped",
-				slog.String("consumer", p.Consumer), slog.String("topic", p.Topic), slog.Int("partition", p.PP), slog.Any("err", err))
+		if r.o.health.stop(pairSubject(p), why) {
+			r.log.Error("outbox: delivery stopped on a row it cannot read; it is not skipped",
+				append([]any{slog.String("consumer", p.Consumer), slog.String("topic", p.Topic), slog.Int("partition", p.PP), slog.String("why", why)}, errAttrs(err)...)...)
 		}
 		return
 	}
@@ -264,6 +270,7 @@ func (r *relay) deliverAll(ctx context.Context) {
 	o := r.o
 	regs := make(map[string]*consumerReg, len(r.regs))
 	highs := map[string]uint64{}
+	refused := map[string]bool{} // topics whose partition count changed
 	var pairs []outboxstore.Pair
 	now := o.now()
 	for _, reg := range r.regs {
@@ -277,13 +284,19 @@ func (r *relay) deliverAll(ctx context.Context) {
 		}
 		hi, ok := highs[ti.name]
 		if !ok {
-			h, _, err := o.store.ReadHigh(ctx, ti.name)
+			h, found, err := o.store.ReadHigh(ctx, ti.name)
 			if err != nil {
 				r.intakeFault(ctx, ti.name, "topic "+ti.name, err)
 				continue
 			}
 			hi = h.High
 			highs[ti.name] = hi
+			// Messages sequenced over another partition count are not found by
+			// pairs of this one: deliver nothing from the topic until they agree.
+			refused[ti.name] = !r.partitionsOK(ti, h, found)
+		}
+		if refused[ti.name] {
+			continue
 		}
 		for pp := range ti.partitions {
 			p := outboxstore.Pair{Consumer: reg.name, Topic: ti.name, PP: pp}
@@ -464,9 +477,11 @@ func (r *relay) passOrdered(ctx context.Context, reg *consumerReg, ti *topicInfo
 
 // execResult is what running a handler on one message came to.
 type execResult struct {
-	matched bool  // the handler ran (a Where did not reject the message)
-	skipped bool  // a retried dead letter addressed to another consumer
-	err     error // the handler's failure
+	matched bool        // the handler ran (a Where did not reject the message)
+	skipped bool        // a retried dead letter addressed to another consumer
+	err     error       // the handler's failure
+	seq     uint64      // the message's seq
+	folded  tasks.RunID // the existing run a Tx.StartRun folded into, if one did
 }
 
 // execute runs the consumer on one message: the retried-dead-letter address
@@ -501,7 +516,11 @@ func (r *relay) execute(ctx context.Context, reg *consumerReg, ti *topicInfo, ro
 		r.log.Error("outbox: handler panicked", slog.String("consumer", reg.name), slog.String("topic", ti.name),
 			slog.Uint64("seq", row.Seq), slog.String("panic_type", pe.typ), slog.String("frames", strings.Join(pe.frames, " <- ")))
 	}
-	return execResult{matched: matched, err: err}
+	res := execResult{matched: matched, err: err, seq: row.Seq}
+	if tx != nil {
+		res.folded = tx.folded
+	}
+	return res
 }
 
 // deliverOne delivers one message to an ordered consumer and settles it.
@@ -571,6 +590,14 @@ func (r *relay) countSettled(reg *consumerReg, ti *topicInfo, res execResult) {
 		r.o.inst.filtered(ti.name, reg.name)
 	default:
 		r.o.inst.delivered(ti.name, reg.name)
+		if res.folded != "" {
+			// The delivery is acked (the run it asked for exists) but queued no
+			// run of its own: say so, so a consumer whose runs keep folding is
+			// visible rather than a silent loss of what came after the first.
+			r.o.inst.folded(ti.name, reg.name)
+			r.log.Info("outbox: run start folded into an existing run", slog.String("consumer", reg.name),
+				slog.String("topic", ti.name), slog.Uint64("seq", res.seq), slog.String("run", string(res.folded)))
+		}
 	}
 }
 
@@ -739,6 +766,7 @@ func (r *relay) passUnordered(ctx context.Context, reg *consumerReg, ti *topicIn
 		}
 		now := o.now()
 		var items []*roundItem
+		var gone []uint64 // retry entries whose message is no longer in the store
 		var earliest time.Time
 		for _, e := range st.Try.Entries {
 			if e.NextAt.After(now) {
@@ -756,7 +784,8 @@ func (r *relay) passUnordered(ctx context.Context, reg *consumerReg, ti *topicIn
 				return
 			}
 			if !ok {
-				continue // gone: the settle batch drops the entry
+				gone = append(gone, e.Seq) // the settle batch drops the entry
+				continue
 			}
 			items = append(items, &roundItem{row: row, attempt: e.Attempt + 1, retry: true})
 		}
@@ -777,7 +806,7 @@ func (r *relay) passUnordered(ctx context.Context, reg *consumerReg, ti *topicIn
 				return
 			}
 		}
-		if len(items) == 0 {
+		if len(items) == 0 && len(gone) == 0 {
 			switch {
 			case len(st.Try.Entries) > 0 && !earliest.IsZero():
 				r.retryAt(p, earliest)
@@ -791,7 +820,7 @@ func (r *relay) passUnordered(ctx context.Context, reg *consumerReg, ti *topicIn
 		if ctx.Err() != nil {
 			return // nothing is settled: the round is delivered again
 		}
-		if out := r.settleRound(ctx, reg, ti, p, items, newMax); out != outAcked {
+		if out := r.settleRound(ctx, reg, ti, p, items, gone, newMax); out != outAcked {
 			return
 		}
 		r.unblock(p)
@@ -835,14 +864,14 @@ func (r *relay) messageAt(ctx context.Context, p outboxstore.Pair, seq uint64) (
 
 // roundCounts are what a committed round did, for metrics and health.
 type roundCounts struct {
-	delivered, filtered, retried, dead int
-	next                               time.Time
+	delivered, filtered, retried, dead, gone int
+	next                                     time.Time
 }
 
 // settleRound commits a round. It reads the pair's cursor with GetForUpdate, so
 // a concurrent writer fails the commit; on a retry it re-reads and drops every
 // item another writer already settled.
-func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo, p outboxstore.Pair, items []*roundItem, newMax uint64) outcome {
+func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo, p outboxstore.Pair, items []*roundItem, gone []uint64, newMax uint64) outcome {
 	o := r.o
 	out := outHalt
 	var cnt roundCounts
@@ -861,6 +890,15 @@ func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo
 		entries := map[uint64]outboxstore.TryEntry{}
 		for _, e := range st.Try.Entries {
 			entries[e.Seq] = e
+		}
+		// An entry whose message is gone can never be retried: leaving it would
+		// hold a slot of the pair's bounded try list, and keep the pair awake,
+		// for good.
+		for _, seq := range gone {
+			if _, ok := entries[seq]; ok {
+				delete(entries, seq)
+				cnt.gone++
+			}
 		}
 		for _, it := range items {
 			seq := it.row.Seq
@@ -947,6 +985,10 @@ func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo
 		}
 		if cnt.dead > 0 {
 			o.health.addDead(reg.name, o.now())
+		}
+		if cnt.gone > 0 {
+			r.log.Warn("outbox: messages under retry were gone from the store; their retry entries were dropped",
+				slog.String("consumer", reg.name), slog.String("topic", ti.name), slog.Int("partition", p.PP), slog.Int("entries", cnt.gone))
 		}
 		if !cnt.next.IsZero() {
 			r.retryAt(p, cnt.next)

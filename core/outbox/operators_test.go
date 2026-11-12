@@ -1,5 +1,5 @@
 // file: core/outbox/operators_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 79b776b8-4d28-4cfd-addc-c1ac58312a45
 // last-edited: 2026-11-12
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/internal/outboxstore"
 	"github.com/falkcorp/mediacore/outbox"
 	"github.com/falkcorp/mediacore/storage"
@@ -206,8 +207,9 @@ func TestOutbox_RetentionRechecksFloorsInItsBatch(t *testing.T) {
 }
 
 // An orphan's cursor is dropped only if it is still expired when the batch
-// reads it: one touched after the sweep decided (an operator's purge of its
-// backlog) is kept, and dropped by a later sweep once it has expired again.
+// reads it: one whose absence mark moved after the sweep decided (the consumer
+// came back and went away again, so its grace period restarted) is kept, and
+// dropped by a later sweep once it has expired again.
 func TestOutbox_OrphanCursorTouchedAfterTheSweepDecidedIsKept(t *testing.T) {
 	clk := &skew{}
 	cfg := func(c *outbox.Config) { c.RelayRotate = 24 * time.Hour; c.OrphanRetention = time.Hour }
@@ -228,7 +230,8 @@ func TestOutbox_OrphanCursorTouchedAfterTheSweepDecidedIsKept(t *testing.T) {
 			return
 		}
 		for pp := range 2 {
-			rewritePair(t, self.Load(), outboxstore.Pair{Consumer: consumerN3, Topic: noticeName, PP: pp}, clk.now(), func(*outboxstore.PairState) {})
+			rewritePair(t, self.Load(), outboxstore.Pair{Consumer: consumerN3, Topic: noticeName, PP: pp}, clk.now(),
+				func(ps *outboxstore.PairState) { ps.Cur.Absent = clk.now().UTC() })
 		}
 	}}
 	// The second build no longer declares consumerN3 anywhere.
@@ -239,9 +242,38 @@ func TestOutbox_OrphanCursorTouchedAfterTheSweepDecidedIsKept(t *testing.T) {
 		t.Fatalf("the removed consumer has %d cursors to expire, want 2", n)
 	}
 
+	// The grace period runs from the first sweep that saw the consumer missing.
+	eventually(t, "the first sweep to mark the removed consumer absent", func() bool { return r2.absent(consumerN3) == 2 })
 	clk.advance(2 * time.Hour)
 	eventually(t, "the sweep to decide the orphan's cursors expired", func() bool { return once.Load() })
 	stays(t, "the touched cursors kept", 400*time.Millisecond, func() bool { return r2.cursors(consumerN3) == 2 })
 	clk.advance(2 * time.Hour)
 	eventually(t, "the cursors to expire again and be dropped", func() bool { return r2.cursors(consumerN3) == 0 })
+}
+
+// RefreshStatus on a Status that failed (an operator request whose client went
+// away, so its context ended mid-read) leaves the health state as it was: the
+// partial Status it would have published reports the dead letters it did not
+// get to read as gone.
+func TestOutbox_RefreshStatusFailureKeepsTheLastHealth(t *testing.T) {
+	r := newRig(t, rigOpts{cfg: func(c *outbox.Config) { c.MaxAttempts = 1 },
+		register: func(testing.TB, *rig) []registration {
+			return []registration{{owner: "core", hs: []outbox.Handler{outbox.Consume(notice(), consumerN,
+				func(context.Context, outbox.Message[Dispatch]) error { return outbox.ErrPermanent })}}}
+		}})
+	r.stage("wayne-manor", Dispatch{Villain: "Joker"})
+	eventually(t, "health degraded by the dead letter", func() bool {
+		h := r.healthOf()
+		return h.Status == health.StatusDegraded && h.Reason == "dead_letters"
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.ob.Status(ctx); err == nil {
+		t.Fatal("Status on a canceled context succeeded; the test would prove nothing")
+	}
+	r.ob.RefreshStatus(ctx)
+	if h := r.healthOf(); h.Status != health.StatusDegraded || h.Reason != "dead_letters" {
+		t.Fatalf("health after a failed refresh = %v %q, want it unchanged (degraded, dead_letters)", h.Status, h.Reason)
+	}
 }

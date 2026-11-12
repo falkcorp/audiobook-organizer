@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/store.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 754dc428-ceb7-4876-824c-cde4fb15a4f3
 // last-edited: 2026-11-12
 
@@ -12,12 +12,18 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/codec"
 	"github.com/falkcorp/mediacore/storage/keys"
 )
 
-// Errors of the store. A decode failure of a row of another version wraps
-// codec.ErrUnknownVersion; it is returned as it is, never defaulted.
+// Errors of the store. A row that does not decode is a *RowError: of another
+// version it wraps codec.ErrUnknownVersion, otherwise ErrCorruptRow; either
+// way it is returned, never defaulted or skipped.
 var (
+	// ErrCorruptRow: a row of the right version does not decode. The error
+	// names the row and never carries the decoder's text: a JSON error quotes
+	// the value it rejected, and a row's value is a payload.
+	ErrCorruptRow = errors.New("outboxstore: a row does not decode")
 	// ErrPartitionsChanged: the topic's declared partition count differs from
 	// the one its high-water mark was stamped with. Re-spreading the keys
 	// would reorder them, so the topic is refused.
@@ -30,6 +36,26 @@ var (
 	// since the relay's last run); the relay creates it before delivering.
 	ErrNoCursor = errors.New("outboxstore: the pair has no cursor")
 )
+
+// RowError is a row that failed to decode. Where names it (the family, topic,
+// consumer, partition and seq: names and numbers, never a value) and Err is
+// ErrCorruptRow or codec.ErrUnknownVersion.
+type RowError struct {
+	Where string
+	Err   error
+}
+
+func (e *RowError) Error() string { return e.Where + ": " + e.Err.Error() }
+func (e *RowError) Unwrap() error { return e.Err }
+
+// rowErr is the error of the row named where, which failed to decode with err.
+// Only the class of err survives.
+func rowErr(where string, err error) error {
+	if errors.Is(err, codec.ErrUnknownVersion) {
+		return &RowError{Where: where, Err: codec.ErrUnknownVersion}
+	}
+	return &RowError{Where: where, Err: ErrCorruptRow}
+}
 
 // Store is the c/outbox/ keyspace. It holds the handle, which is the
 // capability to write it: Stage binds it to a producer's batch.
@@ -87,7 +113,7 @@ func (s *Store) ScanIntake(ctx context.Context, topic string, now time.Time, lim
 		}
 		in, derr := intakeCodec().Decode(kv.Value)
 		if derr != nil {
-			return rows, delayed, fmt.Errorf("intake row %s/%s: %w", topic, id, derr)
+			return rows, delayed, rowErr(fmt.Sprintf("intake row %s/%s", topic, id), derr)
 		}
 		if in.NotBefore.After(now) {
 			delayed++
@@ -118,7 +144,7 @@ func (s *Store) IntakeStats(ctx context.Context, topic string, maxCount int) (n 
 		}
 		in, derr := intakeCodec().Decode(kv.Value)
 		if derr != nil {
-			return n, false, oldest, derr
+			return n, false, oldest, rowErr("intake row of "+topic, derr)
 		}
 		if n == 0 || in.StagedAt.Before(oldest) {
 			oldest = in.StagedAt
@@ -165,7 +191,7 @@ func (s *Store) ReadHigh(ctx context.Context, topic string) (High, bool, error) 
 	}
 	h, err := highCodec().Decode(raw)
 	if err != nil {
-		return High{}, false, fmt.Errorf("seq row %s: %w", topic, err)
+		return High{}, false, rowErr(fmt.Sprintf("seq row %s", topic), err)
 	}
 	return h, true, nil
 }
@@ -189,7 +215,7 @@ func (s *Store) StageSequence(ctx context.Context, b *storage.Batch, topic strin
 		return High{}, err
 	default:
 		if hi, err = highCodec().Decode(raw); err != nil {
-			return High{}, fmt.Errorf("seq row %s: %w", topic, err)
+			return High{}, rowErr(fmt.Sprintf("seq row %s", topic), err)
 		}
 		if hi.Partitions != partitions {
 			return High{}, fmt.Errorf("%w: %s was sequenced over %d partitions and now declares %d", ErrPartitionsChanged, topic, hi.Partitions, partitions)
@@ -249,7 +275,7 @@ func (s *Store) MessagesAfter(ctx context.Context, topic string, pp int, after u
 		}
 		m, derr := msgCodec().Decode(kv.Value)
 		if derr != nil {
-			return out, fmt.Errorf("message row %s/%02d/%d: %w", topic, pp, seq, derr)
+			return out, rowErr(fmt.Sprintf("message row %s/%02d/%d", topic, pp, seq), derr)
 		}
 		out = append(out, MsgRow{Seq: seq, PP: pp, Msg: m})
 	}
@@ -273,7 +299,7 @@ func (s *Store) MessageStats(ctx context.Context, topic string, pp int, after ui
 		if n == 0 {
 			m, derr := msgCodec().Decode(kv.Value)
 			if derr != nil {
-				return n, false, oldest, derr
+				return n, false, oldest, rowErr(fmt.Sprintf("message row %s/%02d/%d", topic, pp, after+1), derr)
 			}
 			oldest = m.StagedAt
 		}
@@ -322,7 +348,7 @@ func (s *Store) OldestMessages(ctx context.Context, topic string, pp, limit int)
 		}
 		m, derr := msgCodec().Decode(kv.Value)
 		if derr != nil {
-			return out, fmt.Errorf("message row %s/%02d/%d: %w", topic, pp, seq, derr)
+			return out, rowErr(fmt.Sprintf("message row %s/%02d/%d", topic, pp, seq), derr)
 		}
 		out = append(out, MsgRow{Seq: seq, PP: pp, Msg: m})
 	}
@@ -354,7 +380,7 @@ func (s *Store) ReadPair(ctx context.Context, p Pair) (PairState, error) {
 		return st, err
 	default:
 		if st.Cur, err = curCodec().Decode(raw); err != nil {
-			return st, fmt.Errorf("cursor row %s/%s/%02d: %w", p.Consumer, p.Topic, p.PP, err)
+			return st, rowErr(fmt.Sprintf("cursor row %s/%s/%02d", p.Consumer, p.Topic, p.PP), err)
 		}
 		st.Has = true
 	}
@@ -370,7 +396,7 @@ func (s *Store) readTry(ctx context.Context, p Pair, st PairState) (PairState, e
 		return st, err
 	}
 	if st.Try, err = tryCodec().Decode(raw); err != nil {
-		return st, fmt.Errorf("try row %s/%s/%02d: %w", p.Consumer, p.Topic, p.PP, err)
+		return st, rowErr(fmt.Sprintf("try row %s/%s/%02d", p.Consumer, p.Topic, p.PP), err)
 	}
 	return st, nil
 }
@@ -390,7 +416,7 @@ func (s *Store) LoadPair(ctx context.Context, b *storage.Batch, p Pair) (PairSta
 		return st, err
 	default:
 		if st.Cur, err = curCodec().Decode(raw); err != nil {
-			return st, fmt.Errorf("cursor row %s/%s/%02d: %w", p.Consumer, p.Topic, p.PP, err)
+			return st, rowErr(fmt.Sprintf("cursor row %s/%s/%02d", p.Consumer, p.Topic, p.PP), err)
 		}
 		st.Has = true
 	}
@@ -441,7 +467,9 @@ func (s *Store) StageDead(ctx context.Context, b *storage.Batch, consumer, topic
 // partition that has none: at the topic's high-water mark ("now"), or at 0
 // with fromBeginning (the oldest retained message). It reads seq/<topic> with
 // GetForUpdate and each cursor with LoadPair, so a cursor or a message
-// sequenced meanwhile fails the commit. It returns how many it created.
+// sequenced meanwhile fails the commit. It returns how many it created. A
+// stamp that differs from partitions is ErrPartitionsChanged and creates
+// nothing: cursors for the wrong partition set would strand messages.
 func (s *Store) StageCursorInit(ctx context.Context, b *storage.Batch, consumer, topic string, partitions int, fromBeginning bool, now time.Time) (int, error) {
 	b.Bind(s.ks)
 	var hi High
@@ -452,7 +480,10 @@ func (s *Store) StageCursorInit(ctx context.Context, b *storage.Batch, consumer,
 		return 0, err
 	default:
 		if hi, err = highCodec().Decode(raw); err != nil {
-			return 0, fmt.Errorf("seq row %s: %w", topic, err)
+			return 0, rowErr(fmt.Sprintf("seq row %s", topic), err)
+		}
+		if hi.Partitions != partitions {
+			return 0, fmt.Errorf("%w: %s was sequenced over %d partitions and now declares %d", ErrPartitionsChanged, topic, hi.Partitions, partitions)
 		}
 	}
 	start := hi.High
@@ -514,7 +545,7 @@ func (s *Store) AllCursors(ctx context.Context) ([]CursorRow, error) {
 		}
 		cur, derr := curCodec().Decode(kv.Value)
 		if derr != nil {
-			return out, fmt.Errorf("cursor row %s/%s/%02d: %w", c, t, pp, derr)
+			return out, rowErr(fmt.Sprintf("cursor row %s/%s/%02d", c, t, pp), derr)
 		}
 		out = append(out, CursorRow{Pair: Pair{Consumer: c, Topic: t, PP: pp}, Cur: cur})
 	}
@@ -541,7 +572,7 @@ func (s *Store) GetDead(ctx context.Context, consumer, topic string, seq uint64)
 	}
 	d, err := deadCodec().Decode(raw)
 	if err != nil {
-		return Dead{}, false, fmt.Errorf("dead row %s/%s/%d: %w", consumer, topic, seq, err)
+		return Dead{}, false, rowErr(fmt.Sprintf("dead row %s/%s/%d", consumer, topic, seq), err)
 	}
 	return d, true, nil
 }
@@ -568,7 +599,7 @@ func (s *Store) ScanDead(ctx context.Context, after []byte, limit int) ([]DeadRo
 		}
 		d, derr := deadCodec().Decode(kv.Value)
 		if derr != nil {
-			return out, nil, fmt.Errorf("dead row %s/%s/%d: %w", c, t, seq, derr)
+			return out, nil, rowErr(fmt.Sprintf("dead row %s/%s/%d", c, t, seq), derr)
 		}
 		out = append(out, DeadRow{Consumer: c, Topic: t, Seq: seq, Dead: d})
 		last = append(last[:0], kv.Key...)
@@ -632,7 +663,7 @@ func (s *Store) LoadDead(ctx context.Context, b *storage.Batch, consumer, topic 
 		return Dead{}, false, err
 	}
 	if d, err = deadCodec().Decode(raw); err != nil {
-		return Dead{}, false, fmt.Errorf("dead row %s/%s/%d: %w", consumer, topic, seq, err)
+		return Dead{}, false, rowErr(fmt.Sprintf("dead row %s/%s/%d", consumer, topic, seq), err)
 	}
 	return d, true, nil
 }

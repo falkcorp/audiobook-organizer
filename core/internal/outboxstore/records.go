@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/records.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5f394976-e7d8-4f5e-be83-5afd62ff5595
 // last-edited: 2026-11-12
 
@@ -54,10 +54,17 @@ type High struct {
 // state (cursor, try, dead letters); each one reads the cursor with
 // GetForUpdate and writes it back with Rev+1, so a stale writer's commit
 // fails.
+//
+// Absent is when retention first saw the cursor's consumer in neither the
+// registered nor the declared set (a consumer removed from the build); the zero
+// time is every consumer that is present. It is the start of the orphan grace
+// period: only retention writes it, only for a consumer that is gone, and it
+// clears it again as soon as the consumer is back.
 type Cursor struct {
-	Seq uint64    `json:"seq"`
-	Rev uint64    `json:"rev"`
-	At  time.Time `json:"at"`
+	Seq    uint64    `json:"seq"`
+	Rev    uint64    `json:"rev"`
+	At     time.Time `json:"at"`
+	Absent time.Time `json:"absent_since,omitzero"`
 }
 
 // TryEntry is one message under retry: the head message of an ordered

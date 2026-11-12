@@ -1,5 +1,5 @@
 // file: core/outbox/consumer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3ec1a6c8-90d6-4e8d-9a3e-7b34e8e5d5a2
 // last-edited: 2026-11-12
 
@@ -58,6 +58,9 @@ type Tx struct {
 	ctx  context.Context
 	b    *storage.Batch
 	runs Runs
+	// folded is the run a StartRun of this delivery folded into (or replayed)
+	// instead of inserting one; empty when every start inserted its own.
+	folded tasks.RunID
 }
 
 // Batch is the relay batch. It was opened on the outbox's own keyspace, so a
@@ -72,12 +75,24 @@ func (tx *Tx) Batch() *storage.Batch { return tx.b }
 // ModeRequestLive or ModeRequestPreview (unset: tasks.ErrModeUnset, a
 // programming error that dead-letters). A module kind's run is stamped with
 // that module's system actor.
+//
+// A start may fold into a run that already exists (the kind's DedupePolicy,
+// or an idempotency key): the returned ref says so (Existing) and no new run
+// is queued, so the message's own work is done only if that run does it. The
+// relay counts and logs every such delivery (mediacore_outbox_folded_total),
+// but a kind started from an outbox consumer must still be idempotent and
+// carry a DedupePolicy.Key (queued-only) rather than the default params rule,
+// which also folds into a RUNNING run and drops what arrived after it began.
 func (tx *Tx) StartRun(kind tasks.Kind, req tasks.StartRequest) (tasks.RunRef, error) {
 	if tx == nil || tx.b == nil || tx.runs == nil {
 		return tasks.RunRef{}, ErrNoRuns
 	}
 	req.Trigger = tasks.TriggerOutbox
-	return tx.runs.StartIn(tx.ctx, tx.b, kind, req)
+	ref, err := tx.runs.StartIn(tx.ctx, tx.b, kind, req)
+	if err == nil && ref.Existing {
+		tx.folded = ref.ID
+	}
+	return ref, err
 }
 
 // consumerConfig is what ConsumerOptions set.

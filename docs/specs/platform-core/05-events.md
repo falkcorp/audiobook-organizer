@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.12.2 -->
+<!-- version: 1.12.3 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-12 -->
 
 # 05 — Events (`core/events`) and Outbox (`core/outbox`)
 
@@ -613,6 +613,7 @@ ABO series changes.
 | `mediacore_outbox_pending` | gauge | `consumer`, `state` (`enabled`, `disabled`) |
 | `mediacore_outbox_lag_seconds` | gauge | `consumer` (age of the oldest unacked message) |
 | `mediacore_outbox_filtered_total` | counter | `topic`, `consumer` (messages acked by a `Where` filter) |
+| `mediacore_outbox_folded_total` | counter | `topic`, `consumer` (deliveries acked after a run start folded into an existing run) |
 | `mediacore_outbox_orphans_dropped_total` | counter | `topic` |
 
 `topic`, `subscriber` and `consumer` are closed sets (declared at boot, disabled modules' consumer
