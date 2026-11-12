@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/me_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7b3c9e04-1d58-4a26-b6f1-d85a02c7e913
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/falkcorp/mediacore/auth"
-	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -129,7 +128,7 @@ func TestMySessions_NeverCarryATokenAndRevokeOnlyOwn(t *testing.T) {
 	a := e.api()
 	p, is := e.withSession(bruce)
 	_, dickSession := e.withSession(dick)
-	page, err := call(specMeSessions(), a.mySessions, p, listReq{PageParams: httpapi.PageParams{Limit: 50}})
+	page, err := call(specMeSessions(), a.mySessions, p, listReq{Limit: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +167,7 @@ func TestMyKeys_TheKeyIsShownOnceAndNeverListed(t *testing.T) {
 	if !strings.HasPrefix(raw, "mck_") || !strings.HasSuffix(created.Location, created.Body.APIKey.ID) || created.Body.APIKey.Status != "active" || created.Body.APIKey.ExpiresAt == nil {
 		t.Fatalf("%+v", created)
 	}
-	page, err := call(specMeKeys(), a.myKeys, p, listReq{PageParams: httpapi.PageParams{Limit: 50}})
+	page, err := call(specMeKeys(), a.myKeys, p, listReq{Limit: 50})
 	if err != nil || page.Total != 1 {
 		t.Fatalf("%+v %v", page, err)
 	}

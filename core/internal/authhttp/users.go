@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/users.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b8d5e17-9c40-4a3f-b1e6-5a07c3d8f194
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"net/http"
 	"slices"
-	"time"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -93,7 +92,7 @@ func (r *inviteCreateReq) Validate() error {
 		fields = append(fields, httpapi.Field("/body/role", "required", "an invite needs a role"))
 	}
 	if r.Body.TTL != "" {
-		if d, err := time.ParseDuration(r.Body.TTL); err != nil || d <= 0 {
+		if _, ok := positiveDuration(r.Body.TTL); !ok {
 			fields = append(fields, httpapi.Field("/body/ttl", "invalid", "a positive duration such as 72h"))
 		}
 	}
@@ -107,7 +106,11 @@ func (a *api) createInvite(ctx context.Context, p *auth.Principal, in *httpapi.I
 	b := in.Req.Body
 	spec := auth.InviteSpec{Username: b.Username, Email: b.Email, Role: rbac.RoleName(b.Role)}
 	if b.TTL != "" {
-		spec.TTL, _ = time.ParseDuration(b.TTL) // Validate checked it
+		d, ok := positiveDuration(b.TTL)
+		if !ok {
+			return httpapi.Created[InviteCreated]{}, httpapi.Invalid(httpapi.Field("/body/ttl", "invalid", "a positive duration such as 72h"))
+		}
+		spec.TTL = d
 	}
 	link, v, err := a.Invites.CreateInvite(ctx, p, spec)
 	if err != nil {

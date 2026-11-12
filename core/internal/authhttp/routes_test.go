@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/routes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a7e19c5-d204-4f8b-86a1-0b5c7d92e418
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -281,8 +281,7 @@ func TestDTOs_SnakeCaseJSON(t *testing.T) {
 		InviteCreated{}, LinkCreated{}, RolesReplace{},
 	} {
 		rt := reflect.TypeOf(v)
-		for i := range rt.NumField() {
-			f := rt.Field(i)
+		for f := range rt.Fields() {
 			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 			if name == "" || !snake.MatchString(name) {
 				t.Errorf("%s.%s json tag %q is not snake_case", rt.Name(), f.Name, f.Tag.Get("json"))
@@ -297,16 +296,16 @@ func TestDTOs_NoSecretFieldsAndNoTargetOnPasswordChange(t *testing.T) {
 	banned := regexp.MustCompile(`(?i)hash|salt|secret|mask|epoch`)
 	for _, v := range []any{User{}, Me{}, Session{}, APIKey{}, Invite{}, InvitePreview{}, Providers{}, Provider{}, SessionOpened{}} {
 		rt := reflect.TypeOf(v)
-		for i := range rt.NumField() {
-			if banned.MatchString(rt.Field(i).Name) {
-				t.Errorf("%s.%s names a stored secret", rt.Name(), rt.Field(i).Name)
+		for field := range rt.Fields() {
+			if banned.MatchString(field.Name) {
+				t.Errorf("%s.%s names a stored secret", rt.Name(), field.Name)
 			}
 		}
 	}
-	pc := reflect.TypeOf(PasswordChange{})
+	pc := reflect.TypeFor[PasswordChange]()
 	var names []string
-	for i := range pc.NumField() {
-		names = append(names, pc.Field(i).Tag.Get("json"))
+	for field := range pc.Fields() {
+		names = append(names, field.Tag.Get("json"))
 	}
 	if !slices.Equal(names, []string{"current", "new"}) {
 		t.Fatalf("PasswordChange fields %v: PUT /me/password is self-only, {current, new}", names)

@@ -1,7 +1,7 @@
 // file: core/internal/confighttp/errors.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2bf2666b-a918-45d3-936d-ca9c4b6827a9
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package confighttp
 
@@ -90,7 +90,7 @@ func (pb *problemBody) Error() string { return "confighttp: " + pb.Code }
 
 // problem builds a *problemBody.
 func problem(status int, code, detail string) *problemBody {
-	return &problemBody{Problem: httpapi.Problem{Status: status, Code: code, Detail: detail}}
+	return &problemBody{Status: status, Code: code, Detail: detail}
 }
 
 // unauthenticated is the 401 of a request that carries no identity this

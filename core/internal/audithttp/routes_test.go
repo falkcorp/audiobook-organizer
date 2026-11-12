@@ -1,7 +1,7 @@
 // file: core/internal/audithttp/routes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4c6e2210-19b1-49c9-b95e-ffcd88ee48e6
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package audithttp
 
@@ -271,7 +271,7 @@ func TestAuditRoutes_NeedAuditView(t *testing.T) {
 func TestList_PagesNewestFirst(t *testing.T) {
 	e := newEnv(t)
 	var written []uint64
-	for i := 0; i < 7; i++ {
+	for range 7 {
 		written = append(written, e.write(t, audit.Event{Action: "core.session.create", Outcome: audit.Success, Actor: actor("u-bruce", "bruce")}))
 	}
 	slices.Reverse(written)
@@ -279,7 +279,7 @@ func TestList_PagesNewestFirst(t *testing.T) {
 	p := commissioner()
 
 	var got []uint64
-	req := listReq{CursorParams: httpapi.CursorParams{Limit: 3}}
+	req := listReq{Limit: 3}
 	pages := 0
 	for {
 		page := get(t, a, p, req)
@@ -302,20 +302,20 @@ func TestList_PagesNewestFirst(t *testing.T) {
 
 	// The boundary: exactly limit records, then limit+1.
 	small := newEnv(t)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		small.write(t, audit.Event{Action: "core.session.create", Outcome: audit.Success})
 	}
 	sa := newAPI(small.store, nil)
-	page := get(t, sa, p, listReq{CursorParams: httpapi.CursorParams{Limit: 3}})
+	page := get(t, sa, p, listReq{Limit: 3})
 	if len(page.Items) != 3 || page.NextCursor != "" {
 		t.Errorf("exactly limit records = %d items, cursor %q; want 3 and none", len(page.Items), page.NextCursor)
 	}
 	small.write(t, audit.Event{Action: "core.session.create", Outcome: audit.Success})
-	page = get(t, sa, p, listReq{CursorParams: httpapi.CursorParams{Limit: 3}})
+	page = get(t, sa, p, listReq{Limit: 3})
 	if len(page.Items) != 3 || page.NextCursor == "" {
 		t.Fatalf("limit+1 records = %d items, cursor %q; want 3 and a cursor", len(page.Items), page.NextCursor)
 	}
-	rest := get(t, sa, p, listReq{CursorParams: httpapi.CursorParams{Limit: 3, Cursor: page.NextCursor}})
+	rest := get(t, sa, p, listReq{Limit: 3, Cursor: page.NextCursor})
 	if len(rest.Items) != 1 || rest.NextCursor != "" || rest.Items[0].Seq >= page.Items[2].Seq {
 		t.Errorf("second page = %+v", rest)
 	}
@@ -332,12 +332,12 @@ func TestList_PagesNewestFirst(t *testing.T) {
 // invalid_cursor.
 func TestList_BadCursorIs400(t *testing.T) {
 	e := newEnv(t)
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		e.write(t, audit.Event{Action: "core.session.create", Outcome: audit.Success})
 	}
 	a := newAPI(e.store, nil)
 	p := commissioner()
-	page := get(t, a, p, listReq{CursorParams: httpapi.CursorParams{Limit: 2}})
+	page := get(t, a, p, listReq{Limit: 2})
 	if page.NextCursor == "" {
 		t.Fatal("no cursor to reuse")
 	}
@@ -351,7 +351,7 @@ func TestList_BadCursorIs400(t *testing.T) {
 		"other filters": page.NextCursor,
 	} {
 		t.Run(name, func(t *testing.T) {
-			req := listReq{CursorParams: httpapi.CursorParams{Limit: 2, Cursor: cursor}}
+			req := listReq{Limit: 2, Cursor: cursor}
 			if name == "other filters" {
 				req.Outcome = "success"
 			}
@@ -592,7 +592,7 @@ func TestList_StoreFailureIs503(t *testing.T) {
 func records(n int) []audit.Record {
 	var out []audit.Record
 	for i := n; i >= 1; i-- {
-		out = append(out, audit.Record{Seq: uint64(i), ID: fmt.Sprint("r", i), Time: epoch, Event: audit.Event{Action: "core.session.create", Outcome: audit.Success}})
+		out = append(out, audit.Record{Seq: uint64(i), ID: fmt.Sprint("r", i), Time: epoch, Action: "core.session.create", Outcome: audit.Success})
 	}
 	return out
 }
@@ -672,7 +672,7 @@ func TestVisibility_AuthAndUserRecords(t *testing.T) {
 func TestVisibility_WithheldRecordsDoNotUseUpAPage(t *testing.T) {
 	e := newEnv(t)
 	first := e.write(t, audit.Event{Action: "core.role.update", Outcome: audit.Success, Actor: actor("u-dick", "dick")})
-	for i := 0; i < 12; i++ {
+	for range 12 {
 		e.write(t, audit.Event{Action: "core.auth.login", Outcome: audit.Success, Actor: actor("u-selina", "selina"), Target: userRef("u-selina")})
 	}
 	last := e.write(t, audit.Event{Action: "core.role.update", Outcome: audit.Success, Actor: actor("u-dick", "dick")})
@@ -683,7 +683,7 @@ func TestVisibility_WithheldRecordsDoNotUseUpAPage(t *testing.T) {
 	if got := seqsOf(page.Items); !slices.Equal(got, []uint64{last}) || page.NextCursor == "" {
 		t.Fatalf("first page = %v cursor %q", got, page.NextCursor)
 	}
-	page = get(t, a, p, listReq{CursorParams: httpapi.CursorParams{Limit: 1, Cursor: page.NextCursor}})
+	page = get(t, a, p, listReq{Limit: 1, Cursor: page.NextCursor})
 	if got := seqsOf(page.Items); !slices.Equal(got, []uint64{first}) || page.NextCursor != "" {
 		t.Errorf("second page = %v cursor %q, want the record past the withheld run and no cursor", got, page.NextCursor)
 	}

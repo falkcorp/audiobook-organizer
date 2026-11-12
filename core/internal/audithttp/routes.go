@@ -1,7 +1,7 @@
 // file: core/internal/audithttp/routes.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b7ba0d64-88a0-4182-aa62-18009112fbcf
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package audithttp is the HTTP surface of core's audit log (05-rbac §7.6,
 // F4-05): GET /audit, a cursor-paged query, and GET /audit/export, the same
@@ -197,7 +197,7 @@ func (a *api) export(w http.ResponseWriter, r *http.Request) {
 			if err := enc.Encode(map[string]string{"error": "export_incomplete"}); err != nil {
 				return
 			}
-			_ = rc.Flush() // best effort: the stream ends here either way
+			a.flushEnd(ctx, rc) // best effort: the stream ends here either way
 			return
 		}
 		if err := enc.Encode(wire(first)); err != nil {
@@ -211,7 +211,16 @@ func (a *api) export(w http.ResponseWriter, r *http.Request) {
 		}
 		first, ferr, more = next()
 	}
-	_ = rc.Flush() // the end of the stream; a writer that cannot flush has sent it
+	a.flushEnd(ctx, rc) // the end of the stream; a writer that cannot flush has sent it
+}
+
+// flushEnd flushes the last of the stream. A writer that cannot flush has
+// sent it already; any other failure means the client went away, which is
+// logged at debug and answered by nothing: the status line is out.
+func (a *api) flushEnd(ctx context.Context, rc *http.ResponseController) {
+	if err := rc.Flush(); err != nil && !isNoFlush(err) {
+		a.log.DebugContext(ctx, "audithttp: the export's last flush failed", slog.Any("error", err))
+	}
 }
 
 // queryOf reads the export's filters from the URL's query. Unknown parameters

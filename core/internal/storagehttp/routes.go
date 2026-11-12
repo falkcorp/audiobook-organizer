@@ -1,7 +1,7 @@
 // file: core/internal/storagehttp/routes.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: fc881e0c-487c-4da6-a3d2-a0f548fc9d0a
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 // Package storagehttp is the HTTP surface of the factory reset (05-storage
 // §5S.3.15, 05-rbac §6.2, F4-05): POST /api/core/v1/system/factory-reset,
@@ -206,7 +206,8 @@ func (a *api) refuse(w http.ResponseWriter, r *http.Request, err error) {
 // stands.
 func (a *api) recordFailure(ctx context.Context, ev audit.Event, cause error) {
 	ev.Outcome, ev.Reason = audit.Failure, "staging_refused"
-	if _, ok := mapResetError(cause); !ok {
+	// A refusal maps to a problem; anything else is a failure of staging.
+	if pb, ok := mapResetError(cause); !ok || pb == nil {
 		ev.Outcome, ev.Reason = audit.Error, "staging_failed"
 	}
 	if err := a.audit.Record(ctx, ev); err != nil {

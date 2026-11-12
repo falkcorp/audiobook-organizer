@@ -1,11 +1,12 @@
 // file: core/internal/modulehttp/openapi.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2608b4b5-3c38-43b4-9f93-421aecbf9687
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package modulehttp
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -93,7 +94,10 @@ func (a *api) serveOpenAPI(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	if _, err := w.Write(body); err != nil {
+		// The status line is out; the client went away mid-body.
+		a.log.DebugContext(r.Context(), "modulehttp: the OpenAPI document was not delivered", slog.Any("error", err))
+	}
 }
 
 // openAPIAccess is the rule of 05-http-api §7: core.http.openapi.public makes

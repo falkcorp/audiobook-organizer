@@ -1,7 +1,7 @@
 // file: core/internal/authhttp/me.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c3e72a95-0f4b-4d18-8b6a-7d1e9f305b24
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package authhttp
 
@@ -180,7 +180,7 @@ func (k KeyCreate) validate() error {
 		fields = append(fields, httpapi.Field("/body/scopes", "required", "a key needs at least one scope"))
 	}
 	if k.ExpiresIn != "" {
-		if d, err := time.ParseDuration(k.ExpiresIn); err != nil || d <= 0 {
+		if _, ok := positiveDuration(k.ExpiresIn); !ok {
 			fields = append(fields, httpapi.Field("/body/expires_in", "invalid", "a positive duration such as 720h"))
 		}
 	}
@@ -190,16 +190,28 @@ func (k KeyCreate) validate() error {
 	return nil
 }
 
-// keySpec turns a validated body into the Service's request for owner.
-func (k KeyCreate) keySpec(owner auth.UserID) auth.KeySpec {
+// positiveDuration parses s as a duration greater than zero.
+func positiveDuration(s string) (time.Duration, bool) {
+	d, err := time.ParseDuration(s)
+	return d, err == nil && d > 0
+}
+
+// keySpec turns a body into the Service's request for owner. Validate has
+// already refused a bad expiry; this refuses it again rather than send the
+// Service a zero that means "the default lifetime".
+func (k KeyCreate) keySpec(owner auth.UserID) (auth.KeySpec, error) {
 	spec := auth.KeySpec{Owner: owner, Name: k.Name}
 	for _, s := range k.Scopes {
 		spec.Scopes = append(spec.Scopes, rbac.Permission(s))
 	}
 	if k.ExpiresIn != "" {
-		spec.ExpiresIn, _ = time.ParseDuration(k.ExpiresIn) // Validate checked it
+		d, ok := positiveDuration(k.ExpiresIn)
+		if !ok {
+			return auth.KeySpec{}, httpapi.Invalid(httpapi.Field("/body/expires_in", "invalid", "a positive duration such as 720h"))
+		}
+		spec.ExpiresIn = d
 	}
-	return spec
+	return spec, nil
 }
 
 func (a *api) createMyKey(ctx context.Context, p *auth.Principal, in *httpapi.In[createKeyReq]) (httpapi.Created[KeyCreated], error) {
@@ -210,7 +222,11 @@ func (a *api) createMyKey(ctx context.Context, p *auth.Principal, in *httpapi.In
 // whether the actor may: scopes held, key actors only for themselves, a
 // manager's interactive method and dominance.
 func (a *api) mintKey(ctx context.Context, s spec, p *auth.Principal, owner auth.UserID, body KeyCreate, location string) (httpapi.Created[KeyCreated], error) {
-	raw, k, err := a.Self.CreateAPIKey(ctx, p, body.keySpec(owner))
+	ks, err := body.keySpec(owner)
+	if err != nil {
+		return httpapi.Created[KeyCreated]{}, err
+	}
+	raw, k, err := a.Self.CreateAPIKey(ctx, p, ks)
 	if err != nil {
 		return httpapi.Created[KeyCreated]{}, a.fail(ctx, s, p, string(owner), err)
 	}

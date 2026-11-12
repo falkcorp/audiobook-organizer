@@ -1,7 +1,7 @@
 // file: core/internal/modulehttp/openapi_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6fd872bb-8fed-44b9-a7e6-3f551b71aacf
-// last-edited: 2026-11-10
+// last-edited: 2026-11-11
 
 package modulehttp
 
@@ -9,7 +9,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strconv"
 	"strings"
@@ -307,5 +310,26 @@ func TestDocumentMap(t *testing.T) {
 	}
 	if _, ok := m.OpenAPI("joker"); ok {
 		t.Error("OpenAPI(joker) found a document")
+	}
+}
+
+// brokenBody is a ResponseWriter whose body write fails.
+type brokenBody struct{ h http.Header }
+
+func (b *brokenBody) Header() http.Header       { return b.h }
+func (b *brokenBody) WriteHeader(int)           {}
+func (b *brokenBody) Write([]byte) (int, error) { return 0, errors.New("client went away") }
+
+// TestOpenAPI_ALostClientIsLoggedNotSilent: a document that cannot be
+// delivered is logged at debug, without the document in the log.
+func TestOpenAPI_ALostClientIsLoggedNotSilent(t *testing.T) {
+	var logs strings.Builder
+	a := &api{docs: DocumentMap{"core": []byte(`{"openapi":"3.1.0"}`)}, public: yes,
+		log: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	r := httptest.NewRequest(http.MethodGet, docPath, nil)
+	r.SetPathValue(openAPIFile, "core.json")
+	a.serveOpenAPI(&brokenBody{h: http.Header{}}, r)
+	if !strings.Contains(logs.String(), "not delivered") || strings.Contains(logs.String(), "3.1.0") {
+		t.Fatalf("log = %q", logs.String())
 	}
 }
