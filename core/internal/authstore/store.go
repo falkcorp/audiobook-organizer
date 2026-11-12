@@ -1,5 +1,5 @@
 // file: core/internal/authstore/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a7b06243-983e-42c3-9979-3aacdb3d3374
 // last-edited: 2026-11-11
 
@@ -252,12 +252,56 @@ func (s *Store) get(ctx context.Context, key []byte) ([]byte, error) {
 	return raw, nil
 }
 
+// ErrDoubleWrite is a second write to a record one batch already changed. A
+// write is derived from the committed bytes (NewBatch), so the second would
+// replace the first without having seen it: a disable, a delete or a password
+// blank lost to a later write of the same row. It is a programming error, not a
+// conflict, so it is not storage.ErrConflict and is never retried.
+var ErrDoubleWrite = errors.New("authstore: a record is written twice in one batch")
+
+// refuseRewrite (called after the Expect, whose precondition its read keeps)
+// returns ErrDoubleWrite when b has already changed key: an
+// indexed batch reads its own writes, so key's view in b differs from the
+// committed bytes the caller derived its write from (want, nil for absent) while
+// the committed value is still those bytes. A batch that cannot read its own
+// writes is not checked (it cannot be told).
+func (s *Store) refuseRewrite(b *storage.Batch, key, want []byte) error {
+	if !b.Indexed() {
+		return nil
+	}
+	view, err := b.GetForUpdate(context.Background(), s.ks, key)
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
+		view = nil
+	case err != nil:
+		return fmt.Errorf("authstore: read %s through the batch: %w", keyDesc(key), err)
+	}
+	if bytes.Equal(view, want) {
+		return nil
+	}
+	// The view differs from what the caller read: this batch's own write, or a
+	// commit that landed since the caller read. Only the first is a double write;
+	// the second is the conflict the commit's Expect reports, and the caller
+	// retries.
+	now, err := s.committed(key)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(now, want) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrDoubleWrite, keyDesc(key))
+}
+
 // set binds the keyspace, records Expect(key, want) (nil: absent) and stages
-// key = raw.
+// key = raw. It refuses a second write to key in one batch.
 func (s *Store) set(b *storage.Batch, key, want, raw []byte) error {
 	b.Bind(s.ks)
 	if err := b.Expect(s.ks, key, want); err != nil {
 		return fmt.Errorf("authstore: expect %s: %w", keyDesc(key), err)
+	}
+	if err := s.refuseRewrite(b, key, want); err != nil {
+		return err
 	}
 	if err := b.In(s.ks).Set(key, raw); err != nil {
 		return fmt.Errorf("authstore: stage %s: %w", keyDesc(key), err)
@@ -265,11 +309,15 @@ func (s *Store) set(b *storage.Batch, key, want, raw []byte) error {
 	return nil
 }
 
-// del stages the deletion of key with an Expect on want, the bytes read.
+// del stages the deletion of key with an Expect on want, the bytes read. It
+// refuses a second write to key in one batch.
 func (s *Store) del(b *storage.Batch, key, want []byte) error {
 	b.Bind(s.ks)
 	if err := b.Expect(s.ks, key, want); err != nil {
 		return fmt.Errorf("authstore: expect %s: %w", keyDesc(key), err)
+	}
+	if err := s.refuseRewrite(b, key, want); err != nil {
+		return err
 	}
 	if err := b.In(s.ks).Delete(key); err != nil {
 		return fmt.Errorf("authstore: stage delete %s: %w", keyDesc(key), err)
