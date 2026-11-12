@@ -1,5 +1,5 @@
 // file: core/backup/types.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 57a7b5b9-8d91-4be9-b34d-06a2bc8b8eeb
 // last-edited: 2026-11-12
 
@@ -303,4 +303,8 @@ var (
 	ErrUnreadableSecrets  = errors.New("backup: the keyring lacks keys the archive's secret records need")
 	ErrUnencryptedSecrets = errors.New("backup: refusing to write secret material into an unencrypted archive")
 	ErrProtectedByFloor   = errors.New("backup: archive is protected by a retention floor")
+	// ErrNotFound: no archive of that ID is in the backup directory (the
+	// catalogue is derived from the directory, so this is also the answer for an
+	// archive deleted outside the service).
+	ErrNotFound = errors.New("backup: no such archive")
 )
