@@ -1,7 +1,7 @@
 // file: internal/metadata/taglib_exported.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-10
+// last-edited: 2026-11-12
 //
 // Exported wrappers around the internal taglib read/write functions.
 // Both the WASM (taglib_support.go) and CGO (taglib_cgo.go) build
@@ -13,6 +13,7 @@ package metadata
 import (
 	"context"
 
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
@@ -56,4 +57,15 @@ func WriteSingleTag(filePath, tagName, value string) error {
 // tagger.WithoutBackup writes no .bak-* sibling whatever create_backups says.
 func WriteSingleTagContext(ctx context.Context, filePath, tagName, value string) error {
 	return writeSingleTagWithTaglib(ctx, filePath, tagName, value)
+}
+
+// WriteSingleTagContextVia is WriteSingleTagContext recording the file's new
+// hashes (and, when rec also records provenance, a failed verification) on the
+// book_file row through rec instead of the store SetBookFileHashStore
+// installed. A caller that is handed its store (a maintenance job) passes it
+// here, so the write does not reach a store through a package variable. A nil
+// rec records nothing; WriteSingleTagContext is this call with the installed
+// store.
+func WriteSingleTagContextVia(ctx context.Context, rec fileops.BookFileHashRecorder, filePath, tagName, value string) error {
+	return writeSingleTagWithTaglibVia(ctx, rec, filePath, tagName, value)
 }

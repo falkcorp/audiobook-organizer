@@ -1,7 +1,7 @@
 // file: internal/metadata/taglib_support.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-11
+// last-edited: 2026-11-12
 //
 // TagLib WASM writer (default, no CGO required).
 // For native CGO performance, build with -tags native_taglib.
@@ -78,11 +78,21 @@ func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]any, _ 
 // If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
 // refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
 func writeSingleTagWithTaglib(ctx context.Context, filePath, tagName, value string) error {
+	return writeSingleTagWithTaglibVia(ctx, bookFileHashStore(), filePath, tagName, value)
+}
+
+// writeSingleTagWithTaglibVia is writeSingleTagWithTaglib recording through rec
+// (nil: no recording) instead of the installed hash store.
+func writeSingleTagWithTaglibVia(ctx context.Context, rec fileops.BookFileHashRecorder, filePath, tagName, value string) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		return fmt.Errorf("taglib abs: %w", err)
 	}
-	return tagger.WriteTagsSafe(ctx, abs, map[string][]string{tagName: {value}}, 0, WithBookFileHashes(packageSafeWriteDeps))
+	deps := packageSafeWriteDeps
+	if rec != nil {
+		deps.HashStore = rec
+	}
+	return tagger.WriteTagsSafe(ctx, abs, map[string][]string{tagName: {value}}, 0, deps)
 }
 
 // writePropertiesWithTaglib writes tags as given, property by property, through

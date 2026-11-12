@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/backfill_file_hashes.go
-// version: 4.6.3
+// version: 4.6.4
 // guid: a1000014-0000-0000-0000-000000000014
-// last-edited: 2026-11-09
+// last-edited: 2026-11-12
 
 package jobs
 
@@ -1236,7 +1236,13 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 	run.opID = opID
 	markerFound, markerUnknown := false, false
 	if opID != "" {
-		cp, cerr := operations.LoadCheckpoint(store, opID)
+		var cp *operations.OperationState
+		var cerr error
+		if ck := checkpointerFrom(ctx); ck != nil {
+			cp, cerr = ck.Load()
+		} else {
+			cp, cerr = operations.LoadCheckpoint(store, opID)
+		}
 		switch {
 		case cerr != nil:
 			markerUnknown = true
@@ -1319,7 +1325,13 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		partialNote = "this operation's saved state could not be read and no earlier report was found: counts may cover only part of the operation"
 	}
 	if opID != "" {
-		if serr := operations.SaveCheckpoint(store, opID, "maintenance:backfill-file-hashes", "started", 0, len(files)); serr != nil {
+		var serr error
+		if ck := checkpointerFrom(ctx); ck != nil {
+			serr = ck.Save("maintenance:backfill-file-hashes", "started", 0, len(files))
+		} else {
+			serr = operations.SaveCheckpoint(store, opID, "maintenance:backfill-file-hashes", "started", 0, len(files))
+		}
+		if serr != nil {
 			msg := serr.Error()
 			hbLog.Warn("could not save the operation's started marker op=%s err=%s", logger.SanitizeLogValue(opID), logger.SanitizeLogValue(msg))
 			run.log("warn", "Could not save this operation's started marker", &msg)
