@@ -1,0 +1,17 @@
+# file: core/realtime/testdata/series.golden
+# version: 1.0.0
+# guid: a8c4e1f6-3b72-4d95-8e0a-5f9d2c6b7134
+# last-edited: 2026-11-11
+#
+# The mediacore.realtime scope's series (05-realtime §9): family<TAB>type<TAB>labels,
+# checked by metricstest.AssertSeries in TestRealtimeSeries_Golden. A family
+# with no sample exports nothing, so the test records one of each first.
+mediacore_realtime_events_delivered_total	counter	topic
+mediacore_realtime_events_dropped_total	counter	reason
+mediacore_realtime_events_filtered_total	counter	reason,topic
+mediacore_realtime_events_published_total	counter	topic
+mediacore_realtime_resets_total	counter	reason
+mediacore_realtime_ring_oldest_age_seconds	gauge	
+mediacore_realtime_stream_refusals_total	counter	reason
+mediacore_realtime_streams_closed_total	counter	reason
+mediacore_realtime_subscribers	gauge	
