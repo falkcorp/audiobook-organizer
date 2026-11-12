@@ -1,5 +1,5 @@
 // file: core/internal/libfs/libfs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1f6e7a3c-52b8-4a6e-9d0b-3c8f4e5a6b71
 // last-edited: 2026-11-11
 
@@ -295,17 +295,15 @@ func TestDeviceAndInodeOf(t *testing.T) {
 	write(t, filepath.Join(dir, "f"), "x")
 	fi, _ := os.Lstat(filepath.Join(dir, "f"))
 	di, _ := os.Lstat(dir)
-	dev1, ok1 := DeviceOf(fi)
-	dev2, ok2 := DeviceOf(di)
+	dev1, ino1, ok1 := InodeOf(fi)
+	dev2, ino2, ok2 := InodeOf(di)
 	if ok1 != ok2 {
-		t.Fatalf("DeviceOf availability differs: %v %v", ok1, ok2)
+		t.Fatalf("InodeOf availability differs: %v %v", ok1, ok2)
 	}
 	if ok1 && dev1 != dev2 {
 		t.Errorf("a file and its directory report different devices: %d %d", dev1, dev2)
 	}
-	_, ino1, okI := InodeOf(fi)
-	_, ino2, _ := InodeOf(di)
-	if okI && ino1 == ino2 {
+	if ok1 && ino1 == ino2 {
 		t.Error("a file and its directory share an inode")
 	}
 	_ = r

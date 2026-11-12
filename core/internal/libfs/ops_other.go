@@ -1,5 +1,5 @@
 // file: core/internal/libfs/ops_other.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a83c203b-ea72-45f4-acb5-0a216009d1da
 // last-edited: 2026-11-11
 
@@ -52,9 +52,6 @@ func RenameNoReplaceFallback(od *Dir, oldName string, nd *Dir, newName string) e
 
 // SyncDir is a no-op: Windows has no directory fsync.
 func SyncDir(d *Dir) error { return require(d) }
-
-// DeviceOf reports no device: the platform's FileInfo carries none.
-func DeviceOf(fs.FileInfo) (uint64, bool) { return 0, false }
 
 // Ancestry is not available without directory descriptors: the caller must
 // treat the answer as unknown.
