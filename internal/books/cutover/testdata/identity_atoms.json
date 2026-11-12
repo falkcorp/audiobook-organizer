@@ -1,0 +1,99 @@
+{
+  "_header": {
+    "file": "internal/books/cutover/testdata/identity_atoms.json",
+    "version": "1.0.0",
+    "guid": "91f4e46f-1410-4e2f-b183-7db6cb2827a1",
+    "last-edited": "2026-11-12"
+  },
+  "_about": "05-rbac 6.1: books' atom table as the identity cutover tests run it. internal/books pins books.AtomTable to this file (TestAtomTable_MatchesIdentityCutoverFixture) and internal/books/cutover pins its fixture to it, so a change to the table must change this file and, through it, the fixture.",
+  "atoms": [
+    {
+      "name": "library.view",
+      "scopes": [
+        "books:view",
+        "core:tasks.view"
+      ]
+    },
+    {
+      "name": "library.edit_metadata",
+      "scopes": [
+        "books:edit"
+      ]
+    },
+    {
+      "name": "library.delete",
+      "scopes": [
+        "books:delete"
+      ]
+    },
+    {
+      "name": "library.organize",
+      "scopes": [
+        "books:organize"
+      ]
+    },
+    {
+      "name": "scan.trigger",
+      "scopes": [
+        "books:scan"
+      ]
+    },
+    {
+      "name": "integrations.manage",
+      "scopes": [
+        "core:integrations.manage",
+        "books:integrations.manage"
+      ]
+    },
+    {
+      "name": "users.manage",
+      "scopes": [
+        "core:users.manage",
+        "core:roles.view"
+      ]
+    },
+    {
+      "name": "settings.manage",
+      "scopes": [
+        "core:settings.manage",
+        "books:settings.manage",
+        "core:tasks.manage",
+        "core:system.view",
+        "core:system.manage",
+        "core:library.manage",
+        "core:library.browse",
+        "core:integrations.manage"
+      ]
+    },
+    {
+      "name": "playlists.create",
+      "scopes": [
+        "books:playlists.create"
+      ]
+    },
+    {
+      "name": "collections.manage",
+      "scopes": [
+        "books:collections.manage"
+      ]
+    },
+    {
+      "name": "requests.create",
+      "scopes": [
+        "books:request"
+      ]
+    },
+    {
+      "name": "requests.approve",
+      "scopes": [
+        "books:request.approve"
+      ]
+    },
+    {
+      "name": "fingerprint.worker",
+      "scopes": [
+        "books:fingerprint.worker"
+      ]
+    }
+  ]
+}

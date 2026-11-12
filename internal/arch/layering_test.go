@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.10
+// version: 1.5.11
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-11
+// last-edited: 2026-11-12
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -92,7 +92,8 @@ var layerOf = map[string]int{
 	"internal/audioext":              0, // table: leaf
 	"internal/audioutil":             0, // computed: imports no module package
 	"internal/authorname":            0, // table: leaf
-	"internal/books/cutover":         0, // computed: imports no module package (core only; its tests import internal/books/store)
+	"internal/books/cutover":         0, // override: imports only core and its own leaf m3 (its tests import internal/books/store)
+	"internal/books/cutover/m3":      0, // computed: imports no module package (core only; a leaf under cutover that names no books package)
 	"internal/cache":                 0, // table: leaf
 	"internal/cfaccesspolicy":        0, // computed: imports no module package
 	"internal/cfservicetoken":        0, // computed: imports no module package
@@ -515,6 +516,10 @@ var layerOverride = map[string]int{
 	"internal/matcher": 0,
 	// fingerprint imports only internal/audioutil (no module imports, layer 0).
 	"internal/fingerprint": 0,
+	// cutover imports core packages and internal/books/cutover/m3, which names
+	// no module package (go list -f '{{.Imports}}' on both): the ImportFloor
+	// would put it at 3 for importing one leaf of its own.
+	"internal/books/cutover": 0,
 }
 
 // familyLayer returns the layer of a directory family, or false.
