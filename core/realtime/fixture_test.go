@@ -77,12 +77,12 @@ const (
 )
 
 var (
-	topicSignal  = events.NewTopic[Signal]("batcave.signal.lit.v1")      // batcave:view
-	topicCell    = events.NewTopic[Signal]("batcave.cell.opened.v1")     // batcave:run
-	topicAlarm   = events.NewTopic[Signal]("batcave.alarm.rang.v1")      // batcave:view, Visible: public wing or batcave:run
-	topicBeacon  = events.NewTopic[Beacon]("batcave.beacon.updated.v1")  // batcave:view, Coalesce 250ms
-	topicArk     = events.NewTopic[Signal]("arkham.ward.alerted.v1")     // arkham:view
-	topicRetired = events.NewTopic[Retired]("core.ward.retired.v1")      // AnyAuthenticated
+	topicSignal  = events.NewTopic[Signal]("batcave.signal.lit.v1")     // batcave:view
+	topicCell    = events.NewTopic[Signal]("batcave.cell.opened.v1")    // batcave:run
+	topicAlarm   = events.NewTopic[Signal]("batcave.alarm.rang.v1")     // batcave:view, Visible: public wing or batcave:run
+	topicBeacon  = events.NewTopic[Beacon]("batcave.beacon.updated.v1") // batcave:view, Coalesce 250ms
+	topicArk     = events.NewTopic[Signal]("arkham.ward.alerted.v1")    // arkham:view
+	topicRetired = events.NewTopic[Retired]("core.ward.retired.v1")     // AnyAuthenticated
 	topicRun     = events.NewTopic[tasks.RunView]("core.task.run-changed.v1")
 	topicLog     = events.NewTopic[Retired]("core.task.log-appended.v1") // AnyAuthenticated, keyed by run
 	topicInval   = events.NewTopic[Invalidated]("core.principal.invalidated.v1")
@@ -146,6 +146,7 @@ type env struct {
 	hub *realtime.Hub
 	pub events.Scope
 	cor events.Scope
+	ark events.Scope
 }
 
 // newAuth boots auth and rbac with the Batcave scopes; it opens no bus.
@@ -364,7 +365,7 @@ func (e *env) wire(ho hubOptions) {
 	if err := bus.Open(); err != nil {
 		e.t.Fatal(err)
 	}
-	e.bus, e.hub, e.pub, e.cor = bus, hub, bus.Scope("batcave"), bus.Scope("core")
+	e.bus, e.hub, e.pub, e.cor, e.ark = bus, hub, bus.Scope("batcave"), bus.Scope("core"), bus.Scope("arkham")
 	e.t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -650,9 +651,9 @@ func (l *logs) logger() *slog.Logger {
 // builds, registered on the roster under their first name.
 type cast struct {
 	*env
-	srv                                           *httptest.Server
-	ro                                            *roster
-	bruce, lucius, dick, barbara, oswald, robin *auth.User
+	srv                                                 *httptest.Server
+	ro                                                  *roster
+	bruce, lucius, dick, barbara, oswald, robin, selina *auth.User
 }
 
 // newCast boots the full environment and serves the hub's handler.
@@ -667,7 +668,16 @@ func newCast(t testing.TB, ho hubOptions) *cast {
 	c.barbara = e.user("barbara", "arkham.warden", "batcave.watcher")
 	c.oswald = e.user("oswald")
 	c.robin = e.user("robin", "batcave.relay")
-	for name, u := range map[string]*auth.User{"bruce": c.bruce, "lucius": c.lucius, "dick": c.dick, "barbara": c.barbara, "oswald": c.oswald, "robin": c.robin} {
+	// selina holds core:users.view through a custom role: she may read
+	// user-identifying text (05-realtime 4.7) and nothing else extra.
+	admin := e.rb.Compile(rbac.CheckerInput{Roles: []rbac.RoleName{rbac.RoleAdmin}, Interactive: true})
+	if _, err := e.rb.CreateRole(context.Background(), admin, rbac.RoleInput{
+		Name: "custom.registrar", Title: "Registrar", Permissions: []rbac.Permission{"core:self", "core:users.view", scopeView},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.selina = e.user("selina", "custom.registrar")
+	for name, u := range map[string]*auth.User{"bruce": c.bruce, "lucius": c.lucius, "dick": c.dick, "barbara": c.barbara, "oswald": c.oswald, "robin": c.robin, "selina": c.selina} {
 		c.ro.set(name, e.session(u))
 	}
 	return c
@@ -685,3 +695,10 @@ func (c *cast) open(t testing.TB, who, path string, hdr ...string) *reader {
 
 // hubHeartbeat is options with only the heartbeat set.
 func hubHeartbeat(d time.Duration) realtime.Options { return realtime.Options{Heartbeat: d} }
+
+// sizes is options with only the ring and the per-subscriber queue set.
+func sizes(ring, buffer int) realtime.Options {
+	return realtime.Options{RingSize: ring, ClientBuffer: buffer}
+}
+
+func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
