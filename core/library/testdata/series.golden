@@ -1,0 +1,18 @@
+# file: core/library/testdata/series.golden
+# version: 1.0.0
+# guid: 8e9f004b-8e6c-4b10-9629-a12c8de9cad6
+# last-edited: 2026-11-11
+#
+# The mediacore.library scope's series (05-library 5L.8, 05-metrics §5):
+# family<TAB>type<TAB>labels, checked by metricstest.AssertSeries in
+# TestLibrarySeries_Golden.
+mediacore_library_hash_bytes_total	counter	root
+mediacore_library_quarantined	gauge	owner
+mediacore_library_refusals_total	counter	reason
+mediacore_library_root_avail_bytes	gauge	root
+mediacore_library_root_state	gauge	root,state
+mediacore_library_transfer_bytes_total	counter	did
+mediacore_library_transfer_duration_seconds	histogram	did
+mediacore_library_transfers_total	counter	did,mode,outcome
+mediacore_library_watch_events_total	counter	kind,root
+mediacore_library_watch_rescans_total	counter	reason,root

@@ -1,5 +1,5 @@
 // file: core/library/quarantine.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: dbac77ed-fee6-451d-9dbc-7065c15ea39f
 // last-edited: 2026-11-11
 
@@ -48,7 +48,8 @@ func (r quarantineRow) record() QuarantineRecord {
 // Quarantine moves p (a file or a directory) into its root's quarantine area
 // with a no-clobber rename (the same root is the same filesystem, so it is
 // atomic) and records it in c/library/quarantine/<id>, the record first.
-func (m *manager) Quarantine(ctx context.Context, caller storage.Owner, p Path, reason string) (QuarantineID, error) {
+func (m *manager) Quarantine(ctx context.Context, caller storage.Owner, p Path, reason string) (_ QuarantineID, err error) {
+	defer func() { m.ctr.refused(err) }()
 	if p.IsRoot() {
 		return "", fmt.Errorf("%w: a root directory cannot be quarantined", ErrBadTransfer)
 	}
@@ -126,7 +127,8 @@ func (m *manager) loadQuarantine(ctx context.Context, id QuarantineID) (quaranti
 
 // Release moves a held item back to its Original path (or *to), never
 // clobbering, and ends its record. Only the owner that quarantined it may.
-func (m *manager) Release(ctx context.Context, caller storage.Owner, id QuarantineID, to *Path) (Path, error) {
+func (m *manager) Release(ctx context.Context, caller storage.Owner, id QuarantineID, to *Path) (_ Path, err error) {
+	defer func() { m.ctr.refused(err) }()
 	row, err := m.loadQuarantine(ctx, id)
 	if err != nil {
 		return Path{}, err

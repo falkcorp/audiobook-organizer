@@ -1,5 +1,5 @@
 // file: core/library/helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 34ac2131-b6fb-47d9-b049-9f60d823773c
 // last-edited: 2026-11-11
 
@@ -17,6 +17,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
+	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -254,6 +255,7 @@ type rigOpts struct {
 	caps    func(storage.Owner, string) bool
 	oracles []ProtectionOracle
 	faults  *faults
+	metrics *metrics.Scope
 }
 
 const testInstall = "install-gotham-1"
@@ -284,7 +286,7 @@ func (r *rig) build(o rigOpts) *manager {
 		sm.wrapStore = func(name string, s rowStore) rowStore { return faultStore{rowStore: s, f: fl, name: name} }
 	}
 	m, err := newManager(Options{
-		Keyspace: r.st.ks, InstallID: testInstall, Oracles: o.oracles, Enabled: o.enabled, HasCapability: o.caps,
+		Keyspace: r.st.ks, InstallID: testInstall, Oracles: o.oracles, Enabled: o.enabled, HasCapability: o.caps, Metrics: o.metrics,
 	}, sm)
 	if err != nil {
 		r.t.Fatalf("newManager: %v", err)
