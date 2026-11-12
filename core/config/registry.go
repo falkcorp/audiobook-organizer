@@ -1,7 +1,7 @@
 // file: core/config/registry.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 74ce6316-8927-42d8-ac4f-38c9f6a04ebe
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 package config
 
@@ -38,7 +38,6 @@ func Register[T any](r Registry, s Section[T]) (*Handle[T], error) {
 	}
 	sp := s.spec()
 	sp.typ = reflect.TypeFor[T]()
-	sp.schemaFor = func() (*jsonschema.Schema, error) { return jsonschemax.For[T](storeOverrides()) }
 	b, err := r.register(sp)
 	if err != nil {
 		return nil, err
@@ -138,11 +137,11 @@ func buildSection(sp *sectionSpec) (*section, error) {
 	if err := sp.path.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	if sp.typ == nil || sp.schemaFor == nil {
+	if sp.typ == nil {
 		return nil, fmt.Errorf("%w: section %s was not built by Register", ErrInvalid, sp.path)
 	}
 	sec := &section{path: sp.path, spec: sp, byRel: map[string]*keyInfo{}}
-	schema, err := sp.schemaFor()
+	schema, err := jsonschemax.ForType(sp.typ, storeOverrides())
 	if err != nil {
 		return nil, fmt.Errorf("%w: section %s: %w", ErrInvalid, sp.path, err)
 	}

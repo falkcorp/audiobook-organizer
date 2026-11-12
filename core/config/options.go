@@ -1,7 +1,7 @@
 // file: core/config/options.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8e9c571c-9236-40b5-8f6f-60cdc5d93911
-// last-edited: 2026-11-10
+// last-edited: 2026-11-12
 
 package config
 
@@ -10,8 +10,6 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-
-	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // Reload says when a change takes effect.
@@ -71,10 +69,10 @@ type sectionSpec struct {
 	failClosed  []failClosed
 
 	// Set by Register[T], which is the one place T is known: the section's
-	// Go type and its reflected JSON Schema (jsonschemax with config's
-	// overrides).
-	typ       reflect.Type
-	schemaFor func() (*jsonschema.Schema, error)
+	// Go type. The reflected JSON Schema is jsonschemax.ForType of it with
+	// config's overrides, so the build is a function of the spec's data alone
+	// (the section cache, sectioncache.go, keys on exactly these fields).
+	typ reflect.Type
 }
 
 // SectionOption configures a Section at Define time.
