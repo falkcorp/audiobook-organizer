@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/ai"
 	"github.com/falkcorp/mediacore/integrations/integrationstest"
 	"github.com/falkcorp/mediacore/internal/instancestore"
+	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
@@ -140,6 +141,36 @@ func (s *fakeStager) Started() []started {
 	return append([]started(nil), s.started...)
 }
 
+// hookStore wraps the native job store the router writes through. after runs
+// once a Transition has read the job and staged its write and before the
+// router commits, which is the window a racing writer needs: the hook commits
+// a competing write there, so the router's commit must lose to it.
+type hookStore struct {
+	ai.JobStore
+	mu    sync.Mutex
+	after func(id ai.BatchJobID, from ai.JobState, next ai.StoredJob)
+}
+
+func (s *hookStore) Transition(ctx context.Context, b *storage.Batch, id ai.BatchJobID, from ai.JobState, next ai.StoredJob) error {
+	if err := s.JobStore.Transition(ctx, b, id, from, next); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	fn := s.after
+	s.mu.Unlock()
+	if fn != nil {
+		fn(id, from, next)
+	}
+	return nil
+}
+
+// onTransition sets the hook (nil clears it).
+func (s *hookStore) onTransition(fn func(id ai.BatchJobID, from ai.JobState, next ai.StoredJob)) {
+	s.mu.Lock()
+	s.after = fn
+	s.mu.Unlock()
+}
+
 type harness struct {
 	t      testing.TB
 	reg    *integrations.Registry
@@ -147,7 +178,11 @@ type harness struct {
 	clk    *clock
 	stager *fakeStager
 	ks     storage.Keyspace
-	jobs   ai.JobStore
+	jobs   ai.JobStore // the native store, for reads and competing writes
+	hooks  *hookStore  // what the router writes through
+
+	prov  *metrics.Provider // nil unless the harness was built withMetrics
+	scope *metrics.Scope
 
 	disabled atomic.Bool
 	cfgMu    sync.Mutex
@@ -157,9 +192,25 @@ type harness struct {
 	backends map[integrations.InstanceID]ai.Backend
 }
 
+type harnessOptions struct{ metrics, noStager bool }
+
+// harnessOption configures newHarness.
+type harnessOption func(*harnessOptions)
+
+// withMetrics gives the router the core "ai" scope of a real Provider.
+func withMetrics() harnessOption { return func(o *harnessOptions) { o.metrics = true } }
+
+// withoutStager builds the router with no Stager, as a service that cannot
+// start module runs would be.
+func withoutStager() harnessOption { return func(o *harnessOptions) { o.noStager = true } }
+
 // newHarness boots the store, the Registry and the Router.
-func newHarness(t testing.TB) *harness {
+func newHarness(t testing.TB, opts ...harnessOption) *harness {
 	t.Helper()
+	var ho harnessOptions
+	for _, o := range opts {
+		o(&ho)
+	}
 	ctx := context.Background()
 	o, err := storage.Open(ctx, storage.OpenOptions{
 		Path: filepath.Join(t.TempDir(), "main.pebble"),
@@ -242,9 +293,26 @@ func newHarness(t testing.TB) *harness {
 	h.reg = reg
 	h.ks = keyspaceOf(t, db, ai.Owner)
 	h.jobs = ai.NativeJobStore(h.ks)
+	h.hooks = &hookStore{JobStore: h.jobs}
+	if ho.metrics {
+		p, err := metrics.New(ctx, metrics.Options{AppID: "gotham", Prometheus: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+		sc, err := p.Core("ai", ai.ScopeKeys()...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.prov, h.scope = p, sc
+	}
+	var stager tasks.Stager = h.stager
+	if ho.noStager {
+		stager = nil
+	}
 	r, err := ai.NewRouter(ai.RouterOptions{
-		Registry: reg, Disabled: h.disabled.Load, Jobs: h.jobs, NewBatch: h.ks.NewIndexedBatch,
-		Stager: h.stager, Now: clk.Now,
+		Registry: reg, Disabled: h.disabled.Load, Jobs: h.hooks, NewBatch: h.ks.NewIndexedBatch,
+		Stager: stager, Now: clk.Now, Metrics: h.scope,
 		Config: func() ai.Config {
 			h.cfgMu.Lock()
 			defer h.cfgMu.Unlock()
@@ -416,4 +484,39 @@ func registerApply(t testing.TB, c ai.Capability, h handler) tasks.Definition {
 		t.Fatal("BatchApplyTask returned nil")
 	}
 	return def
+}
+
+// competing commits a write of its own to job id, in a separate batch over the
+// native store: the racing writer of the one-winner tests. It fails the test
+// when its own commit does not succeed, since it must always win its window.
+func (h *harness) competing(id ai.BatchJobID, from ai.JobState, to ai.JobState) {
+	h.t.Helper()
+	ctx := context.Background()
+	cur, err := h.jobs.Get(ctx, id)
+	if err != nil {
+		h.t.Fatalf("competing writer: read %s: %v", id, err)
+	}
+	if cur.State != from {
+		h.t.Fatalf("competing writer: job %s is %s, want %s", id, cur.State, from)
+	}
+	next := cur
+	next.State, next.Updated, next.Payload = to, h.clk.Now(), nil
+	b := h.ks.NewIndexedBatch()
+	defer func() { _ = b.Close() }()
+	if err := h.jobs.Transition(ctx, b, id, from, next); err != nil {
+		h.t.Fatalf("competing writer: stage %s -> %s: %v", from, to, err)
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		h.t.Fatalf("competing writer: commit %s -> %s: %v", from, to, err)
+	}
+}
+
+// mustJob reads job id.
+func (h *harness) mustJob(id ai.BatchJobID) ai.StoredJob {
+	h.t.Helper()
+	j, err := h.jobs.Get(context.Background(), id)
+	if err != nil {
+		h.t.Fatalf("job %s: %v", id, err)
+	}
+	return j
 }
