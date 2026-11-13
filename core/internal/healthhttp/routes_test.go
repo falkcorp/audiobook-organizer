@@ -599,7 +599,9 @@ func TestDiagnosticsDownload_AuditFailureStopsTheStream(t *testing.T) {
 	if rep.status != 503 {
 		t.Errorf("= %d, want 503", rep.status)
 	}
-	if bytes.HasPrefix(rep.body, []byte("PK")) {
+	// Anywhere in the body, not only at its start: an error body followed by
+	// the zip is still the bundle leaving.
+	if bytes.Contains(rep.body, []byte("PK\x03\x04")) {
 		t.Error("bundle bytes were sent although the audit write failed")
 	}
 }
