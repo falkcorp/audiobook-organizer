@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.6.3
+// version: 1.7.0
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -18,7 +18,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
+
+// dedupExactTriageKind is rule R3: the native kind of maintenance.dedup-exact-triage.
+const dedupExactTriageKind tasks.Kind = "books.maintenance.dedup-exact-triage"
 
 // TriageClass labels the inferred population of a dedup candidate.
 type TriageClass string
@@ -343,32 +347,92 @@ func (p *Plugin) dedupExactTriageDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runDedupExactTriage(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	if !p.deps.HasDedupEngine() {
-		_ = reporter.Log(slog.LevelInfo, "Dedup engine not initialized, skipping exact triage")
-		return nil
-	}
+// dedupExactTriageEnv is what the core needs from its engine (rules R2 and R10).
+type dedupExactTriageEnv struct {
+	t6g4Base
+}
 
+// runDedupExactTriage is the v2 shell around runDedupExactTriageCore (rule R2 item 2).
+func (p *Plugin) runDedupExactTriage(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params dedupExactTriageParams
-	if len(rawParams) > 0 {
+	if p.deps.HasDedupEngine() && len(rawParams) > 0 {
 		if err := json.Unmarshal(rawParams, &params); err != nil {
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
+	_, err := p.runDedupExactTriageCore(ctx, params, dedupExactTriageEnv{
+		t6g4Base: t6g4HeadBase(reporter, params.Apply,
+			headT6G4Store{deps: p.deps}, headT6G4Writer{deps: p.deps}),
+	})
+	return err
+}
+
+// dedupExactTriageNativeParams carries HEAD's apply flag only so a start request
+// that still sends it is refused: the native run's mode comes from the start
+// request (apply is true exactly in a live run), never from a param.
+type dedupExactTriageNativeParams struct {
+	Apply *bool `json:"apply,omitempty"`
+}
+
+// dedupExactTriageKind is the native shell (rule R2 item 3). It has a preview, so
+// there is no Live-only error: a preview classifies and dismisses nothing.
+func (p *Plugin) dedupExactTriageKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(dedupExactTriageKind, tasks.TaskSpec[dedupExactTriageNativeParams, TriageReport]{
+		Common: tasks.Common{
+			Title:          "Dedup exact-pending triage (dry-run / apply)",
+			Help:           "Classifies all pending exact-layer dedup candidates into 5 populations (genuine/stub/fragment/title_leak/unknown) and reports counts. Dry-run by default — no candidates are deleted. With apply=true, dismisses every purgeable candidate (stub/title_leak) via a status update; genuine/fragment/unknown candidates are never touched.",
+			Effects:        tasks.Writes(t6g4Res("dedup_candidates")...),
+			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:         tasks.ResumeDrop,
+			Priority:       tasks.PriorityLow,
+			ConcurrencyKey: tasks.Key("books.maintenance.dedup-exact-triage"),
+			Timeout:        30 * time.Minute,
+			Schedule:       sched,
+			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in dedupExactTriageNativeParams) (TriageReport, error) {
+			if in.Apply != nil {
+				return TriageReport{}, fmt.Errorf("%s: the apply param is not accepted; the run's mode comes from the start request (live applies, preview reports)", rc.Kind())
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return TriageReport{}, err
+			}
+			return p.runDedupExactTriageCore(rc.Context(), dedupExactTriageParams{Apply: base.Live}, dedupExactTriageEnv{t6g4Base: base})
+		},
+	})
+}
+
+// runDedupExactTriageCore is HEAD's body (rule R2 item 1). A preview reads through
+// env.Store; only an applying run reaches env.Writer, so a preview can never
+// dismiss a candidate.
+func (p *Plugin) runDedupExactTriageCore(ctx context.Context, params dedupExactTriageParams, env dedupExactTriageEnv) (TriageReport, error) {
+	if !env.Store.HasDedupEngine() {
+		env.Log(slog.LevelInfo, "Dedup engine not initialized, skipping exact triage")
+		return TriageReport{}, nil
+	}
 
 	if params.Apply {
-		_ = reporter.Log(slog.LevelInfo, "Starting exact-pending dedup triage (apply=true — purgeable candidates will be dismissed)")
+		env.Log(slog.LevelInfo, "Starting exact-pending dedup triage (apply=true — purgeable candidates will be dismissed)")
 	} else {
-		_ = reporter.Log(slog.LevelInfo, "Starting exact-pending dedup triage (dry-run — no deletes)")
+		env.Log(slog.LevelInfo, "Starting exact-pending dedup triage (dry-run — no deletes)")
 	}
-	_ = reporter.UpdateProgress(0, 0, "Scanning candidates…")
+	env.Progress(0, 0, "Scanning candidates…")
 
-	report, err := p.deps.DedupTriageExactPending(ctx, params.Apply)
+	var (
+		report *TriageReport
+		err    error
+	)
+	if params.Apply {
+		report, err = env.Writer.DedupTriageApply(ctx)
+	} else {
+		report, err = env.Store.DedupTriagePreview(ctx)
+	}
 	if err != nil {
-		return fmt.Errorf("triage scan: %w", err)
+		return TriageReport{}, fmt.Errorf("triage scan: %w", err)
 	}
 
-	_ = reporter.UpdateProgress(report.TotalScanned, report.TotalScanned, "Classification complete")
+	env.Progress(report.TotalScanned, report.TotalScanned, "Classification complete")
 
 	// Log per-population summaries.
 	for _, cls := range []TriageClass{
@@ -379,19 +443,19 @@ func (p *Plugin) runDedupExactTriage(ctx context.Context, rawParams json.RawMess
 		if purgeableClasses[cls] {
 			action = "purgeable"
 		}
-		_ = reporter.Log(slog.LevelInfo,
+		env.Log(slog.LevelInfo,
 			fmt.Sprintf("%-12s  %5d candidates  [%s]", string(cls), pop.Count, action),
 		)
 	}
 
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"Summary: total=%d  purgeable=%d  keep=%d  review=%d  dismissed=%d",
 		report.TotalScanned, report.PurgeableCount, report.KeepCount, report.ReviewCount, report.DismissedCount,
 	))
 
 	// Emit the full report as a structured log entry so the UI can surface it.
 	reportJSON, _ := json.MarshalIndent(report, "", "  ")
-	_ = reporter.Log(slog.LevelInfo, "Triage report (JSON)", slog.String("report", string(reportJSON)))
+	env.Log(slog.LevelInfo, "Triage report (JSON)", slog.String("report", string(reportJSON)))
 
-	return nil
+	return *report, nil
 }
