@@ -1,7 +1,7 @@
 # file: internal/plugins/maintenance/testdata/fixer_stores_allowlist.txt
-# version: 1.2.0
+# version: 1.3.0
 # guid: 6a3e8d21-9c47-4f15-b2e0-1d7c5a9f3b68
-# last-edited: 2026-11-12
+# last-edited: 2026-11-13
 #
 # Reviewed exceptions for TestFixerStores_NoFixerReachesAStoreExceptThroughTheShell
 # (fixer_stores_guard_test.go; the pass is tools/fixerstores).
@@ -22,6 +22,8 @@
 
 # ---- store sinks
 store-sink (*Plugin).fixerStores convert:pluginFixerStores->FixerStores # the fallback for a caller that runs a fixer without the shell (HEAD's repairs.plan / repairs.apply ops and the fixers' own tests); the native shell always binds the stores (KindDeps.BindStores is required) and fixerStores answers from ctx first. TestFixers_FallBackToPluginStoresWithoutShell covers it. Goes with the HEAD path
+store-sink (*Plugin).t6g5OpsStore OpsStore # false positive of the VTA pass: the F5-10 group's HEAD adapter (headT6g5Store, the plugin's own deps for the maintenance ops it converts) is a callee of interface methods that fixer code calls on narrow readers (here retired-row reads on versionprimary and regroup stores), but no fixer is ever handed a headT6g5Store; fixers take their stores from ctx's FixerStores. Goes with the HEAD path (F5-18)
+store-sink (headT6g5Store).GetChaptersForBook VersionPrimaryStore # false positive of the VTA pass, same shape as t6g5OpsStore: versionprimary.Loader.Load calls GetChaptersForBook on a chapter reader, and the pass adds the HEAD adapter as a possible callee; fixers pass the loader their shell stores. Goes with the HEAD path (F5-18)
 
 # ---- deps that are not stores
 dep RootDir # the configured library root, a string; nothing is read or written through it
