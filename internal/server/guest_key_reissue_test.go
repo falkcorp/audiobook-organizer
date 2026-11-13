@@ -1,7 +1,7 @@
 // file: internal/server/guest_key_reissue_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7adb11d4-24ec-4f03-a1b2-9e8a576a5ab1
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package server
 
@@ -22,8 +22,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cfservicetoken"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
-	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
-	"github.com/falkcorp/audiobook-organizer/internal/mail/mailtest"
+	"github.com/falkcorp/mediacore/coretest"
+	imail "github.com/falkcorp/mediacore/integrations/notify/mail"
 	"github.com/gin-gonic/gin"
 )
 
@@ -67,14 +67,14 @@ func (g *gatedSender) Sent() []imail.Message {
 // admin who clicks the button.
 type reissueFixture struct {
 	*tokenFixture
-	mail  *mailtest.Recorder
+	mail  *coretest.Recorder
 	admin *database.User
 }
 
 func newReissueFixture(t *testing.T) *reissueFixture {
 	t.Helper()
 	f := newTokenFixture(t)
-	r := &reissueFixture{tokenFixture: f, mail: &mailtest.Recorder{}}
+	r := &reissueFixture{tokenFixture: f, mail: &coretest.Recorder{}}
 	f.srv.mailSenderOverride = r.mail
 	f.srv.externalURL = ""
 	config.Mutate(func(c *config.Config) { c.PublicBaseURL = "https://books.example.com" })

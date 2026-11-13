@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.115.9
+// version: 2.115.10
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-11-10
+// last-edited: 2026-11-13
 
 package server
 
@@ -39,7 +39,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	_ "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -54,6 +53,7 @@ import (
 	coreauth "github.com/falkcorp/mediacore/auth"
 	diagflight "github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
+	imail "github.com/falkcorp/mediacore/integrations/notify/mail"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"

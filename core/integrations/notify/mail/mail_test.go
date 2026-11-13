@@ -1,7 +1,7 @@
-// file: internal/mail/mail_test.go
-// version: 1.1.0
+// file: core/integrations/notify/mail/mail_test.go
+// version: 1.2.0
 // guid: 4390d39b-6ec5-4a8e-a468-83a1beaa191b
-// last-edited: 2026-10-19
+// last-edited: 2026-11-13
 
 package mail
 

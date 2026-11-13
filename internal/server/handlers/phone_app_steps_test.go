@@ -1,7 +1,7 @@
 // file: internal/server/handlers/phone_app_steps_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 17a9d2d3-c383-4119-8b22-80a2d492f512
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package handlers
 
@@ -12,7 +12,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/mail/mailtest"
+	"github.com/falkcorp/mediacore/coretest"
 )
 
 const (
@@ -109,10 +109,10 @@ func TestInviteEmail_StepsPointAtTheInvitationPage(t *testing.T) {
 }
 
 func TestEmailSendBlocked(t *testing.T) {
-	rec := &mailtest.Recorder{}
+	rec := &coretest.Recorder{}
 	for _, tt := range []struct {
 		name   string
-		sender *mailtest.Recorder
+		sender *coretest.Recorder
 		base   string
 		want   string
 	}{

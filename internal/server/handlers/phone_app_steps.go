@@ -1,7 +1,7 @@
 // file: internal/server/handlers/phone_app_steps.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: dc8db512-0961-4e2c-a747-9c5014eb7267
-// last-edited: 2026-11-07
+// last-edited: 2026-11-13
 
 // The phone-app steps shared by two emails, and the email that carries a
 // guest's phone-app key.
@@ -32,7 +32,7 @@ import (
 	"strings"
 	texttemplate "text/template"
 
-	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
+	imail "github.com/falkcorp/mediacore/integrations/notify/mail"
 )
 
 // phoneAppStepsTextDef defines the "phoneAppSteps" text partial. Its data needs

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/invite_delivery_test.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: e4b17c92-6a35-4d80-9f2e-1c8d5a7b3f06
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package handlers_test
 
@@ -18,10 +18,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
-	"github.com/falkcorp/audiobook-organizer/internal/mail/mailtest"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
+	"github.com/falkcorp/mediacore/coretest"
+	imail "github.com/falkcorp/mediacore/integrations/notify/mail"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 )
@@ -33,7 +33,7 @@ const (
 type inviteFixture struct {
 	store  *database.PebbleStore
 	router *gin.Engine
-	rec    *mailtest.Recorder
+	rec    *coretest.Recorder
 	h      *handlers.UserHandler
 	mailOn bool
 	syncOn bool           // GuestPolicySyncConfigured: accept adds the invitee to the Access guest policy
@@ -61,7 +61,7 @@ func newInviteFixture(t *testing.T) *inviteFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	f := &inviteFixture{store: store, rec: &mailtest.Recorder{}, mailOn: true, base: testBase + "/"}
+	f := &inviteFixture{store: store, rec: &coretest.Recorder{}, mailOn: true, base: testBase + "/"}
 	f.h = handlers.NewUserHandler(store)
 	f.h.SetInviteDelivery(&handlers.InviteDelivery{
 		Sender: func() imail.Sender {

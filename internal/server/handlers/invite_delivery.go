@@ -1,7 +1,7 @@
 // file: internal/server/handlers/invite_delivery.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: 9d3a7f62-1c84-4e5b-a0f9-6b2e8c4d1a37
-// last-edited: 2026-11-10
+// last-edited: 2026-11-13
 
 // Invitation delivery: the invite email, resend, and the public invite lookup
 // the accept page calls.
@@ -40,9 +40,9 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreauth "github.com/falkcorp/mediacore/auth"
+	imail "github.com/falkcorp/mediacore/integrations/notify/mail"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 )
