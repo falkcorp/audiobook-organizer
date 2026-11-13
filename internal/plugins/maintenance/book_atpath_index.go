@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.6.1
+// version: 1.7.2
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -14,8 +14,8 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- book_atpath: index ops ---
@@ -74,17 +74,37 @@ type bookAtPathBackfillParams struct {
 	IfNeeded bool `json:"if_needed,omitempty"`
 }
 
+// The two native kinds of this file (F5-07, rule R3: "books." + the def's ID).
+const (
+	t6g2KindBookAtPathIndexVerify   tasks.Kind = "books.maintenance.book-atpath-index-verify"
+	t6g2KindBookAtPathIndexBackfill tasks.Kind = "books.maintenance.book-atpath-index-backfill"
+)
+
+// DisplayName and Description of the two defs, shared by HEAD's def and the
+// native kind so the two cannot drift.
+const (
+	t6g2BookAtPathIndexVerifyTitle = "Book path-set index verify"
+	t6g2BookAtPathIndexVerifyHelp  = "Diffs the book_atpath: index (every book at each path) against the book " +
+		"rows from one snapshot. Fails if any book, live OR soft-deleted, has no index key at " +
+		"its path, which would let LiveBookIDsAtPath (live books) or BookIDsAtPath (every row; " +
+		"the purge's check before it removes a file) report a taken path as free. Extras are " +
+		"reported but do not fail. REPORT-ONLY: modifies nothing."
+
+	t6g2BookAtPathIndexBackfillTitle = "Book path-set index rebuild"
+	t6g2BookAtPathIndexBackfillHelp  = "Rewrites the book_atpath: index key for every book, ignoring the " +
+		"one-time startup sentinel, then sets it. Run after any rollback to a build that " +
+		"predates the index, then run the verify op. Writes index keys only, never book rows. " +
+		"Enqueued with {\"if_needed\": true} (as boot does) it builds the index only when the " +
+		"one-time sentinel is not yet set."
+)
+
 func (p *Plugin) bookAtPathIndexVerifyDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.book-atpath-index-verify",
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "maintenance",
-		DisplayName: "Book path-set index verify",
-		Description: "Diffs the book_atpath: index (every book at each path) against the book " +
-			"rows from one snapshot. Fails if any book, live OR soft-deleted, has no index key at " +
-			"its path, which would let LiveBookIDsAtPath (live books) or BookIDsAtPath (every row; " +
-			"the purge's check before it removes a file) report a taken path as free. Extras are " +
-			"reported but do not fail. REPORT-ONLY: modifies nothing.",
+		ID:              "maintenance.book-atpath-index-verify",
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "maintenance",
+		DisplayName:     t6g2BookAtPathIndexVerifyTitle,
+		Description:     t6g2BookAtPathIndexVerifyHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.book-atpath-index",
@@ -99,15 +119,11 @@ func (p *Plugin) bookAtPathIndexVerifyDef() sdk.OperationDef {
 
 func (p *Plugin) bookAtPathIndexBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.book-atpath-index-backfill",
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "maintenance",
-		DisplayName: "Book path-set index rebuild",
-		Description: "Rewrites the book_atpath: index key for every book, ignoring the " +
-			"one-time startup sentinel, then sets it. Run after any rollback to a build that " +
-			"predates the index, then run the verify op. Writes index keys only, never book rows. " +
-			"Enqueued with {\"if_needed\": true} (as boot does) it builds the index only when the " +
-			"one-time sentinel is not yet set.",
+		ID:              "maintenance.book-atpath-index-backfill",
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "maintenance",
+		DisplayName:     t6g2BookAtPathIndexBackfillTitle,
+		Description:     t6g2BookAtPathIndexBackfillHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		// Shares the verify op's key so a verify never reads a half-rebuilt index.
@@ -124,16 +140,25 @@ func (p *Plugin) runBookAtPathIndexVerify(ctx context.Context, _ json.RawMessage
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	v, ok := database.AsCapability[bookAtPathVerifier](store)
-	if !ok {
-		return fmt.Errorf("cannot run: store is %T, which has no book_atpath: index "+
-			"(and no store in its decorator chain does)", store)
-	}
-	return verifyBookAtPathIndex(ctx, v, reporter)
+	_, err := runBookAtPathIndexVerifyCore(ctx, t6g2NoParams{}, headT6G2Wire(headT6G2Env(p, reporter), p, store))
+	return err
 }
 
-func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter sdk.Reporter) error {
-	_ = reporter.UpdateProgress(0, 1, "verifying book_atpath: index")
+// t6g2NoParams is the params type of a def that takes none.
+type t6g2NoParams = struct{}
+
+// runBookAtPathIndexVerifyCore is the verify body shared by HEAD's shell and the
+// native kind. It reads through env.Store only.
+func runBookAtPathIndexVerifyCore(ctx context.Context, _ t6g2NoParams, env t6g2Env) (t6g2NoResult, error) {
+	if !env.Store.Supports(t6g2CapAtPathVerify) {
+		return t6g2NoResult{}, fmt.Errorf("cannot run: store is %s, which has no book_atpath: index "+
+			"(and no store in its decorator chain does)", env.Store.Describe())
+	}
+	return t6g2NoResult{}, t6g2VerifyBookAtPathIndex(ctx, env.Store, env)
+}
+
+func t6g2VerifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, env t6g2Env) error {
+	env.Progress(0, 1, "verifying book_atpath: index")
 	rep, err := v.VerifyBookAtPathIndex(ctx)
 	if err != nil {
 		return fmt.Errorf("verify book_atpath index: %w", err)
@@ -145,11 +170,11 @@ func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter s
 		rep.SentinelSet, rep.BooksScanned, rep.IndexKeysScanned, rep.MissingLive,
 		rep.MissingTrashed, rep.ExtraRowGone, rep.ExtraRowMoved, rep.Malformed, rep.UndecodableRows,
 		rep.StaleMarkers, rep.UnmarkedUndecodable, rep.MarkersNotInSet)
-	_ = reporter.Log(slog.LevelInfo, summary)
+	env.Log(slog.LevelInfo, summary)
 	if b, mErr := json.Marshal(rep); mErr == nil {
-		_ = reporter.Log(slog.LevelInfo, "report: "+string(b))
+		env.Log(slog.LevelInfo, "report: "+string(b))
 	}
-	_ = reporter.UpdateProgress(1, 1, summary)
+	env.Progress(1, 1, summary)
 
 	if rep.MissingLive > 0 {
 		return fmt.Errorf("book_atpath index is INCOMPLETE: %d live book(s) have no key at their "+
@@ -185,15 +210,6 @@ func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter s
 	return nil
 }
 
-// bookAtPathProgressTo turns the store's per-chunk callbacks into liveness
-// stamps. The row total is unknown up front, so total is 0 and the message
-// carries the count. Safe for the concurrent workers that call it.
-func bookAtPathProgressTo(reporter sdk.Reporter) database.BookAtPathProgress {
-	return func(scanned int) {
-		_ = reporter.UpdateProgress(scanned, 0, fmt.Sprintf("book_atpath index: %d book rows staged", scanned))
-	}
-}
-
 func (p *Plugin) runBookAtPathIndexBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params bookAtPathBackfillParams
 	if len(raw) > 0 {
@@ -205,43 +221,58 @@ func (p *Plugin) runBookAtPathIndexBackfill(ctx context.Context, raw json.RawMes
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	_, err := runBookAtPathIndexBackfillCore(ctx, params, headT6G2Wire(headT6G2Env(p, reporter), p, store))
+	return err
+}
+
+// runBookAtPathIndexBackfillCore is the backfill body shared by HEAD's shell and
+// the native kind. It probes capabilities on env.Store and writes through
+// env.Writer.
+func runBookAtPathIndexBackfillCore(ctx context.Context, params bookAtPathBackfillParams, env t6g2Env) (t6g2NoResult, error) {
 	if params.IfNeeded {
-		b, ok := database.AsCapability[bookAtPathBackfiller](store)
-		if !ok {
+		if !env.Store.Supports(t6g2CapAtPathBackfill) {
 			// Boot enqueues this on every start. A store with no index (not
 			// Pebble) has nothing to build and LiveBookIDsAtPath scans, as it
 			// always has, so a red row on every boot would be noise. The
 			// goroutine logged the same Warn. An operator's rebuild still
 			// fails below.
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("store is %T, which has no book_atpath: index "+
+			env.Log(slog.LevelWarn, fmt.Sprintf("store is %s, which has no book_atpath: index "+
 				"(and no store in its decorator chain does); nothing to build, LiveBookIDsAtPath stays on "+
-				"the full scan", store), opsregistry.NoOpAttr())
-			return nil
+				"the full scan", env.Store.Describe()), env.NoOp)
+			return t6g2NoResult{}, nil
 		}
-		return backfillBookAtPathIfNeeded(ctx, b, reporter)
+		return t6g2NoResult{}, t6g2BackfillBookAtPathIfNeeded(ctx, env.Writer, env)
 	}
-	r, ok := database.AsCapability[bookAtPathRebuilder](store)
-	if !ok {
-		return fmt.Errorf("cannot run: store is %T, which has no book_atpath: index "+
-			"(and no store in its decorator chain does)", store)
+	if !env.Store.Supports(t6g2CapAtPathRebuild) {
+		return t6g2NoResult{}, fmt.Errorf("cannot run: store is %s, which has no book_atpath: index "+
+			"(and no store in its decorator chain does)", env.Store.Describe())
 	}
-	_ = reporter.UpdateProgress(0, 1, "rebuilding book_atpath: index")
-	res, err := r.RebuildBookAtPathIndex(ctx, bookAtPathProgressTo(reporter))
+	env.Progress(0, 1, "rebuilding book_atpath: index")
+	res, err := env.Writer.RebuildBookAtPathIndex(ctx, t6g2AtPathProgressTo(env))
 	if err != nil {
-		return fmt.Errorf("rebuild book_atpath index (scanned %d before failing; sentinel "+
+		return t6g2NoResult{}, fmt.Errorf("rebuild book_atpath index (scanned %d before failing; sentinel "+
 			"state unchanged by this run): %w", res.Scanned, err)
 	}
 	msg := fmt.Sprintf("rebuilt book_atpath index: %d books, %d commits, %d undecodable",
 		res.Scanned, res.Commits, res.UndecodableRows)
-	_ = reporter.UpdateProgress(1, 1, msg)
+	env.Progress(1, 1, msg)
 	if res.UndecodableRows > 0 {
 		// Same stance as the verify op: rows that could not be decoded were
 		// not indexed, so the run is reported as incomplete, not green.
-		_ = reporter.Log(slog.LevelError, msg)
-		return bookAtPathUndecodableError(res)
+		env.Log(slog.LevelError, msg)
+		return t6g2NoResult{}, bookAtPathUndecodableError(res)
 	}
-	_ = reporter.Log(slog.LevelInfo, msg)
-	return nil
+	env.Log(slog.LevelInfo, msg)
+	return t6g2NoResult{}, nil
+}
+
+// t6g2AtPathProgressTo turns the store's per-chunk callbacks into liveness
+// stamps. The row total is unknown up front, so total is 0 and the message
+// carries the count. Safe for the concurrent workers that call it.
+func t6g2AtPathProgressTo(env t6g2Env) database.BookAtPathProgress {
+	return func(scanned int) {
+		env.Progress(scanned, 0, fmt.Sprintf("book_atpath index: %d book rows staged", scanned))
+	}
 }
 
 func bookAtPathUndecodableError(res database.BookAtPathBackfillResult) error {
@@ -250,7 +281,7 @@ func bookAtPathUndecodableError(res database.BookAtPathBackfillResult) error {
 		"maintenance.book-atpath-index-backfill", res.UndecodableRows, res.SampleUndecodable)
 }
 
-// backfillBookAtPathIfNeeded is the boot mode ({"if_needed": true}): the
+// t6g2BackfillBookAtPathIfNeeded is the boot mode ({"if_needed": true}): the
 // sentinel-gated build the goroutine ran. The outcomes match it, with each
 // failure now a red op row instead of a log line only:
 //
@@ -266,39 +297,113 @@ func bookAtPathUndecodableError(res database.BookAtPathBackfillResult) error {
 //
 // Until the sentinel is set LiveBookIDsAtPath serves from a full scan, so
 // nothing is wrong while the build is pending, only slow.
-func backfillBookAtPathIfNeeded(ctx context.Context, b bookAtPathBackfiller, reporter sdk.Reporter) error {
-	_ = reporter.Log(slog.LevelDebug, "Starting book_atpath index backfill (skipped when the one-time sentinel is set)")
-	_ = reporter.UpdateProgress(0, 1, "checking book_atpath: index sentinel")
-	res, err := b.BackfillBookAtPathIndex(ctx, bookAtPathProgressTo(reporter))
+func t6g2BackfillBookAtPathIfNeeded(ctx context.Context, b bookAtPathBackfiller, env t6g2Env) error {
+	env.Log(slog.LevelDebug, "Starting book_atpath index backfill (skipped when the one-time sentinel is set)")
+	env.Progress(0, 1, "checking book_atpath: index sentinel")
+	res, err := b.BackfillBookAtPathIndex(ctx, t6g2AtPathProgressTo(env))
 	if err != nil {
 		// Only a cancel is an interruption. The def's Timeout ends ctx with
 		// DeadlineExceeded: a build too slow to finish leaves the sentinel
 		// unset, which is a failure, not a clean stop.
 		if errors.Is(ctx.Err(), context.Canceled) || (ctx.Err() == nil && errors.Is(err, context.Canceled)) {
-			_ = reporter.Log(slog.LevelInfo, "book_atpath index build interrupted; LiveBookIDsAtPath stays on "+
+			env.Log(slog.LevelInfo, "book_atpath index build interrupted; LiveBookIDsAtPath stays on "+
 				"the full scan until the next boot builds it", slog.String("error", err.Error()))
 			if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
 				return fmt.Errorf("book_atpath index build interrupted (%s): %w", err.Error(), ctxErr)
 			}
 			return fmt.Errorf("book_atpath index build interrupted: %w", err)
 		}
-		_ = reporter.Log(slog.LevelError, "book_atpath index not built; LiveBookIDsAtPath stays on the full "+
+		env.Log(slog.LevelError, "book_atpath index not built; LiveBookIDsAtPath stays on the full "+
 			"scan until a later boot or maintenance.book-atpath-index-backfill succeeds",
 			slog.String("error", err.Error()))
 		return fmt.Errorf("backfill book_atpath index (scanned %d before failing; the sentinel is not set): %w",
 			res.Scanned, err)
 	}
 	if res.Skipped {
-		_ = reporter.Log(slog.LevelInfo, "book_atpath index already built; nothing to do", opsregistry.NoOpAttr())
+		env.Log(slog.LevelInfo, "book_atpath index already built; nothing to do", env.NoOp)
 		return nil
 	}
 	msg := fmt.Sprintf("built book_atpath index: %d books, %d commits, %d undecodable",
 		res.Scanned, res.Commits, res.UndecodableRows)
-	_ = reporter.UpdateProgress(1, 1, msg)
+	env.Progress(1, 1, msg)
 	if res.UndecodableRows > 0 {
-		_ = reporter.Log(slog.LevelError, msg)
+		env.Log(slog.LevelError, msg)
 		return bookAtPathUndecodableError(res)
 	}
-	_ = reporter.Log(slog.LevelInfo, msg)
+	env.Log(slog.LevelInfo, msg)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Native kinds (F5-07).
+// ---------------------------------------------------------------------------
+
+// The verify op writes nothing and the rebuild writes index keys (HEAD's own
+// comments: "Writes index keys only, never book rows"). The index keys sit under
+// the books resource, as book-hash-index-repair declares for its own.
+func t6g2BookAtPathIndexVerifyMeta() t6g2Meta {
+	return t6g2Meta{
+		Kind:     t6g2KindBookAtPathIndexVerify,
+		Title:    t6g2BookAtPathIndexVerifyTitle,
+		Help:     t6g2BookAtPathIndexVerifyHelp,
+		Effects:  tasks.ReadOnly(),
+		Resume:   tasks.ResumeDrop,
+		Priority: tasks.PriorityLow,
+		Timeout:  30 * time.Minute,
+		Key:      "maintenance.book-atpath-index",
+	}
+}
+
+func t6g2BookAtPathIndexBackfillMeta() t6g2Meta {
+	return t6g2Meta{
+		Kind:     t6g2KindBookAtPathIndexBackfill,
+		Title:    t6g2BookAtPathIndexBackfillTitle,
+		Help:     t6g2BookAtPathIndexBackfillHelp,
+		Effects:  tasks.Writes(t6g2Res("books")...),
+		Resume:   tasks.ResumeDrop,
+		Priority: tasks.PriorityLow,
+		Timeout:  30 * time.Minute,
+		// Shares the verify op's key so a verify never reads a half-rebuilt index.
+		Key: "maintenance.book-atpath-index",
+	}
+}
+
+func t6g2BookAtPathIndexVerifyKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	m := t6g2BookAtPathIndexVerifyMeta()
+	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
+			return t6g2NoResult{}, err
+		}
+		env, err := t6g2NativeEnv(rc, deps, tasks.Parallelism{})
+		if err != nil {
+			return t6g2NoResult{}, err
+		}
+		return runBookAtPathIndexVerifyCore(rc.Context(), t6g2NoParams{}, env)
+	}
+	return tasks.Task(m.Kind, tasks.TaskSpec[json.RawMessage, t6g2NoResult]{Common: m.common(sched), Run: run})
+}
+
+func t6g2BookAtPathIndexBackfillKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	m := t6g2BookAtPathIndexBackfillMeta()
+	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
+		// A live-only writer (rule R7): no Preview at HEAD.
+		if err := t6g2RefuseNotLive(rc, m.Kind); err != nil {
+			return t6g2NoResult{}, err
+		}
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
+			return t6g2NoResult{}, err
+		}
+		var params bookAtPathBackfillParams
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &params); err != nil {
+				return t6g2NoResult{}, fmt.Errorf("book-atpath-index-backfill: params: %w", err)
+			}
+		}
+		env, err := t6g2NativeEnv(rc, deps, tasks.Parallelism{})
+		if err != nil {
+			return t6g2NoResult{}, err
+		}
+		return runBookAtPathIndexBackfillCore(rc.Context(), params, env)
+	}
+	return tasks.Task(m.Kind, tasks.TaskSpec[json.RawMessage, t6g2NoResult]{Common: m.common(sched), Run: run})
 }

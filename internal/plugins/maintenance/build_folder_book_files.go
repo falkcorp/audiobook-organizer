@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.4.2
+// version: 1.5.1
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — op maintenance.build-folder-book-files.
 //
@@ -69,6 +69,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // folderBuildParams configures the op.
@@ -183,18 +184,31 @@ type folderBuildReport struct {
 	Books               []folderBuildBook `json:"books"`
 }
 
+// t6g2BuildFolderBookFilesID is HEAD's def ID; the native kind is "books." + it.
+const t6g2BuildFolderBookFilesID = "maintenance.build-folder-book-files"
+
+// t6g2KindBuildFolderBookFiles is the native kind (F5-07, rule R3).
+const t6g2KindBuildFolderBookFiles tasks.Kind = "books." + t6g2BuildFolderBookFilesID
+
+// DisplayName and Description of the def, shared by HEAD's def and the native
+// kind so the two cannot drift.
+const (
+	t6g2BuildFolderBookFilesTitle = "Build book_file rows from a book's folder"
+	t6g2BuildFolderBookFilesHelp  = "For books ABS lists (primary + organized) that own no book_file row while their file_path is " +
+		"a folder of audio: creates one row per audio file, in natural filename order, with each file's size " +
+		"and ffprobe duration, then recomputes the book's totals. Files another live book already references " +
+		"are skipped and reported. Never touches the iTunes tree. Params: book_ids, limit. " +
+		"DRY RUN unless {\"apply\": true}."
+)
+
 func (p *Plugin) buildFolderBookFilesDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.build-folder-book-files",
-		Preview:     sdk.PreviewSpec{Params: folderBuildParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "maintenance",
-		DisplayName: "Build book_file rows from a book's folder",
-		Description: "For books ABS lists (primary + organized) that own no book_file row while their file_path is " +
-			"a folder of audio: creates one row per audio file, in natural filename order, with each file's size " +
-			"and ffprobe duration, then recomputes the book's totals. Files another live book already references " +
-			"are skipped and reported. Never touches the iTunes tree. Params: book_ids, limit. " +
-			"DRY RUN unless {\"apply\": true}.",
+		ID:              t6g2BuildFolderBookFilesID,
+		Preview:         sdk.PreviewSpec{Params: folderBuildParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "maintenance",
+		DisplayName:     t6g2BuildFolderBookFilesTitle,
+		Description:     t6g2BuildFolderBookFilesHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		// Shares relink's key: relink, probe-directory-books and this op all
@@ -246,8 +260,29 @@ type fbCandidate struct {
 }
 
 // buildFolderBookFiles is the op body, separated from the plugin wiring so
-// tests can hand it a store directly.
+// tests can hand it a store directly. The store is both the read side and the
+// row creator; the pool is HEAD's, one worker per CPU.
 func buildFolderBookFiles(ctx context.Context, store folderBuildStore, params folderBuildParams, reporter sdk.Reporter) (*folderBuildReport, error) {
+	env := headT6G2Env(nil, reporter)
+	env.Items = headT6G2Items(reporter, runtime.NumCPU())
+	return buildFolderBookFilesCore(ctx, store, store, params, env)
+}
+
+// t6g2FolderReads is every read the build makes: env.Store satisfies it.
+type t6g2FolderReads interface {
+	bookByIDReader
+	bookFileLister
+	ListBookIDs() ([]string, error)
+	BookFilesAtPath(path string) ([]database.BookFile, error)
+	LiveBookIDsAtPath(path string) ([]string, error)
+	BookAtPathIndexBuilt() (bool, error)
+}
+
+// buildFolderBookFilesCore is the body shared by HEAD's shell and the native
+// kind. Reads come from reads and the only write, the additive row batch, goes
+// through creator (env.Writer on both shells); the pool and progress are env's.
+func buildFolderBookFilesCore(ctx context.Context, reads t6g2FolderReads, creator bookFileBatchCreator, params folderBuildParams, env t6g2Env) (*folderBuildReport, error) {
+	store := reads
 	// LiveBookIDsAtPath answers from a scan of EVERY book row until the
 	// book_atpath index is built. This op asks once per audio file, so an
 	// unbuilt index would be tens of thousands of full scans.
@@ -260,13 +295,13 @@ func buildFolderBookFiles(ctx context.Context, store folderBuildStore, params fo
 	}
 
 	if !params.Apply {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN: no book_file rows will be created")
+		env.Log(slog.LevelInfo, "DRY RUN: no book_file rows will be created")
 	}
 
 	explicit := len(params.BookIDs) > 0
 	ids := params.BookIDs
 	if !explicit {
-		_ = reporter.UpdateProgress(0, 0, "Phase 1/2: enumerating library…")
+		env.Progress(0, 0, "Phase 1/2: enumerating library…")
 		if ids, err = store.ListBookIDs(); err != nil {
 			return nil, fmt.Errorf("ListBookIDs: %w", err)
 		}
@@ -290,7 +325,14 @@ func buildFolderBookFiles(ctx context.Context, store folderBuildStore, params fo
 		}
 	}
 
-	scanErr := registry.RunItems(ctx, reporter, ids, func(_ context.Context, id string) error {
+	scanErr := env.Items(ctx, len(ids), t6g2Loop{
+		ProgressTotal: len(ids),
+		Collect:       true,
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Phase 1/2: checking book %d/%d…", i+1, total)
+		},
+	}, func(_ context.Context, bi int) error {
+		id := ids[bi]
 		e := folderBuildBook{BookID: id}
 		b, err := store.GetBookByID(id)
 		if err != nil {
@@ -356,13 +398,6 @@ func buildFolderBookFiles(ctx context.Context, store folderBuildStore, params fo
 		candidates = append(candidates, &fbCandidate{book: b, folder: filepath.Clean(path), result: e})
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   runtime.NumCPU(),
-		ProgressTotal: len(ids),
-		ErrMode:       registry.ErrModeCollect,
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Phase 1/2: checking book %d/%d…", i+1, total)
-		},
 	})
 	if scanErr != nil {
 		return nil, fmt.Errorf("library scan: %w", scanErr)
@@ -405,26 +440,25 @@ func buildFolderBookFiles(ctx context.Context, store folderBuildStore, params fo
 	// sequence: a nested pool would put NumCPU² probes on the box at once.
 	var done atomic.Int64
 	total := len(work)
-	buildErr := registry.RunItems(ctx, reporter, work, func(ctx context.Context, c *fbCandidate) error {
-		onFile := func(i, n int, name string) {
-			// Stamp mid-book: RunItems only stamps between items, and a
-			// 142-file folder of slow reads can outlast the progress watchdog.
-			_ = reporter.UpdateProgress(int(done.Load()), total, fmt.Sprintf(
-				"Phase 2/2: %s: file %d/%d (%s)", linkintegrity.DirNameOf(c.folder), i+1, n, name))
-		}
-		err := buildOneFolder(ctx, store, c, params.Apply, onFile)
-		done.Add(1)
-		return err
-	}, registry.RunItemsOptions{
-		Concurrency:   runtime.NumCPU(),
+	buildErr := env.Items(ctx, len(work), t6g2Loop{
 		ProgressTotal: total,
-		// ErrModeFail: the only error a worker returns is a fail-closed
-		// lookup (the ownership index is unavailable). Carrying on would
-		// report the rest of the library as built on no ownership check.
-		ErrMode: registry.ErrModeFail,
+		// Collect stays false (fail): the only error a worker returns is a
+		// fail-closed lookup (the ownership index is unavailable). Carrying on
+		// would report the rest of the library as built on no ownership check.
 		Label: func(i, n int) string {
 			return fmt.Sprintf("Phase 2/2: building book %d/%d…", i+1, n)
 		},
+	}, func(ctx context.Context, wi int) error {
+		c := work[wi]
+		onFile := func(i, n int, name string) {
+			// Stamp mid-book: RunItems only stamps between items, and a
+			// 142-file folder of slow reads can outlast the progress watchdog.
+			env.Progress(int(done.Load()), total, fmt.Sprintf(
+				"Phase 2/2: %s: file %d/%d (%s)", linkintegrity.DirNameOf(c.folder), i+1, n, name))
+		}
+		err := buildOneFolder(ctx, store, creator, c, params.Apply, onFile)
+		done.Add(1)
+		return err
 	})
 	for _, c := range work {
 		if c.result.Decision == "" {
@@ -450,8 +484,8 @@ func buildFolderBookFiles(ctx context.Context, store folderBuildStore, params fo
 		}
 	}
 
-	_ = reporter.Log(slog.LevelInfo, report.summary())
-	_ = reporter.UpdateProgress(total, total, report.summary())
+	env.Log(slog.LevelInfo, report.summary())
+	env.Progress(total, total, report.summary())
 	if buildErr != nil {
 		return report, fmt.Errorf("build pass aborted: %w", buildErr)
 	}
@@ -481,7 +515,7 @@ func (r *folderBuildReport) summary() string {
 // buildOneFolder lists, checks, probes and (with apply) writes one book's rows,
 // setting c.result. It returns an error only when the ownership lookup cannot
 // answer; every per-book problem is a decision instead.
-func buildOneFolder(ctx context.Context, store folderBuildStore, c *fbCandidate, apply bool, onFile func(i, n int, name string)) error {
+func buildOneFolder(ctx context.Context, store t6g2FolderReads, creator bookFileBatchCreator, c *fbCandidate, apply bool, onFile func(i, n int, name string)) error {
 	res := &c.result
 	audio, names, subdirs, err := folderAudioFiles(c.folder)
 	if err != nil {
@@ -568,7 +602,7 @@ func buildOneFolder(ctx context.Context, store folderBuildStore, c *fbCandidate,
 	}
 	// One batch: atomic, and the book's aggregates (Duration, FileSize) are
 	// recomputed once rather than once per row.
-	if err := store.BatchCreateBookFiles(rows); err != nil {
+	if err := creator.BatchCreateBookFiles(rows); err != nil {
 		res.Decision, res.Reason = fbError, fmt.Sprintf("BatchCreateBookFiles: %v", err)
 		return nil
 	}
@@ -610,7 +644,7 @@ func folderAudioFiles(dir string) (audio, names []string, subdirs int, err error
 // be a live sibling, a soft-deleted book, or self, and none of those lets a
 // second row onto the file. It is not listed among the owners, though, so a
 // live holder is not offered as a second owner of a path its sibling owns.
-func pathClaimantsOf(store folderBuildStore, path, self string) (owners []string, retired *database.BookFile, err error) {
+func pathClaimantsOf(store t6g2FolderReads, path, self string) (owners []string, retired *database.BookFile, err error) {
 	rows, err := store.BookFilesAtPath(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("book_file rows at %s: %w", path, err)
@@ -648,4 +682,61 @@ func pathClaimantsOf(store folderBuildStore, path, self string) (owners []string
 	}
 	sort.Strings(out)
 	return out, retired, nil
+}
+
+// t6g2BuildFolderBookFilesParallelism is HEAD's pool for both passes: one
+// worker per CPU (a DB read and a stat per book in the scan, an ffprobe
+// subprocess per file in the build).
+func t6g2BuildFolderBookFilesParallelism() tasks.Parallelism { return tasks.CPU() }
+
+func t6g2BuildFolderBookFilesMeta() t6g2Meta {
+	return t6g2Meta{
+		Kind:     t6g2KindBuildFolderBookFiles,
+		Title:    t6g2BuildFolderBookFilesTitle,
+		Help:     t6g2BuildFolderBookFilesHelp,
+		Effects:  tasks.Writes(t6g2Res("book_files", "books")...),
+		Resume:   tasks.ResumeDrop,
+		Priority: tasks.PriorityNormal,
+		Timeout:  240 * time.Minute,
+		// Shares relink's key, as HEAD does.
+		Key: "maintenance.relink-unlinked-books",
+	}
+}
+
+// t6g2BuildFolderBookFilesNativeParams is the native kind's params. Apply is
+// not among them: the mode decides it.
+type t6g2BuildFolderBookFilesNativeParams struct {
+	BookIDs []string `json:"book_ids"`
+	Limit   int      `json:"limit"`
+}
+
+func t6g2BuildFolderBookFilesKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	m := t6g2BuildFolderBookFilesMeta()
+	par := t6g2BuildFolderBookFilesParallelism()
+	run := func(rc *tasks.RC, raw json.RawMessage) (*folderBuildReport, error) {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
+			return nil, err
+		}
+		var np t6g2BuildFolderBookFilesNativeParams
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &np); err != nil {
+				return nil, fmt.Errorf("invalid params: %w", err)
+			}
+		}
+		if np.Limit < 0 {
+			return nil, fmt.Errorf("invalid params: limit must be >= 0")
+		}
+		env, err := t6g2NativeEnv(rc, deps, par)
+		if err != nil {
+			return nil, err
+		}
+		if !env.Store.Supports(t6g2CapFolderBuild) {
+			// Without the path lookups the ownership check cannot run, and
+			// building without it could claim another book's files.
+			return nil, fmt.Errorf("store %s cannot list book_file rows by path; refusing to build without the ownership check", env.Store.Describe())
+		}
+		params := folderBuildParams{Apply: t6g2Live(rc), BookIDs: np.BookIDs, Limit: np.Limit}
+		return buildFolderBookFilesCore(rc.Context(), env.Store, env.Writer, params, env)
+	}
+	return tasks.Task(m.Kind, tasks.TaskSpec[json.RawMessage, *folderBuildReport]{Common: m.common(sched), Run: run})
 }

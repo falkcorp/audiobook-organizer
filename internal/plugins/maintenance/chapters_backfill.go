@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.8.3
+// version: 1.9.1
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — op maintenance.chapters-backfill.
 //
@@ -78,8 +78,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // chaptersBackfillParams configures the op.
@@ -229,21 +229,34 @@ type chapterPersister interface {
 	SaveChaptersForBook(bookID string, chapters []database.Chapter) error
 }
 
+// t6g2ChaptersBackfillID is HEAD's def ID; the native kind is "books." + it.
+const t6g2ChaptersBackfillID = "maintenance.chapters-backfill"
+
+// t6g2KindChaptersBackfill is the native kind (F5-07, rule R3).
+const t6g2KindChaptersBackfill tasks.Kind = "books." + t6g2ChaptersBackfillID
+
+// DisplayName and Description of the def, shared by HEAD's def and the native
+// kind so the two cannot drift.
+const (
+	t6g2ChaptersBackfillTitle = "Backfill embedded chapters (single-file books)"
+	t6g2ChaptersBackfillHelp  = "Extracts the embedded chapter timeline from single-file audiobook containers that have none " +
+		"persisted, so the ABS API stops falling back to a one-chapter-spans-the-whole-book synthesis. Chapter " +
+		"extraction only ever ran on the scanner's new-book save path, so every book predating 2026-07-30 was " +
+		"never probed. Multi-file books are skipped deliberately: their persisted form is identical to the " +
+		"live synthesis and would go stale undetectably. Refuses to run when ffprobe is unavailable. " +
+		"DRY RUN unless {\"apply\": true}. Books that already have chapters are skipped unless " +
+		"{\"overwrite\": true} is set, which REPLACES the stored timeline and requires an explicit " +
+		"book_ids cohort — a stored timeline can be wrong, and every reader here tests only that it exists."
+)
+
 func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.chapters-backfill",
+		ID:          t6g2ChaptersBackfillID,
 		Preview:     sdk.PreviewSpec{Params: chaptersBackfillParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
-		DisplayName: "Backfill embedded chapters (single-file books)",
-		Description: "Extracts the embedded chapter timeline from single-file audiobook containers that have none " +
-			"persisted, so the ABS API stops falling back to a one-chapter-spans-the-whole-book synthesis. Chapter " +
-			"extraction only ever ran on the scanner's new-book save path, so every book predating 2026-07-30 was " +
-			"never probed. Multi-file books are skipped deliberately: their persisted form is identical to the " +
-			"live synthesis and would go stale undetectably. Refuses to run when ffprobe is unavailable. " +
-			"DRY RUN unless {\"apply\": true}. Books that already have chapters are skipped unless " +
-			"{\"overwrite\": true} is set, which REPLACES the stored timeline and requires an explicit " +
-			"book_ids cohort — a stored timeline can be wrong, and every reader here tests only that it exists.",
+		DisplayName: t6g2ChaptersBackfillTitle,
+		Description: t6g2ChaptersBackfillHelp,
 		// ResumeRestart, not Drop. This op has the longest Timeout in the
 		// codebase (24h) and re-enumerates the whole library, so an interrupted
 		// run used to throw away a day of ffprobe work. Every item is
@@ -357,6 +370,19 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
+	env := headT6G2Wire(headT6G2Env(p, reporter), p, p.deps.OpsStore())
+	env.Checkpoint = reporter.Checkpoint
+	env.Items = headT6G2Items(reporter, runtime.NumCPU())
+	_, err := runChaptersBackfillCore(ctx, params, env)
+	return err
+}
+
+// runChaptersBackfillCore is the body shared by HEAD's shell and the native
+// kind. params.Apply is the resolved write direction; reads come from
+// env.Store, chapter writes go through env.Writer.
+func runChaptersBackfillCore(ctx context.Context, params chaptersBackfillParams, env t6g2Env) (t6g2NoResult, error) {
+	var err error
+	store := env.Store
 	if len(params.BookIDs) > 0 && len(params.BookIDsCamel) > 0 {
 		// Order-insensitive: a resumed run's checkpoint always writes the
 		// canonical book_ids key SORTED (see the sort.Strings(ids) below,
@@ -372,7 +398,7 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		sort.Strings(a)
 		sort.Strings(b)
 		if !slices.Equal(a, b) {
-			return fmt.Errorf("book_ids and bookIds disagree; send one")
+			return t6g2NoResult{}, fmt.Errorf("book_ids and bookIds disagree; send one")
 		}
 	}
 	if len(params.BookIDs) == 0 && len(params.BookIDsCamel) > 0 {
@@ -392,11 +418,11 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 	// typed. Checked before ffprobe so a malformed request fails on its own
 	// terms rather than on a missing binary.
 	if params.Overwrite && len(params.BookIDs) == 0 {
-		return fmt.Errorf("refusing overwrite without book_ids: overwrite REPLACES stored chapter " +
+		return t6g2NoResult{}, fmt.Errorf("refusing overwrite without book_ids: overwrite REPLACES stored chapter " +
 			"timelines and is a per-book repair, not a library-wide pass — pass an explicit book_ids list")
 	}
 	if params.Overwrite && !params.Apply {
-		_ = reporter.Log(slog.LevelInfo, "overwrite requested on a DRY RUN — reporting what would be replaced, writing nothing")
+		env.Log(slog.LevelInfo, "overwrite requested on a DRY RUN — reporting what would be replaced, writing nothing")
 	}
 
 	// ── refuse to run without ffprobe ────────────────────────────────────────
@@ -406,32 +432,30 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 	// that genuinely has none. Those two states must not look alike.
 	ffprobePath, err := lookupFFprobeFn()
 	if err != nil {
-		return fmt.Errorf("cannot run: this op extracts real chapter markers and has no fallback — %w", err)
+		return t6g2NoResult{}, fmt.Errorf("cannot run: this op extracts real chapter markers and has no fallback — %w", err)
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("using ffprobe at %s", ffprobePath))
+	env.Log(slog.LevelInfo, fmt.Sprintf("using ffprobe at %s", ffprobePath))
 
-	store := p.deps.OpsStore()
 	if store == nil {
-		return fmt.Errorf("database not initialized")
+		return t6g2NoResult{}, fmt.Errorf("database not initialized")
 	}
-	persister, ok := database.AsCapability[chapterPersister](store)
-	if !ok {
-		return fmt.Errorf("cannot run: store is %T, which does not persist chapters "+
-			"(and no store in its decorator chain does)", store)
+	if !store.Supports(t6g2CapChapters) {
+		return t6g2NoResult{}, fmt.Errorf("cannot run: store is %s, which does not persist chapters "+
+			"(and no store in its decorator chain does)", store.Describe())
 	}
 	if !params.Apply {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no chapters will be written")
+		env.Log(slog.LevelInfo, "DRY RUN — no chapters will be written")
 	}
 
 	ids := params.BookIDs
 	if len(ids) == 0 {
-		_ = reporter.UpdateProgress(0, 0, "Enumerating library…")
+		env.Progress(0, 0, "Enumerating library…")
 		ids, err = store.ListBookIDs()
 		if err != nil {
-			return fmt.Errorf("ListBookIDs: %w", err)
+			return t6g2NoResult{}, fmt.Errorf("ListBookIDs: %w", err)
 		}
 	} else {
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("restricted to %d explicit book IDs", len(ids)))
+		env.Log(slog.LevelInfo, fmt.Sprintf("restricted to %d explicit book IDs", len(ids)))
 	}
 
 	// A resume watermark counts positions, so the positions have to mean the
@@ -449,7 +473,7 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 	// slice and the op would report success having examined nothing.
 	resumeFrom := min(max(params.ResumeFrom, 0), len(ids))
 	if resumeFrom > 0 {
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		env.Log(slog.LevelInfo, fmt.Sprintf(
 			"resuming at book %d/%d (%d already persisted by earlier attempts)",
 			resumeFrom, len(ids), params.AlreadyPersisted))
 	}
@@ -465,7 +489,43 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 	// call per item is exactly the shape that hung dedup.full-scan for 3+ hours
 	// on a single core. Every worker touches a disjoint book, and the only
 	// shared state is the atomic counter block, so the pool needs no lock.
-	runErr := registry.RunItems(ctx, reporter, ids, func(ctx context.Context, id string) error {
+	runErr := env.Items(ctx, len(ids), t6g2Loop{
+		Collect:       true,
+		ProgressTotal: len(ids),
+		ResumeFrom:    resumeFrom,
+		// Throttle: one checkpoint per 200 completed books. The watermark is a
+		// contiguous prefix, so a restart re-probes at most 200 books — cheap,
+		// since a re-probe is a container-header read and books that already
+		// have chapters short-circuit on a single Pebble get.
+		CheckpointEvery: chaptersBackfillCheckpointEvery,
+		// Every field is carried, not just the watermark. A checkpoint replaces
+		// or is merged into the resumed run's params, so anything omitted here
+		// comes back as its zero value: dropping Apply would silently downgrade
+		// a live run to a dry run on restart, and dropping BookIDs would widen a
+		// cohort run to the whole library. Dropping Overwrite would turn the
+		// unfinished half of a repair run back into a skip-if-present pass,
+		// leaving the books past the watermark holding the bad timeline the run
+		// was started to replace — and reporting success.
+		CheckpointState: func(_ context.Context, watermark int) error {
+			return env.Checkpoint(chaptersBackfillParams{
+				Apply:            params.Apply,
+				Limit:            params.Limit,
+				BookIDs:          params.BookIDs,
+				Overwrite:        params.Overwrite,
+				ResumeFrom:       watermark,
+				AlreadyPersisted: int(priorPersisted + c.persisted.Load()),
+			})
+		},
+		// Reports ELIGIBLE (= persisted + wouldPersist), not persisted. A dry
+		// run never increments persisted, so a label reading it sat at zero for
+		// the whole run and was indistinguishable from a run finding nothing —
+		// the opposite of the truth on the first cohort pass, which found 33.
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Books %d/%d (eligible=%d chapters=%d)",
+				i+1, total, c.persisted.Load()+c.wouldPersist.Load(), c.chaptersWorked.Load())
+		},
+	}, func(ctx context.Context, bi int) error {
+		id := ids[bi]
 		c.examined.Add(1)
 
 		// Already extracted — idempotent, the same rule the scanner applies.
@@ -478,7 +538,7 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		// only that it is non-empty.
 		replacing := false
 		storedIsDegenerate := false
-		if stored, err := persister.GetChaptersForBook(id); err == nil && len(stored) > 0 {
+		if stored, err := store.GetChaptersForBook(id); err == nil && len(stored) > 0 {
 			if !params.Overwrite {
 				c.skipHasStored.Add(1)
 				return nil
@@ -540,7 +600,7 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 			// run where every probe failed cannot be mistaken for a library
 			// with no markers.
 			c.probeFailed.Add(1)
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("ProbeChapters(%s): %v", path, perr))
+			env.Log(slog.LevelWarn, fmt.Sprintf("ProbeChapters(%s): %v", path, perr))
 			return nil
 		}
 		if len(chs) < minPersistableChapters {
@@ -570,9 +630,9 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 					c.wouldClear.Add(1)
 					return nil
 				}
-				if derr := persister.SaveChaptersForBook(id, nil); derr != nil {
+				if derr := env.Writer.SaveChaptersForBook(id, nil); derr != nil {
 					c.persistFailed.Add(1)
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("clear chapters(%s): %v", id, derr))
+					env.Log(slog.LevelWarn, fmt.Sprintf("clear chapters(%s): %v", id, derr))
 					return nil
 				}
 				c.cleared.Add(1)
@@ -603,9 +663,9 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 				ID: ch.ID, StartSec: ch.StartSec, EndSec: ch.EndSec, Title: ch.Title,
 			}
 		}
-		if serr := persister.SaveChaptersForBook(id, dbChapters); serr != nil {
+		if serr := env.Writer.SaveChaptersForBook(id, dbChapters); serr != nil {
 			c.persistFailed.Add(1)
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("SaveChaptersForBook(%s): %v", id, serr))
+			env.Log(slog.LevelWarn, fmt.Sprintf("SaveChaptersForBook(%s): %v", id, serr))
 			return nil
 		}
 		c.persisted.Add(1)
@@ -613,42 +673,6 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 			c.replaced.Add(1)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   runtime.NumCPU(),
-		ProgressTotal: len(ids),
-		ErrMode:       registry.ErrModeCollect,
-		ResumeFrom:    resumeFrom,
-		// Throttle: one checkpoint per 200 completed books. The watermark is a
-		// contiguous prefix, so a restart re-probes at most 200 books — cheap,
-		// since a re-probe is a container-header read and books that already
-		// have chapters short-circuit on a single Pebble get.
-		CheckpointEvery: chaptersBackfillCheckpointEvery,
-		// Every field is carried, not just the watermark. Checkpoint JSON is
-		// MERGED into the resumed run's params, so anything omitted here comes
-		// back as its zero value: dropping Apply would silently downgrade a
-		// live run to a dry run on restart, and dropping BookIDs would widen a
-		// cohort run to the whole library. Dropping Overwrite would turn the
-		// unfinished half of a repair run back into a skip-if-present pass,
-		// leaving the books past the watermark holding the bad timeline the run
-		// was started to replace — and reporting success.
-		CheckpointStateFn: func(ctx context.Context, watermark int) error {
-			return reporter.Checkpoint(chaptersBackfillParams{
-				Apply:            params.Apply,
-				Limit:            params.Limit,
-				BookIDs:          params.BookIDs,
-				Overwrite:        params.Overwrite,
-				ResumeFrom:       watermark,
-				AlreadyPersisted: int(priorPersisted + c.persisted.Load()),
-			})
-		},
-		// Reports ELIGIBLE (= persisted + wouldPersist), not persisted. A dry
-		// run never increments persisted, so a label reading it sat at zero for
-		// the whole run and was indistinguishable from a run finding nothing —
-		// the opposite of the truth on the first cohort pass, which found 33.
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Books %d/%d (eligible=%d chapters=%d)",
-				i+1, total, c.persisted.Load()+c.wouldPersist.Load(), c.chaptersWorked.Load())
-		},
 	})
 
 	summary := c.summary(params.Apply)
@@ -656,7 +680,61 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 		summary += fmt.Sprintf(" | ⚠️ write cap %d reached — %d eligible books left unwritten",
 			params.Limit, c.wouldPersist.Load())
 	}
-	_ = reporter.Log(slog.LevelInfo, summary)
-	_ = reporter.UpdateProgress(len(ids), len(ids), summary)
-	return runErr
+	env.Log(slog.LevelInfo, summary)
+	env.Progress(len(ids), len(ids), summary)
+	return t6g2NoResult{}, runErr
+}
+
+// t6g2ChaptersBackfillParallelism is HEAD's pool: one worker per CPU (one
+// ffprobe subprocess per book).
+func t6g2ChaptersBackfillParallelism() tasks.Parallelism { return tasks.CPU() }
+
+func t6g2ChaptersBackfillMeta() t6g2Meta {
+	return t6g2Meta{
+		Kind:  t6g2KindChaptersBackfill,
+		Title: t6g2ChaptersBackfillTitle,
+		Help:  t6g2ChaptersBackfillHelp,
+		// HEAD declares no Writes (it writes only the chapters: keyspace and
+		// "declaring ResBooks would misdescribe it"), so the native effects name
+		// that keyspace as a resource of its own; F5-18 must declare it.
+		Effects:  tasks.Writes(t6g2Res("chapters")...),
+		Resume:   tasks.ResumeContinue,
+		Priority: tasks.PriorityLow,
+		Timeout:  24 * time.Hour,
+		// Shares the ffprobe lane with the other whole-library probe op.
+		Key: "maintenance.probe-directory-books",
+	}
+}
+
+func t6g2ChaptersBackfillKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	m := t6g2ChaptersBackfillMeta()
+	par := t6g2ChaptersBackfillParallelism()
+	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
+			return t6g2NoResult{}, err
+		}
+		params := chaptersBackfillParams{}
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &params); err != nil {
+				return t6g2NoResult{}, fmt.Errorf("invalid params: %w", err)
+			}
+		}
+		// A checkpoint carries the watermark and the writes already done; the
+		// rest of its params are the start params, which a restart reads again.
+		var saved chaptersBackfillParams
+		ok, err := rc.Restore(&saved)
+		if err != nil {
+			return t6g2NoResult{}, fmt.Errorf("%s: restore checkpoint: %w", m.Kind, err)
+		}
+		if ok {
+			params.ResumeFrom, params.AlreadyPersisted = saved.ResumeFrom, saved.AlreadyPersisted
+		}
+		params.Apply = t6g2Live(rc)
+		env, err := t6g2NativeEnv(rc, deps, par)
+		if err != nil {
+			return t6g2NoResult{}, err
+		}
+		return runChaptersBackfillCore(rc.Context(), params, env)
+	}
+	return tasks.Task(m.Kind, tasks.TaskSpec[json.RawMessage, t6g2NoResult]{Common: m.common(sched), Run: run})
 }

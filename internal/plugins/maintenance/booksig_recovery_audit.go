@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.6.3
+// version: 1.7.1
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // STOR-1/STOR-2: UpdateBook's memdb-stripped-Book full-replacement bug silently
@@ -69,25 +70,38 @@ func (e auditExample) String() string {
 	return fmt.Sprintf("%s (%q) %s NOT recoverable", e.bookID, e.title, e.field)
 }
 
+// t6g2BookSigRecoveryAuditID is HEAD's def ID; the native kind is "books." + it.
+const t6g2BookSigRecoveryAuditID = "maintenance.booksig-recovery-audit"
+
+// t6g2KindBookSigRecoveryAudit is the native kind (F5-07, rule R3).
+const t6g2KindBookSigRecoveryAudit tasks.Kind = "books." + t6g2BookSigRecoveryAuditID
+
+// DisplayName and Description of the def, shared by HEAD's def and the native
+// kind so the two cannot drift.
+const (
+	t6g2BookSigRecoveryAuditTitle = "Audit/restore wiped Description/BookSig from snapshots"
+	t6g2BookSigRecoveryAuditHelp  = "Dry-run audit (default) or owner-greenlit apply mode (STOR-1/STOR-2). " +
+		"Scans every book's Pebble-direct current row for missing Description and for " +
+		"BookSigV1 that was built (BookSigBuiltAt set) but is now nil, then checks each " +
+		"book's book_ver: CoW snapshots for the newest snapshot still carrying each " +
+		"missing field. Dry-run (default) only reports how much wipe damage from the " +
+		"memdb full-replacement bug is recoverable; it never writes and never prunes " +
+		"snapshots. Apply mode (dryRun=false, explicit only) writes back ONLY the " +
+		"recovered field(s) onto a freshly re-read current row, skipping any field " +
+		"that is no longer empty at write time. It never prunes snapshots."
+)
+
 func (p *Plugin) bookSigRecoveryAuditDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.booksig-recovery-audit",
-		Preview:     sdk.PreviewSpec{Params: bookSigRecoveryAuditParams{}},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "maintenance",
-		DisplayName: "Audit/restore wiped Description/BookSig from snapshots",
-		Description: "Dry-run audit (default) or owner-greenlit apply mode (STOR-1/STOR-2). " +
-			"Scans every book's Pebble-direct current row for missing Description and for " +
-			"BookSigV1 that was built (BookSigBuiltAt set) but is now nil, then checks each " +
-			"book's book_ver: CoW snapshots for the newest snapshot still carrying each " +
-			"missing field. Dry-run (default) only reports how much wipe damage from the " +
-			"memdb full-replacement bug is recoverable; it never writes and never prunes " +
-			"snapshots. Apply mode (dryRun=false, explicit only) writes back ONLY the " +
-			"recovered field(s) onto a freshly re-read current row, skipping any field " +
-			"that is no longer empty at write time. It never prunes snapshots.",
+		ID:              t6g2BookSigRecoveryAuditID,
+		Preview:         sdk.PreviewSpec{Params: bookSigRecoveryAuditParams{}},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "maintenance",
+		DisplayName:     t6g2BookSigRecoveryAuditTitle,
+		Description:     t6g2BookSigRecoveryAuditHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.booksig-recovery-audit",
+		ConcurrencyKey:  t6g2BookSigRecoveryAuditID,
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         60 * time.Minute,
@@ -135,19 +149,27 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	dryRun, err := opmode.ResolveDryRun("maintenance.booksig-recovery-audit", params.DryRunSnake, params.DryRun)
+	dryRun, err := opmode.ResolveDryRun(t6g2BookSigRecoveryAuditID, params.DryRunSnake, params.DryRun)
 	if err != nil {
 		return err
 	}
-	if dryRun {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — read-only audit, no changes will be written")
-	} else {
-		_ = reporter.Log(slog.LevelInfo, "APPLY MODE — restoring recoverable fields from book_ver: snapshots (owner-greenlit)")
-	}
+	env := headT6G2Wire(headT6G2Env(p, reporter), p, p.deps.OpsStore())
+	_, err = runBookSigRecoveryAuditCore(ctx, dryRun, env)
+	return err
+}
 
-	store := p.deps.OpsStore()
+// runBookSigRecoveryAuditCore is the body shared by HEAD's shell and the native
+// kind: dryRun is the resolved mode. Reads go through env.Store and the restore
+// through env.Writer.
+func runBookSigRecoveryAuditCore(ctx context.Context, dryRun bool, env t6g2Env) (t6g2NoResult, error) {
+	if dryRun {
+		env.Log(slog.LevelInfo, "DRY RUN — read-only audit, no changes will be written")
+	} else {
+		env.Log(slog.LevelInfo, "APPLY MODE — restoring recoverable fields from book_ver: snapshots (owner-greenlit)")
+	}
+	store := env.Store
 	if store == nil {
-		return fmt.Errorf("database not initialized")
+		return t6g2NoResult{}, fmt.Errorf("database not initialized")
 	}
 
 	// Enumerate book IDs only (memdb-safe, ~a few MB of strings for the whole
@@ -157,10 +179,10 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 	// memdb-stripped projection GetAllBooks would return.
 	ids, err := store.ListBookIDs()
 	if err != nil {
-		return fmt.Errorf("ListBookIDs: %w", err)
+		return t6g2NoResult{}, fmt.Errorf("ListBookIDs: %w", err)
 	}
 	total := len(ids)
-	_ = reporter.UpdateProgress(0, total, "Auditing Description/BookSig recoverability…")
+	env.Progress(0, total, "Auditing Description/BookSig recoverability…")
 
 	const (
 		logInterval  = 15 * time.Second
@@ -213,21 +235,21 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		if len(sample) > 0 {
 			msg += " — e.g. " + strings.Join(sample, "; ")
 		}
-		_ = reporter.Log(slog.LevelInfo, msg)
-		_ = reporter.UpdateProgress(scanned, total, fmt.Sprintf("Audited %d/%d", scanned, total))
+		env.Log(slog.LevelInfo, msg)
+		env.Progress(scanned, total, fmt.Sprintf("Audited %d/%d", scanned, total))
 		lastLog = time.Now()
 	}
 
 	for _, id := range ids {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return t6g2NoResult{}, ctx.Err()
 		}
 		scanned++
 
 		book, gerr := store.GetBookByID(id)
 		if gerr != nil || book == nil {
 			if gerr != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: GetBookByID failed: %v", id, gerr))
+				env.Log(slog.LevelWarn, fmt.Sprintf("book %s: GetBookByID failed: %v", id, gerr))
 			}
 			errCount++
 			heartbeat(false)
@@ -250,7 +272,7 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		booksWithSnapshotLookup++
 		snaps, serr := store.GetBookSnapshots(id, 0) // 0 => all snapshots, newest-first
 		if serr != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: GetBookSnapshots failed: %v", id, serr))
+			env.Log(slog.LevelWarn, fmt.Sprintf("book %s: GetBookSnapshots failed: %v", id, serr))
 			errCount++
 			// Without snapshots we cannot judge recoverability; count the missing
 			// field(s) but classify as not-recoverable for this run.
@@ -295,7 +317,7 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		// Book from scratch or from a memdb projection, only mutate a row we
 		// just read Pebble-direct.
 		if !dryRun && (descSnapBook != nil || sigSnapBook != nil) {
-			restored, skipped, rerr := restoreRecoverableFields(store, id, descSnapBook, sigSnapBook, reporter)
+			restored, skipped, rerr := restoreRecoverableFields(env.Writer, id, descSnapBook, sigSnapBook, env.Log)
 			restoredCount += restored
 			skippedNonEmpty += skipped
 			if rerr != nil {
@@ -324,9 +346,9 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 		report += fmt.Sprintf(" Restored %d, skipped-nonempty %d, restore errors %d.",
 			restoredCount, skippedNonEmpty, restoreErrorCount)
 	}
-	_ = reporter.Log(slog.LevelInfo, report)
-	_ = reporter.UpdateProgress(total, total, report)
-	return nil
+	env.Log(slog.LevelInfo, report)
+	env.Progress(total, total, report)
+	return t6g2NoResult{}, nil
 }
 
 // restoreRecoverableFields re-reads book id fresh from the authoritative
@@ -344,11 +366,11 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 // the caller) to carry a non-nil Description/BookSigV1 respectively; either
 // may be nil if that field isn't recoverable for this book.
 func restoreRecoverableFields(
-	store bookModifier,
+	store t6g2RowWriter,
 	id string,
 	descSnapBook *database.Book,
 	sigSnapBook *database.Book,
-	reporter sdk.Reporter,
+	log t6g2Log,
 ) (restored int, skippedNonEmpty int, err error) {
 	// ModifyBook re-reads the row under its write lock and fills only the
 	// recovered columns that are still empty there, so a column another
@@ -360,7 +382,7 @@ func restoreRecoverableFields(
 		if descSnapBook != nil {
 			if fresh.Description != nil {
 				skippedNonEmpty++
-				_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s: description no longer empty at write time, skipping", id))
+				log(slog.LevelDebug, fmt.Sprintf("book %s: description no longer empty at write time, skipping", id))
 			} else {
 				fresh.Description = descSnapBook.Description
 				changed = true
@@ -370,7 +392,7 @@ func restoreRecoverableFields(
 		if sigSnapBook != nil {
 			if fresh.BookSigV1 != nil {
 				skippedNonEmpty++
-				_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s: booksig_v1 no longer empty at write time, skipping", id))
+				log(slog.LevelDebug, fmt.Sprintf("book %s: booksig_v1 no longer empty at write time, skipping", id))
 			} else {
 				fresh.BookSigV1 = sigSnapBook.BookSigV1
 				fresh.BookSigV1Mask = sigSnapBook.BookSigV1Mask
@@ -388,17 +410,47 @@ func restoreRecoverableFields(
 		return nil
 	})
 	if uerr != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: UpdateBook restore failed: %v", id, uerr))
+		log(slog.LevelWarn, fmt.Sprintf("book %s: UpdateBook restore failed: %v", id, uerr))
 		return 0, skippedNonEmpty, uerr
 	}
 	if written == nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: restore re-read found no row, skipping", id))
+		log(slog.LevelWarn, fmt.Sprintf("book %s: restore re-read found no row, skipping", id))
 		return 0, 0, fmt.Errorf("book %s: not found on restore re-read", id)
 	}
 	if !changed {
 		return 0, skippedNonEmpty, nil
 	}
 
-	_ = reporter.Log(slog.LevelDebug, fmt.Sprintf("book %s (%q): restored recovered field(s)", id, title))
+	log(slog.LevelDebug, fmt.Sprintf("book %s (%q): restored recovered field(s)", id, title))
 	return 1, skippedNonEmpty, nil
+}
+
+func t6g2BookSigRecoveryAuditMeta() t6g2Meta {
+	return t6g2Meta{
+		Kind:  t6g2KindBookSigRecoveryAudit,
+		Title: t6g2BookSigRecoveryAuditTitle,
+		Help:  t6g2BookSigRecoveryAuditHelp,
+		// HEAD declares no Writes but applies by writing the books table, so the
+		// effects say what the apply does (R7: preview is supported).
+		Effects:  tasks.Writes(t6g2Res("books")...),
+		Resume:   tasks.ResumeDrop,
+		Priority: tasks.PriorityLow,
+		Timeout:  60 * time.Minute,
+		Key:      t6g2BookSigRecoveryAuditID,
+	}
+}
+
+func t6g2BookSigRecoveryAuditKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	m := t6g2BookSigRecoveryAuditMeta()
+	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
+			return t6g2NoResult{}, err
+		}
+		env, err := t6g2NativeEnv(rc, deps, tasks.Parallelism{})
+		if err != nil {
+			return t6g2NoResult{}, err
+		}
+		return runBookSigRecoveryAuditCore(rc.Context(), !t6g2Live(rc), env)
+	}
+	return tasks.Task(m.Kind, tasks.TaskSpec[json.RawMessage, t6g2NoResult]{Common: m.common(sched), Run: run})
 }

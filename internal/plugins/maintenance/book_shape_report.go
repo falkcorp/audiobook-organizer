@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_shape_report.go
-// version: 1.2.1
+// version: 1.3.1
 // guid: 3f0c5a71-8d4e-4a92-9b16-2c7e5d40ab31
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -22,8 +22,8 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- book-shape-report ---
@@ -340,16 +340,26 @@ func (r bookShapeReport) summary() string {
 		r.UnreadableDirs, skipped, len(r.Findings), strings.Join(parts, " "))
 }
 
+// t6g2KindBookShapeReport is the native kind (F5-07, rule R3).
+const t6g2KindBookShapeReport tasks.Kind = "books.maintenance.book-shape-report"
+
+// DisplayName and Description of the def, shared by HEAD's def and the native
+// kind so the two cannot drift.
+const (
+	t6g2BookShapeReportTitle = "Book shape report"
+	t6g2BookShapeReportHelp  = "Classifies oversized books, duplicate book rows at one path, the four same-path " +
+		"split shapes (partition, containment, different-content, orphaned files) and corrupt paths " +
+		"(concatenated absolutes, collision-suffix explosions), and names a recommended treatment for " +
+		"each. REPORT-ONLY: there is no apply mode; the only output is a TSV under {root}/.reports/."
+)
+
 func (p *Plugin) bookShapeReportDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.book-shape-report",
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "maintenance",
-		DisplayName: "Book shape report",
-		Description: "Classifies oversized books, duplicate book rows at one path, the four same-path " +
-			"split shapes (partition, containment, different-content, orphaned files) and corrupt paths " +
-			"(concatenated absolutes, collision-suffix explosions), and names a recommended treatment for " +
-			"each. REPORT-ONLY: there is no apply mode; the only output is a TSV under {root}/.reports/.",
+		ID:              "maintenance.book-shape-report",
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "maintenance",
+		DisplayName:     t6g2BookShapeReportTitle,
+		Description:     t6g2BookShapeReportHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.book-shape-report",
@@ -375,21 +385,29 @@ func (p *Plugin) runBookShapeReport(ctx context.Context, rawParams json.RawMessa
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
+	env := headT6G2Wire(headT6G2Env(p, reporter), p, store)
+	env.Items = headT6G2Items(reporter, bookShapeConcurrency(params.Concurrency))
+	_, err := runBookShapeReportCore(ctx, params, env)
+	return err
+}
 
+// runBookShapeReportCore is the body shared by HEAD's shell and the native kind.
+// It reads through env.Store; its one output is the TSV at env.ReportPath.
+func runBookShapeReportCore(ctx context.Context, params bookShapeReportParams, env t6g2Env) (t6g2NoResult, error) {
 	// Resolve the report path BEFORE any work: a run that could not record its
 	// findings should fail with nothing done rather than spend an hour walking
 	// the library and then lose the answer.
-	reportPath, err := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "book-shape-report"))
+	reportPath, err := env.ReportPath(params.ReportPath, "book-shape-report")
 	if err != nil {
-		return err
+		return t6g2NoResult{}, err
 	}
 
-	report, err := buildBookShapeReport(ctx, store, params, reporter)
+	report, err := buildBookShapeReportCore(ctx, env.Store, params, env)
 	if err != nil {
-		return err
+		return t6g2NoResult{}, err
 	}
 
-	log := reporter.Logger()
+	log := env.Logger
 	if wErr := writeBookShapeReport(reportPath, report.Findings); wErr != nil {
 		log.Error("book-shape-report: FAILED to write the per-finding report",
 			"path", reportPath, "err", wErr, "findings", len(report.Findings))
@@ -407,7 +425,7 @@ func (p *Plugin) runBookShapeReport(ctx context.Context, rawParams json.RawMessa
 			"path_kind", f.PathKind, "owned_rows", f.OwnedRows, "disk_files", f.DiskFiles, "detail", f.Detail)
 	}
 	log.Info("book-shape-report complete (REPORT ONLY, nothing modified)", "summary", report.summary())
-	return nil
+	return t6g2NoResult{}, nil
 }
 
 // bookShapeGroupKey is the grouping key for a book, and it is a PURE function of
@@ -580,10 +598,12 @@ func shardGroups(groups []bookShapeGroup, n int) [][]bookShapeGroup {
 	return shards
 }
 
-// buildBookShapeReport performs the sweep and RETURNS the report, so the counts
-// and findings can be asserted as values rather than scraped from log lines.
-func buildBookShapeReport(ctx context.Context, store bookShapeStore, params bookShapeReportParams, reporter sdk.Reporter) (bookShapeReport, error) {
-	log := reporter.Logger()
+// buildBookShapeReportCore performs the sweep and RETURNS the report, so the
+// counts and findings can be asserted as values rather than scraped from log
+// lines. Its pool is env.Items (the shell binds the worker count), its progress
+// and liveness are the env's. store is the read side only.
+func buildBookShapeReportCore(ctx context.Context, store bookShapeStore, params bookShapeReportParams, env t6g2Env) (bookShapeReport, error) {
+	log := env.Logger
 	log.Info("book-shape-report start",
 		"oversized_threshold", params.oversizedThreshold(),
 		"collision_suffix_min", params.collisionSuffixMin(),
@@ -667,7 +687,7 @@ func buildBookShapeReport(ctx context.Context, store bookShapeStore, params book
 
 	shards := shardGroups(groups, bookShapeConcurrency(params.Concurrency))
 	if len(shards) == 0 {
-		_ = reporter.UpdateProgress(0, 0, "REPORT ONLY (nothing modified) — "+report.summary())
+		env.Progress(0, 0, "REPORT ONLY (nothing modified) — "+report.summary())
 		return report, nil
 	}
 
@@ -675,10 +695,16 @@ func buildBookShapeReport(ctx context.Context, store bookShapeStore, params book
 	var findings []bookShapeFinding
 	unreadable := 0
 
-	prog := sdk.NewProgress(reporter, len(shards))
+	prog := newT6G2StageProgress(env, len(shards))
 	prog.Start(fmt.Sprintf("Classifying %d book(s) across %d path group(s) in %d shard(s)…", len(books), len(groups), len(shards)))
 
-	err = registry.RunItems(ctx, reporter, shards, func(itemCtx context.Context, shard []bookShapeGroup) error {
+	err = env.Items(ctx, len(shards), t6g2Loop{
+		Collect: true,
+		// Label depends only on its arguments. It runs INSIDE each worker
+		// goroutine, so reading a shared counter here would be a data race.
+		Label: func(i, t int) string { return fmt.Sprintf("Classified shard %d/%d", i+1, t) },
+	}, func(itemCtx context.Context, shardIdx int) error {
+		shard := shards[shardIdx]
 		local := make([]bookShapeFinding, 0, 16)
 		localUnreadable := 0
 		for i, g := range shard {
@@ -688,13 +714,13 @@ func buildBookShapeReport(ctx context.Context, store bookShapeStore, params book
 			// RunItems stamps liveness only BETWEEN items, and one item here is a
 			// whole shard that can hold a 1,494-entry directory on a slow mount.
 			if i%bookShapeLivenessEvery == 0 {
-				registry.TouchLiveness(reporter)
+				env.Touch()
 			}
 			stat := bookShapeDirStat{Kind: "not-statted", AudioFiles: -1}
 			if !params.SkipDiskStat {
 				// Stamp before the readdir too: a single large or slow directory
 				// can outlast the watchdog window on its own.
-				registry.TouchLiveness(reporter)
+				env.Touch()
 				stat = statGroupDir(g.dir)
 				if stat.Kind == "unreadable" {
 					localUnreadable++
@@ -707,12 +733,6 @@ func buildBookShapeReport(ctx context.Context, store bookShapeStore, params book
 		unreadable += localUnreadable
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: bookShapeConcurrency(params.Concurrency),
-		ErrMode:     registry.ErrModeCollect,
-		// Label depends only on its arguments. It runs INSIDE each worker
-		// goroutine, so reading a shared counter here would be a data race.
-		Label: func(i, t int) string { return fmt.Sprintf("Classified shard %d/%d", i+1, t) },
 	})
 	if err != nil {
 		return bookShapeReport{}, fmt.Errorf("shape sweep: %w", err)
@@ -725,7 +745,7 @@ func buildBookShapeReport(ctx context.Context, store bookShapeStore, params book
 		report.ShapeCounts[f.Shape]++
 	}
 
-	sdk.NewProgress(reporter, len(shards)).Done("REPORT ONLY (nothing modified) — " + report.summary())
+	newT6G2StageProgress(env, len(shards)).Done("REPORT ONLY (nothing modified) — " + report.summary())
 	return report, nil
 }
 
@@ -1153,4 +1173,83 @@ func writeBookShapeReport(path string, findings []bookShapeFinding) error {
 			clean(f.Detail), clean(f.Recommendation))
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o664)
+}
+
+// t6g2StageProgress is sdk.Progress over an env: the same frames (Start at
+// (0, n+2), Done at (n+2, n+2)) and "(pct%)" suffix, so HEAD's reports read as
+// before.
+type t6g2StageProgress struct {
+	progress func(done, total int, msg string)
+	n, total int
+}
+
+func newT6G2StageProgress(env t6g2Env, n int) *t6g2StageProgress {
+	n = max(n, 0)
+	return &t6g2StageProgress{progress: env.Progress, n: n, total: n + 2}
+}
+
+func (p *t6g2StageProgress) format(cur int, msg string) string {
+	pct := float64(cur) / float64(p.total) * 100
+	// For large jobs show two decimals so 1088/308857 doesn't read 0.00%.
+	if p.n >= 100 {
+		return fmt.Sprintf("%s (%.2f%%)", msg, pct)
+	}
+	return fmt.Sprintf("%s (%.0f%%)", msg, pct)
+}
+
+func (p *t6g2StageProgress) Start(msg string) { p.progress(0, p.total, p.format(0, msg)) }
+
+func (p *t6g2StageProgress) Done(msg string) { p.progress(p.total, p.total, p.format(p.total, msg)) }
+
+// ---------------------------------------------------------------------------
+// Native kind (F5-07).
+// ---------------------------------------------------------------------------
+
+// HEAD declares no Writes and no write capability: the TSV under {root}/.reports
+// is a file the op writes outside any store, which no Effects resource names (see
+// the seams note), so the kind is ReadOnly as the def is.
+func t6g2BookShapeReportMeta() t6g2Meta {
+	return t6g2Meta{
+		Kind:     t6g2KindBookShapeReport,
+		Title:    t6g2BookShapeReportTitle,
+		Help:     t6g2BookShapeReportHelp,
+		Effects:  tasks.ReadOnly(),
+		Resume:   tasks.ResumeDrop,
+		Priority: tasks.PriorityLow,
+		Timeout:  2 * time.Hour,
+		Key:      "maintenance.book-shape-report",
+	}
+}
+
+// t6g2BookShapeReportParallelism is HEAD's bookShapeConcurrency: the concurrency
+// param when set, else every CPU.
+func t6g2BookShapeReportParallelism(params bookShapeReportParams) tasks.Parallelism {
+	if params.Concurrency > 0 {
+		return tasks.Fixed(params.Concurrency, "the concurrency param of this run")
+	}
+	return tasks.CPU()
+}
+
+func t6g2BookShapeReportKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	m := t6g2BookShapeReportMeta()
+	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
+			return t6g2NoResult{}, err
+		}
+		var params bookShapeReportParams
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &params); err != nil {
+				return t6g2NoResult{}, fmt.Errorf("parse params: %w", err)
+			}
+		}
+		env, err := t6g2NativeEnv(rc, deps, t6g2BookShapeReportParallelism(params))
+		if err != nil {
+			return t6g2NoResult{}, err
+		}
+		if env.ReportPath == nil {
+			return t6g2NoResult{}, fmt.Errorf("%s: t6g2Deps.ReportPath is not set", m.Kind)
+		}
+		return runBookShapeReportCore(rc.Context(), params, env)
+	}
+	return tasks.Task(m.Kind, tasks.TaskSpec[json.RawMessage, t6g2NoResult]{Common: m.common(sched), Run: run})
 }
