@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/email.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a9d25e71-4c08-4b36-8e1f-37f0c6a2d584
 // last-edited: 2026-11-13
 
@@ -121,15 +121,24 @@ func parseSettings(settings map[string]any) (instanceConfig, error) {
 	case []string:
 		c.to = slices.Clone(to)
 	}
-	if len(c.to) == 0 || len(c.to) > maxRecipients {
-		return c, fmt.Errorf("%w: to needs 1 to %d recipients", integrations.ErrInvalid, maxRecipients)
-	}
-	for _, r := range c.to {
-		if _, err := parseAddress(r); err != nil {
-			return c, fmt.Errorf("%w: a recipient is not a single address", integrations.ErrInvalid)
-		}
+	if err := checkRecipients(c.to); err != nil {
+		return c, err
 	}
 	return c, nil
+}
+
+// checkRecipients is the rule for an instance's to: one to maxRecipients
+// addresses, each a single address.
+func checkRecipients(to []string) error {
+	if len(to) == 0 || len(to) > maxRecipients {
+		return fmt.Errorf("%w: to needs 1 to %d recipients", integrations.ErrInvalid, maxRecipients)
+	}
+	for _, r := range to {
+		if _, err := parseAddress(r); err != nil {
+			return fmt.Errorf("%w: a recipient is not a single address", integrations.ErrInvalid)
+		}
+	}
+	return nil
 }
 
 // channel is one email instance.
@@ -170,12 +179,19 @@ func (c *channel) Test(ctx context.Context) error {
 // ticket from gate (nil: no admission). It is how the kernel makes the invite
 // flow's Sender, and coretest.MailRecorder, an email instance (05-notify
 // section 10, the mailSenderOverride seam).
-func NewChannel(ref integrations.Ref, gate integrations.Gate, s Sender, to []string) notify.Notifier {
+//
+// It fails (integrations.ErrInvalid) for a recipient list a configured
+// instance would refuse: none, too many, or an entry that is not a single
+// address. A channel with no recipient has nothing to send to.
+func NewChannel(ref integrations.Ref, gate integrations.Gate, s Sender, to []string) (notify.Notifier, error) {
+	if err := checkRecipients(to); err != nil {
+		return nil, err
+	}
 	return &channel{
 		env: integrations.Env{Ref: ref, Gate: gate, Now: time.Now},
 		cfg: instanceConfig{to: slices.Clone(to)},
 		mk:  func(SMTPConfig) (Sender, error) { return s, nil },
-	}
+	}, nil
 }
 
 // Send delivers n as one message to every recipient: one SMTP transaction, so

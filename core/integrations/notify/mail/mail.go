@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/mail.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 11234e57-50d2-4d9a-be89-62e983dfeda9
 // last-edited: 2026-11-13
 
@@ -82,6 +82,17 @@ var ErrTLSRequired = errors.New("mail: refusing to send without TLS")
 // ErrAuthUnavailable is returned when a username is configured and the server
 // does not offer AUTH.
 var ErrAuthUnavailable = errors.New("mail: the server does not offer AUTH")
+
+// sentinelError is an error whose text is msg and which is errors.Is(is). It
+// lets a refusal keep the exact admin-visible wording the invite flow always
+// showed while a caller can still match the sentinel.
+type sentinelError struct {
+	msg string
+	is  error
+}
+
+func (e *sentinelError) Error() string { return e.msg }
+func (e *sentinelError) Unwrap() error { return e.is }
 
 // SMTPConfig configures SMTPSender.
 type SMTPConfig struct {
@@ -239,13 +250,16 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 		case s.requiresTLS():
 			// Refuse before AUTH, MAIL FROM or any message data; never
 			// fall back to plain text for a host off this machine.
-			return fmt.Errorf("%w: %s does not offer STARTTLS and is not a loopback host (use port 465 or a relay that supports STARTTLS)", ErrTLSRequired, s.cfg.Host)
+			return &sentinelError{
+				msg: fmt.Sprintf("mail: %s does not offer STARTTLS and is not a loopback host: refusing to send without TLS (use port 465 or a relay that supports STARTTLS)", s.cfg.Host),
+				is:  ErrTLSRequired,
+			}
 		}
 	}
 
 	if s.cfg.Username != "" {
 		if ok, _ := c.Extension("AUTH"); !ok {
-			return fmt.Errorf("%w: a username is configured", ErrAuthUnavailable)
+			return &sentinelError{msg: "mail: SMTP_USERNAME is set but the server does not offer AUTH", is: ErrAuthUnavailable}
 		}
 		// PlainAuth refuses to send credentials over an unencrypted
 		// connection to anything but localhost.

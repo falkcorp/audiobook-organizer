@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/email_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d17e2c9-83a4-4b60-9e1f-c7a02b6d4f38
 // last-edited: 2026-11-13
 
@@ -269,6 +269,94 @@ func TestEmail_SettingsAreChecked(t *testing.T) {
 
 func manyRecipients(n int) []any {
 	out := make([]any, n)
+	for i := range out {
+		out[i] = "robin" + strings.Repeat("x", i%3) + string(rune('a'+i%26)) + "@example.com"
+	}
+	return out
+}
+
+// The move must not change what an administrator reads when a send is refused:
+// the invite flow shows these errors, SMTP_USERNAME hint included. The
+// sentinels are for callers that match; the text is unchanged.
+func TestSender_RefusalsKeepTheAdminWording(t *testing.T) {
+	ctx := context.Background()
+	msg := Message{To: "jim@example.com", Subject: "The signal", Text: "Lit."}
+
+	f := &fakeSMTP{}
+	port, _ := startFake(t, f)
+	s, err := NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "alerts@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.treatAsRemote = true
+	err = s.Send(ctx, msg)
+	if !errors.Is(err, ErrTLSRequired) {
+		t.Fatalf("err = %v, want ErrTLSRequired", err)
+	}
+	want := "mail: 127.0.0.1 does not offer STARTTLS and is not a loopback host: refusing to send without TLS (use port 465 or a relay that supports STARTTLS)"
+	if err.Error() != want {
+		t.Errorf("TLS refusal text = %q, want %q", err, want)
+	}
+
+	f = &fakeSMTP{}
+	port, _ = startFake(t, f)
+	s, err = NewSMTPSender(SMTPConfig{Host: "127.0.0.1", Port: port, From: "alerts@example.com", Username: "alfred", Password: "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Send(ctx, msg)
+	if !errors.Is(err, ErrAuthUnavailable) {
+		t.Fatalf("err = %v, want ErrAuthUnavailable", err)
+	}
+	if want := "mail: SMTP_USERNAME is set but the server does not offer AUTH"; err.Error() != want {
+		t.Errorf("AUTH refusal text = %q, want %q", err, want)
+	}
+}
+
+// recordingSender keeps the messages it is asked to send.
+type recordingSender struct {
+	mu   sync.Mutex
+	sent []Message
+}
+
+func (r *recordingSender) Send(_ context.Context, m Message) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sent = append(r.sent, m)
+	return nil
+}
+
+// NewChannel wraps a Sender as an email instance: with no recipient it would
+// index an empty list at the first send, so it refuses to build instead.
+func TestNewChannel_NeedsRecipientsAndSends(t *testing.T) {
+	rec := &recordingSender{}
+	for name, to := range map[string][]string{
+		"none":        nil,
+		"empty":       {},
+		"not an addr": {"not an address"},
+		"a header":    {"a@example.com\r\nBcc: b@example.com"},
+		"a list item": {"a@example.com, b@example.com"},
+		"too many":    manyStrings(maxRecipients + 1),
+	} {
+		ch, err := NewChannel(batphone, nil, rec, to)
+		if !errors.Is(err, integrations.ErrInvalid) || ch != nil {
+			t.Errorf("%s: NewChannel = (%v, %v), want (nil, ErrInvalid)", name, ch, err)
+		}
+	}
+	ch, err := NewChannel(batphone, nil, rec, []string{"jim@example.com", "alfred@example.com"})
+	if err != nil {
+		t.Fatalf("NewChannel: %v", err)
+	}
+	if err := ch.Send(context.Background(), signalNote, notify.Target{Instance: batphone}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(rec.sent) != 1 || rec.sent[0].To != "jim@example.com" || len(rec.sent[0].AlsoTo) != 1 {
+		t.Fatalf("sent = %+v, want one message to jim and alfred", rec.sent)
+	}
+}
+
+func manyStrings(n int) []string {
+	out := make([]string, n)
 	for i := range out {
 		out[i] = "robin" + strings.Repeat("x", i%3) + string(rune('a'+i%26)) + "@example.com"
 	}
