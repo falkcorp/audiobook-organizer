@@ -550,13 +550,6 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// authorityExportItem is one export item with its position (the duplicate
-// tiebreak).
-type authorityExportItem struct {
-	i   int
-	raw json.RawMessage
-}
-
 func ingestLibraryExport(ctx context.Context, b *authoritybuild.Builder, path string, workers int, env authorityBuildEnv) error {
 	clean := filepath.Clean(path)
 	if !filepath.IsAbs(clean) {

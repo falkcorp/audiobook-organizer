@@ -38,9 +38,6 @@ import (
 // (deps.NewWriter(rc.Writer())).
 
 const (
-	// t6g1KindPrefix is rule R3: tasks.Kind("books." + <HEAD def ID>).
-	t6g1KindPrefix = "books."
-
 	// t6g1SignalMemDB is the readiness component every kind waits for (HEAD's
 	// NoWarmupWait false). It is the same component F5-01 declares in package
 	// jobs (unexported there).
@@ -321,9 +318,6 @@ func t6g1NativeEnv(rc *tasks.RC) t6g1Env {
 		OpID:     string(rc.RunID()),
 	}
 }
-
-// t6g1KindFor is the kind name rule R3 gives a HEAD def ID.
-func t6g1KindFor(headID string) tasks.Kind { return tasks.Kind(t6g1KindPrefix + headID) }
 
 // t6g1Common is the Common block every definition shares; the caller fills the
 // per-definition fields (Title, Help, Effects, Resume, Priority, Timeout...).

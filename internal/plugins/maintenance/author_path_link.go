@@ -328,40 +328,6 @@ type authorPathLinkResult struct {
 	UndoLedgerRows int                           `json:"undo_ledger_rows"`
 }
 
-// authorPathLinkAuthorStore is the author-row half of this op's store surface:
-// resolve a derived name to a row, and mint one when it is nobody's near miss.
-type authorPathLinkAuthorStore interface {
-	GetAllAuthors() ([]database.Author, error)
-	// GetAllAuthorBookCounts is the row's OWN book count, the number
-	// GET /api/v1/authors/<id> reports. One call for the whole library, at
-	// index-build time: the suspect bar needs it for every candidate target and
-	// a per-book author read would make a library-scale op N+1.
-	GetAllAuthorBookCounts() (map[int]int, error)
-	GetAuthorByName(name string) (*database.Author, error)
-	GetAuthorByID(id int) (*database.Author, error)
-	CreateAuthor(name string) (*database.Author, error)
-}
-
-// authorPathLinkBookStore is the book half: the library sweep, the per-book
-// re-read, the two writes and the undo-ledger row.
-type authorPathLinkBookStore interface {
-	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
-	GetBookByID(id string) (*database.Book, error)
-	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
-	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-	CreateOperationChange(change *database.OperationChange) error
-}
-
-// authorPathLinkStore is the narrow store surface this op needs, per the
-// store_slices.go convention of listing methods explicitly. It is the
-// composition of the two halves above, so neither piece is wider than the
-// interfacebloat bar and each call site can name only the half it uses.
-type authorPathLinkStore interface {
-	authorPathLinkAuthorStore
-	authorPathLinkBookStore
-}
-
 // authorPathLinkHelp is the def's Description, which the native kind carries as
 // its Help.
 const authorPathLinkHelp = "Books with NO author id whose PATH names an author: the person-shaped path segment " +
@@ -1252,12 +1218,8 @@ type authorPathLinkCreator struct {
 	wouldMint map[string]*authorPathLinkCreatedAuthor
 }
 
-func newAuthorPathLinkCreator(store authorPathLinkAuthorStore, dryRun bool) *authorPathLinkCreator {
-	return newAuthorPathLinkCreatorVia(store, store, dryRun)
-}
-
-// newAuthorPathLinkCreatorVia is newAuthorPathLinkCreator with the author write
-// split from the author read, so a native run mints through its gated writer.
+// newAuthorPathLinkCreatorVia builds the creator with the author write split
+// from the author read, so a native run mints through its gated writer.
 func newAuthorPathLinkCreatorVia(store interface {
 	GetAuthorByName(name string) (*database.Author, error)
 }, writer interface {
