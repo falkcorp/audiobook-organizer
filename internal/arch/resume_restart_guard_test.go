@@ -1,7 +1,7 @@
 // file: internal/arch/resume_restart_guard_test.go
-// version: 1.1.0
+// version: 1.0.1
 // guid: 87f31afd-8f18-4eed-8095-a44c9e9c30bf
-// last-edited: 2026-11-13
+// last-edited: 2026-11-03
 
 package arch
 
@@ -226,6 +226,7 @@ var restartWithoutCheckpoint = map[string]string{
 	"internal/plugins/maintenance/author_duplicate_merge.go maintenance.author-duplicate-merge":       "after a merge the group has one live row, so a re-run reports nothing to do; short run",
 	"internal/plugins/maintenance/author_id_repair.go maintenance.author-id-repair":                   "after an apply nothing dangles and each name cluster has one row, so a restart re-plans from current state",
 	"internal/plugins/maintenance/author_path_link.go maintenance.author-path-link":                   "a linked book has a non-nil scalar author and leaves the population, so a restart re-plans from current state",
+	"internal/plugins/maintenance/book_hash_index_repair.go bookHashIndexRepairID":                    "an index check-and-repair that writes only missing keys and deletes only extra ones; documented idempotent",
 	"internal/plugins/maintenance/dedupe_book_file_rows.go maintenance.dedupe-book-file-rows":         "a removed duplicate row no longer matches the selection; the ledger of deleted rows is journaled per run",
 	"internal/plugins/maintenance/series_phantom_repair.go seriesPhantomRepairOpID":                   "a repaired phantom series id no longer lacks a series row, so the report/repair selection shrinks as it works",
 	"internal/plugins/maintenance/repair_transcribe_status.go maintenance.repair-transcribe-status":   "a repaired row leaves the transport-failure state it is selected by; it never calls Whisper",

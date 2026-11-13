@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/booksig_sidecar_migrate.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2c8f6a90-4b17-4e35-9d82-1a5e703c6f84
 // last-edited: 2026-11-13
 
@@ -72,11 +72,11 @@ const bookSigMigratePageSize = 200
 // warmup numbers.
 const bookSigInlineBytesPerBook = 22 * 1024
 
-// bookSigSidecarMigrateID is HEAD's def ID; the native kind is "books." + it.
-const bookSigSidecarMigrateID = "maintenance.booksig-sidecar-migrate"
+// t6g2BookSigSidecarMigrateID is HEAD's def ID; the native kind is "books." + it.
+const t6g2BookSigSidecarMigrateID = "maintenance.booksig-sidecar-migrate"
 
 // t6g2KindBookSigSidecarMigrate is the native kind (F5-07, rule R3).
-const t6g2KindBookSigSidecarMigrate tasks.Kind = "books." + bookSigSidecarMigrateID
+const t6g2KindBookSigSidecarMigrate tasks.Kind = "books." + t6g2BookSigSidecarMigrateID
 
 // DisplayName and Description of the def, shared by HEAD's def and the native
 // kind so the two cannot drift.
@@ -96,7 +96,7 @@ const (
 
 func (p *Plugin) bookSigSidecarMigrateDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              bookSigSidecarMigrateID,
+		ID:              t6g2BookSigSidecarMigrateID,
 		Preview:         sdk.PreviewSpec{Params: bookSigSidecarMigrateParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
@@ -104,7 +104,7 @@ func (p *Plugin) bookSigSidecarMigrateDef() sdk.OperationDef {
 		Description:     t6g2BookSigSidecarMigrateHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  bookSigSidecarMigrateID,
+		ConcurrencyKey:  t6g2BookSigSidecarMigrateID,
 		Cancellable:     true,
 		// Isolate means out-of-process, and Pebble is single-writer: a child
 		// cannot reopen the database. Must stay false.
@@ -123,7 +123,7 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	dryRun, err := opmode.ResolveDryRun(bookSigSidecarMigrateID, params.DryRunSnake, params.DryRun)
+	dryRun, err := opmode.ResolveDryRun(t6g2BookSigSidecarMigrateID, params.DryRunSnake, params.DryRun)
 	if err != nil {
 		return err
 	}
@@ -204,7 +204,15 @@ func runBookSigSidecarMigrateCore(ctx context.Context, limit int, dryRun bool, e
 				return ctx.Err()
 			}
 			examined.Add(1)
-			outcome, err := env.Writer.MigrateBookSigToSidecar(id, dryRun)
+			// A preview classifies through the store (a read): the writer does
+			// not run in a preview, and must not be asked to.
+			var outcome database.BookSigMigrateOutcome
+			var err error
+			if dryRun {
+				outcome, err = store.ClassifyBookSigMigration(id)
+			} else {
+				outcome, err = env.Writer.MigrateBookSigToSidecar(id)
+			}
 			if err != nil {
 				// One unreadable or malformed row must not abort a
 				// whole-library pass; it is counted and reported, and the row
@@ -278,7 +286,7 @@ func t6g2BookSigSidecarMigrateMeta() t6g2Meta {
 		Resume:   tasks.ResumeDrop,
 		Priority: tasks.PriorityLow,
 		Timeout:  90 * time.Minute,
-		Key:      bookSigSidecarMigrateID,
+		Key:      t6g2BookSigSidecarMigrateID,
 	}
 }
 
@@ -292,7 +300,7 @@ func t6g2BookSigSidecarMigrateKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.
 	m := t6g2BookSigSidecarMigrateMeta()
 	par := t6g2BookSigSidecarMigrateParallelism()
 	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
 		var params t6g2BookSigSidecarMigrateNativeParams

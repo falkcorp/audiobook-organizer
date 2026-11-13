@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_shape_report.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3f0c5a71-8d4e-4a92-9b16-2c7e5d40ab31
 // last-edited: 2026-11-13
 
@@ -598,17 +598,10 @@ func shardGroups(groups []bookShapeGroup, n int) [][]bookShapeGroup {
 	return shards
 }
 
-// buildBookShapeReport performs the sweep and RETURNS the report, so the counts
-// and findings can be asserted as values rather than scraped from log lines.
-func buildBookShapeReport(ctx context.Context, store bookShapeStore, params bookShapeReportParams, reporter sdk.Reporter) (bookShapeReport, error) {
-	env := headT6G2Env(nil, reporter)
-	env.Items = headT6G2Items(reporter, bookShapeConcurrency(params.Concurrency))
-	return buildBookShapeReportCore(ctx, store, params, env)
-}
-
-// buildBookShapeReportCore is buildBookShapeReport over an env: its pool is
-// env.Items (the shell binds the worker count), its progress and liveness are
-// the env's. store is the read side only.
+// buildBookShapeReportCore performs the sweep and RETURNS the report, so the
+// counts and findings can be asserted as values rather than scraped from log
+// lines. Its pool is env.Items (the shell binds the worker count), its progress
+// and liveness are the env's. store is the read side only.
 func buildBookShapeReportCore(ctx context.Context, store bookShapeStore, params bookShapeReportParams, env t6g2Env) (bookShapeReport, error) {
 	log := env.Logger
 	log.Info("book-shape-report start",
@@ -1240,7 +1233,7 @@ func t6g2BookShapeReportParallelism(params bookShapeReportParams) tasks.Parallel
 func t6g2BookShapeReportKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	m := t6g2BookShapeReportMeta()
 	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
 		var params bookShapeReportParams

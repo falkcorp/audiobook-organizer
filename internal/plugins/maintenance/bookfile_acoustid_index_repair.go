@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/bookfile_acoustid_index_repair.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b4e1d27-5f90-4c63-a2d8-e07c91b3f5a4
 // last-edited: 2026-11-13
 
@@ -215,6 +215,7 @@ func (p *Plugin) runBookFileAcoustIDIndexRepair(ctx context.Context, raw json.Ra
 		return fmt.Errorf("database not initialized")
 	}
 	env := headT6G2Wire(headT6G2Env(p, reporter), p, store)
+	env.Checkpoint = reporter.Checkpoint
 	env.Items = headT6G2Items(reporter, runtime.NumCPU())
 	_, err = runBookFileAcoustIDIndexRepairCore(ctx, t6g2AcoustIDRepairRun{Params: params, DryRun: dryRun}, env)
 	return err
@@ -269,6 +270,8 @@ func runBookFileAcoustIDIndexRepairCore(ctx context.Context, run t6g2AcoustIDRep
 			break
 		}
 		after = next
+		// The page is fully judged (and deleted, live). Persist the cursor and
+		// the counts; a failed save costs only a re-judged page on restart.
 		params.ResumeAfter, params.Done = after, tally.done()
 		if err := env.Checkpoint(params); err != nil {
 			env.Log(slog.LevelWarn, "Could not save the resume point; a restart would redo more",
@@ -387,7 +390,7 @@ func t6g2BookFileAcoustIDIndexRepairKind(deps t6g2Deps, sched func(tasks.Kind) *
 	m := t6g2BookFileAcoustIDIndexRepairMeta()
 	par := t6g2BookFileAcoustIDIndexRepairParallelism()
 	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
 		dryRun := !t6g2Live(rc)

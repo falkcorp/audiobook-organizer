@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
 // last-edited: 2026-11-13
 
@@ -184,11 +184,11 @@ type folderBuildReport struct {
 	Books               []folderBuildBook `json:"books"`
 }
 
-// buildFolderBookFilesID is HEAD's def ID; the native kind is "books." + it.
-const buildFolderBookFilesID = "maintenance.build-folder-book-files"
+// t6g2BuildFolderBookFilesID is HEAD's def ID; the native kind is "books." + it.
+const t6g2BuildFolderBookFilesID = "maintenance.build-folder-book-files"
 
 // t6g2KindBuildFolderBookFiles is the native kind (F5-07, rule R3).
-const t6g2KindBuildFolderBookFiles tasks.Kind = "books." + buildFolderBookFilesID
+const t6g2KindBuildFolderBookFiles tasks.Kind = "books." + t6g2BuildFolderBookFilesID
 
 // DisplayName and Description of the def, shared by HEAD's def and the native
 // kind so the two cannot drift.
@@ -203,7 +203,7 @@ const (
 
 func (p *Plugin) buildFolderBookFilesDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              buildFolderBookFilesID,
+		ID:              t6g2BuildFolderBookFilesID,
 		Preview:         sdk.PreviewSpec{Params: folderBuildParams{}},
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
@@ -694,7 +694,7 @@ func t6g2BuildFolderBookFilesMeta() t6g2Meta {
 		Kind:     t6g2KindBuildFolderBookFiles,
 		Title:    t6g2BuildFolderBookFilesTitle,
 		Help:     t6g2BuildFolderBookFilesHelp,
-		Effects:  tasks.Writes(t6g2Res("book_files")...),
+		Effects:  tasks.Writes(t6g2Res("book_files", "books")...),
 		Resume:   tasks.ResumeDrop,
 		Priority: tasks.PriorityNormal,
 		Timeout:  240 * time.Minute,
@@ -714,7 +714,7 @@ func t6g2BuildFolderBookFilesKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.S
 	m := t6g2BuildFolderBookFilesMeta()
 	par := t6g2BuildFolderBookFilesParallelism()
 	run := func(rc *tasks.RC, raw json.RawMessage) (*folderBuildReport, error) {
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "apply", "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return nil, err
 		}
 		var np t6g2BuildFolderBookFilesNativeParams

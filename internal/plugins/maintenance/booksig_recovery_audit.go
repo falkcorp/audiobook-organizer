@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
 // last-edited: 2026-11-13
 
@@ -70,11 +70,11 @@ func (e auditExample) String() string {
 	return fmt.Sprintf("%s (%q) %s NOT recoverable", e.bookID, e.title, e.field)
 }
 
-// bookSigRecoveryAuditID is HEAD's def ID; the native kind is "books." + it.
-const bookSigRecoveryAuditID = "maintenance.booksig-recovery-audit"
+// t6g2BookSigRecoveryAuditID is HEAD's def ID; the native kind is "books." + it.
+const t6g2BookSigRecoveryAuditID = "maintenance.booksig-recovery-audit"
 
 // t6g2KindBookSigRecoveryAudit is the native kind (F5-07, rule R3).
-const t6g2KindBookSigRecoveryAudit tasks.Kind = "books." + bookSigRecoveryAuditID
+const t6g2KindBookSigRecoveryAudit tasks.Kind = "books." + t6g2BookSigRecoveryAuditID
 
 // DisplayName and Description of the def, shared by HEAD's def and the native
 // kind so the two cannot drift.
@@ -93,7 +93,7 @@ const (
 
 func (p *Plugin) bookSigRecoveryAuditDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:              bookSigRecoveryAuditID,
+		ID:              t6g2BookSigRecoveryAuditID,
 		Preview:         sdk.PreviewSpec{Params: bookSigRecoveryAuditParams{}},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
@@ -101,7 +101,7 @@ func (p *Plugin) bookSigRecoveryAuditDef() sdk.OperationDef {
 		Description:     t6g2BookSigRecoveryAuditHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  bookSigRecoveryAuditID,
+		ConcurrencyKey:  t6g2BookSigRecoveryAuditID,
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         60 * time.Minute,
@@ -149,15 +149,11 @@ func (p *Plugin) runBookSigRecoveryAudit(ctx context.Context, raw json.RawMessag
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	dryRun, err := opmode.ResolveDryRun(bookSigRecoveryAuditID, params.DryRunSnake, params.DryRun)
+	dryRun, err := opmode.ResolveDryRun(t6g2BookSigRecoveryAuditID, params.DryRunSnake, params.DryRun)
 	if err != nil {
 		return err
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	env := headT6G2Wire(headT6G2Env(p, reporter), p, store)
+	env := headT6G2Wire(headT6G2Env(p, reporter), p, p.deps.OpsStore())
 	_, err = runBookSigRecoveryAuditCore(ctx, dryRun, env)
 	return err
 }
@@ -172,6 +168,9 @@ func runBookSigRecoveryAuditCore(ctx context.Context, dryRun bool, env t6g2Env) 
 		env.Log(slog.LevelInfo, "APPLY MODE — restoring recoverable fields from book_ver: snapshots (owner-greenlit)")
 	}
 	store := env.Store
+	if store == nil {
+		return t6g2NoResult{}, fmt.Errorf("database not initialized")
+	}
 
 	// Enumerate book IDs only (memdb-safe, ~a few MB of strings for the whole
 	// library). We deliberately do NOT materialize full Book structs for the
@@ -437,14 +436,14 @@ func t6g2BookSigRecoveryAuditMeta() t6g2Meta {
 		Resume:   tasks.ResumeDrop,
 		Priority: tasks.PriorityLow,
 		Timeout:  60 * time.Minute,
-		Key:      bookSigRecoveryAuditID,
+		Key:      t6g2BookSigRecoveryAuditID,
 	}
 }
 
 func t6g2BookSigRecoveryAuditKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	m := t6g2BookSigRecoveryAuditMeta()
 	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
 		env, err := t6g2NativeEnv(rc, deps, tasks.Parallelism{})

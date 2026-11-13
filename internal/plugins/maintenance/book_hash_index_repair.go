@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_hash_index_repair.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6f2a8c15-4d93-4e70-b1a6-3c9e0d7b5a28
 // last-edited: 2026-11-13
 
@@ -270,7 +270,7 @@ func t6g2BookHashIndexRepairMeta() t6g2Meta {
 func t6g2BookHashIndexRepairKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	m := t6g2BookHashIndexRepairMeta()
 	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
 		var params t6g2BookHashIndexRepairParams

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: f05c0cfb-33a6-46e3-a29b-4ab6825825dc
 // last-edited: 2026-11-13
 
@@ -49,8 +49,9 @@ const signalT6G2MemDB tasks.ReadySignal = "books.memdb"
 // t6g2SettingsManageScopes is the route requirement of HEAD's settings.manage
 // atom (05-rbac 6.1, internal/books.AtomTable), the permission every def of this
 // group gets because none sets Permissions. internal/books imports this package
-// through its import graph, so the table cannot be read from here; the external
-// test TestT6G2Kinds_StartRequirementMatchesAtomTable fails when the two drift.
+// through its import graph, so the table cannot be imported from here;
+// TestT6G2Kinds_MatchHEADDefs parses ../../books/atoms.go and fails when the two
+// drift.
 var t6g2SettingsManageScopes = []rbac.Permission{
 	"core:settings.manage", "books:settings.manage", "core:tasks.manage", "core:system.view",
 	"core:system.manage", "core:library.manage", "core:library.browse", "core:integrations.manage",
@@ -158,6 +159,10 @@ type t6g2IndexReads interface {
 	CheckBookHashIndex(ctx context.Context, progress database.BookHashIndexProgress) (t6g2HashIndexRun, error)
 	ScanBookFileAcoustIDIndex(after string, limit int) ([]database.BookFileAcoustIDEntry, string, error)
 	JudgeBookFileAcoustIDEntry(e database.BookFileAcoustIDEntry) (database.BookFileAcoustIDVerdict, error)
+	// ClassifyBookSigMigration is the preview of MigrateBookSigToSidecar: the
+	// outcome a live migration of the book would have, with nothing written. It
+	// is a read, so a preview run (whose writer refuses to run) can use it.
+	ClassifyBookSigMigration(id string) (database.BookSigMigrateOutcome, error)
 }
 
 type t6g2StoreProbe interface {
@@ -199,9 +204,9 @@ type t6g2RowWriter interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	SaveChaptersForBook(bookID string, chapters []database.Chapter) error
 	BatchCreateBookFiles(files []*database.BookFile) error
-	// MigrateBookSigToSidecar takes its own dryRun: a preview classifies and
-	// writes nothing (see the seams note on how NewWriter must treat it).
-	MigrateBookSigToSidecar(id string, dryRun bool) (database.BookSigMigrateOutcome, error)
+	// MigrateBookSigToSidecar is live-only: a preview classifies through
+	// t6g2Store.ClassifyBookSigMigration, never through the writer.
+	MigrateBookSigToSidecar(id string) (database.BookSigMigrateOutcome, error)
 }
 
 // t6g2Writer is every write the group's cores make.
@@ -267,7 +272,11 @@ type t6g2Env struct {
 // HEAD's side of the env.
 // ---------------------------------------------------------------------------
 
-// headT6G2Env is the env of a v2 run: the reporter's own methods.
+// headT6G2Env is the env of a v2 run: the reporter's own methods. It leaves
+// Checkpoint nil: only a shell that checkpoints sets it (t6g2HeadBootEnv, the
+// acoustid and chapters shells), because the resume-restart guard reads
+// reporter.Checkpoint calls to tell a def that checkpoints from one that does
+// not.
 func headT6G2Env(p *Plugin, reporter sdk.Reporter) t6g2Env {
 	return t6g2Env{
 		Log:    func(l slog.Level, m string, a ...slog.Attr) { _ = reporter.Log(l, m, a...) },
@@ -276,9 +285,8 @@ func headT6G2Env(p *Plugin, reporter sdk.Reporter) t6g2Env {
 		Progress: func(done, total int, msg string) {
 			_ = reporter.UpdateProgress(done, total, msg)
 		},
-		Touch:      func() { opsregistry.TouchLiveness(reporter) },
-		Checkpoint: reporter.Checkpoint,
-		Continue:   opsregistry.ErrContinueInPlace,
+		Touch:    func() { opsregistry.TouchLiveness(reporter) },
+		Continue: opsregistry.ErrContinueInPlace,
 		NewYieldDue: func(ctx context.Context) func() bool {
 			return newYieldDue(ctx, bootYieldMargin)
 		},
@@ -393,6 +401,14 @@ func (s headT6G2Store) JudgeBookFileAcoustIDEntry(e database.BookFileAcoustIDEnt
 		return 0, t6g2Unsupported(s, t6g2CapAcoustIDRepair)
 	}
 	return r.JudgeBookFileAcoustIDEntry(e)
+}
+
+func (s headT6G2Store) ClassifyBookSigMigration(id string) (database.BookSigMigrateOutcome, error) {
+	m := database.AsBookSigMigrateStore(s.ops)
+	if m == nil {
+		return 0, t6g2Unsupported(s, t6g2CapSigMigrate)
+	}
+	return m.MigrateBookSigToSidecar(id, true)
 }
 
 func (s headT6G2Store) Describe() string { return fmt.Sprintf("%T", s.ops) }
@@ -515,18 +531,23 @@ func (w headT6G2Writer) BatchCreateBookFiles(files []*database.BookFile) error {
 	return w.ops.BatchCreateBookFiles(files)
 }
 
-func (w headT6G2Writer) MigrateBookSigToSidecar(id string, dryRun bool) (database.BookSigMigrateOutcome, error) {
+func (w headT6G2Writer) MigrateBookSigToSidecar(id string) (database.BookSigMigrateOutcome, error) {
 	m := database.AsBookSigMigrateStore(w.ops)
 	if m == nil {
 		return 0, t6g2Unsupported(headT6G2Store{w.ops}, t6g2CapSigMigrate)
 	}
-	return m.MigrateBookSigToSidecar(id, dryRun)
+	return m.MigrateBookSigToSidecar(id, false)
 }
 
 // headT6G2Wire fills the env's store and writer from the plugin's deps, for a
-// def whose HEAD shell needs them. A nil OpsStore is the caller's "database not
-// initialized" check, made before this.
+// def whose HEAD shell needs them. A nil OpsStore leaves both unset: a core
+// that needs a store checks env.Store for nil at the point HEAD's body checked
+// for "database not initialized", so the refusals keep HEAD's order (a shell
+// that checks first is wrong where HEAD validated params or logged before it).
 func headT6G2Wire(env t6g2Env, p *Plugin, ops OpsStore) t6g2Env {
+	if ops == nil {
+		return env
+	}
 	env.Store = headT6G2Store{ops: ops}
 	env.Writer = headT6G2Writer{deps: p.deps, ops: ops}
 	return env
@@ -599,19 +620,34 @@ func t6g2NativeEnv(rc *tasks.RC, deps t6g2Deps, par tasks.Parallelism) (t6g2Env,
 // for, a contiguous-completion watermark callback, in t6g2Watermark.
 func t6g2NativeItems(rc *tasks.RC, par tasks.Parallelism) t6g2Items {
 	return func(_ context.Context, n int, loop t6g2Loop, fn func(context.Context, int) error) error {
+		if n == 0 {
+			return nil
+		}
+		// The denominator is the ORIGINAL length, pinned the way HEAD's RunItems
+		// pins it on a resume, so a resumed run reports 4200/14000 and not the
+		// size of the remainder.
+		total := loop.ProgressTotal
+		if total == 0 {
+			total = n
+		}
 		from := min(max(loop.ResumeFrom, 0), n)
 		if from >= n {
+			if loop.ResumeFrom > 0 {
+				// Everything was done by the previous attempt: report the work as
+				// complete so the bar does not sit at a stale value.
+				rc.Progress().Set(int64(total), tasks.Known(int64(total)))
+				rc.Progress().Note("resumed: all items already complete")
+			}
 			return nil
 		}
 		idx := make([]int, 0, n-from)
 		for i := from; i < n; i++ {
 			idx = append(idx, i)
 		}
-		// A resumed loop keeps the original numbering, as HEAD's RunItems does.
-		total := loop.ProgressTotal
-		if total == 0 && from > 0 {
-			total = n
-		}
+		// ProgressBase and ProgressTotal put the pool's progress on the walk's
+		// absolute numbering (position in the whole candidate list), the same
+		// numbers the walk reports through env.Progress, so the two writers
+		// never make the bar jump between schemes.
 		opts := tasks.ItemsOptions[int]{
 			OnError:       tasks.FailFast,
 			ProgressBase:  loop.ProgressOffset + from,
@@ -721,15 +757,18 @@ func t6g2RefuseNotLive(rc *tasks.RC, kind tasks.Kind) error {
 }
 
 // t6g2RefuseModeKeys is 05-tasks 5T.3.7 mode contract item 1: params carry no
-// key the run's mode replaces. A requeue starts with none; keys are compared
-// case-insensitively because the params decode with encoding/json.
-func t6g2RefuseModeKeys(kind tasks.Kind, raw []byte, keys ...string) error {
+// key the run's mode replaces. The set is fixed for every kind of the group
+// (dry_run, dryRun and apply), including those whose HEAD params never had the
+// key: a native run's direction comes from the start request alone. A requeue
+// starts with none; keys are compared case-insensitively because the params
+// decode with encoding/json.
+func t6g2RefuseModeKeys(kind tasks.Kind, raw []byte) error {
 	m, err := t6g2ParamObject(kind, raw)
 	if err != nil {
 		return err
 	}
 	for key := range m {
-		for _, banned := range keys {
+		for _, banned := range t6g2ModeKeys {
 			if strings.EqualFold(key, banned) {
 				return fmt.Errorf("%s: params carry %q; the run's mode comes from the start request, not params", kind, key)
 			}
@@ -737,6 +776,9 @@ func t6g2RefuseModeKeys(kind tasks.Kind, raw []byte, keys ...string) error {
 	}
 	return nil
 }
+
+// t6g2ModeKeys are the params keys a native run refuses.
+var t6g2ModeKeys = []string{"dry_run", "dryRun", "apply"}
 
 // t6g2ParamObject decodes params as a JSON object; empty and null params are an
 // empty object.

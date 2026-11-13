@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
 // last-edited: 2026-11-13
 
@@ -229,11 +229,11 @@ type chapterPersister interface {
 	SaveChaptersForBook(bookID string, chapters []database.Chapter) error
 }
 
-// chaptersBackfillID is HEAD's def ID; the native kind is "books." + it.
-const chaptersBackfillID = "maintenance.chapters-backfill"
+// t6g2ChaptersBackfillID is HEAD's def ID; the native kind is "books." + it.
+const t6g2ChaptersBackfillID = "maintenance.chapters-backfill"
 
 // t6g2KindChaptersBackfill is the native kind (F5-07, rule R3).
-const t6g2KindChaptersBackfill tasks.Kind = "books." + chaptersBackfillID
+const t6g2KindChaptersBackfill tasks.Kind = "books." + t6g2ChaptersBackfillID
 
 // DisplayName and Description of the def, shared by HEAD's def and the native
 // kind so the two cannot drift.
@@ -251,7 +251,7 @@ const (
 
 func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          chaptersBackfillID,
+		ID:          t6g2ChaptersBackfillID,
 		Preview:     sdk.PreviewSpec{Params: chaptersBackfillParams{}},
 		Liveness:    sdk.LivenessRunItems,
 		Plugin:      "maintenance",
@@ -370,11 +370,8 @@ func (p *Plugin) runChaptersBackfill(ctx context.Context, raw json.RawMessage, r
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	env := headT6G2Wire(headT6G2Env(p, reporter), p, store)
+	env := headT6G2Wire(headT6G2Env(p, reporter), p, p.deps.OpsStore())
+	env.Checkpoint = reporter.Checkpoint
 	env.Items = headT6G2Items(reporter, runtime.NumCPU())
 	_, err := runChaptersBackfillCore(ctx, params, env)
 	return err
@@ -439,6 +436,9 @@ func runChaptersBackfillCore(ctx context.Context, params chaptersBackfillParams,
 	}
 	env.Log(slog.LevelInfo, fmt.Sprintf("using ffprobe at %s", ffprobePath))
 
+	if store == nil {
+		return t6g2NoResult{}, fmt.Errorf("database not initialized")
+	}
 	if !store.Supports(t6g2CapChapters) {
 		return t6g2NoResult{}, fmt.Errorf("cannot run: store is %s, which does not persist chapters "+
 			"(and no store in its decorator chain does)", store.Describe())
@@ -710,7 +710,7 @@ func t6g2ChaptersBackfillKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Sched
 	m := t6g2ChaptersBackfillMeta()
 	par := t6g2ChaptersBackfillParallelism()
 	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "apply", "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
 		params := chaptersBackfillParams{}

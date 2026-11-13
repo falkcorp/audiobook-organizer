@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
 // last-edited: 2026-11-13
 
@@ -155,10 +155,6 @@ func runBookAtPathIndexVerifyCore(ctx context.Context, _ t6g2NoParams, env t6g2E
 			"(and no store in its decorator chain does)", env.Store.Describe())
 	}
 	return t6g2NoResult{}, t6g2VerifyBookAtPathIndex(ctx, env.Store, env)
-}
-
-func verifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, reporter sdk.Reporter) error {
-	return t6g2VerifyBookAtPathIndex(ctx, v, headT6G2Env(nil, reporter))
 }
 
 func t6g2VerifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, env t6g2Env) error {
@@ -375,7 +371,7 @@ func t6g2BookAtPathIndexBackfillMeta() t6g2Meta {
 func t6g2BookAtPathIndexVerifyKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	m := t6g2BookAtPathIndexVerifyMeta()
 	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
 		env, err := t6g2NativeEnv(rc, deps, tasks.Parallelism{})
@@ -394,7 +390,7 @@ func t6g2BookAtPathIndexBackfillKind(deps t6g2Deps, sched func(tasks.Kind) *task
 		if err := t6g2RefuseNotLive(rc, m.Kind); err != nil {
 			return t6g2NoResult{}, err
 		}
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
 		var params bookAtPathBackfillParams

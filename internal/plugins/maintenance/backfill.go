@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
 // last-edited: 2026-11-13
 
@@ -73,9 +73,9 @@ var bootYieldMargin = 5 * time.Minute
 // run at PriorityLow beside user work. The transcode is a full AAC re-encode,
 // so it gets the smallest.
 const (
-	bootExternalIDWorkers = 1
-	bootWalkWorkers       = 4
-	bootTranscodeWorkers  = 2
+	t6g2BootExternalIDWorkers = 1
+	bootWalkWorkers           = 4
+	bootTranscodeWorkers      = 2
 )
 
 // DisplayName and Description of the four defs, shared by HEAD's def and the
@@ -111,19 +111,7 @@ type quietReporter struct{ sdk.Reporter }
 func (quietReporter) UpdateProgress(int, int, string) error { return nil }
 func (quietReporter) SetCurrentItem(string)                 {}
 
-// bootWalkRun builds the resume plumbing of one attempt for HEAD's shells: the
-// saved position from params, a Checkpoint that persists params with an updated
-// position (reporter.Checkpoint, the registry's one checkpoint format), the
-// worker pool (opsregistry.RunItems; Concurrency is set, it defaults to one),
-// and, when canYield, a YieldDue that fires near the deadline. It is
-// t6g2BootWalkRun over HEAD's env.
-func bootWalkRun(ctx context.Context, reporter sdk.Reporter, params bootBackfillParams, workers int, canYield bool) walkresume.Run {
-	env := headT6G2Env(nil, reporter)
-	env.Items = headT6G2Items(quietReporter{reporter}, workers)
-	return t6g2BootWalkRun(ctx, env, params, canYield)
-}
-
-// t6g2BootWalkRun is the resume plumbing over an env, shared by HEAD's shells
+// t6g2BootWalkRun is the resume plumbing of one attempt over an env, shared by HEAD's shells
 // and the native ones: Checkpoint persists params with the position through
 // env.Checkpoint, Exec is env.Items, and YieldDue (when canYield) is the env's.
 func t6g2BootWalkRun(ctx context.Context, env t6g2Env, params bootBackfillParams, canYield bool) walkresume.Run {
@@ -219,15 +207,16 @@ func (p *Plugin) runExternalIDBackfill(ctx context.Context, raw json.RawMessage,
 	if err != nil {
 		return err
 	}
-	_, err = runExternalIDBackfillCore(ctx, params, p.headBootEnv(reporter, bootExternalIDWorkers))
+	_, err = runExternalIDBackfillCore(ctx, params, p.t6g2HeadBootEnv(reporter, t6g2BootExternalIDWorkers))
 	return err
 }
 
-// headBootEnv is the env of a boot op under HEAD's shell: the walk's pool is
+// t6g2HeadBootEnv is the env of a boot op under HEAD's shell: the walk's pool is
 // quiet (the walk reports its own absolute progress) with the op's worker
 // count, and the writer is the plugin's ServerDeps.
-func (p *Plugin) headBootEnv(reporter sdk.Reporter, workers int) t6g2Env {
+func (p *Plugin) t6g2HeadBootEnv(reporter sdk.Reporter, workers int) t6g2Env {
 	env := headT6G2Env(p, reporter)
+	env.Checkpoint = reporter.Checkpoint
 	env.Items = headT6G2Items(quietReporter{reporter}, workers)
 	env.Writer = headT6G2Writer{deps: p.deps}
 	return env
@@ -280,7 +269,7 @@ func (p *Plugin) runMovementAtomCleanup(ctx context.Context, raw json.RawMessage
 	if err != nil {
 		return err
 	}
-	_, err = runMovementAtomCleanupCore(ctx, params, p.headBootEnv(reporter, bootWalkWorkers))
+	_, err = runMovementAtomCleanupCore(ctx, params, p.t6g2HeadBootEnv(reporter, bootWalkWorkers))
 	return err
 }
 
@@ -325,7 +314,7 @@ func (p *Plugin) runMalformedM4BRemux(ctx context.Context, raw json.RawMessage, 
 	if err != nil {
 		return err
 	}
-	_, err = runMalformedM4BRemuxCore(ctx, params, p.headBootEnv(reporter, bootWalkWorkers))
+	_, err = runMalformedM4BRemuxCore(ctx, params, p.t6g2HeadBootEnv(reporter, bootWalkWorkers))
 	return err
 }
 
@@ -389,7 +378,7 @@ func (p *Plugin) runMalformedM4BTranscode(ctx context.Context, raw json.RawMessa
 	if err != nil {
 		return err
 	}
-	_, err = runMalformedM4BTranscodeCore(ctx, params, p.headBootEnv(reporter, bootTranscodeWorkers))
+	_, err = runMalformedM4BTranscodeCore(ctx, params, p.t6g2HeadBootEnv(reporter, bootTranscodeWorkers))
 	return err
 }
 
@@ -438,7 +427,7 @@ func runMalformedM4BTranscodeCore(ctx context.Context, params bootBackfillParams
 type t6g2NoResult = struct{}
 
 func t6g2ExternalIDBackfillParallelism() tasks.Parallelism {
-	return tasks.Fixed(bootExternalIDWorkers, "one walker: the book pass and the iTunes XML pass checkpoint a single cursor")
+	return tasks.Fixed(t6g2BootExternalIDWorkers, "one walker: the book pass and the iTunes XML pass checkpoint a single cursor")
 }
 
 func t6g2MovementAtomCleanupParallelism() tasks.Parallelism {
@@ -489,7 +478,7 @@ func t6g2MalformedM4BRemuxMeta() t6g2Meta {
 		Kind:     t6g2KindMalformedM4BRemux,
 		Title:    t6g2MalformedM4BRemuxTitle,
 		Help:     t6g2MalformedM4BRemuxHelp,
-		Effects:  tasks.Writes(t6g2Res("files", "book_files", "settings")...),
+		Effects:  tasks.Writes(t6g2Res("files", "book_files", "settings", "books")...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  120 * time.Minute,
@@ -520,7 +509,7 @@ func t6g2BootKind(m t6g2Meta, par tasks.Parallelism, deps t6g2Deps, sched func(t
 		if err := t6g2RefuseNotLive(rc, m.Kind); err != nil {
 			return t6g2NoResult{}, err
 		}
-		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
 		params, err := decodeBootBackfillParams(string(m.Kind), raw)
