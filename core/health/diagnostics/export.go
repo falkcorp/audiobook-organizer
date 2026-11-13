@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/export.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7102b260-8f02-42cc-80dd-78ab03c55cec
 // last-edited: 2026-11-13
 
@@ -35,9 +35,12 @@ type ExportParams struct {
 	// was made (PermsOf), so the bundle holds what the actor could read then
 	// and not what a later role change leaves them (05-health 5H.3.5). The
 	// start route always sets it, an empty list when the actor holds nothing;
-	// nil means no snapshot was taken and the run resolves the actor's
-	// permissions when it starts. It is deliberately not omitempty: an empty
-	// snapshot must not read back as none.
+	// nil means no snapshot was taken. The run always resolves the actor's
+	// permissions when it starts and a snapshot only NARROWS that set (a
+	// permission is read only if the actor holds it now and the snapshot lists
+	// it), because task params are client-supplied and must never grant.
+	// It is deliberately not omitempty: an empty snapshot must not read back
+	// as none.
 	Perms []string `json:"perms"`
 	// Sections, when not empty, names the sections to write
 	// ("<moduleID>.<name>"); empty means every section the viewer may read. The

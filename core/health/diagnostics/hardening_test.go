@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
 // last-edited: 2026-11-13
 
@@ -20,6 +20,8 @@ import (
 
 	"github.com/falkcorp/mediacore/health/diagnostics"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/tasks"
+	"github.com/falkcorp/mediacore/tasks/taskstest"
 )
 
 // exporterWith builds an Exporter over the fixture with cfg adjusted.
@@ -427,5 +429,85 @@ func TestDiagnostics_StreamManifestDescribesTheView(t *testing.T) {
 	}
 	if !slices.Contains(m.Omitted, "batcave.vault") {
 		t.Errorf("omitted = %v, want the dropped section", m.Omitted)
+	}
+}
+
+// TestDiagnostics_WidenedSnapshotIsClamped: ExportParams.Perms are task params,
+// which the start request supplies, so a snapshot that lists more than the actor
+// holds now must not grant it. The bundle holds the intersection.
+func TestDiagnostics_WidenedSnapshotIsClamped(t *testing.T) {
+	f := newFixture(t)
+	vault := contributor{{Name: "batcave.vault", Perm: rbac.Need("core:admin"), Write: func(_ context.Context, w diagnostics.Writer, _ diagnostics.Viewer) error {
+		return w.JSON("d.json", "x")
+	}}}
+	// The actor holds only core:system.manage.
+	e := f.exporter(viewerOf("core:system.manage"), diagnostics.CoreSources{}, vault)
+
+	res, err := f.build(e, "run-widen", diagnostics.ExportParams{ActorID: "robin", Perms: []string{"core:system.manage", "core:admin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := f.zipFiles(res.File)
+	if files["batcave.vault/d.json"] != nil {
+		t.Error("a snapshot listing core:admin granted it to an actor who does not hold it")
+	}
+	if m := manifestOf(t, files); !slices.Equal(m.Omitted, []string{"batcave.vault"}) {
+		t.Errorf("omitted = %v, want the admin-only section", m.Omitted)
+	}
+
+	// Narrowing still works: an actor who holds both, with a snapshot of one.
+	e = f.exporter(viewerOf("core:system.manage", "core:admin"), diagnostics.CoreSources{}, vault)
+	res, err = f.build(e, "run-narrow", diagnostics.ExportParams{ActorID: "robin", Perms: []string{"core:system.manage"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.zipFiles(res.File)["batcave.vault/d.json"] != nil {
+		t.Error("a narrower snapshot did not narrow")
+	}
+
+	// An actor who no longer resolves fails the run closed, snapshot or not.
+	gone := func(context.Context, string) (diagnostics.Viewer, error) {
+		return diagnostics.Viewer{}, errors.New("no such actor")
+	}
+	e = f.exporter(gone, diagnostics.CoreSources{}, vault)
+	if _, err := f.build(e, "run-gone", diagnostics.ExportParams{ActorID: "robin", Perms: []string{"core:admin"}}); err == nil {
+		t.Error("a run for an actor ViewerFor cannot resolve succeeded on the strength of its snapshot")
+	}
+}
+
+// actorRun is a run host whose run id is a plain name and whose stamped actor
+// the test chooses.
+type actorRun struct {
+	*taskstest.FakeRun
+	id    string
+	actor tasks.Actor
+}
+
+func (a *actorRun) RunID() tasks.RunID { return tasks.RunID(a.id) }
+func (a *actorRun) Actor() tasks.Actor { return a.actor }
+
+// TestDiagnostics_MismatchedActorRefused: params naming an actor other than the
+// executor-stamped one are refused before any file is written; the matching
+// actor, and a system run with no stamped person, are not.
+func TestDiagnostics_MismatchedActorRefused(t *testing.T) {
+	f := newFixture(t)
+	e := f.exporter(viewerOf("core:system.manage"), diagnostics.CoreSources{})
+	run := func(id string, stamped tasks.Actor, p diagnostics.ExportParams) error {
+		rc := tasks.NewRC(&actorRun{FakeRun: taskstest.NewFakeRun(context.Background(), diagnostics.ExportKind), id: id, actor: stamped})
+		_, err := e.Export(rc, p)
+		return err
+	}
+	err := run("run-mismatch", tasks.Actor{UserID: "robin", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce", Perms: []string{"core:system.manage"}})
+	if !errors.Is(err, diagnostics.ErrActorMismatch) {
+		t.Fatalf("err = %v, want ErrActorMismatch", err)
+	}
+	if _, serr := f.root.Stat("run-mismatch.zip"); serr == nil {
+		t.Error("a refused run wrote a bundle")
+	}
+	if err := run("run-match", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}); err != nil {
+		t.Errorf("the stamped actor was refused: %v", err)
+	}
+	if err := run("run-system", tasks.Actor{System: "core"}, diagnostics.ExportParams{ActorID: "bruce"}); err != nil {
+		t.Errorf("a system run with no stamped person was refused: %v", err)
 	}
 }
