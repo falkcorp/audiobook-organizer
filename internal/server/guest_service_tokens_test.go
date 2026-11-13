@@ -810,7 +810,7 @@ func TestGuestToken_PublicLookupAnnouncesTheKeyOnlyWhenItWillBeMinted(t *testing
 
 func TestGuestToken_EmailOptInSendsPostAcceptMail(t *testing.T) {
 	f := newTokenFixture(t)
-	rec := &coretest.Recorder{}
+	rec := &coretest.MailRecorder{}
 	f.srv.mailSenderOverride = rec
 	// Default off: no mail.
 	_, _ = f.acceptGuest(t, strings.Repeat("a", 64), "guesta")

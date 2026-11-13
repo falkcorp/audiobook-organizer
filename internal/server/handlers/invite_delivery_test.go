@@ -33,7 +33,7 @@ const (
 type inviteFixture struct {
 	store  *database.PebbleStore
 	router *gin.Engine
-	rec    *coretest.Recorder
+	rec    *coretest.MailRecorder
 	h      *handlers.UserHandler
 	mailOn bool
 	syncOn bool           // GuestPolicySyncConfigured: accept adds the invitee to the Access guest policy
@@ -61,7 +61,7 @@ func newInviteFixture(t *testing.T) *inviteFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	f := &inviteFixture{store: store, rec: &coretest.Recorder{}, mailOn: true, base: testBase + "/"}
+	f := &inviteFixture{store: store, rec: &coretest.MailRecorder{}, mailOn: true, base: testBase + "/"}
 	f.h = handlers.NewUserHandler(store)
 	f.h.SetInviteDelivery(&handlers.InviteDelivery{
 		Sender: func() imail.Sender {

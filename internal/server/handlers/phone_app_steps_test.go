@@ -109,10 +109,10 @@ func TestInviteEmail_StepsPointAtTheInvitationPage(t *testing.T) {
 }
 
 func TestEmailSendBlocked(t *testing.T) {
-	rec := &coretest.Recorder{}
+	rec := &coretest.MailRecorder{}
 	for _, tt := range []struct {
 		name   string
-		sender *coretest.Recorder
+		sender *coretest.MailRecorder
 		base   string
 		want   string
 	}{
