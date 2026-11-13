@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-13
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
@@ -794,6 +795,9 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 				scenario(t)
 				return
 			}
+			// extract-wav-clips checks the host's decode opt-in before it builds its
+			// writer; pin it on so the run does not depend on the host's environment.
+			t.Setenv(serverdecode.EnvVar, "true")
 			deps, pr := fakeT6G4Deps(t)
 			def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
 			run := &t6g4RunWriter{name: "run"}
