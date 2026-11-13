@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-13
 
@@ -78,8 +78,10 @@ func (r pathRoots) redactPaths(s string) string {
 }
 
 // pathAt returns where the path starting at s[i] ends and what replaces it. A
-// known root names the path first; then a URL route shape (routePrefixes) is
-// left as written; anything else is "<path>".
+// known root locates the extent of the path (a root with spaces in its own
+// name is matched whole); then name decides what the path is called, from its
+// cleaned form. A URL route shape (routePrefixes) is left as written; anything
+// else is "<path>".
 func (r pathRoots) pathAt(s string, i int) (end int, repl string) {
 	for _, root := range r {
 		rest, ok := underRoot(s[i:], root.Path)
@@ -90,14 +92,42 @@ func (r pathRoots) pathAt(s string, i int) (end int, repl string) {
 		if len(tok) < len(root.Path) {
 			tok = s[i : i+len(root.Path)]
 		}
-		return i + len(tok), "<root:" + root.Name + ">" + slashes(tok[len(root.Path):])
+		return i + len(tok), r.name(tok)
 	}
 	run := s[i : i+pathRun(s[i:])]
-	if isRoute(run) {
+	if isRoute(run) && isRoute(filepath.Clean(run)) {
 		return i + len(run), run
 	}
 	tok := trimPathTail(run)
-	return i + len(tok), "<path>"
+	return i + len(tok), r.name(tok)
+}
+
+// name is what a path is called in the bundle: "<root:NAME>/rest" when the
+// path, cleaned, is still under a known root, "<path>" otherwise. The raw text
+// never decides: "/srv/lib/../../home/x" starts with a root and is not under
+// it, and "/srv/lib/../vault/x" is under another. Only the cleaned tail is
+// written, so no ".." survives into the output.
+func (r pathRoots) name(tok string) string {
+	clean := filepath.Clean(tok)
+	for _, root := range r {
+		if rest, ok := cleanUnder(clean, root.Path); ok {
+			return "<root:" + root.Name + ">" + slashes(rest)
+		}
+	}
+	return "<path>"
+}
+
+// cleanUnder reports whether the cleaned path is root itself or below it,
+// returning what follows the root ("" or starting with a separator).
+func cleanUnder(clean, root string) (string, bool) {
+	if len(clean) < len(root) || !pathEqual(clean[:len(root)], root) {
+		return "", false
+	}
+	rest := clean[len(root):]
+	if rest == "" || isPathSep(rest[0]) {
+		return rest, true
+	}
+	return "", false
 }
 
 // routePrefixes are the HTTP subtrees the router mounts: a request line or a
@@ -126,26 +156,24 @@ func isRoute(run string) bool {
 // opposed to a line of prose). When the entire value is one clean absolute path
 // it is replaced as one, spaces and all, so "/Users/bruce/Library/Application
 // Support/app/db" does not leak its tail. A value that is more than that (a
-// second path later in the text, ": " and a message, a quoted string) is prose that starts with a path, and goes to
-// redactPaths so every path in it is rewritten and none of its text is lost to
-// the replacement. A newline, a value that is not path-shaped, and a route
-// take the same road.
+// second path later in the text, ": " and a message, a quoted string) is prose
+// that starts with a path, and goes to redactPaths so every path in it is
+// rewritten and none of its text is lost to the replacement. A newline, a value
+// that is not path-shaped, and a route take the same road. A single path is
+// named from its cleaned form (name), so ".." cannot carry it out of a root.
 func (r pathRoots) redactValue(s string) string {
 	if s == "" || strings.ContainsAny(s, "\n\r") || !absolutePath(s) || !r.singlePath(s) {
 		return r.redactPaths(s)
 	}
 	for _, root := range r {
-		if rest, ok := underRoot(s, root.Path); ok {
-			if rest != "" && !isPathSep(rest[0]) {
-				return r.redactPaths(s) // punctuation after the root: prose
-			}
-			return "<root:" + root.Name + ">" + slashes(rest)
+		if rest, ok := underRoot(s, root.Path); ok && rest != "" && !isPathSep(rest[0]) {
+			return r.redactPaths(s) // punctuation after the root: prose
 		}
 	}
-	if isRoute(s) {
+	if isRoute(s) && isRoute(filepath.Clean(s)) {
 		return r.redactPaths(s)
 	}
-	return "<path>"
+	return r.name(s)
 }
 
 // singlePath reports whether s, which starts as an absolute path, is nothing
@@ -215,12 +243,26 @@ func pathRun(s string) int {
 }
 
 // trimPathTail drops sentence punctuation that follows a path in prose
-// ("open /x/y: no such file", "see /x/y.").
+// ("open /x/y: no such file", "see /x/y."). A final segment made only of dots
+// ("/x/.", "/x/..") is part of the path, not punctuation: stripping it would
+// leave the ".." outside the replacement, where it undoes the cleaning.
 func trimPathTail(tok string) string {
-	for len(tok) > 1 && (strings.HasSuffix(tok, ":") || strings.HasSuffix(tok, ".")) {
+	for len(tok) > 1 {
+		switch {
+		case strings.HasSuffix(tok, ":"):
+		case strings.HasSuffix(tok, ".") && !dotSegment(tok):
+		default:
+			return tok
+		}
 		tok = tok[:len(tok)-1]
 	}
 	return tok
+}
+
+// dotSegment reports whether the last segment of tok is "." or "..".
+func dotSegment(tok string) bool {
+	seg := tok[strings.LastIndexAny(tok, "/\\")+1:]
+	return seg == "." || seg == ".."
 }
 
 // slashes writes a Windows path's remainder with "/", one for each run of

@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
 // last-edited: 2026-11-13
 
@@ -792,7 +792,7 @@ func TestDiagnostics_WholeValuePathRuleOnlyForASinglePath(t *testing.T) {
 
 		"trailing_slash": "<path>",
 		"doubled_slash":  "<path>",
-		"dot_segment":    "<root:lib>/a b/./c",
+		"dot_segment":    "<root:lib>/a b/c", // the cleaned tail is written
 		"dot_outside":    "<path>",
 	}
 	for k, w := range want {
@@ -801,4 +801,69 @@ func TestDiagnostics_WholeValuePathRuleOnlyForASinglePath(t *testing.T) {
 		}
 	}
 	assertNoneOf(t, files, "/home/bruce", "/Users/bruce", "Application Support", "Bruce's", "wayne")
+}
+
+// TestDiagnostics_DotDotCannotCarryAPathOutOfARoot: a path is named from its
+// cleaned form. A raw prefix match called "/srv/lib/../../home/bruce/x" a path
+// in the lib root and wrote the outside path out; now it is "<path>", a ".."
+// that stays inside the root keeps the root's name (with the cleaned tail), a
+// path that resolves into another root takes that root's name, and a route
+// prefix does not shelter a ".." either. The same rule holds in a value, in a
+// JSON log line and in a text log line.
+func TestDiagnostics_DotDotCannotCarryAPathOutOfARoot(t *testing.T) {
+	roots := []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}, {Name: "vault", Path: "/srv/vault"}}
+	cases := []struct{ in, want string }{
+		{"/srv/lib/../../home/bruce/x", "<path>"},
+		{"/srv/lib/./../etc/passwd", "<path>"},
+		{"/srv/lib//..//home/bruce", "<path>"},
+		{"/srv/lib/..", "<path>"},
+		{"/srv/lib/b/../a", "<root:lib>/a"},
+		{"/srv/lib/../vault/x", "<root:vault>/x"},
+		{"/srv/lib//a/./b/", "<root:lib>/a/b"},
+		{"/api/../home/bruce/x", "<path>"},
+	}
+	f := newFixture(t)
+	vals := map[string]string{}
+	var lines []string
+	for i, c := range cases {
+		key := string(rune('a' + i))
+		vals[key] = c.in
+		lines = append(lines, "open "+c.in+" now")
+	}
+	e := f.exporterWith(viewerOf("core:system.manage"), func(cfg *diagnostics.Config) {
+		cfg.Roots = roots
+		cfg.Contributors = []diagnostics.Contributor{jsonSection("batcave.v", vals)}
+		cfg.Sources.Logs = func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(strings.Join(lines, "\n") + "\n")), nil
+		}
+	})
+	res, err := f.build(e, "run-dotdot", diagnostics.ExportParams{ActorID: "robin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := f.zipFiles(res.File)
+	assertNoneOf(t, files, "bruce", "/home", "/etc/passwd", "..")
+
+	var got map[string]string
+	if err := json.Unmarshal(files["batcave.v/d.json"], &got); err != nil {
+		t.Fatal(err)
+	}
+	logLines := strings.Split(strings.TrimSpace(string(files["core.logs/logs.jsonl"])), "\n")
+	if len(logLines) != len(cases) {
+		t.Fatalf("got %d log lines, want %d: %q", len(logLines), len(cases), logLines)
+	}
+	for i, c := range cases {
+		if v := got[string(rune('a'+i))]; v != c.want {
+			t.Errorf("value %q = %q, want %q", c.in, v, c.want)
+		}
+		if want := "open " + c.want + " now"; logLines[i] != want {
+			t.Errorf("text line for %q = %q, want %q", c.in, logLines[i], want)
+		}
+	}
+
+	// A JSON log line takes the same rule.
+	jl := logsOf(t, roots, []string{`{"msg":"open","path":"/srv/lib/../../home/bruce/x","note":"see /srv/lib/../etc/hosts"}`})
+	if strings.Contains(jl, "bruce") || strings.Contains(jl, "/etc/hosts") || !strings.Contains(jl, `"path":"<path>"`) {
+		t.Errorf("JSON log line: %s", jl)
+	}
 }
