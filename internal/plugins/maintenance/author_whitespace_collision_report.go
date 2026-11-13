@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_whitespace_collision_report.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6a5d0c32-4fbc-47b6-ab12-2cfbbff82249
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- author-whitespace-collision-report ---
@@ -163,19 +164,23 @@ func formatCollisionGroup(g whitespaceCollisionGroup) string {
 		g.Kind, g.Key, g.ResolvesTo, strings.Join(parts, "; "))
 }
 
+// authorWhitespaceCollisionHelp is the def's Description, which the native kind
+// carries as its Help.
+const authorWhitespaceCollisionHelp = "REPORT ONLY — changes nothing. Groups author rows whose names are equal once " +
+	"internal whitespace is collapsed and case is ignored (e.g. 'Raymond  L.  Weil' and " +
+	"'Raymond L. Weil'). 'whitespace' groups collide only under the new normalization; " +
+	"'legacy' groups already shared a key. Logs counts plus up to 200 groups per kind with " +
+	"each member's author ID, quoted name, book count and reference count, and the author ID " +
+	"a name lookup resolves to. Books is the DISPLAY counter (omits trashed books, " +
+	"non-primary versions and junction-only co-author credits); refs is the unfiltered count."
+
 func (p *Plugin) authorWhitespaceCollisionReportDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-whitespace-collision-report",
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Author whitespace-collision report",
-		Description: "REPORT ONLY — changes nothing. Groups author rows whose names are equal once " +
-			"internal whitespace is collapsed and case is ignored (e.g. 'Raymond  L.  Weil' and " +
-			"'Raymond L. Weil'). 'whitespace' groups collide only under the new normalization; " +
-			"'legacy' groups already shared a key. Logs counts plus up to 200 groups per kind with " +
-			"each member's author ID, quoted name, book count and reference count, and the author ID " +
-			"a name lookup resolves to. Books is the DISPLAY counter (omits trashed books, " +
-			"non-primary versions and junction-only co-author credits); refs is the unfiltered count.",
+		Description: authorWhitespaceCollisionHelp,
 		// ResumeDrop: a read-only report is cheap to re-trigger.
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
@@ -190,12 +195,49 @@ func (p *Plugin) authorWhitespaceCollisionReportDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runAuthorWhitespaceCollisionReport(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.OpsStore()
+	env := authorWhitespaceCollisionEnv{t6g1Env: t6g1HeadEnv(reporter, true)}
+	// A nil OpsStore stays a nil interface in env.Store, which the core reports
+	// as "database not initialized".
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = t6g1HeadStore{store}
+	}
+	return authorWhitespaceCollisionReportCore(ctx, env)
+}
+
+// authorWhitespaceCollisionKind is rule R3's kind for the def above.
+const authorWhitespaceCollisionKind = tasks.Kind("books.maintenance.author-whitespace-collision-report")
+
+// authorWhitespaceCollisionStore is the four reads the report makes.
+// AuthorRefCounts is database.AuthorRefCounts over the store, which looks
+// through the decorator chain; a narrow reader cannot be handed to that helper.
+type authorWhitespaceCollisionStore interface {
+	GetAllAuthors() ([]database.Author, error)
+	GetAllAuthorBookCounts() (map[int]int, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	AuthorRefCounts() (map[int]int, error)
+}
+
+// authorWhitespaceCollisionEnv is what the core takes from its shell. The
+// report writes nothing, so it has no writer.
+type authorWhitespaceCollisionEnv struct {
+	t6g1Env
+	Store authorWhitespaceCollisionStore
+}
+
+// authorWhitespaceCollisionParallelism is the report's concurrency (HEAD
+// declared none).
+func authorWhitespaceCollisionParallelism() tasks.Parallelism {
+	return tasks.Sequential("HEAD declared no concurrency (sequential)")
+}
+
+// authorWhitespaceCollisionReportCore is the body of runAuthorWhitespaceCollisionReport.
+func authorWhitespaceCollisionReportCore(ctx context.Context, env authorWhitespaceCollisionEnv) error {
+	store := env.Store
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting author whitespace-collision report (report only)")
-	_ = reporter.UpdateProgress(0, 4, "Listing authors…")
+	env.Log(slog.LevelInfo, "Starting author whitespace-collision report (report only)")
+	env.Progress(0, 4, "Listing authors…")
 
 	authors, err := store.GetAllAuthors()
 	if err != nil {
@@ -205,22 +247,22 @@ func (p *Plugin) runAuthorWhitespaceCollisionReport(ctx context.Context, _ json.
 		return err
 	}
 
-	_ = reporter.UpdateProgress(1, 4, "Counting books and references per author…")
+	env.Progress(1, 4, "Counting books and references per author…")
 	// Both counts FAIL the op on error rather than rendering zeros: a report of
 	// zeros is exactly the artifact someone would later cite to justify a merge.
 	bookCounts, err := store.GetAllAuthorBookCounts()
 	if err != nil {
 		return fmt.Errorf("author book counts: %w", err)
 	}
-	refCounts, err := database.AuthorRefCounts(store)
+	refCounts, err := store.AuthorRefCounts()
 	if err != nil {
 		return fmt.Errorf("author reference counts: %w", err)
 	}
 
-	_ = reporter.UpdateProgress(2, 4, fmt.Sprintf("Grouping %d author names…", len(authors)))
+	env.Progress(2, 4, fmt.Sprintf("Grouping %d author names…", len(authors)))
 	report := findWhitespaceCollisions(authors, bookCounts, refCounts, whitespaceCollisionSampleLimit)
 
-	_ = reporter.UpdateProgress(3, 4, "Resolving the index owner of each logged group…")
+	env.Progress(3, 4, "Resolving the index owner of each logged group…")
 	// One read per LOGGED group (bounded by 2 × the sample limit), not per author.
 	for _, sample := range [][]whitespaceCollisionGroup{report.WhitespaceSample, report.LegacySample} {
 		for i := range sample {
@@ -238,19 +280,41 @@ func (p *Plugin) runAuthorWhitespaceCollisionReport(ctx context.Context, _ json.
 	}
 
 	summary := report.summary()
-	_ = reporter.Log(slog.LevelInfo, summary)
+	env.Log(slog.LevelInfo, summary)
 	for _, sample := range [][]whitespaceCollisionGroup{report.WhitespaceSample, report.LegacySample} {
 		for _, g := range sample {
 			ids := make([]string, 0, len(g.Members))
 			for _, m := range g.Members {
 				ids = append(ids, fmt.Sprint(m.ID))
 			}
-			_ = reporter.Log(slog.LevelInfo, formatCollisionGroup(g),
+			env.Log(slog.LevelInfo, formatCollisionGroup(g),
 				slog.String("kind", g.Kind), slog.String("key", g.Key),
 				slog.Int("resolves_to", g.ResolvesTo), slog.Int("total_refs", g.TotalRefs),
 				slog.String("author_ids", strings.Join(ids, ",")))
 		}
 	}
-	_ = reporter.UpdateProgress(4, 4, summary)
+	env.Progress(4, 4, summary)
 	return nil
+}
+
+// authorWhitespaceCollisionNative is the native kind: a report, so ReadOnly.
+func (p *Plugin) authorWhitespaceCollisionNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(authorWhitespaceCollisionKind, sched)
+	c.Title = "Author whitespace-collision report"
+	c.Help = authorWhitespaceCollisionHelp
+	c.Effects = tasks.ReadOnly(tasks.Res("books", "authors"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.author-whitespace-collision-report")
+	c.Timeout = 10 * time.Minute
+	return tasks.Task(authorWhitespaceCollisionKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, _ json.RawMessage) (struct{}, error) {
+			env := authorWhitespaceCollisionEnv{t6g1Env: t6g1NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			return struct{}{}, authorWhitespaceCollisionReportCore(rc.Context(), env)
+		},
+	})
 }

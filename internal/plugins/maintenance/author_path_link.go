@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.11.4
+// version: 1.12.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- author-path-link ---
@@ -361,6 +362,18 @@ type authorPathLinkStore interface {
 	authorPathLinkBookStore
 }
 
+// authorPathLinkHelp is the def's Description, which the native kind carries as
+// its Help.
+const authorPathLinkHelp = "Books with NO author id whose PATH names an author: the person-shaped path segment " +
+	"is resolved through the author:name index and the book is linked to that row (join row and " +
+	"scalar). A person-shaped name with no row is created and linked; a NEAR MISS of an existing " +
+	"row is reported and never created. Suspect targets and ambiguous paths are skipped: a row thin " +
+	"by EITHER its scalar count or its own book_count, a row named with the placeholder, a row " +
+	"whose name reads as a title/franchise/collective, and a match on the book's own folder. " +
+	"Books that already have an author id, books " +
+	"under books/itunes/**, and Doctor Who / Big Finish / Torchwood are never touched. Defaults " +
+	"to dry_run=true; bookIds and pathPrefix scope a run."
+
 func (p *Plugin) authorPathLinkDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-path-link",
@@ -368,15 +381,7 @@ func (p *Plugin) authorPathLinkDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Link path-derived authors to author rows",
-		Description: "Books with NO author id whose PATH names an author: the person-shaped path segment " +
-			"is resolved through the author:name index and the book is linked to that row (join row and " +
-			"scalar). A person-shaped name with no row is created and linked; a NEAR MISS of an existing " +
-			"row is reported and never created. Suspect targets and ambiguous paths are skipped: a row thin " +
-			"by EITHER its scalar count or its own book_count, a row named with the placeholder, a row " +
-			"whose name reads as a title/franchise/collective, and a match on the book's own folder. " +
-			"Books that already have an author id, books " +
-			"under books/itunes/**, and Doctor Who / Big Finish / Torchwood are never touched. Defaults " +
-			"to dry_run=true; bookIds and pathPrefix scope a run.",
+		Description: authorPathLinkHelp,
 		// Idempotent: a linked book has a non-nil scalar and is out of the
 		// population, so a restart re-plans from current state.
 		ResumePolicy:    sdk.ResumeRestart,
@@ -402,11 +407,8 @@ func (p *Plugin) runAuthorPathLink(ctx context.Context, rawParams json.RawMessag
 	if _, err := opmode.ResolveDryRun("maintenance.author-path-link", params.DryRun, params.DryRunCamel); err != nil {
 		return err
 	}
-	if len(params.BookIDs) > 0 && len(params.BookIDsSnake) > 0 {
-		return fmt.Errorf("maintenance.author-path-link: bookIds and book_ids both sent; send one")
-	}
-	if params.PathPrefix != "" && params.PathPrefixSnake != "" {
-		return fmt.Errorf("maintenance.author-path-link: pathPrefix and path_prefix both sent; send one")
+	if err := authorPathLinkCheckAliases(params); err != nil {
+		return err
 	}
 	result, err := p.authorPathLink(ctx, params, reporter)
 	if result != nil {
@@ -415,6 +417,18 @@ func (p *Plugin) runAuthorPathLink(ctx context.Context, rawParams json.RawMessag
 		}
 	}
 	return err
+}
+
+// authorPathLinkCheckAliases refuses a request that sends one scope under both of
+// its spellings.
+func authorPathLinkCheckAliases(params authorPathLinkParams) error {
+	if len(params.BookIDs) > 0 && len(params.BookIDsSnake) > 0 {
+		return fmt.Errorf("maintenance.author-path-link: bookIds and book_ids both sent; send one")
+	}
+	if params.PathPrefix != "" && params.PathPrefixSnake != "" {
+		return fmt.Errorf("maintenance.author-path-link: pathPrefix and path_prefix both sent; send one")
+	}
+	return nil
 }
 
 // normalizeAuthorNameForLink is the author:name index key: the ONLY comparison
@@ -806,6 +820,134 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 	if err != nil {
 		return nil, err
 	}
+	env := authorPathLinkEnv{
+		t6g1Env: t6g1HeadEnv(reporter, !dryRun),
+		Store:   store,
+		Writer:  t6g1HeadWriter{store},
+		// The owner-manual check's readers. Tags come from their own accessor:
+		// OpsStore does not carry them.
+		ManualOnly:             applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: p.deps.BookTagReader()},
+		Items:                  t6g1HeadItems(reporter),
+		AcquireStandDown:       p.t6g1HeadStandDown(reporter),
+		InvalidateAuthorsCache: p.deps.InvalidateAuthorsCache,
+		InvalidateDedupCache:   p.deps.InvalidateDedupCache,
+	}
+	return authorPathLinkCore(ctx, params, env)
+}
+
+// authorPathLinkKind is rule R3's kind for the def above.
+const authorPathLinkKind = tasks.Kind("books.maintenance.author-path-link")
+
+// authorPathLinkReader is the reads the op makes: the author index, the library
+// sweep and the per-book re-read.
+type authorPathLinkReader interface {
+	authorPathLinkAuthorReader
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+}
+
+// authorPathLinkAuthorReader is the author-row reads.
+type authorPathLinkAuthorReader interface {
+	GetAllAuthors() ([]database.Author, error)
+	GetAllAuthorBookCounts() (map[int]int, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
+}
+
+// authorPathLinkWriter is the writes the op makes: the minted author row, the
+// credit, the scalar and the ledger row.
+type authorPathLinkWriter interface {
+	CreateAuthor(name string) (*database.Author, error)
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	RecordOperationChange(change *database.OperationChange) error
+}
+
+// authorPathLinkEnv is what the core takes from its shell. env.Live is the apply
+// switch (dry_run=false).
+type authorPathLinkEnv struct {
+	t6g1Env
+	Store  authorPathLinkReader
+	Writer authorPathLinkWriter
+	// ManualOnly are the owner-manual check's readers.
+	ManualOnly applygate.ManualOnlyReaders
+	// Items runs the classification and the apply pools.
+	Items t6g1ItemsFunc
+	// AcquireStandDown parks the library scan for the apply's write phase.
+	AcquireStandDown func(ctx context.Context, reason string) (t6g1Hold, error)
+	// InvalidateAuthorsCache and InvalidateDedupCache drop the cached author list
+	// after an apply that wrote.
+	InvalidateAuthorsCache func()
+	InvalidateDedupCache   func()
+}
+
+// authorPathLinkNativeParams are the native kind's params: HEAD's without
+// dry_run, which the run's mode carries (Live applies, Preview reports).
+type authorPathLinkNativeParams struct {
+	BookIDs         []string `json:"bookIds,omitempty"`
+	BookIDsSnake    []string `json:"book_ids,omitempty"`
+	PathPrefix      string   `json:"pathPrefix,omitempty"`
+	PathPrefixSnake string   `json:"path_prefix,omitempty"`
+	CreateMissing   *bool    `json:"create_missing,omitempty"`
+	SampleLimit     int      `json:"sample_limit,omitempty"`
+}
+
+// authorPathLinkParallelism is both pools (classification and apply), sized to
+// runtime.NumCPU() as at HEAD.
+func authorPathLinkParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// authorPathLinkNative is the native kind. Preview is the dry run; the result is
+// the per-change report HEAD stored as the op result.
+func (p *Plugin) authorPathLinkNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(authorPathLinkKind, sched)
+	c.Title = "Link path-derived authors to author rows"
+	c.Help = authorPathLinkHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	c.Resume = tasks.ResumeFromZero
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.author-path-link")
+	c.Timeout = 2 * time.Hour
+	return tasks.Task(authorPathLinkKind, tasks.TaskSpec[authorPathLinkNativeParams, authorPathLinkResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, np authorPathLinkNativeParams) (authorPathLinkResult, error) {
+			params := authorPathLinkParams{
+				BookIDs: np.BookIDs, BookIDsSnake: np.BookIDsSnake,
+				PathPrefix: np.PathPrefix, PathPrefixSnake: np.PathPrefixSnake,
+				CreateMissing: np.CreateMissing, SampleLimit: np.SampleLimit,
+			}
+			if err := authorPathLinkCheckAliases(params); err != nil {
+				return authorPathLinkResult{}, err
+			}
+			env := authorPathLinkEnv{
+				t6g1Env:                t6g1NativeEnv(rc),
+				Writer:                 deps.NewWriter(rc.Writer()),
+				ManualOnly:             deps.ManualOnly,
+				Items:                  t6g1NativeItems(rc),
+				AcquireStandDown:       t6g1NativeStandDown(rc, deps.StandDownKey),
+				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,
+				InvalidateDedupCache:   deps.InvalidateDedupCache,
+			}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			res, err := authorPathLinkCore(rc.Context(), params, env)
+			if res == nil {
+				return authorPathLinkResult{}, err
+			}
+			return *res, err
+		},
+	})
+}
+
+// authorPathLinkCore is the body of authorPathLink from the create_missing
+// default on.
+func authorPathLinkCore(ctx context.Context, params authorPathLinkParams, env authorPathLinkEnv) (*authorPathLinkResult, error) {
+	store := env.Store
+	if store == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	dryRun := !env.Live
 	createMissing := true
 	if params.CreateMissing != nil {
 		createMissing = *params.CreateMissing
@@ -814,7 +956,7 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 	if sample <= 0 {
 		sample = authorPathLinkDefaultSample
 	}
-	log := reporter.Logger()
+	log := env.Logger
 
 	res := &authorPathLinkResult{
 		DryRun:         dryRun,
@@ -828,24 +970,19 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 
 	// Stand-down for the write phase only, as author-id-repair does: a running
 	// scan rewrites book rows underneath an apply. A dry run parks nothing.
-	var standDownHolder string
-	var standDownHeld bool
+	var standDown t6g1Hold
 	if !dryRun {
-		holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "author-path-link apply")
+		hold, sdErr := env.AcquireStandDown(ctx, "author-path-link apply")
 		if sdErr != nil {
 			return res, fmt.Errorf("author-path-link: acquire scan stand-down: %w", sdErr)
 		}
-		defer release()
-		standDownHolder, standDownHeld = holderID, held
+		defer hold.Release()
+		standDown = hold
 	}
-	lost := func() bool { return scanStandDownLostForApply(p.deps, standDownHolder, standDownHeld) }
-	opID := registry.ReporterOpID(reporter)
+	lost := func() bool { return standDown.Lost != nil && standDown.Lost() }
+	opID := env.OpID
 
-	// Named once at the top so this op's whole store requirement is one type;
-	// each helper below then takes only the half it uses.
-	var linkStore authorPathLinkStore = store
-
-	idx, err := authorPathLinkBuildIndex(linkStore)
+	idx, err := authorPathLinkBuildIndex(store)
 	if err != nil {
 		return res, err
 	}
@@ -853,7 +990,7 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 
 	// The scan pass also fills idx.bookCount, so every classification below
 	// reads ONE frozen count per author row.
-	scoped, err := authorPathLinkScope(ctx, linkStore, params, res, idx, reporter)
+	scoped, err := authorPathLinkScope(ctx, store, params, res, idx, env.Progress)
 	if err != nil {
 		return res, err
 	}
@@ -884,11 +1021,19 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 	// is exactly the fuzzy-compare-over-a-whole-library shape CLAUDE.md names.
 	// The frozen index is read-only from here on, so workers share it without a
 	// lock; only record() needs one.
-	// The owner-manual check's readers. Tags come from their own accessor:
-	// OpsStore does not carry them.
-	mo := applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: p.deps.BookTagReader()}
+	mo := env.ManualOnly
 	var actionable []authorPathLinkChange
-	classifyErr := registry.RunItems(ctx, reporter, scoped, func(_ context.Context, b database.BookCore) error {
+	classifyErr := env.Items(ctx, len(scoped), t6g1ItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		// Label runs inside each worker goroutine, so it reads done under mu.
+		Label: func(i, total int) string {
+			mu.Lock()
+			d := done
+			mu.Unlock()
+			return fmt.Sprintf("Classifying paths %d/%d (decided %d)", i+1, total, d)
+		},
+	}, func(_ context.Context, i int) error {
+		b := scoped[i]
 		ch := authorPathLinkClassify(&b, idx, mo)
 		if ch.Outcome == authorPathLinkWouldLink || (ch.Outcome == authorPathLinkWouldCreate && createMissing) {
 			mu.Lock()
@@ -903,15 +1048,6 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 		}
 		record(ch)
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		// Label runs inside each worker goroutine, so it reads done under mu.
-		Label: func(i, total int) string {
-			mu.Lock()
-			d := done
-			mu.Unlock()
-			return fmt.Sprintf("Classifying paths %d/%d (decided %d)", i+1, total, d)
-		},
 	})
 	if classifyErr != nil {
 		return res, classifyErr
@@ -919,12 +1055,8 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 	// The apply order is the book id order, not the order workers finished in.
 	sort.Slice(actionable, func(i, j int) bool { return actionable[i].BookID < actionable[j].BookID })
 
-	creator := newAuthorPathLinkCreator(linkStore, dryRun)
-	runErr := registry.RunItems(ctx, reporter, actionable, func(ctx context.Context, ch authorPathLinkChange) error {
-		out := p.authorPathLinkApplyOne(ch, linkStore, mo, creator, dryRun, opID, lost, res, &mu)
-		record(out)
-		return nil
-	}, registry.RunItemsOptions{
+	creator := newAuthorPathLinkCreatorVia(store, env.Writer, dryRun)
+	runErr := env.Items(ctx, len(actionable), t6g1ItemsOptions{
 		Concurrency: runtime.NumCPU(),
 		// Label runs inside each worker goroutine, so it reads done under mu.
 		Label: func(i, total int) string {
@@ -933,20 +1065,24 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 			mu.Unlock()
 			return fmt.Sprintf("Linking path-derived authors %d/%d (classified %d)", i+1, total, d)
 		},
+	}, func(ctx context.Context, i int) error {
+		out := authorPathLinkApplyOne(actionable[i], store, env.Writer, mo, creator, dryRun, opID, lost, res, &mu)
+		record(out)
+		return nil
 	})
 
 	res.CreatedAuthors = creator.created()
 	sort.Slice(res.Changes, func(i, j int) bool { return res.Changes[i].BookID < res.Changes[j].BookID })
 	if res.Outcomes[authorPathLinkLinked] > 0 || res.Outcomes[authorPathLinkCreatedAndLinked] > 0 {
-		p.deps.InvalidateAuthorsCache()
-		p.deps.InvalidateDedupCache()
+		env.InvalidateAuthorsCache()
+		env.InvalidateDedupCache()
 	}
 
 	summary := fmt.Sprintf(
 		"author-path-link complete (dry_run=%v): scanned=%d in_scope=%d author_rows=%d outcomes=%v created_rows=%d undo_rows=%d",
 		dryRun, res.BooksScanned, res.BooksInScope, res.AuthorRows, res.Outcomes, len(res.CreatedAuthors), res.UndoLedgerRows)
 	log.Info("author-path-link: done", "dry_run", dryRun, "sample", firstN(res.Changes, sample))
-	_ = reporter.UpdateProgress(1, 1, summary)
+	env.Progress(1, 1, summary)
 	if runErr != nil {
 		return res, runErr
 	}
@@ -954,7 +1090,7 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 }
 
 // authorPathLinkBuildIndex freezes the author rows and their book counts.
-func authorPathLinkBuildIndex(store authorPathLinkAuthorStore) (*authorPathLinkIndex, error) {
+func authorPathLinkBuildIndex(store authorPathLinkAuthorReader) (*authorPathLinkIndex, error) {
 	authors, err := store.GetAllAuthors()
 	if err != nil {
 		return nil, fmt.Errorf("author-path-link: list authors: %w", err)
@@ -1033,7 +1169,9 @@ func authorPathLinkUnderPrefix(path, prefix string) bool {
 // authorPathLinkScope pages the whole library once and returns the in-scope
 // books, counting what it dropped. GetAllBooksCoreComplete (not the memdb-served
 // twin) because this op writes.
-func authorPathLinkScope(ctx context.Context, store authorPathLinkBookStore, params authorPathLinkParams, res *authorPathLinkResult, idx *authorPathLinkIndex, reporter sdk.Reporter) ([]database.BookCore, error) {
+func authorPathLinkScope(ctx context.Context, store interface {
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
+}, params authorPathLinkParams, res *authorPathLinkResult, idx *authorPathLinkIndex, progress func(current, total int, msg string)) ([]database.BookCore, error) {
 	wanted := map[string]bool{}
 	for _, id := range params.bookIDs() {
 		wanted[id] = true
@@ -1077,7 +1215,7 @@ func authorPathLinkScope(ctx context.Context, store authorPathLinkBookStore, par
 			}
 			scoped = append(scoped, b)
 		}
-		_ = reporter.UpdateProgress(res.BooksScanned, 0,
+		progress(res.BooksScanned, 0,
 			fmt.Sprintf("Scanned %d books, %d in scope", res.BooksScanned, len(scoped)))
 		if len(page) < authorPathLinkPageSize {
 			break
@@ -1099,7 +1237,12 @@ func authorPathLinkScope(ctx context.Context, store authorPathLinkBookStore, par
 // between classification and now is REUSED. (3) The per-run map means 24 books
 // deriving one name make one call, not 24.
 type authorPathLinkCreator struct {
-	store  authorPathLinkAuthorStore
+	store interface {
+		GetAuthorByName(name string) (*database.Author, error)
+	}
+	writer interface {
+		CreateAuthor(name string) (*database.Author, error)
+	}
 	dryRun bool
 	mu     sync.Mutex
 	byName map[string]database.Author
@@ -1110,8 +1253,19 @@ type authorPathLinkCreator struct {
 }
 
 func newAuthorPathLinkCreator(store authorPathLinkAuthorStore, dryRun bool) *authorPathLinkCreator {
+	return newAuthorPathLinkCreatorVia(store, store, dryRun)
+}
+
+// newAuthorPathLinkCreatorVia is newAuthorPathLinkCreator with the author write
+// split from the author read, so a native run mints through its gated writer.
+func newAuthorPathLinkCreatorVia(store interface {
+	GetAuthorByName(name string) (*database.Author, error)
+}, writer interface {
+	CreateAuthor(name string) (*database.Author, error)
+}, dryRun bool) *authorPathLinkCreator {
 	return &authorPathLinkCreator{
 		store:     store,
+		writer:    writer,
 		dryRun:    dryRun,
 		byName:    map[string]database.Author{},
 		minted:    map[int]*authorPathLinkCreatedAuthor{},
@@ -1161,7 +1315,7 @@ func (c *authorPathLinkCreator) resolveOrCreate(name string, allowCreate bool) (
 		}
 		return database.Author{}, false, nil
 	}
-	created, err := c.store.CreateAuthor(name)
+	created, err := c.writer.CreateAuthor(name)
 	if err != nil {
 		return database.Author{}, false, err
 	}
@@ -1219,9 +1373,10 @@ func (c *authorPathLinkCreator) created() []authorPathLinkCreatedAuthor {
 // duplicate or re-plumb that whole path. That is a store change far wider than
 // this op, and it is the right follow-up; the resume above makes the invariant
 // hold without it.
-func (p *Plugin) authorPathLinkApplyOne(
+func authorPathLinkApplyOne(
 	ch authorPathLinkChange,
-	store authorPathLinkBookStore,
+	store authorPathLinkReader,
+	writer authorPathLinkWriter,
 	mo applygate.ManualOnlyReaders,
 	creator *authorPathLinkCreator,
 	dryRun bool,
@@ -1327,7 +1482,7 @@ func (p *Plugin) authorPathLinkApplyOne(
 
 	// (1) the credit. A resumed half-write already has it; re-writing would be
 	// a no-op anyway, and the callback refuses to touch a non-empty array.
-	if _, err := store.ModifyBookAuthors(ch.BookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+	if _, err := writer.ModifyBookAuthors(ch.BookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
 		if len(cur) > 0 {
 			return nil, database.ErrSkipBookAuthorsWrite
 		}
@@ -1339,7 +1494,7 @@ func (p *Plugin) authorPathLinkApplyOne(
 	// (2) the scalar, under the book's write lock, and only while it is still
 	// nil -- so a column another writer commits meanwhile is not reverted.
 	wrote := false
-	written, err := store.ModifyBook(ch.BookID, func(cur *database.Book) error {
+	written, err := writer.ModifyBook(ch.BookID, func(cur *database.Book) error {
 		if cur.AuthorID != nil {
 			return database.ErrSkipBookWrite
 		}
@@ -1383,7 +1538,7 @@ func (p *Plugin) authorPathLinkApplyOne(
 	// which the result names in created_authors) purge-empty-authors removes
 	// the row once nothing credits it. A real reversible undo needs a change
 	// type that carries both keys; that is a follow-up, not a claim made here.
-	if lErr := database.RecordOperationChange(store, &database.OperationChange{
+	if lErr := writer.RecordOperationChange(&database.OperationChange{
 		ID:          ulid.Make().String(),
 		OperationID: opID,
 		BookID:      ch.BookID,

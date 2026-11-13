@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.8.4
+// version: 1.9.0
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -15,8 +16,8 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- purge-empty-authors ---
@@ -159,6 +160,15 @@ func (r emptyAuthorReport) summary() string {
 		r.HeldLinkedDuringRun, r.HeldLookupFailed, r.JournalFailed)
 }
 
+// purgeEmptyAuthorsHelp is the def's Description, which the native kind carries
+// as its Help.
+const purgeEmptyAuthorsHelp = "Deletes author rows attached to zero books — importer junk such as track " +
+	"and chapter titles parsed into the author field ('- Edgedancer', '04 - Heir to the " +
+	"Jedi'). Measured 4,975 of 12,854 authors on this library. DRY-RUN BY DEFAULT: pass " +
+	"apply=true to delete. By default refuses any author with a non-zero file count, " +
+	"since zero books plus files present is more likely a broken junction link than an " +
+	"empty author; pass require_zero_files=false to override. Idempotent."
+
 func (p *Plugin) purgeEmptyAuthorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.purge-empty-authors",
@@ -166,12 +176,7 @@ func (p *Plugin) purgeEmptyAuthorsDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Purge empty authors",
-		Description: "Deletes author rows attached to zero books — importer junk such as track " +
-			"and chapter titles parsed into the author field ('- Edgedancer', '04 - Heir to the " +
-			"Jedi'). Measured 4,975 of 12,854 authors on this library. DRY-RUN BY DEFAULT: pass " +
-			"apply=true to delete. By default refuses any author with a non-zero file count, " +
-			"since zero books plus files present is more likely a broken junction link than an " +
-			"empty author; pass require_zero_files=false to override. Idempotent.",
+		Description: purgeEmptyAuthorsHelp,
 		// ResumeDrop, not Requeue: this is a deletion, and a half-finished run that
 		// silently resumes after a restart is harder to reason about than one that
 		// stops and is re-triggered deliberately. Re-running is cheap and idempotent.
@@ -204,16 +209,102 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	reporter.Logger().Info("purge-empty-authors start",
-		"apply", params.Apply, "require_zero_files", params.requireZeroFiles(), "limit", params.Limit)
+	env := purgeEmptyAuthorsEnv{
+		t6g1Env:          t6g1HeadEnv(reporter, params.Apply),
+		Store:            t6g1HeadStore{store},
+		Writer:           t6g1HeadWriter{store},
+		AcquireStandDown: p.t6g1HeadStandDown(reporter),
+	}
+	return purgeEmptyAuthorsCore(ctx, params, env)
+}
 
-	_ = reporter.UpdateProgress(0, 3, "Listing authors…")
+// purgeEmptyAuthorsKind is rule R3's kind for the def above.
+const purgeEmptyAuthorsKind = tasks.Kind("books.maintenance.purge-empty-authors")
+
+// purgeEmptyAuthorsStore is the reads the op makes.
+type purgeEmptyAuthorsStore interface {
+	GetAllAuthors() ([]database.Author, error)
+	GetAllAuthorBookCounts() (map[int]int, error)
+	AuthorRefCounts() (map[int]int, error)
+	AuthorFileRefCounts() (map[int]int, error)
+	GetAllSeries() ([]database.Series, error)
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+}
+
+// purgeEmptyAuthorsWriter is the writes the op makes: the undo-ledger row and
+// the delete.
+type purgeEmptyAuthorsWriter interface {
+	RecordOperationChange(change *database.OperationChange) error
+	DeleteAuthor(id int) error
+}
+
+// purgeEmptyAuthorsEnv is what the core takes from its shell.
+type purgeEmptyAuthorsEnv struct {
+	t6g1Env
+	Store  purgeEmptyAuthorsStore
+	Writer purgeEmptyAuthorsWriter
+	// AcquireStandDown parks the library scan for the delete phase.
+	AcquireStandDown func(ctx context.Context, reason string) (t6g1Hold, error)
+}
+
+// purgeEmptyAuthorsParallelism is the op's concurrency. HEAD declared none, and
+// the loop below is deliberately sequential (see its comment).
+func purgeEmptyAuthorsParallelism() tasks.Parallelism {
+	return tasks.Sequential("HEAD declared no concurrency; each delete sweeps the whole book_authors junction under the stand-down lease")
+}
+
+// purgeEmptyAuthorsNativeParams are the native kind's params: HEAD's without
+// apply, which the run's mode carries (Live applies, Preview reports).
+type purgeEmptyAuthorsNativeParams struct {
+	RequireZeroFiles *bool `json:"require_zero_files,omitempty"`
+	Limit            int   `json:"limit"`
+}
+
+// purgeEmptyAuthorsNative is the native kind. It deletes authors, sweeps them
+// out of the per-book junction and journals each delete.
+func (p *Plugin) purgeEmptyAuthorsNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(purgeEmptyAuthorsKind, sched)
+	c.Title = "Purge empty authors"
+	c.Help = purgeEmptyAuthorsHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "authors"), tasks.Res("books", "books"), tasks.Res("books", "operations"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.purge-empty-authors")
+	c.Timeout = 2 * time.Hour
+	return tasks.Task(purgeEmptyAuthorsKind, tasks.TaskSpec[purgeEmptyAuthorsNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, np purgeEmptyAuthorsNativeParams) (struct{}, error) {
+			env := purgeEmptyAuthorsEnv{
+				t6g1Env:          t6g1NativeEnv(rc),
+				Writer:           deps.NewWriter(rc.Writer()),
+				AcquireStandDown: t6g1NativeStandDown(rc, deps.StandDownKey),
+			}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			params := purgeEmptyAuthorsParams{RequireZeroFiles: np.RequireZeroFiles, Limit: np.Limit}
+			return struct{}{}, purgeEmptyAuthorsCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// purgeEmptyAuthorsCore is the body of runPurgeEmptyAuthors. env.Live is the
+// apply switch.
+func purgeEmptyAuthorsCore(ctx context.Context, params purgeEmptyAuthorsParams, env purgeEmptyAuthorsEnv) error {
+	store := env.Store
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	env.Logger.Info("purge-empty-authors start",
+		"apply", env.Live, "require_zero_files", params.requireZeroFiles(), "limit", params.Limit)
+
+	env.Progress(0, 3, "Listing authors…")
 	authors, err := store.GetAllAuthors()
 	if err != nil {
 		return fmt.Errorf("list authors: %w", err)
 	}
 
-	_ = reporter.UpdateProgress(1, 3, "Counting books per author…")
+	env.Progress(1, 3, "Counting books per author…")
 	bookCounts, err := store.GetAllAuthorBookCounts()
 	if err != nil {
 		return fmt.Errorf("author book counts: %w", err)
@@ -239,7 +330,7 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	// silent fallback to the filtered count.
 	var fileCounts map[int]int
 	if params.requireZeroFiles() {
-		fileCounts, err = database.AuthorFileRefCounts(store)
+		fileCounts, err = store.AuthorFileRefCounts()
 		if err != nil {
 			return fmt.Errorf("author file counts (needed for the require_zero_files guard): %w", err)
 		}
@@ -271,7 +362,7 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	// delete handlers use. It resolves the capability through the decorator
 	// chain and returns an error rather than a filtered fallback when the store
 	// cannot answer, so the nil-capability case arrives here as an error too.
-	refCounts, err := database.AuthorRefCounts(store)
+	refCounts, err := store.AuthorRefCounts()
 	if err != nil {
 		return fmt.Errorf("purge-empty-authors: %w", err)
 	}
@@ -303,30 +394,30 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	if report.ZeroBooksWithFiles > 0 {
 		// Its own line so the held-back population arrives with names and file
 		// counts rather than only as a number in the summary.
-		reporter.Logger().Info("purge-empty-authors held back (zero books, has files)",
+		env.Logger.Info("purge-empty-authors held back (zero books, has files)",
 			"held_back", report.ZeroBooksWithFiles,
 			"sampled", len(report.HeldBackSample),
 			"held_back_sample", report.HeldBackSample)
 	}
 	if report.HeldBySeries > 0 {
-		reporter.Logger().Info("purge-empty-authors held back (no books, still a series owner)",
+		env.Logger.Info("purge-empty-authors held back (no books, still a series owner)",
 			"held_by_series", report.HeldBySeries,
 			"sampled", len(report.HeldBySeriesSample),
 			"held_by_series_sample", report.HeldBySeriesSample)
 	}
 	if report.HeldByRefs > 0 {
-		reporter.Logger().Info("purge-empty-authors held back (zero books by the display count, still referenced)",
+		env.Logger.Info("purge-empty-authors held back (zero books by the display count, still referenced)",
 			"held_by_refs", report.HeldByRefs,
 			"sampled", len(report.HeldByRefsSample),
 			"held_by_refs_sample", report.HeldByRefsSample)
 	}
 
-	if !params.Apply {
+	if !env.Live {
 		msg := "DRY RUN (nothing deleted) — " + report.summary()
-		reporter.Logger().Info("purge-empty-authors dry run",
+		env.Logger.Info("purge-empty-authors dry run",
 			"eligible", report.Eligible, "held_by_refs", report.HeldByRefs,
 			"sample", report.Sample)
-		_ = reporter.UpdateProgress(3, 3, msg)
+		env.Progress(3, 3, msg)
 		return nil
 	}
 
@@ -335,9 +426,9 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	// would pause a days-long production scan for no write at all.
 	if len(eligible) == 0 {
 		msg := "nothing to delete — " + report.summary()
-		reporter.Logger().Info("purge-empty-authors complete (nothing eligible)",
+		env.Logger.Info("purge-empty-authors complete (nothing eligible)",
 			"held_by_refs", report.HeldByRefs, "held_back", report.ZeroBooksWithFiles)
-		_ = reporter.UpdateProgress(3, 3, msg)
+		env.Progress(3, 3, msg)
 		return nil
 	}
 
@@ -356,17 +447,17 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	// stand-down narrows the window in which that re-check can fire. (It does
 	// park a scan resumed after a restart: on 2026-09-12 a scan at
 	// resume_count=5 went interrupted_quiesced for the whole of this op's apply.)
-	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "purge-empty-authors apply")
+	hold, sdErr := env.AcquireStandDown(ctx, "purge-empty-authors apply")
 	if sdErr != nil {
 		return fmt.Errorf("purge-empty-authors: acquire scan stand-down: %w", sdErr)
 	}
-	defer releaseStandDown()
+	defer hold.Release()
 
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 	if opID == "" {
 		// Same precedent as author_duplicate_merge.go and series_dedup.go: journal
 		// anyway. A ledger row with no operation id still records the name.
-		reporter.Logger().Warn("purge-empty-authors: no operation id on the reporter, undo-ledger rows will be unattributed")
+		env.Logger.Warn("purge-empty-authors: no operation id on the reporter, undo-ledger rows will be unattributed")
 	}
 
 	// Deleted one at a time rather than in a bulk batch. DeleteAuthor removes the
@@ -388,13 +479,13 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	for _, a := range authors {
 		authorNames[a.ID] = a.Name
 	}
-	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Deleting %d empty authors…", len(eligible)))
-	prog := sdk.NewProgress(reporter, len(eligible))
+	env.Progress(2, 3, fmt.Sprintf("Deleting %d empty authors…", len(eligible)))
+	prog := sdk.NewProgress(t6g1ProgressSink{fn: env.Progress}, len(eligible))
 	prog.Start(fmt.Sprintf("Deleting %d empty authors…", len(eligible)))
 	for i, id := range eligible {
 		if err := ctx.Err(); err != nil {
 			// Report what was actually done before the cancel, rather than losing it.
-			reporter.Logger().Info("purge-empty-authors cancelled",
+			env.Logger.Info("purge-empty-authors cancelled",
 				"deleted", report.Deleted, "remaining", len(eligible)-i)
 			prog.Done("cancelled — " + report.summary())
 			return err
@@ -404,8 +495,8 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		// The per-item half of the stand-down contract: renew the lease and treat
 		// losing it as a hard abort of the REMAINING deletes. A lapsed lease means
 		// the scanner has resumed. Inert when the gate is not held.
-		if scanStandDownLostForApply(p.deps, holderID, standDownHeld) {
-			reporter.Logger().Warn("purge-empty-authors: scan stand-down lease lost, aborting remaining deletes",
+		if hold.Lost() {
+			env.Logger.Warn("purge-empty-authors: scan stand-down lease lost, aborting remaining deletes",
 				"deleted", report.Deleted, "remaining", len(eligible)-i)
 			prog.Done("aborted (stand-down lease lost) — " + report.summary())
 			return fmt.Errorf("purge-empty-authors: scan stand-down lease lost after %d delete(s), "+
@@ -432,13 +523,13 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		linked, lerr := store.GetBooksByAuthorIDWithRoleCore(id)
 		if lerr != nil {
 			report.HeldLookupFailed++
-			reporter.Logger().Warn("purge-empty-authors: re-check lookup failed, author held (not deleted)",
+			env.Logger.Warn("purge-empty-authors: re-check lookup failed, author held (not deleted)",
 				"author_id", id, "name", name, "err", lerr)
 			continue
 		}
 		if len(linked) > 0 {
 			report.HeldLinkedDuringRun++
-			reporter.Logger().Warn("purge-empty-authors: author linked to a book during the run, held (not deleted)",
+			env.Logger.Warn("purge-empty-authors: author linked to a book during the run, held (not deleted)",
 				"author_id", id, "name", name, "linked_books", len(linked), "first_book_id", linked[0].ID)
 			continue
 		}
@@ -456,7 +547,7 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		// The ledger row can describe a delete that then fails. That is the right
 		// trade (a stray record of an author that still exists is harmless; a
 		// deleted author with no record is not), and it is logged below.
-		if jerr := database.RecordOperationChange(store, &database.OperationChange{
+		if jerr := env.Writer.RecordOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			ChangeType:  "author_delete",
@@ -465,15 +556,22 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 			NewValue:    "purged_empty",
 		}); jerr != nil {
 			report.JournalFailed++
-			reporter.Logger().Warn("purge-empty-authors: undo-ledger write failed, author NOT deleted",
+			env.Logger.Warn("purge-empty-authors: undo-ledger write failed, author NOT deleted",
 				"author_id", id, "name", name, "err", jerr)
 			continue
 		}
 
-		if derr := store.DeleteAuthor(id); derr != nil {
+		if derr := env.Writer.DeleteAuthor(id); derr != nil {
+			if errors.Is(derr, tasks.ErrFenced) {
+				// The run lost its permit or its stand-down lease: the kernel's writer
+				// refuses every further write, so abort the remaining deletes as the
+				// lease-lost check above does.
+				prog.Done("aborted (run fenced) — " + report.summary())
+				return fmt.Errorf("purge-empty-authors: run fenced after %d delete(s): %w", report.Deleted, derr)
+			}
 			// One bad row must not abandon the other thousands; count it and move on.
 			report.Failed++
-			reporter.Logger().Warn("purge-empty-authors: delete failed (its undo-ledger row was already written and names an author that still exists)",
+			env.Logger.Warn("purge-empty-authors: delete failed (its undo-ledger row was already written and names an author that still exists)",
 				"author_id", id, "name", name, "err", derr)
 			continue
 		}
@@ -484,7 +582,7 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 	}
 
 	msg := report.summary()
-	reporter.Logger().Info("purge-empty-authors complete",
+	env.Logger.Info("purge-empty-authors complete",
 		"deleted", report.Deleted, "failed", report.Failed,
 		"held_by_refs", report.HeldByRefs, "held_back", report.ZeroBooksWithFiles,
 		"held_linked_during_run", report.HeldLinkedDuringRun,

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.9.5
+// version: 1.10.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -20,9 +20,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // autoMatchTranscribedParams is the checkpoint/input state for a
@@ -43,6 +43,10 @@ type autoMatchTranscribedParams struct {
 	MinScore float64 `json:"min_score,omitempty"`
 }
 
+// autoMatchTranscribedHelp is the def's Description, which the native kind
+// carries as its Help.
+const autoMatchTranscribedHelp = "Walks the library and auto-applies the best metadata candidate to unreviewed books whose audio-derived transcription exactly matches a search result above a configurable score threshold. Dry-run by default — pass dry_run=false to apply. Checkpointed and cancellable."
+
 func (p *Plugin) autoMatchTranscribedDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:           "maintenance.auto-match-transcribed",
@@ -50,7 +54,7 @@ func (p *Plugin) autoMatchTranscribedDef() sdk.OperationDef {
 		Liveness:     sdk.LivenessRunItems,
 		Plugin:       "maintenance",
 		DisplayName:  "Auto-match transcribed books",
-		Description:  "Walks the library and auto-applies the best metadata candidate to unreviewed books whose audio-derived transcription exactly matches a search result above a configurable score threshold. Dry-run by default — pass dry_run=false to apply. Checkpointed and cancellable.",
+		Description:  autoMatchTranscribedHelp,
 		ResumePolicy: sdk.ResumeRestart,
 		// This op APPLIES metadata candidates to books (ApplyTranscriptionCandidate),
 		// so it reads and writes the library. It declared no Capabilities at all until
@@ -88,13 +92,125 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		return err
 	}
 
+	env := autoMatchTranscribedEnv{
+		t6g1Env: t6g1HeadEnv(reporter, !dryRun),
+		Store:   store,
+		// The owner-manual check's readers; the series reader is the run's own
+		// index, built in the core. Tags come from their own accessor.
+		ManualOnly:     applygate.ManualOnlyReaders{Files: store, Authors: store, Tags: p.deps.BookTagReader()},
+		Items:          t6g1HeadItems(reporter),
+		Runners:        p.deps,
+		HasService:     p.deps.HasMetadataFetchService,
+		SaveCheckpoint: func(state any) error { return reporter.Checkpoint(state) },
+	}
+	return autoMatchTranscribedCore(ctx, params, env)
+}
+
+// autoMatchTranscribedKind is rule R3's kind for the def above.
+const autoMatchTranscribedKind = tasks.Kind("books.maintenance.auto-match-transcribed")
+
+// autoMatchTranscribedStore is the reads the op makes.
+type autoMatchTranscribedStore interface {
+	ListBookIDs() ([]string, error)
+	GetAllSeries() ([]database.Series, error)
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// autoMatchTranscribedEnv is what the core takes from its shell. env.Live is the
+// apply switch (dry_run=false). The core writes nothing itself: the apply is
+// Runners.ApplyTranscriptionCandidate, which the native shell builds over the
+// run's gated writer (t6g1Deps.NewTranscriptionRunners).
+type autoMatchTranscribedEnv struct {
+	t6g1Env
+	Store autoMatchTranscribedStore
+	// ManualOnly are the owner-manual check's readers; its Series reader is
+	// replaced by the run's own series index.
+	ManualOnly applygate.ManualOnlyReaders
+	// Items runs the book pool.
+	Items t6g1ItemsFunc
+	// Runners searches and applies transcription candidates.
+	Runners TranscriptionRunners
+	// HasService reports whether the metadata fetch service is wired.
+	HasService func() bool
+	// SaveCheckpoint stores the run's checkpoint (autoMatchTranscribedParams).
+	SaveCheckpoint func(state any) error
+}
+
+// autoMatchTranscribedNativeParams are the native kind's params: HEAD's without
+// dry_run (the run's mode carries it) and without last_book_id (rc.Restore
+// carries the checkpoint).
+type autoMatchTranscribedNativeParams struct {
+	MinScore float64 `json:"min_score,omitempty"`
+}
+
+// autoMatchTranscribedParallelism is the book pool. HEAD sets Concurrency 1 on
+// purpose: the apply is a fail-safe-capped, checkpointed walk.
+func autoMatchTranscribedParallelism() tasks.Parallelism {
+	return tasks.Fixed(1, "the bulk-apply cap counts applies in order and the checkpoint is the last book visited")
+}
+
+// autoMatchTranscribedNative is the native kind. Preview is the dry run.
+func (p *Plugin) autoMatchTranscribedNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(autoMatchTranscribedKind, sched)
+	c.Title = "Auto-match transcribed books"
+	c.Help = autoMatchTranscribedHelp
+	// HEAD declared no write set; the apply is ApplyTranscriptionCandidate, which
+	// fills a book's title or author (creating the author row and journaling).
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	// The run checkpoints the last book visited and restores it (rc.Restore).
+	c.Resume = tasks.ResumeContinue
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.auto-match-transcribed")
+	c.Timeout = 12 * time.Hour
+	return tasks.Task(autoMatchTranscribedKind, tasks.TaskSpec[autoMatchTranscribedNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, np autoMatchTranscribedNativeParams) (struct{}, error) {
+			params := autoMatchTranscribedParams{MinScore: np.MinScore}
+			var cp autoMatchTranscribedParams
+			ok, err := rc.Restore(&cp)
+			if err != nil {
+				return struct{}{}, fmt.Errorf("maintenance.auto-match-transcribed: restore checkpoint: %w", err)
+			}
+			if ok {
+				params.LastBookID = cp.LastBookID
+			}
+			env := autoMatchTranscribedEnv{
+				t6g1Env:        t6g1NativeEnv(rc),
+				ManualOnly:     deps.ManualOnly,
+				Items:          t6g1NativeItems(rc),
+				HasService:     func() bool { return deps.NewTranscriptionRunners != nil },
+				SaveCheckpoint: func(state any) error { return rc.Checkpoint(state) },
+			}
+			if deps.NewTranscriptionRunners != nil {
+				env.Runners = deps.NewTranscriptionRunners(rc.Writer())
+			}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			return struct{}{}, autoMatchTranscribedCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// autoMatchTranscribedCore is the body of runAutoMatchTranscribed from the
+// min_score default on. env.Live is the apply switch.
+func autoMatchTranscribedCore(ctx context.Context, params autoMatchTranscribedParams, env autoMatchTranscribedEnv) error {
+	store := env.Store
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	if env.HasService == nil || !env.HasService() {
+		return fmt.Errorf("metadata fetch service not initialized; cannot run auto-match-transcribed")
+	}
+	dryRun := !env.Live
+
 	// Default min_score to 0.75.
 	minScore := params.MinScore
 	if minScore <= 0 {
 		minScore = 0.75
 	}
 
-	log := reporter.Logger()
+	log := env.Logger
 
 	allIDs, err := store.ListBookIDs()
 	if err != nil {
@@ -118,7 +234,7 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		"total_books", total, "start_index", startIdx)
 
 	if startIdx >= total {
-		_ = reporter.UpdateProgress(total, total, "nothing to process — already at end")
+		env.Progress(total, total, "nothing to process — already at end")
 		return nil
 	}
 
@@ -146,10 +262,30 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		seriesNames[s.ID] = s.Name
 	}
 
+	mo := env.ManualOnly
+	mo.Series = seriesNames
+
 	// lastID tracks the most-recently visited book for checkpoint writes.
 	lastID := params.LastBookID
 
-	err = registry.RunItems(ctx, reporter, allIDs[startIdx:], func(ctx context.Context, id string) error {
+	err = env.Items(ctx, total-startIdx, t6g1ItemsOptions{
+		Concurrency:   1,
+		ProgressTotal: total,
+		ProgressBase:  startIdx,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("auto-match %d/%d — eligible: %d, applied: %d",
+				startIdx+i+1, t, eligible, applied)
+		},
+		CheckpointState: func(_ context.Context, _ int) error {
+			dr := dryRun
+			return env.SaveCheckpoint(autoMatchTranscribedParams{
+				LastBookID: lastID,
+				DryRun:     &dr,
+				MinScore:   minScore,
+			})
+		},
+	}, func(ctx context.Context, idx int) error {
+		id := allIDs[startIdx+idx]
 		scanned++
 		b, getErr := store.GetBookByID(id)
 		if getErr != nil || b == nil {
@@ -183,7 +319,7 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 			transAuthor = *b.TranscribedAuthor
 		}
 
-		top, found, searchErr := p.deps.SearchTranscriptionCandidate(
+		top, found, searchErr := env.Runners.SearchTranscriptionCandidate(
 			ctx, id, transTitle, transAuthor,
 		)
 		candTitle, candAuthor, score := top.Title, top.Author, top.Score
@@ -231,7 +367,7 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		// ApplyTranscriptionCandidate re-runs before it writes, so a dry run
 		// and a real run skip the same books; a refusal there (the cache
 		// changed since this read) is still counted below.
-		guard := applygate.BulkManualOnlyGuard(applygate.ManualOnlyReaders{Files: store, Series: seriesNames, Authors: store, Tags: p.deps.BookTagReader()}, b, transTitle)
+		guard := applygate.BulkManualOnlyGuard(mo, b, transTitle)
 		if reason, detail := applygate.ManualOnlyDetail(b,
 			&metafetch.MetadataCandidate{Title: candTitle, Author: candAuthor, Series: top.Series, ManualOnly: top.ManualOnly},
 			applygate.TranscribedSearch{Query: transTitle}, guard); reason != "" {
@@ -268,7 +404,7 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 				"applied", applied, "cap", capCounter.Cap(), "next_book_id", id)
 			return capErr
 		}
-		applyErr := p.deps.ApplyTranscriptionCandidate(ctx, id, candTitle, candAuthor)
+		applyErr := env.Runners.ApplyTranscriptionCandidate(ctx, id, candTitle, candAuthor)
 		if errors.Is(applyErr, ErrTranscriptionNothingToFill) {
 			// Nothing left to write (filled since the pre-check, or the match
 			// has no value for the empty field, or it is locked): a skip, not
@@ -306,22 +442,6 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 			"book_id", id, "db_title", b.Title, "candidate", candTitle, "score", score)
 		applied++
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:    1,
-		ProgressTotal:  total,
-		ProgressOffset: startIdx,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("auto-match %d/%d — eligible: %d, applied: %d",
-				startIdx+i+1, t, eligible, applied)
-		},
-		CheckpointFn: func(_ context.Context) error {
-			dr := dryRun
-			return reporter.Checkpoint(autoMatchTranscribedParams{
-				LastBookID: lastID,
-				DryRun:     &dr,
-				MinScore:   minScore,
-			})
-		},
 	})
 	if err != nil {
 		return err
@@ -340,7 +460,7 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		)
 	}
 	log.Info(summary)
-	_ = reporter.UpdateProgress(total, total, summary)
+	env.Progress(total, total, summary)
 	return nil
 }
 

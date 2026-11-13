@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.4.4
+// version: 1.5.0
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -15,9 +15,9 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- author-duplicate-merge ---
@@ -88,6 +88,16 @@ type authorDuplicateMergeParams struct {
 	Names []string `json:"names,omitempty"`
 }
 
+// authorDuplicateMergeHelp is the def's Description, which the native kind
+// carries as its Help.
+const authorDuplicateMergeHelp = "Merges duplicate author rows into one keeper, but ONLY for the author names " +
+	"passed in `names` (matched after normalization). There is no heuristic and no " +
+	"'merge everything that looks similar' mode: an empty `names` is a no-op. Within each " +
+	"listed group the row with the most books wins (ties go to the lowest id) and every " +
+	"other row's books are relinked onto it before it is deleted. A row still referenced " +
+	"by books the merge cannot move (trashed, non-primary, or junction-only credits) is " +
+	"held back rather than deleted. Defaults to dry_run=true; pass dry_run=false to write."
+
 func (p *Plugin) authorDuplicateMergeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-duplicate-merge",
@@ -95,13 +105,7 @@ func (p *Plugin) authorDuplicateMergeDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Merge an operator-confirmed list of duplicate authors",
-		Description: "Merges duplicate author rows into one keeper, but ONLY for the author names " +
-			"passed in `names` (matched after normalization). There is no heuristic and no " +
-			"'merge everything that looks similar' mode: an empty `names` is a no-op. Within each " +
-			"listed group the row with the most books wins (ties go to the lowest id) and every " +
-			"other row's books are relinked onto it before it is deleted. A row still referenced " +
-			"by books the merge cannot move (trashed, non-primary, or junction-only credits) is " +
-			"held back rather than deleted. Defaults to dry_run=true; pass dry_run=false to write.",
+		Description: authorDuplicateMergeHelp,
 		// ResumeRestart, matching author-conjunction-repair: the run is short and
 		// idempotent (after a successful merge the group has one live row, so a
 		// re-run reports nothing to do), so restarting beats resuming a half-known
@@ -135,7 +139,94 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 	if err != nil {
 		return err
 	}
-	log := reporter.Logger()
+	env := authorDuplicateMergeEnv{
+		t6g1Env:                t6g1HeadEnv(reporter, !dryRun),
+		Store:                  t6g1HeadStore{store},
+		Writer:                 t6g1HeadWriter{store},
+		AcquireStandDown:       p.t6g1HeadStandDown(reporter),
+		InvalidateAuthorsCache: p.deps.InvalidateAuthorsCache,
+		InvalidateDedupCache:   p.deps.InvalidateDedupCache,
+	}
+	return authorDuplicateMergeCore(ctx, params.Names, env)
+}
+
+// authorDuplicateMergeKind is rule R3's kind for the def above.
+const authorDuplicateMergeKind = tasks.Kind("books.maintenance.author-duplicate-merge")
+
+// authorDuplicateMergeStore is the reads the op makes: the author lists, the
+// unfiltered reference buckets the delete guard compares, and what a merge reads.
+type authorDuplicateMergeStore interface {
+	t6g1MergeReader
+	GetAllAuthors() ([]database.Author, error)
+	GetAllAuthorBookCounts() (map[int]int, error)
+	// AuthorRefBucketCounts is database.AuthorRefBucketCounts over the store.
+	AuthorRefBucketCounts() (map[int]database.AuthorRefBuckets, error)
+}
+
+// authorDuplicateMergeEnv is what the core takes from its shell. env.Live is the
+// apply switch (dry_run=false).
+type authorDuplicateMergeEnv struct {
+	t6g1Env
+	Store  authorDuplicateMergeStore
+	Writer t6g1MergeWriter
+	// AcquireStandDown parks the library scan for the apply's write phase.
+	AcquireStandDown func(ctx context.Context, reason string) (t6g1Hold, error)
+	// InvalidateAuthorsCache and InvalidateDedupCache drop the cached author list
+	// after an apply that wrote.
+	InvalidateAuthorsCache func()
+	InvalidateDedupCache   func()
+}
+
+// authorDuplicateMergeNativeParams are the native kind's params: HEAD's without
+// dry_run, which the run's mode carries (Live applies, Preview reports).
+type authorDuplicateMergeNativeParams struct {
+	Names []string `json:"names,omitempty"`
+}
+
+// authorDuplicateMergeParallelism is the op's concurrency. HEAD declared none and
+// the loop is deliberately sequential: a merge rewrites a book's whole author
+// slice and two listed groups can share a book.
+func authorDuplicateMergeParallelism() tasks.Parallelism {
+	return tasks.Sequential("a merge rewrites a book's whole author slice, and two listed groups can share a book")
+}
+
+// authorDuplicateMergeNative is the native kind. Preview is the dry run.
+func (p *Plugin) authorDuplicateMergeNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(authorDuplicateMergeKind, sched)
+	c.Title = "Merge an operator-confirmed list of duplicate authors"
+	c.Help = authorDuplicateMergeHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	c.Resume = tasks.ResumeFromZero
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.author-duplicate-merge")
+	c.Timeout = 30 * time.Minute
+	return tasks.Task(authorDuplicateMergeKind, tasks.TaskSpec[authorDuplicateMergeNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, np authorDuplicateMergeNativeParams) (struct{}, error) {
+			env := authorDuplicateMergeEnv{
+				t6g1Env:                t6g1NativeEnv(rc),
+				Writer:                 deps.NewWriter(rc.Writer()),
+				AcquireStandDown:       t6g1NativeStandDown(rc, deps.StandDownKey),
+				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,
+				InvalidateDedupCache:   deps.InvalidateDedupCache,
+			}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			return struct{}{}, authorDuplicateMergeCore(rc.Context(), np.Names, env)
+		},
+	})
+}
+
+// authorDuplicateMergeCore is the body of runAuthorDuplicateMerge from the
+// allowlist on.
+func authorDuplicateMergeCore(ctx context.Context, names []string, env authorDuplicateMergeEnv) error {
+	store := env.Store
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	dryRun := !env.Live
+	log := env.Logger
 
 	// Build the allowlist FIRST, before any store read. Two listed names that
 	// normalize to the same group are folded here rather than processed twice --
@@ -144,7 +235,7 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 	nameOutcomes := map[string]int{}
 	wanted := map[string]string{} // normalized form -> the spelling the operator typed
 	var wantedOrder []string
-	for _, n := range params.Names {
+	for _, n := range names {
 		norm := util.NormalizeAuthor(n)
 		if norm == "" {
 			nameOutcomes[authorDupNameBlank]++
@@ -169,10 +260,10 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 	if len(wantedOrder) == 0 {
 		summary := fmt.Sprintf(
 			"author-duplicate-merge complete (dry_run=%v): names_listed=%d, names_usable=0, nothing to do "+
-				"(this op only merges names it is explicitly given)", dryRun, len(params.Names))
+				"(this op only merges names it is explicitly given)", dryRun, len(names))
 		log.Info("author-duplicate-merge: no usable names supplied, nothing to do",
-			"dry_run", dryRun, "names_listed", len(params.Names), "name_outcomes", nameOutcomes)
-		prog := sdk.NewProgress(reporter, 0)
+			"dry_run", dryRun, "names_listed", len(names), "name_outcomes", nameOutcomes)
+		prog := sdk.NewProgress(t6g1ProgressSink{fn: env.Progress}, 0)
 		prog.Start(summary)
 		prog.Done(summary)
 		return nil
@@ -203,7 +294,7 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 	// see -- live and trashed books -- against what it will move. A junction row
 	// whose book row no longer exists (dangling) used to count too, and held
 	// authors back for a reference that DeleteAuthor's sweep removes anyway.
-	refBuckets, err := database.AuthorRefBucketCounts(store)
+	refBuckets, err := store.AuthorRefBucketCounts()
 	if err != nil {
 		return fmt.Errorf("author-duplicate-merge: %w", err)
 	}
@@ -219,25 +310,24 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 
 	log.Info("author-duplicate-merge: starting",
 		"dry_run", dryRun, "authors_total", len(authors),
-		"names_listed", len(params.Names), "names_usable", len(wantedOrder))
+		"names_listed", len(names), "names_usable", len(wantedOrder))
 
 	// The scan stand-down is acquired ONCE for the whole write phase, matching
 	// mark_missing_files.go / missing_file_repoint.go / recover_missing_files.go.
 	// A running library.scan rewrites book rows underneath an apply, so the writes
 	// below must not race it. A dry run writes nothing and therefore takes no gate:
 	// parking the scanner to read would be a real cost for no reason.
-	var standDownHolder string
-	var standDownHeld bool
+	var standDown t6g1Hold
 	if !dryRun {
-		holderID, held, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "author-duplicate-merge apply")
+		hold, sdErr := env.AcquireStandDown(ctx, "author-duplicate-merge apply")
 		if sdErr != nil {
 			return fmt.Errorf("author-duplicate-merge: acquire scan stand-down: %w", sdErr)
 		}
-		defer releaseStandDown()
-		standDownHolder, standDownHeld = holderID, held
+		defer hold.Release()
+		standDown = hold
 	}
 
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 	if !dryRun && opID == "" {
 		// Every merge is journaled under this id so the revert engine can undo it
 		// (mergeAuthorInto). Rows under no id belong to no operation a revert can
@@ -249,7 +339,7 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 	booksRelinked := 0
 	ledgerRows := 0
 
-	prog := sdk.NewProgress(reporter, len(wantedOrder))
+	prog := sdk.NewProgress(t6g1ProgressSink{fn: env.Progress}, len(wantedOrder))
 	prog.Start(fmt.Sprintf("Merging %d operator-listed author group(s) (dry_run=%v)", len(wantedOrder), dryRun))
 
 	// Deliberately SEQUENTIAL, against the repo's default preference for a worker
@@ -351,7 +441,7 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 			// the gate is not held (a dry run, or a stand-down controller that is
 			// not wired), so an op with no interlock is never spuriously aborted.
 			// An apply with no op id never gets here: it is refused above.
-			if scanStandDownLostForApply(p.deps, standDownHolder, standDownHeld) {
+			if standDown.Lost != nil && standDown.Lost() {
 				return fmt.Errorf("author-duplicate-merge: scan stand-down lease lost after %d merge(s), "+
 					"refusing to keep writing while the scanner is running", rowOutcomes[authorDupRowMerged])
 			}
@@ -360,7 +450,7 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 			// author_merge_credits row per book, one author_merge_delete row for
 			// the source), so a merge that fails partway leaves exactly the
 			// books it moved journaled, and the revert engine can undo the lot.
-			relinked, undoRows, err := p.mergeAuthorInto(ctx, src, canonical, dryRun, opID, log)
+			relinked, undoRows, err := mergeAuthorIntoVia(ctx, store, env.Writer, src, canonical, dryRun, opID, log)
 			ledgerRows += undoRows
 			if err != nil {
 				rowOutcomes[authorDupRowFailed]++
@@ -386,15 +476,15 @@ func (p *Plugin) runAuthorDuplicateMerge(ctx context.Context, rawParams json.Raw
 	// run changed nothing and dropping a warm cache costs something for nothing --
 	// the same guard as author_conjunction_repair.go:263.
 	if !dryRun && rowOutcomes[authorDupRowMerged] > 0 {
-		p.deps.InvalidateAuthorsCache()
-		p.deps.InvalidateDedupCache()
+		env.InvalidateAuthorsCache()
+		env.InvalidateDedupCache()
 		log.Info("author-duplicate-merge: invalidated author caches", "rows_written", rowOutcomes[authorDupRowMerged])
 	}
 
 	summary := fmt.Sprintf(
 		"author-duplicate-merge complete (dry_run=%v): names_listed=%d, names_usable=%d, name_outcomes=%v, "+
 			"row_outcomes=%v, books_relinked=%d, undo_rows=%d, authors_total=%d",
-		dryRun, len(params.Names), len(wantedOrder), nameOutcomes, rowOutcomes, booksRelinked, ledgerRows, len(authors))
+		dryRun, len(names), len(wantedOrder), nameOutcomes, rowOutcomes, booksRelinked, ledgerRows, len(authors))
 	log.Info("author-duplicate-merge: done",
 		"dry_run", dryRun, "name_outcomes", nameOutcomes, "row_outcomes", rowOutcomes,
 		"books_relinked", booksRelinked, "undo_rows", ledgerRows, "authors_total", len(authors))

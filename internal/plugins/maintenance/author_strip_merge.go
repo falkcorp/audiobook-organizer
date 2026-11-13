@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -20,8 +20,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- author-strip-merge ---
@@ -399,6 +399,26 @@ func (r authorStripMergeReport) summary() string {
 		r.RelinkPlanned, r.RelinkNoCandidate, r.RelinkConflict, r.RelinkSkippedITunes, r.RelinkSkippedOwnerManual, r.RelinkFailed, r.RelinkAmbiguous, r.RelinkDeferred, r.Relinked, r.RelinkNewAuthors, r.RelinkJournalRows, r.TwinDeletes)
 }
 
+// authorStripMergeHelp is the def's Description, which the native kind carries
+// as its Help.
+const authorStripMergeHelp = "Repairs author rows built out of chapter-file numbering ('001_Celestia', " +
+	"'Track 01', '000m_00s__056m_16s_43h'). Strips the numbering; when the residue names " +
+	"an existing author the row is MERGED into it ('001-147 Kevin J Anderson'), and rows " +
+	"that carry no usable name are DELETED. Rows whose residue matches nothing are left " +
+	"alone rather than renamed. Also deletes TITLE-AS-AUTHOR rows: a name matching every " +
+	"live book it credits ('Arcane Chef 2' crediting 'Arcane Chef 2: A LitRPG Adventure'), " +
+	"never a row that also credits a differently-titled book (delete_title_as_author=true). A numbered row is " +
+	"never merged into a title-as-author row. relink_title_as_author=true credits each such book to its REAL " +
+	"author when the library's own evidence (provider value, other versions, file artist tags, series " +
+	"siblings) names exactly one, creating the author through the creation gate; conflicts and no-evidence " +
+	"books are listed and left alone, and books/itunes/** and Doctor Who / Big Finish / Torchwood are never " +
+	"touched. Placeholder rows ('Unknown', 'Various', 'n/a', a duplicate " +
+	"'Unknown Author') are MERGED INTO the canonical Unknown Author row, which is never " +
+	"deleted. Pass delete_unmatched=true to delete those too (review " +
+	"the dry run first: 812 on this library, chapter and book titles). Measured 2,793 " +
+	"of 19,972 authors on this library. " +
+	"REPORT-ONLY BY DEFAULT: pass apply=true to write. Idempotent."
+
 func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-strip-merge",
@@ -406,23 +426,7 @@ func (p *Plugin) authorStripMergeDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Strip author numbering and merge",
-		Description: "Repairs author rows built out of chapter-file numbering ('001_Celestia', " +
-			"'Track 01', '000m_00s__056m_16s_43h'). Strips the numbering; when the residue names " +
-			"an existing author the row is MERGED into it ('001-147 Kevin J Anderson'), and rows " +
-			"that carry no usable name are DELETED. Rows whose residue matches nothing are left " +
-			"alone rather than renamed. Also deletes TITLE-AS-AUTHOR rows: a name matching every " +
-			"live book it credits ('Arcane Chef 2' crediting 'Arcane Chef 2: A LitRPG Adventure'), " +
-			"never a row that also credits a differently-titled book (delete_title_as_author=true). A numbered row is " +
-			"never merged into a title-as-author row. relink_title_as_author=true credits each such book to its REAL " +
-			"author when the library's own evidence (provider value, other versions, file artist tags, series " +
-			"siblings) names exactly one, creating the author through the creation gate; conflicts and no-evidence " +
-			"books are listed and left alone, and books/itunes/** and Doctor Who / Big Finish / Torchwood are never " +
-			"touched. Placeholder rows ('Unknown', 'Various', 'n/a', a duplicate " +
-			"'Unknown Author') are MERGED INTO the canonical Unknown Author row, which is never " +
-			"deleted. Pass delete_unmatched=true to delete those too (review " +
-			"the dry run first: 812 on this library, chapter and book titles). Measured 2,793 " +
-			"of 19,972 authors on this library. " +
-			"REPORT-ONLY BY DEFAULT: pass apply=true to write. Idempotent.",
+		Description: authorStripMergeHelp,
 		// ResumeDrop, not Requeue: this deletes rows, and a half-finished run
 		// that silently resumes after a restart is harder to reason about than
 		// one that stops and is re-triggered. Re-running is cheap and idempotent.
@@ -466,16 +470,144 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	log := reporter.Logger()
+	env := authorStripMergeEnv{
+		t6g1Env: t6g1HeadEnv(reporter, params.Apply),
+		Store:   t6g1HeadStore{store},
+		Writer:  t6g1HeadWriter{store},
+		// The owner-manual check's readers; tags come from their own accessor
+		// (OpsStore does not carry them).
+		ManualOnly: applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: p.deps.BookTagReader()},
+	}
+	return authorStripMergeCore(ctx, params, env)
+}
+
+// authorStripMergeKind is rule R3's kind for the def above.
+const authorStripMergeKind = tasks.Kind("books.maintenance.author-strip-merge")
+
+// authorStripMergeStore is the reads the op makes: the author, book and series
+// lists, the credits of a row, and what the relink and a merge read.
+type authorStripMergeStore interface {
+	t6g1MergeReader
+	authorPathLinkAuthorReader
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetAllSeries() ([]database.Series, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+}
+
+// authorStripMergeWriter is the writes the op makes: merges, the junk-row
+// unlink and delete, the relink's credit and primary rewrites and its journal,
+// and the authors the relink mints.
+type authorStripMergeWriter interface {
+	t6g1MergeWriter
+	CreateAuthor(name string) (*database.Author, error)
+	DeleteAuthor(id int) error
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	RecordOperationChange(change *database.OperationChange) error
+}
+
+// authorStripMergeEnv is what the core takes from its shell. env.Live is the
+// apply switch (HEAD's apply=true).
+type authorStripMergeEnv struct {
+	t6g1Env
+	Store  authorStripMergeStore
+	Writer authorStripMergeWriter
+	// ManualOnly are the owner-manual check's readers.
+	ManualOnly applygate.ManualOnlyReaders
+}
+
+// authorStripMergeNativeParams are the native kind's params: HEAD's without
+// apply, which the run's mode carries (Live applies, Preview reports).
+type authorStripMergeNativeParams struct {
+	Limit               int   `json:"limit"`
+	DeleteJunk          *bool `json:"delete_junk,omitempty"`
+	DeleteUnmatched     bool  `json:"delete_unmatched"`
+	DeleteTitleAsAuthor bool  `json:"delete_title_as_author"`
+	RelinkTitleAsAuthor bool  `json:"relink_title_as_author"`
+}
+
+// authorStripMergeParallelism is the op's concurrency. HEAD declared none and
+// the plan is applied one row at a time: a merge or an unlink rewrites a book's
+// whole author slice.
+func authorStripMergeParallelism() tasks.Parallelism {
+	return tasks.Sequential("HEAD declared no concurrency; each merge or unlink rewrites a book's whole author slice, and rows can share a book")
+}
+
+// authorStripMergeNative is the native kind. Preview is the report-only run
+// (HEAD's apply=false); Live applies.
+func (p *Plugin) authorStripMergeNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(authorStripMergeKind, sched)
+	c.Title = "Strip author numbering and merge"
+	c.Help = authorStripMergeHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.author-strip-merge")
+	c.Timeout = 60 * time.Minute
+	return tasks.Task(authorStripMergeKind, tasks.TaskSpec[authorStripMergeNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, np authorStripMergeNativeParams) (struct{}, error) {
+			env := authorStripMergeEnv{
+				t6g1Env:    t6g1NativeEnv(rc),
+				Writer:     deps.NewWriter(rc.Writer()),
+				ManualOnly: deps.ManualOnly,
+			}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			params := authorStripMergeParams{
+				Limit: np.Limit, DeleteJunk: np.DeleteJunk, DeleteUnmatched: np.DeleteUnmatched,
+				DeleteTitleAsAuthor: np.DeleteTitleAsAuthor, RelinkTitleAsAuthor: np.RelinkTitleAsAuthor,
+			}
+			return struct{}{}, authorStripMergeCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// t6g1RelinkStore is the relink's titleRelinkStore over a reader and a gated
+// writer: the relink (author_strip_merge_relink.go) takes one store value, so
+// this routes its three writes through the writer and leaves its reads on the
+// reader.
+type t6g1RelinkStore struct {
+	authorStripMergeStore
+	w authorStripMergeWriter
+}
+
+func (s t6g1RelinkStore) SetBookAuthors(bookID string, authors []database.BookAuthor) error {
+	return s.w.SetBookAuthors(bookID, authors)
+}
+
+func (s t6g1RelinkStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return s.w.ModifyBook(id, fn)
+}
+
+// CreateOperationChange journals through the writer. RecordOperationChange has
+// already classified the row by the time it gets here.
+func (s t6g1RelinkStore) CreateOperationChange(change *database.OperationChange) error {
+	return s.w.RecordOperationChange(change)
+}
+
+// authorStripMergeCore is the body of runAuthorStripMerge from the start log on.
+// env.Live is the apply switch: it overrides params.Apply, so the mode a run was
+// started in is the one it writes in.
+func authorStripMergeCore(ctx context.Context, params authorStripMergeParams, env authorStripMergeEnv) error {
+	store := env.Store
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	params.Apply = env.Live
+	log := env.Logger
 	// The undo ledger keys the title relink's rows and each merge's rows
 	// (mergeAuthorInto) by this id.
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 	log.Info("author-strip-merge start",
 		"apply", params.Apply, "delete_junk", params.deleteJunk(),
 		"delete_unmatched", params.DeleteUnmatched, "delete_title_as_author", params.DeleteTitleAsAuthor,
 		"relink_title_as_author", params.RelinkTitleAsAuthor, "limit", params.Limit)
 
-	_ = reporter.UpdateProgress(0, 2, "Listing authors…")
+	env.Progress(0, 2, "Listing authors…")
 	authors, err := store.GetAllAuthors()
 	if err != nil {
 		return fmt.Errorf("list authors: %w", err)
@@ -570,7 +702,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		report.CanonicalUnknownID = u.ID
 	}
 
-	_ = reporter.UpdateProgress(1, 2, "Classifying author names…")
+	env.Progress(1, 2, "Classifying author names…")
 	for _, a := range authors {
 		if canonicalUnknown != nil && a.ID == canonicalUnknown.ID {
 			continue // the canonical placeholder is never touched
@@ -679,18 +811,15 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 	relinkWrite := params.Apply && params.RelinkTitleAsAuthor
 	var relinkedBooks map[string]bool
 	if params.RelinkTitleAsAuthor && len(titleRows)+len(twins) > 0 {
-		_ = reporter.UpdateProgress(1, 2, "Relinking title-as-author books…")
+		env.Progress(1, 2, "Relinking title-as-author books…")
 		junkIDs := make(map[int]bool, len(titleRows)+len(twins))
 		junkRows := append(append([]database.Author{}, titleRows...), twins...)
 		for _, a := range junkRows {
 			junkIDs[a.ID] = true
 		}
 		idx := newTitleRelinkIndex(allBooksCore, authors, byName, seriesByID, junkIDs)
-		creator := newAuthorPathLinkCreator(store, !relinkWrite)
-		// The owner-manual check's readers; tags come from their own accessor
-		// (OpsStore does not carry them).
-		mo := applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: p.deps.BookTagReader()}
-		rel, rErr := relinkTitleAsAuthorBooks(ctx, store, mo, creator, junkRows, &idx, relinkWrite, params.Limit, opID, log)
+		creator := newAuthorPathLinkCreatorVia(store, env.Writer, !relinkWrite)
+		rel, rErr := relinkTitleAsAuthorBooks(ctx, t6g1RelinkStore{store, env.Writer}, env.ManualOnly, creator, junkRows, &idx, relinkWrite, params.Limit, opID, log)
 		if rErr != nil {
 			return rErr
 		}
@@ -770,7 +899,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			return ctx.Err()
 		}
 		if i%25 == 0 {
-			_ = reporter.UpdateProgress(i, len(plans), "Applying author repairs…")
+			env.Progress(i, len(plans), "Applying author repairs…")
 		}
 		if canonicalUnknown != nil && pl.from.ID == canonicalUnknown.ID {
 			// Unreachable through the classifier above; kept so that a future
@@ -804,7 +933,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 			// and only then deletes. Reused rather than reimplemented: the
 			// AuthorID step is exactly the one whose absence stranded ~212
 			// authors' books in the 2026-08-24 dangling-AuthorID incident.
-			n, _, err := p.mergeAuthorInto(ctx, pl.from, *pl.into, false, opID, log)
+			n, _, err := mergeAuthorIntoVia(ctx, store, env.Writer, pl.from, *pl.into, false, opID, log)
 			report.BooksTouched += n
 			if err != nil {
 				report.Failed++
@@ -823,7 +952,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		// set it reads every credit and reports what it WOULD do, so the
 		// authorless count in a report-only run is the apply's own number
 		// rather than a second estimate that could drift from it.
-		n, held, err := p.unlinkAndDeleteAuthor(ctx, pl.from, doomed, relinkedBooks, !params.Apply, log)
+		n, held, err := unlinkAndDeleteAuthorVia(ctx, store, env.Writer, pl.from, doomed, relinkedBooks, !params.Apply, log)
 		// Partial counts are still real work (or real prediction): a row that
 		// failed on its third book did rewrite two, and the report must not
 		// shrink because of it.
@@ -852,7 +981,7 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 	}
 	report.BooksHeldSoleCredit = len(heldBooks)
 
-	_ = reporter.UpdateProgress(len(plans), len(plans), report.summary())
+	env.Progress(len(plans), len(plans), report.summary())
 	log.Info("author-strip-merge done", "summary", report.summary())
 	for _, s := range report.Sample {
 		log.Info("author-strip-merge plan", "change", s)
@@ -918,7 +1047,9 @@ func dropMergesIntoRemovedRows(plans []authorStripPlan, report *authorStripMerge
 // (authorjunk.ClassifyName). A lookup that fails or finds nothing answers false:
 // a credit that cannot be shown to be a person does not count as the book's
 // remaining author, so the book is held rather than left to it.
-func (p *Plugin) isRealAuthor(store OpsStore, id int) bool {
+func isRealAuthor(store interface {
+	GetAuthorByID(id int) (*database.Author, error)
+}, id int) bool {
 	a, err := store.GetAuthorByID(id)
 	if err != nil || a == nil || a.ID != id {
 		return false
@@ -950,6 +1081,13 @@ func (p *Plugin) isRealAuthor(store OpsStore, id int) bool {
 // same run (a dry run has not written them yet), which are not at risk.
 func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author, doomed map[int]bool, relinked map[string]bool, dryRun bool, log *slog.Logger) (unlinked int, held []string, err error) {
 	store := p.deps.OpsStore()
+	return unlinkAndDeleteAuthorVia(ctx, t6g1HeadStore{store}, t6g1HeadWriter{store}, from, doomed, relinked, dryRun, log)
+}
+
+// unlinkAndDeleteAuthorVia is unlinkAndDeleteAuthor over a reader and a writer,
+// so the native kind reaches it through its run's gated writer. Every other
+// line is the body it had.
+func unlinkAndDeleteAuthorVia(ctx context.Context, store authorStripMergeStore, writer authorStripMergeWriter, from database.Author, doomed map[int]bool, relinked map[string]bool, dryRun bool, log *slog.Logger) (unlinked int, held []string, err error) {
 
 	// ForRelink, not WithRole: the trash is included, because DeleteAuthor
 	// below sweeps the author out of trashed books' junction rows too.
@@ -979,7 +1117,7 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 			// A survivor is an author-role credit (a narrator is never one) whose
 			// author is not itself junk by name: the same test the junk-author
 			// repair uses (hasOtherRealAuthorCredit), so the two never disagree.
-			if !doomed[ba.AuthorID] && isPrimaryAuthorRole(ba.Role) && p.isRealAuthor(store, ba.AuthorID) {
+			if !doomed[ba.AuthorID] && isPrimaryAuthorRole(ba.Role) && isRealAuthor(store, ba.AuthorID) {
 				survivors++
 			}
 			ba.Position = len(remaining)
@@ -990,7 +1128,7 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 		// (junction and AuthorID are known to diverge on this library; a book
 		// whose primary is not being touched keeps that credit).
 		keepsPrimary := book.AuthorID != nil && *book.AuthorID != from.ID && !doomed[*book.AuthorID] &&
-			p.isRealAuthor(store, *book.AuthorID)
+			isRealAuthor(store, *book.AuthorID)
 		// A trashed book does not hold the row: it is not in the library, and a
 		// junk row that only trashed books still credit would otherwise stay
 		// for ever.
@@ -1003,7 +1141,7 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 			unlinked++
 			continue
 		}
-		if err := store.SetBookAuthors(book.ID, remaining); err != nil {
+		if err := writer.SetBookAuthors(book.ID, remaining); err != nil {
 			return unlinked, held, fmt.Errorf("set book authors for %s: %w", book.ID, err)
 		}
 
@@ -1032,7 +1170,7 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 			// (ModifyBook), so a column another writer commits meanwhile is
 			// not reverted (audit A1#15). The fresh row decides: a book whose
 			// primary already moved off the deleted author is left alone.
-			written, err := store.ModifyBook(book.ID, func(full *database.Book) error {
+			written, err := writer.ModifyBook(book.ID, func(full *database.Book) error {
 				if full.AuthorID == nil || *full.AuthorID != from.ID {
 					return database.ErrSkipBookWrite
 				}
@@ -1058,10 +1196,10 @@ func (p *Plugin) unlinkAndDeleteAuthor(ctx context.Context, from database.Author
 	if dryRun || len(held) > 0 {
 		return unlinked, held, nil
 	}
-	if err := database.VerifyAuthorUnlinked(store, from.ID); err != nil {
+	if err := store.VerifyAuthorUnlinked(from.ID); err != nil {
 		return unlinked, held, err
 	}
-	if err := store.DeleteAuthor(from.ID); err != nil {
+	if err := writer.DeleteAuthor(from.ID); err != nil {
 		return unlinked, held, fmt.Errorf("delete author %d: %w", from.ID, err)
 	}
 	return unlinked, held, nil

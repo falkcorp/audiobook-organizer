@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.15.4
+// version: 1.16.0
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -21,8 +21,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // maintenance.author-dedup-scan was retired into dedup.author-scan (04-P14a); its
@@ -86,20 +86,24 @@ import (
 // part is not linked again, and both writes skip a book that no longer names the
 // composite (TestAuthorSplitScan_NoCreditLostWhenEitherWriteFails,
 // TestAuthorSplitScan_RequeueAfterPartialApply).
+// authorSplitScanHelp is the def's Description, which the native kind carries as
+// its Help.
+const authorSplitScanHelp = "Finds and splits composite author names (e.g. 'Smith, J. & Jones, A.'). " +
+	"DRY RUN BY DEFAULT, including the scheduled run: lists each composite and its parts; " +
+	"pass dry_run=false to create the parts, relink books and delete the composite."
+
 func (p *Plugin) authorSplitScanDef() sdk.OperationDef {
 	sched := "0 2 * * 1" // 02:00 every Monday
 	return sdk.OperationDef{
-		ID:          "maintenance.author-split-scan",
-		Preview:     sdk.PreviewSpec{Params: opmode.DryRunParams{}},
-		FormerIDs:   []string{"scheduler.author-split-scan"},
-		Permissions: []auth.Permission{auth.PermSettingsManage},
-		Writes:      []sdk.Resource{sdk.ResBooks, sdk.ResAuthors},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "maintenance",
-		DisplayName: "Author split scan",
-		Description: "Finds and splits composite author names (e.g. 'Smith, J. & Jones, A.'). " +
-			"DRY RUN BY DEFAULT, including the scheduled run: lists each composite and its parts; " +
-			"pass dry_run=false to create the parts, relink books and delete the composite.",
+		ID:              "maintenance.author-split-scan",
+		Preview:         sdk.PreviewSpec{Params: opmode.DryRunParams{}},
+		FormerIDs:       []string{"scheduler.author-split-scan"},
+		Permissions:     []auth.Permission{auth.PermSettingsManage},
+		Writes:          []sdk.Resource{sdk.ResBooks, sdk.ResAuthors},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "maintenance",
+		DisplayName:     "Author split scan",
+		Description:     authorSplitScanHelp,
 		ResumePolicy:    sdk.ResumeRequeue,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.author-split-scan",
@@ -152,8 +156,9 @@ type authorSplitItem struct {
 // authorSplitRun holds the apply's shared counters. Every field is read by the
 // RunItems Label closure from worker goroutines, so all are atomics.
 type authorSplitRun struct {
-	store    OpsStore
-	reporter sdk.Reporter
+	store  authorSplitStore
+	writer authorSplitWriter
+	env    t6g1Env
 
 	attempted    atomic.Int64
 	booksUpdated atomic.Int64
@@ -196,7 +201,7 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	book := it.book
 
 	wroteCredits := false
-	_, err := r.store.ModifyBookAuthors(book.ID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+	_, err := r.writer.ModifyBookAuthors(book.ID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
 		var fresh *database.Book
 		freshRead := false
 		updated := cur
@@ -255,7 +260,7 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	if err != nil {
 		r.relinkErrs.Add(1)
 		r.errCount.Add(1)
-		_ = r.reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: credits of book %s not relinked: %v", book.ID, err))
+		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: credits of book %s not relinked: %v", book.ID, err))
 		authorSplitLog.Warn("author split: credits of book %s not relinked: %s", logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(err.Error()))
 		return // the primary stays on the composite, which keeps the book listed under it
 	}
@@ -280,7 +285,7 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	newPrimary := primaryPlan.newAuthors[0]
 	firstID := newPrimary.ID
 	applied := false
-	written, err := r.store.ModifyBook(book.ID, func(full *database.Book) error {
+	written, err := r.writer.ModifyBook(book.ID, func(full *database.Book) error {
 		if full.AuthorID == nil || *full.AuthorID != composite.ID {
 			return database.ErrSkipBookWrite
 		}
@@ -292,14 +297,14 @@ func (r *authorSplitRun) relinkBook(it *authorSplitItem) {
 	switch {
 	case err != nil:
 		r.errCount.Add(1)
-		_ = r.reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: failed to update primary author on book %s: %v", book.ID, err))
+		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: failed to update primary author on book %s: %v", book.ID, err))
 		authorSplitLog.Warn("author split: primary author write failed: book=%s author=%q err=%s",
 			logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(composite.Name), logger.SanitizeLogValue(err.Error()))
 	case written == nil:
 		r.errCount.Add(1)
-		_ = r.reporter.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s no longer exists, primary author not updated", book.ID))
+		r.env.Log(slog.LevelWarn, fmt.Sprintf("author split: book %s no longer exists, primary author not updated", book.ID))
 	case !applied:
-		_ = r.reporter.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left author %q meanwhile, primary author not updated", book.ID, composite.Name))
+		r.env.Log(slog.LevelInfo, fmt.Sprintf("author split: book %s left author %q meanwhile, primary author not updated", book.ID, composite.Name))
 	default:
 		r.booksUpdated.Add(1)
 		r.wrote.Store(true)
@@ -311,21 +316,108 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 	if err != nil {
 		return err
 	}
-	store := p.deps.OpsStore()
+	env := authorSplitEnv{
+		t6g1Env:              t6g1HeadEnv(reporter, !dryRun),
+		Items:                t6g1HeadItems(reporter),
+		Hold:                 p.t6g1HeadHold(reporter),
+		InvalidateDedupCache: p.deps.InvalidateDedupCache,
+	}
+	// A nil OpsStore stays a nil interface in env.Store, which the core reports
+	// as "database not initialized".
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store, env.Writer = store, store
+	}
+	return authorSplitScanCore(ctx, env)
+}
+
+// authorSplitScanKind is rule R3's kind for the def above.
+const authorSplitScanKind = tasks.Kind("books.maintenance.author-split-scan")
+
+// authorSplitStore is the reads the op makes.
+type authorSplitStore interface {
+	GetAllAuthors() ([]database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
+}
+
+// authorSplitWriter is the writes the op makes: the parts it creates, the two
+// per-book writes and the composite's delete.
+type authorSplitWriter interface {
+	CreateAuthor(name string) (*database.Author, error)
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	DeleteAuthor(id int) error
+}
+
+// authorSplitEnv is what the core takes from its shell.
+type authorSplitEnv struct {
+	t6g1Env
+	Store  authorSplitStore
+	Writer authorSplitWriter
+	// Items runs the apply's book pool.
+	Items t6g1ItemsFunc
+	// Hold takes the library scan stand-down for the apply.
+	Hold func(ctx context.Context, reason string) (t6g1Held, error)
+	// InvalidateDedupCache drops the duplicate-author cache after a write.
+	InvalidateDedupCache func()
+}
+
+// authorSplitScanParallelism is the apply's book pool (authorSplitScanWorkers).
+func authorSplitScanParallelism() tasks.Parallelism {
+	return tasks.Fixed(authorSplitScanWorkers, "Pebble reads and writes on disjoint books; a small fixed pool keeps the store busy without piling writers on one stripe")
+}
+
+// authorSplitScanNative is the native kind. Preview is the dry run (reads
+// only); Live applies.
+func (p *Plugin) authorSplitScanNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(authorSplitScanKind, sched)
+	c.Title = "Author split scan"
+	c.Help = authorSplitScanHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"))
+	c.Resume = tasks.ResumeFromZero
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.author-split-scan")
+	c.Timeout = 2 * time.Hour
+	return tasks.Task(authorSplitScanKind, tasks.TaskSpec[struct{}, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, _ struct{}) (struct{}, error) {
+			base := t6g1NativeEnv(rc)
+			items := t6g1NativeItems(rc)
+			env := authorSplitEnv{
+				t6g1Env:              base,
+				Writer:               deps.NewWriter(rc.Writer()),
+				Items:                items,
+				Hold:                 t6g1NativeHold(rc, base, items, deps.StandDownKey),
+				InvalidateDedupCache: deps.InvalidateDedupCache,
+			}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			return struct{}{}, authorSplitScanCore(rc.Context(), env)
+		},
+	})
+}
+
+// authorSplitScanCore is the body of runAuthorSplitScan from the store check
+// on; env.Live is the apply switch (dry_run=false).
+func authorSplitScanCore(ctx context.Context, env authorSplitEnv) (retErr error) {
+	dryRun := !env.Live
+	store := env.Store
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Starting author split scan (dry_run=%v)", dryRun))
+	env.Log(slog.LevelInfo, fmt.Sprintf("Starting author split scan (dry_run=%v)", dryRun))
 
 	authors, err := store.GetAllAuthors()
 	if err != nil {
 		return fmt.Errorf("failed to get authors: %w", err)
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Scanning %d authors for composite names...", len(authors)))
+	env.Log(slog.LevelInfo, fmt.Sprintf("Scanning %d authors for composite names...", len(authors)))
 
 	// Classification: pure name splitting, no store call, so it stays one loop.
 	total := len(authors)
-	prog := sdk.NewProgress(reporter, total)
+	prog := sdk.NewProgress(t6g1ProgressSink{fn: env.Progress}, total)
 	prog.Start(fmt.Sprintf("Scanning %d authors for composite names...", total))
 	var composites []authorSplitComposite
 	for i, author := range authors {
@@ -341,11 +433,11 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 	}
 
 	if dryRun {
-		return p.previewAuthorSplit(ctx, store, reporter, prog, composites)
+		return previewAuthorSplit(ctx, store, env.t6g1Env, prog, composites)
 	}
 	if len(composites) == 0 {
 		resultMsg := "Split 0 composite authors, updated 0 books (0 errors, 0 books not relinked)"
-		_ = reporter.Log(slog.LevelInfo, resultMsg)
+		env.Log(slog.LevelInfo, resultMsg)
 		prog.Done(resultMsg)
 		return nil
 	}
@@ -355,19 +447,21 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 	// taken only now that a composite exists: a pass that finds nothing to split
 	// must not park a running scan. RunItems beats the lease per book and stops
 	// before the next write once it is lost.
-	hold, sdErr := registry.HoldScanStandDown(ctx, p.deps, reporter, "maintenance.author-split-scan apply")
+	hold, sdErr := env.Hold(ctx, "maintenance.author-split-scan apply")
 	if sdErr != nil {
 		return sdErr
 	}
 	defer func() { retErr = hold.Finish(retErr) }()
-	ctx, reporter = hold.Context(), hold.Reporter()
+	// The hold rebinds the context (canceled when the lease is lost) and the
+	// progress/log/pool the write phase reports through.
+	ctx, env.t6g1Env, env.Items = hold.Ctx, hold.Env, hold.Items
 
-	run := &authorSplitRun{store: store, reporter: reporter}
+	run := &authorSplitRun{store: store, writer: env.Writer, env: env.t6g1Env}
 	// Any row written means the duplicate-author cache is stale, including when
 	// the apply stops early (cancel, Timeout, lost lease).
 	defer func() {
 		if run.wrote.Load() {
-			p.deps.InvalidateDedupCache()
+			env.InvalidateDedupCache()
 		}
 	}()
 
@@ -391,7 +485,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 				newAuthors = append(newAuthors, *existing)
 				continue
 			}
-			created, cerr := store.CreateAuthor(name)
+			created, cerr := env.Writer.CreateAuthor(name)
 			if errors.Is(cerr, database.ErrImplausibleAuthorName) {
 				// A junk part ("read by narrator" split out of
 				// "Stephen King, read by narrator") is dropped on
@@ -401,7 +495,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 			if cerr != nil {
 				run.errCount.Add(1)
 				partFailed = true
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Failed to create author %q: %v", name, cerr))
+				env.Log(slog.LevelWarn, fmt.Sprintf("Failed to create author %q: %v", name, cerr))
 				continue
 			}
 			run.wrote.Store(true)
@@ -435,7 +529,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 		if lerr != nil {
 			run.errCount.Add(1)
 			pl.skipDelete = true
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Failed to get books for author %q: %v", pl.composite.Name, lerr))
+			env.Log(slog.LevelWarn, fmt.Sprintf("Failed to get books for author %q: %v", pl.composite.Name, lerr))
 			continue
 		}
 		for _, b := range books {
@@ -450,21 +544,21 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 	}
 
 	// Step 3, the pool: one item per book, disjoint by book ID.
-	runErr := registry.RunItems(ctx, reporter, items, func(_ context.Context, it *authorSplitItem) error {
-		if reporter.IsCanceled() {
-			return context.Canceled
-		}
-		run.attempted.Add(1)
-		run.relinkBook(it)
-		return nil
-	}, registry.RunItemsOptions{
+	runErr := env.Items(ctx, len(items), t6g1ItemsOptions{
 		Concurrency: authorSplitScanWorkers,
 		Label: func(i, n int) string {
 			return fmt.Sprintf("Book %d/%d (%d primary authors updated, %d errors)", i+1, n, run.booksUpdated.Load(), run.errCount.Load())
 		},
+	}, func(_ context.Context, i int) error {
+		if env.Canceled() {
+			return context.Canceled
+		}
+		run.attempted.Add(1)
+		run.relinkBook(items[i])
+		return nil
 	})
 	if runErr != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Stopped after %d of %d books: %v", run.attempted.Load(), len(items), runErr))
+		env.Log(slog.LevelWarn, fmt.Sprintf("Stopped after %d of %d books: %v", run.attempted.Load(), len(items), runErr))
 		return fmt.Errorf("author-split-scan stopped after %d of %d books: %w", run.attempted.Load(), len(items), runErr)
 	}
 
@@ -480,21 +574,21 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 			return fmt.Errorf("author-split-scan stopped before deleting composite %q: %w", pl.composite.Name, cerr)
 		}
 		if verr := database.VerifyAuthorUnlinked(store, pl.composite.ID); verr != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Composite author %q NOT deleted: %v", pl.composite.Name, verr))
+			env.Log(slog.LevelWarn, fmt.Sprintf("Composite author %q NOT deleted: %v", pl.composite.Name, verr))
 			run.errCount.Add(1)
-		} else if derr := store.DeleteAuthor(pl.composite.ID); derr != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Failed to delete composite author %q: %v", pl.composite.Name, derr))
+		} else if derr := env.Writer.DeleteAuthor(pl.composite.ID); derr != nil {
+			env.Log(slog.LevelWarn, fmt.Sprintf("Failed to delete composite author %q: %v", pl.composite.Name, derr))
 			run.errCount.Add(1)
 		} else {
 			splitCount++
 			run.wrote.Store(true)
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Split %q → %v", pl.composite.Name, pl.parts))
+			env.Log(slog.LevelInfo, fmt.Sprintf("Split %q → %v", pl.composite.Name, pl.parts))
 		}
 	}
 
 	resultMsg := fmt.Sprintf("Split %d composite authors, updated %d books (%d errors, %d books not relinked due to credit-list errors)",
 		splitCount, run.booksUpdated.Load(), run.errCount.Load(), run.relinkErrs.Load())
-	_ = reporter.Log(slog.LevelInfo, resultMsg)
+	env.Log(slog.LevelInfo, resultMsg)
 	prog.Done(resultMsg)
 	return nil
 }
@@ -505,7 +599,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 // the list is what an operator reviews before passing dry_run=false. It loops
 // over the composites alone (a short list next to the library) and costs two
 // indexed reads each, so it stays sequential.
-func (p *Plugin) previewAuthorSplit(ctx context.Context, store OpsStore, reporter sdk.Reporter, prog *sdk.Progress, composites []authorSplitComposite) error {
+func previewAuthorSplit(ctx context.Context, store authorSplitStore, env t6g1Env, prog *sdk.Progress, composites []authorSplitComposite) error {
 	errCount := 0
 	wouldSplit, wouldCreate, wouldRelink := 0, 0, 0
 	for _, c := range composites {
@@ -525,18 +619,18 @@ func (p *Plugin) previewAuthorSplit(ctx context.Context, store OpsStore, reporte
 		books, berr := store.GetBooksByAuthorIDForRelinkCore(c.author.ID)
 		if berr != nil {
 			errCount++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Failed to get books for author %q: %v", c.author.Name, berr))
+			env.Log(slog.LevelWarn, fmt.Sprintf("Failed to get books for author %q: %v", c.author.Name, berr))
 			continue
 		}
 		wouldSplit++
 		wouldCreate += missing
 		wouldRelink += len(books)
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Would split %q (id %d) → %q (%d new authors, %d books)",
+		env.Log(slog.LevelInfo, fmt.Sprintf("Would split %q (id %d) → %q (%d new authors, %d books)",
 			c.author.Name, c.author.ID, c.parts, missing, len(books)))
 	}
 	resultMsg := fmt.Sprintf("DRY RUN: would split %d composite authors, create %d authors, relink %d books (%d errors); "+
 		"pass dry_run=false to write", wouldSplit, wouldCreate, wouldRelink, errCount)
-	_ = reporter.Log(slog.LevelInfo, resultMsg)
+	env.Log(slog.LevelInfo, resultMsg)
 	prog.Done(resultMsg)
 	return nil
 }
@@ -578,18 +672,22 @@ func (p *Plugin) previewAuthorSplit(ctx context.Context, store OpsStore, reporte
 // tables, as the author ops in this plugin (author-id-repair, author-path-link)
 // declare theirs: it then waits for, rather than interleaves with, another
 // running writer of the same rows.
+// resolveProductionAuthorsHelp is the def's Description, which the native kind
+// carries as its Help.
+const resolveProductionAuthorsHelp = "Resolves real authors for production company entries using external metadata. " +
+	"DRY RUN BY DEFAULT, including the scheduled run: counts the books it would re-fetch; " +
+	"pass dry_run=false to fetch and write."
+
 func (p *Plugin) resolveProductionAuthorsDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.resolve-production-authors",
-		Preview:     sdk.PreviewSpec{Params: opmode.DryRunParams{}},
-		FormerIDs:   []string{"scheduler.resolve-production-authors"},
-		Permissions: []auth.Permission{auth.PermSettingsManage},
-		Liveness:    sdk.LivenessManual,
-		Plugin:      "maintenance",
-		DisplayName: "Resolve production company authors",
-		Description: "Resolves real authors for production company entries using external metadata. " +
-			"DRY RUN BY DEFAULT, including the scheduled run: counts the books it would re-fetch; " +
-			"pass dry_run=false to fetch and write.",
+		ID:              "maintenance.resolve-production-authors",
+		Preview:         sdk.PreviewSpec{Params: opmode.DryRunParams{}},
+		FormerIDs:       []string{"scheduler.resolve-production-authors"},
+		Permissions:     []auth.Permission{auth.PermSettingsManage},
+		Liveness:        sdk.LivenessManual,
+		Plugin:          "maintenance",
+		DisplayName:     "Resolve production company authors",
+		Description:     resolveProductionAuthorsHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.resolve-production-authors",
@@ -635,17 +733,117 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 	if err != nil {
 		return err
 	}
-	store := p.deps.OpsStore()
+	env := resolveProductionEnv{
+		t6g1Env:              t6g1HeadEnv(reporter, !dryRun),
+		Items:                t6g1HeadItems(reporter),
+		Hold:                 p.t6g1HeadHold(reporter),
+		InvalidateDedupCache: p.deps.InvalidateDedupCache,
+		Fetch:                t6g1HeadFetcher{p.deps},
+		Workers:              resolveProductionAuthorsWorkers(),
+	}
+	// A nil OpsStore stays a nil interface in env.Store, which the core reports
+	// as "database not initialized".
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = store
+	}
+	return resolveProductionAuthorsCore(ctx, env)
+}
+
+// resolveProductionAuthorsKind is rule R3's kind for the def above.
+const resolveProductionAuthorsKind = tasks.Kind("books.maintenance.resolve-production-authors")
+
+// resolveProductionStore is the reads the op makes.
+type resolveProductionStore interface {
+	GetAllAuthors() ([]database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+}
+
+// t6g1MetadataFetcher is the metadata fetch the apply runs per book. The fetch
+// applies what it finds (fill-only book fields, the author credit join, series
+// rows), so the native fetcher is built per run over that run's writer
+// (t6g1Deps.NewMetadataFetcher): its writes do not go around the gate.
+type t6g1MetadataFetcher interface {
+	// HasService reports whether the metadata fetch service is wired.
+	HasService() bool
+	// FetchByTitle re-fetches the book's metadata by title and applies it,
+	// returning the author id the book now has.
+	FetchByTitle(ctx context.Context, bookID string) (*int, error)
+}
+
+// resolveProductionEnv is what the core takes from its shell. The op's writes
+// are the fetcher's: the core itself writes nothing, so it has no writer.
+type resolveProductionEnv struct {
+	t6g1Env
+	Store resolveProductionStore
+	Fetch t6g1MetadataFetcher
+	// Items runs the apply's book pool.
+	Items t6g1ItemsFunc
+	// Workers is the pool size (resolveProductionAuthorsWorkers).
+	Workers int
+	// Hold takes the library scan stand-down for the apply.
+	Hold func(ctx context.Context, reason string) (t6g1Held, error)
+	// InvalidateDedupCache drops the duplicate-author cache after a fetch ran.
+	InvalidateDedupCache func()
+}
+
+// resolveProductionAuthorsParallelism is the apply's book pool: network-bound,
+// sized by metadata_scoring.bulk_fetch_workers.
+func resolveProductionAuthorsParallelism() tasks.Parallelism {
+	return tasks.Fixed(resolveProductionAuthorsWorkers(), "network-bound metadata fetches; each provider has its own token bucket, the pool only keeps them busy")
+}
+
+// resolveProductionAuthorsNative is the native kind. Preview counts the books;
+// Live fetches and writes.
+func (p *Plugin) resolveProductionAuthorsNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(resolveProductionAuthorsKind, sched)
+	c.Title = "Resolve production company authors"
+	c.Help = resolveProductionAuthorsHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "series"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.resolve-production-authors")
+	c.Timeout = 2 * time.Hour
+	return tasks.Task(resolveProductionAuthorsKind, tasks.TaskSpec[struct{}, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, _ struct{}) (struct{}, error) {
+			base := t6g1NativeEnv(rc)
+			items := t6g1NativeItems(rc)
+			env := resolveProductionEnv{
+				t6g1Env:              base,
+				Items:                items,
+				Hold:                 t6g1NativeHold(rc, base, items, deps.StandDownKey),
+				InvalidateDedupCache: deps.InvalidateDedupCache,
+				Workers:              resolveProductionAuthorsWorkers(),
+			}
+			if deps.NewMetadataFetcher != nil {
+				env.Fetch = deps.NewMetadataFetcher(rc.Writer())
+			} else {
+				env.Fetch = t6g1NoFetcher{}
+			}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			return struct{}{}, resolveProductionAuthorsCore(rc.Context(), env)
+		},
+	})
+}
+
+// resolveProductionAuthorsCore is the body of runResolveProductionAuthors from
+// the store check on; env.Live is the apply switch (dry_run=false).
+func resolveProductionAuthorsCore(ctx context.Context, env resolveProductionEnv) (retErr error) {
+	dryRun := !env.Live
+	store := env.Store
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	if !dryRun && !p.deps.HasMetadataFetchService() {
+	if !dryRun && !env.Fetch.HasService() {
 		// The apply is a metadata fetch per book. Without the service it would
 		// resolve nothing and report success, which is the silent no-op this
 		// def used to be.
 		return fmt.Errorf("metadata fetch service not initialized")
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Starting production author resolution (dry_run=%v)", dryRun))
+	env.Log(slog.LevelInfo, fmt.Sprintf("Starting production author resolution (dry_run=%v)", dryRun))
 
 	authors, err := store.GetAllAuthors()
 	if err != nil {
@@ -659,10 +857,10 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 		}
 	}
 
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Found %d production company authors", len(prodAuthors)))
+	env.Log(slog.LevelInfo, fmt.Sprintf("Found %d production company authors", len(prodAuthors)))
 	total := len(prodAuthors)
 	lookupFailed := 0
-	prog := sdk.NewProgress(reporter, total)
+	prog := sdk.NewProgress(t6g1ProgressSink{fn: env.Progress}, total)
 	prog.Start(fmt.Sprintf("Listing books for %d production companies", total))
 
 	// The work list, built sequentially: production companies are few and each
@@ -675,13 +873,13 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if reporter.IsCanceled() {
+		if env.Canceled() {
 			return context.Canceled
 		}
 		books, err := store.GetBooksByAuthorIDWithRoleCore(author.ID)
 		if err != nil {
 			lookupFailed++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Could not list books for production company %q (id %d): %v", author.Name, author.ID, err))
+			env.Log(slog.LevelWarn, fmt.Sprintf("Could not list books for production company %q (id %d): %v", author.Name, author.ID, err))
 			prog.StepN(i+1, fmt.Sprintf("Listed %d/%d production companies", i+1, total))
 			continue
 		}
@@ -692,7 +890,7 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 			}
 		}
 		if dryRun {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Would re-fetch metadata for %d books credited to %q (id %d)",
+			env.Log(slog.LevelInfo, fmt.Sprintf("Would re-fetch metadata for %d books credited to %q (id %d)",
 				len(books), author.Name, author.ID))
 		}
 		prog.StepN(i+1, fmt.Sprintf("Listed %d/%d production companies", i+1, total))
@@ -703,7 +901,7 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 		// it; it counts the books instead.
 		resultMsg := fmt.Sprintf("DRY RUN: would re-fetch metadata for %d books across %d production companies; "+
 			"pass dry_run=false to write", len(bookIDs), total)
-		_ = reporter.Log(slog.LevelInfo, resultMsg)
+		env.Log(slog.LevelInfo, resultMsg)
 		prog.Done(resultMsg)
 		return nil
 	}
@@ -712,7 +910,7 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 		// would park a running scan for no write.
 		resultMsg := fmt.Sprintf("Resolved 0 books across %d production companies (no books to re-fetch, %d companies' book lists unreadable)",
 			total, lookupFailed)
-		_ = reporter.Log(slog.LevelInfo, resultMsg)
+		env.Log(slog.LevelInfo, resultMsg)
 		prog.Done(resultMsg)
 		return nil
 	}
@@ -726,12 +924,14 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 	// cancelled then too, so an in-flight fetch stops searching and refuses its
 	// write if the loss lands before its apply starts. A loss that lands during
 	// the apply itself can still complete that one book's write.
-	hold, sdErr := registry.HoldScanStandDown(ctx, p.deps, reporter, "maintenance.resolve-production-authors apply")
+	hold, sdErr := env.Hold(ctx, "maintenance.resolve-production-authors apply")
 	if sdErr != nil {
 		return sdErr
 	}
 	defer func() { retErr = hold.Finish(retErr) }()
-	ctx, reporter = hold.Context(), hold.Reporter()
+	// The hold rebinds the context (canceled when the lease is lost) and the
+	// progress/log/pool the write phase reports through.
+	ctx, env.t6g1Env, env.Items = hold.Ctx, hold.Env, hold.Items
 
 	// Counters are atomics: the fetch callback and the Label closure both run
 	// inside RunItems' worker goroutines.
@@ -742,16 +942,22 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 	// stop keep their new credits.
 	defer func() {
 		if attempted.Load() > 0 {
-			p.deps.InvalidateDedupCache()
+			env.InvalidateDedupCache()
 		}
 	}()
 
-	runErr := registry.RunItems(ctx, reporter, bookIDs, func(itemCtx context.Context, bookID string) error {
-		if reporter.IsCanceled() {
+	runErr := env.Items(ctx, len(bookIDs), t6g1ItemsOptions{
+		Concurrency: env.Workers,
+		Label: func(i, n int) string {
+			return fmt.Sprintf("Book %d/%d (%d resolved, %d fetches failed)", i+1, n, resolved.Load(), fetchFailed.Load())
+		},
+	}, func(itemCtx context.Context, i int) error {
+		bookID := bookIDs[i]
+		if env.Canceled() {
 			return context.Canceled
 		}
 		attempted.Add(1)
-		newAuthorID, fetchErr := p.deps.FetchMetadataByTitle(itemCtx, bookID)
+		newAuthorID, fetchErr := env.Fetch.FetchByTitle(itemCtx, bookID)
 		if fetchErr != nil {
 			if ctx.Err() != nil {
 				// The op stopped (cancel, Timeout, lost lease), not this book.
@@ -767,20 +973,15 @@ func (p *Plugin) runResolveProductionAuthors(ctx context.Context, raw json.RawMe
 			resolved.Add(1)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: resolveProductionAuthorsWorkers(),
-		Label: func(i, n int) string {
-			return fmt.Sprintf("Book %d/%d (%d resolved, %d fetches failed)", i+1, n, resolved.Load(), fetchFailed.Load())
-		},
 	})
 
 	resultMsg := fmt.Sprintf("Resolved %d books across %d production companies (%d fetches failed, %d companies' book lists unreadable)",
 		resolved.Load(), total, fetchFailed.Load(), lookupFailed)
 	if runErr != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Stopped after %d of %d books: %s: %v", attempted.Load(), len(bookIDs), resultMsg, runErr))
+		env.Log(slog.LevelWarn, fmt.Sprintf("Stopped after %d of %d books: %s: %v", attempted.Load(), len(bookIDs), resultMsg, runErr))
 		return runErr
 	}
-	_ = reporter.Log(slog.LevelInfo, resultMsg)
+	env.Log(slog.LevelInfo, resultMsg)
 	prog.Done(resultMsg)
 	return nil
 }
