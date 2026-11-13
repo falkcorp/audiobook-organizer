@@ -94,6 +94,7 @@ var layerOf = map[string]int{
 	"internal/authorname":            0, // table: leaf
 	"internal/books/cutover":         0, // override: imports only core and its own leaf m3 (its tests import internal/books/store)
 	"internal/books/cutover/m3":      0, // computed: imports no module package (core only; a leaf under cutover that names no books package)
+	"internal/books/cutover/m5":      0, // computed: imports no module package (core only; a leaf under cutover that names no books package)
 	"internal/cache":                 0, // table: leaf
 	"internal/cfaccesspolicy":        0, // computed: imports no module package
 	"internal/cfservicetoken":        0, // computed: imports no module package

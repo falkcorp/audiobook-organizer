@@ -1,7 +1,7 @@
 // file: core/kernel/core_sections.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
-// last-edited: 2026-11-11
+// last-edited: 2026-11-13
 
 package kernel
 
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/internal/logjournal"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/tasks"
@@ -242,16 +243,15 @@ func coreSections() []any {
 		}),
 
 		// 05-logging §8: core.log is log.Settings; the journal's two sections are
-		// kernel structs that a later row (F5-15) swaps to the logjournal types
-		// in this same list.
+		// the logjournal types (F5-15).
 		config.Define("core.log", log.DefaultSettings()),
-		config.Define("core.log.journal", logJournalSettings{
+		config.Define("core.log.journal", logjournal.Settings{
 			Enabled:       true,
 			MinLevel:      "info",
 			RetentionDays: 90,
 			QueueSize:     4096,
 		}),
-		config.Define("core.log.schedules", logSchedules{JournalPrune: scheduleEvery(24 * time.Hour)}),
+		config.Define("core.log.schedules", logjournal.Schedules{JournalPrune: scheduleEvery(24 * time.Hour)}),
 
 		// 05-metadata M1.7 and M2.7
 		config.Define("core.integrations", integrationsSettings{
@@ -748,25 +748,6 @@ type libraryFreeSpace struct {
 
 type libraryQuarantine struct {
 	Retention config.Duration `json:"retention" protect:"interactive"` // 0 = keep until purged
-}
-
-// ---- core.log, core.log.journal, core.log.schedules (05-logging §8) ----
-//
-// core.log is log.Settings, the type 05-logging §3 names for it, with
-// log.DefaultSettings as its defaults; log (L0) cannot import config, so the
-// kernel registers it. log.Settings declares neither "journal" nor
-// "schedules": the sections below are the journal's, whose types do not exist
-// until F5-15 and are kernel structs until then.
-
-type logJournalSettings struct {
-	Enabled       bool   `json:"enabled" reload:"restart"`
-	MinLevel      string `json:"min_level" schema:"enum=debug|info|warn|error"`
-	RetentionDays int    `json:"retention_days" schema:"minimum=0"` // 0 = keep
-	QueueSize     int    `json:"queue_size" reload:"restart" schema:"minimum=64"`
-}
-
-type logSchedules struct {
-	JournalPrune tasks.ScheduleConfig `json:"journal_prune"`
 }
 
 // ---- core.integrations, core.providerhttp (05-metadata M1.7, M2.7) ----
