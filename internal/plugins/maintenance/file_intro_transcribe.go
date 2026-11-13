@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.6.2
+// version: 1.8.0
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // maintenance.transcribe-file-intros transcribes the first fileIntroClipSeconds
@@ -345,8 +346,14 @@ type fileIntroAccum struct {
 	writeMu sync.Mutex
 	mu      sync.Mutex
 	stats   database.FileIntroStats
-	sink    database.FileIntroStatsStore
+	sink    fileIntroStatsSink
 	log     *slog.Logger // reporter's logger; nil in tests that do not care
+}
+
+// fileIntroStatsSink persists the run's counters: the one method of
+// database.FileIntroStatsStore the accumulator calls.
+type fileIntroStatsSink interface {
+	PutFileIntroStats(*database.FileIntroStats) error
 }
 
 func (a *fileIntroAccum) update(fn func(s *database.FileIntroStats)) {
@@ -390,16 +397,49 @@ func fileIntroRunID(reporter sdk.Reporter) string {
 	return "run-" + time.Now().UTC().Format(time.RFC3339)
 }
 
-// fileIntroStore is the slice of the ops store this op reads and writes
-// through ordinary methods. (The field-scoped book_file writes come through
-// database.BookFileIntroStore, a capability.)
-type fileIntroStore interface {
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
+// fileIntroKind is the native kind of maintenance.transcribe-file-intros (rule R3).
+const fileIntroKind tasks.Kind = "books." + fileIntroOpID
+
+// fileIntroEnv is what the core needs from its engine (rules R2 and R10).
+type fileIntroEnv struct {
+	t6g4Base
+}
+
+// fileIntroNativeParams is fileIntroParams for the native run: the mode comes
+// from the start request, so dry_run and dryRun are accepted only to be refused.
+type fileIntroNativeParams struct {
+	OnlyMissing *bool  `json:"only_missing,omitempty"`
+	RetryFailed *bool  `json:"retry_failed,omitempty"`
+	ClearRunID  string `json:"clear_run_id,omitempty"`
+	DryRun      *bool  `json:"dry_run,omitempty"`
+	DryRunCamel *bool  `json:"dryRun,omitempty"`
+}
+
+// fileIntroResult is the run's outcome: the selection (always), the counters of
+// a live run, or the rollback's tallies.
+type fileIntroResult struct {
+	DryRun   bool                     `json:"dry_run"`
+	RunID    string                   `json:"run_id,omitempty"`
+	Eligible int                      `json:"eligible"`
+	Selected int                      `json:"selected"`
+	Stats    *database.FileIntroStats `json:"stats,omitempty"`
+	Cleared  *fileIntroClearResult    `json:"cleared,omitempty"`
+}
+
+// fileIntroWorkerReads is the one row read the worker makes: a donor file.
+type fileIntroWorkerReads interface {
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
-	GetBookByID(id string) (*database.Book, error)
+}
+
+// fileIntroWorkerWrites is what the worker writes: a file's result, a timeout
+// strike, and a book-level fill.
+type fileIntroWorkerWrites interface {
+	SetBookFileIntro(bookID, fileID string, r database.BookFileIntroResult) (database.BookFileIntroWrite, error)
+	RecordIntroTimeout(bookID, fileID string, s database.IntroTimeoutStrike) (database.IntroTimeoutOutcome, error)
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
+// runFileIntroTranscribe is the v2 shell around runFileIntroTranscribeCore (rule R2 item 2).
 func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	store := p.deps.OpsStore()
 	if store == nil {
@@ -415,49 +455,109 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 	if err != nil {
 		return err
 	}
+	_, err = p.runFileIntroTranscribeCore(ctx, params, fileIntroEnv{
+		t6g4Base: t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}),
+	})
+	return err
+}
+
+// fileIntroTranscribeKind is the native shell (rule R2 item 3). HEAD has a
+// preview, so a preview run counts and writes nothing.
+func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(fileIntroKind, tasks.TaskSpec[fileIntroNativeParams, fileIntroResult]{
+		Common: tasks.Common{
+			Title: "Transcribe file intros",
+			Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced.",
+			// HEAD declares no Writes (see the long comment on fileIntroTranscribeDef).
+			// The body writes a file's intro group (SetBookFileIntro, ClearBookFileIntro,
+			// RecordIntroTimeout) and a book's transcript fill (ModifyBook).
+			Effects:  tasks.Writes(t6g4Res("book_files", "books")...),
+			Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:   tasks.ResumeContinue,
+			Priority: tasks.PriorityLow,
+			// HEAD's 30 days is above tasks.MaxTimeout; the run is resumable, so a
+			// timeout at the cap continues where it stopped.
+			ConcurrencyKey:  tasks.Key("books." + fileIntroOpID),
+			Timeout:         tasks.MaxTimeout,
+			ProgressTimeout: 30 * time.Minute,
+			Schedule:        sched,
+			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in fileIntroNativeParams) (fileIntroResult, error) {
+			if in.DryRun != nil || in.DryRunCamel != nil {
+				return fileIntroResult{}, fmt.Errorf("%s: dry_run is not accepted; the run's mode comes from the start request", rc.Kind())
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return fileIntroResult{}, err
+			}
+			return p.runFileIntroTranscribeCore(rc.Context(), fileIntroParams{
+				OnlyMissing: in.OnlyMissing, RetryFailed: in.RetryFailed, ClearRunID: in.ClearRunID,
+			}, fileIntroEnv{t6g4Base: base})
+		},
+	})
+}
+
+// runFileIntroTranscribeCore is HEAD's body (rule R2 item 1) after the shell
+// resolved the store, decoded params and resolved the mode: env.Live is true
+// exactly when HEAD's dryRun is false. It reads through env.Store and writes
+// only through env.Writer.
+func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntroParams, env fileIntroEnv) (fileIntroResult, error) {
+	store := env.Store
+	dryRun := !env.Live
+	reporter := env.reporter(ctx)
+	var queue OpQueueReader
+	if store.HasOperationQueue() {
+		queue = store
+	}
 	if params.ClearRunID != "" {
-		return p.clearFileIntros(ctx, store, p.deps.OperationQueueStore(), reporter, params.ClearRunID, dryRun)
+		cleared, err := p.clearFileIntrosVia(ctx, fileIntroClearIO{
+			reads: store, writes: env.Writer, writable: store.FileIntroWritesAvailable(), each: env.Each,
+		}, queue, reporter, params.ClearRunID, dryRun)
+		return fileIntroResult{DryRun: dryRun, RunID: params.ClearRunID, Cleared: &cleared}, err
 	}
 
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
 	retryFailed := params.RetryFailed != nil && *params.RetryFailed
 	mark := introModeMarker(dryRun)
-	log := reporter.Logger()
+	log := env.Logger()
 
-	_ = reporter.UpdateProgress(0, 1, mark+"Selecting work — reading every book file")
+	env.Progress(0, 1, mark+"Selecting work — reading every book file")
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("%s: read book files: %w", fileIntroOpID, err)
+		return fileIntroResult{}, fmt.Errorf("%s: read book files: %w", fileIntroOpID, err)
 	}
 	sel := selectFileIntroWork(cores, fileIntroSelectOpts{onlyMissing: onlyMissing, retryFailed: retryFailed})
 	cores = nil
+	res := fileIntroResult{DryRun: dryRun, Eligible: sel.eligible, Selected: sel.selected}
 
 	if dryRun {
-		return previewFileIntros(reporter, sel, onlyMissing)
+		return res, previewFileIntros(reporter, sel, onlyMissing)
 	}
 
 	slots := fileIntroSlots()
 	if slots < 1 {
-		return fmt.Errorf("%s: no whisper endpoint is configured (whisper_endpoints / whisper_remote_url); refusing to start a run that cannot transcribe", fileIntroOpID)
+		return res, fmt.Errorf("%s: no whisper endpoint is configured (whisper_endpoints / whisper_remote_url); refusing to start a run that cannot transcribe", fileIntroOpID)
 	}
 	if err := fileIntroPreflight(ctx); err != nil {
-		return err
+		return res, err
 	}
-	intros, ok := database.AsCapability[database.BookFileIntroStore](store)
-	if !ok {
-		return fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
+	if !store.FileIntroWritesAvailable() {
+		return res, fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
 	}
-	queue := p.deps.OperationQueueStore()
 	// A live run refuses to start while a scan or bulk apply is running (see
 	// fileIntroWaitWhileBusy for why); the preview above never reaches here.
 	if err := fileIntroRefuseIfBusy(queue); err != nil {
-		return err
+		return res, err
 	}
 
-	runID := fileIntroRunID(reporter)
+	runID := env.OpID
+	if runID == "" {
+		runID = "run-" + time.Now().UTC().Format(time.RFC3339)
+	}
+	res.RunID = runID
 	startedAt := time.Now()
-	sink, _ := database.AsCapability[database.FileIntroStatsStore](store)
-	accum := &fileIntroAccum{sink: sink, log: log, stats: database.FileIntroStats{
+	accum := &fileIntroAccum{sink: env.Writer, log: log, stats: database.FileIntroStats{
 		RunOpID: runID, StartedAt: startedAt, UpdatedAt: startedAt,
 		Eligible: sel.eligible, TranscribedAtStart: sel.transcribedAtStart, TranscribedNow: sel.transcribedAtStart,
 		Selected:      sel.selected,
@@ -471,27 +571,23 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 
 	if len(sel.groups) == 0 {
 		accum.flush(true)
-		_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
+		env.Progress(1, 1, mark+fmt.Sprintf(
 			"Done — nothing to transcribe (%d of %d eligible files already have a result)",
 			sel.transcribedAtStart, sel.eligible))
-		return nil
+		st := accum.snapshot()
+		res.Stats = &st
+		return res, nil
 	}
 	accum.flush(false)
 
 	w := &fileIntroWorker{
-		store: store, intros: intros, queue: queue, reporter: reporter, accum: accum,
+		store: store, writer: env.Writer, queue: queue, reporter: reporter, accum: accum,
 		runID: runID, onlyMissing: onlyMissing,
 	}
 	batches := chunkFileIntroGroups(sel.groups, fileIntroBatchGroups)
 	w.batchesTotal = len(batches)
 	var filesDone atomic.Int64
-	err = registry.RunItems(ctx, reporter, batches, func(ctx context.Context, b []fileIntroGroup) error {
-		n, berr := w.runBatch(ctx, b)
-		w.batchesDone.Add(1)
-		filesDone.Add(int64(n))
-		accum.flush(false)
-		return berr
-	}, registry.RunItemsOptions{
+	err = env.Each(ctx, len(batches), t6g4EachOpts{
 		// One worker per whisper slot across all endpoints. Each call carries one
 		// batch; the dispatcher places it on an endpoint with a free slot,
 		// rotating among equal-priority endpoints (allocateJobsWith), so the
@@ -502,22 +598,29 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 		Label: func(i, t int) string {
 			return mark + fmt.Sprintf("Batch %d/%d — %d of %d files handled", i+1, t, int(filesDone.Load()), sel.selected)
 		},
+	}, func(ctx context.Context, i int) error {
+		n, berr := w.runBatch(ctx, batches[i])
+		w.batchesDone.Add(1)
+		filesDone.Add(int64(n))
+		accum.flush(false)
+		return berr
 	})
 	accum.flush(true)
 	st := accum.snapshot()
+	res.Stats = &st
 	log.Info("transcribe-file-intros: finished",
 		"run_id", runID, "attempted", st.Attempted, "ok", st.OK, "unparsed", st.Unparsed, "silence", st.Silence,
 		"whisper_error", st.WhisperError, "ffmpeg_error", st.FFmpegError, "transcribe_timeout", st.TranscribeTimeout, "source_missing", st.SourceMissing, "reused", st.Reused,
 		"deferred", st.Deferred, "stale", st.Stale, "already_had", st.AlreadyHad, "book_fills", st.BookFills,
 		"coverage_now", st.TranscribedNow, "eligible", st.Eligible, "err", err)
 	if err != nil {
-		return err
+		return res, err
 	}
-	_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
+	env.Progress(1, 1, mark+fmt.Sprintf(
 		"Done — run %s: %d ok, %d unparsed, %d silent, %d whisper-err, %d ffmpeg-err, %d decode-timeout, %d source-missing, %d reused, %d deferred, %d stale; %d book transcripts filled; coverage %d/%d files",
 		runID, st.OK, st.Unparsed, st.Silence, st.WhisperError, st.FFmpegError, st.TranscribeTimeout, st.SourceMissing, st.Reused, st.Deferred, st.Stale,
 		st.BookFills, st.TranscribedNow, st.Eligible))
-	return nil
+	return res, nil
 }
 
 func chunkFileIntroGroups(gs []fileIntroGroup, size int) [][]fileIntroGroup {
@@ -559,8 +662,8 @@ func previewFileIntros(reporter sdk.Reporter, sel fileIntroSelection, onlyMissin
 // fileIntroWorker holds what a batch needs; shared by every worker goroutine,
 // so everything on it is read-only or internally synchronised.
 type fileIntroWorker struct {
-	store       fileIntroStore
-	intros      database.BookFileIntroStore
+	store       fileIntroWorkerReads
+	writer      fileIntroWorkerWrites
 	queue       OpQueueReader
 	reporter    sdk.Reporter
 	accum       *fileIntroAccum
@@ -1122,7 +1225,7 @@ func (w *fileIntroWorker) applyGroup(g fileIntroGroup, gr groupResult) (int, err
 		if r.At.IsZero() {
 			r.At = time.Now()
 		}
-		wrote, err := w.intros.SetBookFileIntro(m.BookID, m.FileID, r)
+		wrote, err := w.writer.SetBookFileIntro(m.BookID, m.FileID, r)
 		if err != nil {
 			log.Warn("transcribe-file-intros: write failed", "file_id", m.FileID, "err", err)
 			w.accum.update(func(s *database.FileIntroStats) { s.WriteErrors++ })
@@ -1146,7 +1249,7 @@ func (w *fileIntroWorker) applyGroup(g fileIntroGroup, gr groupResult) (int, err
 // transcribe_timeout status, which selection skips.
 func (w *fileIntroWorker) recordTimeout(g fileIntroGroup, m fileIntroItem, gr groupResult) {
 	log := w.reporter.Logger()
-	out, err := w.intros.RecordIntroTimeout(m.BookID, m.FileID, database.IntroTimeoutStrike{
+	out, err := w.writer.RecordIntroTimeout(m.BookID, m.FileID, database.IntroTimeoutStrike{
 		SourceHash: g.Hash, RunOpID: w.runID, Detail: gr.res.Error, At: gr.res.At,
 		Limit: transcribeTimeoutStrikeLimit, MinGap: transcribeStrikeMinGap, Worker: gr.worker,
 	})
@@ -1236,7 +1339,7 @@ func (w *fileIntroWorker) count(gr groupResult, wrote database.BookFileIntroWrit
 // that equality is how clear_run_id later recognises its own fill.
 func (w *fileIntroWorker) fillBook(bookID string, r database.BookFileIntroResult, gr groupResult) error {
 	wrote := false
-	_, err := w.store.ModifyBook(bookID, func(cur *database.Book) error {
+	_, err := w.writer.ModifyBook(bookID, func(cur *database.Book) error {
 		if cur.IntroTranscription != nil && *cur.IntroTranscription != "" {
 			return database.ErrSkipBookWrite
 		}

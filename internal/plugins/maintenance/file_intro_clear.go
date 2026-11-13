@@ -1,24 +1,56 @@
 // file: internal/plugins/maintenance/file_intro_clear.go
-// version: 1.1.1
+// version: 1.3.0
 // guid: 6f3b8d25-e471-4a09-b2c6-1d8a95e7f034
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-// clearFileIntros is rollback for maintenance.transcribe-file-intros
+// fileIntroClearReads is what the rollback reads: the book_file listing it finds
+// the run's rows in, and the two rows its preview compares.
+type fileIntroClearReads interface {
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// fileIntroClearWrites is what the rollback writes: the per-file clear and the
+// book revert (ModifyBook, under the book's own lock).
+type fileIntroClearWrites interface {
+	ClearBookFileIntro(bookID, fileID, runOpID string) (before *database.BookFile, cleared bool, err error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}
+
+// fileIntroClearIO is everything clearFileIntrosVia reaches the store through:
+// the reads, the writes, whether the store can write at all (HEAD's capability
+// probe, made by the caller), and the loop runner (rule R10: nothing else).
+type fileIntroClearIO struct {
+	reads    fileIntroClearReads
+	writes   fileIntroClearWrites
+	writable bool
+	each     func(ctx context.Context, n int, o t6g4EachOpts, fn func(ctx context.Context, i int) error) error
+}
+
+// fileIntroClearResult is what a rollback did (or, in a preview, would do).
+type fileIntroClearResult struct {
+	DryRun      bool   `json:"dry_run"`
+	RunID       string `json:"run_id"`
+	Files       int    `json:"files"`
+	BookReverts int    `json:"book_reverts"`
+	Errors      int    `json:"errors"`
+}
+
+// clearFileIntrosVia is rollback for maintenance.transcribe-file-intros
 // (clear_run_id): it removes the per-file results the named run wrote and the
 // book-level transcripts that were filled from them. It writes no undo-ledger
 // rows (owner decision: rollback is by run id).
@@ -41,28 +73,28 @@ import (
 // attempted-at); that stamp is reverted with the file row, on the same
 // exact-match rule, or the book would stay skipped as a durable failure after
 // its cause was rolled back.
-func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queue OpQueueReader, reporter sdk.Reporter, runID string, dryRun bool) error {
+//
+// HEAD's shell and the native kind both run it, so the rollback exists once.
+func (p *Plugin) clearFileIntrosVia(ctx context.Context, io fileIntroClearIO, queue OpQueueReader, reporter sdk.Reporter, runID string, dryRun bool) (fileIntroClearResult, error) {
 	mark := introModeMarker(dryRun)
 	log := reporter.Logger()
+	store := io.reads
 
-	var intros database.BookFileIntroStore
 	if !dryRun {
-		var ok bool
-		intros, ok = database.AsCapability[database.BookFileIntroStore](store)
-		if !ok {
-			return fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
+		if !io.writable {
+			return fileIntroClearResult{}, fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
 		}
 		// A scan's unlocked read-modify-write can bring a cleared group back
 		// with its stale run id, so a live clear obeys the same gate as a run.
 		if err := fileIntroRefuseIfBusy(queue); err != nil {
-			return err
+			return fileIntroClearResult{}, err
 		}
 	}
 
 	_ = reporter.UpdateProgress(0, 1, mark+"Clearing — finding the files run "+runID+" wrote")
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("%s: read book files: %w", fileIntroOpID, err)
+		return fileIntroClearResult{}, fmt.Errorf("%s: read book files: %w", fileIntroOpID, err)
 	}
 	type ref struct{ bookID, fileID string }
 	var refs []ref
@@ -85,7 +117,14 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 	// Each file is its own row and each book revert is guarded by ModifyBook's
 	// per-book lock plus an exact-match check, so workers cannot double-revert;
 	// the pool is bounded to the CPU count (the work is store reads/writes).
-	err = registry.RunItems(ctx, reporter, chunks, func(ctx context.Context, rs []ref) error {
+	err = io.each(ctx, len(chunks), t6g4EachOpts{
+		Concurrency:   t6g4CPU,
+		ProgressTotal: len(chunks),
+		Label: func(i, t int) string {
+			return mark + fmt.Sprintf("Clearing run %s — chunk %d/%d, %d files so far", runID, i+1, t, files.Load())
+		},
+	}, func(ctx context.Context, ci int) error {
+		rs := chunks[ci]
 		if !dryRun {
 			// Immediately before this chunk's writes, not only at start: a
 			// clear over many chunks outlives a scan that begins mid-run.
@@ -119,7 +158,7 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 				}
 				continue
 			}
-			prior, cleared, cerr := intros.ClearBookFileIntro(r.bookID, r.fileID, runID)
+			prior, cleared, cerr := io.writes.ClearBookFileIntro(r.bookID, r.fileID, runID)
 			if cerr != nil {
 				errs.Add(1)
 				log.Warn("transcribe-file-intros: clear failed", "file_id", r.fileID, "err", cerr)
@@ -128,7 +167,7 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 				continue
 			}
 			files.Add(1)
-			reverted, rerr := revertBookFill(store, r.bookID, prior)
+			reverted, rerr := revertBookFill(io.writes, r.bookID, prior)
 			if rerr != nil {
 				errs.Add(1)
 				log.Warn("transcribe-file-intros: book revert failed", "book_id", r.bookID, "err", rerr)
@@ -139,15 +178,9 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 		}
 		chunksDone.Add(1)
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   max(runtime.NumCPU(), 1),
-		ProgressTotal: len(chunks),
-		Label: func(i, t int) string {
-			return mark + fmt.Sprintf("Clearing run %s — chunk %d/%d, %d files so far", runID, i+1, t, files.Load())
-		},
 	})
 	if err != nil {
-		return err
+		return fileIntroClearResult{}, err
 	}
 
 	verb := "cleared"
@@ -162,7 +195,10 @@ func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queu
 	log.Info("transcribe-file-intros: clear", "run_id", runID, "dry_run", dryRun,
 		"files", files.Load(), "book_reverts", bookReverts.Load(), "errors", errs.Load(), "at", time.Now().UTC())
 	_ = reporter.UpdateProgress(1, 1, msg)
-	return nil
+	return fileIntroClearResult{
+		DryRun: dryRun, RunID: runID,
+		Files: int(files.Load()), BookReverts: int(bookReverts.Load()), Errors: int(errs.Load()),
+	}, nil
 }
 
 func ptrStrEq(a, b *string) bool {
@@ -205,7 +241,7 @@ func bookHoldsFileVerdict(b *database.Book, f *database.BookFile) bool {
 // only where they still equal the file's. It also undoes a book-level
 // transcribe_timeout verdict stamped from that row (bookHoldsFileVerdict),
 // clearing only the status, error and attempt time.
-func revertBookFill(store fileIntroStore, bookID string, prior *database.BookFile) (bool, error) {
+func revertBookFill(store bookModifier, bookID string, prior *database.BookFile) (bool, error) {
 	if prior == nil {
 		return false, nil
 	}

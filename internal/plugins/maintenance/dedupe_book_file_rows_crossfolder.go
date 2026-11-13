@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: 65b43ad1-649a-4077-856f-593cb93f5cbd
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -190,6 +190,25 @@ func verifyCrossFolderPurge(d bookFileRowDecision, stat func(string) (os.FileInf
 	return true, ""
 }
 
+// dedupeRowsDeleteStore is what journalAndDeleteBookFiles needs: the undo-ledger
+// write and the batched delete. It narrows the parameter from OpsStore (every
+// caller still compiles) so the dedup core can hand it env.Writer (F5-09, rule R10).
+type dedupeRowsDeleteStore interface {
+	database.OperationChangeCreator
+	DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error)
+}
+
+// dedupeRowsStore is what the remove_row_ids pass needs: its one read, and the
+// writes the salvage, window carry-over, journaled delete and recompute make. A
+// narrowing of OpsStore for the same reason as dedupeRowsDeleteStore.
+type dedupeRowsStore interface {
+	dedupeRowsDeleteStore
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	UpdateBookFile(id string, file *database.BookFile) error
+	CarryOverFingerprintWindows(from []database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error)
+	RecomputeBookAggregates(bookID string) error
+}
+
 // journalAndDeleteBookFiles writes one undo-ledger row per book_file row and
 // only then deletes them in one batch.
 //
@@ -230,7 +249,7 @@ func verifyCrossFolderPurge(d bookFileRowDecision, stat func(string) (os.FileInf
 // commit chunk can fail in a later chunk after earlier ones committed), which a
 // caller must report as deleted, count, and recompute the book for, rather than
 // treating the whole book as untouched.
-func journalAndDeleteBookFiles(store OpsStore, opID, bookID string, rows []database.BookFile) (map[string]bool, error) {
+func journalAndDeleteBookFiles(store dedupeRowsDeleteStore, opID, bookID string, rows []database.BookFile) (map[string]bool, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
@@ -313,7 +332,7 @@ func journalAndDeleteBookFiles(store OpsStore, opID, bookID string, rows []datab
 // voidDeleteJournal takes back the ledger rows written for a delete that did not
 // happen. A void that cannot be written is returned: a live row for a deletion
 // that never occurred is worse than a failed op.
-func voidDeleteJournal(store OpsStore, journaled map[string]*database.OperationChange) error {
+func voidDeleteJournal(store database.OperationChangeCreator, journaled map[string]*database.OperationChange) error {
 	now := time.Now()
 	var errs []error
 	for _, change := range journaled {
@@ -385,7 +404,7 @@ func (p *Plugin) emitRowDecisions(decisions []bookFileRowDecision, path string, 
 
 // finishRemoveNamedRows runs the remove_row_ids mode and reports it the same
 // way the sweep reports: per-row log lines, a decisions TSV, a summary line.
-func (p *Plugin) finishRemoveNamedRows(store OpsStore, params DedupeBookFileRowsParams, cores []database.BookFileCore,
+func (p *Plugin) finishRemoveNamedRows(store dedupeRowsStore, params DedupeBookFileRowsParams, cores []database.BookFileCore,
 	opID, reportPath string, reporter sdk.Reporter) error {
 	res := removeNamedBookFileRows(store, params, cores, opID, reporter.Logger())
 	note := p.emitRowDecisions(res.decisions, decisionsReportPath(reportPath), reporter)
@@ -423,7 +442,7 @@ type removeRowsResult struct {
 // fingerprint windows there, journal, delete, and recompute the book's
 // aggregates. A confirmed_duplicate removal with no hash twin has no row that
 // provably holds the same bytes, so nothing is salvaged or carried from it.
-func removeNamedBookFileRows(store OpsStore, params DedupeBookFileRowsParams, cores []database.BookFileCore,
+func removeNamedBookFileRows(store dedupeRowsStore, params DedupeBookFileRowsParams, cores []database.BookFileCore,
 	opID string, log *slog.Logger) removeRowsResult {
 	var res removeRowsResult
 	bookOf := make(map[string]string, len(cores))

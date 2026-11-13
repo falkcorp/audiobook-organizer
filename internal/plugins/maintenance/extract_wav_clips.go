@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
-// last-edited: 2026-10-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -21,10 +21,13 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
+
+// extractWAVClipsKind is rule R3: the native kind of maintenance.extract-wav-clips.
+const extractWAVClipsKind tasks.Kind = "books.maintenance.extract-wav-clips"
 
 const extractWAVPageSize = 500 // larger pages — pure I/O, no GPU wait
 
@@ -50,6 +53,23 @@ type extractWAVParams struct {
 	SkipExisting *bool `json:"skip_existing,omitempty"` // default true
 }
 
+// extractWAVResult is the run's tallies (HEAD logs them; the native run returns them).
+type extractWAVResult struct {
+	Extracted      int `json:"extracted"`
+	Skipped        int `json:"skipped"`
+	Failed         int `json:"failed"`
+	HashFailed     int `json:"hash_failed"`
+	HashMismatched int `json:"hash_mismatched"`
+	ClipLinkFailed int `json:"clip_link_failed"`
+	Total          int `json:"total"`
+}
+
+// extractWAVClipsEnv is what the core needs from its engine (rules R2 and R10).
+type extractWAVClipsEnv struct {
+	t6g4Base
+}
+
+// runExtractWAVClips is the v2 shell around runExtractWAVClipsCore (rule R2 item 2).
 func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	if err := serverdecode.Check("maintenance.extract-wav-clips"); err != nil {
 		return err
@@ -65,19 +85,64 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 			return fmt.Errorf("maintenance.extract-wav-clips: decode params: %w", err)
 		}
 	}
+	_, err := p.runExtractWAVClipsCore(ctx, params, extractWAVClipsEnv{
+		t6g4Base: t6g4HeadBase(reporter, true,
+			headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}),
+	})
+	return err
+}
+
+// extractWAVClipsKind is the native shell (rule R2 item 3). HEAD has no preview
+// and the run writes book_files.file_hash, so it is a Live-only writer (rule R7).
+func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(extractWAVClipsKind, tasks.TaskSpec[extractWAVParams, extractWAVResult]{
+		Common: tasks.Common{
+			Title:           "Extract WAV clips for transcription cache",
+			Help:            "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes.",
+			Effects:         tasks.Writes(t6g4Res("book_files")...),
+			Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:          tasks.ResumeContinue,
+			Priority:        tasks.PriorityLow,
+			ConcurrencyKey:  tasks.Key("books.maintenance.extract-wav-clips"),
+			Timeout:         24 * time.Hour,
+			ProgressTimeout: 10 * time.Minute,
+			Schedule:        sched,
+			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in extractWAVParams) (extractWAVResult, error) {
+			if err := t6g4RequireLive(rc); err != nil {
+				return extractWAVResult{}, err
+			}
+			if err := serverdecode.Check("maintenance.extract-wav-clips"); err != nil {
+				return extractWAVResult{}, err
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return extractWAVResult{}, err
+			}
+			return p.runExtractWAVClipsCore(rc.Context(), in, extractWAVClipsEnv{t6g4Base: base})
+		},
+	})
+}
+
+// runExtractWAVClipsCore is HEAD's body (rule R2 item 1) after the shell checked
+// the decoder, resolved the store and decoded params: it reads books through
+// env.Store and persists a file hash only through env.Writer.
+func (p *Plugin) runExtractWAVClipsCore(ctx context.Context, params extractWAVParams, env extractWAVClipsEnv) (extractWAVResult, error) {
+	store := env.Store
 	skipExisting := params.SkipExisting == nil || *params.SkipExisting
 
-	log := reporter.Logger()
-	rootDir := p.deps.RootDir()
+	log := env.Logger()
+	rootDir := store.RootDir()
 	cacheDir := wavCacheDir(rootDir)
 
 	if err := os.MkdirAll(cacheDir, 0o775); err != nil {
-		return fmt.Errorf("create wav cache dir %s: %w", cacheDir, err)
+		return extractWAVResult{}, fmt.Errorf("create wav cache dir %s: %w", cacheDir, err)
 	}
 
 	allIDs, err := store.ListBookIDs()
 	if err != nil {
-		return fmt.Errorf("list book ids: %w", err)
+		return extractWAVResult{}, fmt.Errorf("list book ids: %w", err)
 	}
 	total := len(allIDs)
 
@@ -92,7 +157,14 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 	var extracted, skipped, failed int
 	var hashFailed, hashMismatched, clipLinkFailed int
 
-	err = registry.RunItems(ctx, reporter, pages, func(ctx context.Context, ids []string) error {
+	err = env.Each(ctx, len(pages), t6g4EachOpts{
+		Concurrency:   1,
+		ProgressTotal: len(pages),
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Page %d/%d — %d extracted, %d skipped", i+1, t, extracted, skipped)
+		},
+	}, func(ctx context.Context, pageIdx int) error {
+		ids := pages[pageIdx]
 		sem := make(chan struct{}, introTranscribeFFWorkers)
 		var mu sync.Mutex
 		var wg sync.WaitGroup
@@ -156,7 +228,7 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 				// Content-addressed identity for the source file. See
 				// persistCanonicalFileHash for why this must be the canonical
 				// digest and why the write-back is when-missing only.
-				srcHash, herr := persistCanonicalFileHash(store, cacheDir, ref, dest)
+				srcHash, herr := persistCanonicalFileHash(env.Writer, cacheDir, ref, dest)
 				if herr != nil {
 					if errors.Is(herr, errClipLinkFailed) {
 						// Degraded cache, not a lost hash: the identity
@@ -196,29 +268,27 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 		}
 		wg.Wait()
 
-		_ = reporter.UpdateProgress(extracted+skipped, total,
+		env.Progress(extracted+skipped, total,
 			fmt.Sprintf("WAV clips: %d extracted, %d skipped (cached), %d failed, %d hash failed, %d hash mismatched, %d link failed",
 				extracted, skipped, failed, hashFailed, hashMismatched, clipLinkFailed))
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   1,
-		ProgressTotal: len(pages),
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Page %d/%d — %d extracted, %d skipped", i+1, t, extracted, skipped)
-		},
 	})
+	res := extractWAVResult{
+		Extracted: extracted, Skipped: skipped, Failed: failed, HashFailed: hashFailed,
+		HashMismatched: hashMismatched, ClipLinkFailed: clipLinkFailed, Total: total,
+	}
 	if err != nil {
-		return err
+		return res, err
 	}
 
 	log.Info("extract-wav-clips: complete",
 		"extracted", extracted, "skipped", skipped, "failed", failed,
 		"hash_failed", hashFailed, "hash_mismatched", hashMismatched,
 		"clip_link_failed", clipLinkFailed, "total", total)
-	_ = reporter.UpdateProgress(1, 1,
+	env.Progress(1, 1,
 		fmt.Sprintf("Done — %d extracted, %d already cached, %d failed, %d hash failed, %d hash mismatched, %d link failed",
 			extracted, skipped, failed, hashFailed, hashMismatched, clipLinkFailed))
-	return nil
+	return res, nil
 }
 
 // fileHashSetter is the narrow store surface persistCanonicalFileHash needs.

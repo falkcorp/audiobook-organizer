@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -17,8 +17,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 	"github.com/oklog/ulid/v2"
 )
+
+// aiDedupBatchKind is rule R3: the native kind of maintenance.ai-dedup-batch.
+const aiDedupBatchKind tasks.Kind = "books.maintenance.ai-dedup-batch"
 
 // maintenance.dedup-llm-review was removed 2026-09-25 (naming audit class 8).
 // It called the same dedup engine RunLLMReview as dedup.llm-review, under a
@@ -76,6 +80,22 @@ func submitAuthorDedupOnce(ctx context.Context, jobs database.AIJobsStore, param
 	buildInputs func() ([]ai.AuthorDiscoveryInput, error), submit authorDedupSubmitFunc,
 	checkpoint func(any) error,
 ) (string, bool, error) {
+	return submitAuthorDedupOnceVia(ctx, jobs, params, buildInputs, submit, checkpoint)
+}
+
+// aiJobLister is the one read submitAuthorDedupOnceVia makes of the ai_jobs
+// table: the listing that says whether a batch is already in flight.
+type aiJobLister interface {
+	ListAIJobs(typeFilter, statusFilter string, limit, offset int) ([]database.AIJob, error)
+}
+
+// submitAuthorDedupOnceVia is submitAuthorDedupOnce's body (rule R10 item 1): it
+// reads the in-flight listing through the lister it is handed, so the core can
+// give it env.Store, and writes only through the submit it is handed.
+func submitAuthorDedupOnceVia(ctx context.Context, jobs aiJobLister, params aiDedupBatchParams,
+	buildInputs func() ([]ai.AuthorDiscoveryInput, error), submit authorDedupSubmitFunc,
+	checkpoint func(any) error,
+) (string, bool, error) {
 	if params.JobID != "" {
 		return params.JobID, false, nil
 	}
@@ -112,6 +132,19 @@ func submitAuthorDedupOnce(ctx context.Context, jobs database.AIJobsStore, param
 	return jobID, true, nil
 }
 
+// aiDedupBatchResult is HEAD's result map (job_id, submitted) as a struct with
+// the same JSON keys.
+type aiDedupBatchResult struct {
+	JobID     string `json:"job_id"`
+	Submitted bool   `json:"submitted"`
+}
+
+// aiDedupBatchEnv is what the core needs from its engine (rules R2 and R10).
+type aiDedupBatchEnv struct {
+	t6g4Base
+}
+
+// runAIDedupBatch is the v2 shell around runAIDedupBatchCore (rule R2 item 2).
 func (p *Plugin) runAIDedupBatch(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	if !p.deps.HasAIParsing() {
 		return fmt.Errorf("AI parsing is not enabled")
@@ -135,9 +168,66 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, raw json.RawMessage, repor
 			return fmt.Errorf("decode params: %w", err)
 		}
 	}
+	res, err := p.runAIDedupBatchCore(ctx, params, aiDedupBatchEnv{
+		t6g4Base: t6g4HeadBase(reporter, true,
+			headT6G4Store{OpsStore: store, deps: p.deps, aiJobs: jobs},
+			headT6G4Writer{store: store, aiParser: parser, aiJobs: jobs}),
+	})
+	if err != nil {
+		return err
+	}
+	return opsregistry.ReporterSetResult(reporter, res)
+}
+
+// aiDedupBatchKind is the native shell (rule R2 item 3). HEAD has no preview for
+// this definition (it submits a paid batch), so a native run refuses any mode
+// but live. The checkpoint is HEAD's own struct (aiDedupBatchParams), restored
+// into the params the way HEAD's registry merges it on a resume.
+func (p *Plugin) aiDedupBatchKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(aiDedupBatchKind, tasks.TaskSpec[aiDedupBatchParams, aiDedupBatchResult]{
+		Common: tasks.Common{
+			Title:          "AI author dedup batch",
+			Help:           "Submits authors to the OpenAI Batch API for dedup review (50% cheaper, up to 24h turnaround). Results land in the AI author review queue.",
+			Effects:        tasks.Writes(t6g4Res("operations")...),
+			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:         tasks.ResumeContinue,
+			Priority:       tasks.PriorityLow,
+			ConcurrencyKey: tasks.Key("books.maintenance.ai-dedup-batch"),
+			Timeout:        30 * time.Minute,
+			Schedule:       sched,
+			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in aiDedupBatchParams) (aiDedupBatchResult, error) {
+			if err := t6g4RequireLive(rc); err != nil {
+				return aiDedupBatchResult{}, err
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return aiDedupBatchResult{}, err
+			}
+			var cp aiDedupBatchParams
+			if ok, rerr := rc.Restore(&cp); rerr != nil {
+				return aiDedupBatchResult{}, fmt.Errorf("%s: restore checkpoint: %w", rc.Kind(), rerr)
+			} else if ok && in.JobID == "" {
+				in.JobID = cp.JobID
+			}
+			return p.runAIDedupBatchCore(rc.Context(), in, aiDedupBatchEnv{t6g4Base: base})
+		},
+	})
+}
+
+// runAIDedupBatchCore is HEAD's body (rule R2 item 1) after the shell resolved the
+// store and decoded params: it reads authors and the in-flight listing through
+// env.Store and submits the batch only through env.Writer.
+func (p *Plugin) runAIDedupBatchCore(ctx context.Context, params aiDedupBatchParams, env aiDedupBatchEnv) (aiDedupBatchResult, error) {
+	rep := env.reporter(ctx)
+	store := env.Store
+	if !store.HasAIParsing() {
+		return aiDedupBatchResult{}, fmt.Errorf("AI parsing is not enabled")
+	}
 
 	buildInputs := func() ([]ai.AuthorDiscoveryInput, error) {
-		_ = reporter.Log(slog.LevelInfo, "Building author list for batch AI dedup")
+		_ = rep.Log(slog.LevelInfo, "Building author list for batch AI dedup")
 		allAuthors, err := store.GetAllAuthors()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get authors: %w", err)
@@ -162,20 +252,20 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, raw json.RawMessage, repor
 		return inputs, nil
 	}
 	submit := func(ctx context.Context, sourceID string, inputs []ai.AuthorDiscoveryInput) (string, error) {
-		return parser.SubmitAuthorDedupJob(ctx, jobs, sourceID, inputs)
+		return env.Writer.SubmitAuthorDedupJob(ctx, sourceID, inputs)
 	}
 
-	jobID, submitted, err := submitAuthorDedupOnce(ctx, jobs, params, buildInputs, submit, reporter.Checkpoint)
+	jobID, submitted, err := submitAuthorDedupOnceVia(ctx, store, params, buildInputs, submit, rep.Checkpoint)
 	if err != nil {
-		return err
+		return aiDedupBatchResult{}, err
 	}
 	switch {
 	case jobID == "":
-		_ = reporter.Log(slog.LevelInfo, "No authors to process")
+		_ = rep.Log(slog.LevelInfo, "No authors to process")
 	case submitted:
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Submitted author dedup job %s; the batch poller applies its results to the AI review queue when OpenAI finishes", jobID))
+		_ = rep.Log(slog.LevelInfo, fmt.Sprintf("Submitted author dedup job %s; the batch poller applies its results to the AI review queue when OpenAI finishes", jobID))
 	default:
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Author dedup job %s is already in flight; not submitting another batch", jobID))
+		_ = rep.Log(slog.LevelInfo, fmt.Sprintf("Author dedup job %s is already in flight; not submitting another batch", jobID))
 	}
-	return opsregistry.ReporterSetResult(reporter, map[string]any{"job_id": jobID, "submitted": submitted})
+	return aiDedupBatchResult{JobID: jobID, Submitted: submitted}, nil
 }

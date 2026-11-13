@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 4f8e1a67-05b3-4d29-9c7e-3a6b2d80f514
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -20,7 +20,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
+
+// fileProvenanceCaptureKind is rule R3: the native kind of maintenance.file-provenance-capture.
+const fileProvenanceCaptureKind tasks.Kind = "books.maintenance.file-provenance-capture"
 
 // Capturing provenance for files that are NOT yet in the library.
 //
@@ -116,11 +120,91 @@ func (p *Plugin) fileProvenanceCaptureDef() sdk.OperationDef {
 	}
 }
 
+// fileProvCaptureEnv is what the core needs from its engine (rules R2 and R10).
+type fileProvCaptureEnv struct {
+	t6g4Base
+}
+
+// fileProvCaptureNativeParams is fileProvCaptureParams for the native run: the
+// same fields, except Apply is only a refusal marker (the mode comes from the
+// start request; a live run applies, a preview walks and hashes nothing).
+type fileProvCaptureNativeParams struct {
+	Roots      []string `json:"roots"`
+	Max        int      `json:"max"`
+	Extensions []string `json:"extensions"`
+	Apply      *bool    `json:"apply,omitempty"`
+}
+
+// fileProvenanceCaptureHeadEnv builds the env HEAD's shells give the core: the
+// provenance store resolved off the deps (nil when no layer implements it).
+func (p *Plugin) fileProvenanceCaptureHeadEnv(reporter sdk.Reporter, apply bool) fileProvCaptureEnv {
+	prov := p.deps.FileProvenanceStore()
+	return fileProvCaptureEnv{t6g4Base: t6g4HeadBase(reporter, apply,
+		headT6G4Store{deps: p.deps, prov: prov}, headT6G4Writer{prov: prov})}
+}
+
+// runFileProvenanceCapture is the v2 shell around runFileProvenanceCaptureCore (rule R2 item 2).
 func (p *Plugin) runFileProvenanceCapture(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	log := reporter.Logger()
-	result, err := p.captureFileProvenance(ctx, rawParams)
+	params, err := decodeFileProvCaptureParams(rawParams)
 	if err != nil {
 		return err
+	}
+	_, err = p.runFileProvenanceCaptureCore(ctx, params, p.fileProvenanceCaptureHeadEnv(reporter, params.Apply))
+	return err
+}
+
+// fileProvenanceCaptureKind is the native shell (rule R2 item 3). HEAD has a
+// preview, so there is no Live-only error.
+func (p *Plugin) fileProvenanceCaptureKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(fileProvenanceCaptureKind, tasks.TaskSpec[fileProvCaptureNativeParams, fileProvCaptureResult]{
+		Common: tasks.Common{
+			Title: "Capture provenance for files outside the library",
+			Help: "Walks the given roots, digests each audio file, and records an " +
+				"append-only provenance event so the pristine hash exists before anything " +
+				"copies, moves, or retags the file. Events are orphans until the file is " +
+				"imported, then adopted into its book_file chain. Roots are required; " +
+				"default dry-run, pass {\"apply\": true} to write events.",
+			Effects:        tasks.Writes(t6g4Res("file_provenance")...),
+			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:         tasks.ResumeDrop,
+			Priority:       tasks.PriorityLow,
+			ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-capture"),
+			Schedule:       sched,
+			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in fileProvCaptureNativeParams) (fileProvCaptureResult, error) {
+			if in.Apply != nil {
+				return fileProvCaptureResult{}, fmt.Errorf("%s: the apply param is not accepted; the run's mode comes from the start request (live applies, preview reports)", rc.Kind())
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return fileProvCaptureResult{}, err
+			}
+			return p.runFileProvenanceCaptureCore(rc.Context(), fileProvCaptureParams{
+				Roots: in.Roots, Apply: base.Live, Max: in.Max, Extensions: in.Extensions,
+			}, fileProvCaptureEnv{t6g4Base: base})
+		},
+	})
+}
+
+// decodeFileProvCaptureParams is the params decode both HEAD entry points share.
+func decodeFileProvCaptureParams(rawParams json.RawMessage) (fileProvCaptureParams, error) {
+	var params fileProvCaptureParams
+	if len(rawParams) > 0 {
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fileProvCaptureParams{}, fmt.Errorf("file-provenance-capture: decode params: %w", err)
+		}
+	}
+	return params, nil
+}
+
+// runFileProvenanceCaptureCore is HEAD's run body (rule R2 item 1): the sweep and
+// the report lines.
+func (p *Plugin) runFileProvenanceCaptureCore(ctx context.Context, params fileProvCaptureParams, env fileProvCaptureEnv) (fileProvCaptureResult, error) {
+	log := env.Logger()
+	result, err := p.captureFileProvenanceCore(ctx, params, env)
+	if err != nil {
+		return result, err
 	}
 
 	if b, mErr := json.Marshal(result); mErr == nil {
@@ -141,7 +225,7 @@ func (p *Plugin) runFileProvenanceCapture(ctx context.Context, rawParams json.Ra
 		"apply", result.Apply, "walked", result.Walked, "hashed", result.Hashed,
 		"recorded", result.Recorded, "already_known", result.AlreadyKnown,
 		"capped", result.Capped, "errors", result.Errors)
-	return nil
+	return result, nil
 }
 
 // captureFileProvenance does the work and returns the tally.
@@ -149,12 +233,21 @@ func (p *Plugin) runFileProvenanceCapture(ctx context.Context, rawParams json.Ra
 // Split from the reporter plumbing so the behaviour can be asserted directly
 // rather than by parsing a log line back out of a fake reporter.
 func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMessage) (fileProvCaptureResult, error) {
-	var params fileProvCaptureParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fileProvCaptureResult{}, fmt.Errorf("file-provenance-capture: decode params: %w", err)
-		}
+	params, err := decodeFileProvCaptureParams(rawParams)
+	if err != nil {
+		return fileProvCaptureResult{}, err
 	}
+	prov := p.deps.FileProvenanceStore()
+	// No reporter: the sweep itself logs nothing, and the pinned callers assert
+	// the tally directly.
+	return p.captureFileProvenanceCore(ctx, params, fileProvCaptureEnv{t6g4Base: t6g4Base{
+		Live: params.Apply, Store: headT6G4Store{deps: p.deps, prov: prov}, Writer: headT6G4Writer{prov: prov},
+	}})
+}
+
+// captureFileProvenanceCore is the sweep itself over decoded params. The ledger
+// is read through env.Store and appended to only through env.Writer.
+func (p *Plugin) captureFileProvenanceCore(ctx context.Context, params fileProvCaptureParams, env fileProvCaptureEnv) (fileProvCaptureResult, error) {
 	if len(params.Roots) == 0 {
 		return fileProvCaptureResult{}, fmt.Errorf("file-provenance-capture: at least one root is required")
 	}
@@ -170,8 +263,8 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 		extSet[strings.ToLower(e)] = struct{}{}
 	}
 
-	store := p.deps.FileProvenanceStore()
-	if store == nil {
+	store := env.Store
+	if !store.FileProvenanceAvailable() {
 		return fileProvCaptureResult{}, fmt.Errorf("file-provenance-capture: provenance store not initialized")
 	}
 
@@ -257,7 +350,7 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 				Actor:  "maintenance.file-provenance-capture",
 				Detail: "captured outside the library, before any modification",
 			}
-			if aerr := store.AppendFileEvent(ev); aerr != nil {
+			if aerr := env.Writer.AppendFileEvent(ev); aerr != nil {
 				result.Errors++
 				return nil
 			}
@@ -276,13 +369,20 @@ func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMe
 	return result, nil
 }
 
+// fileEventFinder is the one ledger read alreadyObserved makes. It narrows the
+// parameter from database.FileProvenanceStore (every caller still compiles) so
+// the core can hand it env.Store.
+type fileEventFinder interface {
+	FindFileEventsByHash(hash string) ([]database.FileEvent, error)
+}
+
 // alreadyObserved reports whether the ledger already holds this exact
 // observation — same content, same path. Re-running the sweep is then cheap and
 // does not pile duplicate rows into an append-only store.
 //
 // The hash has already been computed by the caller, so this costs a prefix scan
 // rather than another full read.
-func alreadyObserved(store database.FileProvenanceStore, sha, path string) (bool, error) {
+func alreadyObserved(store fileEventFinder, sha, path string) (bool, error) {
 	events, err := store.FindFileEventsByHash(sha)
 	if err != nil {
 		return false, err
