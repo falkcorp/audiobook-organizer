@@ -535,7 +535,7 @@ func t6g4KindByName(t *testing.T, defs []tasks.Definition, kind tasks.Kind) task
 // conformance suite (05-tasks 5T.9 last row).
 func TestT6G4Kinds_Conformance(t *testing.T) {
 	deps, _ := fakeT6G4Deps(t)
-	defs := (&Plugin{}).t6g4Kinds(deps, nil)
+	defs := t6g4Kinds(deps, nil)
 	if got, want := len(defs), len(t6g4Expected); got != want {
 		t.Fatalf("t6g4Kinds returned %d definitions, want %d", got, want)
 	}
@@ -626,7 +626,7 @@ func t6g4HeadResume(p sdk.ResumePolicy) tasks.ResumePolicy {
 func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 	deps, _ := fakeT6G4Deps(t)
 	p := &Plugin{}
-	defs := p.t6g4Kinds(deps, nil)
+	defs := t6g4Kinds(deps, nil)
 	t.Run("schedule-hook-and-parallelism", t6g4CheckScheduleHookAndParallelism)
 	for _, w := range t6g4Expected {
 		t.Run(string(w.kind), func(t *testing.T) {
@@ -689,7 +689,7 @@ func t6g4CheckScheduleHookAndParallelism(t *testing.T) {
 		by[k] = s
 		return s
 	}
-	for _, d := range (&Plugin{}).t6g4Kinds(deps, hook) {
+	for _, d := range t6g4Kinds(deps, hook) {
 		if got := tasks.CommonOf(d).Schedule; got == nil || got != by[d.Kind()] {
 			t.Errorf("%s: Schedule = %v, want the hook's value for that kind", d.Kind(), got)
 		}
@@ -742,7 +742,7 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 		t.Run(string(w.kind), func(t *testing.T) {
 			if w.refuse != "" {
 				deps, pr := fakeT6G4Deps(t)
-				def := t6g4KindByName(t, (&Plugin{}).t6g4Kinds(deps, nil), w.kind)
+				def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
 				_, rc := newT6G4RC(w.kind, tasks.ModeLive, &t6g4RunWriter{})
 				err := t6g4RunSafely(t, def, rc, w.refuse)
 				if err == nil || !strings.Contains(err.Error(), "not accepted") {
@@ -757,7 +757,7 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 			}
 			if w.liveOnly {
 				deps, pr := fakeT6G4Deps(t)
-				def := t6g4KindByName(t, (&Plugin{}).t6g4Kinds(deps, nil), w.kind)
+				def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
 				_, rc := newT6G4RC(w.kind, tasks.ModePreview, &t6g4RunWriter{})
 				err := t6g4RunSafely(t, def, rc, "")
 				if err == nil || !strings.Contains(err.Error(), "preview not supported") {
@@ -768,7 +768,7 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 				}
 			} else {
 				deps, pr := fakeT6G4Deps(t)
-				def := t6g4KindByName(t, (&Plugin{}).t6g4Kinds(deps, nil), w.kind)
+				def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
 				_, rc := newT6G4RC(w.kind, tasks.ModePreview, &t6g4RunWriter{})
 				_ = t6g4RunSafely(t, def, rc, "")
 				for _, c := range pr.store.rec.all() {
@@ -785,7 +785,7 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 				return
 			}
 			deps, pr := fakeT6G4Deps(t)
-			def := t6g4KindByName(t, (&Plugin{}).t6g4Kinds(deps, nil), w.kind)
+			def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
 			run := &t6g4RunWriter{name: "run"}
 			_, rc := newT6G4RC(w.kind, tasks.ModeLive, run)
 			_ = t6g4RunSafely(t, def, rc, "")

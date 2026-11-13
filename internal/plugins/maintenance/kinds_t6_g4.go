@@ -864,7 +864,10 @@ func t6g4RequireLive(rc *tasks.RC) error {
 // t6g4Kinds returns every native kind of this group, in file order, each with
 // Schedule: sched(kind) (rule R9; a nil sched means none). Nothing calls it in
 // production: F5-18 passes the list to Registrar.Tasks.
-func (p *Plugin) t6g4Kinds(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
+func t6g4Kinds(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
+	// The kinds are methods only to reach the shared helper methods of *Plugin;
+	// the native cores read nothing from the plugin's fields (rule R10).
+	p := &Plugin{}
 	at := func(k tasks.Kind) *tasks.Schedule {
 		if sched == nil {
 			return nil
@@ -892,4 +895,4 @@ func (p *Plugin) t6g4Kinds(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule
 // t6g4KindsRoot names t6g4Kinds from non-test code so tasklint's unregistered-kind
 // rule counts it a registration root until F5-18's Registrar.Tasks call replaces
 // this line. F5-18 deletes it.
-var _ = (*Plugin).t6g4Kinds
+var _ = t6g4Kinds
