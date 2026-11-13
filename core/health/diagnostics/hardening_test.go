@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
 // last-edited: 2026-11-13
 
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/health/diagnostics"
+	"github.com/falkcorp/mediacore/internal/authz"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
@@ -509,5 +510,86 @@ func TestDiagnostics_MismatchedActorRefused(t *testing.T) {
 	}
 	if err := run("run-system", tasks.Actor{System: "core"}, diagnostics.ExportParams{ActorID: "bruce"}); err != nil {
 		t.Errorf("a system run with no stamped person was refused: %v", err)
+	}
+}
+
+// TestDiagnostics_AdminSnapshotKeepsEverySection is the seeded administrator
+// through the real checker. authz.Compile gives an admin the core:admin flag
+// and nothing else concrete, so PermsOf is ["core:admin"] and its reach over
+// every other scope is the checker's rule, not a member of the snapshot. A
+// snapshot read as an exact-name list dropped every section from an
+// administrator's bundle.
+func TestDiagnostics_AdminSnapshotKeepsEverySection(t *testing.T) {
+	cat, err := rbac.NewCatalog(rbac.CoreScopes()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compile := func(interactive bool, scopes []rbac.Permission) rbac.Checker {
+		return authz.Compile(rbac.CompileInput{
+			CheckerInput: rbac.CheckerInput{Roles: []rbac.RoleName{"admin"}, Scopes: scopes, Interactive: interactive},
+			RolePatterns: []rbac.Permission{"core:admin"},
+		}, cat)
+	}
+	viewerFor := func(c rbac.Checker) func(context.Context, string) (diagnostics.Viewer, error) {
+		return func(_ context.Context, actor string) (diagnostics.Viewer, error) {
+			return diagnostics.Viewer{ActorID: actor, Can: c.Has}, nil
+		}
+	}
+	section := func(name string, perm rbac.Requirement) diagnostics.Section {
+		return diagnostics.Section{Name: name, Perm: perm, Write: func(_ context.Context, w diagnostics.Writer, _ diagnostics.Viewer) error {
+			return w.JSON("d.json", "x")
+		}}
+	}
+	contrib := contributor{
+		section("batcave.manage", rbac.Need("core:system.manage")),
+		section("batcave.view", rbac.Need("core:system.view")),
+		section("batcave.restore", rbac.Need("core:backup.restore")), // Sensitive
+	}
+
+	// An interactive administrator: every section, however the snapshot was taken.
+	f := newFixture(t)
+	admin := compile(true, nil)
+	snap := diagnostics.PermsOf(admin)
+	if !slices.Equal(snap, []string{"core:admin"}) {
+		t.Fatalf("the seeded admin's snapshot = %v, want [core:admin]", snap)
+	}
+	res, err := f.build(f.exporter(viewerFor(admin), diagnostics.CoreSources{}, contrib), "run-admin", diagnostics.ExportParams{ActorID: "alfred", Perms: snap})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := f.zipFiles(res.File)
+	for _, name := range []string{"batcave.manage", "batcave.view", "batcave.restore"} {
+		if files[name+"/d.json"] == nil {
+			t.Errorf("%s missing from the administrator's bundle (omitted %v)", name, manifestOf(t, files).Omitted)
+		}
+	}
+
+	// A non-interactive credential naming core:admin still holds no Sensitive
+	// scope: the snapshot never widens what the live checker refuses.
+	f = newFixture(t)
+	key := compile(false, []rbac.Permission{"core:admin"})
+	res, err = f.build(f.exporter(viewerFor(key), diagnostics.CoreSources{}, contrib), "run-key", diagnostics.ExportParams{ActorID: "alfred", Perms: diagnostics.PermsOf(key)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = f.zipFiles(res.File)
+	if files["batcave.manage/d.json"] == nil || files["batcave.restore/d.json"] != nil {
+		t.Errorf("a non-interactive admin key: files %v, want the manage section and not the Sensitive one", names(files))
+	}
+
+	// A snapshot that lists core:admin does not grant it to an actor whose live
+	// checker does not hold it.
+	f = newFixture(t)
+	editor := authz.Compile(rbac.CompileInput{
+		CheckerInput: rbac.CheckerInput{Roles: []rbac.RoleName{"editor"}, Interactive: true},
+		RolePatterns: []rbac.Permission{"core:system.view"},
+	}, cat)
+	res, err = f.build(f.exporter(viewerFor(editor), diagnostics.CoreSources{}, contrib), "run-editor", diagnostics.ExportParams{ActorID: "robin", Perms: []string{"core:admin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = f.zipFiles(res.File)
+	if files["batcave.view/d.json"] == nil || files["batcave.manage/d.json"] != nil {
+		t.Errorf("a forged admin snapshot over a viewer: files %v", names(files))
 	}
 }
