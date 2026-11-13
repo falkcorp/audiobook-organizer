@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-authn.md -->
-<!-- version: 1.13.11 -->
+<!-- version: 1.13.12 -->
 <!-- guid: 73c4823d-8269-4c1d-8809-4006a6da6f0d -->
-<!-- last-edited: 2026-11-11 -->
+<!-- last-edited: 2026-11-13 -->
 
 # 05 — Authentication (`core/auth`)
 
@@ -876,7 +876,7 @@ Core owns it; nothing refers to an app, a module or `users.manage`.
    (role-resolved, 05-rbac §4.6); none → create `admin` (suffixing on collision) with role
    `admin` and a generated password returned once. Returns an `mck_` API key scoped `["core:admin"]`
    (a HEAD bootstrap key still live at the cutover holds every atom, `bootstrap.go:402`, and is imported
-   through 05-rbac §6.1's every-atom row, which keeps its HEAD reach), TTL `core.auth.bootstrap.key_ttl` (8 h default, 24 h max — today's values). The key is
+   through 05-rbac §6.1's every-atom row, which keeps its HEAD reach except the debug edit routes, whose scope is `Sensitive`, 05-rbac §6.2), TTL `core.auth.bootstrap.key_ttl` (8 h default, 24 h max — today's values). The key is
    non-interactive, so `Sensitive` scopes stay out of its reach (05-rbac §4.4). Audit:
    `core.bootstrap.redeem` (05-rbac §7.1).
 3. `POST /api/core/v1/auth/setup` (first admin with chosen password) is reachable only while

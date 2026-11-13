@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_required_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91d4b7e3-2c58-4a06-b3f9-6e1a8d0c5b27
 // last-edited: 2026-11-13
 
@@ -26,9 +26,11 @@ func reachIndex(t *testing.T, vd *reachR0Doc, name string) int {
 	return i
 }
 
-// Viewer sessions and every key that is not Confined() keep their playlist
-// writes (SEC-4): R0 let them, and so must R2.
-func TestReachOracle_ViewerSessionsAndNonConfinedKeysKeepPlaylistWrites(t *testing.T) {
+// Viewer sessions and every key whose compiled checker holds a non-Confining
+// scope keep their playlist writes (SEC-4): R0 let them, and so must R2. A key
+// whose checker is empty (an fp-worker user's key scoped outside the worker
+// scope, 05-rbac 6.3) holds none, and its loss is a listed expected difference.
+func TestReachOracle_ViewerSessionsAndKeysWithANonConfiningScopeKeepPlaylistWrites(t *testing.T) {
 	pd, vd := reachLoad(t)
 	atoms := idAtoms()
 	_, whos, r2 := reachRun(t, pd, vd, atoms, atoms)
@@ -48,7 +50,7 @@ func TestReachOracle_ViewerSessionsAndNonConfinedKeysKeepPlaylistWrites(t *testi
 	checked := 0
 	for i, w := range whos {
 		isKey := strings.HasPrefix(w.name, "key:")
-		if w.name != "session:viewer" && !(isKey && w.chk != nil && !w.chk.confined) {
+		if w.name != "session:viewer" && !(isKey && w.chk != nil && !w.chk.confined && len(w.chk.set) > 0) {
 			continue
 		}
 		for _, k := range routes {

@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_spec_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e2b8d94-3a17-4c60-b8f1-9d4a6c0e7b25
 // last-edited: 2026-11-13
 
@@ -121,7 +121,7 @@ func TestReachSpec_CatalogFlagsAreTheSpecs(t *testing.T) {
 		return s
 	}
 	if d := spec("books:admin.debug"); !d.AuthRequired || !d.Sensitive {
-		t.Error("books:admin.debug must be AuthRequired and Sensitive (05-rbac 6.2: 401 with auth off)")
+		t.Error("books:admin.debug must be AuthRequired and Sensitive (05-rbac 6.1 and 6.2: 401 with auth off, and a non-interactive principal is refused, 4.4 rule 1)")
 	}
 	if !spec("books:fingerprint.worker").Confining {
 		t.Error("books:fingerprint.worker is the one Confining scope")

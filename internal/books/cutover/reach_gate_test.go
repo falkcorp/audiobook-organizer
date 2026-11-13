@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_gate_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d3a8f21-6c4e-4b95-a0d7-1e9b2c5f8a36
 // last-edited: 2026-11-13
 
@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/mediacore/rbac"
 )
 
 // The reach oracle's expected differences (F4-07), and the classifier that holds
@@ -132,6 +134,18 @@ func reachInteractiveRoutes() func(string) bool {
 	return func(k string) bool { return set[k] }
 }
 
+// reachAuthenticatedRoutes matches the manifest's routes that need authentication
+// and nothing else (HEAD's permission-less routes, pAuth).
+func reachAuthenticatedRoutes() func(string) bool {
+	set := map[string]bool{}
+	for _, lr := range reachManifest() {
+		if lr.Perm.Kind() == rbac.KindAuthenticated {
+			set[lr.Method+" "+lr.GinPath] = true
+		}
+	}
+	return func(k string) bool { return set[k] }
+}
+
 // reachIdentityRoutes are the credential-metadata routes whose successors are
 // core's native ones (05-authn 4.11, 4.13): the manifest keeps them as
 // Authenticated until F4-08 deletes them, and core's replacement answers the
@@ -167,9 +181,15 @@ func reachExpected() []reachExpect {
 			route: routeIs("POST /api/v1/backup/restore"), who: whoIs("session:custom-all"), r0: 'A', r2: 'D',
 		},
 		{
-			name:  "05-rbac 12 reviewed gain: an admin-owned settings.manage key's GET /cache/stats/keys",
-			why:   "R0's adminRole refused it; the successor needs core:system.view, which settings.manage's row grants",
-			route: routeIs("GET /api/v1/cache/stats/keys"), who: whoIs("key:admin:settings"), r0: 'D', r2: 'A',
+			name:  "05-rbac 6.3: a key whose atoms lie outside an fp-worker owner's roles reaches no route",
+			why:   "HEAD's workerOnly reads an empty effective set as not worker-only and let the key through every authenticated-only route; the key's checker is empty after the cutover, because the fp-worker role holds no ambient scope",
+			route: reachAuthenticatedRoutes(), who: whoIs("key:fp-worker:view", "key:fp-worker:settings", "key:fp-worker:users"), r0: 'A', r2: 'D',
+		},
+		{
+			name:  "05-rbac 6.2 / 4.4 rule 1: debug edits are interactive-only",
+			why:   "books:admin.debug is Sensitive, so a non-interactive principal is refused even with core:admin; HEAD's RequireAdmin let an admin's every-atom or empty-list key through",
+			route: routeIs("PATCH /api/v1/admin/debug/books/:id", "PATCH /api/v1/admin/debug/book-files/:id", "POST /api/v1/admin/debug/edits/:edit_id/undo"),
+			who:   whoIs("key:admin:every", "key:admin:empty"), r0: 'A', r2: 'D',
 		},
 	}
 }
