@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.22.3
+// version: 2.23.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -71,6 +71,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // Repair categories. The first two can be applied; the rest are report-only.
@@ -209,6 +210,74 @@ func (p *Plugin) fsRegroupXMLDef() sdk.OperationDef {
 	}
 }
 
+// fsRegroupKind is the native kind of maintenance.fs-regroup-xml (rule R3).
+const fsRegroupKind tasks.Kind = "books.maintenance.fs-regroup-xml"
+
+// fsRegroupEnv is what the core needs from its engine (rules R2 and R10): the
+// shared env plus the scan stand-down service (nil where there is no scanner,
+// as HEAD's degraded caller).
+type fsRegroupEnv struct {
+	t6g4Base
+	Scan ScanController
+}
+
+// fsRegroupNativeParams is fsRegroupParams for the native run: the mode comes
+// from the start request, so dryRun and dry_run are accepted only to be refused.
+type fsRegroupNativeParams struct {
+	Limit       int      `json:"limit"`
+	Categories  []string `json:"categories"`
+	DryRun      *bool    `json:"dryRun,omitempty"`
+	DryRunSnake *bool    `json:"dry_run,omitempty"`
+}
+
+// fsRegroupResult is the run's outcome: the plan's summary, and in an apply the
+// tallies of fsRepairResult.
+type fsRegroupResult struct {
+	DryRun            bool   `json:"dry_run"`
+	Summary           string `json:"summary"`
+	Groups            int    `json:"groups"`
+	RowsMoved         int    `json:"rows_moved"`
+	RowsCreated       int    `json:"rows_created"`
+	ShellsSoftDeleted int    `json:"shells_soft_deleted"`
+	ShellsKept        int    `json:"shells_kept"`
+	TitleKept         int    `json:"title_kept"`
+	LedgerRows        int    `json:"ledger_rows"`
+	Skipped           int    `json:"skipped"`
+	Errors            int    `json:"errors"`
+	HandOffsRefused   int    `json:"handoffs_refused"`
+	StandDownLost     bool   `json:"stand_down_lost"`
+}
+
+// fsRegroupView is the read-write store the apply path hands to the helpers
+// beneath it (merge.SoftDeleteBook, versionprimary, itunesguard, the ledger and
+// field-lock helpers): the env's reads and the env's writes, nothing else.
+type fsRegroupView struct {
+	t6g4Store
+	t6g4Writer
+}
+
+// The four methods fsRepairStore carries only because an upstream interface
+// (merge.BookWriter, regroupFileMover, fsExternalIDReassigner) names them: no
+// code on this op's path calls any, so they are refused rather than added to the
+// writer, which holds exactly what the cores write.
+func errFSRegroupNotWritten(method string) error {
+	return fmt.Errorf("fs-regroup-xml: %s is not part of this op's write set", method)
+}
+
+func (fsRegroupView) UpdateBook(string, *database.Book) (*database.Book, error) {
+	return nil, errFSRegroupNotWritten("UpdateBook")
+}
+func (fsRegroupView) DeleteBook(string) error { return errFSRegroupNotWritten("DeleteBook") }
+func (fsRegroupView) MoveBookFilesToBook([]string, string, string) error {
+	return errFSRegroupNotWritten("MoveBookFilesToBook")
+}
+func (fsRegroupView) ReassignExternalIDs(string, string) error {
+	return errFSRegroupNotWritten("ReassignExternalIDs")
+}
+
+var _ fsRepairStore = fsRegroupView{}
+
+// runFSRegroupXML is the v2 shell around runFSRegroupXMLCore (rule R2 item 2).
 func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params fsRegroupParams
 	if len(raw) > 0 {
@@ -228,23 +297,87 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 		return fmt.Errorf("database not initialized")
 	}
 	var anyStore any = opsStore
-	store, ok := anyStore.(fsRepairStore)
-	if !ok {
+	if _, ok := anyStore.(fsRepairStore); !ok {
 		return fmt.Errorf("fs-regroup-xml: store lacks the ledger or field-lock methods; refusing to run")
 	}
+	_, err = p.runFSRegroupXMLCore(ctx, params, fsRegroupEnv{
+		t6g4Base: t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: opsStore, deps: p.deps}, headT6G4Writer{store: opsStore}),
+		Scan:     p.deps,
+	})
+	return err
+}
 
-	plan, err := planFSRepair(ctx, store, reporter)
+// fsRegroupXMLKind is the native shell (rule R2 item 3). HEAD has a preview, so
+// a preview run plans and reports and writes nothing.
+func (p *Plugin) fsRegroupXMLKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(fsRegroupKind, tasks.TaskSpec[fsRegroupNativeParams, fsRegroupResult]{
+		Common: tasks.Common{
+			Title: "Repair chapter-per-folder books (fragments, duplicates, layout)",
+			Help: "Finds books laid out one chapter per folder (<Book>/<Book> - N/<file>) and sorts them into " +
+				"fragments (one book row per chapter: merged onto one survivor, shells soft-deleted), duplicates " +
+				"(rows whose files another book already owns: shells soft-deleted, owner untouched) and " +
+				"chapter_folder_layout (one book whose files sit in per-chapter folders: reported only). Never " +
+				"deletes a book_file row, skips the iTunes tree and protected paths, journals every change. " +
+				"A preview reports the per-group plan; start in live mode to apply.",
+			// Declared write-set (as HEAD: dispatcher Gate 3b): this op never runs beside
+			// another op that declares books or book_files, so no repoint can land
+			// between its path lookup and its row create.
+			Effects:        tasks.Writes(t6g4Res("books", "book_files")...),
+			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:         tasks.ResumeDrop,
+			Priority:       tasks.PriorityLow,
+			ConcurrencyKey: tasks.Key("books.maintenance.fs-regroup-xml"),
+			Timeout:        120 * time.Minute,
+			Schedule:       sched,
+			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in fsRegroupNativeParams) (fsRegroupResult, error) {
+			if in.DryRun != nil || in.DryRunSnake != nil {
+				return fsRegroupResult{}, fmt.Errorf("%s: dryRun and dry_run are not accepted; the run's mode comes from the start request", rc.Kind())
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return fsRegroupResult{}, err
+			}
+			return p.runFSRegroupXMLCore(rc.Context(), fsRegroupParams{Limit: in.Limit, Categories: in.Categories},
+				fsRegroupEnv{t6g4Base: base, Scan: deps.Scan})
+		},
+	})
+}
+
+// runFSRegroupXMLCore is HEAD's body (rule R2 item 1) after the shell decoded
+// params, resolved the mode and the store: env.Live is true exactly when HEAD's
+// dryRun is false. It reads through env.Store and writes only through
+// env.Writer.
+func (p *Plugin) runFSRegroupXMLCore(ctx context.Context, params fsRegroupParams, env fsRegroupEnv) (fsRegroupResult, error) {
+	dryRun := !env.Live
+	if _, err := params.categorySet(); err != nil {
+		return fsRegroupResult{}, err
+	}
+	reporter := env.reporter(ctx)
+	plan, err := planFSRepair(ctx, env.Store, reporter)
 	if err != nil {
-		return err
+		return fsRegroupResult{}, err
 	}
 	reportFSRepairPlan(plan, dryRun, reporter)
 	if dryRun {
-		_ = reporter.UpdateProgress(3, 3, "DRY RUN — "+plan.summary())
-		return nil
+		msg := "DRY RUN — " + plan.summary()
+		env.Progress(3, 3, msg)
+		return fsRegroupResult{DryRun: true, Summary: msg}, nil
 	}
-	res, err := applyFSRepairPlan(ctx, store, p.deps, p.deps.OperationQueueStore(), plan, params, reporter)
-	_ = reporter.UpdateProgress(3, 3, res.String())
-	return err
+	var queue OpQueueReader
+	if env.Store.HasOperationQueue() {
+		queue = env.Store
+	}
+	res, err := applyFSRepairPlanVia(ctx, fsRegroupView{env.Store, env.Writer}, env.Scan, queue, env.Each, plan, params, reporter)
+	msg := res.String()
+	env.Progress(3, 3, msg)
+	return fsRegroupResult{
+		Summary: msg, Groups: res.Groups, RowsMoved: res.RowsMoved, RowsCreated: res.RowsCreated,
+		ShellsSoftDeleted: res.ShellsSoftDeleted, ShellsKept: res.ShellsKept, TitleKept: res.TitleKept,
+		LedgerRows: res.LedgerRows, Skipped: res.Skipped, Errors: res.Errors,
+		HandOffsRefused: res.HandOffsRefused, StandDownLost: res.StandDownLost,
+	}, err
 }
 
 // ---- plan -----------------------------------------------------------------
@@ -934,6 +1067,16 @@ func (a *fsApplier) journalRow(bookID, changeType, field, oldV, newV string) (*d
 func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanController, queue OpQueueReader,
 	plan *fsRepairPlan, params fsRegroupParams, reporter sdk.Reporter,
 ) (fsRepairResult, error) {
+	return applyFSRepairPlanVia(ctx, store, scan, queue, t6g4RunEachHEAD(reporter), plan, params, reporter)
+}
+
+// applyFSRepairPlanVia is applyFSRepairPlan with the group loop run by each
+// (HEAD's registry.RunItems, or the native tasks.RunItems), so the apply exists
+// once for both shells.
+func applyFSRepairPlanVia(ctx context.Context, store fsRepairStore, scan ScanController, queue OpQueueReader,
+	each func(ctx context.Context, n int, o t6g4EachOpts, fn func(ctx context.Context, i int) error) error,
+	plan *fsRepairPlan, params fsRegroupParams, reporter sdk.Reporter,
+) (fsRepairResult, error) {
 	var res fsRepairResult
 	want, err := params.categorySet()
 	if err != nil {
@@ -978,7 +1121,14 @@ func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanContro
 	// path shares, so that section is serial; the per-group reads and the ledger
 	// writes outside it run in parallel. Making the RMW itself parallel needs
 	// per-group locking in internal/merge, which is a separate design decision.
-	err = registry.RunItems(ctx, reporter, work, func(gctx context.Context, g fsRepairGroup) error {
+	err = each(ctx, len(work), t6g4EachOpts{
+		Concurrency: t6g4CPU,
+		Collect:     true,
+		Label: func(_, total int) string {
+			return fmt.Sprintf("repaired %d/%d groups (errors=%d)", done.Load(), total, a.errs.Load())
+		},
+	}, func(gctx context.Context, i int) error {
+		g := work[i]
 		defer done.Add(1)
 		if lost.Load() {
 			return nil
@@ -994,12 +1144,6 @@ func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanContro
 			a.applyDuplicates(g)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(_, total int) string {
-			return fmt.Sprintf("repaired %d/%d groups (errors=%d)", done.Load(), total, a.errs.Load())
-		},
 	})
 	res = fsRepairResult{
 		Groups: int(a.groups.Load()), RowsMoved: int(a.moved.Load()), RowsCreated: int(a.created.Load()),

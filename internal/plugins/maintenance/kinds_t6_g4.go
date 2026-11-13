@@ -86,6 +86,7 @@ type t6g4Store interface {
 	t6g4BookCoreReads
 	t6g4OpQueueReads
 	t6g4FileIntroReads
+	t6g4RegroupReads
 }
 
 // t6g4Writer holds exactly the WRITE methods this group's cores call. Where HEAD
@@ -102,6 +103,8 @@ type t6g4Writer interface {
 	t6g4DedupeRowsWrites
 	t6g4FileIntroWrites
 	t6g4BookModifyWrites
+	t6g4BookFilesBatchWrites
+	t6g4RegroupWrites
 }
 
 // t6g4BookFileReads is the book_file read the file-integrity scan makes.
@@ -247,6 +250,38 @@ type t6g4BookModifyWrites interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
+// t6g4RegroupReads is what fs-regroup-xml reads beyond the shared groups: the
+// planner's whole-library snapshot, the apply's per-group re-reads, and the
+// reads of the helpers it hands the store to (merge, versionprimary,
+// itunesguard, the field-lock loader).
+type t6g4RegroupReads interface {
+	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	BookFilesAtPath(path string) ([]database.BookFile, error)
+	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	GetChaptersForBook(bookID string) ([]database.Chapter, error)
+	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
+	GetUserPreference(key string) (*database.UserPreference, error)
+	LiveBookIDsAtPath(path string) ([]string, error)
+}
+
+// t6g4BookFilesBatchWrites is the batched book_file write-back that recomputes
+// each touched book once (UpdateBookFiles).
+type t6g4BookFilesBatchWrites interface {
+	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
+}
+
+// t6g4RegroupWrites are fs-regroup-xml's writes beyond the shared groups: a row
+// created in a gap, rows moved to the survivor, a soft-delete row's void, and
+// the retired shell's external ids moved one at a time.
+type t6g4RegroupWrites interface {
+	CreateBookFile(file *database.BookFile) error
+	MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error
+	MarkOperationChangesReverted(operationID string, changeIDs []string) error
+	ReassignExternalID(source, externalID, newBookID string) error
+}
+
 // t6g4ReportPath is the report-path resolution Plugin.resolveReportPath makes,
 // over the library root a core reads from its store rather than from the
 // plugin's deps: the caller's explicit path when given, else
@@ -265,6 +300,10 @@ type t6g4Deps struct {
 	// (F5-18: internal/books/writer over rc.Writer()). The shell of a ReadOnly
 	// kind never calls it.
 	NewWriter func(tasks.Writer) t6g4Writer
+	// Scan is the scan stand-down service fs-regroup-xml's apply takes around
+	// its writes. Nil means none (HEAD's degraded caller, which runs unchanged
+	// where there is no scanner).
+	Scan ScanController
 }
 
 // ---- the env every core receives (rule R2, widened by the notes in seams.d/F5-09.md) ----
@@ -532,6 +571,33 @@ type headT6G4Store struct {
 
 func (h headT6G4Store) FileProvenanceAvailable() bool { return h.prov != nil }
 
+// errT6G4StoreLacks is the error of an adapter method whose store method is not
+// part of OpsStore (HEAD's fs-regroup-xml reaches it by a type assertion, and
+// refuses to run when the store lacks it).
+func errT6G4StoreLacks(method string) error {
+	return fmt.Errorf("store lacks %s; refusing to run", method)
+}
+
+func (h headT6G4Store) BookFilesAtPath(path string) ([]database.BookFile, error) {
+	r, ok := any(h.OpsStore).(interface {
+		BookFilesAtPath(string) ([]database.BookFile, error)
+	})
+	if !ok {
+		return nil, errT6G4StoreLacks("BookFilesAtPath")
+	}
+	return r.BookFilesAtPath(path)
+}
+
+func (h headT6G4Store) GetChaptersForBook(bookID string) ([]database.Chapter, error) {
+	r, ok := any(h.OpsStore).(interface {
+		GetChaptersForBook(string) ([]database.Chapter, error)
+	})
+	if !ok {
+		return nil, errT6G4StoreLacks("GetChaptersForBook")
+	}
+	return r.GetChaptersForBook(bookID)
+}
+
 func (h headT6G4Store) FileIntroWritesAvailable() bool {
 	_, ok := database.AsCapability[database.BookFileIntroStore](h.OpsStore)
 	return ok
@@ -591,6 +657,32 @@ type headT6G4Writer struct {
 	deps ServerDeps
 	// prov is the file_prov keyspace resolved off the deps (nil when absent).
 	prov database.FileProvenanceStore
+}
+
+func (h headT6G4Writer) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
+	r, ok := any(h.store).(interface {
+		MarkOperationChangesReverted(string, []string) error
+	})
+	if !ok {
+		return errT6G4StoreLacks("MarkOperationChangesReverted")
+	}
+	return r.MarkOperationChangesReverted(operationID, changeIDs)
+}
+
+func (h headT6G4Writer) CreateBookFile(file *database.BookFile) error {
+	return h.store.CreateBookFile(file)
+}
+
+func (h headT6G4Writer) MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error {
+	return h.store.MoveBookFilesToBookBulk(moves, targetBookID)
+}
+
+func (h headT6G4Writer) ReassignExternalID(source, externalID, newBookID string) error {
+	return h.store.ReassignExternalID(source, externalID, newBookID)
+}
+
+func (h headT6G4Writer) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
+	return h.store.UpdateBookFiles(ctx, files, afterRow)
 }
 
 func (h headT6G4Writer) intros() (database.BookFileIntroStore, error) {
@@ -721,6 +813,7 @@ func (p *Plugin) t6g4Kinds(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule
 		p.introMigrateSingleFileKind(deps, at(introMigrateSingleFileKind)),
 		p.dedupeBookFileRowsKind(deps, at(dedupeBookFileRowsKind)),
 		p.fileIntroTranscribeKind(deps, at(fileIntroKind)),
+		p.fsRegroupXMLKind(deps, at(fsRegroupKind)),
 	}
 }
 
