@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repair.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 50b5022c-9d86-467d-991e-2be9cddf4847
-// last-edited: 2026-09-13
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // missingFileRepairSampleLimit bounds how many example paths and book IDs are
@@ -111,25 +111,63 @@ func (p *Plugin) missingFileRepairDef() sdk.OperationDef {
 	}
 }
 
+// missingFileRepairKind is the native kind of maintenance.missing-file-repair (F5-10).
+const missingFileRepairKind tasks.Kind = "books.maintenance.missing-file-repair"
+
+// missingFileRepairEnv is what runMissingFileRepairCore needs from its engine:
+// the base and the worker pool.
+type missingFileRepairEnv struct {
+	t6g5Base
+	Items t6g5ItemsFunc
+}
+
+// missingFileRepairResult is the counts the report logs when it completes: the
+// native kind's result. HEAD stores no result.
+type missingFileRepairResult struct {
+	RowsFlaggedForReview            int `json:"rows_flagged_for_review"`
+	BooksFullyBrokenNeedingDecision int `json:"books_fully_broken_needing_decision"`
+	PathsUnreadable                 int `json:"paths_unreadable"`
+}
+
 func (p *Plugin) runMissingFileRepair(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	// Decode first: a bad body must fail the op before the store is touched.
 	var params missingFileRepairParams
 	if err := decodeOpParams(rawParams, &params); err != nil {
 		return fmt.Errorf("missing-file-repair: parse params: %w", err)
 	}
 
-	store := p.deps.OpsStore()
-	if store == nil {
+	if p.deps.OpsStore() == nil {
 		return fmt.Errorf("database not initialized")
 	}
 
-	// 🔴 Deletion was REMOVED from this op on 2026-08-19. Rejecting apply loudly
-	// rather than ignoring it: a parameter that silently stops doing what its name
-	// says is the exact shape of silent failure this codebase spends effort
-	// removing, and any caller still passing it is acting on a stale belief about
-	// what this op does.
+	env := missingFileRepairEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, false), Items: t6g5HeadItems(reporter)}
+	_, err := runMissingFileRepairCore(ctx, params, env)
+	return err
+}
+
+// missingFileRepairKind builds the native kind. Declared ReadOnly: the op is
+// report-only (HEAD requests no CapLibraryWrite and declares no Writes).
+func (p *Plugin) missingFileRepairKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	return tasks.Task(missingFileRepairKind, tasks.TaskSpec[json.RawMessage, missingFileRepairResult]{
+		Common: t6g5Common(p.missingFileRepairDef(), missingFileRepairKind, tasks.ReadOnly(), sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (missingFileRepairResult, error) {
+			var params missingFileRepairParams
+			if err := decodeOpParams(raw, &params); err != nil {
+				return missingFileRepairResult{}, fmt.Errorf("missing-file-repair: parse params: %w", err)
+			}
+			base, err := t6g5NativeBase(missingFileRepairKind, rc, deps, false)
+			if err != nil {
+				return missingFileRepairResult{}, err
+			}
+			return runMissingFileRepairCore(rc.Context(), params, missingFileRepairEnv{t6g5Base: base, Items: t6g5NativeItems(rc)})
+		},
+	})
+}
+
+// runMissingFileRepairCore is the shared body of both shells. It returns the
+// counts instead of only logging them.
+func runMissingFileRepairCore(ctx context.Context, params missingFileRepairParams, env missingFileRepairEnv) (missingFileRepairResult, error) {
 	if params.Apply {
-		return fmt.Errorf(
+		return missingFileRepairResult{}, fmt.Errorf(
 			"{\"apply\": true} is no longer supported: this operation never deletes. " +
 				"The full-population audit (docs/audits/2026-08-17-missing-file-audit-full-population.md) " +
 				"found that rows this op classified as safe to prune are the only pointer to files that " +
@@ -138,12 +176,12 @@ func (p *Plugin) runMissingFileRepair(ctx context.Context, rawParams json.RawMes
 				"maintenance.missing-file-audit for which rows are recoverable")
 	}
 
-	plan, err := planMissingFileRepair(ctx, store, params, reporter)
+	plan, err := planMissingFileRepairVia(ctx, env.Store, params, env)
 	if err != nil {
-		return err
+		return missingFileRepairResult{}, err
 	}
 
-	log := reporter.Logger()
+	log := env.Logger
 	log.Info("missing-file-report plan", "summary", plan.summary(),
 		"sample_paths", plan.SamplePaths)
 	if len(plan.FullyBroken) > 0 {
@@ -172,14 +210,26 @@ func (p *Plugin) runMissingFileRepair(ctx context.Context, rawParams json.RawMes
 		"rows_flagged_for_review", len(plan.RowsFlagged),
 		"books_fully_broken_needing_decision", plan.BooksFullyBroken,
 		"paths_unreadable", len(plan.Unreadable))
-	return nil
+	return missingFileRepairResult{
+		RowsFlaggedForReview:            len(plan.RowsFlagged),
+		BooksFullyBrokenNeedingDecision: plan.BooksFullyBroken,
+		PathsUnreadable:                 len(plan.Unreadable),
+	}, nil
 }
 
 // planMissingFileRepair stats every candidate row and decides, per BOOK, what is
 // safe to prune. Returned as a value so the decisions can be asserted directly in
 // tests rather than inferred from side effects.
+
 func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, params missingFileRepairParams, reporter sdk.Reporter) (repairPlan, error) {
-	log := reporter.Logger()
+	return planMissingFileRepairVia(ctx, store, params,
+		missingFileRepairEnv{t6g5Base: t6g5ReporterBase(ctx, reporter, false), Items: t6g5HeadItems(reporter)})
+}
+
+// planMissingFileRepairVia is planMissingFileRepair over the engine the env
+// names (rule R10: it reads the store it is handed and nothing it captures).
+func planMissingFileRepairVia(ctx context.Context, store bookFileCoreScanner, params missingFileRepairParams, env missingFileRepairEnv) (repairPlan, error) {
+	log := env.Logger
 	maxFlagged := params.MaxFlagged
 	if maxFlagged <= 0 {
 		maxFlagged = params.MaxDeletes
@@ -212,10 +262,17 @@ func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, param
 	results := make([]fileExistence, len(items))
 	var missing, present, unreadable atomic.Int64
 
-	prog := sdk.NewProgress(reporter, len(items))
+	prog := t6g5NewProgress(env.t6g5Base, len(items))
 	prog.Start(fmt.Sprintf("Checking %d book_file path(s)…", len(items)))
 
-	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, it missingFileItem) error {
+	err = env.Items(ctx, len(items), t6g5ItemsOpts{
+		Pool:    missingFileStatPool(),
+		Collect: true,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Checked %d/%d paths (missing=%d)", i+1, t, missing.Load())
+		},
+	}, func(_ context.Context, i int) error {
+		it := items[i]
 		switch _, serr := os.Stat(it.file.FilePath); {
 		case serr == nil:
 			results[it.idx] = filePresent
@@ -228,12 +285,6 @@ func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, param
 			unreadable.Add(1)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Checked %d/%d paths (missing=%d)", i+1, t, missing.Load())
-		},
 	})
 	if err != nil {
 		return repairPlan{}, fmt.Errorf("stat sweep: %w", err)
