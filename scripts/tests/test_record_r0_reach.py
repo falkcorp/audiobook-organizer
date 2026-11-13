@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.3.1
+# version: 1.4.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -718,32 +718,54 @@ class AuthFlipTest(unittest.TestCase):
         self.assertIn("authentication is still on", str(cm.exception))
         rec.check_auth_is_off(self.Client(200))
 
-    def test_the_flip_runs_the_helper_from_the_repo_root_on_the_copys_store(self):
+    def test_the_edit_runs_the_helper_from_the_repo_root_on_the_copys_store(self):
         layout = mock.Mock()
         layout.db = pathlib.Path("/x/db/audiobooks.pebble")
         done = subprocess.CompletedProcess([], 0, stdout="enable_auth: true -> false\n", stderr="")
         with mock.patch.object(rec.subprocess, "run", return_value=done) as run:
-            rec.flip_auth_off(layout)
+            rec.edit_config(layout, [rec.AUTH_OFF_EDIT])
         argv = run.call_args.args[0]
         self.assertEqual(argv[:2], ["go", "run"])
-        self.assertTrue(argv[2].endswith("flip_auth.go"))
+        self.assertTrue(argv[2].endswith("edit_config.go"))
         self.assertEqual(argv[3], "/x/db/audiobooks.pebble")
+        self.assertEqual(argv[4:], ["enable_auth=true>false"])
         self.assertEqual(run.call_args.kwargs["cwd"], w.REPO_ROOT)
 
-    def test_a_failed_flip_stops_the_run(self):
+    def test_a_failed_edit_stops_the_run(self):
         layout = mock.Mock()
         layout.db = pathlib.Path("/x/db/audiobooks.pebble")
         bad = subprocess.CompletedProcess([], 1, stdout="", stderr="no config_blob")
         failing = mock.patch.object(rec.subprocess, "run", return_value=bad)
         with failing, self.assertRaises(w.CorpusError) as cm:
-            rec.flip_auth_off(layout)
+            rec.edit_config(layout, [rec.WORKER_FLAG])
         self.assertIn("no config_blob", str(cm.exception))
 
-    def test_the_helper_source_is_a_txt_file_and_names_the_one_key_it_changes(self):
-        src = rec.FLIP_AUTH_SRC.read_text(encoding="utf-8")
-        self.assertEqual(rec.FLIP_AUTH_SRC.suffix, ".txt")
-        self.assertIn('blob["enable_auth"] = json.RawMessage("false")', src)
+    def test_each_boot_turns_the_worker_flag_on_and_only_the_auth_off_boot_turns_auth_off(self):
+        seen = []
+        stop = RuntimeError("stop after the edit")
+
+        def record_edits(layout, edits):
+            seen.append(edits)
+            raise stop
+
+        args = rec.build_parser().parse_args(["--check"])
+        for auth_off, want in (
+            (False, [rec.WORKER_FLAG]),
+            (True, [rec.WORKER_FLAG, rec.AUTH_OFF_EDIT]),
+        ):
+            staged = mock.patch.object(rec, "stage_copy")
+            edited = mock.patch.object(rec, "edit_config", side_effect=record_edits)
+            with staged, edited, self.assertRaises(RuntimeError):
+                rec.boot_and_record(args, pathlib.Path("r0"), [], [], auth_off)
+            self.assertEqual(seen[-1], want)
+
+    def test_the_helper_source_is_a_txt_file_that_checks_what_it_replaces(self):
+        src = rec.EDIT_CONFIG_SRC.read_text(encoding="utf-8")
+        self.assertEqual(rec.EDIT_CONFIG_SRC.suffix, ".txt")
         self.assertIn("pebble.Open(path, &pebble.Options{})", src)
+        self.assertIn('e.from != "*" && string(was) != e.from', src)
+        self.assertEqual(rec.AUTH_OFF_EDIT, "enable_auth=true>false")
+        self.assertEqual(rec.WORKER_FLAG, "fingerprint_remote_workers_enabled=*>true")
 
     def test_the_auth_on_pass_is_saved_and_read_back(self):
         with tempfile.TemporaryDirectory() as d:
