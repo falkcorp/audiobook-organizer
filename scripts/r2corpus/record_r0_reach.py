@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.4.0
+# version: 1.4.1
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -117,6 +117,11 @@ OK_5XX: dict[str, str] = {
     ),
     "DELETE /api/v1/backup/:filename": "500 failed to delete backup (no such file or backups dir)",
     "POST /api/v1/dedup/fingerprint-rescan": "503 no fingerprint backend (fpcalc / ffmpeg) found",
+    # fpworker/handler.go: "503 when no live window-backfill is running", the state of
+    # a recording store; the routes that decode a body answer 400 first.
+    "GET /api/v1/fingerprint/worker/hello": "503 no live window-backfill is running",
+    "POST /api/v1/fingerprint/worker/lease/:id/release": "503 no live window-backfill is running",
+    "POST /api/v1/fingerprint/worker/lease/:id/renew": "503 no live window-backfill is running",
     "GET /api/v1/deluge/labels": "502 the Deluge host does not resolve (an unconfigured client)",
     "POST /api/v1/deluge/test-connection": "502 the Deluge host does not resolve",
     "GET /api/v1/deluge/torrents": "502 the Deluge host does not resolve",
