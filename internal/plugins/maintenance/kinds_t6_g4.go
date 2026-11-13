@@ -8,14 +8,17 @@ package maintenance
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"runtime"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -81,6 +84,8 @@ type t6g4Store interface {
 	t6g4WAVReads
 	t6g4ProvReads
 	t6g4BookCoreReads
+	t6g4OpQueueReads
+	t6g4FileIntroReads
 }
 
 // t6g4Writer holds exactly the WRITE methods this group's cores call. Where HEAD
@@ -94,6 +99,9 @@ type t6g4Writer interface {
 	t6g4WAVWrites
 	t6g4ProvWrites
 	t6g4BookFileWrites
+	t6g4DedupeRowsWrites
+	t6g4FileIntroWrites
+	t6g4BookModifyWrites
 }
 
 // t6g4BookFileReads is the book_file read the file-integrity scan makes.
@@ -195,6 +203,60 @@ type t6g4BookFileWrites interface {
 	UpdateBookFile(id string, file *database.BookFile) error
 }
 
+// t6g4OpQueueReads is the active-operation listing the file-row dedup consults
+// before it applies (a library.scan rewrites the rows it deletes).
+// HasOperationQueue is false where HEAD's OperationQueueStore() returned nil.
+type t6g4OpQueueReads interface {
+	HasOperationQueue() bool
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
+}
+
+// t6g4DedupeRowsWrites are the file-row dedup's writes beyond UpdateBookFile: the
+// fingerprint-window carry-over, the undo-ledger row, the batched delete and the
+// aggregate recompute.
+type t6g4DedupeRowsWrites interface {
+	CarryOverFingerprintWindows(from []database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error)
+	CreateOperationChange(change *database.OperationChange) error
+	DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error)
+	RecomputeBookAggregates(bookID string) error
+}
+
+// t6g4FileIntroReads is what the per-file intro transcription reads beyond the
+// shared groups: a file row and a book row by id (donor reuse, the rollback
+// preview), and whether the store can write per-file intro results at all (HEAD's
+// database.AsCapability probe, which a core cannot make on a store it only reads).
+type t6g4FileIntroReads interface {
+	FileIntroWritesAvailable() bool
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// t6g4FileIntroWrites are the per-file intro writes: a result, a rollback, the
+// timeout strikes, and the run's persisted counters.
+type t6g4FileIntroWrites interface {
+	SetBookFileIntro(bookID, fileID string, r database.BookFileIntroResult) (database.BookFileIntroWrite, error)
+	ClearBookFileIntro(bookID, fileID, runOpID string) (before *database.BookFile, cleared bool, err error)
+	RecordIntroTimeout(bookID, fileID string, s database.IntroTimeoutStrike) (database.IntroTimeoutOutcome, error)
+	ClearIntroTimeouts(bookID, fileID, sourceHash string) (cleared bool, err error)
+	PutFileIntroStats(*database.FileIntroStats) error
+}
+
+// t6g4BookModifyWrites is ModifyBook: a write of the book row's own columns
+// under its lock (a book-level transcript fill or its revert).
+type t6g4BookModifyWrites interface {
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}
+
+// t6g4ReportPath is the report-path resolution Plugin.resolveReportPath makes,
+// over the library root a core reads from its store rather than from the
+// plugin's deps: the caller's explicit path when given, else
+// {RootDir}/.reports/<fileName>, with its directory proven writable.
+func t6g4ReportPath(store t6g4PathReads, explicit, fileName string) (string, error) {
+	return library.ReportPathNotify(store.RootDir(), explicit, fileName, func(dir string, was fs.FileMode) {
+		logger.New("maintenance").Warn("removed world write from the report directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))
+	})
+}
+
 // t6g4Deps is what the owner (books, from F5-18) declares for the group's kinds
 // (rule R10 item 4; 05-tasks 5T.8.4 store-capture).
 type t6g4Deps struct {
@@ -214,13 +276,17 @@ type t6g4Deps struct {
 // reporter.Logger(), SetCurrentItem, IsCanceled and ReporterOpID and the
 // helpers beneath them take an sdk.Reporter that tests pin (rule R2 item 4).
 type t6g4Base struct {
-	Live           bool
-	OpID           string
-	Log            func(level slog.Level, msg string, attrs ...slog.Attr)
-	Logger         func() *slog.Logger
-	Progress       func(done, total int, msg string)
-	SetItem        func(label string)
-	Canceled       func() bool
+	Live     bool
+	OpID     string
+	Log      func(level slog.Level, msg string, attrs ...slog.Attr)
+	Logger   func() *slog.Logger
+	Progress func(done, total int, msg string)
+	SetItem  func(label string)
+	Canceled func() bool
+	// Touch tells the engine's liveness watchdog the run is alive without
+	// moving the progress bar (HEAD: registry.TouchLiveness; native:
+	// rc.Progress().Tick()).
+	Touch          func()
 	SaveCheckpoint func(v any) error
 	LoadCheckpoint func(v any) (bool, error)
 	Writer         t6g4Writer // rule R10: the only write path
@@ -367,6 +433,13 @@ func (r t6g4Reporter) SetCurrentItem(label string) {
 	}
 }
 
+// TouchLiveness makes registry.TouchLiveness reach the env's Touch.
+func (r t6g4Reporter) TouchLiveness() {
+	if r.b.Touch != nil {
+		r.b.Touch()
+	}
+}
+
 // OpID makes registry.ReporterOpID answer with the run's id.
 func (r t6g4Reporter) OpID() string { return r.b.OpID }
 
@@ -382,6 +455,7 @@ func t6g4HeadBase(reporter sdk.Reporter, live bool, store t6g4Store, writer t6g4
 		Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
 		SetItem:  reporter.SetCurrentItem,
 		Canceled: reporter.IsCanceled,
+		Touch:    func() { registry.TouchLiveness(reporter) },
 		SaveCheckpoint: func(v any) error {
 			return reporter.Checkpoint(v)
 		},
@@ -428,6 +502,7 @@ func t6g4NativeBase(rc *tasks.RC, deps t6g4Deps, needsWriter bool) (t6g4Base, er
 		},
 		SetItem:        func(label string) { rc.Progress().Note(label) },
 		Canceled:       rc.Canceled,
+		Touch:          func() { rc.Progress().Tick() },
 		SaveCheckpoint: rc.Checkpoint,
 		LoadCheckpoint: rc.Restore,
 		Writer:         w,
@@ -457,6 +532,11 @@ type headT6G4Store struct {
 
 func (h headT6G4Store) FileProvenanceAvailable() bool { return h.prov != nil }
 
+func (h headT6G4Store) FileIntroWritesAvailable() bool {
+	_, ok := database.AsCapability[database.BookFileIntroStore](h.OpsStore)
+	return ok
+}
+
 func (h headT6G4Store) FindFileEventsByHash(hash string) ([]database.FileEvent, error) {
 	return h.prov.FindFileEventsByHash(hash)
 }
@@ -473,6 +553,12 @@ func (h headT6G4Store) ScanFileEventsBySeq(afterSeq uint64, limit int) ([]databa
 
 func (h headT6G4Store) GetFileHistory(bookFileID string) ([]database.FileEvent, error) {
 	return h.prov.GetFileHistory(bookFileID)
+}
+
+func (h headT6G4Store) HasOperationQueue() bool { return h.deps.OperationQueueStore() != nil }
+
+func (h headT6G4Store) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	return h.deps.OperationQueueStore().ListActiveOperationsV2()
 }
 
 func (h headT6G4Store) RootDir() string { return h.deps.RootDir() }
@@ -507,10 +593,80 @@ type headT6G4Writer struct {
 	prov database.FileProvenanceStore
 }
 
+func (h headT6G4Writer) intros() (database.BookFileIntroStore, error) {
+	intros, ok := database.AsCapability[database.BookFileIntroStore](h.store)
+	if !ok {
+		return nil, fmt.Errorf("the store does not support per-file intro writes")
+	}
+	return intros, nil
+}
+
+func (h headT6G4Writer) SetBookFileIntro(bookID, fileID string, r database.BookFileIntroResult) (database.BookFileIntroWrite, error) {
+	intros, err := h.intros()
+	if err != nil {
+		return 0, err
+	}
+	return intros.SetBookFileIntro(bookID, fileID, r)
+}
+
+func (h headT6G4Writer) ClearBookFileIntro(bookID, fileID, runOpID string) (*database.BookFile, bool, error) {
+	intros, err := h.intros()
+	if err != nil {
+		return nil, false, err
+	}
+	return intros.ClearBookFileIntro(bookID, fileID, runOpID)
+}
+
+func (h headT6G4Writer) RecordIntroTimeout(bookID, fileID string, s database.IntroTimeoutStrike) (database.IntroTimeoutOutcome, error) {
+	intros, err := h.intros()
+	if err != nil {
+		return database.IntroTimeoutOutcome{}, err
+	}
+	return intros.RecordIntroTimeout(bookID, fileID, s)
+}
+
+func (h headT6G4Writer) ClearIntroTimeouts(bookID, fileID, sourceHash string) (bool, error) {
+	intros, err := h.intros()
+	if err != nil {
+		return false, err
+	}
+	return intros.ClearIntroTimeouts(bookID, fileID, sourceHash)
+}
+
+// PutFileIntroStats is best effort, as HEAD's sink is: a store without the
+// capability simply persists no counters.
+func (h headT6G4Writer) PutFileIntroStats(st *database.FileIntroStats) error {
+	sink, ok := database.AsCapability[database.FileIntroStatsStore](h.store)
+	if !ok {
+		return nil
+	}
+	return sink.PutFileIntroStats(st)
+}
+
+func (h headT6G4Writer) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return h.store.ModifyBook(id, fn)
+}
+
 func (h headT6G4Writer) AppendFileEvent(e database.FileEvent) error { return h.prov.AppendFileEvent(e) }
 
 func (h headT6G4Writer) SetFileProvExportCursor(seq uint64) error {
 	return h.prov.SetFileProvExportCursor(seq)
+}
+
+func (h headT6G4Writer) CarryOverFingerprintWindows(from []database.FingerprintWindowRef, to database.FingerprintWindowRef) (int, error) {
+	return h.store.CarryOverFingerprintWindows(from, to)
+}
+
+func (h headT6G4Writer) CreateOperationChange(change *database.OperationChange) error {
+	return h.store.CreateOperationChange(change)
+}
+
+func (h headT6G4Writer) DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error) {
+	return h.store.DeleteBookFilesByIDs(refs)
+}
+
+func (h headT6G4Writer) RecomputeBookAggregates(bookID string) error {
+	return h.store.RecomputeBookAggregates(bookID)
 }
 
 func (h headT6G4Writer) UpdateBookFile(id string, file *database.BookFile) error {
@@ -563,6 +719,8 @@ func (p *Plugin) t6g4Kinds(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule
 		p.fileProvenanceExportKind(deps, at(fileProvenanceExportKind)),
 		p.filePathCollisionReportKind(deps, at(filePathCollisionReportKind)),
 		p.introMigrateSingleFileKind(deps, at(introMigrateSingleFileKind)),
+		p.dedupeBookFileRowsKind(deps, at(dedupeBookFileRowsKind)),
+		p.fileIntroTranscribeKind(deps, at(fileIntroKind)),
 	}
 }
 

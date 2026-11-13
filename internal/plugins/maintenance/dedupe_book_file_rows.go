@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.12.8
+// version: 1.13.0
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -19,9 +19,12 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
+
+// dedupeBookFileRowsKind is rule R3: the native kind of maintenance.dedupe-book-file-rows.
+const dedupeBookFileRowsKind tasks.Kind = "books.maintenance.dedupe-book-file-rows"
 
 // DedupeBookFileRowsParams are the JSON parameters for the duplicate book_file
 // row cleanup.
@@ -269,6 +272,52 @@ func mergeMissingFields(keeper database.BookFile, twins []database.BookFile) (da
 	return keeper, changed
 }
 
+// dedupeBookFileRowsResult is the run's tallies. HEAD folds them into one summary
+// line; the native run also returns them.
+type dedupeBookFileRowsResult struct {
+	// RemoveNamedOnly marks a remove_row_ids run, which reports through its own
+	// summary line and carries no sweep tallies.
+	RemoveNamedOnly bool   `json:"remove_named_only,omitempty"`
+	RowsScanned     int    `json:"rows_scanned"`
+	BooksAffected   int    `json:"books_affected"`
+	RedundantRows   int    `json:"redundant_rows"`
+	SupersededRows  int    `json:"superseded_rows"`
+	SupersededBooks int    `json:"superseded_books"`
+	Deleted         int    `json:"deleted"`
+	WouldDelete     int    `json:"would_delete"`
+	Salvaged        int    `json:"salvaged"`
+	Recomputed      int    `json:"recomputed"`
+	Failed          int    `json:"failed"`
+	ReportPath      string `json:"report_path,omitempty"`
+}
+
+// dedupeBookFileRowsEnv is what the core needs from its engine (rules R2 and R10).
+type dedupeBookFileRowsEnv struct {
+	t6g4Base
+}
+
+// dedupeRowsView is the one value the remove_row_ids helpers take as their
+// dedupeRowsStore: reads through the env's store, writes through its writer.
+type dedupeRowsView struct {
+	t6g4Store
+	t6g4Writer
+}
+
+// dedupeBookFileRowsNativeParams is DedupeBookFileRowsParams for the native run:
+// the same fields, except Apply is only a refusal marker (a live run applies, a
+// preview reports).
+type dedupeBookFileRowsNativeParams struct {
+	Limit              int      `json:"limit,omitempty"`
+	ReportPath         string   `json:"reportPath,omitempty"`
+	PruneSuperseded    *bool    `json:"pruneSuperseded,omitempty"`
+	BookIDs            []string `json:"book_ids,omitempty"`
+	CrossFolder        bool     `json:"cross_folder,omitempty"`
+	RemoveRowIDs       []string `json:"remove_row_ids,omitempty"`
+	ConfirmedDuplicate bool     `json:"confirmed_duplicate,omitempty"`
+	Apply              *bool    `json:"apply,omitempty"`
+}
+
+// runDedupeBookFileRows is the v2 shell around runDedupeBookFileRowsCore (rule R2 item 2).
 func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params DedupeBookFileRowsParams
 	if len(raw) > 0 {
@@ -280,17 +329,67 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	_, err := p.runDedupeBookFileRowsCore(ctx, params, dedupeBookFileRowsEnv{
+		t6g4Base: t6g4HeadBase(reporter, params.Apply,
+			headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}),
+	})
+	return err
+}
+
+// dedupeBookFileRowsKind is the native shell (rule R2 item 3). HEAD has a
+// preview, so a preview run reads and reports and deletes nothing. DependsOn
+// library.scan carries over as NotWhile.
+func (p *Plugin) dedupeBookFileRowsKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(dedupeBookFileRowsKind, tasks.TaskSpec[dedupeBookFileRowsNativeParams, dedupeBookFileRowsResult]{
+		Common: tasks.Common{
+			Title: "De-duplicate book_file rows",
+			Help:  "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Optional: book_ids scopes the run; cross_folder:true also deletes a missing row whose basename and size match exactly one present row in the same book; remove_row_ids removes named rows that have an identical-hash present twin (or confirmed_duplicate:true). Dry-run by default — pass {\"apply\": true} to delete.",
+			// Declared write-set: never runs beside another op that rewrites
+			// book_file rows, e.g. maintenance.fs-regroup-xml.
+			Effects:         tasks.Writes(t6g4Res("book_files")...),
+			Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:          tasks.ResumeContinue,
+			Priority:        tasks.PriorityLow,
+			ConcurrencyKey:  tasks.Key("books.maintenance.dedupe-book-file-rows"),
+			Timeout:         2 * time.Hour,
+			ProgressTimeout: 30 * time.Minute,
+			NotWhile:        []tasks.Kind{"library.scan"},
+			Schedule:        sched,
+			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in dedupeBookFileRowsNativeParams) (dedupeBookFileRowsResult, error) {
+			if in.Apply != nil {
+				return dedupeBookFileRowsResult{}, fmt.Errorf("%s: the apply param is not accepted; the run's mode comes from the start request (live applies, preview reports)", rc.Kind())
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return dedupeBookFileRowsResult{}, err
+			}
+			return p.runDedupeBookFileRowsCore(rc.Context(), DedupeBookFileRowsParams{
+				Apply: base.Live, Limit: in.Limit, ReportPath: in.ReportPath, PruneSuperseded: in.PruneSuperseded,
+				BookIDs: in.BookIDs, CrossFolder: in.CrossFolder, RemoveRowIDs: in.RemoveRowIDs,
+				ConfirmedDuplicate: in.ConfirmedDuplicate,
+			}, dedupeBookFileRowsEnv{t6g4Base: base})
+		},
+	})
+}
+
+// runDedupeBookFileRowsCore is HEAD's body (rule R2 item 1) after the shell decoded
+// params and resolved the store. It reads through env.Store and changes a row,
+// a fingerprint window, the undo journal or a book aggregate only through env.Writer.
+func (p *Plugin) runDedupeBookFileRowsCore(ctx context.Context, params DedupeBookFileRowsParams, env dedupeBookFileRowsEnv) (dedupeBookFileRowsResult, error) {
+	store, w := env.Store, env.Writer
 	// Resolve the report path before any work: with no reportPath and no usable
 	// root_dir the run must fail with nothing done, not apply and then lose its record.
 	reportMode := "dryrun"
 	if params.Apply {
 		reportMode = "apply"
 	}
-	reportPath, rpErr := p.resolveReportPath(params.ReportPath, "dedupe-book-file-rows-"+reportMode+".tsv")
+	reportPath, rpErr := t6g4ReportPath(env.Store, params.ReportPath, "dedupe-book-file-rows-"+reportMode+".tsv")
 	if rpErr != nil {
-		return fmt.Errorf("dedupe-book-file-rows: %w", rpErr)
+		return dedupeBookFileRowsResult{}, fmt.Errorf("dedupe-book-file-rows: %w", rpErr)
 	}
-	log := reporter.Logger()
+	log := env.Logger()
 	scope := params.bookScope()
 	log.Info("dedupe-book-file-rows: starting", "apply", params.Apply, "limit", params.Limit,
 		"book_ids", len(scope), "cross_folder", params.CrossFolder, "remove_row_ids", len(params.RemoveRowIDs))
@@ -304,21 +403,20 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	// is not caught. DependsOn (dedupeBookFileRowsDef) narrows that window at
 	// dispatch. The op is not scan-proof; it is scan-aware.
 	if params.Apply {
-		qs := p.deps.OperationQueueStore()
-		if qs == nil {
-			return fmt.Errorf("dedupe-book-file-rows: cannot verify no library.scan is active; refusing to apply")
+		if !store.HasOperationQueue() {
+			return dedupeBookFileRowsResult{}, fmt.Errorf("dedupe-book-file-rows: cannot verify no library.scan is active; refusing to apply")
 		}
-		active, aerr := qs.ListActiveOperationsV2()
+		active, aerr := store.ListActiveOperationsV2()
 		if aerr != nil {
 			// Fail CLOSED: an unreadable queue is not proof of an idle queue.
-			return fmt.Errorf("dedupe-book-file-rows: cannot list active operations; refusing to apply: %w", aerr)
+			return dedupeBookFileRowsResult{}, fmt.Errorf("dedupe-book-file-rows: cannot list active operations; refusing to apply: %w", aerr)
 		}
 		for _, op := range active {
 			if op.DefID == "library.scan" && (op.Status == "running" || op.Status == "queued") {
 				// A ZOMBIE 'running' ROW WITH NO LIVE HANDLE ALSO LANDS HERE, and
 				// that is the safe direction — say so, or the next operator reads
 				// this as the op being broken instead of the queue being stale.
-				return fmt.Errorf(
+				return dedupeBookFileRowsResult{}, fmt.Errorf(
 					"dedupe-book-file-rows: library.scan is %s (op %s); refusing to apply — a running scan "+
 						"rewrites the rows this op deletes. If that scan is a stale/zombie row with no live "+
 						"handle, clear it before re-running rather than bypassing this check",
@@ -335,14 +433,14 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	// blind on the one field we must not lose.
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("scan book_files: %w", err)
+		return dedupeBookFileRowsResult{}, fmt.Errorf("scan book_files: %w", err)
 	}
 	// Captured ONCE, outside any worker: every journal row this run writes is
 	// tagged with the same operation id so GetOperationChanges(opID) returns the
 	// whole deletion set. ReporterOpID degrades to "" for a reporter that cannot
 	// say (a fake, by design) — that is a WARN, never a refusal: the rows still
 	// carry the full BookFile in OldValue and stay reachable via GetBookChanges.
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 	if opID == "" {
 		log.Warn("dedupe-book-file-rows: no operation id; journal rows will be uncorrelated")
 	}
@@ -350,7 +448,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	// remove_row_ids runs INSTEAD of the sweep: it is an explicit, named-row
 	// removal and must not quietly bring a library-wide dedupe along with it.
 	if len(params.RemoveRowIDs) > 0 {
-		return p.finishRemoveNamedRows(store, params, cores, opID, reportPath, reporter)
+		return dedupeBookFileRowsResult{RemoveNamedOnly: true}, p.finishRemoveNamedRows(dedupeRowsView{store, w}, params, cores, opID, reportPath, env.reporter(ctx))
 	}
 
 	inScope := make(map[string]bool, len(scope))
@@ -460,7 +558,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		}
 		for _, id := range scope {
 			if !hasRows[id] {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("dedupe-book-file-rows: book_ids entry %s has no book_file rows with a path", id))
+				env.Log(slog.LevelWarn, fmt.Sprintf("dedupe-book-file-rows: book_ids entry %s has no book_file rows with a path", id))
 				continue
 			}
 			if _, ok := affected[id]; !ok {
@@ -484,7 +582,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		"books_affected", len(affected),
 		"redundant_rows", dupRows)
 
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"%d book(s) hold duplicate book_file rows (%d redundant rows); %d more visited for superseded-row folding; %d more for cross-folder purging; %d more because book_ids named them",
 		len(affected)-supersededCandidates-crossFolderCandidates-scopedOnly, dupRows, supersededCandidates,
 		crossFolderCandidates, scopedOnly))
@@ -534,7 +632,17 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 
 	// opID was captured once, before PASS 1, so every worker tags its journal
 	// rows with the same operation id.
-	runErr := registry.RunItems(ctx, reporter, bookIDs, func(ctx context.Context, bookID string) error {
+	runErr := env.Each(ctx, len(bookIDs), t6g4EachOpts{
+		Concurrency: t6g4CPU,
+		// Collect: a single failing book must not abandon the other 175.
+		// Per-book failures are already counted and logged above, and the callback
+		// returns nil for them, so this mainly governs cancellation semantics.
+		Collect: true,
+		Label: func(i, total int) string {
+			return fmt.Sprintf("book %d/%d", i+1, total)
+		},
+	}, func(ctx context.Context, bookIdx int) error {
+		bookID := bookIDs[bookIdx]
 		// GetBookFiles reads Pebble directly (raw prefix iteration), NOT memdb, so
 		// AcoustIDFingerprint is present and un-stripped here. That is exactly why
 		// the keeper decision happens in this pass and not the previous one.
@@ -807,7 +915,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			// was never rescued — losing a duration is recoverable, losing it while
 			// also deleting the only copy is not.
 			if changed {
-				if uerr := store.UpdateBookFile(keeper.ID, &keeper); uerr != nil {
+				if uerr := w.UpdateBookFile(keeper.ID, &keeper); uerr != nil {
 					mu.Lock()
 					failed++
 					mu.Unlock()
@@ -837,7 +945,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			for ri := range redundant {
 				donorRefs = append(donorRefs, database.FileWindowRef(redundant[ri].ID))
 			}
-			if _, cerr := store.CarryOverFingerprintWindows(donorRefs, database.FileWindowRef(keeper.ID)); cerr != nil {
+			if _, cerr := w.CarryOverFingerprintWindows(donorRefs, database.FileWindowRef(keeper.ID)); cerr != nil {
 				mu.Lock()
 				failed++
 				mu.Unlock()
@@ -888,7 +996,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			// rest intact; gone names the former. The op is idempotent, so the
 			// cost is one more run, and one book's failure must not abandon the
 			// others.
-			gone, derr := journalAndDeleteBookFiles(store, opID, bookID, pendingRows)
+			gone, derr := journalAndDeleteBookFiles(w, opID, bookID, pendingRows)
 			mu.Lock()
 			if derr != nil {
 				failed++
@@ -923,7 +1031,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		// batch delete was skipped. Removing it would silently zero a counter the
 		// op's output is read for.
 		if params.Apply && changedThisBook {
-			if rerr := store.RecomputeBookAggregates(bookID); rerr != nil {
+			if rerr := w.RecomputeBookAggregates(bookID); rerr != nil {
 				mu.Lock()
 				failed++
 				mu.Unlock()
@@ -939,22 +1047,19 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 		// completes, using a monotonic counter that stays ordered even when books
 		// finish out of order. That is also what keeps the stuck-op watchdog fed.
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: workers,
-		// ErrModeCollect: a single failing book must not abandon the other 175.
-		// Per-book failures are already counted and logged above, and the callback
-		// returns nil for them, so this mainly governs cancellation semantics.
-		ErrMode: registry.ErrModeCollect,
-		Label: func(i, total int) string {
-			return fmt.Sprintf("book %d/%d", i+1, total)
-		},
 	})
+	res := dedupeBookFileRowsResult{
+		RowsScanned: len(cores), BooksAffected: len(affected), RedundantRows: dupRows,
+		SupersededRows: supersededRows, SupersededBooks: supersededBooks,
+		Deleted: deleted, WouldDelete: wouldDelete, Salvaged: salvaged, Recomputed: recomputed,
+		Failed: failed, ReportPath: reportPath,
+	}
 	if runErr != nil && ctx.Err() != nil {
 		// Cancelled or timed out. Everything already committed stays correct — books
 		// are independent and the op is idempotent — so report and let a re-run
 		// pick up the remainder rather than pretending the work was lost.
 		log.Warn("dedupe-book-file-rows: cancelled", "deleted", deleted, "books", len(bookIDs))
-		return ctx.Err()
+		return res, ctx.Err()
 	}
 	if runErr != nil {
 		log.Warn("dedupe-book-file-rows: some books failed", "err", runErr)
@@ -980,7 +1085,7 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 	}
 	crossNote := ""
 	if trackRows {
-		crossNote = " | rows: " + p.emitRowDecisions(decisions, decisionsReportPath(reportPath), reporter)
+		crossNote = " | rows: " + p.emitRowDecisions(decisions, decisionsReportPath(reportPath), env.reporter(ctx))
 	}
 
 	verb := fmt.Sprintf("would delete %d (would salvage fields on %d keepers)", wouldDelete, salvaged)
@@ -999,9 +1104,9 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 			"| %s%s | NOTE: corrected totals may not appear until memdb refreshes (restart) | e.g. %s",
 		len(cores), len(affected), dupRows, supersededRows, supersededBooks, verb, failed, reportNote, crossNote,
 		strings.Join(examples, "; "))
-	_ = reporter.Log(slog.LevelInfo, summary)
-	_ = reporter.UpdateProgress(len(bookIDs), len(bookIDs), summary)
-	return nil
+	env.Log(slog.LevelInfo, summary)
+	env.Progress(len(bookIDs), len(bookIDs), summary)
+	return res, nil
 }
 
 // writeDupeRowsReport dumps EVERY affected book and its duplication shape as a
