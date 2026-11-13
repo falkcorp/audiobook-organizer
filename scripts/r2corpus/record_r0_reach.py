@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.5.1
+# version: 1.5.2
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -126,6 +126,7 @@ OK_5XX: dict[str, str] = {
     "GET /api/v1/deluge/labels": "502 the Deluge host does not resolve (an unconfigured client)",
     "POST /api/v1/deluge/test-connection": "502 the Deluge host does not resolve",
     "GET /api/v1/deluge/torrents": "502 the Deluge host does not resolve",
+    "GET /api/v1/deluge/discover": "502 the Deluge host does not resolve (discovery is on in the recording)",
     "POST /api/v1/operations/:id/revert": "500 failed to revert operation (no changes for the operation)",
     "POST /api/v1/update/apply": "500 failed to apply update (no release asset to apply)",
 }
