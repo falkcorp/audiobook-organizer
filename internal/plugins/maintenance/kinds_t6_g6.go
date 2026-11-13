@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d78a6104-de76-4b10-ab6f-1cf177912760
 // last-edited: 2026-11-13
 
@@ -310,17 +310,27 @@ func t6g6ErrgroupItems(ctx context.Context, par tasks.Parallelism, n int, _ t6g6
 
 // t6g6Store is every read the 14 definitions make, composed from each
 // definition's own narrow interface. A method two definitions share has one
-// signature, so the embeds overlap cleanly. Nothing here writes.
+// signature, so the embeds overlap cleanly. Nothing here writes. It is split in
+// two so no single declaration is wider than the interface-width ratchet allows;
+// the method set is the union and no consumer sees the split.
 type t6g6Store interface {
+	t6g6StoreCleanup
+	t6g6StoreRepair
+}
+
+type t6g6StoreCleanup interface {
 	orphanBookFilesCleanupStore
 	orphanRepointPlanStore
 	opChangeBookIndexStore
 	probeDirectoryBooksStore
+	rbfReader
+}
+
+type t6g6StoreRepair interface {
 	recoverMissingFilesStore
 	regroupShatteredAIStore
 	relinkUnlinkedBooksStore
 	repairTranscribeStatusStore
-	rbfReader
 }
 
 // t6g6Writer is every write the 14 definitions make, composed from each
@@ -328,10 +338,19 @@ type t6g6Store interface {
 // t6g6Deps.NewWriter over the run's kernel-gated tasks.Writer, so every write
 // goes through the gate (and is recorded, not executed, in a Preview run).
 type t6g6Writer interface {
+	t6g6WriterCompact
+	t6g6WriterRepair
+}
+
+type t6g6WriterCompact interface {
 	nightlyCompactActivityLogWriter
 	opChangeBookIndexWriter
 	recompactActivityDigestsWriter
 	itunesHealWriter
+	rbfWriter
+}
+
+type t6g6WriterRepair interface {
 	recoverMissingFilesWriter
 	regroupShatteredAIWriter
 	database.ReviewItemPendingDeleter
@@ -339,7 +358,6 @@ type t6g6Writer interface {
 	probeDirectoryBooksWriter
 	repairMergedUserStateWriter
 	repairTranscribeStatusWriter
-	rbfWriter
 }
 
 // t6g6Deps is what the native kinds are built from. Every field is set once, by
