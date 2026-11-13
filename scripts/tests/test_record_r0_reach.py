@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.4.0
+# version: 1.5.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -750,8 +750,8 @@ class AuthFlipTest(unittest.TestCase):
 
         args = rec.build_parser().parse_args(["--check"])
         for auth_off, want in (
-            (False, [rec.WORKER_FLAG]),
-            (True, [rec.WORKER_FLAG, rec.AUTH_OFF_EDIT]),
+            (False, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG]),
+            (True, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG, rec.AUTH_OFF_EDIT]),
         ):
             staged = mock.patch.object(rec, "stage_copy")
             edited = mock.patch.object(rec, "edit_config", side_effect=record_edits)
@@ -766,6 +766,7 @@ class AuthFlipTest(unittest.TestCase):
         self.assertIn('e.from != "*" && string(was) != e.from', src)
         self.assertEqual(rec.AUTH_OFF_EDIT, "enable_auth=true>false")
         self.assertEqual(rec.WORKER_FLAG, "fingerprint_remote_workers_enabled=*>true")
+        self.assertEqual(rec.DISCOVERY_FLAG, "deluge_discovery_enabled=*>true")
 
     def test_the_auth_on_pass_is_saved_and_read_back(self):
         with tempfile.TemporaryDirectory() as d:
