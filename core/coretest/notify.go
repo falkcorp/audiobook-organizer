@@ -1,5 +1,5 @@
 // file: core/coretest/notify.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0f6b3a92-c4d1-47e8-95b7-3d28a1e60c49
 // last-edited: 2026-11-13
 
@@ -44,28 +44,28 @@ type WebhookDelivery struct {
 // so a mistake in one is not repeated in the other.
 type WebhookReceiver struct {
 	// URL is the address to configure as the instance's url. The signature
-	// covers it as written, so a test must configure exactly this string.
+	// covers it as written, so a test must configure exactly this string. It is
+	// set before the receiver is returned and never changes.
 	URL string
-	// Secret, when non-empty, makes the receiver verify signatures.
-	Secret string
-	// Tolerance is how old a signature's timestamp may be; 0 is five minutes.
-	Tolerance time.Duration
-	// Now is the receiver's clock; nil is time.Now.
-	Now func() time.Time
-	// Respond decides the answer to the n-th request (1-based): a status and
-	// an optional Retry-After header value. nil answers 204.
-	Respond func(n int, d WebhookDelivery) (status int, retryAfter string)
 
-	srv *httptest.Server
-	mu  sync.Mutex
-	got []WebhookDelivery
+	srv    *httptest.Server
+	secret string // fixed at construction: "" accepts unsigned requests
+
+	// mu guards everything below. The handler runs on the server's goroutines
+	// while a test sets these between requests, so they are reached through the
+	// Set methods and read under the lock.
+	mu        sync.Mutex
+	tolerance time.Duration
+	now       func() time.Time
+	respond   func(n int, d WebhookDelivery) (status int, retryAfter string)
+	got       []WebhookDelivery
 }
 
 // NewWebhookReceiver starts a receiver that verifies signatures made with
 // secret ("" accepts unsigned requests). It is closed when t ends.
 func NewWebhookReceiver(t testing.TB, secret string) *WebhookReceiver {
 	t.Helper()
-	r := &WebhookReceiver{Secret: secret}
+	r := &WebhookReceiver{secret: secret}
 	r.srv = httptest.NewServer(http.HandlerFunc(r.serve))
 	r.URL = r.srv.URL + "/gotham/hook"
 	t.Cleanup(r.srv.Close)
@@ -75,13 +75,13 @@ func NewWebhookReceiver(t testing.TB, secret string) *WebhookReceiver {
 func (r *WebhookReceiver) serve(w http.ResponseWriter, req *http.Request) {
 	body, _ := io.ReadAll(req.Body)
 	d := WebhookDelivery{Method: req.Method, Header: req.Header.Clone(), Body: body}
-	if r.Secret != "" {
+	if r.secret != "" {
 		d.SignatureErr = r.verify(d)
 	}
 	r.mu.Lock()
 	r.got = append(r.got, d)
 	n := len(r.got)
-	respond := r.Respond
+	respond := r.respond
 	r.mu.Unlock()
 	status, retry := http.StatusNoContent, ""
 	if respond != nil {
@@ -91,6 +91,31 @@ func (r *WebhookReceiver) serve(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Retry-After", retry)
 	}
 	w.WriteHeader(status)
+}
+
+// SetNow sets the receiver's clock for the signature's timestamp check; nil is
+// time.Now. Safe to call while requests are arriving.
+func (r *WebhookReceiver) SetNow(now func() time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.now = now
+}
+
+// SetTolerance sets how old a signature's timestamp may be; 0 is five minutes.
+// Safe to call while requests are arriving.
+func (r *WebhookReceiver) SetTolerance(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tolerance = d
+}
+
+// SetRespond sets what the receiver answers: for the n-th request (1-based) a
+// status and an optional Retry-After header value. nil answers 204. Safe to
+// call while requests are arriving.
+func (r *WebhookReceiver) SetRespond(f func(n int, d WebhookDelivery) (status int, retryAfter string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.respond = f
 }
 
 // Deliveries returns a copy of every request taken, in order.
@@ -124,18 +149,20 @@ func (r *WebhookReceiver) verify(d WebhookDelivery) error {
 	if err != nil {
 		return fmt.Errorf("timestamp %q is not a number", ts)
 	}
+	r.mu.Lock()
+	clock, tol := r.now, r.tolerance
+	r.mu.Unlock()
 	now := time.Now()
-	if r.Now != nil {
-		now = r.Now()
+	if clock != nil {
+		now = clock()
 	}
-	tol := r.Tolerance
 	if tol == 0 {
 		tol = 5 * time.Minute
 	}
 	if age := now.Sub(time.Unix(secs, 0)); age > tol || age < -tol {
 		return fmt.Errorf("timestamp is %s from now, past the %s tolerance", age, tol)
 	}
-	mac := hmac.New(sha256.New, []byte(r.Secret))
+	mac := hmac.New(sha256.New, []byte(r.secret))
 	mac.Write([]byte(ts + "." + delivery + "." + r.URL + "."))
 	mac.Write(d.Body)
 	want := hex.EncodeToString(mac.Sum(nil))

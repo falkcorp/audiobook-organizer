@@ -1,5 +1,5 @@
 // file: core/integrations/notify/webhook/webhook_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c41d8e07-5a92-4f36-b0e8-72a9d3f15b86
 // last-edited: 2026-11-13
 
@@ -219,7 +219,7 @@ func TestWebhook_SignatureWithTimestamp(t *testing.T) {
 	r := newRig(t)
 	rcv := coretest.NewWebhookReceiver(t, secret)
 	r.put(roof, rcv.URL, nil, map[string]secrets.Value{"secret": secrets.NewValue(secret)})
-	rcv.Now = func() time.Time { return noon }
+	rcv.SetNow(func() time.Time { return noon })
 
 	if err := r.send(roof, signalNote()); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -324,12 +324,12 @@ func TestWebhook_JSONBodyGolden(t *testing.T) {
 func TestWebhook_DeliveryHeaderStable(t *testing.T) {
 	r := newRig(t)
 	rcv := coretest.NewWebhookReceiver(t, "")
-	rcv.Respond = func(n int, _ coretest.WebhookDelivery) (int, string) {
+	rcv.SetRespond(func(n int, _ coretest.WebhookDelivery) (int, string) {
 		if n <= 2 {
 			return http.StatusNotFound, "" // not a status that holds the provider: the next attempt is sent
 		}
 		return http.StatusNoContent, ""
-	}
+	})
 	r.put(roof, rcv.URL, nil, nil)
 	other := integrations.Ref{Kind: integrations.KindNotify, Instance: "alfred"}
 	r.put(other, rcv.URL, nil, nil)
@@ -563,7 +563,7 @@ func TestWebhook_ClassifiesAnswers(t *testing.T) {
 	} {
 		rcv := coretest.NewWebhookReceiver(t, "")
 		status, retry := c.status, c.retry
-		rcv.Respond = func(int, coretest.WebhookDelivery) (int, string) { return status, retry }
+		rcv.SetRespond(func(int, coretest.WebhookDelivery) (int, string) { return status, retry })
 		url := rcv.URL
 		if c.status == 302 {
 			retry = ""
@@ -606,7 +606,7 @@ func TestWebhook_SecretsAreUsedAndNeverSentUnsigned(t *testing.T) {
 	const secret, token = "hush-hush-batcave", "tok-GOTHAM-SENTINEL"
 	r := newRig(t)
 	rcv := coretest.NewWebhookReceiver(t, secret)
-	rcv.Now = func() time.Time { return noon }
+	rcv.SetNow(func() time.Time { return noon })
 	r.put(roof, rcv.URL, map[string]any{"method": "PUT"}, map[string]secrets.Value{
 		"secret": secrets.NewValue(secret), "token": secrets.NewValue(token),
 	})
@@ -660,7 +660,7 @@ func TestWebhook_OneRequestPerSend(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			r := newRig(t)
 			rcv := coretest.NewWebhookReceiver(t, "")
-			rcv.Respond = func(int, coretest.WebhookDelivery) (int, string) { return http.StatusServiceUnavailable, "30" }
+			rcv.SetRespond(func(int, coretest.WebhookDelivery) (int, string) { return http.StatusServiceUnavailable, "30" })
 			r.put(roof, rcv.URL, map[string]any{"method": method}, nil)
 			start := time.Now()
 			err := r.send(roof, signalNote())
