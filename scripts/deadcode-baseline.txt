@@ -138,6 +138,7 @@ core/kernel.QuarantineGauge.Record
 core/kernel.StorageHealth
 core/kernel.auditMetrics
 core/kernel.auditOwnerSpec
+core/kernel.beginHealthShutdown
 core/kernel.bootConfig
 core/kernel.buildHealth
 core/kernel.classifyStore
@@ -156,6 +157,7 @@ core/kernel.declareCoreCatalog
 core/kernel.enginePing
 core/kernel.eventKinds
 core/kernel.eventProblems
+core/kernel.eventsProbe
 core/kernel.forkedAt
 core/kernel.hookOfAborted
 core/kernel.hookReport.add
@@ -187,6 +189,7 @@ core/kernel.outboxConfig
 core/kernel.outboxHealthCheck
 core/kernel.outboxKinds
 core/kernel.outboxOwnerSpec
+core/kernel.outboxProbe
 core/kernel.outboxProblems
 core/kernel.reapplyApplyFor
 core/kernel.reapplyInput.applicable
@@ -216,6 +219,7 @@ core/kernel.reapplyInput.untrusted
 core/kernel.reapplyInput.writeBookkeeping
 core/kernel.reapplyInput.writeMarkers
 core/kernel.reapplyRevocations
+core/kernel.registerCoreComponents
 core/kernel.reportSecretsHealth
 core/kernel.restoreAborted
 core/kernel.restoreHookList
@@ -236,8 +240,10 @@ core/kernel.secretsOwnerSpec
 core/kernel.servedOlder
 core/kernel.stampRestore.Append
 core/kernel.startAudit
+core/kernel.startHealthLoops
 core/kernel.stopAudit
 core/kernel.syncDirOf
+core/kernel.tasksProbe
 core/kernel.userIDs
 core/kernel.writeStoreMarkers
 internal/ai.NewEmbeddingClient
