@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
 // last-edited: 2026-11-13
 
@@ -760,6 +760,11 @@ func TestDiagnostics_WholeValuePathRuleOnlyForASinglePath(t *testing.T) {
 		"apostrophe":   "/Users/bruce/Bruce's Music/x",
 		"clean_root":   "/srv/lib/Joker/ch1.m4b",
 		"trailing_dot": "/srv/lib.",
+		// Not canonical is not prose: a name with a space keeps its tail out.
+		"trailing_slash": "/home/bruce wayne/x/",
+		"doubled_slash":  "/home/bruce wayne//x",
+		"dot_segment":    "/srv/lib/a b/./c",
+		"dot_outside":    "/home/bruce wayne/./cowl/",
 	}
 	e := f.exporterWith(viewerOf("core:system.manage"), func(cfg *diagnostics.Config) {
 		cfg.Roots = []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}
@@ -784,11 +789,16 @@ func TestDiagnostics_WholeValuePathRuleOnlyForASinglePath(t *testing.T) {
 		"apostrophe":   "<path>",
 		"clean_root":   "<root:lib>/Joker/ch1.m4b",
 		"trailing_dot": "<root:lib>.",
+
+		"trailing_slash": "<path>",
+		"doubled_slash":  "<path>",
+		"dot_segment":    "<root:lib>/a b/./c",
+		"dot_outside":    "<path>",
 	}
 	for k, w := range want {
 		if got[k] != w {
 			t.Errorf("%s = %q, want %q", k, got[k], w)
 		}
 	}
-	assertNoneOf(t, files, "/home/bruce", "/Users/bruce", "Application Support", "Bruce's")
+	assertNoneOf(t, files, "/home/bruce", "/Users/bruce", "Application Support", "Bruce's", "wayne")
 }
