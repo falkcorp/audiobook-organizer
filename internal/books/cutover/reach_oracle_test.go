@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_oracle_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c27d5a40-9e18-4b63-8f02-3a6d1e7b9c54
 // last-edited: 2026-11-13
 
@@ -271,9 +271,20 @@ type reachGate struct {
 // check is pinned here from the spec; it is a claim about code that F4-08 or
 // the handler migration (04) writes, and unproven until then (seams.d/F4-07.md).
 var reachHandlerAdmin = map[string]string{
-	"GET /api/v1/users/:id/footprint": "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:97-99)",
-	"GET /api/v1/users/merges":        "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:190-192)",
-	"PUT /api/v1/users/:id/email":     "05-rbac 4.6: SetUserEmail checks core:admin in place of the admin role name (handlers/user.go:285,453)",
+	"GET /api/v1/users/:id/footprint": "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:68-70, called at :101) @v0.223.0",
+	"GET /api/v1/users/merges":        "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:68-70, called at :194) @v0.223.0",
+	"PUT /api/v1/users/:id/email":     "05-rbac 4.6: SetUserEmail checks core:admin in place of the admin role name (handlers/user.go:456-458) @v0.223.0",
+}
+
+// reachHandlerAdminSources are the HEAD handler files the pin is about, and the
+// role-name test each still carries. While those tests are in the code the pin
+// states what the router cannot see; the day F4-08 or the handler migration (04)
+// replaces them with rbac.Can, the pin has outlived its reason and
+// TestReachHandlerAdminPin_GoesWhenTheHandlersMigrate fails, so the registered
+// path must prove those handlers and the pin is deleted.
+var reachHandlerAdminSources = map[string]string{
+	"../../server/handlers/user_merge.go": "slices.Contains(actor.Roles, adminRole)",
+	"../../server/handlers/user.go":       "slices.Contains(actor.Roles, adminRole)",
 }
 
 // reachUnenforced are the atoms no route enforces: books' table gives them a

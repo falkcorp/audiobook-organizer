@@ -1,11 +1,12 @@
 // file: internal/books/cutover/reach_gate_unit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a8c2e71-0d36-4f94-b7a3-c1e9d6f20b58
 // last-edited: 2026-11-13
 
 package cutover
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -18,7 +19,7 @@ import (
 
 func TestReachClassify_ARowAssertsBothLetters(t *testing.T) {
 	rows := []reachExpect{{
-		name: "row", route: routeIs("GET /a"), who: whoIs("p1"), r0: 'A', r2: 'D',
+		name: "row", route: routeIs("GET /a"), who: whoIs("p1"), r0: 'A', r2: 'D', want: 1,
 	}}
 	for _, tc := range []struct {
 		name           string
@@ -38,7 +39,7 @@ func TestReachClassify_ARowAssertsBothLetters(t *testing.T) {
 }
 
 func TestReachClassify_ARowThatMatchesNothingIsStale(t *testing.T) {
-	rows := []reachExpect{{name: "stale row", route: routeIs("GET /gone"), who: anyWho, r0: 'A', r2: 'D'}}
+	rows := []reachExpect{{name: "stale row", route: routeIs("GET /gone"), who: anyWho, r0: 'A', r2: 'D', want: 1}}
 	res := reachDiffResult{cells: []reachCell{{"GET /a", "p1", 'A', 'D'}}}
 	problems := reachGateProblems(res, rows)
 	if len(problems) != 2 {
@@ -46,6 +47,49 @@ func TestReachClassify_ARowThatMatchesNothingIsStale(t *testing.T) {
 	}
 	if !strings.Contains(problems[1], "stale row") {
 		t.Errorf("the stale row is not named: %q", problems[1])
+	}
+}
+
+// A row asserts how many cells it claims. A route whose ruled change is partly
+// reversed stops differing for some of the row's principals: the row is still
+// "used", so only the count sees it.
+func TestReachClassify_ARowThatClaimsFewerOrMoreCellsThanItAssertsFails(t *testing.T) {
+	row := func(want int) []reachExpect {
+		return []reachExpect{{name: "row", route: routeIs("GET /a", "GET /b"), who: whoIs("p1", "p2"), r0: 'A', r2: 'D', want: want}}
+	}
+	a, b := reachCell{"GET /a", "p1", 'A', 'D'}, reachCell{"GET /b", "p2", 'A', 'D'}
+	for _, tc := range []struct {
+		name  string
+		cells []reachCell
+		want  int
+		fails bool
+	}{
+		{"exactly the asserted count", []reachCell{a, b}, 2, false},
+		{"one cell short: a partial reversal", []reachCell{a}, 2, true},
+		{"one cell over: a gain the row absorbs", []reachCell{a, b}, 1, true},
+		{"a row that asserts no count", []reachCell{a, b}, 0, true},
+	} {
+		got := reachGateProblems(reachDiffResult{cells: tc.cells}, row(tc.want))
+		if (len(got) > 0) != tc.fails {
+			t.Errorf("%s: problems %q, want failure=%v", tc.name, got, tc.fails)
+		}
+		if tc.fails && tc.want > 0 && !strings.Contains(strings.Join(got, "\n"), "asserts") {
+			t.Errorf("%s: the count mismatch is not reported: %q", tc.name, got)
+		}
+	}
+}
+
+// The rows' counts add up to the whole diff: a cell no row's route or principal
+// set names is caught as unexpected, and one that two rows both claim is caught
+// here.
+func TestReachGate_TheRowsCountsAreTheWholeDiff(t *testing.T) {
+	rows := []reachExpect{
+		{name: "r1", route: routeIs("GET /a"), who: anyWho, r0: 'A', r2: 'D', want: 1},
+		{name: "r2", route: routeIs("GET /a"), who: anyWho, r0: 'A', r2: 'D', want: 1},
+	}
+	got := reachGateProblems(reachDiffResult{cells: []reachCell{{"GET /a", "p1", 'A', 'D'}}}, rows)
+	if !strings.Contains(strings.Join(got, "\n"), "in all") {
+		t.Errorf("a doubly-claimed cell passed: %q", got)
 	}
 }
 
@@ -161,5 +205,42 @@ func TestReachGate_HandlerAdminPinRefusesWhoLacksCoreAdmin(t *testing.T) {
 	}
 	if len(reachHandlerAdmin) != 3 {
 		t.Errorf("reachHandlerAdmin pins %d routes, want the three the spec names", len(reachHandlerAdmin))
+	}
+}
+
+// The pin is an assumption about handler code, so it is held to the code. While
+// HEAD's role-name tests are in the handlers it stands; once they are gone the
+// pin must go with them and the registered path proves the handlers (seams.d/
+// F4-07.md, obligations on F4-08).
+func TestReachHandlerAdminPin_GoesWhenTheHandlersMigrate(t *testing.T) {
+	for path, want := range reachHandlerAdminSources {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s no longer holds %q: the handler check the reachHandlerAdmin pin states has moved. Delete the pin and prove the three routes (footprint, merges, email) through the registered path, as seams.d/F4-07.md asks of F4-08", path, want)
+		}
+	}
+}
+
+// The pin refuses a caller without core:admin on top of the route's own
+// requirement; it does not replace it. A pinned route that stops asking for
+// users.manage at the router would still pass the gate, because every cell the
+// pin leaves open is one R0 also leaves open, so the requirement is asserted here.
+func TestReachHandlerAdminPin_SitsOnRoutesThatAskForUsersManage(t *testing.T) {
+	seen := 0
+	for _, lr := range reachManifest() {
+		key := lr.Method + " " + lr.GinPath
+		if _, pinned := reachHandlerAdmin[key]; !pinned {
+			continue
+		}
+		seen++
+		if lr.Perm.Kind() != rbac.KindLegacyAtom || lr.Perm.Atom() != "users.manage" {
+			t.Errorf("%s is pinned as a handler-level core:admin check, but its route requirement is kind %v, not the users.manage atom", key, lr.Perm.Kind())
+		}
+	}
+	if seen != len(reachHandlerAdmin) {
+		t.Errorf("%d of %d pinned routes are in the manifest", seen, len(reachHandlerAdmin))
 	}
 }
