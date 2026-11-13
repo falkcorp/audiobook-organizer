@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c0ba68fc-0752-49a5-9e51-187eca399e39
 // last-edited: 2026-11-13
 
@@ -322,7 +322,7 @@ func TestT6G5Kinds_WritesThroughShell(t *testing.T) {
 
 		out, err := t6g5Run(t, d, newT6G5Host(d.Kind(), tasks.ModePreview, &t6g5Gate{}), `{"apply":true}`)
 		require.NoError(t, err)
-		assert.Contains(t, string(out), `"DryRun":true`, "a preview forces the dry run whatever params say")
+		assert.Contains(t, string(out), `"dry_run":true`, "a preview forces the dry run whatever params say")
 		assert.Empty(t, f.writer.called())
 	})
 
