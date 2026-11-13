@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_eval_unit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e3a9c15-2b84-4d70-a6f1-9c0d5b8e2a47
 // last-edited: 2026-11-13
 
@@ -19,7 +19,7 @@ import (
 
 func reachSeedPerms(t *testing.T, id string) []rbac.Permission {
 	t.Helper()
-	for _, s := range idSeedRoles() {
+	for _, s := range reachSeedRoles() {
 		if s.ID == id {
 			return s.Permissions
 		}
@@ -39,7 +39,7 @@ func reachKey(t *testing.T, cat *rbac.Catalog, role string, scopes ...rbac.Permi
 }
 
 func TestReachEval_SeedSessions(t *testing.T) {
-	cat := idCatalog(t)
+	cat := reachCatalog(t)
 	editor, viewer, admin := reachSession(t, cat, "editor"), reachSession(t, cat, "viewer"), reachSession(t, cat, "admin")
 	for _, tc := range []struct {
 		who  string
@@ -75,7 +75,7 @@ func TestReachEval_SeedSessions(t *testing.T) {
 // A key holds the intersection of its owner's roles and its scopes; an admin
 // holds whatever a key names, and core:admin only when the key names it.
 func TestReachEval_KeyIsTheIntersection(t *testing.T) {
-	cat := idCatalog(t)
+	cat := reachCatalog(t)
 	editorEdit := reachKey(t, cat, "editor", "books:edit", "core:settings.manage")
 	if !editorEdit.satisfies(rbac.Need("books:edit")) {
 		t.Error("an editor-owned key naming books:edit holds it")
@@ -100,7 +100,7 @@ func TestReachEval_KeyIsTheIntersection(t *testing.T) {
 }
 
 func TestReachEval_ConfinedWorker(t *testing.T) {
-	cat := idCatalog(t)
+	cat := reachCatalog(t)
 	worker := reachSession(t, cat, "fp-worker")
 	if !worker.confined {
 		t.Fatal("fp-worker holds only Confining scopes")
@@ -124,7 +124,7 @@ func TestReachEval_ConfinedWorker(t *testing.T) {
 // AuthRequired nor Sensitive, never core:admin, and an AllOf drops its
 // AuthRequired members before the test.
 func TestReachEval_AuthDisabled(t *testing.T) {
-	cat := idCatalog(t)
+	cat := reachCatalog(t)
 	off := reachAuthDisabled(cat)
 	for _, s := range []rbac.Permission{rbac.CoreAdmin, "core:audit.view", "core:system.manage", "core:backup.restore", "core:roles.manage"} {
 		if off.has(s) {
@@ -201,7 +201,7 @@ func reachWhosOf(t *testing.T, cat *rbac.Catalog) []reachWho {
 }
 
 func TestReachEvaluate(t *testing.T) {
-	cat := idCatalog(t)
+	cat := reachCatalog(t)
 	whos := reachWhosOf(t, cat)
 	routes := []httpapi.LegacyRoute{
 		{Method: "PUT", GinPath: "/edit", Perm: rbac.LegacyAtom("library.edit_metadata")},
@@ -235,7 +235,7 @@ func TestReachEvaluate(t *testing.T) {
 // The atom table is a parameter: changing one row changes the verdicts of the
 // routes that atom gates, and of no other.
 func TestReachEvaluate_ChangedAtomRowChangesVerdicts(t *testing.T) {
-	cat := idCatalog(t)
+	cat := reachCatalog(t)
 	whos := reachWhosOf(t, cat)
 	routes := []httpapi.LegacyRoute{
 		{Method: "PUT", GinPath: "/edit", Perm: rbac.LegacyAtom("library.edit_metadata")},
@@ -248,7 +248,7 @@ func TestReachEvaluate_ChangedAtomRowChangesVerdicts(t *testing.T) {
 	mutated := idAtoms()
 	for i := range mutated {
 		if mutated[i].Name == "library.edit_metadata" {
-			mutated[i].Scopes = []rbac.Permission{"books:delete"}
+			mutated[i].Scopes = []rbac.Permission{"books:admin.view"}
 		}
 	}
 	got, err := reachEvaluate(mutated, routes, whos)
@@ -259,7 +259,7 @@ func TestReachEvaluate_ChangedAtomRowChangesVerdicts(t *testing.T) {
 		t.Error("a change to one atom row moved another atom's route")
 	}
 	if got.verdict["PUT /edit"] == base.verdict["PUT /edit"] {
-		t.Errorf("flipping library.edit_metadata to books:delete left PUT /edit at %s", got.verdict["PUT /edit"])
+		t.Errorf("flipping library.edit_metadata to books:admin.view (an admin-only scope) left PUT /edit at %s", got.verdict["PUT /edit"])
 	}
 }
 

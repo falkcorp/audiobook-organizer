@@ -1,0 +1,408 @@
+{
+ "_header": {
+  "file": "internal/books/rbacreach/principals.json",
+  "version": "1.0.0",
+  "guid": "b3c2f6e1-7d48-4a15-9e0b-5c1a8d2f4e67",
+  "last-edited": "2026-11-13"
+ },
+ "what": "the principal table of 05-rbac section 12; the Go oracle seeds the same rows",
+ "users": {
+  "lucius.fox": "admin",
+  "dick.grayson": "editor",
+  "barbara.gordon": "viewer",
+  "fp.worker": "fp-worker",
+  "james.gordon": "custom-all",
+  "harleen.quinzel": "custom-subset",
+  "lucius.fox.jr": "custom-unknown"
+ },
+ "custom_roles": {
+  "custom-all": {
+   "name": "GCPD Command",
+   "permissions": [
+    "library.view",
+    "library.edit_metadata",
+    "library.delete",
+    "library.organize",
+    "scan.trigger",
+    "integrations.manage",
+    "users.manage",
+    "settings.manage",
+    "playlists.create",
+    "collections.manage",
+    "requests.create",
+    "requests.approve",
+    "fingerprint.worker"
+   ]
+  },
+  "custom-subset": {
+   "name": "Arkham Staff",
+   "permissions": [
+    "library.view",
+    "library.edit_metadata",
+    "collections.manage",
+    "requests.create"
+   ]
+  },
+  "custom-unknown": {
+   "name": "Wayne Enterprises",
+   "permissions": [
+    "library.view",
+    "playlists.create",
+    "batcave.access"
+   ]
+  }
+ },
+ "principals": [
+  {
+   "name": "session:admin",
+   "kind": "session",
+   "user": "lucius.fox",
+   "role": "admin"
+  },
+  {
+   "name": "session:editor",
+   "kind": "session",
+   "user": "dick.grayson",
+   "role": "editor"
+  },
+  {
+   "name": "session:viewer",
+   "kind": "session",
+   "user": "barbara.gordon",
+   "role": "viewer"
+  },
+  {
+   "name": "session:fp-worker",
+   "kind": "session",
+   "user": "fp.worker",
+   "role": "fp-worker"
+  },
+  {
+   "name": "session:custom-all",
+   "kind": "session",
+   "user": "james.gordon",
+   "role": "custom-all"
+  },
+  {
+   "name": "session:custom-subset",
+   "kind": "session",
+   "user": "harleen.quinzel",
+   "role": "custom-subset"
+  },
+  {
+   "name": "session:custom-unknown",
+   "kind": "session",
+   "user": "lucius.fox.jr",
+   "role": "custom-unknown"
+  },
+  {
+   "name": "key:admin:view",
+   "kind": "key",
+   "user": "lucius.fox",
+   "role": "admin",
+   "scopes": [
+    "library.view"
+   ]
+  },
+  {
+   "name": "key:admin:settings",
+   "kind": "key",
+   "user": "lucius.fox",
+   "role": "admin",
+   "scopes": [
+    "settings.manage"
+   ]
+  },
+  {
+   "name": "key:admin:users",
+   "kind": "key",
+   "user": "lucius.fox",
+   "role": "admin",
+   "scopes": [
+    "users.manage"
+   ]
+  },
+  {
+   "name": "key:admin:worker",
+   "kind": "key",
+   "user": "lucius.fox",
+   "role": "admin",
+   "scopes": [
+    "fingerprint.worker"
+   ]
+  },
+  {
+   "name": "key:admin:every",
+   "kind": "key",
+   "user": "lucius.fox",
+   "role": "admin",
+   "scopes": [
+    "library.view",
+    "library.edit_metadata",
+    "library.delete",
+    "library.organize",
+    "scan.trigger",
+    "integrations.manage",
+    "users.manage",
+    "settings.manage",
+    "playlists.create",
+    "collections.manage",
+    "requests.create",
+    "requests.approve",
+    "fingerprint.worker"
+   ]
+  },
+  {
+   "name": "key:admin:empty",
+   "kind": "key",
+   "user": "lucius.fox",
+   "role": "admin",
+   "scopes": []
+  },
+  {
+   "name": "key:editor:view",
+   "kind": "key",
+   "user": "dick.grayson",
+   "role": "editor",
+   "scopes": [
+    "library.view"
+   ]
+  },
+  {
+   "name": "key:editor:settings",
+   "kind": "key",
+   "user": "dick.grayson",
+   "role": "editor",
+   "scopes": [
+    "settings.manage"
+   ]
+  },
+  {
+   "name": "key:editor:users",
+   "kind": "key",
+   "user": "dick.grayson",
+   "role": "editor",
+   "scopes": [
+    "users.manage"
+   ]
+  },
+  {
+   "name": "key:editor:worker",
+   "kind": "key",
+   "user": "dick.grayson",
+   "role": "editor",
+   "scopes": [
+    "fingerprint.worker"
+   ]
+  },
+  {
+   "name": "key:editor:every",
+   "kind": "key",
+   "user": "dick.grayson",
+   "role": "editor",
+   "scopes": [
+    "library.view",
+    "library.edit_metadata",
+    "library.delete",
+    "library.organize",
+    "scan.trigger",
+    "integrations.manage",
+    "users.manage",
+    "settings.manage",
+    "playlists.create",
+    "collections.manage",
+    "requests.create",
+    "requests.approve",
+    "fingerprint.worker"
+   ]
+  },
+  {
+   "name": "key:editor:empty",
+   "kind": "key",
+   "user": "dick.grayson",
+   "role": "editor",
+   "scopes": []
+  },
+  {
+   "name": "key:viewer:view",
+   "kind": "key",
+   "user": "barbara.gordon",
+   "role": "viewer",
+   "scopes": [
+    "library.view"
+   ]
+  },
+  {
+   "name": "key:viewer:settings",
+   "kind": "key",
+   "user": "barbara.gordon",
+   "role": "viewer",
+   "scopes": [
+    "settings.manage"
+   ]
+  },
+  {
+   "name": "key:viewer:users",
+   "kind": "key",
+   "user": "barbara.gordon",
+   "role": "viewer",
+   "scopes": [
+    "users.manage"
+   ]
+  },
+  {
+   "name": "key:viewer:worker",
+   "kind": "key",
+   "user": "barbara.gordon",
+   "role": "viewer",
+   "scopes": [
+    "fingerprint.worker"
+   ]
+  },
+  {
+   "name": "key:viewer:every",
+   "kind": "key",
+   "user": "barbara.gordon",
+   "role": "viewer",
+   "scopes": [
+    "library.view",
+    "library.edit_metadata",
+    "library.delete",
+    "library.organize",
+    "scan.trigger",
+    "integrations.manage",
+    "users.manage",
+    "settings.manage",
+    "playlists.create",
+    "collections.manage",
+    "requests.create",
+    "requests.approve",
+    "fingerprint.worker"
+   ]
+  },
+  {
+   "name": "key:viewer:empty",
+   "kind": "key",
+   "user": "barbara.gordon",
+   "role": "viewer",
+   "scopes": []
+  },
+  {
+   "name": "key:fp-worker:view",
+   "kind": "key",
+   "user": "fp.worker",
+   "role": "fp-worker",
+   "scopes": [
+    "library.view"
+   ]
+  },
+  {
+   "name": "key:fp-worker:settings",
+   "kind": "key",
+   "user": "fp.worker",
+   "role": "fp-worker",
+   "scopes": [
+    "settings.manage"
+   ]
+  },
+  {
+   "name": "key:fp-worker:users",
+   "kind": "key",
+   "user": "fp.worker",
+   "role": "fp-worker",
+   "scopes": [
+    "users.manage"
+   ]
+  },
+  {
+   "name": "key:fp-worker:worker",
+   "kind": "key",
+   "user": "fp.worker",
+   "role": "fp-worker",
+   "scopes": [
+    "fingerprint.worker"
+   ]
+  },
+  {
+   "name": "key:fp-worker:every",
+   "kind": "key",
+   "user": "fp.worker",
+   "role": "fp-worker",
+   "scopes": [
+    "library.view",
+    "library.edit_metadata",
+    "library.delete",
+    "library.organize",
+    "scan.trigger",
+    "integrations.manage",
+    "users.manage",
+    "settings.manage",
+    "playlists.create",
+    "collections.manage",
+    "requests.create",
+    "requests.approve",
+    "fingerprint.worker"
+   ]
+  },
+  {
+   "name": "key:fp-worker:empty",
+   "kind": "key",
+   "user": "fp.worker",
+   "role": "fp-worker",
+   "scopes": []
+  },
+  {
+   "name": "key:custom-all:every",
+   "kind": "key",
+   "user": "james.gordon",
+   "role": "custom-all",
+   "scopes": [
+    "library.view",
+    "library.edit_metadata",
+    "library.delete",
+    "library.organize",
+    "scan.trigger",
+    "integrations.manage",
+    "users.manage",
+    "settings.manage",
+    "playlists.create",
+    "collections.manage",
+    "requests.create",
+    "requests.approve",
+    "fingerprint.worker"
+   ]
+  },
+  {
+   "name": "key:custom-all:empty",
+   "kind": "key",
+   "user": "james.gordon",
+   "role": "custom-all",
+   "scopes": []
+  },
+  {
+   "name": "key:custom-subset:outside",
+   "kind": "key",
+   "user": "harleen.quinzel",
+   "role": "custom-subset",
+   "scopes": [
+    "settings.manage",
+    "users.manage"
+   ]
+  },
+  {
+   "name": "key:custom-subset:empty",
+   "kind": "key",
+   "user": "harleen.quinzel",
+   "role": "custom-subset",
+   "scopes": []
+  },
+  {
+   "name": "anonymous",
+   "kind": "anonymous"
+  },
+  {
+   "name": "authoff",
+   "kind": "authoff"
+  }
+ ]
+}
