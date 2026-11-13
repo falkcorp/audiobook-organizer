@@ -170,12 +170,12 @@ func (s *Startup) Run(ctx context.Context, name string, fn func(context.Context)
 	if s.log != nil {
 		s.log.ErrorContext(ctx, "startup step failed; continuing degraded", "step", name, "token", st.Token, "err", err)
 	}
-	s.markDegraded(st)
+	s.markDegraded(ctx, st)
 	return nil
 }
 
 // markDegraded records st's token and reports its component.
-func (s *Startup) markDegraded(st StartupStep) {
+func (s *Startup) markDegraded(ctx context.Context, st StartupStep) {
 	s.mu.Lock()
 	s.degraded[st.Token] = struct{}{}
 	tokens := s.tokensLocked()
@@ -190,7 +190,7 @@ func (s *Startup) markDegraded(st StartupStep) {
 	// answer is expected and report below sets its result. Any other refusal
 	// (an invalid token) is logged, not swallowed.
 	if _, err := s.reg.Register(Check{ID: id, Title: "Startup step " + st.Name}); err != nil && !errors.Is(err, ErrComponentExists) && s.log != nil {
-		s.log.Error("startup degraded component not registered", "step", st.Name, "token", st.Token, "err", err)
+		s.log.ErrorContext(ctx, "startup degraded component not registered", "step", st.Name, "token", st.Token, "err", err)
 	}
 	s.reg.report(id, res)
 	s.reg.mu.Lock()
