@@ -4,13 +4,13 @@
 // last-edited: 2026-10-19
 
 // Package mailtest provides a recording mail.Sender for tests.
-package mailtest
+package coretest
 
 import (
 	"context"
 	"sync"
 
-	"github.com/falkcorp/audiobook-organizer/internal/mail"
+	"github.com/falkcorp/mediacore/integrations/notify/mail"
 )
 
 // Recorder is a mail.Sender that keeps every message it is asked to send and

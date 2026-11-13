@@ -1,7 +1,7 @@
-// file: internal/mail/mail.go
-// version: 1.1.0
+// file: core/integrations/notify/mail/mail.go
+// version: 1.2.0
 // guid: 11234e57-50d2-4d9a-be89-62e983dfeda9
-// last-edited: 2026-10-19
+// last-edited: 2026-11-13
 
 // Package mail sends transactional email (today: user invitations) over SMTP.
 //
