@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-13
 
@@ -293,6 +293,16 @@ const (
 // redactString applies the pattern layer to one string under key, counting what
 // changed. A redactor that panics fails closed.
 func (st *build) redactString(key, s string) (out string) {
+	return st.redactText(key, s, false)
+}
+
+// redactValue is redactString for a string that is a whole JSON value: an
+// absolute path that is the entire value is replaced as one (pathRoots.redactValue).
+func (st *build) redactValue(key, s string) (out string) {
+	return st.redactText(key, s, true)
+}
+
+func (st *build) redactText(key, s string, whole bool) (out string) {
 	defer func() {
 		if recover() != nil {
 			out = redactedErr
@@ -303,7 +313,7 @@ func (st *build) redactString(key, s string) (out string) {
 		st.counts.typed++
 		return s
 	}
-	out, changed := st.scrub(key, s)
+	out, changed := st.scrub(key, s, whole)
 	if changed {
 		st.counts.pattern++
 	}
@@ -321,7 +331,7 @@ func (st *build) redactKey(k string) (out string) {
 			st.counts.pattern++
 		}
 	}()
-	out, changed := st.scrub("", k)
+	out, changed := st.scrub("", k, false)
 	if changed {
 		st.counts.pattern++
 	}
@@ -330,10 +340,14 @@ func (st *build) redactKey(k string) (out string) {
 
 // scrub is the pattern layer proper: the log.Redactor, then the absolute-path
 // rule. It reports whether either changed s.
-func (st *build) scrub(key, s string) (string, bool) {
+func (st *build) scrub(key, s string, whole bool) (string, bool) {
 	out, kind := st.red.StringKinds(key, s)
 	changed := kind != 0 || out != s
-	if p := st.roots.redactPaths(out); p != out {
+	redact := st.roots.redactPaths
+	if whole {
+		redact = st.roots.redactValue
+	}
+	if p := redact(out); p != out {
 		out, changed = p, true
 	}
 	return out, changed
@@ -374,7 +388,7 @@ func (st *build) walk(key string, v any, depth int) any {
 	}
 	switch x := v.(type) {
 	case string:
-		return st.redactString(key, x)
+		return st.redactValue(key, x)
 	case map[string]any:
 		return st.walkObject(x, depth)
 	case []any:
@@ -585,7 +599,7 @@ func (w *sectionWriter) File(name string, r io.Reader) error {
 			}
 			text := redactedLong
 			if !tooLong {
-				text = w.st.redactString("", string(line))
+				text = w.redactLine(line)
 			} else {
 				w.st.counts.pattern++
 			}
@@ -606,6 +620,31 @@ func (w *sectionWriter) File(name string, r io.Reader) error {
 			return rerr
 		}
 	}
+}
+
+// redactLine redacts one line of a File. A line that is a JSON object (the
+// structured log's line, a JSONL row) is decoded and walked like any JSON
+// value, so a quoted path stays inside its string, the escapes stay valid and
+// a deny-listed member name replaces its value; it is written back compact with
+// its members in key order. Any other line is text and takes the string rule,
+// which cuts a path at its first space.
+func (w *sectionWriter) redactLine(line []byte) string {
+	if t := bytes.TrimLeft(line, " \t"); len(t) > 0 && t[0] == '{' {
+		dec := json.NewDecoder(bytes.NewReader(t))
+		dec.UseNumber()
+		var tree map[string]any
+		if err := dec.Decode(&tree); err == nil && tree != nil {
+			if _, extra := dec.Token(); extra == io.EOF {
+				var out bytes.Buffer
+				enc := json.NewEncoder(&out)
+				enc.SetEscapeHTML(false)
+				if enc.Encode(w.st.walk("", tree, 0)) == nil {
+					return string(bytes.TrimSuffix(out.Bytes(), []byte("\n")))
+				}
+			}
+		}
+	}
+	return w.st.redactString("", string(line))
 }
 
 // readLine reads one line without its newline. A line longer than

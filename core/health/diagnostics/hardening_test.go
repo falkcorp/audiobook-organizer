@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
 // last-edited: 2026-11-13
 
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -591,5 +592,118 @@ func TestDiagnostics_AdminSnapshotKeepsEverySection(t *testing.T) {
 	files = f.zipFiles(res.File)
 	if files["batcave.view/d.json"] == nil || files["batcave.manage/d.json"] != nil {
 		t.Errorf("a forged admin snapshot over a viewer: files %v", names(files))
+	}
+}
+
+// logsOf builds a bundle whose core.logs is lines and returns the file's text.
+func logsOf(t *testing.T, roots []diagnostics.PathRoot, lines []string) string {
+	t.Helper()
+	f := newFixture(t)
+	e := f.exporterWith(viewerOf("core:system.manage"), func(cfg *diagnostics.Config) {
+		cfg.Roots = roots
+		cfg.Sources.Logs = func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(strings.Join(lines, "\n") + "\n")), nil
+		}
+	})
+	res, err := f.build(e, "run-logs", diagnostics.ExportParams{ActorID: "bruce"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(f.zipFiles(res.File)["core.logs/logs.jsonl"])
+}
+
+// TestDiagnostics_JSONLogLinesStayValid: the structured log's lines are JSON
+// objects, and a path inside a quoted message ("config file \"/etc/x\" not
+// found", what %q writes) used to lose its closing escape to the path rule and
+// leave an invalid line. Every line is decoded and walked like any JSON value,
+// so the escapes stay, the path is redacted inside its string, and a deny-listed
+// member name still replaces its value.
+func TestDiagnostics_JSONLogLinesStayValid(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(slog.NewJSONHandler(&buf, nil))
+	lg.Info(`config file "/etc/batcave/app.yaml" not found`, "path", "/srv/gotham/audiobooks/Joker/ch1.m4b", "password", "hunter2-not-real", "cwd", "/Users/bruce/Library/Application Support/app/db")
+	lg.Warn("no quote here", "err", `open "/var/lib/batcave/state.db": denied`, "n", 7)
+	roots := []diagnostics.PathRoot{{Name: "audiobooks", Path: "/srv/gotham/audiobooks"}}
+	out := logsOf(t, roots, strings.Split(strings.TrimSpace(buf.String()), "\n"))
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines:\n%s", len(lines), out)
+	}
+	for _, l := range lines {
+		if !json.Valid([]byte(l)) {
+			t.Fatalf("a redacted log line is not valid JSON:\n%s", l)
+		}
+	}
+	var first, second map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatal(err)
+	}
+	if first["msg"] != `config file "<path>" not found` {
+		t.Errorf("msg = %q", first["msg"])
+	}
+	if first["path"] != "<root:audiobooks>/Joker/ch1.m4b" {
+		t.Errorf("path = %q", first["path"])
+	}
+	if first["cwd"] != "<path>" {
+		t.Errorf("cwd = %q: a whole-value path with spaces must not leak its tail", first["cwd"])
+	}
+	if first["password"] == "hunter2-not-real" {
+		t.Errorf("password survived: %v", first["password"])
+	}
+	if second["err"] != `open "<path>": denied` || second["n"] != float64(7) {
+		t.Errorf("second line = %v", second)
+	}
+	assertNoneOf(t, map[string][]byte{"logs": []byte(out)}, "/etc/batcave", "/var/lib/batcave", "Application Support", "hunter2-not-real")
+
+	// A line that is not JSON keeps the text rule, and a quote escape still
+	// ends a path in text.
+	text := logsOf(t, nil, []string{`msg=\"/etc/batcave/app.yaml\" gone`, "{not json /etc/batcave/x"})
+	if !strings.Contains(text, `msg=\"<path>\" gone`) || strings.Contains(text, "/etc/batcave") {
+		t.Errorf("text lines:\n%s", text)
+	}
+}
+
+// TestDiagnostics_RouteShapesAndEdgesOfPathRule pins what the path rule leaves
+// alone and what it still names: router-mounted routes (a request line, a
+// Prometheus label) are the same text on every host; a closing tag is not a
+// path; punctuation after a root keeps the root's name; a UNC share is a path;
+// the rewrite is a fixed point.
+func TestDiagnostics_RouteShapesAndEdgesOfPathRule(t *testing.T) {
+	roots := []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}
+	in := []string{
+		`GET /api/v1/books/123 200`,
+		`http_requests_total{route="/api/v1/books/{id}"} 3`,
+		`probe /readyz and /livez?x=1 ok but /livez-backup/db is a file`,
+		`see /srv/lib. and /srv/lib: gone`,
+		`<div>x</div> and <root:lib>/x already done`,
+		`share \\gotham-nas\batcave\x unreachable`,
+	}
+	got := strings.Split(strings.TrimSpace(logsOf(t, roots, in)), "\n")
+	want := []string{
+		`GET /api/v1/books/123 200`,
+		`http_requests_total{route="/api/v1/books/{id}"} 3`,
+		`probe /readyz and /livez?x=1 ok but <path> is a file`,
+		`see <root:lib>. and <root:lib>: gone`,
+		`<div>x</div> and <root:lib>/x already done`,
+		`share <path> unreachable`,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d lines: %q", len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d\n got %q\nwant %q", i, got[i], want[i])
+		}
+	}
+	// Redacting the output again changes nothing.
+	again := strings.Split(strings.TrimSpace(logsOf(t, roots, got)), "\n")
+	for i := range got {
+		if again[i] != got[i] {
+			t.Errorf("not idempotent, line %d: %q -> %q", i, got[i], again[i])
+		}
 	}
 }
