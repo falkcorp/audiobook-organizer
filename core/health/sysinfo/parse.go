@@ -1,5 +1,5 @@
 // file: core/health/sysinfo/parse.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9e695b0b-4ab4-473c-aed6-8b9b6f049d0f
 // last-edited: 2026-11-13
 
@@ -59,6 +59,14 @@ func parseStatmRSS(text string, pageSize int) uint64 {
 // sysconf without cgo.
 const clockTicksPerSecond = 100
 
+// maxStartSeconds bounds boot time and a process's start offset, in seconds:
+// 2^40 is about 35,000 years, far past any real value and far inside int64, so
+// a corrupt /proc cannot overflow the arithmetic below.
+const (
+	maxStartSeconds = 1 << 40
+	maxStartTicks   = maxStartSeconds * clockTicksPerSecond
+)
+
 // parseProcessStart is the process start time from /proc/self/stat and
 // /proc/stat: boot time plus the stat's starttime ticks. The zero Time when
 // either is malformed. The comm field of stat may contain spaces and
@@ -74,7 +82,7 @@ func parseProcessStart(stat, procStat string) time.Time {
 		return time.Time{}
 	}
 	ticks, err := strconv.ParseUint(f[19], 10, 64)
-	if err != nil {
+	if err != nil || ticks > maxStartTicks {
 		return time.Time{}
 	}
 	var btime int64
@@ -86,10 +94,14 @@ func parseProcessStart(stat, procStat string) time.Time {
 			}
 		}
 	}
-	if btime == 0 {
+	if btime <= 0 || btime > maxStartSeconds {
 		return time.Time{}
 	}
-	return time.Unix(btime, 0).Add(time.Duration(ticks) * time.Second / clockTicksPerSecond)
+	// Whole seconds and the sub-second remainder are added apart: ticks times
+	// time.Second would overflow a Duration for a large starttime. ticks is
+	// at most maxStartTicks, so the conversion to int64 cannot wrap.
+	t := int64(ticks)
+	return time.Unix(btime+t/clockTicksPerSecond, t%clockTicksPerSecond*int64(time.Second/clockTicksPerSecond))
 }
 
 // parseUptime is /proc/uptime's first field.
