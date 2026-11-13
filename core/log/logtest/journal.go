@@ -1,5 +1,5 @@
 // file: core/log/logtest/journal.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d7c1e94-0b3a-4e68-a2f7-9c4b8d6e1a30
 // last-edited: 2026-11-13
 
@@ -537,9 +537,9 @@ func imported(src string, r log.Record) log.ImportedRecord {
 func caseImportRoundTrip(tt tester, ctx context.Context, s Subject) {
 	tt.Helper()
 	in := []log.ImportedRecord{
-		imported("syslog:a", log.Record{Time: epoch().Add(7*time.Second + 123456789), Level: log.LevelWarn, Module: "books", Subsystem: "scanner", Message: "imported warning",
+		imported("src:a", log.Record{Time: epoch().Add(7*time.Second + 123456789), Level: log.LevelWarn, Module: "books", Subsystem: "scanner", Message: "imported warning",
 			Attrs: []slog.Attr{slog.String("user_id", "bruce-wayne")}}),
-		imported("syslog:b", rec(8*time.Second, log.LevelInfo, "books", "organizer", "imported info")),
+		imported("src:b", rec(8*time.Second, log.LevelInfo, "books", "organizer", "imported info")),
 	}
 	if err := s.Importer.Import(ctx, in); err != nil {
 		tt.Errorf("Import: %v", err)
@@ -566,9 +566,9 @@ func caseImportRoundTrip(tt tester, ctx context.Context, s Subject) {
 func caseImportIdempotent(tt tester, ctx context.Context, s Subject) {
 	tt.Helper()
 	in := []log.ImportedRecord{
-		imported("syslog:1", rec(1*time.Second, log.LevelInfo, "books", "scanner", "one")),
-		imported("syslog:2", rec(2*time.Second, log.LevelWarn, "books", "scanner", "two")),
-		imported("syslog:3", rec(3*time.Second, log.LevelError, "books", "scanner", "three")),
+		imported("src:1", rec(1*time.Second, log.LevelInfo, "books", "scanner", "one")),
+		imported("src:2", rec(2*time.Second, log.LevelWarn, "books", "scanner", "two")),
+		imported("src:3", rec(3*time.Second, log.LevelError, "books", "scanner", "three")),
 	}
 	for i := range 3 {
 		if err := s.Importer.Import(ctx, in); err != nil {
@@ -581,9 +581,9 @@ func caseImportIdempotent(tt tester, ctx context.Context, s Subject) {
 
 func caseImportOverlap(tt tester, ctx context.Context, s Subject) {
 	tt.Helper()
-	a := imported("syslog:a", rec(1*time.Second, log.LevelInfo, "books", "", "a"))
-	b := imported("syslog:b", rec(2*time.Second, log.LevelInfo, "books", "", "b"))
-	c := imported("syslog:c", rec(3*time.Second, log.LevelInfo, "books", "", "c"))
+	a := imported("src:a", rec(1*time.Second, log.LevelInfo, "books", "", "a"))
+	b := imported("src:b", rec(2*time.Second, log.LevelInfo, "books", "", "b"))
+	c := imported("src:c", rec(3*time.Second, log.LevelInfo, "books", "", "c"))
 	// A step that crashed between an import and its deletes re-imports part of
 	// what it wrote.
 	for _, batch := range [][]log.ImportedRecord{{a, b}, {b, c}} {
@@ -600,8 +600,8 @@ func caseImportDistinctIDs(tt tester, ctx context.Context, s Subject) {
 	// Two rows written in one instant by two sources are two records: the key
 	// is derived from the time and the source ID, not the time alone.
 	if err := s.Importer.Import(ctx, []log.ImportedRecord{
-		imported("syslog:t:scanner", rec(time.Second, log.LevelInfo, "books", "scanner", "from the scanner")),
-		imported("syslog:t:organizer", rec(time.Second, log.LevelInfo, "books", "organizer", "from the organizer")),
+		imported("src:t:scanner", rec(time.Second, log.LevelInfo, "books", "scanner", "from the scanner")),
+		imported("src:t:organizer", rec(time.Second, log.LevelInfo, "books", "organizer", "from the organizer")),
 	}); err != nil {
 		tt.Errorf("Import: %v", err)
 		return
@@ -622,9 +622,9 @@ func caseImportSortsByTime(tt tester, ctx context.Context, s Subject) {
 		return
 	}
 	if err := s.Importer.Import(ctx, []log.ImportedRecord{
-		imported("syslog:5", rec(5*time.Second, log.LevelInfo, "books", "", "imported 5")),
-		imported("syslog:20", rec(20*time.Second, log.LevelInfo, "books", "", "imported 20")),
-		imported("syslog:40", rec(40*time.Second, log.LevelInfo, "books", "", "imported 40")),
+		imported("src:5", rec(5*time.Second, log.LevelInfo, "books", "", "imported 5")),
+		imported("src:20", rec(20*time.Second, log.LevelInfo, "books", "", "imported 20")),
+		imported("src:40", rec(40*time.Second, log.LevelInfo, "books", "", "imported 40")),
 	}); err != nil {
 		tt.Errorf("Import: %v", err)
 		return
@@ -661,7 +661,7 @@ func caseCancelledContext(tt tester, ctx context.Context, s Subject) {
 	if err := s.Store.Append(dead, []log.Record{rec(0, log.LevelInfo, "core", "", "never written")}); err == nil {
 		tt.Errorf("Append with a cancelled context returned nil")
 	}
-	if err := s.Importer.Import(dead, []log.ImportedRecord{imported("syslog:x", rec(0, log.LevelInfo, "books", "", "never imported"))}); err == nil {
+	if err := s.Importer.Import(dead, []log.ImportedRecord{imported("src:x", rec(0, log.LevelInfo, "books", "", "never imported"))}); err == nil {
 		tt.Errorf("Import with a cancelled context returned nil")
 	}
 	wantMessages(tt, "after cancelled writes", drain(tt, ctx, s.Store, all()))

@@ -1,7 +1,7 @@
 // file: internal/telemetrypolicy/series_contract_test.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package telemetrypolicy (internal/telemetry/contract until R1-10) pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from
@@ -184,6 +184,8 @@ func buildSeedingTable() []seedRow {
 	return []seedRow{
 		{"audiobook_organizer_log_dropped_total", "app.New in TestMain: the kernel's log metrics bridge (core/kernel/logmetrics.go) observes the primary sink at zero", do(func() {})},
 		{"audiobook_organizer_log_redactions_total", "app.New in TestMain: the same bridge observes each redaction kind at zero", do(func() {})},
+		{"audiobook_organizer_log_journal_write_errors_total", "app.New in TestMain: the same bridge observes the journal tap's write errors at zero while no tap is wired (F5-18 wires one)", do(func() {})},
+		{"audiobook_organizer_log_journal_lag_seconds", "app.New in TestMain: the same bridge observes the journal tap's lag at zero while no tap is wired (F5-18 wires one)", do(func() {})},
 		{"audiobook_organizer_memdb_fallback_reads_total", "(&database.PebbleStore{UseMemDB: true}).GetBooksByMetadataSourceHashInMemory on an unpublished memdb", once(seedMemdbFallback)},
 		{"audiobook_organizer_operations_started_total", "metrics.IncOperationStarted", do(func() { metrics.IncOperationStarted("contract") })},
 		{"audiobook_organizer_operations_completed_total", "metrics.IncOperationCompleted", do(func() { metrics.IncOperationCompleted("contract") })},
@@ -990,13 +992,15 @@ type instrumentSpec struct {
 // and its golden rows' source becomes "otel".
 var ourInstruments = []instrumentSpec{
 	{name: "audiobook_organizer.memdb.fallback_reads", kind: kindCounter, keys: []attribute.Key{telemetry.Outcome, telemetry.Site}},
-	// The two log families are core's observable counters (kernel.registerLogMetrics,
+	// The four log families are core's observable instruments (kernel.registerLogMetrics,
 	// scope mediacore.log under the app namespace), declared here so the golden pins
 	// their names on ABO's /metrics. mediacore_log_records_total is not here: it has
 	// no series until a record passes through the pipeline, and nothing in this
 	// process logs through it.
 	{name: "audiobook_organizer.log.dropped", kind: kindCounter, keys: []attribute.Key{telemetry.Sink}},
 	{name: "audiobook_organizer.log.redactions", kind: kindCounter, keys: []attribute.Key{telemetry.Kind}},
+	{name: "audiobook_organizer.log.journal_write_errors", kind: kindCounter},
+	{name: "audiobook_organizer.log.journal_lag", kind: kindGauge, unit: "s"},
 	{name: "audiobook_organizer.ops.runs", kind: kindCounter, unit: "{run}", keys: []attribute.Key{telemetry.DefID, telemetry.Outcome}},
 	{name: "audiobook_organizer.ops.run.duration", kind: kindHistogram, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Outcome}},
 	{name: "audiobook_organizer.ops.items", kind: kindCounter, unit: "{item}", keys: []attribute.Key{telemetry.DefID, telemetry.Outcome}},

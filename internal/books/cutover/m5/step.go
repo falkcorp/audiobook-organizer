@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m5/step.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4e8b2d70-a1c5-4963-8f3e-7d0c9b5a2e16
 // last-edited: 2026-11-13
 
@@ -274,11 +274,16 @@ func parseKey(key string) (t time.Time, source string, ok bool) {
 // after a crash reports only what it stepped.
 func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
 	rep := datamigrate.VerifyReport{Read: m.read.Load(), Written: m.imported.Load(), Quarantined: m.quarantined.Load()}
-	for kv, err := range r.Scan(ctx, storage.ScanOptions{Start: SourceRanges()[0].Start, End: SourceRanges()[0].End, KeysOnly: true, Limit: 1}) {
-		if err != nil {
-			return rep, err
-		}
-		rep.Failures = append(rep.Failures, fmt.Sprintf("a syslog: row is still present (%s)", kv.Key))
+	// One probe is enough: any key in the range is a row the step missed.
+	it, err := r.NewIterator(ctx, storage.ScanOptions{Start: SourceRanges()[0].Start, End: SourceRanges()[0].End, KeysOnly: true})
+	if err != nil {
+		return rep, err
+	}
+	if it.First() {
+		rep.Failures = append(rep.Failures, fmt.Sprintf("a syslog: row is still present (%s)", it.Key()))
+	}
+	if err := errors.Join(it.Err(), it.Close()); err != nil {
+		return rep, err
 	}
 	if rep.Read != rep.Written+rep.Quarantined {
 		rep.Failures = append(rep.Failures, fmt.Sprintf("read %d rows but imported %d and quarantined %d", rep.Read, rep.Written, rep.Quarantined))
