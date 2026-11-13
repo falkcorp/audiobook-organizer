@@ -1,5 +1,5 @@
 // file: core/internal/logjournal/tap_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d2a9c05-3e81-4b7f-a4d6-0c8f1e5b7a93
 // last-edited: 2026-11-13
 
@@ -342,4 +342,50 @@ func TestJournal_PruneScheduleKeyDeclared(t *testing.T) {
 			t.Errorf("Settings.%s tags = %q, want json %q reload %q", name, f.Tag, want[0], want[1])
 		}
 	}
+}
+
+// holdingJournal is a journal whose Append waits to be released, so a test can
+// look at the tap while a batch is in the store's hands.
+type holdingJournal struct {
+	fakeJournal
+	release chan struct{}
+}
+
+func (h *holdingJournal) Append(ctx context.Context, recs []log.Record) error {
+	<-h.release
+	return h.fakeJournal.Append(ctx, recs)
+}
+
+// A batch the store is still writing has left Pending, but its records are not
+// in the journal: Lag keeps counting from its oldest record until the write
+// returns, so a stuck store shows as a growing gauge and not as a quiet one.
+func TestTap_LagCountsTheBatchInFlight(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		l, hj := newLogging(t), &holdingJournal{release: make(chan struct{})}
+		tp, err := logjournal.StartTap(l, hj, enabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		emit(l, 0, 256) // the size bound starts the write, which waits in Append
+		synctest.Wait()
+		time.Sleep(500 * time.Millisecond)
+
+		c := tp.Counters()
+		if c.Pending != 0 {
+			t.Errorf("Pending = %d while the batch is in the store's hands, want 0", c.Pending)
+		}
+		if c.Lag != 500*time.Millisecond {
+			t.Errorf("Lag = %v with a batch in flight for 500ms, want 500ms", c.Lag)
+		}
+
+		close(hj.release)
+		synctest.Wait()
+		if c := tp.Counters(); c.Lag != 0 || c.Pending != 0 || c.Degraded {
+			t.Errorf("after the write returned: %+v, want no lag, nothing pending, not degraded", c)
+		}
+		if got := hj.sizes(); !reflect.DeepEqual(got, []int{256}) {
+			t.Errorf("batches %v, want [256]", got)
+		}
+		_ = l.Close(context.Background())
+	})
 }

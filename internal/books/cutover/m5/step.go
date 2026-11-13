@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m5/step.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e8b2d70-a1c5-4963-8f3e-7d0c9b5a2e16
 // last-edited: 2026-11-13
 
@@ -186,17 +186,28 @@ func decode(key string, raw []byte) (log.Record, string) {
 	if !ok {
 		return log.Record{}, reasonLevel
 	}
-	t := row.CreatedAt
-	if !usable(t) {
-		// A row stored before created_at was written, or with a zero value: the
-		// key carries the time the row was added.
-		kt, _, ok := parseKey(key)
-		if !ok || !usable(kt) {
-			return log.Record{}, reasonTime
+	// Judged in UTC, the zone the record is stored in: a created_at of
+	// 9999-12-31T23:59:59-05:00 is year 10000 there, which the journal's Import
+	// refuses (it would fail the BootBlocking chunk on every boot), so the check
+	// is the importer's own.
+	t := row.CreatedAt.UTC()
+	keySource := ""
+	if kt, ks, ok := parseKey(key); ok {
+		keySource = ks
+		if !usable(t) {
+			// A row stored before created_at was written, or with a zero value:
+			// the key carries the time the row was added.
+			t = kt.UTC()
 		}
-		t = kt
 	}
-	rec := log.Record{Time: t.UTC(), Level: lv, Module: Module, Subsystem: row.Source, Message: row.Message}
+	if !usable(t) {
+		return log.Record{}, reasonTime
+	}
+	sub := row.Source
+	if sub == "" {
+		sub = keySource // the key carries the source the row was added under
+	}
+	rec := log.Record{Time: t, Level: lv, Module: Module, Subsystem: sub, Message: row.Message}
 	if row.UserID != "" {
 		rec.Attrs = []slog.Attr{slog.String(UserIDAttr, row.UserID)}
 	}
