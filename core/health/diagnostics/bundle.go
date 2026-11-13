@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-13
 
@@ -136,14 +136,29 @@ func (v Viewer) Satisfies(r rbac.Requirement) bool {
 	return satisfied(specOf(r), v.Can)
 }
 
-// ViewerOf is the Viewer whose permissions are exactly perms, the set an
-// ExportParams carries (PermsOf).
+// ViewerOf is the Viewer a snapshot (PermsOf) describes. It reads the snapshot
+// with the checker's own rule for core:admin: an administrator holds that one
+// scope and nothing else concrete (rbac.Checker.Concrete lists what the roles
+// expand to, and admin's reach over every other scope is the checker's flag,
+// not a member of the set), so a held core:admin admits every scope. Reading it
+// as an exact-name list instead drops every section from an administrator's
+// bundle.
+//
+// The result is only ever the snapshot half of the run's viewer: Exporter.viewer
+// intersects it with the actor's permissions as ViewerFor resolves them now,
+// and that checker still refuses a Sensitive scope to a non-interactive
+// principal and a scope the catalog does not declare, admin or not. Admitting
+// everything here therefore grants nothing the live checker would refuse.
 func ViewerOf(actorID string, perms []string) Viewer {
 	held := make(map[string]struct{}, len(perms))
 	for _, p := range perms {
 		held[p] = struct{}{}
 	}
+	_, admin := held[string(rbac.CoreAdmin)]
 	return Viewer{ActorID: actorID, Can: func(p rbac.Permission) bool {
+		if admin {
+			return true
+		}
 		_, ok := held[string(p)]
 		return ok
 	}}
