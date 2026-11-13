@@ -1,5 +1,5 @@
 // file: core/health/probes.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e8b6a21-9f47-4d05-a2c8-1b7d4e6f9c30
 // last-edited: 2026-11-13
 
@@ -67,8 +67,8 @@ func (r *Registry) afterChange() {
 // see, with the others generalised. A token "<component>:<reason>" is shown
 // whole when its reason is a startup or readiness reason (warming, starting,
 // stopping, down, unknown, a check failure, a failed startup step's token) and
-// as "<component>:down" or "<component>:unknown" when the reason is an auth,
-// config, backup, restore, storage or secrets posture token (05-health
+// as "<component>:down" when the reason is an auth, config, backup, restore,
+// storage or secrets posture token (05-health
 // §5H.3.1: no posture token reaches /readyz, SEC-7). A token that does not
 // match the "<component>:<reason>" grammar is dropped. The result is a new
 // slice and never nil.
@@ -81,9 +81,6 @@ func PublicTokens(tokens []string) []string {
 		}
 		if isPostureReason(reason) {
 			reason = "down"
-			if strings.HasSuffix(t, ":unknown") {
-				reason = "unknown"
-			}
 		}
 		out = append(out, id+":"+reason)
 	}
@@ -94,7 +91,10 @@ func PublicTokens(tokens []string) []string {
 // §5H.3.1 keeps off unauthenticated surfaces. A function with a switch, not a
 // package-level set (no mutable package state, R5). The prefixes cover the
 // families the spec lists (checkpoint, revocation journal, restore,
-// factory-reset, config and secrets tokens); the exact names are the rest.
+// factory-reset, config, secrets, backup, keyring and derive-key tokens); the
+// exact names are the rest. TestPostureTokensGolden pins every token the
+// specs name, so a token whose family is missing here fails a test rather than
+// reaching /readyz.
 func isPostureReason(reason string) bool {
 	switch reason {
 	case "storage_quarantine", "secrets_undecryptable", "secrets_keyring_not_exported",
@@ -103,6 +103,7 @@ func isPostureReason(reason string) bool {
 	}
 	for _, p := range [...]string{
 		"storage_", "secrets_", "revocation_journal_", "restore_", "factory_reset_", "config_", "archive_", "auth_",
+		"backup_", "keyring_", "derive_key_",
 	} {
 		if strings.HasPrefix(reason, p) {
 			return true

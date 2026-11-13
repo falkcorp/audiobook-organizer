@@ -1,5 +1,5 @@
 // file: core/health/registry_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e0849cfa-c877-4bf8-98f6-53c0658eea4c
 // last-edited: 2026-11-13
 
@@ -327,14 +327,21 @@ func TestRegistry_ProbeRunsOnceAtRegister(t *testing.T) {
 	}
 }
 
+// TestRegistry_ProbeTimeoutIsItsContext: a probe still running at its deadline
+// is Down check_timeout. (A Register-time probe that answers after the deadline
+// is later accepted, until StartChecks runs: TestRegister_LateAnswerBeforeStartChecksIsAccepted.
+// This probe does not answer until the test ends, so the timeout stands.)
 func TestRegistry_ProbeTimeoutIsItsContext(t *testing.T) {
 	r := NewRegistry()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
 	mustRegister(t, r, Check{ID: cave, Timeout: 30 * time.Millisecond, Probe: func(ctx context.Context) Result {
 		<-ctx.Done()
+		<-release
 		return Result{Status: StatusUp, Reason: "answered_late"}
 	}})
 	if got := r.Snapshot().Components[0].Result; got.Status != StatusDown || got.Reason != "check_timeout" {
-		t.Errorf("result = %+v: an answer after the deadline must be Down check_timeout", got)
+		t.Errorf("result = %+v: a probe past its deadline must be Down check_timeout", got)
 	}
 }
 

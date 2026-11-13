@@ -1,5 +1,5 @@
 // file: core/health/metrics_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b7e3a5c9-4d12-4f68-9a0e-2c8d6f1b3a74
 // last-edited: 2026-11-13
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,5 +97,40 @@ func TestHealthMetrics_NilRecordsNothing(t *testing.T) {
 	}
 	if _, err := health.NewMetrics(nil); err == nil {
 		t.Error("NewMetrics(nil) succeeded")
+	}
+}
+
+// TestHealthMetrics_AttachRacesCollection: a registry attaches itself to the
+// Metrics while the metrics reader's goroutine is gathering component_status,
+// which reads the attached registry. Run under -race: a plain pointer field
+// there is a data race, an atomic one is not.
+func TestHealthMetrics_AttachRacesCollection(t *testing.T) {
+	p, m := newMetrics(t)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = gatherHealth(t, p)
+			}
+		}
+	})
+	for range 50 {
+		r := health.NewRegistryWith(health.Options{Metrics: m})
+		if _, err := r.Register(health.Check{ID: "wayne.batcave", Probe: func(context.Context) health.Result { return health.Result{Status: health.StatusUp} }}); err != nil {
+			t.Error(err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+	var status bool
+	for _, s := range gatherHealth(t, p) {
+		status = status || strings.HasSuffix(s.Family, "component_status")
+	}
+	if !status {
+		t.Error("component_status is not served after a registry attached")
 	}
 }

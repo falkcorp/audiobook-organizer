@@ -1,5 +1,5 @@
 // file: core/health/metrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f0f4a3c-6d8b-4b7e-9c58-2f8d0b8a4e11
 // last-edited: 2026-11-13
 
@@ -8,6 +8,7 @@ package health
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -42,7 +43,7 @@ type Metrics struct {
 	// status is read by an observable callback over the registries that
 	// attached themselves; see Metrics.attach.
 	status metric.Int64ObservableGauge
-	reg    *Registry
+	reg    atomic.Pointer[Registry]
 }
 
 // ScopeAttributes are the label keys the health scope declares. A function,
@@ -129,17 +130,18 @@ func NewMetrics(p *metrics.Provider) (*Metrics, error) {
 }
 
 // attach binds the registry the component_status gauge reads. One Metrics
-// serves one Registry: a second attach replaces the first.
+// serves one Registry: a second attach replaces the first. The callback runs on
+// the metrics reader's goroutine, so the pointer is atomic.
 func (m *Metrics) attach(r *Registry) {
 	if m == nil {
 		return
 	}
-	m.reg = r
+	m.reg.Store(r)
 }
 
 // observeStatus is the component_status callback.
 func (m *Metrics) observeStatus(_ context.Context, o metric.Observer) error {
-	r := m.reg
+	r := m.reg.Load()
 	if r == nil {
 		return nil
 	}

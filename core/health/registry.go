@@ -1,5 +1,5 @@
 // file: core/health/registry.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 268f470f-94c4-4d33-93bd-af65944395ec
 // last-edited: 2026-11-13
 
@@ -260,7 +260,10 @@ func validReason(s string) bool {
 // is the component's first. StartChecks calls it again on its Interval; until
 // then a probed component changes only by Report. A Probe that panics yields
 // Down with the Reason check_panic, one that outlives its Timeout yields Down
-// with check_timeout (the call is abandoned, not waited for).
+// with check_timeout (the call is abandoned, not waited for). An abandoned
+// Register-time call that does answer later, before StartChecks has run and
+// before any Report, replaces that Down with its answer (acceptLate): a slow
+// first check at boot is not a permanent Down.
 func (r *Registry) Register(c Check) (Reporter, error) {
 	if !validID(c.ID) {
 		return nil, fmt.Errorf("health: component ID %q is not <module>.<name> of [a-z0-9_-] segments", c.ID)
@@ -272,9 +275,12 @@ func (r *Registry) Register(c Check) (Reporter, error) {
 		return nil, fmt.Errorf("%w: %s", ErrComponentExists, c.ID)
 	}
 	comp := &component{check: c}
+	var late <-chan outcome
 	if c.Probe != nil {
 		// Outside the lock: a Probe may be slow and may call the registry.
-		res, took, _ := r.runCheck(context.Background(), comp)
+		var res Result
+		var took time.Duration
+		res, took, _, late = r.runCheck(context.Background(), comp)
 		comp.result, comp.duration = r.clamp(res), took
 		r.metrics.recordCheck(c.ID, took, comp.result, comp.result.Status == StatusDown)
 	}
@@ -289,6 +295,9 @@ func (r *Registry) Register(c Check) (Reporter, error) {
 		r.spawnLocked(comp)
 	}
 	r.mu.Unlock()
+	if late != nil {
+		go r.acceptLate(comp, late)
+	}
 	r.afterChange()
 	return componentReporter{reg: r, id: c.ID}, nil
 }
@@ -299,14 +308,37 @@ const (
 	reasonCheckTimeout = "check_timeout"
 )
 
+// outcome is how one Probe call ended: a Result, or the value it panicked with.
+type outcome struct {
+	res      Result
+	panicked any
+	// at is when the probe returned. runCheck compares it with the deadline
+	// when the answer and the deadline are both ready, so an answer given in
+	// time is kept and one given after the deadline is not.
+	at time.Time
+}
+
+// result is the Result an outcome stands for.
+func (o outcome) result() Result {
+	if o.panicked != nil {
+		return Result{Status: StatusDown, Reason: reasonCheckPanic, Detail: fmt.Sprintf("check panicked: %v", o.panicked)}
+	}
+	return o.res
+}
+
 // runCheck calls comp's Probe once under its timeout and contains what goes
 // wrong: a panic is Down check_panic, a Probe still running when its context
 // ends is Down check_timeout. The call runs on its own goroutine so a Probe
 // that ignores its context cannot hold the caller; such a goroutine is
 // abandoned (and logged), and comp.running keeps a second call from starting
 // until it returns. ok is false when parent ended first (shutdown): the
-// caller records nothing.
-func (r *Registry) runCheck(parent context.Context, comp *component) (res Result, took time.Duration, ok bool) {
+// caller records nothing. late is non-nil only after a timeout: it delivers
+// the abandoned call's outcome whenever it ends (Register uses it, see there).
+//
+// When the Probe answers at the instant the timeout fires, the answer wins:
+// select picks at random between two ready cases, so the timeout branch looks
+// for an answer before it reports one.
+func (r *Registry) runCheck(parent context.Context, comp *component) (res Result, took time.Duration, ok bool, late <-chan outcome) {
 	c := comp.check
 	timeout := c.Timeout
 	if timeout <= 0 {
@@ -315,39 +347,81 @@ func (r *Registry) runCheck(parent context.Context, comp *component) (res Result
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	start := time.Now()
-	type outcome struct {
-		res      Result
-		panicked any
-		did      bool
-	}
 	done := make(chan outcome, 1)
 	comp.running.Store(true)
 	go func() {
 		defer comp.running.Store(false)
 		defer func() {
 			if p := recover(); p != nil {
-				done <- outcome{panicked: p, did: true}
+				done <- outcome{panicked: p, at: time.Now()}
 			}
 		}()
-		done <- outcome{res: c.Probe(ctx), did: true}
+		res := c.Probe(ctx)
+		done <- outcome{res: res, at: time.Now()}
 	}()
+	// inTime reports whether o was given before the deadline.
+	inTime := func(o outcome) bool {
+		dl, has := ctx.Deadline()
+		return !has || o.at.Before(dl)
+	}
+	// overran is the Result of a check that answered, or is still to answer,
+	// after its deadline. An answer already given is handed on as the late one.
+	overran := func(late <-chan outcome) (Result, time.Duration, bool, <-chan outcome) {
+		return Result{Status: StatusDown, Reason: reasonCheckTimeout, Detail: "the check did not answer within " + timeout.String()}, time.Since(start), true, late
+	}
+	lateAnswer := func(o outcome) <-chan outcome {
+		c := make(chan outcome, 1)
+		c <- o
+		return c
+	}
 	select {
 	case o := <-done:
-		took = time.Since(start)
-		if o.panicked != nil {
-			return Result{Status: StatusDown, Reason: reasonCheckPanic, Detail: fmt.Sprintf("check panicked: %v", o.panicked)}, took, true
+		if !inTime(o) {
+			return overran(lateAnswer(o))
 		}
-		return o.res, took, true
+		return o.result(), time.Since(start), true, nil
 	case <-ctx.Done():
 		took = time.Since(start)
 		if parent.Err() != nil {
-			return Result{}, took, false
+			return Result{}, took, false, nil
+		}
+		// The answer and the deadline can become ready together, and select
+		// then picks either. An answer that was given before the deadline is
+		// not a timeout, however the tie fell; one given after it is.
+		select {
+		case o := <-done:
+			if !inTime(o) {
+				return overran(lateAnswer(o))
+			}
+			return o.result(), took, true, nil
+		default:
 		}
 		if r.log != nil {
 			r.log.Warn("health: check exceeded its timeout and was abandoned", "component", string(c.ID), "timeout", timeout.String())
 		}
-		return Result{Status: StatusDown, Reason: reasonCheckTimeout, Detail: "the check did not answer within " + timeout.String()}, took, true
+		return overran(done)
 	}
+}
+
+// acceptLate gives a Register-time probe that overran its timeout, and then
+// answered, the answer it was waiting to give. Until StartChecks runs, nothing
+// else will probe the component, so without this a component whose first check
+// is slow (core.storage's engine ping at boot) would stay Down, and the tasks
+// executor, which waits on it, would never start. It applies only while the
+// result is still the timeout this Register recorded: a Report, or the first
+// probe of a started loop, has since spoken for the component and is newer.
+func (r *Registry) acceptLate(comp *component, late <-chan outcome) {
+	res := r.clamp((<-late).result())
+	r.mu.Lock()
+	if r.runCtx != nil || comp.result.Reason != reasonCheckTimeout || comp.result.Status != StatusDown {
+		r.mu.Unlock()
+		return
+	}
+	comp.result = res
+	r.broadcastLocked()
+	r.mu.Unlock()
+	r.metrics.recordCheck(comp.check.ID, 0, res, res.Status == StatusDown)
+	r.afterChange()
 }
 
 // clamp is the stored form of res: a Reason outside the grammar becomes

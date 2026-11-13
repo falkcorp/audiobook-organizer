@@ -1,5 +1,5 @@
 // file: core/health/probes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8f1b3d5a-2c74-4e96-a0b8-6d9e2f4c7a15
 // last-edited: 2026-11-13
 
@@ -206,7 +206,9 @@ func TestPublicTokens(t *testing.T) {
 
 // TestReadyz_FlipsBeforeHTTPDrain: shutdown flips readiness to 503 and tells
 // systemd STOPPING=1 before the HTTP drain phase starts, so load balancers see
-// 503 before connections drop (05-health §5H.4).
+// 503 before connections drop (05-health §5H.4). This one pins the registry and
+// supervisor semantics; the kernel's own order, beginHealthShutdown ahead of
+// the drain, is TestKernel_ReadyzFlipsBeforeHTTPDrain in package kernel.
 func TestReadyz_FlipsBeforeHTTPDrain(t *testing.T) {
 	r := NewRegistry()
 	n := &fakeNotifier{active: true}
@@ -282,5 +284,45 @@ func TestStatusFeed_PublishesOnlyOnChange(t *testing.T) {
 	}
 	if b, _ := json.Marshal(got[2]); string(b) != `{"ready":true,"not_ready":[]}` {
 		t.Errorf("payload JSON = %s: not_ready must be an array", b)
+	}
+}
+
+// TestPostureTokensGolden pins every posture token the specs name (05-health
+// 5H.3.1 and the sections it points at: config, secrets, backup, restore,
+// storage, authn). Each is generalised to "<component>:down" on a public
+// surface, so no family can be added to the specs without this list, and the
+// prefixes of isPostureReason, being kept in step. A token that falls through
+// would reach /readyz in clear (SEC-7).
+func TestPostureTokensGolden(t *testing.T) {
+	tokens := []string{
+		"auth_disabled_remote", "auto_update_paused", "backup_encryption_pending", "backup_failed",
+		"config_alias_conflict", "config_binding_conflict", "config_boot_record_quarantined",
+		"config_extension_suspended", "config_fail_closed_override", "config_legacy_name_shadowed",
+		"config_narrowing_owed", "config_overrides_quarantined", "config_retired_name_ignored",
+		"derive_key_retire_blocked", "factory_reset_cleanup_incomplete", "factory_reset_failed",
+		"keyring_not_exported", "operator_secret_withheld", "restore_aborted", "restore_admins_review",
+		"restore_failed", "restore_inflight", "restore_last_admin_kept", "restore_pending", "restore_rejected",
+		"revocation_journal_broken", "revocation_journal_colocated", "revocation_journal_reset",
+		"revocation_journal_unwritable", "secrets_keyring_not_exported", "secrets_undecryptable",
+		"storage_checkpoint_mode", "storage_checkpoint_open", "storage_checkpoint_retained",
+		"storage_extension_suspended", "storage_quarantine", "storage_step_pending",
+	}
+	for _, tok := range tokens {
+		if !validReason(tok) {
+			t.Errorf("%s is not a legal reason token", tok)
+			continue
+		}
+		if !isPostureReason(tok) {
+			t.Errorf("posture token %s is not recognised, so it would reach /readyz", tok)
+		}
+		if got := PublicTokens([]string{"core.x:" + tok}); !slices.Equal(got, []string{"core.x:down"}) {
+			t.Errorf("PublicTokens(%s) = %v, want core.x:down", tok, got)
+		}
+	}
+	// The readiness reasons stay readable.
+	for _, tok := range []string{"warming", "starting", "stopping", "down", "unknown", "check_panic", "check_timeout"} {
+		if isPostureReason(tok) {
+			t.Errorf("readiness reason %s is treated as a posture token", tok)
+		}
 	}
 }

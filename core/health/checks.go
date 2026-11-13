@@ -1,5 +1,5 @@
 // file: core/health/checks.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c9d2f4e-3b86-4a1d-8e75-4f2a6b9c1d03
 // last-edited: 2026-11-13
 
@@ -8,6 +8,7 @@ package health
 import (
 	"context"
 	"math/rand/v2"
+	"slices"
 	"time"
 )
 
@@ -93,7 +94,7 @@ func (r *Registry) runOnce(ctx context.Context, comp *component) {
 	if comp.running.Load() {
 		return
 	}
-	res, took, ok := r.runCheck(ctx, comp)
+	res, took, ok, _ := r.runCheck(ctx, comp)
 	if !ok {
 		return // shutdown: the probe was cancelled, record nothing
 	}
@@ -114,11 +115,17 @@ func (r *Registry) runOnce(ctx context.Context, comp *component) {
 // of core.health.live_stall, or half the watchdog period when that is shorter.
 // The first beat is recorded before StartHeartbeat returns. stop ends the
 // heartbeat and marks the registry as not beating (live again by the F2
-// rule); it does not wait for a work func that is wedged. sup may be nil.
+// rule); it does not wait for a work func that is wedged. sup may be nil. A
+// second StartHeartbeat while one runs starts nothing and returns a stop that
+// does nothing, as StartChecks does.
 func (r *Registry) StartHeartbeat(ctx context.Context, sup *Supervisor, work ...func()) (stop func()) {
+	if !r.beating.CompareAndSwap(false, true) {
+		// One heartbeat per registry: a second would double the watchdog pings
+		// and its stop would mark the first one's registry as not beating.
+		return func() {}
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	r.lastBeat.Store(r.now().UnixNano())
-	r.beating.Store(true)
 	go func() {
 		t := time.NewTimer(r.beatEvery(sup))
 		defer t.Stop()
@@ -171,11 +178,42 @@ func (r *Registry) BeginShutdown() {
 }
 
 // setStartup records whether startup is pending (a Startup attached and not
-// yet complete) and the degraded startup tokens. Called by Startup.
+// yet complete) and the degraded startup tokens. Called by Startup when it
+// attaches; later changes go through setStartupPending and setStartupTokens,
+// which each touch only their own field.
 func (r *Registry) setStartup(pending bool, tokens []string) {
 	r.mu.Lock()
 	r.startupPending = pending
 	r.startupTokens = tokens
+	r.broadcastLocked()
+	r.mu.Unlock()
+	r.afterChange()
+}
+
+// setStartupPending sets only whether startup is pending, so Complete cannot
+// lose a token a step recorded meanwhile.
+func (r *Registry) setStartupPending(pending bool) {
+	r.mu.Lock()
+	r.startupPending = pending
+	r.broadcastLocked()
+	r.mu.Unlock()
+	r.afterChange()
+}
+
+// setStartupTokens adds tokens to the degraded startup tokens and leaves
+// whether startup is pending alone: a step that fails while Complete runs must
+// not put "starting" back (a read-then-write of pending would). Tokens only
+// ever grow, so the union makes two steps recording at once order-independent.
+func (r *Registry) setStartupTokens(tokens []string) {
+	r.mu.Lock()
+	merged := slices.Clone(r.startupTokens)
+	for _, t := range tokens {
+		if !slices.Contains(merged, t) {
+			merged = append(merged, t)
+		}
+	}
+	slices.Sort(merged)
+	r.startupTokens = merged
 	r.broadcastLocked()
 	r.mu.Unlock()
 	r.afterChange()
