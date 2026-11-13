@@ -69,6 +69,27 @@ func TestReadyz_CriticalDownIs503_LivezStays200(t *testing.T) {
 		t.Fatalf("/readyz with a Degraded Critical and a Down advisory component = %d, want 200", rec.Code)
 	}
 
+	// Critical alone (no Readiness) still fails readiness while Down: the two
+	// flags are separate clauses of the rule, so a component that is only
+	// Critical is not covered by the Readiness clause.
+	journal := mustRegister(t, r, Check{ID: "core.journal", Critical: true})
+	journal.Report(Result{Status: StatusDown, Reason: "journal_down"})
+	rec = get(mux, "/readyz")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz with a Critical-only component Down = %d, want 503", rec.Code)
+	}
+	body = StatusPayload{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(body.NotReady, []string{"core.journal:journal_down"}) {
+		t.Fatalf("/readyz body = %+v, want the Critical-only component as the one reason", body)
+	}
+	journal.Report(Result{Status: StatusUp})
+	if rec := get(mux, "/readyz"); rec.Code != http.StatusOK {
+		t.Fatalf("/readyz after the Critical-only component recovered = %d, want 200", rec.Code)
+	}
+
 	// A wedged heartbeat fails /livez and still leaves readiness to the components.
 	r.beating.Store(true)
 	r.lastBeat.Store(time.Now().Add(-time.Hour).UnixNano())
