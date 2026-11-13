@@ -1,7 +1,7 @@
 # file: internal/plugins/maintenance/testdata/fixer_stores_allowlist.txt
-# version: 1.3.0
+# version: 1.2.0
 # guid: 6a3e8d21-9c47-4f15-b2e0-1d7c5a9f3b68
-# last-edited: 2026-11-13
+# last-edited: 2026-11-12
 #
 # Reviewed exceptions for TestFixerStores_NoFixerReachesAStoreExceptThroughTheShell
 # (fixer_stores_guard_test.go; the pass is tools/fixerstores).
@@ -22,8 +22,6 @@
 
 # ---- store sinks
 store-sink (*Plugin).fixerStores convert:pluginFixerStores->FixerStores # the fallback for a caller that runs a fixer without the shell (HEAD's repairs.plan / repairs.apply ops and the fixers' own tests); the native shell always binds the stores (KindDeps.BindStores is required) and fixerStores answers from ctx first. TestFixers_FallBackToPluginStoresWithoutShell covers it. Goes with the HEAD path
-store-sink (headT6g3Store).rawKV OpsStore # the pass's call graph links every implementer of a raw-key reader interface (merge.FlagHolderFollowsFrom takes one) to this adapter; no fixer is ever handed it. The group-3 maintenance shells (internal/plugins/maintenance/kinds_t6_g3.go) build it over the plugin's deps for the check they run, and F5-18 replaces it with the owner's declared store. Goes with the HEAD path
-store-sink (headT6g3Writer).CreateOperationChange OpsStore # the pass's call graph links every implementer of the journal-row writer interface (repairs.Writer's) to this adapter; no fixer is ever handed it, a fixer journals through the store its FixerStores carry. The group-3 credits backfill's HEAD shell is the only caller. Goes with the HEAD path
 
 # ---- deps that are not stores
 dep RootDir # the configured library root, a string; nothing is read or written through it

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
 // last-edited: 2026-11-13
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"runtime"
 	"slices"
@@ -233,7 +232,8 @@ func newT6G3Fake(t *testing.T) *t6g3Fake {
 
 func (f *t6g3Fake) deps() t6g3Deps {
 	return t6g3Deps{
-		Store: f.store,
+		Store:        f.store,
+		StandDownKey: t6g3ScanKey,
 		NewWriter: func(w tasks.Writer) t6g3Writer {
 			f.mu.Lock()
 			f.newWriters = append(f.newWriters, w)
@@ -248,6 +248,9 @@ func (f *t6g3Fake) handed() []tasks.Writer {
 	defer f.mu.Unlock()
 	return slices.Clone(f.newWriters)
 }
+
+// t6g3ScanKey is the library scan key the test owner declares.
+const t6g3ScanKey tasks.Key = "books.library.scan"
 
 // fakeT6G3Deps is the owner's declared dependencies as a test fake.
 func fakeT6G3Deps(t *testing.T) t6g3Deps { return newT6G3Fake(t).deps() }
@@ -270,6 +273,8 @@ type t6g3Host struct {
 
 	mu   sync.Mutex
 	logs []string
+	// standDowns are the keys the run asked to stand down.
+	standDowns []tasks.Key
 }
 
 type t6g3LogHandler struct{ h *t6g3Host }
@@ -294,8 +299,13 @@ func (t6g3Hold) Release() {}
 
 // StandDown hands out a hold that is never lost, which is what a credits
 // backfill apply needs to get past its scan stand-down.
-func (h *t6g3Host) StandDown(tasks.Key) (tasks.Hold, error) { return t6g3Hold{}, nil }
-func (h *t6g3Host) Log() *slog.Logger                       { return slog.New(t6g3LogHandler{h}) }
+func (h *t6g3Host) StandDown(k tasks.Key) (tasks.Hold, error) {
+	h.mu.Lock()
+	h.standDowns = append(h.standDowns, k)
+	h.mu.Unlock()
+	return t6g3Hold{}, nil
+}
+func (h *t6g3Host) Log() *slog.Logger { return slog.New(t6g3LogHandler{h}) }
 
 func newT6G3Host(kind tasks.Kind, mode tasks.Mode, w tasks.Writer) (*t6g3Host, *tasks.RC) {
 	h := &t6g3Host{FakeRun: taskstest.NewFakeRun(context.Background(), kind), mode: mode, w: w}
@@ -354,7 +364,7 @@ type t6g3Want struct {
 }
 
 var t6g3Wants = []t6g3Want{
-	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, []string{"books", "external_ids", "files", "operations"}, ""},
+	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, []string{"activity", "books", "external_ids", "files", "operations"}, ""},
 	{"maintenance.tombstone-cleanup", "Resolve author tombstone chains", tasks.ResumeDrop, "books.maintenance.tombstone-cleanup", time.Hour, 0, false, []string{"authors"}, ""},
 	{"maintenance.temp-file-cleanup", "Clean orphaned temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{"activity", "files"}, ""},
 	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{"files"}, ""},
@@ -367,7 +377,7 @@ var t6g3Wants = []t6g3Want{
 	{"maintenance.folder-cover-backfill", "Use folder cover images", tasks.ResumeDrop, "books.maintenance.folder-cover-backfill", 120 * time.Minute, 0, false, []string{"books"}, ""},
 	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, []string{"cover_text"}, ""},
 	{"maintenance.credit-census", "Author/narrator credit census", tasks.ResumeDrop, "books.maintenance.credit-census", 2 * time.Hour, 0, true, nil, ""},
-	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{"books", "narrators", "operations"}, ""},
+	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{"authors", "books", "narrators", "operations"}, ""},
 }
 
 func TestT6G3Kinds_MatchHEADDefs(t *testing.T) {
@@ -392,7 +402,7 @@ func TestT6G3Kinds_MatchHEADDefs(t *testing.T) {
 			if !w.readOnly {
 				assert.Equal(t, w.writes, t6g3WriteKinds(c.Effects), "R7 write set")
 			}
-			assert.Equal(t, w.par, ParString(d), "a Task declares no Parallelism: its loops pass theirs to RunItems")
+			assert.Equal(t, w.par, t6g3ParString(d), "a Task declares no Parallelism: its loops pass theirs to RunItems")
 		})
 	}
 }
@@ -401,13 +411,15 @@ func TestT6G3Kinds_MatchHEADDefs(t *testing.T) {
 func TestT6G3_LoopParallelism(t *testing.T) {
 	assert.Equal(t, "cpu", creditCensusParallelism().String(), "HEAD: runtime.NumCPU()")
 	assert.Equal(t, "cpu", creditsBackfillParallelism().String(), "HEAD: runtime.NumCPU()")
-	n := min(max(runtime.NumCPU()*2, 1), 32)
-	assert.True(t, strings.HasPrefix(folderCoverBackfillParallelism().String(), fmt.Sprintf("fixed(%d): ", n)), folderCoverBackfillParallelism().String())
-	assert.True(t, strings.HasPrefix(coverTextReadParallelism().String(), fmt.Sprintf("fixed(%d): ", n)), coverTextReadParallelism().String())
+	// The cover ops' pools are sized by the core (workers param, else twice the
+	// cores, clamped 1-32), not by a def-level constant.
+	assert.Equal(t, min(max(runtime.NumCPU()*2, 1), 32), coverOpDefaultWorkers(0))
+	assert.Equal(t, 3, coverOpDefaultWorkers(3))
+	assert.Equal(t, 32, coverOpDefaultWorkers(500))
 }
 
-// ParString renders a definition's declared parallelism, "" for a Task.
-func ParString(d tasks.Definition) string {
+// t6g3ParString renders a definition's declared parallelism, "" for a Task.
+func t6g3ParString(d tasks.Definition) string {
 	p := tasks.ParallelismOf(d)
 	if p == (tasks.Parallelism{}) {
 		return ""
@@ -570,11 +582,21 @@ func TestT6G3_CreditsBackfillPreviewWritesNothing(t *testing.T) {
 }
 
 func TestT6G3_ModeKeysAreRefused(t *testing.T) {
+	// Every native shell that writes refuses a mode key (decision 3), in any
+	// case; the spelling varies per kind on purpose.
 	cases := map[string]string{
-		"maintenance.credits-backfill":            `{"Apply":true}`,
+		"maintenance.purge-deleted":               `{"dry_run":false}`,
+		"maintenance.tombstone-cleanup":           `{"dryRun":false}`,
+		"maintenance.temp-file-cleanup":           `{"APPLY":true}`,
+		"maintenance.transcode-temp-cleanup":      `{"dry_run":true}`,
+		"maintenance.cleanup-activity-log":        `{"Apply":true}`,
+		"maintenance.cleanup-old-backups":         `{"dry_run":false}`,
+		"maintenance.trash-cleanup":               `{"dryRun":false}`,
 		"maintenance.clear-apply-rename-failures": `{"apply":true}`,
-		"maintenance.folder-cover-backfill":       `{"dry_run":false}`,
+		"maintenance.compact-activity-log":        `{"older_than_days":3,"dry_run":false}`,
+		"maintenance.folder-cover-backfill":       `{"apply":true}`,
 		"maintenance.cover-text-read":             `{"dryRun":false}`,
+		"maintenance.credits-backfill":            `{"Apply":true}`,
 	}
 	for id, params := range cases {
 		f := newT6G3Fake(t)

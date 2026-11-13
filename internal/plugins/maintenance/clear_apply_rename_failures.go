@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/clear_apply_rename_failures.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1c9f4a67-52b8-4d03-ae71-8f605d2c9b34
 // last-edited: 2026-11-13
 
@@ -145,7 +145,7 @@ func (p *Plugin) clearApplyRenameFailuresKind(deps t6g3Deps, sched func(tasks.Ki
 		Common: t6g3Common(p.clearApplyRenameFailuresDef(), clearApplyRenameFailuresKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (clearApplyRenameFailuresResult, error) {
 			var scope clearApplyRenameFailuresScope
-			if err := t6g3DecodeParams(clearApplyRenameFailuresKind, raw, &scope, "apply", "dry_run", "dryRun"); err != nil {
+			if err := t6g3DecodeParams(clearApplyRenameFailuresKind, raw, &scope, t6g3ModeKeys...); err != nil {
 				return clearApplyRenameFailuresResult{}, err
 			}
 			base, err := t6g3NativeBase(clearApplyRenameFailuresKind, rc, deps, true)

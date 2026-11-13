@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 6950317d-b65c-41e5-86a8-9cc277a95054
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -175,7 +175,7 @@ func (f *cbFixture) runWith(ctx context.Context, rep *cbReporter, params credits
 	if params.Apply {
 		env.mod = f.s
 	}
-	return runCreditsBackfillScan(ctx, env, params, rep)
+	return f.runEnv(ctx, env, params, rep)
 }
 
 func ba(bookID string, rows ...[2]int) []database.BookAuthor {
@@ -940,7 +940,7 @@ func TestCreditsBackfill_BookChangedSincePlanIsNotOverwritten(t *testing.T) {
 	}}
 	rep := &cbReporter{id: cbTestOpID}
 	env := creditsBackfillEnv{store: f.s, mod: mod, opID: rep.id, workers: 1}
-	res, err := runCreditsBackfillScan(context.Background(), env, creditsBackfillParams{Apply: true}, rep)
+	res, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, rep)
 	if res == nil {
 		t.Fatalf("no result: %v", err)
 	}
@@ -1168,7 +1168,7 @@ func cbRefusedWriteRun(t *testing.T, f *cbFixture) (bruce, selina int) {
 	}}
 	rep := &cbReporter{id: cbTestOpID}
 	env := creditsBackfillEnv{store: f.s, mod: mod, opID: rep.id, workers: 1}
-	if _, err := runCreditsBackfillScan(context.Background(), env, creditsBackfillParams{Apply: true}, rep); err == nil {
+	if _, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, rep); err == nil {
 		t.Fatal("a refused write reported a clean run")
 	}
 	return bruce, selina

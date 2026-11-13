@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 29eb0771-6105-406d-b32a-2a11e3535809
 // last-edited: 2026-11-13
 
@@ -201,6 +201,11 @@ type t6g3Deps struct {
 	// GuardTags is the credits backfill's franchise-tag reader (nil: the tag
 	// check is skipped, as repairs.GuardOwnerManualBooks documents).
 	GuardTags repairs.GuardTagReader
+	// StandDownKey is the concurrency key the library scan runs under, which a
+	// live credits backfill holds down for its writes (HEAD held the registry's
+	// scan stand-down). Declared by the owner, as repairs.Deps.StandDownKey is:
+	// empty, a live backfill is refused rather than run beside a scan.
+	StandDownKey tasks.Key
 	// NewWriter returns the writer for one run, its write methods going through
 	// w (F5-18: internal/books/writer over rc.Writer()). w is nil for a
 	// ReadOnly kind, whose core writes nothing.
@@ -212,8 +217,13 @@ type t6g3Deps struct {
 // headT6g3Writer is t6g3Writer over HEAD's dependencies: each method calls what
 // HEAD's body called, in the same order with the same arguments. Deps are read
 // lazily so a test double with no store behind it is only touched by the
-// method a test reaches.
-type headT6g3Writer struct{ p *Plugin }
+// method a test reaches. The store the shell captured (HEAD's OpsStore at the
+// start of the run) is the one every store-reaching write uses, so the writer
+// never re-reads the plugin's dependencies for it (nil: errT6g3NoStore).
+type headT6g3Writer struct {
+	p     *Plugin
+	store OpsStore
+}
 
 func (w headT6g3Writer) RunAutoPurgeSoftDeleted(ctx context.Context, opID string) error {
 	return w.p.deps.RunAutoPurgeSoftDeleted(ctx, opID)
@@ -222,7 +232,7 @@ func (w headT6g3Writer) RunAutoPurgeSoftDeleted(ctx context.Context, opID string
 func (w headT6g3Writer) ActivityFlushOp(opID string) { w.p.deps.ActivityFlushOp(opID) }
 
 func (w headT6g3Writer) ResolveTombstoneChains() (int, error) {
-	store := w.p.deps.OpsStore()
+	store := w.store
 	if store == nil {
 		return 0, errT6g3NoStore
 	}
@@ -256,7 +266,7 @@ func (w headT6g3Writer) MaintainActivityLog(ctx context.Context, changeDays, deb
 }
 
 func (w headT6g3Writer) SetUserPreferenceForUser(userID, key, value string) error {
-	store := w.p.deps.OpsStore()
+	store := w.store
 	if store == nil {
 		return errT6g3NoStore
 	}
@@ -264,7 +274,7 @@ func (w headT6g3Writer) SetUserPreferenceForUser(userID, key, value string) erro
 }
 
 func (w headT6g3Writer) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	store := w.p.deps.OpsStore()
+	store := w.store
 	if store == nil {
 		return nil, errT6g3NoStore
 	}
@@ -272,7 +282,7 @@ func (w headT6g3Writer) ModifyBook(id string, fn func(*database.Book) error) (*d
 }
 
 func (w headT6g3Writer) SetRaw(key string, value []byte) error {
-	store := w.p.deps.OpsStore()
+	store := w.store
 	if store == nil {
 		return errT6g3NoStore
 	}
@@ -280,7 +290,7 @@ func (w headT6g3Writer) SetRaw(key string, value []byte) error {
 }
 
 func (w headT6g3Writer) ModifyBookCredits(bookID string, fn func(book *database.Book, credits *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
-	store := w.p.deps.OpsStore()
+	store := w.store
 	if store == nil {
 		return nil, database.BookCreditsEdit{}, errT6g3NoStore
 	}
@@ -292,7 +302,7 @@ func (w headT6g3Writer) ModifyBookCredits(bookID string, fn func(book *database.
 }
 
 func (w headT6g3Writer) CreateNarrator(name string) (*database.Narrator, error) {
-	store := w.p.deps.OpsStore()
+	store := w.store
 	if store == nil {
 		return nil, errT6g3NoStore
 	}
@@ -300,7 +310,7 @@ func (w headT6g3Writer) CreateNarrator(name string) (*database.Narrator, error) 
 }
 
 func (w headT6g3Writer) DeleteNarrator(id int) error {
-	store := w.p.deps.OpsStore()
+	store := w.store
 	if store == nil {
 		return errT6g3NoStore
 	}
@@ -308,7 +318,7 @@ func (w headT6g3Writer) DeleteNarrator(id int) error {
 }
 
 func (w headT6g3Writer) CreateOperationChange(change *database.OperationChange) error {
-	store := w.p.deps.OpsStore()
+	store := w.store
 	if store == nil {
 		return errT6g3NoStore
 	}
@@ -329,7 +339,7 @@ func (w headT6g3Writer) InvalidateAuthorsCache() { w.p.deps.InvalidateAuthorsCac
 // ReplaceOpRowsPrefix writes through the ops store's row store, as the judged
 // markers always did.
 func (w headT6g3Writer) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (database.OpRow, error)) error {
-	rows, ok := database.AsCapability[database.OpRowStore](w.p.deps.OpsStore())
+	rows, ok := database.AsCapability[database.OpRowStore](w.store)
 	if !ok {
 		return fmt.Errorf("%w: no operation row store", errT6g3NoCapability)
 	}
@@ -398,13 +408,13 @@ func (s headT6g3Store) ListActiveOperationsV2() ([]database.OperationV2Row, erro
 func (s headT6g3Store) Can(c t6g3Capability) bool {
 	switch c {
 	case t6g3CapNameIndex:
-		_, ok := database.AsCapability[narratorByNameReader](s.p.deps.OpsStore())
+		_, ok := database.AsCapability[narratorByNameReader](s.OpsStore)
 		return ok
 	case t6g3CapOpsLister:
-		_, ok := database.AsCapability[database.OperationsV2SinceLister](s.p.deps.OpsStore())
+		_, ok := database.AsCapability[database.OperationsV2SinceLister](s.OpsStore)
 		return ok
 	case t6g3CapOpRows:
-		_, ok := database.AsCapability[database.OpRowStore](s.p.deps.OpsStore())
+		_, ok := database.AsCapability[database.OpRowStore](s.OpsStore)
 		return ok
 	case t6g3CapClassLists:
 		_, ok := database.AsCapability[database.OpRowStore](s.p.deps.OperationQueueStore())
@@ -414,7 +424,7 @@ func (s headT6g3Store) Can(c t6g3Capability) bool {
 }
 
 func headCap[T any](s headT6g3Store, what string) (T, error) {
-	store := s.p.deps.OpsStore()
+	store := s.OpsStore
 	if store == nil {
 		var zero T
 		return zero, errT6g3NoStore
@@ -504,7 +514,7 @@ func (s headT6g3Store) ScanPrefix(prefix string) ([]database.KVPair, error) {
 }
 
 func (s headT6g3Store) rawKV() (combineJournalKV, error) {
-	store := s.p.deps.OpsStore()
+	store := s.OpsStore
 	if store == nil {
 		return nil, errT6g3NoStore
 	}
@@ -523,7 +533,7 @@ type t6g3Base struct {
 	// Live is false for a preview (HEAD: dry run).
 	Live bool
 	// Log writes one line to the run's log.
-	Log func(level slog.Level, msg string)
+	Log func(level slog.Level, msg string, attrs ...slog.Attr)
 	// Progress reports done of total with a message; a total of 0 is unknown.
 	Progress func(done, total int, msg string)
 	// OpID is the run's operation ID (HEAD: ctxOpID(ctx); native: rc.RunID()).
@@ -592,13 +602,14 @@ func t6g3NativeItems(rc *tasks.RC, par tasks.Parallelism) t6g3ItemsFunc {
 // t6g3HeadBase fills the base the way HEAD's shells do: from the reporter and
 // the plugin's dependencies.
 func (p *Plugin) t6g3HeadBase(ctx context.Context, reporter sdk.Reporter, live bool) t6g3Base {
+	store := p.deps.OpsStore()
 	return t6g3Base{
 		Live:     live,
-		Log:      func(level slog.Level, msg string) { _ = reporter.Log(level, msg) },
+		Log:      func(level slog.Level, msg string, attrs ...slog.Attr) { _ = reporter.Log(level, msg, attrs...) },
 		Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
 		OpID:     ctxOpID(ctx),
-		Writer:   headT6g3Writer{p: p},
-		Store:    headT6g3Store{OpsStore: p.deps.OpsStore(), p: p},
+		Writer:   headT6g3Writer{p: p, store: store},
+		Store:    headT6g3Store{OpsStore: store, p: p},
 	}
 }
 
@@ -607,8 +618,8 @@ func (p *Plugin) t6g3HeadBase(ctx context.Context, reporter sdk.Reporter, live b
 func t6g3NativeBase(kind tasks.Kind, rc *tasks.RC, deps t6g3Deps, writes bool) (t6g3Base, error) {
 	b := t6g3Base{
 		Live: rc.Mode() == tasks.ModeLive,
-		Log: func(level slog.Level, msg string) {
-			rc.Log().Log(rc.Context(), level, msg)
+		Log: func(level slog.Level, msg string, attrs ...slog.Attr) {
+			rc.Log().LogAttrs(rc.Context(), level, msg, attrs...)
 		},
 		Progress: func(done, total int, msg string) {
 			n := tasks.Unknown()
@@ -669,6 +680,18 @@ func t6g3DecodeParams(kind tasks.Kind, raw json.RawMessage, v any, modeKeys ...s
 		return fmt.Errorf("%s: decode params: %w", kind, err)
 	}
 	return nil
+}
+
+// t6g3ModeKeys are the param keys that would carry the run's mode: dry_run,
+// dryRun and apply. The mode comes from the start request (05-tasks 5T.3.7).
+var t6g3ModeKeys = []string{"dry_run", "dryRun", "apply"}
+
+// t6g3RefuseModeKeys is the params step of a native shell whose body takes no
+// params of its own: a mode key is refused (case-insensitively), and so is
+// params that are not a JSON object. Any other key is ignored, as HEAD ignored
+// the params of these defs.
+func t6g3RefuseModeKeys(kind tasks.Kind, raw json.RawMessage) error {
+	return t6g3DecodeParams(kind, raw, &struct{}{}, t6g3ModeKeys...)
 }
 
 // t6g3LiveOnly is rule R7's "Live-only writer": HEAD runs such a def only in an

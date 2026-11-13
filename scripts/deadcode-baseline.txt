@@ -651,13 +651,10 @@ internal/plugins/maintenance.Plugin.tombstoneCleanupKind
 internal/plugins/maintenance.Plugin.transcodeTempCleanupKind
 internal/plugins/maintenance.Plugin.trashCleanupKind
 internal/plugins/maintenance.consolidationLeftoversFixer.newSource
-internal/plugins/maintenance.coverOpWorkers
-internal/plugins/maintenance.coverTextReadParallelism
 internal/plugins/maintenance.creditCensusParallelism
 internal/plugins/maintenance.creditsBackfillParallelism
 internal/plugins/maintenance.duplicateCopiesFixer.detail
 internal/plugins/maintenance.folderBooksFixer.handOff
-internal/plugins/maintenance.folderCoverBackfillParallelism
 internal/plugins/maintenance.fragmentFixer.stores
 internal/plugins/maintenance.junkTitleFixer.buildJunkIndex
 internal/plugins/maintenance.junkTitleFixer.candidateTitle
@@ -680,6 +677,7 @@ internal/plugins/maintenance.t6g3NativeBase
 internal/plugins/maintenance.t6g3NativeItems
 internal/plugins/maintenance.t6g3NeedStore
 internal/plugins/maintenance.t6g3Priority
+internal/plugins/maintenance.t6g3RefuseModeKeys
 internal/plugins/maintenance.t6g3Resume
 internal/plugins/maintenance.t6g3StartRequirement
 internal/plugins/maintenance.versionTwinFixer.readers

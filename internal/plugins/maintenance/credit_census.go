@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credit_census.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 1df256d6-add9-41de-bf6d-622ed04e2944
 // last-edited: 2026-11-13
 
@@ -681,7 +681,7 @@ func (p *Plugin) runCreditCensus(ctx context.Context, _ json.RawMessage, reporte
 func runCreditCensusScan(ctx context.Context, store creditCensusStore, reporter sdk.Reporter, concurrency int) (*creditCensusResult, error) {
 	env := creditCensusEnv{
 		t6g3Base: t6g3Base{
-			Log:      func(level slog.Level, msg string) { _ = reporter.Log(level, msg) },
+			Log:      func(level slog.Level, msg string, attrs ...slog.Attr) { _ = reporter.Log(level, msg, attrs...) },
 			Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
 		},
 		Items: t6g3HeadItems(ctx, reporter, concurrency),

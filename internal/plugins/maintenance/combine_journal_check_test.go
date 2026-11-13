@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/combine_journal_check_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8c3f5a17-d2e4-4b96-a1c8-0e7b9d4f2a53
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
 import (
+	"context"
 	"errors"
 	"sort"
 	"strings"
@@ -16,7 +17,25 @@ import (
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
-type combineKVFake struct{ m map[string][]byte }
+// combineKVFake is an OpsStore that answers only the raw-key reads the check
+// makes; any other method panics on the nil embedded store.
+type combineKVFake struct {
+	OpsStore
+	m map[string][]byte
+}
+
+// combineKVDeps hands the HEAD shell that store.
+type combineKVDeps struct {
+	fakeDeps
+	kv *combineKVFake
+}
+
+func (d combineKVDeps) OpsStore() OpsStore { return d.kv }
+
+// runCombineCheck runs the HEAD shell over kv, the path the engine takes.
+func runCombineCheck(kv *combineKVFake, rep sdk.Reporter) error {
+	return (&Plugin{deps: combineKVDeps{kv: kv}}).runCombineJournalCheck(context.Background(), nil, rep)
+}
 
 func (k *combineKVFake) GetRaw(key string) ([]byte, error) { return k.m[key], nil }
 func (k *combineKVFake) ScanPrefix(prefix string) ([]database.KVPair, error) {
@@ -51,7 +70,7 @@ func TestCombineJournalCheck_ListsEveryUnreadableRowByKey(t *testing.T) {
 		"merge:combine-journal:01BAD-B": []byte(`"a string, not an object"`),
 	}}
 	rep := &fakeReporter{}
-	err := checkCombineJournalRows(kv, rep)
+	err := runCombineCheck(kv, rep)
 	var ue *merge.UnreadableCombineJournalsError
 	if !errors.As(err, &ue) || len(ue.Rows) != 2 {
 		t.Fatalf("want an UnreadableCombineJournalsError with 2 rows, got %v", err)
@@ -76,7 +95,7 @@ func TestCombineJournalCheck_CleanStorePasses(t *testing.T) {
 		"unrelated:key":                []byte("{not json"),
 	}}
 	rep := &fakeReporter{}
-	if err := checkCombineJournalRows(kv, rep); err != nil {
+	if err := runCombineCheck(kv, rep); err != nil {
 		t.Fatalf("a store with only readable journals must pass: %v", err)
 	}
 	if !strings.Contains(strings.Join(rep.logs, "\n"), "1 rows, 0 unreadable") {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-11-13
 
@@ -777,11 +777,6 @@ func (p *Plugin) creditsBackfillDef() sdk.OperationDef {
 // creditsBackfillKind is the native kind of maintenance.credits-backfill (F5-08).
 const creditsBackfillKind tasks.Kind = "books.maintenance.credits-backfill"
 
-// creditsBackfillStandDownKey is the library scan's concurrency key, which the
-// native apply holds down (rc.StandDown). HEAD held the registry's scan
-// stand-down; F5-18 confirms the scan kind's key (see the F5-08 seams note).
-const creditsBackfillStandDownKey tasks.Key = "books.library.scan"
-
 // creditsBackfillCoreEnv is what creditsBackfillCore needs from its engine.
 type creditsBackfillCoreEnv struct {
 	t6g3Base
@@ -825,31 +820,41 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 	}
 	base := p.t6g3HeadBase(ctx, reporter, params.Apply)
 	base.OpID = registry.ReporterOpID(reporter)
-	_, err := creditsBackfillCore(ctx, params, creditsBackfillCoreEnv{
-		t6g3Base:  base,
-		GuardTags: repairsGuardTags(p.deps),
-		Eng:       headCBEngine{ctx: ctx, reporter: reporter, scan: p.deps},
-		Workers:   runtime.NumCPU(),
-		StoreResult: func(res *creditsBackfillResult) error {
-			return registry.ReporterSetResult(reporter, res)
-		},
-	})
+	env := t6g3CreditsCoreEnv(base, repairsGuardTags(p.deps), headCBEngine{ctx: ctx, reporter: reporter, scan: p.deps})
+	env.StoreResult = func(res *creditsBackfillResult) error {
+		return registry.ReporterSetResult(reporter, res)
+	}
+	_, err := creditsBackfillCore(ctx, params, env)
 	return err
+}
+
+// t6g3CreditsCoreEnv is the core env both shells start from. Workers is the
+// bound of the run's own errgroups (the prior-attempt verify, the narrator-file
+// pass), runtime.NumCPU() as HEAD's shell set it; the pool of the three item
+// loops is the engine's (HEAD: Workers, native: the kind's declared
+// parallelism).
+func t6g3CreditsCoreEnv(base t6g3Base, tags repairs.GuardTagReader, eng cbEngine) creditsBackfillCoreEnv {
+	return creditsBackfillCoreEnv{t6g3Base: base, GuardTags: tags, Eng: eng, Workers: runtime.NumCPU()}
 }
 
 // creditsBackfillKind builds the native kind. HEAD declares a Preview, so it
 // runs in either mode; its apply param becomes the start request's mode. Writes
 // found: the book rows and their author/narrator joins (books), the narrator
-// records it creates and deletes (narrators), and the undo journal, the judged
-// markers and the class id lists (operations). The result is the summary the
+// records it creates and deletes (narrators), the author joins a credits write
+// replaces (authors: ModifyBookCredits takes book, book_authors and
+// book_narrators together), and the undo journal, the judged markers and the
+// class id lists (operations). HEAD declared Reads books and authors (kept) and
+// Writes books; the series read is the guard's (GetAllSeries). The result is the summary the
 // core stored; on an error core drops it (see the F5-08 seams note).
 func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "narrators"), tasks.Res("books", "operations"))
+	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"),
+		tasks.Res("books", "narrators"), tasks.Res("books", "operations")).
+		AlsoReads(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "series"))
 	return tasks.Task(creditsBackfillKind, tasks.TaskSpec[json.RawMessage, creditsBackfillResult]{
 		Common: t6g3Common(p.creditsBackfillDef(), creditsBackfillKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (creditsBackfillResult, error) {
 			var params creditsBackfillParams
-			if err := t6g3DecodeParams(creditsBackfillKind, raw, &params, "apply", "dry_run", "dryRun"); err != nil {
+			if err := t6g3DecodeParams(creditsBackfillKind, raw, &params, t6g3ModeKeys...); err != nil {
 				return creditsBackfillResult{}, err
 			}
 			if rc.Resumed() {
@@ -874,11 +879,8 @@ func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *task
 				return creditsBackfillResult{}, fmt.Errorf("%s: the store cannot keep the class id lists (database.OpRowStore)", creditsBackfillKind)
 			}
 			params.Apply = base.Live
-			res, err := creditsBackfillCore(rc.Context(), params, creditsBackfillCoreEnv{
-				t6g3Base:  base,
-				GuardTags: deps.GuardTags,
-				Eng:       nativeCBEngine{rc: rc, base: base},
-			})
+			res, err := creditsBackfillCore(rc.Context(), params, t6g3CreditsCoreEnv(base, deps.GuardTags,
+				nativeCBEngine{rc: rc, base: base, standDownKey: deps.StandDownKey}))
 			if res == nil {
 				return creditsBackfillResult{}, err
 			}
@@ -895,9 +897,13 @@ func creditsBackfillParallelism() tasks.Parallelism { return tasks.CPU() }
 type nativeCBEngine struct {
 	rc   *tasks.RC
 	base t6g3Base
+	// standDownKey is the owner-declared library scan key (t6g3Deps).
+	standDownKey tasks.Key
 }
 
-func (e nativeCBEngine) Log(level slog.Level, msg string)        { e.base.Log(level, msg) }
+func (e nativeCBEngine) Log(level slog.Level, msg string, attrs ...slog.Attr) {
+	e.base.Log(level, msg, attrs...)
+}
 func (e nativeCBEngine) Progress(done, total int, msg string)    { e.base.Progress(done, total, msg) }
 func (e nativeCBEngine) Checkpoint(params creditsBackfillParams) { _ = e.rc.Checkpoint(params) }
 func (e nativeCBEngine) Items(int) t6g3ItemsFunc {
@@ -906,7 +912,12 @@ func (e nativeCBEngine) Items(int) t6g3ItemsFunc {
 func (e nativeCBEngine) Beat(ctx context.Context) error { return ctx.Err() }
 
 func (e nativeCBEngine) Hold(_ context.Context, _ string) (cbHold, error) {
-	h, err := e.rc.StandDown(creditsBackfillStandDownKey)
+	if e.standDownKey == "" {
+		// No key means no stand-down, which is a library scan writing under an
+		// apply: refused, as repairs refuses the same (F5-02).
+		return nil, fmt.Errorf("%s: t6g3Deps.StandDownKey is not set; a live apply does not run without the scan stand-down", creditsBackfillKind)
+	}
+	h, err := e.rc.StandDown(e.standDownKey)
 	if err != nil {
 		return nil, err
 	}
@@ -950,7 +961,7 @@ func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env 
 		if err == nil {
 			return nil, fmt.Errorf("store credits backfill result: %w", serr)
 		}
-		env.Log(slog.LevelError, "credits-backfill: result not stored: "+serr.Error())
+		env.Log(slog.LevelError, "credits-backfill: result not stored", slog.String("error", serr.Error()))
 		return res, err
 	}
 	return summary, err
@@ -968,7 +979,7 @@ type cbResultWriter interface {
 // the caller returns it). The rows go first, so a stored result that names the
 // row store has all of its rows; a summary that fails to store takes the rows
 // back.
-func persistCreditsBackfillResult(w cbResultWriter, opID string, res *creditsBackfillResult, setResult func(*creditsBackfillResult) error, log func(slog.Level, string)) (*creditsBackfillResult, error) {
+func persistCreditsBackfillResult(w cbResultWriter, opID string, res *creditsBackfillResult, setResult func(*creditsBackfillResult) error, log func(slog.Level, string, ...slog.Attr)) (*creditsBackfillResult, error) {
 	if w == nil || opID == "" {
 		return nil, errors.New("no operation id or row store to keep the class id lists under")
 	}
@@ -984,7 +995,8 @@ func persistCreditsBackfillResult(w cbResultWriter, opID string, res *creditsBac
 	if setResult != nil {
 		if err := setResult(summary); err != nil {
 			if cerr := w.ClearClassLists(opID); cerr != nil {
-				log(slog.LevelWarn, "credits-backfill: class lists not cleared after a failed result write: "+cerr.Error())
+				log(slog.LevelWarn, "credits-backfill: class lists not cleared after a failed result write",
+					slog.String("error", cerr.Error()))
 			}
 			return nil, err
 		}
@@ -1013,8 +1025,6 @@ type creditsBackfillEnv struct {
 	// tags is the guard's franchise-tag reader (nil: the tag check is
 	// skipped, as repairs.GuardOwnerManualBooks documents).
 	tags repairs.GuardTagReader
-	// scan is the stand-down controller (nil: no interlock, as in tests).
-	scan ScanController
 	// opID is this operation's id ("" when the reporter cannot say: then no
 	// journal can be written, so an apply refuses).
 	opID    string
@@ -1036,7 +1046,7 @@ type cbCreditsModifier interface {
 // reporter and registry, or the native run context. Everything the run does to
 // the outside world that is not a store read or a write goes through it.
 type cbEngine interface {
-	Log(level slog.Level, msg string)
+	Log(level slog.Level, msg string, attrs ...slog.Attr)
 	Progress(done, total int, msg string)
 	// Checkpoint records params so a resumed run is a later attempt of the same
 	// run (best effort, as HEAD's reporter.Checkpoint was).
@@ -1068,7 +1078,9 @@ type headCBEngine struct {
 	scan     ScanController
 }
 
-func (e headCBEngine) Log(level slog.Level, msg string) { _ = e.reporter.Log(level, msg) }
+func (e headCBEngine) Log(level slog.Level, msg string, attrs ...slog.Attr) {
+	_ = e.reporter.Log(level, msg, attrs...)
+}
 func (e headCBEngine) Progress(done, total int, msg string) {
 	_ = e.reporter.UpdateProgress(done, total, msg)
 }
@@ -2047,7 +2059,8 @@ func (r *cbRun) markLeftoversJudged() {
 			return database.OpRow{ID: cbSwept, Data: []byte(src.fingerprint)}, nil
 		})
 		if err != nil {
-			r.env.eng.Log(slog.LevelWarn, fmt.Sprintf("credits-backfill: could not mark operation's leftovers judged (operation %s): %v", src.id, err))
+			r.env.eng.Log(slog.LevelWarn, "credits-backfill: could not mark operation's leftovers judged",
+				slog.String("operation", src.id), slog.String("error", err.Error()))
 		}
 	}
 }

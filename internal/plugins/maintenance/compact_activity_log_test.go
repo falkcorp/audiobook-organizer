@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 6e1a9c47-2b5d-4f83-a0e6-9d3c7b2f5e18
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -198,12 +198,12 @@ func (r *compactProgressReporter) UpdateProgress(cur, total int, msg string) err
 	return r.resultReporter.UpdateProgress(cur, total, msg)
 }
 
-// TestCompactProgressToReporter_ForwardsRunningTotals pins the adapter: each
+// TestCompactProgressVia_ForwardsRunningTotals pins the forwarder: each
 // chunk event stamps progress with the store's running total for the call, and
 // the message names the day when the event carries one.
-func TestCompactProgressToReporter_ForwardsRunningTotals(t *testing.T) {
+func TestCompactProgressVia_ForwardsRunningTotals(t *testing.T) {
 	rep := &compactProgressReporter{}
-	fwd := compactProgressToReporter(rep)
+	fwd := compactProgressVia(func(done, total int, msg string) { _ = rep.UpdateProgress(done, total, msg) })
 	day := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 
 	fwd(database.CompactProgressEvent{Backend: "pebble", Result: database.CompactResult{DaysCompacted: 1, EntriesDeleted: 1719}})

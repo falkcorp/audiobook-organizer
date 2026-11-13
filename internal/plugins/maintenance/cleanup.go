@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.35.0
+// version: 1.35.1
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-11-13
 
@@ -93,14 +93,18 @@ func runPurgeDeletedCore(ctx context.Context, env purgeDeletedEnv) (struct{}, er
 
 // purgeDeletedKind builds the native kind. Live-only writer: HEAD declares no
 // Writes and no Preview, so a preview run is refused. Writes found: the
-// purge's book rows, their external-id tombstones, the files it removes and the
-// undo records it reads and clears (audiobooks.PurgeSoftDeletedUnattended).
+// purge's book rows, their external-id tombstones, the files it removes, the
+// undo records it reads and clears (audiobooks.PurgeSoftDeletedUnattended) and
+// the activity entries the run flushes under its operation id (ActivityFlushOp).
 func (p *Plugin) purgeDeletedKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "external_ids"),
-		tasks.Res("books", "files"), tasks.Res("books", "operations"))
-	return tasks.Task(purgeDeletedKind, tasks.TaskSpec[struct{}, struct{}]{
+		tasks.Res("books", "files"), tasks.Res("books", "operations"), tasks.Res("books", "activity"))
+	return tasks.Task(purgeDeletedKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g3Common(p.purgeDeletedDef(), purgeDeletedKind, eff, sched),
-		Run: func(rc *tasks.RC, _ struct{}) (struct{}, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			if err := t6g3RefuseModeKeys(purgeDeletedKind, raw); err != nil {
+				return struct{}{}, err
+			}
 			if err := t6g3LiveOnly(purgeDeletedKind, rc); err != nil {
 				return struct{}{}, err
 			}
@@ -183,9 +187,12 @@ func runTombstoneCleanupCore(_ context.Context, env tombstoneCleanupEnv) (tombst
 // ResolveTombstoneChains rewrites the author tombstone rows (authors).
 func (p *Plugin) tombstoneCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "authors"))
-	return tasks.Task(tombstoneCleanupKind, tasks.TaskSpec[struct{}, tombstoneCleanupResult]{
+	return tasks.Task(tombstoneCleanupKind, tasks.TaskSpec[json.RawMessage, tombstoneCleanupResult]{
 		Common: t6g3Common(p.tombstoneCleanupDef(), tombstoneCleanupKind, eff, sched),
-		Run: func(rc *tasks.RC, _ struct{}) (tombstoneCleanupResult, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (tombstoneCleanupResult, error) {
+			if err := t6g3RefuseModeKeys(tombstoneCleanupKind, raw); err != nil {
+				return tombstoneCleanupResult{}, err
+			}
 			if err := t6g3LiveOnly(tombstoneCleanupKind, rc); err != nil {
 				return tombstoneCleanupResult{}, err
 			}
@@ -267,14 +274,20 @@ func runTempFileCleanupCore(_ context.Context, env tempFileCleanupEnv) (tempFile
 // CleanupOrphanedTempFiles records and flushes (activity).
 func (p *Plugin) tempFileCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "files"), tasks.Res("books", "activity"))
-	return tasks.Task(tempFileCleanupKind, tasks.TaskSpec[struct{}, tempFileCleanupResult]{
+	return tasks.Task(tempFileCleanupKind, tasks.TaskSpec[json.RawMessage, tempFileCleanupResult]{
 		Common: t6g3Common(p.tempFileCleanupDef(), tempFileCleanupKind, eff, sched),
-		Run: func(rc *tasks.RC, _ struct{}) (tempFileCleanupResult, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (tempFileCleanupResult, error) {
+			if err := t6g3RefuseModeKeys(tempFileCleanupKind, raw); err != nil {
+				return tempFileCleanupResult{}, err
+			}
 			if err := t6g3LiveOnly(tempFileCleanupKind, rc); err != nil {
 				return tempFileCleanupResult{}, err
 			}
 			base, err := t6g3NativeBase(tempFileCleanupKind, rc, deps, true)
 			if err != nil {
+				return tempFileCleanupResult{}, err
+			}
+			if err := t6g3NeedStore(tempFileCleanupKind, base); err != nil {
 				return tempFileCleanupResult{}, err
 			}
 			return runTempFileCleanupCore(rc.Context(), tempFileCleanupEnv{base})
@@ -384,11 +397,17 @@ func runTranscodeTempCleanupCore(ctx context.Context, env transcodeTempCleanupEn
 // temp files CleanupStaleTempFiles removes in a live run (files).
 func (p *Plugin) transcodeTempCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "files"))
-	return tasks.Task(transcodeTempCleanupKind, tasks.TaskSpec[struct{}, transcodeTempCleanupResult]{
+	return tasks.Task(transcodeTempCleanupKind, tasks.TaskSpec[json.RawMessage, transcodeTempCleanupResult]{
 		Common: t6g3Common(p.transcodeTempCleanupDef(), transcodeTempCleanupKind, eff, sched),
-		Run: func(rc *tasks.RC, _ struct{}) (transcodeTempCleanupResult, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (transcodeTempCleanupResult, error) {
+			if err := t6g3RefuseModeKeys(transcodeTempCleanupKind, raw); err != nil {
+				return transcodeTempCleanupResult{}, err
+			}
 			base, err := t6g3NativeBase(transcodeTempCleanupKind, rc, deps, true)
 			if err != nil {
+				return transcodeTempCleanupResult{}, err
+			}
+			if err := t6g3NeedStore(transcodeTempCleanupKind, base); err != nil {
 				return transcodeTempCleanupResult{}, err
 			}
 			return runTranscodeTempCleanupCore(rc.Context(), transcodeTempCleanupEnv{base})
@@ -452,14 +471,20 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 // (activity).
 func (p *Plugin) cleanupActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "activity"))
-	return tasks.Task(cleanupActivityLogKind, tasks.TaskSpec[struct{}, cleanupActivityLogResult]{
+	return tasks.Task(cleanupActivityLogKind, tasks.TaskSpec[json.RawMessage, cleanupActivityLogResult]{
 		Common: t6g3Common(p.cleanupActivityLogDef(), cleanupActivityLogKind, eff, sched),
-		Run: func(rc *tasks.RC, _ struct{}) (cleanupActivityLogResult, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (cleanupActivityLogResult, error) {
+			if err := t6g3RefuseModeKeys(cleanupActivityLogKind, raw); err != nil {
+				return cleanupActivityLogResult{}, err
+			}
 			if err := t6g3LiveOnly(cleanupActivityLogKind, rc); err != nil {
 				return cleanupActivityLogResult{}, err
 			}
 			base, err := t6g3NativeBase(cleanupActivityLogKind, rc, deps, true)
 			if err != nil {
+				return cleanupActivityLogResult{}, err
+			}
+			if err := t6g3NeedStore(cleanupActivityLogKind, base); err != nil {
 				return cleanupActivityLogResult{}, err
 			}
 			return runCleanupActivityLogCore(rc.Context(), cleanupActivityLogEnv{base})
@@ -655,14 +680,20 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 // on the def explains why it touches no row.
 func (p *Plugin) cleanupOldBackupsKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "files"))
-	return tasks.Task(cleanupOldBackupsKind, tasks.TaskSpec[struct{}, cleanupOldBackupsResult]{
+	return tasks.Task(cleanupOldBackupsKind, tasks.TaskSpec[json.RawMessage, cleanupOldBackupsResult]{
 		Common: t6g3Common(p.cleanupOldBackupsDef(), cleanupOldBackupsKind, eff, sched),
-		Run: func(rc *tasks.RC, _ struct{}) (cleanupOldBackupsResult, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (cleanupOldBackupsResult, error) {
+			if err := t6g3RefuseModeKeys(cleanupOldBackupsKind, raw); err != nil {
+				return cleanupOldBackupsResult{}, err
+			}
 			if err := t6g3LiveOnly(cleanupOldBackupsKind, rc); err != nil {
 				return cleanupOldBackupsResult{}, err
 			}
 			base, err := t6g3NativeBase(cleanupOldBackupsKind, rc, deps, true)
 			if err != nil {
+				return cleanupOldBackupsResult{}, err
+			}
+			if err := t6g3NeedStore(cleanupOldBackupsKind, base); err != nil {
 				return cleanupOldBackupsResult{}, err
 			}
 			return runCleanupOldBackupsCore(rc.Context(), cleanupOldBackupsEnv{base})
@@ -905,24 +936,27 @@ func notePaths(files []database.PurgeFileNote) []string {
 const trashCleanupKind tasks.Kind = "books.maintenance.trash-cleanup"
 
 // trashCleanupEnv is what runTrashCleanupCore needs from its engine.
-type trashCleanupEnv struct{ t6g3Base }
+type trashCleanupEnv struct {
+	t6g3Base
+	// StoreResult keeps the payload on the run's row (HEAD: the reporter's
+	// result slot). The core calls it where HEAD did, once the payload is built
+	// and before the first log line, and joins a failure into the run's error.
+	// Nil: the return value is the result (the native shell).
+	StoreResult func(TrashCleanupResult) error
+}
 
-// runTrashCleanup is the v2 shell of maintenance.trash-cleanup. The core returns
-// the payload, and this shell stores it on the run's row: a result the page
-// cannot read back would leave a run that purged versions looking like a run
-// that did nothing, so a failed write is reported on the op, joined with the
-// purge's own error.
+// runTrashCleanup is the v2 shell of maintenance.trash-cleanup. It hands the
+// core the write that stores the payload on the run's row, which the core makes
+// where HEAD did: a result the page cannot read back would leave a run that
+// purged versions looking like a run that did nothing, so a failed write is
+// reported on the op, joined with the purge's own error.
 func (p *Plugin) runTrashCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	payload, err := runTrashCleanupCore(ctx, trashCleanupEnv{p.t6g3HeadBase(ctx, reporter, true)})
-	if setErr := opsregistry.ReporterSetResult(reporter, payload); setErr != nil {
-		persist := fmt.Errorf("trash cleanup: persist result: %w", setErr)
-		if err != nil {
-			// Both are why the night failed: the purges, and the result the page
-			// reads back not being stored.
-			return errors.Join(err, persist)
-		}
-		return persist
-	}
+	_, err := runTrashCleanupCore(ctx, trashCleanupEnv{
+		t6g3Base: p.t6g3HeadBase(ctx, reporter, true),
+		StoreResult: func(payload TrashCleanupResult) error {
+			return opsregistry.ReporterSetResult(reporter, payload)
+		},
+	})
 	return err
 }
 
@@ -932,9 +966,12 @@ func (p *Plugin) runTrashCleanup(ctx context.Context, _ json.RawMessage, reporte
 // versions to purge_failed (book_versions).
 func (p *Plugin) trashCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "book_versions"), tasks.Res("books", "files"))
-	return tasks.Task(trashCleanupKind, tasks.TaskSpec[struct{}, TrashCleanupResult]{
+	return tasks.Task(trashCleanupKind, tasks.TaskSpec[json.RawMessage, TrashCleanupResult]{
 		Common: t6g3Common(p.trashCleanupDef(), trashCleanupKind, eff, sched),
-		Run: func(rc *tasks.RC, _ struct{}) (TrashCleanupResult, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (TrashCleanupResult, error) {
+			if err := t6g3RefuseModeKeys(trashCleanupKind, raw); err != nil {
+				return TrashCleanupResult{}, err
+			}
 			if err := t6g3LiveOnly(trashCleanupKind, rc); err != nil {
 				return TrashCleanupResult{}, err
 			}
@@ -944,7 +981,7 @@ func (p *Plugin) trashCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.S
 			}
 			// core drops a failed run's result (core/tasks/erased.go): see the
 			// F5-08 seams note.
-			return runTrashCleanupCore(rc.Context(), trashCleanupEnv{base})
+			return runTrashCleanupCore(rc.Context(), trashCleanupEnv{t6g3Base: base})
 		},
 	})
 }
@@ -1009,6 +1046,13 @@ func runTrashCleanupCore(_ context.Context, env trashCleanupEnv) (TrashCleanupRe
 	}
 	payload.SwapIncomplete = len(payload.SwapIncompleteVersionIDs)
 	payload.SwapIncompleteBooks = res.SwapIncomplete
+	// A result the page cannot read back would leave a run that purged versions
+	// looking like a run that did nothing; a failed write is reported on the op.
+	var setErr error
+	if env.StoreResult != nil {
+		setErr = env.StoreResult(payload)
+	}
+
 	if len(res.KeptFiles) > 0 {
 		env.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d of the purged versions kept files another row or book names (versions %s, books %s)",
 			len(res.KeptFiles), strings.Join(payload.KeptVersionIDs, ", "), strings.Join(payload.KeptBookIDs, ", ")))
@@ -1133,9 +1177,17 @@ func runTrashCleanupCore(_ context.Context, env trashCleanupEnv) (TrashCleanupRe
 			failed = fmt.Sprintf("; %d failed", res.Failed)
 		}
 		env.Log(slog.LevelWarn, fmt.Sprintf("%s%s: %v", msg, failed, err))
+		if setErr != nil {
+			// Both are why the night failed: the purges, and the result the page
+			// reads back not being stored.
+			return payload, errors.Join(err, fmt.Errorf("trash cleanup: persist result: %w", setErr))
+		}
 		return payload, err
 	}
 	env.Log(slog.LevelInfo, msg)
+	if setErr != nil {
+		return payload, fmt.Errorf("trash cleanup: persist result: %w", setErr)
+	}
 	return payload, nil
 }
 
