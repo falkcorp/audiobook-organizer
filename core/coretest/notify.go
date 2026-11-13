@@ -1,5 +1,5 @@
 // file: core/coretest/notify.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0f6b3a92-c4d1-47e8-95b7-3d28a1e60c49
 // last-edited: 2026-11-13
 
@@ -73,7 +73,11 @@ func NewWebhookReceiver(t testing.TB, secret string) *WebhookReceiver {
 }
 
 func (r *WebhookReceiver) serve(w http.ResponseWriter, req *http.Request) {
-	body, _ := io.ReadAll(req.Body)
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		http.Error(w, "reading the request body failed", http.StatusBadRequest)
+		return
+	}
 	d := WebhookDelivery{Method: req.Method, Header: req.Header.Clone(), Body: body}
 	if r.secret != "" {
 		d.SignatureErr = r.verify(d)
@@ -134,7 +138,7 @@ func (r *WebhookReceiver) verify(d WebhookDelivery) error {
 		return errors.New("no X-Mediacore-Delivery header")
 	}
 	var ts, sig string
-	for _, part := range strings.Split(d.Header.Get("X-Mediacore-Signature"), ",") {
+	for part := range strings.SplitSeq(d.Header.Get("X-Mediacore-Signature"), ",") {
 		switch k, v, _ := strings.Cut(part, "="); k {
 		case "t":
 			ts = v

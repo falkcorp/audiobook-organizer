@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/mail.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 11234e57-50d2-4d9a-be89-62e983dfeda9
 // last-edited: 2026-11-13
 
@@ -176,7 +176,7 @@ func isLoopbackHost(host string) bool {
 }
 
 // Send delivers msg. It honours ctx: cancelling it closes the connection.
-func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
+func (s *SMTPSender) Send(ctx context.Context, msg Message) (err error) {
 	to, err := parseAddress(msg.To)
 	if err != nil {
 		return fmt.Errorf("mail: recipient: %w", err)
@@ -209,7 +209,10 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 	// One deadline for the whole exchange, and close on cancellation so a
 	// stalled server cannot hold the caller past its context.
 	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(dl)
+		if err := conn.SetDeadline(dl); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("mail: set the deadline on the connection to %s: %w", addr, err)
+		}
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
@@ -230,7 +233,19 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 		_ = conn.Close()
 		return s.ctxErr(ctx, fmt.Errorf("mail: SMTP greeting from %s: %w", addr, err))
 	}
-	defer c.Close()
+	// Close the session on every way out except a QUIT the server took (QUIT
+	// closes it). A failed Close of an abandoned session joins the failure that
+	// is already being returned; it never turns an accepted message into an
+	// error, and a connection the context already closed is not worth saying.
+	closeSession := true
+	defer func() {
+		if !closeSession {
+			return
+		}
+		if cerr := c.Close(); cerr != nil && err != nil && !errors.Is(cerr, net.ErrClosed) {
+			err = errors.Join(err, cerr)
+		}
+	}()
 
 	hello := s.cfg.HelloName
 	if hello == "" {
@@ -287,8 +302,9 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 	if err := w.Close(); err != nil {
 		return s.ctxErr(ctx, fmt.Errorf("mail: end of data: %w", err))
 	}
-	// The message is accepted once DATA closes; a failed QUIT is not a failure.
-	_ = c.Quit()
+	// The message is accepted once DATA closes, so a failed QUIT is not a
+	// failure: the session is dropped by the deferred close instead.
+	closeSession = c.Quit() != nil
 	return nil
 }
 

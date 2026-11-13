@@ -1,5 +1,5 @@
 // file: core/integrations/notify/notifytest/suite.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b18d3f64-9e27-4a50-8c71-d4a6e0f2b936
 // last-edited: 2026-11-13
 
@@ -78,10 +78,18 @@ func Rule(id string) notify.Rule {
 	}
 }
 
+// closeBatch discards a test's batch and fails the test if that reports an error.
+func closeBatch(t testing.TB, b *storage.Batch) {
+	t.Helper()
+	if err := b.Close(); err != nil {
+		t.Errorf("closing the batch: %v", err)
+	}
+}
+
 func put(t *testing.T, f Fixture, r notify.Rule) {
 	t.Helper()
 	b := f.NewBatch()
-	defer b.Close()
+	defer closeBatch(t, b)
 	if err := f.Store.Put(context.Background(), b, r); err != nil {
 		t.Fatalf("Put %s: %v", r.ID, err)
 	}
@@ -148,7 +156,7 @@ func deleteRule(t *testing.T, f Fixture) {
 	put(t, f, Rule("signal"))
 	put(t, f, Rule("alarm"))
 	b := f.NewBatch()
-	defer b.Close()
+	defer closeBatch(t, b)
 	if err := f.Store.Delete(context.Background(), b, "signal"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -162,7 +170,7 @@ func deleteRule(t *testing.T, f Fixture) {
 
 func deleteMissing(t *testing.T, f Fixture) {
 	b := f.NewBatch()
-	defer b.Close()
+	defer closeBatch(t, b)
 	if err := f.Store.Delete(context.Background(), b, "joker"); !errors.Is(err, notify.ErrRuleNotFound) {
 		t.Errorf("Delete of a missing rule: err = %v, want ErrRuleNotFound", err)
 	}
@@ -188,8 +196,8 @@ func concurrentWriters(t *testing.T, f Fixture) {
 	ctx := context.Background()
 	put(t, f, Rule("signal"))
 	a, b := f.NewBatch(), f.NewBatch()
-	defer a.Close()
-	defer b.Close()
+	defer closeBatch(t, a)
+	defer closeBatch(t, b)
 	ra, rb := Rule("signal"), Rule("signal")
 	ra.Topics, rb.Topics = []string{"gotham.*"}, []string{"wayne.*"}
 	if err := f.Store.Put(ctx, a, ra); err != nil {
@@ -229,7 +237,7 @@ func refusesInvalidID(t *testing.T, f Fixture) {
 		if err == nil {
 			t.Errorf("Put accepted the rule ID %q", id)
 		}
-		_ = b.Close()
+		closeBatch(t, b)
 	}
 }
 

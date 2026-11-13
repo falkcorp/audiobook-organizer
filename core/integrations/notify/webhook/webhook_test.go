@@ -1,5 +1,5 @@
 // file: core/integrations/notify/webhook/webhook_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c41d8e07-5a92-4f36-b0e8-72a9d3f15b86
 // last-edited: 2026-11-13
 
@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -139,9 +140,7 @@ func newRig(t testing.TB) *rig {
 func (r *rig) put(ref integrations.Ref, url string, extra map[string]any, in map[string]secrets.Value) integrations.InstanceConfig {
 	r.t.Helper()
 	s := map[string]any{"url": url}
-	for k, v := range extra {
-		s[k] = v
-	}
+	maps.Copy(s, extra)
 	got, err := r.reg.Put(admin(), integrations.InstanceConfig{
 		Ref: ref, Adapter: webhook.AdapterID, Name: string(ref.Instance), Enabled: true, Local: true, Settings: s,
 	}, in)
@@ -187,7 +186,7 @@ func signalNote() notify.Notification {
 // webhook.Sign but the rule itself, written out from the documented format.
 func verify(secret, url, delivery, signature string, body []byte, now time.Time, tolerance time.Duration) error {
 	var ts, sig string
-	for _, part := range strings.Split(signature, ",") {
+	for part := range strings.SplitSeq(signature, ",") {
 		switch k, v, _ := strings.Cut(part, "="); k {
 		case "t":
 			ts = v
