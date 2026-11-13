@@ -887,15 +887,15 @@ func (p *Plugin) authorPathLinkNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 			}
 			env := authorPathLinkEnv{
 				t6g1Env:                t6g1NativeEnv(rc),
-				Writer:                 deps.NewWriter(rc.Writer()),
+				Writer:                 deps.NewWriters(rc.Writer()).PathLink,
 				ManualOnly:             deps.ManualOnly,
 				Items:                  t6g1NativeItems(rc),
 				AcquireStandDown:       t6g1NativeStandDown(rc, deps.StandDownKey),
 				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,
 				InvalidateDedupCache:   deps.InvalidateDedupCache,
 			}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.PathLink != nil {
+				env.Store = deps.Stores.PathLink
 			}
 			res, err := authorPathLinkCore(rc.Context(), params, env)
 			if res == nil {

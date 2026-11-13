@@ -35,7 +35,7 @@ import (
 // everything else (logging, progress, checkpoints, per-item pools) through the
 // hooks on env. The HEAD shell fills the env from the plugin's deps; the native
 // shell fills it from the run's context, with the writer the kernel gates
-// (deps.NewWriter(rc.Writer())).
+// (deps.NewWriters(rc.Writer())).
 
 const (
 	// t6g1SignalMemDB is the readiness component every kind waits for (HEAD's
@@ -332,51 +332,51 @@ func t6g1Common(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule) tasks.C
 	return c
 }
 
-// t6g1Writer is every write the 14 cores make, as one set of narrow groups, one
-// per definition (declared next to its core). A core takes only its own group.
-type t6g1Writer interface {
-	pruneAIJournalWriter
-	purgeEmptyAuthorsWriter
-	authorityBuildWriter
-	activityFilterWriter
-	authorSplitWriter
-	t6g1MergeWriter
-	authorIDRepairWriter
-	authorPathLinkWriter
-	authorStripMergeWriter
+// t6g1Writers is every write the 14 cores make, one narrow group per definition
+// (declared next to its core). A core takes only its own group, and no wide
+// interface is ever built from them: the two author-merge kinds share Merge.
+type t6g1Writers struct {
+	PruneAIJournal pruneAIJournalWriter
+	ActivityFilter activityFilterWriter
+	AuthorSplit    authorSplitWriter
+	Merge          t6g1MergeWriter
+	IDRepair       authorIDRepairWriter
+	PathLink       authorPathLinkWriter
+	PurgeEmpty     purgeEmptyAuthorsWriter
+	AuthorityBuild authorityBuildWriter
+	StripMerge     authorStripMergeWriter
 }
 
-// t6g1Store is every read the 14 cores make, grouped like t6g1Writer. Reads and
-// writes are disjoint, so a helper that needs both takes a struct of the two.
-type t6g1Store interface {
-	authorTitleFragmentStore
-	authorWhitespaceCollisionStore
-	purgeEmptyAuthorsStore
-	authorityBuildStore
-	activityFilterStore
-	authorSplitStore
-	resolveProductionStore
-	t6g1MergeReader
-	authorConjunctionRepairStore
-	authorDuplicateMergeStore
-	authorIDRepairStore
-	authorPathLinkReader
-	authorStripMergeStore
-	autoMatchTranscribedStore
+// t6g1Stores is every library read the cores make, one narrow group per
+// definition, like t6g1Writers. A nil field means that kind has no store wired
+// and its core reports "database not initialized" as at HEAD.
+type t6g1Stores struct {
+	TitleFragment       authorTitleFragmentStore
+	WhitespaceCollision authorWhitespaceCollisionStore
+	PurgeEmpty          purgeEmptyAuthorsStore
+	AuthorityBuild      authorityBuildStore
+	AuthorSplit         authorSplitStore
+	ResolveProduction   resolveProductionStore
+	ConjunctionRepair   authorConjunctionRepairStore
+	DuplicateMerge      authorDuplicateMergeStore
+	IDRepair            authorIDRepairStore
+	PathLink            authorPathLinkReader
+	StripMerge          authorStripMergeStore
+	AutoMatch           autoMatchTranscribedStore
 }
 
 // t6g1Deps is what the native shells need from the plugin: the stores and the
 // services the cores call. The kernel builds it at F5-18.
 type t6g1Deps struct {
-	// Store reads the library.
-	Store t6g1Store
-	// NewWriter wraps the run's gated writer: every write a core makes goes
-	// through the value it returns (conversion rule 3).
-	NewWriter func(tasks.Writer) t6g1Writer
+	// Stores read the library.
+	Stores t6g1Stores
+	// NewWriters wraps the run's gated writer: every write a core makes goes
+	// through the group it returns (conversion rule 3).
+	NewWriters func(tasks.Writer) t6g1Writers
 	// AIJournalRetentionDays is the configured ai_journal_retention_days.
 	AIJournalRetentionDays func() int
 	// ActivityFilter reads the Pebble activity store's filter-index state; nil
-	// when no Pebble activity store is wired. Its writes go through NewWriter.
+	// when no Pebble activity store is wired. Its writes go through NewWriters.
 	ActivityFilter activityFilterStore
 	// PlanReader reads the stored dry run an authority-build apply carries out.
 	PlanReader authorityPlanReader
@@ -445,7 +445,7 @@ func (p *Plugin) t6g1HeadStandDown(rep sdk.Reporter) func(ctx context.Context, r
 	}
 }
 
-// t6g1HeadStore is HEAD's t6g1Store: the plugin's OpsStore plus the reads that
+// t6g1HeadStore is HEAD's store: the plugin's OpsStore plus the reads that
 // are a helper over it rather than a method of it.
 type t6g1HeadStore struct{ OpsStore }
 
@@ -498,7 +498,7 @@ func (a t6g1HeadActivity) ReconcileFilterIndexCoverage(ctx context.Context, prog
 	return rec.ReconcileFilterIndexCoverage(ctx, progress)
 }
 
-// t6g1HeadWriter is HEAD's t6g1Writer: the writes go straight to the plugin's
+// t6g1HeadWriter is HEAD's writer: the writes go straight to the plugin's
 // store, as they did before the cores existed.
 type t6g1HeadWriter struct{ OpsStore }
 

@@ -277,8 +277,8 @@ func (p *Plugin) authorTitleFragmentNative(deps t6g1Deps, sched func(tasks.Kind)
 		Common: c,
 		Run: func(rc *tasks.RC, _ json.RawMessage) (struct{}, error) {
 			env := authorTitleFragmentEnv{t6g1Env: t6g1NativeEnv(rc)}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.TitleFragment != nil {
+				env.Store = deps.Stores.TitleFragment
 			}
 			return struct{}{}, authorTitleFragmentScanCore(rc.Context(), env)
 		},

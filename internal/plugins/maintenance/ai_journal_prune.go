@@ -210,7 +210,7 @@ func (p *Plugin) pruneAIJournalNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 			env := pruneAIJournalEnv{
 				t6g1Env:     t6g1NativeEnv(rc),
 				DefaultDays: deps.AIJournalRetentionDays(),
-				Writer:      deps.NewWriter(rc.Writer()),
+				Writer:      deps.NewWriters(rc.Writer()).PruneAIJournal,
 			}
 			res, err := pruneAIJournalCore(rc.Context(), params, env)
 			if res == nil {

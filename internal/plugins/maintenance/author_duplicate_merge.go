@@ -205,13 +205,13 @@ func (p *Plugin) authorDuplicateMergeNative(deps t6g1Deps, sched func(tasks.Kind
 		Run: func(rc *tasks.RC, np authorDuplicateMergeNativeParams) (struct{}, error) {
 			env := authorDuplicateMergeEnv{
 				t6g1Env:                t6g1NativeEnv(rc),
-				Writer:                 deps.NewWriter(rc.Writer()),
+				Writer:                 deps.NewWriters(rc.Writer()).Merge,
 				AcquireStandDown:       t6g1NativeStandDown(rc, deps.StandDownKey),
 				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,
 				InvalidateDedupCache:   deps.InvalidateDedupCache,
 			}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.DuplicateMerge != nil {
+				env.Store = deps.Stores.DuplicateMerge
 			}
 			return struct{}{}, authorDuplicateMergeCore(rc.Context(), np.Names, env)
 		},

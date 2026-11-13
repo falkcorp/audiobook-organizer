@@ -23,9 +23,9 @@ import (
 )
 
 // t6g1Recorder is the writer a test hands the kinds: it records the calls that
-// reach it and the tasks.Writer NewWriter was given.
+// reach it and the tasks.Writer NewWriters was given.
 type t6g1Recorder struct {
-	t6g1Writer // nil: a call the test did not expect panics
+	t6g1MergeWriter // nil: a call the test did not expect panics
 
 	mu      sync.Mutex
 	renames []string
@@ -43,14 +43,14 @@ func (r *t6g1Recorder) MoveCredits(string, authormerge.CreditMove) (authormerge.
 }
 
 // t6g1JokerStore holds one stranded author, "& Joker", and no author "Joker".
-type t6g1JokerStore struct{ t6g1Store }
+type t6g1JokerStore struct{ authorConjunctionRepairStore }
 
 func (t6g1JokerStore) GetAllAuthors() ([]database.Author, error) {
 	return []database.Author{{ID: 7, Name: "& Joker"}, {ID: 8, Name: "Batman"}}, nil
 }
 func (t6g1JokerStore) GetAuthorByName(string) (*database.Author, error) { return nil, nil }
 
-// t6g1Probe records how the native shells called deps.NewWriter.
+// t6g1Probe records how the native shells called deps.NewWriters.
 type t6g1Probe struct {
 	mu       sync.Mutex
 	calls    int
@@ -61,13 +61,13 @@ type t6g1Probe struct {
 
 func (p *t6g1Probe) deps() t6g1Deps {
 	return t6g1Deps{
-		Store: t6g1JokerStore{},
-		NewWriter: func(w tasks.Writer) t6g1Writer {
+		Stores: t6g1Stores{ConjunctionRepair: t6g1JokerStore{}},
+		NewWriters: func(w tasks.Writer) t6g1Writers {
 			p.mu.Lock()
 			defer p.mu.Unlock()
 			p.calls++
 			p.given = w
-			return p.recorder
+			return t6g1Writers{Merge: p.recorder}
 		},
 		AIJournalRetentionDays: func() int { return 30 },
 		InvalidateAuthorsCache: func() { p.mu.Lock(); p.caches++; p.mu.Unlock() },
@@ -255,11 +255,11 @@ func TestT6G1Kinds_WritesThroughShell(t *testing.T) {
 	require.Empty(t, probe.recorder.renames, "a preview wrote")
 	require.Zero(t, probe.caches, "a preview dropped the caches")
 
-	// Live renames through the writer NewWriter built over the run's writer.
+	// Live renames through the writer NewWriters built over the run's writer.
 	probe.calls = 0
 	require.NoError(t, runT6G1Kind(t, conj, tasks.ModeLive, gate, ""))
 	require.Equal(t, 1, probe.calls)
-	require.Same(t, gate, probe.given, "NewWriter must be given the run's writer")
+	require.Same(t, gate, probe.given, "NewWriters must be given the run's writer")
 	require.Len(t, probe.recorder.renames, 1)
 	require.Contains(t, probe.recorder.renames[0], "& Joker->Joker")
 	require.Positive(t, probe.caches, "a live write drops the caches")

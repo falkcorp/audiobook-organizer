@@ -386,13 +386,13 @@ func (p *Plugin) authorSplitScanNative(deps t6g1Deps, sched func(tasks.Kind) *ta
 			items := t6g1NativeItems(rc)
 			env := authorSplitEnv{
 				t6g1Env:              base,
-				Writer:               deps.NewWriter(rc.Writer()),
+				Writer:               deps.NewWriters(rc.Writer()).AuthorSplit,
 				Items:                items,
 				Hold:                 t6g1NativeHold(rc, base, items, deps.StandDownKey),
 				InvalidateDedupCache: deps.InvalidateDedupCache,
 			}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.AuthorSplit != nil {
+				env.Store = deps.Stores.AuthorSplit
 			}
 			return struct{}{}, authorSplitScanCore(rc.Context(), env)
 		},
@@ -821,8 +821,8 @@ func (p *Plugin) resolveProductionAuthorsNative(deps t6g1Deps, sched func(tasks.
 			} else {
 				env.Fetch = t6g1NoFetcher{}
 			}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.ResolveProduction != nil {
+				env.Store = deps.Stores.ResolveProduction
 			}
 			return struct{}{}, resolveProductionAuthorsCore(rc.Context(), env)
 		},

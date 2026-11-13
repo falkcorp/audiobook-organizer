@@ -276,11 +276,11 @@ func (p *Plugin) purgeEmptyAuthorsNative(deps t6g1Deps, sched func(tasks.Kind) *
 		Run: func(rc *tasks.RC, np purgeEmptyAuthorsNativeParams) (struct{}, error) {
 			env := purgeEmptyAuthorsEnv{
 				t6g1Env:          t6g1NativeEnv(rc),
-				Writer:           deps.NewWriter(rc.Writer()),
+				Writer:           deps.NewWriters(rc.Writer()).PurgeEmpty,
 				AcquireStandDown: t6g1NativeStandDown(rc, deps.StandDownKey),
 			}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.PurgeEmpty != nil {
+				env.Store = deps.Stores.PurgeEmpty
 			}
 			params := purgeEmptyAuthorsParams{RequireZeroFiles: np.RequireZeroFiles, Limit: np.Limit}
 			return struct{}{}, purgeEmptyAuthorsCore(rc.Context(), params, env)

@@ -311,8 +311,8 @@ func (p *Plugin) authorWhitespaceCollisionNative(deps t6g1Deps, sched func(tasks
 		Common: c,
 		Run: func(rc *tasks.RC, _ json.RawMessage) (struct{}, error) {
 			env := authorWhitespaceCollisionEnv{t6g1Env: t6g1NativeEnv(rc)}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.WhitespaceCollision != nil {
+				env.Store = deps.Stores.WhitespaceCollision
 			}
 			return struct{}{}, authorWhitespaceCollisionReportCore(rc.Context(), env)
 		},

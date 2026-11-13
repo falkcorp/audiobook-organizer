@@ -221,12 +221,12 @@ func (p *Plugin) authorConjunctionRepairNative(deps t6g1Deps, sched func(tasks.K
 		Run: func(rc *tasks.RC, np authorConjunctionRepairNativeParams) (struct{}, error) {
 			env := authorConjunctionRepairEnv{
 				t6g1Env:                t6g1NativeEnv(rc),
-				Writer:                 deps.NewWriter(rc.Writer()),
+				Writer:                 deps.NewWriters(rc.Writer()).Merge,
 				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,
 				InvalidateDedupCache:   deps.InvalidateDedupCache,
 			}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.ConjunctionRepair != nil {
+				env.Store = deps.Stores.ConjunctionRepair
 			}
 			return struct{}{}, authorConjunctionRepairCore(rc.Context(), np.SkipAuthorIDs, env)
 		},

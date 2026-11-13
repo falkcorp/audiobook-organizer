@@ -279,7 +279,7 @@ func (p *Plugin) activityFilterIndexBackfillNative(deps t6g1Deps, sched func(tas
 			}
 			env := activityFilterEnv{
 				t6g1Env:        t6g1NativeEnv(rc),
-				Writer:         deps.NewWriter(rc.Writer()),
+				Writer:         deps.NewWriters(rc.Writer()).ActivityFilter,
 				Items:          t6g1NativeItems(rc),
 				SaveCheckpoint: func(state any) error { return rc.Checkpoint(state) },
 			}

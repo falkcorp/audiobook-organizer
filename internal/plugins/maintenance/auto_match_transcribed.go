@@ -184,8 +184,8 @@ func (p *Plugin) autoMatchTranscribedNative(deps t6g1Deps, sched func(tasks.Kind
 			if deps.NewTranscriptionRunners != nil {
 				env.Runners = deps.NewTranscriptionRunners(rc.Writer())
 			}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.AutoMatch != nil {
+				env.Store = deps.Stores.AutoMatch
 			}
 			return struct{}{}, autoMatchTranscribedCore(rc.Context(), params, env)
 		},

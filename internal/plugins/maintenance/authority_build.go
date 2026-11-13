@@ -278,15 +278,15 @@ func (p *Plugin) authorityBuildNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 			}
 			env := authorityBuildEnv{
 				t6g1Env: t6g1NativeEnv(rc),
-				Writer:  deps.NewWriter(rc.Writer()),
+				Writer:  deps.NewWriters(rc.Writer()).AuthorityBuild,
 				Plans:   deps.PlanReader,
 				Items:   t6g1NativeItems(rc),
 				ApplyParams: func(planOpID string) map[string]any {
 					return map[string]any{"plan_op_id": planOpID}
 				},
 			}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.AuthorityBuild != nil {
+				env.Store = deps.Stores.AuthorityBuild
 			}
 			out, err := runAuthorityBuildCore(rc.Context(), params, !env.Live, env, time.Now())
 			if out == nil {

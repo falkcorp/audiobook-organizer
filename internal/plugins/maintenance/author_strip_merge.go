@@ -551,11 +551,11 @@ func (p *Plugin) authorStripMergeNative(deps t6g1Deps, sched func(tasks.Kind) *t
 		Run: func(rc *tasks.RC, np authorStripMergeNativeParams) (struct{}, error) {
 			env := authorStripMergeEnv{
 				t6g1Env:    t6g1NativeEnv(rc),
-				Writer:     deps.NewWriter(rc.Writer()),
+				Writer:     deps.NewWriters(rc.Writer()).StripMerge,
 				ManualOnly: deps.ManualOnly,
 			}
-			if deps.Store != nil {
-				env.Store = deps.Store
+			if deps.Stores.StripMerge != nil {
+				env.Store = deps.Stores.StripMerge
 			}
 			params := authorStripMergeParams{
 				Limit: np.Limit, DeleteJunk: np.DeleteJunk, DeleteUnmatched: np.DeleteUnmatched,
