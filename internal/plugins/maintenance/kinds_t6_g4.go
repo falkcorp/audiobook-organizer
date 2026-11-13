@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
+	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/rbac"
@@ -107,6 +109,7 @@ type t6g4Writer interface {
 	t6g4BookFilesBatchWrites
 	t6g4RegroupWrites
 	t6g4DurationWrites
+	t6g4TranscribeWrites
 }
 
 // t6g4BookFileReads is the book_file read the file-integrity scan makes.
@@ -244,6 +247,15 @@ type t6g4FileIntroWrites interface {
 	RecordIntroTimeout(bookID, fileID string, s database.IntroTimeoutStrike) (database.IntroTimeoutOutcome, error)
 	ClearIntroTimeouts(bookID, fileID, sourceHash string) (cleared bool, err error)
 	PutFileIntroStats(*database.FileIntroStats) error
+}
+
+// t6g4TranscribeWrites are the per-book intro transcription's two writes beyond
+// the shared groups: the run's persisted counters (a no-op where the store has no
+// stats key, as HEAD's nil sink was) and the whisper result journal, which is a
+// write-through key/value store.
+type t6g4TranscribeWrites interface {
+	PutTranscribeStats(*database.TranscribeStats) error
+	OpenWhisperJournal() (transcribe.ResultJournal, error)
 }
 
 // t6g4BookModifyWrites is ModifyBook: a write of the book row's own columns
@@ -775,6 +787,24 @@ func (h headT6G4Writer) PutFileIntroStats(st *database.FileIntroStats) error {
 	return sink.PutFileIntroStats(st)
 }
 
+// PutTranscribeStats is best effort, as HEAD's sink was: a store without the
+// capability persists no counters.
+func (h headT6G4Writer) PutTranscribeStats(st *database.TranscribeStats) error {
+	sink, ok := database.AsCapability[database.TranscribeStatsStore](h.store)
+	if !ok {
+		return nil
+	}
+	return sink.PutTranscribeStats(st)
+}
+
+func (h headT6G4Writer) OpenWhisperJournal() (transcribe.ResultJournal, error) {
+	j, err := resultjournal.New(h.store, whisperJournalKind)
+	if err != nil {
+		return nil, err
+	}
+	return j, nil
+}
+
 func (h headT6G4Writer) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	return h.store.ModifyBook(id, fn)
 }
@@ -842,27 +872,22 @@ func (p *Plugin) t6g4Kinds(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule
 		return sched(k)
 	}
 	return []tasks.Definition{
-		p.integrityCheckKind(deps, at(integrityCheckKind)),
-		p.identIndexKind(deps, at(identIndexKind)),
 		p.aiDedupBatchKind(deps, at(aiDedupBatchKind)),
 		p.dedupExactTriageKind(deps, at(dedupExactTriageKind)),
+		p.dedupeBookFileRowsKind(deps, at(dedupeBookFileRowsKind)),
+		p.durationBackfillKind(deps, at(durationBackfillKind)),
 		p.extractWAVClipsKind(deps, at(extractWAVClipsKind)),
+		p.fileIntroTranscribeKind(deps, at(fileIntroKind)),
 		p.fileProvenanceCaptureKind(deps, at(fileProvenanceCaptureKind)),
 		p.fileProvenanceExportKind(deps, at(fileProvenanceExportKind)),
 		p.filePathCollisionReportKind(deps, at(filePathCollisionReportKind)),
-		p.introMigrateSingleFileKind(deps, at(introMigrateSingleFileKind)),
-		p.dedupeBookFileRowsKind(deps, at(dedupeBookFileRowsKind)),
-		p.fileIntroTranscribeKind(deps, at(fileIntroKind)),
 		p.fsRegroupXMLKind(deps, at(fsRegroupKind)),
-		p.durationBackfillKind(deps, at(durationBackfillKind)),
+		p.identIndexKind(deps, at(identIndexKind)),
+		p.integrityCheckKind(deps, at(integrityCheckKind)),
+		p.introMigrateSingleFileKind(deps, at(introMigrateSingleFileKind)),
+		p.introTranscribeNativeKind(deps, at(introTranscribeKind)),
 	}
 }
-
-// t6g4Parallelism is rule R4's Parallelism of each converted in-body loop, by
-// kind: the value the kind's native shell passes to tasks.RunItems and the
-// parity test compares with HEAD's RunItemsOptions. A kind with no in-body loop
-// has no entry.
-var t6g4Parallelism = map[tasks.Kind]tasks.Parallelism{}
 
 // t6g4KindsRoot names t6g4Kinds from non-test code so tasklint's unregistered-kind
 // rule counts it a registration root until F5-18's Registrar.Tasks call replaces
