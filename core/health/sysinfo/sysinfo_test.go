@@ -1,5 +1,5 @@
 // file: core/health/sysinfo/sysinfo_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e5f2b8a4-3c71-4d96-b0e8-9a4d6c1f7b35
 // last-edited: 2026-11-13
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,7 +171,16 @@ func TestParseProcessStart(t *testing.T) {
 	if !got.Equal(want) {
 		t.Errorf("start = %v, want %v", got, want)
 	}
+	// A sub-second remainder survives: 150001 ticks is 1500.01 s.
+	frac := strings.Replace(stat, " 150000 ", " 150001 ", 1)
+	if got, want := parseProcessStart(frac, "btime 1700000000\n"), time.Unix(1700000000, 10_000_000).Add(1500*time.Second); !got.Equal(want) {
+		t.Errorf("start with a remainder = %v, want %v", got, want)
+	}
+	// A corrupt /proc cannot overflow the arithmetic: a huge starttime or boot
+	// time is malformed, not a wrapped time.
+	huge := strings.Replace(stat, " 150000 ", " 18446744073709551615 ", 1)
 	for _, c := range []struct{ stat, proc string }{
+		{huge, "btime 1700000000\n"}, {stat, "btime 9223372036854775807\n"}, {stat, "btime -5\n"},
 		{"", "btime 1"}, {"1 (x) S 1 2", "btime 1"}, {stat, ""}, {stat, "btime nope\n"},
 	} {
 		if !parseProcessStart(c.stat, c.proc).IsZero() {
