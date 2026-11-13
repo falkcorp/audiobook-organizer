@@ -1,5 +1,5 @@
 // file: core/integrations/notify/deliver_test.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: b8d24f6a-3e17-4c90-a5b2-9f0e7d1c4a63
 // last-edited: 2026-11-13
 
@@ -7,6 +7,7 @@ package notify_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -224,7 +225,10 @@ func TestDeliver_EntryOlderThanMaxAgeDeadLettered(t *testing.T) {
 func TestDeliver_IntegrationsDisabledKeepsEntryPending(t *testing.T) {
 	var off atomic.Bool
 	off.Store(true)
-	r := newRig(t, rigOpts{metrics: true, disabled: &off, notifyCfg: func(c *notify.Config) { c.MaxAttempts = 1 }})
+	// max_attempts is 2 and the first real send fails: if the refusals above
+	// had used attempts, that failure would be the last and dead-letter.
+	r := newRig(t, rigOpts{metrics: true, disabled: &off, notifyCfg: func(c *notify.Config) { c.MaxAttempts = 2 }})
+	r.fake.SendFn = failOnce(r.fake)
 	r.putRule(rule("roof", []string{signalName}, commissioner))
 	r.publish(signalNote("Joker"))
 
@@ -243,13 +247,14 @@ func TestDeliver_IntegrationsDisabledKeepsEntryPending(t *testing.T) {
 
 	off.Store(false)
 	r.clock.advance(2 * time.Minute)
-	eventually(t, "the delivery once the switch is back", func() bool { return r.fake.Sent() == 1 })
+	eventually(t, "the failed send and its retry once the switch is back", func() bool { return r.fake.Sent() == 2 })
 	stays(t, "never dead-lettered", 150*time.Millisecond, func() bool { return len(r.dead()) == 0 })
 }
 
 // The same holds for one instance switched off.
 func TestDeliver_DisabledInstanceKeepsEntryPending(t *testing.T) {
-	r := newRig(t, rigOpts{metrics: true, notifyCfg: func(c *notify.Config) { c.MaxAttempts = 1 }})
+	r := newRig(t, rigOpts{metrics: true, notifyCfg: func(c *notify.Config) { c.MaxAttempts = 2 }})
+	r.fake.SendFn = failOnce(r.fake)
 	cfg, ok := r.reg.Config(commissioner)
 	if !ok {
 		t.Fatal("no commissioner instance")
@@ -272,7 +277,46 @@ func TestDeliver_DisabledInstanceKeepsEntryPending(t *testing.T) {
 		t.Fatalf("enable: %v", err)
 	}
 	r.clock.advance(2 * time.Minute)
-	eventually(t, "the delivery once it is back", func() bool { return r.fake.Sent() == 1 })
+	eventually(t, "the failed send and its retry once it is back", func() bool { return r.fake.Sent() == 2 })
+	stays(t, "never dead-lettered", 150*time.Millisecond, func() bool { return len(r.dead()) == 0 })
+}
+
+// failOnce is a SendFn whose first send fails transiently and whose later
+// sends succeed.
+func failOnce(f *notifytest.FakeNotifier) func(context.Context, notify.Notification, notify.Target) error {
+	return func(_ context.Context, _ notify.Notification, tg notify.Target) error {
+		if f.Sent() <= 1 {
+			return notifytest.Fail(tg.Instance, integrations.ClassTransient, 503, 0)
+		}
+		return nil
+	}
+}
+
+// A switch that goes off between the lease and the send is the same case: the
+// refusal the adapter raises at send time keeps the entry's attempts too.
+func TestDeliver_DisabledAtSendKeepsAttempts(t *testing.T) {
+	r := newRig(t, rigOpts{metrics: true, notifyCfg: func(c *notify.Config) { c.MaxAttempts = 2 }})
+	r.fake.SendFn = func(_ context.Context, _ notify.Notification, tg notify.Target) error {
+		switch n := r.fake.Sent(); {
+		case n <= 3:
+			return fmt.Errorf("the switch went off: %w", integrations.ErrDisabled)
+		case n == 4:
+			return notifytest.Fail(tg.Instance, integrations.ClassTransient, 503, 0)
+		}
+		return nil
+	}
+	r.putRule(rule("roof", []string{signalName}, commissioner))
+	r.publish(signalNote("Bane"))
+	// Three refusals, then a transient failure, then the send: max_attempts 2
+	// is only enough for the last two if the refusals cost nothing.
+	eventually(t, "the fifth send", func() bool {
+		r.clock.advance(2 * time.Minute)
+		return r.fake.Sent() == 5
+	})
+	stays(t, "never dead-lettered", 150*time.Millisecond, func() bool { return len(r.dead()) == 0 })
+	if got := counted(r, commissioner, "disabled"); got != 3 {
+		t.Errorf("deliveries_total{disabled} = %v, want 3", got)
+	}
 }
 
 // core.notify.max_age still applies to an entry held back by the switch.
