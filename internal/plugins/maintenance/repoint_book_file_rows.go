@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
 // last-edited: 2026-11-13
 
@@ -362,6 +362,15 @@ type rbfNativeStore struct {
 	rbfWriter
 }
 
+// rbfRetiredShim gives the run's reader the retired-inclusive row list the claims
+// pass asks for by capability: the reader is held as the narrow rbfReader, which
+// hides the capability, so it is resolved through the store's decorators here.
+type rbfRetiredShim struct{ rbfReader }
+
+func (s rbfRetiredShim) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return database.AllBookFilesCoreIncludingRetired(s.rbfReader)
+}
+
 // rbfPreviewWriter stands in for the writer in a Preview run, which must not
 // write: a dry run never reaches the apply phase, so this only fires on a bug.
 type rbfPreviewWriter struct{}
@@ -418,7 +427,7 @@ func (p *Plugin) repointBookFileRowsNative(deps t6g6Deps, sched func(tasks.Kind)
 			if live && deps.NewWriter != nil {
 				w = deps.NewWriter(rc.Writer())
 			}
-			env := rbfEnv{store: rbfNativeStore{deps.Store, w}, itunesRoots: roots}
+			env := rbfEnv{store: rbfNativeStore{rbfRetiredShim{deps.Store}, w}, itunesRoots: roots}
 			core := t6g6NativeEnv(rc)
 			core.StandDown = t6g6NativeStandDown(rc, deps.StandDownKey)
 			report, runErr := repointBookFileRowsCore(rc.Context(), env, params, core)

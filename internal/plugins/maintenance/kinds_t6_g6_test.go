@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-13
 
@@ -386,7 +386,10 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 			wantPrio = tasks.PriorityHigh
 		}
 		require.Equal(t, wantPrio, c.Priority, "%s priority", id)
-		require.Equal(t, r.head.Timeout, c.Timeout, "%s timeout", id)
+		// The kernel refuses a Timeout over tasks.MaxTimeout, so a def with a
+		// longer one (library-optimize's 36h) runs capped natively.
+		wantTimeout := min(r.head.Timeout, tasks.MaxTimeout)
+		require.Equal(t, wantTimeout, c.Timeout, "%s timeout", id)
 		require.Equal(t, r.head.ProgressTimeout, c.ProgressTimeout, "%s progress timeout", id)
 		require.Equal(t, tasks.Key("books."+r.head.ConcurrencyKey), c.ConcurrencyKey, "%s concurrency key", id)
 

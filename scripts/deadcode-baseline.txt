@@ -674,6 +674,7 @@ internal/plugins/maintenance.rbfParallelism
 internal/plugins/maintenance.rbfPreviewWriter.CreateOperationChange
 internal/plugins/maintenance.rbfPreviewWriter.ModifyBookFile
 internal/plugins/maintenance.rbfPreviewWriter.RecomputeBookAggregates
+internal/plugins/maintenance.rbfRetiredShim.GetAllBookFilesCoreIncludingRetired
 internal/plugins/maintenance.rebuildOpChangeBookIndex
 internal/plugins/maintenance.recompactActivityDigestsParallelism
 internal/plugins/maintenance.reconcileFixer.reader
