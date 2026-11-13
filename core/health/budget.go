@@ -1,5 +1,5 @@
 // file: core/health/budget.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 91c4e7a2-5d38-4f60-8b1e-2a9d6c3f7e84
 // last-edited: 2026-11-13
 
@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime"
 	"time"
 )
 
@@ -29,6 +28,10 @@ const (
 	defaultHTTPDrain  = 10 * time.Second // core.shutdown.http_drain
 	defaultTasksDrain = 10 * time.Second // core.tasks.shutdown_drain
 	defaultBusClose   = 2 * time.Second  // core.events.close_drain
+
+	// abandonGrace is how long Run waits, after a bounded phase's context
+	// ends, for the phase to return before it abandons it.
+	abandonGrace = 50 * time.Millisecond
 )
 
 // DefaultShutdownBudget is core.shutdown.budget: configured when a layer set it
@@ -149,14 +152,22 @@ func (b *StopBudget) slice(phase StopPhase) (d time.Duration, bounded bool, err 
 // expired context, so it can still do work that needs none.
 //
 // The deadline is a bound on how long Run takes, not only a signal to fn: a
-// bounded phase that has not returned when its context ends is abandoned (the
-// goroutine is left to finish or die with the process, as a health check that
-// overruns its timeout is, 05-health 5H.9) and Run returns an error wrapping
-// ErrPhaseAbandoned and the context's error. Without that a phase that ignores
-// its context, a drain stuck in a syscall, would carry the whole shutdown past
-// core.shutdown.budget and the supervisor's SIGKILL would land before the
-// storage close. An abandoned phase's context is cancelled for good when Run
-// returns.
+// bounded phase that has not returned abandonGrace after its context ends is
+// abandoned (the goroutine is left to finish or die with the process, as a
+// health check that overruns its timeout is, 05-health 5H.9) and Run returns an
+// error wrapping ErrPhaseAbandoned and the context's error. Without that a
+// phase that ignores its context, a drain stuck in a syscall, would carry the
+// whole shutdown past core.shutdown.budget and the supervisor's SIGKILL would
+// land before the storage close. An abandoned phase's context is cancelled for
+// good when Run returns.
+//
+// The grace is what lets a phase that honours its context return its own error
+// instead of being reported as abandoned: it needs a scheduling turn after the
+// deadline to notice it, which a loaded host does not always give within one
+// yield. The price is a bounded overrun: a phase that is abandoned takes its
+// slice plus abandonGrace, so the six bounded phases together can run at most
+// 6 x abandonGrace (300ms) past the total, and the storage close starts that much
+// later. A phase that returns in time pays nothing.
 //
 // PhaseStorage is the exception: it runs synchronously, after the cap if need
 // be, with a context the budget never cancels, and is never abandoned (Pebble's
@@ -189,15 +200,14 @@ func (b *StopBudget) Run(ctx context.Context, phase StopPhase, fn func(context.C
 	select {
 	case err = <-done:
 	case <-ctx.Done():
-		// A phase that honours its context returns at the same instant the
-		// deadline fires; give it one scheduling turn so that is usually not
-		// reported as an abandonment. Best effort: one that has not been
-		// scheduled by then is abandoned, which costs a log line and nothing
-		// else, since its error would have been the context's anyway.
-		runtime.Gosched()
+		// A phase that honours its context returns when the deadline fires;
+		// give it abandonGrace to get scheduled and say so before it is
+		// reported as abandoned. One that has not returned by then is stuck.
+		grace := time.NewTimer(abandonGrace)
+		defer grace.Stop()
 		select {
 		case err = <-done:
-		default:
+		case <-grace.C:
 			took := b.now().Sub(start)
 			b.m.recordPhase(string(phase), took)
 			if b.log != nil {

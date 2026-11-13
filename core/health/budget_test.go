@@ -1,5 +1,5 @@
 // file: core/health/budget_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b8f4d6e-9c13-4a57-8e0d-1f7c3a5b9d28
 // last-edited: 2026-11-13
 
@@ -186,16 +186,21 @@ func TestStopBudget_PhaseIgnoringContextIsAbandoned(t *testing.T) {
 			}
 			abandoned++
 		}
-		if total := time.Since(start); total > 25*time.Second {
-			t.Errorf("phases took %s in all, over the 25s total", total)
+		// Each abandoned phase takes its slice plus the grace; the grace of one
+		// phase is time the later remainder phases no longer have, so only the
+		// capped phases keep their caps.
+		total := time.Since(start)
+		if total < 25*time.Second || total > 25*time.Second+6*abandonGrace {
+			t.Errorf("phases took %s in all, want the 25s total plus at most 6 x %s", total, abandonGrace)
 		}
-		want := map[StopPhase]time.Duration{
-			PhaseHTTPDrain: 10 * time.Second, PhaseTasksDrain: 10 * time.Second, PhaseBusClose: 2 * time.Second,
-			PhaseWorkers: time.Second, PhaseHooks: time.Second, PhaseRealtime: time.Second,
+		for p, w := range map[StopPhase]time.Duration{PhaseHTTPDrain: 10 * time.Second, PhaseTasksDrain: 10 * time.Second, PhaseBusClose: 2 * time.Second} {
+			if took[p] != w+abandonGrace {
+				t.Errorf("%s took %s, want its %s cap plus the %s grace", p, took[p], w, abandonGrace)
+			}
 		}
-		for p, w := range want {
-			if took[p] != w {
-				t.Errorf("%s took %s, want %s", p, took[p], w)
+		for _, p := range []StopPhase{PhaseWorkers, PhaseHooks, PhaseRealtime} {
+			if took[p] <= abandonGrace || took[p] > time.Second+abandonGrace {
+				t.Errorf("%s took %s, want a share of what is left (over the grace, at most 1s) plus the grace", p, took[p])
 			}
 		}
 		if abandoned != 6 {
@@ -231,10 +236,10 @@ func TestStopBudget_StoragePhaseIsNeverAbandoned(t *testing.T) {
 
 // TestStopBudget_PhaseThatReturnsInTimeIsNotAbandoned: a phase that returns
 // before its deadline is a normal return with its own result, and one that
-// returns what its context says at the deadline still reports the deadline
-// (whether Run saw it return or had already given up on it, the error wraps
-// context.DeadlineExceeded; which of the two it is depends on scheduling at that
-// instant, so only the invariant is asserted).
+// returns what its context says at the deadline reports the deadline, never an
+// abandonment. The grace makes the boundary exact: a phase that is up to
+// abandonGrace late still returns its own result, one later than that is
+// abandoned.
 func TestStopBudget_PhaseThatReturnsInTimeIsNotAbandoned(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := NewStopBudget(10*time.Second, StopLimits{HTTPDrain: time.Second}, nil)
@@ -250,9 +255,24 @@ func TestStopBudget_PhaseThatReturnsInTimeIsNotAbandoned(t *testing.T) {
 			<-ctx.Done()
 			return ctx.Err()
 		})
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Errorf("a phase that honoured its deadline: err = %v, want DeadlineExceeded", err)
+		if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrPhaseAbandoned) {
+			t.Errorf("a phase that honoured its deadline: err = %v, want DeadlineExceeded and no abandonment", err)
 		}
+
+		late := func(phase StopPhase, after time.Duration) error {
+			b := NewStopBudget(10*time.Second, StopLimits{BusClose: time.Second}, nil)
+			return b.Run(context.Background(), phase, func(context.Context) error {
+				time.Sleep(time.Second + after) // ignores ctx, returns after the deadline
+				return boom
+			})
+		}
+		if err := late(PhaseBusClose, abandonGrace/2); !errors.Is(err, boom) || errors.Is(err, ErrPhaseAbandoned) {
+			t.Errorf("a phase %s past its deadline: err = %v, want its own error inside the grace", abandonGrace/2, err)
+		}
+		if err := late(PhaseBusClose, 2*abandonGrace); !errors.Is(err, ErrPhaseAbandoned) {
+			t.Errorf("a phase %s past its deadline: err = %v, want abandoned after the grace", 2*abandonGrace, err)
+		}
+		time.Sleep(time.Minute) // let the abandoned phase end before the bubble does
 	})
 }
 
