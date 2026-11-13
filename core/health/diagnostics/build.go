@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/build.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0e48d09a-7583-4133-9749-d96bbfaf2aa5
 // last-edited: 2026-11-13
 
@@ -311,9 +311,29 @@ func BundleFile(runID string) string { return runID + ".zip" }
 // Export is the kind's Run: it matches InterimExport.Export, so F8's native
 // body keeps the types, and reports progress per section.
 func (e *Exporter) Export(rc *tasks.RC, p ExportParams) (ExportResult, error) {
+	if err := checkStampedActor(rc.Actor(), p); err != nil {
+		e.countBundle("error")
+		return ExportResult{}, err
+	}
 	return e.Build(rc.Context(), string(rc.RunID()), p, func(done, total int) {
 		rc.Progress().Set(int64(done), tasks.Known(int64(total)))
 	})
+}
+
+// ErrActorMismatch is the refusal of a run whose params name a different actor
+// than the one the executor stamped on the run.
+var ErrActorMismatch = errors.New("diagnostics: params name a different actor than the run's")
+
+// checkStampedActor refuses a run whose p.ActorID is not the person the
+// executor recorded as having started it. The params are client-supplied; the
+// stamped actor is not (tasks.Actor: never derived from an unsigned header).
+// A run with no stamped person (a system actor) has nothing to compare, and its
+// bundle is still limited to what ViewerFor says the named actor may read.
+func checkStampedActor(stamped tasks.Actor, p ExportParams) error {
+	if stamped.UserID != "" && stamped.UserID != p.ActorID {
+		return ErrActorMismatch
+	}
+	return nil
 }
 
 // Build writes the bundle for runID. progress (nil allowed) is called after
@@ -414,18 +434,28 @@ func (e *Exporter) Build(ctx context.Context, runID string, p ExportParams, prog
 	return ExportResult{File: final, Redactions: m.Redactions}, nil
 }
 
-// viewer is the run's viewer: the permissions carried in p, resolved when the
-// request was made, or, for params without them, the actor's as ViewerFor
-// resolves them now.
+// viewer is the run's viewer: the actor's permissions as ViewerFor resolves
+// them now, narrowed to p.Perms when the request carried a snapshot.
+//
+// p.Perms can only narrow. It is a task parameter, and a task's params are
+// whatever the start request supplied, so a snapshot is never trusted to grant:
+// a permission is held only when the actor holds it now AND the snapshot lists
+// it. A role change between the request and the run therefore removes
+// permissions from the bundle and a forged or stale snapshot cannot add any.
+// An actor ViewerFor cannot resolve (deleted since the request) fails the run
+// closed.
 func (e *Exporter) viewer(ctx context.Context, p ExportParams) (Viewer, error) {
-	if p.Perms != nil {
-		return ViewerOf(p.ActorID, p.Perms), nil
-	}
 	v, err := e.cfg.ViewerFor(ctx, p.ActorID)
 	if err != nil {
 		return Viewer{}, fmt.Errorf("diagnostics: resolve viewer: %w", err)
 	}
 	v.ActorID = p.ActorID
+	if p.Perms == nil {
+		return v, nil
+	}
+	snap := ViewerOf(p.ActorID, p.Perms)
+	now := v.Can
+	v.Can = func(perm rbac.Permission) bool { return now != nil && now(perm) && snap.Can(perm) }
 	return v, nil
 }
 
