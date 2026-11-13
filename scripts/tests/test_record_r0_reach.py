@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.0.1
+# version: 1.1.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -108,6 +108,7 @@ class FakeR0:
         self.defs_start_status = 400
         self.awaiting = ["run-1"]
         self.dead = False
+        self.peers: list[str] = []  # the client address of every request
         self.stream_path: str | None = None  # an event stream: headers, then heartbeats forever
         self.lock = threading.Lock()
         outer = self
@@ -166,6 +167,7 @@ class FakeR0:
         h.wfile.write(raw)
 
     def handle(self, h) -> None:
+        self.peers.append(h.client_address[0])
         if self.stream_path and urlparse(h.path).path == self.stream_path:
             return self.stream(h)
         with self.lock:
@@ -426,6 +428,26 @@ class RecordPassTest(unittest.TestCase):
         last = len(self.rig.routes) - 1
         self.assertEqual(out["columns"][names.index("session:admin")][last], 200)
         self.assertEqual(out["columns"][names.index("anonymous")][last], 401)
+
+    def test_a_probe_can_come_from_its_own_source_address(self):
+        # R0 rate-limits each peer address and the limit is a stored setting, not
+        # an environment one: the recorder spreads its probes over 127/8 instead.
+        self.rig.fake.peers.clear()
+        status = rec.status_only(
+            self.rig.client, "GET", "/api/v1/health", None, "none", 10.0, source="127.0.0.1"
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(self.rig.fake.peers, ["127.0.0.1"])
+
+    def test_source_addresses_are_distinct_loopback_addresses(self):
+        src = rec.SourceIPs()
+        seen = [src.next() for _ in range(70000)]
+        self.assertEqual(len(set(seen)), len(seen))
+        for ip in seen[:300] + seen[-300:]:
+            parts = [int(x) for x in ip.split(".")]
+            self.assertEqual(parts[0], 127)
+            self.assertTrue(all(0 <= x <= 255 for x in parts))
+            self.assertNotIn(ip, ("127.0.0.0", "127.255.255.255"))
 
     def test_logout_ends_the_session_and_the_recorder_logs_in_again(self):
         out = self.rig.run()
