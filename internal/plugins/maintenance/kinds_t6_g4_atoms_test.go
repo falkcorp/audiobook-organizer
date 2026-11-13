@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_atoms_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b9e0d7a-52c3-4f18-8a6d-1e7c3b95a0f2
 // last-edited: 2026-11-13
 
@@ -11,6 +11,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
+	"github.com/falkcorp/mediacore/rbac"
 )
 
 // TestT6G4StartRequirement_MatchesSettingsManageAtom: the scopes group 4's kinds
@@ -29,8 +30,12 @@ func TestT6G4StartRequirement_MatchesSettingsManageAtom(t *testing.T) {
 	if len(want) == 0 {
 		t.Fatal("AtomTable has no settings.manage row")
 	}
+	req := maintenance.T6G4StartRequirement()
+	if req.Kind() != rbac.KindAllOf {
+		t.Errorf("group 4 start requirement kind = %v, want AllOf (HEAD's settings.manage needs every scope)", req.Kind())
+	}
 	var got []string
-	for _, s := range maintenance.T6G4StartRequirement().Permissions() {
+	for _, s := range req.Permissions() {
 		got = append(got, string(s))
 	}
 	if !slices.Equal(got, want) {

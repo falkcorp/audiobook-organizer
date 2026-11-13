@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-13
 
@@ -712,7 +712,7 @@ func t6g4CheckScheduleHookAndParallelism(t *testing.T) {
 		conc int
 		want tasks.Parallelism
 	}{
-		{0, tasks.Sequential("r")}, {1, tasks.Sequential("r")}, {6, tasks.Fixed(6, "r")}, {t6g4CPU, tasks.CPU()},
+		{0, tasks.Sequential("r")}, {1, tasks.Sequential("r")}, {2, tasks.Fixed(2, "r")}, {6, tasks.Fixed(6, "r")}, {t6g4CPU, tasks.CPU()},
 	} {
 		if got := t6g4Par(t6g4EachOpts{Concurrency: c.conc}, "r"); got.String() != c.want.String() {
 			t.Errorf("t6g4Par(%d) = %s, want %s", c.conc, got, c.want)
