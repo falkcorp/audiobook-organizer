@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_oracle_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c27d5a40-9e18-4b63-8f02-3a6d1e7b9c54
 // last-edited: 2026-11-13
 
@@ -180,7 +180,7 @@ type reachWho struct {
 func reachRolePatterns(t testing.TB, snap *idSnap, roles []rbac.RoleName) []rbac.Permission {
 	t.Helper()
 	seeds := map[string][]rbac.Permission{}
-	for _, s := range idSeedRoles() {
+	for _, s := range reachSeedRoles() {
 		seeds[s.ID] = s.Permissions
 	}
 	var out []rbac.Permission
@@ -256,6 +256,24 @@ type reachGate struct {
 	delegated   bool // OwnAuth: enforced inside the ABS handler, outside this oracle
 	req         rbac.Requirement
 	interactive bool // Guards.Interactive: a key and the auth-disabled principal are refused first
+	owner       bool // Guards.Owner: no OwnerVerifier is configured here, so 05-authn 4.8's fallback
+	handler     bool // the handler itself checks core:admin (reachHandlerAdmin)
+}
+
+// reachHandlerAdmin are the routes whose handler, not the router, refuses a
+// caller that does not hold core:admin. At HEAD each tests the admin role by
+// name and that a key may act as admin; 05-rbac 4.6 moves each to
+// rbac.Can(ctx, core:admin) with key scoping, "never adminRole", and says so
+// for these: the merge handlers' mergeActor, including the two reads that are not
+// credential routes (GET /users/:id/footprint, GET /users/merges), and the
+// role-name checks of handlers/user.go (SetUserEmail, whose route's users.manage
+// "is not enough"). The oracle's route-level gate cannot see a handler, so the
+// check is pinned here from the spec; it is a claim about code that F4-08 or
+// the handler migration (04) writes, and unproven until then (seams.d/F4-07.md).
+var reachHandlerAdmin = map[string]string{
+	"GET /api/v1/users/:id/footprint": "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:97-99)",
+	"GET /api/v1/users/merges":        "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:190-192)",
+	"PUT /api/v1/users/:id/email":     "05-rbac 4.6: SetUserEmail checks core:admin in place of the admin role name (handlers/user.go:285,453)",
 }
 
 // reachUnenforced are the atoms no route enforces: books' table gives them a
@@ -266,7 +284,8 @@ var reachUnenforced = map[string]bool{"playlists.create": true}
 // LegacyAtom becomes AllOf every scope of the atom's row. A route whose atom
 // the table lacks, or no route may enforce, is an error, never a gate.
 func reachResolve(atoms []m3.AtomRow, lr httpapi.LegacyRoute) (reachGate, error) {
-	g := reachGate{req: lr.Perm, interactive: lr.Guards.Interactive, delegated: lr.OwnAuth}
+	_, handler := reachHandlerAdmin[lr.Method+" "+lr.GinPath]
+	g := reachGate{req: lr.Perm, interactive: lr.Guards.Interactive, owner: lr.Guards.Owner, handler: handler, delegated: lr.OwnAuth}
 	if lr.Perm.Kind() == rbac.KindDelegated {
 		g.delegated = true
 	}
@@ -293,7 +312,7 @@ func reachResolve(atoms []m3.AtomRow, lr httpapi.LegacyRoute) (reachGate, error)
 }
 
 // allows is stage 13's decision: the interactive guard first (a key and
-// auth-off never pass it), then the requirement. A Public route is open to
+// auth-off never pass it), the owner guard's fallback, then the requirement. A Public route is open to
 // every principal, the anonymous one included.
 func (g reachGate) allows(w reachWho) bool {
 	if g.req.Kind() == rbac.KindPublic {
@@ -303,6 +322,16 @@ func (g reachGate) allows(w reachWho) bool {
 		return false
 	}
 	if g.interactive && !w.chk.interactive {
+		return false
+	}
+	// Guards.Owner needs an owner-assurance principal, which only an
+	// OwnerVerifier sets, and core ships none (05-authn 4.8). With
+	// core.auth.owner.required=false, its default when no verifier is
+	// configured, the guard falls back to Interactive plus core:admin.
+	if g.owner && (!w.chk.interactive || !w.chk.has(rbac.CoreAdmin)) {
+		return false
+	}
+	if g.handler && !w.chk.has(rbac.CoreAdmin) {
 		return false
 	}
 	return w.chk.satisfies(g.req)
@@ -393,7 +422,9 @@ func reachDiff(r0 *reachR0Doc, r2 *reachR2) reachDiffResult {
 			res.r0Only = append(res.r0Only, k)
 			continue
 		}
-		for i := range r0.Principals {
+		// A route has a letter per principal; a task start or approval has one
+		// per principal the recorder asked (not the auth-disabled one).
+		for i := range r.Verdict {
 			res.compared++
 			if r.Verdict[i] != v2[i] {
 				res.cells = append(res.cells, reachCell{route: k, principal: r0.Principals[i], r0: r.Verdict[i], r2: v2[i]})
@@ -422,7 +453,9 @@ func reachMigrate(t testing.TB, pd *reachPrincipalsDoc, atoms []m3.AtomRow) (*id
 	t.Helper()
 	seed := &reachSeed{}
 	rig := newIDRig(t, "overlay", seed.option(pd.Principals), func(r *idRig) {
-		r.config = func(c *m3.Config) { c.Atoms = atoms }
+		r.config = func(c *m3.Config) {
+			c.Atoms, c.SeedRoles, c.Catalog, c.Ambient = atoms, reachSeedRoles(), reachCatalog(t), reachAmbient()
+		}
 	})
 	snap, err := rig.run(t)
 	if err != nil {
@@ -439,11 +472,30 @@ func reachMigrate(t testing.TB, pd *reachPrincipalsDoc, atoms []m3.AtomRow) (*id
 // are one table, except in the mutation checks that change one and not the other.
 func reachCompare(t testing.TB, pd *reachPrincipalsDoc, vd *reachR0Doc, m3Atoms, routeAtoms []m3.AtomRow) (reachDiffResult, []reachWho) {
 	t.Helper()
+	res, whos, _ := reachRun(t, pd, vd, m3Atoms, routeAtoms)
+	return res, whos
+}
+
+// reachRun is reachCompare that also returns R2's letters, route by route
+// (the recorded task starts and approvals included as pseudo-routes).
+func reachRun(t testing.TB, pd *reachPrincipalsDoc, vd *reachR0Doc, m3Atoms, routeAtoms []m3.AtomRow) (reachDiffResult, []reachWho, *reachR2) {
+	t.Helper()
 	snap, seed := reachMigrate(t, pd, m3Atoms)
-	whos := reachWhos(t, snap, seed, pd.Principals, idCatalog(t))
-	r2, err := reachEvaluate(routeAtoms, reachManifest(), whos)
+	whos := reachWhos(t, snap, seed, pd.Principals, reachCatalog(t))
+	routes := reachManifest()
+	r2, err := reachEvaluate(routeAtoms, routes, whos)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return reachDiff(vd, r2), whos
+	tasks, err := reachTaskVerdicts(routeAtoms, routes, vd, whos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The recorded starts and approvals join the routes as pseudo-routes.
+	withTasks := *vd
+	withTasks.Routes = append(slices.Clone(vd.Routes), reachTaskRoutes(vd, tasks)...)
+	for k, v := range tasks {
+		r2.verdict[k] = v
+	}
+	return reachDiff(&withTasks, r2), whos, r2
 }
