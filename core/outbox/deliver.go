@@ -1,7 +1,7 @@
 // file: core/outbox/deliver.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2a6ad2a4-6bc1-4f3b-b7f1-0ee9e2bb7d3f
-// last-edited: 2026-11-12
+// last-edited: 2026-11-13
 
 package outbox
 
@@ -139,21 +139,35 @@ func backoffDelay(attempt int, lo, hi time.Duration, u float64) time.Duration {
 
 // failurePlan decides what a failed delivery leads to: a dead letter at once
 // for a permanent error, or when this was the last allowed attempt; otherwise
-// the time of the next try.
-func (o *Outbox) failurePlan(reg *consumerReg, cfg Config, attempt int, err error) (dead bool, token string, next time.Time) {
+// the time of the next try (the handler's RetryAfter/RetryFree hint, else the
+// backoff curve) and the attempts the message has used after this failure,
+// which is one less than attempt for a RetryFree failure.
+func (o *Outbox) failurePlan(reg *consumerReg, cfg Config, attempt int, err error) (dead bool, token string, next time.Time, used int) {
 	token, permanent := classify(err)
+	if permanent {
+		return true, token, time.Time{}, attempt
+	}
+	hint, hinted := hintOf(err)
+	if hinted && hint.free {
+		// The delivery was never really tried: the message keeps the attempts
+		// it had, and nothing here can reach the limit.
+		return false, token, o.now().Add(hint.after), attempt - 1
+	}
 	limit := cfg.MaxAttempts
 	if reg.cfg.maxAttempts > 0 {
 		limit = reg.cfg.maxAttempts
 	}
-	if permanent || attempt >= limit {
-		return true, token, time.Time{}
+	if attempt >= limit {
+		return true, token, time.Time{}, attempt
+	}
+	if hinted {
+		return false, token, o.now().Add(hint.after), attempt
 	}
 	lo, hi := cfg.BackoffMin, cfg.BackoffMax
 	if reg.cfg.backoffMin > 0 {
 		lo, hi = reg.cfg.backoffMin, reg.cfg.backoffMax
 	}
-	return false, token, o.now().Add(backoffDelay(attempt, lo, hi, o.rnd()))
+	return false, token, o.now().Add(backoffDelay(attempt, lo, hi, o.rnd())), attempt
 }
 
 // ackInto records that the pair took over the message at seq: the cursor moves
@@ -611,6 +625,7 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 	var dead bool
 	var next time.Time
 	var token string
+	var used int
 	err := storage.RetryOnConflict(ctx, settleAttempts, func(ctx context.Context) (err error) {
 		b := o.store.OpenBatch()
 		defer closeBatch(b, &err)
@@ -622,7 +637,7 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 			out = outStale
 			return nil
 		}
-		dead, token, next = o.failurePlan(reg, r.cfg, attempt, herr)
+		dead, token, next, used = o.failurePlan(reg, r.cfg, attempt, herr)
 		if dead {
 			d := outboxstore.Dead{Msg: row.Msg, Part: p.PP, Token: token, Attempts: attempt, At: o.now().UTC()}
 			if err := o.store.StageDead(ctx, b, reg.name, ti.name, row.Seq, d); err != nil {
@@ -630,7 +645,7 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 			}
 			ackInto(&st, row.Seq)
 		} else {
-			st.Try.Entries = []outboxstore.TryEntry{{Seq: row.Seq, Attempt: attempt, NextAt: next.UTC(), Token: token}}
+			st.Try.Entries = []outboxstore.TryEntry{{Seq: row.Seq, Attempt: used, NextAt: next.UTC(), Token: token}}
 		}
 		if err := o.store.StagePair(b, p, st, o.now()); err != nil {
 			return err
@@ -923,7 +938,7 @@ func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo
 				}
 				continue
 			}
-			dead, token, next := o.failurePlan(reg, r.cfg, it.attempt, it.res.err)
+			dead, token, next, used := o.failurePlan(reg, r.cfg, it.attempt, it.res.err)
 			if dead {
 				d := outboxstore.Dead{Msg: it.row.Msg, Part: p.PP, Token: token, Attempts: it.attempt, At: o.now().UTC()}
 				if err := o.store.StageDead(ctx, b, reg.name, ti.name, seq, d); err != nil {
@@ -933,7 +948,7 @@ func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo
 				cnt.dead++
 				continue
 			}
-			entries[seq] = outboxstore.TryEntry{Seq: seq, Attempt: it.attempt, NextAt: next.UTC(), Token: token}
+			entries[seq] = outboxstore.TryEntry{Seq: seq, Attempt: used, NextAt: next.UTC(), Token: token}
 			cnt.retried++
 			if cnt.next.IsZero() || next.Before(cnt.next) {
 				cnt.next = next
