@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -46,6 +46,7 @@ import json
 import pathlib
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import urllib.error
@@ -86,10 +87,35 @@ ALLOW, DENY = "A", "D"
 # What each principal sees as a denial. R0's middleware answers 401 for no or an
 # unusable credential and 403 for an authenticated principal lacking the atom.
 DENY_STATUSES = frozenset({401, 403})
-# A route whose authorized probe legitimately answers 5xx would be listed here,
-# by "METHOD /path", with the reason. Populated only from an observed run: a 5xx
-# is otherwise a recorder failure (the probe did not reach a verdict).
-OK_5XX: dict[str, str] = {}
+# A route whose authorized probe answers 5xx, by "METHOD /path", with the reason.
+# Authorization runs before the handler, so a 5xx is an allow: the request was let
+# through and the handler then failed on the recorder's dummy id or empty body, or
+# on a service the throwaway store has not configured. Any 5xx not listed here is
+# a recorder failure (the probe did not reach a verdict), and a listed route must
+# answer 401 to the anonymous caller (check_5xx_follows_authorization), which is
+# what shows the 5xx came after the decision. Each reason is R0's own message in
+# the serve log of the run that observed it (run 43391356590).
+OK_5XX: dict[str, str] = {
+    "POST /api/v1/ai/scans": "500 AI scan pipeline not configured",
+    "POST /api/v1/ai/scans/:id/cancel": "500 AI scan pipeline not configured",
+    "POST /api/v1/ai/test-connection": "500 connection test failed (no AI provider configured)",
+    "PUT /api/v1/audiobooks/:id": "500 failed to update audiobook (the dummy id has no row)",
+    "POST /api/v1/audiobooks/:id/apply-metadata": "500 failed to apply metadata (no row)",
+    "POST /api/v1/audiobooks/:id/mark-no-match": "500 failed to mark no match (no row)",
+    "POST /api/v1/audiobooks/:id/parse-with-ai": "500 no AI provider configured",
+    "POST /api/v1/audiobooks/:id/quarantine": "500 quarantine failed (no row)",
+    "DELETE /api/v1/audiobooks/:id/quarantine": "500 unquarantine failed (no row)",
+    "POST /api/v1/audiobooks/:id/retired-versions/:vid/restore": (
+        "501 restoring a retired version is not available yet"
+    ),
+    "DELETE /api/v1/backup/:filename": "500 failed to delete backup (no such file)",
+    "POST /api/v1/dedup/fingerprint-rescan": "503 no fingerprint backend (fpcalc / ffmpeg) found",
+    "GET /api/v1/deluge/labels": "502 the Deluge host does not resolve (an unconfigured client)",
+    "POST /api/v1/deluge/test-connection": "502 the Deluge host does not resolve",
+    "GET /api/v1/deluge/torrents": "502 the Deluge host does not resolve",
+    "POST /api/v1/operations/:id/revert": "500 failed to revert operation (no such operation)",
+    "POST /api/v1/update/apply": "500 failed to apply update (no update staged)",
+}
 
 ADMIN_USER = "lucius.fox"  # the corpus' admin-role user, whose session mints keys
 USERS: dict[str, tuple[str, str]] = {
@@ -203,7 +229,8 @@ def verdict_of(status: int, key: str) -> str:
     """401/403 -> D; any other status below 500 -> A. Else the run is wrong."""
     if status == 429:
         raise RecorderError(f"{key}: 429 (the rate limiter is on): not a verdict")
-    if status >= 500 and key not in OK_5XX:
+    route = key.split(" ", 1)[1] if " " in key else key  # "<principal> METHOD /path"
+    if status >= 500 and route not in OK_5XX:
         raise RecorderError(
             f"{key}: {status}: a probe that fails after authorization must answer below 500"
         )
@@ -499,6 +526,30 @@ def check_no_drift(before: dict[str, Any], after: dict[str, Any]) -> None:
 # ---------------------------------------------------------------- the pass
 
 
+def check_5xx_follows_authorization(
+    routes: list[dict[str, Any]],
+    principals: list[dict[str, Any]],
+    columns: list[list[int]],
+    ok_5xx: dict[str, str] | None = None,
+) -> None:
+    """A route listed in OK_5XX is an allow only because its 5xx came after the
+    decision: the anonymous caller, who never passes it, must be refused."""
+    listed = OK_5XX if ok_5xx is None else ok_5xx
+    names = [p["name"] for p in principals]
+    if "anonymous" not in names:
+        return
+    anon = columns[names.index("anonymous")]
+    bad = [
+        f"{r['method']} {r['path']}: anonymous got {anon[i]}, not a refusal"
+        for i, r in enumerate(routes)
+        if f"{r['method']} {r['path']}" in listed and anon[i] not in DENY_STATUSES
+    ]
+    if bad:
+        raise RecorderError(
+            "OK_5XX route(s) whose 5xx is not shown to follow authorization:\n" + "\n".join(bad)
+        )
+
+
 def record_pass(
     make_probe: Callable[[dict[str, Any]], Probe],
     principals: list[dict[str, Any]],
@@ -512,6 +563,7 @@ def record_pass(
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         futures = [pool.submit(probe_principal, p, routes) for p in probes]
         columns = [f.result() for f in futures]  # a failure in any worker raises here
+    check_5xx_follows_authorization(routes, principals, columns)
     out: dict[str, Any] = {"columns": columns}
     if do_tasks:
         out["tasks"] = probe_tasks(probes, task_defs(admin))
@@ -731,8 +783,21 @@ def boot_and_record(
         admin = probes["session:admin"]
         return record_pass(lambda p: probes[p["name"]], mine, routes, admin, args.workers, True)
     finally:
-        proc.stop()
+        stop_throwaway(proc)
         keep_log(layout, f"{args.workdir.rstrip('/')}-logs", "off" if auth_off else "on")
+
+
+def stop_throwaway(proc: Any) -> None:
+    """Stop R0 and discard its store: the recording is already in memory, so a
+    shutdown that hangs or exits non-zero is logged and the process killed."""
+    try:
+        proc.stop(timeout=60.0)
+    except (subprocess.TimeoutExpired, w.CorpusError) as e:
+        print(f"R0 did not stop cleanly ({type(e).__name__}); killing it", file=sys.stderr)
+        if proc.proc is not None and not proc.docker:
+            proc.proc.kill()
+            proc.proc.wait()
+            proc.proc = None
 
 
 def keep_log(layout: Any, dest: str, boot: str) -> None:
