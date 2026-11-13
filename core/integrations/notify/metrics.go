@@ -1,5 +1,5 @@
 // file: core/integrations/notify/metrics.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 91d4c7a2-5e08-4b3f-a6d1-0f83e2b7c5a4
 // last-edited: 2026-11-13
 
@@ -46,11 +46,21 @@ func deliveryBuckets() []float64 {
 const (
 	resultResolved = "resolved"
 	resultNoRule   = "no_rule"
+	resultDisabled = "disabled" // a rule named a channel that is switched off
 )
 
-// deadScanPages bounds the dead-letter gauge's scan: at most this many pages of
-// 500 are read per collection, so a scrape never walks an unbounded backlog.
-const deadScanPages = 10
+// deadScanPages and deadPageSize bound the dead-letter gauge's scan: at most
+// this many pages are read per scrape, so a scrape never walks an unbounded
+// backlog. ListDead has no consumer filter, so other consumers' dead letters
+// use the same budget.
+const (
+	deadScanPages = 10
+	deadPageSize  = 500
+)
+
+// unattributedInstance labels the dead letters the gauge could count but not
+// attribute to an instance: what the page budget cut off (see deadCounts).
+const unattributedInstance = "unattributed"
 
 func newInstruments(sc *metrics.Scope, ob *outbox.Outbox) (*instruments, error) {
 	var m metric.Meter
@@ -92,12 +102,12 @@ func newInstruments(sc *metrics.Scope, ob *outbox.Outbox) (*instruments, error) 
 		return nil, fmt.Errorf("notify: dead-letter gauge: %w", err)
 	}
 	if _, err := m.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
-		counts, err := deadByInstance(ctx, ob)
+		counts, err := deadCounts(ctx, ob, deadScanPages, deadPageSize)
 		if err != nil {
 			return err
 		}
-		for ref, n := range counts {
-			o.ObserveInt64(dead, int64(n), metric.WithAttributeSet(attribute.NewSet(attribute.String("instance", ref.String()))))
+		for label, n := range counts {
+			o.ObserveInt64(dead, int64(n), metric.WithAttributeSet(attribute.NewSet(attribute.String("instance", label))))
 		}
 		return nil
 	}, dead); err != nil {
@@ -106,13 +116,19 @@ func newInstruments(sc *metrics.Scope, ob *outbox.Outbox) (*instruments, error) 
 	return in, nil
 }
 
-// deadByInstance tallies the dead letters of core.notify.deliver by the
-// instance their payload names, reading at most deadScanPages pages.
-func deadByInstance(ctx context.Context, ob *outbox.Outbox) (map[integrations.Ref]int, error) {
-	out := map[integrations.Ref]int{}
-	after := ""
-	for range deadScanPages {
-		letters, next, err := ob.ListDead(ctx, after, 500)
+// deadCounts tallies the dead letters of core.notify.deliver by the instance
+// their payload names, reading at most pages pages of pageSize. When the scan
+// reaches the end of the dead letters the tally is exact. When the budget runs
+// out first, the rest is unknown by instance, so the outbox's own count of the
+// consumer's dead letters (which needs no payloads) gives the total and the
+// difference is reported as instance="unattributed": the series still sum to
+// the real number rather than under-reporting it. That total is itself capped
+// by the outbox's status bound, so under a very large backlog it is a floor.
+func deadCounts(ctx context.Context, ob *outbox.Outbox, pages, pageSize int) (map[string]int, error) {
+	out := map[string]int{}
+	after, truncated := "", false
+	for range pages {
+		letters, next, err := ob.ListDead(ctx, after, pageSize)
 		if err != nil {
 			return nil, err
 		}
@@ -122,13 +138,29 @@ func deadByInstance(ctx context.Context, ob *outbox.Outbox) (map[integrations.Re
 			}
 			var d Delivery
 			if json.Unmarshal(l.Payload, &d) == nil {
-				out[d.Target.Instance]++
+				out[d.Target.Instance.String()]++
 			}
 		}
 		if next == "" {
-			break
+			return out, nil
 		}
-		after = next
+		after, truncated = next, true
+	}
+	if !truncated {
+		return out, nil
+	}
+	st, err := ob.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tallied := 0
+	for _, n := range out {
+		tallied += n
+	}
+	for _, c := range st.Consumers {
+		if c.Name == DeliverConsumer && c.Dead > tallied {
+			out[unattributedInstance] = c.Dead - tallied
+		}
 	}
 	return out, nil
 }

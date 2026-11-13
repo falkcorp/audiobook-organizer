@@ -1,5 +1,5 @@
 // file: core/integrations/notify/metrics_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 41b7e9c3-2d60-4a85-8f13-e6a0c97d5b28
 // last-edited: 2026-11-13
 
@@ -42,5 +42,43 @@ func TestNotifyMetrics_SeriesGolden(t *testing.T) {
 	}
 	if got := sample(t, r.mp, "mediacore_notify_targets_total", map[string]string{"topic": vaultName, "result": "no_rule"}); got != 1 {
 		t.Errorf("targets_total{no_rule} = %v, want 1", got)
+	}
+}
+
+// The dead-letter gauge reads a bounded number of pages. Inside the budget its
+// per-instance tally is exact; past it, what it could not read is reported as
+// instance="unattributed" so the series still add up to the outbox's own count
+// instead of quietly under-reporting.
+func TestNotifyMetrics_DeadLetterGaugeSurvivesItsPageBudget(t *testing.T) {
+	r := newRig(t, rigOpts{metrics: true, notifyCfg: func(c *notify.Config) { c.MaxAttempts = 1 }})
+	r.fake.SendFn = func(_ context.Context, _ notify.Notification, tg notify.Target) error {
+		return notifytest.Fail(tg.Instance, integrations.ClassInvalid, 400, 0)
+	}
+	r.putRule(rule("roof", []string{signalName}, commissioner, alfred, oracle))
+	r.publish(signalNote("Riddler"))
+	eventually(t, "three dead letters", func() bool { return len(r.dead()) == 3 })
+
+	total := func(m map[string]int) (n int) {
+		for _, v := range m {
+			n += v
+		}
+		return n
+	}
+	exact, err := notify.DeadCounts(context.Background(), r.ob, 10, 500)
+	must(t, err)
+	if total(exact) != 3 || exact[commissioner.String()] != 1 || exact[alfred.String()] != 1 || exact[oracle.String()] != 1 {
+		t.Fatalf("an unbudgeted scan = %v, want one per instance", exact)
+	}
+	if _, ok := exact["unattributed"]; ok {
+		t.Errorf("an exact scan reported an unattributed remainder: %v", exact)
+	}
+
+	cut, err := notify.DeadCounts(context.Background(), r.ob, 1, 1) // one dead letter read, two cut off
+	must(t, err)
+	if total(cut) != 3 {
+		t.Errorf("a scan cut short counts %d dead letters (%v), want the real 3", total(cut), cut)
+	}
+	if cut["unattributed"] != 2 {
+		t.Errorf("unattributed = %d (%v), want the 2 the budget cut off", cut["unattributed"], cut)
 	}
 }

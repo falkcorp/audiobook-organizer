@@ -1,5 +1,5 @@
 // file: core/integrations/notify/deliver.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b1e94d8-2f07-4c35-8a73-d5c0e91b2f48
 // last-edited: 2026-11-13
 
@@ -50,9 +50,15 @@ func DeliveryTopicSpec() events.TopicSpec {
 const dispatchCeiling = 1 << 30
 
 // retryFreeDelay is how long an entry waits when its channel could not be
-// tried because the integrations switch or the instance is off: the entry
-// stays pending, and no attempt is used, until someone turns it back on.
+// tried because the global core.integrations.disabled switch is on: the entry
+// stays pending, and no attempt is used, until someone turns it back on. (An
+// instance that is switched off is different: see disabledRetry.)
 const retryFreeDelay = time.Minute
+
+// defaultRetryAfterMax caps a receiver's Retry-After when neither the instance
+// nor its adapter sets integrations.Limits.RetryAfterMax; it is providerhttp's
+// own default.
+const defaultRetryAfterMax = 5 * time.Minute
 
 // Consumer returns the handler of DeliveryTopic: register it with
 // Outbox.Register("core", notify.Consumer(svc)) (and list DeliverConsumer in
@@ -78,11 +84,13 @@ func (s *Service) deliver(ctx context.Context, m outbox.Message[Delivery]) error
 
 	nr, release, err := integrations.Lease[Notifier](ctx, s.o.Registry, ref)
 	if err != nil {
+		if ctx.Err() != nil {
+			// The relay is stopping: not a verdict on the channel, and no
+			// attempt. The relay leaves the entry pending on shutdown.
+			return err
+		}
 		if errors.Is(err, integrations.ErrDisabled) {
-			// The switch (or this instance) is off. Nothing was tried, so keep
-			// the entry pending and keep its attempts for when it is on.
-			s.inst.delivery(ref, "disabled", "", -1)
-			return outbox.RetryFree(retryFreeDelay, err)
+			return s.disabledRetry(m, cfg, ref, err)
 		}
 		s.inst.delivery(ref, classLabel(ctx, err), "", -1)
 		return s.retryOrDeadLetter(m, cfg, err, 0)
@@ -102,24 +110,34 @@ func (s *Service) deliver(ctx context.Context, m outbox.Message[Delivery]) error
 		s.inst.delivery(ref, "ok", adapter, took)
 		return nil
 	}
+	if ctx.Err() != nil {
+		// The relay is stopping, so the send was cut short by us and says
+		// nothing about the channel: hand the error back untouched and use no
+		// attempt. This is decided on the relay's ctx, never on the send's: an
+		// adapter classifies against the send ctx, where its own 15s deadline
+		// looks like a cancellation.
+		s.inst.delivery(ref, integrations.ClassCanceled.String(), adapter, took)
+		return err
+	}
 	if errors.Is(err, integrations.ErrDisabled) {
-		// The switch went off between the lease and the send: the same case
-		// as a refused lease. Nothing reached the channel.
-		s.inst.delivery(ref, "disabled", "", -1)
-		return outbox.RetryFree(retryFreeDelay, err)
+		// The switch (or the instance) went off between the lease and the
+		// send: the same case as a refused lease. Nothing reached the channel.
+		return s.disabledRetry(m, cfg, ref, err)
 	}
 	class := integrations.ClassOf(ctx, err)
+	if class == integrations.ClassCanceled {
+		// The relay is alive, so a cancellation or deadline the adapter saw
+		// was the send's own timeout (a receiver that hangs): a transient
+		// failure, counted, and dead-lettered at max_attempts.
+		class = integrations.ClassTransient
+	}
 	s.inst.delivery(ref, class.String(), adapter, took)
 	s.log.Warn("notify: delivery failed", "instance", ref.String(), "topic", d.Notification.Topic,
 		"notification", d.Notification.ID, "class", class.String(), "attempt", m.Attempt)
 
 	switch class {
-	case integrations.ClassCanceled:
-		// The relay is stopping: not a verdict on the channel. Hand the error
-		// back untouched; the relay leaves the entry pending on shutdown.
-		return err
 	case integrations.ClassTransient, integrations.ClassRateLimited, integrations.ClassQuota:
-		return s.retryOrDeadLetter(m, cfg, err, retryAfterOf(err))
+		return s.retryOrDeadLetter(m, cfg, err, s.clampRetryAfter(ref, retryAfterOf(err)))
 	case integrations.ClassRefusedLocal:
 		if until, ok := refusalWait(s.now(), err); ok {
 			return s.retryOrDeadLetter(m, cfg, err, until)
@@ -128,6 +146,55 @@ func (s *Service) deliver(ctx context.Context, m outbox.Message[Delivery]) error
 	// Auth, Invalid, NotFound, Unsupported, BadOutput, Unknown, and a local
 	// refusal that waiting cannot lift (the egress guard): a human must act.
 	return fmt.Errorf("%w: %w", outbox.ErrPermanent, err)
+}
+
+// disabledRetry is the handler's answer to a refusal because integrations are
+// switched off. The global core.integrations.disabled switch is an operator
+// pause: nothing was tried, so the entry stays pending and keeps its attempts
+// (outbox.RetryFree). An instance that was switched off after the entry was
+// staged is a counted retry: Publish no longer stages deliveries for a
+// disabled instance, so this one is a channel the operator turned off with
+// work in flight, and its entries must not sit for max_age unaccounted, taking
+// slots of a partition other channels share. They retry on the outbox's
+// backoff and dead-letter at max_attempts, where an operator can retry them
+// once the channel is back.
+func (s *Service) disabledRetry(m outbox.Message[Delivery], cfg Config, ref integrations.Ref, err error) error {
+	s.inst.delivery(ref, "disabled", "", -1)
+	if s.instanceDisabled(ref) {
+		return s.retryOrDeadLetter(m, cfg, err, 0)
+	}
+	return outbox.RetryFree(retryFreeDelay, err)
+}
+
+// instanceDisabled reports whether the registry holds ref switched off.
+func (s *Service) instanceDisabled(ref integrations.Ref) bool {
+	ic, ok := s.o.Registry.Config(ref)
+	return ok && !ic.Enabled
+}
+
+// retryAfterMax is the longest a receiver's Retry-After is honoured for ref:
+// the instance's Limits.RetryAfterMax, else its adapter's, else 5 minutes.
+func (s *Service) retryAfterMax(ref integrations.Ref) time.Duration {
+	ic, ok := s.o.Registry.Config(ref)
+	if !ok {
+		return defaultRetryAfterMax
+	}
+	if ic.Limits != nil && ic.Limits.RetryAfterMax > 0 {
+		return ic.Limits.RetryAfterMax
+	}
+	for meta := range s.o.Registry.Adapters(ref.Kind) {
+		if meta.ID == ic.Adapter && meta.Limits.RetryAfterMax > 0 {
+			return meta.Limits.RetryAfterMax
+		}
+	}
+	return defaultRetryAfterMax
+}
+
+// clampRetryAfter bounds a Retry-After an adapter reported. An adapter's
+// answer is the remote's word, and one year is a legal value of the header:
+// the clamp is here, once, so every adapter has it.
+func (s *Service) clampRetryAfter(ref integrations.Ref, wait time.Duration) time.Duration {
+	return min(wait, s.retryAfterMax(ref))
 }
 
 // classLabel is the class label of an error the lease returned.
@@ -169,7 +236,12 @@ func (s *Service) retryOrDeadLetter(m outbox.Message[Delivery], cfg Config, err 
 		return fmt.Errorf("%w: gave up after %d attempts: %w", outbox.ErrPermanent, m.Attempt, err)
 	}
 	if wait > 0 {
-		return outbox.RetryAfter(wait, err)
+		// Never park an entry past the moment it expires: the next attempt
+		// then finds it past max_age and dead-letters it, instead of the
+		// entry holding one of its partition's retry slots for the length of
+		// a hold or a Retry-After.
+		remaining := max(cfg.MaxAge-s.now().Sub(m.EnqueuedAt), time.Second)
+		return outbox.RetryAfter(min(wait, remaining), err)
 	}
 	return err
 }

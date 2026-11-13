@@ -1,5 +1,5 @@
 // file: core/integrations/notify/service.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d27f8b03-4a96-4e51-b0c8-6e19a3f5d724
 // last-edited: 2026-11-13
 
@@ -221,18 +221,35 @@ func (s *Service) Publish(ctx context.Context, b *storage.Batch, n Notification)
 	n.Fields = cloneFields(n.Fields)
 	n.Links = slices.Clone(n.Links)
 
-	targets := s.rules.Load().resolve(n.Topic, n.Severity)
+	resolved := s.rules.Load().resolve(n.Topic, n.Severity)
+	targets := make([]Target, 0, len(resolved))
+	for _, t := range resolved {
+		// A channel that is switched off hears nothing: staging for it would
+		// park entries on a partition other channels share until max_age.
+		if !s.instanceDisabled(t.Instance) {
+			targets = append(targets, t)
+		}
+	}
+	if off := len(resolved) - len(targets); off > 0 {
+		s.inst.targets(n.Topic, resultDisabled, off)
+	}
 	if len(targets) == 0 {
-		// Nobody asked to hear it: nothing is staged, so there is no batch to
-		// write even when the caller passed none.
+		// Nobody is listening: no rule matched, or every channel a rule names
+		// is off. Nothing is staged, so there is no batch to write even when
+		// the caller passed none.
 		s.inst.published(n.Topic, n.Severity)
-		s.inst.targets(n.Topic, resultNoRule, 1)
+		if len(resolved) == 0 {
+			s.inst.targets(n.Topic, resultNoRule, 1)
+		}
 		return nil
 	}
 	stage := func(b *storage.Batch) error {
 		for _, t := range targets {
-			// The key is the target, so one channel's deliveries share a
-			// partition and a slow channel does not sit in another's.
+			// The partition key is the instance ref, so one channel's
+			// deliveries stay in order. Partitions are a hash of the key into
+			// a fixed 16, so two channels can still share one; the consumer is
+			// unordered, which is what keeps a retrying entry from blocking
+			// another channel's (up to the outbox's per-partition retry cap).
 			if err := outbox.Stage(s.w, b, DeliveryTopic(), t.Instance.String(), Delivery{Notification: n, Target: t}); err != nil {
 				return fmt.Errorf("notify: stage the delivery to %s: %w", t.Instance, err)
 			}
