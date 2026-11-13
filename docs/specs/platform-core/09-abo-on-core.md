@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.13.0 -->
+<!-- version: 1.13.1 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-13 -->
 
 # 09 — ABO on core: releases and the cutover
 
@@ -430,7 +430,11 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
   `/users/{id}/sessions*`, `/users/{id}/api-keys*`) and the audit routes answer 401 too, while the settings routes keep
   their auth-off reach (05-rbac §4.11): "With authentication off, credential, API-key, session, audit and backup
   routes now refuse requests; turn authentication on to use them." Playlist writes stay open to every signed-in user,
-  as at HEAD: `books:playlists.create` is not enforced on them (SEC-4). ABO's
+  as at HEAD: `books:playlists.create` is not enforced on them (SEC-4). An API key of an `fp-worker` user whose
+  scopes lie outside the worker scope reaches no route (HEAD let it reach the authenticated-only routes). An admin's
+  API key, the bootstrap key included, no longer reaches `PATCH /api/v1/admin/debug/books/:id`,
+  `PATCH /api/v1/admin/debug/book-files/:id` or `POST /api/v1/admin/debug/edits/:edit_id/undo`; use a signed-in
+  admin session. The debug read routes are unchanged. ABO's
   `core.auth.disabled_allow_remote` defaults to `true`, with health Degraded `auth_disabled_remote` (05-rbac
   §4.10–§4.11).
 

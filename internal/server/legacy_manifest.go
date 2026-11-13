@@ -1,7 +1,7 @@
 // file: internal/server/legacy_manifest.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 1f86291c-166f-4f94-92a6-26ebb4bef101
-// last-edited: 2026-11-08
+// last-edited: 2026-11-13
 
 package server
 
@@ -546,7 +546,7 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodPost, "/api/v1/cache/invalidate", pNeed("core:admin"), fRated},
 		{http.MethodGet, "/api/v1/cache/stats", pAtom("library.view"), fRated},
 		{http.MethodGet, "/api/v1/cache/stats/history", pAtom("library.view"), fRated},
-		{http.MethodGet, "/api/v1/cache/stats/keys", pNeed("core:system.view"), fRated},
+		{http.MethodGet, "/api/v1/cache/stats/keys", pNeed("books:admin.view"), fRated},
 		{http.MethodGet, "/api/v1/catalog/entries", pAtom("library.view"), fRated},
 		{http.MethodGet, "/api/v1/catalog/entries/:id", pAtom("library.view"), fRated},
 		{http.MethodGet, "/api/v1/collections", pAtom("library.view"), fRated},
