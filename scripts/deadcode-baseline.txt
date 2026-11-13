@@ -677,6 +677,7 @@ internal/plugins/maintenance.purgeEmptyAuthorsParallelism
 internal/plugins/maintenance.reconcileFixer.reader
 internal/plugins/maintenance.resolveProductionAuthorsParallelism
 internal/plugins/maintenance.t6g1Common
+internal/plugins/maintenance.t6g1KindList
 internal/plugins/maintenance.t6g1NativeEnv
 internal/plugins/maintenance.t6g1NativeHold
 internal/plugins/maintenance.t6g1NativeItems

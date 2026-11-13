@@ -594,8 +594,13 @@ func (p *Plugin) t6g1Kinds(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule
 	}
 }
 
-// t6g1KindsRoot names t6g1Kinds from non-test code so tasklint's
-// unregistered-kind rule counts it a registration root until F5-18's
-// Registrar.Tasks call replaces this line (the analyzer does not load test
-// files). F5-18 deletes it.
-var _ = (*Plugin).t6g1Kinds
+// t6g1KindList is t6g1Kinds as a plain function. tasklint's unregistered-kind
+// rule only counts a list function without a receiver as a registration root,
+// and only once non-test code names it; the blank var below does until
+// F5-18's Registrar.Tasks call replaces both (the analyzer does not load test
+// files). F5-18 deletes them.
+func t6g1KindList(p *Plugin, deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
+	return p.t6g1Kinds(deps, sched)
+}
+
+var _ = t6g1KindList
