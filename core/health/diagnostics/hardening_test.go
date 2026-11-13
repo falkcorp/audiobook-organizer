@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
 // last-edited: 2026-11-13
 
@@ -489,8 +489,8 @@ func (a *actorRun) RunID() tasks.RunID { return tasks.RunID(a.id) }
 func (a *actorRun) Actor() tasks.Actor { return a.actor }
 
 // TestDiagnostics_MismatchedActorRefused: params naming an actor other than the
-// executor-stamped one are refused before any file is written; the matching
-// actor, and a system run with no stamped person, are not.
+// executor-stamped one are refused before any file is written, and so is a run
+// with no stamped person (fail closed); only the matching actor is not.
 func TestDiagnostics_MismatchedActorRefused(t *testing.T) {
 	f := newFixture(t)
 	e := f.exporter(viewerOf("core:system.manage"), diagnostics.CoreSources{})
@@ -509,8 +509,13 @@ func TestDiagnostics_MismatchedActorRefused(t *testing.T) {
 	if err := run("run-match", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}); err != nil {
 		t.Errorf("the stamped actor was refused: %v", err)
 	}
-	if err := run("run-system", tasks.Actor{System: "core"}, diagnostics.ExportParams{ActorID: "bruce"}); err != nil {
-		t.Errorf("a system run with no stamped person was refused: %v", err)
+	for name, stamped := range map[string]tasks.Actor{"run-system": {System: "core"}, "run-blank": {}} {
+		if err := run(name, stamped, diagnostics.ExportParams{ActorID: "bruce"}); !errors.Is(err, diagnostics.ErrActorMismatch) {
+			t.Errorf("%s: a run with no stamped person: err = %v, want ErrActorMismatch", name, err)
+		}
+		if _, serr := f.root.Stat(name + ".zip"); serr == nil {
+			t.Errorf("%s: a refused run wrote a bundle", name)
+		}
 	}
 }
 
