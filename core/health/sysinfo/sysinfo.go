@@ -1,5 +1,5 @@
 // file: core/health/sysinfo/sysinfo.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 747decc9-e246-4d80-92f1-e6a9faf4a284
 // last-edited: 2026-11-13
 
@@ -27,32 +27,39 @@ import (
 
 // Info is one reading of the host and the process.
 type Info struct {
-	App           string // set by the caller: Collect does not know the app's ID
-	Version       string
-	Commit        string
-	GoVersion     string
-	OS, Arch      string
-	NumCPU        int
-	GOMAXPROCS    int
-	Goroutines    int
-	Memory        Memory        // runtime.MemStats subset + process RSS + host total/available
-	ProcessUptime time.Duration // since the process started; 0 when the platform cannot say
-	SystemUptime  time.Duration // 0 when the platform cannot say
-	Roots         []RootSpace   // per library root: name, free/total bytes (via core/library)
-	Container     bool          // running in a container (affects updater policy, 05-updater)
+	App           string        `json:"app"` // set by the caller: Collect does not know the app's ID
+	Version       string        `json:"version"`
+	Commit        string        `json:"commit"`
+	GoVersion     string        `json:"go_version"`
+	OS            string        `json:"os"`
+	Arch          string        `json:"arch"`
+	NumCPU        int           `json:"num_cpu"`
+	GOMAXPROCS    int           `json:"gomaxprocs"`
+	Goroutines    int           `json:"goroutines"`
+	Memory        Memory        `json:"memory"`            // runtime.MemStats subset + process RSS + host total/available
+	ProcessUptime time.Duration `json:"process_uptime_ns"` // since the process started; 0 when the platform cannot say
+	SystemUptime  time.Duration `json:"system_uptime_ns"`  // 0 when the platform cannot say
+	Roots         []RootSpace   `json:"roots"`             // per library root: name, free/total bytes (via core/library)
+	Container     bool          `json:"container"`         // running in a container (affects updater policy, 05-updater)
 }
 
 // Memory is the process's and the host's memory, in bytes.
 type Memory struct {
-	HeapAlloc, HeapSys, Sys, RSS, HostTotal, HostAvailable uint64
-	NumGC                                                  uint32
+	HeapAlloc     uint64 `json:"heap_alloc"`
+	HeapSys       uint64 `json:"heap_sys"`
+	Sys           uint64 `json:"sys"`
+	RSS           uint64 `json:"rss"`
+	HostTotal     uint64 `json:"host_total"`
+	HostAvailable uint64 `json:"host_available"`
+	NumGC         uint32 `json:"num_gc"`
 }
 
 // RootSpace is one library root's capacity. A root that is disabled, unmounted
 // or slow to answer reports zeros.
 type RootSpace struct {
-	Name                  string
-	FreeBytes, TotalBytes uint64
+	Name       string `json:"name"`
+	FreeBytes  uint64 `json:"free_bytes"`
+	TotalBytes uint64 `json:"total_bytes"`
 }
 
 // rootTimeout bounds one root's statfs: a hung network mount must not hold the

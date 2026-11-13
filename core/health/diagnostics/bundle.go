@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-13
 
@@ -524,3 +524,7 @@ func (s *jsonlSink) Close() error {
 	}
 	return nil
 }
+
+// ValidSectionName reports whether n is a section name, "<moduleID>.<name>".
+// A start request is checked against it before a run is enqueued.
+func ValidSectionName(n string) bool { return validSectionName(n) }
