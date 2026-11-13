@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-13
 
@@ -126,8 +126,7 @@ func isRoute(run string) bool {
 // opposed to a line of prose). When the entire value is one clean absolute path
 // it is replaced as one, spaces and all, so "/Users/bruce/Library/Application
 // Support/app/db" does not leak its tail. A value that is more than that (a
-// second path later in the text, ": " and a message, a quoted string, a path
-// filepath.Clean would change) is prose that starts with a path, and goes to
+// second path later in the text, ": " and a message, a quoted string) is prose that starts with a path, and goes to
 // redactPaths so every path in it is rewritten and none of its text is lost to
 // the replacement. A newline, a value that is not path-shaped, and a route
 // take the same road.
@@ -150,12 +149,14 @@ func (r pathRoots) redactValue(s string) string {
 }
 
 // singlePath reports whether s, which starts as an absolute path, is nothing
-// but that path: no later path start, no ": " (a message after the path), no
-// double quote or backtick, and filepath.Clean leaves it as it is. An
-// apostrophe is a character of names ("/Music/Bruce's Mix"); a quoted second
-// path is caught by the later-path-start rule.
+// but that path: no later path start, no ": " (a message after the path) and no
+// double quote or backtick. How the path is spelled does not matter: a trailing
+// or doubled separator or a "/./" segment is still one path, and a space inside
+// it is part of a name, so a non-canonical value is not prose. An apostrophe is
+// a character of names ("/Music/Bruce's Mix"); a quoted second path is caught
+// by the later-path-start rule.
 func (r pathRoots) singlePath(s string) bool {
-	if strings.Contains(s, ": ") || strings.ContainsAny(s, "\"`") || filepath.Clean(s) != s {
+	if strings.Contains(s, ": ") || strings.ContainsAny(s, "\"`") {
 		return false
 	}
 	for i := 1; i < len(s); i++ {
@@ -301,16 +302,17 @@ func (r pathRoots) pathBoundary(s string, i int) bool {
 // path right after it, so "<path>/home/bruce/x" is a path to redact. A name no
 // root has is text someone wrote, not output of this rule.
 func (r pathRoots) endsRootPlaceholder(s string, i int) bool {
-	open := strings.LastIndexByte(s[:i-1], '<')
-	if open < 0 {
-		return false
+	// Compare the text before the ">" with each root's "<root:NAME" in place:
+	// no search back through the line, so a line of ">" costs O(roots) per
+	// character, not O(line).
+	const open = "<root:"
+	for _, root := range r {
+		start := i - (len(open) + len(root.Name) + 1)
+		if start >= 0 && s[start:start+len(open)] == open && s[start+len(open):i-1] == root.Name {
+			return true
+		}
 	}
-	name, ok := strings.CutPrefix(s[open:i], "<root:")
-	if !ok {
-		return false
-	}
-	name, ok = strings.CutSuffix(name, ">")
-	return ok && slices.ContainsFunc(r, func(root PathRoot) bool { return root.Name == name })
+	return false
 }
 
 // closingTag reports whether s[i] is the "/" of "</name>": tag-name characters
