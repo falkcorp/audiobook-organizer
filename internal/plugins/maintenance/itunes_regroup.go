@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.30.3
+// version: 1.31.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -91,6 +92,81 @@ func (p *Plugin) itunesRegroupDef() sdk.OperationDef {
 	}
 }
 
+// itunesRegroupKind is the native kind of itunes.regroup (F5-10).
+const itunesRegroupKind tasks.Kind = "books.itunes.regroup"
+
+// regroupReporter is the two reporter calls the regroup's snapshot and apply
+// make; sdk.Reporter satisfies it, and the native engine's run does through
+// regroupEnv.reporter.
+type regroupReporter interface {
+	Log(level slog.Level, msg string, attrs ...slog.Attr) error
+	UpdateProgress(done, total int, msg string) error
+}
+
+// itunesRegroupReader is the reads the regroup makes.
+type itunesRegroupReader interface {
+	itunesRegroupSnapshotReader
+	regroupBookReader
+	regroupManualOnlyReader
+	database.RetiredBookFileReader
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	// LibraryReadPath is the configured iTunes library path (HEAD:
+	// config.AppConfig.ITunes.LibraryReadPath), the default for xmlPath.
+	LibraryReadPath() string
+}
+
+// itunesRegroupWriter is the writes the regroup makes.
+type itunesRegroupWriter interface {
+	regroupBookMutator
+	regroupFileMover
+	itunesBookCreator
+	itunesExternalIDReassigner
+	// UserProgress is the merge user-state store the empty-book delete carries
+	// listening state through (HEAD: Deps.MergeUserStateStore).
+	UserProgress() merge.UserProgressMerger
+}
+
+// regroupNativeStore is the run's store over a reader and a writer: the
+// itunesRegroupStore the apply takes, with the retired-row reader the delete
+// guard needs.
+type regroupNativeStore struct {
+	itunesRegroupReader
+	itunesRegroupWriter
+}
+
+// regroupEnv is what the regroup's core needs from its engine.
+type regroupEnv struct {
+	t6g5Base
+	// RootDir is the library root.
+	RootDir string
+	// NewStore returns the run's store and the user-state lookup for the delete
+	// pass, refusing a run whose wiring is incomplete.
+	NewStore func() (regroupCoreStore, func(itunesRegroupStore) merge.UserProgressMerger, error)
+}
+
+// regroupCoreStore is what the core holds: the apply's store and the
+// snapshot's reads.
+type regroupCoreStore interface {
+	itunesRegroupStore
+	itunesRegroupSnapshotReader
+}
+
+// regroupEnvReporter is a regroupReporter over the env.
+type regroupEnvReporter struct{ env t6g5Base }
+
+func (r regroupEnvReporter) Log(level slog.Level, msg string, _ ...slog.Attr) error {
+	r.env.Log(level, msg)
+	return nil
+}
+func (r regroupEnvReporter) UpdateProgress(done, total int, msg string) error {
+	r.env.Progress(done, total, msg)
+	return nil
+}
+
+func (e regroupEnv) reporter() regroupReporter { return regroupEnvReporter{e.t6g5Base} }
+
+// runITunesRegroup is the v2 shell: HEAD's decode, dry-run resolution and
+// "database not initialized" check, then the shared core.
 func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params itunesRegroupParams
 	if len(raw) > 0 {
@@ -106,9 +182,58 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	env := regroupEnv{
+		t6g5Base: p.t6g5HeadBase(ctx, reporter, !dryRun),
+		RootDir:  config.AppConfig.RootDir,
+		NewStore: func() (regroupCoreStore, func(itunesRegroupStore) merge.UserProgressMerger, error) {
+			rstore, err := newRegroupRunStore(store, p.deps.BookTagReader())
+			return rstore, p.regroupUserStateStore, err
+		},
+	}
+	return itunesRegroupCore(ctx, params, env)
+}
+
+// itunesRegroupKind builds the native kind. Writes found: book rows (CreateBook,
+// UpdateBook, ModifyBook, DeleteBook, RecomputeBookAggregates), book_file rows
+// (MoveBookFilesToBook, MoveBookFilesToBookBulk), the itunes external-id
+// mappings (ReassignExternalID) and the users' listening state the empty-book
+// delete carries (UserProgress); HEAD declares only capabilities. The dry-run
+// keys are refused, the mode is the run's.
+func (p *Plugin) itunesRegroupKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"),
+		tasks.Res("books", "external_ids"), tasks.Res("books", "user_state"))
+	return tasks.Task(itunesRegroupKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: t6g5Common(p.itunesRegroupDef(), itunesRegroupKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			var params itunesRegroupParams
+			if err := t6g5DecodeParams(itunesRegroupKind, raw, &params, "dryRun", "dry_run"); err != nil {
+				return struct{}{}, err
+			}
+			base, err := t6g5NativeBase(itunesRegroupKind, rc, deps, true)
+			if err != nil {
+				return struct{}{}, err
+			}
+			env := regroupEnv{
+				t6g5Base: base,
+				RootDir:  base.Store.RootDir(),
+				NewStore: func() (regroupCoreStore, func(itunesRegroupStore) merge.UserProgressMerger, error) {
+					um := base.Writer.UserProgress()
+					return regroupNativeStore{base.Store, base.Writer},
+						func(itunesRegroupStore) merge.UserProgressMerger { return um }, nil
+				},
+			}
+			return struct{}{}, itunesRegroupCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// itunesRegroupCore is the shared body of both shells. The mode is env.Live;
+// params' dry-run keys are not read.
+func itunesRegroupCore(ctx context.Context, params itunesRegroupParams, env regroupEnv) error {
+	dryRun := !env.Live
 	xmlPath := strings.TrimSpace(params.XMLPath)
 	if xmlPath == "" {
-		xmlPath = strings.TrimSpace(config.AppConfig.ITunes.LibraryReadPath)
+		xmlPath = strings.TrimSpace(env.Store.LibraryReadPath())
 	}
 	if xmlPath == "" {
 		return fmt.Errorf("no iTunes XML path: set params.xmlPath or itunes.library_read_path")
@@ -118,33 +243,33 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	// that is the check keeping iTunes rows out of library copies. Refuse
 	// rather than plan blind -- the dry run too, since its report would
 	// count groups the apply must not touch.
-	rootDir := strings.TrimSpace(config.AppConfig.RootDir)
+	rootDir := strings.TrimSpace(env.RootDir)
 	if rootDir == "" {
 		return fmt.Errorf("itunes.regroup: root_dir is not configured; cannot tell library copies apart")
 	}
 	if dryRun {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
+		env.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
-	_ = reporter.UpdateProgress(0, 4, "Phase 1/4: parsing iTunes library…")
+	env.Progress(0, 4, "Phase 1/4: parsing iTunes library…")
 	lib, err := itunes.ParseLibrary(xmlPath)
 	if err != nil {
 		return fmt.Errorf("parse library %q: %w", xmlPath, err)
 	}
 	groups := itunesservice.GroupLibraryForHeal(lib)
 
-	rstore, err := newRegroupRunStore(store, p.deps.BookTagReader())
+	rstore, userState, err := env.NewStore()
 	if err != nil {
 		return err
 	}
 
-	_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: snapshotting DB for %d target groups…", len(groups)))
-	snap, err := p.buildRegroupSnapshot(ctx, rstore, rootDir, reporter)
+	env.Progress(1, 4, fmt.Sprintf("Phase 2/4: snapshotting DB for %d target groups…", len(groups)))
+	snap, err := buildRegroupSnapshot(ctx, rstore, rootDir, env.reporter())
 	if err != nil {
 		return err
 	}
 
-	_ = reporter.UpdateProgress(2, 4, "Phase 3/4: planning…")
+	env.Progress(2, 4, "Phase 3/4: planning…")
 	plan := itunesservice.PlanRegroup(groups, snap)
 
 	checkFailed := regroupCheckFailedBooks(snap)
@@ -154,32 +279,32 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 		plan.ManualCheckFailedSkipped, len(checkFailed), plan.LibraryTitleKept,
 		plan.FreshBooks, len(plan.DeleteBooks), plan.PIDsResolved, plan.PIDsUnresolved,
 		regroupRuleDelta(plan))
-	_ = reporter.Log(slog.LevelInfo, "PLAN: "+summary)
+	env.Log(slog.LevelInfo, "PLAN: "+summary)
 	if len(checkFailed) > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+		env.Log(slog.LevelWarn, fmt.Sprintf(
 			"owner-manual check could not be done for %d book(s); %d group(s) holding them were skipped (first ids: %s)",
 			len(checkFailed), plan.ManualCheckFailedSkipped, strings.Join(firstN(checkFailed, 20), ", ")))
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"RULE CHANGE (2026-10-01): %s | legacy-rule-skipped=%d | skips by reason: %s | unblocked examples: %s",
 		regroupRuleDelta(plan), plan.LegacyEntangledSkipped, regroupSkipReasons(plan),
 		strings.Join(plan.UnblockedExamples, "; ")))
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"COMPLETENESS: complete-groups=%d partial-groups=%d (missing some tracks) single-file-in-multitrack-album=%d",
 		plan.CompleteGroups, plan.PartialGroups, plan.SingleFileChapterBooks))
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"SINGLE-FILE BY DURATION: <15min(true chapter/clip)=%d  15-90min(ambiguous)=%d  >=90min(COMPLETE book, false alarm)=%d | short examples: %s",
 		plan.SFCShort, plan.SFCMid, plan.SFCLong, strings.Join(plan.SFCExamples, "; ")))
 
 	if dryRun {
 		examples := regroupExamples(plan, 8)
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN examples: "+strings.Join(examples, " | "))
-		_ = reporter.UpdateProgress(4, 4, "DRY RUN — "+summary)
+		env.Log(slog.LevelInfo, "DRY RUN examples: "+strings.Join(examples, " | "))
+		env.Progress(4, 4, "DRY RUN — "+summary)
 		return regroupCheckFailedErr(plan, true)
 	}
 
-	_ = reporter.UpdateProgress(3, 4, "Phase 4/4: applying plan…")
-	applied, err := p.applyRegroupPlan(ctx, rstore, plan, rootDir, reporter)
+	env.Progress(3, 4, "Phase 4/4: applying plan…")
+	applied, err := applyRegroupPlanVia(ctx, rstore, plan, rootDir, env.reporter(), userState)
 	if err != nil {
 		return joinRegroupErrs(err, regroupCheckFailedErr(plan, false))
 	}
@@ -190,7 +315,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	if n := len(applied.SkippedTargetNotListed); n > 0 {
 		final += fmt.Sprintf(" | kept (listed, with listening state, no listed target): %d (see op log)", n)
 	}
-	_ = reporter.UpdateProgress(4, 4, final)
+	env.Progress(4, 4, final)
 	return regroupCheckFailedErr(plan, false)
 }
 
@@ -503,6 +628,11 @@ func regroupManualOnly(r applygate.ManualOnlyReaders, b *database.Book) (bool, e
 // never make that book a target or a source. Version-group membership still
 // counts every scanned member, so the incumbent rule sees the whole group.
 func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSnapshotReader, rootDir string, reporter sdk.Reporter) (itunesservice.Snapshot, error) {
+	return buildRegroupSnapshot(ctx, store, rootDir, reporter)
+}
+
+// buildRegroupSnapshot is the shared body of Plugin.buildRegroupSnapshot.
+func buildRegroupSnapshot(ctx context.Context, store itunesRegroupSnapshotReader, rootDir string, reporter regroupReporter) (itunesservice.Snapshot, error) {
 	snap := itunesservice.Snapshot{
 		PIDLoc: make(map[string]itunesservice.PIDLoc),
 		Books:  make(map[string]itunesservice.BookMeta),
@@ -838,6 +968,13 @@ func enrichScore(b *database.Book) int {
 // plan's refusal rules re-run on the fresh rows (regroupRecheck); a group
 // whose books changed since the snapshot is skipped and counted.
 func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan itunesservice.RegroupPlan, rootDir string, reporter sdk.Reporter) (regroupApplyReport, error) {
+	return applyRegroupPlanVia(ctx, store, plan, rootDir, reporter, p.regroupUserStateStore)
+}
+
+// applyRegroupPlanVia is the shared body of Plugin.applyRegroupPlan; userState
+// is where the delete pass finds the merge user-state store (nil fails the
+// delete closed).
+func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itunesservice.RegroupPlan, rootDir string, reporter regroupReporter, userState func(itunesRegroupStore) merge.UserProgressMerger) (regroupApplyReport, error) {
 	touched := make(map[string]bool)
 	var c regroupApplyCounts
 	var deleted, deleteSkipped, stateCarried, stateReappeared int
@@ -898,7 +1035,7 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 		if stateProbe == nil {
 			var probe *merge.UserStateProbe
 			perr := errors.New("no user-state store wired")
-			if um := p.regroupUserStateStore(store); um != nil {
+			if um := userState(store); um != nil {
 				stateStore = um
 				probe, perr = merge.NewUserStateProbe(um)
 			}
@@ -1089,7 +1226,7 @@ type regroupApplyCounts struct {
 // one the recheck reads under the lock; a target that changed groups in
 // between (including joining one) is refused as changed rather than written
 // under the wrong lock or none.
-func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi int, rootDir string, reporter sdk.Reporter, touched map[string]bool, c *regroupApplyCounts) {
+func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi int, rootDir string, reporter regroupReporter, touched map[string]bool, c *regroupApplyCounts) {
 	a := plan.Groups[gi]
 	lockedGID := ""
 	if !a.FreshBook {

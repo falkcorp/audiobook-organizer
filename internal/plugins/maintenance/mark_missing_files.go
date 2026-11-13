@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.10.4
+// version: 1.11.0
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -54,8 +54,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 type markMissingParams struct {
@@ -205,17 +205,66 @@ func (p *Plugin) markMissingFilesDef() sdk.OperationDef {
 	}
 }
 
+// markMissingFilesKind is the native kind of maintenance.mark-missing-files (F5-10).
+const markMissingFilesKind tasks.Kind = "books.maintenance.mark-missing-files"
+
+// markMissingFilesEnv is what the op's cores need from their engine: the base,
+// the worker pool and the scan stand-down for the write phase.
+type markMissingFilesEnv struct {
+	t6g5Base
+	Items t6g5ItemsFunc
+	Lease t6g5LeaseFunc
+}
+
+// runMarkMissingFiles is the v2 shell: HEAD's strict params decode and its
+// "database not initialized" check, then the shared core.
 func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params markMissingParams
 	if err := decodeOpParams(rawParams, &params); err != nil {
 		return fmt.Errorf("mark-missing-files: decode params: %w", err)
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
+	if p.deps.OpsStore() == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	log := reporter.Logger()
-	if params.Apply {
+	env := markMissingFilesEnv{
+		t6g5Base: p.t6g5HeadBase(ctx, reporter, params.Apply),
+		Items:    t6g5HeadItems(reporter),
+		Lease:    p.t6g5HeadLease(reporter),
+	}
+	_, err := runMarkMissingFilesCore(ctx, params, env)
+	return err
+}
+
+// markMissingFilesKind builds the native kind. Writes: the Missing flag of
+// book_file rows (HEAD declares none; found: UpdateBookFiles). The params
+// decode into HEAD's struct after the mode key (apply) is refused.
+func (p *Plugin) markMissingFilesKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)))
+	return tasks.Task(markMissingFilesKind, tasks.TaskSpec[json.RawMessage, markMissingPlan]{
+		Common: t6g5Common(p.markMissingFilesDef(), markMissingFilesKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (markMissingPlan, error) {
+			if err := t6g5RefuseModeKeys(markMissingFilesKind, raw, "apply"); err != nil {
+				return markMissingPlan{}, err
+			}
+			var params markMissingParams
+			if err := decodeOpParams(raw, &params); err != nil {
+				return markMissingPlan{}, fmt.Errorf("mark-missing-files: decode params: %w", err)
+			}
+			base, err := t6g5NativeBase(markMissingFilesKind, rc, deps, true)
+			if err != nil {
+				return markMissingPlan{}, err
+			}
+			env := markMissingFilesEnv{t6g5Base: base, Items: t6g5NativeItems(rc), Lease: t6g5NativeLease(rc, deps)}
+			return runMarkMissingFilesCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// runMarkMissingFilesCore is the shared body of both shells. The mode is
+// env.Live; params.Apply is not read.
+func runMarkMissingFilesCore(ctx context.Context, params markMissingParams, env markMissingFilesEnv) (markMissingPlan, error) {
+	log := env.Logger
+	if env.Live {
 		// The apply phase now cooperatively stands the library scanner down for its
 		// duration (PR #3080) — the real control that replaces the old "no scan
 		// should be active" documented precondition. The write-time re-stat remains
@@ -226,11 +275,11 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 
 	// Resolve the report path before any work: with no reportPath and no usable
 	// root_dir the run must fail with nothing done, not apply and then lose its record.
-	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "mark-missing-files"))
+	reportPath, rpErr := t6g5ReportPath(env.t6g5Base, params.ReportPath, "mark-missing-files")
 	if rpErr != nil {
-		return fmt.Errorf("mark-missing-files: %w", rpErr)
+		return markMissingPlan{}, fmt.Errorf("mark-missing-files: %w", rpErr)
 	}
-	plan, err := planMarkMissingFiles(ctx, store, p.deps, params, reporter)
+	plan, err := planMarkMissingFilesVia(ctx, env.Store, env.Writer, params, env)
 
 	// Write the report BEFORE returning any error, so a run that aborts mid-apply
 	// (e.g. the scan stand-down lease lapsed after k writes) still leaves the
@@ -248,7 +297,7 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 	}
 
 	if err != nil {
-		return err
+		return plan, err
 	}
 
 	if b, mErr := json.Marshal(plan); mErr == nil {
@@ -259,7 +308,7 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 			"cap", plan.CappedAt, "would_mark_missing", plan.WouldMarkMissing, "would_clear_stale", plan.WouldClearStale)
 	}
 	log.Info("mark-missing-files complete", "summary", plan.summary())
-	return nil
+	return plan, nil
 }
 
 // markMissingStore is the narrow store this op needs: read every row's core
@@ -283,20 +332,40 @@ type flip struct {
 	toValue bool // the Missing value to write
 }
 
+// planMarkMissingFiles is the plan with HEAD's signature: a store of its own, a
+// scan controller and a reporter. It is a wrapper over planMarkMissingFilesVia.
 func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan ScanController, params markMissingParams, reporter sdk.Reporter) (markMissingPlan, error) {
-	log := reporter.Logger()
+	env := markMissingFilesEnv{
+		t6g5Base: t6g5ReporterBase(ctx, reporter, params.Apply),
+		Items:    t6g5HeadItems(reporter),
+		Lease:    t6g5HeadLeaseOn(scan, reporter),
+	}
+	return planMarkMissingFilesVia(ctx, store, store, params, env)
+}
+
+// markMissingReader is the reads the plan makes.
+type markMissingReader interface {
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	repointReader
+}
+
+// planMarkMissingFilesVia is planMarkMissingFiles over the engine the env names
+// (rule R10: it reads the reader and writes the writer it is handed and
+// captures nothing).
+func planMarkMissingFilesVia(ctx context.Context, store markMissingReader, writer bookFileBatchWriter, params markMissingParams, env markMissingFilesEnv) (markMissingPlan, error) {
+	log := env.Logger
 	log.Info("mark-missing-files start",
-		"apply", params.Apply, "path_prefix", params.PathPrefix, "max", params.Max)
+		"apply", env.Live, "path_prefix", params.PathPrefix, "max", params.Max)
 
 	// Stamp liveness around the one unbounded store read: nothing else can until
 	// the first RunItems item completes.
-	registry.TouchLiveness(reporter)
+	env.Touch()
 	files, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return markMissingPlan{}, fmt.Errorf("load book files: %w", err)
 	}
-	registry.TouchLiveness(reporter)
-	plan := markMissingPlan{Apply: params.Apply}
+	env.Touch()
+	plan := markMissingPlan{Apply: env.Live}
 
 	// primaryBookIDs is the set of PRIMARY-version books. BooksBrokenOnDisk must
 	// count only these, because the dashboard's BrokenFiles counter does
@@ -315,7 +384,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 		if cerr := ctx.Err(); cerr != nil {
 			return markMissingPlan{}, fmt.Errorf("load books: %w", cerr)
 		}
-		registry.TouchLiveness(reporter)
+		env.Touch()
 		page, perr := store.GetAllBooksCore(bookPageSize, offset)
 		if perr != nil {
 			return markMissingPlan{}, fmt.Errorf("load books: %w", perr)
@@ -358,10 +427,17 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 	states := make([]rowState, len(items))
 	var missingCount atomic.Int64
 
-	prog := sdk.NewProgress(reporter, len(items))
+	prog := t6g5NewProgress(env.t6g5Base, len(items))
 	prog.Start(fmt.Sprintf("Checking %d book_file path(s)…", len(items)))
 
-	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, it item) error {
+	err = env.Items(ctx, len(items), t6g5ItemsOpts{
+		Pool:    missingFileStatPool(),
+		Collect: true,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Checked %d/%d paths (gone=%d)", i+1, t, missingCount.Load())
+		},
+	}, func(_ context.Context, i int) error {
+		it := items[i]
 		switch _, serr := os.Stat(it.file.FilePath); {
 		case serr == nil:
 			// present
@@ -373,12 +449,6 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 			log.Warn("mark-missing-files: could not stat", "path", it.file.FilePath, "err", serr)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Checked %d/%d paths (gone=%d)", i+1, t, missingCount.Load())
-		},
 	})
 	if err != nil {
 		return markMissingPlan{}, fmt.Errorf("stat sweep: %w", err)
@@ -433,7 +503,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 			Bucket: bucket, Path: fl.file.FilePath, Reason: reason})
 	}
 
-	if !params.Apply {
+	if !env.Live {
 		log.Info("mark-missing-files: DRY RUN — no rows written",
 			"would_mark_missing", plan.WouldMarkMissing, "would_clear_stale", plan.WouldClearStale)
 		return plan, nil
@@ -443,11 +513,11 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 	// library.scan write the Missing flag on the same rows, so quiesce the scanner
 	// to keep our flips from racing its. Released (scan resumes) on return; dry-run
 	// returned above so it never stands the scanner down.
-	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, scan, reporter, "mark-missing-files apply")
+	lease, sdErr := env.Lease(ctx, "mark-missing-files apply")
 	if sdErr != nil {
 		return plan, fmt.Errorf("mark-missing-files: acquire scan stand-down: %w", sdErr)
 	}
-	defer releaseStandDown()
+	defer lease.Release()
 
 	// Phase 3 — write. Rehydrate the FULL BookFile and change only Missing:
 	// UpdateBookFile semantics are a full-record replacement, so a partial record
@@ -469,7 +539,18 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 		func(fl flip) string { return fl.file.BookID },
 		func(fl flip) string { return fl.file.ID })
 	totalBooks := len(groups)
-	err = registry.RunItems(ctx, reporter, groups, func(itemCtx context.Context, g bookFileBatchGroup[flip]) error {
+	err = env.Items(ctx, len(groups), t6g5ItemsOpts{
+		Pool:    missingFileStatPool(),
+		Collect: true,
+		// The items are books now, so the label counts FLIPS from its own
+		// atomic rather than the item index, which would read as "reconciled
+		// 3/900" for 900 books holding 40,000 flips.
+		Label: func(_, books int) string {
+			return fmt.Sprintf("Reconciled %d/%d flags across %d books (errs=%d)",
+				rowsDone.Load(), totalFlips, books, updateErrs.Load())
+		},
+	}, func(itemCtx context.Context, i int) error {
+		g := groups[i]
 		// RunItems reports progress in BOOKS (the item). The in-book progress
 		// line below must use the same units or the bar alternates between two
 		// scales and appears to jump backwards -- see run_items.go's P-2 note.
@@ -479,7 +560,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 		if standDownLost.Load() {
 			return nil
 		}
-		if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+		if lease.Lost() {
 			standDownLost.Store(true)
 			log.Warn("mark-missing-files: scan stand-down lease lost — aborting remaining writes")
 			return nil
@@ -494,7 +575,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 		// The stat pass is the longest stretch between two stand-down renewals,
 		// and RunItems renews only per BOOK — so stamp liveness and re-check the
 		// lease from inside it. See bookFileStatLivenessEvery.
-		beat := prewriteHeartbeat(reporter, func() bool {
+		beat := t6g5PrewriteHeartbeat(env.t6g5Base, func() bool {
 			// A book can hold ~1,500 rows; stop mid-book on Cancel rather than
 			// finishing the stat pass of a book whose write will be refused anyway.
 			if itemCtx.Err() != nil {
@@ -503,7 +584,7 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 			if standDownLost.Load() {
 				return true
 			}
-			if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+			if lease.Lost() {
 				standDownLost.Store(true)
 				log.Warn("mark-missing-files: scan stand-down lease lost — aborting remaining writes")
 				return true
@@ -581,13 +662,12 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 		}
 
 		bookID := g.BookID
-		out := writeBookFileBatch(itemCtx, store, rows, bookFileBatchOpts{
-			Reporter: reporter,
+		out := t6g5WriteBookFileBatch(itemCtx, writer, rows, env.t6g5Base, t6g5BatchOpts{
 			Abort: func() bool {
 				if standDownLost.Load() {
 					return true
 				}
-				if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+				if lease.Lost() {
 					standDownLost.Store(true)
 					log.Warn("mark-missing-files: scan stand-down lease lost — aborting remaining writes")
 					return true
@@ -627,16 +707,6 @@ func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan Scan
 				"book", bookID, "planned", len(rows), "written", out.Applied)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		// The items are books now, so the label counts FLIPS from its own
-		// atomic rather than the item index, which would read as "reconciled
-		// 3/900" for 900 books holding 40,000 flips.
-		Label: func(_, books int) string {
-			return fmt.Sprintf("Reconciled %d/%d flags across %d books (errs=%d)",
-				rowsDone.Load(), totalFlips, books, updateErrs.Load())
-		},
 	})
 	if err != nil {
 		return plan, fmt.Errorf("reconcile writes: %w", err)

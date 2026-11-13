@@ -1,0 +1,3 @@
+### Added
+
+- maintenance: T6 group 5 (14 definitions: iTunes clone/playlist-import/regroup, library-state repair, mark-missing-files, merge-same-path-dupes, metadata refresh and cache reap, the three missing-file ops, move-book-file-rows, purge-empty-narrators, split-joined-narrators) now has a native `books.<ID>` task kind each (F5-10), built dark. Each body is a core function that takes its reads and writes through narrow interfaces, so the HEAD operation and the native kind run the same code; nothing registers the kinds yet (F5-18), so behavior is unchanged. When F5-18 registers them, the metadata refresh's `0 6 * * *` schedule is not carried over and must be re-declared there if wanted.

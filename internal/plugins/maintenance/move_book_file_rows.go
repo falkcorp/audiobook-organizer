@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — op maintenance.move-book-file-rows.
 //
@@ -58,6 +58,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 const (
@@ -180,61 +181,136 @@ func (p *Plugin) moveBookFileRowsDef() sdk.OperationDef {
 		ResumePolicy: sdk.ResumeDrop,
 		Cancellable:  true,
 		// The move list is small and walked by hand; each plan step and each
-		// target's apply reports progress (mbfProgress).
+		// target's apply reports progress.
 		Liveness:     sdk.LivenessManual,
 		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:          p.runMoveBookFileRows,
 	}
 }
 
+// mbfReader is the reads the op makes.
+type mbfReader interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
+}
+
+// mbfWriter is the writes the op makes.
+type mbfWriter interface {
+	MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+}
+
+// moveBookFileRowsKind is the native kind of maintenance.move-book-file-rows (F5-10).
+const moveBookFileRowsKind tasks.Kind = "books." + mbfOpID
+
+// mbfInput is the native kind's params: HEAD's mbfParams without the mode keys
+// (dry_run, dryRun), which the start request carries.
+type mbfInput struct {
+	Moves []mbfMove `json:"moves"`
+}
+
+// moveBookFileRowsEnv is what the op's cores need from their engine: the base
+// and the scan stand-down for the apply.
+type moveBookFileRowsEnv struct {
+	t6g5Base
+	Lease t6g5LeaseFunc
+}
+
+// runMoveBookFileRows is the v2 shell: HEAD's strict params decode and mode
+// resolution, then the shared core.
 func (p *Plugin) runMoveBookFileRows(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params mbfParams
 	if err := decodeStrictParams(raw, &params); err != nil {
 		return fmt.Errorf("%s: decode params: %w", mbfOpName, err)
 	}
-	if _, err := params.dryRun(); err != nil {
+	dryRun, err := params.dryRun()
+	if err != nil {
 		return err
 	}
-	ops := p.deps.OpsStore()
-	if ops == nil {
+	if p.deps.OpsStore() == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	store, ok := any(ops).(mbfStore)
-	if !ok {
-		return fmt.Errorf("%s: store cannot move book_file rows; refusing to run", mbfOpName)
-	}
-	// Fail closed: without resolvable iTunes roots the op cannot prove a path
-	// is outside them.
-	roots, err := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
-	if err != nil {
-		return fmt.Errorf("%s: resolve iTunes roots: %w", mbfOpName, err)
-	}
-	report, runErr := moveBookFileRows(ctx, mbfEnv{store: store, itunesRoots: roots, scan: p.deps}, params, reporter)
+	env := moveBookFileRowsEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, !dryRun), Lease: p.t6g5HeadLease(reporter)}
+	report, runErr := runMoveBookFileRowsCore(ctx, mbfInput{Moves: params.Moves}, env)
 	if report != nil {
 		if sErr := registry.ReporterSetResult(reporter, report); sErr != nil {
 			reporter.Logger().Warn(mbfOpName+": result not persisted", "err", sErr)
 		}
-		reporter.Logger().Info(mbfOpName+" complete", "summary", report.summary())
 	}
 	return runErr
 }
 
-// moveBookFileRows plans every move, and on a live run applies the planned
-// ones. The move list is hand-picked and small (mbfMaxMoves), so it runs
-// sequentially: the only whole-library read is the one owner lookup, done once.
+// moveBookFileRowsKind builds the native kind. Writes: HEAD's declared
+// book_files resource; the preview is HEAD's dry run.
+func (p *Plugin) moveBookFileRowsKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)))
+	return tasks.Task(moveBookFileRowsKind, tasks.TaskSpec[json.RawMessage, mbfReport]{
+		Common: t6g5Common(p.moveBookFileRowsDef(), moveBookFileRowsKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (mbfReport, error) {
+			var in mbfInput
+			if err := t6g5DecodeStrictParams(moveBookFileRowsKind, raw, &in, "dry_run", "dryRun"); err != nil {
+				return mbfReport{}, err
+			}
+			base, err := t6g5NativeBase(moveBookFileRowsKind, rc, deps, true)
+			if err != nil {
+				return mbfReport{}, err
+			}
+			report, runErr := runMoveBookFileRowsCore(rc.Context(), in, moveBookFileRowsEnv{t6g5Base: base, Lease: t6g5NativeLease(rc, deps)})
+			if report == nil {
+				return mbfReport{}, runErr
+			}
+			return *report, runErr
+		},
+	})
+}
+
+// runMoveBookFileRowsCore is the shared body of both shells: it fails closed
+// without resolvable iTunes roots, plans and applies the moves, and logs the
+// summary.
+func runMoveBookFileRowsCore(ctx context.Context, in mbfInput, env moveBookFileRowsEnv) (*mbfReport, error) {
+	// Fail closed: without resolvable iTunes roots the op cannot prove a path
+	// is outside them.
+	roots, err := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
+	if err != nil {
+		return nil, fmt.Errorf("%s: resolve iTunes roots: %w", mbfOpName, err)
+	}
+	report, runErr := moveBookFileRowsVia(ctx, env.Store, env.Store.GetAllBookFilesCoreIncludingRetired, env.Writer, roots, in.Moves, env)
+	if report != nil {
+		env.Logger.Info(mbfOpName+" complete", "summary", report.summary())
+	}
+	return report, runErr
+}
+
+// moveBookFileRows is moveBookFileRowsVia with HEAD's signature: a store of its
+// own, iTunes roots, a scan controller and a reporter.
 func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporter sdk.Reporter) (*mbfReport, error) {
 	dryRun, err := params.dryRun()
 	if err != nil {
 		return nil, err
 	}
-	if len(params.Moves) == 0 {
+	via := moveBookFileRowsEnv{t6g5Base: t6g5ReporterBase(ctx, reporter, !dryRun), Lease: t6g5HeadLeaseOn(env.scan, reporter)}
+	return moveBookFileRowsVia(ctx, env.store,
+		func() ([]database.BookFileCore, error) { return database.AllBookFilesCoreIncludingRetired(env.store) },
+		env.store, env.itunesRoots, params.Moves, via)
+}
+
+// moveBookFileRowsVia plans every move, and on a live run applies the planned
+// ones. The move list is hand-picked and small (mbfMaxMoves), so it runs
+// sequentially: the only whole-library read is the one owner lookup, done once.
+// It reads the reader and writes the writer it is handed and captures nothing
+// (rule R10); allFiles lists every book_file row, retired included.
+func moveBookFileRowsVia(ctx context.Context, rd mbfReader, allFiles func() ([]database.BookFileCore, error), wr mbfWriter,
+	itunesRoots []string, moves []mbfMove, env moveBookFileRowsEnv) (*mbfReport, error) {
+	dryRun := !env.Live
+	if len(moves) == 0 {
 		return nil, fmt.Errorf("%s: moves must not be empty", mbfOpName)
 	}
-	if len(params.Moves) > mbfMaxMoves {
-		return nil, fmt.Errorf("%s: %d moves exceeds the limit of %d", mbfOpName, len(params.Moves), mbfMaxMoves)
+	if len(moves) > mbfMaxMoves {
+		return nil, fmt.Errorf("%s: %d moves exceeds the limit of %d", mbfOpName, len(moves), mbfMaxMoves)
 	}
 
-	owners, err := mbfResolveOwners(env.store, params.Moves)
+	owners, err := mbfResolveOwners(allFiles, moves)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +321,7 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 		if b, ok := books[id]; ok {
 			return b, nil
 		}
-		b, err := env.store.GetBookByID(id)
+		b, err := rd.GetBookByID(id)
 		if err != nil {
 			return nil, err
 		}
@@ -257,7 +333,7 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 		if rows, ok := targetRows[id]; ok {
 			return rows, nil
 		}
-		rows, err := env.store.GetBookFiles(id)
+		rows, err := rd.GetBookFiles(id)
 		if err != nil {
 			return nil, err
 		}
@@ -278,12 +354,12 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 		}
 	}
 
-	for i, mv := range params.Moves {
+	for i, mv := range moves {
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		mbfProgress(reporter, i, len(params.Moves), "planning row "+mv.RowID)
-		r, planErr := mbfPlanOne(env, mv, owners[mv.RowID], seenRow, claimed, getBook, getTargetRows)
+		env.Progress(i, len(moves), "planning row "+mv.RowID)
+		r, planErr := mbfPlanOne(rd, itunesRoots, mv, owners[mv.RowID], seenRow, claimed, getBook, getTargetRows)
 		if planErr != nil {
 			return report, planErr
 		}
@@ -303,11 +379,11 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 		return report, nil
 	}
 
-	holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, env.scan, reporter, mbfOpName+" apply")
+	lease, sdErr := env.Lease(ctx, mbfOpName+" apply")
 	if sdErr != nil {
 		return report, fmt.Errorf("%s: scan stand-down: %w", mbfOpName, sdErr)
 	}
-	defer release()
+	defer lease.Release()
 
 	// One MoveBookFilesToBookBulk per target: each call is one atomic batch
 	// and recomputes each distinct book once.
@@ -324,15 +400,15 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 	}
 	for ti, target := range targets {
 		idx := byTarget[target]
-		mbfProgress(reporter, ti, len(targets), "moving rows to book "+target)
-		if ctx.Err() != nil || scanStandDownLostForApply(env.scan, holderID, held) {
+		env.Progress(ti, len(targets), "moving rows to book "+target)
+		if ctx.Err() != nil || lease.Lost() {
 			for _, i := range idx {
 				report.Moves[i].Status = mbfStatusNotAttempt
 				report.Moves[i].Error = "run canceled or scan stand-down lost before this target"
 			}
 			continue
 		}
-		if err := env.store.MoveBookFilesToBookBulk(mbfRegroup(report.Moves, idx), target); err != nil {
+		if err := wr.MoveBookFilesToBookBulk(mbfRegroup(report.Moves, idx), target); err != nil {
 			for _, i := range idx {
 				report.Moves[i].Status = mbfStatusMoveFailed
 				report.Moves[i].Error = err.Error()
@@ -348,7 +424,7 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 				continue
 			}
 			want := r.NewTrack
-			_, mErr := env.store.ModifyBookFile(target, r.RowID, func(f *database.BookFile) error {
+			_, mErr := wr.ModifyBookFile(target, r.RowID, func(f *database.BookFile) error {
 				if f.TrackNumber == want {
 					return database.ErrSkipBookFileWrite
 				}
@@ -365,24 +441,13 @@ func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporte
 
 	after := map[string]*database.Book{}
 	for _, id := range touched {
-		b, err := env.store.GetBookByID(id)
+		b, err := rd.GetBookByID(id)
 		if err == nil && b != nil {
 			after[id] = b
 		}
 	}
 	report.After = mbfBookStates(touched, after)
 	return report, nil
-}
-
-// mbfProgress stamps liveness. A failed progress write is logged, not fatal:
-// it loses a progress line, never a row.
-func mbfProgress(reporter sdk.Reporter, done, total int, msg string) {
-	if reporter == nil {
-		return
-	}
-	if err := reporter.UpdateProgress(done, total, msg); err != nil {
-		reporter.Logger().Warn(mbfOpName+": progress not recorded", "err", err)
-	}
 }
 
 // mbfRegroup builds the per-source move list for one target's planned moves.
@@ -407,7 +472,7 @@ func mbfRegroup(moves []mbfResult, idx []int) []database.BookFileMove {
 // then confirms it). The others are looked up in ONE pass over every row's
 // core; a row absent from that pass (including while memdb is still warming
 // up) resolves to "" and is refused as not found, never guessed.
-func mbfResolveOwners(store mbfStore, moves []mbfMove) (map[string]string, error) {
+func mbfResolveOwners(allFiles func() ([]database.BookFileCore, error), moves []mbfMove) (map[string]string, error) {
 	owners := make(map[string]string, len(moves))
 	need := map[string]bool{}
 	for _, mv := range moves {
@@ -424,7 +489,7 @@ func mbfResolveOwners(store mbfStore, moves []mbfMove) (map[string]string, error
 	// refused by name in mbfPlanOne, instead of resolving to "" and being
 	// reported as "row not found", which would send the operator hunting for a
 	// row that exists.
-	all, err := database.AllBookFilesCoreIncludingRetired(store)
+	all, err := allFiles()
 	if err != nil {
 		return nil, fmt.Errorf("%s: list book_file rows: %w", mbfOpName, err)
 	}
@@ -436,7 +501,7 @@ func mbfResolveOwners(store mbfStore, moves []mbfMove) (map[string]string, error
 	return owners, nil
 }
 
-func mbfPlanOne(env mbfEnv, mv mbfMove, owner string, seenRow map[string]bool, claimed map[string]map[int]string,
+func mbfPlanOne(rd mbfReader, itunesRoots []string, mv mbfMove, owner string, seenRow map[string]bool, claimed map[string]map[int]string,
 	getBook func(string) (*database.Book, error), getTargetRows func(string) ([]database.BookFile, error)) (mbfResult, error) {
 	r := mbfResult{RowID: mv.RowID, ToBookID: mv.ToBookID, FromBookID: owner, Status: mbfStatusRefused}
 	refuse := func(reason string) (mbfResult, error) {
@@ -453,7 +518,7 @@ func mbfPlanOne(env mbfEnv, mv mbfMove, owner string, seenRow map[string]bool, c
 	if owner == "" {
 		return refuse("row not found")
 	}
-	row, err := env.store.GetBookFileByID(owner, mv.RowID)
+	row, err := rd.GetBookFileByID(owner, mv.RowID)
 	if err != nil {
 		return r, fmt.Errorf("%s: read row %s: %w", mbfOpName, mv.RowID, err)
 	}
@@ -498,7 +563,7 @@ func mbfPlanOne(env mbfEnv, mv mbfMove, owner string, seenRow map[string]bool, c
 		return refuse("target book is soft-deleted")
 	}
 	for _, p := range []string{row.FilePath, src.FilePath, dst.FilePath} {
-		if underITunes(p, env.itunesRoots) {
+		if underITunes(p, itunesRoots) {
 			return refuse("itunes-path: " + p)
 		}
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.3.4
+// version: 1.4.0
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- split-joined-narrators ---
@@ -337,7 +338,7 @@ func splitVerdictReason(v util.NarratorCreditVerdict) string {
 // bookAuthorNamesForSplit reads the names of every author credited on b
 // (join plus author_id column). Fails closed: an incomplete list would turn
 // an author into a narrator.
-func bookAuthorNamesForSplit(store OpsStore, b *database.Book) ([]string, error) {
+func bookAuthorNamesForSplit(store narratorSplitAuthorReader, b *database.Book) ([]string, error) {
 	ids := make(map[int]bool)
 	if b.AuthorID != nil && *b.AuthorID > 0 {
 		ids[*b.AuthorID] = true
@@ -364,18 +365,85 @@ func bookAuthorNamesForSplit(store OpsStore, b *database.Book) ([]string, error)
 	return names, nil
 }
 
+// splitJoinedNarratorsKind is the native kind of maintenance.split-joined-narrators (F5-10).
+const splitJoinedNarratorsKind tasks.Kind = "books.maintenance.split-joined-narrators"
+
+// narratorSplitAuthorReader is the author reads that keep an author from
+// becoming a narrator (bookAuthorNamesForSplit).
+type narratorSplitAuthorReader interface {
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	GetAuthorByID(id int) (*database.Author, error)
+}
+
+// narratorSplitReader is the reads the split makes.
+type narratorSplitReader interface {
+	narratorSplitAuthorReader
+	ListNarrators() ([]database.Narrator, error)
+	// BooksLinkingNarrators lists, per book, the whole credit list of every
+	// book that links one of ids, failing closed (database.BooksLinkingNarrators).
+	BooksLinkingNarrators(ids map[int]bool) (map[string][]database.BookNarrator, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+	NarratorLinkCount(narratorID int) (int, error)
+}
+
+// narratorSplitWriter is the writes the split makes beyond the purge's
+// (narratorPurger: ledger rows, narrator delete, authors-cache invalidation).
+type narratorSplitWriter interface {
+	narratorPurger
+	CreateNarrator(name string) (*database.Narrator, error)
+	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
+}
+
+// splitJoinedNarratorsEnv is what the split's core needs from its engine.
+type splitJoinedNarratorsEnv struct {
+	t6g5Base
+	Lease t6g5LeaseFunc
+}
+
+// splitJoinedNarrators is the v2 shell: HEAD's "database not initialized"
+// check, then the shared core.
 func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNarratorsParams, reporter sdk.Reporter) (splitJoinedReport, error) {
-	store := p.deps.OpsStore()
-	if store == nil {
+	if p.deps.OpsStore() == nil {
 		return splitJoinedReport{}, fmt.Errorf("database not initialized")
 	}
+	env := splitJoinedNarratorsEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, params.Apply), Lease: p.t6g5HeadLease(reporter)}
+	return splitJoinedNarratorsCore(ctx, params, env)
+}
+
+// splitJoinedNarratorsKind builds the native kind. Writes found: book_narrators
+// junction rows and narrator rows (CreateNarrator, SetBookNarrators,
+// DeleteNarrator) and their undo-ledger rows; HEAD declares none. The params
+// decode into HEAD's struct after the mode key (apply) is refused.
+func (p *Plugin) splitJoinedNarratorsKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "narrators"), tasks.Res("books", "book_narrators"), tasks.Res("books", "operations"))
+	return tasks.Task(splitJoinedNarratorsKind, tasks.TaskSpec[json.RawMessage, splitJoinedReport]{
+		Common: t6g5Common(p.splitJoinedNarratorsDef(), splitJoinedNarratorsKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (splitJoinedReport, error) {
+			var params splitJoinedNarratorsParams
+			if err := t6g5DecodeParams(splitJoinedNarratorsKind, raw, &params, "apply"); err != nil {
+				return splitJoinedReport{}, err
+			}
+			base, err := t6g5NativeBase(splitJoinedNarratorsKind, rc, deps, true)
+			if err != nil {
+				return splitJoinedReport{}, err
+			}
+			return splitJoinedNarratorsCore(rc.Context(), params, splitJoinedNarratorsEnv{t6g5Base: base, Lease: t6g5NativeLease(rc, deps)})
+		},
+	})
+}
+
+// splitJoinedNarratorsCore is the shared body of both shells. The mode is
+// env.Live; params.Apply is not read.
+func splitJoinedNarratorsCore(ctx context.Context, params splitJoinedNarratorsParams, env splitJoinedNarratorsEnv) (splitJoinedReport, error) {
+	store := env.Store
 	if params.Limit < 0 {
 		return splitJoinedReport{}, fmt.Errorf("split-joined-narrators: limit must be >= 0, got %d", params.Limit)
 	}
-	log := reporter.Logger()
-	log.Info("split-joined-narrators start", "apply", params.Apply, "limit", params.Limit)
+	log := env.Logger
+	log.Info("split-joined-narrators start", "apply", env.Live, "limit", params.Limit)
 
-	_ = reporter.UpdateProgress(0, 3, "Listing narrators…")
+	env.Progress(0, 3, "Listing narrators…")
 	narrators, err := store.ListNarrators()
 	if err != nil {
 		return splitJoinedReport{}, fmt.Errorf("list narrators: %w", err)
@@ -383,16 +451,16 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 	joined := joinedNarrators(narrators)
 	report := splitJoinedReport{TotalNarrators: len(narrators), Joined: len(joined)}
 	if len(joined) == 0 {
-		_ = reporter.UpdateProgress(3, 3, "no joined narrators — "+report.summary())
+		env.Progress(3, 3, "no joined narrators — "+report.summary())
 		return report, nil
 	}
 
-	_ = reporter.UpdateProgress(1, 3, "Finding books that credit joined narrators…")
+	env.Progress(1, 3, "Finding books that credit joined narrators…")
 	ids := make(map[int]bool, len(joined))
 	for id := range joined {
 		ids[id] = true
 	}
-	books, err := database.BooksLinkingNarrators(store, ids)
+	books, err := store.BooksLinkingNarrators(ids)
 	if err != nil {
 		return report, fmt.Errorf("split-joined-narrators: %w", err)
 	}
@@ -505,20 +573,20 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		"held_for_review", report.HeldForReview, "books_with_drops", report.BooksWithDrops, "sample", report.JoinedSample,
 		"held_for_review_sample", report.HeldForReviewSample)
 
-	if !params.Apply {
-		_ = reporter.UpdateProgress(3, 3, "DRY RUN (nothing written) — "+report.summary())
+	if !env.Live {
+		env.Progress(3, 3, "DRY RUN (nothing written) — "+report.summary())
 		return report, nil
 	}
 
-	holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "split-joined-narrators apply")
+	lease, sdErr := env.Lease(ctx, "split-joined-narrators apply")
 	if sdErr != nil {
 		return report, fmt.Errorf("split-joined-narrators: could not acquire scan stand-down; refusing to write: %w", sdErr)
 	}
-	defer release()
-	opID := registry.ReporterOpID(reporter)
+	defer lease.Release()
+	opID := env.OpID
 	defer func() {
 		if report.BooksRewritten > 0 || report.NarratorsDeleted > 0 {
-			p.deps.InvalidateAuthorsCache()
+			env.Writer.InvalidateAuthorsCache()
 		}
 	}()
 
@@ -532,7 +600,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		if id, ok := resolved[name]; ok {
 			return id, nil
 		}
-		n, err := store.CreateNarrator(name)
+		n, err := env.Writer.CreateNarrator(name)
 		if err != nil {
 			return 0, err
 		}
@@ -543,15 +611,15 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		return n.ID, nil
 	}
 
-	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Rewriting %d books…", len(bookIDs)))
-	prog := sdk.NewProgress(reporter, len(bookIDs))
+	env.Progress(2, 3, fmt.Sprintf("Rewriting %d books…", len(bookIDs)))
+	prog := t6g5NewProgress(env.t6g5Base, len(bookIDs))
 	prog.Start(fmt.Sprintf("Rewriting %d books…", len(bookIDs)))
 	for i, bookID := range bookIDs {
 		if err := ctx.Err(); err != nil {
 			prog.Done("cancelled — " + report.summary())
 			return report, err
 		}
-		if scanStandDownLostForApply(p.deps, holderID, held) {
+		if lease.Lost() {
 			report.Aborted = errSplitJoinedStandDownLost.Error()
 			prog.Done(report.summary())
 			return report, errSplitJoinedStandDownLost
@@ -575,7 +643,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 		}
 		before, _ := json.Marshal(current)
 		after, _ := json.Marshal(next)
-		if jerr := database.RecordOperationChange(store, &database.OperationChange{
+		if jerr := env.Writer.RecordOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			BookID:      bookID,
@@ -588,7 +656,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			log.Warn("split-joined-narrators: undo-ledger write failed, book NOT rewritten", "book_id", bookID, "err", jerr)
 			continue
 		}
-		if werr := store.SetBookNarrators(bookID, next); werr != nil {
+		if werr := env.Writer.SetBookNarrators(bookID, next); werr != nil {
 			report.BooksFailed++
 			log.Warn("split-joined-narrators: rewrite failed (its ledger row was already written)", "book_id", bookID, "err", werr)
 			continue
@@ -607,7 +675,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			prog.Done("cancelled — " + report.summary())
 			return report, err
 		}
-		if scanStandDownLostForApply(p.deps, holderID, held) {
+		if lease.Lost() {
 			report.Aborted = errSplitJoinedStandDownLost.Error()
 			prog.Done(report.summary())
 			return report, errSplitJoinedStandDownLost
@@ -629,7 +697,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			continue
 		}
 		before, _ := json.Marshal(current)
-		if jerr := database.RecordOperationChange(store, &database.OperationChange{
+		if jerr := env.Writer.RecordOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			BookID:      bookID,
@@ -642,7 +710,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			log.Warn("split-joined-narrators: undo-ledger write failed, orphan row kept", "book_id", bookID, "err", jerr)
 			continue
 		}
-		if werr := store.SetBookNarrators(bookID, []database.BookNarrator{}); werr != nil {
+		if werr := env.Writer.SetBookNarrators(bookID, []database.BookNarrator{}); werr != nil {
 			report.OrphanClearFailed++
 			log.Warn("split-joined-narrators: orphan clear failed (its ledger row was already written)", "book_id", bookID, "err", werr)
 			continue
@@ -657,12 +725,12 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			prog.Done("cancelled — " + report.summary())
 			return report, err
 		}
-		if scanStandDownLostForApply(p.deps, holderID, held) {
+		if lease.Lost() {
 			report.Aborted = errSplitJoinedStandDownLost.Error()
 			prog.Done(report.summary())
 			return report, errSplitJoinedStandDownLost
 		}
-		links, lerr := database.NarratorLinkCount(store, n.ID)
+		links, lerr := store.NarratorLinkCount(n.ID)
 		if lerr != nil {
 			prog.Done(report.summary())
 			return report, fmt.Errorf("split-joined-narrators: re-check narrator %d before delete: %w", n.ID, lerr)
@@ -671,7 +739,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			report.NarratorsHeld++
 			continue
 		}
-		if jerr := database.RecordOperationChange(store, &database.OperationChange{
+		if jerr := env.Writer.RecordOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			ChangeType:  "narrator_delete",
@@ -683,7 +751,7 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 			log.Warn("split-joined-narrators: undo-ledger write failed, narrator NOT deleted", "narrator_id", n.ID, "err", jerr)
 			continue
 		}
-		if derr := store.DeleteNarrator(n.ID); derr != nil {
+		if derr := env.Writer.DeleteNarrator(n.ID); derr != nil {
 			report.NarratorsFailed++
 			log.Warn("split-joined-narrators: delete failed", "narrator_id", n.ID, "err", derr)
 			continue

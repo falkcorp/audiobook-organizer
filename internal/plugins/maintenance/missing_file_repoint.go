@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -41,8 +41,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // missingFileRepointDefaultMax bounds how many rows one run will rewrite, so a first
@@ -196,24 +196,73 @@ func (p *Plugin) missingFileRepointDef() sdk.OperationDef {
 	}
 }
 
+// missingFileRepointKind is the native kind of maintenance.missing-file-repoint (F5-10).
+const missingFileRepointKind tasks.Kind = "books.maintenance.missing-file-repoint"
+
+// missingFileRepointEnv is what the repoint's cores need from their engine: the
+// base, the worker pool and the scan stand-down for the write phase.
+type missingFileRepointEnv struct {
+	t6g5Base
+	Items t6g5ItemsFunc
+	Lease t6g5LeaseFunc
+}
+
+// runMissingFileRepoint is the v2 shell: HEAD's strict params decode and its
+// "database not initialized" check, then the shared core.
 func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params missingFileRepointParams
 	if err := decodeOpParams(rawParams, &params); err != nil {
 		return fmt.Errorf("missing-file-repoint: decode params: %w", err)
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
+	if p.deps.OpsStore() == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	env := missingFileRepointEnv{
+		t6g5Base: p.t6g5HeadBase(ctx, reporter, params.Apply),
+		Items:    t6g5HeadItems(reporter),
+		Lease:    p.t6g5HeadLease(reporter),
+	}
+	_, err := runMissingFileRepointCore(ctx, params, env)
+	return err
+}
+
+// missingFileRepointKind builds the native kind. Writes: HEAD's declared
+// book_files resource; the preview is HEAD's dry run. The params decode into
+// HEAD's struct after the mode key (apply) is refused, so its Apply field is
+// never set from params.
+func (p *Plugin) missingFileRepointKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)))
+	return tasks.Task(missingFileRepointKind, tasks.TaskSpec[json.RawMessage, repointPlan]{
+		Common: t6g5Common(p.missingFileRepointDef(), missingFileRepointKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (repointPlan, error) {
+			if err := t6g5RefuseModeKeys(missingFileRepointKind, raw, "apply"); err != nil {
+				return repointPlan{}, err
+			}
+			var params missingFileRepointParams
+			if err := decodeOpParams(raw, &params); err != nil {
+				return repointPlan{}, fmt.Errorf("missing-file-repoint: decode params: %w", err)
+			}
+			base, err := t6g5NativeBase(missingFileRepointKind, rc, deps, true)
+			if err != nil {
+				return repointPlan{}, err
+			}
+			env := missingFileRepointEnv{t6g5Base: base, Items: t6g5NativeItems(rc), Lease: t6g5NativeLease(rc, deps)}
+			return runMissingFileRepointCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// runMissingFileRepointCore is the shared body of both shells. The mode is
+// env.Live; params.Apply is not read.
+func runMissingFileRepointCore(ctx context.Context, params missingFileRepointParams, env missingFileRepointEnv) (repointPlan, error) {
 	// Resolve the report path before any work: with no reportPath and no usable
 	// root_dir the run must fail with nothing done, not apply and then lose its record.
-	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "missing-file-repoint"))
+	reportPath, rpErr := t6g5ReportPath(env.t6g5Base, params.ReportPath, "missing-file-repoint")
 	if rpErr != nil {
-		return fmt.Errorf("missing-file-repoint: %w", rpErr)
+		return repointPlan{}, fmt.Errorf("missing-file-repoint: %w", rpErr)
 	}
-	plan, err := planMissingFileRepoint(ctx, store, p.deps, params, reporter)
-	log := reporter.Logger()
-
+	plan, err := planMissingFileRepointVia(ctx, env.Store, env.Store.GetAllBookFilesCoreIncludingRetired, env.Writer, params, env)
+	log := env.Logger
 	// Write the full per-row report BEFORE returning any error, so a run that
 	// aborts mid-apply (e.g. the scan stand-down lease lapsed after k writes) still
 	// leaves the artifact behind — exactly the run where an operator most needs it.
@@ -234,7 +283,7 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 	}
 
 	if err != nil {
-		return err
+		return plan, err
 	}
 
 	if b, mErr := json.Marshal(plan); mErr == nil {
@@ -257,7 +306,7 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 			"cap", plan.CappedAt, "repointable", plan.Repointable)
 	}
 	log.Info("missing-file-repoint complete", "summary", plan.summary())
-	return nil
+	return plan, nil
 }
 
 // repointStore is the narrow store this op needs: read every row, read one book's
@@ -272,25 +321,55 @@ type repointStore interface {
 	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 }
 
+// planMissingFileRepoint is the plan with HEAD's signature: a store of its own,
+// a scan controller and a reporter. It is a wrapper over
+// planMissingFileRepointVia.
 func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanController, params missingFileRepointParams, reporter sdk.Reporter) (repointPlan, error) {
-	log := reporter.Logger()
+	env := missingFileRepointEnv{
+		t6g5Base: t6g5ReporterBase(ctx, reporter, params.Apply),
+		Items:    t6g5HeadItems(reporter),
+		Lease:    t6g5HeadLeaseOn(scan, reporter),
+	}
+	return planMissingFileRepointVia(ctx, store,
+		func() ([]database.BookFileCore, error) { return database.AllBookFilesCoreIncludingRetired(store) },
+		store, params, env)
+}
+
+// repointReader is the reads the plan makes beyond the book_file list.
+type repointReader interface {
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// planMissingFileRepointVia is planMissingFileRepoint over the engine the env
+// names (rule R10: it reads the reader and writes the writer it is handed and
+// captures nothing). allFiles lists every book_file row, retired included.
+func planMissingFileRepointVia(
+	ctx context.Context,
+	store repointReader,
+	allFiles func() ([]database.BookFileCore, error),
+	writer bookFileBatchWriter,
+	params missingFileRepointParams,
+	env missingFileRepointEnv,
+) (repointPlan, error) {
+	log := env.Logger
 	maxRewrites := params.Max
 	if maxRewrites <= 0 {
 		maxRewrites = missingFileRepointDefaultMax
 	}
 	log.Info("missing-file-repoint start",
-		"apply", params.Apply, "path_prefix", params.PathPrefix,
+		"apply", env.Live, "path_prefix", params.PathPrefix,
 		"max", maxRewrites, "require_size_match", params.requireSize())
 
 	// One list, two jobs. The rows to repair exclude retired rows (a retired
 	// version is never repaired), but the paths already claimed include them: a
 	// retired row still names its path, so a repoint target sitting on one would
 	// put two rows on one file.
-	files, err := database.AllBookFilesCoreIncludingRetired(store)
+	files, err := allFiles()
 	if err != nil {
 		return repointPlan{}, fmt.Errorf("load book files: %w", err)
 	}
-	plan := repointPlan{Apply: params.Apply, ScannedRows: countLiveCores(files)}
+	plan := repointPlan{Apply: env.Live, ScannedRows: countLiveCores(files)}
 
 	// bookPathByID maps each book to its recorded FilePath, so a missing row can
 	// fall back to its owning single-file book's own location (see the second
@@ -352,10 +431,17 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 	outcomes := make([]rowOutcome, len(items))
 	var missingCount atomic.Int64
 
-	prog := sdk.NewProgress(reporter, len(items))
+	prog := t6g5NewProgress(env.t6g5Base, len(items))
 	prog.Start(fmt.Sprintf("Checking %d book_file path(s)…", len(items)))
 
-	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, it candidateItem) error {
+	err = env.Items(ctx, len(items), t6g5ItemsOpts{
+		Pool:    missingFileStatPool(),
+		Collect: true,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Checked %d/%d paths (missing=%d)", i+1, t, missingCount.Load())
+		},
+	}, func(_ context.Context, i int) error {
+		it := items[i]
 		if _, serr := os.Stat(it.file.FilePath); serr == nil {
 			return nil // present; nothing to do
 		} else if !os.IsNotExist(serr) {
@@ -431,12 +517,6 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 		out.size = foundSize
 		outcomes[it.idx] = out
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Checked %d/%d paths (missing=%d)", i+1, t, missingCount.Load())
-		},
 	})
 	if err != nil {
 		return repointPlan{}, fmt.Errorf("stat sweep: %w", err)
@@ -524,7 +604,7 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 			Bucket: "repointable", OldPath: rw.item.file.FilePath, NewPath: rw.target,
 			Reason: "would repoint"})
 	}
-	if !params.Apply {
+	if !env.Live {
 		log.Info("missing-file-repoint: DRY RUN — no rows written", "would_repoint", len(rewrites))
 		return plan, nil
 	}
@@ -532,11 +612,11 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 	// Acquire the scan stand-down for the write phase: cooperatively quiesce any
 	// running library.scan so our FilePath rewrites can't race its own writes.
 	// Released (scan resumes from checkpoint) on return. Dry-run returned above.
-	holderID, standDownHeld, releaseStandDown, sdErr := acquireScanStandDownForApply(ctx, scan, reporter, "missing-file-repoint apply")
+	lease, sdErr := env.Lease(ctx, "missing-file-repoint apply")
 	if sdErr != nil {
 		return plan, fmt.Errorf("missing-file-repoint: acquire scan stand-down: %w", sdErr)
 	}
-	defer releaseStandDown()
+	defer lease.Release()
 
 	// Phase 3 — write. Rehydrate the FULL BookFile and change only FilePath:
 	// UpdateBookFile semantics are a full-record replacement, so constructing a
@@ -559,7 +639,18 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 		func(rw rewrite) string { return rw.item.file.BookID },
 		func(rw rewrite) string { return rw.item.file.ID })
 	totalBooks := len(groups)
-	err = registry.RunItems(ctx, reporter, groups, func(itemCtx context.Context, g bookFileBatchGroup[rewrite]) error {
+	err = env.Items(ctx, len(groups), t6g5ItemsOpts{
+		Pool:    missingFileStatPool(),
+		Collect: true,
+		// The items are books now, so the label counts ROWS from its own atomic
+		// rather than the item index, which would read as "repointed 3/120" for
+		// 120 books holding 500 rows.
+		Label: func(_, books int) string {
+			return fmt.Sprintf("Repointed %d/%d rows across %d books (errs=%d)",
+				rowsDone.Load(), totalRewrites, books, updateErrs.Load())
+		},
+	}, func(itemCtx context.Context, i int) error {
+		g := groups[i]
 		// RunItems reports progress in BOOKS (the item). The in-book progress
 		// line below must use the same units or the bar alternates between two
 		// scales and appears to jump backwards -- see run_items.go's P-2 note.
@@ -568,7 +659,7 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 		if standDownLost.Load() {
 			return nil
 		}
-		if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+		if lease.Lost() {
 			standDownLost.Store(true)
 			log.Warn("missing-file-repoint: scan stand-down lease lost — aborting remaining writes")
 			return nil
@@ -604,13 +695,12 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 		}
 
 		bookID := g.BookID
-		out := writeBookFileBatch(itemCtx, store, rows, bookFileBatchOpts{
-			Reporter: reporter,
+		out := t6g5WriteBookFileBatch(itemCtx, writer, rows, env.t6g5Base, t6g5BatchOpts{
 			Abort: func() bool {
 				if standDownLost.Load() {
 					return true
 				}
-				if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+				if lease.Lost() {
 					standDownLost.Store(true)
 					log.Warn("missing-file-repoint: scan stand-down lease lost — aborting remaining writes")
 					return true
@@ -645,16 +735,6 @@ func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanCo
 				"book", bookID, "planned", len(rows), "written", out.Applied)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		// The items are books now, so the label counts ROWS from its own atomic
-		// rather than the item index, which would read as "repointed 3/120" for
-		// 120 books holding 500 rows.
-		Label: func(_, books int) string {
-			return fmt.Sprintf("Repointed %d/%d rows across %d books (errs=%d)",
-				rowsDone.Load(), totalRewrites, books, updateErrs.Load())
-		},
 	})
 	if err != nil {
 		return plan, fmt.Errorf("repoint writes: %w", err)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 30f92b7b-033e-4403-927a-99445211075c
 // last-edited: 2026-11-13
 
@@ -11,15 +11,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/itunes"
+	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -51,6 +60,10 @@ type t6g5Base struct {
 	Logger *slog.Logger
 	// Progress reports done of total with a message; a total of 0 is unknown.
 	Progress func(done, total int, msg string)
+	// Touch stamps the run live without reporting progress, for a loop whose
+	// item is much larger than a unit of work (HEAD: registry.TouchLiveness;
+	// native: nothing, the progress writes already stamp the run).
+	Touch func()
 	// OpID is the run's operation ID (HEAD: ctxOpID(ctx); native: rc.RunID()).
 	OpID string
 	// Writer is the only write path (rule R10).
@@ -165,8 +178,32 @@ func t6g5ReporterBase(ctx context.Context, reporter sdk.Reporter, live bool) t6g
 		Log:      func(level slog.Level, msg string) { _ = reporter.Log(level, msg) },
 		Logger:   reporter.Logger(),
 		Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
-		OpID:     ctxOpID(ctx),
+		Touch:    func() { opsregistry.TouchLiveness(reporter) },
+		OpID:     t6g5HeadOpID(ctx, reporter),
 	}
+}
+
+// t6g5HeadOpID is the operation ID HEAD's report names carry: the reporter's,
+// else the run context's.
+func t6g5HeadOpID(ctx context.Context, reporter sdk.Reporter) string {
+	if id := opsregistry.ReporterOpID(reporter); id != "" {
+		return id
+	}
+	return ctxOpID(ctx)
+}
+
+// t6g5ReportPath is resolveReportPath(explicit, opReportFileName(...)) over the
+// env: the explicit path when one was given, otherwise
+// {root}/.reports/<prefix>-<opID>.tsv ("unknown-op" with no ID), its directory
+// proven writable before any work (HEAD's contract).
+func t6g5ReportPath(env t6g5Base, explicit, prefix string) (string, error) {
+	name := env.OpID
+	if name == "" {
+		name = "unknown-op"
+	}
+	return library.ReportPathNotify(env.Store.RootDir(), explicit, prefix+"-"+name+".tsv", func(dir string, was fs.FileMode) {
+		logger.New("maintenance").Warn("removed world write from the report directory, its mode was %o dir=%s", was, logger.SanitizeLogValue(dir))
+	})
 }
 
 // t6g5NativeBase fills the base the way the native shells do: from rc and the
@@ -191,6 +228,7 @@ func t6g5NativeBase(kind tasks.Kind, rc *tasks.RC, deps t6g5Deps, writes bool) (
 				rc.Progress().Note(msg)
 			}
 		},
+		Touch: func() {},
 		OpID:  string(rc.RunID()),
 		Store: deps.Store,
 	}
@@ -283,13 +321,19 @@ type t6g5LeaseFunc func(ctx context.Context, reason string) (t6g5Lease, error)
 // t6g5HeadLease is HEAD's acquire: the scan controller the plugin holds,
 // keyed by the operation's own ID.
 func (p *Plugin) t6g5HeadLease(reporter sdk.Reporter) t6g5LeaseFunc {
+	return t6g5HeadLeaseOn(p.deps, reporter)
+}
+
+// t6g5HeadLeaseOn is HEAD's acquire over a scan controller of the caller's
+// own (nil holds nothing, as in acquireScanStandDownForApply).
+func t6g5HeadLeaseOn(scan ScanController, reporter sdk.Reporter) t6g5LeaseFunc {
 	return func(ctx context.Context, reason string) (t6g5Lease, error) {
-		holderID, held, release, err := acquireScanStandDownForApply(ctx, p.deps, reporter, reason)
+		holderID, held, release, err := acquireScanStandDownForApply(ctx, scan, reporter, reason)
 		if err != nil {
 			return t6g5Lease{Lost: func() bool { return false }, Release: release}, err
 		}
 		return t6g5Lease{
-			Lost:    func() bool { return scanStandDownLostForApply(p.deps, holderID, held) },
+			Lost:    func() bool { return scanStandDownLostForApply(scan, holderID, held) },
 			Release: release,
 		}, nil
 	}
@@ -312,6 +356,64 @@ func t6g5NativeLease(rc *tasks.RC, deps t6g5Deps) t6g5LeaseFunc {
 			Lost:    func() bool { return ctx.Err() != nil },
 			Release: h.Release,
 		}, nil
+	}
+}
+
+// t6g5BatchOpts is bookFileBatchOpts without the reporter: the engine-neutral
+// options of one book's batch write.
+type t6g5BatchOpts struct {
+	// Progress renders the progress line for row done of total, at most once per
+	// bookFileBatchProgressInterval.
+	Progress func(done, total int) (current, progressTotal int, msg string)
+	// Abort, when it returns true, stops the rest of this book's batch.
+	Abort func() bool
+	// OnRow is called after each row attempt with its index and whether it was
+	// applied.
+	OnRow func(i int, applied bool)
+}
+
+// t6g5WriteBookFileBatch is writeBookFileBatch over the env: the same single
+// UpdateBookFiles call per book, a liveness stamp after every row, the same
+// throttled progress line and the same abort, with the stamp and the progress
+// going to the env rather than a reporter.
+func t6g5WriteBookFileBatch(ctx context.Context, w bookFileBatchWriter, rows []*database.BookFile, env t6g5Base, opts t6g5BatchOpts) bookFileWriteOutcome {
+	if len(rows) == 0 {
+		return bookFileWriteOutcome{}
+	}
+	batchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	done := 0
+	lastProgress := time.Now()
+	written, err := w.UpdateBookFiles(batchCtx, rows, func(i int, applied bool) {
+		done++
+		env.Touch()
+		if opts.OnRow != nil {
+			opts.OnRow(i, applied)
+		}
+		if opts.Progress != nil && time.Since(lastProgress) >= bookFileBatchProgressInterval {
+			cur, tot, msg := opts.Progress(done, len(rows))
+			env.Progress(cur, tot, msg)
+			lastProgress = time.Now()
+		}
+		// Checked AFTER the row, so the abort stops the NEXT row rather than
+		// discarding work already committed.
+		if opts.Abort != nil && opts.Abort() {
+			cancel()
+		}
+	})
+	return classifyBookFileWrites(written, err)
+}
+
+// t6g5PrewriteHeartbeat is prewriteHeartbeat over the env: every
+// bookFileStatLivenessEvery rows it stamps the run live, then asks abort.
+func t6g5PrewriteHeartbeat(env t6g5Base, abort func() bool) func(i int) bool {
+	return func(i int) bool {
+		if i%bookFileStatLivenessEvery != 0 {
+			return true
+		}
+		env.Touch()
+		return abort == nil || !abort()
 	}
 }
 
@@ -552,6 +654,14 @@ func t6g5Common(def sdk.OperationDef, kind tasks.Kind, effects tasks.Effects, sc
 // interfacebloat limit.
 type t6g5Writer interface {
 	libraryStateRepairModifier
+	reapCacheDeleter
+	bookFileBatchWriter
+	mergeSamePathMerger
+	mbfWriter
+	narratorSplitWriter
+	playlistImportWriter
+	icStoreWriter
+	itunesRegroupWriter
 	// GROUPS-WRITER
 }
 
@@ -576,6 +686,18 @@ type t6g5Store interface {
 	t6g5ScanReader
 	t6g5BookFileReader
 	libraryStateRepairReader
+	reapCacheLister
+	reapBookResolver
+	repointReader
+	mbfReader
+	narratorPurgeReader
+	narratorSplitReader
+	playlistImportReader
+	icStoreReader
+	itunesRegroupReader
+	// GetAllBookFilesCoreIncludingRetired is GetAllBookFilesCore with the retired
+	// rows kept.
+	GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
 	// RootDir is the library root (HEAD: deps.RootDir()).
 	RootDir() string
 	// GROUPS-STORE
@@ -609,7 +731,7 @@ type headT6g5Writer struct{ p *Plugin }
 type headT6g5Store struct{ p *Plugin }
 
 // t6g5OpsStore is the plugin's store, or HEAD's "database not initialized".
-func (p *Plugin) t6g5OpsStore() (database.Store, error) {
+func (p *Plugin) t6g5OpsStore() (OpsStore, error) {
 	st := p.deps.OpsStore()
 	if st == nil {
 		return nil, errT6g5NoStore
@@ -647,6 +769,497 @@ func (w headT6g5Writer) ModifyBook(id string, fn func(*database.Book) error) (*d
 	return st.ModifyBook(id, fn)
 }
 
+func (s headT6g5Store) ListMetadataCacheKeys() ([]database.MetadataCacheSummary, error) {
+	c := s.p.deps.MetadataCacheStore()
+	if c == nil {
+		return nil, errT6g5NoStore
+	}
+	return c.ListMetadataCacheKeys()
+}
+
+func (s headT6g5Store) GetBookByID(id string) (*database.Book, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookByID(id)
+}
+
+func (w headT6g5Writer) DeleteMetadataCache(bookID string) error {
+	c := w.p.deps.MetadataCacheStore()
+	if c == nil {
+		return errT6g5NoStore
+	}
+	return c.DeleteMetadataCache(bookID)
+}
+
+func (s headT6g5Store) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetAllBooksCore(limit, offset)
+}
+
+func (s headT6g5Store) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookFiles(bookID)
+}
+
+func (s headT6g5Store) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return database.AllBookFilesCoreIncludingRetired(st)
+}
+
+func (s headT6g5Store) GetBookFileByID(bookID, fileID string) (*database.BookFile, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookFileByID(bookID, fileID)
+}
+
+func (s headT6g5Store) ListNarrators() ([]database.Narrator, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.ListNarrators()
+}
+
+func (s headT6g5Store) NarratorRefCounts() (database.NarratorRefs, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return database.NarratorRefs{}, err
+	}
+	return database.NarratorRefCounts(st)
+}
+
+func (s headT6g5Store) NarratorLinkCount(narratorID int) (int, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return 0, err
+	}
+	return database.NarratorLinkCount(st, narratorID)
+}
+
+func (w headT6g5Writer) RecordOperationChange(change *database.OperationChange) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return database.RecordOperationChange(st, change)
+}
+
+func (w headT6g5Writer) DeleteNarrator(id int) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return st.DeleteNarrator(id)
+}
+
+func (w headT6g5Writer) InvalidateAuthorsCache() { w.p.deps.InvalidateAuthorsCache() }
+
+func (w headT6g5Writer) MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return st.MoveBookFilesToBookBulk(moves, targetBookID)
+}
+
+func (w headT6g5Writer) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.ModifyBookFile(bookID, fileID, fn)
+}
+
+func (w headT6g5Writer) MergeBooks(opID string, bookIDs []string, primaryID string) (int, error) {
+	return w.p.deps.MergeBooks(opID, bookIDs, primaryID)
+}
+
+func (w headT6g5Writer) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return 0, err
+	}
+	return st.UpdateBookFiles(ctx, files, afterRow)
+}
+
+func (s headT6g5Store) BooksLinkingNarrators(ids map[int]bool) (map[string][]database.BookNarrator, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return database.BooksLinkingNarrators(st, ids)
+}
+
+func (s headT6g5Store) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookAuthors(bookID)
+}
+
+func (s headT6g5Store) GetAuthorByID(id int) (*database.Author, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetAuthorByID(id)
+}
+
+func (s headT6g5Store) GetBookNarrators(bookID string) ([]database.BookNarrator, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBookNarrators(bookID)
+}
+
+func (w headT6g5Writer) CreateNarrator(name string) (*database.Narrator, error) {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.CreateNarrator(name)
+}
+
+func (w headT6g5Writer) SetBookNarrators(bookID string, narrators []database.BookNarrator) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return st.SetBookNarrators(bookID, narrators)
+}
+
+func (s headT6g5Store) LibraryReadPath() string { return config.AppConfig.ITunes.LibraryReadPath }
+
+func (s headT6g5Store) ProbeSmartPlaylists(lib *itunes.ITLLibrary, ownerUserID string) itunesservice.PlaylistImportResult {
+	return itunesservice.NewPlaylistImporter(s.p.deps.PlaylistStore()).MigrateSmartPlaylists(lib,
+		itunesservice.PlaylistImportOptions{OwnerUserID: ownerUserID, DryRun: true})
+}
+
+func (s headT6g5Store) CountSmartPlaylists() (int, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return 0, err
+	}
+	_, total, err := st.ListUserPlaylists("smart", 1, 0)
+	return total, err
+}
+
+func (w headT6g5Writer) ImportSmartPlaylists(lib *itunes.ITLLibrary, ownerUserID string) itunesservice.PlaylistImportResult {
+	return itunesservice.NewPlaylistImporter(w.p.deps.PlaylistStore()).MigrateSmartPlaylists(lib,
+		itunesservice.PlaylistImportOptions{OwnerUserID: ownerUserID, DryRun: false})
+}
+
+func (s headT6g5Store) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetBooksByVersionGroup(groupID)
+}
+
+func (s headT6g5Store) GetAllPreferencesForUser(userID string) ([]database.UserPreferenceKV, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetAllPreferencesForUser(userID)
+}
+
+func (s headT6g5Store) GetSeriesByID(id int) (*database.Series, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetSeriesByID(id)
+}
+
+func (s headT6g5Store) GetBookTagsDetailed(bookID string) ([]database.BookTag, error) {
+	tr := s.p.deps.BookTagReader()
+	if tr == nil {
+		return nil, errT6g5NoStore
+	}
+	return tr.GetBookTagsDetailed(bookID)
+}
+
+func (s headT6g5Store) GetAuthorByName(name string) (*database.Author, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetAuthorByName(name)
+}
+
+func (s headT6g5Store) GetChaptersForBook(bookID string) ([]database.Chapter, error) {
+	vps := s.p.deps.VersionPrimaryStore()
+	if vps == nil {
+		return nil, errT6g5NoStore
+	}
+	return vps.GetChaptersForBook(bookID)
+}
+
+func (s headT6g5Store) BookFileRowsAtPathStrict(path string) ([]database.BookFile, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	lk, ok := database.AsCapability[database.BookFilePathLookup](st)
+	if !ok {
+		return nil, errors.New("the store cannot look up which rows name a path")
+	}
+	return database.BookFileRowsAtPathStrict(lk, path)
+}
+
+func (s headT6g5Store) RefuseWhileLibraryScanActive(opName string) error {
+	return refuseWhileLibraryScanActive(s.p.deps.OperationQueueStore(), opName)
+}
+
+func (s headT6g5Store) PlanLibraryClone(book *database.Book, files []database.BookFile) ([]string, error) {
+	return s.p.deps.PlanLibraryClone(book, files)
+}
+
+func (s headT6g5Store) LibraryITunesPath(path string) string { return s.p.deps.LibraryITunesPath(path) }
+
+func (w headT6g5Writer) DeleteBook(id string) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return st.DeleteBook(id)
+}
+
+func (w headT6g5Writer) DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error) {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.DeleteBookFilesByIDs(refs)
+}
+
+func (w headT6g5Writer) SetBookAuthors(bookID string, authors []database.BookAuthor) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return st.SetBookAuthors(bookID, authors)
+}
+
+func (w headT6g5Writer) SetUserPreferenceForUser(userID, key, value string) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return st.SetUserPreferenceForUser(userID, key, value)
+}
+
+func (w headT6g5Writer) SaveChaptersForBook(bookID string, chapters []database.Chapter) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	cp, ok := database.AsCapability[chapterPersister](st)
+	if !ok {
+		return errors.New("store cannot write chapter tables")
+	}
+	return cp.SaveChaptersForBook(bookID, chapters)
+}
+
+func (w headT6g5Writer) CloneBookIntoLibrary(book *database.Book, files []database.BookFile, opID string) (string, error) {
+	return w.p.deps.CloneBookIntoLibrary(book, files, opID)
+}
+
+func (w headT6g5Writer) Reflink(src, dst string) error {
+	if w.p.reflinkFile != nil {
+		return w.p.reflinkFile(src, dst)
+	}
+	return fileops.Reflink(src, dst)
+}
+
+func (w headT6g5Writer) userState() (merge.UserProgressMerger, error) {
+	um := w.p.deps.MergeUserStateStore()
+	if um == nil {
+		return nil, errT6g5NoStore
+	}
+	return um, nil
+}
+
+func (w headT6g5Writer) CarryStateBeforeHardDelete(keepID, doomedID string) error {
+	um, err := w.userState()
+	if err != nil {
+		return err
+	}
+	return merge.CarryStateBeforeHardDelete(um, keepID, doomedID)
+}
+
+func (w headT6g5Writer) HardDeleteWithoutUserState(bookID string, del func() error) error {
+	um, err := w.userState()
+	if err != nil {
+		return err
+	}
+	return merge.HardDeleteWithoutUserState(um, bookID, del)
+}
+
+func (w headT6g5Writer) CarryStateBetweenLiveBooks(toID, fromID string) error {
+	um, err := w.userState()
+	if err != nil {
+		return err
+	}
+	return merge.CarryStateBetweenLiveBooks(um, toID, fromID)
+}
+
+func (s headT6g5Store) GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetAllBooksFullFrom(afterID, limit)
+}
+
+func (s headT6g5Store) GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetExternalIDsForBook(bookID)
+}
+
+func (s headT6g5Store) GetAllSeries() ([]database.Series, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetAllSeries()
+}
+
+func (s headT6g5Store) GetAllAuthors() ([]database.Author, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.GetAllAuthors()
+}
+
+// t6g5Retired is the store's retired-row reader capability, or the same
+// refusal HEAD's regroup gave when the store cannot list retired rows.
+func (s headT6g5Store) t6g5Retired() (database.RetiredBookFileReader, error) {
+	st, err := s.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	r, ok := database.AsCapability[database.RetiredBookFileReader](st)
+	if !ok {
+		return nil, errors.New("the store cannot list book_file rows including retired ones")
+	}
+	return r, nil
+}
+
+func (s headT6g5Store) GetBookFilesIncludingRetired(bookID string) ([]database.BookFile, error) {
+	r, err := s.t6g5Retired()
+	if err != nil {
+		return nil, err
+	}
+	return r.GetBookFilesIncludingRetired(bookID)
+}
+
+func (s headT6g5Store) GetRetiredBookFiles(holderID string) ([]database.BookFile, error) {
+	r, err := s.t6g5Retired()
+	if err != nil {
+		return nil, err
+	}
+	return r.GetRetiredBookFiles(holderID)
+}
+
+func (s headT6g5Store) GetRetiredVersionsFromBook(shellID string) ([]database.BookVersion, error) {
+	r, err := s.t6g5Retired()
+	if err != nil {
+		return nil, err
+	}
+	return r.GetRetiredVersionsFromBook(shellID)
+}
+
+func (s headT6g5Store) GetBookFileByPIDIncludingRetired(pid string) (*database.BookFile, error) {
+	r, err := s.t6g5Retired()
+	if err != nil {
+		return nil, err
+	}
+	return r.GetBookFileByPIDIncludingRetired(pid)
+}
+
+func (s headT6g5Store) GetBookFileByPathIncludingRetired(path string) (*database.BookFile, error) {
+	r, err := s.t6g5Retired()
+	if err != nil {
+		return nil, err
+	}
+	return r.GetBookFileByPathIncludingRetired(path)
+}
+
+func (s headT6g5Store) GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error) {
+	tr := s.p.deps.BookTagReader()
+	if tr == nil {
+		return nil, errT6g5NoStore
+	}
+	return tr.GetBookTagsByBookIDs(bookIDs)
+}
+
+func (w headT6g5Writer) UpdateBook(id string, book *database.Book) (*database.Book, error) {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.UpdateBook(id, book)
+}
+
+func (w headT6g5Writer) RecomputeBookAggregates(bookID string) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return st.RecomputeBookAggregates(bookID)
+}
+
+func (w headT6g5Writer) MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return st.MoveBookFilesToBook(fileIDs, sourceBookID, targetBookID)
+}
+
+func (w headT6g5Writer) CreateBook(book *database.Book) (*database.Book, error) {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return nil, err
+	}
+	return st.CreateBook(book)
+}
+
+func (w headT6g5Writer) ReassignExternalID(source, externalID, newBookID string) error {
+	st, err := w.p.t6g5OpsStore()
+	if err != nil {
+		return err
+	}
+	return st.ReassignExternalID(source, externalID, newBookID)
+}
+
+// UserProgress is the merge user-state store, nil when none is wired.
+func (w headT6g5Writer) UserProgress() merge.UserProgressMerger {
+	return w.p.deps.MergeUserStateStore()
+}
+
 // --- the group's list function ---
 
 // t6g5Kinds returns every native kind of file group 5, in file order, each with
@@ -654,10 +1267,20 @@ func (w headT6g5Writer) ModifyBook(id string, fn func(*database.Book) error) (*d
 // production; F5-18 does.
 func (p *Plugin) t6g5Kinds(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
 	return []tasks.Definition{
+		p.itunesCloneIntoLibraryKind(deps, sched),
+		p.itunesPlaylistImportKind(deps, sched),
+		p.itunesRegroupKind(deps, sched),
 		p.libraryStateRepairKind(deps, sched),
+		p.markMissingFilesKind(deps, sched),
+		p.mergeSamePathDupesKind(deps, sched),
 		p.metadataRefreshKind(deps, sched),
+		p.metadataCacheReapKind(deps, sched),
 		p.missingFileAuditKind(deps, sched),
 		p.missingFileRepairKind(deps, sched),
+		p.missingFileRepointKind(deps, sched),
+		p.moveBookFileRowsKind(deps, sched),
+		p.purgeEmptyNarratorsKind(deps, sched),
+		p.splitJoinedNarratorsKind(deps, sched),
 	}
 }
 
