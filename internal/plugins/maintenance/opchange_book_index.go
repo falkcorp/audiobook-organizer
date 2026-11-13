@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-11-13
 
@@ -76,18 +76,18 @@ import (
 // *PebbleStore method outside database.Store. Every mode writes index keys
 // only, never journal rows.
 
-type opChangeIndexRebuilder interface {
-	opChangeIndexVerifier
-	opChangeIndexBuilder
+type t6g6OpChangeIndexRebuilder interface {
+	t6g6OpChangeIndexVerifier
+	t6g6OpChangeIndexBuilder
 }
 
-// opChangeIndexVerifier is the read half of the index surface: the verify.
-type opChangeIndexVerifier interface {
+// t6g6OpChangeIndexVerifier is the read half of the index surface: the verify.
+type t6g6OpChangeIndexVerifier interface {
 	VerifyOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookIndexReport, error)
 }
 
-// opChangeIndexBuilder is the write half: the two modes that write index keys.
-type opChangeIndexBuilder interface {
+// t6g6OpChangeIndexBuilder is the write half: the two modes that write index keys.
+type t6g6OpChangeIndexBuilder interface {
 	RebuildOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookBackfillResult, error)
 	EnsureOpChangeByBookIndexWith(ctx context.Context, opts database.OpChangeEnsureOptions) (database.OpChangeByBookEnsureResult, error)
 }
@@ -208,14 +208,14 @@ type opChangeBookIndexStore interface {
 	// OpChangeIndexVerifier returns the verify surface and a description of the
 	// store ("%T") for the refusal messages; ok is false when no store in the
 	// decorator chain has the index.
-	OpChangeIndexVerifier() (v opChangeIndexVerifier, desc string, ok bool)
+	OpChangeIndexVerifier() (v t6g6OpChangeIndexVerifier, desc string, ok bool)
 }
 
 // opChangeBookIndexWriter is the writes the op makes: the two modes that write
 // index keys, never journal rows. Whether the store has the index is the
 // Store's answer (OpChangeIndexVerifier), asked first.
 type opChangeBookIndexWriter interface {
-	opChangeIndexBuilder
+	t6g6OpChangeIndexBuilder
 }
 
 // opChangeBookIndexEnv is what the core takes from its shell.
@@ -228,10 +228,11 @@ type opChangeBookIndexEnv struct {
 	ContinueInPlace error
 }
 
-// opChangeBookIndexParallelism is the op's concurrency. HEAD declared none and
-// the store's index passes are serialized by its own slot.
-func opChangeBookIndexParallelism() tasks.Parallelism {
-	return tasks.Sequential("HEAD declared no concurrency; the store's index-pass slot serializes every mode")
+// opChangeYieldCheckpoint is the marker a native ensure checkpoints before it
+// yields. The resume point itself lives in the store; the marker is what the
+// kernel needs to honour the yield.
+type opChangeYieldCheckpoint struct {
+	VerifiedRows int `json:"verified_rows"`
 }
 
 // opChangeBookIndexNativeParams are the native kind's params: HEAD's without
@@ -252,10 +253,15 @@ func (p *Plugin) opChangeBookIndexNative(deps t6g6Deps, sched func(tasks.Kind) *
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.opchange-book-index")
 	c.Timeout = 60 * time.Minute
-	return tasks.Task(opChangeBookIndexKind, tasks.TaskSpec[opChangeBookIndexNativeParams, struct{}]{
+	return tasks.Task(opChangeBookIndexKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
-		Run: func(rc *tasks.RC, np opChangeBookIndexNativeParams) (struct{}, error) {
-			if np.Ensure && rc.Mode() != tasks.ModeLive {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			var np opChangeBookIndexNativeParams
+			if err := t6g6DecodeParams(opChangeBookIndexKind, raw, &np); err != nil {
+				return struct{}{}, err
+			}
+			live := rc.Mode() == tasks.ModeLive
+			if np.Ensure && !live {
 				return struct{}{}, fmt.Errorf("%s: ensure=true writes index keys; start with mode live", opChangeBookIndexKind)
 			}
 			env := opChangeBookIndexEnv{
@@ -267,8 +273,12 @@ func (p *Plugin) opChangeBookIndexNative(deps t6g6Deps, sched func(tasks.Kind) *
 			}
 			// A Preview run is read-only and has no writer to build; the verify
 			// goes through the store.
-			if rc.Mode() == tasks.ModeLive {
-				env.Writer = deps.NewWriter(rc.Writer())
+			if live {
+				w, err := t6g6NewWriter(opChangeBookIndexKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
 			}
 			return struct{}{}, opChangeBookIndexCore(rc.Context(), np.Ensure, env)
 		},
@@ -299,11 +309,11 @@ func opChangeBookIndexCore(ctx context.Context, ensure bool, env opChangeBookInd
 	}
 	switch {
 	case ensure:
-		return ensureOpChangeBookIndexVia(ctx, env.Writer, env)
+		return t6g6EnsureOpChangeBookIndex(ctx, env.Writer, env)
 	case !env.Live:
-		return previewOpChangeBookIndexVia(ctx, v, env)
+		return t6g6PreviewOpChangeBookIndex(ctx, v, env)
 	default:
-		return rebuildOpChangeBookIndexVia(ctx, env.Writer, env)
+		return t6g6RebuildOpChangeBookIndex(ctx, env.Writer, env)
 	}
 }
 
@@ -320,16 +330,11 @@ func t6g6OpChangeIndexProgressVia(env opChangeBookIndexEnv) database.OpChangeInd
 	}
 }
 
-// opChangeEnsureProgress is t6g6OpChangeIndexProgressVia for the ensure: the verify
-// phase reports a determinate (rows, total) once the store has sized the pass,
-// because the registry counts progress toward a yield only against a total
-// (an indeterminate report advances nothing), and rows is absolute across the
-// runs of one verify. The other phases stay indeterminate.
-func opChangeEnsureProgress(reporter sdk.Reporter) (database.OpChangeIndexProgress, func(total int)) {
-	return t6g6OpChangeEnsureProgressVia(t6g6HeadEnvForOpChange(reporter))
-}
-
-// t6g6OpChangeEnsureProgressVia is opChangeEnsureProgress over the env's hooks.
+// t6g6OpChangeEnsureProgressVia is t6g6OpChangeIndexProgressVia for the ensure:
+// the verify phase reports a determinate (rows, total) once the store has sized
+// the pass, because the registry counts progress toward a yield only against a
+// total (an indeterminate report advances nothing), and rows is absolute across
+// the runs of one verify. The other phases stay indeterminate.
 func t6g6OpChangeEnsureProgressVia(env opChangeBookIndexEnv) (database.OpChangeIndexProgress, func(total int)) {
 	var total atomic.Int64
 	progress := func(phase string, rows int) {
@@ -343,14 +348,9 @@ func t6g6OpChangeEnsureProgressVia(env opChangeBookIndexEnv) (database.OpChangeI
 	return progress, func(n int) { total.Store(int64(n)) }
 }
 
-// previewOpChangeBookIndex is the read-only mode: it reports what a rebuild
+// t6g6PreviewOpChangeBookIndex is the read-only mode: it reports what a rebuild
 // would fix and writes nothing.
-func previewOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
-	return previewOpChangeBookIndexVia(ctx, r, t6g6HeadEnvForOpChange(reporter))
-}
-
-// previewOpChangeBookIndexVia is previewOpChangeBookIndex over the env's hooks.
-func previewOpChangeBookIndexVia(ctx context.Context, r opChangeIndexVerifier, env opChangeBookIndexEnv) error {
+func t6g6PreviewOpChangeBookIndex(ctx context.Context, r t6g6OpChangeIndexVerifier, env opChangeBookIndexEnv) error {
 	env.Progress(0, 1, "verifying opchange_by_book: index (preview, writes nothing)")
 	rep, err := r.VerifyOpChangeByBookIndex(ctx, t6g6OpChangeIndexProgressVia(env))
 	if err != nil {
@@ -367,12 +367,8 @@ func previewOpChangeBookIndexVia(ctx context.Context, r opChangeIndexVerifier, e
 	return nil
 }
 
-func rebuildOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
-	return rebuildOpChangeBookIndexVia(ctx, r, t6g6HeadEnvForOpChange(reporter))
-}
-
-// rebuildOpChangeBookIndexVia is rebuildOpChangeBookIndex over the env's hooks.
-func rebuildOpChangeBookIndexVia(ctx context.Context, r opChangeIndexBuilder, env opChangeBookIndexEnv) error {
+// t6g6RebuildOpChangeBookIndex is the forced rebuild (dry_run=false).
+func t6g6RebuildOpChangeBookIndex(ctx context.Context, r t6g6OpChangeIndexBuilder, env opChangeBookIndexEnv) error {
 	env.Progress(0, 1, "rebuilding opchange_by_book: index")
 	res, err := r.RebuildOpChangeByBookIndex(ctx, t6g6OpChangeIndexProgressVia(env))
 	if err != nil {
@@ -394,7 +390,7 @@ func rebuildOpChangeBookIndexVia(ctx context.Context, r opChangeIndexBuilder, en
 	return nil
 }
 
-// ensureOpChangeBookIndex is the boot mode ({"ensure": true}): backfill or
+// t6g6EnsureOpChangeBookIndex is the boot mode ({"ensure": true}): backfill or
 // resume, verify, rebuild on a dirty verify (EnsureOpChangeByBookIndex). The
 // outcomes match the goroutine it replaced, with each failure now a red op
 // row instead of a log line only:
@@ -414,12 +410,7 @@ func rebuildOpChangeBookIndexVia(ctx context.Context, r opChangeIndexBuilder, en
 //
 // A store with no index at all (not Pebble) never reaches here: the run
 // logs a Warn tagged NoOpAttr and succeeds (runOpChangeBookIndexRebuild).
-func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
-	return ensureOpChangeBookIndexVia(ctx, r, t6g6HeadEnvForOpChange(reporter))
-}
-
-// ensureOpChangeBookIndexVia is ensureOpChangeBookIndex over the env's hooks.
-func ensureOpChangeBookIndexVia(ctx context.Context, r opChangeIndexBuilder, env opChangeBookIndexEnv) error {
+func t6g6EnsureOpChangeBookIndex(ctx context.Context, r t6g6OpChangeIndexBuilder, env opChangeBookIndexEnv) error {
 	env.Log(slog.LevelDebug, "Starting opchange_by_book index ensure (backfill if needed, verify, rebuild if dirty)")
 	env.Progress(0, 1, "checking opchange_by_book: index")
 	progress, setTotal := t6g6OpChangeEnsureProgressVia(env)
@@ -454,6 +445,14 @@ func ensureOpChangeBookIndexVia(ctx context.Context, r opChangeIndexBuilder, env
 		env.Log(slog.LevelInfo, fmt.Sprintf("opchange_by_book index verify pausing at its time budget: "+
 			"%d journal rows verified (%d this run); the operation continues from its cursor",
 			res.Verify.VerifiedRows, res.Verify.Rows))
+		// The kernel honours a yield only after a checkpoint since the attempt
+		// started; HEAD's registry did not need one (the cursors are the store's),
+		// so only a native shell, which sets Checkpoint, writes this marker.
+		if env.Checkpoint != nil {
+			if cpErr := env.Checkpoint(opChangeYieldCheckpoint{VerifiedRows: res.Verify.VerifiedRows}); cpErr != nil {
+				return fmt.Errorf("opchange_by_book index verify: checkpoint before yielding: %w", cpErr)
+			}
+		}
 		return fmt.Errorf("opchange_by_book index verify: %w", env.ContinueInPlace)
 	}
 	if !res.Trusted {
@@ -488,10 +487,4 @@ func ensureOpChangeBookIndexVia(ctx context.Context, r opChangeIndexBuilder, env
 	}
 	env.Log(slog.LevelInfo, summary)
 	return nil
-}
-
-// t6g6HeadEnvForOpChange is the env of a HEAD-shaped call: the reporter's hooks
-// and the registry's yield sentinel.
-func t6g6HeadEnvForOpChange(reporter sdk.Reporter) opChangeBookIndexEnv {
-	return opChangeBookIndexEnv{t6g6Env: t6g6HeadEnv(reporter, true), ContinueInPlace: opsregistry.ErrContinueInPlace}
 }

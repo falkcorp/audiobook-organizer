@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/nightly_compact_activity_log.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b7e4d92-5c1a-4f38-9e26-d8a3f17c6b45
 // last-edited: 2026-11-13
 
@@ -31,10 +31,14 @@ const nightlyCompactActivityLogHelp = "Collapses every activity entry from befor
 // kept days into daily digests (owner decision
 // 2026-09-13: keep only today in full detail).
 //
-// SAME MACHINERY AS THE MANUAL OP. It computes a different cutoff and then
-// calls compactAndRecord, which is CompactActivityEntries plus the per-chunk
-// liveness and persisted result the manual compact-activity-log op reports.
-// There is no second compactor.
+// SAME STORE PASS AS THE MANUAL OP. It computes a different cutoff and then
+// calls CompactActivityEntries, the same store pass the manual
+// compact-activity-log op makes, and records the per-chunk liveness and the
+// persisted result the way that op does. The record step is a copy of the
+// manual op's compactAndRecord body, inlined in nightlyCompactActivityLogCore:
+// once F5-08's group-neutral compactAndRecordCore has merged, this core calls it
+// and the copy goes (seams.d/F5-11.md names the follow-up). The store pass
+// itself exists once.
 //
 // SCHEDULE. The Schedule field below is documentation and the EnqueueOp
 // dedupe arm only: nothing evaluates OperationDef.Schedule as a timer (the
@@ -106,33 +110,37 @@ type nightlyCompactActivityLogEnv struct {
 	KeepDays func() int
 }
 
-// nightlyCompactActivityLogParallelism is the op's concurrency. HEAD declared
-// none and the compaction is one store pass that chunks itself.
-func nightlyCompactActivityLogParallelism() tasks.Parallelism {
-	return tasks.Sequential("HEAD declared no concurrency; the store's compaction is one pass that commits per chunk")
-}
-
 // nightlyCompactActivityLogNative is the native kind. It compacts activity
 // entries into daily digests, so it has no preview and refuses a Preview run.
 func (p *Plugin) nightlyCompactActivityLogNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g6Common(nightlyCompactActivityLogKind, sched)
 	c.Title = "Nightly activity compaction (00:10 local)"
 	c.Help = nightlyCompactActivityLogHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "operations"))
+	c.Effects = tasks.Writes(tasks.Res("books", "activity"))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.cleanup-activity-log")
 	c.Timeout = 6 * time.Hour
 	c.ProgressTimeout = 20 * time.Minute
-	return tasks.Task(nightlyCompactActivityLogKind, tasks.TaskSpec[struct{}, CompactActivityLogResult]{
+	return tasks.Task(nightlyCompactActivityLogKind, tasks.TaskSpec[json.RawMessage, CompactActivityLogResult]{
 		Common: c,
-		Run: func(rc *tasks.RC, _ struct{}) (CompactActivityLogResult, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (CompactActivityLogResult, error) {
+			if err := t6g6RefuseModeKeys(nightlyCompactActivityLogKind, raw); err != nil {
+				return CompactActivityLogResult{}, err
+			}
 			if err := t6g6LiveOnly(rc, nightlyCompactActivityLogKind); err != nil {
+				return CompactActivityLogResult{}, err
+			}
+			if err := t6g6NeedDep(nightlyCompactActivityLogKind, "ActivityLogFullDetailDays", deps.ActivityLogFullDetailDays != nil); err != nil {
+				return CompactActivityLogResult{}, err
+			}
+			w, err := t6g6NewWriter(nightlyCompactActivityLogKind, deps, rc)
+			if err != nil {
 				return CompactActivityLogResult{}, err
 			}
 			env := nightlyCompactActivityLogEnv{
 				t6g6Env:  t6g6NativeEnv(rc),
-				Writer:   deps.NewWriter(rc.Writer()),
+				Writer:   w,
 				KeepDays: deps.ActivityLogFullDetailDays,
 			}
 			return nightlyCompactActivityLogCore(rc.Context(), env)

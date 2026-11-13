@@ -102,33 +102,34 @@ type recompactActivityDigestsEnv struct {
 	Writer recompactActivityDigestsWriter
 }
 
-// recompactActivityDigestsParallelism is the op's concurrency. HEAD declared none
-// and the store's re-derivation is one blocking call.
-func recompactActivityDigestsParallelism() tasks.Parallelism {
-	return tasks.Sequential("HEAD declared no concurrency; the store's re-derivation is one blocking call")
-}
-
 // recompactActivityDigestsNative is the native kind. It rewrites stored digests,
 // so it has no preview and refuses a Preview run.
 func (p *Plugin) recompactActivityDigestsNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g6Common(recompactActivityDigestsKind, sched)
 	c.Title = "Recompact activity digests"
 	c.Help = recompactActivityDigestsHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "operations"))
+	c.Effects = tasks.Writes(tasks.Res("books", "activity"))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.cleanup-activity-log")
 	c.Timeout = 60 * time.Minute
 	c.ProgressTimeout = 60 * time.Minute
-	return tasks.Task(recompactActivityDigestsKind, tasks.TaskSpec[struct{}, RecompactActivityDigestsResult]{
+	return tasks.Task(recompactActivityDigestsKind, tasks.TaskSpec[json.RawMessage, RecompactActivityDigestsResult]{
 		Common: c,
-		Run: func(rc *tasks.RC, _ struct{}) (RecompactActivityDigestsResult, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (RecompactActivityDigestsResult, error) {
+			if err := t6g6RefuseModeKeys(recompactActivityDigestsKind, raw); err != nil {
+				return RecompactActivityDigestsResult{}, err
+			}
 			if err := t6g6LiveOnly(rc, recompactActivityDigestsKind); err != nil {
+				return RecompactActivityDigestsResult{}, err
+			}
+			w, err := t6g6NewWriter(recompactActivityDigestsKind, deps, rc)
+			if err != nil {
 				return RecompactActivityDigestsResult{}, err
 			}
 			env := recompactActivityDigestsEnv{
 				t6g6Env: t6g6NativeEnv(rc),
-				Writer:  deps.NewWriter(rc.Writer()),
+				Writer:  w,
 			}
 			return recompactActivityDigestsCore(rc.Context(), env)
 		},

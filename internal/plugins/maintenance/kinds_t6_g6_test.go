@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-13
 
@@ -174,7 +174,7 @@ func (s *t6g6TestStore) AllBookFilesCoreIncludingRetired() ([]database.BookFileC
 func (s *t6g6TestStore) ListReviewItems(database.ReviewFilter) ([]database.ReviewItem, int, error) {
 	return nil, 0, nil
 }
-func (s *t6g6TestStore) OpChangeIndexVerifier() (opChangeIndexVerifier, string, bool) {
+func (s *t6g6TestStore) OpChangeIndexVerifier() (t6g6OpChangeIndexVerifier, string, bool) {
 	return t6g6TestVerifier{}, "fake", true
 }
 

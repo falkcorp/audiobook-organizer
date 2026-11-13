@@ -1,15 +1,18 @@
 // file: internal/plugins/maintenance/kinds_t6_g6.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: d78a6104-de76-4b10-ab6f-1cf177912760
 // last-edited: 2026-11-13
 
 package maintenance
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/rbac"
@@ -88,6 +91,13 @@ type t6g6Env struct {
 	// StandDown parks the library scan for a live apply's write phase. Nil means
 	// no interlock is available (a core that needs one refuses to apply).
 	StandDown func(ctx context.Context, reason string) (t6g6Hold, error)
+	// Checkpoint saves state for the run's resume (rc.Checkpoint). Nil in a HEAD
+	// shell, whose cores that checkpoint do so through their own Reporter; a core
+	// that yields in place (ErrContinueInPlace) only does so when this is set.
+	Checkpoint func(state any) error
+	// Restore loads the state Checkpoint saved into v and reports whether there
+	// was any (rc.Restore). Nil in a HEAD shell.
+	Restore func(v any) (bool, error)
 }
 
 // t6g6Hold is a held scan stand-down.
@@ -207,12 +217,21 @@ func t6g6NativeEnv(rc *tasks.RC) t6g6Env {
 				rc.Progress().Note(msg)
 			}
 		},
-		Canceled: rc.Canceled,
-		Logger:   rc.Log(),
-		OpID:     string(rc.RunID()),
-		Items:    t6g6NativeItems(rc),
+		Canceled:   rc.Canceled,
+		Logger:     rc.Log(),
+		OpID:       string(rc.RunID()),
+		Items:      t6g6NativeItems(rc),
+		Checkpoint: rc.Checkpoint,
+		Restore:    rc.Restore,
 	}
-	e.Reporter = t6g6ProgressSink{fn: e.Progress}
+	e.Reporter = t6g6ReporterSink{
+		progress:   e.Progress,
+		touch:      rc.Progress().Tick,
+		log:        e.Log,
+		logger:     e.Logger,
+		canceled:   e.Canceled,
+		checkpoint: e.Checkpoint,
+	}
 	return e
 }
 
@@ -272,21 +291,137 @@ func t6g6LiveOnly(rc *tasks.RC, kind tasks.Kind) error {
 	return nil
 }
 
-// t6g6ProgressSink adapts an env.Progress hook to the sdk.Reporter that
-// sdk.NewProgress takes; NewProgress only calls UpdateProgress.
-type t6g6ProgressSink struct {
-	sdk.Reporter
-	fn func(current, total int, msg string)
+// t6g6ReporterSink is the sdk.Reporter a native shell hands the shared helpers
+// that take one (sdk.NewProgress, the batch writer's liveness stamps and
+// pre-write heartbeat). Every method is backed by the run's own hooks or, where
+// the run has none, is a plain no-op or a refusal, so a helper that reaches a
+// method the sink does not carry fails loudly instead of dereferencing a nil
+// embedded Reporter. It implements registry.LivenessToucher: the executor stamps
+// liveness from a progress report, a Touch and a Tick alike.
+type t6g6ReporterSink struct {
+	progress   func(current, total int, msg string)
+	touch      func()
+	log        func(level slog.Level, msg string, attrs ...slog.Attr)
+	logger     *slog.Logger
+	canceled   func() bool
+	checkpoint func(state any) error
 }
 
-func (s t6g6ProgressSink) UpdateProgress(current, total int, msg string) error {
-	s.fn(current, total, msg)
+var (
+	_ sdk.Reporter                = t6g6ReporterSink{}
+	_ opsregistry.LivenessToucher = t6g6ReporterSink{}
+)
+
+func (s t6g6ReporterSink) UpdateProgress(current, total int, msg string) error {
+	if s.progress != nil {
+		s.progress(current, total, msg)
+	}
 	return nil
+}
+
+func (s t6g6ReporterSink) Log(level slog.Level, msg string, attrs ...slog.Attr) error {
+	if s.log != nil {
+		s.log(level, msg, attrs...)
+	}
+	return nil
+}
+
+func (s t6g6ReporterSink) Logger() *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
+}
+
+func (s t6g6ReporterSink) Checkpoint(state any) error {
+	if s.checkpoint == nil {
+		return errors.New("checkpoint is not available in this run")
+	}
+	return s.checkpoint(state)
+}
+
+func (s t6g6ReporterSink) IsCanceled() bool { return s.canceled != nil && s.canceled() }
+
+func (s t6g6ReporterSink) RunPhase(ctx context.Context, _ string, fn func(context.Context, sdk.Reporter) error) error {
+	return fn(ctx, s)
+}
+
+func (s t6g6ReporterSink) Trigger(context.Context, string, any) error {
+	return errors.New("triggering an event is not available in this run")
+}
+
+func (s t6g6ReporterSink) SetCurrentItem(string) {}
+
+// TouchLiveness stamps the run's liveness clock (rc.Progress().Tick) without
+// reporting progress.
+func (s t6g6ReporterSink) TouchLiveness() {
+	if s.touch != nil {
+		s.touch()
+	}
 }
 
 // t6g6NewProgress is sdk.NewProgress over the env's progress hook.
 func t6g6NewProgress(env t6g6Env, n int) *sdk.Progress {
-	return sdk.NewProgress(t6g6ProgressSink{fn: env.Progress}, n)
+	return sdk.NewProgress(t6g6ReporterSink{progress: env.Progress}, n)
+}
+
+// t6g6ModeKeys are the param keys that would carry the run's mode: dry_run,
+// dryRun and apply. The mode comes from the start request (05-tasks 5T.3.7),
+// never from params, so a native writing shell refuses them.
+var t6g6ModeKeys = []string{"dry_run", "dryRun", "apply"}
+
+// t6g6DecodeParams is the native shells' params step: a mode key is refused
+// (case-insensitively, as encoding/json matches field names), then the rest is
+// decoded into v. Empty and null params decode to the zero value; params that
+// are not a JSON object are refused.
+func t6g6DecodeParams(kind tasks.Kind, raw json.RawMessage, v any) error {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 || bytes.Equal(t, []byte("null")) {
+		return nil
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(t, &keys); err != nil {
+		return fmt.Errorf("%s: decode params: %w", kind, err)
+	}
+	for key := range keys {
+		for _, banned := range t6g6ModeKeys {
+			if strings.EqualFold(key, banned) {
+				return fmt.Errorf("%s: params carry %q; the run's mode comes from the start request, not params", kind, key)
+			}
+		}
+	}
+	if err := json.Unmarshal(t, v); err != nil {
+		return fmt.Errorf("%s: decode params: %w", kind, err)
+	}
+	return nil
+}
+
+// t6g6RefuseModeKeys is t6g6DecodeParams for a shell whose body takes no params
+// of its own; any other key is ignored, as HEAD ignored the params of these defs.
+func t6g6RefuseModeKeys(kind tasks.Kind, raw json.RawMessage) error {
+	return t6g6DecodeParams(kind, raw, &struct{}{})
+}
+
+// t6g6NeedDep refuses a native run whose owner left a dependency unset, before
+// the core dereferences it.
+func t6g6NeedDep(kind tasks.Kind, name string, set bool) error {
+	if !set {
+		return fmt.Errorf("%s: t6g6Deps.%s is not set", kind, name)
+	}
+	return nil
+}
+
+// t6g6NewWriter builds the run's writer over its kernel-gated tasks.Writer,
+// refusing a run whose owner declared no factory (or one that returned nothing).
+func t6g6NewWriter(kind tasks.Kind, deps t6g6Deps, rc *tasks.RC) (t6g6Writer, error) {
+	if err := t6g6NeedDep(kind, "NewWriter", deps.NewWriter != nil); err != nil {
+		return nil, err
+	}
+	w := deps.NewWriter(rc.Writer())
+	if w == nil {
+		return nil, fmt.Errorf("%s: t6g6Deps.NewWriter returned no writer", kind)
+	}
+	return w, nil
 }
 
 // t6g6ErrgroupItems is a pool for the cores whose HEAD body ran its own bounded
@@ -408,9 +543,16 @@ func (s t6g6HeadStore) AllBookFilesCoreIncludingRetired() ([]database.BookFileCo
 
 // OpChangeIndexVerifier resolves the index's verify surface through the
 // decorator chain; desc is the store's type for the refusal messages.
-func (s t6g6HeadStore) OpChangeIndexVerifier() (opChangeIndexVerifier, string, bool) {
-	v, ok := database.AsCapability[opChangeIndexVerifier](s.OpsStore)
-	return v, fmt.Sprintf("%T", s.OpsStore), ok
+//
+// The verify and the build halves are ONE capability, as at HEAD: a decorator
+// that carries only one half answers "no index" here (the ensure then warns and
+// returns nil) rather than verifying through one half and failing the other.
+func (s t6g6HeadStore) OpChangeIndexVerifier() (t6g6OpChangeIndexVerifier, string, bool) {
+	v, ok := database.AsCapability[t6g6OpChangeIndexRebuilder](s.OpsStore)
+	if !ok {
+		return nil, fmt.Sprintf("%T", s.OpsStore), false
+	}
+	return v, fmt.Sprintf("%T", s.OpsStore), true
 }
 
 // t6g6HeadWriter is HEAD's writes: what each HEAD shell called, on the object it
@@ -433,8 +575,8 @@ func (w t6g6HeadWriter) CreateBookFile(file *database.BookFile) error {
 	return w.store.CreateBookFile(file)
 }
 
-func (w t6g6HeadWriter) builder() (opChangeIndexBuilder, error) {
-	b, ok := database.AsCapability[opChangeIndexBuilder](w.store)
+func (w t6g6HeadWriter) builder() (t6g6OpChangeIndexBuilder, error) {
+	b, ok := database.AsCapability[t6g6OpChangeIndexRebuilder](w.store)
 	if !ok {
 		return nil, fmt.Errorf("store %T has no opchange_by_book index", w.store)
 	}
