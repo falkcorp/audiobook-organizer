@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.3.1
+# version: 1.4.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -29,7 +29,7 @@ server.
 Two boots: one with auth on (every principal but ``authoff``) and one on a copy
 whose stored config has ``enable_auth`` turned off (``authoff``; R0 reads the
 stored config after the environment, so ``ENABLE_AUTH=false`` does not reach a
-store that has one: ``r0authoff/flip_auth.go.txt``). Secrets never reach the
+store that has one: ``r0config/edit_config.go.txt``). Secrets never reach the
 output: keys are minted on the copy and held in memory only.
 
 ``--check`` re-derives the data and exits 1 on any differing verdict cell.
@@ -808,16 +808,26 @@ def _without_secrets(body: Any) -> str:
     return re.sub(r"abk_[^\"\s,}]+", "abk_<cut>", json.dumps(body))[:400]
 
 
-FLIP_AUTH_SRC = pathlib.Path(__file__).with_name("r0authoff") / "flip_auth.go.txt"
+EDIT_CONFIG_SRC = pathlib.Path(__file__).with_name("r0config") / "edit_config.go.txt"
+
+# R0 answers 404 ahead of authentication on /api/v1/fingerprint/worker/* while this
+# flag is off (handlers/fpworker flagGuard), so a recording with it off sees no
+# principal's reach on those routes: both boots turn it on.
+WORKER_FLAG = "fingerprint_remote_workers_enabled=*>true"
+AUTH_OFF_EDIT = "enable_auth=true>false"
 
 
-def flip_auth_off(layout: Any) -> None:
-    """Turn enable_auth off in the staged copy's stored config (flip_auth.go.txt)."""
+def edit_config(layout: Any, edits: list[str]) -> None:
+    """Rewrite keys of the staged copy's stored config blob (edit_config.go.txt).
+
+    R0 reads the stored config after the environment, so the environment cannot
+    reach a key the blob holds; each edit names the value the key must hold now.
+    """
     with tempfile.TemporaryDirectory() as tmp:
-        src = pathlib.Path(tmp) / "flip_auth.go"
-        shutil.copy(FLIP_AUTH_SRC, src)
+        src = pathlib.Path(tmp) / "edit_config.go"
+        shutil.copy(EDIT_CONFIG_SRC, src)
         r = subprocess.run(  # noqa: S603 - fixed argv
-            ["go", "run", str(src), str(layout.db)],
+            ["go", "run", str(src), str(layout.db), *edits],
             cwd=w.REPO_ROOT,
             capture_output=True,
             text=True,
@@ -826,7 +836,7 @@ def flip_auth_off(layout: Any) -> None:
         )
     if r.returncode != 0:
         raise w.CorpusError(
-            f"could not turn enable_auth off in the copy: {r.stderr.strip()[-800:]}"
+            f"could not edit the copy's stored config ({', '.join(edits)}): {r.stderr.strip()[-800:]}"
         )
     print(r.stdout.strip(), file=sys.stderr, flush=True)
 
@@ -865,10 +875,9 @@ def boot_and_record(
     # environment does not reach: the recorder spreads its probes over loopback
     # source addresses instead (SourceIPs), and sets no ENABLE_RATE_LIMIT.
     env: dict[str, str] = {}
-    if auth_off:
-        # ENABLE_AUTH=false does not reach a store that has a config_blob either:
-        # rewrite enable_auth in the throwaway copy's blob.
-        flip_auth_off(layout)
+    # ENABLE_AUTH=false does not reach a store that has a config_blob either:
+    # rewrite the keys in the throwaway copy's blob.
+    edit_config(layout, [WORKER_FLAG, AUTH_OFF_EDIT] if auth_off else [WORKER_FLAG])
     proc = w.R0Process(binary, layout, args.port, docker=args.docker, extra_env=env)
     client = w.Client(proc.base, user_agent=RECORDER_UA)
     proc.start()

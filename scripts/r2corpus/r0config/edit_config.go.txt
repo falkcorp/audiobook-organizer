@@ -1,11 +1,18 @@
-// file: scripts/r2corpus/r0authoff/flip_auth.go.txt
-// version: 1.0.0
+// file: scripts/r2corpus/r0config/edit_config.go.txt
+// version: 2.0.0
 // guid: 3c8e5a17-9d24-4f60-b1a7-6e0d2c4f8b93
 // last-edited: 2026-11-13
 //
 // A throwaway program, not part of the build: scripts/r2corpus/record_r0_reach.py
 // copies this file to a temporary name ending in .go and runs it with `go run`
 // from the repository root, against a throwaway copy of the overlay corpus' store.
+//
+// It rewrites named keys of the stored config blob, each with the value it must
+// currently hold, so a store that is not the one the recorder expects fails the
+// run instead of being recorded: enable_auth=true>false for the auth-off boot,
+// and fingerprint_remote_workers_enabled=*>true for both boots (R0 answers 404
+// ahead of authentication on the fingerprint worker routes while the flag is
+// off, so no principal's reach there could be observed).
 //
 // R0 reads its settings from the stored config_blob after it has read the
 // environment, and the blob carries enable_auth (config.LoadConfigFromDatabase),
@@ -18,7 +25,8 @@
 // go.mod pins, v2.1.7, the version R0 v0.223.0 is built with, so the store's
 // format is not changed by the open.
 //
-// Usage: go run flip_auth.go <path of the store, audiobooks.pebble>
+// Usage: go run edit_config.go <path of the store, audiobooks.pebble> key=from>to ...
+// from is a JSON literal the key must hold now, or * for any value or none.
 
 package main
 
@@ -26,6 +34,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -40,18 +49,39 @@ type setting struct {
 	IsSecret bool   `json:"is_secret"`
 }
 
+// edit is one key=from>to argument.
+type edit struct{ key, from, to string }
+
+func parseEdit(arg string) (edit, error) {
+	key, rest, ok := strings.Cut(arg, "=")
+	from, to, ok2 := strings.Cut(rest, ">")
+	if !ok || !ok2 || key == "" || from == "" || to == "" || !json.Valid([]byte(to)) {
+		return edit{}, fmt.Errorf("%q is not key=from>to with a JSON literal to", arg)
+	}
+	return edit{key, from, to}, nil
+}
+
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: flip_auth <store path>")
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: edit_config <store path> key=from>to ...")
 		os.Exit(2)
 	}
-	if err := run(os.Args[1]); err != nil {
-		fmt.Fprintln(os.Stderr, "flip_auth:", err)
+	var edits []edit
+	for _, a := range os.Args[2:] {
+		e, err := parseEdit(a)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "edit_config:", err)
+			os.Exit(2)
+		}
+		edits = append(edits, e)
+	}
+	if err := run(os.Args[1], edits); err != nil {
+		fmt.Fprintln(os.Stderr, "edit_config:", err)
 		os.Exit(1)
 	}
 }
 
-func run(path string) (err error) {
+func run(path string, edits []edit) (err error) {
 	db, err := pebble.Open(path, &pebble.Options{})
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
@@ -76,11 +106,14 @@ func run(path string) (err error) {
 	if err := json.Unmarshal([]byte(row.Value), &blob); err != nil || blob == nil {
 		return fmt.Errorf("the stored config is not a JSON object: %v", err)
 	}
-	was, ok := blob["enable_auth"]
-	if !ok || string(was) != "true" {
-		return fmt.Errorf("the stored config has enable_auth %q, want true", string(was))
+	for _, e := range edits {
+		was, present := blob[e.key]
+		if e.from != "*" && string(was) != e.from {
+			return fmt.Errorf("the stored config has %s %q (present %v), want %s", e.key, string(was), present, e.from)
+		}
+		blob[e.key] = json.RawMessage(e.to)
+		fmt.Printf("%s: %s -> %s in %s\n", e.key, orNone(was, present), e.to, blobKey)
 	}
-	blob["enable_auth"] = json.RawMessage("false")
 	out, err := json.Marshal(blob)
 	if err != nil {
 		return err
@@ -93,6 +126,12 @@ func run(path string) (err error) {
 	if err := db.Set([]byte(blobKey), data, pebble.Sync); err != nil {
 		return fmt.Errorf("write %s: %w", blobKey, err)
 	}
-	fmt.Println("enable_auth: true -> false in", blobKey)
 	return nil
+}
+
+func orNone(v json.RawMessage, present bool) string {
+	if !present {
+		return "(absent)"
+	}
+	return string(v)
 }
