@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-13
 
@@ -480,6 +480,36 @@ func TestT6G2Kinds_Conformance(t *testing.T) {
 			if tasks.CommonOf(d).Schedule != nil {
 				t.Errorf("%s: nil sched must mean no schedule", d.Kind())
 			}
+		}
+	})
+
+	t.Run("watermark", func(t *testing.T) {
+		run := func(from, total, every int, order []int) []int {
+			var got []int
+			w := newT6G2Watermark(from, total, every, func(_ context.Context, mark int) error {
+				got = append(got, mark)
+				return nil
+			})
+			for _, i := range order {
+				w.complete(context.Background(), i)
+			}
+			return got
+		}
+		// Absolute indexes: a resumed walk starting at 10 checkpoints 10+mark,
+		// and an open gap stalls the mark until it closes.
+		if got, want := run(10, 5, 1, []int{12, 11, 10, 14, 13}), []int{13, 15}; !slices.Equal(got, want) {
+			t.Errorf("resumed out-of-order checkpoints = %v, want %v", got, want)
+		}
+		if got, want := run(0, 7, 3, []int{0, 1, 2, 3, 4, 5, 6}), []int{3, 6, 7}; !slices.Equal(got, want) {
+			t.Errorf("every=3 checkpoints = %v, want %v", got, want)
+		}
+		if got := run(0, 3, 1, []int{9, -1}); len(got) != 0 {
+			t.Errorf("out-of-range completions checkpointed %v", got)
+		}
+		if w := newT6G2Watermark(0, 3, 1, nil); w != nil {
+			t.Error("nil fn must give a nil tracker")
+		} else {
+			w.complete(context.Background(), 0) // safe on nil
 		}
 	})
 }
