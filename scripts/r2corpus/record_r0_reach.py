@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.3.0
+# version: 1.3.1
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -555,10 +555,13 @@ def census(admin: Probe) -> dict[str, Any]:
         )
         for u in (users.body.get("data") or {}).get("users", [])
     )
-    books = admin.fetch("/api/v1/audiobooks?limit=1")
+    books = admin.fetch("/api/v1/audiobooks/count")
     if books.status != 200:
-        raise RecorderError(f"census: GET /api/v1/audiobooks -> {books.status}")
-    total = (books.body or {}).get("count", (books.body or {}).get("total"))
+        raise RecorderError(f"census: GET /api/v1/audiobooks/count -> {books.status}")
+    total = ((books.body or {}).get("data") or {}).get("count")
+    if not isinstance(total, int) or isinstance(total, bool):
+        # A census that reads nothing counts nothing: the sentinel would pass on any drift.
+        raise RecorderError(f"census: the book count is {total!r}, not a number")
     return {
         "users": [list(r) for r in rows],
         "books": total,
