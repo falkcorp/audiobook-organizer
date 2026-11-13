@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_paths_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d41c7b92-6a35-4e08-9f1d-83b5e2a07c64
 // last-edited: 2026-11-13
 
@@ -551,4 +551,18 @@ func TestT6G3_TrashCleanupHeadShellStoresTheResultBeforeItLogs(t *testing.T) {
 	require.NotEmpty(t, rep.events)
 	assert.Equal(t, "result", rep.events[0], "the result is written first: %v", rep.events)
 	assert.Contains(t, rep.events, "log")
+}
+
+// HEAD's cover-text read stamps the run's liveness clock before each model
+// read (the watchdog's clock): one stamp per distinct image, through the
+// def's own Run over a reporter that counts them.
+func TestT6G3_CoverTextReadHeadShellStampsLivenessBeforeEachRead(t *testing.T) {
+	_, deps, _ := coverOpFixture(t)
+	reader := newT6G3GateReader(2, 1)
+	orig := newCoverTextReader
+	newCoverTextReader = func() coverTextReader { return reader }
+	t.Cleanup(func() { newCoverTextReader = orig })
+	rep := &touchReporter{}
+	require.NoError(t, New(deps).runCoverTextRead(context.Background(), json.RawMessage(`{"dry_run":false}`), rep))
+	assert.GreaterOrEqual(t, rep.touches.Load(), int64(2), "one liveness stamp per image read")
 }
