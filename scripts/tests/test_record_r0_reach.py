@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.2.2
+# version: 1.3.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -23,11 +23,13 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 from urllib.parse import urlparse
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -660,6 +662,78 @@ class AuthOffTest(unittest.TestCase):
         )
         statuses = out["columns"][0]
         self.assertNotIn(401, statuses[:-1])  # no route but the never-allowed one answers 401
+
+    def test_a_5xx_only_the_authoff_list_names_is_an_allow_in_the_authoff_pass(self):
+        fake = FakeR0(auth_off=True)
+        self.addCleanup(fake.stop)
+        client = w.Client(fake.base, user_agent="test")
+        p = [x for x in rec.principal_table() if x["kind"] == "authoff"]
+        probe = rec.Probe(client, p[0], None)
+        routes = [{k: v for k, v in r.items() if k != "atom"} for r in FIXTURE_ROUTES]
+        fake.fail_status["GET /api/v1/health"] = 500
+
+        def run():
+            return rec.record_pass(lambda _: probe, p, routes, probe, 1, False)
+
+        with self.assertRaises(rec.RecorderError):
+            run()
+        with mock.patch.dict(rec.OK_5XX_AUTHOFF, {"GET /api/v1/health": "a test"}):
+            self.assertIn(500, run()["columns"][0])
+        # the same entry does not loosen the auth-on pass
+        listed = mock.patch.dict(rec.OK_5XX_AUTHOFF, {"GET /api/v1/health": "a test"})
+        with listed, self.assertRaises(rec.RecorderError):
+            rec.verdict_of(500, "key:x GET /api/v1/health")
+
+
+class AuthFlipTest(unittest.TestCase):
+    class Client:
+        def __init__(self, status):
+            self.status = status
+
+        def request(self, method, path, auth=None, **kw):
+            return type("R", (), {"status": self.status, "body": {}})()
+
+    def test_a_boot_that_still_asks_for_a_credential_is_not_auth_off(self):
+        with self.assertRaises(w.CorpusError) as cm:
+            rec.check_auth_is_off(self.Client(401))
+        self.assertIn("authentication is still on", str(cm.exception))
+        rec.check_auth_is_off(self.Client(200))
+
+    def test_the_flip_runs_the_helper_from_the_repo_root_on_the_copys_store(self):
+        layout = mock.Mock()
+        layout.db = pathlib.Path("/x/db/audiobooks.pebble")
+        done = subprocess.CompletedProcess([], 0, stdout="enable_auth: true -> false\n", stderr="")
+        with mock.patch.object(rec.subprocess, "run", return_value=done) as run:
+            rec.flip_auth_off(layout)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:2], ["go", "run"])
+        self.assertTrue(argv[2].endswith("flip_auth.go"))
+        self.assertEqual(argv[3], "/x/db/audiobooks.pebble")
+        self.assertEqual(run.call_args.kwargs["cwd"], w.REPO_ROOT)
+
+    def test_a_failed_flip_stops_the_run(self):
+        layout = mock.Mock()
+        layout.db = pathlib.Path("/x/db/audiobooks.pebble")
+        bad = subprocess.CompletedProcess([], 1, stdout="", stderr="no config_blob")
+        failing = mock.patch.object(rec.subprocess, "run", return_value=bad)
+        with failing, self.assertRaises(w.CorpusError) as cm:
+            rec.flip_auth_off(layout)
+        self.assertIn("no config_blob", str(cm.exception))
+
+    def test_the_helper_source_is_a_txt_file_and_names_the_one_key_it_changes(self):
+        src = rec.FLIP_AUTH_SRC.read_text(encoding="utf-8")
+        self.assertEqual(rec.FLIP_AUTH_SRC.suffix, ".txt")
+        self.assertIn('blob["enable_auth"] = json.RawMessage("false")', src)
+        self.assertIn("pebble.Open(path, &pebble.Options{})", src)
+
+    def test_the_auth_on_pass_is_saved_and_read_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "sub" / rec.PARTIAL_ON
+            doc = {"columns": [[200, 403]], "canary": {"anonymous": 401}}
+            rec.save_partial(path, doc)
+            self.assertEqual(json.loads(path.read_text()), doc)
+        ns = rec.build_parser().parse_args(["--check", "--reuse-auth-on", "x.json"])
+        self.assertEqual(ns.reuse_auth_on, "x.json")
 
 
 class FilesAndCheckTest(unittest.TestCase):

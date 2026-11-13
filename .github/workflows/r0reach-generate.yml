@@ -1,5 +1,5 @@
 # file: .github/workflows/r0reach-generate.yml
-# version: 0.1.1
+# version: 0.2.0
 # guid: 61f3a9d2-5e84-4c07-b2a1-9d4e7c0f3b58
 # last-edited: 2026-11-13
 #
@@ -22,7 +22,7 @@ permissions:
 jobs:
   record:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,6 +30,10 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
       - name: Runtime libraries for the R0 binary
         run: sudo apt-get update -q && sudo apt-get install -y -q libtag1v5 || sudo apt-get install -y -q libtag2
       - name: Record R0's reach
