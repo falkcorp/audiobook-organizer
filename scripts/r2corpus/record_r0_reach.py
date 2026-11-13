@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.5.0
+# version: 1.5.1
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -496,9 +496,12 @@ def awaiting_runs(admin: Probe) -> list[dict[str, Any]]:
 
 # A task start that is authorized fails validation: a run must never start.
 TASK_OK_AFTER_AUTH = frozenset({400, 404, 409, 422})
-# An approval probe sends decision "maybe": 422 once authorized; 404 is the run
-# not being readable by the caller (mayReadRun), which is before the decision.
-APPROVE_REACHED = frozenset({422})
+# An approval probe sends decision "maybe": R0's ApproveRun answers 400
+# (VALIDATION_ERROR) once the caller is authorized, after the approver check and
+# before the Approver; 404 is the run not being readable by the caller
+# (mayReadRun), which is before the approver check. The first full recording
+# looked for 422 and so read every authorized approval as N.
+APPROVE_REACHED = frozenset({400})
 
 
 def probe_tasks(probes: list[Probe], defs: list[dict[str, Any]]) -> list[dict[str, Any]]:

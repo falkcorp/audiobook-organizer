@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.5.0
+# version: 1.5.1
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -265,7 +265,7 @@ class FakeR0:
                 return self.reply(h, 401)
             if not self.auth_off and "requests.approve" not in (atoms or []):
                 return self.reply(h, 403)
-            return self.reply(h, 422)
+            return self.reply(h, 400)
         for r in FIXTURE_ROUTES:
             pat = re.sub(r":[A-Za-z_]+", "[^/]+", r["path"])
             pat = re.sub(r"\*[A-Za-z_]+", ".+", pat)
