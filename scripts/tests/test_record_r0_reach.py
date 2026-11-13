@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.3.0
+# version: 1.3.1
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -109,6 +109,8 @@ class FakeR0:
             str, int
         ] = {}  # username -> status of GET /auth/me (a confined worker)
         self.delete_user_on: str | None = None  # a route whose probe drops a user
+        self.delete_book_on: str | None = None  # a route whose probe drops a book
+        self.count_reply: dict = {"data": {"count": 3}}
         self.defs = [
             {"id": "scan.trigger", "permissions": ["scan.trigger"], "approver": "requests.approve"},
             {"id": "books.noop", "permissions": ["library.view"], "approver": ""},
@@ -213,6 +215,8 @@ class FakeR0:
                 return self.reply(h, status)
         if self.delete_user_on and path == self.delete_user_on:
             self.users.pop("bystander", None)
+        if self.delete_book_on and path == self.delete_book_on:
+            self.count_reply = {"data": {"count": self.count_reply["data"]["count"] - 1}}
         user, atoms = self.principal(h)
         if path == "/api/v1/auth/login":
             u = (body or {}).get("username")
@@ -236,8 +240,8 @@ class FakeR0:
             return self.reply(h, 201, {"data": {"id": f"k-{len(self.keys)}", "api_key": secret}})
         if path == "/api/v1/users" and method == "GET" and (user and "users.manage" in atoms):
             return self.reply(h, 200, {"data": {"users": list(self.users.values())}})
-        if path == "/api/v1/audiobooks" and method == "GET":
-            return self.reply(h, 200, {"count": 3})
+        if path == "/api/v1/audiobooks/count" and method == "GET":
+            return self.reply(h, 200, self.count_reply)
         if path == "/api/v3/ops/defs" and method == "GET":
             return self.reply(h, 200 if user or self.auth_off else 401, {"items": self.defs})
         if path == "/api/v3/ops/runs" and method == "GET":
@@ -616,6 +620,21 @@ class RecordPassTest(unittest.TestCase):
         with self.assertRaises(rec.RecorderError) as cm:
             self.rig.run()
         self.assertIn("drift", str(cm.exception))
+
+    def test_a_dropped_book_fails_the_run(self):
+        self.rig.fake.delete_book_on = "/api/v1/system/reset"
+        with self.assertRaises(rec.RecorderError) as cm:
+            self.rig.run()
+        self.assertIn("drift", str(cm.exception))
+        self.assertIn("books", str(cm.exception))
+
+    def test_a_census_that_cannot_read_the_book_count_fails_the_run(self):
+        for reply in ({"count": 3}, {"data": {}}, {"data": {"count": "3"}}):
+            with self.subTest(reply=reply):
+                self.rig.fake.count_reply = reply
+                with self.assertRaises(rec.RecorderError) as cm:
+                    self.rig.run()
+                self.assertIn("book count", str(cm.exception))
 
     def test_a_task_start_that_is_not_refused_after_authorization_fails(self):
         self.rig.fake.defs_start_status = 202  # a run started
