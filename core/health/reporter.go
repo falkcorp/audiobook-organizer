@@ -1,7 +1,7 @@
 // file: core/health/reporter.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 20a5ee3e-4349-4ef1-a6de-3b6eeacc4b92
-// last-edited: 2026-11-10
+// last-edited: 2026-11-13
 
 package health
 
@@ -33,6 +33,10 @@ type Reporters interface {
 // ErrNotOwned is what Reporters.Reporter returns for a component the module
 // did not register.
 var ErrNotOwned = errors.New("health: component not registered by this module")
+
+// ErrComponentExists is Register's answer for an ID already registered; the
+// startup table's degraded component, one per token, tests for it.
+var ErrComponentExists = errors.New("health: component is already registered")
 
 // componentReporter is the Reporter of one registered component.
 type componentReporter struct {

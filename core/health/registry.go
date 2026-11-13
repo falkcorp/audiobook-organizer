@@ -1,5 +1,5 @@
 // file: core/health/registry.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 268f470f-94c4-4d33-93bd-af65944395ec
 // last-edited: 2026-11-13
 
@@ -269,7 +269,7 @@ func (r *Registry) Register(c Check) (Reporter, error) {
 	_, dup := r.comps[c.ID]
 	r.mu.Unlock()
 	if dup {
-		return nil, fmt.Errorf("health: component %s is already registered", c.ID)
+		return nil, fmt.Errorf("%w: %s", ErrComponentExists, c.ID)
 	}
 	comp := &component{check: c}
 	if c.Probe != nil {
@@ -281,7 +281,7 @@ func (r *Registry) Register(c Check) (Reporter, error) {
 	r.mu.Lock()
 	if _, dup := r.comps[c.ID]; dup { // registered meanwhile
 		r.mu.Unlock()
-		return nil, fmt.Errorf("health: component %s is already registered", c.ID)
+		return nil, fmt.Errorf("%w: %s", ErrComponentExists, c.ID)
 	}
 	r.comps[c.ID] = comp
 	r.broadcastLocked()

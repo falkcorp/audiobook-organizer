@@ -1,5 +1,5 @@
 // file: core/health/sysinfo/parse.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9e695b0b-4ab4-473c-aed6-8b9b6f049d0f
 // last-edited: 2026-11-13
 
@@ -17,7 +17,7 @@ import (
 // parseMeminfo is MemTotal and MemAvailable of /proc/meminfo in bytes; a
 // missing or malformed line is 0.
 func parseMeminfo(text string) (total, available uint64) {
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		key, rest, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
@@ -78,7 +78,7 @@ func parseProcessStart(stat, procStat string) time.Time {
 		return time.Time{}
 	}
 	var btime int64
-	for _, line := range strings.Split(procStat, "\n") {
+	for line := range strings.SplitSeq(procStat, "\n") {
 		if v, ok := strings.CutPrefix(line, "btime "); ok {
 			btime, err = strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			if err != nil {
@@ -112,7 +112,7 @@ func detectContainer(env string, exists func(path string) bool, cgroup string) b
 	if env != "" || exists("/.dockerenv") || exists("/run/.containerenv") {
 		return true
 	}
-	for _, line := range strings.Split(cgroup, "\n") {
+	for line := range strings.SplitSeq(cgroup, "\n") {
 		for _, marker := range [...]string{"/docker/", "/kubepods", "/containerd/", "/libpod-", "/lxc/", "/crio-"} {
 			if strings.Contains(line, marker) {
 				return true
