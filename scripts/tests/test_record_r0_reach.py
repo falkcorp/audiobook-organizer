@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -21,6 +21,7 @@ import io
 import json
 import pathlib
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -100,6 +101,8 @@ class FakeR0:
         self.sessions: dict[str, str] = {}
         self.keys: dict[str, tuple[str, list[str]]] = {}
         self.fail_status: dict[str, int] = {}  # "METHOD path-prefix" -> status
+        # the same, but only for a request that passed authorization (a handler's own failure)
+        self.handler_status: dict[str, int] = {}
         self.delete_user_on: str | None = None  # a route whose probe drops a user
         self.defs = [
             {"id": "scan.trigger", "permissions": ["scan.trigger"], "approver": "requests.approve"},
@@ -273,6 +276,10 @@ class FakeR0:
                 return self.reply(h, 200)
             if a != "@authenticated" and a not in (atoms or []):
                 return self.reply(h, 403)
+            for prefix, status in self.handler_status.items():
+                pm, pp = prefix.split(" ", 1)
+                if pm == method and path.startswith(pp):
+                    return self.reply(h, status)
             return self.reply(h, 400 if method in ("POST", "PUT", "PATCH") else 404)
         return self.reply(h, 404)
 
@@ -375,6 +382,32 @@ class ProbeShapeTest(unittest.TestCase):
         for bad in (429, 500, 503, 0):
             with self.assertRaises(rec.RecorderError):
                 rec.verdict_of(bad, "k")
+        # a listed route's 5xx is an allow, whichever principal asked
+        self.assertEqual(rec.verdict_of(500, "key:x POST /api/v1/ai/scans"), "A")
+        self.assertEqual(rec.verdict_of(502, "session:y GET /api/v1/deluge/torrents"), "A")
+        with self.assertRaises(rec.RecorderError):
+            rec.verdict_of(500, "key:x POST /api/v1/ai/not-listed")
+
+
+class StopThrowawayTest(unittest.TestCase):
+    class Hung:
+        docker = False
+
+        def __init__(self, exc):
+            self.exc, self.killed = exc, False
+            self.proc = type("P", (), {})()
+            self.proc.kill = lambda: setattr(self, "killed", True)
+            self.proc.wait = lambda: 0
+
+        def stop(self, timeout):
+            raise self.exc
+
+    def test_a_shutdown_that_hangs_is_killed_not_raised(self):
+        for exc in (subprocess.TimeoutExpired("r0", 60), w.CorpusError("exit 2")):
+            h = self.Hung(exc)
+            rec.stop_throwaway(h)
+            self.assertTrue(h.killed)
+            self.assertIsNone(h.proc)
 
 
 class RecordPassTest(unittest.TestCase):
@@ -466,11 +499,40 @@ class RecordPassTest(unittest.TestCase):
         self.assertEqual((order[-1]["method"], order[-1]["path"]), ("POST", "/api/v1/auth/logout"))
 
     def test_a_5xx_is_a_recorder_failure_that_names_the_route(self):
+        self.assertNotIn("GET /api/v1/health", rec.OK_5XX)
+        self.rig.fake.fail_status["GET /api/v1/health"] = 500
+        with self.assertRaises(rec.RecorderError) as cm:
+            self.rig.run()
+        self.assertIn("GET /api/v1/health", str(cm.exception))
+        self.assertIn("500", str(cm.exception))
+
+    def test_a_listed_5xx_after_authorization_is_an_allow(self):
+        route = "PUT /api/v1/audiobooks/:id"
+        self.assertIn(route, rec.OK_5XX)
+        self.rig.fake.handler_status["PUT /api/v1/audiobooks"] = 500
+        out = self.rig.run()
+        names = [p["name"] for p in self.rig.principals]
+        i = next(i for i, r in enumerate(self.rig.routes) if f"{r['method']} {r['path']}" == route)
+        self.assertEqual(out["columns"][names.index("session:admin")][i], 500)
+        self.assertEqual(out["columns"][names.index("anonymous")][i], 401)
+        verdicts = rec.build_verdicts({}, self.rig.routes, self.rig.principals, out["columns"], {})
+        row = verdicts["routes"][i]
+        self.assertEqual(row["verdict"][names.index("session:admin")], "A")
+        self.assertEqual(row["verdict"][names.index("anonymous")], "D")
+
+    def test_a_listed_5xx_the_anonymous_caller_also_gets_is_not_a_verdict(self):
+        # a 5xx before the decision (a crash in the middleware) is not an allow.
         self.rig.fake.fail_status["PUT /api/v1/audiobooks"] = 500
         with self.assertRaises(rec.RecorderError) as cm:
             self.rig.run()
-        self.assertIn("PUT /api/v1/audiobooks/:id", str(cm.exception))
-        self.assertIn("500", str(cm.exception))
+        self.assertIn("anonymous got 500", str(cm.exception))
+
+    def test_every_listed_5xx_names_a_route_of_the_committed_dump(self):
+        dump = json.loads(
+            (REPO_ROOT / "internal/books/rbacreach/routes.json").read_text(encoding="utf-8")
+        )
+        known = {f"{r['method']} {r['path']}" for r in dump["routes"]}
+        self.assertEqual(sorted(set(rec.OK_5XX) - known), [])
 
     def test_a_429_is_a_recorder_failure_not_a_deny(self):
         self.rig.fake.fail_status["GET /api/v1/health"] = 429
