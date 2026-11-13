@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/download.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e2ff7848-fe31-45cc-b7b9-a67d28dad6a2
 // last-edited: 2026-11-13
 
@@ -20,9 +20,14 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// ErrExpired is OpenBundle's answer for a bundle that is gone: pruned after
-// core.diagnostics.retention, never written, or not a bundle file name. The
-// route maps it to 410.
+// DefaultRetention is core.diagnostics.retention's default: 24 h.
+const DefaultRetention = 24 * time.Hour
+
+// ErrExpired is OpenBundle's answer for a bundle that is gone or past its
+// retention: pruned, never written, older than core.diagnostics.retention
+// (the prune task runs hourly, so a file can outlive its retention by up to an
+// hour and must not be served then), or not a bundle file name. The route maps
+// it to 410.
 var ErrExpired = errors.New("diagnostics: bundle expired")
 
 // ErrCorrupt is a file that is not a readable bundle.
@@ -42,8 +47,13 @@ type Bundle struct {
 
 // OpenBundle opens file ("<run-id>.zip") inside root and reads its manifest. A
 // name that is not a plain bundle name is ErrExpired, never a path: the root
-// would refuse an escape, and the name is refused before it gets that far.
-func OpenBundle(root *os.Root, file string) (*Bundle, error) {
+// would refuse an escape, and the name is refused before it gets that far. So
+// is a file whose modification time is more than retention before now
+// (retention <= 0 means DefaultRetention).
+func OpenBundle(root *os.Root, file string, retention time.Duration, now time.Time) (*Bundle, error) {
+	if retention <= 0 {
+		retention = DefaultRetention
+	}
 	if id, ok := strings.CutSuffix(file, ".zip"); !ok || !plainName(id) {
 		return nil, ErrExpired
 	}
@@ -57,6 +67,9 @@ func OpenBundle(root *os.Root, file string) (*Bundle, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("diagnostics: stat %s: %w", file, err), f.Close())
+	}
+	if now.Sub(fi.ModTime()) > retention {
+		return nil, errors.Join(ErrExpired, f.Close())
 	}
 	zr, err := zip.NewReader(f, fi.Size())
 	if err != nil {
@@ -96,8 +109,11 @@ func (b *Bundle) Close() error { return b.f.Close() }
 // (SEC2-13), so a role removed after the run started cannot fetch what it could
 // no longer read. Entries are copied compressed, unchanged. A section the
 // manifest does not know, or an entry whose name is not a plain relative path,
-// is dropped. It returns the sections it left out, which the streamed zip also
-// lists in OmittedAtDownloadFile.
+// is dropped. The manifest in the streamed zip is rewritten to describe the
+// view: the sections that were dropped leave its section list, their errors and
+// truncations leave with them, and they are added to its omitted list. It
+// returns the sections it left out, which the streamed zip also lists in
+// OmittedAtDownloadFile.
 func (b *Bundle) Stream(dst io.Writer, can func(rbac.Permission) bool) (omitted []string, err error) {
 	perms := map[string]PermSpec{}
 	for _, s := range b.Manifest.Sections {
@@ -107,15 +123,7 @@ func (b *Bundle) Stream(dst io.Writer, can func(rbac.Permission) bool) (omitted 
 	dropped := map[string]bool{}
 	for _, zf := range b.zr.File {
 		section, _, ok := strings.Cut(zf.Name, "/")
-		if !ok || !validEntryName(zf.Name) {
-			continue
-		}
-		if section == ManifestSectionName {
-			if zf.Name == ManifestFile {
-				if err := zw.Copy(zf); err != nil {
-					return nil, fmt.Errorf("diagnostics: copy manifest: %w", err)
-				}
-			}
+		if !ok || !validEntryName(zf.Name) || section == ManifestSectionName {
 			continue
 		}
 		spec, known := perms[section]
@@ -127,24 +135,71 @@ func (b *Bundle) Stream(dst io.Writer, can func(rbac.Permission) bool) (omitted 
 			return nil, fmt.Errorf("diagnostics: copy %s: %w", zf.Name, err)
 		}
 	}
+	// A section in the manifest whose permission the checker does not satisfy
+	// is left out even when it wrote no file.
+	for _, s := range b.Manifest.Sections {
+		if !satisfied(s.Perm, can) {
+			dropped[s.Name] = true
+		}
+	}
 	for s := range dropped {
 		omitted = append(omitted, s)
 	}
 	slices.Sort(omitted)
-	w, err := zw.Create(OmittedAtDownloadFile)
-	if err != nil {
-		return nil, fmt.Errorf("diagnostics: create omitted listing: %w", err)
-	}
 	if omitted == nil {
 		omitted = []string{}
 	}
-	if err := json.NewEncoder(w).Encode(map[string]any{"omitted": omitted}); err != nil {
+	if err := writeJSONEntry(zw, ManifestFile, b.Manifest.viewFor(dropped)); err != nil {
+		return nil, fmt.Errorf("diagnostics: write manifest: %w", err)
+	}
+	if err := writeJSONEntry(zw, OmittedAtDownloadFile, map[string]any{"omitted": omitted}); err != nil {
 		return nil, fmt.Errorf("diagnostics: write omitted listing: %w", err)
 	}
 	if err := zw.Close(); err != nil {
 		return nil, fmt.Errorf("diagnostics: finish stream: %w", err)
 	}
 	return omitted, nil
+}
+
+func writeJSONEntry(zw *zip.Writer, name string, v any) error {
+	w, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+// viewFor is the manifest of the view that leaves dropped sections out.
+func (m Manifest) viewFor(dropped map[string]bool) Manifest {
+	out := m
+	out.Sections = []ManifestSection{}
+	for _, s := range m.Sections {
+		if !dropped[s.Name] {
+			out.Sections = append(out.Sections, s)
+		}
+	}
+	out.Omitted = slices.Clone(m.Omitted)
+	for s := range dropped {
+		if !slices.Contains(out.Omitted, s) {
+			out.Omitted = append(out.Omitted, s)
+		}
+	}
+	slices.Sort(out.Omitted)
+	out.Errors = nil
+	for _, e := range m.Errors {
+		if !dropped[e.Section] {
+			out.Errors = append(out.Errors, e)
+		}
+	}
+	out.Truncated = nil
+	for _, t := range m.Truncated {
+		if section, _, _ := strings.Cut(t, "/"); !dropped[section] {
+			out.Truncated = append(out.Truncated, t)
+		}
+	}
+	return out
 }
 
 // isBundleName is ^<plain name>\.zip(\.tmp)?$: a finished bundle or the partial

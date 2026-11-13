@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/build.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0e48d09a-7583-4133-9749-d96bbfaf2aa5
 // last-edited: 2026-11-13
 
@@ -32,7 +32,19 @@ import (
 // Source is a section's data: a value the bundle serialises as JSON. A source
 // that holds secret-typed values hands over Secret and Redacted placeholders
 // (the typed layer); everything else is still pattern-redacted.
-type Source func(ctx context.Context) (any, error)
+//
+// The viewer is the run's, so a source whose rows have their own permissions
+// (core.tasks: params and results only for kinds the viewer may view) filters
+// for it. A source that dropped rows returns them counted in Filtered, and the
+// bundle records the count under the permission layer.
+type Source func(ctx context.Context, v Viewer) (any, error)
+
+// Filtered is a Source's answer when it left rows out for the viewer: Value is
+// what is serialised, Omitted how many rows the viewer may not read.
+type Filtered struct {
+	Value   any
+	Omitted int
+}
 
 // TextSource is a section's text (log lines, a metrics exposition). The reader
 // is closed by the bundle.
@@ -102,15 +114,19 @@ type Config struct {
 	// touches goes through it, so none can escape.
 	Root *os.Root
 	// ViewerFor resolves the permissions of the run's actor when the run
-	// starts. The run outlives the request, so the viewer is looked up, not
-	// carried.
+	// starts and ExportParams carries none (Perms is nil). A run started by the
+	// route carries the permissions resolved at request time, and those win.
 	ViewerFor func(ctx context.Context, actorID string) (Viewer, error)
 	Sources   CoreSources
 	// Contributors are the modules' sections (Registrar.Diagnostics).
 	Contributors []Contributor
 	// Redactor is the pattern layer; nil means log.NewRedactor(nil).
 	Redactor *log.Redactor
-	Metrics  MetricsSink
+	// Roots are the known filesystem roots (the library roots): an absolute
+	// path inside one is written "<root:NAME>/...", any other absolute path
+	// "<path>", in every string of the bundle.
+	Roots   []PathRoot
+	Metrics MetricsSink
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// App and Version go in the manifest.
@@ -202,10 +218,14 @@ func usable(p PermSpec) bool {
 }
 
 func jsonSection(name, file string, src Source) Section {
-	return Section{Name: name, Perm: manage(), Write: func(ctx context.Context, w Writer, _ Viewer) error {
-		v, err := src(ctx)
+	return Section{Name: name, Perm: manage(), Write: func(ctx context.Context, w Writer, viewer Viewer) error {
+		v, err := src(ctx, viewer)
 		if err != nil {
 			return err
+		}
+		if f, ok := v.(Filtered); ok {
+			OmitRows(w, f.Omitted)
+			v = f.Value
 		}
 		return w.JSON(file, v)
 	}}
@@ -233,7 +253,7 @@ func (e *Exporter) coreSections() []Section {
 		}
 	}
 	add("core.system", "info.json", src.System)
-	out = append(out, jsonSection("core.build", "build.json", func(context.Context) (any, error) {
+	out = append(out, jsonSection("core.build", "build.json", func(context.Context, Viewer) (any, error) {
 		bi, ok := e.cfg.BuildInfo()
 		if !ok || bi == nil {
 			return map[string]string{"error": "build info unavailable"}, nil
@@ -258,6 +278,7 @@ func (e *Exporter) coreSections() []Section {
 type build struct {
 	zw        *zip.Writer
 	red       *log.Redactor
+	roots     pathRoots
 	counts    counts
 	written   map[string]bool
 	truncated []string
@@ -305,12 +326,11 @@ func (e *Exporter) Build(ctx context.Context, runID string, p ExportParams, prog
 	if err != nil {
 		return ExportResult{}, err
 	}
-	viewer, err := e.cfg.ViewerFor(ctx, p.ActorID)
+	viewer, err := e.viewer(ctx, p)
 	if err != nil {
 		e.countBundle("error")
-		return ExportResult{}, fmt.Errorf("diagnostics: resolve viewer: %w", err)
+		return ExportResult{}, err
 	}
-	viewer.ActorID = p.ActorID
 
 	tmp, final := runID+".zip.tmp", BundleFile(runID)
 	f, err := e.cfg.Root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -331,6 +351,7 @@ func (e *Exporter) Build(ctx context.Context, runID string, p ExportParams, prog
 	st := &build{
 		zw:      zip.NewWriter(f),
 		red:     e.cfg.Redactor,
+		roots:   newPathRoots(e.cfg.Roots),
 		written: map[string]bool{},
 		limit:   e.cfg.MaxFileBytes,
 		now:     e.cfg.Now,
@@ -391,6 +412,21 @@ func (e *Exporter) Build(ctx context.Context, runID string, p ExportParams, prog
 		e.countRedacted(layer, n)
 	}
 	return ExportResult{File: final, Redactions: m.Redactions}, nil
+}
+
+// viewer is the run's viewer: the permissions carried in p, resolved when the
+// request was made, or, for params without them, the actor's as ViewerFor
+// resolves them now.
+func (e *Exporter) viewer(ctx context.Context, p ExportParams) (Viewer, error) {
+	if p.Perms != nil {
+		return ViewerOf(p.ActorID, p.Perms), nil
+	}
+	v, err := e.cfg.ViewerFor(ctx, p.ActorID)
+	if err != nil {
+		return Viewer{}, fmt.Errorf("diagnostics: resolve viewer: %w", err)
+	}
+	v.ActorID = p.ActorID
+	return v, nil
 }
 
 // plan picks the sections to run: every one, or the requested names. An

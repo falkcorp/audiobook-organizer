@@ -1,5 +1,5 @@
 // file: core/internal/healthhttp/routes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e6dcf7f8-396a-47a8-b1bd-154ed75f5597
 // last-edited: 2026-11-13
 
@@ -512,7 +512,7 @@ func TestDiagnostics_NarrowKeyOfActor403(t *testing.T) {
 		t.Errorf("narrow key = %d %s", rep.status, rep.body)
 	}
 	// The actor's full-scope but non-interactive key, and a delegated session.
-	for _, m := range []auth.Method{auth.MethodAPIKey} {
+	for _, m := range []auth.Method{auth.MethodAPIKey, auth.MethodSessionDelegated} {
 		rep := r.do(hhAs(hhBruce, m, manage, adminPerm), "GET", "/diagnostics/run-bruce", "", "")
 		if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
 			t.Errorf("%s = %d %s, want 403 interactive_required", m, rep.status, rep.body)

@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/export.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7102b260-8f02-42cc-80dd-78ab03c55cec
-// last-edited: 2026-11-11
+// last-edited: 2026-11-13
 
 // Package diagnostics is the diagnostics bundle of 05-health 5H.3.5. Until the
 // health flip (F8) it holds only the minimal owner registration of the kind
@@ -31,6 +31,14 @@ const ExportTimeout = 30 * time.Minute
 type ExportParams struct {
 	// ActorID is the start-time Viewer's actor (diagnostics.Viewer.ActorID).
 	ActorID string `json:"actor_id"`
+	// Perms are the actor's concrete permissions as resolved when the request
+	// was made (PermsOf), so the bundle holds what the actor could read then
+	// and not what a later role change leaves them (05-health 5H.3.5). The
+	// start route always sets it, an empty list when the actor holds nothing;
+	// nil means no snapshot was taken and the run resolves the actor's
+	// permissions when it starts. It is deliberately not omitempty: an empty
+	// snapshot must not read back as none.
+	Perms []string `json:"perms"`
 	// Sections, when not empty, names the sections to write
 	// ("<moduleID>.<name>"); empty means every section the viewer may read. The
 	// spec names "the start request's options" without listing them, so this
