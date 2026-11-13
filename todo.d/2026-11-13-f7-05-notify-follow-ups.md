@@ -1,4 +1,4 @@
-- [ ] **TODO-F7-05-SMTP-DIAL-GUARD** The `core.email` channel is admitted by the
+- [ ] **TODO-F7-05-SMTP-DIAL-GUARD** (hard precondition of the F7-09 flip) The `core.email` channel is admitted by the
       integrations gate but its SMTP dial has no egress guard: providerhttp's guard
       wraps HTTP only, so an SMTP host that resolves to a private address is not
       refused. Add a dial hook an adapter can use (F7-01 or providerhttp) and use it
@@ -16,3 +16,8 @@
       entries per partition for an `Unordered()` consumer, so a downed notify channel
       with more than 64 retrying deliveries can head-block others on its partition.
       Decide whether to raise or remove the cap, or key deliveries more finely.
+- [ ] **TODO-F7-05-IMPORTRULE-REFRESH** `NativeImporter`'s `ImportRule` writes the
+      rule store but does not refresh a running `notify.Service`'s loaded rules
+      (`Service.PutRule` does). F7-08 must reload after an import or build the
+      Service after it. Acceptance: a rule imported while a Service runs routes the
+      next notification without a restart, with a test.
