@@ -1,5 +1,5 @@
 // file: core/log/logtest/journal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4e9a7d2-6f18-4b53-8e0a-2d5b7c9f1e64
 // last-edited: 2026-11-13
 
@@ -52,6 +52,7 @@ const (
 	bugTextCaseExact    refBug = "text-case-sensitive"
 	bugSinceExclusive   refBug = "since-exclusive"
 	bugUntilInclusive   refBug = "until-inclusive"
+	bugFiltersAtMillis  refBug = "since-until-judged-at-millis"
 	bugIgnoreLevel      refBug = "min-level-ignored"
 	bugIgnoreModule     refBug = "module-ignored"
 	bugCursorRepeats    refBug = "cursor-repeats-last"
@@ -192,6 +193,13 @@ func (s *refStore) Query(ctx context.Context, q log.JournalQuery) (log.JournalPa
 		}
 		if s.bug != bugIgnoreModule && q.Module != "" && r.Module != q.Module {
 			return false
+		}
+		if s.bug == bugFiltersAtMillis {
+			// Judges the record and the bounds at the precision of a key.
+			rt := r.Time.Truncate(time.Millisecond)
+			if !q.Since.IsZero() && rt.Before(q.Since.Truncate(time.Millisecond)) || !q.Until.IsZero() && !rt.Before(q.Until.Truncate(time.Millisecond)) {
+				return false
+			}
 		}
 		if !q.Since.IsZero() {
 			if s.bug == bugSinceExclusive && !r.Time.After(q.Since) || s.bug != bugSinceExclusive && r.Time.Before(q.Since) {
@@ -358,6 +366,9 @@ func TestJournalStoreSuite_CatchesEachBrokenStore(t *testing.T) {
 		{bugTextCaseExact, CaseFilters},
 		{bugSinceExclusive, CaseFilters},
 		{bugUntilInclusive, CaseFilters},
+		{bugSinceExclusive, CaseSinceUntilInMs},
+		{bugUntilInclusive, CaseSinceUntilInMs},
+		{bugFiltersAtMillis, CaseSinceUntilInMs},
 		{bugIgnoreLevel, CaseFilters},
 		{bugIgnoreModule, CaseFilters},
 		{bugCursorRepeats, CaseCursor},
@@ -383,8 +394,8 @@ func TestJournalStoreSuite_CatchesEachBrokenStore(t *testing.T) {
 func TestJournalStoreSuite_NeedsStoreAndImporter(t *testing.T) {
 	r := newRecorder()
 	runSuite(r, func(tester) Subject { return Subject{Store: &refStore{}} })
-	if got := failedCases(*r.fails); len(got) != 14 {
-		t.Fatalf("a Subject without an Importer failed %d cases, want all 14: %v", len(got), *r.fails)
+	if got := failedCases(*r.fails); len(got) != 15 {
+		t.Fatalf("a Subject without an Importer failed %d cases, want all 15: %v", len(got), *r.fails)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: core/log/logtest/journal.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d7c1e94-0b3a-4e68-a2f7-9c4b8d6e1a30
 // last-edited: 2026-11-13
 
@@ -38,6 +38,7 @@ const (
 	CaseCursorWithFilter  = "cursor_with_filter"
 	CasePrune             = "prune_bounded_oldest_first"
 	CasePruneBoundary     = "prune_before_is_exclusive"
+	CaseSinceUntilInMs    = "since_inclusive_until_exclusive_within_one_millisecond"
 	CaseImportRoundTrip   = "import_round_trip"
 	CaseImportIdempotent  = "import_twice_leaves_one_each"
 	CaseImportOverlap     = "import_overlapping_batches"
@@ -55,7 +56,8 @@ const (
 //     numbers come back as numbers, strings as strings, bools as bools);
 //   - Query is newest first by Record.Time, records with an equal Time in the
 //     reverse of the order they were appended, Since is inclusive and Until
-//     exclusive, MinLevel and Module and Text filter, and a cursor pages the
+//     exclusive (each judged on the record's own Time, to the microsecond, not
+//     on a rounded one), MinLevel and Module and Text filter, and a cursor pages the
 //     result without a gap or a repeat, filtered or not;
 //   - Prune deletes at most limit records older than before (exclusive),
 //     oldest first, and reports whether older ones remain;
@@ -110,6 +112,7 @@ func runSuite(tt tester, open func(tester) Subject) {
 		{CaseCursorWithFilter, caseCursorWithFilter},
 		{CasePrune, casePrune},
 		{CasePruneBoundary, casePruneBoundary},
+		{CaseSinceUntilInMs, caseSinceUntilInMs},
 		{CaseImportRoundTrip, caseImportRoundTrip},
 		{CaseImportIdempotent, caseImportIdempotent},
 		{CaseImportOverlap, caseImportOverlap},
@@ -496,6 +499,35 @@ func casePruneBoundary(tt tester, ctx context.Context, s Subject) {
 	if n, more, err = s.Store.Prune(ctx, at(24*time.Hour), 0); err != nil || n != 0 || !more {
 		tt.Errorf("Prune(limit 0) = %d, %v, %v; want 0, true, nil: it deletes nothing and says records remain", n, more, err)
 	}
+}
+
+func caseSinceUntilInMs(tt tester, ctx context.Context, s Subject) {
+	tt.Helper()
+	// Three records inside one millisecond, one a millisecond either side: a
+	// filter that compared milliseconds could not tell the three apart, so Since
+	// and Until are judged on the record's own time.
+	base := epoch().Add(20 * time.Millisecond)
+	if err := s.Store.Append(ctx, []log.Record{
+		{Time: base.Add(-time.Millisecond), Level: log.LevelInfo, Module: "core", Message: "early"},
+		{Time: base.Add(100 * time.Microsecond), Level: log.LevelInfo, Module: "core", Message: "before"},
+		{Time: base.Add(500 * time.Microsecond), Level: log.LevelInfo, Module: "core", Message: "exactly"},
+		{Time: base.Add(900 * time.Microsecond), Level: log.LevelInfo, Module: "core", Message: "after"},
+		{Time: base.Add(time.Millisecond), Level: log.LevelInfo, Module: "core", Message: "late"},
+	}); err != nil {
+		tt.Errorf("Append: %v", err)
+		return
+	}
+	q := func(f func(*log.JournalQuery)) log.JournalQuery { j := all(); f(&j); return j }
+	mid := base.Add(500 * time.Microsecond)
+	wantMessages(tt, "Since is inclusive, to the microsecond",
+		drain(tt, ctx, s.Store, q(func(j *log.JournalQuery) { j.Since = mid })), "late", "after", "exactly")
+	wantMessages(tt, "Until is exclusive, to the microsecond",
+		drain(tt, ctx, s.Store, q(func(j *log.JournalQuery) { j.Until = mid })), "before", "early")
+	wantMessages(tt, "Since and Until inside one millisecond",
+		drain(tt, ctx, s.Store, q(func(j *log.JournalQuery) {
+			j.Since = base.Add(100 * time.Microsecond)
+			j.Until = base.Add(900 * time.Microsecond)
+		})), "exactly", "before")
 }
 
 func imported(src string, r log.Record) log.ImportedRecord {

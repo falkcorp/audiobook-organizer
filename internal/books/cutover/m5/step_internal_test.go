@@ -1,5 +1,5 @@
 // file: internal/books/cutover/m5/step_internal_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7a2c5e19-0b84-4d36-a1f3-98e4d6b02c57
 // last-edited: 2026-11-13
 
@@ -136,6 +136,78 @@ func TestVerify_AccountingMustBalance(t *testing.T) {
 			}
 			if rep.Read != c.read || rep.Written != c.imported || rep.Quarantined != c.quarantined {
 				t.Errorf("report = %+v, want the migration's own counts", rep)
+			}
+		})
+	}
+}
+
+// TestDecode_TimeAndSubsystem: the time check is made in UTC, the zone the
+// record is stored in, so M5 refuses exactly what the journal's Import refuses
+// (an instant after 9999-12-31T23:59:59Z fails Import for the whole chunk, on
+// every boot); and a row with no source takes the source its key was added under.
+func TestDecode_TimeAndSubsystem(t *testing.T) {
+	const goodKey = "syslog:2026-11-05T00:00:04Z:scanner"
+	keyTime := time.Date(2026, 11, 5, 0, 0, 4, 0, time.UTC)
+	cases := []struct {
+		name       string
+		key, raw   string
+		wantReason string
+		wantTime   time.Time
+		wantSub    string
+	}{
+		{
+			name: "local_year_9999_is_utc_year_10000_falls_back_to_the_key",
+			key:  goodKey, raw: `{"source":"scanner","level":"info","message":"x","created_at":"9999-12-31T23:59:59-05:00"}`,
+			wantTime: keyTime, wantSub: "scanner",
+		},
+		{
+			name: "local_year_9999_is_utc_year_10000_and_no_usable_key",
+			key:  "syslog:garbage", raw: `{"source":"scanner","level":"info","message":"x","created_at":"9999-12-31T23:59:59-05:00"}`,
+			wantReason: reasonTime,
+		},
+		{
+			name: "last_utc_instant_of_9999_given_in_a_west_zone_is_kept",
+			key:  goodKey, raw: `{"source":"scanner","level":"info","message":"x","created_at":"9999-12-31T18:59:59-05:00"}`,
+			wantTime: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC), wantSub: "scanner",
+		},
+		{
+			name: "created_at_in_an_east_zone_is_stored_as_utc",
+			key:  goodKey, raw: `{"source":"scanner","level":"info","message":"x","created_at":"2026-11-05T09:00:04+09:00"}`,
+			wantTime: keyTime, wantSub: "scanner",
+		},
+		{
+			name: "no_source_takes_the_keys",
+			key:  goodKey, raw: `{"level":"warn","message":"x","created_at":"2026-11-05T00:00:04Z"}`,
+			wantTime: keyTime, wantSub: "scanner",
+		},
+		{
+			name: "a_source_on_the_row_wins_over_the_keys",
+			key:  goodKey, raw: `{"source":"organizer","level":"warn","message":"x","created_at":"2026-11-05T00:00:04Z"}`,
+			wantTime: keyTime, wantSub: "organizer",
+		},
+		{
+			name: "no_source_and_no_parseable_key_stays_blank",
+			key:  "syslog:garbage", raw: `{"level":"warn","message":"x","created_at":"2026-11-05T00:00:04Z"}`,
+			wantTime: keyTime, wantSub: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec, reason := decode(c.key, []byte(c.raw))
+			if reason != c.wantReason {
+				t.Fatalf("reason = %q, want %q", reason, c.wantReason)
+			}
+			if reason != "" {
+				return
+			}
+			if !rec.Time.Equal(c.wantTime) || rec.Time.Location() != time.UTC {
+				t.Errorf("Time = %v, want %v in UTC", rec.Time, c.wantTime)
+			}
+			if !usable(rec.Time) {
+				t.Errorf("the record's time %v is one the journal's Import refuses", rec.Time)
+			}
+			if rec.Subsystem != c.wantSub {
+				t.Errorf("Subsystem = %q, want %q", rec.Subsystem, c.wantSub)
 			}
 		})
 	}
