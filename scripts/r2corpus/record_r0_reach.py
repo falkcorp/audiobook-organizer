@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -324,6 +324,7 @@ class Probe:
         self.principal = principal
         self._login = login
         self.auth = _auth_name(principal)
+        self.canary_status: int | None = None  # what the first canary answered
 
     def send(self, method: str, path: str, body: Any) -> int:
         """The status line of one request, with the body left unread: a probe that
@@ -356,21 +357,31 @@ def _auth_name(p: dict[str, Any]) -> str:
 
 
 def canary(probe: Probe) -> None:
-    """The principal's credential still works (an authorized `me`), or still fails."""
+    """The principal's credential still behaves as it did at the start.
+
+    The first call records the status of a harmless request and requires a live
+    credential's answer: 200, or 403 for a worker-confined credential ("this
+    credential is limited to the fingerprint worker API": R0 refuses `me` to it
+    by design), 401 for the anonymous caller, 200 on the auth-disabled status
+    route. Every later call must answer the same, so a probe that revoked a
+    session, stripped a role or killed the server is caught, whichever status
+    that principal's baseline is."""
     kind = probe.principal["kind"]
     if kind == "authoff":
         status = probe.send("GET", "/api/v1/auth/status", None)
-        want = {200}
+        first = {200}
     elif kind == "anonymous":
         status = probe.send("GET", "/api/v1/auth/me", None)
-        want = {401}
+        first = {401}
     else:
         status = probe.send("GET", "/api/v1/auth/me", None)
-        want = {200}
+        first = {200, 403}
+    want = first if probe.canary_status is None else {probe.canary_status}
     if status not in want:
         raise RecorderError(
             f"canary for {probe.principal['name']}: {status}, want one of {sorted(want)}"
         )
+    probe.canary_status = status
 
 
 def order_routes(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
