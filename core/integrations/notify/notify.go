@@ -1,5 +1,5 @@
 // file: core/integrations/notify/notify.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f7a2c91-6d48-4b0e-a5c3-91e82d70b4f6
 // last-edited: 2026-11-13
 
@@ -67,7 +67,7 @@ func (s Severity) String() string {
 }
 
 // Valid reports whether s is one of the five severities.
-func (s Severity) Valid() bool { return int(s) < len(severityNames()) }
+func (s Severity) Valid() bool { return s <= SeverityCritical }
 
 // ParseSeverity is String's inverse. The events catalog spells a topic's
 // default severity as "info", "warning" or "error"; the spelling of every

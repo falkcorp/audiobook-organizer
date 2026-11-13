@@ -1,5 +1,5 @@
 // file: core/integrations/notify/webhook/webhook.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e03a7c58-91d4-4f26-b8a5-2c6d7f19e340
 // last-edited: 2026-11-13
 
@@ -90,9 +90,11 @@ func Descriptor() (integrations.Descriptor, error) {
 		Settings:    schema,
 		Egress:      integrations.EgressConfigured,
 		// One notification is one request, and a retry is the outbox's, so
-		// the gate does not retry on its own (MaxRetries 0): a second POST the
-		// receiver cannot tell from the first would be a duplicate.
-		Limits: integrations.Limits{RPS: 1, Burst: 5, MaxRetries: 0, Timeout: sendTimeout},
+		// the gate does not retry on its own: MaxRetries is -1, the Limits
+		// value for none (zero means the gate's default of several, which
+		// would resend a POST the receiver cannot tell from the first, after
+		// sleeping through the receiver's Retry-After inside Send).
+		Limits: integrations.Limits{RPS: 1, Burst: 5, MaxRetries: -1, Timeout: sendTimeout},
 	}, build), nil
 }
 
