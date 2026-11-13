@@ -67,14 +67,14 @@ func (g *gatedSender) Sent() []imail.Message {
 // admin who clicks the button.
 type reissueFixture struct {
 	*tokenFixture
-	mail  *coretest.Recorder
+	mail  *coretest.MailRecorder
 	admin *database.User
 }
 
 func newReissueFixture(t *testing.T) *reissueFixture {
 	t.Helper()
 	f := newTokenFixture(t)
-	r := &reissueFixture{tokenFixture: f, mail: &coretest.Recorder{}}
+	r := &reissueFixture{tokenFixture: f, mail: &coretest.MailRecorder{}}
 	f.srv.mailSenderOverride = r.mail
 	f.srv.externalURL = ""
 	config.Mutate(func(c *config.Config) { c.PublicBaseURL = "https://books.example.com" })
