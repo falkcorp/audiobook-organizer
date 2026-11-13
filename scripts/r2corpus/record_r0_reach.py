@@ -566,14 +566,35 @@ def prepare_credentials(client: Any, principals: list[dict[str, Any]]) -> dict[s
                 },
                 auth=admin_ident,
             )
-            secret = w.find_key_secret(r.body)
+            secret = _find_secret(r.body)
             if r.status not in (200, 201) or not secret:
-                raise RecorderError(f"minting {p['name']} -> {r.status}")
+                raise RecorderError(
+                    f"minting {p['name']} -> {r.status}: {_without_secrets(r.body)}"
+                )
             client.keys[f"{KEY_PREFIX}{p['name']}"] = secret
             probes[p["name"]] = Probe(client, p, None)
         else:
             probes[p["name"]] = Probe(client, p, None)
     return probes
+
+
+def _find_secret(body: Any) -> str | None:
+    """The raw key secret in a mint response: any string value starting abk_."""
+    if isinstance(body, str):
+        return body if body.startswith("abk_") and len(body) > 20 else None
+    if isinstance(body, dict):
+        body = list(body.values())
+    if isinstance(body, list):
+        for v in body:
+            found = _find_secret(v)
+            if found:
+                return found
+    return None
+
+
+def _without_secrets(body: Any) -> str:
+    """A response body for an error message, with every abk_ value cut."""
+    return re.sub(r"abk_[^\"\s,}]+", "abk_<cut>", json.dumps(body))[:400]
 
 
 def stage_copy(args: argparse.Namespace, layout: Any) -> None:
