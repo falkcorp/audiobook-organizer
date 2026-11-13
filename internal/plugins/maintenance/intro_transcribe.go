@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.46.0
+// version: 3.47.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-11-13
 
@@ -274,9 +274,12 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	if err != nil {
 		return err
 	}
-	_, err = p.runIntroTranscribeCore(ctx, params, introTranscribeEnv{
-		t6g4Base: t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}),
-	})
+	base := t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store})
+	// HEAD's body reached reporter.Checkpoint (its CheckpointFn); the resume guard
+	// in internal/arch counts that, so this shell keeps the path. Nothing in the
+	// core calls it at the page concurrency (see the note after the page loop).
+	base.SaveCheckpoint = func(v any) error { return reporter.Checkpoint(v) }
+	_, err = p.runIntroTranscribeCore(ctx, params, introTranscribeEnv{t6g4Base: base})
 	return err
 }
 

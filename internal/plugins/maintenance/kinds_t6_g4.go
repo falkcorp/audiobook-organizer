@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-13
 
@@ -549,9 +549,10 @@ func t6g4HeadBase(reporter sdk.Reporter, live bool, store t6g4Store, writer t6g4
 		SetItem:  reporter.SetCurrentItem,
 		Canceled: reporter.IsCanceled,
 		Touch:    func() { registry.TouchLiveness(reporter) },
-		SaveCheckpoint: func(v any) error {
-			return reporter.Checkpoint(v)
-		},
+		// No SaveCheckpoint: HEAD's v2 defs of this group never checkpoint (the
+		// restartWithoutCheckpoint entries in internal/arch say so, and no core
+		// calls the field), so forwarding reporter.Checkpoint here would only make
+		// the resume guard believe they do.
 		Writer: writer,
 		Store:  store,
 		Each:   t6g4RunEachHEAD(reporter),
@@ -835,7 +836,9 @@ func (h headT6G4Writer) CarryOverFingerprintWindows(from []database.FingerprintW
 }
 
 func (h headT6G4Writer) CreateOperationChange(change *database.OperationChange) error {
-	return h.store.CreateOperationChange(change)
+	// Through the classification check, as HEAD's body did (an unclassified change
+	// type is refused there); a bare store call is what TestJournalRowsAreCreatedThroughTheClassificationCheck forbids.
+	return database.RecordOperationChange(h.store, change)
 }
 
 func (h headT6G4Writer) DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error) {
