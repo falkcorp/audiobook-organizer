@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_gate_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d3a8f21-6c4e-4b95-a0d7-1e9b2c5f8a36
 // last-edited: 2026-11-13
 
@@ -31,6 +31,7 @@ type reachExpect struct {
 	route  func(key string) bool       // which routes ("METHOD /gin/path")
 	who    func(principal string) bool // which principals
 	r0, r2 byte                        // the letters it asserts on each side
+	want   int                         // how many cells it claims, exactly: fewer or more is a failure
 }
 
 // routeIs matches exact routes.
@@ -75,11 +76,14 @@ type reachClassified struct {
 	unexpected []reachCell    // differ, and no row claims them
 	unused     []string       // rows that matched no cell
 	hits       map[string]int // cells per row
+	short      []string       // rows whose cell count is not the one they assert
 }
 
 // reachClassify assigns every differing cell to the rows that match it. A row
 // asserts both letters, so a cell that moved the other way is unexpected even
-// when its route and principal are on the row.
+// when its route and principal are on the row, and it asserts how many cells it
+// claims, so a partial reversal of a ruled change (a route that stops differing
+// for some of the row's principals) fails instead of leaving the row "used".
 func reachClassify(cells []reachCell, rows []reachExpect) reachClassified {
 	out := reachClassified{hits: map[string]int{}}
 	for _, c := range cells {
@@ -95,8 +99,11 @@ func reachClassify(cells []reachCell, rows []reachExpect) reachClassified {
 		}
 	}
 	for _, r := range rows {
-		if out.hits[r.name] == 0 {
+		switch n := out.hits[r.name]; {
+		case n == 0:
 			out.unused = append(out.unused, r.name)
+		case n != r.want:
+			out.short = append(out.short, fmt.Sprintf("%s: matches %d cell(s), asserts %d", r.name, n, r.want))
 		}
 	}
 	return out
@@ -168,28 +175,28 @@ func reachExpected() []reachExpect {
 		{
 			name:  "05-rbac 4.11(a): auth-off tightening on Guards.Interactive routes",
 			why:   "HEAD's credential guard is a pass-through with auth off; the auth-disabled principal is non-interactive",
-			route: reachInteractiveRoutes(), who: whoIs("authoff"), r0: 'A', r2: 'D',
+			route: reachInteractiveRoutes(), who: whoIs("authoff"), r0: 'A', r2: 'D', want: 11,
 		},
 		{
 			name:  "05-rbac 4.11(d): credential-metadata routes answer the auth-disabled principal 401",
 			why:   "HEAD's handler needs a user and has none with auth off; the successor is core's native route, whose answer is core's half",
-			route: routeIs(reachIdentityRoutes...), who: whoIs("authoff"), r0: 'D', r2: 'A',
+			route: routeIs(reachIdentityRoutes...), who: whoIs("authoff"), r0: 'D', r2: 'A', want: 7,
 		},
 		{
-			name:  "05-rbac 6.2: restore needs core:backup.restore, which only core:admin holds",
-			why:   "HEAD's s.perm let a role holding every atom restore; the successor's scope is Sensitive and AuthRequired",
-			route: routeIs("POST /api/v1/backup/restore"), who: whoIs("session:custom-all"), r0: 'A', r2: 'D',
+			name:  "05-authn 4.8: restore's owner guard falls back to Interactive plus core:admin",
+			why:   "HEAD's s.perm let a role holding every atom restore; with no OwnerVerifier the guard's fallback needs core:admin, which a custom role never holds (core:backup.restore, 05-rbac 6.2, is the core half's check)",
+			route: routeIs("POST /api/v1/backup/restore"), who: whoIs("session:custom-all"), r0: 'A', r2: 'D', want: 1,
 		},
 		{
 			name:  "05-rbac 6.3: a key whose atoms lie outside an fp-worker owner's roles reaches no route",
 			why:   "HEAD's workerOnly reads an empty effective set as not worker-only and let the key through every authenticated-only route; the key's checker is empty after the cutover, because the fp-worker role holds no ambient scope",
-			route: reachAuthenticatedRoutes(), who: whoIs("key:fp-worker:view", "key:fp-worker:settings", "key:fp-worker:users"), r0: 'A', r2: 'D',
+			route: reachAuthenticatedRoutes(), who: whoIs("key:fp-worker:view", "key:fp-worker:settings", "key:fp-worker:users"), r0: 'A', r2: 'D', want: 96,
 		},
 		{
 			name:  "05-rbac 6.2 / 4.4 rule 1: debug edits are interactive-only",
 			why:   "books:admin.debug is Sensitive, so a non-interactive principal is refused even with core:admin; HEAD's RequireAdmin let an admin's every-atom or empty-list key through",
 			route: routeIs("PATCH /api/v1/admin/debug/books/:id", "PATCH /api/v1/admin/debug/book-files/:id", "POST /api/v1/admin/debug/edits/:edit_id/undo"),
-			who:   whoIs("key:admin:every", "key:admin:empty"), r0: 'A', r2: 'D',
+			who:   whoIs("key:admin:every", "key:admin:empty"), r0: 'A', r2: 'D', want: 6,
 		},
 	}
 }
@@ -203,17 +210,17 @@ func reachRecorderLimits() []reachExpect {
 		{
 			name:  "recorder limit: a Public route whose handler checks credentials",
 			why:   "POST /login and /auth/refresh answer 401 to the probe's dummy credentials for every principal; the router lets everyone in",
-			route: routeIs("POST /login", "POST /auth/refresh"), who: anyWho, r0: 'D', r2: 'A',
+			route: routeIs("POST /login", "POST /auth/refresh"), who: anyWho, r0: 'D', r2: 'A', want: 74,
 		},
 		{
 			name:  "recorder limit: the conditional credential guard fails closed on the probe's unknown key id",
 			why:   "POST /auth/api-keys/:id/rotate (retired, answers 410) refuses a key whose target it cannot show is its own user's; the probe's id is unknown",
-			route: routeIs("POST /api/v1/auth/api-keys/:id/rotate"), who: whoHas("key:"), r0: 'D', r2: 'A',
+			route: routeIs("POST /api/v1/auth/api-keys/:id/rotate"), who: whoHas("key:"), r0: 'D', r2: 'A', want: 21,
 		},
 		{
 			name:  "recorder limit: approving needs a user and a verified method inside the handler",
 			why:   "R0's ApproveRun refuses the auth-disabled principal for want of a user to record; R2's route-level atom is books:view",
-			route: routeIs("POST /api/v3/ops/runs/:id/approve"), who: whoIs("authoff"), r0: 'D', r2: 'A',
+			route: routeIs("POST /api/v3/ops/runs/:id/approve"), who: whoIs("authoff"), r0: 'D', r2: 'A', want: 1,
 		},
 	}
 }
@@ -228,6 +235,19 @@ func reachGateProblems(res reachDiffResult, rows []reachExpect) []string {
 	}
 	for _, name := range c.unused {
 		out = append(out, "expected difference matches no cell (it is stale, or the oracle stopped seeing it): "+name)
+	}
+	for _, msg := range c.short {
+		out = append(out, "expected difference claims a different number of cells than it asserts (a ruled change was partly reversed, or the oracle sees a different set): "+msg)
+	}
+	total := 0
+	for _, r := range rows {
+		if r.want <= 0 {
+			out = append(out, "expected difference asserts no cell count: "+r.name)
+		}
+		total += r.want
+	}
+	if len(c.unexpected) == 0 && len(res.cells) != total {
+		out = append(out, fmt.Sprintf("the rows assert %d differing cell(s) in all, the oracle found %d", total, len(res.cells)))
 	}
 	return out
 }
