@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.13.2
+// version: 1.14.1
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -40,16 +40,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -111,20 +111,24 @@ type regroupPayload struct {
 	RecommendationEvidence itunesservice.RecommendationEvidence `json:"recommendationEvidence"`
 }
 
+// regroupShatteredAIHelp is the def's Description, which the native kind carries
+// as its Help.
+const regroupShatteredAIHelp = "Scans the whole library, groups the single-file books left by the broken iTunes import " +
+	"(one track = one book) by their book folder, classifies each folder's shape with a deterministic " +
+	"regex tier (multi-disc, version group, anthology, or ambiguous — NO AI), and writes one review-queue " +
+	"HOLD per candidate folder. Never changes a book or file; the only writes are review-queue rows (upserts " +
+	"are idempotent) and deletes of superseded pending holds. dry_run defaults to true: a run that states " +
+	"no mode computes the candidates and reports what it would upsert and delete, writing nothing. Pass " +
+	"dry_run=false to write the holds. The apply path is a later PR."
+
 func (p *Plugin) regroupShatteredAIDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.regroup-shattered-ai",
-		Preview:     sdk.PreviewSpec{Params: regroupParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "maintenance",
-		DisplayName: "Regroup shattered books (review-queue producer)",
-		Description: "Scans the whole library, groups the single-file books left by the broken iTunes import " +
-			"(one track = one book) by their book folder, classifies each folder's shape with a deterministic " +
-			"regex tier (multi-disc, version group, anthology, or ambiguous — NO AI), and writes one review-queue " +
-			"HOLD per candidate folder. Never changes a book or file; the only writes are review-queue rows (upserts " +
-			"are idempotent) and deletes of superseded pending holds. dry_run defaults to true: a run that states " +
-			"no mode computes the candidates and reports what it would upsert and delete, writing nothing. Pass " +
-			"dry_run=false to write the holds. The apply path is a later PR.",
+		ID:              "maintenance.regroup-shattered-ai",
+		Preview:         sdk.PreviewSpec{Params: regroupParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "maintenance",
+		DisplayName:     "Regroup shattered books (review-queue producer)",
+		Description:     regroupShatteredAIHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.regroup-shattered-ai",
@@ -150,15 +154,117 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	if err != nil {
 		return err
 	}
-	store := p.deps.OpsStore()
+	env := regroupShatteredAIEnv{t6g6Env: t6g6HeadEnv(reporter, !dryRun)}
+	// A nil OpsStore leaves the env's store nil (a typed-nil adapter would hide
+	// it), so the core's "database not initialized" check still fires.
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = store
+		env.Writer = store
+		// The stale-hold purge needs the conditional delete, a capability the
+		// store may lack; a nil Purger is the "lacks it" case.
+		if holds, ok := database.AsCapability[reviewHoldStore](store); ok {
+			env.Purger = holds
+		}
+	}
+	return regroupShatteredAICore(ctx, params.Limit, dryRun, env)
+}
+
+// regroupShatteredAIKind is rule R3's kind for the def above.
+const regroupShatteredAIKind = tasks.Kind("books.maintenance.regroup-shattered-ai")
+
+// regroupShatteredAIStore is the reads the scan and the preview make.
+type regroupShatteredAIStore interface {
+	ListBookIDs() ([]string, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	reviewHoldLister
+}
+
+// regroupShatteredAIWriter is the review-queue write a live run makes.
+type regroupShatteredAIWriter interface {
+	UpsertReviewItem(item database.ReviewItem) (database.ReviewItem, error)
+}
+
+// regroupShatteredAIEnv is what the core takes from its shell.
+type regroupShatteredAIEnv struct {
+	t6g6Env
+	Store  regroupShatteredAIStore
+	Writer regroupShatteredAIWriter
+	// Purger deletes superseded pending holds and lists the pending ones. Nil
+	// when the store cannot delete conditionally: the core then skips the purge
+	// and fails the run, as HEAD does.
+	Purger reviewHoldStore
+}
+
+// regroupShatteredAIParallelism is the op's concurrency: the read-only per-book
+// scan ran on registry.RunItems at runtime.NumCPU().
+func regroupShatteredAIParallelism() tasks.Parallelism {
+	return tasks.CPU()
+}
+
+// regroupShatteredAINative is the native kind. Preview is the dry run HEAD's
+// default was; Live writes the review holds.
+func (p *Plugin) regroupShatteredAINative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(regroupShatteredAIKind, sched)
+	c.Title = "Regroup shattered books (review-queue producer)"
+	c.Help = regroupShatteredAIHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "review_items"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.regroup-shattered-ai")
+	c.Timeout = 120 * time.Minute
+	return tasks.Task(regroupShatteredAIKind, tasks.TaskSpec[regroupNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, in regroupNativeParams) (struct{}, error) {
+			live := rc.Mode() == tasks.ModeLive
+			env := regroupShatteredAIEnv{t6g6Env: t6g6NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			if live && deps.NewWriter != nil {
+				w := deps.NewWriter(rc.Writer())
+				env.Writer = w
+				env.Purger = regroupNativePurger{reads: env.Store, del: w}
+			}
+			return struct{}{}, regroupShatteredAICore(rc.Context(), in.Limit, !live, env)
+		},
+	})
+}
+
+// regroupNativeParams are the native run's params: HEAD's without the dry-run
+// switch, which the run's mode decides.
+type regroupNativeParams struct {
+	Limit int `json:"limit,omitempty"`
+}
+
+// regroupNativePurger is the native reviewHoldStore: reads from the store, the
+// conditional delete through the run's gated writer.
+type regroupNativePurger struct {
+	reads reviewHoldLister
+	del   database.ReviewItemPendingDeleter
+}
+
+func (r regroupNativePurger) ListReviewItems(f database.ReviewFilter) ([]database.ReviewItem, int, error) {
+	return r.reads.ListReviewItems(f)
+}
+
+func (r regroupNativePurger) DeleteReviewItemIfPending(id string) (bool, error) {
+	return r.del.DeleteReviewItemIfPending(id)
+}
+
+// regroupShatteredAICore is the body of runRegroupShatteredAI.
+func regroupShatteredAICore(ctx context.Context, limit int, dryRun bool, env regroupShatteredAIEnv) error {
+	params := regroupParams{Limit: limit}
+	store := env.Store
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	logf := func(level slog.Level, msg string) { env.Log(level, msg) }
 	if dryRun {
-		_ = reporter.Log(slog.LevelInfo, "PREVIEW (dry_run) — no review hold is written or deleted; pass dry_run=false to write them")
+		logf(slog.LevelInfo, "PREVIEW (dry_run) — no review hold is written or deleted; pass dry_run=false to write them")
 	}
 
-	_ = reporter.UpdateProgress(0, 0, "Phase 1/2: enumerating library…")
+	env.Progress(0, 0, "Phase 1/2: enumerating library…")
 	ids, err := store.ListBookIDs()
 	if err != nil {
 		return fmt.Errorf("ListBookIDs: %w", err)
@@ -177,7 +283,14 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	// policy rather than by a silent bug.
 	var skippedFrozen atomic.Int64
 	views := make([]itunesservice.ShatterBook, 0, len(ids))
-	scanErr := registry.RunItems(ctx, reporter, ids, func(ctx context.Context, id string) error {
+	scanErr := env.Items(ctx, regroupShatteredAIParallelism(), len(ids), t6g6ItemsOptions{
+		Collect:       true,
+		ProgressTotal: len(ids),
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Phase 1/2: scanning book %d/%d…", i+1, total)
+		},
+	}, func(ctx context.Context, idx int) error {
+		id := ids[idx]
 		b, err := store.GetBookByID(id)
 		if err != nil || b == nil {
 			return nil // non-fatal: skip a book that vanished mid-scan
@@ -242,19 +355,12 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 		views = append(views, v)
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   runtime.NumCPU(),
-		ProgressTotal: len(ids),
-		ErrMode:       registry.ErrModeCollect,
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Phase 1/2: scanning book %d/%d…", i+1, total)
-		},
 	})
 	if scanErr != nil {
 		return fmt.Errorf("library scan: %w", scanErr)
 	}
 
-	_ = reporter.UpdateProgress(len(ids), len(ids)+1, "Phase 2/2: classifying folders + writing review holds…")
+	env.Progress(len(ids), len(ids)+1, "Phase 2/2: classifying folders + writing review holds…")
 	groups, st := itunesservice.ClassifyShatteredFolders(views)
 
 	// RECONCILE: account for EVERY book so the record count ties out vs the library
@@ -265,7 +371,7 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	recon := fmt.Sprintf(
 		"RECONCILE: library=%d scan-skipped=%d total=%d non-primary=%d multi-file=%d no-path=%d singletons=%d distinct-skipped=%d groups=%d bykind=%v",
 		len(ids), scanSkipped, st.TotalBooks, st.NonPrimary, st.MultiFile, st.NoPath, st.Singletons, st.DistinctSkip, st.Groups, st.ByKind)
-	_ = reporter.Log(slog.LevelInfo, recon)
+	logf(slog.LevelInfo, recon)
 
 	// Write one idempotent review hold per detected group. ZERO book/file writes.
 	// A preview builds every payload and item exactly as a live run does (so a
@@ -278,7 +384,7 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	// applied), so those are reported as already-decided, not as would-upsert.
 	var decided map[string]struct{}
 	if dryRun {
-		decided = decidedRegroupHolds(store, reporter)
+		decided = decidedRegroupHoldsVia(store, logf)
 	}
 	for i := range groups {
 		if ctx.Err() != nil {
@@ -290,7 +396,7 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 		g := groups[i]
 		payload, perr := buildRegroupPayload(g)
 		if perr != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("marshal payload for %q: %v", g.FolderRef, perr))
+			logf(slog.LevelWarn, fmt.Sprintf("marshal payload for %q: %v", g.FolderRef, perr))
 			writeErrs++
 			continue
 		}
@@ -312,9 +418,9 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 			}
 			continue
 		}
-		res, uerr := store.UpsertReviewItem(item)
+		res, uerr := env.Writer.UpsertReviewItem(item)
 		if uerr != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("UpsertReviewItem %q: %v", g.FolderRef, uerr))
+			logf(slog.LevelWarn, fmt.Sprintf("UpsertReviewItem %q: %v", g.FolderRef, uerr))
 			writeErrs++
 			continue
 		}
@@ -323,7 +429,7 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 			alreadyDecided++
 		}
 		if written%200 == 0 {
-			_ = reporter.UpdateProgress(len(ids), len(ids)+1,
+			env.Progress(len(ids), len(ids)+1,
 				fmt.Sprintf("Phase 2/2: wrote %d/%d review holds…", written, len(groups)))
 		}
 	}
@@ -339,7 +445,7 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 	var result string
 	purgeSkipped := false
 	if dryRun {
-		stale := staleRegroupHolds(store, reporter, groups, params.Limit)
+		stale := staleRegroupHoldsVia(store, logf, groups, params.Limit)
 		samples := make([]string, 0, regroupPreviewSamples)
 		for i := range stale {
 			if i >= regroupPreviewSamples {
@@ -347,7 +453,7 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 			}
 			samples = append(samples, fmt.Sprintf("%s %q", stale[i].Kind, stale[i].FolderRef))
 		}
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		logf(slog.LevelInfo, fmt.Sprintf(
 			"PREVIEW: would upsert %d review holds (e.g. %s) and delete %d stale pending holds (e.g. %s); %d already decided, left as they are",
 			wouldUpsert, strings.Join(sampleUpserts, "; "), len(stale), strings.Join(samples, "; "), alreadyDecided))
 		result = fmt.Sprintf(
@@ -359,12 +465,12 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 		// without it cannot purge safely, and "stale-purged=0" would read as "nothing
 		// was stale", so the result says the purge did not run and the op fails below.
 		purgeField := ""
-		if holds, ok := database.AsCapability[reviewHoldStore](store); ok {
-			purgeField = fmt.Sprintf("stale-purged=%d", reconcileStaleHolds(ctx, holds, reporter, groups, params.Limit))
+		if env.Purger != nil {
+			purgeField = fmt.Sprintf("stale-purged=%d", reconcileStaleHoldsVia(ctx, env.Purger, logf, groups, params.Limit))
 		} else {
 			purgeSkipped = true
 			purgeField = "stale-purge SKIPPED (store lacks conditional delete)"
-			_ = reporter.Log(slog.LevelError, fmt.Sprintf(
+			logf(slog.LevelError, fmt.Sprintf(
 				"reconcile: store %T cannot delete review holds conditionally; the stale-hold purge was NOT run", store))
 		}
 		result = fmt.Sprintf(
@@ -372,8 +478,8 @@ func (p *Plugin) runRegroupShatteredAI(ctx context.Context, raw json.RawMessage,
 				"skipped-frozen-itunes=%d) from %d detected groups; books and files untouched. bykind=%v",
 			written, alreadyDecided, writeErrs, purgeField, skippedFrozen.Load(), len(groups), st.ByKind)
 	}
-	_ = reporter.Log(slog.LevelInfo, result)
-	_ = reporter.UpdateProgress(len(ids)+1, len(ids)+1, result)
+	logf(slog.LevelInfo, result)
+	env.Progress(len(ids)+1, len(ids)+1, result)
 	if writeErrs > 0 && purgeSkipped {
 		return fmt.Errorf("%d review-hold write errors during regroup (see op log), and the stale-hold purge was skipped "+
 			"because the store lacks the conditional delete", writeErrs)
@@ -403,7 +509,18 @@ const reconcileScanLimit = 100_000
 // delete and UpsertReviewItem share one mutex, so a worker pool would only add
 // contention.
 func reconcileStaleHolds(ctx context.Context, store reviewHoldStore, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) int {
-	stale := staleRegroupHolds(store, reporter, groups, limit)
+	return reconcileStaleHoldsVia(ctx, store, t6g6ReporterLogf(reporter), groups, limit)
+}
+
+// t6g6ReporterLogf is HEAD's `_ = reporter.Log(level, msg)` as the log hook the
+// Via helpers take.
+func t6g6ReporterLogf(reporter sdk.Reporter) func(slog.Level, string) {
+	return func(level slog.Level, msg string) { _ = reporter.Log(level, msg) }
+}
+
+// reconcileStaleHoldsVia is reconcileStaleHolds with the log as a hook.
+func reconcileStaleHoldsVia(ctx context.Context, store reviewHoldStore, logf func(slog.Level, string), groups []itunesservice.RegroupGroup, limit int) int {
+	stale := staleRegroupHoldsVia(store, logf, groups, limit)
 	purged := 0
 	for _, it := range stale {
 		if ctx.Err() != nil {
@@ -411,14 +528,14 @@ func reconcileStaleHolds(ctx context.Context, store reviewHoldStore, reporter sd
 		}
 		deleted, derr := store.DeleteReviewItemIfPending(it.ID)
 		if derr != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reconcile: delete stale hold %s (%s): %v", it.ID, it.FolderRef, derr))
+			logf(slog.LevelWarn, fmt.Sprintf("reconcile: delete stale hold %s (%s): %v", it.ID, it.FolderRef, derr))
 			continue
 		}
 		if deleted {
 			purged++
 		}
 	}
-	_ = reporter.Log(slog.LevelInfo,
+	logf(slog.LevelInfo,
 		fmt.Sprintf("RECONCILE-PURGE: deleted %d superseded pending regroup holds (folder no longer emitted)", purged))
 	return purged
 }
@@ -426,12 +543,12 @@ func reconcileStaleHolds(ctx context.Context, store reviewHoldStore, reporter sd
 // regroupPreviewSamples bounds the example holds a preview names in its log.
 const regroupPreviewSamples = 5
 
-// staleRegroupHolds is the READ half of the reconcile: the PENDING regroup.* holds whose
-// DedupKey is not in the set this run emitted. It deletes nothing, so a preview calls it
-// to report what a live run would purge and reconcileStaleHolds deletes exactly this
-// list. Nil when limit > 0 (a canary run emits a subset) or when the pending list cannot
-// be read (logged).
-func staleRegroupHolds(store reviewHoldLister, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) []database.ReviewItem {
+// staleRegroupHoldsVia is the READ half of the reconcile: the PENDING regroup.* holds
+// whose DedupKey is not in the set this run emitted. It deletes nothing, so a preview
+// calls it to report what a live run would purge and reconcileStaleHolds deletes
+// exactly this list. Nil when limit > 0 (a canary run emits a subset) or when the
+// pending list cannot be read (logged through logf).
+func staleRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string), groups []itunesservice.RegroupGroup, limit int) []database.ReviewItem {
 	if limit > 0 {
 		return nil
 	}
@@ -444,7 +561,7 @@ func staleRegroupHolds(store reviewHoldLister, reporter sdk.Reporter, groups []i
 		Limit:  reconcileScanLimit,
 	})
 	if err != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reconcile: list pending review items: %v", err))
+		logf(slog.LevelWarn, fmt.Sprintf("reconcile: list pending review items: %v", err))
 		return nil
 	}
 	var stale []database.ReviewItem
@@ -460,19 +577,19 @@ func staleRegroupHolds(store reviewHoldLister, reporter sdk.Reporter, groups []i
 	return stale
 }
 
-// decidedRegroupHolds returns the DedupKeys of regroup.* holds whose status is
+// decidedRegroupHoldsVia returns the DedupKeys of regroup.* holds whose status is
 // not pending: the ones UpsertReviewItem leaves untouched. One full scan of the
 // review queue (the status index has no "not pending" scan, and a new decided
 // status must not be missed). On a read error it logs and returns nil, so the
 // preview counts every group as would-upsert, as it did before this check.
-func decidedRegroupHolds(store reviewHoldLister, reporter sdk.Reporter) map[string]struct{} {
+func decidedRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string)) map[string]struct{} {
 	items, total, err := store.ListReviewItems(database.ReviewFilter{Limit: reconcileScanLimit})
 	if err != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("preview: list review items: %v; already-decided holds are counted as would-upsert", err))
+		logf(slog.LevelWarn, fmt.Sprintf("preview: list review items: %v; already-decided holds are counted as would-upsert", err))
 		return nil
 	}
 	if total > len(items) {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("preview: review queue has %d items, read %d; decided holds past the cap are counted as would-upsert", total, len(items)))
+		logf(slog.LevelWarn, fmt.Sprintf("preview: review queue has %d items, read %d; decided holds past the cap are counted as would-upsert", total, len(items)))
 	}
 	decided := map[string]struct{}{}
 	for _, it := range items {

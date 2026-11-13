@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.3.2
+// version: 1.4.1
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
-// last-edited: 2026-10-18
+// last-edited: 2026-11-13
 
 // Package maintenance — op maintenance.probe-directory-books.
 //
@@ -57,16 +57,17 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -104,19 +105,23 @@ var (
 	lookupFFprobeFn        = audioutil.LookupFFprobe
 )
 
+// probeDirectoryBooksHelp is the def's Description, which the native kind carries
+// as its Help.
+const probeDirectoryBooksHelp = "Tier-2 escalation over the directory-shaped unlinked books that relink-unlinked-books could only " +
+	"send to review. Tier 1 passes nil durations, so ClassifyDir's series guard cannot fire and every multi-file " +
+	"folder is parked. This op probes each audio file's real duration with ffprobe and re-runs the SAME " +
+	"classifier with that evidence, resolving folders that were un-probed rather than unknowable. Files that " +
+	"cannot be probed are excluded, never counted as zero, and a folder with any unprobeable file stays in " +
+	"review. Refuses to run when ffprobe is unavailable. DRY RUN unless {\"apply\": true}."
+
 func (p *Plugin) probeDirectoryBooksDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.probe-directory-books",
-		Preview:     sdk.PreviewSpec{Params: probeDirParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "maintenance",
-		DisplayName: "Probe directory-shaped books (tier 2 · re-classify)",
-		Description: "Tier-2 escalation over the directory-shaped unlinked books that relink-unlinked-books could only " +
-			"send to review. Tier 1 passes nil durations, so ClassifyDir's series guard cannot fire and every multi-file " +
-			"folder is parked. This op probes each audio file's real duration with ffprobe and re-runs the SAME " +
-			"classifier with that evidence, resolving folders that were un-probed rather than unknowable. Files that " +
-			"cannot be probed are excluded, never counted as zero, and a folder with any unprobeable file stays in " +
-			"review. Refuses to run when ffprobe is unavailable. DRY RUN unless {\"apply\": true}.",
+		ID:              "maintenance.probe-directory-books",
+		Preview:         sdk.PreviewSpec{Params: probeDirParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "maintenance",
+		DisplayName:     "Probe directory-shaped books (tier 2 · re-classify)",
+		Description:     probeDirectoryBooksHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		// Shares tier 1's key: both ops create book_file rows for the same
@@ -148,7 +153,87 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
+	env := probeDirectoryBooksEnv{t6g6Env: t6g6HeadEnv(reporter, params.Apply)}
+	// A nil OpsStore leaves env.Store nil (a typed-nil adapter would hide it), so
+	// the core's "database not initialized" check still fires, after the ffprobe
+	// refusal as before.
+	if store := p.t6g6HeadOpsStore(); store != nil {
+		env.Store = t6g6HeadStore{OpsStore: store}
+		env.Writer = t6g6HeadWriter{deps: p.deps, store: store}
+	}
+	return probeDirectoryBooksCore(ctx, params.Limit, env)
+}
 
+// probeDirectoryBooksKind is rule R3's kind for the def above.
+const probeDirectoryBooksKind = tasks.Kind("books.maintenance.probe-directory-books")
+
+// probeDirectoryBooksStore is the reads the op makes.
+type probeDirectoryBooksStore interface {
+	ListBookIDs() ([]string, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// probeDirectoryBooksWriter is the one write the op makes: the additive
+// CreateBookFile (no UpdateBook anywhere, see the file comment).
+type probeDirectoryBooksWriter interface {
+	CreateBookFile(file *database.BookFile) error
+}
+
+// probeDirectoryBooksLinker is the folderLinker linkProbedFolder takes: its reads
+// from the store, its one write from the writer.
+type probeDirectoryBooksLinker struct {
+	probeDirectoryBooksStore
+	probeDirectoryBooksWriter
+}
+
+// probeDirectoryBooksEnv is what the core takes from its shell.
+type probeDirectoryBooksEnv struct {
+	t6g6Env
+	Store  probeDirectoryBooksStore
+	Writer probeDirectoryBooksWriter
+}
+
+// probeDirectoryBooksParallelism is the op's concurrency: both pools are sized to
+// runtime.NumCPU() (ffprobe is a subprocess doing CPU and IO work).
+func probeDirectoryBooksParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// probeDirectoryBooksNativeParams are the native kind's params: HEAD's without
+// apply, which the run's mode carries (Live creates the rows, Preview reports).
+type probeDirectoryBooksNativeParams struct {
+	Limit int `json:"limit"`
+}
+
+// probeDirectoryBooksNative is the native kind. It creates book_file rows (and
+// the store recomputes the book's aggregates), and writes only in Live.
+func (p *Plugin) probeDirectoryBooksNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(probeDirectoryBooksKind, sched)
+	c.Title = "Probe directory-shaped books (tier 2 · re-classify)"
+	c.Help = probeDirectoryBooksHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "book_files"), tasks.Res("books", "books"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityNormal
+	c.ConcurrencyKey = tasks.Key("books.maintenance.relink-unlinked-books")
+	c.Timeout = 120 * time.Minute
+	return tasks.Task(probeDirectoryBooksKind, tasks.TaskSpec[probeDirectoryBooksNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, np probeDirectoryBooksNativeParams) (struct{}, error) {
+			env := probeDirectoryBooksEnv{t6g6Env: t6g6NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			// A Preview run writes nothing, so it builds no writer.
+			if env.Live {
+				env.Writer = deps.NewWriter(rc.Writer())
+			}
+			return struct{}{}, probeDirectoryBooksCore(rc.Context(), np.Limit, env)
+		},
+	})
+}
+
+// probeDirectoryBooksCore is the body of runProbeDirectoryBooks after the params
+// are decoded: limit is probeDirParams.Limit and env.Live is its Apply.
+func probeDirectoryBooksCore(ctx context.Context, limit int, env probeDirectoryBooksEnv) error {
 	// ── Phase 0: refuse to run without ffprobe ───────────────────────────────
 	//
 	// This check comes FIRST — before the store is even fetched — because the
@@ -160,18 +245,18 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 	if err != nil {
 		return fmt.Errorf("cannot run: this op measures real durations and has no fallback — %w", err)
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("using ffprobe at %s", ffprobePath))
+	env.Log(slog.LevelInfo, fmt.Sprintf("using ffprobe at %s", ffprobePath))
 
-	store := p.deps.OpsStore()
-	if store == nil {
+	if env.Store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	if !params.Apply {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no book_file rows will be created")
+	store := env.Store
+	if !env.Live {
+		env.Log(slog.LevelInfo, "DRY RUN — no book_file rows will be created")
 	}
 
 	// ── Phase 1: find the directory-shaped books held for review ─────────────
-	_ = reporter.UpdateProgress(0, 0, "Phase 1/3: enumerating library…")
+	env.Progress(0, 0, "Phase 1/3: enumerating library…")
 	ids, err := store.ListBookIDs()
 	if err != nil {
 		return fmt.Errorf("ListBookIDs: %w", err)
@@ -185,7 +270,14 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 	candidates := make([]probeCandidate, 0, 1024)
 	var examined, skipped, dirAlreadyLinkable int
 
-	scanErr := registry.RunItems(ctx, reporter, ids, func(_ context.Context, id string) error {
+	scanErr := env.Items(ctx, probeDirectoryBooksParallelism(), len(ids), t6g6ItemsOptions{
+		Collect:       true,
+		ProgressTotal: len(ids),
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Phase 1/3: checking book %d/%d…", i+1, total)
+		},
+	}, func(_ context.Context, i int) error {
+		id := ids[i]
 		b, err := store.GetBookByID(id)
 		if err != nil || b == nil {
 			mu.Lock()
@@ -230,13 +322,6 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 		candidates = append(candidates, probeCandidate{finding: f, beforeReason: f.Reason})
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   runtime.NumCPU(),
-		ProgressTotal: len(ids),
-		ErrMode:       registry.ErrModeCollect,
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Phase 1/3: checking book %d/%d…", i+1, total)
-		},
 	})
 	if scanErr != nil {
 		return fmt.Errorf("library scan: %w", scanErr)
@@ -258,7 +343,7 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 	var doneFolders atomic.Int64
 	totalFolders := len(candidates)
 
-	if err := probeAll(ctx, reporter, ffprobePath, candidates, &doneFolders, totalFolders); err != nil {
+	if err := t6g6ProbeAllVia(ctx, env, ffprobePath, candidates, &doneFolders, totalFolders); err != nil {
 		return fmt.Errorf("duration probe: %w", err)
 	}
 
@@ -308,22 +393,22 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 
 	// ── Phase 3: apply (only with apply=true) ────────────────────────────────
 	linked, linkErrs := 0, 0
-	if params.Apply {
-		_ = reporter.UpdateProgress(totalFolders, totalFolders+1, "Phase 3/3: creating book_file rows…")
+	if env.Live {
+		env.Progress(totalFolders, totalFolders+1, "Phase 3/3: creating book_file rows…")
 		for i := range candidates {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if params.Limit > 0 && linked >= params.Limit {
+			if limit > 0 && linked >= limit {
 				break
 			}
 			c := candidates[i]
 			if c.finding.Action != linkintegrity.DispositionLink {
 				continue
 			}
-			n, err := linkProbedFolder(store, c)
+			n, err := linkProbedFolder(probeDirectoryBooksLinker{env.Store, env.Writer}, c)
 			if err != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+				env.Log(slog.LevelWarn, fmt.Sprintf(
 					"link %s (%s): %v", c.finding.BookID, c.finding.FilePath, err))
 				linkErrs++
 				continue
@@ -342,7 +427,7 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 	phase := linkintegrity.PhaseResult{
 		Name:     "probe-directory-books",
 		Examined: len(candidates),
-		Applied:  params.Apply,
+		Applied:  env.Live,
 		Actioned: linked,
 		Errors:   linkErrs,
 		// Every examined folder lands in exactly one bucket, so the phase
@@ -353,18 +438,18 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 
 	report := linkintegrity.Report{
 		LibraryTotal: len(ids),
-		DryRun:       !params.Apply,
+		DryRun:       !env.Live,
 		Phases:       []linkintegrity.PhaseResult{phase},
 	}
 
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"RECONCILE: library=%d examined=%d scan-skipped=%d dir-review=%d dir-already-linkable=%d",
 		len(ids), examined, skipped, len(candidates), dirAlreadyLinkable))
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"RECLASSIFIED with measured durations: now-one-book=%d still-review=%d folders-with-unprobeable-files=%d",
 		nowOneBook, stillReview, withFailedProbes))
 	for _, tr := range transitions {
-		_ = reporter.Log(slog.LevelInfo, "resolved by measurement: "+tr)
+		env.Log(slog.LevelInfo, "resolved by measurement: "+tr)
 	}
 	if len(heldByCategory) > 0 {
 		cats := make([]string, 0, len(heldByCategory))
@@ -376,13 +461,13 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 		for _, k := range cats {
 			parts = append(parts, fmt.Sprintf("%s=%d", k, heldByCategory[k]))
 		}
-		_ = reporter.Log(slog.LevelInfo, "STILL IN REVIEW by category: "+strings.Join(parts, " "))
+		env.Log(slog.LevelInfo, "STILL IN REVIEW by category: "+strings.Join(parts, " "))
 	}
 	for _, h := range heldSamples {
-		_ = reporter.Log(slog.LevelInfo, "still in review: "+h)
+		env.Log(slog.LevelInfo, "still in review: "+h)
 	}
-	_ = reporter.Log(slog.LevelInfo, report.Summary())
-	_ = reporter.UpdateProgress(totalFolders+1, totalFolders+1, strings.TrimSpace(report.Summary()))
+	env.Log(slog.LevelInfo, report.Summary())
+	env.Progress(totalFolders+1, totalFolders+1, strings.TrimSpace(report.Summary()))
 
 	if bad := report.UnreconciledPhases(); len(bad) > 0 {
 		return fmt.Errorf("phase(s) did not reconcile: %s", strings.Join(bad, ", "))
@@ -406,12 +491,29 @@ func probeAll(
 	doneFolders *atomic.Int64,
 	totalFolders int,
 ) error {
-	idx := make([]int, len(candidates))
-	for i := range idx {
-		idx[i] = i
-	}
+	return t6g6ProbeAllVia(ctx, probeDirectoryBooksEnv{t6g6Env: t6g6HeadEnv(reporter, true)}, ffprobePath, candidates, doneFolders, totalFolders)
+}
 
-	return registry.RunItems(ctx, reporter, idx, func(ctx context.Context, i int) error {
+// t6g6ProbeAllVia is probeAll over the env's pool and progress hook.
+func t6g6ProbeAllVia(
+	ctx context.Context,
+	env probeDirectoryBooksEnv,
+	ffprobePath string,
+	candidates []probeCandidate,
+	doneFolders *atomic.Int64,
+	totalFolders int,
+) error {
+	return env.Items(ctx, probeDirectoryBooksParallelism(), len(candidates), t6g6ItemsOptions{
+		Collect:       true,
+		ProgressTotal: totalFolders,
+		// PerItemTimeout is deliberately unset: it would cap a whole FOLDER,
+		// and a legitimately large folder would be truncated mid-measurement,
+		// producing exactly the partial evidence this op refuses to act on.
+		// The bound that matters is per-FILE, inside probeFolderDurations.
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Phase 2/3: probing folder %d/%d…", i+1, total)
+		},
+	}, func(ctx context.Context, i int) error {
 		c := &candidates[i]
 		names, subdirs := readDirNames(c.finding.FilePath)
 		audio := folderAudioNames(names)
@@ -430,7 +532,7 @@ func probeAll(
 		// NOT sufficient here — it is in-memory/SSE only and never touches the
 		// clock the watchdog reads.
 		onFile := func(fileIdx int, name string) {
-			_ = reporter.UpdateProgress(int(doneFolders.Load()), totalFolders, fmt.Sprintf(
+			env.Progress(int(doneFolders.Load()), totalFolders, fmt.Sprintf(
 				"Phase 2/3: probing %s — file %d/%d (%s)",
 				linkintegrity.DirNameOf(c.finding.FilePath), fileIdx+1, len(audio), name))
 		}
@@ -440,17 +542,6 @@ func probeAll(
 
 		doneFolders.Add(1)
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   runtime.NumCPU(),
-		ProgressTotal: totalFolders,
-		ErrMode:       registry.ErrModeCollect,
-		// PerItemTimeout is deliberately unset: it would cap a whole FOLDER,
-		// and a legitimately large folder would be truncated mid-measurement,
-		// producing exactly the partial evidence this op refuses to act on.
-		// The bound that matters is per-FILE, inside probeFolderDurations.
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Phase 2/3: probing folder %d/%d…", i+1, total)
-		},
 	})
 }
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.7.2
+// version: 1.9.0
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -13,6 +13,8 @@ import (
 	"log/slog"
 	"sync/atomic"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
@@ -74,8 +76,18 @@ import (
 // *PebbleStore method outside database.Store. Every mode writes index keys
 // only, never journal rows.
 
-type opChangeIndexRebuilder interface {
+type t6g6OpChangeIndexRebuilder interface {
+	t6g6OpChangeIndexVerifier
+	t6g6OpChangeIndexBuilder
+}
+
+// t6g6OpChangeIndexVerifier is the read half of the index surface: the verify.
+type t6g6OpChangeIndexVerifier interface {
 	VerifyOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookIndexReport, error)
+}
+
+// t6g6OpChangeIndexBuilder is the write half: the two modes that write index keys.
+type t6g6OpChangeIndexBuilder interface {
 	RebuildOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookBackfillResult, error)
 	EnsureOpChangeByBookIndexWith(ctx context.Context, opts database.OpChangeEnsureOptions) (database.OpChangeByBookEnsureResult, error)
 }
@@ -114,6 +126,17 @@ func opChangeBookIndexStartCheck(params map[string]json.RawMessage, _ bool) erro
 	return nil
 }
 
+// opChangeBookIndexHelp is the def's Description, which the native kind carries
+// as its Help.
+const opChangeBookIndexHelp = "Checks and repairs the opchange_by_book: index that GetBookChanges reads. " +
+	"Preview by default: reports journal rows with no index entry, writes nothing. With " +
+	"ensure=true (boot enqueues this on every start) it builds or resumes the index, verifies " +
+	"the journal against it (resuming from a saved cursor, so a journal too big for one run is " +
+	"finished across runs, and checking only the rows added since once a pass has covered it), " +
+	"rebuilds if any row lacks an entry (e.g. after a rollback) and only then lets GetBookChanges read it. With dry_run=false it rebuilds from scratch; " +
+	"GetBookChanges uses the full journal scan while it runs and trusts the index again only " +
+	"if it succeeds. Writes index keys only, never journal rows."
+
 const opChangeBookIndexRebuildID = "maintenance.opchange-book-index-rebuild"
 
 func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
@@ -123,14 +146,7 @@ func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Operation-journal by-book index rebuild",
-		Description: "Checks and repairs the opchange_by_book: index that GetBookChanges reads. " +
-			"Preview by default: reports journal rows with no index entry, writes nothing. With " +
-			"ensure=true (boot enqueues this on every start) it builds or resumes the index, verifies " +
-			"the journal against it (resuming from a saved cursor, so a journal too big for one run is " +
-			"finished across runs, and checking only the rows added since once a pass has covered it), " +
-			"rebuilds if any row lacks an entry (e.g. after a rollback) and only then lets GetBookChanges read it. With dry_run=false it rebuilds from scratch; " +
-			"GetBookChanges uses the full journal scan while it runs and trusts the index again only " +
-			"if it succeeds. Writes index keys only, never journal rows.",
+		Description: opChangeBookIndexHelp,
 		// ResumeRestart, not ResumeDrop: the registry honours
 		// ErrContinueInPlace only for a def that resumes in place, and the ensure
 		// yields with one (a verify too big for one Timeout). Every mode is
@@ -169,89 +185,192 @@ func (p *Plugin) runOpChangeBookIndexRebuild(ctx context.Context, raw json.RawMe
 	if err != nil {
 		return err
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
+	env := opChangeBookIndexEnv{
+		t6g6Env:         t6g6HeadEnv(reporter, !dryRun),
+		ContinueInPlace: opsregistry.ErrContinueInPlace,
+	}
+	// A nil OpsStore leaves env.Store nil (a typed-nil adapter would hide it), so
+	// the core's "database not initialized" check still fires.
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = t6g6HeadStore{OpsStore: store}
+		env.Writer = t6g6HeadWriter{deps: p.deps, store: store}
+	}
+	return opChangeBookIndexCore(ctx, params.Ensure, env)
+}
+
+// opChangeBookIndexKind is rule R3's kind for the def above.
+const opChangeBookIndexKind = tasks.Kind("books." + opChangeBookIndexRebuildID)
+
+// opChangeBookIndexStore is the read the op makes: it resolves the store's verify
+// surface through database.AsCapability, which sees through the Store-embedding
+// decorators.
+type opChangeBookIndexStore interface {
+	// OpChangeIndexVerifier returns the verify surface and a description of the
+	// store ("%T") for the refusal messages; ok is false when no store in the
+	// decorator chain has the index.
+	OpChangeIndexVerifier() (v t6g6OpChangeIndexVerifier, desc string, ok bool)
+}
+
+// opChangeBookIndexWriter is the writes the op makes: the two modes that write
+// index keys, never journal rows. Whether the store has the index is the
+// Store's answer (OpChangeIndexVerifier), asked first.
+type opChangeBookIndexWriter interface {
+	t6g6OpChangeIndexBuilder
+}
+
+// opChangeBookIndexEnv is what the core takes from its shell.
+type opChangeBookIndexEnv struct {
+	t6g6Env
+	Store  opChangeBookIndexStore
+	Writer opChangeBookIndexWriter
+	// ContinueInPlace is the error the ensure's yield wraps: the registry's
+	// ErrContinueInPlace at HEAD, tasks.ErrContinueInPlace natively.
+	ContinueInPlace error
+}
+
+// opChangeYieldCheckpoint is the marker a native ensure checkpoints before it
+// yields. The resume point itself lives in the store; the marker is what the
+// kernel needs to honour the yield.
+type opChangeYieldCheckpoint struct {
+	VerifiedRows int `json:"verified_rows"`
+}
+
+// opChangeBookIndexNativeParams are the native kind's params: HEAD's without
+// dry_run, which the run's mode carries (Live writes, Preview verifies).
+type opChangeBookIndexNativeParams struct {
+	Ensure bool `json:"ensure,omitempty"`
+}
+
+// opChangeBookIndexNative is the native kind. It writes index keys, and only in
+// Live: a Preview run is the read-only verify; ensure is a write mode and is
+// refused in Preview.
+func (p *Plugin) opChangeBookIndexNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(opChangeBookIndexKind, sched)
+	c.Title = "Operation-journal by-book index rebuild"
+	c.Help = opChangeBookIndexHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "operations"))
+	c.Resume = tasks.ResumeContinue
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.opchange-book-index")
+	c.Timeout = 60 * time.Minute
+	return tasks.Task(opChangeBookIndexKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			var np opChangeBookIndexNativeParams
+			if err := t6g6DecodeParams(opChangeBookIndexKind, raw, &np); err != nil {
+				return struct{}{}, err
+			}
+			live := rc.Mode() == tasks.ModeLive
+			if np.Ensure && !live {
+				return struct{}{}, fmt.Errorf("%s: ensure=true writes index keys; start with mode live", opChangeBookIndexKind)
+			}
+			env := opChangeBookIndexEnv{
+				t6g6Env:         t6g6NativeEnv(rc),
+				ContinueInPlace: tasks.ErrContinueInPlace,
+			}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			// A Preview run is read-only and has no writer to build; the verify
+			// goes through the store.
+			if live {
+				w, err := t6g6NewWriter(opChangeBookIndexKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
+			}
+			return struct{}{}, opChangeBookIndexCore(rc.Context(), np.Ensure, env)
+		},
+	})
+}
+
+// opChangeBookIndexCore is the body of runOpChangeBookIndexRebuild after the
+// params are decoded and the mode resolved: env.Live is "not a dry run".
+func opChangeBookIndexCore(ctx context.Context, ensure bool, env opChangeBookIndexEnv) error {
+	if env.Store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	r, ok := database.AsCapability[opChangeIndexRebuilder](store)
+	v, desc, ok := env.Store.OpChangeIndexVerifier()
 	if !ok {
-		if params.Ensure {
+		if ensure {
 			// Boot enqueues the ensure on every start. A store with no index
 			// (not Pebble) has nothing to check and GetBookChanges scans, as
 			// it always has, so this is not a failure: a red row on every
 			// boot would be noise. The goroutine logged the same Warn. An
 			// operator's preview or rebuild still fails below.
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("store is %T, which has no opchange_by_book: index "+
+			env.Log(slog.LevelWarn, fmt.Sprintf("store is %s, which has no opchange_by_book: index "+
 				"(and no store in its decorator chain does); nothing to ensure, GetBookChanges uses the "+
-				"full journal scan", store), opsregistry.NoOpAttr())
+				"full journal scan", desc), opsregistry.NoOpAttr())
 			return nil
 		}
-		return fmt.Errorf("cannot run: store is %T, which has no opchange_by_book: index "+
-			"(and no store in its decorator chain does)", store)
+		return fmt.Errorf("cannot run: store is %s, which has no opchange_by_book: index "+
+			"(and no store in its decorator chain does)", desc)
 	}
 	switch {
-	case params.Ensure:
-		return ensureOpChangeBookIndex(ctx, r, reporter)
-	case dryRun:
-		return previewOpChangeBookIndex(ctx, r, reporter)
+	case ensure:
+		return t6g6EnsureOpChangeBookIndex(ctx, env.Writer, env)
+	case !env.Live:
+		return t6g6PreviewOpChangeBookIndex(ctx, v, env)
 	default:
-		return rebuildOpChangeBookIndex(ctx, r, reporter)
+		return t6g6RebuildOpChangeBookIndex(ctx, env.Writer, env)
 	}
 }
 
-// opChangeIndexProgressTo turns the store's progress callbacks into liveness
-// stamps. The row total is unknown up front, so total is 0 and the message
-// carries the count.
-func opChangeIndexProgressTo(reporter sdk.Reporter) database.OpChangeIndexProgress {
+// t6g6OpChangeIndexProgressVia turns the store's progress callbacks into liveness
+// stamps over the env's hooks. The row total is unknown up front, so total is 0
+// and the message carries the count.
+func t6g6OpChangeIndexProgressVia(env opChangeBookIndexEnv) database.OpChangeIndexProgress {
 	return func(phase string, rows int) {
 		msg := fmt.Sprintf("opchange_by_book index %s: %d journal rows read", phase, rows)
 		if phase == "waiting" {
 			msg = "waiting for another opchange_by_book index pass (e.g. the boot ensure or a manual rebuild) to finish"
 		}
-		_ = reporter.UpdateProgress(rows, 0, msg)
+		env.Progress(rows, 0, msg)
 	}
 }
 
-// opChangeEnsureProgress is opChangeIndexProgressTo for the ensure: the verify
-// phase reports a determinate (rows, total) once the store has sized the pass,
-// because the registry counts progress toward a yield only against a total
-// (an indeterminate report advances nothing), and rows is absolute across the
-// runs of one verify. The other phases stay indeterminate.
-func opChangeEnsureProgress(reporter sdk.Reporter) (database.OpChangeIndexProgress, func(total int)) {
+// t6g6OpChangeEnsureProgressVia is t6g6OpChangeIndexProgressVia for the ensure:
+// the verify phase reports a determinate (rows, total) once the store has sized
+// the pass, because the registry counts progress toward a yield only against a
+// total (an indeterminate report advances nothing), and rows is absolute across
+// the runs of one verify. The other phases stay indeterminate.
+func t6g6OpChangeEnsureProgressVia(env opChangeBookIndexEnv) (database.OpChangeIndexProgress, func(total int)) {
 	var total atomic.Int64
 	progress := func(phase string, rows int) {
 		if phase != "verify" {
-			opChangeIndexProgressTo(reporter)(phase, rows)
+			t6g6OpChangeIndexProgressVia(env)(phase, rows)
 			return
 		}
 		t := max(int(total.Load()), rows)
-		_ = reporter.UpdateProgress(rows, t, fmt.Sprintf("opchange_by_book index verify: %d of %d journal rows checked", rows, t))
+		env.Progress(rows, t, fmt.Sprintf("opchange_by_book index verify: %d of %d journal rows checked", rows, t))
 	}
 	return progress, func(n int) { total.Store(int64(n)) }
 }
 
-// previewOpChangeBookIndex is the read-only mode: it reports what a rebuild
+// t6g6PreviewOpChangeBookIndex is the read-only mode: it reports what a rebuild
 // would fix and writes nothing.
-func previewOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
-	_ = reporter.UpdateProgress(0, 1, "verifying opchange_by_book: index (preview, writes nothing)")
-	rep, err := r.VerifyOpChangeByBookIndex(ctx, opChangeIndexProgressTo(reporter))
+func t6g6PreviewOpChangeBookIndex(ctx context.Context, r t6g6OpChangeIndexVerifier, env opChangeBookIndexEnv) error {
+	env.Progress(0, 1, "verifying opchange_by_book: index (preview, writes nothing)")
+	rep, err := r.VerifyOpChangeByBookIndex(ctx, t6g6OpChangeIndexProgressVia(env))
 	if err != nil {
 		return fmt.Errorf("verify opchange_by_book index: %w", err)
 	}
 	msg := fmt.Sprintf("preview: sentinel_set=%t rows=%d indexable=%d missing_entries=%d "+
 		"undecodable=%d unmarked_undecodable=%d; run with dry_run=false to rebuild",
 		rep.SentinelSet, rep.Rows, rep.Indexable, rep.MissingEntries, rep.Undecodable, rep.UnmarkedUndecodable)
-	_ = reporter.Log(slog.LevelInfo, msg)
+	env.Log(slog.LevelInfo, msg)
 	if len(rep.SampleMissing) > 0 {
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("sample rows with no entry: %v", rep.SampleMissing))
+		env.Log(slog.LevelInfo, fmt.Sprintf("sample rows with no entry: %v", rep.SampleMissing))
 	}
-	_ = reporter.UpdateProgress(1, 1, msg)
+	env.Progress(1, 1, msg)
 	return nil
 }
 
-func rebuildOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
-	_ = reporter.UpdateProgress(0, 1, "rebuilding opchange_by_book: index")
-	res, err := r.RebuildOpChangeByBookIndex(ctx, opChangeIndexProgressTo(reporter))
+// t6g6RebuildOpChangeBookIndex is the forced rebuild (dry_run=false).
+func t6g6RebuildOpChangeBookIndex(ctx context.Context, r t6g6OpChangeIndexBuilder, env opChangeBookIndexEnv) error {
+	env.Progress(0, 1, "rebuilding opchange_by_book: index")
+	res, err := r.RebuildOpChangeByBookIndex(ctx, t6g6OpChangeIndexProgressVia(env))
 	if err != nil {
 		return fmt.Errorf("rebuild opchange_by_book index (scanned %d before failing; the sentinel "+
 			"and trust stay cleared, so GetBookChanges uses the full scan until the next boot's "+
@@ -259,19 +378,19 @@ func rebuildOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, rep
 	}
 	msg := fmt.Sprintf("rebuilt opchange_by_book index: %d rows scanned, %d indexed, %d undecodable, %d commits",
 		res.Scanned, res.Indexed, res.Undecodable, res.Commits)
-	_ = reporter.UpdateProgress(1, 1, msg)
+	env.Progress(1, 1, msg)
 	if res.Undecodable > 0 {
 		// Same stance as the book_atpath rebuild: undecodable rows make every
 		// GetBookChanges fail (as they did before the index), so not green.
-		_ = reporter.Log(slog.LevelError, msg)
+		env.Log(slog.LevelError, msg)
 		return fmt.Errorf("opchange_by_book index rebuilt, but %d journal row(s) cannot be decoded; "+
 			"GetBookChanges fails for every book until each is rewritten or removed", res.Undecodable)
 	}
-	_ = reporter.Log(slog.LevelInfo, msg)
+	env.Log(slog.LevelInfo, msg)
 	return nil
 }
 
-// ensureOpChangeBookIndex is the boot mode ({"ensure": true}): backfill or
+// t6g6EnsureOpChangeBookIndex is the boot mode ({"ensure": true}): backfill or
 // resume, verify, rebuild on a dirty verify (EnsureOpChangeByBookIndex). The
 // outcomes match the goroutine it replaced, with each failure now a red op
 // row instead of a log line only:
@@ -291,10 +410,10 @@ func rebuildOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, rep
 //
 // A store with no index at all (not Pebble) never reaches here: the run
 // logs a Warn tagged NoOpAttr and succeeds (runOpChangeBookIndexRebuild).
-func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
-	_ = reporter.Log(slog.LevelDebug, "Starting opchange_by_book index ensure (backfill if needed, verify, rebuild if dirty)")
-	_ = reporter.UpdateProgress(0, 1, "checking opchange_by_book: index")
-	progress, setTotal := opChangeEnsureProgress(reporter)
+func t6g6EnsureOpChangeBookIndex(ctx context.Context, r t6g6OpChangeIndexBuilder, env opChangeBookIndexEnv) error {
+	env.Log(slog.LevelDebug, "Starting opchange_by_book index ensure (backfill if needed, verify, rebuild if dirty)")
+	env.Progress(0, 1, "checking opchange_by_book: index")
+	progress, setTotal := t6g6OpChangeEnsureProgressVia(env)
 	res, err := r.EnsureOpChangeByBookIndexWith(ctx, database.OpChangeEnsureOptions{
 		Progress: progress, VerifyTotal: setTotal, YieldMargin: opChangeVerifyYieldMargin,
 	})
@@ -304,7 +423,7 @@ func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, repo
 		// DeadlineExceeded: a run too slow to finish leaves the index
 		// untrusted, which is a failure, not a clean stop.
 		if errors.Is(ctx.Err(), context.Canceled) || (ctx.Err() == nil && errors.Is(err, context.Canceled)) {
-			_ = reporter.Log(slog.LevelInfo, "opchange_by_book index check interrupted; GetBookChanges "+
+			env.Log(slog.LevelInfo, "opchange_by_book index check interrupted; GetBookChanges "+
 				"uses the full journal scan until the next boot checks it",
 				slog.String("error", err.Error()))
 			// Keep the store's error when it already carries ctx's (it names
@@ -315,7 +434,7 @@ func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, repo
 			}
 			return fmt.Errorf("opchange_by_book index ensure interrupted: %w", err)
 		}
-		_ = reporter.Log(slog.LevelError, "opchange_by_book index not trusted; GetBookChanges stays on the "+
+		env.Log(slog.LevelError, "opchange_by_book index not trusted; GetBookChanges stays on the "+
 			"full journal scan until a later ensure or rebuild succeeds", slog.String("error", err.Error()))
 		return fmt.Errorf("ensure opchange_by_book index: %w", err)
 	}
@@ -323,16 +442,24 @@ func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, repo
 		// The verify reached its time budget at a durable cursor. Nothing is
 		// trusted yet; the registry re-queues this operation and the next
 		// attempt continues from the cursor with a fresh Timeout.
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("opchange_by_book index verify pausing at its time budget: "+
+		env.Log(slog.LevelInfo, fmt.Sprintf("opchange_by_book index verify pausing at its time budget: "+
 			"%d journal rows verified (%d this run); the operation continues from its cursor",
 			res.Verify.VerifiedRows, res.Verify.Rows))
-		return fmt.Errorf("opchange_by_book index verify: %w", opsregistry.ErrContinueInPlace)
+		// The kernel honours a yield only after a checkpoint since the attempt
+		// started; HEAD's registry did not need one (the cursors are the store's),
+		// so only a native shell, which sets Checkpoint, writes this marker.
+		if env.Checkpoint != nil {
+			if cpErr := env.Checkpoint(opChangeYieldCheckpoint{VerifiedRows: res.Verify.VerifiedRows}); cpErr != nil {
+				return fmt.Errorf("opchange_by_book index verify: checkpoint before yielding: %w", cpErr)
+			}
+		}
+		return fmt.Errorf("opchange_by_book index verify: %w", env.ContinueInPlace)
 	}
 	if !res.Trusted {
 		msg := fmt.Sprintf("opchange_by_book index not trusted after ensure (rebuilt=%t sentinel_set=%t "+
 			"missing_entries=%d unmarked_undecodable=%d); GetBookChanges stays on the full journal scan",
 			res.Rebuilt, res.Verify.SentinelSet, res.Verify.MissingEntries, res.Verify.UnmarkedUndecodable)
-		_ = reporter.Log(slog.LevelError, msg)
+		env.Log(slog.LevelError, msg)
 		return errors.New(msg)
 	}
 	undecodable := res.Verify.Undecodable
@@ -347,17 +474,17 @@ func ensureOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, repo
 	if res.Rebuilt {
 		summary += fmt.Sprintf(" (rebuild scanned=%d indexed=%d)", res.Rebuild.Scanned, res.Rebuild.Indexed)
 	}
-	_ = reporter.UpdateProgress(1, 1, summary)
+	env.Progress(1, 1, summary)
 	if undecodable > 0 {
-		_ = reporter.Log(slog.LevelError, summary)
+		env.Log(slog.LevelError, summary)
 		return fmt.Errorf("opchange_by_book index trusted, but %d journal row(s) cannot be decoded; "+
 			"GetBookChanges fails for every book until each is rewritten or removed", undecodable)
 	}
 	if res.Backfill.Skipped && !res.Rebuilt {
-		_ = reporter.Log(slog.LevelInfo, "opchange_by_book index already complete and verified; nothing to do: "+summary,
+		env.Log(slog.LevelInfo, "opchange_by_book index already complete and verified; nothing to do: "+summary,
 			opsregistry.NoOpAttr())
 		return nil
 	}
-	_ = reporter.Log(slog.LevelInfo, summary)
+	env.Log(slog.LevelInfo, summary)
 	return nil
 }

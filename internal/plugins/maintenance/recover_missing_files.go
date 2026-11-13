@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -68,11 +68,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -220,21 +221,25 @@ func (p recoverPlan) summary() string {
 		p.SkippedChanged, p.UpdateErrs, p.RecomputeErrs)
 }
 
+// recoverMissingFilesHelp is the def's Description, which the native kind carries
+// as its Help.
+const recoverMissingFilesHelp = "For book_file rows whose bytes are gone and whose path cannot be derived by " +
+	"missing-file-repoint, matches the row's recorded file size to a real file on disk. Repoints " +
+	"IN-TREE (rewrites FilePath, never moves or deletes) only when the match is bidirectionally " +
+	"unique — exactly one unclaimed file of that size and extension, wanted by exactly one row. " +
+	"With {\"reflinkOutside\": true} it also RECOVERS rows whose only unique candidate lives under a " +
+	"source dir, by cloning (reflink/CoW) the source bytes back to the row's own in-tree path — no DB " +
+	"write, never overwriting an existing file. Censuses the rest (nowhere=residue). Run " +
+	"missing-file-repoint FIRST. Default dry-run; pass {\"apply\": true} to write. On apply it " +
+	"cooperatively stands the library scanner down for the write phase (PR #3080) and re-stats each " +
+	"candidate before writing, so a concurrent scan can no longer clobber the rewrite."
+
 func (p *Plugin) recoverMissingFilesDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.recover-missing-files",
-		Preview:     sdk.PreviewSpec{Params: recoverMissingParams{}},
-		DisplayName: "Recover missing book files by size match",
-		Description: "For book_file rows whose bytes are gone and whose path cannot be derived by " +
-			"missing-file-repoint, matches the row's recorded file size to a real file on disk. Repoints " +
-			"IN-TREE (rewrites FilePath, never moves or deletes) only when the match is bidirectionally " +
-			"unique — exactly one unclaimed file of that size and extension, wanted by exactly one row. " +
-			"With {\"reflinkOutside\": true} it also RECOVERS rows whose only unique candidate lives under a " +
-			"source dir, by cloning (reflink/CoW) the source bytes back to the row's own in-tree path — no DB " +
-			"write, never overwriting an existing file. Censuses the rest (nowhere=residue). Run " +
-			"missing-file-repoint FIRST. Default dry-run; pass {\"apply\": true} to write. On apply it " +
-			"cooperatively stands the library scanner down for the write phase (PR #3080) and re-stats each " +
-			"candidate before writing, so a concurrent scan can no longer clobber the rewrite.",
+		ID:              "maintenance.recover-missing-files",
+		Preview:         sdk.PreviewSpec{Params: recoverMissingParams{}},
+		DisplayName:     "Recover missing book files by size match",
+		Description:     recoverMissingFilesHelp,
 		DefaultPriority: sdk.PriorityLow,
 		// Its OWN ConcurrencyKey, like every maintenance op. Its Writes (below) do not
 		// gate library.scan, which declares none (Gate 3b is Writes∩Writes); the
@@ -283,21 +288,122 @@ func (p *Plugin) runRecoverMissingFiles(ctx context.Context, rawParams json.RawM
 			return fmt.Errorf("recover-missing-files: decode params: %w", err)
 		}
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
+	env := recoverMissingFilesEnv{
+		t6g6Env: t6g6HeadEnv(reporter, params.Apply),
+		RootDir: p.deps.RootDir,
+		ResolveReport: func(explicit string) (string, error) {
+			return p.resolveReportPath(explicit, opReportFileName(reporter, "recover-missing-files"))
+		},
+	}
+	env.StandDown = t6g6HeadStandDown(p.deps, reporter)
+	// A nil OpsStore leaves the env's store and writer nil (a typed-nil adapter
+	// would hide it), so the core's "database not initialized" check still fires.
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = t6g6HeadStore{OpsStore: store}
+		env.Writer = store
+	}
+	return recoverMissingFilesCore(ctx, params, env)
+}
+
+// recoverMissingFilesKind is rule R3's kind for the def above.
+const recoverMissingFilesKind = tasks.Kind("books.maintenance.recover-missing-files")
+
+// recoverMissingFilesStore is the reads the op makes.
+type recoverMissingFilesStore interface {
+	// AllBookFilesCoreIncludingRetired is every book_file row, retired ones
+	// included (database.AllBookFilesCoreIncludingRetired over the store).
+	AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// recoverMissingFilesWriter is the one write the apply phase makes: the repointed
+// rows, carried with the full-record replacement of UpdateBookFiles.
+type recoverMissingFilesWriter interface {
+	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
+}
+
+// recoverMissingFilesEnv is what the core takes from its shell.
+type recoverMissingFilesEnv struct {
+	t6g6Env
+	Store  recoverMissingFilesStore
+	Writer recoverMissingFilesWriter
+	// RootDir is the library root the inventory walk covers.
+	RootDir func() string
+	// ResolveReport resolves where the per-row report goes (the explicit
+	// reportPath param, or the run's default file under the library root).
+	ResolveReport func(explicit string) (string, error)
+}
+
+// recoverMissingFilesParallelism is the op's concurrency: the stat sweep, the
+// per-book writes and the reflinks all ran on registry.RunItems at
+// missingFileStatConcurrency.
+func recoverMissingFilesParallelism() tasks.Parallelism {
+	return tasks.Fixed(missingFileStatConcurrency, "I/O-bound stat sweep, per-book writes and reflinks over a NAS; the same bounded pool the audit/repoint/mark-missing sweeps use")
+}
+
+// recoverMissingFilesNative is the native kind. Preview runs the plan and writes
+// the report (the dry run HEAD's apply=false was); Live applies it.
+func (p *Plugin) recoverMissingFilesNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(recoverMissingFilesKind, sched)
+	c.Title = "Recover missing book files by size match"
+	c.Help = recoverMissingFilesHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "book_files"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.recover-missing-files")
+	c.Timeout = 4 * time.Hour
+	return tasks.Task(recoverMissingFilesKind, tasks.TaskSpec[recoverMissingNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, in recoverMissingNativeParams) (struct{}, error) {
+			params := recoverMissingParams{
+				Apply: rc.Mode() == tasks.ModeLive, SourceDirs: in.SourceDirs, Max: in.Max,
+				ReflinkOutside: in.ReflinkOutside, RequireExtMatch: in.RequireExtMatch, ReportPath: in.ReportPath,
+			}
+			env := recoverMissingFilesEnv{
+				t6g6Env: t6g6NativeEnv(rc),
+				RootDir: deps.RootDir,
+				ResolveReport: func(explicit string) (string, error) {
+					return deps.ResolveReportPath(explicit, "recover-missing-files-"+string(rc.RunID())+".tsv")
+				},
+			}
+			env.StandDown = t6g6NativeStandDown(rc, deps.StandDownKey)
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			if params.Apply && deps.NewWriter != nil {
+				env.Writer = deps.NewWriter(rc.Writer())
+			}
+			return struct{}{}, recoverMissingFilesCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// recoverMissingNativeParams are the native run's params: HEAD's without Apply,
+// which the run's mode decides.
+type recoverMissingNativeParams struct {
+	SourceDirs      []string `json:"sourceDirs,omitempty"`
+	Max             int      `json:"max,omitempty"`
+	ReflinkOutside  bool     `json:"reflinkOutside,omitempty"`
+	RequireExtMatch *bool    `json:"requireExtMatch,omitempty"`
+	ReportPath      string   `json:"reportPath,omitempty"`
+}
+
+// recoverMissingFilesCore is the body of runRecoverMissingFiles.
+func recoverMissingFilesCore(ctx context.Context, params recoverMissingParams, env recoverMissingFilesEnv) error {
+	if env.Store == nil {
 		return fmt.Errorf("database not initialized")
 	}
 	// Resolve the report path before any work: with no reportPath and no usable
 	// root_dir the run must fail with nothing done, not apply and then lose its record.
-	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "recover-missing-files"))
+	reportPath, rpErr := env.ResolveReport(params.ReportPath)
 	if rpErr != nil {
 		return fmt.Errorf("recover-missing-files: %w", rpErr)
 	}
-	rootDir := p.deps.RootDir()
+	rootDir := env.RootDir()
 	if strings.TrimSpace(rootDir) == "" {
 		return fmt.Errorf("recover-missing-files: RootDir is empty; cannot walk the library tree")
 	}
-	log := reporter.Logger()
+	log := env.Logger
 	if params.Apply {
 		// Log at apply-start so the journal records that the scanner was stood down for
 		// the write phase (PR #3080) — a real runtime interlock, not just a documented
@@ -308,7 +414,7 @@ func (p *Plugin) runRecoverMissingFiles(ctx context.Context, rawParams json.RawM
 			"row is written, so a concurrent change is skipped, not written.")
 	}
 
-	plan, err := planRecoverMissingFiles(ctx, store, p.deps, rootDir, params, reporter)
+	plan, err := t6g6PlanRecoverVia(ctx, env, rootDir, params)
 
 	// Write the report BEFORE returning any error, so a run that aborts mid-apply
 	// (e.g. the scan stand-down lease lapsed after k writes) still leaves the
@@ -399,7 +505,30 @@ func underRoot(p, root string) bool {
 }
 
 func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanController, rootDir string, params recoverMissingParams, reporter sdk.Reporter) (recoverPlan, error) {
-	log := reporter.Logger()
+	env := recoverMissingFilesEnv{
+		t6g6Env: t6g6HeadEnv(reporter, params.Apply),
+		Store:   t6g6RecoverStoreShim{store},
+		Writer:  store,
+	}
+	env.StandDown = t6g6HeadStandDown(scan, reporter)
+	return t6g6PlanRecoverVia(ctx, env, rootDir, params)
+}
+
+// t6g6RecoverStoreShim gives a recoverStore the retired-inclusive file list the
+// Via planner reads: database.AllBookFilesCoreIncludingRetired over the store,
+// which sees through decorators.
+type t6g6RecoverStoreShim struct{ recoverStore }
+
+func (s t6g6RecoverStoreShim) AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return database.AllBookFilesCoreIncludingRetired(s.recoverStore)
+}
+
+// t6g6PlanRecoverVia is planRecoverMissingFiles over the env the shell hands the
+// core: reads through env.Store, the repoint write through env.Writer, the scan
+// stand-down through env.StandDown, and the per-item pools through env.Items.
+func t6g6PlanRecoverVia(ctx context.Context, env recoverMissingFilesEnv, rootDir string, params recoverMissingParams) (recoverPlan, error) {
+	log := env.Logger
+	par := recoverMissingFilesParallelism()
 	maxRewrites := params.Max
 	if maxRewrites <= 0 {
 		maxRewrites = recoverDefaultMax
@@ -412,7 +541,7 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	// One list, two jobs: the claimed set below includes retired rows (a retired
 	// version still names its path, so a candidate on it would become a second
 	// row's target), while the rows to recover exclude them.
-	files, err := database.AllBookFilesCoreIncludingRetired(store)
+	files, err := env.Store.AllBookFilesCoreIncludingRetired()
 	if err != nil {
 		return recoverPlan{}, fmt.Errorf("load book files: %w", err)
 	}
@@ -449,9 +578,15 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	gone := make([]bool, len(items))
 	var missingCount atomic.Int64
 
-	prog := sdk.NewProgress(reporter, len(items))
+	prog := t6g6NewProgress(env.t6g6Env, len(items))
 	prog.Start(fmt.Sprintf("Checking %d book_file path(s)…", len(items)))
-	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, it item) error {
+	err = env.Items(ctx, par, len(items), t6g6ItemsOptions{
+		Collect: true,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Checked %d/%d paths (missing=%d)", i+1, t, missingCount.Load())
+		},
+	}, func(_ context.Context, ii int) error {
+		it := items[ii]
 		if _, serr := os.Stat(it.file.FilePath); os.IsNotExist(serr) {
 			gone[it.idx] = true
 			missingCount.Add(1)
@@ -460,12 +595,6 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		// this op only recovers rows whose bytes are provably gone, never one it merely
 		// could not read.
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Checked %d/%d paths (missing=%d)", i+1, t, missingCount.Load())
-		},
 	})
 	if err != nil {
 		return recoverPlan{}, fmt.Errorf("stat sweep: %w", err)
@@ -522,7 +651,7 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 			if walked%recoverWalkProgressEvery == 0 {
 				// Keep the watchdog's lastProgressAt fresh through the walk. Total is
 				// unknown mid-walk, so report count with total 0.
-				_ = reporter.UpdateProgress(int(walked), 0,
+				env.Progress(int(walked), 0,
 					fmt.Sprintf("Building disk inventory… %d files (%d unclaimed)", walked, plan.UnclaimedSeen))
 			}
 			if _, taken := claimed[path]; taken {
@@ -751,19 +880,18 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	// abort). This also lets the recovery proceed against a resumed scan the
 	// stand-down cannot currently quiesce. Dry-run returned above, so this is only
 	// ever reached for an actual apply.
-	var (
-		holderID         string
-		standDownHeld    bool
-		releaseStandDown = func() {}
-	)
+	hold := t6g6Hold{Lost: func() bool { return false }, Release: func() {}}
 	if len(rewrites) > 0 {
-		h, held, rel, sdErr := acquireScanStandDownForApply(ctx, scan, reporter, "recover-missing-files apply")
+		if env.StandDown == nil {
+			return plan, fmt.Errorf("recover-missing-files: no scan stand-down available, refusing to apply without it")
+		}
+		h, sdErr := env.StandDown(ctx, "recover-missing-files apply")
 		if sdErr != nil {
 			return plan, fmt.Errorf("recover-missing-files: acquire scan stand-down: %w", sdErr)
 		}
-		holderID, standDownHeld, releaseStandDown = h, held, rel
+		hold = h
 	}
-	defer releaseStandDown()
+	defer hold.Release()
 
 	// --- Phase 4 — write (Branch A only). Rehydrate the FULL BookFile and change only
 	// FilePath: UpdateBookFiles carries UpdateBookFile's full-record-replacement
@@ -786,7 +914,16 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		func(rw rewriteRow) string { return rw.file.BookID },
 		func(rw rewriteRow) string { return rw.file.ID })
 	totalBooks := len(groups)
-	err = registry.RunItems(ctx, reporter, groups, func(itemCtx context.Context, g bookFileBatchGroup[rewriteRow]) error {
+	err = env.Items(ctx, par, len(groups), t6g6ItemsOptions{
+		Collect: true,
+		// The items are books now, so the label counts ROWS from its own atomic
+		// rather than the item index.
+		Label: func(_, books int) string {
+			return fmt.Sprintf("Repointed %d/%d rows across %d books (skipped=%d errs=%d)",
+				rowsDone.Load(), totalRewrites, books, skippedChanged.Load(), updateErrs.Load())
+		},
+	}, func(itemCtx context.Context, gi int) error {
+		g := groups[gi]
 		// RunItems reports progress in BOOKS (the item). The in-book progress
 		// line below must use the same units or the bar alternates between two
 		// scales and appears to jump backwards -- see run_items.go's P-2 note.
@@ -797,7 +934,7 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		if standDownLost.Load() {
 			return nil
 		}
-		if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+		if hold.Lost() {
 			standDownLost.Store(true)
 			log.Warn("recover-missing-files: scan stand-down lease lost — aborting remaining writes")
 			return nil
@@ -811,11 +948,11 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		// The stat pass is the longest stretch between two stand-down renewals,
 		// and RunItems renews only per BOOK — so stamp liveness and re-check the
 		// lease from inside it. See bookFileStatLivenessEvery.
-		beat := prewriteHeartbeat(reporter, func() bool {
+		beat := prewriteHeartbeat(env.Reporter, func() bool {
 			if standDownLost.Load() {
 				return true
 			}
-			if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+			if hold.Lost() {
 				standDownLost.Store(true)
 				log.Warn("recover-missing-files: scan stand-down lease lost — aborting remaining writes")
 				return true
@@ -843,7 +980,7 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 			return nil
 		}
 
-		siblings, gerr := store.GetBookFiles(g.BookID)
+		siblings, gerr := env.Store.GetBookFiles(g.BookID)
 		if gerr != nil {
 			// One error per row that would have been written, matching the
 			// per-row loop this replaced: each of those rows did its own
@@ -874,13 +1011,13 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 		}
 
 		bookID := g.BookID
-		out := writeBookFileBatch(itemCtx, store, rows, bookFileBatchOpts{
-			Reporter: reporter,
+		out := writeBookFileBatch(itemCtx, env.Writer, rows, bookFileBatchOpts{
+			Reporter: env.Reporter,
 			Abort: func() bool {
 				if standDownLost.Load() {
 					return true
 				}
-				if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+				if hold.Lost() {
 					standDownLost.Store(true)
 					log.Warn("recover-missing-files: scan stand-down lease lost — aborting remaining writes")
 					return true
@@ -915,15 +1052,6 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 				"book", bookID, "planned", len(rows), "written", out.Applied)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		// The items are books now, so the label counts ROWS from its own atomic
-		// rather than the item index.
-		Label: func(_, books int) string {
-			return fmt.Sprintf("Repointed %d/%d rows across %d books (skipped=%d errs=%d)",
-				rowsDone.Load(), totalRewrites, books, skippedChanged.Load(), updateErrs.Load())
-		},
 	})
 	if err != nil {
 		return plan, fmt.Errorf("repoint writes: %w", err)
@@ -941,11 +1069,17 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 	// other process restored is never clobbered — it is counted skipped, not an error. ---
 	if params.ReflinkOutside && !standDownLost.Load() {
 		var reflinked, reflinkSkipped, reflinkErrs atomic.Int64
-		err = registry.RunItems(ctx, reporter, reflinks, func(_ context.Context, rl reflinkRow) error {
+		err = env.Items(ctx, par, len(reflinks), t6g6ItemsOptions{
+			Collect: true,
+			Label: func(i, t int) string {
+				return fmt.Sprintf("Reflinked %d/%d rows (skipped=%d errs=%d)", i+1, t, reflinkSkipped.Load(), reflinkErrs.Load())
+			},
+		}, func(_ context.Context, ri int) error {
+			rl := reflinks[ri]
 			if standDownLost.Load() {
 				return nil
 			}
-			if scanStandDownLostForApply(scan, holderID, standDownHeld) {
+			if hold.Lost() {
 				standDownLost.Store(true)
 				log.Warn("recover-missing-files: scan stand-down lease lost — aborting remaining reflinks")
 				return nil
@@ -1005,12 +1139,6 @@ func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanC
 				mu.Unlock()
 			}
 			return nil
-		}, registry.RunItemsOptions{
-			Concurrency: missingFileStatConcurrency,
-			ErrMode:     registry.ErrModeCollect,
-			Label: func(i, t int) string {
-				return fmt.Sprintf("Reflinked %d/%d rows (skipped=%d errs=%d)", i+1, t, reflinkSkipped.Load(), reflinkErrs.Load())
-			},
 		})
 		if err != nil {
 			return plan, fmt.Errorf("reflink writes: %w", err)

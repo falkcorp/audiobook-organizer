@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.4.4
+// version: 1.5.0
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -14,9 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -190,6 +191,10 @@ func classifyStatusRepair(b database.Book) repairVerdict {
 	return repairVerdict{Reason: repairRecomputedUnparsed, NewStatus: &s, Write: true}
 }
 
+// repairTranscribeStatusHelp is the def's Description, which the native kind
+// carries as its Help.
+const repairTranscribeStatusHelp = "Fixes transcribe_status rows that record a TRANSPORT failure (the Whisper endpoint was unreachable) rather than a transcription failure. A day-long outage on 2026-07-01 marked ~77% of the library whisper_error while their transcripts, dated four days earlier, survived intact. This recomputes the status from the stored text (credits -> ok, else unparsed), or clears it back to never-attempted where there is no text. Never calls Whisper, never touches transcript text, and leaves genuine failures and the [SILENCE] sentinel alone. Defaults to dry_run=true."
+
 func (p *Plugin) repairTranscribeStatusDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.repair-transcribe-status",
@@ -197,7 +202,7 @@ func (p *Plugin) repairTranscribeStatusDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Repair transcribe status after a transport outage",
-		Description:     "Fixes transcribe_status rows that record a TRANSPORT failure (the Whisper endpoint was unreachable) rather than a transcription failure. A day-long outage on 2026-07-01 marked ~77% of the library whisper_error while their transcripts, dated four days earlier, survived intact. This recomputes the status from the stored text (credits -> ok, else unparsed), or clears it back to never-attempted where there is no text. Never calls Whisper, never touches transcript text, and leaves genuine failures and the [SILENCE] sentinel alone. Defaults to dry_run=true.",
+		Description:     repairTranscribeStatusHelp,
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.repair-transcribe-status",
@@ -228,7 +233,83 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 	if err != nil {
 		return err
 	}
-	log := reporter.Logger()
+	return repairTranscribeStatusCore(ctx, params.LastBookID, dryRun, repairTranscribeStatusEnv{
+		t6g6Env: t6g6HeadEnv(reporter, !dryRun),
+		Store:   store,
+		Writer:  store,
+	})
+}
+
+// repairTranscribeStatusKind is rule R3's kind for the def above.
+const repairTranscribeStatusKind = tasks.Kind("books.maintenance.repair-transcribe-status")
+
+// repairTranscribeStatusStore is the reads the sweep makes.
+type repairTranscribeStatusStore interface {
+	ListBookIDs() ([]string, error)
+	GetBookByID(id string) (*database.Book, error)
+}
+
+// repairTranscribeStatusWriter is the one write: the two status fields, under
+// the book's write lock.
+type repairTranscribeStatusWriter interface {
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}
+
+// repairTranscribeStatusEnv is what the core takes from its shell.
+type repairTranscribeStatusEnv struct {
+	t6g6Env
+	Store  repairTranscribeStatusStore
+	Writer repairTranscribeStatusWriter
+}
+
+// repairTranscribeStatusParallelism is the op's concurrency: the page sweep ran
+// on registry.RunItems with Concurrency 8.
+func repairTranscribeStatusParallelism() tasks.Parallelism {
+	return tasks.Fixed(8, "pages of 500 books are disjoint sets, so no two workers touch the same row (ModifyBook is a read-modify-write); 8 is HEAD's fixed pool")
+}
+
+// repairTranscribeStatusNative is the native kind. Preview is the dry run HEAD's
+// default was; Live writes the repaired statuses.
+func (p *Plugin) repairTranscribeStatusNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(repairTranscribeStatusKind, sched)
+	c.Title = "Repair transcribe status after a transport outage"
+	c.Help = repairTranscribeStatusHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "books"))
+	c.Resume = tasks.ResumeContinue
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.repair-transcribe-status")
+	c.Timeout = 2 * time.Hour
+	c.ProgressTimeout = 5 * time.Minute
+	return tasks.Task(repairTranscribeStatusKind, tasks.TaskSpec[repairTranscribeStatusNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, in repairTranscribeStatusNativeParams) (struct{}, error) {
+			live := rc.Mode() == tasks.ModeLive
+			env := repairTranscribeStatusEnv{t6g6Env: t6g6NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			if live && deps.NewWriter != nil {
+				env.Writer = deps.NewWriter(rc.Writer())
+			}
+			return struct{}{}, repairTranscribeStatusCore(rc.Context(), in.LastBookID, !live, env)
+		},
+	})
+}
+
+// repairTranscribeStatusNativeParams are the native run's params: HEAD's without
+// the dry-run switch, which the run's mode decides.
+type repairTranscribeStatusNativeParams struct {
+	LastBookID string `json:"last_book_id,omitempty"`
+}
+
+// repairTranscribeStatusCore is the body of runRepairTranscribeStatus.
+func repairTranscribeStatusCore(ctx context.Context, lastBookID string, dryRun bool, env repairTranscribeStatusEnv) error {
+	store := env.Store
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	params := repairStatusParams{LastBookID: lastBookID}
+	log := env.Logger
 
 	allIDs, err := store.ListBookIDs()
 	if err != nil {
@@ -246,7 +327,7 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 	total := len(allIDs)
 	log.Info("repair-transcribe-status: starting", "dry_run", dryRun, "total_books", total)
 	if startIdx >= total {
-		_ = reporter.UpdateProgress(1, 1, "Done — nothing to repair")
+		env.Progress(1, 1, "Done — nothing to repair")
 		return nil
 	}
 
@@ -256,7 +337,11 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 	// Pages partition books into DISJOINT sets so no two workers touch the same
 	// row — UpdateBook is a read-modify-write with no store-level lock.
 	pages := chunkIDs(allIDs[startIdx:], repairStatusPageSize)
-	err = registry.RunItems(ctx, reporter, pages, func(ctx context.Context, ids []string) error {
+	err = env.Items(ctx, repairTranscribeStatusParallelism(), len(pages), t6g6ItemsOptions{
+		ProgressTotal: len(pages),
+		Label:         func(i, t int) string { return fmt.Sprintf("Page %d/%d", i+1, t) },
+	}, func(ctx context.Context, pi int) error {
+		ids := pages[pi]
 		local := map[string]int{}
 		for _, id := range ids {
 			select {
@@ -284,7 +369,7 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 			// op never assigns IntroTranscription, so the transcript cannot
 			// be disturbed by a repair. The verdict is re-made on the fresh
 			// row; a book repaired meanwhile is left alone.
-			written, uerr := store.ModifyBook(b.ID, func(cur *database.Book) error {
+			written, uerr := env.Writer.ModifyBook(b.ID, func(cur *database.Book) error {
 				fresh := classifyStatusRepair(*cur)
 				if !fresh.Write {
 					return database.ErrSkipBookWrite
@@ -311,10 +396,6 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 		}
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   8,
-		ProgressTotal: len(pages),
-		Label:         func(i, t int) string { return fmt.Sprintf("Page %d/%d", i+1, t) },
 	})
 
 	mu.Lock()
@@ -338,7 +419,7 @@ func (p *Plugin) runRepairTranscribeStatus(ctx context.Context, rawParams json.R
 	if !dryRun {
 		verb = "Repaired"
 	}
-	_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
+	env.Progress(1, 1, fmt.Sprintf(
 		"%s %d books — %d ok, %d unparsed, %d cleared; kept %d genuine failures, %d silence (of %d)",
 		verb, changed, snap[repairRecomputedOK], snap[repairRecomputedUnparsed],
 		snap[repairClearedNeverTried], snap[repairSkipNotTransport], snap[repairSkipSilence], total))

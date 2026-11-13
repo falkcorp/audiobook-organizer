@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 2.3.1
+// version: 2.4.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -30,6 +32,10 @@ type OrphanBookFilesCleanupParams struct {
 	Delete bool `json:"delete"`
 }
 
+// orphanBookFilesCleanupHelp is the def's Description, which the native kind
+// carries as its Help.
+const orphanBookFilesCleanupHelp = "Report-only: counts book_file rows whose book_id no longer references an existing book. Never deletes; see maintenance.orphan-book-files-repoint-plan for where each should go."
+
 // orphanBookFilesCleanupDef registers the maintenance.orphan-book-files-cleanup
 // OperationDef. It runs nightly during the maintenance window (02:15 daily) so
 // it sits between purge-old-logs (02:00 Sun) and purge-deleted (03:00) without
@@ -41,7 +47,7 @@ func (p *Plugin) orphanBookFilesCleanupDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Orphan book_file scan",
-		Description:     "Report-only: counts book_file rows whose book_id no longer references an existing book. Never deletes; see maintenance.orphan-book-files-repoint-plan for where each should go.",
+		Description:     orphanBookFilesCleanupHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "maintenance.orphan-book-files-cleanup",
@@ -64,30 +70,89 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
+	env := orphanBookFilesCleanupEnv{t6g6Env: t6g6HeadEnv(reporter, false)}
+	// A nil OpsStore leaves env.Store nil (a typed-nil adapter would hide it), so
+	// the core's "database not initialized" check still fires, after the delete
+	// refusal as before.
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = t6g6HeadStore{OpsStore: store}
+	}
+	return orphanBookFilesCleanupCore(ctx, params, env)
+}
+
+// orphanBookFilesCleanupKind is rule R3's kind for the def above.
+const orphanBookFilesCleanupKind = tasks.Kind("books.maintenance.orphan-book-files-cleanup")
+
+// orphanBookFilesCleanupStore is the reads the scan makes. The op writes
+// nothing, so it has no writer.
+type orphanBookFilesCleanupStore interface {
+	// AllBookFilesCoreIncludingRetired is every book_file row, retired ones
+	// included (database.AllBookFilesCoreIncludingRetired over the store).
+	AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
+	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error)
+}
+
+// orphanBookFilesCleanupEnv is what the core takes from its shell.
+type orphanBookFilesCleanupEnv struct {
+	t6g6Env
+	Store orphanBookFilesCleanupStore
+}
+
+// orphanBookFilesCleanupParallelism is the op's concurrency. HEAD declared none
+// and the scan is one pass of set differences.
+func orphanBookFilesCleanupParallelism() tasks.Parallelism {
+	return tasks.Sequential("HEAD declared no concurrency; the scan is one pass of set differences over the book_file and book lists")
+}
+
+// orphanBookFilesCleanupNative is the native kind. It only reports, so it is
+// ReadOnly and its Preview and Live runs are the same.
+func (p *Plugin) orphanBookFilesCleanupNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(orphanBookFilesCleanupKind, sched)
+	c.Title = "Orphan book_file scan"
+	c.Help = orphanBookFilesCleanupHelp
+	c.Effects = tasks.ReadOnly()
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityNormal
+	c.ConcurrencyKey = tasks.Key("books.maintenance.orphan-book-files-cleanup")
+	c.Timeout = 30 * time.Minute
+	return tasks.Task(orphanBookFilesCleanupKind, tasks.TaskSpec[OrphanBookFilesCleanupParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, params OrphanBookFilesCleanupParams) (struct{}, error) {
+			env := orphanBookFilesCleanupEnv{t6g6Env: t6g6NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			return struct{}{}, orphanBookFilesCleanupCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// orphanBookFilesCleanupCore is the body of runOrphanBookFilesCleanup.
+func orphanBookFilesCleanupCore(ctx context.Context, params OrphanBookFilesCleanupParams, env orphanBookFilesCleanupEnv) error {
 	if params.Delete {
 		return fmt.Errorf("the delete mode of this op was removed: it deleted book_file rows, which must be repointed instead; run maintenance.orphan-book-files-repoint-plan for a dry-run plan")
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
+	if env.Store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting orphan book_file scan (report-only)")
-	scanProg := sdk.NewProgress(reporter, 0)
+	env.Log(slog.LevelInfo, "Starting orphan book_file scan (report-only)")
+	scanProg := t6g6NewProgress(env.t6g6Env, 0)
 	scanProg.Start("Scanning book_files for orphan rows...")
 
-	orphans, totalFiles, ownerCount, err := findOrphanBookFiles(ctx, store)
+	orphans, totalFiles, ownerCount, err := t6g6FindOrphanBookFilesVia(ctx, env.Store)
 	if err != nil {
 		return fmt.Errorf("scan failed: %w", err)
 	}
 
-	_ = reporter.Log(slog.LevelInfo, "Orphan scan complete",
+	env.Log(slog.LevelInfo, "Orphan scan complete",
 		slog.Int("orphan_count", len(orphans)),
 		slog.Int("total_book_files", totalFiles),
 		// live + soft-deleted: every book that could still own a file row.
 		slog.Int("owning_books", ownerCount),
 	)
 	msg := fmt.Sprintf("Orphan book_file scan: %d orphan(s) detected (report-only)", len(orphans))
-	_ = reporter.Log(slog.LevelInfo, msg)
+	env.Log(slog.LevelInfo, msg)
 	scanProg.Done(msg)
 	return nil
 }
@@ -115,12 +180,28 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 // This is the testable core of runOrphanBookFilesCleanup and of the repoint
 // plan. It never deletes anything, and no caller does any more.
 func findOrphanBookFiles(ctx context.Context, store orphanFileScanner) (orphans []database.BookFileCore, totalFiles int, ownerCount int, err error) {
+	return t6g6FindOrphanBookFilesVia(ctx, t6g6OrphanScanShim{store})
+}
+
+// t6g6OrphanScanShim gives an orphanFileScanner the retired-inclusive file list
+// the Via scan reads: database.AllBookFilesCoreIncludingRetired over the store,
+// which sees through decorators.
+type t6g6OrphanScanShim struct{ orphanFileScanner }
+
+func (s t6g6OrphanScanShim) AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return database.AllBookFilesCoreIncludingRetired(s.orphanFileScanner)
+}
+
+// t6g6FindOrphanBookFilesVia is findOrphanBookFiles over the reads the shell
+// hands the core (see it for what the scan decides and why each read fails
+// closed).
+func t6g6FindOrphanBookFilesVia(ctx context.Context, store orphanBookFilesCleanupStore) (orphans []database.BookFileCore, totalFiles int, ownerCount int, err error) {
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()
 	}
 	// Retired rows included: a retired row is keyed under its holder, so one whose
 	// holder is gone is an orphan like any other row.
-	files, ferr := database.AllBookFilesCoreIncludingRetired(store)
+	files, ferr := store.AllBookFilesCoreIncludingRetired()
 	if ferr != nil {
 		return nil, 0, 0, fmt.Errorf("GetAllBookFilesCore: %w", ferr)
 	}

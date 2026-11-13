@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recompact_activity_digests.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 8b4f2e61-3d7a-4c95-a0e8-5f1c9d6b2a73
-// last-edited: 2026-11-07
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -12,8 +12,10 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -30,6 +32,10 @@ type RecompactActivityDigestsResult struct {
 	Touched int `json:"touched"`
 	Skipped int `json:"skipped"`
 }
+
+// recompactActivityDigestsHelp is the def's Description, which the native kind
+// carries as its Help.
+const recompactActivityDigestsHelp = "Re-derives type, tier and tags on daily digests that were compacted before enrichment existed."
 
 // recompactActivityDigestsDef is the admin "recompact digests" action.
 //
@@ -60,7 +66,7 @@ func (p *Plugin) recompactActivityDigestsDef() sdk.OperationDef {
 		ProgressTimeout: 60 * time.Minute,
 		Plugin:          "maintenance",
 		DisplayName:     "Recompact activity digests",
-		Description:     "Re-derives type, tier and tags on daily digests that were compacted before enrichment existed.",
+		Description:     recompactActivityDigestsHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -73,12 +79,73 @@ func (p *Plugin) recompactActivityDigestsDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runRecompactActivityDigests(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	env := recompactActivityDigestsEnv{
+		t6g6Env: t6g6HeadEnv(reporter, true),
+		Writer:  t6g6HeadWriter{deps: p.deps},
+	}
+	_, err := recompactActivityDigestsCore(ctx, env)
+	return err
+}
+
+// recompactActivityDigestsKind is rule R3's kind for the def above.
+const recompactActivityDigestsKind = tasks.Kind("books." + RecompactActivityDigestsDefID)
+
+// recompactActivityDigestsWriter is the one write the op makes: the digest
+// re-derivation.
+type recompactActivityDigestsWriter interface {
+	RecompactActivityDigests(ctx context.Context) (database.RecompactResult, error)
+}
+
+// recompactActivityDigestsEnv is what the core takes from its shell.
+type recompactActivityDigestsEnv struct {
+	t6g6Env
+	Writer recompactActivityDigestsWriter
+}
+
+// recompactActivityDigestsNative is the native kind. It rewrites stored digests,
+// so it has no preview and refuses a Preview run.
+func (p *Plugin) recompactActivityDigestsNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(recompactActivityDigestsKind, sched)
+	c.Title = "Recompact activity digests"
+	c.Help = recompactActivityDigestsHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "activity"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.cleanup-activity-log")
+	c.Timeout = 60 * time.Minute
+	c.ProgressTimeout = 60 * time.Minute
+	return tasks.Task(recompactActivityDigestsKind, tasks.TaskSpec[json.RawMessage, RecompactActivityDigestsResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (RecompactActivityDigestsResult, error) {
+			if err := t6g6RefuseModeKeys(recompactActivityDigestsKind, raw); err != nil {
+				return RecompactActivityDigestsResult{}, err
+			}
+			if err := t6g6LiveOnly(rc, recompactActivityDigestsKind); err != nil {
+				return RecompactActivityDigestsResult{}, err
+			}
+			w, err := t6g6NewWriter(recompactActivityDigestsKind, deps, rc)
+			if err != nil {
+				return RecompactActivityDigestsResult{}, err
+			}
+			env := recompactActivityDigestsEnv{
+				t6g6Env: t6g6NativeEnv(rc),
+				Writer:  w,
+			}
+			return recompactActivityDigestsCore(rc.Context(), env)
+		},
+	})
+}
+
+// recompactActivityDigestsCore is the body of runRecompactActivityDigests. The
+// result comes back even when the re-derivation failed (the counters are what
+// was committed before it), and env.SetResult, when set, persists it.
+func recompactActivityDigestsCore(ctx context.Context, env recompactActivityDigestsEnv) (RecompactActivityDigestsResult, error) {
 	startMsg := "Re-deriving legacy daily-digest items"
 	logger.InfoCtx(ctx, startMsg)
-	_ = reporter.Log(slog.LevelInfo, startMsg)
-	_ = reporter.UpdateProgress(0, 0, startMsg)
+	env.Log(slog.LevelInfo, startMsg)
+	env.Progress(0, 0, startMsg)
 
-	res, err := p.deps.RecompactActivityDigests(ctx)
+	res, err := env.Writer.RecompactActivityDigests(ctx)
 	result := RecompactActivityDigestsResult{Touched: res.Touched, Skipped: res.Skipped}
 
 	// The counters are reported whatever happened: on a failure they are what
@@ -87,21 +154,23 @@ func (p *Plugin) runRecompactActivityDigests(ctx context.Context, _ json.RawMess
 	doneMsg := fmt.Sprintf("Recompacted %d digest(s), %d already current", result.Touched, result.Skipped)
 	if err != nil {
 		doneMsg = fmt.Sprintf("FAILED after recompacting %d digest(s) (%d already current): %v", result.Touched, result.Skipped, err)
-		_ = reporter.Log(slog.LevelError, doneMsg)
+		env.Log(slog.LevelError, doneMsg)
 	} else {
-		_ = reporter.Log(slog.LevelInfo, doneMsg)
+		env.Log(slog.LevelInfo, doneMsg)
 	}
 	logger.InfoCtx(ctx, doneMsg)
-	_ = reporter.UpdateProgress(result.Touched+result.Skipped, result.Touched+result.Skipped, doneMsg)
+	env.Progress(result.Touched+result.Skipped, result.Touched+result.Skipped, doneMsg)
 
-	if setErr := opsregistry.ReporterSetResult(reporter, result); setErr != nil {
-		if err != nil {
-			return fmt.Errorf("recompact-activity-digests: %w (and persisting the result failed: %v)", err, setErr)
+	if env.SetResult != nil {
+		if setErr := env.SetResult(result); setErr != nil {
+			if err != nil {
+				return result, fmt.Errorf("recompact-activity-digests: %w (and persisting the result failed: %v)", err, setErr)
+			}
+			return result, fmt.Errorf("recompact-activity-digests: persist result: %w", setErr)
 		}
-		return fmt.Errorf("recompact-activity-digests: persist result: %w", setErr)
 	}
 	if err != nil {
-		return fmt.Errorf("recompact-activity-digests: %w", err)
+		return result, fmt.Errorf("recompact-activity-digests: %w", err)
 	}
-	return nil
+	return result, nil
 }
