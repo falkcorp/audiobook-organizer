@@ -1,5 +1,5 @@
 // file: core/health/budget.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91c4e7a2-5d38-4f60-8b1e-2a9d6c3f7e84
 // last-edited: 2026-11-13
 
@@ -7,7 +7,10 @@ package health
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"runtime"
 	"time"
 )
 
@@ -64,6 +67,13 @@ type StopLimits struct {
 	BusClose   time.Duration // core.events.close_drain, 2s
 }
 
+// ErrPhaseAbandoned is wrapped by the error StopBudget.Run returns when a
+// bounded phase did not return by its deadline and was left running. The
+// error also wraps the context's own error (context.DeadlineExceeded for a
+// budget deadline), so a caller that only asks errors.Is(err,
+// context.DeadlineExceeded) keeps working.
+var ErrPhaseAbandoned = errors.New("health: stop phase abandoned at its deadline")
+
 // StopBudget carves phase deadlines from one total. It is used by one
 // goroutine, the shutdown path, one phase at a time.
 type StopBudget struct {
@@ -71,6 +81,7 @@ type StopBudget struct {
 	deadline time.Time
 	limits   StopLimits
 	m        *Metrics
+	log      *slog.Logger
 	// remainderLeft counts the remainder phases (workers, hooks, realtime) not
 	// yet run; each gets an equal share of what is left.
 	remainderLeft int
@@ -96,6 +107,12 @@ func newStopBudget(now func() time.Time, total time.Duration, l StopLimits, m *M
 		l.BusClose = defaultBusClose
 	}
 	return &StopBudget{now: now, deadline: now().Add(total), limits: l, m: m, remainderLeft: 3}
+}
+
+// WithLog sets the logger that records an abandoned phase and returns b.
+func (b *StopBudget) WithLog(l *slog.Logger) *StopBudget {
+	b.log = l
+	return b
 }
 
 // Remaining is the time left of the total, never negative.
@@ -129,24 +146,67 @@ func (b *StopBudget) slice(phase StopPhase) (d time.Duration, bounded bool, err 
 // Run runs fn as phase under its slice of the budget: a context that ends at
 // min(the phase's cap, what remains), or for the remainder phases an equal
 // share of what remains. A phase reached with nothing left runs with an
-// expired context, so it can still do work that needs none. PhaseStorage always
-// runs, after the cap if need be, with a context that is never cancelled by the
-// budget (Pebble's WAL keeps committed batches; a skipped close would not).
-// The phase's duration is recorded as shutdown_phase_seconds.
+// expired context, so it can still do work that needs none.
+//
+// The deadline is a bound on how long Run takes, not only a signal to fn: a
+// bounded phase that has not returned when its context ends is abandoned (the
+// goroutine is left to finish or die with the process, as a health check that
+// overruns its timeout is, 05-health 5H.9) and Run returns an error wrapping
+// ErrPhaseAbandoned and the context's error. Without that a phase that ignores
+// its context, a drain stuck in a syscall, would carry the whole shutdown past
+// core.shutdown.budget and the supervisor's SIGKILL would land before the
+// storage close. An abandoned phase's context is cancelled for good when Run
+// returns.
+//
+// PhaseStorage is the exception: it runs synchronously, after the cap if need
+// be, with a context the budget never cancels, and is never abandoned (Pebble's
+// WAL keeps committed batches; a skipped close would not). The phase's
+// duration, abandoned or not, is recorded as shutdown_phase_seconds.
 func (b *StopBudget) Run(ctx context.Context, phase StopPhase, fn func(context.Context) error) error {
 	d, bounded, err := b.slice(phase)
 	if err != nil {
 		return err
 	}
-	var cancel context.CancelFunc
-	if bounded {
-		ctx, cancel = context.WithTimeout(ctx, d)
-	} else {
-		ctx, cancel = context.WithCancel(context.WithoutCancel(ctx))
-	}
-	defer cancel()
 	start := b.now()
-	err = fn(ctx)
+	if !bounded {
+		ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		defer cancel()
+		err = fn(ctx)
+		b.m.recordPhase(string(phase), b.now().Sub(start))
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		defer func() {
+			if p := recover(); p != nil {
+				done <- fmt.Errorf("health: stop phase %q panicked: %v", phase, p)
+			}
+		}()
+		done <- fn(ctx)
+	}()
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		// A phase that honours its context returns at the same instant the
+		// deadline fires; give it one scheduling turn so that is usually not
+		// reported as an abandonment. Best effort: one that has not been
+		// scheduled by then is abandoned, which costs a log line and nothing
+		// else, since its error would have been the context's anyway.
+		runtime.Gosched()
+		select {
+		case err = <-done:
+		default:
+			took := b.now().Sub(start)
+			b.m.recordPhase(string(phase), took)
+			if b.log != nil {
+				b.log.Warn("health: stop phase did not return by its deadline and was abandoned",
+					"phase", string(phase), "budget", d.String(), "took", took.String())
+			}
+			return fmt.Errorf("%w: %s after %s: %w", ErrPhaseAbandoned, phase, took, ctx.Err())
+		}
+	}
 	b.m.recordPhase(string(phase), b.now().Sub(start))
 	return err
 }
