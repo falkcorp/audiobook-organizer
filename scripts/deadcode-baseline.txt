@@ -667,6 +667,8 @@ internal/plugins/maintenance.planMetadataCacheReap
 internal/plugins/maintenance.planMissingFileRepair
 internal/plugins/maintenance.planMissingFileRepoint
 internal/plugins/maintenance.reconcileFixer.reader
+internal/plugins/maintenance.regroupSDKReporter.Log
+internal/plugins/maintenance.regroupSDKReporter.UpdateProgress
 internal/plugins/maintenance.t6g5Common
 internal/plugins/maintenance.t6g5DecodeParams
 internal/plugins/maintenance.t6g5DecodeStrictParams
