@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_clear.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f3b8d25-e471-4a09-b2c6-1d8a95e7f034
 // last-edited: 2026-11-13
 
@@ -15,40 +15,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
-
-// clearFileIntros is rollback for maintenance.transcribe-file-intros
-// (clear_run_id): it removes the per-file results the named run wrote and the
-// book-level transcripts that were filled from them. It writes no undo-ledger
-// rows (owner decision: rollback is by run id).
-//
-// A preview, which is the default, counts both and writes nothing, so the
-// owner sees the size of the rollback before it happens.
-//
-// What it does NOT do is restore earlier content. A run that only filled empty
-// files (only_missing, the default) leaves nothing to restore. A forced re-run
-// (only_missing=false) replaced earlier transcripts, and clearing it returns
-// those files to "never transcribed", not to what they held: roll-forward only.
-//
-// A book fill is reverted only when the book still holds EXACTLY what the fill
-// wrote (same text, same transcribed-at, same attempted-at), so a transcript
-// the book op or the owner wrote afterwards is never erased.
-//
-// clear_run_id also takes a book-op run id (the book op's strikes and verdicts
-// carry its op id). When that run made a file's transcribe_timeout permanent it
-// stamped the same verdict on the BOOK in the same step (same status, error and
-// attempted-at); that stamp is reverted with the file row, on the same
-// exact-match rule, or the book would stay skipped as a durable failure after
-// its cause was rolled back.
-func (p *Plugin) clearFileIntros(ctx context.Context, store fileIntroStore, queue OpQueueReader, reporter sdk.Reporter, runID string, dryRun bool) error {
-	_, writable := database.AsCapability[database.BookFileIntroStore](store)
-	_, err := p.clearFileIntrosVia(ctx, fileIntroClearIO{
-		reads:    store,
-		writes:   headFileIntroClearWriter{store: store},
-		writable: writable,
-		each:     t6g4RunEachHEAD(reporter),
-	}, queue, reporter, runID, dryRun)
-	return err
-}
 
 // fileIntroClearReads is what the rollback reads: the book_file listing it finds
 // the run's rows in, and the two rows its preview compares.
@@ -84,24 +50,31 @@ type fileIntroClearResult struct {
 	Errors      int    `json:"errors"`
 }
 
-// headFileIntroClearWriter is HEAD's write side of the rollback: the capability
-// and the store HEAD's body called, in the same order.
-type headFileIntroClearWriter struct{ store fileIntroStore }
-
-func (h headFileIntroClearWriter) ClearBookFileIntro(bookID, fileID, runOpID string) (*database.BookFile, bool, error) {
-	intros, ok := database.AsCapability[database.BookFileIntroStore](h.store)
-	if !ok {
-		return nil, false, fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
-	}
-	return intros.ClearBookFileIntro(bookID, fileID, runOpID)
-}
-
-func (h headFileIntroClearWriter) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	return h.store.ModifyBook(id, fn)
-}
-
-// clearFileIntrosVia is clearFileIntros's body over io: HEAD's shell and the
-// native kind both run it, so the rollback exists once.
+// clearFileIntrosVia is rollback for maintenance.transcribe-file-intros
+// (clear_run_id): it removes the per-file results the named run wrote and the
+// book-level transcripts that were filled from them. It writes no undo-ledger
+// rows (owner decision: rollback is by run id).
+//
+// A preview, which is the default, counts both and writes nothing, so the
+// owner sees the size of the rollback before it happens.
+//
+// What it does NOT do is restore earlier content. A run that only filled empty
+// files (only_missing, the default) leaves nothing to restore. A forced re-run
+// (only_missing=false) replaced earlier transcripts, and clearing it returns
+// those files to "never transcribed", not to what they held: roll-forward only.
+//
+// A book fill is reverted only when the book still holds EXACTLY what the fill
+// wrote (same text, same transcribed-at, same attempted-at), so a transcript
+// the book op or the owner wrote afterwards is never erased.
+//
+// clear_run_id also takes a book-op run id (the book op's strikes and verdicts
+// carry its op id). When that run made a file's transcribe_timeout permanent it
+// stamped the same verdict on the BOOK in the same step (same status, error and
+// attempted-at); that stamp is reverted with the file row, on the same
+// exact-match rule, or the book would stay skipped as a durable failure after
+// its cause was rolled back.
+//
+// HEAD's shell and the native kind both run it, so the rollback exists once.
 func (p *Plugin) clearFileIntrosVia(ctx context.Context, io fileIntroClearIO, queue OpQueueReader, reporter sdk.Reporter, runID string, dryRun bool) (fileIntroClearResult, error) {
 	mark := introModeMarker(dryRun)
 	log := reporter.Logger()

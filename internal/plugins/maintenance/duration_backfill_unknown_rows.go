@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-13
 
@@ -905,18 +905,11 @@ func (p *Plugin) runUnknownRowsBackfillVia(ctx context.Context, store unknownRow
 	return nil
 }
 
-// unknownRowsPool runs fn over items through registry.RunItems with the pool
-// size set EXPLICITLY (RunItems is sequential by default). Each item checks ctx
-// first and stamps liveness when done. Label runs inside the worker goroutines,
-// so every counter it reads is atomic.
-func unknownRowsPool[T any](ctx context.Context, reporter sdk.Reporter, workers int, ctr *unknownRowsCounters,
-	items []T, name string, fn func(context.Context, T) error) error {
-	return unknownRowsPoolVia(ctx, t6g4RunEachHEAD(reporter), reporter, workers, ctr, items, name, fn)
-}
-
-// unknownRowsPoolVia is unknownRowsPool over any loop runner: each is HEAD's
-// registry.RunItems or the native tasks.RunItems, both at Concurrency workers
-// and collecting errors.
+// unknownRowsPoolVia runs fn over items through any loop runner (each is HEAD's
+// registry.RunItems or the native tasks.RunItems) with the pool size set
+// EXPLICITLY (RunItems is sequential by default). Each item checks ctx first and
+// stamps liveness when done. Label runs inside the worker goroutines, so every
+// counter it reads is atomic.
 func unknownRowsPoolVia[T any](ctx context.Context, each t6g4EachFn, reporter sdk.Reporter, workers int, ctr *unknownRowsCounters,
 	items []T, name string, fn func(context.Context, T) error) error {
 	ctr.done.Store(0)

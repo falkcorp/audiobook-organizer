@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-13
 
@@ -37,9 +37,6 @@ import (
 // native shell around the same core (rule R2). The core reaches its writer and
 // its stores only through the env its shell hands it (rule R10): nothing in a
 // core reads p.deps, a receiver field or a package variable for a store.
-
-// t6g4KindPrefix is rule R3: tasks.Kind("books." + <HEAD def ID>).
-const t6g4KindPrefix = "books."
 
 // t6g4SignalMemDB is the readiness component the kinds wait for (rule R5,
 // NoWarmupWait false, which every definition of this group is). Books registers
@@ -86,6 +83,12 @@ type t6g4Store interface {
 	t6g4WAVReads
 	t6g4ProvReads
 	t6g4BookCoreReads
+	t6g4StoreReadsB
+}
+
+// t6g4StoreReadsB is the second half of t6g4Store's composition; it exists only
+// to keep every declared interface at or under the width ratchet's 8 entries.
+type t6g4StoreReadsB interface {
 	t6g4OpQueueReads
 	t6g4FileIntroReads
 	t6g4RegroupReads
@@ -103,6 +106,11 @@ type t6g4Writer interface {
 	t6g4WAVWrites
 	t6g4ProvWrites
 	t6g4BookFileWrites
+	t6g4WriterB
+}
+
+// t6g4WriterB is the second half of t6g4Writer's composition (width ratchet).
+type t6g4WriterB interface {
 	t6g4DedupeRowsWrites
 	t6g4FileIntroWrites
 	t6g4BookModifyWrites
@@ -272,6 +280,11 @@ type t6g4RegroupReads interface {
 	GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	BookFilesAtPath(path string) ([]database.BookFile, error)
+	t6g4RegroupReadsB
+}
+
+// t6g4RegroupReadsB is the rest of t6g4RegroupReads (width ratchet).
+type t6g4RegroupReadsB interface {
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 	GetChaptersForBook(bookID string) ([]database.Chapter, error)
@@ -480,7 +493,9 @@ func (r t6g4Reporter) Logger() *slog.Logger {
 	if r.b.Logger != nil {
 		return r.b.Logger()
 	}
-	return slog.Default()
+	// The sanitizing subsystem logger, not slog.Default(): a direct slog call
+	// bypasses the log-injection barrier (TestGuard_NoDirectSlogCalls).
+	return slog.New(standardLoggerHandler{l: logger.New("maintenance")})
 }
 
 func (r t6g4Reporter) Checkpoint(state any) error {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-13
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -570,6 +571,10 @@ type t6g4Want struct {
 	// noLive skips the Live scenario: the core reaches the network or an external
 	// tool before it can make a recorded write.
 	noLive bool
+	// helpReworded: the native Help drops HEAD's dry-run wording, because the
+	// native shell refuses dry_run and a run's mode is the Preview flag, not a
+	// param. Every other row's Help is HEAD's Description verbatim.
+	helpReworded bool
 }
 
 // t6g4Expected is in file order (the order of t6g4Kinds).
@@ -581,11 +586,11 @@ var t6g4Expected = []t6g4Want{
 	{kind: dedupeBookFileRowsKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupeBookFileRowsDef() },
 		resume: tasks.ResumeContinue, writes: []string{"book_files"}, notWhile: []tasks.Kind{"library.scan"}, refuse: `{"apply":true}`},
 	{kind: durationBackfillKind, head: func(p *Plugin) sdk.OperationDef { return p.durationBackfillDef() },
-		resume: tasks.ResumeDrop, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`},
+		resume: tasks.ResumeDrop, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`, helpReworded: true},
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
 		resume: tasks.ResumeContinue, writes: []string{"book_files"}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
-		resume: tasks.ResumeContinue, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`},
+		resume: tasks.ResumeContinue, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
 		resume: tasks.ResumeDrop, writes: []string{"file_provenance"}, refuse: `{"apply":true}`},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
@@ -593,7 +598,7 @@ var t6g4Expected = []t6g4Want{
 	{kind: filePathCollisionReportKind, head: func(p *Plugin) sdk.OperationDef { return p.filePathCollisionReportDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: fsRegroupKind, head: func(p *Plugin) sdk.OperationDef { return p.fsRegroupXMLDef() },
-		resume: tasks.ResumeDrop, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`},
+		resume: tasks.ResumeDrop, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`, helpReworded: true},
 	{kind: identIndexKind, head: func(p *Plugin) sdk.OperationDef { return p.identIndexRebuildDef() },
 		resume: tasks.ResumeDrop, writes: []string{"books"}},
 	{kind: integrityCheckKind, head: func(p *Plugin) sdk.OperationDef { return p.integrityCheckDef() },
@@ -639,7 +644,12 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			if c.Title != head.DisplayName {
 				t.Errorf("Title = %q, want HEAD's DisplayName %q", c.Title, head.DisplayName)
 			}
-			if c.Help != head.Description {
+			if w.helpReworded {
+				if c.Help == "" || c.Help == head.Description || strings.Contains(strings.ToLower(c.Help), "dry-run") ||
+					strings.Contains(c.Help, "dry_run") || strings.Contains(c.Help, "dryRun") {
+					t.Errorf("Help must be set, reworded and free of dry-run params, got %q", c.Help)
+				}
+			} else if c.Help != head.Description {
 				t.Errorf("Help differs from HEAD's Description")
 			}
 			if c.Resume != w.resume || c.Resume != t6g4HeadResume(head.ResumePolicy) {
@@ -690,7 +700,7 @@ func t6g4CheckScheduleHookAndParallelism(t *testing.T) {
 		return s
 	}
 	for _, d := range t6g4Kinds(deps, hook) {
-		if got := tasks.CommonOf(d).Schedule; got == nil || got != by[d.Kind()] {
+		if got := tasks.CommonOf(d).Schedule; got == nil || !reflect.DeepEqual(got, by[d.Kind()]) {
 			t.Errorf("%s: Schedule = %v, want the hook's value for that kind", d.Kind(), got)
 		}
 	}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-11-13
 
@@ -395,16 +395,6 @@ func fileIntroRunID(reporter sdk.Reporter) string {
 		return id
 	}
 	return "run-" + time.Now().UTC().Format(time.RFC3339)
-}
-
-// fileIntroStore is the slice of the ops store this op reads and writes
-// through ordinary methods. (The field-scoped book_file writes come through
-// database.BookFileIntroStore, a capability.)
-type fileIntroStore interface {
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
-	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
-	GetBookByID(id string) (*database.Book, error)
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
 // fileIntroKind is the native kind of maintenance.transcribe-file-intros (rule R3).
