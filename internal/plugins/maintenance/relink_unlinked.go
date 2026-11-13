@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.7.4
+// version: 1.8.0
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — op maintenance.relink-unlinked-books.
 //
@@ -39,16 +39,16 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -67,17 +67,21 @@ type relinkParams struct {
 	IncludeDirectories bool `json:"includeDirectories"`
 }
 
+// relinkUnlinkedBooksHelp is the def's Description, which the native kind carries
+// as its Help.
+const relinkUnlinkedBooksHelp = "Finds Book rows that own ZERO book_file rows but whose file_path still resolves on disk, " +
+	"and creates the missing book_file row. These books are unlinked, not orphaned — they are unplayable " +
+	"and invisible to every duration-dependent check until relinked. reconcile.scan cannot see them because " +
+	"it only flags books whose path FAILS to stat. DRY RUN unless {\"apply\": true}."
+
 func (p *Plugin) relinkUnlinkedBooksDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.relink-unlinked-books",
-		Preview:     sdk.PreviewSpec{Params: relinkParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "maintenance",
-		DisplayName: "Relink unlinked books (detect · repair)",
-		Description: "Finds Book rows that own ZERO book_file rows but whose file_path still resolves on disk, " +
-			"and creates the missing book_file row. These books are unlinked, not orphaned — they are unplayable " +
-			"and invisible to every duration-dependent check until relinked. reconcile.scan cannot see them because " +
-			"it only flags books whose path FAILS to stat. DRY RUN unless {\"apply\": true}.",
+		ID:              "maintenance.relink-unlinked-books",
+		Preview:         sdk.PreviewSpec{Params: relinkParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "maintenance",
+		DisplayName:     "Relink unlinked books (detect · repair)",
+		Description:     relinkUnlinkedBooksHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "maintenance.relink-unlinked-books",
@@ -96,12 +100,98 @@ func (p *Plugin) runRelinkUnlinkedBooks(ctx context.Context, raw json.RawMessage
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	store := p.deps.OpsStore()
+	env := relinkUnlinkedBooksEnv{t6g6Env: t6g6HeadEnv(reporter, params.Apply)}
+	// A nil OpsStore leaves the env's store and writer nil (a typed-nil adapter
+	// would hide it), so the core's "database not initialized" check still fires.
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = store
+		env.Writer = store
+	}
+	return relinkUnlinkedBooksCore(ctx, params, env)
+}
+
+// relinkUnlinkedBooksKind is rule R3's kind for the def above.
+const relinkUnlinkedBooksKind = tasks.Kind("books.maintenance.relink-unlinked-books")
+
+// relinkUnlinkedBooksStore is the reads the detection and the repair's re-check make.
+type relinkUnlinkedBooksStore interface {
+	ListBookIDs() ([]string, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+}
+
+// relinkUnlinkedBooksWriter is the two additive writes the repair makes.
+type relinkUnlinkedBooksWriter interface {
+	bookFileCreator
+	bookFileBatchCreator
+}
+
+// relinkUnlinkedBooksLinker is the folderRelinker relinkOne takes: its reads from
+// the store, its writes from the writer.
+type relinkUnlinkedBooksLinker struct {
+	relinkUnlinkedBooksStore
+	relinkUnlinkedBooksWriter
+}
+
+// relinkUnlinkedBooksEnv is what the core takes from its shell.
+type relinkUnlinkedBooksEnv struct {
+	t6g6Env
+	Store  relinkUnlinkedBooksStore
+	Writer relinkUnlinkedBooksWriter
+}
+
+// relinkUnlinkedBooksParallelism is the op's concurrency: the read-only os.Stat
+// sweep ran on registry.RunItems at runtime.NumCPU(); the repair is a single
+// sequential pass after it.
+func relinkUnlinkedBooksParallelism() tasks.Parallelism {
+	return tasks.CPU()
+}
+
+// relinkUnlinkedBooksNative is the native kind. Preview is the detector HEAD's
+// apply=false was; Live creates the missing rows.
+func (p *Plugin) relinkUnlinkedBooksNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(relinkUnlinkedBooksKind, sched)
+	c.Title = "Relink unlinked books (detect · repair)"
+	c.Help = relinkUnlinkedBooksHelp
+	// HEAD declared no Writes. The repair creates book_file rows and the batch
+	// create recomputes the owning book's aggregates, so both are declared.
+	c.Effects = tasks.Writes(tasks.Res("books", "book_files"), tasks.Res("books", "books"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityNormal
+	c.ConcurrencyKey = tasks.Key("books.maintenance.relink-unlinked-books")
+	c.Timeout = 120 * time.Minute
+	return tasks.Task(relinkUnlinkedBooksKind, tasks.TaskSpec[relinkNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, in relinkNativeParams) (struct{}, error) {
+			live := rc.Mode() == tasks.ModeLive
+			params := relinkParams{Apply: live, Limit: in.Limit, IncludeDirectories: in.IncludeDirectories}
+			env := relinkUnlinkedBooksEnv{t6g6Env: t6g6NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			if live && deps.NewWriter != nil {
+				env.Writer = deps.NewWriter(rc.Writer())
+			}
+			return struct{}{}, relinkUnlinkedBooksCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// relinkNativeParams are the native run's params: HEAD's without Apply, which
+// the run's mode decides.
+type relinkNativeParams struct {
+	Limit              int  `json:"limit,omitempty"`
+	IncludeDirectories bool `json:"includeDirectories,omitempty"`
+}
+
+// relinkUnlinkedBooksCore is the body of runRelinkUnlinkedBooks.
+func relinkUnlinkedBooksCore(ctx context.Context, params relinkParams, env relinkUnlinkedBooksEnv) error {
+	store := env.Store
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
 
-	_ = reporter.UpdateProgress(0, 0, "Phase 1/2: enumerating library…")
+	env.Progress(0, 0, "Phase 1/2: enumerating library…")
 	ids, err := store.ListBookIDs()
 	if err != nil {
 		return fmt.Errorf("ListBookIDs: %w", err)
@@ -117,7 +207,14 @@ func (p *Plugin) runRelinkUnlinkedBooks(ctx context.Context, raw json.RawMessage
 	findings := make([]linkintegrity.Finding, 0, 1024)
 	var examined, skipped int
 
-	scanErr := registry.RunItems(ctx, reporter, ids, func(ctx context.Context, id string) error {
+	scanErr := env.Items(ctx, relinkUnlinkedBooksParallelism(), len(ids), t6g6ItemsOptions{
+		Collect:       true,
+		ProgressTotal: len(ids),
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Phase 1/2: checking book %d/%d…", i+1, total)
+		},
+	}, func(ctx context.Context, idx int) error {
+		id := ids[idx]
 		b, err := store.GetBookByID(id)
 		if err != nil || b == nil {
 			mu.Lock()
@@ -149,13 +246,6 @@ func (p *Plugin) runRelinkUnlinkedBooks(ctx context.Context, raw json.RawMessage
 		findings = append(findings, f)
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   runtime.NumCPU(),
-		ProgressTotal: len(ids),
-		ErrMode:       registry.ErrModeCollect,
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Phase 1/2: checking book %d/%d…", i+1, total)
-		},
 	})
 	if scanErr != nil {
 		return fmt.Errorf("library scan: %w", scanErr)
@@ -175,7 +265,7 @@ func (p *Plugin) runRelinkUnlinkedBooks(ctx context.Context, raw json.RawMessage
 	// ── Phase 2: repair (only with apply) ───────────────────────────────────
 	repaired, repairErrs := 0, 0
 	if params.Apply {
-		_ = reporter.UpdateProgress(len(ids), len(ids)+1, "Phase 2/2: creating book_file rows…")
+		env.Progress(len(ids), len(ids)+1, "Phase 2/2: creating book_file rows…")
 		for i := range findings {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -190,9 +280,9 @@ func (p *Plugin) runRelinkUnlinkedBooks(ctx context.Context, raw json.RawMessage
 			if f.Shape == linkintegrity.ShapeDirectory && !params.IncludeDirectories {
 				continue
 			}
-			n, err := relinkOne(store, f)
+			n, err := relinkOne(relinkUnlinkedBooksLinker{store, env.Writer}, f)
 			if err != nil {
-				_ = reporter.Log(slog.LevelWarn,
+				env.Log(slog.LevelWarn,
 					fmt.Sprintf("relink %s (%s): %v", f.BookID, f.FilePath, err))
 				repairErrs++
 				continue
@@ -216,11 +306,11 @@ func (p *Plugin) runRelinkUnlinkedBooks(ctx context.Context, raw json.RawMessage
 
 	// RECONCILE: tie every book back to the library total, mirroring the existing
 	// producers. A scan that silently lost books must be visible, not inferred.
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"RECONCILE: library=%d examined=%d scan-skipped=%d unlinked=%d",
 		len(ids), examined, skipped, len(findings)))
-	_ = reporter.Log(slog.LevelInfo, report.Summary())
-	_ = reporter.UpdateProgress(len(ids)+1, len(ids)+1, strings.TrimSpace(report.Summary()))
+	env.Log(slog.LevelInfo, report.Summary())
+	env.Progress(len(ids)+1, len(ids)+1, strings.TrimSpace(report.Summary()))
 
 	if bad := report.UnreconciledPhases(); len(bad) > 0 {
 		return fmt.Errorf("phase(s) did not reconcile: %s", strings.Join(bad, ", "))

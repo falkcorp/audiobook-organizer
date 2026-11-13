@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/nightly_compact_activity_log.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 0b7e4d92-5c1a-4f38-9e26-d8a3f17c6b45
-// last-edited: 2026-10-19
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -9,14 +9,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // NightlyCompactActivityLogDefID is the def the nightly_activity_compaction
 // scheduler task enqueues.
 const NightlyCompactActivityLogDefID = "maintenance.nightly-compact-activity-log"
+
+// nightlyCompactActivityLogHelp is the def's Description, which the native kind
+// carries as its Help.
+const nightlyCompactActivityLogHelp = "Collapses every activity entry from before the kept full-detail days (default: before today) into daily digests."
 
 // nightlyCompactActivityLogDef compacts every activity entry from before the
 // kept days into daily digests (owner decision
@@ -53,7 +62,7 @@ func (p *Plugin) nightlyCompactActivityLogDef() sdk.OperationDef {
 		ProgressTimeout: 20 * time.Minute, // same reason as compactActivityLogDef
 		Plugin:          "maintenance",
 		DisplayName:     "Nightly activity compaction (00:10 local)",
-		Description:     "Collapses every activity entry from before the kept full-detail days (default: before today) into daily digests.",
+		Description:     nightlyCompactActivityLogHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.cleanup-activity-log",
@@ -71,14 +80,130 @@ func (p *Plugin) nightlyCompactActivityLogDef() sdk.OperationDef {
 var nightlyNow = time.Now
 
 func (p *Plugin) runNightlyCompactActivityLog(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	keep := p.deps.ActivityLogFullDetailDays()
+	env := nightlyCompactActivityLogEnv{
+		t6g6Env:  t6g6HeadEnv(reporter, true),
+		Writer:   t6g6HeadWriter{deps: p.deps},
+		KeepDays: p.deps.ActivityLogFullDetailDays,
+	}
+	_, err := nightlyCompactActivityLogCore(ctx, env)
+	return err
+}
+
+// nightlyCompactActivityLogKind is rule R3's kind for the def above.
+const nightlyCompactActivityLogKind = tasks.Kind("books." + NightlyCompactActivityLogDefID)
+
+// nightlyCompactActivityLogWriter is the one write the op makes: the activity
+// store's compaction pass.
+type nightlyCompactActivityLogWriter interface {
+	CompactActivityEntries(ctx context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error)
+}
+
+// nightlyCompactActivityLogEnv is what the core takes from its shell.
+type nightlyCompactActivityLogEnv struct {
+	t6g6Env
+	Writer nightlyCompactActivityLogWriter
+	// KeepDays is the configured activity_log_full_detail_days.
+	KeepDays func() int
+}
+
+// nightlyCompactActivityLogParallelism is the op's concurrency. HEAD declared
+// none and the compaction is one store pass that chunks itself.
+func nightlyCompactActivityLogParallelism() tasks.Parallelism {
+	return tasks.Sequential("HEAD declared no concurrency; the store's compaction is one pass that commits per chunk")
+}
+
+// nightlyCompactActivityLogNative is the native kind. It compacts activity
+// entries into daily digests, so it has no preview and refuses a Preview run.
+func (p *Plugin) nightlyCompactActivityLogNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(nightlyCompactActivityLogKind, sched)
+	c.Title = "Nightly activity compaction (00:10 local)"
+	c.Help = nightlyCompactActivityLogHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "operations"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.cleanup-activity-log")
+	c.Timeout = 6 * time.Hour
+	c.ProgressTimeout = 20 * time.Minute
+	return tasks.Task(nightlyCompactActivityLogKind, tasks.TaskSpec[struct{}, CompactActivityLogResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, _ struct{}) (CompactActivityLogResult, error) {
+			if err := t6g6LiveOnly(rc, nightlyCompactActivityLogKind); err != nil {
+				return CompactActivityLogResult{}, err
+			}
+			env := nightlyCompactActivityLogEnv{
+				t6g6Env:  t6g6NativeEnv(rc),
+				Writer:   deps.NewWriter(rc.Writer()),
+				KeepDays: deps.ActivityLogFullDetailDays,
+			}
+			return nightlyCompactActivityLogCore(rc.Context(), env)
+		},
+	})
+}
+
+// nightlyCompactActivityLogCore is the body of runNightlyCompactActivityLog:
+// the cutoff, then the compaction and the result record compactAndRecord makes
+// for the manual op. The result comes back even when the compaction failed (a
+// partial total is the record), and env.SetResult, when set, persists it.
+func nightlyCompactActivityLogCore(ctx context.Context, env nightlyCompactActivityLogEnv) (CompactActivityLogResult, error) {
+	keep := env.KeepDays()
 	cutoff, err := nightlyCompactionCutoff(nightlyNow(), keep)
 	if err != nil {
-		return err
+		return CompactActivityLogResult{}, err
 	}
 	startMsg := fmt.Sprintf("Nightly compaction: collapsing every activity entry before %s (local midnight, keeping %d full day(s) before today)",
 		cutoff.Format(time.RFC3339), keep)
-	return p.compactAndRecord(ctx, cutoff, startMsg, "nightly-compact-activity-log", reporter)
+	const opName = "nightly-compact-activity-log"
+	logger.InfoCtx(ctx, startMsg)
+	env.Log(slog.LevelInfo, startMsg)
+	// First liveness stamp BEFORE the store is called: with nothing to do there
+	// are no chunk events, and the watchdog's never_reported strike must not
+	// fire on an op that finished in milliseconds but was slow to persist.
+	env.Progress(0, 0, "starting compaction")
+
+	totals, err := env.Writer.CompactActivityEntries(ctx, cutoff, func(ev database.CompactProgressEvent) {
+		msg := fmt.Sprintf("%s: %d days compacted, %d entries removed so far",
+			ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted)
+		if !ev.Day.IsZero() {
+			msg += fmt.Sprintf(" (day %s)", ev.Day.UTC().Format("2006-01-02"))
+		}
+		env.Progress(ev.Result.EntriesDeleted, 0, msg)
+	})
+
+	outcome := CompactBackendOutcome{DaysCompacted: totals.DaysCompacted, EntriesDeleted: totals.EntriesDeleted}
+	if err != nil {
+		outcome.Error = err.Error()
+	}
+	result := CompactActivityLogResult{
+		Cutoff:         cutoff.UTC(),
+		DaysCompacted:  totals.DaysCompacted,
+		EntriesDeleted: totals.EntriesDeleted,
+		Backends:       map[string]CompactBackendOutcome{"active": outcome},
+	}
+
+	totalMsg := fmt.Sprintf("Activity compaction totals: %d days compacted, %d entries removed",
+		result.DaysCompacted, result.EntriesDeleted)
+	if err != nil {
+		totalMsg = fmt.Sprintf("Activity compaction FAILED after %d days compacted, %d entries removed: %v",
+			result.DaysCompacted, result.EntriesDeleted, err)
+		env.Log(slog.LevelError, totalMsg)
+	} else {
+		env.Log(slog.LevelInfo, totalMsg)
+	}
+	logger.InfoCtx(ctx, totalMsg)
+	env.Progress(result.EntriesDeleted, result.EntriesDeleted, totalMsg)
+
+	if env.SetResult != nil {
+		if setErr := env.SetResult(result); setErr != nil {
+			if err != nil {
+				return result, fmt.Errorf("%s: %w (and persisting the result failed: %v)", opName, err, setErr)
+			}
+			return result, fmt.Errorf("%s: persist result: %w", opName, setErr)
+		}
+	}
+	if err != nil {
+		return result, fmt.Errorf("%s: %w", opName, err)
+	}
+	return result, nil
 }
 
 // nightlyCompactionCutoff returns the start of now's local calendar day, moved

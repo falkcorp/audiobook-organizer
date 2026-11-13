@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 458004fb-a5f3-4cb8-a25f-741cd3f75b74
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -11,15 +11,14 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
-	"golang.org/x/sync/errgroup"
 )
 
 // maintenance.orphan-book-files-repoint-plan is the DRY-RUN-ONLY census and
@@ -123,13 +122,17 @@ type OrphanRepointPlan struct {
 	Items            []OrphanRepointPlanItem `json:"items"`
 }
 
+// orphanBookFilesRepointPlanHelp is the def's Description, which the native kind
+// carries as its Help.
+const orphanBookFilesRepointPlanHelp = "Read-only: finds book_file rows whose book no longer exists and plans which book each should be repointed to. Never writes."
+
 func (p *Plugin) orphanBookFilesRepointPlanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.orphan-book-files-repoint-plan",
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Orphan book_file repoint plan (dry run)",
-		Description:     "Read-only: finds book_file rows whose book no longer exists and plans which book each should be repointed to. Never writes.",
+		Description:     orphanBookFilesRepointPlanHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.orphan-book-files-repoint-plan",
@@ -150,35 +153,129 @@ func (p *Plugin) runOrphanBookFilesRepointPlan(ctx context.Context, _ json.RawMe
 	if !ok {
 		return fmt.Errorf("store %T lacks the lookups the repoint plan needs", ops)
 	}
-	prog := sdk.NewProgress(reporter, 0)
+	env := orphanBookFilesRepointPlanEnv{
+		t6g6Env: t6g6HeadEnv(reporter, false),
+		Store:   headOrphanBookFilesRepointPlanStore{t6g6HeadStore: t6g6HeadStore{OpsStore: ops}, plan: planStore},
+	}
+	// HEAD's planner runs its own errgroup, not the registry's RunItems.
+	env.Items = t6g6ErrgroupItems
+	_, err := orphanBookFilesRepointPlanCore(ctx, env)
+	return err
+}
+
+// orphanBookFilesRepointPlanKind is rule R3's kind for the def above.
+const orphanBookFilesRepointPlanKind = tasks.Kind("books.maintenance.orphan-book-files-repoint-plan")
+
+// orphanBookFilesRepointPlanStore is the reads the plan makes: the orphan scan
+// and the planner's lookups. The op writes nothing, so it has no writer.
+type orphanBookFilesRepointPlanStore interface {
+	orphanBookFilesCleanupStore
+	orphanRepointPlanStore
+}
+
+// headOrphanBookFilesRepointPlanStore is HEAD's store for the plan: the ops
+// store for the scan, and the asserted view of the same store for the lookups
+// OpsStore does not carry.
+type headOrphanBookFilesRepointPlanStore struct {
+	t6g6HeadStore
+	plan orphanRepointPlanStore
+}
+
+func (s headOrphanBookFilesRepointPlanStore) GetBookByID(id string) (*database.Book, error) {
+	return s.plan.GetBookByID(id)
+}
+func (s headOrphanBookFilesRepointPlanStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
+	return s.plan.BookFilesAtPath(path)
+}
+func (s headOrphanBookFilesRepointPlanStore) LiveBookIDsAtPath(path string) ([]string, error) {
+	return s.plan.LiveBookIDsAtPath(path)
+}
+func (s headOrphanBookFilesRepointPlanStore) BookAtPathIndexBuilt() (bool, error) {
+	return s.plan.BookAtPathIndexBuilt()
+}
+func (s headOrphanBookFilesRepointPlanStore) GetBookTombstone(id string) (*database.Book, error) {
+	return s.plan.GetBookTombstone(id)
+}
+func (s headOrphanBookFilesRepointPlanStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+	return s.plan.GetBooksByVersionGroup(groupID)
+}
+
+// orphanBookFilesRepointPlanEnv is what the core takes from its shell.
+type orphanBookFilesRepointPlanEnv struct {
+	t6g6Env
+	Store orphanBookFilesRepointPlanStore
+}
+
+// orphanBookFilesRepointPlanParallelism is the op's concurrency: HEAD's planner
+// runs a pool of runtime.NumCPU() workers, one per missing book.
+func orphanBookFilesRepointPlanParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// orphanBookFilesRepointPlanNative is the native kind. It reads, classifies and
+// returns the plan; it never writes, so it is ReadOnly and its Preview and Live
+// runs are the same.
+func (p *Plugin) orphanBookFilesRepointPlanNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(orphanBookFilesRepointPlanKind, sched)
+	c.Title = "Orphan book_file repoint plan (dry run)"
+	c.Help = orphanBookFilesRepointPlanHelp
+	c.Effects = tasks.ReadOnly()
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.orphan-book-files-repoint-plan")
+	c.Timeout = 30 * time.Minute
+	return tasks.Task(orphanBookFilesRepointPlanKind, tasks.TaskSpec[struct{}, OrphanRepointPlan]{
+		Common: c,
+		Run: func(rc *tasks.RC, _ struct{}) (OrphanRepointPlan, error) {
+			env := orphanBookFilesRepointPlanEnv{t6g6Env: t6g6NativeEnv(rc)}
+			if deps.Store != nil {
+				env.Store = deps.Store
+			}
+			plan, err := orphanBookFilesRepointPlanCore(rc.Context(), env)
+			if err != nil || plan == nil {
+				return OrphanRepointPlan{}, err
+			}
+			return *plan, nil
+		},
+	})
+}
+
+// orphanBookFilesRepointPlanCore is the body of runOrphanBookFilesRepointPlan.
+// It returns the plan, which HEAD's shell also stores as the op result through
+// env.SetResult.
+func orphanBookFilesRepointPlanCore(ctx context.Context, env orphanBookFilesRepointPlanEnv) (*OrphanRepointPlan, error) {
+	if env.Store == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	prog := t6g6NewProgress(env.t6g6Env, 0)
 	prog.Start("Scanning book_files for orphan rows (dry run)...")
 
-	orphans, totalFiles, owners, err := findOrphanBookFiles(ctx, ops)
+	orphans, totalFiles, owners, err := t6g6FindOrphanBookFilesVia(ctx, env.Store)
 	if err != nil {
-		return fmt.Errorf("scan failed: %w", err)
+		return nil, fmt.Errorf("scan failed: %w", err)
 	}
-	plan, err := planOrphanRepoints(ctx, planStore, orphans)
+	plan, err := t6g6PlanOrphanRepointsVia(ctx, env.Store, orphans, env.Items)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	plan.TotalBookFiles = totalFiles
 	plan.OwningBooks = owners
 	if plan.PathOwnerSkipped != "" {
-		_ = reporter.Log(slog.LevelWarn, plan.PathOwnerSkipped)
+		env.Log(slog.LevelWarn, plan.PathOwnerSkipped)
 	}
 	// The full plan is the op's result payload, readable afterwards with
 	// GET /api/v1/operations/<op id>/result. Fail the op if it cannot be
 	// stored: a review artifact that silently is not there is worse than none.
-	if err := opsregistry.ReporterSetResult(reporter, plan); err != nil {
-		return fmt.Errorf("store the plan as the op result: %w", err)
+	if env.SetResult != nil {
+		if err := env.SetResult(plan); err != nil {
+			return nil, fmt.Errorf("store the plan as the op result: %w", err)
+		}
 	}
 	where := "GET /api/v1/operations/<this op id>/result"
-	if id := opsregistry.ReporterOpID(reporter); id != "" {
+	if id := env.OpID; id != "" {
 		where = "GET /api/v1/operations/" + id + "/result"
 	}
-	_ = reporter.Log(slog.LevelInfo, "Full plan (every row, bucketed) stored as this op's result: "+where)
+	env.Log(slog.LevelInfo, "Full plan (every row, bucketed) stored as this op's result: "+where)
 
-	_ = reporter.Log(slog.LevelInfo, "Orphan repoint plan (dry run, nothing written)",
+	env.Log(slog.LevelInfo, "Orphan repoint plan (dry run, nothing written)",
 		slog.Int("orphans", plan.Orphans),
 		slog.Int("orphan_book_ids", plan.OrphanBookIDs),
 		slog.Int("planned_repoints", plan.PlannedRepoints),
@@ -192,7 +289,7 @@ func (p *Plugin) runOrphanBookFilesRepointPlan(ctx context.Context, _ json.RawMe
 			break
 		}
 		it := plan.Items[i]
-		_ = reporter.Log(slog.LevelInfo, "orphan",
+		env.Log(slog.LevelInfo, "orphan",
 			slog.String("book_file_id", it.BookFileID),
 			slog.String("orphan_book_id", it.OrphanBookID),
 			slog.String("file_path", it.FilePath),
@@ -204,7 +301,7 @@ func (p *Plugin) runOrphanBookFilesRepointPlan(ctx context.Context, _ json.RawMe
 	msg := fmt.Sprintf("Orphan repoint plan: %d orphan row(s) across %d missing book(s); %d repoint(s) planned; nothing written",
 		plan.Orphans, plan.OrphanBookIDs, plan.PlannedRepoints)
 	prog.Done(msg)
-	return nil
+	return plan, nil
 }
 
 // planOrphanRepoints classifies every orphan row. Read-only.
@@ -213,6 +310,12 @@ func (p *Plugin) runOrphanBookFilesRepointPlan(ctx context.Context, _ json.RawMe
 // missing book — so the per-book tombstone/version-group lookup is done once
 // and no two workers touch the same book. Results merge under one mutex.
 func planOrphanRepoints(ctx context.Context, store orphanRepointPlanStore, allOrphans []database.BookFileCore) (*OrphanRepointPlan, error) {
+	return t6g6PlanOrphanRepointsVia(ctx, store, allOrphans, t6g6ErrgroupItems)
+}
+
+// t6g6PlanOrphanRepointsVia is planOrphanRepoints over the shell's pool: the
+// per-book workers run on items, HEAD's errgroup or the native executor's.
+func t6g6PlanOrphanRepointsVia(ctx context.Context, store orphanRepointPlanStore, allOrphans []database.BookFileCore, items t6g6ItemsFunc) (*OrphanRepointPlan, error) {
 	orphans := liveCores(allOrphans)
 	retiredExcluded := len(allOrphans) - len(orphans)
 	byBook := make(map[string][]database.BookFileCore)
@@ -241,39 +344,36 @@ func planOrphanRepoints(ctx context.Context, store orphanRepointPlanStore, allOr
 		plan.PathOwnerSkipped = "book_atpath index is not built (run its backfill first): the live-book-at-path check was skipped for every row, so no repoint_to_path_owner or ambiguous_path_owner is planned"
 	}
 	var mu sync.Mutex
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(runtime.NumCPU())
-	for _, bookID := range ids {
+	err = items(ctx, orphanBookFilesRepointPlanParallelism(), len(ids), t6g6ItemsOptions{}, func(ctx context.Context, i int) error {
+		bookID := ids[i]
 		rows := byBook[bookID]
-		g.Go(func() error {
-			if err := gctx.Err(); err != nil {
-				return err
-			}
-			survivor, survivorWhy, err := orphanMergeSurvivor(store, bookID)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		survivor, survivorWhy, err := orphanMergeSurvivor(store, bookID)
+		if err != nil {
+			return err
+		}
+		planned := make([]OrphanRepointPlanItem, 0, len(rows))
+		for _, f := range rows {
+			it, err := classifyOrphanRow(store, f, survivor, survivorWhy, checkPathOwner)
 			if err != nil {
 				return err
 			}
-			items := make([]OrphanRepointPlanItem, 0, len(rows))
-			for _, f := range rows {
-				it, err := classifyOrphanRow(store, f, survivor, survivorWhy, checkPathOwner)
-				if err != nil {
-					return err
-				}
-				items = append(items, it)
+			planned = append(planned, it)
+		}
+		mu.Lock()
+		for _, it := range planned {
+			plan.ByClass[it.Class]++
+			if it.TargetBookID != "" {
+				plan.PlannedRepoints++
 			}
-			mu.Lock()
-			for _, it := range items {
-				plan.ByClass[it.Class]++
-				if it.TargetBookID != "" {
-					plan.PlannedRepoints++
-				}
-				plan.Items = append(plan.Items, it)
-			}
-			mu.Unlock()
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
+			plan.Items = append(plan.Items, it)
+		}
+		mu.Unlock()
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	sort.Slice(plan.Items, func(i, j int) bool {

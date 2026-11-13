@@ -1,0 +1,3 @@
+### Added
+
+- maintenance: the 14 group 6 maintenance operations (nightly activity compaction, opchange book index rebuild, optimize, orphan book_file scan, orphan book_file repoint plan, probe directory books, recompact activity digests, iTunes heal, recover missing files, regroup shattered books, relink unlinked books, repair merged user state, repair transcribe status, repoint book_file rows) now have native `books.<id>` task definitions built dark (F5-11). Each runs the same body as before through a shell, writes only through the run's gated writer, and keeps its HEAD title, help, resume policy and parallelism. Nothing registers them yet, so behaviour is unchanged.
