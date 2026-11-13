@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-13
 
@@ -15,7 +15,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -786,7 +785,3 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 		}
 	})
 }
-
-// The reflect import keeps the table honest: a Row field added without a test
-// reading it fails here.
-var _ = reflect.TypeFor[t6g2Row]
