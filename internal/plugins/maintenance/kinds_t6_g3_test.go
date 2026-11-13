@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
 // last-edited: 2026-11-13
 
@@ -296,11 +296,6 @@ func (t6g3Hold) Release() {}
 // backfill apply needs to get past its scan stand-down.
 func (h *t6g3Host) StandDown(tasks.Key) (tasks.Hold, error) { return t6g3Hold{}, nil }
 func (h *t6g3Host) Log() *slog.Logger                       { return slog.New(t6g3LogHandler{h}) }
-func (h *t6g3Host) joinedLogs() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return strings.Join(h.logs, "\n")
-}
 
 func newT6G3Host(kind tasks.Kind, mode tasks.Mode, w tasks.Writer) (*t6g3Host, *tasks.RC) {
 	h := &t6g3Host{FakeRun: taskstest.NewFakeRun(context.Background(), kind), mode: mode, w: w}
