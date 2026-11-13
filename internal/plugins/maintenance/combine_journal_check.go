@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combine_journal_check.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2b7d4e91-6c35-4a08-9f12-8d0a5e3c7b64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // maintenance.combine-journal-check lists the combine-journal rows that cannot
@@ -60,38 +61,94 @@ func (p *Plugin) combineJournalCheckDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runCombineJournalCheck(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+// combineJournalCheckKind is the native kind of maintenance.combine-journal-check
+// (F5-08).
+const combineJournalCheckKind tasks.Kind = "books." + combineJournalCheckID
+
+// combineJournalCheckEnv is what combineJournalCheckCore needs from its engine:
+// the base (Store is the only read path; the check writes nothing).
+type combineJournalCheckEnv struct{ t6g3Base }
+
+// runCombineJournalCheck is the v2 shell of maintenance.combine-journal-check.
+// The two refusals before the check are HEAD's engine preconditions: no
+// database, and a store that cannot read raw keys.
+func (p *Plugin) runCombineJournalCheck(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	kv, ok := database.AsCapability[combineJournalKV](store)
-	if !ok {
+	if _, ok := database.AsCapability[combineJournalKV](store); !ok {
 		return fmt.Errorf("%s: store is %T, which cannot read combine journals", combineJournalCheckID, store)
 	}
-	return checkCombineJournalRows(kv, reporter)
+	_, err := combineJournalCheckCore(ctx, combineJournalCheckEnv{p.t6g3HeadBase(ctx, reporter, true)})
+	return err
 }
 
 // checkCombineJournalRows is the check over any raw-key reader.
 func checkCombineJournalRows(kv combineJournalKV, reporter sdk.Reporter) error {
-	_ = reporter.UpdateProgress(0, 0, "combine journals: reading every row")
-	check, err := merge.CheckCombineJournals(kv)
+	env := combineJournalCheckEnv{t6g3Base{
+		Live:     true,
+		Log:      func(level slog.Level, msg string) { _ = reporter.Log(level, msg) },
+		Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
+		Store:    t6g3KVStore{kv: kv},
+	}}
+	_, err := combineJournalCheckCore(context.Background(), env)
+	return err
+}
+
+// t6g3KVStore is a t6g3Store that answers only the raw-key reads, for
+// checkCombineJournalRows' callers that hold a bare reader. Any other read
+// panics on the nil embedded store, which the check never makes.
+type t6g3KVStore struct {
+	t6g3Store
+	kv combineJournalKV
+}
+
+func (s t6g3KVStore) GetRaw(key string) ([]byte, error) { return s.kv.GetRaw(key) }
+func (s t6g3KVStore) ScanPrefix(prefix string) ([]database.KVPair, error) {
+	return s.kv.ScanPrefix(prefix)
+}
+
+// combineJournalCheckKind builds the native kind. Declared ReadOnly: the check
+// reads every combine-journal row and writes nothing. A ReadOnly run gets no
+// writer from core, so the shell builds none.
+func (p *Plugin) combineJournalCheckKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	return tasks.Task(combineJournalCheckKind, tasks.TaskSpec[struct{}, merge.CombineJournalCheck]{
+		Common: t6g3Common(p.combineJournalCheckDef(), combineJournalCheckKind, tasks.ReadOnly(), sched),
+		Run: func(rc *tasks.RC, _ struct{}) (merge.CombineJournalCheck, error) {
+			base, err := t6g3NativeBase(combineJournalCheckKind, rc, deps, false)
+			if err != nil {
+				return merge.CombineJournalCheck{}, err
+			}
+			if err := t6g3NeedStore(combineJournalCheckKind, base); err != nil {
+				return merge.CombineJournalCheck{}, err
+			}
+			return combineJournalCheckCore(rc.Context(), combineJournalCheckEnv{base})
+		},
+	})
+}
+
+// combineJournalCheckCore is the shared body of both shells. It returns the
+// check; err is the refusal the purge itself makes while a row is unreadable.
+func combineJournalCheckCore(_ context.Context, env combineJournalCheckEnv) (merge.CombineJournalCheck, error) {
+	env.Progress(0, 0, "combine journals: reading every row")
+	check, err := merge.CheckCombineJournals(env.Store)
 	if err != nil {
-		return fmt.Errorf("%s: %w", combineJournalCheckID, err)
+		return merge.CombineJournalCheck{}, fmt.Errorf("%s: %w", combineJournalCheckID, err)
 	}
 	const logCap = 200
 	for i, u := range check.Unreadable {
 		if i == logCap {
-			_ = reporter.Log(slog.LevelError, fmt.Sprintf("... and %d more unreadable rows not listed", len(check.Unreadable)-logCap))
+			env.Log(slog.LevelError, fmt.Sprintf("... and %d more unreadable rows not listed", len(check.Unreadable)-logCap))
 			break
 		}
-		_ = reporter.Log(slog.LevelError, fmt.Sprintf("unreadable combine journal row: key=%q error=%s", u.Key, u.Err))
+		env.Log(slog.LevelError, fmt.Sprintf("unreadable combine journal row: key=%q error=%s", u.Key, u.Err))
 	}
 	msg := fmt.Sprintf("combine journals: %d rows, %d unreadable", check.Rows, len(check.Unreadable))
-	_ = reporter.Log(slog.LevelInfo, msg)
-	_ = reporter.UpdateProgress(1, 1, msg)
+	env.Log(slog.LevelInfo, msg)
+	env.Progress(1, 1, msg)
 	if len(check.Unreadable) > 0 {
-		return &merge.UnreadableCombineJournalsError{Rows: check.Unreadable}
+		return check, &merge.UnreadableCombineJournalsError{Rows: check.Unreadable}
 	}
-	return nil
+	return check, nil
 }

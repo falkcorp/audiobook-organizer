@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.5.6
+// version: 1.6.0
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
-// last-edited: 2026-11-12
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -35,6 +35,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- credits-backfill ---
@@ -773,6 +774,31 @@ func (p *Plugin) creditsBackfillDef() sdk.OperationDef {
 	}
 }
 
+// creditsBackfillKind is the native kind of maintenance.credits-backfill (F5-08).
+const creditsBackfillKind tasks.Kind = "books.maintenance.credits-backfill"
+
+// creditsBackfillStandDownKey is the library scan's concurrency key, which the
+// native apply holds down (rc.StandDown). HEAD held the registry's scan
+// stand-down; F5-18 confirms the scan kind's key (see the F5-08 seams note).
+const creditsBackfillStandDownKey tasks.Key = "books.library.scan"
+
+// creditsBackfillCoreEnv is what creditsBackfillCore needs from its engine.
+type creditsBackfillCoreEnv struct {
+	t6g3Base
+	// GuardTags is the guard's franchise-tag reader (nil: the tag check is
+	// skipped, as repairs.GuardOwnerManualBooks documents).
+	GuardTags repairs.GuardTagReader
+	// Eng is the run's engine (log, progress, checkpoint, stand-down, pool).
+	Eng cbEngine
+	// Workers is the worker count the HEAD engine's pools use; the native
+	// engine's pool is the def's Parallelism and ignores it.
+	Workers int
+	// StoreResult keeps the summary beyond the return value (HEAD: the
+	// reporter's result slot). Nil: the return value is the result.
+	StoreResult func(res *creditsBackfillResult) error
+}
+
+// runCreditsBackfill is the v2 shell of maintenance.credits-backfill.
 func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params creditsBackfillParams
 	if len(raw) > 0 {
@@ -785,71 +811,207 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 		return fmt.Errorf("database not initialized")
 	}
 	// The class id lists are stored beside the operation, not in its result
-	// (storeCreditsBackfillResult), so the store must be able to keep them:
+	// (persistCreditsBackfillResult), so the store must be able to keep them:
 	// found out here, before an apply writes a book, not after hours of it.
-	rows, ok := database.AsCapability[database.OpRowStore](p.deps.OperationQueueStore())
-	if !ok {
+	if _, ok := database.AsCapability[database.OpRowStore](p.deps.OperationQueueStore()); !ok {
 		return fmt.Errorf("credits backfill: the operation store %T cannot keep the class id lists (database.OpRowStore)",
 			p.deps.OperationQueueStore())
 	}
-	var store creditsBackfillStore = ops
-	var mod database.BookCreditsModifier
 	if params.Apply {
-		m, ok := database.AsCapability[database.BookCreditsModifier](ops)
-		if !ok {
+		if _, ok := database.AsCapability[database.BookCreditsModifier](ops); !ok {
 			return fmt.Errorf("cannot apply: store is %T, which cannot write a book's credits and row together "+
 				"(ModifyBookCredits), and no store in its decorator chain can", ops)
 		}
-		mod = m
 	}
-	env := creditsBackfillEnv{
-		store:   store,
-		mod:     mod,
-		tags:    repairsGuardTags(p.deps),
-		scan:    p.deps,
-		opID:    registry.ReporterOpID(reporter),
-		workers: runtime.NumCPU(),
-	}
-	res, err := runCreditsBackfillScan(ctx, env, params, reporter)
-	if res != nil {
-		if params.Apply && res.Counts != nil && res.BooksToWrite > 0 {
-			p.deps.InvalidateAuthorsCache()
-		}
-		if serr := storeCreditsBackfillResult(reporter, rows, env.opID, res); serr != nil {
-			if err == nil {
-				return fmt.Errorf("store credits backfill result: %w", serr)
-			}
-			_ = reporter.Log(slog.LevelError, "credits-backfill: result not stored", slog.String("error", serr.Error()))
-		}
-	}
+	base := p.t6g3HeadBase(ctx, reporter, params.Apply)
+	base.OpID = registry.ReporterOpID(reporter)
+	_, err := creditsBackfillCore(ctx, params, creditsBackfillCoreEnv{
+		t6g3Base:  base,
+		GuardTags: repairsGuardTags(p.deps),
+		Eng:       headCBEngine{ctx: ctx, reporter: reporter, scan: p.deps},
+		Workers:   runtime.NumCPU(),
+		StoreResult: func(res *creditsBackfillResult) error {
+			return registry.ReporterSetResult(reporter, res)
+		},
+	})
 	return err
 }
 
-// storeCreditsBackfillResult stores the run's result: the class id lists as op
-// rows under the operation's id (database.SaveClassLists), then the summary (the
-// result without the lists, carrying their ClassListSummary) as the operation's
-// result. The rows go first, so a stored result that names the row store has all
-// of its rows; a summary that fails to store takes the rows back.
+// creditsBackfillKind builds the native kind. HEAD declares a Preview, so it
+// runs in either mode; its apply param becomes the start request's mode. Writes
+// found: the book rows and their author/narrator joins (books), the narrator
+// records it creates and deletes (narrators), and the undo journal, the judged
+// markers and the class id lists (operations). The result is the summary the
+// core stored; on an error core drops it (see the F5-08 seams note).
+func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "narrators"), tasks.Res("books", "operations"))
+	return tasks.Task(creditsBackfillKind, tasks.TaskSpec[json.RawMessage, creditsBackfillResult]{
+		Common: t6g3Common(p.creditsBackfillDef(), creditsBackfillKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (creditsBackfillResult, error) {
+			var params creditsBackfillParams
+			if err := t6g3DecodeParams(creditsBackfillKind, raw, &params, "apply", "dry_run", "dryRun"); err != nil {
+				return creditsBackfillResult{}, err
+			}
+			if rc.Resumed() {
+				// The checkpoint carries every param (the HEAD run merged it
+				// back on ResumeRestart): a resumed apply stays an apply with
+				// the same cohort, limit and allows, and is a later attempt.
+				var cp creditsBackfillParams
+				if ok, err := rc.Restore(&cp); err != nil {
+					return creditsBackfillResult{}, fmt.Errorf("%s: restore checkpoint: %w", creditsBackfillKind, err)
+				} else if ok {
+					params = cp
+				}
+			}
+			base, err := t6g3NativeBase(creditsBackfillKind, rc, deps, true)
+			if err != nil {
+				return creditsBackfillResult{}, err
+			}
+			if err := t6g3NeedStore(creditsBackfillKind, base); err != nil {
+				return creditsBackfillResult{}, err
+			}
+			if !base.Store.Can(t6g3CapClassLists) {
+				return creditsBackfillResult{}, fmt.Errorf("%s: the store cannot keep the class id lists (database.OpRowStore)", creditsBackfillKind)
+			}
+			params.Apply = base.Live
+			res, err := creditsBackfillCore(rc.Context(), params, creditsBackfillCoreEnv{
+				t6g3Base:  base,
+				GuardTags: deps.GuardTags,
+				Eng:       nativeCBEngine{rc: rc, base: base},
+			})
+			if res == nil {
+				return creditsBackfillResult{}, err
+			}
+			return *res, err
+		},
+	})
+}
+
+// creditsBackfillParallelism is rule R4: HEAD ran every loop at
+// runtime.NumCPU() workers.
+func creditsBackfillParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// nativeCBEngine is cbEngine over the native run context.
+type nativeCBEngine struct {
+	rc   *tasks.RC
+	base t6g3Base
+}
+
+func (e nativeCBEngine) Log(level slog.Level, msg string)        { e.base.Log(level, msg) }
+func (e nativeCBEngine) Progress(done, total int, msg string)    { e.base.Progress(done, total, msg) }
+func (e nativeCBEngine) Checkpoint(params creditsBackfillParams) { _ = e.rc.Checkpoint(params) }
+func (e nativeCBEngine) Items(int) t6g3ItemsFunc {
+	return t6g3NativeItems(e.rc, creditsBackfillParallelism())
+}
+func (e nativeCBEngine) Beat(ctx context.Context) error { return ctx.Err() }
+
+func (e nativeCBEngine) Hold(_ context.Context, _ string) (cbHold, error) {
+	h, err := e.rc.StandDown(creditsBackfillStandDownKey)
+	if err != nil {
+		return nil, err
+	}
+	return nativeCBHold{h: h, e: e}, nil
+}
+
+type nativeCBHold struct {
+	h tasks.Hold
+	e nativeCBEngine
+}
+
+func (h nativeCBHold) Context() context.Context { return h.e.rc.Context() }
+func (h nativeCBHold) Lost() bool               { return false }
+func (h nativeCBHold) Release()                 { h.h.Release() }
+func (h nativeCBHold) Items(int) t6g3ItemsFunc  { return h.e.Items(0) }
+
+// creditsBackfillCore is the shared body of both shells: the run, then the
+// result's persistence. It returns the summary (the result without the class
+// id lists) whenever the run got as far as listing books.
+func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env creditsBackfillCoreEnv) (*creditsBackfillResult, error) {
+	var mod cbCreditsModifier
+	if params.Apply {
+		mod = env.Writer
+	}
+	res, err := runCreditsBackfillRun(ctx, creditsBackfillEnv{
+		store:   cbStoreView{t6g3Store: env.Store, w: env.Writer},
+		mod:     mod,
+		tags:    env.GuardTags,
+		opID:    env.OpID,
+		workers: env.Workers,
+		eng:     env.Eng,
+	}, params)
+	if res == nil {
+		return nil, err
+	}
+	if params.Apply && res.Counts != nil && res.BooksToWrite > 0 {
+		env.Writer.InvalidateAuthorsCache()
+	}
+	summary, serr := persistCreditsBackfillResult(env.Writer, env.OpID, res, env.StoreResult, env.Log)
+	if serr != nil {
+		if err == nil {
+			return nil, fmt.Errorf("store credits backfill result: %w", serr)
+		}
+		env.Log(slog.LevelError, "credits-backfill: result not stored: "+serr.Error())
+		return res, err
+	}
+	return summary, err
+}
+
+// cbResultWriter is the two writes that keep a result's class id lists.
+type cbResultWriter interface {
+	SaveClassLists(opID string, lists map[string][]string) (*database.ClassListSummary, error)
+	ClearClassLists(opID string) error
+}
+
+// storeCreditsBackfillResult stores the run's result over a row store: the HEAD
+// adapter of persistCreditsBackfillResult (the reporter's result slot).
 func storeCreditsBackfillResult(reporter sdk.Reporter, rows database.OpRowStore, opID string, res *creditsBackfillResult) error {
-	if rows == nil || opID == "" {
+	if rows == nil {
 		return errors.New("no operation id or row store to keep the class id lists under")
+	}
+	_, err := persistCreditsBackfillResult(cbRowsWriter{rows}, opID, res,
+		func(r *creditsBackfillResult) error { return registry.ReporterSetResult(reporter, r) },
+		func(level slog.Level, msg string) { _ = reporter.Log(level, msg) })
+	return err
+}
+
+// cbRowsWriter is cbResultWriter over a database.OpRowStore.
+type cbRowsWriter struct{ rows database.OpRowStore }
+
+func (w cbRowsWriter) SaveClassLists(opID string, lists map[string][]string) (*database.ClassListSummary, error) {
+	return database.SaveClassLists(w.rows, opID, lists)
+}
+func (w cbRowsWriter) ClearClassLists(opID string) error {
+	return database.ClearClassLists(w.rows, opID)
+}
+
+// persistCreditsBackfillResult stores the run's result: the class id lists as op
+// rows under the operation's id (SaveClassLists), then the summary (the result
+// without the lists, carrying their ClassListSummary) through setResult (nil:
+// the caller returns it). The rows go first, so a stored result that names the
+// row store has all of its rows; a summary that fails to store takes the rows
+// back.
+func persistCreditsBackfillResult(w cbResultWriter, opID string, res *creditsBackfillResult, setResult func(*creditsBackfillResult) error, log func(slog.Level, string)) (*creditsBackfillResult, error) {
+	if w == nil || opID == "" {
+		return nil, errors.New("no operation id or row store to keep the class id lists under")
 	}
 	lists := make(map[string][]string, len(res.Classes))
 	for _, c := range res.Classes {
 		lists[c.Key] = c.BookIDs
 	}
-	sum, err := database.SaveClassLists(rows, opID, lists)
+	sum, err := w.SaveClassLists(opID, lists)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := registry.ReporterSetResult(reporter, res.summary(sum)); err != nil {
-		if cerr := database.ClearClassLists(rows, opID); cerr != nil {
-			_ = reporter.Log(slog.LevelWarn, "credits-backfill: class lists not cleared after a failed result write",
-				slog.String("error", cerr.Error()))
+	summary := res.summary(sum)
+	if setResult != nil {
+		if err := setResult(summary); err != nil {
+			if cerr := w.ClearClassLists(opID); cerr != nil {
+				log(slog.LevelWarn, "credits-backfill: class lists not cleared after a failed result write: "+cerr.Error())
+			}
+			return nil, err
 		}
-		return err
 	}
-	return nil
+	return summary, nil
 }
 
 // summary is res as the operation stores it: the classes without their id
@@ -869,7 +1031,7 @@ func (res *creditsBackfillResult) summary(lists *database.ClassListSummary) *cre
 type creditsBackfillEnv struct {
 	store creditsBackfillStore
 	// mod writes; nil in a dry run.
-	mod database.BookCreditsModifier
+	mod cbCreditsModifier
 	// tags is the guard's franchise-tag reader (nil: the tag check is
 	// skipped, as repairs.GuardOwnerManualBooks documents).
 	tags repairs.GuardTagReader
@@ -879,6 +1041,108 @@ type creditsBackfillEnv struct {
 	// journal can be written, so an apply refuses).
 	opID    string
 	workers int
+	// eng is the run's engine: its log, progress, checkpoint, stand-down hold
+	// and worker pool. runCreditsBackfillScan fills it from the HEAD reporter;
+	// the core's callers fill it themselves.
+	eng cbEngine
+}
+
+// cbCreditsModifier is the one write the apply makes to a book:
+// database.BookCreditsModifier without ModifyBookNarrators, which no step of
+// this op calls.
+type cbCreditsModifier interface {
+	ModifyBookCredits(bookID string, fn func(book *database.Book, credits *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error)
+}
+
+// cbEngine is what the run needs of the engine that hosts it: the HEAD
+// reporter and registry, or the native run context. Everything the run does to
+// the outside world that is not a store read or a write goes through it.
+type cbEngine interface {
+	Log(level slog.Level, msg string)
+	Progress(done, total int, msg string)
+	// Checkpoint records params so a resumed run is a later attempt of the same
+	// run (best effort, as HEAD's reporter.Checkpoint was).
+	Checkpoint(params creditsBackfillParams)
+	// Items is the worker loop outside a stand-down hold.
+	Items(workers int) t6g3ItemsFunc
+	// Hold takes the library scan's stand-down for an apply.
+	Hold(ctx context.Context, reason string) (cbHold, error)
+	// Beat renews a hold's lease (when the context carries one) and reports the
+	// reason the run must stop before its next write, nil when it may go on.
+	Beat(ctx context.Context) error
+}
+
+// cbHold is a held scan stand-down.
+type cbHold interface {
+	// Context is the work context: canceled when the lease is lost.
+	Context() context.Context
+	// Lost reports whether the lease lapsed.
+	Lost() bool
+	Release()
+	// Items is the worker loop under the hold (each item renews the lease).
+	Items(workers int) t6g3ItemsFunc
+}
+
+// headCBEngine is cbEngine over HEAD's reporter and the registry's stand-down.
+type headCBEngine struct {
+	ctx      context.Context
+	reporter sdk.Reporter
+	scan     ScanController
+}
+
+func (e headCBEngine) Log(level slog.Level, msg string) { _ = e.reporter.Log(level, msg) }
+func (e headCBEngine) Progress(done, total int, msg string) {
+	_ = e.reporter.UpdateProgress(done, total, msg)
+}
+func (e headCBEngine) Checkpoint(params creditsBackfillParams) { _ = e.reporter.Checkpoint(params) }
+func (e headCBEngine) Items(workers int) t6g3ItemsFunc {
+	return t6g3HeadItems(e.ctx, e.reporter, workers)
+}
+func (e headCBEngine) Beat(ctx context.Context) error { return registry.ScanStandDownCheckpoint(ctx) }
+
+func (e headCBEngine) Hold(ctx context.Context, reason string) (cbHold, error) {
+	h, err := registry.HoldScanStandDown(ctx, e.scan, e.reporter, reason)
+	if err != nil {
+		return nil, err
+	}
+	return headCBHold{h}, nil
+}
+
+type headCBHold struct{ h *registry.ScanStandDownHold }
+
+func (h headCBHold) Context() context.Context { return h.h.Context() }
+func (h headCBHold) Lost() bool               { return h.h.Lost() }
+func (h headCBHold) Release()                 { h.h.Release() }
+func (h headCBHold) Items(workers int) t6g3ItemsFunc {
+	return t6g3HeadItems(h.h.Context(), h.h.Reporter(), workers)
+}
+
+// cbStoreView is the creditsBackfillStore both shells hand the run: its reads
+// are the run's t6g3Store and its writes go through the run's t6g3Writer, so no
+// step of the run holds a path around either (rule R10).
+type cbStoreView struct {
+	t6g3Store
+	w t6g3Writer
+}
+
+func (v cbStoreView) CreateNarrator(name string) (*database.Narrator, error) {
+	return v.w.CreateNarrator(name)
+}
+func (v cbStoreView) DeleteNarrator(id int) error { return v.w.DeleteNarrator(id) }
+func (v cbStoreView) CreateOperationChange(change *database.OperationChange) error {
+	return v.w.CreateOperationChange(change)
+}
+
+// ReplaceOpRowsPrefix completes database.OpRowStore with the writer's.
+func (v cbStoreView) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (database.OpRow, error)) error {
+	return v.w.ReplaceOpRowsPrefix(opID, rowPrefix, n, at)
+}
+
+// cbLacks reports whether store is a cbStoreView whose reader lacks c. A store
+// that is not one (a test's) is probed by database.AsCapability as it always was.
+func cbLacks(store creditsBackfillStore, c t6g3Capability) bool {
+	v, ok := store.(cbStoreView)
+	return ok && !v.Can(c)
 }
 
 // cbAccumulator collects book ids and samples per class across workers.
@@ -1116,9 +1380,16 @@ func (r *cbRun) noteErr(err error) {
 	r.firstErrMu.Unlock()
 }
 
-// runCreditsBackfillScan does the work. It returns a result whenever it got
-// as far as listing books, including on cancel or failure (Complete=false).
+// runCreditsBackfillScan is the run over HEAD's reporter: the adapter the HEAD
+// shell and the tests call. It returns a result whenever it got as far as
+// listing books, including on cancel or failure (Complete=false).
 func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params creditsBackfillParams, reporter sdk.Reporter) (*creditsBackfillResult, error) {
+	env.eng = headCBEngine{ctx: ctx, reporter: reporter, scan: env.scan}
+	return runCreditsBackfillRun(ctx, env, params)
+}
+
+// runCreditsBackfillRun does the work, on env's engine.
+func runCreditsBackfillRun(ctx context.Context, env creditsBackfillEnv, params creditsBackfillParams) (*creditsBackfillResult, error) {
 	started := time.Now()
 	allow := map[string]bool{}
 	for _, k := range params.Allow {
@@ -1143,14 +1414,14 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	// The checkpoint carries every param: on ResumeRestart it is merged back
 	// into the params, so a resumed apply stays an apply with the same cohort,
 	// limit and allows, and knows it is a later attempt.
-	_ = reporter.Checkpoint(params)
+	env.eng.Checkpoint(params)
 
 	mode := "dry_run"
 	if params.Apply {
 		mode = "apply"
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("credits-backfill: start (%s, attempt %d)", mode, params.Attempt))
-	_ = reporter.UpdateProgress(0, 1, "Indexing authors and narrators…")
+	env.eng.Log(slog.LevelInfo, fmt.Sprintf("credits-backfill: start (%s, attempt %d)", mode, params.Attempt))
+	env.eng.Progress(0, 1, "Indexing authors and narrators…")
 
 	// The scan stand-down is held for the whole apply, reading and planning
 	// included: the plan is made from rows a running scan could rewrite, and a
@@ -1165,16 +1436,16 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	// is a frozen copy of every record, and one built before the hold could be
 	// stale by the time the scan is down (a scan that was still running
 	// creates authors and narrators).
-	workCtx, workRep := ctx, reporter
-	var hold *registry.ScanStandDownHold
+	workCtx, items := ctx, env.eng.Items
+	var hold cbHold
 	if params.Apply {
-		h, sdErr := registry.HoldScanStandDown(ctx, env.scan, reporter, "credits-backfill apply")
+		h, sdErr := env.eng.Hold(ctx, "credits-backfill apply")
 		if sdErr != nil {
 			return nil, sdErr
 		}
 		hold = h
 		defer hold.Release()
-		workCtx, workRep = hold.Context(), hold.Reporter()
+		workCtx, items = hold.Context(), hold.Items
 	}
 
 	idx, err := buildCreditCensusIndex(env.store)
@@ -1210,7 +1481,7 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		run.preexisting[id] = true
 	}
 	run.indexNarrators()
-	if r, ok := database.AsCapability[narratorByNameReader](env.store); ok {
+	if r, ok := database.AsCapability[narratorByNameReader](env.store); ok && !cbLacks(env.store, t6g3CapNameIndex) {
 		run.byName = r
 	}
 
@@ -1244,9 +1515,6 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		}
 	}
 
-	runCtx, cancel := context.WithCancelCause(workCtx)
-	defer cancel(nil)
-
 	workers := max(env.workers, 1)
 	// PHASE 1: plan and guard every book, concurrently and without writing.
 	// Planning everything first is what makes the limit's cohort the same in a
@@ -1258,16 +1526,14 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	// the only errors RunItems sees are a cancel and a lost stand-down. The
 	// first one stops the pass; ErrModeCollect would run every remaining item
 	// into the same error and join thousands of copies of it.
-	runErr := registry.RunItems(runCtx, workRep, ids, func(_ context.Context, id string) error {
-		run.planBook(id)
-		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: workers,
-		ErrMode:     registry.ErrModeFail,
+	runErr := items(workers)(len(ids), t6g3ItemsOpts{
 		// Label runs inside each worker goroutine: it reads atomics only.
 		Label: func(i, total int) string {
 			return fmt.Sprintf("Credits backfill: planning %d/%d (errors %d)", i+1, total, run.failed.Load())
 		},
+	}, func(_ context.Context, i int) error {
+		run.planBook(ids[i])
+		return nil
 	})
 
 	// PHASE 2: books waiting on a name the run creates are planned again, then
@@ -1276,7 +1542,7 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	// reach (all of it when phase 1 stopped early) is filed under review as phase
 	// 1 left it, so no scanned book drops out of every class.
 	if runErr == nil {
-		runErr = run.replanPending(runCtx, workRep, workers)
+		runErr = run.replanPending(items, workers)
 	}
 	run.filePending(workers)
 	eligible := run.planIDs()
@@ -1289,7 +1555,7 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		if run.settled.boundHit {
 			level = slog.LevelWarn
 		}
-		_ = reporter.Log(level, fmt.Sprintf("credits-backfill: spellings settled in %d pass(es), %d split book(s) sent back to review, %d key(s) settled by their creators alone, bound hit %t",
+		env.eng.Log(level, fmt.Sprintf("credits-backfill: spellings settled in %d pass(es), %d split book(s) sent back to review, %d key(s) settled by their creators alone, bound hit %t",
 			run.settled.passes, len(run.settled.demoted), len(run.settled.recomputed), run.settled.boundHit))
 	}
 
@@ -1312,25 +1578,23 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 			if len(batch) == 0 {
 				return nil
 			}
-			return registry.RunItems(runCtx, workRep, batch, func(itemCtx context.Context, id string) error {
-				// Beat the lease and stop before this book's write once it is
-				// lost: a lapsed lease means the scanner may be writing again.
-				// (RunItems beats a ctx-carried hold before each item too; this
-				// stays so the guarantee does not depend on that.)
-				if err := registry.ScanStandDownCheckpoint(itemCtx); err != nil {
-					return err
-				}
-				run.apply(run.plans[id])
-				return nil
-			}, registry.RunItemsOptions{
-				Concurrency: workers,
-				ErrMode:     registry.ErrModeFail, // see phase 1
+			return items(workers)(len(batch), t6g3ItemsOpts{
 				// Label runs inside each worker goroutine: atomics and its
 				// arguments only (what is an immutable string).
 				Label: func(i, total int) string {
 					return fmt.Sprintf("Credits backfill: writing %d/%d %s (written %d, errors %d)",
 						i+1, total, what, run.written.Load(), run.failed.Load())
 				},
+			}, func(itemCtx context.Context, i int) error {
+				// Beat the lease and stop before this book's write once it is
+				// lost: a lapsed lease means the scanner may be writing again.
+				// (The loop beats a ctx-carried hold before each item too; this
+				// stays so the guarantee does not depend on that.)
+				if err := env.eng.Beat(itemCtx); err != nil {
+					return err
+				}
+				run.apply(run.plans[batch[i]])
+				return nil
 			})
 		}
 		runErr = write(creating, "books that create or link to records")
@@ -1355,7 +1619,7 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 	// credits is deleted again, so a later run cannot link a split credit to it.
 	if params.Apply {
 		run.deleteUnusedCreated(hold == nil || !hold.Lost())
-		run.markLeftoversJudged(reporter)
+		run.markLeftoversJudged()
 	}
 
 	earlier := 0
@@ -1395,8 +1659,8 @@ func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params 
 		"narrators_to_create=%d created=%d counts=%v",
 		res.Mode, res.Complete, res.BooksListed, res.BooksScanned, res.BooksToWrite, res.BooksInReview, res.BooksHeld,
 		res.NarratorsToCreate, res.NarratorsCreated, res.Counts)
-	_ = reporter.Log(slog.LevelInfo, summary)
-	_ = reporter.UpdateProgress(len(ids), len(ids), summary)
+	env.eng.Log(slog.LevelInfo, summary)
+	env.eng.Progress(len(ids), len(ids), summary)
 	return res, outErr
 }
 
@@ -1758,7 +2022,7 @@ func cbSourceFingerprint(row database.OperationV2Row) string {
 // the records only such a journal names are not found here.
 func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
 	lister, ok := database.AsCapability[database.OperationsV2SinceLister](r.env.store)
-	if !ok {
+	if !ok || cbLacks(r.env.store, t6g3CapOpsLister) {
 		return nil, fmt.Errorf("cannot find the records other credits-backfill operations left: store is %T, which cannot list operations (OperationsV2SinceLister)", r.env.store)
 	}
 	rows, err := lister.ListOperationsV2Since(time.Time{}, math.MaxInt)
@@ -1766,6 +2030,9 @@ func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
 		return nil, fmt.Errorf("list operations for the records other credits-backfill operations left: %w", err)
 	}
 	markers, _ := database.AsCapability[database.OpRowStore](r.env.store)
+	if cbLacks(r.env.store, t6g3CapOpRows) {
+		markers = nil
+	}
 	var out []cbSourceOp
 	for _, row := range rows {
 		if row.DefID != creditsBackfillOpID || row.ID == r.env.opID || row.Status == "completed" {
@@ -1793,9 +2060,9 @@ func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
 // stand-down lapsed, a link count or a delete failed) stays unmarked, and the
 // next apply reads it again. A marker that cannot be written is only logged: the
 // next apply reads the journal again, which is the safe direction.
-func (r *cbRun) markLeftoversJudged(rep sdk.Reporter) {
+func (r *cbRun) markLeftoversJudged() {
 	markers, ok := database.AsCapability[database.OpRowStore](r.env.store)
-	if !ok {
+	if !ok || cbLacks(r.env.store, t6g3CapOpRows) {
 		return
 	}
 	for _, src := range r.judged {
@@ -1813,8 +2080,7 @@ func (r *cbRun) markLeftoversJudged(rep sdk.Reporter) {
 			return database.OpRow{ID: cbSwept, Data: []byte(src.fingerprint)}, nil
 		})
 		if err != nil {
-			_ = rep.Log(slog.LevelWarn, "credits-backfill: could not mark operation's leftovers judged",
-				slog.String("operation", src.id), slog.String("error", err.Error()))
+			r.env.eng.Log(slog.LevelWarn, fmt.Sprintf("credits-backfill: could not mark operation's leftovers judged (operation %s): %v", src.id, err))
 		}
 	}
 }
@@ -1865,7 +2131,7 @@ func (r *cbRun) verifyPriorAttempts(ctx context.Context) error {
 			// apply verifies every journaled book before phase 1 starts, and
 			// that is a full-library read when the earlier attempt got far)
 			// and stops at a cancel or a lost lease.
-			if err := registry.ScanStandDownCheckpoint(gctx); err != nil {
+			if err := r.env.eng.Beat(gctx); err != nil {
 				return err
 			}
 			holds, err := r.holdsAnyPostImage(bookID, jb.afters)
@@ -2265,7 +2531,7 @@ func (r *cbRun) finishPlan(id string, in *cbBookRead, willCreate func(name strin
 // Each id leaves r.pending as it is planned again, so what is left in it when
 // this returns early (a canceled run) is exactly the books never reached, which
 // filePending then files.
-func (r *cbRun) replanPending(ctx context.Context, rep sdk.Reporter, workers int) error {
+func (r *cbRun) replanPending(items func(workers int) t6g3ItemsFunc, workers int) error {
 	r.plansMu.Lock()
 	pending := maps.Clone(r.pending)
 	ids := slices.Sorted(maps.Keys(pending))
@@ -2288,19 +2554,18 @@ func (r *cbRun) replanPending(ctx context.Context, rep sdk.Reporter, workers int
 		k := authorjunk.FoldKey(name)
 		return k != "" && creates[k]
 	}
-	return registry.RunItems(ctx, rep, ids, func(_ context.Context, id string) error {
+	return items(workers)(len(ids), t6g3ItemsOpts{
+		// Label runs inside each worker goroutine: it reads its arguments only.
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Credits backfill: planning split credits again %d/%d", i+1, total)
+		},
+	}, func(_ context.Context, i int) error {
+		id := ids[i]
 		r.finishPlan(id, pending[id], willCreate)
 		r.plansMu.Lock()
 		delete(r.pending, id)
 		r.plansMu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: workers,
-		ErrMode:     registry.ErrModeFail,
-		// Label runs inside each worker goroutine: it reads its arguments only.
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Credits backfill: planning split credits again %d/%d", i+1, total)
-		},
 	})
 }
 

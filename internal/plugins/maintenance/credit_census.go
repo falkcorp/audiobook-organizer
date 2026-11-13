@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credit_census.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 1df256d6-add9-41de-bf6d-622ed04e2944
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- credit-census ---
@@ -640,6 +641,21 @@ func (p *Plugin) creditCensusDef() sdk.OperationDef {
 	}
 }
 
+// creditCensusKind is the native kind of maintenance.credit-census (F5-08).
+const creditCensusKind tasks.Kind = "books.maintenance.credit-census"
+
+// creditCensusEnv is what creditCensusCore needs from its engine: the base and
+// the worker pool (the census writes nothing, so it has no Writer).
+type creditCensusEnv struct {
+	t6g3Base
+	// Items is the per-book loop, on the pool of creditCensusParallelism.
+	Items t6g3ItemsFunc
+}
+
+// creditCensusParallelism is rule R4: HEAD ran the loop at runtime.NumCPU().
+func creditCensusParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// runCreditCensus is the v2 shell of maintenance.credit-census.
 func (p *Plugin) runCreditCensus(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
 	ops := p.deps.OpsStore()
 	if ops == nil {
@@ -658,13 +674,57 @@ func (p *Plugin) runCreditCensus(ctx context.Context, _ json.RawMessage, reporte
 	return err
 }
 
-// runCreditCensusScan does the work. It returns a result whenever it got as far
-// as listing books, including on cancel or read failure (Complete=false), so
-// the caller can persist what was counted.
+// runCreditCensusScan is the census over any reader and reporter, at the given
+// worker count. It returns a result whenever it got as far as listing books,
+// including on cancel or read failure (Complete=false), so the caller can
+// persist what was counted.
 func runCreditCensusScan(ctx context.Context, store creditCensusStore, reporter sdk.Reporter, concurrency int) (*creditCensusResult, error) {
+	env := creditCensusEnv{
+		t6g3Base: t6g3Base{
+			Log:      func(level slog.Level, msg string) { _ = reporter.Log(level, msg) },
+			Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
+		},
+		Items: t6g3HeadItems(ctx, reporter, concurrency),
+	}
+	return creditCensusCore(ctx, store, env)
+}
+
+// creditCensusKind builds the native kind. Declared ReadOnly: the census reads
+// every book and its credits and writes nothing. Rule R7 declares no reads for
+// a ReadOnly kind, so HEAD's Reads (books, authors) are not carried. A ReadOnly
+// run gets no writer from core, so the shell builds none. The result is the
+// census; on an error core drops it (see the F5-08 seams note).
+func (p *Plugin) creditCensusKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.ReadOnly()
+	return tasks.Task(creditCensusKind, tasks.TaskSpec[struct{}, creditCensusResult]{
+		Common: t6g3Common(p.creditCensusDef(), creditCensusKind, eff, sched),
+		Run: func(rc *tasks.RC, _ struct{}) (creditCensusResult, error) {
+			base, err := t6g3NativeBase(creditCensusKind, rc, deps, false)
+			if err != nil {
+				return creditCensusResult{}, err
+			}
+			if err := t6g3NeedStore(creditCensusKind, base); err != nil {
+				return creditCensusResult{}, err
+			}
+			res, err := creditCensusCore(rc.Context(), base.Store, creditCensusEnv{
+				t6g3Base: base,
+				Items:    t6g3NativeItems(rc, creditCensusParallelism()),
+			})
+			if res == nil {
+				return creditCensusResult{}, err
+			}
+			return *res, err
+		},
+	})
+}
+
+// creditCensusCore is the shared body of both shells. The store is an argument
+// (rule R10: what a core reads arrives through its arguments); the native shell
+// passes env.Store.
+func creditCensusCore(ctx context.Context, store creditCensusStore, env creditCensusEnv) (*creditCensusResult, error) {
 	started := time.Now()
-	_ = reporter.Log(slog.LevelInfo, "credit-census: start (read only)")
-	_ = reporter.UpdateProgress(0, 1, "Indexing authors and narrators…")
+	env.Log(slog.LevelInfo, "credit-census: start (read only)")
+	env.Progress(0, 1, "Indexing authors and narrators…")
 
 	idx, err := buildCreditCensusIndex(store)
 	if err != nil {
@@ -681,7 +741,14 @@ func runCreditCensusScan(ctx context.Context, store creditCensusStore, reporter 
 	var firstErrMu sync.Mutex
 	var firstErr error
 
-	runErr := registry.RunItems(ctx, reporter, ids, func(_ context.Context, id string) error {
+	runErr := env.Items(len(ids), t6g3ItemsOpts{
+		// Label runs inside each worker goroutine: the counters are atomics.
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Credit census %d/%d (classified %d, unreadable %d)",
+				i+1, total, scanned.Load(), failed.Load())
+		},
+	}, func(_ context.Context, i int) error {
+		id := ids[i]
 		classes, gotBook, cerr := creditCensusOne(idx, store, id)
 		switch {
 		case cerr != nil:
@@ -699,13 +766,6 @@ func runCreditCensusScan(ctx context.Context, store creditCensusStore, reporter 
 			acc.add(id, classes)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: concurrency,
-		// Label runs inside each worker goroutine: the counters are atomics.
-		Label: func(i, total int) string {
-			return fmt.Sprintf("Credit census %d/%d (classified %d, unreadable %d)",
-				i+1, total, scanned.Load(), failed.Load())
-		},
 	})
 
 	res := &creditCensusResult{
@@ -752,8 +812,8 @@ func runCreditCensusScan(ctx context.Context, store creditCensusStore, reporter 
 
 	summary := fmt.Sprintf("credit-census (read only, complete=%t): listed=%d scanned=%d gone=%d disagreement_books=%d counts=%v",
 		res.Complete, res.BooksListed, res.BooksScanned, res.BooksGone, res.DisagreementBooks, res.Counts)
-	_ = reporter.Log(slog.LevelInfo, summary)
-	_ = reporter.UpdateProgress(len(ids), len(ids), summary)
+	env.Log(slog.LevelInfo, summary)
+	env.Progress(len(ids), len(ids), summary)
 	return res, outErr
 }
 

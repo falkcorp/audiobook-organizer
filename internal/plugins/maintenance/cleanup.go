@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.34.3
+// version: 1.35.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -23,10 +23,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/sweep"
-	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- purge-deleted ---
@@ -59,25 +58,59 @@ func (p *Plugin) purgeDeletedDef() sdk.OperationDef {
 	}
 }
 
+// purgeDeletedKind is the native kind of maintenance.purge-deleted (F5-08).
+const purgeDeletedKind tasks.Kind = "books.maintenance.purge-deleted"
+
+// purgeDeletedEnv is what runPurgeDeletedCore needs from its engine: the base
+// only (the purge reads no store of its own; the writer decides the books).
+type purgeDeletedEnv struct{ t6g3Base }
+
+// runPurgeDeleted is the v2 shell of maintenance.purge-deleted.
 func (p *Plugin) runPurgeDeleted(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	_ = reporter.Log(slog.LevelInfo, "Starting purge of soft-deleted books")
-	prog := sdk.NewProgress(reporter, 0)
-	prog.Start("Purging soft-deleted books...")
-	opID := ctxOpID(ctx)
-	err := p.deps.RunAutoPurgeSoftDeleted(ctx, opID)
-	p.deps.ActivityFlushOp(opID)
+	_, err := runPurgeDeletedCore(ctx, purgeDeletedEnv{p.t6g3HeadBase(ctx, reporter, true)})
+	return err
+}
+
+// runPurgeDeletedCore is the shared body of both shells.
+func runPurgeDeletedCore(ctx context.Context, env purgeDeletedEnv) (struct{}, error) {
+	env.Log(slog.LevelInfo, "Starting purge of soft-deleted books")
+	t6g3ProgressStart(env.t6g3Base, "Purging soft-deleted books...")
+	err := env.Writer.RunAutoPurgeSoftDeleted(ctx, env.OpID)
+	env.Writer.ActivityFlushOp(env.OpID)
 	if err != nil {
 		// Refused (the undo records could not be read) or stopped before it
 		// decided every book (timeout, shutdown, watchdog, quiesce): a failed
 		// run, not a completed one that did nothing. What is left is picked up
 		// by the next run.
-		_ = reporter.Log(slog.LevelWarn, "Purge did not finish: "+err.Error())
-		prog.Done("Purge did not finish: " + err.Error())
-		return err
+		env.Log(slog.LevelWarn, "Purge did not finish: "+err.Error())
+		t6g3ProgressDone(env.t6g3Base, "Purge did not finish: "+err.Error())
+		return struct{}{}, err
 	}
-	_ = reporter.Log(slog.LevelInfo, "Purge complete")
-	prog.Done("Purge complete")
-	return nil
+	env.Log(slog.LevelInfo, "Purge complete")
+	t6g3ProgressDone(env.t6g3Base, "Purge complete")
+	return struct{}{}, nil
+}
+
+// purgeDeletedKind builds the native kind. Live-only writer: HEAD declares no
+// Writes and no Preview, so a preview run is refused. Writes found: the
+// purge's book rows, their external-id tombstones, the files it removes and the
+// undo records it reads and clears (audiobooks.PurgeSoftDeletedUnattended).
+func (p *Plugin) purgeDeletedKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "external_ids"),
+		tasks.Res("books", "files"), tasks.Res("books", "operations"))
+	return tasks.Task(purgeDeletedKind, tasks.TaskSpec[struct{}, struct{}]{
+		Common: t6g3Common(p.purgeDeletedDef(), purgeDeletedKind, eff, sched),
+		Run: func(rc *tasks.RC, _ struct{}) (struct{}, error) {
+			if err := t6g3LiveOnly(purgeDeletedKind, rc); err != nil {
+				return struct{}{}, err
+			}
+			base, err := t6g3NativeBase(purgeDeletedKind, rc, deps, true)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return runPurgeDeletedCore(rc.Context(), purgeDeletedEnv{base})
+		},
+	})
 }
 
 // --- tombstone-cleanup ---
@@ -109,22 +142,60 @@ func (p *Plugin) tombstoneCleanupDef() sdk.OperationDef {
 	}
 }
 
-func (p *Plugin) runTombstoneCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.OpsStore()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
+// tombstoneCleanupKind is the native kind of maintenance.tombstone-cleanup
+// (F5-08).
+const tombstoneCleanupKind tasks.Kind = "books.maintenance.tombstone-cleanup"
+
+// tombstoneCleanupEnv is what runTombstoneCleanupCore needs from its engine.
+type tombstoneCleanupEnv struct{ t6g3Base }
+
+// tombstoneCleanupResult is the count HEAD logs.
+type tombstoneCleanupResult struct {
+	Resolved int `json:"resolved"`
+}
+
+// runTombstoneCleanup is the v2 shell of maintenance.tombstone-cleanup. An
+// uninitialised database is HEAD's own precondition, checked before the run
+// says anything.
+func (p *Plugin) runTombstoneCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	if p.deps.OpsStore() == nil {
+		return errT6g3NoStore
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting author tombstone chain resolution")
-	prog := sdk.NewProgress(reporter, 0)
-	prog.Start("Resolving tombstone chains...")
-	updated, err := store.ResolveTombstoneChains()
+	_, err := runTombstoneCleanupCore(ctx, tombstoneCleanupEnv{p.t6g3HeadBase(ctx, reporter, true)})
+	return err
+}
+
+// runTombstoneCleanupCore is the shared body of both shells.
+func runTombstoneCleanupCore(_ context.Context, env tombstoneCleanupEnv) (tombstoneCleanupResult, error) {
+	env.Log(slog.LevelInfo, "Starting author tombstone chain resolution")
+	t6g3ProgressStart(env.t6g3Base, "Resolving tombstone chains...")
+	updated, err := env.Writer.ResolveTombstoneChains()
 	if err != nil {
-		return fmt.Errorf("tombstone chain resolution failed: %w", err)
+		return tombstoneCleanupResult{}, fmt.Errorf("tombstone chain resolution failed: %w", err)
 	}
 	resultMsg := fmt.Sprintf("Resolved %d tombstone chains", updated)
-	_ = reporter.Log(slog.LevelInfo, resultMsg)
-	prog.Done(resultMsg)
-	return nil
+	env.Log(slog.LevelInfo, resultMsg)
+	t6g3ProgressDone(env.t6g3Base, resultMsg)
+	return tombstoneCleanupResult{Resolved: updated}, nil
+}
+
+// tombstoneCleanupKind builds the native kind. Live-only writer. Writes found:
+// ResolveTombstoneChains rewrites the author tombstone rows (authors).
+func (p *Plugin) tombstoneCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "authors"))
+	return tasks.Task(tombstoneCleanupKind, tasks.TaskSpec[struct{}, tombstoneCleanupResult]{
+		Common: t6g3Common(p.tombstoneCleanupDef(), tombstoneCleanupKind, eff, sched),
+		Run: func(rc *tasks.RC, _ struct{}) (tombstoneCleanupResult, error) {
+			if err := t6g3LiveOnly(tombstoneCleanupKind, rc); err != nil {
+				return tombstoneCleanupResult{}, err
+			}
+			base, err := t6g3NativeBase(tombstoneCleanupKind, rc, deps, true)
+			if err != nil {
+				return tombstoneCleanupResult{}, err
+			}
+			return runTombstoneCleanupCore(rc.Context(), tombstoneCleanupEnv{base})
+		},
+	})
 }
 
 // --- temp-file-cleanup ---
@@ -163,14 +234,52 @@ func (p *Plugin) tempFileCleanupDef() sdk.OperationDef {
 // watchdog budget from this value (optimizeProgressTimeout).
 const tempFileCleanupProgressTimeout = 1 * time.Hour
 
+// tempFileCleanupKind is the native kind of maintenance.temp-file-cleanup
+// (F5-08).
+const tempFileCleanupKind tasks.Kind = "books.maintenance.temp-file-cleanup"
+
+// tempFileCleanupEnv is what runTempFileCleanupCore needs from its engine.
+type tempFileCleanupEnv struct{ t6g3Base }
+
+// tempFileCleanupResult is the count HEAD logs.
+type tempFileCleanupResult struct {
+	Removed int `json:"removed"`
+}
+
+// runTempFileCleanup is the v2 shell of maintenance.temp-file-cleanup.
 func (p *Plugin) runTempFileCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	opID := ctxOpID(ctx)
+	_, err := runTempFileCleanupCore(ctx, tempFileCleanupEnv{p.t6g3HeadBase(ctx, reporter, true)})
+	return err
+}
+
+// runTempFileCleanupCore is the shared body of both shells.
+func runTempFileCleanupCore(_ context.Context, env tempFileCleanupEnv) (tempFileCleanupResult, error) {
 	// CleanupOrphanedTempFiles flushes the op's batched entries itself, before
 	// its summary entry, so no ActivityFlushOp call follows it here.
-	removed := p.deps.CleanupOrphanedTempFiles(p.deps.RootDir(), opID)
+	removed := env.Writer.CleanupOrphanedTempFiles(env.Store.RootDir(), env.OpID)
 	msg := fmt.Sprintf("Removed %d orphaned temp files", removed)
-	_ = reporter.Log(slog.LevelInfo, msg)
-	return nil
+	env.Log(slog.LevelInfo, msg)
+	return tempFileCleanupResult{Removed: removed}, nil
+}
+
+// tempFileCleanupKind builds the native kind. Live-only writer. Writes found:
+// the orphaned temp files it removes (files) and the activity entries
+// CleanupOrphanedTempFiles records and flushes (activity).
+func (p *Plugin) tempFileCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "files"), tasks.Res("books", "activity"))
+	return tasks.Task(tempFileCleanupKind, tasks.TaskSpec[struct{}, tempFileCleanupResult]{
+		Common: t6g3Common(p.tempFileCleanupDef(), tempFileCleanupKind, eff, sched),
+		Run: func(rc *tasks.RC, _ struct{}) (tempFileCleanupResult, error) {
+			if err := t6g3LiveOnly(tempFileCleanupKind, rc); err != nil {
+				return tempFileCleanupResult{}, err
+			}
+			base, err := t6g3NativeBase(tempFileCleanupKind, rc, deps, true)
+			if err != nil {
+				return tempFileCleanupResult{}, err
+			}
+			return runTempFileCleanupCore(rc.Context(), tempFileCleanupEnv{base})
+		},
+	})
 }
 
 // --- transcode-temp-cleanup ---
@@ -223,29 +332,68 @@ func (p *Plugin) runTranscodeTempCleanup(ctx context.Context, raw json.RawMessag
 	if err != nil {
 		return err
 	}
-	paths, err := p.deps.OpsStore().GetAllImportPaths()
+	_, err = runTranscodeTempCleanupCore(ctx, transcodeTempCleanupEnv{p.t6g3HeadBase(ctx, reporter, !dryRun)})
+	return err
+}
+
+// transcodeTempCleanupKind is the native kind of maintenance.transcode-temp-cleanup
+// (F5-08).
+const transcodeTempCleanupKind tasks.Kind = "books.maintenance.transcode-temp-cleanup"
+
+// transcodeTempCleanupEnv is what runTranscodeTempCleanupCore needs from its
+// engine: the base (Live is the inverse of HEAD's dry_run).
+type transcodeTempCleanupEnv struct{ t6g3Base }
+
+// transcodeTempCleanupResult is the counts HEAD logs.
+type transcodeTempCleanupResult struct {
+	Removed int `json:"removed"`
+	Swept   int `json:"swept"`
+	Paths   int `json:"paths"`
+}
+
+// runTranscodeTempCleanupCore is the shared body of both shells.
+func runTranscodeTempCleanupCore(ctx context.Context, env transcodeTempCleanupEnv) (transcodeTempCleanupResult, error) {
+	paths, err := env.Store.GetAllImportPaths()
 	if err != nil {
-		return fmt.Errorf("list import paths: %w", err)
+		return transcodeTempCleanupResult{}, fmt.Errorf("list import paths: %w", err)
 	}
 	app := appdirs.Current()
 	removed, swept := 0, 0
 	for _, ip := range paths {
 		if err := ctx.Err(); err != nil {
-			return err
+			return transcodeTempCleanupResult{}, err
 		}
 		if _, statErr := os.Stat(ip.Path); statErr != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Skipping import path %q: %v", ip.Path, statErr))
+			env.Log(slog.LevelWarn, fmt.Sprintf("Skipping import path %q: %v", ip.Path, statErr))
 			continue
 		}
-		removed += transcode.CleanupStaleTempFiles(ip.Path, app, transcodeTempMaxAge, dryRun)
+		removed += env.Writer.CleanupStaleTempFiles(ip.Path, app, transcodeTempMaxAge, !env.Live)
 		swept++
 	}
 	verb := "Removed"
-	if dryRun {
+	if !env.Live {
 		verb = "Preview: would remove"
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("%s %d stale transcode temp files from %d of %d import paths", verb, removed, swept, len(paths)))
-	return nil
+	env.Log(slog.LevelInfo, fmt.Sprintf("%s %d stale transcode temp files from %d of %d import paths", verb, removed, swept, len(paths)))
+	return transcodeTempCleanupResult{Removed: removed, Swept: swept, Paths: len(paths)}, nil
+}
+
+// transcodeTempCleanupKind builds the native kind. HEAD declares a Preview, so
+// the native kind runs in either mode and takes its mode from rc, never from a
+// dry_run param (05-tasks 5T.3.7 item 3). Writes found: the stale transcode
+// temp files CleanupStaleTempFiles removes in a live run (files).
+func (p *Plugin) transcodeTempCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "files"))
+	return tasks.Task(transcodeTempCleanupKind, tasks.TaskSpec[struct{}, transcodeTempCleanupResult]{
+		Common: t6g3Common(p.transcodeTempCleanupDef(), transcodeTempCleanupKind, eff, sched),
+		Run: func(rc *tasks.RC, _ struct{}) (transcodeTempCleanupResult, error) {
+			base, err := t6g3NativeBase(transcodeTempCleanupKind, rc, deps, true)
+			if err != nil {
+				return transcodeTempCleanupResult{}, err
+			}
+			return runTranscodeTempCleanupCore(rc.Context(), transcodeTempCleanupEnv{base})
+		},
+	})
 }
 
 // --- cleanup-activity-log ---
@@ -278,7 +426,49 @@ func (p *Plugin) cleanupActivityLogDef() sdk.OperationDef {
 	}
 }
 
+// cleanupActivityLogKind is the native kind of maintenance.cleanup-activity-log
+// (F5-08).
+const cleanupActivityLogKind tasks.Kind = "books.maintenance.cleanup-activity-log"
+
+// cleanupActivityLogEnv is what runCleanupActivityLogCore needs from its engine.
+type cleanupActivityLogEnv struct{ t6g3Base }
+
+// cleanupActivityLogResult is the counts HEAD logs.
+type cleanupActivityLogResult struct {
+	Compacted    int   `json:"compacted"`
+	Summarized   int   `json:"summarized"`
+	Pruned       int   `json:"pruned"`
+	IndexOrphans int64 `json:"index_orphans_removed"`
+}
+
+// runCleanupActivityLog is the v2 shell of maintenance.cleanup-activity-log.
 func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	_, err := runCleanupActivityLogCore(ctx, cleanupActivityLogEnv{p.t6g3HeadBase(ctx, reporter, true)})
+	return err
+}
+
+// cleanupActivityLogKind builds the native kind. Live-only writer. Writes found:
+// compaction, summarize, prune and index repair all rewrite the activity log
+// (activity).
+func (p *Plugin) cleanupActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "activity"))
+	return tasks.Task(cleanupActivityLogKind, tasks.TaskSpec[struct{}, cleanupActivityLogResult]{
+		Common: t6g3Common(p.cleanupActivityLogDef(), cleanupActivityLogKind, eff, sched),
+		Run: func(rc *tasks.RC, _ struct{}) (cleanupActivityLogResult, error) {
+			if err := t6g3LiveOnly(cleanupActivityLogKind, rc); err != nil {
+				return cleanupActivityLogResult{}, err
+			}
+			base, err := t6g3NativeBase(cleanupActivityLogKind, rc, deps, true)
+			if err != nil {
+				return cleanupActivityLogResult{}, err
+			}
+			return runCleanupActivityLogCore(rc.Context(), cleanupActivityLogEnv{base})
+		},
+	})
+}
+
+// runCleanupActivityLogCore is the shared body of both shells.
+func runCleanupActivityLogCore(ctx context.Context, env cleanupActivityLogEnv) (cleanupActivityLogResult, error) {
 	// This def declares LivenessManual, and until 2026-09-10 the run never
 	// called UpdateProgress — only Log at the end, which the watchdog does not
 	// count — so any night whose compaction backlog exceeded ProgressTimeout
@@ -286,8 +476,8 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	// events, the summarize pass per-group events and the prune per-batch
 	// events, and MaintainActivityLog stamps each phase boundary; forwarding
 	// all of them is what keeps this op alive.
-	_ = reporter.UpdateProgress(0, 0, "starting activity log cleanup")
-	ctx = database.WithMaintenanceProgress(ctx, maintenanceProgressToReporter(reporter))
+	env.Progress(0, 0, "starting activity log cleanup")
+	ctx = database.WithMaintenanceProgress(ctx, maintenanceProgressVia(env.Progress))
 
 	// NO SECOND COMPACTION. While nightly compaction is enabled it owns the
 	// compaction pass (maintenance.nightly-compact-activity-log, cutoff = start
@@ -296,30 +486,32 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 	// legacy pass survives only for a deployment that turned nightly
 	// compaction off, with its original semantics (0 or less means 14 days).
 	compactMsg := "compaction skipped (nightly compaction is enabled)"
-	if !p.deps.ActivityLogNightlyCompactionEnabled() {
-		days := p.deps.ActivityLogCompactionDays()
+	compacted := 0
+	if !env.Store.ActivityLogNightlyCompactionEnabled() {
+		days := env.Store.ActivityLogCompactionDays()
 		if days <= 0 {
 			days = 14
 		}
-		res, err := p.deps.CompactActivityEntries(ctx, time.Now().AddDate(0, 0, -days), compactProgressToReporter(reporter))
+		res, err := env.Writer.CompactActivityEntries(ctx, time.Now().AddDate(0, 0, -days), compactProgressVia(env.Progress))
 		if err != nil {
-			return fmt.Errorf("compact activity: %w", err)
+			return cleanupActivityLogResult{}, fmt.Errorf("compact activity: %w", err)
 		}
+		compacted = res.DaysCompacted
 		compactMsg = fmt.Sprintf("compacted %d", res.DaysCompacted)
 	}
-	summarized, pruned, indexOrphans, err := p.deps.MaintainActivityLog(
+	summarized, pruned, indexOrphans, err := env.Writer.MaintainActivityLog(
 		ctx,
-		p.deps.ActivityLogRetentionChangeDays(),
-		p.deps.ActivityLogRetentionDebugDays(),
+		env.Store.ActivityLogRetentionChangeDays(),
+		env.Store.ActivityLogRetentionDebugDays(),
 	)
 	if err != nil {
-		return err
+		return cleanupActivityLogResult{}, err
 	}
 	msg := fmt.Sprintf("Activity log cleanup: %s, summarized %d, pruned %d, orphaned index entries removed %d",
 		compactMsg, summarized, pruned, indexOrphans)
 	logger.InfoCtx(ctx, msg)
-	_ = reporter.Log(slog.LevelInfo, msg)
-	return nil
+	env.Log(slog.LevelInfo, msg)
+	return cleanupActivityLogResult{Compacted: compacted, Summarized: summarized, Pruned: pruned, IndexOrphans: indexOrphans}, nil
 }
 
 // --- purge-old-logs ---
@@ -440,18 +632,57 @@ func (p *Plugin) cleanupOldBackupsDef() sdk.OperationDef {
 	}
 }
 
+// cleanupOldBackupsKind is the native kind of maintenance.cleanup-old-backups
+// (F5-08).
+const cleanupOldBackupsKind tasks.Kind = "books.maintenance.cleanup-old-backups"
+
+// cleanupOldBackupsEnv is what runCleanupOldBackupsCore needs from its engine.
+type cleanupOldBackupsEnv struct{ t6g3Base }
+
+// cleanupOldBackupsResult is the count HEAD logs.
+type cleanupOldBackupsResult struct {
+	Removed int `json:"removed"`
+}
+
+// runCleanupOldBackups is the v2 shell of maintenance.cleanup-old-backups.
 func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	rootDir := p.deps.RootDir()
+	_, err := runCleanupOldBackupsCore(ctx, cleanupOldBackupsEnv{p.t6g3HeadBase(ctx, reporter, true)})
+	return err
+}
+
+// cleanupOldBackupsKind builds the native kind. Live-only writer. Writes found:
+// the .bak-* files sweep.RemoveOldBackupFiles removes (files); HEAD's comment
+// on the def explains why it touches no row.
+func (p *Plugin) cleanupOldBackupsKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "files"))
+	return tasks.Task(cleanupOldBackupsKind, tasks.TaskSpec[struct{}, cleanupOldBackupsResult]{
+		Common: t6g3Common(p.cleanupOldBackupsDef(), cleanupOldBackupsKind, eff, sched),
+		Run: func(rc *tasks.RC, _ struct{}) (cleanupOldBackupsResult, error) {
+			if err := t6g3LiveOnly(cleanupOldBackupsKind, rc); err != nil {
+				return cleanupOldBackupsResult{}, err
+			}
+			base, err := t6g3NativeBase(cleanupOldBackupsKind, rc, deps, true)
+			if err != nil {
+				return cleanupOldBackupsResult{}, err
+			}
+			return runCleanupOldBackupsCore(rc.Context(), cleanupOldBackupsEnv{base})
+		},
+	})
+}
+
+// runCleanupOldBackupsCore is the shared body of both shells.
+func runCleanupOldBackupsCore(ctx context.Context, env cleanupOldBackupsEnv) (cleanupOldBackupsResult, error) {
+	rootDir := env.Store.RootDir()
 	if rootDir == "" {
-		_ = reporter.Log(slog.LevelInfo, "No root directory configured, skipping backup cleanup")
-		return nil
+		env.Log(slog.LevelInfo, "No root directory configured, skipping backup cleanup")
+		return cleanupOldBackupsResult{}, nil
 	}
-	retentionDays := p.deps.BackupRetentionDays()
+	retentionDays := env.Store.BackupRetentionDays()
 	if retentionDays <= 0 {
 		retentionDays = 30
 	}
 	maxAge := time.Duration(retentionDays) * 24 * time.Hour
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Scanning %s for .bak-* files older than %d days", rootDir, retentionDays))
+	env.Log(slog.LevelInfo, fmt.Sprintf("Scanning %s for .bak-* files older than %d days", rootDir, retentionDays))
 
 	// The walk, the app-dir guard, the name-time age test and the remove live in
 	// sweep.RemoveOldBackupFiles. This op supplies the one thing that is its own:
@@ -460,7 +691,7 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 	// audio's mtime, often years old, so mtime would delete a fresh backup on the
 	// next run; fileops KeepBackup, AGE CONTRACT). Anything else that merely
 	// contains ".bak-" (a book called "x.bak-notes.m4b") is kept at any age.
-	removed, err := sweep.RemoveOldBackupFiles(ctx, rootDir, appdirs.Current(),
+	removed, err := env.Writer.RemoveOldBackupFiles(ctx, rootDir, appdirs.Current(),
 		fileops.BackupNameTime,
 		maxAge,
 		func(level slog.Level, msg string, kv ...any) {
@@ -473,8 +704,8 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 				logger.DebugCtx(ctx, msg, kv...)
 			}
 		})
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Backup cleanup complete: removed %d file(s)", removed))
-	return err
+	env.Log(slog.LevelInfo, fmt.Sprintf("Backup cleanup complete: removed %d file(s)", removed))
+	return cleanupOldBackupsResult{Removed: removed}, err
 }
 
 // --- trash-cleanup ---
@@ -670,8 +901,58 @@ func notePaths(files []database.PurgeFileNote) []string {
 	return paths
 }
 
-func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	res, err := p.deps.CleanupTrashedVersions()
+// trashCleanupKind is the native kind of maintenance.trash-cleanup (F5-08).
+const trashCleanupKind tasks.Kind = "books.maintenance.trash-cleanup"
+
+// trashCleanupEnv is what runTrashCleanupCore needs from its engine.
+type trashCleanupEnv struct{ t6g3Base }
+
+// runTrashCleanup is the v2 shell of maintenance.trash-cleanup. The core returns
+// the payload, and this shell stores it on the run's row: a result the page
+// cannot read back would leave a run that purged versions looking like a run
+// that did nothing, so a failed write is reported on the op, joined with the
+// purge's own error.
+func (p *Plugin) runTrashCleanup(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
+	payload, err := runTrashCleanupCore(ctx, trashCleanupEnv{p.t6g3HeadBase(ctx, reporter, true)})
+	if setErr := opsregistry.ReporterSetResult(reporter, payload); setErr != nil {
+		persist := fmt.Errorf("trash cleanup: persist result: %w", setErr)
+		if err != nil {
+			// Both are why the night failed: the purges, and the result the page
+			// reads back not being stored.
+			return errors.Join(err, persist)
+		}
+		return persist
+	}
+	return err
+}
+
+// trashCleanupKind builds the native kind. Live-only writer. Writes found:
+// CleanupTrashedVersions purges trashed versions (book_versions), removes their
+// files and the files the kept-file sweep unlinks (files), and moves unsettled
+// versions to purge_failed (book_versions).
+func (p *Plugin) trashCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "book_versions"), tasks.Res("books", "files"))
+	return tasks.Task(trashCleanupKind, tasks.TaskSpec[struct{}, TrashCleanupResult]{
+		Common: t6g3Common(p.trashCleanupDef(), trashCleanupKind, eff, sched),
+		Run: func(rc *tasks.RC, _ struct{}) (TrashCleanupResult, error) {
+			if err := t6g3LiveOnly(trashCleanupKind, rc); err != nil {
+				return TrashCleanupResult{}, err
+			}
+			base, err := t6g3NativeBase(trashCleanupKind, rc, deps, true)
+			if err != nil {
+				return TrashCleanupResult{}, err
+			}
+			// core drops a failed run's result (core/tasks/erased.go): see the
+			// F5-08 seams note.
+			return runTrashCleanupCore(rc.Context(), trashCleanupEnv{base})
+		},
+	})
+}
+
+// runTrashCleanupCore is the shared body of both shells. It returns the result
+// payload instead of storing it.
+func runTrashCleanupCore(_ context.Context, env trashCleanupEnv) (TrashCleanupResult, error) {
+	res, err := env.Writer.CleanupTrashedVersions()
 	payload := TrashCleanupResult{Purged: res.Purged, Failed: res.Failed, KeptFiles: len(res.KeptFiles), NeedsAttention: len(res.NeedsAttention), CannotTell: len(res.CannotTell), NothingServed: len(res.NothingServed), ServedKept: len(res.Kept), StoppedForMerge: res.StoppedForMerge, StoppedForMergeNights: res.MergeStopStreak, StoppedForMergeRepeatedly: res.MergeStopStreak >= versions.MergeStopEscalateAfter}
 	for _, k := range res.KeptFiles {
 		payload.KeptVersionIDs = append(payload.KeptVersionIDs, k.VersionID)
@@ -728,62 +1009,58 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 	}
 	payload.SwapIncomplete = len(payload.SwapIncompleteVersionIDs)
 	payload.SwapIncompleteBooks = res.SwapIncomplete
-	// A result the page cannot read back would leave a run that purged versions
-	// looking like a run that did nothing; a failed write is reported on the op.
-	setErr := opsregistry.ReporterSetResult(reporter, payload)
-
 	if len(res.KeptFiles) > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d of the purged versions kept files another row or book names (versions %s, books %s)",
+		env.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d of the purged versions kept files another row or book names (versions %s, books %s)",
 			len(res.KeptFiles), strings.Join(payload.KeptVersionIDs, ", "), strings.Join(payload.KeptBookIDs, ", ")))
 	}
 	if res.KeptSweep.ReportOnly && res.KeptSweep.WouldRemove+res.KeptSweep.WouldDrop > 0 {
 		// One line per file, so the run's journal is the list the owner reads before
 		// switching kept_sweep_apply_enabled on.
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: the kept-file sweep is REPORT ONLY (kept_sweep_apply_enabled is off) and changed nothing; with it on, it would remove %d file(s) nothing names any more and drop %d note(s) of files already gone",
+		env.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: the kept-file sweep is REPORT ONLY (kept_sweep_apply_enabled is off) and changed nothing; with it on, it would remove %d file(s) nothing names any more and drop %d note(s) of files already gone",
 			res.KeptSweep.WouldRemove, res.KeptSweep.WouldDrop))
 		for _, f := range payload.KeptSweepWouldRemoveFiles {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: kept-file sweep WOULD remove %s (version %s, book %s; it was kept: %s)", f.Path, f.VersionID, f.BookID, f.Reason))
+			env.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: kept-file sweep WOULD remove %s (version %s, book %s; it was kept: %s)", f.Path, f.VersionID, f.BookID, f.Reason))
 		}
 		for _, f := range payload.KeptSweepWouldDropFiles {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: kept-file sweep WOULD drop the note of %s, already gone (version %s, book %s; it was kept: %s)", f.Path, f.VersionID, f.BookID, f.Reason))
+			env.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: kept-file sweep WOULD drop the note of %s, already gone (version %s, book %s; it was kept: %s)", f.Path, f.VersionID, f.BookID, f.Reason))
 		}
 	}
 	if res.KeptSweep.OutsideSlot > 0 {
 		// One line per file, every run: these are the files nothing will ever remove
 		// for the owner, so the journal is where they are read.
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: the kept-file sweep removes files only inside a version's own .versions folder; %d noted file(s) lie outside theirs and are kept, never removed",
+		env.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: the kept-file sweep removes files only inside a version's own .versions folder; %d noted file(s) lie outside theirs and are kept, never removed",
 			res.KeptSweep.OutsideSlot))
 		for _, f := range payload.KeptSweepOutsideSlotFiles {
-			_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: kept-file sweep KEEPS %s (version %s, book %s): outside the version's own .versions folder", f.Path, f.VersionID, f.BookID))
+			env.Log(slog.LevelInfo, fmt.Sprintf("Trash cleanup: kept-file sweep KEEPS %s (version %s, book %s): outside the version's own .versions folder", f.Path, f.VersionID, f.BookID))
 		}
 	}
 	if n := len(res.KeptSweep.Escalated); n > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d purged version(s) had a kept file the sweep could not settle for %d nights in a row and are now purge_failed, so the sweep stops warning about those files (it still sweeps the other kept files of the version); Purge now retries one, or hard delete drops it (versions %s, files %s)",
+		env.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d purged version(s) had a kept file the sweep could not settle for %d nights in a row and are now purge_failed, so the sweep stops warning about those files (it still sweeps the other kept files of the version); Purge now retries one, or hard delete drops it (versions %s, files %s)",
 			n, versions.PurgeUndecidedEscalateAfter, strings.Join(payload.KeptSweepEscalatedVersions, ", "), strings.Join(escalatedPaths(payload.KeptSweepEscalatedFiles), ", ")))
 	}
 	if n := res.KeptSweep.KeptOnError; n > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: the kept-file sweep left %d file(s) of purged versions in place because it could not decide or act on them; nothing was removed for them and they are tried again next run (versions %s, files %s)",
+		env.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: the kept-file sweep left %d file(s) of purged versions in place because it could not decide or act on them; nothing was removed for them and they are tried again next run (versions %s, files %s)",
 			n, strings.Join(payload.KeptSweepKeptOnErrorVersions, ", "), strings.Join(payload.KeptSweepKeptOnErrorPaths, ", ")))
 	}
 	if len(res.NeedsAttention) > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) need the owner (a file cannot be removed: permission or a read-only filesystem; or the kept-file sweep could not settle one for several nights) and are not retried; Purge now retries one, or hard delete drops it (versions %s, books %s)",
+		env.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) need the owner (a file cannot be removed: permission or a read-only filesystem; or the kept-file sweep could not settle one for several nights) and are not retried; Purge now retries one, or hard delete drops it (versions %s, books %s)",
 			len(res.NeedsAttention), strings.Join(payload.NeedsAttentionVersionIDs, ", "), strings.Join(payload.NeedsAttentionBookIDs, ", ")))
 	}
 	// One WARN per version a live book still serves, so the run's journal lists
 	// every one; they stay in the trash and are retried on the next run.
 	for _, k := range res.Kept {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: kept version %s of book %s in the trash: %d path(s) kept, %s", k.VersionID, k.BookID, len(k.Files), versions.KeptReason))
+		env.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: kept version %s of book %s in the trash: %d path(s) kept, %s", k.VersionID, k.BookID, len(k.Files), versions.KeptReason))
 	}
 	if len(res.CannotTell) > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) were left alone because the files that are left are not there and nothing shows they were removed (a drive that is down looks the same); nothing was deleted and they are tried again next run (versions %s, books %s)",
+		env.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) were left alone because the files that are left are not there and nothing shows they were removed (a drive that is down looks the same); nothing was deleted and they are tried again next run (versions %s, books %s)",
 			len(res.CannotTell), strings.Join(payload.CannotTellVersionIDs, ", "), strings.Join(payload.CannotTellBookIDs, ", ")))
 	}
 	if len(res.NothingServed) > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) were left in the trash because the book serves nothing that exists on disk; nothing was deleted, and they are listed again every run until the book's path is fixed or the version restored (versions %s, books %s, book paths %s)",
+		env.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d version(s) were left in the trash because the book serves nothing that exists on disk; nothing was deleted, and they are listed again every run until the book's path is fixed or the version restored (versions %s, books %s, book paths %s)",
 			len(res.NothingServed), strings.Join(payload.NothingServedVersionIDs, ", "), strings.Join(payload.NothingServedBookIDs, ", "), strings.Join(payload.NothingServedFilePaths, ", ")))
 	}
 	if len(res.SwapIncomplete) > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d book(s) have a version swap that did not finish and no active version; nothing was moved, and they are listed again every run until the swap is resumed from the Version Management page (books %s, book paths %s)",
+		env.Log(slog.LevelWarn, fmt.Sprintf("Trash cleanup: %d book(s) have a version swap that did not finish and no active version; nothing was moved, and they are listed again every run until the swap is resumed from the Version Management page (books %s, book paths %s)",
 			len(res.SwapIncomplete), strings.Join(payload.SwapIncompleteBookIDs, ", "), strings.Join(payload.SwapIncompleteFilePaths, ", ")))
 	}
 	// The summary line is built before the error is looked at: a run that failed
@@ -832,7 +1109,7 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		// Not a failure (the op stays green), but three nights of nothing purged
 		// because the merge lock was never free is something to go and look at.
 		warn := fmt.Sprintf("Trash cleanup: stopped for the merge lock %d nights in a row, so the trash is not being purged; check what holds the merge lock around this time (a long combine, or merges queuing on it)", res.MergeStopStreak)
-		_ = reporter.Log(slog.LevelWarn, warn)
+		env.Log(slog.LevelWarn, warn)
 	}
 	if res.SwapIncompleteErr != nil {
 		// The unfinished swaps could not be listed: the night is reported as
@@ -855,19 +1132,11 @@ func (p *Plugin) runTrashCleanup(_ context.Context, _ json.RawMessage, reporter 
 		if res.Failed > 0 {
 			failed = fmt.Sprintf("; %d failed", res.Failed)
 		}
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("%s%s: %v", msg, failed, err))
-		if setErr != nil {
-			// Both are why the night failed: the purges, and the result the page
-			// reads back not being stored.
-			return errors.Join(err, fmt.Errorf("trash cleanup: persist result: %w", setErr))
-		}
-		return err
+		env.Log(slog.LevelWarn, fmt.Sprintf("%s%s: %v", msg, failed, err))
+		return payload, err
 	}
-	_ = reporter.Log(slog.LevelInfo, msg)
-	if setErr != nil {
-		return fmt.Errorf("trash cleanup: persist result: %w", setErr)
-	}
-	return nil
+	env.Log(slog.LevelInfo, msg)
+	return payload, nil
 }
 
 // ----- helpers -----

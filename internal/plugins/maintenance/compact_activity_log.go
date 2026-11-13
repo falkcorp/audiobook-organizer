@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 2.0.3
+// version: 2.1.0
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // CompactActivityLogDefID is the def id of the user-triggered activity-log
@@ -107,23 +108,75 @@ func (p *Plugin) compactActivityLogDef() sdk.OperationDef {
 	}
 }
 
+// compactActivityLogKind is the native kind of maintenance.compact-activity-log
+// (F5-08).
+const compactActivityLogKind tasks.Kind = "books." + CompactActivityLogDefID
+
+// compactActivityLogEnv is what compactAndRecordCore needs from its engine: the
+// base only (the one write is the writer's CompactActivityEntries).
+type compactActivityLogEnv struct{ t6g3Base }
+
+// runCompactActivityLog is the v2 shell of maintenance.compact-activity-log.
 func (p *Plugin) runCompactActivityLog(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
+	cutoff, startMsg, err := compactActivityLogPlan(raw, time.Now())
+	if err != nil {
+		return err
+	}
+	return p.compactAndRecord(ctx, cutoff, startMsg, "compact-activity-log", reporter)
+}
+
+// compactActivityLogPlan is the params half both shells share: decode and bound
+// the params, then the cutoff and the opening line. A refusal here happens
+// before the run says or writes anything.
+func compactActivityLogPlan(raw json.RawMessage, now time.Time) (cutoff time.Time, startMsg string, err error) {
 	params, err := decodeCompactActivityLogParams(raw)
 	if err != nil {
-		return err
+		return time.Time{}, "", err
 	}
-	cutoff, err := compactCutoff(time.Now(), params.OlderThanDays)
+	cutoff, err = compactCutoff(now, params.OlderThanDays)
 	if err != nil {
-		return err
+		return time.Time{}, "", err
 	}
 
-	startMsg := fmt.Sprintf("Compacting activity entries older than %s (%d days)",
+	startMsg = fmt.Sprintf("Compacting activity entries older than %s (%d days)",
 		cutoff.UTC().Format(time.RFC3339), params.OlderThanDays)
 	if params.OlderThanDays == 0 {
 		startMsg = fmt.Sprintf("Compacting every activity entry up to %s",
 			cutoff.UTC().Format(time.RFC3339))
 	}
-	return p.compactAndRecord(ctx, cutoff, startMsg, "compact-activity-log", reporter)
+	return cutoff, startMsg, nil
+}
+
+// compactActivityLogKind builds the native kind. Its params are the raw payload,
+// decoded and bounded by the same compactActivityLogPlan as HEAD's: a missing
+// older_than_days must stay a refusal, and a typed struct would decode it to
+// zero, which means "compact everything". Live-only writer. Writes found:
+// CompactActivityEntries collapses activity rows into daily digests (activity).
+func (p *Plugin) compactActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "activity"))
+	return tasks.Task(compactActivityLogKind, tasks.TaskSpec[json.RawMessage, CompactActivityLogResult]{
+		Common: t6g3Common(p.compactActivityLogDef(), compactActivityLogKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (CompactActivityLogResult, error) {
+			if err := t6g3LiveOnly(compactActivityLogKind, rc); err != nil {
+				return CompactActivityLogResult{}, err
+			}
+			cutoff, startMsg, err := compactActivityLogPlan(raw, time.Now())
+			if err != nil {
+				return CompactActivityLogResult{}, err
+			}
+			base, err := t6g3NativeBase(compactActivityLogKind, rc, deps, true)
+			if err != nil {
+				return CompactActivityLogResult{}, err
+			}
+			result, err := compactAndRecordCore(rc.Context(), cutoff, startMsg, compactActivityLogEnv{base})
+			if err != nil {
+				// core drops a failed run's result (core/tasks/erased.go): see the
+				// F5-08 seams note.
+				return result, fmt.Errorf("compact-activity-log: %w", err)
+			}
+			return result, nil
+		},
+	})
 }
 
 // compactAndRecord is the reporting half shared by the manual
@@ -134,14 +187,30 @@ func (p *Plugin) runCompactActivityLog(ctx context.Context, raw json.RawMessage,
 // cutoff; everything after that is this function, so a fix to the liveness or
 // result shape cannot land on one and miss the other.
 func (p *Plugin) compactAndRecord(ctx context.Context, cutoff time.Time, startMsg, opName string, reporter sdk.Reporter) error {
+	result, err := compactAndRecordCore(ctx, cutoff, startMsg, compactActivityLogEnv{p.t6g3HeadBase(ctx, reporter, true)})
+	if setErr := opsregistry.ReporterSetResult(reporter, result); setErr != nil {
+		if err != nil {
+			return fmt.Errorf("%s: %w (and persisting the result failed: %v)", opName, err, setErr)
+		}
+		return fmt.Errorf("%s: persist result: %w", opName, setErr)
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", opName, err)
+	}
+	return nil
+}
+
+// compactAndRecordCore is the shared body: the compaction and its reporting,
+// returning the result the shell stores. err is the compaction's own, unwrapped.
+func compactAndRecordCore(ctx context.Context, cutoff time.Time, startMsg string, env compactActivityLogEnv) (CompactActivityLogResult, error) {
 	logger.InfoCtx(ctx, startMsg)
-	_ = reporter.Log(slog.LevelInfo, startMsg)
+	env.Log(slog.LevelInfo, startMsg)
 	// First liveness stamp BEFORE the store is called: with nothing to do
 	// there are no chunk events, and the watchdog's never_reported strike must
 	// not fire on an op that finished in milliseconds but was slow to persist.
-	_ = reporter.UpdateProgress(0, 0, "starting compaction")
+	env.Progress(0, 0, "starting compaction")
 
-	totals, err := p.deps.CompactActivityEntries(ctx, cutoff, compactProgressToReporter(reporter))
+	totals, err := env.Writer.CompactActivityEntries(ctx, cutoff, compactProgressVia(env.Progress))
 
 	outcome := CompactBackendOutcome{DaysCompacted: totals.DaysCompacted, EntriesDeleted: totals.EntriesDeleted}
 	if err != nil {
@@ -159,23 +228,13 @@ func (p *Plugin) compactAndRecord(ctx context.Context, cutoff time.Time, startMs
 	if err != nil {
 		totalMsg = fmt.Sprintf("Activity compaction FAILED after %d days compacted, %d entries removed: %v",
 			result.DaysCompacted, result.EntriesDeleted, err)
-		_ = reporter.Log(slog.LevelError, totalMsg)
+		env.Log(slog.LevelError, totalMsg)
 	} else {
-		_ = reporter.Log(slog.LevelInfo, totalMsg)
+		env.Log(slog.LevelInfo, totalMsg)
 	}
 	logger.InfoCtx(ctx, totalMsg)
-	_ = reporter.UpdateProgress(result.EntriesDeleted, result.EntriesDeleted, totalMsg)
-
-	if setErr := opsregistry.ReporterSetResult(reporter, result); setErr != nil {
-		if err != nil {
-			return fmt.Errorf("%s: %w (and persisting the result failed: %v)", opName, err, setErr)
-		}
-		return fmt.Errorf("%s: persist result: %w", opName, setErr)
-	}
-	if err != nil {
-		return fmt.Errorf("%s: %w", opName, err)
-	}
-	return nil
+	env.Progress(result.EntriesDeleted, result.EntriesDeleted, totalMsg)
+	return result, err
 }
 
 // decodeCompactActivityLogParams decodes and bounds the op's params.
@@ -232,13 +291,19 @@ func compactCutoff(now time.Time, days int) (time.Time, error) {
 // windows). The single Pebble store emits none of those, so they went with
 // the SQLite backend on 2026-10-19.
 func compactProgressToReporter(reporter sdk.Reporter) database.CompactProgress {
+	return compactProgressVia(func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) })
+}
+
+// compactProgressVia is compactProgressToReporter over a progress function, the
+// form a shared core takes from its env (rule R10).
+func compactProgressVia(update func(done, total int, msg string)) database.CompactProgress {
 	return func(ev database.CompactProgressEvent) {
 		msg := fmt.Sprintf("%s: %d days compacted, %d entries removed so far",
 			ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted)
 		if !ev.Day.IsZero() {
 			msg += fmt.Sprintf(" (day %s)", ev.Day.UTC().Format("2006-01-02"))
 		}
-		_ = reporter.UpdateProgress(ev.Result.EntriesDeleted, 0, msg)
+		update(ev.Result.EntriesDeleted, 0, msg)
 	}
 }
 
@@ -254,6 +319,12 @@ func compactProgressToReporter(reporter sdk.Reporter) database.CompactProgress {
 // because the hook rides a context and nothing promises a pass stays
 // single-goroutine.
 func maintenanceProgressToReporter(reporter sdk.Reporter) database.MaintenanceProgress {
+	return maintenanceProgressVia(func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) })
+}
+
+// maintenanceProgressVia is maintenanceProgressToReporter over a progress
+// function, the form a shared core takes from its env (rule R10).
+func maintenanceProgressVia(update func(done, total int, msg string)) database.MaintenanceProgress {
 	type phaseBackend struct{ phase, backend string }
 	var (
 		mu     sync.Mutex
@@ -276,6 +347,6 @@ func maintenanceProgressToReporter(reporter sdk.Reporter) database.MaintenancePr
 		} else {
 			msg = fmt.Sprintf("%s: %s %d rows so far", ev.Phase, ev.Backend, ev.Rows)
 		}
-		_ = reporter.UpdateProgress(int(total), 0, msg)
+		update(int(total), 0, msg)
 	}
 }
