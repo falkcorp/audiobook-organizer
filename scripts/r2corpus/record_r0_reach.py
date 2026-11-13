@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.0.1
+# version: 1.1.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -38,6 +38,8 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import datetime
+import functools
+import http.client
 import http.cookiejar
 import importlib.util
 import json
@@ -45,6 +47,7 @@ import pathlib
 import re
 import shutil
 import sys
+import threading
 import urllib.error
 import urllib.request
 from typing import Any, Callable
@@ -209,7 +212,51 @@ def verdict_of(status: int, key: str) -> str:
     return DENY if status in DENY_STATUSES else ALLOW
 
 
-def status_only(client: Any, method: str, path: str, body: Any, auth: str, timeout: float) -> int:
+class SourceIPs:
+    """A fresh loopback source address per request (127.0.0.0/8, all local on Linux).
+
+    R0 limits each peer address to a token bucket (100 a minute, burst 20) and
+    the setting is read from the store, not the environment, so ENABLE_RATE_LIMIT
+    cannot turn it off. One address per probe never meets another's bucket: the
+    limiter stays on, as R0 ships it, and no probe waits for it.
+    """
+
+    SPAN = 1 << 24
+
+    def __init__(self) -> None:
+        self._n = 1
+        self._lock = threading.Lock()
+
+    def next(self) -> str:
+        with self._lock:
+            self._n = self._n % (self.SPAN - 2) + 1
+            n = self._n
+        return f"127.{(n >> 16) & 255}.{(n >> 8) & 255}.{n & 255}"
+
+
+# Set by main() from --spread-source-ips; None sends from the default address.
+SOURCES: SourceIPs | None = None
+
+
+class _FromAddress(urllib.request.HTTPHandler):
+    def __init__(self, address: str) -> None:
+        super().__init__()
+        self.address = address
+
+    def http_open(self, req: urllib.request.Request):
+        conn = functools.partial(http.client.HTTPConnection, source_address=(self.address, 0))
+        return self.do_open(conn, req)
+
+
+def status_only(
+    client: Any,
+    method: str,
+    path: str,
+    body: Any,
+    auth: str,
+    timeout: float,
+    source: str | None = None,
+) -> int:
     """Send one request and return its status without reading the body.
 
     The writer's client reads the whole body, which never ends for an event
@@ -229,6 +276,8 @@ def status_only(client: Any, method: str, path: str, body: Any, auth: str, timeo
         jar = client.jars.setdefault(auth, http.cookiejar.CookieJar())
         handlers.append(urllib.request.HTTPCookieProcessor(jar))
     req = urllib.request.Request(client.base + path, data=data, method=method, headers=hdrs)
+    if source:
+        handlers.append(_FromAddress(source))
     opener = urllib.request.build_opener(*handlers)
     try:
         with opener.open(req, timeout=timeout) as r:
@@ -254,7 +303,8 @@ class Probe:
         is authorized can reach a stream (SSE) that never ends, and the verdict
         is the status, which the headers already carry."""
         try:
-            return status_only(self.client, method, path, body, self.auth, 60.0)
+            source = SOURCES.next() if SOURCES else None
+            return status_only(self.client, method, path, body, self.auth, 60.0, source)
         except OSError as e:  # connection refused/reset, timeout: the server died
             raise RecorderError(f"{self.principal['name']} {method} {path}: {e}") from e
 
@@ -757,6 +807,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--out", default=str(REACH_DIR), help="write the data here")
     ap.add_argument("--workers", type=int, default=8, help="principals probed in parallel")
     ap.add_argument("--settle-timeout", type=float, default=360.0)
+    ap.add_argument(
+        "--spread-source-ips",
+        action=argparse.BooleanOptionalAction,
+        default=sys.platform.startswith("linux"),
+        help="send each probe from its own 127.x.y.z address, so R0's per-address "
+        "rate limit never answers 429 (needs a loopback that owns all of 127/8: Linux)",
+    )
     return ap
 
 
@@ -769,6 +826,8 @@ def main(argv: list[str] | None = None) -> int:
     if not (args.regenerate or args.check):
         print("nothing to do: pass --list, --regenerate or --check", file=sys.stderr)
         return 2
+    global SOURCES
+    SOURCES = SourceIPs() if args.spread_source_ips else None
     try:
         pdoc, vdoc = record(args)
     except (w.CorpusError, RecorderError) as e:
