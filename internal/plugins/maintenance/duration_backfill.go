@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.15.2
+// version: 2.16.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -97,6 +97,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 type durationReextractParams struct {
@@ -707,6 +708,68 @@ func processBookForReextractMode(
 // stamped on every row regardless. A var so tests can set it to zero.
 var reextractSegmentProgressInterval = 15 * time.Second
 
+// durationBackfillKind is the native kind of maintenance.duration-backfill (rule R3).
+const durationBackfillKind tasks.Kind = "books." + durationBackfillOpID
+
+// durationBackfillEnv is what the core needs from its engine (rules R2 and R10).
+// SetUnknownRowsResult persists the unknownRows mode's op result where the shell
+// has a place for one (HEAD's reporter); the native shell leaves it nil and the
+// result is the core's return value.
+type durationBackfillEnv struct {
+	t6g4Base
+	SetUnknownRowsResult func(UnknownRowsResult) error
+}
+
+// durationBackfillNativeParams is durationReextractParams for the native run:
+// the mode comes from the start request, so dryRun and dry_run are accepted only
+// to be refused. SkipAgeDays is a pointer because the unknownRows mode refuses
+// the key when it is present at all (HEAD reads that off the raw params).
+type durationBackfillNativeParams struct {
+	Limit               int      `json:"limit"`
+	Workers             int      `json:"workers"`
+	SkipAgeDays         *int     `json:"skipAgeDays,omitempty"`
+	Force               bool     `json:"force"`
+	OnlyMissingDuration bool     `json:"onlyMissingDuration"`
+	BookIDs             []string `json:"bookIds,omitempty"`
+	BookIDsSnake        []string `json:"book_ids,omitempty"`
+	ZeroRowsOnly        bool     `json:"zeroRowsOnly"`
+	ZeroRowsOnlySnake   bool     `json:"zero_rows_only"`
+	Mode                string   `json:"mode,omitempty"`
+	FileIDs             []string `json:"fileIds,omitempty"`
+	FileIDsSnake        []string `json:"file_ids,omitempty"`
+	DryRun              *bool    `json:"dryRun,omitempty"`
+	DryRunSnake         *bool    `json:"dry_run,omitempty"`
+}
+
+// durationBackfillResult is the run's outcome. The book-grain run fills the
+// counters; the unknownRows mode fills UnknownRows instead.
+type durationBackfillResult struct {
+	DryRun             bool               `json:"dry_run"`
+	Examined           int                `json:"examined"`
+	Eligible           int                `json:"eligible"`
+	FromFingerprint    int                `json:"from_fingerprint"`
+	FromStored         int                `json:"from_stored"`
+	FromFfprobe        int                `json:"from_ffprobe"`
+	WouldChange        int                `json:"would_change"`
+	RoughlyDouble      int                `json:"roughly_double"`
+	MSCorrectedRows    int                `json:"ms_corrected_rows"`
+	Incomplete         int                `json:"incomplete_books"`
+	RecentlyVerified   int                `json:"recently_verified_skipped"`
+	Estimated          int                `json:"estimated_segments"`
+	MissingOnDisk      int                `json:"missing_on_disk"`
+	ReadErrors         int                `json:"read_errors"`
+	WriteErrors        int                `json:"write_errors"`
+	NoFilePath         int                `json:"no_filepath"`
+	NoOwnFolderSkipped int                `json:"no_own_folder_skipped"`
+	ITunesSkipped      int                `json:"itunes_skipped"`
+	CopyBooks          int                `json:"copy_books"`
+	CopyRows           int                `json:"copy_rows_untouched"`
+	Corrected          int                `json:"corrected"`
+	Summary            string             `json:"summary,omitempty"`
+	UnknownRows        *UnknownRowsResult `json:"unknown_rows,omitempty"`
+}
+
+// runDurationBackfill is the v2 shell around runDurationBackfillCore (rule R2 item 2).
 func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	params := durationReextractParams{Workers: 4, SkipAgeDays: 90} // safe defaults
 	if len(raw) > 0 {
@@ -722,6 +785,83 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	if err != nil {
 		return err
 	}
+	store := p.deps.OpsStore()
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err = p.runDurationBackfillCore(ctx, params, raw, durationBackfillEnv{
+		t6g4Base:             t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}),
+		SetUnknownRowsResult: func(res UnknownRowsResult) error { return registry.ReporterSetResult(reporter, res) },
+	})
+	return err
+}
+
+// durationBackfillKindDef is the native shell (rule R2 item 3). HEAD has a
+// preview, so a preview run counts and writes nothing.
+func (p *Plugin) durationBackfillKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(durationBackfillKind, tasks.TaskSpec[durationBackfillNativeParams, durationBackfillResult]{
+		Common: tasks.Common{
+			Title: "Backfill book durations",
+			Help: "The single duration operation. Reads the real per-file duration already stored from fingerprinting (AcoustIDFingerprintDurationSec) first — a fast DB pass — " +
+				"and falls back to ffprobe only for never-fingerprinted files. Handles both multi-file and virtual single-file books. " +
+				"Corrects Book.Duration where the old fileSize÷bitrate estimate was wrong (PR #1555; m4b/m4a were ~2× too short). " +
+				"Never overwrites a real duration with an estimate, and skips books with any unreadable segment. " +
+				"A preview counts what would change (incl. fingerprint vs ffprobe split); start in live mode to apply. " +
+				"Workers param (default 4) controls ffprobe concurrency — higher = faster ffprobe tail. " +
+				"Set onlyMissingDuration=true to scope the run to books with no known duration. " +
+				"mode=unknownRows is the row-grain pass: it walks book_file rows in ANY book (copies and books/itunes rows included, read-only on disk) that no one has measured, " +
+				"borrows a duration from a sibling row at the same path, promotes the fingerprint duration, then ffprobes the rest (absent files are not probed; rows excluded from scanning are skipped); narrow it with fileIds / bookIds. On demand only.",
+			// Declared write-set (as HEAD, dispatcher Gate 3b): this op rewrites
+			// book_file rows. It also writes the book's own Duration and
+			// DurationVerifiedAt columns (ModifyBook), which HEAD never declared.
+			Effects:        tasks.Writes(t6g4Res("book_files", "books")...),
+			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:         tasks.ResumeDrop,
+			Priority:       tasks.PriorityLow,
+			ConcurrencyKey: tasks.Key("books." + durationBackfillOpID),
+			Timeout:        120 * time.Minute,
+			Schedule:       sched,
+			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in durationBackfillNativeParams) (durationBackfillResult, error) {
+			if in.DryRun != nil || in.DryRunSnake != nil {
+				return durationBackfillResult{}, fmt.Errorf("%s: dryRun and dry_run are not accepted; the run's mode comes from the start request", rc.Kind())
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return durationBackfillResult{}, err
+			}
+			params := durationReextractParams{
+				Workers: 4, SkipAgeDays: 90, // safe defaults, as HEAD's shell
+				Limit: in.Limit, Force: in.Force, OnlyMissingDuration: in.OnlyMissingDuration,
+				BookIDs: in.BookIDs, BookIDsSnake: in.BookIDsSnake,
+				ZeroRowsOnly: in.ZeroRowsOnly, ZeroRowsOnlySnake: in.ZeroRowsOnlySnake,
+				Mode: in.Mode, FileIDs: in.FileIDs, FileIDsSnake: in.FileIDsSnake,
+			}
+			if in.Workers != 0 {
+				params.Workers = in.Workers
+			}
+			// validateUnknownRowsParams reads the presence of skipAgeDays off the raw
+			// params, so a typed run presents the key exactly when it was set.
+			var raw json.RawMessage
+			if in.SkipAgeDays != nil {
+				params.SkipAgeDays = *in.SkipAgeDays
+				raw, _ = json.Marshal(map[string]int{"skipAgeDays": *in.SkipAgeDays})
+			}
+			return p.runDurationBackfillCore(rc.Context(), params, raw, durationBackfillEnv{t6g4Base: base})
+		},
+	})
+}
+
+// runDurationBackfillCore is HEAD's body (rule R2 item 1) after the shell
+// decoded params, resolved the mode and the store: env.Live is true exactly when
+// HEAD's dryRun is false. raw is the params as sent (the unknownRows validation
+// needs the presence of skipAgeDays). It reads through env.Store and writes only
+// through env.Writer.
+func (p *Plugin) runDurationBackfillCore(ctx context.Context, params durationReextractParams, raw json.RawMessage, env durationBackfillEnv) (durationBackfillResult, error) {
+	dryRun := !env.Live
+	store := env.Store
+	reporter := env.reporter(ctx)
 	// Clamp worker count.
 	if params.Workers < 1 {
 		params.Workers = 4
@@ -738,20 +878,35 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		skipBefore = time.Now().AddDate(0, 0, -params.SkipAgeDays)
 	}
 
-	store := p.deps.OpsStore()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-
 	if dryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
 	if params.Mode != "" || len(params.FileIDs) > 0 || len(params.FileIDsSnake) > 0 {
 		if err := validateUnknownRowsParams(params, raw); err != nil {
-			return err
+			return durationBackfillResult{DryRun: dryRun}, err
 		}
-		return p.runUnknownRowsBackfill(ctx, store, params, dryRun, reporter)
+		// HEAD hands the row walk the store it resolves AsCapability off, and a
+		// writer only when the store can defer aggregates (nil otherwise).
+		var writer segmentFailureWriter
+		if env.Store.DeferAggregatesAvailable() {
+			writer = env.Writer
+		}
+		var ur UnknownRowsResult
+		urSet := false
+		err := p.runUnknownRowsBackfillVia(ctx, t6g4View{env.Store, env.Writer}, writer, env.Each,
+			func(r UnknownRowsResult) error {
+				ur, urSet = r, true
+				if env.SetUnknownRowsResult != nil {
+					return env.SetUnknownRowsResult(r)
+				}
+				return nil
+			}, params, dryRun, reporter)
+		out := durationBackfillResult{DryRun: dryRun}
+		if urSet {
+			out.UnknownRows = &ur
+		}
+		return out, err
 	}
 
 	totalBooks, countErr := store.CountAllBooks()
@@ -805,6 +960,19 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		examples    = make([]string, 0, exampleCap)
 		lastLog     = time.Now()
 	)
+
+	// snap is the result so far; only the collector (this goroutine) calls it.
+	snap := func() durationBackfillResult {
+		return durationBackfillResult{
+			DryRun: dryRun, Examined: examined, Eligible: eligible,
+			FromFingerprint: fpBooks, FromStored: storedDurBooks, FromFfprobe: ffprobeBooks,
+			WouldChange: wouldChange, RoughlyDouble: roughlyDouble, MSCorrectedRows: msFixedRows,
+			Incomplete: incomplete, RecentlyVerified: recentlyVerified, Estimated: estimated,
+			MissingOnDisk: missingOnDisk, ReadErrors: readErrs, WriteErrors: writeErrs,
+			NoFilePath: noPath, NoOwnFolderSkipped: noOwnFolder, ITunesSkipped: itunesSkipped,
+			CopyBooks: copyBooks, CopyRows: copyRows, Corrected: written,
+		}
+	}
 
 	heartbeat := func(force bool) {
 		if !force && time.Since(lastLog) < logInterval {
@@ -902,7 +1070,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		if err := ctx.Err(); err != nil {
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 				"cancelled after %d books examined, %d corrected", examined, written))
-			return err
+			return snap(), err
 		}
 		examined++
 		heartbeat(false)
@@ -945,16 +1113,15 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		// not the book is eligible, and never in a dry run. This precedes the
 		// eligibility check on purpose: an all-failed book is ineligible.
 		if !dryRun && len(res.failedBFs) > 0 {
-			deferred, ok := database.AsCapability[segmentFailureWriter](store)
-			if !ok {
+			if !store.DeferAggregatesAvailable() {
 				writeErrs++
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: the store cannot defer aggregates; %d probe failure(s) not recorded", res.book.ID, len(res.failedBFs)))
 			} else {
-				_, nErr, fErr := recordSegmentProbeFailures(ctx, deferred, reporter, res.failedBFs)
+				_, nErr, fErr := recordSegmentProbeFailures(ctx, env.Writer, reporter, res.failedBFs)
 				if nErr > 0 || fErr != nil {
 					if ctx.Err() != nil {
-						return ctx.Err()
+						return snap(), ctx.Err()
 					}
 					writeErrs += nErr
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
@@ -980,7 +1147,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			// the next run for SkipAgeDays while its total is still short by
 			// every unresolved segment.
 			if !dryRun && res.unresolved == 0 {
-				stampVerifiedAt(store, reporter, res.book.ID)
+				stampVerifiedAt(env.Writer, reporter, res.book.ID)
 			}
 			continue
 		}
@@ -1021,7 +1188,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			}
 			bookID, nSeg := res.book.ID, len(rows)
 			lastSegLog := time.Now()
-			_, uErr := store.UpdateBookFiles(ctx, rows, func(i int, _ bool) {
+			_, uErr := env.Writer.UpdateBookFiles(ctx, rows, func(i int, _ bool) {
 				// A row write just finished: real work, so stamp liveness.
 				registry.TouchLiveness(reporter)
 				if time.Since(lastSegLog) >= reextractSegmentProgressInterval {
@@ -1040,7 +1207,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 						"cancelled while writing book %s's segments, after %d books examined, %d corrected",
 						bookID, examined, written))
-					return ctx.Err()
+					return snap(), ctx.Err()
 				}
 				// Not stamped verified, so the next run retries this book.
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
@@ -1049,7 +1216,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 				continue
 			}
 		} else if len(res.segs) > 0 {
-			if rErr := store.RecomputeBookAggregates(res.book.ID); rErr != nil {
+			if rErr := env.Writer.RecomputeBookAggregates(res.book.ID); rErr != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: RecomputeBookAggregates failed: %v", res.book.ID, rErr))
 				writeErrs++
@@ -1073,7 +1240,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			nd := res.newDur
 			oldDur := res.book.Duration
 			applied := false
-			row, uErr := store.ModifyBook(res.book.ID, func(cur *database.Book) error {
+			row, uErr := env.Writer.ModifyBook(res.book.ID, func(cur *database.Book) error {
 				if !sameIntPtr(cur.Duration, oldDur) {
 					return database.ErrSkipBookWrite
 				}
@@ -1104,14 +1271,14 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		// incomplete book would hide its short total from the next run for
 		// SkipAgeDays.
 		if res.unresolved == 0 {
-			stampVerifiedAt(store, reporter, res.book.ID)
+			stampVerifiedAt(env.Writer, reporter, res.book.ID)
 		}
 		heartbeat(false)
 	}
 
 	// Wait for producer and surface any non-limit error.
 	if err := <-producerErr; err != nil && err != errLimitReached {
-		return fmt.Errorf("book scan: %w", err)
+		return snap(), fmt.Errorf("book scan: %w", err)
 	}
 
 	if n := warns.suppressed(); n > 0 {
@@ -1135,7 +1302,9 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		total = examined
 	}
 	_ = reporter.UpdateProgress(total, total, summary)
-	return nil
+	out := snap()
+	out.Summary = summary
+	return out, nil
 }
 
 // readFailureCounts renders the two read-failure counters for the progress and

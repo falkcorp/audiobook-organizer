@@ -87,6 +87,7 @@ type t6g4Store interface {
 	t6g4OpQueueReads
 	t6g4FileIntroReads
 	t6g4RegroupReads
+	t6g4DurationReads
 }
 
 // t6g4Writer holds exactly the WRITE methods this group's cores call. Where HEAD
@@ -105,6 +106,7 @@ type t6g4Writer interface {
 	t6g4BookModifyWrites
 	t6g4BookFilesBatchWrites
 	t6g4RegroupWrites
+	t6g4DurationWrites
 }
 
 // t6g4BookFileReads is the book_file read the file-integrity scan makes.
@@ -282,6 +284,28 @@ type t6g4RegroupWrites interface {
 	ReassignExternalID(source, externalID, newBookID string) error
 }
 
+// t6g4DurationReads is what duration-backfill reads beyond the shared groups: the
+// library's book count (the progress denominator), and whether the store can
+// defer aggregates on a row write (HEAD's database.AsCapability probe).
+type t6g4DurationReads interface {
+	CountAllBooks() (int, error)
+	DeferAggregatesAvailable() bool
+}
+
+// t6g4DurationWrites is the per-row book_file write that defers the book's
+// aggregate recompute (a probe-failure record, or an unknownRows measurement).
+type t6g4DurationWrites interface {
+	ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+}
+
+// t6g4View is the read-write store a core hands to a helper that needs both
+// (a recompute that follows its own row writes, a ledger helper): the env's
+// reads and the env's writes, nothing else.
+type t6g4View struct {
+	t6g4Store
+	t6g4Writer
+}
+
 // t6g4ReportPath is the report-path resolution Plugin.resolveReportPath makes,
 // over the library root a core reads from its store rather than from the
 // plugin's deps: the caller's explicit path when given, else
@@ -370,6 +394,9 @@ func t6g4Par(o t6g4EachOpts, reason string) tasks.Parallelism {
 		return tasks.Sequential(reason)
 	}
 }
+
+// t6g4EachFn is the type of t6g4Base.Each, for the helpers that take a loop runner.
+type t6g4EachFn = func(ctx context.Context, n int, o t6g4EachOpts, fn func(ctx context.Context, i int) error) error
 
 // t6g4RunEach is the shared native loop: tasks.RunItems over the indexes.
 func t6g4RunEach(rc *tasks.RC, n int, o t6g4EachOpts, fn func(ctx context.Context, i int) error) error {
@@ -598,6 +625,11 @@ func (h headT6G4Store) GetChaptersForBook(bookID string) ([]database.Chapter, er
 	return r.GetChaptersForBook(bookID)
 }
 
+func (h headT6G4Store) DeferAggregatesAvailable() bool {
+	_, ok := database.AsCapability[segmentFailureWriter](h.OpsStore)
+	return ok
+}
+
 func (h headT6G4Store) FileIntroWritesAvailable() bool {
 	_, ok := database.AsCapability[database.BookFileIntroStore](h.OpsStore)
 	return ok
@@ -683,6 +715,14 @@ func (h headT6G4Writer) ReassignExternalID(source, externalID, newBookID string)
 
 func (h headT6G4Writer) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
 	return h.store.UpdateBookFiles(ctx, files, afterRow)
+}
+
+func (h headT6G4Writer) ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	w, ok := database.AsCapability[segmentFailureWriter](h.store)
+	if !ok {
+		return nil, fmt.Errorf("the store cannot defer aggregates")
+	}
+	return w.ModifyBookFileDeferAggregates(bookID, fileID, fn)
 }
 
 func (h headT6G4Writer) intros() (database.BookFileIntroStore, error) {
@@ -814,6 +854,7 @@ func (p *Plugin) t6g4Kinds(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule
 		p.dedupeBookFileRowsKind(deps, at(dedupeBookFileRowsKind)),
 		p.fileIntroTranscribeKind(deps, at(fileIntroKind)),
 		p.fsRegroupXMLKind(deps, at(fsRegroupKind)),
+		p.durationBackfillKind(deps, at(durationBackfillKind)),
 	}
 }
 
