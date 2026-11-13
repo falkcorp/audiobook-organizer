@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_sidecar_migrate.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 2c8f6a90-4b17-4e35-9d82-1a5e703c6f84
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -16,8 +16,8 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // maintenance.booksig-sidecar-migrate finishes the job PR #2387 started.
@@ -72,26 +72,39 @@ const bookSigMigratePageSize = 200
 // warmup numbers.
 const bookSigInlineBytesPerBook = 22 * 1024
 
+// bookSigSidecarMigrateID is HEAD's def ID; the native kind is "books." + it.
+const bookSigSidecarMigrateID = "maintenance.booksig-sidecar-migrate"
+
+// t6g2KindBookSigSidecarMigrate is the native kind (F5-07, rule R3).
+const t6g2KindBookSigSidecarMigrate tasks.Kind = "books." + bookSigSidecarMigrateID
+
+// DisplayName and Description of the def, shared by HEAD's def and the native
+// kind so the two cannot drift.
+const (
+	t6g2BookSigSidecarMigrateTitle = "Migrate inline book signatures into the book_sig: sidecar"
+	t6g2BookSigSidecarMigrateHelp  = "Dry-run audit (default) or explicit apply of the #2387 storage migration. " +
+		"Walks every book: row and, for any row still carrying the five inline BookSig* " +
+		"fields, writes the book_sig:<id> sidecar and rewrites the row without them — both " +
+		"in ONE Pebble batch, so a row is never stripped without its sidecar. Reads are " +
+		"fallback-first, so un-migrated and migrated books both work throughout and the op " +
+		"is safe to re-run or to stop midway. Dry-run (default) only classifies and reports " +
+		"counts. Apply mode (dryRun=false, explicit only) performs the only irreversible " +
+		"step in the sidecar design. Set limit=N to migrate a small canary first. Books " +
+		"whose row changes underneath the migration are skipped and counted, never " +
+		"half-written."
+)
+
 func (p *Plugin) bookSigSidecarMigrateDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          "maintenance.booksig-sidecar-migrate",
-		Preview:     sdk.PreviewSpec{Params: bookSigSidecarMigrateParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "maintenance",
-		DisplayName: "Migrate inline book signatures into the book_sig: sidecar",
-		Description: "Dry-run audit (default) or explicit apply of the #2387 storage migration. " +
-			"Walks every book: row and, for any row still carrying the five inline BookSig* " +
-			"fields, writes the book_sig:<id> sidecar and rewrites the row without them — both " +
-			"in ONE Pebble batch, so a row is never stripped without its sidecar. Reads are " +
-			"fallback-first, so un-migrated and migrated books both work throughout and the op " +
-			"is safe to re-run or to stop midway. Dry-run (default) only classifies and reports " +
-			"counts. Apply mode (dryRun=false, explicit only) performs the only irreversible " +
-			"step in the sidecar design. Set limit=N to migrate a small canary first. Books " +
-			"whose row changes underneath the migration are skipped and counted, never " +
-			"half-written.",
+		ID:              bookSigSidecarMigrateID,
+		Preview:         sdk.PreviewSpec{Params: bookSigSidecarMigrateParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "maintenance",
+		DisplayName:     t6g2BookSigSidecarMigrateTitle,
+		Description:     t6g2BookSigSidecarMigrateHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.booksig-sidecar-migrate",
+		ConcurrencyKey:  bookSigSidecarMigrateID,
 		Cancellable:     true,
 		// Isolate means out-of-process, and Pebble is single-writer: a child
 		// cannot reopen the database. Must stay false.
@@ -110,52 +123,60 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
-	dryRun, err := opmode.ResolveDryRun("maintenance.booksig-sidecar-migrate", params.DryRunSnake, params.DryRun)
+	dryRun, err := opmode.ResolveDryRun(bookSigSidecarMigrateID, params.DryRunSnake, params.DryRun)
 	if err != nil {
 		return err
 	}
-	log := reporter.Logger()
-
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	env := headT6G2Wire(headT6G2Env(p, reporter), p, store)
+	env.Items = headT6G2Items(reporter, runtime.NumCPU())
+	_, err = runBookSigSidecarMigrateCore(ctx, params.Limit, dryRun, env)
+	return err
+}
 
-	// Resolve through the capability helper, never a bare type assertion: the server
-	// used to install the Bleve indexedStore decorator (removed in 07-S3), and `store.(*PebbleStore)`
-	// against a wrapped store is indistinguishable from a genuinely unsupported
-	// backend. Several ops silently no-opped in production exactly that way. A
-	// hard error here is deliberate — "unsupported store, 0 books migrated" must
-	// never be reportable as success.
-	migrator := database.AsBookSigMigrateStore(store)
-	if migrator == nil {
-		return fmt.Errorf("store does not support book signature migration (got %T); "+
-			"this op requires a Pebble-backed store and must not report success without one", store)
+// runBookSigSidecarMigrateCore is the body shared by HEAD's shell and the native
+// kind: limit is the canary cap and dryRun the resolved mode.
+func runBookSigSidecarMigrateCore(ctx context.Context, limit int, dryRun bool, env t6g2Env) (t6g2NoResult, error) {
+	log := env.Logger
+	store := env.Store
+
+	// Resolve through the capability probe, never a bare type assertion: the
+	// server used to install the Bleve indexedStore decorator (removed in 07-S3),
+	// and `store.(*PebbleStore)` against a wrapped store is indistinguishable
+	// from a genuinely unsupported backend. Several ops silently no-opped in
+	// production exactly that way. A hard error here is deliberate — "unsupported
+	// store, 0 books migrated" must never be reportable as success.
+	if !store.Supports(t6g2CapSigMigrate) {
+		return t6g2NoResult{}, fmt.Errorf("store does not support book signature migration (got %s); "+
+			"this op requires a Pebble-backed store and must not report success without one", store.Describe())
 	}
 
 	if dryRun {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — classifying only, no rows or sidecars will be written")
+		env.Log(slog.LevelInfo, "DRY RUN — classifying only, no rows or sidecars will be written")
 	} else {
-		_ = reporter.Log(slog.LevelWarn, "APPLY MODE — rewriting book: rows and writing book_sig: sidecars (irreversible)")
+		env.Log(slog.LevelWarn, "APPLY MODE — rewriting book: rows and writing book_sig: sidecars (irreversible)")
 	}
 
 	ids, err := store.ListBookIDs()
 	if err != nil {
-		return fmt.Errorf("ListBookIDs: %w", err)
+		return t6g2NoResult{}, fmt.Errorf("ListBookIDs: %w", err)
 	}
 	libraryTotal := len(ids)
-	if params.Limit > 0 && params.Limit < len(ids) {
-		ids = ids[:params.Limit]
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	if limit > 0 && limit < len(ids) {
+		ids = ids[:limit]
+		env.Log(slog.LevelInfo, fmt.Sprintf(
 			"CANARY — limit=%d, examining the first %d of %d books; the remainder are untouched and a later run resumes from here",
-			params.Limit, len(ids), libraryTotal))
+			limit, len(ids), libraryTotal))
 	}
 	total := len(ids)
 	if total == 0 {
-		_ = reporter.UpdateProgress(1, 1, "No books to examine")
-		return nil
+		env.Progress(1, 1, "No books to examine")
+		return t6g2NoResult{}, nil
 	}
-	_ = reporter.UpdateProgress(0, total, "Migrating inline book signatures to the sidecar…")
+	env.Progress(0, total, "Migrating inline book signatures to the sidecar…")
 
 	var (
 		examined     atomic.Int64
@@ -167,13 +188,23 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 	)
 
 	pages := chunkIDs(ids, bookSigMigratePageSize)
-	runErr := registry.RunItems(ctx, reporter, pages, func(ctx context.Context, page []string) error {
-		for _, id := range page {
+	runErr := env.Items(ctx, len(pages), t6g2Loop{
+		ProgressTotal: len(pages),
+		// Label runs inside the worker goroutines: it reads only atomics.
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Page %d/%d — %d migrated, %d stripped-only, %d raced",
+				i+1, t, migrated.Load(), strippedOnly.Load(), skippedRaced.Load())
+		},
+	}, func(ctx context.Context, pi int) error {
+		// CPU-bound work (JSON decode/encode) plus a small Pebble write per
+		// candidate. Books partition by ID across disjoint pages, so workers
+		// never contend for a row.
+		for _, id := range pages[pi] {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			examined.Add(1)
-			outcome, err := migrator.MigrateBookSigToSidecar(id, dryRun)
+			outcome, err := env.Writer.MigrateBookSigToSidecar(id, dryRun)
 			if err != nil {
 				// One unreadable or malformed row must not abort a
 				// whole-library pass; it is counted and reported, and the row
@@ -194,16 +225,6 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 			}
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		// CPU-bound work (JSON decode/encode) plus a small Pebble write per
-		// candidate. Books partition by ID across disjoint pages, so workers
-		// never contend for a row.
-		Concurrency:   runtime.NumCPU(),
-		ProgressTotal: len(pages),
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Page %d/%d — %d migrated, %d stripped-only, %d raced",
-				i+1, t, migrated.Load(), strippedOnly.Load(), skippedRaced.Load())
-		},
 	})
 
 	candidates := migrated.Load() + strippedOnly.Load() + skippedRaced.Load()
@@ -234,12 +255,57 @@ func (p *Plugin) runBookSigSidecarMigrate(ctx context.Context, raw json.RawMessa
 		"implied_inline_mb", impliedMB)
 
 	if skippedRaced.Load() > 0 {
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+		env.Log(slog.LevelInfo, fmt.Sprintf(
 			"%d books were written by another path mid-migration and were skipped rather than reverted; re-run to pick them up",
 			skippedRaced.Load()))
 	}
 
-	_ = reporter.Log(slog.LevelInfo, report)
-	_ = reporter.UpdateProgress(len(pages), len(pages), report)
-	return runErr
+	env.Log(slog.LevelInfo, report)
+	env.Progress(len(pages), len(pages), report)
+	return t6g2NoResult{}, runErr
+}
+
+// t6g2BookSigSidecarMigrateParallelism is HEAD's page pool: one worker per CPU
+// (JSON decode/encode plus a small Pebble write per candidate).
+func t6g2BookSigSidecarMigrateParallelism() tasks.Parallelism { return tasks.CPU() }
+
+func t6g2BookSigSidecarMigrateMeta() t6g2Meta {
+	return t6g2Meta{
+		Kind:     t6g2KindBookSigSidecarMigrate,
+		Title:    t6g2BookSigSidecarMigrateTitle,
+		Help:     t6g2BookSigSidecarMigrateHelp,
+		Effects:  tasks.Writes(t6g2Res("books")...),
+		Resume:   tasks.ResumeDrop,
+		Priority: tasks.PriorityLow,
+		Timeout:  90 * time.Minute,
+		Key:      bookSigSidecarMigrateID,
+	}
+}
+
+// t6g2BookSigSidecarMigrateNativeParams is the native kind's params: the canary
+// cap only. The mode is the run's mode, never a param.
+type t6g2BookSigSidecarMigrateNativeParams struct {
+	Limit int `json:"limit"`
+}
+
+func t6g2BookSigSidecarMigrateKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	m := t6g2BookSigSidecarMigrateMeta()
+	par := t6g2BookSigSidecarMigrateParallelism()
+	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
+		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+			return t6g2NoResult{}, err
+		}
+		var params t6g2BookSigSidecarMigrateNativeParams
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &params); err != nil {
+				return t6g2NoResult{}, fmt.Errorf("%s: invalid params: %w", m.Kind, err)
+			}
+		}
+		env, err := t6g2NativeEnv(rc, deps, par)
+		if err != nil {
+			return t6g2NoResult{}, err
+		}
+		return runBookSigSidecarMigrateCore(rc.Context(), params.Limit, !t6g2Live(rc), env)
+	}
+	return tasks.Task(m.Kind, tasks.TaskSpec[json.RawMessage, t6g2NoResult]{Common: m.common(sched), Run: run})
 }

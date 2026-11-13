@@ -1,0 +1,3 @@
+### Changed
+
+- maintenance: the 13 definitions of the plugin's second group (external-id-backfill, movement-atom-cleanup, malformed-m4b-remux, malformed-m4b-transcode, book-atpath-index-verify, book-atpath-index-backfill, book-hash-index-repair, book-shape-report, bookfile-acoustid-index-repair, booksig-recovery-audit, booksig-sidecar-migrate, build-folder-book-files, chapters-backfill) each get a native `books.maintenance.<name>` task kind (F5-07), built dark: nothing registers them until the tasks flip, so a run behaves as before. Each body moved into a function shared by the existing operation and the new kind, which reach the store and every write only through what their shell hands them. The tasklint exemption entry for these files is deleted.

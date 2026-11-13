@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_acoustid_index_repair.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8b4e1d27-5f90-4c63-a2d8-e07c91b3f5a4
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -17,8 +17,8 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // maintenance.bookfile-acoustid-index-repair deletes the book_file_acoustid:
@@ -84,20 +84,30 @@ type bookFileAcoustIDIndexRepairer interface {
 	DeleteOrphanBookFileAcoustIDEntries(ctx context.Context, entries []database.BookFileAcoustIDEntry) (int, error)
 }
 
+// t6g2KindBookFileAcoustIDIndexRepair is the native kind (F5-07, rule R3).
+const t6g2KindBookFileAcoustIDIndexRepair tasks.Kind = "books." + bookFileAcoustIDIndexRepairID
+
+// DisplayName and Description of the def, shared by HEAD's def and the native
+// kind so the two cannot drift.
+const (
+	t6g2BookFileAcoustIDIndexRepairTitle = "Book file AcoustID index repair"
+	t6g2BookFileAcoustIDIndexRepairHelp  = "Deletes book_file_acoustid: index keys whose book_file row holds no matching " +
+		"AcoustID segment: keys the old create/update writers left for segments the row never " +
+		"stored. Preview by default: judges every key and reports counts, writes nothing. With " +
+		"dry_run=false it deletes the orphans, each judged again under the single-owner index " +
+		"lock before the delete. Keys whose row still stores the segment are left for " +
+		"dedup.bookfile-seg-drop; malformed values are reported, never deleted. GetBookFileByAcoustID " +
+		"stops answering for a deleted key. It never writes a book_file row."
+)
+
 func (p *Plugin) bookFileAcoustIDIndexRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          bookFileAcoustIDIndexRepairID,
-		Preview:     sdk.PreviewSpec{Params: opmode.DryRunParams{}},
-		Liveness:    sdk.LivenessRunItems,
-		Plugin:      "maintenance",
-		DisplayName: "Book file AcoustID index repair",
-		Description: "Deletes book_file_acoustid: index keys whose book_file row holds no matching " +
-			"AcoustID segment: keys the old create/update writers left for segments the row never " +
-			"stored. Preview by default: judges every key and reports counts, writes nothing. With " +
-			"dry_run=false it deletes the orphans, each judged again under the single-owner index " +
-			"lock before the delete. Keys whose row still stores the segment are left for " +
-			"dedup.bookfile-seg-drop; malformed values are reported, never deleted. GetBookFileByAcoustID " +
-			"stops answering for a deleted key. It never writes a book_file row.",
+		ID:              bookFileAcoustIDIndexRepairID,
+		Preview:         sdk.PreviewSpec{Params: opmode.DryRunParams{}},
+		Liveness:        sdk.LivenessRunItems,
+		Plugin:          "maintenance",
+		DisplayName:     t6g2BookFileAcoustIDIndexRepairTitle,
+		Description:     t6g2BookFileAcoustIDIndexRepairHelp,
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  bookFileAcoustIDIndexRepairID,
@@ -204,36 +214,54 @@ func (p *Plugin) runBookFileAcoustIDIndexRepair(ctx context.Context, raw json.Ra
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	repairer, ok := database.AsCapability[bookFileAcoustIDIndexRepairer](store)
-	if !ok {
-		return fmt.Errorf("%s: store is %T, which has no book_file_acoustid: index to repair", bookFileAcoustIDIndexRepairID, store)
+	env := headT6G2Wire(headT6G2Env(p, reporter), p, store)
+	env.Items = headT6G2Items(reporter, runtime.NumCPU())
+	_, err = runBookFileAcoustIDIndexRepairCore(ctx, t6g2AcoustIDRepairRun{Params: params, DryRun: dryRun}, env)
+	return err
+}
+
+// t6g2AcoustIDRepairRun is the core's input: the params as the run started
+// (checkpoints save them verbatim, so a restored run keeps its spelling of the
+// mode) and the mode already resolved.
+type t6g2AcoustIDRepairRun struct {
+	Params acoustIDRepairParams
+	DryRun bool
+}
+
+// runBookFileAcoustIDIndexRepairCore is the body shared by HEAD's shell and the
+// native kind. It scans and judges through env.Store, deletes through env.Writer
+// and judges each page on env.Items.
+func runBookFileAcoustIDIndexRepairCore(ctx context.Context, run t6g2AcoustIDRepairRun, env t6g2Env) (t6g2NoResult, error) {
+	params, dryRun := run.Params, run.DryRun
+	if !env.Store.Supports(t6g2CapAcoustIDRepair) {
+		return t6g2NoResult{}, fmt.Errorf("%s: store is %s, which has no book_file_acoustid: index to repair", bookFileAcoustIDIndexRepairID, env.Store.Describe())
 	}
 
 	verb := "deleting orphans"
 	if dryRun {
 		verb = "checking (preview, deletes nothing)"
 	}
-	_ = reporter.UpdateProgress(0, 0, "book_file_acoustid: index: "+verb)
+	env.Progress(0, 0, "book_file_acoustid: index: "+verb)
 
 	var tally acoustIDRepairTally
 	tally.restore(params.Done)
 	after := params.ResumeAfter
 	if after != "" {
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("resuming after a restart: %d keys already handled", tally.scanned.Load()))
+		env.Log(slog.LevelInfo, fmt.Sprintf("resuming after a restart: %d keys already handled", tally.scanned.Load()))
 	}
 	for {
-		page, next, err := repairer.ScanBookFileAcoustIDIndex(after, acoustIDRepairPage)
+		page, next, err := env.Store.ScanBookFileAcoustIDIndex(after, acoustIDRepairPage)
 		if err != nil {
-			return fmt.Errorf("%s: scan: %w", bookFileAcoustIDIndexRepairID, err)
+			return t6g2NoResult{}, fmt.Errorf("%s: scan: %w", bookFileAcoustIDIndexRepairID, err)
 		}
 		if len(page) > 0 {
-			orphans, err := judgeAcoustIDPage(ctx, reporter, repairer, page, &tally)
+			orphans, err := judgeAcoustIDPage(ctx, env, page, &tally)
 			if err != nil {
-				return fmt.Errorf("%s: %w", bookFileAcoustIDIndexRepairID, err)
+				return t6g2NoResult{}, fmt.Errorf("%s: %w", bookFileAcoustIDIndexRepairID, err)
 			}
 			if !dryRun {
-				if err := deleteAcoustIDOrphans(ctx, repairer, orphans, &tally); err != nil {
-					return fmt.Errorf("%s: %w", bookFileAcoustIDIndexRepairID, err)
+				if err := deleteAcoustIDOrphans(ctx, env.Writer, orphans, &tally); err != nil {
+					return t6g2NoResult{}, fmt.Errorf("%s: %w", bookFileAcoustIDIndexRepairID, err)
 				}
 			}
 		}
@@ -241,17 +269,15 @@ func (p *Plugin) runBookFileAcoustIDIndexRepair(ctx context.Context, raw json.Ra
 			break
 		}
 		after = next
-		// The page is fully judged (and deleted, live). Persist the cursor and
-		// the counts; a failed save costs only a re-judged page on restart.
 		params.ResumeAfter, params.Done = after, tally.done()
-		if err := reporter.Checkpoint(params); err != nil {
-			_ = reporter.Log(slog.LevelWarn, "Could not save the resume point; a restart would redo more",
+		if err := env.Checkpoint(params); err != nil {
+			env.Log(slog.LevelWarn, "Could not save the resume point; a restart would redo more",
 				slog.String("error", err.Error()))
 		}
 	}
 
 	for _, s := range tally.samples {
-		_ = reporter.Log(slog.LevelInfo, "orphan: "+s)
+		env.Log(slog.LevelInfo, "orphan: "+s)
 	}
 	msg := fmt.Sprintf("book_file_acoustid: index: %d keys; %d orphans (%d row lacks the segment, %d row gone); "+
 		"%d live legacy (left for dedup.bookfile-seg-drop); %d malformed (never deleted)",
@@ -266,23 +292,31 @@ func (p *Plugin) runBookFileAcoustIDIndexRepair(ctx context.Context, raw json.Ra
 	if tally.malformed.Load() > 0 {
 		level = slog.LevelWarn
 	}
-	_ = reporter.Log(level, msg)
-	_ = reporter.UpdateProgress(1, 1, msg)
-	return nil
+	env.Log(level, msg)
+	env.Progress(1, 1, msg)
+	return t6g2NoResult{}, nil
 }
 
-// judgeAcoustIDPage judges every entry of one scanned page on a worker pool and
+// judgeAcoustIDPage judges every entry of one scanned page on the env's pool and
 // returns the orphans. Judging is read-only, so the workers share no state but
 // the tally and the orphan list.
-func judgeAcoustIDPage(ctx context.Context, reporter sdk.Reporter, repairer bookFileAcoustIDIndexRepairer,
+func judgeAcoustIDPage(ctx context.Context, env t6g2Env,
 	page []database.BookFileAcoustIDEntry, tally *acoustIDRepairTally) ([]database.BookFileAcoustIDEntry, error) {
 	var (
 		mu      sync.Mutex
 		orphans []database.BookFileAcoustIDEntry
 	)
 	base := int(tally.scanned.Load())
-	err := registry.RunItems(ctx, reporter, page, func(_ context.Context, e database.BookFileAcoustIDEntry) error {
-		v, err := repairer.JudgeBookFileAcoustIDEntry(e)
+	err := env.Items(ctx, len(page), t6g2Loop{
+		// Label runs inside the worker goroutines: it reads no counter.
+		Label: func(i, total int) string {
+			return fmt.Sprintf("book_file_acoustid: key %d/%d of this page", i+1, total)
+		},
+		ProgressOffset: base,
+		ProgressTotal:  base + len(page),
+	}, func(_ context.Context, i int) error {
+		e := page[i]
+		v, err := env.Store.JudgeBookFileAcoustIDEntry(e)
 		if err != nil {
 			return err
 		}
@@ -304,14 +338,6 @@ func judgeAcoustIDPage(ctx context.Context, reporter sdk.Reporter, repairer book
 			mu.Unlock()
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		// Label runs inside the worker goroutines: it reads no counter.
-		Label: func(i, total int) string {
-			return fmt.Sprintf("book_file_acoustid: key %d/%d of this page", i+1, total)
-		},
-		ProgressOffset: base,
-		ProgressTotal:  base + len(page),
 	})
 	return orphans, err
 }
@@ -319,7 +345,7 @@ func judgeAcoustIDPage(ctx context.Context, reporter sdk.Reporter, repairer book
 // deleteAcoustIDOrphans deletes the orphans of one page in small chunks. A chunk
 // judges its keys again under the lock, so a key that stopped being an orphan
 // since the page was judged is counted as kept, not deleted.
-func deleteAcoustIDOrphans(ctx context.Context, repairer bookFileAcoustIDIndexRepairer,
+func deleteAcoustIDOrphans(ctx context.Context, repairer t6g2IndexWriter,
 	orphans []database.BookFileAcoustIDEntry, tally *acoustIDRepairTally) error {
 	for start := 0; start < len(orphans); start += acoustIDRepairDeleteChunk {
 		if err := ctx.Err(); err != nil {
@@ -338,4 +364,49 @@ func deleteAcoustIDOrphans(ctx context.Context, repairer bookFileAcoustIDIndexRe
 		tally.keptAtDelete.Add(int64(len(chunk) - n))
 	}
 	return nil
+}
+
+// t6g2BookFileAcoustIDIndexRepairParallelism is HEAD's page-judging pool: one
+// worker per CPU (one row read per key).
+func t6g2BookFileAcoustIDIndexRepairParallelism() tasks.Parallelism { return tasks.CPU() }
+
+func t6g2BookFileAcoustIDIndexRepairMeta() t6g2Meta {
+	return t6g2Meta{
+		Kind:     t6g2KindBookFileAcoustIDIndexRepair,
+		Title:    t6g2BookFileAcoustIDIndexRepairTitle,
+		Help:     t6g2BookFileAcoustIDIndexRepairHelp,
+		Effects:  tasks.Writes(t6g2Res("book_files")...).AlsoReads(t6g2Res("book_files")...),
+		Resume:   tasks.ResumeContinue,
+		Priority: tasks.PriorityLow,
+		Timeout:  60 * time.Minute,
+		Key:      bookFileAcoustIDIndexRepairID,
+	}
+}
+
+func t6g2BookFileAcoustIDIndexRepairKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	m := t6g2BookFileAcoustIDIndexRepairMeta()
+	par := t6g2BookFileAcoustIDIndexRepairParallelism()
+	run := func(rc *tasks.RC, raw json.RawMessage) (t6g2NoResult, error) {
+		if err := t6g2RefuseModeKeys(m.Kind, raw, "dry_run", "dryRun"); err != nil {
+			return t6g2NoResult{}, err
+		}
+		dryRun := !t6g2Live(rc)
+		// A checkpoint is the run's params with the cursor and counts updated.
+		run := t6g2AcoustIDRepairRun{DryRun: dryRun}
+		var saved acoustIDRepairParams
+		ok, err := rc.Restore(&saved)
+		if err != nil {
+			return t6g2NoResult{}, fmt.Errorf("%s: restore checkpoint: %w", m.Kind, err)
+		}
+		if ok {
+			run.Params = saved
+		}
+		run.Params.DryRun, run.Params.DryRunCamel = &dryRun, nil
+		env, err := t6g2NativeEnv(rc, deps, par)
+		if err != nil {
+			return t6g2NoResult{}, err
+		}
+		return runBookFileAcoustIDIndexRepairCore(rc.Context(), run, env)
+	}
+	return tasks.Task(m.Kind, tasks.TaskSpec[json.RawMessage, t6g2NoResult]{Common: m.common(sched), Run: run})
 }
