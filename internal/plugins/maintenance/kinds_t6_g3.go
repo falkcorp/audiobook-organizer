@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 29eb0771-6105-406d-b32a-2a11e3535809
 // last-edited: 2026-11-13
 
@@ -313,6 +313,15 @@ func (w headT6g3Writer) CreateOperationChange(change *database.OperationChange) 
 		return errT6g3NoStore
 	}
 	return store.CreateOperationChange(change)
+}
+
+// CreateOperationChange forwards the row to the writer. It sits here, with the
+// other forwarder of the journal method, so the journal-writer guard
+// (internal/arch) allowlists this file alone: credits_backfill.go calls
+// database.RecordOperationChange, which checks the row's type before it reaches
+// this method.
+func (v cbStoreView) CreateOperationChange(change *database.OperationChange) error {
+	return v.w.CreateOperationChange(change)
 }
 
 func (w headT6g3Writer) InvalidateAuthorsCache() { w.p.deps.InvalidateAuthorsCache() }
@@ -755,7 +764,7 @@ func t6g3Common(def sdk.OperationDef, kind tasks.Kind, effects tasks.Effects, sc
 		c.Ready = []tasks.ReadySignal{t6g3SignalMemDB}
 	}
 	if def.ConcurrencyKey != "" {
-		c.ConcurrencyKey = tasks.Key("books." + def.ConcurrencyKey)
+		c.ConcurrencyKey = tasks.Key(t6g3KindPrefix + def.ConcurrencyKey)
 	}
 	if sched != nil {
 		c.Schedule = sched(kind)

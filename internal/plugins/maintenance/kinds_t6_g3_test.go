@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
 // last-edited: 2026-11-13
 
@@ -286,7 +286,16 @@ func (l t6g3LogHandler) WithGroup(string) slog.Handler      { return l }
 
 func (h *t6g3Host) Mode() tasks.Mode     { return h.mode }
 func (h *t6g3Host) Writer() tasks.Writer { return h.w }
-func (h *t6g3Host) Log() *slog.Logger    { return slog.New(t6g3LogHandler{h}) }
+
+// t6g3Hold is the stand-down hold a test host hands out (FakeRun models none).
+type t6g3Hold struct{}
+
+func (t6g3Hold) Release() {}
+
+// StandDown hands out a hold that is never lost, which is what a credits
+// backfill apply needs to get past its scan stand-down.
+func (h *t6g3Host) StandDown(tasks.Key) (tasks.Hold, error) { return t6g3Hold{}, nil }
+func (h *t6g3Host) Log() *slog.Logger                       { return slog.New(t6g3LogHandler{h}) }
 func (h *t6g3Host) joinedLogs() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -352,11 +361,11 @@ type t6g3Want struct {
 var t6g3Wants = []t6g3Want{
 	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, []string{"books", "external_ids", "files", "operations"}, ""},
 	{"maintenance.tombstone-cleanup", "Resolve author tombstone chains", tasks.ResumeDrop, "books.maintenance.tombstone-cleanup", time.Hour, 0, false, []string{"authors"}, ""},
-	{"maintenance.temp-file-cleanup", "Clean orphaned temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, 0, false, []string{"activity", "files"}, ""},
-	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, 0, false, []string{"files"}, ""},
+	{"maintenance.temp-file-cleanup", "Clean orphaned temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{"activity", "files"}, ""},
+	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{"files"}, ""},
 	{"maintenance.cleanup-activity-log", "Clean activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 30 * time.Minute, 20 * time.Minute, false, []string{"activity"}, ""},
-	{"maintenance.cleanup-old-backups", "Clean old backup files", tasks.ResumeFromZero, "books.maintenance.cleanup-old-backups", time.Hour, 0, false, []string{"files"}, ""},
-	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, 0, false, []string{"book_versions", "files"}, ""},
+	{"maintenance.cleanup-old-backups", "Clean old backup files", tasks.ResumeFromZero, "books.maintenance.cleanup-old-backups", time.Hour, time.Hour, false, []string{"files"}, ""},
+	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, time.Hour, false, []string{"book_versions", "files"}, ""},
 	{"maintenance.clear-apply-rename-failures", "Clear apply rename-failure records", tasks.ResumeDrop, "books.maintenance.clear-apply-rename-failures", 10 * time.Minute, 10 * time.Minute, false, []string{"user_state"}, ""},
 	{"maintenance.combine-journal-check", "Combine journal readability check", tasks.ResumeDrop, "books.maintenance.combine-journal-check", 10 * time.Minute, 0, true, nil, ""},
 	{"maintenance.compact-activity-log", "Compact activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 6 * time.Hour, 20 * time.Minute, false, []string{"activity"}, ""},

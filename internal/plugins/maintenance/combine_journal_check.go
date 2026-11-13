@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/combine_journal_check.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2b7d4e91-6c35-4a08-9f12-8d0a5e3c7b64
 // last-edited: 2026-11-13
 
@@ -82,31 +82,6 @@ func (p *Plugin) runCombineJournalCheck(ctx context.Context, _ json.RawMessage, 
 	}
 	_, err := combineJournalCheckCore(ctx, combineJournalCheckEnv{p.t6g3HeadBase(ctx, reporter, true)})
 	return err
-}
-
-// checkCombineJournalRows is the check over any raw-key reader.
-func checkCombineJournalRows(kv combineJournalKV, reporter sdk.Reporter) error {
-	env := combineJournalCheckEnv{t6g3Base{
-		Live:     true,
-		Log:      func(level slog.Level, msg string) { _ = reporter.Log(level, msg) },
-		Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
-		Store:    t6g3KVStore{kv: kv},
-	}}
-	_, err := combineJournalCheckCore(context.Background(), env)
-	return err
-}
-
-// t6g3KVStore is a t6g3Store that answers only the raw-key reads, for
-// checkCombineJournalRows' callers that hold a bare reader. Any other read
-// panics on the nil embedded store, which the check never makes.
-type t6g3KVStore struct {
-	t6g3Store
-	kv combineJournalKV
-}
-
-func (s t6g3KVStore) GetRaw(key string) ([]byte, error) { return s.kv.GetRaw(key) }
-func (s t6g3KVStore) ScanPrefix(prefix string) ([]database.KVPair, error) {
-	return s.kv.ScanPrefix(prefix)
 }
 
 // combineJournalCheckKind builds the native kind. Declared ReadOnly: the check

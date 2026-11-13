@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
 // last-edited: 2026-11-13
 
@@ -78,7 +78,7 @@ type CompactBackendOutcome struct {
 //
 // LIVENESS. Declared LivenessManual, and it earns that: the compaction store
 // emits a progress event per chunk and per day (database.WithCompactProgress),
-// which compactProgressToReporter forwards to reporter.UpdateProgress. Log
+// which compactProgressVia forwards to the progress function. Log
 // lines alone would not do — reporter.Log does not stamp the watchdog clock
 // (registry/types.go, LivenessManual). ProgressTimeout is raised from the 5m
 // default to 20m. It was sized for a single chunk statement on the 19.5 GB
@@ -279,23 +279,18 @@ func compactCutoff(now time.Time, days int) (time.Time, error) {
 	return cutoff, nil
 }
 
-// compactProgressToReporter adapts the compaction store's progress events to
-// reporter.UpdateProgress. Total is unknown up front (the store bounds its
-// loop by the data, not by a pre-count), so it is reported as 0 and the UI
-// shows an indeterminate bar with the running count. ev.Result is the store's
-// running total for this CompactByDay call, so it is forwarded as is.
+// compactProgressVia adapts the compaction store's progress events to a
+// progress function (the form a shared core takes from its env, rule R10).
+// Total is unknown up front (the store bounds its loop by the data, not by a
+// pre-count), so it is reported as 0 and the UI shows an indeterminate bar with
+// the running count. ev.Result is the store's running total for this
+// CompactByDay call, so it is forwarded as is.
 //
 // Done and Heartbeat handling lived here while a migrating wrapper fanned
 // compaction out across a Pebble and a SQLite store (per-backend completion
 // stamps, a cross-backend cumulative counter, liveness-only SQLite scan
 // windows). The single Pebble store emits none of those, so they went with
 // the SQLite backend on 2026-10-19.
-func compactProgressToReporter(reporter sdk.Reporter) database.CompactProgress {
-	return compactProgressVia(func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) })
-}
-
-// compactProgressVia is compactProgressToReporter over a progress function, the
-// form a shared core takes from its env (rule R10).
 func compactProgressVia(update func(done, total int, msg string)) database.CompactProgress {
 	return func(ev database.CompactProgressEvent) {
 		msg := fmt.Sprintf("%s: %d days compacted, %d entries removed so far",
@@ -307,8 +302,9 @@ func compactProgressVia(update func(done, total int, msg string)) database.Compa
 	}
 }
 
-// maintenanceProgressToReporter adapts the summarize/prune/repair passes'
-// progress events to reporter.UpdateProgress, for the nightly cleanup.
+// maintenanceProgressVia adapts the summarize/prune/repair passes' progress
+// events to a progress function (the form a shared core takes from its env,
+// rule R10), for the nightly cleanup.
 //
 // The progress COUNTER is cumulative across the whole op, which ev.Rows is not:
 // the store restarts its count at zero for each phase, so forwarding ev.Rows
@@ -318,12 +314,6 @@ func compactProgressVia(update func(done, total int, msg string)) database.Compa
 // summing those is the row count actually deleted so far. The map is guarded
 // because the hook rides a context and nothing promises a pass stays
 // single-goroutine.
-func maintenanceProgressToReporter(reporter sdk.Reporter) database.MaintenanceProgress {
-	return maintenanceProgressVia(func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) })
-}
-
-// maintenanceProgressVia is maintenanceProgressToReporter over a progress
-// function, the form a shared core takes from its env (rule R10).
 func maintenanceProgressVia(update func(done, total int, msg string)) database.MaintenanceProgress {
 	type phaseBackend struct{ phase, backend string }
 	var (

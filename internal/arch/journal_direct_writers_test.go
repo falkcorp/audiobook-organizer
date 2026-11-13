@@ -1,7 +1,7 @@
 // file: internal/arch/journal_direct_writers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b2f9a6e-1d84-4c37-a0e3-7c91d2f4b685
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package arch
 
@@ -47,6 +47,9 @@ var journalDirectAllowed = map[string]string{
 	"internal/operations/opswriter/writer.go": "records the op-history rows AFTER the write committed, so an " +
 		"unclassified type must be logged and counted (History.failed), not refused; its types are the opswriter's " +
 		"own (book_file_modify, book_authors_modify, effect:<name>)",
+	"internal/plugins/maintenance/kinds_t6_g3.go": "the group-3 maintenance writer forwards a row the credits backfill already " +
+		"passed through database.RecordOperationChange (its store view's CreateOperationChange is called by that helper only); " +
+		"it creates no row of its own",
 	"pkg/ops/opstest/world.go": "the in-memory test world forwards the store method it implements; it creates no row of its own",
 }
 

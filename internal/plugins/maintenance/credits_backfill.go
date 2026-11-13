@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-11-13
 
@@ -208,7 +208,7 @@ import (
 // rows; database.SaveClassLists, one row per 1,000 ids, in its own row
 // namespace, tagged with the save's attempt nonce) and the operation's
 // result keeps the summary, the counts and the samples only
-// (storeCreditsBackfillResult). The store must be able to keep op rows: the run
+// (persistCreditsBackfillResult). The store must be able to keep op rows: the run
 // refuses to start without it. A run with a limit still plans every book, so it
 // stores the full-library review and held lists again for its own operation id;
 // that is deliberate (they are that run's evidence), and a limited run's lists
@@ -636,7 +636,7 @@ type cbClass struct {
 	Count      int    `json:"count"`
 	// BookIDs are the class's book ids, sorted. The scan returns them whole;
 	// the stored result leaves them out (the lists live in op rows, see
-	// storeCreditsBackfillResult) and a client pages them from
+	// persistCreditsBackfillResult) and a client pages them from
 	// GET /operations/:id/class-lists/:class.
 	BookIDs []string    `json:"book_ids,omitempty"`
 	Samples []*cbSample `json:"samples,omitempty"`
@@ -962,28 +962,6 @@ type cbResultWriter interface {
 	ClearClassLists(opID string) error
 }
 
-// storeCreditsBackfillResult stores the run's result over a row store: the HEAD
-// adapter of persistCreditsBackfillResult (the reporter's result slot).
-func storeCreditsBackfillResult(reporter sdk.Reporter, rows database.OpRowStore, opID string, res *creditsBackfillResult) error {
-	if rows == nil {
-		return errors.New("no operation id or row store to keep the class id lists under")
-	}
-	_, err := persistCreditsBackfillResult(cbRowsWriter{rows}, opID, res,
-		func(r *creditsBackfillResult) error { return registry.ReporterSetResult(reporter, r) },
-		func(level slog.Level, msg string) { _ = reporter.Log(level, msg) })
-	return err
-}
-
-// cbRowsWriter is cbResultWriter over a database.OpRowStore.
-type cbRowsWriter struct{ rows database.OpRowStore }
-
-func (w cbRowsWriter) SaveClassLists(opID string, lists map[string][]string) (*database.ClassListSummary, error) {
-	return database.SaveClassLists(w.rows, opID, lists)
-}
-func (w cbRowsWriter) ClearClassLists(opID string) error {
-	return database.ClearClassLists(w.rows, opID)
-}
-
 // persistCreditsBackfillResult stores the run's result: the class id lists as op
 // rows under the operation's id (SaveClassLists), then the summary (the result
 // without the lists, carrying their ClassListSummary) through setResult (nil:
@@ -1042,7 +1020,7 @@ type creditsBackfillEnv struct {
 	opID    string
 	workers int
 	// eng is the run's engine: its log, progress, checkpoint, stand-down hold
-	// and worker pool. runCreditsBackfillScan fills it from the HEAD reporter;
+	// and worker pool. headCBEngine fills it from the HEAD reporter;
 	// the core's callers fill it themselves.
 	eng cbEngine
 }
@@ -1129,9 +1107,6 @@ func (v cbStoreView) CreateNarrator(name string) (*database.Narrator, error) {
 	return v.w.CreateNarrator(name)
 }
 func (v cbStoreView) DeleteNarrator(id int) error { return v.w.DeleteNarrator(id) }
-func (v cbStoreView) CreateOperationChange(change *database.OperationChange) error {
-	return v.w.CreateOperationChange(change)
-}
 
 // ReplaceOpRowsPrefix completes database.OpRowStore with the writer's.
 func (v cbStoreView) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (database.OpRow, error)) error {
@@ -1378,14 +1353,6 @@ func (r *cbRun) noteErr(err error) {
 		r.firstErr = err
 	}
 	r.firstErrMu.Unlock()
-}
-
-// runCreditsBackfillScan is the run over HEAD's reporter: the adapter the HEAD
-// shell and the tests call. It returns a result whenever it got as far as
-// listing books, including on cancel or failure (Complete=false).
-func runCreditsBackfillScan(ctx context.Context, env creditsBackfillEnv, params creditsBackfillParams, reporter sdk.Reporter) (*creditsBackfillResult, error) {
-	env.eng = headCBEngine{ctx: ctx, reporter: reporter, scan: env.scan}
-	return runCreditsBackfillRun(ctx, env, params)
 }
 
 // runCreditsBackfillRun does the work, on env's engine.
