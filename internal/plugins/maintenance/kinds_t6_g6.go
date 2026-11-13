@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d78a6104-de76-4b10-ab6f-1cf177912760
 // last-edited: 2026-11-13
 
@@ -383,6 +383,16 @@ type t6g6Deps struct {
 	// ITunesRoots resolves the protected iTunes roots (merge.ITunesProtectedRoots
 	// over the configured iTunes settings).
 	ITunesRoots func() ([]string, error)
+}
+
+// t6g6HeadOpsStore is the plugin's OpsStore, or nil when the plugin holds no
+// deps (the HEAD tests that assert an op refuses before it touches anything
+// build the plugin with New(nil)).
+func (p *Plugin) t6g6HeadOpsStore() OpsStore {
+	if p.deps == nil {
+		return nil
+	}
+	return p.deps.OpsStore()
 }
 
 // t6g6HeadStore is HEAD's reads: the plugin's OpsStore plus the reads that are a

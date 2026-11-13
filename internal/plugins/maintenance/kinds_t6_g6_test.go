@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-13
 
@@ -208,6 +208,9 @@ func (r t6g6RBFStore) GetBookFileByPath(p string) (*database.BookFile, error) {
 }
 func (r t6g6RBFStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return r.s.GetAllBookFilesCore()
+}
+func (r t6g6RBFStore) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return r.s.GetAllBookFilesCoreIncludingRetired()
 }
 func (r t6g6RBFStore) LiveBookIDsAtPath(p string) ([]string, error) { return r.s.LiveBookIDsAtPath(p) }
 

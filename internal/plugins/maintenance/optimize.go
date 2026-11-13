@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
 // last-edited: 2026-11-13
 
@@ -146,7 +146,9 @@ func (p *Plugin) optimizeNative(_ t6g6Deps, sched func(tasks.Kind) *tasks.Schedu
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.maintenance.library-optimize")
-	c.Timeout = 36 * time.Hour
+	// The kernel refuses a Timeout over tasks.MaxTimeout (24h); HEAD's def keeps
+	// its 36h, so the native kind runs under the cap until F5-18 retires the def.
+	c.Timeout = tasks.MaxTimeout
 	c.ProgressTimeout = optimizeProgressTimeout
 	return tasks.Task(optimizeKind, tasks.TaskSpec[struct{}, struct{}]{
 		Common: c,

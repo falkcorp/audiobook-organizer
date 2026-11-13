@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
 // last-edited: 2026-11-13
 
@@ -157,7 +157,7 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 	// A nil OpsStore leaves env.Store nil (a typed-nil adapter would hide it), so
 	// the core's "database not initialized" check still fires, after the ffprobe
 	// refusal as before.
-	if store := p.deps.OpsStore(); store != nil {
+	if store := p.t6g6HeadOpsStore(); store != nil {
 		env.Store = t6g6HeadStore{OpsStore: store}
 		env.Writer = t6g6HeadWriter{deps: p.deps, store: store}
 	}
