@@ -1,0 +1,2875 @@
+{
+ "_header": {
+  "file": "internal/books/rbacreach/routes.json",
+  "version": "1.0.0",
+  "guid": "d41a8b7f-2c65-4e93-8f10-6b9e3a7c5d28",
+  "last-edited": "2026-11-13"
+ },
+ "what": "the gin route table of the R0 tag's router (source dump, scripts/r2corpus/r0routes)",
+ "r0_tag": "v0.223.0",
+ "route_count": 572,
+ "abs_off_count": 497,
+ "abs_on_count": 572,
+ "routes": [
+  {
+   "method": "GET",
+   "path": "/",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/authorize",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/authors/:id",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/collections",
+   "abs_only": true
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/collections/:id",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/collections/:id",
+   "abs_only": true
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/collections/:id",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/collections/:id/batch/add",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/collections/:id/batch/remove",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/collections/:id/book",
+   "abs_only": true
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/collections/:id/book/:bookId",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/emails/send-ebook-to-device",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/events",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/health",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/items/:id",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/items/:id/cover",
+   "abs_only": true
+  },
+  {
+   "method": "HEAD",
+   "path": "/api/items/:id/cover",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/items/:id/file/:ino",
+   "abs_only": true
+  },
+  {
+   "method": "HEAD",
+   "path": "/api/items/:id/file/:ino",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/items/:id/file/:ino/download",
+   "abs_only": true
+  },
+  {
+   "method": "HEAD",
+   "path": "/api/items/:id/file/:ino/download",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/items/:id/play",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/authors",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/collections",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/filterdata",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/items",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/narrators",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/personalized",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/playlists",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/recent-episodes",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/search",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/series",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/bookmarks/:id",
+   "abs_only": true
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/me/item/:id/bookmark",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/me/item/:id/bookmark",
+   "abs_only": true
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/me/item/:id/bookmark/:time",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/item/:id/remove-from-continue-listening",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/me/item/:id/remove-from-continue-listening",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/item/listening-sessions/:id",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/listening-sessions",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/listening-stats",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/progress",
+   "abs_only": true
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/me/progress/:id",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/progress/:id",
+   "abs_only": true
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/me/progress/:id",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/progress/:id/remove-from-continue-listening",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/me/progress/:id/remove-from-continue-listening",
+   "abs_only": true
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/me/progress/batch/update",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/sessions",
+   "abs_only": true
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/me/sessions/:id",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/me/stats/year/:year",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/narrators/:id/image",
+   "abs_only": true
+  },
+  {
+   "method": "HEAD",
+   "path": "/api/narrators/:id/image",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/playlists",
+   "abs_only": true
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/playlists/:id",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/playlists/:id",
+   "abs_only": true
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/playlists/:id",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/playlists/:id/batch/add",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/playlists/:id/batch/remove",
+   "abs_only": true
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/playlists/:id/item/:libraryItemId",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/series/:id",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/session/:id/close",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/session/:id/sync",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/session/local",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/api/session/local-all",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/activity",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/activity/clamp-summaries",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/activity/compact",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/activity/sources",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/admin/debug/book-files/:id",
+   "abs_only": false
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/admin/debug/book-files/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/admin/debug/books/:id",
+   "abs_only": false
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/admin/debug/books/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/admin/debug/edits",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/admin/debug/edits/:edit_id/undo",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/admin/debug/lookup",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/admin/guest-service-tokens",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/admin/guest-service-tokens/:userId/revoke",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/admin/guest-service-tokens/plan",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/admin/recompact-digests",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/ai-jobs",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/ai/backends/pull-model",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/ai/backends/status",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/ai/capabilities",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/ai/endpoints/status",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/ai/parse-filename",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/ai/scans",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/ai/scans",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/ai/scans/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/ai/scans/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/ai/scans/:id/apply",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/ai/scans/:id/cancel",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/ai/scans/:id/results",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/ai/scans/compare",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/ai/test-connection",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/audiobooks/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/audiobooks/:id",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/audiobooks/:id/alternative-titles",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/alternative-titles",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/alternative-titles",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/apply-metadata",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/changelog",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/changes",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/clear-no-match",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/compare-acoustid",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/cover",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/cover-history",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/cover-history/restore",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/cover-text",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/cow-versions",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/cow-versions/prune",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/discard-progress-and-purge",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/external-ids",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/extract-track-info",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/fetch-metadata",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/field-states",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/files",
+   "abs_only": false
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/audiobooks/:id/files/:file_id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/force-rescan",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/mark-no-match",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/metadata-history",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/metadata-history/:field",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/metadata-history/:field/undo",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/metadata-rejections",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/move-segments",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/narrators",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/audiobooks/:id/narrators",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/organize",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/parse-with-ai",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/path-history",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/position",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/position",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/preview-organize",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/audiobooks/:id/quarantine",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/quarantine",
+   "abs_only": false
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/audiobooks/:id/rating",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/reconcile-files",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/relocate",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/rescan",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/restore",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/retired-versions",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/retired-versions/:vid/restore",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/revert-metadata",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/sample",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/search-metadata",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/segments",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/segments/:segmentId/tags",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/audiobooks/:id/set-primary",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/similar",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/split-to-books",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/split-version",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/state",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/audiobooks/:id/status",
+   "abs_only": false
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/audiobooks/:id/status",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/status/repair",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/tags",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/tags-detailed",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/undo-last-apply",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/user-tags",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/user-tags",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/audiobooks/:id/user-tags",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/audiobooks/:id/user-tags/:tag",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/:id/versions",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/versions",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/audiobooks/:id/versions/:vid",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/versions/:vid/purge-now",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/versions/:vid/restore",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/versions/resume-swap",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/:id/write-back",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/batch",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/batch-operations",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/batch-tags",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/batch-write-back",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/bulk-write-back",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/combine",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/count",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/duplicates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/duplicates/dismiss",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/duplicates/link",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/duplicates/merge",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/duplicates/reject",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/duplicates/scan",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/duplicates/scan-results",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/facets",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/link",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/metadata/batch-apply-cached",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/metadata/cache/review",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/metadata/cache/review/selection",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/metadata/cached",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/audiobooks/purge-soft-deleted",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/purge-soft-deleted/forget-waiting-file-records",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/audiobooks/purge-soft-deleted/preview",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/audiobooks/purge-soft-deleted/preview/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/purge-soft-deleted/waiting-file-records",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/purged-versions",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/quarantined",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/soft-deleted",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/swap-incomplete",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/audiobooks/trashed-versions",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/auth/accept-invite",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/auth/api-keys",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/auth/api-keys",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/auth/api-keys/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/auth/api-keys/:id",
+   "abs_only": false
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/auth/api-keys/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/auth/api-keys/:id/rotate",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/auth/bootstrap",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/auth/invite/:token",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/auth/login",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/auth/logout",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/auth/me",
+   "abs_only": false
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/auth/me",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/auth/me/password",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/auth/oauth-providers",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/auth/oauth/:provider/callback",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/auth/oauth/:provider/start",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/auth/sessions",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/auth/sessions/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/auth/setup",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/auth/status",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/auth/temp-tokens",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/authors",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/authors/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/authors/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/authors/:id/aliases",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/authors/:id/aliases",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/authors/:id/aliases/:aliasId",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/authors/:id/books",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/authors/:id/name",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/authors/:id/reclassify-as-narrator",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/authors/:id/resolve-production",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/authors/:id/split",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/authors/:id/tags",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/authors/:id/tags",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/authors/bulk-delete",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/authors/count",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/authors/duplicates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/authors/duplicates/refresh",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/authors/merge",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/authors/ref-audit",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/backup/:filename",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/backup/create",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/backup/list",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/backup/restore",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/blocked-hashes",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/blocked-hashes",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/blocked-hashes/:hash",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/books/:id/position",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/books/:id/position",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/books/:id/state",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/books/:id/status",
+   "abs_only": false
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/books/:id/status",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/books/:id/status/repair",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/books/:id/versions/:vid",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/books/:id/versions/:vid/purge-now",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/books/:id/versions/:vid/restore",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/cache/invalidate",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/cache/stats",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/cache/stats/history",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/cache/stats/keys",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/catalog/entries",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/catalog/entries/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/collections",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/collections",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/collections/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/collections/:id",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/collections/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/collections/:id/books",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/collections/:id/books/:bookId",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/collections/:id/materialize",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/config",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/config",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/covers/local/:filename",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/covers/proxy",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/csp-report",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dashboard",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/candidates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/candidates/:id/breakdown",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/:id/link",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/:id/reject",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/book-pair-counts",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/bulk-count",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/bulk-link",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/bulk-reject",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/bulk-reject/revert",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/candidates/export",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/link-cluster",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/link-series",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/reject-cluster",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/candidates/remove-from-cluster",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/candidates/series-summary",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/embed",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/fingerprint-rescan",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/labels",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/labels/:id/override",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/labels/export",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/labels/stats",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/labels/suspicious",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/purge-stale",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/rescore",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/reset-acoustid",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/scan",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/scan-acoustid",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/scan-llm",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/split-book-candidates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/split-book-candidates/:id/merge",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/split-book-candidates/bulk-merge",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/split-book-scan",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/dedup/stats",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/dedup/validate",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/deluge/discover",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/deluge/discover/import",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/deluge/labels",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/deluge/status",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/deluge/test-connection",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/deluge/torrents",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/diagnostics/ai-results/:operationId",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/diagnostics/apply-suggestions",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/diagnostics/db-census",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/diagnostics/db-health",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/diagnostics/export",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/diagnostics/export/:operationId/download",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/diagnostics/fingerprint-failures",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/diagnostics/submit-ai",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/diagnostics/traces",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/diagnostics/traces/:name",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/discovery/import",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/file-ops/pending",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/filesystem/browse",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/filesystem/exclude",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/filesystem/exclude",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/filesystem/home",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/fingerprint/worker/hello",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/fingerprint/worker/lease",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/fingerprint/worker/lease/:id/release",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/fingerprint/worker/lease/:id/renew",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/fingerprint/worker/results",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/health",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/import-paths",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/import-paths",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/import-paths/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/import/collision-preview",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/import/file",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/itunes/books",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/itunes/import",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/itunes/import-status/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/itunes/import-status/bulk",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/itunes/library-stats",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/itunes/library-status",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/itunes/library/download",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/itunes/pid-integrity",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/itunes/pid-repair",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/itunes/test-mapping",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/itunes/validate",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/library/metadata-results",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/library/quick-queries",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/maintenance-window/config",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/maintenance-window/run",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/maintenance-window/status",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/maintenance/acoustid-stats",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/maintenance/book-file-hash-stats",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/maintenance/book-metadata-hash-stats",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/maintenance/file-intro-stats",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/maintenance/jobs",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/maintenance/jobs/:job_id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/maintenance/repair-missing-files/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/maintenance/scan-composer-tags/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/maintenance/transcribe-stats",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/maintenance/wipe",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/master-lists",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/master-lists",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/master-lists/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/master-lists/elsewhere",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/me/:status",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/merge/combine-journal",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/merge/sibling-journal",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/merge/sibling-undo/:journal_id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/merge/undo/:journal_id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata-sources/test",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/batch-apply-candidates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/batch-fetch-candidates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/batch-reject-candidates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/batch-unreject-candidates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/batch-update",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/bulk-apply-preview",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/metadata/bulk-apply-preview/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/bulk-fetch",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/metadata/candidate-feedback",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/candidate-feedback",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/metadata/candidate-feedback/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/metadata/export",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/metadata/fields",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/import",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/metadata/providers/throttles",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/metadata/providers/throttles",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/metadata/providers/throttles/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/metadata/recent-fetches",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/metadata/search",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/unreject-candidate",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/metadata/validate",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/narrators",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/narrators/count",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/op-defs",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/op-defs/:id",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/openlibrary/data",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/openlibrary/download",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/openlibrary/import",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/openlibrary/status",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/openlibrary/upload",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/:id/activity",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/:id/changes",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/:id/class-lists/:class",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/:id/result",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/:id/results",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/:id/revert",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/:id/undo/preflight",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/active",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/activity/merged",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/assign-orphan-vgs",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/audit-files",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/backfill-scan-cache",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/cleanup-version-groups",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/clear-stale",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/elect-missing-primaries",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/events",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/mark-broken-segments",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/merge-novg-duplicates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/optimize-database",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/pause",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/pause",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/recent",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/reconcile",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/reconcile/preview",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/reconcile/scan",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/reconcile/scan/latest",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/resume",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/set-internal-flag",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/stale",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/sweep-tombstones",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/timeline",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/v2",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/operations/v2/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/v2/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/v2/:id/finish",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/operations/v2/:id/logs/download",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/operations/v2/:id/record",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/operations/v2/:id/retry",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/playlists",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/playlists",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/playlists/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/playlists/:id",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/playlists/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/playlists/:id/books",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/playlists/:id/books/:bookID",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/playlists/:id/export.m3u",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/playlists/:id/materialize",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/playlists/:id/reorder",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/plugins",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/plugins/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/plugins/:id/disable",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/plugins/:id/enable",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/plugins/:id/health",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/plugins/:id/settings",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/policy/tags",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/preferences/:key",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/preferences/:key",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/preferences/:key",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/purged-versions/:vid",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/repairs",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/repairs/:fixer/apply",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/repairs/:fixer/owner-apply",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/repairs/:fixer/plan",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/repairs/:fixer/plan/:op_id/rows",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/repairs/owner-status",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/review/bulk",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/review/count",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/review/items",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/review/items/:id/abandon-apply",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/review/items/:id/approve",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/review/items/:id/reject",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/review/replay-approved",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/search/:search_id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/series",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/series/:id",
+   "abs_only": false
+  },
+  {
+   "method": "PATCH",
+   "path": "/api/v1/series/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/series/:id/books",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/series/:id/name",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/series/:id/split",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/series/:id/tags",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/series/:id/tags",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/series/bulk-delete",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/series/count",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/series/deduplicate",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/series/duplicates",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/series/duplicates/refresh",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/series/merge",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/series/prune",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/series/prune/preview",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/setup/validate-openai-key",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/signals/coverage",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/system/activity-log",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/system/announcements",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/system/factory-reset",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/system/logs",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/system/reset",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/system/status",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/system/storage",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/tags",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/tasks",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/tasks/:name",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/tasks/:name/run",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/tools",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/tools/:name/install",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/tools/:name/status",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/update/apply",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/update/check",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/update/status",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/users",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/:id/deactivate",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/users/:id/email",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/users/:id/footprint",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/:id/merge-into/:target/apply",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/:id/merge-into/:target/preview",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/:id/reactivate",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/:id/reset-password",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/invite",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/users/invites",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/users/invites/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/invites/:id/resend",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/users/merges",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/merges/:jid/resume",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/users/merges/:jid/undo",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/version-groups/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/work",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/work/stats",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/works",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/works",
+   "abs_only": false
+  },
+  {
+   "method": "DELETE",
+   "path": "/api/v1/works/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/works/:id",
+   "abs_only": false
+  },
+  {
+   "method": "PUT",
+   "path": "/api/v1/works/:id",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v1/works/:id/books",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v3/ops/counts",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v3/ops/defs",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v3/ops/defs/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v3/ops/defs/:id/runs",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v3/ops/events",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v3/ops/runs",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v3/ops/runs",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v3/ops/runs/:id",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v3/ops/runs/:id/approve",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v3/ops/runs/:id/cancel",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v3/ops/runs/:id/rows",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/api/v3/ops/timeline",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/auth/openid",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/auth/openid/browser",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/auth/openid/browser",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/auth/openid/callback",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/auth/refresh",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/auth/temp-login",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/health",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/login",
+   "abs_only": true
+  },
+  {
+   "method": "POST",
+   "path": "/logout",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/metrics",
+   "abs_only": false
+  },
+  {
+   "method": "GET",
+   "path": "/ping",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/public/session/:id/track/:index",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/status",
+   "abs_only": true
+  }
+ ]
+}

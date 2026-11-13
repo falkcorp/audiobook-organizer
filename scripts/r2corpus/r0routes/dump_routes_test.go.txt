@@ -1,0 +1,70 @@
+// file: scripts/r2corpus/r0routes/dump_routes_test.go.txt
+// version: 1.0.0
+// guid: 3f0a6c52-9d1e-4b87-a2c4-6e5d8b1f7a39
+// last-edited: 2026-11-13
+
+// Copied into internal/server/ of a checkout of the R0 tag as
+// r0_route_dump_test.go by scripts/r2corpus/dump_r0_routes.py (F4-07). It is a
+// .txt here so that no build of main compiles it: it names the tag's
+// setupCredGuardServerWith, which main no longer has. It writes the gin router
+// of the tag, ABS surface on and off, to $R0_ROUTE_DUMP.
+package server
+
+import (
+	"encoding/json"
+	"os"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+)
+
+func dumpRoutes(t *testing.T, abs bool) map[string]struct{ Method, Path string } {
+	t.Helper()
+	f := setupCredGuardServerWith(t, func(c *config.Config) {
+		if abs {
+			c.ABSAPIEnabled = true
+			c.ABSJWTSecret = strings.Repeat("route-dump-", 4)
+		}
+	})
+	out := map[string]struct{ Method, Path string }{}
+	for _, r := range f.srv.router.Routes() {
+		out[r.Method+" "+r.Path] = struct{ Method, Path string }{r.Method, r.Path}
+	}
+	return out
+}
+
+func TestR0RouteDump(t *testing.T) {
+	dst := os.Getenv("R0_ROUTE_DUMP")
+	if dst == "" {
+		t.Skip("R0_ROUTE_DUMP not set")
+	}
+	off := dumpRoutes(t, false)
+	on := dumpRoutes(t, true)
+	type row struct {
+		Method  string `json:"method"`
+		Path    string `json:"path"`
+		ABSOnly bool   `json:"abs_only"`
+	}
+	var rows []row
+	for k, v := range on {
+		_, inOff := off[k]
+		rows = append(rows, row{v.Method, v.Path, !inOff})
+	}
+	for k := range off {
+		_, inOn := on[k]
+		require.True(t, inOn, "route %s exists with ABS off and not with ABS on", k)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Path != rows[j].Path {
+			return rows[i].Path < rows[j].Path
+		}
+		return rows[i].Method < rows[j].Method
+	})
+	raw, err := json.MarshalIndent(map[string]any{"routes": rows, "abs_off": len(off), "abs_on": len(on)}, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(dst, append(raw, '\n'), 0o644))
+}
