@@ -1,5 +1,5 @@
 // file: core/kernel/health_loops_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d740c96-10cf-4011-bacb-8508f19cebed
 // last-edited: 2026-11-13
 
@@ -8,7 +8,10 @@ package kernel
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -230,5 +233,52 @@ func TestKernel_BeginHealthShutdownFlipsReadinessAndSaysStopping(t *testing.T) {
 	}
 	if _, stopping := n.counts(); stopping != 2 {
 		t.Errorf("STOPPING sent %d times for 2 calls (the registry flip is idempotent; the notify is per call)", stopping)
+	}
+}
+
+// TestKernel_ReadyzFlipsBeforeHTTPDrain runs the kernel's own shutdown
+// preamble, beginHealthShutdown, ahead of the HTTP drain phase of a real
+// StopBudget and looks from inside the drain: /readyz already answers 503 with
+// core.kernel:stopping, systemd has already been told STOPPING=1, and the
+// status topic carried exactly one ready:false (05-health 5H.4). A shutdown
+// path that drains first, or that forgets either half of the preamble, fails.
+func TestKernel_ReadyzFlipsBeforeHTTPDrain(t *testing.T) {
+	reg := health.NewRegistry()
+	n := &supNotifier{}
+	sup := health.NewSupervisor(nil, n)
+	var published []health.StatusPayload
+	reg.SetStatusPublisher(func(p health.StatusPayload) { published = append(published, p) })
+	ready := health.ReadyHandler(reg)
+	readyz := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		ready.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		return rec
+	}
+	if rec := readyz(); rec.Code != http.StatusOK {
+		t.Fatalf("/readyz before shutdown = %d, want 200", rec.Code)
+	}
+
+	b := health.NewStopBudget(25*time.Second, health.StopLimits{}, nil)
+	beginHealthShutdown(reg, sup)
+	var duringDrain *httptest.ResponseRecorder
+	var stoppingDuringDrain int
+	if err := b.Run(context.Background(), health.PhaseHTTPDrain, func(context.Context) error {
+		duringDrain = readyz()
+		_, stoppingDuringDrain = n.counts()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if duringDrain.Code != http.StatusServiceUnavailable {
+		t.Errorf("/readyz during the HTTP drain = %d, want 503", duringDrain.Code)
+	}
+	if body := duringDrain.Body.String(); !strings.Contains(body, "core.kernel:stopping") {
+		t.Errorf("/readyz body during the drain = %s, want the stopping token", body)
+	}
+	if stoppingDuringDrain != 1 {
+		t.Errorf("STOPPING=1 sent %d times before the drain started, want 1", stoppingDuringDrain)
+	}
+	if len(published) != 2 || !published[0].Ready || published[1].Ready || !slices.Equal(published[1].NotReady, []string{"core.kernel:stopping"}) {
+		t.Errorf("status feed = %+v, want [ready, not-ready(stopping)]", published)
 	}
 }
