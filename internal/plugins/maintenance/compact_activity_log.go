@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 2.1.2
+// version: 2.1.3
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
 // last-edited: 2026-11-13
 
@@ -112,16 +112,45 @@ func (p *Plugin) compactActivityLogDef() sdk.OperationDef {
 // (F5-08).
 const compactActivityLogKind tasks.Kind = "books." + CompactActivityLogDefID
 
-// compactRecordEnv is what compactAndRecordCore needs from its engine: a log,
-// a progress sink and the one compaction write. It names no group's types,
-// because the nightly op (F5-11's group) calls the same core through
-// compactAndRecord; each shell fills it from its own engine.
-type compactRecordEnv struct {
-	Log      func(level slog.Level, msg string, attrs ...slog.Attr)
-	Progress func(done, total int, msg string)
-	// Compact is database's CompactActivityEntries: HEAD's dependency, or the
-	// native writer's method.
-	Compact func(ctx context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error)
+// compactRecordEnv is what compactAndRecordCore needs from its caller: a log, a
+// progress sink and the one compaction write (database's
+// CompactActivityEntries). It names no group's types, because the manual op
+// (F5-08), the nightly op (F5-11) and both of their native kinds call the same
+// core; each caller supplies its own implementation.
+type compactRecordEnv interface {
+	Log(level slog.Level, msg string, attrs ...slog.Attr)
+	Progress(done, total int, msg string)
+	CompactActivityEntries(ctx context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error)
+}
+
+// headCompactRecordEnv is the HEAD shells' env: the reporter and p.deps.
+type headCompactRecordEnv struct {
+	p        *Plugin
+	reporter sdk.Reporter
+}
+
+func (e headCompactRecordEnv) Log(level slog.Level, msg string, attrs ...slog.Attr) {
+	_ = e.reporter.Log(level, msg, attrs...)
+}
+func (e headCompactRecordEnv) Progress(done, total int, msg string) {
+	_ = e.reporter.UpdateProgress(done, total, msg)
+}
+func (e headCompactRecordEnv) CompactActivityEntries(ctx context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error) {
+	return e.p.deps.CompactActivityEntries(ctx, cutoff, progress)
+}
+
+// t6g3CompactRecordEnv is the native kind's env: the run's log and progress and
+// the writer's compaction.
+type t6g3CompactRecordEnv struct{ base t6g3Base }
+
+func (e t6g3CompactRecordEnv) Log(level slog.Level, msg string, attrs ...slog.Attr) {
+	e.base.Log(level, msg, attrs...)
+}
+func (e t6g3CompactRecordEnv) Progress(done, total int, msg string) {
+	e.base.Progress(done, total, msg)
+}
+func (e t6g3CompactRecordEnv) CompactActivityEntries(ctx context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error) {
+	return e.base.Writer.CompactActivityEntries(ctx, cutoff, progress)
 }
 
 // runCompactActivityLog is the v2 shell of maintenance.compact-activity-log.
@@ -179,9 +208,7 @@ func (p *Plugin) compactActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *t
 			if err != nil {
 				return CompactActivityLogResult{}, err
 			}
-			result, err := compactAndRecordCore(rc.Context(), cutoff, startMsg, compactRecordEnv{
-				Log: base.Log, Progress: base.Progress, Compact: base.Writer.CompactActivityEntries,
-			})
+			result, err := compactAndRecordCore(rc.Context(), cutoff, startMsg, t6g3CompactRecordEnv{base: base})
 			if err != nil {
 				// core drops a failed run's result (core/tasks/erased.go): see the
 				// F5-08 seams note.
@@ -200,13 +227,7 @@ func (p *Plugin) compactActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *t
 // cutoff; everything after that is this function, so a fix to the liveness or
 // result shape cannot land on one and miss the other.
 func (p *Plugin) compactAndRecord(ctx context.Context, cutoff time.Time, startMsg, opName string, reporter sdk.Reporter) error {
-	result, err := compactAndRecordCore(ctx, cutoff, startMsg, compactRecordEnv{
-		Log:      func(level slog.Level, msg string, attrs ...slog.Attr) { _ = reporter.Log(level, msg, attrs...) },
-		Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
-		Compact: func(ctx context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error) {
-			return p.deps.CompactActivityEntries(ctx, cutoff, progress)
-		},
-	})
+	result, err := compactAndRecordCore(ctx, cutoff, startMsg, headCompactRecordEnv{p: p, reporter: reporter})
 	if setErr := opsregistry.ReporterSetResult(reporter, result); setErr != nil {
 		if err != nil {
 			return fmt.Errorf("%s: %w (and persisting the result failed: %v)", opName, err, setErr)
@@ -219,8 +240,14 @@ func (p *Plugin) compactAndRecord(ctx context.Context, cutoff time.Time, startMs
 	return nil
 }
 
-// compactAndRecordCore is the shared body: the compaction and its reporting,
-// returning the result the shell stores. err is the compaction's own, unwrapped.
+// compactAndRecordCore is the ONE shared body of the manual compact-activity-log
+// and the nightly nightly-compact-activity-log ops, on both the HEAD and the
+// native path: one call to CompactActivityEntries (the single compaction
+// implementation), per-chunk progress forwarded to the watchdog, and the
+// CompactActivityLogResult the caller stores. The ops differ only in how they
+// compute cutoff; everything after that is this function, so a fix to the
+// liveness or result shape lands on every caller and cannot miss one. err is
+// the compaction's own, unwrapped.
 func compactAndRecordCore(ctx context.Context, cutoff time.Time, startMsg string, env compactRecordEnv) (CompactActivityLogResult, error) {
 	logger.InfoCtx(ctx, startMsg)
 	env.Log(slog.LevelInfo, startMsg)
@@ -229,7 +256,7 @@ func compactAndRecordCore(ctx context.Context, cutoff time.Time, startMsg string
 	// not fire on an op that finished in milliseconds but was slow to persist.
 	env.Progress(0, 0, "starting compaction")
 
-	totals, err := env.Compact(ctx, cutoff, compactProgressVia(env.Progress))
+	totals, err := env.CompactActivityEntries(ctx, cutoff, compactProgressVia(env.Progress))
 
 	outcome := CompactBackendOutcome{DaysCompacted: totals.DaysCompacted, EntriesDeleted: totals.EntriesDeleted}
 	if err != nil {

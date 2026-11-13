@@ -670,6 +670,9 @@ internal/plugins/maintenance.nativeCBHold.Lost
 internal/plugins/maintenance.nativeCBHold.Release
 internal/plugins/maintenance.reconcileFixer.reader
 internal/plugins/maintenance.t6g3Common
+internal/plugins/maintenance.t6g3CompactRecordEnv.CompactActivityEntries
+internal/plugins/maintenance.t6g3CompactRecordEnv.Log
+internal/plugins/maintenance.t6g3CompactRecordEnv.Progress
 internal/plugins/maintenance.t6g3DecodeParams
 internal/plugins/maintenance.t6g3KindList
 internal/plugins/maintenance.t6g3LiveOnly
