@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-13
 
@@ -584,7 +584,7 @@ func TestT6G6Kinds_WritesThroughShell(t *testing.T) {
 }
 
 // The repoint writes through a real store: its apply reads its own writes back.
-func TestT6G6Kinds_RepointWritesThroughShell(t *testing.T) {
+func TestT6G6More_RepointWritesThroughShell(t *testing.T) {
 	gate := &gateWriter6{name: "gotham"}
 	build := func(t *testing.T) (*t6g6Probe, rbfFixture, tasks.Definition) {
 		f := newRBFFixture(t, -1, "-")
@@ -622,7 +622,7 @@ func TestT6G6Kinds_RepointWritesThroughShell(t *testing.T) {
 }
 
 // A live apply that rewrites rows never runs without the scan stand-down.
-func TestT6G6Kinds_ApplyRefusesWithoutStandDownKey(t *testing.T) {
+func TestT6G6More_ApplyRefusesWithoutStandDownKey(t *testing.T) {
 	gate := &gateWriter6{name: "gotham"}
 
 	p := newT6G6Probe(t)
@@ -655,7 +655,7 @@ func TestT6G6Kinds_ApplyRefusesWithoutStandDownKey(t *testing.T) {
 
 // The three reports write nothing and are declared ReadOnly, so the kernel hands
 // them no writer: their shells never ask deps for one.
-func TestT6G6Kinds_ReadOnlyKindsBuildNoWriter(t *testing.T) {
+func TestT6G6More_ReadOnlyKindsBuildNoWriter(t *testing.T) {
 	p := newT6G6Probe(t)
 	defs := (&Plugin{}).t6g6Kinds(p.deps(), nil)
 	for _, kind := range []tasks.Kind{optimizeKind, orphanBookFilesCleanupKind, orphanBookFilesRepointPlanKind} {
