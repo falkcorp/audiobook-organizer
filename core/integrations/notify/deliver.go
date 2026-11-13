@@ -1,5 +1,5 @@
 // file: core/integrations/notify/deliver.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6b1e94d8-2f07-4c35-8a73-d5c0e91b2f48
 // last-edited: 2026-11-13
 
@@ -38,7 +38,9 @@ type Delivery struct {
 func DeliveryTopic() outbox.Topic[Delivery] { return outbox.NewTopic[Delivery](DeliveryTopicName) }
 
 // DeliveryTopicSpec is the catalog entry of DeliveryTopic, for the kernel's
-// Registrar.Topics. 16 partitions, ordered by channel instance.
+// Registrar.Topics. 16 partitions, keyed by channel instance: the key keeps one
+// channel's entries together, but a hash into 16 lets two channels share a
+// partition, and the consumer is unordered.
 func DeliveryTopicSpec() events.TopicSpec {
 	return DeliveryTopic().Spec(events.TopicSpec{Permission: rbac.Need(integrations.ManagePerm)}, 16)
 }
@@ -84,7 +86,7 @@ func (s *Service) deliver(ctx context.Context, m outbox.Message[Delivery]) error
 
 	nr, release, err := integrations.Lease[Notifier](ctx, s.o.Registry, ref)
 	if err != nil {
-		if ctx.Err() != nil {
+		if relayStopping(ctx) {
 			// The relay is stopping: not a verdict on the channel, and no
 			// attempt. The relay leaves the entry pending on shutdown.
 			return err
@@ -110,7 +112,7 @@ func (s *Service) deliver(ctx context.Context, m outbox.Message[Delivery]) error
 		s.inst.delivery(ref, "ok", adapter, took)
 		return nil
 	}
-	if ctx.Err() != nil {
+	if relayStopping(ctx) {
 		// The relay is stopping, so the send was cut short by us and says
 		// nothing about the channel: hand the error back untouched and use no
 		// attempt. This is decided on the relay's ctx, never on the send's: an
@@ -125,10 +127,13 @@ func (s *Service) deliver(ctx context.Context, m outbox.Message[Delivery]) error
 		return s.disabledRetry(m, cfg, ref, err)
 	}
 	class := integrations.ClassOf(ctx, err)
-	if class == integrations.ClassCanceled {
-		// The relay is alive, so a cancellation or deadline the adapter saw
-		// was the send's own timeout (a receiver that hangs): a transient
-		// failure, counted, and dead-lettered at max_attempts.
+	if class == integrations.ClassCanceled || (class == integrations.ClassUnknown && sctx.Err() != nil) {
+		// The relay is not stopping, so a cancellation or deadline the adapter
+		// saw was the send's own timeout (a receiver that hangs), or the
+		// handler's own deadline: a transient failure, counted, and
+		// dead-lettered at max_attempts. An adapter that lost the cause (an
+		// error that says only "use of closed network connection") reads the
+		// same once the send's ctx is done.
 		class = integrations.ClassTransient
 	}
 	s.inst.delivery(ref, class.String(), adapter, took)
@@ -200,6 +205,14 @@ func (s *Service) clampRetryAfter(ref integrations.Ref, wait time.Duration) time
 // classLabel is the class label of an error the lease returned.
 func classLabel(ctx context.Context, err error) string {
 	return integrations.ClassOf(ctx, err).String()
+}
+
+// relayStopping reports whether the relay is shutting down: its ctx was
+// canceled. A ctx that ended by its deadline is not that: it is the handler's
+// own time limit (core.outbox.handler_timeout), which a send_timeout set at or
+// above it can reach, and a handler that ran out of time has failed an attempt.
+func relayStopping(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.Canceled)
 }
 
 // retryAfterOf is the Retry-After an adapter's error carries, 0 if none.
