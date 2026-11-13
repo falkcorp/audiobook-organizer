@@ -1,5 +1,5 @@
 // file: core/health/hardening_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e6a9d41-7b35-4c80-9f1d-5a3c8e0b7d62
 // last-edited: 2026-11-13
 
@@ -46,6 +46,9 @@ func TestRegister_LateAnswerBeforeStartChecksIsAccepted(t *testing.T) {
 			synctest.Wait()
 			if got := stateOf(r, "core.storage").Result; got.Status != StatusUp {
 				t.Errorf("after the late answer: %+v, want Up", got)
+			}
+			if got := stateOf(r, "core.storage").Duration; got != 8*time.Second {
+				t.Errorf("duration after the late answer = %s, want the probe's own 8s, not 0", got)
 			}
 			if err := <-waited; err != nil {
 				t.Errorf("Wait: %v", err)

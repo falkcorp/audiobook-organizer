@@ -1,5 +1,5 @@
 // file: core/health/registry.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 268f470f-94c4-4d33-93bd-af65944395ec
 // last-edited: 2026-11-13
 
@@ -261,9 +261,10 @@ func validReason(s string) bool {
 // then a probed component changes only by Report. A Probe that panics yields
 // Down with the Reason check_panic, one that outlives its Timeout yields Down
 // with check_timeout (the call is abandoned, not waited for). An abandoned
-// Register-time call that does answer later, before StartChecks has run and
-// before any Report, replaces that Down with its answer (acceptLate): a slow
-// first check at boot is not a permanent Down.
+// Register-time call that does answer later, while no check loop is running
+// (before StartChecks, or after its stop) and before any Report, replaces that
+// Down with its answer (acceptLate): a slow first check at boot is not a
+// permanent Down.
 func (r *Registry) Register(c Check) (Reporter, error) {
 	if !validID(c.ID) {
 		return nil, fmt.Errorf("health: component ID %q is not <module>.<name> of [a-z0-9_-] segments", c.ID)
@@ -316,6 +317,9 @@ type outcome struct {
 	// when the answer and the deadline are both ready, so an answer given in
 	// time is kept and one given after the deadline is not.
 	at time.Time
+	// start is when the call began, so a late answer can say how long the
+	// probe really took (at - start).
+	start time.Time
 }
 
 // result is the Result an outcome stands for.
@@ -353,11 +357,11 @@ func (r *Registry) runCheck(parent context.Context, comp *component) (res Result
 		defer comp.running.Store(false)
 		defer func() {
 			if p := recover(); p != nil {
-				done <- outcome{panicked: p, at: time.Now()}
+				done <- outcome{panicked: p, at: time.Now(), start: start}
 			}
 		}()
 		res := c.Probe(ctx)
-		done <- outcome{res: res, at: time.Now()}
+		done <- outcome{res: res, at: time.Now(), start: start}
 	}()
 	// inTime reports whether o was given before the deadline.
 	inTime := func(o outcome) bool {
@@ -404,23 +408,27 @@ func (r *Registry) runCheck(parent context.Context, comp *component) (res Result
 }
 
 // acceptLate gives a Register-time probe that overran its timeout, and then
-// answered, the answer it was waiting to give. Until StartChecks runs, nothing
-// else will probe the component, so without this a component whose first check
-// is slow (core.storage's engine ping at boot) would stay Down, and the tasks
-// executor, which waits on it, would never start. It applies only while the
-// result is still the timeout this Register recorded: a Report, or the first
-// probe of a started loop, has since spoken for the component and is newer.
+// answered, the answer it was waiting to give. While no check loop is running
+// (before StartChecks, and again after its stop), nothing else will probe the
+// component, so without this a component whose first check is slow
+// (core.storage's engine ping at boot) would stay Down, and the tasks executor,
+// which waits on it, would never start. It applies only while no loop is
+// running and the result is still the timeout this Register recorded: a Report,
+// or the first probe of a started loop, has since spoken for the component and
+// is newer. The recorded duration is the probe's own, from its start to its
+// answer.
 func (r *Registry) acceptLate(comp *component, late <-chan outcome) {
-	res := r.clamp((<-late).result())
+	o := <-late
+	res, took := r.clamp(o.result()), o.at.Sub(o.start)
 	r.mu.Lock()
 	if r.runCtx != nil || comp.result.Reason != reasonCheckTimeout || comp.result.Status != StatusDown {
 		r.mu.Unlock()
 		return
 	}
-	comp.result = res
+	comp.result, comp.duration = res, took
 	r.broadcastLocked()
 	r.mu.Unlock()
-	r.metrics.recordCheck(comp.check.ID, 0, res, res.Status == StatusDown)
+	r.metrics.recordCheck(comp.check.ID, took, res, res.Status == StatusDown)
 	r.afterChange()
 }
 
