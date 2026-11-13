@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -38,12 +38,15 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import datetime
+import http.cookiejar
 import importlib.util
 import json
 import pathlib
 import re
 import shutil
 import sys
+import urllib.error
+import urllib.request
 from typing import Any, Callable
 
 _HERE = pathlib.Path(__file__).resolve().parent
@@ -206,6 +209,37 @@ def verdict_of(status: int, key: str) -> str:
     return DENY if status in DENY_STATUSES else ALLOW
 
 
+def status_only(client: Any, method: str, path: str, body: Any, auth: str, timeout: float) -> int:
+    """Send one request and return its status without reading the body.
+
+    The writer's client reads the whole body, which never ends for an event
+    stream whose heartbeat keeps resetting the socket timeout (a probe that was
+    authorized for ``GET /api/events`` hung the first runner pass for 37 minutes).
+    A 429 is not retried: it means the rate limiter is on, a recorder failure.
+    """
+    hdrs = {"Accept": "application/json", "User-Agent": RECORDER_UA}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        hdrs["Content-Type"] = "application/json"
+    handlers: list[Any] = []
+    if auth.startswith("key:"):
+        hdrs["Authorization"] = f"Bearer {client.keys[auth[4:]]}"
+    elif auth != "none":
+        jar = client.jars.setdefault(auth, http.cookiejar.CookieJar())
+        handlers.append(urllib.request.HTTPCookieProcessor(jar))
+    req = urllib.request.Request(client.base + path, data=data, method=method, headers=hdrs)
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return int(r.status)  # leaving the block closes the connection
+    except urllib.error.HTTPError as e:
+        try:
+            return int(e.code)
+        finally:
+            e.close()
+
+
 class Probe:
     """One principal's way of sending a request (a cookie jar, a key or none)."""
 
@@ -216,13 +250,13 @@ class Probe:
         self.auth = _auth_name(principal)
 
     def send(self, method: str, path: str, body: Any) -> int:
+        """The status line of one request, with the body left unread: a probe that
+        is authorized can reach a stream (SSE) that never ends, and the verdict
+        is the status, which the headers already carry."""
         try:
-            # _once, not request(): request() waits out a 429 and retries, and a
-            # 429 here means the rate limiter is on, which is a recorder failure.
-            r = self.client._once(method, path, body, self.auth, None, 60.0)
+            return status_only(self.client, method, path, body, self.auth, 60.0)
         except OSError as e:  # connection refused/reset, timeout: the server died
             raise RecorderError(f"{self.principal['name']} {method} {path}: {e}") from e
-        return r.status
 
     def fetch(self, path: str) -> Any:
         """A GET whose body the recorder reads (retries a 429, like the writer's client)."""
@@ -290,6 +324,7 @@ def probe_principal(probe: Probe, routes: list[dict[str, Any]]) -> list[int]:
     if problems:
         raise RecorderError(f"{len(problems)} probe(s) without a verdict:\n" + "\n".join(problems))
     canary(probe)
+    print(f"recorded {probe.principal['name']}: {len(routes)} routes", file=sys.stderr, flush=True)
     return [out[(r["method"], r["path"])] for r in routes]
 
 
@@ -305,16 +340,24 @@ def task_defs(admin: Probe) -> list[dict[str, Any]]:
     return sorted(items, key=lambda d: str(d["id"]))
 
 
-def awaiting_runs(admin: Probe) -> list[str]:
+RUN_FIELDS = ("id", "def_id", "def", "kind", "state", "owner", "created_by")
+
+
+def awaiting_runs(admin: Probe) -> list[dict[str, Any]]:
+    """The runs in state awaiting_decision, each with the fields that name its definition."""
     r = admin.fetch("/api/v3/ops/runs?limit=200")
     body = r.body if isinstance(r.body, dict) else {}
     items = body.get("items") or []
-    ids = sorted(str(x["id"]) for x in items if x.get("state") == "awaiting_decision")
-    if not ids:
+    runs = [
+        {k: x[k] for k in RUN_FIELDS if k in x}
+        for x in sorted(items, key=lambda x: str(x["id"]))
+        if x.get("state") == "awaiting_decision"
+    ]
+    if not runs:
         raise RecorderError(
             "the corpus holds no run in state awaiting_decision to probe approvals on"
         )
-    return ids
+    return runs
 
 
 # A task start that is authorized fails validation: a run must never start.
@@ -350,9 +393,10 @@ def probe_tasks(probes: list[Probe], defs: list[dict[str, Any]]) -> list[dict[st
     return rows
 
 
-def probe_approvals(probes: list[Probe], run_ids: list[str]) -> list[dict[str, Any]]:
+def probe_approvals(probes: list[Probe], runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
-    for rid in run_ids:
+    for run in runs:
+        rid = str(run["id"])
         path = f"/api/v3/ops/runs/{rid}/approve"
         statuses, cells = [], []
         for p in probes:
@@ -362,7 +406,7 @@ def probe_approvals(probes: list[Probe], run_ids: list[str]) -> list[dict[str, A
             # N: the probe did not reach the approver check (the run is not
             # readable by this caller); it carries no reach information.
             cells.append(DENY if s in DENY_STATUSES else ALLOW if s in APPROVE_REACHED else "N")
-        rows.append({"run_id": rid, "status": statuses, "verdict": "".join(cells)})
+        rows.append({"run_id": rid, "run": run, "status": statuses, "verdict": "".join(cells)})
     return rows
 
 
