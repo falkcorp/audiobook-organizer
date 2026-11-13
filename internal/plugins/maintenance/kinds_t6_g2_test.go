@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-13
 
@@ -15,6 +15,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -471,8 +472,8 @@ func TestT6G2Kinds_Conformance(t *testing.T) {
 	t.Run("schedule hook", func(t *testing.T) {
 		want := &tasks.Schedule{}
 		for _, d := range (&Plugin{}).t6g2Kinds(fakeT6G2Deps(t), func(tasks.Kind) *tasks.Schedule { return want }) {
-			if got := tasks.CommonOf(d).Schedule; got != want {
-				t.Errorf("%s: Schedule = %p, want the sched hook's value", d.Kind(), got)
+			if got := tasks.CommonOf(d).Schedule; !reflect.DeepEqual(got, want) {
+				t.Errorf("%s: Schedule = %v, want the sched hook's value %v", d.Kind(), got, want)
 			}
 		}
 		for _, d := range defs {
