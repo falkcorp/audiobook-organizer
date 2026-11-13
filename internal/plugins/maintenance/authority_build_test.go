@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/authority_build_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9e2d6a51-7c3b-4f18-a0e4-5b8c1d7f2a63
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -110,6 +110,22 @@ func dryRunPlan(t *testing.T, p *Plugin, ps *database.PebbleStore, id, params st
 	return plan
 }
 
+// t6g1BuildAuthorityLists runs the build core over a raw KV store the way
+// HEAD's shell does: its Reporter on the env and its pool.
+func t6g1BuildAuthorityLists(ctx context.Context, kv database.RawKVStore, params authorityBuildParams, dryRun bool,
+	expectDigest string, reporter sdk.Reporter, now time.Time) (*authorityBuildOutcome, error) {
+	env := authorityBuildEnv{
+		t6g1Env: t6g1HeadEnv(reporter, !dryRun),
+		Store:   kv,
+		Writer:  kv,
+		Items:   t6g1HeadItems(reporter),
+		ApplyParams: func(planOpID string) map[string]any {
+			return map[string]any{"dry_run": false, "plan_op_id": planOpID}
+		},
+	}
+	return buildAuthorityListsCore(ctx, env, params, dryRun, expectDigest, now)
+}
+
 func TestAuthorityBuild_IsRegistered(t *testing.T) {
 	reg := &authorityCaptureRegistry{}
 	require.NoError(t, New(nil).Register(reg))
@@ -129,7 +145,7 @@ func TestAuthorityBuild_DryRunWritesNothing(t *testing.T) {
 	ps := authorityTestStore(t)
 	before := authorityKeyCounts(t, ps)
 	rep := &concurrentReporter{}
-	out, err := buildAuthorityLists(context.Background(), ps, authorityBuildParams{LibraryExportPath: writeExport(t, true), Concurrency: 4}, true, "", rep, time.Now())
+	out, err := t6g1BuildAuthorityLists(context.Background(), ps, authorityBuildParams{LibraryExportPath: writeExport(t, true), Concurrency: 4}, true, "", rep, time.Now())
 	require.NoError(t, err)
 	require.True(t, out.DryRun)
 	require.Positive(t, out.Writes)
@@ -231,15 +247,15 @@ func TestAuthorityBuild_PartialSourcesAreRefusedAndHeld(t *testing.T) {
 
 func TestAuthorityBuild_RejectsRelativeExportPath(t *testing.T) {
 	ps := authorityTestStore(t)
-	_, err := buildAuthorityLists(context.Background(), ps, authorityBuildParams{LibraryExportPath: "library.json"}, true, "", &concurrentReporter{}, time.Now())
+	_, err := t6g1BuildAuthorityLists(context.Background(), ps, authorityBuildParams{LibraryExportPath: "library.json"}, true, "", &concurrentReporter{}, time.Now())
 	require.Error(t, err)
-	_, err = buildAuthorityLists(context.Background(), ps, authorityBuildParams{LibraryExportPath: t.TempDir()}, true, "", &concurrentReporter{}, time.Now())
+	_, err = t6g1BuildAuthorityLists(context.Background(), ps, authorityBuildParams{LibraryExportPath: t.TempDir()}, true, "", &concurrentReporter{}, time.Now())
 	require.Error(t, err, "a directory is not an export")
 }
 
 // TestAuthorityBuild_CatalogPagesConcurrently puts more than two cat_raw
 // pages (including the same product ASIN in two marketplaces) through
-// buildAuthorityLists with several workers, under -race, and checks the
+// the build with several workers, under -race, and checks the
 // result does not depend on the worker count.
 func TestAuthorityBuild_CatalogPagesConcurrently(t *testing.T) {
 	ps := authorityTestStore(t)
@@ -261,7 +277,7 @@ func TestAuthorityBuild_CatalogPagesConcurrently(t *testing.T) {
 
 	var digests []string
 	for _, workers := range []int{1, 8} {
-		out, err := buildAuthorityLists(context.Background(), ps, authorityBuildParams{SkipSeed: true, Concurrency: workers}, true, "", &concurrentReporter{}, time.Now())
+		out, err := t6g1BuildAuthorityLists(context.Background(), ps, authorityBuildParams{SkipSeed: true, Concurrency: workers}, true, "", &concurrentReporter{}, time.Now())
 		require.NoError(t, err)
 		st := out.Report.Sources[authority.SourceCatalog]
 		require.Equal(t, n-50, st.Items)

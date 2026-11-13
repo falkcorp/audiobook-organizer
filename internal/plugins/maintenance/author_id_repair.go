@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.8.3
+// version: 1.9.0
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- author-id-repair ---
@@ -142,6 +143,15 @@ type authorIDRepairResult struct {
 	PhaseDuplicatesSkip bool                   `json:"phase_duplicates_skipped,omitempty"`
 }
 
+// authorIDRepairHelp is the def's Description, which the native kind carries as
+// its Help.
+const authorIDRepairHelp = "Phase (a): books whose author_id names a deleted author are repointed to their " +
+	"next author by credit position, or to the 'Unknown Author' row the name index resolves " +
+	"(never cleared). Phase (b): author rows sharing a normalized name are merged onto the id " +
+	"the name index resolves; each duplicate is deleted only after a re-read finds zero credits " +
+	"in both memdb and Pebble. Defaults to dry_run=true; pass dry_run=false to write. The op " +
+	"result lists every planned or applied change."
+
 func (p *Plugin) authorIDRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-id-repair",
@@ -149,12 +159,7 @@ func (p *Plugin) authorIDRepairDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Repair dangling and duplicate author ids",
-		Description: "Phase (a): books whose author_id names a deleted author are repointed to their " +
-			"next author by credit position, or to the 'Unknown Author' row the name index resolves " +
-			"(never cleared). Phase (b): author rows sharing a normalized name are merged onto the id " +
-			"the name index resolves; each duplicate is deleted only after a re-read finds zero credits " +
-			"in both memdb and Pebble. Defaults to dry_run=true; pass dry_run=false to write. The op " +
-			"result lists every planned or applied change.",
+		Description: authorIDRepairHelp,
 		// Idempotent: after an apply there is nothing dangling and one row per
 		// cluster, so a restart re-plans from current state.
 		ResumePolicy:    sdk.ResumeRestart,
@@ -198,11 +203,139 @@ func (p *Plugin) authorIDRepair(ctx context.Context, params authorIDRepairParams
 	if err != nil {
 		return nil, err
 	}
+	env := authorIDRepairEnv{
+		t6g1Env:                t6g1HeadEnv(reporter, !dryRun),
+		Store:                  t6g1HeadStore{store},
+		Writer:                 t6g1HeadWriter{store},
+		Items:                  t6g1HeadItems(reporter),
+		AcquireStandDown:       p.t6g1HeadStandDown(reporter),
+		InvalidateAuthorsCache: p.deps.InvalidateAuthorsCache,
+		InvalidateDedupCache:   p.deps.InvalidateDedupCache,
+	}
+	return authorIDRepairCore(ctx, params, env)
+}
+
+// authorIDRepairKind is rule R3's kind for the def above.
+const authorIDRepairKind = tasks.Kind("books.maintenance.author-id-repair")
+
+// authorIDRepairStore is the reads the op makes: the library lists, both
+// credit views a delete is re-checked through, and what a merge reads.
+type authorIDRepairStore interface {
+	t6g1MergeReader
+	GetAllAuthors() ([]database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetAuthorByID(id int) (*database.Author, error)
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetBookIDsCreditingAuthorDurable(authorID int) ([]string, error)
+}
+
+// authorIDRepairWriter is the writes the op makes: the Unknown Author row, the
+// journaled scalar repoint, and the merge composites.
+type authorIDRepairWriter interface {
+	t6g1MergeWriter
+	CreateAuthor(name string) (*database.Author, error)
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	// JournalStep writes one undo-ledger row BEFORE the write it describes and
+	// returns the function that voids it (authormerge.Step). Both the row and the
+	// void are writes, so both go through the gate.
+	JournalStep(opID string, row *database.OperationChange) (void func() error, err error)
+}
+
+// JournalStep is authormerge.Step over the plugin's store.
+func (w t6g1HeadWriter) JournalStep(opID string, row *database.OperationChange) (func() error, error) {
+	return authormerge.Step(w.OpsStore, opID, row)
+}
+
+// authorIDRepairEnv is what the core takes from its shell. env.Live is the apply
+// switch (dry_run=false).
+type authorIDRepairEnv struct {
+	t6g1Env
+	Store  authorIDRepairStore
+	Writer authorIDRepairWriter
+	// Items runs the dangling-scalar phase's book pool.
+	Items t6g1ItemsFunc
+	// AcquireStandDown parks the library scan for the apply's write phase.
+	AcquireStandDown func(ctx context.Context, reason string) (t6g1Hold, error)
+	// InvalidateAuthorsCache and InvalidateDedupCache drop the cached author list
+	// after an apply that wrote.
+	InvalidateAuthorsCache func()
+	InvalidateDedupCache   func()
+}
+
+// authorIDRepairNativeParams are the native kind's params: HEAD's without
+// dry_run, which the run's mode carries (Live applies, Preview reports).
+type authorIDRepairNativeParams struct {
+	SampleLimit    int  `json:"sample_limit,omitempty"`
+	SkipDangling   bool `json:"skip_dangling,omitempty"`
+	SkipDuplicates bool `json:"skip_duplicates,omitempty"`
+}
+
+// UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
+func (p *authorIDRepairNativeParams) UnmarshalJSON(b []byte) error {
+	if err := t6g1RefuseModeKeys(b, t6g1DryRunKeys...); err != nil {
+		return err
+	}
+	type plain authorIDRepairNativeParams
+	return json.Unmarshal(b, (*plain)(p))
+}
+
+// authorIDRepairParallelism is the dangling-scalar phase's book pool: one item
+// per book, each writing only its own row. The duplicate phase is sequential.
+func authorIDRepairParallelism() tasks.Parallelism { return tasks.CPU() }
+
+// authorIDRepairNative is the native kind. Preview is the dry run; the result is
+// the per-change report HEAD stored as the op result.
+func (p *Plugin) authorIDRepairNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(authorIDRepairKind, sched)
+	c.Title = "Repair dangling and duplicate author ids"
+	c.Help = authorIDRepairHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	c.Resume = tasks.ResumeFromZero
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.author-id-repair")
+	c.Timeout = 2 * time.Hour
+	return tasks.Task(authorIDRepairKind, tasks.TaskSpec[authorIDRepairNativeParams, authorIDRepairResult]{
+		Common: c,
+		Run: func(rc *tasks.RC, np authorIDRepairNativeParams) (authorIDRepairResult, error) {
+			if err := t6g1RefuseUnwired(rc, authorIDRepairKind, deps.cacheWires(true)...); err != nil {
+				var zero authorIDRepairResult
+				return zero, err
+			}
+			env := authorIDRepairEnv{
+				t6g1Env:                t6g1NativeEnv(rc),
+				Writer:                 deps.NewWriters(rc.Writer()).IDRepair,
+				Items:                  t6g1NativeItems(rc, authorIDRepairParallelism()),
+				AcquireStandDown:       t6g1NativeStandDown(rc, deps.StandDownKey),
+				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,
+				InvalidateDedupCache:   deps.InvalidateDedupCache,
+			}
+			if deps.Stores.IDRepair != nil {
+				env.Store = deps.Stores.IDRepair
+			}
+			res, err := authorIDRepairCore(rc.Context(), authorIDRepairParams{
+				SampleLimit: np.SampleLimit, SkipDangling: np.SkipDangling, SkipDuplicates: np.SkipDuplicates,
+			}, env)
+			if res == nil {
+				return authorIDRepairResult{}, err
+			}
+			return *res, err
+		},
+	})
+}
+
+// authorIDRepairCore is the body of authorIDRepair from the sample limit on.
+func authorIDRepairCore(ctx context.Context, params authorIDRepairParams, env authorIDRepairEnv) (*authorIDRepairResult, error) {
+	store := env.Store
+	if store == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	dryRun := !env.Live
 	sample := params.SampleLimit
 	if sample <= 0 {
 		sample = authorIDRepairDefaultSample
 	}
-	log := reporter.Logger()
+	log := env.Logger
 
 	res := &authorIDRepairResult{
 		DryRun:              dryRun,
@@ -217,19 +350,18 @@ func (p *Plugin) authorIDRepair(ctx context.Context, params authorIDRepairParams
 
 	// Stand-down for the write phase only, as author-duplicate-merge does: a
 	// running scan rewrites book rows underneath an apply. A dry run parks nothing.
-	var standDownHolder string
-	var standDownHeld bool
+	var standDown t6g1Hold
 	if !dryRun {
-		holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "author-id-repair apply")
+		hold, sdErr := env.AcquireStandDown(ctx, "author-id-repair apply")
 		if sdErr != nil {
 			return res, fmt.Errorf("author-id-repair: acquire scan stand-down: %w", sdErr)
 		}
-		defer release()
-		standDownHolder, standDownHeld = holderID, held
+		defer hold.Release()
+		standDown = hold
 	}
-	lost := func() bool { return scanStandDownLostForApply(p.deps, standDownHolder, standDownHeld) }
+	lost := func() bool { return standDown.Lost != nil && standDown.Lost() }
 
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 	if !dryRun && opID == "" {
 		// Every write is journaled under this id so the revert engine can undo
 		// it; rows under no id belong to no operation a revert can name.
@@ -238,14 +370,14 @@ func (p *Plugin) authorIDRepair(ctx context.Context, params authorIDRepairParams
 	wrote := false
 
 	if !params.SkipDangling {
-		w, err := p.authorIDRepairDangling(ctx, store, reporter, dryRun, opID, lost, res)
+		w, err := authorIDRepairDangling(ctx, env, opID, lost, res)
 		wrote = wrote || w
 		if err != nil {
 			return res, err
 		}
 	}
 	if !params.SkipDuplicates {
-		w, err := p.authorIDRepairDuplicates(ctx, store, reporter, dryRun, opID, lost, res)
+		w, err := authorIDRepairDuplicates(ctx, env, opID, lost, res)
 		wrote = wrote || w
 		if err != nil {
 			return res, err
@@ -253,8 +385,8 @@ func (p *Plugin) authorIDRepair(ctx context.Context, params authorIDRepairParams
 	}
 
 	if wrote {
-		p.deps.InvalidateAuthorsCache()
-		p.deps.InvalidateDedupCache()
+		env.InvalidateAuthorsCache()
+		env.InvalidateDedupCache()
 	}
 
 	summary := fmt.Sprintf(
@@ -267,7 +399,7 @@ func (p *Plugin) authorIDRepair(ctx context.Context, params authorIDRepairParams
 	log.Info("author-id-repair: done", "dry_run", dryRun,
 		"dangling_sample", firstN(res.DanglingChanges, sample),
 		"duplicate_sample", firstN(res.DuplicateChanges, sample))
-	_ = reporter.UpdateProgress(1, 1, summary)
+	env.Progress(1, 1, summary)
 	return res, nil
 }
 
@@ -283,16 +415,14 @@ func firstN[T any](s []T, n int) []T {
 // Parallel via registry.RunItems, partitioned BY BOOK: each item is one book
 // and each book appears once, and the only row an item writes is its own book
 // row, so no two workers can touch the same row.
-func (p *Plugin) authorIDRepairDangling(
+func authorIDRepairDangling(
 	ctx context.Context,
-	store OpsStore,
-	reporter sdk.Reporter,
-	dryRun bool,
+	env authorIDRepairEnv,
 	opID string,
 	lost func() bool,
 	res *authorIDRepairResult,
 ) (bool, error) {
-	log := reporter.Logger()
+	store, dryRun, log := env.Store, !env.Live, env.Logger
 
 	authors, err := store.GetAllAuthors()
 	if err != nil {
@@ -326,7 +456,7 @@ func (p *Plugin) authorIDRepairDangling(
 				candidates = append(candidates, b)
 			}
 		}
-		_ = reporter.UpdateProgress(res.BooksScanned, 0,
+		env.Progress(res.BooksScanned, 0,
 			fmt.Sprintf("Phase (a): scanned %d books, %d dangling candidates", res.BooksScanned, len(candidates)))
 		if len(page) < authorIDRepairPageSize {
 			break
@@ -354,7 +484,7 @@ func (p *Plugin) authorIDRepairDangling(
 		if unknownID != 0 || dryRun {
 			return unknownID, nil
 		}
-		u, cErr := store.CreateAuthor(database.UnknownAuthorName)
+		u, cErr := env.Writer.CreateAuthor(database.UnknownAuthorName)
 		if cErr != nil || u == nil || u.ID <= 0 {
 			return 0, fmt.Errorf("create %q: %v", database.UnknownAuthorName, cErr)
 		}
@@ -386,7 +516,17 @@ func (p *Plugin) authorIDRepairDangling(
 		}
 	}
 
-	runErr := registry.RunItems(ctx, reporter, candidates, func(ctx context.Context, c database.BookCore) error {
+	runErr := env.Items(ctx, len(candidates), t6g1ItemsOptions{
+		Concurrency: runtime.NumCPU(),
+		// Label runs inside each worker goroutine, so it reads done under mu.
+		Label: func(i, total int) string {
+			mu.Lock()
+			d := done
+			mu.Unlock()
+			return fmt.Sprintf("Phase (a): dangling author ids %d/%d (processed %d)", i+1, total, d)
+		},
+	}, func(ctx context.Context, idx int) error {
+		c := candidates[idx]
 		old := *c.AuthorID
 		// Pebble re-read: the row decides, not the projection.
 		full, gErr := store.GetBookByID(c.ID)
@@ -459,7 +599,7 @@ func (p *Plugin) authorIDRepairDangling(
 			return nil
 		}
 		journaledAuthor := full.Author
-		void, jErr := authormerge.Step(store, opID, row)
+		void, jErr := env.Writer.JournalStep(opID, row)
 		if jErr != nil {
 			ch.Error = "undo row not recorded: " + jErr.Error()
 			record(ch, "failed")
@@ -472,7 +612,7 @@ func (p *Plugin) authorIDRepairDangling(
 			}
 		}
 		repointed := false
-		written, uErr := store.ModifyBook(c.ID, func(cur *database.Book) error {
+		written, uErr := env.Writer.ModifyBook(c.ID, func(cur *database.Book) error {
 			if cur.AuthorID == nil || *cur.AuthorID != old || !sameAuthorObject(cur.Author, journaledAuthor) {
 				return database.ErrSkipBookWrite
 			}
@@ -503,15 +643,6 @@ func (p *Plugin) authorIDRepairDangling(
 		mu.Unlock()
 		record(ch, "repointed")
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: runtime.NumCPU(),
-		// Label runs inside each worker goroutine, so it reads done under mu.
-		Label: func(i, total int) string {
-			mu.Lock()
-			d := done
-			mu.Unlock()
-			return fmt.Sprintf("Phase (a): dangling author ids %d/%d (processed %d)", i+1, total, d)
-		},
 	})
 	sort.Slice(res.DanglingChanges, func(i, j int) bool { return res.DanglingChanges[i].BookID < res.DanglingChanges[j].BookID })
 	res.UnknownAuthorID = unknownID
@@ -529,16 +660,14 @@ func (p *Plugin) authorIDRepairDangling(
 // the work disjoint and a pool would lose one worker's update to the other --
 // the reasoning author_duplicate_merge.go and author_conjunction_repair.go
 // already record. The population is small (a few dozen clusters on prod).
-func (p *Plugin) authorIDRepairDuplicates(
+func authorIDRepairDuplicates(
 	ctx context.Context,
-	store OpsStore,
-	reporter sdk.Reporter,
-	dryRun bool,
+	env authorIDRepairEnv,
 	opID string,
 	lost func() bool,
 	res *authorIDRepairResult,
 ) (bool, error) {
-	log := reporter.Logger()
+	store, dryRun, log := env.Store, !env.Live, env.Logger
 	authors, err := store.GetAllAuthors()
 	if err != nil {
 		return false, fmt.Errorf("author-id-repair: list authors: %w", err)
@@ -587,12 +716,12 @@ func (p *Plugin) authorIDRepairDuplicates(
 				return wrote, ctx.Err()
 			}
 			step++
-			_ = reporter.UpdateProgress(step, res.DuplicateRows,
+			env.Progress(step, res.DuplicateRows,
 				fmt.Sprintf("Phase (b): duplicate %d/%d (%q -> %d)", step, res.DuplicateRows, dup.Name, canonical.ID))
 			if !dryRun && lost() {
 				return wrote, fmt.Errorf("author-id-repair: scan stand-down lease lost; refusing to keep writing")
 			}
-			ch, w, ledger := p.authorIDMergeOne(store, dryRun, opID, norm, dup, *canonical, log)
+			ch, w, ledger := authorIDMergeOneVia(store, env.Writer, dryRun, opID, norm, dup, *canonical, log)
 			wrote = wrote || w
 			res.UndoLedgerRows += ledger
 			res.DuplicateOutcomes[ch.Outcome]++
@@ -607,7 +736,9 @@ func (p *Plugin) authorIDRepairDuplicates(
 // "lowest id" -- only the indexed row is reachable by name, so any other choice
 // leaves the survivor unreachable. A cluster whose index resolves to nothing,
 // or to a row outside the cluster, is skipped rather than guessed at.
-func authorIDRepairCanonical(store OpsStore, group []database.Author) (*database.Author, string) {
+func authorIDRepairCanonical(store interface {
+	GetAuthorByName(name string) (*database.Author, error)
+}, group []database.Author) (*database.Author, string) {
 	resolved, err := store.GetAuthorByName(group[0].Name)
 	if err != nil || resolved == nil {
 		return nil, authorIDClusterIndexUnresolved
@@ -660,7 +791,7 @@ func rewriteJoinsOnto(joins []database.BookAuthor, from, into int) ([]database.B
 	return out, changed
 }
 
-// authorIDMergeOne moves one duplicate's credits onto canonical and deletes it
+// authorIDMergeOneVia moves one duplicate's credits onto canonical and deletes it
 // when -- and only when -- a re-read through BOTH stores finds nothing left.
 // Returns the change record, whether it wrote, and undo-ledger rows written.
 //
@@ -669,8 +800,12 @@ func rewriteJoinsOnto(joins []database.BookAuthor, from, into int) ([]database.B
 // author_merge_credits / author_merge_delete rows the revert engine reverses:
 // the same rows the Authors view merge writes. An apply with no operation id
 // is refused, as its merge could never be undone.
-func (p *Plugin) authorIDMergeOne(
-	store OpsStore,
+//
+// It takes a reader and a writer, so the native kind reaches it through its run's
+// gated writer and HEAD's shell through the plugin's store.
+func authorIDMergeOneVia(
+	store authorIDRepairStore,
+	writer t6g1MergeWriter,
 	dryRun bool,
 	opID, norm string,
 	dup, canonical database.Author,
@@ -683,7 +818,7 @@ func (p *Plugin) authorIDMergeOne(
 	// The delete is the store's merge-delete capability; a store without it
 	// would have to drop the duplicate's aliases with it. Refuse before any book
 	// moves, in a preview too. No DeleteAuthor fallback.
-	if _, ok := database.AsCapability[database.AuthorMergeDeleter](store); !ok {
+	if !store.CanMergeDelete() {
 		ch.Outcome, ch.Error = authorIDMergeFailed, database.ErrAuthorMergeDeleteUnsupported.Error()
 		return ch, false, 0
 	}
@@ -753,7 +888,7 @@ func (p *Plugin) authorIDMergeOne(
 			primary = full.AuthorID
 		}
 		target := canonical
-		res, mErr := authormerge.MoveCredits(store, opID, authormerge.CreditMove{
+		res, mErr := writer.MoveCredits(opID, authormerge.CreditMove{
 			BookID: bookID, FromID: dup.ID, IntoID: canonical.ID, Into: &target,
 			Before: joins, After: after, PrimaryBefore: primary,
 		})
@@ -781,7 +916,7 @@ func (p *Plugin) authorIDMergeOne(
 	// Either one still seeing a credit -- a failed write above, a book written
 	// concurrently, memdb and Pebble disagreeing -- holds the row back.
 	var still []string
-	if vErr := database.VerifyAuthorUnlinked(store, dup.ID); vErr != nil {
+	if vErr := store.VerifyAuthorUnlinked(dup.ID); vErr != nil {
 		still = append(still, "relink-view: "+vErr.Error())
 	}
 	remaining, drErr := store.GetBookIDsCreditingAuthorDurable(dup.ID)
@@ -793,7 +928,7 @@ func (p *Plugin) authorIDMergeOne(
 		ch.Outcome, ch.StillCrediting = authorIDMergeHeld, still
 		log.Warn("author-id-repair: duplicate still credited after moves, NOT deleted",
 			"author_id", dup.ID, "name", dup.Name, "canonical_id", canonical.ID, "still", still)
-	} else if del, delErr := authormerge.MergeDelete(store, opID, dup, canonical); delErr != nil {
+	} else if del, delErr := writer.MergeDeleteAuthor(opID, dup, canonical); delErr != nil {
 		// MergeDeleteAuthor: the duplicate's aliases move to the canonical row and
 		// the tombstone is written with the delete (DeleteAuthor dropped both).
 		ch.Outcome, ch.Error = authorIDMergeFailed, delErr.Error()

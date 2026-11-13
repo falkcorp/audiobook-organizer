@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_title_fragment_report.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 13220b5a-7a38-4977-b0f3-257781a67fe3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- author-title-fragment-scan ---
@@ -152,19 +153,23 @@ func topTitleFragmentRows(rows []titleFragmentRow, limit int) []titleFragmentRow
 	return rows
 }
 
+// authorTitleFragmentHelp is the def's Description, which the native kind
+// carries as its Help.
+const authorTitleFragmentHelp = "REPORT ONLY — changes nothing. Walks every author and flags names that begin " +
+	"with '-' (track/chapter titles parsed into the author field, e.g. '- Edgedancer') or that " +
+	"fail the person-name shape check (which also catches single-word names, so read that count " +
+	"as a net, not a verdict). Logs counts plus up to 100 sample rows per reason (author ID, " +
+	"name, book count). The book count is the DISPLAY counter: it omits trashed books, " +
+	"non-primary versions and junction-only co-author credits, so '0 books' here does NOT mean " +
+	"the author is safe to delete."
+
 func (p *Plugin) authorTitleFragmentScanDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-title-fragment-scan",
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Author title-fragment scan",
-		Description: "REPORT ONLY — changes nothing. Walks every author and flags names that begin " +
-			"with '-' (track/chapter titles parsed into the author field, e.g. '- Edgedancer') or that " +
-			"fail the person-name shape check (which also catches single-word names, so read that count " +
-			"as a net, not a verdict). Logs counts plus up to 100 sample rows per reason (author ID, " +
-			"name, book count). The book count is the DISPLAY counter: it omits trashed books, " +
-			"non-primary versions and junction-only co-author credits, so '0 books' here does NOT mean " +
-			"the author is safe to delete.",
+		Description: authorTitleFragmentHelp,
 		// ResumeDrop: a read-only report is cheap to re-trigger, and a resumed run
 		// would only repeat the same reads.
 		ResumePolicy:    sdk.ResumeDrop,
@@ -180,12 +185,39 @@ func (p *Plugin) authorTitleFragmentScanDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runAuthorTitleFragmentScan(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	store := p.deps.OpsStore()
+	env := authorTitleFragmentEnv{t6g1Env: t6g1HeadEnv(reporter, true)}
+	// A nil OpsStore stays a nil interface in env.Store, which the core reports
+	// as "database not initialized".
+	if store := p.deps.OpsStore(); store != nil {
+		env.Store = store
+	}
+	return authorTitleFragmentScanCore(ctx, env)
+}
+
+// authorTitleFragmentKind is rule R3's kind for the def above.
+const authorTitleFragmentKind = tasks.Kind("books.maintenance.author-title-fragment-scan")
+
+// authorTitleFragmentStore is the two reads the scan makes.
+type authorTitleFragmentStore interface {
+	GetAllAuthors() ([]database.Author, error)
+	GetAllAuthorBookCounts() (map[int]int, error)
+}
+
+// authorTitleFragmentEnv is what the core takes from its shell. The scan writes
+// nothing, so it has no writer.
+type authorTitleFragmentEnv struct {
+	t6g1Env
+	Store authorTitleFragmentStore
+}
+
+// authorTitleFragmentScanCore is the body of runAuthorTitleFragmentScan.
+func authorTitleFragmentScanCore(ctx context.Context, env authorTitleFragmentEnv) error {
+	store := env.Store
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	_ = reporter.Log(slog.LevelInfo, "Starting author title-fragment scan (report only)")
-	_ = reporter.UpdateProgress(0, 3, "Listing authors…")
+	env.Log(slog.LevelInfo, "Starting author title-fragment scan (report only)")
+	env.Progress(0, 3, "Listing authors…")
 
 	authors, err := store.GetAllAuthors()
 	if err != nil {
@@ -195,7 +227,7 @@ func (p *Plugin) runAuthorTitleFragmentScan(ctx context.Context, _ json.RawMessa
 		return err
 	}
 
-	_ = reporter.UpdateProgress(1, 3, "Counting books per author…")
+	env.Progress(1, 3, "Counting books per author…")
 	// GetAllAuthorBookCounts is the DISPLAY counter (skips trashed books,
 	// non-primary versions and junction-only co-author credits — see the long
 	// comment in author_purge_empty.go). Acceptable for a report that only shows
@@ -208,19 +240,41 @@ func (p *Plugin) runAuthorTitleFragmentScan(ctx context.Context, _ json.RawMessa
 		return fmt.Errorf("author book counts: %w", err)
 	}
 
-	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Checking %d author names…", len(authors)))
+	env.Progress(2, 3, fmt.Sprintf("Checking %d author names…", len(authors)))
 	report := scanTitleFragmentAuthors(authors, bookCounts, titleFragmentSampleLimit)
 
 	summary := report.summary()
-	_ = reporter.Log(slog.LevelInfo, summary)
+	env.Log(slog.LevelInfo, summary)
 	for _, rows := range [][]titleFragmentRow{report.HyphenSample, report.NotPersonSample} {
 		for _, r := range rows {
-			_ = reporter.Log(slog.LevelInfo,
+			env.Log(slog.LevelInfo,
 				fmt.Sprintf("flagged author reason=%s author_id=%d books=%d name=%q", r.Reason, r.ID, r.Books, r.Name),
 				slog.Int("author_id", r.ID), slog.Int("books", r.Books),
 				slog.String("reason", r.Reason), slog.String("name", r.Name))
 		}
 	}
-	_ = reporter.UpdateProgress(3, 3, summary)
+	env.Progress(3, 3, summary)
 	return nil
+}
+
+// authorTitleFragmentNative is the native kind: a report, so ReadOnly.
+func (p *Plugin) authorTitleFragmentNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(authorTitleFragmentKind, sched)
+	c.Title = "Author title-fragment scan"
+	c.Help = authorTitleFragmentHelp
+	c.Effects = tasks.ReadOnly(tasks.Res("books", "authors"))
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.author-title-fragment-scan")
+	c.Timeout = 10 * time.Minute
+	return tasks.Task(authorTitleFragmentKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, _ json.RawMessage) (struct{}, error) {
+			env := authorTitleFragmentEnv{t6g1Env: t6g1NativeEnv(rc)}
+			if deps.Stores.TitleFragment != nil {
+				env.Store = deps.Stores.TitleFragment
+			}
+			return struct{}{}, authorTitleFragmentScanCore(rc.Context(), env)
+		},
+	})
 }
