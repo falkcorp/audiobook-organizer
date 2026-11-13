@@ -1,5 +1,5 @@
 // file: core/integrations/notify/publish_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c3e1a95-d208-4b6f-8e41-a05f92d7c318
 // last-edited: 2026-11-13
 
@@ -277,5 +277,49 @@ func TestNotifyMetaAloneProducesNoNotification(t *testing.T) {
 				return r.fake.Sent() == 0 && st.Pending == 0 && st.IntakeBacklog == 0 && st.Dead == 0
 			})
 		})
+	}
+}
+
+// Publish stages nothing for a channel that is switched off: the entry would
+// sit on a partition other channels share until max_age. The skipped targets
+// are counted (result "disabled"), and a rule whose only channel is off leaves
+// no entry at all.
+func TestPublish_SkipsADisabledInstance(t *testing.T) {
+	r := newRig(t, rigOpts{metrics: true})
+	cfg, ok := r.reg.Config(commissioner)
+	if !ok {
+		t.Fatal("no commissioner instance")
+	}
+	cfg.Enabled = false
+	if _, err := r.reg.Put(admin(), cfg, nil); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	r.putRule(rule("roof", []string{signalName}, commissioner, alfred))
+	r.publish(signalNote("Penguin"))
+	eventually(t, "alfred's delivery", func() bool { return len(callsTo(r.fake, alfred)) == 1 })
+	stays(t, "nothing for the disabled commissioner", 200*time.Millisecond, func() bool {
+		return len(callsTo(r.fake, commissioner)) == 0 && len(r.dead()) == 0
+	})
+	labels := func(result string) map[string]string {
+		return map[string]string{"topic": signalName, "result": result}
+	}
+	if got := sample(t, r.mp, "mediacore_notify_targets_total", labels("disabled")); got != 1 {
+		t.Errorf("targets_total{disabled} = %v, want 1", got)
+	}
+	if got := sample(t, r.mp, "mediacore_notify_targets_total", labels("resolved")); got != 1 {
+		t.Errorf("targets_total{resolved} = %v, want 1 (alfred only)", got)
+	}
+
+	// A rule whose only channel is off: published, but nothing is staged.
+	r.putRule(rule("only-commissioner", []string{"wayne.vault.tripped.v1"}, commissioner))
+	r.publish(notify.Notification{Topic: vaultName, Title: "Vault tripped"})
+	stays(t, "no delivery for a rule whose channel is off", 200*time.Millisecond, func() bool {
+		return len(callsTo(r.fake, commissioner)) == 0 && r.status().Pending+r.status().Retrying == 0
+	})
+	if got := sample(t, r.mp, "mediacore_notify_targets_total", map[string]string{"topic": vaultName, "result": "disabled"}); got != 1 {
+		t.Errorf("targets_total{vault,disabled} = %v, want 1", got)
+	}
+	if got := sample(t, r.mp, "mediacore_notify_targets_total", map[string]string{"topic": vaultName, "result": "no_rule"}); got != 0 {
+		t.Errorf("targets_total{vault,no_rule} = %v, want 0: a rule matched", got)
 	}
 }
