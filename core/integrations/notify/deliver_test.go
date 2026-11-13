@@ -1,5 +1,5 @@
 // file: core/integrations/notify/deliver_test.go
-// version: 1.0.5
+// version: 1.0.7
 // guid: b8d24f6a-3e17-4c90-a5b2-9f0e7d1c4a63
 // last-edited: 2026-11-13
 
@@ -375,29 +375,46 @@ func TestDeliver_SlowChannelDoesNotBlockAnother(t *testing.T) {
 // An adapter classifies against the send's own ctx, where the 15s send timeout
 // looks like a cancellation. The handler decides on the relay's ctx: a send
 // that hangs past send_timeout is a transient failure, counted, and
-// dead-lettered at max_attempts, not an endless retry until max_age.
+// dead-lettered at max_attempts, not an endless retry until max_age. Whatever
+// shape the adapter's error has once the send ctx is done: a classified
+// cancellation (what core.webhook and core.email return), a bare context
+// error, a wrapped one, or a transport error that lost its cause.
 func TestDeliver_HungSendIsDeadLetteredAtMaxAttempts(t *testing.T) {
-	r := newRig(t, rigOpts{metrics: true, notifyCfg: func(c *notify.Config) {
-		c.MaxAttempts = 2
-		c.SendTimeout = 50 * time.Millisecond
-	}})
-	r.fake.SendFn = func(ctx context.Context, _ notify.Notification, tg notify.Target) error {
-		<-ctx.Done() // the receiver never answers
-		return notifytest.Fail(tg.Instance, integrations.ClassCanceled, 0, 0)
+	shapes := map[string]func(tg notify.Target, ctx context.Context) error{
+		"a classified cancellation": func(tg notify.Target, _ context.Context) error {
+			return notifytest.Fail(tg.Instance, integrations.ClassCanceled, 0, 0)
+		},
+		"a bare deadline error":    func(_ notify.Target, ctx context.Context) error { return ctx.Err() },
+		"a wrapped deadline error": func(_ notify.Target, ctx context.Context) error { return fmt.Errorf("send: %w", ctx.Err()) },
+		"an error that lost its cause": func(notify.Target, context.Context) error {
+			return errors.New("use of closed network connection")
+		},
 	}
-	r.putRule(rule("roof", []string{signalName}, commissioner))
-	r.publish(signalNote("Mad Hatter"))
+	for name, shape := range shapes {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, rigOpts{metrics: true, notifyCfg: func(c *notify.Config) {
+				c.MaxAttempts = 2
+				c.SendTimeout = 50 * time.Millisecond
+			}})
+			r.fake.SendFn = func(ctx context.Context, _ notify.Notification, tg notify.Target) error {
+				<-ctx.Done() // the receiver never answers
+				return shape(tg, ctx)
+			}
+			r.putRule(rule("roof", []string{signalName}, commissioner))
+			r.publish(signalNote("Mad Hatter"))
 
-	eventually(t, "the dead letter", func() bool { return len(r.dead()) == 1 })
-	stays(t, "no third attempt", 300*time.Millisecond, func() bool { return r.fake.Sent() == 2 })
-	if d := r.dead()[0]; d.Attempts != 2 {
-		t.Errorf("dead letter attempts = %d, want 2", d.Attempts)
-	}
-	if got := counted(r, commissioner, "transient"); got != 2 {
-		t.Errorf("deliveries_total{transient} = %v, want 2 (a timeout is transient, not canceled)", got)
-	}
-	if got := counted(r, commissioner, "canceled"); got != 0 {
-		t.Errorf("deliveries_total{canceled} = %v, want 0", got)
+			eventually(t, "the dead letter", func() bool { return len(r.dead()) == 1 })
+			stays(t, "no third attempt", 300*time.Millisecond, func() bool { return r.fake.Sent() == 2 })
+			if d := r.dead()[0]; d.Attempts != 2 {
+				t.Errorf("dead letter attempts = %d, want 2", d.Attempts)
+			}
+			if got := counted(r, commissioner, "transient"); got != 2 {
+				t.Errorf("deliveries_total{transient} = %v, want 2 (a timeout is transient, not canceled)", got)
+			}
+			if got := counted(r, commissioner, "canceled"); got != 0 {
+				t.Errorf("deliveries_total{canceled} = %v, want 0", got)
+			}
+		})
 	}
 }
 
@@ -415,17 +432,25 @@ func TestDeliver_HugeRetryAfterIsClampedAndTheEntryExpires(t *testing.T) {
 	}
 	r.putRule(rule("roof", []string{signalName}, commissioner))
 	r.publish(signalNote("Ra's al Ghul"))
-	eventually(t, "the first send", func() bool { return r.fake.Sent() >= 1 })
+	eventually(t, "the first send, parked for a retry", func() bool { return r.fake.Sent() >= 1 && r.status().Retrying >= 1 })
 
-	eventually(t, "a second send once the 5 minute clamp has passed", func() bool {
+	// Step the clock in clamp-sized steps (a few hours in one jump upsets the
+	// relay's own rotation): ten steps of 6 minutes is an hour, inside max_age,
+	// so a clamp that works lets the second send happen with the entry alive.
+	for i := 0; r.fake.Sent() < 2; i++ {
+		if i == 10 {
+			t.Fatal("no second send within an hour of clock time: the Retry-After was not clamped")
+		}
 		r.clock.advance(6 * time.Minute)
-		return r.fake.Sent() >= 2
-	})
+		time.Sleep(20 * time.Millisecond)
+	}
 	if len(r.dead()) != 0 {
 		t.Fatalf("dead-lettered %d entries before max_age", len(r.dead()))
 	}
-	r.clock.advance(3 * time.Hour)
-	eventually(t, "the entry expired", func() bool { return len(r.dead()) == 1 && counted(r, commissioner, "expired") == 1 })
+	eventually(t, "the entry expired", func() bool {
+		r.clock.advance(30 * time.Minute)
+		return len(r.dead()) == 1 && counted(r, commissioner, "expired") == 1
+	})
 }
 
 // A local refusal that time lifts (a hold, an open breaker, a spent budget) is
@@ -446,8 +471,10 @@ func TestDeliver_LocalRefusalWaitsOrDeadLetters(t *testing.T) {
 		eventually(t, "the refused send", func() bool { return r.fake.Sent() == 1 })
 		stays(t, "no second send before the hold ends, and no dead letter", 300*time.Millisecond,
 			func() bool { return r.fake.Sent() == 1 && len(r.dead()) == 0 })
-		r.clock.advance(3 * time.Minute)
-		eventually(t, "the second send after the hold", func() bool { return r.fake.Sent() == 2 })
+		eventually(t, "the second send after the hold", func() bool {
+			r.clock.advance(3 * time.Minute)
+			return r.fake.Sent() == 2
+		})
 		stays(t, "never dead-lettered", 150*time.Millisecond, func() bool { return len(r.dead()) == 0 })
 	})
 	t.Run("a hold longer than max_age expires instead of parking the entry", func(t *testing.T) {
@@ -459,8 +486,10 @@ func TestDeliver_LocalRefusalWaitsOrDeadLetters(t *testing.T) {
 		r.putRule(rule("roof", []string{signalName}, commissioner))
 		r.publish(signalNote("Hush"))
 		eventually(t, "the refused send", func() bool { return r.fake.Sent() == 1 })
-		r.clock.advance(3 * time.Hour)
-		eventually(t, "the entry expired", func() bool { return len(r.dead()) == 1 && counted(r, commissioner, "expired") == 1 })
+		eventually(t, "the entry expired", func() bool {
+			r.clock.advance(30 * time.Minute)
+			return len(r.dead()) == 1 && counted(r, commissioner, "expired") == 1
+		})
 	})
 	t.Run("an egress refusal dead-letters at once", func(t *testing.T) {
 		r := newRig(t, rigOpts{metrics: true})
@@ -523,6 +552,40 @@ func TestDeliver_ShutdownIsNotAnAttempt(t *testing.T) {
 		}
 		if got := counted(r, commissioner, "transient"); got != 0 {
 			t.Errorf("deliveries_total{transient} = %v, want 0: a shutdown is not the channel failing", got)
+		}
+	})
+}
+
+// The handler's own ctx also ends by its deadline (core.outbox.handler_timeout)
+// when a send_timeout is configured at or above it. That is not a shutdown: the
+// handler ran out of time, which is a failed attempt, so on the last attempt it
+// dead-letters instead of returning untouched forever.
+func TestDeliver_HandlerTimeoutIsACountedFailure(t *testing.T) {
+	run := func(r *rig, ctx context.Context) error {
+		m := outbox.Message[notify.Delivery]{
+			Attempt: 1000, EnqueuedAt: r.clock.now(),
+			Payload: notify.Delivery{Notification: signalNote("Scarecrow"), Target: notify.Target{Instance: commissioner}},
+		}
+		return notify.Deliver(r.svc, ctx, m)
+	}
+	t.Run("at the lease", func(t *testing.T) {
+		r := newRig(t, rigOpts{})
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		if err := run(r, ctx); !errors.Is(err, outbox.ErrPermanent) {
+			t.Errorf("an expired handler ctx at the lease = %v, want a dead letter on the last attempt", err)
+		}
+	})
+	t.Run("during the send", func(t *testing.T) {
+		r := newRig(t, rigOpts{notifyCfg: func(c *notify.Config) { c.SendTimeout = time.Minute }})
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		r.fake.SendFn = func(sctx context.Context, _ notify.Notification, tg notify.Target) error {
+			<-sctx.Done() // the handler's deadline arrives first
+			return notifytest.Fail(tg.Instance, integrations.ClassCanceled, 0, 0)
+		}
+		if err := run(r, ctx); !errors.Is(err, outbox.ErrPermanent) {
+			t.Errorf("a send cut off by the handler's deadline = %v, want a dead letter on the last attempt", err)
 		}
 	})
 }
