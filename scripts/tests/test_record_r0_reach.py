@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.2.1
+# version: 1.2.2
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -379,6 +379,32 @@ class ProbeShapeTest(unittest.TestCase):
         self.assertIsNone(rec.probe_body("GET"))
         self.assertIsNone(rec.probe_body("DELETE"))
 
+    def test_the_invite_routes_get_a_token_of_each_principals_own(self):
+        a = rec.probe_request("GET", "/api/v1/auth/invite/:token", "key:admin:view")
+        b = rec.probe_request("GET", "/api/v1/auth/invite/:token", "session:viewer")
+        self.assertNotEqual(a, b)
+        self.assertTrue(a[0].startswith("/api/v1/auth/invite/r2reach-missing-"))
+        self.assertIsNone(a[1])
+        c = rec.probe_request("POST", "/api/v1/auth/accept-invite", "key:admin:view")
+        d = rec.probe_request("POST", "/api/v1/auth/accept-invite", "session:viewer")
+        self.assertNotEqual(c[1], d[1])
+        self.assertEqual(set(c[1]), {"token"})
+        # a token is a path segment: nothing in it needs escaping
+        self.assertRegex(c[1]["token"], r"^[A-Za-z0-9-]+$")
+        # every other route is the static probe
+        self.assertEqual(
+            rec.probe_request("PUT", "/api/v1/a/:id", "key:x"), ("/api/v1/a/r2reach-missing", {})
+        )
+        self.assertEqual(rec.probe_request("GET", "/api/v1/a", "key:x"), ("/api/v1/a", None))
+
+    def test_the_invite_routes_are_routes_of_the_committed_dump(self):
+        dump = json.loads(
+            (REPO_ROOT / "internal/books/rbacreach/routes.json").read_text(encoding="utf-8")
+        )
+        known = {(r["method"], r["path"]) for r in dump["routes"]}
+        self.assertIn(rec.INVITE_GET, known)
+        self.assertIn(rec.INVITE_ACCEPT, known)
+
     def test_verdict_rule(self):
         self.assertEqual(rec.verdict_of(401, "k"), "D")
         self.assertEqual(rec.verdict_of(403, "k"), "D")
@@ -537,6 +563,13 @@ class RecordPassTest(unittest.TestCase):
             self.rig.run()
         self.assertIn("GET /api/v1/health", str(cm.exception))
         self.assertIn("500", str(cm.exception))
+
+    def test_every_principals_failures_are_reported_together(self):
+        self.rig.fake.fail_status["GET /api/v1/health"] = 500
+        with self.assertRaises(rec.RecorderError) as cm:
+            self.rig.run()
+        for who in ("session:admin", "session:viewer", "key:admin:view"):
+            self.assertIn(f"{who} GET /api/v1/health", str(cm.exception))
 
     def test_a_listed_5xx_after_authorization_is_an_allow(self):
         route = "PUT /api/v1/audiobooks/:id"
