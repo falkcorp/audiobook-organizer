@@ -1,5 +1,5 @@
 // file: core/archtest/startup_steps_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d1f7a60-5b3c-4e29-a0c4-92e6b7d31f58
 // last-edited: 2026-11-13
 
@@ -151,6 +151,32 @@ func other(ctx context.Context, r runner) error {
 		}
 		if len(got) != 0 {
 			t.Fatalf("a Run on another type reported:\n  %s", strings.Join(got, "\n  "))
+		}
+	})
+
+	t.Run("SameNameOfAnotherTypeInAnotherFunctionIgnored", func(t *testing.T) {
+		// "st" is a *health.Startup in kernel.go's early and a plain runner
+		// here: the name alone must not make the second a Startup.
+		root := startupTree(t, map[string]string{
+			"kernel/samename.go": `package kernel
+
+import "context"
+
+type plainRunner struct{}
+
+func (plainRunner) Run(ctx context.Context, name string, fn func(context.Context) error) error { return fn(ctx) }
+
+func samename(ctx context.Context, st plainRunner) error {
+	return st.Run(ctx, "penguin.umbrella", func(context.Context) error { return nil })
+}
+`,
+		})
+		got, err := StartupStepFindings(root, table, "kernel")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("a same-named variable of another type reported:\n  %s", strings.Join(got, "\n  "))
 		}
 	})
 

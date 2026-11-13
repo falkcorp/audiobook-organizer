@@ -1,5 +1,5 @@
 // file: core/archtest/startup_steps.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b6c0d2e-8a41-4f6a-9d57-6e1f0a7c2b94
 // last-edited: 2026-11-13
 
@@ -29,11 +29,12 @@ const healthPath = mediacorePath + "/health"
 // pkgs are the module-relative directories to scan, each with its
 // sub-packages ("kernel", "module").
 //
-// A Run call is recognised by its receiver: an identifier or field declared as
-// *health.Startup, or assigned from health.NewStartup, in the same package.
-// It is a syntactic scan, as internal/startup's is; a Startup reached through
-// a helper's return value is not tracked, and the guard's own tests pin what
-// it does see. Test files are not scanned.
+// A Run call is recognised by its receiver: an identifier declared as
+// *health.Startup (or assigned from health.NewStartup) in the enclosing
+// function or at package level, or a field declared as one in a struct of the
+// package. It is a syntactic scan, as internal/startup's is; a Startup reached
+// through a helper's return value is not tracked, and the guard's own tests
+// pin what it does see. Test files are not scanned.
 func StartupSteps(t testing.TB, table []string, pkgs ...string) {
 	t.Helper()
 	wd, err := os.Getwd()
@@ -117,7 +118,11 @@ type startupRunSite struct {
 }
 
 // startupRunSites parses the files as one package and returns its Run calls on
-// a *health.Startup, in source order per file.
+// a *health.Startup, in source order per file. An identifier receiver counts
+// when the enclosing function (or a package-level var) declares it as a
+// Startup, so a same-named variable of another type in another function is not
+// mistaken for one; a field receiver (k.startup.Run) counts when a struct of
+// the package declares a Startup field of that name.
 func startupRunSites(files []string) ([]startupRunSite, error) {
 	fset := token.NewFileSet()
 	var parsed []*ast.File
@@ -128,36 +133,72 @@ func startupRunSites(files []string) ([]startupRunSite, error) {
 		}
 		parsed = append(parsed, af)
 	}
-	tracked := map[string]bool{}
+	fields, pkgVars := map[string]bool{}, map[string]bool{}
 	for _, af := range parsed {
 		aliases := healthAliases(af)
 		if len(aliases) == 0 {
 			continue
 		}
-		trackStartupNames(af, aliases, tracked)
-	}
-	var out []startupRunSite
-	for _, af := range parsed {
+		for _, d := range af.Decls {
+			if gd, ok := d.(*ast.GenDecl); ok {
+				trackStartupNames(gd, aliases, pkgVars)
+			}
+		}
 		ast.Inspect(af, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) != 3 {
-				return true
+			if st, ok := n.(*ast.StructType); ok {
+				trackStartupNames(st, aliases, fields)
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Run" || !tracked[receiverName(sel.X)] {
-				return true
-			}
-			site := startupRunSite{pos: fset.Position(call.Pos()).String()}
-			if lit, ok := call.Args[1].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				if s, err := strconv.Unquote(lit.Value); err == nil {
-					site.name = s
-				}
-			}
-			out = append(out, site)
 			return true
 		})
 	}
+	var out []startupRunSite
+	for _, af := range parsed {
+		aliases := healthAliases(af)
+		for _, d := range af.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			locals := map[string]bool{}
+			if len(aliases) > 0 {
+				trackStartupNames(fd, aliases, locals)
+			}
+			ast.Inspect(fd, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) != 3 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Run" || !isStartupReceiver(sel.X, locals, pkgVars, fields) {
+					return true
+				}
+				site := startupRunSite{pos: fset.Position(call.Pos()).String()}
+				if lit, ok := call.Args[1].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					if s, err := strconv.Unquote(lit.Value); err == nil {
+						site.name = s
+					}
+				}
+				out = append(out, site)
+				return true
+			})
+		}
+	}
 	return out, nil
+}
+
+// isStartupReceiver reports whether e names a *health.Startup: a local or
+// package-level identifier declared as one, or a selector ending in a struct
+// field declared as one.
+func isStartupReceiver(e ast.Expr, locals, pkgVars, fields map[string]bool) bool {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return locals[x.Name] || pkgVars[x.Name]
+	case *ast.SelectorExpr:
+		return fields[x.Sel.Name]
+	case *ast.ParenExpr:
+		return isStartupReceiver(x.X, locals, pkgVars, fields)
+	}
+	return false
 }
 
 // healthAliases returns the names under which af imports the health package.
@@ -177,9 +218,10 @@ func healthAliases(af *ast.File) map[string]bool {
 	return out
 }
 
-// trackStartupNames adds to tracked every name af declares as a *health.Startup
-// (a parameter, result, field or var) or assigns from health.NewStartup.
-func trackStartupNames(af *ast.File, aliases map[string]bool, tracked map[string]bool) {
+// trackStartupNames adds to tracked every name declared as a *health.Startup
+// (a parameter, result, field or var) or assigned from health.NewStartup
+// anywhere under root.
+func trackStartupNames(root ast.Node, aliases map[string]bool, tracked map[string]bool) {
 	isStartup := func(e ast.Expr) bool {
 		if star, ok := e.(*ast.StarExpr); ok {
 			e = star.X
@@ -191,7 +233,7 @@ func trackStartupNames(af *ast.File, aliases map[string]bool, tracked map[string
 		id, ok := sel.X.(*ast.Ident)
 		return ok && aliases[id.Name]
 	}
-	ast.Inspect(af, func(n ast.Node) bool {
+	ast.Inspect(root, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.Field:
 			if isStartup(x.Type) {
@@ -225,18 +267,4 @@ func trackStartupNames(af *ast.File, aliases map[string]bool, tracked map[string
 		}
 		return true
 	})
-}
-
-// receiverName is the name a Run receiver is tracked by: the identifier, or the
-// last field of a selector chain (k.startup.Run tracks "startup").
-func receiverName(e ast.Expr) string {
-	switch x := e.(type) {
-	case *ast.Ident:
-		return x.Name
-	case *ast.SelectorExpr:
-		return x.Sel.Name
-	case *ast.ParenExpr:
-		return receiverName(x.X)
-	}
-	return ""
 }
