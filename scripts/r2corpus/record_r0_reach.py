@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.2.1
+# version: 1.2.2
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -98,23 +98,27 @@ DENY_STATUSES = frozenset({401, 403})
 OK_5XX: dict[str, str] = {
     "POST /api/v1/ai/scans": "500 AI scan pipeline not configured",
     "POST /api/v1/ai/scans/:id/cancel": "500 AI scan pipeline not configured",
-    "POST /api/v1/ai/test-connection": "500 connection test failed (no AI provider configured)",
-    "PUT /api/v1/audiobooks/:id": "500 failed to update audiobook (the dummy id has no row)",
-    "POST /api/v1/audiobooks/:id/apply-metadata": "500 failed to apply metadata (no row)",
-    "POST /api/v1/audiobooks/:id/mark-no-match": "500 failed to mark no match (no row)",
-    "POST /api/v1/audiobooks/:id/parse-with-ai": "500 no AI provider configured",
-    "POST /api/v1/audiobooks/:id/quarantine": "500 quarantine failed (no row)",
-    "DELETE /api/v1/audiobooks/:id/quarantine": "500 unquarantine failed (no row)",
+    "POST /api/v1/ai/test-connection": "500 connection test failed (the OpenAI call is refused, no key)",
+    "PUT /api/v1/audiobooks/:id": "500 failed to update audiobook (no updates provided)",
+    "POST /api/v1/audiobooks/bulk-write-back": (
+        "500 enqueue failed while an earlier probe's run holds the op's concurrency key"
+        " (202 otherwise)"
+    ),
+    "POST /api/v1/audiobooks/:id/apply-metadata": "500 failed to apply metadata (audiobook not found)",
+    "POST /api/v1/audiobooks/:id/mark-no-match": "500 failed to mark no match (audiobook not found)",
+    "POST /api/v1/audiobooks/:id/parse-with-ai": "500 a recovered nil-pointer panic: no AI parser is configured",
+    "POST /api/v1/audiobooks/:id/quarantine": "500 quarantine failed (book not found)",
+    "DELETE /api/v1/audiobooks/:id/quarantine": "500 unquarantine failed (book not found)",
     "POST /api/v1/audiobooks/:id/retired-versions/:vid/restore": (
         "501 restoring a retired version is not available yet"
     ),
-    "DELETE /api/v1/backup/:filename": "500 failed to delete backup (no such file)",
+    "DELETE /api/v1/backup/:filename": "500 failed to delete backup (no such file or backups dir)",
     "POST /api/v1/dedup/fingerprint-rescan": "503 no fingerprint backend (fpcalc / ffmpeg) found",
     "GET /api/v1/deluge/labels": "502 the Deluge host does not resolve (an unconfigured client)",
     "POST /api/v1/deluge/test-connection": "502 the Deluge host does not resolve",
     "GET /api/v1/deluge/torrents": "502 the Deluge host does not resolve",
-    "POST /api/v1/operations/:id/revert": "500 failed to revert operation (no such operation)",
-    "POST /api/v1/update/apply": "500 failed to apply update (no update staged)",
+    "POST /api/v1/operations/:id/revert": "500 failed to revert operation (no changes for the operation)",
+    "POST /api/v1/update/apply": "500 failed to apply update (no release asset to apply)",
 }
 
 ADMIN_USER = "lucius.fox"  # the corpus' admin-role user, whose session mints keys
@@ -219,6 +223,30 @@ def probe_path(path: str) -> str:
 
 def probe_body(method: str) -> Any:
     return {} if method in MUTATING else None
+
+
+# R0 bounds the two public invite routes with a per-token bucket (burst 8, 6 a
+# minute) beside the per-peer one, and a request with no token or a body that
+# does not parse shares one fallback bucket. The peer-address spread does not
+# help: thirty-odd principals probing one dummy token get a 429 after the eighth.
+# Each principal therefore probes with a token of its own.
+INVITE_GET = ("GET", "/api/v1/auth/invite/:token")
+INVITE_ACCEPT = ("POST", "/api/v1/auth/accept-invite")
+
+
+def probe_token(principal_name: str) -> str:
+    """A dummy invite token no other principal uses."""
+    return f"{DUMMY_ID}-{re.sub(r'[^A-Za-z0-9]+', '-', principal_name)}"
+
+
+def probe_request(method: str, path: str, principal_name: str) -> tuple[str, Any]:
+    """The request a principal sends for a route: probe_path and probe_body, with
+    the invite routes' token made the principal's own."""
+    if (method, path) == INVITE_GET:
+        return path.replace(":token", probe_token(principal_name)), None
+    if (method, path) == INVITE_ACCEPT:
+        return path, {"token": probe_token(principal_name)}
+    return probe_path(path), probe_body(method)
 
 
 class RecorderError(RuntimeError):
@@ -401,7 +429,8 @@ def probe_principal(probe: Probe, routes: list[dict[str, Any]]) -> list[int]:
     problems: list[str] = []
     for r in order_routes(routes):
         m, p = r["method"], r["path"]
-        status = probe.send(m, probe_path(p), probe_body(m))
+        req_path, req_body = probe_request(m, p, probe.principal["name"])
+        status = probe.send(m, req_path, req_body)
         try:
             verdict_of(status, f"{probe.principal['name']} {m} {p}")
         except RecorderError as e:
@@ -573,7 +602,15 @@ def record_pass(
     before = census(admin) if do_tasks else None
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         futures = [pool.submit(probe_principal, p, routes) for p in probes]
-        columns = [f.result() for f in futures]  # a failure in any worker raises here
+        columns: list[list[int]] = []
+        failures: list[str] = []
+        for f in futures:  # every principal's failure is reported, not the first one's
+            try:
+                columns.append(f.result())
+            except RecorderError as e:
+                failures.append(str(e))
+    if failures:
+        raise RecorderError("\n".join(failures))
     check_5xx_follows_authorization(routes, principals, columns)
     out: dict[str, Any] = {"columns": columns}
     if do_tasks:
