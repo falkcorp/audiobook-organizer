@@ -1,14 +1,18 @@
 // file: core/integrations/notify/mail/mail.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 11234e57-50d2-4d9a-be89-62e983dfeda9
 // last-edited: 2026-11-13
 
-// Package mail sends transactional email (today: user invitations) over SMTP.
+// Package mail sends email over SMTP, in two shapes: the Sender primitive for
+// transactional mail that is not a notification (user invitations), and the
+// core.email channel of the notify kind (email.go, 05-notify section 3.1),
+// which wraps SMTPSender.
 //
-// It is deliberately small and dependency-free: net/smtp for the protocol, the
-// standard mime packages for a multipart/alternative text + HTML body. It
-// imports nothing from this module, logs nothing, and never puts the SMTP
-// password into an error, so callers can log its errors as they are.
+// The sender is deliberately small and dependency-free: net/smtp for the
+// protocol, the standard mime packages for a multipart/alternative text + HTML
+// body. mail.go imports nothing from this module, logs nothing, and never puts
+// the SMTP password into an error, so callers can log its errors as they are.
+// Only email.go knows about integrations and notify.
 //
 // Transport rules (owner decision 2026-10-19, prod relays through a local
 // postfix on 127.0.0.1:25 with no AUTH):
@@ -54,6 +58,10 @@ type Message struct {
 	Subject string
 	Text    string // text/plain part
 	HTML    string // text/html part; optional
+	// AlsoTo are further recipients of the same message, each a single
+	// address: they are listed in the To header and receive it in the same SMTP
+	// transaction as To, so a send either reaches all of them or none.
+	AlsoTo []string
 }
 
 // Sender delivers a Message. Implementations must be safe for concurrent use.
@@ -64,6 +72,16 @@ type Sender interface {
 // ErrInvalidHeader is returned for a header value carrying CR or LF (header
 // injection) or an address that does not parse.
 var ErrInvalidHeader = errors.New("mail: invalid header value")
+
+// ErrTLSRequired is returned, before AUTH, MAIL FROM or any message data, when
+// the server is not a loopback host and offers no STARTTLS on a port that is
+// not implicit TLS. Nothing was sent, and sending again changes nothing until
+// the host, the port or the server does.
+var ErrTLSRequired = errors.New("mail: refusing to send without TLS")
+
+// ErrAuthUnavailable is returned when a username is configured and the server
+// does not offer AUTH.
+var ErrAuthUnavailable = errors.New("mail: the server does not offer AUTH")
 
 // SMTPConfig configures SMTPSender.
 type SMTPConfig struct {
@@ -152,10 +170,18 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 	if err != nil {
 		return fmt.Errorf("mail: recipient: %w", err)
 	}
+	rcpts := []*mail.Address{to}
+	for _, extra := range msg.AlsoTo {
+		a, err := parseAddress(extra)
+		if err != nil {
+			return fmt.Errorf("mail: recipient: %w", err)
+		}
+		rcpts = append(rcpts, a)
+	}
 	if strings.ContainsAny(msg.Subject, "\r\n") {
 		return fmt.Errorf("mail: subject: %w", ErrInvalidHeader)
 	}
-	body, err := BuildMessage(s.from, to, msg, time.Now())
+	body, err := buildMessage(s.from, rcpts, msg, time.Now())
 	if err != nil {
 		return err
 	}
@@ -213,13 +239,13 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 		case s.requiresTLS():
 			// Refuse before AUTH, MAIL FROM or any message data; never
 			// fall back to plain text for a host off this machine.
-			return fmt.Errorf("mail: %s does not offer STARTTLS and is not a loopback host: refusing to send without TLS (use port 465 or a relay that supports STARTTLS)", s.cfg.Host)
+			return fmt.Errorf("%w: %s does not offer STARTTLS and is not a loopback host (use port 465 or a relay that supports STARTTLS)", ErrTLSRequired, s.cfg.Host)
 		}
 	}
 
 	if s.cfg.Username != "" {
 		if ok, _ := c.Extension("AUTH"); !ok {
-			return errors.New("mail: SMTP_USERNAME is set but the server does not offer AUTH")
+			return fmt.Errorf("%w: a username is configured", ErrAuthUnavailable)
 		}
 		// PlainAuth refuses to send credentials over an unencrypted
 		// connection to anything but localhost.
@@ -231,8 +257,10 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 	if err := c.Mail(s.from.Address); err != nil {
 		return s.ctxErr(ctx, fmt.Errorf("mail: MAIL FROM: %w", err))
 	}
-	if err := c.Rcpt(to.Address); err != nil {
-		return s.ctxErr(ctx, fmt.Errorf("mail: RCPT TO: %w", err))
+	for _, rcpt := range rcpts {
+		if err := c.Rcpt(rcpt.Address); err != nil {
+			return s.ctxErr(ctx, fmt.Errorf("mail: RCPT TO: %w", err))
+		}
 	}
 	w, err := c.Data()
 	if err != nil {
@@ -295,6 +323,12 @@ func redact(err error, secret string) error {
 // body (text, then HTML when present), quoted-printable encoded. Exported for
 // tests and for previewing; Send calls it.
 func BuildMessage(from, to *mail.Address, msg Message, now time.Time) ([]byte, error) {
+	return buildMessage(from, []*mail.Address{to}, msg, now)
+}
+
+// buildMessage is BuildMessage for one or more recipients, all in the To
+// header.
+func buildMessage(from *mail.Address, to []*mail.Address, msg Message, now time.Time) ([]byte, error) {
 	if strings.ContainsAny(msg.Subject, "\r\n") {
 		return nil, fmt.Errorf("mail: subject: %w", ErrInvalidHeader)
 	}
@@ -316,7 +350,11 @@ func BuildMessage(from, to *mail.Address, msg Message, now time.Time) ([]byte, e
 	header("Date", now.Format(time.RFC1123Z))
 	header("Message-ID", "<"+idPart+"@"+domain+">")
 	header("From", from.String())
-	header("To", to.String())
+	list := make([]string, len(to))
+	for i, a := range to {
+		list[i] = a.String()
+	}
+	header("To", strings.Join(list, ", "))
 	header("Subject", mime.QEncoding.Encode("utf-8", msg.Subject))
 	header("MIME-Version", "1.0")
 	header("Auto-Submitted", "auto-generated")
