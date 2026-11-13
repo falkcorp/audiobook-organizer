@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.31.1
+// version: 1.31.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-11-13
 
@@ -98,9 +98,21 @@ const itunesRegroupKind tasks.Kind = "books.itunes.regroup"
 // regroupReporter is the two reporter calls the regroup's snapshot and apply
 // make; sdk.Reporter satisfies it, and the native engine's run does through
 // regroupEnv.reporter.
+//
+// Its methods return nothing: progress and log reporting is best effort here,
+// as it is through sdk.Reporter, and an adapter (regroupSDKReporter) is the one
+// place a reporter's error is dropped.
 type regroupReporter interface {
-	Log(level slog.Level, msg string, attrs ...slog.Attr) error
-	UpdateProgress(done, total int, msg string) error
+	Log(level slog.Level, msg string)
+	UpdateProgress(done, total int, msg string)
+}
+
+// regroupSDKReporter adapts HEAD's sdk.Reporter to a regroupReporter.
+type regroupSDKReporter struct{ r sdk.Reporter }
+
+func (a regroupSDKReporter) Log(level slog.Level, msg string) { a.r.Log(level, msg) }
+func (a regroupSDKReporter) UpdateProgress(done, total int, msg string) {
+	a.r.UpdateProgress(done, total, msg)
 }
 
 // itunesRegroupReader is the reads the regroup makes.
@@ -154,13 +166,9 @@ type regroupCoreStore interface {
 // regroupEnvReporter is a regroupReporter over the env.
 type regroupEnvReporter struct{ env t6g5Base }
 
-func (r regroupEnvReporter) Log(level slog.Level, msg string, _ ...slog.Attr) error {
-	r.env.Log(level, msg)
-	return nil
-}
-func (r regroupEnvReporter) UpdateProgress(done, total int, msg string) error {
+func (r regroupEnvReporter) Log(level slog.Level, msg string) { r.env.Log(level, msg) }
+func (r regroupEnvReporter) UpdateProgress(done, total int, msg string) {
 	r.env.Progress(done, total, msg)
-	return nil
 }
 
 func (e regroupEnv) reporter() regroupReporter { return regroupEnvReporter{e.t6g5Base} }
@@ -628,7 +636,7 @@ func regroupManualOnly(r applygate.ManualOnlyReaders, b *database.Book) (bool, e
 // never make that book a target or a source. Version-group membership still
 // counts every scanned member, so the incumbent rule sees the whole group.
 func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSnapshotReader, rootDir string, reporter sdk.Reporter) (itunesservice.Snapshot, error) {
-	return buildRegroupSnapshot(ctx, store, rootDir, reporter)
+	return buildRegroupSnapshot(ctx, store, rootDir, regroupSDKReporter{reporter})
 }
 
 // buildRegroupSnapshot is the shared body of Plugin.buildRegroupSnapshot.
@@ -690,7 +698,7 @@ func buildRegroupSnapshot(ctx context.Context, store itunesRegroupSnapshotReader
 		}
 		scanned += len(batch)
 		afterID = batch[len(batch)-1].ID
-		_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: scanned %d books…", scanned))
+		reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: scanned %d books…", scanned))
 		if len(batch) < page {
 			break
 		}
@@ -803,12 +811,12 @@ func buildRegroupSnapshot(ctx context.Context, store itunesRegroupSnapshotReader
 			continue
 		}
 		if nFailed < logFailures {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("owner-manual check failed; groups holding %s will be skipped: %v", liveIDs[i], failed[i]))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("owner-manual check failed; groups holding %s will be skipped: %v", liveIDs[i], failed[i]))
 		}
 		nFailed++
 	}
 	if nFailed > logFailures {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("owner-manual check failed for %d more book(s) (not listed)", nFailed-logFailures))
+		reporter.Log(slog.LevelWarn, fmt.Sprintf("owner-manual check failed for %d more book(s) (not listed)", nFailed-logFailures))
 	}
 
 	for i, id := range liveIDs {
@@ -825,7 +833,7 @@ func buildRegroupSnapshot(ctx context.Context, store itunesRegroupSnapshotReader
 		meta.ManualCheckFailed = failed[i] != nil
 		snap.Books[id] = meta
 	}
-	_ = reporter.UpdateProgress(2, 4, fmt.Sprintf("Phase 2/4: snapshot ready (%d books, %d PID locations)", len(snap.Books), len(snap.PIDLoc)))
+	reporter.UpdateProgress(2, 4, fmt.Sprintf("Phase 2/4: snapshot ready (%d books, %d PID locations)", len(snap.Books), len(snap.PIDLoc)))
 	return snap, nil
 }
 
@@ -968,7 +976,7 @@ func enrichScore(b *database.Book) int {
 // plan's refusal rules re-run on the fresh rows (regroupRecheck); a group
 // whose books changed since the snapshot is skipped and counted.
 func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan itunesservice.RegroupPlan, rootDir string, reporter sdk.Reporter) (regroupApplyReport, error) {
-	return applyRegroupPlanVia(ctx, store, plan, rootDir, reporter, p.regroupUserStateStore)
+	return applyRegroupPlanVia(ctx, store, plan, rootDir, regroupSDKReporter{reporter}, p.regroupUserStateStore)
 }
 
 // applyRegroupPlanVia is the shared body of Plugin.applyRegroupPlan; userState
@@ -1013,17 +1021,17 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 		// canary this guard exists to prevent.
 		if eerr != nil || (ownsErr != nil && !errors.Is(ownsErr, database.ErrBookOwnsFiles)) {
 			deleteSkipped++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not verify empty (files err=%v, ext-ids err=%v)", id, ownsErr, eerr))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not verify empty (files err=%v, ext-ids err=%v)", id, ownsErr, eerr))
 			continue
 		}
 		if ownsErr != nil {
 			deleteSkipped++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %v", id, ownsErr))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %v", id, ownsErr))
 			continue
 		}
 		if len(exts) != 0 {
 			deleteSkipped++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %d ext-ids remain", id, len(exts)))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %d ext-ids remain", id, len(exts)))
 			continue
 		}
 		// A book a user has listening state on: the delete is a hard
@@ -1041,7 +1049,7 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 			}
 			if perr != nil {
 				deleteSkipped++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not list users to check their listening state: %v", id, perr))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not list users to check their listening state: %v", id, perr))
 				continue
 			}
 			stateProbe = probe
@@ -1049,7 +1057,7 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 		has, herr := stateProbe.Has(id)
 		if herr != nil {
 			deleteSkipped++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not read its users' listening state: %v", id, herr))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not read its users' listening state: %v", id, herr))
 			continue
 		}
 		// The final check and the delete run under one hold of the merge
@@ -1062,7 +1070,7 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 			listedErr := func(err error) {
 				deleteSkipped++
 				errCount++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user has listening state on it and whether ABS lists it or its target could not be read: %v; kept with its state", id, err))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user has listening state on it and whether ABS lists it or its target could not be read: %v; kept with its state", id, err))
 			}
 			target, targetListed, terr := regroupStateTarget(plan, c.targets, id, listed)
 			if terr != nil {
@@ -1071,7 +1079,7 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 			}
 			if target == "" {
 				deleteSkipped++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user has listening state on it and no applied group took its files to carry it to", id))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user has listening state on it and no applied group took its files to carry it to", id))
 				continue
 			}
 			// A book ABS lists keeps its users' state unless the target is
@@ -1081,7 +1089,7 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 			skipNotListed := func(why string) {
 				deleteSkipped++
 				report.SkippedTargetNotListed = append(report.SkippedTargetNotListed, id)
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: ABS lists it, a user has listening state on it, and the target that took its files (%s) is not a book ABS lists%s; kept with its state", id, target, why))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: ABS lists it, a user has listening state on it, and the target that took its files (%s) is not a book ABS lists%s; kept with its state", id, target, why))
 			}
 			doomedListed, derr := listed(id)
 			if derr != nil {
@@ -1121,7 +1129,7 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 			err := merge.CarryStateThenHardDelete(stateStore, target, id, precheck, del)
 			if ownsRefused != nil && errors.Is(err, merge.ErrCarryPrecheckRefused) {
 				deleteSkipped++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: re-checked under the merge lock and nothing was carried; kept with its state: %v", id, ownsRefused))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: re-checked under the merge lock and nothing was carried; kept with its state: %v", id, ownsRefused))
 				continue
 			}
 			if errors.Is(err, errRegroupTargetNotListed) {
@@ -1134,7 +1142,7 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 			}
 			if errors.Is(err, merge.ErrStateCarryIncomplete) {
 				deleteSkipped++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: its users' listening state could not be carried to %s: %v", id, target, err))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: its users' listening state could not be carried to %s: %v", id, target, err))
 				continue
 			}
 			// The carry landed whether or not the delete then failed.
@@ -1142,13 +1150,13 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 			switch tl, lerr := listed(target); {
 			case lerr != nil:
 				errCount++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: its users' listening state was carried to %s, but whether ABS lists %s could not be read: %v", id, target, target, lerr))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: its users' listening state was carried to %s, but whether ABS lists %s could not be read: %v", id, target, target, lerr))
 			case !tl:
 				report.StateCarriedUnlisted = append(report.StateCarriedUnlisted, id)
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: its users' listening state was carried to %s, which ABS does not list (no applied target that took its files is listed); kept, not visible in ABS until %s is organized and its group's primary", id, target, target))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: its users' listening state was carried to %s, which ABS does not list (no applied target that took its files is listed); kept, not visible in ABS until %s is organized and its group's primary", id, target, target))
 			}
 			if err != nil {
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("delete %s failed: %v", id, err))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("delete %s failed: %v", id, err))
 				errCount++
 				continue
 			}
@@ -1158,16 +1166,16 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 		if err := merge.HardDeleteWithoutUserState(stateStore, id, del); err != nil {
 			if errors.Is(err, merge.ErrUserStateCheckFailed) {
 				deleteSkipped++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not re-check its users' listening state right before the delete: %v", id, err))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not re-check its users' listening state right before the delete: %v", id, err))
 				continue
 			}
 			if errors.Is(err, merge.ErrUserStateOnDoomedBook) {
 				deleteSkipped++
 				stateReappeared++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: listening state found on it right before the delete: %v", id, err))
+				reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: listening state found on it right before the delete: %v", id, err))
 				continue
 			}
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("delete %s failed: %v", id, err))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("delete %s failed: %v", id, err))
 			errCount++
 			continue
 		}
@@ -1177,16 +1185,16 @@ func applyRegroupPlanVia(ctx context.Context, store itunesRegroupStore, plan itu
 	// Recompute aggregates for every touched target.
 	for id := range touched {
 		if err := store.RecomputeBookAggregates(id); err != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("recompute %s failed: %v", id, err))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("recompute %s failed: %v", id, err))
 			errCount++
 		}
 	}
 
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	reporter.Log(slog.LevelInfo, fmt.Sprintf(
 		"APPLIED: moved=%d titled=%d library-title-kept=%d fresh=%d deleted=%d state-carried=%d state-carried-unlisted=%d skipped-target-not-listed=%d state-reappeared=%d delete-skipped=%d recheck-skipped=%d errors=%d",
 		moved, titled, titleKept, created, deleted, stateCarried, len(report.StateCarriedUnlisted), len(report.SkippedTargetNotListed), stateReappeared, deleteSkipped, recheckSkipped, errCount))
 	if n := len(report.StateCarriedUnlisted); n > 0 {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+		reporter.Log(slog.LevelWarn, fmt.Sprintf(
 			"%d book(s)' listening state was carried to a book ABS does not list (first ids: %s)",
 			n, strings.Join(firstN(report.StateCarriedUnlisted, 20), ", ")))
 	}
@@ -1234,7 +1242,7 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 		if err != nil {
 			c.recheckSkipped++
 			c.errCount++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip group %q: apply-time recheck could not read target %s: %v", a.Title, a.Target, err))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("skip group %q: apply-time recheck could not read target %s: %v", a.Title, a.Target, err))
 			return
 		}
 		if tb != nil && tb.VersionGroupID != nil {
@@ -1250,12 +1258,12 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 	if err != nil {
 		c.recheckSkipped++
 		c.errCount++
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip group %q: apply-time recheck could not read its books: %v", a.Title, err))
+		reporter.Log(slog.LevelWarn, fmt.Sprintf("skip group %q: apply-time recheck could not read its books: %v", a.Title, err))
 		return
 	}
 	if why != "" {
 		c.recheckSkipped++
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip group %q (target %s): changed since the plan, recheck refuses it as %s", a.Title, a.Target, why))
+		reporter.Log(slog.LevelWarn, fmt.Sprintf("skip group %q (target %s): changed since the plan, recheck refuses it as %s", a.Title, a.Target, why))
 		return
 	}
 
@@ -1263,7 +1271,7 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 	if a.FreshBook {
 		nb, err := store.CreateBook(&database.Book{Title: a.Title})
 		if err != nil || nb == nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("create fresh book for %q failed: %v", a.Title, err))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("create fresh book for %q failed: %v", a.Title, err))
 			c.errCount++
 			return
 		}
@@ -1291,7 +1299,7 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 			// Everything moved (visible); only the fsync failed. The
 			// per-file retry below would find the rows gone from their
 			// sources and count every move as failed.
-			_ = reporter.Log(slog.LevelError, fmt.Sprintf("bulk move of %d files -> %s was written but its fsync failed (%v): durability unknown; treating it as applied", len(bulk), target, bulkErr))
+			reporter.Log(slog.LevelError, fmt.Sprintf("bulk move of %d files -> %s was written but its fsync failed (%v): durability unknown; treating it as applied", len(bulk), target, bulkErr))
 			bulkErr = nil
 		}
 		if err := bulkErr; err != nil {
@@ -1301,7 +1309,7 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 			// between must not block every other move in the group. This is
 			// the resilience the per-file loop always had; the batch is only
 			// the fast path.
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+			reporter.Log(slog.LevelWarn, fmt.Sprintf(
 				"bulk move of %d files -> %s failed (%v); retrying per file", len(bulk), target, err))
 			// Fresh slice, NOT movedOK[:0] — movedOK aliases a.Moves here, and
 			// truncate-then-append would rewrite the frozen plan's own backing
@@ -1309,7 +1317,7 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 			movedOK = make([]itunesservice.FileMove, 0, len(a.Moves))
 			for _, m := range a.Moves {
 				if err := store.MoveBookFilesToBook([]string{m.FileID}, m.From, target); err != nil {
-					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("move file %s %s->%s failed: %v", m.FileID, m.From, target, err))
+					reporter.Log(slog.LevelWarn, fmt.Sprintf("move file %s %s->%s failed: %v", m.FileID, m.From, target, err))
 					c.errCount++
 					continue
 				}
@@ -1320,7 +1328,7 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 
 	for _, m := range movedOK {
 		if err := store.ReassignExternalID("itunes", m.PID, target); err != nil {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("reassign pid %s->%s failed: %v", m.PID, target, err))
+			reporter.Log(slog.LevelWarn, fmt.Sprintf("reassign pid %s->%s failed: %v", m.PID, target, err))
 			c.errCount++
 		}
 		c.moved++
@@ -1347,7 +1355,7 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 		retitled = true
 		return nil
 	}); err != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("set title on %s failed: %v", target, err))
+		reporter.Log(slog.LevelWarn, fmt.Sprintf("set title on %s failed: %v", target, err))
 		c.errCount++
 	} else if written != nil && retitled {
 		c.titled++
