@@ -1,3 +1,0 @@
-### Added
-
-- The system log journal, dark (F5-15): core's native `log.JournalStore` over `c/log/` (`core/internal/logjournal`: a ULID-keyed store with newest-first queries and bounded oldest-first prune, an idempotent `log.Importer`, and a fail-open tap that batches 256 records or one second), the `log.JournalStore`/`log.Importer` SDK types and `logtest.JournalStoreSuite`, the `mediacore_log_journal_write_errors_total` and `mediacore_log_journal_lag_seconds` series, and books' cutover step M5, which moves every `syslog:` row into that journal and deletes it (a row that does not map is quarantined with its bytes). Nothing registers the step or starts the tap yet (F5-18), so the running server's log is unchanged.
