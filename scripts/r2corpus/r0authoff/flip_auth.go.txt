@@ -1,0 +1,98 @@
+// file: scripts/r2corpus/r0authoff/flip_auth.go.txt
+// version: 1.0.0
+// guid: 3c8e5a17-9d24-4f60-b1a7-6e0d2c4f8b93
+// last-edited: 2026-11-13
+//
+// A throwaway program, not part of the build: scripts/r2corpus/record_r0_reach.py
+// copies this file to a temporary name ending in .go and runs it with `go run`
+// from the repository root, against a throwaway copy of the overlay corpus' store.
+//
+// R0 reads its settings from the stored config_blob after it has read the
+// environment, and the blob carries enable_auth (config.LoadConfigFromDatabase),
+// so ENABLE_AUTH=false does not turn authentication off for a store that has a
+// blob. R0 refuses to change enable_auth through its own API while no owner is
+// configured (config.OwnerTrustRootUnsetMessage). This program rewrites that one
+// key in the blob the way R0's own store does: pebble.Open with default options
+// (internal/database/pebble_store.go openPebbleChecked), the row
+// "setting:config_blob" holding a database.Setting. The pebble module is the one
+// go.mod pins, v2.1.7, the version R0 v0.223.0 is built with, so the store's
+// format is not changed by the open.
+//
+// Usage: go run flip_auth.go <path of the store, audiobooks.pebble>
+
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/cockroachdb/pebble/v2"
+)
+
+const blobKey = "setting:config_blob"
+
+// setting is database.Setting's wire shape (internal/database/settings.go).
+type setting struct {
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	Type     string `json:"type"`
+	IsSecret bool   `json:"is_secret"`
+}
+
+func main() {
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "usage: flip_auth <store path>")
+		os.Exit(2)
+	}
+	if err := run(os.Args[1]); err != nil {
+		fmt.Fprintln(os.Stderr, "flip_auth:", err)
+		os.Exit(1)
+	}
+}
+
+func run(path string) (err error) {
+	db, err := pebble.Open(path, &pebble.Options{})
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer func() {
+		if cerr := db.Close(); err == nil {
+			err = cerr
+		}
+	}()
+
+	raw, closer, err := db.Get([]byte(blobKey))
+	if err != nil {
+		return fmt.Errorf("read %s: %w", blobKey, err)
+	}
+	var row setting
+	uerr := json.Unmarshal(raw, &row)
+	_ = closer.Close()
+	if uerr != nil {
+		return fmt.Errorf("%s is not a setting row: %w", blobKey, uerr)
+	}
+	var blob map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(row.Value), &blob); err != nil || blob == nil {
+		return fmt.Errorf("the stored config is not a JSON object: %v", err)
+	}
+	was, ok := blob["enable_auth"]
+	if !ok || string(was) != "true" {
+		return fmt.Errorf("the stored config has enable_auth %q, want true", string(was))
+	}
+	blob["enable_auth"] = json.RawMessage("false")
+	out, err := json.Marshal(blob)
+	if err != nil {
+		return err
+	}
+	row.Value = string(out)
+	data, err := json.Marshal(row)
+	if err != nil {
+		return err
+	}
+	if err := db.Set([]byte(blobKey), data, pebble.Sync); err != nil {
+		return fmt.Errorf("write %s: %w", blobKey, err)
+	}
+	fmt.Println("enable_auth: true -> false in", blobKey)
+	return nil
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.2.2
+# version: 1.3.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -26,9 +26,11 @@ a drift sentinel (a census of users, books and task definitions, plus a
 per-principal canary) fails the run when a probe changed the store or killed the
 server.
 
-Two boots: one with auth on (every principal but ``authoff``) and one with
-``ENABLE_AUTH=false`` (``authoff``). Secrets never reach the output: keys are
-minted on the copy and held in memory only.
+Two boots: one with auth on (every principal but ``authoff``) and one on a copy
+whose stored config has ``enable_auth`` turned off (``authoff``; R0 reads the
+stored config after the environment, so ``ENABLE_AUTH=false`` does not reach a
+store that has one: ``r0authoff/flip_auth.go.txt``). Secrets never reach the
+output: keys are minted on the copy and held in memory only.
 
 ``--check`` re-derives the data and exits 1 on any differing verdict cell.
 """
@@ -48,6 +50,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -120,6 +123,12 @@ OK_5XX: dict[str, str] = {
     "POST /api/v1/operations/:id/revert": "500 failed to revert operation (no changes for the operation)",
     "POST /api/v1/update/apply": "500 failed to apply update (no release asset to apply)",
 }
+
+# The same for the auth-disabled boot only: a handler that assumes a signed-in user
+# and fails without one. With authentication off no decision stands before the
+# handler, so these are allows too; they are kept apart so the auth-on pass does
+# not take them. Each reason is R0's own message in the auth-off boot's serve log.
+OK_5XX_AUTHOFF: dict[str, str] = {}
 
 ADMIN_USER = "lucius.fox"  # the corpus' admin-role user, whose session mints keys
 USERS: dict[str, tuple[str, str]] = {
@@ -253,12 +262,13 @@ class RecorderError(RuntimeError):
     """A probe that did not reach a verdict, or a store that drifted."""
 
 
-def verdict_of(status: int, key: str) -> str:
+def verdict_of(status: int, key: str, ok_5xx: dict[str, str] | None = None) -> str:
     """401/403 -> D; any other status below 500 -> A. Else the run is wrong."""
+    listed = OK_5XX if ok_5xx is None else ok_5xx
     if status == 429:
         raise RecorderError(f"{key}: 429 (the rate limiter is on): not a verdict")
     route = key.split(" ", 1)[1] if " " in key else key  # "<principal> METHOD /path"
-    if status >= 500 and route not in OK_5XX:
+    if status >= 500 and route not in listed:
         raise RecorderError(
             f"{key}: {status}: a probe that fails after authorization must answer below 500"
         )
@@ -427,12 +437,13 @@ def probe_principal(probe: Probe, routes: list[dict[str, Any]]) -> list[int]:
     canary(probe)
     out: dict[tuple[str, str], int] = {}
     problems: list[str] = []
+    listed = {**OK_5XX, **OK_5XX_AUTHOFF} if probe.principal["kind"] == "authoff" else OK_5XX
     for r in order_routes(routes):
         m, p = r["method"], r["path"]
         req_path, req_body = probe_request(m, p, probe.principal["name"])
         status = probe.send(m, req_path, req_body)
         try:
-            verdict_of(status, f"{probe.principal['name']} {m} {p}")
+            verdict_of(status, f"{probe.principal['name']} {m} {p}", listed)
         except RecorderError as e:
             problems.append(str(e))
         out[(m, p)] = status
@@ -613,6 +624,7 @@ def record_pass(
         raise RecorderError("\n".join(failures))
     check_5xx_follows_authorization(routes, principals, columns)
     out: dict[str, Any] = {"columns": columns}
+    out["canary"] = {p.principal["name"]: p.canary_status for p in probes}
     if do_tasks:
         out["tasks"] = probe_tasks(probes, task_defs(admin))
         out["approvals"] = probe_approvals(probes, awaiting_runs(admin))
@@ -693,6 +705,8 @@ def diff_verdicts(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
     for k in ("r0_tag", "r0_binary_sha256", "route_count", "principals"):
         if old.get(k) != new.get(k):
             out.append(f"{k}: {old.get(k)!r} -> {new.get(k)!r}")
+    if old.get("canary") != new.get("canary"):
+        out.append(f"canary: {old.get('canary')!r} -> {new.get('canary')!r}")
     names = new["principals"]
     o = {(r["method"], r["path"]): r["verdict"] for r in old["routes"]}
     n = {(r["method"], r["path"]): r["verdict"] for r in new["routes"]}
@@ -791,6 +805,40 @@ def _without_secrets(body: Any) -> str:
     return re.sub(r"abk_[^\"\s,}]+", "abk_<cut>", json.dumps(body))[:400]
 
 
+FLIP_AUTH_SRC = pathlib.Path(__file__).with_name("r0authoff") / "flip_auth.go.txt"
+
+
+def flip_auth_off(layout: Any) -> None:
+    """Turn enable_auth off in the staged copy's stored config (flip_auth.go.txt)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        src = pathlib.Path(tmp) / "flip_auth.go"
+        shutil.copy(FLIP_AUTH_SRC, src)
+        r = subprocess.run(  # noqa: S603 - fixed argv
+            ["go", "run", str(src), str(layout.db)],
+            cwd=w.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=1200,
+            check=False,
+        )
+    if r.returncode != 0:
+        raise w.CorpusError(
+            f"could not turn enable_auth off in the copy: {r.stderr.strip()[-800:]}"
+        )
+    print(r.stdout.strip(), file=sys.stderr, flush=True)
+
+
+def check_auth_is_off(client: Any) -> None:
+    """R0 booted from the flipped store must answer a credential-less request to a
+    route that needs one: a 401 here means the recording would not be auth-off."""
+    r = client.request("GET", "/api/v3/ops/runs?limit=1", auth="none")
+    if r.status == 401:
+        raise w.CorpusError(
+            "the auth-off boot answers 401 to a request without a credential: "
+            "authentication is still on, so the auth-off column would be a lie"
+        )
+
+
 def stage_copy(args: argparse.Namespace, layout: Any) -> None:
     corpus = pathlib.Path(args.corpus).resolve()
     if layout.workdir.exists():
@@ -810,15 +858,20 @@ def boot_and_record(
 ) -> dict[str, Any]:
     layout = w.Layout(pathlib.Path(args.workdir))
     stage_copy(args, layout)
-    # R0 limits each IP to 100 requests a minute: the probe must not meet it.
-    env = {"ENABLE_RATE_LIMIT": "false"}
+    # R0 builds its per-peer rate limiter from the stored config, which the
+    # environment does not reach: the recorder spreads its probes over loopback
+    # source addresses instead (SourceIPs), and sets no ENABLE_RATE_LIMIT.
+    env: dict[str, str] = {}
     if auth_off:
-        env["ENABLE_AUTH"] = "false"
+        # ENABLE_AUTH=false does not reach a store that has a config_blob either:
+        # rewrite enable_auth in the throwaway copy's blob.
+        flip_auth_off(layout)
     proc = w.R0Process(binary, layout, args.port, docker=args.docker, extra_env=env)
     client = w.Client(proc.base, user_agent=RECORDER_UA)
     proc.start()
     try:
         if auth_off:
+            check_auth_is_off(client)
             ra.wait_for_boot_runs(client, "none", timeout=args.settle_timeout)
             mine = [p for p in principals if p["kind"] == "authoff"]
             probes = {p["name"]: Probe(client, p, None) for p in mine}
@@ -839,7 +892,7 @@ def stop_throwaway(proc: Any) -> None:
     """Stop R0 and discard its store: the recording is already in memory, so a
     shutdown that hangs or exits non-zero is logged and the process killed."""
     try:
-        proc.stop(timeout=60.0)
+        proc.stop(timeout=10.0)
     except (subprocess.TimeoutExpired, w.CorpusError) as e:
         print(f"R0 did not stop cleanly ({type(e).__name__}); killing it", file=sys.stderr)
         if proc.proc is not None and not proc.docker:
@@ -888,7 +941,13 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     w.check_outside_maintenance_window()
     principals = principal_table()
     routes = routes_doc["routes"]
-    on = boot_and_record(args, binary, routes, principals, auth_off=False)
+    out = pathlib.Path(args.out)
+    if args.reuse_auth_on:
+        on = json.loads(pathlib.Path(args.reuse_auth_on).read_text(encoding="utf-8"))
+    else:
+        on = boot_and_record(args, binary, routes, principals, auth_off=False)
+        if args.regenerate:  # kept, so a failure after this point does not lose the pass
+            save_partial(out / PARTIAL_ON, on)
     off = boot_and_record(args, binary, routes, principals, auth_off=True)
     # Stitch the two boots' columns in principal order.
     cols_on = iter(on["columns"])
@@ -902,7 +961,17 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
         "store": "internal/books/testdata/r2corpus/overlay",
     }
     extra = {k: on[k] for k in ("tasks", "approvals", "census")}
+    extra["canary"] = {**on["canary"], **off["canary"]}
     return principals_doc(principals), build_verdicts(meta, routes, principals, columns, extra)
+
+
+PARTIAL_ON = "auth-on.partial.json"
+
+
+def save_partial(path: pathlib.Path, doc: dict[str, Any]) -> None:
+    """The auth-on pass as recorded (not committed): --reuse-auth-on reads it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -918,6 +987,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--workdir", default=w.DEFAULT_WORKDIR)
     ap.add_argument("--port", type=int, default=w.DEFAULT_PORT)
     ap.add_argument("--out", default=str(REACH_DIR), help="write the data here")
+    ap.add_argument(
+        "--reuse-auth-on",
+        metavar="PATH",
+        help="use the auth-on pass saved in PATH (auth-on.partial.json) and record only "
+        "the auth-off boot",
+    )
     ap.add_argument("--workers", type=int, default=8, help="principals probed in parallel")
     ap.add_argument("--settle-timeout", type=float, default=360.0)
     ap.add_argument(
