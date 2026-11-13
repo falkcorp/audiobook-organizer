@@ -1,5 +1,5 @@
 // file: core/internal/healthhttp/routes.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c5017dc-52e8-43c1-b15d-bf6ff14ef910
 // last-edited: 2026-11-13
 
@@ -88,7 +88,13 @@ type Deps struct {
 	Enqueuer Enqueuer
 	// Bundles is the os.Root on core.diagnostics.dir.
 	Bundles *os.Root
-	Audit   Recorder
+	// Retention is core.diagnostics.retention: a bundle older than it is 410
+	// even if the prune task has not removed it yet. Zero means the 24 h
+	// default (diagnostics.DefaultRetention).
+	Retention time.Duration
+	// Now is the clock; nil means time.Now.
+	Now   func() time.Time
+	Audit Recorder
 	// Redactor redacts component Detail text; nil means log.NewRedactor(nil).
 	Redactor *log.Redactor
 	// App and Version identify the build in the health body.
@@ -122,6 +128,8 @@ type api struct {
 	runs    Runs
 	enq     Enqueuer
 	root    *os.Root
+	keep    time.Duration
+	now     func() time.Time
 	audit   Recorder
 	red     *log.Redactor
 	app     string
@@ -131,7 +139,10 @@ type api struct {
 
 func newAPI(d Deps) *api {
 	a := &api{reg: d.Health, info: d.Info, runs: d.Runs, enq: d.Enqueuer, root: d.Bundles, audit: d.Audit,
-		red: d.Redactor, app: d.App, version: d.Version, log: d.Log}
+		keep: d.Retention, now: d.Now, red: d.Redactor, app: d.App, version: d.Version, log: d.Log}
+	if a.now == nil {
+		a.now = time.Now
+	}
 	if a.red == nil {
 		a.red = log.NewRedactor(nil)
 	}
@@ -252,7 +263,10 @@ func holds(p *auth.Principal, perm rbac.Permission) bool {
 
 // authorise is the repetition of the route's permission and guards, in the
 // order stage 13 refuses them: a principal (401), the permission (403), an
-// interactive credential (403).
+// interactive credential (403). "Interactive" is MethodSession alone, not
+// MayChangeCredentials: a temp-login or invite session (MethodSessionDelegated)
+// may change credentials but must not download operator data (05-health
+// §5H.3.3, §5H.5, SEC2-13). The router's shared Guards are left as they are.
 func authorise(p *auth.Principal, g gate) (string, error) {
 	subject := ""
 	if p != nil && p.User != nil {
@@ -263,7 +277,7 @@ func authorise(p *auth.Principal, g gate) (string, error) {
 		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
 	case !holds(p, g.perm):
 		return "", httpapi.Forbidden(g.perm)
-	case g.interactive && !p.Method.MayChangeCredentials():
+	case g.interactive && !p.Method.Interactive():
 		return "", &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: "this route needs an interactive session"}
 	}
 	return subject, nil
@@ -393,7 +407,7 @@ func (a *api) start(w http.ResponseWriter, r *http.Request, c caller) {
 		a.fail(w, r, &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"})
 		return
 	}
-	id, err := a.enq.EnqueueExport(audit.WithActor(r.Context(), c.actor(r)), diagnostics.ExportParams{ActorID: c.subject, Sections: req.Sections}, c.subject)
+	id, err := a.enq.EnqueueExport(audit.WithActor(r.Context(), c.actor(r)), diagnostics.ExportParams{ActorID: c.subject, Perms: diagnostics.PermsOf(c.p.Perms), Sections: req.Sections}, c.subject)
 	if err != nil {
 		a.fail(w, r, err)
 		return
@@ -433,7 +447,7 @@ func (a *api) download(w http.ResponseWriter, r *http.Request, c caller) {
 		a.fail(w, r, &httpapi.Error{Status: http.StatusConflict, Code: "bundle_not_ready", Detail: "the run has not produced its bundle"})
 		return
 	}
-	b, err := diagnostics.OpenBundle(a.root, run.File)
+	b, err := diagnostics.OpenBundle(a.root, run.File, a.keep, a.now())
 	switch {
 	case errors.Is(err, diagnostics.ErrExpired):
 		a.fail(w, r, &httpapi.Error{Status: http.StatusGone, Code: "bundle_expired", Detail: "the bundle is past its retention and was removed"})

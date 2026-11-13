@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d8634ac0-da50-4670-b2ca-6e84e324168a
 // last-edited: 2026-11-13
 
@@ -177,7 +177,7 @@ func TestDiagnostics_SecretsNeverSerialised(t *testing.T) {
 		Value  any    `json:"value"`
 		Source string `json:"source"`
 	}
-	cfg := func(context.Context) (any, error) {
+	cfg := func(context.Context, diagnostics.Viewer) (any, error) {
 		return []entry{
 			{"core.auth.session_key", diagnostics.Secret{Name: "core.auth.session_key"}, "file"},
 			{"core.ui.title", "Gotham Audio Archive", "default"},
@@ -247,7 +247,7 @@ func TestDiagnostics_PatternRedaction(t *testing.T) {
 		}
 		return io.NopCloser(strings.NewReader(strings.Join(lines, "\n") + "\n")), nil
 	}
-	health := func(context.Context) (any, error) {
+	health := func(context.Context, diagnostics.Viewer) (any, error) {
 		return map[string]any{"detail": "dial https://alfred:" + secretURLPw + "@db.example failed", "cookie": secretCookie}, nil
 	}
 	items := func(yield func(map[string]string) bool) {
@@ -433,7 +433,7 @@ func TestDiagnostics_PathsConfinedToRoot(t *testing.T) {
 
 	// The reader refuses a name that is not a bundle's, and a symlink that
 	// points out of the root.
-	if _, err := diagnostics.OpenBundle(f.root, "../x.zip"); !errors.Is(err, diagnostics.ErrExpired) {
+	if _, err := diagnostics.OpenBundle(f.root, "../x.zip", 0, time.Now()); !errors.Is(err, diagnostics.ErrExpired) {
 		t.Errorf("OpenBundle(../x.zip) = %v", err)
 	}
 	outside := filepath.Join(parent, filepath.Base(f.dir)+"-outside.zip")
@@ -444,7 +444,7 @@ func TestDiagnostics_PathsConfinedToRoot(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(f.dir, "link.zip")); err != nil {
 		t.Skipf("no symlinks here: %v", err)
 	}
-	_, err = diagnostics.OpenBundle(f.root, "link.zip")
+	_, err = diagnostics.OpenBundle(f.root, "link.zip", 0, time.Now())
 	if err == nil || errors.Is(err, diagnostics.ErrCorrupt) {
 		t.Errorf("OpenBundle followed a symlink out of the root: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestDiagnostics_StreamRefiltersAtDownload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := diagnostics.OpenBundle(f.root, res.File)
+	b, err := diagnostics.OpenBundle(f.root, res.File, 0, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +531,7 @@ func TestDiagnostics_StreamDropsUnknownSections(t *testing.T) {
 	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	b, err := diagnostics.OpenBundle(f.root, res.File)
+	b, err := diagnostics.OpenBundle(f.root, res.File, 0, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,13 +548,13 @@ func TestDiagnostics_StreamDropsUnknownSections(t *testing.T) {
 
 func TestDiagnostics_OpenBundleExpired(t *testing.T) {
 	f := newFixture(t)
-	if _, err := diagnostics.OpenBundle(f.root, "gone.zip"); !errors.Is(err, diagnostics.ErrExpired) {
+	if _, err := diagnostics.OpenBundle(f.root, "gone.zip", 0, time.Now()); !errors.Is(err, diagnostics.ErrExpired) {
 		t.Errorf("missing bundle: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(f.dir, "junk.zip"), []byte("not a zip"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := diagnostics.OpenBundle(f.root, "junk.zip"); !errors.Is(err, diagnostics.ErrCorrupt) {
+	if _, err := diagnostics.OpenBundle(f.root, "junk.zip", 0, time.Now()); !errors.Is(err, diagnostics.ErrCorrupt) {
 		t.Errorf("junk bundle: %v", err)
 	}
 }
@@ -685,7 +685,7 @@ func TestDiagnostics_ViewerSatisfiesFailsClosed(t *testing.T) {
 func TestDiagnostics_ManifestAndCoreBuild(t *testing.T) {
 	f := newFixture(t)
 	e := f.exporter(viewerOf("core:system.manage"), diagnostics.CoreSources{
-		System: func(context.Context) (any, error) { return map[string]int{"cpus": 8}, nil },
+		System: func(context.Context, diagnostics.Viewer) (any, error) { return map[string]int{"cpus": 8}, nil },
 	})
 	res, err := f.build(e, "run-manifest", diagnostics.ExportParams{ActorID: "bruce"})
 	if err != nil {

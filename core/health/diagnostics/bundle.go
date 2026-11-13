@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-13
 
@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"iter"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/mediacore/rbac"
@@ -135,6 +136,48 @@ func (v Viewer) Satisfies(r rbac.Requirement) bool {
 	return satisfied(specOf(r), v.Can)
 }
 
+// ViewerOf is the Viewer whose permissions are exactly perms, the set an
+// ExportParams carries (PermsOf).
+func ViewerOf(actorID string, perms []string) Viewer {
+	held := make(map[string]struct{}, len(perms))
+	for _, p := range perms {
+		held[p] = struct{}{}
+	}
+	return Viewer{ActorID: actorID, Can: func(p rbac.Permission) bool {
+		_, ok := held[string(p)]
+		return ok
+	}}
+}
+
+// PermsOf lists the concrete permissions c holds, for ExportParams.Perms. It
+// never returns nil, so a run started with no permissions at all is told apart
+// from a run started without a snapshot.
+func PermsOf(c rbac.Checker) []string {
+	out := []string{}
+	if c == nil {
+		return out
+	}
+	for _, p := range c.Concrete() {
+		out = append(out, string(p))
+	}
+	return out
+}
+
+// RowOmitter is what the Writer a bundle hands a section also implements: it
+// counts rows a section left out because the viewer may not read them, under
+// the permission layer of the manifest's redaction counts.
+type RowOmitter interface {
+	OmitRows(n int)
+}
+
+// OmitRows counts n rows a section left out for the viewer on w, when w counts
+// them (every Writer a bundle builds does).
+func OmitRows(w Writer, n int) {
+	if o, ok := w.(RowOmitter); ok && n > 0 {
+		o.OmitRows(n)
+	}
+}
+
 // Contributor is registered by a module (Registrar.Diagnostics, an addition to 06).
 type Contributor interface {
 	Sections() []Section
@@ -245,11 +288,40 @@ func (st *build) redactString(key, s string) (out string) {
 		st.counts.typed++
 		return s
 	}
-	out, kind := st.red.StringKinds(key, s)
-	if kind != 0 || out != s {
+	out, changed := st.scrub(key, s)
+	if changed {
 		st.counts.pattern++
 	}
 	return out
+}
+
+// redactKey applies the pattern layer to an object member's name. A key is text
+// like any other (a map keyed by URL, by token or by path puts that text in the
+// bytes), so it passes the same redactor and path rule as a value. A key is
+// never a typed placeholder, so there is no typed shortcut here.
+func (st *build) redactKey(k string) (out string) {
+	defer func() {
+		if recover() != nil {
+			out = redactedErr
+			st.counts.pattern++
+		}
+	}()
+	out, changed := st.scrub("", k)
+	if changed {
+		st.counts.pattern++
+	}
+	return out
+}
+
+// scrub is the pattern layer proper: the log.Redactor, then the absolute-path
+// rule. It reports whether either changed s.
+func (st *build) scrub(key, s string) (string, bool) {
+	out, kind := st.red.StringKinds(key, s)
+	changed := kind != 0 || out != s
+	if p := st.roots.redactPaths(out); p != out {
+		out, changed = p, true
+	}
+	return out, changed
 }
 
 // isTypedPlaceholder reports a string the typed layer produced.
@@ -289,10 +361,7 @@ func (st *build) walk(key string, v any, depth int) any {
 	case string:
 		return st.redactString(key, x)
 	case map[string]any:
-		for k, val := range x {
-			x[k] = st.walkMember(k, val, depth+1)
-		}
-		return x
+		return st.walkObject(x, depth)
 	case []any:
 		for i, val := range x {
 			x[i] = st.walk(key, val, depth+1)
@@ -310,6 +379,32 @@ func (st *build) walk(key string, v any, depth int) any {
 		}
 	}
 	return v
+}
+
+// walkObject rebuilds an object with its keys redacted. The value is judged by
+// the original key (a deny-listed name still replaces its value), the output
+// carries the redacted key text. Keys that collapse to the same text are kept
+// apart with a "#2", "#3" suffix, in the order of the original keys, so no
+// member is lost and the result does not depend on map order.
+func (st *build) walkObject(x map[string]any, depth int) map[string]any {
+	keys := make([]string, 0, len(x))
+	for k := range x {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	out := make(map[string]any, len(x))
+	for _, k := range keys {
+		base := st.redactKey(k)
+		nk := base
+		for n := 2; ; n++ {
+			if _, taken := out[nk]; !taken {
+				break
+			}
+			nk = fmt.Sprintf("%s#%d", base, n)
+		}
+		out[nk] = st.walkMember(k, x[k], depth+1)
+	}
+	return out
 }
 
 // walkMember redacts the value of object member k. A deny-listed key replaces
@@ -559,6 +654,9 @@ func (s *jsonlSink) Close() error {
 	}
 	return nil
 }
+
+// OmitRows implements RowOmitter.
+func (w *sectionWriter) OmitRows(n int) { w.st.counts.permission += n }
 
 // ValidSectionName reports whether n is a section name, "<moduleID>.<name>".
 // A start request is checked against it before a run is enqueued.
