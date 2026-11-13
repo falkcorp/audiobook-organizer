@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/STATE.md -->
-<!-- version: 1.58.0 -->
+<!-- version: 1.59.0 -->
 <!-- guid: 621bd548-9bb0-45e1-8e7b-31d3f7ef650e -->
-<!-- last-edited: 2026-11-11 -->
+<!-- last-edited: 2026-11-13 -->
 
 # Platform-core planning operation — state
 
@@ -153,6 +153,20 @@ OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 | W37 | F2-05 | #4608 `bf84bfc1d` | T2: native task routes in `core/internal/taskhttp`, the `hello.count` task and the executor window-start guard (dark; nothing mounts the routes). Merged 2026-11-11 |
 | W37 | F4-03 | #4609 `3ed4c1ee5` | T3: OIDC moves into `core/auth/oidc` with the native-app hand-off, and Cloudflare Access consolidates into `internal/cfaccess` as an owner-proof auth extension (dark; ABO's sign-in is unchanged). Merged 2026-11-11 |
 | W37 | F7-10 | #4606 `4bafbf760` | T3: dark integrations instance, test, health and hold routes in `core/internal/integrationhttp`; nothing mounts them until F7-09. Follow-up #4607 `57fec82b9` (a refusal never quotes the submitted URL). Merged 2026-11-11 |
+| W38 | F4-05 | #4616 `c382e9730` | T3: native identity, role, audit, settings, reset, module and UI routes in core (dark). Merged 2026-11-12 |
+| W38 | F7-02 | #4619 `035227050` | T3: `core/providerhttp` outbound gate, egress guard and metadata contract (dark). Re-cut r3 of #4610 and #4615. Merged 2026-11-12 |
+| W38 | F2-16 | #4617 `aebd1429a` | T3: the kernel wires the F2 foundation (tasks, scheduler, config, audit, events, health) into the boot. Follow-up #4629 `024ba0c4a` builds the core config store only when tasks need it (the `examples/hello` race matrix went from 534 s back toward main's 161 s). Merged 2026-11-12 |
+| W38 | F3-06 | #4611 `59ca0d860` | T4: books cutover: generated rename table, frozen HEAD codec and cipher, M2, and books' M7 importers (dark). Follow-up #4628 `393236387` (blob-absent viper keys seeded, host `concurrent_scans` default). Merged 2026-11-12 |
+| W38 | F7-07 | #4621 `d14f6fd75` | T3: full-text index contract, derived generations and `bleveindex` (dark). Follow-ups #4625 `67722caaa` (bounded backoff eviction, token-keyed retries) and #4643 `ad4a1925a` (an all-refused chunk backs off per document). Merged 2026-11-12 |
+| W38 | F4-11 | #4622 `40278429f` | T4: authenticated revocation journal and the boot re-apply in `core/backup` (dark). Follow-up #4645 `c99de8d84` (durable unapplied queue for unknown journal kinds). Re-cut r2 of #4605. Merged 2026-11-12 |
+| W38 | F5-01 | #4627 `0217c2e1f` | T3: maintenance jobs become task kinds. Follow-up #4641 `20693a61b` (write-verb oracle, resume wording, test renames). Merged 2026-11-12 |
+| W38 | F6-02 | #4632 `eda3f655f` | T3: `core/realtime` hub, SSE and `eventhttp` (dark). Re-cut r2. Merged 2026-11-12 |
+| W38 | F5-02 | #4634 `e1acc58ee` | T3: repairs fixers become fixer kinds. Follow-up #4647 `b01a5d930` (fixer-stores guard, refused run state cached). Merged 2026-11-12 |
+| W38 | F7-06 | #4635 `21d5355f1` | T4: core library completed, built dark. Re-cut r2. Merged 2026-11-12 |
+| W38 | F4-06 | #4640 `c9791034f` | T4: books cutover identity step M3 with the read-only preflight and cutover blockers (dark). Merged 2026-11-12 |
+| W38 | F6-01 | #4648 `257f3f1b0` | T4: `core/outbox`: same-batch staging, commit-ordered intake, the relay task and consumers (dark). Re-cut r3. Merged 2026-11-12 |
+| W38 | F8-01 | #4653 `bfb2d4fc6` | T4: core backup and restore (dark). Re-cut r3. Merged 2026-11-12 and deployed 15:28 EST |
+| W38 | F7-03 | #4655 `6bb29e45b` | T4: core AI router, the `core.openai_compat` adapter and durable batch jobs (dark). Re-cut r2. Merged 2026-11-12 22:22 EST; not deployed yet |
 
 Side PRs this period (not plan rows): #4400 `0f5f0d509` (promote dispatch with `GITHUB_TOKEN`), #4401 `cd7578a2c`
 (github-common pins → `23ed8a4`, nightly e2e skipped: it starts no server), #4402 `18348c535` (v0.223.0 changelog
@@ -162,6 +176,8 @@ input, minimatch override, changelog collection lands through a PR when direct p
 Side PRs 2026-11-10 (not plan rows): #4553 `77d62638b` (server `afterListen` and stop data-race fix) with follow-ups #4558 `2edd4879e`, #4561 `c21dffe73` and #4562 `f4ae268ee`; #4565 (Dockerfile `go mod download` retry) is in the merge queue.
 
 Side PRs 2026-11-11 (not plan rows): #4577 `f9240ac3b` (F3-OIDC-SECRET: `core/config` binds a list entry's `secrets.Ref`, each OIDC `client_secret` declared; F3-02 does not wait on it any more); flake and test fixes #4585 `084774a69` (events drop-warning ordering), #4589 `798d47018` (perimeter health timestamp) and #4612 `a4d9d752b` (the cutover drill selftest closes its store when its mutation skips).
+
+Side PRs 2026-11-12 (not plan rows): #4612 `a4d9d752b` (drill selftest Pebble teardown flake), #4626 `a27523523`, #4633 `144945b8a` and #4639 `5ad7f69b0` (providerhttp scrub-linearity test, ending in a deterministic work count), #4642 `4fc626bb1` (CodeQL alloc-size bound in the books store), #4646 `2f65c4d6a` (core config `SectionCache`), #4649 `45f0b9792` (SSE reset test race), #4651 `8bff5521f` (providerhttp boot-read log flake), #4652 `415063838` and #4656 `2436cc92d` (core-ci 45-minute timeout, cache prefix fallback, cache saved on main pushes).
 
 Note (2026-11-10, from the F2-01 follow-up and F3-01 reviews): `recoverAutoFetchFileOp` (`internal/server/file_io_pool.go`) still reads `config.AppConfig.WriteBackMetadata` directly on a file-I/O pool worker. That is outside the `afterListen` guard, and is recorded for the config-cutover row.
 
@@ -193,7 +209,9 @@ Owner 2026-11-07: no owner gates and no burn-in periods; finish the refactor as 
 
 ## Next action
 
-W27 progress so far: 14 plan rows merged (F2-03, F4-02, F4-02b, F2-15, F2-17, F3-02, F7-01, F3-04, F2-04, F7-04, F2-11, F2-05, F4-03 and F7-10), with follow-ups #4584, #4594, #4597, #4604 and #4607 and side PRs #4577, #4582, #4585, #4589 and #4612. Deployed 2026-11-11 19:07 EST from main `a4d9d752b` with `make deploy-debug`; the service came up active with NRestarts=0. In review: 3 PRs (#4605 F4-11, #4610 F7-02, #4611 F3-06). Being built: 4 rows (F4-05, F7-06, F7-07 and F2-16). The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending, and the owner's after-the-fact sign-off on F2-06's DataStep seam is open (see Blockers). In plain terms: W27 adds more dark building blocks (the task executor and scheduler, core sign-in and OIDC, the integrations registry and the storage cutover machinery); nothing users see has changed.
+Status 2026-11-13 01:40 EST: W38 (the 11-12 batch) merged 14 plan rows: F4-05, F7-02, F2-16, F3-06, F7-07, F4-11, F5-01, F6-02, F5-02, F7-06, F4-06, F6-01, F8-01 and F7-03, with follow-ups #4625, #4628, #4629, #4641, #4643, #4645 and #4647. Deployed twice on 2026-11-12 with `make deploy-debug`: 03:08 EST at `024ba0c4a` and 15:28 EST at `bfb2d4fc6` (health 200). Main has moved past the last deploy by F7-03 (#4655) and #4656. Being built now: 8 rows (F5-15, F7-05, F4-07, F8-03 and F5-06 to F5-09). Next ready: F5-10, F5-11, F5-12, F5-04, F5-05, F5-13, F5-16, F9-01 and F6-04. F5-19 waits on F5-15. Still held: F3-08 (`RELEASE_FREEZE`) and the R1-27 owner action (host.conf and the root-owned rollback helpers). In plain terms: the remaining dark building blocks (AI routing, backup, outbox, library, search index) are in, and the old maintenance and repair jobs are being moved onto the new task system; nothing users see has changed.
+
+Before W38: W27 progress: 14 plan rows merged (F2-03, F4-02, F4-02b, F2-15, F2-17, F3-02, F7-01, F3-04, F2-04, F7-04, F2-11, F2-05, F4-03 and F7-10), with follow-ups #4584, #4594, #4597, #4604 and #4607 and side PRs #4577, #4582, #4585, #4589 and #4612. Deployed 2026-11-11 19:07 EST from main `a4d9d752b` with `make deploy-debug`; the service came up active with NRestarts=0. In review: 3 PRs (#4605 F4-11, #4610 F7-02, #4611 F3-06). Being built: 4 rows (F4-05, F7-06, F7-07 and F2-16). The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending, and the owner's after-the-fact sign-off on F2-06's DataStep seam is open (see Blockers). In plain terms: W27 adds more dark building blocks (the task executor and scheduler, core sign-in and OIDC, the integrations registry and the storage cutover machinery); nothing users see has changed.
 
 Before W27: W26 is merged, 6 of 6 (F3-05, F4-09, F2-02, F2-14, F3-03 and F2-06, with follow-ups #4570 and #4576), and deployed 2026-11-10 from main `cfc281eb3` with `make deploy-debug`; the service came up active with NRestarts=0. OWNER-04 is answered (https://github.com/falkcorp/audiobook-organizer/issues/4382#issuecomment-6781137669). W27 is in progress: F2-03, F4-02, F2-15 and F2-17 (#4578), plus #4577 (OIDC `client_secret`). F3-02 waits on #4577. The owner's after-the-fact sign-off on F2-06's DataStep seam is open (see Blockers). The R1-27 owner action (host.conf and the root-owned rollback helpers) is still pending. In plain terms: W26 adds more dark building blocks (the Basic gate, authorization checks, the task stores, core secrets and the data-migration runner); nothing users see has changed.
 
