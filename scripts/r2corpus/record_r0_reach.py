@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.4.2
+# version: 1.5.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-13
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -820,6 +820,12 @@ EDIT_CONFIG_SRC = pathlib.Path(__file__).with_name("r0config") / "edit_config.go
 # flag is off (handlers/fpworker flagGuard), so a recording with it off sees no
 # principal's reach on those routes: both boots turn it on.
 WORKER_FLAG = "fingerprint_remote_workers_enabled=*>true"
+# The two Deluge discovery handlers answer 403 from inside the handler while this
+# flag is off ("deluge discovery is disabled"), which the probe cannot tell from
+# an authorization denial: every principal, the admin's session included, read D.
+# With it on, an authorized caller reaches the handler's own 400 (no client set).
+DISCOVERY_FLAG = "deluge_discovery_enabled=*>true"
+BOOT_FLAGS = [WORKER_FLAG, DISCOVERY_FLAG]
 AUTH_OFF_EDIT = "enable_auth=true>false"
 
 
@@ -883,7 +889,7 @@ def boot_and_record(
     env: dict[str, str] = {}
     # ENABLE_AUTH=false does not reach a store that has a config_blob either:
     # rewrite the keys in the throwaway copy's blob.
-    edit_config(layout, [WORKER_FLAG, AUTH_OFF_EDIT] if auth_off else [WORKER_FLAG])
+    edit_config(layout, [*BOOT_FLAGS, AUTH_OFF_EDIT] if auth_off else list(BOOT_FLAGS))
     proc = w.R0Process(binary, layout, args.port, docker=args.docker, extra_env=env)
     client = w.Client(proc.base, user_agent=RECORDER_UA)
     proc.start()
