@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
 // last-edited: 2026-11-13
 
@@ -532,7 +532,7 @@ func TestDiagnostics_AdminSnapshotKeepsEverySection(t *testing.T) {
 	}
 	compile := func(interactive bool, scopes []rbac.Permission) rbac.Checker {
 		return authz.Compile(rbac.CompileInput{
-			CheckerInput: rbac.CheckerInput{Roles: []rbac.RoleName{"admin"}, Scopes: scopes, Interactive: interactive},
+			Roles: []rbac.RoleName{"admin"}, Scopes: scopes, Interactive: interactive,
 			RolePatterns: []rbac.Permission{"core:admin"},
 		}, cat)
 	}
@@ -587,7 +587,7 @@ func TestDiagnostics_AdminSnapshotKeepsEverySection(t *testing.T) {
 	// checker does not hold it.
 	f = newFixture(t)
 	editor := authz.Compile(rbac.CompileInput{
-		CheckerInput: rbac.CheckerInput{Roles: []rbac.RoleName{"editor"}, Interactive: true},
+		Roles: []rbac.RoleName{"editor"}, Interactive: true,
 		RolePatterns: []rbac.Permission{"core:system.view"},
 	}, cat)
 	res, err = f.build(f.exporter(viewerFor(editor), diagnostics.CoreSources{}, contrib), "run-editor", diagnostics.ExportParams{ActorID: "robin", Perms: []string{"core:admin"}})
@@ -711,4 +711,84 @@ func TestDiagnostics_RouteShapesAndEdgesOfPathRule(t *testing.T) {
 			t.Errorf("not idempotent, line %d: %q -> %q", i, got[i], again[i])
 		}
 	}
+}
+
+// TestDiagnostics_PathRuleDelimitersDoNotHideAPath: "<" and ">" are path
+// boundaries like any delimiter, so a path put right after markup is redacted;
+// only the redactor's own placeholders and a real closing tag are skipped.
+func TestDiagnostics_PathRuleDelimitersDoNotHideAPath(t *testing.T) {
+	roots := []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}
+	in := []string{
+		`<b>/home/bruce/secret.txt`,
+		`x=<i>/etc/shadow and </home/bruce/y>`,
+		"a</etc/passwd b",
+		`<path>/home/bruce/z and <root:cowl>/home/bruce/w`,
+		`</div> <root:lib>/x <path> done`,
+	}
+	got := strings.Split(strings.TrimSpace(logsOf(t, roots, in)), "\n")
+	want := []string{
+		`<b><path>`,
+		`x=<i><path> and <<path>>`,
+		`a<<path> b`,
+		`<path><path> and <root:cowl><path>`,
+		`</div> <root:lib>/x <path> done`,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d lines: %q", len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d\n got %q\nwant %q", i, got[i], want[i])
+		}
+	}
+	assertNoneOf(t, map[string][]byte{"logs": []byte(strings.Join(got, "\n"))}, "/home/bruce", "/etc/shadow", "/etc/passwd")
+}
+
+// TestDiagnostics_WholeValuePathRuleOnlyForASinglePath: a JSON string that
+// merely starts with a path, root or not, is prose: every path in it is
+// redacted and its text kept. Only a value that is one clean path is replaced
+// as a whole.
+func TestDiagnostics_WholeValuePathRuleOnlyForASinglePath(t *testing.T) {
+	f := newFixture(t)
+	vals := map[string]string{
+		"msg_root":     "/srv/lib/x: open /home/bruce/cowl: denied",
+		"quoted_root":  "/srv/lib/x '/home/bruce/y'",
+		"msg_outside":  "/etc/a: /home/bruce/b",
+		"two_outside":  "/etc/a /home/bruce/c",
+		"dq_outside":   `/etc/a "/home/bruce/d"`,
+		"spaced":       "/Users/bruce/Library/Application Support/app/db",
+		"apostrophe":   "/Users/bruce/Bruce's Music/x",
+		"clean_root":   "/srv/lib/Joker/ch1.m4b",
+		"trailing_dot": "/srv/lib.",
+	}
+	e := f.exporterWith(viewerOf("core:system.manage"), func(cfg *diagnostics.Config) {
+		cfg.Roots = []diagnostics.PathRoot{{Name: "lib", Path: "/srv/lib"}}
+		cfg.Contributors = []diagnostics.Contributor{jsonSection("batcave.v", vals)}
+	})
+	res, err := f.build(e, "run-single", diagnostics.ExportParams{ActorID: "bruce"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := f.zipFiles(res.File)
+	var got map[string]string
+	if err := json.Unmarshal(files["batcave.v/d.json"], &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"msg_root":     "<root:lib>/x: open <path>: denied",
+		"quoted_root":  "<root:lib>/x '<path>'",
+		"msg_outside":  "<path>: <path>",
+		"two_outside":  "<path> <path>",
+		"dq_outside":   `<path> "<path>"`,
+		"spaced":       "<path>",
+		"apostrophe":   "<path>",
+		"clean_root":   "<root:lib>/Joker/ch1.m4b",
+		"trailing_dot": "<root:lib>.",
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s = %q, want %q", k, got[k], w)
+		}
+	}
+	assertNoneOf(t, files, "/home/bruce", "/Users/bruce", "Application Support", "Bruce's")
 }
