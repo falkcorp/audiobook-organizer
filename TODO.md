@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.40 -->
+<!-- version: 10.78.41 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -11,7 +11,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-12 -->
+<!-- last-edited: 2026-11-13 -->
 
 # Project TODO — live items only
 
@@ -23,6 +23,74 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-F7-03-VALIDATE-ENDPOINT** Call `ai.Router.ValidateEndpoint` on every
+      Put of an `ai`-kind instance in the F7 flip (F7-09). F7-03 ships the hook and
+      nothing calls it, so a wildcard capability tick (`"*"`) would be stored and
+      never honoured. Acceptance: a wildcard `PUT` through the kernel answers 422
+      and stores nothing. Decide whether the larger fix (a descriptor-level
+      validation hook in `integrations`, about 40 lines) replaces the kernel's duty
+      to remember the call. Brief: `docs/agent-tasks/platform-core/F7-09-f7-flip-integrations.md`.
+- [ ] **TODO-F7-03-CLEAR-BENCH** Have the `core.integrations.health` task call
+      `ai.Router.ClearBench` on a `HealthOK` probe (F7-09), without clearing a quota
+      bench: `GET /v1/models` succeeds on a spent balance.
+- [ ] **TODO-F7-01-HOLD-PERSIST** `integrations.HoldPolicy.Persist` is a dead flag:
+      `providerhttp` writes every hold to the store unconditionally and merges the
+      field with an OR (`providerhttp/scope.go`), so `false` cannot be expressed and
+      the OpenAI adapter's `Persist: false` changes nothing. Make it a real choice
+      (a `NoPersist` field or a tri-state, with merge semantics and a test), or
+      delete the field.
+- [ ] **TODO-F7-03-POLL-DAMAGED-ROW** `JobStore.Open` ends the listing at the first
+      damaged job row, so jobs after it in ID order are not polled until the row is
+      repaired (the jobs before it now are). The complete fix is for `Open` to yield
+      the error for that row and continue; every `Open` consumer (the poll and two
+      `aitest` suites) then has to treat a per-row error as non-terminal.
+
+- [ ] **TODO-F5-15-CHUNK-END-HOOK** `datamigrate.DataMigration.Step` is per key-value and
+      has no chunk-end callback, so M5 (`internal/books/cutover/m5`) makes one
+      `log.Importer.Import` call per `syslog:` row, then stages the row's delete. The
+      brief asked for one call per chunk. Add a chunk-end hook to `datamigrate` and batch
+      the import there. Measure rows per second on a real disk first: the shard test's
+      figure comes from an in-memory filesystem and says nothing about fsync cost.
+- [ ] **TODO-F5-15-VERIFY-DURABLE-COUNTS** M5's `Verify` balances read against
+      imported plus quarantined using this boot's counters only, so a boot that resumes
+      mid-run reports only the rows it stepped. Persist the per-step counts with the
+      chunk commit so a resumed boot's report covers the whole step.
+- [ ] **TODO-F5-15-ULID-ENCODERS** Five packages declare their own Crockford alphabet and
+      ULID encoder (`taskstore`, `outbox`, `audit`, the library journal, and
+      `core/internal/logjournal`). Fold them into one shared encoder with a single test.
+- [ ] **TODO-F5-15-WIRING-F5-18** Nothing registers M5 or starts the journal tap yet. F5-18
+      registers the step with `m5.New(m5.Config{Importer, Logger}, LogCutoverID,
+      BooksCutoverLevel, []storage.StepRef{BooksLevelStepRef(version)})`, adds
+      `Importers.Log` to `core/module`, registers the `core/log` owner with
+      `logjournal.StorageSpec()`, builds `logjournal.New`, `NewImporter` and `StartTap`,
+      passes `withJournalCounters(tap.Counters)` to the metrics bridge, closes Logging
+      before flushing the tap on shutdown, and adds the `log_journal_degraded` health
+      token.
+
+- [ ] **TODO-F7-05-SMTP-DIAL-GUARD** (hard precondition of the F7-09 flip) The `core.email` channel is admitted by the
+      integrations gate but its SMTP dial has no egress guard: providerhttp's guard
+      wraps HTTP only, so an SMTP host that resolves to a private address is not
+      refused. Add a dial hook an adapter can use (F7-01 or providerhttp) and use it
+      in `core/integrations/notify/mail`. Acceptance: an email instance whose host
+      is a private address without `Local` is refused before any connection, with a
+      test beside `TestEmail_GateRefusalIsReturnedBeforeAnyConnection`. Seams note:
+      `docs/agent-tasks/platform-core/seams.d/F7-05.md`.
+- [ ] **TODO-F7-05-WEBHOOK-HOLD-POLICY** A transient 5xx from a notify webhook holds
+      its providerhttp scope for 30 minutes (5 minutes for other transient answers),
+      and retries inside the hold are refused locally. Decide whether a
+      notification channel wants a notify-specific `HoldPolicy` in the webhook
+      Descriptor, and make framing headers (Host, Content-Length) refused at Put,
+      not only at build (F7-10).
+- [ ] **TODO-F7-05-UNORDERED-RETRY-CAP** The outbox keeps at most 64 retrying
+      entries per partition for an `Unordered()` consumer, so a downed notify channel
+      with more than 64 retrying deliveries can head-block others on its partition.
+      Decide whether to raise or remove the cap, or key deliveries more finely.
+- [ ] **TODO-F7-05-IMPORTRULE-REFRESH** `NativeImporter`'s `ImportRule` writes the
+      rule store but does not refresh a running `notify.Service`'s loaded rules
+      (`Service.PutRule` does). F7-08 must reload after an import or build the
+      Service after it. Acceptance: a rule imported while a Service runs routes the
+      next notification without a restart, with a test.
 
 - [ ] **Assert the rename table's `refuse` verdicts against `config`'s real ones (F3-07)** F3-06's golden generates each retired name's `refuse`/`warn` from the rows' admin flag and the two registered `FailClosed` keys' tags; it cannot compare with core's real verdict because `coreSections()` is unexported in `core/kernel` and F3-06 leaves `core/` alone. In F3-07's `TestRenameTable_EveryKeyRegistered`, add: for every key the real registry has, the golden's verdict equals `config`'s verdict for that path.
   - Owner: F3-07.
