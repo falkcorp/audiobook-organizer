@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-11-13
 
@@ -307,14 +307,9 @@ func opChangeBookIndexCore(ctx context.Context, ensure bool, env opChangeBookInd
 	}
 }
 
-// opChangeIndexProgressTo turns the store's progress callbacks into liveness
-// stamps. The row total is unknown up front, so total is 0 and the message
-// carries the count.
-func opChangeIndexProgressTo(reporter sdk.Reporter) database.OpChangeIndexProgress {
-	return t6g6OpChangeIndexProgressVia(t6g6HeadEnvForOpChange(reporter))
-}
-
-// t6g6OpChangeIndexProgressVia is opChangeIndexProgressTo over the env's hooks.
+// t6g6OpChangeIndexProgressVia turns the store's progress callbacks into liveness
+// stamps over the env's hooks. The row total is unknown up front, so total is 0
+// and the message carries the count.
 func t6g6OpChangeIndexProgressVia(env opChangeBookIndexEnv) database.OpChangeIndexProgress {
 	return func(phase string, rows int) {
 		msg := fmt.Sprintf("opchange_by_book index %s: %d journal rows read", phase, rows)
@@ -325,7 +320,7 @@ func t6g6OpChangeIndexProgressVia(env opChangeBookIndexEnv) database.OpChangeInd
 	}
 }
 
-// opChangeEnsureProgress is opChangeIndexProgressTo for the ensure: the verify
+// opChangeEnsureProgress is t6g6OpChangeIndexProgressVia for the ensure: the verify
 // phase reports a determinate (rows, total) once the store has sized the pass,
 // because the registry counts progress toward a yield only against a total
 // (an indeterminate report advances nothing), and rows is absolute across the

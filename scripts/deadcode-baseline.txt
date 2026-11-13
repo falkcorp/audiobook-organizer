@@ -651,7 +651,6 @@ internal/plugins/maintenance.Plugin.repairTranscribeStatusNative
 internal/plugins/maintenance.Plugin.repointBookFileRowsNative
 internal/plugins/maintenance.Plugin.t6g6Kinds
 internal/plugins/maintenance.consolidationLeftoversFixer.newSource
-internal/plugins/maintenance.decidedRegroupHolds
 internal/plugins/maintenance.duplicateCopiesFixer.detail
 internal/plugins/maintenance.ensureOpChangeBookIndex
 internal/plugins/maintenance.findOrphanBookFiles
@@ -663,7 +662,6 @@ internal/plugins/maintenance.junkTitleFixer.candidateTitle
 internal/plugins/maintenance.nightlyCompactActivityLogParallelism
 internal/plugins/maintenance.opChangeBookIndexParallelism
 internal/plugins/maintenance.opChangeEnsureProgress
-internal/plugins/maintenance.opChangeIndexProgressTo
 internal/plugins/maintenance.optimizeParallelism
 internal/plugins/maintenance.orphanBookFilesCleanupParallelism
 internal/plugins/maintenance.planOrphanRepoints
@@ -682,7 +680,6 @@ internal/plugins/maintenance.reconcileStaleHolds
 internal/plugins/maintenance.regroupNativePurger.DeleteReviewItemIfPending
 internal/plugins/maintenance.regroupNativePurger.ListReviewItems
 internal/plugins/maintenance.repairMergedUserStateParallelism
-internal/plugins/maintenance.staleRegroupHolds
 internal/plugins/maintenance.t6g6Common
 internal/plugins/maintenance.t6g6HeadEnvForOpChange
 internal/plugins/maintenance.t6g6KindFor

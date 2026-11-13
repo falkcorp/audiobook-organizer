@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
 // last-edited: 2026-11-13
 
@@ -543,16 +543,11 @@ func reconcileStaleHoldsVia(ctx context.Context, store reviewHoldStore, logf fun
 // regroupPreviewSamples bounds the example holds a preview names in its log.
 const regroupPreviewSamples = 5
 
-// staleRegroupHolds is the READ half of the reconcile: the PENDING regroup.* holds whose
-// DedupKey is not in the set this run emitted. It deletes nothing, so a preview calls it
-// to report what a live run would purge and reconcileStaleHolds deletes exactly this
-// list. Nil when limit > 0 (a canary run emits a subset) or when the pending list cannot
-// be read (logged).
-func staleRegroupHolds(store reviewHoldLister, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) []database.ReviewItem {
-	return staleRegroupHoldsVia(store, t6g6ReporterLogf(reporter), groups, limit)
-}
-
-// staleRegroupHoldsVia is staleRegroupHolds with the log as a hook.
+// staleRegroupHoldsVia is the READ half of the reconcile: the PENDING regroup.* holds
+// whose DedupKey is not in the set this run emitted. It deletes nothing, so a preview
+// calls it to report what a live run would purge and reconcileStaleHolds deletes
+// exactly this list. Nil when limit > 0 (a canary run emits a subset) or when the
+// pending list cannot be read (logged through logf).
 func staleRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string), groups []itunesservice.RegroupGroup, limit int) []database.ReviewItem {
 	if limit > 0 {
 		return nil
@@ -582,16 +577,11 @@ func staleRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string),
 	return stale
 }
 
-// decidedRegroupHolds returns the DedupKeys of regroup.* holds whose status is
+// decidedRegroupHoldsVia returns the DedupKeys of regroup.* holds whose status is
 // not pending: the ones UpsertReviewItem leaves untouched. One full scan of the
 // review queue (the status index has no "not pending" scan, and a new decided
 // status must not be missed). On a read error it logs and returns nil, so the
 // preview counts every group as would-upsert, as it did before this check.
-func decidedRegroupHolds(store reviewHoldLister, reporter sdk.Reporter) map[string]struct{} {
-	return decidedRegroupHoldsVia(store, t6g6ReporterLogf(reporter))
-}
-
-// decidedRegroupHoldsVia is decidedRegroupHolds with the log as a hook.
 func decidedRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string)) map[string]struct{} {
 	items, total, err := store.ListReviewItems(database.ReviewFilter{Limit: reconcileScanLimit})
 	if err != nil {
