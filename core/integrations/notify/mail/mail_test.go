@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/mail_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4390d39b-6ec5-4a8e-a468-83a1beaa191b
 // last-edited: 2026-11-13
 
@@ -44,6 +44,7 @@ type fakeSMTP struct {
 	authPlain    string // decoded AUTH PLAIN payload
 	mailFrom     string
 	rcptTo       string
+	rcptAll      []string // every RCPT TO, in order
 	data         string
 	done         chan struct{}
 }
@@ -154,6 +155,7 @@ func (f *fakeSMTP) serve() {
 		case "RCPT":
 			f.mu.Lock()
 			f.rcptTo = line
+			f.rcptAll = append(f.rcptAll, line)
 			f.mu.Unlock()
 			w("250 ok")
 		case "DATA":
