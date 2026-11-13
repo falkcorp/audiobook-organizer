@@ -1,0 +1,15 @@
+# file: core/integrations/notify/testdata/series.golden
+# version: 1.0.0
+# guid: 9d3a6f12-7b84-4c05-a1e9-52f8c0d7b346
+# last-edited: 2026-11-13
+#
+# The mediacore.notify scope's series (05-notify section 7, 05-metrics section
+# 6 item 5): family<TAB>type<TAB>labels, checked by metricstest.AssertSeries in
+# TestNotifyMetrics_SeriesGolden. Every label is bounded: instance is a
+# configured channel, class and result are closed sets, adapter is a
+# registered adapter, topic is a declared topic and severity one of five names.
+mediacore_notify_dead_letters	gauge	instance
+mediacore_notify_deliveries_total	counter	class,instance
+mediacore_notify_delivery_seconds	histogram	adapter
+mediacore_notify_published_total	counter	severity,topic
+mediacore_notify_targets_total	counter	result,topic
