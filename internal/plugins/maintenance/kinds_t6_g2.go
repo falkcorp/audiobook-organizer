@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f05c0cfb-33a6-46e3-a29b-4ab6825825dc
 // last-edited: 2026-11-13
 
@@ -40,9 +40,6 @@ import (
 // ServerDeps. The kinds are DARK: nothing registers them before the tasks flip
 // (F5-18), which also deletes the v2 defs, the head* adapters below and
 // t6g2KindList's keep-alive line.
-
-// t6g2KindPrefix is rule R3: tasks.Kind("books." + <HEAD def ID>).
-const t6g2KindPrefix = "books."
 
 // signalT6G2MemDB is the readiness component the kinds wait for (rule R5,
 // NoWarmupWait false, which every def of this group is). Books registers the

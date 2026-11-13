@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
 // last-edited: 2026-11-13
 
@@ -175,13 +175,8 @@ func newYieldDue(ctx context.Context, margin time.Duration) func() bool {
 	}
 }
 
-// yielded turns a walk's ErrYield into the registry's continue-in-place
-// sentinel; any other error is returned as is.
-func yielded(reporter sdk.Reporter, what string, err error) error {
-	return t6g2Yielded(headT6G2Env(nil, reporter), what, err)
-}
-
-// t6g2Yielded is yielded over an env: the sentinel is env.Continue.
+// t6g2Yielded turns a walk's ErrYield into the registry's continue-in-place
+// sentinel (env.Continue); any other error is returned as is.
 func t6g2Yielded(env t6g2Env, what string, err error) error {
 	if !errors.Is(err, walkresume.ErrYield) {
 		return err

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
 // last-edited: 2026-11-13
 
@@ -214,15 +214,6 @@ func t6g2VerifyBookAtPathIndex(ctx context.Context, v bookAtPathVerifier, env t6
 	return nil
 }
 
-// bookAtPathProgressTo turns the store's per-chunk callbacks into liveness
-// stamps. The row total is unknown up front, so total is 0 and the message
-// carries the count. Safe for the concurrent workers that call it.
-func bookAtPathProgressTo(reporter sdk.Reporter) database.BookAtPathProgress {
-	return func(scanned int) {
-		_ = reporter.UpdateProgress(scanned, 0, fmt.Sprintf("book_atpath index: %d book rows staged", scanned))
-	}
-}
-
 func (p *Plugin) runBookAtPathIndexBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params bookAtPathBackfillParams
 	if len(raw) > 0 {
@@ -279,7 +270,9 @@ func runBookAtPathIndexBackfillCore(ctx context.Context, params bookAtPathBackfi
 	return t6g2NoResult{}, nil
 }
 
-// t6g2AtPathProgressTo is bookAtPathProgressTo over an env.
+// t6g2AtPathProgressTo turns the store's per-chunk callbacks into liveness
+// stamps. The row total is unknown up front, so total is 0 and the message
+// carries the count. Safe for the concurrent workers that call it.
 func t6g2AtPathProgressTo(env t6g2Env) database.BookAtPathProgress {
 	return func(scanned int) {
 		env.Progress(scanned, 0, fmt.Sprintf("book_atpath index: %d book rows staged", scanned))
@@ -292,7 +285,7 @@ func bookAtPathUndecodableError(res database.BookAtPathBackfillResult) error {
 		"maintenance.book-atpath-index-backfill", res.UndecodableRows, res.SampleUndecodable)
 }
 
-// backfillBookAtPathIfNeeded is the boot mode ({"if_needed": true}): the
+// t6g2BackfillBookAtPathIfNeeded is the boot mode ({"if_needed": true}): the
 // sentinel-gated build the goroutine ran. The outcomes match it, with each
 // failure now a red op row instead of a log line only:
 //
@@ -308,11 +301,6 @@ func bookAtPathUndecodableError(res database.BookAtPathBackfillResult) error {
 //
 // Until the sentinel is set LiveBookIDsAtPath serves from a full scan, so
 // nothing is wrong while the build is pending, only slow.
-func backfillBookAtPathIfNeeded(ctx context.Context, b bookAtPathBackfiller, reporter sdk.Reporter) error {
-	return t6g2BackfillBookAtPathIfNeeded(ctx, b, headT6G2Env(nil, reporter))
-}
-
-// t6g2BackfillBookAtPathIfNeeded is backfillBookAtPathIfNeeded over an env.
 func t6g2BackfillBookAtPathIfNeeded(ctx context.Context, b bookAtPathBackfiller, env t6g2Env) error {
 	env.Log(slog.LevelDebug, "Starting book_atpath index backfill (skipped when the one-time sentinel is set)")
 	env.Progress(0, 1, "checking book_atpath: index sentinel")

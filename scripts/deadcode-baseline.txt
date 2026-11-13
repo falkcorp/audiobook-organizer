@@ -636,8 +636,6 @@ internal/plugins/itunes.loggerWrapper.UpdateProgress
 internal/plugins/itunes.loggerWrapper.Warn
 internal/plugins/itunes.loggerWrapper.With
 internal/plugins/maintenance.Plugin.t6g2Kinds
-internal/plugins/maintenance.backfillBookAtPathIfNeeded
-internal/plugins/maintenance.bookAtPathProgressTo
 internal/plugins/maintenance.bootWalkRun
 internal/plugins/maintenance.buildBookShapeReport
 internal/plugins/maintenance.consolidationLeftoversFixer.newSource
@@ -698,7 +696,6 @@ internal/plugins/maintenance.t6g2StartRequirement
 internal/plugins/maintenance.t6g2Watermark.complete
 internal/plugins/maintenance.verifyBookAtPathIndex
 internal/plugins/maintenance.versionTwinFixer.readers
-internal/plugins/maintenance.yielded
 internal/querygrammar.PatternSlotAcquisitions
 internal/repairs.GuardBooks
 internal/repairs.GuardBooksFor
