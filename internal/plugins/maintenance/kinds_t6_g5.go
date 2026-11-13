@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 30f92b7b-033e-4403-927a-99445211075c
 // last-edited: 2026-11-13
 
@@ -87,12 +87,6 @@ type t6g5Pool struct {
 // tasks.Fixed(n) (rule R4).
 func t6g5FixedPool(n int, reason string) t6g5Pool {
 	return t6g5Pool{Workers: n, Par: tasks.Fixed(n, reason)}
-}
-
-// t6g5SeqPool is the pool of a loop that HEAD ran with Concurrency zero or
-// omitted: sequential (registry clamps it to 1), tasks.Sequential (rule R4).
-func t6g5SeqPool(reason string) t6g5Pool {
-	return t6g5Pool{Workers: 0, Par: tasks.Sequential(reason)}
 }
 
 // t6g5CPUPool is the pool of a loop that HEAD ran with
@@ -548,15 +542,6 @@ func t6g5DecodeStrictParams(kind tasks.Kind, raw json.RawMessage, v any, modeKey
 	return nil
 }
 
-// t6g5LiveOnly is rule R7's "Live-only writer": HEAD runs such a def only in an
-// explicit live mode, so its native shell refuses a preview.
-func t6g5LiveOnly(kind tasks.Kind, rc *tasks.RC) error {
-	if rc.Mode() != tasks.ModeLive {
-		return fmt.Errorf("%s: preview not supported; start with mode live", kind)
-	}
-	return nil
-}
-
 // --- HEAD field mapping (rules R3, R5, R6) ---
 
 const (
@@ -653,16 +638,25 @@ func t6g5Common(def sdk.OperationDef, kind tasks.Kind, effects tasks.Effects, sc
 // grouped into one small interface so the composition stays under the repo's
 // interfacebloat limit.
 type t6g5Writer interface {
+	t6g5BookFileWriter
+	t6g5NarratorITunesWriter
+}
+
+// t6g5BookFileWriter is the writers of the book and book_file ops.
+type t6g5BookFileWriter interface {
 	libraryStateRepairModifier
 	reapCacheDeleter
 	bookFileBatchWriter
 	mergeSamePathMerger
 	mbfWriter
+}
+
+// t6g5NarratorITunesWriter is the writers of the narrator and iTunes ops.
+type t6g5NarratorITunesWriter interface {
 	narratorSplitWriter
 	playlistImportWriter
 	icStoreWriter
 	itunesRegroupWriter
-	// GROUPS-WRITER
 }
 
 // --- store: the read methods the group's cores call ---
@@ -683,6 +677,12 @@ type t6g5BookFileReader interface {
 // t6g5Store holds exactly the read methods this group's cores call; none of
 // them writes (rule R10 item 3).
 type t6g5Store interface {
+	t6g5BookFileStore
+	t6g5NarratorITunesStore
+}
+
+// t6g5BookFileStore is the reads of the book, book_file and scan ops.
+type t6g5BookFileStore interface {
 	t6g5ScanReader
 	t6g5BookFileReader
 	libraryStateRepairReader
@@ -690,17 +690,21 @@ type t6g5Store interface {
 	reapBookResolver
 	repointReader
 	mbfReader
+	// GetAllBookFilesCoreIncludingRetired is GetAllBookFilesCore with the retired
+	// rows kept.
+	GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
+}
+
+// t6g5NarratorITunesStore is the reads of the narrator and iTunes ops, and the
+// library root.
+type t6g5NarratorITunesStore interface {
 	narratorPurgeReader
 	narratorSplitReader
 	playlistImportReader
 	icStoreReader
 	itunesRegroupReader
-	// GetAllBookFilesCoreIncludingRetired is GetAllBookFilesCore with the retired
-	// rows kept.
-	GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
 	// RootDir is the library root (HEAD: deps.RootDir()).
 	RootDir() string
-	// GROUPS-STORE
 }
 
 // t6g5Deps is what the owner (books, from F5-18) declares for the group's
