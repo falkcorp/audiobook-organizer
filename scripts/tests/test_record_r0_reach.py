@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -103,6 +103,9 @@ class FakeR0:
         self.fail_status: dict[str, int] = {}  # "METHOD path-prefix" -> status
         # the same, but only for a request that passed authorization (a handler's own failure)
         self.handler_status: dict[str, int] = {}
+        self.me_status: dict[
+            str, int
+        ] = {}  # username -> status of GET /auth/me (a confined worker)
         self.delete_user_on: str | None = None  # a route whose probe drops a user
         self.defs = [
             {"id": "scan.trigger", "permissions": ["scan.trigger"], "approver": "requests.approve"},
@@ -219,6 +222,8 @@ class FakeR0:
         if path == "/api/v1/auth/status":
             return self.reply(h, 200)
         if path == "/api/v1/auth/me":
+            if user in self.me_status:
+                return self.reply(h, self.me_status[user])
             return self.reply(h, 200 if (user or self.auth_off) else 401)
         if path == "/api/v1/auth/api-keys" and method == "POST":
             if user is None or "users.manage" not in (atoms or []):
@@ -387,6 +392,33 @@ class ProbeShapeTest(unittest.TestCase):
         self.assertEqual(rec.verdict_of(502, "session:y GET /api/v1/deluge/torrents"), "A")
         with self.assertRaises(rec.RecorderError):
             rec.verdict_of(500, "key:x POST /api/v1/ai/not-listed")
+
+
+class CanaryTest(unittest.TestCase):
+    def setUp(self):
+        self.rig = Rig()
+
+    def tearDown(self):
+        self.rig.close()
+
+    def test_a_worker_confined_credentials_403_is_its_baseline(self):
+        self.rig.fake.me_status["barbara.gordon"] = 403
+        out = self.rig.run()
+        self.assertEqual(len(out["columns"]), len(self.rig.principals))
+
+    def test_a_canary_that_answers_differently_from_its_baseline_fails(self):
+        probe = self.rig.probes["session:viewer"]
+        rec.canary(probe)
+        self.assertEqual(probe.canary_status, 200)
+        self.rig.fake.me_status["barbara.gordon"] = 403
+        with self.assertRaises(rec.RecorderError) as cm:
+            rec.canary(probe)
+        self.assertIn("session:viewer: 403, want one of [200]", str(cm.exception))
+
+    def test_a_first_canary_that_is_not_a_live_credential_fails(self):
+        self.rig.fake.me_status["barbara.gordon"] = 401
+        with self.assertRaises(rec.RecorderError):
+            rec.canary(self.rig.probes["session:viewer"])
 
 
 class StopThrowawayTest(unittest.TestCase):
