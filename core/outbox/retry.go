@@ -1,5 +1,5 @@
 // file: core/outbox/retry.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0b7a6e-3c1f-4a7e-9b52-0e8f1c6d4a93
 // last-edited: 2026-11-13
 
@@ -49,8 +49,7 @@ func RetryFree(d time.Duration, err error) error {
 // hintOf returns the retry hint carried by err, if any. A permanent error
 // wins over a hint: the caller checks classify first.
 func hintOf(err error) (*retryHint, bool) {
-	var h *retryHint
-	if errors.As(err, &h) {
+	if h, ok := errors.AsType[*retryHint](err); ok {
 		return h, true
 	}
 	return nil, false

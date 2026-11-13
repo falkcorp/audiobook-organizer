@@ -1,5 +1,5 @@
 // file: core/integrations/notify/service.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d27f8b03-4a96-4e51-b0c8-6e19a3f5d724
 // last-edited: 2026-11-13
 
@@ -13,6 +13,7 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -271,9 +272,9 @@ func (s *Service) Publish(ctx context.Context, b *storage.Batch, n Notification)
 }
 
 // commitOwn runs fill in a batch Publish owns and commits it.
-func (s *Service) commitOwn(ctx context.Context, fill func(*storage.Batch) error) error {
+func (s *Service) commitOwn(ctx context.Context, fill func(*storage.Batch) error) (err error) {
 	b := s.o.Keyspace.NewBatch()
-	defer b.Close()
+	defer func() { err = errors.Join(err, b.Close()) }()
 	if err := fill(b); err != nil {
 		return err
 	}
@@ -288,9 +289,7 @@ func cloneFields(f map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(f))
-	for k, v := range f {
-		out[k] = v
-	}
+	maps.Copy(out, f)
 	return out
 }
 
@@ -369,9 +368,9 @@ func (s *Service) DeleteRule(ctx context.Context, id string) error {
 func (s *Service) write(ctx context.Context, stage func(context.Context, *storage.Batch) error, edit func([]Rule) []Rule) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	err := storage.RetryOnConflict(ctx, ruleCommitAttempts, func(ctx context.Context) error {
+	err := storage.RetryOnConflict(ctx, ruleCommitAttempts, func(ctx context.Context) (err error) {
 		b := s.o.Keyspace.NewBatch()
-		defer b.Close()
+		defer func() { err = errors.Join(err, b.Close()) }()
 		if err := stage(ctx, b); err != nil {
 			return err
 		}

@@ -1,5 +1,5 @@
 // file: core/integrations/notify/mail/email_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d17e2c9-83a4-4b60-9e1f-c7a02b6d4f38
 // last-edited: 2026-11-13
 
@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"maps"
 	"net"
 	"net/textproto"
 	"strings"
@@ -108,9 +109,7 @@ func (p poolOf) pool() *x509.CertPool { return p.p }
 func settings(extra map[string]any) map[string]any {
 	m := map[string]any{"host": "mail.example.com", "port": float64(587), "from": "Gotham Alerts <alerts@example.com>",
 		"to": []any{"Jim Gordon <jim@example.com>", "alfred@example.com"}}
-	for k, v := range extra {
-		m[k] = v
-	}
+	maps.Copy(m, extra)
 	return m
 }
 

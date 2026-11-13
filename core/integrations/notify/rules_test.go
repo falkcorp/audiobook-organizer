@@ -1,5 +1,5 @@
 // file: core/integrations/notify/rules_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2e95c0b7-6a41-4d83-9f27-c18a5d3e7b04
 // last-edited: 2026-11-13
 
@@ -138,13 +138,11 @@ func TestPutRule_ConcurrentWritersConverge(t *testing.T) {
 	var wg sync.WaitGroup
 	ids := []string{"a-rule", "b-rule", "c-rule", "d-rule", "e-rule", "f-rule", "g-rule", "h-rule"}
 	for _, id := range ids {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := r.svc.PutRule(admin(), rule(id, []string{signalName}, commissioner)); err != nil {
 				t.Errorf("PutRule %s: %v", id, err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	stored, err := notify.NativeRuleStore(r.notifyKS).Load(context.Background())

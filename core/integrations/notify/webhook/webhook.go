@@ -1,5 +1,5 @@
 // file: core/integrations/notify/webhook/webhook.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e03a7c58-91d4-4f26-b8a5-2c6d7f19e340
 // last-edited: 2026-11-13
 
@@ -348,8 +348,7 @@ func (i *instance) Send(ctx context.Context, n notify.Notification, t notify.Tar
 
 	resp, err := i.client().Do(req)
 	if err != nil {
-		var e *integrations.Error
-		if errors.As(err, &e) {
+		if e, ok := errors.AsType[*integrations.Error](err); ok {
 			// The gate's refusal, or a classified transport failure: keep its
 			// class, and drop the *url.Error around it, which names the URL.
 			return fail(e.Class, e.Status, e.RetryAfter, e.Err)
@@ -358,7 +357,7 @@ func (i *instance) Send(ctx context.Context, n notify.Notification, t notify.Tar
 		return fail(providerhttp.Classify(ctx, nil, nil, err), 0, 0, cause)
 	}
 	defer resp.Body.Close()
-	excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
+	excerpt := readExcerpt(resp.Body)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
@@ -371,6 +370,18 @@ func (i *instance) Send(ctx context.Context, n notify.Notification, t notify.Tar
 		wait = retryAfter(resp.Header, i.env.Now())
 	}
 	return fail(class, resp.StatusCode, wait, fmt.Errorf("the receiver answered %d", resp.StatusCode))
+}
+
+// readExcerpt reads at most maxResponse bytes of a response, which only help
+// classify a non-2xx answer (a quota page against a plain 5xx). A read that
+// fails part way yields no excerpt at all: half a body could point the
+// classifier the wrong way, and the status line alone still classifies.
+func readExcerpt(r io.Reader) []byte {
+	b, err := io.ReadAll(io.LimitReader(r, maxResponse))
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // secretFailure is the failure of reading a secret before sending.
