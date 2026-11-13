@@ -670,11 +670,11 @@ internal/plugins/maintenance.planOrphanRepoints
 internal/plugins/maintenance.planRecoverMissingFiles
 internal/plugins/maintenance.previewOpChangeBookIndex
 internal/plugins/maintenance.probeAll
+internal/plugins/maintenance.rbfNativeStore.AllBookFilesCoreIncludingRetired
 internal/plugins/maintenance.rbfParallelism
 internal/plugins/maintenance.rbfPreviewWriter.CreateOperationChange
 internal/plugins/maintenance.rbfPreviewWriter.ModifyBookFile
 internal/plugins/maintenance.rbfPreviewWriter.RecomputeBookAggregates
-internal/plugins/maintenance.rbfRetiredShim.GetAllBookFilesCoreIncludingRetired
 internal/plugins/maintenance.rebuildOpChangeBookIndex
 internal/plugins/maintenance.recompactActivityDigestsParallelism
 internal/plugins/maintenance.reconcileFixer.reader

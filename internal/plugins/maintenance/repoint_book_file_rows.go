@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
 // last-edited: 2026-11-13
 
@@ -317,7 +317,15 @@ func rbfClaims(store rbfStore, want map[string]bool) (map[string][]string, error
 	// Retired rows count as claims: a retired version still names its path, and
 	// a live row repointed onto it would share a path with a file the library is
 	// holding. (The row being repointed is refused if retired; see rbfPlanOne.)
-	cores, err := database.AllBookFilesCoreIncludingRetired(store)
+	var cores []database.BookFileCore
+	var err error
+	if l, ok := store.(interface {
+		AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
+	}); ok {
+		cores, err = l.AllBookFilesCoreIncludingRetired()
+	} else {
+		cores, err = database.AllBookFilesCoreIncludingRetired(store)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: list book_file rows: %w", rbfOpName, err)
 	}
@@ -362,12 +370,12 @@ type rbfNativeStore struct {
 	rbfWriter
 }
 
-// rbfRetiredShim gives the run's reader the retired-inclusive row list the claims
-// pass asks for by capability: the reader is held as the narrow rbfReader, which
-// hides the capability, so it is resolved through the store's decorators here.
-type rbfRetiredShim struct{ rbfReader }
-
-func (s rbfRetiredShim) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+// AllBookFilesCoreIncludingRetired is every row's core, retired included. The
+// claims pass asks for it by method first: the reader is held as the narrow
+// rbfReader, which hides the store's retired-row capability from
+// database.AllBookFilesCoreIncludingRetired, so it is resolved here, through the
+// store's decorators.
+func (s rbfNativeStore) AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
 	return database.AllBookFilesCoreIncludingRetired(s.rbfReader)
 }
 
@@ -427,7 +435,7 @@ func (p *Plugin) repointBookFileRowsNative(deps t6g6Deps, sched func(tasks.Kind)
 			if live && deps.NewWriter != nil {
 				w = deps.NewWriter(rc.Writer())
 			}
-			env := rbfEnv{store: rbfNativeStore{rbfRetiredShim{deps.Store}, w}, itunesRoots: roots}
+			env := rbfEnv{store: rbfNativeStore{deps.Store, w}, itunesRoots: roots}
 			core := t6g6NativeEnv(rc)
 			core.StandDown = t6g6NativeStandDown(rc, deps.StandDownKey)
 			report, runErr := repointBookFileRowsCore(rc.Context(), env, params, core)
