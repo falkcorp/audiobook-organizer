@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
 // last-edited: 2026-11-13
 
@@ -227,15 +227,16 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 }
 
 // missingFileRepointKind builds the native kind. Writes: HEAD's declared
-// book_files resource; the preview is HEAD's dry run. The params decode into
+// book_files resource and the books whose size and duration the row update
+// recomputes (UpdateBookFiles); the preview is HEAD's dry run. The params decode into
 // HEAD's struct after the mode key (apply) is refused, so its Apply field is
 // never set from params.
 func (p *Plugin) missingFileRepointKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)))
+	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)), tasks.Res("books", string(sdk.ResBooks)))
 	return tasks.Task(missingFileRepointKind, tasks.TaskSpec[json.RawMessage, repointPlan]{
 		Common: t6g5Common(p.missingFileRepointDef(), missingFileRepointKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (repointPlan, error) {
-			if err := t6g5RefuseModeKeys(missingFileRepointKind, raw, "apply"); err != nil {
+			if err := t6g5RefuseModeKeys(missingFileRepointKind, raw, t6g5ModeKeys...); err != nil {
 				return repointPlan{}, err
 			}
 			var params missingFileRepointParams
@@ -321,28 +322,14 @@ type repointStore interface {
 	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 }
 
-// planMissingFileRepoint is the plan with HEAD's signature: a store of its own,
-// a scan controller and a reporter. It is a wrapper over
-// planMissingFileRepointVia.
-func planMissingFileRepoint(ctx context.Context, store repointStore, scan ScanController, params missingFileRepointParams, reporter sdk.Reporter) (repointPlan, error) {
-	env := missingFileRepointEnv{
-		t6g5Base: t6g5ReporterBase(ctx, reporter, params.Apply),
-		Items:    t6g5HeadItems(reporter),
-		Lease:    t6g5HeadLeaseOn(scan, reporter),
-	}
-	return planMissingFileRepointVia(ctx, store,
-		func() ([]database.BookFileCore, error) { return database.AllBookFilesCoreIncludingRetired(store) },
-		store, params, env)
-}
-
 // repointReader is the reads the plan makes beyond the book_file list.
 type repointReader interface {
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
 
-// planMissingFileRepointVia is planMissingFileRepoint over the engine the env
-// names (rule R10: it reads the reader and writes the writer it is handed and
+// planMissingFileRepointVia plans (and, when env.Live, applies) the repoint over
+// the engine the env names (rule R10: it reads the reader and writes the writer it is handed and
 // captures nothing). allFiles lists every book_file row, retired included.
 func planMissingFileRepointVia(
 	ctx context.Context,

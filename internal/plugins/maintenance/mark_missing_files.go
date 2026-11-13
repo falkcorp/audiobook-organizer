@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
 // last-edited: 2026-11-13
 
@@ -236,14 +236,15 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 }
 
 // markMissingFilesKind builds the native kind. Writes: the Missing flag of
-// book_file rows (HEAD declares none; found: UpdateBookFiles). The params
+// book_file rows and, through the aggregate recompute that follows a row update,
+// the book's size and duration (HEAD declares none; found: UpdateBookFiles). The params
 // decode into HEAD's struct after the mode key (apply) is refused.
 func (p *Plugin) markMissingFilesKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)))
+	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)), tasks.Res("books", string(sdk.ResBooks)))
 	return tasks.Task(markMissingFilesKind, tasks.TaskSpec[json.RawMessage, markMissingPlan]{
 		Common: t6g5Common(p.markMissingFilesDef(), markMissingFilesKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (markMissingPlan, error) {
-			if err := t6g5RefuseModeKeys(markMissingFilesKind, raw, "apply"); err != nil {
+			if err := t6g5RefuseModeKeys(markMissingFilesKind, raw, t6g5ModeKeys...); err != nil {
 				return markMissingPlan{}, err
 			}
 			var params markMissingParams
@@ -332,25 +333,14 @@ type flip struct {
 	toValue bool // the Missing value to write
 }
 
-// planMarkMissingFiles is the plan with HEAD's signature: a store of its own, a
-// scan controller and a reporter. It is a wrapper over planMarkMissingFilesVia.
-func planMarkMissingFiles(ctx context.Context, store markMissingStore, scan ScanController, params markMissingParams, reporter sdk.Reporter) (markMissingPlan, error) {
-	env := markMissingFilesEnv{
-		t6g5Base: t6g5ReporterBase(ctx, reporter, params.Apply),
-		Items:    t6g5HeadItems(reporter),
-		Lease:    t6g5HeadLeaseOn(scan, reporter),
-	}
-	return planMarkMissingFilesVia(ctx, store, store, params, env)
-}
-
 // markMissingReader is the reads the plan makes.
 type markMissingReader interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	repointReader
 }
 
-// planMarkMissingFilesVia is planMarkMissingFiles over the engine the env names
-// (rule R10: it reads the reader and writes the writer it is handed and
+// planMarkMissingFilesVia plans (and, when env.Live, applies) the mark over the
+// engine the env names (rule R10: it reads the reader and writes the writer it is handed and
 // captures nothing).
 func planMarkMissingFilesVia(ctx context.Context, store markMissingReader, writer bookFileBatchWriter, params markMissingParams, env markMissingFilesEnv) (markMissingPlan, error) {
 	log := env.Logger

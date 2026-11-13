@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_owned_files_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c3a58e17-4f20-4b96-8d71-e0b92a6f5c34
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -80,7 +80,7 @@ func TestITunesRegroupApply_DeleteKeepsHolderOfOnlyRetiredRowsWithItsState(t *te
 	retireRowInto(t, s, loser)
 
 	p := &Plugin{}
-	if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+	if _, err := applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	live, err := s.GetBookFiles(loser)
@@ -132,7 +132,7 @@ func TestITunesRegroupApply_DeleteRechecksOwnedRowsUnderTheLockBeforeTheCarry(t 
 	w := &retiredAfterFirstReadStore{PebbleStore: s, t: t, bookID: loser}
 
 	p := &Plugin{}
-	if _, err := p.applyRegroupPlan(context.Background(), w, plan, rgRoot, rep); err != nil {
+	if _, err := applyRegroupPlan(context.Background(), w, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	if w.calls < 2 {

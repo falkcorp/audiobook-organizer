@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_classify_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6c1f0a72-5d84-4b39-8e27-3af10d95b6c2
-// last-edited: 2026-08-19
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -121,9 +121,9 @@ func TestClassifyMissingRows_CountsAgainstRealFiles(t *testing.T) {
 	missingFileClassifyControls = []string{filepath.Join(root, "__CONTROL_MUST_BE_MISSING__.mp3")}
 	t.Cleanup(func() { missingFileClassifyControls = orig })
 
-	got, err := classifyMissingRows(context.Background(), missing, 10, &fakeReporter{})
+	got, err := classifyMissingRowsVia(context.Background(), missing, 10, t6g5AuditEnv(context.Background(), &fakeReporter{}))
 	if err != nil {
-		t.Fatalf("classifyMissingRows: %v", err)
+		t.Fatalf("classifyMissingRowsVia: %v", err)
 	}
 
 	if got.Recoverable != 1 {
@@ -162,10 +162,9 @@ func TestClassifyMissingRows_ResolvedControlFailsTheRun(t *testing.T) {
 	missingFileClassifyControls = []string{planted}
 	t.Cleanup(func() { missingFileClassifyControls = orig })
 
-	_, err := classifyMissingRows(context.Background(),
-		[]string{filepath.Join(root, "Book/Title - 3/9.mp3")}, 10, &fakeReporter{})
+	_, err := classifyMissingRowsVia(context.Background(), []string{filepath.Join(root, "Book/Title - 3/9.mp3")}, 10, t6g5AuditEnv(context.Background(), &fakeReporter{}))
 	if err == nil {
-		t.Fatal("classifyMissingRows returned nil error with a resolved control — " +
+		t.Fatal("classifyMissingRowsVia returned nil error with a resolved control — " +
 			"the instrument check is inert and every recoverable count it reports is unverified")
 	}
 	if !strings.Contains(err.Error(), "instrument check failed") {

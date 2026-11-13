@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
 // last-edited: 2026-11-13
 
@@ -447,19 +447,14 @@ func runMissingFileAuditCore(ctx context.Context, params missingFileAuditParams,
 	}, nil
 }
 
-// auditMissingFiles performs the sweep and RETURNS the report.
+// auditMissingFilesVia performs the sweep over the engine the env names and
+// RETURNS the report (rule R10: it reads the store it is handed and nothing it
+// captures).
 //
 // Split out from the op body so the numbers can be asserted as values rather than
 // scraped from a progress string — the counts are the entire product of this op and
 // a destructive repair will be sized from them, so they deserve to be tested
 // directly.
-func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params missingFileAuditParams, reporter sdk.Reporter) (missingFileReport, error) {
-	return auditMissingFilesVia(ctx, store, params,
-		missingFileAuditEnv{t6g5Base: t6g5ReporterBase(ctx, reporter, false), Items: t6g5HeadItems(reporter)})
-}
-
-// auditMissingFilesVia is auditMissingFiles over the engine the env names (rule
-// R10: the sweep reads the store it is handed and nothing it captures).
 func auditMissingFilesVia(ctx context.Context, store bookFileCoreScanner, params missingFileAuditParams, env missingFileAuditEnv) (missingFileReport, error) {
 	sampleLimit := params.SampleLimit
 	if sampleLimit <= 0 {
@@ -758,18 +753,13 @@ type classifyCandidate struct {
 	isControl  bool
 }
 
-// classifyMissingRows stats the derived candidate for every missing row.
+// classifyMissingRowsVia stats the derived candidate for every missing row, over
+// the engine the env names.
 //
 // Concurrency: the same bounded pool the sweep uses. Every item is one os.Stat
 // against the NAS, so the pool is sized for LATENCY, not cores — see
 // missingFileStatConcurrency. Results are written to a preallocated slice indexed
 // by position, never to a shared map, so no lock is needed.
-func classifyMissingRows(ctx context.Context, missingPaths []string, sampleLimit int, reporter sdk.Reporter) (missingFileClassification, error) {
-	return classifyMissingRowsVia(ctx, missingPaths, sampleLimit,
-		missingFileAuditEnv{t6g5Base: t6g5ReporterBase(ctx, reporter, false), Items: t6g5HeadItems(reporter)})
-}
-
-// classifyMissingRowsVia is classifyMissingRows over the engine the env names.
 func classifyMissingRowsVia(ctx context.Context, missingPaths []string, sampleLimit int, env missingFileAuditEnv) (missingFileClassification, error) {
 	var out missingFileClassification
 	log := env.Logger

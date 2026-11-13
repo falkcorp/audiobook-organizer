@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_batch_write_test.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 6c1d80fe-4a52-47b3-9d8e-0b2f5a9c7314
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -61,8 +61,8 @@ func TestMarkMissingFiles_RecomputesBookOnce(t *testing.T) {
 	}, true, 1000)
 
 	logs := aggtest.Capture(t)
-	plan, err := planMarkMissingFiles(context.Background(), s, nil,
-		markMissingParams{Apply: true}, &fakeReporter{})
+	t6g5h1 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), s, s, t6g5h1, t6g5MarkEnv(context.Background(), t6g5h1.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, batchTestRows, plan.ClearedStale, "every row must still be written")
 	require.Equal(t, 0, plan.UpdateErrs)
@@ -84,8 +84,8 @@ func TestMissingFileRepoint_RecomputesBookOnce(t *testing.T) {
 	}, false, 1000)
 
 	logs := aggtest.Capture(t)
-	plan, err := planMissingFileRepoint(context.Background(), s, nil,
-		missingFileRepointParams{Apply: true}, &fakeReporter{})
+	t6g5h1 := missingFileRepointParams{Apply: true}
+	plan, err := planMissingFileRepointVia(context.Background(), s, t6g5RepointAll(s), s, t6g5h1, t6g5RepointEnv(context.Background(), t6g5h1.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, batchTestRows, plan.Repointed, "every row must still be written")
 	require.Equal(t, 0, plan.UpdateErrs)
@@ -224,8 +224,8 @@ func TestMarkMissing_MultipleBooksUnderConcurrency(t *testing.T) {
 	}
 
 	rep := &livenessReporter{}
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true}, rep)
+	t6g5h2 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h2, t6g5MarkEnv(context.Background(), t6g5h2.Apply, nil, rep))
 	require.NoError(t, err)
 	require.Equal(t, books*perBook, plan.MarkedMissing, "every row of every book must be written")
 	require.Equal(t, 0, plan.UpdateErrs)

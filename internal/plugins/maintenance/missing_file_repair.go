@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/missing_file_repair.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 50b5022c-9d86-467d-991e-2be9cddf4847
 // last-edited: 2026-11-13
 
@@ -130,6 +130,7 @@ type missingFileRepairResult struct {
 }
 
 func (p *Plugin) runMissingFileRepair(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
+	// Decode first: a bad body must fail the op before the store is touched.
 	var params missingFileRepairParams
 	if err := decodeOpParams(rawParams, &params); err != nil {
 		return fmt.Errorf("missing-file-repair: parse params: %w", err)
@@ -166,6 +167,11 @@ func (p *Plugin) missingFileRepairKind(deps t6g5Deps, sched func(tasks.Kind) *ta
 // runMissingFileRepairCore is the shared body of both shells. It returns the
 // counts instead of only logging them.
 func runMissingFileRepairCore(ctx context.Context, params missingFileRepairParams, env missingFileRepairEnv) (missingFileRepairResult, error) {
+	// 🔴 Deletion was REMOVED from this op on 2026-08-19. Rejecting apply loudly
+	// rather than ignoring it: a parameter that silently stops doing what its name
+	// says is the exact shape of silent failure this codebase spends effort
+	// removing, and any caller still passing it is acting on a stale belief about
+	// what this op does.
 	if params.Apply {
 		return missingFileRepairResult{}, fmt.Errorf(
 			"{\"apply\": true} is no longer supported: this operation never deletes. " +
@@ -176,7 +182,7 @@ func runMissingFileRepairCore(ctx context.Context, params missingFileRepairParam
 				"maintenance.missing-file-audit for which rows are recoverable")
 	}
 
-	plan, err := planMissingFileRepairVia(ctx, env.Store, params, env)
+	plan, err := planMissingFileRepair(ctx, env.Store, params, env)
 	if err != nil {
 		return missingFileRepairResult{}, err
 	}
@@ -219,16 +225,9 @@ func runMissingFileRepairCore(ctx context.Context, params missingFileRepairParam
 
 // planMissingFileRepair stats every candidate row and decides, per BOOK, what is
 // safe to prune. Returned as a value so the decisions can be asserted directly in
-// tests rather than inferred from side effects.
-
-func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, params missingFileRepairParams, reporter sdk.Reporter) (repairPlan, error) {
-	return planMissingFileRepairVia(ctx, store, params,
-		missingFileRepairEnv{t6g5Base: t6g5ReporterBase(ctx, reporter, false), Items: t6g5HeadItems(reporter)})
-}
-
-// planMissingFileRepairVia is planMissingFileRepair over the engine the env
-// names (rule R10: it reads the store it is handed and nothing it captures).
-func planMissingFileRepairVia(ctx context.Context, store bookFileCoreScanner, params missingFileRepairParams, env missingFileRepairEnv) (repairPlan, error) {
+// tests rather than inferred from side effects. It reads the store it is handed
+// and nothing it captures (rule R10), over the engine the env names.
+func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, params missingFileRepairParams, env missingFileRepairEnv) (repairPlan, error) {
 	log := env.Logger
 	maxFlagged := params.MaxFlagged
 	if maxFlagged <= 0 {

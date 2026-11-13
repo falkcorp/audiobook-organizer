@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_purge_empty.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: b1c1b8ef-893a-4ff8-9714-8ed1521febfa
 // last-edited: 2026-11-13
 
@@ -224,16 +224,17 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 }
 
 // purgeEmptyNarratorsKind builds the native kind. Writes found: the narrator
-// rows (DeleteNarrator) and their undo-ledger rows (RecordOperationChange);
+// rows and their book links (DeleteNarrator) and the undo-ledger rows
+// (RecordOperationChange);
 // HEAD declares none. The params decode into HEAD's struct after the mode key
 // (apply) is refused.
 func (p *Plugin) purgeEmptyNarratorsKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "narrators"), tasks.Res("books", "operations"))
+	eff := tasks.Writes(tasks.Res("books", "narrators"), tasks.Res("books", "book_narrators"), tasks.Res("books", "operations"))
 	return tasks.Task(purgeEmptyNarratorsKind, tasks.TaskSpec[json.RawMessage, emptyNarratorReport]{
 		Common: t6g5Common(p.purgeEmptyNarratorsDef(), purgeEmptyNarratorsKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (emptyNarratorReport, error) {
 			var params purgeEmptyNarratorsParams
-			if err := t6g5DecodeParams(purgeEmptyNarratorsKind, raw, &params, "apply"); err != nil {
+			if err := t6g5DecodeParams(purgeEmptyNarratorsKind, raw, &params, t6g5ModeKeys...); err != nil {
 				return emptyNarratorReport{}, err
 			}
 			base, err := t6g5NativeBase(purgeEmptyNarratorsKind, rc, deps, true)

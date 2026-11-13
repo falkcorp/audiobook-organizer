@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2f7a5c81-9de3-4b06-8c14-a35f7e290bd6
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -118,7 +118,7 @@ func seedReap(n int) *reapFakeCache {
 
 func runReapPlan(t *testing.T, cache *reapFakeCache, books *reapFakeBooks, params metadataCacheReapParams) reapPlan {
 	t.Helper()
-	plan, err := planMetadataCacheReap(context.Background(), cache, books, params, &fakeReporter{})
+	plan, err := planMetadataCacheReapVia(context.Background(), cache, cache, books, metadataCacheReapInput{Max: params.Max}, t6g5ReapEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 	// The identity that has to hold on every run, asserted on every run rather
 	// than only in the test that is about it.
@@ -213,9 +213,8 @@ func TestMetadataCacheReap_RecheckErrorSparesTheRow(t *testing.T) {
 	cache := seedReap(2)
 	books := &reapFakeBooks{}
 	// Both rows look orphaned in the scan; b00's re-check then faults.
-	plan, err := planMetadataCacheReap(context.Background(), cache,
-		&recheckFailBooks{inner: books, failAfter: map[string]int{"b00": 1}},
-		metadataCacheReapParams{Apply: true}, &fakeReporter{})
+	t6g5h1 := metadataCacheReapParams{Apply: true}
+	plan, err := planMetadataCacheReapVia(context.Background(), cache, cache, &recheckFailBooks{inner: books, failAfter: map[string]int{"b00": 1}}, metadataCacheReapInput{Max: t6g5h1.Max}, t6g5ReapEnv(context.Background(), t6g5h1.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 2, plan.Orphaned)
@@ -341,8 +340,8 @@ func TestMetadataCacheReap_ReportListsEveryScannedRow(t *testing.T) {
 // look" must not produce the same outcome.
 func TestMetadataCacheReap_ListFailureAborts(t *testing.T) {
 	cache := &reapFakeCache{listErr: errors.New("pebble: iter failed")}
-	_, err := planMetadataCacheReap(context.Background(), cache, &reapFakeBooks{},
-		metadataCacheReapParams{Apply: true}, &fakeReporter{})
+	t6g5h2 := metadataCacheReapParams{Apply: true}
+	_, err := planMetadataCacheReapVia(context.Background(), cache, cache, &reapFakeBooks{}, metadataCacheReapInput{Max: t6g5h2.Max}, t6g5ReapEnv(context.Background(), t6g5h2.Apply, &fakeReporter{}))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "list metadata cache")
 	require.Empty(t, cache.deletedSorted())
@@ -350,7 +349,7 @@ func TestMetadataCacheReap_ListFailureAborts(t *testing.T) {
 
 // ---- run-level tests ----
 //
-// Everything above drives planMetadataCacheReap directly, which leaves the
+// Everything above drives planMetadataCacheReapVia directly, which leaves the
 // wiring untested: params decoding, the deps nil checks, and the report write.
 // The params tags matter more here than in a read-only op — a typo in
 // `json:"apply"` would ship a delete op that ignores its own dry-run default,

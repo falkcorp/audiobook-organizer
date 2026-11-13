@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/metadata_cache_reap.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6b1f9d47-3c82-4e05-9a71-d84c2f60e5b3
 // last-edited: 2026-11-13
 
@@ -245,7 +245,7 @@ func (p *Plugin) metadataCacheReapKind(deps t6g5Deps, sched func(tasks.Kind) *ta
 		Common: t6g5Common(p.metadataCacheReapDef(), metadataCacheReapKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (reapPlan, error) {
 			var in metadataCacheReapInput
-			if err := t6g5DecodeParams(metadataCacheReapKind, raw, &in, "apply"); err != nil {
+			if err := t6g5DecodeParams(metadataCacheReapKind, raw, &in, t6g5ModeKeys...); err != nil {
 				return reapPlan{}, err
 			}
 			base, err := t6g5NativeBase(metadataCacheReapKind, rc, deps, true)
@@ -315,20 +315,9 @@ func runMetadataCacheReapCore(ctx context.Context, in metadataCacheReapInput, en
 	return plan, nil
 }
 
-// planMetadataCacheReap is the plan with HEAD's signature: a cache store and a
-// resolver of its own and a reporter. It is a wrapper over
-// planMetadataCacheReapVia.
-func planMetadataCacheReap(
-	ctx context.Context,
-	cache database.MetadataCacheStore,
-	books reapBookResolver,
-	params metadataCacheReapParams,
-	reporter sdk.Reporter,
-) (reapPlan, error) {
-	env := metadataCacheReapEnv{t6g5Base: t6g5ReporterBase(ctx, reporter, params.Apply), Items: t6g5HeadItems(reporter)}
-	return planMetadataCacheReapVia(ctx, cache, cache, books, metadataCacheReapInput{Max: params.Max}, env)
-}
-
+// planMetadataCacheReapVia plans (and, when env.Live, applies) the reap over the
+// engine the env names (rule R10: it lists the cache it is handed, deletes
+// through the deleter it is handed and captures nothing).
 func planMetadataCacheReapVia(
 	ctx context.Context,
 	cache reapCacheLister,

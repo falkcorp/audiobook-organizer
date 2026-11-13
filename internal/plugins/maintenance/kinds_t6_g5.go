@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 30f92b7b-033e-4403-927a-99445211075c
 // last-edited: 2026-11-13
 
@@ -62,7 +62,7 @@ type t6g5Base struct {
 	Progress func(done, total int, msg string)
 	// Touch stamps the run live without reporting progress, for a loop whose
 	// item is much larger than a unit of work (HEAD: registry.TouchLiveness;
-	// native: nothing, the progress writes already stamp the run).
+	// native: rc.Progress().Tick).
 	Touch func()
 	// OpID is the run's operation ID (HEAD: ctxOpID(ctx); native: rc.RunID()).
 	OpID string
@@ -159,13 +159,18 @@ func t6g5NativeItems(rc *tasks.RC) t6g5ItemsFunc {
 // the plugin's dependencies.
 func (p *Plugin) t6g5HeadBase(ctx context.Context, reporter sdk.Reporter, live bool) t6g5Base {
 	b := t6g5ReporterBase(ctx, reporter, live)
-	b.Writer = headT6g5Writer{p: p}
-	b.Store = headT6g5Store{p: p}
+	// The plugin's stores are resolved here, once, and the adapters answer from
+	// what they hold: an adapter that reached for p.deps on every call would
+	// look to the fixer-stores guard like a way for a fixer to reach a store.
+	ops := p.deps.OpsStore()
+	b.Writer = headT6g5Writer{p: p, ops: ops}
+	b.Store = headT6g5Store{p: p, ops: ops, vps: p.deps.VersionPrimaryStore()}
 	return b
 }
 
-// t6g5ReporterBase is the base without a writer or a store: what a helper that
-// is handed its own store (the HEAD-signature wrappers the tests call) needs.
+// t6g5ReporterBase is the base without a writer or a store: the reporter-derived
+// part both t6g5HeadBase and a test building a core's env around its own fake
+// store need.
 func t6g5ReporterBase(ctx context.Context, reporter sdk.Reporter, live bool) t6g5Base {
 	return t6g5Base{
 		Live:     live,
@@ -222,7 +227,7 @@ func t6g5NativeBase(kind tasks.Kind, rc *tasks.RC, deps t6g5Deps, writes bool) (
 				rc.Progress().Note(msg)
 			}
 		},
-		Touch: func() {},
+		Touch: func() { rc.Progress().Tick() },
 		OpID:  string(rc.RunID()),
 		Store: deps.Store,
 	}
@@ -271,26 +276,11 @@ func (p *t6g5Progress) Start(msg string) {
 	p.report(0, p.total, p.format(0, msg))
 }
 
-// Step advances the cursor by one.
-func (p *t6g5Progress) Step(msg string) {
-	p.cur++
-	if p.cur > p.n+1 {
-		p.cur = p.n + 1
-	}
-	p.report(p.cur, p.total, p.format(p.cur, msg))
-}
-
 // StepN jumps to the i-th unit of N.
 func (p *t6g5Progress) StepN(i int, msg string) {
 	i = max(0, min(i, p.n))
 	p.cur = i
 	p.report(i, p.total, p.format(i, msg))
-}
-
-// Finalize emits the penultimate frame at (total-1, total).
-func (p *t6g5Progress) Finalize(msg string) {
-	p.cur = p.total - 1
-	p.report(p.cur, p.total, p.format(p.cur, msg))
 }
 
 // Done emits the final frame at (total, total).
@@ -488,6 +478,11 @@ func (r t6g5OpsProgress) Log(level, message string, details *string) error {
 }
 
 func (r t6g5OpsProgress) IsCanceled() bool { return false }
+
+// t6g5ModeKeys are the params keys that carry the run's mode in HEAD's
+// writing ops, refused by every native writing shell (05-tasks 5T.3.7): the
+// mode comes from the start request. One list, so a kind cannot forget one.
+var t6g5ModeKeys = []string{"apply", "dry_run", "dryRun"}
 
 // t6g5RefuseModeKeys is the first step of the native shells' params decode
 // (05-tasks 5T.3.7 mode contract): a key that carries the run's mode (keys:
@@ -729,18 +724,33 @@ var errT6g5NoStore = errors.New("database not initialized")
 // HEAD's body called, in the same order with the same arguments. Deps are read
 // lazily so a test double with no store behind it is only touched by the
 // method a test reaches.
-type headT6g5Writer struct{ p *Plugin }
+type headT6g5Writer struct {
+	p   *Plugin
+	ops OpsStore
+}
 
 // headT6g5Store is t6g5Store over HEAD's dependencies.
-type headT6g5Store struct{ p *Plugin }
+type headT6g5Store struct {
+	p   *Plugin
+	ops OpsStore
+	vps VersionPrimaryStore
+}
 
-// t6g5OpsStore is the plugin's store, or HEAD's "database not initialized".
-func (p *Plugin) t6g5OpsStore() (OpsStore, error) {
-	st := p.deps.OpsStore()
-	if st == nil {
+// opsStore is the plugin's store as t6g5HeadBase resolved it, or HEAD's
+// "database not initialized".
+func (w headT6g5Writer) opsStore() (OpsStore, error) {
+	if w.ops == nil {
 		return nil, errT6g5NoStore
 	}
-	return st, nil
+	return w.ops, nil
+}
+
+// opsStore is headT6g5Writer.opsStore for the reads.
+func (s headT6g5Store) opsStore() (OpsStore, error) {
+	if s.ops == nil {
+		return nil, errT6g5NoStore
+	}
+	return s.ops, nil
 }
 
 func (s headT6g5Store) RunMetadataRefreshScan(ctx context.Context, progress operations.ProgressReporter) error {
@@ -748,7 +758,7 @@ func (s headT6g5Store) RunMetadataRefreshScan(ctx context.Context, progress oper
 }
 
 func (s headT6g5Store) GetAllBookFilesCore() ([]database.BookFileCore, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -756,7 +766,7 @@ func (s headT6g5Store) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 }
 
 func (s headT6g5Store) GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -766,7 +776,7 @@ func (s headT6g5Store) GetAllBooksCoreComplete(limit, offset int) ([]database.Bo
 func (s headT6g5Store) RootDir() string { return s.p.deps.RootDir() }
 
 func (w headT6g5Writer) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -782,7 +792,7 @@ func (s headT6g5Store) ListMetadataCacheKeys() ([]database.MetadataCacheSummary,
 }
 
 func (s headT6g5Store) GetBookByID(id string) (*database.Book, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -798,7 +808,7 @@ func (w headT6g5Writer) DeleteMetadataCache(bookID string) error {
 }
 
 func (s headT6g5Store) GetAllBooksCore(limit, offset int) ([]database.BookCore, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -806,7 +816,7 @@ func (s headT6g5Store) GetAllBooksCore(limit, offset int) ([]database.BookCore, 
 }
 
 func (s headT6g5Store) GetBookFiles(bookID string) ([]database.BookFile, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -814,7 +824,7 @@ func (s headT6g5Store) GetBookFiles(bookID string) ([]database.BookFile, error) 
 }
 
 func (s headT6g5Store) GetAllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -822,7 +832,7 @@ func (s headT6g5Store) GetAllBookFilesCoreIncludingRetired() ([]database.BookFil
 }
 
 func (s headT6g5Store) GetBookFileByID(bookID, fileID string) (*database.BookFile, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -830,7 +840,7 @@ func (s headT6g5Store) GetBookFileByID(bookID, fileID string) (*database.BookFil
 }
 
 func (s headT6g5Store) ListNarrators() ([]database.Narrator, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -838,7 +848,7 @@ func (s headT6g5Store) ListNarrators() ([]database.Narrator, error) {
 }
 
 func (s headT6g5Store) NarratorRefCounts() (database.NarratorRefs, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return database.NarratorRefs{}, err
 	}
@@ -846,7 +856,7 @@ func (s headT6g5Store) NarratorRefCounts() (database.NarratorRefs, error) {
 }
 
 func (s headT6g5Store) NarratorLinkCount(narratorID int) (int, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return 0, err
 	}
@@ -854,7 +864,7 @@ func (s headT6g5Store) NarratorLinkCount(narratorID int) (int, error) {
 }
 
 func (w headT6g5Writer) RecordOperationChange(change *database.OperationChange) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -862,7 +872,7 @@ func (w headT6g5Writer) RecordOperationChange(change *database.OperationChange) 
 }
 
 func (w headT6g5Writer) DeleteNarrator(id int) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -872,7 +882,7 @@ func (w headT6g5Writer) DeleteNarrator(id int) error {
 func (w headT6g5Writer) InvalidateAuthorsCache() { w.p.deps.InvalidateAuthorsCache() }
 
 func (w headT6g5Writer) MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -880,7 +890,7 @@ func (w headT6g5Writer) MoveBookFilesToBookBulk(moves []database.BookFileMove, t
 }
 
 func (w headT6g5Writer) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -892,7 +902,7 @@ func (w headT6g5Writer) MergeBooks(opID string, bookIDs []string, primaryID stri
 }
 
 func (w headT6g5Writer) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return 0, err
 	}
@@ -900,7 +910,7 @@ func (w headT6g5Writer) UpdateBookFiles(ctx context.Context, files []*database.B
 }
 
 func (s headT6g5Store) BooksLinkingNarrators(ids map[int]bool) (map[string][]database.BookNarrator, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -908,7 +918,7 @@ func (s headT6g5Store) BooksLinkingNarrators(ids map[int]bool) (map[string][]dat
 }
 
 func (s headT6g5Store) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -916,7 +926,7 @@ func (s headT6g5Store) GetBookAuthors(bookID string) ([]database.BookAuthor, err
 }
 
 func (s headT6g5Store) GetAuthorByID(id int) (*database.Author, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -924,7 +934,7 @@ func (s headT6g5Store) GetAuthorByID(id int) (*database.Author, error) {
 }
 
 func (s headT6g5Store) GetBookNarrators(bookID string) ([]database.BookNarrator, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -932,7 +942,7 @@ func (s headT6g5Store) GetBookNarrators(bookID string) ([]database.BookNarrator,
 }
 
 func (w headT6g5Writer) CreateNarrator(name string) (*database.Narrator, error) {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -940,7 +950,7 @@ func (w headT6g5Writer) CreateNarrator(name string) (*database.Narrator, error) 
 }
 
 func (w headT6g5Writer) SetBookNarrators(bookID string, narrators []database.BookNarrator) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -955,7 +965,7 @@ func (s headT6g5Store) ProbeSmartPlaylists(lib *itunes.ITLLibrary, ownerUserID s
 }
 
 func (s headT6g5Store) CountSmartPlaylists() (int, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return 0, err
 	}
@@ -969,7 +979,7 @@ func (w headT6g5Writer) ImportSmartPlaylists(lib *itunes.ITLLibrary, ownerUserID
 }
 
 func (s headT6g5Store) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -977,7 +987,7 @@ func (s headT6g5Store) GetBooksByVersionGroup(groupID string) ([]database.Book, 
 }
 
 func (s headT6g5Store) GetAllPreferencesForUser(userID string) ([]database.UserPreferenceKV, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -985,7 +995,7 @@ func (s headT6g5Store) GetAllPreferencesForUser(userID string) ([]database.UserP
 }
 
 func (s headT6g5Store) GetSeriesByID(id int) (*database.Series, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1001,7 +1011,7 @@ func (s headT6g5Store) GetBookTagsDetailed(bookID string) ([]database.BookTag, e
 }
 
 func (s headT6g5Store) GetAuthorByName(name string) (*database.Author, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1009,7 +1019,7 @@ func (s headT6g5Store) GetAuthorByName(name string) (*database.Author, error) {
 }
 
 func (s headT6g5Store) GetChaptersForBook(bookID string) ([]database.Chapter, error) {
-	vps := s.p.deps.VersionPrimaryStore()
+	vps := s.vps
 	if vps == nil {
 		return nil, errT6g5NoStore
 	}
@@ -1017,7 +1027,7 @@ func (s headT6g5Store) GetChaptersForBook(bookID string) ([]database.Chapter, er
 }
 
 func (s headT6g5Store) BookFileRowsAtPathStrict(path string) ([]database.BookFile, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1039,7 +1049,7 @@ func (s headT6g5Store) PlanLibraryClone(book *database.Book, files []database.Bo
 func (s headT6g5Store) LibraryITunesPath(path string) string { return s.p.deps.LibraryITunesPath(path) }
 
 func (w headT6g5Writer) DeleteBook(id string) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -1047,7 +1057,7 @@ func (w headT6g5Writer) DeleteBook(id string) error {
 }
 
 func (w headT6g5Writer) DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error) {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1055,7 +1065,7 @@ func (w headT6g5Writer) DeleteBookFilesByIDs(refs []database.BookFileRef) ([]dat
 }
 
 func (w headT6g5Writer) SetBookAuthors(bookID string, authors []database.BookAuthor) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -1063,7 +1073,7 @@ func (w headT6g5Writer) SetBookAuthors(bookID string, authors []database.BookAut
 }
 
 func (w headT6g5Writer) SetUserPreferenceForUser(userID, key, value string) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -1071,7 +1081,7 @@ func (w headT6g5Writer) SetUserPreferenceForUser(userID, key, value string) erro
 }
 
 func (w headT6g5Writer) SaveChaptersForBook(bookID string, chapters []database.Chapter) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -1126,7 +1136,7 @@ func (w headT6g5Writer) CarryStateBetweenLiveBooks(toID, fromID string) error {
 }
 
 func (s headT6g5Store) GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1134,7 +1144,7 @@ func (s headT6g5Store) GetAllBooksFullFrom(afterID string, limit int) ([]databas
 }
 
 func (s headT6g5Store) GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1142,7 +1152,7 @@ func (s headT6g5Store) GetExternalIDsForBook(bookID string) ([]database.External
 }
 
 func (s headT6g5Store) GetAllSeries() ([]database.Series, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1150,7 +1160,7 @@ func (s headT6g5Store) GetAllSeries() ([]database.Series, error) {
 }
 
 func (s headT6g5Store) GetAllAuthors() ([]database.Author, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1160,7 +1170,7 @@ func (s headT6g5Store) GetAllAuthors() ([]database.Author, error) {
 // t6g5Retired is the store's retired-row reader capability, or the same
 // refusal HEAD's regroup gave when the store cannot list retired rows.
 func (s headT6g5Store) t6g5Retired() (database.RetiredBookFileReader, error) {
-	st, err := s.p.t6g5OpsStore()
+	st, err := s.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1220,7 +1230,7 @@ func (s headT6g5Store) GetBookTagsByBookIDs(bookIDs []string) (map[string][]stri
 }
 
 func (w headT6g5Writer) UpdateBook(id string, book *database.Book) (*database.Book, error) {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1228,7 +1238,7 @@ func (w headT6g5Writer) UpdateBook(id string, book *database.Book) (*database.Bo
 }
 
 func (w headT6g5Writer) RecomputeBookAggregates(bookID string) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -1236,7 +1246,7 @@ func (w headT6g5Writer) RecomputeBookAggregates(bookID string) error {
 }
 
 func (w headT6g5Writer) MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
@@ -1244,7 +1254,7 @@ func (w headT6g5Writer) MoveBookFilesToBook(fileIDs []string, sourceBookID, targ
 }
 
 func (w headT6g5Writer) CreateBook(book *database.Book) (*database.Book, error) {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return nil, err
 	}
@@ -1252,16 +1262,27 @@ func (w headT6g5Writer) CreateBook(book *database.Book) (*database.Book, error) 
 }
 
 func (w headT6g5Writer) ReassignExternalID(source, externalID, newBookID string) error {
-	st, err := w.p.t6g5OpsStore()
+	st, err := w.opsStore()
 	if err != nil {
 		return err
 	}
 	return st.ReassignExternalID(source, externalID, newBookID)
 }
 
-// UserProgress is the merge user-state store, nil when none is wired.
-func (w headT6g5Writer) UserProgress() merge.UserProgressMerger {
-	return w.p.deps.MergeUserStateStore()
+func (w headT6g5Writer) CarryStateThenHardDelete(keepID, doomedID string, precheck, del func() error) error {
+	um, err := w.userState()
+	if err != nil {
+		return err
+	}
+	return merge.CarryStateThenHardDelete(um, keepID, doomedID, precheck, del)
+}
+
+func (w headT6g5Writer) NewUserStateProbe() (regroupStateProbe, error) {
+	um, err := w.userState()
+	if err != nil {
+		return nil, err
+	}
+	return merge.NewUserStateProbe(um)
 }
 
 // --- the group's list function ---

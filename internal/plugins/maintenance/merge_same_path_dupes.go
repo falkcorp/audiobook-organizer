@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
 // last-edited: 2026-11-13
 
@@ -215,14 +215,17 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 }
 
 // mergeSamePathDupesKind builds the native kind. Writes: HEAD's declared
-// book_files resource; the preview is HEAD's dry run. The params decode into
+// book_files resource and what the merge it calls writes (MergeBooks: the
+// books, the external-id reroute, the losers' listening state following the
+// survivor, the undo journal); the preview is HEAD's dry run. The params decode into
 // HEAD's struct after the mode key (apply) is refused.
 func (p *Plugin) mergeSamePathDupesKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)))
+	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBooks)), tasks.Res("books", string(sdk.ResBookFiles)),
+		tasks.Res("books", "external_ids"), tasks.Res("books", "user_state"), tasks.Res("books", "operations"))
 	return tasks.Task(mergeSamePathDupesKind, tasks.TaskSpec[json.RawMessage, mergeSamePathPlan]{
 		Common: t6g5Common(p.mergeSamePathDupesDef(), mergeSamePathDupesKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (mergeSamePathPlan, error) {
-			if err := t6g5RefuseModeKeys(mergeSamePathDupesKind, raw, "apply"); err != nil {
+			if err := t6g5RefuseModeKeys(mergeSamePathDupesKind, raw, t6g5ModeKeys...); err != nil {
 				return mergeSamePathPlan{}, err
 			}
 			var params mergeSamePathParams
@@ -361,15 +364,8 @@ func isPrimary(b database.BookCore) bool {
 	return b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
 }
 
-// planMergeSamePathDupes is the plan with HEAD's signature: a store of its own, a
-// merge function and a reporter. It is a wrapper over planMergeSamePathDupesVia.
-func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, mergeFn bookMergeFunc, params mergeSamePathParams, reporter sdk.Reporter) (mergeSamePathPlan, error) {
-	env := mergeSamePathDupesEnv{t6g5Base: t6g5ReporterBase(ctx, reporter, params.Apply), Items: t6g5HeadItems(reporter)}
-	return planMergeSamePathDupesVia(ctx, store, mergeFn, params, env)
-}
-
-// planMergeSamePathDupesVia is planMergeSamePathDupes over the engine the env
-// names (rule R10: it reads the store and merges through the function it is
+// planMergeSamePathDupesVia plans (and, when env.Live, applies) the merge over
+// the engine the env names (rule R10: it reads the store and merges through the function it is
 // handed and captures nothing).
 func planMergeSamePathDupesVia(ctx context.Context, store mergeSamePathStore, mergeFn bookMergeFunc, params mergeSamePathParams, env mergeSamePathDupesEnv) (mergeSamePathPlan, error) {
 	log := env.Logger

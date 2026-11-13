@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/path_prefix_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: e41b6d09-2f7a-4c83-9b15-6a0d8e3c47f2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -59,15 +59,17 @@ func TestPathPrefix_OpsMatchOnFolderBoundary(t *testing.T) {
 
 	ops := map[string]func(t *testing.T, prefix string) int{
 		"mark-missing-files": func(t *testing.T, prefix string) int {
-			plan, err := planMarkMissingFiles(ctx, &markFakeStore{cores: cores()}, nil,
-				markMissingParams{PathPrefix: prefix}, &fakeReporter{})
+			t6g5h1 := &markFakeStore{cores: cores()}
+			t6g5h2 := markMissingParams{PathPrefix: prefix}
+			plan, err := planMarkMissingFilesVia(ctx, t6g5h1, t6g5h1, t6g5h2, t6g5MarkEnv(ctx, t6g5h2.Apply, nil, &fakeReporter{}))
 			require.NoError(t, err)
 			return plan.ScannedRows
 		},
 		"missing-file-repoint": func(t *testing.T, prefix string) int {
 			// ScannedRows is len(files) before the filter; MissingRows is the in-scope count.
-			plan, err := planMissingFileRepoint(ctx, &repointFakeStore{cores: cores()}, nil,
-				missingFileRepointParams{PathPrefix: prefix}, &fakeReporter{})
+			t6g5h1 := &repointFakeStore{cores: cores()}
+			t6g5h2 := missingFileRepointParams{PathPrefix: prefix}
+			plan, err := planMissingFileRepointVia(ctx, t6g5h1, t6g5RepointAll(t6g5h1), t6g5h1, t6g5h2, t6g5RepointEnv(ctx, t6g5h2.Apply, nil, &fakeReporter{}))
 			require.NoError(t, err)
 			return plan.MissingRows
 		},
@@ -86,8 +88,8 @@ func TestPathPrefix_OpsMatchOnFolderBoundary(t *testing.T) {
 					database.BookCore{ID: "x" + id, FilePath: p}, database.BookCore{ID: "y" + id, FilePath: p})
 			}
 			m := &recordingMerge{}
-			plan, err := planMergeSamePathDupes(ctx, store, m.fn,
-				mergeSamePathParams{PathPrefix: prefix}, &fakeReporter{})
+			t6g5h1 := mergeSamePathParams{PathPrefix: prefix}
+			plan, err := planMergeSamePathDupesVia(ctx, store, m.fn, t6g5h1, t6g5MergeEnv(ctx, t6g5h1.Apply, &fakeReporter{}))
 			require.NoError(t, err)
 			return plan.SharedPaths
 		},

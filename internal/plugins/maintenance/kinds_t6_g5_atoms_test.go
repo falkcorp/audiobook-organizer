@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_atoms_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 684dc428-f2c3-4906-b566-b7309c6f9762
 // last-edited: 2026-11-13
 
@@ -10,6 +10,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
+	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,4 +34,18 @@ func TestT6G5_StartRequirementMatchesAtomTable(t *testing.T) {
 		got = append(got, string(p))
 	}
 	assert.Equal(t, want, got)
+}
+
+// TestT6G5_EveryKindStartsOnSettingsManage reads the Perms.Start each
+// definition really declares (not just the helper): all 14 are AllOf over the
+// same scopes, AllOf because HEAD's route requires every one of them.
+func TestT6G5_EveryKindStartsOnSettingsManage(t *testing.T) {
+	want := maintenance.T6G5StartRequirement()
+	defs := maintenance.T6G5Kinds()
+	require.Len(t, defs, 14)
+	for _, d := range defs {
+		start := tasks.CommonOf(d).Perms.Start
+		assert.Equal(t, rbac.KindAllOf, start.Kind(), "%s: every scope is required", d.Kind())
+		assert.Equal(t, want.Permissions(), start.Permissions(), "%s", d.Kind())
+	}
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
 // last-edited: 2026-11-13
 
@@ -421,7 +421,7 @@ func (p *Plugin) splitJoinedNarratorsKind(deps t6g5Deps, sched func(tasks.Kind) 
 		Common: t6g5Common(p.splitJoinedNarratorsDef(), splitJoinedNarratorsKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (splitJoinedReport, error) {
 			var params splitJoinedNarratorsParams
-			if err := t6g5DecodeParams(splitJoinedNarratorsKind, raw, &params, "apply"); err != nil {
+			if err := t6g5DecodeParams(splitJoinedNarratorsKind, raw, &params, t6g5ModeKeys...); err != nil {
 				return splitJoinedReport{}, err
 			}
 			base, err := t6g5NativeBase(splitJoinedNarratorsKind, rc, deps, true)

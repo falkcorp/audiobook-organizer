@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c0ba68fc-0752-49a5-9e51-187eca399e39
 // last-edited: 2026-11-13
 
@@ -121,8 +121,51 @@ func (*t6g5Gate) RowApplied(context.Context, string) (bool, error) { return fals
 // t6g5Host is a FakeRun with a chosen mode and writer.
 type t6g5Host struct {
 	*taskstest.FakeRun
-	mode tasks.Mode
-	w    tasks.Writer
+	mode  tasks.Mode
+	w     tasks.Writer
+	holds *t6g5Holds
+}
+
+// StandDown records the key and the release when a test installed holds, and
+// is FakeRun's refusal otherwise.
+func (h *t6g5Host) StandDown(key tasks.Key) (tasks.Hold, error) {
+	if h.holds == nil {
+		return h.FakeRun.StandDown(key)
+	}
+	return h.holds.take(key)
+}
+
+// t6g5Holds records the scan stand-down keys a run took and how many of those
+// holds were released.
+type t6g5Holds struct {
+	mu       sync.Mutex
+	keys     []tasks.Key
+	released int
+	err      error
+}
+
+type t6g5HoldHandle struct{ h *t6g5Holds }
+
+func (x t6g5HoldHandle) Release() {
+	x.h.mu.Lock()
+	x.h.released++
+	x.h.mu.Unlock()
+}
+
+func (h *t6g5Holds) take(key tasks.Key) (tasks.Hold, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.err != nil {
+		return nil, h.err
+	}
+	h.keys = append(h.keys, key)
+	return t6g5HoldHandle{h}, nil
+}
+
+func (h *t6g5Holds) snapshot() ([]tasks.Key, int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.keys), h.released
 }
 
 func (h *t6g5Host) Mode() tasks.Mode     { return h.mode }
@@ -130,8 +173,14 @@ func (h *t6g5Host) Writer() tasks.Writer { return h.w }
 func (h *t6g5Host) Log() *slog.Logger    { return slog.New(slog.DiscardHandler) }
 
 func newT6G5Host(kind tasks.Kind, mode tasks.Mode, w tasks.Writer) *tasks.RC {
-	h := &t6g5Host{FakeRun: taskstest.NewFakeRun(context.Background(), kind), mode: mode, w: w}
-	return tasks.NewRC(h)
+	rc, _ := newT6G5HostCtx(context.Background(), kind, mode, w, nil)
+	return rc
+}
+
+// newT6G5HostCtx is newT6G5Host over a chosen context and stand-down recorder.
+func newT6G5HostCtx(ctx context.Context, kind tasks.Kind, mode tasks.Mode, w tasks.Writer, holds *t6g5Holds) (*tasks.RC, *taskstest.FakeRun) {
+	fr := taskstest.NewFakeRun(ctx, kind)
+	return tasks.NewRC(&t6g5Host{FakeRun: fr, mode: mode, w: w, holds: holds}), fr
 }
 
 // t6g5Run runs d's own Run with the params the executor would decode.
@@ -163,8 +212,8 @@ func t6g5KindByName(t *testing.T, defs []tasks.Definition, headID string) tasks.
 	return nil
 }
 
-// ParString renders a definition's declared parallelism, "" for a Task.
-func ParString(d tasks.Definition) string {
+// t6g5ParString renders a definition's declared parallelism, "" for a Task.
+func t6g5ParString(d tasks.Definition) string {
 	p := tasks.ParallelismOf(d)
 	if p == (tasks.Parallelism{}) {
 		return ""
@@ -202,19 +251,19 @@ type t6g5Want struct {
 
 func t6g5Wants() []t6g5Want {
 	return []t6g5Want{
-		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{"book_files", "books", "chapters", "user_preferences"}},
+		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{"authors", "book_files", "books", "chapters", "user_preferences", "user_state"}},
 		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false, []string{"user_playlists"}},
 		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{"book_files", "books", "external_ids", "user_state"}},
 		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false, []string{"books"}},
-		{"maintenance.mark-missing-files", (*Plugin).markMissingFilesDef, tasks.ResumeDrop, false, []string{"book_files"}},
-		{"maintenance.merge-same-path-dupes", (*Plugin).mergeSamePathDupesDef, tasks.ResumeDrop, false, []string{"book_files"}},
+		{"maintenance.mark-missing-files", (*Plugin).markMissingFilesDef, tasks.ResumeDrop, false, []string{"book_files", "books"}},
+		{"maintenance.merge-same-path-dupes", (*Plugin).mergeSamePathDupesDef, tasks.ResumeDrop, false, []string{"book_files", "books", "external_ids", "operations", "user_state"}},
 		{"maintenance.metadata-refresh", (*Plugin).metadataRefreshDef, tasks.ResumeFromZero, true, nil},
 		{"maintenance.metadata-cache-reap", (*Plugin).metadataCacheReapDef, tasks.ResumeDrop, false, []string{"metadata_cache"}},
 		{"maintenance.missing-file-audit", (*Plugin).missingFileAuditDef, tasks.ResumeDrop, true, nil},
 		{"maintenance.missing-file-repair", (*Plugin).missingFileRepairDef, tasks.ResumeDrop, true, nil},
-		{"maintenance.missing-file-repoint", (*Plugin).missingFileRepointDef, tasks.ResumeDrop, false, []string{"book_files"}},
-		{"maintenance.move-book-file-rows", (*Plugin).moveBookFileRowsDef, tasks.ResumeDrop, false, []string{"book_files"}},
-		{"maintenance.purge-empty-narrators", (*Plugin).purgeEmptyNarratorsDef, tasks.ResumeDrop, false, []string{"narrators", "operations"}},
+		{"maintenance.missing-file-repoint", (*Plugin).missingFileRepointDef, tasks.ResumeDrop, false, []string{"book_files", "books"}},
+		{"maintenance.move-book-file-rows", (*Plugin).moveBookFileRowsDef, tasks.ResumeDrop, false, []string{"book_files", "books"}},
+		{"maintenance.purge-empty-narrators", (*Plugin).purgeEmptyNarratorsDef, tasks.ResumeDrop, false, []string{"book_narrators", "narrators", "operations"}},
 		{"maintenance.split-joined-narrators", (*Plugin).splitJoinedNarratorsDef, tasks.ResumeDrop, false, []string{"book_narrators", "narrators", "operations"}},
 	}
 }
@@ -245,7 +294,7 @@ func TestT6G5Kinds_MatchHEADDefs(t *testing.T) {
 			if !w.readOnly {
 				assert.Equal(t, w.writes, t6g5WriteKinds(c.Effects), "R7 write set")
 			}
-			assert.Equal(t, "", ParString(d), "a Task declares no Parallelism: its loops pass theirs to RunItems")
+			assert.Equal(t, "", t6g5ParString(d), "a Task declares no Parallelism: its loops pass theirs to RunItems")
 		})
 	}
 }
@@ -287,12 +336,14 @@ func TestT6G5Kinds_WritesThroughShell(t *testing.T) {
 	})
 
 	t.Run("read-only kinds get no writer", func(t *testing.T) {
-		f := newT6G5Fake()
-		d := t6g5KindByName(t, (&Plugin{}).t6g5Kinds(f.deps(), nil), "maintenance.missing-file-audit")
-		require.True(t, tasks.CommonOf(d).Effects.IsReadOnly())
-		_ = d
-		assert.Empty(t, f.handed(), "a ReadOnly run never asks for a writer")
-		assert.Empty(t, f.writer.called())
+		for _, mode := range []tasks.Mode{tasks.ModePreview, tasks.ModeLive} {
+			f := newT6G5Fake()
+			d := t6g5KindByName(t, (&Plugin{}).t6g5Kinds(f.deps(), nil), "maintenance.missing-file-audit")
+			require.True(t, tasks.CommonOf(d).Effects.IsReadOnly())
+			_, _ = t6g5Run(t, d, newT6G5Host(d.Kind(), mode, &t6g5Gate{}), "")
+			assert.Empty(t, f.handed(), "a ReadOnly run never asks for a writer (mode %v)", mode)
+			assert.Empty(t, f.writer.called())
+		}
 	})
 
 	t.Run("mode keys are refused in params", func(t *testing.T) {

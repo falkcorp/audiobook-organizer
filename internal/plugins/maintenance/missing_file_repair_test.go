@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repair_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: c47f0a91-5e6b-4d28-93af-2b8054e17c6d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -54,7 +54,7 @@ func planRepair(t *testing.T, rows []database.BookFileCore, params missingFileRe
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return rows, nil },
 	}
-	plan, err := planMissingFileRepair(context.Background(), store, params, &fakeReporter{})
+	plan, err := planMissingFileRepair(context.Background(), store, params, t6g5RepairEnv(context.Background(), &fakeReporter{}))
 	if err != nil {
 		t.Fatalf("planMissingFileRepair: %v", err)
 	}

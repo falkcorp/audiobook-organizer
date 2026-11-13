@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
 // last-edited: 2026-11-13
 
@@ -125,6 +125,12 @@ type playlistImportWriter interface {
 // itunesPlaylistImportEnv is what the import's core needs from its engine.
 type itunesPlaylistImportEnv struct {
 	t6g5Base
+	// Global is where HEAD wrote the four attribute lines of this op: the
+	// process-wide logger (slog.Default()), not the run's. Native: the run's
+	// logger. Keeping HEAD on the global one keeps its output unchanged: the
+	// reporter's logger also fans each line out to the op log, the bus and the
+	// activity log.
+	Global *slog.Logger
 }
 
 // runITunesPlaylistImport is the v2 shell: HEAD's decode and dry-run
@@ -140,7 +146,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	if err != nil {
 		return err
 	}
-	return itunesPlaylistImportCore(ctx, params, itunesPlaylistImportEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, !dryRun)})
+	return itunesPlaylistImportCore(ctx, params, itunesPlaylistImportEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, !dryRun), Global: slog.Default()})
 }
 
 // itunesPlaylistImportKind builds the native kind. Writes found: UserPlaylist
@@ -153,14 +159,14 @@ func (p *Plugin) itunesPlaylistImportKind(deps t6g5Deps, sched func(tasks.Kind) 
 		Common: t6g5Common(p.itunesPlaylistImportDef(), itunesPlaylistImportKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
 			var params itunesPlaylistImportParams
-			if err := t6g5DecodeParams(itunesPlaylistImportKind, raw, &params, "dryRun", "dry_run"); err != nil {
+			if err := t6g5DecodeParams(itunesPlaylistImportKind, raw, &params, t6g5ModeKeys...); err != nil {
 				return struct{}{}, err
 			}
 			base, err := t6g5NativeBase(itunesPlaylistImportKind, rc, deps, true)
 			if err != nil {
 				return struct{}{}, err
 			}
-			return struct{}{}, itunesPlaylistImportCore(rc.Context(), params, itunesPlaylistImportEnv{t6g5Base: base})
+			return struct{}{}, itunesPlaylistImportCore(rc.Context(), params, itunesPlaylistImportEnv{t6g5Base: base, Global: base.Logger})
 		},
 	})
 }
@@ -238,7 +244,7 @@ func itunesPlaylistImportCore(ctx context.Context, params itunesPlaylistImportPa
 				"same library can contain hundreds of smart playlists the binary ITL parser "+
 				"does not surface. Verify with: grep -c 'Smart Criteria' '<library>.xml'",
 			len(lib.Playlists))
-		env.Logger.Warn("itunes-playlist-import: no smart playlists extracted", "source", source, "path", libPath, "playlists", len(lib.Playlists))
+		env.Global.Warn("itunes-playlist-import: no smart playlists extracted", "source", source, "path", libPath, "playlists", len(lib.Playlists))
 		env.Log(slog.LevelWarn, msg)
 		env.Progress(3, 3, "0 smart playlists extracted — see log")
 		return nil
@@ -271,7 +277,7 @@ func itunesPlaylistImportCore(ctx context.Context, params itunesPlaylistImportPa
 				"Criteria did not survive parsing (ITUNES-SMARTCRIT-PARSE). Importing them "+
 				"would create playlists that are silently empty.", empties, probe.Imported)
 		env.Log(slog.LevelWarn, msg)
-		env.Logger.Warn("itunes-playlist-import: empty translated queries",
+		env.Global.Warn("itunes-playlist-import: empty translated queries",
 			"empty", empties, "importable", probe.Imported)
 
 		if !dryRun && !params.AllowEmptyQueries {
@@ -296,7 +302,7 @@ func itunesPlaylistImportCore(ctx context.Context, params itunesPlaylistImportPa
 		if total, lerr := env.Store.CountSmartPlaylists(); lerr == nil {
 			verified = total
 		} else {
-			env.Logger.Warn("itunes-playlist-import: verification re-read failed", "err", lerr)
+			env.Global.Warn("itunes-playlist-import: verification re-read failed", "err", lerr)
 		}
 	}
 
@@ -304,7 +310,7 @@ func itunesPlaylistImportCore(ctx context.Context, params itunesPlaylistImportPa
 	if dryRun {
 		mode = "DRY-RUN"
 	}
-	env.Logger.Info("itunes-playlist-import complete",
+	env.Global.Info("itunes-playlist-import complete",
 		"mode", mode, "source", source, "path", libPath,
 		"playlistsInLibrary", len(lib.Playlists),
 		"smartFound", res.SmartFound,

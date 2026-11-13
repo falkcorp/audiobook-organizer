@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
 // last-edited: 2026-11-13
 
@@ -266,7 +266,7 @@ func (p *Plugin) libraryStateRepairKind(deps t6g5Deps, sched func(tasks.Kind) *t
 		Common: t6g5Common(p.repairLibraryStateDef(), libraryStateRepairKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (libraryStateRepairResult, error) {
 			var in libraryStateRepairInput
-			if err := t6g5DecodeStrictParams(libraryStateRepairKind, raw, &in, "dry_run", "dryRun"); err != nil {
+			if err := t6g5DecodeStrictParams(libraryStateRepairKind, raw, &in, t6g5ModeKeys...); err != nil {
 				return libraryStateRepairResult{}, err
 			}
 			base, err := t6g5NativeBase(libraryStateRepairKind, rc, deps, true)

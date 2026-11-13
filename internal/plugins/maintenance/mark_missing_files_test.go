@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files_test.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 8b2e4f61-9c73-45a0-8d1e-2f6a7c904b3d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -117,8 +117,8 @@ func TestMarkMissing_MarksGoneRowsAndPreservesRecord(t *testing.T) {
 	gone := filepath.Join(dir, "gone.mp3") // never written to disk
 	store := seedMark(gone, false)
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true}, &fakeReporter{})
+	t6g5h1 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h1, t6g5MarkEnv(context.Background(), t6g5h1.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 1, plan.WouldMarkMissing)
@@ -139,8 +139,8 @@ func TestMarkMissing_ClearsStaleFlag(t *testing.T) {
 	writeFile(t, present, 10)
 	store := seedMark(present, true) // stored Missing=true, but the file is there
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true}, &fakeReporter{})
+	t6g5h2 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h2, t6g5MarkEnv(context.Background(), t6g5h2.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 1, plan.WouldClearStale)
@@ -155,8 +155,8 @@ func TestMarkMissing_DryRunWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	store := seedMark(filepath.Join(dir, "gone.mp3"), false)
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{}, &fakeReporter{}) // Apply defaults to false
+	t6g5h3 := markMissingParams{}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h3, t6g5MarkEnv(context.Background(), t6g5h3.Apply, nil, &fakeReporter{})) // Apply defaults to false
 	require.NoError(t, err)
 
 	require.Equal(t, 1, plan.WouldMarkMissing, "dry run still reports the plan")
@@ -183,8 +183,8 @@ func TestMarkMissing_UnchangedRowsNotWritten(t *testing.T) {
 		},
 	}
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true}, &fakeReporter{})
+	t6g5h4 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h4, t6g5MarkEnv(context.Background(), t6g5h4.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 2, plan.Unchanged)
@@ -204,8 +204,8 @@ func TestMarkMissing_UnreadableLeavesFlagUntouched(t *testing.T) {
 	// Statting "afile/child.mp3" fails with ENOTDIR, which is not IsNotExist.
 	store := seedMark(filepath.Join(notADir, "child.mp3"), false)
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true}, &fakeReporter{})
+	t6g5h5 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h5, t6g5MarkEnv(context.Background(), t6g5h5.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 1, plan.Unreadable)
@@ -232,8 +232,8 @@ func TestMarkMissing_SkipsRowAlreadyReconciled(t *testing.T) {
 		}}},
 	}
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true}, &fakeReporter{})
+	t6g5h6 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h6, t6g5MarkEnv(context.Background(), t6g5h6.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 1, plan.WouldMarkMissing, "the plan still counts the row it intended to flip")
@@ -262,8 +262,8 @@ func TestMarkMissing_BooksBrokenCountsDistinctBooks(t *testing.T) {
 		},
 	}
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true}, &fakeReporter{})
+	t6g5h7 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h7, t6g5MarkEnv(context.Background(), t6g5h7.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 2, plan.BooksBrokenOnDisk, "b1 (two gone files, counted once) and b2; b3 is present")
@@ -293,8 +293,8 @@ func TestMarkMissing_BooksBrokenExcludesNonPrimary(t *testing.T) {
 		},
 	}
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true}, &fakeReporter{})
+	t6g5h8 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h8, t6g5MarkEnv(context.Background(), t6g5h8.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 1, plan.BooksBrokenOnDisk, "only b1 (primary) counts; b2 is a non-primary version")
@@ -315,8 +315,8 @@ func TestMarkMissing_CapIsBoundedAndDeterministic(t *testing.T) {
 	}
 	store := &markFakeStore{cores: cores, full: full}
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true, Max: 2}, &fakeReporter{})
+	t6g5h9 := markMissingParams{Apply: true, Max: 2}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h9, t6g5MarkEnv(context.Background(), t6g5h9.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 3, plan.WouldMarkMissing, "the count reflects the FULL set, not the capped slice")
@@ -351,8 +351,8 @@ func TestMarkMissing_ReportRecordsFlipsAndUnreadableOnly(t *testing.T) {
 		},
 	}
 
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: false}, &fakeReporter{}) // dry run — report still written
+	t6g5h10 := markMissingParams{Apply: false}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h10, t6g5MarkEnv(context.Background(), t6g5h10.Apply, nil, &fakeReporter{})) // dry run — report still written
 	require.NoError(t, err)
 
 	require.Equal(t, 1, plan.WouldMarkMissing)

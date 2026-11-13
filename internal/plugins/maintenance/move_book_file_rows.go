@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
 // last-edited: 2026-11-13
 
@@ -156,12 +156,6 @@ type mbfStore interface {
 
 var _ mbfStore = database.Store(nil)
 
-type mbfEnv struct {
-	store       mbfStore
-	itunesRoots []string
-	scan        ScanController
-}
-
 func (p *Plugin) moveBookFileRowsDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          mbfOpID,
@@ -232,6 +226,7 @@ func (p *Plugin) runMoveBookFileRows(ctx context.Context, raw json.RawMessage, r
 		return fmt.Errorf("database not initialized")
 	}
 	env := moveBookFileRowsEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, !dryRun), Lease: p.t6g5HeadLease(reporter)}
+	env.Progress = mbfHeadProgress(reporter)
 	report, runErr := runMoveBookFileRowsCore(ctx, mbfInput{Moves: params.Moves}, env)
 	if report != nil {
 		if sErr := registry.ReporterSetResult(reporter, report); sErr != nil {
@@ -241,15 +236,30 @@ func (p *Plugin) runMoveBookFileRows(ctx context.Context, raw json.RawMessage, r
 	return runErr
 }
 
+// mbfHeadProgress stamps liveness through the reporter. A failed progress write
+// is logged, not fatal: it loses a progress line, never a row. HEAD-only: the
+// native shell's progress is rc.Progress, which has no write to fail.
+func mbfHeadProgress(reporter sdk.Reporter) func(done, total int, msg string) {
+	return func(done, total int, msg string) {
+		if reporter == nil {
+			return
+		}
+		if err := reporter.UpdateProgress(done, total, msg); err != nil {
+			reporter.Logger().Warn(mbfOpName+": progress not recorded", "err", err)
+		}
+	}
+}
+
 // moveBookFileRowsKind builds the native kind. Writes: HEAD's declared
-// book_files resource; the preview is HEAD's dry run.
+// book_files resource and the books both ends of a move recompute
+// (MoveBookFilesToBookBulk); the preview is HEAD's dry run.
 func (p *Plugin) moveBookFileRowsKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)))
+	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)), tasks.Res("books", string(sdk.ResBooks)))
 	return tasks.Task(moveBookFileRowsKind, tasks.TaskSpec[json.RawMessage, mbfReport]{
 		Common: t6g5Common(p.moveBookFileRowsDef(), moveBookFileRowsKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (mbfReport, error) {
 			var in mbfInput
-			if err := t6g5DecodeStrictParams(moveBookFileRowsKind, raw, &in, "dry_run", "dryRun"); err != nil {
+			if err := t6g5DecodeStrictParams(moveBookFileRowsKind, raw, &in, t6g5ModeKeys...); err != nil {
 				return mbfReport{}, err
 			}
 			base, err := t6g5NativeBase(moveBookFileRowsKind, rc, deps, true)
@@ -280,19 +290,6 @@ func runMoveBookFileRowsCore(ctx context.Context, in mbfInput, env moveBookFileR
 		env.Logger.Info(mbfOpName+" complete", "summary", report.summary())
 	}
 	return report, runErr
-}
-
-// moveBookFileRows is moveBookFileRowsVia with HEAD's signature: a store of its
-// own, iTunes roots, a scan controller and a reporter.
-func moveBookFileRows(ctx context.Context, env mbfEnv, params mbfParams, reporter sdk.Reporter) (*mbfReport, error) {
-	dryRun, err := params.dryRun()
-	if err != nil {
-		return nil, err
-	}
-	via := moveBookFileRowsEnv{t6g5Base: t6g5ReporterBase(ctx, reporter, !dryRun), Lease: t6g5HeadLeaseOn(env.scan, reporter)}
-	return moveBookFileRowsVia(ctx, env.store,
-		func() ([]database.BookFileCore, error) { return database.AllBookFilesCoreIncludingRetired(env.store) },
-		env.store, env.itunesRoots, params.Moves, via)
 }
 
 // moveBookFileRowsVia plans every move, and on a live run applies the planned

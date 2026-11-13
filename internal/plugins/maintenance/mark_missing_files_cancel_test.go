@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files_cancel_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 5c8e2a47-3d19-4b6f-a0e4-7f12b9d36c85
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -63,7 +63,8 @@ func TestMarkMissing_PreCanceledRunDoesNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := planMarkMissingFiles(ctx, st, nil, markMissingParams{Apply: true}, &touchReporter{})
+	t6g5h1 := markMissingParams{Apply: true}
+	_, err := planMarkMissingFilesVia(ctx, st, st, t6g5h1, t6g5MarkEnv(ctx, t6g5h1.Apply, nil, &touchReporter{}))
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, st.updates, "a canceled run must write nothing")
 	require.Zero(t, st.getFilesCalls.Load())
@@ -85,7 +86,8 @@ func TestMarkMissing_CancelStopsBookPaging(t *testing.T) {
 		}
 	}
 
-	_, err := planMarkMissingFiles(ctx, st, nil, markMissingParams{}, &touchReporter{})
+	t6g5h2 := markMissingParams{}
+	_, err := planMarkMissingFilesVia(ctx, st, st, t6g5h2, t6g5MarkEnv(ctx, t6g5h2.Apply, nil, &touchReporter{}))
 	require.ErrorIs(t, err, context.Canceled)
 	require.EqualValues(t, 2, pages.Load(), "paging must stop after the page that saw the cancel")
 }
@@ -99,7 +101,8 @@ func TestMarkMissing_PlanPhaseStampsLiveness(t *testing.T) {
 		st.books = append(st.books, database.BookCore{ID: fmt.Sprintf("book%05d", i)})
 	}
 	rep := &touchReporter{}
-	_, err := planMarkMissingFiles(context.Background(), st, nil, markMissingParams{}, rep)
+	t6g5h3 := markMissingParams{}
+	_, err := planMarkMissingFilesVia(context.Background(), st, st, t6g5h3, t6g5MarkEnv(context.Background(), t6g5h3.Apply, nil, rep))
 	require.NoError(t, err)
 	require.EqualValues(t, 2+3, rep.touches.Load(), "2 around the row read + 1 per books page")
 }
@@ -111,7 +114,8 @@ func TestMarkMissing_ApplyStatPassStampsLiveness(t *testing.T) {
 	rows := 2*bookFileStatLivenessEvery + 2 // beats at 0, 64, 128
 	st := goneRows(t, "b1", rows)
 	rep := &touchReporter{}
-	plan, err := planMarkMissingFiles(context.Background(), st, nil, markMissingParams{Apply: true}, rep)
+	t6g5h4 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), st, st, t6g5h4, t6g5MarkEnv(context.Background(), t6g5h4.Apply, nil, rep))
 	require.NoError(t, err)
 	require.Equal(t, rows, plan.MarkedMissing)
 	// 3 plan-phase stamps (2 around the row read + 1 books page), 3 stat-pass
@@ -134,7 +138,8 @@ func TestMarkMissing_CancelStopsApplyStatPass(t *testing.T) {
 		}
 	}
 
-	_, err := planMarkMissingFiles(ctx, st, nil, markMissingParams{Apply: true}, rep)
+	t6g5h5 := markMissingParams{Apply: true}
+	_, err := planMarkMissingFilesVia(ctx, st, st, t6g5h5, t6g5MarkEnv(ctx, t6g5h5.Apply, nil, rep))
 	// The cancel lands inside the stat pass, which returns ctx.Err() before any
 	// write is planned, so the plan call itself must surface it.
 	require.ErrorIs(t, err, context.Canceled)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-11-13
 
@@ -311,7 +311,8 @@ type icUserState interface {
 	CarryStateBetweenLiveBooks(toID, fromID string) error
 }
 
-// icMergeUserState is icUserState over a merge.UserProgressMerger.
+// icMergeUserState is icUserState and regroupUserState over a
+// merge.UserProgressMerger.
 type icMergeUserState struct{ um merge.UserProgressMerger }
 
 func (m icMergeUserState) CarryStateBeforeHardDelete(keepID, doomedID string) error {
@@ -322,6 +323,16 @@ func (m icMergeUserState) HardDeleteWithoutUserState(bookID string, del func() e
 }
 func (m icMergeUserState) CarryStateBetweenLiveBooks(toID, fromID string) error {
 	return merge.CarryStateBetweenLiveBooks(m.um, toID, fromID)
+}
+func (m icMergeUserState) CarryStateThenHardDelete(keepID, doomedID string, precheck, del func() error) error {
+	return merge.CarryStateThenHardDelete(m.um, keepID, doomedID, precheck, del)
+}
+func (m icMergeUserState) NewUserStateProbe() (regroupStateProbe, error) {
+	p, err := merge.NewUserStateProbe(m.um)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 type icRunner struct {
@@ -504,7 +515,7 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	base := p.t6g5HeadBase(ctx, reporter, params.Apply || params.Rollback || params.Repair)
 	env := itunesCloneEnv{
 		t6g5Base: base, Items: t6g5HeadItems(reporter), Lease: p.t6g5HeadLease(reporter),
-		RootDir: rootDir, Reads: headT6g5Store{p},
+		RootDir: rootDir, Reads: base.Store,
 		NewRunner: func(writes bool) (*icRunner, error) {
 			reflink := p.reflinkFile
 			if reflink == nil {
@@ -529,18 +540,23 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 
 // itunesCloneIntoLibraryKind builds the native kind. Writes found: books,
 // book_files and the chapter table through the store calls, the book rows the
-// clone creates (CloneBookIntoLibrary) and the undo records in _system
-// preferences (SetUserPreferenceForUser); HEAD declares only capabilities.
-// apply, rollback and repair stay params (HEAD's LiveOneOf): a preview forces
-// all three false, a live run must name exactly one.
+// clone creates (CloneBookIntoLibrary), the credit lists (SetBookAuthors), the
+// listening state a rollback carries back to the source (icUserState) and the
+// undo records in _system preferences (SetUserPreferenceForUser); HEAD declares
+// only capabilities.
+// apply, rollback and repair stay params (HEAD's LiveOneOf: they pick which
+// write a live run makes, they are not the run's mode): a preview forces all
+// three false, a live run must name exactly one. dry_run and dryRun, which
+// would carry the mode, are refused like every writing kind's.
 func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"),
-		tasks.Res("books", "chapters"), tasks.Res("books", "user_preferences"))
+		tasks.Res("books", "chapters"), tasks.Res("books", "user_preferences"),
+		tasks.Res("books", "authors"), tasks.Res("books", "user_state"))
 	return tasks.Task(itunesCloneIntoLibraryKind, tasks.TaskSpec[json.RawMessage, *icReport]{
 		Common: t6g5Common(p.itunesCloneIntoLibraryDef(), itunesCloneIntoLibraryKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (*icReport, error) {
 			var params icParams
-			if err := t6g5DecodeParams(itunesCloneIntoLibraryKind, raw, &params); err != nil {
+			if err := t6g5DecodeParams(itunesCloneIntoLibraryKind, raw, &params, "dry_run", "dryRun"); err != nil {
 				return nil, err
 			}
 			base, err := t6g5NativeBase(itunesCloneIntoLibraryKind, rc, deps, true)
@@ -563,6 +579,10 @@ func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind
 						tags:     base.Store,
 						userOps:  base.Writer,
 						pathRows: base.Store.BookFileRowsAtPathStrict,
+						// The rollback's retired-shell guard reads the run's store for
+						// the retired rows (database.RefuseRetiredShell); without it
+						// every rollback is refused.
+						reads: base.Store,
 					}
 					if writes {
 						run.chapters = icChaptersJoin{base.Store, base.Writer}
