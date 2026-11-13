@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/build.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e48d09a-7583-4133-9749-d96bbfaf2aa5
 // last-edited: 2026-11-13
 
@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"runtime/debug"
 	"slices"
 	"time"
@@ -266,12 +265,24 @@ type build struct {
 	now       func() time.Time
 }
 
-var runIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
-
 // ValidRunID reports whether id is safe as a file name stem: letters, digits,
 // underscore and hyphen only. A run ID that is not never reaches the
 // filesystem.
-func ValidRunID(id string) bool { return runIDRE.MatchString(id) }
+func ValidRunID(id string) bool { return plainName(id) }
+
+// plainName is ^[A-Za-z0-9_-]{1,128}$: a name safe as one path element.
+func plainName(s string) bool {
+	if len(s) == 0 || len(s) > 128 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
 
 // BundleFile is the zip's name for a run.
 func BundleFile(runID string) string { return runID + ".zip" }
@@ -310,8 +321,9 @@ func (e *Exporter) Build(ctx context.Context, runID string, p ExportParams, prog
 	finished := false
 	defer func() {
 		if !finished {
-			_ = f.Close()
-			_ = e.cfg.Root.Remove(tmp)
+			// The run already failed with err; a file that will not close or
+			// will not go is reported beside it, never instead of it.
+			err = errors.Join(err, f.Close(), e.cfg.Root.Remove(tmp))
 			e.countBundle("error")
 		}
 	}()

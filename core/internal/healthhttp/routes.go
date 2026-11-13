@@ -442,7 +442,13 @@ func (a *api) download(w http.ResponseWriter, r *http.Request, c caller) {
 		a.fail(w, r, err)
 		return
 	}
-	defer func() { _ = b.Close() }()
+	defer func() {
+		// A read-only file's close failure changes nothing for the response;
+		// it is logged for the operator.
+		if err := b.Close(); err != nil {
+			a.logf(r.Context(), "healthhttp: close bundle", err)
+		}
+	}()
 
 	ctx := audit.WithActor(r.Context(), c.actor(r))
 	ev := audit.Event{

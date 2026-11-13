@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/download.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2ff7848-fe31-45cc-b7b9-a67d28dad6a2
 // last-edited: 2026-11-13
 
@@ -13,7 +13,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -41,13 +40,11 @@ type Bundle struct {
 	ModTime  time.Time
 }
 
-var bundleFileRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}\.zip$`)
-
 // OpenBundle opens file ("<run-id>.zip") inside root and reads its manifest. A
 // name that is not a plain bundle name is ErrExpired, never a path: the root
 // would refuse an escape, and the name is refused before it gets that far.
 func OpenBundle(root *os.Root, file string) (*Bundle, error) {
-	if !bundleFileRE.MatchString(file) {
+	if id, ok := strings.CutSuffix(file, ".zip"); !ok || !plainName(id) {
 		return nil, ErrExpired
 	}
 	f, err := root.Open(file)
@@ -59,18 +56,15 @@ func OpenBundle(root *os.Root, file string) (*Bundle, error) {
 	}
 	fi, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("diagnostics: stat %s: %w", file, err)
+		return nil, errors.Join(fmt.Errorf("diagnostics: stat %s: %w", file, err), f.Close())
 	}
 	zr, err := zip.NewReader(f, fi.Size())
 	if err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+		return nil, errors.Join(fmt.Errorf("%w: %v", ErrCorrupt, err), f.Close())
 	}
 	b := &Bundle{f: f, zr: zr, ModTime: fi.ModTime()}
 	if err := b.readManifest(); err != nil {
-		_ = f.Close()
-		return nil, err
+		return nil, errors.Join(err, f.Close())
 	}
 	return b, nil
 }
@@ -153,7 +147,13 @@ func (b *Bundle) Stream(dst io.Writer, can func(rbac.Permission) bool) (omitted 
 	return omitted, nil
 }
 
-var pruneRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}\.zip(\.tmp)?$`)
+// isBundleName is ^<plain name>\.zip(\.tmp)?$: a finished bundle or the partial
+// of a run that stopped.
+func isBundleName(name string) bool {
+	name = strings.TrimSuffix(name, ".tmp")
+	id, ok := strings.CutSuffix(name, ".zip")
+	return ok && plainName(id)
+}
 
 // Prune removes bundle files (and abandoned ".zip.tmp" partials) whose
 // modification time is older than retention at now. It touches only names
@@ -165,13 +165,13 @@ func Prune(root *os.Root, retention time.Duration, now time.Time) (removed int, 
 		return 0, fmt.Errorf("diagnostics: open dir: %w", err)
 	}
 	ents, err := d.ReadDir(-1)
-	_ = d.Close()
+	err = errors.Join(err, d.Close())
 	if err != nil {
 		return 0, fmt.Errorf("diagnostics: read dir: %w", err)
 	}
 	var errs []error
 	for _, de := range ents {
-		if de.IsDir() || !pruneRE.MatchString(de.Name()) {
+		if de.IsDir() || !isBundleName(de.Name()) {
 			continue
 		}
 		fi, ierr := de.Info()

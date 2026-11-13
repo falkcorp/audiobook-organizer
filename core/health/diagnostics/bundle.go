@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-13
 
@@ -17,7 +17,6 @@ import (
 	"io/fs"
 	"iter"
 	"log/slog"
-	"regexp"
 	"strings"
 
 	"github.com/falkcorp/mediacore/rbac"
@@ -108,16 +107,17 @@ func WriteJSONL[T any](w Writer, name string, items iter.Seq[T]) error {
 	pr, pw := io.Pipe()
 	go func() {
 		enc := json.NewEncoder(pw)
+		var encErr error
 		for it := range items {
-			if err := enc.Encode(it); err != nil {
-				_ = pw.CloseWithError(err)
-				return
+			if encErr = enc.Encode(it); encErr != nil {
+				break
 			}
 		}
-		_ = pw.Close()
+		// A nil encErr is a clean end of stream (what Close would send).
+		pw.CloseWithError(encErr)
 	}()
 	err := w.File(name, pr)
-	_ = pr.CloseWithError(err) // unblocks the producer if File stopped reading
+	pr.CloseWithError(err) // unblocks the producer if File stopped reading
 	return err
 }
 
@@ -256,10 +256,27 @@ func (st *build) redactString(key, s string) (out string) {
 // It is exact: a string that merely starts with "<secret:" must not skip the
 // pattern layer.
 func isTypedPlaceholder(s string) bool {
-	return s == "<redacted>" || secretPlaceholderRE.MatchString(s)
+	return s == "<redacted>" || secretPlaceholder(s)
 }
 
-var secretPlaceholderRE = regexp.MustCompile(`^<secret:[A-Za-z0-9_.-]{1,128}>$`)
+// secretPlaceholder is ^<secret:[A-Za-z0-9_.-]{1,128}>$.
+func secretPlaceholder(s string) bool {
+	id, ok := strings.CutPrefix(s, "<secret:")
+	if !ok {
+		return false
+	}
+	id, ok = strings.CutSuffix(id, ">")
+	if !ok || len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
 
 // walk redacts a decoded JSON tree under key. A deny-listed key replaces its
 // whole value, whatever its kind.
@@ -336,12 +353,28 @@ func (st *build) redactJSON(v any, pretty bool) ([]byte, error) {
 	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
-// sectionNameRE is "<moduleID>.<name>": two or more dot-separated segments of
-// [a-z0-9_-] starting with [a-z0-9].
-var sectionNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+$`)
-
-// validSectionName is the grammar of Section.Name.
-func validSectionName(n string) bool { return sectionNameRE.MatchString(n) }
+// validSectionName is the grammar of Section.Name, "<moduleID>.<name>": two or
+// more dot-separated segments of [a-z0-9_-], each starting with [a-z0-9]
+// (^[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+$).
+func validSectionName(n string) bool {
+	segs := strings.Split(n, ".")
+	if len(segs) < 2 {
+		return false
+	}
+	for _, seg := range segs {
+		if seg == "" {
+			return false
+		}
+		for i := 0; i < len(seg); i++ {
+			c := seg[i]
+			digitOrLower := c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
+			if !digitOrLower && (i == 0 || (c != '_' && c != '-')) {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // validEntryName reports whether name is a relative path with no "..", no
 // backslash, no NUL and no empty segment: a zip entry that cannot climb out of
@@ -450,8 +483,10 @@ func (w *sectionWriter) File(name string, r io.Reader) error {
 				return err
 			}
 			if e.over {
-				_, _ = io.Copy(io.Discard, br) // the producer finishes; nothing more is kept
-				return nil
+				// The producer finishes; nothing more is kept. A read error
+				// while draining is still an error of the section.
+				_, err := io.Copy(io.Discard, br)
+				return err
 			}
 		}
 		if rerr == io.EOF {

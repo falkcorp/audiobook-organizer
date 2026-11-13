@@ -186,9 +186,12 @@ func (s *Startup) markDegraded(st StartupStep) {
 	s.reg.metrics.recordStartup(st.Name, true)
 	id := ComponentID(degradedComponentPrefix + st.Token)
 	res := Result{Status: StatusDegraded, Reason: st.Token, Detail: "startup step " + st.Name + " failed"}
-	// Two steps may share a token, so the component may already exist: the
-	// duplicate-Register error is expected and report below sets its result.
-	_, _ = s.reg.Register(Check{ID: id, Title: "Startup step " + st.Name})
+	// Two steps may share a token, so the component may already exist: that
+	// answer is expected and report below sets its result. Any other refusal
+	// (an invalid token) is logged, not swallowed.
+	if _, err := s.reg.Register(Check{ID: id, Title: "Startup step " + st.Name}); err != nil && !errors.Is(err, ErrComponentExists) && s.log != nil {
+		s.log.Error("startup degraded component not registered", "step", st.Name, "token", st.Token, "err", err)
+	}
 	s.reg.report(id, res)
 	s.reg.mu.Lock()
 	pending := s.reg.startupPending
