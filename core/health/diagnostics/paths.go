@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-13
 
@@ -51,8 +51,9 @@ func newPathRoots(in []PathRoot) pathRoots {
 // limit of free text: a path with spaces outside every root leaks its tail
 // here. Structured values go through redactValue, which has the whole string.
 //
-// The rewrite is idempotent: "<root:lib>/x" and "<path>" start with "<" and
-// ">" is never a path boundary, so a second pass leaves them alone.
+// The rewrite is a fixed point: the ">" that ends "<root:NAME>" is not a
+// boundary (pathBoundary) and the rule never writes a path after "<path>", so a
+// second pass leaves both alone.
 func (r pathRoots) redactPaths(s string) string {
 	if !strings.ContainsAny(s, "/\\") {
 		return s
@@ -60,7 +61,7 @@ func (r pathRoots) redactPaths(s string) string {
 	var b strings.Builder
 	last := 0
 	for i := 0; i < len(s); {
-		if !pathStart(s, i) {
+		if !r.pathStart(s, i) {
 			i++
 			continue
 		}
@@ -122,18 +123,22 @@ func isRoute(run string) bool {
 }
 
 // redactValue rewrites a string that is a whole value (a JSON string, as
-// opposed to a line of prose). When the entire value is an absolute path it is
-// replaced as one, spaces and all, so "/Users/bruce/Library/Application
-// Support/app/db" does not leak its tail; a value with a newline, one that is
-// not path-shaped, or a route is left to redactPaths.
+// opposed to a line of prose). When the entire value is one clean absolute path
+// it is replaced as one, spaces and all, so "/Users/bruce/Library/Application
+// Support/app/db" does not leak its tail. A value that is more than that (a
+// second path later in the text, ": " and a message, a quoted string, a path
+// filepath.Clean would change) is prose that starts with a path, and goes to
+// redactPaths so every path in it is rewritten and none of its text is lost to
+// the replacement. A newline, a value that is not path-shaped, and a route
+// take the same road.
 func (r pathRoots) redactValue(s string) string {
-	if s == "" || strings.ContainsAny(s, "\n\r") || !absolutePath(s) {
+	if s == "" || strings.ContainsAny(s, "\n\r") || !absolutePath(s) || !r.singlePath(s) {
 		return r.redactPaths(s)
 	}
 	for _, root := range r {
 		if rest, ok := underRoot(s, root.Path); ok {
 			if rest != "" && !isPathSep(rest[0]) {
-				return r.redactPaths(s) // a delimiter after the root: prose, not a bare path
+				return r.redactPaths(s) // punctuation after the root: prose
 			}
 			return "<root:" + root.Name + ">" + slashes(rest)
 		}
@@ -142,6 +147,23 @@ func (r pathRoots) redactValue(s string) string {
 		return r.redactPaths(s)
 	}
 	return "<path>"
+}
+
+// singlePath reports whether s, which starts as an absolute path, is nothing
+// but that path: no later path start, no ": " (a message after the path), no
+// double quote or backtick, and filepath.Clean leaves it as it is. An
+// apostrophe is a character of names ("/Music/Bruce's Mix"); a quoted second
+// path is caught by the later-path-start rule.
+func (r pathRoots) singlePath(s string) bool {
+	if strings.Contains(s, ": ") || strings.ContainsAny(s, "\"`") || filepath.Clean(s) != s {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if r.pathStart(s, i) {
+			return false
+		}
+	}
+	return true
 }
 
 // absolutePath reports a value that starts as an absolute path: "/x", a
@@ -230,8 +252,8 @@ func isPathDelim(c byte) bool {
 }
 
 // pathStart reports whether an absolute path begins at s[i].
-func pathStart(s string, i int) bool {
-	if i > 0 && !pathBoundary(s, i) {
+func (r pathRoots) pathStart(s string, i int) bool {
+	if i > 0 && !r.pathBoundary(s, i) {
 		return false
 	}
 	return pathStartAt(s, i)
@@ -250,12 +272,17 @@ func pathStartAt(s string, i int) bool {
 	}
 }
 
-// pathBoundary reports whether a path may start after s[i-1]. A "<" or ">" is
-// never a boundary: "</div>" closes a tag and "<root:lib>/x" is already a
-// rewritten path.
-func pathBoundary(s string, i int) bool {
+// pathBoundary reports whether a path may start after s[i-1]. A "<" and a ">"
+// are boundaries like any delimiter ("<b>/home/bruce/x" has a path in it), with
+// two narrow exceptions that keep the rewrite a fixed point and leave markup
+// alone: a ">" that ends the placeholder of a configured root ("<root:NAME>"),
+// whose tail is already rewritten, and the "/" of a closing tag
+// ("</div>": "/", tag-name characters, then ">").
+func (r pathRoots) pathBoundary(s string, i int) bool {
 	switch c := s[i-1]; {
-	case c == '<' || c == '>':
+	case c == '>' && r.endsRootPlaceholder(s, i):
+		return false
+	case c == '<' && closingTag(s, i):
 		return false
 	case isPathDelim(c):
 		return true
@@ -266,6 +293,37 @@ func pathBoundary(s string, i int) bool {
 		return i >= 3 && s[i-2] == '/' && s[i-3] == ':'
 	}
 	return false
+}
+
+// endsRootPlaceholder reports whether the ">" at s[i-1] closes "<root:NAME>"
+// for the name of a configured root: the redactor's own output, whose tail is
+// already rewritten. "<path>" is not skipped: the redactor never writes a
+// path right after it, so "<path>/home/bruce/x" is a path to redact. A name no
+// root has is text someone wrote, not output of this rule.
+func (r pathRoots) endsRootPlaceholder(s string, i int) bool {
+	open := strings.LastIndexByte(s[:i-1], '<')
+	if open < 0 {
+		return false
+	}
+	name, ok := strings.CutPrefix(s[open:i], "<root:")
+	if !ok {
+		return false
+	}
+	name, ok = strings.CutSuffix(name, ">")
+	return ok && slices.ContainsFunc(r, func(root PathRoot) bool { return root.Name == name })
+}
+
+// closingTag reports whether s[i] is the "/" of "</name>": tag-name characters
+// follow it and then ">".
+func closingTag(s string, i int) bool {
+	if s[i] != '/' {
+		return false
+	}
+	j := i + 1
+	for j < len(s) && (s[j] >= 'a' && s[j] <= 'z' || s[j] >= 'A' && s[j] <= 'Z' || s[j] >= '0' && s[j] <= '9') {
+		j++
+	}
+	return j > i+1 && j < len(s) && s[j] == '>'
 }
 
 // winDrive reports "X:\" or "X:/" at s[i].
