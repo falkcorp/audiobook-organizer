@@ -1,7 +1,7 @@
 // file: internal/server/invite_guest_access.go
-// version: 1.12.4
+// version: 1.12.5
 // guid: 5b2e9c47-8a13-4d6f-b3e1-0c7a4f8d2e95
-// last-edited: 2026-11-11
+// last-edited: 2026-11-13
 
 package server
 
@@ -17,9 +17,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	imail "github.com/falkcorp/audiobook-organizer/internal/mail"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	coreauth "github.com/falkcorp/mediacore/auth"
+	imail "github.com/falkcorp/mediacore/integrations/notify/mail"
 )
 
 var inviteAccessLog = logger.New("server.invites")

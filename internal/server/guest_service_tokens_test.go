@@ -1,7 +1,7 @@
 // file: internal/server/guest_service_tokens_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4d8a2f63-7b19-4c50-a3e8-1f6c9b0d5e27
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package server
 
@@ -28,8 +28,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cfservicetoken"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
-	"github.com/falkcorp/audiobook-organizer/internal/mail/mailtest"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/mediacore/coretest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -810,7 +810,7 @@ func TestGuestToken_PublicLookupAnnouncesTheKeyOnlyWhenItWillBeMinted(t *testing
 
 func TestGuestToken_EmailOptInSendsPostAcceptMail(t *testing.T) {
 	f := newTokenFixture(t)
-	rec := &mailtest.Recorder{}
+	rec := &coretest.MailRecorder{}
 	f.srv.mailSenderOverride = rec
 	// Default off: no mail.
 	_, _ = f.acceptGuest(t, strings.Repeat("a", 64), "guesta")
