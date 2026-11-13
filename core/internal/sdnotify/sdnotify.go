@@ -1,7 +1,7 @@
 // file: core/internal/sdnotify/sdnotify.go
-// version: 2.1.3
+// version: 2.2.0
 // guid: 96427de2-bc6f-4a85-9a35-774bdfed9ee7
-// last-edited: 2026-11-08
+// last-edited: 2026-11-13
 
 // Package sdnotify implements the systemd notify protocol (sd_notify(3)) with
 // the standard library only.
@@ -143,4 +143,38 @@ func ExtendTimeout(d time.Duration) error {
 		return nil
 	}
 	return notify("EXTEND_TIMEOUT_USEC=" + strconv.FormatInt(d.Microseconds(), 10))
+}
+
+// Watchdog pings systemd's watchdog ("WATCHDOG=1"). The service must send it at
+// least every WatchdogInterval's full period (WATCHDOG_USEC) or systemd kills
+// it; health.Supervisor sends it at half that, from the same heartbeat that
+// answers /livez, so a wedged process stops pinging and is restarted.
+func Watchdog() error { return notify("WATCHDOG=1") }
+
+// Active reports whether a notify socket is set, so the two uses of
+// EXTEND_TIMEOUT_USEC that are only meaningful under systemd can be skipped
+// (Docker and launchd have no equivalent).
+func Active() bool { return os.Getenv(lifecycle.NotifySocketEnv) != "" }
+
+// watchdogUSECEnv and watchdogPIDEnv are sd_watchdog_enabled(3)'s variables.
+const (
+	watchdogUSECEnv = "WATCHDOG_USEC"
+	watchdogPIDEnv  = "WATCHDOG_PID"
+)
+
+// WatchdogInterval is the watchdog period the unit's WatchdogSec= set
+// (WATCHDOG_USEC), or zero when it set none, when the value is not a positive
+// integer, or when WATCHDOG_PID names another process (a forked child must not
+// ping for its parent). The caller pings at half of it.
+func WatchdogInterval() time.Duration {
+	usec, err := strconv.ParseInt(os.Getenv(watchdogUSECEnv), 10, 64)
+	if err != nil || usec <= 0 {
+		return 0
+	}
+	if pid := os.Getenv(watchdogPIDEnv); pid != "" {
+		if n, err := strconv.Atoi(pid); err != nil || n != os.Getpid() {
+			return 0
+		}
+	}
+	return time.Duration(usec) * time.Microsecond
 }

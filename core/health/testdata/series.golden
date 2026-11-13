@@ -1,0 +1,17 @@
+# file: core/health/testdata/series.golden
+# version: 1.0.0
+# guid: d4a1c7e3-5f28-4b96-8c0d-7e3b9a2f6d51
+# last-edited: 2026-11-13
+#
+# The health, diagnostics and shutdown core scopes' series (05-health §5H.8):
+# family<TAB>type<TAB>labels, checked by TestHealthSeries_Golden. Core fixes a
+# scope's prefix at "<namespace>.<subsystem>", so the spec's one table is three
+# scopes; this one golden lists all eight families.
+mediacore_diagnostics_bundles_total	counter	outcome
+mediacore_diagnostics_redactions_total	counter	layer
+mediacore_health_check_duration_seconds	histogram	component
+mediacore_health_check_failures_total	counter	component,reason
+mediacore_health_component_status	gauge	component
+mediacore_health_ready	gauge	
+mediacore_health_startup_degraded	gauge	step
+mediacore_shutdown_phase_seconds	histogram	phase

@@ -1,7 +1,7 @@
 // file: core/health/registry_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: e0849cfa-c877-4bf8-98f6-53c0658eea4c
-// last-edited: 2026-11-10
+// last-edited: 2026-11-13
 
 package health
 
@@ -11,6 +11,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -307,7 +308,7 @@ func TestRegistry_ProbeRunsOnceAtRegister(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	rep.Report(Result{Status: StatusDegraded})
 	if calls != 1 {
-		t.Fatalf("Probe ran %d times, want 1: the loop is F8's", calls)
+		t.Fatalf("Probe ran %d times, want 1: nothing starts the loop but StartChecks", calls)
 	}
 
 	// A probe that panics or returns a bad Reason is contained.
@@ -318,8 +319,8 @@ func TestRegistry_ProbeRunsOnceAtRegister(t *testing.T) {
 			alleyState = c
 		}
 	}
-	if alleyState.Result.Status != StatusDown || alleyState.Result.Reason != "probe_panicked" {
-		t.Errorf("a panicking probe = %+v, want Down probe_panicked", alleyState.Result)
+	if alleyState.Result.Status != StatusDown || alleyState.Result.Reason != "check_panic" {
+		t.Errorf("a panicking probe = %+v, want Down check_panic", alleyState.Result)
 	}
 	if strings.Contains(alleyState.Result.Detail, "joker") == false {
 		t.Errorf("the panic value is missing from Detail: %q", alleyState.Result.Detail)
@@ -330,10 +331,10 @@ func TestRegistry_ProbeTimeoutIsItsContext(t *testing.T) {
 	r := NewRegistry()
 	mustRegister(t, r, Check{ID: cave, Timeout: 30 * time.Millisecond, Probe: func(ctx context.Context) Result {
 		<-ctx.Done()
-		return Result{Status: StatusDown, Reason: "timed_out", Detail: ctx.Err().Error()}
+		return Result{Status: StatusUp, Reason: "answered_late"}
 	}})
-	if got := r.Snapshot().Components[0].Result; got.Reason != "timed_out" {
-		t.Errorf("result = %+v: the probe's context never expired", got)
+	if got := r.Snapshot().Components[0].Result; got.Status != StatusDown || got.Reason != "check_timeout" {
+		t.Errorf("result = %+v: an answer after the deadline must be Down check_timeout", got)
 	}
 }
 
@@ -392,15 +393,24 @@ func TestErrNotOwnedIsASentinel(t *testing.T) {
 	}
 }
 
-// TestNoGlobals_Health is 03 R5 for core/health's readiness core: registry.go
-// and reporter.go hold no package-level mutable state, so one Registry per
-// App stays one. A package-level var may only be a sentinel error built by
-// errors.New (ErrNotOwned); consts, types and funcs are not state. The
-// app package's TestNoGlobals scans every core file for the process
-// globals (default registry, slog default); this one scans these two files
+// TestNoGlobals_Health is 03 R5 for core/health: no non-test file of the
+// package holds package-level mutable state, so one Registry per App stays
+// one. A package-level var may only be a sentinel error built by errors.New
+// (ErrNotOwned, ErrUnknownStep); consts, types and funcs are not state. The
+// app package's TestNoGlobals scans every core file for the process globals
+// (default registry, slog default); this one scans every file of this package
 // for any package-level var at all.
 func TestNoGlobals_Health(t *testing.T) {
-	for _, file := range []string{"registry.go", "reporter.go"} {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanned := 0
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		scanned++
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
 		if err != nil {
@@ -418,6 +428,9 @@ func TestNoGlobals_Health(t *testing.T) {
 				}
 			}
 		}
+	}
+	if scanned < 6 {
+		t.Fatalf("scanned %d files, want every non-test file of the package (registry, reporter, snapshot, checks, probes, startup, ...)", scanned)
 	}
 }
 
