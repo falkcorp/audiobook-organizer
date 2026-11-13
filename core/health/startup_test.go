@@ -1,5 +1,5 @@
 // file: core/health/startup_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d2e9b4c-1a85-4f73-b0c6-3e8a7d5f2b19
 // last-edited: 2026-11-13
 
@@ -191,11 +191,13 @@ func TestCoreStartupSteps_TableIsValid(t *testing.T) {
 	}
 }
 
-// TestStartup_ExtendPerStepNeverTimer: EXTEND_TIMEOUT_USEC is sent once per
+// TestStartup_ExtendNeverOnATimer: EXTEND_TIMEOUT_USEC is sent once per
 // ExtendStart call, each asking for StartupStepBudget, and never on a timer: an
 // hour of fake time with no step sends nothing (a hung step must still be
-// killed at its own budget), and nothing is sent without a supervisor.
-func TestStartup_ExtendPerStepNeverTimer(t *testing.T) {
+// killed at its own budget), and nothing is sent without a supervisor. The
+// per-step half, over a real notify socket and a startup table, is
+// TestStartup_ExtendPerStepNeverTimer.
+func TestStartup_ExtendNeverOnATimer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		n := &fakeNotifier{active: true}
 		sup := NewSupervisor(nil, n)

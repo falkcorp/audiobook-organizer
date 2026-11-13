@@ -1,5 +1,5 @@
 // file: core/health/startup.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3a9e18-2c54-4b6f-b0a1-9e8f5c2d4a61
 // last-edited: 2026-11-13
 
@@ -193,10 +193,7 @@ func (s *Startup) markDegraded(ctx context.Context, st StartupStep) {
 		s.log.ErrorContext(ctx, "startup degraded component not registered", "step", st.Name, "token", st.Token, "err", err)
 	}
 	s.reg.report(id, res)
-	s.reg.mu.Lock()
-	pending := s.reg.startupPending
-	s.reg.mu.Unlock()
-	s.reg.setStartup(pending, tokens)
+	s.reg.setStartupTokens(tokens)
 }
 
 // Degraded is the tokens of the Degraded steps that failed, sorted and without
@@ -223,7 +220,7 @@ func (s *Startup) Complete() {
 	if s.reg == nil {
 		return
 	}
-	s.reg.setStartup(false, s.Degraded())
+	s.reg.setStartupPending(false)
 }
 
 // CoreStartupSteps is the core rows of the startup table (the steps core runs
