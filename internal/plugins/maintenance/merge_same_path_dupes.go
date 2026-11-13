@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.5.1
+// version: 1.6.1
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — MERGE repair for duplicate book records that point at the
 // exact same audio file.
@@ -45,8 +45,8 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // mergeSamePathDefaultMax bounds how many GROUPS one run will merge, so a first
@@ -182,22 +182,75 @@ func (p *Plugin) mergeSamePathDupesDef() sdk.OperationDef {
 	}
 }
 
+// mergeSamePathMerger is the one write the op makes: the safe merge path.
+type mergeSamePathMerger interface {
+	// MergeBooks merges bookIDs into primaryID under opID (the sibling-move undo
+	// journal key) and returns the loser count.
+	MergeBooks(opID string, bookIDs []string, primaryID string) (int, error)
+}
+
+// mergeSamePathDupesKind is the native kind of maintenance.merge-same-path-dupes (F5-10).
+const mergeSamePathDupesKind tasks.Kind = "books.maintenance.merge-same-path-dupes"
+
+// mergeSamePathDupesEnv is what the op's cores need from their engine: the base
+// and the worker pool.
+type mergeSamePathDupesEnv struct {
+	t6g5Base
+	Items t6g5ItemsFunc
+}
+
+// runMergeSamePathDupes is the v2 shell: HEAD's strict params decode and its
+// "database not initialized" check, then the shared core.
 func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params mergeSamePathParams
 	if err := decodeOpParams(rawParams, &params); err != nil {
 		return fmt.Errorf("merge-same-path-dupes: decode params: %w", err)
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
+	if p.deps.OpsStore() == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	log := reporter.Logger()
+	env := mergeSamePathDupesEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, params.Apply), Items: t6g5HeadItems(reporter)}
+	_, err := runMergeSamePathDupesCore(ctx, params, env)
+	return err
+}
+
+// mergeSamePathDupesKind builds the native kind. Writes: HEAD's declared
+// book_files resource and what the merge it calls writes (MergeBooks: the
+// books, the external-id reroute, the losers' listening state following the
+// survivor, the undo journal); the preview is HEAD's dry run. The params decode into
+// HEAD's struct after the mode key (apply) is refused.
+func (p *Plugin) mergeSamePathDupesKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBooks)), tasks.Res("books", string(sdk.ResBookFiles)),
+		tasks.Res("books", "external_ids"), tasks.Res("books", "user_state"), tasks.Res("books", "operations"))
+	return tasks.Task(mergeSamePathDupesKind, tasks.TaskSpec[json.RawMessage, mergeSamePathPlan]{
+		Common: t6g5Common(p.mergeSamePathDupesDef(), mergeSamePathDupesKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (mergeSamePathPlan, error) {
+			if err := t6g5RefuseModeKeys(mergeSamePathDupesKind, raw, t6g5ModeKeys...); err != nil {
+				return mergeSamePathPlan{}, err
+			}
+			var params mergeSamePathParams
+			if err := decodeOpParams(raw, &params); err != nil {
+				return mergeSamePathPlan{}, fmt.Errorf("merge-same-path-dupes: decode params: %w", err)
+			}
+			base, err := t6g5NativeBase(mergeSamePathDupesKind, rc, deps, true)
+			if err != nil {
+				return mergeSamePathPlan{}, err
+			}
+			return runMergeSamePathDupesCore(rc.Context(), params, mergeSamePathDupesEnv{t6g5Base: base, Items: t6g5NativeItems(rc)})
+		},
+	})
+}
+
+// runMergeSamePathDupesCore is the shared body of both shells. The mode is
+// env.Live; params.Apply is not read.
+func runMergeSamePathDupesCore(ctx context.Context, params mergeSamePathParams, env mergeSamePathDupesEnv) (mergeSamePathPlan, error) {
+	log := env.Logger
 
 	// Resolve the report path before any work: with no reportPath and no usable
 	// root_dir the run must fail with nothing done, not apply and then lose its record.
-	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "merge-same-path-dupes"))
+	reportPath, rpErr := t6g5ReportPath(env.t6g5Base, params.ReportPath, "merge-same-path-dupes")
 	if rpErr != nil {
-		return fmt.Errorf("merge-same-path-dupes: %w", rpErr)
+		return mergeSamePathPlan{}, fmt.Errorf("merge-same-path-dupes: %w", rpErr)
 	}
 
 	// The report is the ONLY complete record of which losers were soft-deleted
@@ -205,20 +258,20 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 	// apply run, prove it is writable BEFORE any merge happens: a destructive op
 	// must not soft-delete records it then cannot account for. A dry run does not
 	// destroy anything, so a report failure there is logged, not fatal.
-	if params.Apply {
+	if env.Live {
 		if err := preflightReportPath(reportPath); err != nil {
-			return fmt.Errorf("merge-same-path-dupes: refusing to apply — the audit report path %q is not writable: %w", reportPath, err)
+			return mergeSamePathPlan{}, fmt.Errorf("merge-same-path-dupes: refusing to apply — the audit report path %q is not writable: %w", reportPath, err)
 		}
 	}
 
 	// Every merge journals its sibling-move undo pointer under this run.
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 	mergeFn := func(bookIDs []string, primaryID string) (int, error) {
-		return p.deps.MergeBooks(opID, bookIDs, primaryID)
+		return env.Writer.MergeBooks(opID, bookIDs, primaryID)
 	}
-	plan, err := planMergeSamePathDupes(ctx, store, mergeFn, params, reporter)
+	plan, err := planMergeSamePathDupesVia(ctx, env.Store, mergeFn, params, env)
 	if err != nil {
-		return err
+		return mergeSamePathPlan{}, err
 	}
 
 	if wErr := writeMergeReport(reportPath, plan.all); wErr != nil {
@@ -250,7 +303,7 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 			"cap", plan.CappedAt, "mergeable", plan.Mergeable)
 	}
 	log.Info("merge-same-path-dupes complete", "summary", plan.summary())
-	return nil
+	return plan, nil
 }
 
 // hashForPath returns the stored hash of the row that names sharedPath within one
@@ -311,13 +364,16 @@ func isPrimary(b database.BookCore) bool {
 	return b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
 }
 
-func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, mergeFn bookMergeFunc, params mergeSamePathParams, reporter sdk.Reporter) (mergeSamePathPlan, error) {
-	log := reporter.Logger()
+// planMergeSamePathDupesVia plans (and, when env.Live, applies) the merge over
+// the engine the env names (rule R10: it reads the store and merges through the function it is
+// handed and captures nothing).
+func planMergeSamePathDupesVia(ctx context.Context, store mergeSamePathStore, mergeFn bookMergeFunc, params mergeSamePathParams, env mergeSamePathDupesEnv) (mergeSamePathPlan, error) {
+	log := env.Logger
 	maxMerges := params.Max
 	if maxMerges <= 0 {
 		maxMerges = mergeSamePathDefaultMax
 	}
-	log.Info("merge-same-path-dupes start", "apply", params.Apply, "path_prefix", params.PathPrefix, "max", maxMerges)
+	log.Info("merge-same-path-dupes start", "apply", env.Live, "path_prefix", params.PathPrefix, "max", maxMerges)
 
 	// Group live, single-audio-file book records by their exact FilePath.
 	byPath := map[string][]database.BookCore{}
@@ -346,7 +402,7 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 			break
 		}
 	}
-	plan := mergeSamePathPlan{Apply: params.Apply, BooksScanned: scanned}
+	plan := mergeSamePathPlan{Apply: env.Live, BooksScanned: scanned}
 
 	// Keep only the shared paths, in a deterministic order.
 	type group struct {
@@ -377,10 +433,15 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 	}
 	results := make([]classified, len(groups))
 
-	prog := sdk.NewProgress(reporter, len(groups))
+	prog := t6g5NewProgress(env.t6g5Base, len(groups))
 	prog.Start(fmt.Sprintf("Classifying %d shared-path group(s)…", len(groups)))
 
-	err := registry.RunItems(ctx, reporter, groups, func(_ context.Context, g group) error {
+	err := env.Items(ctx, len(groups), t6g5ItemsOpts{
+		Pool:    missingFileStatPool(),
+		Collect: true,
+		Label:   func(i, t int) string { return fmt.Sprintf("Classified %d/%d groups", i+1, t) },
+	}, func(_ context.Context, gi int) error {
+		g := groups[gi]
 		idx := -1
 		for i := range groups {
 			if groups[i].path == g.path {
@@ -435,10 +496,6 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 		results[idx] = classified{g: g, mergeable: true, primaryID: primary.ID,
 			loserIDs: losers, bucket: "mergeable", reason: "hash-confirmed same file"}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		Label:       func(i, t int) string { return fmt.Sprintf("Classified %d/%d groups", i+1, t) },
 	})
 	if err != nil {
 		return mergeSamePathPlan{}, fmt.Errorf("classify: %w", err)
@@ -494,7 +551,7 @@ func planMergeSamePathDupes(ctx context.Context, store mergeSamePathStore, merge
 		mergeable = mergeable[:maxMerges]
 	}
 
-	if !params.Apply {
+	if !env.Live {
 		for _, r := range mergeable {
 			plan.record(mergeGroupDecision{Path: r.g.path, Bucket: "mergeable",
 				PrimaryID: r.primaryID, LoserIDs: r.loserIDs, Reason: r.reason})

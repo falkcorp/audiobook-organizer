@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/manual_only_followups_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 414c97a5-21fa-425f-81df-a00e9bf95fd6
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -82,14 +82,14 @@ func TestITunesRegroupApply_SkipsCheckFailedGroup(t *testing.T) {
 
 	p := &Plugin{}
 	rep := &fakeReporter{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), rgLinkFailStore{s, f1}, rgRoot, rep)
+	snap, err := buildRegroupSnapshot(context.Background(), rgLinkFailStore{s, f1}, rgRoot, t6g5RgReporter(context.Background(), rep))
 	require.NoError(t, err, "one book's failed check must not fail the snapshot")
 	plan := itunesservice.PlanRegroup([]itunesservice.HealGroup{
 		{Title: "Album F", PIDs: []string{"p1", "p2"}},
 		{Title: "Album G", PIDs: []string{"q1", "q2"}},
 	}, snap)
 	require.True(t, plan.Groups[0].ManualCheckFailed)
-	_, err = p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep)
+	_, err = applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState)
 	require.NoError(t, err)
 
 	for _, id := range []string{f1, f2} {
@@ -154,7 +154,7 @@ func TestITunesRegroupApply_RecheckReadFailureSkipsGroup(t *testing.T) {
 
 	p := &Plugin{}
 	rep := &fakeReporter{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), base, rgRoot, rep)
+	snap, err := buildRegroupSnapshot(context.Background(), base, rgRoot, t6g5RgReporter(context.Background(), rep))
 	require.NoError(t, err)
 	plan := itunesservice.PlanRegroup([]itunesservice.HealGroup{
 		{Title: "Album F", PIDs: []string{"p1", "p2"}},
@@ -163,7 +163,7 @@ func TestITunesRegroupApply_RecheckReadFailureSkipsGroup(t *testing.T) {
 	require.Equal(t, 2, plan.Consolidated)
 
 	s.failID, s.armed = plan.Groups[0].Target, true
-	_, err = p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep)
+	_, err = applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState)
 	require.Error(t, err, "a recheck read failure is reported at the end of the run")
 
 	var skipped bool

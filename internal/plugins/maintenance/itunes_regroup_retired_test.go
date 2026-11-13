@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_retired_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 2b6e90c4-7d15-4a83-9c2f-61e8f3b5a047
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -41,8 +41,7 @@ func TestBuildRegroupSnapshot_RetiredRowPIDIsNotLocated(t *testing.T) {
 		t.Fatalf("RetireBookFiles: %v", err)
 	}
 
-	p := &Plugin{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, &fakeReporter{})
+	snap, err := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), &fakeReporter{}))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}

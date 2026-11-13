@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap.go
-// version: 1.2.3
+// version: 1.3.1
 // guid: 6b1f9d47-3c82-4e05-9a71-d84c2f60e5b3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 // Package maintenance — REAPER for metadata_cache rows whose book is gone.
 //
@@ -52,8 +52,8 @@ import (
 	"sync/atomic"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // metadataCacheReapDefaultMax bounds how many rows one run will delete, so a
@@ -188,6 +188,36 @@ type reapBookResolver interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
+// reapCacheLister lists the cache rows.
+type reapCacheLister interface {
+	ListMetadataCacheKeys() ([]database.MetadataCacheSummary, error)
+}
+
+// reapCacheDeleter deletes one book's cache row.
+type reapCacheDeleter interface {
+	DeleteMetadataCache(bookID string) error
+}
+
+// metadataCacheReapKind is the native kind of maintenance.metadata-cache-reap (F5-10).
+const metadataCacheReapKind tasks.Kind = "books.maintenance.metadata-cache-reap"
+
+// metadataCacheReapInput is the native kind's params: HEAD's
+// metadataCacheReapParams without the mode key (apply), which the start
+// request carries.
+type metadataCacheReapInput struct {
+	Max        int    `json:"max"`
+	ReportPath string `json:"reportPath"`
+}
+
+// metadataCacheReapEnv is what runMetadataCacheReapCore needs from its engine:
+// the base and the worker pool.
+type metadataCacheReapEnv struct {
+	t6g5Base
+	Items t6g5ItemsFunc
+}
+
+// runMetadataCacheReap is the v2 shell: HEAD's lenient params decode and its
+// "database not initialized" checks, then the shared core.
 func (p *Plugin) runMetadataCacheReap(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params metadataCacheReapParams
 	if len(rawParams) > 0 {
@@ -195,26 +225,53 @@ func (p *Plugin) runMetadataCacheReap(ctx context.Context, rawParams json.RawMes
 			return fmt.Errorf("metadata-cache-reap: decode params: %w", err)
 		}
 	}
-	cache := p.deps.MetadataCacheStore()
-	if cache == nil {
+	if p.deps.MetadataCacheStore() == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	books := p.deps.OpsStore()
-	if books == nil {
+	if p.deps.OpsStore() == nil {
 		return fmt.Errorf("database not initialized")
 	}
+	env := metadataCacheReapEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, params.Apply), Items: t6g5HeadItems(reporter)}
+	_, err := runMetadataCacheReapCore(ctx, metadataCacheReapInput{Max: params.Max, ReportPath: params.ReportPath}, env)
+	return err
+}
+
+// metadataCacheReapKind builds the native kind. Writes found: the cache row
+// delete (DeleteMetadataCache), the books-store resource "metadata_cache"; the
+// per-row report is a file, not a store write.
+func (p *Plugin) metadataCacheReapKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "metadata_cache"))
+	return tasks.Task(metadataCacheReapKind, tasks.TaskSpec[json.RawMessage, reapPlan]{
+		Common: t6g5Common(p.metadataCacheReapDef(), metadataCacheReapKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (reapPlan, error) {
+			var in metadataCacheReapInput
+			if err := t6g5DecodeParams(metadataCacheReapKind, raw, &in, t6g5ModeKeys...); err != nil {
+				return reapPlan{}, err
+			}
+			base, err := t6g5NativeBase(metadataCacheReapKind, rc, deps, true)
+			if err != nil {
+				return reapPlan{}, err
+			}
+			env := metadataCacheReapEnv{t6g5Base: base, Items: t6g5NativeItems(rc)}
+			return runMetadataCacheReapCore(rc.Context(), in, env)
+		},
+	})
+}
+
+// runMetadataCacheReapCore is the shared body of both shells.
+func runMetadataCacheReapCore(ctx context.Context, in metadataCacheReapInput, env metadataCacheReapEnv) (reapPlan, error) {
 	// Resolve the report path before any work: with no reportPath and no usable
 	// root_dir the run must fail with nothing done, not apply and then lose its record.
-	reportPath, rpErr := p.resolveReportPath(params.ReportPath, opReportFileName(reporter, "metadata-cache-reap"))
+	reportPath, rpErr := t6g5ReportPath(env.t6g5Base, in.ReportPath, "metadata-cache-reap")
 	if rpErr != nil {
-		return fmt.Errorf("metadata-cache-reap: %w", rpErr)
+		return reapPlan{}, fmt.Errorf("metadata-cache-reap: %w", rpErr)
 	}
 
-	plan, err := planMetadataCacheReap(ctx, cache, books, params, reporter)
+	plan, err := planMetadataCacheReapVia(ctx, env.Store, env.Writer, env.Store, in, env)
 	if err != nil {
-		return err
+		return reapPlan{}, err
 	}
-	log := reporter.Logger()
+	log := env.Logger
 
 	// Write the per-row report BEFORE the summary lines, so a run killed while
 	// emitting its summary still leaves the artifact behind. For a delete op the
@@ -255,28 +312,32 @@ func (p *Plugin) runMetadataCacheReap(ctx context.Context, rawParams json.RawMes
 			"cap", plan.CappedAt, "remaining", plan.OrphanedCapped)
 	}
 	log.Info("metadata-cache-reap complete", "summary", plan.summary())
-	return nil
+	return plan, nil
 }
 
-func planMetadataCacheReap(
+// planMetadataCacheReapVia plans (and, when env.Live, applies) the reap over the
+// engine the env names (rule R10: it lists the cache it is handed, deletes
+// through the deleter it is handed and captures nothing).
+func planMetadataCacheReapVia(
 	ctx context.Context,
-	cache database.MetadataCacheStore,
+	cache reapCacheLister,
+	deleter reapCacheDeleter,
 	books reapBookResolver,
-	params metadataCacheReapParams,
-	reporter sdk.Reporter,
+	params metadataCacheReapInput,
+	env metadataCacheReapEnv,
 ) (reapPlan, error) {
-	log := reporter.Logger()
+	log := env.Logger
 	maxDeletes := params.Max
 	if maxDeletes <= 0 {
 		maxDeletes = metadataCacheReapDefaultMax
 	}
-	log.Info("metadata-cache-reap start", "apply", params.Apply, "max", maxDeletes)
+	log.Info("metadata-cache-reap start", "apply", env.Live, "max", maxDeletes)
 
 	summaries, err := cache.ListMetadataCacheKeys()
 	if err != nil {
 		return reapPlan{}, fmt.Errorf("list metadata cache: %w", err)
 	}
-	plan := reapPlan{Apply: params.Apply, ScannedRows: len(summaries)}
+	plan := reapPlan{Apply: env.Live, ScannedRows: len(summaries)}
 
 	type cacheItem struct {
 		idx int
@@ -299,10 +360,17 @@ func planMetadataCacheReap(
 	outcomes := make([]rowOutcome, len(items))
 	var orphanCount atomic.Int64
 
-	prog := sdk.NewProgress(reporter, len(items))
+	prog := t6g5NewProgress(env.t6g5Base, len(items))
 	prog.Start(fmt.Sprintf("Resolving %d cached book(s)…", len(items)))
 
-	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, it cacheItem) error {
+	err = env.Items(ctx, len(items), t6g5ItemsOpts{
+		Pool:    t6g5FixedPool(metadataCacheReapConcurrency, "store-bound point-gets"),
+		Collect: true,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Resolved %d/%d cached books (orphans=%d)", i+1, t, orphanCount.Load())
+		},
+	}, func(_ context.Context, i int) error {
+		it := items[i]
 		if strings.TrimSpace(it.sum.BookID) == "" {
 			outcomes[it.idx] = rowOutcome{errMsg: "empty book_id"}
 			return nil
@@ -318,12 +386,6 @@ func planMetadataCacheReap(
 			outcomes[it.idx] = rowOutcome{orphan: true}
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: metadataCacheReapConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Resolved %d/%d cached books (orphans=%d)", i+1, t, orphanCount.Load())
-		},
 	})
 	if err != nil {
 		return reapPlan{}, fmt.Errorf("resolve sweep: %w", err)
@@ -369,7 +431,7 @@ func planMetadataCacheReap(
 			Candidates: it.sum.CandidateCount, Reason: "book does not resolve — would reap"})
 	}
 
-	if !params.Apply {
+	if !env.Live {
 		log.Info("metadata-cache-reap: DRY RUN — no rows deleted", "would_reap", len(reapable))
 		return plan, nil
 	}
@@ -396,7 +458,17 @@ func planMetadataCacheReap(
 	}
 
 	var reaped, revived, deleteErrs atomic.Int64
-	err = registry.RunItems(ctx, reporter, reapable, func(_ context.Context, it cacheItem) error {
+	// Disjoint by construction: reapable holds one row per book ID, so no two
+	// workers ever delete the same row.
+	err = env.Items(ctx, len(reapable), t6g5ItemsOpts{
+		Pool:    t6g5FixedPool(metadataCacheReapConcurrency, "store-bound point-gets"),
+		Collect: true,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Reaped %d/%d rows (revived=%d errs=%d)",
+				i+1, t, revived.Load(), deleteErrs.Load())
+		},
+	}, func(_ context.Context, i int) error {
+		it := reapable[i]
 		book, gerr := books.GetBookByID(it.sum.BookID)
 		if gerr != nil {
 			deleteErrs.Add(1)
@@ -412,7 +484,7 @@ func planMetadataCacheReap(
 				"book", it.sum.BookID)
 			return nil
 		}
-		if derr := cache.DeleteMetadataCache(it.sum.BookID); derr != nil {
+		if derr := deleter.DeleteMetadataCache(it.sum.BookID); derr != nil {
 			deleteErrs.Add(1)
 			note(it.sum.BookID, "delete-error", "NOT deleted: "+derr.Error())
 			log.Warn("metadata-cache-reap: delete failed", "book", it.sum.BookID, "err", derr)
@@ -421,13 +493,6 @@ func planMetadataCacheReap(
 		reaped.Add(1)
 		note(it.sum.BookID, "reaped", "DELETED")
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: metadataCacheReapConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Reaped %d/%d rows (revived=%d errs=%d)",
-				i+1, t, revived.Load(), deleteErrs.Load())
-		},
 	})
 	if err != nil {
 		return plan, fmt.Errorf("reap deletes: %w", err)

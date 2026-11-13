@@ -1,18 +1,32 @@
 // file: internal/plugins/maintenance/move_book_file_rows_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: ec59dece-f7b5-45f6-83e1-f69b95f45340
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 	"github.com/stretchr/testify/require"
 )
+
+// t6g5MbfRunHead runs the op's HEAD shell (the v2 def's Run) over the fixture
+// store, as the registry does: strict params decode, mode resolution, the
+// shared core, the persisted result. The result is read back from the reporter.
+func t6g5MbfRunHead(t *testing.T, s database.Store, params mbfParams) (*mbfReport, error) {
+	t.Helper()
+	raw, err := json.Marshal(params)
+	require.NoError(t, err)
+	rr := &resultReporter{}
+	runErr := New(fakeDeps{store: s}).moveBookFileRowsDef().Run(context.Background(), raw, rr)
+	rep, _ := rr.result.(*mbfReport)
+	return rep, runErr
+}
 
 // mbfFixture mirrors the Warforged Sorcerer case: the target owns chapters
 // 02-03 in dirA; the source owns chapter 01 from dirA plus its own files in
@@ -70,8 +84,7 @@ func TestMoveBookFileRows_OmittedDryRunPreviews(t *testing.T) {
 	f := newMBFFixture(t)
 	before := mbfDuration(t, f.s, f.dst)
 
-	rep, err := moveBookFileRows(context.Background(), mbfEnv{store: f.s},
-		mbfParams{Moves: []mbfMove{{RowID: f.ch01, ToBookID: f.dst}}}, &fakeReporter{})
+	rep, err := t6g5MbfRunHead(t, f.s, mbfParams{Moves: []mbfMove{{RowID: f.ch01, ToBookID: f.dst}}})
 	require.NoError(t, err)
 	require.True(t, rep.DryRun)
 	require.Equal(t, 1, rep.Planned)
@@ -99,8 +112,7 @@ func TestMoveBookFileRows_LiveMovesKeepsHashSetsTrackRecomputesBoth(t *testing.T
 	require.Equal(t, 1684+2069, dstBefore)
 
 	live := false
-	rep, err := moveBookFileRows(context.Background(), mbfEnv{store: f.s},
-		mbfParams{Moves: []mbfMove{{RowID: f.ch01, ToBookID: f.dst}}, DryRunSnake: &live}, &fakeReporter{})
+	rep, err := t6g5MbfRunHead(t, f.s, mbfParams{Moves: []mbfMove{{RowID: f.ch01, ToBookID: f.dst}}, DryRunSnake: &live})
 	require.NoError(t, err)
 	require.False(t, rep.DryRun)
 	require.Equal(t, 1, rep.Moved)
@@ -149,7 +161,7 @@ func TestMoveBookFileRows_Refusals(t *testing.T) {
 	require.NoError(t, err)
 
 	live := false
-	rep, err := moveBookFileRows(context.Background(), mbfEnv{store: f.s}, mbfParams{Moves: []mbfMove{
+	rep, err := t6g5MbfRunHead(t, f.s, mbfParams{Moves: []mbfMove{
 		{RowID: f.slantNoTrack, ToBookID: f.dst},
 		{RowID: collide, ToBookID: f.dst},
 		{RowID: itunesRow, ToBookID: f.dst},
@@ -159,7 +171,7 @@ func TestMoveBookFileRows_Refusals(t *testing.T) {
 		{RowID: pinnedWrong, ToBookID: f.dst, FromBookID: f.dst},
 		{RowID: f.ch01, ToBookID: f.dst},
 		{RowID: f.ch01, ToBookID: f.dst},
-	}, DryRunSnake: &live}, &fakeReporter{})
+	}, DryRunSnake: &live})
 	require.NoError(t, err)
 
 	want := []struct{ status, reasonPrefix string }{
@@ -191,12 +203,11 @@ func TestMoveBookFileRows_Refusals(t *testing.T) {
 
 func TestMoveBookFileRows_EmptyMovesAndBadMode(t *testing.T) {
 	f := newMBFFixture(t)
-	_, err := moveBookFileRows(context.Background(), mbfEnv{store: f.s}, mbfParams{}, &fakeReporter{})
+	_, err := t6g5MbfRunHead(t, f.s, mbfParams{})
 	require.Error(t, err)
 
 	tr, fa := true, false
-	_, err = moveBookFileRows(context.Background(), mbfEnv{store: f.s},
-		mbfParams{Moves: []mbfMove{{RowID: f.ch01, ToBookID: f.dst}}, DryRunSnake: &fa, DryRun: &tr}, &fakeReporter{})
+	_, err = t6g5MbfRunHead(t, f.s, mbfParams{Moves: []mbfMove{{RowID: f.ch01, ToBookID: f.dst}}, DryRunSnake: &fa, DryRun: &tr})
 	require.ErrorContains(t, err, "disagree")
 	row, err := f.s.GetBookFileByID(f.src, f.ch01)
 	require.NoError(t, err)

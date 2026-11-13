@@ -1,7 +1,7 @@
 # file: internal/plugins/maintenance/testdata/fixer_stores_allowlist.txt
-# version: 1.2.0
+# version: 1.4.0
 # guid: 6a3e8d21-9c47-4f15-b2e0-1d7c5a9f3b68
-# last-edited: 2026-11-12
+# last-edited: 2026-11-13
 #
 # Reviewed exceptions for TestFixerStores_NoFixerReachesAStoreExceptThroughTheShell
 # (fixer_stores_guard_test.go; the pass is tools/fixerstores).

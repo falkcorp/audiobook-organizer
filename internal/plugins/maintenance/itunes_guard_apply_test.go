@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_guard_apply_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5e2a7c90-4d1b-4f38-a6e2-9b3d0c8f1a57
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -106,8 +106,8 @@ func TestMergeSamePath_ITunesRefusalIsCountedAsRefused(t *testing.T) {
 	refuse := func([]string, string) (int, error) {
 		return 0, fmt.Errorf("merge: %w", &merge.ITunesProtectedError{BookID: "a", Path: path})
 	}
-	plan, err := planMergeSamePathDupes(context.Background(), store, refuse,
-		mergeSamePathParams{Apply: true}, &fakeReporter{})
+	t6g5h1 := mergeSamePathParams{Apply: true}
+	plan, err := planMergeSamePathDupesVia(context.Background(), store, refuse, t6g5h1, t6g5MergeEnv(context.Background(), t6g5h1.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.RefusedITunes)
 	require.Equal(t, 0, plan.MergeFailed)

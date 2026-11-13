@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_purge_empty.go
-// version: 1.1.4
+// version: 1.2.1
 // guid: b1c1b8ef-893a-4ff8-9714-8ed1521febfa
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -16,9 +16,9 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- purge-empty-narrators ---
@@ -182,22 +182,82 @@ func (p *Plugin) runPurgeEmptyNarrators(ctx context.Context, rawParams json.RawM
 	return err
 }
 
-// purgeEmptyNarrators does the work and returns the report, so tests can
-// assert on what was held and why, not only on which rows survived.
+// purgeEmptyNarratorsKind is the native kind of maintenance.purge-empty-narrators (F5-10).
+const purgeEmptyNarratorsKind tasks.Kind = "books.maintenance.purge-empty-narrators"
+
+// narratorPurgeReader is the reads the purge makes.
+type narratorPurgeReader interface {
+	ListNarrators() ([]database.Narrator, error)
+	// NarratorRefCounts counts every book reference to each narrator, in every
+	// book state, failing closed when the store cannot (database.NarratorRefCounts).
+	NarratorRefCounts() (database.NarratorRefs, error)
+	// NarratorLinkCount is the per-item re-check (database.NarratorLinkCount).
+	NarratorLinkCount(narratorID int) (int, error)
+}
+
+// narratorPurger is the writes the purge makes.
+type narratorPurger interface {
+	// RecordOperationChange writes one undo-ledger row (database.RecordOperationChange).
+	RecordOperationChange(change *database.OperationChange) error
+	DeleteNarrator(id int) error
+	// InvalidateAuthorsCache drops the derived authors/narrators cache after a
+	// delete.
+	InvalidateAuthorsCache()
+}
+
+// purgeEmptyNarratorsEnv is what the purge's core needs from its engine: the
+// base and the scan stand-down for the apply.
+type purgeEmptyNarratorsEnv struct {
+	t6g5Base
+	Lease t6g5LeaseFunc
+}
+
+// purgeEmptyNarrators is the v2 shell: HEAD's "database not initialized" check,
+// then the shared core. It returns the report, so tests can assert on what was
+// held and why, not only on which rows survived.
 func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarratorsParams, reporter sdk.Reporter) (emptyNarratorReport, error) {
-	store := p.deps.OpsStore()
-	if store == nil {
+	if p.deps.OpsStore() == nil {
 		return emptyNarratorReport{}, fmt.Errorf("database not initialized")
 	}
+	env := purgeEmptyNarratorsEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, params.Apply), Lease: p.t6g5HeadLease(reporter)}
+	return purgeEmptyNarratorsCore(ctx, params, env)
+}
+
+// purgeEmptyNarratorsKind builds the native kind. Writes found: the narrator
+// rows and their book links (DeleteNarrator) and the undo-ledger rows
+// (RecordOperationChange);
+// HEAD declares none. The params decode into HEAD's struct after the mode key
+// (apply) is refused.
+func (p *Plugin) purgeEmptyNarratorsKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "narrators"), tasks.Res("books", "book_narrators"), tasks.Res("books", "operations"))
+	return tasks.Task(purgeEmptyNarratorsKind, tasks.TaskSpec[json.RawMessage, emptyNarratorReport]{
+		Common: t6g5Common(p.purgeEmptyNarratorsDef(), purgeEmptyNarratorsKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (emptyNarratorReport, error) {
+			var params purgeEmptyNarratorsParams
+			if err := t6g5DecodeParams(purgeEmptyNarratorsKind, raw, &params, t6g5ModeKeys...); err != nil {
+				return emptyNarratorReport{}, err
+			}
+			base, err := t6g5NativeBase(purgeEmptyNarratorsKind, rc, deps, true)
+			if err != nil {
+				return emptyNarratorReport{}, err
+			}
+			return purgeEmptyNarratorsCore(rc.Context(), params, purgeEmptyNarratorsEnv{t6g5Base: base, Lease: t6g5NativeLease(rc, deps)})
+		},
+	})
+}
+
+// purgeEmptyNarratorsCore is the shared body of both shells. The mode is
+// env.Live; params.Apply is not read.
+func purgeEmptyNarratorsCore(ctx context.Context, params purgeEmptyNarratorsParams, env purgeEmptyNarratorsEnv) (emptyNarratorReport, error) {
 	if params.Limit < 0 {
 		return emptyNarratorReport{}, fmt.Errorf("purge-empty-narrators: limit must be >= 0, got %d", params.Limit)
 	}
-	log := reporter.Logger()
+	log := env.Logger
 	log.Info("purge-empty-narrators start",
-		"apply", params.Apply, "require_no_name_match", params.requireNoNameMatch(), "limit", params.Limit)
+		"apply", env.Live, "require_no_name_match", params.requireNoNameMatch(), "limit", params.Limit)
 
-	_ = reporter.UpdateProgress(0, 3, "Listing narrators…")
-	narrators, err := store.ListNarrators()
+	env.Progress(0, 3, "Listing narrators…")
+	narrators, err := env.Store.ListNarrators()
 	if err != nil {
 		return emptyNarratorReport{}, fmt.Errorf("list narrators: %w", err)
 	}
@@ -205,8 +265,8 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 	// The delete guard. Unfiltered and fail-closed: a store that cannot answer
 	// is an error, never an empty map, because an empty map reads as "nothing
 	// references anything" and would delete every narrator.
-	_ = reporter.UpdateProgress(1, 3, "Counting narrator references…")
-	refs, err := database.NarratorRefCounts(store)
+	env.Progress(1, 3, "Counting narrator references…")
+	refs, err := env.Store.NarratorRefCounts()
 	if err != nil {
 		return emptyNarratorReport{}, fmt.Errorf("purge-empty-narrators: %w", err)
 	}
@@ -235,9 +295,9 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 		"require_no_name_match", params.requireNoNameMatch(),
 		"sample", report.HeldNameInTextSample)
 
-	if !params.Apply {
+	if !env.Live {
 		log.Info("purge-empty-narrators dry run", "eligible", report.Eligible, "sample", report.Sample)
-		_ = reporter.UpdateProgress(3, 3, "DRY RUN (nothing deleted) — "+report.summary())
+		env.Progress(3, 3, "DRY RUN (nothing deleted) — "+report.summary())
 		return report, nil
 	}
 
@@ -246,17 +306,17 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 	// in #3307, applied here too).
 	if len(eligible) == 0 {
 		log.Info("purge-empty-narrators: nothing eligible, no stand-down taken")
-		_ = reporter.UpdateProgress(3, 3, "nothing to delete — "+report.summary())
+		env.Progress(3, 3, "nothing to delete — "+report.summary())
 		return report, nil
 	}
 
-	holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "purge-empty-narrators apply")
+	lease, sdErr := env.Lease(ctx, "purge-empty-narrators apply")
 	if sdErr != nil {
 		return report, fmt.Errorf("purge-empty-narrators: could not acquire scan stand-down; refusing to delete: %w", sdErr)
 	}
-	defer release()
+	defer lease.Release()
 
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 	if opID == "" {
 		// Journal anyway, as purge-empty-authors does: a ledger row with no
 		// operation id still records the narrator's id and name.
@@ -268,7 +328,7 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 	// abort after some deletes still drops the stale list.
 	defer func() {
 		if report.Deleted > 0 {
-			p.deps.InvalidateAuthorsCache()
+			env.Writer.InvalidateAuthorsCache()
 		}
 	}()
 
@@ -278,8 +338,8 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 	// would serialize on the WAL anyway and add a window in which two workers'
 	// sweeps interleave. The population is under a thousand (966 narrators in
 	// total at a recent production warmup), so there is nothing to win.
-	_ = reporter.UpdateProgress(2, 3, fmt.Sprintf("Deleting %d empty narrators…", len(eligible)))
-	prog := sdk.NewProgress(reporter, len(eligible))
+	env.Progress(2, 3, fmt.Sprintf("Deleting %d empty narrators…", len(eligible)))
+	prog := t6g5NewProgress(env.t6g5Base, len(eligible))
 	prog.Start(fmt.Sprintf("Deleting %d empty narrators…", len(eligible)))
 	for i, n := range eligible {
 		if err := ctx.Err(); err != nil {
@@ -287,7 +347,7 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 			prog.Done("cancelled — " + report.summary())
 			return report, err
 		}
-		if scanStandDownLostForApply(p.deps, holderID, held) {
+		if lease.Lost() {
 			report.Aborted = errNarratorPurgeStandDownLost.Error()
 			log.Warn("purge-empty-narrators: scan stand-down lease lost, abandoning remaining deletes",
 				"deleted", report.Deleted, "remaining", len(eligible)-i)
@@ -308,7 +368,7 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 		// re-mints the row. If it lands after the commit, the book holds a
 		// dangling narrator id. Closing that needs a lock shared with every
 		// SetBookNarrators caller; nothing in the store provides one today.
-		links, lerr := database.NarratorLinkCount(store, n.ID)
+		links, lerr := env.Store.NarratorLinkCount(n.ID)
 		if lerr != nil {
 			prog.Done(report.summary())
 			return report, fmt.Errorf("purge-empty-narrators: re-check narrator %d before delete (deleted %d so far): %w",
@@ -332,7 +392,7 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 		// failed write skips the delete. The row can describe a delete that
 		// then fails; a stray record of a narrator that still exists is
 		// harmless, the reverse is not.
-		if jerr := database.RecordOperationChange(store, &database.OperationChange{
+		if jerr := env.Writer.RecordOperationChange(&database.OperationChange{
 			ID:          ulid.Make().String(),
 			OperationID: opID,
 			ChangeType:  "narrator_delete",
@@ -350,7 +410,7 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 		// entry, and any junction entry (none, per the re-check), then brings
 		// memdb in line: DeleteNarratorFromMemDB plus a replay of every swept
 		// book's credits.
-		if derr := store.DeleteNarrator(n.ID); derr != nil {
+		if derr := env.Writer.DeleteNarrator(n.ID); derr != nil {
 			report.Failed++
 			log.Warn("purge-empty-narrators: delete failed (its undo-ledger row was already written and names a narrator that still exists)",
 				"narrator_id", n.ID, "name", n.Name, "err", derr)

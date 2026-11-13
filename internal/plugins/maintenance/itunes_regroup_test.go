@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -77,7 +77,7 @@ func TestITunesRegroupApply_MergeAndDelete(t *testing.T) {
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
 
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	snap, err := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestITunesRegroupApply_MergeAndDelete(t *testing.T) {
 	if plan.Consolidated != 1 || len(plan.DeleteBooks) != 1 {
 		t.Fatalf("plan consolidate=%d deletes=%d, want 1/1", plan.Consolidated, len(plan.DeleteBooks))
 	}
-	if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+	if _, err := applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 
@@ -130,14 +130,14 @@ func TestITunesRegroupApply_DeleteGuardSkipsResidualExtID(t *testing.T) {
 	p := &Plugin{}
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
-	snap, _ := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	snap, _ := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 	plan := itunesservice.PlanRegroup(groups, snap)
 
 	survivor := plan.Groups[0].Target
 	if survivor != b1 {
 		t.Skipf("survivor was %s not b1 (tiebreak); residual-guard case needs b2 to be the loser", survivor)
 	}
-	if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+	if _, err := applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	// b2 still has the residual mapping → must NOT have been deleted.
@@ -160,7 +160,7 @@ func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
 	p := &Plugin{}
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
-	snap, _ := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	snap, _ := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 	plan := itunesservice.PlanRegroup(groups, snap)
 
 	survivor := plan.Groups[0].Target
@@ -172,7 +172,7 @@ func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
 	// Wrap so the delete-guard's ext-id read for the loser errors. The merge
 	// phase does not call GetExternalIDsForBook, so only the guard is affected.
 	wrapped := &errExtIDStore{Store: s, failID: loser}
-	if _, err := p.applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, rep); err != nil {
+	if _, err := applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 
@@ -188,7 +188,7 @@ func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
 func TestITunesRegroupApply_DeleteCarriesUserStateToTarget(t *testing.T) {
 	s, u, plan, rep := regroupWithState(t)
 	p := &Plugin{}
-	if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+	if _, err := applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
@@ -214,7 +214,7 @@ func TestITunesRegroupApply_DeleteKeepsBookWhenCarryFails(t *testing.T) {
 	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
 	fs := &rgFailStateStore{PebbleStore: s, failOn: target}
 	p := &Plugin{}
-	if _, err := p.applyRegroupPlan(context.Background(), fs, plan, rgRoot, rep); err != nil {
+	if _, err := applyRegroupPlan(context.Background(), fs, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	if b, _ := s.GetBookByID(loser); b == nil {
@@ -264,10 +264,9 @@ func regroupWithState(t *testing.T) (*database.PebbleStore, *database.User, itun
 			t.Fatalf("SetUserPosition: %v", err)
 		}
 	}
-	p := &Plugin{}
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	snap, err := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -320,7 +319,7 @@ func TestITunesRegroupApply_CarryToUnlistedTargetIsReported(t *testing.T) {
 				t.Fatalf("ModifyBook: %v", err)
 			}
 		}
-		got, err := (&Plugin{}).applyRegroupPlan(context.Background(), s, plan, rgRoot, rep)
+		got, err := applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), (&Plugin{}).regroupUserState)
 		if err != nil {
 			t.Fatalf("applyRegroupPlan: %v", err)
 		}
@@ -375,7 +374,7 @@ func TestITunesRegroupApply_StateAfterProbeRefusesDelete(t *testing.T) {
 	}
 	p := &Plugin{}
 	rep := &fakeReporter{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	snap, err := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -385,7 +384,7 @@ func TestITunesRegroupApply_StateAfterProbeRefusesDelete(t *testing.T) {
 	}
 	loser := plan.DeleteBooks[0]
 	ls := &rgLateWriteStore{PebbleStore: s, on: loser, user: u.ID}
-	if _, err := p.applyRegroupPlan(context.Background(), ls, plan, rgRoot, rep); err != nil {
+	if _, err := applyRegroupPlan(context.Background(), ls, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	if b, _ := s.GetBookByID(loser); b == nil {
@@ -453,7 +452,7 @@ func TestITunesRegroupApply_ListedDoomedBookKeepsStateOffUnlistedTarget(t *testi
 		s, u, plan, rep := regroupWithState(t)
 		loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
 		store := &rgListLater{PebbleStore: s, on: loser, early: !late}
-		got, err := (&Plugin{}).applyRegroupPlan(context.Background(), store, plan, rgRoot, rep)
+		got, err := applyRegroupPlan(context.Background(), store, plan, rgRoot, t6g5RgReporter(context.Background(), rep), (&Plugin{}).regroupUserState)
 		if err != nil {
 			t.Fatalf("late=%v: applyRegroupPlan: %v", late, err)
 		}
@@ -513,7 +512,7 @@ func TestITunesRegroupApply_ListedReadErrorFailsClosed(t *testing.T) {
 	s, u, plan, rep := regroupWithState(t)
 	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
 	store := &rgReadFailLater{PebbleStore: s, on: loser}
-	_, err := (&Plugin{}).applyRegroupPlan(context.Background(), store, plan, rgRoot, rep)
+	_, err := applyRegroupPlan(context.Background(), store, plan, rgRoot, t6g5RgReporter(context.Background(), rep), (&Plugin{}).regroupUserState)
 	if err == nil {
 		t.Fatalf("applyRegroupPlan: no error, want the failed listing read counted\n%s", strings.Join(rep.logs, "\n"))
 	}

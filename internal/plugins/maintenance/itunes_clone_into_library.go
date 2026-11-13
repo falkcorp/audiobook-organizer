@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.17.2
+// version: 1.18.1
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- itunes-clone-into-library ---
@@ -223,11 +224,115 @@ func (p *Plugin) runITunesCloneIntoLibrary(ctx context.Context, raw json.RawMess
 	return err
 }
 
-// icStore is what the op reads and writes: the ops store plus the chapter
-// table versionprimary's loader and hand-off need.
+// icStore is what the op reads and writes: the book/file/preference calls
+// (OpsStore field, a narrow view since F5-10) plus the chapter table
+// versionprimary's loader and hand-off need. The forwarding methods below are
+// the whole surface the runner, versionprimary and applygate reach it by.
 type icStore struct {
-	OpsStore
+	OpsStore icOpsView
 	database.ChapterReader
+}
+
+// icReader is the reads the op makes.
+type icReader interface {
+	icBookReader
+	database.BookAuthorReader
+	GetSeriesByID(id int) (*database.Series, error)
+}
+
+// icBookReader is the book, file, group and preference reads.
+type icBookReader interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
+	GetAllPreferencesForUser(userID string) ([]database.UserPreferenceKV, error)
+}
+
+// icWriter is the writes the op makes through the store.
+type icWriter interface {
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+	DeleteBook(id string) error
+	DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error)
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	SetUserPreferenceForUser(userID, key, value string) error
+}
+
+// icOpsView is icReader and icWriter together: the one view the runner holds.
+type icOpsView interface {
+	icReader
+	icWriter
+}
+
+func (s icStore) GetBookByID(id string) (*database.Book, error) { return s.OpsStore.GetBookByID(id) }
+func (s icStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	return s.OpsStore.GetBookFiles(bookID)
+}
+func (s icStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+	return s.OpsStore.GetBooksByVersionGroup(groupID)
+}
+func (s icStore) GetAllPreferencesForUser(userID string) ([]database.UserPreferenceKV, error) {
+	return s.OpsStore.GetAllPreferencesForUser(userID)
+}
+func (s icStore) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
+	return s.OpsStore.GetBookAuthors(bookID)
+}
+func (s icStore) GetAuthorByID(id int) (*database.Author, error) { return s.OpsStore.GetAuthorByID(id) }
+func (s icStore) GetSeriesByID(id int) (*database.Series, error) { return s.OpsStore.GetSeriesByID(id) }
+func (s icStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return s.OpsStore.ModifyBook(id, fn)
+}
+func (s icStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	return s.OpsStore.ModifyBookFile(bookID, fileID, fn)
+}
+func (s icStore) DeleteBook(id string) error { return s.OpsStore.DeleteBook(id) }
+func (s icStore) DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error) {
+	return s.OpsStore.DeleteBookFilesByIDs(refs)
+}
+func (s icStore) SetBookAuthors(bookID string, authors []database.BookAuthor) error {
+	return s.OpsStore.SetBookAuthors(bookID, authors)
+}
+func (s icStore) SetUserPreferenceForUser(userID, key, value string) error {
+	return s.OpsStore.SetUserPreferenceForUser(userID, key, value)
+}
+
+// icUserState is the three user-state moves undo makes. The default (HEAD)
+// implementation runs the merge package's functions over a
+// merge.UserProgressMerger; the native engine's is its writer.
+type icUserState interface {
+	// CarryStateBeforeHardDelete moves every user's state from doomedID onto
+	// keepID, all or nothing (merge.CarryStateBeforeHardDelete).
+	CarryStateBeforeHardDelete(keepID, doomedID string) error
+	// HardDeleteWithoutUserState runs del under the merge lock, refusing when
+	// the book has acquired user state (merge.HardDeleteWithoutUserState).
+	HardDeleteWithoutUserState(bookID string, del func() error) error
+	// CarryStateBetweenLiveBooks moves state between two live books
+	// (merge.CarryStateBetweenLiveBooks).
+	CarryStateBetweenLiveBooks(toID, fromID string) error
+}
+
+// icMergeUserState is icUserState and regroupUserState over a
+// merge.UserProgressMerger.
+type icMergeUserState struct{ um merge.UserProgressMerger }
+
+func (m icMergeUserState) CarryStateBeforeHardDelete(keepID, doomedID string) error {
+	return merge.CarryStateBeforeHardDelete(m.um, keepID, doomedID)
+}
+func (m icMergeUserState) HardDeleteWithoutUserState(bookID string, del func() error) error {
+	return merge.HardDeleteWithoutUserState(m.um, bookID, del)
+}
+func (m icMergeUserState) CarryStateBetweenLiveBooks(toID, fromID string) error {
+	return merge.CarryStateBetweenLiveBooks(m.um, toID, fromID)
+}
+func (m icMergeUserState) CarryStateThenHardDelete(keepID, doomedID string, precheck, del func() error) error {
+	return merge.CarryStateThenHardDelete(m.um, keepID, doomedID, precheck, del)
+}
+func (m icMergeUserState) NewUserStateProbe() (regroupStateProbe, error) {
+	p, err := merge.NewUserStateProbe(m.um)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 type icRunner struct {
@@ -262,6 +367,12 @@ type icRunner struct {
 	// resolves nothing: the checks then refuse (fail closed) instead of
 	// reading a missing capability as "no retired rows".
 	reads any
+	// userOps, when set, makes the user-state moves instead of userState (the
+	// native engine's writer). nil resolves from userState / the store.
+	userOps icUserState
+	// pathRows, when set, answers clonePathClaim instead of reads (the native
+	// engine's store). nil resolves from reads.
+	pathRows func(path string) ([]database.BookFile, error)
 }
 
 // icUserStateStore is the store undo moves a clone's user state through.
@@ -269,8 +380,20 @@ func (r *icRunner) icUserStateStore() merge.UserProgressMerger {
 	if r.userState != nil {
 		return r.userState
 	}
-	if um, ok := database.AsCapability[merge.UserProgressMerger](r.store); ok {
+	if um, ok := database.AsCapability[merge.UserProgressMerger](r.store.OpsStore); ok {
 		return um
+	}
+	return nil
+}
+
+// icUserStateOps is the user-state moves undo makes, nil when the store
+// cannot make them.
+func (r *icRunner) icUserStateOps() icUserState {
+	if r.userOps != nil {
+		return r.userOps
+	}
+	if um := r.icUserStateStore(); um != nil {
+		return icMergeUserState{um}
 	}
 	return nil
 }
@@ -290,18 +413,192 @@ func (r *icRunner) carryCloneStateToSource(rec *icRecord) error {
 	if err := r.checkUndoSource(rec); err != nil {
 		return err
 	}
-	um := r.icUserStateStore()
+	um := r.icUserStateOps()
 	if um == nil {
 		return fmt.Errorf("store cannot read or move users' listening state")
 	}
-	return merge.CarryStateBeforeHardDelete(um, rec.SourceBookID, rec.CloneBookID)
+	return um.CarryStateBeforeHardDelete(rec.SourceBookID, rec.CloneBookID)
 }
 
+// itunesCloneIntoLibraryKind is the native kind of itunes.clone-into-library (F5-10).
+const itunesCloneIntoLibraryKind tasks.Kind = "books.itunes.clone-into-library"
+
+// icCloneReader is the cloner's reads: where a book's files would land.
+type icCloneReader interface {
+	// PlanLibraryClone returns the library paths book's active files would land
+	// at, in files order. Nothing is written (LibraryCloner.PlanLibraryClone).
+	PlanLibraryClone(book *database.Book, files []database.BookFile) ([]string, error)
+	// LibraryITunesPath is the iTunes path the organize service records for a
+	// library file (LibraryCloner.LibraryITunesPath).
+	LibraryITunesPath(path string) string
+}
+
+// icCloneWriter is the cloner's write.
+type icCloneWriter interface {
+	// CloneBookIntoLibrary reflinks the files and creates the organized version
+	// (LibraryCloner.CloneBookIntoLibrary).
+	CloneBookIntoLibrary(book *database.Book, files []database.BookFile, opID string) (string, error)
+	// Reflink clones one file for the mixed kind (Plugin.reflinkFile).
+	Reflink(src, dst string) error
+}
+
+// icChapterWriter is the chapter-table write.
+type icChapterWriter interface {
+	SaveChaptersForBook(bookID string, chapters []database.Chapter) error
+}
+
+// icStoreReader is the reads the core makes on the store itself, beyond
+// icReader.
+type icStoreReader interface {
+	icReader
+	icCloneReader
+	database.ChapterReader
+	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
+	GetAuthorByName(name string) (*database.Author, error)
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+	// BookFileRowsAtPathStrict is database.BookFileRowsAtPathStrict over the
+	// store: the complete multi-row lookup, an error when it cannot be had.
+	BookFileRowsAtPathStrict(path string) ([]database.BookFile, error)
+	// RefuseWhileLibraryScanActive errors while a library.scan is queued or
+	// running, or when that cannot be verified (refuseWhileLibraryScanActive).
+	RefuseWhileLibraryScanActive(opName string) error
+}
+
+// icStoreWriter is the writes the core makes: the store's, the cloner's, the
+// chapter table's and the user-state moves.
+type icStoreWriter interface {
+	icWriter
+	icCloneWriter
+	icChapterWriter
+	icUserState
+}
+
+// icClonerJoin is a LibraryCloner over a reader and a writer.
+type icClonerJoin struct {
+	icCloneReader
+	icCloneWriter
+}
+
+// icChaptersJoin is a chapterPersister over a reader and a writer.
+type icChaptersJoin struct {
+	database.ChapterReader
+	icChapterWriter
+}
+
+// icOpsJoin is the runner's one store view over a reader and a writer.
+type icOpsJoin struct {
+	icReader
+	icWriter
+}
+
+// itunesCloneEnv is what the clone's core needs from its engine.
+type itunesCloneEnv struct {
+	t6g5Base
+	Items t6g5ItemsFunc
+	Lease t6g5LeaseFunc
+	// RootDir is the library root.
+	RootDir string
+	// NewRunner builds the engine's runner; writes is true for an apply,
+	// rollback or repair.
+	NewRunner func(writes bool) (*icRunner, error)
+	// Reads is the reads the core makes before the runner exists.
+	Reads icStoreReader
+}
+
+// itunesCloneIntoLibrary is the v2 shell: HEAD's nil-store check and runner,
+// then the shared core.
 func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, rootDir string, reporter sdk.Reporter) (*icReport, error) {
 	ops, vps := p.deps.OpsStore(), p.deps.VersionPrimaryStore()
 	if ops == nil || vps == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
+	base := p.t6g5HeadBase(ctx, reporter, params.Apply || params.Rollback || params.Repair)
+	env := itunesCloneEnv{
+		t6g5Base: base, Items: t6g5HeadItems(reporter), Lease: p.t6g5HeadLease(reporter),
+		RootDir: rootDir, Reads: base.Store,
+		NewRunner: func(writes bool) (*icRunner, error) {
+			reflink := p.reflinkFile
+			if reflink == nil {
+				reflink = fileops.Reflink
+			}
+			run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, reads: ops, cloner: p.deps, reflink: reflink, tags: p.deps.BookTagReader()}
+			if um := p.deps.MergeUserStateStore(); um != nil {
+				run.userState = um
+			}
+			if writes {
+				cp, ok := database.AsCapability[chapterPersister](ops)
+				if !ok {
+					return nil, fmt.Errorf("itunes-clone-into-library: store cannot write chapter tables; refusing to write")
+				}
+				run.chapters = cp
+			}
+			return run, nil
+		},
+	}
+	return itunesCloneCore(ctx, params, env)
+}
+
+// itunesCloneIntoLibraryKind builds the native kind. Writes found: books,
+// book_files and the chapter table through the store calls, the book rows the
+// clone creates (CloneBookIntoLibrary), the credit lists (SetBookAuthors), the
+// listening state a rollback carries back to the source (icUserState) and the
+// undo records in _system preferences (SetUserPreferenceForUser); HEAD declares
+// only capabilities.
+// apply, rollback and repair stay params (HEAD's LiveOneOf: they pick which
+// write a live run makes, they are not the run's mode): a preview forces all
+// three false, a live run must name exactly one. dry_run and dryRun, which
+// would carry the mode, are refused like every writing kind's.
+func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"),
+		tasks.Res("books", "chapters"), tasks.Res("books", "user_preferences"),
+		tasks.Res("books", "authors"), tasks.Res("books", "user_state"))
+	return tasks.Task(itunesCloneIntoLibraryKind, tasks.TaskSpec[json.RawMessage, *icReport]{
+		Common: t6g5Common(p.itunesCloneIntoLibraryDef(), itunesCloneIntoLibraryKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (*icReport, error) {
+			var params icParams
+			if err := t6g5DecodeParams(itunesCloneIntoLibraryKind, raw, &params, "dry_run", "dryRun"); err != nil {
+				return nil, err
+			}
+			base, err := t6g5NativeBase(itunesCloneIntoLibraryKind, rc, deps, true)
+			if err != nil {
+				return nil, err
+			}
+			if !base.Live {
+				params.Apply, params.Rollback, params.Repair = false, false, false
+			} else if !params.Apply && !params.Rollback && !params.Repair {
+				return nil, fmt.Errorf("%s: a live run must name one of apply, rollback or repair", itunesCloneIntoLibraryKind)
+			}
+			env := itunesCloneEnv{
+				t6g5Base: base, Items: t6g5NativeItems(rc), Lease: t6g5NativeLease(rc, deps),
+				RootDir: base.Store.RootDir(), Reads: base.Store,
+				NewRunner: func(writes bool) (*icRunner, error) {
+					run := &icRunner{
+						store:    icStore{OpsStore: icOpsJoin{base.Store, base.Writer}, ChapterReader: base.Store},
+						cloner:   icClonerJoin{base.Store, base.Writer},
+						reflink:  base.Writer.Reflink,
+						tags:     base.Store,
+						userOps:  base.Writer,
+						pathRows: base.Store.BookFileRowsAtPathStrict,
+						// The rollback's retired-shell guard reads the run's store for
+						// the retired rows (database.RefuseRetiredShell); without it
+						// every rollback is refused.
+						reads: base.Store,
+					}
+					if writes {
+						run.chapters = icChaptersJoin{base.Store, base.Writer}
+					}
+					return run, nil
+				},
+			}
+			return itunesCloneCore(rc.Context(), params, env)
+		},
+	})
+}
+
+// itunesCloneCore is the shared body of both shells. Which write the run makes
+// (apply, rollback or repair) is params'; whether it writes at all is the
+// engine's, and the shells have already cleared the three for a preview.
+func itunesCloneCore(ctx context.Context, params icParams, env itunesCloneEnv) (*icReport, error) {
 	requested := normalizeGroupIDs(params.GroupIDs)
 	report := &icReport{DryRun: !params.Apply && !params.Rollback && !params.Repair, Rollback: params.Rollback,
 		ByDecision: map[string]int{}, ByKind: map[string]int{}, BySkip: map[string]int{}, ByOutcome: map[string]int{}}
@@ -317,37 +614,27 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	if modes == 1 && len(requested) == 0 {
 		return report, fmt.Errorf("itunes-clone-into-library: apply, rollback and repair need explicit group_ids; pick them from the dry run")
 	}
-	if rootDir == "" {
+	if env.RootDir == "" {
 		return report, fmt.Errorf("itunes-clone-into-library: root_dir is not set")
 	}
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 	writes := modes == 1
 	if writes && opID == "" {
 		return report, fmt.Errorf("itunes-clone-into-library: no operation id; refusing to write")
 	}
-	reflink := p.reflinkFile
-	if reflink == nil {
-		reflink = fileops.Reflink
+	run, err := env.NewRunner(writes)
+	if err != nil {
+		return report, err
 	}
-	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, reads: ops, cloner: p.deps, reflink: reflink, rootDir: rootDir, opID: opID, apply: params.Apply, tags: p.deps.BookTagReader()}
-	if um := p.deps.MergeUserStateStore(); um != nil {
-		run.userState = um
-	}
-	if writes {
-		cp, ok := database.AsCapability[chapterPersister](ops)
-		if !ok {
-			return report, fmt.Errorf("itunes-clone-into-library: store cannot write chapter tables; refusing to write")
-		}
-		run.chapters = cp
-	}
+	run.rootDir, run.opID, run.apply = env.RootDir, opID, params.Apply
 
 	work := requested
 	if !params.Rollback && !params.Repair {
-		books, err := ops.GetAllBooksCoreComplete(0, 0)
+		books, err := env.Reads.GetAllBooksCoreComplete(0, 0)
 		if err != nil {
 			return report, fmt.Errorf("list books: %w", err)
 		}
-		unknown, err := unknownAuthorIDs(ops)
+		unknown, err := unknownAuthorIDs(env.Reads)
 		if err != nil {
 			return report, err
 		}
@@ -358,18 +645,17 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	}
 	report.Candidates = len(work)
 
-	holderID, held := "", false
+	lease := t6g5Lease{Lost: func() bool { return false }, Release: func() {}}
 	if writes {
-		if err := refuseWhileLibraryScanActive(p.deps.OperationQueueStore(), "itunes-clone-into-library"); err != nil {
+		if err := env.Reads.RefuseWhileLibraryScanActive("itunes-clone-into-library"); err != nil {
 			return report, err
 		}
-		var release func()
 		var sdErr error
-		holderID, held, release, sdErr = acquireScanStandDownForApply(ctx, p.deps, reporter, "itunes-clone-into-library")
+		lease, sdErr = env.Lease(ctx, "itunes-clone-into-library")
 		if sdErr != nil {
 			return report, fmt.Errorf("itunes-clone-into-library: could not acquire scan stand-down; refusing to write: %w", sdErr)
 		}
-		defer release()
+		defer lease.Release()
 	}
 
 	var (
@@ -378,12 +664,20 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 		lost   atomic.Bool
 		done   atomic.Int64
 	)
-	runErr := registry.RunItems(ctx, reporter, work, func(gctx context.Context, gid string) error {
+	runErr := env.Items(ctx, len(work), t6g5ItemsOpts{
+		// Set explicitly: groups are disjoint sets of books, so no two
+		// workers touch the same row.
+		Pool:    t6g5FixedPool(icWorkers, "I/O on one pool, the bound the repair op uses"),
+		Collect: true,
+		// Label runs inside the workers: it reads only the atomic.
+		Label: func(_, total int) string { return fmt.Sprintf("Groups %d/%d", done.Load(), total) },
+	}, func(gctx context.Context, i int) error {
+		gid := work[i]
 		defer done.Add(1)
 		if lost.Load() {
 			return nil
 		}
-		if writes && scanStandDownLostForApply(p.deps, holderID, held) {
+		if writes && lease.Lost() {
 			lost.Store(true)
 			return nil
 		}
@@ -400,12 +694,6 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 		groups = append(groups, g)
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		// Set explicitly: RunItems defaults to one worker.
-		Concurrency: icWorkers,
-		ErrMode:     registry.ErrModeCollect,
-		// Label runs inside the workers: it reads only the atomic.
-		Label: func(_, total int) string { return fmt.Sprintf("Groups %d/%d", done.Load(), total) },
 	})
 
 	sort.Slice(groups, func(i, j int) bool { return groups[i].GroupID < groups[j].GroupID })
@@ -433,8 +721,8 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	if runErr != nil {
 		return report, runErr
 	}
-	reporter.Logger().Info("itunes-clone-into-library complete", "summary", report.summary())
-	_ = reporter.UpdateProgress(1, 1, report.summary())
+	env.Logger.Info("itunes-clone-into-library complete", "summary", report.summary())
+	env.Progress(1, 1, report.summary())
 	return report, nil
 }
 
@@ -703,7 +991,13 @@ func (r *icRunner) plan(ctx context.Context, gid string) (icGroupReport, *icPlan
 		return g, nil
 	}
 	loader := versionprimary.Loader{Files: r.store, Chapters: r.store, RootDir: r.rootDir}
-	ms, err := loader.LoadMembers(ctx, members, vgStoreAlive(r.store))
+	alive := func(id string) bool {
+		// A read error counts as alive, as vgStoreAlive does: the group is left
+		// as it is rather than crowning a book that may still be merged away.
+		b, err := r.store.GetBookByID(id)
+		return err != nil || (b != nil && !b.IsSoftDeleted())
+	}
+	ms, err := loader.LoadMembers(ctx, members, alive)
 	if err != nil {
 		g.Decision, g.Error = icDecisionSkip, "load signals: "+err.Error()
 		return g, nil
@@ -1211,11 +1505,17 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 // complete multi-row lookup (database.BookFileRowsAtPathStrict): a store that
 // cannot give it is an error, never "nobody claims it".
 func (r *icRunner) clonePathClaim(path string) (string, error) {
-	lk, ok := database.AsCapability[database.BookFilePathLookup](r.reads)
-	if !ok {
-		return "", errors.New("the store cannot look up which rows name a path")
+	var rows []database.BookFile
+	var err error
+	if r.pathRows != nil {
+		rows, err = r.pathRows(path)
+	} else {
+		lk, ok := database.AsCapability[database.BookFilePathLookup](r.reads)
+		if !ok {
+			return "", errors.New("the store cannot look up which rows name a path")
+		}
+		rows, err = database.BookFileRowsAtPathStrict(lk, path)
 	}
-	rows, err := database.BookFileRowsAtPathStrict(lk, path)
 	if err != nil {
 		return "", err
 	}
@@ -1338,11 +1638,11 @@ func (r *icRunner) removeVersionClone(rec *icRecord) error {
 	if err := r.store.SetBookAuthors(rec.CloneBookID, nil); err != nil {
 		return fmt.Errorf("clear clone authors: %w", err)
 	}
-	um := r.icUserStateStore()
+	um := r.icUserStateOps()
 	if um == nil {
 		return fmt.Errorf("delete clone book %s: store cannot re-check users' listening state", rec.CloneBookID)
 	}
-	if err := merge.HardDeleteWithoutUserState(um, rec.CloneBookID, func() error {
+	if err := um.HardDeleteWithoutUserState(rec.CloneBookID, func() error {
 		return r.store.DeleteBook(rec.CloneBookID)
 	}); err != nil {
 		return fmt.Errorf("delete clone book %s: %w", rec.CloneBookID, err)
@@ -1371,11 +1671,11 @@ func (r *icRunner) keepCloneStateVisible(rec *icRecord) string {
 	if !listed(rec.CloneBookID) {
 		return fmt.Sprintf("users' listening state is on source %s; neither it nor clone %s is listed by ABS", rec.SourceBookID, rec.CloneBookID)
 	}
-	um := r.icUserStateStore()
+	um := r.icUserStateOps()
 	if um == nil {
 		return fmt.Sprintf("users' listening state is on source %s, which ABS does not list, and the store cannot move it back to clone %s", rec.SourceBookID, rec.CloneBookID)
 	}
-	if err := merge.CarryStateBetweenLiveBooks(um, rec.CloneBookID, rec.SourceBookID); err != nil {
+	if err := um.CarryStateBetweenLiveBooks(rec.CloneBookID, rec.SourceBookID); err != nil {
 		if errors.Is(err, merge.ErrSyncRedirectNotCleared) {
 			// The state did move; only the redirect between the two
 			// live books is left.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.5.0
+// version: 1.6.1
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
-// last-edited: 2026-10-26
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // iTunes smart-playlist import (spec 3.4 task 5).
@@ -101,6 +101,40 @@ func (p *Plugin) itunesPlaylistImportDef() sdk.OperationDef {
 	}
 }
 
+// itunesPlaylistImportKind is the native kind of itunes.playlist-import (F5-10).
+const itunesPlaylistImportKind tasks.Kind = "books.itunes.playlist-import"
+
+// playlistImportReader is the reads the import makes.
+type playlistImportReader interface {
+	// LibraryReadPath is the configured iTunes library path (HEAD:
+	// config.AppConfig.ITunes.LibraryReadPath), the default for libraryPath.
+	LibraryReadPath() string
+	// ProbeSmartPlaylists is a dry run of the migration: it reads the store and
+	// writes nothing.
+	ProbeSmartPlaylists(lib *itunes.ITLLibrary, ownerUserID string) itunesservice.PlaylistImportResult
+	// CountSmartPlaylists is the number of smart playlists in the store.
+	CountSmartPlaylists() (int, error)
+}
+
+// playlistImportWriter is the write the import makes.
+type playlistImportWriter interface {
+	// ImportSmartPlaylists creates the UserPlaylist rows the migration found.
+	ImportSmartPlaylists(lib *itunes.ITLLibrary, ownerUserID string) itunesservice.PlaylistImportResult
+}
+
+// itunesPlaylistImportEnv is what the import's core needs from its engine.
+type itunesPlaylistImportEnv struct {
+	t6g5Base
+	// Global is where HEAD wrote the four attribute lines of this op: the
+	// process-wide logger (slog.Default()), not the run's. Native: the run's
+	// logger. Keeping HEAD on the global one keeps its output unchanged: the
+	// reporter's logger also fans each line out to the op log, the bus and the
+	// activity log.
+	Global *slog.Logger
+}
+
+// runITunesPlaylistImport is the v2 shell: HEAD's decode and dry-run
+// resolution, then the shared core.
 func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params itunesPlaylistImportParams
 	if len(raw) > 0 {
@@ -112,13 +146,41 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	if err != nil {
 		return err
 	}
+	return itunesPlaylistImportCore(ctx, params, itunesPlaylistImportEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, !dryRun), Global: slog.Default()})
+}
 
+// itunesPlaylistImportKind builds the native kind. Writes found: UserPlaylist
+// rows (CreateUserPlaylist, via PlaylistSync); HEAD declares only the
+// CapLibraryWrite capability. The dry-run keys are refused, the mode is the
+// run's.
+func (p *Plugin) itunesPlaylistImportKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "user_playlists"))
+	return tasks.Task(itunesPlaylistImportKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: t6g5Common(p.itunesPlaylistImportDef(), itunesPlaylistImportKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			var params itunesPlaylistImportParams
+			if err := t6g5DecodeParams(itunesPlaylistImportKind, raw, &params, t6g5ModeKeys...); err != nil {
+				return struct{}{}, err
+			}
+			base, err := t6g5NativeBase(itunesPlaylistImportKind, rc, deps, true)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, itunesPlaylistImportCore(rc.Context(), params, itunesPlaylistImportEnv{t6g5Base: base, Global: base.Logger})
+		},
+	})
+}
+
+// itunesPlaylistImportCore is the shared body of both shells. The mode is
+// env.Live (an omitted mode is a preview in both engines).
+func itunesPlaylistImportCore(ctx context.Context, params itunesPlaylistImportParams, env itunesPlaylistImportEnv) error {
+	dryRun := !env.Live
 	libPath := strings.TrimSpace(params.LibraryPath)
 	if libPath == "" {
 		libPath = strings.TrimSpace(params.ITLPath)
 	}
 	if libPath == "" {
-		libPath = strings.TrimSpace(config.AppConfig.ITunes.LibraryReadPath)
+		libPath = strings.TrimSpace(env.Store.LibraryReadPath())
 	}
 	if libPath == "" {
 		return fmt.Errorf("itunes-playlist-import: libraryPath is required " +
@@ -137,14 +199,14 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	if isXML {
 		source = "xml"
 	}
-	_ = reporter.UpdateProgress(0, 3, fmt.Sprintf("Phase 1/3: parsing %s source %s (%.1f MB)…",
+	env.Progress(0, 3, fmt.Sprintf("Phase 1/3: parsing %s source %s (%.1f MB)…",
 		source, libPath, float64(st.Size())/(1024*1024)))
 
 	var lib *itunes.ITLLibrary
 	if isXML {
 		lib, err = itunes.ParseXMLLibraryPlaylists(libPath)
 	} else {
-		reporter.Log(slog.LevelWarn, fmt.Sprintf(
+		env.Log(slog.LevelWarn, fmt.Sprintf(
 			"reading the BINARY .itl at %s — it extracts 0 smart playlists from real "+
 				"12.13.10.3 libraries. Point libraryPath at the iTunes Library.xml export instead.", libPath))
 		lib, err = itunes.ParseITL(libPath)
@@ -162,7 +224,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 			smart++
 		}
 	}
-	_ = reporter.UpdateProgress(1, 3, fmt.Sprintf("Phase 2/3: %d playlists in library, %d smart", len(lib.Playlists), smart))
+	env.Progress(1, 3, fmt.Sprintf("Phase 2/3: %d playlists in library, %d smart", len(lib.Playlists), smart))
 
 	// MEASURED 2026-08-10 and unresolved: the binary ITL parser extracts ZERO
 	// smart playlists from real iTunes 12.13.10.3 libraries, while the XML
@@ -182,17 +244,15 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 				"same library can contain hundreds of smart playlists the binary ITL parser "+
 				"does not surface. Verify with: grep -c 'Smart Criteria' '<library>.xml'",
 			len(lib.Playlists))
-		slog.Warn("itunes-playlist-import: no smart playlists extracted", "source", source, "path", libPath, "playlists", len(lib.Playlists))
-		_ = reporter.Log(slog.LevelWarn, msg)
-		_ = reporter.UpdateProgress(3, 3, "0 smart playlists extracted — see log")
+		env.Global.Warn("itunes-playlist-import: no smart playlists extracted", "source", source, "path", libPath, "playlists", len(lib.Playlists))
+		env.Log(slog.LevelWarn, msg)
+		env.Progress(3, 3, "0 smart playlists extracted — see log")
 		return nil
 	}
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	importer := itunesservice.NewPlaylistImporter(p.deps.PlaylistStore())
 
 	// ALWAYS dry-run first, even when applying. The Smart Criteria format is
 	// only partially mapped (ITUNES-SMARTCRIT-PARSE): ParseSmartCriteria now
@@ -203,10 +263,8 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	// guard refuses to apply while any importable playlist would be created
 	// with an empty query. Importing hundreds of empty playlists is worse than
 	// importing none: it looks like it worked.
-	probe := importer.MigrateSmartPlaylists(lib, itunesservice.PlaylistImportOptions{
-		OwnerUserID: strings.TrimSpace(params.OwnerUserID),
-		DryRun:      true,
-	})
+	owner := strings.TrimSpace(params.OwnerUserID)
+	probe := env.Store.ProbeSmartPlaylists(lib, owner)
 	empties := 0
 	for _, it := range probe.Items {
 		if it.Status == "would-import" && strings.TrimSpace(it.Query) == "" {
@@ -218,8 +276,8 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 			"%d of %d importable playlists translate to an EMPTY query — their Smart "+
 				"Criteria did not survive parsing (ITUNES-SMARTCRIT-PARSE). Importing them "+
 				"would create playlists that are silently empty.", empties, probe.Imported)
-		_ = reporter.Log(slog.LevelWarn, msg)
-		slog.Warn("itunes-playlist-import: empty translated queries",
+		env.Log(slog.LevelWarn, msg)
+		env.Global.Warn("itunes-playlist-import: empty translated queries",
 			"empty", empties, "importable", probe.Imported)
 
 		if !dryRun && !params.AllowEmptyQueries {
@@ -233,10 +291,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 
 	res := probe
 	if !dryRun {
-		res = importer.MigrateSmartPlaylists(lib, itunesservice.PlaylistImportOptions{
-			OwnerUserID: strings.TrimSpace(params.OwnerUserID),
-			DryRun:      false,
-		})
+		res = env.Writer.ImportSmartPlaylists(lib, owner)
 	}
 
 	// Report by RE-READING the store, not by trusting the returned counter.
@@ -244,10 +299,10 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	// actually exist afterwards.
 	verified := -1
 	if !dryRun {
-		if _, total, lerr := p.deps.OpsStore().ListUserPlaylists("smart", 1, 0); lerr == nil {
+		if total, lerr := env.Store.CountSmartPlaylists(); lerr == nil {
 			verified = total
 		} else {
-			slog.Warn("itunes-playlist-import: verification re-read failed", "err", lerr)
+			env.Global.Warn("itunes-playlist-import: verification re-read failed", "err", lerr)
 		}
 	}
 
@@ -255,7 +310,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	if dryRun {
 		mode = "DRY-RUN"
 	}
-	slog.Info("itunes-playlist-import complete",
+	env.Global.Info("itunes-playlist-import complete",
 		"mode", mode, "source", source, "path", libPath,
 		"playlistsInLibrary", len(lib.Playlists),
 		"smartFound", res.SmartFound,
@@ -268,12 +323,12 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 	if verified >= 0 {
 		summary += fmt.Sprintf("; %d smart playlists in store after", verified)
 	}
-	_ = reporter.UpdateProgress(3, 3, summary)
+	env.Progress(3, 3, summary)
 
-	_ = reporter.Log(slog.LevelInfo, summary)
+	env.Log(slog.LevelInfo, summary)
 	for _, it := range res.Items {
 		if it.Status == "unparseable" || it.Status == "create-failed" {
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("%s: %s (%s)", it.Status, it.Title, it.Err))
+			env.Log(slog.LevelWarn, fmt.Sprintf("%s: %s (%s)", it.Status, it.Title, it.Err))
 		}
 	}
 	return nil

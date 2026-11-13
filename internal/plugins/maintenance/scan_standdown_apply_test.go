@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/scan_standdown_apply_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5c8e1a94-2d76-4f03-9b6e-1a4c7e0d258f
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -154,8 +154,8 @@ func TestMarkMissing_Apply_HoldsScanStandDownAndRenews(t *testing.T) {
 	store := seedMarkGone(dir, n)
 	c := &recordingScanController{renewOK: true}
 
-	plan, err := planMarkMissingFiles(context.Background(), store, c,
-		markMissingParams{Apply: true}, &opIDReporter{id: "op-42"})
+	t6g5h1 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h1, t6g5MarkEnv(context.Background(), t6g5h1.Apply, c, &opIDReporter{id: "op-42"}))
 	require.NoError(t, err)
 	require.Equal(t, n, plan.MarkedMissing)
 	require.Len(t, store.updates, n, "every gone row is written when the gate holds")
@@ -176,8 +176,8 @@ func TestMarkMissing_Apply_AbortsWhenLeaseLost(t *testing.T) {
 	store := seedMarkGone(dir, n)
 	c := &recordingScanController{renewOK: false} // lease is gone from the first heartbeat
 
-	plan, err := planMarkMissingFiles(context.Background(), store, c,
-		markMissingParams{Apply: true}, &opIDReporter{id: "op-99"})
+	t6g5h2 := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h2, t6g5MarkEnv(context.Background(), t6g5h2.Apply, c, &opIDReporter{id: "op-99"}))
 	require.Error(t, err, "a lapsed lease mid-apply must surface as an error")
 	require.Contains(t, err.Error(), "lease lapsed")
 	require.Equal(t, 0, plan.MarkedMissing)
@@ -200,8 +200,8 @@ func TestMarkMissing_DryRun_DoesNotAcquire(t *testing.T) {
 	store := seedMarkGone(dir, 3)
 	c := &recordingScanController{renewOK: true}
 
-	_, err := planMarkMissingFiles(context.Background(), store, c,
-		markMissingParams{}, &opIDReporter{id: "op-1"}) // Apply defaults false
+	t6g5h3 := markMissingParams{}
+	_, err := planMarkMissingFilesVia(context.Background(), store, store, t6g5h3, t6g5MarkEnv(context.Background(), t6g5h3.Apply, c, &opIDReporter{id: "op-1"})) // Apply defaults false
 	require.NoError(t, err)
 
 	acq, _, ren := c.counts()

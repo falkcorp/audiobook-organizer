@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_reader_abort_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c2e91d4-3b58-4a06-9e1f-d84a5b60c2f7
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -51,7 +51,8 @@ func (s *storeWithoutRetiredReader) UpdateBookFiles(context.Context, []*database
 // so none of them reaches this branch.
 func TestRetiredReaderAbort_RepointStopsBeforePlanningOrWriting(t *testing.T) {
 	store := &storeWithoutRetiredReader{}
-	plan, err := planMissingFileRepoint(context.Background(), store, nil, missingFileRepointParams{Apply: true}, &fakeReporter{})
+	t6g5h1 := missingFileRepointParams{Apply: true}
+	plan, err := planMissingFileRepointVia(context.Background(), store, t6g5RepointAll(store), store, t6g5h1, t6g5RepointEnv(context.Background(), t6g5h1.Apply, nil, &fakeReporter{}))
 	require.ErrorIs(t, err, database.ErrRetiredReaderUnavailable)
 	assert.Contains(t, err.Error(), "load book files")
 	assert.Equal(t, repointPlan{}, plan, "nothing may be planned from a claim set that left retired rows out")
