@@ -1,22 +1,26 @@
 // file: core/kernel/logmetrics_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2b9d5e71-4c08-4a3f-8e6b-d0a7c3f15e82
-// last-edited: 2026-11-08
+// last-edited: 2026-11-13
 
 package kernel
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 
+	"github.com/falkcorp/mediacore/internal/logjournal"
 	"github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/metrics/metricstest"
 )
 
@@ -57,7 +61,7 @@ func mustSample(t *testing.T, k *Kernel, family string, want map[string]string) 
 }
 
 // TestLogMetrics_SeriesGolden (05-logging §9): the mediacore.log scope serves
-// the three families of testdata/log/series.golden, a record, a tap drop and
+// the five families of testdata/log/series.golden, a record, a tap drop and
 // a redaction each raise their counter by one, and a level below debug is
 // labelled as the pipeline renders it. One cell reads the families through
 // the Provider's served /metrics handler, not through the bridge.
@@ -149,7 +153,9 @@ func TestLogMetrics_SeriesGolden(t *testing.T) {
 	l.Log(context.Background(), log.LevelTrace+2, "closer")
 	mustSample(t, k, "mediacore_log_records_total", map[string]string{"module": "core", "level": "TRACE+2"})
 
-	// Through the served handler: the three families, as a scraper sees them.
+	// Through the served handler: the five families, as a scraper sees them. The
+	// two journal families are served from boot, at 0 until a journal tap is wired
+	// in (F5-18).
 	srv := httptest.NewServer(k.provider.Handler())
 	defer srv.Close()
 	resp, err := http.Get(srv.URL)
@@ -161,7 +167,10 @@ func TestLogMetrics_SeriesGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"mediacore_log_dropped_total", "mediacore_log_records_total", "mediacore_log_redactions_total"}
+	want := []string{
+		"mediacore_log_dropped_total", "mediacore_log_journal_lag_seconds", "mediacore_log_journal_write_errors_total",
+		"mediacore_log_records_total", "mediacore_log_redactions_total",
+	}
 	if !slices.Equal(families, want) {
 		t.Errorf("/metrics serves %v, want %v", families, want)
 	}
@@ -173,5 +182,55 @@ func TestLogMetrics_NoScopeWhenLoggerInjected(t *testing.T) {
 	k := mustNew(t, Config{AppID: "gotham", Logger: slog.New(slog.DiscardHandler)})
 	if k.logScope != nil {
 		t.Error("a mediacore.log scope was registered with no pipeline")
+	}
+}
+
+// TestLogMetrics_JournalFamiliesReadTheTap (05-logging §9, F5-15): with a
+// journal tap's counters supplied, mediacore_log_journal_write_errors_total and
+// mediacore_log_journal_lag_seconds serve its WriteErrors and Lag; without
+// them both serve 0.
+func TestLogMetrics_JournalFamiliesReadTheTap(t *testing.T) {
+	read := func(opts ...logMetricsOption) (errs, lag float64) {
+		t.Helper()
+		ctx := context.Background()
+		p, err := metrics.New(ctx, metrics.Options{AppID: "gotham", ServiceName: "gotham", Prometheus: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = p.Shutdown(ctx) })
+		l, err := log.New(log.Options{Output: io.Discard, Format: log.FormatText, Level: slog.LevelInfo, Redactor: log.NewRedactor(nil)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = l.Close(ctx) })
+		if _, err := registerLogMetrics(p, l, opts...); err != nil {
+			t.Fatal(err)
+		}
+		mfs, err := p.Gatherer().Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := 0
+		for _, mf := range mfs {
+			switch mf.GetName() {
+			case "mediacore_log_journal_write_errors_total":
+				errs, found = mf.GetMetric()[0].GetCounter().GetValue(), found+1
+			case "mediacore_log_journal_lag_seconds":
+				lag, found = mf.GetMetric()[0].GetGauge().GetValue(), found+1
+			}
+		}
+		if found != 2 {
+			t.Fatalf("served %d of the 2 journal families", found)
+		}
+		return errs, lag
+	}
+	if e, g := read(); e != 0 || g != 0 {
+		t.Errorf("no tap: errors %v, lag %v; want 0, 0", e, g)
+	}
+	tap := withJournalCounters(func() logjournal.TapCounters {
+		return logjournal.TapCounters{WriteErrors: 7, Lag: 2500 * time.Millisecond}
+	})
+	if e, g := read(tap); e != 7 || g != 2.5 {
+		t.Errorf("with a tap: errors %v, lag %v; want 7, 2.5", e, g)
 	}
 }

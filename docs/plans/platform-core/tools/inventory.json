@@ -2416,7 +2416,9 @@
    "core/log/journal_test.go",
    "core/kernel/logmetrics.go",
    "core/kernel/testdata/log/",
-   "core/kernel/core_sections.go"
+   "core/kernel/core_sections.go",
+   "core/kernel/core_sections_validate.go",
+   "core/kernel/logmetrics_test.go"
   ],
   "spec": "05-logging §5, §11 item 1 (R2 part); 03 §3.8 M5; 04 §8.1 F5; 06 §6.4.10 F5",
   "notes": "Tier: a durable journal store, its importer and a migration step. The query route is F5-19's and the live tail F6-05's. core.log.journal and core.log.schedules are registered dark from F2 by F2-09's section list; this row adds logjournal's Schedules type they name. M5's step ID comes from F3-06's stepids.go. Adds mediacore_log_journal_write_errors_total and mediacore_log_journal_lag_seconds (05-logging §9) to R1-18's kernel-side bridge and its series golden. Swaps the core.log.journal.* section and the journal_prune schedule key declarations in core_sections.go to logjournal.Settings and logjournal.Schedules (05-logging §5), so one type is registered. 04 keys: F5 create mediacore/internal/logjournal; F5 create mediacore/log/logtest. Owns gate tests: TestCutover_SyslogImported."

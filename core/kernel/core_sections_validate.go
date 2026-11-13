@@ -1,7 +1,7 @@
 // file: core/kernel/core_sections_validate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: adedcea5-5d4b-4dd0-b8c2-12da76e1f988
-// last-edited: 2026-11-11
+// last-edited: 2026-11-13
 
 package kernel
 
@@ -70,9 +70,8 @@ func (s librarySettings) Validate() error {
 	return validateSchedules("core.library.schedules", s.Schedules)
 }
 
-// Validate implements config.Validator: core.log.schedules is a section of
-// its own.
-func (s logSchedules) Validate() error { return validateSchedules("core.log.schedules", s) }
+// core.log.schedules is a section of its own whose type, logjournal.Schedules,
+// implements config.Validator itself (F5-15), so it has no method here.
 
 // Validate implements config.Validator (core.integrations.schedules).
 func (s integrationsSettings) Validate() error {

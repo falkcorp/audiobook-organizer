@@ -1,7 +1,7 @@
 // file: core/kernel/logmetrics.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6a3e8c14-9d52-4b70-b1f6-e4c05d27a9b8
-// last-edited: 2026-11-08
+// last-edited: 2026-11-13
 
 package kernel
 
@@ -13,9 +13,27 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/falkcorp/mediacore/internal/logjournal"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 )
+
+// logMetricsOption configures registerLogMetrics. It is unexported: the one
+// option is for the kernel's own wiring (F5-18), which hands the bridge the
+// journal tap's counters once the tap exists.
+type logMetricsOption func(*logMetricsConfig)
+
+type logMetricsConfig struct {
+	journal func() logjournal.TapCounters
+}
+
+// withJournalCounters names the journal tap's counters as the source of the two
+// journal families. Without it the families observe 0: the series exist from
+// boot, as 05-logging §9 lists them, and a journal that is not running reads as
+// no errors and no lag, not as an absent series.
+func withJournalCounters(f func() logjournal.TapCounters) logMetricsOption {
+	return func(c *logMetricsConfig) { c.journal = f }
+}
 
 // registerLogMetrics is the bridge of 05-logging §9 (log cannot import
 // metrics, 03 R4): it takes the core scope mediacore.log (the app's namespace
@@ -25,12 +43,19 @@ import (
 //	<ns>_log_records_total{level,module}
 //	<ns>_log_dropped_total{sink}
 //	<ns>_log_redactions_total{kind}
+//	<ns>_log_journal_write_errors_total
+//	<ns>_log_journal_lag_seconds
 //
-// The journal families of §9 (write errors, lag) have no Counters field until
-// F5-15 and are not registered. Nothing is recorded on the logging path: the
-// pipeline's own atomics are the source, so a record costs no more than it
-// did.
-func registerLogMetrics(p *metrics.Provider, l *log.Logging) (*metrics.Scope, error) {
+// The first three read l.Counters(); the journal's two read the journal tap's
+// own counters (logjournal.TapCounters), which are not part of log.Counters
+// because the tap lives in core/internal/logjournal, above log. Nothing is
+// recorded on the logging path: the pipeline's own atomics are the source, so a
+// record costs no more than it did.
+func registerLogMetrics(p *metrics.Provider, l *log.Logging, opts ...logMetricsOption) (*metrics.Scope, error) {
+	var cfg logMetricsConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
 	sc, err := p.Core("log", "level", "module", "sink", "kind")
 	if err != nil {
 		return nil, fmt.Errorf("kernel: log metrics scope: %w", err)
@@ -51,7 +76,23 @@ func registerLogMetrics(p *metrics.Provider, l *log.Logging) (*metrics.Scope, er
 	if err != nil {
 		return nil, fmt.Errorf("kernel: log redactions counter: %w", err)
 	}
+	journalErrors, err := m.Int64ObservableCounter(prefix+".journal_write_errors",
+		metric.WithDescription("Journal batches the store refused; those records were not journaled (the journal fails open)."))
+	if err != nil {
+		return nil, fmt.Errorf("kernel: log journal write errors counter: %w", err)
+	}
+	journalLag, err := m.Float64ObservableGauge(prefix+".journal_lag", metric.WithUnit("s"),
+		metric.WithDescription("Age of the oldest log record the journal has accepted and not yet written; 0 when nothing waits."))
+	if err != nil {
+		return nil, fmt.Errorf("kernel: log journal lag gauge: %w", err)
+	}
 	_, err = m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		var jc logjournal.TapCounters
+		if cfg.journal != nil {
+			jc = cfg.journal()
+		}
+		o.ObserveInt64(journalErrors, int64(jc.WriteErrors))
+		o.ObserveFloat64(journalLag, jc.Lag.Seconds())
 		c := l.Counters()
 		for mod, byLevel := range c.Records {
 			for lv, n := range byLevel {
@@ -66,7 +107,7 @@ func registerLogMetrics(p *metrics.Provider, l *log.Logging) (*metrics.Scope, er
 			o.ObserveInt64(redactions, int64(n), metric.WithAttributes(attribute.String("kind", kind)))
 		}
 		return nil
-	}, records, dropped, redactions)
+	}, records, dropped, redactions, journalErrors, journalLag)
 	if err != nil {
 		return nil, fmt.Errorf("kernel: log metrics callback: %w", err)
 	}
