@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-13
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -23,6 +23,7 @@ import pathlib
 import re
 import sys
 import threading
+import time
 import unittest
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
@@ -107,6 +108,7 @@ class FakeR0:
         self.defs_start_status = 400
         self.awaiting = ["run-1"]
         self.dead = False
+        self.stream_path: str | None = None  # an event stream: headers, then heartbeats forever
         self.lock = threading.Lock()
         outer = self
 
@@ -164,8 +166,28 @@ class FakeR0:
         h.wfile.write(raw)
 
     def handle(self, h) -> None:
+        if self.stream_path and urlparse(h.path).path == self.stream_path:
+            return self.stream(h)
         with self.lock:
             self._handle(h)
+
+    def stream(self, h) -> None:
+        """An SSE route: 401 without a principal, else 200 and a heartbeat that
+        never stops (a client that reads the body to its end never returns)."""
+        with self.lock:
+            user, _ = self.principal(h)
+        if user is None and not self.auth_off:
+            return self.reply(h, 401)
+        h.send_response(200)
+        h.send_header("Content-Type", "text/event-stream")
+        h.end_headers()
+        for _ in range(400):  # 20 s at most, so a failing test still ends
+            try:
+                h.wfile.write(b": heartbeat\n\n")
+                h.wfile.flush()
+            except OSError:
+                return
+            time.sleep(0.05)
 
     def _handle(self, h) -> None:
         if self.dead:
@@ -207,7 +229,10 @@ class FakeR0:
         if path == "/api/v3/ops/defs" and method == "GET":
             return self.reply(h, 200 if user or self.auth_off else 401, {"items": self.defs})
         if path == "/api/v3/ops/runs" and method == "GET":
-            items = [{"id": r, "state": "awaiting_decision"} for r in self.awaiting]
+            items = [
+                {"id": r, "state": "awaiting_decision", "def_id": "scan.trigger", "secret": "x"}
+                for r in self.awaiting
+            ]
             return self.reply(h, 200 if user or self.auth_off else 401, {"items": items})
         m = re.fullmatch(r"/api/v3/ops/defs/([^/]+)/runs", path)
         if m and method == "POST":
@@ -388,6 +413,20 @@ class RecordPassTest(unittest.TestCase):
         self.assertEqual(edit[idx["session:viewer"]], "D")
         self.assertEqual(edit[idx["key:editor:every"]], "A")
 
+    def test_an_event_stream_does_not_hang_the_probe(self):
+        # The first runner pass hung 37 minutes in GET /api/events: an authorized
+        # probe of a stream whose heartbeat keeps the socket alive. The verdict is
+        # the status line; the body is never read.
+        self.rig.fake.stream_path = "/api/events"
+        self.rig.routes.append({"method": "GET", "path": "/api/events", "abs_only": False})
+        started = time.monotonic()
+        out = self.rig.run(do_tasks=False)
+        self.assertLess(time.monotonic() - started, 15, "the probe waited for the stream to end")
+        names = [p["name"] for p in self.rig.principals]
+        last = len(self.rig.routes) - 1
+        self.assertEqual(out["columns"][names.index("session:admin")][last], 200)
+        self.assertEqual(out["columns"][names.index("anonymous")][last], 401)
+
     def test_logout_ends_the_session_and_the_recorder_logs_in_again(self):
         out = self.rig.run()
         names = [p["name"] for p in self.rig.principals]
@@ -448,6 +487,9 @@ class RecordPassTest(unittest.TestCase):
         self.assertEqual(tasks["scan.trigger"]["permissions"], ["scan.trigger"])
         ap = out["approvals"][0]
         self.assertEqual(ap["run_id"], "run-1")
+        self.assertEqual(
+            ap["run"], {"id": "run-1", "def_id": "scan.trigger", "state": "awaiting_decision"}
+        )
         self.assertEqual(ap["verdict"][i], "A")
         self.assertEqual(ap["verdict"][names.index("session:viewer")], "D")
 
