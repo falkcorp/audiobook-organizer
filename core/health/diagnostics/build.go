@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/build.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0e48d09a-7583-4133-9749-d96bbfaf2aa5
 // last-edited: 2026-11-13
 
@@ -321,16 +321,21 @@ func (e *Exporter) Export(rc *tasks.RC, p ExportParams) (ExportResult, error) {
 }
 
 // ErrActorMismatch is the refusal of a run whose params name a different actor
-// than the one the executor stamped on the run.
+// than the one the executor stamped on the run, or whose run has no stamped
+// person to compare.
 var ErrActorMismatch = errors.New("diagnostics: params name a different actor than the run's")
 
 // checkStampedActor refuses a run whose p.ActorID is not the person the
 // executor recorded as having started it. The params are client-supplied; the
 // stamped actor is not (tasks.Actor: never derived from an unsigned header).
-// A run with no stamped person (a system actor) has nothing to compare, and its
-// bundle is still limited to what ViewerFor says the named actor may read.
+//
+// It fails closed: a run with no stamped person (a system actor, or a stamp the
+// executor could not fill) is refused too, because comparing nothing to a
+// claimed ActorID proves nothing and the claimed ID is what the download route
+// later binds the bundle to. No system actor starts this kind; when one needs
+// to, it needs its own rule here, not a silent pass.
 func checkStampedActor(stamped tasks.Actor, p ExportParams) error {
-	if stamped.UserID != "" && stamped.UserID != p.ActorID {
+	if stamped.UserID == "" || stamped.UserID != p.ActorID {
 		return ErrActorMismatch
 	}
 	return nil
