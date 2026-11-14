@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -36,13 +36,12 @@ import (
 // ---------------------------------------------------------------------------
 // Recording fakes of t6g2Store and t6g2Writer (rule R10).
 //
-// Both embed the interface they fake and leave it nil: a method a test did not
-// provide panics, so a core that reaches for something its scenario did not
-// arrange fails loudly instead of reading a zero value.
+// The store fake implements every t6g2Store method, so a core that reaches for
+// something its scenario did not arrange reads an empty value the test asserts
+// on; the writer fake embeds its interface and panics on an unprovided method.
 // ---------------------------------------------------------------------------
 
 type t6g2FakeStore struct {
-	t6g2Store
 	mu sync.Mutex
 
 	ids      []string
@@ -1732,6 +1731,21 @@ func t6g2RefusalSubtests(t *testing.T) {
 		}
 	})
 
+	// The boot-time if_needed backfill is the one capability probe that is not a
+	// refusal: a store with no index has nothing to build, so HEAD logs a Warn
+	// and the run ends clean without a write.
+	t.Run("book-atpath-index-backfill if_needed on a store with no index is a clean no-op", func(t *testing.T) {
+		f := newT6G2Fakes(t)
+		f.store.unsupported[t6g2CapAtPathBackfill] = true
+		def := kindOf(f, f.deps(), t6g2KindBookAtPathIndexBackfill)
+		if _, err := t6g2RunKind(t, def, t6g2NewRC(def.Kind(), tasks.ModeLive, nil), `{"if_needed":true}`); err != nil {
+			t.Fatalf("err = %v, want a clean no-op", err)
+		}
+		if len(f.writer.got()) != 0 {
+			t.Errorf("wrote %v on a store with no index", f.writer.got())
+		}
+	})
+
 	// Every kind that probes a capability refuses, naming the store, before it
 	// writes anything.
 	for _, tc := range []struct {
@@ -1741,7 +1755,6 @@ func t6g2RefusalSubtests(t *testing.T) {
 	}{
 		{t6g2KindBookAtPathIndexVerify, t6g2CapAtPathVerify, `{}`},
 		{t6g2KindBookAtPathIndexBackfill, t6g2CapAtPathRebuild, `{}`},
-		{t6g2KindBookAtPathIndexBackfill, t6g2CapAtPathBackfill, `{"if_needed":true}`},
 		{t6g2KindBookHashIndexRepair, t6g2CapHashIndex, `{}`},
 		{t6g2KindBookFileAcoustIDIndexRepair, t6g2CapAcoustIDRepair, `{}`},
 		{t6g2KindBookSigSidecarMigrate, t6g2CapSigMigrate, `{}`},
