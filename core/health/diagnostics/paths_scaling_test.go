@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_scaling_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8a5d71-c204-4b96-8f1d-6a0b9e2c4d58
 // last-edited: 2026-11-14
 
@@ -89,6 +89,34 @@ func TestRedactPaths_NestedTokensAreLinear(t *testing.T) {
 		out := timeRedact(t, roots, line)
 		if strings.Contains(out, "/home") {
 			t.Errorf("%s: %q", name, head(out))
+		}
+	}
+}
+
+// TestRedactPaths_RouteQueryShapesAreLinear (round 5): the route scanner takes a
+// whole token to whitespace and then reads its path part and query a second
+// time, decoding percent escapes up to maxDecode rounds. Each shape below makes
+// a naive version re-scan its input from every delimiter, every "&", every "%"
+// or every failed chunk, and so is quadratic; none may be, and none may leak.
+func TestRedactPaths_RouteQueryShapesAreLinear(t *testing.T) {
+	roots := scalingRoots()
+	for name, line := range map[string]string{
+		"nested escapes":        "/api/x?a=" + strings.Repeat("%25", 130_000) + "2F",
+		"many query parts":      "/api/x?" + strings.Repeat("a=1&", 90_000) + "p=%2Fhome%2Fbruce",
+		"commas":                strings.Repeat("/api/x,", 50_000) + "/home/bruce",
+		"question marks":        strings.Repeat("/api/x?", 50_000) + "/home/bruce",
+		"trailing punctuation":  "/api/x" + strings.Repeat(".'", 100_000) + " /home/bruce",
+		"failed chunks":         strings.Repeat("/api/%zz,", 40_000) + "/home/bruce",
+		"slash runs":            "/api/x" + strings.Repeat("/", 200_000) + "home/bruce",
+		"decoded slash runs":    "/api/x" + strings.Repeat("%2F", 100_000) + "home%2Fbruce",
+		"bare percents":         "/api/x?a=" + strings.Repeat("%", 200_000) + "&p=%2Fhome%2Fbruce",
+		"fragments":             "/api/x" + strings.Repeat("#a", 100_000) + "#%2Fhome%2Fbruce",
+		"whitespace separated":  strings.Repeat("/api/x?a=1 ", 30_000) + "/home/bruce",
+		"alternating encodings": strings.Repeat("/api/x?a=%2Fapi%2Fx%3Fa%3D1&", 12_000) + "p=/home/bruce",
+	} {
+		out := timeRedact(t, roots, line)
+		if strings.Contains(out, "bruce") {
+			t.Errorf("%s: a path survived: %q", name, head(out))
 		}
 	}
 }

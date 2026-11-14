@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/build.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 0e48d09a-7583-4133-9749-d96bbfaf2aa5
 // last-edited: 2026-11-14
 
@@ -318,10 +318,6 @@ func BundleFile(runID string) string { return runID + ".zip" }
 // Export is the kind's Run: it matches InterimExport.Export, so F8's native
 // body keeps the types, and reports progress per section.
 func (e *Exporter) Export(rc *tasks.RC, p ExportParams) (ExportResult, error) {
-	if err := checkStampedActor(rc.Actor(), p); err != nil {
-		e.countBundle("error")
-		return ExportResult{}, err
-	}
 	return e.Build(rc.Context(), string(rc.RunID()), rc.Actor(), p, func(done, total int) {
 		rc.Progress().Set(int64(done), tasks.Known(int64(total)))
 	})
@@ -350,9 +346,16 @@ func checkStampedActor(stamped tasks.Actor, p ExportParams) error {
 
 // Build writes the bundle for runID. actor is the executor-stamped actor of the
 // run (Export passes rc.Actor()); it, not p.ActorID, is what ViewerFor resolves.
+// Build is exported, so it holds the actor check itself (checkStampedActor)
+// rather than trusting every caller to have made it: a caller that passes an
+// actor other than p.ActorID gets ErrActorMismatch and no file.
 // progress (nil allowed) is called after each section with how many are done of
 // how many are planned.
 func (e *Exporter) Build(ctx context.Context, runID string, actor tasks.Actor, p ExportParams, progress func(done, total int)) (res ExportResult, err error) {
+	if err := checkStampedActor(actor, p); err != nil {
+		e.countBundle("error")
+		return ExportResult{}, err
+	}
 	if !ValidRunID(runID) {
 		return ExportResult{}, fmt.Errorf("diagnostics: run id %q is not a plain name", runID)
 	}
