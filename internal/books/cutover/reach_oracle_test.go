@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_oracle_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c27d5a40-9e18-4b63-8f02-3a6d1e7b9c54
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package cutover
 
@@ -74,6 +74,8 @@ type reachR0Approval struct {
 
 type reachR0Doc struct {
 	R0Tag           string            `json:"r0_tag"`
+	OverlaySHA256   string            `json:"overlay_sha256"` // digest of the overlay store the recording copied
+	Recorded        map[string]string `json:"recorded"`       // the run that wrote it (provenance, never compared)
 	RouteCount      int               `json:"route_count"`
 	Principals      []string          `json:"principals"`
 	Routes          []reachR0Route    `json:"routes"`
@@ -452,8 +454,13 @@ func reachDiff(r0 *reachR0Doc, r2 *reachR2) reachDiffResult {
 	return res
 }
 
-// reachManifest is books' ABS-on manifest, the one the route dump covers.
-func reachManifest() []httpapi.LegacyRoute { return server.LegacyRoutes(true) }
+// reachManifestSource is where the oracle reads books' ABS-on manifest, the one
+// the route dump covers. The mutation checks swap it for a changed copy
+// (reach_mutation_test.go); nothing else does, and none of them runs in parallel.
+var reachManifestSource = func() []httpapi.LegacyRoute { return server.LegacyRoutes(true) }
+
+// reachManifest is the manifest the oracle judges.
+func reachManifest() []httpapi.LegacyRoute { return reachManifestSource() }
 
 // ---- running the oracle ----
 
@@ -493,14 +500,34 @@ func reachRun(t testing.TB, pd *reachPrincipalsDoc, vd *reachR0Doc, m3Atoms, rou
 	t.Helper()
 	snap, seed := reachMigrate(t, pd, m3Atoms)
 	whos := reachWhos(t, snap, seed, pd.Principals, reachCatalog(t))
-	routes := reachManifest()
-	r2, err := reachEvaluate(routeAtoms, routes, whos)
+	res, r2 := reachJudge(t, vd, routeAtoms, whos)
+	return res, whos, r2
+}
+
+// reachJudge is the half of the oracle that reads the manifest: it evaluates
+// every route and the recorded task starts and approvals for whos and diffs them
+// with R0's. It migrates nothing, so a check that changes only the manifest runs
+// it again over the same whos.
+func reachJudge(t testing.TB, vd *reachR0Doc, routeAtoms []m3.AtomRow, whos []reachWho) (reachDiffResult, *reachR2) {
+	t.Helper()
+	res, r2, err := reachJudgeErr(vd, routeAtoms, whos)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return res, r2
+}
+
+// reachJudgeErr is reachJudge that returns the error a route without a
+// requirement (or naming an atom the table lacks) raises, so a check can assert it.
+func reachJudgeErr(vd *reachR0Doc, routeAtoms []m3.AtomRow, whos []reachWho) (reachDiffResult, *reachR2, error) {
+	routes := reachManifest()
+	r2, err := reachEvaluate(routeAtoms, routes, whos)
+	if err != nil {
+		return reachDiffResult{}, nil, err
+	}
 	tasks, err := reachTaskVerdicts(routeAtoms, routes, vd, whos)
 	if err != nil {
-		t.Fatal(err)
+		return reachDiffResult{}, nil, err
 	}
 	// The recorded starts and approvals join the routes as pseudo-routes.
 	withTasks := *vd
@@ -508,5 +535,5 @@ func reachRun(t testing.TB, pd *reachPrincipalsDoc, vd *reachR0Doc, m3Atoms, rou
 	for k, v := range tasks {
 		r2.verdict[k] = v
 	}
-	return reachDiff(&withTasks, r2), whos, r2
+	return reachDiff(&withTasks, r2), r2, nil
 }

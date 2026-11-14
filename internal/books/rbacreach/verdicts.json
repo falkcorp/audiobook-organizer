@@ -1,14 +1,24 @@
 {
  "_header": {
   "file": "internal/books/rbacreach/verdicts.json",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "guid": "e92f5c3a-8b17-4d64-a0c9-1f6d7b2e8a43",
-  "last-edited": "2026-11-13"
+  "last-edited": "2026-11-14"
  },
  "what": "R0's allow/deny per (route, principal); A = past the authorization decision, D = 401/403 (record_r0_reach.py)",
  "r0_tag": "v0.223.0",
  "r0_binary_sha256": "6f33d9dd7e41c2e43c3aa80342ed2c5b940df749ae6fdd6773bce9053837dc6f",
  "store": "internal/books/testdata/r2corpus/overlay",
+ "overlay_sha256": "d7d8475f1aa39d05402c463ad6f4dd5a942783f55e168e56ffb25a510fce701e",
+ "recorded": {
+  "recorder_commit": "b4e945a3dae8e98415ff5f4d4654a82f183147a7",
+  "workflow": "R0 reach record (temporary)",
+  "run_id": "43412869288",
+  "run_attempt": "1",
+  "runner_image": "ubuntu-26.04/20261101.186.1",
+  "python": "3.12",
+  "note": "filled in by hand from the run's log and the workflow's setup-python input: this recording predates the recorded field"
+ },
  "route_count": 572,
  "principals": [
   "session:admin",

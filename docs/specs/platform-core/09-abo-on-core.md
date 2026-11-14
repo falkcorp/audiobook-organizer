@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/09-abo-on-core.md -->
-<!-- version: 1.13.1 -->
+<!-- version: 1.14.0 -->
 <!-- guid: 3c82c917-2fc4-4385-b085-73d143a2374f -->
-<!-- last-edited: 2026-11-13 -->
+<!-- last-edited: 2026-11-14 -->
 
 # 09 — ABO on core: releases and the cutover
 
@@ -414,8 +414,7 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
 - **Keys and roles.** An `abk_` key with empty scopes, which holds all of its owner's role permissions at HEAD (P3), is
   converted per 05-rbac §6 and never stored empty; a new key never has empty or wildcard scopes. HEAD's `admin`
   seed and every key whose owner holds HEAD's `admin` role (the bootstrap key, an admin's every-atom or empty-list key)
-  map to `core:admin` plus every native scope of the 13 atom rows, task-run approval included, so the reach oracle
-  shows no loss; every other holder of every atom (a custom role, or a key owned by a non-admin) gets the union of the
+  map to `core:admin` plus every native scope of the 13 atom rows, task-run approval included, so the reach oracle shows no loss except the three debug edit routes, whose `books:admin.debug` is `Sensitive` (05-rbac §6.2); every other holder of every atom (a custom role, or a key owned by a non-admin) gets the union of the
   13 rows, a key then intersected with its owner's role set, never `core:admin` (05-rbac §6.1; SEC-12). Core seeds the four
   seed roles, and their IDs (`admin`, `editor`, `viewer`, `fp-worker`) are kept, so `User.Roles` and invite role
   references need no rewrite. An atom outside the table maps to nothing, and its role converts and is reported (P2).

@@ -1,0 +1,56 @@
+# file: scripts/r2corpus/r0config/r0reach-record.workflow.yml.txt
+# version: 1.0.0
+# guid: 9a4e7c15-3d82-4b60-a1f9-5c0e8b2d6a37
+# last-edited: 2026-11-14
+#
+# A template, not a workflow: it is a .txt outside .github/workflows, so it never
+# runs from here. It is the temporary workflow that recorded
+# internal/books/rbacreach (GitHub Actions run 43412869288, ubuntu-26.04), with its
+# trigger changed and its listing step dropped; its record, upload and log steps are
+# the same. To re-record R0's reach, or to run --check, copy
+# it to .github/workflows/r0reach-record.yml on a throwaway branch named
+# r0reach-record/<anything>, push, read the `r0reach` artifact, and never merge that
+# branch. The probes run against a throwaway copy of the overlay store, so the
+# destructive routes they reach are harmless there. Replace --regenerate with
+# --check to compare instead of write. See scripts/r2corpus/record_r0_reach.py.
+
+name: R0 reach record (temporary)
+
+on:
+  push:
+    branches: ['r0reach-record/**']
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Runtime libraries for the R0 binary
+        run: sudo apt-get update -q && sudo apt-get install -y -q libtag1v5 || sudo apt-get install -y -q libtag2
+      - name: Record R0's reach
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/r2corpus/record_r0_reach.py --regenerate
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: r0reach
+          path: internal/books/rbacreach
+          include-hidden-files: true
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: r0reach-serve-log
+          path: /tmp/r2corpus-logs
+          include-hidden-files: true
+          if-no-files-found: ignore

@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_tasks_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0c7e4a19-5d38-4b62-9f81-a3d6b2e8c570
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package cutover
 
@@ -49,6 +49,23 @@ func reachRouteGate(atoms []m3.AtomRow, routes []httpapi.LegacyRoute, key string
 	return reachGate{}, fmt.Errorf("the manifest has no route %s", key)
 }
 
+// reachTaskWhos are the principals a recorded verdict of n letters covers: the
+// first n of whos. The recorder does not start tasks as the auth-disabled
+// principal, so n may be one short, and the one left out must be that principal:
+// a recording whose principal order drifted would otherwise pair letters with the
+// wrong principals and compare them without a word.
+func reachTaskWhos(whos []reachWho, n int, what string) ([]reachWho, error) {
+	if n > len(whos) {
+		return nil, fmt.Errorf("%s: %d verdict letters for %d principals", what, n, len(whos))
+	}
+	for _, w := range whos[n:] {
+		if w.chk == nil || !w.chk.authOff {
+			return nil, fmt.Errorf("%s: %d verdict letters leave out principal %q, which is not the auth-disabled one", what, n, w.name)
+		}
+	}
+	return whos[:n], nil
+}
+
 // reachTaskVerdicts returns the R2 letter strings of the recorded task starts
 // and approvals, keyed like the pseudo-routes, with one letter for each of the
 // first n principals (the recorder does not start tasks as the auth-disabled
@@ -60,7 +77,16 @@ func reachTaskVerdicts(atoms []m3.AtomRow, routes []httpapi.LegacyRoute, vd *rea
 	if err != nil {
 		return nil, err
 	}
+	seenTask := map[string]bool{}
 	for _, t := range vd.Tasks {
+		if seenTask[t.ID] {
+			return nil, fmt.Errorf("the recording lists task definition %s twice: its starts would overwrite each other", t.ID)
+		}
+		seenTask[t.ID] = true
+		covered, err := reachTaskWhos(whos, len(t.Verdict), "task "+t.ID)
+		if err != nil {
+			return nil, err
+		}
 		gates := []reachGate{floor}
 		for _, p := range t.Permissions {
 			g, err := reachAtomGate(atoms, p)
@@ -70,7 +96,7 @@ func reachTaskVerdicts(atoms []m3.AtomRow, routes []httpapi.LegacyRoute, vd *rea
 			gates = append(gates, g)
 		}
 		var b strings.Builder
-		for _, w := range whos[:len(t.Verdict)] {
+		for _, w := range covered {
 			b.WriteByte(reachAllOf(gates, w))
 		}
 		out[reachTaskStartMethod+" "+t.ID] = b.String()
@@ -83,8 +109,19 @@ func reachTaskVerdicts(atoms []m3.AtomRow, routes []httpapi.LegacyRoute, vd *rea
 	for _, t := range vd.Tasks {
 		approver[t.ID] = t.Approver
 	}
+	seenApproval := map[string]bool{}
 	for _, a := range vd.Approvals {
 		def, _ := a.Run["def_id"].(string)
+		// An approval is keyed by its definition, like the pseudo-route it
+		// becomes: two awaiting runs of one definition would overwrite each other.
+		if seenApproval[def] {
+			return nil, fmt.Errorf("the recording holds two awaiting runs of %q: their approvals would overwrite each other", def)
+		}
+		seenApproval[def] = true
+		covered, err := reachTaskWhos(whos, len(a.Verdict), "approval of a run of "+def)
+		if err != nil {
+			return nil, err
+		}
 		name := approver[def]
 		if name == "" {
 			name = "settings.manage" // R0's default approver permission
@@ -94,7 +131,7 @@ func reachTaskVerdicts(atoms []m3.AtomRow, routes []httpapi.LegacyRoute, vd *rea
 			return nil, fmt.Errorf("approval of a run of %s: %w", def, err)
 		}
 		var b strings.Builder
-		for _, w := range whos[:len(a.Verdict)] {
+		for _, w := range covered {
 			// An approval needs a verified method: R0 refuses the
 			// auth-disabled principal for want of a user to record.
 			if w.chk == nil || w.chk.authOff {

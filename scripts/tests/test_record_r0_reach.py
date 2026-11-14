@@ -1,7 +1,7 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.5.2
+# version: 1.6.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
-# last-edited: 2026-11-13
+# last-edited: 2026-11-14
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
 
 The recorder is driven against a fake R0: a stdlib HTTP server that answers from
@@ -111,6 +111,8 @@ class FakeR0:
         self.delete_user_on: str | None = None  # a route whose probe drops a user
         self.delete_book_on: str | None = None  # a route whose probe drops a book
         self.count_reply: dict = {"data": {"count": 3}}
+        self.config_reply: dict = {"data": {"library_root": "/x", "scan_interval": 5}}
+        self.change_config_on: str | None = None  # a route whose probe rewrites a setting
         self.defs = [
             {"id": "scan.trigger", "permissions": ["scan.trigger"], "approver": "requests.approve"},
             {"id": "books.noop", "permissions": ["library.view"], "approver": ""},
@@ -215,6 +217,8 @@ class FakeR0:
                 return self.reply(h, status)
         if self.delete_user_on and path == self.delete_user_on:
             self.users.pop("bystander", None)
+        if self.change_config_on and path == self.change_config_on:
+            self.config_reply = {"data": {"library_root": "/x", "scan_interval": 6}}
         if self.delete_book_on and path == self.delete_book_on:
             self.count_reply = {"data": {"count": self.count_reply["data"]["count"] - 1}}
         user, atoms = self.principal(h)
@@ -240,6 +244,8 @@ class FakeR0:
             return self.reply(h, 201, {"data": {"id": f"k-{len(self.keys)}", "api_key": secret}})
         if path == "/api/v1/users" and method == "GET" and (user and "users.manage" in atoms):
             return self.reply(h, 200, {"data": {"users": list(self.users.values())}})
+        if path == "/api/v1/config" and method == "GET" and user:
+            return self.reply(h, 200, self.config_reply)
         if path == "/api/v1/audiobooks/count" and method == "GET":
             return self.reply(h, 200, self.count_reply)
         if path == "/api/v3/ops/defs" and method == "GET":
@@ -628,6 +634,23 @@ class RecordPassTest(unittest.TestCase):
         self.assertIn("drift", str(cm.exception))
         self.assertIn("books", str(cm.exception))
 
+    def test_a_probe_that_rewrites_a_setting_fails_the_run(self):
+        self.rig.fake.change_config_on = "/api/v1/system/reset"
+        with self.assertRaises(rec.RecorderError) as cm:
+            self.rig.run()
+        self.assertIn("drift", str(cm.exception))
+        self.assertIn("config", str(cm.exception))
+
+    def test_a_census_that_reads_no_settings_fails_the_run(self):
+        self.rig.fake.config_reply = {}
+        with self.assertRaises(rec.RecorderError) as cm:
+            self.rig.run()
+        self.assertIn("no settings", str(cm.exception))
+
+    def test_the_census_names_the_config_digest(self):
+        out = self.rig.run()
+        self.assertRegex(out["census"]["config_sha256"], r"^[0-9a-f]{64}$")
+
     def test_a_census_that_cannot_read_the_book_count_fails_the_run(self):
         for reply in ({"count": 3}, {"data": {}}, {"data": {"count": "3"}}):
             with self.subTest(reply=reply):
@@ -851,6 +874,100 @@ class FilesAndCheckTest(unittest.TestCase):
         self.assertEqual(set(head), {"file", "version", "guid", "last-edited"})
 
 
+class ProvenanceTest(unittest.TestCase):
+    """The recording names the store it was made from and the run that made it."""
+
+    def store(self, files: dict[str, bytes]) -> pathlib.Path:
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        for rel, body in files.items():
+            (d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (d / rel).write_bytes(body)
+        return d
+
+    def test_the_digest_follows_content_and_names_not_mode_or_mtime(self):
+        a = self.store({"db/x": b"one", "state/y": b"two"})
+        want = rec.overlay_digest(a)
+        self.assertRegex(want, r"^[0-9a-f]{64}$")
+        (a / "db/x").chmod(0o600)
+        import os
+
+        os.utime(a / "db/x", (1, 1))
+        self.assertEqual(rec.overlay_digest(a), want)
+        same = self.store({"state/y": b"two", "db/x": b"one"})
+        self.assertEqual(rec.overlay_digest(same), want)
+
+    def test_a_changed_added_or_renamed_file_changes_the_digest(self):
+        base = rec.overlay_digest(self.store({"db/x": b"one"}))
+        self.assertNotEqual(rec.overlay_digest(self.store({"db/x": b"uno"})), base)
+        self.assertNotEqual(rec.overlay_digest(self.store({"db/x": b"one", "db/z": b""})), base)
+        self.assertNotEqual(rec.overlay_digest(self.store({"db/w": b"one"})), base)
+        # a content that moves across the path/content boundary is not the same store
+        self.assertNotEqual(
+            rec.overlay_digest(self.store({"a": b"bc"})),
+            rec.overlay_digest(self.store({"ab": b"c"})),
+        )
+
+    def test_an_empty_store_has_no_digest(self):
+        with self.assertRaises(w.CorpusError):
+            rec.overlay_digest(self.store({}))
+
+    def test_recorded_by_reads_the_github_run_and_falls_back_to_the_checkout(self):
+        env = {
+            "GITHUB_SHA": "a" * 40,
+            "GITHUB_WORKFLOW": "R0 reach record",
+            "GITHUB_RUN_ID": "7",
+            "GITHUB_RUN_ATTEMPT": "2",
+            "ImageOS": "ubuntu26",
+            "ImageVersion": "20261101.186.1",
+        }
+        got = rec.recorded_by(env)
+        self.assertEqual(got["recorder_commit"], "a" * 40)
+        self.assertEqual(
+            (got["workflow"], got["run_id"], got["run_attempt"]), ("R0 reach record", "7", "2")
+        )
+        self.assertEqual(got["runner_image"], "ubuntu26/20261101.186.1")
+        local = rec.recorded_by({})
+        self.assertEqual(local["workflow"], "local")
+        self.assertEqual(local["run_id"], "")
+        self.assertTrue(local["runner_image"])
+        self.assertRegex(local["recorder_commit"], r"^([0-9a-f]{40}|unknown)$")
+
+    def test_check_flags_a_changed_overlay_and_ignores_who_recorded_it(self):
+        old = {
+            "r0_tag": "v1",
+            "r0_binary_sha256": "0" * 64,
+            "overlay_sha256": "1" * 64,
+            "route_count": 0,
+            "principals": [],
+            "routes": [],
+            "recorded": {"run_id": "1"},
+        }
+        same_but_run = {**old, "recorded": {"run_id": "2"}}
+        self.assertEqual(rec.diff_verdicts(old, same_but_run), [])
+        moved = {**old, "overlay_sha256": "2" * 64}
+        diffs = rec.diff_verdicts(old, moved)
+        self.assertEqual(len(diffs), 1)
+        self.assertTrue(diffs[0].startswith("overlay_sha256"))
+
+    def test_the_rerun_procedure_and_its_workflow_template_ship_with_the_recorder(self):
+        doc = rec.__doc__
+        self.assertIn("--check", doc)
+        self.assertIn("r0reach-record.workflow.yml.txt", doc)
+        tmpl = REPO_ROOT / "scripts/r2corpus/r0config/r0reach-record.workflow.yml.txt"
+        text = tmpl.read_text(encoding="utf-8")
+        self.assertIn("record_r0_reach.py --regenerate", text)
+        self.assertIn("contents: read", text)
+        # every action is pinned to a full commit SHA
+        for line in text.splitlines():
+            if "uses:" in line:
+                self.assertRegex(line, r"@[0-9a-f]{40}\b", line)
+        self.assertFalse(
+            (REPO_ROOT / ".github/workflows/r0reach-generate.yml").exists(),
+            "the temporary recording workflow must not be on the branch",
+        )
+
+
 class CommittedDataTest(unittest.TestCase):
     """The recorded data, once it is committed, is whole (skipped before the first run)."""
 
@@ -875,6 +992,15 @@ class CommittedDataTest(unittest.TestCase):
         m = json.loads((REPO_ROOT / "internal/books/testdata/r2corpus/manifest.json").read_text())
         self.assertEqual(self.v["r0_tag"], m["r0_tag"])
         self.assertEqual(self.v["r0_binary_sha256"], m["r0_binary_sha256"])
+
+    def test_the_recording_names_its_store_and_its_run(self):
+        store = REPO_ROOT / "internal/books/testdata/r2corpus/overlay"
+        self.assertEqual(self.v["overlay_sha256"], rec.overlay_digest(store))
+        got = self.v["recorded"]
+        self.assertRegex(got["recorder_commit"], r"^[0-9a-f]{40}$")
+        self.assertRegex(got["run_id"], r"^[0-9]+$")
+        for k in ("workflow", "runner_image", "python", "run_attempt"):
+            self.assertTrue(got[k], k)
 
     def test_no_secret_and_no_go_file_in_the_data_directory(self):
         for p in REACH.iterdir():
