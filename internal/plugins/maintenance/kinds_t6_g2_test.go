@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-14
 
@@ -999,8 +999,10 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 			// The set is the same for every kind, and a key is refused in any
 			// case: the params decode with encoding/json, which matches keys
 			// case-insensitively.
+			// The three keys are spelled here, not read from t6g2ModeKeys: a test
+			// that iterates the set under test cannot notice a key dropped from it.
 			var keys []string
-			for _, k := range t6g2ModeKeys {
+			for _, k := range []string{"dry_run", "dryRun", "apply"} {
 				keys = append(keys, k, strings.ToUpper(k), strings.ToUpper(k[:1])+k[1:])
 			}
 			for _, key := range keys {
