@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/build.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 0e48d09a-7583-4133-9749-d96bbfaf2aa5
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package diagnostics
 
@@ -113,10 +113,17 @@ type Config struct {
 	// Root is the os.Root on core.diagnostics.dir. Every path the bundle
 	// touches goes through it, so none can escape.
 	Root *os.Root
-	// ViewerFor resolves the permissions of the run's actor when the run
-	// starts and ExportParams carries none (Perms is nil). A run started by the
-	// route carries the permissions resolved at request time, and those win.
-	ViewerFor func(ctx context.Context, actorID string) (Viewer, error)
+	// ViewerFor resolves the permissions of the run's actor as they are when
+	// the run starts. It receives the actor the executor stamped on the run
+	// (tasks.Actor: the person and AuthMethod, never read from the params), not
+	// a bare ID, because what a person may read depends on HOW they started the
+	// run: a checker compiled for an interactive session admits Sensitive scopes
+	// that the same person's API key must not reach. F8-04's implementation must
+	// compile with Interactive set from actor.AuthMethod ("session"), and must
+	// not hand every method the person's interactive checker. A run started by
+	// the route also carries the permissions resolved at request time
+	// (ExportParams.Perms), which can only narrow what ViewerFor returns.
+	ViewerFor func(ctx context.Context, actor tasks.Actor) (Viewer, error)
 	Sources   CoreSources
 	// Contributors are the modules' sections (Registrar.Diagnostics).
 	Contributors []Contributor
@@ -315,7 +322,7 @@ func (e *Exporter) Export(rc *tasks.RC, p ExportParams) (ExportResult, error) {
 		e.countBundle("error")
 		return ExportResult{}, err
 	}
-	return e.Build(rc.Context(), string(rc.RunID()), p, func(done, total int) {
+	return e.Build(rc.Context(), string(rc.RunID()), rc.Actor(), p, func(done, total int) {
 		rc.Progress().Set(int64(done), tasks.Known(int64(total)))
 	})
 }
@@ -341,9 +348,11 @@ func checkStampedActor(stamped tasks.Actor, p ExportParams) error {
 	return nil
 }
 
-// Build writes the bundle for runID. progress (nil allowed) is called after
-// each section with how many are done of how many are planned.
-func (e *Exporter) Build(ctx context.Context, runID string, p ExportParams, progress func(done, total int)) (res ExportResult, err error) {
+// Build writes the bundle for runID. actor is the executor-stamped actor of the
+// run (Export passes rc.Actor()); it, not p.ActorID, is what ViewerFor resolves.
+// progress (nil allowed) is called after each section with how many are done of
+// how many are planned.
+func (e *Exporter) Build(ctx context.Context, runID string, actor tasks.Actor, p ExportParams, progress func(done, total int)) (res ExportResult, err error) {
 	if !ValidRunID(runID) {
 		return ExportResult{}, fmt.Errorf("diagnostics: run id %q is not a plain name", runID)
 	}
@@ -351,7 +360,7 @@ func (e *Exporter) Build(ctx context.Context, runID string, p ExportParams, prog
 	if err != nil {
 		return ExportResult{}, err
 	}
-	viewer, err := e.viewer(ctx, p)
+	viewer, err := e.viewer(ctx, actor, p)
 	if err != nil {
 		e.countBundle("error")
 		return ExportResult{}, err
@@ -449,8 +458,8 @@ func (e *Exporter) Build(ctx context.Context, runID string, p ExportParams, prog
 // permissions from the bundle and a forged or stale snapshot cannot add any.
 // An actor ViewerFor cannot resolve (deleted since the request) fails the run
 // closed.
-func (e *Exporter) viewer(ctx context.Context, p ExportParams) (Viewer, error) {
-	v, err := e.cfg.ViewerFor(ctx, p.ActorID)
+func (e *Exporter) viewer(ctx context.Context, actor tasks.Actor, p ExportParams) (Viewer, error) {
+	v, err := e.cfg.ViewerFor(ctx, actor)
 	if err != nil {
 		return Viewer{}, fmt.Errorf("diagnostics: resolve viewer: %w", err)
 	}

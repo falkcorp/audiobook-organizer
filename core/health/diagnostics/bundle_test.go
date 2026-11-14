@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/bundle_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d8634ac0-da50-4670-b2ca-6e84e324168a
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package diagnostics_test
 
@@ -23,6 +23,7 @@ import (
 
 	"github.com/falkcorp/mediacore/health/diagnostics"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // The fixtures are Batman-universe on purpose: titles, people and places only.
@@ -77,13 +78,13 @@ func newFixture(t *testing.T) *fixture {
 }
 
 // viewerOf resolves every actor to a viewer holding exactly perms.
-func viewerOf(perms ...rbac.Permission) func(context.Context, string) (diagnostics.Viewer, error) {
-	return func(_ context.Context, actor string) (diagnostics.Viewer, error) {
-		return diagnostics.Viewer{ActorID: actor, Can: func(p rbac.Permission) bool { return slices.Contains(perms, p) }}, nil
+func viewerOf(perms ...rbac.Permission) func(context.Context, tasks.Actor) (diagnostics.Viewer, error) {
+	return func(_ context.Context, actor tasks.Actor) (diagnostics.Viewer, error) {
+		return diagnostics.Viewer{ActorID: actor.UserID, Can: func(p rbac.Permission) bool { return slices.Contains(perms, p) }}, nil
 	}
 }
 
-func (f *fixture) exporter(viewer func(context.Context, string) (diagnostics.Viewer, error), src diagnostics.CoreSources, contrib ...diagnostics.Contributor) *diagnostics.Exporter {
+func (f *fixture) exporter(viewer func(context.Context, tasks.Actor) (diagnostics.Viewer, error), src diagnostics.CoreSources, contrib ...diagnostics.Contributor) *diagnostics.Exporter {
 	f.t.Helper()
 	e, err := diagnostics.New(diagnostics.Config{
 		Root: f.root, ViewerFor: viewer, Sources: src, Contributors: contrib,
@@ -167,7 +168,13 @@ func assertNoneOf(t *testing.T, files map[string][]byte, secrets ...string) {
 var manage = rbac.Need("core:system.manage")
 
 func (f *fixture) build(e *diagnostics.Exporter, run string, p diagnostics.ExportParams) (diagnostics.ExportResult, error) {
-	return e.Build(context.Background(), run, p, nil)
+	return f.buildAs(e, run, tasks.Actor{UserID: p.ActorID, AuthMethod: "session"}, p)
+}
+
+// buildAs builds a bundle for the run's stamped actor, the way Export passes
+// rc.Actor(): ViewerFor sees the actor's method as well as the person.
+func (f *fixture) buildAs(e *diagnostics.Exporter, run string, actor tasks.Actor, p diagnostics.ExportParams) (diagnostics.ExportResult, error) {
+	return e.Build(context.Background(), run, actor, p, nil)
 }
 
 func TestDiagnostics_SecretsNeverSerialised(t *testing.T) {
@@ -357,7 +364,7 @@ func TestDiagnostics_SectionErrorAndPanicGivePartialBundle(t *testing.T) {
 	}
 	e := f.exporter(viewerOf("core:system.manage"), diagnostics.CoreSources{}, bad)
 	var seen [][2]int
-	res, err := e.Build(context.Background(), "run-partial", diagnostics.ExportParams{ActorID: "bruce"}, func(done, total int) { seen = append(seen, [2]int{done, total}) })
+	res, err := e.Build(context.Background(), "run-partial", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}, func(done, total int) { seen = append(seen, [2]int{done, total}) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +592,7 @@ func TestDiagnostics_FileSizeCapAndTextOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := e.Build(context.Background(), "run-caps", diagnostics.ExportParams{ActorID: "bruce"}, nil)
+	res, err := e.Build(context.Background(), "run-caps", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +625,7 @@ func TestDiagnostics_CancelRemovesPartialFile(t *testing.T) {
 		return ctx.Err()
 	}}}
 	e := f.exporter(viewerOf("core:system.manage"), diagnostics.CoreSources{}, c)
-	if _, err := e.Build(ctx, "run-cancel", diagnostics.ExportParams{ActorID: "bruce"}, nil); !errors.Is(err, context.Canceled) {
+	if _, err := e.Build(ctx, "run-cancel", tasks.Actor{UserID: "bruce", AuthMethod: "session"}, diagnostics.ExportParams{ActorID: "bruce"}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Build = %v, want context.Canceled", err)
 	}
 	ents, _ := os.ReadDir(f.dir)

@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package diagnostics
 
@@ -146,9 +146,14 @@ func (v Viewer) Satisfies(r rbac.Requirement) bool {
 //
 // The result is only ever the snapshot half of the run's viewer: Exporter.viewer
 // intersects it with the actor's permissions as ViewerFor resolves them now,
-// and that checker still refuses a Sensitive scope to a non-interactive
-// principal and a scope the catalog does not declare, admin or not. Admitting
-// everything here therefore grants nothing the live checker would refuse.
+// and that checker refuses a Sensitive scope to a non-interactive principal and
+// a scope the catalog does not declare, admin or not. Admitting everything here
+// therefore grants nothing the live checker would refuse, PROVIDED ViewerFor
+// compiled that checker for the way the run was started: it receives the
+// stamped tasks.Actor so it can set Interactive from AuthMethod. A ViewerFor
+// that returned the person's interactive checker for an API key's run would let
+// a key's [core:admin] snapshot reach every Sensitive section (F8-04 obligation,
+// seams.d/F8-03.md).
 func ViewerOf(actorID string, perms []string) Viewer {
 	held := make(map[string]struct{}, len(perms))
 	for _, p := range perms {
@@ -322,8 +327,10 @@ func (st *build) redactText(key, s string, whole bool) (out string) {
 
 // redactKey applies the pattern layer to an object member's name. A key is text
 // like any other (a map keyed by URL, by token or by path puts that text in the
-// bytes), so it passes the same redactor and path rule as a value. A key is
-// never a typed placeholder, so there is no typed shortcut here.
+// bytes), so it passes the same redactor and path rule as a value, and it is a
+// whole string like a value is: a key that is one path ("/Users/bruce/k k") is
+// replaced as one, spaces and all, not cut at its first space. A key is never a
+// typed placeholder, so there is no typed shortcut here.
 func (st *build) redactKey(k string) (out string) {
 	defer func() {
 		if recover() != nil {
@@ -331,7 +338,7 @@ func (st *build) redactKey(k string) (out string) {
 			st.counts.pattern++
 		}
 	}()
-	out, changed := st.scrub("", k, false)
+	out, changed := st.scrub("", k, true)
 	if changed {
 		st.counts.pattern++
 	}

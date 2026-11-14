@@ -1,7 +1,7 @@
 // file: core/internal/healthhttp/routes_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e6dcf7f8-396a-47a8-b1bd-154ed75f5597
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package healthhttp
 
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/mediacore/health/sysinfo"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // ---- doubles ---------------------------------------------------------------
@@ -240,15 +241,15 @@ func (r *hhRig) bundleFor(id, actor string) {
 	}
 	e, err := diagnostics.New(diagnostics.Config{
 		Root: r.root,
-		ViewerFor: func(_ context.Context, a string) (diagnostics.Viewer, error) {
-			return diagnostics.Viewer{ActorID: a, Can: func(p rbac.Permission) bool { return p == manage || p == adminPerm }}, nil
+		ViewerFor: func(_ context.Context, a tasks.Actor) (diagnostics.Viewer, error) {
+			return diagnostics.Viewer{ActorID: a.UserID, Can: func(p rbac.Permission) bool { return p == manage || p == adminPerm }}, nil
 		},
 		Contributors: []diagnostics.Contributor{sec("batcave.vault", rbac.Need("core:admin")), sec("batcave.garage", rbac.Need("core:system.manage"))},
 	})
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	res, err := e.Build(context.Background(), id, diagnostics.ExportParams{ActorID: actor}, nil)
+	res, err := e.Build(context.Background(), id, tasks.Actor{UserID: actor, AuthMethod: "session"}, diagnostics.ExportParams{ActorID: actor}, nil)
 	if err != nil {
 		r.t.Fatal(err)
 	}
