@@ -1,0 +1,3 @@
+### Added
+
+- maintenance: the 14 group 1 maintenance operations (activity filter index backfill, AI journal prune, author split scan, resolve production authors, author conjunction repair, author duplicate merge, author id repair, author path link, purge empty authors, author strip merge, author title fragment scan, author whitespace collision report, authority build, auto-match transcribed) now have native `books.<id>` task definitions built dark (F5-06). Each runs the same body as before through a shell, writes only through the run's gated writer, and keeps its HEAD title, help, resume policy and parallelism. Nothing registers them yet, so behaviour is unchanged.

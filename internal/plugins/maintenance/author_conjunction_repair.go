@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.12.4
+// version: 1.13.0
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -19,9 +19,9 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- author-conjunction-repair ---
@@ -104,6 +104,16 @@ const (
 	conjRepairFailed        = "failed"
 )
 
+// authorConjunctionRepairHelp is the def's Description, which the native kind
+// carries as its Help.
+const authorConjunctionRepairHelp = "Repairs author rows named like '& Conrad Westmaas', created when an " +
+	"Oxford-comma credit list ('A, B, & C') was split on the comma before the ampersand " +
+	"branch could run. Merges each row into the correctly-named author when one already " +
+	"exists, otherwise renames it in place. Matches '&' only — rows beginning with 'and ' " +
+	"are book-title fragments and are deliberately left alone. Defaults to dry_run=true; " +
+	"pass dry_run=false to write. skip_author_ids excludes specific rows, reported as " +
+	"skip_explicitly_excluded rather than dropped from the totals."
+
 func (p *Plugin) authorConjunctionRepairDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          "maintenance.author-conjunction-repair",
@@ -111,13 +121,7 @@ func (p *Plugin) authorConjunctionRepairDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Repair author names with a stranded ampersand",
-		Description: "Repairs author rows named like '& Conrad Westmaas', created when an " +
-			"Oxford-comma credit list ('A, B, & C') was split on the comma before the ampersand " +
-			"branch could run. Merges each row into the correctly-named author when one already " +
-			"exists, otherwise renames it in place. Matches '&' only — rows beginning with 'and ' " +
-			"are book-title fragments and are deliberately left alone. Defaults to dry_run=true; " +
-			"pass dry_run=false to write. skip_author_ids excludes specific rows, reported as " +
-			"skip_explicitly_excluded rather than dropped from the totals.",
+		Description: authorConjunctionRepairHelp,
 		// RESUME AUDIT 2026-09-11 (c): kept, with no checkpoint, because a
 		// from-zero restart is idempotent and cheap by construction. The work
 		// list is selected from CURRENT author names (authorConjunctionRe on
@@ -156,14 +160,100 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 	if err != nil {
 		return err
 	}
-	skip := make(map[int]struct{}, len(params.SkipAuthorIDs))
-	for _, id := range params.SkipAuthorIDs {
+	env := authorConjunctionRepairEnv{
+		t6g1Env:                t6g1HeadEnv(reporter, !dryRun),
+		Store:                  t6g1HeadStore{store},
+		Writer:                 t6g1HeadWriter{store},
+		InvalidateAuthorsCache: p.deps.InvalidateAuthorsCache,
+		InvalidateDedupCache:   p.deps.InvalidateDedupCache,
+	}
+	return authorConjunctionRepairCore(ctx, params.SkipAuthorIDs, env)
+}
+
+// authorConjunctionRepairKind is rule R3's kind for the def above.
+const authorConjunctionRepairKind = tasks.Kind("books.maintenance.author-conjunction-repair")
+
+// authorConjunctionRepairStore is the reads the op makes: the author list, the
+// twin lookup and what a merge reads.
+type authorConjunctionRepairStore interface {
+	t6g1MergeReader
+	GetAllAuthors() ([]database.Author, error)
+	GetAuthorByName(name string) (*database.Author, error)
+}
+
+// authorConjunctionRepairEnv is what the core takes from its shell. env.Live is
+// the apply switch (dry_run=false).
+type authorConjunctionRepairEnv struct {
+	t6g1Env
+	Store  authorConjunctionRepairStore
+	Writer t6g1MergeWriter
+	// InvalidateAuthorsCache and InvalidateDedupCache drop the cached author list
+	// after an apply that wrote.
+	InvalidateAuthorsCache func()
+	InvalidateDedupCache   func()
+}
+
+// authorConjunctionRepairNativeParams are the native kind's params: HEAD's
+// without dry_run, which the run's mode carries (Live applies, Preview reports).
+type authorConjunctionRepairNativeParams struct {
+	SkipAuthorIDs []int `json:"skip_author_ids,omitempty"`
+}
+
+// UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
+func (p *authorConjunctionRepairNativeParams) UnmarshalJSON(b []byte) error {
+	if err := t6g1RefuseModeKeys(b, t6g1DryRunKeys...); err != nil {
+		return err
+	}
+	type plain authorConjunctionRepairNativeParams
+	return json.Unmarshal(b, (*plain)(p))
+}
+
+// authorConjunctionRepairNative is the native kind. Preview is the dry run.
+func (p *Plugin) authorConjunctionRepairNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g1Common(authorConjunctionRepairKind, sched)
+	c.Title = "Repair author names with a stranded ampersand"
+	c.Help = authorConjunctionRepairHelp
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	c.Resume = tasks.ResumeFromZero
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books.maintenance.author-conjunction-repair")
+	c.Timeout = 30 * time.Minute
+	return tasks.Task(authorConjunctionRepairKind, tasks.TaskSpec[authorConjunctionRepairNativeParams, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, np authorConjunctionRepairNativeParams) (struct{}, error) {
+			if err := t6g1RefuseUnwired(rc, authorConjunctionRepairKind, deps.cacheWires(true)...); err != nil {
+				var zero struct{}
+				return zero, err
+			}
+			env := authorConjunctionRepairEnv{
+				t6g1Env:                t6g1NativeEnv(rc),
+				Writer:                 deps.NewWriters(rc.Writer()).Merge,
+				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,
+				InvalidateDedupCache:   deps.InvalidateDedupCache,
+			}
+			if deps.Stores.ConjunctionRepair != nil {
+				env.Store = deps.Stores.ConjunctionRepair
+			}
+			return struct{}{}, authorConjunctionRepairCore(rc.Context(), np.SkipAuthorIDs, env)
+		},
+	})
+}
+
+// authorConjunctionRepairCore is the body of runAuthorConjunctionRepair from the
+// skip list on.
+func authorConjunctionRepairCore(ctx context.Context, skipAuthorIDs []int, env authorConjunctionRepairEnv) error {
+	store := env.Store
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	dryRun := !env.Live
+	skip := make(map[int]struct{}, len(skipAuthorIDs))
+	for _, id := range skipAuthorIDs {
 		skip[id] = struct{}{}
 	}
-
-	log := reporter.Logger()
+	log := env.Logger
 	// The undo ledger keys each merge's rows by this id (mergeAuthorInto).
-	opID := registry.ReporterOpID(reporter)
+	opID := env.OpID
 
 	authors, err := store.GetAllAuthors()
 	if err != nil {
@@ -185,12 +275,12 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 
 	log.Info("author-conjunction-repair: starting",
 		"dry_run", dryRun, "authors_total", len(authors), "authors_matched", len(matched),
-		"skip_author_ids", params.SkipAuthorIDs)
+		"skip_author_ids", skipAuthorIDs)
 
 	outcomes := map[string]int{}
 	booksRelinked := 0
 
-	prog := sdk.NewProgress(reporter, len(matched))
+	prog := sdk.NewProgress(t6g1ProgressSink{fn: env.Progress}, len(matched))
 	prog.Start(fmt.Sprintf("Repairing %d author rows with a stranded ampersand (dry_run=%v)", len(matched), dryRun))
 
 	// Deliberately SEQUENTIAL, against the repo's default preference for a
@@ -241,7 +331,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 		}
 
 		if twin != nil && twin.ID != author.ID {
-			relinked, _, err := p.mergeAuthorInto(ctx, author, *twin, dryRun, opID, log)
+			relinked, _, err := mergeAuthorIntoVia(ctx, store, env.Writer, author, *twin, dryRun, opID, log)
 			if err != nil {
 				outcomes[conjRepairFailed]++
 				log.Warn("author-conjunction-repair: merge failed",
@@ -269,7 +359,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 			outcomes[conjRepairWouldRename]++
 			log.Info("author-conjunction-repair: rename",
 				"dry_run", true, "author_id", author.ID, "from", author.Name, "to", cleaned)
-		} else if err := renameAuthorJournaled(store, opID, author, cleaned); errors.Is(err, errRenameNameTaken) {
+		} else if err := env.Writer.RenameAuthorJournaled(opID, author, cleaned); errors.Is(err, errRenameNameTaken) {
 			outcomes[conjRepairSkipNameTaken]++
 			log.Warn("author-conjunction-repair: rename skipped, another author holds the name",
 				"author_id", author.ID, "from", author.Name, "to", cleaned, "err", err)
@@ -294,8 +384,8 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 	// is a real cost to pay for no reason.
 	wrote := outcomes[conjRepairMerged] + outcomes[conjRepairRenamed]
 	if !dryRun && wrote > 0 {
-		p.deps.InvalidateAuthorsCache()
-		p.deps.InvalidateDedupCache()
+		env.InvalidateAuthorsCache()
+		env.InvalidateDedupCache()
 		log.Info("author-conjunction-repair: invalidated author caches", "rows_written", wrote)
 	}
 
@@ -309,7 +399,7 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 	return nil
 }
 
-// mergeAuthorInto moves every book link from `from` onto `into` and then deletes
+// mergeAuthorIntoVia moves every book link from `from` onto `into` and then deletes
 // the `from` row. It returns the number of books whose author slice was
 // rewritten and the number of undo-ledger rows it wrote.
 //
@@ -331,13 +421,15 @@ func (p *Plugin) runAuthorConjunctionRepair(ctx context.Context, rawParams json.
 // per book and one author_merge_delete row for the author, which the revert
 // engine reverses (credits, primary, the author, its aliases and redirects). An
 // apply with no operation id is refused: its merge could never be undone.
-func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author, dryRun bool, opID string, log *slog.Logger) (relinked, undoRows int, err error) {
-	store := p.deps.OpsStore()
+//
+// It takes a reader and a writer, so the native kind reaches it through its run's
+// gated writer and HEAD's shell through the plugin's store.
+func mergeAuthorIntoVia(ctx context.Context, store t6g1MergeReader, writer t6g1MergeWriter, from, into database.Author, dryRun bool, opID string, log *slog.Logger) (relinked, undoRows int, err error) {
 	// The delete at the end is the store's merge-delete capability. Without it
 	// the merged author could only be deleted with its aliases, so refuse before
 	// any credit moves (a preview too: it must not promise a merge the apply
 	// refuses). No DeleteAuthor fallback.
-	if _, ok := database.AsCapability[database.AuthorMergeDeleter](store); !ok {
+	if !store.CanMergeDelete() {
 		return 0, 0, fmt.Errorf("merge author %d into %d: %w", from.ID, into.ID, database.ErrAuthorMergeDeleteUnsupported)
 	}
 	if !dryRun && opID == "" {
@@ -372,7 +464,7 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 			continue
 		}
 		into := into
-		moved, err := authormerge.MoveCredits(store, opID, authormerge.CreditMove{
+		moved, err := writer.MoveCredits(opID, authormerge.CreditMove{
 			BookID: book.ID, FromID: from.ID, IntoID: into.ID, Into: &into,
 			Before: before, After: creditsMovedOnto(book.ID, before, from.ID, into.ID),
 			PrimaryBefore: book.AuthorID,
@@ -396,14 +488,14 @@ func (p *Plugin) mergeAuthorInto(ctx context.Context, from, into database.Author
 	if dryRun {
 		return relinked, undoRows, nil
 	}
-	if err := database.VerifyAuthorUnlinked(store, from.ID); err != nil {
+	if err := store.VerifyAuthorUnlinked(from.ID); err != nil {
 		return relinked, undoRows, err
 	}
 	// MergeDeleteAuthor, not DeleteAuthor: the merged author's aliases (pen
 	// names) move to the survivor and the tombstone redirecting the old id is
 	// written in the same batch. DeleteAuthor cascades the aliases away, so a pen
 	// name of a merged author resolved to nobody.
-	del, err := authormerge.MergeDelete(store, opID, from, into)
+	del, err := writer.MergeDeleteAuthor(opID, from, into)
 	if err != nil {
 		return relinked, undoRows, fmt.Errorf("delete author %d: %w", from.ID, err)
 	}
