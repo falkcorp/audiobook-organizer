@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c0ba68fc-0752-49a5-9e51-187eca399e39
 // last-edited: 2026-11-14
 
@@ -266,8 +266,8 @@ type t6g5Want struct {
 
 func t6g5Wants() []t6g5Want {
 	return []t6g5Want{
-		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{"authors", "book_files", "books", "chapters", "user_preferences", "user_state"}},
-		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false, []string{"user_playlists"}},
+		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{"authors", "book_files", "books", "user_state"}},
+		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false, []string{"user_state"}},
 		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{"book_files", "books", "external_ids", "user_state"}},
 		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false, []string{"books"}},
 		{"maintenance.mark-missing-files", (*Plugin).markMissingFilesDef, tasks.ResumeDrop, false, []string{"book_files", "books"}},
@@ -278,8 +278,8 @@ func t6g5Wants() []t6g5Want {
 		{"maintenance.missing-file-repair", (*Plugin).missingFileRepairDef, tasks.ResumeDrop, true, nil},
 		{"maintenance.missing-file-repoint", (*Plugin).missingFileRepointDef, tasks.ResumeDrop, false, []string{"book_files", "books"}},
 		{"maintenance.move-book-file-rows", (*Plugin).moveBookFileRowsDef, tasks.ResumeDrop, false, []string{"book_files", "books"}},
-		{"maintenance.purge-empty-narrators", (*Plugin).purgeEmptyNarratorsDef, tasks.ResumeDrop, false, []string{"book_narrators", "narrators", "operations"}},
-		{"maintenance.split-joined-narrators", (*Plugin).splitJoinedNarratorsDef, tasks.ResumeDrop, false, []string{"book_narrators", "narrators", "operations"}},
+		{"maintenance.purge-empty-narrators", (*Plugin).purgeEmptyNarratorsDef, tasks.ResumeDrop, false, []string{"books", "operations"}},
+		{"maintenance.split-joined-narrators", (*Plugin).splitJoinedNarratorsDef, tasks.ResumeDrop, false, []string{"books", "operations"}},
 	}
 }
 

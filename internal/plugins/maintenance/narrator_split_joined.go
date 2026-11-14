@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/narrator_split_joined.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: b580d009-3cf0-45d9-bf1b-18f6e1f6c33d
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -411,12 +411,13 @@ func (p *Plugin) splitJoinedNarrators(ctx context.Context, params splitJoinedNar
 	return splitJoinedNarratorsCore(ctx, params, env)
 }
 
-// splitJoinedNarratorsKind builds the native kind. Writes found: book_narrators
-// junction rows and narrator rows (CreateNarrator, SetBookNarrators,
-// DeleteNarrator) and their undo-ledger rows; HEAD declares none. The params
+// splitJoinedNarratorsKind builds the native kind. Writes found: narrator
+// rows and book_narrators junction rows (CreateNarrator, SetBookNarrators,
+// DeleteNarrator), declared as the books resource (pkg/ops has no narrator
+// constant), and their undo-ledger rows (operations); HEAD declares none. The params
 // decode into HEAD's struct after the mode key (apply) is refused.
 func (p *Plugin) splitJoinedNarratorsKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "narrators"), tasks.Res("books", "book_narrators"), tasks.Res("books", "operations"))
+	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "operations"))
 	return tasks.Task(splitJoinedNarratorsKind, tasks.TaskSpec[json.RawMessage, splitJoinedReport]{
 		Common: t6g5Common(p.splitJoinedNarratorsDef(), splitJoinedNarratorsKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (splitJoinedReport, error) {

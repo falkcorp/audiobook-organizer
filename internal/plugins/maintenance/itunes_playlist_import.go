@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -154,7 +154,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 // CapLibraryWrite capability. The dry-run keys are refused, the mode is the
 // run's.
 func (p *Plugin) itunesPlaylistImportKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "user_playlists"))
+	eff := tasks.Writes(tasks.Res("books", "user_state"))
 	return tasks.Task(itunesPlaylistImportKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g5Common(p.itunesPlaylistImportDef(), itunesPlaylistImportKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {

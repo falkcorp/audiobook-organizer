@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-14
 
@@ -57,13 +57,13 @@ var t6g5SpyWrites = map[string][]string{
 	"CarryStateThenHardDelete":   {"user_state"},
 	"CloneBookIntoLibrary":       {"books", "book_files"},
 	"CreateBook":                 {"books"},
-	"CreateNarrator":             {"narrators"},
+	"CreateNarrator":             {"books"},
 	"DeleteBook":                 {"books", "book_files"},
 	"DeleteBookFilesByIDs":       {"book_files"},
 	"DeleteMetadataCache":        {"metadata_cache"},
-	"DeleteNarrator":             {"narrators", "book_narrators"},
+	"DeleteNarrator":             {"books"},
 	"HardDeleteWithoutUserState": {},
-	"ImportSmartPlaylists":       {"user_playlists"},
+	"ImportSmartPlaylists":       {"user_state"},
 	"InvalidateAuthorsCache":     {},
 	"MergeBooks":                 {"books", "book_files", "external_ids", "user_state", "operations"},
 	"ModifyBook":                 {"books"},
@@ -75,10 +75,10 @@ var t6g5SpyWrites = map[string][]string{
 	"ReassignExternalID":         {"external_ids"},
 	"RecomputeBookAggregates":    {"books"},
 	"RecordOperationChange":      {"operations"},
-	"SaveChaptersForBook":        {"chapters"},
+	"SaveChaptersForBook":        {"books"},
 	"SetBookAuthors":             {"authors"},
-	"SetBookNarrators":           {"book_narrators"},
-	"SetUserPreferenceForUser":   {"user_preferences"},
+	"SetBookNarrators":           {"books"},
+	"SetUserPreferenceForUser":   {"user_state"},
 	"UpdateBook":                 {"books"},
 	"UpdateBookFiles":            {"book_files", "books"},
 }

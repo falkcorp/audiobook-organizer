@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.18.2
+// version: 1.18.3
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-11-14
 
@@ -550,7 +550,6 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 // would carry the mode, are refused like every writing kind's.
 func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"),
-		tasks.Res("books", "chapters"), tasks.Res("books", "user_preferences"),
 		tasks.Res("books", "authors"), tasks.Res("books", "user_state"))
 	return tasks.Task(itunesCloneIntoLibraryKind, tasks.TaskSpec[json.RawMessage, *icReport]{
 		Common: t6g5Common(p.itunesCloneIntoLibraryDef(), itunesCloneIntoLibraryKind, eff, sched),
