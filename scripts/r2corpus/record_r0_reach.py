@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.6.0
+# version: 1.6.1
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-14
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -22,7 +22,7 @@ A probe is a request that fails *after* authorization when it is authorized: a
 dummy path id (404) or an empty ``{}`` body (400/422). So a 401/403 is a
 denial and any other status below 500 is an allow. Nothing else is a verdict:
 a 429, a 5xx and a connection error are recorder failures, never recorded, and
-a drift sentinel (a census of users, books, task definitions and the stored config, plus a
+a drift sentinel (a census of users, books and task definitions, plus a
 per-principal canary) fails the run when a probe changed the store or killed the
 server.
 
@@ -575,8 +575,14 @@ def probe_approvals(probes: list[Probe], runs: list[dict[str, Any]]) -> list[dic
 
 
 def census(admin: Probe) -> dict[str, Any]:
-    """What probing must not change: users (id, name, roles, status), books, task defs
-    and the stored config (a digest of GET /api/v1/config)."""
+    """What probing must not change: users (id, name, roles, status), books and task defs.
+
+    The stored config is not in the census. It was added once, as a digest of
+    ``GET /api/v1/config``, and the first run against the real R0 (GitHub Actions run
+    43636904080, a throwaway ``--check``) failed on it: the recorder's own authorized
+    probes ``PUT /api/v1/config`` and ``PUT /api/v1/maintenance-window/config`` with an
+    empty body, and R0 writes the whole config back, so it differs after the pass by
+    design. A census of what the probes themselves rewrite cannot hold."""
     users = admin.fetch("/api/v1/users")
     if users.status != 200:
         raise RecorderError(f"census: GET /api/v1/users -> {users.status}")
@@ -596,21 +602,10 @@ def census(admin: Probe) -> dict[str, Any]:
     if not isinstance(total, int) or isinstance(total, bool):
         # A census that reads nothing counts nothing: the sentinel would pass on any drift.
         raise RecorderError(f"census: the book count is {total!r}, not a number")
-    # The stored config too: PUT /config and PUT /maintenance-window/config are
-    # probed as writes, and a probe that changed a setting would change what the
-    # later probes see. (The maintenance-window config has no GET of its own.)
-    config = admin.fetch("/api/v1/config")
-    if config.status != 200:
-        raise RecorderError(f"census: GET /api/v1/config -> {config.status}")
-    if not isinstance(config.body, dict) or not config.body:
-        raise RecorderError("census: GET /api/v1/config returned no settings to digest")
     return {
         "users": [list(r) for r in rows],
         "books": total,
         "task_defs": [d["id"] for d in task_defs(admin)],
-        "config": hashlib.sha256(
-            json.dumps(config.body, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest(),
     }
 
 
@@ -684,7 +679,6 @@ def record_pass(
             "users": len(after["users"]),
             "books": after["books"],
             "task_defs": len(after["task_defs"]),
-            "config_sha256": after["config"],
         }
     return out
 
