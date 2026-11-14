@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_adversarial_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9d4b7e21-3a6c-4f58-8e0d-5b1c2a97f634
 // last-edited: 2026-11-14
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -164,12 +165,7 @@ func allNames() []string {
 }
 
 func isPlain(name string) bool {
-	for _, n := range plainNames {
-		if n == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(plainNames, name)
 }
 
 // pathOf is the planted path: the marker is a segment of its own, below a name.
