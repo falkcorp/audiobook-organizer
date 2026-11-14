@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -296,16 +296,16 @@ type dedupeBookFileRowsEnv struct {
 	t6g4Base
 }
 
-// dedupeRowsView is the one value the remove_row_ids helpers take as their
-// dedupeRowsStore: reads through the env's store, writes through its writer.
-type dedupeRowsView struct {
+// t6g4DedupeRowsView is the one value the remove_row_ids helpers take as their
+// t6g4DedupeRowsStore: reads through the env's store, writes through its writer.
+type t6g4DedupeRowsView struct {
 	t6g4Store
 	t6g4Writer
 }
 
 // dedupeBookFileRowsNativeParams is DedupeBookFileRowsParams for the native run:
-// the same fields, except Apply is only a refusal marker (a live run applies, a
-// preview reports).
+// the same fields, except the mode keys are only refusal markers (a live run
+// applies, a preview reports).
 type dedupeBookFileRowsNativeParams struct {
 	Limit              int      `json:"limit,omitempty"`
 	ReportPath         string   `json:"reportPath,omitempty"`
@@ -314,7 +314,7 @@ type dedupeBookFileRowsNativeParams struct {
 	CrossFolder        bool     `json:"cross_folder,omitempty"`
 	RemoveRowIDs       []string `json:"remove_row_ids,omitempty"`
 	ConfirmedDuplicate bool     `json:"confirmed_duplicate,omitempty"`
-	Apply              *bool    `json:"apply,omitempty"`
+	t6g4ModeKeys
 }
 
 // runDedupeBookFileRows is the v2 shell around runDedupeBookFileRowsCore (rule R2 item 2).
@@ -338,28 +338,39 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 
 // dedupeBookFileRowsKind is the native shell (rule R2 item 3). HEAD has a
 // preview, so a preview run reads and reports and deletes nothing. DependsOn
-// library.scan carries over as NotWhile.
+// library.scan carries over as NotWhile, mapped by rule R3 (books.library.scan)
+// and joined by books.library.scan-full, the full sweep's own kind that shares the
+// scan's body and key (05-tasks 5T.8.2 rename map rule 4): a full sweep rewrites
+// the same rows this run deletes.
 func (p *Plugin) dedupeBookFileRowsKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(dedupeBookFileRowsKind, tasks.TaskSpec[dedupeBookFileRowsNativeParams, dedupeBookFileRowsResult]{
 		Common: tasks.Common{
 			Title: "De-duplicate book_file rows",
-			Help:  "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Optional: book_ids scopes the run; cross_folder:true also deletes a missing row whose basename and size match exactly one present row in the same book; remove_row_ids removes named rows that have an identical-hash present twin (or confirmed_duplicate:true). Dry-run by default — pass {\"apply\": true} to delete.",
+			Help:  "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Optional: book_ids scopes the run; cross_folder:true also deletes a missing row whose basename and size match exactly one present row in the same book; remove_row_ids removes named rows that have an identical-hash present twin (or confirmed_duplicate:true). A preview (the default) reports what it would remove and deletes nothing; start in live mode to delete.",
 			// Declared write-set: never runs beside another op that rewrites
-			// book_file rows, e.g. maintenance.fs-regroup-xml.
-			Effects:         tasks.Writes(t6g4Res("book_files")...),
-			Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:          tasks.ResumeContinue,
+			// book_file rows, e.g. maintenance.fs-regroup-xml. HEAD declares
+			// book_files only; the body also recomputes the book's aggregates
+			// (RecomputeBookAggregates: books), carries a deleted row's
+			// fingerprint windows to its twin (CarryOverFingerprintWindows:
+			// fingerprint_index) and journals each deletion for undo
+			// (CreateOperationChange: operations).
+			Effects: tasks.Writes(t6g4Res("book_files", "books", "fingerprint_index", "operations")...),
+			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
+			// internal/arch: a removed duplicate row no longer matches the selection), so the 05-tasks mapping is
+			// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
+			Resume:          tasks.ResumeFromZero,
 			Priority:        tasks.PriorityLow,
 			ConcurrencyKey:  tasks.Key("books.maintenance.dedupe-book-file-rows"),
 			Timeout:         2 * time.Hour,
 			ProgressTimeout: 30 * time.Minute,
-			NotWhile:        []tasks.Kind{"library.scan"},
+			NotWhile:        []tasks.Kind{"books.library.scan", "books.library.scan-full"},
 			Schedule:        sched,
 			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		},
 		Run: func(rc *tasks.RC, in dedupeBookFileRowsNativeParams) (dedupeBookFileRowsResult, error) {
-			if in.Apply != nil {
-				return dedupeBookFileRowsResult{}, fmt.Errorf("%s: the apply param is not accepted; the run's mode comes from the start request (live applies, preview reports)", rc.Kind())
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return dedupeBookFileRowsResult{}, err
 			}
 			base, err := t6g4NativeBase(rc, deps, true)
 			if err != nil {
@@ -448,7 +459,7 @@ func (p *Plugin) runDedupeBookFileRowsCore(ctx context.Context, params DedupeBoo
 	// remove_row_ids runs INSTEAD of the sweep: it is an explicit, named-row
 	// removal and must not quietly bring a library-wide dedupe along with it.
 	if len(params.RemoveRowIDs) > 0 {
-		return dedupeBookFileRowsResult{RemoveNamedOnly: true}, p.finishRemoveNamedRows(dedupeRowsView{store, w}, params, cores, opID, reportPath, env.reporter(ctx))
+		return dedupeBookFileRowsResult{RemoveNamedOnly: true}, p.finishRemoveNamedRows(t6g4DedupeRowsView{store, w}, params, cores, opID, reportPath, env.reporter(ctx))
 	}
 
 	inScope := make(map[string]bool, len(scope))

@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -549,10 +550,11 @@ func t6g4HeadBase(reporter sdk.Reporter, live bool, store t6g4Store, writer t6g4
 		SetItem:  reporter.SetCurrentItem,
 		Canceled: reporter.IsCanceled,
 		Touch:    func() { registry.TouchLiveness(reporter) },
-		// No SaveCheckpoint: HEAD's v2 defs of this group never checkpoint (the
-		// restartWithoutCheckpoint entries in internal/arch say so, and no core
-		// calls the field), so forwarding reporter.Checkpoint here would only make
-		// the resume guard believe they do.
+		// No SaveCheckpoint here: of HEAD's v2 defs of this group only
+		// ai-dedup-batch checkpoints (its job id), and its shell sets the field
+		// itself. The rest are restartWithoutCheckpoint entries in internal/arch,
+		// and forwarding reporter.Checkpoint for them would only make the resume
+		// guard believe they checkpoint.
 		Writer: writer,
 		Store:  store,
 		Each:   t6g4RunEachHEAD(reporter),
@@ -711,7 +713,7 @@ type headT6G4Writer struct {
 	store OpsStore
 	ident identIndexRebuilder
 	// aiParser and aiJobs are what HEAD's body built to submit the batch.
-	aiParser *ai.OpenAIParser
+	aiParser t6g4AIBatchSubmitter
 	aiJobs   database.AIJobsStore
 	// deps is the server dependency set whose service dedup-exact-triage calls.
 	deps ServerDeps
@@ -875,6 +877,36 @@ func (h headT6G4Writer) RebuildIdentIndex(ctx context.Context) (database.IdentRe
 func t6g4RequireLive(rc *tasks.RC) error {
 	if rc.Mode() != tasks.ModeLive {
 		return fmt.Errorf("%s: preview not supported; start with mode live", rc.Kind())
+	}
+	return nil
+}
+
+// t6g4ModeKeys is embedded in the native params struct of every writing kind of
+// the group (05-tasks 5T.3.7, coordinator decision 3): the run's mode comes from
+// the start request, so a params body that carries dry_run, dryRun or apply is
+// refused rather than silently ignored. The fields are json.RawMessage so that
+// presence is what counts: "dry_run": null and "apply": false are refused too.
+// encoding/json matches keys case-insensitively, so DRY_RUN and Apply land here
+// as well. A kind that embeds this declares no field of its own under any of
+// the three names (an outer field would shadow the embedded one and the key
+// would never reach it).
+type t6g4ModeKeys struct {
+	DryRun      json.RawMessage `json:"dry_run,omitempty"`
+	DryRunCamel json.RawMessage `json:"dryRun,omitempty"`
+	Apply       json.RawMessage `json:"apply,omitempty"`
+}
+
+// t6g4RefuseModeKeys is the one params check of every writing native shell: it
+// names the first mode key the request carried (dry_run, dryRun, apply, in that
+// order) and refuses the run before anything else happens.
+func t6g4RefuseModeKeys(kind tasks.Kind, m t6g4ModeKeys) error {
+	for _, k := range []struct {
+		name string
+		v    json.RawMessage
+	}{{"dry_run", m.DryRun}, {"dryRun", m.DryRunCamel}, {"apply", m.Apply}} {
+		if len(k.v) > 0 {
+			return fmt.Errorf("%s: the %s param is not accepted; the run's mode comes from the start request (live applies, preview reports)", kind, k.name)
+		}
 	}
 	return nil
 }

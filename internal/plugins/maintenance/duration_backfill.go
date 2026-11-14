@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.0
+// version: 2.16.1
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -721,8 +721,8 @@ type durationBackfillEnv struct {
 }
 
 // durationBackfillNativeParams is durationReextractParams for the native run:
-// the mode comes from the start request, so dryRun and dry_run are accepted only
-// to be refused. SkipAgeDays is a pointer because the unknownRows mode refuses
+// the mode comes from the start request, so dryRun, dry_run and apply are
+// accepted only to be refused. SkipAgeDays is a pointer because the unknownRows mode refuses
 // the key when it is present at all (HEAD reads that off the raw params).
 type durationBackfillNativeParams struct {
 	Limit               int      `json:"limit"`
@@ -737,8 +737,7 @@ type durationBackfillNativeParams struct {
 	Mode                string   `json:"mode,omitempty"`
 	FileIDs             []string `json:"fileIds,omitempty"`
 	FileIDsSnake        []string `json:"file_ids,omitempty"`
-	DryRun              *bool    `json:"dryRun,omitempty"`
-	DryRunSnake         *bool    `json:"dry_run,omitempty"`
+	t6g4ModeKeys
 }
 
 // durationBackfillResult is the run's outcome. The book-grain run fills the
@@ -824,8 +823,8 @@ func (p *Plugin) durationBackfillKind(deps t6g4Deps, sched *tasks.Schedule) task
 			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
 		},
 		Run: func(rc *tasks.RC, in durationBackfillNativeParams) (durationBackfillResult, error) {
-			if in.DryRun != nil || in.DryRunSnake != nil {
-				return durationBackfillResult{}, fmt.Errorf("%s: dryRun and dry_run are not accepted; the run's mode comes from the start request", rc.Kind())
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return durationBackfillResult{}, err
 			}
 			base, err := t6g4NativeBase(rc, deps, true)
 			if err != nil {
@@ -894,7 +893,7 @@ func (p *Plugin) runDurationBackfillCore(ctx context.Context, params durationRee
 		}
 		var ur UnknownRowsResult
 		urSet := false
-		err := p.runUnknownRowsBackfillVia(ctx, t6g4View{env.Store, env.Writer}, writer, env.Each,
+		err := p.t6g4RunUnknownRowsBackfill(ctx, t6g4View{env.Store, env.Writer}, writer, env.Each,
 			func(r UnknownRowsResult) error {
 				ur, urSet = r, true
 				if env.SetUnknownRowsResult != nil {

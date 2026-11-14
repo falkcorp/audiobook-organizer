@@ -662,7 +662,6 @@ internal/plugins/maintenance.fragmentFixer.stores
 internal/plugins/maintenance.junkTitleFixer.buildJunkIndex
 internal/plugins/maintenance.junkTitleFixer.candidateTitle
 internal/plugins/maintenance.reconcileFixer.reader
-internal/plugins/maintenance.submitAuthorDedupOnce
 internal/plugins/maintenance.t6g4Kinds
 internal/plugins/maintenance.t6g4NativeBase
 internal/plugins/maintenance.t6g4Par

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -667,17 +667,17 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	if w, ok := database.AsCapability[segmentFailureWriter](store); ok {
 		writer = w
 	}
-	return p.runUnknownRowsBackfillVia(ctx, store, writer, t6g4RunEachHEAD(reporter),
+	return p.t6g4RunUnknownRowsBackfill(ctx, store, writer, t6g4RunEachHEAD(reporter),
 		func(res UnknownRowsResult) error { return registry.ReporterSetResult(reporter, res) },
 		params, dryRun, reporter)
 }
 
-// runUnknownRowsBackfillVia is runUnknownRowsBackfill's body with its four reaches
+// t6g4RunUnknownRowsBackfill is runUnknownRowsBackfill's body with its four reaches
 // outside the row walk passed in, so HEAD's shell and the native kind run the
 // one implementation: writer (nil when the store cannot defer aggregates), each
 // (the pool runner), setResult (persists the op result) and the store, whose
 // RecomputeBookAggregates is the recompute's write.
-func (p *Plugin) runUnknownRowsBackfillVia(ctx context.Context, store unknownRowsStore, writer segmentFailureWriter,
+func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRowsStore, writer segmentFailureWriter,
 	each t6g4EachFn, setResult func(UnknownRowsResult) error, params durationReextractParams,
 	dryRun bool, reporter sdk.Reporter) error {
 	workers := unknownRowsConcurrency(params.Workers)
@@ -848,7 +848,7 @@ func (p *Plugin) runUnknownRowsBackfillVia(ctx context.Context, store unknownRow
 	// A cancelled run must still bring the aggregates of every row it wrote up
 	// to date, so the leftover sweep below runs on every exit path.
 	runErr := func() error {
-		if err := unknownRowsPoolVia(ctx, each, reporter, workers, &run.ctr, pass1, "borrowing/promoting", func(_ context.Context, w unknownRowWork) error {
+		if err := t6g4UnknownRowsPool(ctx, each, reporter, workers, &run.ctr, pass1, "borrowing/promoting", func(_ context.Context, w unknownRowWork) error {
 			wrote, wErr := writeUnknownRow(run.writer, w.row, func(cur *database.BookFile) error {
 				return cur.SetMeasuredDuration(w.sec)
 			})
@@ -868,7 +868,7 @@ func (p *Plugin) runUnknownRowsBackfillVia(ctx context.Context, store unknownRow
 			_, probing := run.pending[id]
 			return !probing
 		}), workers)
-		return unknownRowsPoolVia(ctx, each, reporter, workers, &run.ctr, groupProbeRows(pass2), "probing", func(ctx context.Context, g []unknownRowWork) error {
+		return t6g4UnknownRowsPool(ctx, each, reporter, workers, &run.ctr, groupProbeRows(pass2), "probing", func(ctx context.Context, g []unknownRowWork) error {
 			return run.probeAndSettle(ctx, g)
 		})
 	}()
@@ -905,12 +905,12 @@ func (p *Plugin) runUnknownRowsBackfillVia(ctx context.Context, store unknownRow
 	return nil
 }
 
-// unknownRowsPoolVia runs fn over items through any loop runner (each is HEAD's
+// t6g4UnknownRowsPool runs fn over items through any loop runner (each is HEAD's
 // registry.RunItems or the native tasks.RunItems) with the pool size set
 // EXPLICITLY (RunItems is sequential by default). Each item checks ctx first and
 // stamps liveness when done. Label runs inside the worker goroutines, so every
 // counter it reads is atomic.
-func unknownRowsPoolVia[T any](ctx context.Context, each t6g4EachFn, reporter sdk.Reporter, workers int, ctr *unknownRowsCounters,
+func t6g4UnknownRowsPool[T any](ctx context.Context, each t6g4EachFn, reporter sdk.Reporter, workers int, ctr *unknownRowsCounters,
 	items []T, name string, fn func(context.Context, T) error) error {
 	ctr.done.Store(0)
 	total := len(items)

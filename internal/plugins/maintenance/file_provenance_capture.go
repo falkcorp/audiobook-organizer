@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4f8e1a67-05b3-4d29-9c7e-3a6b2d80f514
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -126,13 +126,14 @@ type fileProvCaptureEnv struct {
 }
 
 // fileProvCaptureNativeParams is fileProvCaptureParams for the native run: the
-// same fields, except Apply is only a refusal marker (the mode comes from the
-// start request; a live run applies, a preview walks and hashes nothing).
+// same fields, except the mode keys are only refusal markers (the mode comes
+// from the start request; a live run applies, a preview walks and hashes
+// nothing).
 type fileProvCaptureNativeParams struct {
 	Roots      []string `json:"roots"`
 	Max        int      `json:"max"`
 	Extensions []string `json:"extensions"`
-	Apply      *bool    `json:"apply,omitempty"`
+	t6g4ModeKeys
 }
 
 // fileProvenanceCaptureHeadEnv builds the env HEAD's shells give the core: the
@@ -163,18 +164,25 @@ func (p *Plugin) fileProvenanceCaptureKind(deps t6g4Deps, sched *tasks.Schedule)
 				"append-only provenance event so the pristine hash exists before anything " +
 				"copies, moves, or retags the file. Events are orphans until the file is " +
 				"imported, then adopted into its book_file chain. Roots are required; " +
-				"default dry-run, pass {\"apply\": true} to write events.",
-			Effects:        tasks.Writes(t6g4Res("file_provenance")...),
+				"a preview (the default) writes nothing, start in live mode to write events.",
+			// The events are the file-history chain of a book_file (orphans until the
+			// file is imported). pkg/ops has no provenance-ledger constant; the
+			// nearest valid name is book_files. Listed under "Review decisions".
+			Effects:        tasks.Writes(t6g4Res("book_files")...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,
 			ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-capture"),
-			Schedule:       sched,
-			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+			// HEAD declares no Timeout (the registry's own default applies); the
+			// native kind states 120 minutes, a sweep-sized bound (decision of
+			// the F5-09 review, MINOR 13). Listed in the PR's Deviations.
+			Timeout:  120 * time.Minute,
+			Schedule: sched,
+			Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
 		},
 		Run: func(rc *tasks.RC, in fileProvCaptureNativeParams) (fileProvCaptureResult, error) {
-			if in.Apply != nil {
-				return fileProvCaptureResult{}, fmt.Errorf("%s: the apply param is not accepted; the run's mode comes from the start request (live applies, preview reports)", rc.Kind())
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return fileProvCaptureResult{}, err
 			}
 			base, err := t6g4NativeBase(rc, deps, true)
 			if err != nil {
@@ -369,10 +377,10 @@ func (p *Plugin) captureFileProvenanceCore(ctx context.Context, params fileProvC
 	return result, nil
 }
 
-// fileEventFinder is the one ledger read alreadyObserved makes. It narrows the
+// t6g4FileEventFinder is the one ledger read alreadyObserved makes. It narrows the
 // parameter from database.FileProvenanceStore (every caller still compiles) so
 // the core can hand it env.Store.
-type fileEventFinder interface {
+type t6g4FileEventFinder interface {
 	FindFileEventsByHash(hash string) ([]database.FileEvent, error)
 }
 
@@ -382,7 +390,7 @@ type fileEventFinder interface {
 //
 // The hash has already been computed by the caller, so this costs a prefix scan
 // rather than another full read.
-func alreadyObserved(store fileEventFinder, sha, path string) (bool, error) {
+func alreadyObserved(store t6g4FileEventFinder, sha, path string) (bool, error) {
 	events, err := store.FindFileEventsByHash(sha)
 	if err != nil {
 		return false, err

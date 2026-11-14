@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -53,6 +53,14 @@ type extractWAVParams struct {
 	SkipExisting *bool `json:"skip_existing,omitempty"` // default true
 }
 
+// extractWAVNativeParams is extractWAVParams for the native run: the mode keys
+// are accepted only to be refused (the run is Live-only; its mode comes from
+// the start request).
+type extractWAVNativeParams struct {
+	SkipExisting *bool `json:"skip_existing,omitempty"`
+	t6g4ModeKeys
+}
+
 // extractWAVResult is the run's tallies (HEAD logs them; the native run returns them).
 type extractWAVResult struct {
 	Extracted      int `json:"extracted"`
@@ -95,13 +103,16 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 // extractWAVClipsKind is the native shell (rule R2 item 3). HEAD has no preview
 // and the run writes book_files.file_hash, so it is a Live-only writer (rule R7).
 func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
-	return tasks.Task(extractWAVClipsKind, tasks.TaskSpec[extractWAVParams, extractWAVResult]{
+	return tasks.Task(extractWAVClipsKind, tasks.TaskSpec[extractWAVNativeParams, extractWAVResult]{
 		Common: tasks.Common{
-			Title:           "Extract WAV clips for transcription cache",
-			Help:            "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes.",
-			Effects:         tasks.Writes(t6g4Res("book_files")...),
-			Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:          tasks.ResumeContinue,
+			Title:   "Extract WAV clips for transcription cache",
+			Help:    "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes.",
+			Effects: tasks.Writes(t6g4Res("book_files")...),
+			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
+			// internal/arch: skip_existing (the default) skips a clip already in the cache), so the 05-tasks mapping is
+			// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
+			Resume:          tasks.ResumeFromZero,
 			Priority:        tasks.PriorityLow,
 			ConcurrencyKey:  tasks.Key("books.maintenance.extract-wav-clips"),
 			Timeout:         24 * time.Hour,
@@ -109,7 +120,10 @@ func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks
 			Schedule:        sched,
 			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		},
-		Run: func(rc *tasks.RC, in extractWAVParams) (extractWAVResult, error) {
+		Run: func(rc *tasks.RC, in extractWAVNativeParams) (extractWAVResult, error) {
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return extractWAVResult{}, err
+			}
 			if err := t6g4RequireLive(rc); err != nil {
 				return extractWAVResult{}, err
 			}
@@ -120,7 +134,7 @@ func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks
 			if err != nil {
 				return extractWAVResult{}, err
 			}
-			return p.runExtractWAVClipsCore(rc.Context(), in, extractWAVClipsEnv{t6g4Base: base})
+			return p.runExtractWAVClipsCore(rc.Context(), extractWAVParams{SkipExisting: in.SkipExisting}, extractWAVClipsEnv{t6g4Base: base})
 		},
 	})
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -42,9 +42,9 @@ const (
 	statusExtracted    = "extracted" // extract-only mode: WAV cached, not transcribed
 )
 
-// transcribeStatsSink is the one method the accumulator calls to persist its
+// t6g4TranscribeStatsSink is the one method the accumulator calls to persist its
 // counters: database.TranscribeStatsStore without its read.
-type transcribeStatsSink interface {
+type t6g4TranscribeStatsSink interface {
 	PutTranscribeStats(*database.TranscribeStats) error
 }
 
@@ -52,12 +52,12 @@ type transcribeStatsSink interface {
 // aggregate. The 4 concurrent page goroutines all record outcomes into it; the
 // op flushes it to PebbleDB (via sink) after each page so a monitor can read
 // one key. sink may be nil when the store does not implement
-// transcribeStatsSink — in that case the accumulator still tracks
+// t6g4TranscribeStatsSink — in that case the accumulator still tracks
 // counts in memory (used for the op's final log line) but never persists.
 type transcribeStatsAccum struct {
 	mu    sync.Mutex
 	stats database.TranscribeStats
-	sink  transcribeStatsSink
+	sink  t6g4TranscribeStatsSink
 	// stuck counts consecutive pages the pool answered "worker stuck" (see
 	// whisperStuckMaxBatches); a page that gets an answer resets it.
 	stuck stuckStreak
@@ -92,7 +92,7 @@ func (a *transcribeStatsAccum) beat(msg string) {
 	}
 }
 
-func newTranscribeStatsAccum(sink transcribeStatsSink, opID string, totalBooks int, startedAt time.Time) *transcribeStatsAccum {
+func newTranscribeStatsAccum(sink t6g4TranscribeStatsSink, opID string, totalBooks int, startedAt time.Time) *transcribeStatsAccum {
 	return &transcribeStatsAccum{
 		sink: sink,
 		stats: database.TranscribeStats{

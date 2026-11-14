@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/filepath_collision_report.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 80fcbf6b-a38f-4f44-86f4-7f1f06d2a0d2
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -195,7 +195,7 @@ func (p *Plugin) filePathCollisionReportKind(deps t6g4Deps, sched *tasks.Schedul
 // runFilePathCollisionReportCore is HEAD's body (rule R2 item 1) after the shell
 // resolved the store and decoded params.
 func runFilePathCollisionReportCore(ctx context.Context, params filePathCollisionReportParams, env filePathCollisionEnv) (filePathCollisionReport, error) {
-	report, err := buildFilePathCollisionReportVia(ctx, env.Store, params, env.t6g4Base)
+	report, err := t6g4BuildFilePathCollisionReport(ctx, env.Store, params, env.t6g4Base)
 	if err != nil {
 		return report, err
 	}
@@ -274,13 +274,13 @@ func shardBookCores(books []database.BookCore, n int) [][]database.BookCore {
 // produces, and any op that later relies on them deserves a report tested
 // directly.
 func buildFilePathCollisionReport(ctx context.Context, store filePathCollisionStore, params filePathCollisionReportParams, reporter sdk.Reporter) (filePathCollisionReport, error) {
-	return buildFilePathCollisionReportVia(ctx, store, params, t6g4HeadBase(reporter, false, nil, nil))
+	return t6g4BuildFilePathCollisionReport(ctx, store, params, t6g4HeadBase(reporter, false, nil, nil))
 }
 
-// buildFilePathCollisionReportVia is buildFilePathCollisionReport over an env
+// t6g4BuildFilePathCollisionReport is buildFilePathCollisionReport over an env
 // base: the sweep's progress and its loop run through the base, so the core can
 // hand it either shell's.
-func buildFilePathCollisionReportVia(ctx context.Context, store filePathCollisionStore, params filePathCollisionReportParams, base t6g4Base) (filePathCollisionReport, error) {
+func t6g4BuildFilePathCollisionReport(ctx context.Context, store filePathCollisionStore, params filePathCollisionReportParams, base t6g4Base) (filePathCollisionReport, error) {
 	reporter := base.reporter(ctx)
 	sampleLimit := params.SampleLimit
 	if sampleLimit <= 0 {

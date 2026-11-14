@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -135,13 +135,12 @@ type introMigrateEnv struct {
 }
 
 // introMigrateNativeParams is introMigrateParams for the native run: the mode
-// comes from the start request, so dry_run and dryRun are accepted only to be
-// refused, and last_book_id and overwrite carry over.
+// comes from the start request, so dry_run, dryRun and apply are accepted only
+// to be refused, and last_book_id and overwrite carry over.
 type introMigrateNativeParams struct {
-	LastBookID  string `json:"last_book_id,omitempty"`
-	Overwrite   *bool  `json:"overwrite,omitempty"`
-	DryRun      *bool  `json:"dry_run,omitempty"`
-	DryRunCamel *bool  `json:"dryRun,omitempty"`
+	LastBookID string `json:"last_book_id,omitempty"`
+	Overwrite  *bool  `json:"overwrite,omitempty"`
+	t6g4ModeKeys
 }
 
 // runIntroMigrateSingleFile is the v2 shell around runIntroMigrateSingleFileCore (rule R2 item 2).
@@ -173,11 +172,14 @@ func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule
 	return tasks.Task(introMigrateSingleFileKind, tasks.TaskSpec[introMigrateNativeParams, introMigrateResult]{
 		Common: tasks.Common{
 			Title: "Migrate intro transcripts to single-file books",
-			Help:  "Tier 0 of the per-file intro backfill. Copies the book-level intro transcript onto the book's one BookFile row, for the ~33,780 single-file books (75.3% of the library). Zero GPU: it is a copy, not a transcription. Multi-file books are deliberately refused because the book-level transcript does not record which file produced it and the silence-retry path may have used file 2. Defaults to dry_run=true; pass dry_run=false to write.",
+			Help:  "Tier 0 of the per-file intro backfill. Copies the book-level intro transcript onto the book's one BookFile row, for the ~33,780 single-file books (75.3% of the library). Zero GPU: it is a copy, not a transcription. Multi-file books are deliberately refused because the book-level transcript does not record which file produced it and the silence-retry path may have used file 2. Previews by default (a preview reports what it would copy and writes nothing); start it in live mode to write.",
 			// UpdateBookFile whole-row write-back on BookFile rows (reads Books).
-			Effects:         tasks.Writes(t6g4Res("book_files")...).AlsoReads(t6g4Res("books")...),
-			Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:          tasks.ResumeContinue,
+			Effects: tasks.Writes(t6g4Res("book_files")...).AlsoReads(t6g4Res("books")...),
+			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
+			// internal/arch: overwrite is off by default, so a re-run skips a row that already carries a transcript), so the 05-tasks mapping is
+			// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
+			Resume:          tasks.ResumeFromZero,
 			Priority:        tasks.PriorityLow,
 			ConcurrencyKey:  tasks.Key("books.maintenance.intro-migrate-single-file"),
 			Timeout:         2 * time.Hour,
@@ -186,8 +188,8 @@ func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule
 			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		},
 		Run: func(rc *tasks.RC, in introMigrateNativeParams) (introMigrateResult, error) {
-			if in.DryRun != nil || in.DryRunCamel != nil {
-				return introMigrateResult{}, fmt.Errorf("%s: dry_run is not accepted; the run's mode comes from the start request", rc.Kind())
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return introMigrateResult{}, err
 			}
 			base, err := t6g4NativeBase(rc, deps, true)
 			if err != nil {
@@ -263,7 +265,7 @@ func (p *Plugin) runIntroMigrateSingleFileCore(ctx context.Context, params intro
 				return ctx.Err()
 			default:
 			}
-			reason := migrateOneBookVia(store, env.Writer, log, id, dryRun, overwrite)
+			reason := t6g4MigrateOneBook(store, env.Writer, log, id, dryRun, overwrite)
 			record(reason, 1)
 		}
 		return nil
@@ -301,14 +303,14 @@ func (p *Plugin) runIntroMigrateSingleFileCore(ctx context.Context, params intro
 	return introMigrateResult{DryRun: dryRun, TotalBooks: total, Counts: snapshot}, err
 }
 
-// introMigrateReads is the read surface migrateOneBookVia needs.
-type introMigrateReads interface {
+// t6g4IntroMigrateReads is the read surface t6g4MigrateOneBook needs.
+type t6g4IntroMigrateReads interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 }
 
-// introMigrateWrites is the one write migrateOneBookVia makes.
-type introMigrateWrites interface {
+// t6g4IntroMigrateWrites is the one write t6g4MigrateOneBook makes.
+type t6g4IntroMigrateWrites interface {
 	UpdateBookFile(id string, file *database.BookFile) error
 }
 
@@ -318,12 +320,12 @@ func (p *Plugin) migrateOneBook(store bookFileRelinker, log interface {
 	Info(string, ...any)
 	Warn(string, ...any)
 }, bookID string, dryRun, overwrite bool) string {
-	return migrateOneBookVia(store, store, log, bookID, dryRun, overwrite)
+	return t6g4MigrateOneBook(store, store, log, bookID, dryRun, overwrite)
 }
 
-// migrateOneBookVia is migrateOneBook's body (rule R10 item 1): it reads through
+// t6g4MigrateOneBook is migrateOneBook's body (rule R10 item 1): it reads through
 // r and writes only through w, so the core can hand it env.Store and env.Writer.
-func migrateOneBookVia(r introMigrateReads, w introMigrateWrites, log interface {
+func t6g4MigrateOneBook(r t6g4IntroMigrateReads, w t6g4IntroMigrateWrites, log interface {
 	Info(string, ...any)
 	Warn(string, ...any)
 }, bookID string, dryRun, overwrite bool) string {

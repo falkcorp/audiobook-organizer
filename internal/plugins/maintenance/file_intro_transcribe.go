@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -346,13 +346,13 @@ type fileIntroAccum struct {
 	writeMu sync.Mutex
 	mu      sync.Mutex
 	stats   database.FileIntroStats
-	sink    fileIntroStatsSink
+	sink    t6g4FileIntroStatsSink
 	log     *slog.Logger // reporter's logger; nil in tests that do not care
 }
 
-// fileIntroStatsSink persists the run's counters: the one method of
+// t6g4FileIntroStatsSink persists the run's counters: the one method of
 // database.FileIntroStatsStore the accumulator calls.
-type fileIntroStatsSink interface {
+type t6g4FileIntroStatsSink interface {
 	PutFileIntroStats(*database.FileIntroStats) error
 }
 
@@ -406,13 +406,13 @@ type fileIntroEnv struct {
 }
 
 // fileIntroNativeParams is fileIntroParams for the native run: the mode comes
-// from the start request, so dry_run and dryRun are accepted only to be refused.
+// from the start request, so dry_run, dryRun and apply are accepted only to be
+// refused.
 type fileIntroNativeParams struct {
 	OnlyMissing *bool  `json:"only_missing,omitempty"`
 	RetryFailed *bool  `json:"retry_failed,omitempty"`
 	ClearRunID  string `json:"clear_run_id,omitempty"`
-	DryRun      *bool  `json:"dry_run,omitempty"`
-	DryRunCamel *bool  `json:"dryRun,omitempty"`
+	t6g4ModeKeys
 }
 
 // fileIntroResult is the run's outcome: the selection (always), the counters of
@@ -470,7 +470,10 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced.",
 			// HEAD declares no Writes (see the long comment on fileIntroTranscribeDef).
 			// The body writes a file's intro group (SetBookFileIntro, ClearBookFileIntro,
-			// RecordIntroTimeout) and a book's transcript fill (ModifyBook).
+			// RecordIntroTimeout: book_files), a book's transcript fill (ModifyBook:
+			// books). It also writes the run's counters (PutFileIntroStats, the
+			// stats:transcribe-files key), which has no pkg/ops constant: listed under
+			// "Review decisions", not declared.
 			Effects:  tasks.Writes(t6g4Res("book_files", "books")...),
 			Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:   tasks.ResumeContinue,
@@ -484,8 +487,8 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		},
 		Run: func(rc *tasks.RC, in fileIntroNativeParams) (fileIntroResult, error) {
-			if in.DryRun != nil || in.DryRunCamel != nil {
-				return fileIntroResult{}, fmt.Errorf("%s: dry_run is not accepted; the run's mode comes from the start request", rc.Kind())
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return fileIntroResult{}, err
 			}
 			base, err := t6g4NativeBase(rc, deps, true)
 			if err != nil {
@@ -511,7 +514,7 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 		queue = store
 	}
 	if params.ClearRunID != "" {
-		cleared, err := p.clearFileIntrosVia(ctx, fileIntroClearIO{
+		cleared, err := p.t6g4ClearFileIntros(ctx, fileIntroClearIO{
 			reads: store, writes: env.Writer, writable: store.FileIntroWritesAvailable(), each: env.Each,
 		}, queue, reporter, params.ClearRunID, dryRun)
 		return fileIntroResult{DryRun: dryRun, RunID: params.ClearRunID, Cleared: &cleared}, err

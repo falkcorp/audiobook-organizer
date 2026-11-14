@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -151,12 +151,12 @@ type fileProvExportEnv struct {
 	t6g4Base
 }
 
-// fileProvExportNativeParams is fileProvExportParams for the native run: Apply
-// is only a refusal marker (the mode comes from the start request).
+// fileProvExportNativeParams is fileProvExportParams for the native run: the
+// mode keys are only refusal markers (the mode comes from the start request).
 type fileProvExportNativeParams struct {
-	Path  string `json:"path"`
-	Max   int    `json:"max"`
-	Apply *bool  `json:"apply,omitempty"`
+	Path string `json:"path"`
+	Max  int    `json:"max"`
+	t6g4ModeKeys
 }
 
 // runFileProvenanceExport is the v2 shell around runFileProvenanceExportCore (rule R2 item 2).
@@ -180,19 +180,27 @@ func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) 
 			Help: "Appends every provenance event newer than the durable export " +
 				"cursor to a JSONL file, so the ledger survives corruption of the database " +
 				"it lives in. Never rewrites what it has written. Reports sequence gaps and " +
-				"missing rows as deletion evidence. Path is required; default dry-run, pass " +
-				"{\"apply\": true} to write.",
-			Effects:        tasks.Writes(t6g4Res("file_provenance")...),
+				"missing rows as deletion evidence. Path is required; a preview (the default) " +
+				"writes nothing, start in live mode to write.",
+			// Appends the ledger to a JSONL file on disk (files) and moves the export
+			// cursor in the provenance keyspace. pkg/ops has no provenance-ledger
+			// constant; the nearest valid name is book_files. Listed under
+			// "Review decisions".
+			Effects:        tasks.Writes(t6g4Res("book_files", "files")...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,
 			ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-export"),
-			Schedule:       sched,
-			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+			// HEAD declares no Timeout (the registry's own default applies); the
+			// native kind states 120 minutes (F5-09 review, MINOR 13). Listed in
+			// the PR's Deviations.
+			Timeout:  120 * time.Minute,
+			Schedule: sched,
+			Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
 		},
 		Run: func(rc *tasks.RC, in fileProvExportNativeParams) (fileProvExportResult, error) {
-			if in.Apply != nil {
-				return fileProvExportResult{}, fmt.Errorf("%s: the apply param is not accepted; the run's mode comes from the start request (live applies, preview reports)", rc.Kind())
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return fileProvExportResult{}, err
 			}
 			base, err := t6g4NativeBase(rc, deps, true)
 			if err != nil {

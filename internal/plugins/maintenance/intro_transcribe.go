@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.47.0
+// version: 3.47.1
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -191,8 +191,16 @@ type introTranscribeParams struct {
 	RemoteExtract *bool `json:"remote_extract,omitempty"`
 }
 
-// introTranscribeHelp is the definition's description, shared by HEAD's v2 def and the native kind.
-const introTranscribeHelp = "Transcribes the first 90 seconds of each book's first audio file with Whisper. Where the clip is cut depends on remote_extract: by default, when this server may not decode audio (production) and a Whisper worker advertises path_pipeline, the server sends the worker the file's path and the worker cuts the clip from its own NFS mount (no server decode, no clip cache; a worker with a lost mount defers the page instead of failing books); otherwise ffmpeg runs on this host, which needs ALLOW_SERVER_DECODE. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Works in pages of 200 books sent as batches. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode; a path_unmapped book, whose worker could not read the share, is never durable and is simply retried) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply. dry_run defaults to true for every mode (full transcribe, extract_only and reparse_only): a run that states no mode only selects the work and reports how many books it would process, writing nothing and decoding nothing. Pass dry_run=false (or dryRun=false) to transcribe, extract or reparse for real."
+// introTranscribeHelpBody is the part of the description both the v2 def and the
+// native kind share: everything but the sentence about the run's mode.
+const introTranscribeHelpBody = "Transcribes the first 90 seconds of each book's first audio file with Whisper. Where the clip is cut depends on remote_extract: by default, when this server may not decode audio (production) and a Whisper worker advertises path_pipeline, the server sends the worker the file's path and the worker cuts the clip from its own NFS mount (no server decode, no clip cache; a worker with a lost mount defers the page instead of failing books); otherwise ffmpeg runs on this host, which needs ALLOW_SERVER_DECODE. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Works in pages of 200 books sent as batches. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode; a path_unmapped book, whose worker could not read the share, is never durable and is simply retried) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply."
+
+// introTranscribeHelp is the definition's description, shared by HEAD's v2 def only.
+const introTranscribeHelp = introTranscribeHelpBody + " dry_run defaults to true for every mode (full transcribe, extract_only and reparse_only): a run that states no mode only selects the work and reports how many books it would process, writing nothing and decoding nothing. Pass dry_run=false (or dryRun=false) to transcribe, extract or reparse for real."
+
+// introTranscribeNativeHelp is the native kind's Help: the same text with the mode
+// sentence of a run whose mode is the start request's (a dry_run param is refused).
+const introTranscribeNativeHelp = introTranscribeHelpBody + " A run started in preview mode (the default) only selects the work and reports how many books it would process, writing nothing and decoding nothing; start it in live mode to transcribe, extract or reparse for real."
 
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 	return sdk.OperationDef{
@@ -232,8 +240,8 @@ type introTranscribeEnv struct {
 }
 
 // introTranscribeNativeParams is introTranscribeParams for the native run: the
-// mode comes from the start request, so dry_run and dryRun are accepted only to
-// be refused.
+// mode comes from the start request, so dry_run, dryRun and apply are accepted
+// only to be refused.
 type introTranscribeNativeParams struct {
 	LastBookID    string `json:"last_book_id,omitempty"`
 	OnlyMissing   *bool  `json:"only_missing,omitempty"`
@@ -242,8 +250,7 @@ type introTranscribeNativeParams struct {
 	ReparseOnly   *bool  `json:"reparse_only,omitempty"`
 	ExtractOnly   *bool  `json:"extract_only,omitempty"`
 	RemoteExtract *bool  `json:"remote_extract,omitempty"`
-	DryRun        *bool  `json:"dry_run,omitempty"`
-	DryRunCamel   *bool  `json:"dryRun,omitempty"`
+	t6g4ModeKeys
 }
 
 // introTranscribeResult is the run's outcome: the selection, and the counters of
@@ -274,12 +281,12 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	if err != nil {
 		return err
 	}
-	base := t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store})
-	// HEAD's body reached reporter.Checkpoint (its CheckpointFn); the resume guard
-	// in internal/arch counts that, so this shell keeps the path. Nothing in the
-	// core calls it at the page concurrency (see the note after the page loop).
-	base.SaveCheckpoint = func(v any) error { return reporter.Checkpoint(v) }
-	_, err = p.runIntroTranscribeCore(ctx, params, introTranscribeEnv{t6g4Base: base})
+	// No SaveCheckpoint: HEAD's CheckpointFn was never called at the page
+	// concurrency (see the note after the page loop), so the def restarts from
+	// zero and says so in internal/arch's restartWithoutCheckpoint.
+	_, err = p.runIntroTranscribeCore(ctx, params, introTranscribeEnv{
+		t6g4Base: t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}),
+	})
 	return err
 }
 
@@ -289,13 +296,18 @@ func (p *Plugin) introTranscribeNativeKind(deps t6g4Deps, sched *tasks.Schedule)
 	return tasks.Task(introTranscribeKind, tasks.TaskSpec[introTranscribeNativeParams, introTranscribeResult]{
 		Common: tasks.Common{
 			Title: "Transcribe book intros",
-			Help:  introTranscribeHelp,
+			Help:  introTranscribeNativeHelp,
 			// HEAD declares Writes: books. The body also writes a file's timeout
-			// strikes (RecordIntroTimeout, ClearIntroTimeouts), the run's stats
-			// aggregate (PutTranscribeStats) and the whisper result journal.
-			Effects:         tasks.Writes(t6g4Res("books", "book_files")...),
-			Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:          tasks.ResumeContinue,
+			// strikes (RecordIntroTimeout, ClearIntroTimeouts: book_files), the
+			// run's stats aggregate (PutTranscribeStats, the stats:transcribe key) and
+			// the whisper result journal (OpenWhisperJournal): neither has a pkg/ops
+			// constant, so they are listed under "Review decisions", not declared.
+			Effects: tasks.Writes(t6g4Res("books", "book_files")...),
+			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
+			// internal/arch: only_missing re-selects every book still without a transcript), so the 05-tasks mapping is
+			// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
+			Resume:          tasks.ResumeFromZero,
 			Priority:        tasks.PriorityLow,
 			ConcurrencyKey:  tasks.Key("books." + introTranscribeOpID),
 			Timeout:         10 * time.Hour,
@@ -304,8 +316,8 @@ func (p *Plugin) introTranscribeNativeKind(deps t6g4Deps, sched *tasks.Schedule)
 			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		},
 		Run: func(rc *tasks.RC, in introTranscribeNativeParams) (introTranscribeResult, error) {
-			if in.DryRun != nil || in.DryRunCamel != nil {
-				return introTranscribeResult{}, fmt.Errorf("%s: dry_run is not accepted; the run's mode comes from the start request", rc.Kind())
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return introTranscribeResult{}, err
 			}
 			base, err := t6g4NativeBase(rc, deps, true)
 			if err != nil {
@@ -521,7 +533,7 @@ func (p *Plugin) runIntroTranscribeCore(ctx context.Context, params introTranscr
 			return scanBusyNow(introTranscribeOpID, store)
 		}
 	}
-	pageStore := newIntroPageStore(store, env.Writer)
+	pageStore := t6g4NewIntroPageStore(store, env.Writer)
 
 	// RunItems drives the page loop with introTranscribePageConc pages in flight
 	// at once. Each page runs its own ffmpeg workers (introTranscribeFFWorkers),
@@ -643,28 +655,28 @@ func (p *Plugin) runIntroTranscribeCore(ctx context.Context, params introTranscr
 	return res, nil
 }
 
-// introPageFiles is the transcribePageStore the page worker reads files and
+// t6g4IntroPageFiles is the transcribePageStore the page worker reads files and
 // writes book columns through.
-type introPageFiles struct {
+type t6g4IntroPageFiles struct {
 	bookFileLister
 	bookModifier
 }
 
-// introPageFilesWithStrikes is introPageFiles for a store that can also write a
+// t6g4IntroPageFilesWithStrikes is t6g4IntroPageFiles for a store that can also write a
 // file's timeout strikes: it satisfies database.BookFileIntroStore, which is what
 // recordBookTimeout and clearFileTimeouts look for with database.AsCapability.
-type introPageFilesWithStrikes struct {
-	introPageFiles
+type t6g4IntroPageFilesWithStrikes struct {
+	t6g4IntroPageFiles
 	database.BookFileIntroStore
 }
 
-// newIntroPageStore is the page worker's store over the core's read and write
+// t6g4NewIntroPageStore is the page worker's store over the core's read and write
 // seams. The strike methods are present only where reads reports the store can
 // write per-file intro results, mirroring HEAD's capability probe on its store.
-func newIntroPageStore(reads t6g4Store, writes t6g4Writer) transcribePageStore {
-	base := introPageFiles{bookFileLister: reads, bookModifier: writes}
+func t6g4NewIntroPageStore(reads t6g4Store, writes t6g4Writer) transcribePageStore {
+	base := t6g4IntroPageFiles{bookFileLister: reads, bookModifier: writes}
 	if reads.FileIntroWritesAvailable() {
-		return introPageFilesWithStrikes{introPageFiles: base, BookFileIntroStore: writes}
+		return t6g4IntroPageFilesWithStrikes{t6g4IntroPageFiles: base, BookFileIntroStore: writes}
 	}
 	return base
 }

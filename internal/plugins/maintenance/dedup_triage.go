@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -367,11 +367,12 @@ func (p *Plugin) runDedupExactTriage(ctx context.Context, rawParams json.RawMess
 	return err
 }
 
-// dedupExactTriageNativeParams carries HEAD's apply flag only so a start request
-// that still sends it is refused: the native run's mode comes from the start
-// request (apply is true exactly in a live run), never from a param.
+// dedupExactTriageNativeParams carries HEAD's apply flag (and the other two
+// mode keys) only so a start request that still sends one is refused: the native
+// run's mode comes from the start request (apply is true exactly in a live
+// run), never from a param.
 type dedupExactTriageNativeParams struct {
-	Apply *bool `json:"apply,omitempty"`
+	t6g4ModeKeys
 }
 
 // dedupExactTriageKind is the native shell (rule R2 item 3). It has a preview, so
@@ -379,9 +380,11 @@ type dedupExactTriageNativeParams struct {
 func (p *Plugin) dedupExactTriageKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(dedupExactTriageKind, tasks.TaskSpec[dedupExactTriageNativeParams, TriageReport]{
 		Common: tasks.Common{
-			Title:          "Dedup exact-pending triage (dry-run / apply)",
-			Help:           "Classifies all pending exact-layer dedup candidates into 5 populations (genuine/stub/fragment/title_leak/unknown) and reports counts. Dry-run by default — no candidates are deleted. With apply=true, dismisses every purgeable candidate (stub/title_leak) via a status update; genuine/fragment/unknown candidates are never touched.",
-			Effects:        tasks.Writes(t6g4Res("dedup_candidates")...),
+			Title: "Dedup exact-pending triage (dry-run / apply)",
+			Help:  "Classifies all pending exact-layer dedup candidates into 5 populations (genuine/stub/fragment/title_leak/unknown) and reports counts. A preview (the default) deletes nothing. Started in live mode, it dismisses every purgeable candidate (stub/title_leak) via a status update; genuine/fragment/unknown candidates are never touched.",
+			// Dismissing a candidate is a status update on a dedup candidate row,
+			// which lives in the embedding store.
+			Effects:        tasks.Writes(t6g4Res("embeddings")...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,
@@ -391,8 +394,8 @@ func (p *Plugin) dedupExactTriageKind(deps t6g4Deps, sched *tasks.Schedule) task
 			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
 		},
 		Run: func(rc *tasks.RC, in dedupExactTriageNativeParams) (TriageReport, error) {
-			if in.Apply != nil {
-				return TriageReport{}, fmt.Errorf("%s: the apply param is not accepted; the run's mode comes from the start request (live applies, preview reports)", rc.Kind())
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return TriageReport{}, err
 			}
 			base, err := t6g4NativeBase(rc, deps, true)
 			if err != nil {

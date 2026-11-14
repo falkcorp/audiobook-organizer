@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_clear.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6f3b8d25-e471-4a09-b2c6-1d8a95e7f034
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -31,7 +31,7 @@ type fileIntroClearWrites interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
-// fileIntroClearIO is everything clearFileIntrosVia reaches the store through:
+// fileIntroClearIO is everything t6g4ClearFileIntros reaches the store through:
 // the reads, the writes, whether the store can write at all (HEAD's capability
 // probe, made by the caller), and the loop runner (rule R10: nothing else).
 type fileIntroClearIO struct {
@@ -50,7 +50,7 @@ type fileIntroClearResult struct {
 	Errors      int    `json:"errors"`
 }
 
-// clearFileIntrosVia is rollback for maintenance.transcribe-file-intros
+// t6g4ClearFileIntros is rollback for maintenance.transcribe-file-intros
 // (clear_run_id): it removes the per-file results the named run wrote and the
 // book-level transcripts that were filled from them. It writes no undo-ledger
 // rows (owner decision: rollback is by run id).
@@ -75,7 +75,7 @@ type fileIntroClearResult struct {
 // its cause was rolled back.
 //
 // HEAD's shell and the native kind both run it, so the rollback exists once.
-func (p *Plugin) clearFileIntrosVia(ctx context.Context, io fileIntroClearIO, queue OpQueueReader, reporter sdk.Reporter, runID string, dryRun bool) (fileIntroClearResult, error) {
+func (p *Plugin) t6g4ClearFileIntros(ctx context.Context, io fileIntroClearIO, queue OpQueueReader, reporter sdk.Reporter, runID string, dryRun bool) (fileIntroClearResult, error) {
 	mark := introModeMarker(dryRun)
 	log := reporter.Logger()
 	store := io.reads
