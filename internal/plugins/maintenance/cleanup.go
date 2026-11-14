@@ -961,11 +961,11 @@ func (p *Plugin) runTrashCleanup(ctx context.Context, _ json.RawMessage, reporte
 }
 
 // trashCleanupKind builds the native kind. Live-only writer. Writes found:
-// CleanupTrashedVersions purges trashed versions (book_versions), removes their
-// files and the files the kept-file sweep unlinks (files), and moves unsettled
-// versions to purge_failed (book_versions).
+// CleanupTrashedVersions purges trashed versions (book_version rows, counted
+// under books), removes their files and the files the kept-file sweep unlinks (files), and moves unsettled
+// versions to purge_failed (book_version rows, counted under books).
 func (p *Plugin) trashCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "book_versions"), tasks.Res("books", "files"))
+	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "files"))
 	return tasks.Task(t6g3TrashCleanupKind, tasks.TaskSpec[json.RawMessage, TrashCleanupResult]{
 		Common: t6g3Common(p.trashCleanupDef(), t6g3TrashCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (TrashCleanupResult, error) {

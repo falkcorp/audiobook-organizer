@@ -215,11 +215,12 @@ type t6g3Deps struct {
 // --- the HEAD adapters (rule R10 item 5) ---
 
 // headT6g3Writer is t6g3Writer over HEAD's dependencies: each method calls what
-// HEAD's body called, in the same order with the same arguments. Deps are read
-// lazily so a test double with no store behind it is only touched by the
-// method a test reaches. The store the shell captured (HEAD's OpsStore at the
-// start of the run) is the one every store-reaching write uses, so the writer
-// never re-reads the plugin's dependencies for it (nil: errT6g3NoStore).
+// HEAD's body called, in the same order with the same arguments. The store the
+// shell captured (HEAD's OpsStore at the start of the run) is read eagerly, once,
+// in t6g3HeadBase, and is the one every store-reaching write uses, so the writer
+// never re-reads the plugin's dependencies for it (nil: errT6g3NoStore). Only the
+// non-store dependencies (purge, activity, trash, the operation queue) are read
+// lazily, so a test double is touched only by the method a test reaches.
 type headT6g3Writer struct {
 	p     *Plugin
 	store OpsStore

@@ -257,8 +257,9 @@ const folderCoverBackfillOpID = "maintenance.folder-cover-backfill"
 // folderCoverBackfillKind builds the native kind. HEAD declares a Preview, so
 // it runs in either mode (HEAD's dry_run default of true becomes the start
 // request's mode). Writes found: ModifyBook on the book's cover fields only.
-// HEAD's `workers` param (clamped 1-32) is not carried: a Task's pool is fixed
-// at HEAD's default of twice the cores (see the F5-08 seams note).
+// HEAD's `workers` param (clamped 1-32) is carried: the core sizes the pool
+// (the param, else twice the cores) and the shell hands that size to
+// tasks.RunItems as tasks.Fixed.
 func (p *Plugin) folderCoverBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "books"))
 	return tasks.Task(t6g3FolderCoverBackfillKind, tasks.TaskSpec[json.RawMessage, struct{}]{
@@ -505,12 +506,13 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 // coverTextReadKind builds the native kind. HEAD declares a Preview, so it runs
 // in either mode. Writes found: the per-image text records and the per-book
 // image index, both raw-key records of the cover-text store (resource
-// cover_text); the op never writes a book. The `workers` param and the
-// capacity-sized live pool are carried: the core sizes the pool and the native
+// metadata_cache: the closest constant in pkg/ops/effects.go, as the store holds
+// derived per-image reads, not book metadata; F5-06 owns any new constant); the
+// op never writes a book. The `workers` param and the capacity-sized live pool are carried: the core sizes the pool and the native
 // shell gives that size to tasks.RunItems as a fixed parallelism, so a read
 // never queues behind a semaphore inside an item.
 func (p *Plugin) coverTextReadKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "cover_text"))
+	eff := tasks.Writes(tasks.Res("books", "metadata_cache"))
 	return tasks.Task(t6g3CoverTextReadKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g3Common(p.coverTextReadDef(), t6g3CoverTextReadKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {

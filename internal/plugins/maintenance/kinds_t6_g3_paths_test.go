@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_paths_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d41c7b92-6a35-4e08-9f1d-83b5e2a07c64
 // last-edited: 2026-11-14
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"runtime"
 	"slices"
@@ -40,6 +41,10 @@ type t6g3CBStore struct {
 	*database.PebbleStore
 	// mod, when set, takes the credits write (an interleaving edit).
 	mod database.BookCreditsModifier
+	// failClear makes the class lists' clear (a replace with no rows) fail.
+	failClear error
+	// failMark makes the judged-marker write fail.
+	failMark error
 
 	mu    sync.Mutex
 	calls []string
@@ -82,6 +87,12 @@ func (s *t6g3CBStore) CreateOperationChange(c *database.OperationChange) error {
 
 func (s *t6g3CBStore) ReplaceOpRowsPrefix(opID, prefix string, n int, at func(int) (database.OpRow, error)) error {
 	s.note("ReplaceOpRowsPrefix:" + prefix + ":" + string(rune('0'+min(n, 9))))
+	if n == 0 && prefix == database.ClassListRowPrefix && s.failClear != nil {
+		return s.failClear
+	}
+	if prefix == cbSwept && s.failMark != nil {
+		return s.failMark
+	}
 	return s.PebbleStore.ReplaceOpRowsPrefix(opID, prefix, n, at)
 }
 
@@ -204,11 +215,13 @@ func TestT6G3_CreditsBackfillHeadShellFailedResultWriteClearsTheClassLists(t *te
 // writer under it.
 type t6g3CBRecWriter struct {
 	t6g3Writer
+	t6g3ResLog
 	mu    sync.Mutex
 	calls []string
 }
 
 func (w *t6g3CBRecWriter) note(c string) {
+	w.record(c)
 	w.mu.Lock()
 	w.calls = append(w.calls, c)
 	w.mu.Unlock()
@@ -300,6 +313,18 @@ func (n *t6g3CBNative) calls() []string {
 	return out
 }
 
+// assertWithin checks every resource the run's writers wrote against d's WriteSet.
+func (n *t6g3CBNative) assertWithin(t *testing.T, d tasks.Definition) {
+	t.Helper()
+	n.mu.Lock()
+	var all t6g3ResLog
+	for _, w := range n.writers {
+		all.merge(&w.t6g3ResLog)
+	}
+	n.mu.Unlock()
+	all.assertWithin(t, d)
+}
+
 func (n *t6g3CBNative) kind() tasks.Definition {
 	return (&Plugin{}).creditsBackfillKind(n.deps, nil)
 }
@@ -316,6 +341,7 @@ func TestT6G3_CreditsBackfillNativeLiveWritesThroughTheWriter(t *testing.T) {
 	host.SetCPUSlots(3)
 	raw, err := t6g3Run(t, n.kind(), rc, "")
 	require.NoError(t, err)
+	n.assertWithin(t, n.kind())
 
 	require.Len(t, n.handed, 1, "NewWriter is called once per run")
 	assert.True(t, n.handed[0] == tasks.Writer(gate), "NewWriter is handed this run's rc.Writer()")
@@ -394,13 +420,15 @@ func TestT6G3_CreditsBackfillCoreEnvBoundsItsGroupsByNumCPU(t *testing.T) {
 	assert.Equal(t, runtime.NumCPU(), env.Workers)
 }
 
-// The credits backfill's effects name every resource its writer touches: the
-// books, the author joins a credits write replaces, the narrator records and
-// the operation rows; and what it reads.
+// The credits backfill's effects name every resource its writer touches, using
+// only the pkg/ops/effects.go constants: the books with their narrator joins and
+// the narrator records (books), the author joins a credits write replaces
+// (authors) and the operation store's rows (operations); and what it reads. The
+// native live test checks the writes the run made against this set.
 func TestT6G3_CreditsBackfillEffects(t *testing.T) {
 	d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(t6g3Deps{}, nil), "maintenance.credits-backfill")
 	e := tasks.CommonOf(d).Effects
-	assert.Equal(t, []string{"authors", "books", "narrators", "operations"}, t6g3WriteKinds(e))
+	assert.Equal(t, []string{"authors", "books", "operations"}, t6g3WriteKinds(e))
 	var reads []string
 	for _, r := range e.ReadSet() {
 		reads = append(reads, r.Kind)
@@ -411,12 +439,10 @@ func TestT6G3_CreditsBackfillEffects(t *testing.T) {
 
 // --- the cover ops' pools ---
 
-// t6g3GateReader is a vision reader that holds each read until `barrier` reads
-// are in flight (or a short wait), so the most that ever ran at once is what
-// the pool allowed.
-type t6g3GateReader struct {
-	capacity int
-	barrier  int
+// t6g3Barrier holds each caller of pass until `n` are in flight (or a short wait),
+// so the most that ever ran at once is what the pool above it allowed.
+type t6g3Barrier struct {
+	n int
 
 	mu       sync.Mutex
 	inflight int
@@ -425,53 +451,69 @@ type t6g3GateReader struct {
 	once     sync.Once
 }
 
+func newT6G3Barrier(n int) *t6g3Barrier { return &t6g3Barrier{n: n, ready: make(chan struct{})} }
+
+func (b *t6g3Barrier) pass() {
+	b.mu.Lock()
+	b.inflight++
+	b.max = max(b.max, b.inflight)
+	if b.inflight >= b.n {
+		b.once.Do(func() { close(b.ready) })
+	}
+	b.mu.Unlock()
+	select {
+	case <-b.ready:
+	case <-time.After(300 * time.Millisecond):
+	}
+	b.mu.Lock()
+	b.inflight--
+	b.mu.Unlock()
+}
+
+func (b *t6g3Barrier) maxInFlight() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.max
+}
+
+// t6g3GateReader is a vision reader whose reads pass through a barrier.
+type t6g3GateReader struct {
+	capacity int
+	*t6g3Barrier
+}
+
 func newT6G3GateReader(capacity, barrier int) *t6g3GateReader {
-	return &t6g3GateReader{capacity: capacity, barrier: barrier, ready: make(chan struct{})}
+	return &t6g3GateReader{capacity: capacity, t6g3Barrier: newT6G3Barrier(barrier)}
 }
 
 func (g *t6g3GateReader) Capacity() int { return g.capacity }
 
 func (g *t6g3GateReader) ReadCoverText(_ context.Context, _ []byte, _ string) (*ai.CoverTextResult, error) {
-	g.mu.Lock()
-	g.inflight++
-	g.max = max(g.max, g.inflight)
-	if g.inflight >= g.barrier {
-		g.once.Do(func() { close(g.ready) })
-	}
-	g.mu.Unlock()
-	select {
-	case <-g.ready:
-	case <-time.After(300 * time.Millisecond):
-	}
-	g.mu.Lock()
-	g.inflight--
-	g.mu.Unlock()
+	g.pass()
 	return &ai.CoverTextResult{Text: &covertext.Text{Title: "Read"}, Raw: `{"title":"Read"}`, Model: "vision-model", EndpointID: "pool-a"}, nil
 }
 
-func (g *t6g3GateReader) maxInFlight() int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.max
-}
-
-// The native cover-text read sizes its pool like HEAD: the workers param, else
-// the vision pool's capacity when live, as the pool itself (no semaphore inside
-// an item for a read to queue on, where the item timeout would already be
-// running). Two images, capacity two: both reads are in flight together; with
-// workers=1 never more than one.
+// The native cover-text read sizes its pool like HEAD: the workers param, else the
+// vision pool's capacity when live, as the pool itself (no semaphore inside an
+// item for a read to queue on, where the item timeout would already be running).
+// The capacity here is 1, which cannot equal the default pool (twice the cores,
+// never below 2): two images are never in flight together under capacity 1, and
+// with the capacity ignored the default pool would put both in flight at once.
+// Capacity 2 with workers=1 never runs more than one.
 func TestT6G3_CoverTextReadNativePoolIsTheWorkersParamOrTheCapacity(t *testing.T) {
+	require.Greater(t, t6g3CoverOpDefaultWorkers(0), 1, "the capacity case needs a default that differs from 1")
 	for _, tc := range []struct {
-		name   string
-		params string
-		want   int
+		name     string
+		capacity int
+		params   string
+		want     int
 	}{
-		{"capacity", "", 2},
-		{"workers param", `{"workers":1}`, 1},
+		{"capacity", 1, `{}`, 1},
+		{"workers param", 2, `{"workers":1}`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, deps, ids := coverOpFixture(t)
-			reader := newT6G3GateReader(2, 2)
+			reader := newT6G3GateReader(tc.capacity, 2)
 			orig := newCoverTextReader
 			newCoverTextReader = func() coverTextReader { return reader }
 			t.Cleanup(func() { newCoverTextReader = orig })
@@ -483,12 +525,8 @@ func TestT6G3_CoverTextReadNativePoolIsTheWorkersParamOrTheCapacity(t *testing.T
 				},
 			}
 			d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(kd, nil), "maintenance.cover-text-read")
-			params := tc.params
-			if params == "" {
-				params = `{}`
-			}
 			_, rc := newT6G3Host(d.Kind(), tasks.ModeLive, &t6g3Gate{})
-			_, err := t6g3Run(t, d, rc, params)
+			_, err := t6g3Run(t, d, rc, tc.params)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, reader.maxInFlight())
 			for _, id := range ids {
@@ -497,6 +535,102 @@ func TestT6G3_CoverTextReadNativePoolIsTheWorkersParamOrTheCapacity(t *testing.T
 				require.Len(t, got, 1)
 				require.NotNil(t, got[0].Record, "every image is read and stored through the writer")
 			}
+		})
+	}
+}
+
+// t6g3CoverGateStore holds each book-files read at a barrier, which is where
+// foldercover starts work on a book, and reports an empty operation queue (no
+// scan), so a live folder-cover run is allowed.
+type t6g3CoverGateStore struct {
+	t6g3Store
+	b *t6g3Barrier
+}
+
+func (s *t6g3CoverGateStore) GetBookFiles(id string) ([]database.BookFile, error) {
+	s.b.pass()
+	return s.t6g3Store.GetBookFiles(id)
+}
+
+func (s *t6g3CoverGateStore) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	return nil, nil
+}
+
+// t6g3ModifyBookWriter records the books written through the folder-cover run's
+// writer and passes each write to the writer under it.
+type t6g3ModifyBookWriter struct {
+	t6g3Writer
+	t6g3ResLog
+	mu  sync.Mutex
+	ids []string
+}
+
+func (w *t6g3ModifyBookWriter) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	w.record("ModifyBook")
+	w.mu.Lock()
+	w.ids = append(w.ids, id)
+	w.mu.Unlock()
+	return w.t6g3Writer.ModifyBook(id, fn)
+}
+
+func (w *t6g3ModifyBookWriter) written() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.ids)
+}
+
+// A live native folder-cover run hands NewWriter this run's rc.Writer(), writes
+// each book's cover through that writer (coverFolderStore.ModifyBook), sets the
+// cover on both books, and sizes its pool from the workers param, else the
+// default (twice the cores, never below 2).
+func TestT6G3_FolderCoverBackfillNativeLiveWritesThroughTheWriter(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		params string
+		want   int
+	}{
+		{"workers param", `{"workers":1}`, 1},
+		{"no param", `{}`, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, deps, ids := coverOpFixture(t)
+			p := New(deps)
+			barrier := newT6G3Barrier(2)
+			var (
+				mu     sync.Mutex
+				handed []tasks.Writer
+				spy    *t6g3ModifyBookWriter
+			)
+			kd := t6g3Deps{
+				Store: &t6g3CoverGateStore{t6g3Store: headT6g3Store{OpsStore: st, p: p}, b: barrier},
+				NewWriter: func(w tasks.Writer) t6g3Writer {
+					mu.Lock()
+					defer mu.Unlock()
+					handed = append(handed, w)
+					spy = &t6g3ModifyBookWriter{t6g3Writer: headT6g3Writer{p: p, store: st}}
+					return spy
+				},
+			}
+			d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(kd, nil), "maintenance.folder-cover-backfill")
+			gate := &t6g3Gate{id: "folder-cover"}
+			_, rc := newT6G3Host(d.Kind(), tasks.ModeLive, gate)
+			_, err := t6g3Run(t, d, rc, tc.params)
+			require.NoError(t, err)
+
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, handed, 1, "NewWriter is called once per run")
+			assert.Same(t, gate, handed[0], "NewWriter is handed this run's rc.Writer()")
+			require.NotNil(t, spy)
+			assert.ElementsMatch(t, ids, spy.written(), "each book's write went through the run's writer")
+			spy.assertWithin(t, d)
+			for _, id := range ids {
+				b, err := st.GetBookByID(id)
+				require.NoError(t, err)
+				require.NotNil(t, b)
+				require.NotNil(t, b.CoverURL, "the cover is set on %s", id)
+			}
+			assert.Equal(t, tc.want, barrier.maxInFlight(), "the pool is the workers param, else the default")
 		})
 	}
 }
@@ -566,4 +700,141 @@ func TestT6G3_CoverTextReadHeadShellStampsLivenessBeforeEachRead(t *testing.T) {
 	rep := &touchReporter{}
 	require.NoError(t, New(deps).runCoverTextRead(context.Background(), json.RawMessage(`{"dry_run":false}`), rep))
 	assert.GreaterOrEqual(t, rep.touches.Load(), int64(2), "one liveness stamp per image read")
+}
+
+// --- the env each credits-backfill shell hands the core ---
+
+// captureCreditsCoreEnv swaps the seam both shells call for a wrapper that keeps
+// the env it was handed, and restores it when the test ends.
+func captureCreditsCoreEnv(t *testing.T) *[]t6g3CreditsBackfillCoreEnv {
+	t.Helper()
+	var (
+		mu   sync.Mutex
+		envs []t6g3CreditsBackfillCoreEnv
+	)
+	orig := t6g3RunCreditsCore
+	t6g3RunCreditsCore = func(ctx context.Context, params creditsBackfillParams, env t6g3CreditsBackfillCoreEnv) (*creditsBackfillResult, error) {
+		mu.Lock()
+		envs = append(envs, env)
+		mu.Unlock()
+		return orig(ctx, params, env)
+	}
+	t.Cleanup(func() { t6g3RunCreditsCore = orig })
+	return &envs
+}
+
+// Both shells bound the core's worker pools by the machine's cores (the HEAD
+// engine's pools use Workers; the native engine's pool is the kind's declared
+// CPU slots, but the core's own fan-out reads Workers), and each hands the
+// core its own engine.
+func TestT6G3_CreditsBackfillShellsHandTheCoreTheirWorkersAndEngine(t *testing.T) {
+	t.Run("head", func(t *testing.T) {
+		f := newCBFixture(t)
+		seedCBCensusFixture(f)
+		envs := captureCreditsCoreEnv(t)
+		p, _, _ := newT6G3CBHead(f, nil)
+		require.NoError(t, p.creditsBackfillDef().Run(context.Background(), json.RawMessage(`{}`), &cbReporter{id: cbTestOpID}))
+		require.Len(t, *envs, 1)
+		assert.Equal(t, runtime.NumCPU(), (*envs)[0].Workers)
+		assert.IsType(t, headT6g3CBEngine{}, (*envs)[0].Eng)
+	})
+	t.Run("native", func(t *testing.T) {
+		f := newCBFixture(t)
+		seedCBCensusFixture(f)
+		envs := captureCreditsCoreEnv(t)
+		n := newT6G3CBNative(f, t6g3ScanKey)
+		host, rc := newT6G3Host(t6g3CreditsBackfillKind, tasks.ModePreview, &t6g3Gate{})
+		host.SetCPUSlots(3)
+		_, err := t6g3Run(t, n.kind(), rc, "")
+		require.NoError(t, err)
+		require.Len(t, *envs, 1)
+		assert.Equal(t, runtime.NumCPU(), (*envs)[0].Workers)
+		assert.IsType(t, t6g3NativeCBEngine{}, (*envs)[0].Eng)
+	})
+}
+
+// --- the warnings a failed bookkeeping write leaves in the run's log ---
+
+// t6g3AttrReporter is a cbReporter that keeps each log line with its attributes
+// and can refuse the result write.
+type t6g3AttrReporter struct {
+	cbReporter
+	failResult bool
+	amu        sync.Mutex
+	lines      []t6g3AttrLine
+}
+
+func (r *t6g3AttrReporter) Log(level slog.Level, msg string, attrs ...slog.Attr) error {
+	line := t6g3AttrLine{Level: level, Msg: msg, Attrs: map[string]string{}}
+	for _, a := range attrs {
+		line.Attrs[a.Key] = a.Value.String()
+	}
+	r.amu.Lock()
+	r.lines = append(r.lines, line)
+	r.amu.Unlock()
+	return r.cbReporter.Log(level, msg, attrs...)
+}
+
+func (r *t6g3AttrReporter) SetResult(v any) error {
+	if r.failResult {
+		return errors.New("result store unavailable")
+	}
+	return r.cbReporter.SetResult(v)
+}
+
+func (r *t6g3AttrReporter) snapshot() []t6g3AttrLine {
+	r.amu.Lock()
+	defer r.amu.Unlock()
+	return slices.Clone(r.lines)
+}
+
+// A result write that fails clears the class lists it had just saved; when that
+// clear fails too, the run logs a warning that carries the clear's error.
+func TestT6G3_CreditsBackfillHeadShellWarnsWhenClassListsAreNotCleared(t *testing.T) {
+	f := newCBFixture(t)
+	seedCBCensusFixture(f)
+	p, rec, _ := newT6G3CBHead(f, nil)
+	rec.failClear = errors.New("clear refused")
+	rep := &t6g3AttrReporter{cbReporter: cbReporter{id: cbTestOpID}, failResult: true}
+	err := p.creditsBackfillDef().Run(context.Background(), json.RawMessage(`{}`), rep)
+	require.Error(t, err, "the result write failed")
+	line, ok := t6g3FindLine(rep.snapshot(), "class lists not cleared")
+	require.True(t, ok, "no warning in %v", rep.snapshot())
+	assert.Equal(t, slog.LevelWarn, line.Level)
+	assert.Equal(t, "clear refused", line.Attrs["error"])
+}
+
+// An operation whose leftovers this run judged gets a marker; when that write
+// fails, the run warns, naming the operation and carrying the store's error.
+func TestT6G3_CreditsBackfillHeadShellWarnsWhenAJudgedMarkerIsNotWritten(t *testing.T) {
+	f, rec := cbLeftoverFixture(t, false)
+	cbSeedOtherOp(t, f, cbCrashedOp, creditsBackfillOpID, "failed", rec)
+	p, st, _ := newT6G3CBHead(f, nil)
+	st.failMark = errors.New("marker refused")
+	rep := &t6g3AttrReporter{cbReporter: cbReporter{id: cbLeftoverOp}}
+	require.NoError(t, p.creditsBackfillDef().Run(context.Background(), json.RawMessage(`{"apply":true}`), rep))
+	line, ok := t6g3FindLine(rep.snapshot(), "could not mark operation's leftovers judged")
+	require.True(t, ok, "no warning in %v", rep.snapshot())
+	assert.Equal(t, slog.LevelWarn, line.Level)
+	assert.Equal(t, cbCrashedOp, line.Attrs["operation"])
+	assert.Equal(t, "marker refused", line.Attrs["error"])
+}
+
+func TestT6G3_CreditsBackfillNativeWarnsWhenAJudgedMarkerIsNotWritten(t *testing.T) {
+	f, rec := cbLeftoverFixture(t, false)
+	cbSeedOtherOp(t, f, cbCrashedOp, creditsBackfillOpID, "failed", rec)
+	n := newT6G3CBNative(f, t6g3ScanKey)
+	n.rec.failMark = errors.New("marker refused")
+	host, rc := newT6G3Host(t6g3CreditsBackfillKind, tasks.ModeLive, &t6g3Gate{id: "credits-live"})
+	host.SetCPUSlots(3)
+	_, err := t6g3Run(t, n.kind(), rc, `{"apply":true}`)
+	require.NoError(t, err)
+	host.mu.Lock()
+	lines := slices.Clone(host.lines)
+	host.mu.Unlock()
+	line, ok := t6g3FindLine(lines, "could not mark operation's leftovers judged")
+	require.True(t, ok, "no warning in %v", lines)
+	assert.Equal(t, slog.LevelWarn, line.Level)
+	assert.Equal(t, cbCrashedOp, line.Attrs["operation"])
+	assert.Equal(t, "marker refused", line.Attrs["error"])
 }

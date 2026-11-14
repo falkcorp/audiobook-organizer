@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_review3_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 2c9f6b13-7a4e-48d0-b5e1-0d83a7c4f956
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,8 +31,91 @@ import (
 
 // --- recording fakes of t6g3Writer and t6g3Store (rule R10) ---
 
+// t6g3MethodResources maps each t6g3Writer write method to the pkg/ops/effects.go
+// resources it can write. It is the one place a method's effect is written down
+// for the Effects tests: a recording writer notes the resources of every method a
+// run calls, and the test checks them against the kind's declared WriteSet, so the
+// declaration is judged against what the run did, not against a second copy of
+// itself. A method with no entry fails the test.
+var t6g3MethodResources = map[string][]string{
+	"RunAutoPurgeSoftDeleted":  {"books", "external_ids", "files", "operations"},
+	"ActivityFlushOp":          {"activity"},
+	"ResolveTombstoneChains":   {"authors"},
+	"CleanupTrashedVersions":   {"books", "files"},
+	"CleanupOrphanedTempFiles": {"activity", "files"},
+	"CleanupStaleTempFiles":    {"files"},
+	"RemoveOldBackupFiles":     {"files"},
+	"CompactActivityEntries":   {"activity"},
+	"MaintainActivityLog":      {"activity"},
+	"SetUserPreferenceForUser": {"user_state"},
+	"ModifyBook":               {"books"},
+	"SetRaw":                   {"metadata_cache"},
+	"ModifyBookCredits":        {"books", "authors"},
+	"CreateNarrator":           {"books"},
+	"DeleteNarrator":           {"books"},
+	"CreateOperationChange":    {"operations"},
+	"InvalidateAuthorsCache":   {"authors"},
+	"ReplaceOpRowsPrefix":      {"operations"},
+	"SaveClassLists":           {"operations"},
+	"ClearClassLists":          {"operations"},
+}
+
+// t6g3ResLog collects the resources of the write methods a recording writer saw.
+type t6g3ResLog struct {
+	rmu       sync.Mutex
+	resources map[string]bool
+	unmapped  []string
+}
+
+// record notes the resources of call ("Method" or "Method:detail").
+func (l *t6g3ResLog) record(call string) {
+	method, _, _ := strings.Cut(call, ":")
+	l.rmu.Lock()
+	defer l.rmu.Unlock()
+	res, ok := t6g3MethodResources[method]
+	if !ok {
+		l.unmapped = append(l.unmapped, method)
+		return
+	}
+	if l.resources == nil {
+		l.resources = map[string]bool{}
+	}
+	for _, r := range res {
+		l.resources[r] = true
+	}
+}
+
+// merge adds what o saw.
+func (l *t6g3ResLog) merge(o *t6g3ResLog) {
+	o.rmu.Lock()
+	defer o.rmu.Unlock()
+	l.rmu.Lock()
+	defer l.rmu.Unlock()
+	if l.resources == nil {
+		l.resources = map[string]bool{}
+	}
+	for r := range o.resources {
+		l.resources[r] = true
+	}
+	l.unmapped = append(l.unmapped, o.unmapped...)
+}
+
+// assertWithin fails when a run wrote a resource d does not declare in its
+// WriteSet, or called a writer method t6g3MethodResources does not know.
+func (l *t6g3ResLog) assertWithin(t *testing.T, d tasks.Definition) {
+	t.Helper()
+	l.rmu.Lock()
+	defer l.rmu.Unlock()
+	require.Empty(t, l.unmapped, "writer methods with no entry in t6g3MethodResources")
+	declared := t6g3WriteKinds(tasks.CommonOf(d).Effects)
+	for r := range l.resources {
+		assert.Contains(t, declared, r, "%s: the run wrote resource %q that its Effects do not declare", d.Kind(), r)
+	}
+}
+
 // t6g3RecWriter records every write a core makes through it, by method name.
 type t6g3RecWriter struct {
+	t6g3ResLog
 	mu    sync.Mutex
 	calls []string
 	// failPurge makes RunAutoPurgeSoftDeleted fail.
@@ -42,6 +126,7 @@ type t6g3RecWriter struct {
 }
 
 func (w *t6g3RecWriter) note(name string) {
+	w.record(name)
 	w.mu.Lock()
 	w.calls = append(w.calls, name)
 	w.mu.Unlock()
@@ -273,16 +358,41 @@ type t6g3Host struct {
 
 	mu   sync.Mutex
 	logs []string
+	// lines are the log lines with their attributes.
+	lines []t6g3AttrLine
 	// standDowns are the keys the run asked to stand down.
 	standDowns []tasks.Key
+}
+
+// t6g3AttrLine is one log line with its attributes, values rendered as text.
+type t6g3AttrLine struct {
+	Level slog.Level
+	Msg   string
+	Attrs map[string]string
+}
+
+// t6g3FindLine returns the first line whose message contains sub.
+func t6g3FindLine(lines []t6g3AttrLine, sub string) (t6g3AttrLine, bool) {
+	for _, l := range lines {
+		if strings.Contains(l.Msg, sub) {
+			return l, true
+		}
+	}
+	return t6g3AttrLine{}, false
 }
 
 type t6g3LogHandler struct{ h *t6g3Host }
 
 func (l t6g3LogHandler) Enabled(context.Context, slog.Level) bool { return true }
 func (l t6g3LogHandler) Handle(_ context.Context, r slog.Record) error {
+	line := t6g3AttrLine{Level: r.Level, Msg: r.Message, Attrs: map[string]string{}}
+	r.Attrs(func(a slog.Attr) bool {
+		line.Attrs[a.Key] = a.Value.String()
+		return true
+	})
 	l.h.mu.Lock()
 	l.h.logs = append(l.h.logs, r.Message)
+	l.h.lines = append(l.h.lines, line)
 	l.h.mu.Unlock()
 	return nil
 }
@@ -370,14 +480,14 @@ var t6g3Wants = []t6g3Want{
 	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{"files"}, ""},
 	{"maintenance.cleanup-activity-log", "Clean activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 30 * time.Minute, 20 * time.Minute, false, []string{"activity"}, ""},
 	{"maintenance.cleanup-old-backups", "Clean old backup files", tasks.ResumeFromZero, "books.maintenance.cleanup-old-backups", time.Hour, time.Hour, false, []string{"files"}, ""},
-	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, time.Hour, false, []string{"book_versions", "files"}, ""},
+	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, time.Hour, false, []string{"books", "files"}, ""},
 	{"maintenance.clear-apply-rename-failures", "Clear apply rename-failure records", tasks.ResumeDrop, "books.maintenance.clear-apply-rename-failures", 10 * time.Minute, 10 * time.Minute, false, []string{"user_state"}, ""},
 	{"maintenance.combine-journal-check", "Combine journal readability check", tasks.ResumeDrop, "books.maintenance.combine-journal-check", 10 * time.Minute, 0, true, nil, ""},
 	{"maintenance.compact-activity-log", "Compact activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 6 * time.Hour, 20 * time.Minute, false, []string{"activity"}, ""},
 	{"maintenance.folder-cover-backfill", "Use folder cover images", tasks.ResumeDrop, "books.maintenance.folder-cover-backfill", 120 * time.Minute, 0, false, []string{"books"}, ""},
-	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, []string{"cover_text"}, ""},
+	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, []string{"metadata_cache"}, ""},
 	{"maintenance.credit-census", "Author/narrator credit census", tasks.ResumeDrop, "books.maintenance.credit-census", 2 * time.Hour, 0, true, nil, ""},
-	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{"authors", "books", "narrators", "operations"}, ""},
+	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{"authors", "books", "operations"}, ""},
 }
 
 func TestT6G3Kinds_MatchHEADDefs(t *testing.T) {
@@ -487,6 +597,7 @@ func TestT6G3Kinds_WritesThroughShell(t *testing.T) {
 			require.Len(t, handed, 1, "NewWriter is called once per run")
 			assert.Same(t, gate, handed[0], "NewWriter is handed this run's rc.Writer()")
 			assert.Equal(t, tc.wantCalls, f.writer.called(), "every write reaches the recording t6g3Writer")
+			f.writer.assertWithin(t, d)
 		})
 	}
 
@@ -563,6 +674,7 @@ func TestT6G3_CreditsBackfillApplyWritesThroughTheWriter(t *testing.T) {
 	assert.Contains(t, calls, "ModifyBookCredits:bk-1", "the book write goes through the writer")
 	assert.Contains(t, calls, "SaveClassLists", "the class lists go through the writer")
 	assert.Same(t, gate, f.handed()[0])
+	f.writer.assertWithin(t, d)
 }
 
 func TestT6G3_CreditsBackfillPreviewWritesNothing(t *testing.T) {
@@ -645,4 +757,74 @@ func TestT6G3_CoverTextReadNeedsACapableReaderWhenLive(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no AI endpoint can read cover text")
 	assert.Empty(t, f.writer.called())
+}
+
+// The native loop maps t6g3ItemsOpts onto tasks.ItemsOptions: Collect runs every
+// item after one fails (the default stops at the first error) and ItemTimeout
+// bounds each item's context.
+func TestT6G3_NativeItemsCollectsErrorsAndBoundsEachItem(t *testing.T) {
+	loop := func() t6g3ItemsFunc {
+		_, rc := newT6G3Host(t6g3CreditCensusKind, tasks.ModeLive, nil)
+		return t6g3NativeItems(rc, tasks.Fixed(1, "test: one worker, so item order is fixed"))
+	}
+	failFirst := func(ran *int) func(context.Context, int) error {
+		return func(_ context.Context, i int) error {
+			*ran++
+			if i == 0 {
+				return errors.New("item zero failed")
+			}
+			return nil
+		}
+	}
+	t.Run("Collect runs the rest", func(t *testing.T) {
+		var ran int
+		err := loop()(3, t6g3ItemsOpts{Collect: true}, failFirst(&ran))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "item zero failed")
+		assert.Equal(t, 3, ran, "every item ran")
+	})
+	t.Run("without Collect the first error stops the loop", func(t *testing.T) {
+		var ran int
+		err := loop()(3, t6g3ItemsOpts{}, failFirst(&ran))
+		require.Error(t, err)
+		assert.Less(t, ran, 3, "items after the failure did not run")
+	})
+	t.Run("ItemTimeout ends an item's context", func(t *testing.T) {
+		var got error
+		err := loop()(1, t6g3ItemsOpts{ItemTimeout: 20 * time.Millisecond}, func(ctx context.Context, _ int) error {
+			select {
+			case <-ctx.Done():
+				got = ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		assert.ErrorIs(t, got, context.DeadlineExceeded, "the item saw its own deadline")
+	})
+}
+
+// t6g3TombstoneStore answers the one write the tombstone cleanup makes.
+type t6g3TombstoneStore struct {
+	database.Store
+	calls atomic.Int32
+}
+
+func (s *t6g3TombstoneStore) ResolveTombstoneChains() (int, error) {
+	s.calls.Add(1)
+	return 3, nil
+}
+
+// HEAD's tombstone cleanup resolves through the store the shell captured: a
+// writer whose store was left nil would fail every nightly run with "database not
+// initialized".
+func TestT6G3_TombstoneCleanupHeadShellResolvesThroughTheCapturedStore(t *testing.T) {
+	st := &t6g3TombstoneStore{}
+	p := New(fakeDeps{store: st})
+	rep := &fakeReporter{}
+	require.NoError(t, p.tombstoneCleanupDef().Run(context.Background(), nil, rep))
+	assert.EqualValues(t, 1, st.calls.Load(), "the write reached the store")
+	rep.mu.Lock()
+	defer rep.mu.Unlock()
+	assert.Contains(t, rep.logs, "Resolved 3 tombstone chains")
 }

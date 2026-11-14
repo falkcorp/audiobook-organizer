@@ -824,7 +824,7 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 	env.StoreResult = func(res *creditsBackfillResult) error {
 		return registry.ReporterSetResult(reporter, res)
 	}
-	_, err := creditsBackfillCore(ctx, params, env)
+	_, err := t6g3RunCreditsCore(ctx, params, env)
 	return err
 }
 
@@ -839,16 +839,17 @@ func t6g3CreditsCoreEnv(base t6g3Base, tags repairs.GuardTagReader, eng t6g3CBEn
 
 // creditsBackfillKind builds the native kind. HEAD declares a Preview, so it
 // runs in either mode; its apply param becomes the start request's mode. Writes
-// found: the book rows and their author/narrator joins (books), the narrator
-// records it creates and deletes (narrators), the author joins a credits write
-// replaces (authors: ModifyBookCredits takes book, book_authors and
-// book_narrators together), and the undo journal, the judged markers and the
-// class id lists (operations). HEAD declared Reads books and authors (kept) and
+// found: the book rows with their narrator joins and the narrator records it
+// creates and deletes (books: pkg/ops/effects.go has no narrator constant), the
+// author joins a credits write replaces (authors: ModifyBookCredits takes book,
+// book_authors and book_narrators together), and the undo journal, the judged
+// markers and the class id lists (operations: the operation store, whose op rows
+// are the closest constant to the markers and lists). HEAD declared Reads books and authors (kept) and
 // Writes books; the series read is the guard's (GetAllSeries). The result is the summary the
 // core stored; on an error core drops it (see the F5-08 seams note).
 func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"),
-		tasks.Res("books", "narrators"), tasks.Res("books", "operations")).
+		tasks.Res("books", "operations")).
 		AlsoReads(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "series"))
 	return tasks.Task(t6g3CreditsBackfillKind, tasks.TaskSpec[json.RawMessage, creditsBackfillResult]{
 		Common: t6g3Common(p.creditsBackfillDef(), t6g3CreditsBackfillKind, eff, sched),
@@ -879,7 +880,7 @@ func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *task
 				return creditsBackfillResult{}, fmt.Errorf("%s: the store cannot keep the class id lists (database.OpRowStore)", t6g3CreditsBackfillKind)
 			}
 			params.Apply = base.Live
-			res, err := creditsBackfillCore(rc.Context(), params, t6g3CreditsCoreEnv(base, deps.GuardTags,
+			res, err := t6g3RunCreditsCore(rc.Context(), params, t6g3CreditsCoreEnv(base, deps.GuardTags,
 				t6g3NativeCBEngine{rc: rc, base: base, standDownKey: deps.StandDownKey}))
 			if res == nil {
 				return creditsBackfillResult{}, err
@@ -930,9 +931,18 @@ type t6g3NativeCBHold struct {
 }
 
 func (h t6g3NativeCBHold) Context() context.Context { return h.e.rc.Context() }
-func (h t6g3NativeCBHold) Lost() bool               { return false }
-func (h t6g3NativeCBHold) Release()                 { h.h.Release() }
-func (h t6g3NativeCBHold) Items(int) t6g3ItemsFunc  { return h.e.Items(0) }
+
+// Lost is always false: tasks.Hold is interface{ Release() } with no lease
+// (core/tasks/rc.go), so a native hold cannot lapse. The callers' `hold == nil
+// || !hold.Lost()` is the HEAD hold's check, not an oversight here.
+func (h t6g3NativeCBHold) Lost() bool              { return false }
+func (h t6g3NativeCBHold) Release()                { h.h.Release() }
+func (h t6g3NativeCBHold) Items(int) t6g3ItemsFunc { return h.e.Items(0) }
+
+// t6g3RunCreditsCore is creditsBackfillCore behind a variable that both shells
+// call, so a test can see the env each one hands the core (the Workers bound in
+// particular). Production never assigns it.
+var t6g3RunCreditsCore = creditsBackfillCore
 
 // creditsBackfillCore is the shared body of both shells: the run, then the
 // result's persistence. It returns the summary (the result without the class
