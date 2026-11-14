@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-14
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -583,7 +584,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).chaptersBackfillDef, kind: t6g2KindChaptersBackfill, resume: tasks.ResumeContinue,
-			writes: []string{"chapters"}, workers: runtime.NumCPU(), parPrefix: "cpu",
+			writes: []string{"books"}, workers: runtime.NumCPU(), parPrefix: "cpu",
 			params:   `{"book_ids":["bat-1"]}`,
 			arrange:  func(t *testing.T, f *t6g2Fakes) { t6g2ChaptersFixture(t, f, "bat-1") },
 			wantLive: []string{"SaveChaptersForBook:bat-1:2"},
@@ -853,6 +854,25 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 		}
 	})
 
+	// Every resource a kind declares is a name of the shared Effects vocabulary
+	// (pkg/ops/effects.go); a coined name would be refused at registration.
+	t.Run("effects use the shared vocabulary", func(t *testing.T) {
+		valid := map[string]bool{}
+		for _, r := range []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries,
+			ops.ResReviewItems, ops.ResEmbeddings, ops.ResOperations, ops.ResCatalog, ops.ResFingerprintIndex,
+			ops.ResSettings, ops.ResActivity, ops.ResFiles, ops.ResExternalIDs, ops.ResUserState,
+			ops.ResMetadataCache, ops.ResFieldStates, ops.ResIndexes} {
+			valid[tasks.Res("books", string(r)).String()] = true
+		}
+		for _, d := range (&Plugin{}).t6g2Kinds(newT6G2Fakes(t).deps(), nil) {
+			for _, x := range tasks.CommonOf(d).Effects.WriteSet() {
+				if !valid[x.String()] {
+					t.Errorf("%s declares %s, which is not in the shared Effects vocabulary", d.Kind(), x)
+				}
+			}
+		}
+	})
+
 	t.Run("parallelism", func(t *testing.T) {
 		pars := map[tasks.Kind]tasks.Parallelism{
 			t6g2KindExternalIDBackfill:          t6g2ExternalIDBackfillParallelism(),
@@ -1090,7 +1110,7 @@ var t6g2Touches = map[string][]string{
 	"RebuildBookAtPathIndex":              {"books"},
 	"DeleteOrphanBookFileAcoustIDEntries": {"book_files"},
 	"ModifyBook":                          {"books"},
-	"SaveChaptersForBook":                 {"chapters"},
+	"SaveChaptersForBook":                 {"books"},
 	"BatchCreateBookFiles":                {"book_files", "books"},
 	"MigrateBookSigToSidecar":             {"books"},
 }

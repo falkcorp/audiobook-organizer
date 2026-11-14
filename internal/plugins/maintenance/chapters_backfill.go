@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — op maintenance.chapters-backfill.
 //
@@ -694,10 +694,11 @@ func t6g2ChaptersBackfillMeta() t6g2Meta {
 		Kind:  t6g2KindChaptersBackfill,
 		Title: t6g2ChaptersBackfillTitle,
 		Help:  t6g2ChaptersBackfillHelp,
-		// HEAD declares no Writes (it writes only the chapters: keyspace and
-		// "declaring ResBooks would misdescribe it"), so the native effects name
-		// that keyspace as a resource of its own; F5-18 must declare it.
-		Effects:  tasks.Writes(t6g2Res("chapters")...),
+		// HEAD declares no Writes (it writes only the chapters: keyspace). The
+		// Effects vocabulary (pkg/ops/effects.go) has no chapters constant, so
+		// the per-book chapter rows are declared as books rather than coining a
+		// name; see the PR's Review decisions.
+		Effects:  tasks.Writes(t6g2Res("books")...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  24 * time.Hour,
