@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g3.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 29eb0771-6105-406d-b32a-2a11e3535809
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -330,7 +330,7 @@ func (w headT6g3Writer) CreateOperationChange(change *database.OperationChange) 
 // (internal/arch) allowlists this file alone: credits_backfill.go calls
 // database.RecordOperationChange, which checks the row's type before it reaches
 // this method.
-func (v cbStoreView) CreateOperationChange(change *database.OperationChange) error {
+func (v t6g3CBStoreView) CreateOperationChange(change *database.OperationChange) error {
 	return v.w.CreateOperationChange(change)
 }
 

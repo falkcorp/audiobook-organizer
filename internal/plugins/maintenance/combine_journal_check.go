@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combine_journal_check.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2b7d4e91-6c35-4a08-9f12-8d0a5e3c7b64
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -61,9 +61,9 @@ func (p *Plugin) combineJournalCheckDef() sdk.OperationDef {
 	}
 }
 
-// combineJournalCheckKind is the native kind of maintenance.combine-journal-check
+// t6g3CombineJournalCheckKind is the native kind of maintenance.combine-journal-check
 // (F5-08).
-const combineJournalCheckKind tasks.Kind = "books." + combineJournalCheckID
+const t6g3CombineJournalCheckKind tasks.Kind = "books." + combineJournalCheckID
 
 // combineJournalCheckEnv is what combineJournalCheckCore needs from its engine:
 // the base (Store is the only read path; the check writes nothing).
@@ -88,14 +88,14 @@ func (p *Plugin) runCombineJournalCheck(ctx context.Context, _ json.RawMessage, 
 // reads every combine-journal row and writes nothing. A ReadOnly run gets no
 // writer from core, so the shell builds none.
 func (p *Plugin) combineJournalCheckKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	return tasks.Task(combineJournalCheckKind, tasks.TaskSpec[struct{}, merge.CombineJournalCheck]{
-		Common: t6g3Common(p.combineJournalCheckDef(), combineJournalCheckKind, tasks.ReadOnly(), sched),
+	return tasks.Task(t6g3CombineJournalCheckKind, tasks.TaskSpec[struct{}, merge.CombineJournalCheck]{
+		Common: t6g3Common(p.combineJournalCheckDef(), t6g3CombineJournalCheckKind, tasks.ReadOnly(), sched),
 		Run: func(rc *tasks.RC, _ struct{}) (merge.CombineJournalCheck, error) {
-			base, err := t6g3NativeBase(combineJournalCheckKind, rc, deps, false)
+			base, err := t6g3NativeBase(t6g3CombineJournalCheckKind, rc, deps, false)
 			if err != nil {
 				return merge.CombineJournalCheck{}, err
 			}
-			if err := t6g3NeedStore(combineJournalCheckKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3CombineJournalCheckKind, base); err != nil {
 				return merge.CombineJournalCheck{}, err
 			}
 			return combineJournalCheckCore(rc.Context(), combineJournalCheckEnv{base})

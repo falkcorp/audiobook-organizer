@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -413,9 +413,9 @@ func TestT6G3_LoopParallelism(t *testing.T) {
 	assert.Equal(t, "cpu", creditsBackfillParallelism().String(), "HEAD: runtime.NumCPU()")
 	// The cover ops' pools are sized by the core (workers param, else twice the
 	// cores, clamped 1-32), not by a def-level constant.
-	assert.Equal(t, min(max(runtime.NumCPU()*2, 1), 32), coverOpDefaultWorkers(0))
-	assert.Equal(t, 3, coverOpDefaultWorkers(3))
-	assert.Equal(t, 32, coverOpDefaultWorkers(500))
+	assert.Equal(t, min(max(runtime.NumCPU()*2, 1), 32), t6g3CoverOpDefaultWorkers(0))
+	assert.Equal(t, 3, t6g3CoverOpDefaultWorkers(3))
+	assert.Equal(t, 32, t6g3CoverOpDefaultWorkers(500))
 }
 
 // t6g3ParString renders a definition's declared parallelism, "" for a Task.

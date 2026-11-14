@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credit_census.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 1df256d6-add9-41de-bf6d-622ed04e2944
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -641,10 +641,10 @@ func (p *Plugin) creditCensusDef() sdk.OperationDef {
 	}
 }
 
-// creditCensusKind is the native kind of maintenance.credit-census (F5-08).
-const creditCensusKind tasks.Kind = "books.maintenance.credit-census"
+// t6g3CreditCensusKind is the native kind of maintenance.credit-census (F5-08).
+const t6g3CreditCensusKind tasks.Kind = "books.maintenance.credit-census"
 
-// creditCensusEnv is what creditCensusCore needs from its engine: the base and
+// creditCensusEnv is what t6g3CreditCensusCore needs from its engine: the base and
 // the worker pool (the census writes nothing, so it has no Writer).
 type creditCensusEnv struct {
 	t6g3Base
@@ -686,7 +686,7 @@ func runCreditCensusScan(ctx context.Context, store creditCensusStore, reporter 
 		},
 		Items: t6g3HeadItems(ctx, reporter, concurrency),
 	}
-	return creditCensusCore(ctx, store, env)
+	return t6g3CreditCensusCore(ctx, store, env)
 }
 
 // creditCensusKind builds the native kind. Declared ReadOnly: the census reads
@@ -696,17 +696,17 @@ func runCreditCensusScan(ctx context.Context, store creditCensusStore, reporter 
 // census; on an error core drops it (see the F5-08 seams note).
 func (p *Plugin) creditCensusKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.ReadOnly()
-	return tasks.Task(creditCensusKind, tasks.TaskSpec[struct{}, creditCensusResult]{
-		Common: t6g3Common(p.creditCensusDef(), creditCensusKind, eff, sched),
+	return tasks.Task(t6g3CreditCensusKind, tasks.TaskSpec[struct{}, creditCensusResult]{
+		Common: t6g3Common(p.creditCensusDef(), t6g3CreditCensusKind, eff, sched),
 		Run: func(rc *tasks.RC, _ struct{}) (creditCensusResult, error) {
-			base, err := t6g3NativeBase(creditCensusKind, rc, deps, false)
+			base, err := t6g3NativeBase(t6g3CreditCensusKind, rc, deps, false)
 			if err != nil {
 				return creditCensusResult{}, err
 			}
-			if err := t6g3NeedStore(creditCensusKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3CreditCensusKind, base); err != nil {
 				return creditCensusResult{}, err
 			}
-			res, err := creditCensusCore(rc.Context(), base.Store, creditCensusEnv{
+			res, err := t6g3CreditCensusCore(rc.Context(), base.Store, creditCensusEnv{
 				t6g3Base: base,
 				Items:    t6g3NativeItems(rc, creditCensusParallelism()),
 			})
@@ -718,10 +718,10 @@ func (p *Plugin) creditCensusKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.S
 	})
 }
 
-// creditCensusCore is the shared body of both shells. The store is an argument
+// t6g3CreditCensusCore is the shared body of both shells. The store is an argument
 // (rule R10: what a core reads arrives through its arguments); the native shell
 // passes env.Store.
-func creditCensusCore(ctx context.Context, store creditCensusStore, env creditCensusEnv) (*creditCensusResult, error) {
+func t6g3CreditCensusCore(ctx context.Context, store creditCensusStore, env creditCensusEnv) (*creditCensusResult, error) {
 	started := time.Now()
 	env.Log(slog.LevelInfo, "credit-census: start (read only)")
 	env.Progress(0, 1, "Indexing authors and narrators…")

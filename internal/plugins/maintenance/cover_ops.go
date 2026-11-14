@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cover_ops.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: e5a3c8f2-1d7b-4e96-8c40-6b2f9d1a7e35
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — ops maintenance.folder-cover-backfill and
 // maintenance.cover-text-read.
@@ -84,44 +84,44 @@ type t6g3CoverBookReader interface {
 	GetAllBooksCore(limit int, offset int) ([]database.BookCore, error)
 }
 
-// coverFolderStore is the foldercover.Store a cover core hands foldercover: its
+// t6g3CoverFolderStore is the foldercover.Store a cover core hands foldercover: its
 // reads come from the run's reader and its one write (ModifyBook) from the
 // run's writer, so foldercover never holds a path around either (rule R10). A
 // nil w is a preview's: foldercover.Evaluate never writes.
-type coverFolderStore struct {
+type t6g3CoverFolderStore struct {
 	r t6g3CoverReader
 	w t6g3CoverWriter
 }
 
-func (s coverFolderStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+func (s t6g3CoverFolderStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
 	return s.r.GetBookFiles(bookID)
 }
 
-func (s coverFolderStore) GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error) {
+func (s t6g3CoverFolderStore) GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error) {
 	return s.r.GetMetadataFieldStates(bookID)
 }
 
-func (s coverFolderStore) GetUserPreference(key string) (*database.UserPreference, error) {
+func (s t6g3CoverFolderStore) GetUserPreference(key string) (*database.UserPreference, error) {
 	return s.r.GetUserPreference(key)
 }
 
-func (s coverFolderStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+func (s t6g3CoverFolderStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	if s.w == nil {
 		return nil, errors.New("cover: no writer in a preview run")
 	}
 	return s.w.ModifyBook(id, fn)
 }
 
-// coverKV is the covertext.KV a cover core hands covertext: reads from the
+// t6g3CoverKV is the covertext.KV a cover core hands covertext: reads from the
 // run's store, writes through the run's writer.
-type coverKV struct {
+type t6g3CoverKV struct {
 	r t6g3RawReader
 	w t6g3CoverWriter
 }
 
-func (k coverKV) GetRaw(key string) ([]byte, error) { return k.r.GetRaw(key) }
+func (k t6g3CoverKV) GetRaw(key string) ([]byte, error) { return k.r.GetRaw(key) }
 
-func (k coverKV) SetRaw(key string, value []byte) error {
+func (k t6g3CoverKV) SetRaw(key string, value []byte) error {
 	if k.w == nil {
 		return errors.New("cover: no writer in a preview run")
 	}
@@ -135,22 +135,22 @@ func t6g3RefuseWhileScan(r OpQueueReader, opID string) error {
 	if errors.Is(err, errT6g3NoCapability) {
 		return refuseWhileLibraryScanActive(nil, opID)
 	}
-	return refuseWhileLibraryScanActive(listedQueue{active, err}, opID)
+	return refuseWhileLibraryScanActive(t6g3ListedQueue{active, err}, opID)
 }
 
-// listedQueue replays one ListActiveOperationsV2 answer.
-type listedQueue struct {
+// t6g3ListedQueue replays one ListActiveOperationsV2 answer.
+type t6g3ListedQueue struct {
 	rows []database.OperationV2Row
 	err  error
 }
 
-func (q listedQueue) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+func (q t6g3ListedQueue) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
 	return q.rows, q.err
 }
 
-// coverOpDefaultWorkers is HEAD's default pool of both cover ops: IO bound, so
+// t6g3CoverOpDefaultWorkers is HEAD's default pool of both cover ops: IO bound, so
 // twice the core count, clamped 1-32 like an explicit workers param.
-func coverOpDefaultWorkers(n int) int { return clampWorkers(n, runtime.NumCPU()*2) }
+func t6g3CoverOpDefaultWorkers(n int) int { return clampWorkers(n, runtime.NumCPU()*2) }
 
 // coverOpBooks lists the books a cover op examines: the requested ids, or
 // every book not marked for deletion, capped at Limit.
@@ -225,8 +225,8 @@ var folderCoverOutcomeOrder = []foldercover.Outcome{
 	foldercover.OutcomeNoFolder, foldercover.OutcomeNoCandidate, foldercover.OutcomeRaced, foldercover.OutcomeError,
 }
 
-// folderCoverBackfillKind is the native kind of maintenance.folder-cover-backfill (F5-08).
-const folderCoverBackfillKind tasks.Kind = "books.maintenance.folder-cover-backfill"
+// t6g3FolderCoverBackfillKind is the native kind of maintenance.folder-cover-backfill (F5-08).
+const t6g3FolderCoverBackfillKind tasks.Kind = "books.maintenance.folder-cover-backfill"
 
 // folderCoverBackfillEnv is what folderCoverBackfillCore needs from its engine.
 type folderCoverBackfillEnv struct {
@@ -261,19 +261,19 @@ const folderCoverBackfillOpID = "maintenance.folder-cover-backfill"
 // at HEAD's default of twice the cores (see the F5-08 seams note).
 func (p *Plugin) folderCoverBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "books"))
-	return tasks.Task(folderCoverBackfillKind, tasks.TaskSpec[json.RawMessage, struct{}]{
-		Common: t6g3Common(p.folderCoverBackfillDef(), folderCoverBackfillKind, eff, sched),
+	return tasks.Task(t6g3FolderCoverBackfillKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: t6g3Common(p.folderCoverBackfillDef(), t6g3FolderCoverBackfillKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
 			var params coverOpParams
-			if err := t6g3DecodeParams(folderCoverBackfillKind, raw, &params, t6g3ModeKeys...); err != nil {
+			if err := t6g3DecodeParams(t6g3FolderCoverBackfillKind, raw, &params, t6g3ModeKeys...); err != nil {
 				return struct{}{}, err
 			}
 			params.BookIDs = append(params.BookIDs, params.BookIDsSnake...)
-			base, err := t6g3NativeBase(folderCoverBackfillKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3FolderCoverBackfillKind, rc, deps, true)
 			if err != nil {
 				return struct{}{}, err
 			}
-			if err := t6g3NeedStore(folderCoverBackfillKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3FolderCoverBackfillKind, base); err != nil {
 				return struct{}{}, err
 			}
 			return struct{}{}, folderCoverBackfillCore(rc.Context(), params, folderCoverBackfillEnv{
@@ -303,7 +303,7 @@ func folderCoverBackfillCore(ctx context.Context, params coverOpParams, env fold
 	if err != nil {
 		return err
 	}
-	var fcStore foldercover.Store = coverFolderStore{r: env.Store, w: env.Writer}
+	var fcStore foldercover.Store = t6g3CoverFolderStore{r: env.Store, w: env.Writer}
 	var (
 		mu       sync.Mutex
 		counts   = map[foldercover.Outcome]int{}
@@ -314,7 +314,7 @@ func folderCoverBackfillCore(ctx context.Context, params coverOpParams, env fold
 	// each worker writes only that book's row (ModifyBook), so no two workers
 	// touch the same row. Two books sharing one image store the same
 	// content-addressed file, which StoreCoverImage makes safe.
-	runErr := env.ItemsFor(coverOpDefaultWorkers(params.Workers))(len(books), t6g3ItemsOpts{Collect: true}, func(ctx context.Context, i int) error {
+	runErr := env.ItemsFor(t6g3CoverOpDefaultWorkers(params.Workers))(len(books), t6g3ItemsOpts{Collect: true}, func(ctx context.Context, i int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -465,8 +465,8 @@ func gatherCoverImages(store foldercover.Store, book *database.Book, rootDir str
 	return out, errs
 }
 
-// coverTextReadKind is the native kind of maintenance.cover-text-read (F5-08).
-const coverTextReadKind tasks.Kind = "books.maintenance.cover-text-read"
+// t6g3CoverTextReadKind is the native kind of maintenance.cover-text-read (F5-08).
+const t6g3CoverTextReadKind tasks.Kind = "books.maintenance.cover-text-read"
 
 // coverTextReadOpID is HEAD's def ID, which the core's messages carry.
 const coverTextReadOpID = "maintenance.cover-text-read"
@@ -511,19 +511,19 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 // never queues behind a semaphore inside an item.
 func (p *Plugin) coverTextReadKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "cover_text"))
-	return tasks.Task(coverTextReadKind, tasks.TaskSpec[json.RawMessage, struct{}]{
-		Common: t6g3Common(p.coverTextReadDef(), coverTextReadKind, eff, sched),
+	return tasks.Task(t6g3CoverTextReadKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: t6g3Common(p.coverTextReadDef(), t6g3CoverTextReadKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
 			var params coverOpParams
-			if err := t6g3DecodeParams(coverTextReadKind, raw, &params, t6g3ModeKeys...); err != nil {
+			if err := t6g3DecodeParams(t6g3CoverTextReadKind, raw, &params, t6g3ModeKeys...); err != nil {
 				return struct{}{}, err
 			}
 			params.BookIDs = append(params.BookIDs, params.BookIDsSnake...)
-			base, err := t6g3NativeBase(coverTextReadKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3CoverTextReadKind, rc, deps, true)
 			if err != nil {
 				return struct{}{}, err
 			}
-			if err := t6g3NeedStore(coverTextReadKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3CoverTextReadKind, base); err != nil {
 				return struct{}{}, err
 			}
 			return struct{}{}, coverTextReadCore(rc.Context(), params, coverTextReadEnv{
@@ -543,7 +543,7 @@ func coverTextReadCore(ctx context.Context, params coverOpParams, env coverTextR
 	dryRun := !env.Live
 	rootDir := env.Store.RootDir()
 	reader := env.Reader
-	workers := coverOpDefaultWorkers(params.Workers)
+	workers := t6g3CoverOpDefaultWorkers(params.Workers)
 	if dryRun {
 		env.Log(slog.LevelInfo, "DRY RUN — no image is sent to a model and nothing is stored")
 	} else {
@@ -561,8 +561,8 @@ func coverTextReadCore(ctx context.Context, params coverOpParams, env coverTextR
 	if err != nil {
 		return err
 	}
-	var fcStore foldercover.Store = coverFolderStore{r: env.Store, w: nil}
-	var kv covertext.KV = coverKV{r: env.Store, w: env.Writer}
+	var fcStore foldercover.Store = t6g3CoverFolderStore{r: env.Store, w: nil}
+	var kv covertext.KV = t6g3CoverKV{r: env.Store, w: env.Writer}
 
 	var (
 		mu                                            sync.Mutex

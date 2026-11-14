@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_paths_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: d41c7b92-6a35-4e08-9f1d-83b5e2a07c64
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -312,7 +312,7 @@ func TestT6G3_CreditsBackfillNativeLiveWritesThroughTheWriter(t *testing.T) {
 	seedCBCensusFixture(f)
 	n := newT6G3CBNative(f, t6g3ScanKey)
 	gate := &t6g3Gate{id: "credits-live"}
-	host, rc := newT6G3Host(creditsBackfillKind, tasks.ModeLive, gate)
+	host, rc := newT6G3Host(t6g3CreditsBackfillKind, tasks.ModeLive, gate)
 	host.SetCPUSlots(3)
 	raw, err := t6g3Run(t, n.kind(), rc, "")
 	require.NoError(t, err)
@@ -341,7 +341,7 @@ func TestT6G3_CreditsBackfillNativePreviewWritesAndHoldsNothing(t *testing.T) {
 	f := newCBFixture(t)
 	seedCBCensusFixture(f)
 	n := newT6G3CBNative(f, t6g3ScanKey)
-	host, rc := newT6G3Host(creditsBackfillKind, tasks.ModePreview, &t6g3Gate{})
+	host, rc := newT6G3Host(t6g3CreditsBackfillKind, tasks.ModePreview, &t6g3Gate{})
 	_, err := t6g3Run(t, n.kind(), rc, "")
 	require.NoError(t, err)
 	calls := n.calls()
@@ -358,7 +358,7 @@ func TestT6G3_CreditsBackfillNativeRefusesALiveApplyWithoutAStandDownKey(t *test
 	f := newCBFixture(t)
 	seedCBCensusFixture(f)
 	n := newT6G3CBNative(f, "")
-	host, rc := newT6G3Host(creditsBackfillKind, tasks.ModeLive, &t6g3Gate{})
+	host, rc := newT6G3Host(t6g3CreditsBackfillKind, tasks.ModeLive, &t6g3Gate{})
 	_, err := t6g3Run(t, n.kind(), rc, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "StandDownKey")
@@ -373,7 +373,7 @@ func TestT6G3_CreditsBackfillNativeRestoresHEADCheckpoint(t *testing.T) {
 	f := newCBFixture(t)
 	seedCBCensusFixture(f)
 	n := newT6G3CBNative(f, t6g3ScanKey)
-	host, rc := newT6G3Host(creditsBackfillKind, tasks.ModeLive, &t6g3Gate{})
+	host, rc := newT6G3Host(t6g3CreditsBackfillKind, tasks.ModeLive, &t6g3Gate{})
 	require.NoError(t, host.SetCheckpoint("", json.RawMessage(`{"apply":true,"limit":1,"attempt":1}`)))
 	require.True(t, rc.Resumed())
 	_, err := t6g3Run(t, n.kind(), rc, "")
@@ -390,7 +390,7 @@ func TestT6G3_CreditsBackfillNativeRestoresHEADCheckpoint(t *testing.T) {
 // The run's own errgroups are bounded by NumCPU in both shells, as HEAD's shell
 // set it; the native kind used to leave it unset.
 func TestT6G3_CreditsBackfillCoreEnvBoundsItsGroupsByNumCPU(t *testing.T) {
-	env := t6g3CreditsCoreEnv(t6g3Base{}, nil, nativeCBEngine{})
+	env := t6g3CreditsCoreEnv(t6g3Base{}, nil, t6g3NativeCBEngine{})
 	assert.Equal(t, runtime.NumCPU(), env.Workers)
 }
 

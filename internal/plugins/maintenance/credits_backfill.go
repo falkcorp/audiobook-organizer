@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -208,7 +208,7 @@ import (
 // rows; database.SaveClassLists, one row per 1,000 ids, in its own row
 // namespace, tagged with the save's attempt nonce) and the operation's
 // result keeps the summary, the counts and the samples only
-// (persistCreditsBackfillResult). The store must be able to keep op rows: the run
+// (t6g3PersistCreditsBackfillResult). The store must be able to keep op rows: the run
 // refuses to start without it. A run with a limit still plans every book, so it
 // stores the full-library review and held lists again for its own operation id;
 // that is deliberate (they are that run's evidence), and a limited run's lists
@@ -636,7 +636,7 @@ type cbClass struct {
 	Count      int    `json:"count"`
 	// BookIDs are the class's book ids, sorted. The scan returns them whole;
 	// the stored result leaves them out (the lists live in op rows, see
-	// persistCreditsBackfillResult) and a client pages them from
+	// t6g3PersistCreditsBackfillResult) and a client pages them from
 	// GET /operations/:id/class-lists/:class.
 	BookIDs []string    `json:"book_ids,omitempty"`
 	Samples []*cbSample `json:"samples,omitempty"`
@@ -774,17 +774,17 @@ func (p *Plugin) creditsBackfillDef() sdk.OperationDef {
 	}
 }
 
-// creditsBackfillKind is the native kind of maintenance.credits-backfill (F5-08).
-const creditsBackfillKind tasks.Kind = "books.maintenance.credits-backfill"
+// t6g3CreditsBackfillKind is the native kind of maintenance.credits-backfill (F5-08).
+const t6g3CreditsBackfillKind tasks.Kind = "books.maintenance.credits-backfill"
 
-// creditsBackfillCoreEnv is what creditsBackfillCore needs from its engine.
-type creditsBackfillCoreEnv struct {
+// t6g3CreditsBackfillCoreEnv is what creditsBackfillCore needs from its engine.
+type t6g3CreditsBackfillCoreEnv struct {
 	t6g3Base
 	// GuardTags is the guard's franchise-tag reader (nil: the tag check is
 	// skipped, as repairs.GuardOwnerManualBooks documents).
 	GuardTags repairs.GuardTagReader
 	// Eng is the run's engine (log, progress, checkpoint, stand-down, pool).
-	Eng cbEngine
+	Eng t6g3CBEngine
 	// Workers is the worker count the HEAD engine's pools use; the native
 	// engine's pool is the def's Parallelism and ignores it.
 	Workers int
@@ -806,7 +806,7 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 		return fmt.Errorf("database not initialized")
 	}
 	// The class id lists are stored beside the operation, not in its result
-	// (persistCreditsBackfillResult), so the store must be able to keep them:
+	// (t6g3PersistCreditsBackfillResult), so the store must be able to keep them:
 	// found out here, before an apply writes a book, not after hours of it.
 	if _, ok := database.AsCapability[database.OpRowStore](p.deps.OperationQueueStore()); !ok {
 		return fmt.Errorf("credits backfill: the operation store %T cannot keep the class id lists (database.OpRowStore)",
@@ -820,7 +820,7 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 	}
 	base := p.t6g3HeadBase(ctx, reporter, params.Apply)
 	base.OpID = registry.ReporterOpID(reporter)
-	env := t6g3CreditsCoreEnv(base, repairsGuardTags(p.deps), headCBEngine{ctx: ctx, reporter: reporter, scan: p.deps})
+	env := t6g3CreditsCoreEnv(base, repairsGuardTags(p.deps), headT6g3CBEngine{ctx: ctx, reporter: reporter, scan: p.deps})
 	env.StoreResult = func(res *creditsBackfillResult) error {
 		return registry.ReporterSetResult(reporter, res)
 	}
@@ -833,8 +833,8 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 // pass), runtime.NumCPU() as HEAD's shell set it; the pool of the three item
 // loops is the engine's (HEAD: Workers, native: the kind's declared
 // parallelism).
-func t6g3CreditsCoreEnv(base t6g3Base, tags repairs.GuardTagReader, eng cbEngine) creditsBackfillCoreEnv {
-	return creditsBackfillCoreEnv{t6g3Base: base, GuardTags: tags, Eng: eng, Workers: runtime.NumCPU()}
+func t6g3CreditsCoreEnv(base t6g3Base, tags repairs.GuardTagReader, eng t6g3CBEngine) t6g3CreditsBackfillCoreEnv {
+	return t6g3CreditsBackfillCoreEnv{t6g3Base: base, GuardTags: tags, Eng: eng, Workers: runtime.NumCPU()}
 }
 
 // creditsBackfillKind builds the native kind. HEAD declares a Preview, so it
@@ -850,11 +850,11 @@ func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *task
 	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"),
 		tasks.Res("books", "narrators"), tasks.Res("books", "operations")).
 		AlsoReads(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "series"))
-	return tasks.Task(creditsBackfillKind, tasks.TaskSpec[json.RawMessage, creditsBackfillResult]{
-		Common: t6g3Common(p.creditsBackfillDef(), creditsBackfillKind, eff, sched),
+	return tasks.Task(t6g3CreditsBackfillKind, tasks.TaskSpec[json.RawMessage, creditsBackfillResult]{
+		Common: t6g3Common(p.creditsBackfillDef(), t6g3CreditsBackfillKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (creditsBackfillResult, error) {
 			var params creditsBackfillParams
-			if err := t6g3DecodeParams(creditsBackfillKind, raw, &params, t6g3ModeKeys...); err != nil {
+			if err := t6g3DecodeParams(t6g3CreditsBackfillKind, raw, &params, t6g3ModeKeys...); err != nil {
 				return creditsBackfillResult{}, err
 			}
 			if rc.Resumed() {
@@ -863,24 +863,24 @@ func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *task
 				// the same cohort, limit and allows, and is a later attempt.
 				var cp creditsBackfillParams
 				if ok, err := rc.Restore(&cp); err != nil {
-					return creditsBackfillResult{}, fmt.Errorf("%s: restore checkpoint: %w", creditsBackfillKind, err)
+					return creditsBackfillResult{}, fmt.Errorf("%s: restore checkpoint: %w", t6g3CreditsBackfillKind, err)
 				} else if ok {
 					params = cp
 				}
 			}
-			base, err := t6g3NativeBase(creditsBackfillKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3CreditsBackfillKind, rc, deps, true)
 			if err != nil {
 				return creditsBackfillResult{}, err
 			}
-			if err := t6g3NeedStore(creditsBackfillKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3CreditsBackfillKind, base); err != nil {
 				return creditsBackfillResult{}, err
 			}
 			if !base.Store.Can(t6g3CapClassLists) {
-				return creditsBackfillResult{}, fmt.Errorf("%s: the store cannot keep the class id lists (database.OpRowStore)", creditsBackfillKind)
+				return creditsBackfillResult{}, fmt.Errorf("%s: the store cannot keep the class id lists (database.OpRowStore)", t6g3CreditsBackfillKind)
 			}
 			params.Apply = base.Live
 			res, err := creditsBackfillCore(rc.Context(), params, t6g3CreditsCoreEnv(base, deps.GuardTags,
-				nativeCBEngine{rc: rc, base: base, standDownKey: deps.StandDownKey}))
+				t6g3NativeCBEngine{rc: rc, base: base, standDownKey: deps.StandDownKey}))
 			if res == nil {
 				return creditsBackfillResult{}, err
 			}
@@ -893,57 +893,57 @@ func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *task
 // runtime.NumCPU() workers.
 func creditsBackfillParallelism() tasks.Parallelism { return tasks.CPU() }
 
-// nativeCBEngine is cbEngine over the native run context.
-type nativeCBEngine struct {
+// t6g3NativeCBEngine is t6g3CBEngine over the native run context.
+type t6g3NativeCBEngine struct {
 	rc   *tasks.RC
 	base t6g3Base
 	// standDownKey is the owner-declared library scan key (t6g3Deps).
 	standDownKey tasks.Key
 }
 
-func (e nativeCBEngine) Log(level slog.Level, msg string, attrs ...slog.Attr) {
+func (e t6g3NativeCBEngine) Log(level slog.Level, msg string, attrs ...slog.Attr) {
 	e.base.Log(level, msg, attrs...)
 }
-func (e nativeCBEngine) Progress(done, total int, msg string)    { e.base.Progress(done, total, msg) }
-func (e nativeCBEngine) Checkpoint(params creditsBackfillParams) { _ = e.rc.Checkpoint(params) }
-func (e nativeCBEngine) Items(int) t6g3ItemsFunc {
+func (e t6g3NativeCBEngine) Progress(done, total int, msg string)    { e.base.Progress(done, total, msg) }
+func (e t6g3NativeCBEngine) Checkpoint(params creditsBackfillParams) { _ = e.rc.Checkpoint(params) }
+func (e t6g3NativeCBEngine) Items(int) t6g3ItemsFunc {
 	return t6g3NativeItems(e.rc, creditsBackfillParallelism())
 }
-func (e nativeCBEngine) Beat(ctx context.Context) error { return ctx.Err() }
+func (e t6g3NativeCBEngine) Beat(ctx context.Context) error { return ctx.Err() }
 
-func (e nativeCBEngine) Hold(_ context.Context, _ string) (cbHold, error) {
+func (e t6g3NativeCBEngine) Hold(_ context.Context, _ string) (t6g3CBHold, error) {
 	if e.standDownKey == "" {
 		// No key means no stand-down, which is a library scan writing under an
 		// apply: refused, as repairs refuses the same (F5-02).
-		return nil, fmt.Errorf("%s: t6g3Deps.StandDownKey is not set; a live apply does not run without the scan stand-down", creditsBackfillKind)
+		return nil, fmt.Errorf("%s: t6g3Deps.StandDownKey is not set; a live apply does not run without the scan stand-down", t6g3CreditsBackfillKind)
 	}
 	h, err := e.rc.StandDown(e.standDownKey)
 	if err != nil {
 		return nil, err
 	}
-	return nativeCBHold{h: h, e: e}, nil
+	return t6g3NativeCBHold{h: h, e: e}, nil
 }
 
-type nativeCBHold struct {
+type t6g3NativeCBHold struct {
 	h tasks.Hold
-	e nativeCBEngine
+	e t6g3NativeCBEngine
 }
 
-func (h nativeCBHold) Context() context.Context { return h.e.rc.Context() }
-func (h nativeCBHold) Lost() bool               { return false }
-func (h nativeCBHold) Release()                 { h.h.Release() }
-func (h nativeCBHold) Items(int) t6g3ItemsFunc  { return h.e.Items(0) }
+func (h t6g3NativeCBHold) Context() context.Context { return h.e.rc.Context() }
+func (h t6g3NativeCBHold) Lost() bool               { return false }
+func (h t6g3NativeCBHold) Release()                 { h.h.Release() }
+func (h t6g3NativeCBHold) Items(int) t6g3ItemsFunc  { return h.e.Items(0) }
 
 // creditsBackfillCore is the shared body of both shells: the run, then the
 // result's persistence. It returns the summary (the result without the class
 // id lists) whenever the run got as far as listing books.
-func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env creditsBackfillCoreEnv) (*creditsBackfillResult, error) {
-	var mod cbCreditsModifier
+func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env t6g3CreditsBackfillCoreEnv) (*creditsBackfillResult, error) {
+	var mod t6g3CBCreditsModifier
 	if params.Apply {
 		mod = env.Writer
 	}
-	res, err := runCreditsBackfillRun(ctx, creditsBackfillEnv{
-		store:   cbStoreView{t6g3Store: env.Store, w: env.Writer},
+	res, err := t6g3RunCreditsBackfillRun(ctx, creditsBackfillEnv{
+		store:   t6g3CBStoreView{t6g3Store: env.Store, w: env.Writer},
 		mod:     mod,
 		tags:    env.GuardTags,
 		opID:    env.OpID,
@@ -956,7 +956,7 @@ func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env 
 	if params.Apply && res.Counts != nil && res.BooksToWrite > 0 {
 		env.Writer.InvalidateAuthorsCache()
 	}
-	summary, serr := persistCreditsBackfillResult(env.Writer, env.OpID, res, env.StoreResult, env.Log)
+	summary, serr := t6g3PersistCreditsBackfillResult(env.Writer, env.OpID, res, env.StoreResult, env.Log)
 	if serr != nil {
 		if err == nil {
 			return nil, fmt.Errorf("store credits backfill result: %w", serr)
@@ -967,19 +967,19 @@ func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env 
 	return summary, err
 }
 
-// cbResultWriter is the two writes that keep a result's class id lists.
-type cbResultWriter interface {
+// t6g3CBResultWriter is the two writes that keep a result's class id lists.
+type t6g3CBResultWriter interface {
 	SaveClassLists(opID string, lists map[string][]string) (*database.ClassListSummary, error)
 	ClearClassLists(opID string) error
 }
 
-// persistCreditsBackfillResult stores the run's result: the class id lists as op
+// t6g3PersistCreditsBackfillResult stores the run's result: the class id lists as op
 // rows under the operation's id (SaveClassLists), then the summary (the result
 // without the lists, carrying their ClassListSummary) through setResult (nil:
 // the caller returns it). The rows go first, so a stored result that names the
 // row store has all of its rows; a summary that fails to store takes the rows
 // back.
-func persistCreditsBackfillResult(w cbResultWriter, opID string, res *creditsBackfillResult, setResult func(*creditsBackfillResult) error, log func(slog.Level, string, ...slog.Attr)) (*creditsBackfillResult, error) {
+func t6g3PersistCreditsBackfillResult(w t6g3CBResultWriter, opID string, res *creditsBackfillResult, setResult func(*creditsBackfillResult) error, log func(slog.Level, string, ...slog.Attr)) (*creditsBackfillResult, error) {
 	if w == nil || opID == "" {
 		return nil, errors.New("no operation id or row store to keep the class id lists under")
 	}
@@ -1021,7 +1021,7 @@ func (res *creditsBackfillResult) summary(lists *database.ClassListSummary) *cre
 type creditsBackfillEnv struct {
 	store creditsBackfillStore
 	// mod writes; nil in a dry run.
-	mod cbCreditsModifier
+	mod t6g3CBCreditsModifier
 	// tags is the guard's franchise-tag reader (nil: the tag check is
 	// skipped, as repairs.GuardOwnerManualBooks documents).
 	tags repairs.GuardTagReader
@@ -1030,22 +1030,22 @@ type creditsBackfillEnv struct {
 	opID    string
 	workers int
 	// eng is the run's engine: its log, progress, checkpoint, stand-down hold
-	// and worker pool. headCBEngine fills it from the HEAD reporter;
+	// and worker pool. headT6g3CBEngine fills it from the HEAD reporter;
 	// the core's callers fill it themselves.
-	eng cbEngine
+	eng t6g3CBEngine
 }
 
-// cbCreditsModifier is the one write the apply makes to a book:
+// t6g3CBCreditsModifier is the one write the apply makes to a book:
 // database.BookCreditsModifier without ModifyBookNarrators, which no step of
 // this op calls.
-type cbCreditsModifier interface {
+type t6g3CBCreditsModifier interface {
 	ModifyBookCredits(bookID string, fn func(book *database.Book, credits *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error)
 }
 
-// cbEngine is what the run needs of the engine that hosts it: the HEAD
+// t6g3CBEngine is what the run needs of the engine that hosts it: the HEAD
 // reporter and registry, or the native run context. Everything the run does to
 // the outside world that is not a store read or a write goes through it.
-type cbEngine interface {
+type t6g3CBEngine interface {
 	Log(level slog.Level, msg string, attrs ...slog.Attr)
 	Progress(done, total int, msg string)
 	// Checkpoint records params so a resumed run is a later attempt of the same
@@ -1054,14 +1054,14 @@ type cbEngine interface {
 	// Items is the worker loop outside a stand-down hold.
 	Items(workers int) t6g3ItemsFunc
 	// Hold takes the library scan's stand-down for an apply.
-	Hold(ctx context.Context, reason string) (cbHold, error)
+	Hold(ctx context.Context, reason string) (t6g3CBHold, error)
 	// Beat renews a hold's lease (when the context carries one) and reports the
 	// reason the run must stop before its next write, nil when it may go on.
 	Beat(ctx context.Context) error
 }
 
-// cbHold is a held scan stand-down.
-type cbHold interface {
+// t6g3CBHold is a held scan stand-down.
+type t6g3CBHold interface {
 	// Context is the work context: canceled when the lease is lost.
 	Context() context.Context
 	// Lost reports whether the lease lapsed.
@@ -1071,64 +1071,66 @@ type cbHold interface {
 	Items(workers int) t6g3ItemsFunc
 }
 
-// headCBEngine is cbEngine over HEAD's reporter and the registry's stand-down.
-type headCBEngine struct {
+// headT6g3CBEngine is t6g3CBEngine over HEAD's reporter and the registry's stand-down.
+type headT6g3CBEngine struct {
 	ctx      context.Context
 	reporter sdk.Reporter
 	scan     ScanController
 }
 
-func (e headCBEngine) Log(level slog.Level, msg string, attrs ...slog.Attr) {
+func (e headT6g3CBEngine) Log(level slog.Level, msg string, attrs ...slog.Attr) {
 	_ = e.reporter.Log(level, msg, attrs...)
 }
-func (e headCBEngine) Progress(done, total int, msg string) {
+func (e headT6g3CBEngine) Progress(done, total int, msg string) {
 	_ = e.reporter.UpdateProgress(done, total, msg)
 }
-func (e headCBEngine) Checkpoint(params creditsBackfillParams) { _ = e.reporter.Checkpoint(params) }
-func (e headCBEngine) Items(workers int) t6g3ItemsFunc {
+func (e headT6g3CBEngine) Checkpoint(params creditsBackfillParams) { _ = e.reporter.Checkpoint(params) }
+func (e headT6g3CBEngine) Items(workers int) t6g3ItemsFunc {
 	return t6g3HeadItems(e.ctx, e.reporter, workers)
 }
-func (e headCBEngine) Beat(ctx context.Context) error { return registry.ScanStandDownCheckpoint(ctx) }
+func (e headT6g3CBEngine) Beat(ctx context.Context) error {
+	return registry.ScanStandDownCheckpoint(ctx)
+}
 
-func (e headCBEngine) Hold(ctx context.Context, reason string) (cbHold, error) {
+func (e headT6g3CBEngine) Hold(ctx context.Context, reason string) (t6g3CBHold, error) {
 	h, err := registry.HoldScanStandDown(ctx, e.scan, e.reporter, reason)
 	if err != nil {
 		return nil, err
 	}
-	return headCBHold{h}, nil
+	return headT6g3CBHold{h}, nil
 }
 
-type headCBHold struct{ h *registry.ScanStandDownHold }
+type headT6g3CBHold struct{ h *registry.ScanStandDownHold }
 
-func (h headCBHold) Context() context.Context { return h.h.Context() }
-func (h headCBHold) Lost() bool               { return h.h.Lost() }
-func (h headCBHold) Release()                 { h.h.Release() }
-func (h headCBHold) Items(workers int) t6g3ItemsFunc {
+func (h headT6g3CBHold) Context() context.Context { return h.h.Context() }
+func (h headT6g3CBHold) Lost() bool               { return h.h.Lost() }
+func (h headT6g3CBHold) Release()                 { h.h.Release() }
+func (h headT6g3CBHold) Items(workers int) t6g3ItemsFunc {
 	return t6g3HeadItems(h.h.Context(), h.h.Reporter(), workers)
 }
 
-// cbStoreView is the creditsBackfillStore both shells hand the run: its reads
+// t6g3CBStoreView is the creditsBackfillStore both shells hand the run: its reads
 // are the run's t6g3Store and its writes go through the run's t6g3Writer, so no
 // step of the run holds a path around either (rule R10).
-type cbStoreView struct {
+type t6g3CBStoreView struct {
 	t6g3Store
 	w t6g3Writer
 }
 
-func (v cbStoreView) CreateNarrator(name string) (*database.Narrator, error) {
+func (v t6g3CBStoreView) CreateNarrator(name string) (*database.Narrator, error) {
 	return v.w.CreateNarrator(name)
 }
-func (v cbStoreView) DeleteNarrator(id int) error { return v.w.DeleteNarrator(id) }
+func (v t6g3CBStoreView) DeleteNarrator(id int) error { return v.w.DeleteNarrator(id) }
 
 // ReplaceOpRowsPrefix completes database.OpRowStore with the writer's.
-func (v cbStoreView) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (database.OpRow, error)) error {
+func (v t6g3CBStoreView) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i int) (database.OpRow, error)) error {
 	return v.w.ReplaceOpRowsPrefix(opID, rowPrefix, n, at)
 }
 
-// cbLacks reports whether store is a cbStoreView whose reader lacks c. A store
+// t6g3CBLacks reports whether store is a t6g3CBStoreView whose reader lacks c. A store
 // that is not one (a test's) is probed by database.AsCapability as it always was.
-func cbLacks(store creditsBackfillStore, c t6g3Capability) bool {
-	v, ok := store.(cbStoreView)
+func t6g3CBLacks(store creditsBackfillStore, c t6g3Capability) bool {
+	v, ok := store.(t6g3CBStoreView)
 	return ok && !v.Can(c)
 }
 
@@ -1367,8 +1369,8 @@ func (r *cbRun) noteErr(err error) {
 	r.firstErrMu.Unlock()
 }
 
-// runCreditsBackfillRun does the work, on env's engine.
-func runCreditsBackfillRun(ctx context.Context, env creditsBackfillEnv, params creditsBackfillParams) (*creditsBackfillResult, error) {
+// t6g3RunCreditsBackfillRun does the work, on env's engine.
+func t6g3RunCreditsBackfillRun(ctx context.Context, env creditsBackfillEnv, params creditsBackfillParams) (*creditsBackfillResult, error) {
 	started := time.Now()
 	allow := map[string]bool{}
 	for _, k := range params.Allow {
@@ -1416,7 +1418,7 @@ func runCreditsBackfillRun(ctx context.Context, env creditsBackfillEnv, params c
 	// stale by the time the scan is down (a scan that was still running
 	// creates authors and narrators).
 	workCtx, items := ctx, env.eng.Items
-	var hold cbHold
+	var hold t6g3CBHold
 	if params.Apply {
 		h, sdErr := env.eng.Hold(ctx, "credits-backfill apply")
 		if sdErr != nil {
@@ -1460,7 +1462,7 @@ func runCreditsBackfillRun(ctx context.Context, env creditsBackfillEnv, params c
 		run.preexisting[id] = true
 	}
 	run.indexNarrators()
-	if r, ok := database.AsCapability[narratorByNameReader](env.store); ok && !cbLacks(env.store, t6g3CapNameIndex) {
+	if r, ok := database.AsCapability[narratorByNameReader](env.store); ok && !t6g3CBLacks(env.store, t6g3CapNameIndex) {
 		run.byName = r
 	}
 
@@ -2001,7 +2003,7 @@ func cbSourceFingerprint(row database.OperationV2Row) string {
 // the records only such a journal names are not found here.
 func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
 	lister, ok := database.AsCapability[database.OperationsV2SinceLister](r.env.store)
-	if !ok || cbLacks(r.env.store, t6g3CapOpsLister) {
+	if !ok || t6g3CBLacks(r.env.store, t6g3CapOpsLister) {
 		return nil, fmt.Errorf("cannot find the records other credits-backfill operations left: store is %T, which cannot list operations (OperationsV2SinceLister)", r.env.store)
 	}
 	rows, err := lister.ListOperationsV2Since(time.Time{}, math.MaxInt)
@@ -2009,7 +2011,7 @@ func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
 		return nil, fmt.Errorf("list operations for the records other credits-backfill operations left: %w", err)
 	}
 	markers, _ := database.AsCapability[database.OpRowStore](r.env.store)
-	if cbLacks(r.env.store, t6g3CapOpRows) {
+	if t6g3CBLacks(r.env.store, t6g3CapOpRows) {
 		markers = nil
 	}
 	var out []cbSourceOp
@@ -2041,7 +2043,7 @@ func (r *cbRun) otherCreditsBackfillOps() ([]cbSourceOp, error) {
 // next apply reads the journal again, which is the safe direction.
 func (r *cbRun) markLeftoversJudged() {
 	markers, ok := database.AsCapability[database.OpRowStore](r.env.store)
-	if !ok || cbLacks(r.env.store, t6g3CapOpRows) {
+	if !ok || t6g3CBLacks(r.env.store, t6g3CapOpRows) {
 		return
 	}
 	for _, src := range r.judged {

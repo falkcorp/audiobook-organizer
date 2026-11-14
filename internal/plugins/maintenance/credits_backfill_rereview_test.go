@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_rereview_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7d2e9a46-1c8b-4f35-a0d7-93b6e5c41f28
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -43,8 +43,8 @@ func (f *cbFixture) runEnvScan(ctx context.Context, env creditsBackfillEnv, para
 		env.workers = 1
 	}
 	// The run over HEAD's engine, as the HEAD shell builds it.
-	env.eng = headCBEngine{ctx: ctx, reporter: rep, scan: scan}
-	return runCreditsBackfillRun(ctx, env, params)
+	env.eng = headT6g3CBEngine{ctx: ctx, reporter: rep, scan: scan}
+	return t6g3RunCreditsBackfillRun(ctx, env, params)
 }
 
 func cbRevert(t *testing.T, f *cbFixture) *audiobooks.RevertResult {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 2.1.3
+// version: 2.1.4
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -108,9 +108,9 @@ func (p *Plugin) compactActivityLogDef() sdk.OperationDef {
 	}
 }
 
-// compactActivityLogKind is the native kind of maintenance.compact-activity-log
+// t6g3CompactActivityLogKind is the native kind of maintenance.compact-activity-log
 // (F5-08).
-const compactActivityLogKind tasks.Kind = "books." + CompactActivityLogDefID
+const t6g3CompactActivityLogKind tasks.Kind = "books." + CompactActivityLogDefID
 
 // compactRecordEnv is what compactAndRecordCore needs from its caller: a log, a
 // progress sink and the one compaction write (database's
@@ -191,20 +191,20 @@ func compactActivityLogPlan(raw json.RawMessage, now time.Time) (cutoff time.Tim
 // CompactActivityEntries collapses activity rows into daily digests (activity).
 func (p *Plugin) compactActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "activity"))
-	return tasks.Task(compactActivityLogKind, tasks.TaskSpec[json.RawMessage, CompactActivityLogResult]{
-		Common: t6g3Common(p.compactActivityLogDef(), compactActivityLogKind, eff, sched),
+	return tasks.Task(t6g3CompactActivityLogKind, tasks.TaskSpec[json.RawMessage, CompactActivityLogResult]{
+		Common: t6g3Common(p.compactActivityLogDef(), t6g3CompactActivityLogKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (CompactActivityLogResult, error) {
-			if err := t6g3RefuseModeKeys(compactActivityLogKind, raw); err != nil {
+			if err := t6g3RefuseModeKeys(t6g3CompactActivityLogKind, raw); err != nil {
 				return CompactActivityLogResult{}, err
 			}
-			if err := t6g3LiveOnly(compactActivityLogKind, rc); err != nil {
+			if err := t6g3LiveOnly(t6g3CompactActivityLogKind, rc); err != nil {
 				return CompactActivityLogResult{}, err
 			}
 			cutoff, startMsg, err := compactActivityLogPlan(raw, time.Now())
 			if err != nil {
 				return CompactActivityLogResult{}, err
 			}
-			base, err := t6g3NativeBase(compactActivityLogKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3CompactActivityLogKind, rc, deps, true)
 			if err != nil {
 				return CompactActivityLogResult{}, err
 			}

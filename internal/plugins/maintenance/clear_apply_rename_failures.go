@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/clear_apply_rename_failures.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 1c9f4a67-52b8-4d03-ae71-8f605d2c9b34
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Clears the metadata apply pipeline's DURABLE RENAME-FAILURE records.
 //
@@ -86,9 +86,9 @@ func (p *Plugin) clearApplyRenameFailuresDef() sdk.OperationDef {
 	}
 }
 
-// clearApplyRenameFailuresKind is the native kind of
+// t6g3ClearApplyRenameFailuresKind is the native kind of
 // maintenance.clear-apply-rename-failures (F5-08).
-const clearApplyRenameFailuresKind tasks.Kind = "books.maintenance.clear-apply-rename-failures"
+const t6g3ClearApplyRenameFailuresKind tasks.Kind = "books.maintenance.clear-apply-rename-failures"
 
 // clearApplyRenameFailuresScope is what the body takes of the params: HEAD's
 // params without Apply, which is the run's mode (env.Live) and never a param on
@@ -141,18 +141,18 @@ func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json
 // (user_state); the op never touches a file or a book_file row.
 func (p *Plugin) clearApplyRenameFailuresKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "user_state"))
-	return tasks.Task(clearApplyRenameFailuresKind, tasks.TaskSpec[json.RawMessage, clearApplyRenameFailuresResult]{
-		Common: t6g3Common(p.clearApplyRenameFailuresDef(), clearApplyRenameFailuresKind, eff, sched),
+	return tasks.Task(t6g3ClearApplyRenameFailuresKind, tasks.TaskSpec[json.RawMessage, clearApplyRenameFailuresResult]{
+		Common: t6g3Common(p.clearApplyRenameFailuresDef(), t6g3ClearApplyRenameFailuresKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (clearApplyRenameFailuresResult, error) {
 			var scope clearApplyRenameFailuresScope
-			if err := t6g3DecodeParams(clearApplyRenameFailuresKind, raw, &scope, t6g3ModeKeys...); err != nil {
+			if err := t6g3DecodeParams(t6g3ClearApplyRenameFailuresKind, raw, &scope, t6g3ModeKeys...); err != nil {
 				return clearApplyRenameFailuresResult{}, err
 			}
-			base, err := t6g3NativeBase(clearApplyRenameFailuresKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3ClearApplyRenameFailuresKind, rc, deps, true)
 			if err != nil {
 				return clearApplyRenameFailuresResult{}, err
 			}
-			if err := t6g3NeedStore(clearApplyRenameFailuresKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3ClearApplyRenameFailuresKind, base); err != nil {
 				return clearApplyRenameFailuresResult{}, err
 			}
 			return runClearApplyRenameFailuresCore(rc.Context(), scope, clearApplyRenameFailuresEnv{base})

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.35.1
+// version: 1.35.2
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -58,8 +58,8 @@ func (p *Plugin) purgeDeletedDef() sdk.OperationDef {
 	}
 }
 
-// purgeDeletedKind is the native kind of maintenance.purge-deleted (F5-08).
-const purgeDeletedKind tasks.Kind = "books.maintenance.purge-deleted"
+// t6g3PurgeDeletedKind is the native kind of maintenance.purge-deleted (F5-08).
+const t6g3PurgeDeletedKind tasks.Kind = "books.maintenance.purge-deleted"
 
 // purgeDeletedEnv is what runPurgeDeletedCore needs from its engine: the base
 // only (the purge reads no store of its own; the writer decides the books).
@@ -99,16 +99,16 @@ func runPurgeDeletedCore(ctx context.Context, env purgeDeletedEnv) (struct{}, er
 func (p *Plugin) purgeDeletedKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "external_ids"),
 		tasks.Res("books", "files"), tasks.Res("books", "operations"), tasks.Res("books", "activity"))
-	return tasks.Task(purgeDeletedKind, tasks.TaskSpec[json.RawMessage, struct{}]{
-		Common: t6g3Common(p.purgeDeletedDef(), purgeDeletedKind, eff, sched),
+	return tasks.Task(t6g3PurgeDeletedKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: t6g3Common(p.purgeDeletedDef(), t6g3PurgeDeletedKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
-			if err := t6g3RefuseModeKeys(purgeDeletedKind, raw); err != nil {
+			if err := t6g3RefuseModeKeys(t6g3PurgeDeletedKind, raw); err != nil {
 				return struct{}{}, err
 			}
-			if err := t6g3LiveOnly(purgeDeletedKind, rc); err != nil {
+			if err := t6g3LiveOnly(t6g3PurgeDeletedKind, rc); err != nil {
 				return struct{}{}, err
 			}
-			base, err := t6g3NativeBase(purgeDeletedKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3PurgeDeletedKind, rc, deps, true)
 			if err != nil {
 				return struct{}{}, err
 			}
@@ -146,9 +146,9 @@ func (p *Plugin) tombstoneCleanupDef() sdk.OperationDef {
 	}
 }
 
-// tombstoneCleanupKind is the native kind of maintenance.tombstone-cleanup
+// t6g3TombstoneCleanupKind is the native kind of maintenance.tombstone-cleanup
 // (F5-08).
-const tombstoneCleanupKind tasks.Kind = "books.maintenance.tombstone-cleanup"
+const t6g3TombstoneCleanupKind tasks.Kind = "books.maintenance.tombstone-cleanup"
 
 // tombstoneCleanupEnv is what runTombstoneCleanupCore needs from its engine.
 type tombstoneCleanupEnv struct{ t6g3Base }
@@ -187,16 +187,16 @@ func runTombstoneCleanupCore(_ context.Context, env tombstoneCleanupEnv) (tombst
 // ResolveTombstoneChains rewrites the author tombstone rows (authors).
 func (p *Plugin) tombstoneCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "authors"))
-	return tasks.Task(tombstoneCleanupKind, tasks.TaskSpec[json.RawMessage, tombstoneCleanupResult]{
-		Common: t6g3Common(p.tombstoneCleanupDef(), tombstoneCleanupKind, eff, sched),
+	return tasks.Task(t6g3TombstoneCleanupKind, tasks.TaskSpec[json.RawMessage, tombstoneCleanupResult]{
+		Common: t6g3Common(p.tombstoneCleanupDef(), t6g3TombstoneCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (tombstoneCleanupResult, error) {
-			if err := t6g3RefuseModeKeys(tombstoneCleanupKind, raw); err != nil {
+			if err := t6g3RefuseModeKeys(t6g3TombstoneCleanupKind, raw); err != nil {
 				return tombstoneCleanupResult{}, err
 			}
-			if err := t6g3LiveOnly(tombstoneCleanupKind, rc); err != nil {
+			if err := t6g3LiveOnly(t6g3TombstoneCleanupKind, rc); err != nil {
 				return tombstoneCleanupResult{}, err
 			}
-			base, err := t6g3NativeBase(tombstoneCleanupKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3TombstoneCleanupKind, rc, deps, true)
 			if err != nil {
 				return tombstoneCleanupResult{}, err
 			}
@@ -241,9 +241,9 @@ func (p *Plugin) tempFileCleanupDef() sdk.OperationDef {
 // watchdog budget from this value (optimizeProgressTimeout).
 const tempFileCleanupProgressTimeout = 1 * time.Hour
 
-// tempFileCleanupKind is the native kind of maintenance.temp-file-cleanup
+// t6g3TempFileCleanupKind is the native kind of maintenance.temp-file-cleanup
 // (F5-08).
-const tempFileCleanupKind tasks.Kind = "books.maintenance.temp-file-cleanup"
+const t6g3TempFileCleanupKind tasks.Kind = "books.maintenance.temp-file-cleanup"
 
 // tempFileCleanupEnv is what runTempFileCleanupCore needs from its engine.
 type tempFileCleanupEnv struct{ t6g3Base }
@@ -274,20 +274,20 @@ func runTempFileCleanupCore(_ context.Context, env tempFileCleanupEnv) (tempFile
 // CleanupOrphanedTempFiles records and flushes (activity).
 func (p *Plugin) tempFileCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "files"), tasks.Res("books", "activity"))
-	return tasks.Task(tempFileCleanupKind, tasks.TaskSpec[json.RawMessage, tempFileCleanupResult]{
-		Common: t6g3Common(p.tempFileCleanupDef(), tempFileCleanupKind, eff, sched),
+	return tasks.Task(t6g3TempFileCleanupKind, tasks.TaskSpec[json.RawMessage, tempFileCleanupResult]{
+		Common: t6g3Common(p.tempFileCleanupDef(), t6g3TempFileCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (tempFileCleanupResult, error) {
-			if err := t6g3RefuseModeKeys(tempFileCleanupKind, raw); err != nil {
+			if err := t6g3RefuseModeKeys(t6g3TempFileCleanupKind, raw); err != nil {
 				return tempFileCleanupResult{}, err
 			}
-			if err := t6g3LiveOnly(tempFileCleanupKind, rc); err != nil {
+			if err := t6g3LiveOnly(t6g3TempFileCleanupKind, rc); err != nil {
 				return tempFileCleanupResult{}, err
 			}
-			base, err := t6g3NativeBase(tempFileCleanupKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3TempFileCleanupKind, rc, deps, true)
 			if err != nil {
 				return tempFileCleanupResult{}, err
 			}
-			if err := t6g3NeedStore(tempFileCleanupKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3TempFileCleanupKind, base); err != nil {
 				return tempFileCleanupResult{}, err
 			}
 			return runTempFileCleanupCore(rc.Context(), tempFileCleanupEnv{base})
@@ -349,9 +349,9 @@ func (p *Plugin) runTranscodeTempCleanup(ctx context.Context, raw json.RawMessag
 	return err
 }
 
-// transcodeTempCleanupKind is the native kind of maintenance.transcode-temp-cleanup
+// t6g3TranscodeTempCleanupKind is the native kind of maintenance.transcode-temp-cleanup
 // (F5-08).
-const transcodeTempCleanupKind tasks.Kind = "books.maintenance.transcode-temp-cleanup"
+const t6g3TranscodeTempCleanupKind tasks.Kind = "books.maintenance.transcode-temp-cleanup"
 
 // transcodeTempCleanupEnv is what runTranscodeTempCleanupCore needs from its
 // engine: the base (Live is the inverse of HEAD's dry_run).
@@ -397,17 +397,17 @@ func runTranscodeTempCleanupCore(ctx context.Context, env transcodeTempCleanupEn
 // temp files CleanupStaleTempFiles removes in a live run (files).
 func (p *Plugin) transcodeTempCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "files"))
-	return tasks.Task(transcodeTempCleanupKind, tasks.TaskSpec[json.RawMessage, transcodeTempCleanupResult]{
-		Common: t6g3Common(p.transcodeTempCleanupDef(), transcodeTempCleanupKind, eff, sched),
+	return tasks.Task(t6g3TranscodeTempCleanupKind, tasks.TaskSpec[json.RawMessage, transcodeTempCleanupResult]{
+		Common: t6g3Common(p.transcodeTempCleanupDef(), t6g3TranscodeTempCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (transcodeTempCleanupResult, error) {
-			if err := t6g3RefuseModeKeys(transcodeTempCleanupKind, raw); err != nil {
+			if err := t6g3RefuseModeKeys(t6g3TranscodeTempCleanupKind, raw); err != nil {
 				return transcodeTempCleanupResult{}, err
 			}
-			base, err := t6g3NativeBase(transcodeTempCleanupKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3TranscodeTempCleanupKind, rc, deps, true)
 			if err != nil {
 				return transcodeTempCleanupResult{}, err
 			}
-			if err := t6g3NeedStore(transcodeTempCleanupKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3TranscodeTempCleanupKind, base); err != nil {
 				return transcodeTempCleanupResult{}, err
 			}
 			return runTranscodeTempCleanupCore(rc.Context(), transcodeTempCleanupEnv{base})
@@ -445,9 +445,9 @@ func (p *Plugin) cleanupActivityLogDef() sdk.OperationDef {
 	}
 }
 
-// cleanupActivityLogKind is the native kind of maintenance.cleanup-activity-log
+// t6g3CleanupActivityLogKind is the native kind of maintenance.cleanup-activity-log
 // (F5-08).
-const cleanupActivityLogKind tasks.Kind = "books.maintenance.cleanup-activity-log"
+const t6g3CleanupActivityLogKind tasks.Kind = "books.maintenance.cleanup-activity-log"
 
 // cleanupActivityLogEnv is what runCleanupActivityLogCore needs from its engine.
 type cleanupActivityLogEnv struct{ t6g3Base }
@@ -471,20 +471,20 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 // (activity).
 func (p *Plugin) cleanupActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "activity"))
-	return tasks.Task(cleanupActivityLogKind, tasks.TaskSpec[json.RawMessage, cleanupActivityLogResult]{
-		Common: t6g3Common(p.cleanupActivityLogDef(), cleanupActivityLogKind, eff, sched),
+	return tasks.Task(t6g3CleanupActivityLogKind, tasks.TaskSpec[json.RawMessage, cleanupActivityLogResult]{
+		Common: t6g3Common(p.cleanupActivityLogDef(), t6g3CleanupActivityLogKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (cleanupActivityLogResult, error) {
-			if err := t6g3RefuseModeKeys(cleanupActivityLogKind, raw); err != nil {
+			if err := t6g3RefuseModeKeys(t6g3CleanupActivityLogKind, raw); err != nil {
 				return cleanupActivityLogResult{}, err
 			}
-			if err := t6g3LiveOnly(cleanupActivityLogKind, rc); err != nil {
+			if err := t6g3LiveOnly(t6g3CleanupActivityLogKind, rc); err != nil {
 				return cleanupActivityLogResult{}, err
 			}
-			base, err := t6g3NativeBase(cleanupActivityLogKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3CleanupActivityLogKind, rc, deps, true)
 			if err != nil {
 				return cleanupActivityLogResult{}, err
 			}
-			if err := t6g3NeedStore(cleanupActivityLogKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3CleanupActivityLogKind, base); err != nil {
 				return cleanupActivityLogResult{}, err
 			}
 			return runCleanupActivityLogCore(rc.Context(), cleanupActivityLogEnv{base})
@@ -657,9 +657,9 @@ func (p *Plugin) cleanupOldBackupsDef() sdk.OperationDef {
 	}
 }
 
-// cleanupOldBackupsKind is the native kind of maintenance.cleanup-old-backups
+// t6g3CleanupOldBackupsKind is the native kind of maintenance.cleanup-old-backups
 // (F5-08).
-const cleanupOldBackupsKind tasks.Kind = "books.maintenance.cleanup-old-backups"
+const t6g3CleanupOldBackupsKind tasks.Kind = "books.maintenance.cleanup-old-backups"
 
 // cleanupOldBackupsEnv is what runCleanupOldBackupsCore needs from its engine.
 type cleanupOldBackupsEnv struct{ t6g3Base }
@@ -680,20 +680,20 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 // on the def explains why it touches no row.
 func (p *Plugin) cleanupOldBackupsKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "files"))
-	return tasks.Task(cleanupOldBackupsKind, tasks.TaskSpec[json.RawMessage, cleanupOldBackupsResult]{
-		Common: t6g3Common(p.cleanupOldBackupsDef(), cleanupOldBackupsKind, eff, sched),
+	return tasks.Task(t6g3CleanupOldBackupsKind, tasks.TaskSpec[json.RawMessage, cleanupOldBackupsResult]{
+		Common: t6g3Common(p.cleanupOldBackupsDef(), t6g3CleanupOldBackupsKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (cleanupOldBackupsResult, error) {
-			if err := t6g3RefuseModeKeys(cleanupOldBackupsKind, raw); err != nil {
+			if err := t6g3RefuseModeKeys(t6g3CleanupOldBackupsKind, raw); err != nil {
 				return cleanupOldBackupsResult{}, err
 			}
-			if err := t6g3LiveOnly(cleanupOldBackupsKind, rc); err != nil {
+			if err := t6g3LiveOnly(t6g3CleanupOldBackupsKind, rc); err != nil {
 				return cleanupOldBackupsResult{}, err
 			}
-			base, err := t6g3NativeBase(cleanupOldBackupsKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3CleanupOldBackupsKind, rc, deps, true)
 			if err != nil {
 				return cleanupOldBackupsResult{}, err
 			}
-			if err := t6g3NeedStore(cleanupOldBackupsKind, base); err != nil {
+			if err := t6g3NeedStore(t6g3CleanupOldBackupsKind, base); err != nil {
 				return cleanupOldBackupsResult{}, err
 			}
 			return runCleanupOldBackupsCore(rc.Context(), cleanupOldBackupsEnv{base})
@@ -932,8 +932,8 @@ func notePaths(files []database.PurgeFileNote) []string {
 	return paths
 }
 
-// trashCleanupKind is the native kind of maintenance.trash-cleanup (F5-08).
-const trashCleanupKind tasks.Kind = "books.maintenance.trash-cleanup"
+// t6g3TrashCleanupKind is the native kind of maintenance.trash-cleanup (F5-08).
+const t6g3TrashCleanupKind tasks.Kind = "books.maintenance.trash-cleanup"
 
 // trashCleanupEnv is what runTrashCleanupCore needs from its engine.
 type trashCleanupEnv struct {
@@ -966,16 +966,16 @@ func (p *Plugin) runTrashCleanup(ctx context.Context, _ json.RawMessage, reporte
 // versions to purge_failed (book_versions).
 func (p *Plugin) trashCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", "book_versions"), tasks.Res("books", "files"))
-	return tasks.Task(trashCleanupKind, tasks.TaskSpec[json.RawMessage, TrashCleanupResult]{
-		Common: t6g3Common(p.trashCleanupDef(), trashCleanupKind, eff, sched),
+	return tasks.Task(t6g3TrashCleanupKind, tasks.TaskSpec[json.RawMessage, TrashCleanupResult]{
+		Common: t6g3Common(p.trashCleanupDef(), t6g3TrashCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (TrashCleanupResult, error) {
-			if err := t6g3RefuseModeKeys(trashCleanupKind, raw); err != nil {
+			if err := t6g3RefuseModeKeys(t6g3TrashCleanupKind, raw); err != nil {
 				return TrashCleanupResult{}, err
 			}
-			if err := t6g3LiveOnly(trashCleanupKind, rc); err != nil {
+			if err := t6g3LiveOnly(t6g3TrashCleanupKind, rc); err != nil {
 				return TrashCleanupResult{}, err
 			}
-			base, err := t6g3NativeBase(trashCleanupKind, rc, deps, true)
+			base, err := t6g3NativeBase(t6g3TrashCleanupKind, rc, deps, true)
 			if err != nil {
 				return TrashCleanupResult{}, err
 			}

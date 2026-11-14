@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_class_lists_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: b4d81e07-93c2-4a5f-8e16-5f0c2a7d9e38
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -34,11 +34,11 @@ func (r *failingResultReporter) SetResult(any) error { return errors.New("result
 // row store) and the reporter's result slot. A nil store hands the step no
 // writer.
 func cbPersistResult(rep sdk.Reporter, store *database.PebbleStore, opID string, res *creditsBackfillResult) error {
-	var w cbResultWriter
+	var w t6g3CBResultWriter
 	if store != nil {
 		w = headT6g3Writer{p: &Plugin{deps: fakeDeps{store: store}}, store: store}
 	}
-	_, err := persistCreditsBackfillResult(w, opID, res,
+	_, err := t6g3PersistCreditsBackfillResult(w, opID, res,
 		func(r *creditsBackfillResult) error { return registry.ReporterSetResult(rep, r) },
 		func(level slog.Level, msg string, attrs ...slog.Attr) { _ = rep.Log(level, msg, attrs...) })
 	return err
