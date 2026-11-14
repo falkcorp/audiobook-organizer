@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -56,6 +58,17 @@ type fakeT6G4Store struct {
 
 	bookFilesCore []database.BookFileCore
 	identReport   database.IdentIndexReport
+	// aiParsing and authors drive ai-dedup-batch: the core refuses a library
+	// whose AI parsing is off, and builds the batch from the authors.
+	aiParsing bool
+	authors   []database.Author
+}
+
+func (s *fakeT6G4Store) HasAIParsing() bool { return s.aiParsing }
+
+func (s *fakeT6G4Store) GetAllAuthors() ([]database.Author, error) {
+	s.rec.add("GetAllAuthors")
+	return s.authors, nil
 }
 
 // RootDir is a temp dir, so a core that writes a report writes it there.
@@ -82,6 +95,13 @@ type fakeT6G4Writer struct {
 func (w *fakeT6G4Writer) DedupTriageApply(context.Context) (*TriageReport, error) {
 	w.rec.add("DedupTriageApply")
 	return &TriageReport{}, nil
+}
+
+// SubmitAuthorDedupJob answers a job id derived from the source id, as a real
+// submit's row would carry.
+func (w *fakeT6G4Writer) SubmitAuthorDedupJob(_ context.Context, sourceID string, _ []ai.AuthorDiscoveryInput) (string, error) {
+	w.rec.add("SubmitAuthorDedupJob")
+	return "job-" + sourceID, nil
 }
 
 func (w *fakeT6G4Writer) RebuildIdentIndex(context.Context) (database.IdentRebuildStats, error) {
@@ -416,6 +436,16 @@ type t6g4Probe struct {
 	handed         tasks.Writer
 }
 
+// fakeT6G4Scan is a ScanController that grants every stand-down at once.
+type fakeT6G4Scan struct{ acquires atomic.Int32 }
+
+func (f *fakeT6G4Scan) AcquireScanStandDown(context.Context, string, string) (func(), error) {
+	f.acquires.Add(1)
+	return func() {}, nil
+}
+func (*fakeT6G4Scan) RenewScanStandDown(string) bool { return true }
+func (*fakeT6G4Scan) ScanStandDownValid(string) bool { return true }
+
 // fakeT6G4Deps is the helper the brief names: deps with a recording store and a
 // NewWriter that records the tasks.Writer it was handed.
 func fakeT6G4Deps(t *testing.T) (t6g4Deps, *t6g4Probe) {
@@ -427,6 +457,7 @@ func fakeT6G4Deps(t *testing.T) (t6g4Deps, *t6g4Probe) {
 	}
 	return t6g4Deps{
 		Store: pr.store,
+		Scan:  &fakeT6G4Scan{},
 		NewWriter: func(w tasks.Writer) t6g4Writer {
 			pr.mu.Lock()
 			defer pr.mu.Unlock()
@@ -558,64 +589,85 @@ type t6g4Want struct {
 	head func(p *Plugin) sdk.OperationDef
 	// resume is rule R5's mapping of HEAD's ResumePolicy.
 	resume tasks.ResumePolicy
-	// writes is rule R7's native write set, as books resource kinds; nil with
-	// readOnly true means "Declared ReadOnly".
+	// headCheckpoints: HEAD's shell saves a checkpoint AND reads it on restart.
+	// Only then does HEAD's ResumeRestart map to ResumeContinue; a Restart that
+	// re-reads nothing is a run from zero (the arch guard's
+	// restartWithoutCheckpoint list names those shells).
+	headCheckpoints bool
+	// writes is the native write set, as ops.Resource names (every one must be a
+	// constant of pkg/ops); nil with readOnly true means "Declared ReadOnly".
 	writes   []string
 	readOnly bool
 	// liveOnly: HEAD runs this only in an explicit live mode (rule R7).
 	liveOnly bool
-	// notWhile is rule R5's DependsOn mapping.
-	notWhile []tasks.Kind
-	// refuse is a params body naming a mode key the native shell must refuse
-	// ("" when HEAD's params carry none).
-	refuse string
+	// notWhile is rule R5's DependsOn mapping, derived from HEAD's DependsOn in
+	// t6g4WantNotWhile; this field only records which rows have one.
+	hasDependsOn bool
+	// timeout overrides the HEAD-derived Timeout where HEAD declared none and
+	// the native kind states one explicitly (review MINOR 13).
+	timeout time.Duration
 	// noLive skips the Live scenario: the core reaches the network or an external
 	// tool before it can make a recorded write.
 	noLive bool
-	// helpReworded: the native Help drops HEAD's dry-run wording, because the
-	// native shell refuses dry_run and a run's mode is the Preview flag, not a
-	// param. Every other row's Help is HEAD's Description verbatim.
+	// helpReworded: HEAD's Description names a mode param (dry_run, dryRun,
+	// apply), which the native shell refuses, so the native Help is reworded.
+	// The test derives this from HEAD's text and requires the flag to agree.
 	helpReworded bool
 }
 
-// t6g4Expected is in file order (the order of t6g4Kinds).
+// t6g4Expected is in file order (the order of t6g4Kinds). Write sets use only the
+// resource names pkg/ops defines; a store with no such name is not declared (see
+// the PR's Review decisions).
 var t6g4Expected = []t6g4Want{
 	{kind: aiDedupBatchKind, head: func(p *Plugin) sdk.OperationDef { return p.aiDedupBatchDef() },
-		resume: tasks.ResumeContinue, writes: []string{"operations"}, liveOnly: true},
+		resume: tasks.ResumeContinue, headCheckpoints: true, writes: []string{"review_items"}, liveOnly: true},
 	{kind: dedupExactTriageKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupExactTriageDef() },
-		resume: tasks.ResumeDrop, writes: []string{"dedup_candidates"}, refuse: `{"apply":true}`},
+		resume: tasks.ResumeDrop, writes: []string{"embeddings"}, helpReworded: true},
 	{kind: dedupeBookFileRowsKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupeBookFileRowsDef() },
-		resume: tasks.ResumeContinue, writes: []string{"book_files"}, notWhile: []tasks.Kind{"library.scan"}, refuse: `{"apply":true}`},
+		resume: tasks.ResumeFromZero, writes: []string{"book_files", "books", "fingerprint_index", "operations"}, hasDependsOn: true, helpReworded: true},
 	{kind: durationBackfillKind, head: func(p *Plugin) sdk.OperationDef { return p.durationBackfillDef() },
-		resume: tasks.ResumeDrop, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []string{"book_files", "books"}, helpReworded: true},
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
-		resume: tasks.ResumeContinue, writes: []string{"book_files"}, liveOnly: true},
+		resume: tasks.ResumeFromZero, writes: []string{"book_files"}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
-		resume: tasks.ResumeContinue, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`, helpReworded: true},
+		resume: tasks.ResumeContinue, headCheckpoints: true, writes: []string{"book_files", "books"}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
-		resume: tasks.ResumeDrop, writes: []string{"file_provenance"}, refuse: `{"apply":true}`},
+		resume: tasks.ResumeDrop, writes: []string{"book_files"}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
-		resume: tasks.ResumeDrop, writes: []string{"file_provenance"}, refuse: `{"apply":true}`},
+		resume: tasks.ResumeDrop, writes: []string{"book_files", "files"}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: filePathCollisionReportKind, head: func(p *Plugin) sdk.OperationDef { return p.filePathCollisionReportDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: fsRegroupKind, head: func(p *Plugin) sdk.OperationDef { return p.fsRegroupXMLDef() },
-		resume: tasks.ResumeDrop, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []string{"books", "book_files", "external_ids", "operations"}, helpReworded: true},
 	{kind: identIndexKind, head: func(p *Plugin) sdk.OperationDef { return p.identIndexRebuildDef() },
-		resume: tasks.ResumeDrop, writes: []string{"books"}},
+		resume: tasks.ResumeDrop, writes: []string{"books", "indexes"}, helpReworded: true},
 	{kind: integrityCheckKind, head: func(p *Plugin) sdk.OperationDef { return p.integrityCheckDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: introMigrateSingleFileKind, head: func(p *Plugin) sdk.OperationDef { return p.introMigrateSingleFileDef() },
-		resume: tasks.ResumeContinue, writes: []string{"book_files"}, refuse: `{"dry_run":true}`},
+		resume: tasks.ResumeFromZero, writes: []string{"book_files"}, helpReworded: true},
 	{kind: introTranscribeKind, head: func(p *Plugin) sdk.OperationDef { return p.introTranscribeDef() },
-		resume: tasks.ResumeContinue, writes: []string{"book_files", "books"}, refuse: `{"dry_run":true}`, noLive: true},
+		resume: tasks.ResumeFromZero, writes: []string{"books", "book_files"}, noLive: true, helpReworded: true},
+}
+
+// t6g4OpsResources is pkg/ops's resource vocabulary, spelled through the
+// constants so a rename or removal there breaks this file at compile time.
+var t6g4OpsResources = []ops.Resource{
+	ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResReviewItems,
+	ops.ResEmbeddings, ops.ResOperations, ops.ResCatalog, ops.ResFingerprintIndex,
+	ops.ResSettings, ops.ResActivity, ops.ResFiles, ops.ResExternalIDs, ops.ResUserState,
+	ops.ResMetadataCache, ops.ResFieldStates, ops.ResIndexes,
 }
 
 // t6g4HeadResume is rule R5's mapping of HEAD's ResumePolicy: Restart is
-// Continue, Requeue is FromZero, Drop and Ask map to themselves.
-func t6g4HeadResume(p sdk.ResumePolicy) tasks.ResumePolicy {
+// Continue only when HEAD's shell reads the checkpoint it saved (else a run from
+// zero), Requeue is FromZero, Drop and Ask map to themselves.
+func t6g4HeadResume(p sdk.ResumePolicy, headCheckpoints bool) tasks.ResumePolicy {
 	switch p {
 	case sdk.ResumeRestart:
-		return tasks.ResumeContinue
+		if headCheckpoints {
+			return tasks.ResumeContinue
+		}
+		return tasks.ResumeFromZero
 	case sdk.ResumeRequeue:
 		return tasks.ResumeFromZero
 	case sdk.ResumeAsk:
@@ -623,6 +675,33 @@ func t6g4HeadResume(p sdk.ResumePolicy) tasks.ResumePolicy {
 	default:
 		return tasks.ResumeDrop
 	}
+}
+
+// t6g4WantNotWhile derives rule R5's DependsOn mapping from HEAD's definition:
+// R3 renames each plugin-local id to "books."+id, and 05-tasks rename rule 4
+// adds the scan-full companion to a library.scan dependency (the full scan holds
+// the same stand-down; F5-13).
+func t6g4WantNotWhile(head sdk.OperationDef) []tasks.Kind {
+	var out []tasks.Kind
+	for _, id := range head.DependsOn {
+		out = append(out, tasks.Kind("books."+id))
+		if id == "library.scan" {
+			out = append(out, "books.library.scan-full")
+		}
+	}
+	return out
+}
+
+// t6g4NamesModeKey reports whether a Help text tells the operator to pass a mode
+// param the native shell refuses.
+func t6g4NamesModeKey(help string) bool {
+	h := strings.ToLower(help)
+	for _, tok := range []string{"dry_run", "dryrun", "dry-run", "apply=", "\"apply\"", "apply param", "param apply", "apply:"} {
+		if strings.Contains(h, tok) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestT6G4Kinds_MatchHEADDefs: each native kind equals "books." + HEAD's ID, and
@@ -645,18 +724,32 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			if c.Title != head.DisplayName {
 				t.Errorf("Title = %q, want HEAD's DisplayName %q", c.Title, head.DisplayName)
 			}
+			// HEAD's Description tells the operator to pass a mode param the native
+			// shell refuses; the test derives which rows that is from HEAD's own
+			// text, so the flag cannot drift from it. A native Help never names one.
+			if got := t6g4NamesModeKey(head.Description); got != w.helpReworded {
+				t.Errorf("HEAD Description names a mode param = %v, table helpReworded = %v", got, w.helpReworded)
+			}
+			if t6g4NamesModeKey(c.Help) {
+				t.Errorf("native Help still names a mode param: %q", c.Help)
+			}
 			if w.helpReworded {
-				if c.Help == "" || c.Help == head.Description || strings.Contains(strings.ToLower(c.Help), "dry-run") ||
-					strings.Contains(c.Help, "dry_run") || strings.Contains(c.Help, "dryRun") {
-					t.Errorf("Help must be set, reworded and free of dry-run params, got %q", c.Help)
+				if c.Help == "" || c.Help == head.Description {
+					t.Errorf("Help must be set and reworded, got %q", c.Help)
 				}
 			} else if c.Help != head.Description {
 				t.Errorf("Help differs from HEAD's Description")
 			}
-			if c.Resume != w.resume || c.Resume != t6g4HeadResume(head.ResumePolicy) {
-				t.Errorf("Resume = %v, table %v, mapping of HEAD's %v is %v", c.Resume, w.resume, head.ResumePolicy, t6g4HeadResume(head.ResumePolicy))
+			if wantResume := t6g4HeadResume(head.ResumePolicy, w.headCheckpoints); c.Resume != w.resume || c.Resume != wantResume {
+				t.Errorf("Resume = %v, table %v, mapping of HEAD's %v (checkpoints=%v) is %v", c.Resume, w.resume, head.ResumePolicy, w.headCheckpoints, wantResume)
 			}
 			wantTimeout := min(head.Timeout, tasks.MaxTimeout)
+			if w.timeout != 0 {
+				if head.Timeout != 0 {
+					t.Errorf("table gives an explicit timeout %v but HEAD declares %v", w.timeout, head.Timeout)
+				}
+				wantTimeout = w.timeout
+			}
 			if c.Timeout != wantTimeout || c.ProgressTimeout != head.ProgressTimeout {
 				t.Errorf("Timeout/ProgressTimeout = %v/%v, want %v/%v", c.Timeout, c.ProgressTimeout, wantTimeout, head.ProgressTimeout)
 			}
@@ -667,8 +760,8 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			if c.Priority != wantPrio {
 				t.Errorf("Priority = %v, want %v", c.Priority, wantPrio)
 			}
-			if !slices.Equal(c.NotWhile, w.notWhile) {
-				t.Errorf("NotWhile = %v, want %v", c.NotWhile, w.notWhile)
+			if want := t6g4WantNotWhile(head); !slices.Equal(c.NotWhile, want) || (len(want) > 0) != w.hasDependsOn {
+				t.Errorf("NotWhile = %v, want %v derived from HEAD's DependsOn %v", c.NotWhile, want, head.DependsOn)
 			}
 			if !slices.Equal(c.Ready, []tasks.ReadySignal{t6g4SignalMemDB}) {
 				t.Errorf("Ready = %v, want [%s]", c.Ready, t6g4SignalMemDB)
@@ -679,8 +772,17 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			if c.Schedule != nil {
 				t.Errorf("Schedule = %v with a nil hook, want none", c.Schedule)
 			}
-			if got := t6g4WriteKinds(c.Effects); w.readOnly != c.Effects.IsReadOnly() || !slices.Equal(got, w.writes) {
-				t.Errorf("Effects: readOnly=%v writes=%v, want readOnly=%v writes=%v", c.Effects.IsReadOnly(), got, w.readOnly, w.writes)
+			want := slices.Clone(w.writes)
+			slices.Sort(want)
+			if got := t6g4WriteKinds(c.Effects); w.readOnly != c.Effects.IsReadOnly() || !slices.Equal(got, want) {
+				t.Errorf("Effects: readOnly=%v writes=%v, want readOnly=%v writes=%v", c.Effects.IsReadOnly(), got, w.readOnly, want)
+			}
+			// Every declared name (reads included) is a pkg/ops resource constant:
+			// the vocabulary is closed, a new name is a Review decision, not a coin.
+			for _, r := range append(c.Effects.WriteSet(), c.Effects.ReadSet()...) {
+				if !slices.Contains(t6g4OpsResources, ops.Resource(r.Kind)) {
+					t.Errorf("Effects name %q, which is not a pkg/ops resource constant", r.Kind)
+				}
 			}
 			if head.ID != string(w.kind)[len("books."):] {
 				t.Errorf("table kind %s is not books.<HEAD ID %s>", w.kind, head.ID)
@@ -745,24 +847,12 @@ func t6g4RunSafely(t *testing.T, d tasks.Definition, rc *tasks.RC, params string
 
 // TestT6G4Kinds_WritesThroughShell: for every kind whose Effects declare writes,
 // one Live run shows NewWriter called once with that run's rc.Writer() (rule R10);
-// a Preview run of a kind never builds a write that reaches the writer, a
-// Live-only kind refuses a Preview run by name, and every kind refuses the mode
-// key its HEAD params carried.
+// a Preview run of a kind never builds a write that reaches the writer, and a
+// Live-only kind refuses a Preview run by name. The mode-key refusal has its own
+// test, TestT6G4Kinds_RefuseModeKeys.
 func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 	for _, w := range t6g4Expected {
 		t.Run(string(w.kind), func(t *testing.T) {
-			if w.refuse != "" {
-				deps, pr := fakeT6G4Deps(t)
-				def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
-				_, rc := newT6G4RC(w.kind, tasks.ModeLive, &t6g4RunWriter{})
-				err := t6g4RunSafely(t, def, rc, w.refuse)
-				if err == nil || !strings.Contains(err.Error(), "not accepted") {
-					t.Errorf("params %s: err = %v, want a refusal naming the key", w.refuse, err)
-				}
-				if pr.newWriterCalls != 0 {
-					t.Errorf("a refused run built a writer")
-				}
-			}
 			if w.readOnly {
 				return
 			}
@@ -783,7 +873,7 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 				_, rc := newT6G4RC(w.kind, tasks.ModePreview, &t6g4RunWriter{})
 				_ = t6g4RunSafely(t, def, rc, "")
 				for _, c := range pr.store.rec.all() {
-					if t6g4WriterCalls[c] {
+					if t6g4WriterCalls(c) {
 						t.Errorf("a Preview run made the write %s", c)
 					}
 				}
@@ -806,24 +896,185 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 			if pr.newWriterCalls != 1 || pr.handed != tasks.Writer(run) {
 				t.Errorf("NewWriter called %d time(s) with %v, want once with this run's rc.Writer()", pr.newWriterCalls, pr.handed)
 			}
+			t6g4CheckRecordedWritesDeclared(t, def, pr)
 		})
 	}
 }
 
-// t6g4WriterCalls is the set of method names recT6G4Writer records, so a test
-// can tell a write from a store read in the shared call record.
-var t6g4WriterCalls = map[string]bool{}
-
-func init() {
-	for _, n := range []string{
-		"AppendFileEvent", "CarryOverFingerprintWindows", "ClearBookFileIntro", "ClearIntroTimeouts",
-		"CreateBookFile", "CreateOperationChange", "DedupTriageApply", "DeleteBookFilesByIDs",
-		"MarkOperationChangesReverted", "ModifyBook", "ModifyBookFileDeferAggregates", "MoveBookFilesToBookBulk",
-		"PutFileIntroStats", "PutTranscribeStats", "ReassignExternalID", "RebuildIdentIndex", "RecordIntroTimeout",
-		"SetBookFileHash", "SetBookFileIntro", "SetFileProvExportCursor", "UpdateBookFile", "UpdateBookFiles",
-	} {
-		t6g4WriterCalls[n] = true
+// TestT6G4Kinds_RefuseModeKeys: every native WRITING kind refuses each of the
+// three mode keys HEAD's params carried (dry_run, dryRun, apply), in any letter
+// case and with any value, null included, through the real decode path and
+// before it builds a writer. The mode of a native run is the start request's,
+// so a param that asks for another would be a silent override.
+func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
+	keys := [][]string{
+		{"dry_run", "DRY_RUN", "Dry_Run"},
+		{"dryRun", "DRYRUN", "dryrun"},
+		{"apply", "Apply", "APPLY"},
 	}
+	refused := 0
+	for _, w := range t6g4Expected {
+		if w.readOnly {
+			continue
+		}
+		t.Run(string(w.kind), func(t *testing.T) {
+			for _, spellings := range keys {
+				for i, key := range spellings {
+					values := []string{"true"}
+					if i == 0 {
+						values = []string{"true", "false", "null"}
+					}
+					for _, v := range values {
+						body := fmt.Sprintf(`{%q:%s}`, key, v)
+						deps, pr := fakeT6G4Deps(t)
+						def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
+						_, rc := newT6G4RC(w.kind, tasks.ModeLive, &t6g4RunWriter{})
+						err := t6g4RunSafely(t, def, rc, body)
+						if err == nil || !strings.Contains(err.Error(), "the "+spellings[0]+" param is not accepted") {
+							t.Errorf("params %s: err = %v, want a refusal naming the key", body, err)
+						}
+						if pr.newWriterCalls != 0 || len(pr.store.rec.all()) != 0 {
+							t.Errorf("params %s: a refused run built a writer or touched the store: %v", body, pr.store.rec.all())
+						}
+						refused++
+					}
+				}
+			}
+		})
+	}
+	// 12 writing kinds x (3 values for the first spelling + 1 each for the other
+	// two) x 3 keys: a kind dropping out of the table would shrink this.
+	if want := 12 * 3 * (3 + 1 + 1); refused != want {
+		t.Errorf("exercised %d refusals, want %d (12 writing kinds x 3 keys x 5 spellings/values)", refused, want)
+	}
+}
+
+// t6g4WriterResource is the spy's method-to-resource map: for every method of
+// t6g4Writer, the pkg/ops resource a call to it writes. A "" value marks a store
+// with no pkg/ops constant (stats rows and the whisper result journal), which
+// no Effects can name; those are listed in the PR's Review decisions. The map
+// is the oracle of TestT6G4Kinds_EffectsCoverRecordedWrites, so it is compared
+// against the real interface by reflection and against the vocabulary by name.
+var t6g4WriterResource = map[string]ops.Resource{
+	"AppendFileEvent":               ops.ResBookFiles, // the provenance ledger has no constant
+	"CarryOverFingerprintWindows":   ops.ResFingerprintIndex,
+	"ClearBookFileIntro":            ops.ResBookFiles,
+	"ClearIntroTimeouts":            ops.ResBookFiles,
+	"CreateBookFile":                ops.ResBookFiles,
+	"CreateOperationChange":         ops.ResOperations,
+	"DedupTriageApply":              ops.ResEmbeddings,
+	"DeleteBookFilesByIDs":          ops.ResBookFiles,
+	"MarkOperationChangesReverted":  ops.ResOperations,
+	"ModifyBook":                    ops.ResBooks,
+	"ModifyBookFileDeferAggregates": ops.ResBookFiles,
+	"MoveBookFilesToBookBulk":       ops.ResBookFiles,
+	"OpenWhisperJournal":            "",
+	"PutFileIntroStats":             "",
+	"PutTranscribeStats":            "",
+	"ReassignExternalID":            ops.ResExternalIDs,
+	"RebuildIdentIndex":             ops.ResIndexes,
+	"RecomputeBookAggregates":       ops.ResBooks,
+	"RecordIntroTimeout":            ops.ResBookFiles,
+	"SetBookFileHash":               ops.ResBookFiles,
+	"SetBookFileIntro":              ops.ResBookFiles,
+	"SetFileProvExportCursor":       ops.ResBookFiles, // the export cursor belongs to the provenance ledger
+	"SubmitAuthorDedupJob":          ops.ResReviewItems,
+	"UpdateBookFile":                ops.ResBookFiles,
+	"UpdateBookFiles":               ops.ResBookFiles,
+}
+
+// t6g4WriterCalls tells a write from a store read in the shared call record.
+func t6g4WriterCalls(name string) bool { _, ok := t6g4WriterResource[name]; return ok }
+
+// TestT6G4Kinds_WriterSpyMapCoversInterface: every method of t6g4Writer has a
+// spy mapping, so a writer method added without one fails here rather than
+// slipping past the recorded-writes check; every mapped name is a real method
+// and a pkg/ops resource (or the explicit "" for no constant).
+func TestT6G4Kinds_WriterSpyMapCoversInterface(t *testing.T) {
+	iface := reflect.TypeOf((*t6g4Writer)(nil)).Elem()
+	seen := map[string]bool{}
+	for i := 0; i < iface.NumMethod(); i++ {
+		name := iface.Method(i).Name
+		seen[name] = true
+		if _, ok := t6g4WriterResource[name]; !ok {
+			t.Errorf("t6g4Writer.%s has no entry in t6g4WriterResource", name)
+		}
+	}
+	for name, res := range t6g4WriterResource {
+		if !seen[name] {
+			t.Errorf("t6g4WriterResource names %s, which is not a t6g4Writer method", name)
+		}
+		if res != "" && !slices.Contains(t6g4OpsResources, res) {
+			t.Errorf("%s maps to %q, not a pkg/ops resource", name, res)
+		}
+	}
+}
+
+// t6g4CheckRecordedWritesDeclared asserts the resources of the writer calls a
+// run RECORDED are a subset of the kind's declared WriteSet: the declaration
+// is checked against what the code did, not against a second typed table.
+func t6g4CheckRecordedWritesDeclared(t *testing.T, def tasks.Definition, pr *t6g4Probe) {
+	t.Helper()
+	declared := map[string]bool{}
+	for _, r := range tasks.CommonOf(def).Effects.WriteSet() {
+		declared[r.Kind] = true
+	}
+	for _, r := range t6g4RecordedResources(t, pr.store.rec.all()) {
+		if !declared[r] {
+			t.Errorf("%s recorded a write to %q, which its Effects do not declare (declared %v)", def.Kind(), r, t6g4WriteKinds(tasks.CommonOf(def).Effects))
+		}
+	}
+}
+
+// TestT6G4FSRegroup_LiveApplyNeedsScanStandDown (review M11): a live fs-regroup
+// apply with no scan stand-down service refuses by name and writes nothing; a
+// preview needs none and runs; with the service present the live run is not
+// refused for its absence.
+func TestT6G4FSRegroup_LiveApplyNeedsScanStandDown(t *testing.T) {
+	run := func(t *testing.T, mode tasks.Mode, withScan bool) (*t6g4Probe, error) {
+		deps, pr := fakeT6G4Deps(t)
+		if !withScan {
+			deps.Scan = nil
+		}
+		def := t6g4KindByName(t, t6g4Kinds(deps, nil), fsRegroupKind)
+		_, rc := newT6G4RC(fsRegroupKind, mode, &t6g4RunWriter{})
+		return pr, t6g4RunSafely(t, def, rc, "")
+	}
+	pr, err := run(t, tasks.ModeLive, false)
+	if err == nil || !strings.Contains(err.Error(), "Scan is not set") {
+		t.Errorf("live apply with no Scan: err = %v, want a refusal naming t6g4Deps.Scan", err)
+	}
+	if got := t6g4RecordedResources(t, pr.store.rec.all()); len(got) != 0 {
+		t.Errorf("the refused live apply wrote %v", got)
+	}
+	if _, err := run(t, tasks.ModePreview, false); err != nil && strings.Contains(err.Error(), "Scan is not set") {
+		t.Errorf("a preview must not need the scan stand-down, got %v", err)
+	}
+	if _, err := run(t, tasks.ModeLive, true); err != nil && strings.Contains(err.Error(), "Scan is not set") {
+		t.Errorf("a live apply with Scan set was refused for its absence: %v", err)
+	}
+}
+
+// t6g4RecordedResources maps the writer calls a run recorded to the resources
+// they wrote, failing the test on a method the spy map does not know.
+func t6g4RecordedResources(t *testing.T, calls []string) []string {
+	t.Helper()
+	set := map[string]bool{}
+	for _, c := range calls {
+		res, ok := t6g4WriterResource[c]
+		if !ok {
+			continue // a store read, not a writer call
+		}
+		if res != "" {
+			set[string(res)] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for r := range set {
+		out = append(out, r)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // t6g4WriteScenarios holds a stricter Live-run scenario for a kind, replacing the
@@ -884,6 +1135,7 @@ func init() {
 		if got := pr.store.rec.all(); !slices.Equal(got, []string{"RebuildIdentIndex"}) {
 			t.Errorf("calls = %v, want the rebuild through the writer only", got)
 		}
+		t6g4CheckRecordedWritesDeclared(t, def, pr)
 	}
 }
 
@@ -903,3 +1155,16 @@ func TestIdentIndexKind_PreviewVerifiesAndNeverRebuilds(t *testing.T) {
 // which is an external test package (it imports internal/books, which imports
 // this package).
 func T6G4StartRequirement() rbac.Requirement { return t6g4StartRequirement() }
+
+// T6G4KindStarts returns every native kind of the group with the Start
+// requirement it declares (tasks.CommonOf(d).Perms.Start), for the external atoms
+// test: asserting on the shared constructor alone would not catch a kind that
+// stopped using it.
+func T6G4KindStarts(t *testing.T) map[tasks.Kind]rbac.Requirement {
+	deps, _ := fakeT6G4Deps(t)
+	out := map[tasks.Kind]rbac.Requirement{}
+	for _, d := range t6g4Kinds(deps, nil) {
+		out[d.Kind()] = tasks.CommonOf(d).Perms.Start
+	}
+	return out
+}
