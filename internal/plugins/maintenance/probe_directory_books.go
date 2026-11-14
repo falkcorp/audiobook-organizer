@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
 // last-edited: 2026-11-14
 
@@ -495,7 +495,7 @@ func probeDirectoryBooksCore(ctx context.Context, limit int, env probeDirectoryB
 	return nil
 }
 
-// probeAll runs the folder-level worker pool, writing each folder's probes and
+// t6g6ProbeAllVia runs the folder-level worker pool, writing each folder's probes and
 // verdict back into candidates[i] in place.
 //
 // Writing through the index (rather than RunItems' by-value item) is why this is
@@ -503,18 +503,6 @@ func probeDirectoryBooksCore(ctx context.Context, limit int, env probeDirectoryB
 // ever touch the same element, so the in-place writes need no lock. That
 // partitioning is the same discipline CLAUDE.md requires of any parallel apply
 // path — disjoint sets, stated explicitly.
-func probeAll(
-	ctx context.Context,
-	reporter sdk.Reporter,
-	ffprobePath string,
-	candidates []probeCandidate,
-	doneFolders *atomic.Int64,
-	totalFolders int,
-) error {
-	return t6g6ProbeAllVia(ctx, probeDirectoryBooksEnv{t6g6Env: t6g6HeadEnv(reporter, true)}, ffprobePath, candidates, doneFolders, totalFolders)
-}
-
-// t6g6ProbeAllVia is probeAll over the env's pool and progress hook.
 func t6g6ProbeAllVia(
 	ctx context.Context,
 	env probeDirectoryBooksEnv,

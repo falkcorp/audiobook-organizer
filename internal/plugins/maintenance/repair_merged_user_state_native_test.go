@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_merged_user_state_native_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3c9d2e71-6b04-4a58-9f1e-7d2b8a5c4e30
 // last-edited: 2026-11-14
 
@@ -163,7 +163,7 @@ func (s t6g6UserStateStore) UserStateBookmarkReads() (t6g6BookmarkReads, bool) {
 // recorder (and is within the declared WriteSet), and a Preview run writes
 // nothing at all.
 func TestT6G6More_RepairMergedThroughShell(t *testing.T) {
-	gate := &gateWriter6{name: "gotham"}
+	gate := &t6g6GateWriter{name: "gotham"}
 	build := func(t *testing.T) (*t6g6Probe, database.Store, string, string, string, tasks.Definition) {
 		store, userID, winnerID, loserID := strandedFixture(t)
 		pebble, ok := store.(*database.PebbleStore)

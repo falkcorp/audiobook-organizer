@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 7830431a-11dc-4bee-97c0-82047798cb98
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -67,7 +67,7 @@ func TestPlanOrphanRepoints_ClassifiesAndNeverWrites(t *testing.T) {
 		{ID: "o-merge", BookID: "ghost-merged", FilePath: "/elsewhere/m.mp3"},
 		{ID: "o-none", BookID: "ghost-3", FilePath: "/nowhere/n.mp3"},
 	}
-	plan, err := planOrphanRepoints(context.Background(), store, orphans)
+	plan, err := t6g6PlanOrphanRepointsVia(context.Background(), store, orphans, t6g6ErrgroupItems)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,9 +127,9 @@ func TestPlanOrphanRepoints_DuplicateSeenWhenIndexNamesTheOrphan(t *testing.T) {
 		t.Fatalf("fixture is vacuous: single index names %+v, want orphan-row", hit)
 	}
 
-	plan, err := planOrphanRepoints(context.Background(), store, []database.BookFileCore{
+	plan, err := t6g6PlanOrphanRepointsVia(context.Background(), store, []database.BookFileCore{
 		{ID: "orphan-row", BookID: ghost.ID, FilePath: "/lib/D/01.mp3"},
-	})
+	}, t6g6ErrgroupItems)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,10 +145,10 @@ func TestPlanOrphanRepoints_SameFileTwiceIsPlannedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planOrphanRepoints(context.Background(), store, []database.BookFileCore{
+	plan, err := t6g6PlanOrphanRepointsVia(context.Background(), store, []database.BookFileCore{
 		{ID: "o1", BookID: "ghost-a", FilePath: "/lib/E/01.mp3"},
 		{ID: "o2", BookID: "ghost-b", FilePath: "/lib/E/01.mp3"},
-	})
+	}, t6g6ErrgroupItems)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,9 +167,9 @@ func TestPlanOrphanRepoints_SkipsPathOwnerWhenAtPathIndexUnbuilt(t *testing.T) {
 	if _, err := store.CreateBook(&database.Book{Title: "Dir", FilePath: "/lib/F"}); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planOrphanRepoints(context.Background(), store, []database.BookFileCore{
+	plan, err := t6g6PlanOrphanRepointsVia(context.Background(), store, []database.BookFileCore{
 		{ID: "o1", BookID: "ghost", FilePath: "/lib/F/01.mp3"},
-	})
+	}, t6g6ErrgroupItems)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,10 +187,10 @@ func TestPlanOrphanRepoints_RetiredOrphansAreExcludedAndCounted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planOrphanRepoints(context.Background(), store, []database.BookFileCore{
+	plan, err := t6g6PlanOrphanRepointsVia(context.Background(), store, []database.BookFileCore{
 		{ID: "live-orphan", BookID: "ghost-a", FilePath: "/lib/Gotham/R/01.mp3"},
 		{ID: "retired-orphan", BookID: "ghost-b", FilePath: "/lib/Gotham/R/02.mp3", Retired: true},
-	})
+	}, t6g6ErrgroupItems)
 	if err != nil {
 		t.Fatal(err)
 	}

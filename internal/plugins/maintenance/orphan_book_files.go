@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -99,12 +99,6 @@ type orphanBookFilesCleanupEnv struct {
 	Store orphanBookFilesCleanupStore
 }
 
-// orphanBookFilesCleanupParallelism is the op's concurrency. HEAD declared none
-// and the scan is one pass of set differences.
-func orphanBookFilesCleanupParallelism() tasks.Parallelism {
-	return tasks.Sequential("HEAD declared no concurrency; the scan is one pass of set differences over the book_file and book lists")
-}
-
 // orphanBookFilesCleanupNative is the native kind. It only reports, so it is
 // ReadOnly and its Preview and Live runs are the same.
 func (p *Plugin) orphanBookFilesCleanupNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
@@ -157,7 +151,7 @@ func orphanBookFilesCleanupCore(ctx context.Context, params OrphanBookFilesClean
 	return nil
 }
 
-// findOrphanBookFiles returns every BookFile whose BookID does not match any
+// t6g6FindOrphanBookFilesVia returns every BookFile whose BookID does not match any
 // book that could still own it. Returns the orphan slice, the total number of
 // book_files scanned, and the number of owning book IDs considered.
 //
@@ -178,23 +172,8 @@ func orphanBookFilesCleanupCore(ctx context.Context, params OrphanBookFilesClean
 // for this scan and the one it reports.
 //
 // This is the testable core of runOrphanBookFilesCleanup and of the repoint
-// plan. It never deletes anything, and no caller does any more.
-func findOrphanBookFiles(ctx context.Context, store orphanFileScanner) (orphans []database.BookFileCore, totalFiles int, ownerCount int, err error) {
-	return t6g6FindOrphanBookFilesVia(ctx, t6g6OrphanScanShim{store})
-}
-
-// t6g6OrphanScanShim gives an orphanFileScanner the retired-inclusive file list
-// the Via scan reads: database.AllBookFilesCoreIncludingRetired over the store,
-// which sees through decorators.
-type t6g6OrphanScanShim struct{ orphanFileScanner }
-
-func (s t6g6OrphanScanShim) AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
-	return database.AllBookFilesCoreIncludingRetired(s.orphanFileScanner)
-}
-
-// t6g6FindOrphanBookFilesVia is findOrphanBookFiles over the reads the shell
-// hands the core (see it for what the scan decides and why each read fails
-// closed).
+// plan, over the reads the shell hands the core. It never deletes anything,
+// and no caller does any more.
 func t6g6FindOrphanBookFilesVia(ctx context.Context, store orphanBookFilesCleanupStore) (orphans []database.BookFileCore, totalFiles int, ownerCount int, err error) {
 	if ctx.Err() != nil {
 		return nil, 0, 0, ctx.Err()

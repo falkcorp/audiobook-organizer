@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/probe_directory_books_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 4a71c9e6-2b58-4d03-8f19-7c6e0b2a5d84
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -304,7 +304,7 @@ func TestProbeAll_ParallelWritesAreIndexPartitioned(t *testing.T) {
 
 	var done atomic.Int64
 	rep := &concurrentReporter{}
-	if err := probeAll(context.Background(), rep, "ffprobe", cands, &done, len(cands)); err != nil {
+	if err := t6g6ProbeAllVia(context.Background(), probeDirectoryBooksEnv{t6g6Env: t6g6HeadEnv(rep, true)}, "ffprobe", cands, &done, len(cands)); err != nil {
 		t.Fatalf("probeAll: %v", err)
 	}
 

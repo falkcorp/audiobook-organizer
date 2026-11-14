@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -123,31 +123,56 @@ type optimizeEnv struct {
 	t6g6Env
 	// Enqueue starts a child op by HEAD def ID and returns its run id.
 	Enqueue func(ctx context.Context, defID string, params any) (string, error)
+	// Deadline is this attempt's deadline (rc.Deadline); nil in a HEAD shell,
+	// which never yields. Together with the env's Checkpoint and Restore it lets a
+	// native sweep end the attempt between children and resume where it stopped.
+	Deadline func() time.Time
 	// Wait blocks until the child ends. relay is HEAD's progress relay, which
 	// feeds this op's watchdog from the child's observations; the native wait
 	// ignores it (rc.Await relays the child's liveness itself).
 	Wait func(ctx context.Context, childID string, relay func(childop.Observation)) error
 }
 
-// optimizeParallelism is the op's concurrency: the children run one after the
-// other.
-func optimizeParallelism() tasks.Parallelism {
-	return tasks.Sequential("HEAD declared no concurrency; the sweep runs its child ops one after the other")
+// optimizeTotalBudget is HEAD's Timeout for the whole sweep. The native kind's
+// attempt is capped at tasks.MaxTimeout (24h), so a sweep that outlives one
+// attempt yields between children and the resumed attempts share this budget.
+const optimizeTotalBudget = 36 * time.Hour
+
+// optimizeYieldMargin is how close to the attempt's deadline the sweep stops
+// starting children and yields instead (the kernel's own YieldMargin).
+const optimizeYieldMargin = 5 * time.Minute
+
+// optimizeCheckpoint is what a yielding attempt saves: when the sweep began
+// (the 36h budget runs from it, across attempts) and the children it has already
+// finished, by name (the child list depends on config flags that can change
+// between attempts, so an index would not be stable).
+type optimizeCheckpoint struct {
+	StartedAt time.Time `json:"started_at"`
+	Finished  []string  `json:"finished"`
+	Completed int       `json:"completed"`
+	Failed    int       `json:"failed"`
 }
 
 // optimizeNative is the native kind. The sweep writes nothing itself (its
 // children do), so it is declared ReadOnly. HEAD has no preview and a Preview
 // run would start live children, so a Preview run is refused.
+//
+// Resume is ResumeContinue, a deviation from rule R5's mapping of HEAD's
+// ResumeDrop: the executor only honours ErrContinueInPlace for a ResumeContinue
+// kind, and the kind needs it to keep HEAD's 36h total under the kernel's 24h
+// attempt cap. HEAD never checkpointed, so a crash (as opposed to a yield)
+// resumes with no checkpoint and starts the sweep over, which is what Drop did.
 func (p *Plugin) optimizeNative(_ t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g6Common(optimizeKind, sched)
 	c.Title = "Library optimize sweep"
 	c.Help = optimizeHelp
 	c.Effects = tasks.ReadOnly()
-	c.Resume = tasks.ResumeDrop
+	c.Resume = tasks.ResumeContinue
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.maintenance.library-optimize")
-	// The kernel refuses a Timeout over tasks.MaxTimeout (24h); HEAD's def keeps
-	// its 36h, so the native kind runs under the cap until F5-18 retires the def.
+	// The kernel refuses a Timeout over tasks.MaxTimeout (24h). HEAD's 36h is kept
+	// as optimizeTotalBudget across attempts: the sweep yields between children
+	// before the attempt's deadline (optimizeYieldMargin) and resumes.
 	c.Timeout = tasks.MaxTimeout
 	c.ProgressTimeout = optimizeProgressTimeout
 	return tasks.Task(optimizeKind, tasks.TaskSpec[struct{}, struct{}]{
@@ -157,7 +182,8 @@ func (p *Plugin) optimizeNative(_ t6g6Deps, sched func(tasks.Kind) *tasks.Schedu
 				return struct{}{}, err
 			}
 			env := optimizeEnv{
-				t6g6Env: t6g6NativeEnv(rc),
+				t6g6Env:  t6g6NativeEnv(rc),
+				Deadline: rc.Deadline,
 				Enqueue: func(_ context.Context, defID string, params any) (string, error) {
 					ref, err := rc.Enqueue(t6g6KindFor(defID), params)
 					return string(ref.ID), err
@@ -261,11 +287,56 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 	total := len(children)
 	completed := 0
 	failed := 0
+	finished := map[string]bool{}
+	var finishedOrder []string
+
+	// A resumed native attempt carries on from the children the yielding attempt
+	// finished, under the one 36h budget measured from the sweep's first start.
+	if env.Restore != nil {
+		var cp optimizeCheckpoint
+		ok, err := env.Restore(&cp)
+		if err != nil {
+			return fmt.Errorf("restore optimize checkpoint: %w", err)
+		}
+		if ok {
+			if !cp.StartedAt.IsZero() {
+				start = cp.StartedAt
+			}
+			if time.Since(start) >= optimizeTotalBudget {
+				return fmt.Errorf("optimize sweep exceeded its %s budget across attempts", optimizeTotalBudget)
+			}
+			completed, failed = cp.Completed, cp.Failed
+			for _, name := range cp.Finished {
+				finished[name] = true
+			}
+			finishedOrder = append(finishedOrder, cp.Finished...)
+			env.Log(slog.LevelInfo, fmt.Sprintf("Resuming optimize sweep: %d/%d children already finished", len(cp.Finished), total))
+		}
+	}
+	finishedThisAttempt := 0
 
 	prog := t6g6NewProgress(env.t6g6Env, total)
 	prog.Start("Starting optimize sweep...")
 
 	for i, ch := range children {
+		if finished[ch.name] {
+			prog.StepN(i+1, fmt.Sprintf("Child %d/%d: %s already finished", i+1, total, ch.name))
+			continue
+		}
+		// Yield between children when the attempt is about to run out: a child
+		// already in flight cannot be interrupted (rc.Await takes no context), so
+		// this is the only point the sweep can hand the attempt back. At least one
+		// child must have finished in this attempt, or the resumed attempt would
+		// make no progress and yield again at once.
+		if env.Deadline != nil && env.Checkpoint != nil && finishedThisAttempt > 0 {
+			if dl := env.Deadline(); !dl.IsZero() && time.Until(dl) < optimizeYieldMargin {
+				if cpErr := env.Checkpoint(optimizeCheckpoint{StartedAt: start, Finished: finishedOrder, Completed: completed, Failed: failed}); cpErr != nil {
+					return fmt.Errorf("checkpoint optimize sweep: %w", cpErr)
+				}
+				env.Log(slog.LevelInfo, fmt.Sprintf("Optimize sweep yielding before child %d/%d: attempt deadline near", i+1, total))
+				return tasks.ErrContinueInPlace
+			}
+		}
 		if env.Canceled() {
 			logger.InfoCtx(ctx, "maintenance.library-optimize: sweep canceled",
 				"operation_id", opID,
@@ -307,6 +378,9 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 			env.Log(slog.LevelWarn,
 				fmt.Sprintf("Child %s enqueue failed (skipping): %v", ch.name, err))
 			failed++
+			finished[ch.name] = true
+			finishedOrder = append(finishedOrder, ch.name)
+			finishedThisAttempt++
 			continue
 		}
 
@@ -330,6 +404,12 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 			env.Log(slog.LevelWarn,
 				fmt.Sprintf("Child %s failed (continuing): %v", ch.name, waitErr))
 			failed++
+			finished[ch.name] = true
+			finishedOrder = append(finishedOrder, ch.name)
+			finishedThisAttempt++
+			if env.Deadline != nil { // native only: HEAD reports nothing after a child ends
+				prog.StepN(i+1, fmt.Sprintf("Child %d/%d: %s failed", i+1, total, ch.name))
+			}
 			continue
 		}
 
@@ -343,6 +423,12 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 		env.Log(slog.LevelInfo,
 			fmt.Sprintf("Child %s completed in %s", ch.name, elapsed.Round(time.Second)))
 		completed++
+		finished[ch.name] = true
+		finishedOrder = append(finishedOrder, ch.name)
+		finishedThisAttempt++
+		if env.Deadline != nil { // native only: HEAD reports nothing after a child ends
+			prog.StepN(i+1, fmt.Sprintf("Child %d/%d: %s done", i+1, total, ch.name))
+		}
 	}
 
 	totalElapsed := time.Since(start)

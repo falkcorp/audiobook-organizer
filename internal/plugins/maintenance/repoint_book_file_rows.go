@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.5.3
+// version: 1.5.4
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
 // last-edited: 2026-11-14
 
@@ -362,12 +362,6 @@ func repointBookFileRows(ctx context.Context, env rbfEnv, params rbfParams, repo
 
 // rbfKind is rule R3's kind for the def above.
 const rbfKind = tasks.Kind("books." + rbfOpID)
-
-// rbfParallelism is the op's concurrency: HEAD declared none and runs the
-// hand-picked list sequentially.
-func rbfParallelism() tasks.Parallelism {
-	return tasks.Sequential("the list is hand-picked and small (rbfMaxRepoints); the one whole-library read is the claim pass, done once per phase")
-}
 
 // rbfNativeStore is the rbfStore a native run hands the core: planning reads
 // from the store, and every write goes through the run's gated writer.

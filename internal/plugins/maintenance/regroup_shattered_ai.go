@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.14.2
+// version: 1.14.3
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
 // last-edited: 2026-11-14
 
@@ -391,7 +391,7 @@ func regroupShatteredAICore(ctx context.Context, limit int, dryRun bool, env reg
 	// applied), so those are reported as already-decided, not as would-upsert.
 	var decided map[string]struct{}
 	if dryRun {
-		decided = decidedRegroupHoldsVia(store, logf)
+		decided = t6g6DecidedRegroupHoldsVia(store, logf)
 	}
 	for i := range groups {
 		if ctx.Err() != nil {
@@ -452,7 +452,7 @@ func regroupShatteredAICore(ctx context.Context, limit int, dryRun bool, env reg
 	var result string
 	purgeSkipped := false
 	if dryRun {
-		stale := staleRegroupHoldsVia(store, logf, groups, params.Limit)
+		stale := t6g6StaleRegroupHoldsVia(store, logf, groups, params.Limit)
 		samples := make([]string, 0, regroupPreviewSamples)
 		for i := range stale {
 			if i >= regroupPreviewSamples {
@@ -473,7 +473,7 @@ func regroupShatteredAICore(ctx context.Context, limit int, dryRun bool, env reg
 		// was stale", so the result says the purge did not run and the op fails below.
 		purgeField := ""
 		if env.Purger != nil {
-			purgeField = fmt.Sprintf("stale-purged=%d", reconcileStaleHoldsVia(ctx, env.Purger, logf, groups, params.Limit))
+			purgeField = fmt.Sprintf("stale-purged=%d", t6g6ReconcileStaleHoldsVia(ctx, env.Purger, logf, groups, params.Limit))
 		} else {
 			purgeSkipped = true
 			purgeField = "stale-purge SKIPPED (store lacks conditional delete)"
@@ -505,7 +505,7 @@ func regroupShatteredAICore(ctx context.Context, limit int, dryRun bool, env reg
 // exceeds any realistic regroup hold population (intentional holds only).
 const reconcileScanLimit = 100_000
 
-// reconcileStaleHolds deletes PENDING regroup.* holds whose DedupKey is not in the set
+// t6g6ReconcileStaleHoldsVia deletes PENDING regroup.* holds whose DedupKey is not in the set
 // this run emitted, returning the number purged. Returns 0 (a no-op) when limit > 0 (a
 // canary run emits only a subset, so purging the rest would be wrong). It never touches
 // non-regroup holds (another producer's rows) or human-decided holds: the list is a
@@ -515,19 +515,8 @@ const reconcileScanLimit = 100_000
 // bounded (intentional holds only), each delete is a cheap local Pebble write, and the
 // delete and UpsertReviewItem share one mutex, so a worker pool would only add
 // contention.
-func reconcileStaleHolds(ctx context.Context, store reviewHoldStore, reporter sdk.Reporter, groups []itunesservice.RegroupGroup, limit int) int {
-	return reconcileStaleHoldsVia(ctx, store, t6g6ReporterLogf(reporter), groups, limit)
-}
-
-// t6g6ReporterLogf is HEAD's `_ = reporter.Log(level, msg)` as the log hook the
-// Via helpers take.
-func t6g6ReporterLogf(reporter sdk.Reporter) func(slog.Level, string) {
-	return func(level slog.Level, msg string) { _ = reporter.Log(level, msg) }
-}
-
-// reconcileStaleHoldsVia is reconcileStaleHolds with the log as a hook.
-func reconcileStaleHoldsVia(ctx context.Context, store reviewHoldStore, logf func(slog.Level, string), groups []itunesservice.RegroupGroup, limit int) int {
-	stale := staleRegroupHoldsVia(store, logf, groups, limit)
+func t6g6ReconcileStaleHoldsVia(ctx context.Context, store reviewHoldStore, logf func(slog.Level, string), groups []itunesservice.RegroupGroup, limit int) int {
+	stale := t6g6StaleRegroupHoldsVia(store, logf, groups, limit)
 	purged := 0
 	for _, it := range stale {
 		if ctx.Err() != nil {
@@ -550,12 +539,12 @@ func reconcileStaleHoldsVia(ctx context.Context, store reviewHoldStore, logf fun
 // regroupPreviewSamples bounds the example holds a preview names in its log.
 const regroupPreviewSamples = 5
 
-// staleRegroupHoldsVia is the READ half of the reconcile: the PENDING regroup.* holds
+// t6g6StaleRegroupHoldsVia is the READ half of the reconcile: the PENDING regroup.* holds
 // whose DedupKey is not in the set this run emitted. It deletes nothing, so a preview
 // calls it to report what a live run would purge and reconcileStaleHolds deletes
 // exactly this list. Nil when limit > 0 (a canary run emits a subset) or when the
 // pending list cannot be read (logged through logf).
-func staleRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string), groups []itunesservice.RegroupGroup, limit int) []database.ReviewItem {
+func t6g6StaleRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string), groups []itunesservice.RegroupGroup, limit int) []database.ReviewItem {
 	if limit > 0 {
 		return nil
 	}
@@ -584,12 +573,12 @@ func staleRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string),
 	return stale
 }
 
-// decidedRegroupHoldsVia returns the DedupKeys of regroup.* holds whose status is
+// t6g6DecidedRegroupHoldsVia returns the DedupKeys of regroup.* holds whose status is
 // not pending: the ones UpsertReviewItem leaves untouched. One full scan of the
 // review queue (the status index has no "not pending" scan, and a new decided
 // status must not be missed). On a read error it logs and returns nil, so the
 // preview counts every group as would-upsert, as it did before this check.
-func decidedRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string)) map[string]struct{} {
+func t6g6DecidedRegroupHoldsVia(store reviewHoldLister, logf func(slog.Level, string)) map[string]struct{} {
 	items, total, err := store.ListReviewItems(database.ReviewFilter{Limit: reconcileScanLimit})
 	if err != nil {
 		logf(slog.LevelWarn, fmt.Sprintf("preview: list review items: %v; already-decided holds are counted as would-upsert", err))

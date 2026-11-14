@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-14
 
@@ -326,14 +326,14 @@ func fakeT6G6Deps(t *testing.T) t6g6Deps {
 	return newT6G6Probe(t).deps()
 }
 
-// gateWriter6 is a distinguishable tasks.Writer: identity is the assertion.
-type gateWriter6 struct{ name string }
+// t6g6GateWriter is a distinguishable tasks.Writer: identity is the assertion.
+type t6g6GateWriter struct{ name string }
 
-func (*gateWriter6) Do(context.Context, tasks.Write, func(context.Context) ([]tasks.Change, error)) error {
+func (*t6g6GateWriter) Do(context.Context, tasks.Write, func(context.Context) ([]tasks.Change, error)) error {
 	return nil
 }
-func (*gateWriter6) MarkRowApplied(context.Context, string)           {}
-func (*gateWriter6) RowApplied(context.Context, string) (bool, error) { return false, nil }
+func (*t6g6GateWriter) MarkRowApplied(context.Context, string)           {}
+func (*t6g6GateWriter) RowApplied(context.Context, string) (bool, error) { return false, nil }
 
 type t6g6TestHold struct{ released *bool }
 
@@ -625,7 +625,7 @@ func t6g6WriteCases() []t6g6WriteCase {
 }
 
 func TestT6G6Kinds_WritesThroughShell(t *testing.T) {
-	gate := &gateWriter6{name: "gotham"}
+	gate := &t6g6GateWriter{name: "gotham"}
 
 	for _, c := range t6g6WriteCases() {
 		t.Run(string(c.kind), func(t *testing.T) {
@@ -675,7 +675,7 @@ func TestT6G6Kinds_WritesThroughShell(t *testing.T) {
 
 // The repoint writes through a real store: its apply reads its own writes back.
 func TestT6G6More_RepointWritesThroughShell(t *testing.T) {
-	gate := &gateWriter6{name: "gotham"}
+	gate := &t6g6GateWriter{name: "gotham"}
 	build := func(t *testing.T) (*t6g6Probe, rbfFixture, tasks.Definition) {
 		f := newRBFFixture(t, -1, "-")
 		p := newT6G6Probe(t)
@@ -714,7 +714,7 @@ func TestT6G6More_RepointWritesThroughShell(t *testing.T) {
 
 // A live apply that rewrites rows never runs without the scan stand-down.
 func TestT6G6More_ApplyRefusesWithoutStandDownKey(t *testing.T) {
-	gate := &gateWriter6{name: "gotham"}
+	gate := &t6g6GateWriter{name: "gotham"}
 
 	p := newT6G6Probe(t)
 	for _, c := range t6g6WriteCases() {
@@ -778,7 +778,7 @@ func TestT6G6More_WritingShellsRefuseModeKeys(t *testing.T) {
 	}
 	require.Len(t, kinds, 11)
 	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
-	gate := &gateWriter6{name: "gotham"}
+	gate := &t6g6GateWriter{name: "gotham"}
 	for _, kind := range kinds {
 		for _, key := range keys {
 			t.Run(string(kind)+"/"+key, func(t *testing.T) {

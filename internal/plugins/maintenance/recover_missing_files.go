@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-11-14
 
@@ -522,26 +522,7 @@ func underRoot(p, root string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func planRecoverMissingFiles(ctx context.Context, store recoverStore, scan ScanController, rootDir string, params recoverMissingParams, reporter sdk.Reporter) (recoverPlan, error) {
-	env := recoverMissingFilesEnv{
-		t6g6Env: t6g6HeadEnv(reporter, params.Apply),
-		Store:   t6g6RecoverStoreShim{store},
-		Writer:  store,
-	}
-	env.StandDown = t6g6HeadStandDown(scan, reporter)
-	return t6g6PlanRecoverVia(ctx, env, rootDir, params)
-}
-
-// t6g6RecoverStoreShim gives a recoverStore the retired-inclusive file list the
-// Via planner reads: database.AllBookFilesCoreIncludingRetired over the store,
-// which sees through decorators.
-type t6g6RecoverStoreShim struct{ recoverStore }
-
-func (s t6g6RecoverStoreShim) AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
-	return database.AllBookFilesCoreIncludingRetired(s.recoverStore)
-}
-
-// t6g6PlanRecoverVia is planRecoverMissingFiles over the env the shell hands the
+// t6g6PlanRecoverVia plans the recovery over the env the shell hands the
 // core: reads through env.Store, the repoint write through env.Writer, the scan
 // stand-down through env.StandDown, and the per-item pools through env.Items.
 func t6g6PlanRecoverVia(ctx context.Context, env recoverMissingFilesEnv, rootDir string, params recoverMissingParams) (recoverPlan, error) {

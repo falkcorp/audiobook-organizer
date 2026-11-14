@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_repoint_plan.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 458004fb-a5f3-4cb8-a25f-741cd3f75b74
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -155,7 +155,7 @@ func (p *Plugin) runOrphanBookFilesRepointPlan(ctx context.Context, _ json.RawMe
 	}
 	env := orphanBookFilesRepointPlanEnv{
 		t6g6Env: t6g6HeadEnv(reporter, false),
-		Store:   headOrphanBookFilesRepointPlanStore{t6g6HeadStore: t6g6HeadStore{OpsStore: ops}, plan: planStore},
+		Store:   t6g6HeadOrphanRepointPlanStore{t6g6HeadStore: t6g6HeadStore{OpsStore: ops}, plan: planStore},
 	}
 	// HEAD's planner runs its own errgroup, not the registry's RunItems.
 	env.Items = t6g6ErrgroupItems
@@ -173,30 +173,30 @@ type orphanBookFilesRepointPlanStore interface {
 	orphanRepointPlanStore
 }
 
-// headOrphanBookFilesRepointPlanStore is HEAD's store for the plan: the ops
+// t6g6HeadOrphanRepointPlanStore is HEAD's store for the plan: the ops
 // store for the scan, and the asserted view of the same store for the lookups
 // OpsStore does not carry.
-type headOrphanBookFilesRepointPlanStore struct {
+type t6g6HeadOrphanRepointPlanStore struct {
 	t6g6HeadStore
 	plan orphanRepointPlanStore
 }
 
-func (s headOrphanBookFilesRepointPlanStore) GetBookByID(id string) (*database.Book, error) {
+func (s t6g6HeadOrphanRepointPlanStore) GetBookByID(id string) (*database.Book, error) {
 	return s.plan.GetBookByID(id)
 }
-func (s headOrphanBookFilesRepointPlanStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
+func (s t6g6HeadOrphanRepointPlanStore) BookFilesAtPath(path string) ([]database.BookFile, error) {
 	return s.plan.BookFilesAtPath(path)
 }
-func (s headOrphanBookFilesRepointPlanStore) LiveBookIDsAtPath(path string) ([]string, error) {
+func (s t6g6HeadOrphanRepointPlanStore) LiveBookIDsAtPath(path string) ([]string, error) {
 	return s.plan.LiveBookIDsAtPath(path)
 }
-func (s headOrphanBookFilesRepointPlanStore) BookAtPathIndexBuilt() (bool, error) {
+func (s t6g6HeadOrphanRepointPlanStore) BookAtPathIndexBuilt() (bool, error) {
 	return s.plan.BookAtPathIndexBuilt()
 }
-func (s headOrphanBookFilesRepointPlanStore) GetBookTombstone(id string) (*database.Book, error) {
+func (s t6g6HeadOrphanRepointPlanStore) GetBookTombstone(id string) (*database.Book, error) {
 	return s.plan.GetBookTombstone(id)
 }
-func (s headOrphanBookFilesRepointPlanStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
+func (s t6g6HeadOrphanRepointPlanStore) GetBooksByVersionGroup(groupID string) ([]database.Book, error) {
 	return s.plan.GetBooksByVersionGroup(groupID)
 }
 
@@ -304,17 +304,12 @@ func orphanBookFilesRepointPlanCore(ctx context.Context, env orphanBookFilesRepo
 	return plan, nil
 }
 
-// planOrphanRepoints classifies every orphan row. Read-only.
+// t6g6PlanOrphanRepointsVia classifies every orphan row. Read-only.
 //
 // Work is partitioned by orphan BookID — one worker owns every row of one
 // missing book — so the per-book tombstone/version-group lookup is done once
 // and no two workers touch the same book. Results merge under one mutex.
-func planOrphanRepoints(ctx context.Context, store orphanRepointPlanStore, allOrphans []database.BookFileCore) (*OrphanRepointPlan, error) {
-	return t6g6PlanOrphanRepointsVia(ctx, store, allOrphans, t6g6ErrgroupItems)
-}
-
-// t6g6PlanOrphanRepointsVia is planOrphanRepoints over the shell's pool: the
-// per-book workers run on items, HEAD's errgroup or the native executor's.
+// The per-book workers run on items, HEAD's errgroup or the native executor's.
 func t6g6PlanOrphanRepointsVia(ctx context.Context, store orphanRepointPlanStore, allOrphans []database.BookFileCore, items t6g6ItemsFunc) (*OrphanRepointPlan, error) {
 	orphans := liveCores(allOrphans)
 	retiredExcluded := len(allOrphans) - len(orphans)
