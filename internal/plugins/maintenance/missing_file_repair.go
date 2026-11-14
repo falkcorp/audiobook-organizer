@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repair.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 50b5022c-9d86-467d-991e-2be9cddf4847
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -182,7 +182,7 @@ func runMissingFileRepairCore(ctx context.Context, params missingFileRepairParam
 				"maintenance.missing-file-audit for which rows are recoverable")
 	}
 
-	plan, err := planMissingFileRepair(ctx, env.Store, params, env)
+	plan, err := t6g5PlanMissingFileRepair(ctx, env.Store, params, env)
 	if err != nil {
 		return missingFileRepairResult{}, err
 	}
@@ -223,11 +223,11 @@ func runMissingFileRepairCore(ctx context.Context, params missingFileRepairParam
 	}, nil
 }
 
-// planMissingFileRepair stats every candidate row and decides, per BOOK, what is
+// t6g5PlanMissingFileRepair stats every candidate row and decides, per BOOK, what is
 // safe to prune. Returned as a value so the decisions can be asserted directly in
 // tests rather than inferred from side effects. It reads the store it is handed
 // and nothing it captures (rule R10), over the engine the env names.
-func planMissingFileRepair(ctx context.Context, store bookFileCoreScanner, params missingFileRepairParams, env missingFileRepairEnv) (repairPlan, error) {
+func t6g5PlanMissingFileRepair(ctx context.Context, store bookFileCoreScanner, params missingFileRepairParams, env missingFileRepairEnv) (repairPlan, error) {
 	log := env.Logger
 	maxFlagged := params.MaxFlagged
 	if maxFlagged <= 0 {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — op maintenance.move-book-file-rows.
 //
@@ -226,7 +226,7 @@ func (p *Plugin) runMoveBookFileRows(ctx context.Context, raw json.RawMessage, r
 		return fmt.Errorf("database not initialized")
 	}
 	env := moveBookFileRowsEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, !dryRun), Lease: p.t6g5HeadLease(reporter)}
-	env.Progress = mbfHeadProgress(reporter)
+	env.Progress = t6g5MbfHeadProgress(reporter)
 	report, runErr := runMoveBookFileRowsCore(ctx, mbfInput{Moves: params.Moves}, env)
 	if report != nil {
 		if sErr := registry.ReporterSetResult(reporter, report); sErr != nil {
@@ -236,10 +236,10 @@ func (p *Plugin) runMoveBookFileRows(ctx context.Context, raw json.RawMessage, r
 	return runErr
 }
 
-// mbfHeadProgress stamps liveness through the reporter. A failed progress write
+// t6g5MbfHeadProgress stamps liveness through the reporter. A failed progress write
 // is logged, not fatal: it loses a progress line, never a row. HEAD-only: the
 // native shell's progress is rc.Progress, which has no write to fail.
-func mbfHeadProgress(reporter sdk.Reporter) func(done, total int, msg string) {
+func t6g5MbfHeadProgress(reporter sdk.Reporter) func(done, total int, msg string) {
 	return func(done, total int, msg string) {
 		if reporter == nil {
 			return

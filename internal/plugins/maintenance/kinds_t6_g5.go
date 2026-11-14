@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 30f92b7b-033e-4403-927a-99445211075c
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -721,9 +721,10 @@ type t6g5Deps struct {
 var errT6g5NoStore = errors.New("database not initialized")
 
 // headT6g5Writer is t6g5Writer over HEAD's dependencies: each method calls what
-// HEAD's body called, in the same order with the same arguments. Deps are read
-// lazily so a test double with no store behind it is only touched by the
-// method a test reaches.
+// HEAD's body called, in the same order with the same arguments. The plugin's
+// stores are resolved once, in t6g5HeadBase, and the adapters answer from what
+// they hold, so a deps double is asked for OpsStore and VersionPrimaryStore on
+// every HEAD run, whichever method the run goes on to reach.
 type headT6g5Writer struct {
 	p   *Plugin
 	ops OpsStore
@@ -1277,12 +1278,18 @@ func (w headT6g5Writer) CarryStateThenHardDelete(keepID, doomedID string, preche
 	return merge.CarryStateThenHardDelete(um, keepID, doomedID, precheck, del)
 }
 
-func (w headT6g5Writer) NewUserStateProbe() (regroupStateProbe, error) {
+func (w headT6g5Writer) NewUserStateProbe() (t6g5RegroupStateProbe, error) {
 	um, err := w.userState()
 	if err != nil {
 		return nil, err
 	}
-	return merge.NewUserStateProbe(um)
+	// Not `return merge.NewUserStateProbe(um)`: on error that wraps a nil
+	// *UserStateProbe in a non-nil interface.
+	p, err := merge.NewUserStateProbe(um)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // --- the group's list function ---

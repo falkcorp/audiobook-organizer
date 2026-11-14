@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -310,21 +310,6 @@ func runMarkMissingFilesCore(ctx context.Context, params markMissingParams, env 
 	}
 	log.Info("mark-missing-files complete", "summary", plan.summary())
 	return plan, nil
-}
-
-// markMissingStore is the narrow store this op needs: read every row's core
-// projection (path + current Missing), read the book core projection to learn
-// which books are PRIMARY versions (so BooksBrokenOnDisk counts the same
-// population the dashboard's BrokenFiles counter does — primary books only),
-// rehydrate one book's files to write the full record back, and write it.
-type markMissingStore interface {
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
-	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
-	// UpdateBookFiles, not per-row UpdateBookFile: the apply phase rewrites
-	// many rows of the same book and must recompute that book's aggregates
-	// once after the rows, not once per row (see bookfile_batch_write.go).
-	UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error)
 }
 
 // flip is one row whose Missing flag disagrees with disk.

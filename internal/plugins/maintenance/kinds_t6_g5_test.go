@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c0ba68fc-0752-49a5-9e51-187eca399e39
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -124,7 +126,13 @@ type t6g5Host struct {
 	mode  tasks.Mode
 	w     tasks.Writer
 	holds *t6g5Holds
+	// touches counts the liveness stamps the run made (FakeRun's Touch is a
+	// no-op).
+	touches atomic.Int64
 }
+
+// Touch counts the stamp.
+func (h *t6g5Host) Touch() { h.touches.Add(1) }
 
 // StandDown records the key and the release when a test installed holds, and
 // is FakeRun's refusal otherwise.
@@ -179,8 +187,15 @@ func newT6G5Host(kind tasks.Kind, mode tasks.Mode, w tasks.Writer) *tasks.RC {
 
 // newT6G5HostCtx is newT6G5Host over a chosen context and stand-down recorder.
 func newT6G5HostCtx(ctx context.Context, kind tasks.Kind, mode tasks.Mode, w tasks.Writer, holds *t6g5Holds) (*tasks.RC, *taskstest.FakeRun) {
-	fr := taskstest.NewFakeRun(ctx, kind)
-	return tasks.NewRC(&t6g5Host{FakeRun: fr, mode: mode, w: w, holds: holds}), fr
+	rc, h := newT6G5HostFull(ctx, kind, mode, w, holds)
+	return rc, h.FakeRun
+}
+
+// newT6G5HostFull is newT6G5HostCtx that also returns the host, for a test
+// that reads what the run did to it.
+func newT6G5HostFull(ctx context.Context, kind tasks.Kind, mode tasks.Mode, w tasks.Writer, holds *t6g5Holds) (*tasks.RC, *t6g5Host) {
+	h := &t6g5Host{FakeRun: taskstest.NewFakeRun(ctx, kind), mode: mode, w: w, holds: holds}
+	return tasks.NewRC(h), h
 }
 
 // t6g5Run runs d's own Run with the params the executor would decode.
@@ -337,12 +352,22 @@ func TestT6G5Kinds_WritesThroughShell(t *testing.T) {
 
 	t.Run("read-only kinds get no writer", func(t *testing.T) {
 		for _, mode := range []tasks.Mode{tasks.ModePreview, tasks.ModeLive} {
-			f := newT6G5Fake()
-			d := t6g5KindByName(t, (&Plugin{}).t6g5Kinds(f.deps(), nil), "maintenance.missing-file-audit")
-			require.True(t, tasks.CommonOf(d).Effects.IsReadOnly())
-			_, _ = t6g5Run(t, d, newT6G5Host(d.Kind(), mode, &t6g5Gate{}), "")
-			assert.Empty(t, f.handed(), "a ReadOnly run never asks for a writer (mode %v)", mode)
-			assert.Empty(t, f.writer.called())
+			s := newRepairPebble(t)
+			dir := t.TempDir()
+			const book = "01BATMAN00000000000000RO01"
+			_, err := s.CreateBook(&database.Book{ID: book, Title: "Hush", FilePath: dir})
+			require.NoError(t, err)
+			require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "01ROWRO0000000000000000001", BookID: book, FilePath: filepath.Join(dir, "gone.mp3")}))
+
+			r := t6g5RunNativeOn(t, New(fakeDeps{store: s, root: dir}), mode, "maintenance.missing-file-audit", "", "")
+			require.True(t, tasks.CommonOf(r.def).Effects.IsReadOnly())
+			require.NoError(t, r.err, "mode %v", mode)
+			var res missingFileAuditResult
+			require.NoError(t, json.Unmarshal(r.out, &res))
+			assert.Equal(t, 1, res.Rows, "the audit read the book_file table (mode %v)", mode)
+			assert.Equal(t, 1, res.Missing, "mode %v", mode)
+			assert.Empty(t, r.handed, "a ReadOnly run never asks for a writer (mode %v)", mode)
+			assert.Empty(t, r.spy.calls, "mode %v", mode)
 		}
 	})
 
@@ -384,4 +409,18 @@ func TestT6G5Kinds_WritesThroughShell(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "NewWriter is not set")
 	})
+}
+
+// The native base's Touch is rc.Progress().Tick(): the long per-item loops call
+// it to stamp liveness, and a stall detector reads that stamp. A Touch that
+// reverts to a no-op would let a healthy run be flagged.
+func TestT6G5NativeBase_TouchStampsLiveness(t *testing.T) {
+	deps := t6g5Deps{Store: newT6G5Fake().store}
+	rc, host := newT6G5HostFull(context.Background(), "books.maintenance.missing-file-audit", tasks.ModeLive, &t6g5Gate{}, nil)
+	b, err := t6g5NativeBase("books.maintenance.missing-file-audit", rc, deps, false)
+	require.NoError(t, err)
+	before := host.touches.Load()
+	b.Touch()
+	b.Touch()
+	assert.Equal(t, before+2, host.touches.Load(), "each Touch reaches the host as a liveness stamp")
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.18.1
+// version: 1.18.2
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -311,7 +311,7 @@ type icUserState interface {
 	CarryStateBetweenLiveBooks(toID, fromID string) error
 }
 
-// icMergeUserState is icUserState and regroupUserState over a
+// icMergeUserState is icUserState and t6g5RegroupUserState over a
 // merge.UserProgressMerger.
 type icMergeUserState struct{ um merge.UserProgressMerger }
 
@@ -327,7 +327,7 @@ func (m icMergeUserState) CarryStateBetweenLiveBooks(toID, fromID string) error 
 func (m icMergeUserState) CarryStateThenHardDelete(keepID, doomedID string, precheck, del func() error) error {
 	return merge.CarryStateThenHardDelete(m.um, keepID, doomedID, precheck, del)
 }
-func (m icMergeUserState) NewUserStateProbe() (regroupStateProbe, error) {
+func (m icMergeUserState) NewUserStateProbe() (t6g5RegroupStateProbe, error) {
 	p, err := merge.NewUserStateProbe(m.um)
 	if err != nil {
 		return nil, err

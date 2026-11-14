@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes_test.go
-// version: 1.1.6
+// version: 1.1.7
 // guid: 5d2e8a41-9c3b-4f7e-8a10-2b6c4d9e1f30
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -73,8 +73,8 @@ func TestMergeSamePath_MergesHashConfirmedDuplicate(t *testing.T) {
 		},
 	}
 	m := &recordingMerge{}
-	t6g5h1 := mergeSamePathParams{Apply: true}
-	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, t6g5h1, t6g5MergeEnv(context.Background(), t6g5h1.Apply, &fakeReporter{}))
+	params := mergeSamePathParams{Apply: true}
+	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, params, t6g5MergeEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.SharedPaths)
 	require.Equal(t, 1, plan.Mergeable)
@@ -98,8 +98,8 @@ func TestMergeSamePath_DryRunMergesNothing(t *testing.T) {
 		},
 	}
 	m := &recordingMerge{}
-	t6g5h2 := mergeSamePathParams{}
-	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, t6g5h2, t6g5MergeEnv(context.Background(), t6g5h2.Apply, &fakeReporter{})) // Apply defaults false
+	params := mergeSamePathParams{}
+	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, params, t6g5MergeEnv(context.Background(), params.Apply, &fakeReporter{})) // Apply defaults false
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.Mergeable)
 	require.Equal(t, 0, plan.Merged)
@@ -117,8 +117,8 @@ func TestMergeSamePath_RefusesHashMismatch(t *testing.T) {
 		},
 	}
 	m := &recordingMerge{}
-	t6g5h3 := mergeSamePathParams{Apply: true}
-	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, t6g5h3, t6g5MergeEnv(context.Background(), t6g5h3.Apply, &fakeReporter{}))
+	params := mergeSamePathParams{Apply: true}
+	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, params, t6g5MergeEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.HashMismatch)
 	require.Equal(t, 0, plan.Mergeable)
@@ -137,8 +137,8 @@ func TestMergeSamePath_RefusesUnverifiedHash(t *testing.T) {
 		},
 	}
 	m := &recordingMerge{}
-	t6g5h4 := mergeSamePathParams{Apply: true}
-	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, t6g5h4, t6g5MergeEnv(context.Background(), t6g5h4.Apply, &fakeReporter{}))
+	params := mergeSamePathParams{Apply: true}
+	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, params, t6g5MergeEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.UnverifiedHash)
 	require.Equal(t, 0, plan.Mergeable)
@@ -154,8 +154,8 @@ func TestMergeSamePath_IgnoresDirectoryPaths(t *testing.T) {
 		rows:  map[string][]database.BookFile{},
 	}
 	m := &recordingMerge{}
-	t6g5h5 := mergeSamePathParams{Apply: true}
-	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, t6g5h5, t6g5MergeEnv(context.Background(), t6g5h5.Apply, &fakeReporter{}))
+	params := mergeSamePathParams{Apply: true}
+	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, params, t6g5MergeEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, 0, plan.SharedPaths, "directory paths must not be grouped")
 	require.Empty(t, m.calls)
@@ -176,8 +176,8 @@ func TestMergeSamePath_ExcludesSoftDeleted(t *testing.T) {
 		},
 	}
 	m := &recordingMerge{}
-	t6g5h6 := mergeSamePathParams{Apply: true}
-	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, t6g5h6, t6g5MergeEnv(context.Background(), t6g5h6.Apply, &fakeReporter{}))
+	params := mergeSamePathParams{Apply: true}
+	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, params, t6g5MergeEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, 0, plan.SharedPaths, "a soft-deleted record leaves only one live book at the path")
 	require.Empty(t, m.calls)
@@ -224,8 +224,8 @@ func TestMergeSamePath_ReadErrorIsItsOwnBucket(t *testing.T) {
 		getFilesErr: fmt.Errorf("pebble: closed"),
 	}
 	m := &recordingMerge{}
-	t6g5h7 := mergeSamePathParams{Apply: true}
-	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, t6g5h7, t6g5MergeEnv(context.Background(), t6g5h7.Apply, &fakeReporter{}))
+	params := mergeSamePathParams{Apply: true}
+	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, params, t6g5MergeEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, 1, plan.ReadError, "a store read failure is its own bucket")
 	require.Equal(t, 0, plan.UnverifiedHash, "a read failure must NOT be counted as 'no hash'")
@@ -253,8 +253,8 @@ func TestMergeSamePath_CappedGroupsAreReportedNotDropped(t *testing.T) {
 		},
 	}
 	m := &recordingMerge{}
-	t6g5h8 := mergeSamePathParams{Apply: true, Max: 1}
-	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, t6g5h8, t6g5MergeEnv(context.Background(), t6g5h8.Apply, &fakeReporter{}))
+	params := mergeSamePathParams{Apply: true, Max: 1}
+	plan, err := planMergeSamePathDupesVia(context.Background(), store, m.fn, params, t6g5MergeEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, 3, plan.Mergeable, "all three groups pass the hash gate")
 	require.Equal(t, 1, plan.CappedAt)

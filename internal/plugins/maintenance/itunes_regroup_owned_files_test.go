@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_owned_files_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: c3a58e17-4f20-4b96-8d71-e0b92a6f5c34
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -80,8 +80,8 @@ func TestITunesRegroupApply_DeleteKeepsHolderOfOnlyRetiredRowsWithItsState(t *te
 	retireRowInto(t, s, loser)
 
 	p := &Plugin{}
-	if _, err := applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
-		t.Fatalf("applyRegroupPlan: %v", err)
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState); err != nil {
+		t.Fatalf("t6g5ApplyRegroupPlan: %v", err)
 	}
 	live, err := s.GetBookFiles(loser)
 	if err != nil || len(live) != 0 {
@@ -132,8 +132,8 @@ func TestITunesRegroupApply_DeleteRechecksOwnedRowsUnderTheLockBeforeTheCarry(t 
 	w := &retiredAfterFirstReadStore{PebbleStore: s, t: t, bookID: loser}
 
 	p := &Plugin{}
-	if _, err := applyRegroupPlan(context.Background(), w, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
-		t.Fatalf("applyRegroupPlan: %v", err)
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), w, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState); err != nil {
+		t.Fatalf("t6g5ApplyRegroupPlan: %v", err)
 	}
 	if w.calls < 2 {
 		t.Fatalf("the loser's rows were read %d time(s), want at least 2: the check under the merge lock never ran", w.calls)

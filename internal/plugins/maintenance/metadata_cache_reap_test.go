@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 2f7a5c81-9de3-4b06-8c14-a35f7e290bd6
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -213,8 +213,8 @@ func TestMetadataCacheReap_RecheckErrorSparesTheRow(t *testing.T) {
 	cache := seedReap(2)
 	books := &reapFakeBooks{}
 	// Both rows look orphaned in the scan; b00's re-check then faults.
-	t6g5h1 := metadataCacheReapParams{Apply: true}
-	plan, err := planMetadataCacheReapVia(context.Background(), cache, cache, &recheckFailBooks{inner: books, failAfter: map[string]int{"b00": 1}}, metadataCacheReapInput{Max: t6g5h1.Max}, t6g5ReapEnv(context.Background(), t6g5h1.Apply, &fakeReporter{}))
+	params := metadataCacheReapParams{Apply: true}
+	plan, err := planMetadataCacheReapVia(context.Background(), cache, cache, &recheckFailBooks{inner: books, failAfter: map[string]int{"b00": 1}}, metadataCacheReapInput{Max: params.Max}, t6g5ReapEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.NoError(t, err)
 
 	require.Equal(t, 2, plan.Orphaned)
@@ -340,8 +340,8 @@ func TestMetadataCacheReap_ReportListsEveryScannedRow(t *testing.T) {
 // look" must not produce the same outcome.
 func TestMetadataCacheReap_ListFailureAborts(t *testing.T) {
 	cache := &reapFakeCache{listErr: errors.New("pebble: iter failed")}
-	t6g5h2 := metadataCacheReapParams{Apply: true}
-	_, err := planMetadataCacheReapVia(context.Background(), cache, cache, &reapFakeBooks{}, metadataCacheReapInput{Max: t6g5h2.Max}, t6g5ReapEnv(context.Background(), t6g5h2.Apply, &fakeReporter{}))
+	params := metadataCacheReapParams{Apply: true}
+	_, err := planMetadataCacheReapVia(context.Background(), cache, cache, &reapFakeBooks{}, metadataCacheReapInput{Max: params.Max}, t6g5ReapEnv(context.Background(), params.Apply, &fakeReporter{}))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "list metadata cache")
 	require.Empty(t, cache.deletedSorted())

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.7.4
+// version: 1.7.5
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -539,8 +539,8 @@ func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
 	if plan.Consolidated != 1 || plan.Groups[0].Target != ed.ID {
 		t.Fatalf("plan = %+v, want consolidate onto the edition %s", plan.Groups, ed.ID)
 	}
-	if _, err := applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
-		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState); err != nil {
+		t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 
 	if b, _ := s.GetBookByID(frag); b != nil && !b.IsSoftDeleted() {
@@ -823,8 +823,8 @@ func TestITunesRegroupApply_RecheckSkipsChangedGroup(t *testing.T) {
 
 			tc.change(t, s, frag, other)
 
-			if _, err := applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
-				t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+			if _, err := t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState); err != nil {
+				t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 			}
 			var found bool
 			for _, l := range rep.logs {
@@ -935,8 +935,8 @@ func TestITunesRegroupApply_LibraryCopyKeepsTitle(t *testing.T) {
 			if tc.afterPlan != nil {
 				tc.afterPlan(t, s, b.ID)
 			}
-			if _, err := applyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
-				t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+			if _, err := t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState); err != nil {
+				t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 			}
 			after, err := s.GetBookByID(b.ID)
 			if err != nil || after == nil {
@@ -1118,8 +1118,8 @@ func TestITunesRegroupApply_HoldsGroupLockAcrossRecheckAndMoves(t *testing.T) {
 	}
 	probe.onMove = func() { notCrowned("before the moves") }
 	probe.onModify = func() { notCrowned("before the title write") }
-	if _, err := applyRegroupPlan(context.Background(), probe, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
-		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), probe, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState); err != nil {
+		t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 	if !started.Load() {
 		t.Fatalf("apply's recheck never read the target's version group (logs %v)", rep.logs)
@@ -1190,8 +1190,8 @@ func TestITunesRegroupApply_TargetJoinedGroupRefused(t *testing.T) {
 	target := plan.Groups[0].Target
 
 	wrapped := &rgJoinGroupStore{PebbleStore: s, id: target, vg: "vg-joined"}
-	if _, err := applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.regroupUserState); err != nil {
-		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), wrapped, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState); err != nil {
+		t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 	var found bool
 	for _, l := range rep.logs {
