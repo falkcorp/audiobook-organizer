@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d78a6104-de76-4b10-ab6f-1cf177912760
 // last-edited: 2026-11-14
 
@@ -21,6 +21,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -475,6 +476,7 @@ type t6g6StoreRepair interface {
 	relinkUnlinkedBooksStore
 	repairTranscribeStatusStore
 	repairMergedUserStateReads
+	reconcile.HealReader
 }
 
 // t6g6Writer is every write the 14 definitions make, composed from each
@@ -490,7 +492,7 @@ type t6g6WriterCompact interface {
 	nightlyCompactActivityLogWriter
 	opChangeBookIndexWriter
 	recompactActivityDigestsWriter
-	itunesHealWriter
+	reconcile.HealWriter
 	rbfWriter
 }
 

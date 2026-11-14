@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_merged_user_state.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8d4b2f67-1a9e-4c35-b7d0-9e6f3a2c1b58
 // last-edited: 2026-11-14
 
@@ -154,12 +154,23 @@ type repairMergedUserStateReads interface {
 // repairMergedUserStateWrites is every write the pass makes: the moved state, the
 // pending-record bookkeeping and the capability writes.
 type repairMergedUserStateWrites interface {
+	repairMergedUserStateRowWrites
+	repairMergedUserStateCapWrites
+}
+
+// repairMergedUserStateRowWrites are the pass's own writes.
+type repairMergedUserStateRowWrites interface {
 	SetRaw(key string, value []byte) error
 	DeleteRaw(key string) error
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	SetUserBookState(state *database.UserBookState) error
 	SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error
 	ClearUserPositions(userID, bookID string) error
+}
+
+// repairMergedUserStateCapWrites are the capability writes the merge package
+// probes the store for.
+type repairMergedUserStateCapWrites interface {
 	UserStateSyncWrites() (t6g6SyncWrites, bool)
 	UserStateBookmarkWrites() (t6g6BookmarkWrites, bool)
 	UserStateTimestampWriter() (database.UserPositionTimestampWriter, bool)
@@ -306,9 +317,9 @@ func (p *Plugin) repairMergedUserStateNative(deps t6g6Deps, sched func(tasks.Kin
 	c.Title = "Repair user state stranded by merges"
 	c.Help = repairMergedUserStateHelp
 	// HEAD declared no Writes. The pass moves listening state (position rows,
-	// progress rows, bookmarks) and clears the pending-repair records; those
-	// are user-state rows of the books domain.
-	c.Effects = tasks.Writes(tasks.Res("books", "user_state"))
+	// progress rows, bookmarks) and clears the pending-repair records (user_state)
+	// and carries the play-count marks onto the survivor with ModifyBook (books).
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "user_state"))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books." + merge.UserStateRepairOpID)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: b8c9d0e1-f2a3-4567-1234-789012345678
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -45,49 +45,26 @@ func (p *Plugin) itunesHealDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runITunesHeal(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
-	env := itunesHealEnv{
-		t6g6Env: t6g6HeadEnv(reporter, true),
-		Writer:  headITunesHealWriter{store: p.deps.ReconcileStore(), reporter: reporter},
-	}
-	return itunesHealCore(ctx, params, env)
+	// HEAD's entry point, unchanged: the heal over the reporter's pool, log and
+	// progress with the plugin's reconcile store as both halves.
+	return reconcile.RunITunesHeal(ctx, p.deps.ReconcileStore(), reporter, params)
 }
 
 // itunesHealKind is rule R3's kind for the def above.
 const itunesHealKind = tasks.Kind("books.itunes.heal")
 
-// itunesHealWriter is the one write the op makes. The heal is a single pass in
-// internal/reconcile that reads the iTunes XML and the library, reflinks each
-// missing file back to its expected path, repoints the book_file row and
-// collapses duplicates through merge.Service. Its run is the gated write: the
-// kernel's writer (F5-18) adapts the run's progress and log to the reporter the
-// reconcile package takes.
-type itunesHealWriter interface {
-	// RunITunesHeal runs reconcile.RunITunesHeal; params is its checkpoint state
-	// (reconcile.ITunesHealParams as JSON, empty for a fresh run).
-	RunITunesHeal(ctx context.Context, params json.RawMessage) error
-}
-
-// headITunesHealWriter is HEAD's writer: reconcile.RunITunesHeal over the
-// plugin's reconcile store and the run's reporter, as HEAD called it.
-type headITunesHealWriter struct {
-	store    ReconcileStore
-	reporter sdk.Reporter
-}
-
-func (w headITunesHealWriter) RunITunesHeal(ctx context.Context, params json.RawMessage) error {
-	return reconcile.RunITunesHeal(ctx, w.store, w.reporter, params)
-}
-
-// itunesHealEnv is what the core takes from its shell.
+// itunesHealEnv is what the core takes from its shell: the reads and the writes
+// of internal/reconcile's heal, split so the writes can be gated (the collapse
+// of duplicate books, the track reflink and the whisper-result journal).
 type itunesHealEnv struct {
 	t6g6Env
-	Writer itunesHealWriter
+	Reader reconcile.HealReader
+	Writer reconcile.HealWriter
 }
 
-// itunesHealParallelism is the op's concurrency. HEAD declared none on the def:
-// the heal runs its own 16-worker pool inside internal/reconcile.
+// itunesHealParallelism is the heal's pool: HEAD's RunItems Concurrency of 16.
 func itunesHealParallelism() tasks.Parallelism {
-	return tasks.Sequential("HEAD declared no concurrency on the def; reconcile.RunITunesHeal runs its own pool inside")
+	return tasks.Fixed(reconcile.HealConcurrency, "reads the iTunes XML once, then resolves and reflinks each missing track: file-index lookups, DB reads and an optional AcoustID/Whisper round trip, so I/O and network bound; HEAD's own pool")
 }
 
 // itunesHealNative is the native kind. It reflinks files and repoints and merges
@@ -96,31 +73,58 @@ func (p *Plugin) itunesHealNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.S
 	c := t6g6Common(itunesHealKind, sched)
 	c.Title = "iTunes path heal"
 	c.Help = itunesHealHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"), tasks.Res("books", "operations"))
+	// HEAD declared no Writes. The heal repoints and merges book rows (books,
+	// book_files, the undo journal under operations) and reflinks files back
+	// into the library (files).
+	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"), tasks.Res("books", "files"), tasks.Res("books", "operations"))
+	// HEAD's def says Restart because the reflink is idempotent. The heal never
+	// writes a checkpoint of its own (LastProcessedPID only comes in through the
+	// params), so a restart re-walks from the start: ResumeFromZero, not Continue.
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.itunes.heal")
 	c.Timeout = 60 * time.Minute
-	return tasks.Task(itunesHealKind, tasks.TaskSpec[reconcile.ITunesHealParams, struct{}]{
+	return tasks.Task(itunesHealKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
-		Run: func(rc *tasks.RC, params reconcile.ITunesHealParams) (struct{}, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			params, err := t6g6DecodeNative[reconcile.ITunesHealParams](itunesHealKind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
 			if err := t6g6LiveOnly(rc, itunesHealKind); err != nil {
 				return struct{}{}, err
 			}
-			raw, err := json.Marshal(params)
+			if err := t6g6NeedDep(itunesHealKind, "Store", deps.Store != nil); err != nil {
+				return struct{}{}, err
+			}
+			w, err := t6g6NewWriter(itunesHealKind, deps, rc)
 			if err != nil {
-				return struct{}{}, fmt.Errorf("encode params: %w", err)
+				return struct{}{}, err
 			}
-			env := itunesHealEnv{
-				t6g6Env: t6g6NativeEnv(rc),
-				Writer:  deps.NewWriter(rc.Writer()),
-			}
-			return struct{}{}, itunesHealCore(rc.Context(), raw, env)
+			env := itunesHealEnv{t6g6Env: t6g6NativeEnv(rc), Reader: deps.Store, Writer: w}
+			return struct{}{}, itunesHealCore(rc.Context(), params, env)
 		},
 	})
 }
 
-// itunesHealCore is the body of runITunesHeal.
-func itunesHealCore(ctx context.Context, params json.RawMessage, env itunesHealEnv) error {
-	return env.Writer.RunITunesHeal(ctx, params)
+// itunesHealCore runs the heal over the env's reads, writes and pool.
+func itunesHealCore(ctx context.Context, params reconcile.ITunesHealParams, env itunesHealEnv) error {
+	if env.Reader == nil || env.Writer == nil {
+		return fmt.Errorf("iTunes heal: no store")
+	}
+	return reconcile.RunITunesHealVia(ctx, reconcile.HealEnv{
+		Logger:   env.Logger,
+		Progress: env.Progress,
+		OpID:     env.OpID,
+		Reader:   env.Reader,
+		Writer:   env.Writer,
+		Items: func(ctx context.Context, n int, o reconcile.HealItemsOptions, fn func(ctx context.Context, i int) error) error {
+			return env.Items(ctx, itunesHealParallelism(), n, t6g6ItemsOptions{
+				Collect:       true,
+				ProgressBase:  o.ProgressOffset,
+				ProgressTotal: o.ProgressTotal,
+				Label:         o.Label,
+			}, fn)
+		},
+	}, params)
 }

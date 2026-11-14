@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-14
 
@@ -20,7 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
@@ -40,6 +41,55 @@ type t6g6Recorder struct {
 	// backing, when set, is the real store the rbf apply reads its own writes
 	// back from.
 	backing rbfWriter
+	// us, when set, is the real user-state store the repair-merged writes (and
+	// the test store's reads) go to; it records its own writes into this
+	// recorder.
+	us *t6g6UserStateSpy
+}
+
+// t6g6WriterResource maps every writer method the spy can record to the Effects
+// resource it writes, written out by hand. A recorded call whose method is not
+// in this map fails the test, so a new writer method cannot slip past the
+// declared write set.
+var t6g6WriterResource = map[string]string{
+	"CompactActivityEntries":     "books/activity",
+	"RecompactActivityDigests":   "books/activity",
+	"RebuildOpChangeByBookIndex": "books/operations",
+	"CreateOperationChange":      "books/operations",
+	"CollapseHealDuplicates":     "books/books",
+	"HealTrack":                  "books/files",
+	"UpdateBookFiles":            "books/book_files",
+	"CreateBookFile":             "books/book_files",
+	"ModifyBookFile":             "books/book_files",
+	"RecomputeBookAggregates":    "books/books",
+	"ModifyBook":                 "books/books",
+	"UpsertReviewItem":           "books/review_items",
+	"DeleteReviewItemIfPending":  "books/review_items",
+	"SetRaw":                     "books/user_state",
+	"DeleteRaw":                  "books/user_state",
+	"SetUserBookState":           "books/user_state",
+	"SetUserPosition":            "books/user_state",
+	"SetUserPositionAt":          "books/user_state",
+	"ClearUserPositions":         "books/user_state",
+	"MintOrGetSyncID":            "books/user_state",
+	"RecordSyncMerge":            "books/user_state",
+	"CopyBookmarkIfAbsent":       "books/user_state",
+}
+
+// t6g6AssertWritesDeclared fails when a recorded write names a method with no
+// mapped resource, or a resource the kind's declared WriteSet does not hold.
+func t6g6AssertWritesDeclared(t *testing.T, calls []string, def tasks.Definition) {
+	t.Helper()
+	declared := map[string]bool{}
+	for _, res := range tasks.CommonOf(def).Effects.WriteSet() {
+		declared[tasks.FormatRef(res)] = true
+	}
+	for _, c := range calls {
+		method, _, _ := strings.Cut(c, " ")
+		res, ok := t6g6WriterResource[method]
+		require.True(t, ok, "%s: writer method %q has no resource in t6g6WriterResource", def.Kind(), method)
+		require.True(t, declared[res], "%s: %q writes %s, which its Effects do not declare", def.Kind(), c, res)
+	}
 }
 
 func (r *t6g6Recorder) rec(s string) {
@@ -69,10 +119,17 @@ func (r *t6g6Recorder) RebuildOpChangeByBookIndex(context.Context, database.OpCh
 	return database.OpChangeByBookBackfillResult{Scanned: 4, Indexed: 4}, nil
 }
 
-func (r *t6g6Recorder) RunITunesHeal(context.Context, json.RawMessage) error {
-	r.rec("RunITunesHeal")
+func (r *t6g6Recorder) CollapseHealDuplicates(_, keepID string, _ []string) error {
+	r.rec("CollapseHealDuplicates " + keepID)
 	return nil
 }
+
+func (r *t6g6Recorder) HealTrack(dst, src string) error {
+	r.rec("HealTrack " + filepath.Base(dst) + " <- " + filepath.Base(src))
+	return nil
+}
+
+func (r *t6g6Recorder) HealWhisperJournal() transcribe.ResultJournal { return nil }
 
 func (r *t6g6Recorder) UpdateBookFiles(_ context.Context, files []*database.BookFile, afterRow func(int, bool)) (int, error) {
 	for i, f := range files {
@@ -107,16 +164,10 @@ func (r *t6g6Recorder) BatchCreateBookFiles(files []*database.BookFile) error {
 	return nil
 }
 
-func (r *t6g6Recorder) RepairMergedUserState(_ context.Context, o merge.UserStateRepairOptions) (*merge.UserStateRepairReport, error) {
-	if o.Apply {
-		r.rec("RepairMergedUserState apply")
-	} else {
-		r.rec("RepairMergedUserState report")
-	}
-	return &merge.UserStateRepairReport{Apply: o.Apply, PendingOnly: o.PendingOnly}, nil
-}
-
 func (r *t6g6Recorder) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if r.us != nil {
+		return r.us.ModifyBook(id, fn)
+	}
 	cur := *r.books[id]
 	if err := fn(&cur); err != nil {
 		return nil, err
@@ -211,8 +262,11 @@ func (r t6g6RBFStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 	return r.s.GetAllBookFilesCore()
 }
 
-// Unwrap lets database.AsCapability reach the real store's retired-row reads.
-func (r t6g6RBFStore) Unwrap() database.Store { return r.s }
+// AllBookFilesCoreIncludingRetired is the held store's own method (MINOR 3): the
+// native claims pass calls it by name, so nothing here depends on Unwrap.
+func (r t6g6RBFStore) AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
+	return database.AllBookFilesCoreIncludingRetired(r.s)
+}
 
 func (r t6g6RBFStore) LiveBookIDsAtPath(p string) ([]string, error) { return r.s.LiveBookIDsAtPath(p) }
 
@@ -385,7 +439,7 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.relinkUnlinkedBooksDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
 			par: cpu(relinkUnlinkedBooksParallelism), wantPar: "cpu", effects: []string{"books/book_files", "books/books"}},
 		{head: p.repairMergedUserStateDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
-			effects: []string{"books/user_state"}},
+			effects: []string{"books/books", "books/user_state"}},
 		{head: p.repairTranscribeStatusDef(), resume: tasks.ResumeFromZero, timeout: 2 * time.Hour,
 			par: cpu(repairTranscribeStatusParallelism), wantPar: "fixed(8): ", effects: []string{"books/books"}},
 		{head: p.repointBookFileRowsDef(), resume: tasks.ResumeDrop, timeout: p.repointBookFileRowsDef().Timeout,
@@ -482,11 +536,24 @@ func t6g6WriteCases() []t6g6WriteCase {
 		},
 		{
 			kind: itunesHealKind, liveOnly: true,
-			live: []string{"RunITunesHeal"},
-		},
-		{
-			kind: repairMergedUserStateKind,
-			live: []string{"RepairMergedUserState apply"}, preview: []string{"RepairMergedUserState report"},
+			setup: func(t *testing.T, p *t6g6Probe) {
+				// One iTunes track whose mapped path is missing, with its file in the
+				// library under the same name: layer 1 resolves the single candidate.
+				healDir := t.TempDir()
+				writeFile(t, filepath.Join(p.root, "Gotham", "Hush.mp3"), 10)
+				xml := filepath.Join(t.TempDir(), "Library.xml")
+				require.NoError(t, os.WriteFile(xml, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>Tracks</key><dict><key>1</key><dict>
+<key>Location</key><string>file://localhost/W:/Gotham/Hush.mp3</string>
+<key>Name</key><string>Hush</string><key>Artist</key><string>Bruce Wayne</string>
+<key>Persistent ID</key><string>BATPID0000000001</string></dict></dict></dict></plist>`), 0o644))
+				oldITunes, oldRoot := config.AppConfig.ITunes, config.AppConfig.RootDir
+				t.Cleanup(func() { config.AppConfig.ITunes, config.AppConfig.RootDir = oldITunes, oldRoot })
+				config.AppConfig.ITunes.LibraryReadPath = xml
+				config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{{From: "W:/Gotham", To: healDir}}
+				config.AppConfig.RootDir = p.root
+			},
+			live: []string{"HealTrack Hush.mp3 <- Hush.mp3"},
 		},
 		{
 			kind: relinkUnlinkedBooksKind,
@@ -576,6 +643,7 @@ func TestT6G6Kinds_WritesThroughShell(t *testing.T) {
 			require.Equal(t, 1, p.writerCalls(), "NewWriter calls")
 			require.Same(t, gate, p.given, "NewWriter must be given the run's writer")
 			require.Equal(t, c.live, p.rec.snapshot(), "writes in a live run")
+			t6g6AssertWritesDeclared(t, p.rec.snapshot(), def)
 			if c.standsDown {
 				require.Equal(t, []tasks.Key{p.standKey}, h.standDowns, "scan stand-down")
 				require.True(t, h.released, "stand-down released")
@@ -627,6 +695,7 @@ func TestT6G6More_RepointWritesThroughShell(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, gate, p.given, "NewWriter must be given the run's writer")
 	require.Equal(t, 1, p.writerCalls())
+	t6g6AssertWritesDeclared(t, p.rec.snapshot(), def)
 	calls := strings.Join(p.rec.snapshot(), "\n")
 	require.Contains(t, calls, "ModifyBookFile "+f.row)
 	require.Contains(t, calls, "CreateOperationChange")
@@ -697,3 +766,30 @@ func (s *t6g6TestStore) ListSoftDeletedBooks(int, int, *time.Time) ([]database.B
 	return nil, nil
 }
 func (s *t6g6TestStore) BookAtPathIndexBuilt() (bool, error) { return true, nil }
+
+// Every native shell that writes refuses a mode key in its params, whatever its
+// case, before it builds a writer or touches the store: the run's mode comes
+// from the start request, never from params (coordinator ruling 3).
+func TestT6G6More_WritingShellsRefuseModeKeys(t *testing.T) {
+	kinds := []tasks.Kind{
+		nightlyCompactActivityLogKind, opChangeBookIndexKind, recompactActivityDigestsKind,
+		itunesHealKind, repairMergedUserStateKind, relinkUnlinkedBooksKind, probeDirectoryBooksKind,
+		repairTranscribeStatusKind, regroupShatteredAIKind, recoverMissingFilesKind, rbfKind,
+	}
+	require.Len(t, kinds, 11)
+	keys := []string{"dry_run", "dryRun", "DRY_RUN", "DryRun", "apply", "Apply", "APPLY"}
+	gate := &gateWriter6{name: "gotham"}
+	for _, kind := range kinds {
+		for _, key := range keys {
+			t.Run(string(kind)+"/"+key, func(t *testing.T) {
+				p := newT6G6Probe(t)
+				defs := (&Plugin{}).t6g6Kinds(p.deps(), nil)
+				_, err := runT6G6Kind(t, t6g6ByKind(t, defs, kind), tasks.ModeLive, gate, `{"`+key+`": true}`)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "mode comes from the start request")
+				require.Zero(t, p.writerCalls(), "a writer was built")
+				require.Empty(t, p.rec.snapshot(), "something was written")
+			})
+		}
+	}
+}

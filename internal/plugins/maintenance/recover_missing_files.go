@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -347,31 +347,49 @@ func (p *Plugin) recoverMissingFilesNative(deps t6g6Deps, sched func(tasks.Kind)
 	c := t6g6Common(recoverMissingFilesKind, sched)
 	c.Title = "Recover missing book files by size match"
 	c.Help = recoverMissingFilesHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "book_files"))
+	// HEAD declared book_files only. UpdateBookFiles also recomputes each book's
+	// aggregates (books), and the opt-in reflinkOutside branch clones files on disk
+	// (files, the resource F5-08 names it). Effects are static per kind, so files
+	// is declared for every run, as the widest the kind can do.
+	c.Effects = tasks.Writes(tasks.Res("books", "book_files"), tasks.Res("books", "books"), tasks.Res("books", "files"))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.recover-missing-files")
 	c.Timeout = 4 * time.Hour
-	return tasks.Task(recoverMissingFilesKind, tasks.TaskSpec[recoverMissingNativeParams, struct{}]{
+	return tasks.Task(recoverMissingFilesKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
-		Run: func(rc *tasks.RC, in recoverMissingNativeParams) (struct{}, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			in, err := t6g6DecodeNative[recoverMissingNativeParams](recoverMissingFilesKind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
+			for _, d := range []struct {
+				name string
+				set  bool
+			}{{"Store", deps.Store != nil}, {"RootDir", deps.RootDir != nil}, {"ResolveReportPath", deps.ResolveReportPath != nil}} {
+				if err := t6g6NeedDep(recoverMissingFilesKind, d.name, d.set); err != nil {
+					return struct{}{}, err
+				}
+			}
 			params := recoverMissingParams{
 				Apply: rc.Mode() == tasks.ModeLive, SourceDirs: in.SourceDirs, Max: in.Max,
 				ReflinkOutside: in.ReflinkOutside, RequireExtMatch: in.RequireExtMatch, ReportPath: in.ReportPath,
 			}
 			env := recoverMissingFilesEnv{
 				t6g6Env: t6g6NativeEnv(rc),
+				Store:   deps.Store,
 				RootDir: deps.RootDir,
 				ResolveReport: func(explicit string) (string, error) {
 					return deps.ResolveReportPath(explicit, "recover-missing-files-"+string(rc.RunID())+".tsv")
 				},
 			}
 			env.StandDown = t6g6NativeStandDown(rc, deps.StandDownKey)
-			if deps.Store != nil {
-				env.Store = deps.Store
-			}
-			if params.Apply && deps.NewWriter != nil {
-				env.Writer = deps.NewWriter(rc.Writer())
+			if params.Apply {
+				w, err := t6g6NewWriter(recoverMissingFilesKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
 			}
 			return struct{}{}, recoverMissingFilesCore(rc.Context(), params, env)
 		},

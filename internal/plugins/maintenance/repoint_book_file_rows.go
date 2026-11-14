@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -249,6 +249,11 @@ type rbfEnv struct {
 	store       rbfStore
 	itunesRoots []string
 	scan        ScanController
+	// allCores is every row's core, retired ones included: the one read the
+	// claims pass makes that is not a method of the narrow store. The HEAD shell
+	// resolves it as a capability of the store it holds; the native shell hands
+	// it the t6g6Store's own method.
+	allCores func() ([]database.BookFileCore, error)
 }
 
 // rbfHelp is the def's Description, which the native kind carries as its Help.
@@ -313,19 +318,14 @@ func (p *Plugin) runRepointBookFileRows(ctx context.Context, raw json.RawMessage
 // rbfClaims maps each cleaned new_path in the request to the IDs of every row
 // holding it, from ONE pass over every row's core. Missing rows count: a row
 // flagged missing still names the path.
-func rbfClaims(store rbfStore, want map[string]bool) (map[string][]string, error) {
+func rbfClaims(allCores func() ([]database.BookFileCore, error), want map[string]bool) (map[string][]string, error) {
 	// Retired rows count as claims: a retired version still names its path, and
 	// a live row repointed onto it would share a path with a file the library is
 	// holding. (The row being repointed is refused if retired; see rbfPlanOne.)
-	var cores []database.BookFileCore
-	var err error
-	if l, ok := store.(interface {
-		AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error)
-	}); ok {
-		cores, err = l.AllBookFilesCoreIncludingRetired()
-	} else {
-		cores, err = database.AllBookFilesCoreIncludingRetired(store)
+	if allCores == nil {
+		return nil, fmt.Errorf("%s: no reader for the book_file rows", rbfOpName)
 	}
+	cores, err := allCores()
 	if err != nil {
 		return nil, fmt.Errorf("%s: list book_file rows: %w", rbfOpName, err)
 	}
@@ -346,6 +346,12 @@ func rbfClaims(store rbfStore, want map[string]bool) (map[string][]string, error
 // sequentially; the one whole-library read is the claim pass, done once per
 // phase.
 func repointBookFileRows(ctx context.Context, env rbfEnv, params rbfParams, reporter sdk.Reporter) (*rbfReport, error) {
+	if env.allCores == nil {
+		store := env.store
+		env.allCores = func() ([]database.BookFileCore, error) {
+			return database.AllBookFilesCoreIncludingRetired(store)
+		}
+	}
 	core := t6g6HeadEnv(reporter, false)
 	// The progress hook keeps HEAD's "progress not recorded" warning, which
 	// the generic hook would drop with the error.
@@ -368,15 +374,6 @@ func rbfParallelism() tasks.Parallelism {
 type rbfNativeStore struct {
 	rbfReader
 	rbfWriter
-}
-
-// AllBookFilesCoreIncludingRetired is every row's core, retired included. The
-// claims pass asks for it by method first: the reader is held as the narrow
-// rbfReader, which hides the store's retired-row capability from
-// database.AllBookFilesCoreIncludingRetired, so it is resolved here, through the
-// store's decorators.
-func (s rbfNativeStore) AllBookFilesCoreIncludingRetired() ([]database.BookFileCore, error) {
-	return database.AllBookFilesCoreIncludingRetired(s.rbfReader)
 }
 
 // rbfPreviewWriter stands in for the writer in a Preview run, which must not
@@ -407,15 +404,21 @@ func (p *Plugin) repointBookFileRowsNative(deps t6g6Deps, sched func(tasks.Kind)
 	c := t6g6Common(rbfKind, sched)
 	c.Title = "Repoint missing book_file rows at a named file"
 	c.Help = rbfHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "book_files"))
+	// HEAD declared book_files only. The apply also recomputes the book's
+	// aggregates (books) and journals the old row to the undo journal (operations).
+	c.Effects = tasks.Writes(tasks.Res("books", "book_files"), tasks.Res("books", "books"), tasks.Res("books", "operations"))
 	// A re-run is safe: a repointed row's file is present, so it is refused at
 	// the old-path-missing gate.
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books." + rbfOpID)
-	return tasks.Task(rbfKind, tasks.TaskSpec[rbfNativeParams, rbfReport]{
+	return tasks.Task(rbfKind, tasks.TaskSpec[json.RawMessage, rbfReport]{
 		Common: c,
-		Run: func(rc *tasks.RC, in rbfNativeParams) (rbfReport, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (rbfReport, error) {
+			in, err := t6g6DecodeNative[rbfNativeParams](rbfKind, raw)
+			if err != nil {
+				return rbfReport{}, err
+			}
 			live := rc.Mode() == tasks.ModeLive
 			dry := !live
 			params := rbfParams{Repoints: in.Repoints, DryRunSnake: &dry}
@@ -432,10 +435,14 @@ func (p *Plugin) repointBookFileRowsNative(deps t6g6Deps, sched func(tasks.Kind)
 				return rbfReport{}, fmt.Errorf("%s: resolve iTunes roots: %w", rbfOpName, err)
 			}
 			var w rbfWriter = rbfPreviewWriter{}
-			if live && deps.NewWriter != nil {
-				w = deps.NewWriter(rc.Writer())
+			if live {
+				nw, err := t6g6NewWriter(rbfKind, deps, rc)
+				if err != nil {
+					return rbfReport{}, err
+				}
+				w = nw
 			}
-			env := rbfEnv{store: rbfNativeStore{deps.Store, w}, itunesRoots: roots}
+			env := rbfEnv{store: rbfNativeStore{deps.Store, w}, itunesRoots: roots, allCores: deps.Store.AllBookFilesCoreIncludingRetired}
 			core := t6g6NativeEnv(rc)
 			core.StandDown = t6g6NativeStandDown(rc, deps.StandDownKey)
 			report, runErr := repointBookFileRowsCore(rc.Context(), env, params, core)
@@ -484,7 +491,7 @@ func repointBookFileRowsCore(ctx context.Context, env rbfEnv, params rbfParams, 
 			want[filepath.Clean(row.FilePath)] = true
 		}
 	}
-	claims, err := rbfClaims(env.store, want)
+	claims, err := rbfClaims(env.allCores, want)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +559,7 @@ func repointBookFileRowsCore(ctx context.Context, env rbfEnv, params rbfParams, 
 			applyWant[filepath.Clean(r.NewPath)] = true
 		}
 	}
-	applyClaims, err := rbfClaims(env.store, applyWant)
+	applyClaims, err := rbfClaims(env.allCores, applyWant)
 	if err != nil {
 		return report, err
 	}
