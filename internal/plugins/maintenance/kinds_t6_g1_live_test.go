@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-13
 
@@ -247,6 +247,11 @@ func (p *t6g1LiveProbe) deps(ops OpsStore) t6g1Deps {
 			ConjunctionRepair: hs, DuplicateMerge: hs, IDRepair: hs, PathLink: ops, StripMerge: hs, AutoMatch: ops,
 		}
 		d.ManualOnly = applygate.ManualOnlyReaders{Files: ops, Series: ops, Authors: ops}
+		// BookManualOnly refuses a missing reader on every book (fail closed), so
+		// a store that reads tags must be wired or the check fails each book.
+		if tr, ok := ops.(applygate.ManualOnlyTagReader); ok {
+			d.ManualOnly.Tags = tr
+		}
 	}
 	return d
 }
@@ -345,7 +350,12 @@ func t6g1LiveCases() []t6g1LiveCase {
 			setup: func(t *testing.T, p *t6g1LiveProbe) (t6g1Deps, func(*testing.T, *t6g1Host, json.RawMessage)) {
 				s := newRepairPebble(t)
 				keep := repairAuthor(t, s, "Alfred Pennyworth")
-				dup := repairAuthor(t, s, "ALFRED PENNYWORTH")
+				// CreateAuthor resolves a case variant to the existing row, so the
+				// duplicate is made by renaming a second author onto the variant
+				// (the store's name index allows it; the same recipe as
+				// author-id-repair below).
+				dup := repairAuthor(t, s, "Alfred twin")
+				require.NoError(t, s.UpdateAuthorName(dup.ID, "ALFRED PENNYWORTH"))
 				repairBook(t, s, "b1", &keep.ID, keep.ID)
 				repairBook(t, s, "b3", &keep.ID, keep.ID)
 				repairBook(t, s, "b2", &dup.ID, dup.ID)
@@ -454,7 +464,7 @@ func t6g1LiveCases() []t6g1LiveCase {
 					return amd
 				}
 				return d, func(t *testing.T, h *t6g1Host, _ json.RawMessage) {
-					require.Equal(t, 1, amd.searchCalled)
+					require.Equal(t, 2, amd.searchCalled, "the search is a read: once in the preview, once in the live run")
 					require.Equal(t, 1, amd.applyCalled, "the apply ran through the runner built over the run's writer")
 					raw, ok := h.CheckpointJSON("")
 					require.True(t, ok, "the run checkpoints the last book it visited")

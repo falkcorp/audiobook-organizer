@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
 // last-edited: 2026-11-13
 
@@ -222,7 +222,7 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.authorSplitScanDef(), par: authorSplitScanParallelism(), wantPar: "fixed(4): ",
 			writes: []string{"books/authors", "books/books"}},
 		{head: p.resolveProductionAuthorsDef(), par: resolveProductionAuthorsParallelism(), wantPar: "fixed(",
-			writes: []string{"books/aux_stores", "books/authors", "books/book_files", "books/books", "books/operations", "books/series"}},
+			writes: []string{"books/authors", "books/aux_stores", "books/book_files", "books/books", "books/operations", "books/series"}},
 		{head: p.authorConjunctionRepairDef(), writes: []string{"books/authors", "books/books", "books/operations"}},
 		{head: p.authorDuplicateMergeDef(), writes: []string{"books/authors", "books/books", "books/operations"}},
 		{head: p.authorIDRepairDef(), par: authorIDRepairParallelism(), wantPar: "cpu",
@@ -235,7 +235,7 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.authorWhitespaceCollisionReportDef(), readOnly: true},
 		{head: p.authorityBuildDef(), par: authorityBuildParallelism(0), wantPar: "cpu", writes: []string{"books/aux_stores"}},
 		{head: p.autoMatchTranscribedDef(), par: autoMatchTranscribedParallelism(), wantPar: "fixed(1): ", checkpoints: true,
-			writes: []string{"books/aux_stores", "books/authors", "books/book_files", "books/books", "books/operations"}},
+			writes: []string{"books/authors", "books/aux_stores", "books/book_files", "books/books", "books/operations"}},
 	}
 
 	seen := map[tasks.Kind]bool{}
@@ -284,7 +284,7 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 			require.True(t, c.Effects.IsReadOnly(), "%s must be declared ReadOnly", id)
 		} else {
 			require.False(t, c.Effects.IsReadOnly(), "%s writes", id)
-			require.Equal(t, r.writes, t6g1WriteSet(c), "%s write set", id)
+			require.Equal(t, slices.Sorted(slices.Values(r.writes)), t6g1WriteSet(c), "%s write set", id)
 		}
 
 		if r.wantPar != "" {
