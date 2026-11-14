@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -44,6 +44,7 @@ type t6g1CountWriter struct {
 
 	mu    sync.Mutex
 	calls map[string]int
+	res   t6g1ResourceLog
 	// failRecord, when set, is what RecordOperationChange returns instead of
 	// writing the row.
 	failRecord error
@@ -57,6 +58,7 @@ func (w *t6g1CountWriter) note(name string) {
 	w.mu.Lock()
 	w.calls[name]++
 	w.mu.Unlock()
+	w.res.record(name)
 }
 
 func (w *t6g1CountWriter) count(name string) int {
@@ -151,12 +153,14 @@ type t6g1CountActivity struct {
 	windows []int64 // the from bound of each window written
 	marks   int
 	clears  int
+	res     t6g1ResourceLog
 }
 
 func (a *t6g1CountActivity) BackfillFilterIndexWindow(ctx context.Context, from, to int64, openEnded bool) (int, error) {
 	a.mu.Lock()
 	a.windows = append(a.windows, from)
 	a.mu.Unlock()
+	a.res.record("BackfillFilterIndexWindow")
 	return a.t6g1HeadActivity.BackfillFilterIndexWindow(ctx, from, to, openEnded)
 }
 
@@ -164,6 +168,7 @@ func (a *t6g1CountActivity) MarkFilterIndexBackfillDone() error {
 	a.mu.Lock()
 	a.marks++
 	a.mu.Unlock()
+	a.res.record("MarkFilterIndexBackfillDone")
 	return a.t6g1HeadActivity.MarkFilterIndexBackfillDone()
 }
 
@@ -171,7 +176,13 @@ func (a *t6g1CountActivity) ClearFilterIndexBackfillDone() error {
 	a.mu.Lock()
 	a.clears++
 	a.mu.Unlock()
+	a.res.record("ClearFilterIndexBackfillDone")
 	return a.t6g1HeadActivity.ClearFilterIndexBackfillDone()
+}
+
+func (a *t6g1CountActivity) ReconcileFilterIndexCoverage(ctx context.Context, progress database.FilterIndexProgress) (database.FilterIndexReconcileResult, error) {
+	a.res.record("ReconcileFilterIndexCoverage")
+	return a.t6g1HeadActivity.ReconcileFilterIndexCoverage(ctx, progress)
 }
 
 // t6g1FakeFetcher is the metadata fetcher the resolve kind runs per book.
@@ -211,6 +222,15 @@ func (p *t6g1LiveProbe) noteGiven(w tasks.Writer) {
 	p.mu.Lock()
 	p.given = append(p.given, w)
 	p.mu.Unlock()
+}
+
+// resLogs are the resource logs of every spy the probe built.
+func (p *t6g1LiveProbe) resLogs() []*t6g1ResourceLog {
+	logs := []*t6g1ResourceLog{&p.cw.res}
+	if p.act != nil {
+		logs = append(logs, &p.act.res)
+	}
+	return logs
 }
 
 func (p *t6g1LiveProbe) cacheCount() int {
@@ -527,6 +547,7 @@ func TestT6G1Kinds_LiveRunsWriteThroughTheRunsWriter(t *testing.T) {
 				require.Same(t, gate, w, "the factory must be given the run's writer, rc.Writer()")
 			}
 			check(t, h, res)
+			t6g1RequireWritesDeclared(t, def, probe.resLogs()...)
 
 			if tc.standDown {
 				require.Equal(t, []tasks.Key{t6g1TestStandDownKey}, h.standDowns(), "the write phase parks the library scan")
@@ -560,7 +581,15 @@ func TestT6G1Kinds_LiveCasesCoverEveryWritingKind(t *testing.T) {
 
 // The authority build applies a reviewed plan: a Preview run produces it, a
 // Live run carries it out through the writer.
-func TestT6G1Kinds_AuthorityBuildAppliesThroughTheRunsWriter(t *testing.T) {
+//
+// PLANTED V2 ROW (seam, F5-18 obligation): the Live run finds its plan through
+// deps.PlanReader, which reads a v2 operation row (DefID maintenance.authority-build,
+// completed, ResultData set). A native Preview's result lives in the tasks run
+// store, not in the v2 operations table, so this test PLANTS a v2 row holding the
+// Preview's result (storePlanRow) to stand in for the lookup F5-18 must build.
+// It does not prove a native Preview's plan_op_id (its RunID) resolves in
+// production; seams.d/F5-06.md and todo.d/ carry that as an F5-18 obligation.
+func TestT6G1Kinds_AuthorityBuildAppliesFromAPlantedV2PlanRow(t *testing.T) {
 	ps := authorityTestStore(t)
 	probe := &t6g1LiveProbe{}
 	deps := probe.deps(ps)
@@ -576,6 +605,7 @@ func TestT6G1Kinds_AuthorityBuildAppliesThroughTheRunsWriter(t *testing.T) {
 	require.NoError(t, json.Unmarshal(res, &plan))
 	require.True(t, plan.DryRun)
 	require.Positive(t, plan.Writes)
+	// Planted v2 row: see the test comment. The native Preview did not write it.
 	storePlanRow(t, ps, "plan1", res)
 
 	res, h, err := runT6G1Full(t, def, tasks.ModeLive, gate, `{"plan_op_id":"plan1"}`, nil)
@@ -585,6 +615,7 @@ func TestT6G1Kinds_AuthorityBuildAppliesThroughTheRunsWriter(t *testing.T) {
 	require.NotNil(t, applied.Apply)
 	require.Equal(t, plan.Writes, applied.Apply.Written)
 	require.Positive(t, probe.cw.count("SetRaw"), "the ref_* keys were written through the writer")
+	t6g1RequireWritesDeclared(t, def, probe.resLogs()...)
 	require.NotEmpty(t, probe.given)
 	for _, w := range probe.given {
 		require.Same(t, gate, w)
@@ -627,6 +658,41 @@ func TestT6G1Kinds_ActivityBackfillRestoresHEADCheckpoint(t *testing.T) {
 	require.True(t, r.SentinelMarked)
 }
 
+// A fresh activity backfill checkpoints as it goes, and what it writes never runs
+// ahead of the windows it indexed: a resume from a checkpoint that skipped an
+// unfinished window would mark the index done over unindexed rows. 40 days of
+// rows is about 41 windows and the run checkpoints every 8 completions, so the
+// last checkpoint is one the run wrote itself, not one the test seeded.
+func TestT6G1Kinds_ActivityBackfillWritesAContiguousCheckpoint(t *testing.T) {
+	s, _ := newAfibStore(t, 40)
+	probe := &t6g1LiveProbe{}
+	probe.act = &t6g1CountActivity{t6g1HeadActivity: t6g1HeadActivity{s}}
+	deps := probe.deps(nil)
+	deps.ActivityFilter = t6g1HeadActivity{s}
+	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(deps, nil), activityFilterIndexBackfillKind)
+
+	_, h, err := runT6G1Full(t, def, tasks.ModeLive, &t6g1GateWriter{}, "", nil)
+	require.NoError(t, err)
+	raw, ok := h.CheckpointJSON("")
+	require.True(t, ok, "a run over many windows must write a checkpoint")
+	var cp activityFilterIndexBackfillParams
+	require.NoError(t, json.Unmarshal(raw, &cp))
+	require.Greater(t, cp.PlanWindows, 8, "the fixture must span more than one checkpoint interval")
+	require.Positive(t, cp.ResumeFrom, "the watermark advanced")
+	require.LessOrEqual(t, cp.ResumeFrom, cp.PlanWindows)
+
+	probe.act.mu.Lock()
+	indexed := map[int64]bool{}
+	for _, from := range probe.act.windows {
+		indexed[from] = true
+	}
+	probe.act.mu.Unlock()
+	w := int64(activityFilterIndexWindow)
+	for i := range cp.ResumeFrom {
+		require.True(t, indexed[cp.PlanStartNanos+int64(i)*w], "the checkpoint says windows 0..%d are done but window %d was never indexed", cp.ResumeFrom-1, i)
+	}
+}
+
 // A resumed auto-match skips every book up to and including the checkpoint's
 // last book, from the bytes HEAD wrote (autoMatchTranscribedParams).
 func TestT6G1Kinds_AutoMatchRestoresHEADCheckpoint(t *testing.T) {
@@ -651,36 +717,37 @@ func TestT6G1Kinds_AutoMatchRestoresHEADCheckpoint(t *testing.T) {
 	require.Contains(t, string(raw), `"last_book_id":"b3"`)
 }
 
-// A native writing kind refuses the keys the run's mode replaces, whatever
-// their case, and accepts an empty or null body: a dropped {"dry_run":true}
-// would turn a start meant as a dry run into a live write.
+// A native writing kind refuses every key the run's mode replaces (dry_run,
+// dryRun and apply), whatever their case, and accepts an empty or null body: a
+// dropped {"dry_run":true} or {"apply":false} would turn a start meant as a dry
+// run into a live write. The table is one subtest per kind per key, so a shell
+// that drops any one of them fails its own row.
 func TestT6G1Kinds_RefuseModeKeysInParams(t *testing.T) {
 	defs := (&Plugin{}).t6g1Kinds(t6g1Deps{}, nil)
-	dryRun := []string{`{"dry_run":true}`, `{"dryRun":false}`, `{"DRY_RUN":true}`, `{"Dry_Run":false}`}
-	apply := []string{`{"apply":false}`, `{"Apply":true}`}
-	cases := []struct {
-		kind tasks.Kind
-		bad  []string
-	}{
-		{activityFilterIndexBackfillKind, slices.Concat(dryRun, apply)},
-		{pruneAIJournalKind, slices.Concat(dryRun, apply)},
-		{authorSplitScanKind, dryRun},
-		{resolveProductionAuthorsKind, dryRun},
-		{authorConjunctionRepairKind, dryRun},
-		{authorDuplicateMergeKind, dryRun},
-		{authorIDRepairKind, dryRun},
-		{authorPathLinkKind, dryRun},
-		{purgeEmptyAuthorsKind, slices.Concat(dryRun, apply)},
-		{authorStripMergeKind, slices.Concat(dryRun, apply)},
-		{authorityBuildKind, dryRun},
-		{autoMatchTranscribedKind, dryRun},
+	keys := map[string][]string{
+		"dry_run": {`{"dry_run":true}`, `{"DRY_RUN":true}`, `{"Dry_Run":false}`},
+		"dryRun":  {`{"dryRun":false}`, `{"DRYRUN":true}`, `{"dryrun":true}`},
+		"apply":   {`{"apply":false}`, `{"Apply":true}`, `{"APPLY":false}`},
 	}
-	for _, tc := range cases {
-		decode, _ := t6g1Runner(t, t6g1ByKind(t, defs, tc.kind))
-		for _, body := range tc.bad {
-			_, err := decode(json.RawMessage(body))
-			require.Error(t, err, "%s accepted %s", tc.kind, body)
-			require.Contains(t, err.Error(), "mode comes from the start request", "%s %s", tc.kind, body)
+	for _, key := range t6g1ModeKeys {
+		require.Contains(t, keys, key, "t6g1ModeKeys gained %q: add its bodies here", key)
+	}
+	require.Len(t, keys, len(t6g1ModeKeys), "a key here that t6g1ModeKeys no longer refuses")
+	kinds := []tasks.Kind{
+		activityFilterIndexBackfillKind, pruneAIJournalKind, authorSplitScanKind, resolveProductionAuthorsKind,
+		authorConjunctionRepairKind, authorDuplicateMergeKind, authorIDRepairKind, authorPathLinkKind,
+		purgeEmptyAuthorsKind, authorStripMergeKind, authorityBuildKind, autoMatchTranscribedKind,
+	}
+	for _, kind := range kinds {
+		decode, _ := t6g1Runner(t, t6g1ByKind(t, defs, kind))
+		for key, bodies := range keys {
+			t.Run(string(kind)+"/"+key, func(t *testing.T) {
+				for _, body := range bodies {
+					_, err := decode(json.RawMessage(body))
+					require.Error(t, err, "%s accepted %s", kind, body)
+					require.Contains(t, err.Error(), "mode comes from the start request", "%s %s", kind, body)
+				}
+			})
 		}
 		for _, body := range []string{"", "null", "{}"} {
 			var raw json.RawMessage
@@ -688,7 +755,7 @@ func TestT6G1Kinds_RefuseModeKeysInParams(t *testing.T) {
 				raw = json.RawMessage(body)
 			}
 			_, err := decode(raw)
-			require.NoError(t, err, "%s refused the body %q", tc.kind, body)
+			require.NoError(t, err, "%s refused the body %q", kind, body)
 		}
 	}
 }

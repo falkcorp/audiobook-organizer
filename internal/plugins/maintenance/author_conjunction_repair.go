@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -201,7 +201,7 @@ type authorConjunctionRepairNativeParams struct {
 
 // UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
 func (p *authorConjunctionRepairNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1DryRunKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain authorConjunctionRepairNativeParams
@@ -225,9 +225,14 @@ func (p *Plugin) authorConjunctionRepairNative(deps t6g1Deps, sched func(tasks.K
 				var zero struct{}
 				return zero, err
 			}
+			writer, err := t6g1WriterOf(deps, rc, authorConjunctionRepairKind, func(ws t6g1Writers) t6g1MergeWriter { return ws.Merge })
+			if err != nil {
+				var zero struct{}
+				return zero, err
+			}
 			env := authorConjunctionRepairEnv{
 				t6g1Env:                t6g1NativeEnv(rc),
-				Writer:                 deps.NewWriters(rc.Writer()).Merge,
+				Writer:                 writer,
 				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,
 				InvalidateDedupCache:   deps.InvalidateDedupCache,
 			}

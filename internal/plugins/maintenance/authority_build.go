@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/authority_build.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7b057b54-4781-486b-b075-fe627504dcf1
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -266,7 +266,7 @@ type authorityBuildNativeParams struct {
 
 // UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
 func (p *authorityBuildNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1DryRunKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain authorityBuildNativeParams
@@ -279,7 +279,7 @@ func (p *Plugin) authorityBuildNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 	c := t6g1Common(authorityBuildKind, sched)
 	c.Title = "Authority lists: build"
 	c.Help = authorityBuildHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "aux_stores"))
+	c.Effects = tasks.Writes(tasks.Res("books", "authority_lists"))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books." + authorityBuildOpID)
@@ -291,9 +291,14 @@ func (p *Plugin) authorityBuildNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 				LibraryExportPath: np.LibraryExportPath, SkipCatalog: np.SkipCatalog,
 				SkipSeed: np.SkipSeed, Concurrency: np.Concurrency, PlanOpID: np.PlanOpID,
 			}
+			writer, err := t6g1WriterOf(deps, rc, authorityBuildKind, func(ws t6g1Writers) authorityBuildWriter { return ws.AuthorityBuild })
+			if err != nil {
+				var zero authorityPlanResult
+				return zero, err
+			}
 			env := authorityBuildEnv{
 				t6g1Env: t6g1NativeEnv(rc),
-				Writer:  deps.NewWriters(rc.Writer()).AuthorityBuild,
+				Writer:  writer,
 				Plans:   deps.PlanReader,
 				Items:   t6g1NativeItems(rc, authorityBuildParallelism(np.Concurrency)),
 				ApplyParams: func(planOpID string) map[string]any {

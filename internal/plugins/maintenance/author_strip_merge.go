@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -530,7 +530,7 @@ type authorStripMergeNativeParams struct {
 
 // UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
 func (p *authorStripMergeNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1ApplyKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain authorStripMergeNativeParams
@@ -551,9 +551,17 @@ func (p *Plugin) authorStripMergeNative(deps t6g1Deps, sched func(tasks.Kind) *t
 	return tasks.Task(authorStripMergeKind, tasks.TaskSpec[authorStripMergeNativeParams, struct{}]{
 		Common: c,
 		Run: func(rc *tasks.RC, np authorStripMergeNativeParams) (struct{}, error) {
+			if err := t6g1RefuseUnwired(rc, authorStripMergeKind, deps.manualOnlyWires(true)...); err != nil {
+				return struct{}{}, err
+			}
+			writer, err := t6g1WriterOf(deps, rc, authorStripMergeKind, func(ws t6g1Writers) authorStripMergeWriter { return ws.StripMerge })
+			if err != nil {
+				var zero struct{}
+				return zero, err
+			}
 			env := authorStripMergeEnv{
 				t6g1Env:    t6g1NativeEnv(rc),
-				Writer:     deps.NewWriters(rc.Writer()).StripMerge,
+				Writer:     writer,
 				ManualOnly: deps.ManualOnly,
 			}
 			if deps.Stores.StripMerge != nil {

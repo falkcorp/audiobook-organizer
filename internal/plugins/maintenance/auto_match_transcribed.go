@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -145,7 +145,7 @@ type autoMatchTranscribedNativeParams struct {
 
 // UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
 func (p *autoMatchTranscribedNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1DryRunKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain autoMatchTranscribedNativeParams
@@ -168,11 +168,12 @@ func (p *Plugin) autoMatchTranscribedNative(deps t6g1Deps, sched func(tasks.Kind
 	// that writes: the book row and its author credits (books, authors; the
 	// credit step creates an author row when the name is new), the per-file
 	// segment titles (book_files, generateSegmentTitles), the metadata change
-	// record and the fetched-metadata state (operations and aux_stores,
-	// recordApplyHistory and updateFetchedMetadataState) and the duplicate flag
+	// record (operations, recordApplyHistory), the fetched-metadata cache
+	// (metadata_cache) and the per-field state snapshot (field_states) and the
+	// duplicate flag
 	// of a shared source hash (books, checkMetadataSourceHashDuplicates).
 	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "book_files"),
-		tasks.Res("books", "operations"), tasks.Res("books", "aux_stores"))
+		tasks.Res("books", "operations"), tasks.Res("books", "metadata_cache"), tasks.Res("books", "field_states"))
 	// The run checkpoints the last book visited and restores it (rc.Restore).
 	c.Resume = tasks.ResumeContinue
 	c.Priority = tasks.PriorityLow
@@ -181,6 +182,9 @@ func (p *Plugin) autoMatchTranscribedNative(deps t6g1Deps, sched func(tasks.Kind
 	return tasks.Task(autoMatchTranscribedKind, tasks.TaskSpec[autoMatchTranscribedNativeParams, struct{}]{
 		Common: c,
 		Run: func(rc *tasks.RC, np autoMatchTranscribedNativeParams) (struct{}, error) {
+			if err := t6g1RefuseUnwired(rc, autoMatchTranscribedKind, deps.manualOnlyWires(false)...); err != nil {
+				return struct{}{}, err
+			}
 			params := autoMatchTranscribedParams{MinScore: np.MinScore}
 			var cp autoMatchTranscribedParams
 			ok, err := rc.Restore(&cp)

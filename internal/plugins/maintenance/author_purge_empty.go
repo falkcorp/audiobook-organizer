@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -256,7 +256,7 @@ type purgeEmptyAuthorsNativeParams struct {
 
 // UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
 func (p *purgeEmptyAuthorsNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1ApplyKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain purgeEmptyAuthorsNativeParams
@@ -277,9 +277,14 @@ func (p *Plugin) purgeEmptyAuthorsNative(deps t6g1Deps, sched func(tasks.Kind) *
 	return tasks.Task(purgeEmptyAuthorsKind, tasks.TaskSpec[purgeEmptyAuthorsNativeParams, struct{}]{
 		Common: c,
 		Run: func(rc *tasks.RC, np purgeEmptyAuthorsNativeParams) (struct{}, error) {
+			writer, err := t6g1WriterOf(deps, rc, purgeEmptyAuthorsKind, func(ws t6g1Writers) purgeEmptyAuthorsWriter { return ws.PurgeEmpty })
+			if err != nil {
+				var zero struct{}
+				return zero, err
+			}
 			env := purgeEmptyAuthorsEnv{
 				t6g1Env:          t6g1NativeEnv(rc),
-				Writer:           deps.NewWriters(rc.Writer()).PurgeEmpty,
+				Writer:           writer,
 				AcquireStandDown: t6g1NativeStandDown(rc, deps.StandDownKey),
 			}
 			if deps.Stores.PurgeEmpty != nil {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: d7602035-c210-4555-84a3-7a28e0a22f83
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -255,7 +255,7 @@ type activityFilterNativeParams struct {
 // the op has no Preview, so a dry_run or apply key can only mean a caller who
 // believes the run will not write.
 func (p *activityFilterNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1ApplyKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain activityFilterNativeParams
@@ -268,7 +268,7 @@ func (p *Plugin) activityFilterIndexBackfillNative(deps t6g1Deps, sched func(tas
 	c := t6g1Common(activityFilterIndexBackfillKind, sched)
 	c.Title = "Backfill activity filter indexes"
 	c.Help = activityFilterIndexBackfillHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "operations"))
+	c.Effects = tasks.Writes(tasks.Res("books", "activity"))
 	// The run checkpoints its window watermark and restores it (rc.Restore).
 	c.Resume = tasks.ResumeContinue
 	c.Priority = tasks.PriorityLow
@@ -293,9 +293,14 @@ func (p *Plugin) activityFilterIndexBackfillNative(deps t6g1Deps, sched func(tas
 				params.PlanStartNanos, params.PlanWindows = cp.PlanStartNanos, cp.PlanWindows
 				params.ResumeFrom, params.IndexedBefore = cp.ResumeFrom, cp.IndexedBefore
 			}
+			writer, err := t6g1WriterOf(deps, rc, activityFilterIndexBackfillKind, func(ws t6g1Writers) activityFilterWriter { return ws.ActivityFilter })
+			if err != nil {
+				var zero ActivityFilterIndexBackfillResult
+				return zero, err
+			}
 			env := activityFilterEnv{
 				t6g1Env:        t6g1NativeEnv(rc),
-				Writer:         deps.NewWriters(rc.Writer()).ActivityFilter,
+				Writer:         writer,
 				Items:          t6g1NativeItems(rc, activityFilterIndexBackfillParallelism(np.Workers)),
 				SaveCheckpoint: func(state any) error { return rc.Checkpoint(state) },
 			}

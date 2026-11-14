@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
@@ -31,12 +33,14 @@ type t6g1Recorder struct {
 
 	mu      sync.Mutex
 	renames []string
+	res     t6g1ResourceLog
 }
 
 func (r *t6g1Recorder) RenameAuthorJournaled(opID string, a database.Author, name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.renames = append(r.renames, opID+":"+a.Name+"->"+name)
+	r.res.record("RenameAuthorJournaled")
 	return nil
 }
 
@@ -194,6 +198,154 @@ func t6g1WriteSet(c tasks.Common) []string {
 	return out
 }
 
+// t6g1WriterResources maps every method of every group 1 writer interface to
+// the resources that write touches. It is keyed on the interfaces' methods, not
+// on the Effects under test: TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod
+// reflects over t6g1Writers and fails for a method with no row, and the spies
+// record the resources of each write a live run actually makes. A live run then
+// asserts the recorded resources are within the kind's declared WriteSet, so a
+// wrong or missing resource in an Effects declaration fails a test instead of
+// being copied into a second hand-typed table.
+var t6g1WriterResources = map[string][]string{
+	"AIJournalPruner":              {string(ops.ResAIJournal)},
+	"BackfillFilterIndexWindow":    {string(ops.ResActivity)},
+	"MarkFilterIndexBackfillDone":  {string(ops.ResActivity)},
+	"ClearFilterIndexBackfillDone": {string(ops.ResActivity)},
+	"ReconcileFilterIndexCoverage": {string(ops.ResActivity)},
+	"CreateAuthor":                 {string(ops.ResAuthors)},
+	"DeleteAuthor":                 {string(ops.ResAuthors)},
+	"ModifyBookAuthors":            {string(ops.ResAuthors)},
+	"SetBookAuthors":               {string(ops.ResAuthors)},
+	"ModifyBook":                   {string(ops.ResBooks)},
+	"RecordOperationChange":        {string(ops.ResOperations)},
+	"JournalStep":                  {string(ops.ResOperations)},
+	"MoveCredits":                  {string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResOperations)},
+	"MergeDeleteAuthor":            {string(ops.ResAuthors), string(ops.ResOperations)},
+	"RenameAuthorJournaled":        {string(ops.ResAuthors), string(ops.ResOperations)},
+	"SetRaw":                       {string(ops.ResAuthorityLists)},
+	"DeleteRawBatch":               {string(ops.ResAuthorityLists)},
+}
+
+// t6g1ResourceLog records the resources of the writes a spy saw, and the
+// methods it saw that t6g1WriterResources does not map.
+type t6g1ResourceLog struct {
+	mu       sync.Mutex
+	seen     map[string]bool
+	unmapped map[string]bool
+}
+
+func (l *t6g1ResourceLog) record(method string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	res, ok := t6g1WriterResources[method]
+	if !ok {
+		if l.unmapped == nil {
+			l.unmapped = map[string]bool{}
+		}
+		l.unmapped[method] = true
+		return
+	}
+	if l.seen == nil {
+		l.seen = map[string]bool{}
+	}
+	for _, r := range res {
+		l.seen[r] = true
+	}
+}
+
+// t6g1RequireWritesDeclared fails when a spy saw a write whose resource the
+// definition's WriteSet does not declare, saw an unmapped writer method, or saw
+// no write at all (a live case that exercised nothing proves nothing).
+func t6g1RequireWritesDeclared(t *testing.T, def tasks.Definition, logs ...*t6g1ResourceLog) {
+	t.Helper()
+	declared := t6g1WriteSet(tasks.CommonOf(def))
+	seen := map[string]bool{}
+	for _, l := range logs {
+		if l == nil {
+			continue
+		}
+		l.mu.Lock()
+		for r := range l.seen {
+			seen[r] = true
+		}
+		require.Empty(t, l.unmapped, "%s: writer methods with no row in t6g1WriterResources", def.Kind())
+		l.mu.Unlock()
+	}
+	require.NotEmpty(t, seen, "%s: the live run made no recorded write", def.Kind())
+	for r := range seen {
+		require.Contains(t, declared, "books/"+r, "%s writes %s but does not declare it in its WriteSet %v", def.Kind(), r, declared)
+	}
+}
+
+func TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod(t *testing.T) {
+	wt := reflect.TypeOf(t6g1Writers{})
+	used := map[string]bool{}
+	for i := range wt.NumField() {
+		it := wt.Field(i).Type
+		require.Equal(t, reflect.Interface, it.Kind(), "%s is not a writer interface", wt.Field(i).Name)
+		for j := range it.NumMethod() {
+			name := it.Method(j).Name
+			used[name] = true
+			require.Contains(t, t6g1WriterResources, name, "writer method %s.%s has no row in t6g1WriterResources", wt.Field(i).Name, name)
+		}
+	}
+	for name := range t6g1WriterResources {
+		require.True(t, used[name], "t6g1WriterResources row %s names no writer method", name)
+	}
+}
+
+// t6g1OpsVocabulary is every resource name pkg/ops defines. An Effects
+// declaration may use only these; the list is built from the constants, so a
+// rename or a removal breaks the build instead of drifting.
+var t6g1OpsVocabulary = []ops.Resource{
+	ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResReviewItems,
+	ops.ResEmbeddings, ops.ResOperations, ops.ResCatalog, ops.ResFingerprintIndex,
+	ops.ResSettings, ops.ResActivity, ops.ResFiles, ops.ResExternalIDs, ops.ResUserState,
+	ops.ResMetadataCache, ops.ResFieldStates, ops.ResIndexes, ops.ResAIJournal, ops.ResAuthorityLists,
+}
+
+func TestT6G1Kinds_EffectsUseOnlyOpsResources(t *testing.T) {
+	valid := map[string]bool{}
+	for _, r := range t6g1OpsVocabulary {
+		valid[string(r)] = true
+	}
+	for _, d := range (&Plugin{}).t6g1Kinds(fakeT6G1Deps(t), nil) {
+		c := tasks.CommonOf(d)
+		for _, r := range slices.Concat(c.Effects.WriteSet(), c.Effects.ReadSet(), c.Effects.DeleteSet()) {
+			require.Equal(t, "books", r.Module, "%s", d.Kind())
+			require.True(t, valid[r.Kind], "%s declares %q, which is not a pkg/ops resource constant", d.Kind(), r.Kind)
+		}
+	}
+}
+
+// The native pool's watermark is the contiguous finished prefix, whatever the
+// completion order: a resume from a watermark that ran ahead of an unfinished
+// item would skip it, and the activity backfill would then mark the index done
+// over unindexed windows.
+func TestT6G1Kinds_WatermarkIsTheContiguousPrefix(t *testing.T) {
+	ctx := context.Background()
+	var got []int
+	w := newT6g1Watermark(0, 5, 1, func(_ context.Context, wm int) error { got = append(got, wm); return nil })
+	for _, i := range []int{0, 2, 3, 1} {
+		require.NoError(t, w.complete(ctx, i))
+	}
+	require.Equal(t, []int{1, 1, 1, 4}, got, "the watermark never passes an unfinished item")
+
+	got = nil
+	w = newT6g1Watermark(3, 6, 1, func(_ context.Context, wm int) error { got = append(got, wm); return nil })
+	for _, i := range []int{4, 3, 5} {
+		require.NoError(t, w.complete(ctx, i))
+	}
+	require.Equal(t, []int{3, 5, 6}, got, "a resumed pool starts its watermark at ResumeFrom")
+
+	got = nil
+	w = newT6g1Watermark(0, 6, 3, func(_ context.Context, wm int) error { got = append(got, wm); return nil })
+	for i := range 6 {
+		require.NoError(t, w.complete(ctx, i))
+	}
+	require.Equal(t, []int{3, 6}, got, "the callback runs once per CheckpointEvery completions")
+}
+
 func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g1Kinds(fakeT6G1Deps(t), nil)
@@ -211,31 +363,30 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 		checkpoints bool
 		// readOnly: the two reports write nothing.
 		readOnly bool
-		// writes is what the kind's writers touch, read from the writer
-		// interface of each core (not from the Effects under test).
-		writes []string
+		// fetchWrites is what the kind's metadata fetch writes through the
+		// fetcher or runner built over the run's writer, which no writer-method
+		// spy sees (resolve and auto-match). The write sets of every other kind
+		// are checked against the writes a live run records
+		// (t6g1RequireWritesDeclared), not against a table typed here.
+		fetchWrites []string
 	}
 	rows := []row{
-		{head: p.activityFilterIndexBackfillDef(), par: activityFilterIndexBackfillParallelism(0), wantPar: "cpu", checkpoints: true,
-			writes: []string{"books/operations"}},
-		{head: p.pruneAIJournalDef(), writes: []string{"books/aux_stores"}},
-		{head: p.authorSplitScanDef(), par: authorSplitScanParallelism(), wantPar: "fixed(4): ",
-			writes: []string{"books/authors", "books/books"}},
+		{head: p.activityFilterIndexBackfillDef(), par: activityFilterIndexBackfillParallelism(0), wantPar: "cpu", checkpoints: true},
+		{head: p.pruneAIJournalDef()},
+		{head: p.authorSplitScanDef(), par: authorSplitScanParallelism(), wantPar: "fixed(4): "},
 		{head: p.resolveProductionAuthorsDef(), par: resolveProductionAuthorsParallelism(), wantPar: "fixed(",
-			writes: []string{"books/authors", "books/aux_stores", "books/book_files", "books/books", "books/operations", "books/series"}},
-		{head: p.authorConjunctionRepairDef(), writes: []string{"books/authors", "books/books", "books/operations"}},
-		{head: p.authorDuplicateMergeDef(), writes: []string{"books/authors", "books/books", "books/operations"}},
-		{head: p.authorIDRepairDef(), par: authorIDRepairParallelism(), wantPar: "cpu",
-			writes: []string{"books/authors", "books/books", "books/operations"}},
-		{head: p.authorPathLinkDef(), par: authorPathLinkParallelism(), wantPar: "cpu",
-			writes: []string{"books/authors", "books/books", "books/operations"}},
-		{head: p.purgeEmptyAuthorsDef(), writes: []string{"books/authors", "books/books", "books/operations"}},
-		{head: p.authorStripMergeDef(), writes: []string{"books/authors", "books/books", "books/operations"}},
+			fetchWrites: []string{"books/books", "books/authors", "books/series", "books/book_files", "books/operations", "books/metadata_cache", "books/field_states"}},
+		{head: p.authorConjunctionRepairDef()},
+		{head: p.authorDuplicateMergeDef()},
+		{head: p.authorIDRepairDef(), par: authorIDRepairParallelism(), wantPar: "cpu"},
+		{head: p.authorPathLinkDef(), par: authorPathLinkParallelism(), wantPar: "cpu"},
+		{head: p.purgeEmptyAuthorsDef()},
+		{head: p.authorStripMergeDef()},
 		{head: p.authorTitleFragmentScanDef(), readOnly: true},
 		{head: p.authorWhitespaceCollisionReportDef(), readOnly: true},
-		{head: p.authorityBuildDef(), par: authorityBuildParallelism(0), wantPar: "cpu", writes: []string{"books/aux_stores"}},
+		{head: p.authorityBuildDef(), par: authorityBuildParallelism(0), wantPar: "cpu"},
 		{head: p.autoMatchTranscribedDef(), par: autoMatchTranscribedParallelism(), wantPar: "fixed(1): ", checkpoints: true,
-			writes: []string{"books/authors", "books/aux_stores", "books/book_files", "books/books", "books/operations"}},
+			fetchWrites: []string{"books/books", "books/authors", "books/book_files", "books/operations", "books/metadata_cache", "books/field_states"}},
 	}
 
 	seen := map[tasks.Kind]bool{}
@@ -284,7 +435,10 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 			require.True(t, c.Effects.IsReadOnly(), "%s must be declared ReadOnly", id)
 		} else {
 			require.False(t, c.Effects.IsReadOnly(), "%s writes", id)
-			require.Equal(t, slices.Sorted(slices.Values(r.writes)), t6g1WriteSet(c), "%s write set", id)
+			require.NotEmpty(t, c.Effects.WriteSet(), "%s declares no write", id)
+			for _, w := range r.fetchWrites {
+				require.Contains(t, t6g1WriteSet(c), w, "%s must declare what its metadata fetch writes", id)
+			}
 		}
 
 		if r.wantPar != "" {
@@ -324,6 +478,7 @@ func TestT6G1Kinds_WritesThroughShell(t *testing.T) {
 	require.Len(t, probe.recorder.renames, 1)
 	require.Contains(t, probe.recorder.renames[0], "& Joker->Joker")
 	require.Positive(t, probe.caches, "a live write drops the caches")
+	t6g1RequireWritesDeclared(t, conj, &probe.recorder.res)
 
 	// A live-only kind refuses Preview before it builds a writer.
 	probe.calls = 0

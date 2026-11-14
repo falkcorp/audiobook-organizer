@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -273,7 +273,7 @@ type authorIDRepairNativeParams struct {
 
 // UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
 func (p *authorIDRepairNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1DryRunKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain authorIDRepairNativeParams
@@ -302,9 +302,14 @@ func (p *Plugin) authorIDRepairNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 				var zero authorIDRepairResult
 				return zero, err
 			}
+			writer, err := t6g1WriterOf(deps, rc, authorIDRepairKind, func(ws t6g1Writers) authorIDRepairWriter { return ws.IDRepair })
+			if err != nil {
+				var zero authorIDRepairResult
+				return zero, err
+			}
 			env := authorIDRepairEnv{
 				t6g1Env:                t6g1NativeEnv(rc),
-				Writer:                 deps.NewWriters(rc.Writer()).IDRepair,
+				Writer:                 writer,
 				Items:                  t6g1NativeItems(rc, authorIDRepairParallelism()),
 				AcquireStandDown:       t6g1NativeStandDown(rc, deps.StandDownKey),
 				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,

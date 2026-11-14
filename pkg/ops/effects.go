@@ -1,7 +1,7 @@
 // file: pkg/ops/effects.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
-// last-edited: 2026-10-17
+// last-edited: 2026-11-14
 
 package ops
 
@@ -16,7 +16,8 @@ import (
 type Resource string
 
 // Resources. The first nine are v2's set; the rest are what v2 ops wrote
-// without a name.
+// without a name. Every name an Effects declaration uses must be one of these
+// constants; do not coin a catch-all.
 const (
 	ResBooks            Resource = "books"
 	ResBookFiles        Resource = "book_files"
@@ -36,6 +37,17 @@ const (
 	ResMetadataCache Resource = "metadata_cache"
 	ResFieldStates   Resource = "field_states"
 	ResIndexes       Resource = "indexes"
+
+	// ResAIJournal is the durable AI result journal (aijournal:<kind>:<key>
+	// keys, internal/ai/resultjournal): whisper and batch results kept so a
+	// restart does not pay for them twice. No other constant names it: it is
+	// not the undo journal (ResOperations) and not a metadata cache.
+	ResAIJournal Resource = "ai_journal"
+	// ResAuthorityLists is the authority lists (ref_person:, ref_pub:,
+	// ref_asin:, ref_src: and ref_ovr: keys, internal/authority): reference
+	// names rebuilt from the library export, plus the owner overrides. It is not
+	// ResCatalog, which is the author catalog (cat:* keys).
+	ResAuthorityLists Resource = "authority_lists"
 )
 
 // deletePrefix marks a Resource built by Deletes.

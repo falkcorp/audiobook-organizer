@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.12.0
+// version: 1.12.1
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -861,7 +861,7 @@ type authorPathLinkNativeParams struct {
 
 // UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
 func (p *authorPathLinkNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1DryRunKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain authorPathLinkNativeParams
@@ -886,7 +886,7 @@ func (p *Plugin) authorPathLinkNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 	return tasks.Task(authorPathLinkKind, tasks.TaskSpec[authorPathLinkNativeParams, authorPathLinkResult]{
 		Common: c,
 		Run: func(rc *tasks.RC, np authorPathLinkNativeParams) (authorPathLinkResult, error) {
-			if err := t6g1RefuseUnwired(rc, authorPathLinkKind, deps.cacheWires(true)...); err != nil {
+			if err := t6g1RefuseUnwired(rc, authorPathLinkKind, append(deps.cacheWires(true), deps.manualOnlyWires(true)...)...); err != nil {
 				var zero authorPathLinkResult
 				return zero, err
 			}
@@ -898,9 +898,14 @@ func (p *Plugin) authorPathLinkNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 			if err := authorPathLinkCheckAliases(params); err != nil {
 				return authorPathLinkResult{}, err
 			}
+			writer, err := t6g1WriterOf(deps, rc, authorPathLinkKind, func(ws t6g1Writers) authorPathLinkWriter { return ws.PathLink })
+			if err != nil {
+				var zero authorPathLinkResult
+				return zero, err
+			}
 			env := authorPathLinkEnv{
 				t6g1Env:                t6g1NativeEnv(rc),
-				Writer:                 deps.NewWriters(rc.Writer()).PathLink,
+				Writer:                 writer,
 				ManualOnly:             deps.ManualOnly,
 				Items:                  t6g1NativeItems(rc, authorPathLinkParallelism()),
 				AcquireStandDown:       t6g1NativeStandDown(rc, deps.StandDownKey),

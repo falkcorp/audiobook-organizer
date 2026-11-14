@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -185,7 +185,7 @@ type authorDuplicateMergeNativeParams struct {
 
 // UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
 func (p *authorDuplicateMergeNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1DryRunKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain authorDuplicateMergeNativeParams
@@ -209,9 +209,14 @@ func (p *Plugin) authorDuplicateMergeNative(deps t6g1Deps, sched func(tasks.Kind
 				var zero struct{}
 				return zero, err
 			}
+			writer, err := t6g1WriterOf(deps, rc, authorDuplicateMergeKind, func(ws t6g1Writers) t6g1MergeWriter { return ws.Merge })
+			if err != nil {
+				var zero struct{}
+				return zero, err
+			}
 			env := authorDuplicateMergeEnv{
 				t6g1Env:                t6g1NativeEnv(rc),
-				Writer:                 deps.NewWriters(rc.Writer()).Merge,
+				Writer:                 writer,
 				AcquireStandDown:       t6g1NativeStandDown(rc, deps.StandDownKey),
 				InvalidateAuthorsCache: deps.InvalidateAuthorsCache,
 				InvalidateDedupCache:   deps.InvalidateDedupCache,

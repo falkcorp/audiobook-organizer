@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ai_journal_prune.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d906856e-dcfc-4b03-a4ad-ca561f540095
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -201,7 +201,7 @@ type pruneAIJournalNativeParams struct {
 
 // UnmarshalJSON refuses the keys the run's mode replaces.
 func (p *pruneAIJournalNativeParams) UnmarshalJSON(b []byte) error {
-	if err := t6g1RefuseModeKeys(b, t6g1ApplyKeys...); err != nil {
+	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain pruneAIJournalNativeParams
@@ -214,7 +214,7 @@ func (p *Plugin) pruneAIJournalNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 	c := t6g1Common(pruneAIJournalKind, sched)
 	c.Title = "Prune AI result journal"
 	c.Help = "Deletes journalled whisper transcription results older than ai_journal_retention_days (default 30; 0 keeps them forever). Transcripts on books are not touched."
-	c.Effects = tasks.Writes(tasks.Res("books", "aux_stores"))
+	c.Effects = tasks.Writes(tasks.Res("books", "ai_journal"))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books." + PruneAIJournalDefID)
@@ -229,10 +229,15 @@ func (p *Plugin) pruneAIJournalNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 			if deps.AIJournalRetentionDays == nil {
 				return PruneAIJournalResult{}, fmt.Errorf("%s: AIJournalRetentionDays is not wired", pruneAIJournalKind)
 			}
+			writer, err := t6g1WriterOf(deps, rc, pruneAIJournalKind, func(ws t6g1Writers) pruneAIJournalWriter { return ws.PruneAIJournal })
+			if err != nil {
+				var zero PruneAIJournalResult
+				return zero, err
+			}
 			env := pruneAIJournalEnv{
 				t6g1Env:     t6g1NativeEnv(rc),
 				DefaultDays: deps.AIJournalRetentionDays(),
-				Writer:      deps.NewWriters(rc.Writer()).PruneAIJournal,
+				Writer:      writer,
 			}
 			res, err := pruneAIJournalCore(rc.Context(), PruneAIJournalParams(np), env)
 			if res == nil {

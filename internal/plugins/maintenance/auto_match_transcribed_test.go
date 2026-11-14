@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 3f7e9b2a-5c8d-4e1f-a0b3-6d9c2e5f8a1b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -219,6 +220,56 @@ func TestAutoMatchTranscribed_Apply(t *testing.T) {
 	}
 	if deps.applyCalled != 1 {
 		t.Errorf("expected 1 apply call (dry_run=false), got %d", deps.applyCalled)
+	}
+}
+
+// autoMatchCheckpointSpy records the checkpoints the HEAD run writes.
+type autoMatchCheckpointSpy struct {
+	fakeReporter
+	mu     sync.Mutex
+	states []autoMatchTranscribedParams
+}
+
+func (r *autoMatchCheckpointSpy) Checkpoint(state any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if p, ok := state.(autoMatchTranscribedParams); ok {
+		r.states = append(r.states, p)
+	}
+	return nil
+}
+
+// TestAutoMatchTranscribed_HEADCheckpointsTheLastBookVisited pins that the HEAD
+// shell hands the per-item CheckpointFn to the pool: the walk is a 12 hour
+// ResumeRestart op, and one that never checkpoints rewalks the library from book
+// zero on every restart and spends the bulk-apply cap again.
+func TestAutoMatchTranscribed_HEADCheckpointsTheLastBookVisited(t *testing.T) {
+	trans, author := "Year One", "Bruce Wayne"
+	var books []database.Book
+	for _, id := range []string{"b1", "b2", "b3"} {
+		books = append(books, database.Book{ID: id, Title: "Yr One " + id, TranscribedTitle: &trans, TranscribedAuthor: &author})
+	}
+	deps := &autoMatchDeps{
+		searchFn: func(context.Context, string, string, string) (string, string, float64, bool, error) {
+			return trans, author, 1.8, true, nil
+		},
+	}
+	p := newAutoMatchPlugin(books, deps)
+	rep := &autoMatchCheckpointSpy{}
+
+	if err := p.runAutoMatchTranscribed(context.Background(), autoMatchParams(false, 0), rep); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rep.mu.Lock()
+	defer rep.mu.Unlock()
+	if len(rep.states) == 0 {
+		t.Fatal("the run wrote no checkpoint")
+	}
+	if got := rep.states[len(rep.states)-1].LastBookID; got != "b3" {
+		t.Errorf("last checkpoint names %q, want the last book visited, b3", got)
+	}
+	if deps.applyCalled != 3 {
+		t.Errorf("apply calls = %d, want 3", deps.applyCalled)
 	}
 }
 

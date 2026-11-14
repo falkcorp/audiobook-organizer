@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -374,7 +374,7 @@ type authorSplitNativeParams struct{}
 
 // UnmarshalJSON refuses the keys the run's mode replaces.
 func (p *authorSplitNativeParams) UnmarshalJSON(b []byte) error {
-	return t6g1RefuseModeKeys(b, t6g1DryRunKeys...)
+	return t6g1RefuseModeKeys(b)
 }
 
 // authorSplitScanNative is the native kind. Preview is the dry run (reads
@@ -397,9 +397,14 @@ func (p *Plugin) authorSplitScanNative(deps t6g1Deps, sched func(tasks.Kind) *ta
 			}
 			base := t6g1NativeEnv(rc)
 			items := t6g1NativeItems(rc, authorSplitScanParallelism())
+			writer, err := t6g1WriterOf(deps, rc, authorSplitScanKind, func(ws t6g1Writers) authorSplitWriter { return ws.AuthorSplit })
+			if err != nil {
+				var zero struct{}
+				return zero, err
+			}
 			env := authorSplitEnv{
 				t6g1Env:              base,
-				Writer:               deps.NewWriters(rc.Writer()).AuthorSplit,
+				Writer:               writer,
 				Items:                items,
 				Hold:                 t6g1NativeHold(rc, base, items, deps.StandDownKey),
 				InvalidateDedupCache: deps.InvalidateDedupCache,
@@ -812,7 +817,7 @@ type resolveProductionNativeParams struct{}
 
 // UnmarshalJSON refuses the keys the run's mode replaces.
 func (p *resolveProductionNativeParams) UnmarshalJSON(b []byte) error {
-	return t6g1RefuseModeKeys(b, t6g1DryRunKeys...)
+	return t6g1RefuseModeKeys(b)
 }
 
 // resolveProductionAuthorsNative is the native kind. Preview counts the books;
@@ -822,9 +827,11 @@ func (p *Plugin) resolveProductionAuthorsNative(deps t6g1Deps, sched func(tasks.
 	c.Title = "Resolve production company authors"
 	c.Help = resolveProductionAuthorsHelp
 	// The fetch is metafetch's apply (see autoMatchTranscribedNative for the
-	// trace): book, credits, segment titles, change record, fetched state.
+	// trace): book, credits, segment titles, change record (operations), the
+	// fetched-metadata cache (metadata_cache) and the field-state snapshot
+	// (field_states).
 	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "series"),
-		tasks.Res("books", "book_files"), tasks.Res("books", "operations"), tasks.Res("books", "aux_stores"))
+		tasks.Res("books", "book_files"), tasks.Res("books", "operations"), tasks.Res("books", "metadata_cache"), tasks.Res("books", "field_states"))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.resolve-production-authors")

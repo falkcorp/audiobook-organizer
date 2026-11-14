@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g1.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4494039c-1a79-4b3b-9872-ecea118f76ad
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -63,22 +63,21 @@ func t6g1StartRequirement() rbac.Requirement {
 	return rbac.AllOf(t6g1SettingsManageScopes...)
 }
 
-// t6g1DryRunKeys are the params a native kind refuses because the run's mode
-// (Live or Preview, from the start request) is the switch: HEAD's dry_run in
-// both spellings. t6g1ApplyKeys adds HEAD's inverted spelling (apply=true).
-var (
-	t6g1DryRunKeys = []string{"dry_run", "dryRun"}
-	t6g1ApplyKeys  = []string{"dry_run", "dryRun", "apply"}
-)
+// t6g1ModeKeys are the params every native writing kind refuses because the
+// run's mode (Live or Preview, from the start request) is the switch: HEAD's
+// dry_run in both spellings and HEAD's inverted spelling (apply). No native kind
+// keeps any of them, so one list serves all 12; a start body that carries one is
+// a caller still speaking the v2 convention.
+var t6g1ModeKeys = []string{"dry_run", "dryRun", "apply"}
 
 // t6g1RefuseModeKeys is F5-01's refuseModeKeys for the group 1 kinds (conversion
-// rule 3, 05-tasks 5T.3.7): a JSON object carrying one of keys (compared
+// rule 3, 05-tasks 5T.3.7): a JSON object carrying one of t6g1ModeKeys (compared
 // case-insensitively, like encoding/json matches field names) is refused rather
 // than dropped, because a dropped {"apply":false} or {"dry_run":true} would turn
 // a start the caller meant as a dry run into a live write. The native params
 // types call it from UnmarshalJSON, so the decode the executor does is the
 // refusal. Empty and null params are fine: a requeue starts with none.
-func t6g1RefuseModeKeys(data []byte, keys ...string) error {
+func t6g1RefuseModeKeys(data []byte) error {
 	t := bytes.TrimSpace(data)
 	if len(t) == 0 || bytes.Equal(t, []byte("null")) {
 		return nil
@@ -88,7 +87,7 @@ func t6g1RefuseModeKeys(data []byte, keys ...string) error {
 		return err
 	}
 	for key := range m {
-		for _, banned := range keys {
+		for _, banned := range t6g1ModeKeys {
 			if strings.EqualFold(key, banned) {
 				return fmt.Errorf("params carry %q; the run's mode comes from the start request, not params", key)
 			}
@@ -467,6 +466,37 @@ func t6g1RefuseUnwired(rc *tasks.RC, kind tasks.Kind, wires ...t6g1Wire) error {
 		}
 	}
 	return nil
+}
+
+// t6g1WriterOf builds the writer group of one kind over the run's writer
+// (rc.Writer()), refusing with a sentence, in every mode, when deps carry no
+// NewWriters or the group the kind needs is nil: a nil there would panic at the
+// first write (or at Preview's first read of it) with only a stack trace.
+func t6g1WriterOf[W any](deps t6g1Deps, rc *tasks.RC, kind tasks.Kind, pick func(t6g1Writers) W) (W, error) {
+	var zero W
+	if deps.NewWriters == nil {
+		return zero, fmt.Errorf("%s: NewWriters is not wired", kind)
+	}
+	w := pick(deps.NewWriters(rc.Writer()))
+	if any(w) == nil {
+		return zero, fmt.Errorf("%s: the kind's writer group is not wired", kind)
+	}
+	return w, nil
+}
+
+// manualOnlyWires are the owner-manual readers a Live run needs: all four for
+// applygate.BookManualOnly (path-link, strip-merge), Files alone for
+// applygate.BulkManualOnlyGuard (auto-match). A missing reader fails closed on
+// every book, so a run would report success having applied nothing.
+func (d t6g1Deps) manualOnlyWires(all bool) []t6g1Wire {
+	w := []t6g1Wire{{"ManualOnly.Files", d.ManualOnly.Files != nil}}
+	if all {
+		w = append(w,
+			t6g1Wire{"ManualOnly.Series", d.ManualOnly.Series != nil},
+			t6g1Wire{"ManualOnly.Authors", d.ManualOnly.Authors != nil},
+			t6g1Wire{"ManualOnly.Tags", d.ManualOnly.Tags != nil})
+	}
+	return w
 }
 
 // cacheWires are the cache hooks the kinds call after a write: the dedup cache
