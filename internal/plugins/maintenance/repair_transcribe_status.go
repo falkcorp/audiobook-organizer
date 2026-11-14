@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -280,16 +280,24 @@ func (p *Plugin) repairTranscribeStatusNative(deps t6g6Deps, sched func(tasks.Ki
 	c.ConcurrencyKey = tasks.Key("books.maintenance.repair-transcribe-status")
 	c.Timeout = 2 * time.Hour
 	c.ProgressTimeout = 5 * time.Minute
-	return tasks.Task(repairTranscribeStatusKind, tasks.TaskSpec[repairTranscribeStatusNativeParams, struct{}]{
+	return tasks.Task(repairTranscribeStatusKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
-		Run: func(rc *tasks.RC, in repairTranscribeStatusNativeParams) (struct{}, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			in, err := t6g6DecodeNative[repairTranscribeStatusNativeParams](repairTranscribeStatusKind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
 			live := rc.Mode() == tasks.ModeLive
 			env := repairTranscribeStatusEnv{t6g6Env: t6g6NativeEnv(rc)}
 			if deps.Store != nil {
 				env.Store = deps.Store
 			}
-			if live && deps.NewWriter != nil {
-				env.Writer = deps.NewWriter(rc.Writer())
+			if live {
+				w, err := t6g6NewWriter(repairTranscribeStatusKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
 			}
 			return struct{}{}, repairTranscribeStatusCore(rc.Context(), in.LastBookID, !live, env)
 		},

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_merged_user_state.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d4b2f67-1a9e-4c35-b7d0-9e6f3a2c1b58
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Moves user state stranded under merged-away books onto their survivors.
 //
@@ -33,13 +33,16 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/falkcorp/mediacore/tasks"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -86,10 +89,11 @@ func (p *Plugin) runRepairMergedUserState(ctx context.Context, rawParams json.Ra
 
 func (p *Plugin) repairMergedUserState(ctx context.Context, params repairMergedUserStateParams, reporter sdk.Reporter) error {
 	env := repairMergedUserStateEnv{t6g6Env: t6g6HeadEnv(reporter, params.Apply)}
-	// A nil store leaves the env's writer nil (a typed-nil adapter would hide it),
+	// A nil store leaves the env's halves nil (a typed-nil adapter would hide it),
 	// so the core's "no store" check still fires.
 	if store := p.deps.MergeUserStateStore(); store != nil {
-		env.Writer = headRepairMergedUserStateWriter{store: store}
+		h := t6g6HeadUserState{UserStateRepairStore: store}
+		env.Store, env.Writer = h, h
 	}
 	_, err := repairMergedUserStateCore(ctx, params, env)
 	return err
@@ -98,33 +102,201 @@ func (p *Plugin) repairMergedUserState(ctx context.Context, params repairMergedU
 // repairMergedUserStateKind is rule R3's kind for the def above.
 const repairMergedUserStateKind = tasks.Kind("books." + merge.UserStateRepairOpID)
 
-// repairMergedUserStateWriter is the repair itself. The merge package finds the
-// stranded rows and moves them in one pass through the same store, so the whole
-// pass is one writer call: a native run's writer is the kernel-gated one, and a
-// report-only (Preview) pass makes no write through it.
-type repairMergedUserStateWriter interface {
-	RepairMergedUserState(ctx context.Context, opts merge.UserStateRepairOptions) (*merge.UserStateRepairReport, error)
+// The repair's store, split as the group's rule R10 wants it: reads through the
+// env's Store, writes through its Writer. merge.RepairMergedUserState itself
+// takes ONE merge.UserStateRepairStore and probes it for the sync-identity,
+// bookmark and timestamp capabilities (database.AsSyncIdentityStore,
+// AsBookmarkStore, AsBookmarkCopier and AsCapability[UserPositionTimestampWriter]
+// are the only probes the pass reaches), so the core composes that object from the
+// two halves (t6g6ComposeUserState) instead of handing it a captured store.
+
+// t6g6SyncReads is the read half of database.SyncIdentityStore.
+type t6g6SyncReads interface {
+	GetSyncIDForBook(bookID string) (string, bool, error)
+	ResolveSyncItem(syncID string) (*database.SyncItem, error)
+	ListSyncAliases(syncID string) ([]string, error)
 }
 
-// headRepairMergedUserStateWriter is HEAD's writer: merge.RepairMergedUserState
-// over the plugin's user-state store.
-type headRepairMergedUserStateWriter struct{ store merge.UserStateRepairStore }
-
-func (w headRepairMergedUserStateWriter) RepairMergedUserState(ctx context.Context, opts merge.UserStateRepairOptions) (*merge.UserStateRepairReport, error) {
-	return merge.RepairMergedUserState(ctx, w.store, opts)
+// t6g6SyncWrites is the write half of it the pass uses: the follow mints the
+// survivor's id and records the merge redirect. RepointSyncItem is the
+// version-handover path and is not reachable from the repair.
+type t6g6SyncWrites interface {
+	MintOrGetSyncID(bookID string) (string, error)
+	RecordSyncMerge(loserBookID, winnerBookID string) error
 }
 
-// repairMergedUserStateEnv is what the core takes from its shell. The op reads
-// only through the writer's pass, so it has no separate store.
+// t6g6BookmarkReads is the read half of database.BookmarkStore.
+type t6g6BookmarkReads interface {
+	ListBookmarks(userID, itemID string) ([]progress.Bookmark, error)
+	ListBookmarksForUser(userID string) ([]progress.Bookmark, error)
+}
+
+// t6g6BookmarkWrites is the one bookmark write the repair makes.
+type t6g6BookmarkWrites interface {
+	CopyBookmarkIfAbsent(b progress.Bookmark) (bool, error)
+}
+
+// repairMergedUserStateReads is every read the pass makes. The capability
+// getters answer ok=false when the store has no such surface, so the merge
+// package's "this store has no bookmarks" skip behaves as it did on the plugin's
+// single store.
+type repairMergedUserStateReads interface {
+	ListUsers() ([]database.User, error)
+	ScanPrefix(prefix string) ([]database.KVPair, error)
+	ListUserPositionsSince(userID string, t time.Time) ([]database.UserPosition, error)
+	GetBookByID(id string) (*database.Book, error)
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)
+	UserStateSyncReads() (t6g6SyncReads, bool)
+	UserStateBookmarkReads() (t6g6BookmarkReads, bool)
+}
+
+// repairMergedUserStateWrites is every write the pass makes: the moved state, the
+// pending-record bookkeeping and the capability writes.
+type repairMergedUserStateWrites interface {
+	SetRaw(key string, value []byte) error
+	DeleteRaw(key string) error
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	SetUserBookState(state *database.UserBookState) error
+	SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error
+	ClearUserPositions(userID, bookID string) error
+	UserStateSyncWrites() (t6g6SyncWrites, bool)
+	UserStateBookmarkWrites() (t6g6BookmarkWrites, bool)
+	UserStateTimestampWriter() (database.UserPositionTimestampWriter, bool)
+}
+
+// t6g6UserStateBase is the merge.UserStateRepairStore of the composed pair.
+type t6g6UserStateBase struct {
+	r repairMergedUserStateReads
+	w repairMergedUserStateWrites
+}
+
+func (b t6g6UserStateBase) ListUsers() ([]database.User, error) { return b.r.ListUsers() }
+func (b t6g6UserStateBase) ScanPrefix(prefix string) ([]database.KVPair, error) {
+	return b.r.ScanPrefix(prefix)
+}
+func (b t6g6UserStateBase) ListUserPositionsSince(userID string, t time.Time) ([]database.UserPosition, error) {
+	return b.r.ListUserPositionsSince(userID, t)
+}
+func (b t6g6UserStateBase) GetBookByID(id string) (*database.Book, error) { return b.r.GetBookByID(id) }
+func (b t6g6UserStateBase) GetUserBookState(userID, bookID string) (*database.UserBookState, error) {
+	return b.r.GetUserBookState(userID, bookID)
+}
+func (b t6g6UserStateBase) ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error) {
+	return b.r.ListUserPositionsForBook(userID, bookID)
+}
+func (b t6g6UserStateBase) SetRaw(key string, value []byte) error { return b.w.SetRaw(key, value) }
+func (b t6g6UserStateBase) DeleteRaw(key string) error            { return b.w.DeleteRaw(key) }
+func (b t6g6UserStateBase) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	return b.w.ModifyBook(id, fn)
+}
+func (b t6g6UserStateBase) SetUserBookState(state *database.UserBookState) error {
+	return b.w.SetUserBookState(state)
+}
+func (b t6g6UserStateBase) SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error {
+	return b.w.SetUserPosition(userID, bookID, segmentID, positionSeconds)
+}
+func (b t6g6UserStateBase) ClearUserPositions(userID, bookID string) error {
+	return b.w.ClearUserPositions(userID, bookID)
+}
+
+// t6g6ComposedSync is the database.SyncIdentityStore the pass sees. The
+// version-handover write is outside the repair and refuses.
+type t6g6ComposedSync struct {
+	t6g6SyncReads
+	t6g6SyncWrites
+}
+
+func (t6g6ComposedSync) RepointSyncItem(string, string) error {
+	return errors.New("repair-merged-user-state: RepointSyncItem is not part of the repair")
+}
+
+// t6g6ComposedBookmarks is the database.BookmarkStore (plus BookmarkCopier) the
+// pass sees; only the reads and the copy are part of the repair.
+type t6g6ComposedBookmarks struct {
+	t6g6BookmarkReads
+	t6g6BookmarkWrites
+}
+
+func (t6g6ComposedBookmarks) CreateBookmark(progress.Bookmark) error {
+	return errors.New("repair-merged-user-state: CreateBookmark is not part of the repair")
+}
+
+func (t6g6ComposedBookmarks) UpdateBookmarkTitle(string, string, float64, string) error {
+	return errors.New("repair-merged-user-state: UpdateBookmarkTitle is not part of the repair")
+}
+
+func (t6g6ComposedBookmarks) DeleteBookmark(string, string, float64) error {
+	return errors.New("repair-merged-user-state: DeleteBookmark is not part of the repair")
+}
+
+// t6g6ComposeUserState builds the merge.UserStateRepairStore the pass runs on
+// from the env's two halves. A capability is present on the result only when the
+// halves both carry it, which is what the merge package's interface probes look
+// for; one either half lacks is left out, as on a store without it.
+func t6g6ComposeUserState(r repairMergedUserStateReads, w repairMergedUserStateWrites) merge.UserStateRepairStore {
+	var s merge.UserStateRepairStore = t6g6UserStateBase{r: r, w: w}
+	if sr, ok := r.UserStateSyncReads(); ok {
+		if sw, ok := w.UserStateSyncWrites(); ok {
+			s = struct {
+				merge.UserStateRepairStore
+				database.SyncIdentityStore
+			}{s, t6g6ComposedSync{sr, sw}}
+		}
+	}
+	if br, ok := r.UserStateBookmarkReads(); ok {
+		if bw, ok := w.UserStateBookmarkWrites(); ok {
+			bm := t6g6ComposedBookmarks{br, bw}
+			s = struct {
+				merge.UserStateRepairStore
+				database.BookmarkStore
+				database.BookmarkCopier
+			}{s, bm, bm}
+		}
+	}
+	if tw, ok := w.UserStateTimestampWriter(); ok {
+		s = struct {
+			merge.UserStateRepairStore
+			database.UserPositionTimestampWriter
+		}{s, tw}
+	}
+	return s
+}
+
+// t6g6HeadUserState is HEAD's store for the pass: the plugin's one
+// merge.UserStateRepairStore, which is both halves. Its capability getters are
+// the merge package's own probes, which look through a store decorator.
+type t6g6HeadUserState struct{ merge.UserStateRepairStore }
+
+func (h t6g6HeadUserState) UserStateSyncReads() (t6g6SyncReads, bool) {
+	s := database.AsSyncIdentityStore(h.UserStateRepairStore)
+	return s, s != nil
+}
+
+func (h t6g6HeadUserState) UserStateBookmarkReads() (t6g6BookmarkReads, bool) {
+	s := database.AsBookmarkStore(h.UserStateRepairStore)
+	return s, s != nil
+}
+
+func (h t6g6HeadUserState) UserStateSyncWrites() (t6g6SyncWrites, bool) {
+	s := database.AsSyncIdentityStore(h.UserStateRepairStore)
+	return s, s != nil
+}
+
+func (h t6g6HeadUserState) UserStateBookmarkWrites() (t6g6BookmarkWrites, bool) {
+	s := database.AsBookmarkCopier(h.UserStateRepairStore)
+	return s, s != nil
+}
+
+func (h t6g6HeadUserState) UserStateTimestampWriter() (database.UserPositionTimestampWriter, bool) {
+	return database.AsCapability[database.UserPositionTimestampWriter](h.UserStateRepairStore)
+}
+
+// repairMergedUserStateEnv is what the core takes from its shell.
 type repairMergedUserStateEnv struct {
 	t6g6Env
-	Writer repairMergedUserStateWriter
-}
-
-// repairMergedUserStateParallelism is the op's concurrency: HEAD declared none
-// and the merge package's pass is sequential.
-func repairMergedUserStateParallelism() tasks.Parallelism {
-	return tasks.Sequential("HEAD declared no concurrency; merge.RepairMergedUserState is one sequential pass over the pending records and every user's rows")
+	Store  repairMergedUserStateReads
+	Writer repairMergedUserStateWrites
 }
 
 // repairMergedUserStateNative is the native kind. Preview is the report-only pass
@@ -142,15 +314,26 @@ func (p *Plugin) repairMergedUserStateNative(deps t6g6Deps, sched func(tasks.Kin
 	c.ConcurrencyKey = tasks.Key("books." + merge.UserStateRepairOpID)
 	c.Timeout = 30 * time.Minute
 	c.ProgressTimeout = 30 * time.Minute
-	return tasks.Task(repairMergedUserStateKind, tasks.TaskSpec[repairMergedUserStateNativeParams, merge.UserStateRepairReport]{
+	return tasks.Task(repairMergedUserStateKind, tasks.TaskSpec[json.RawMessage, merge.UserStateRepairReport]{
 		Common: c,
-		Run: func(rc *tasks.RC, in repairMergedUserStateNativeParams) (merge.UserStateRepairReport, error) {
-			params := repairMergedUserStateParams{Apply: rc.Mode() == tasks.ModeLive, PendingOnly: in.PendingOnly}
-			env := repairMergedUserStateEnv{t6g6Env: t6g6NativeEnv(rc)}
-			// Built in Preview too: a report-only pass writes nothing through it.
-			if deps.NewWriter != nil {
-				env.Writer = deps.NewWriter(rc.Writer())
+		Run: func(rc *tasks.RC, raw json.RawMessage) (merge.UserStateRepairReport, error) {
+			in, err := t6g6DecodeNative[repairMergedUserStateNativeParams](repairMergedUserStateKind, raw)
+			if err != nil {
+				return merge.UserStateRepairReport{}, err
 			}
+			if err := t6g6NeedDep(repairMergedUserStateKind, "Store", deps.Store != nil); err != nil {
+				return merge.UserStateRepairReport{}, err
+			}
+			params := repairMergedUserStateParams{Apply: rc.Mode() == tasks.ModeLive, PendingOnly: in.PendingOnly}
+			env := repairMergedUserStateEnv{t6g6Env: t6g6NativeEnv(rc), Store: deps.Store}
+			// Built in Preview too: a report-only pass writes nothing through it
+			// (the kernel records the intent), and the composed store needs both
+			// halves.
+			w, err := t6g6NewWriter(repairMergedUserStateKind, deps, rc)
+			if err != nil {
+				return merge.UserStateRepairReport{}, err
+			}
+			env.Writer = w
 			rep, err := repairMergedUserStateCore(rc.Context(), params, env)
 			if rep == nil {
 				return merge.UserStateRepairReport{}, err
@@ -169,10 +352,11 @@ type repairMergedUserStateNativeParams struct {
 // repairMergedUserStateCore is the body of repairMergedUserState. It returns the
 // report so a native shell can hand it back as the run's result.
 func repairMergedUserStateCore(ctx context.Context, params repairMergedUserStateParams, env repairMergedUserStateEnv) (*merge.UserStateRepairReport, error) {
-	if env.Writer == nil {
+	if env.Store == nil || env.Writer == nil {
 		return nil, fmt.Errorf("repair-merged-user-state: no store")
 	}
-	rep, err := env.Writer.RepairMergedUserState(ctx, merge.UserStateRepairOptions{Apply: params.Apply, PendingOnly: params.PendingOnly})
+	rep, err := merge.RepairMergedUserState(ctx, t6g6ComposeUserState(env.Store, env.Writer),
+		merge.UserStateRepairOptions{Apply: params.Apply, PendingOnly: params.PendingOnly})
 	if err != nil {
 		return nil, fmt.Errorf("repair-merged-user-state: %w", err)
 	}

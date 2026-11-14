@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -213,16 +213,23 @@ func (p *Plugin) regroupShatteredAINative(deps t6g6Deps, sched func(tasks.Kind) 
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.regroup-shattered-ai")
 	c.Timeout = 120 * time.Minute
-	return tasks.Task(regroupShatteredAIKind, tasks.TaskSpec[regroupNativeParams, struct{}]{
+	return tasks.Task(regroupShatteredAIKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
-		Run: func(rc *tasks.RC, in regroupNativeParams) (struct{}, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			in, err := t6g6DecodeNative[regroupNativeParams](regroupShatteredAIKind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
 			live := rc.Mode() == tasks.ModeLive
 			env := regroupShatteredAIEnv{t6g6Env: t6g6NativeEnv(rc)}
 			if deps.Store != nil {
 				env.Store = deps.Store
 			}
-			if live && deps.NewWriter != nil {
-				w := deps.NewWriter(rc.Writer())
+			if live {
+				w, err := t6g6NewWriter(regroupShatteredAIKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
 				env.Writer = w
 				env.Purger = regroupNativePurger{reads: env.Store, del: w}
 			}

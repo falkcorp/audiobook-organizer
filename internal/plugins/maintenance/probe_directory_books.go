@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — op maintenance.probe-directory-books.
 //
@@ -154,12 +154,16 @@ func (p *Plugin) runProbeDirectoryBooks(ctx context.Context, raw json.RawMessage
 		}
 	}
 	env := probeDirectoryBooksEnv{t6g6Env: t6g6HeadEnv(reporter, params.Apply)}
-	// A nil OpsStore leaves env.Store nil (a typed-nil adapter would hide it), so
-	// the core's "database not initialized" check still fires, after the ffprobe
-	// refusal as before.
-	if store := p.t6g6HeadOpsStore(); store != nil {
-		env.Store = t6g6HeadStore{OpsStore: store}
-		env.Writer = t6g6HeadWriter{deps: p.deps, store: store}
+	// The store is fetched by the core AFTER its ffprobe refusal, as HEAD did
+	// ("before the store is even fetched"). A nil OpsStore leaves env.Store nil (a
+	// typed-nil adapter would hide it), so the core's "database not initialized"
+	// check still fires.
+	env.Resolve = func() (probeDirectoryBooksStore, probeDirectoryBooksWriter) {
+		store := p.t6g6HeadOpsStore()
+		if store == nil {
+			return nil, nil
+		}
+		return t6g6HeadStore{OpsStore: store}, t6g6HeadWriter{deps: p.deps, store: store}
 	}
 	return probeDirectoryBooksCore(ctx, params.Limit, env)
 }
@@ -192,6 +196,10 @@ type probeDirectoryBooksEnv struct {
 	t6g6Env
 	Store  probeDirectoryBooksStore
 	Writer probeDirectoryBooksWriter
+	// Resolve, when set, supplies Store and Writer after the core's ffprobe check
+	// (HEAD's shell fetches the plugin's store only then). Nil in a native shell,
+	// which sets both up front.
+	Resolve func() (probeDirectoryBooksStore, probeDirectoryBooksWriter)
 }
 
 // probeDirectoryBooksParallelism is the op's concurrency: both pools are sized to
@@ -215,16 +223,25 @@ func (p *Plugin) probeDirectoryBooksNative(deps t6g6Deps, sched func(tasks.Kind)
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.maintenance.relink-unlinked-books")
 	c.Timeout = 120 * time.Minute
-	return tasks.Task(probeDirectoryBooksKind, tasks.TaskSpec[probeDirectoryBooksNativeParams, struct{}]{
+	return tasks.Task(probeDirectoryBooksKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
-		Run: func(rc *tasks.RC, np probeDirectoryBooksNativeParams) (struct{}, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			np, err := t6g6DecodeNative[probeDirectoryBooksNativeParams](probeDirectoryBooksKind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
 			env := probeDirectoryBooksEnv{t6g6Env: t6g6NativeEnv(rc)}
 			if deps.Store != nil {
 				env.Store = deps.Store
 			}
-			// A Preview run writes nothing, so it builds no writer.
+			// A Preview run writes nothing, so it builds no writer; a Live run
+			// refuses up front when the owner left the factory unset.
 			if env.Live {
-				env.Writer = deps.NewWriter(rc.Writer())
+				w, err := t6g6NewWriter(probeDirectoryBooksKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
 			}
 			return struct{}{}, probeDirectoryBooksCore(rc.Context(), np.Limit, env)
 		},
@@ -247,6 +264,9 @@ func probeDirectoryBooksCore(ctx context.Context, limit int, env probeDirectoryB
 	}
 	env.Log(slog.LevelInfo, fmt.Sprintf("using ffprobe at %s", ffprobePath))
 
+	if env.Resolve != nil {
+		env.Store, env.Writer = env.Resolve()
+	}
 	if env.Store == nil {
 		return fmt.Errorf("database not initialized")
 	}

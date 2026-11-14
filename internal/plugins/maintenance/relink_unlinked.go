@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — op maintenance.relink-unlinked-books.
 //
@@ -160,17 +160,25 @@ func (p *Plugin) relinkUnlinkedBooksNative(deps t6g6Deps, sched func(tasks.Kind)
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.maintenance.relink-unlinked-books")
 	c.Timeout = 120 * time.Minute
-	return tasks.Task(relinkUnlinkedBooksKind, tasks.TaskSpec[relinkNativeParams, struct{}]{
+	return tasks.Task(relinkUnlinkedBooksKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
-		Run: func(rc *tasks.RC, in relinkNativeParams) (struct{}, error) {
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			in, err := t6g6DecodeNative[relinkNativeParams](relinkUnlinkedBooksKind, raw)
+			if err != nil {
+				return struct{}{}, err
+			}
 			live := rc.Mode() == tasks.ModeLive
 			params := relinkParams{Apply: live, Limit: in.Limit, IncludeDirectories: in.IncludeDirectories}
 			env := relinkUnlinkedBooksEnv{t6g6Env: t6g6NativeEnv(rc)}
 			if deps.Store != nil {
 				env.Store = deps.Store
 			}
-			if live && deps.NewWriter != nil {
-				env.Writer = deps.NewWriter(rc.Writer())
+			if live {
+				w, err := t6g6NewWriter(relinkUnlinkedBooksKind, deps, rc)
+				if err != nil {
+					return struct{}{}, err
+				}
+				env.Writer = w
 			}
 			return struct{}{}, relinkUnlinkedBooksCore(rc.Context(), params, env)
 		},

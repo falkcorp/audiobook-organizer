@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g6.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d78a6104-de76-4b10-ab6f-1cf177912760
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -396,6 +396,14 @@ func t6g6DecodeParams(kind tasks.Kind, raw json.RawMessage, v any) error {
 	return nil
 }
 
+// t6g6DecodeNative is t6g6DecodeParams into a fresh P, for the native shells that
+// take their params raw (so a mode key can be refused before decoding).
+func t6g6DecodeNative[P any](kind tasks.Kind, raw json.RawMessage) (P, error) {
+	var v P
+	err := t6g6DecodeParams(kind, raw, &v)
+	return v, err
+}
+
 // t6g6RefuseModeKeys is t6g6DecodeParams for a shell whose body takes no params
 // of its own; any other key is ignored, as HEAD ignored the params of these defs.
 func t6g6RefuseModeKeys(kind tasks.Kind, raw json.RawMessage) error {
@@ -466,6 +474,7 @@ type t6g6StoreRepair interface {
 	regroupShatteredAIStore
 	relinkUnlinkedBooksStore
 	repairTranscribeStatusStore
+	repairMergedUserStateReads
 }
 
 // t6g6Writer is every write the 14 definitions make, composed from each
@@ -491,7 +500,7 @@ type t6g6WriterRepair interface {
 	database.ReviewItemPendingDeleter
 	relinkUnlinkedBooksWriter
 	probeDirectoryBooksWriter
-	repairMergedUserStateWriter
+	repairMergedUserStateWrites
 	repairTranscribeStatusWriter
 }
 
