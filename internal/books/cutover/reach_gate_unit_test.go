@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_gate_unit_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a8c2e71-0d36-4f94-b7a3-c1e9d6f20b58
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package cutover
 
@@ -242,5 +242,63 @@ func TestReachHandlerAdminPin_SitsOnRoutesThatAskForUsersManage(t *testing.T) {
 	}
 	if seen != len(reachHandlerAdmin) {
 		t.Errorf("%d of %d pinned routes are in the manifest", seen, len(reachHandlerAdmin))
+	}
+}
+
+// The recorder asks every principal but the auth-disabled one, which is last. A
+// recording that covers a different set of principals than the oracle's first n
+// would pair letters with the wrong principals, so it is refused, not compared.
+func TestReachTaskVerdicts_DriftedPrincipalOrderOrDuplicatesAreRefused(t *testing.T) {
+	cat := reachCatalog(t)
+	whos := []reachWho{
+		{name: "session:editor", chk: reachSession(t, cat, "editor")},
+		{name: "authoff", chk: reachAuthDisabled(cat)},
+		{name: "session:admin", chk: reachSession(t, cat, "admin")},
+	}
+	routes := []httpapi.LegacyRoute{
+		{Method: "POST", GinPath: "/api/v3/ops/defs/:id/runs", Perm: rbac.LegacyAtom("scan.trigger")},
+		{Method: "POST", GinPath: "/api/v3/ops/runs/:id/approve", Perm: rbac.LegacyAtom("library.view")},
+	}
+	def := reachR0Task{ID: "edit.def", Permissions: []string{"library.edit_metadata"}, Approver: "settings.manage"}
+
+	// two letters cover whos[:2]; the principal left out, session:admin, is not auth-off
+	drifted := &reachR0Doc{Tasks: []reachR0Task{{ID: def.ID, Permissions: def.Permissions, Approver: def.Approver, Verdict: "AA"}}}
+	if _, err := reachTaskVerdicts(idAtoms(), routes, drifted, whos); err == nil || !strings.Contains(err.Error(), "session:admin") {
+		t.Errorf("a task recording that leaves out a principal that is not the auth-disabled one: %v", err)
+	}
+	approvalDrift := &reachR0Doc{
+		Tasks:     []reachR0Task{{ID: def.ID, Permissions: def.Permissions, Approver: def.Approver, Verdict: "AAA"}},
+		Approvals: []reachR0Approval{{RunID: "r1", Run: map[string]any{"def_id": def.ID}, Verdict: "AA"}},
+	}
+	if _, err := reachTaskVerdicts(idAtoms(), routes, approvalDrift, whos); err == nil || !strings.Contains(err.Error(), "session:admin") {
+		t.Errorf("an approval recording that leaves out a principal that is not the auth-disabled one: %v", err)
+	}
+	tooMany := &reachR0Doc{Tasks: []reachR0Task{{ID: def.ID, Verdict: "AAAA"}}}
+	if _, err := reachTaskVerdicts(idAtoms(), routes, tooMany, whos); err == nil {
+		t.Error("a recording with more letters than principals was accepted")
+	}
+
+	twoTasks := &reachR0Doc{Tasks: []reachR0Task{
+		{ID: def.ID, Permissions: def.Permissions, Verdict: "AAA"},
+		{ID: def.ID, Permissions: def.Permissions, Verdict: "AAA"},
+	}}
+	if _, err := reachTaskVerdicts(idAtoms(), routes, twoTasks, whos); err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("one definition listed twice: %v", err)
+	}
+	twoRuns := &reachR0Doc{
+		Tasks: []reachR0Task{{ID: def.ID, Permissions: def.Permissions, Approver: def.Approver, Verdict: "AAA"}},
+		Approvals: []reachR0Approval{
+			{RunID: "r1", Run: map[string]any{"def_id": def.ID}, Verdict: "AAA"},
+			{RunID: "r2", Run: map[string]any{"def_id": def.ID}, Verdict: "AAA"},
+		},
+	}
+	if _, err := reachTaskVerdicts(idAtoms(), routes, twoRuns, whos); err == nil || !strings.Contains(err.Error(), "two awaiting runs") {
+		t.Errorf("two awaiting runs of one definition: %v", err)
+	}
+	// the shape the recorder writes: every principal but the last, which is auth-off
+	ordered := []reachWho{whos[0], whos[2], whos[1]}
+	ok := &reachR0Doc{Tasks: []reachR0Task{{ID: def.ID, Permissions: def.Permissions, Approver: def.Approver, Verdict: "AA"}}}
+	if _, err := reachTaskVerdicts(idAtoms(), routes, ok, ordered); err != nil {
+		t.Errorf("the recorder's own shape was refused: %v", err)
 	}
 }

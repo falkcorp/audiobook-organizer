@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-http-api.md -->
-<!-- version: 1.13.6 -->
+<!-- version: 1.14.0 -->
 <!-- guid: fcd387ab-7a8e-49e2-a4b4-a6901aaee1e3 -->
-<!-- last-edited: 2026-11-08 -->
+<!-- last-edited: 2026-11-14 -->
 
 # 05 — HTTP API framework (`core/httpapi`)
 
@@ -1090,7 +1090,7 @@ custom-role half over random native roles, SEC4-2): allow and deny on the migrat
 by the R0 binary, plus its labelled hand-built overlay for the rows R0's API cannot write, custom roles
 among them, 09 §9.3) equal the R0 binary's, R0 being HEAD plus the six early fixes (SEC-13), apart from
 the reviewed differences 05-rbac §12 lists and asserts, an every-atom
-key whose owner's roles hold `core:admin`, or an admin key, keeping its whole reach (an every-atom key of
+key whose owner's roles hold `core:admin`, or an admin key, keeping its whole reach except the three debug edit routes, whose `books:admin.debug` is `Sensitive` (05-rbac §6.2) (an every-atom key of
 a non-admin owner keeps only the intersection, SEC-12), task-run approval included (05-rbac §6.3), and the test
 stays as the regression test of books' atom table.
 
@@ -1364,7 +1364,7 @@ the ops families change at F5 and the AI families at F7, and F8 renames nothing 
 | `TestStage2_ServerAddressIgnoresHost` | two requests to one route with different `Host` headers produce one `server_address` value, `Options.ServerName` (MOD10-2) |
 | `TestLegacyMount_MuxAndGinAgreeOnEncodedSlash` | a request with `%2F` in a segment whose gin match differs from its mux pattern → 404, no gin handler runs (SEC2-22) |
 | `TestOwnAuthRoutesGolden` / `TestLegacyAuthGin_RefusedWithoutOption` | the reviewed `OwnAuth` set; `LegacyAuthGin` without `LegacyAuthGinUntil`, and `OwnAuth` without a registered auth method → boot errors (SEC2-17) |
-| `TestIdentityCutover_ReachOracle` (the reach oracle; 05-rbac §12 owns it) | on the F4 PR, over the fixture corpus written by the R0 binary plus its labelled hand-built overlay (custom roles and the other rows R0's API cannot write, 09 §9.3; IMPL-8), migrated: every manifest route (572 at `748fd787a`; the count is generated at the flip's base commit, ADV-11) × every principal kind of 05-rbac §12 (seed-role sessions, scoped API keys, auth-off mode: `settings.manage` routes 200, in-handler `deny` sites deny, the recorded tightenings of 05-rbac §4.11 asserted refused; COR5-4, SEC5-8, SEC5-9) allow and deny as the R0 binary does (HEAD plus the six early fixes, SEC-13), apart from the reviewed differences 05-rbac §12 lists, each asserted as such (the auth-off tightenings, the tightened `settings.manage` system routes, the `core:system.status` readiness reach, dominance and the one reviewed gain among them), an every-atom key whose owner's roles hold `core:admin`, or an admin key, keeping its whole reach, task-run approval included, and an editor-owned every-atom key keeping only the intersection (SEC-12); the playlist write routes admit every authenticated principal (SEC-4); custom-role half: for random native roles, stage 13 admits a legacy route only if the route's successor admits (SEC4-2). It stays as the regression test of books' atom table |
+| `TestIdentityCutover_ReachOracle` (the reach oracle; 05-rbac §12 owns it) | on the F4 PR, over the fixture corpus written by the R0 binary plus its labelled hand-built overlay (custom roles and the other rows R0's API cannot write, 09 §9.3; IMPL-8), migrated: every manifest route (572 at `748fd787a`; the count is generated at the flip's base commit, ADV-11) × every principal kind of 05-rbac §12 (seed-role sessions, scoped API keys, auth-off mode: `settings.manage` routes 200, in-handler `deny` sites deny, the recorded tightenings of 05-rbac §4.11 asserted refused; COR5-4, SEC5-8, SEC5-9) allow and deny as the R0 binary does (HEAD plus the six early fixes, SEC-13), apart from the reviewed differences 05-rbac §12 lists, each asserted as such (the auth-off tightenings, the tightened `settings.manage` system routes, the `core:system.status` readiness reach, and dominance among them), an every-atom key whose owner's roles hold `core:admin`, or an admin key, keeping its whole reach except the three debug edit routes, whose `books:admin.debug` is `Sensitive` (05-rbac §6.2), task-run approval included, and an editor-owned every-atom key keeping only the intersection (SEC-12); the playlist write routes admit every authenticated principal (SEC-4); custom-role half: for random native roles, stage 13 admits a legacy route only if the route's successor admits (SEC4-2). It stays as the regression test of books' atom table |
 | `TestLegacyRoute_SettingsAtomNeverWiderThanSuccessor` | every manifest route gated by `settings.manage` or `users.manage` carries the atom table's full-reach entry, 05-rbac §6.1's "Route requirement" (XFILE-5); a custom role holding the four `settings.manage` expansion scopes gets 403 on backup restore, backup create, logs, tool install and plugin settings (R4-3, SEC4-2) |
 | `TestCoreRoutesReplaceGin` | after each R2 flip, on the real engine: no gin route remains at a path the flip's native routes replace (the flip's generated list), and after F5 no route lies under `/api/v3/` (§4.6, §4.9, D10) |
 

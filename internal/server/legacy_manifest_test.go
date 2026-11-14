@@ -1,7 +1,7 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.0.10
+// version: 1.1.0
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
-// last-edited: 2026-11-11
+// last-edited: 2026-11-14
 
 package server
 
@@ -196,7 +196,10 @@ func assertAdminKind(t *testing.T, srv *Server, key string, perm rbac.Requiremen
 	t.Helper()
 	kind, recorded := srv.adminRoutes[key]
 	switch perm.String() {
-	case "core:system.view", "books:admin.view":
+	case "books:admin.view":
+		// Not core:system.view: that scope is status detail and sysinfo
+		// (05-rbac §6.1); an admin row that carries it again is refused here
+		// (F4-07 F-2 moved GET /cache/stats/keys to books:admin.view).
 		assert.Equal(t, adminRouteReadOnly, kind, "%s", key)
 	case "all(core:users.manage,books:admin.view)":
 		// The master-list group wires adminRole directly (read-only kind)

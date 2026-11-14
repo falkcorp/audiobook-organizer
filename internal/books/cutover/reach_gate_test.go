@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_gate_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7d3a8f21-6c4e-4b95-a0d7-1e9b2c5f8a36
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package cutover
 
@@ -268,24 +268,37 @@ func TestIdentityCutover_ReachOracle(t *testing.T) {
 	}
 }
 
-// The routes only one side has are pinned exactly, with the reason for each.
-// A route that appears or disappears fails here, never silently.
-func TestReachOracle_RoutesOnOneSideAreExactlyThesePinned(t *testing.T) {
-	pd, vd := reachLoad(t)
-	atoms := idAtoms()
-	res, _ := reachCompare(t, pd, vd, atoms, atoms)
-	wantR0Only := []string{
+// reachWantR0Only and reachWantR2Only are the routes only one side has, each with
+// the reason. A route that appears or disappears fails, never silently.
+var (
+	reachWantR0Only = []string{
 		"GET /",                             // the SPA handler, outside the manifest (served by the embedded frontend)
 		"POST /api/v1/system/factory-reset", // HEAD's reset routes: deleted at F4, the native core route succeeds them (05-rbac 6.2)
 		"POST /api/v1/system/reset",
 	}
-	wantR2Only := []string{
+	reachWantR2Only = []string{
 		"POST /api/v1/admin/guest-service-tokens/:userId/reissue", // newer than the R0 tag: no baseline to compare with
 	}
-	if !slices.Equal(res.r0Only, wantR0Only) {
-		t.Errorf("routes only R0 has:\n got %q\nwant %q", res.r0Only, wantR0Only)
+)
+
+// reachOneSideProblems is what the pinned one-sided routes fail on, as text.
+func reachOneSideProblems(res reachDiffResult) []string {
+	var out []string
+	if !slices.Equal(res.r0Only, reachWantR0Only) {
+		out = append(out, fmt.Sprintf("routes only R0 has:\n got %q\nwant %q", res.r0Only, reachWantR0Only))
 	}
-	if !slices.Equal(res.r2Only, wantR2Only) {
-		t.Errorf("routes only R2 has:\n got %q\nwant %q", res.r2Only, wantR2Only)
+	if !slices.Equal(res.r2Only, reachWantR2Only) {
+		out = append(out, fmt.Sprintf("routes only R2 has:\n got %q\nwant %q", res.r2Only, reachWantR2Only))
+	}
+	return out
+}
+
+// The routes only one side has are pinned exactly, with the reason for each.
+func TestReachOracle_RoutesOnOneSideAreExactlyThesePinned(t *testing.T) {
+	pd, vd := reachLoad(t)
+	atoms := idAtoms()
+	res, _ := reachCompare(t, pd, vd, atoms, atoms)
+	for _, p := range reachOneSideProblems(res) {
+		t.Error(p)
 	}
 }

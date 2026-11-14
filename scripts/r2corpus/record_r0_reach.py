@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.5.2
+# version: 1.6.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
-# last-edited: 2026-11-13
+# last-edited: 2026-11-14
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
 
 05-rbac §6.3 / 09 §9.2.6: the reach oracle compares, for every (route, principal)
@@ -22,7 +22,7 @@ A probe is a request that fails *after* authorization when it is authorized: a
 dummy path id (404) or an empty ``{}`` body (400/422). So a 401/403 is a
 denial and any other status below 500 is an allow. Nothing else is a verdict:
 a 429, a 5xx and a connection error are recorder failures, never recorded, and
-a drift sentinel (a census of users, books and task definitions, plus a
+a drift sentinel (a census of users, books, task definitions and the stored config, plus a
 per-principal canary) fails the run when a probe changed the store or killed the
 server.
 
@@ -32,7 +32,27 @@ stored config after the environment, so ``ENABLE_AUTH=false`` does not reach a
 store that has one: ``r0config/edit_config.go.txt``). Secrets never reach the
 output: keys are minted on the copy and held in memory only.
 
-``--check`` re-derives the data and exits 1 on any differing verdict cell.
+``--check`` re-derives the data and exits 1 on any differing verdict cell, a
+changed R0 binary, a changed route count or principal list, or a changed overlay
+store (``overlay_sha256``, the digest of every file of the store the recording
+copied; the Go oracle also checks it against the committed store, offline).
+
+Provenance. ``verdicts.json`` names the run that wrote it in ``recorded`` (the
+recorder's commit, the CI workflow and run, the runner image, python): taken from
+the GitHub Actions environment when the recorder runs there, else from the local
+checkout. It is never compared by ``--check``, since every run has its own.
+
+Re-running it (R0's per-address rate limit needs a loopback that owns all of
+127/8, so ``--spread-source-ips`` is on by default only on Linux):
+
+1. on a Linux host with the pinned R0 asset's runtime libraries (libtag), run
+   ``python3 scripts/r2corpus/record_r0_reach.py --check``. On macOS the loopback
+   owns only 127.0.0.1, ``--spread-source-ips`` is off, and R0's limiter answers
+   429, which fails the run; ``--docker`` (R0 in a container) was not tried for
+   this data;
+2. or on a GitHub runner: ``r0config/r0reach-record.workflow.yml.txt`` is the
+   workflow that recorded the committed data (run 43412869288), as a template
+   to copy onto a throwaway branch; its header says how.
 """
 
 from __future__ import annotations
@@ -41,11 +61,14 @@ import argparse
 import concurrent.futures
 import datetime
 import functools
+import hashlib
 import http.client
 import http.cookiejar
 import importlib.util
 import json
+import os
 import pathlib
+import platform
 import re
 import shutil
 import subprocess
@@ -82,7 +105,7 @@ HEADER_GUIDS = {
     "routes.json": "d41a8b7f-2c65-4e93-8f10-6b9e3a7c5d28",
     "verdicts.json": "e92f5c3a-8b17-4d64-a0c9-1f6d7b2e8a43",
 }
-DATA_VERSION = "1.0.0"
+DATA_VERSION = "1.1.0"
 
 RECORDER_UA = "r2corpus-reach/1.0"
 KEY_PREFIX = "r2reach-"
@@ -552,7 +575,8 @@ def probe_approvals(probes: list[Probe], runs: list[dict[str, Any]]) -> list[dic
 
 
 def census(admin: Probe) -> dict[str, Any]:
-    """What probing must not change: users (id, name, roles, status), books, task defs."""
+    """What probing must not change: users (id, name, roles, status), books, task defs
+    and the stored config (a digest of GET /api/v1/config)."""
     users = admin.fetch("/api/v1/users")
     if users.status != 200:
         raise RecorderError(f"census: GET /api/v1/users -> {users.status}")
@@ -572,10 +596,21 @@ def census(admin: Probe) -> dict[str, Any]:
     if not isinstance(total, int) or isinstance(total, bool):
         # A census that reads nothing counts nothing: the sentinel would pass on any drift.
         raise RecorderError(f"census: the book count is {total!r}, not a number")
+    # The stored config too: PUT /config and PUT /maintenance-window/config are
+    # probed as writes, and a probe that changed a setting would change what the
+    # later probes see. (The maintenance-window config has no GET of its own.)
+    config = admin.fetch("/api/v1/config")
+    if config.status != 200:
+        raise RecorderError(f"census: GET /api/v1/config -> {config.status}")
+    if not isinstance(config.body, dict) or not config.body:
+        raise RecorderError("census: GET /api/v1/config returned no settings to digest")
     return {
         "users": [list(r) for r in rows],
         "books": total,
         "task_defs": [d["id"] for d in task_defs(admin)],
+        "config": hashlib.sha256(
+            json.dumps(config.body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
     }
 
 
@@ -649,8 +684,49 @@ def record_pass(
             "users": len(after["users"]),
             "books": after["books"],
             "task_defs": len(after["task_defs"]),
+            "config_sha256": after["config"],
         }
     return out
+
+
+def overlay_digest(root: pathlib.Path) -> str:
+    """sha256 over the store's files: each one's slash path, a NUL, the sha256 of
+    its content and a newline, in path order. Mode, mtime and owner are not part
+    of it (a checkout does not preserve them); the Go oracle computes the same."""
+    entries = sorted((p.relative_to(root).as_posix(), p) for p in root.rglob("*") if p.is_file())
+    if not entries:
+        raise w.CorpusError(f"{root}: no store files to digest")
+    h = hashlib.sha256()
+    for rel, p in entries:
+        h.update(f"{rel}\0{w.sha256_file(p)}\n".encode())
+    return h.hexdigest()
+
+
+def recorded_by(env: Any = None) -> dict[str, str]:
+    """Who wrote this recording: the GitHub Actions run when there is one, else the
+    local checkout. Provenance only; ``--check`` never compares it."""
+    env = os.environ if env is None else env
+    commit = env.get("GITHUB_SHA", "")
+    if not commit:
+        try:
+            commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=w.REPO_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            commit = "unknown"
+    image = "/".join(x for x in (env.get("ImageOS", ""), env.get("ImageVersion", "")) if x)
+    return {
+        "recorder_commit": commit,
+        "workflow": env.get("GITHUB_WORKFLOW", "local"),
+        "run_id": env.get("GITHUB_RUN_ID", ""),
+        "run_attempt": env.get("GITHUB_RUN_ATTEMPT", ""),
+        "runner_image": image or platform.platform(),
+        "python": platform.python_version(),
+    }
 
 
 def build_verdicts(
@@ -715,7 +791,7 @@ def principals_doc(principals: list[dict[str, Any]]) -> dict[str, Any]:
 def diff_verdicts(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
     """One line per differing verdict cell (statuses are not compared)."""
     out: list[str] = []
-    for k in ("r0_tag", "r0_binary_sha256", "route_count", "principals"):
+    for k in ("r0_tag", "r0_binary_sha256", "overlay_sha256", "route_count", "principals"):
         if old.get(k) != new.get(k):
             out.append(f"{k}: {old.get(k)!r} -> {new.get(k)!r}")
     if old.get("canary") != new.get("canary"):
@@ -987,6 +1063,8 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
         "r0_tag": tag,
         "r0_binary_sha256": manifest["r0_binary_sha256"],
         "store": "internal/books/testdata/r2corpus/overlay",
+        "overlay_sha256": overlay_digest(pathlib.Path(args.corpus)),
+        "recorded": recorded_by(),
     }
     extra = {k: on[k] for k in ("tasks", "approvals", "census")}
     extra["canary"] = {**on["canary"], **off["canary"]}
