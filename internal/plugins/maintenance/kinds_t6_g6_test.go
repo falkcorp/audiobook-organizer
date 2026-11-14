@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -346,27 +347,49 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 	defs := p.t6g6Kinds(fakeT6G6Deps(t), nil)
 	require.Len(t, defs, 14)
 
+	// Every expected value below is written out by hand from the HEAD def and
+	// the coordinator's rulings, never derived from the code under test.
 	type row struct {
-		head     sdk.OperationDef
-		par      tasks.Parallelism
-		wantPar  string
-		readOnly bool
+		head    sdk.OperationDef
+		resume  tasks.ResumePolicy
+		timeout time.Duration
+		// par is the HEAD loop's parallelism, for the kinds whose body runs a pool
+		// of its own (the *Parallelism func is the one both shells call); nil for
+		// a kind with no loop.
+		par     *tasks.Parallelism
+		wantPar string
+		// effects is the independent expected write set; nil means ReadOnly.
+		effects []string
 	}
+	cpu := func(f func() tasks.Parallelism) *tasks.Parallelism { v := f(); return &v }
 	rows := []row{
-		{head: p.nightlyCompactActivityLogDef(), par: nightlyCompactActivityLogParallelism(), wantPar: "sequential: "},
-		{head: p.opChangeBookIndexRebuildDef(), par: opChangeBookIndexParallelism(), wantPar: "sequential: "},
-		{head: p.optimizeDef(), par: optimizeParallelism(), wantPar: "sequential: ", readOnly: true},
-		{head: p.orphanBookFilesCleanupDef(), par: orphanBookFilesCleanupParallelism(), wantPar: "sequential: ", readOnly: true},
-		{head: p.orphanBookFilesRepointPlanDef(), par: orphanBookFilesRepointPlanParallelism(), wantPar: "cpu", readOnly: true},
-		{head: p.probeDirectoryBooksDef(), par: probeDirectoryBooksParallelism(), wantPar: "cpu"},
-		{head: p.recompactActivityDigestsDef(), par: recompactActivityDigestsParallelism(), wantPar: "sequential: "},
-		{head: p.itunesHealDef(), par: itunesHealParallelism(), wantPar: "sequential: "},
-		{head: p.recoverMissingFilesDef(), par: recoverMissingFilesParallelism(), wantPar: "fixed(24): "},
-		{head: p.regroupShatteredAIDef(), par: regroupShatteredAIParallelism(), wantPar: "cpu"},
-		{head: p.relinkUnlinkedBooksDef(), par: relinkUnlinkedBooksParallelism(), wantPar: "cpu"},
-		{head: p.repairMergedUserStateDef(), par: repairMergedUserStateParallelism(), wantPar: "sequential: "},
-		{head: p.repairTranscribeStatusDef(), par: repairTranscribeStatusParallelism(), wantPar: "fixed(8): "},
-		{head: p.repointBookFileRowsDef(), par: rbfParallelism(), wantPar: "sequential: "},
+		{head: p.nightlyCompactActivityLogDef(), resume: tasks.ResumeDrop, timeout: 6 * time.Hour,
+			effects: []string{"books/activity"}},
+		{head: p.opChangeBookIndexRebuildDef(), resume: tasks.ResumeContinue, timeout: 60 * time.Minute,
+			effects: []string{"books/operations"}},
+		{head: p.optimizeDef(), resume: tasks.ResumeContinue, timeout: tasks.MaxTimeout},
+		{head: p.orphanBookFilesCleanupDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
+		{head: p.orphanBookFilesRepointPlanDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
+			par: cpu(orphanBookFilesRepointPlanParallelism), wantPar: "cpu"},
+		{head: p.probeDirectoryBooksDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
+			par: cpu(probeDirectoryBooksParallelism), wantPar: "cpu", effects: []string{"books/book_files", "books/books"}},
+		{head: p.recompactActivityDigestsDef(), resume: tasks.ResumeDrop, timeout: 60 * time.Minute,
+			effects: []string{"books/activity"}},
+		{head: p.itunesHealDef(), resume: tasks.ResumeFromZero, timeout: 60 * time.Minute,
+			effects: []string{"books/book_files", "books/books", "books/files", "books/operations"}},
+		{head: p.recoverMissingFilesDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
+			par: cpu(recoverMissingFilesParallelism), wantPar: "fixed(24): ",
+			effects: []string{"books/book_files", "books/books", "books/files"}},
+		{head: p.regroupShatteredAIDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
+			par: cpu(regroupShatteredAIParallelism), wantPar: "cpu", effects: []string{"books/review_items"}},
+		{head: p.relinkUnlinkedBooksDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
+			par: cpu(relinkUnlinkedBooksParallelism), wantPar: "cpu", effects: []string{"books/book_files", "books/books"}},
+		{head: p.repairMergedUserStateDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
+			effects: []string{"books/user_state"}},
+		{head: p.repairTranscribeStatusDef(), resume: tasks.ResumeFromZero, timeout: 2 * time.Hour,
+			par: cpu(repairTranscribeStatusParallelism), wantPar: "fixed(8): ", effects: []string{"books/books"}},
+		{head: p.repointBookFileRowsDef(), resume: tasks.ResumeDrop, timeout: p.repointBookFileRowsDef().Timeout,
+			effects: []string{"books/book_files", "books/books", "books/operations"}},
 	}
 
 	seen := map[tasks.Kind]bool{}
@@ -387,38 +410,30 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 			wantPrio = tasks.PriorityHigh
 		}
 		require.Equal(t, wantPrio, c.Priority, "%s priority", id)
-		// The kernel refuses a Timeout over tasks.MaxTimeout, so a def with a
-		// longer one (library-optimize's 36h) runs capped natively.
-		wantTimeout := min(r.head.Timeout, tasks.MaxTimeout)
-		require.Equal(t, wantTimeout, c.Timeout, "%s timeout", id)
+		require.Equal(t, r.timeout, c.Timeout, "%s timeout", id)
 		require.Equal(t, r.head.ProgressTimeout, c.ProgressTimeout, "%s progress timeout", id)
 		require.Equal(t, tasks.Key("books."+r.head.ConcurrencyKey), c.ConcurrencyKey, "%s concurrency key", id)
 
-		// R5: Restart and Requeue are the two policies the brief maps apart.
-		var wantResume tasks.ResumePolicy
-		switch r.head.ResumePolicy {
-		case sdk.ResumeRestart:
-			wantResume = tasks.ResumeContinue
-		case sdk.ResumeRequeue:
-			wantResume = tasks.ResumeFromZero
-		case sdk.ResumeDrop:
-			wantResume = tasks.ResumeDrop
-		case sdk.ResumeAsk:
-			wantResume = tasks.ResumeAsk
-		default:
-			t.Fatalf("%s: HEAD resume policy %v has no mapping", id, r.head.ResumePolicy)
-		}
-		require.Equal(t, wantResume, c.Resume, "%s resume", id)
+		// R5 with the coordinator's NIT 5 ruling: a Restart def maps to
+		// ResumeContinue only when its native body reads a checkpoint on restart,
+		// else ResumeFromZero. The expected policy is written out per row.
+		require.Equal(t, r.resume, c.Resume, "%s resume", id)
 
-		if r.readOnly {
+		var gotWrites []string
+		for _, res := range c.Effects.WriteSet() {
+			gotWrites = append(gotWrites, tasks.FormatRef(res))
+		}
+		sort.Strings(gotWrites)
+		if r.effects == nil {
 			require.True(t, c.Effects.IsReadOnly(), "%s must be declared ReadOnly", id)
 		} else {
 			require.False(t, c.Effects.IsReadOnly(), "%s writes", id)
-			require.NotEmpty(t, c.Effects.WriteSet(), "%s write set", id)
+			require.Equal(t, r.effects, gotWrites, "%s write set", id)
 		}
 
-		ps := r.par.String()
-		require.True(t, strings.HasPrefix(ps, r.wantPar), "%s parallelism %q, want prefix %q", id, ps, r.wantPar)
+		if r.par != nil {
+			require.True(t, strings.HasPrefix(r.par.String(), r.wantPar), "%s parallelism %q, want prefix %q", id, r.par.String(), r.wantPar)
+		}
 		require.Contains(t, c.Ready, t6g6SignalMemDB, "%s readiness", id)
 		require.NotEmpty(t, c.Perms.Start, "%s start permission", id)
 	}

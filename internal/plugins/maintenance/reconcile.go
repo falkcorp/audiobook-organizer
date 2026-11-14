@@ -97,7 +97,7 @@ func (p *Plugin) itunesHealNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.S
 	c.Title = "iTunes path heal"
 	c.Help = itunesHealHelp
 	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"), tasks.Res("books", "operations"))
-	c.Resume = tasks.ResumeContinue
+	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.itunes.heal")
 	c.Timeout = 60 * time.Minute

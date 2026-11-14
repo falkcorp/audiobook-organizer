@@ -275,7 +275,7 @@ func (p *Plugin) repairTranscribeStatusNative(deps t6g6Deps, sched func(tasks.Ki
 	c.Title = "Repair transcribe status after a transport outage"
 	c.Help = repairTranscribeStatusHelp
 	c.Effects = tasks.Writes(tasks.Res("books", "books"))
-	c.Resume = tasks.ResumeContinue
+	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.repair-transcribe-status")
 	c.Timeout = 2 * time.Hour
