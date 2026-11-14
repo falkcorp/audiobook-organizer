@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_adversarial_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9d4b7e21-3a6c-4f58-8e0d-5b1c2a97f634
 // last-edited: 2026-11-14
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/falkcorp/mediacore/log"
@@ -441,7 +442,14 @@ func FuzzRedactPaths(f *testing.F) {
 			// A tail can end or open a token; only the shape invariants hold
 			// then.
 			wantGone := run && tail == ""
-			invariants(t, rd, in, safeRun(rd, in), wantGone)
+			start := time.Now()
+			out := safeRun(rd, in)
+			// Linearity is a hard rule: a slow input is a finding, whatever the
+			// output is. (The bound is far above a loaded runner's noise.)
+			if d := time.Since(start); d > scalingBound {
+				t.Errorf("[%s] %q (%d bytes) took %s, want under %s", rd.name, in, len(in), d, scalingBound)
+			}
+			invariants(t, rd, in, out, wantGone)
 		}
 	})
 }
@@ -709,5 +717,26 @@ func TestRedactPaths_EmptyQueryPartsAreKept(t *testing.T) {
 		same("/api/v1/x?=#", "/api/v1/x?=#"),
 		same("/api/v1/x#", "/api/v1/x#"),
 		same("/api/v1/x?a=1&path=%2FUsers%2Fbruce&", "/api/v1/x?a=1&path=<path>&"),
+	})
+}
+
+// TestRedactPaths_RawQueryDelimiterInANameIsAKnownLimit pins G8: a raw "&", "#"
+// or key-position "=" is a query delimiter (RFC 3986), so a directory name that
+// holds one UNENCODED splits the value, and what follows the delimiter is a
+// relative path, which the rule does not redact. The shipped UI sends %26, %23
+// and %3D (encodeURIComponent), and those are judged whole (the first two cases
+// of the last block). The outputs below are the limit, written down so that
+// widening the rule is a decision and not a side effect: the cost of widening is
+// redacting every relative "a/b" in a query ("sort=asc/desc", "#section/2",
+// "date=2026/11/14"). Coordinator decision recorded in the seams note (G8).
+func TestRedactPaths_RawQueryDelimiterInANameIsAKnownLimit(t *testing.T) {
+	runExact(t, []pc{
+		// The limit: the part after the raw delimiter is a relative path.
+		same("/api/v1/x?sort=a}b&path=/Users%2F#z%2FGordonx%2FBooks", "/api/v1/x?sort=a}b&path=<path>#z%2FGordonx%2FBooks"),
+		same("/api/v1/x?path=/Users/a&b/Gordonx/Books", "/api/v1/x?path=<path>&b/Gordonx/Books"),
+		same("/api/v1/x?/Users/a=b/Gordonx/Books=1", "/api/v1/x?<path>=b/Gordonx/Books=1"),
+		// Encoded, the same names are one value and nothing survives.
+		same("/api/v1/x?path=/Users/a%23b/Gordonx/Books", "/api/v1/x?path=<path>"),
+		same("/api/v1/x?path=/Users/a%26b/Gordonx/Books", "/api/v1/x?path=<path>"),
 	})
 }
