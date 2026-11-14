@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_adversarial_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9d4b7e21-3a6c-4f58-8e0d-5b1c2a97f634
 // last-edited: 2026-11-14
 
@@ -284,6 +284,15 @@ func plant(ci, fi int, name string, wi int, si int) (p planted, ok bool) {
 		return p, false // G7: a percent-encoded path outside a route is not decoded
 	}
 	if c.kind == "path" && !(f.encoded || f.name == "raw") {
+		return p, false
+	}
+	// A query's "&" and "#" are its delimiters (RFC 3986): a client that means
+	// them as part of a directory name sends %26 and %23, and the encoding
+	// forms that escape the name do. Written raw they split the value, so the
+	// part after them is a different value, not a spelling of this path.
+	// In a query's name position "=" is the delimiter too.
+	if c.kind == "query" && (!f.encoded || f.rawName) &&
+		(strings.ContainsAny(name, "&#") || c.name == "key" && strings.Contains(name, "=")) {
 		return p, false
 	}
 	var target string
@@ -671,4 +680,34 @@ func TestRedactPaths_OutputIsAFixedPoint(t *testing.T) {
 	if n < 100 {
 		t.Fatalf("only %d inputs", n)
 	}
+}
+
+// TestRedactPaths_NestedRouteKeepsItsOwnEncoding (found by FuzzRedactPaths): a
+// value that is itself a route is judged as written, not after its query has
+// been decoded into the outer value's text. Decoded first, the inner "%23"
+// became a "#" that opened a fragment and the rest of the path was read as a
+// relative path and left in the output.
+func TestRedactPaths_NestedRouteKeepsItsOwnEncoding(t *testing.T) {
+	runExact(t, []pc{
+		same("/api/v1/x?next=/api/v1/y?p=%2FUsers%2F%23z%2FGordonx%2FBooks", "/api/v1/x?next=/api/v1/y?p=<path>"),
+		// As a line the token ends at the space; as a whole value the route is the
+		// whole string and its query runs to the end (G4).
+		{in: `/api/v1/x?next=/api/v1/y?p=%2FUsers%2F%23z%2FGordonx%2FBooks "ok"`, text: `/api/v1/x?next=/api/v1/y?p=<path> "ok"`, value: "/api/v1/x?next=/api/v1/y?p=<path>"},
+		same("/api/v1/x?next=%2Fapi%2Fv1%2Fy%3Fp%3D%252FUsers%252F%2523z%252FGordonx", "/api/v1/x?next=/api/v1/y%3Fp%3D<path>"),
+		same("/api/v1/x?next=/api/v1/y?q=1%26p%3D%2FUsers%2Fz%2FGordonx", "/api/v1/x?next=/api/v1/y?q=1%26p%3D<path>"),
+	})
+}
+
+// TestRedactPaths_EmptyQueryPartsAreKept (found by FuzzRedactPaths): an empty
+// name, value or fragment is a part like any other. absolutePath indexed the
+// first byte of "" and panicked on "?a=&b=&&=#" shapes.
+func TestRedactPaths_EmptyQueryPartsAreKept(t *testing.T) {
+	runExact(t, []pc{
+		same("/api/v1/x?", "/api/v1/x?"),
+		same("/api/v1/x?a=&b=", "/api/v1/x?a=&b="),
+		same("/api/v1/x?&&=&", "/api/v1/x?&&=&"),
+		same("/api/v1/x?=#", "/api/v1/x?=#"),
+		same("/api/v1/x#", "/api/v1/x#"),
+		same("/api/v1/x?a=1&path=%2FUsers%2Fbruce&", "/api/v1/x?a=1&path=<path>&"),
+	})
 }
