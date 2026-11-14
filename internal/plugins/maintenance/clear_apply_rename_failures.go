@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/clear_apply_rename_failures.go
-// version: 1.2.2
+// version: 1.3.1
 // guid: 1c9f4a67-52b8-4d03-ae71-8f605d2c9b34
-// last-edited: 2026-10-18
+// last-edited: 2026-11-13
 
 // Clears the metadata apply pipeline's DURABLE RENAME-FAILURE records.
 //
@@ -33,6 +33,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 type clearApplyRenameFailuresParams struct {
@@ -85,6 +86,23 @@ func (p *Plugin) clearApplyRenameFailuresDef() sdk.OperationDef {
 	}
 }
 
+// clearApplyRenameFailuresKind is the native kind of
+// maintenance.clear-apply-rename-failures (F5-08).
+const clearApplyRenameFailuresKind tasks.Kind = "books.maintenance.clear-apply-rename-failures"
+
+// clearApplyRenameFailuresScope is what the body takes of the params: HEAD's
+// params without Apply, which is the run's mode (env.Live) and never a param on
+// the native side (05-tasks 5T.3.7 mode contract item 3).
+type clearApplyRenameFailuresScope struct {
+	BookIDs []string `json:"book_ids,omitempty"`
+}
+
+// clearApplyRenameFailuresEnv is what runClearApplyRenameFailuresCore needs
+// from its engine: the base (Live is HEAD's apply=true).
+type clearApplyRenameFailuresEnv struct{ t6g3Base }
+
+// runClearApplyRenameFailures is the v2 shell of
+// maintenance.clear-apply-rename-failures.
 func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params clearApplyRenameFailuresParams
 	if len(rawParams) > 0 {
@@ -92,11 +110,59 @@ func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
+	if p.deps.OpsStore() == nil {
 		return fmt.Errorf("clear-apply-rename-failures: no store")
 	}
+	env := clearApplyRenameFailuresEnv{p.t6g3HeadBase(ctx, reporter, params.Apply)}
+	res, err := runClearApplyRenameFailuresCore(ctx, clearApplyRenameFailuresScope{BookIDs: params.BookIDs}, env)
+	if err != nil {
+		return err
+	}
+	// Persist the full row list on the operation record, the same way
+	// reconcile.go and dedup_ops.go do, so a dry run's decisions are readable
+	// afterwards rather than living only in the log.
+	//
+	// This wrote via store.UpdateOperationResultData(ctxOpID(ctx), ...), which
+	// resolves a v1 `operation:` row that no live op has, so it always returned
+	// "operation not found". Here the error was only logged, so the failure was
+	// invisible: every run reported success while the result data it promises
+	// was never stored. Now it goes to the run's own v2 row.
+	if err := opsregistry.ReporterSetResult(reporter, res); err != nil {
+		env.Log(slog.LevelWarn, fmt.Sprintf("could not persist result data: %v", err))
+	}
+	return nil
+}
 
+// clearApplyRenameFailuresKind builds the native kind. HEAD declares a Preview,
+// so the native kind runs in either mode. Its params are decoded from the raw
+// payload so an apply key is refused rather than ignored: a caller who sends
+// apply=true must not get a silent preview. Writes found:
+// SetUserPreferenceForUser blanks a record in the _system preference keyspace
+// (user_state); the op never touches a file or a book_file row.
+func (p *Plugin) clearApplyRenameFailuresKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", "user_state"))
+	return tasks.Task(clearApplyRenameFailuresKind, tasks.TaskSpec[json.RawMessage, clearApplyRenameFailuresResult]{
+		Common: t6g3Common(p.clearApplyRenameFailuresDef(), clearApplyRenameFailuresKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (clearApplyRenameFailuresResult, error) {
+			var scope clearApplyRenameFailuresScope
+			if err := t6g3DecodeParams(clearApplyRenameFailuresKind, raw, &scope, t6g3ModeKeys...); err != nil {
+				return clearApplyRenameFailuresResult{}, err
+			}
+			base, err := t6g3NativeBase(clearApplyRenameFailuresKind, rc, deps, true)
+			if err != nil {
+				return clearApplyRenameFailuresResult{}, err
+			}
+			if err := t6g3NeedStore(clearApplyRenameFailuresKind, base); err != nil {
+				return clearApplyRenameFailuresResult{}, err
+			}
+			return runClearApplyRenameFailuresCore(rc.Context(), scope, clearApplyRenameFailuresEnv{base})
+		},
+	})
+}
+
+// runClearApplyRenameFailuresCore is the shared body of both shells. It returns
+// the result instead of storing it.
+func runClearApplyRenameFailuresCore(ctx context.Context, params clearApplyRenameFailuresScope, env clearApplyRenameFailuresEnv) (clearApplyRenameFailuresResult, error) {
 	wanted := make(map[string]struct{}, len(params.BookIDs))
 	for _, id := range params.BookIDs {
 		if s := strings.TrimSpace(id); s != "" {
@@ -104,11 +170,10 @@ func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json
 		}
 	}
 
-	prefs, err := store.GetAllPreferencesForUser("_system")
+	prefs, err := env.Store.GetAllPreferencesForUser("_system")
 	if err != nil {
-		return fmt.Errorf("list _system preferences: %w", err)
+		return clearApplyRenameFailuresResult{}, fmt.Errorf("list _system preferences: %w", err)
 	}
-
 	res := clearApplyRenameFailuresResult{Scanned: len(prefs)}
 	for _, pref := range prefs {
 		prefix := organizer.ApplyRenameFailurePrefix
@@ -148,13 +213,13 @@ func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json
 		}
 		res.Matched++
 
-		if params.Apply {
+		if env.Live {
 			if err := ctx.Err(); err != nil {
-				return err
+				return clearApplyRenameFailuresResult{}, err
 			}
-			if err := store.SetUserPreferenceForUser("_system", pref.Key, ""); err != nil {
+			if err := env.Writer.SetUserPreferenceForUser("_system", pref.Key, ""); err != nil {
 				res.Errors++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("could not clear record for book %s: %v", bookID, err))
+				env.Log(slog.LevelWarn, fmt.Sprintf("could not clear record for book %s: %v", bookID, err))
 			} else {
 				row.Cleared = true
 				res.Cleared++
@@ -166,20 +231,8 @@ func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json
 	sort.Slice(res.Rows, func(i, j int) bool { return res.Rows[i].BookID < res.Rows[j].BookID })
 
 	summary := fmt.Sprintf("Apply rename-failure records: %d matched, %d cleared (apply=%t)",
-		res.Matched, res.Cleared, params.Apply)
-	_ = reporter.Log(slog.LevelInfo, summary)
-	_ = reporter.UpdateProgress(1, 1, summary)
-	// Persist the full row list on the operation record, the same way
-	// reconcile.go and dedup_ops.go do, so a dry run's decisions are readable
-	// afterwards rather than living only in the log.
-	//
-	// This wrote via store.UpdateOperationResultData(ctxOpID(ctx), ...), which
-	// resolves a v1 `operation:` row that no live op has, so it always returned
-	// "operation not found". Here the error was only logged, so the failure was
-	// invisible: every run reported success while the result data it promises
-	// was never stored. Now it goes to the run's own v2 row.
-	if err := opsregistry.ReporterSetResult(reporter, res); err != nil {
-		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("could not persist result data: %v", err))
-	}
-	return nil
+		res.Matched, res.Cleared, env.Live)
+	env.Log(slog.LevelInfo, summary)
+	env.Progress(1, 1, summary)
+	return res, nil
 }

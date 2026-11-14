@@ -361,9 +361,9 @@ func TestCreditsBackfill_IndexIsBuiltAfterTheScanStandDown(t *testing.T) {
 		b.Narrator = strp("Renee Montoya")
 	}, ba("ix-1", [2]int{bruce, 0}), nil)
 	renee := 0
-	env := creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1,
-		scan: hookScan{onAcquire: func() { renee = f.narrator("Renée Montoya") }}}
-	res, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID})
+	env := creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}
+	res, err := f.runEnvScan(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID},
+		hookScan{onAcquire: func() { renee = f.narrator("Renée Montoya") }})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_coverage_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 4b0e2a0e-6b8e-4d63-9c1e-7f7c5c1a2d31
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -511,7 +511,7 @@ func TestCreditsBackfill_InterruptedReplanFilesTheSplitBooksItNeverReached(t *te
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rep := &cbCancelOnReplanReporter{cbReporter: cbReporter{id: cbTestOpID}, cancel: cancel}
-	res, err := runCreditsBackfillScan(ctx, creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{}, rep)
+	res, err := f.runEnv(ctx, creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{}, rep)
 	if err == nil || res.Complete {
 		t.Fatalf("a canceled run must be incomplete: err=%v", err)
 	}

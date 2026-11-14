@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_class_lists_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: b4d81e07-93c2-4a5f-8e16-5f0c2a7d9e38
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -9,10 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // The class id lists of a full-library result are 5-12 MB. They are stored as
@@ -25,6 +28,21 @@ import (
 type failingResultReporter struct{ cbReporter }
 
 func (r *failingResultReporter) SetResult(any) error { return errors.New("result store unavailable") }
+
+// cbPersistResult stores a result the way the HEAD shell does: the production
+// persist step over HEAD's writer (class lists through the operation queue's
+// row store) and the reporter's result slot. A nil store hands the step no
+// writer.
+func cbPersistResult(rep sdk.Reporter, store *database.PebbleStore, opID string, res *creditsBackfillResult) error {
+	var w cbResultWriter
+	if store != nil {
+		w = headT6g3Writer{p: &Plugin{deps: fakeDeps{store: store}}, store: store}
+	}
+	_, err := persistCreditsBackfillResult(w, opID, res,
+		func(r *creditsBackfillResult) error { return registry.ReporterSetResult(rep, r) },
+		func(level slog.Level, msg string, attrs ...slog.Attr) { _ = rep.Log(level, msg, attrs...) })
+	return err
+}
 
 func opRowIDs(t *testing.T, rs database.OpRowStore, opID string) []string {
 	t.Helper()
@@ -47,7 +65,7 @@ func TestCreditsBackfill_StoredResultKeepsCountsAndPagesIDsFromOpRows(t *testing
 	}
 	scanned := len(res.Classes)
 	rep := &cbReporter{id: cbTestOpID}
-	if err := storeCreditsBackfillResult(rep, f.s, cbTestOpID, res); err != nil {
+	if err := cbPersistResult(rep, f.s, cbTestOpID, res); err != nil {
 		t.Fatal(err)
 	}
 	stored, ok := rep.result.(*creditsBackfillResult)
@@ -121,7 +139,7 @@ func TestCreditsBackfill_StoredResultSizeDoesNotGrowWithTheIDLists(t *testing.T)
 		t.Fatal(err)
 	}
 	rep := &cbReporter{id: cbTestOpID}
-	if err := storeCreditsBackfillResult(rep, f.s, cbTestOpID, res); err != nil {
+	if err := cbPersistResult(rep, f.s, cbTestOpID, res); err != nil {
 		t.Fatal(err)
 	}
 	small, err := json.Marshal(rep.result)
@@ -149,7 +167,7 @@ func TestCreditsBackfill_FailedResultWriteClearsTheClassListRows(t *testing.T) {
 		{Key: cbHeldITunes, Kind: cbKindHeld, Definition: "d", Count: 2, BookIDs: []string{"b1", "b2"}},
 	}}
 	rep := &failingResultReporter{cbReporter{id: cbTestOpID}}
-	if err := storeCreditsBackfillResult(rep, f.s, cbTestOpID, res); err == nil {
+	if err := cbPersistResult(rep, f.s, cbTestOpID, res); err == nil {
 		t.Fatal("a failing result write was reported as stored")
 	}
 	if rows := opRowIDs(t, f.s, cbTestOpID); len(rows) != 0 {
@@ -157,24 +175,24 @@ func TestCreditsBackfill_FailedResultWriteClearsTheClassListRows(t *testing.T) {
 	}
 
 	good := &cbReporter{id: cbTestOpID}
-	if err := storeCreditsBackfillResult(good, f.s, cbTestOpID, res); err != nil {
+	if err := cbPersistResult(good, f.s, cbTestOpID, res); err != nil {
 		t.Fatal(err)
 	}
 	res2 := &creditsBackfillResult{Classes: []cbClass{
 		{Key: cbHeldOwnerManual, Kind: cbKindHeld, Definition: "d", Count: 1, BookIDs: []string{"b9"}},
 	}}
 	again := &cbReporter{id: cbTestOpID}
-	if err := storeCreditsBackfillResult(again, f.s, cbTestOpID, res2); err != nil {
+	if err := cbPersistResult(again, f.s, cbTestOpID, res2); err != nil {
 		t.Fatal(err)
 	}
 	if rows := opRowIDs(t, f.s, cbTestOpID); !slices.Equal(rows, []string{database.ClassListRowPrefix + "held_owner_manual/000000"}) {
 		t.Fatalf("rows after a second store = %v, want only the second run's", rows)
 	}
 
-	if err := storeCreditsBackfillResult(good, nil, cbTestOpID, res); err == nil {
+	if err := cbPersistResult(good, nil, cbTestOpID, res); err == nil {
 		t.Fatal("no row store was accepted")
 	}
-	if err := storeCreditsBackfillResult(good, f.s, "", res); err == nil {
+	if err := cbPersistResult(good, f.s, "", res); err == nil {
 		t.Fatal("no operation id was accepted")
 	}
 }
@@ -193,17 +211,17 @@ func TestCreditsBackfill_StoringTheResultLeavesTheOperationsOtherRowsIntact(t *t
 	res := &creditsBackfillResult{Classes: []cbClass{
 		{Key: cbHeldITunes, Kind: cbKindHeld, Definition: "d", Count: 2, BookIDs: []string{"b1", "b2"}},
 	}}
-	if err := storeCreditsBackfillResult(&cbReporter{id: cbTestOpID}, f.s, cbTestOpID, res); err != nil {
+	if err := cbPersistResult(&cbReporter{id: cbTestOpID}, f.s, cbTestOpID, res); err != nil {
 		t.Fatal(err)
 	}
-	if err := storeCreditsBackfillResult(&cbReporter{id: cbTestOpID}, f.s, cbTestOpID, res); err != nil {
+	if err := cbPersistResult(&cbReporter{id: cbTestOpID}, f.s, cbTestOpID, res); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{database.ClassListRowPrefix + "held_itunes/000000", planRow}
 	if rows := opRowIDs(t, f.s, cbTestOpID); !slices.Equal(rows, want) {
 		t.Fatalf("rows after two stores = %v, want %v", rows, want)
 	}
-	if err := storeCreditsBackfillResult(&failingResultReporter{cbReporter{id: cbTestOpID}}, f.s, cbTestOpID, res); err == nil {
+	if err := cbPersistResult(&failingResultReporter{cbReporter{id: cbTestOpID}}, f.s, cbTestOpID, res); err == nil {
 		t.Fatal("a failing result write was reported as stored")
 	}
 	if rows := opRowIDs(t, f.s, cbTestOpID); !slices.Equal(rows, []string{planRow}) {
@@ -220,7 +238,7 @@ func TestCreditsBackfill_StoredSummaryRefusesRowsOfAnUnfinishedLaterAttempt(t *t
 		{Key: cbHeldITunes, Kind: cbKindHeld, Definition: "d", Count: 2, BookIDs: []string{"b1", "b2"}},
 	}}
 	rep := &cbReporter{id: cbTestOpID}
-	if err := storeCreditsBackfillResult(rep, f.s, cbTestOpID, res); err != nil {
+	if err := cbPersistResult(rep, f.s, cbTestOpID, res); err != nil {
 		t.Fatal(err)
 	}
 	stored := rep.result.(*creditsBackfillResult)

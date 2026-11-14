@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_rereview_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7d2e9a46-1c8b-4f35-a0d7-93b6e5c41f28
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // Tests for the second adversarial review of PR #4195 (credits backfill).
@@ -27,13 +28,23 @@ import (
 
 // runEnv runs the scan with an env the caller built (a scan controller, a
 // wrapped store or modifier) over this fixture.
-func (f *cbFixture) runEnv(ctx context.Context, env creditsBackfillEnv, params creditsBackfillParams, rep *cbReporter) (*creditsBackfillResult, error) {
+func (f *cbFixture) runEnv(ctx context.Context, env creditsBackfillEnv, params creditsBackfillParams, rep sdk.Reporter) (*creditsBackfillResult, error) {
 	f.t.Helper()
-	env.opID = rep.id
+	return f.runEnvScan(ctx, env, params, rep, nil)
+}
+
+// runEnvScan is runEnv with the scan stand-down controller the engine holds
+// through (nil: no interlock). The controller belongs to the engine, not to the
+// env, so it is passed here.
+func (f *cbFixture) runEnvScan(ctx context.Context, env creditsBackfillEnv, params creditsBackfillParams, rep sdk.Reporter, scan ScanController) (*creditsBackfillResult, error) {
+	f.t.Helper()
+	env.opID = rep.(interface{ OpID() string }).OpID()
 	if env.workers == 0 {
 		env.workers = 1
 	}
-	return runCreditsBackfillScan(ctx, env, params, rep)
+	// The run over HEAD's engine, as the HEAD shell builds it.
+	env.eng = headCBEngine{ctx: ctx, reporter: rep, scan: scan}
+	return runCreditsBackfillRun(ctx, env, params)
 }
 
 func cbRevert(t *testing.T, f *cbFixture) *audiobooks.RevertResult {
@@ -108,8 +119,8 @@ func TestCreditsBackfill_StandDownLeaseIsRenewedDuringPlanning(t *testing.T) {
 	}
 	reads := &atomic.Int64{}
 	scan := &cbReadLeaseScan{reads: reads, maxReads: 3}
-	env := creditsBackfillEnv{store: cbReadCountStore{f.s, reads}, mod: f.s, scan: scan}
-	res, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID})
+	env := creditsBackfillEnv{store: cbReadCountStore{f.s, reads}, mod: f.s}
+	res, err := f.runEnvScan(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID}, scan)
 	if err != nil {
 		t.Fatalf("apply: %v (renews %d, lost %v)", err, scan.renews, scan.lost)
 	}
@@ -161,9 +172,9 @@ func TestCreditsBackfill_LostStandDownIsReportedAsTheCause(t *testing.T) {
 	env := creditsBackfillEnv{
 		store: f.s,
 		mod:   cbWriteCountMod{f.s, writes},
-		scan:  &cbWriteLeaseScan{writes: writes, afterWrites: 2},
 	}
-	res, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID})
+	res, err := f.runEnvScan(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID},
+		&cbWriteLeaseScan{writes: writes, afterWrites: 2})
 	if !errors.Is(err, registry.ErrScanStandDownLost) {
 		t.Fatalf("err = %v, want it to wrap registry.ErrScanStandDownLost", err)
 	}
@@ -451,7 +462,7 @@ func TestCreditsBackfill_LockAppearingBeforeTheWriteLeavesNoJournalRow(t *testin
 	f.book("lj-1", "Year One", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
 	f.book("lj-2", "Year Two", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
 	rep := &cbLockOnWriteReporter{cbReporter: cbReporter{id: cbTestOpID}, f: f, books: []string{"lj-1", "lj-2"}, field: database.FieldKeyAuthorName}
-	res, err := runCreditsBackfillScan(context.Background(), creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{Apply: true}, rep)
+	res, err := f.runEnv(context.Background(), creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{Apply: true}, rep)
 	if err != nil {
 		t.Fatal(err)
 	}

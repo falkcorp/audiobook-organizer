@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_review_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5b0f2c1e-8a47-4d3b-9e6a-27c4d1f08b93
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -596,7 +596,7 @@ func TestCreditsBackfillReview_ApplyWritesConcurrently(t *testing.T) {
 	mod := &cbBarrierModifier{BookCreditsModifier: f.s, release: make(chan struct{}), timeout: 2 * time.Second}
 	rep := &cbReporter{id: cbTestOpID}
 	env := creditsBackfillEnv{store: f.s, mod: mod, opID: rep.id, workers: 4}
-	res, err := runCreditsBackfillScan(context.Background(), env, creditsBackfillParams{Apply: true}, rep)
+	res, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, rep)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -629,7 +629,7 @@ func TestCreditsBackfillReview_NarratorsCreatedCountsOnlySuccessfulWrites(t *tes
 	}}
 	rep := &cbReporter{id: cbTestOpID}
 	env := creditsBackfillEnv{store: f.s, mod: mod, opID: rep.id, workers: 1}
-	res, err := runCreditsBackfillScan(context.Background(), env, creditsBackfillParams{Apply: true}, rep)
+	res, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, rep)
 	if err == nil {
 		t.Fatal("a refused write reported a clean run")
 	}
