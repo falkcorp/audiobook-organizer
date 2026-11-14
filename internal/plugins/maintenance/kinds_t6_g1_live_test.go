@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-14
 
@@ -48,6 +48,8 @@ type t6g1CountWriter struct {
 	// failRecord, when set, is what RecordOperationChange returns instead of
 	// writing the row.
 	failRecord error
+	// failDelete, when set, is what DeleteAuthor returns instead of deleting.
+	failDelete error
 }
 
 func newT6G1CountWriter(ops OpsStore) *t6g1CountWriter {
@@ -99,6 +101,9 @@ func (w *t6g1CountWriter) ModifyBook(id string, fn func(*database.Book) error) (
 
 func (w *t6g1CountWriter) DeleteAuthor(id int) error {
 	w.note("DeleteAuthor")
+	if w.failDelete != nil {
+		return w.failDelete
+	}
 	return w.OpsStore.DeleteAuthor(id)
 }
 
@@ -845,6 +850,58 @@ func TestT6G1Kinds_PurgeAbortsWhenTheJournalWriteIsFenced(t *testing.T) {
 	for _, id := range empties {
 		a, _ := s.GetAuthorByID(id)
 		require.NotNil(t, a, "author %d must still exist", id)
+	}
+}
+
+// A delete refused because the run was fenced between its journal row and the
+// delete aborts the purge too, rather than counting it as one failed delete.
+func TestT6G1Kinds_PurgeAbortsWhenTheDeleteIsFenced(t *testing.T) {
+	s, _, empties := t6g1PurgeFixture(t)
+	probe := &t6g1LiveProbe{}
+	deps := probe.deps(s)
+	probe.cw.failDelete = fmt.Errorf("delete refused: %w", tasks.ErrFenced)
+	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(deps, nil), purgeEmptyAuthorsKind)
+
+	err := runT6G1Kind(t, def, tasks.ModeLive, &t6g1GateWriter{}, "")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, tasks.ErrFenced), "the abort wraps the fence: %v", err)
+	require.Contains(t, err.Error(), "run fenced")
+	require.Equal(t, 1, probe.cw.count("DeleteAuthor"), "the run stopped at the first fenced delete")
+	for _, id := range empties {
+		a, _ := s.GetAuthorByID(id)
+		require.NotNil(t, a, "author %d must still exist", id)
+	}
+}
+
+// A kind whose deps lack NewWriters, or the writer group it needs, or (for the
+// kinds that read the owner-manual check) the readers, is refused with a
+// sentence before it does anything, in Preview too: a nil there would panic.
+func TestT6G1Kinds_RefusesUnwiredWritersAndReaders(t *testing.T) {
+	probe := &t6g1LiveProbe{}
+	base := probe.deps(nil)
+
+	noWriters := base
+	noWriters.NewWriters = nil
+	emptyGroup := base
+	emptyGroup.NewWriters = func(tasks.Writer) t6g1Writers { return t6g1Writers{} }
+	for name, deps := range map[string]t6g1Deps{"NewWriters nil": noWriters, "writer group nil": emptyGroup} {
+		for _, kind := range []tasks.Kind{
+			pruneAIJournalKind, authorSplitScanKind, purgeEmptyAuthorsKind, authorStripMergeKind,
+		} {
+			defs := (&Plugin{}).t6g1Kinds(deps, nil)
+			def := t6g1ByKind(t, defs, kind)
+			err := runT6G1Kind(t, def, tasks.ModeLive, &t6g1GateWriter{}, "")
+			require.Error(t, err, "%s/%s", name, kind)
+			require.Contains(t, err.Error(), "not wired", "%s/%s", name, kind)
+		}
+	}
+
+	noReaders := base
+	for _, kind := range []tasks.Kind{authorPathLinkKind, authorStripMergeKind, autoMatchTranscribedKind} {
+		def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(noReaders, nil), kind)
+		err := runT6G1Kind(t, def, tasks.ModeLive, &t6g1GateWriter{}, "")
+		require.Error(t, err, "%s", kind)
+		require.Contains(t, err.Error(), "ManualOnly", "%s", kind)
 	}
 }
 

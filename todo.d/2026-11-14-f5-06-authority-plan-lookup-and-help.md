@@ -1,0 +1,3 @@
+- [ ] F5-18: back the native authority-build plan lookup with the tasks run store. A native Preview's `plan_op_id` is its RunID, but `deps.PlanReader` reads a v2 operation row, so a native apply of a native dry run cannot find its plan. Replace `TestT6G1Kinds_AuthorityBuildAppliesFromAPlantedV2PlanRow` with a test that feeds a native Preview's own result to the Live run. See `docs/agent-tasks/platform-core/seams.d/F5-06.md`.
+- [ ] F5-18: rewrite the native Help text of the 12 T6 group 1 writing kinds. It is verbatim HEAD and tells callers to pass `apply=true` or `dry_run=false`, which the native kinds refuse; name the run mode instead.
+- [ ] F5-18: declare the `ai_journal` and `authority_lists` resource kinds in `r.Resources(...)`; no kind uses `aux_stores` any more.
