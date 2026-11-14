@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/filepath_collision_report.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 80fcbf6b-a38f-4f44-86f4-7f1f06d2a0d2
 // last-edited: 2026-11-14
 
@@ -267,19 +267,11 @@ func shardBookCores(books []database.BookCore, n int) [][]database.BookCore {
 	return shards
 }
 
-// buildFilePathCollisionReport performs the sweep and RETURNS the report.
-//
-// Split out from the op body so the counts can be asserted as values rather
-// than scraped from a log line -- this op's entire purpose is the numbers it
-// produces, and any op that later relies on them deserves a report tested
-// directly.
-func buildFilePathCollisionReport(ctx context.Context, store filePathCollisionStore, params filePathCollisionReportParams, reporter sdk.Reporter) (filePathCollisionReport, error) {
-	return t6g4BuildFilePathCollisionReport(ctx, store, params, t6g4HeadBase(reporter, false, nil, nil))
-}
-
-// t6g4BuildFilePathCollisionReport is buildFilePathCollisionReport over an env
-// base: the sweep's progress and its loop run through the base, so the core can
-// hand it either shell's.
+// t6g4BuildFilePathCollisionReport performs the sweep and RETURNS the report, over
+// an env base: the sweep's progress and its loop run through the base, so the
+// core can hand it either shell's. Split out from the op body so the counts can
+// be asserted as values rather than scraped from a log line -- this op's entire
+// purpose is the numbers it produces.
 func t6g4BuildFilePathCollisionReport(ctx context.Context, store filePathCollisionStore, params filePathCollisionReportParams, base t6g4Base) (filePathCollisionReport, error) {
 	reporter := base.reporter(ctx)
 	sampleLimit := params.SampleLimit

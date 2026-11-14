@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
 // last-edited: 2026-11-14
 
@@ -165,10 +165,16 @@ func (p *Plugin) runFileProvenanceExport(ctx context.Context, rawParams json.Raw
 	if err != nil {
 		return err
 	}
-	prov := p.deps.FileProvenanceStore()
-	_, err = p.runFileProvenanceExportCore(ctx, params, fileProvExportEnv{t6g4Base: t6g4HeadBase(reporter, params.Apply,
-		headT6G4Store{deps: p.deps, prov: prov}, headT6G4Writer{prov: prov})})
+	_, err = p.runFileProvenanceExportCore(ctx, params, p.fileProvenanceExportHeadEnv(reporter, params.Apply))
 	return err
+}
+
+// fileProvenanceExportHeadEnv builds the env HEAD's shell gives the core: the
+// provenance store resolved off the deps (nil when no layer implements it).
+func (p *Plugin) fileProvenanceExportHeadEnv(reporter sdk.Reporter, apply bool) fileProvExportEnv {
+	prov := p.deps.FileProvenanceStore()
+	return fileProvExportEnv{t6g4Base: t6g4HeadBase(reporter, apply,
+		headT6G4Store{deps: p.deps, prov: prov}, headT6G4Writer{prov: prov})}
 }
 
 // fileProvenanceExportKind is the native shell (rule R2 item 3). HEAD has a
@@ -264,22 +270,6 @@ func (p *Plugin) runFileProvenanceExportCore(ctx context.Context, params filePro
 		"bytes", result.BytesWritten, "chains_verified", result.ChainsVerified,
 		"chains_broken", result.ChainsBroken)
 	return result, nil
-}
-
-// exportFileProvenance does the work and returns the tally.
-//
-// Split from the reporter plumbing so the behaviour can be asserted directly
-// rather than by parsing a log line back out of a fake reporter.
-func (p *Plugin) exportFileProvenance(ctx context.Context, rawParams json.RawMessage) (fileProvExportResult, error) {
-	params, err := decodeFileProvExportParams(rawParams)
-	if err != nil {
-		return fileProvExportResult{}, err
-	}
-	prov := p.deps.FileProvenanceStore()
-	// No reporter: the export itself logs nothing; pinned callers assert the tally.
-	return p.exportFileProvenanceCore(ctx, params, fileProvExportEnv{t6g4Base: t6g4Base{
-		Live: params.Apply, Store: headT6G4Store{deps: p.deps, prov: prov}, Writer: headT6G4Writer{prov: prov},
-	}})
 }
 
 // exportFileProvenanceCore is the export itself over decoded params. The ledger is

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-14
 
@@ -659,20 +659,7 @@ func (r *unknownRowsRun) rowSettled(bookID string) {
 	}
 }
 
-func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsStore, params durationReextractParams,
-	dryRun bool, reporter sdk.Reporter) error {
-	// HEAD resolves the deferred-aggregate writer off the store only once there is
-	// something to write; a nil writer says the store cannot defer aggregates.
-	var writer segmentFailureWriter
-	if w, ok := database.AsCapability[segmentFailureWriter](store); ok {
-		writer = w
-	}
-	return p.t6g4RunUnknownRowsBackfill(ctx, store, writer, t6g4RunEachHEAD(reporter),
-		func(res UnknownRowsResult) error { return registry.ReporterSetResult(reporter, res) },
-		params, dryRun, reporter)
-}
-
-// t6g4RunUnknownRowsBackfill is runUnknownRowsBackfill's body with its four reaches
+// t6g4RunUnknownRowsBackfill is the unknown-rows backfill with its four reaches
 // outside the row walk passed in, so HEAD's shell and the native kind run the
 // one implementation: writer (nil when the store cannot defer aggregates), each
 // (the pool runner), setResult (persists the op result) and the store, whose

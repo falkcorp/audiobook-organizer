@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.7.2
+// version: 2.8.0
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // itoa is shared with regroup_shattered_ai_test.go.
@@ -126,7 +127,8 @@ func fsRowCount(t *testing.T, s *database.PebbleStore) int {
 
 func fsPlan(t *testing.T, s regroupSnapshotReader) *fsRepairPlan {
 	t.Helper()
-	plan, err := planFSRepair(context.Background(), s, &fakeReporter{})
+	rep := &fakeReporter{}
+	plan, err := planFSRepair(context.Background(), s, rep, t6g4RunEachHEAD(rep))
 	if err != nil {
 		t.Fatalf("planFSRepair: %v", err)
 	}
@@ -281,7 +283,7 @@ func TestFsRegroupFragments_ApplyMergesSoftDeletesAndJournals(t *testing.T) {
 	survivor := frag[0].SurvivorID
 
 	rep := &opIDReporter{id: "op-frag"}
-	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, rep)
+	res, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, rep)
 	if err != nil {
 		t.Fatalf("apply: %v (%s)", err, res)
 	}
@@ -382,7 +384,7 @@ func TestFsRegroupDuplicates_DryRunAndApplyRetireShellsOnly(t *testing.T) {
 	}
 
 	g := &fsGuardStore{PebbleStore: s}
-	if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-dup"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-dup"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	for _, id := range shells {
@@ -440,7 +442,7 @@ func TestFsRegroupLayout_DetectedAndApplyRefuses(t *testing.T) {
 	}
 
 	rep := &opIDReporter{id: "op-lay"}
-	_, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{Categories: []string{fsCatLayout}}, rep)
+	_, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{Categories: []string{fsCatLayout}}, rep)
 	if err == nil || !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("layout apply err = %v, want the not-implemented refusal", err)
 	}
@@ -483,7 +485,7 @@ func TestFsRegroupProtectedPath_Refused(t *testing.T) {
 	if n := len(fsGroupsOf(plan, fsCatFragments)) + len(fsGroupsOf(plan, fsCatLayout)); n != 0 {
 		t.Fatalf("protected books leaked into appliable categories: %s", plan.summary())
 	}
-	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-prot"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-prot"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	for _, id := range append(itunes, prot...) {
@@ -518,7 +520,7 @@ func TestFsRegroupApply_RefusesDuringScan(t *testing.T) {
 			ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
 			before := fsRowCount(t, s)
 			plan := fsPlan(t, s)
-			if _, err := applyFSRepairPlan(context.Background(), s, tc.scan, tc.queue, plan, fsRegroupParams{}, &opIDReporter{id: "op-scan"}); err == nil {
+			if _, err := fsApplyPlan(context.Background(), s, tc.scan, tc.queue, plan, fsRegroupParams{}, &opIDReporter{id: "op-scan"}); err == nil {
 				t.Fatalf("apply succeeded, want a refusal")
 			}
 			for _, id := range ids {
@@ -536,7 +538,7 @@ func TestFsRegroupApply_RefusesDuringScan(t *testing.T) {
 	s := regroupStore(t)
 	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 2)
 	c := &recordingScanController{renewOK: true}
-	if _, err := applyFSRepairPlan(context.Background(), s, c, fsQueue{}, fsPlan(t, s), fsRegroupParams{}, &opIDReporter{id: "op-held"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), s, c, fsQueue{}, fsPlan(t, s), fsRegroupParams{}, &opIDReporter{id: "op-held"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if acq, rel, ren := c.counts(); acq != 1 || rel != 1 || ren < 1 {
@@ -554,11 +556,11 @@ func TestFsRegroupApply_LookupErrorSkipsGroupAndOpIDRequired(t *testing.T) {
 	g := &fsGuardStore{PebbleStore: s, lookupErr: errors.New("transient")}
 	plan := fsPlan(t, g)
 
-	if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &fakeReporter{}); err == nil ||
+	if _, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &fakeReporter{}); err == nil ||
 		!strings.Contains(err.Error(), "operation id") {
 		t.Fatalf("apply without op id: err = %v, want refusal", err)
 	}
-	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-lookup"})
+	res, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-lookup"})
 	if err == nil || res.Groups != 0 {
 		t.Fatalf("apply with lookup errors: err=%v res=%s, want error and 0 groups", err, res)
 	}
@@ -605,7 +607,7 @@ func TestFsRegroupFragments_RevertRestoresShellsAndRows(t *testing.T) {
 	pre, _ := s.GetBookByID(survivor)
 	preTitle, prePath := pre.Title, pre.FilePath
 
-	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-undo"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-undo"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	led := fsLedgerTypes(t, s, "op-undo")
@@ -668,7 +670,7 @@ func TestFsRegroupFragments_SharedPathRefused(t *testing.T) {
 		t.Fatalf("members sharing a path were classified fragments: %s", plan.summary())
 	}
 	fsForce(plan, fsCatFragments)
-	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-share"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-share"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if got := fsRowCount(t, s); got != before {
@@ -696,7 +698,7 @@ func TestFsRegroupFragments_RowPathDiffersRefused(t *testing.T) {
 		t.Fatalf("a member whose row path differs was classified fragments: %s", plan.summary())
 	}
 	fsForce(plan, fsCatFragments)
-	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-differs"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-differs"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if got := fsRowCount(t, s); got != before {
@@ -732,7 +734,7 @@ func TestFsRegroupFragments_RevertAfterCreateLeavesRowsOnTheirBooks(t *testing.T
 		t.Fatalf("fragments groups = %d, want 1 (plan %s)", len(frag), plan.summary())
 	}
 	survivor := frag[0].SurvivorID
-	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-create"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-create"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	rows, _ := s.GetBookFiles(survivor)
@@ -788,7 +790,7 @@ func TestFsRegroupRevert_RefusesFieldsChangedSince(t *testing.T) {
 		t.Fatalf("fragments groups = %d (plan %s)", len(frag), plan.summary())
 	}
 	survivor := frag[0].SurvivorID
-	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-drift"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-drift"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	edited := base + "/edited"
@@ -848,7 +850,7 @@ func TestFsRegroupApply_SurvivorSoftDeletedMidRunSkipsGroup(t *testing.T) {
 	if err := merge.SoftDeleteBook(s, survivor); err != nil {
 		t.Fatal(err)
 	}
-	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-mid"})
+	res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-mid"})
 	if err != nil || res.Skipped != 1 || res.Groups != 0 {
 		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
 	}
@@ -885,7 +887,7 @@ func TestFsRegroupDuplicates_NonPrimaryOwnerRefused(t *testing.T) {
 			plan.Groups[i].Category, plan.Groups[i].OwnerID = fsCatDuplicates, owner
 		}
 	}
-	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-nonprim"})
+	res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-nonprim"})
 	if err != nil || res.Skipped != 1 {
 		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
 	}
@@ -916,7 +918,7 @@ func TestFsRegroupFragments_MissingFileRefused(t *testing.T) {
 		t.Errorf("dry run does not flag the missing file: %v", rep.logs)
 	}
 	fsForce(plan, fsCatFragments)
-	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-missing"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-missing"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if got := fsRowCount(t, s); got != before {
@@ -955,7 +957,7 @@ func TestFsRegroupApply_ProtectedAfterPlanSkipsGroup(t *testing.T) {
 	old := config.AppConfig.ProtectedPaths
 	config.AppConfig.ProtectedPaths = []string{filepath.Dir(base)}
 	t.Cleanup(func() { config.AppConfig.ProtectedPaths = old })
-	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-prot-late"})
+	res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-prot-late"})
 	if err != nil || res.Skipped != 1 {
 		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
 	}
@@ -1000,7 +1002,7 @@ func TestFsRegroupRevert_RefusesTitleEditedSince(t *testing.T) {
 	s := regroupStore(t)
 	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
 	plan, g := fsOneFragmentsGroup(t, s)
-	if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-title"}); err != nil {
+	if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-title"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	sb, _ := s.GetBookByID(g.SurvivorID)
@@ -1040,7 +1042,7 @@ func TestFsRegroupApply_BookAtFolderAfterPlanSkipsGroup(t *testing.T) {
 	plan, _ := fsOneFragmentsGroup(t, s)
 	late := fsSeedBook(t, s, "Cage of Souls", base)
 	before := fsRowCount(t, s)
-	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-late-book"})
+	res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-late-book"})
 	if err != nil || res.Skipped != 1 {
 		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
 	}
@@ -1078,7 +1080,7 @@ func TestFsRegroupApply_VersionChangeAfterPlanSkipsGroup(t *testing.T) {
 				}
 			}
 			before := fsRowCount(t, s)
-			res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-version"})
+			res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-version"})
 			if err != nil || res.Skipped != 1 {
 				t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
 			}
@@ -1096,7 +1098,7 @@ func TestFsRegroupApply_MemberRowsChangedAfterPlanSkipsGroup(t *testing.T) {
 	plan, _ := fsOneFragmentsGroup(t, s)
 	fsSeedRow(t, s, ids[0], base+"/Cage of Souls - 9/9.mp3")
 	before := fsRowCount(t, s)
-	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-gained"})
+	res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-gained"})
 	if err != nil || res.Skipped != 1 {
 		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
 	}
@@ -1158,7 +1160,7 @@ func TestFsRegroupFragments_FileOutsideChapterFolderRefused(t *testing.T) {
 		}
 	}
 	before := fsRowCount(t, s)
-	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-bonus"})
+	res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-bonus"})
 	if err != nil || res.Skipped != 1 {
 		t.Fatalf("apply err=%v res=%s, want the group skipped", err, res)
 	}
@@ -1224,7 +1226,7 @@ func TestFsRegroupApply_BookAtFolderMissedByPathIndexSkipsGroup(t *testing.T) {
 				t.Fatalf("precondition: the path index still names live book %s, so this is not the index-miss case", x)
 			}
 			before := fsRowCount(t, s)
-			res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-index-miss"})
+			res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-index-miss"})
 			if err != nil || res.Skipped != 1 {
 				t.Fatalf("apply err=%v res=%s, want the group skipped (live book %s is at the folder)", err, res, x)
 			}
@@ -1251,7 +1253,7 @@ func TestFsRegroupRevert_TitleRevertStates(t *testing.T) {
 			s := regroupStore(t)
 			seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
 			plan, g := fsOneFragmentsGroup(t, s)
-			if _, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-states"}); err != nil {
+			if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-states"}); err != nil {
 				t.Fatalf("apply: %v", err)
 			}
 			changes, err := s.GetOperationChanges("op-states")
@@ -1324,7 +1326,7 @@ func TestFsRegroupApply_BookFolderLookupErrorFailsGroup(t *testing.T) {
 	plan, _ := fsOneFragmentsGroup(t, s)
 	before := fsRowCount(t, s)
 	g := &fsGuardStore{PebbleStore: s, atPathErr: errors.New("book_atpath read failed")}
-	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-atpath-err"})
+	res, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-atpath-err"})
 	if err == nil || res.Errors != 1 || res.Groups != 0 || res.Skipped != 0 {
 		t.Fatalf("apply err=%v res=%s, want an error, errors=1 and no group applied", err, res)
 	}
@@ -1343,7 +1345,7 @@ func TestFsRegroupApply_OtherLiveBookAtFolderRefusesGroup(t *testing.T) {
 	plan, grp := fsOneFragmentsGroup(t, s)
 	before := fsRowCount(t, s)
 	g := &fsGuardStore{PebbleStore: s, atPathIDs: []string{grp.SurvivorID, "other-live-book"}}
-	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-atpath-other"})
+	res, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-atpath-other"})
 	if err != nil || res.Skipped != 1 || res.Groups != 0 || res.Errors != 0 {
 		t.Fatalf("apply err=%v res=%s, want the group skipped and nothing applied", err, res)
 	}
@@ -1372,7 +1374,7 @@ func TestFsRegroupDuplicates_ShellStaysLiveWhenItsSoftDeleteCannotBeJournaled(t 
 	_, shells := seedDuplicates(t, s, "/lib/Kevin J. Anderson/Metal Swarm")
 	plan := fsPlan(t, s)
 	g := &opJournalFailStore{fsGuardStore: &fsGuardStore{PebbleStore: s}, failType: fsChangeSoftDelete}
-	if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-nojournal"}); err == nil || !strings.Contains(err.Error(), "errors during fs-regroup apply") {
+	if _, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-nojournal"}); err == nil || !strings.Contains(err.Error(), "errors during fs-regroup apply") {
 		t.Fatalf("apply err = %v, want the step failures reported", err)
 	}
 	for _, id := range shells {
@@ -1392,7 +1394,7 @@ func TestFsRegroupDuplicates_FailedSoftDeleteVoidsItsJournaledRow(t *testing.T) 
 	_, shells := seedDuplicates(t, s, "/lib/Kevin J. Anderson/Metal Swarm")
 	plan := fsPlan(t, s)
 	g := &softDeleteFailStore{fsGuardStore: &fsGuardStore{PebbleStore: s}}
-	if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-sdfail"}); err == nil || !strings.Contains(err.Error(), "errors during fs-regroup apply") {
+	if _, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-sdfail"}); err == nil || !strings.Contains(err.Error(), "errors during fs-regroup apply") {
 		t.Fatalf("apply err = %v, want the step failures reported", err)
 	}
 	for _, id := range shells {
@@ -1482,7 +1484,7 @@ func TestFsRegroupDuplicates_SoftDeleteErrorKeepsItsJournalRowUnlessTheShellRead
 			plan := fsPlan(t, s)
 			g := &softDeleteLandsThenFailsStore{fsGuardStore: &fsGuardStore{PebbleStore: s}, landed: tc.landed, failReread: tc.failReread}
 			opID := "op-sdkept-" + tc.name
-			if _, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: opID}); err == nil || !strings.Contains(err.Error(), "errors during fs-regroup apply") {
+			if _, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: opID}); err == nil || !strings.Contains(err.Error(), "errors during fs-regroup apply") {
 				t.Fatalf("apply err = %v, want the step failures reported", err)
 			}
 			for _, id := range shells {
@@ -1508,4 +1510,82 @@ func TestFsRegroupDuplicates_SoftDeleteErrorKeepsItsJournalRowUnlessTheShellRead
 			}
 		})
 	}
+}
+
+// TestPlanFSRepair_ClassifiesOnTheCallersLoopRunner (review M3): the plan's
+// classification pass runs on the loop runner the caller hands in, at the CPU
+// parallelism HEAD sized it at, collecting errors. It used to call
+// registry.RunItems with runtime.NumCPU() itself, so a native run's
+// classification was a second, untracked pool beside its own loop.
+func TestPlanFSRepair_ClassifiesOnTheCallersLoopRunner(t *testing.T) {
+	s := regroupStore(t)
+	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	want := fsPlan(t, s)
+
+	rep := &fakeReporter{}
+	head := t6g4RunEachHEAD(rep)
+	var calls []t6g4EachOpts
+	var items []int
+	each := func(ctx context.Context, n int, o t6g4EachOpts, fn func(context.Context, int) error) error {
+		calls = append(calls, o)
+		items = append(items, n)
+		return head(ctx, n, o, fn)
+	}
+	got, err := planFSRepair(context.Background(), s, rep, each)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || items[0] < 1 {
+		t.Fatalf("classification loop runner calls = %d over %v items, want one call over at least one job", len(calls), items)
+	}
+	if calls[0].Concurrency != t6g4CPU || !calls[0].Collect {
+		t.Errorf("classification options = %+v, want t6g4CPU concurrency and Collect", calls[0])
+	}
+	if len(got.Groups) != len(want.Groups) || got.summary() != want.summary() {
+		t.Errorf("plan through the caller's runner = %q (%d groups), want %q (%d groups)", got.summary(), len(got.Groups), want.summary(), len(want.Groups))
+	}
+}
+
+// fsNativeStore answers the two snapshot reads the classification pass makes from
+// a real PebbleStore and everything else empty (zeroT6G4Store).
+type fsNativeStore struct {
+	zeroT6G4Store
+	ps *database.PebbleStore
+}
+
+func (s fsNativeStore) GetAllBooksFullFrom(afterID string, limit int) ([]database.Book, error) {
+	return s.ps.GetAllBooksFullFrom(afterID, limit)
+}
+
+func (s fsNativeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
+	return s.ps.GetAllBookFilesCore()
+}
+
+// TestFsRegroupKind_NativePreviewClassifiesAtDeclaredCPUParallelism (review M3):
+// the native preview's classification pass runs on the run's own tasks.RunItems,
+// so it holds CPU slots from the run's pool (taskstest.FakeRun counts them).
+func TestFsRegroupKind_NativePreviewClassifiesAtDeclaredCPUParallelism(t *testing.T) {
+	s := regroupStore(t)
+	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	deps := t6g4Deps{
+		Store:     fsNativeStore{ps: s},
+		NewWriter: func(tasks.Writer) t6g4Writer { return recT6G4Writer{rec: &t6g4Calls{}} },
+	}
+	def := t6g4KindByName(t, t6g4Kinds(deps, nil), fsRegroupKind)
+	host, rc := newT6G4RC(fsRegroupKind, tasks.ModePreview, &t6g4RunWriter{})
+	if _, err := runT6G4Kind(t, def, rc, ""); err != nil {
+		t.Fatal(err)
+	}
+	if acquires, _ := host.CPUStats(); acquires < 1 {
+		t.Errorf("CPU slot acquisitions = %d, want the classification pass to run on the run's CPU-parallel loop", acquires)
+	}
+}
+
+// fsApplyPlan applies a plan on HEAD's loop runner, the way HEAD's shell does:
+// the group loop is registry.RunItems over the same reporter the apply reports
+// to. It is the one place the tests name that pairing.
+func fsApplyPlan(ctx context.Context, store fsRepairStore, scan ScanController, queue OpQueueReader,
+	plan *fsRepairPlan, params fsRegroupParams, reporter sdk.Reporter,
+) (fsRepairResult, error) {
+	return t6g4ApplyFSRepairPlan(ctx, store, scan, queue, t6g4RunEachHEAD(reporter), plan, params, reporter)
 }

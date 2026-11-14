@@ -636,11 +636,9 @@ internal/plugins/itunes.loggerWrapper.UpdateProgress
 internal/plugins/itunes.loggerWrapper.Warn
 internal/plugins/itunes.loggerWrapper.With
 internal/plugins/maintenance.Plugin.aiDedupBatchKind
-internal/plugins/maintenance.Plugin.captureFileProvenance
 internal/plugins/maintenance.Plugin.dedupExactTriageKind
 internal/plugins/maintenance.Plugin.dedupeBookFileRowsKind
 internal/plugins/maintenance.Plugin.durationBackfillKind
-internal/plugins/maintenance.Plugin.exportFileProvenance
 internal/plugins/maintenance.Plugin.extractWAVClipsKind
 internal/plugins/maintenance.Plugin.fileIntroTranscribeKind
 internal/plugins/maintenance.Plugin.filePathCollisionReportKind
@@ -651,10 +649,6 @@ internal/plugins/maintenance.Plugin.identIndexKind
 internal/plugins/maintenance.Plugin.integrityCheckKind
 internal/plugins/maintenance.Plugin.introMigrateSingleFileKind
 internal/plugins/maintenance.Plugin.introTranscribeNativeKind
-internal/plugins/maintenance.Plugin.migrateOneBook
-internal/plugins/maintenance.Plugin.runUnknownRowsBackfill
-internal/plugins/maintenance.applyFSRepairPlan
-internal/plugins/maintenance.buildFilePathCollisionReport
 internal/plugins/maintenance.consolidationLeftoversFixer.newSource
 internal/plugins/maintenance.duplicateCopiesFixer.detail
 internal/plugins/maintenance.folderBooksFixer.handOff
@@ -665,6 +659,7 @@ internal/plugins/maintenance.reconcileFixer.reader
 internal/plugins/maintenance.t6g4Kinds
 internal/plugins/maintenance.t6g4NativeBase
 internal/plugins/maintenance.t6g4Par
+internal/plugins/maintenance.t6g4RefuseModeKeys
 internal/plugins/maintenance.t6g4RequireLive
 internal/plugins/maintenance.t6g4Res
 internal/plugins/maintenance.t6g4RunEach

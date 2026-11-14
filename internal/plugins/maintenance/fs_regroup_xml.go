@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.23.1
+// version: 2.23.2
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-11-14
 
@@ -46,7 +46,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -366,7 +365,7 @@ func (p *Plugin) runFSRegroupXMLCore(ctx context.Context, params fsRegroupParams
 		return fsRegroupResult{}, err
 	}
 	reporter := env.reporter(ctx)
-	plan, err := planFSRepair(ctx, env.Store, reporter)
+	plan, err := planFSRepair(ctx, env.Store, reporter, env.Each)
 	if err != nil {
 		return fsRegroupResult{}, err
 	}
@@ -488,8 +487,12 @@ func fsRegroupProtectedPath(p string) bool {
 	return false
 }
 
-// planFSRepair loads the library snapshot and classifies it. Read-only.
-func planFSRepair(ctx context.Context, store regroupSnapshotReader, reporter sdk.Reporter) (*fsRepairPlan, error) {
+// planFSRepair loads the library snapshot and classifies it. Read-only. The
+// classification pass runs on each (HEAD's registry.RunItems, or the native
+// tasks.RunItems at the declared CPU parallelism), so the plan exists once for
+// both shells and a native run's classification is its own run's loop, not an
+// untracked goroutine pool beside it.
+func planFSRepair(ctx context.Context, store regroupSnapshotReader, reporter sdk.Reporter, each t6g4EachFn) (*fsRepairPlan, error) {
 	_ = reporter.UpdateProgress(0, 3, "Phase 1/3: scanning books…")
 	bookMeta := make(map[string]*itunesservice.FSBook)
 	titles := make(map[string]string)
@@ -603,7 +606,16 @@ func planFSRepair(ctx context.Context, store regroupSnapshotReader, reporter sdk
 	}
 	groups := make([]fsRepairGroup, len(jobs))
 	var done atomic.Int64
-	err = registry.RunItems(ctx, reporter, jobs, func(_ context.Context, j job) error {
+	// CPU-bound map lookups over an immutable snapshot: one worker per core
+	// (t6g4CPU), every item run, errors joined.
+	err = each(ctx, len(jobs), t6g4EachOpts{
+		Concurrency: t6g4CPU,
+		Collect:     true,
+		Label: func(_, total int) string {
+			return fmt.Sprintf("Phase 3/3: classified %d/%d", done.Load(), total)
+		},
+	}, func(_ context.Context, i int) error {
+		j := jobs[i]
 		if j.target != nil {
 			groups[j.i] = classifyShatteredTarget(*j.target, idx)
 		} else if g, ok := classifyLayoutBook(j.bookID, idx); ok {
@@ -611,13 +623,6 @@ func planFSRepair(ctx context.Context, store regroupSnapshotReader, reporter sdk
 		}
 		done.Add(1)
 		return nil
-	}, registry.RunItemsOptions{
-		// CPU-bound map lookups over an immutable snapshot: one worker per core.
-		Concurrency: runtime.NumCPU(),
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(_, total int) string {
-			return fmt.Sprintf("Phase 3/3: classified %d/%d", done.Load(), total)
-		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("classify: %w", err)
@@ -1073,17 +1078,10 @@ func (a *fsApplier) journalRow(bookID, changeType, field, oldV, newV string) (*d
 	return row, true
 }
 
-// applyFSRepairPlan applies the fragments and duplicates groups. It never
-// runs a layout move: asking for that category returns fsLayoutApplyRefusal.
-func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanController, queue OpQueueReader,
-	plan *fsRepairPlan, params fsRegroupParams, reporter sdk.Reporter,
-) (fsRepairResult, error) {
-	return t6g4ApplyFSRepairPlan(ctx, store, scan, queue, t6g4RunEachHEAD(reporter), plan, params, reporter)
-}
-
-// t6g4ApplyFSRepairPlan is applyFSRepairPlan with the group loop run by each
-// (HEAD's registry.RunItems, or the native tasks.RunItems), so the apply exists
-// once for both shells.
+// t6g4ApplyFSRepairPlan applies the fragments and duplicates groups, with the
+// group loop run by each (HEAD's registry.RunItems, or the native
+// tasks.RunItems), so the apply exists once for both shells. It never runs a
+// layout move: asking for that category returns fsLayoutApplyRefusal.
 func t6g4ApplyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanController, queue OpQueueReader,
 	each func(ctx context.Context, n int, o t6g4EachOpts, fn func(ctx context.Context, i int) error) error,
 	plan *fsRepairPlan, params fsRegroupParams, reporter sdk.Reporter,

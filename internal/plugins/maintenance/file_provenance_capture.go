@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_provenance_capture.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 4f8e1a67-05b3-4d29-9c7e-3a6b2d80f514
 // last-edited: 2026-11-14
 
@@ -234,23 +234,6 @@ func (p *Plugin) runFileProvenanceCaptureCore(ctx context.Context, params filePr
 		"recorded", result.Recorded, "already_known", result.AlreadyKnown,
 		"capped", result.Capped, "errors", result.Errors)
 	return result, nil
-}
-
-// captureFileProvenance does the work and returns the tally.
-//
-// Split from the reporter plumbing so the behaviour can be asserted directly
-// rather than by parsing a log line back out of a fake reporter.
-func (p *Plugin) captureFileProvenance(ctx context.Context, rawParams json.RawMessage) (fileProvCaptureResult, error) {
-	params, err := decodeFileProvCaptureParams(rawParams)
-	if err != nil {
-		return fileProvCaptureResult{}, err
-	}
-	prov := p.deps.FileProvenanceStore()
-	// No reporter: the sweep itself logs nothing, and the pinned callers assert
-	// the tally directly.
-	return p.captureFileProvenanceCore(ctx, params, fileProvCaptureEnv{t6g4Base: t6g4Base{
-		Live: params.Apply, Store: headT6G4Store{deps: p.deps, prov: prov}, Writer: headT6G4Writer{prov: prov},
-	}})
 }
 
 // captureFileProvenanceCore is the sweep itself over decoded params. The ledger

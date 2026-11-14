@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
 // last-edited: 2026-11-14
 
@@ -314,16 +314,8 @@ type t6g4IntroMigrateWrites interface {
 	UpdateBookFile(id string, file *database.BookFile) error
 }
 
-// migrateOneBook evaluates and (unless dry-run) performs the tier-0 copy for a
-// single book, returning the outcome reason.
-func (p *Plugin) migrateOneBook(store bookFileRelinker, log interface {
-	Info(string, ...any)
-	Warn(string, ...any)
-}, bookID string, dryRun, overwrite bool) string {
-	return t6g4MigrateOneBook(store, store, log, bookID, dryRun, overwrite)
-}
-
-// t6g4MigrateOneBook is migrateOneBook's body (rule R10 item 1): it reads through
+// t6g4MigrateOneBook evaluates and (unless dry-run) performs the tier-0 copy for
+// a single book, returning the outcome reason (rule R10 item 1): it reads through
 // r and writes only through w, so the core can hand it env.Store and env.Writer.
 func t6g4MigrateOneBook(r t6g4IntroMigrateReads, w t6g4IntroMigrateWrites, log interface {
 	Info(string, ...any)

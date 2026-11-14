@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7e1c4b9a-52d8-4f36-a0b7-c9d13e6f2a84
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -23,8 +23,10 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/books/store/aggtest"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // urReporter is a fakeReporter that also persists the op result, as the real
@@ -900,7 +902,7 @@ func TestUnknownRows_DurabilityUnknownWriteIsAppliedAndItsBookRecomputed(t *test
 
 	logs := aggtest.Capture(t)
 	rep := &urReporter{}
-	err := New(fakeDeps{store: s}).runUnknownRowsBackfill(context.Background(), urDurabilityUnknownStore{s},
+	err := runUnknownRowsBackfillHEAD(New(fakeDeps{store: s}), context.Background(), urDurabilityUnknownStore{s},
 		durationReextractParams{Mode: durationModeUnknownRows}, false, rep)
 	require.NoError(t, err)
 	res := rep.got(t)
@@ -1331,4 +1333,18 @@ func TestUnknownRows_FalseBookGrainFlagsAreHarmless(t *testing.T) {
 	res := urApply(t, s, map[string]any{"force": false, "onlyMissingDuration": false})
 	require.Equal(t, 1, res.ProbedKnown)
 	require.Equal(t, 30, durtest.Sec(urRow(t, s, book.ID, f.ID).Duration))
+}
+
+// runUnknownRowsBackfillHEAD runs the unknown-rows backfill the way HEAD's shell
+// does: the deferred-aggregate writer resolved off the store only when it has
+// the capability, HEAD's loop runner, and the result persisted on the reporter.
+func runUnknownRowsBackfillHEAD(p *Plugin, ctx context.Context, store unknownRowsStore, params durationReextractParams,
+	dryRun bool, reporter sdk.Reporter) error {
+	var writer segmentFailureWriter
+	if w, ok := database.AsCapability[segmentFailureWriter](store); ok {
+		writer = w
+	}
+	return p.t6g4RunUnknownRowsBackfill(ctx, store, writer, t6g4RunEachHEAD(reporter),
+		func(res UnknownRowsResult) error { return registry.ReporterSetResult(reporter, res) },
+		params, dryRun, reporter)
 }

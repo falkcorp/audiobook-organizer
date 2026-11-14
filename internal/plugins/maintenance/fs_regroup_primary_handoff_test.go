@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_primary_handoff_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7c3a9e15-4d2b-4f80-a6e1-b95d0c28f473
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -70,7 +70,7 @@ func TestFsRegroupDuplicates_RetiredPrimaryShellHandsOnAndRevertRecrowns(t *test
 
 	plan := fsPlan(t, s)
 	require.Len(t, fsGroupsOf(plan, fsCatDuplicates), 1, plan.summary())
-	_, err = applyFSRepairPlan(context.Background(), &fsGuardStore{PebbleStore: s}, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-vg"})
+	_, err = fsApplyPlan(context.Background(), &fsGuardStore{PebbleStore: s}, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-vg"})
 	require.NoError(t, err)
 	require.True(t, fsSoftDeleted(t, s, shells[0]))
 	require.Equal(t, []string{lib.ID}, fsLivePrimaries(t, s, vg))
@@ -116,7 +116,7 @@ func TestFsRegroupDuplicates_HandOffNeverWritesAnITunesMember(t *testing.T) {
 
 	plan := fsPlan(t, s)
 	require.Len(t, fsGroupsOf(plan, fsCatDuplicates), 1, plan.summary())
-	res, err := applyFSRepairPlan(context.Background(), &fsGuardStore{PebbleStore: s}, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-vg-it"})
+	res, err := fsApplyPlan(context.Background(), &fsGuardStore{PebbleStore: s}, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-vg-it"})
 	require.NoError(t, err)
 	require.Equal(t, 1, res.HandOffsRefused, res.String())
 	require.Equal(t, 0, res.Errors, res.String())
@@ -194,7 +194,7 @@ func TestFsRegroupDuplicates_HandOffFailedBeforeAnyWriteKeepsTheIncumbentOnRever
 	plan := fsPlan(t, s)
 	require.Len(t, fsGroupsOf(plan, fsCatDuplicates), 1, plan.summary())
 	st := &extIDErrStore{fsGuardStore: &fsGuardStore{PebbleStore: s}, failFor: owner}
-	res, _ := applyFSRepairPlan(context.Background(), st, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-vg-readerr"})
+	res, _ := fsApplyPlan(context.Background(), st, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-vg-readerr"})
 	require.Zero(t, res.HandOffsRefused, res.String())
 	require.Equal(t, 1, res.Errors, res.String())
 	require.True(t, fsSoftDeleted(t, s, shells[0]))
