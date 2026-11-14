@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_paths_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: d41c7b92-6a35-4e08-9f1d-83b5e2a07c64
 // last-edited: 2026-11-14
 
@@ -704,22 +704,20 @@ func TestT6G3_CoverTextReadHeadShellStampsLivenessBeforeEachRead(t *testing.T) {
 
 // --- the env each credits-backfill shell hands the core ---
 
-// captureCreditsCoreEnv swaps the seam both shells call for a wrapper that keeps
-// the env it was handed, and restores it when the test ends.
+// captureCreditsCoreEnv keeps the env each shell hands the core, through the
+// observer hook, and removes the hook when the test ends.
 func captureCreditsCoreEnv(t *testing.T) *[]t6g3CreditsBackfillCoreEnv {
 	t.Helper()
 	var (
 		mu   sync.Mutex
 		envs []t6g3CreditsBackfillCoreEnv
 	)
-	orig := t6g3RunCreditsCore
-	t6g3RunCreditsCore = func(ctx context.Context, params creditsBackfillParams, env t6g3CreditsBackfillCoreEnv) (*creditsBackfillResult, error) {
+	t6g3ObserveCreditsEnv = func(env t6g3CreditsBackfillCoreEnv) {
 		mu.Lock()
 		envs = append(envs, env)
 		mu.Unlock()
-		return orig(ctx, params, env)
 	}
-	t.Cleanup(func() { t6g3RunCreditsCore = orig })
+	t.Cleanup(func() { t6g3ObserveCreditsEnv = nil })
 	return &envs
 }
 
@@ -827,7 +825,7 @@ func TestT6G3_CreditsBackfillNativeWarnsWhenAJudgedMarkerIsNotWritten(t *testing
 	n.rec.failMark = errors.New("marker refused")
 	host, rc := newT6G3Host(t6g3CreditsBackfillKind, tasks.ModeLive, &t6g3Gate{id: "credits-live"})
 	host.SetCPUSlots(3)
-	_, err := t6g3Run(t, n.kind(), rc, `{"apply":true}`)
+	_, err := t6g3Run(t, n.kind(), rc, "")
 	require.NoError(t, err)
 	host.mu.Lock()
 	lines := slices.Clone(host.lines)

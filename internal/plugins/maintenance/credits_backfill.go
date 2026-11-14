@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-11-14
 
@@ -824,7 +824,7 @@ func (p *Plugin) runCreditsBackfill(ctx context.Context, raw json.RawMessage, re
 	env.StoreResult = func(res *creditsBackfillResult) error {
 		return registry.ReporterSetResult(reporter, res)
 	}
-	_, err := t6g3RunCreditsCore(ctx, params, env)
+	_, err := creditsBackfillCore(ctx, params, env)
 	return err
 }
 
@@ -880,7 +880,7 @@ func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *task
 				return creditsBackfillResult{}, fmt.Errorf("%s: the store cannot keep the class id lists (database.OpRowStore)", t6g3CreditsBackfillKind)
 			}
 			params.Apply = base.Live
-			res, err := t6g3RunCreditsCore(rc.Context(), params, t6g3CreditsCoreEnv(base, deps.GuardTags,
+			res, err := creditsBackfillCore(rc.Context(), params, t6g3CreditsCoreEnv(base, deps.GuardTags,
 				t6g3NativeCBEngine{rc: rc, base: base, standDownKey: deps.StandDownKey}))
 			if res == nil {
 				return creditsBackfillResult{}, err
@@ -939,15 +939,20 @@ func (h t6g3NativeCBHold) Lost() bool              { return false }
 func (h t6g3NativeCBHold) Release()                { h.h.Release() }
 func (h t6g3NativeCBHold) Items(int) t6g3ItemsFunc { return h.e.Items(0) }
 
-// t6g3RunCreditsCore is creditsBackfillCore behind a variable that both shells
-// call, so a test can see the env each one hands the core (the Workers bound in
-// particular). Production never assigns it.
-var t6g3RunCreditsCore = creditsBackfillCore
+// t6g3ObserveCreditsEnv, when a test sets it, sees the env each shell hands the
+// core (the Workers bound in particular). It is a hook rather than a variable
+// the shells call through, so the restart guard's static trace still follows the
+// shells into creditsBackfillCore to its Checkpoint call. Production never
+// assigns it.
+var t6g3ObserveCreditsEnv func(t6g3CreditsBackfillCoreEnv)
 
 // creditsBackfillCore is the shared body of both shells: the run, then the
 // result's persistence. It returns the summary (the result without the class
 // id lists) whenever the run got as far as listing books.
 func creditsBackfillCore(ctx context.Context, params creditsBackfillParams, env t6g3CreditsBackfillCoreEnv) (*creditsBackfillResult, error) {
+	if t6g3ObserveCreditsEnv != nil {
+		t6g3ObserveCreditsEnv(env)
+	}
 	var mod t6g3CBCreditsModifier
 	if params.Apply {
 		mod = env.Writer
