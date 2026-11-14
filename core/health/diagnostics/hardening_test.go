@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package diagnostics_test
 
@@ -27,7 +27,7 @@ import (
 )
 
 // exporterWith builds an Exporter over the fixture with cfg adjusted.
-func (f *fixture) exporterWith(viewer func(context.Context, string) (diagnostics.Viewer, error), adjust func(*diagnostics.Config)) *diagnostics.Exporter {
+func (f *fixture) exporterWith(viewer func(context.Context, tasks.Actor) (diagnostics.Viewer, error), adjust func(*diagnostics.Config)) *diagnostics.Exporter {
 	f.t.Helper()
 	cfg := diagnostics.Config{
 		Root: f.root, ViewerFor: viewer, Metrics: f.sink,
@@ -468,7 +468,7 @@ func TestDiagnostics_WidenedSnapshotIsClamped(t *testing.T) {
 	}
 
 	// An actor who no longer resolves fails the run closed, snapshot or not.
-	gone := func(context.Context, string) (diagnostics.Viewer, error) {
+	gone := func(context.Context, tasks.Actor) (diagnostics.Viewer, error) {
 		return diagnostics.Viewer{}, errors.New("no such actor")
 	}
 	e = f.exporter(gone, diagnostics.CoreSources{}, vault)
@@ -536,9 +536,9 @@ func TestDiagnostics_AdminSnapshotKeepsEverySection(t *testing.T) {
 			RolePatterns: []rbac.Permission{"core:admin"},
 		}, cat)
 	}
-	viewerFor := func(c rbac.Checker) func(context.Context, string) (diagnostics.Viewer, error) {
-		return func(_ context.Context, actor string) (diagnostics.Viewer, error) {
-			return diagnostics.Viewer{ActorID: actor, Can: c.Has}, nil
+	viewerFor := func(c rbac.Checker) func(context.Context, tasks.Actor) (diagnostics.Viewer, error) {
+		return func(_ context.Context, actor tasks.Actor) (diagnostics.Viewer, error) {
+			return diagnostics.Viewer{ActorID: actor.UserID, Can: c.Has}, nil
 		}
 	}
 	section := func(name string, perm rbac.Requirement) diagnostics.Section {
