@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_paths_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d41c7b92-6a35-4e08-9f1d-83b5e2a07c64
 // last-edited: 2026-11-13
 
@@ -328,7 +328,8 @@ func TestT6G3_CreditsBackfillNativeLiveWritesThroughTheWriter(t *testing.T) {
 	var res creditsBackfillResult
 	require.NoError(t, json.Unmarshal(raw, &res))
 	assert.True(t, res.ClassLists.Valid(), "the result carries the class list summary")
-	assert.NotEmpty(t, cbBookWriteRows(f), "the journal rows are under the run's id")
+	assert.NotEmpty(t, cbBookWriteRowsFor(f, string(rc.RunID())), "the journal rows are under the run's id")
+	assert.Empty(t, cbBookWriteRows(f), "and none leak under the reporter-test id")
 	// Rule R4: HEAD ran every loop on NumCPU workers; the native pool is the
 	// kind's CPU parallelism, which takes its slots from the host.
 	acquires, maxInUse := host.CPUStats()

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill_test.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 6950317d-b65c-41e5-86a8-9cc277a95054
 // last-edited: 2026-11-13
 
@@ -152,7 +152,14 @@ func (f *cbFixture) state(id string) undo.CreditsBackfillState {
 // record removed again).
 func cbBookWriteRows(f *cbFixture) []*database.OperationChange {
 	f.t.Helper()
-	all, err := f.s.GetOperationChanges(cbTestOpID)
+	return cbBookWriteRowsFor(f, cbTestOpID)
+}
+
+// cbBookWriteRowsFor is cbBookWriteRows for the journal of one named run: a
+// native run's operation ID is its rc.RunID(), not the reporter-test constant.
+func cbBookWriteRowsFor(f *cbFixture, opID string) []*database.OperationChange {
+	f.t.Helper()
+	all, err := f.s.GetOperationChanges(opID)
 	if err != nil {
 		f.t.Fatal(err)
 	}
