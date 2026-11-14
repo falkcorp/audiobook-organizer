@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-14
 
@@ -1678,6 +1678,28 @@ func t6g2PoolSubtests(t *testing.T) {
 		}
 		if !slices.Equal(got, []int{3, 4}) || !slices.Equal(marks, []int{4, 5}) {
 			t.Errorf("ran %v with marks %v, want items 3 and 4 with absolute marks 4 and 5", got, marks)
+		}
+	})
+
+	// A loop that is one page of a longer walk (acoustid repair judges a page at a
+	// time) numbers its progress from the pages before it.
+	t.Run("a paged loop reports progress from its offset", func(t *testing.T) {
+		h := t6g2NewHost(t6g2KindBookFileAcoustIDIndexRepair, tasks.ModeLive, &t6g2RunWriter{})
+		err := t6g2NativeItems(tasks.NewRC(h), tasks.Fixed(1, "test"))(context.Background(), 3,
+			t6g2Loop{ProgressOffset: 10, ProgressTotal: 20},
+			func(context.Context, int) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dones []int64
+		for _, e := range h.Progress() {
+			if e.Total != 20 {
+				t.Errorf("progress total = %d, want the pinned 20", e.Total)
+			}
+			dones = append(dones, e.Done)
+		}
+		if !slices.Equal(dones, []int64{11, 12, 13}) {
+			t.Errorf("progress = %v, want 11, 12, 13 (the offset plus the items done)", dones)
 		}
 	})
 
