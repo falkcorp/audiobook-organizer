@@ -724,6 +724,7 @@ internal/plugins/maintenance.resolveProductionAuthorsParallelism
 internal/plugins/maintenance.resolveProductionNativeParams.UnmarshalJSON
 internal/plugins/maintenance.t6g1Common
 internal/plugins/maintenance.t6g1Deps.cacheWires
+internal/plugins/maintenance.t6g1Deps.manualOnlyWires
 internal/plugins/maintenance.t6g1KindList
 internal/plugins/maintenance.t6g1NativeEnv
 internal/plugins/maintenance.t6g1NativeHold
@@ -735,6 +736,7 @@ internal/plugins/maintenance.t6g1RefuseModeKeys
 internal/plugins/maintenance.t6g1RefuseUnwired
 internal/plugins/maintenance.t6g1StartRequirement
 internal/plugins/maintenance.t6g1Watermark.complete
+internal/plugins/maintenance.t6g1WriterOf
 internal/plugins/maintenance.versionTwinFixer.readers
 internal/querygrammar.PatternSlotAcquisitions
 internal/repairs.GuardBooks
