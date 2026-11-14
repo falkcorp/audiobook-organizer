@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/split-readiness.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 54041305-9707-4448-b5af-133d66d4696a -->
-<!-- last-edited: 2026-11-08 -->
+<!-- last-edited: 2026-11-14 -->
 
 # Split readiness
 
@@ -28,7 +28,16 @@ not exist yet, so it is unmeasured, not passed) and ERROR (the measurement could
 ## Latest
 
 <!-- readiness:latest:start -->
-No night has been folded in yet.
+Night of 2026-11-14, commit `337b855fae16`.
+
+| Criterion | Status | Measured |
+|---|---|---|
+| SC1 Public API stable across 3 consecutive core checkpoints | FAIL | 1 checkpoint(s) recorded, 4 needed for 3 pairs |
+| SC3 Second consumer builds against core with nothing but a dependency on it | PASS | builds, vets and tests in example.com/mediacore-smoke; internal import refused |
+| SC5 Coverage: total and per SDK package | FAIL | total 82.7%, 9 of 61 SDK package(s) below 60% |
+| SC6 Every core contribution point is documented | N/A | not applicable: the generator core/internal/cmd/coredoc has not landed yet |
+| SC8 npm packages build and pack standalone | FAIL | npm run build failed against the packed tarballs |
+| SC9 No known vulnerabilities in core's graph | FAIL | govulncheck ./... found vulnerabilities |
 <!-- readiness:latest:end -->
 
 ## History
@@ -36,4 +45,5 @@ No night has been folded in yet.
 <!-- readiness:history:start -->
 | Date | Commit | SC1 | SC3 | SC5 | SC6 | SC8 | SC9 |
 |---|---|---|---|---|---|---|---|
+| 2026-11-14 | `337b855fae16` | FAIL | PASS | FAIL | N/A | FAIL | FAIL |
 <!-- readiness:history:end -->
