@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-14
 
@@ -402,21 +402,34 @@ func (r pathRoots) redactQuery(q string, depth int) string {
 
 // queryPart is one name, value or fragment of a route: left as written unless
 // its decoded form holds a path. Decoding is lenient (a valid %XX decodes, a bad
-// one stays, "+" is a space when plus) and runs to a fixed point within
-// maxDecode rounds; a part that is still changing after that is "<value>". A
-// part with a path is written as the rewritten text if it was not decoded, and
-// percent-encoded (encodeRedacted) if it was, so a decoded control byte, "&",
-// "#" or space never reaches the output.
+// one stays, "+" is a space when plus), one layer at a time, and stops as soon as
+// the text is a route: a route is judged as written at its own layer, because
+// decoding further would flatten the encoding of the route's own query ("?p=%2F..."
+// inside "next=/api/v1/y?p=%2F..." would become a raw "/" and "#" of the outer
+// value and lose its fragment). A part still changing after maxDecode layers is
+// "<value>". A part with a path is written as the rewritten text if it was not
+// decoded, and percent-encoded (encodeRedacted) if it was, so a decoded control
+// byte, "&", "#" or space never reaches the output.
 func (r pathRoots) queryPart(raw string, depth int, plus bool) string {
-	dec, exhausted := lenientDecode(raw, plus)
-	if exhausted {
-		return "<value>"
+	cur := raw
+	for round := 0; ; round++ {
+		if absolutePath(cur) && r.wholeRoute(cur) {
+			break
+		}
+		next := unescapeLenient(cur, plus)
+		if next == cur {
+			break
+		}
+		if round >= maxDecode {
+			return "<value>"
+		}
+		cur = next
 	}
-	out := r.queryValue(dec, depth+1)
+	out := r.queryValue(cur, depth+1)
 	switch {
-	case out == dec:
+	case out == cur:
 		return raw
-	case dec == raw:
+	case cur == raw:
 		return out
 	}
 	return encodeRedacted(out)
@@ -722,6 +735,9 @@ func (r pathRoots) pathStart(s string, i int, mode scanMode) bool {
 // only if that segment is a name (shapedSegment), so "*/15", "*/*", "+/-",
 // "50%/50%" and "(read)/(write)" are not.
 func pathStartAt(s string, i int) bool {
+	if i >= len(s) {
+		return false
+	}
 	switch c := s[i]; {
 	case c == '/':
 		j := i
