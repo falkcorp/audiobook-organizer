@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_units_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f4fb7e6-9d63-4c0e-8a57-2a1d6c0b3e91
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -246,4 +249,60 @@ func TestT6G5HeadItems_Parallelism(t *testing.T) {
 	assert.Equal(t, 1, run(0, 5, 0), "Workers 0 is sequential, as HEAD's RunItems clamps it")
 	assert.Equal(t, 1, run(1, 5, 0), "Workers 1 is sequential")
 	assert.Equal(t, 3, run(3, 6, 3), "Workers 3 runs three at once")
+}
+
+// TestT6G5StartRequirement_FailsClosedOnAForeignAtom pins rule R6: the empty
+// permission list and an explicit settings.manage both start on settings.manage,
+// and any other permission yields the zero requirement (which registration
+// refuses) instead of a guessed scope.
+func TestT6G5StartRequirement_FailsClosedOnAForeignAtom(t *testing.T) {
+	def := func(perms ...auth.Permission) sdk.OperationDef { return sdk.OperationDef{Permissions: perms} }
+	assert.Equal(t, rbac.KindAllOf, t6g5StartRequirement(def()).Kind(), "no permissions is the default settings.manage")
+	assert.Equal(t, rbac.KindAllOf, t6g5StartRequirement(def(auth.PermSettingsManage)).Kind())
+	assert.True(t, t6g5StartRequirement(def(auth.PermLibraryView)).IsZero(), "a foreign atom has no row")
+	assert.True(t, t6g5StartRequirement(def(auth.PermSettingsManage, auth.PermLibraryView)).IsZero(), "one foreign atom among known ones")
+}
+
+// t6g5OpIDReporter is a fakeReporter that carries an op ID, which HEAD's
+// stand-down acquire needs to register a holder.
+type t6g5OpIDReporter struct {
+	*fakeReporter
+	id string
+}
+
+func (r t6g5OpIDReporter) OpID() string { return r.id }
+
+// t6g5LeaseScan is a ScanController whose lease the test can lapse.
+type t6g5LeaseScan struct {
+	lapsed atomic.Bool
+	renews atomic.Int32
+}
+
+func (s *t6g5LeaseScan) AcquireScanStandDown(context.Context, string, string) (func(), error) {
+	return func() {}, nil
+}
+
+func (s *t6g5LeaseScan) RenewScanStandDown(string) bool {
+	s.renews.Add(1)
+	return !s.lapsed.Load()
+}
+
+func (s *t6g5LeaseScan) ScanStandDownValid(string) bool { return !s.lapsed.Load() }
+
+// TestT6G5HeadLease_ReportsALapsedStandDown pins HEAD's lease: Lost renews the
+// holder and is true once the scan controller says the lease is gone, false
+// while it is held, and always false when nothing was acquired (no controller).
+func TestT6G5HeadLease_ReportsALapsedStandDown(t *testing.T) {
+	scan := &t6g5LeaseScan{}
+	lease, err := t6g5HeadLeaseOn(scan, t6g5OpIDReporter{&fakeReporter{}, "op-batman"})(context.Background(), "test")
+	require.NoError(t, err)
+	assert.False(t, lease.Lost(), "a held lease is not lost")
+	assert.EqualValues(t, 1, scan.renews.Load(), "Lost renews the lease")
+	scan.lapsed.Store(true)
+	assert.True(t, lease.Lost(), "a lapsed lease is lost")
+	lease.Release()
+
+	none, err := t6g5HeadLeaseOn(nil, t6g5OpIDReporter{&fakeReporter{}, "op-robin"})(context.Background(), "test")
+	require.NoError(t, err)
+	assert.False(t, none.Lost(), "no controller holds nothing, so nothing is lost")
 }
