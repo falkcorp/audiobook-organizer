@@ -253,10 +253,9 @@ func (l *t6g1ResourceLog) record(method string) {
 	}
 }
 
-// t6g1RequireWritesDeclared fails when a spy saw a write whose resource the
-// definition's WriteSet does not declare, saw an unmapped writer method, or saw
-// no write at all (a live case that exercised nothing proves nothing).
-func t6g1RequireWritesDeclared(t *testing.T, def tasks.Definition, logs ...*t6g1ResourceLog) {
+// t6g1RequireWritesWithin fails when a spy saw a write whose resource the
+// definition's WriteSet does not declare, or an unmapped writer method.
+func t6g1RequireWritesWithin(t *testing.T, def tasks.Definition, logs ...*t6g1ResourceLog) map[string]bool {
 	t.Helper()
 	declared := t6g1WriteSet(tasks.CommonOf(def))
 	seen := map[string]bool{}
@@ -271,10 +270,18 @@ func t6g1RequireWritesDeclared(t *testing.T, def tasks.Definition, logs ...*t6g1
 		require.Empty(t, l.unmapped, "%s: writer methods with no row in t6g1WriterResources", def.Kind())
 		l.mu.Unlock()
 	}
-	require.NotEmpty(t, seen, "%s: the live run made no recorded write", def.Kind())
 	for r := range seen {
 		require.Contains(t, declared, "books/"+r, "%s writes %s but does not declare it in its WriteSet %v", def.Kind(), r, declared)
 	}
+	return seen
+}
+
+// t6g1RequireWritesDeclared is t6g1RequireWritesWithin plus: the live run made
+// at least one recorded write (a case that exercised nothing proves nothing).
+func t6g1RequireWritesDeclared(t *testing.T, def tasks.Definition, logs ...*t6g1ResourceLog) {
+	t.Helper()
+	seen := t6g1RequireWritesWithin(t, def, logs...)
+	require.NotEmpty(t, seen, "%s: the live run made no recorded write", def.Kind())
 }
 
 func TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod(t *testing.T) {

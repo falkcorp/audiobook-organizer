@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-14
 
@@ -291,6 +291,10 @@ type t6g1LiveCase struct {
 	preview bool
 	// standDown: a live run parks the library scan under t6g1TestStandDownKey.
 	standDown bool
+	// fetchOnly: every write goes through the fetcher or runner built over the
+	// run's writer, which the writer-method spies cannot see, so there is no
+	// recorded write to compare with the WriteSet (MatchHEADDefs pins those).
+	fetchOnly bool
 	// cpu: the kind's pool is declared tasks.CPU(), so a live run takes CPU
 	// slots; every other pool is Fixed and takes none.
 	cpu bool
@@ -350,7 +354,7 @@ func t6g1LiveCases() []t6g1LiveCase {
 			},
 		},
 		{
-			name: "resolve-production-authors", kind: resolveProductionAuthorsKind, preview: true, standDown: true,
+			name: "resolve-production-authors", kind: resolveProductionAuthorsKind, preview: true, standDown: true, fetchOnly: true,
 			setup: func(t *testing.T, p *t6g1LiveProbe) (t6g1Deps, func(*testing.T, *t6g1Host, json.RawMessage)) {
 				s := newRepairPebble(t)
 				prod, err := s.CreateAuthor("Gotham Playhouse Theater")
@@ -480,7 +484,7 @@ func t6g1LiveCases() []t6g1LiveCase {
 			},
 		},
 		{
-			name: "auto-match-transcribed", kind: autoMatchTranscribedKind, preview: true,
+			name: "auto-match-transcribed", kind: autoMatchTranscribedKind, preview: true, fetchOnly: true,
 			setup: func(t *testing.T, p *t6g1LiveProbe) (t6g1Deps, func(*testing.T, *t6g1Host, json.RawMessage)) {
 				amd, ops := t6g1AutoMatchFixture(t, []string{"b1"})
 				d := p.deps(ops)
@@ -552,7 +556,11 @@ func TestT6G1Kinds_LiveRunsWriteThroughTheRunsWriter(t *testing.T) {
 				require.Same(t, gate, w, "the factory must be given the run's writer, rc.Writer()")
 			}
 			check(t, h, res)
-			t6g1RequireWritesDeclared(t, def, probe.resLogs()...)
+			if tc.fetchOnly {
+				t6g1RequireWritesWithin(t, def, probe.resLogs()...)
+			} else {
+				t6g1RequireWritesDeclared(t, def, probe.resLogs()...)
+			}
 
 			if tc.standDown {
 				require.Equal(t, []tasks.Key{t6g1TestStandDownKey}, h.standDowns(), "the write phase parks the library scan")
@@ -692,9 +700,9 @@ func TestT6G1Kinds_ActivityBackfillWritesAContiguousCheckpoint(t *testing.T) {
 		indexed[from] = true
 	}
 	probe.act.mu.Unlock()
-	w := int64(activityFilterIndexWindow)
 	for i := range cp.ResumeFrom {
-		require.True(t, indexed[cp.PlanStartNanos+int64(i)*w], "the checkpoint says windows 0..%d are done but window %d was never indexed", cp.ResumeFrom-1, i)
+		from, _, _ := activityFilterIndexWindowBounds(cp, i)
+		require.True(t, indexed[from], "the checkpoint says windows 0..%d are done but window %d was never indexed", cp.ResumeFrom-1, i)
 	}
 }
 
