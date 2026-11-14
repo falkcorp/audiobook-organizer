@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 2.4.1
+// version: 2.4.2
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
 // last-edited: 2026-11-14
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -70,15 +71,21 @@ func (p *Plugin) runOrphanBookFilesCleanup(ctx context.Context, raw json.RawMess
 			return fmt.Errorf("invalid params: %w", err)
 		}
 	}
+	// The delete refusal comes before the store is fetched, as at HEAD.
+	if params.Delete {
+		return errOrphanDeleteRemoved
+	}
 	env := orphanBookFilesCleanupEnv{t6g6Env: t6g6HeadEnv(reporter, false)}
 	// A nil OpsStore leaves env.Store nil (a typed-nil adapter would hide it), so
-	// the core's "database not initialized" check still fires, after the delete
-	// refusal as before.
+	// the core's "database not initialized" check still fires.
 	if store := p.deps.OpsStore(); store != nil {
 		env.Store = t6g6HeadStore{OpsStore: store}
 	}
 	return orphanBookFilesCleanupCore(ctx, params, env)
 }
+
+// errOrphanDeleteRemoved is the refusal of the removed delete mode.
+var errOrphanDeleteRemoved = errors.New("the delete mode of this op was removed: it deleted book_file rows, which must be repointed instead; run maintenance.orphan-book-files-repoint-plan for a dry-run plan")
 
 // orphanBookFilesCleanupKind is rule R3's kind for the def above.
 const orphanBookFilesCleanupKind = tasks.Kind("books.maintenance.orphan-book-files-cleanup")
@@ -125,7 +132,7 @@ func (p *Plugin) orphanBookFilesCleanupNative(deps t6g6Deps, sched func(tasks.Ki
 // orphanBookFilesCleanupCore is the body of runOrphanBookFilesCleanup.
 func orphanBookFilesCleanupCore(ctx context.Context, params OrphanBookFilesCleanupParams, env orphanBookFilesCleanupEnv) error {
 	if params.Delete {
-		return fmt.Errorf("the delete mode of this op was removed: it deleted book_file rows, which must be repointed instead; run maintenance.orphan-book-files-repoint-plan for a dry-run plan")
+		return errOrphanDeleteRemoved
 	}
 	if env.Store == nil {
 		return fmt.Errorf("database not initialized")

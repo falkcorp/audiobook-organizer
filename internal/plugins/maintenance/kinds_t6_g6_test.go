@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-14
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
 )
@@ -489,7 +490,17 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 			require.True(t, strings.HasPrefix(r.par.String(), r.wantPar), "%s parallelism %q, want prefix %q", id, r.par.String(), r.wantPar)
 		}
 		require.Contains(t, c.Ready, t6g6SignalMemDB, "%s readiness", id)
-		require.NotEmpty(t, c.Perms.Start, "%s start permission", id)
+		// Atoms (coordinator ruling 7): read what the definition declares, and
+		// check it against the settings.manage scope list written out by hand.
+		require.Equal(t, rbac.KindAllOf, c.Perms.Start.Kind(), "%s start requirement must be AllOf", id)
+		var gotScopes []string
+		for _, sc := range c.Perms.Start.Permissions() {
+			gotScopes = append(gotScopes, string(sc))
+		}
+		require.Equal(t, []string{
+			"core:settings.manage", "books:settings.manage", "core:tasks.manage", "core:system.view",
+			"core:system.manage", "core:library.manage", "core:library.browse", "core:integrations.manage",
+		}, gotScopes, "%s start scopes", id)
 	}
 	require.Len(t, seen, 14, "14 distinct kinds")
 }
