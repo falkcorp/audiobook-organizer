@@ -1,7 +1,7 @@
 // file: core/internal/sdnotify/sdnotify_test.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 9009cd80-44b0-462e-a2ad-d3e325def504
-// last-edited: 2026-11-08
+// last-edited: 2026-11-13
 
 //go:build !windows
 
@@ -150,4 +150,47 @@ func TestAbstractSocketRoundTrip(t *testing.T) {
 	t.Setenv(lifecycle.NotifySocketEnv, "@"+name)
 	noErr(t, Ready())
 	want(t, readNotify(t, conn, 5*time.Second), "READY=1")
+}
+
+func TestWatchdogDatagram(t *testing.T) {
+	conn := fakeNotifySocket(t)
+	noErr(t, Watchdog())
+	want(t, readNotify(t, conn, 5*time.Second), "WATCHDOG=1")
+}
+
+func TestActiveFollowsNotifySocket(t *testing.T) {
+	t.Setenv(lifecycle.NotifySocketEnv, "")
+	if Active() {
+		t.Fatal("Active with no NOTIFY_SOCKET")
+	}
+	t.Setenv(lifecycle.NotifySocketEnv, "/run/example/notify")
+	if !Active() {
+		t.Fatal("not Active with NOTIFY_SOCKET set")
+	}
+}
+
+func TestWatchdogInterval(t *testing.T) {
+	pid := fmt.Sprint(os.Getpid())
+	cases := []struct {
+		name, usec, pid string
+		want            time.Duration
+	}{
+		{"unset", "", "", 0},
+		{"thirty seconds", "30000000", "", 30 * time.Second},
+		{"own pid", "30000000", pid, 30 * time.Second},
+		{"another pid", "30000000", "1", 0},
+		{"garbage pid", "30000000", "x", 0},
+		{"garbage usec", "soon", "", 0},
+		{"zero", "0", "", 0},
+		{"negative", "-5", "", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv(watchdogUSECEnv, c.usec)
+			t.Setenv(watchdogPIDEnv, c.pid)
+			if got := WatchdogInterval(); got != c.want {
+				t.Fatalf("WatchdogInterval = %s, want %s", got, c.want)
+			}
+		})
+	}
 }

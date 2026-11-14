@@ -1,30 +1,37 @@
 // file: core/health/registry.go
-// version: 1.0.0
+// version: 1.1.3
 // guid: 268f470f-94c4-4d33-93bd-af65944395ec
-// last-edited: 2026-11-10
+// last-edited: 2026-11-13
 
 package health
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// The readiness core of 05-health §5H.3.1: Status, ComponentID, Result,
-// Check, Registry, Snapshot. It is the F2 slice (05-health §5H.10): components
-// are updated by a push-only Reporter, plus one synchronous call of a Check's
-// Probe at Register. The probe loop, /livez, /readyz and the HTTP snapshot
-// are F8's.
+// The component registry of 05-health §5H.3.1: Status, ComponentID, Result,
+// Check, Registry. F2 landed the readiness core (components updated by a push
+// Reporter, plus one call of a Check's Probe at Register); F8 completes it
+// (snapshot.go, probes.go, startup.go): the probe loop (StartChecks), the
+// heartbeat that /livez and the watchdog follow (StartHeartbeat), the startup
+// and shutdown readiness conditions, and the status feed.
+//
+// A Registry starts no goroutine and reads no clock of its own until one of
+// the Start functions is called, so an unstarted registry behaves as it did at
+// F2: always live, ready exactly when no Readiness component is not Up or
+// Degraded and no Critical one is Down.
 //
 // The state of a Registry is one mutex-guarded map. Wait is signalled, not
 // polled: every Register and Report closes the registry's changed channel
 // and installs a fresh one, so each blocked Wait wakes exactly when
-// something it might be waiting for happened, and no goroutine exists beyond
-// the callers'.
+// something it might be waiting for happened.
 
 // Status is one component's state.
 type Status uint8
@@ -81,6 +88,41 @@ const maxReasonLen = 40
 // zero. 05-health §5H.7's core.health.check_timeout key belongs to F8.
 const defaultProbeTimeout = 5 * time.Second
 
+// Timings are the three hot-reloadable settings of 05-health §5H.7. A zero
+// field takes the key's default.
+type Timings struct {
+	CheckInterval time.Duration // core.health.check_interval, 30s
+	CheckTimeout  time.Duration // core.health.check_timeout, 5s
+	LiveStall     time.Duration // core.health.live_stall, 60s
+}
+
+// withDefaults fills the zero fields of t with the keys' defaults.
+func (t Timings) withDefaults() Timings {
+	if t.CheckInterval <= 0 {
+		t.CheckInterval = 30 * time.Second
+	}
+	if t.CheckTimeout <= 0 {
+		t.CheckTimeout = defaultProbeTimeout
+	}
+	if t.LiveStall <= 0 {
+		t.LiveStall = 60 * time.Second
+	}
+	return t
+}
+
+// Options configure a Registry built with NewRegistryWith.
+type Options struct {
+	// Timings reads the live core.health.* values on every use, so a reload
+	// takes effect on the next tick. nil means the defaults.
+	Timings func() Timings
+	// Metrics receives the health series (§5H.8). nil records nothing.
+	Metrics *Metrics
+	// Log receives a check's panic and an abandoned check. nil logs nothing.
+	Log *slog.Logger
+	// Now is the clock. nil means time.Now.
+	Now func() time.Time
+}
+
 // Check declares one component (module.Registrar.Health takes these, 06 §6.4.3).
 type Check struct {
 	ID        ComponentID
@@ -92,49 +134,89 @@ type Check struct {
 	Timeout   time.Duration                    // 0 = core.health.check_timeout
 }
 
-// Snapshot is the registry's state at one instant.
-type Snapshot struct {
-	Ready      bool
-	Live       bool
-	Components []ComponentState // sorted by ID
-	Startup    []string         // degraded startup tokens
-}
-
-// ComponentState is one component in a Snapshot.
-type ComponentState struct {
-	ID       ComponentID
-	Result   Result
-	Critical bool
-	Duration time.Duration // last check duration
-}
-
 type component struct {
 	check    Check
 	result   Result
 	duration time.Duration
+	// running is set while a probe goroutine of this component is alive, so a
+	// check that outlives its timeout is never joined by a second call of
+	// itself (§5H.6: never concurrently with itself).
+	running atomic.Bool
 }
 
 // Registry is one per App (R5). Modules register Checks via Registrar.Health and
 // push through module.Deps.Health (a Reporter scoped to the module's IDs).
-// It is goroutine-safe; build one with NewRegistry.
+// It is goroutine-safe; build one with NewRegistry or NewRegistryWith.
 type Registry struct {
-	now func() time.Time
+	now     func() time.Time
+	timings func() Timings
+	metrics *Metrics
+	log     *slog.Logger
 
 	mu    sync.Mutex
 	comps map[ComponentID]*component
 	// changed is closed, and replaced, by every Register and Report: the
 	// broadcast Wait blocks on.
 	changed chan struct{}
+
+	// The readiness conditions beyond the components (§5H.3.3): startup has
+	// not completed (set by a Startup attached to this registry), shutdown has
+	// begun. Both are false on a registry nothing attached to.
+	startupPending bool
+	shuttingDown   bool
+	startupTokens  []string // degraded startup tokens, sorted
+	noJitter       bool     // tests: probe loops tick exactly on the interval
+
+	// checks: the probe loops (checks.go). runCtx is non-nil while they run;
+	// a component registered meanwhile gets its loop at once.
+	runCtx context.Context
+	wg     sync.WaitGroup
+
+	// The heartbeat (/livez, the watchdog). beating is set while StartHeartbeat's
+	// goroutine runs; lastBeat is its last tick in unix nanoseconds. A registry
+	// with no heartbeat is always live.
+	beating  atomic.Bool
+	lastBeat atomic.Int64
+
+	// The status feed (probes.go): pubMu serialises publication so events
+	// leave in the order the state changed; sink and last are guarded by it.
+	pubMu sync.Mutex
+	sink  func(StatusPayload)
+	last  *StatusPayload
+	// observed is true once a sink or Metrics exists, so afterChange is one
+	// atomic load for a registry nobody watches.
+	observed atomic.Bool
 }
 
-// NewRegistry returns an empty registry. A kernel builds one per App.
-func NewRegistry() *Registry {
-	return &Registry{
-		now:     time.Now,
+// NewRegistry returns an empty registry with the default timings and no
+// metrics. A kernel builds one per App.
+func NewRegistry() *Registry { return NewRegistryWith(Options{}) }
+
+// NewRegistryWith returns an empty registry configured by o. It starts no
+// goroutine: the probe loop and the heartbeat start only from StartChecks and
+// StartHeartbeat.
+func NewRegistryWith(o Options) *Registry {
+	r := &Registry{
+		now:     o.Now,
+		timings: o.Timings,
+		metrics: o.Metrics,
+		log:     o.Log,
 		comps:   map[ComponentID]*component{},
 		changed: make(chan struct{}),
 	}
+	if r.now == nil {
+		r.now = time.Now
+	}
+	if r.timings == nil {
+		r.timings = func() Timings { return Timings{} }
+	}
+	r.metrics.attach(r)
+	r.observed.Store(o.Metrics != nil)
+	return r
 }
+
+// cfg is the current timings with defaults applied.
+func (r *Registry) cfg() Timings { return r.timings().withDefaults() }
 
 // validID reports whether id is "<module>.<name>[.<more>...]".
 func validID(id ComponentID) bool {
@@ -173,12 +255,16 @@ func validReason(s string) bool {
 
 // Register declares a component and returns its push Reporter. A duplicate
 // or malformed ID is an error and registers nothing. A component starts
-// Unknown, unless its Check has a Probe: the Probe is then called once, here
-// and synchronously, under Check.Timeout (default 5s), and its Result is the
-// component's first. The Probe is never called again: scheduling is F8's, so
-// until then a probed component changes only by Report. A Probe that panics
-// yields Down with the Reason probe_panicked. A Probe that ignores its
-// context holds Register for as long as it runs.
+// Unknown, unless its Check has a Probe: the Probe is then called once, here,
+// under Check.Timeout (default core.health.check_timeout, 5s), and its Result
+// is the component's first. StartChecks calls it again on its Interval; until
+// then a probed component changes only by Report. A Probe that panics yields
+// Down with the Reason check_panic, one that outlives its Timeout yields Down
+// with check_timeout (the call is abandoned, not waited for). An abandoned
+// Register-time call that does answer later, while no check loop is running
+// (before StartChecks, or after its stop) and before any Report, replaces that
+// Down with its answer (acceptLate): a slow first check at boot is not a
+// permanent Down.
 func (r *Registry) Register(c Check) (Reporter, error) {
 	if !validID(c.ID) {
 		return nil, fmt.Errorf("health: component ID %q is not <module>.<name> of [a-z0-9_-] segments", c.ID)
@@ -187,40 +273,163 @@ func (r *Registry) Register(c Check) (Reporter, error) {
 	_, dup := r.comps[c.ID]
 	r.mu.Unlock()
 	if dup {
-		return nil, fmt.Errorf("health: component %s is already registered", c.ID)
+		return nil, fmt.Errorf("%w: %s", ErrComponentExists, c.ID)
 	}
 	comp := &component{check: c}
+	var late <-chan outcome
 	if c.Probe != nil {
 		// Outside the lock: a Probe may be slow and may call the registry.
-		comp.result, comp.duration = r.runProbe(c)
-		comp.result = r.clamp(comp.result)
+		var res Result
+		var took time.Duration
+		res, took, _, late = r.runCheck(context.Background(), comp)
+		comp.result, comp.duration = r.clamp(res), took
+		r.metrics.recordCheck(c.ID, took, comp.result, comp.result.Status == StatusDown)
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if _, dup := r.comps[c.ID]; dup { // registered meanwhile
-		return nil, fmt.Errorf("health: component %s is already registered", c.ID)
+		r.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s", ErrComponentExists, c.ID)
 	}
 	r.comps[c.ID] = comp
 	r.broadcastLocked()
+	if c.Probe != nil && r.runCtx != nil {
+		r.spawnLocked(comp)
+	}
+	r.mu.Unlock()
+	if late != nil {
+		go r.acceptLate(comp, late)
+	}
+	r.afterChange()
 	return componentReporter{reg: r, id: c.ID}, nil
 }
 
-// runProbe calls c.Probe once under its timeout, containing a panic.
-func (r *Registry) runProbe(c Check) (res Result, took time.Duration) {
+// The Reasons a check that did not return a Result of its own is given.
+const (
+	reasonCheckPanic   = "check_panic"
+	reasonCheckTimeout = "check_timeout"
+)
+
+// outcome is how one Probe call ended: a Result, or the value it panicked with.
+type outcome struct {
+	res      Result
+	panicked any
+	// at is when the probe returned. runCheck compares it with the deadline
+	// when the answer and the deadline are both ready, so an answer given in
+	// time is kept and one given after the deadline is not.
+	at time.Time
+	// start is when the call began, so a late answer can say how long the
+	// probe really took (at - start).
+	start time.Time
+}
+
+// result is the Result an outcome stands for.
+func (o outcome) result() Result {
+	if o.panicked != nil {
+		return Result{Status: StatusDown, Reason: reasonCheckPanic, Detail: fmt.Sprintf("check panicked: %v", o.panicked)}
+	}
+	return o.res
+}
+
+// runCheck calls comp's Probe once under its timeout and contains what goes
+// wrong: a panic is Down check_panic, a Probe still running when its context
+// ends is Down check_timeout. The call runs on its own goroutine so a Probe
+// that ignores its context cannot hold the caller; such a goroutine is
+// abandoned (and logged), and comp.running keeps a second call from starting
+// until it returns. ok is false when parent ended first (shutdown): the
+// caller records nothing. late is non-nil only after a timeout: it delivers
+// the abandoned call's outcome whenever it ends (Register uses it, see there).
+//
+// When the Probe answers at the instant the timeout fires, the answer wins:
+// select picks at random between two ready cases, so the timeout branch looks
+// for an answer before it reports one.
+func (r *Registry) runCheck(parent context.Context, comp *component) (res Result, took time.Duration, ok bool, late <-chan outcome) {
+	c := comp.check
 	timeout := c.Timeout
 	if timeout <= 0 {
-		timeout = defaultProbeTimeout
+		timeout = r.cfg().CheckTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	start := time.Now()
-	defer func() {
-		took = time.Since(start)
-		if p := recover(); p != nil {
-			res = Result{Status: StatusDown, Reason: "probe_panicked", Detail: fmt.Sprintf("probe panicked: %v", p)}
-		}
+	done := make(chan outcome, 1)
+	comp.running.Store(true)
+	go func() {
+		defer comp.running.Store(false)
+		defer func() {
+			if p := recover(); p != nil {
+				done <- outcome{panicked: p, at: time.Now(), start: start}
+			}
+		}()
+		res := c.Probe(ctx)
+		done <- outcome{res: res, at: time.Now(), start: start}
 	}()
-	return c.Probe(ctx), 0
+	// inTime reports whether o was given before the deadline.
+	inTime := func(o outcome) bool {
+		dl, has := ctx.Deadline()
+		return !has || o.at.Before(dl)
+	}
+	// overran is the Result of a check that answered, or is still to answer,
+	// after its deadline. An answer already given is handed on as the late one.
+	overran := func(late <-chan outcome) (Result, time.Duration, bool, <-chan outcome) {
+		return Result{Status: StatusDown, Reason: reasonCheckTimeout, Detail: "the check did not answer within " + timeout.String()}, time.Since(start), true, late
+	}
+	lateAnswer := func(o outcome) <-chan outcome {
+		c := make(chan outcome, 1)
+		c <- o
+		return c
+	}
+	select {
+	case o := <-done:
+		if !inTime(o) {
+			return overran(lateAnswer(o))
+		}
+		return o.result(), time.Since(start), true, nil
+	case <-ctx.Done():
+		took = time.Since(start)
+		if parent.Err() != nil {
+			return Result{}, took, false, nil
+		}
+		// The answer and the deadline can become ready together, and select
+		// then picks either. An answer that was given before the deadline is
+		// not a timeout, however the tie fell; one given after it is.
+		select {
+		case o := <-done:
+			if !inTime(o) {
+				return overran(lateAnswer(o))
+			}
+			return o.result(), took, true, nil
+		default:
+		}
+		if r.log != nil {
+			r.log.Warn("health: check exceeded its timeout and was abandoned", "component", string(c.ID), "timeout", timeout.String())
+		}
+		return overran(done)
+	}
+}
+
+// acceptLate gives a Register-time probe that overran its timeout, and then
+// answered, the answer it was waiting to give. While no check loop is running
+// (before StartChecks, and again after its stop), nothing else will probe the
+// component, so without this a component whose first check is slow
+// (core.storage's engine ping at boot) would stay Down, and the tasks executor,
+// which waits on it, would never start. It applies only while no loop is
+// running and the result is still the timeout this Register recorded: a Report,
+// or the first probe of a started loop, has since spoken for the component and
+// is newer. The recorded duration is the probe's own, from its start to its
+// answer.
+func (r *Registry) acceptLate(comp *component, late <-chan outcome) {
+	o := <-late
+	res, took := r.clamp(o.result()), o.at.Sub(o.start)
+	r.mu.Lock()
+	if r.runCtx != nil || comp.result.Reason != reasonCheckTimeout || comp.result.Status != StatusDown {
+		r.mu.Unlock()
+		return
+	}
+	comp.result, comp.duration = res, took
+	r.broadcastLocked()
+	r.mu.Unlock()
+	r.metrics.recordCheck(comp.check.ID, took, res, res.Status == StatusDown)
+	r.afterChange()
 }
 
 // clamp is the stored form of res: a Reason outside the grammar becomes
@@ -239,10 +448,14 @@ func (r *Registry) clamp(res Result) Result {
 func (r *Registry) report(id ComponentID, res Result) {
 	res = r.clamp(res)
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if comp, ok := r.comps[id]; ok {
+	comp, ok := r.comps[id]
+	if ok {
 		comp.result = res
 		r.broadcastLocked()
+	}
+	r.mu.Unlock()
+	if ok {
+		r.afterChange()
 	}
 }
 
@@ -252,8 +465,17 @@ func (r *Registry) broadcastLocked() {
 	r.changed = make(chan struct{})
 }
 
+// The tokens of the two readiness conditions that are not a component's
+// (§5H.3.3: "startup complete and not shutting down"). They have the same
+// "<component>:<reason>" shape as every other not-ready token and are fixed
+// strings, so /readyz may show them.
+const (
+	tokenStarting = "core.kernel:starting"
+	tokenStopping = "core.kernel:stopping"
+)
+
 // notReadyLocked is the readiness tokens, "<component>:<reason>", sorted by
-// component ID: every Readiness component that is not Up or Degraded, and
+// component ID (the startup and shutdown tokens first): every Readiness component that is not Up or Degraded, and
 // every Critical component that is Down. A result with no Reason has the
 // fixed one, "unknown" or "down". r.mu is held.
 func (r *Registry) notReadyLocked() []string {
@@ -263,6 +485,12 @@ func (r *Registry) notReadyLocked() []string {
 	}
 	slices.Sort(ids)
 	var tokens []string
+	if r.startupPending {
+		tokens = append(tokens, tokenStarting)
+	}
+	if r.shuttingDown {
+		tokens = append(tokens, tokenStopping)
+	}
 	for _, id := range ids {
 		comp := r.comps[id]
 		st := comp.result.Status
@@ -290,23 +518,6 @@ func (r *Registry) Ready() (ready bool, notReady []string) {
 	defer r.mu.Unlock()
 	notReady = r.notReadyLocked()
 	return len(notReady) == 0, notReady
-}
-
-// Live reports whether the process is alive. There is no heartbeat before
-// F8's, so a registry is live for as long as it exists.
-func (r *Registry) Live() bool { return r != nil }
-
-// Snapshot is the registry's state: Ready, Live and every component sorted by
-// ID. Startup is F8's and stays empty.
-func (r *Registry) Snapshot() Snapshot {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	s := Snapshot{Ready: len(r.notReadyLocked()) == 0, Live: true, Components: make([]ComponentState, 0, len(r.comps))}
-	for id, comp := range r.comps {
-		s.Components = append(s.Components, ComponentState{ID: id, Result: comp.result, Critical: comp.check.Critical, Duration: comp.duration})
-	}
-	slices.SortFunc(s.Components, func(a, b ComponentState) int { return strings.Compare(string(a.ID), string(b.ID)) })
-	return s
 }
 
 // Wait blocks until every listed component is Up or Degraded (tasks Ready

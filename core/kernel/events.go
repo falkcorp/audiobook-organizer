@@ -1,7 +1,7 @@
 // file: core/kernel/events.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ee756d64-c170-47a6-bd01-d4954cdaee38
-// last-edited: 2026-11-10
+// last-edited: 2026-11-13
 
 package kernel
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/events"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 )
@@ -67,8 +68,10 @@ func newKernelEvents(p *metrics.Provider, l *slog.Logger, queueSize int, closeDr
 // coreTopics are the catalog entries core declares. Each is registered only
 // when its owner lands (05-events §5E.3.1 "Core topics"): core.rbac.changed.v1
 // with F4-08, the core.task.* topics with the tasks flip (F5), the backup,
-// integration-health and auth topics with their owning rows. None exists yet.
-func coreTopics() []events.TopicSpec { return nil }
+// integration-health and auth topics with their owning rows. The status topic
+// is health's (F8-03, 05-health §5H.3.3); the rest do not exist yet. Nothing
+// declares any of them until F4-08 wires declareCore.
+func coreTopics() []events.TopicSpec { return []events.TopicSpec{health.StatusTopicSpec()} }
 
 // declareCore declares core's topics; a refusal is a core problem (Module "").
 func (ke *kernelEvents) declareCore(topics []events.TopicSpec) []module.Problem {
