@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.13.0
+# version: 1.13.1
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-15
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -683,7 +683,7 @@ class RecordPassTest(unittest.TestCase):
 
     def test_a_listed_5xx_without_its_listed_message_is_a_recorder_failure(self):
         self.rig.fake.handler_status["PUT /api/v1/audiobooks"] = 500
-        self.rig.fake.handler_message = "open /srv/batcave/archive/joker.mp3: permission denied (192.0.2.7)"
+        self.rig.fake.handler_message = "open /srv/batcave/archive/joker.mp3: permission denied (192.0.2.10)"
         with self.assertRaises(rec.RecorderError) as cm:
             self.rig.run()
         text = str(cm.exception)
@@ -693,7 +693,7 @@ class RecordPassTest(unittest.TestCase):
         # not a path component, not the message, not an address. The old shape_of kept
         # every letter, so "batcave", "joker" and "permission" all reached the log.
         self.assertIn("chars of", text)
-        for word in ("srv", "batcave", "archive", "joker", "permission", "denied", "192"):
+        for word in ("srv", "batcave", "archive", "joker", "permission", "denied", "192", "0.2.10"):
             self.assertNotIn(word, text)
 
     def test_shape_of_names_the_kind_of_a_body_and_none_of_its_words(self):
