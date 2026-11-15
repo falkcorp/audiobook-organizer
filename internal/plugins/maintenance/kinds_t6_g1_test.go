@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
 // last-edited: 2026-11-14
 
@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -306,27 +307,59 @@ func TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod(t *testing.T) {
 	}
 }
 
-// t6g1OpsVocabulary is every resource name pkg/ops defines. An Effects
-// declaration may use only these; the list is built from the constants, so a
-// rename or a removal breaks the build instead of drifting.
-var t6g1OpsVocabulary = []ops.Resource{
-	ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResReviewItems,
-	ops.ResEmbeddings, ops.ResOperations, ops.ResCatalog, ops.ResFingerprintIndex,
-	ops.ResSettings, ops.ResActivity, ops.ResFiles, ops.ResExternalIDs, ops.ResUserState,
-	ops.ResMetadataCache, ops.ResFieldStates, ops.ResIndexes, ops.ResAIJournal, ops.ResAuthorityLists,
-	ops.ResSyncIdentity, ops.ResMetrics, ops.ResCoverText,
+// t6g1OpsVocabulary is every Resource constant pkg/ops/effects.go declares,
+// read from the source with go/ast, so adding a constant needs no edit here and
+// a name that is only a string literal in a kind is not in the set.
+func t6g1OpsVocabulary(t *testing.T) map[string]bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join("..", "..", "..", "pkg", "ops", "effects.go"), nil, 0)
+	require.NoError(t, err)
+	valid := map[string]bool{}
+	for _, d := range file.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "Resource" {
+				continue
+			}
+			for _, v := range vs.Values {
+				if lit, ok := v.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					name, err := strconv.Unquote(lit.Value)
+					require.NoError(t, err)
+					valid[name] = true
+				}
+			}
+		}
+	}
+	require.Contains(t, valid, string(ops.ResBooks), "the enumeration found no Resource constants")
+	require.Len(t, valid, 23, "pkg/ops declares a different number of Resource constants; update the count with the new constant")
+	return valid
 }
 
+// Every name in every kind's declared Effects (write, read and delete sets) and
+// in t6g1WriterResources is a pkg/ops Resource constant. A literal that merely
+// compiles, such as "aux_stores", is caught by value here.
 func TestT6G1Kinds_EffectsUseOnlyOpsResources(t *testing.T) {
-	valid := map[string]bool{}
-	for _, r := range t6g1OpsVocabulary {
-		valid[string(r)] = true
-	}
+	valid := t6g1OpsVocabulary(t)
 	for _, d := range (&Plugin{}).t6g1Kinds(fakeT6G1Deps(t), nil) {
 		c := tasks.CommonOf(d)
 		for _, r := range slices.Concat(c.Effects.WriteSet(), c.Effects.ReadSet(), c.Effects.DeleteSet()) {
 			require.Equal(t, "books", r.Module, "%s", d.Kind())
 			require.True(t, valid[r.Kind], "%s declares %q, which is not a pkg/ops resource constant", d.Kind(), r.Kind)
+		}
+	}
+	for method, res := range t6g1WriterResources {
+		for _, r := range res {
+			require.True(t, valid[r], "t6g1WriterResources[%s] names %q, which is not a pkg/ops resource constant", method, r)
+		}
+	}
+	for kind, o := range t6g1OutsideWriterSeam {
+		for _, r := range o.res {
+			require.True(t, valid[r], "t6g1OutsideWriterSeam[%s] names %q, which is not a pkg/ops resource constant", kind, r)
 		}
 	}
 }

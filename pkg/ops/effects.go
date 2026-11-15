@@ -1,5 +1,5 @@
 // file: pkg/ops/effects.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
 // last-edited: 2026-11-14
 
@@ -57,6 +57,11 @@ const (
 	// cover_text_book:<book id> index, internal/covertext) that the cover-text
 	// read kind writes. No F5-06 kind uses it; F5-08 switches to it.
 	ResCoverText Resource = "cover_text"
+	// ResFileProvenance is the file provenance ledger (file_prov:, file_prov_hash:,
+	// file_prov_orphan: and file_prov_seq: keys, internal/books/store) that the
+	// provenance capture/export kinds and the quarantine path write. No F5-06
+	// kind uses it; the siblings that write it switch to it.
+	ResFileProvenance Resource = "file_provenance"
 )
 
 // deletePrefix marks a Resource built by Deletes.
