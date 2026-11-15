@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -41,7 +41,8 @@ import (
 //
 // The store fake implements every t6g2Store method, so a core that reaches for
 // something its scenario did not arrange reads an empty value the test asserts
-// on; the writer fake embeds its interface and panics on an unprovided method.
+// on; the writer fake implements every t6g2Writer method (the compiler
+// checks it where it is returned as one), so a new method fails the build until it records.
 // ---------------------------------------------------------------------------
 
 type t6g2FakeStore struct {
@@ -162,7 +163,6 @@ func (s *t6g2FakeStore) CheckBookHashIndex(context.Context, database.BookHashInd
 // t6g2RecWriter records every write that reaches it, as "Method" or
 // "Method:arg" strings in call order.
 type t6g2RecWriter struct {
-	t6g2Writer
 	mu    sync.Mutex
 	calls []string
 
@@ -345,6 +345,11 @@ func (w *t6g2RecWriter) RepairBookHashIndex(context.Context, database.BookHashIn
 
 func (w *t6g2RecWriter) RebuildBookAtPathIndex(context.Context, database.BookAtPathProgress) (database.BookAtPathBackfillResult, error) {
 	w.rec("RebuildBookAtPathIndex")
+	return database.BookAtPathBackfillResult{}, nil
+}
+
+func (w *t6g2RecWriter) BackfillBookAtPathIndex(context.Context, database.BookAtPathProgress) (database.BookAtPathBackfillResult, error) {
+	w.rec("BackfillBookAtPathIndex")
 	return database.BookAtPathBackfillResult{}, nil
 }
 
@@ -572,6 +577,11 @@ type t6g2Row struct {
 	// store instead: a preview's writer never runs.
 	wantPreview    []string
 	wantClassified []string
+	// bootParams and wantBoot are a second live scenario of a kind whose mode
+	// decides which writer call it makes (the at-path backfill's boot mode,
+	// {"if_needed":true}); the effects check covers wantLive and wantBoot both.
+	bootParams string
+	wantBoot   []string
 }
 
 func t6g2Rows() []t6g2Row {
@@ -608,7 +618,8 @@ func t6g2Rows() []t6g2Row {
 		{
 			def: (*Plugin).bookAtPathIndexBackfillDef, kind: t6g2KindBookAtPathIndexBackfill, resume: tasks.ResumeDrop,
 			writes: []ops.Resource{ops.ResBooks}, liveOnly: true, params: `{}`,
-			wantLive: []string{"RebuildBookAtPathIndex"},
+			wantLive:   []string{"RebuildBookAtPathIndex"},
+			bootParams: `{"if_needed":true}`, wantBoot: []string{"BackfillBookAtPathIndex"},
 		},
 		{
 			def: (*Plugin).bookHashIndexRepairDef, kind: t6g2KindBookHashIndexRepair, resume: tasks.ResumeFromZero,
@@ -915,13 +926,9 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 			// The resources the row's writer calls touch, from t6g2Touches (traced
 			// from what each production writer reaches, not from the Effects).
 			touched := map[string]bool{}
-			calls := slices.Clone(r.wantLive)
-			// The boot-mode build of the at-path index ({"if_needed":true}) writes
-			// through BackfillBookAtPathIndex, which the forced rebuild's row does
-			// not call; the same kind's Effects must cover it too.
-			if r.kind == t6g2KindBookAtPathIndexBackfill {
-				calls = append(calls, "BackfillBookAtPathIndex")
-			}
+			// Every scenario's recorded writes: the live one and, for a kind with a
+			// second mode, the writes of that mode (each run and checked below).
+			calls := append(slices.Clone(r.wantLive), r.wantBoot...)
 			for _, call := range calls {
 				method, _, _ := strings.Cut(call, ":")
 				res, ok := t6g2Touches[method]
@@ -1010,6 +1017,8 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 	// entry cannot lose a resource the code still touches (the Effects check
 	// cannot see it: the transcode's own entry already covers the same names),
 	// and a trace whose call was removed or renamed fails here.
+	// It does not see a write ADDED to the chain: the table is typed here, so a new
+	// write in the production code needs a new row (the trace is reviewed, not derived).
 	t.Run("quarantine's touch entry matches the calls it reaches", func(t *testing.T) {
 		svc := filepath.Join("..", "..", "quarantine", "service.go")
 		srv := filepath.Join("..", "..", "server", "quarantine_known_bad.go")
@@ -1211,6 +1220,17 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 				t.Errorf("writes reaching the t6g2Writer = %v, want %v", got, r.wantLive)
 			}
 		})
+		if r.bootParams != "" {
+			t.Run(string(r.kind)+"/live boot mode", func(t *testing.T) {
+				f, _, err := t6g2ArrangeAndRun(t, r, tasks.ModeLive, r.bootParams)
+				if err != nil {
+					t.Fatalf("live run: %v", err)
+				}
+				if got := f.writer.got(); !slices.Equal(got, r.wantBoot) {
+					t.Errorf("writes reaching the t6g2Writer = %v, want %v", got, r.wantBoot)
+				}
+			})
+		}
 		t.Run(string(r.kind)+"/preview", func(t *testing.T) {
 			f, _, err := t6g2ArrangeAndRun(t, r, tasks.ModePreview, r.params)
 			if r.liveOnly {
@@ -1442,6 +1462,9 @@ func (s t6g2HeadStore) BatchCreateBookFiles(files []*database.BookFile) error {
 func (s t6g2HeadStore) RebuildBookAtPathIndex(ctx context.Context, p database.BookAtPathProgress) (database.BookAtPathBackfillResult, error) {
 	return s.f.writer.RebuildBookAtPathIndex(ctx, p)
 }
+func (s t6g2HeadStore) BackfillBookAtPathIndex(ctx context.Context, p database.BookAtPathProgress) (database.BookAtPathBackfillResult, error) {
+	return s.f.writer.BackfillBookAtPathIndex(ctx, p)
+}
 func (s t6g2HeadStore) DeleteOrphanBookFileAcoustIDEntries(ctx context.Context, e []database.BookFileAcoustIDEntry) (int, error) {
 	return s.f.writer.DeleteOrphanBookFileAcoustIDEntries(ctx, e)
 }
@@ -1514,6 +1537,21 @@ func t6g2HeadShellSubtests(t *testing.T) {
 			}
 			if got := f.writer.got(); !slices.Equal(got, r.wantLive) {
 				t.Errorf("writes reaching the store = %v, want %v", got, r.wantLive)
+			}
+			if r.bootParams != "" {
+				// The second mode of the kind, over fresh fakes: HEAD's shell reaches
+				// the same writer call the native boot run does.
+				bf := newT6G2Fakes(t)
+				if r.arrange != nil {
+					r.arrange(t, bf)
+				}
+				bp := &Plugin{deps: t6g2HeadDeps{fakeDeps: fakeDeps{store: t6g2HeadStore{f: bf}}, w: bf.writer}}
+				if err := r.def(bp).Run(context.Background(), json.RawMessage(r.bootParams), &t6g2ResultReporter{fakeReporter: &fakeReporter{}}); err != nil {
+					t.Fatalf("HEAD boot-mode run: %v", err)
+				}
+				if got := bf.writer.got(); !slices.Equal(got, r.wantBoot) {
+					t.Errorf("boot-mode writes reaching the store = %v, want %v", got, r.wantBoot)
+				}
 			}
 			if r.kind == t6g2KindBuildFolderBookFiles {
 				// The shell persists the report on the run's row.
@@ -2254,64 +2292,80 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 		}
 		return out
 	}
-	for _, tc := range []struct {
-		kind  tasks.Kind
-		width int
-	}{
-		{t6g2KindMovementAtomCleanup, bootWalkWorkers},
-		{t6g2KindMalformedM4BRemux, bootWalkWorkers},
-		{t6g2KindMalformedM4BTranscode, bootTranscodeWorkers},
-	} {
-		t.Run(string(tc.kind), func(t *testing.T) {
+	// workersOf is the width the row declares for a kind: the one number the
+	// native "parallelism used" test checks too, so the HEAD pin and the native
+	// pin share one expectation. Each pin below runs MORE items than that width
+	// (one past it), so a HEAD shell capped at any smaller constant, or at the
+	// item count of a small fixture, runs fewer at once and fails.
+	workersOf := func(t *testing.T, kind tasks.Kind) int {
+		t.Helper()
+		for _, r := range t6g2Rows() {
+			if r.kind == kind {
+				if r.workers < 1 {
+					t.Fatalf("%s: row declares no pool width", kind)
+				}
+				return r.workers
+			}
+		}
+		t.Fatalf("no row for %s", kind)
+		return 0
+	}
+	for _, kind := range []tasks.Kind{t6g2KindMovementAtomCleanup, t6g2KindMalformedM4BRemux, t6g2KindMalformedM4BTranscode} {
+		t.Run(string(kind), func(t *testing.T) {
+			want := workersOf(t, kind)
+			if t6g2WalkItems <= want {
+				t.Fatalf("a walk of %d items cannot show a pool of %d", t6g2WalkItems, want)
+			}
 			f := newT6G2Fakes(t)
-			f.writer.gt.set(tc.width)
-			run(t, f, tc.kind, t6g2HeadLive[tc.kind])
-			if got := f.writer.peakInFlight(); got != tc.width {
-				t.Errorf("HEAD ran %d items at once, want its %d workers", got, tc.width)
+			f.writer.gt.set(want)
+			run(t, f, kind, t6g2HeadLive[kind])
+			if got := f.writer.peakInFlight(); got != want {
+				t.Errorf("HEAD ran %d items at once, want its %d workers", got, want)
 			}
 		})
 	}
 
 	t.Run("a per-CPU kind (chapters-backfill) uses every core", func(t *testing.T) {
-		ids := []string{"bat-1", "bat-2", "bat-3", "bat-4", "bat-5", "bat-6", "bat-7", "bat-8"}
+		want := workersOf(t, t6g2KindChaptersBackfill)
+		books := ids(want + 1)
 		f := newT6G2Fakes(t)
-		t6g2ChaptersFixture(t, f, ids...)
-		want := min(runtime.NumCPU(), len(ids))
+		t6g2ChaptersFixture(t, f, books...)
 		f.writer.gt.set(want)
-		quoted, _ := json.Marshal(ids)
+		quoted, _ := json.Marshal(books)
 		run(t, f, t6g2KindChaptersBackfill, fmt.Sprintf(`{"apply":true,"book_ids":%s}`, quoted))
 		if got := f.writer.peakInFlight(); got != want {
-			t.Errorf("HEAD ran %d books at once, want min(NumCPU, books) = %d", got, want)
+			t.Errorf("HEAD ran %d books at once, want its %d workers", got, want)
 		}
 	})
 
 	t.Run("bookfile-acoustid-index-repair judges on every core", func(t *testing.T) {
 		f := newT6G2Fakes(t)
-		f.store.acoustid = make([]database.BookFileAcoustIDEntry, 16)
+		want := workersOf(t, t6g2KindBookFileAcoustIDIndexRepair)
+		f.store.acoustid = make([]database.BookFileAcoustIDEntry, want+1)
 		f.store.verdict = database.AcoustIDEntryRowGone
-		want := min(runtime.NumCPU(), len(f.store.acoustid))
 		f.store.gt.set(want)
 		run(t, f, t6g2KindBookFileAcoustIDIndexRepair, t6g2HeadLive[t6g2KindBookFileAcoustIDIndexRepair])
 		if got := f.store.gt.peakInFlight(); got != want {
-			t.Errorf("HEAD judged %d entries at once, want min(NumCPU, entries) = %d", got, want)
+			t.Errorf("HEAD judged %d entries at once, want its %d workers", got, want)
 		}
 	})
 
 	t.Run("booksig-sidecar-migrate migrates pages on every core", func(t *testing.T) {
-		// Pages of bookSigMigratePageSize ids are the pool's items.
-		const pages = 4
+		// Pages of bookSigMigratePageSize ids are the pool's items; one page more
+		// than the pool is wide.
+		want := workersOf(t, t6g2KindBookSigSidecarMigrate)
 		f := newT6G2Fakes(t)
-		f.store.ids = ids(pages * bookSigMigratePageSize)
-		want := min(runtime.NumCPU(), pages)
+		f.store.ids = ids((want + 1) * bookSigMigratePageSize)
 		f.writer.gt.set(want)
 		run(t, f, t6g2KindBookSigSidecarMigrate, t6g2HeadLive[t6g2KindBookSigSidecarMigrate])
 		if got := f.writer.peakInFlight(); got != want {
-			t.Errorf("HEAD migrated %d pages at once, want min(NumCPU, pages) = %d", got, want)
+			t.Errorf("HEAD migrated %d pages at once, want its %d workers", got, want)
 		}
 	})
 
 	t.Run("build-folder-book-files checks and builds on every core", func(t *testing.T) {
-		books := ids(8)
+		want := workersOf(t, t6g2KindBuildFolderBookFiles)
+		books := ids(want + 1)
 		f := newT6G2Fakes(t)
 		stubProbe(t, map[string]int{"01.mp3": 100, "02.mp3": 200})
 		organized, primary := "organized", true
@@ -2322,17 +2376,16 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 				LibraryState: &organized, IsPrimaryVersion: &primary,
 			}
 		}
-		want := min(runtime.NumCPU(), len(books))
 		// Phase 1 reads each book's rows; phase 2 writes them. Each is its own pool.
 		f.store.gt.set(want)
 		f.writer.gt.set(want)
 		quoted, _ := json.Marshal(books)
 		run(t, f, t6g2KindBuildFolderBookFiles, fmt.Sprintf(`{"apply":true,"book_ids":%s}`, quoted))
 		if got := f.store.gt.peakInFlight(); got != want {
-			t.Errorf("HEAD checked %d books at once (phase 1), want min(NumCPU, books) = %d", got, want)
+			t.Errorf("HEAD checked %d books at once (phase 1), want its %d workers", got, want)
 		}
 		if got := f.writer.peakInFlight(); got != want {
-			t.Errorf("HEAD built %d books at once (phase 2), want min(NumCPU, books) = %d", got, want)
+			t.Errorf("HEAD built %d books at once (phase 2), want its %d workers", got, want)
 		}
 		if n := len(f.writer.got()); n != len(books) {
 			t.Errorf("HEAD built %d books, want %d", n, len(books))
@@ -2340,11 +2393,12 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 	})
 
 	t.Run("book-shape-report classifies shards on every core", func(t *testing.T) {
-		// One group per book, one shard per core, so every shard is a pool item.
-		const books = 8
+		// One group per book and one more group than the pool is wide, so there
+		// are as many shards as workers and every shard is a pool item.
+		want := workersOf(t, t6g2KindBookShapeReport)
 		f := newT6G2Fakes(t)
 		organized, primary := "organized", true
-		for _, id := range ids(books) {
+		for _, id := range ids(want + 1) {
 			dir := t.TempDir()
 			paths := touchAudio(t, dir, "01.mp3", "02.mp3")
 			f.store.core = append(f.store.core, database.BookCore{
@@ -2354,13 +2408,12 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 				f.store.fileCores = append(f.store.fileCores, database.BookFileCore{ID: fmt.Sprintf("%s-f%d", id, j), BookID: id, FilePath: p})
 			}
 		}
-		want := min(runtime.NumCPU(), books)
 		rep := &t6g2TouchReporter{t6g2ResultReporter: &t6g2ResultReporter{fakeReporter: &fakeReporter{}}}
 		rep.gt.set(want)
 		params := fmt.Sprintf(`{"oversizedThreshold":1,"reportPath":%q}`, filepath.Join(f.reportDir, "shape.tsv"))
 		runWith(t, f, t6g2KindBookShapeReport, params, rep)
 		if got := rep.gt.peakInFlight(); got != want {
-			t.Errorf("HEAD classified %d shards at once, want min(NumCPU, groups) = %d", got, want)
+			t.Errorf("HEAD classified %d shards at once, want its %d workers", got, want)
 		}
 	})
 }
