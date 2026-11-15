@@ -93,8 +93,12 @@ func (r pathRoots) redactPathsAt(s string, depth int, mode scanMode) string {
 	}
 	var b strings.Builder
 	last := 0
+	// The whole-token rules (tokenAt) can only fire in text that holds a URL's
+	// "://" or a "%", and only where a token or a scheme can start; most lines
+	// hold neither, and a line of 400k bytes should not pay a call per byte.
+	tokens := mode == scanText && (strings.Contains(s, "://") || strings.IndexByte(s, '%') >= 0)
 	for i := 0; i < len(s); {
-		if mode == scanText {
+		if tokens && (i == 0 || s[i-1] <= ' ' || s[i-1] == 0x7f || s[i-1] == '"' || s[i-1] == '`' || isAlpha(s[i])) {
 			if end, repl, ok := r.tokenAt(s, i, depth); ok {
 				b.WriteString(s[last:i])
 				b.WriteString(repl)
