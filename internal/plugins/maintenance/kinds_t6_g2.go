@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g2.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: f05c0cfb-33a6-46e3-a29b-4ab6825825dc
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -618,13 +618,24 @@ func t6g2NativeEnvOf(rc *tasks.RC, deps t6g2Deps, par tasks.Parallelism, writes 
 				rc.Progress().Note(msg)
 			}
 		},
-		Touch:       rc.Progress().Tick,
-		Checkpoint:  rc.Checkpoint,
-		Continue:    tasks.ErrContinueInPlace,
-		NewYieldDue: func(context.Context) func() bool { return rc.ShouldYield },
-		Items:       t6g2NativeItems(rc, par),
-		Store:       deps.Store,
-		Writer:      w,
+		Touch:      rc.Progress().Tick,
+		Checkpoint: rc.Checkpoint,
+		Continue:   tasks.ErrContinueInPlace,
+		// The yield margin is HEAD's, not the kernel's alone: max(bootYieldMargin,
+		// twice the slowest gap between checkpoints this attempt has seen), so a
+		// walk whose items take longer than the margin stops while the items in
+		// flight can still finish. The kernel's own rc.ShouldYield (10% of the
+		// Timeout, at least a minute) is OR-ed in and can only bring the yield
+		// forward.
+		NewYieldDue: func(context.Context) func() bool {
+			return adaptiveYieldDue(func() (time.Time, bool) {
+				dl := rc.Deadline()
+				return dl, !dl.IsZero()
+			}, time.Now, bootYieldMargin, rc.ShouldYield)
+		},
+		Items:  t6g2NativeItems(rc, par),
+		Store:  deps.Store,
+		Writer: w,
 	}
 	if deps.ReportPath != nil {
 		env.ReportPath = func(explicit, prefix string) (string, error) {
