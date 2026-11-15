@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
 // last-edited: 2026-11-14
 
@@ -133,6 +133,18 @@ type optimizeEnv struct {
 	Wait func(ctx context.Context, childID string, relay func(childop.Observation)) error
 }
 
+// The HEAD def IDs of the four children the sweep starts. The native sweep starts
+// each by t6g6KindFor(id) ("books." + id), so the kind a sibling row declares for
+// its def must be exactly that. The IDs are the literals the owning defs carry
+// (internal/plugins/maintenance cleanup.go and internal/plugins/acoustid
+// fingerprint_rescan.go, scan.go, backfill.go).
+const (
+	optimizeChildTempFileCleanup   = "maintenance.temp-file-cleanup"
+	optimizeChildFingerprintRescan = "acoustid.fingerprint-rescan"
+	optimizeChildAcoustIDScan      = "acoustid.scan"
+	optimizeChildAcoustIDBackfill  = "acoustid.backfill"
+)
+
 // optimizeTotalBudget is HEAD's Timeout for the whole sweep. The native kind's
 // attempt is capped at tasks.MaxTimeout (24h), so a sweep that outlives one
 // attempt yields between children and the resumed attempts share this budget.
@@ -217,24 +229,24 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 	children := []childOp{
 		{
 			name:   "temp-file-cleanup",
-			defID:  "maintenance.temp-file-cleanup",
+			defID:  optimizeChildTempFileCleanup,
 			params: nil,
 		},
 		{
 			name:  "fingerprint-rescan-missing",
-			defID: "acoustid.fingerprint-rescan",
+			defID: optimizeChildFingerprintRescan,
 			params: map[string]any{
 				"scope": "missing",
 			},
 		},
 		{
 			name:   "acoustid-scan",
-			defID:  "acoustid.scan",
+			defID:  optimizeChildAcoustIDScan,
 			params: nil,
 		},
 		{
 			name:   "acoustid-backfill",
-			defID:  "acoustid.backfill",
+			defID:  optimizeChildAcoustIDBackfill,
 			params: nil,
 		},
 	}
@@ -250,7 +262,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 	if !config.AppConfig.Maintenance.AcoustIDBackfill {
 		kept := make([]childOp, 0, len(children))
 		for _, ch := range children {
-			if ch.defID == "acoustid.backfill" {
+			if ch.defID == optimizeChildAcoustIDBackfill {
 				logger.InfoCtx(ctx, "maintenance.library-optimize: acoustid-backfill excluded",
 					"operation_id", opID,
 					"reason", "maintenance.acoustid_backfill=false",
@@ -270,7 +282,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 	if !serverdecode.Allowed() {
 		kept := make([]childOp, 0, len(children))
 		for _, ch := range children {
-			if ch.defID == "acoustid.fingerprint-rescan" {
+			if ch.defID == optimizeChildFingerprintRescan {
 				logger.InfoCtx(ctx, "maintenance.library-optimize: fingerprint-rescan-missing excluded",
 					"operation_id", opID,
 					"reason", serverdecode.EnvVar+" is not true",

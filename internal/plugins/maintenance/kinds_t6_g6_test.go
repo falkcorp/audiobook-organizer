@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.2.5
+// version: 1.2.6
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-14
 
@@ -50,6 +50,9 @@ type t6g6Recorder struct {
 	us *t6g6UserStateSpy
 	// cutoffs are the cutoffs CompactActivityEntries was handed.
 	cutoffs []time.Time
+	// ensure, when set, scripts what the opchange ensure answers; nil answers a
+	// trusted, already-complete index.
+	ensure func(database.OpChangeEnsureOptions) (database.OpChangeByBookEnsureResult, error)
 }
 
 // t6g6WriterResource maps every writer method the spy can record to the Effects
@@ -57,28 +60,29 @@ type t6g6Recorder struct {
 // in this map fails the test, so a new writer method cannot slip past the
 // declared write set.
 var t6g6WriterResource = map[string]string{
-	"CompactActivityEntries":     "books/" + string(ops.ResActivity),
-	"RecompactActivityDigests":   "books/" + string(ops.ResActivity),
-	"RebuildOpChangeByBookIndex": "books/" + string(ops.ResOperations),
-	"CreateOperationChange":      "books/" + string(ops.ResOperations),
-	"CollapseHealDuplicates":     "books/" + string(ops.ResBooks),
-	"HealTrack":                  "books/" + string(ops.ResFiles),
-	"UpdateBookFiles":            "books/" + string(ops.ResBookFiles),
-	"CreateBookFile":             "books/" + string(ops.ResBookFiles),
-	"ModifyBookFile":             "books/" + string(ops.ResBookFiles),
-	"RecomputeBookAggregates":    "books/" + string(ops.ResBooks),
-	"ModifyBook":                 "books/" + string(ops.ResBooks),
-	"UpsertReviewItem":           "books/" + string(ops.ResReviewItems),
-	"DeleteReviewItemIfPending":  "books/" + string(ops.ResReviewItems),
-	"SetRaw":                     "books/" + string(ops.ResUserState),
-	"DeleteRaw":                  "books/" + string(ops.ResUserState),
-	"SetUserBookState":           "books/" + string(ops.ResUserState),
-	"SetUserPosition":            "books/" + string(ops.ResUserState),
-	"SetUserPositionAt":          "books/" + string(ops.ResUserState),
-	"ClearUserPositions":         "books/" + string(ops.ResUserState),
-	"MintOrGetSyncID":            "books/" + string(ops.ResUserState),
-	"RecordSyncMerge":            "books/" + string(ops.ResUserState),
-	"CopyBookmarkIfAbsent":       "books/" + string(ops.ResUserState),
+	"CompactActivityEntries":        "books/" + string(ops.ResActivity),
+	"RecompactActivityDigests":      "books/" + string(ops.ResActivity),
+	"RebuildOpChangeByBookIndex":    "books/" + string(ops.ResOperations),
+	"EnsureOpChangeByBookIndexWith": "books/" + string(ops.ResOperations),
+	"CreateOperationChange":         "books/" + string(ops.ResOperations),
+	"CollapseHealDuplicates":        "books/" + string(ops.ResBooks),
+	"HealTrack":                     "books/" + string(ops.ResFiles),
+	"UpdateBookFiles":               "books/" + string(ops.ResBookFiles),
+	"CreateBookFile":                "books/" + string(ops.ResBookFiles),
+	"ModifyBookFile":                "books/" + string(ops.ResBookFiles),
+	"RecomputeBookAggregates":       "books/" + string(ops.ResBooks),
+	"ModifyBook":                    "books/" + string(ops.ResBooks),
+	"UpsertReviewItem":              "books/" + string(ops.ResReviewItems),
+	"DeleteReviewItemIfPending":     "books/" + string(ops.ResReviewItems),
+	"SetRaw":                        "books/" + string(ops.ResUserState),
+	"DeleteRaw":                     "books/" + string(ops.ResUserState),
+	"SetUserBookState":              "books/" + string(ops.ResUserState),
+	"SetUserPosition":               "books/" + string(ops.ResUserState),
+	"SetUserPositionAt":             "books/" + string(ops.ResUserState),
+	"ClearUserPositions":            "books/" + string(ops.ResUserState),
+	"MintOrGetSyncID":               "books/" + string(ops.ResUserState),
+	"RecordSyncMerge":               "books/" + string(ops.ResUserState),
+	"CopyBookmarkIfAbsent":          "books/" + string(ops.ResUserState),
 }
 
 // t6g6Eff is the sorted "books/<resource>" refs of the given pkg/ops constants.
@@ -137,6 +141,17 @@ func (r *t6g6Recorder) RecompactActivityDigests(context.Context) (database.Recom
 func (r *t6g6Recorder) RebuildOpChangeByBookIndex(context.Context, database.OpChangeIndexProgress) (database.OpChangeByBookBackfillResult, error) {
 	r.rec("RebuildOpChangeByBookIndex")
 	return database.OpChangeByBookBackfillResult{Scanned: 4, Indexed: 4}, nil
+}
+
+func (r *t6g6Recorder) EnsureOpChangeByBookIndexWith(_ context.Context, opts database.OpChangeEnsureOptions) (database.OpChangeByBookEnsureResult, error) {
+	r.rec("EnsureOpChangeByBookIndexWith")
+	r.mu.Lock()
+	f := r.ensure
+	r.mu.Unlock()
+	if f != nil {
+		return f(opts)
+	}
+	return database.OpChangeByBookEnsureResult{Trusted: true, Backfill: database.OpChangeByBookBackfillResult{Skipped: true}}, nil
 }
 
 func (r *t6g6Recorder) CollapseHealDuplicates(_, keepID string, _ []string) error {
@@ -369,6 +384,23 @@ type t6g6Host struct {
 	mu         sync.Mutex
 	standDowns []tasks.Key
 	released   bool
+	// caps are the worker counts the run's item loops declared (CapWorkers is
+	// handed the declared count before every loop).
+	caps []int
+}
+
+// CapWorkers records the declared count and applies the fake's own cap.
+func (h *t6g6Host) CapWorkers(declared int) int {
+	h.mu.Lock()
+	h.caps = append(h.caps, declared)
+	h.mu.Unlock()
+	return h.FakeRun.CapWorkers(declared)
+}
+
+func (h *t6g6Host) workerCaps() []int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]int(nil), h.caps...)
 }
 
 func (h *t6g6Host) Mode() tasks.Mode     { return h.mode }
