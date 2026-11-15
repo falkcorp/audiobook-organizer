@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_adversarial_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d4b7e21-3a6c-4f58-8e0d-5b1c2a97f634
 // last-edited: 2026-11-14
 
@@ -8,6 +8,7 @@ package diagnostics
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"net/url"
 	"slices"
 	"strconv"
@@ -261,6 +262,28 @@ var ctxs = []ctx{
 	{"public", "/public/x?p=%s", "query"},
 	{"nested", "/api/v1/x?next=/api/v1/y?p=%s", "query"},
 	{"multi", "/api/v1/x?a=%s&b=%s", "query"},
+
+	// Round 7, review finding 1: whitespace-free compact JSON (and CSV-like text)
+	// around a URL. The byte after the host ends the authority, so the path
+	// planted after it is read as text and not as a part of the URL.
+	{"compact-url", `https://abs.example","p":"%s"`, "text"},
+	{"compact-json", `{"u":"https://abs.example","p":"%s"}`, "text"},
+	{"compact-backtick", "https://abs.example`,%s", "text"},
+	{"compact-bslash", `https://abs.example\","p":"%s"`, "text"},
+	{"compact-comma", "https://abs.example,%s", "text"},
+	{"compact-lt", "https://abs.example<%s", "text"},
+	{"compact-gt", "https://abs.example>%s", "text"},
+	{"compact-port", `{"u":"https://abs.example:8080","p":"%s"}`, "text"},
+	{"compact-tail", `https://abs.example","p":"%s","q":"?x`, "text"},
+	{"compact-path", `{"u":"https://abs.example/x","p":"%s"}`, "text"},
+	{"compact-route", `{"u":"/api/v1/x","p":"%s"}`, "text"},
+	// Round 7, review finding 2: a "<root:NAME>" placeholder or a closing tag in
+	// the same whitespace-free run, in front of a quote and the planted text.
+	{"tag-prefix", `</b>"%s`, "text"},
+	{"root-prefix", `<root:lib>"%s`, "text"},
+	{"root-backtick", "<root:lib>`%s", "text"},
+	{"tag-quoted", `</tag>"%s"`, "text"},
+	{"root-tag", `<root:lib></b>"%s`, "text"},
 
 	{"pathpart", "/api/v1/x/%s", "path"},
 	{"url-path", "https://abs.example/items/%s", "path"},
@@ -869,6 +892,125 @@ func TestRedactPaths_EscapedQuoteInAJSONStringDoesNotEndTheQuery(t *testing.T) {
 		same(`/api/v1/x?p=/Users/a\"b/Gordonx/Books`, `/api/v1/x?<query>`),
 		same(`GET https://abs.example/x?p=/Users/a\"b/Gordonx/Books 200`, `GET https://abs.example/x?<query> 200`),
 	})
+}
+
+// TestRedactPaths_URLAuthorityEndsAtAByteThatCannotBeInIt (round 7, review
+// finding 1): a URL token runs to whitespace, so in compact JSON with no
+// whitespace ("https://h","p":"/Users/bruce") the quote, the comma and the path
+// after them were read as the URL's authority and path part and came out as
+// written. A byte that cannot be in an authority (anything but a letter, digit,
+// "-._~%:@[]" or a byte of a non-ASCII host) ends the URL token there when it
+// comes before the first "/", "?" or "#", and the rest is scanned as text. The
+// opaque run to whitespace applies only after a "?" or "#" (G9), not to the
+// authority and not to the path part.
+func TestRedactPaths_URLAuthorityEndsAtAByteThatCannotBeInIt(t *testing.T) {
+	var cases []pc
+	for _, end := range []string{`"`, "`", `\`, "<", ">", ",", ";", "'", ")", "|", "{", "}", "^", "!", "*", "(", "&", "=", "+", "$"} {
+		cases = append(cases,
+			same("https://h"+end+"/Users/bruce/"+marker, "https://h"+end+"<path>"),
+			same("see https://h"+end+"/Users/bruce/"+marker+" now", "see https://h"+end+"<path> now"),
+			same(`{"u":"https://h`+end+`","p":"/Users/bruce/`+marker+`"}`, `{"u":"https://h`+end+`","p":"<path>"}`),
+		)
+	}
+	cases = append(cases,
+		same(`"https://h","p":"/Users/bruce/`+marker+`"`, `"https://h","p":"<path>"`),
+		same(`{"u":"https://h","p":"/Users/bruce/`+marker+`"}`, `{"u":"https://h","p":"<path>"}`),
+		same("{\"u\":\"https://h`,\"p\":\"/Users/bruce/"+marker+"\"}", "{\"u\":\"https://h`,\"p\":\"<path>\"}"),
+		same(`{"u":"https://h\","p":"/Users/bruce/`+marker+`"}`, `{"u":"https://h\","p":"<path>"}`),
+		same(`{"u":"https://h<","p":"/Users/bruce/`+marker+`"}`, `{"u":"https://h<","p":"<path>"}`),
+		same(`{"u":"https://h>","p":"/Users/bruce/`+marker+`"}`, `{"u":"https://h>","p":"<path>"}`),
+		// An authority that holds only authority bytes is still kept whole, userinfo
+		// and port included, and its path part and query behave as before.
+		same("https://bat:pw@abs.example:8080/x", "https://bat:pw@abs.example:8080/x"),
+		same("https://[::1]:8080/x", "https://[::1]:8080/x"),
+		pc{"https://abs.example/x?p=/Users/bruce/" + marker + " 200", "https://abs.example/x?<query> 200", "https://abs.example/x?<query>"},
+		same(`"https://abs.example/x?p=1","p":"/Users/bruce/`+marker+`"`, `"https://abs.example/x?<query>`),
+		// A URL with a query after a byte that ends the authority: the query is no
+		// longer the URL's, so the text after the byte is scanned as text.
+		same(`{"u":"https://h","q":"?a=/Users/bruce/`+marker+`"}`, `{"u":"https://h","q":"?a=<path>"}`),
+	)
+	runExact(t, cases)
+	// The whole-value road: a value that starts as a URL and holds a "?" or "#"
+	// in its first chunk is read as one URL, and its authority ends the same way.
+	roots := advRoots()
+	for _, in := range []string{
+		`https://h","p":"/Users/bruce/` + marker + `","q":"?x`,
+		"https://h`,\"p\":\"/Users/bruce/" + marker + "\",\"q\":\"#x",
+		`https://h\","p":"/Users/bruce/` + marker + `","q":"?x`,
+		`https://h<,"p":"/Users/bruce/` + marker + `","q":"?x`,
+	} {
+		if out := roots.redactValue(in); strings.Contains(out, marker) {
+			t.Errorf("value %q -> %q", in, out)
+		}
+	}
+}
+
+// TestRedactPaths_EncodedTokenAfterAQuoteAndAPrefix (round 7, review finding 2):
+// the encoded-token rule judges a token once from its start and does not judge a
+// token that starts inside the extent it read (judged). The hypothesis was that
+// whether a token is an encoded path depends on where it starts, so a prefix in
+// the same whitespace-free run (a "<root:NAME>" placeholder, a "</tag>", a
+// bracket) could make the whole token read as no path while the part after a
+// quote is one. Every shape below puts an encoded path after a quote or a
+// backtick behind such a prefix; none may leave the marker.
+func TestRedactPaths_EncodedTokenAfterAQuoteAndAPrefix(t *testing.T) {
+	roots := advRoots()
+	prefixes := []string{"", "x", "<root:lib>", "<root:lib>/a", "<root:vault>", "<root:nope>", "</b>", "</tag>", "</b></i>", "(", "<", "'(", "[<root:lib>",
+		"%3Croot:lib%3E", "%3C%2Fb%3E", "a@", "k=", "<root:lib>/x@", "<root:lib><root:vault>", "/srv/lib", "/srv/lib/a@", "/api/x", "/api/x?q=", "https://h", "https://h/x", "50%25", "%zz", "%2", "%"}
+	quotes := []string{`"`, "`", `"'`, `\"`, `""`, "`\""}
+	encoded := []string{
+		"%2FUsers%2Fbruce%2F" + marker, "%2fUsers%2fbruce%2f" + marker, "%252FUsers%252Fbruce%252F" + marker,
+		"%25252FUsers%25252Fbruce%25252F" + marker, "C%3A%5CUsers%5Cbruce%5C" + marker, "%5C%5Cvault%5Cshare%5C" + marker,
+		"path=%2FUsers%2Fbruce%2F" + marker, "%2FUsers/bruce/" + marker,
+	}
+	n := 0
+	for _, pre := range prefixes {
+		for _, q := range quotes {
+			for _, enc := range encoded {
+				for _, post := range []string{"", " 200", `"`, ")", ","} {
+					in := pre + q + enc + post
+					for road, run := range map[string]func(string) string{"text": roots.redactPaths, "value": roots.redactValue} {
+						out := run(in)
+						for _, f := range decodedForms(out) {
+							if strings.Contains(f, marker) {
+								t.Errorf("[%s] marker survived\n in:  %q\n out: %q", road, in, out)
+								break
+							}
+						}
+						n++
+					}
+				}
+			}
+		}
+	}
+	if n < 5000 {
+		t.Fatalf("only %d cases", n)
+	}
+}
+
+// TestRedactPaths_JudgedSkipChangesNothing proves the skip in redactPathsAt is
+// safe by comparison, not by argument alone: on a large deterministic sample of
+// strings built from the bytes that matter (quotes, backticks, "%", the hex of an
+// encoded slash, tag and placeholder punctuation, slashes, a root's name), the
+// rewrite with the skip equals the rewrite without it, so a token that starts
+// inside an already judged extent is never one the whole token missed.
+func TestRedactPaths_JudgedSkipChangesNothing(t *testing.T) {
+	roots := advRoots()
+	alphabet := []string{`"`, "`", "%", "2", "F", "f", "5", "C", "c", "<", ">", "/", `\`, "U", "s", "x", ":", "root:lib", "lib", "b", "'", "(", ")", " ", ".", "@", "=", "?", "#", "api", "https://", "%2F", "%5C", "%25", "</b>", "<root:lib>", "<root:lib>/", "Users", "C:", "a"}
+	rng := rand.New(rand.NewPCG(7, 11))
+	for range 120_000 {
+		var b strings.Builder
+		for k, n := 0, 1+rng.IntN(14); k < n; k++ {
+			b.WriteString(alphabet[rng.IntN(len(alphabet))])
+		}
+		in := b.String()
+		for _, mode := range []scanMode{scanText, scanRoutePath} {
+			with, without := roots.scanPaths(in, 0, mode, true), roots.scanPaths(in, 0, mode, false)
+			if with != without {
+				t.Fatalf("the judged skip changed the rewrite of %q (mode %d)\n with:    %q\n without: %q", in, mode, with, without)
+			}
+		}
+	}
 }
 
 // TestRedactPaths_PathStartPastTheEndIsNotAPath: an empty string is not an
