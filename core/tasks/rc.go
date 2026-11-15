@@ -1,5 +1,5 @@
 // file: core/tasks/rc.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 485cb90e-f19f-43ac-911a-0ba9d24400dc
 // last-edited: 2026-11-15
 
@@ -263,8 +263,8 @@ func (rc *RC) Enqueue(kind Kind, params any, opts ...StartOption) (RunRef, error
 
 // Await waits for a child run and returns its outcome.
 //
-// While the child is alive (queued, waiting for its dependencies, running or
-// stopping) the executor keeps this run's liveness stamped, several times
+// While the child is alive (queued, waiting for its dependencies, running,
+// stopping or quiesced by a stand-down) the executor keeps this run's liveness stamped, several times
 // within its ProgressTimeout, so the watchdog does not stop a parent for
 // waiting on a long child. The stamp is liveness only: it is not progress
 // (ErrContinueInPlace still needs a real report) and it leaves the run
