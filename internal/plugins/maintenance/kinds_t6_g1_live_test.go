@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-14
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -934,6 +935,7 @@ func TestT6G1Kinds_RefusesUnwiredWritersAndReaders(t *testing.T) {
 	require.NotNil(t, base.ManualOnly.Series)
 	require.NotNil(t, base.ManualOnly.Authors)
 
+	previews := 0 // Preview runs that reached the writer guard
 	noWriters := base
 	noWriters.NewWriters = nil
 	emptyGroup := base
@@ -952,10 +954,18 @@ func TestT6G1Kinds_RefusesUnwiredWritersAndReaders(t *testing.T) {
 				def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(c.deps, nil), kind)
 				err := runT6G1Kind(t, def, mode, &t6g1GateWriter{}, "")
 				require.Error(t, err, "%s/%s/%v", name, kind, mode)
+				if mode == tasks.ModePreview && strings.Contains(err.Error(), "preview not supported") {
+					continue // the kind has no Preview run (prune-ai-journal)
+				}
+				if mode == tasks.ModePreview {
+					previews++
+				}
 				require.Contains(t, err.Error(), c.want, "%s/%s/%v", name, kind, mode)
 			}
 		}
 	}
+
+	require.Positive(t, previews, "no Preview run reached the writer guard; the Preview half pins nothing")
 
 	// One reader missing at a time, each named in the refusal. Series is a leg
 	// only of the two BookManualOnly kinds; auto-match builds its own.
