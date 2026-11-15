@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b2d6f0a8-4c17-4e93-9a5b-7d1e3c8f2a60
 // last-edited: 2026-11-15
 
@@ -369,12 +369,12 @@ func f803bMakeRef() *regexp.Regexp {
 // `+=` (appended with a space), at the start of a line (a recipe line starts with
 // a tab), with a trailing ` # comment` removed. A value is kept as written;
 // f803bExpand resolves the references in it.
-func f803bMakeVars(body string) map[string]string {
+func f803bMakeVars(body string) (map[string]string, error) {
 	vars := map[string]string{}
 	// A nil read function reads no file: an include line is skipped, as if the
 	// included file did not exist.
-	_ = f803bMakeVarsInto(vars, body, nil, 0)
-	return vars
+	err := f803bMakeVarsInto(vars, body, nil, 0)
+	return vars, err
 }
 
 func f803bMakeInclude() *regexp.Regexp {
@@ -407,7 +407,7 @@ func f803bMakeVarsInto(vars map[string]string, body string, read func(name strin
 			if len(bad) > 0 {
 				return fmt.Errorf("include %s: cannot resolve %s", m[1], strings.Join(bad, ", "))
 			}
-			for _, name := range strings.Fields(names) {
+			for name := range strings.FieldsSeq(names) {
 				inc, ok := read(name)
 				if !ok {
 					continue

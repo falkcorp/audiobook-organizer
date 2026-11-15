@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 0e5a8c31-7d92-4b64-a1f7-3c6e9d2b5a08
 // last-edited: 2026-11-15
 
@@ -337,7 +337,10 @@ func TestF803bMakeVars(t *testing.T) {
 		"L :=",
 		"url := http://x/#frag",
 	}, "\n")
-	got := f803bMakeVars(body)
+	got, err := f803bMakeVars(body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := map[string]string{"A": "one", "B": "two", "C": "three", "D": "first", "E": "a b", "F": "exported", "G": "over", "H": "default", "K": "nospace", "L": "", "url": "http://x/#frag"}
 	if len(got) != len(want) {
 		t.Errorf("variables = %v, want %v", got, want)
