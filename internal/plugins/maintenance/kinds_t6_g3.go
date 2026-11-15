@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g3.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 29eb0771-6105-406d-b32a-2a11e3535809
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -551,9 +551,18 @@ type t6g3Base struct {
 // both shells map (HEAD to registry.RunItemsOptions, native to
 // tasks.ItemsOptions).
 type t6g3ItemsOpts struct {
-	// Label is the progress label of item i of total. Called from worker
-	// goroutines: whatever it reads needs a mutex or atomic.
+	// Label is HEAD's progress label for a loop whose label reads running
+	// counters. Called from worker goroutines: whatever it reads needs a mutex
+	// or atomic. The native loop does not carry it: tasks.ItemsOptions.Label is
+	// pure (the item only) and is rendered before the item runs, so a counter
+	// label would show pre-item tallies and could step backwards. A counter
+	// label is dropped natively (seams.d/F5-08.md, F5-10.md and F5-11.md).
 	Label func(i, total int) string
+	// PureLabel is HEAD's label for a loop whose label reads only the item
+	// index and the total. Both loops carry it: HEAD's as Label, the native as
+	// the item-only tasks.ItemsOptions.Label (the item is the index). Set at
+	// most one of Label and PureLabel.
+	PureLabel func(i, total int) string
 	// Collect runs every item and joins the errors (HEAD's ErrModeCollect);
 	// otherwise the first error stops the loop.
 	Collect bool
@@ -573,7 +582,11 @@ func t6g3HeadItems(ctx context.Context, reporter sdk.Reporter, workers int) t6g3
 		for i := range idx {
 			idx[i] = i
 		}
-		opts := opsregistry.RunItemsOptions{Concurrency: workers, PerItemTimeout: o.ItemTimeout, Label: o.Label}
+		lbl := o.Label
+		if lbl == nil {
+			lbl = o.PureLabel
+		}
+		opts := opsregistry.RunItemsOptions{Concurrency: workers, PerItemTimeout: o.ItemTimeout, Label: lbl}
 		if o.Collect {
 			opts.ErrMode = opsregistry.ErrModeCollect
 		}
@@ -590,8 +603,10 @@ func t6g3NativeItems(rc *tasks.RC, par tasks.Parallelism) t6g3ItemsFunc {
 			idx[i] = i
 		}
 		opts := tasks.ItemsOptions[int]{ItemTimeout: o.ItemTimeout}
-		if o.Label != nil {
-			opts.Label = func(i int) string { return o.Label(i, n) }
+		// Only the index-only label crosses: the item is the index and the
+		// total is n, what HEAD's label saw. A counter label is dropped.
+		if o.PureLabel != nil {
+			opts.Label = func(i int) string { return o.PureLabel(i, n) }
 		}
 		if o.Collect {
 			opts.OnError = tasks.Collect

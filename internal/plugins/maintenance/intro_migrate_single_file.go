@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.6.5
+// version: 1.6.6
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
 // last-edited: 2026-11-15
 
@@ -257,7 +257,7 @@ func (p *Plugin) runIntroMigrateSingleFileCore(ctx context.Context, params intro
 		Concurrency:   8,
 		Reason:        "eight pages at once, HEAD's width: pages partition the library by book ID, so no two workers touch the same book_file row (UpdateBookFile is an unlocked read-modify-write)",
 		ProgressTotal: len(pages),
-		Label: func(i, t int) string {
+		PureLabel: func(i, t int) string {
 			return fmt.Sprintf("Page %d/%d", i+1, t)
 		},
 	}, func(ctx context.Context, pageIdx int) error {

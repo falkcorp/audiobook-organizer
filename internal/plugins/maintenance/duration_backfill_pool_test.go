@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_pool_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6df2f8ff-a5db-4063-902a-56a68a37c969
 // last-edited: 2026-11-15
 
@@ -268,7 +268,7 @@ func TestDurationPoolOn_DeclaresWorkersTimeoutDenominatorAndBookLabels(t *testin
 	if got.ItemTimeout <= 0 {
 		t.Fatal("a book must be bounded")
 	}
-	if l := got.Label(2, 3); l != "book gotham-3" {
+	if l := got.PureLabel(2, 3); l != "book gotham-3" {
 		t.Fatalf("label = %q", l)
 	}
 	if len(seen) != 2 || seen[0] != "gotham-1" || seen[1] != "gotham-3" {

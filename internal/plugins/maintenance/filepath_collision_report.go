@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/filepath_collision_report.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 80fcbf6b-a38f-4f44-86f4-7f1f06d2a0d2
 // last-edited: 2026-11-15
 
@@ -307,7 +307,7 @@ func t6g4BuildFilePathCollisionReport(ctx context.Context, store filePathCollisi
 		err = base.Each(ctx, len(items), t6g4EachOpts{
 			Concurrency: t6g4CPU,
 			Collect:     true,
-			Label: func(i, t int) string {
+			PureLabel: func(i, t int) string {
 				return fmt.Sprintf("Scanned shard %d/%d", i+1, t)
 			},
 		}, func(_ context.Context, shardIdx int) error {

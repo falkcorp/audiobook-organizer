@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.6.5
+// version: 1.6.6
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -2557,7 +2557,7 @@ func (r *cbRun) replanPending(items func(workers int) t6g3ItemsFunc, workers int
 	}
 	return items(workers)(len(ids), t6g3ItemsOpts{
 		// Label runs inside each worker goroutine: it reads its arguments only.
-		Label: func(i, total int) string {
+		PureLabel: func(i, total int) string {
 			return fmt.Sprintf("Credits backfill: planning split credits again %d/%d", i+1, total)
 		},
 	}, func(_ context.Context, i int) error {

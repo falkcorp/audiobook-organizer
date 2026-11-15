@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
 // last-edited: 2026-11-15
 
@@ -441,9 +441,9 @@ func planMergeSamePathDupesVia(ctx context.Context, store mergeSamePathStore, me
 	prog.Start(fmt.Sprintf("Classifying %d shared-path group(s)…", len(groups)))
 
 	err := env.Items(ctx, len(groups), t6g5ItemsOpts{
-		Pool:    missingFileStatPool(),
-		Collect: true,
-		Label:   func(i, t int) string { return fmt.Sprintf("Classified %d/%d groups", i+1, t) },
+		Pool:      missingFileStatPool(),
+		Collect:   true,
+		PureLabel: func(i, t int) string { return fmt.Sprintf("Classified %d/%d groups", i+1, t) },
 	}, func(_ context.Context, gi int) error {
 		g := groups[gi]
 		idx := -1

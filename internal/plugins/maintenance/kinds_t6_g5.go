@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 30f92b7b-033e-4403-927a-99445211075c
 // last-edited: 2026-11-15
 
@@ -101,9 +101,18 @@ func t6g5CPUPool() t6g5Pool {
 type t6g5ItemsOpts struct {
 	// Pool is the loop's worker count (rule R4).
 	Pool t6g5Pool
-	// Label is the progress label of item i of total. Called from worker
-	// goroutines: whatever it reads needs a mutex or atomic.
+	// Label is HEAD's progress label for a loop whose label reads running
+	// counters. Called from worker goroutines: whatever it reads needs a mutex
+	// or atomic. The native loop does not carry it: tasks.ItemsOptions.Label is
+	// pure (the item only) and is rendered before the item runs, so a counter
+	// label would show pre-item tallies and could step backwards. A counter
+	// label is dropped natively (seams.d/F5-10.md).
 	Label func(i, total int) string
+	// PureLabel is HEAD's label for a loop whose label reads only the item
+	// index and the total. Both loops carry it: HEAD's as Label, the native as
+	// the item-only tasks.ItemsOptions.Label (the item is the index). Set at
+	// most one of Label and PureLabel.
+	PureLabel func(i, total int) string
 	// Collect runs every item and joins the errors (HEAD's ErrModeCollect);
 	// otherwise the first error stops the loop.
 	Collect bool
@@ -121,7 +130,11 @@ func t6g5HeadItems(reporter sdk.Reporter) t6g5ItemsFunc {
 		for i := range idx {
 			idx[i] = i
 		}
-		opts := opsregistry.RunItemsOptions{Concurrency: o.Pool.Workers, Label: o.Label}
+		lbl := o.Label
+		if lbl == nil {
+			lbl = o.PureLabel
+		}
+		opts := opsregistry.RunItemsOptions{Concurrency: o.Pool.Workers, Label: lbl}
 		if o.Collect {
 			opts.ErrMode = opsregistry.ErrModeCollect
 		}
@@ -139,8 +152,10 @@ func t6g5NativeItems(rc *tasks.RC) t6g5ItemsFunc {
 			idx[i] = i
 		}
 		opts := tasks.ItemsOptions[int]{}
-		if o.Label != nil {
-			opts.Label = func(i int) string { return o.Label(i, n) }
+		// Only the index-only label crosses: the item is the index and the
+		// total is n, what HEAD's label saw. A counter label is dropped.
+		if o.PureLabel != nil {
+			opts.Label = func(i int) string { return o.PureLabel(i, n) }
 		}
 		if o.Collect {
 			opts.OnError = tasks.Collect

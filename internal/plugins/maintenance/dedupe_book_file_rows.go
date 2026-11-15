@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.13.5
+// version: 1.13.6
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-11-15
 
@@ -645,7 +645,7 @@ func (p *Plugin) runDedupeBookFileRowsCore(ctx context.Context, params DedupeBoo
 		// Per-book failures are already counted and logged above, and the callback
 		// returns nil for them, so this mainly governs cancellation semantics.
 		Collect: true,
-		Label: func(i, total int) string {
+		PureLabel: func(i, total int) string {
 			return fmt.Sprintf("book %d/%d", i+1, total)
 		},
 	}
