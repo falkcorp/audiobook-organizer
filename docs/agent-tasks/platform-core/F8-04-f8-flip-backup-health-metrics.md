@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md -->
-<!-- version: 1.1.6 -->
+<!-- version: 1.1.7 -->
 <!-- guid: 9c425807-35e2-4fe7-9289-5de6f5478ebe -->
 <!-- last-edited: 2026-11-15 -->
 
@@ -11,7 +11,7 @@
 | Release | R2, flip F8 (the flip PR) |
 | Tier | **T4** (Opus / xhigh–max): every flip PR is T4; this one changes the `/health` callers, the Basic-gate exempt set, the metrics mount and the backup owner |
 | Wave | W38 (alone: the only PR of its wave; it owns `main.go`, `internal/server/`, books' registration and the kernel and module wiring files in W38). Runs inside an announced **move window** |
-| Depends on | F7-09, F8-01, F8-02, F8-03 |
+| Depends on | F7-09, F8-01, F8-02, F8-03, F8-03b |
 | Owns gate tests | the dashboard-reference test over the kernel `/metrics` mount (extension of `TestDeployReferencedSeriesServed`); `TestLegacyArchiveRestoreThenMigrate` (F8-01 landed its staging half) |
 | Spec | 09 §9.4 R2 flips table row F8, §9.6 rows 3 and 19, §9.2.7 (F8 moves the mount only), §9.2.9 (one PR per rename, every caller); 03 §3.8 F8; 05-backup §5B.10, B1, B7; 05-updater §5U.10, §5U.12; 05-health §5H.3.3, §5H.10 (row F8); 05-metrics §6, §12, §13; 05-http-api §8.1 (F8 row), §12; 06 §6.4.10 (F8 row); 04 §8.1 F8 |
 
@@ -20,7 +20,7 @@ the subsystems, deletes what they replace and switches every first-party caller 
 boots and passes e2e. It merges alone in its wave. The R2 freeze is on (since F3-08, which merged before F3-07): do not touch
 `.github/workflows/prerelease.yml`.
 
-> **STOP: do not mount `healthhttp` or the diagnostics routes, and do not build the diagnostics `Exporter`, until F8-03b merges.** The path redactor F8-03 shipped does not make a bundle safe to share (usernames and directory trees leak for names with spaces, `~user`, `smb://` paths and build flags; see `docs/agent-tasks/platform-core/seams.d/F8-03.md`, "Round 8"). F8-03b (`todo.d/2026-11-15-f8-03b-share-safe-bundle.md`) replaces it. `archtest.F803bGate` fails the build while `diagnostics.RedesignPendingF8_03b` is true and non-test code imports `core/internal/healthhttp` or constructs the Exporter. F8-03b is a dependency of this row's item 3 (Health) in addition to F8-03.
+> **STOP: do not mount `healthhttp` or the diagnostics routes, and do not build the diagnostics `Exporter`, until F8-03b merges.** The path redactor F8-03 shipped does not make a bundle safe to share (usernames and directory trees leak for names with spaces, `~user`, `smb://` paths and build flags; see `docs/agent-tasks/platform-core/seams.d/F8-03.md`, "Round 8"). F8-03b (`docs/agent-tasks/platform-core/F8-03b-share-safe-bundle.md`, TODO id `TODO-F8-03B-SHARE-SAFE-BUNDLE`) replaces it. While `diagnostics.RedesignPendingF8_03b` is true, `diagnostics.New` and `Exporter.Build` return `diagnostics.ErrRedesignPendingF8_03b` outside a test binary, from any module, so a bundle cannot be built by accident; `archtest.F803bGate` also fails the build if core's non-test code imports `core/internal/healthhttp` or constructs the Exporter. F8-03b is a dependency of this row (its item 3, Health, mounts the routes) in addition to F8-03.
 
 ## START HERE (do this first, exactly)
 

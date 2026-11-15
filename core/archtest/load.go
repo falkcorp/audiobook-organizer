@@ -1,7 +1,7 @@
 // file: core/archtest/load.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 62e56953-af8e-4e5b-a936-1a80e6b6953d
-// last-edited: 2026-11-05
+// last-edited: 2026-11-15
 
 package archtest
 
@@ -31,6 +31,12 @@ type Package struct {
 	// GoFiles are the absolute paths of its non-test Go files (GoFiles and
 	// CgoFiles) under any loaded tag set.
 	GoFiles []string
+	// IgnoredGoFiles are the absolute paths of the non-test Go files that
+	// build constraints exclude under EVERY loaded tag set (a file compiled
+	// under any one set is in GoFiles instead). Nothing builds them, so only a
+	// syntactic check can see them; a check that reads imports or references
+	// parses these too.
+	IgnoredGoFiles []string
 	// TestGoFiles are the absolute paths of its _test.go files (in-package and
 	// external) under any loaded tag set.
 	TestGoFiles []string
@@ -68,15 +74,16 @@ type listPackage struct {
 		Path string
 		Main bool
 	}
-	GoFiles      []string
-	CgoFiles     []string
-	TestGoFiles  []string
-	XTestGoFiles []string
-	Imports      []string
-	TestImports  []string
-	XTestImports []string
-	Error        *listError
-	DepsErrors   []*listError
+	GoFiles        []string
+	CgoFiles       []string
+	IgnoredGoFiles []string
+	TestGoFiles    []string
+	XTestGoFiles   []string
+	Imports        []string
+	TestImports    []string
+	XTestImports   []string
+	Error          *listError
+	DepsErrors     []*listError
 }
 
 type listError struct {
@@ -152,6 +159,7 @@ func Load(opts LoadOptions) (map[string]*Package, error) {
 				out[lp.ImportPath] = p
 			}
 			p.GoFiles = appendAbs(p.GoFiles, lp.Dir, lp.GoFiles, lp.CgoFiles)
+			p.IgnoredGoFiles = appendAbs(p.IgnoredGoFiles, lp.Dir, nonTestFiles(lp.IgnoredGoFiles))
 			p.TestGoFiles = appendAbs(p.TestGoFiles, lp.Dir, lp.TestGoFiles, lp.XTestGoFiles)
 			p.Imports = append(p.Imports, lp.Imports...)
 			p.TestImports = append(p.TestImports, lp.TestImports...)
@@ -164,6 +172,7 @@ func Load(opts LoadOptions) (map[string]*Package, error) {
 	}
 	for _, p := range out {
 		p.GoFiles = uniq(p.GoFiles)
+		p.IgnoredGoFiles = without(uniq(p.IgnoredGoFiles), p.GoFiles)
 		p.TestGoFiles = uniq(p.TestGoFiles)
 		p.Imports = uniq(p.Imports)
 		p.TestImports = uniq(p.TestImports)
@@ -226,7 +235,7 @@ func embedOutputListed(opts LoadOptions, lp listPackage, pattern string) bool {
 
 func goList(dir string, set TagSet, patterns []string) ([]listPackage, error) {
 	args := []string{"list", "-e", "-deps", "-test",
-		"-json=ImportPath,Dir,ForTest,Standard,Module,GoFiles,CgoFiles,TestGoFiles,XTestGoFiles,Imports,TestImports,XTestImports,EmbedPatterns,EmbedFiles,Error,DepsErrors"}
+		"-json=ImportPath,Dir,ForTest,Standard,Module,GoFiles,CgoFiles,IgnoredGoFiles,TestGoFiles,XTestGoFiles,Imports,TestImports,XTestImports,EmbedPatterns,EmbedFiles,Error,DepsErrors"}
 	if len(set.Tags) > 0 {
 		args = append(args, "-tags", strings.Join(set.Tags, ","))
 	}
@@ -278,6 +287,32 @@ func appendAbs(dst []string, dir string, lists ...[]string) []string {
 		}
 	}
 	return dst
+}
+
+// nonTestFiles is names without the _test.go files.
+func nonTestFiles(names []string) []string {
+	var out []string
+	for _, n := range names {
+		if !strings.HasSuffix(n, "_test.go") {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// without is s minus the members of drop, in order; nil when nothing is left.
+func without(s, drop []string) []string {
+	skip := make(map[string]bool, len(drop))
+	for _, d := range drop {
+		skip[d] = true
+	}
+	var out []string
+	for _, f := range s {
+		if !skip[f] {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func uniq(s []string) []string {

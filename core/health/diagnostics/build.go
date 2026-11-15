@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/build.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: 0e48d09a-7583-4133-9749-d96bbfaf2aa5
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package diagnostics
 
@@ -15,6 +15,7 @@ import (
 	"os"
 	"runtime/debug"
 	"slices"
+	"testing"
 	"time"
 
 	"github.com/falkcorp/mediacore/log"
@@ -131,7 +132,8 @@ type Config struct {
 	Redactor *log.Redactor
 	// Roots are the known filesystem roots (the library roots): an absolute
 	// path inside one is written "<root:NAME>/...", any other absolute path
-	// "<path>", in every string of the bundle.
+	// "<path>", in every string of the bundle (within the limits listed in
+	// seams.d/F8-03.md Round 8; F8-03b).
 	Roots   []PathRoot
 	Metrics MetricsSink
 	// Now is the clock; nil means time.Now.
@@ -148,6 +150,17 @@ type Config struct {
 type Exporter struct {
 	cfg      Config
 	sections []Section
+	// isTestBinary is testing.Testing unless a test replaces it; nil (a zero
+	// Exporter) means testing.Testing. redesignRefusal reads it.
+	isTestBinary func() bool
+}
+
+// testBinary reports whether the process is a test binary.
+func (e *Exporter) testBinary() bool {
+	if e.isTestBinary != nil {
+		return e.isTestBinary()
+	}
+	return testing.Testing()
 }
 
 // manage is the permission every core section needs: what starting a bundle
@@ -158,7 +171,16 @@ func manage() rbac.Requirement { return rbac.Need("core:system.manage") }
 // contributors'. A malformed section (bad name, no Write, zero or delegated
 // Perm, a duplicate name, the reserved core.manifest) is an error here, at
 // boot, not a hole in a bundle later.
-func New(cfg Config) (*Exporter, error) {
+//
+// While RedesignPendingF8_03b is true, New returns ErrRedesignPendingF8_03b
+// outside a test binary, before it looks at cfg.
+func New(cfg Config) (*Exporter, error) { return newExporter(cfg, testing.Testing) }
+
+// newExporter is New with the test-binary probe passed in.
+func newExporter(cfg Config, isTestBinary func() bool) (*Exporter, error) {
+	if err := redesignRefusal(RedesignPendingF8_03b, isTestBinary); err != nil {
+		return nil, err
+	}
 	if cfg.Root == nil {
 		return nil, errors.New("diagnostics: Config.Root is nil")
 	}
@@ -177,7 +199,7 @@ func New(cfg Config) (*Exporter, error) {
 	if cfg.BuildInfo == nil {
 		cfg.BuildInfo = debug.ReadBuildInfo
 	}
-	e := &Exporter{cfg: cfg}
+	e := &Exporter{cfg: cfg, isTestBinary: isTestBinary}
 	all := e.coreSections()
 	for _, c := range cfg.Contributors {
 		if c == nil {
@@ -291,6 +313,10 @@ type build struct {
 	truncated []string
 	limit     int64
 	now       func() time.Time
+	// keyProbes is how many lookups in an object being rebuilt walkObject's
+	// key naming has made in this run (keyNamer.probes, summed). Nothing reads
+	// it outside tests: it is the deterministic measure of the naming cost.
+	keyProbes int
 }
 
 // ValidRunID reports whether id is safe as a file name stem: letters, digits,
@@ -351,7 +377,15 @@ func checkStampedActor(stamped tasks.Actor, p ExportParams) error {
 // actor other than p.ActorID gets ErrActorMismatch and no file.
 // progress (nil allowed) is called after each section with how many are done of
 // how many are planned.
+//
+// While RedesignPendingF8_03b is true, Build returns ErrRedesignPendingF8_03b
+// outside a test binary and writes nothing.
 func (e *Exporter) Build(ctx context.Context, runID string, actor tasks.Actor, p ExportParams, progress func(done, total int)) (res ExportResult, err error) {
+	// First, before the actor check, the run id or any file: while the path
+	// redactor is the one F8-03b replaces, no bundle is written outside a test.
+	if err := redesignRefusal(RedesignPendingF8_03b, e.testBinary); err != nil {
+		return ExportResult{}, err
+	}
 	if err := checkStampedActor(actor, p); err != nil {
 		e.countBundle("error")
 		return ExportResult{}, err

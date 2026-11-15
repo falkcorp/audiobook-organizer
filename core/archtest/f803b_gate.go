@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_gate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e7a1c92-6b35-4d08-a9f1-2c5d8e03b764
 // last-edited: 2026-11-15
 
@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,11 @@ const (
 	// f803bMarker is the constant in diagnostics that says the redactor is
 	// still the one the round 7 review of F8-03 rejected.
 	f803bMarker = "RedesignPendingF8_03b"
+	// f803bScanner1 and f803bScanner2 are the functions of diagnostics' path
+	// redactor that the marker stands for: while one of them is declared in a
+	// non-test file of the package, the redesign is pending, whatever the marker
+	// says.
+	f803bScanner1, f803bScanner2 = "scanPaths", "tokenAt"
 	// f803bBlocked ends every finding: the text a developer reads when F8-04
 	// (or anything else) tries to mount the diagnostics routes.
 	f803bBlocked = "mount is blocked until F8-03b replaces the path redactor; see seams.d/F8-03.md"
@@ -34,7 +40,14 @@ const (
 // F803bGate fails t while diagnostics.RedesignPendingF8_03b is true and a
 // non-test file imports core/internal/healthhttp or constructs the bundle
 // Exporter (diagnostics.New, or a diagnostics.Exporter composite literal or
-// new(diagnostics.Exporter)).
+// new(diagnostics.Exporter)), and fails it when the marker is false while the
+// scanner it stands for (scanPaths, tokenAt) is still declared in diagnostics.
+//
+// This is the early signal, with a file and a line. The refusal that holds is in
+// diagnostics itself: New and Build return ErrRedesignPendingF8_03b outside a
+// test binary while the marker is true, from any module, so the root module, a
+// wrapper or a constructor inside diagnostics is stopped at run time even though
+// this guard scans only core and matches only the names it knows.
 //
 // The F8-03 round 7 review found that the path redactor in
 // core/health/diagnostics leaks usernames and directory trees in realistic
@@ -46,7 +59,9 @@ const (
 // diagnostics itself and, for the import rule, healthhttp itself.
 //
 // The guard counts imports and references, not calls, so an alias, a blank
-// import, a dot import or a function value is caught. It does not look for
+// import, a dot import or a function value is caught. It is syntactic, so it
+// also parses the files that build constraints exclude under every tag set
+// (go list's IgnoredGoFiles). It does not look for
 // //go:linkname: reaching either package that way is deliberate work, not a
 // slip, and the review of the F8-04 change is where it would show.
 //
@@ -76,8 +91,10 @@ func F803bGate(t testing.TB) {
 // It returns nil when the marker is false. It returns an error when the load
 // fails, when diagnostics is not among the loaded packages, when the marker is
 // not a plain true or false constant of diagnostics (it was renamed or removed
-// without removing this guard: F8-03b deletes both together), or when no
-// non-test file was scanned: each would make the guard pass without looking.
+// without removing this guard: F8-03b deletes both together), when the marker is
+// false while scanPaths or tokenAt are still declared in diagnostics (the flip
+// that would open the gate without replacing the scanner), or when no non-test
+// file was scanned: each would make the guard pass without looking.
 func F803bGateFindings(dir string) ([]string, error) {
 	pkgs, err := Load(LoadOptions{Dir: dir, TagSets: TagSets()})
 	if err != nil {
@@ -94,11 +111,11 @@ func F803bGateFindings(dir string) ([]string, error) {
 	var out []string
 	scanned := 0
 	for _, p := range pkgs {
-		for _, f := range p.GoFiles {
-			scanned++
-			if !pending {
-				continue
-			}
+		scanned += len(p.GoFiles)
+		if !pending {
+			continue
+		}
+		for _, f := range slices.Concat(p.GoFiles, p.IgnoredGoFiles) {
 			found, err := f803bUses(f, p.ImportPath)
 			if err != nil {
 				return nil, err
@@ -116,8 +133,14 @@ func F803bGateFindings(dir string) ([]string, error) {
 // f803bPending reads diagnostics.RedesignPendingF8_03b from the package's
 // non-test files. The marker is read from source so the guard needs no import of
 // diagnostics (archtest imports no package it guards) and so a fixture tree can
-// carry either value.
+// carry either value. A false marker is only believed when the scanner it stands
+// for is gone: scanPaths or tokenAt still declared in a non-test file is an
+// error, so the marker cannot be flipped to open the gate.
 func f803bPending(files []string) (bool, error) {
+	var (
+		pending, found bool
+		scanner        []string
+	)
 	for _, file := range files {
 		fset := token.NewFileSet()
 		af, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
@@ -125,29 +148,42 @@ func f803bPending(files []string) (bool, error) {
 			return false, fmt.Errorf("parse %s: %v", file, err)
 		}
 		for _, d := range af.Decls {
-			gd, ok := d.(*ast.GenDecl)
-			if !ok || gd.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range gd.Specs {
-				vs := spec.(*ast.ValueSpec)
-				for i, name := range vs.Names {
-					if name.Name != f803bMarker {
-						continue
+			switch d := d.(type) {
+			case *ast.FuncDecl:
+				if d.Recv == nil && (d.Name.Name == f803bScanner1 || d.Name.Name == f803bScanner2) {
+					scanner = append(scanner, d.Name.Name)
+				}
+			case *ast.GenDecl:
+				if d.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range d.Specs {
+					vs := spec.(*ast.ValueSpec)
+					for i, name := range vs.Names {
+						if name.Name != f803bMarker {
+							continue
+						}
+						if i >= len(vs.Values) {
+							return false, fmt.Errorf("archtest: %s.%s has no value in %s", diagnosticsPath, f803bMarker, file)
+						}
+						id, ok := vs.Values[i].(*ast.Ident)
+						if !ok || (id.Name != "true" && id.Name != "false") {
+							return false, fmt.Errorf("archtest: %s.%s must be the literal true or false (%s)", diagnosticsPath, f803bMarker, file)
+						}
+						pending, found = id.Name == "true", true
 					}
-					if i >= len(vs.Values) {
-						return false, fmt.Errorf("archtest: %s.%s has no value in %s", diagnosticsPath, f803bMarker, file)
-					}
-					id, ok := vs.Values[i].(*ast.Ident)
-					if !ok || (id.Name != "true" && id.Name != "false") {
-						return false, fmt.Errorf("archtest: %s.%s must be the literal true or false (%s)", diagnosticsPath, f803bMarker, file)
-					}
-					return id.Name == "true", nil
 				}
 			}
 		}
 	}
-	return false, fmt.Errorf("archtest: %s.%s is not declared in the %d non-test file(s) of the package: if F8-03b removed it, remove the F8-03b gate (core/archtest/f803b_gate.go) with it; otherwise the guard would be vacuous", diagnosticsPath, f803bMarker, len(files))
+	if !found {
+		return false, fmt.Errorf("archtest: %s.%s is not declared in the %d non-test file(s) of the package: if F8-03b removed it, remove the F8-03b gate (core/archtest/f803b_gate.go) with it; otherwise the guard would be vacuous", diagnosticsPath, f803bMarker, len(files))
+	}
+	if !pending && len(scanner) > 0 {
+		slices.Sort(scanner)
+		return false, fmt.Errorf("archtest: %s.%s is false while the path scanner it stands for is still declared (%s): the marker is not a switch; F8-03b replaces the scanner and deletes the marker and this guard in the same change", diagnosticsPath, f803bMarker, strings.Join(uniq(scanner), ", "))
+	}
+	return pending, nil
 }
 
 // f803bUses parses one non-test file of package pkg and reports its import of
