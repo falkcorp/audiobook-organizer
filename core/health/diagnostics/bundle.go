@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-15
 
@@ -439,22 +439,28 @@ func (st *build) walkObject(x map[string]any, depth int) map[string]any {
 	out := make(map[string]any, len(x))
 	next := map[string]int{}
 	for _, k := range keys {
-		base := st.redactKey(k)
-		nk := base
-		if _, taken := out[nk]; taken {
-			n := max(next[base], 2)
-			for {
-				nk = base + "#" + strconv.Itoa(n)
-				n++
-				if _, taken := out[nk]; !taken {
-					break
-				}
-			}
-			next[base] = n
-		}
-		out[nk] = st.walkMember(k, x[k], depth+1)
+		out[uniqueKey(out, next, st.redactKey(k))] = st.walkMember(k, x[k], depth+1)
 	}
 	return out
+}
+
+// uniqueKey is the name base gets in out: base itself when it is free, else
+// base#2, base#3, ... the first of those that is free. next is the caller's
+// per-base counter (the first suffix not yet tried for that base) and is updated
+// here; it makes the search resume where the last one for the same base stopped.
+func uniqueKey(out map[string]any, next map[string]int, base string) string {
+	if _, taken := out[base]; !taken {
+		return base
+	}
+	n := max(next[base], 2)
+	for {
+		nk := base + "#" + strconv.Itoa(n)
+		n++
+		if _, taken := out[nk]; !taken {
+			next[base] = n
+			return nk
+		}
+	}
 }
 
 // walkMember redacts the value of object member k. A deny-listed key replaces

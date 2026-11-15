@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle_keys_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d2f4a61-7c03-4e95-b1a8-3f6e0c9d5b72
 // last-edited: 2026-11-15
 
@@ -122,14 +122,14 @@ func collidingKeys(n int) map[string]any {
 	return x
 }
 
-// timeKeys is the best of scalingAttempts walks of x. A run over the bound is
+// timeBest is the best of scalingAttempts runs of f. A run over the bound is
 // repeated only when it is under 4 times the bound: a stalled runner slows one
-// run, and a quadratic walk (12.8 s for 16,000 keys) must not be run three times.
-func timeKeys(x map[string]any) (out map[string]any, best time.Duration) {
-	st := keysBuild()
+// run, and a quadratic search (12.8 s for 16,000 keys) must not be run three
+// times.
+func timeBest(f func()) (best time.Duration) {
 	for i := range scalingAttempts {
 		start := time.Now()
-		out = st.walkObject(x, 0)
+		f()
 		d := time.Since(start)
 		if i == 0 || d < best {
 			best = d
@@ -138,37 +138,58 @@ func timeKeys(x map[string]any) (out map[string]any, best time.Duration) {
 			break
 		}
 	}
-	return out, best
+	return best
 }
 
-// TestWalkObject_CollidingKeysAreLinear (round 8, M5): the suffix of the n-th key
+// TestUniqueKey_CollidingKeysAreLinear (round 8, M5): the suffix of the n-th key
 // that collapses to the same text used to be found by probing from "#2", so n keys
 // cost n*n/2 probes: 16,000 path keys took 12.8 s, a 100,000-file section would
-// outlast the 30-minute task. 16,000 and 64,000 colliding keys are walked under
-// the bound, every member is kept under its own name, and quadrupling the keys
-// costs about four times as much, not sixteen.
-func TestWalkObject_CollidingKeysAreLinear(t *testing.T) {
-	var small time.Duration
-	for _, n := range []int{16_000, 64_000} {
-		x := collidingKeys(n)
-		out, d := timeKeys(x)
-		t.Logf("%d colliding keys: %s", n, d)
+// outlast the 30-minute task. The naming is measured on its own, because the
+// redaction of the keys costs 50 times as much per key under -race and coverage and
+// core-ci runs 2.7 times slower than a workstation (64,000 whole keys took 3.3 s
+// there): 16,000, 64,000 and 256,000 colliding keys are named under the bound,
+// every member keeps its own name in key order, and quadrupling the keys costs
+// about four times as much, not sixteen.
+func TestUniqueKey_CollidingKeysAreLinear(t *testing.T) {
+	var prev time.Duration
+	for _, n := range []int{16_000, 64_000, 256_000} {
+		var out map[string]any
+		d := timeBest(func() {
+			out = make(map[string]any, n)
+			next := map[string]int{}
+			for i := range n {
+				out[uniqueKey(out, next, "<path>")] = i
+			}
+		})
+		t.Logf("%d colliding keys named in %s", n, d)
 		if d > scalingBound {
 			t.Fatalf("%d colliding keys took %s in each of up to %d runs, want under %s: the suffix search is not linear", n, d, scalingAttempts, scalingBound)
 		}
-		if len(out) != n {
-			t.Fatalf("%d members, want %d", len(out), n)
+		if len(out) != n || out["<path>"] != 0 || out["<path>#2"] != 1 || out[fmt.Sprintf("<path>#%d", n)] != n-1 {
+			t.Fatalf("%d keys: %d members, <path>=%v <path>#2=%v <path>#%d=%v", n, len(out), out["<path>"], out["<path>#2"], n, out[fmt.Sprintf("<path>#%d", n)])
 		}
-		// The first key in sorted order keeps the bare name, the k-th (k >= 2) is
-		// "<path>#k".
-		sorted := slices.Sorted(maps.Keys(x))
-		if out["<path>"] != x[sorted[0]] || out["<path>#2"] != x[sorted[1]] || out[fmt.Sprintf("<path>#%d", n)] != x[sorted[n-1]] {
-			t.Errorf("%d keys: suffixes are not in key order: <path>=%v <path>#2=%v <path>#%d=%v", n, out["<path>"], out["<path>#2"], n, out[fmt.Sprintf("<path>#%d", n)])
+		if prev > 0 && d > 10*max(prev, 25*time.Millisecond) {
+			t.Errorf("4x the keys took %s against %s: more than ten times, the cost is not linear", d, prev)
 		}
-		if n == 16_000 {
-			small = d
-		} else if d > 10*max(small, 25*time.Millisecond) {
-			t.Errorf("4x the keys took %s against %s: more than ten times, the cost is not linear", d, small)
-		}
+		prev = d
+	}
+}
+
+// TestWalkObject_CollidingKeysWalkInTime: the whole walk, with the redaction of
+// every key, over 16,000 keys that all redact to "<path>" (17 s with the
+// quadratic search, 0.3 s to 0.8 s under -race and coverage on a workstation and on
+// core-ci), keeps every member under its own name in sorted key order.
+func TestWalkObject_CollidingKeysWalkInTime(t *testing.T) {
+	const n = 16_000
+	x := collidingKeys(n)
+	var out map[string]any
+	d := timeBest(func() { out = keysBuild().walkObject(x, 0) })
+	t.Logf("%d colliding keys walked in %s", n, d)
+	if d > scalingBound {
+		t.Fatalf("%d colliding keys took %s in each of up to %d runs, want under %s: the suffix search is not linear", n, d, scalingAttempts, scalingBound)
+	}
+	sorted := slices.Sorted(maps.Keys(x))
+	if len(out) != n || out["<path>"] != x[sorted[0]] || out["<path>#2"] != x[sorted[1]] || out[fmt.Sprintf("<path>#%d", n)] != x[sorted[n-1]] {
+		t.Errorf("%d members, want %d in key order: <path>=%v <path>#2=%v", len(out), n, out["<path>"], out["<path>#2"])
 	}
 }
