@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-15
 
@@ -445,9 +445,9 @@ func t6g1LiveCases() []t6g1LiveCase {
 				a, err := s.CreateAuthor("Bruce Wayne")
 				require.NoError(t, err)
 				for i := range 3 {
-					pathLinkCreateBook(t, s, fmt.Sprintf("fill%d", i), fmt.Sprintf("/mnt/bigdata/books/audiobook-organizer/Filler/f%d/x.m4b", i), &a.ID)
+					pathLinkCreateBook(t, s, fmt.Sprintf("fill%d", i), fmt.Sprintf("/lib/Filler/f%d/x.m4b", i), &a.ID)
 				}
-				pathLinkCreateBook(t, s, "link-me", "/mnt/bigdata/books/audiobook-organizer/Bruce Wayne/Year One/x.m4b", nil)
+				pathLinkCreateBook(t, s, "link-me", "/lib/Bruce Wayne/Year One/x.m4b", nil)
 				return p.deps(s), func(t *testing.T, _ *t6g1Host, res json.RawMessage) {
 					var r authorPathLinkResult
 					require.NoError(t, json.Unmarshal(res, &r))
