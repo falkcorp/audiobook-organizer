@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
 // last-edited: 2026-11-15
 
@@ -659,6 +659,32 @@ func TestT6G3Kinds_MatchHEADDefs(t *testing.T) {
 	}
 }
 
+// Every Effects resource of the group-3 kinds (writes, reads and deletes)
+// belongs to module "books": t6g3Res is the only constructor, and nothing in the
+// kind tests read the module it files a resource under.
+func TestT6G3Kinds_EffectsResourcesAreBooksModule(t *testing.T) {
+	defs := (&Plugin{}).t6g3Kinds(fakeT6G3Deps(t), nil)
+	require.Len(t, defs, len(t6g3Wants))
+	for _, d := range defs {
+		e := tasks.CommonOf(d).Effects
+		if !e.IsReadOnly() {
+			require.NotEmpty(t, e.WriteSet(), "%s: a writer declares a write set", d.Kind())
+		}
+		inBooks := func(module, kind string) {
+			assert.Equal(t, "books", module, "%s: resource %q is filed under module %q", d.Kind(), kind, module)
+		}
+		for _, r := range e.WriteSet() {
+			inBooks(r.Module, r.Kind)
+		}
+		for _, r := range e.ReadSet() {
+			inBooks(r.Module, r.Kind)
+		}
+		for _, r := range e.DeleteSet() {
+			inBooks(r.Module, r.Kind)
+		}
+	}
+}
+
 // TestT6G3_LoopParallelism pins rule R4 for each in-body loop, as literals.
 func TestT6G3_LoopParallelism(t *testing.T) {
 	assert.Equal(t, "cpu", creditCensusParallelism().String(), "HEAD: runtime.NumCPU()")
@@ -836,9 +862,11 @@ func TestT6G3_CreditsBackfillPreviewWritesNothing(t *testing.T) {
 }
 
 // Every native shell that writes refuses a mode key (decision 3), under every
-// spelling and case, in Preview and in Live: one row per kind per key. The
-// refusal comes before the live-only check, the store and the writer, so nothing
-// is written and the error is the mode-key one in both modes.
+// spelling and case, in Preview and in Live: one row per kind per key per value.
+// The rule is that the KEY's presence is refused, so a falsy value (false) is
+// refused exactly like true. The refusal comes before the live-only check, the
+// store and the writer, so nothing is written and the error is the mode-key one
+// in both modes.
 func TestT6G3_ModeKeysAreRefused(t *testing.T) {
 	kinds := map[string]string{
 		"maintenance.purge-deleted":               `{%q:true}`,
@@ -855,19 +883,23 @@ func TestT6G3_ModeKeysAreRefused(t *testing.T) {
 		"maintenance.credits-backfill":            `{%q:true}`,
 	}
 	keys := []string{"dry_run", "DRY_RUN", "dryRun", "DryRun", "apply", "APPLY", "Apply"}
+	values := []string{"true", "false"}
 	modes := map[string]tasks.Mode{"preview": tasks.ModePreview, "live": tasks.ModeLive}
 	for id, tmpl := range kinds {
 		for _, key := range keys {
-			for mname, mode := range modes {
-				t.Run(id+"/"+key+"/"+mname, func(t *testing.T) {
-					f := newT6G3Fake(t)
-					d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(f.deps(), nil), id)
-					_, rc := newT6G3Host(d.Kind(), mode, &t6g3Gate{})
-					_, err := t6g3Run(t, d, rc, fmt.Sprintf(tmpl, key))
-					require.Error(t, err)
-					assert.Contains(t, err.Error(), "mode comes from the start request")
-					assert.Empty(t, f.writer.called())
-				})
+			for _, val := range values {
+				params := fmt.Sprintf(strings.Replace(tmpl, ":true}", ":"+val+"}", 1), key)
+				for mname, mode := range modes {
+					t.Run(id+"/"+key+"="+val+"/"+mname, func(t *testing.T) {
+						f := newT6G3Fake(t)
+						d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(f.deps(), nil), id)
+						_, rc := newT6G3Host(d.Kind(), mode, &t6g3Gate{})
+						_, err := t6g3Run(t, d, rc, params)
+						require.Error(t, err, "%s: %s", id, params)
+						assert.Contains(t, err.Error(), "mode comes from the start request")
+						assert.Empty(t, f.writer.called())
+					})
+				}
 			}
 		}
 	}
