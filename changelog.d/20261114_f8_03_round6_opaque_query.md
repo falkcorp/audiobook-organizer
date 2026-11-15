@@ -1,6 +1,6 @@
 ### Changed
 
-- core: the diagnostics bundle shows no query or fragment of a request target or URL. Everything from the first `?` or `#` to the end of the token is `?<query>` or `#<fragment>` in the redacted view, so a raw `&`, `#`, `=`, `;` or `?` in a directory name can no longer split a query and leave the part after it. The per-parameter judgment, its decoding rounds and its depth cap are gone. The admin view is unchanged.
+- core: the diagnostics bundle shows no query or fragment of a request target or URL. Everything from the first `?` or `#` to the end of the token is `?<query>` or `#<fragment>` in the redacted bundle, so a raw `&`, `#`, `=`, `;` or `?` in a directory name can no longer split a query and leave the part after it. The per-parameter judgment, its decoding rounds and its depth cap are gone. The admin view is unchanged.
 
 ### Fixed
 

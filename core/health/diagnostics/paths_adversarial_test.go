@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/paths_adversarial_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 9d4b7e21-3a6c-4f58-8e0d-5b1c2a97f634
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package diagnostics
 
@@ -1096,9 +1096,11 @@ func TestRedactPaths_URLCutThenQueryIsOpaque(t *testing.T) {
 	}
 }
 
-// The invariant the non-admin (redacted) view is meant to guarantee, stated once
-// (seams note F8-03, "The invariant"): no byte that follows an absolute-path
-// start survives, whether the start is raw or percent-encoded at any depth, in any
+// The scanner's own invariant, stated once (seams note F8-03, "The invariant"; it
+// is narrower than S1, the share-safety the bundle must meet, which this scanner
+// does not: a path with a space in a directory name is cut at the space by the
+// extent rules this test shares, F8-03b replaces the scanner): no byte that
+// follows an absolute-path start survives, whether the start is raw or percent-encoded at any depth, in any
 // delimiter context. TestRedactPaths_NoPathByteSurvivesProperty checks it
 // directly: it builds inputs from independent parts (a prefix, a context, a path
 // spelling, a directory name made of delimiter bytes, a wrapper, a suffix), plants
