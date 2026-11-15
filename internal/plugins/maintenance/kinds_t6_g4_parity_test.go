@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_parity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1f3e20f0-c667-44b8-9f41-3e7208c9958c
 // last-edited: 2026-11-14
 
@@ -10,15 +10,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
+	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -68,11 +71,11 @@ type t6g4LiveCase struct {
 	// unrecorded are declared resources the run writes outside the writer (a file
 	// on disk), so no writer call can record them.
 	unrecorded []ops.Resource
-	// partial, when set, names why the fixture reaches only part of the declared
-	// write set (and which part is therefore unproven); the declaration check is
-	// then recorded-subset-of-declared instead of equality.
-	partial string
-	seed    func(t *testing.T) *t6g4LiveEnv
+	// widths, when set, is the distinct worker counts the native run's loops
+	// declare (the value each loop hands the host's CapWorkers), exactly: the
+	// parallelism the run actually used, not a number in a table.
+	widths func() []int
+	seed   func(t *testing.T) *t6g4LiveEnv
 }
 
 var t6g4LiveCases []t6g4LiveCase
@@ -118,8 +121,18 @@ func TestT6G4Kinds_LiveRunsMatchHEADAndRecordTheirWrites(t *testing.T) {
 			run := &t6g4RunWriter{name: "native"}
 			h, cancel := t6g4RealHost(c.kind, 0, run)
 			defer cancel()
-			if _, err := runT6G4Kind(t, def, tasks.NewRC(h), nat.paramsFor(false, c)); err != nil {
+			wh := &t6g4WidthHost{t6g4Host: h, seen: map[int]bool{}}
+			if _, err := runT6G4Kind(t, def, tasks.NewRC(wh), nat.paramsFor(false, c)); err != nil {
 				t.Fatalf("native run: %v", err)
+			}
+			if c.widths != nil {
+				want := map[int]bool{}
+				for _, w := range c.widths() {
+					want[w] = true
+				}
+				if got, exp := wh.widths(), slices.Sorted(maps.Keys(want)); !slices.Equal(got, exp) {
+					t.Errorf("the run's loops declared worker counts %v, want exactly %v", got, exp)
+				}
 			}
 			if got := nat.observe(); got != afterHead {
 				t.Errorf("native run left the store as\n%s\nHEAD's def.Run left it as\n%s", got, afterHead)
@@ -139,19 +152,45 @@ func TestT6G4Kinds_LiveRunsMatchHEADAndRecordTheirWrites(t *testing.T) {
 			for _, r := range append(slices.Clone(c.want), c.unrecorded...) {
 				expect[string(r)] = true
 			}
-			switch {
-			case c.partial != "":
-				for r := range expect {
-					if !declared[r] {
-						t.Errorf("the live run touches %q, which the Effects do not declare (%v)", r, t6g4Keys(declared))
-					}
-				}
-				t.Logf("partial fixture (%s): declared %v, exercised %v", c.partial, t6g4Keys(declared), t6g4Keys(expect))
-			case !slices.Equal(t6g4Keys(declared), t6g4Keys(expect)):
+			if !slices.Equal(t6g4Keys(declared), t6g4Keys(expect)) {
 				t.Errorf("declared write set %v, but the live run touches %v", t6g4Keys(declared), t6g4Keys(expect))
 			}
 		})
 	}
+}
+
+// t6g4FFmpegShim puts a stand-in ffmpeg first on PATH: it writes a few bytes to
+// its last argument (the output file) and succeeds, so a run extracts a "clip"
+// without the real decoder.
+func t6g4FFmpegShim(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	script := "#!/bin/sh\nfor a; do last=\"$a\"; done\nprintf 'RIFFstand-in-clip' > \"$last\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "ffmpeg"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// t6g4WidthHost is a run host that records the worker count every loop of the
+// run asked to run with, before the operator's cap (FakeRun.SetCap) lowers it.
+type t6g4WidthHost struct {
+	*t6g4Host
+	mu   sync.Mutex
+	seen map[int]bool
+}
+
+func (h *t6g4WidthHost) CapWorkers(declared int) int {
+	h.mu.Lock()
+	h.seen[declared] = true
+	h.mu.Unlock()
+	return h.t6g4Host.CapWorkers(declared)
+}
+
+func (h *t6g4WidthHost) widths() []int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Sorted(maps.Keys(h.seen))
 }
 
 func t6g4Keys(m map[string]bool) []string {
@@ -211,7 +250,7 @@ func t6g4ObserveBooks(t *testing.T, s *database.PebbleStore) string {
 			if werr != nil {
 				t.Fatal(werr)
 			}
-			rows = append(rows, fmt.Sprintf("{%s dur=%d intro=%q windows=%d}", f.FilePath, f.Duration, ft, len(wins)))
+			rows = append(rows, fmt.Sprintf("{%s dur=%d intro=%q windows=%d strikes=%d}", f.FilePath, f.Duration, ft, len(wins), f.IntroTimeouts))
 		}
 		slices.Sort(rows)
 		status := ""
@@ -231,7 +270,8 @@ func init() {
 	// aggregates (books).
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: dedupeBookFileRowsKind, headParams: `{"apply":true}`, params: `{}`,
-		want: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations},
+		widths: func() []int { return []int{tasks.CPU().Workers()} },
+		want:   []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := t6g4MemStore(t)
 			for _, id := range seedDupBooks(t, s, 2, 3) {
@@ -261,7 +301,8 @@ func init() {
 	// a wrong total: the run only recomputes its aggregates (books).
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: durationBackfillKind, headParams: `{"dryRun":false}`, params: `{}`,
-		want: []ops.Resource{ops.ResBookFiles, ops.ResBooks},
+		widths: func() []int { return []int{4} },
+		want:   []ops.Resource{ops.ResBookFiles, ops.ResBooks},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := t6g4MemStore(t)
 			for _, bk := range []struct {
@@ -295,7 +336,8 @@ func init() {
 	// and a file with none; the run copies the transcript onto the row.
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: introMigrateSingleFileKind, headParams: `{"dry_run":false}`, params: `{}`,
-		want: []ops.Resource{ops.ResBookFiles},
+		widths: func() []int { return []int{8} },
+		want:   []ops.Resource{ops.ResBookFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := t6g4MemStore(t)
 			tr := "This is Gotham Central, a Batman audiobook narrated by Alfred Pennyworth."
@@ -395,7 +437,8 @@ func init() {
 	// change (operations).
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: fsRegroupKind, headParams: `{"dry_run":false}`, params: `{}`,
-		want: []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations},
+		widths: func() []int { return []int{tasks.CPU().Workers()} },
+		want:   []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := regroupStore(t)
 			base := fsFragBase(t)
@@ -437,15 +480,11 @@ func init() {
 	// persists the hash on the row that has none (book_files).
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: extractWAVClipsKind, headParams: `{}`, params: `{}`,
-		want: []ops.Resource{ops.ResBookFiles},
+		widths: func() []int { return []int{1} },
+		want:   []ops.Resource{ops.ResBookFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			t.Setenv(serverdecode.EnvVar, "true")
-			bin := t.TempDir()
-			script := "#!/bin/sh\nfor a; do last=\"$a\"; done\nprintf 'RIFFstand-in-clip' > \"$last\"\n"
-			if err := os.WriteFile(filepath.Join(bin, "ffmpeg"), []byte(script), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t6g4FFmpegShim(t)
 
 			s := t6g4MemStore(t)
 			root := t.TempDir()
@@ -479,26 +518,45 @@ func init() {
 		},
 	})
 
-	// transcribe-book-intros: the source file is absent, so the run reaches its
-	// first writes (the book's status row, the stats key, the result journal)
-	// without ffmpeg or Whisper. The book_files half of the declaration (a hash
-	// persisted after a real clip extraction) needs an ffmpeg stand-in and the
-	// transcribeBatchFn seam, and is not exercised here.
+	// transcribe-book-intros: a one-file book whose source exists. A stand-in
+	// ffmpeg cuts the clip and a stubbed batch call (the transcribeBatchFn seam)
+	// answers with a transcript, so the run writes the book's parsed fields
+	// (books) and clears the file's earlier timeout strike (book_files), plus the
+	// stats key and the journal, which no resource names.
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: introTranscribeKind, headParams: `{"dry_run":false}`, params: `{}`,
-		want:    []ops.Resource{ops.ResBooks},
-		partial: "missing source file: the book_files hash write after a clip extraction is not reached",
+		widths: func() []int { return []int{introTranscribePageConc} },
+		want:   []ops.Resource{ops.ResBooks, ops.ResBookFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			orig := config.AppConfig.WhisperClipCacheDir
 			config.AppConfig.WhisperClipCacheDir = ""
 			t.Cleanup(func() { config.AppConfig.WhisperClipCacheDir = orig })
 			t.Setenv(serverdecode.EnvVar, "1")
+			t6g4FFmpegShim(t)
+			swapTranscribeBatchFn(t, func(_ context.Context, jobs map[string]string, _ transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
+				out := make(map[string]transcribe.BatchResult, len(jobs))
+				for k := range jobs {
+					out[k] = transcribe.BatchResult{Text: "Hush, written by Jeph Loeb, narrated by Alfred Pennyworth. Copyright 2002 DC Comics."}
+				}
+				return out, nil
+			})
 			s := t6g4MemStore(t)
 			root := t.TempDir()
-			for _, title := range []string{"Hush", "Hush Returns"} {
-				if _, err := s.CreateBook(&database.Book{Title: title, FilePath: filepath.Join(root, "missing", title+".mp3")}); err != nil {
-					t.Fatal(err)
-				}
+			src := filepath.Join(root, "Hush", "01.mp3")
+			if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(src, []byte("hush-audio-bytes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			b, err := s.CreateBook(&database.Book{Title: "Hush", FilePath: filepath.Dir(src)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// One timeout strike counted against the bytes that are about to be sent:
+			// a transcript clears it.
+			if err := s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: src, FileHash: "hush-hash", IntroTimeouts: 1, IntroTimeoutHash: "hush-hash"}); err != nil {
+				t.Fatal(err)
 			}
 			p := New(fakeDeps{store: s, root: root})
 			return &t6g4LiveEnv{p: p, observe: func() string { return t6g4ObserveBooks(t, s) }}
