@@ -1,7 +1,7 @@
 // file: core/kernel/outbox_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d0b27e65-8a13-4c4f-b6e9-5f1c3a7d2e80
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package kernel
 
@@ -74,8 +74,8 @@ func TestOutboxOwnerSpec(t *testing.T) {
 	if spec.Owner != "core/outbox" || !spec.Spec.Keyspace || !spec.Enabled {
 		t.Errorf("outboxOwnerSpec = %+v, want an enabled core/outbox keyspace", spec)
 	}
-	if len(spec.Spec.Serialized) != 3 {
-		t.Errorf("Serialized = %v, want exactly seq/, cur/ and dead/", spec.Spec.Serialized)
+	if len(spec.Spec.Serialized) != 4 {
+		t.Errorf("Serialized = %v, want exactly seq/, cur/, dead/ and deadn/", spec.Spec.Serialized)
 	}
 	db := bootAuditDB(t, spec)
 	if _, ok := db.Keyspace("core/outbox"); !ok {

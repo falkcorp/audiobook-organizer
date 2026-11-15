@@ -1,7 +1,7 @@
 // file: core/kernel/outbox.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 61c0d9a4-2e7b-4b83-9f15-d3a8e0c47b92
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package kernel
 
@@ -67,7 +67,7 @@ type kernelOutbox struct {
 const outboxOwnerID = outboxstore.Owner
 
 // outboxOwnerSpec is the storage claim of core/outbox: the c/outbox/ keyspace
-// with seq/, cur/ and dead/ Serialized and nothing else (no claims, no migrations).
+// with seq/, cur/, dead/ and deadn/ Serialized and nothing else (no claims, no migrations).
 // Registering a new owner takes a one-time write in the claim ledger at P4b:
 // that belongs to the flip (F6-03) that appends this spec to storageOwners.
 func outboxOwnerSpec() storage.OwnerSpec {

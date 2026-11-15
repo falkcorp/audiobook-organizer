@@ -1,5 +1,5 @@
 // file: core/outbox/relay.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 77b6d1de-9cf2-4c52-8f0b-7e9a5c2b6d11
 // last-edited: 2026-11-15
 
@@ -422,7 +422,7 @@ func (r *relay) stopTopic(topic, subject, why string, err error) {
 // ---- maintenance
 
 // maintain sweeps retention every sweepEvery and refreshes the status gauges
-// and the health component every statusEvery.
+// and the health component every o.statusEvery (statusEvery, unless a test set it).
 func (r *relay) maintain(ctx context.Context) {
 	o := r.o
 	now := o.now()
@@ -432,7 +432,7 @@ func (r *relay) maintain(ctx context.Context) {
 			r.fault("retention sweep", err)
 		}
 	}
-	if now.Sub(r.lastStat) >= statusEvery {
+	if now.Sub(r.lastStat) >= o.statusEvery {
 		r.lastStat = now
 		o.RefreshStatus(ctx)
 	}
@@ -440,60 +440,189 @@ func (r *relay) maintain(ctx context.Context) {
 
 // RefreshStatus recomputes the status the gauges and core.outbox report. The
 // relay calls it every 15 seconds; operator actions call it after they change
-// anything.
+// anything. It is also the audit of the dead-letter counters: it checks them
+// against the letters once per call, repairs a counter that is wrong (loudly),
+// and builds the status from the counts it just published, so the gauges and
+// the health component never carry two different readings of one refresh.
 func (o *Outbox) RefreshStatus(ctx context.Context) {
-	st, err := o.Status(ctx)
-	if err != nil {
-		// A failed Status is a partial one: publishing it would report the
-		// dead letters and the stops it did not get to read as gone, so the
-		// last good reading stands.
-		if ctx.Err() == nil {
-			o.faultLog(o.log, "status", err)
+	dead, err := o.syncDead(ctx, true)
+	if err == nil {
+		var st Status
+		if st, err = o.status(ctx, dead); err == nil {
+			o.inst.publish(&st)
+			return
 		}
-		return
 	}
-	o.inst.publish(&st)
-	// The dead-letter counts are read again, inside syncDead's lock, rather than
-	// taken from st: st was computed before this point, and publishing it after
-	// an operator's retry or a relay's dead-lettering had published a newer count
-	// would put the older one back.
-	if err := o.syncDead(ctx); err != nil && ctx.Err() == nil {
+	// A failed Status is a partial one: publishing it would report the dead
+	// letters and the stops it did not get to read as gone, so the last good
+	// reading stands.
+	if ctx.Err() == nil {
 		o.faultLog(o.log, "status", err)
 	}
 }
 
-// syncDead recounts the dead letters in the store and reports them through the
-// health component. Every writer of that count (the relay's dead-lettering, an
-// operator's retry or discard through changed, the periodic RefreshStatus) goes
-// through here, and the recount is read inside deadMu: a recount that starts
-// after another one published reads a store at least as new as the one that
-// published, so the last publisher always holds the newest count. An in-memory
-// increment after the commit could land after an operator had already removed
-// the letter, and leave core.outbox Degraded until the next refresh.
-func (o *Outbox) syncDead(ctx context.Context) error {
+// syncDead reads the dead-letter counts and reports them through the health
+// component, and returns them. Every writer of that count (the relay's
+// dead-lettering, an operator's retry or discard through changed, the periodic
+// RefreshStatus) goes through here, and the counts are read inside deadMu: a
+// recount that starts after another one published reads a store at least as
+// new as the one that published, so the last publisher always holds the newest
+// count. An in-memory increment after the commit could land after an operator
+// had already removed the letter, and leave core.outbox Degraded until the
+// next refresh.
+//
+// The counts are the deadn/ counters, one row per (consumer, topic, partition)
+// that holds a letter, kept in the same batch as every letter written or
+// removed: a recount costs the same whether the store holds ten letters or ten
+// thousand, so dead-lettering a backlog is linear in its size. With audit it
+// also counts the letters themselves (keys only, once) and, if the two
+// disagree, calls RepairDeadCounts and logs what it changed. A disagreement
+// seen here can be a writer caught between the two reads, which RepairDeadCounts
+// (it reads one snapshot) finds nothing to repair; a repair is logged only when
+// it changed a counter.
+func (o *Outbox) syncDead(ctx context.Context, audit bool) (map[string]int, error) {
 	o.deadMu.Lock()
 	defer o.deadMu.Unlock()
-	counts, err := o.store.DeadCounts(ctx)
-	if err != nil {
-		return err
+	if err := o.seedDeadCounts(ctx); err != nil {
+		return nil, err
+	}
+	counts, err := o.store.DeadTotals(ctx)
+	switch {
+	case err == nil:
+	case rowFaultOf(err):
+		// A counter that does not decode is repaired like one that is wrong.
+		audit = true
+	default:
+		return nil, err
+	}
+	if audit {
+		if counts, err = o.auditDeadCounts(ctx, counts, err); err != nil {
+			return nil, err
+		}
+	}
+	if h := o.hooks.get(); h.afterDeadRead != nil {
+		h.afterDeadRead()
 	}
 	o.health.setDead(counts)
 	o.health.report(o.now())
+	return counts, nil
+}
+
+// auditDeadCounts compares the counters' totals (counts, or its error) with the
+// letters' own, and repairs the counters if they differ. deadMu is held.
+func (o *Outbox) auditDeadCounts(ctx context.Context, counts map[string]int, readErr error) (map[string]int, error) {
+	if readErr == nil {
+		letters, err := o.store.DeadCounts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if sameCounts(counts, letters) {
+			return counts, nil
+		}
+	}
+	fixes, err := o.store.RepairDeadCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	o.logDeadFixes(fixes, false)
+	return o.store.DeadTotals(ctx)
+}
+
+// seedDeadCounts builds the deadn/ counters from the dead letters once per
+// process, before anything reads or changes one. A store written before the
+// counters existed holds letters and no counters: the first start after the
+// upgrade creates them. It is RepairDeadCounts, so it writes only a counter
+// that is missing or wrong, once, in one batch; a crash between its read and its
+// commit leaves nothing written and the next start does it again, and running
+// it twice (two processes, a restart) changes nothing the second time. deadMu
+// must be held.
+func (o *Outbox) seedDeadCounts(ctx context.Context) error {
+	if o.deadSeeded.Load() {
+		return nil
+	}
+	fixes, err := o.store.RepairDeadCounts(ctx)
+	if err != nil {
+		return err
+	}
+	o.logDeadFixes(fixes, true)
+	o.deadSeeded.Store(true)
 	return nil
 }
 
-// deadLettered tells the health component that consumer dead-lettered a message
-// whose commit is done. The recount runs on settleCtx: the dead letter is
-// durable even when the run was canceled, and Degraded should say so. If the
-// store cannot be read it counts the letter in memory, so a dead letter is
-// never reported as nothing; the next refresh replaces that count with the
-// store's.
-func (r *relay) deadLettered(ctx context.Context, consumer string) {
-	o := r.o
+// ensureDeadCounts is seedDeadCounts for a caller that does not hold deadMu:
+// every writer of a dead letter calls it before its batch, so the counter it
+// bumps is never an unbuilt one.
+func (o *Outbox) ensureDeadCounts(ctx context.Context) error {
+	if o.deadSeeded.Load() {
+		return nil
+	}
+	o.deadMu.Lock()
+	defer o.deadMu.Unlock()
+	return o.seedDeadCounts(ctx)
+}
+
+// deadCounts is the dead letters by consumer, from the counters.
+func (o *Outbox) deadCounts(ctx context.Context) (map[string]int, error) {
+	if err := o.ensureDeadCounts(ctx); err != nil {
+		return nil, err
+	}
+	return o.store.DeadTotals(ctx)
+}
+
+// logDeadFixes says what a repair changed. Counters created for letters that
+// predate them are expected (seeding) and logged at Info; a counter that held a
+// number other than the letters' is drift, never overwritten silently: Warn,
+// with both numbers.
+func (o *Outbox) logDeadFixes(fixes []outboxstore.DeadCountFix, seeding bool) {
+	created := 0
+	for _, f := range fixes {
+		if seeding && f.Absent {
+			created++
+			continue
+		}
+		o.log.Warn("outbox: a dead-letter counter did not match its letters; it was rewritten from them",
+			slog.String("consumer", f.Consumer), slog.String("topic", f.Topic), slog.String("shard", f.Shard),
+			slog.Int("counter", f.Had), slog.Int("letters", f.Want),
+			slog.Bool("counter_missing", f.Absent), slog.Bool("counter_unreadable", f.Unreadable))
+	}
+	if created > 0 {
+		o.log.Info("outbox: dead-letter counters built from the stored letters", slog.Int("counters", created))
+	}
+}
+
+// sameCounts reports whether two per-consumer counts agree, a consumer with no
+// letters being the same as one that is missing.
+func sameCounts(a, b map[string]int) bool {
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	for k, v := range b {
+		if a[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// rowFaultOf reports whether err is a row that does not decode.
+func rowFaultOf(err error) bool {
+	_, ok := rowCause(err)
+	return ok
+}
+
+// deadLettered tells the health component that a message of the relay's was
+// dead-lettered and its commit is done. The recount runs on settleCtx: the dead
+// letter is durable even when the run was canceled, and Degraded should say so.
+// A recount that fails is logged and left to the next refresh; there is no
+// in-memory count to fall back on, because one that raced an operator's retry
+// is how a retried letter used to leave the component Degraded.
+func (r *relay) deadLettered(ctx context.Context) {
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
-	if err := o.syncDead(sctx); err != nil {
-		o.health.addDead(consumer, o.now())
+	if _, err := r.o.syncDead(sctx, false); err != nil {
+		r.fault("counting dead letters", err)
 	}
 }
 

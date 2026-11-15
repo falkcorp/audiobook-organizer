@@ -1,7 +1,7 @@
 // file: core/outbox/health.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5f6a4c2c-9f56-4a53-8c5f-0f3c6c1a6a40
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package outbox
 
@@ -31,6 +31,7 @@ type healthState struct {
 	now func() time.Time
 
 	mu       sync.Mutex
+	last     time.Time // the At of the last Result: a later one never carries an earlier time
 	disabled bool
 	dead     map[string]int    // consumer -> dead letters
 	stopped  map[string]string // subject -> why
@@ -38,15 +39,6 @@ type healthState struct {
 
 func newHealthState(rep health.Reporter, now func() time.Time) *healthState {
 	return &healthState{rep: rep, now: now, dead: map[string]int{}, stopped: map[string]string{}}
-}
-
-// addDead counts one more dead letter of consumer and reports at once, so
-// Degraded does not wait for the next status refresh.
-func (h *healthState) addDead(consumer string, now time.Time) {
-	h.mu.Lock()
-	h.dead[consumer]++
-	h.mu.Unlock()
-	h.report(now)
 }
 
 func (h *healthState) setDisabled(v bool) {
@@ -67,33 +59,45 @@ func (h *healthState) setDead(counts map[string]int) {
 // should not wait for the next status refresh to learn that delivery stopped.
 func (h *healthState) stop(subject, why string) (first bool) {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	if _, ok := h.stopped[subject]; ok {
-		h.mu.Unlock()
 		return false
 	}
 	h.stopped[subject] = why
-	h.mu.Unlock()
-	h.report(h.now())
+	h.reportLocked(h.now())
 	return true
 }
 
 // clear forgets a stop once the row is readable again, and reports at once.
 func (h *healthState) clear(subject string) {
 	h.mu.Lock()
-	_, was := h.stopped[subject]
-	delete(h.stopped, subject)
-	h.mu.Unlock()
-	if was {
-		h.report(h.now())
+	defer h.mu.Unlock()
+	if _, was := h.stopped[subject]; was {
+		delete(h.stopped, subject)
+		h.reportLocked(h.now())
 	}
 }
 
-// report computes the Result and pushes it.
+// report computes the Result from the current state and pushes it.
 func (h *healthState) report(now time.Time) {
 	if h == nil || h.rep == nil {
 		return
 	}
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reportLocked(now)
+}
+
+// reportLocked is report with mu held. now is raised to the last report's time
+// if it is earlier, so the Results are ordered by At as well as by arrival.
+func (h *healthState) reportLocked(now time.Time) {
+	if h.rep == nil {
+		return
+	}
+	if now.Before(h.last) {
+		now = h.last
+	}
+	h.last = now
 	res := health.Result{Status: health.StatusUp, At: now}
 	var parts []string
 	total := 0
@@ -121,6 +125,5 @@ func (h *healthState) report(now time.Time) {
 		res.Status = health.StatusDegraded
 		res.Detail = strings.Join(parts, "; ")
 	}
-	h.mu.Unlock()
 	h.rep.Report(res)
 }

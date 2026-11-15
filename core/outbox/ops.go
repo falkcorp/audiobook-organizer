@@ -1,7 +1,7 @@
 // file: core/outbox/ops.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4b1a1f7a-0a62-4d4e-8f1d-8d2a0b5f7c33
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package outbox
 
@@ -93,7 +93,7 @@ func (o *Outbox) knownConsumer(ctx context.Context, name string) (bool, error) {
 			return true, nil
 		}
 	}
-	counts, err := o.store.DeadCounts(ctx)
+	counts, err := o.deadCounts(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -165,6 +165,9 @@ func (o *Outbox) mutateDead(ctx context.Context, consumer string, seq uint64, re
 		}
 	}
 	err = storage.RetryOnConflict(ctx, settleAttempts, func(ctx context.Context) (err error) {
+		if err := o.ensureDeadCounts(ctx); err != nil {
+			return err
+		}
 		b := o.store.OpenBatch()
 		defer closeBatch(b, &err)
 		cur, ok, err := o.store.LoadDead(ctx, b, consumer, topic, seq)
@@ -174,8 +177,11 @@ func (o *Outbox) mutateDead(ctx context.Context, consumer string, seq uint64, re
 		if !ok {
 			return ErrDeadNotFound
 		}
-		if err := o.store.StageDeleteDead(b, consumer, topic, seq); err != nil {
+		// The delete lowers the letter's pair counter in this same batch.
+		if found, err := o.store.StageDeleteDead(ctx, b, consumer, topic, seq); err != nil {
 			return err
+		} else if !found {
+			return ErrDeadNotFound
 		}
 		if restage {
 			id, err := o.ids.next()

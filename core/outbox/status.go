@@ -1,7 +1,7 @@
 // file: core/outbox/status.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0b7f0c06-1d5b-4e3c-9a64-2f0f9d3a8e64
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package outbox
 
@@ -93,8 +93,21 @@ type ConsumerStatus struct {
 // Status reads the outbox's state. Every count is bounded by statCap. A row
 // that does not decode does not fail the read: it is named in Stopped and the
 // counts that needed it are marked as "at least"; only a failure of the store
-// returns an error.
+// returns an error. The first call of a process also builds the dead-letter
+// counters from the stored letters if they are not built yet (deadn/; see
+// seedDeadCounts), which is a write of its own, made once.
 func (o *Outbox) Status(ctx context.Context) (Status, error) {
+	dead, err := o.deadCounts(ctx)
+	if err != nil {
+		return Status{At: o.now()}, fmt.Errorf("status: dead letters: %w", err)
+	}
+	return o.status(ctx, dead)
+}
+
+// status is Status with the dead-letter counts by consumer already read:
+// RefreshStatus reads them once, under the lock that publishes them to the
+// health component, and builds the status from the same reading.
+func (o *Outbox) status(ctx context.Context, dead map[string]int) (Status, error) {
 	st := Status{At: o.now()}
 	stopped := map[StoppedStatus]bool{}
 	stop := func(s StoppedStatus) {
@@ -147,10 +160,6 @@ func (o *Outbox) Status(ctx context.Context) (Status, error) {
 	for _, u := range unreadable {
 		cause, _ := rowCause(u.Err)
 		stop(StoppedStatus{Topic: u.Pair.Topic, Consumer: u.Pair.Consumer, Partition: u.Pair.PP, Cause: cause})
-	}
-	dead, err := o.store.DeadCounts(ctx)
-	if err != nil {
-		return st, fmt.Errorf("status: dead letters: %w", err)
 	}
 	byConsumer := map[string][]outboxstore.CursorRow{}
 	for _, c := range cursors {

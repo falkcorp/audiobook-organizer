@@ -1,7 +1,7 @@
 // file: core/internal/outboxstore/records.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 5f394976-e7d8-4f5e-be83-5afd62ff5595
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package outboxstore
 
@@ -94,9 +94,17 @@ type Dead struct {
 	At       time.Time `json:"at"`
 }
 
+// DeadCount is the value of deadn/<consumer>/<topic>/<shard>: how many dead
+// letters the shard holds. A shard with none has no row.
+type DeadCount struct {
+	N int `json:"n"`
+}
+
 func intakeCodec() codec.Codec[Intake] { return codec.JSON[Intake](RecordVersion) }
 func msgCodec() codec.Codec[Msg]       { return codec.JSON[Msg](RecordVersion) }
 func highCodec() codec.Codec[High]     { return codec.JSON[High](RecordVersion) }
 func curCodec() codec.Codec[Cursor]    { return codec.JSON[Cursor](RecordVersion) }
 func tryCodec() codec.Codec[Try]       { return codec.JSON[Try](RecordVersion) }
 func deadCodec() codec.Codec[Dead]     { return codec.JSON[Dead](RecordVersion) }
+
+func deadCountCodec() codec.Codec[DeadCount] { return codec.JSON[DeadCount](RecordVersion) }
