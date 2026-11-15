@@ -1,5 +1,5 @@
 // file: core/internal/executor/await_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e0b3f52-8a1d-4c6e-9b47-2d6a1f0c8e93
 // last-edited: 2026-11-15
 
@@ -369,6 +369,7 @@ func TestAwait_ContinueInPlaceAfterAwaitStillNeedsRealProgress(t *testing.T) {
 					o.Config = Config{DispatchTick: time.Second, WatchdogInterval: 30 * time.Second, MinCheckpointInterval: time.Nanosecond}
 					o.Catalog = catalogWith(t, "gotham:run")
 				})
+				base := runtime.NumGoroutine()
 				id := h.start(awaitParent, tasks.StartRequest{})
 				time.Sleep(4 * time.Minute)
 				synctest.Wait()
@@ -382,6 +383,7 @@ func TestAwait_ContinueInPlaceAfterAwaitStillNeedsRealProgress(t *testing.T) {
 				if !c.progress && !strings.Contains(r.Error, "reported no progress") {
 					t.Errorf("error %q does not name the missing progress", r.Error)
 				}
+				settleGoroutines(t, base)
 			})
 		})
 	}
@@ -405,6 +407,7 @@ func TestAwait_ChildThatIgnoresItsStopEndsTheWaitAtAbandon(t *testing.T) {
 			c.Resume = tasks.ResumeDrop
 		})
 		h, got := awaitRig(t, time.Minute, stubborn, nil)
+		base := runtime.NumGoroutine()
 		parent := h.start(awaitParent, tasks.StartRequest{})
 		time.Sleep(5 * time.Minute)
 		synctest.Wait()
@@ -419,15 +422,16 @@ func TestAwait_ChildThatIgnoresItsStopEndsTheWaitAtAbandon(t *testing.T) {
 		if r := h.get(parent); r.State != tasks.StateSucceeded {
 			t.Errorf("parent %s/%q, want succeeded: the abandon ends the wait", r.State, r.Reason)
 		}
-		close(release)
+		close(release) // the zombie's goroutine returns
 		time.Sleep(time.Second)
+		settleGoroutines(t, base)
 	})
 }
 
 // TestAwaitAlive pins which child states keep a waiting run alive: the ones
-// the executor advances by itself. A child that needs a restart, a released
-// stand-down hold or a person's decision does not, so a parent waiting on it
-// stays subject to its own watchdog.
+// the executor advances by itself, a quiesced one included (its hold ends with its
+// holder or its lease). A child that needs a restart or a person's decision
+// does not, so a parent waiting on it stays subject to its own watchdog.
 func TestAwaitAlive(t *testing.T) {
 	for _, c := range []struct {
 		state tasks.RunState
@@ -438,7 +442,7 @@ func TestAwaitAlive(t *testing.T) {
 		{tasks.StateRunning, true},
 		{tasks.StateStopping, true},
 		{tasks.StateInterrupted, false},
-		{tasks.StateInterruptedQuiesced, false},
+		{tasks.StateInterruptedQuiesced, true}, // the hold ends with its holder or its lease, then the run is re-queued
 		{tasks.StateAwaitingDecision, false},
 		{tasks.StateSucceeded, false},
 		{tasks.StateFailed, false},

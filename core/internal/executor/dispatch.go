@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
 // last-edited: 2026-11-15
 
@@ -583,15 +583,16 @@ func (e *executor) awaitUnpaused(ctx context.Context) error {
 // run well inside its watchdog limit.
 const awaitRelaysPerLimit = 3
 
-// awaitAlive reports whether a child in state s will advance without an
-// operator or a restart: queued, waiting for its dependencies, running, or
-// stopping (its grace is bounded). An interrupted child waits for the next
-// boot, a quiesced one for its stand-down hold to be released, and one
-// awaiting a decision for a person; none is alive, so none keeps the waiting
+// awaitAlive reports whether a child in state s will advance without a
+// person or a restart: queued, waiting for its dependencies, running,
+// stopping (its grace is bounded), or quiesced (a stand-down hold is
+// released by its holder's exit or its lease's expiry, and the run is then
+// re-queued). An interrupted child waits for the next boot and one awaiting
+// a decision for a person; neither is alive, so neither keeps the waiting
 // run alive either.
 func awaitAlive(s tasks.RunState) bool {
 	switch s {
-	case tasks.StateQueued, tasks.StateWaitingDeps, tasks.StateRunning, tasks.StateStopping:
+	case tasks.StateQueued, tasks.StateWaitingDeps, tasks.StateRunning, tasks.StateStopping, tasks.StateInterruptedQuiesced:
 		return true
 	default:
 		return false
