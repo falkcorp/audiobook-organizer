@@ -1,7 +1,7 @@
 // file: core/outbox/consumer.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3ec1a6c8-90d6-4e8d-9a3e-7b34e8e5d5a2
-// last-edited: 2026-11-12
+// last-edited: 2026-11-14
 
 package outbox
 
@@ -43,6 +43,12 @@ type RawMessage struct {
 // HandlerFunc is at-least-once and bounded: it runs under
 // core.outbox.handler_timeout, must honour its context, must be idempotent
 // (keyed on IdempotencyKey) and must not write module entities.
+//
+// A nil return means the effect is complete, and the relay acks it even when
+// the relay was told to stop meanwhile: the ack commits past the run's cancel.
+// A handler that stops early because its context was canceled therefore must
+// return ctx.Err() (or an error wrapping it), never nil: a nil return after a
+// cut-short effect acks a message that never took effect, and it is lost.
 type HandlerFunc[T any] func(ctx context.Context, m Message[T]) error
 
 // TxHandlerFunc is for core consumers whose effect is a write to their own
@@ -262,7 +268,9 @@ func applyOptions(opts []ConsumerOption) consumerConfig {
 }
 
 // Consume is the typed core consumer: h runs outside the commit, and the
-// cursor advances once it returned nil. At-least-once: a crash after h's
+// cursor advances once it returned nil (see HandlerFunc: nil is acked even
+// after a stop, so a handler cut short by its context returns ctx.Err()).
+// At-least-once: a crash after h's
 // external effect and before the ack redelivers, so h dedupes on
 // IdempotencyKey. Module packages must not call it
 // (archtest.OutboxModuleConsumersAreTasks); Register refuses a module owner.

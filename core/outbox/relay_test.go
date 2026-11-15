@@ -1,5 +1,5 @@
 // file: core/outbox/relay_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 9a4d6e13-0b57-4c82-8e1f-72c5d3a0b6f4
 // last-edited: 2026-11-14
 
@@ -7,6 +7,7 @@ package outbox_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -114,17 +115,41 @@ func TestOutbox_RelayRestartsAfterCancel(t *testing.T) {
 	}
 }
 
+// cancelRelayInline cancels the one relay run from inside a relay hook and
+// returns once the run's context is canceled: CancelAs cancels the attempt's
+// context before it returns and does not wait for the body, which is the
+// caller of the hook. The hook therefore holds the relay at its seam with the
+// cancel already delivered, and nothing in the test waits on a clock that could
+// expire into a pass. It reports failures with Errorf, which is safe off the
+// test goroutine.
+func cancelRelayInline(t testing.TB, rg *rig) {
+	t.Helper()
+	runs := rg.runsOf(outbox.RelayKind)
+	if len(runs) != 1 {
+		t.Errorf("%d relay runs, want 1", len(runs))
+		return
+	}
+	if err := rg.x.CancelAs(context.Background(), runs[0].ID, systemActor); err != nil {
+		t.Errorf("cancel the relay run: %v", err)
+		return
+	}
+	rec, err := rg.stores.Runs.Get(context.Background(), runs[0].ID)
+	if err != nil || (rec.State != tasks.StateStopping && !rec.State.Terminal()) {
+		t.Errorf("relay run is %q (err %v) after its cancel, want stopping or ended", rec.State, err)
+	}
+}
+
 // A cancel that lands after a handler returned nil and before its ack commits
 // must not lose the ack: the message was delivered, so the cursor advances on a
-// context that outlives the run. The hook cancels the run from the window
-// itself and holds the relay there until the run's context is done, so the test
-// reproduces the cancel-before-ack ordering on every run instead of racing it.
+// context that outlives the run. The hook cancels the run from inside the
+// window (cancelRelayInline), so the test reproduces the cancel-before-ack
+// ordering on every run instead of racing it, and it requires the handler's
+// context to have ended by that cancel and not by the handler's own deadline.
 func TestOutbox_AckSurvivesCancelBetweenHandlerAndCommit(t *testing.T) {
 	var self atomic.Pointer[rig]
 	var handlerCtx atomic.Pointer[context.Context]
 	var acked atomic.Int64
 	var fired atomic.Bool
-	cancelErr := make(chan error, 4)
 	rc := &recorder{}
 
 	hooks := &outbox.TestHooks{
@@ -132,17 +157,9 @@ func TestOutbox_AckSurvivesCancelBetweenHandlerAndCommit(t *testing.T) {
 			if consumer != consumerN || !fired.CompareAndSwap(false, true) {
 				return
 			}
-			rg := self.Load()
-			runs := rg.runsOf(outbox.RelayKind)
-			if len(runs) != 1 {
-				cancelErr <- fmt.Errorf("%d relay runs, want 1", len(runs))
-				return
-			}
-			go func() { cancelErr <- rg.x.CancelAs(context.Background(), runs[0].ID, systemActor) }()
-			select {
-			case <-(*handlerCtx.Load()).Done():
-			case <-time.After(10 * time.Second):
-				cancelErr <- fmt.Errorf("the run's context was not canceled")
+			cancelRelayInline(t, self.Load())
+			if hctx := *handlerCtx.Load(); !errors.Is(context.Cause(hctx), tasks.ErrCanceled) {
+				t.Errorf("the handler's context ended with %v, want the task cancel", context.Cause(hctx))
 			}
 		},
 		AfterAckCommit: func(consumer string, _ uint64) {
@@ -167,14 +184,6 @@ func TestOutbox_AckSurvivesCancelBetweenHandlerAndCommit(t *testing.T) {
 	must(t, err)
 	r.waitRun(ref.ID, tasks.StateCanceled)
 	eventually(t, "the relay to stop", func() bool { return !r.ob.Running() })
-	for drained := false; !drained; {
-		select {
-		case err := <-cancelErr:
-			must(t, err)
-		default:
-			drained = true
-		}
-	}
 	if got := acked.Load(); got != 1 {
 		t.Fatalf("%d acks committed for the Joker after a cancel between handler and ack, want 1", got)
 	}
@@ -186,6 +195,47 @@ func TestOutbox_AckSurvivesCancelBetweenHandlerAndCommit(t *testing.T) {
 	if got := rc.villains(); got[0] != "Joker" || got[1] != "Penguin" {
 		t.Fatalf("delivered %v", got)
 	}
+}
+
+// A cancel that lands after a handler reported a failure and before the
+// failure is recorded must not lose it: the attempt and its backoff commit past
+// the run's cancel, so the restarted relay does not deliver the message again
+// at once, as an attempt the failure plan never budgeted. The hook cancels the
+// run between the staged retry record and its commit.
+func TestOutbox_FailureSurvivesCancelBetweenHandlerAndCommit(t *testing.T) {
+	var self atomic.Pointer[rig]
+	var fired atomic.Bool
+	var calls atomic.Int64
+
+	r := newRig(t, rigOpts{
+		noRelay: true,
+		cfg:     func(c *outbox.Config) { c.BackoffMin, c.BackoffMax = time.Hour, time.Hour },
+		hooks: &outbox.TestHooks{BeforeFailCommit: func(consumer string, _ uint64) {
+			if consumer == consumerN && fired.CompareAndSwap(false, true) {
+				cancelRelayInline(t, self.Load())
+			}
+		}},
+		register: func(testing.TB, *rig) []registration {
+			return []registration{{owner: "core", hs: []outbox.Handler{outbox.Consume(notice(), consumerN,
+				func(context.Context, outbox.Message[Dispatch]) error {
+					calls.Add(1)
+					return errors.New("the Joker slipped the net")
+				})}}}
+		},
+	})
+	self.Store(r)
+
+	r.stage("wayne-manor", Dispatch{Villain: "Joker"})
+	ref, err := r.x.Start(context.Background(), outbox.RelayKind, tasks.StartRequest{Mode: tasks.ModeRequestLive})
+	must(t, err)
+	r.waitRun(ref.ID, tasks.StateCanceled)
+	eventually(t, "the relay to stop", func() bool { return !r.ob.Running() })
+	if got := r.count(tryRoot()); got != 1 {
+		t.Fatalf("%d retry records after a cancel between a failure and its commit, want 1", got)
+	}
+
+	r.startRelay()
+	stays(t, "the recorded backoff to hold the message back", 200*time.Millisecond, func() bool { return calls.Load() == 1 })
 }
 
 // A relay turned off by its dial is not started by a nudge, and a Preview run

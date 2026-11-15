@@ -1,14 +1,3 @@
 ### Fixed
 
-#### `core/outbox` — a cancel between handler return and ack no longer redelivers the message
-
-`settleAck` committed the cursor advance on the relay run's own context. When the
-run was canceled after a handler returned nil and before the ack committed
-(every graceful shutdown can land there), the commit failed on the canceled
-context, the message stayed unacked and the next relay run delivered it a
-second time. The ack of an already-delivered message now commits on a context
-detached from the run's cancellation and bounded by a 5 second timeout, and an
-ack lost at shutdown is logged. This also removes the intermittent failure of
-`TestOutbox_RelayRestartsAfterCancel` ("exactly two deliveries did not hold");
-`TestOutbox_AckSurvivesCancelBetweenHandlerAndCommit` pins the window
-deterministically.
+- core/outbox: an ordered, plain consumer's delivery is no longer repeated when the relay run is canceled between its handler returning and the settle committing. `settleAck` committed the cursor advance on the run's own context, so a cancel in that window (a graceful shutdown can land there) failed the commit, left the message unacked and delivered it a second time; a failure the handler had really reported was lost the same way in `settleFail`, which cost the message an unbudgeted attempt that ignored its backoff and `RetryAfter`. Both now commit on a context that outlives the cancel, bounded by five seconds (`settleCtx`), and a settle that is lost while the run stops is logged with the failure's class and type only. A handler that stops because its context was canceled must return `ctx.Err()`, never nil, since nil is acked even after a stop (now stated in the `HandlerFunc` documentation). Unordered consumers are not covered: a canceled unordered round still redelivers its completed messages (tracked in `todo.d`). This also removes the intermittent `TestOutbox_RelayRestartsAfterCancel` failure.
