@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_batch_write.go
-// version: 1.1.1
+// version: 1.3.0
 // guid: 3f0a9c61-8d24-4b17-9e35-c1a7f2b64d08
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 // Package maintenance — shared plumbing for ops that rewrite MANY book_file
 // rows of the SAME book.
@@ -39,8 +39,9 @@ import (
 
 // bookFileBatchProgressInterval throttles the in-book progress line. Liveness
 // is stamped on EVERY row (see bookFileBatchOpts.Reporter); this only paces the
-// human-readable message.
-const bookFileBatchProgressInterval = 10 * time.Second
+// human-readable message. A var, not a const, so a test can drive the progress
+// wiring without waiting ten seconds; nothing in production assigns it.
+var bookFileBatchProgressInterval = 10 * time.Second
 
 // bookFileBatchGroup is one book's share of a flat work list.
 type bookFileBatchGroup[T any] struct {
@@ -102,13 +103,22 @@ const bookFileStatLivenessEvery = 64
 // bookFileStatLivenessEvery rows (starting at the first), and returns false
 // when the pass should stop.
 func prewriteHeartbeat(reporter sdk.Reporter, abort func() bool) func(i int) bool {
+	return prewriteHeartbeatVia(func() {
+		if reporter != nil {
+			registry.TouchLiveness(reporter)
+		}
+	}, abort)
+}
+
+// prewriteHeartbeatVia is prewriteHeartbeat over a liveness stamp, so the HEAD
+// shells (a reporter) and the native shells (the run's progress tick) share one
+// body and one set of tests.
+func prewriteHeartbeatVia(touch func(), abort func() bool) func(i int) bool {
 	return func(i int) bool {
 		if i%bookFileStatLivenessEvery != 0 {
 			return true
 		}
-		if reporter != nil {
-			registry.TouchLiveness(reporter)
-		}
+		touch()
 		return abort == nil || !abort()
 	}
 }
@@ -186,14 +196,12 @@ func flattenJoinedErrs(err error) []error {
 	return []error{err}
 }
 
-// bookFileBatchOpts configures writeBookFileBatch.
-type bookFileBatchOpts struct {
-	// Reporter receives a liveness stamp after EVERY row. Without it a book
-	// with thousands of rows would look frozen to the stuck-op watchdog for
-	// the whole batch, because registry.RunItems stamps once per ITEM and the
-	// item is now a whole book.
-	Reporter sdk.Reporter
-
+// bookFileBatchHooks is the engine-neutral part of one book's batch write: the
+// callbacks the HEAD shells (through bookFileBatchOpts) and the native shells
+// (through the t6g5 variants) both pass. It lives here, with the body that
+// reads it, so production code does not import its options type from a dark
+// group's scaffolding.
+type bookFileBatchHooks struct {
 	// Progress, when non-nil, renders the progress line for row done of total
 	// in this book. It is called at most once per bookFileBatchProgressInterval.
 	Progress func(done, total int) (current, progressTotal int, msg string)
@@ -211,6 +219,24 @@ type bookFileBatchOpts struct {
 	OnRow func(i int, applied bool)
 }
 
+// bookFileBatchOpts configures writeBookFileBatch.
+type bookFileBatchOpts struct {
+	// Reporter receives a liveness stamp after EVERY row. Without it a book
+	// with thousands of rows would look frozen to the stuck-op watchdog for
+	// the whole batch, because registry.RunItems stamps once per ITEM and the
+	// item is now a whole book.
+	Reporter sdk.Reporter
+
+	// Progress: see bookFileBatchHooks.Progress.
+	Progress func(done, total int) (current, progressTotal int, msg string)
+
+	// Abort: see bookFileBatchHooks.Abort.
+	Abort func() bool
+
+	// OnRow: see bookFileBatchHooks.OnRow.
+	OnRow func(i int, applied bool)
+}
+
 // writeBookFileBatch writes rows — all belonging to ONE book — through a single
 // UpdateBookFiles call, so the book's aggregates are recomputed once after the
 // rows rather than once per row.
@@ -223,6 +249,32 @@ type bookFileBatchOpts struct {
 // the books it wrote before returning, so a cancelled batch never leaves a book
 // disagreeing with its own rows.
 func writeBookFileBatch(ctx context.Context, store bookFileBatchWriter, rows []*database.BookFile, opts bookFileBatchOpts) bookFileWriteOutcome {
+	sink := bookFileBatchSink{Touch: func() {
+		if opts.Reporter != nil {
+			registry.TouchLiveness(opts.Reporter)
+		}
+	}}
+	if opts.Reporter != nil {
+		sink.Progress = func(cur, tot int, msg string) { _ = opts.Reporter.UpdateProgress(cur, tot, msg) }
+	}
+	return writeBookFileBatchVia(ctx, store, rows, sink, bookFileBatchHooks{Progress: opts.Progress, Abort: opts.Abort, OnRow: opts.OnRow})
+}
+
+// bookFileBatchSink is where a batch write sends its liveness stamp and its
+// progress line: a sdk.Reporter for the HEAD shells, the run's env for the
+// native ones.
+type bookFileBatchSink struct {
+	// Touch stamps liveness after EVERY row. A nil Touch is skipped, so a sink
+	// built without one cannot panic inside the store's per-row callback.
+	Touch func()
+	// Progress renders the throttled progress line; nil drops it.
+	Progress func(current, total int, msg string)
+}
+
+// writeBookFileBatchVia is the body of writeBookFileBatch (and of the native
+// shells' t6g5WriteBookFileBatch) over a sink, so the abort-after-N-rows rule
+// is written once and tested once.
+func writeBookFileBatchVia(ctx context.Context, store bookFileBatchWriter, rows []*database.BookFile, sink bookFileBatchSink, opts bookFileBatchHooks) bookFileWriteOutcome {
 	if len(rows) == 0 {
 		return bookFileWriteOutcome{}
 	}
@@ -233,15 +285,15 @@ func writeBookFileBatch(ctx context.Context, store bookFileBatchWriter, rows []*
 	lastProgress := time.Now()
 	written, err := store.UpdateBookFiles(batchCtx, rows, func(i int, applied bool) {
 		done++
-		if opts.Reporter != nil {
-			registry.TouchLiveness(opts.Reporter)
+		if sink.Touch != nil {
+			sink.Touch()
 		}
 		if opts.OnRow != nil {
 			opts.OnRow(i, applied)
 		}
-		if opts.Progress != nil && opts.Reporter != nil && time.Since(lastProgress) >= bookFileBatchProgressInterval {
+		if opts.Progress != nil && sink.Progress != nil && time.Since(lastProgress) >= bookFileBatchProgressInterval {
 			cur, tot, msg := opts.Progress(done, len(rows))
-			_ = opts.Reporter.UpdateProgress(cur, tot, msg)
+			sink.Progress(cur, tot, msg)
 			lastProgress = time.Now()
 		}
 		// Checked AFTER the row, so the abort stops the NEXT row rather than

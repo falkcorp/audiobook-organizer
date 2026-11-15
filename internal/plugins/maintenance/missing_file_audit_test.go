@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5c8e2a17-96d4-4b3f-a70e-1d92f4c6b085
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -50,9 +50,9 @@ func runAudit(t *testing.T, rows []database.BookFileCore, params missingFileAudi
 	store := &database.MockStore{
 		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) { return rows, nil },
 	}
-	rep, err := auditMissingFiles(context.Background(), store, params, &fakeReporter{})
+	rep, err := auditMissingFilesVia(context.Background(), store, params, t6g5AuditEnv(context.Background(), &fakeReporter{}))
 	if err != nil {
-		t.Fatalf("auditMissingFiles: %v", err)
+		t.Fatalf("auditMissingFilesVia: %v", err)
 	}
 	return rep
 }

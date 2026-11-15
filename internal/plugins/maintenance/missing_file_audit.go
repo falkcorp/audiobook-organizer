@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.7.2
+// version: 1.8.1
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -18,8 +18,8 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- missing-file-audit ---
@@ -321,6 +321,36 @@ type missingFileItem struct {
 	file database.BookFileCore
 }
 
+// missingFileAuditKind is the native kind of maintenance.missing-file-audit (F5-10).
+const missingFileAuditKind tasks.Kind = "books.maintenance.missing-file-audit"
+
+// missingFileStatPool is the stat sweeps' pool (rule R4): HEAD ran every
+// missing-file stat loop on missingFileStatConcurrency workers, sized for NAS
+// latency rather than cores.
+func missingFileStatPool() t6g5Pool {
+	return t6g5FixedPool(missingFileStatConcurrency,
+		"each item is one os.Stat against the NAS, so the pool is sized for latency, not cores")
+}
+
+// missingFileAuditEnv is what the audit's cores need from their engine: the
+// base and the worker pool.
+type missingFileAuditEnv struct {
+	t6g5Base
+	Items t6g5ItemsFunc
+}
+
+// missingFileAuditResult is the counts the audit logs when it completes: the
+// native kind's result. HEAD stores no result.
+type missingFileAuditResult struct {
+	Rows                       int `json:"rows"`
+	Missing                    int `json:"missing"`
+	Unreadable                 int `json:"unreadable"`
+	ZeroSize                   int `json:"zero_size"`
+	BooksFullyBroken           int `json:"books_fully_broken"`
+	BooksPartiallyBroken       int `json:"books_partially_broken"`
+	MissingRowsDecisiveSignals int `json:"missing_rows_with_a_decisive_signal"`
+}
+
 func (p *Plugin) runMissingFileAudit(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	// Decode first: a bad body must fail the op before the store is touched.
 	var params missingFileAuditParams
@@ -328,17 +358,43 @@ func (p *Plugin) runMissingFileAudit(ctx context.Context, rawParams json.RawMess
 		return fmt.Errorf("missing-file-audit: parse params: %w", err)
 	}
 
-	store := p.deps.OpsStore()
-	if store == nil {
+	if p.deps.OpsStore() == nil {
 		return fmt.Errorf("database not initialized")
 	}
 
-	report, err := auditMissingFiles(ctx, store, params, reporter)
+	env := missingFileAuditEnv{t6g5Base: p.t6g5HeadBase(ctx, reporter, false), Items: t6g5HeadItems(reporter)}
+	_, err := runMissingFileAuditCore(ctx, params, env)
+	return err
+}
+
+// missingFileAuditKind builds the native kind. Declared ReadOnly: HEAD declares
+// no Writes and never requests CapLibraryWrite; the op only stats paths.
+func (p *Plugin) missingFileAuditKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	return tasks.Task(missingFileAuditKind, tasks.TaskSpec[json.RawMessage, missingFileAuditResult]{
+		Common: t6g5Common(p.missingFileAuditDef(), missingFileAuditKind, tasks.ReadOnly(), sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (missingFileAuditResult, error) {
+			var params missingFileAuditParams
+			if err := decodeOpParams(raw, &params); err != nil {
+				return missingFileAuditResult{}, fmt.Errorf("missing-file-audit: parse params: %w", err)
+			}
+			base, err := t6g5NativeBase(missingFileAuditKind, rc, deps, false)
+			if err != nil {
+				return missingFileAuditResult{}, err
+			}
+			return runMissingFileAuditCore(rc.Context(), params, missingFileAuditEnv{t6g5Base: base, Items: t6g5NativeItems(rc)})
+		},
+	})
+}
+
+// runMissingFileAuditCore is the shared body of both shells. It returns the
+// counts instead of only logging them.
+func runMissingFileAuditCore(ctx context.Context, params missingFileAuditParams, env missingFileAuditEnv) (missingFileAuditResult, error) {
+	report, err := auditMissingFilesVia(ctx, env.Store, params, env)
 	if err != nil {
-		return err
+		return missingFileAuditResult{}, err
 	}
 
-	log := reporter.Logger()
+	log := env.Logger
 	roots := make([]string, 0, len(report.MissingByRoot))
 	for r := range report.MissingByRoot {
 		roots = append(roots, r)
@@ -384,21 +440,27 @@ func (p *Plugin) runMissingFileAudit(ctx context.Context, rawParams json.RawMess
 		fields = append(fields, "zero_size_sample", report.ZeroSizeSample)
 	}
 	log.Info("missing-file-audit complete", fields...)
-	return nil
+	return missingFileAuditResult{
+		Rows: report.TotalRows, Missing: report.Missing, Unreadable: report.Unreadable, ZeroSize: report.ZeroSize,
+		BooksFullyBroken: report.BooksAllGone, BooksPartiallyBroken: report.BooksPartial,
+		MissingRowsDecisiveSignals: report.SignalsMissing.AnyDecisive,
+	}, nil
 }
 
-// auditMissingFiles performs the sweep and RETURNS the report.
+// auditMissingFilesVia performs the sweep over the engine the env names and
+// RETURNS the report (rule R10: it reads the store it is handed and nothing it
+// captures).
 //
 // Split out from the op body so the numbers can be asserted as values rather than
 // scraped from a progress string — the counts are the entire product of this op and
 // a destructive repair will be sized from them, so they deserve to be tested
 // directly.
-func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params missingFileAuditParams, reporter sdk.Reporter) (missingFileReport, error) {
+func auditMissingFilesVia(ctx context.Context, store bookFileCoreScanner, params missingFileAuditParams, env missingFileAuditEnv) (missingFileReport, error) {
 	sampleLimit := params.SampleLimit
 	if sampleLimit <= 0 {
 		sampleLimit = missingFileSampleLimit
 	}
-	log := reporter.Logger()
+	log := env.Logger
 	log.Info("missing-file-audit start", "path_prefix", params.PathPrefix, "sample_limit", sampleLimit)
 
 	files, err := store.GetAllBookFilesCore()
@@ -424,10 +486,19 @@ func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params mi
 	results := make([]fileExistence, len(items))
 	var missing, present, unreadable, zeroSize atomic.Int64
 
-	prog := sdk.NewProgress(reporter, len(items))
+	prog := t6g5NewProgress(env.t6g5Base, len(items))
 	prog.Start(fmt.Sprintf("Checking %d book_file path(s)…", len(items)))
 
-	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, it missingFileItem) error {
+	err = env.Items(ctx, len(items), t6g5ItemsOpts{
+		Pool: missingFileStatPool(),
+		// One unreadable path must not abandon the sweep: the whole point is the
+		// total, and a partial total is the one number that cannot be acted on.
+		Collect: true,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Checked %d/%d paths (missing=%d)", i+1, t, missing.Load())
+		},
+	}, func(_ context.Context, i int) error {
+		it := items[i]
 		switch info, serr := os.Stat(it.file.FilePath); {
 		case serr == nil && info.Size() == 0:
 			// Present on disk but holds no bytes -- a truncated/corrupt file, not a
@@ -450,14 +521,6 @@ func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params mi
 			log.Warn("missing-file-audit: could not stat", "path", it.file.FilePath, "err", serr)
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		// One unreadable path must not abandon the sweep: the whole point is the
-		// total, and a partial total is the one number that cannot be acted on.
-		ErrMode: registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Checked %d/%d paths (missing=%d)", i+1, t, missing.Load())
-		},
 	})
 	if err != nil {
 		return missingFileReport{}, fmt.Errorf("stat sweep: %w", err)
@@ -524,7 +587,7 @@ func auditMissingFiles(ctx context.Context, store bookFileCoreScanner, params mi
 				missingPaths = append(missingPaths, items[i].file.FilePath)
 			}
 		}
-		cls, cerr := classifyMissingRows(ctx, missingPaths, sampleLimit, reporter)
+		cls, cerr := classifyMissingRowsVia(ctx, missingPaths, sampleLimit, env)
 		if cerr != nil {
 			// A failed instrument check is not a partial result to be published
 			// with a caveat -- every verdict rests on the same stat call.
@@ -690,15 +753,16 @@ type classifyCandidate struct {
 	isControl  bool
 }
 
-// classifyMissingRows stats the derived candidate for every missing row.
+// classifyMissingRowsVia stats the derived candidate for every missing row, over
+// the engine the env names.
 //
 // Concurrency: the same bounded pool the sweep uses. Every item is one os.Stat
 // against the NAS, so the pool is sized for LATENCY, not cores — see
 // missingFileStatConcurrency. Results are written to a preallocated slice indexed
 // by position, never to a shared map, so no lock is needed.
-func classifyMissingRows(ctx context.Context, missingPaths []string, sampleLimit int, reporter sdk.Reporter) (missingFileClassification, error) {
+func classifyMissingRowsVia(ctx context.Context, missingPaths []string, sampleLimit int, env missingFileAuditEnv) (missingFileClassification, error) {
 	var out missingFileClassification
-	log := reporter.Logger()
+	log := env.Logger
 
 	work := make([]classifyCandidate, 0, len(missingPaths)+len(missingFileClassifyControls))
 	for _, p := range missingPaths {
@@ -723,10 +787,17 @@ func classifyMissingRows(ctx context.Context, missingPaths []string, sampleLimit
 		resolved[i] = -1
 	}
 
-	prog := sdk.NewProgress(reporter, len(work))
+	prog := t6g5NewProgress(env.t6g5Base, len(work))
 	prog.Start(fmt.Sprintf("Classifying %d missing path(s) by shape…", len(work)))
 
-	err := registry.RunItems(ctx, reporter, work, func(_ context.Context, it classifyCandidate) error {
+	err := env.Items(ctx, len(work), t6g5ItemsOpts{
+		Pool:    missingFileStatPool(),
+		Collect: true,
+		Label: func(i, t int) string {
+			return fmt.Sprintf("Classified %d/%d missing paths", i+1, t)
+		},
+	}, func(_ context.Context, i int) error {
+		it := work[i]
 		for ci, cand := range it.candidates {
 			if _, serr := os.Stat(cand); serr == nil {
 				resolved[it.idx] = ci
@@ -734,12 +805,6 @@ func classifyMissingRows(ctx context.Context, missingPaths []string, sampleLimit
 			}
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: missingFileStatConcurrency,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, t int) string {
-			return fmt.Sprintf("Classified %d/%d missing paths", i+1, t)
-		},
 	})
 	if err != nil {
 		return out, fmt.Errorf("classify sweep: %w", err)
