@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 29eb0771-6105-406d-b32a-2a11e3535809
 // last-edited: 2026-11-15
 
@@ -53,7 +53,10 @@ type t6g3PurgeWriter interface {
 // t6g3FileWriter is the writes that remove files.
 type t6g3FileWriter interface {
 	CleanupOrphanedTempFiles(rootDir string, opID string) int
-	CleanupStaleTempFiles(root string, app pathutil.AppDirs, maxAge time.Duration, dryRun bool) int
+	// CleanupStaleTempFiles removes the stale transcode temp files under root and
+	// returns how many. It is the live removal only: a preview counts with a read
+	// outside the writer (runTranscodeTempCleanupCore).
+	CleanupStaleTempFiles(root string, app pathutil.AppDirs, maxAge time.Duration) int
 	RemoveOldBackupFiles(ctx context.Context, root string, app pathutil.AppDirs,
 		match func(name string) (time.Time, bool), maxAge time.Duration,
 		log func(level slog.Level, msg string, kv ...any)) (int, error)
@@ -249,8 +252,8 @@ func (w headT6g3Writer) CleanupOrphanedTempFiles(rootDir string, opID string) in
 	return w.p.deps.CleanupOrphanedTempFiles(rootDir, opID)
 }
 
-func (w headT6g3Writer) CleanupStaleTempFiles(root string, app pathutil.AppDirs, maxAge time.Duration, dryRun bool) int {
-	return transcode.CleanupStaleTempFiles(root, app, maxAge, dryRun)
+func (w headT6g3Writer) CleanupStaleTempFiles(root string, app pathutil.AppDirs, maxAge time.Duration) int {
+	return transcode.CleanupStaleTempFiles(root, app, maxAge, false)
 }
 
 func (w headT6g3Writer) RemoveOldBackupFiles(ctx context.Context, root string, app pathutil.AppDirs,
