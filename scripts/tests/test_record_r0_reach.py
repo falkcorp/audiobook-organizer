@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.6.1
+# version: 1.7.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-14
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -85,6 +85,17 @@ FIXTURE_ROUTES = [
 ]
 
 
+# The two routes that write the stored config, each with R0's refusal of a body
+# before it writes: PUT /config answers 400 for a key Config lacks, the
+# maintenance-window handler for an hour outside 0-23.
+CONFIG_WRITERS = {
+    "/api/v1/config": lambda body: bool(set(body) - {"library_root", "scan_interval"}),
+    "/api/v1/maintenance-window/config": lambda body: (
+        not all(0 <= body.get(k, 0) <= 23 for k in ("window_start", "window_end"))
+    ),
+}
+
+
 class FakeR0:
     """A fixture R0: every behaviour a test needs is a switch on the instance."""
 
@@ -111,6 +122,12 @@ class FakeR0:
         self.delete_user_on: str | None = None  # a route whose probe drops a user
         self.delete_book_on: str | None = None  # a route whose probe drops a book
         self.count_reply: dict = {"data": {"count": 3}}
+        # What GET /config digests. The two config-writing routes below rewrite it the
+        # way R0 did for an empty body (it writes the whole config back); a body
+        # their handlers refuse (an unknown key, an hour outside 0-23) writes nothing.
+        self.config_reply: dict = {"data": {"library_root": "/x", "scan_interval": 5}}
+        self.config_writes = 0
+        self.change_config_on: str | None = None  # a route whose probe rewrites a setting
         self.defs = [
             {"id": "scan.trigger", "permissions": ["scan.trigger"], "approver": "requests.approve"},
             {"id": "books.noop", "permissions": ["library.view"], "approver": ""},
@@ -217,6 +234,8 @@ class FakeR0:
             self.users.pop("bystander", None)
         if self.delete_book_on and path == self.delete_book_on:
             self.count_reply = {"data": {"count": self.count_reply["data"]["count"] - 1}}
+        if self.change_config_on and path == self.change_config_on:
+            self.config_reply = {"data": {"library_root": "/x", "scan_interval": 6}}
         user, atoms = self.principal(h)
         if path == "/api/v1/auth/login":
             u = (body or {}).get("username")
@@ -240,6 +259,20 @@ class FakeR0:
             return self.reply(h, 201, {"data": {"id": f"k-{len(self.keys)}", "api_key": secret}})
         if path == "/api/v1/users" and method == "GET" and (user and "users.manage" in atoms):
             return self.reply(h, 200, {"data": {"users": list(self.users.values())}})
+        if path == "/api/v1/config" and method == "GET" and user:
+            return self.reply(h, 200, self.config_reply)
+        if path in CONFIG_WRITERS and method == "PUT":
+            if user is None:
+                return self.reply(h, 401)
+            if "settings.manage" not in (atoms or []):
+                return self.reply(h, 403)
+            if CONFIG_WRITERS[path](body or {}):
+                return self.reply(h, 400)
+            self.config_writes += 1
+            self.config_reply = {
+                "data": {**self.config_reply["data"], "writes": self.config_writes}
+            }
+            return self.reply(h, 200)
         if path == "/api/v1/audiobooks/count" and method == "GET":
             return self.reply(h, 200, self.count_reply)
         if path == "/api/v3/ops/defs" and method == "GET":
@@ -382,8 +415,31 @@ class ProbeShapeTest(unittest.TestCase):
 
     def test_mutating_verbs_get_an_empty_object(self):
         self.assertEqual(rec.probe_body("POST"), {})
+        self.assertEqual(rec.probe_body("PUT", "/api/v1/audiobooks/:id"), {})
         self.assertIsNone(rec.probe_body("GET"))
         self.assertIsNone(rec.probe_body("DELETE"))
+
+    def test_the_two_config_writers_get_a_body_their_handlers_refuse_before_writing(self):
+        self.assertEqual(rec.probe_body("PUT", "/api/v1/config"), {"r2reach_probe": True})
+        self.assertEqual(
+            rec.probe_body("PUT", "/api/v1/maintenance-window/config"), {"window_start": -1}
+        )
+        self.assertEqual(
+            rec.probe_request("PUT", "/api/v1/config", "key:x"),
+            ("/api/v1/config", {"r2reach_probe": True}),
+        )
+        # the bodies are the ones the fake's models of R0's two handlers refuse
+        for path, body in rec.CONFIG_PROBE_BODIES.items():
+            self.assertTrue(CONFIG_WRITERS[path[1]](body), path)
+            self.assertFalse(CONFIG_WRITERS[path[1]]({}), path)
+
+    def test_the_config_writers_are_routes_of_the_committed_dump(self):
+        dump = json.loads(
+            (REPO_ROOT / "internal/books/rbacreach/routes.json").read_text(encoding="utf-8")
+        )
+        known = {(r["method"], r["path"]) for r in dump["routes"]}
+        for key in rec.CONFIG_PROBE_BODIES:
+            self.assertIn(key, known)
 
     def test_the_invite_routes_get_a_token_of_each_principals_own(self):
         a = rec.probe_request("GET", "/api/v1/auth/invite/:token", "key:admin:view")
@@ -628,6 +684,75 @@ class RecordPassTest(unittest.TestCase):
         self.assertIn("drift", str(cm.exception))
         self.assertIn("books", str(cm.exception))
 
+    def test_a_probe_that_rewrites_a_setting_fails_the_run(self):
+        self.rig.fake.change_config_on = "/api/v1/system/reset"
+        with self.assertRaises(rec.RecorderError) as cm:
+            self.rig.run()
+        self.assertIn("drift", str(cm.exception))
+        self.assertIn("config", str(cm.exception))
+
+    def test_a_census_that_reads_no_settings_fails_the_run(self):
+        self.rig.fake.config_reply = {}
+        with self.assertRaises(rec.RecorderError) as cm:
+            self.rig.run()
+        self.assertIn("no settings", str(cm.exception))
+
+    def test_the_census_names_the_config_digest(self):
+        out = self.rig.run()
+        self.assertRegex(out["census"]["config_sha256"], r"^[0-9a-f]{64}$")
+
+    def config_rig(self) -> Rig:
+        rig = self.rig
+        rig.routes = rig.routes + [
+            {"method": "PUT", "path": p, "abs_only": False} for p in CONFIG_WRITERS
+        ]
+        return rig
+
+    def test_the_probes_of_the_config_writers_leave_the_config_digest_alone(self):
+        rig = self.config_rig()
+        out = rig.run()
+        self.assertEqual(rig.fake.config_writes, 0)
+        self.assertRegex(out["census"]["config_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_an_empty_body_to_a_config_writer_rewrites_the_config_and_fails_the_run(self):
+        rig = self.config_rig()
+        emptied = mock.patch.dict(rec.CONFIG_PROBE_BODIES, {}, clear=True)
+        with emptied, self.assertRaises(rec.RecorderError) as cm:
+            rig.run()
+        self.assertIn("drift", str(cm.exception))
+        self.assertIn("config", str(cm.exception))
+        self.assertGreater(rig.fake.config_writes, 0)
+
+    def test_the_new_body_gives_the_letters_the_empty_body_gave(self):
+        """Authorization decides before either body is read, so a refused body and an
+        empty one are told apart only by what they write."""
+        letters = {}
+        for name, bodies in (("probe", None), ("empty", {})):
+            rig = Rig()
+            self.addCleanup(rig.close)
+            rig.routes = rig.routes + [
+                {"method": "PUT", "path": p, "abs_only": False} for p in CONFIG_WRITERS
+            ]
+            ctx = (
+                mock.patch.dict(rec.CONFIG_PROBE_BODIES, {}, clear=True)
+                if bodies is not None
+                else mock.patch.dict(rec.CONFIG_PROBE_BODIES, dict(rec.CONFIG_PROBE_BODIES))
+            )
+            with ctx:
+                try:
+                    out = rig.run(do_tasks=False)
+                except rec.RecorderError:
+                    self.fail("the probe needs no census to record")
+            doc = rec.build_verdicts(
+                {"r0_tag": "t"}, rig.routes, rig.principals, out["columns"], {}
+            )
+            letters[name] = {
+                (r["method"], r["path"]): r["verdict"]
+                for r in doc["routes"]
+                if r["path"] in CONFIG_WRITERS
+            }
+        self.assertEqual(letters["probe"], letters["empty"])
+
     def test_a_census_that_cannot_read_the_book_count_fails_the_run(self):
         for reply in ({"count": 3}, {"data": {}}, {"data": {"count": "3"}}):
             with self.subTest(reply=reply):
@@ -776,6 +901,97 @@ class AuthFlipTest(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), doc)
         ns = rec.build_parser().parse_args(["--check", "--reuse-auth-on", "x.json"])
         self.assertEqual(ns.reuse_auth_on, "x.json")
+
+
+class OwnerSetTest(unittest.TestCase):
+    """The owner-set recording: the owner-gated routes again, in boots whose stored
+    config holds an owner email, for the table's every principal."""
+
+    def test_the_owner_email_is_a_fixture_on_a_reserved_domain(self):
+        self.assertEqual(rec.OWNER_EMAIL, "bruce@example.invalid")
+        self.assertEqual(rec.OWNER_EDIT, 'owner_email=*>"bruce@example.invalid"')
+
+    def test_the_owner_routes_are_routes_of_the_committed_dump(self):
+        dump = json.loads((REACH / "routes.json").read_text(encoding="utf-8"))
+        got = rec.owner_routes(dump["routes"])
+        self.assertEqual([(r["method"], r["path"]) for r in got], list(rec.OWNER_ROUTES))
+        self.assertEqual(len(rec.OWNER_ROUTES), 9)
+        self.assertEqual(len(set(rec.OWNER_ROUTES)), 9)
+
+    def test_a_route_the_dump_lacks_is_a_recorder_failure(self):
+        with self.assertRaises(rec.RecorderError) as cm:
+            rec.owner_routes([{"method": "POST", "path": "/api/v1/backup/restore"}])
+        self.assertIn("/api/v1/system/reset", str(cm.exception))
+
+    def test_an_owner_boot_adds_the_owner_edit_to_the_flags_and_to_auth_off(self):
+        seen: list[list[str]] = []
+
+        def record_edits(layout, edits):
+            seen.append(edits)
+            raise RuntimeError("stop after the edit")
+
+        args = rec.build_parser().parse_args(["--check"])
+        for auth_off, owner_set, want in (
+            (False, True, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG, rec.OWNER_EDIT]),
+            (True, True, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG, rec.AUTH_OFF_EDIT, rec.OWNER_EDIT]),
+            (False, False, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG]),
+        ):
+            staged = mock.patch.object(rec, "stage_copy")
+            edited = mock.patch.object(rec, "edit_config", side_effect=record_edits)
+            with staged, edited, self.assertRaises(RuntimeError):
+                rec.boot_and_record(args, pathlib.Path("r0"), [], [], auth_off, owner_set=owner_set)
+            self.assertEqual(seen[-1], want)
+
+    def test_the_columns_of_the_two_boots_are_stitched_in_principal_order(self):
+        table = [
+            p
+            for p in rec.principal_table()
+            if p["name"] in {"session:admin", "authoff", "anonymous"}
+        ]
+        self.assertEqual([p["name"] for p in table], ["session:admin", "anonymous", "authoff"])
+        on = [[403, 403], [401, 401]]
+        off = [[200, 404]]
+        self.assertEqual(rec.stitch_columns(table, on, off), [[403, 403], [401, 401], [200, 404]])
+
+    def test_the_owner_doc_has_a_letter_per_principal_and_names_the_owner(self):
+        table = [
+            p
+            for p in rec.principal_table()
+            if p["name"] in {"session:admin", "anonymous", "authoff"}
+        ]
+        routes = [{"method": "POST", "path": "/api/v1/backup/restore"}]
+        doc = rec.owner_set_doc(routes, table, [[403], [401], [404]])
+        self.assertEqual(doc["owner_email"], rec.OWNER_EMAIL)
+        self.assertEqual(
+            doc["routes"],
+            [
+                {
+                    "method": "POST",
+                    "path": "/api/v1/backup/restore",
+                    "status": [403, 401, 404],
+                    "verdict": "DDA",
+                }
+            ],
+        )
+
+    def test_check_compares_the_owner_set_recording(self):
+        base = {
+            "principals": ["a", "b"],
+            "routes": [],
+            "owner_set": {
+                "owner_email": rec.OWNER_EMAIL,
+                "routes": [{"method": "POST", "path": "/x", "verdict": "DD"}],
+            },
+        }
+        self.assertEqual(rec.diff_verdicts(base, base), [])
+        flipped = json.loads(json.dumps(base))
+        flipped["owner_set"]["routes"][0]["verdict"] = "DA"
+        self.assertEqual(rec.diff_verdicts(base, flipped), ["owner_set POST /x / b: D -> A"])
+        dropped = {**base, "owner_set": {"owner_email": rec.OWNER_EMAIL, "routes": []}}
+        self.assertEqual(rec.diff_verdicts(base, dropped), ["owner_set POST /x: route removed"])
+        other = json.loads(json.dumps(base))
+        other["owner_set"]["owner_email"] = "someone@example.invalid"
+        self.assertEqual(len(rec.diff_verdicts(base, other)), 1)
 
 
 class FilesAndCheckTest(unittest.TestCase):
