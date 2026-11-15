@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-14
 
@@ -63,7 +63,8 @@ func t6g4StartRequirement() rbac.Requirement {
 }
 
 // t6g4Res is rule R7's res(s) = tasks.Res("books", s). It takes the pkg/ops
-// constants, never a string, so a coined resource name does not compile.
+// constants by convention; a bare string converts to ops.Resource, so
+// TestT6G4Kinds_EveryDeclaredResourceIsAPkgOpsConstant is what closes the vocabulary.
 func t6g4Res(resources ...ops.Resource) []tasks.Resource {
 	out := make([]tasks.Resource, len(resources))
 	for i, r := range resources {
