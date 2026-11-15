@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
 // last-edited: 2026-11-15
 
@@ -305,9 +305,14 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 }
 
 // libraryStateRepairKind builds the native kind. Writes: HEAD's declared
-// books resource; the preview is HEAD's dry run.
+// books resource plus what a book write carries (the SetLibraryStateOrganized row
+// of kinds_resources.go); the preview is HEAD's dry run.
 func (p *Plugin) libraryStateRepairKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)))
+	// SetLibraryStateOrganized is a ModifyBook-shaped write: the books row and what
+	// a book write carries (authors' legacy index, the stale stamp, the ident: rows;
+	// the shared bookW row of kinds_resources.go).
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)),
+		tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(libraryStateRepairKind, tasks.TaskSpec[json.RawMessage, libraryStateRepairResult]{
 		Common: t6g5Common(p.repairLibraryStateDef(), libraryStateRepairKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (libraryStateRepairResult, error) {

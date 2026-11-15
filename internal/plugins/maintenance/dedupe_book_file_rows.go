@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.13.6
+// version: 1.13.7
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-11-15
 
@@ -356,7 +356,9 @@ func (p *Plugin) dedupeBookFileRowsKind(deps t6g4Deps, sched *tasks.Schedule) ta
 			// (CreateOperationChange: operations).
 			// It also writes the per-book and per-row decisions TSVs under the
 			// library root (files: bytes on disk, written outside the writer).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations, ops.ResFiles)...),
+			// The file-row methods it calls recompute the books aggregate, so the row also carries
+			// the rest of the ModifyBook row: authors, metadata_cache, indexes (THE RULE, kinds_resources.go).
+			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes, ops.ResFingerprintIndex, ops.ResOperations, ops.ResFiles)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: a removed duplicate row no longer matches the selection), so the 05-tasks mapping is

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.15.3
+// version: 1.15.4
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — RECOVER missing book_file rows by matching their recorded
 // FileSize to real files on disk, for the rows that maintenance.missing-file-repoint
@@ -353,7 +353,9 @@ func (p *Plugin) recoverMissingFilesNative(deps t6g6Deps, sched func(tasks.Kind)
 	// aggregates (books), and the opt-in reflinkOutside branch clones files on disk
 	// (files, the resource F5-08 names it). Effects are static per kind, so files
 	// is declared for every run, as the widest the kind can do.
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResFiles)))
+	// The shared fileRow of kinds_resources.go: a book_file row write also
+	// recomputes the owning book (books, authors, metadata_cache, indexes).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResFiles)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.recover-missing-files")

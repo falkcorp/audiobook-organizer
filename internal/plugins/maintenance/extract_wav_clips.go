@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.10.6
+// version: 1.10.7
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
 // last-edited: 2026-11-15
 
@@ -115,7 +115,9 @@ func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks
 			// stack parity review P1). files: the clips it cuts and the content-stable
 			// hardlinks it makes under the library root (bytes on disk, written outside
 			// the writer).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResFiles)...),
+			// ModifyBook is reached through the recompute, so the row is the whole ModifyBook row:
+			// authors, metadata_cache, indexes too (THE RULE, kinds_resources.go).
+			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResAuthors, ops.ResMetadataCache, ops.ResIndexes, ops.ResFiles)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: skip_existing (the default) skips a clip already in the cache), so the 05-tasks mapping is

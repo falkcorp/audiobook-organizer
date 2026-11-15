@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.6.6
+// version: 1.6.7
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
 // last-edited: 2026-11-15
 
@@ -229,7 +229,9 @@ func (p *Plugin) mergeSamePathDupesKind(deps t6g5Deps, sched func(tasks.Kind) *t
 		// metadata_cache and indexes: MergeBooks re-authors every member through
 		// ModifyBook (the stale stamp on the cache row when the identity changes) and
 		// stages the ident: rows (`indexes`, kinds_resources.go).
-		tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
+		tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)),
+		// authors: the same ModifyBook stages author_books_legacy: for a re-authored book.
+		tasks.Res("books", string(ops.ResAuthors)))
 	return tasks.Task(mergeSamePathDupesKind, tasks.TaskSpec[json.RawMessage, mergeSamePathPlan]{
 		Common: t6g5Common(p.mergeSamePathDupesDef(), mergeSamePathDupesKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (mergeSamePathPlan, error) {

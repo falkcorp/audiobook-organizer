@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/build_folder_book_files.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 92622b6c-f340-42c4-b6b1-2fdba32b770f
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.build-folder-book-files.
 //
@@ -68,7 +68,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -692,10 +691,12 @@ func t6g2BuildFolderBookFilesParallelism() tasks.Parallelism { return tasks.CPU(
 
 func t6g2BuildFolderBookFilesMeta() t6g2Meta {
 	return t6g2Meta{
-		Kind:     t6g2KindBuildFolderBookFiles,
-		Title:    t6g2BuildFolderBookFilesTitle,
-		Help:     t6g2BuildFolderBookFilesHelp,
-		Effects:  tasks.Writes(t6g2Res(ops.ResBookFiles, ops.ResBooks)...),
+		Kind:  t6g2KindBuildFolderBookFiles,
+		Title: t6g2BuildFolderBookFilesTitle,
+		Help:  t6g2BuildFolderBookFilesHelp,
+		// BatchCreateBookFiles recomputes the books aggregate: the shared row of
+		// t6WriterResources, not a retyped list (kinds_resources.go).
+		Effects:  tasks.Writes(t6g2Res(t6WriterResources["BatchCreateBookFiles"]...)...),
 		Resume:   tasks.ResumeDrop,
 		Priority: tasks.PriorityNormal,
 		Timeout:  240 * time.Minute,

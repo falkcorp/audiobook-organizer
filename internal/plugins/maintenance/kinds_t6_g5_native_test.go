@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-15
 
@@ -779,15 +779,18 @@ func TestT6G5Native_RepairLibraryState(t *testing.T) {
 	b, err := s.CreateBook(&database.Book{ID: "01BATMAN00000000000000LS01", Title: "Arkham Asylum",
 		FilePath: filepath.Join(root, "Bruce Wayne", "Arkham Asylum", "01.mp3"), LibraryState: &state, OrganizedFileHash: &hash})
 	require.NoError(t, err)
-	// A cache row for the book, a resource the repair must NOT write: a repair
-	// that also dropped or stamped it changes a key the diff can see.
+	// A cache row for the book: what this run OBSERVABLY writes is books alone (its
+	// closure sets LibraryState, which trips no stale stamp), and a repair that also
+	// dropped or stamped the row would change a key the diff can see. The declared
+	// row is wider (SetLibraryStateOrganized carries the whole ModifyBook row, the one
+	// rule of kinds_resources.go): this asserts the run, not the declaration.
 	require.NoError(t, s.PutMetadataCache(&database.MetadataCandidateCache{BookID: b.ID, FetchedAt: time.Now()}))
 
 	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: root}), tasks.ModeLive, "maintenance.repair-library-state", "", "")
 	require.NoError(t, r.err)
 	r.requireWriter(t)
 	r.requireStoreWritesWithin(t, d, string(ops.ResBooks))
-	assert.Equal(t, []string{string(ops.ResBooks)}, d.resources, "the repair writes the books resource and nothing else: its one write sets LibraryState, which trips no metadata-cache stale stamp")
+	assert.Equal(t, []string{string(ops.ResBooks)}, d.resources, "this run changes the books resource and nothing else: its one write sets LibraryState, which trips no metadata-cache stale stamp (the declared row is wider by the one rule)")
 	var res libraryStateRepairResult
 	require.NoError(t, json.Unmarshal(r.out, &res))
 	assert.False(t, res.DryRun)

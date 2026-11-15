@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.move-book-file-rows.
 //
@@ -255,7 +255,12 @@ func t6g5MbfHeadProgress(reporter sdk.Reporter) func(done, total int, msg string
 // book_files resource and the books both ends of a move recompute
 // (MoveBookFilesToBookBulk); the preview is HEAD's dry run.
 func (p *Plugin) moveBookFileRowsKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)))
+	// The book_file row writers: the shared fileRow of kinds_resources.go (the row
+	// and everything the aggregate recompute it triggers writes: books, authors,
+	// metadata_cache, indexes).
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)),
+		tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)),
+		tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(moveBookFileRowsKind, tasks.TaskSpec[json.RawMessage, mbfReport]{
 		Common: t6g5Common(p.moveBookFileRowsDef(), moveBookFileRowsKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (mbfReport, error) {

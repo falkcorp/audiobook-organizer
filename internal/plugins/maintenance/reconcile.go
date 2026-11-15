@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: b8c9d0e1-f2a3-4567-1234-789012345678
 // last-edited: 2026-11-15
 
@@ -95,7 +95,9 @@ func (p *Plugin) itunesHealNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.S
 		tasks.Res("books", string(ops.ResSyncIdentity)), tasks.Res("books", string(ops.ResAIJournal)),
 		// metadata_cache: the merge re-authors members through ModifyBook, which stamps
 		// the cache stale on an identity change (the shared MergeBooks row).
-		tasks.Res("books", string(ops.ResMetadataCache)))
+		tasks.Res("books", string(ops.ResMetadataCache)),
+		// authors: the same ModifyBook stages author_books_legacy: (the MergeBooks row).
+		tasks.Res("books", string(ops.ResAuthors)))
 	// HEAD's def says Restart because the reflink is idempotent. The heal never
 	// writes a checkpoint of its own (LastProcessedPID only comes in through the
 	// params), so a restart re-walks from the start: ResumeFromZero, not Continue.

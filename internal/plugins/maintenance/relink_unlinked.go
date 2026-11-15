@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
 // last-edited: 2026-11-15
 
@@ -157,7 +157,9 @@ func (p *Plugin) relinkUnlinkedBooksNative(deps t6g6Deps, sched func(tasks.Kind)
 	c.Help = relinkUnlinkedBooksHelp
 	// HEAD declared no Writes. The repair creates book_file rows and the batch
 	// create recomputes the owning book's aggregates, so both are declared.
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)))
+	// The shared fileRow of kinds_resources.go: a book_file row write also
+	// recomputes the owning book (books, authors, metadata_cache, indexes).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.maintenance.relink-unlinked-books")

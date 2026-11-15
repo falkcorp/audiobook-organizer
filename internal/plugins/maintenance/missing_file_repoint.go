@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_repoint.go
-// version: 1.15.2
+// version: 1.15.3
 // guid: 9f4c1e02-7b56-4d38-a1c9-05e6b7d3428f
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — REPOINT repair for book_file rows whose FilePath no longer
 // resolves but whose bytes are still on disk under a different name.
@@ -233,7 +233,12 @@ func (p *Plugin) runMissingFileRepoint(ctx context.Context, rawParams json.RawMe
 // HEAD's struct after the mode key (apply) is refused, so its Apply field is
 // never set from params.
 func (p *Plugin) missingFileRepointKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)))
+	// The book_file row writers: the shared fileRow of kinds_resources.go (the row
+	// and everything the aggregate recompute it triggers writes: books, authors,
+	// metadata_cache, indexes).
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)),
+		tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)),
+		tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(missingFileRepointKind, tasks.TaskSpec[json.RawMessage, repointPlan]{
 		Common: t6g5Common(p.missingFileRepointDef(), missingFileRepointKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (repointPlan, error) {
