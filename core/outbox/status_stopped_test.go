@@ -1,7 +1,7 @@
 // file: core/outbox/status_stopped_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3d9f1a62-5e48-4b07-a1c3-82e6f0b7d415
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package outbox_test
 
@@ -50,6 +50,11 @@ func TestOutbox_StatusSurvivesAnUnreadableRowAndNamesIt(t *testing.T) {
 		t.Run("message row, "+tc.name, func(t *testing.T) {
 			r := newRig(t, rigOpts{register: consumeInto(&recorder{}, consumerN)})
 			eventually(t, "the consumer's cursors", func() bool { return r.cursors(consumerN) == 2 })
+			// The relay is stopped before the message is staged: a running relay
+			// delivers the valid row between StageSequence and the overwrite below,
+			// the cursor then passes it, and Status (which reads above the cursor
+			// only) rightly has nothing unreadable to name.
+			r.stopRelay()
 			seqRow(t, r)
 			r.putRaw(outboxstore.MsgKey(noticeName, pp, 1), tc.row)
 			st, err := r.ob.Status(ctx)

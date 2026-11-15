@@ -1,7 +1,7 @@
 // file: core/outbox/harness_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1e7fbb59-5fbb-4c44-9df0-2d6b9f8a1c70
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package outbox_test
 
@@ -312,6 +312,23 @@ func (r *rig) startRelay() tasks.RunID {
 	}
 	eventually(r.t, "the relay to run", func() bool { return r.ob.Running() })
 	return ref.ID
+}
+
+// stopRelay cancels the one relay run and waits until it has ended and its
+// goroutine has left relayBody, so nothing in the rig reads or writes the
+// store's message and cursor families until a test starts a relay again (the
+// nudger is not running unless the test started it). A test that plants rows
+// by hand beside a running relay races the relay's own delivery of them; this
+// is the barrier that removes the relay from the race.
+func (r *rig) stopRelay() {
+	r.t.Helper()
+	runs := r.runsOf(outbox.RelayKind)
+	if len(runs) != 1 {
+		r.t.Fatalf("%d relay runs, want 1", len(runs))
+	}
+	must(r.t, r.x.CancelAs(context.Background(), runs[0].ID, systemActor))
+	r.waitRun(runs[0].ID, tasks.StateCanceled)
+	eventually(r.t, "the relay to stop", func() bool { return !r.ob.Running() })
 }
 
 // healthOf is the core.outbox component's current Result.
