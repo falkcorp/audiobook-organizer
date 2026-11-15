@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.10.0
+# version: 1.11.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-15
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -117,6 +117,9 @@ class FakeR0:
         self.fail_status: dict[str, int] = {}  # "METHOD path-prefix" -> status
         # the same, but only for a request that passed authorization (a handler's own failure)
         self.handler_status: dict[str, int] = {}
+        # the error message a handler's own 5xx carries (None: the empty body of a
+        # recovered panic); the listed reason of PUT /audiobooks/:id by default
+        self.handler_message: str | None = rec.OK_5XX_REASONS["PUT /api/v1/audiobooks/:id"][1]
         self.me_status: dict[
             str, int
         ] = {}  # username -> status of GET /auth/me (a confined worker)
@@ -194,6 +197,16 @@ class FakeR0:
         h.end_headers()
         h.wfile.write(raw)
 
+    def reply_error(self, h, status: int, message: str | None) -> None:
+        """An error reply as R0's handlers write one: ``{"error": message}`` (the
+        generic message of ``httputil.InternalError``), or no body at all."""
+        raw = b"" if message is None else json.dumps({"error": message}).encode()
+        h.send_response(status)
+        h.send_header("Content-Type", "application/json")
+        h.send_header("Content-Length", str(len(raw)))
+        h.end_headers()
+        h.wfile.write(raw)
+
     def handle(self, h) -> None:
         self.peers.append(h.client_address[0])
         if self.stream_path and urlparse(h.path).path == self.stream_path:
@@ -230,7 +243,7 @@ class FakeR0:
         for prefix, status in self.fail_status.items():
             pm, pp = prefix.split(" ", 1)
             if pm == method and path.startswith(pp):
-                return self.reply(h, status)
+                return self.reply_error(h, status, self.handler_message)
         if self.delete_user_on and path == self.delete_user_on:
             self.users.pop("bystander", None)
         if self.delete_book_on and path == self.delete_book_on:
@@ -324,7 +337,7 @@ class FakeR0:
             for prefix, status in self.handler_status.items():
                 pm, pp = prefix.split(" ", 1)
                 if pm == method and path.startswith(pp):
-                    return self.reply(h, status)
+                    return self.reply_error(h, status, self.handler_message)
             return self.reply(h, 400 if method in ("POST", "PUT", "PATCH") else 404)
         return self.reply(h, 404)
 
@@ -648,12 +661,65 @@ class RecordPassTest(unittest.TestCase):
         self.assertEqual(row["verdict"][names.index("session:admin")], "A")
         self.assertEqual(row["verdict"][names.index("anonymous")], "D")
 
+    def test_a_listed_5xx_is_recorded_with_its_reason_token_and_never_its_body(self):
+        route = "PUT /api/v1/audiobooks/:id"
+        self.rig.fake.handler_status["PUT /api/v1/audiobooks"] = 500
+        out = self.rig.run()
+        names = [p["name"] for p in self.rig.principals]
+        i = next(i for i, r in enumerate(self.rig.routes) if f"{r['method']} {r['path']}" == route)
+        want = rec.OK_5XX_REASONS[route][0]
+        self.assertEqual(out["reasons"][names.index("session:admin")][route], want)
+        self.assertNotIn(route, out["reasons"][names.index("anonymous")])
+        verdicts = rec.build_verdicts(
+            {}, self.rig.routes, self.rig.principals, out["columns"], {}, out["reasons"]
+        )
+        row = verdicts["routes"][i]
+        self.assertEqual(row["reason"][names.index("session:admin")], want)
+        self.assertEqual(row["reason"][names.index("anonymous")], "")
+        self.assertEqual(len(row["reason"]), len(names))
+        # a route with no 5xx cell carries no reason list, and no body text is kept
+        self.assertTrue(all("reason" not in r for k, r in enumerate(verdicts["routes"]) if k != i))
+        self.assertNotIn("failed to update audiobook", json.dumps(verdicts))
+
+    def test_a_listed_5xx_without_its_listed_message_is_a_recorder_failure(self):
+        self.rig.fake.handler_status["PUT /api/v1/audiobooks"] = 500
+        self.rig.fake.handler_message = "open /home/runner/work/x: permission denied (10.1.2.3)"
+        with self.assertRaises(rec.RecorderError) as cm:
+            self.rig.run()
+        text = str(cm.exception)
+        self.assertIn("PUT /api/v1/audiobooks/:id", text)
+        self.assertIn("failed-to-update-audiobook", text)
+        # the shape of the body is named, its path and address are not
+        self.assertNotIn("/home/runner", text)
+        self.assertNotIn("10.1.2.3", text)
+
     def test_a_listed_5xx_the_anonymous_caller_also_gets_is_not_a_verdict(self):
         # a 5xx before the decision (a crash in the middleware) is not an allow.
         self.rig.fake.fail_status["PUT /api/v1/audiobooks"] = 500
         with self.assertRaises(rec.RecorderError) as cm:
             self.rig.run()
         self.assertIn("anonymous got 500", str(cm.exception))
+
+    def test_every_listed_5xx_has_exactly_one_reason_token(self):
+        self.assertEqual(sorted(rec.OK_5XX_REASONS), sorted({**rec.OK_5XX, **rec.OK_5XX_AUTHOFF}))
+        for route, (token, message) in rec.OK_5XX_REASONS.items():
+            self.assertRegex(token, r"^[a-z][a-z0-9-]{3,40}$", route)
+            self.assertTrue(message is None or len(message) >= 8, route)
+
+    def test_reason_token_reads_the_message_and_an_empty_panic_body(self):
+        panic = "POST /api/v1/audiobooks/:id/parse-with-ai"
+        self.assertEqual(rec.reason_token(panic, 500, ""), "recovered-panic")
+        with self.assertRaises(rec.RecorderError):
+            rec.reason_token(panic, 500, '{"error":"failed to parse"}')
+        route = "POST /api/v1/update/apply"
+        body = '{"error":"Failed To Apply Update","code":"INTERNAL_ERROR"}'
+        self.assertEqual(rec.reason_token(route, 500, body), "failed-to-apply-update")
+        with self.assertRaises(rec.RecorderError) as cm:
+            rec.reason_token(route, 500, '{"error":"disk /var/lib/x 17 full"}')
+        self.assertNotIn("/var/lib", str(cm.exception))
+        self.assertNotIn("17", str(cm.exception))
+        with self.assertRaises(rec.RecorderError):
+            rec.reason_token("GET /api/v1/health", 500, "")
 
     def test_every_listed_5xx_names_a_route_of_the_committed_dump(self):
         dump = json.loads(
@@ -822,7 +888,9 @@ class AuthOffTest(unittest.TestCase):
 
         with self.assertRaises(rec.RecorderError):
             run()
-        with mock.patch.dict(rec.OK_5XX_AUTHOFF, {"GET /api/v1/health": "a test"}):
+        reasons = {"GET /api/v1/health": ("a-test", "failed to update audiobook")}
+        listed_off = mock.patch.dict(rec.OK_5XX_AUTHOFF, {"GET /api/v1/health": "a test"})
+        with listed_off, mock.patch.dict(rec.OK_5XX_REASONS, reasons):
             self.assertIn(500, run()["columns"][0])
         # the same entry does not loosen the auth-on pass
         listed = mock.patch.dict(rec.OK_5XX_AUTHOFF, {"GET /api/v1/health": "a test"})
@@ -993,6 +1061,7 @@ class OwnerSetTest(unittest.TestCase):
                 "approvals": [],
                 "census": {},
                 "canary": {p["name"]: 200 for p in mine},
+                "reasons": [{} for _ in mine],
             }
             if owner_set and not auth_off:
                 out["refusals"] = {

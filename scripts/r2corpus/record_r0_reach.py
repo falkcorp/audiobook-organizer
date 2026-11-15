@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.9.0
+# version: 1.10.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-15
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -21,7 +21,9 @@ requests every route of R0's router dump (``routes.json``, written by
 A probe is a request that fails *after* authorization when it is authorized: a
 dummy path id (404) or an empty ``{}`` body (400/422). So a 401/403 is a
 denial and any other status below 500 is an allow. Nothing else is a verdict:
-a 429, a 5xx and a connection error are recorder failures, never recorded, and
+a 429, a 5xx (but for the routes of ``OK_5XX``, whose 5xx cells are recorded with a
+closed-vocabulary reason token, ``OK_5XX_REASONS``, never with the body) and a
+connection error are recorder failures, never recorded, and
 a drift sentinel (a census of users, books, task definitions and the stored config,
 plus a per-principal canary) fails the run when a probe changed the store or killed
 the server.
@@ -123,7 +125,7 @@ HEADER_GUIDS = {
     "routes.json": "d41a8b7f-2c65-4e93-8f10-6b9e3a7c5d28",
     "verdicts.json": "e92f5c3a-8b17-4d64-a0c9-1f6d7b2e8a43",
 }
-DATA_VERSION = "1.1.0"
+DATA_VERSION = "1.2.0"
 
 RECORDER_UA = "r2corpus-reach/1.0"
 KEY_PREFIX = "r2reach-"
@@ -177,6 +179,92 @@ OK_5XX: dict[str, str] = {
 # handler, so these are allows too; they are kept apart so the auth-on pass does
 # not take them. Each reason is R0's own message in the auth-off boot's serve log.
 OK_5XX_AUTHOFF: dict[str, str] = {}
+
+# The reason of every OK_5XX route as a token from a closed vocabulary, with the text
+# R0's handler puts in the error body (``httputil.InternalError`` and the Respond*
+# helpers answer a fixed message, never the underlying error; a recovered panic
+# answers 500 with no body at all, ``message`` None). A 5xx cell is recorded with its
+# token, never with the body: a body can carry a path or an address of the runner,
+# and the recording is public. A 5xx whose body does not hold the listed message is a
+# recorder failure, so a middleware that began answering 5xx before authorization
+# cannot hide behind the list. Which cells answer 5xx varies between runs (an earlier
+# probe's state: ``update/apply`` answered 400 and then 500 for one principal), so the
+# token is a property of a cell that answered 5xx, not a cell that must.
+OK_5XX_REASONS: dict[str, tuple[str, str | None]] = {
+    "POST /api/v1/ai/scans": ("ai-scan-pipeline-not-configured", "AI scan pipeline not configured"),
+    "POST /api/v1/ai/scans/:id/cancel": (
+        "ai-scan-pipeline-not-configured",
+        "AI scan pipeline not configured",
+    ),
+    "POST /api/v1/ai/test-connection": ("connection-test-failed", "connection test failed"),
+    "PUT /api/v1/audiobooks/:id": ("failed-to-update-audiobook", "failed to update audiobook"),
+    "POST /api/v1/audiobooks/bulk-write-back": ("enqueue-failed", "enqueue failed"),
+    "POST /api/v1/audiobooks/:id/apply-metadata": (
+        "failed-to-apply-metadata",
+        "failed to apply metadata",
+    ),
+    "POST /api/v1/audiobooks/:id/mark-no-match": (
+        "failed-to-mark-no-match",
+        "failed to mark no match",
+    ),
+    "POST /api/v1/audiobooks/:id/parse-with-ai": ("recovered-panic", None),
+    "POST /api/v1/audiobooks/:id/quarantine": ("quarantine-failed", "quarantine failed"),
+    "DELETE /api/v1/audiobooks/:id/quarantine": ("unquarantine-failed", "unquarantine failed"),
+    "POST /api/v1/audiobooks/:id/retired-versions/:vid/restore": (
+        "restore-not-journaled",
+        "restoring a retired version is not available yet",
+    ),
+    "DELETE /api/v1/backup/:filename": ("failed-to-delete-backup", "failed to delete backup"),
+    "POST /api/v1/dedup/fingerprint-rescan": (
+        "no-fingerprint-backend",
+        "no fingerprint backend (fpcalc / ffmpeg) found",
+    ),
+    "GET /api/v1/fingerprint/worker/hello": (
+        "worker-not-running",
+        "acoustid.window-backfill is not running",
+    ),
+    "POST /api/v1/fingerprint/worker/lease/:id/release": (
+        "worker-not-running",
+        "acoustid.window-backfill is not running",
+    ),
+    "POST /api/v1/fingerprint/worker/lease/:id/renew": (
+        "worker-not-running",
+        "acoustid.window-backfill is not running",
+    ),
+    "POST /api/v1/update/check": ("failed-to-check-for-updates", "failed to check for updates"),
+    "GET /api/v1/deluge/labels": ("deluge-unreachable", "deluge rpc auth.login"),
+    "POST /api/v1/deluge/test-connection": ("deluge-unreachable", "deluge rpc auth.login"),
+    "GET /api/v1/deluge/torrents": ("deluge-unreachable", "deluge rpc auth.login"),
+    "GET /api/v1/deluge/discover": ("deluge-unreachable", "deluge rpc auth.login"),
+    "POST /api/v1/operations/:id/revert": (
+        "failed-to-revert-operation",
+        "failed to revert operation",
+    ),
+    "POST /api/v1/update/apply": ("failed-to-apply-update", "failed to apply update"),
+}
+
+
+def shape_of(body: str) -> str:
+    """A body reduced to letters and spaces (every other character becomes ``_``),
+    cut to 60 characters: enough to see which message a failing run got without
+    printing a path, an address or an id into a public log."""
+    return "".join(c if c.isalpha() or c == " " else "_" for c in body.strip()[:60])
+
+
+def reason_token(route: str, status: int, body: str) -> str:
+    """The token of a 5xx on a listed route, or a recorder failure when the body does
+    not hold the message the list names for it."""
+    if route not in OK_5XX_REASONS:
+        raise RecorderError(f"{route}: {status}: the list names no reason token for it")
+    token, message = OK_5XX_REASONS[route]
+    ok = body.strip() == "" if message is None else message.lower() in body.lower()
+    if not ok:
+        raise RecorderError(
+            f"{route}: {status} without its listed reason {token!r}; "
+            f"the body reads {shape_of(body)!r}"
+        )
+    return token
+
 
 ADMIN_USER = "lucius.fox"  # the corpus' admin-role user, whose session mints keys
 USERS: dict[str, tuple[str, str]] = {
@@ -438,6 +526,7 @@ class Probe:
         self._login = login
         self.auth = _auth_name(principal)
         self.canary_status: int | None = None  # what the first canary answered
+        self.reasons: dict[str, str] = {}  # "METHOD path" -> token, for each 5xx cell
 
     def send(self, method: str, path: str, body: Any, body_sink: list[str] | None = None) -> int:
         """The status line of one request, with the body left unread: a probe that
@@ -517,11 +606,21 @@ def probe_principal(probe: Probe, routes: list[dict[str, Any]]) -> list[int]:
     for r in order_routes(routes):
         m, p = r["method"], r["path"]
         req_path, req_body = probe_request(m, p, probe.principal["name"])
-        status = probe.send(m, req_path, req_body)
+        sink: list[str] = []
+        status = probe.send(m, req_path, req_body, sink)
+        name = probe.principal["name"]
         try:
-            verdict_of(status, f"{probe.principal['name']} {m} {p}", listed)
+            verdict_of(status, f"{name} {m} {p}", listed)
         except RecorderError as e:
             problems.append(str(e))
+        else:
+            if status >= 500:
+                try:
+                    probe.reasons[f"{m} {p}"] = reason_token(
+                        f"{m} {p}", status, sink[0] if sink else ""
+                    )
+                except RecorderError as e:
+                    problems.append(f"{name} {e}")
         out[(m, p)] = status
         if (m, p) in SESSION_KILLERS:
             probe.relogin()
@@ -720,6 +819,7 @@ def record_pass(
     check_5xx_follows_authorization(routes, principals, columns)
     out: dict[str, Any] = {"columns": columns}
     out["canary"] = {p.principal["name"]: p.canary_status for p in probes}
+    out["reasons"] = [dict(getattr(p, "reasons", {})) for p in probes]
     if do_tasks:
         out["tasks"] = probe_tasks(probes, task_defs(admin))
         out["approvals"] = probe_approvals(probes, awaiting_runs(admin))
@@ -787,21 +887,27 @@ def build_verdicts(
     principals: list[dict[str, Any]],
     columns: list[list[int]],
     extra: dict[str, Any],
+    reasons: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Assemble verdicts.json from one status column per principal."""
+    """Assemble verdicts.json from one status column per principal. ``reasons`` is
+    each principal's token per 5xx cell (``reason_token``); a route with a 5xx cell
+    gets a ``reason`` list, one entry per principal, empty for a cell that did not
+    answer 5xx."""
     rows = []
     for i, r in enumerate(routes):
         st = [col[i] for col in columns]
-        rows.append(
-            {
-                "method": r["method"],
-                "path": r["path"],
-                "probe_path": probe_path(r["path"]),
-                "abs_only": bool(r.get("abs_only")),
-                "status": st,
-                "verdict": "".join(DENY if s in DENY_STATUSES else ALLOW for s in st),
-            }
-        )
+        row: dict[str, Any] = {
+            "method": r["method"],
+            "path": r["path"],
+            "probe_path": probe_path(r["path"]),
+            "abs_only": bool(r.get("abs_only")),
+            "status": st,
+            "verdict": "".join(DENY if s in DENY_STATUSES else ALLOW for s in st),
+        }
+        if reasons is not None and any(s >= 500 for s in st):
+            key = f"{r['method']} {r['path']}"
+            row["reason"] = [reasons[k].get(key, "") if s >= 500 else "" for k, s in enumerate(st)]
+        rows.append(row)
     uniform = sorted(f"{r['method']} {r['path']}" for r in rows if set(r["status"]) == {404})
     return {
         **meta,
@@ -813,10 +919,9 @@ def build_verdicts(
     }
 
 
-def stitch_columns(
-    principals: list[dict[str, Any]], on: list[list[int]], off: list[list[int]]
-) -> list[list[int]]:
-    """The auth-on boot's columns and the auth-off boot's, in principal order."""
+def stitch_columns(principals: list[dict[str, Any]], on: list[Any], off: list[Any]) -> list[Any]:
+    """The auth-on boot's columns (or reasons) and the auth-off boot's, in principal
+    order."""
     cols_on, cols_off = iter(on), iter(off)
     return [next(cols_off) if p["kind"] == "authoff" else next(cols_on) for p in principals]
 
@@ -1356,7 +1461,14 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     extra["owner_set"] = owner_set_doc(
         owner_subset, principals, owner_columns, owner_canary, owner_on["refusals"]
     )
-    return principals_doc(principals), build_verdicts(meta, routes, principals, columns, extra)
+    if "reasons" not in on:
+        raise RecorderError(
+            "the saved auth-on pass has no 5xx reasons; record it again without --reuse-auth-on"
+        )
+    reasons = stitch_columns(principals, on["reasons"], off["reasons"])
+    return principals_doc(principals), build_verdicts(
+        meta, routes, principals, columns, extra, reasons
+    )
 
 
 PARTIAL_ON = "auth-on.partial.json"
