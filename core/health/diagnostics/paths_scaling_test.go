@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_scaling_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3e8a5d71-c204-4b96-8f1d-6a0b9e2c4d58
 // last-edited: 2026-11-14
 
@@ -121,6 +121,28 @@ func TestRedactPaths_RouteQueryShapesAreLinear(t *testing.T) {
 	}
 }
 
+// scalingAttempts is how many times bestOf runs a slow input before it counts.
+const scalingAttempts = 3
+
+// bestOf runs run(line) until one run is under scalingBound (at most
+// scalingAttempts runs) and returns the output and the fastest time. A runner
+// that stalls for seconds (core-ci runs every package at once under -race and
+// coverage; one 360 KB line took 3.6 s there and 60 ms here) slows one run, not
+// three in a row, while a quadratic scan takes 6 to 26 s on every run.
+func bestOf(run func(string) string, line string) (out string, best time.Duration) {
+	for i := range scalingAttempts {
+		start := time.Now()
+		out = run(line)
+		if d := time.Since(start); i == 0 || d < best {
+			best = d
+		}
+		if best <= scalingBound {
+			break
+		}
+	}
+	return out, best
+}
+
 // TestRedactPaths_UrlAndEncodedTokenShapesAreLinear (round 6): a URL is
 // recognised at any scheme start and read to the end of its token, an opaque
 // query is not scanned at all, and a token that carries an encoded separator is
@@ -150,10 +172,9 @@ func TestRedactPaths_UrlAndEncodedTokenShapesAreLinear(t *testing.T) {
 			t.Fatalf("%s: %d bytes would not reach the redactor", name, len(line))
 		}
 		for road, run := range map[string]func(string) string{"text": roots.redactPaths, "value": roots.redactValue} {
-			start := time.Now()
-			out := run(line)
-			if d := time.Since(start); d > scalingBound {
-				t.Fatalf("%s/%s: %d bytes took %s, want under %s: the scan is not linear", name, road, len(line), d, scalingBound)
+			out, d := bestOf(run, line)
+			if d > scalingBound {
+				t.Fatalf("%s/%s: %d bytes took %s in each of %d runs, want under %s: the scan is not linear", name, road, len(line), d, scalingAttempts, scalingBound)
 			}
 			if strings.Contains(out, "bruce") {
 				t.Errorf("%s/%s: a path survived: %q", name, road, head(out))
