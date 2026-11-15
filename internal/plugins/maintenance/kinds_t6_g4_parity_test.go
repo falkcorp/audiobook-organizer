@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_parity_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1f3e20f0-c667-44b8-9f41-3e7208c9958c
 // last-edited: 2026-11-14
 
@@ -216,7 +216,9 @@ func t6g4MemStore(t *testing.T) *database.PebbleStore {
 }
 
 // t6g4ObserveBooks renders every book and its rows, ordered by title and path.
-func t6g4ObserveBooks(t *testing.T, s *database.PebbleStore) string {
+// roots are per-seed directories (a TempDir each) that file paths sit under;
+// each is rendered as <root> so two seeds of one case compare equal.
+func t6g4ObserveBooks(t *testing.T, s *database.PebbleStore, roots ...string) string {
 	t.Helper()
 	ids, err := s.ListBookIDs()
 	if err != nil {
@@ -250,7 +252,15 @@ func t6g4ObserveBooks(t *testing.T, s *database.PebbleStore) string {
 			if werr != nil {
 				t.Fatal(werr)
 			}
-			rows = append(rows, fmt.Sprintf("{%s dur=%d intro=%q windows=%d strikes=%d}", f.FilePath, f.Duration, ft, len(wins), f.IntroTimeouts))
+			fdur := "nil" // a nil Duration is "not measured", distinct from 0
+			if f.Duration != nil {
+				fdur = fmt.Sprint(*f.Duration)
+			}
+			path := f.FilePath
+			for _, r := range roots {
+				path = strings.ReplaceAll(path, r, "<root>")
+			}
+			rows = append(rows, fmt.Sprintf("{%s dur=%s intro=%q windows=%d strikes=%d}", path, fdur, ft, len(wins), f.IntroTimeouts))
 		}
 		slices.Sort(rows)
 		status := ""
@@ -559,7 +569,7 @@ func init() {
 				t.Fatal(err)
 			}
 			p := New(fakeDeps{store: s, root: root})
-			return &t6g4LiveEnv{p: p, observe: func() string { return t6g4ObserveBooks(t, s) }}
+			return &t6g4LiveEnv{p: p, observe: func() string { return t6g4ObserveBooks(t, s, root) }}
 		},
 	})
 }
