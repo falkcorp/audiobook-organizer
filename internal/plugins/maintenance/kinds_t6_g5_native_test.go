@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-15
 
@@ -1017,6 +1017,13 @@ func TestT6G5Native_CloneRollbackFailureCarriesStateBackBetweenLiveBooks(t *test
 	mark := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	_, err := f.s.ModifyBook(cloneID, func(b *database.Book) error { b.ITunesPlayCountBumpedAt = &mark; return nil })
 	require.NoError(t, err)
+	// The play-count mark only moves onto a book whose own mark is EARLIER (carryPlayCountMark
+	// skips an equal or later one), so the source holds a later mark than the clone: the
+	// first carry (clone to source) leaves it, and the carry back (source to clone) is the
+	// one that stamps the clone's book row.
+	later := mark.Add(time.Hour)
+	_, err = f.s.ModifyBook("T", func(b *database.Book) error { b.ITunesPlayCountBumpedAt = &later; return nil })
+	require.NoError(t, err)
 	require.NoError(t, f.s.SetUserBookState(&database.UserBookState{UserID: user.ID, BookID: cloneID, Status: database.UserBookStatusFinished, ProgressPct: 100, LastActivityAt: time.Now()}))
 	// A source ABS does not list, so the carry back has to land on the clone.
 	runner := &icRunner{store: icStore{OpsStore: f.s}}
@@ -1038,6 +1045,10 @@ func TestT6G5Native_CloneRollbackFailureCarriesStateBackBetweenLiveBooks(t *test
 	require.Equal(t, icOutcomeFailed, g.Outcome, "the rollback's last step failed: "+g.Error)
 	require.Equal(t, 1, r.spy.count("CarryStateBetweenLiveBooks"), "the state was moved back through the writer")
 	r.requireMethodWrote(t, "CarryStateBetweenLiveBooks", string(ops.ResBooks), string(ops.ResUserState))
+	cb, err := f.s.GetBookByID(cloneID)
+	require.NoError(t, err)
+	require.NotNil(t, cb.ITunesPlayCountBumpedAt)
+	assert.True(t, cb.ITunesPlayCountBumpedAt.Equal(later), "the later mark landed on the clone")
 }
 
 // --- regroup ---
