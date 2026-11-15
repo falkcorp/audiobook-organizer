@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.6.6
+// version: 1.6.7
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-11-15
 
@@ -851,8 +851,11 @@ func t6g3CreditsCoreEnv(base t6g3Base, tags repairs.GuardTagReader, eng t6g3CBEn
 // (GetAllSeries). The result is the summary the core stored; on an error core
 // drops it (see the F5-08 seams note).
 func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	// metadata_cache and indexes: ModifyBookCredits re-authors the book (the stale
+	// stamp when the credits change the search identity, the ident: rows), the shared
+	// ModifyBookCredits row of kinds_resources.go.
 	eff := tasks.Writes(t6g3Res(ops.ResBooks), t6g3Res(ops.ResAuthors),
-		t6g3Res(ops.ResOperations)).
+		t6g3Res(ops.ResOperations), t6g3Res(ops.ResMetadataCache), t6g3Res(ops.ResIndexes)).
 		AlsoReads(t6g3Res(ops.ResBooks), t6g3Res(ops.ResAuthors), t6g3Res(ops.ResSeries))
 	return tasks.Task(t6g3CreditsBackfillKind, tasks.TaskSpec[json.RawMessage, creditsBackfillResult]{
 		Common: t6g3Common(p.creditsBackfillDef(), t6g3CreditsBackfillKind, eff, sched),

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.23.4
+// version: 2.23.5
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-11-15
 
@@ -325,8 +325,11 @@ func (p *Plugin) fsRegroupXMLKind(deps t6g4Deps, sched *tasks.Schedule) tasks.De
 			// book_files; the body also repoints a shadowed external id
 			// (ReassignExternalID: external_ids) and writes the undo ledger it
 			// reverts from (CreateOperationChange, MarkOperationChangesReverted:
-			// operations).
-			Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations)...),
+			// operations). ModifyBook (the survivor's title and path, the retired
+			// shells' soft delete) also stamps the metadata cache stale on an identity
+			// change and stages the ident: rows (metadata_cache, indexes: the shared
+			// ModifyBook row, kinds_resources.go).
+			Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,

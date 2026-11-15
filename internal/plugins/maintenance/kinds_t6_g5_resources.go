@@ -1,19 +1,25 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_resources.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: d2a4e8b7-6f13-4c95-b0e1-3a7c95d4f208
 // last-edited: 2026-11-15
 
 package maintenance
 
-import "github.com/falkcorp/audiobook-organizer/pkg/ops"
+import (
+	"reflect"
 
-// t6g5WriterResources is the single source of what each method of t6g5Writer
-// writes, as pkg/ops resources. Three readers share it so they cannot drift:
-// the native tests' recording spy (which checks every run's writes against the
-// kind's declared Effects), the test that checks each kind's Effects equal the
-// union over the methods it can call, and F5-18's books writer, which must stamp
-// each method with exactly these resources or a live run is refused with
-// ErrOutsideEffects.
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
+)
+
+// t6g5WriterResources is what each method of t6g5Writer writes, as pkg/ops
+// resources: this group's view of t6WriterResources (kinds_resources.go), the one
+// method-to-resource table of every converted maintenance group. It is a view, not
+// a copy: a row is the shared slice, so this group cannot disagree with the others
+// about what ModifyBook or DeleteBook write. Three readers use it: the native
+// tests' recording spy (which checks every run's writes against the kind's
+// declared Effects), the test that checks each kind's Effects equal the union over
+// the methods it can call, and F5-18's books writer, which must stamp each method
+// with exactly these resources or a live run is refused with ErrOutsideEffects.
 //
 // A row is the resources the method writes through its whole call chain, not
 // only the store method it names, and it is conservative where a callee is
@@ -27,9 +33,12 @@ import "github.com/falkcorp/audiobook-organizer/pkg/ops"
 // The resource names are the pkg/ops constants. Vocabulary mappings the row
 // accepts, because pkg/ops has no finer name: narrator, book-narrator and
 // chapter rows are `books`; user preferences and user playlists are `user_state`;
-// the store's derived secondary keys (the ident: rows, path and version-group
-// indexes) belong to the row that owns them, so they are not `indexes`, which
-// names the search and memdb index set. `operations` is the undo journal and
+// the ident: rows (the identification driver's derived state, the set
+// RebuildIdentIndex rebuilds) are `indexes`, which is also the search and memdb
+// index set, so every method that stages them declares it (CreateBook, ModifyBook,
+// UpdateBook, DeleteBook, DeleteMetadataCache, MergeBooks, CloneBookIntoLibrary);
+// the other derived secondary keys (path and version-group indexes) belong to the
+// row that owns them. `operations` is the undo journal and
 // nothing else: the OperationChange rows (opchange:), and the merge sibling-move
 // journal (merge:sibling-journal:<id>), which is the undo payload of one merge.
 // A record keyed on a book or a version group belongs to `books`: path_history:
@@ -38,42 +47,7 @@ import "github.com/falkcorp/audiobook-organizer/pkg/ops"
 // `sync_identity`, F5-06's constant, wherever a merge follow or a handover writes
 // them; a method that also moves real listening state keeps `user_state` too.
 // TestT6G5Resources_EveryNameIsAnOpsConstant checks the values.
-var t6g5WriterResources = map[string][]ops.Resource{
-	// The carry moves listening state (user_state), follows the absorbed book's
-	// sync id onto the survivor (sync_identity: FollowAbsorbedJournaled ->
-	// MintOrGetSyncID, RecordSyncMerge) and, when the loser was finished, stamps
-	// the play-count mark on the winner's book row (books).
-	"CarryStateBeforeHardDelete": {ops.ResBooks, ops.ResUserState, ops.ResSyncIdentity},
-	"CarryStateBetweenLiveBooks": {ops.ResBooks, ops.ResUserState, ops.ResSyncIdentity},
-	"CarryStateThenHardDelete":   {ops.ResBooks, ops.ResUserState, ops.ResSyncIdentity},
-	"CloneBookIntoLibrary":       {ops.ResBooks, ops.ResBookFiles, ops.ResFiles, ops.ResAuthors, ops.ResUserState, ops.ResSyncIdentity, ops.ResOperations},
-	"CreateBook":                 {ops.ResBooks},
-	"CreateNarrator":             {ops.ResBooks},
-	"DeleteBook":                 {ops.ResBooks, ops.ResAuthors, ops.ResFieldStates, ops.ResEmbeddings, ops.ResMetadataCache, ops.ResUserState},
-	"DeleteBookFilesByIDs":       {ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex},
-	"DeleteMetadataCache":        {ops.ResMetadataCache},
-	"DeleteNarrator":             {ops.ResBooks},
-	"HardDeleteWithoutUserState": {},
-	"ImportSmartPlaylists":       {ops.ResUserState},
-	"InvalidateAuthorsCache":     {},
-	"MergeBooks":                 {ops.ResBooks, ops.ResExternalIDs, ops.ResUserState, ops.ResSyncIdentity, ops.ResOperations},
-	"ModifyBook":                 {ops.ResBooks, ops.ResMetadataCache},
-	"ModifyBookFile":             {ops.ResBookFiles, ops.ResBooks},
-	"MoveBookFilesToBook":        {ops.ResBookFiles, ops.ResBooks},
-	"MoveBookFilesToBookBulk":    {ops.ResBookFiles, ops.ResBooks},
-	"NewUserStateProbe":          {},
-	"Reflink":                    {ops.ResFiles},
-	"ReassignExternalID":         {ops.ResExternalIDs},
-	"RecomputeBookAggregates":    {ops.ResBooks},
-	"RecordOperationChange":      {ops.ResOperations},
-	"SaveChaptersForBook":        {ops.ResBooks},
-	"SetBookAuthors":             {ops.ResAuthors},
-	"SetBookNarrators":           {ops.ResBooks},
-	"SetLibraryStateOrganized":   {ops.ResBooks},
-	"SetUserPreferenceForUser":   {ops.ResUserState},
-	"UpdateBook":                 {ops.ResBooks, ops.ResMetadataCache},
-	"UpdateBookFiles":            {ops.ResBookFiles, ops.ResBooks},
-}
+var t6g5WriterResources = t6WriterView(nil, reflect.TypeFor[t6g5Writer]())
 
 // t6g5OutsideWrite is one write a kind's core makes without going through the
 // writer, and why it is not a writer method.

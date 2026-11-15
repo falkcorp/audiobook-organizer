@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_parity_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 1f3e20f0-c667-44b8-9f41-3e7208c9958c
 // last-edited: 2026-11-15
 
@@ -73,6 +73,13 @@ type t6g4LiveCase struct {
 	// unrecorded are declared resources the run writes outside the writer (a file
 	// on disk), so no writer call can record them.
 	unrecorded []ops.Resource
+	// unexercised are writer methods the kind can call on a branch this fixture
+	// does not reach (a book with no fingerprint segment, say). The kind still
+	// declares what their rows write, since the production run reaches them; the
+	// check below requires each to be a method of the writer, absent from the
+	// run's recorded calls (a recorded method belongs in want), and adds its row to
+	// the declared set the run must equal.
+	unexercised []string
 	// widths, when set, is the distinct worker counts the native run's loops
 	// declare (the value each loop hands the host's CapWorkers), exactly: the
 	// parallelism the run actually used, not a number in a table.
@@ -153,6 +160,18 @@ func TestT6G4Kinds_LiveRunsMatchHEADAndRecordTheirWrites(t *testing.T) {
 			expect := map[string]bool{}
 			for _, r := range append(slices.Clone(c.want), c.unrecorded...) {
 				expect[string(r)] = true
+			}
+			for _, m := range c.unexercised {
+				row, ok := t6g4WriterResource[m]
+				if !ok {
+					t.Errorf("unexercised names %s, which is not a t6g4Writer method", m)
+				}
+				if slices.Contains(rec.all(), m) {
+					t.Errorf("unexercised names %s, but the run recorded it: its resources belong in want", m)
+				}
+				for _, r := range row {
+					expect[string(r)] = true
+				}
 			}
 			if !slices.Equal(t6g4Keys(declared), t6g4Keys(expect)) {
 				t.Errorf("declared write set %v, but the live run touches %v", t6g4Keys(declared), t6g4Keys(expect))
@@ -409,6 +428,10 @@ func init() {
 		kind: durationBackfillKind, headParams: `{"dryRun":false}`, params: `{}`,
 		widths: func() []int { return []int{4} },
 		want:   []ops.Resource{ops.ResBookFiles, ops.ResBooks},
+		// the branch for a book with no fingerprint segment writes its total with
+		// ModifyBook (metadata_cache, indexes besides the books row); neither seeded
+		// book takes it
+		unexercised: []string{"ModifyBook"},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := t6g4MemStore(t)
 			for _, bk := range []struct {
@@ -443,7 +466,8 @@ func init() {
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: introMigrateSingleFileKind, headParams: `{"dry_run":false}`, params: `{}`,
 		widths: func() []int { return []int{8} },
-		want:   []ops.Resource{ops.ResBookFiles},
+		// UpdateBookFile recomputes the book's aggregates afterwards: book_files and books
+		want: []ops.Resource{ops.ResBookFiles, ops.ResBooks},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := t6g4MemStore(t)
 			tr := "This is Gotham Central, a Batman audiobook narrated by Alfred Pennyworth."
@@ -544,7 +568,9 @@ func init() {
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: fsRegroupKind, headParams: `{"dry_run":false}`, params: `{}`,
 		widths: func() []int { return []int{tasks.CPU().Workers()} },
-		want:   []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations},
+		// ModifyBook (the survivor's title and path, the shells' soft delete) also
+		// writes metadata_cache and indexes
+		want: []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := regroupStore(t)
 			base := fsFragBase(t)
@@ -587,7 +613,8 @@ func init() {
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: extractWAVClipsKind, headParams: `{}`, params: `{}`,
 		widths: func() []int { return []int{1} },
-		want:   []ops.Resource{ops.ResBookFiles},
+		// SetBookFileHash notifies the aggregate recompute: book_files and books
+		want: []ops.Resource{ops.ResBookFiles, ops.ResBooks},
 		// the clips and hardlinks under the library root
 		unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {

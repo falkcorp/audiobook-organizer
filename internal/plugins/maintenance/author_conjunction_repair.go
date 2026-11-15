@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -214,7 +214,11 @@ func (p *Plugin) authorConjunctionRepairNative(deps t6g1Deps, sched func(tasks.K
 	c := t6g1Common(authorConjunctionRepairKind, sched)
 	c.Title = "Repair author names with a stranded ampersand"
 	c.Help = authorConjunctionRepairHelp
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)))
+	// metadata_cache and indexes: every path of this kind re-authors books through
+	// ModifyBook (directly or inside DeleteAuthor, MergeDeleteAuthor and MoveCredits),
+	// whose shared row (kinds_resources.go) also stamps the metadata cache stale on an
+	// identity change and stages the ident: rows (`indexes`).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-conjunction-repair")

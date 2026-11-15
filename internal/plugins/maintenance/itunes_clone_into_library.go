@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.20.1
+// version: 1.20.2
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-11-15
 
@@ -571,7 +571,11 @@ func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind
 		// them with the book row; ModifyBook stamps the cache stale): the rollback
 		// and repair paths call both. Traced per method in the seams note.
 		tasks.Res("books", string(ops.ResFingerprintIndex)), tasks.Res("books", string(ops.ResFieldStates)),
-		tasks.Res("books", string(ops.ResEmbeddings)), tasks.Res("books", string(ops.ResMetadataCache)))
+		tasks.Res("books", string(ops.ResEmbeddings)), tasks.Res("books", string(ops.ResMetadataCache)),
+		// indexes: CreateBook (the clone's copy) and DeleteBook stage the ident: rows,
+		// the identification driver's derived state; `indexes` owns that family
+		// (kinds_resources.go).
+		tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(itunesCloneIntoLibraryKind, tasks.TaskSpec[json.RawMessage, *icReport]{
 		Common: t6g5Common(p.itunesCloneIntoLibraryDef(), itunesCloneIntoLibraryKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (*icReport, error) {

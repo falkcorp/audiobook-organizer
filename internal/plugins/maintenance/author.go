@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.16.2
+// version: 1.16.4
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -384,7 +384,11 @@ func (p *Plugin) authorSplitScanNative(deps t6g1Deps, sched func(tasks.Kind) *ta
 	c := t6g1Common(authorSplitScanKind, sched)
 	c.Title = "Author split scan"
 	c.Help = authorSplitScanHelp
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)))
+	// metadata_cache and indexes: every path of this kind re-authors books through
+	// ModifyBook (directly or inside DeleteAuthor, MergeDeleteAuthor and MoveCredits),
+	// whose shared row (kinds_resources.go) also stamps the metadata cache stale on an
+	// identity change and stages the ident: rows (`indexes`).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-split-scan")
@@ -830,9 +834,11 @@ func (p *Plugin) resolveProductionAuthorsNative(deps t6g1Deps, sched func(tasks.
 	// The fetch is metafetch's apply (see autoMatchTranscribedNative for the
 	// trace): book, credits, segment titles, change record (operations), the
 	// fetched-metadata cache (metadata_cache) and the field-state snapshot
-	// (field_states).
+	// (field_states). The book writes also stage the ident: rows (indexes: the shared
+	// ModifyBook, CreateBook and DeleteBook rows, kinds_resources.go).
 	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResSeries)),
-		tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResFieldStates)))
+		tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResFieldStates)),
+		tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.resolve-production-authors")
