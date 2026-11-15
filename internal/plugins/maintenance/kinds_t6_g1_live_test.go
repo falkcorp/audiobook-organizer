@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-15
 
@@ -807,6 +807,38 @@ func TestT6G1Kinds_RefuseModeKeysInParams(t *testing.T) {
 			_, err := decode(raw)
 			require.NoError(t, err, "%s refused the body %q", kind, body)
 		}
+	}
+}
+
+// HEAD decoded the authority-build params strictly (decodeStrictParams); the
+// native kind must too (review C6, stack). Every body below is otherwise valid,
+// so a plain json.Unmarshal would accept it and apply or plan with a dropped or
+// last-wins value; the executor's decode refuses each before the run reads
+// anything. The controls (the same keys, no loose one) decode.
+func TestT6G1Kinds_AuthorityBuildRefusesLooseParams(t *testing.T) {
+	probe := &t6g1LiveProbe{}
+	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(probe.deps(authorityTestStore(t)), nil), authorityBuildKind)
+	decode, _ := t6g1Runner(t, def)
+
+	for _, body := range []string{`{"plan_op_id":"plan1"}`, `{"library_export_path":"/lib/export.xml","skip_seed":true,"concurrency":2}`} {
+		_, err := decode(json.RawMessage(body))
+		require.NoError(t, err, "control %s", body)
+	}
+	for name, body := range map[string]string{
+		"unknown key":                  `{"plan_op_id":"plan1","bogus":1}`,
+		"misspelt key":                 `{"plan_op":"plan1"}`,
+		"duplicate key":                `{"plan_op_id":"plan1","plan_op_id":""}`,
+		"case-variant duplicate key":   `{"plan_op_id":"plan1","Plan_Op_ID":""}`,
+		"case-variant duplicate other": `{"skip_seed":true,"SKIP_SEED":false}`,
+		"trailing data":                `{"plan_op_id":"plan1"} {}`,
+	} {
+		_, err := decode(json.RawMessage(body))
+		require.Error(t, err, "%s: %s", name, body)
+
+		// And through a whole run: the start fails and nothing is written.
+		err = runT6G1Kind(t, def, tasks.ModeLive, &t6g1GateWriter{name: "authority"}, body)
+		require.Error(t, err, "%s: %s", name, body)
+		require.Zero(t, probe.cw.total(), "%s wrote", name)
 	}
 }
 

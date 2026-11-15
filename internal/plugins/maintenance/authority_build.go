@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/authority_build.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7b057b54-4781-486b-b075-fe627504dcf1
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -265,13 +265,19 @@ type authorityBuildNativeParams struct {
 	PlanOpID          string `json:"plan_op_id,omitempty"`
 }
 
-// UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
+// UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys),
+// then decodes as HEAD's shell does (decodeStrictParams): an unknown key, a key
+// named twice (case variants included: encoding/json would keep the last, so
+// {"plan_op_id":"a","Plan_Op_ID":""} would apply with no plan named), and data
+// after the object are refused rather than dropped. This op writes the ref_*
+// lists from a reviewed plan, so a mistyped key must fail the start instead of
+// running with a default.
 func (p *authorityBuildNativeParams) UnmarshalJSON(b []byte) error {
 	if err := t6g1RefuseModeKeys(b); err != nil {
 		return err
 	}
 	type plain authorityBuildNativeParams
-	return json.Unmarshal(b, (*plain)(p))
+	return decodeStrictParams(b, (*plain)(p))
 }
 
 // authorityBuildNative is the native kind. A Preview run is the dry run and a
