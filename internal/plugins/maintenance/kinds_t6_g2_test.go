@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.3
+// version: 1.3.5
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-15
 
@@ -190,12 +190,26 @@ type t6g2RecWriter struct {
 // together. A pool narrower than the gate never reaches it, so its peak stays
 // below it; a wider one overshoots. The gate is its own type so the writer, the
 // store and a reporter can each hold one without sharing a width.
+//
+// A gate can be limited to the first n callers (setFirst): the callers after
+// the nth pass straight through without holding or counting. A test uses that
+// to pin one pool of a two-phase kind when both phases call the same store
+// method, because phase 1 finishes before phase 2 starts.
 type t6g2Gate struct {
 	mu       sync.Mutex
 	want     int
+	first    int // when positive, only the first `first` callers are gated
+	calls    int
 	inflight int
 	peak     int
 	deadline time.Time
+}
+
+// setFirst limits the gate to the first n callers of enter; zero gates all.
+func (g *t6g2Gate) setFirst(n int) {
+	g.mu.Lock()
+	g.first = n
+	g.mu.Unlock()
 }
 
 // set is the width the gate waits for; zero (the default) never waits.
@@ -209,6 +223,11 @@ func (g *t6g2Gate) set(n int) {
 // that marks it done.
 func (g *t6g2Gate) enter() func() {
 	g.mu.Lock()
+	g.calls++
+	if g.first > 0 && g.calls > g.first {
+		g.mu.Unlock()
+		return func() {}
+	}
 	g.inflight++
 	g.peak = max(g.peak, g.inflight)
 	if g.want > 0 && g.deadline.IsZero() {
@@ -2312,6 +2331,20 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 				return r.workers
 			}
 		}
+	// perCPUWorkers is workersOf for a kind whose pool is one worker per CPU
+	// (HEAD's shell passes runtime.NumCPU()). On a one-CPU runner that width IS
+	// one, so no pin can tell the pool from a mutant narrowed to a single
+	// worker: the test skips there, visibly, rather than passing without
+	// proving anything. With two or more CPUs a pool forced to width 1 peaks
+	// at 1 and fails the pin's != want check.
+	perCPUWorkers := func(t *testing.T, kind tasks.Kind) int {
+		t.Helper()
+		want := workersOf(t, kind)
+		if want < 2 {
+			t.Skipf("%s: a one-CPU runner cannot tell a per-CPU pool from width 1", kind)
+		}
+		return want
+	}
 		t.Fatalf("no row for %s", kind)
 		return 0
 	}
@@ -2331,7 +2364,7 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 	}
 
 	t.Run("a per-CPU kind (chapters-backfill) uses every core", func(t *testing.T) {
-		want := workersOf(t, t6g2KindChaptersBackfill)
+		want := perCPUWorkers(t, t6g2KindChaptersBackfill)
 		books := ids(want + 1)
 		f := newT6G2Fakes(t)
 		t6g2ChaptersFixture(t, f, books...)
@@ -2345,7 +2378,7 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 
 	t.Run("bookfile-acoustid-index-repair judges on every core", func(t *testing.T) {
 		f := newT6G2Fakes(t)
-		want := workersOf(t, t6g2KindBookFileAcoustIDIndexRepair)
+		want := perCPUWorkers(t, t6g2KindBookFileAcoustIDIndexRepair)
 		f.store.acoustid = make([]database.BookFileAcoustIDEntry, want+1)
 		f.store.verdict = database.AcoustIDEntryRowGone
 		f.store.gt.set(want)
@@ -2358,7 +2391,7 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 	t.Run("booksig-sidecar-migrate migrates pages on every core", func(t *testing.T) {
 		// Pages of bookSigMigratePageSize ids are the pool's items; one page more
 		// than the pool is wide.
-		want := workersOf(t, t6g2KindBookSigSidecarMigrate)
+		want := perCPUWorkers(t, t6g2KindBookSigSidecarMigrate)
 		f := newT6G2Fakes(t)
 		f.store.ids = ids((want + 1) * bookSigMigratePageSize)
 		f.writer.gt.set(want)
@@ -2369,7 +2402,7 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 	})
 
 	t.Run("build-folder-book-files checks and builds on every core", func(t *testing.T) {
-		want := workersOf(t, t6g2KindBuildFolderBookFiles)
+		want := perCPUWorkers(t, t6g2KindBuildFolderBookFiles)
 		books := ids(want + 1)
 		f := newT6G2Fakes(t)
 		stubProbe(t, map[string]int{"01.mp3": 100, "02.mp3": 200})
@@ -2381,7 +2414,14 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 				LibraryState: &organized, IsPrimaryVersion: &primary,
 			}
 		}
-		// Phase 1 reads each book's rows; phase 2 writes them. Each is its own pool.
+		// Phase 1 reads each book's rows (one GetBookFiles per book); phase 2
+		// re-reads them under the write (a second GetBookFiles per book) and then
+		// writes them. Each is its own pool and phase 1 finishes before phase 2
+		// starts. The store gate is limited to the first len(books) GetBookFiles
+		// calls, which are exactly phase 1's, so phase 2's re-reads can neither
+		f.store.gt.setFirst(len(books))
+		// hold nor count toward the phase-1 peak: only a phase-1 pool as wide as
+		// the declaration reaches it. The writer gate sees phase 2's writes only.
 		f.store.gt.set(want)
 		f.writer.gt.set(want)
 		quoted, _ := json.Marshal(books)
@@ -2400,7 +2440,7 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 	t.Run("book-shape-report classifies shards on every core", func(t *testing.T) {
 		// One group per book and one more group than the pool is wide, so there
 		// are as many shards as workers and every shard is a pool item.
-		want := workersOf(t, t6g2KindBookShapeReport)
+		want := perCPUWorkers(t, t6g2KindBookShapeReport)
 		f := newT6G2Fakes(t)
 		organized, primary := "organized", true
 		for _, id := range ids(want + 1) {
