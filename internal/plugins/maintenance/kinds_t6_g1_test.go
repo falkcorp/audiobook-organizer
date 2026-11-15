@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
 // last-edited: 2026-11-15
 
@@ -355,7 +355,12 @@ func t6AllNativeKinds(t *testing.T) []tasks.Definition {
 	t.Helper()
 	p := &Plugin{}
 	var defs []tasks.Definition
-	g4, err := t6g4Kinds(func() t6g4Deps { d, _ := fakeT6G4Deps(t); return d }(), nil)
+	// fakeT6G4Deps leaves Stats nil on purpose (t6g4Kinds refuses a nil Stats, and
+	// TestT6G4Kinds_RegistrationRefusesNilStats needs the fake to show that), so
+	// the helper supplies HEAD's: this test reads Effects and never runs a kind.
+	g4deps, _ := fakeT6G4Deps(t)
+	g4deps.Stats = headT6G4Stats{}
+	g4, err := t6g4Kinds(g4deps, nil)
 	require.NoError(t, err)
 	groups := map[string][]tasks.Definition{
 		"g1": p.t6g1Kinds(fakeT6G1Deps(t), nil),
