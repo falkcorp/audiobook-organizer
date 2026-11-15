@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/missing_file_audit.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 4e1c7a92-3b58-4d06-9f21-8c5a0e7b3d64
-// last-edited: 2026-11-13
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -793,7 +793,7 @@ func classifyMissingRowsVia(ctx context.Context, missingPaths []string, sampleLi
 	err := env.Items(ctx, len(work), t6g5ItemsOpts{
 		Pool:    missingFileStatPool(),
 		Collect: true,
-		Label: func(i, t int) string {
+		PureLabel: func(i, t int) string {
 			return fmt.Sprintf("Classified %d/%d missing paths", i+1, t)
 		},
 	}, func(_ context.Context, i int) error {

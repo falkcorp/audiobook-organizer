@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
 // last-edited: 2026-11-15
 
@@ -375,10 +375,9 @@ func runRepairLibraryStateCore(ctx context.Context, in libraryStateRepairInput, 
 	runErr := env.Items(ctx, len(applied), t6g5ItemsOpts{
 		// Explicit: HEAD ran this with Concurrency: runtime.NumCPU() (rule R4).
 		Pool: t6g5CPUPool(),
-		// Label runs INSIDE each worker goroutine, so anything it reads needs
-		// the same lock as the callback body. It reads only its two arguments
-		// here, which is why there is no shared counter to guard.
-		Label: func(i, total int) string {
+		// The label reads only its two arguments, so it is index-only and the
+		// native loop carries it (PureLabel).
+		PureLabel: func(i, total int) string {
 			return fmt.Sprintf("repairing library_state %d/%d", i, total)
 		},
 	}, func(_ context.Context, i int) error {
