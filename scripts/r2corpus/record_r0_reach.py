@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.11.0
+# version: 1.11.1
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-15
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -249,7 +249,7 @@ def shape_of(body: str) -> str:
     JSON object and how many keys that object has. Enough to see whether a failing
     run got an empty reply, a plain-text line or an error document, and nothing that
     can carry a path, an address, an id or a message into a public log (a word of the
-    body is a word of a path: ``/home/<name>/...`` survives any letters-only filter)."""
+    body can be a word of a path, and a letters-only filter keeps it)."""
     text = body.strip()
     if not text:
         return "empty body"
