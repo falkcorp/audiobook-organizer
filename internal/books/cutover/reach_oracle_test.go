@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_oracle_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c27d5a40-9e18-4b63-8f02-3a6d1e7b9c54
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package cutover
 
@@ -46,7 +46,9 @@ type reachPrincipal struct {
 }
 
 type reachPrincipalsDoc struct {
-	Principals []reachPrincipal `json:"principals"`
+	Principals  []reachPrincipal           `json:"principals"`
+	Users       map[string]string          `json:"users"`        // username -> role label the recorder gave it
+	CustomRoles map[string]reachCustomRole `json:"custom_roles"` // role label -> the custom role's title and HEAD atoms
 }
 
 type reachR0Route struct {
@@ -55,6 +57,9 @@ type reachR0Route struct {
 	ABSOnly bool   `json:"abs_only"`
 	Status  []int  `json:"status"`
 	Verdict string `json:"verdict"` // one letter per principal, in Principals' order: A allow, D deny
+	// AdminRefusal is the admin session's refusal text on an owner-set route: R0's
+	// own gate message, recorded so a 403 for another reason is not read as the gate.
+	AdminRefusal string `json:"admin_refusal"`
 }
 
 func (r reachR0Route) key() string { return r.Method + " " + r.Path }
@@ -78,6 +83,7 @@ type reachR0Approval struct {
 type reachR0OwnerSet struct {
 	What       string         `json:"what"`
 	OwnerEmail string         `json:"owner_email"`
+	Canary     map[string]int `json:"canary"` // each principal's canary status in the owner boots
 	Routes     []reachR0Route `json:"routes"`
 }
 
@@ -92,6 +98,7 @@ type reachR0Doc struct {
 	Tasks           []reachR0Task     `json:"tasks"`
 	Approvals       []reachR0Approval `json:"approvals"`
 	OwnerSet        *reachR0OwnerSet  `json:"owner_set"` // nil until R0 is recorded with an owner set
+	Canary          map[string]int    `json:"canary"`    // each principal's canary status in the main boots
 }
 
 func reachReadJSON(t testing.TB, name string, v any) {
@@ -296,7 +303,15 @@ var reachUnenforced = map[string]bool{"playlists.create": true}
 // LegacyAtom becomes AllOf every scope of the atom's row. A route whose atom
 // the table lacks, or no route may enforce, is an error, never a gate.
 func reachResolve(atoms []m3.AtomRow, lr httpapi.LegacyRoute) (reachGate, error) {
-	_, handler := reachHandlerAdmin[lr.Method+" "+lr.GinPath]
+	return reachResolveWith(atoms, lr, reachHandlerAdmin)
+}
+
+// reachResolveWith is reachResolve under the given handler-admin pin. The pin is a
+// parameter, not only the package variable, so a check that needs the oracle
+// without it (reachPinHiddenProblems) passes an empty one instead of emptying the
+// variable for the duration, which a parallel test would race with (round-3 NIT-3).
+func reachResolveWith(atoms []m3.AtomRow, lr httpapi.LegacyRoute, pin map[string]string) (reachGate, error) {
+	_, handler := pin[lr.Method+" "+lr.GinPath]
 	g := reachGate{req: lr.Perm, interactive: lr.Guards.Interactive, owner: lr.Guards.Owner, handler: handler, delegated: lr.OwnAuth}
 	if lr.Perm.Kind() == rbac.KindDelegated {
 		g.delegated = true
@@ -354,17 +369,31 @@ func (g reachGate) allows(w reachWho) bool {
 type reachR2 struct {
 	verdict   map[string]string
 	delegated []string
+	// ownerGuard is, for every route R2 judged (not the delegated ones), whether the
+	// manifest the evaluation read carries Guards.Owner on it, and names is the
+	// principals in the letters' order. The owner-set model reads both, so a
+	// manifest change moves it (reach_owner_test.go).
+	ownerGuard map[string]bool
+	names      []string
 }
 
 // reachEvaluate resolves every manifest route through atoms and evaluates it
 // for every principal. It reads no store: the principals' checkers and the atom
 // table are its whole input, so the same function runs under a changed table.
 func reachEvaluate(atoms []m3.AtomRow, routes []httpapi.LegacyRoute, whos []reachWho) (*reachR2, error) {
-	out := &reachR2{verdict: map[string]string{}}
+	return reachEvaluateWith(atoms, routes, whos, reachHandlerAdmin)
+}
+
+// reachEvaluateWith is reachEvaluate under the given handler-admin pin.
+func reachEvaluateWith(atoms []m3.AtomRow, routes []httpapi.LegacyRoute, whos []reachWho, pin map[string]string) (*reachR2, error) {
+	out := &reachR2{verdict: map[string]string{}, ownerGuard: map[string]bool{}}
+	for _, w := range whos {
+		out.names = append(out.names, w.name)
+	}
 	var errs []string
 	for _, lr := range routes {
 		key := lr.Method + " " + lr.GinPath
-		g, err := reachResolve(atoms, lr)
+		g, err := reachResolveWith(atoms, lr, pin)
 		if err != nil {
 			errs = append(errs, err.Error())
 			continue
@@ -382,6 +411,7 @@ func reachEvaluate(atoms []m3.AtomRow, routes []httpapi.LegacyRoute, whos []reac
 			}
 		}
 		out.verdict[key] = b.String()
+		out.ownerGuard[key] = g.owner
 	}
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%d routes do not resolve:\n%s", len(errs), strings.Join(errs, "\n"))
@@ -415,13 +445,17 @@ type reachDiffResult struct {
 	// that R2 gates itself (neither delegated nor R0-only), counted as the loop
 	// meets them. Task starts and approvals are pseudo-routes and not counted.
 	routesCompared int
+	// r2 is the evaluation the cells came from, so a check that needs more of it
+	// than the cells (the owner-set model reads each route's guard) is run on the
+	// manifest that produced them, mutated or not.
+	r2 *reachR2
 }
 
 // reachDiff compares R0's recorded verdicts with R2's. It is pure: both sides
 // are values. Routes only one side has are listed, never skipped; a delegated
 // route is counted and listed.
 func reachDiff(r0 *reachR0Doc, r2 *reachR2) reachDiffResult {
-	res := reachDiffResult{delegated: r2.delegated}
+	res := reachDiffResult{delegated: r2.delegated, r2: r2}
 	seen := map[string]bool{}
 	deleg := map[string]bool{}
 	for _, k := range r2.delegated {
@@ -505,6 +539,9 @@ func reachCompare(t testing.TB, pd *reachPrincipalsDoc, vd *reachR0Doc, m3Atoms,
 func reachRun(t testing.TB, pd *reachPrincipalsDoc, vd *reachR0Doc, m3Atoms, routeAtoms []m3.AtomRow) (reachDiffResult, []reachWho, *reachR2) {
 	t.Helper()
 	snap, seed := reachMigrate(t, pd, m3Atoms)
+	for _, p := range reachRoleProblems(snap, pd, m3Atoms) {
+		t.Error(p)
+	}
 	whos := reachWhos(t, snap, seed, pd.Principals, reachCatalog(t))
 	res, r2 := reachJudge(t, vd, routeAtoms, whos)
 	return res, whos, r2
@@ -526,8 +563,13 @@ func reachJudge(t testing.TB, vd *reachR0Doc, routeAtoms []m3.AtomRow, whos []re
 // reachJudgeErr is reachJudge that returns the error a route without a
 // requirement (or naming an atom the table lacks) raises, so a check can assert it.
 func reachJudgeErr(vd *reachR0Doc, routeAtoms []m3.AtomRow, whos []reachWho) (reachDiffResult, *reachR2, error) {
+	return reachJudgeErrWith(vd, routeAtoms, whos, reachHandlerAdmin)
+}
+
+// reachJudgeErrWith is reachJudgeErr under the given handler-admin pin.
+func reachJudgeErrWith(vd *reachR0Doc, routeAtoms []m3.AtomRow, whos []reachWho, pin map[string]string) (reachDiffResult, *reachR2, error) {
 	routes := reachManifest()
-	r2, err := reachEvaluate(routeAtoms, routes, whos)
+	r2, err := reachEvaluateWith(routeAtoms, routes, whos, pin)
 	if err != nil {
 		return reachDiffResult{}, nil, err
 	}

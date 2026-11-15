@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_pin_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e2b9d47-8a13-4c60-b7f5-1d90c6a3e824
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package cutover
 
@@ -41,10 +41,10 @@ var reachPinnedCells = []string{
 // show the pinned cells and no others.
 func reachPinHiddenProblems(t testing.TB, vd *reachR0Doc, atoms []m3.AtomRow, whos []reachWho, with reachDiffResult) []string {
 	t.Helper()
-	saved := reachHandlerAdmin
-	reachHandlerAdmin = map[string]string{}
-	defer func() { reachHandlerAdmin = saved }()
-	without, _ := reachJudge(t, vd, atoms, whos)
+	without, _, err := reachJudgeErrWith(vd, atoms, whos, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	was := reachCellSet(with)
 	var hidden []string
