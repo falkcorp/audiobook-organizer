@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-11-14
 
@@ -503,18 +503,13 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			if err != nil {
 				return fileIntroResult{}, err
 			}
+			// Only the native shell sets a margin; HEAD's builds the env without one,
+			// so only a native run yields before its deadline (review M4).
 			return p.runFileIntroTranscribeCore(rc.Context(), fileIntroParams{
 				OnlyMissing: in.OnlyMissing, RetryFailed: in.RetryFailed, ClearRunID: in.ClearRunID,
-			}, fileIntroNativeEnv(base))
+			}, fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin})
 		},
 	})
-}
-
-// fileIntroNativeEnv is the env the native shell hands the core: the resolved
-// base plus the yield margin. HEAD's shell builds fileIntroEnv without a margin,
-// so only the native run yields before its deadline (review M4).
-func fileIntroNativeEnv(base t6g4Base) fileIntroEnv {
-	return fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin}
 }
 
 // runFileIntroTranscribeCore is HEAD's body (rule R2 item 1) after the shell
@@ -624,11 +619,16 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 		stats.UpdatedAt = startedAt
 	}
 	accum := &fileIntroAccum{sink: env.Writer, log: log, stats: stats}
-	log.Info("transcribe-file-intros: starting",
+	startAttrs := []any{
 		"run_id", runID, "only_missing", onlyMissing, "retry_failed", retryFailed,
 		"eligible", sel.eligible, "already_done", sel.transcribedAtStart,
 		"selected", sel.selected, "groups", len(groups), "reuse_files", sel.reuseFiles, "slots", slots,
-		"resumed", resumed, "batches_done_earlier", base)
+	}
+	if resumed {
+		// HEAD never resumes (no checkpoint), so its line keeps HEAD's attributes.
+		startAttrs = append(startAttrs, "resumed", true, "batches_done_earlier", base)
+	}
+	log.Info("transcribe-file-intros: starting", startAttrs...)
 
 	if len(sel.groups) == 0 && !resumed {
 		accum.flush(true)
@@ -784,7 +784,9 @@ type fileIntroBatchLoop struct {
 	label       func(i, total int) string
 	each        t6g4EachFn
 
-	completed atomic.Int64
+	// firstDone is set once this attempt's batch 0 has completed; yielding waits
+	// for it, so a yield always leaves a prefix of at least one batch.
+	firstDone atomic.Bool
 	yielding  atomic.Bool
 }
 
@@ -797,9 +799,14 @@ type fileIntroBatchLoop struct {
 // price is that the loop counts a skipped batch as completed in its own
 // progress; the caller resets the bar to the exact prefix.
 //
-// The margin is checked only before a batch starts and only once this attempt
-// has completed one: yielding with nothing done would fail the executor's
-// "progress past the starting point" proof and end the run. A batch already
+// The margin is checked only before a batch starts and only once this attempt's
+// FIRST batch has completed: a yield must leave a prefix of at least one batch,
+// or it would fail the executor's "progress past the starting point" proof and
+// end the run. Waiting on batch 0 rather than on any completed batch matters
+// because the loop's workers start in no fixed order: a later batch can finish
+// before batch 0 begins, and batch 0 would then start inside the margin and be
+// skipped, leaving a prefix of zero. The cost is that batches keep starting past
+// the margin while batch 0 is still running; the margin is best effort anyway. A batch already
 // running when the deadline nears can outlive the margin (a paused scan or a
 // whisper outage retry waits minutes); the run context then ends, the batch's
 // context error is returned, and the run falls back to the executor's timeout
@@ -813,7 +820,7 @@ func (l *fileIntroBatchLoop) run(ctx context.Context) (prefix int, yielded bool,
 		if l.yielding.Load() {
 			return true
 		}
-		if l.yieldMargin <= 0 || !hasDeadline || l.completed.Load() == 0 || time.Until(deadline) >= l.yieldMargin {
+		if l.yieldMargin <= 0 || !hasDeadline || !l.firstDone.Load() || time.Until(deadline) >= l.yieldMargin {
 			return false
 		}
 		l.yielding.Store(true)
@@ -838,7 +845,9 @@ func (l *fileIntroBatchLoop) run(ctx context.Context) (prefix int, yielded bool,
 			n, berr := l.runBatch(ctx, l.batches[i])
 			l.afterBatch(n)
 			if berr == nil {
-				l.completed.Add(1)
+				if i == 0 {
+					l.firstDone.Store(true)
+				}
 				mu.Lock()
 				done[i] = true
 				mu.Unlock()

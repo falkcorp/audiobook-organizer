@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_yield_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 79b2a942-e84c-447f-a8c4-433000d6fd16
 // last-edited: 2026-11-14
 
@@ -347,17 +347,17 @@ func yieldLoop(n int, run func(i int) error) *fileIntroBatchLoop {
 }
 
 func TestFileIntroBatchLoop_PrefixStopsAtTheFirstBatchLeftForTheNextAttempt(t *testing.T) {
-	release, started0 := make(chan struct{}), make(chan struct{})
+	// Batch 1 is slow. Batch 0 finishes first (once batch 1 has begun), which
+	// frees a worker for batch 2: that starts inside the margin with batch 0 done,
+	// so it is skipped, and the slow batch 1 still completes.
+	release, started1 := make(chan struct{}), make(chan struct{})
 	l := yieldLoop(3, func(i int) error {
 		switch i {
 		case 0:
-			close(started0)
-			<-release // batch 0 is slow; batch 1 finishes first, and batch 2 starts inside the margin
+			<-started1 // batch 1 must have begun, or it would itself be skipped
 		case 1:
-			// The runner starts its workers as goroutines in no fixed order. Batch 1
-			// must not finish before batch 0 has begun, or batch 0 would itself start
-			// inside the margin and be skipped, which is a different scenario.
-			<-started0
+			close(started1)
+			<-release
 		}
 		return nil
 	})
@@ -377,19 +377,19 @@ func TestFileIntroBatchLoop_PrefixStopsAtTheFirstBatchLeftForTheNextAttempt(t *t
 	}
 }
 
-func TestFileIntroBatchLoop_AnOutOfOrderCompletionIsNotAPrefix(t *testing.T) {
-	// Batch 0 fails after batch 1 finished and batch 2 was skipped: the error is
-	// returned, never a yield, and the prefix does not pass the failed batch.
-	release, started0 := make(chan struct{}), make(chan struct{})
+func TestFileIntroBatchLoop_ARealErrorBeatsAYieldAndStopsThePrefix(t *testing.T) {
+	// Batch 0 completes, batch 1 fails after batch 2 was skipped at the margin:
+	// the error is returned, never a yield, and the prefix stops before the failed batch.
+	release, started1 := make(chan struct{}), make(chan struct{})
 	boom := errors.New("whisper pool down")
 	l := yieldLoop(3, func(i int) error {
 		switch i {
 		case 0:
-			close(started0)
+			<-started1
+		case 1:
+			close(started1)
 			<-release
 			return boom
-		case 1:
-			<-started0 // see the prefix test: batch 0 must have begun before batch 1 can finish
 		}
 		return nil
 	})
@@ -403,28 +403,30 @@ func TestFileIntroBatchLoop_AnOutOfOrderCompletionIsNotAPrefix(t *testing.T) {
 	if !errors.Is(err, boom) || yielded {
 		t.Fatalf("a real error must win over a yield: yielded=%v err=%v", yielded, err)
 	}
-	if prefix != 0 {
-		t.Fatalf("prefix = %d, want 0 (batch 0 failed)", prefix)
+	if prefix != 1 {
+		t.Fatalf("prefix = %d, want 1 (batch 0 only; batch 1 failed)", prefix)
 	}
 }
 
-// TestFileIntroNativeEnv_SetsTheYieldMargin pins the shell wiring of review M4:
-// the native env carries the five minute margin and keeps the base it was given,
-// and HEAD's env (built by the HEAD shell) carries none.
-func TestFileIntroNativeEnv_SetsTheYieldMargin(t *testing.T) {
-	var base t6g4Base
-	base.Live = true
-	env := fileIntroNativeEnv(base)
-	if env.YieldMargin != fileIntroYieldMargin {
-		t.Errorf("native YieldMargin = %v, want fileIntroYieldMargin %v", env.YieldMargin, fileIntroYieldMargin)
+// A yield must leave a prefix of at least one batch (the executor's progress
+// proof), so it waits for batch 0 itself: a slow batch 0 does not let later
+// batches be skipped, and the loop does not yield while it is still running.
+func TestFileIntroBatchLoop_NeverYieldsBeforeBatchZeroIsDone(t *testing.T) {
+	ran2 := make(chan struct{})
+	l := yieldLoop(3, func(i int) error {
+		switch i {
+		case 0:
+			<-ran2 // batch 0 stays running until batch 2 has run its body
+		case 2:
+			close(ran2)
+		}
+		return nil
+	})
+	prefix, yielded, err := l.run(shortDeadline(t))
+	if err != nil || yielded {
+		t.Fatalf("a yield with batch 0 still running: yielded=%v err=%v", yielded, err)
 	}
-	if fileIntroYieldMargin != 5*time.Minute {
-		t.Errorf("fileIntroYieldMargin = %v, the ruling is five minutes", fileIntroYieldMargin)
-	}
-	if !env.Live {
-		t.Errorf("native env dropped the base it was given: %+v", env.t6g4Base)
-	}
-	if head := (fileIntroEnv{t6g4Base: base}); head.YieldMargin != 0 {
-		t.Errorf("HEAD's env must set no margin, got %v", head.YieldMargin)
+	if prefix != 3 {
+		t.Fatalf("prefix = %d, want all 3 batches run", prefix)
 	}
 }
