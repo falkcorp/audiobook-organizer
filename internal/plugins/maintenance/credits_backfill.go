@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credits_backfill.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: c57e24de-1f92-4c65-ab7d-c7938aef4df2
 // last-edited: 2026-11-14
 
@@ -34,6 +34,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -842,15 +843,17 @@ func t6g3CreditsCoreEnv(base t6g3Base, tags repairs.GuardTagReader, eng t6g3CBEn
 // found: the book rows with their narrator joins and the narrator records it
 // creates and deletes (books: pkg/ops/effects.go has no narrator constant), the
 // author joins a credits write replaces (authors: ModifyBookCredits takes book,
-// book_authors and book_narrators together), and the undo journal, the judged
-// markers and the class id lists (operations: the operation store, whose op rows
-// are the closest constant to the markers and lists). HEAD declared Reads books and authors (kept) and
-// Writes books; the series read is the guard's (GetAllSeries). The result is the summary the
-// core stored; on an error core drops it (see the F5-08 seams note).
+// book_authors and book_narrators together), and the undo journal (operations:
+// the run writes it through CreateOperationChange). The class id lists are the
+// run's own rows (opv2:row:), not an Effect and not authority_lists; the judged
+// markers are op rows written under earlier operations. HEAD declared Reads
+// books and authors (kept) and Writes books; the series read is the guard's
+// (GetAllSeries). The result is the summary the core stored; on an error core
+// drops it (see the F5-08 seams note).
 func (p *Plugin) creditsBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"),
-		tasks.Res("books", "operations")).
-		AlsoReads(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "series"))
+	eff := tasks.Writes(t6g3Res(ops.ResBooks), t6g3Res(ops.ResAuthors),
+		t6g3Res(ops.ResOperations)).
+		AlsoReads(t6g3Res(ops.ResBooks), t6g3Res(ops.ResAuthors), t6g3Res(ops.ResSeries))
 	return tasks.Task(t6g3CreditsBackfillKind, tasks.TaskSpec[json.RawMessage, creditsBackfillResult]{
 		Common: t6g3Common(p.creditsBackfillDef(), t6g3CreditsBackfillKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (creditsBackfillResult, error) {
@@ -943,7 +946,8 @@ func (h t6g3NativeCBHold) Items(int) t6g3ItemsFunc { return h.e.Items(0) }
 // core (the Workers bound in particular). It is a hook rather than a variable
 // the shells call through, so the restart guard's static trace still follows the
 // shells into creditsBackfillCore to its Checkpoint call. Production never
-// assigns it.
+// assigns it, and a test that sets it must not run in parallel with another
+// credits run.
 var t6g3ObserveCreditsEnv func(t6g3CreditsBackfillCoreEnv)
 
 // creditsBackfillCore is the shared body of both shells: the run, then the

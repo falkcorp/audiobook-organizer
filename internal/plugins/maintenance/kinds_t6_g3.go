@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 29eb0771-6105-406d-b32a-2a11e3535809
 // last-edited: 2026-11-14
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -829,3 +830,8 @@ func t6g3KindList(p *Plugin, deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedu
 }
 
 var _ = t6g3KindList
+
+// t6g3Res is the whole-kind Effects reference for a pkg/ops resource under the
+// books module. Every Effects resource in this group is written through it, as
+// the pkg/ops constant, never as a string literal.
+func t6g3Res(r ops.Resource) tasks.Resource { return tasks.Res("books", string(r)) }

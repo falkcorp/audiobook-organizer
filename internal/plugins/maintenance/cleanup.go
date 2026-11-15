@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.35.2
+// version: 1.35.3
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-11-14
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -97,8 +98,8 @@ func runPurgeDeletedCore(ctx context.Context, env purgeDeletedEnv) (struct{}, er
 // undo records it reads and clears (audiobooks.PurgeSoftDeletedUnattended) and
 // the activity entries the run flushes under its operation id (ActivityFlushOp).
 func (p *Plugin) purgeDeletedKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "external_ids"),
-		tasks.Res("books", "files"), tasks.Res("books", "operations"), tasks.Res("books", "activity"))
+	eff := tasks.Writes(t6g3Res(ops.ResBooks), t6g3Res(ops.ResExternalIDs),
+		t6g3Res(ops.ResFiles), t6g3Res(ops.ResOperations), t6g3Res(ops.ResActivity))
 	return tasks.Task(t6g3PurgeDeletedKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g3Common(p.purgeDeletedDef(), t6g3PurgeDeletedKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
@@ -186,7 +187,7 @@ func runTombstoneCleanupCore(_ context.Context, env tombstoneCleanupEnv) (tombst
 // tombstoneCleanupKind builds the native kind. Live-only writer. Writes found:
 // ResolveTombstoneChains rewrites the author tombstone rows (authors).
 func (p *Plugin) tombstoneCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "authors"))
+	eff := tasks.Writes(t6g3Res(ops.ResAuthors))
 	return tasks.Task(t6g3TombstoneCleanupKind, tasks.TaskSpec[json.RawMessage, tombstoneCleanupResult]{
 		Common: t6g3Common(p.tombstoneCleanupDef(), t6g3TombstoneCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (tombstoneCleanupResult, error) {
@@ -273,7 +274,7 @@ func runTempFileCleanupCore(_ context.Context, env tempFileCleanupEnv) (tempFile
 // the orphaned temp files it removes (files) and the activity entries
 // CleanupOrphanedTempFiles records and flushes (activity).
 func (p *Plugin) tempFileCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "files"), tasks.Res("books", "activity"))
+	eff := tasks.Writes(t6g3Res(ops.ResFiles), t6g3Res(ops.ResActivity))
 	return tasks.Task(t6g3TempFileCleanupKind, tasks.TaskSpec[json.RawMessage, tempFileCleanupResult]{
 		Common: t6g3Common(p.tempFileCleanupDef(), t6g3TempFileCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (tempFileCleanupResult, error) {
@@ -396,7 +397,7 @@ func runTranscodeTempCleanupCore(ctx context.Context, env transcodeTempCleanupEn
 // dry_run param (05-tasks 5T.3.7 item 3). Writes found: the stale transcode
 // temp files CleanupStaleTempFiles removes in a live run (files).
 func (p *Plugin) transcodeTempCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "files"))
+	eff := tasks.Writes(t6g3Res(ops.ResFiles))
 	return tasks.Task(t6g3TranscodeTempCleanupKind, tasks.TaskSpec[json.RawMessage, transcodeTempCleanupResult]{
 		Common: t6g3Common(p.transcodeTempCleanupDef(), t6g3TranscodeTempCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (transcodeTempCleanupResult, error) {
@@ -470,7 +471,7 @@ func (p *Plugin) runCleanupActivityLog(ctx context.Context, _ json.RawMessage, r
 // compaction, summarize, prune and index repair all rewrite the activity log
 // (activity).
 func (p *Plugin) cleanupActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "activity"))
+	eff := tasks.Writes(t6g3Res(ops.ResActivity))
 	return tasks.Task(t6g3CleanupActivityLogKind, tasks.TaskSpec[json.RawMessage, cleanupActivityLogResult]{
 		Common: t6g3Common(p.cleanupActivityLogDef(), t6g3CleanupActivityLogKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (cleanupActivityLogResult, error) {
@@ -679,7 +680,7 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 // the .bak-* files sweep.RemoveOldBackupFiles removes (files); HEAD's comment
 // on the def explains why it touches no row.
 func (p *Plugin) cleanupOldBackupsKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "files"))
+	eff := tasks.Writes(t6g3Res(ops.ResFiles))
 	return tasks.Task(t6g3CleanupOldBackupsKind, tasks.TaskSpec[json.RawMessage, cleanupOldBackupsResult]{
 		Common: t6g3Common(p.cleanupOldBackupsDef(), t6g3CleanupOldBackupsKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (cleanupOldBackupsResult, error) {
@@ -965,7 +966,7 @@ func (p *Plugin) runTrashCleanup(ctx context.Context, _ json.RawMessage, reporte
 // under books), removes their files and the files the kept-file sweep unlinks (files), and moves unsettled
 // versions to purge_failed (book_version rows, counted under books).
 func (p *Plugin) trashCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "files"))
+	eff := tasks.Writes(t6g3Res(ops.ResBooks), t6g3Res(ops.ResFiles))
 	return tasks.Task(t6g3TrashCleanupKind, tasks.TaskSpec[json.RawMessage, TrashCleanupResult]{
 		Common: t6g3Common(p.trashCleanupDef(), t6g3TrashCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (TrashCleanupResult, error) {

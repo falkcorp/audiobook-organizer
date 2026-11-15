@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cover_ops.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: e5a3c8f2-1d7b-4e96-8c40-6b2f9d1a7e35
 // last-edited: 2026-11-14
 
@@ -40,6 +40,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -261,7 +262,7 @@ const folderCoverBackfillOpID = "maintenance.folder-cover-backfill"
 // (the param, else twice the cores) and the shell hands that size to
 // tasks.RunItems as tasks.Fixed.
 func (p *Plugin) folderCoverBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "books"))
+	eff := tasks.Writes(t6g3Res(ops.ResBooks))
 	return tasks.Task(t6g3FolderCoverBackfillKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g3Common(p.folderCoverBackfillDef(), t6g3FolderCoverBackfillKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
@@ -512,7 +513,7 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 // shell gives that size to tasks.RunItems as a fixed parallelism, so a read
 // never queues behind a semaphore inside an item.
 func (p *Plugin) coverTextReadKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "metadata_cache"))
+	eff := tasks.Writes(t6g3Res(t6g3CoverTextResource))
 	return tasks.Task(t6g3CoverTextReadKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g3Common(p.coverTextReadDef(), t6g3CoverTextReadKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
@@ -538,6 +539,13 @@ func (p *Plugin) coverTextReadKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.
 		},
 	})
 }
+
+// t6g3CoverTextResource is the Effects resource of the cover-text records
+// (the `cover_text:` and `cover_text_book:` key families). pkg/ops/effects.go on
+// this branch has no constant for them, so the closest one is declared;
+// F5-06 adds ops.ResCoverText, and the coordinator swaps this one line to it at
+// stacking (with the SetRaw entry of t6g3MethodResources in the test).
+const t6g3CoverTextResource = ops.ResMetadataCache
 
 // coverTextReadCore is the shared body of both shells.
 func coverTextReadCore(ctx context.Context, params coverOpParams, env coverTextReadEnv) error {

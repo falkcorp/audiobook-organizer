@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
 // last-edited: 2026-11-14
 
@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -23,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	pathutil "github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
 	"github.com/stretchr/testify/assert"
@@ -37,27 +40,46 @@ import (
 // run calls, and the test checks them against the kind's declared WriteSet, so the
 // declaration is judged against what the run did, not against a second copy of
 // itself. A method with no entry fails the test.
-var t6g3MethodResources = map[string][]string{
-	"RunAutoPurgeSoftDeleted":  {"books", "external_ids", "files", "operations"},
-	"ActivityFlushOp":          {"activity"},
-	"ResolveTombstoneChains":   {"authors"},
-	"CleanupTrashedVersions":   {"books", "files"},
-	"CleanupOrphanedTempFiles": {"activity", "files"},
-	"CleanupStaleTempFiles":    {"files"},
-	"RemoveOldBackupFiles":     {"files"},
-	"CompactActivityEntries":   {"activity"},
-	"MaintainActivityLog":      {"activity"},
-	"SetUserPreferenceForUser": {"user_state"},
-	"ModifyBook":               {"books"},
-	"SetRaw":                   {"metadata_cache"},
-	"ModifyBookCredits":        {"books", "authors"},
-	"CreateNarrator":           {"books"},
-	"DeleteNarrator":           {"books"},
-	"CreateOperationChange":    {"operations"},
-	"InvalidateAuthorsCache":   {"authors"},
-	"ReplaceOpRowsPrefix":      {"operations"},
-	"SaveClassLists":           {"operations"},
-	"ClearClassLists":          {"operations"},
+var t6g3MethodResources = map[string][]ops.Resource{
+	"RunAutoPurgeSoftDeleted":  {ops.ResBooks, ops.ResExternalIDs, ops.ResFiles, ops.ResOperations},
+	"ActivityFlushOp":          {ops.ResActivity},
+	"ResolveTombstoneChains":   {ops.ResAuthors},
+	"CleanupTrashedVersions":   {ops.ResBooks, ops.ResFiles},
+	"CleanupOrphanedTempFiles": {ops.ResActivity, ops.ResFiles},
+	"CleanupStaleTempFiles":    {ops.ResFiles},
+	"RemoveOldBackupFiles":     {ops.ResFiles},
+	"CompactActivityEntries":   {ops.ResActivity},
+	"MaintainActivityLog":      {ops.ResActivity},
+	"SetUserPreferenceForUser": {ops.ResUserState},
+	"ModifyBook":               {ops.ResBooks},
+	// The cover-text records. The coordinator swaps this entry to ops.ResCoverText
+	// with t6g3CoverTextResource (cover_ops.go) at stacking.
+	"SetRaw":                 {ops.ResMetadataCache},
+	"ModifyBookCredits":      {ops.ResBooks, ops.ResAuthors},
+	"CreateNarrator":         {ops.ResBooks},
+	"DeleteNarrator":         {ops.ResBooks},
+	"CreateOperationChange":  {ops.ResOperations},
+	"InvalidateAuthorsCache": {ops.ResAuthors},
+	// The run's own rows (opv2:row:) and the judged markers are op rows, not an
+	// Effects resource: mapped, with no resource.
+	"ReplaceOpRowsPrefix": nil,
+	"SaveClassLists":      nil,
+	"ClearClassLists":     nil,
+}
+
+// Every writer method has an entry, and no entry names a method the writer lacks.
+func TestT6G3_MethodResourcesCoverTheWriterInterface(t *testing.T) {
+	typ := reflect.TypeOf((*t6g3Writer)(nil)).Elem()
+	seen := map[string]bool{}
+	for i := 0; i < typ.NumMethod(); i++ {
+		name := typ.Method(i).Name
+		seen[name] = true
+		_, ok := t6g3MethodResources[name]
+		assert.True(t, ok, "t6g3Writer.%s has no entry in t6g3MethodResources", name)
+	}
+	for name := range t6g3MethodResources {
+		assert.True(t, seen[name], "t6g3MethodResources names %s, which t6g3Writer does not have", name)
+	}
 }
 
 // t6g3ResLog collects the resources of the write methods a recording writer saw.
@@ -81,7 +103,7 @@ func (l *t6g3ResLog) record(call string) {
 		l.resources = map[string]bool{}
 	}
 	for _, r := range res {
-		l.resources[r] = true
+		l.resources[string(r)] = true
 	}
 }
 
@@ -221,6 +243,127 @@ func (w *t6g3RecWriter) ClearClassLists(string) error {
 }
 
 var _ t6g3Writer = (*t6g3RecWriter)(nil)
+
+// t6g3ForwardSpy wraps a real t6g3Writer, records every call (by method name, with
+// the id or key where one identifies it) and the resources it writes, and
+// forwards. It implements every method itself and embeds nothing, so a method
+// added to t6g3Writer breaks the compile here, and a method with no entry in
+// t6g3MethodResources fails assertWithin.
+type t6g3ForwardSpy struct {
+	t6g3ResLog
+	inner t6g3Writer
+	mu    sync.Mutex
+	calls []string
+}
+
+var _ t6g3Writer = (*t6g3ForwardSpy)(nil)
+
+func newT6G3ForwardSpy(inner t6g3Writer) *t6g3ForwardSpy { return &t6g3ForwardSpy{inner: inner} }
+
+func (s *t6g3ForwardSpy) note(c string) {
+	s.record(c)
+	s.mu.Lock()
+	s.calls = append(s.calls, c)
+	s.mu.Unlock()
+}
+
+func (s *t6g3ForwardSpy) called() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.calls)
+}
+
+// argsOf returns the detail of every call of method ("Method:detail" -> detail).
+func (s *t6g3ForwardSpy) argsOf(method string) []string {
+	var out []string
+	for _, c := range s.called() {
+		if m, d, ok := strings.Cut(c, ":"); ok && m == method {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func (s *t6g3ForwardSpy) RunAutoPurgeSoftDeleted(ctx context.Context, opID string) error {
+	s.note("RunAutoPurgeSoftDeleted")
+	return s.inner.RunAutoPurgeSoftDeleted(ctx, opID)
+}
+func (s *t6g3ForwardSpy) ActivityFlushOp(opID string) {
+	s.note("ActivityFlushOp")
+	s.inner.ActivityFlushOp(opID)
+}
+func (s *t6g3ForwardSpy) ResolveTombstoneChains() (int, error) {
+	s.note("ResolveTombstoneChains")
+	return s.inner.ResolveTombstoneChains()
+}
+func (s *t6g3ForwardSpy) CleanupTrashedVersions() (versions.CleanupResult, error) {
+	s.note("CleanupTrashedVersions")
+	return s.inner.CleanupTrashedVersions()
+}
+func (s *t6g3ForwardSpy) CleanupOrphanedTempFiles(rootDir string, opID string) int {
+	s.note("CleanupOrphanedTempFiles")
+	return s.inner.CleanupOrphanedTempFiles(rootDir, opID)
+}
+func (s *t6g3ForwardSpy) CleanupStaleTempFiles(root string, app pathutil.AppDirs, maxAge time.Duration, dryRun bool) int {
+	s.note("CleanupStaleTempFiles")
+	return s.inner.CleanupStaleTempFiles(root, app, maxAge, dryRun)
+}
+func (s *t6g3ForwardSpy) RemoveOldBackupFiles(ctx context.Context, root string, app pathutil.AppDirs, match func(string) (time.Time, bool), maxAge time.Duration, log func(slog.Level, string, ...any)) (int, error) {
+	s.note("RemoveOldBackupFiles")
+	return s.inner.RemoveOldBackupFiles(ctx, root, app, match, maxAge, log)
+}
+func (s *t6g3ForwardSpy) CompactActivityEntries(ctx context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error) {
+	s.note("CompactActivityEntries")
+	return s.inner.CompactActivityEntries(ctx, cutoff, progress)
+}
+func (s *t6g3ForwardSpy) MaintainActivityLog(ctx context.Context, changeDays, debugDays int) (int, int, int64, error) {
+	s.note("MaintainActivityLog")
+	return s.inner.MaintainActivityLog(ctx, changeDays, debugDays)
+}
+func (s *t6g3ForwardSpy) SetUserPreferenceForUser(userID, key, value string) error {
+	s.note("SetUserPreferenceForUser:" + key)
+	return s.inner.SetUserPreferenceForUser(userID, key, value)
+}
+func (s *t6g3ForwardSpy) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	s.note("ModifyBook:" + id)
+	return s.inner.ModifyBook(id, fn)
+}
+func (s *t6g3ForwardSpy) SetRaw(key string, value []byte) error {
+	s.note("SetRaw:" + key)
+	return s.inner.SetRaw(key, value)
+}
+func (s *t6g3ForwardSpy) ModifyBookCredits(bookID string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
+	s.note("ModifyBookCredits:" + bookID)
+	return s.inner.ModifyBookCredits(bookID, fn)
+}
+func (s *t6g3ForwardSpy) CreateNarrator(name string) (*database.Narrator, error) {
+	s.note("CreateNarrator:" + name)
+	return s.inner.CreateNarrator(name)
+}
+func (s *t6g3ForwardSpy) DeleteNarrator(id int) error {
+	s.note("DeleteNarrator")
+	return s.inner.DeleteNarrator(id)
+}
+func (s *t6g3ForwardSpy) CreateOperationChange(c *database.OperationChange) error {
+	s.note("CreateOperationChange:" + c.ChangeType)
+	return s.inner.CreateOperationChange(c)
+}
+func (s *t6g3ForwardSpy) InvalidateAuthorsCache() {
+	s.note("InvalidateAuthorsCache")
+	s.inner.InvalidateAuthorsCache()
+}
+func (s *t6g3ForwardSpy) ReplaceOpRowsPrefix(opID, prefix string, n int, at func(int) (database.OpRow, error)) error {
+	s.note("ReplaceOpRowsPrefix:" + prefix)
+	return s.inner.ReplaceOpRowsPrefix(opID, prefix, n, at)
+}
+func (s *t6g3ForwardSpy) SaveClassLists(opID string, lists map[string][]string) (*database.ClassListSummary, error) {
+	s.note("SaveClassLists")
+	return s.inner.SaveClassLists(opID, lists)
+}
+func (s *t6g3ForwardSpy) ClearClassLists(opID string) error {
+	s.note("ClearClassLists")
+	return s.inner.ClearClassLists(opID)
+}
 
 // t6g3FakeStore answers the group's reads from fixtures.
 type t6g3FakeStore struct {
@@ -474,20 +617,20 @@ type t6g3Want struct {
 }
 
 var t6g3Wants = []t6g3Want{
-	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, []string{"activity", "books", "external_ids", "files", "operations"}, ""},
-	{"maintenance.tombstone-cleanup", "Resolve author tombstone chains", tasks.ResumeDrop, "books.maintenance.tombstone-cleanup", time.Hour, 0, false, []string{"authors"}, ""},
-	{"maintenance.temp-file-cleanup", "Clean orphaned temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{"activity", "files"}, ""},
-	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{"files"}, ""},
-	{"maintenance.cleanup-activity-log", "Clean activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 30 * time.Minute, 20 * time.Minute, false, []string{"activity"}, ""},
-	{"maintenance.cleanup-old-backups", "Clean old backup files", tasks.ResumeFromZero, "books.maintenance.cleanup-old-backups", time.Hour, time.Hour, false, []string{"files"}, ""},
-	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, time.Hour, false, []string{"books", "files"}, ""},
-	{"maintenance.clear-apply-rename-failures", "Clear apply rename-failure records", tasks.ResumeDrop, "books.maintenance.clear-apply-rename-failures", 10 * time.Minute, 10 * time.Minute, false, []string{"user_state"}, ""},
+	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, []string{string(ops.ResActivity), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResFiles), string(ops.ResOperations)}, ""},
+	{"maintenance.tombstone-cleanup", "Resolve author tombstone chains", tasks.ResumeDrop, "books.maintenance.tombstone-cleanup", time.Hour, 0, false, []string{string(ops.ResAuthors)}, ""},
+	{"maintenance.temp-file-cleanup", "Clean orphaned temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResActivity), string(ops.ResFiles)}, ""},
+	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResFiles)}, ""},
+	{"maintenance.cleanup-activity-log", "Clean activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 30 * time.Minute, 20 * time.Minute, false, []string{string(ops.ResActivity)}, ""},
+	{"maintenance.cleanup-old-backups", "Clean old backup files", tasks.ResumeFromZero, "books.maintenance.cleanup-old-backups", time.Hour, time.Hour, false, []string{string(ops.ResFiles)}, ""},
+	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResBooks), string(ops.ResFiles)}, ""},
+	{"maintenance.clear-apply-rename-failures", "Clear apply rename-failure records", tasks.ResumeDrop, "books.maintenance.clear-apply-rename-failures", 10 * time.Minute, 10 * time.Minute, false, []string{string(ops.ResUserState)}, ""},
 	{"maintenance.combine-journal-check", "Combine journal readability check", tasks.ResumeDrop, "books.maintenance.combine-journal-check", 10 * time.Minute, 0, true, nil, ""},
-	{"maintenance.compact-activity-log", "Compact activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 6 * time.Hour, 20 * time.Minute, false, []string{"activity"}, ""},
-	{"maintenance.folder-cover-backfill", "Use folder cover images", tasks.ResumeDrop, "books.maintenance.folder-cover-backfill", 120 * time.Minute, 0, false, []string{"books"}, ""},
-	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, []string{"metadata_cache"}, ""},
+	{"maintenance.compact-activity-log", "Compact activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 6 * time.Hour, 20 * time.Minute, false, []string{string(ops.ResActivity)}, ""},
+	{"maintenance.folder-cover-backfill", "Use folder cover images", tasks.ResumeDrop, "books.maintenance.folder-cover-backfill", 120 * time.Minute, 0, false, []string{string(ops.ResBooks)}, ""},
+	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, []string{string(ops.ResMetadataCache)}, ""},
 	{"maintenance.credit-census", "Author/narrator credit census", tasks.ResumeDrop, "books.maintenance.credit-census", 2 * time.Hour, 0, true, nil, ""},
-	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{"authors", "books", "operations"}, ""},
+	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{string(ops.ResAuthors), string(ops.ResBooks), string(ops.ResOperations)}, ""},
 }
 
 func TestT6G3Kinds_MatchHEADDefs(t *testing.T) {
@@ -693,31 +836,41 @@ func TestT6G3_CreditsBackfillPreviewWritesNothing(t *testing.T) {
 	}
 }
 
+// Every native shell that writes refuses a mode key (decision 3), under every
+// spelling and case, in Preview and in Live: one row per kind per key. The
+// refusal comes before the live-only check, the store and the writer, so nothing
+// is written and the error is the mode-key one in both modes.
 func TestT6G3_ModeKeysAreRefused(t *testing.T) {
-	// Every native shell that writes refuses a mode key (decision 3), in any
-	// case; the spelling varies per kind on purpose.
-	cases := map[string]string{
-		"maintenance.purge-deleted":               `{"dry_run":false}`,
-		"maintenance.tombstone-cleanup":           `{"dryRun":false}`,
-		"maintenance.temp-file-cleanup":           `{"APPLY":true}`,
-		"maintenance.transcode-temp-cleanup":      `{"dry_run":true}`,
-		"maintenance.cleanup-activity-log":        `{"Apply":true}`,
-		"maintenance.cleanup-old-backups":         `{"dry_run":false}`,
-		"maintenance.trash-cleanup":               `{"dryRun":false}`,
-		"maintenance.clear-apply-rename-failures": `{"apply":true}`,
-		"maintenance.compact-activity-log":        `{"older_than_days":3,"dry_run":false}`,
-		"maintenance.folder-cover-backfill":       `{"apply":true}`,
-		"maintenance.cover-text-read":             `{"dryRun":false}`,
-		"maintenance.credits-backfill":            `{"Apply":true}`,
+	kinds := map[string]string{
+		"maintenance.purge-deleted":               `{%q:true}`,
+		"maintenance.tombstone-cleanup":           `{%q:true}`,
+		"maintenance.temp-file-cleanup":           `{%q:true}`,
+		"maintenance.transcode-temp-cleanup":      `{%q:true}`,
+		"maintenance.cleanup-activity-log":        `{%q:true}`,
+		"maintenance.cleanup-old-backups":         `{%q:true}`,
+		"maintenance.trash-cleanup":               `{%q:true}`,
+		"maintenance.clear-apply-rename-failures": `{%q:true}`,
+		"maintenance.compact-activity-log":        `{"older_than_days":3,%q:true}`,
+		"maintenance.folder-cover-backfill":       `{%q:true}`,
+		"maintenance.cover-text-read":             `{%q:true}`,
+		"maintenance.credits-backfill":            `{%q:true}`,
 	}
-	for id, params := range cases {
-		f := newT6G3Fake(t)
-		d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(f.deps(), nil), id)
-		_, rc := newT6G3Host(d.Kind(), tasks.ModePreview, &t6g3Gate{})
-		_, err := t6g3Run(t, d, rc, params)
-		require.Error(t, err, id)
-		assert.Contains(t, err.Error(), "mode comes from the start request", id)
-		assert.Empty(t, f.writer.called(), id)
+	keys := []string{"dry_run", "DRY_RUN", "dryRun", "DryRun", "apply", "APPLY", "Apply"}
+	modes := map[string]tasks.Mode{"preview": tasks.ModePreview, "live": tasks.ModeLive}
+	for id, tmpl := range kinds {
+		for _, key := range keys {
+			for mname, mode := range modes {
+				t.Run(id+"/"+key+"/"+mname, func(t *testing.T) {
+					f := newT6G3Fake(t)
+					d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(f.deps(), nil), id)
+					_, rc := newT6G3Host(d.Kind(), mode, &t6g3Gate{})
+					_, err := t6g3Run(t, d, rc, fmt.Sprintf(tmpl, key))
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), "mode comes from the start request")
+					assert.Empty(t, f.writer.called())
+				})
+			}
+		}
 	}
 }
 

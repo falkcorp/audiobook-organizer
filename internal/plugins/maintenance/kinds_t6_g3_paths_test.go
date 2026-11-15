@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_paths_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: d41c7b92-6a35-4e08-9f1d-83b5e2a07c64
 // last-edited: 2026-11-14
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/covertext"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -214,14 +215,12 @@ func TestT6G3_CreditsBackfillHeadShellFailedResultWriteClearsTheClassLists(t *te
 // t6g3CBRecWriter notes the credits backfill's writes and passes them to the
 // writer under it.
 type t6g3CBRecWriter struct {
-	t6g3Writer
-	t6g3ResLog
+	*t6g3ForwardSpy
 	mu    sync.Mutex
 	calls []string
 }
 
 func (w *t6g3CBRecWriter) note(c string) {
-	w.record(c)
 	w.mu.Lock()
 	w.calls = append(w.calls, c)
 	w.mu.Unlock()
@@ -235,42 +234,42 @@ func (w *t6g3CBRecWriter) called() []string {
 
 func (w *t6g3CBRecWriter) ModifyBookCredits(id string, fn func(*database.Book, *database.BookCreditsEdit) error) (*database.Book, database.BookCreditsEdit, error) {
 	w.note("ModifyBookCredits:" + id)
-	return w.t6g3Writer.ModifyBookCredits(id, fn)
+	return w.t6g3ForwardSpy.ModifyBookCredits(id, fn)
 }
 
 func (w *t6g3CBRecWriter) CreateNarrator(name string) (*database.Narrator, error) {
 	w.note("CreateNarrator:" + name)
-	return w.t6g3Writer.CreateNarrator(name)
+	return w.t6g3ForwardSpy.CreateNarrator(name)
 }
 
 func (w *t6g3CBRecWriter) DeleteNarrator(id int) error {
 	w.note("DeleteNarrator")
-	return w.t6g3Writer.DeleteNarrator(id)
+	return w.t6g3ForwardSpy.DeleteNarrator(id)
 }
 
 func (w *t6g3CBRecWriter) CreateOperationChange(c *database.OperationChange) error {
 	w.note("CreateOperationChange:" + c.ChangeType)
-	return w.t6g3Writer.CreateOperationChange(c)
+	return w.t6g3ForwardSpy.CreateOperationChange(c)
 }
 
 func (w *t6g3CBRecWriter) InvalidateAuthorsCache() {
 	w.note("InvalidateAuthorsCache")
-	w.t6g3Writer.InvalidateAuthorsCache()
+	w.t6g3ForwardSpy.InvalidateAuthorsCache()
 }
 
 func (w *t6g3CBRecWriter) ReplaceOpRowsPrefix(opID, prefix string, n int, at func(int) (database.OpRow, error)) error {
 	w.note("ReplaceOpRowsPrefix:" + prefix)
-	return w.t6g3Writer.ReplaceOpRowsPrefix(opID, prefix, n, at)
+	return w.t6g3ForwardSpy.ReplaceOpRowsPrefix(opID, prefix, n, at)
 }
 
 func (w *t6g3CBRecWriter) SaveClassLists(opID string, lists map[string][]string) (*database.ClassListSummary, error) {
 	w.note("SaveClassLists")
-	return w.t6g3Writer.SaveClassLists(opID, lists)
+	return w.t6g3ForwardSpy.SaveClassLists(opID, lists)
 }
 
 func (w *t6g3CBRecWriter) ClearClassLists(opID string) error {
 	w.note("ClearClassLists")
-	return w.t6g3Writer.ClearClassLists(opID)
+	return w.t6g3ForwardSpy.ClearClassLists(opID)
 }
 
 // t6g3CBNative is the credits backfill's owner-declared dependencies over a real
@@ -292,7 +291,7 @@ func newT6G3CBNative(f *cbFixture, key tasks.Key) *t6g3CBNative {
 		Store:        headT6g3Store{OpsStore: rec, p: p},
 		StandDownKey: key,
 		NewWriter: func(w tasks.Writer) t6g3Writer {
-			rw := &t6g3CBRecWriter{t6g3Writer: headT6g3Writer{p: p, store: rec}}
+			rw := &t6g3CBRecWriter{t6g3ForwardSpy: newT6G3ForwardSpy(headT6g3Writer{p: p, store: rec})}
 			n.mu.Lock()
 			n.handed = append(n.handed, w)
 			n.writers = append(n.writers, rw)
@@ -428,7 +427,7 @@ func TestT6G3_CreditsBackfillCoreEnvBoundsItsGroupsByNumCPU(t *testing.T) {
 func TestT6G3_CreditsBackfillEffects(t *testing.T) {
 	d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(t6g3Deps{}, nil), "maintenance.credits-backfill")
 	e := tasks.CommonOf(d).Effects
-	assert.Equal(t, []string{"authors", "books", "operations"}, t6g3WriteKinds(e))
+	assert.Equal(t, []string{string(ops.ResAuthors), string(ops.ResBooks), string(ops.ResOperations)}, t6g3WriteKinds(e))
 	var reads []string
 	for _, r := range e.ReadSet() {
 		reads = append(reads, r.Kind)
@@ -463,7 +462,7 @@ func (b *t6g3Barrier) pass() {
 	b.mu.Unlock()
 	select {
 	case <-b.ready:
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 	}
 	b.mu.Lock()
 	b.inflight--
@@ -509,6 +508,7 @@ func TestT6G3_CoverTextReadNativePoolIsTheWorkersParamOrTheCapacity(t *testing.T
 		want     int
 	}{
 		{"capacity", 1, `{}`, 1},
+		{"capacity above one", 2, `{}`, 2},
 		{"workers param", 2, `{"workers":1}`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -518,16 +518,33 @@ func TestT6G3_CoverTextReadNativePoolIsTheWorkersParamOrTheCapacity(t *testing.T
 			newCoverTextReader = func() coverTextReader { return reader }
 			t.Cleanup(func() { newCoverTextReader = orig })
 			p := New(deps)
+			var (
+				wmu    sync.Mutex
+				handed []tasks.Writer
+				spy    *t6g3ForwardSpy
+			)
 			kd := t6g3Deps{
 				Store: headT6g3Store{OpsStore: st, p: p},
-				NewWriter: func(tasks.Writer) t6g3Writer {
-					return headT6g3Writer{p: p, store: st}
+				NewWriter: func(w tasks.Writer) t6g3Writer {
+					wmu.Lock()
+					defer wmu.Unlock()
+					handed = append(handed, w)
+					spy = newT6G3ForwardSpy(headT6g3Writer{p: p, store: st})
+					return spy
 				},
 			}
 			d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(kd, nil), "maintenance.cover-text-read")
-			_, rc := newT6G3Host(d.Kind(), tasks.ModeLive, &t6g3Gate{})
+			gate := &t6g3Gate{id: "cover-text"}
+			_, rc := newT6G3Host(d.Kind(), tasks.ModeLive, gate)
 			_, err := t6g3Run(t, d, rc, tc.params)
 			require.NoError(t, err)
+			wmu.Lock()
+			require.Len(t, handed, 1, "NewWriter is called once per run")
+			assert.Same(t, gate, handed[0], "NewWriter is handed this run's rc.Writer()")
+			require.NotNil(t, spy)
+			assert.NotEmpty(t, spy.argsOf("SetRaw"), "the records are written through the run's writer")
+			spy.assertWithin(t, d)
+			wmu.Unlock()
 			assert.Equal(t, tc.want, reader.maxInFlight())
 			for _, id := range ids {
 				got, err := covertext.ForBook(st, id)
@@ -556,31 +573,8 @@ func (s *t6g3CoverGateStore) ListActiveOperationsV2() ([]database.OperationV2Row
 	return nil, nil
 }
 
-// t6g3ModifyBookWriter records the books written through the folder-cover run's
-// writer and passes each write to the writer under it.
-type t6g3ModifyBookWriter struct {
-	t6g3Writer
-	t6g3ResLog
-	mu  sync.Mutex
-	ids []string
-}
-
-func (w *t6g3ModifyBookWriter) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	w.record("ModifyBook")
-	w.mu.Lock()
-	w.ids = append(w.ids, id)
-	w.mu.Unlock()
-	return w.t6g3Writer.ModifyBook(id, fn)
-}
-
-func (w *t6g3ModifyBookWriter) written() []string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return slices.Clone(w.ids)
-}
-
 // A live native folder-cover run hands NewWriter this run's rc.Writer(), writes
-// each book's cover through that writer (coverFolderStore.ModifyBook), sets the
+// each book's cover through that writer (t6g3CoverFolderStore.ModifyBook), sets the
 // cover on both books, and sizes its pool from the workers param, else the
 // default (twice the cores, never below 2).
 func TestT6G3_FolderCoverBackfillNativeLiveWritesThroughTheWriter(t *testing.T) {
@@ -599,7 +593,7 @@ func TestT6G3_FolderCoverBackfillNativeLiveWritesThroughTheWriter(t *testing.T) 
 			var (
 				mu     sync.Mutex
 				handed []tasks.Writer
-				spy    *t6g3ModifyBookWriter
+				spy    *t6g3ForwardSpy
 			)
 			kd := t6g3Deps{
 				Store: &t6g3CoverGateStore{t6g3Store: headT6g3Store{OpsStore: st, p: p}, b: barrier},
@@ -607,7 +601,7 @@ func TestT6G3_FolderCoverBackfillNativeLiveWritesThroughTheWriter(t *testing.T) 
 					mu.Lock()
 					defer mu.Unlock()
 					handed = append(handed, w)
-					spy = &t6g3ModifyBookWriter{t6g3Writer: headT6g3Writer{p: p, store: st}}
+					spy = newT6G3ForwardSpy(headT6g3Writer{p: p, store: st})
 					return spy
 				},
 			}
@@ -622,7 +616,7 @@ func TestT6G3_FolderCoverBackfillNativeLiveWritesThroughTheWriter(t *testing.T) 
 			require.Len(t, handed, 1, "NewWriter is called once per run")
 			assert.Same(t, gate, handed[0], "NewWriter is handed this run's rc.Writer()")
 			require.NotNil(t, spy)
-			assert.ElementsMatch(t, ids, spy.written(), "each book's write went through the run's writer")
+			assert.ElementsMatch(t, ids, spy.argsOf("ModifyBook"), "each book's write went through the run's writer")
 			spy.assertWithin(t, d)
 			for _, id := range ids {
 				b, err := st.GetBookByID(id)

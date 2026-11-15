@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/clear_apply_rename_failures.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 1c9f4a67-52b8-4d03-ae71-8f605d2c9b34
 // last-edited: 2026-11-14
 
@@ -32,6 +32,7 @@ import (
 
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -140,7 +141,7 @@ func (p *Plugin) runClearApplyRenameFailures(ctx context.Context, rawParams json
 // SetUserPreferenceForUser blanks a record in the _system preference keyspace
 // (user_state); the op never touches a file or a book_file row.
 func (p *Plugin) clearApplyRenameFailuresKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "user_state"))
+	eff := tasks.Writes(t6g3Res(ops.ResUserState))
 	return tasks.Task(t6g3ClearApplyRenameFailuresKind, tasks.TaskSpec[json.RawMessage, clearApplyRenameFailuresResult]{
 		Common: t6g3Common(p.clearApplyRenameFailuresDef(), t6g3ClearApplyRenameFailuresKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (clearApplyRenameFailuresResult, error) {

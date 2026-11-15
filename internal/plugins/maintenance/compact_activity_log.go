@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/compact_activity_log.go
-// version: 2.1.4
+// version: 2.1.5
 // guid: 3c8f5a92-6d1b-4e7a-9f04-8b2d6c1e5a37
 // last-edited: 2026-11-14
 
@@ -16,6 +16,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -190,7 +191,7 @@ func compactActivityLogPlan(raw json.RawMessage, now time.Time) (cutoff time.Tim
 // zero, which means "compact everything". Live-only writer. Writes found:
 // CompactActivityEntries collapses activity rows into daily digests (activity).
 func (p *Plugin) compactActivityLogKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "activity"))
+	eff := tasks.Writes(t6g3Res(ops.ResActivity))
 	return tasks.Task(t6g3CompactActivityLogKind, tasks.TaskSpec[json.RawMessage, CompactActivityLogResult]{
 		Common: t6g3Common(p.compactActivityLogDef(), t6g3CompactActivityLogKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (CompactActivityLogResult, error) {
