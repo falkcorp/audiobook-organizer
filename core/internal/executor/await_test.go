@@ -1,5 +1,5 @@
 // file: core/internal/executor/await_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5e0b3f52-8a1d-4c6e-9b47-2d6a1f0c8e93
 // last-edited: 2026-11-15
 
@@ -26,6 +26,7 @@ import (
 const (
 	awaitParent = "gotham.stakeout"
 	awaitChild  = "gotham.longcase"
+	awaitLimit  = time.Minute // the parent's ProgressTimeout in these tests
 )
 
 // awaitSaw is what a fixture parent saw when its Await returned.
@@ -44,7 +45,18 @@ type awaitSaw struct {
 func awaitRig(t *testing.T, progTO time.Duration, child tasks.Definition, after func(rc *tasks.RC) error,
 	parentEdits ...func(*tasks.Common)) (*harness, <-chan awaitSaw) {
 	t.Helper()
+	h, got, _ := awaitRigDefs(t, progTO, []tasks.Definition{child}, after, parentEdits...)
+	return h, got
+}
+
+// awaitRigDefs is awaitRig with any definitions beside the parent (the
+// child kind among them); refs receives the child's run ID as soon as the
+// parent has enqueued it.
+func awaitRigDefs(t *testing.T, progTO time.Duration, defs []tasks.Definition, after func(rc *tasks.RC) error,
+	parentEdits ...func(*tasks.Common)) (*harness, <-chan awaitSaw, <-chan tasks.RunID) {
+	t.Helper()
 	got := make(chan awaitSaw, 4)
+	refs := make(chan tasks.RunID, 4)
 	var h *harness
 	edits := append([]func(*tasks.Common){
 		func(c *tasks.Common) { c.ProgressTimeout = progTO; c.Cancel = tasks.Cooperative(time.Second) },
@@ -55,6 +67,7 @@ func awaitRig(t *testing.T, progTO time.Duration, child tasks.Definition, after 
 		if err != nil {
 			return "", err
 		}
+		refs <- ref.ID
 		out, err := rc.Await(ref)
 		got <- awaitSaw{out: out, err: err, returnedAt: time.Now(), lastReport: h.lastReportOf(rc.RunID()), child: ref.ID}
 		if err != nil {
@@ -65,11 +78,11 @@ func awaitRig(t *testing.T, progTO time.Duration, child tasks.Definition, after 
 		}
 		return "", nil
 	}, edits...)
-	h = newHarness(t, []tasks.Definition{parent, child}, func(o *Options) {
+	h = newHarness(t, append([]tasks.Definition{parent}, defs...), func(o *Options) {
 		o.Config = Config{DispatchTick: time.Second, WatchdogInterval: 30 * time.Second}
 		o.Catalog = catalogWith(t, "gotham:run") // gotham's system actor may start its own kinds
 	})
-	return h, got
+	return h, got, refs
 }
 
 // lastReportOf reads the liveness stamp of run id's live attempt.
@@ -134,11 +147,23 @@ func settleGoroutines(t *testing.T, base int) {
 // watchdog never strikes the parent and Await returns the child's outcome.
 func TestAwait_ParentSurvivesChildLongerThanItsWatchdogLimit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		h, got := awaitRig(t, time.Minute, lanternChild(5*time.Minute), nil)
+		h, got := awaitRig(t, awaitLimit, lanternChild(5*time.Minute), nil)
 		base := runtime.NumGoroutine()
 		began := time.Now()
 		parent := h.start(awaitParent, tasks.StartRequest{})
-		time.Sleep(6 * time.Minute)
+		// Sample the parent's stamp age while it waits. A store read takes no
+		// fake time, so a relay period equal to the limit would still pass the
+		// watchdog's gap <= limit test here; the age itself must stay a
+		// third of the limit, within one dispatch tick.
+		var oldest time.Duration
+		for time.Since(began) < 4*time.Minute+50*time.Second {
+			time.Sleep(5 * time.Second)
+			oldest = max(oldest, time.Since(h.lastReportOf(parent)))
+		}
+		if limit := awaitLimit / 3; oldest > limit+time.Second {
+			t.Errorf("oldest parent stamp seen while waiting was %s old, want at most %s (the limit %s over three, plus a dispatch tick)", oldest, limit+time.Second, awaitLimit)
+		}
+		time.Sleep(70 * time.Second)
 		synctest.Wait()
 		r := h.get(parent)
 		if r.State != tasks.StateSucceeded {
@@ -453,5 +478,104 @@ func TestAwaitAlive(t *testing.T) {
 		if got := awaitAlive(c.state); got != c.want {
 			t.Errorf("awaitAlive(%s) = %v, want %v", c.state, got, c.want)
 		}
+	}
+}
+
+// holdupChild is a child kind that queues behind the "gotham.holdup" kind's
+// key, and holdup the Task that holds that key and never ends.
+func holdupDefs() (child, holdup tasks.Definition) {
+	child = taskDef(awaitChild, okBody, func(c *tasks.Common) {
+		c.Effects = tasks.Writes(tasks.Res("gotham", "lab"))
+		c.ConcurrencyKey = "gotham.holdup"
+	})
+	holdup = taskDef("gotham.holdup", blockUntilCtx(nil), func(c *tasks.Common) {
+		c.Effects = tasks.Writes(tasks.Res("gotham", "notes"))
+		c.ProgressTimeout = time.Hour
+		c.Cancel = tasks.Cooperative(time.Second)
+		c.Resume = tasks.ResumeDrop
+	})
+	return child, holdup
+}
+
+// TestAwait_ChildNeedingAPersonOrARestartDoesNotKeepParentAlive: a child
+// that is queued is waited on with the relay, but once it is awaiting a
+// decision or interrupted nothing the executor does will move it, so the
+// parent is no longer stamped and its own watchdog stops it. (The state is
+// written through the executor's run store: no definition reaches these
+// states while its parent is running.)
+func TestAwait_ChildNeedingAPersonOrARestartDoesNotKeepParentAlive(t *testing.T) {
+	for _, state := range []tasks.RunState{tasks.StateAwaitingDecision, tasks.StateInterrupted} {
+		t.Run(string(state), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				child, holdup := holdupDefs()
+				h, got, refs := awaitRigDefs(t, awaitLimit, []tasks.Definition{child, holdup}, nil)
+				h.start("gotham.holdup", tasks.StartRequest{})
+				time.Sleep(time.Second)
+				parent := h.start(awaitParent, tasks.StartRequest{})
+				cid := <-refs
+				time.Sleep(50 * time.Second) // past the limit: only the relay keeps the parent alive
+				synctest.Wait()
+				if c, r := h.get(cid), h.get(parent); c.State != tasks.StateQueued || r.State != tasks.StateRunning {
+					t.Fatalf("at 50s: child %s, parent %s, want queued and running (alive child, relayed parent)", c.State, r.State)
+				}
+				_, err := h.e.move(context.Background(), cid, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+					next := cur
+					next.State = state
+					return next, tasks.RunEvent{Event: "test"}, nil
+				}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(3 * time.Minute) // limit 1m, pass every 30s
+				synctest.Wait()
+				if r := h.get(parent); r.State != tasks.StateCanceled || r.Reason != reasonWatchdog {
+					t.Fatalf("parent %s/%q with its child %s, want canceled/watchdog: nothing relays a child that waits for a person or a restart", r.State, r.Reason, state)
+				}
+				if saw := <-got; !errors.Is(saw.err, tasks.ErrCanceled) {
+					t.Errorf("Await err %v, want the watchdog's cancel", saw.err)
+				}
+			})
+		})
+	}
+}
+
+// TestAwait_ChildBlockedByItsParentFailsAtOnce: a child the dispatch gates
+// can never start while its parent runs (same ConcurrencyKey, overlapping
+// write set, NotWhile naming the parent's kind) would otherwise hold the
+// parent until its own Timeout, with the relay keeping the watchdog from
+// breaking the deadlock. Await refuses it at once, naming the cause.
+func TestAwait_ChildBlockedByItsParentFailsAtOnce(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		edit func(*tasks.Common)
+		why  string
+	}{
+		{"same concurrency key", func(c *tasks.Common) { c.ConcurrencyKey = awaitParent }, "ConcurrencyKey"},
+		{"overlapping write set", func(c *tasks.Common) { c.Effects = tasks.Writes(tasks.Res("gotham", "cases")) }, "write set"},
+		{"NotWhile names the parent", func(c *tasks.Common) { c.NotWhile = []tasks.Kind{awaitParent} }, "NotWhile"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				child := taskDef(awaitChild, okBody, func(cm *tasks.Common) {
+					cm.Effects = tasks.Writes(tasks.Res("gotham", "lab")) // disjoint unless the cell overlaps it
+					c.edit(cm)
+				})
+				h, got := awaitRig(t, awaitLimit, child, nil)
+				began := time.Now()
+				parent := h.start(awaitParent, tasks.StartRequest{})
+				time.Sleep(10 * time.Second)
+				synctest.Wait()
+				saw := <-got
+				if !errors.Is(saw.err, ErrAwaitSelfBlocked) || !strings.Contains(saw.err.Error(), c.why) {
+					t.Fatalf("Await err %v, want ErrAwaitSelfBlocked naming the %s", saw.err, c.why)
+				}
+				if waited := saw.returnedAt.Sub(began); waited > time.Second {
+					t.Errorf("Await refused after %s, want at once", waited)
+				}
+				if r := h.get(parent); r.State != tasks.StateFailed {
+					t.Errorf("parent %s/%q, want failed by the refusal", r.State, r.Reason)
+				}
+			})
+		})
 	}
 }

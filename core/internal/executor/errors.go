@@ -1,7 +1,7 @@
 // file: core/internal/executor/errors.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: ee118157-68ed-4213-be77-f44028207038
-// last-edited: 2026-11-11
+// last-edited: 2026-11-15
 
 package executor
 
@@ -53,6 +53,11 @@ var (
 	ErrReservedCheckpoint = errors.New("executor: checkpoint names starting with core. are reserved")
 	// ErrRowNotInPlan: Approve names a row the plan does not hold.
 	ErrRowNotInPlan = errors.New("executor: approved row is not in the plan")
+	// ErrAwaitSelfBlocked: rc.Await on a queued child that can never start
+	// while the awaiting run is running, because its ConcurrencyKey equals the
+	// run's, its write set overlaps the run's, or its NotWhile names the run's
+	// kind. Waiting would hold the run until its Timeout.
+	ErrAwaitSelfBlocked = errors.New("executor: awaited child cannot start while the awaiting run runs")
 	// ErrNotAwaitingDecision: Decide on a run that is not awaiting_decision.
 	ErrNotAwaitingDecision = errors.New("executor: run is not awaiting a decision")
 	// ErrHoldLost: a stand-down hold's lease expired without renewal; the

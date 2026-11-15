@@ -1,5 +1,5 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
 // last-edited: 2026-11-15
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -580,8 +581,42 @@ func (e *executor) awaitUnpaused(ctx context.Context) error {
 // awaitRelaysPerLimit is how many times per ProgressTimeout await stamps
 // the awaiting run's liveness while the child is alive: three, so one late
 // or missed relay (a slow store read, a scheduling hiccup) still leaves the
-// run well inside its watchdog limit.
+// run well inside its watchdog limit. The relay period is floored at
+// DispatchTick, so a kind whose ProgressTimeout is under three dispatch
+// ticks gets fewer relays per limit, and one under a single tick none to
+// spare; no real kind sets a limit that small (the derived one is at least a
+// minute).
 const awaitRelaysPerLimit = 3
+
+// awaitSelfBlock names why a queued or waiting child, started by the run of
+// attempt a, can never be dispatched while a runs, or returns "". These are
+// the dispatch gates that count the running parent itself: the same
+// ConcurrencyKey (deferKey), an overlapping write set (deferWriteSet) and a
+// NotWhile naming the parent's kind (the child waits in waiting_deps and is
+// never released). A parent that awaits such a child would be held until its
+// own Timeout, and the relay would keep the watchdog from breaking the
+// deadlock. Gates that depend on global load (every worker taken) are
+// ordinary queueing and are not checked.
+func (e *executor) awaitSelfBlock(a *attempt, child tasks.RunRecord) string {
+	cd := e.defs[child.Kind]
+	if cd == nil {
+		return ""
+	}
+	if cd.key == a.d.key {
+		return fmt.Sprintf("it shares the ConcurrencyKey %q", cd.key)
+	}
+	ws, err := e.writeSet(cd, child.Params)
+	if err != nil {
+		ws = cd.writes // the dispatcher's own fallback
+	}
+	if overlapsSet(a.writes, ws) {
+		return "its write set overlaps this run's"
+	}
+	if slices.Contains(cd.c.NotWhile, a.d.kind) {
+		return fmt.Sprintf("its NotWhile names %s", a.d.kind)
+	}
+	return ""
+}
 
 // awaitAlive reports whether a child in state s will advance without a
 // person or a restart: queued, waiting for its dependencies, running,
@@ -613,6 +648,10 @@ func awaitAlive(s tasks.RunState) bool {
 // itself, so they stop the moment the wait returns, the child is found
 // terminal, or the context ends.
 //
+// Before it waits, it refuses a queued child that can never start while this
+// run runs (awaitSelfBlock) with ErrAwaitSelfBlocked, at once, rather than
+// wait for the run's Timeout.
+//
 // A child that is stalled is the child's own watchdog's business: when it
 // stops the child, the run goes terminal and this returns. A child that no
 // watchdog covers (queued, Batch, Fixer, Uninterruptible) is waited on
@@ -621,6 +660,7 @@ func (e *executor) await(a *attempt, id tasks.RunID) (tasks.Outcome, error) {
 	ctx := a.ctx
 	relay := time.NewTicker(max(a.d.progTO/awaitRelaysPerLimit, e.config().DispatchTick))
 	defer relay.Stop()
+	checked := false // the self-block gates cannot change while this run runs
 	for {
 		sig := e.termSignal()
 		rec, err := e.runs.Get(ctx, id)
@@ -632,6 +672,12 @@ func (e *executor) await(a *attempt, id tasks.RunID) (tasks.Outcome, error) {
 		}
 		if rec.State.Terminal() {
 			return tasks.Outcome{State: rec.State, Result: rec.Result, Err: rec.Error}, nil
+		}
+		if !checked && (rec.State == tasks.StateQueued || rec.State == tasks.StateWaitingDeps) {
+			checked = true
+			if why := e.awaitSelfBlock(a, rec); why != "" {
+				return tasks.Outcome{}, fmt.Errorf("%w: %s %s: %s", ErrAwaitSelfBlocked, rec.Kind, rec.ID, why)
+			}
 		}
 		if awaitAlive(rec.State) {
 			a.relayLiveness()
