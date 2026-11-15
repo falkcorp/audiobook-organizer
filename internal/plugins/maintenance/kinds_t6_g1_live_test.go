@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-15
 
@@ -765,6 +765,37 @@ func TestT6G1Kinds_AutoMatchRestoresHEADCheckpoint(t *testing.T) {
 	raw, ok := h.CheckpointJSON("")
 	require.True(t, ok)
 	require.Contains(t, string(raw), `"last_book_id":"b3"`)
+}
+
+// HEAD honoured last_book_id in the start params (review C9, stack): a start
+// that names the last finished book resumes after it, with no checkpoint. A
+// checkpoint, when the run has one, wins (HEAD's registry merges it over the
+// params).
+func TestT6G1Kinds_AutoMatchHonoursLastBookIDStartParam(t *testing.T) {
+	run := func(t *testing.T, params, checkpoint string) []string {
+		t.Helper()
+		amd, ops := t6g1AutoMatchFixture(t, []string{"b1", "b2", "b3"})
+		var applied []string
+		amd.applyFn = func(_ context.Context, id, _, _ string) error {
+			applied = append(applied, id)
+			return nil
+		}
+		probe := &t6g1LiveProbe{}
+		deps := probe.deps(ops)
+		deps.NewTranscriptionRunners = func(w tasks.Writer) TranscriptionRunners { probe.noteGiven(w); return amd }
+		def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(deps, nil), autoMatchTranscribedKind)
+		_, _, err := runT6G1Full(t, def, tasks.ModeLive, &t6g1GateWriter{}, params, func(f *taskstest.FakeRun) {
+			if checkpoint != "" {
+				require.NoError(t, f.SetCheckpoint("", json.RawMessage(checkpoint)))
+			}
+		})
+		require.NoError(t, err)
+		return applied
+	}
+	require.Equal(t, []string{"b2", "b3"}, run(t, `{"last_book_id":"b1"}`, ""), "the start param resumes after b1")
+	require.Equal(t, []string{"b1", "b2", "b3"}, run(t, `{}`, ""), "control: no param, no checkpoint")
+	require.Equal(t, []string{"b3"}, run(t, `{"last_book_id":"b1"}`, `{"last_book_id":"b2","min_score":0.75}`), "the checkpoint wins over the start param")
+	require.Equal(t, []string{"b2", "b3"}, run(t, `{"last_book_id":"b1"}`, `{"min_score":0.75}`), "a checkpoint with no last book leaves the param in force")
 }
 
 // A native writing kind refuses every key the run's mode replaces (dry_run,
