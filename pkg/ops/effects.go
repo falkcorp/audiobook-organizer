@@ -1,5 +1,5 @@
 // file: pkg/ops/effects.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
 // last-edited: 2026-11-15
 
@@ -36,7 +36,16 @@ const (
 	ResUserState     Resource = "user_state"
 	ResMetadataCache Resource = "metadata_cache"
 	ResFieldStates   Resource = "field_states"
-	ResIndexes       Resource = "indexes"
+
+	// ResIndexes is the set of derived index families that have their own
+	// writers: the search and memdb index and the store's ident: rows (the
+	// identity index, ident:state/by/dirty/reason/meta). The ident: rows are
+	// indexes in every maintenance group (F5-07, F5-09, F5-10, F5-11), the same
+	// whether an ident-index rebuild or a book write stages them. Row-family
+	// secondary indexes kept in a row's own batch (book_atpath:, book_hash:,
+	// book_file_acoustid:, path and version-group indexes) are NOT indexes:
+	// they belong to the row family's resource (books, book_files).
+	ResIndexes Resource = "indexes"
 
 	// ResAIJournal is the durable AI result journal (aijournal:<kind>:<key>
 	// keys, internal/ai/resultjournal): whisper and batch results kept so a
