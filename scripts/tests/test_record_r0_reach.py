@@ -1,7 +1,7 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.7.0
+# version: 1.8.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
-# last-edited: 2026-11-14
+# last-edited: 2026-11-15
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
 
 The recorder is driven against a fake R0: a stdlib HTTP server that answers from
@@ -909,7 +909,7 @@ class OwnerSetTest(unittest.TestCase):
 
     def test_the_owner_email_is_a_fixture_on_a_reserved_domain(self):
         self.assertEqual(rec.OWNER_EMAIL, "bruce@example.invalid")
-        self.assertEqual(rec.OWNER_EDIT, 'owner_email=*>"bruce@example.invalid"')
+        self.assertEqual(rec.OWNER_ENV, {"OWNER_EMAIL": "bruce@example.invalid"})
 
     def test_the_owner_routes_are_routes_of_the_committed_dump(self):
         dump = json.loads((REACH / "routes.json").read_text(encoding="utf-8"))
@@ -923,24 +923,52 @@ class OwnerSetTest(unittest.TestCase):
             rec.owner_routes([{"method": "POST", "path": "/api/v1/backup/restore"}])
         self.assertIn("/api/v1/system/reset", str(cm.exception))
 
-    def test_an_owner_boot_adds_the_owner_edit_to_the_flags_and_to_auth_off(self):
-        seen: list[list[str]] = []
+    def test_an_owner_boot_sets_the_owner_in_the_environment_not_the_stored_config(self):
+        seen: list[tuple[list[str], dict[str, str]]] = []
+
+        class StopError(Exception):
+            pass
 
         def record_edits(layout, edits):
-            seen.append(edits)
-            raise RuntimeError("stop after the edit")
+            seen.append((edits, {}))
+
+        def record_process(binary, layout, port, docker=False, extra_env=None):
+            seen[-1] = (seen[-1][0], dict(extra_env or {}))
+            raise StopError
 
         args = rec.build_parser().parse_args(["--check"])
-        for auth_off, owner_set, want in (
-            (False, True, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG, rec.OWNER_EDIT]),
-            (True, True, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG, rec.AUTH_OFF_EDIT, rec.OWNER_EDIT]),
-            (False, False, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG]),
+        for auth_off, owner_set, want_edits, want_env in (
+            (False, True, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG], rec.OWNER_ENV),
+            (True, True, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG, rec.AUTH_OFF_EDIT], rec.OWNER_ENV),
+            (False, False, [rec.WORKER_FLAG, rec.DISCOVERY_FLAG], {}),
         ):
             staged = mock.patch.object(rec, "stage_copy")
             edited = mock.patch.object(rec, "edit_config", side_effect=record_edits)
-            with staged, edited, self.assertRaises(RuntimeError):
+            proc = mock.patch.object(rec.w, "R0Process", side_effect=record_process)
+            with staged, edited, proc, self.assertRaises(StopError):
                 rec.boot_and_record(args, pathlib.Path("r0"), [], [], auth_off, owner_set=owner_set)
-            self.assertEqual(seen[-1], want)
+            self.assertEqual(seen[-1], (want_edits, want_env))
+
+    def test_a_boot_whose_owner_gate_did_not_take_effect_is_a_recorder_failure(self):
+        routes = [
+            {"method": "GET", "path": "/a"},
+            {"method": "POST", "path": "/b"},
+            {"method": "POST", "path": "/c"},
+        ]
+        subset = [routes[1], routes[2]]
+        main = [[200, 200, 403], [403, 403, 401]]  # two principals
+        gated = [[403, 403], [403, 401]]
+        rec.check_owner_gate_took_effect(routes, main, subset, gated)
+        inert = [[200, 403], [403, 401]]  # the first principal still allowed on /b
+        with self.assertRaises(rec.RecorderError) as cm:
+            rec.check_owner_gate_took_effect(routes, main, subset, inert)
+        self.assertIn("OWNER_EMAIL did not reach R0", str(cm.exception))
+        self.assertIn("POST /b", str(cm.exception))
+        with self.assertRaises(rec.RecorderError) as cm:
+            rec.check_owner_gate_took_effect(
+                routes, [[200, 403, 403], [403, 403, 403]], subset, gated
+            )
+        self.assertIn("nothing shows the gate on", str(cm.exception))
 
     def test_the_columns_of_the_two_boots_are_stitched_in_principal_order(self):
         table = [
