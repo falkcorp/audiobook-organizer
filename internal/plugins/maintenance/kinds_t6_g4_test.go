@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.5
+// version: 1.2.6
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-15
 
@@ -1028,9 +1028,8 @@ func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
 }
 
 // t6g4WriterResource is the spy's method-to-resource map: for every method of
-// t6g4Writer, the pkg/ops resource a call to it writes. A "" value marks a store
-// with no pkg/ops constant (the whisper result journal), which no Effects can
-// name; it is listed in seams.d/F5-09.md. The two stats keys are not here at all:
+// t6g4Writer, the pkg/ops resource a call to it writes. A "" value would mark a
+// store with no pkg/ops constant, which no Effects can name; none is left. The two stats keys are not here at all:
 // they are written outside the gated writer (t6g4StatsSink). The map
 // is the oracle of TestT6G4Kinds_EffectsCoverRecordedWrites, so it is compared
 // against the real interface by reflection and against the vocabulary by name.
@@ -1047,7 +1046,7 @@ var t6g4WriterResource = map[string]ops.Resource{
 	"ModifyBook":                    ops.ResBooks,
 	"ModifyBookFileDeferAggregates": ops.ResBookFiles,
 	"MoveBookFilesToBookBulk":       ops.ResBookFiles,
-	"OpenWhisperJournal":            "", // ops.ResAIJournal at stacking (see t6g4IntroTranscribeWrites)
+	"OpenWhisperJournal":            ops.ResAIJournal, // the whisper result journal (aijournal: keys)
 	"ReassignExternalID":            ops.ResExternalIDs,
 	"RebuildIdentIndex":             ops.ResIndexes,
 	"RecomputeBookAggregates":       ops.ResBooks,
@@ -1137,7 +1136,7 @@ func TestT6G4FSRegroup_LiveApplyNeedsScanStandDown(t *testing.T) {
 // shared call record also holds those); it does NOT fail here. That a writer
 // method has a map entry is pinned by TestT6G4Kinds_WriterSpyMapCoversInterface,
 // which compares the map with t6g4Writer's methods by reflection. A method with
-// the entry "" (the whisper journal) is a write that names no resource.
+// an entry "" would be a write that names no resource.
 func t6g4RecordedResources(t *testing.T, calls []string) []string {
 	t.Helper()
 	set := map[string]bool{}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.47.5
+// version: 3.47.6
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-11-15
 
@@ -299,11 +299,10 @@ func (p *Plugin) introTranscribeNativeKind(deps t6g4Deps, sched *tasks.Schedule)
 			Help:  introTranscribeNativeHelp,
 			// HEAD declares Writes: books. The body also writes a file's timeout
 			// strikes (RecordIntroTimeout, ClearIntroTimeouts: book_files) and the
-			// whisper result journal (OpenWhisperJournal), which has no pkg/ops
-			// constant on this branch (the coordinator adds ops.ResAIJournal here at
-			// stacking, see t6g4IntroTranscribeWrites). The run's stats aggregate (the
-			// stats:transcribe key) has none either and is written outside the gated
-			// writer on purpose: see t6g4StatsSink.
+			// whisper result journal (OpenWhisperJournal: ops.ResAIJournal, see
+			// t6g4IntroTranscribeWrites). The run's stats aggregate (the
+			// stats:transcribe key) has no pkg/ops resource and is written outside the
+			// gated writer on purpose: see t6g4StatsSink.
 			Effects: tasks.Writes(t6g4Res(t6g4IntroTranscribeWrites...)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
