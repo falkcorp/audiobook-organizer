@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_gate_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 91c3e5a7-0d48-4f26-8b1e-6a7d2f4c9e03
 // last-edited: 2026-11-15
 
@@ -272,6 +272,108 @@ func Boot() { e, _ := diagnostics.New(); _ = healthhttp.Register(e) }
 		files := map[string]string{"health/diagnostics/paths.go": "package diagnostics\n\nconst RedesignPendingF8_03b = true\n\ntype pathRoots []string\n\nfunc (r pathRoots) scanPaths() {}\nfunc scanPaths() {}\nfunc tokenAt() {}\n"}
 		if got, err := F803bGateFindings(gateTree(t, "true", files)); err != nil || len(got) != 0 {
 			t.Errorf("true marker with the scanner: %v, %v; want no findings", got, err)
+		}
+	})
+
+	// Round 11, O-1: the marker is read from every file of the package, built or
+	// not, and a second declaration is an error. A build-tagged pair (one false,
+	// one true) used to pass: the reader saw only the files some tag set builds and
+	// kept the last declaration it parsed, so the false file, under the production
+	// image's embed_frontend tag included, opened the refusal in that build alone.
+	t.Run("TaggedMarkerPairIsRefused", func(t *testing.T) {
+		pair := func(tag, falseFile, trueFile string) map[string]string {
+			return map[string]string{
+				"health/diagnostics/paths.go":     "package diagnostics\n",
+				"health/diagnostics/" + falseFile: "//go:build " + tag + "\n\npackage diagnostics\n\nconst RedesignPendingF8_03b = false\n",
+				"health/diagnostics/" + trueFile:  "//go:build !" + tag + "\n\npackage diagnostics\n\nconst RedesignPendingF8_03b = true\n",
+			}
+		}
+		for name, files := range map[string]map[string]string{
+			"embed_frontend, false file sorts first": pair("embed_frontend", "aa_marker.go", "zz_marker.go"),
+			"embed_frontend, false file sorts last":  pair("embed_frontend", "zz_marker.go", "aa_marker.go"),
+			"integration, a tag in the union":        pair("integration", "aa_marker.go", "zz_marker.go"),
+			"shipit, a tag no set names":             pair("shipit", "aa_marker.go", "zz_marker.go"),
+			// the false declaration is in a file no tag set builds
+			"false in an ignored file": {
+				"health/diagnostics/ignored.go": "//go:build neverbuilt\n\npackage diagnostics\n\nconst RedesignPendingF8_03b = false\n",
+			},
+		} {
+			got, err := F803bGateFindings(gateTree(t, "true", files))
+			if err == nil {
+				t.Errorf("%s: a tagged marker pair passed the gate (findings %v)", name, got)
+				continue
+			}
+			if !strings.Contains(err.Error(), "false is not a valid state") && !strings.Contains(err.Error(), "declared 2 times") {
+				t.Errorf("%s: err = %v, want the false or declared-twice error", name, err)
+			}
+		}
+	})
+
+	t.Run("MarkerDeclaredTwiceIsRefused", func(t *testing.T) {
+		// Two true declarations compile only under exclusive tags, and each build
+		// would read a different file: one declaration is the rule.
+		files := map[string]string{
+			"health/diagnostics/paths.go":    "package diagnostics\n",
+			"health/diagnostics/marker_a.go": "//go:build integration\n\npackage diagnostics\n\nconst RedesignPendingF8_03b = true\n",
+			"health/diagnostics/marker_b.go": "//go:build !integration\n\npackage diagnostics\n\nconst RedesignPendingF8_03b = true\n",
+		}
+		if _, err := F803bGateFindings(gateTree(t, "true", files)); err == nil || !strings.Contains(err.Error(), "declared 2 times") {
+			t.Errorf("two true declarations: err = %v, want the declared-twice error", err)
+		}
+		// A grouped const that declares it once is still once.
+		grouped := map[string]string{"health/diagnostics/paths.go": "package diagnostics\n\nconst (\n\tother = 1\n\tRedesignPendingF8_03b = true\n)\n"}
+		if got, err := F803bGateFindings(gateTree(t, "true", grouped)); err != nil || len(got) != 0 {
+			t.Errorf("one declaration in a const group: %v, %v; want none", got, err)
+		}
+	})
+
+	// Round 11, O-1 (b): no non-test file of diagnostics or healthhttp may carry a
+	// build constraint while the marker stands, so there is no tagged copy of New,
+	// Build or the marker beside the refusal.
+	t.Run("BuildConstraintInDiagnosticsOrHealthhttp", func(t *testing.T) {
+		const copyOfNew = "package diagnostics\n\nfunc New2() {}\n"
+		for name, tc := range map[string]struct {
+			files map[string]string
+			file  string
+			want  string
+		}{
+			"go:build in diagnostics":      {map[string]string{"health/diagnostics/tagged.go": "//go:build integration\n\n" + copyOfNew}, "health/diagnostics/tagged.go", "build constraint"},
+			"go:build !tag in diagnostics": {map[string]string{"health/diagnostics/prod.go": "//go:build !integration\n\n" + copyOfNew}, "health/diagnostics/prod.go", "build constraint"},
+			"plus build in diagnostics":    {map[string]string{"health/diagnostics/old.go": "// +build integration\n\n" + copyOfNew}, "health/diagnostics/old.go", "build constraint"},
+			"file nobody builds":           {map[string]string{"health/diagnostics/never.go": "//go:build ignore\n\n" + copyOfNew}, "health/diagnostics/never.go", "build constraint"},
+			"GOOS suffix in diagnostics":   {map[string]string{"health/diagnostics/build_windows.go": copyOfNew}, "health/diagnostics/build_windows.go", "file name suffix _windows"},
+			"GOOS_GOARCH suffix":           {map[string]string{"health/diagnostics/build_linux_arm64.go": copyOfNew}, "health/diagnostics/build_linux_arm64.go", "file name suffix _linux_arm64"},
+			"GOARCH suffix in healthhttp":  {map[string]string{"internal/healthhttp/routes_amd64.go": "package healthhttp\n"}, "internal/healthhttp/routes_amd64.go", "file name suffix _amd64"},
+			"go:build in healthhttp":       {map[string]string{"internal/healthhttp/extra.go": "//go:build linux\n\npackage healthhttp\n"}, "internal/healthhttp/extra.go", "build constraint"},
+		} {
+			root := gateTree(t, "true", tc.files)
+			got, err := F803bGateFindings(root)
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+				continue
+			}
+			by := findingsByFile(root, got)
+			if by[tc.file] != 1 || len(got) != 1 {
+				t.Errorf("%s: want one report in %s, got:\n  %s", name, tc.file, strings.Join(got, "\n  "))
+				continue
+			}
+			if !strings.Contains(got[0], tc.want) || !strings.HasSuffix(got[0], f803bConstraintNote) {
+				t.Errorf("%s: finding %q lacks %q or the constraint note", name, got[0], tc.want)
+			}
+		}
+		// None of these is a constraint: a test file's, a constraint-looking
+		// comment after the package clause, a name that merely contains an OS, and
+		// a constraint in a package the rule does not cover.
+		root := gateTree(t, "true", map[string]string{
+			"health/diagnostics/only_test.go":   "//go:build integration\n\npackage diagnostics\n",
+			"health/diagnostics/late.go":        "package diagnostics\n\n//go:build integration\n\nfunc Late() {}\n",
+			"health/diagnostics/windows.go":     "package diagnostics\n\nfunc Win() {}\n",
+			"health/diagnostics/linux_notes.go": "package diagnostics\n\nfunc Notes() {}\n",
+			"kernel/kernel_linux.go":            "package kernel\n\nfunc Linux() {}\n",
+			"kernel/tagged.go":                  "//go:build integration\n\npackage kernel\n",
+		})
+		if got := findingsFor(t, root); len(got) != 0 {
+			t.Errorf("unconstrained files were reported:\n  %s", strings.Join(got, "\n  "))
 		}
 	})
 

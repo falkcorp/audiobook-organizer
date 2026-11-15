@@ -1,0 +1,4 @@
+### Changed
+
+- core: the F8-03b guard now reads every file of `core/health/diagnostics` (built or not, under any tag set) for the marker and fails on a second declaration or on any `false`, so a false marker in a build-tagged file, the production image's `embed_frontend` included, no longer passes; it also fails on any build constraint in a non-test file of `diagnostics` or `healthhttp`. `TestRedesignRefusal_RealBinary` builds and runs the production-binary probe once per tag set the repo ships with. `F803bNoLinkerOverride` reads text files by content (extensionless scripts, `.ps1`, `.conf`, `Makefile.local`); its seams-note entry lists what it cannot see.
+- docs: the plan's W37 row names F8-03b as the dark PR beside F7-09, `test_check_waves.py` asserts the F8-03b row, the plan README lists the F8-03b row after F8-02.

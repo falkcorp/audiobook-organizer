@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: docs/plans/platform-core/tools/test_check_waves.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 2f7b9d41-8c36-4e05-a1d8-6b3e0c5f9a72
 # last-edited: 2026-11-15
 """Tests for check_waves.py's row-id pattern and for the checker over the real inventory.
@@ -10,6 +10,7 @@ whole checker is run as a subprocess.
 
 Usage: python3 -I test_check_waves.py   (from the repo root or any directory)
 """
+import json
 import os
 import re
 import subprocess
@@ -50,6 +51,19 @@ class RealInventory(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertIn("RESULT: PASS", res.stdout)
         self.assertIn("1 schema and ID scheme: PASS", res.stdout)
+
+    def test_the_f8_03b_row_exists_and_f8_04_waits_for_it(self):
+        # The checker passes over an inventory that lacks the row as readily as
+        # over one that has it (it did, until round 10), so the row is asserted.
+        with open(os.path.join(HERE, "inventory.json")) as f:
+            rows = {r["id"]: r for r in json.load(f)}
+        self.assertIn("F8-03b", rows)
+        row = rows["F8-03b"]
+        self.assertEqual(row["depends_on"], ["F8-03"])
+        self.assertEqual(row["release"], "F8")
+        self.assertTrue(row["files"], "the F8-03b row names no files")
+        self.assertIn("F8-03b", rows["F8-04"]["depends_on"])
+        self.assertLess(row["wave"], rows["F8-04"]["wave"])
 
 
 if __name__ == "__main__":
