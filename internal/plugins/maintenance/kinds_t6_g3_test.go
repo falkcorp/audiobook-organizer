@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
 // last-edited: 2026-11-15
 
@@ -595,25 +595,76 @@ type t6g3Want struct {
 	timeout  time.Duration
 	progress time.Duration
 	readOnly bool
-	writes   []string
 	par      string
 }
 
+// t6g3KindWrites is what one kind's core writes: the writer methods it can call
+// (the keys of the group's view of the shared table, t6g3MethodResources) and the
+// resources it writes without a writer call. The declared write set a kind must
+// carry is DERIVED from it (t6g3ExpectedWrites): the sorted union of the shared
+// table's rows for calls plus outside. It is never retyped as a resource list, so
+// a row that widens widens the expectation, and a kind that did not widen with it
+// fails TestT6G3Kinds_MatchHEADDefs. A kind with neither is ReadOnly.
+type t6g3KindWrites struct {
+	calls   []string
+	outside []ops.Resource
+}
+
+var t6g3KindCalls = map[string]t6g3KindWrites{
+	"maintenance.purge-deleted":               {calls: []string{"RunAutoPurgeSoftDeleted", "ActivityFlushOp"}},
+	"maintenance.tombstone-cleanup":           {calls: []string{"ResolveTombstoneChains"}},
+	"maintenance.temp-file-cleanup":           {calls: []string{"CleanupOrphanedTempFiles"}},
+	"maintenance.transcode-temp-cleanup":      {calls: []string{"CleanupStaleTempFiles"}},
+	"maintenance.cleanup-activity-log":        {calls: []string{"CompactActivityEntries", "MaintainActivityLog"}},
+	"maintenance.cleanup-old-backups":         {calls: []string{"RemoveOldBackupFiles"}},
+	"maintenance.trash-cleanup":               {calls: []string{"CleanupTrashedVersions"}},
+	"maintenance.clear-apply-rename-failures": {calls: []string{"SetUserPreferenceForUser"}},
+	"maintenance.combine-journal-check":       {},
+	"maintenance.compact-activity-log":        {calls: []string{"CompactActivityEntries"}},
+	// The folder cover copies the image into the book's folder (files) and stamps
+	// the book (ModifyBook).
+	"maintenance.folder-cover-backfill": {calls: []string{"ModifyBook"}, outside: []ops.Resource{ops.ResFiles}},
+	"maintenance.cover-text-read":       {calls: []string{"SetRaw"}},
+	"maintenance.credit-census":         {},
+	"maintenance.credits-backfill": {calls: []string{
+		"ModifyBookCredits", "CreateNarrator", "DeleteNarrator", "CreateOperationChange", "InvalidateAuthorsCache"}},
+}
+
+// t6g3ExpectedWrites is the write set the kind must declare, sorted: the union of
+// t6g3MethodResources' rows for its calls and its outside resources. A method with
+// no row in the group's view fails the test rather than counting as empty.
+func t6g3ExpectedWrites(t *testing.T, headID string) []string {
+	t.Helper()
+	kw, ok := t6g3KindCalls[headID]
+	require.True(t, ok, "t6g3KindCalls has no entry for %s", headID)
+	rows := [][]ops.Resource{kw.outside}
+	for _, m := range kw.calls {
+		row, ok := t6g3MethodResources[m]
+		require.True(t, ok, "%s: calls %s, which has no row in t6g3MethodResources", headID, m)
+		rows = append(rows, row)
+	}
+	var out []string
+	for _, r := range t6RowsUnion(rows...) {
+		out = append(out, string(r))
+	}
+	return out
+}
+
 var t6g3Wants = []t6g3Want{
-	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, []string{string(ops.ResActivity), string(ops.ResAuthors), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResExternalIDs), string(ops.ResFieldStates), string(ops.ResFiles), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResOperations), string(ops.ResSyncIdentity), string(ops.ResUserState)}, ""},
-	{"maintenance.tombstone-cleanup", "Resolve author tombstone chains", tasks.ResumeDrop, "books.maintenance.tombstone-cleanup", time.Hour, 0, false, []string{string(ops.ResAuthors)}, ""},
-	{"maintenance.temp-file-cleanup", "Clean orphaned temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResActivity), string(ops.ResFiles)}, ""},
-	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResFiles)}, ""},
-	{"maintenance.cleanup-activity-log", "Clean activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 30 * time.Minute, 20 * time.Minute, false, []string{string(ops.ResActivity)}, ""},
-	{"maintenance.cleanup-old-backups", "Clean old backup files", tasks.ResumeFromZero, "books.maintenance.cleanup-old-backups", time.Hour, time.Hour, false, []string{string(ops.ResFiles)}, ""},
-	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResBooks), string(ops.ResFiles), string(ops.ResSettings)}, ""},
-	{"maintenance.clear-apply-rename-failures", "Clear apply rename-failure records", tasks.ResumeDrop, "books.maintenance.clear-apply-rename-failures", 10 * time.Minute, 10 * time.Minute, false, []string{string(ops.ResUserState)}, ""},
-	{"maintenance.combine-journal-check", "Combine journal readability check", tasks.ResumeDrop, "books.maintenance.combine-journal-check", 10 * time.Minute, 0, true, nil, ""},
-	{"maintenance.compact-activity-log", "Compact activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 6 * time.Hour, 20 * time.Minute, false, []string{string(ops.ResActivity)}, ""},
-	{"maintenance.folder-cover-backfill", "Use folder cover images", tasks.ResumeDrop, "books.maintenance.folder-cover-backfill", 120 * time.Minute, 0, false, []string{string(ops.ResBooks), string(ops.ResFiles), string(ops.ResIndexes), string(ops.ResMetadataCache)}, ""},
-	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, []string{string(ops.ResCoverText)}, ""},
-	{"maintenance.credit-census", "Author/narrator credit census", tasks.ResumeDrop, "books.maintenance.credit-census", 2 * time.Hour, 0, true, nil, ""},
-	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{string(ops.ResAuthors), string(ops.ResBooks), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResOperations)}, ""},
+	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, ""},
+	{"maintenance.tombstone-cleanup", "Resolve author tombstone chains", tasks.ResumeDrop, "books.maintenance.tombstone-cleanup", time.Hour, 0, false, ""},
+	{"maintenance.temp-file-cleanup", "Clean orphaned temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, ""},
+	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, ""},
+	{"maintenance.cleanup-activity-log", "Clean activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 30 * time.Minute, 20 * time.Minute, false, ""},
+	{"maintenance.cleanup-old-backups", "Clean old backup files", tasks.ResumeFromZero, "books.maintenance.cleanup-old-backups", time.Hour, time.Hour, false, ""},
+	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, time.Hour, false, ""},
+	{"maintenance.clear-apply-rename-failures", "Clear apply rename-failure records", tasks.ResumeDrop, "books.maintenance.clear-apply-rename-failures", 10 * time.Minute, 10 * time.Minute, false, ""},
+	{"maintenance.combine-journal-check", "Combine journal readability check", tasks.ResumeDrop, "books.maintenance.combine-journal-check", 10 * time.Minute, 0, true, ""},
+	{"maintenance.compact-activity-log", "Compact activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 6 * time.Hour, 20 * time.Minute, false, ""},
+	{"maintenance.folder-cover-backfill", "Use folder cover images", tasks.ResumeDrop, "books.maintenance.folder-cover-backfill", 120 * time.Minute, 0, false, ""},
+	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, ""},
+	{"maintenance.credit-census", "Author/narrator credit census", tasks.ResumeDrop, "books.maintenance.credit-census", 2 * time.Hour, 0, true, ""},
+	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, ""},
 }
 
 func TestT6G3Kinds_MatchHEADDefs(t *testing.T) {
@@ -635,12 +686,31 @@ func TestT6G3Kinds_MatchHEADDefs(t *testing.T) {
 			assert.False(t, c.Perms.Start.IsZero(), "R6")
 			assert.True(t, c.Effects.Declared())
 			assert.Equal(t, w.readOnly, c.Effects.IsReadOnly(), "R7 effects class")
-			if !w.readOnly {
-				assert.Equal(t, w.writes, t6g3WriteKinds(c.Effects), "R7 write set")
+			if w.readOnly {
+				assert.Empty(t, t6g3KindCalls[w.headID].calls, "a ReadOnly kind has no writer method to call")
+			} else {
+				assert.Equal(t, t6g3ExpectedWrites(t, w.headID), t6g3WriteKinds(c.Effects), "R7 write set: the union of the rows of every method the kind can call")
 			}
 			assert.Equal(t, w.par, t6g3ParString(d), "a Task declares no Parallelism: its loops pass theirs to RunItems")
 		})
 	}
+}
+
+// t6g3KindCalls names exactly the group's kinds, and a ReadOnly kind has no calls
+// while a writing kind has some (or outside writes).
+func TestT6G3Kinds_KindCallsCoverEveryKind(t *testing.T) {
+	var want, got []string
+	for _, w := range t6g3Wants {
+		want = append(want, w.headID)
+		kw := t6g3KindCalls[w.headID]
+		assert.Equal(t, w.readOnly, len(kw.calls) == 0 && len(kw.outside) == 0, "%s: ReadOnly iff it has no calls and no outside writes", w.headID)
+	}
+	for id := range t6g3KindCalls {
+		got = append(got, id)
+	}
+	slices.Sort(want)
+	slices.Sort(got)
+	assert.Equal(t, want, got, "t6g3KindCalls has one entry per kind of t6g3Wants")
 }
 
 // Every Effects resource of the group-3 kinds (writes, reads and deletes)
@@ -749,6 +819,10 @@ func TestT6G3Kinds_WritesThroughShell(t *testing.T) {
 			require.Len(t, handed, 1, "NewWriter is called once per run")
 			assert.Same(t, gate, handed[0], "NewWriter is handed this run's rc.Writer()")
 			assert.Equal(t, tc.wantCalls, f.writer.called(), "every write reaches the recording t6g3Writer")
+			for _, call := range f.writer.called() {
+				method, _, _ := strings.Cut(call, ":")
+				assert.Contains(t, t6g3KindCalls[tc.headID].calls, method, "%s called %s, which t6g3KindCalls does not list for the kind", tc.headID, method)
+			}
 			f.writer.assertWithin(t, d)
 		})
 	}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_paths_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: d41c7b92-6a35-4e08-9f1d-83b5e2a07c64
 // last-edited: 2026-11-15
 
@@ -426,13 +426,9 @@ func TestT6G3_CreditsBackfillCoreEnvBoundsItsGroupsByNumCPU(t *testing.T) {
 func TestT6G3_CreditsBackfillEffects(t *testing.T) {
 	d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(t6g3Deps{}, nil), "maintenance.credits-backfill")
 	e := tasks.CommonOf(d).Effects
-	// The writes are the shared table's rows for the writer methods the backfill
-	// can call (t6g3CreditsWriter), not a retyped resource list.
-	var want []string
-	for _, r := range t6RowsOf("ModifyBookCredits", "CreateNarrator", "DeleteNarrator", "CreateOperationChange", "InvalidateAuthorsCache") {
-		want = append(want, string(r))
-	}
-	assert.Equal(t, want, t6g3WriteKinds(e))
+	// The writes are the union of the shared table's rows for the writer methods
+	// the backfill can call (t6g3KindCalls), never a retyped resource list.
+	assert.Equal(t, t6g3ExpectedWrites(t, "maintenance.credits-backfill"), t6g3WriteKinds(e))
 	var reads []string
 	for _, r := range e.ReadSet() {
 		reads = append(reads, r.Kind)

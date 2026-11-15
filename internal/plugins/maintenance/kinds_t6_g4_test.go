@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.8
+// version: 1.2.9
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-15
 
@@ -596,7 +596,13 @@ type t6g4Want struct {
 	// writes is the native write set, spelled with the pkg/ops constants (and
 	// checked against pkg/ops/effects.go by TestT6G4Kinds_EveryDeclaredResourceIsAPkgOpsConstant);
 	// nil with readOnly true means "Declared ReadOnly".
-	writes   []ops.Resource
+	writes []ops.Resource
+	// calls are the writer methods the kind's core can call and outside the
+	// resources it writes without a writer call; writes is DERIVED from them by
+	// t6g4DeriveWrites (the sorted union of the shared table's rows for calls plus
+	// outside), never typed, so a row that widens widens the expectation.
+	calls    []string
+	outside  []ops.Resource
 	readOnly bool
 	// liveOnly: HEAD runs this only in an explicit live mode (rule R7).
 	liveOnly bool
@@ -615,39 +621,50 @@ type t6g4Want struct {
 	helpReworded bool
 }
 
+// t6g4DeriveWrites sets every row's writes to the union of the shared table's
+// rows for its calls plus its outside resources (nil for a row with neither).
+func t6g4DeriveWrites(rows []t6g4Want) []t6g4Want {
+	for i := range rows {
+		if len(rows[i].calls) > 0 || len(rows[i].outside) > 0 {
+			rows[i].writes = t6RowsUnion(t6RowsOf(rows[i].calls...), rows[i].outside)
+		}
+	}
+	return rows
+}
+
 // t6g4Expected is in file order (the order of t6g4Kinds). Write sets use only the
 // resource names pkg/ops defines; a store with no such name is not declared (see
 // the PR's Review decisions).
-var t6g4Expected = []t6g4Want{
+var t6g4Expected = t6g4DeriveWrites([]t6g4Want{
 	{kind: aiDedupBatchKind, head: func(p *Plugin) sdk.OperationDef { return p.aiDedupBatchDef() },
-		resume: tasks.ResumeContinue, headCheckpoints: true, writes: []ops.Resource{ops.ResReviewItems}, liveOnly: true},
+		resume: tasks.ResumeContinue, headCheckpoints: true, calls: []string{"SubmitAuthorDedupJob"}, liveOnly: true},
 	{kind: dedupExactTriageKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupExactTriageDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResEmbeddings}, helpReworded: true},
+		resume: tasks.ResumeDrop, calls: []string{"DedupTriageApply"}, helpReworded: true},
 	{kind: dedupeBookFileRowsKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupeBookFileRowsDef() },
-		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations, ops.ResFiles}, hasDependsOn: true, helpReworded: true},
+		resume: tasks.ResumeFromZero, calls: []string{"CarryOverFingerprintWindows", "CreateOperationChange", "DeleteBookFilesByIDs", "RecomputeBookAggregates", "UpdateBookFile"}, outside: []ops.Resource{ops.ResFiles}, hasDependsOn: true, helpReworded: true},
 	{kind: durationBackfillKind, head: func(p *Plugin) sdk.OperationDef { return p.durationBackfillDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}, helpReworded: true},
+		resume: tasks.ResumeDrop, calls: []string{"ModifyBook", "ModifyBookFileDeferAggregates", "RecomputeBookAggregates", "UpdateBookFiles"}, helpReworded: true},
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
-		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFiles}, liveOnly: true},
+		resume: tasks.ResumeFromZero, calls: []string{"SetBookFileHash"}, outside: []ops.Resource{ops.ResFiles}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
-		resume: tasks.ResumeContinue, yieldsNatively: true, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}, helpReworded: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, calls: []string{"SetBookFileIntro", "ClearBookFileIntro", "RecordIntroTimeout", "ClearIntroTimeouts", "ModifyBook"}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResFileProvenance}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, calls: []string{"AppendFileEvent"}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResFileProvenance, ops.ResFiles}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, calls: []string{"SetFileProvExportCursor"}, outside: []ops.Resource{ops.ResFiles}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: filePathCollisionReportKind, head: func(p *Plugin) sdk.OperationDef { return p.filePathCollisionReportDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: fsRegroupKind, head: func(p *Plugin) sdk.OperationDef { return p.fsRegroupXMLDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes}, helpReworded: true},
+		resume: tasks.ResumeDrop, calls: []string{"CreateBookFile", "MarkOperationChangesReverted", "ModifyBook", "MoveBookFilesToBookBulk", "ReassignExternalID", "RecomputeBookAggregates", "UpdateBookFiles"}, helpReworded: true},
 	{kind: identIndexKind, head: func(p *Plugin) sdk.OperationDef { return p.identIndexRebuildDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBooks, ops.ResIndexes}, helpReworded: true},
+		resume: tasks.ResumeDrop, calls: []string{"RebuildIdentIndex"}, outside: []ops.Resource{ops.ResBooks}, helpReworded: true},
 	{kind: integrityCheckKind, head: func(p *Plugin) sdk.OperationDef { return p.integrityCheckDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: introMigrateSingleFileKind, head: func(p *Plugin) sdk.OperationDef { return p.introMigrateSingleFileDef() },
-		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
+		resume: tasks.ResumeFromZero, calls: []string{"UpdateBookFile"}, helpReworded: true},
 	{kind: introTranscribeKind, head: func(p *Plugin) sdk.OperationDef { return p.introTranscribeDef() },
-		resume: tasks.ResumeFromZero, writes: t6g4IntroTranscribeWrites, noLive: true, helpReworded: true},
-}
+		resume: tasks.ResumeFromZero, calls: []string{"ClearIntroTimeouts", "ModifyBook", "OpenWhisperJournal", "RecordIntroTimeout"}, outside: []ops.Resource{ops.ResFiles}, noLive: true, helpReworded: true},
+})
 
 // t6g4PkgOpsResources is pkg/ops's resource vocabulary: the string value of every
 // constant of type Resource declared in pkg/ops/effects.go, read from the source

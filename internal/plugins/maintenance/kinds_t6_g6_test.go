@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.4.5
+// version: 1.4.6
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-15
 
@@ -24,6 +24,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
@@ -108,6 +109,11 @@ func t6g6AssertWritesDeclared(t *testing.T, calls []string, def tasks.Definition
 		method, _, _ := strings.Cut(c, " ")
 		traced, ok := t6g6WriterResource[method]
 		require.True(t, ok, "%s: writer method %q has no resource set in t6g6WriterResource", def.Kind(), method)
+		// A recorded call is a method the kind's own writer interfaces list: the
+		// kind's expected write set is derived from those, so a call outside them
+		// would be a write the derivation never counted.
+		kw := t6g6KindWriters()[def.Kind()]
+		require.Contains(t, t6WriterMethods(kw.writers...), method, "%s: recorded %q, which is not a method of the kind's writer interfaces", def.Kind(), c)
 		for _, res := range traced {
 			require.True(t, declared[res], "%s: %q writes %s, which its Effects do not declare", def.Kind(), c, res)
 		}
@@ -488,6 +494,76 @@ func TestT6G6Kinds_Conformance(t *testing.T) {
 	taskstest.Conformance(t, (&Plugin{}).t6g6Kinds(fakeT6G6Deps(t), nil)...)
 }
 
+// t6g6KindWrite is what one group-6 kind writes: the writer interfaces its core is
+// handed (the narrow interface of each definition, composed into t6g6Writer) and
+// the resources it writes without a writer call (bytes on disk and the like).
+type t6g6KindWrite struct {
+	writers []reflect.Type
+	outside []ops.Resource
+}
+
+// t6g6KindWriters is each kind's writes, keyed by kind. A kind absent from it is
+// ReadOnly. The declared write set of a kind is the union of the shared table's
+// rows (t6g6WriterResource) for every method of its writer interfaces, plus
+// outside: derived by t6g6ExpectedEffects, enforced both ways by
+// TestT6G6Kinds_MatchHEADDefs, so a row that widens widens the kind and a kind
+// cannot declare a resource none of its methods writes.
+var t6g6KindWritersOnce = sync.OnceValue(t6g6KindWritersBuild)
+
+func t6g6KindWriters() map[tasks.Kind]t6g6KindWrite { return t6g6KindWritersOnce() }
+
+func t6g6KindWritersBuild() map[tasks.Kind]t6g6KindWrite {
+	p := &Plugin{}
+	m := map[tasks.Kind]t6g6KindWrite{}
+	add := func(head sdk.OperationDef, kw t6g6KindWrite) { m[tasks.Kind("books."+head.ID)] = kw }
+	add(p.nightlyCompactActivityLogDef(), t6g6KindWrite{writers: []reflect.Type{reflect.TypeFor[nightlyCompactActivityLogWriter]()}})
+	add(p.opChangeBookIndexRebuildDef(), t6g6KindWrite{writers: []reflect.Type{reflect.TypeFor[opChangeBookIndexWriter]()}})
+	add(p.probeDirectoryBooksDef(), t6g6KindWrite{writers: []reflect.Type{reflect.TypeFor[probeDirectoryBooksWriter]()}})
+	add(p.recompactActivityDigestsDef(), t6g6KindWrite{writers: []reflect.Type{reflect.TypeFor[recompactActivityDigestsWriter]()}})
+	add(p.itunesHealDef(), t6g6KindWrite{writers: []reflect.Type{reflect.TypeFor[reconcile.HealWriter]()}})
+	add(p.recoverMissingFilesDef(), t6g6KindWrite{
+		writers: []reflect.Type{reflect.TypeFor[recoverMissingFilesWriter]()},
+		outside: []ops.Resource{ops.ResFiles}})
+	add(p.regroupShatteredAIDef(), t6g6KindWrite{writers: []reflect.Type{
+		reflect.TypeFor[regroupShatteredAIWriter](), reflect.TypeFor[database.ReviewItemPendingDeleter]()}})
+	add(p.relinkUnlinkedBooksDef(), t6g6KindWrite{writers: []reflect.Type{reflect.TypeFor[relinkUnlinkedBooksWriter]()}})
+	add(p.repairMergedUserStateDef(), t6g6KindWrite{writers: []reflect.Type{reflect.TypeFor[repairMergedUserStateWrites]()}})
+	add(p.repairTranscribeStatusDef(), t6g6KindWrite{writers: []reflect.Type{reflect.TypeFor[repairTranscribeStatusWriter]()}})
+	add(p.repointBookFileRowsDef(), t6g6KindWrite{writers: []reflect.Type{reflect.TypeFor[rbfWriter]()}})
+	return m
+}
+
+// t6g6ExpectedEffects is the sorted "books/<resource>" write set a kind must
+// declare, nil for a ReadOnly kind. A method of a kind's interfaces with no row
+// fails the test rather than counting as empty.
+func t6g6ExpectedEffects(t *testing.T, kind tasks.Kind) []string {
+	t.Helper()
+	kw, ok := t6g6KindWriters()[kind]
+	if !ok {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, m := range t6WriterMethods(kw.writers...) {
+		refs, ok := t6g6WriterResource[m]
+		require.True(t, ok, "%s: writer method %q has no row in the shared table", kind, m)
+		for _, r := range refs {
+			set[r] = true
+		}
+	}
+	for _, r := range t6g6Eff(kw.outside...) {
+		set[r] = true
+	}
+	out := make([]string, 0, len(set))
+	for r := range set {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // TestT6G6Resources_TableCoversEveryWriterMethod: the group's view of the shared
 // table names exactly the write methods of t6g6Writer, including the ones that
 // only exist behind a capability getter (repair-merged-user-state writes its sync
@@ -538,38 +614,29 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 		// a kind with no loop.
 		par     *tasks.Parallelism
 		wantPar string
-		// effects is the independent expected write set; nil means ReadOnly.
-		effects []string
 	}
 	cpu := func(f func() tasks.Parallelism) *tasks.Parallelism { v := f(); return &v }
 	rows := []row{
-		{head: p.nightlyCompactActivityLogDef(), resume: tasks.ResumeDrop, timeout: 6 * time.Hour,
-			effects: t6g6Eff(ops.ResActivity)},
-		{head: p.opChangeBookIndexRebuildDef(), resume: tasks.ResumeContinue, timeout: 60 * time.Minute,
-			effects: t6g6Eff(ops.ResOperations)},
+		{head: p.nightlyCompactActivityLogDef(), resume: tasks.ResumeDrop, timeout: 6 * time.Hour},
+		{head: p.opChangeBookIndexRebuildDef(), resume: tasks.ResumeContinue, timeout: 60 * time.Minute},
 		{head: p.optimizeDef(), resume: tasks.ResumeContinue, timeout: tasks.MaxTimeout},
 		{head: p.orphanBookFilesCleanupDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.orphanBookFilesRepointPlanDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
 			par: cpu(orphanBookFilesRepointPlanParallelism), wantPar: "cpu"},
 		{head: p.probeDirectoryBooksDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
-			par: cpu(probeDirectoryBooksParallelism), wantPar: "cpu", effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks)},
-		{head: p.recompactActivityDigestsDef(), resume: tasks.ResumeDrop, timeout: 60 * time.Minute,
-			effects: t6g6Eff(ops.ResActivity)},
-		{head: p.itunesHealDef(), resume: tasks.ResumeFromZero, timeout: 60 * time.Minute,
-			effects: t6g6Eff(ops.ResAIJournal, ops.ResBooks, ops.ResExternalIDs, ops.ResFiles, ops.ResIndexes, ops.ResMetadataCache, ops.ResOperations, ops.ResSyncIdentity, ops.ResUserState)},
+			par: cpu(probeDirectoryBooksParallelism), wantPar: "cpu"},
+		{head: p.recompactActivityDigestsDef(), resume: tasks.ResumeDrop, timeout: 60 * time.Minute},
+		{head: p.itunesHealDef(), resume: tasks.ResumeFromZero, timeout: 60 * time.Minute},
 		{head: p.recoverMissingFilesDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
-			par: cpu(recoverMissingFilesParallelism), wantPar: "fixed(24): ",
-			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResFiles)},
+			par: cpu(recoverMissingFilesParallelism), wantPar: "fixed(24): "},
 		{head: p.regroupShatteredAIDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
-			par: cpu(regroupShatteredAIParallelism), wantPar: "cpu", effects: t6g6Eff(ops.ResReviewItems)},
+			par: cpu(regroupShatteredAIParallelism), wantPar: "cpu"},
 		{head: p.relinkUnlinkedBooksDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
-			par: cpu(relinkUnlinkedBooksParallelism), wantPar: "cpu", effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks)},
-		{head: p.repairMergedUserStateDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
-			effects: t6g6Eff(ops.ResBooks, ops.ResIndexes, ops.ResMetadataCache, ops.ResSyncIdentity, ops.ResUserState)},
+			par: cpu(relinkUnlinkedBooksParallelism), wantPar: "cpu"},
+		{head: p.repairMergedUserStateDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.repairTranscribeStatusDef(), resume: tasks.ResumeFromZero, timeout: 2 * time.Hour,
-			par: cpu(repairTranscribeStatusParallelism), wantPar: "fixed(8): ", effects: t6g6Eff(ops.ResBooks, ops.ResIndexes, ops.ResMetadataCache)},
-		{head: p.repointBookFileRowsDef(), resume: tasks.ResumeDrop, timeout: p.repointBookFileRowsDef().Timeout,
-			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResOperations)},
+			par: cpu(repairTranscribeStatusParallelism), wantPar: "fixed(8): "},
+		{head: p.repointBookFileRowsDef(), resume: tasks.ResumeDrop, timeout: p.repointBookFileRowsDef().Timeout},
 	}
 
 	seen := map[tasks.Kind]bool{}
@@ -604,11 +671,15 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 			gotWrites = append(gotWrites, tasks.FormatRef(res))
 		}
 		sort.Strings(gotWrites)
-		if r.effects == nil {
+		// The expected write set is derived, never typed: the union of the shared
+		// table's rows for every write method of the kind's writer interfaces, plus
+		// what it writes without a writer call (t6g6KindWriters). A kind with
+		// neither is ReadOnly.
+		if wantWrites := t6g6ExpectedEffects(t, kind); wantWrites == nil {
 			require.True(t, c.Effects.IsReadOnly(), "%s must be declared ReadOnly", id)
 		} else {
 			require.False(t, c.Effects.IsReadOnly(), "%s writes", id)
-			require.Equal(t, r.effects, gotWrites, "%s write set", id)
+			require.Equal(t, wantWrites, gotWrites, "%s write set: the union of the rows of every method of its writer interfaces", id)
 		}
 
 		if r.par != nil {
