@@ -655,6 +655,7 @@ internal/plugins/maintenance.duplicateCopiesFixer.detail
 internal/plugins/maintenance.ensureOpChangeBookIndex
 internal/plugins/maintenance.folderBooksFixer.handOff
 internal/plugins/maintenance.fragmentFixer.stores
+internal/plugins/maintenance.itunesHealCore
 internal/plugins/maintenance.itunesHealParallelism
 internal/plugins/maintenance.junkTitleFixer.buildJunkIndex
 internal/plugins/maintenance.junkTitleFixer.candidateTitle
@@ -674,6 +675,8 @@ internal/plugins/maintenance.regroupNativePurger.DeleteReviewItemIfPending
 internal/plugins/maintenance.regroupNativePurger.ListReviewItems
 internal/plugins/maintenance.repairMergedUserStateParallelism
 internal/plugins/maintenance.t6g6Common
+internal/plugins/maintenance.t6g6DecodeNative
+internal/plugins/maintenance.t6g6DecodeParams
 internal/plugins/maintenance.t6g6HeadEnvForOpChange
 internal/plugins/maintenance.t6g6KindFor
 internal/plugins/maintenance.t6g6KindList
@@ -681,6 +684,9 @@ internal/plugins/maintenance.t6g6LiveOnly
 internal/plugins/maintenance.t6g6NativeEnv
 internal/plugins/maintenance.t6g6NativeItems
 internal/plugins/maintenance.t6g6NativeStandDown
+internal/plugins/maintenance.t6g6NeedDep
+internal/plugins/maintenance.t6g6NewWriter
+internal/plugins/maintenance.t6g6RefuseModeKeys
 internal/plugins/maintenance.t6g6StartRequirement
 internal/plugins/maintenance.versionTwinFixer.readers
 internal/querygrammar.PatternSlotAcquisitions

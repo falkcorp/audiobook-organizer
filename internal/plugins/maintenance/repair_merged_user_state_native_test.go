@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_merged_user_state_native_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3c9d2e71-6b04-4a58-9f1e-7d2b8a5c4e30
 // last-edited: 2026-11-14
 
@@ -204,4 +204,18 @@ func TestT6G6More_RepairMergedThroughShell(t *testing.T) {
 	l, err := store.GetUserBookState(userID, loserID)
 	require.NoError(t, err)
 	require.Equal(t, 61, l.ProgressPct)
+}
+
+// Every capability the halves carry is visible on the composed store at once:
+// the merge package probes the whole object, so a layer that hid the ones below
+// it would silently skip the survivor follow or the bookmark copy.
+func TestT6G6More_ComposedUserStateStacksCapabilities(t *testing.T) {
+	store, _, _, _ := strandedFixture(t)
+	h := t6g6HeadUserState{UserStateRepairStore: store.(*database.PebbleStore)}
+	c := t6g6ComposeUserState(h, h)
+	require.NotNil(t, database.AsSyncIdentityStore(c), "sync identity")
+	require.NotNil(t, database.AsBookmarkStore(c), "bookmarks")
+	require.NotNil(t, database.AsBookmarkCopier(c), "bookmark copier")
+	_, ok := database.AsCapability[database.UserPositionTimestampWriter](c)
+	require.True(t, ok, "timestamp writer")
 }

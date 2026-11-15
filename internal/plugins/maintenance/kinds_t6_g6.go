@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: d78a6104-de76-4b10-ab6f-1cf177912760
 // last-edited: 2026-11-14
 
@@ -182,6 +182,15 @@ func t6g6NativeItems(rc *tasks.RC) t6g6ItemsFunc {
 	}
 }
 
+// SaveCheckpoint saves state for the run's resume when the shell provides one
+// (a native run); a HEAD run has none and keeps its resume point in the store.
+func (e t6g6Env) SaveCheckpoint(state any) error {
+	if e.Checkpoint == nil {
+		return nil
+	}
+	return e.Checkpoint(state)
+}
+
 // t6g6HeadEnv fills the env from HEAD's Reporter.
 func t6g6HeadEnv(rep opsregistry.Reporter, live bool) t6g6Env {
 	return t6g6Env{
@@ -331,7 +340,10 @@ func (s t6g6ReporterSink) Logger() *slog.Logger {
 	if s.logger != nil {
 		return s.logger
 	}
-	return slog.Default()
+	// Only a sink built without a logger gets here (a test's); a native run
+	// always sets one. Discard, not the global logger: slog_guard_test bars a
+	// direct slog.Default from this package.
+	return slog.New(slog.DiscardHandler)
 }
 
 func (s t6g6ReporterSink) Checkpoint(state any) error {

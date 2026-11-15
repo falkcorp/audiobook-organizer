@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_merged_user_state.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 8d4b2f67-1a9e-4c35-b7d0-9e6f3a2c1b58
 // last-edited: 2026-11-14
 
@@ -241,37 +241,80 @@ func (t6g6ComposedBookmarks) DeleteBookmark(string, string, float64) error {
 	return errors.New("repair-merged-user-state: DeleteBookmark is not part of the repair")
 }
 
+// The composed store's capability layers. A layer embeds the CONCRETE type of
+// the one below it, not the merge.UserStateRepairStore interface: embedding the
+// interface would promote only the interface's own methods and hide the
+// capabilities of every layer already stacked (the probes are type assertions on
+// the whole object).
+type (
+	t6g6UsSync struct {
+		merge.UserStateRepairStore
+		database.SyncIdentityStore
+	}
+	t6g6UsBook struct {
+		merge.UserStateRepairStore
+		database.BookmarkStore
+		database.BookmarkCopier
+	}
+	t6g6UsStamp struct {
+		merge.UserStateRepairStore
+		database.UserPositionTimestampWriter
+	}
+	t6g6UsSyncBook struct {
+		t6g6UsSync
+		database.BookmarkStore
+		database.BookmarkCopier
+	}
+	t6g6UsSyncStamp struct {
+		t6g6UsSync
+		database.UserPositionTimestampWriter
+	}
+	t6g6UsBookStamp struct {
+		t6g6UsBook
+		database.UserPositionTimestampWriter
+	}
+	t6g6UsAll struct {
+		t6g6UsSyncBook
+		database.UserPositionTimestampWriter
+	}
+)
+
 // t6g6ComposeUserState builds the merge.UserStateRepairStore the pass runs on
 // from the env's two halves. A capability is present on the result only when the
 // halves both carry it, which is what the merge package's interface probes look
 // for; one either half lacks is left out, as on a store without it.
 func t6g6ComposeUserState(r repairMergedUserStateReads, w repairMergedUserStateWrites) merge.UserStateRepairStore {
-	var s merge.UserStateRepairStore = t6g6UserStateBase{r: r, w: w}
+	base := merge.UserStateRepairStore(t6g6UserStateBase{r: r, w: w})
+	var sync database.SyncIdentityStore
 	if sr, ok := r.UserStateSyncReads(); ok {
 		if sw, ok := w.UserStateSyncWrites(); ok {
-			s = struct {
-				merge.UserStateRepairStore
-				database.SyncIdentityStore
-			}{s, t6g6ComposedSync{sr, sw}}
+			sync = t6g6ComposedSync{sr, sw}
 		}
 	}
+	var bm *t6g6ComposedBookmarks
 	if br, ok := r.UserStateBookmarkReads(); ok {
 		if bw, ok := w.UserStateBookmarkWrites(); ok {
-			bm := t6g6ComposedBookmarks{br, bw}
-			s = struct {
-				merge.UserStateRepairStore
-				database.BookmarkStore
-				database.BookmarkCopier
-			}{s, bm, bm}
+			bm = &t6g6ComposedBookmarks{br, bw}
 		}
 	}
-	if tw, ok := w.UserStateTimestampWriter(); ok {
-		s = struct {
-			merge.UserStateRepairStore
-			database.UserPositionTimestampWriter
-		}{s, tw}
+	tw, hasStamp := w.UserStateTimestampWriter()
+	switch {
+	case sync != nil && bm != nil && hasStamp:
+		return t6g6UsAll{t6g6UsSyncBook{t6g6UsSync{base, sync}, bm, bm}, tw}
+	case sync != nil && bm != nil:
+		return t6g6UsSyncBook{t6g6UsSync{base, sync}, bm, bm}
+	case sync != nil && hasStamp:
+		return t6g6UsSyncStamp{t6g6UsSync{base, sync}, tw}
+	case bm != nil && hasStamp:
+		return t6g6UsBookStamp{t6g6UsBook{base, bm, bm}, tw}
+	case sync != nil:
+		return t6g6UsSync{base, sync}
+	case bm != nil:
+		return t6g6UsBook{base, bm, bm}
+	case hasStamp:
+		return t6g6UsStamp{base, tw}
 	}
-	return s
+	return base
 }
 
 // t6g6HeadUserState is HEAD's store for the pass: the plugin's one

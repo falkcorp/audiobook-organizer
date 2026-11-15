@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -448,10 +448,8 @@ func t6g6EnsureOpChangeBookIndex(ctx context.Context, r t6g6OpChangeIndexBuilder
 		// The kernel honours a yield only after a checkpoint since the attempt
 		// started; HEAD's registry did not need one (the cursors are the store's),
 		// so only a native shell, which sets Checkpoint, writes this marker.
-		if env.Checkpoint != nil {
-			if cpErr := env.Checkpoint(opChangeYieldCheckpoint{VerifiedRows: res.Verify.VerifiedRows}); cpErr != nil {
-				return fmt.Errorf("opchange_by_book index verify: checkpoint before yielding: %w", cpErr)
-			}
+		if cpErr := env.SaveCheckpoint(opChangeYieldCheckpoint{VerifiedRows: res.Verify.VerifiedRows}); cpErr != nil {
+			return fmt.Errorf("opchange_by_book index verify: checkpoint before yielding: %w", cpErr)
 		}
 		return fmt.Errorf("opchange_by_book index verify: %w", env.ContinueInPlace)
 	}
