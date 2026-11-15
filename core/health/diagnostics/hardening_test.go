@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
 // last-edited: 2026-11-14
 
@@ -691,7 +691,7 @@ func TestDiagnostics_RouteShapesAndEdgesOfPathRule(t *testing.T) {
 	want := []string{
 		`GET /api/v1/books/123 200`,
 		`http_requests_total{route="/api/v1/books/{id}"} 3`,
-		`probe /readyz and /livez?x=1 ok but <path> is a file`,
+		`probe /readyz and /livez?<query> ok but <path> is a file`,
 		`see <root:lib>. and <root:lib>: gone`,
 		`<div>x</div> and <root:lib>/x already done`,
 		`share <path> unreachable`,

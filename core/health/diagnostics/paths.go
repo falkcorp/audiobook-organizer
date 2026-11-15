@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-14
 
@@ -46,8 +46,8 @@ func newPathRoots(in []PathRoot) pathRoots {
 }
 
 // maxNest bounds how deep the rule recurses into a token it has already
-// matched: the tail of a path under a root, the part of a route before its
-// query, a query value that is itself a route. Each level re-reads only the
+// matched: the tail of a path under a root, the part of a route or URL before
+// its query (which is opaque, so a query never nests). Each level re-reads only the
 // text inside the token above it, so the work is linear until the bound; past
 // it a text that still holds a path start is written "<path>" (fail closed), so
 // a line built to nest cannot make the rule quadratic.
@@ -82,11 +82,11 @@ const (
 )
 
 func (r pathRoots) redactPathsAt(s string, depth int, mode scanMode) string {
-	if !strings.ContainsAny(s, "/\\") {
+	if !strings.ContainsAny(s, "/\\%") {
 		return s
 	}
 	if depth > maxNest {
-		if r.hasPathStart(s, mode) {
+		if r.hasPathStart(s, mode) || mode == scanText && strings.Contains(s, "%") && r.encodedPathToken(s) {
 			return "<path>"
 		}
 		return s
@@ -94,6 +94,14 @@ func (r pathRoots) redactPathsAt(s string, depth int, mode scanMode) string {
 	var b strings.Builder
 	last := 0
 	for i := 0; i < len(s); {
+		if mode == scanText {
+			if end, repl, ok := r.tokenAt(s, i, depth); ok {
+				b.WriteString(s[last:i])
+				b.WriteString(repl)
+				last, i = end, end
+				continue
+			}
+		}
 		if !r.pathStart(s, i, mode) {
 			i++
 			continue
@@ -108,6 +116,166 @@ func (r pathRoots) redactPathsAt(s string, depth int, mode scanMode) string {
 	}
 	b.WriteString(s[last:])
 	return b.String()
+}
+
+// Placeholders for what the redacted view does not show of a request target.
+const (
+	queryPlaceholder    = "?<query>"
+	fragmentPlaceholder = "#<fragment>"
+)
+
+// opaqueTail is the query and fragment of a route or URL as the redacted view
+// writes them: one fixed placeholder for everything from the first "?" or "#" to
+// the end of the target. It is not split on "&", "=" or ";" and not decoded: a
+// query value is not diagnostic data a non-admin bundle needs, and splitting is
+// what a raw "&", "#" or "=" inside a directory name defeats (the part after it
+// would be a different value, and a key such as "b/Gordonx/Books" is as
+// readable as a value). rest is "" or starts with "?" or "#".
+func opaqueTail(rest string) string {
+	switch {
+	case rest == "":
+		return ""
+	case rest[0] == '?':
+		return queryPlaceholder
+	}
+	return fragmentPlaceholder
+}
+
+// tokenAt is the whole-token rules of free text, tried where a token starts. It
+// returns the end of what it replaced and the replacement, or ok=false when the
+// byte at i is nothing it judges.
+//
+//   - A URL ("scheme://host/path?query", any scheme but file) is kept as written
+//     except for its path part (routePath, as for a route) and its query and
+//     fragment (opaqueTail). It is recognised wherever its scheme starts.
+//   - Where a token starts (after whitespace, a control byte, a quote or a
+//     backtick, past any opening bracket or apostrophe), a token that is not a
+//     route or a URL and that carries a percent-encoded separator whose decoded
+//     text holds an absolute path is "<path>" whole (encodedPathToken). Free text
+//     cut a path at its delimiters; an encoded path is not cut, so its tail
+//     cannot be a different token.
+func (r pathRoots) tokenAt(s string, i, depth int) (end int, repl string, ok bool) {
+	if isAlpha(s[i]) && (i == 0 || !isSchemeByte(s[i-1])) {
+		if n := urlSchemeEnd(s[i:]); n > 0 {
+			tok := trimRouteTail(s[i : i+routeExtent(s[i:])])
+			if len(tok) > n+2 {
+				return i + len(tok), r.urlText(tok, n, depth), true
+			}
+		}
+	}
+	if !tokenStart(s, i) {
+		return 0, "", false
+	}
+	p := i
+	for p < len(s) && strings.IndexByte("'([{<", s[p]) >= 0 {
+		p++
+	}
+	if p >= len(s) || routeStart(s[p:]) {
+		return 0, "", false
+	}
+	if n := urlSchemeEnd(s[p:]); n > 0 {
+		return 0, "", false // the URL rule above owns it
+	}
+	e := routeExtent(s[p:])
+	tok := trimRouteTail(s[p : p+e])
+	if strings.IndexByte(tok, '%') < 0 || !r.encodedPathToken(tok) {
+		return 0, "", false
+	}
+	return p + len(tok), s[i:p] + "<path>", true
+}
+
+// tokenStart reports whether a token of free text starts at i: the text start or
+// the byte after whitespace, a control byte, a double quote or a backtick (the
+// bytes routeExtent ends a token at).
+func tokenStart(s string, i int) bool {
+	if i == 0 {
+		return true
+	}
+	c := s[i-1]
+	return c <= ' ' || c == 0x7f || c == '"' || c == '`'
+}
+
+func isAlpha(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
+func isSchemeByte(c byte) bool {
+	return isAlpha(c) || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'
+}
+
+// urlSchemeEnd is the length of the scheme of s when s starts "scheme://" (a
+// letter, then letters, digits, "+", "-" and "."), and 0 otherwise. file: URLs
+// are paths, and keep the path rule.
+func urlSchemeEnd(s string) int {
+	if len(s) == 0 || !isAlpha(s[0]) {
+		return 0
+	}
+	n := 1
+	for n < len(s) && isSchemeByte(s[n]) {
+		n++
+	}
+	if !strings.HasPrefix(s[n:], "://") || strings.EqualFold(s[:n], "file") {
+		return 0
+	}
+	return n
+}
+
+// urlText is a URL token as written except for its inside: the authority stays,
+// the path part is judged as a route's is (routePath), and the query and
+// fragment are one placeholder (opaqueTail). schemeEnd is urlSchemeEnd of tok.
+func (r pathRoots) urlText(tok string, schemeEnd, depth int) string {
+	rest := tok[schemeEnd+3:]
+	authEnd := strings.IndexAny(rest, "/?#")
+	if authEnd < 0 {
+		return tok
+	}
+	head, rest := tok[:schemeEnd+3+authEnd], rest[authEnd:]
+	pathPart, tail := rest, ""
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		pathPart, tail = rest[:i], rest[i:]
+	}
+	if pathPart != "" {
+		head += "/" + r.routePath(pathPart[1:], depth)
+	}
+	return head + opaqueTail(tail)
+}
+
+// urlHasTail reports whether the first whitespace-delimited chunk of s, a value
+// that starts as a URL, holds a "?" or "#": the start of an opaque query or
+// fragment, which then runs to the end of the value (a raw space in a query is
+// part of it, as it is in a route's).
+func urlHasTail(s string) bool {
+	end := strings.IndexFunc(s, func(r rune) bool { return r <= ' ' })
+	if end < 0 {
+		end = len(s)
+	}
+	return strings.ContainsAny(s[:end], "?#")
+}
+
+// hasEncodedSep reports whether s holds a percent-encoded path separator.
+func hasEncodedSep(s string) bool {
+	return strings.Contains(s, "%2F") || strings.Contains(s, "%2f") ||
+		strings.Contains(s, "%5C") || strings.Contains(s, "%5c")
+}
+
+// encodedPathToken reports whether tok carries a percent-encoded absolute path:
+// at some decoding layer (lenient: a valid %XX decodes, a bad one stays, so
+// nothing fails to decode) the text holds an encoded separator, and the layer
+// decoded holds an absolute-path start. A token with no encoded separator at any
+// layer ("50%25 done") is not judged. Bounded to maxDecode layers, each a linear
+// pass; a token still decoding after that is built to hide something and counts
+// (fail closed).
+func (r pathRoots) encodedPathToken(tok string) bool {
+	cur := tok
+	for range maxDecode + 1 {
+		next := unescapeLenient(cur, false)
+		if next == cur {
+			return false
+		}
+		if hasEncodedSep(cur) && r.hasPathStart(next, scanText) {
+			return true
+		}
+		cur = next
+	}
+	return true
 }
 
 // hasPathStart reports whether any absolute path begins in s.
@@ -127,8 +295,8 @@ func (r pathRoots) hasPathStart(s string, mode scanMode) bool {
 // inside, which is judged (routeText); anything else is "<path>".
 //
 // A token that starts like a route is read to the end of its chunk (routeExtent),
-// not to the first path delimiter: a query is not cut at "'", ")" or ",", which
-// a browse request carries raw. If the chunk is not a route (a bad escape, a
+// not to the first path delimiter: a query is one placeholder to the end of the
+// token, whatever "'", ")", ",", "&" or "=" it holds raw. If the chunk is not a route (a bad escape, a
 // ".." out of the subtree, "/livez/x") the whole chunk is "<path>", so a
 // route-shaped token that does not parse never leaves a tail behind.
 func (r pathRoots) pathAt(s string, i, depth int, mode scanMode) (end int, repl string) {
@@ -299,8 +467,8 @@ func routeStart(s string) bool {
 // routeExtent is the length of the chunk a route-shaped token spans in free
 // text: to whitespace, a control byte, a double quote, a backtick or a `\"`
 // escape. Every other byte is part of it, including the bytes that end a
-// filesystem path ("'" ")" "," "]" ";" "|" "}" "<" ">"), because a query value
-// may hold any of them raw.
+// filesystem path ("'" ")" "," "]" ";" "|" "}" "<" ">"), because a query may
+// hold any of them raw.
 func routeExtent(s string) int {
 	n := 0
 	for n < len(s) {
@@ -333,28 +501,16 @@ func trimRouteTail(tok string) string {
 	return tok[:cut]
 }
 
-// routeText is a route as written, except that its inside is judged: the path
-// part is decoded and read again for a path that starts inside it (routePath),
-// the query is values (redactQuery), and the fragment is one more value.
+// routeText is a route as written, except that its path part is judged (decoded
+// and read again for a path that starts inside it: routePath) and its query and
+// fragment are one placeholder (opaqueTail).
 func (r pathRoots) routeText(tok string, depth int) string {
 	i := strings.IndexAny(tok, "?#")
 	pathPart, rest := tok, ""
 	if i >= 0 {
 		pathPart, rest = tok[:i], tok[i:]
 	}
-	out := "/" + r.routePath(pathPart[1:], depth)
-	switch {
-	case rest == "":
-		return out
-	case rest[0] == '#':
-		return out + "#" + r.queryPart(rest[1:], depth, false)
-	}
-	q, frag, hasFrag := strings.Cut(rest[1:], "#")
-	out += "?" + r.redactQuery(q, depth)
-	if hasFrag {
-		out += "#" + r.queryPart(frag, depth, false)
-	}
-	return out
+	return "/" + r.routePath(pathPart[1:], depth) + opaqueTail(rest)
 }
 
 // routePath is a route's path part (without its first "/"): percent-decoded to a
@@ -375,78 +531,6 @@ func (r pathRoots) routePath(pp string, depth int) string {
 		return out
 	}
 	return encodeRedacted(out)
-}
-
-// redactQuery judges a query string as values: each name and value is
-// percent-decoded and judged (queryPart); the rest is kept exactly as written. A
-// path in a query is not a route ("?path=/Users/bruce/x" and "?path=%2FUsers%2Fbruce"
-// are what filesystem/browse logs). Past maxNest a query is "<query>".
-func (r pathRoots) redactQuery(q string, depth int) string {
-	if q == "" {
-		return q
-	}
-	if depth+1 >= maxNest {
-		return "<query>"
-	}
-	pairs := strings.Split(q, "&")
-	for i, p := range pairs {
-		k, v, hasV := strings.Cut(p, "=")
-		out := r.queryPart(k, depth, true)
-		if hasV {
-			out += "=" + r.queryPart(v, depth, true)
-		}
-		pairs[i] = out
-	}
-	return strings.Join(pairs, "&")
-}
-
-// queryPart is one name, value or fragment of a route: left as written unless
-// its decoded form holds a path. Decoding is lenient (a valid %XX decodes, a bad
-// one stays, "+" is a space when plus), one layer at a time, and stops as soon as
-// the text is a route: a route is judged as written at its own layer, because
-// decoding further would flatten the encoding of the route's own query ("?p=%2F..."
-// inside "next=/api/v1/y?p=%2F..." would become a raw "/" and "#" of the outer
-// value and lose its fragment). A part still changing after maxDecode layers is
-// "<value>". A part with a path is written as the rewritten text if it was not
-// decoded, and percent-encoded (encodeRedacted) if it was, so a decoded control
-// byte, "&", "#" or space never reaches the output.
-func (r pathRoots) queryPart(raw string, depth int, plus bool) string {
-	cur := raw
-	for round := 0; ; round++ {
-		if absolutePath(cur) && r.wholeRoute(cur) {
-			break
-		}
-		next := unescapeLenient(cur, plus)
-		if next == cur {
-			break
-		}
-		if round >= maxDecode {
-			return "<value>"
-		}
-		cur = next
-	}
-	out := r.queryValue(cur, depth+1)
-	switch {
-	case out == cur:
-		return raw
-	case cur == raw:
-		return out
-	}
-	return encodeRedacted(out)
-}
-
-// queryValue judges a decoded query part. A value has no prose: one that is a
-// route recurses, and one that starts as an absolute path is that path whole,
-// spaces, quotes and brackets included ("/Users/bruce/Harry Potter (old)/x" is
-// one path). Anything else is text.
-func (r pathRoots) queryValue(dec string, depth int) string {
-	if dec == "" || strings.ContainsAny(dec, "\n\r") || !absolutePath(dec) {
-		return r.redactPathsAt(dec, depth, scanText)
-	}
-	if r.wholeRoute(dec) {
-		return r.routeText(dec, depth)
-	}
-	return r.name(dec, depth)
 }
 
 // wholeRoute reports whether s, a whole value that starts as an absolute path, is
@@ -514,7 +598,8 @@ func unhex(c byte) byte {
 	return c - 'A' + 10
 }
 
-// encodeRedacted percent-encodes rewritten text for a query: letters, digits
+// encodeRedacted percent-encodes rewritten text for a route's decoded path part
+// (routePath writes it back as it was encoded): letters, digits
 // "-._~" and the bytes of the rule's own placeholders ("/", ":", "<", ">") stay,
 // every other byte is %XX. Nothing decoded survives as a control byte, a line
 // break, a separator or a quote, and a second pass over the output decodes it
@@ -549,10 +634,15 @@ func encodeRedacted(s string) string {
 func (r pathRoots) redactValue(s string) string { return r.redactValueAt(s, 0) }
 
 // redactValueAt: a value that starts as one route is that route whole, whatever
-// follows it (a quote, ": " and a message, a later path: the query's values and
-// the path part are judged, so none of that text is a way around the rule); a
-// value that is one clean path is that path; any other value is text.
+// follows it (a quote, ": " and a message, a later path: the query is one
+// placeholder to the end of the value and the path part is judged, so none of
+// that text is a way around the rule); the same holds for a value that starts as
+// a URL with a "?" or "#" in its first chunk (urlHasTail); a value that is one
+// clean path is that path; any other value is text.
 func (r pathRoots) redactValueAt(s string, depth int) string {
+	if n := urlSchemeEnd(s); n > 0 && len(s) > n+3 && !strings.ContainsAny(s, "\n\r") && urlHasTail(s) {
+		return r.urlText(s, n, depth) // a URL with a query or fragment is one whole URL, as a route is
+	}
 	if s == "" || strings.ContainsAny(s, "\n\r") || !absolutePath(s) {
 		return r.redactPathsAt(s, depth, scanText)
 	}

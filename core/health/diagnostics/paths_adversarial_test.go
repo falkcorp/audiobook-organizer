@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_adversarial_test.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 9d4b7e21-3a6c-4f58-8e0d-5b1c2a97f634
 // last-edited: 2026-11-14
 
@@ -152,7 +152,10 @@ func invariants(t *testing.T, rd road, in, out string, wantMarkerGone bool) {
 // a rule that cut the path there would leak the marker.
 var plainNames = []string{"bat", "bat-x_.~"}
 
-var oddNames = []string{"x'" + marker, "x(" + marker + ")", "x)" + marker, "x," + marker, "x]" + marker, "x;" + marker, "x|" + marker, "x}" + marker, "x " + marker, "x>" + marker, "x%" + marker}
+var oddNames = []string{"x'" + marker, "x(" + marker + ")", "x)" + marker, "x," + marker, "x]" + marker, "x;" + marker, "x|" + marker, "x}" + marker, "x " + marker, "x>" + marker, "x%" + marker,
+	// A raw query delimiter in a name (G8): a route's query is one placeholder,
+	// so none of these may split it and leave the part after it.
+	"x&" + marker, "x#" + marker, "x=" + marker, "x?" + marker, "x&y=" + marker, "x#y&" + marker}
 
 // quoteNames hold a double quote or backtick, which ends a text token and makes
 // a whole value prose; they are planted only where the grammar reads a value
@@ -246,6 +249,11 @@ var ctxs = []ctx{
 	{"authors", "/api/v1/authors/O'Brien/books?path=%s", "query"},
 	{"key", "/api/v1/x?%s=1", "query"},
 	{"fragment", "/api/v1/x?q=1#%s", "query"},
+	{"frag-only", "/api/v1/x#%s", "query"},
+	{"url-query", "https://abs.example/api/x?path=%s", "query"},
+	{"url-fragment", "https://abs.example/items#%s", "query"},
+	{"url-second", "https://abs.example:8080/x?a=1&path=%s", "query"},
+	{"url-bare-query", "https://abs.example?path=%s", "query"},
 	{"livez", "/livez?x=%s", "query"},
 	{"metrics", "/metrics?p=%s", "query"},
 	{"public", "/public/x?p=%s", "query"},
@@ -253,6 +261,7 @@ var ctxs = []ctx{
 	{"multi", "/api/v1/x?a=%s&b=%s", "query"},
 
 	{"pathpart", "/api/v1/x/%s", "path"},
+	{"url-path", "https://abs.example/items/%s", "path"},
 }
 
 // wrappers put the target in a line.
@@ -277,19 +286,7 @@ func plant(ci, fi int, name string, wi int, si int) (p planted, ok bool) {
 	c, f := ctxs[ci%len(ctxs)], forms[fi%len(forms)]
 	w, suffix := wrappers[wi%len(wrappers)], suffixes[si%len(suffixes)]
 	plantedText := f.fn(name)
-	if c.kind == "text" && f.encoded {
-		return p, false // G7: a percent-encoded path outside a route is not decoded
-	}
 	if c.kind == "path" && !(f.encoded || f.name == "raw") {
-		return p, false
-	}
-	// A query's "&" and "#" are its delimiters (RFC 3986): a client that means
-	// them as part of a directory name sends %26 and %23, and the encoding
-	// forms that escape the name do. Written raw they split the value, so the
-	// part after them is a different value, not a spelling of this path.
-	// In a query's name position "=" is the delimiter too.
-	if c.kind == "query" && (!f.encoded || f.rawName) &&
-		(strings.ContainsAny(name, "&#") || c.name == "key" && strings.Contains(name, "=")) {
 		return p, false
 	}
 	var target string
@@ -313,6 +310,10 @@ func plant(ci, fi int, name string, wi int, si int) (p planted, ok bool) {
 	// route a path run ends at every delimiter (G2), so only a plain name is
 	// carried whole.
 	switch {
+	case !routeKind && f.encoded:
+		// G7: an encoded path outside a route is one token, written "<path>"
+		// whole; only a raw space or quote in the name ends the token.
+		p.text = !(f.rawName && (space || quote))
 	case routeKind && f.encoded && !f.rawName:
 		p.text = true
 	case routeKind:
@@ -326,8 +327,15 @@ func plant(ci, fi int, name string, wi int, si int) (p planted, ok bool) {
 	// path that is the whole value is one path unless a quote or a later
 	// ": " makes it prose.
 	switch {
+	case c.name == "url-path" && (space || quote):
+		// A URL's path part with a raw space or quote and no query to open an
+		// opaque tail is cut there like any path in free text (G2); only a
+		// route's path part is read to the end of a whole value.
+		p.whole = false
 	case p.routeWhole:
 		p.whole = true
+	case !routeKind && f.encoded:
+		p.whole = p.text
 	case routeKind:
 		p.whole = p.text // prose around a route is text
 	case c.tmpl == "%s" && w == "%s" && suffix == "":
@@ -417,6 +425,7 @@ func FuzzRedactPaths(f *testing.F) {
 	for ci := range ctxs {
 		for _, fi := range []int{0, 1, 5, 7, 9} {
 			f.Add(uint8(ci), uint8(fi), "x'"+marker, uint8(0), uint8(0), "")
+			f.Add(uint8(ci), uint8(fi), "x&#=;?%"+marker, uint8(0), uint8(0), "")
 		}
 	}
 	f.Add(uint8(30), uint8(5), "bat", uint8(1), uint8(1), " later /Users/x")
@@ -463,7 +472,7 @@ func cleanName(raw string) string {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 			b.WriteRune(r)
-		case strings.ContainsRune("-_.~'(),;|}]>%@+*!#&=\"` ", r):
+		case strings.ContainsRune("-_.~'(),;|}]>%@+*!#&=?\"` ", r):
 			b.WriteRune(r)
 		}
 	}
@@ -508,76 +517,76 @@ func nestEncoded(p string, n int) string {
 	return p
 }
 
-// TestRedactPaths_RouteQueryIsNotCutAtDelimiters (N-1): once a token is a route
-// its query is not cut at an apostrophe, bracket, comma, semicolon or pipe,
-// which a filesystem/browse request carries raw (encodeURIComponent leaves ' ( )
-// raw), nor is its path part ("O'Brien").
-func TestRedactPaths_RouteQueryIsNotCutAtDelimiters(t *testing.T) {
+// TestRedactPaths_RouteQueryIsOpaque (N-1, G8): once a token is a route its
+// query and fragment are one placeholder, however many apostrophes, brackets,
+// commas, semicolons, pipes, "&", "=" or "#" they hold, and the punctuation that
+// closes a route in a line stays outside it. The path part is not cut either
+// ("O'Brien").
+func TestRedactPaths_RouteQueryIsOpaque(t *testing.T) {
 	browse := "/api/v1/filesystem/browse?path="
 	runExact(t, []pc{
-		same(browse+"%2FUsers%2Fo'brien%2FBooks", browse+"<path>"),
-		same(browse+"%2FUsers%2Fbruce%2FAudiobooks%20(old)%2FHarry%20Potter", browse+"<path>"),
-		same(browse+"%2FVolumes%2FBruce's%20Drive%2Fx", browse+"<path>"),
-		same("/api/v1/books?sort=a,b&path=%2FUsers%2Fbruce", "/api/v1/books?sort=a,b&path=<path>"),
-		same("/api/v1/books?sort=a]b&path=%2FUsers%2Fbruce", "/api/v1/books?sort=a]b&path=<path>"),
-		same("/api/v1/books?sort=a;b&path=%2FUsers%2Fbruce", "/api/v1/books?sort=a;b&path=<path>"),
-		same("/api/v1/books?sort=a|b&path=%2FUsers%2Fbruce", "/api/v1/books?sort=a|b&path=<path>"),
-		same("/api/v1/books?sort=a}b&path=%2FUsers%2Fbruce", "/api/v1/books?sort=a}b&path=<path>"),
-		same("/api/v1/books?sort=a)b&path=%2FUsers%2Fbruce", "/api/v1/books?sort=a)b&path=<path>"),
-		same("/api/v1/authors/O'Brien/books?path=%2FUsers%2Fbruce", "/api/v1/authors/O'Brien/books?path=<path>"),
-		same("/api/v1/books/1,2,3?path=%2FUsers%2Fbruce", "/api/v1/books/1,2,3?path=<path>"),
+		same(browse+"%2FUsers%2Fo'brien%2FBooks", "/api/v1/filesystem/browse?<query>"),
+		same(browse+"%2FUsers%2Fbruce%2FAudiobooks%20(old)%2FHarry%20Potter", "/api/v1/filesystem/browse?<query>"),
+		same(browse+"%2FVolumes%2FBruce's%20Drive%2Fx", "/api/v1/filesystem/browse?<query>"),
+		same("/api/v1/books?sort=a,b&path=%2FUsers%2Fbruce", "/api/v1/books?<query>"),
+		same("/api/v1/books?sort=a]b&path=%2FUsers%2Fbruce", "/api/v1/books?<query>"),
+		same("/api/v1/books?sort=a;b&path=%2FUsers%2Fbruce", "/api/v1/books?<query>"),
+		same("/api/v1/books?sort=a|b&path=%2FUsers%2Fbruce", "/api/v1/books?<query>"),
+		same("/api/v1/books?sort=a}b&path=%2FUsers%2Fbruce", "/api/v1/books?<query>"),
+		same("/api/v1/books?sort=a)b&path=%2FUsers%2Fbruce", "/api/v1/books?<query>"),
+		same("/api/v1/authors/O'Brien/books?path=%2FUsers%2Fbruce", "/api/v1/authors/O'Brien/books?<query>"),
+		same("/api/v1/books/1,2,3?path=%2FUsers%2Fbruce", "/api/v1/books/1,2,3?<query>"),
 		// A route in a line: the punctuation that closes it stays outside.
-		same("(GET /api/v1/x?p=%2FUsers%2Fbruce)", "(GET /api/v1/x?p=<path>)"),
-		same("[GET /api/v1/x?p=%2FUsers%2Fbruce]", "[GET /api/v1/x?p=<path>]"),
-		same("'/api/v1/x?p=%2FUsers%2Fbruce'", "'/api/v1/x?p=<path>'"),
-		same(`"/api/v1/x?p=%2FUsers%2Fbruce"`, `"/api/v1/x?p=<path>"`),
-		{in: "/api/v1/x?p=%2FUsers%2Fbruce, then", text: "/api/v1/x?p=<path>, then", value: "/api/v1/x?p=<path>"},
-		{in: "GET /api/v1/x?p=%2FUsers%2Fbruce: denied", text: "GET /api/v1/x?p=<path>: denied", value: "GET /api/v1/x?p=<path>: denied"},
-		// No path, no change.
-		same("/api/v1/books?sort=title,asc&page=2", "/api/v1/books?sort=title,asc&page=2"),
-		same("GET /api/v1/books?ids=1,2,3 200", "GET /api/v1/books?ids=1,2,3 200"),
+		same("(GET /api/v1/x?p=%2FUsers%2Fbruce)", "(GET /api/v1/x?<query>)"),
+		same("[GET /api/v1/x?p=%2FUsers%2Fbruce]", "[GET /api/v1/x?<query>]"),
+		same("'/api/v1/x?p=%2FUsers%2Fbruce'", "'/api/v1/x?<query>'"),
+		same(`"/api/v1/x?p=%2FUsers%2Fbruce"`, `"/api/v1/x?<query>"`),
+		{in: "/api/v1/x?p=%2FUsers%2Fbruce, then", text: "/api/v1/x?<query>, then", value: "/api/v1/x?<query>"},
+		{in: "GET /api/v1/x?p=%2FUsers%2Fbruce: denied", text: "GET /api/v1/x?<query>: denied", value: "GET /api/v1/x?<query>: denied"},
+		// A query with no path is as opaque as one with a path: there is one rule.
+		same("/api/v1/books?sort=title,asc&page=2", "/api/v1/books?<query>"),
+		same("GET /api/v1/books?ids=1,2,3 200", "GET /api/v1/books?<query> 200"),
+		// A fragment; a "#" after a "?" is part of the query.
+		same("/api/v1/books#top", "/api/v1/books#<fragment>"),
+		same("/api/v1/books?a=1#top", "/api/v1/books?<query>"),
 		// A "..": an escape of one after a delimiter does not hide it.
 		same("/api/v1/x'/%2e%2e/%2e%2e/home/bruce", "/api/v1/x%27<path>"),
 	})
 }
 
-// TestRedactPaths_QueryDecodeFailsClosed (N-2): a part that does not decode is
-// judged leniently and, if it still has not settled after five rounds,
-// replaced.
-func TestRedactPaths_QueryDecodeFailsClosed(t *testing.T) {
+// TestRedactPaths_UndecodableQueryIsOpaque (N-2): a query with a bad or
+// truncated escape, or one nested past any decoding depth, is the same
+// placeholder: nothing is decoded, so nothing can fail to decode open.
+func TestRedactPaths_UndecodableQueryIsOpaque(t *testing.T) {
 	browse := "/api/v1/filesystem/browse?path="
 	runExact(t, []pc{
-		same(browse+"%2FUsers%2Fbruce%2F50%", browse+"<path>"),
-		same(browse+"%2FUsers%2Fbruce%zz", browse+"<path>"),
-		same("/api/v1/x?a=50%&path=%2FUsers%2Fbruce", "/api/v1/x?a=50%&path=<path>"),
-		same("GET "+browse+"%2FUsers%2Fbruce%2F50% 200", "GET "+browse+"<path> 200"),
-		same("/api/v1/x?path="+nestEncoded("/Users/bruce", 8), "/api/v1/x?path=<value>"),
-		same("/api/v1/x?a=%&b=%zz&c=%2", "/api/v1/x?a=%&b=%zz&c=%2"), // text, no path: kept as written
-		same("/api/v1/x?"+nestEncoded("/Users/bruce", 8)+"=1", "/api/v1/x?<value>=1"),
+		same(browse+"%2FUsers%2Fbruce%2F50%", "/api/v1/filesystem/browse?<query>"),
+		same(browse+"%2FUsers%2Fbruce%zz", "/api/v1/filesystem/browse?<query>"),
+		same("/api/v1/x?a=50%&path=%2FUsers%2Fbruce", "/api/v1/x?<query>"),
+		same("GET "+browse+"%2FUsers%2Fbruce%2F50% 200", "GET /api/v1/filesystem/browse?<query> 200"),
+		same("/api/v1/x?path="+nestEncoded("/Users/bruce", 8), "/api/v1/x?<query>"),
+		same("/api/v1/x?a=%&b=%zz&c=%2", "/api/v1/x?<query>"),
+		same("/api/v1/x?"+nestEncoded("/Users/bruce", 8)+"=1", "/api/v1/x?<query>"),
 	})
 }
 
-// TestRedactPaths_RewrittenQueryValueIsReencoded (N-3): a value is written
-// percent-encoded, so a decoded newline cannot split the line and a decoded
-// "&", "#" or space cannot change the shape of the query.
-func TestRedactPaths_RewrittenQueryValueIsReencoded(t *testing.T) {
+// TestRedactPaths_QueryNeverWritesALineBreak (N-3): the query is a placeholder,
+// so a "%0A" in it, decoded or not, cannot split a line, on every road; and the
+// output is a fixed point.
+func TestRedactPaths_QueryNeverWritesALineBreak(t *testing.T) {
 	browse := "/api/v1/filesystem/browse?path="
 	runExact(t, []pc{
-		same("GET "+browse+"%2FUsers%2Fbruce%0Aforged-line 200", "GET "+browse+"<path>%0Aforged-line 200"),
-		same("/api/v1/x?msg=see%20%2FUsers%2Fbruce%20now", "/api/v1/x?msg=see%20<path>%20now"),
-		same("/api/v1/x?msg=a%26b%20%2FUsers%2Fbruce", "/api/v1/x?msg=a%26b%20<path>"),
-		same("/api/v1/x?m=%23%2FUsers%2Fbruce", "/api/v1/x?m=%23<path>"),
-		same("/api/v1/x?m=%22%2FUsers%2Fbruce%22", "/api/v1/x?m=%22<path>%22"),
-		same("/api/v1/x?m=a+b%20%2FUsers%2Fbruce", "/api/v1/x?m=a%20b%20<path>"),
-		same("/api/v1/x?m=%E2%80%A8%2FUsers%2Fbruce", "/api/v1/x?m=%E2%80%A8<path>"),
+		same("GET "+browse+"%2FUsers%2Fbruce%0Aforged-line 200", "GET /api/v1/filesystem/browse?<query> 200"),
+		same("/api/v1/x?msg=see%20%2FUsers%2Fbruce%20now", "/api/v1/x?<query>"),
+		same("/api/v1/x?m=%E2%80%A8%2FUsers%2Fbruce", "/api/v1/x?<query>"),
 	})
-	// One line in, one line out, through the whole line road, and the output is a
-	// fixed point.
 	roots := advRoots()
 	for _, in := range []string{
 		"GET " + browse + "%2FUsers%2Fbruce%0Aforged-line 200",
 		"GET " + browse + "%2FUsers%2Fbruce%0D%0Aforged 200",
 		"GET " + browse + "see%20%2FUsers%2Fbruce%0Aforged",
+		"GET https://abs.example/x?p=%0A%2FUsers%2Fbruce 200",
+		"GET path=%0A%2FUsers%2Fbruce 200",
 	} {
 		out := roots.redactPaths(in)
 		if strings.ContainsAny(out, "\n\r") {
@@ -616,7 +625,8 @@ func TestRedactPaths_SingleSegmentSymbolsAreNotPaths(t *testing.T) {
 
 // TestRedactPaths_DoubledSlashInARoutePath (N-5): the access log writes the
 // decoded path, so "/api/v1/x/%2FUsers%2Fbruce" arrives as "/api/v1/x//Users/bruce";
-// a "//" inside a route's path part starts a path (the redaction replaces from the second slash, so one slash survives), and a scheme's "//" does not.
+// a "//" inside a route's path part starts a path (the redaction replaces from
+// the second slash, so one slash survives), and a scheme's "//" does not.
 func TestRedactPaths_DoubledSlashInARoutePath(t *testing.T) {
 	runExact(t, []pc{
 		same("/api/v1/x//Users/bruce", "/api/v1/x/<path>"),
@@ -626,35 +636,80 @@ func TestRedactPaths_DoubledSlashInARoutePath(t *testing.T) {
 		same("/api/v1/x/https://example.com/y", "/api/v1/x/https://example.com/y"),
 		same("/api/v1/x/file:///home/bruce/y", "/api/v1/x/file://<path>"),
 		same("/api/v1/books//1", "/api/v1/books//1"), // a doubled slash that is not a path
-		same("/api/v1/x?next=/api/v1/y//Users/bruce", "/api/v1/x?next=/api/v1/y/<path>"),
+		same("/api/v1/x?next=/api/v1/y//Users/bruce", "/api/v1/x?<query>"),
 	})
 }
 
-// TestRedactPaths_QueryDepthCap (N-6): the "<query>" cap at maxNest is part of
-// the rule's output, so a query nested past it is replaced, and one within it
-// is not.
-func TestRedactPaths_QueryDepthCap(t *testing.T) {
+// TestRedactPaths_EncodedPathOutsideARouteIsRedacted (G7): a token that is not a
+// route or a URL and that carries a percent-encoded separator is decoded (one
+// layer at a time, leniently) and written "<path>" whole when the decoded text
+// holds an absolute-path start. Bare "path=%2F..." in prose, a "url.query" member,
+// a JSON string holding a pre-encoded target: none can carry a path out.
+func TestRedactPaths_EncodedPathOutsideARouteIsRedacted(t *testing.T) {
 	runExact(t, []pc{
-		same("/api/a?q=/api/b?q=/api/c?q=zzz", "/api/a?q=/api/b?q=/api/c?<query>"),
-		same("/api/a?q=/api/b?q=zzz", "/api/a?q=/api/b?q=zzz"),
-		same("/api/a?q=zzz", "/api/a?q=zzz"),
+		same("path=%2FUsers%2Fbruce", "<path>"),
+		same("path=%2fUsers%2fbruce", "<path>"),
+		same(`path=%5C%5Chost%5Cshare%5Cbruce`, "<path>"),
+		same("path=C%3A%5CUsers%5Cbruce", "<path>"),
+		same("path=%252FUsers%252Fbruce", "<path>"),
+		same("path="+nestEncoded("/Users/bruce", 5), "<path>"),
+		same("path="+nestEncoded("/Users/bruce", 8), "<path>"),
+		same("path=%2FUsers%2Fa'b%2FGordonx%2FBooks", "<path>"),
+		same("path=%2FUsers%2Fa;b%2FGordonx%2FBooks", "<path>"),
+		same("path=%2FUsers%2Fa&b%2FGordonx%2FBooks", "<path>"),
+		same("path=%2FUsers%2Fa%zzb%2FGordonx%2FBooks", "<path>"),
+		same("path=%2FUsers%2Fa%b%2FGordonx%2FBooks", "<path>"),
+		same("open (path=%2FUsers%2Fbruce) failed", "open (<path>) failed"),
+		same("'path=%2FUsers%2Fbruce' failed", "'<path>' failed"),
+		same("x=a p=%2FUsers%2Fbruce y", "x=a <path> y"),
+		// Not judged: no encoded separator, or no absolute path once decoded.
+		same("see 50%25 done", "see 50%25 done"),
+		same("application%2Fjson", "application%2Fjson"),
+		same("a%2Fb%2Fc", "a%2Fb%2Fc"),
+		same("rate=50%25%2F100", "rate=50%25%2F100"),
+		same("name=Bruce%20Wayne", "name=Bruce%20Wayne"),
+		// A URL: its query and fragment are the same placeholder as a route's.
+		same("Get \"https://abs.example/api/x?path=%2FUsers%2Fbruce\"", "Get \"https://abs.example/api/x?<query>\""),
+		same("https://abs.example/items?p=/Users/a&b/Gordonx/Books", "https://abs.example/items?<query>"),
+		same("url=https://abs.example/items?p=/Users/a;b/Gordonx", "url=https://abs.example/items?<query>"),
+		same("https://abs.example/items/%2FUsers%2Fbruce", "https://abs.example/items/<path>"),
+		same("https://abs.example/a/b", "https://abs.example/a/b"),
+		same("https://abs.example", "https://abs.example"),
+		same("ws://abs.example:8080/x#top", "ws://abs.example:8080/x#<fragment>"),
 	})
 }
 
-// TestRedactPaths_EncodedPathOutsideARouteIsAKnownLimit pins G7: a
-// percent-encoded absolute path that is not inside a route token is not
-// decoded. No producer feeds a bundle source with such text; the day one does,
-// this test changes with the fix, deliberately.
-func TestRedactPaths_EncodedPathOutsideARouteIsAKnownLimit(t *testing.T) {
-	roots := advRoots()
-	for _, in := range []string{
-		"path=%2FUsers%2Fbruce",
-		"Get \"https://abs.example/api/x?path=%2FUsers%2Fbruce\"",
-	} {
-		if got := roots.redactPaths(in); got != in {
-			t.Errorf("%q changed to %q: the known limit moved; update seams G7 and this test", in, got)
-		}
+// TestRedactPaths_RawQueryDelimiterInANameIsRedacted (G8): a raw "&", "#", "=",
+// ";", "?" or "%" inside a directory name used to split a route's query, and the
+// part after the delimiter was a relative path the rule left. Nothing in the
+// query is shown now, so no delimiter can split it.
+func TestRedactPaths_RawQueryDelimiterInANameIsRedacted(t *testing.T) {
+	runExact(t, []pc{
+		same("/api/v1/x?sort=a}b&path=/Users%2F#z%2FGordonx%2FBooks", "/api/v1/x?<query>"),
+		same("/api/v1/x?path=/Users/a&b/Gordonx/Books", "/api/v1/x?<query>"),
+		same("/api/v1/x?/Users/a=b/Gordonx/Books=1", "/api/v1/x?<query>"),
+		same("/api/v1/x?path=/Users/a;b/Gordonx/Books", "/api/v1/x?<query>"),
+		same("/api/v1/x?path=/Users/a?b/Gordonx/Books", "/api/v1/x?<query>"),
+		same("/api/v1/x?path=/Users/a%b/Gordonx/Books", "/api/v1/x?<query>"),
+		same("/api/v1/x?path=/Users/a#b/Gordonx/Books", "/api/v1/x?<query>"),
+		same("/api/v1/x#/Users/a&b/Gordonx/Books", "/api/v1/x#<fragment>"),
+		same("/api/v1/x?path=/Users/a%23b/Gordonx/Books", "/api/v1/x?<query>"),
+		same("/api/v1/x?path=/Users/a%26b/Gordonx/Books", "/api/v1/x?<query>"),
+	})
+}
+
+// TestRedactPaths_PathStartPastTheEndIsNotAPath: an empty string is not an
+// absolute path. absolutePath indexed the first byte of "" and panicked (found by
+// FuzzRedactPaths when the query was split into parts).
+func TestRedactPaths_PathStartPastTheEndIsNotAPath(t *testing.T) {
+	if absolutePath("") || pathStartAt("/x", 2) {
+		t.Fatal("a position past the end is not a path start")
 	}
+	runExact(t, []pc{
+		same("/api/v1/x?", "/api/v1/x?<query>"),
+		same("/api/v1/x#", "/api/v1/x#<fragment>"),
+		same("/api/v1/x?=#", "/api/v1/x?<query>"),
+	})
 }
 
 // TestRedactPaths_OutputIsAFixedPoint: re-redacting what the rule wrote changes
@@ -684,55 +739,4 @@ func TestRedactPaths_OutputIsAFixedPoint(t *testing.T) {
 	if n < 100 {
 		t.Fatalf("only %d inputs", n)
 	}
-}
-
-// TestRedactPaths_NestedRouteKeepsItsOwnEncoding (found by FuzzRedactPaths): a
-// value that is itself a route is judged as written, not after its query has
-// been decoded into the outer value's text. Decoded first, the inner "%23"
-// became a "#" that opened a fragment and the rest of the path was read as a
-// relative path and left in the output.
-func TestRedactPaths_NestedRouteKeepsItsOwnEncoding(t *testing.T) {
-	runExact(t, []pc{
-		same("/api/v1/x?next=/api/v1/y?p=%2FUsers%2F%23z%2FGordonx%2FBooks", "/api/v1/x?next=/api/v1/y?p=<path>"),
-		// As a line the token ends at the space; as a whole value the route is the
-		// whole string and its query runs to the end (G4).
-		{in: `/api/v1/x?next=/api/v1/y?p=%2FUsers%2F%23z%2FGordonx%2FBooks "ok"`, text: `/api/v1/x?next=/api/v1/y?p=<path> "ok"`, value: "/api/v1/x?next=/api/v1/y?p=<path>"},
-		same("/api/v1/x?next=%2Fapi%2Fv1%2Fy%3Fp%3D%252FUsers%252F%2523z%252FGordonx", "/api/v1/x?next=/api/v1/y%3Fp%3D<path>"),
-		same("/api/v1/x?next=/api/v1/y?q=1%26p%3D%2FUsers%2Fz%2FGordonx", "/api/v1/x?next=/api/v1/y?q=1%26p%3D<path>"),
-	})
-}
-
-// TestRedactPaths_EmptyQueryPartsAreKept (found by FuzzRedactPaths): an empty
-// name, value or fragment is a part like any other. absolutePath indexed the
-// first byte of "" and panicked on "?a=&b=&&=#" shapes.
-func TestRedactPaths_EmptyQueryPartsAreKept(t *testing.T) {
-	runExact(t, []pc{
-		same("/api/v1/x?", "/api/v1/x?"),
-		same("/api/v1/x?a=&b=", "/api/v1/x?a=&b="),
-		same("/api/v1/x?&&=&", "/api/v1/x?&&=&"),
-		same("/api/v1/x?=#", "/api/v1/x?=#"),
-		same("/api/v1/x#", "/api/v1/x#"),
-		same("/api/v1/x?a=1&path=%2FUsers%2Fbruce&", "/api/v1/x?a=1&path=<path>&"),
-	})
-}
-
-// TestRedactPaths_RawQueryDelimiterInANameIsAKnownLimit pins G8: a raw "&", "#"
-// or key-position "=" is a query delimiter (RFC 3986), so a directory name that
-// holds one UNENCODED splits the value, and what follows the delimiter is a
-// relative path, which the rule does not redact. The shipped UI sends %26, %23
-// and %3D (encodeURIComponent), and those are judged whole (the first two cases
-// of the last block). The outputs below are the limit, written down so that
-// widening the rule is a decision and not a side effect: the cost of widening is
-// redacting every relative "a/b" in a query ("sort=asc/desc", "#section/2",
-// "date=2026/11/14"). Coordinator decision recorded in the seams note (G8).
-func TestRedactPaths_RawQueryDelimiterInANameIsAKnownLimit(t *testing.T) {
-	runExact(t, []pc{
-		// The limit: the part after the raw delimiter is a relative path.
-		same("/api/v1/x?sort=a}b&path=/Users%2F#z%2FGordonx%2FBooks", "/api/v1/x?sort=a}b&path=<path>#z%2FGordonx%2FBooks"),
-		same("/api/v1/x?path=/Users/a&b/Gordonx/Books", "/api/v1/x?path=<path>&b/Gordonx/Books"),
-		same("/api/v1/x?/Users/a=b/Gordonx/Books=1", "/api/v1/x?<path>=b/Gordonx/Books=1"),
-		// Encoded, the same names are one value and nothing survives.
-		same("/api/v1/x?path=/Users/a%23b/Gordonx/Books", "/api/v1/x?path=<path>"),
-		same("/api/v1/x?path=/Users/a%26b/Gordonx/Books", "/api/v1/x?path=<path>"),
-	})
 }

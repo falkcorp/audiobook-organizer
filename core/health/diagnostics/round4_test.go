@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/round4_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2e9a40-5d18-4b63-a0f7-1e94c6b83d25
 // last-edited: 2026-11-14
 
@@ -76,23 +76,30 @@ func runPathCases(t *testing.T, cases []pathCase) {
 	assertNoneOf(t, files, "bruce", "/home")
 }
 
-// TestDiagnostics_QueryStringIsValuesNotRoute: a route is left as written, but
-// its query is values. filesystem/browse logs "?path=/Users/bruce/x" (the
-// access log writes the raw query), and the route allowlist used to pass the
-// whole target through untouched, in a value, a text line and a JSON log line.
-func TestDiagnostics_QueryStringIsValuesNotRoute(t *testing.T) {
+// TestDiagnostics_QueryStringIsOpaque: a route is left as written, but its query
+// and fragment are one placeholder (round 6). filesystem/browse logs
+// "?path=/Users/bruce/x" (the access log writes the raw query), the route
+// allowlist used to pass the whole target through untouched, and round 5 judged
+// the query value by value, which a raw "&", "#" or "=" in a directory name
+// defeats. Nothing after the first "?" or "#" is shown, in a value, a text line
+// and a JSON log line.
+func TestDiagnostics_QueryStringIsOpaque(t *testing.T) {
 	runPathCases(t, []pathCase{
-		same("/api/v1/filesystem/browse?path=/Users/bruce/x", "/api/v1/filesystem/browse?path=<path>"),
-		same("/api/v1/filesystem/browse?path=%2FUsers%2Fbruce", "/api/v1/filesystem/browse?path=<path>"),
-		same("/api/v1/filesystem/browse?path=%252FUsers%252Fbruce", "/api/v1/filesystem/browse?path=<path>"),
-		same("/api/v1/filesystem/browse?path=/srv/lib/Joker&show=all", "/api/v1/filesystem/browse?path=<root:lib>/Joker&show=all"),
-		same("/api/v1/filesystem/browse?path=/srv/lib/Joker%20Wild%2F..%2F..%2Fhome%2Fbruce", "/api/v1/filesystem/browse?path=<path>"),
-		same("/api/v1/books?sort=title&page=2", "/api/v1/books?sort=title&page=2"),
-		same("/api/v1/books?next=/api/v1/series", "/api/v1/books?next=/api/v1/series"),
-		same("/api/v1/books?sort=a%20b", "/api/v1/books?sort=a%20b"),
-		same("/metrics?path=/Users/bruce/x", "/metrics?path=<path>"),
-		same("/api/v1/books#/home/bruce/y", "/api/v1/books#<path>"),
-		same("/api/v1/x?a=/api/x?b=/api/x?c=/api/x?d=/Users/bruce", ""), // nested: no leak, shape not pinned
+		same("/api/v1/filesystem/browse?path=/Users/bruce/x", "/api/v1/filesystem/browse?<query>"),
+		same("/api/v1/filesystem/browse?path=%2FUsers%2Fbruce", "/api/v1/filesystem/browse?<query>"),
+		same("/api/v1/filesystem/browse?path=%252FUsers%252Fbruce", "/api/v1/filesystem/browse?<query>"),
+		same("/api/v1/filesystem/browse?path=/srv/lib/Joker&show=all", "/api/v1/filesystem/browse?<query>"),
+		same("/api/v1/filesystem/browse?path=/srv/lib/Joker%20Wild%2F..%2F..%2Fhome%2Fbruce", "/api/v1/filesystem/browse?<query>"),
+		same("/api/v1/books?sort=title&page=2", "/api/v1/books?<query>"),
+		same("/api/v1/books?next=/api/v1/series", "/api/v1/books?<query>"),
+		same("/api/v1/books?sort=a%20b", "/api/v1/books?<query>"),
+		same("/metrics?path=/Users/bruce/x", "/metrics?<query>"),
+		same("/api/v1/books#/home/bruce/y", "/api/v1/books#<fragment>"),
+		same("/api/v1/books?a=1#/home/bruce/y", "/api/v1/books?<query>"),
+		// The pattern layer runs first and writes "c=[REDACTED]" for the nested
+		// URL-shaped tail; the route rule then reads the trailing "]" as the
+		// closer of a bracketed route and leaves it outside the placeholder.
+		{in: "/api/v1/x?a=/api/x?b=/api/x?c=/api/x?d=/Users/bruce", value: "/api/v1/x?<query>", text: "/api/v1/x?<query>]"},
 	})
 
 	// The access log's own JSON line.
@@ -100,7 +107,7 @@ func TestDiagnostics_QueryStringIsValuesNotRoute(t *testing.T) {
 		`{"msg":"request","path":"/api/v1/filesystem/browse?path=/Users/bruce/x","status":200}`,
 		`{"msg":"request","path":"/api/v1/filesystem/browse?path=%2FUsers%2Fbruce","status":200}`,
 	})
-	if strings.Contains(jl, "bruce") || strings.Count(jl, `filesystem/browse?path=<path>`) != 2 {
+	if strings.Contains(jl, "bruce") || strings.Count(jl, `filesystem/browse?<query>`) != 2 {
 		t.Errorf("access-log JSON lines:\n%s", jl)
 	}
 }
@@ -174,7 +181,7 @@ func TestDiagnostics_ExactEndpointsAndEncodedDotDot(t *testing.T) {
 		same("/metrics/", "<path>"),
 		same("/livez/", "<path>"),
 		same("/metrics", "/metrics"),
-		same("/livez?x=1", "/livez?x=1"),
+		same("/livez?x=1", "/livez?<query>"),
 		same("/readyz", "/readyz"),
 		same("/api/v1/books/%7Bid%7D", "/api/v1/books/%7Bid%7D"),
 		same("GET /api/v1/books/{id}", "GET /api/v1/books/{id}"),

@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_scaling_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e8a5d71-c204-4b96-8f1d-6a0b9e2c4d58
 // last-edited: 2026-11-14
 
@@ -117,6 +117,47 @@ func TestRedactPaths_RouteQueryShapesAreLinear(t *testing.T) {
 		out := timeRedact(t, roots, line)
 		if strings.Contains(out, "bruce") {
 			t.Errorf("%s: a path survived: %q", name, head(out))
+		}
+	}
+}
+
+// TestRedactPaths_UrlAndEncodedTokenShapesAreLinear (round 6): a URL is
+// recognised at any scheme start and read to the end of its token, an opaque
+// query is not scanned at all, and a token that carries an encoded separator is
+// decoded up to maxDecode+1 layers before it is judged. Each shape below makes a
+// naive version re-read its token from every scheme start, every "%" or every
+// token start, and so is quadratic. None may be, on the text road or on the
+// whole-value road, and none may leak.
+func TestRedactPaths_UrlAndEncodedTokenShapesAreLinear(t *testing.T) {
+	roots := scalingRoots()
+	for name, line := range map[string]string{
+		"https runs":            strings.Repeat("https://h/", 40_000) + "?p=/home/bruce",
+		"url queries":           strings.Repeat("https://h/x?a=1 ", 25_000) + "/home/bruce",
+		"url long query":        "https://h/x?" + strings.Repeat("a=1&", 90_000) + "p=/home/bruce",
+		"url fragments":         "https://h/x" + strings.Repeat("#a", 100_000) + "#/home/bruce",
+		"scheme-start letters":  strings.Repeat("a!", 150_000) + "/home/bruce",
+		"scheme-like runs":      strings.Repeat("ab+c-d.e", 50_000) + " /home/bruce",
+		"encoded layers":        "path=" + strings.Repeat("%25", 130_000) + "2Fhome%2Fbruce",
+		"encoded separators":    "path=" + strings.Repeat("%2F", 130_000) + "home%2Fbruce",
+		"many encoded tokens":   strings.Repeat("a%2Fb ", 60_000) + "/home/bruce",
+		"many token starts":     strings.Repeat(`"%2F`, 90_000) + "/home/bruce",
+		"opening brackets":      strings.Repeat("(", 300_000) + "%2Fhome%2Fbruce",
+		"bracketed tokens":      strings.Repeat("(a%2Fb) ", 40_000) + "/home/bruce",
+		"bad escapes":           "path=" + strings.Repeat("%zz&%2", 60_000) + "&%2Fhome%2Fbruce",
+		"encoded tokens, paths": strings.Repeat("x=%2Fhome%2Fbruce ", 20_000),
+	} {
+		if len(line) >= maxLineBytes {
+			t.Fatalf("%s: %d bytes would not reach the redactor", name, len(line))
+		}
+		for road, run := range map[string]func(string) string{"text": roots.redactPaths, "value": roots.redactValue} {
+			start := time.Now()
+			out := run(line)
+			if d := time.Since(start); d > scalingBound {
+				t.Fatalf("%s/%s: %d bytes took %s, want under %s: the scan is not linear", name, road, len(line), d, scalingBound)
+			}
+			if strings.Contains(out, "bruce") {
+				t.Errorf("%s/%s: a path survived: %q", name, road, head(out))
+			}
 		}
 	}
 }
