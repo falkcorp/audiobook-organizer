@@ -1,7 +1,7 @@
 // file: core/tasks/rc.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 485cb90e-f19f-43ac-911a-0ba9d24400dc
-// last-edited: 2026-11-10
+// last-edited: 2026-11-15
 
 package tasks
 
@@ -261,7 +261,18 @@ func (rc *RC) Enqueue(kind Kind, params any, opts ...StartOption) (RunRef, error
 	return rc.h.Enqueue(kind, params, opts...)
 }
 
-// Await waits for a child run and relays its liveness to this run.
+// Await waits for a child run and returns its outcome.
+//
+// While the child is alive (queued, waiting for its dependencies, running or
+// stopping) the executor keeps this run's liveness stamped, several times
+// within its ProgressTimeout, so the watchdog does not stop a parent for
+// waiting on a long child. The stamp is liveness only: it is not progress
+// (ErrContinueInPlace still needs a real report) and it leaves the run
+// unreported. It stops when Await returns. The child's own watchdog decides
+// whether the child is stalled; when it stops the child, Await returns its
+// outcome. A child that no watchdog covers (still queued, Batch, Fixer,
+// Uninterruptible) is waited on until this run's Timeout, when Await returns
+// the timeout cause, as it does for a cancel or stop of this run.
 func (rc *RC) Await(ref RunRef) (Outcome, error) { return rc.h.Await(ref) }
 
 // StandDown quiesces running holders of key and keeps new ones queued while
