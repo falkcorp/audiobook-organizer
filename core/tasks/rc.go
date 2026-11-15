@@ -1,5 +1,5 @@
 // file: core/tasks/rc.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 485cb90e-f19f-43ac-911a-0ba9d24400dc
 // last-edited: 2026-11-15
 
@@ -264,15 +264,33 @@ func (rc *RC) Enqueue(kind Kind, params any, opts ...StartOption) (RunRef, error
 // Await waits for a child run and returns its outcome.
 //
 // While the child is alive (queued, waiting for its dependencies, running,
-// stopping or quiesced by a stand-down) the executor keeps this run's liveness stamped, several times
-// within its ProgressTimeout, so the watchdog does not stop a parent for
-// waiting on a long child. The stamp is liveness only: it is not progress
+// stopping, or quiesced by a stand-down) the executor keeps this run's
+// liveness stamped, three times within its ProgressTimeout, so the watchdog
+// does not stop a parent for waiting on a long child. After Await returns,
+// the run has between two thirds of its ProgressTimeout and all of it before
+// it must report again. The stamp is liveness only: it is not progress
 // (ErrContinueInPlace still needs a real report) and it leaves the run
-// unreported. It stops when Await returns. The child's own watchdog decides
-// whether the child is stalled; when it stops the child, Await returns its
-// outcome. A child that no watchdog covers (still queued, Batch, Fixer,
-// Uninterruptible) is waited on until this run's Timeout, when Await returns
-// the timeout cause, as it does for a cancel or stop of this run.
+// unreported. It is written for as long as any Await of this run is blocked,
+// so an Await in a goroutine of the body keeps the run alive even when the
+// body's main path is wedged elsewhere.
+//
+// What ends the wait:
+//   - the child reaching a terminal state; the child's own watchdog decides
+//     whether a Task child is stalled, and when it stops the child Await
+//     returns its outcome;
+//   - a cancel, a stop or the Timeout of this run, with that cause. A child
+//     no watchdog covers (still queued or waiting, Batch, Fixer,
+//     Uninterruptible, or a Task whose own limit exceeds this run's Timeout)
+//     is therefore waited on until this run's Timeout;
+//   - for a child that can never start while this run runs (its
+//     ConcurrencyKey equals this run's, its write set overlaps this run's, or
+//     its NotWhile names this run's kind), an immediate error that names the
+//     cause (ErrAwaitSelfBlocked in core/internal/executor).
+//
+// A child that is interrupted (it waits for the next boot) or awaiting a
+// decision (it waits for a person) is not alive: nothing stamps this run
+// while it waits, so the watchdog stops this run within its ProgressTimeout
+// as it would any silent run.
 func (rc *RC) Await(ref RunRef) (Outcome, error) { return rc.h.Await(ref) }
 
 // StandDown quiesces running holders of key and keeps new ones queued while
