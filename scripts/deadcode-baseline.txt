@@ -681,6 +681,7 @@ internal/plugins/maintenance.t6g3NativeItems
 internal/plugins/maintenance.t6g3NeedStore
 internal/plugins/maintenance.t6g3Priority
 internal/plugins/maintenance.t6g3RefuseModeKeys
+internal/plugins/maintenance.t6g3Res
 internal/plugins/maintenance.t6g3Resume
 internal/plugins/maintenance.t6g3StartRequirement
 internal/plugins/maintenance.versionTwinFixer.readers
