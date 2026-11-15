@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
 // last-edited: 2026-11-15
 
@@ -258,7 +258,7 @@ var optimizeNewTicker = func(d time.Duration) (<-chan time.Time, func()) {
 // dispatch.go await, against the doc on core/tasks rc.go Await), so a child that
 // outlives the sweep's 65-minute ProgressTimeout would otherwise get the sweep
 // stopped as a cancel, which is never resumed. The core fix is filed separately
-// (seams.d/F5-11.md, F5-18 blocker); this tick stays correct after it.
+// (seams.d/F5-11.md, F5-18 blocker); this tick stays correct after it, and is to be removed once core's await stamps the parent itself (core PR #4675).
 func optimizeAwaitTicking(ctx context.Context, await func() (tasks.Outcome, error), tick func(), newTicker func(time.Duration) (<-chan time.Time, func()), childID string) error {
 	type awaited struct {
 		out tasks.Outcome
@@ -266,6 +266,13 @@ func optimizeAwaitTicking(ctx context.Context, await func() (tasks.Outcome, erro
 	}
 	done := make(chan awaited, 1)
 	go func() {
+		// A panic here is outside the run body's recover and would end the
+		// process: report it as the wait's error instead.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- awaited{err: fmt.Errorf("await child run %s panicked: %v", childID, r)}
+			}
+		}()
 		out, err := await()
 		done <- awaited{out, err}
 	}()
@@ -400,20 +407,26 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 			finishedOrder = append(finishedOrder, cp.Finished...)
 			inFlight = cp.InFlight
 			steps = cp.Steps
-			// A flag change between attempts can drop the child that was in
-			// flight from today's list (ALLOW_SERVER_DECODE turned off, say).
-			// Its run is still running, so it is waited on and counted like any
-			// other child, ahead of the rest, instead of being left beside the
-			// children that start after it. Re-attaching never enqueues, so it
-			// needs no def.
+			// The child that was in flight is still running (or re-queued by the
+			// restart), so it is always waited on first, whether or not today's
+			// list still holds it: a flag change between attempts can drop it
+			// (ALLOW_SERVER_DECODE turned off) or put another child ahead of it
+			// (turned on), and either way no later child may start beside it.
+			// Re-attaching never enqueues, so it needs no def.
 			if inFlight != nil && !finished[inFlight.Name] {
+				kept := []childOp{}
+				head := childOp{name: inFlight.Name}
 				listed := false
 				for _, ch := range children {
-					listed = listed || ch.name == inFlight.Name
+					if ch.name == inFlight.Name {
+						head, listed = ch, true
+						continue
+					}
+					kept = append(kept, ch)
 				}
+				children = append([]childOp{head}, kept...)
+				total = len(children)
 				if !listed {
-					children = append([]childOp{{name: inFlight.Name}}, children...)
-					total = len(children)
 					env.Log(slog.LevelInfo, fmt.Sprintf("Optimize sweep: child %s is no longer in the list; waiting on its run %s first", inFlight.Name, inFlight.RunID))
 				}
 			}
@@ -657,11 +670,11 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 		"operation_id", opID,
 		"children_completed", completed,
 		"children_failed", failed,
-		"children_total", total,
+		"children_total", max(total, completed+failed),
 		"elapsed_ms", totalElapsed.Milliseconds(),
 	)
 	doneMsg := fmt.Sprintf("Optimize sweep complete in %s — %d/%d children succeeded",
-		totalElapsed.Round(time.Second), completed, total)
+		totalElapsed.Round(time.Second), completed, max(total, completed+failed))
 	if native {
 		report(doneMsg, max(0, 2*total-steps))
 	} else {
@@ -669,7 +682,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 	}
 	env.Log(slog.LevelInfo,
 		fmt.Sprintf("Library optimize sweep complete: %d/%d children succeeded, %d failed (elapsed: %s)",
-			completed, total, failed, totalElapsed.Round(time.Second)))
+			completed, max(total, completed+failed), failed, totalElapsed.Round(time.Second)))
 
 	return nil
 }

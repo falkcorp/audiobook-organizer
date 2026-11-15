@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_m5_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3e8b6d14-52a7-4c9f-b1d0-7a4f92c6e385
 // last-edited: 2026-11-15
 
@@ -507,6 +507,7 @@ func TestT6G6Native_RepointRefusesLooseParams(t *testing.T) {
 	for name, params := range map[string]func(f rbfFixture) string{
 		"unknown key":   func(f rbfFixture) string { return `{"repoints":[` + item(f) + `],"bogus":1}` },
 		"duplicate key": func(f rbfFixture) string { return `{"repoints":[` + item(f) + `],"repoints":[` + item(f) + `]}` },
+		"trailing data": func(f rbfFixture) string { return `{"repoints":[` + item(f) + `]} {}` },
 		"unknown field": func(f rbfFixture) string {
 			it := item(f)
 			return `{"repoints":[` + it[:len(it)-1] + `,"bogus":1}]}`

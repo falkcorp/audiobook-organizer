@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize_native_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 9a1e4c52-3d78-4b06-8e2f-5c7d0b1a6f93
 // last-edited: 2026-11-15
 
@@ -565,4 +565,34 @@ func TestT6G6Optimize_LostInFlightRecordRestartsTheChildWithIdenticalParams(t *t
 	for i, k := range h.kinds() {
 		require.Equal(t, want[k], h.params[i], "params of %s", k)
 	}
+}
+
+// The recorded in-flight child goes first even when today's list still holds
+// it behind a child a restart newly enabled: with ALLOW_SERVER_DECODE turned on,
+// fingerprint-rescan sits ahead of the re-queued acoustid-backfill, and it must
+// not start beside it.
+func TestT6G6Optimize_InFlightChildIsWaitedOnBeforeANewlyEnabledOne(t *testing.T) {
+	t6g6OptimizeFlags(t, true, true) // the list is cleanup, rescan, scan, backfill
+	raw, err := json.Marshal(optimizeCheckpoint{
+		StartedAt: time.Now().Add(-time.Hour),
+		Finished:  []string{"temp-file-cleanup"},
+		InFlight:  &optimizeInFlight{Name: "acoustid-backfill", RunID: "books.acoustid.backfill#9"},
+	})
+	require.NoError(t, err)
+	h := newT6G6OptimizeHost(t)
+	require.NoError(t, h.SetCheckpoint("", json.RawMessage(raw)))
+	var enqueuedBeforeAwait []tasks.Kind
+	h.onAwait = func(id tasks.RunID) {
+		if id == "books.acoustid.backfill#9" && enqueuedBeforeAwait == nil {
+			enqueuedBeforeAwait = h.kinds()
+			if enqueuedBeforeAwait == nil {
+				enqueuedBeforeAwait = []tasks.Kind{}
+			}
+		}
+	}
+	require.NoError(t, t6g6RunOptimize(t, h))
+	require.Equal(t, tasks.RunID("books.acoustid.backfill#9"), h.awaited[0], "the recorded run is waited on first")
+	require.Empty(t, enqueuedBeforeAwait, "no child started before the in-flight one was awaited")
+	require.Equal(t, []tasks.Kind{"books.acoustid.fingerprint-rescan", "books.acoustid.scan"}, h.kinds(),
+		"the in-flight child is not launched again")
 }
