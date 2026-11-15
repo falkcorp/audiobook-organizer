@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cover_ops.go
-// version: 1.1.1
+// version: 1.2.3
 // guid: e5a3c8f2-1d7b-4e96-8c40-6b2f9d1a7e35
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 // Package maintenance — ops maintenance.folder-cover-backfill and
 // maintenance.cover-text-read.
@@ -40,7 +40,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // coverOpParams is shared by both ops.
@@ -77,9 +79,83 @@ func parseCoverOpParams(opID string, raw json.RawMessage) (coverOpParams, bool, 
 	return p, dry, nil
 }
 
+// t6g3CoverBookReader is the two reads coverOpBooks makes.
+type t6g3CoverBookReader interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetAllBooksCore(limit int, offset int) ([]database.BookCore, error)
+}
+
+// t6g3CoverFolderStore is the foldercover.Store a cover core hands foldercover: its
+// reads come from the run's reader and its one write (ModifyBook) from the
+// run's writer, so foldercover never holds a path around either (rule R10). A
+// nil w is a preview's: foldercover.Evaluate never writes.
+type t6g3CoverFolderStore struct {
+	r t6g3CoverReader
+	w t6g3CoverWriter
+}
+
+func (s t6g3CoverFolderStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	return s.r.GetBookFiles(bookID)
+}
+
+func (s t6g3CoverFolderStore) GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error) {
+	return s.r.GetMetadataFieldStates(bookID)
+}
+
+func (s t6g3CoverFolderStore) GetUserPreference(key string) (*database.UserPreference, error) {
+	return s.r.GetUserPreference(key)
+}
+
+func (s t6g3CoverFolderStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	if s.w == nil {
+		return nil, errors.New("cover: no writer in a preview run")
+	}
+	return s.w.ModifyBook(id, fn)
+}
+
+// t6g3CoverKV is the covertext.KV a cover core hands covertext: reads from the
+// run's store, writes through the run's writer.
+type t6g3CoverKV struct {
+	r t6g3RawReader
+	w t6g3CoverWriter
+}
+
+func (k t6g3CoverKV) GetRaw(key string) ([]byte, error) { return k.r.GetRaw(key) }
+
+func (k t6g3CoverKV) SetRaw(key string, value []byte) error {
+	if k.w == nil {
+		return errors.New("cover: no writer in a preview run")
+	}
+	return k.w.SetRaw(key, value)
+}
+
+// t6g3RefuseWhileScan is refuseWhileLibraryScanActive over a store that may
+// have no queue (errT6g3NoCapability: HEAD's nil queue, "cannot verify").
+func t6g3RefuseWhileScan(r OpQueueReader, opID string) error {
+	active, err := r.ListActiveOperationsV2()
+	if errors.Is(err, errT6g3NoCapability) {
+		return refuseWhileLibraryScanActive(nil, opID)
+	}
+	return refuseWhileLibraryScanActive(t6g3ListedQueue{active, err}, opID)
+}
+
+// t6g3ListedQueue replays one ListActiveOperationsV2 answer.
+type t6g3ListedQueue struct {
+	rows []database.OperationV2Row
+	err  error
+}
+
+func (q t6g3ListedQueue) ListActiveOperationsV2() ([]database.OperationV2Row, error) {
+	return q.rows, q.err
+}
+
+// t6g3CoverOpDefaultWorkers is HEAD's default pool of both cover ops: IO bound, so
+// twice the core count, clamped 1-32 like an explicit workers param.
+func t6g3CoverOpDefaultWorkers(n int) int { return clampWorkers(n, runtime.NumCPU()*2) }
+
 // coverOpBooks lists the books a cover op examines: the requested ids, or
 // every book not marked for deletion, capped at Limit.
-func coverOpBooks(store OpsStore, p coverOpParams) ([]database.Book, error) {
+func coverOpBooks(store t6g3CoverBookReader, p coverOpParams) ([]database.Book, error) {
 	var out []database.Book
 	if len(p.BookIDs) > 0 {
 		for _, id := range p.BookIDs {
@@ -150,48 +226,106 @@ var folderCoverOutcomeOrder = []foldercover.Outcome{
 	foldercover.OutcomeNoFolder, foldercover.OutcomeNoCandidate, foldercover.OutcomeRaced, foldercover.OutcomeError,
 }
 
+// t6g3FolderCoverBackfillKind is the native kind of maintenance.folder-cover-backfill (F5-08).
+const t6g3FolderCoverBackfillKind tasks.Kind = "books.maintenance.folder-cover-backfill"
+
+// folderCoverBackfillEnv is what folderCoverBackfillCore needs from its engine.
+type folderCoverBackfillEnv struct {
+	t6g3Base
+	// ItemsFor returns the per-book loop on a pool of the given size (the
+	// core sizes it from the workers param and HEAD's default).
+	ItemsFor func(workers int) t6g3ItemsFunc
+}
+
+// runFolderCoverBackfill is the v2 shell of maintenance.folder-cover-backfill.
 func (p *Plugin) runFolderCoverBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	const opID = "maintenance.folder-cover-backfill"
-	params, dryRun, err := parseCoverOpParams(opID, raw)
+	params, dryRun, err := parseCoverOpParams(folderCoverBackfillOpID, raw)
 	if err != nil {
 		return err
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
-		return errors.New("database not initialized")
+	if p.deps.OpsStore() == nil {
+		return errT6g3NoStore
 	}
-	rootDir := p.deps.RootDir()
+	return folderCoverBackfillCore(ctx, params, folderCoverBackfillEnv{
+		t6g3Base: p.t6g3HeadBase(ctx, reporter, !dryRun),
+		ItemsFor: func(workers int) t6g3ItemsFunc { return t6g3HeadItems(ctx, reporter, workers) },
+	})
+}
+
+// folderCoverBackfillOpID is HEAD's def ID, which the core's messages carry.
+const folderCoverBackfillOpID = "maintenance.folder-cover-backfill"
+
+// folderCoverBackfillKind builds the native kind. HEAD declares a Preview, so
+// it runs in either mode (HEAD's dry_run default of true becomes the start
+// request's mode). Writes found: ModifyBook on the book's cover fields only.
+// HEAD's `workers` param (clamped 1-32) is carried: the core sizes the pool
+// (the param, else twice the cores) and the shell hands that size to
+// tasks.RunItems as tasks.Fixed.
+func (p *Plugin) folderCoverBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(t6g3Res(ops.ResBooks))
+	return tasks.Task(t6g3FolderCoverBackfillKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: t6g3Common(p.folderCoverBackfillDef(), t6g3FolderCoverBackfillKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			var params coverOpParams
+			if err := t6g3DecodeParams(t6g3FolderCoverBackfillKind, raw, &params, t6g3ModeKeys...); err != nil {
+				return struct{}{}, err
+			}
+			params.BookIDs = append(params.BookIDs, params.BookIDsSnake...)
+			base, err := t6g3NativeBase(t6g3FolderCoverBackfillKind, rc, deps, true)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t6g3NeedStore(t6g3FolderCoverBackfillKind, base); err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, folderCoverBackfillCore(rc.Context(), params, folderCoverBackfillEnv{
+				t6g3Base: base,
+				ItemsFor: func(workers int) t6g3ItemsFunc {
+					return t6g3NativeItems(rc, tasks.Fixed(workers, "directory reads, image header decodes and one tag read per book: IO bound, sized by the workers param or twice the core count"))
+				},
+			})
+		},
+	})
+}
+
+// folderCoverBackfillCore is the shared body of both shells.
+func folderCoverBackfillCore(ctx context.Context, params coverOpParams, env folderCoverBackfillEnv) error {
+	const opID = folderCoverBackfillOpID
+	dryRun := !env.Live
+	rootDir := env.Store.RootDir()
 	if rootDir == "" {
 		return errors.New("root_dir is not configured; covers are stored under it")
 	}
 	if dryRun {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no cover is stored and no book is written")
-	} else if err := refuseWhileLibraryScanActive(p.deps.OperationQueueStore(), opID); err != nil {
+		env.Log(slog.LevelInfo, "DRY RUN — no cover is stored and no book is written")
+	} else if err := t6g3RefuseWhileScan(env.Store, opID); err != nil {
 		return err
 	}
-	books, err := coverOpBooks(store, params)
+	books, err := coverOpBooks(env.Store, params)
 	if err != nil {
 		return err
 	}
+	var fcStore foldercover.Store = t6g3CoverFolderStore{r: env.Store, w: env.Writer}
 	var (
 		mu       sync.Mutex
 		counts   = map[foldercover.Outcome]int{}
 		examples []string
 		failures []string
 	)
-	// Partitioned by book: RunItems hands each book to exactly one worker and
+	// Partitioned by book: the loop hands each book to exactly one worker and
 	// each worker writes only that book's row (ModifyBook), so no two workers
 	// touch the same row. Two books sharing one image store the same
 	// content-addressed file, which StoreCoverImage makes safe.
-	runErr := registry.RunItems(ctx, reporter, books, func(ctx context.Context, b database.Book) error {
+	runErr := env.ItemsFor(t6g3CoverOpDefaultWorkers(params.Workers))(len(books), t6g3ItemsOpts{Collect: true}, func(ctx context.Context, i int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		b := books[i]
 		var plan foldercover.Plan
 		if dryRun {
-			plan = foldercover.Evaluate(store, &b, rootDir)
+			plan = foldercover.Evaluate(fcStore, &b, rootDir)
 		} else {
-			plan = foldercover.Apply(store, &b, rootDir)
+			plan = foldercover.Apply(fcStore, &b, rootDir)
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -203,11 +337,6 @@ func (p *Plugin) runFolderCoverBackfill(ctx context.Context, raw json.RawMessage
 			failures = append(failures, fmt.Sprintf("%s: %s: %v", b.ID, plan.Outcome, plan.Err))
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		// Directory reads, image header decodes and one tag read per book:
-		// IO bound, so twice the core count by default.
-		Concurrency: clampWorkers(params.Workers, runtime.NumCPU()*2),
-		ErrMode:     registry.ErrModeCollect,
 	})
 
 	mu.Lock()
@@ -220,12 +349,12 @@ func (p *Plugin) runFolderCoverBackfill(ctx context.Context, raw json.RawMessage
 	if dryRun {
 		mode = "DRY RUN"
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("%s — folder covers over %d books: %s", mode, len(books), strings.Join(parts, " ")))
+	env.Log(slog.LevelInfo, fmt.Sprintf("%s — folder covers over %d books: %s", mode, len(books), strings.Join(parts, " ")))
 	for _, e := range examples {
-		_ = reporter.Log(slog.LevelInfo, "  example: "+e)
+		env.Log(slog.LevelInfo, "  example: "+e)
 	}
 	for _, f := range failures {
-		_ = reporter.Log(slog.LevelWarn, "  failed: "+f)
+		env.Log(slog.LevelWarn, "  failed: "+f)
 	}
 	return runErr
 }
@@ -277,7 +406,7 @@ type coverImage struct {
 }
 
 // gatherCoverImages collects a book's distinct cover images. Only reads.
-func gatherCoverImages(store OpsStore, book *database.Book, rootDir string) ([]coverImage, []error) {
+func gatherCoverImages(store foldercover.Store, book *database.Book, rootDir string) ([]coverImage, []error) {
 	var (
 		out  []coverImage
 		errs []error
@@ -338,21 +467,95 @@ func gatherCoverImages(store OpsStore, book *database.Book, rootDir string) ([]c
 	return out, errs
 }
 
+// t6g3CoverTextReadKind is the native kind of maintenance.cover-text-read (F5-08).
+const t6g3CoverTextReadKind tasks.Kind = "books.maintenance.cover-text-read"
+
+// coverTextReadOpID is HEAD's def ID, which the core's messages carry.
+const coverTextReadOpID = "maintenance.cover-text-read"
+
+// coverTextReadEnv is what coverTextReadCore needs from its engine.
+type coverTextReadEnv struct {
+	t6g3Base
+	// Reader is the vision reader (newCoverTextReader's, a package seam).
+	Reader coverTextReader
+	// ItemsFor returns the per-book loop on a pool of the given size. The core
+	// sizes it: the workers param, else twice the cores for a preview and the
+	// vision pool's capacity when live.
+	ItemsFor func(workers int) t6g3ItemsFunc
+	// Touch stamps the run's liveness clock before a model read (HEAD:
+	// registry.TouchLiveness). Nil is none: the native engine has no such clock.
+	Touch func()
+}
+
+// runCoverTextRead is the v2 shell of maintenance.cover-text-read.
 func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
-	const opID = "maintenance.cover-text-read"
-	params, dryRun, err := parseCoverOpParams(opID, raw)
+	params, dryRun, err := parseCoverOpParams(coverTextReadOpID, raw)
 	if err != nil {
 		return err
 	}
-	store := p.deps.OpsStore()
-	if store == nil {
-		return errors.New("database not initialized")
+	if p.deps.OpsStore() == nil {
+		return errT6g3NoStore
 	}
-	rootDir := p.deps.RootDir()
-	reader := newCoverTextReader()
-	workers := clampWorkers(params.Workers, runtime.NumCPU()*2)
+	return coverTextReadCore(ctx, params, coverTextReadEnv{
+		t6g3Base: p.t6g3HeadBase(ctx, reporter, !dryRun),
+		Reader:   newCoverTextReader(),
+		ItemsFor: func(workers int) t6g3ItemsFunc { return t6g3HeadItems(ctx, reporter, workers) },
+		Touch:    func() { registry.TouchLiveness(reporter) },
+	})
+}
+
+// coverTextReadKind builds the native kind. HEAD declares a Preview, so it runs
+// in either mode. Writes found: the per-image text records and the per-book
+// image index, both raw-key records of the cover-text store (resource
+// metadata_cache: the closest constant in pkg/ops/effects.go, as the store holds
+// derived per-image reads, not book metadata; F5-06 owns any new constant); the
+// op never writes a book. The `workers` param and the capacity-sized live pool are carried: the core sizes the pool and the native
+// shell gives that size to tasks.RunItems as a fixed parallelism, so a read
+// never queues behind a semaphore inside an item.
+func (p *Plugin) coverTextReadKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(t6g3Res(t6g3CoverTextResource))
+	return tasks.Task(t6g3CoverTextReadKind, tasks.TaskSpec[json.RawMessage, struct{}]{
+		Common: t6g3Common(p.coverTextReadDef(), t6g3CoverTextReadKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
+			var params coverOpParams
+			if err := t6g3DecodeParams(t6g3CoverTextReadKind, raw, &params, t6g3ModeKeys...); err != nil {
+				return struct{}{}, err
+			}
+			params.BookIDs = append(params.BookIDs, params.BookIDsSnake...)
+			base, err := t6g3NativeBase(t6g3CoverTextReadKind, rc, deps, true)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if err := t6g3NeedStore(t6g3CoverTextReadKind, base); err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, coverTextReadCore(rc.Context(), params, coverTextReadEnv{
+				t6g3Base: base,
+				Reader:   newCoverTextReader(),
+				ItemsFor: func(workers int) t6g3ItemsFunc {
+					return t6g3NativeItems(rc, tasks.Fixed(workers, "vision reads queue on the AI pool: the pool is sized to the vision capacity when live, twice the core count for a preview"))
+				},
+			})
+		},
+	})
+}
+
+// t6g3CoverTextResource is the Effects resource of the cover-text records
+// (the `cover_text:` and `cover_text_book:` key families). pkg/ops/effects.go on
+// this branch has no constant for them, so the closest one is declared;
+// F5-06 adds ops.ResCoverText, and the coordinator swaps this one line to it at
+// stacking (with the SetRaw entry of t6g3MethodResources in the test).
+const t6g3CoverTextResource = ops.ResMetadataCache
+
+// coverTextReadCore is the shared body of both shells.
+func coverTextReadCore(ctx context.Context, params coverOpParams, env coverTextReadEnv) error {
+	const opID = coverTextReadOpID
+	dryRun := !env.Live
+	rootDir := env.Store.RootDir()
+	reader := env.Reader
+	workers := t6g3CoverOpDefaultWorkers(params.Workers)
 	if dryRun {
-		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no image is sent to a model and nothing is stored")
+		env.Log(slog.LevelInfo, "DRY RUN — no image is sent to a model and nothing is stored")
 	} else {
 		capacity := reader.Capacity()
 		if capacity == 0 {
@@ -364,10 +567,12 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 		// on every request, so over-subscribing is worse than useless.
 		workers = clampWorkers(params.Workers, capacity)
 	}
-	books, err := coverOpBooks(store, params)
+	books, err := coverOpBooks(env.Store, params)
 	if err != nil {
 		return err
 	}
+	var fcStore foldercover.Store = t6g3CoverFolderStore{r: env.Store, w: nil}
+	var kv covertext.KV = t6g3CoverKV{r: env.Store, w: env.Writer}
 
 	var (
 		mu                                            sync.Mutex
@@ -395,11 +600,17 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 	// hash to exactly one worker, so a cover shared by many books is read once
 	// and no two workers write the same record. Each record is written as its
 	// read lands, so a stop loses at most the reads in flight.
-	runErr := registry.RunItems(ctx, reporter, books, func(ctx context.Context, b database.Book) error {
+	runErr := env.ItemsFor(workers)(len(books), t6g3ItemsOpts{
+		Collect: true,
+		// Above the per-attempt vision timeout, so a read that fails over
+		// once still fits.
+		ItemTimeout: 3*ai.CoverTextAttemptTimeout + time.Minute,
+	}, func(ctx context.Context, i int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		imgs, errs := gatherCoverImages(store, &b, rootDir)
+		b := books[i]
+		imgs, errs := gatherCoverImages(fcStore, &b, rootDir)
 		note(func() {
 			gatherErrs += len(errs)
 			if len(imgs) > 0 {
@@ -414,7 +625,7 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 			for _, ci := range imgs {
 				idx.Images = append(idx.Images, ci.ref)
 			}
-			if err := covertext.PutBook(store, idx); err != nil {
+			if err := covertext.PutBook(kv, idx); err != nil {
 				note(func() { indexWriteErr++ })
 				return fmt.Errorf("store cover index for %s: %w", b.ID, err)
 			}
@@ -423,7 +634,7 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 			if !claim(ci.ref.Hash) {
 				continue
 			}
-			prev, err := covertext.Get(store, ci.ref.Hash)
+			prev, err := covertext.Get(kv, ci.ref.Hash)
 			if err != nil {
 				return fmt.Errorf("read cover text %s: %w", ci.ref.Hash, err)
 			}
@@ -436,7 +647,9 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 			if dryRun {
 				continue
 			}
-			registry.TouchLiveness(reporter)
+			if env.Touch != nil {
+				env.Touch()
+			}
 			rec := &covertext.Record{Hash: ci.ref.Hash, PromptVersion: covertext.PromptVersion, Attempts: 1}
 			if prev != nil {
 				rec.Attempts = prev.Attempts + 1
@@ -458,17 +671,11 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 				rec.Status, rec.Text, rec.Raw, rec.Model, rec.EndpointID = covertext.StatusOK, res.Text, res.Raw, res.Model, res.EndpointID
 				note(func() { readOK++ })
 			}
-			if err := covertext.Put(store, rec); err != nil {
+			if err := covertext.Put(kv, rec); err != nil {
 				return fmt.Errorf("store cover text %s: %w", ci.ref.Hash, err)
 			}
 		}
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency: workers,
-		ErrMode:     registry.ErrModeCollect,
-		// Above the per-attempt vision timeout, so a read that fails over
-		// once still fits.
-		PerItemTimeout: 3*ai.CoverTextAttemptTimeout + time.Minute,
 	})
 
 	mu.Lock()
@@ -477,12 +684,12 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 	if dryRun {
 		mode = "DRY RUN"
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
+	env.Log(slog.LevelInfo, fmt.Sprintf(
 		"%s — cover text over %d books: books_with_covers=%d distinct_images=%d already_current=%d to_read=%d read_ok=%d read_failed=%d gather_errors=%d index_write_errors=%d workers=%d",
 		mode, len(books), booksWithImages, images, current, toRead, readOK, readFailed, gatherErrs, indexWriteErr, workers))
 	sort.Strings(failures)
 	for _, f := range failures {
-		_ = reporter.Log(slog.LevelWarn, "  failed: "+f)
+		env.Log(slog.LevelWarn, "  failed: "+f)
 	}
 	return runErr
 }
