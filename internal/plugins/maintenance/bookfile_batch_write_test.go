@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/bookfile_batch_write_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 6c1d80fe-4a52-47b3-9d8e-0b2f5a9c7314
 // last-edited: 2026-11-15
 
@@ -114,7 +114,7 @@ func TestRecoverMissingFiles_RecomputesBookOnce(t *testing.T) {
 	}
 
 	logs := aggtest.Capture(t)
-	plan, err := planRecoverMissingFiles(context.Background(), s, nil, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), s, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, batchTestRows, plan.Repointed, "every row must still be written")
@@ -272,7 +272,7 @@ func TestRecover_MultipleBooksUnderConcurrency(t *testing.T) {
 		}
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, books*4, plan.Repointed)

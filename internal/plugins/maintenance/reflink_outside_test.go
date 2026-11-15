@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reflink_outside_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9d2c4a71-6e08-4b3f-8c1a-2f7b0e5d9a34
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -41,7 +41,7 @@ func TestReflink_RestoresUniqueOutsideMatch(t *testing.T) {
 	}
 	c := &recordingScanController{renewOK: true}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{Apply: true, ReflinkOutside: true, SourceDirs: []string{src}},
 		&opIDReporter{id: "op-1"})
 	require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestReflink_OffByDefaultOnlyCensuses(t *testing.T) {
 		full:  map[string][]database.BookFile{"b1": {{ID: "f1", BookID: "b1", FilePath: dst, FileSize: 321}}},
 	}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, nil, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, nil, root,
 		recoverMissingParams{Apply: true, SourceDirs: []string{src}}, &fakeReporter{}) // ReflinkOutside default false
 	require.NoError(t, err)
 
@@ -95,7 +95,7 @@ func TestReflink_TwoSourcesSameSizeRefusedAmbiguous(t *testing.T) {
 	}
 	c := &recordingScanController{renewOK: true}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{Apply: true, ReflinkOutside: true, SourceDirs: []string{src}},
 		&opIDReporter{id: "op-1"})
 	require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestReflink_TwoRowsOneSourceRefusedCollision(t *testing.T) {
 	}
 	c := &recordingScanController{renewOK: true}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{Apply: true, ReflinkOutside: true, SourceDirs: []string{src}},
 		&opIDReporter{id: "op-1"})
 	require.NoError(t, err)
@@ -151,7 +151,7 @@ func TestReflink_RefusesDestOutsideRoot(t *testing.T) {
 	}
 	c := &recordingScanController{renewOK: true}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{Apply: true, ReflinkOutside: true, SourceDirs: []string{src}},
 		&opIDReporter{id: "op-1"})
 	require.NoError(t, err)
@@ -175,7 +175,7 @@ func TestReflink_DryRunReportsButCreatesNothing(t *testing.T) {
 	}
 	c := &recordingScanController{renewOK: true}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{ReflinkOutside: true, SourceDirs: []string{src}}, // Apply defaults false
 		&opIDReporter{id: "op-1"})
 	require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestReflink_AbortsWhenLeaseLost(t *testing.T) {
 	}
 	c := &recordingScanController{renewOK: false} // lease gone from the first heartbeat
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{Apply: true, ReflinkOutside: true, SourceDirs: []string{src}},
 		&opIDReporter{id: "op-9"})
 	require.Error(t, err, "a lapsed lease mid-apply must surface as an error")
@@ -243,7 +243,7 @@ func TestReflink_ReflinkOnlyRunIgnoresLostLease(t *testing.T) {
 	}
 	c := &recordingScanController{renewOK: false} // would abort a held run — but none is held
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{Apply: true, ReflinkOutside: true, SourceDirs: []string{src}},
 		&opIDReporter{id: "op-9"})
 	require.NoError(t, err, "a reflink-only run holds no lease, so a lost lease cannot abort it")
@@ -281,7 +281,7 @@ func TestReflink_MixedInTreeAndOutsideInOneApply(t *testing.T) {
 	}
 	c := &recordingScanController{renewOK: true}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{Apply: true, ReflinkOutside: true, SourceDirs: []string{src}},
 		&opIDReporter{id: "op-1"})
 	require.NoError(t, err)
@@ -319,7 +319,7 @@ func TestReflink_CapBoundsFileCreation(t *testing.T) {
 	store := &recoverFakeStore{cores: cores, full: full}
 	c := &recordingScanController{renewOK: true}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{Apply: true, ReflinkOutside: true, Max: 2, SourceDirs: []string{src}},
 		&opIDReporter{id: "op-1"})
 	require.NoError(t, err)
@@ -354,7 +354,7 @@ func TestReflink_ConcurrentRestoreSkipsExistingDest(t *testing.T) {
 	}
 	c := &recordingScanController{renewOK: true}
 
-	plan, err := planRecoverMissingFiles(context.Background(), store, c, root,
+	plan, err := t6g6TestPlanRecover(context.Background(), store, c, root,
 		recoverMissingParams{Apply: true, ReflinkOutside: true, SourceDirs: []string{src}},
 		&opIDReporter{id: "op-1"})
 	require.NoError(t, err)

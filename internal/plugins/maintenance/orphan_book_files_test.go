@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files_test.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 0bd4f9a2-1c3e-4f5a-8b6c-7d9e0f1a2b3c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -50,7 +50,7 @@ func TestFindOrphanBookFiles_SoftDeletedBooksKeepTheirFiles(t *testing.T) {
 		},
 	}
 
-	orphans, _, _, err := findOrphanBookFiles(context.Background(), store)
+	orphans, _, _, err := t6g6FindOrphanBookFilesVia(context.Background(), t6g6OrphanFixture{store})
 	if err != nil {
 		t.Fatalf("findOrphanBookFiles returned error: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestFindOrphanBookFiles_FailsClosedWhenSoftDeletedSetUnavailable(t *testing
 		},
 	}
 
-	orphans, _, _, err := findOrphanBookFiles(context.Background(), store)
+	orphans, _, _, err := t6g6FindOrphanBookFilesVia(context.Background(), t6g6OrphanFixture{store})
 	if err == nil {
 		t.Fatalf("expected an error when the soft-deleted set is unreadable, got %d orphans", len(orphans))
 	}
@@ -141,7 +141,7 @@ func TestFindOrphanBookFiles_ReportOnly(t *testing.T) {
 		},
 	}
 
-	orphans, totalFiles, totalBooks, err := findOrphanBookFiles(context.Background(), store)
+	orphans, totalFiles, totalBooks, err := t6g6FindOrphanBookFilesVia(context.Background(), t6g6OrphanFixture{store})
 	if err != nil {
 		t.Fatalf("findOrphanBookFiles returned error: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestFindOrphanBookFiles_NoOrphans(t *testing.T) {
 			return cores, nil
 		},
 	}
-	orphans, _, _, err := findOrphanBookFiles(context.Background(), store)
+	orphans, _, _, err := t6g6FindOrphanBookFilesVia(context.Background(), t6g6OrphanFixture{store})
 	if err != nil {
 		t.Fatalf("findOrphanBookFiles returned error: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestFindOrphanBookFiles_RefusesToDeleteOnAnUntrustworthyBookList(t *testing
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			orphans, _, _, err := findOrphanBookFiles(context.Background(), tc.store)
+			orphans, _, _, err := t6g6FindOrphanBookFilesVia(context.Background(), t6g6OrphanFixture{tc.store})
 			if err == nil {
 				t.Fatal("findOrphanBookFiles must fail closed when a membership getter " +
 					"cannot vouch for its answer; it returned success and its caller " +
@@ -296,7 +296,7 @@ func TestFindOrphanBookFiles_ReadsTheGuardedBookGetter(t *testing.T) {
 		},
 	}
 
-	orphans, _, ownerCount, err := findOrphanBookFiles(context.Background(), store)
+	orphans, _, ownerCount, err := t6g6FindOrphanBookFilesVia(context.Background(), t6g6OrphanFixture{store})
 	if err != nil {
 		t.Fatalf("findOrphanBookFiles returned error: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestFindOrphanBookFiles_LetterLeadingBooksOnThePebblePath(t *testing.T) {
 		{ID: "f-ghost", BookID: "Ghost", FilePath: "/lib/orphan-range/ghost.mp3"},
 	}}
 
-	orphans, totalFiles, _, err := findOrphanBookFiles(context.Background(), scanner)
+	orphans, totalFiles, _, err := t6g6FindOrphanBookFilesVia(context.Background(), t6g6OrphanFixture{scanner})
 	if err != nil {
 		t.Fatalf("findOrphanBookFiles: %v", err)
 	}

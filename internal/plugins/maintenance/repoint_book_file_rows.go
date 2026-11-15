@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.4.2
+// version: 1.5.6
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -62,6 +62,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
 	"github.com/oklog/ulid/v2"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -72,6 +73,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 const (
@@ -248,19 +251,27 @@ type rbfEnv struct {
 	store       rbfStore
 	itunesRoots []string
 	scan        ScanController
+	// allCores is every row's core, retired ones included: the one read the
+	// claims pass makes that is not a method of the narrow store. The HEAD shell
+	// resolves it as a capability of the store it holds; the native shell hands
+	// it the t6g6Store's own method.
+	allCores func() ([]database.BookFileCore, error)
 }
+
+// rbfHelp is the def's Description, which the native kind carries as its Help.
+const rbfHelp = "Repoints named MISSING book_file rows at a file on disk that no row owns: " +
+	"{\"repoints\":[{\"row_id\":..., \"book_id\":..., \"new_path\":...}]}. Keeps the row's id, track, book " +
+	"and history. Refuses unless the row's file is missing, new_path is a regular file outside iTunes that " +
+	"no row owns, and its size equals the row's (or, for a row with no size, its hash equals the row's). " +
+	"A differing hash at an equal size needs \"allow_hash_mismatch\":true on the item. Journals the old row " +
+	"first. Never deletes anything and never touches files. DRY-RUN BY DEFAULT: {\"dry_run\":false} to write."
 
 func (p *Plugin) repointBookFileRowsDef() sdk.OperationDef {
 	return sdk.OperationDef{
-		ID:          rbfOpID,
-		Preview:     sdk.PreviewSpec{Params: rbfParams{}},
-		DisplayName: "Repoint missing book_file rows at a named file",
-		Description: "Repoints named MISSING book_file rows at a file on disk that no row owns: " +
-			"{\"repoints\":[{\"row_id\":..., \"book_id\":..., \"new_path\":...}]}. Keeps the row's id, track, book " +
-			"and history. Refuses unless the row's file is missing, new_path is a regular file outside iTunes that " +
-			"no row owns, and its size equals the row's (or, for a row with no size, its hash equals the row's). " +
-			"A differing hash at an equal size needs \"allow_hash_mismatch\":true on the item. Journals the old row " +
-			"first. Never deletes anything and never touches files. DRY-RUN BY DEFAULT: {\"dry_run\":false} to write.",
+		ID:              rbfOpID,
+		Preview:         sdk.PreviewSpec{Params: rbfParams{}},
+		DisplayName:     "Repoint missing book_file rows at a named file",
+		Description:     rbfHelp,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  rbfOpID,
 		Writes:          []sdk.Resource{sdk.ResBookFiles},
@@ -309,11 +320,14 @@ func (p *Plugin) runRepointBookFileRows(ctx context.Context, raw json.RawMessage
 // rbfClaims maps each cleaned new_path in the request to the IDs of every row
 // holding it, from ONE pass over every row's core. Missing rows count: a row
 // flagged missing still names the path.
-func rbfClaims(store rbfStore, want map[string]bool) (map[string][]string, error) {
+func rbfClaims(allCores func() ([]database.BookFileCore, error), want map[string]bool) (map[string][]string, error) {
 	// Retired rows count as claims: a retired version still names its path, and
 	// a live row repointed onto it would share a path with a file the library is
 	// holding. (The row being repointed is refused if retired; see rbfPlanOne.)
-	cores, err := database.AllBookFilesCoreIncludingRetired(store)
+	if allCores == nil {
+		return nil, fmt.Errorf("%s: no reader for the book_file rows", rbfOpName)
+	}
+	cores, err := allCores()
 	if err != nil {
 		return nil, fmt.Errorf("%s: list book_file rows: %w", rbfOpName, err)
 	}
@@ -334,6 +348,118 @@ func rbfClaims(store rbfStore, want map[string]bool) (map[string][]string, error
 // sequentially; the one whole-library read is the claim pass, done once per
 // phase.
 func repointBookFileRows(ctx context.Context, env rbfEnv, params rbfParams, reporter sdk.Reporter) (*rbfReport, error) {
+	if env.allCores == nil {
+		store := env.store
+		env.allCores = func() ([]database.BookFileCore, error) {
+			return database.AllBookFilesCoreIncludingRetired(store)
+		}
+	}
+	core := t6g6HeadEnv(reporter, false)
+	// The progress hook keeps HEAD's "progress not recorded" warning, which
+	// the generic hook would drop with the error.
+	core.Progress = func(done, total int, msg string) { rbfProgress(reporter, done, total, msg) }
+	core.StandDown = t6g6HeadStandDown(env.scan, reporter)
+	return repointBookFileRowsCore(ctx, env, params, core)
+}
+
+// rbfKind is rule R3's kind for the def above.
+const rbfKind = tasks.Kind("books." + rbfOpID)
+
+// rbfNativeStore is the rbfStore a native run hands the core: planning reads
+// from the store, and every write goes through the run's gated writer.
+type rbfNativeStore struct {
+	rbfReader
+	rbfWriter
+}
+
+// rbfPreviewWriter stands in for the writer in a Preview run, which must not
+// write: a dry run never reaches the apply phase, so this only fires on a bug.
+type rbfPreviewWriter struct{}
+
+func (rbfPreviewWriter) ModifyBookFile(string, string, func(*database.BookFile) error) (*database.BookFile, error) {
+	return nil, errors.New(rbfOpName + ": write attempted in a preview run")
+}
+
+func (rbfPreviewWriter) RecomputeBookAggregates(string) error {
+	return errors.New(rbfOpName + ": write attempted in a preview run")
+}
+
+func (rbfPreviewWriter) CreateOperationChange(*database.OperationChange) error {
+	return errors.New(rbfOpName + ": write attempted in a preview run")
+}
+
+// rbfNativeParams are the native run's params: HEAD's without the dry-run
+// switch, which the run's mode decides.
+type rbfNativeParams struct {
+	Repoints []rbfRepoint `json:"repoints"`
+}
+
+// repointBookFileRowsNative is the native kind. Preview is the dry run HEAD's
+// default was; Live applies the planned repoints under the scan stand-down.
+func (p *Plugin) repointBookFileRowsNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(rbfKind, sched)
+	c.Title = "Repoint missing book_file rows at a named file"
+	c.Help = rbfHelp
+	// HEAD declared book_files only. The apply also recomputes the book's
+	// aggregates (books) and journals the old row to the undo journal (operations).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResOperations)))
+	// A re-run is safe: a repointed row's file is present, so it is refused at
+	// the old-path-missing gate.
+	c.Resume = tasks.ResumeDrop
+	c.Priority = tasks.PriorityLow
+	c.ConcurrencyKey = tasks.Key("books." + rbfOpID)
+	return tasks.Task(rbfKind, tasks.TaskSpec[json.RawMessage, rbfReport]{
+		Common: c,
+		Run: func(rc *tasks.RC, raw json.RawMessage) (rbfReport, error) {
+			// HEAD decoded strictly (unknown and duplicate keys and trailing data
+			// refused before any read), so a mistyped key fails the run instead of
+			// being dropped. The mode keys are refused first, by name.
+			if err := t6g6RefuseModeKeys(rbfKind, raw); err != nil {
+				return rbfReport{}, err
+			}
+			var in rbfNativeParams
+			if err := decodeStrictParams(raw, &in); err != nil {
+				return rbfReport{}, fmt.Errorf("%s: decode params: %w", rbfKind, err)
+			}
+			live := rc.Mode() == tasks.ModeLive
+			dry := !live
+			params := rbfParams{Repoints: in.Repoints, DryRunSnake: &dry}
+			if deps.Store == nil {
+				return rbfReport{}, fmt.Errorf("database not initialized")
+			}
+			// Fail closed: without resolvable iTunes roots the op cannot prove a
+			// path is outside them.
+			if deps.ITunesRoots == nil {
+				return rbfReport{}, fmt.Errorf("%s: resolve iTunes roots: not configured", rbfOpName)
+			}
+			roots, err := deps.ITunesRoots()
+			if err != nil {
+				return rbfReport{}, fmt.Errorf("%s: resolve iTunes roots: %w", rbfOpName, err)
+			}
+			var w rbfWriter = rbfPreviewWriter{}
+			if live {
+				nw, err := t6g6NewWriter(rbfKind, deps, rc)
+				if err != nil {
+					return rbfReport{}, err
+				}
+				w = nw
+			}
+			env := rbfEnv{store: rbfNativeStore{deps.Store, w}, itunesRoots: roots, allCores: deps.Store.AllBookFilesCoreIncludingRetired}
+			core := t6g6NativeEnv(rc)
+			core.StandDown = t6g6NativeStandDown(rc, deps.StandDownKey)
+			report, runErr := repointBookFileRowsCore(rc.Context(), env, params, core)
+			if report == nil {
+				return rbfReport{}, runErr
+			}
+			return *report, runErr
+		},
+	})
+}
+
+// repointBookFileRowsCore is the body of repointBookFileRows over the env the
+// shell hands it: progress, the op id, the logger and the scan stand-down come
+// from core, the store (reads and writes) from env.
+func repointBookFileRowsCore(ctx context.Context, env rbfEnv, params rbfParams, core t6g6Env) (*rbfReport, error) {
 	dryRun, err := params.dryRun()
 	if err != nil {
 		return nil, err
@@ -367,7 +493,7 @@ func repointBookFileRows(ctx context.Context, env rbfEnv, params rbfParams, repo
 			want[filepath.Clean(row.FilePath)] = true
 		}
 	}
-	claims, err := rbfClaims(env.store, want)
+	claims, err := rbfClaims(env.allCores, want)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +509,7 @@ func repointBookFileRows(ctx context.Context, env rbfEnv, params rbfParams, repo
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		rbfProgress(reporter, i, len(params.Repoints), "planning row "+rp.RowID)
+		core.Progress(i, len(params.Repoints), "planning row "+rp.RowID)
 		r, planErr := rbfPlanOne(env, rp, claims, books, seenRow, seenPath)
 		if planErr != nil {
 			return report, planErr
@@ -413,15 +539,18 @@ func repointBookFileRows(ctx context.Context, env rbfEnv, params rbfParams, repo
 		return report, nil
 	}
 
-	holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, env.scan, reporter, rbfOpName+" apply")
+	if core.StandDown == nil {
+		return report, fmt.Errorf("%s: scan stand-down: none available, refusing to apply without it", rbfOpName)
+	}
+	hold, sdErr := core.StandDown(ctx, rbfOpName+" apply")
 	if sdErr != nil {
 		return report, fmt.Errorf("%s: scan stand-down: %w", rbfOpName, sdErr)
 	}
-	defer release()
+	defer hold.Release()
 
-	opID := registry.ReporterOpID(reporter)
+	opID := core.OpID
 	if opID == "" {
-		reporter.Logger().Warn(rbfOpName + ": no operation id; journal rows will be uncorrelated")
+		core.Logger.Warn(rbfOpName + ": no operation id; journal rows will be uncorrelated")
 	}
 
 	// The claim set is re-read for the apply: a row created at a new path
@@ -432,7 +561,7 @@ func repointBookFileRows(ctx context.Context, env rbfEnv, params rbfParams, repo
 			applyWant[filepath.Clean(r.NewPath)] = true
 		}
 	}
-	applyClaims, err := rbfClaims(env.store, applyWant)
+	applyClaims, err := rbfClaims(env.allCores, applyWant)
 	if err != nil {
 		return report, err
 	}
@@ -442,8 +571,8 @@ func repointBookFileRows(ctx context.Context, env rbfEnv, params rbfParams, repo
 		if r.Status != rbfStatusPlanned {
 			continue
 		}
-		rbfProgress(reporter, i, len(report.Repoints), "repointing row "+r.RowID)
-		if ctx.Err() != nil || scanStandDownLostForApply(env.scan, holderID, held) {
+		core.Progress(i, len(report.Repoints), "repointing row "+r.RowID)
+		if ctx.Err() != nil || hold.Lost() {
 			r.Status = rbfStatusNotAttempt
 			r.Error = "run canceled or scan stand-down lost before this row"
 			continue

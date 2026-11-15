@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/opchange_book_index_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 58b6fa0d-49f4-40bf-b1fe-a55af85a5098
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -84,7 +84,7 @@ func (f fakeOpChangeRebuilder) RebuildOpChangeByBookIndex(context.Context, datab
 func TestOpchangeBookIndexRebuild_PreviewWritesNothing(t *testing.T) {
 	rebuilt := false
 	r := fakeOpChangeRebuilder{rep: database.OpChangeByBookIndexReport{Rows: 5, MissingEntries: 2}, rebuilt: &rebuilt}
-	if err := previewOpChangeBookIndex(context.Background(), r, &fakeReporter{}); err != nil {
+	if err := t6g6PreviewOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(&fakeReporter{})); err != nil {
 		t.Fatal(err)
 	}
 	if rebuilt {
@@ -94,14 +94,14 @@ func TestOpchangeBookIndexRebuild_PreviewWritesNothing(t *testing.T) {
 
 func TestOpchangeBookIndexRebuild_CleanRunPasses(t *testing.T) {
 	r := fakeOpChangeRebuilder{res: database.OpChangeByBookBackfillResult{Scanned: 10, Indexed: 9, Commits: 2}}
-	if err := rebuildOpChangeBookIndex(context.Background(), r, &fakeReporter{}); err != nil {
+	if err := t6g6RebuildOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(&fakeReporter{})); err != nil {
 		t.Fatalf("clean rebuild failed: %v", err)
 	}
 }
 
 func TestOpchangeBookIndexRebuild_UndecodableFails(t *testing.T) {
 	r := fakeOpChangeRebuilder{res: database.OpChangeByBookBackfillResult{Scanned: 10, Indexed: 8, Undecodable: 1}}
-	err := rebuildOpChangeBookIndex(context.Background(), r, &fakeReporter{})
+	err := t6g6RebuildOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(&fakeReporter{}))
 	if err == nil || !strings.Contains(err.Error(), "cannot be decoded") {
 		t.Fatalf("undecodable rows must fail the op, got %v", err)
 	}
@@ -110,7 +110,7 @@ func TestOpchangeBookIndexRebuild_UndecodableFails(t *testing.T) {
 func TestOpchangeBookIndexRebuild_ErrorWrapped(t *testing.T) {
 	boom := errors.New("boom")
 	r := fakeOpChangeRebuilder{res: database.OpChangeByBookBackfillResult{Scanned: 4}, err: boom}
-	err := rebuildOpChangeBookIndex(context.Background(), r, &fakeReporter{})
+	err := t6g6RebuildOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(&fakeReporter{}))
 	if !errors.Is(err, boom) || !strings.Contains(err.Error(), "full scan") {
 		t.Fatalf("err = %v, want the wrapped cause and the fallback note", err)
 	}
@@ -127,11 +127,11 @@ func TestOpchangeBookIndexRebuild_RealStore(t *testing.T) {
 	if err := store.CreateOperationChange(&database.OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
 		t.Fatal(err)
 	}
-	r, ok := database.AsCapability[opChangeIndexRebuilder](store)
+	r, ok := database.AsCapability[t6g6OpChangeIndexRebuilder](store)
 	if !ok {
-		t.Fatal("*PebbleStore does not satisfy opChangeIndexRebuilder")
+		t.Fatal("*PebbleStore does not satisfy t6g6OpChangeIndexRebuilder")
 	}
-	if err := rebuildOpChangeBookIndex(context.Background(), r, &fakeReporter{}); err != nil {
+	if err := t6g6RebuildOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(&fakeReporter{})); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.GetBookChanges("b1")
@@ -171,8 +171,8 @@ func TestOpchangeBookIndexRebuild_ManualLivenessStamps(t *testing.T) {
 		t.Fatal(err)
 	}
 	rep := &progressCountingReporter{}
-	r, _ := database.AsCapability[opChangeIndexRebuilder](store)
-	if err := rebuildOpChangeBookIndex(context.Background(), r, rep); err != nil {
+	r, _ := database.AsCapability[t6g6OpChangeIndexRebuilder](store)
+	if err := t6g6RebuildOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(rep)); err != nil {
 		t.Fatal(err)
 	}
 	// start + one chunk + end.
@@ -237,7 +237,7 @@ func TestOpchangeBookIndexEnsure_DirtyVerifyRebuiltPasses(t *testing.T) {
 			Trusted:  true,
 		}, nil
 	}}
-	if err := ensureOpChangeBookIndex(context.Background(), r, rep); err != nil {
+	if err := t6g6EnsureOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(rep)); err != nil {
 		t.Fatalf("a rebuilt, trusted index failed the op: %v", err)
 	}
 	if rep.noOpLines() != 0 {
@@ -262,7 +262,7 @@ func TestOpchangeBookIndexEnsure_UntrustedFails(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			rep := &p6AttrReporter{}
-			err := ensureOpChangeBookIndex(context.Background(), fakeOpChangeRebuilder{ensure: ensure}, rep)
+			err := t6g6EnsureOpChangeBookIndex(context.Background(), fakeOpChangeRebuilder{ensure: ensure}, t6g6OpChangeTestEnv(rep))
 			if err == nil {
 				t.Fatal("an untrusted index completed the op")
 			}
@@ -286,7 +286,7 @@ func TestOpchangeBookIndexEnsure_UndecodableFails(t *testing.T) {
 			Trusted:  true,
 		}, nil
 	}}
-	err := ensureOpChangeBookIndex(context.Background(), r, &p6AttrReporter{})
+	err := t6g6EnsureOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(&p6AttrReporter{}))
 	if err == nil || !strings.Contains(err.Error(), "cannot be decoded") {
 		t.Fatalf("err = %v, want the undecodable rows to fail the op", err)
 	}
@@ -303,7 +303,7 @@ func TestOpchangeBookIndexEnsure_RebuildUndecodableFails(t *testing.T) {
 			Trusted: true,
 		}, nil
 	}}
-	err := ensureOpChangeBookIndex(context.Background(), r, &p6AttrReporter{})
+	err := t6g6EnsureOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(&p6AttrReporter{}))
 	if err == nil || !strings.Contains(err.Error(), "1 journal row(s) cannot be decoded") {
 		t.Fatalf("err = %v, want the rebuild's undecodable row to fail the op", err)
 	}
@@ -313,7 +313,7 @@ func TestOpchangeBookIndexEnsure_RebuildUndecodableFails(t *testing.T) {
 // line, so it adds nothing to the default activity feed.
 func TestOpchangeBookIndexEnsure_AlreadyTrustedIsNoOp(t *testing.T) {
 	rep := &p6AttrReporter{}
-	if err := ensureOpChangeBookIndex(context.Background(), fakeOpChangeRebuilder{ensure: trustedNoOpEnsure}, rep); err != nil {
+	if err := t6g6EnsureOpChangeBookIndex(context.Background(), fakeOpChangeRebuilder{ensure: trustedNoOpEnsure}, t6g6OpChangeTestEnv(rep)); err != nil {
 		t.Fatal(err)
 	}
 	if rep.noOpLines() == 0 {
@@ -339,7 +339,7 @@ func TestOpchangeBookIndexEnsure_CancelIsAnInterruption(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	rep := &p6AttrReporter{}
 	done := make(chan error, 1)
-	go func() { done <- ensureOpChangeBookIndex(ctx, r, rep) }()
+	go func() { done <- t6g6EnsureOpChangeBookIndex(ctx, r, t6g6OpChangeTestEnv(rep)) }()
 	<-started
 	cancel()
 	select {
@@ -507,7 +507,7 @@ func TestOpchangeBookIndexEnsure_CancelWithUnwrappedStoreError(t *testing.T) {
 		return database.OpChangeByBookEnsureResult{}, errors.New("synthetic iterator closed")
 	}}
 	rep := &p6AttrReporter{}
-	err := ensureOpChangeBookIndex(ctx, r, rep)
+	err := t6g6EnsureOpChangeBookIndex(ctx, r, t6g6OpChangeTestEnv(rep))
 	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "synthetic iterator closed") {
 		t.Fatalf("err = %v, want context.Canceled wrapped with the store's text", err)
 	}
@@ -525,7 +525,7 @@ func TestOpchangeBookIndexEnsure_TimeoutIsAFailure(t *testing.T) {
 		return database.OpChangeByBookEnsureResult{}, fmt.Errorf("opchange_by_book backfill: %w", ctx.Err())
 	}}
 	rep := &p6AttrReporter{}
-	err := ensureOpChangeBookIndex(ctx, r, rep)
+	err := t6g6EnsureOpChangeBookIndex(ctx, r, t6g6OpChangeTestEnv(rep))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want the deadline wrapped", err)
 	}
@@ -559,8 +559,8 @@ func TestOpchangeBookIndexEnsure_ThroughStoreDecorator(t *testing.T) {
 	t.Cleanup(func() { _ = inner.Close() })
 	inner.WaitForWarmup()
 	wrapped := &opChangeDecorator{Store: inner}
-	if _, ok := any(wrapped).(opChangeIndexRebuilder); ok {
-		t.Fatal("a bare assertion resolves opChangeIndexRebuilder through the decorator; " +
+	if _, ok := any(wrapped).(t6g6OpChangeIndexRebuilder); ok {
+		t.Fatal("a bare assertion resolves t6g6OpChangeIndexRebuilder through the decorator; " +
 			"this test no longer reproduces the decorator shape")
 	}
 	if err := inner.CreateOperationChange(&database.OperationChange{
@@ -644,7 +644,7 @@ func TestOpchangeBookIndexEnsure_YieldContinuesInPlace(t *testing.T) {
 			Yielded:  true,
 		}, nil
 	}, gotOpts: &gotOpts}
-	err := ensureOpChangeBookIndex(context.Background(), r, rep)
+	err := t6g6EnsureOpChangeBookIndex(context.Background(), r, t6g6OpChangeTestEnv(rep))
 	if !errors.Is(err, opsregistry.ErrContinueInPlace) {
 		t.Fatalf("err = %v, want registry.ErrContinueInPlace so the registry re-queues the same operation", err)
 	}
@@ -662,7 +662,7 @@ func TestOpchangeBookIndexEnsure_YieldContinuesInPlace(t *testing.T) {
 // verify's position is absolute across the runs of one verify.
 func TestOpchangeBookIndexEnsure_VerifyProgressIsDeterminate(t *testing.T) {
 	rr := &recordedProgress{}
-	progress, setTotal := opChangeEnsureProgress(rr)
+	progress, setTotal := t6g6OpChangeEnsureProgressVia(t6g6OpChangeTestEnv(rr))
 	progress("backfill", 5)
 	setTotal(40)
 	progress("verify", 30)
@@ -696,4 +696,10 @@ func TestOpchangeBookIndexDef_ResumesInPlace(t *testing.T) {
 	if def.Timeout != 60*time.Minute {
 		t.Fatalf("Timeout = %v, want it unchanged at 60m: the fix is a resumable verify, not a longer timeout", def.Timeout)
 	}
+}
+
+// t6g6OpChangeTestEnv is the env of a HEAD-shaped call: the reporter's hooks
+// and the registry's yield sentinel.
+func t6g6OpChangeTestEnv(reporter sdk.Reporter) opChangeBookIndexEnv {
+	return opChangeBookIndexEnv{t6g6Env: t6g6HeadEnv(reporter, true), ContinueInPlace: opsregistry.ErrContinueInPlace}
 }

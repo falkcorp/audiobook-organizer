@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_reader_abort_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7c2e91d4-3b58-4a06-9e1f-d84a5b60c2f7
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -61,7 +61,7 @@ func TestRetiredReaderAbort_RepointStopsBeforePlanningOrWriting(t *testing.T) {
 
 func TestRetiredReaderAbort_RecoverStopsBeforePlanningOrWriting(t *testing.T) {
 	store := &storeWithoutRetiredReader{}
-	plan, err := planRecoverMissingFiles(context.Background(), store, nil, t.TempDir(), recoverMissingParams{Apply: true}, &fakeReporter{})
+	plan, err := t6g6TestPlanRecover(context.Background(), store, nil, t.TempDir(), recoverMissingParams{Apply: true}, &fakeReporter{})
 	require.ErrorIs(t, err, database.ErrRetiredReaderUnavailable)
 	assert.Contains(t, err.Error(), "load book files")
 	assert.Equal(t, recoverPlan{}, plan, "nothing may be planned from a claim set that left retired rows out")

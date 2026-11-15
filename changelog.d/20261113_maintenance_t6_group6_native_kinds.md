@@ -1,0 +1,7 @@
+### Added
+
+- maintenance: the 14 group 6 maintenance operations (nightly activity compaction, opchange book index rebuild, optimize, orphan book_file scan, orphan book_file repoint plan, probe directory books, recompact activity digests, iTunes heal, recover missing files, regroup shattered books, relink unlinked books, repair merged user state, repair transcribe status, repoint book_file rows) now have native `books.<id>` task definitions built dark (F5-11). Each runs the same core as its existing shell and keeps its title, help, priority, timeout and parallelism. Resume policies follow the brief (optimize yields before its attempt deadline, even while a child runs, and resumes by re-attaching to that child, and keeps its own liveness stamped while it waits). Writes the core makes in the database go through the run's gated writer (iTunes heal and repair-merged-user-state now take their writes through a narrow writer instead of one captured store); file moves, reflinks and the heal journal are file I/O on disk and are not gated. Every writing native kind refuses `dry_run`, `dryRun` and `apply` params. Nothing registers them yet, so behaviour is unchanged.
+
+### Changed
+
+- maintenance: internal test-only wrappers (`findOrphanBookFiles`, `planOrphanRepoints`, `probeAll`, `planRecoverMissingFiles`, `reconcileStaleHolds`, `opChangeIndexProgressTo`, `staleRegroupHolds`, `decidedRegroupHolds` and their shims) were removed; their tests call the shared cores. iTunes heal's body moved into `internal/reconcile` behind a reader and a writer interface.

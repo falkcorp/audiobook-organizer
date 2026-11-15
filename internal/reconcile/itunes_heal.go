@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package reconcile
 
@@ -290,10 +290,10 @@ const acoustIDHealMinScore = 0.85
 //
 // If all candidates are acoustically identical (similarity ≥ 0.9), they are
 // duplicate books from the organize bug. MergeBooks collapses them and returns
-// the surviving path. Acoustically distinct candidates return ("", 0). opID
-// is the heal operation the collapse's undo pointer is journaled under
-// (collapseHealDuplicates).
-func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, opID string, candidates []string) (string, int) {
+// the surviving path. Acoustically distinct candidates return ("", 0). collapse
+// is the heal's one duplicate-collapse write (HealWriter.CollapseHealDuplicates,
+// bound to the heal operation the undo pointer is journaled under).
+func resolveAmbiguousByDB(ctx context.Context, store HealReader, collapse func(keepID string, dupIDs []string) error, candidates []string) (string, int) {
 	if len(candidates) == 0 {
 		return "", 0
 	}
@@ -343,7 +343,7 @@ func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, opID string
 		}
 	}
 	if len(dupIDs) > 0 {
-		if err := collapseHealDuplicates(store, opID, keepID, dupIDs); err != nil {
+		if err := collapse(keepID, dupIDs); err != nil {
 			// Returning ("", 0) already fails closed — this candidate stays
 			// unresolved and the heal falls through to its next layer rather
 			// than repointing at a collapse that never happened. What was
@@ -415,7 +415,7 @@ func collapseHealDuplicates(store reconcileStore, opID, keepID string, dupIDs []
 // resolveAmbiguousByBookMeta looks up each candidate's Book in the DB and
 // scores its title and file path (which encodes the author directory) against
 // the iTunes track's Album and Artist via word overlap. Pure DB — no API calls.
-func resolveAmbiguousByBookMeta(store reconcileStore, track iTunesTrack, candidates []string) string {
+func resolveAmbiguousByBookMeta(store HealReader, track iTunesTrack, candidates []string) string {
 	albumWords := titleWords(track.Album)
 	artistWords := titleWords(track.Artist)
 	if len(albumWords) == 0 {
@@ -483,7 +483,7 @@ func resolveAmbiguousByBookMeta(store reconcileStore, track iTunesTrack, candida
 // when non-nil, fpcalc failures and AcoustID lookup failures are tallied and
 // rate-limited-Warn logged instead of silently `continue`-ing — before H3
 // these were indistinguishable from "no match", inflating `ambiguous`.
-func resolveAmbiguousByAcoustID(ctx context.Context, store reconcileStore, ac *acoustid.Client, track iTunesTrack, candidates []string, failures *resolverFailureCounters) string {
+func resolveAmbiguousByAcoustID(ctx context.Context, store HealReader, ac *acoustid.Client, track iTunesTrack, candidates []string, failures *resolverFailureCounters) string {
 	albumWords := titleWords(track.Album)
 	artistWords := titleWords(track.Artist)
 
@@ -591,7 +591,7 @@ func resolveAmbiguousByAcoustID(ctx context.Context, store reconcileStore, ac *a
 // find the book's current file path. This is the most reliable not-found
 // resolver: if the file was organized to a different name/location, the PID
 // stored on the BookFile points directly to it — no filesystem scan needed.
-func resolveNotFoundByPID(store reconcileStore, pid string) string {
+func resolveNotFoundByPID(store HealReader, pid string) string {
 	if pid == "" || store == nil {
 		return ""
 	}
@@ -669,7 +669,7 @@ func storedIntroText(file *database.BookFile, book *database.Book) (text string,
 // outage lands here as a failure: the candidate is unscored and nothing is
 // stored. journal may be nil; when set it is the Whisper result journal the
 // intro ops share.
-func resolveAmbiguousByTranscription(ctx context.Context, store reconcileStore, track iTunesTrack, candidates []string, failures *resolverFailureCounters, journal transcribe.ResultJournal) string {
+func resolveAmbiguousByTranscription(ctx context.Context, store HealReader, track iTunesTrack, candidates []string, failures *resolverFailureCounters, journal transcribe.ResultJournal) string {
 	if len(candidates) == 0 || len(candidates) > 5 {
 		return ""
 	}
@@ -850,7 +850,124 @@ func titleWords(s string) []string {
 	return out
 }
 
-// RunITunesHeal is the entry point called by the maintenance plugin op.
+// HealConcurrency is the heal's worker count: HEAD's RunItems Concurrency.
+const HealConcurrency = 16
+
+// HealReader is every read the heal makes: the resolvers' lookups of the rows a
+// candidate path or iTunes persistent id points at.
+type HealReader interface {
+	GetBookByID(id string) (*database.Book, error)
+	GetBookFiles(bookID string) ([]database.BookFile, error)
+	GetBookFileByPath(filePath string) (*database.BookFile, error)
+	GetBookFileByPID(itunesPID string) (*database.BookFile, error)
+}
+
+// HealWriter is every write the heal makes, so a shell can route them through a
+// gated writer: the duplicate collapse (rows), the track reflink (a file) and the
+// whisper-result journal the transcription layer records into (KV rows).
+type HealWriter interface {
+	// CollapseHealDuplicates merges dupIDs into keepID through merge.Service,
+	// journaling the collapse's undo pointer under opID.
+	CollapseHealDuplicates(opID, keepID string, dupIDs []string) error
+	// HealTrack clones src to dst (or copies it when the filesystem cannot clone);
+	// it refuses an existing dst.
+	HealTrack(dst, src string) error
+	// HealWhisperJournal is the journal shared with the intro-transcribe ops, or
+	// nil when the store has no raw KV surface (the heal then runs without it).
+	HealWhisperJournal() transcribe.ResultJournal
+}
+
+// HealItemsOptions are the per-loop settings the heal hands its pool: every item
+// runs and the item errors are joined (HEAD's ErrModeCollect).
+type HealItemsOptions struct {
+	// ProgressOffset and ProgressTotal place the slice on the progress bar.
+	ProgressOffset, ProgressTotal int
+	// Label is the per-item progress label; called inside the worker goroutines,
+	// so it reads counters atomically.
+	Label func(i, total int) string
+}
+
+// HealEnv is what RunITunesHealVia takes from its shell.
+type HealEnv struct {
+	// Logger is the run's logger.
+	Logger *slog.Logger
+	// Progress reports done out of total with a note.
+	Progress func(done, total int, msg string)
+	// OpID is the run the duplicate collapses are journaled under.
+	OpID string
+	// Reader may be nil: the layers that read rows are then skipped, as HEAD
+	// skipped them for a nil store.
+	Reader HealReader
+	// Writer carries every write.
+	Writer HealWriter
+	// Items runs fn over the indexes 0..n-1 on the shell's pool with
+	// HealConcurrency workers.
+	Items func(ctx context.Context, n int, o HealItemsOptions, fn func(ctx context.Context, i int) error) error
+}
+
+// headHealWriter is HEAD's writer: the collapse and the reflink as HEAD ran them,
+// over the plugin's reconcile store.
+type headHealWriter struct{ store reconcileStore }
+
+// NewHeadHealWriter is HEAD's HealWriter over store (which may be nil).
+func NewHeadHealWriter(store reconcileStore) HealWriter { return headHealWriter{store: store} }
+
+func (w headHealWriter) CollapseHealDuplicates(opID, keepID string, dupIDs []string) error {
+	return collapseHealDuplicates(w.store, opID, keepID, dupIDs)
+}
+
+func (w headHealWriter) HealTrack(dst, src string) error { return healTrack(dst, src) }
+
+func (w headHealWriter) HealWhisperJournal() transcribe.ResultJournal {
+	if w.store == nil {
+		return nil
+	}
+	if kv, ok := any(w.store).(resultjournal.KVStore); ok {
+		if j, jerr := resultjournal.New(kv, resultjournal.KindWhisperIntro); jerr == nil {
+			return j
+		}
+	}
+	return nil
+}
+
+// RunITunesHeal is HEAD's entry point called by the maintenance plugin op: the
+// heal over the reporter's pool, log and progress, with the store as both halves.
+func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Reporter, params json.RawMessage) error {
+	var cp ITunesHealParams
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &cp)
+	}
+	env := HealEnv{
+		Logger: reporter.Logger(),
+		Progress: func(done, total int, msg string) {
+			_ = reporter.UpdateProgress(done, total, msg)
+		},
+		// The duplicate collapse journals its undo pointers under this run.
+		OpID:   registry.ReporterOpID(reporter),
+		Writer: NewHeadHealWriter(store),
+		Items: func(ctx context.Context, n int, o HealItemsOptions, fn func(ctx context.Context, i int) error) error {
+			idx := make([]int, n)
+			for i := range idx {
+				idx[i] = i
+			}
+			return registry.RunItems(ctx, reporter, idx, func(ctx context.Context, i int) error { return fn(ctx, i) },
+				registry.RunItemsOptions{
+					Concurrency:    HealConcurrency,
+					ErrMode:        registry.ErrModeCollect,
+					ProgressOffset: o.ProgressOffset,
+					ProgressTotal:  o.ProgressTotal,
+					Label:          o.Label,
+				})
+		},
+	}
+	// A nil store must leave the reader nil (a typed-nil interface would hide it).
+	if store != nil {
+		env.Reader = store
+	}
+	return RunITunesHealVia(ctx, env, cp)
+}
+
+// RunITunesHealVia is the body of RunITunesHeal over the env its shell hands it.
 //
 // Disambiguation pipeline (each layer only runs if the previous one tied):
 //  1. DisambiguateMatch — author dir + album title words + track number in filename
@@ -862,7 +979,7 @@ func titleWords(s string) []string {
 //     AcoustID title+artists lookup → metadata match; rate-limited, API key required
 //  5. fuzzyFindByAlbum — full index path-content scan for tracks with zero filename
 //     matches; finds files in correctly-named book folders with different filenames
-func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Reporter, params json.RawMessage) error {
+func RunITunesHealVia(ctx context.Context, env HealEnv, cp ITunesHealParams) error {
 	cfg := config.AppConfig.ITunes
 	if cfg.LibraryReadPath == "" {
 		return fmt.Errorf("itunes.library_read_path not configured")
@@ -870,11 +987,6 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 	rootDir := config.AppConfig.RootDir
 	if rootDir == "" {
 		return fmt.Errorf("root_dir not configured")
-	}
-
-	var cp ITunesHealParams
-	if len(params) > 0 {
-		_ = json.Unmarshal(params, &cp)
 	}
 
 	// AcoustID client for layer 4 — nil when no key configured (layers 1–3 still work).
@@ -886,16 +998,11 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 	// Whisper result journal shared with the intro-transcribe ops, so a clip heal
 	// sends is restart-safe like theirs. nil (no journal) when the store has no
 	// raw KV surface; heal then runs without it.
-	var whisperJournal transcribe.ResultJournal
-	if kv, ok := any(store).(resultjournal.KVStore); ok {
-		if j, jerr := resultjournal.New(kv, resultjournal.KindWhisperIntro); jerr == nil {
-			whisperJournal = j
-		}
-	}
+	whisperJournal := env.Writer.HealWhisperJournal()
 
-	log := reporter.Logger()
-	// The duplicate collapse journals its undo pointers under this run.
-	opID := registry.ReporterOpID(reporter)
+	log := env.Logger
+	store := env.Reader
+	opID := env.OpID
 	log.Info("itunes-heal: parsing iTunes XML", "path", cfg.LibraryReadPath)
 
 	allTracks, err := ParseITunesXML(cfg.LibraryReadPath)
@@ -923,7 +1030,7 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 		missing = append(missing, t)
 	}
 
-	_ = reporter.UpdateProgress(0, 1, fmt.Sprintf(
+	env.Progress(0, 1, fmt.Sprintf(
 		"iTunes XML: %d tracks | %d good | %d missing | %d untranslatable — building file index…",
 		len(allTracks), alreadyGood, len(missing), untranslatable,
 	))
@@ -931,7 +1038,7 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 		"missing", len(missing), "already_good", alreadyGood, "untranslatable", untranslatable)
 
 	if len(missing) == 0 {
-		_ = reporter.UpdateProgress(1, 1, fmt.Sprintf(
+		env.Progress(1, 1, fmt.Sprintf(
 			"All %d iTunes tracks already present — nothing to heal", len(allTracks),
 		))
 		return nil
@@ -992,8 +1099,17 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 	)
 	var resolverFailures resolverFailureCounters
 
-	err = registry.RunItems(ctx, reporter, slice,
-		func(ctx context.Context, t iTunesTrack) error {
+	err = env.Items(ctx, len(slice), HealItemsOptions{
+		ProgressOffset: startIdx,
+		ProgressTotal:  len(missing),
+		Label: func(i, total int) string {
+			return fmt.Sprintf("Track %d/%d  healed=%d merged=%d ambig=%d missing=%d err=%d  resolver_fails(fpcalc=%d acoustid=%d whisper=%d)",
+				i+1, total, healed.Load(), merged.Load(), ambiguous.Load(), notFound.Load(), healErrs.Load(),
+				resolverFailures.fpcalcFailed.Load(), resolverFailures.acoustidLookupFailed.Load(), resolverFailures.whisperFailed.Load())
+		},
+	},
+		func(ctx context.Context, i int) error {
+			t := slice[i]
 			expected := TranslateITunesPath(t.Location, cfg.PathMappings)
 
 			if _, err := os.Stat(expected); err == nil {
@@ -1009,7 +1125,9 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 			// Layer 2: stored fingerprint comparison — no fpcalc.
 			if src == "" && len(candidates) > 0 && store != nil {
 				var n int
-				src, n = resolveAmbiguousByDB(ctx, store, opID, candidates)
+				src, n = resolveAmbiguousByDB(ctx, store, func(keepID string, dupIDs []string) error {
+					return env.Writer.CollapseHealDuplicates(opID, keepID, dupIDs)
+				}, candidates)
 				merged.Add(int64(n))
 			}
 
@@ -1051,7 +1169,7 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 				notFound.Add(1)
 				log.Debug("itunes-heal: not found on disk", "expected", expected)
 			default:
-				if err := healTrack(expected, src); err != nil {
+				if err := env.Writer.HealTrack(expected, src); err != nil {
 					healErrs.Add(1)
 					log.Warn("itunes-heal: reflink failed", "dst", expected, "src", src, "err", err)
 				} else {
@@ -1059,17 +1177,6 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 				}
 			}
 			return nil
-		},
-		registry.RunItemsOptions{
-			Concurrency:    16,
-			ErrMode:        registry.ErrModeCollect,
-			ProgressOffset: startIdx,
-			ProgressTotal:  len(missing),
-			Label: func(i, total int) string {
-				return fmt.Sprintf("Track %d/%d  healed=%d merged=%d ambig=%d missing=%d err=%d  resolver_fails(fpcalc=%d acoustid=%d whisper=%d)",
-					i+1, total, healed.Load(), merged.Load(), ambiguous.Load(), notFound.Load(), healErrs.Load(),
-					resolverFailures.fpcalcFailed.Load(), resolverFailures.acoustidLookupFailed.Load(), resolverFailures.whisperFailed.Load())
-			},
 		},
 	)
 	if err != nil {
@@ -1093,7 +1200,7 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 		"resolver_acoustid_below_floor", resolverFailures.acoustidBelowFloor.Load(),
 		"resolver_whisper_failed", resolverFailures.whisperFailed.Load(),
 	)
-	_ = reporter.UpdateProgress(len(missing), len(missing), fmt.Sprintf(
+	env.Progress(len(missing), len(missing), fmt.Sprintf(
 		"Done: healed=%d  merged=%d  ambig=%d  not_found=%d  err=%d",
 		result.Healed, result.Merged, result.Ambiguous, result.NotFound, result.Errors,
 	))

@@ -1,16 +1,19 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.6.2
+// version: 1.10.0
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-11-07
+// last-edited: 2026-11-15
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -18,6 +21,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
+
+// optimizeHelp is the def's Description, which the native kind carries as its Help.
+const optimizeHelp = "Chains cleanup-stale → fingerprint-rescan(missing) → dedup-acoustid-scan → backfill into one user-triggered maintenance pass."
 
 // optimizeDef returns the OperationDef for maintenance.library-optimize
 // (registered as library.optimize until 2026-09-25).
@@ -29,7 +35,7 @@ func (p *Plugin) optimizeDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Library optimize sweep",
-		Description:     "Chains cleanup-stale → fingerprint-rescan(missing) → dedup-acoustid-scan → backfill into one user-triggered maintenance pass.",
+		Description:     optimizeHelp,
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityNormal,
 		ConcurrencyKey:  "maintenance.library-optimize",
@@ -99,35 +105,229 @@ type childOp struct {
 }
 
 func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	opID := ctxOpID(ctx)
+	env := optimizeEnv{
+		t6g6Env: t6g6HeadEnv(reporter, true),
+		Enqueue: p.deps.EnqueueOp,
+		Wait:    p.deps.WaitForOp,
+	}
+	env.OpID = ctxOpID(ctx)
+	return optimizeCore(ctx, env)
+}
+
+// optimizeKind is rule R3's kind for the def above.
+const optimizeKind = tasks.Kind("books.maintenance.library-optimize")
+
+// optimizeEnv is what the core takes from its shell. The sweep reads and writes
+// no store itself: its children do, so it needs only a way to start one and wait
+// for it.
+type optimizeEnv struct {
+	t6g6Env
+	// Enqueue starts a child op by HEAD def ID and returns its run id.
+	Enqueue func(ctx context.Context, defID string, params any) (string, error)
+	// Deadline is this attempt's deadline (rc.Deadline); nil in a HEAD shell,
+	// which never yields. Together with the env's Checkpoint and Restore it lets a
+	// native sweep end the attempt between children and resume where it stopped.
+	Deadline func() time.Time
+	// Wait blocks until the child ends. relay is HEAD's progress relay, which
+	// feeds this op's watchdog from the child's observations; the native wait
+	// ignores it and ticks liveness on a timer instead (optimizeAwaitTicking).
+	Wait func(ctx context.Context, childID string, relay func(childop.Observation)) error
+}
+
+// The HEAD def IDs of the four children the sweep starts. The native sweep starts
+// each by t6g6KindFor(id) ("books." + id), so the kind a sibling row declares for
+// its def must be exactly that. The IDs are the literals the owning defs carry
+// (internal/plugins/maintenance cleanup.go and internal/plugins/acoustid
+// fingerprint_rescan.go, scan.go, backfill.go).
+const (
+	optimizeChildTempFileCleanup   = "maintenance.temp-file-cleanup"
+	optimizeChildFingerprintRescan = "acoustid.fingerprint-rescan"
+	optimizeChildAcoustIDScan      = "acoustid.scan"
+	optimizeChildAcoustIDBackfill  = "acoustid.backfill"
+)
+
+// optimizeTotalBudget is HEAD's Timeout for the whole sweep. The native kind's
+// attempt is capped at tasks.MaxTimeout (24h), so a sweep that outlives one
+// attempt yields between children and the resumed attempts share this budget.
+const optimizeTotalBudget = 36 * time.Hour
+
+// optimizeYieldMargin is how close to the attempt's deadline the sweep stops
+// waiting on the running child (or starting a new one) and yields instead (the
+// kernel's own YieldMargin).
+const optimizeYieldMargin = 5 * time.Minute
+
+// optimizeInFlight names the child a yielding (or crashing) attempt had started
+// and not seen end: the resumed attempt re-attaches to this run instead of
+// launching the child a second time.
+type optimizeInFlight struct {
+	Name  string `json:"name"`
+	RunID string `json:"run_id"`
+}
+
+// optimizeCheckpoint is what the sweep saves after every child boundary and at a
+// yield: when the sweep began (the 36h budget runs from it, across attempts),
+// the children already finished, by name (the child list depends on config flags
+// that can change between attempts, so an index would not be stable), and the
+// child in flight, if any.
+type optimizeCheckpoint struct {
+	StartedAt time.Time         `json:"started_at"`
+	Finished  []string          `json:"finished"`
+	Completed int               `json:"completed"`
+	Failed    int               `json:"failed"`
+	InFlight  *optimizeInFlight `json:"in_flight,omitempty"`
+	// Steps is the native progress counter (see optimizeCore): it only ever grows,
+	// so an attempt that re-attaches to a child and yields again still reports
+	// progress past where the one before stopped.
+	Steps int `json:"steps,omitempty"`
+}
+
+// optimizeNative is the native kind. The sweep writes nothing itself (its
+// children do), so it is declared ReadOnly. HEAD has no preview and a Preview
+// run would start live children, so a Preview run is refused.
+//
+// Resume is ResumeContinue, a deviation from rule R5's mapping of HEAD's
+// ResumeDrop, and unlike opchange the checkpoint IS read on restart (Restore, in
+// optimizeCore). The executor only honours ErrContinueInPlace for a
+// ResumeContinue kind, and the kind needs it to keep HEAD's 36h total under the
+// kernel's 24h attempt cap. The sweep checkpoints after the child it enqueues
+// and after every child that ends, so a crash resumes at the next child (or
+// re-attaches to the child in flight) rather than re-running the sweep. HEAD
+// dropped an interrupted sweep; a restart now resumes it, a behaviour change
+// recorded in seams.d/F5-11.md.
+func (p *Plugin) optimizeNative(_ t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	c := t6g6Common(optimizeKind, sched)
+	c.Title = "Library optimize sweep"
+	c.Help = optimizeHelp
+	c.Effects = tasks.ReadOnly()
+	c.Resume = tasks.ResumeContinue
+	c.Priority = tasks.PriorityNormal
+	c.ConcurrencyKey = tasks.Key("books.maintenance.library-optimize")
+	// The kernel refuses a Timeout over tasks.MaxTimeout (24h). HEAD's 36h is kept
+	// as optimizeTotalBudget across attempts: the sweep yields between children
+	// before the attempt's deadline (optimizeYieldMargin), even while a child is
+	// still running, and resumes.
+	c.Timeout = tasks.MaxTimeout
+	c.ProgressTimeout = optimizeProgressTimeout
+	return tasks.Task(optimizeKind, tasks.TaskSpec[struct{}, struct{}]{
+		Common: c,
+		Run: func(rc *tasks.RC, _ struct{}) (struct{}, error) {
+			if err := t6g6LiveOnly(rc, optimizeKind); err != nil {
+				return struct{}{}, err
+			}
+			env := optimizeEnv{
+				t6g6Env:  t6g6NativeEnv(rc),
+				Deadline: rc.Deadline,
+				Enqueue: func(_ context.Context, defID string, params any) (string, error) {
+					ref, err := rc.Enqueue(t6g6KindFor(defID), params)
+					return string(ref.ID), err
+				},
+				// rc.Await takes no context, so the wait runs in its own goroutine
+				// and ctx (the sweep's deadline minus the yield margin) ends the
+				// wait without ending the child. The goroutine returns when the
+				// attempt's own context ends, which a yield does. The kernel's
+				// await does NOT keep this run alive while it blocks (the rc.Await
+				// doc says it does; the executor's await never touches liveness),
+				// so the wait ticks liveness itself, see optimizeAwaitTicking.
+				Wait: func(ctx context.Context, childID string, _ func(childop.Observation)) error {
+					return optimizeAwaitTicking(ctx, func() (tasks.Outcome, error) {
+						return rc.Await(tasks.RunRef{ID: tasks.RunID(childID)})
+					}, rc.Progress().Tick, optimizeNewTicker, childID)
+				},
+			}
+			return struct{}{}, optimizeCore(rc.Context(), env)
+		},
+	})
+}
+
+// optimizeLivenessEvery is how often a native wait stamps the run's liveness: a
+// quarter of the watchdog's budget, so three ticks can be missed before the
+// run is stuck. The child's own watchdog covers a hung child.
+const optimizeLivenessEvery = optimizeProgressTimeout / 4
+
+// optimizeNewTicker is the clock the native wait ticks on; a test swaps in a
+// channel it drives by hand. stop releases the ticker.
+var optimizeNewTicker = func(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTicker(d)
+	return t.C, t.Stop
+}
+
+// optimizeAwaitTicking blocks until the child ends or ctx does, stamping the
+// run's liveness (tick) every optimizeLivenessEvery while it blocks and not
+// after it returns. await runs in its own goroutine because rc.Await takes no
+// context. The kernel's await does not touch liveness (core/internal/executor
+// dispatch.go await, against the doc on core/tasks rc.go Await), so a child that
+// outlives the sweep's 65-minute ProgressTimeout would otherwise get the sweep
+// stopped as a cancel, which is never resumed. The core fix is filed separately
+// (seams.d/F5-11.md, F5-18 blocker); this tick stays correct after it, and is to be removed once core's await stamps the parent itself (core PR #4675).
+func optimizeAwaitTicking(ctx context.Context, await func() (tasks.Outcome, error), tick func(), newTicker func(time.Duration) (<-chan time.Time, func()), childID string) error {
+	type awaited struct {
+		out tasks.Outcome
+		err error
+	}
+	done := make(chan awaited, 1)
+	go func() {
+		// A panic here is outside the run body's recover and would end the
+		// process: report it as the wait's error instead.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- awaited{err: fmt.Errorf("await child run %s panicked: %v", childID, r)}
+			}
+		}()
+		out, err := await()
+		done <- awaited{out, err}
+	}()
+	ticks, stop := newTicker(optimizeLivenessEvery)
+	defer stop()
+	tick()
+	for {
+		select {
+		case r := <-done:
+			if r.err != nil {
+				return r.err
+			}
+			if r.out.State != tasks.StateSucceeded {
+				return fmt.Errorf("child run %s ended %s: %s", childID, r.out.State, r.out.Err)
+			}
+			return nil
+		case <-ticks:
+			tick()
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+}
+
+// optimizeCore is the body of runOptimize. env.OpID names the run in the logs.
+func optimizeCore(ctx context.Context, env optimizeEnv) error {
+	opID := env.OpID
 	start := time.Now()
 
 	logger.InfoCtx(ctx, "maintenance.library-optimize: sweep started",
 		"operation_id", opID,
 	)
-	_ = reporter.Log(slog.LevelInfo, "Library optimize sweep started")
+	env.Log(slog.LevelInfo, "Library optimize sweep started")
 
 	children := []childOp{
 		{
 			name:   "temp-file-cleanup",
-			defID:  "maintenance.temp-file-cleanup",
+			defID:  optimizeChildTempFileCleanup,
 			params: nil,
 		},
 		{
 			name:  "fingerprint-rescan-missing",
-			defID: "acoustid.fingerprint-rescan",
+			defID: optimizeChildFingerprintRescan,
 			params: map[string]any{
 				"scope": "missing",
 			},
 		},
 		{
 			name:   "acoustid-scan",
-			defID:  "acoustid.scan",
+			defID:  optimizeChildAcoustIDScan,
 			params: nil,
 		},
 		{
 			name:   "acoustid-backfill",
-			defID:  "acoustid.backfill",
+			defID:  optimizeChildAcoustIDBackfill,
 			params: nil,
 		},
 	}
@@ -143,12 +343,12 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 	if !config.AppConfig.Maintenance.AcoustIDBackfill {
 		kept := make([]childOp, 0, len(children))
 		for _, ch := range children {
-			if ch.defID == "acoustid.backfill" {
+			if ch.defID == optimizeChildAcoustIDBackfill {
 				logger.InfoCtx(ctx, "maintenance.library-optimize: acoustid-backfill excluded",
 					"operation_id", opID,
 					"reason", "maintenance.acoustid_backfill=false",
 				)
-				_ = reporter.Log(slog.LevelInfo,
+				env.Log(slog.LevelInfo,
 					"Skipping acoustid-backfill: disabled by maintenance.acoustid_backfill")
 				continue
 			}
@@ -163,12 +363,12 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 	if !serverdecode.Allowed() {
 		kept := make([]childOp, 0, len(children))
 		for _, ch := range children {
-			if ch.defID == "acoustid.fingerprint-rescan" {
+			if ch.defID == optimizeChildFingerprintRescan {
 				logger.InfoCtx(ctx, "maintenance.library-optimize: fingerprint-rescan-missing excluded",
 					"operation_id", opID,
 					"reason", serverdecode.EnvVar+" is not true",
 				)
-				_ = reporter.Log(slog.LevelInfo,
+				env.Log(slog.LevelInfo,
 					"Skipping fingerprint-rescan-missing: in-process audio decoding is not allowed on this server")
 				continue
 			}
@@ -180,18 +380,136 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 	total := len(children)
 	completed := 0
 	failed := 0
+	finished := map[string]bool{}
+	var finishedOrder []string
 
-	prog := sdk.NewProgress(reporter, total)
-	prog.Start("Starting optimize sweep...")
+	// A resumed native attempt carries on from the children the earlier attempt
+	// finished, under the one 36h budget measured from the sweep's first start,
+	// and re-attaches to the child it left in flight.
+	var inFlight *optimizeInFlight
+	steps := 0
+	if env.Restore != nil {
+		var cp optimizeCheckpoint
+		ok, err := env.Restore(&cp)
+		if err != nil {
+			return fmt.Errorf("restore optimize checkpoint: %w", err)
+		}
+		if ok {
+			if cp.StartedAt.IsZero() {
+				// A zero start would silently restart the 36h budget.
+				return fmt.Errorf("restore optimize checkpoint: no start time recorded")
+			}
+			start = cp.StartedAt
+			completed, failed = cp.Completed, cp.Failed
+			for _, name := range cp.Finished {
+				finished[name] = true
+			}
+			finishedOrder = append(finishedOrder, cp.Finished...)
+			inFlight = cp.InFlight
+			steps = cp.Steps
+			// The child that was in flight is still running (or re-queued by the
+			// restart), so it is always waited on first, whether or not today's
+			// list still holds it: a flag change between attempts can drop it
+			// (ALLOW_SERVER_DECODE turned off) or put another child ahead of it
+			// (turned on), and either way no later child may start beside it.
+			// Re-attaching never enqueues, so it needs no def.
+			if inFlight != nil && !finished[inFlight.Name] {
+				kept := []childOp{}
+				head := childOp{name: inFlight.Name}
+				listed := false
+				for _, ch := range children {
+					if ch.name == inFlight.Name {
+						head, listed = ch, true
+						continue
+					}
+					kept = append(kept, ch)
+				}
+				children = append([]childOp{head}, kept...)
+				total = len(children)
+				if !listed {
+					env.Log(slog.LevelInfo, fmt.Sprintf("Optimize sweep: child %s is no longer in the list; waiting on its run %s first", inFlight.Name, inFlight.RunID))
+				}
+			}
+			env.Log(slog.LevelInfo, fmt.Sprintf("Resuming optimize sweep: %d/%d children already finished", len(cp.Finished), total))
+		}
+	}
+	native := env.Deadline != nil
+	if steps < 2*len(finishedOrder) {
+		steps = 2 * len(finishedOrder) // a checkpoint from before Steps existed
+	}
+	finishedThisAttempt := 0
+	budgetErr := func() error {
+		return fmt.Errorf("optimize sweep exceeded its %s budget across attempts", optimizeTotalBudget)
+	}
+	// save records the sweep's position (native only: HEAD has no Checkpoint).
+	save := func(fl *optimizeInFlight) error {
+		if env.Checkpoint == nil {
+			return nil
+		}
+		if err := env.Checkpoint(optimizeCheckpoint{StartedAt: start, Finished: finishedOrder, Completed: completed, Failed: failed, InFlight: fl, Steps: steps}); err != nil {
+			return fmt.Errorf("checkpoint optimize sweep: %w", err)
+		}
+		return nil
+	}
+
+	prog := t6g6NewProgress(env.t6g6Env, total)
+	// Native progress is a count of sweep steps: two per child (it started, it
+	// ended), plus one for every attempt that re-attaches to a child still in
+	// flight, and it is persisted in the checkpoint. The kernel fails a yield
+	// whose attempt reported no progress past its starting point, and a
+	// re-attached child that is still running at the next deadline has finished
+	// nothing, so the re-attach itself must count. HEAD keeps its per-child
+	// progress.
+	report := func(msg string, advance int) {
+		steps += advance
+		t := 2 * total
+		if steps > t {
+			t = steps
+		}
+		env.Progress(steps, t, msg)
+	}
+	if native {
+		report("Starting optimize sweep...", 0)
+	} else {
+		prog.Start("Starting optimize sweep...")
+	}
 
 	for i, ch := range children {
-		if reporter.IsCanceled() {
+		if finished[ch.name] {
+			msg := fmt.Sprintf("Child %d/%d: %s already finished", i+1, total, ch.name)
+			if native {
+				report(msg, 0)
+			} else {
+				prog.StepN(i+1, msg)
+			}
+			continue
+		}
+		// HEAD's 36h total is checked at every child boundary: no child starts
+		// past it.
+		if time.Since(start) >= optimizeTotalBudget {
+			return budgetErr()
+		}
+		reattach := inFlight != nil && inFlight.Name == ch.name
+		// Yield before starting a child when the attempt is about to run out. At
+		// least one child must have finished in this attempt, or the resumed
+		// attempt would make no progress and yield again at once. A child that
+		// is already running is handled at its wait, below.
+		if !reattach && env.Deadline != nil && env.Checkpoint != nil && finishedThisAttempt > 0 {
+			if dl := env.Deadline(); !dl.IsZero() && time.Until(dl) < optimizeYieldMargin {
+				if err := save(nil); err != nil {
+					return err
+				}
+				env.Log(slog.LevelInfo, fmt.Sprintf("Optimize sweep yielding before child %d/%d: attempt deadline near", i+1, total))
+				return tasks.ErrContinueInPlace
+			}
+		}
+		if env.Canceled() {
 			logger.InfoCtx(ctx, "maintenance.library-optimize: sweep canceled",
 				"operation_id", opID,
 				"completed", completed,
 				"failed", failed,
 			)
-			_ = reporter.Log(slog.LevelInfo,
+			env.Log(slog.LevelInfo,
 				fmt.Sprintf("Optimize sweep canceled after %d/%d children", i, total))
 			return fmt.Errorf("canceled")
 		}
@@ -201,7 +519,11 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		default:
 		}
 
-		prog.StepN(i, fmt.Sprintf("Running child op %d/%d: %s", i+1, total, ch.name))
+		if msg := fmt.Sprintf("Running child op %d/%d: %s", i+1, total, ch.name); native {
+			report(msg, 1)
+		} else {
+			prog.StepN(i, msg)
+		}
 
 		childStart := time.Now()
 		logger.InfoCtx(ctx, "maintenance.library-optimize: child started",
@@ -211,22 +533,51 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 			"child_index", i+1,
 			"child_total", total,
 		)
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Starting child %d/%d: %s", i+1, total, ch.name))
+		env.Log(slog.LevelInfo, fmt.Sprintf("Starting child %d/%d: %s", i+1, total, ch.name))
 
-		childID, err := p.deps.EnqueueOp(ctx, ch.defID, ch.params)
-		if err != nil {
-			elapsed := time.Since(childStart)
-			logger.WarnCtx(ctx, "maintenance.library-optimize: child enqueue failed",
-				"operation_id", opID,
-				"child", ch.name,
-				"def_id", ch.defID,
-				"elapsed_ms", elapsed.Milliseconds(),
-				"error", err,
-			)
-			_ = reporter.Log(slog.LevelWarn,
-				fmt.Sprintf("Child %s enqueue failed (skipping): %v", ch.name, err))
-			failed++
-			continue
+		var childID string
+		if reattach {
+			// The earlier attempt started this child and did not see it end:
+			// wait on that run (a child that finished in between answers at
+			// once) and never launch it twice.
+			childID = inFlight.RunID
+			inFlight = nil
+			env.Log(slog.LevelInfo, fmt.Sprintf("Re-attaching to child %d/%d: %s (run %s)", i+1, total, ch.name, childID))
+			// Checkpoint at once: a re-attach attempt that waits out its whole
+			// span would otherwise be struck as uncheckpointed.
+			if err := save(&optimizeInFlight{Name: ch.name, RunID: childID}); err != nil {
+				return err
+			}
+		} else {
+			var err error
+			childID, err = env.Enqueue(ctx, ch.defID, ch.params)
+			if err != nil {
+				elapsed := time.Since(childStart)
+				logger.WarnCtx(ctx, "maintenance.library-optimize: child enqueue failed",
+					"operation_id", opID,
+					"child", ch.name,
+					"def_id", ch.defID,
+					"elapsed_ms", elapsed.Milliseconds(),
+					"error", err,
+				)
+				env.Log(slog.LevelWarn,
+					fmt.Sprintf("Child %s enqueue failed (skipping): %v", ch.name, err))
+				failed++
+				finished[ch.name] = true
+				finishedOrder = append(finishedOrder, ch.name)
+				finishedThisAttempt++
+				if native {
+					report(fmt.Sprintf("Child %d/%d: %s could not be started", i+1, total, ch.name), 1)
+				}
+				if err := save(nil); err != nil {
+					return err
+				}
+				continue
+			}
+			// Record the run id before waiting: a crash from here re-attaches.
+			if err := save(&optimizeInFlight{Name: ch.name, RunID: childID}); err != nil {
+				return err
+			}
 		}
 
 		logger.InfoCtx(ctx, "maintenance.library-optimize: child enqueued",
@@ -237,7 +588,39 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 
 		// Wait for the child to reach a terminal state, relaying its progress so
 		// this op's watchdog sees the child working.
-		if waitErr := p.deps.WaitForOp(ctx, childID, relayChildProgress(prog, i, total, ch.name)); waitErr != nil {
+		// A native wait ends at the earlier of the attempt's deadline minus the
+		// yield margin and the end of the 36h budget, so a child still running
+		// then is yielded on instead of timing the whole attempt out.
+		waitCtx, cancelWait := ctx, context.CancelFunc(func() {})
+		var budgetAt time.Time
+		if env.Deadline != nil && env.Checkpoint != nil {
+			budgetAt = start.Add(optimizeTotalBudget)
+			until := budgetAt
+			if dl := env.Deadline(); !dl.IsZero() && dl.Add(-optimizeYieldMargin).Before(until) {
+				until = dl.Add(-optimizeYieldMargin)
+			}
+			waitCtx, cancelWait = context.WithDeadline(ctx, until)
+		}
+		waitErr := env.Wait(waitCtx, childID, relayChildProgress(prog, i, total, ch.name))
+		waitExpired := waitErr != nil && ctx.Err() == nil &&
+			errors.Is(waitCtx.Err(), context.DeadlineExceeded) && errors.Is(waitErr, context.DeadlineExceeded)
+		cancelWait()
+		if waitErr != nil && env.Deadline != nil && ctx.Err() != nil {
+			// The attempt itself is ending (cancel or timeout), not the child
+			// failing: the child stays in flight in the last checkpoint.
+			return context.Cause(ctx)
+		}
+		if waitExpired {
+			if !time.Now().Before(budgetAt) {
+				return budgetErr()
+			}
+			if err := save(&optimizeInFlight{Name: ch.name, RunID: childID}); err != nil {
+				return err
+			}
+			env.Log(slog.LevelInfo, fmt.Sprintf("Optimize sweep yielding with child %d/%d (%s) still running: attempt deadline near", i+1, total, ch.name))
+			return tasks.ErrContinueInPlace
+		}
+		if waitErr != nil {
 			elapsed := time.Since(childStart)
 			logger.WarnCtx(ctx, "maintenance.library-optimize: child failed or timed out",
 				"operation_id", opID,
@@ -246,9 +629,18 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 				"elapsed_ms", elapsed.Milliseconds(),
 				"error", waitErr,
 			)
-			_ = reporter.Log(slog.LevelWarn,
+			env.Log(slog.LevelWarn,
 				fmt.Sprintf("Child %s failed (continuing): %v", ch.name, waitErr))
 			failed++
+			finished[ch.name] = true
+			finishedOrder = append(finishedOrder, ch.name)
+			finishedThisAttempt++
+			if native { // native only: HEAD reports nothing after a child ends
+				report(fmt.Sprintf("Child %d/%d: %s failed", i+1, total, ch.name), 1)
+			}
+			if err := save(nil); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -259,9 +651,18 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 			"child_id", childID,
 			"elapsed_ms", elapsed.Milliseconds(),
 		)
-		_ = reporter.Log(slog.LevelInfo,
+		env.Log(slog.LevelInfo,
 			fmt.Sprintf("Child %s completed in %s", ch.name, elapsed.Round(time.Second)))
 		completed++
+		finished[ch.name] = true
+		finishedOrder = append(finishedOrder, ch.name)
+		finishedThisAttempt++
+		if native { // native only: HEAD reports nothing after a child ends
+			report(fmt.Sprintf("Child %d/%d: %s done", i+1, total, ch.name), 1)
+		}
+		if err := save(nil); err != nil {
+			return err
+		}
 	}
 
 	totalElapsed := time.Since(start)
@@ -269,14 +670,19 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 		"operation_id", opID,
 		"children_completed", completed,
 		"children_failed", failed,
-		"children_total", total,
+		"children_total", max(total, completed+failed),
 		"elapsed_ms", totalElapsed.Milliseconds(),
 	)
-	prog.Done(fmt.Sprintf("Optimize sweep complete in %s — %d/%d children succeeded",
-		totalElapsed.Round(time.Second), completed, total))
-	_ = reporter.Log(slog.LevelInfo,
+	doneMsg := fmt.Sprintf("Optimize sweep complete in %s — %d/%d children succeeded",
+		totalElapsed.Round(time.Second), completed, max(total, completed+failed))
+	if native {
+		report(doneMsg, max(0, 2*total-steps))
+	} else {
+		prog.Done(doneMsg)
+	}
+	env.Log(slog.LevelInfo,
 		fmt.Sprintf("Library optimize sweep complete: %d/%d children succeeded, %d failed (elapsed: %s)",
-			completed, total, failed, totalElapsed.Round(time.Second)))
+			completed, max(total, completed+failed), failed, totalElapsed.Round(time.Second)))
 
 	return nil
 }
