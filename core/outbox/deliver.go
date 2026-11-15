@@ -1,7 +1,7 @@
 // file: core/outbox/deliver.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2a6ad2a4-6bc1-4f3b-b7f1-0ee9e2bb7d3f
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package outbox
 
@@ -29,6 +29,10 @@ import (
 // settle, so a consumer that fails everything cannot grow its try record
 // without bound.
 const maxTryUnordered = 64
+
+// ackTimeout bounds the commit of an ack for a message whose handler already
+// returned nil, which runs on a context detached from the run's cancellation.
+const ackTimeout = 5 * time.Second
 
 // outcome is what became of one delivery step.
 type outcome uint8
@@ -556,10 +560,20 @@ func (r *relay) deliverOne(ctx context.Context, reg *consumerReg, ti *topicInfo,
 // The batch reads the pair's cursor with GetForUpdate and rewrites it, so a
 // writer that got there first (a zombie run, an operator's purge) fails this
 // commit instead of being overwritten.
+//
+// The consumer already took the message over, so its effect is done and the ack
+// only records that fact. A cancel of the run that lands between the handler's
+// return and this commit must not discard it: the ack commits on a context that
+// outlives the run's cancellation, bounded by ackTimeout so a shutdown cannot
+// hang on it. The fence is checked when the pass's write begins, not here, and
+// the cursor guard above still fails the commit of a zombie run, so committing
+// after a cancel can only record a delivery that happened.
 func (r *relay) settleAck(ctx context.Context, reg *consumerReg, ti *topicInfo, p outboxstore.Pair, row outboxstore.MsgRow, res execResult) outcome {
 	o := r.o
 	out := outHalt
-	err := storage.RetryOnConflict(ctx, settleAttempts, func(ctx context.Context) (err error) {
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ackTimeout)
+	defer cancel()
+	err := storage.RetryOnConflict(actx, settleAttempts, func(ctx context.Context) (err error) {
 		b := o.store.OpenBatch()
 		defer closeBatch(b, &err)
 		st, err := o.store.LoadPair(ctx, b, p)
@@ -588,6 +602,12 @@ func (r *relay) settleAck(ctx context.Context, reg *consumerReg, ti *topicInfo, 
 		return nil
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			// fault stays quiet once the run is stopping, which would leave a
+			// lost ack unrecorded: say that the message will be delivered again.
+			r.log.Warn("outbox: ack not committed at shutdown; the message is delivered again",
+				slog.String("consumer", reg.name), slog.String("topic", ti.name), slog.Uint64("seq", row.Seq), slog.Any("err", err))
+		}
 		r.fault("ack of "+reg.name, err)
 		return outHalt
 	}

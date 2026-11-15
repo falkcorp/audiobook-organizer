@@ -1,7 +1,7 @@
 // file: core/outbox/relay_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9a4d6e13-0b57-4c82-8e1f-72c5d3a0b6f4
-// last-edited: 2026-11-12
+// last-edited: 2026-11-14
 
 package outbox_test
 
@@ -106,6 +106,80 @@ func TestOutbox_RelayRestartsAfterCancel(t *testing.T) {
 
 	ctx := t.Context()
 	go r.ob.RunNudger(ctx)
+	r.stage("wayne-manor", Dispatch{Villain: "Penguin"})
+	eventually(t, "a new relay to deliver", func() bool { return rc.count() == 2 })
+	stays(t, "exactly two deliveries", 150*time.Millisecond, func() bool { return rc.count() == 2 })
+	if got := rc.villains(); got[0] != "Joker" || got[1] != "Penguin" {
+		t.Fatalf("delivered %v", got)
+	}
+}
+
+// A cancel that lands after a handler returned nil and before its ack commits
+// must not lose the ack: the message was delivered, so the cursor advances on a
+// context that outlives the run. The hook cancels the run from the window
+// itself and holds the relay there until the run's context is done, so the test
+// reproduces the cancel-before-ack ordering on every run instead of racing it.
+func TestOutbox_AckSurvivesCancelBetweenHandlerAndCommit(t *testing.T) {
+	var self atomic.Pointer[rig]
+	var handlerCtx atomic.Pointer[context.Context]
+	var acked atomic.Int64
+	var fired atomic.Bool
+	cancelErr := make(chan error, 4)
+	rc := &recorder{}
+
+	hooks := &outbox.TestHooks{
+		AfterHandler: func(consumer string, _ uint64) {
+			if consumer != consumerN || !fired.CompareAndSwap(false, true) {
+				return
+			}
+			rg := self.Load()
+			runs := rg.runsOf(outbox.RelayKind)
+			if len(runs) != 1 {
+				cancelErr <- fmt.Errorf("%d relay runs, want 1", len(runs))
+				return
+			}
+			go func() { cancelErr <- rg.x.CancelAs(context.Background(), runs[0].ID, systemActor) }()
+			select {
+			case <-(*handlerCtx.Load()).Done():
+			case <-time.After(10 * time.Second):
+				cancelErr <- fmt.Errorf("the run's context was not canceled")
+			}
+		},
+		AfterAckCommit: func(consumer string, _ uint64) {
+			if consumer == consumerN {
+				acked.Add(1)
+			}
+		},
+	}
+	r := newRig(t, rigOpts{hooks: hooks, noRelay: true, register: func(testing.TB, *rig) []registration {
+		h := func(ctx context.Context, m outbox.Message[Dispatch]) error {
+			handlerCtx.Store(&ctx)
+			return rc.handler(consumerN)(ctx, m)
+		}
+		return []registration{{owner: "core", hs: []outbox.Handler{outbox.Consume(notice(), consumerN, h)}}}
+	}})
+	self.Store(r)
+
+	r.stage("wayne-manor", Dispatch{Villain: "Joker"})
+	// Not startRelay: it waits for Running, and this run is canceled from inside
+	// its first delivery, so it can be over before that poll sees it.
+	ref, err := r.x.Start(context.Background(), outbox.RelayKind, tasks.StartRequest{Mode: tasks.ModeRequestLive})
+	must(t, err)
+	r.waitRun(ref.ID, tasks.StateCanceled)
+	eventually(t, "the relay to stop", func() bool { return !r.ob.Running() })
+	for drained := false; !drained; {
+		select {
+		case err := <-cancelErr:
+			must(t, err)
+		default:
+			drained = true
+		}
+	}
+	if got := acked.Load(); got != 1 {
+		t.Fatalf("%d acks committed for the Joker after a cancel between handler and ack, want 1", got)
+	}
+
+	r.startRelay()
 	r.stage("wayne-manor", Dispatch{Villain: "Penguin"})
 	eventually(t, "a new relay to deliver", func() bool { return rc.count() == 2 })
 	stays(t, "exactly two deliveries", 150*time.Millisecond, func() bool { return rc.count() == 2 })
