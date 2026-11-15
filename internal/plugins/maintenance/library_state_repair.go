@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.1.4
+// version: 1.4.0
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -19,7 +18,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // --- maintenance.repair-library-state ---
@@ -174,9 +175,83 @@ type libraryStateRepairResult struct {
 	Changes           []libraryStateRepairChange `json:"changes"`
 }
 
-type libraryStateRepairStore interface {
+// libraryStateRepairReader pages the books the scope reads.
+type libraryStateRepairReader interface {
 	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}
+
+// libraryStateRepairModifier writes one book's library_state. It is a narrow
+// method and not ModifyBook so the write can be stamped for what it is: the
+// only column it sets is LibraryState, which trips none of ModifyBook's
+// identity-change side effects (the metadata-cache stale stamp), so the method
+// writes the books resource alone and this kind need not serialize against the
+// metadata-cache writers.
+type libraryStateRepairModifier interface {
+	// SetLibraryStateOrganized moves the book from state `from` to organized,
+	// re-asserting `from` and the organized-file hash on the row re-read under the
+	// write lock. found is false when the row does not exist; applied is false
+	// when the row's state or hash no longer qualifies (nothing is written).
+	SetLibraryStateOrganized(id, from string) (found, applied bool, err error)
+}
+
+// setLibraryStateOrganized is the guarded write behind SetLibraryStateOrganized,
+// over any ModifyBook: the head writer passes the store's, a test passes its fake.
+//
+// The state is re-asserted INSIDE the ModifyBook closure, on the row re-read
+// under the write lock, because the scope snapshot is minutes old by the time
+// the last row is written and this op declares no ConcurrencyKey against the
+// scan or organize paths that also write this column. A row whose state moved
+// since the scan is reported as changed_since_scan and NOT clobbered.
+//
+// OrganizedFileHash is re-checked too: it is the evidence the whole repair
+// rests on, and a row that lost it between scan and write no longer qualifies.
+func setLibraryStateOrganized(modify func(id string, fn func(*database.Book) error) (*database.Book, error), id, from string) (found, applied bool, err error) {
+	row, err := modify(id, func(cur *database.Book) error {
+		curState := ""
+		if cur.LibraryState != nil {
+			curState = *cur.LibraryState
+		}
+		if curState != from {
+			return database.ErrSkipBookWrite
+		}
+		if cur.OrganizedFileHash == nil || strings.TrimSpace(*cur.OrganizedFileHash) == "" {
+			return database.ErrSkipBookWrite
+		}
+		organized := libStateOrganized
+		cur.LibraryState = &organized
+		applied = true
+		return nil
+	})
+	if err != nil {
+		return false, false, err
+	}
+	// ModifyBook returns (nil, nil) for a missing row, and (row, nil) for
+	// ErrSkipBookWrite, which the applied flag tells apart from a write.
+	return row != nil, applied, nil
+}
+
+// libraryStateRepairKind is the native kind of maintenance.repair-library-state (F5-10).
+const libraryStateRepairKind tasks.Kind = "books.maintenance.repair-library-state"
+
+// libraryStateRepairInput is the native kind's params: HEAD's
+// libraryStateRepairParams without the mode keys (dry_run, dryRun), which the
+// start request carries.
+type libraryStateRepairInput struct {
+	IncludeSuspicious bool     `json:"include_suspicious"`
+	OnlyPrimary       *bool    `json:"only_primary"`
+	BookIDs           []string `json:"book_ids"`
+}
+
+// params is HEAD's params value for the shared classifier (mode keys unset).
+func (in libraryStateRepairInput) params() libraryStateRepairParams {
+	return libraryStateRepairParams{IncludeSuspicious: in.IncludeSuspicious, OnlyPrimary: in.OnlyPrimary, BookIDs: in.BookIDs}
+}
+
+// libraryStateRepairEnv is what runRepairLibraryStateCore needs from its
+// engine: the base, the worker pool and the root directory's reader (Store).
+type libraryStateRepairEnv struct {
+	t6g5Base
+	Items t6g5ItemsFunc
 }
 
 func (p *Plugin) repairLibraryStateDef() sdk.OperationDef {
@@ -207,6 +282,8 @@ func (p *Plugin) repairLibraryStateDef() sdk.OperationDef {
 	}
 }
 
+// runRepairLibraryState is the v2 shell: HEAD's strict params decode and mode
+// resolution, then the shared core.
 func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	var params libraryStateRepairParams
 	if err := decodeStrictParams(rawParams, &params); err != nil {
@@ -215,35 +292,70 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 	if _, err := opmode.ResolveDryRun("maintenance.repair-library-state", params.DryRun, params.DryRunCamel); err != nil {
 		return err
 	}
+	env := libraryStateRepairEnv{
+		t6g5Base: p.t6g5HeadBase(ctx, reporter, !params.dryRun()),
+		Items:    t6g5HeadItems(reporter),
+	}
+	in := libraryStateRepairInput{IncludeSuspicious: params.IncludeSuspicious, OnlyPrimary: params.OnlyPrimary, BookIDs: params.BookIDs}
+	res, err := runRepairLibraryStateCore(ctx, in, env)
+	if err != nil {
+		return err
+	}
+	return p.finishLibraryStateRepair(reporter, &res)
+}
 
-	rootDir := strings.TrimRight(p.deps.RootDir(), "/")
+// libraryStateRepairKind builds the native kind. Writes: HEAD's declared
+// books resource; the preview is HEAD's dry run.
+func (p *Plugin) libraryStateRepairKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)))
+	return tasks.Task(libraryStateRepairKind, tasks.TaskSpec[json.RawMessage, libraryStateRepairResult]{
+		Common: t6g5Common(p.repairLibraryStateDef(), libraryStateRepairKind, eff, sched),
+		Run: func(rc *tasks.RC, raw json.RawMessage) (libraryStateRepairResult, error) {
+			var in libraryStateRepairInput
+			if err := t6g5DecodeStrictParams(libraryStateRepairKind, raw, &in, t6g5ModeKeys...); err != nil {
+				return libraryStateRepairResult{}, err
+			}
+			base, err := t6g5NativeBase(libraryStateRepairKind, rc, deps, true)
+			if err != nil {
+				return libraryStateRepairResult{}, err
+			}
+			env := libraryStateRepairEnv{t6g5Base: base, Items: t6g5NativeItems(rc)}
+			res, err := runRepairLibraryStateCore(rc.Context(), in, env)
+			if err != nil {
+				return libraryStateRepairResult{}, err
+			}
+			env.Progress(res.BooksScanned, max(res.BooksScanned, 1), libraryStateRepairMessage(&res))
+			return res, nil
+		},
+	})
+}
+
+// runRepairLibraryStateCore is the shared body of both shells.
+func runRepairLibraryStateCore(ctx context.Context, in libraryStateRepairInput, env libraryStateRepairEnv) (libraryStateRepairResult, error) {
+	params := in.params()
+	rootDir := strings.TrimRight(env.Store.RootDir(), "/")
 	if strings.TrimSpace(rootDir) == "" {
 		// Fail closed. With an empty root every path fails the containment test
 		// and the op would report a clean "nothing to do" run, which is the
 		// worst possible answer: indistinguishable from "already repaired".
-		return fmt.Errorf("repair-library-state: RootDir is empty; refusing to run")
+		return libraryStateRepairResult{}, fmt.Errorf("repair-library-state: RootDir is empty; refusing to run")
 	}
 	itunesRoots, itErr := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
 	if itErr != nil {
-		return fmt.Errorf("repair-library-state: resolve iTunes roots: %w", itErr)
+		return libraryStateRepairResult{}, fmt.Errorf("repair-library-state: resolve iTunes roots: %w", itErr)
 	}
 
-	store, ok := p.deps.OpsStore().(libraryStateRepairStore)
-	if !ok {
-		return fmt.Errorf("repair-library-state: store does not implement the required methods")
-	}
-
-	res := &libraryStateRepairResult{
-		DryRun:            params.dryRun(),
+	res := libraryStateRepairResult{
+		DryRun:            !env.Live,
 		IncludeSuspicious: params.IncludeSuspicious,
 		OnlyPrimary:       params.onlyPrimary(),
 		RootDir:           rootDir,
 		Outcomes:          map[string]int{},
 	}
 
-	scoped, err := libraryStateRepairScope(ctx, store, params, rootDir, itunesRoots, res)
+	scoped, err := libraryStateRepairScope(ctx, env.Store, params, rootDir, itunesRoots, &res)
 	if err != nil {
-		return err
+		return libraryStateRepairResult{}, err
 	}
 
 	if res.DryRun {
@@ -252,35 +364,35 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 			res.Outcomes[lsrWouldRepair]++
 		}
 		res.Changes = append(res.Changes, scoped...)
-		return p.finishLibraryStateRepair(reporter, res)
+		return res, nil
 	}
 
 	applied := make([]libraryStateRepairChange, len(scoped))
 	copy(applied, scoped)
 	var mu sync.Mutex
-	runErr := registry.RunItems(ctx, reporter, applied, func(_ context.Context, ch libraryStateRepairChange) error {
-		out := applyLibraryStateRepair(store, ch)
+	// Disjoint by construction: scoped holds one entry per book ID, so no two
+	// workers ever write the same row.
+	runErr := env.Items(ctx, len(applied), t6g5ItemsOpts{
+		// Explicit: HEAD ran this with Concurrency: runtime.NumCPU() (rule R4).
+		Pool: t6g5CPUPool(),
+		// Label runs INSIDE each worker goroutine, so anything it reads needs
+		// the same lock as the callback body. It reads only its two arguments
+		// here, which is why there is no shared counter to guard.
+		Label: func(i, total int) string {
+			return fmt.Sprintf("repairing library_state %d/%d", i, total)
+		},
+	}, func(_ context.Context, i int) error {
+		out := applyLibraryStateRepair(env.Writer, applied[i])
 		mu.Lock()
 		res.Outcomes[out.Outcome]++
 		res.Changes = append(res.Changes, out)
 		mu.Unlock()
 		return nil
-	}, registry.RunItemsOptions{
-		// Explicit: RunItemsOptions.Concurrency defaults to zero and run_items.go
-		// clamps anything below 1 up to 1, so an omitted field is a sequential
-		// loop wearing a worker-pool API.
-		Concurrency: runtime.NumCPU(),
-		// Label runs INSIDE each worker goroutine (run_items.go), so anything it
-		// reads needs the same lock as the callback body. It reads only its two
-		// arguments here, which is why there is no shared counter to guard.
-		Label: func(i, total int) string {
-			return fmt.Sprintf("repairing library_state %d/%d", i, total)
-		},
 	})
 	if runErr != nil {
-		return runErr
+		return libraryStateRepairResult{}, runErr
 	}
-	return p.finishLibraryStateRepair(reporter, res)
+	return res, nil
 }
 
 // libraryStateRepairScope pages every live book and classifies it. Rows that
@@ -290,7 +402,7 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 // GetAllBooksCoreComplete, not the memdb-served twin, because this op writes.
 func libraryStateRepairScope(
 	ctx context.Context,
-	store libraryStateRepairStore,
+	store libraryStateRepairReader,
 	params libraryStateRepairParams,
 	rootDir string,
 	itunesRoots []string,
@@ -386,44 +498,17 @@ func classifyLibraryStateRepair(
 	return ch, false
 }
 
-// applyLibraryStateRepair writes one row.
-//
-// The state is re-asserted INSIDE the ModifyBook closure, on the row re-read
-// under the write lock, because the scope snapshot is minutes old by the time
-// the last row is written and this op declares no ConcurrencyKey against the
-// scan or organize paths that also write this column. A row whose state moved
-// since the scan is reported as changed_since_scan and NOT clobbered.
-//
-// OrganizedFileHash is re-checked too: it is the evidence the whole repair
-// rests on, and a row that lost it between scan and write no longer qualifies.
-func applyLibraryStateRepair(store libraryStateRepairStore, ch libraryStateRepairChange) libraryStateRepairChange {
-	wrote := false
-	row, err := store.ModifyBook(ch.BookID, func(cur *database.Book) error {
-		curState := ""
-		if cur.LibraryState != nil {
-			curState = *cur.LibraryState
-		}
-		if curState != ch.OldState {
-			return database.ErrSkipBookWrite
-		}
-		if cur.OrganizedFileHash == nil || strings.TrimSpace(*cur.OrganizedFileHash) == "" {
-			return database.ErrSkipBookWrite
-		}
-		organized := libStateOrganized
-		cur.LibraryState = &organized
-		wrote = true
-		return nil
-	})
+// applyLibraryStateRepair writes one row through the writer's guarded
+// SetLibraryStateOrganized (see setLibraryStateOrganized for the re-assertions).
+func applyLibraryStateRepair(store libraryStateRepairModifier, ch libraryStateRepairChange) libraryStateRepairChange {
+	found, applied, err := store.SetLibraryStateOrganized(ch.BookID, ch.OldState)
 	switch {
 	case err != nil:
 		ch.Outcome = lsrWriteFailed
 		ch.Detail = err.Error()
-	case row == nil:
-		// ModifyBook returns (nil, nil) for a missing row.
+	case !found:
 		ch.Outcome = lsrRowGone
-	case !wrote:
-		// ErrSkipBookWrite returns (row, nil), which is indistinguishable from a
-		// successful write by the return value alone — hence the explicit flag.
+	case !applied:
 		ch.Outcome = lsrChangedSinceScan
 	default:
 		ch.Outcome = lsrRepaired
@@ -431,16 +516,20 @@ func applyLibraryStateRepair(store libraryStateRepairStore, ch libraryStateRepai
 	return ch
 }
 
-func (p *Plugin) finishLibraryStateRepair(reporter sdk.Reporter, res *libraryStateRepairResult) error {
+// libraryStateRepairMessage is the run's closing progress line.
+func libraryStateRepairMessage(res *libraryStateRepairResult) string {
 	verb := "would repair"
 	if !res.DryRun {
 		verb = "repaired"
 	}
 	n := res.Outcomes[lsrRepaired] + res.Outcomes[lsrWouldRepair]
-	msg := fmt.Sprintf("repair-library-state (dry_run=%t, include_suspicious=%t, only_primary=%t): scanned=%d %s=%d outcomes=%v",
+	return fmt.Sprintf("repair-library-state (dry_run=%t, include_suspicious=%t, only_primary=%t): scanned=%d %s=%d outcomes=%v",
 		res.DryRun, res.IncludeSuspicious, res.OnlyPrimary, res.BooksScanned, verb, n, res.Outcomes)
+}
+
+func (p *Plugin) finishLibraryStateRepair(reporter sdk.Reporter, res *libraryStateRepairResult) error {
 	if err := registry.ReporterSetResult(reporter, res); err != nil {
 		reporter.Logger().Debug("repair-library-state: result not persisted", "err", err)
 	}
-	return reporter.UpdateProgress(res.BooksScanned, max(res.BooksScanned, 1), msg)
+	return reporter.UpdateProgress(res.BooksScanned, max(res.BooksScanned, 1), libraryStateRepairMessage(res))
 }
