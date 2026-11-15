@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.12
+// version: 1.0.13
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-15
 
@@ -81,14 +81,12 @@ func t6g4Res(resources ...ops.Resource) []tasks.Resource {
 // independently, so a wrong value here fails a test.
 const t6g4ResProvenance = ops.ResFileProvenance
 
-// t6g4IntroTranscribeWrites is transcribe-book-intros' declared write set. The
-// whisper result journal it also writes (OpenWhisperJournal) has no pkg/ops
-// constant on this branch; at stacking the coordinator adds ops.ResAIJournal
-// here (this one line) and to the spy map's OpenWhisperJournal entry (the other
-// one line), and the Effects, the expected table and the parity case follow.
+// t6g4IntroTranscribeWrites is transcribe-book-intros' declared write set.
+// ResAIJournal is the whisper result journal it also writes (OpenWhisperJournal).
 // ResFiles is the clips it cuts into the clip cache (bytes on disk, written
-// outside the writer).
-var t6g4IntroTranscribeWrites = []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResFiles}
+// outside the writer). The Effects, the expected table and the parity case
+// follow this variable; the spy map names the journal's resource itself.
+var t6g4IntroTranscribeWrites = []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResAIJournal, ops.ResFiles}
 
 // ---- the group's two interfaces and its dependency value (rule R10) ----
 
