@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.8
+// version: 1.8.9
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-11-15
 
@@ -515,8 +515,10 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			if err != nil {
 				return fileIntroResult{}, err
 			}
-			// Only the native shell sets a margin; HEAD's builds the env without one,
-			// so only a native run yields before its deadline (review M4).
+			// Only the native shell sets the margins: HEAD's builds the env without
+			// either, so only a native run yields before its deadline (review M4)
+			// and cuts a whisper call before it (N16). A test drives this shell to a
+			// blocked call to pin that it hands both over (N32).
 			return p.runFileIntroTranscribeCore(rc.Context(), fileIntroParams{
 				OnlyMissing: in.OnlyMissing, RetryFailed: in.RetryFailed, ClearRunID: in.ClearRunID,
 			}, fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin, CallMargin: fileIntroCallMargin()})
@@ -772,23 +774,34 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 const fileIntroCheckpointBudget = 2 * time.Minute
 
 // fileIntroCallMargin is how long before the attempt's deadline a whisper call
-// is cut (fileIntroWorker.boundCall). It is derived from the longest the pool
-// itself can wait inside one call, transcribe.PoolPaceMax (the dispatcher paces
-// a refused request for that long before it gives up), plus the checkpoint
-// budget and a minute of slack, so it is strictly larger than the two: a call
-// that starts with the margin still ahead can pace its whole allowance and the
-// yield still has its budget. A function because PoolPaceMax is read from the
-// pool, so a change there moves this with it; the test pins the inequality.
-func fileIntroCallMargin() time.Duration {
+// is cut (fileIntroWorker.boundCall). After a cut the run still has to leave
+// the call (its cancellation tail: the liveness verification after a response
+// is not cancellable, about ten seconds of probes) and run the yield path (the
+// checkpoint write, the final stats flush and the progress reset, the
+// fileIntroCheckpointBudget). The pool's own pacing allowance,
+// transcribe.PoolPaceMax (the dispatcher paces a refused request for that long
+// before it gives up), is the third term: a request must not start where its
+// own pacing could outlast what is left, and callBoundHit refuses to start one
+// inside the margin. The margin is strictly larger than the allowance plus the
+// budget, with a minute of slack; TestFileIntroMargins_* pins the inequality.
+//
+// It is a func variable for two reasons: PoolPaceMax is read from the pool, so a
+// change there moves the margin with it, and the native-shell test replaces it
+// (with fileIntroYieldMargin) by margins that fit a seconds-long deadline, so a
+// shell that forgets to hand it to the run fails a test (N32). Nothing else
+// assigns it.
+var fileIntroCallMargin = func() time.Duration {
 	return transcribe.PoolPaceMax() + fileIntroCheckpointBudget + time.Minute
 }
 
 // fileIntroYieldMargin is how close to its deadline a native attempt gets before
 // it stops starting batches, stops waiting (scan-busy pause, outage retry) and
 // yields (tasks.ErrContinueInPlace) to a fresh attempt. It is a minute beyond
-// fileIntroCallMargin, so a batch is never started in the span where its whisper
-// call would be cut at once. See fileIntroBatchLoop.run for what the margin
-// does and does not bound.
+// the call margin, so a batch is never started in the span where its whisper
+// call would be cut at once. It is computed once, at init, from the call margin
+// of that moment; the two could only diverge if the pool's pace allowance
+// changed at run time, which only a test does. See fileIntroBatchLoop.run for
+// what the margin does and does not bound.
 var fileIntroYieldMargin = fileIntroCallMargin() + time.Minute
 
 // fileIntroKey orders groups exactly as selectFileIntroWork does: the tier (0

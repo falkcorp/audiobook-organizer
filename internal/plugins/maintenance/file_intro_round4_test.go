@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_round4_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b7e1c92-5d48-4a06-8f1d-c9a2e6b04d37
 // last-edited: 2026-11-15
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -154,13 +155,78 @@ func TestFileIntroCallBound_BatchZeroIsNeverCut(t *testing.T) {
 	}
 }
 
+// The native SHELL hands the core both margins (N32). The tests above set
+// env.CallMargin by hand, so a shell that stopped passing it would restore the
+// whole N16 defect with every one of them green. This one goes through the
+// kind's own Run with the margin variables narrowed to a seconds-long deadline:
+// batch 1's whisper call never answers, and only the margin the shell passes can
+// end it before the deadline. Deleting `CallMargin: fileIntroCallMargin()` from
+// the shell leaves the call blocked until the deadline, so the run neither
+// yields nor returns early.
+func TestFileIntroNativeShell_PassesTheCallMarginSoABlockedWhisperCallYields(t *testing.T) {
+	fx := newIntroFx(t)
+	fileIntroSlots = func() int { return 1 }
+	fx.yieldFiles(2*fileIntroBatchGroups + 1)
+	origY, origC := fileIntroYieldMargin, fileIntroCallMargin
+	t.Cleanup(func() { fileIntroYieldMargin, fileIntroCallMargin = origY, origC })
+	// Batches start until 1.5 s before the deadline, a call is cut 1.2 s before
+	// it: the call margin is strictly inside the yield margin, as in production.
+	fileIntroYieldMargin = 1500 * time.Millisecond
+	fileIntroCallMargin = func() time.Duration { return 1200 * time.Millisecond }
+
+	var calls atomic.Int32
+	inner := fileIntroWhisperFn
+	fileIntroWhisperFn = func(ctx context.Context, jobs map[string]fileIntroJob, prog func(int, int)) (map[string]fileIntroWhisperResult, error) {
+		if calls.Add(1) == 1 {
+			return inner(ctx, jobs, prog) // batch 0 answers
+		}
+		<-ctx.Done() // batch 1 never does
+		return nil, ctx.Err()
+	}
+
+	const deadline = 5 * time.Second
+	rec := &t6g4Calls{}
+	var handed []tasks.Writer
+	def := fx.p.fileIntroTranscribeKind(t6g4RealDeps(fx.p, rec, &handed), nil)
+	h, cancel := t6g4RealHost(fileIntroKind, deadline, &t6g4RunWriter{name: "attempt 1"})
+	defer cancel()
+
+	start := time.Now()
+	_, err := runT6G4Kind(t, def, tasks.NewRC(h), "")
+	elapsed := time.Since(start)
+	if !errors.Is(err, tasks.ErrContinueInPlace) {
+		t.Fatalf("the native shell must hand the call margin to the run so a blocked call is cut and the run yields; err = %v after %s", err, elapsed)
+	}
+	if elapsed >= deadline-500*time.Millisecond {
+		t.Fatalf("the run yielded after %s, too close to its %s deadline: the call was cut by the deadline, not by the margin", elapsed, deadline)
+	}
+	raw, ok := h.CheckpointJSON("")
+	if !ok {
+		t.Fatal("the yield saved no cursor")
+	}
+	var cur fileIntroCursor
+	if err := json.Unmarshal(raw, &cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.DoneBatches != 1 || cur.Last == nil {
+		t.Fatalf("cursor %+v, want batch 0 done", cur)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("whisper was called %d times, want 2 (batch 0 and the cut batch 1)", n)
+	}
+}
+
 // ---- N19: an outage sleep that gives up leaves the files undone -------------
 
-// The loop-level tests stub runBatch; this one runs the real batch. The pool is
-// down for batch 1 and the retry sleep gives up inside the margin: runBatch must
-// return the yield with nothing written. Without its errFileIntroYieldNow branch
-// the error would fall through to the whisper_error case and write a durable
-// failure on all eight groups.
+// The loop-level tests stub runBatch; this one runs the real batch, and it has to
+// REACH runBatch's yield branch (the earlier version ran under a one-minute
+// deadline against a ten-minute margin, so batch 1 was skipped before it started
+// and the branch was killed only by the N16 tests). The yield margin here is
+// 300 ms against a 4 s deadline, so batch 1 starts well outside it: the pool is
+// down for it, the retry sleep gives up when the margin arrives, and runBatch
+// must return the yield with nothing written. Without its errFileIntroYieldNow
+// branch the error would fall through to the whisper_error case and write a
+// durable failure on all eight groups.
 func TestFileIntroYieldWait_AnOutageSleepThatGivesUpWritesNothingForTheBatch(t *testing.T) {
 	fx := newIntroFx(t)
 	fileIntroSlots = func() int { return 1 }
@@ -177,9 +243,20 @@ func TestFileIntroYieldWait_AnOutageSleepThatGivesUpWritesNothingForTheBatch(t *
 	}
 
 	ck := &memCheckpoint{}
-	_, err := fx.yieldRun(shortDeadline(t), fx.yieldEnv(&fileIntroRep{id: "run-outage-yield"}, ck, nil, fileIntroYieldMargin), true)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	env := fx.yieldEnv(&fileIntroRep{id: "run-outage-yield"}, ck, nil, 300*time.Millisecond)
+	start := time.Now()
+	_, err := fx.yieldRun(ctx, env, true)
 	if !errors.Is(err, tasks.ErrContinueInPlace) {
 		t.Fatalf("an outage inside the margin must yield, got %v", err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("whisper was called %d times, want 2: batch 0, then batch 1's one try that met the outage "+
+			"(fewer means batch 1 never started, so runBatch's yield branch was not reached; more means a retry inside the margin)", n)
+	}
+	if elapsed := time.Since(start); elapsed < 3*time.Second {
+		t.Fatalf("the run yielded after %s: the retry sleep must have waited for the margin (about 3.7 s), not given up at once", elapsed)
 	}
 	withResult := 0
 	for _, id := range mustAllBooks(t, fx) {
