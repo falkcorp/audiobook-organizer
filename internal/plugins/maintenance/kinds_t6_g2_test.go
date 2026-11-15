@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.6
+// version: 1.3.7
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-15
 
@@ -576,8 +576,16 @@ type t6g2Row struct {
 	kind tasks.Kind
 	// resume is the rule R5 mapping of head.ResumePolicy.
 	resume tasks.ResumePolicy
-	// writes is the declared write set (nil: ReadOnly); reads is AlsoReads.
-	writes, reads []ops.Resource
+	// calls are the writer methods the kind's core can call; outside are the
+	// resources it writes without a writer call. The declared write set the test
+	// expects is derived from them (t6g2Row.derive), never typed: it is the sorted
+	// union of the shared table's rows for calls plus outside, and a kind with
+	// neither is ReadOnly. reads is AlsoReads.
+	calls   []string
+	outside []ops.Resource
+	// writes is the derived expected write set (nil: ReadOnly), set by derive.
+	writes []ops.Resource
+	reads  []ops.Resource
 	// workers is HEAD's worker count and parPrefix the rule R4 spelling;
 	// parPrefix "" means HEAD's body has no RunItems loop.
 	workers   int
@@ -608,22 +616,22 @@ func t6g2Rows() []t6g2Row {
 	rows := []t6g2Row{
 		{
 			def: (*Plugin).externalIDBackfillDef, kind: t6g2KindExternalIDBackfill, resume: tasks.ResumeContinue,
-			writes: []ops.Resource{ops.ResExternalIDs, ops.ResSettings}, workers: t6g2BootExternalIDWorkers, parPrefix: "fixed(1)",
+			calls: []string{"BackfillExternalIDs"}, workers: t6g2BootExternalIDWorkers, parPrefix: "fixed(1)",
 			liveOnly: true, params: `{}`, wantLive: []string{"BackfillExternalIDs"},
 		},
 		{
 			def: (*Plugin).movementAtomCleanupDef, kind: t6g2KindMovementAtomCleanup, resume: tasks.ResumeContinue,
-			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks, ops.ResFileProvenance}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
+			calls: []string{"StripMovementAtoms"}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
 			liveOnly: true, params: `{}`, wantLive: []string{"StripMovementAtoms"},
 		},
 		{
 			def: (*Plugin).malformedM4BRemuxDef, kind: t6g2KindMalformedM4BRemux, resume: tasks.ResumeContinue,
-			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
+			calls: []string{"RemuxMalformedM4BFiles"}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
 			liveOnly: true, params: `{}`, wantLive: []string{"RemuxMalformedM4BFiles"},
 		},
 		{
 			def: (*Plugin).malformedM4BTranscodeDef, kind: t6g2KindMalformedM4BTranscode, resume: tasks.ResumeAsk,
-			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}, workers: bootTranscodeWorkers, parPrefix: "fixed(2)",
+			calls: []string{"TranscodeMalformedM4BFiles", "QuarantineKnownBadFiles"}, workers: bootTranscodeWorkers, parPrefix: "fixed(2)",
 			liveOnly: true, params: `{"quarantine_after":true}`,
 			wantLive: []string{"TranscodeMalformedM4BFiles", "QuarantineKnownBadFiles"},
 		},
@@ -636,13 +644,13 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).bookAtPathIndexBackfillDef, kind: t6g2KindBookAtPathIndexBackfill, resume: tasks.ResumeDrop,
-			writes: []ops.Resource{ops.ResBooks}, liveOnly: true, params: `{}`,
+			calls: []string{"RebuildBookAtPathIndex", "BackfillBookAtPathIndex"}, liveOnly: true, params: `{}`,
 			wantLive:   []string{"RebuildBookAtPathIndex"},
 			bootParams: `{"if_needed":true}`, wantBoot: []string{"BackfillBookAtPathIndex"},
 		},
 		{
 			def: (*Plugin).bookHashIndexRepairDef, kind: t6g2KindBookHashIndexRepair, resume: tasks.ResumeFromZero,
-			writes: []ops.Resource{ops.ResBooks}, reads: []ops.Resource{ops.ResBooks}, params: `{}`,
+			calls: []string{"RepairBookHashIndex"}, reads: []ops.Resource{ops.ResBooks}, params: `{}`,
 			wantLive: []string{"RepairBookHashIndex"},
 		},
 		{
@@ -652,7 +660,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).bookFileAcoustIDIndexRepairDef, kind: t6g2KindBookFileAcoustIDIndexRepair, resume: tasks.ResumeContinue,
-			writes: []ops.Resource{ops.ResBookFiles}, reads: []ops.Resource{ops.ResBookFiles}, workers: runtime.NumCPU(), parPrefix: "cpu",
+			calls: []string{"DeleteOrphanBookFileAcoustIDEntries"}, reads: []ops.Resource{ops.ResBookFiles}, workers: runtime.NumCPU(), parPrefix: "cpu",
 			params: `{}`,
 			arrange: func(t *testing.T, f *t6g2Fakes) {
 				f.store.acoustid = []database.BookFileAcoustIDEntry{{}}
@@ -662,7 +670,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).bookSigRecoveryAuditDef, kind: t6g2KindBookSigRecoveryAudit, resume: tasks.ResumeDrop,
-			writes: []ops.Resource{ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}, params: `{}`,
+			calls: []string{"ModifyBook"}, params: `{}`,
 			arrange: func(t *testing.T, f *t6g2Fakes) {
 				desc := "A Bat out of Gotham"
 				snap, err := json.Marshal(&database.Book{Title: "The Dark Knight Returns", Description: &desc})
@@ -677,14 +685,14 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).bookSigSidecarMigrateDef, kind: t6g2KindBookSigSidecarMigrate, resume: tasks.ResumeDrop,
-			writes: []ops.Resource{ops.ResBooks}, workers: runtime.NumCPU(), parPrefix: "cpu", params: `{}`,
+			calls: []string{"MigrateBookSigToSidecar"}, workers: runtime.NumCPU(), parPrefix: "cpu", params: `{}`,
 			arrange:        func(t *testing.T, f *t6g2Fakes) { f.store.ids = []string{"bat-1", "bat-2"} },
 			wantLive:       []string{"MigrateBookSigToSidecar:bat-1", "MigrateBookSigToSidecar:bat-2"},
 			wantClassified: []string{"bat-1", "bat-2"},
 		},
 		{
 			def: (*Plugin).buildFolderBookFilesDef, kind: t6g2KindBuildFolderBookFiles, resume: tasks.ResumeDrop,
-			writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, workers: runtime.NumCPU(), parPrefix: "cpu",
+			calls: []string{"BatchCreateBookFiles"}, workers: runtime.NumCPU(), parPrefix: "cpu",
 			params: `{"book_ids":["bat-1"]}`,
 			arrange: func(t *testing.T, f *t6g2Fakes) {
 				stubProbe(t, map[string]int{"01.mp3": 100, "02.mp3": 200})
@@ -698,7 +706,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).chaptersBackfillDef, kind: t6g2KindChaptersBackfill, resume: tasks.ResumeContinue,
-			writes: []ops.Resource{ops.ResBooks}, workers: runtime.NumCPU(), parPrefix: "cpu",
+			calls: []string{"SaveChaptersForBook"}, workers: runtime.NumCPU(), parPrefix: "cpu",
 			params:   `{"book_ids":["bat-1"]}`,
 			arrange:  func(t *testing.T, f *t6g2Fakes) { t6g2ChaptersFixture(t, f, "bat-1") },
 			wantLive: []string{"SaveChaptersForBook:bat-1:2"},
@@ -706,8 +714,19 @@ func t6g2Rows() []t6g2Row {
 	}
 	for i := range rows {
 		rows[i].head = rows[i].def(p)
+		rows[i].writes = rows[i].derive()
 	}
 	return rows
+}
+
+// derive is the write set the row's kind must declare: the sorted union of the
+// shared table's rows for every writer method the kind can call, plus the
+// resources it writes outside the writer; nil for a kind with neither (ReadOnly).
+func (r t6g2Row) derive() []ops.Resource {
+	if len(r.calls) == 0 && len(r.outside) == 0 {
+		return nil
+	}
+	return t6RowsUnion(t6RowsOf(r.calls...), r.outside)
 }
 
 // t6g2ChaptersFixture arranges one single-file book per id, each with a file
@@ -944,20 +963,29 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 			for _, x := range c.Effects.WriteSet() {
 				declared[x.String()] = true
 			}
-			// The resources the row's writer calls touch, from t6g2Touches (traced
-			// from what each production writer reaches, not from the Effects).
+			// The resources of every writer method the kind can call, from t6g2Touches
+			// (traced from what each production writer reaches, not from the
+			// Effects), plus what it writes outside the writer.
 			touched := map[string]bool{}
-			// Every scenario's recorded writes: the live one and, for a kind with a
-			// second mode, the writes of that mode (each run and checked below).
-			calls := append(slices.Clone(r.wantLive), r.wantBoot...)
-			for _, call := range calls {
-				method, _, _ := strings.Cut(call, ":")
+			for _, method := range r.calls {
 				res, ok := t6g2Touches[method]
 				if !ok {
 					t.Fatalf("%s: no traced touches for writer method %s", r.kind, method)
 				}
 				for _, n := range res {
 					touched[tasks.Res("books", string(n)).String()] = true
+				}
+			}
+			for _, n := range r.outside {
+				touched[tasks.Res("books", string(n)).String()] = true
+			}
+			// Every scenario's recorded writes (the live one and, for a kind with a
+			// second mode, that mode's) are among the methods the row says it can
+			// call: the list is not a superset of nothing.
+			for _, call := range append(slices.Clone(r.wantLive), r.wantBoot...) {
+				method, _, _ := strings.Cut(call, ":")
+				if !slices.Contains(r.calls, method) {
+					t.Errorf("%s: the run recorded %s, which is not in the row's calls %v", r.kind, method, r.calls)
 				}
 			}
 			for x := range touched {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_resources_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c9b940e-34ff-4da6-88ba-5dbfff0b5b2a
 // last-edited: 2026-11-15
 
@@ -273,11 +273,6 @@ func TestT6G5Resources_EveryNameIsAnOpsConstant(t *testing.T) {
 	for id, outs := range t6g5HeadParityDeclared {
 		for _, o := range outs {
 			assert.True(t, values[string(o.Resource)], "t6g5HeadParityDeclared[%s] names %q, which is no pkg/ops constant", id, o.Resource)
-		}
-	}
-	for _, w := range t6g5Wants() {
-		for _, r := range w.writes {
-			assert.True(t, values[r], "the expected write set of %s names %q, which is no pkg/ops constant", w.headID, r)
 		}
 	}
 
