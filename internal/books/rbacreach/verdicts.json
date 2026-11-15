@@ -11,9 +11,10 @@
  "store": "internal/books/testdata/r2corpus/overlay",
  "overlay_sha256": "d7d8475f1aa39d05402c463ad6f4dd5a942783f55e168e56ffb25a510fce701e",
  "recorded": {
-  "recorder_commit": "f04f53afc6a7a1a901aa1e96b9441c54e78adbe6",
+  "recorder_commit": "b4056186d5145bfa0a22f0f92c15b9ae55a3d5e6",
+  "run_head": "507f246d01e521ab4ec43e4f6ad048ebf56153aa",
   "workflow": "R0 reach record (temporary)",
-  "run_id": "43685703236",
+  "run_id": "43694249244",
   "run_attempt": "1",
   "runner_image": "ubuntu26/20261111.196.1",
   "python": "3.12.16"
@@ -23989,7 +23990,7 @@
     403,
     403,
     403,
-    400,
+    500,
     403,
     403,
     403,
@@ -37241,7 +37242,46 @@
   "authoff": 200
  },
  "owner_set": {
-  "what": "R0's allow/deny on the owner-gated routes with OWNER_EMAIL set in its environment and no Cloudflare Access verifier, so no principal is the owner",
+  "canary": {
+   "session:admin": 200,
+   "session:editor": 200,
+   "session:viewer": 200,
+   "session:fp-worker": 403,
+   "session:custom-all": 200,
+   "session:custom-subset": 200,
+   "session:custom-unknown": 200,
+   "key:admin:view": 200,
+   "key:admin:settings": 200,
+   "key:admin:users": 200,
+   "key:admin:worker": 403,
+   "key:admin:every": 200,
+   "key:admin:empty": 200,
+   "key:editor:view": 200,
+   "key:editor:settings": 200,
+   "key:editor:users": 200,
+   "key:editor:worker": 200,
+   "key:editor:every": 200,
+   "key:editor:empty": 200,
+   "key:viewer:view": 200,
+   "key:viewer:settings": 200,
+   "key:viewer:users": 200,
+   "key:viewer:worker": 200,
+   "key:viewer:every": 200,
+   "key:viewer:empty": 200,
+   "key:fp-worker:view": 200,
+   "key:fp-worker:settings": 200,
+   "key:fp-worker:users": 200,
+   "key:fp-worker:worker": 403,
+   "key:fp-worker:every": 403,
+   "key:fp-worker:empty": 403,
+   "key:custom-all:every": 200,
+   "key:custom-all:empty": 200,
+   "key:custom-subset:outside": 200,
+   "key:custom-subset:empty": 200,
+   "anonymous": 401,
+   "authoff": 200
+  },
+  "what": "R0's allow/deny on the owner-gated routes with OWNER_EMAIL set in its environment and no Cloudflare Access verifier, so no principal is the owner: R0 refuses every principal, and the admin session's refusal is the gate's own (admin_refusal). The owner's allow side is NOT recorded: it needs a verified Access JWT, which this boot cannot mint (no verifier, no issuer)",
   "owner_email": "bruce@example.invalid",
   "routes": [
    {
@@ -37286,7 +37326,8 @@
      401,
      401
     ],
-    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "admin_refusal": "Owner actions need you to sign in through Cloudflare Access (127.0.0.1:18484); a password, SSO, temp-login or invite session, or an API key, is not enough"
    },
    {
     "method": "POST",
@@ -37330,7 +37371,8 @@
      401,
      401
     ],
-    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "admin_refusal": "Owner actions need you to sign in through Cloudflare Access (127.0.0.1:18484); a password, SSO, temp-login or invite session, or an API key, is not enough"
    },
    {
     "method": "POST",
@@ -37374,7 +37416,8 @@
      401,
      403
     ],
-    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "admin_refusal": "Owner actions need you to sign in through Cloudflare Access (127.0.0.1:18484); a password, SSO, temp-login or invite session, or an API key, is not enough"
    },
    {
     "method": "POST",
@@ -37418,7 +37461,8 @@
      401,
      401
     ],
-    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "admin_refusal": "Owner actions need you to sign in through Cloudflare Access (127.0.0.1:18484); a password, SSO, temp-login or invite session, or an API key, is not enough"
    },
    {
     "method": "POST",
@@ -37462,7 +37506,8 @@
      401,
      401
     ],
-    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "admin_refusal": "Owner actions need you to sign in through Cloudflare Access (127.0.0.1:18484); a password, SSO, temp-login or invite session, or an API key, is not enough"
    },
    {
     "method": "POST",
@@ -37506,7 +37551,8 @@
      401,
      403
     ],
-    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "admin_refusal": "Owner actions need you to sign in through Cloudflare Access (127.0.0.1:18484); a password, SSO, temp-login or invite session, or an API key, is not enough"
    },
    {
     "method": "POST",
@@ -37550,7 +37596,8 @@
      401,
      403
     ],
-    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "admin_refusal": "Owner actions need you to sign in through Cloudflare Access (127.0.0.1:18484); a password, SSO, temp-login or invite session, or an API key, is not enough"
    },
    {
     "method": "POST",
@@ -37594,7 +37641,8 @@
      401,
      403
     ],
-    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "admin_refusal": "Owner actions need you to sign in through Cloudflare Access (127.0.0.1:18484); a password, SSO, temp-login or invite session, or an API key, is not enough"
    },
    {
     "method": "POST",
@@ -37638,7 +37686,8 @@
      401,
      403
     ],
-    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+    "verdict": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "admin_refusal": "Owner actions need you to sign in through Cloudflare Access (127.0.0.1:18484); a password, SSO, temp-login or invite session, or an API key, is not enough"
    }
   ]
  }
