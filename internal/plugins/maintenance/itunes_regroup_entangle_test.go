@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.7.3
+// version: 1.7.6
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -317,9 +317,7 @@ func TestITunesRegroupEntanglementRule(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &Plugin{}
-			snap, err := p.buildRegroupSnapshot(context.Background(),
-				&regroupFakeReader{books: tc.books, files: tc.files}, rgRoot, &fakeReporter{})
+			snap, err := buildRegroupSnapshot(context.Background(), &regroupFakeReader{books: tc.books, files: tc.files}, rgRoot, t6g5RgReporter(context.Background(), &fakeReporter{}))
 			if err != nil {
 				t.Fatalf("buildRegroupSnapshot: %v", err)
 			}
@@ -364,8 +362,7 @@ func TestITunesRegroupEntanglementRule_SplitOutOfGroupedSkipped(t *testing.T) {
 			rgFile("b1", "I1", "pb1"),
 		},
 	}
-	p := &Plugin{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), r, rgRoot, &fakeReporter{})
+	snap, err := buildRegroupSnapshot(context.Background(), r, rgRoot, t6g5RgReporter(context.Background(), &fakeReporter{}))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -401,8 +398,7 @@ func TestBuildRegroupSnapshot_IncumbentSemantics(t *testing.T) {
 		trashed, rgBook("T2", "vg4", nil), // trashed true member + one live unset
 		rgBook("U1", "", nil), noCreated, // ungrouped
 	}
-	p := &Plugin{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), &regroupFakeReader{books: books}, rgRoot, &fakeReporter{})
+	snap, err := buildRegroupSnapshot(context.Background(), &regroupFakeReader{books: books}, rgRoot, t6g5RgReporter(context.Background(), &fakeReporter{}))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -535,7 +531,7 @@ func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
 
 	p := &Plugin{}
 	rep := &fakeReporter{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	snap, err := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -543,8 +539,8 @@ func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
 	if plan.Consolidated != 1 || plan.Groups[0].Target != ed.ID {
 		t.Fatalf("plan = %+v, want consolidate onto the edition %s", plan.Groups, ed.ID)
 	}
-	if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
-		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserStateFor); err != nil {
+		t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 
 	if b, _ := s.GetBookByID(frag); b != nil && !b.IsSoftDeleted() {
@@ -580,8 +576,7 @@ func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
 // rgPlan builds the snapshot from r and plans groups over it.
 func rgPlan(t *testing.T, r *regroupFakeReader, groups []itunesservice.HealGroup) (itunesservice.Snapshot, itunesservice.RegroupPlan) {
 	t.Helper()
-	p := &Plugin{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), r, rgRoot, &fakeReporter{})
+	snap, err := buildRegroupSnapshot(context.Background(), r, rgRoot, t6g5RgReporter(context.Background(), &fakeReporter{}))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -817,7 +812,7 @@ func TestITunesRegroupApply_RecheckSkipsChangedGroup(t *testing.T) {
 
 			p := &Plugin{}
 			rep := &fakeReporter{}
-			snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+			snap, err := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 			if err != nil {
 				t.Fatalf("buildRegroupSnapshot: %v", err)
 			}
@@ -828,8 +823,8 @@ func TestITunesRegroupApply_RecheckSkipsChangedGroup(t *testing.T) {
 
 			tc.change(t, s, frag, other)
 
-			if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
-				t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+			if _, err := t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserStateFor); err != nil {
+				t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 			}
 			var found bool
 			for _, l := range rep.logs {
@@ -925,7 +920,7 @@ func TestITunesRegroupApply_LibraryCopyKeepsTitle(t *testing.T) {
 
 			p := &Plugin{}
 			rep := &fakeReporter{}
-			snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+			snap, err := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 			if err != nil {
 				t.Fatalf("buildRegroupSnapshot: %v", err)
 			}
@@ -940,8 +935,8 @@ func TestITunesRegroupApply_LibraryCopyKeepsTitle(t *testing.T) {
 			if tc.afterPlan != nil {
 				tc.afterPlan(t, s, b.ID)
 			}
-			if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
-				t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+			if _, err := t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserStateFor); err != nil {
+				t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 			}
 			after, err := s.GetBookByID(b.ID)
 			if err != nil || after == nil {
@@ -984,8 +979,7 @@ func TestITunesRegroupEntanglementRule_ProbeARootSpellings(t *testing.T) {
 					rgFileAt("f1", "L1", "p1", "/library/Author//Book/./p1.m4b"), rgFile("f2", "F1", "p2"),
 				},
 			}
-			p := &Plugin{}
-			snap, err := p.buildRegroupSnapshot(context.Background(), r, root, &fakeReporter{})
+			snap, err := buildRegroupSnapshot(context.Background(), r, root, t6g5RgReporter(context.Background(), &fakeReporter{}))
 			if err != nil {
 				t.Fatalf("buildRegroupSnapshot: %v", err)
 			}
@@ -1089,7 +1083,7 @@ func TestITunesRegroupApply_HoldsGroupLockAcrossRecheckAndMoves(t *testing.T) {
 
 	p := &Plugin{}
 	rep := &fakeReporter{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	snap, err := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -1124,8 +1118,8 @@ func TestITunesRegroupApply_HoldsGroupLockAcrossRecheckAndMoves(t *testing.T) {
 	}
 	probe.onMove = func() { notCrowned("before the moves") }
 	probe.onModify = func() { notCrowned("before the title write") }
-	if _, err := p.applyRegroupPlan(context.Background(), probe, plan, rgRoot, rep); err != nil {
-		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), probe, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserStateFor); err != nil {
+		t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 	if !started.Load() {
 		t.Fatalf("apply's recheck never read the target's version group (logs %v)", rep.logs)
@@ -1185,7 +1179,7 @@ func TestITunesRegroupApply_TargetJoinedGroupRefused(t *testing.T) {
 
 	p := &Plugin{}
 	rep := &fakeReporter{}
-	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	snap, err := buildRegroupSnapshot(context.Background(), s, rgRoot, t6g5RgReporter(context.Background(), rep))
 	if err != nil {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
@@ -1196,8 +1190,8 @@ func TestITunesRegroupApply_TargetJoinedGroupRefused(t *testing.T) {
 	target := plan.Groups[0].Target
 
 	wrapped := &rgJoinGroupStore{PebbleStore: s, id: target, vg: "vg-joined"}
-	if _, err := p.applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, rep); err != nil {
-		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), wrapped, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserStateFor); err != nil {
+		t.Fatalf("t6g5ApplyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 	var found bool
 	for _, l := range rep.logs {

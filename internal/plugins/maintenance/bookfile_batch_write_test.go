@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_batch_write_test.go
-// version: 1.4.3
+// version: 1.5.0
 // guid: 6c1d80fe-4a52-47b3-9d8e-0b2f5a9c7314
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -61,8 +62,8 @@ func TestMarkMissingFiles_RecomputesBookOnce(t *testing.T) {
 	}, true, 1000)
 
 	logs := aggtest.Capture(t)
-	plan, err := planMarkMissingFiles(context.Background(), s, nil,
-		markMissingParams{Apply: true}, &fakeReporter{})
+	params := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), s, s, params, t6g5MarkEnv(context.Background(), params.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, batchTestRows, plan.ClearedStale, "every row must still be written")
 	require.Equal(t, 0, plan.UpdateErrs)
@@ -84,8 +85,8 @@ func TestMissingFileRepoint_RecomputesBookOnce(t *testing.T) {
 	}, false, 1000)
 
 	logs := aggtest.Capture(t)
-	plan, err := planMissingFileRepoint(context.Background(), s, nil,
-		missingFileRepointParams{Apply: true}, &fakeReporter{})
+	params := missingFileRepointParams{Apply: true}
+	plan, err := planMissingFileRepointVia(context.Background(), s, t6g5RepointAll(s), s, params, t6g5RepointEnv(context.Background(), params.Apply, nil, &fakeReporter{}))
 	require.NoError(t, err)
 	require.Equal(t, batchTestRows, plan.Repointed, "every row must still be written")
 	require.Equal(t, 0, plan.UpdateErrs)
@@ -224,8 +225,8 @@ func TestMarkMissing_MultipleBooksUnderConcurrency(t *testing.T) {
 	}
 
 	rep := &livenessReporter{}
-	plan, err := planMarkMissingFiles(context.Background(), store, nil,
-		markMissingParams{Apply: true}, rep)
+	params := markMissingParams{Apply: true}
+	plan, err := planMarkMissingFilesVia(context.Background(), store, store, params, t6g5MarkEnv(context.Background(), params.Apply, nil, rep))
 	require.NoError(t, err)
 	require.Equal(t, books*perBook, plan.MarkedMissing, "every row of every book must be written")
 	require.Equal(t, 0, plan.UpdateErrs)
@@ -328,4 +329,86 @@ func TestGroupItemsByBook_DeterministicOrder(t *testing.T) {
 	require.Equal(t, []row{{"b2", "f1"}, {"b2", "f3"}}, groups[0].Items)
 	require.Equal(t, "b1", groups[1].BookID)
 	require.Equal(t, []row{{"b1", "f2"}, {"b1", "f4"}}, groups[1].Items)
+}
+
+// batchLineReporter is a livenessReporter that keeps the progress lines it was
+// handed, so a test can tell the wrapper wired the right values through.
+type batchLineReporter struct {
+	livenessReporter
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *batchLineReporter) UpdateProgress(cur, tot int, msg string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines = append(r.lines, fmt.Sprintf("%d/%d %s", cur, tot, msg))
+	return nil
+}
+
+// The HEAD wrapper (recover-missing-files and repoint-to-folder run it nightly)
+// must keep wiring the reporter into the shared body: a liveness stamp after
+// EVERY row, and the in-book progress line through Reporter.UpdateProgress,
+// paced by bookFileBatchProgressInterval. Dropping either assignment in the
+// wrapper compiled and, until this test, passed.
+func TestWriteBookFileBatch_HEADWrapperWiresTouchAndProgress(t *testing.T) {
+	dir := t.TempDir()
+	s := newRepairPebble(t)
+	bookID := seedBatchBook(t, s, batchTestRows, func(i int) string {
+		return filepath.Join(dir, fmt.Sprintf("part%02d.mp3", i))
+	}, false, 1000)
+	rowsFor := func() []*database.BookFile {
+		stored, err := s.GetBookFiles(bookID)
+		require.NoError(t, err)
+		rows := make([]*database.BookFile, len(stored))
+		for i := range stored {
+			rows[i] = &stored[i]
+		}
+		return rows
+	}
+	progress := func(done, total int) (int, int, string) {
+		return done, total, fmt.Sprintf("row %d", done)
+	}
+
+	// Interval 0: every row is due, so every row renders a line.
+	old := bookFileBatchProgressInterval
+	t.Cleanup(func() { bookFileBatchProgressInterval = old })
+	bookFileBatchProgressInterval = 0
+	rep := &batchLineReporter{}
+	out := writeBookFileBatch(context.Background(), s, rowsFor(), bookFileBatchOpts{Reporter: rep, Progress: progress})
+	require.Equal(t, batchTestRows, out.Applied)
+	require.Equal(t, int64(batchTestRows), rep.touches.Load(), "one liveness stamp per row")
+	require.Len(t, rep.lines, batchTestRows, "one progress line per due row, through the reporter")
+	require.Equal(t, fmt.Sprintf("1/%d row 1", batchTestRows), rep.lines[0], "the callback's current, total and message reach UpdateProgress")
+	require.Equal(t, fmt.Sprintf("%[1]d/%[1]d row %[1]d", batchTestRows), rep.lines[batchTestRows-1])
+
+	// The production interval: a fast batch renders no line, but still stamps
+	// every row.
+	bookFileBatchProgressInterval = old
+	quiet := &batchLineReporter{}
+	out = writeBookFileBatch(context.Background(), s, rowsFor(), bookFileBatchOpts{Reporter: quiet, Progress: progress})
+	require.Equal(t, batchTestRows, out.Applied)
+	require.Equal(t, int64(batchTestRows), quiet.touches.Load())
+	require.Empty(t, quiet.lines, "the throttle holds back the line inside the interval")
+
+	// No reporter: no stamp, no line, and no panic.
+	out = writeBookFileBatch(context.Background(), s, rowsFor(), bookFileBatchOpts{Progress: progress})
+	require.Equal(t, batchTestRows, out.Applied)
+}
+
+// The pre-write pass stamps at rows 0, N, 2N ... for N = bookFileStatLivenessEvery,
+// at exactly those rows and no others, through the HEAD wrapper's reporter.
+func TestPrewriteHeartbeat_StampsAtExactlyEveryNthRow(t *testing.T) {
+	rep := &livenessReporter{}
+	beat := prewriteHeartbeat(rep, nil)
+	var stamped []int
+	last := int64(0)
+	for i := range bookFileStatLivenessEvery*2 + 1 {
+		require.True(t, beat(i))
+		if n := rep.touches.Load(); n != last {
+			stamped = append(stamped, i)
+			last = n
+		}
+	}
+	require.Equal(t, []int{0, bookFileStatLivenessEvery, bookFileStatLivenessEvery * 2}, stamped)
 }
