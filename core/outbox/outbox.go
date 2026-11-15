@@ -1,5 +1,5 @@
 // file: core/outbox/outbox.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 5b3c4366-8534-4dc4-870f-850dfab2b120
 // last-edited: 2026-11-15
 
@@ -86,7 +86,9 @@ var (
 	// ErrDeadConflict: the dead letter, or its pair's dead-letter counter, kept
 	// changing under the operation (other operators acting on it, or the relay
 	// dead-lettering another message of the same pair); list it again and retry
-	// if it is still there.
+	// if it is still there. The relay writes a dead letter whether or not the
+	// counters are built, so a failing build never blocks delivery: it shows as
+	// a stopped "dead_counters" subject in Status and in core.outbox's health.
 	ErrDeadConflict = errors.New("outbox: the dead letter changed under the operation")
 )
 
@@ -227,6 +229,7 @@ type Outbox struct {
 	statusEvery time.Duration // how often the relay refreshes status and core.outbox's health
 	deadMu      sync.Mutex    // serializes syncDead: each recount reads the store inside it, so the last one to publish saw the newest state
 	deadSeeded  atomic.Bool   // the deadn/ counters have been built from the letters in this process (seedDeadCounts)
+	deadBad     atomic.Int64  // keys under dead/ that are no dead letter's, as the last audit counted them (RefreshStatus names them)
 	faults      faultLimiter  // one logged line a minute per repeating failure, for the relay and RefreshStatus alike
 	topicsMu    sync.Mutex
 	topicsMem   map[string]*topicInfo
@@ -427,6 +430,9 @@ type hooks struct {
 	// AfterDeadRead runs in syncDead once the dead-letter counters are read and
 	// before they are published, holding deadMu.
 	afterDeadRead func()
+	// SeedDeadCounts runs at the start of seedDeadCounts; an error it returns
+	// is the build's own failure.
+	seedDeadCounts func() error
 }
 
 func (h *hooks) get() hooks {
@@ -436,7 +442,7 @@ func (h *hooks) get() hooks {
 		afterHandler: h.afterHandler, beforeAckCommit: h.beforeAckCommit, afterAckCommit: h.afterAckCommit,
 		beforeFailCommit: h.beforeFailCommit, afterFailCommit: h.afterFailCommit,
 		beforeDeadCommit: h.beforeDeadCommit, beforeRetentionBatch: h.beforeRetentionBatch,
-		afterDeadRead: h.afterDeadRead}
+		afterDeadRead: h.afterDeadRead, seedDeadCounts: h.seedDeadCounts}
 }
 
 // topicInfo is a durable topic's resolved view.

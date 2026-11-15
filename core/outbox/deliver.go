@@ -1,5 +1,5 @@
 // file: core/outbox/deliver.go
-// version: 1.1.5
+// version: 1.1.6
 // guid: 2a6ad2a4-6bc1-4f3b-b7f1-0ee9e2bb7d3f
 // last-edited: 2026-11-15
 
@@ -684,9 +684,10 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 		}
 		dead, token, next, used = o.failurePlan(reg, r.cfg, attempt, herr)
 		if dead {
-			if err := o.requireDeadCounts(); err != nil {
-				return err
-			}
+			// No guard on the counters being built: the letter is written either
+			// way, and a counter that is behind is corrected by RepairDeadCounts,
+			// whose precondition sees this write. Refusing here would redeliver
+			// the message forever and block its pair.
 			d := outboxstore.Dead{Msg: row.Msg, Part: p.PP, Token: token, Attempts: attempt, At: o.now().UTC()}
 			if err := o.store.StageDead(ctx, b, reg.name, ti.name, row.Seq, d); err != nil {
 				return err
@@ -995,9 +996,7 @@ func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo
 			}
 			dead, token, next, used := o.failurePlan(reg, r.cfg, it.attempt, it.res.err)
 			if dead {
-				if err := o.requireDeadCounts(); err != nil {
-					return err
-				}
+				// Written whether or not the counters are built; see settleFail.
 				d := outboxstore.Dead{Msg: it.row.Msg, Part: p.PP, Token: token, Attempts: it.attempt, At: o.now().UTC()}
 				if err := o.store.StageDead(ctx, b, reg.name, ti.name, seq, d); err != nil {
 					return err

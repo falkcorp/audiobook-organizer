@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/store_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a6f2d813-3c9e-47b0-8d51-0e7b4a9c2f68
 // last-edited: 2026-11-15
 
@@ -429,7 +429,7 @@ func TestDead_StoreListCountDelete(t *testing.T) {
 	if _, ok, _ := s.GetDead(ctx, consumer, topic, 6); ok {
 		t.Fatal("GetDead found a letter that was never staged")
 	}
-	counts, err := s.DeadCounts(ctx)
+	counts, _, err := s.DeadCounts(ctx)
 	must(t, err)
 	if counts[consumer] != 3 || counts["wayne.vault.guard"] != 1 {
 		t.Fatalf("DeadCounts = %v", counts)

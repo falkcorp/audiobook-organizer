@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/records.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5f394976-e7d8-4f5e-be83-5afd62ff5595
 // last-edited: 2026-11-15
 
@@ -96,8 +96,13 @@ type Dead struct {
 
 // DeadCount is the value of deadn/<consumer>/<topic>/<shard>: how many dead
 // letters the shard holds. A shard with none has no row.
+//
+// Rev counts the writes of the counter (every bump adds one, whatever it does to
+// N), so a repair that read the counter before a write sees different bytes
+// after it even when the write left N where it was.
 type DeadCount struct {
-	N int `json:"n"`
+	N   int    `json:"n"`
+	Rev uint64 `json:"rev"`
 }
 
 func intakeCodec() codec.Codec[Intake] { return codec.JSON[Intake](RecordVersion) }

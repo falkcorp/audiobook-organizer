@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/dead_counts_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3f6d2a9e-5b1c-4e7a-9d84-1c0b7e52a6f3
 // last-edited: 2026-11-15
 
@@ -49,7 +49,7 @@ func totals(t testing.TB, s *outboxstore.Store) map[string]int {
 	t.Helper()
 	got, err := s.DeadTotals(context.Background())
 	must(t, err)
-	return got
+	return got.ByConsumer
 }
 
 func putRaw(t testing.TB, ks storage.Keyspace, key, raw []byte) {
@@ -122,10 +122,10 @@ func TestDeadCounts_FollowEveryLetterWrite(t *testing.T) {
 	if n := countRows(t, ks, outboxstore.DeadCountRoot()); n != 0 {
 		t.Fatalf("%d counter rows with no letters left, want 0", n)
 	}
-	fixes, err := s.RepairDeadCounts(context.Background())
+	rep, err := s.RepairDeadCounts(context.Background())
 	must(t, err)
-	if len(fixes) != 0 {
-		t.Fatalf("a repair after only counted writes changed %+v, want nothing", fixes)
+	if len(rep.Fixes) != 0 {
+		t.Fatalf("a repair after only counted writes changed %+v, want nothing", rep.Fixes)
 	}
 }
 
@@ -171,8 +171,9 @@ func TestRepairDeadCounts_BuildsAndCorrectsCounters(t *testing.T) {
 		t.Fatalf("DeadTotals = %v before any counter exists", got)
 	}
 
-	fixes, err := s.RepairDeadCounts(ctx)
+	rep, err := s.RepairDeadCounts(ctx)
 	must(t, err)
+	fixes := rep.Fixes
 	if len(fixes) != 4 {
 		t.Fatalf("first repair changed %d counters (%+v), want 4: %s 01 and 00, the guard's 04, and %s's unreadable shard", len(fixes), fixes, consumer, consumer)
 	}
@@ -184,15 +185,16 @@ func TestRepairDeadCounts_BuildsAndCorrectsCounters(t *testing.T) {
 	if got := totals(t, s); got[consumer] != 4 || got["wayne.vault.guard"] != 1 {
 		t.Fatalf("DeadTotals after repair = %v, want %s 4 (3 readable, 1 unreadable) and the guard 1", got, consumer)
 	}
-	if fixes, err = s.RepairDeadCounts(ctx); err != nil || len(fixes) != 0 {
-		t.Fatalf("a second repair = %+v, %v; want nothing to change", fixes, err)
+	if rep, err = s.RepairDeadCounts(ctx); err != nil || len(rep.Fixes) != 0 {
+		t.Fatalf("a second repair = %+v, %v; want nothing to change", rep, err)
 	}
 
 	putRaw(t, ks, outboxstore.DeadCountKey(consumer, topic, 1), []byte(`not a counter`))
 	putRaw(t, ks, outboxstore.DeadCountKey("wayne.vault.guard", topic, 4), mustCount(t, 9))
 	putRaw(t, ks, outboxstore.DeadCountKey("wayne.vault.joker", topic, 2), mustCount(t, 2)) // letters long gone
-	fixes, err = s.RepairDeadCounts(ctx)
+	rep, err = s.RepairDeadCounts(ctx)
 	must(t, err)
+	fixes = rep.Fixes
 	byKey := map[string]outboxstore.DeadCountFix{}
 	for _, f := range fixes {
 		byKey[f.Consumer+"/"+f.Shard] = f
@@ -228,8 +230,9 @@ func TestRepairDeadCounts_NeverOverwritesACountThatMoved(t *testing.T) {
 		// letter on the same pair, counter and all.
 		once.Do(func() { stageDeads(t, s, consumer, 1, 4) })
 	})
-	fixes, err := s.RepairDeadCounts(ctx)
+	rep, err := s.RepairDeadCounts(ctx)
 	must(t, err)
+	fixes := rep.Fixes
 	outboxstore.SetRepairHook(s, nil)
 	if got := totals(t, s)[consumer]; got != 2 {
 		t.Fatalf("DeadTotals = %d, want 2 (letters 3 and 4); the repair wrote a count from before letter 4", got)
@@ -275,11 +278,142 @@ func TestDeadCounts_RecountCostDoesNotGrowWithTheLetters(t *testing.T) {
 	const sample = 300
 	before = s.KeysScanned()
 	for range sample {
-		if _, err := s.DeadCounts(ctx); err != nil {
+		if _, _, err := s.DeadCounts(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if per := (s.KeysScanned() - before) / sample; per != letters {
 		t.Fatalf("a scan of the letters read %d keys, want all %d: the counter does not see the cost it is meant to show", per, letters)
+	}
+}
+
+// letterOnly plants the letter of (consumer, seq) on part without its counter,
+// the way a store from before the counters existed holds it.
+func letterOnly(t testing.TB, ks storage.Keyspace, c string, seq uint64, part int) {
+	t.Helper()
+	raw, err := outboxstore.EncodeDeadForTest(deadAt(part))
+	must(t, err)
+	putRaw(t, ks, outboxstore.DeadKey(c, topic, seq), raw)
+}
+
+// A delete against a counter that is absent (the letter predates the counters,
+// so the relay or an operator removes it before the build ran) leaves the
+// counter where it was: nothing. A repair that read the store just before that
+// delete must still lose its race to it, or it writes a count that still
+// includes the letter. The delete therefore leaves a row of its own, which the
+// repair's byte comparison sees; the next repair deletes that zero row.
+//
+// Before this change the delete clamped at zero and deleted an absent key, so
+// the repair's precondition (absent, as read) passed and it wrote 2 for one
+// letter.
+func TestRepairDeadCounts_SeesADeleteAgainstAnAbsentCounter(t *testing.T) {
+	s, ks := openStore(t)
+	ctx := context.Background()
+	letterOnly(t, ks, consumer, 3, 1)
+	letterOnly(t, ks, consumer, 5, 1)
+	var once sync.Once
+	outboxstore.SetRepairHook(s, func() {
+		once.Do(func() {
+			if !deleteDead(t, s, consumer, 3) {
+				t.Error("the letter to delete was not found")
+			}
+		})
+	})
+	rep, err := s.RepairDeadCounts(ctx)
+	must(t, err)
+	outboxstore.SetRepairHook(s, nil)
+	if got := totals(t, s)[consumer]; got != 1 {
+		t.Fatalf("DeadTotals = %d, want 1: the repair wrote the count of a letter that was deleted while it ran", got)
+	}
+	if len(rep.Fixes) != 1 || rep.Fixes[0].Want != 1 {
+		t.Fatalf("fixes = %+v, want one fix to 1 after re-reading", rep.Fixes)
+	}
+
+	// A zero row, the trace of a delete against nothing, is itself corrected.
+	putRaw(t, ks, outboxstore.DeadCountKey("wayne.vault.guard", topic, 2), mustCount(t, 0))
+	rep, err = s.RepairDeadCounts(ctx)
+	must(t, err)
+	if len(rep.Fixes) != 1 || rep.Fixes[0].Consumer != "wayne.vault.guard" || rep.Fixes[0].Want != 0 {
+		t.Fatalf("a zero row: fixes = %+v, want the guard's counter deleted", rep.Fixes)
+	}
+	if n := countRows(t, ks, outboxstore.DeadCountRoot()); n != 1 {
+		t.Fatalf("%d counter rows, want 1", n)
+	}
+}
+
+// Letters written before the counters are built are safe: the write bumps an
+// absent counter to 1, the repair then reads the letters and corrects it, and
+// a second run changes nothing. This is why the relay does not refuse to write
+// a dead letter while the build is failing.
+func TestRepairDeadCounts_CorrectsACounterStartedByALetterWrittenBeforeTheBuild(t *testing.T) {
+	s, ks := openStore(t)
+	ctx := context.Background()
+	letterOnly(t, ks, consumer, 3, 1)
+	letterOnly(t, ks, consumer, 5, 1)
+	stageDeads(t, s, consumer, 1, 7) // the relay's dead letter, before any build
+	if got := totals(t, s)[consumer]; got != 1 {
+		t.Fatalf("DeadTotals = %d before the build, want 1 (only the new letter is counted)", got)
+	}
+	rep, err := s.RepairDeadCounts(ctx)
+	must(t, err)
+	if len(rep.Fixes) != 1 || rep.Fixes[0].Had != 1 || rep.Fixes[0].Want != 3 || rep.Fixes[0].Absent {
+		t.Fatalf("fixes = %+v, want the counter corrected from 1 to 3", rep.Fixes)
+	}
+	if got := totals(t, s)[consumer]; got != 3 {
+		t.Fatalf("DeadTotals = %d after the build, want 3", got)
+	}
+	if rep, err = s.RepairDeadCounts(ctx); err != nil || len(rep.Fixes) != 0 {
+		t.Fatalf("a second repair = %+v, %v; want nothing", rep, err)
+	}
+}
+
+// Keys that belong to no letter or counter do not stop the repair: it skips and
+// counts them, repairs everything else, and leaves them where they are.
+func TestRepairDeadCounts_SkipsAndCountsKeysThatAreNoLettersOrCounters(t *testing.T) {
+	s, ks := openStore(t)
+	ctx := context.Background()
+	letterOnly(t, ks, consumer, 3, 1)
+	putRaw(t, ks, append(outboxstore.DeadRoot(), 'j'), []byte(`x`))
+	putRaw(t, ks, append(outboxstore.DeadCountRoot(), 'j'), []byte(`x`))
+	rep, err := s.RepairDeadCounts(ctx)
+	if err != nil {
+		t.Fatalf("RepairDeadCounts = %v: a key that is no letter's must not abort the repair", err)
+	}
+	if rep.Unparseable != 2 || len(rep.Fixes) != 1 {
+		t.Fatalf("repair = %+v, want 2 unparseable keys named and one counter built", rep)
+	}
+	if got := totals(t, s)[consumer]; got != 1 {
+		t.Fatalf("DeadTotals = %d, want 1", got)
+	}
+	if n := countRows(t, ks, outboxstore.DeadRoot()); n != 2 {
+		t.Fatalf("%d rows under dead/, want 2: the stray key is left in place", n)
+	}
+	letters, bad, err := s.DeadCounts(ctx)
+	must(t, err)
+	if bad != 1 || letters[consumer] != 1 {
+		t.Fatalf("DeadCounts = %v, %d unparseable; want 1 letter and 1 stray key", letters, bad)
+	}
+	dt, err := s.DeadTotals(ctx)
+	must(t, err)
+	if dt.Unparseable != 1 {
+		t.Fatalf("DeadTotals reports %d stray counter keys, want 1", dt.Unparseable)
+	}
+}
+
+// A counter that does not decode is named, not an error: DeadTotals leaves it
+// out of the sums and the repair rewrites it.
+func TestDeadTotals_NamesAnUnreadableCounterInsteadOfFailing(t *testing.T) {
+	s, ks := openStore(t)
+	stageDeads(t, s, consumer, 1, 3)
+	putRaw(t, ks, outboxstore.DeadCountKey(consumer, topic, 1), []byte(`not a counter`))
+	dt, err := s.DeadTotals(context.Background())
+	if err != nil {
+		t.Fatalf("DeadTotals = %v, want the counter named instead", err)
+	}
+	if len(dt.Unreadable) != 1 || dt.Unreadable[0].Consumer != consumer || dt.Unreadable[0].Shard != "01" {
+		t.Fatalf("Unreadable = %+v, want %s shard 01", dt.Unreadable, consumer)
+	}
+	if dt.ByConsumer[consumer] != 0 {
+		t.Fatalf("an unreadable counter was summed as %d", dt.ByConsumer[consumer])
 	}
 }

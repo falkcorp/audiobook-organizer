@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/keys.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 47a4a283-dcad-4da8-b454-90f24d1d624d
 // last-edited: 2026-11-15
 
@@ -47,7 +47,15 @@
 // the shard adds no contention the pair did not have. A letter that does not
 // decode has no partition to name, so RepairDeadCounts books it under the shard
 // UnreadShard, a key no writer maintains. A zero count has no row: an absent
-// counter is zero. RepairDeadCounts builds the counters from the letters (the
+// counter is zero. The one zero row that can exist is the trace of a letter
+// removed against a counter that was absent or zero (a store from before the
+// counters, not yet repaired): it is written so that a repair that read the
+// store a moment earlier sees the change, and every repair deletes it. Every
+// write of a counter raises its Rev, so its bytes differ after any write.
+// Keys under dead/ or deadn/ that are no letter's or counter's are skipped and
+// counted (never rewritten or deleted) by the repair and the reads, so one of
+// them cannot stop dead-lettering; the outbox names them in Status.
+// RepairDeadCounts builds the counters from the letters (the
 // first start after an upgrade, and the periodic audit), and says what it
 // changed. deadn/ is derived: every number in it is a count of dead/ rows, so it
 // is the one family a repair rewrites whatever the version of the row it

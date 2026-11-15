@@ -1,5 +1,5 @@
 // file: core/outbox/relay.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 77b6d1de-9cf2-4c52-8f0b-7e9a5c2b6d11
 // last-edited: 2026-11-15
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -112,9 +113,13 @@ func (o *Outbox) relayBody(rc *tasks.RC, _ struct{}) (struct{}, error) {
 		// The dead-letter counters are built here, before any delivery of the
 		// loop, on the run's own context: building them scans every stored letter
 		// once, which a settle (5 seconds, once per message) must never be the
-		// place to do. A failure is logged and retried at the top of the next
-		// loop; until it succeeds a dead letter is not written (requireDeadCounts).
-		if err := o.ensureDeadCounts(ctx); err != nil {
+		// place to do. A failure is logged, shown as a stopped "dead_counters"
+		// subject and retried at the top of the next loop. It does not hold up
+		// delivery: a dead letter is written either way, because a counter that
+		// is behind the letters is what RepairDeadCounts exists to correct (its
+		// precondition sees the settle's write), while a letter refused for want
+		// of a counter would redeliver forever and block its pair.
+		if err := o.healDeadCounts(ctx); err != nil {
 			r.fault("building the dead-letter counters", err)
 		}
 		r.syncEpoch()
@@ -469,8 +474,44 @@ func (o *Outbox) RefreshStatus(ctx context.Context) {
 	}
 }
 
+// deadReading is one reading of the dead letters: the count per consumer, and
+// what the reading could not use (counters that do not decode, keys that are
+// no counter's or no letter's), named the way Status names a stopped row.
+type deadReading struct {
+	counts  map[string]int
+	stopped []StoppedStatus
+}
+
+// The health subjects (and, for the two key families, the Topic of a
+// StoppedStatus) of dead-letter rows that cannot be read: keys under dead/ that
+// are no letter's, keys under deadn/ that are no counter's, and the counters
+// failing to build at all.
+const (
+	deadKeysSubject        = "dead/"
+	deadCounterKeysSubject = "deadn/"
+	deadCountersSubject    = "dead_counters"
+)
+
+// readingOf builds the reading of one DeadTotals result, plus the keys under
+// dead/ the last audit could not parse.
+func (o *Outbox) readingOf(t outboxstore.DeadTotal) deadReading {
+	rd := deadReading{counts: t.ByConsumer}
+	for _, u := range t.Unreadable {
+		cause, _ := rowCause(u.Err)
+		pp, _ := strconv.Atoi(u.Shard) // UnreadShard has no partition: 0
+		rd.stopped = append(rd.stopped, StoppedStatus{Topic: u.Topic, Consumer: u.Consumer, Partition: pp, Cause: cause})
+	}
+	if t.Unparseable > 0 {
+		rd.stopped = append(rd.stopped, StoppedStatus{Topic: deadCounterKeysSubject, Cause: "corrupt_row"})
+	}
+	if o.deadBad.Load() > 0 {
+		rd.stopped = append(rd.stopped, StoppedStatus{Topic: deadKeysSubject, Cause: "corrupt_row"})
+	}
+	return rd
+}
+
 // syncDead reads the dead-letter counts and reports them through the health
-// component, and returns them. Every writer of that count (the relay's
+// component, and returns the reading. Every writer of that count (the relay's
 // dead-lettering, an operator's retry or discard through changed, the periodic
 // RefreshStatus) goes through here, and the counts are read inside deadMu: a
 // recount that starts after another one published reads a store at least as
@@ -487,52 +528,62 @@ func (o *Outbox) RefreshStatus(ctx context.Context) {
 // disagree, calls RepairDeadCounts and logs what it changed. A disagreement
 // seen here can be a writer caught between the two reads, which RepairDeadCounts
 // (it reads one snapshot) finds nothing to repair; a repair is logged only when
-// it changed a counter.
-func (o *Outbox) syncDead(ctx context.Context, audit bool) (map[string]int, error) {
+// it changed a counter. A counter that does not decode forces the audit: it is
+// derived data, and the repair rewrites it.
+func (o *Outbox) syncDead(ctx context.Context, audit bool) (deadReading, error) {
 	o.deadMu.Lock()
 	defer o.deadMu.Unlock()
 	if err := o.seedDeadCounts(ctx); err != nil {
-		return nil, err
+		return deadReading{}, err
 	}
-	counts, err := o.store.DeadTotals(ctx)
-	switch {
-	case err == nil:
-	case rowFaultOf(err):
-		// A counter that does not decode is repaired like one that is wrong.
+	totals, err := o.store.DeadTotals(ctx)
+	if err != nil {
+		return deadReading{}, err
+	}
+	if len(totals.Unreadable) > 0 {
 		audit = true
-	default:
-		return nil, err
 	}
 	if audit {
-		if counts, err = o.auditDeadCounts(ctx, counts, err); err != nil {
-			return nil, err
+		if totals, err = o.auditDeadCounts(ctx, totals); err != nil {
+			return deadReading{}, err
 		}
+		if o.deadBad.Load() > 0 {
+			o.health.stop(deadKeysSubject, "corrupt_row")
+		} else {
+			o.health.clear(deadKeysSubject)
+		}
+	}
+	if totals.Unparseable > 0 {
+		o.health.stop(deadCounterKeysSubject, "corrupt_row")
+	} else {
+		o.health.clear(deadCounterKeysSubject)
 	}
 	if h := o.hooks.get(); h.afterDeadRead != nil {
 		h.afterDeadRead()
 	}
-	o.health.setDead(counts)
+	o.health.setDead(totals.ByConsumer)
 	o.health.report(o.now())
-	return counts, nil
+	return o.readingOf(totals), nil
 }
 
-// auditDeadCounts compares the counters' totals (counts, or its error) with the
-// letters' own, and repairs the counters if they differ. deadMu is held.
-func (o *Outbox) auditDeadCounts(ctx context.Context, counts map[string]int, readErr error) (map[string]int, error) {
-	if readErr == nil {
-		letters, err := o.store.DeadCounts(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if sameCounts(counts, letters) {
-			return counts, nil
-		}
-	}
-	fixes, err := o.store.RepairDeadCounts(ctx)
+// auditDeadCounts compares the counters' totals with the letters' own (keys
+// only), and repairs the counters if they differ or one does not decode. It
+// records how many keys under dead/ are no letter's (deadBad), which neither
+// the counters nor the repair can account for. deadMu is held.
+func (o *Outbox) auditDeadCounts(ctx context.Context, totals outboxstore.DeadTotal) (outboxstore.DeadTotal, error) {
+	letters, bad, err := o.store.DeadCounts(ctx)
 	if err != nil {
-		return nil, err
+		return totals, err
 	}
-	o.logDeadFixes(fixes, false)
+	o.deadBad.Store(int64(bad))
+	if len(totals.Unreadable) == 0 && sameCounts(totals.ByConsumer, letters) {
+		return totals, nil
+	}
+	rep, err := o.store.RepairDeadCounts(ctx)
+	if err != nil {
+		return totals, err
+	}
+	o.logDeadFixes(rep.Fixes, false)
 	return o.store.DeadTotals(ctx)
 }
 
@@ -542,40 +593,43 @@ func (o *Outbox) auditDeadCounts(ctx context.Context, counts map[string]int, rea
 // upgrade creates them. It is RepairDeadCounts, so it writes only a counter
 // that is missing or wrong, once, in one batch; a crash between its read and its
 // commit leaves nothing written and the next start does it again, and running
-// it twice (two processes, a restart) changes nothing the second time. deadMu
-// must be held.
+// it twice (two processes, a restart) changes nothing the second time. A build
+// that fails is a stopped "dead_counters" subject in health until one succeeds;
+// the relay writes dead letters meanwhile. deadMu must be held.
 func (o *Outbox) seedDeadCounts(ctx context.Context) error {
 	if o.deadSeeded.Load() {
 		return nil
 	}
-	fixes, err := o.store.RepairDeadCounts(ctx)
+	var err error
+	if h := o.hooks.get(); h.seedDeadCounts != nil {
+		err = h.seedDeadCounts()
+	}
+	var rep outboxstore.DeadCountRepair
+	if err == nil {
+		rep, err = o.store.RepairDeadCounts(ctx)
+	}
 	if err != nil {
+		if ctx.Err() == nil {
+			o.health.stop(deadCountersSubject, "counters_unbuilt")
+		}
 		return err
 	}
-	o.logDeadFixes(fixes, true)
+	o.logDeadFixes(rep.Fixes, true)
+	o.deadBad.Store(int64(rep.Unparseable))
 	o.deadSeeded.Store(true)
+	// Dead letters written while the build was failing were never counted for
+	// health (their recount could not read counters that did not exist): publish
+	// what the counters say now, rather than leave core.outbox Up until the next
+	// refresh. A failure here is left to that refresh.
+	if t, terr := o.store.DeadTotals(ctx); terr == nil {
+		o.health.setDead(t.ByConsumer)
+	}
+	o.health.clear(deadCountersSubject)
+	o.health.report(o.now())
 	return nil
 }
 
-// errDeadCountsNotBuilt: a dead letter was about to be written before the
-// counters were built in this process.
-var errDeadCountsNotBuilt = errors.New("outbox: the dead-letter counters are not built yet")
-
-// requireDeadCounts is the relay's guard before it writes a dead letter: the
-// relay builds the counters at the top of every loop (ensureDeadCounts), so a
-// settle that finds them unbuilt means that build failed, and the letter waits
-// for the next loop (the message is delivered again) instead of the settle
-// scanning every stored letter inside its own deadline.
-func (o *Outbox) requireDeadCounts() error {
-	if o.deadSeeded.Load() {
-		return nil
-	}
-	return errDeadCountsNotBuilt
-}
-
-// ensureDeadCounts is seedDeadCounts for a caller that does not hold deadMu: the
-// relay's loop and the operator paths (Status, RetryDead, DiscardDead), which
-// run on a request's context and are not per message.
+// ensureDeadCounts is seedDeadCounts for a caller that does not hold deadMu.
 func (o *Outbox) ensureDeadCounts(ctx context.Context) error {
 	if o.deadSeeded.Load() {
 		return nil
@@ -585,12 +639,42 @@ func (o *Outbox) ensureDeadCounts(ctx context.Context) error {
 	return o.seedDeadCounts(ctx)
 }
 
-// deadCounts is the dead letters by consumer, from the counters.
-func (o *Outbox) deadCounts(ctx context.Context) (map[string]int, error) {
+// readDead is the dead letters by consumer from the counters, for the callers
+// that do not publish them (Status, the operator paths): it builds the counters
+// first if they are not built.
+func (o *Outbox) readDead(ctx context.Context) (deadReading, error) {
 	if err := o.ensureDeadCounts(ctx); err != nil {
-		return nil, err
+		return deadReading{}, err
 	}
-	return o.store.DeadTotals(ctx)
+	totals, err := o.store.DeadTotals(ctx)
+	if err != nil {
+		return deadReading{}, err
+	}
+	return o.readingOf(totals), nil
+}
+
+// healDeadCounts makes sure the counters are built and that every one decodes,
+// repairing the ones that do not (they are derived data). It is what the relay
+// does at the top of each loop and an operator's retry or discard does before
+// it lowers a counter: a delete against a counter that is wrong would lower a
+// number nobody had checked. The check reads the counters only (one row per
+// pair), never the letters.
+func (o *Outbox) healDeadCounts(ctx context.Context) error {
+	if err := o.ensureDeadCounts(ctx); err != nil {
+		return err
+	}
+	o.deadMu.Lock()
+	defer o.deadMu.Unlock()
+	totals, err := o.store.DeadTotals(ctx)
+	if err != nil || len(totals.Unreadable) == 0 {
+		return err
+	}
+	rep, err := o.store.RepairDeadCounts(ctx)
+	if err != nil {
+		return err
+	}
+	o.logDeadFixes(rep.Fixes, false)
+	return nil
 }
 
 // logDeadFixes says what a repair changed. Counters created for letters that
@@ -628,12 +712,6 @@ func sameCounts(a, b map[string]int) bool {
 		}
 	}
 	return true
-}
-
-// rowFaultOf reports whether err is a row that does not decode.
-func rowFaultOf(err error) bool {
-	_, ok := rowCause(err)
-	return ok
 }
 
 // deadLettered tells the health component that a message of the relay's was

@@ -1,5 +1,5 @@
 // file: core/outbox/export_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: c3f2f7d8-6a5e-4c61-b8a8-0b2d0b9c4e11
 // last-edited: 2026-11-15
 
@@ -26,6 +26,9 @@ type TestHooks struct {
 	// AfterDeadRead runs in syncDead once the dead-letter counters are read and
 	// before they are published, with the recount lock held.
 	AfterDeadRead func()
+	// SeedDeadCounts runs at the start of every attempt to build the dead-letter
+	// counters; the error it returns fails that attempt.
+	SeedDeadCounts func() error
 }
 
 // SetTestHooks installs h; call it before the relay starts.
@@ -42,6 +45,7 @@ func (o *Outbox) SetTestHooks(h TestHooks) {
 	o.hooks.beforeDeadCommit = h.BeforeDeadCommit
 	o.hooks.beforeRetentionBatch = h.BeforeRetentionBatch
 	o.hooks.afterDeadRead = h.AfterDeadRead
+	o.hooks.seedDeadCounts = h.SeedDeadCounts
 }
 
 // SetSweepEvery sets the retention sweep interval; call it before the relay starts.
