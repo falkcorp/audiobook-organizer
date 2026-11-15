@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/credits_backfill_gaps_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 812b813b-fe22-4b23-bf28-6de81d6c94be
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -154,7 +154,7 @@ func TestCreditsBackfill_ApplyCanceledInTheReplanFilesEveryPlannedBook(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rep := &cbCancelOnReplanReporter{cbReporter: cbReporter{id: cbTestOpID}, cancel: cancel}
-	res, err := runCreditsBackfillScan(ctx, creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{Apply: true}, rep)
+	res, err := f.runEnv(ctx, creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{Apply: true}, rep)
 	if err == nil || res.Complete {
 		t.Fatalf("a canceled apply must be incomplete: err=%v", err)
 	}
@@ -243,9 +243,9 @@ func TestCreditsBackfill_LostStandDownFilesTheBooksItNeverWrote(t *testing.T) {
 	env := creditsBackfillEnv{
 		store: f.s,
 		mod:   cbWriteCountMod{f.s, writes},
-		scan:  &cbWriteLeaseScan{writes: writes, afterWrites: 2},
 	}
-	res, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID})
+	res, err := f.runEnvScan(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID},
+		&cbWriteLeaseScan{writes: writes, afterWrites: 2})
 	if !errors.Is(err, registry.ErrScanStandDownLost) {
 		t.Fatalf("err = %v, want the lost stand-down", err)
 	}
@@ -726,10 +726,10 @@ func TestCreditsBackfill_LostStandDownLeavesTheOperationUnjudged(t *testing.T) {
 	env := creditsBackfillEnv{
 		store:   cbFaultStore{creditsBackfillStore: f.s, reads: reads},
 		mod:     cbWriteCountMod{f.s, writes},
-		scan:    &cbWriteLeaseScan{writes: writes, afterWrites: 1},
 		workers: 1,
 	}
-	if _, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: "01LOSTONE"}); !errors.Is(err, registry.ErrScanStandDownLost) {
+	if _, err := f.runEnvScan(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: "01LOSTONE"},
+		&cbWriteLeaseScan{writes: writes, afterWrites: 1}); !errors.Is(err, registry.ErrScanStandDownLost) {
 		t.Fatalf("err = %v, want the lost stand-down", err)
 	}
 	env = creditsBackfillEnv{store: cbFaultStore{creditsBackfillStore: f.s, reads: reads}, mod: f.s, workers: 1}
