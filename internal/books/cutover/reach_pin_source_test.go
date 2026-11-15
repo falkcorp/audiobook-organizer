@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_pin_source_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6dca55f4-5b1d-4718-b6a4-30854084cc7c
 // last-edited: 2026-11-15
 
@@ -568,8 +568,8 @@ func reachMountAuth(src []byte) (string, error) {
 // authorization decision for the 11 pinned cells until the registered path
 // proves the handlers, and the oracle models no owner-assured deployment until
 // R0 has been recorded with an owner set. It also fails once per open obligation
-// (reachFlipObligations: what the oracle knows it does not compare), so that list
-// must be empty at the flip. An unreadable or unfamiliar mount fails closed.
+// (reachObligations with no valid discharge: what the oracle knows it does not
+// compare), so every row must be discharged at the flip. An unreadable or unfamiliar mount fails closed.
 func reachFlipProblems(src []byte, pinned int, ownerRecorded bool, obligations []reachFlipObligation) []string {
 	auth, err := reachMountAuth(src)
 	if err != nil {
@@ -603,7 +603,7 @@ func TestReachFlip_FailsWhileThePinOrTheOwnerlessModelStands(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, vd := reachLoad(t)
-	for _, p := range reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil, reachFlipObligations) {
+	for _, p := range reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil, reachOpenObligationsNow(t)) {
 		t.Error(p)
 	}
 }
@@ -757,6 +757,7 @@ func TestReachFlip_FailsAtTheFlipWhileThePinOrTheOwnerlessModelStands(t *testing
 		t.Fatal(err)
 	}
 	flipped := reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        httpapi.LegacyAuthCore,")
+	open := reachOpenObligationsNow(t)
 	for _, tc := range []struct {
 		name          string
 		src           []byte
@@ -765,12 +766,12 @@ func TestReachFlip_FailsAtTheFlipWhileThePinOrTheOwnerlessModelStands(t *testing
 		obligations   []reachFlipObligation
 		want          int // problems
 	}{
-		{"unflipped: nothing to say", src, 3, false, reachFlipObligations, 0},
+		{"unflipped: nothing to say", src, 3, false, open, 0},
 		{"flipped with the pin", flipped, 3, true, nil, 1},
 		{"flipped with no owner-set recording", flipped, 0, false, nil, 1},
 		{"flipped with both", flipped, 3, false, nil, 2},
 		{"flipped with neither and no open obligation: free to go", flipped, 0, true, nil, 0},
-		{"flipped with every open obligation", flipped, 0, true, reachFlipObligations, len(reachFlipObligations)},
+		{"flipped with every open obligation", flipped, 0, true, open, len(open)},
 		{"an unreadable mount fails closed", []byte("package books\n"), 0, true, nil, 1},
 		{"an unfamiliar Auth fails closed", reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        authMode(),"), 0, true, nil, 1},
 	} {
@@ -782,7 +783,7 @@ func TestReachFlip_FailsAtTheFlipWhileThePinOrTheOwnerlessModelStands(t *testing
 
 // One flip case per obligation: with the pin gone and an owner-set recording, an
 // obligation that is the only one open still blocks the flip, with exactly one
-// problem that names it. Removing an entry from the list while the flip stands is
+// problem that names it. Dropping a row of the table while the flip stands is
 // caught by reachObligationProblems (reach_flip_obligations_test.go).
 func TestReachFlip_EachOpenObligationAloneBlocksTheFlip(t *testing.T) {
 	src, err := os.ReadFile(reachMountSource)
@@ -790,10 +791,11 @@ func TestReachFlip_EachOpenObligationAloneBlocksTheFlip(t *testing.T) {
 		t.Fatal(err)
 	}
 	flipped := reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        httpapi.LegacyAuthCore,")
-	if len(reachFlipObligations) == 0 {
-		t.Fatal("no open obligations listed: nothing blocks the flip")
+	open := reachOpenObligationsNow(t)
+	if len(open) != len(reachObligations) {
+		t.Fatalf("%d of %d obligations are open: with no discharge registered every row blocks the flip", len(open), len(reachObligations))
 	}
-	for _, o := range reachFlipObligations {
+	for _, o := range open {
 		got := reachFlipProblems(flipped, 0, true, []reachFlipObligation{o})
 		if len(got) != 1 || !strings.Contains(got[0], o.name) {
 			t.Errorf("flipped with only %s open: %q", o.name, got)

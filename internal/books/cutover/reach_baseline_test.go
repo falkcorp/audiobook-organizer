@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_baseline_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b8f1c64-d702-4e95-a6c3-0e47b9d1f258
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package cutover
 
@@ -269,5 +269,94 @@ func TestReachOracle_RouteAndCellCountsArePinned(t *testing.T) {
 	res, _ := reachCompare(t, pd, vd, atoms, atoms)
 	if diff := reachCountProblems(vd, res); len(diff) > 0 {
 		t.Errorf("the oracle changed size; every route added or dropped needs a permission decision in the manifest and a place in the pinned lists, then these counts move with it:\n  %s", strings.Join(diff, "\n  "))
+	}
+}
+
+// reachServerErrorReasons names the cause of every route R0 answers 5xx to for a
+// probe that was let through: the same closed vocabulary as OK_5XX_REASONS in
+// scripts/r2corpus/record_r0_reach.py, kept here by hand so that changing the
+// recorder's list without this one (or the reverse) fails. A 5xx is a handler
+// that was reached and could not finish in the throwaway store, never a
+// refusal, and the token says which of its failures it was.
+var reachServerErrorReasons = map[string]string{
+	"POST /api/v1/ai/scans":                                     "ai-scan-pipeline-not-configured",
+	"POST /api/v1/ai/scans/:id/cancel":                          "ai-scan-pipeline-not-configured",
+	"POST /api/v1/ai/test-connection":                           "connection-test-failed",
+	"PUT /api/v1/audiobooks/:id":                                "failed-to-update-audiobook",
+	"POST /api/v1/audiobooks/bulk-write-back":                   "enqueue-failed",
+	"POST /api/v1/audiobooks/:id/apply-metadata":                "failed-to-apply-metadata",
+	"POST /api/v1/audiobooks/:id/mark-no-match":                 "failed-to-mark-no-match",
+	"POST /api/v1/audiobooks/:id/parse-with-ai":                 "recovered-panic",
+	"POST /api/v1/audiobooks/:id/quarantine":                    "quarantine-failed",
+	"DELETE /api/v1/audiobooks/:id/quarantine":                  "unquarantine-failed",
+	"POST /api/v1/audiobooks/:id/retired-versions/:vid/restore": "restore-not-journaled",
+	"DELETE /api/v1/backup/:filename":                           "failed-to-delete-backup",
+	"POST /api/v1/dedup/fingerprint-rescan":                     "no-fingerprint-backend",
+	"GET /api/v1/fingerprint/worker/hello":                      "worker-not-running",
+	"POST /api/v1/fingerprint/worker/lease/:id/release":         "worker-not-running",
+	"POST /api/v1/fingerprint/worker/lease/:id/renew":           "worker-not-running",
+	"POST /api/v1/update/check":                                 "failed-to-check-for-updates",
+	"GET /api/v1/deluge/labels":                                 "deluge-unreachable",
+	"POST /api/v1/deluge/test-connection":                       "deluge-unreachable",
+	"GET /api/v1/deluge/torrents":                               "deluge-unreachable",
+	"GET /api/v1/deluge/discover":                               "deluge-unreachable",
+	"POST /api/v1/operations/:id/revert":                        "failed-to-revert-operation",
+	"POST /api/v1/update/apply":                                 "failed-to-apply-update",
+}
+
+// Every 5xx cell carries the token the list names for its route, and no other
+// cell carries one, so a 5xx whose cause changed (a different handler failure,
+// or a refusal that now looks like one) cannot be recorded unnoticed.
+func TestReachBaseline_EveryServerErrorCellCarriesItsListedReason(t *testing.T) {
+	_, vd := reachLoad(t)
+	seen := map[string]bool{}
+	for _, r := range vd.Routes {
+		if len(r.Status) != len(vd.Principals) {
+			t.Fatalf("%s: %d statuses for %d principals", r.key(), len(r.Status), len(vd.Principals))
+		}
+		var has5xx bool
+		for _, s := range r.Status {
+			if s >= 500 {
+				has5xx = true
+			}
+		}
+		if !has5xx {
+			if len(r.Reason) != 0 {
+				t.Errorf("%s: has no 5xx cell but records reasons %v", r.key(), r.Reason)
+			}
+			continue
+		}
+		seen[r.key()] = true
+		want, listed := reachServerErrorReasons[r.key()]
+		if !listed {
+			t.Errorf("%s: answers 5xx but reachServerErrorReasons names no reason for it; decide what failed before adding one", r.key())
+			continue
+		}
+		if len(r.Reason) != len(r.Status) {
+			t.Errorf("%s: %d reasons for %d cells", r.key(), len(r.Reason), len(r.Status))
+			continue
+		}
+		for i, s := range r.Status {
+			switch got := r.Reason[i]; {
+			case s >= 500 && got != want:
+				t.Errorf("%s %s: 5xx recorded with reason %q, the list names %q", r.key(), vd.Principals[i], got, want)
+			case s < 500 && got != "":
+				t.Errorf("%s %s: status %d carries reason %q", r.key(), vd.Principals[i], s, got)
+			}
+		}
+	}
+	// A listed route that no cell reaches is the recorder's to keep (R0 may answer
+	// it 2xx or 4xx in a throwaway store); it must at least still be a route.
+	have := map[string]bool{}
+	for _, r := range vd.Routes {
+		have[r.key()] = true
+	}
+	for k := range reachServerErrorReasons {
+		if !have[k] {
+			t.Errorf("reachServerErrorReasons lists %s, which is not a recorded route", k)
+		}
+	}
+	if len(seen) == 0 {
+		t.Error("no route answered 5xx; the reason check would pass on an empty recording")
 	}
 }

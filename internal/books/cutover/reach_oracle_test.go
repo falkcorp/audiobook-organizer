@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_oracle_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c27d5a40-9e18-4b63-8f02-3a6d1e7b9c54
 // last-edited: 2026-11-15
 
@@ -60,6 +60,9 @@ type reachR0Route struct {
 	// AdminRefusal is the admin session's refusal text on an owner-set route: R0's
 	// own gate message, recorded so a 403 for another reason is not read as the gate.
 	AdminRefusal string `json:"admin_refusal"`
+	// Reason is, per principal, the closed-vocabulary token for the cause of a 5xx
+	// cell ("" for every other cell). Only routes with at least one 5xx cell carry it.
+	Reason []string `json:"reason"`
 }
 
 func (r reachR0Route) key() string { return r.Method + " " + r.Path }
