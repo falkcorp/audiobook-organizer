@@ -1,7 +1,7 @@
 // file: internal/reconcile/retired_callers_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3a9f6c52-d018-4e47-b2c9-7e15a8d40f36
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package reconcile
 
@@ -106,7 +106,7 @@ func TestResolveAmbiguousByDB_RetiredCandidateIsUnresolved(t *testing.T) {
 					AcoustIDFPVersion: fingerprint.PrintEncodingVersion, Retired: retired && p == "/b.m4b"}, nil
 			}
 			m.GetBookByIDFunc = func(string) (*database.Book, error) { bookReads.Add(1); return nil, nil }
-			src, merged := resolveAmbiguousByDB(context.Background(), m, "", []string{"/a.m4b", "/b.m4b"})
+			src, merged := resolveAmbiguousByDB(context.Background(), m, func(k string, d []string) error { return collapseHealDuplicates(m, "", k, d) }, []string{"/a.m4b", "/b.m4b"})
 			if retired {
 				if src != "" || merged != 0 || bookReads.Load() != 0 {
 					t.Fatalf("retired candidate: resolved to %q (merged %d, book reads %d), want unresolved with no merge reads", src, merged, bookReads.Load())

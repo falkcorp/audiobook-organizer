@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal_collapse_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0c7e4b29-6a13-4d58-91f2-8e3b5d6a2c74
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package reconcile
 
@@ -53,7 +53,7 @@ func healFixture(t *testing.T) (f *vptest.Fixture, k, l, ls, kPath, lPath string
 // puts the sibling back in its group.
 func TestResolveAmbiguousByDB_CollapseUnitesVersionGroups(t *testing.T) {
 	f, k, l, ls, kPath, lPath := healFixture(t)
-	src, n := resolveAmbiguousByDB(context.Background(), f.S, "op-heal", []string{kPath, lPath})
+	src, n := resolveAmbiguousByDB(context.Background(), f.S, func(k string, d []string) error { return collapseHealDuplicates(f.S, "op-heal", k, d) }, []string{kPath, lPath})
 	require.Equal(t, kPath, src)
 	require.Equal(t, 1, n)
 	lb, err := f.S.GetBookByID(l)
@@ -92,7 +92,7 @@ func TestResolveAmbiguousByDB_CollapseRefusesSharedAudioPath(t *testing.T) {
 		return out
 	}
 	before := snap()
-	src, n := resolveAmbiguousByDB(context.Background(), f.S, "", []string{kPath, lPath})
+	src, n := resolveAmbiguousByDB(context.Background(), f.S, func(k string, d []string) error { return collapseHealDuplicates(f.S, "", k, d) }, []string{kPath, lPath})
 	require.Empty(t, src)
 	require.Zero(t, n)
 	require.Equal(t, before, snap(), "a refused collapse writes nothing")

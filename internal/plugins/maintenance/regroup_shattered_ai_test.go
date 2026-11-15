@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 3a9f6c04-8e21-4b57-9d0a-6f2e7c1b5a48
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -365,7 +365,7 @@ func TestReconcileStaleHolds_PurgesSupersededPendingOnly(t *testing.T) {
 	groups := []itunesservice.RegroupGroup{
 		{Kind: itunesservice.KindMultidisc, FolderRef: "/books/keep"},
 	}
-	purged := reconcileStaleHolds(context.Background(), s, &fakeReporter{}, groups, 0)
+	purged := t6g6ReconcileStaleHoldsVia(context.Background(), s, t6g6TestLogf, groups, 0)
 	if purged != 1 {
 		t.Fatalf("expected exactly 1 stale hold purged, got %d", purged)
 	}
@@ -392,7 +392,7 @@ func TestReconcileStaleHolds_SkippedOnCappedRun(t *testing.T) {
 	staleKey := regroupDedupKey(itunesservice.KindMultidisc, "/books/x")
 	seedHold(t, s, itunesservice.KindMultidisc, staleKey, "/books/x")
 
-	purged := reconcileStaleHolds(context.Background(), s, &fakeReporter{}, nil, 5) // limit > 0
+	purged := t6g6ReconcileStaleHoldsVia(context.Background(), s, t6g6TestLogf, nil, 5) // limit > 0
 	if purged != 0 {
 		t.Fatalf("capped run must not purge, got %d", purged)
 	}
@@ -427,8 +427,8 @@ func TestReconcileStaleHolds_LeavesAHoldDecidedAfterTheList(t *testing.T) {
 	decidedKey := regroupDedupKey(itunesservice.KindAnthology, "/books/decided")
 	decided := seedHold(t, s, itunesservice.KindAnthology, decidedKey, "/books/decided")
 
-	purged := reconcileStaleHolds(context.Background(), &decidingLister{PebbleStore: s, decideID: decided.ID},
-		&fakeReporter{}, nil, 0)
+	purged := t6g6ReconcileStaleHoldsVia(context.Background(), &decidingLister{PebbleStore: s, decideID: decided.ID},
+		t6g6TestLogf, nil, 0)
 	if purged != 1 {
 		t.Fatalf("purged %d, want 1 (only the hold still pending)", purged)
 	}
