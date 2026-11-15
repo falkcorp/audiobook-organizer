@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # file: docs/plans/platform-core/tools/check_waves.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 70c618d9-ad53-44e1-a46a-c1b8f03fe864
-# last-edited: 2026-11-05
+# last-edited: 2026-11-15
 """Mechanical checks over inventory.json.
 
 Usage: python3 -I check_waves.py <inventory.json> <spec dir (docs/specs/platform-core)>
 
 Checks:
-  1. schema: every row has id, title, release, wave, tier, depends_on, files, spec, notes; ID scheme.
+  1. schema: every row has id, title, release, wave, tier, depends_on, files, spec, notes; ID scheme
+     (R0-R3 or F2-F9, a two-digit number and an optional lowercase letter; OWNER-nn).
   2. dependencies: every depends_on exists and sits in an earlier wave.
   3. disjointness: inside each wave, no two tasks share a file; a path ending in '/' is a
      directory and collides with every path below it.
@@ -37,7 +38,9 @@ def fail(msg):
 
 # 1. schema
 FIELDS = ["id", "title", "release", "wave", "tier", "depends_on", "files", "spec", "notes"]
-ID_RE = re.compile(r"^(R[0-3]|F[2-9])-\d{2}$|^OWNER-\d{2}$")
+# A row added as a follow-up to a merged one may carry one lowercase letter after the number
+# (F8-03b); tools/test_check_waves.py pins this pattern. \Z, not $: $ also matches before a trailing newline.
+ID_RE = re.compile(r"^(R[0-3]|F[2-9])-\d{2}[a-z]?\Z|^OWNER-\d{2}\Z")
 for r in inv:
     if list(r.keys()) != FIELDS:
         fail("schema %s: %s" % (r.get("id"), list(r.keys())))

@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/implementation-plan.md -->
-<!-- version: 2.6.0 -->
+<!-- version: 2.6.1 -->
 <!-- guid: e0650f4a-4aec-4453-a256-aed84bf5ef1c -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-15 -->
 
 # mediacore — implementation plan (Phase 6, R0–R3)
 
@@ -23,7 +23,7 @@ The workstream index for agents is
 with its wave, tier, dependencies, files and spec sections. The same rows exist as JSON for the brief
 writers.
 
-**Size: 133 rows: 127 agent tasks, each one PR, and 6 owner checkpoints (NOT AGENT WORK),
+**Size: 134 rows: 128 agent tasks, each one PR, and 6 owner checkpoints (NOT AGENT WORK),
 in 46 waves.**
 
 ---
@@ -93,7 +93,7 @@ same PR (09 §9.3; `TestBootCrashMatrix` for a kernel writer, `TestBootCrashMatr
 | **F5** | F4 merged; every conversion group T2–T7 merged dark (F5-01 … F5-14), each having removed its lines from `tasklint`'s exemption list; M4, M5, the journal and its query route dark (F5-15, F5-16, F5-19). | The schedule oracle `TestScheduleParity_AllDefinitions` and `TestCutover_NoCatchUpStorm`; `TestParity_ResumeCancelShutdown`; `TestKindRenameMapCoversLedger` on the F5 build; the dashboard-reference test and `promtool test rules` after the ops renames; `TestABOMetricsGatherNoDuplicate`; G6/G7 (`TestSecondModuleNoAudiobookEdit`); `tasklint`'s exemption list empty; the journal query route with `TestJournal_OtherUsersLinesNeedUsersView` and the route half of `TestJournal_RequiresSystemManage`, HEAD's logs route deleted. | as F3 |
 | **F6** | F5 merged; outbox, realtime, the outbox operator routes and the journal's live tail merged dark (F6-01, F6-02, F6-04, F6-05). | The stream tests (05-events outbox set, 05-realtime hub set); the event half of `TestJournal_RequiresSystemManage`; `/api/events` deleted and the SPA on `/api/core/v1/events`, its log view on the live tail; e2e. | as F3 |
 | **F7** | F6 merged; F7-01 … F7-08 and F7-10 merged dark. | The search oracle `TestBooksIndexRebuiltAtCutover`; the webhook delivery test; `TestRootsCutover_FromHEADFixture`; the instance routes in place of the class-i `/api/v1/config` handlers; the dashboard-reference test after the AI renames; `internal/plugin` deleted with no importer left. | as F3 |
-| **F8** | F7 merged; F8-01 … F8-03 merged dark. | The dashboard-reference test over the kernel `/metrics` mount (no rename); R0's updater tests re-pointed with unchanged expectations, `TestABOUpdaterSourceMatchesHEAD`, `TestApply_RawAssetNoBackup`; `TestBasicGate_ExemptSetGolden` with `/health` exempt; `TestLegacyArchiveRestoreThenMigrate`; `unit-lifecycle`. | as F3 |
+| **F8** | F7 merged; F8-01 … F8-03 and F8-03b merged dark. | The dashboard-reference test over the kernel `/metrics` mount (no rename); R0's updater tests re-pointed with unchanged expectations, `TestABOUpdaterSourceMatchesHEAD`, `TestApply_RawAssetNoBackup`; `TestBasicGate_ExemptSetGolden` with `/health` exempt; `TestLegacyArchiveRestoreThenMigrate`; `unit-lifecycle`. | as F3 |
 | **F9** | F8 merged; F9-01, F9-02, F9-04 and F9-05 merged dark; 07 §7.19 steps 1–2 done. Not ready: it moves to R3 unchanged. | The shell's checks (07 §7.19 step 4: `make build-api && ./audiobook-organizer serve` answers `/` with the placeholder; `TestABOManifestBootsWithShell`); e2e; the image job boots the embedded bundle. | as F3 (in R3: `make rollback` to R2) |
 | **R2 last PR** | F8 merged (and F9 when it is in R2). | The runbook (deploy, rollback, smoke run) and the release note assembled from the rename table, the kind-rename map, the deleted routes, the metric renames and 09 §9.6, each owner's text verbatim (09 §9.2.9). OWNER-05 deploys, cuts R2 and clears `RELEASE_FREEZE`. | `make rollback-restore`: checkpoint or off-host archive offline, plus the pre-freeze release; every write since the upgrade is lost |
 | **R3** | R2 released and deployed (OWNER-05). | `make ci`; e2e; the crash matrix over `legacy-file-cleanup`; a pre-R2 store refused at boot with exit 78 (`TestPreR2StoreRefusedByR3`); `TestRestoreBelowUpgradeFloorRefusedAtStaging`; `TestFreshInstallPostFloorBootsTwice`. OWNER-06 deploys. | `make rollback` to R2 |
@@ -227,7 +227,7 @@ What makes the plan safe beyond the per-wave rule:
 | W34 | F4, F7 | F4-08, F7-08 | 6.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F4-08 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F4-08 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F4-08 is the wave's one owner of the kernel and module wiring files. |
 | W35 | F5 | F5-18 | 6.5 | every dependency merged in an earlier wave (check 2); F5-18 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F5-18 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F5-18 is the wave's one owner of the kernel and module wiring files. |
 | W36 | F6 | F6-03 | 3.5 | every dependency merged in an earlier wave (check 2); F6-03 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F6-03 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F6-03 is the wave's one owner of the kernel and module wiring files. |
-| W37 | F7 | F7-09 | 3.5 | every dependency merged in an earlier wave (check 2); F7-09 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F7-09 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F7-09 is the wave's one owner of the kernel and module wiring files. |
+| W37 | F7, F8 | F7-09, F8-03b | 3.5 | 2 PRs, pairwise file-disjoint (check 3); every dependency merged in an earlier wave (check 2); F7-09 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F7-09 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; the R2 PRs here land dark (no route, schedule or stored row changes before their flip); F7-09 is the wave's one owner of the kernel and module wiring files. |
 | W38 | F8 | F8-04 | 3.5 | every dependency merged in an earlier wave (check 2); F8-04 is the one PR here touching main.go, internal/server/ and books' registration; it merges alone and its siblings rebase after it; F8-04 runs inside an announced move window: no other PR in the wave touches the packages it moves or rewires or the shared layerOf and shard files; F8-04 is the wave's one owner of the kernel and module wiring files. |
 | W39 | R2 | R2-01 | 1.0 | every dependency merged in an earlier wave (check 2). |
 | W40 | OWNER | OWNER-05 | 1.0 | owner checkpoint OWNER-05: no files, NOT AGENT WORK; it gates the tasks that depend on it. |
@@ -683,7 +683,7 @@ decides" (09 §9.4.1; 04 §4.6 and open item 1); until then R1-26 renames it wit
 | T0 | Haiku / low | a mechanical edit that a checker proves (a pin bump, a workflow toggle) | 1 |
 | T1 | Sonnet / medium | small and fully specified: an import-path move of leaf packages, one handler, a deploy-file value, a release note | 11 |
 | T2 | Sonnet / high | multi-file and well specified, moderate blast radius: CI and tooling, move PRs with many importers, contracts that already exist, conversion batches whose shared bodies reroute through their shells | 35 |
-| T3 | Opus / high | fresh core code with intricate contracts, security-sensitive rules, the oracles and corpora | 47 |
+| T3 | Opus / high | fresh core code with intricate contracts, security-sensitive rules, the oracles and corpora | 48 |
 | T4 | Opus / xhigh–max | anything that can lose or expose data or lock users out: durable boot writers, the store engine, the swap, the one-way cutover steps, the perimeter and auth engines, and every flip PR | 33 |
 
 Every agent task carries its one-line reason in the JSON inventory and its brief. A brief may raise its
@@ -723,7 +723,10 @@ tier when its base-commit re-verification finds more than the plan assumed; it n
 - **IDs** encode the release: `R0-nn`, `R1-nn`, `F2-nn` … `F9-nn` (R2's foundation and flips), `R2-nn` (R2's
   closing PRs), `R3-nn`, and `OWNER-nn` for owner checkpoints. The flips keep their first IDs (F3-07, F4-08,
   F5-18, F6-03, F7-09, F8-04, F9-03); rows added later take the next free number of their label, and F5-17 is
-  retired (its `tasklint` work is F2-17).
+  retired (its `tasklint` work is F2-17). One row, F8-03b (a follow-up to the merged F8-03), takes a lowercase
+  letter after its parent's number because its name is the diagnostics marker's (`RedesignPendingF8_03b`,
+  `ErrRedesignPendingF8_03b`, `archtest.F803bGate`); `tools/check_waves.py` accepts that form and
+  `tools/test_check_waves.py` pins it. The number rule would have called it F8-05.
 - **Files** are the main paths a PR creates, modifies or deletes; a path ending in `/` is a whole directory
   (a move, a new package, or the importers a move rewires). The T6 and T7 file groups are listed by file, as the
   conversion briefs computed them at the plan's base; long lists show one line per directory in the README. Every PR also

@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-15
 
@@ -447,11 +447,14 @@ func (st *build) walkObject(x map[string]any, depth int) map[string]any {
 // stays taken, and resuming from the counter picks exactly the suffix a search
 // from "#2" would.
 //
-// The cost is at most three lookups per member: one for the text itself, one
-// for each occupied name passed over (a name "X#N" is a candidate only for the
-// text X, so it is passed over once, by that one counter), and one for the free
-// name found. probes counts the lookups so a test asserts that bound, not a
-// time, which a loaded runner moves.
+// The cost is at most three lookups per member on average, over the whole
+// object: one for the text itself, one for each occupied name passed over (a
+// name "X#N" is a candidate only for the text X, so it is passed over once, by
+// that one counter), and one for the free name found. One member can pass over
+// many occupied names (the first of n keys that take names in advance), so the
+// bound is on the total, 3 times the members, not on each member. probes counts
+// the lookups so a test asserts that bound, not a time, which a loaded runner
+// moves.
 type keyNamer struct {
 	out    map[string]any
 	next   map[string]int

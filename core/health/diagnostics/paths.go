@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-15
 
@@ -28,9 +28,12 @@ import (
 //     by accident;
 //   - core/archtest's F803bGate fails the build if non-test code in core imports
 //     core/internal/healthhttp or constructs the Exporter (an early signal, with
-//     the file and line), and fails it if this constant is false while scanPaths
-//     or tokenAt are still declared in this package: the constant stands for the
-//     scanner, so it cannot be flipped to open the gate.
+//     the file and line), if this constant is anything but true, and if the
+//     refusal's probe is anything but testing.Testing. The constant has two
+//     states, true and deleted: false is an error, not a way to open the gate, and
+//     no symbol name is consulted. Deleting it is the F8-03b PR's reviewed act,
+//     together with redesignRefusal and the gate. TestRedesignRefusal_RealBinary
+//     builds and runs a production binary to prove New and Build refuse in it.
 //
 // F8-04 mounts the diagnostics routes, so F8-04 is blocked on F8-03b
 // (docs/agent-tasks/platform-core/F8-03b-share-safe-bundle.md, TODO id

@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_gate.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4e7a1c92-6b35-4d08-a9f1-2c5d8e03b764
 // last-edited: 2026-11-15
 
@@ -27,11 +27,6 @@ const (
 	// f803bMarker is the constant in diagnostics that says the redactor is
 	// still the one the round 7 review of F8-03 rejected.
 	f803bMarker = "RedesignPendingF8_03b"
-	// f803bScanner1 and f803bScanner2 are the functions of diagnostics' path
-	// redactor that the marker stands for: while one of them is declared in a
-	// non-test file of the package, the redesign is pending, whatever the marker
-	// says.
-	f803bScanner1, f803bScanner2 = "scanPaths", "tokenAt"
 	// f803bBlocked ends every finding: the text a developer reads when F8-04
 	// (or anything else) tries to mount the diagnostics routes.
 	f803bBlocked = "mount is blocked until F8-03b replaces the path redactor; see seams.d/F8-03.md"
@@ -40,14 +35,25 @@ const (
 // F803bGate fails t while diagnostics.RedesignPendingF8_03b is true and a
 // non-test file imports core/internal/healthhttp or constructs the bundle
 // Exporter (diagnostics.New, or a diagnostics.Exporter composite literal or
-// new(diagnostics.Exporter)), and fails it when the marker is false while the
-// scanner it stands for (scanPaths, tokenAt) is still declared in diagnostics.
+// new(diagnostics.Exporter)); it fails t outright when the marker is false (false
+// is not a valid state: the only way out is the F8-03b PR, which deletes the
+// marker, the run-time refusal and this gate together, in one reviewed change);
+// and it fails t when the run-time refusal's probe is anything but testing.Testing
+// (f803bProbe).
 //
 // This is the early signal, with a file and a line. The refusal that holds is in
 // diagnostics itself: New and Build return ErrRedesignPendingF8_03b outside a
 // test binary while the marker is true, from any module, so the root module, a
 // wrapper or a constructor inside diagnostics is stopped at run time even though
 // this guard scans only core and matches only the names it knows.
+//
+// Removal is the F8-03b PR's reviewed act and nothing else: a change that
+// deletes the marker, the refusal and this guard together passes by
+// construction, because there is nothing left to guard, and a reviewer sees that
+// diff. The guard fails on every partial state (the marker false, missing or
+// odd, the refusal's probe changed), and it has no list of symbol names that a
+// rename could slip past except the ones the probe pin reads, which fail the
+// build when they are not found.
 //
 // The F8-03 round 7 review found that the path redactor in
 // core/health/diagnostics leaks usernames and directory trees in realistic
@@ -82,20 +88,28 @@ func F803bGate(t testing.TB) {
 		t.Fatalf("F803bGate: %v", err)
 	}
 	if len(findings) > 0 {
-		t.Errorf("%d breach(es) of the F8-03b gate: %s:\n  %s", len(findings), f803bBlocked, strings.Join(findings, "\n  "))
+		t.Errorf("%d breach(es) of the F8-03b gate:\n  %s", len(findings), strings.Join(findings, "\n  "))
 	}
 }
 
 // F803bGateFindings loads the core module at dir over TagSets() and returns one
-// line per breach of F803bGate, sorted; each line ends with the blocked message.
-// It returns nil when the marker is false. It returns an error when the load
-// fails, when diagnostics is not among the loaded packages, when the marker is
-// not a plain true or false constant of diagnostics (it was renamed or removed
-// without removing this guard: F8-03b deletes both together), when the marker is
-// false while scanPaths or tokenAt are still declared in diagnostics (the flip
-// that would open the gate without replacing the scanner), or when no non-test
-// file was scanned: each would make the guard pass without looking.
+// line per breach of F803bGate, sorted; each line ends with the blocked message
+// (or, for the refusal's probe, the probe message). It returns an error when the
+// load fails, when diagnostics is not among the loaded packages, when the marker
+// is not a plain true or false constant of diagnostics (it was renamed or
+// removed without removing this guard: F8-03b deletes both together), when the
+// marker is false (false is not a valid state, whatever else is in the tree: no
+// symbol name is consulted, so renaming or re-receiving the scanner cannot
+// defeat it), or when no non-test file was scanned: each would make the guard
+// pass without looking.
 func F803bGateFindings(dir string) ([]string, error) {
+	return f803bFindings(dir, f803bReadMarker)
+}
+
+// f803bFindings is F803bGateFindings with the reader of the marker passed in, so
+// a test can run the gate over the real core tree with the marker read as false
+// (no file is edited and nothing is mutable at run time).
+func f803bFindings(dir string, readMarker func(files []string) (bool, error)) ([]string, error) {
 	pkgs, err := Load(LoadOptions{Dir: dir, TagSets: TagSets()})
 	if err != nil {
 		return nil, err
@@ -104,17 +118,17 @@ func F803bGateFindings(dir string) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("archtest: %s is not among the %d loaded packages; the guard would be vacuous", diagnosticsPath, len(pkgs))
 	}
-	pending, err := f803bPending(diag.GoFiles)
+	pending, err := readMarker(diag.GoFiles)
 	if err != nil {
 		return nil, err
+	}
+	if !pending {
+		return nil, fmt.Errorf("archtest: %s.%s is false: false is not a valid state. The marker has two states, true and deleted; F8-03b deletes it, ErrRedesignPendingF8_03b with redesignRefusal, and this guard (core/archtest/f803b_*.go) together, in its own reviewed PR. Setting it false opens the run-time refusal and the healthhttp/Exporter ban at once", diagnosticsPath, f803bMarker)
 	}
 	var out []string
 	scanned := 0
 	for _, p := range pkgs {
 		scanned += len(p.GoFiles)
-		if !pending {
-			continue
-		}
 		for _, f := range slices.Concat(p.GoFiles, p.IgnoredGoFiles) {
 			found, err := f803bUses(f, p.ImportPath)
 			if err != nil {
@@ -126,21 +140,22 @@ func F803bGateFindings(dir string) ([]string, error) {
 	if scanned == 0 {
 		return nil, fmt.Errorf("archtest: no non-test Go file under %s; the guard would be vacuous", dir)
 	}
+	probe, err := f803bProbe(slices.Concat(diag.GoFiles, diag.IgnoredGoFiles))
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, probe...)
 	sort.Strings(out)
 	return uniq(out), nil
 }
 
-// f803bPending reads diagnostics.RedesignPendingF8_03b from the package's
-// non-test files. The marker is read from source so the guard needs no import of
-// diagnostics (archtest imports no package it guards) and so a fixture tree can
-// carry either value. A false marker is only believed when the scanner it stands
-// for is gone: scanPaths or tokenAt still declared in a non-test file is an
-// error, so the marker cannot be flipped to open the gate.
-func f803bPending(files []string) (bool, error) {
-	var (
-		pending, found bool
-		scanner        []string
-	)
+// f803bReadMarker reads diagnostics.RedesignPendingF8_03b from the package's
+// non-test files and returns its value. The marker is read from source so the
+// guard needs no import of diagnostics (archtest imports no package it guards)
+// and so a fixture tree can carry either value. It is an error when the marker is
+// missing, has no value or is not the literal true or false.
+func f803bReadMarker(files []string) (bool, error) {
+	var pending, found bool
 	for _, file := range files {
 		fset := token.NewFileSet()
 		af, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
@@ -148,40 +163,30 @@ func f803bPending(files []string) (bool, error) {
 			return false, fmt.Errorf("parse %s: %v", file, err)
 		}
 		for _, d := range af.Decls {
-			switch d := d.(type) {
-			case *ast.FuncDecl:
-				if d.Recv == nil && (d.Name.Name == f803bScanner1 || d.Name.Name == f803bScanner2) {
-					scanner = append(scanner, d.Name.Name)
-				}
-			case *ast.GenDecl:
-				if d.Tok != token.CONST {
-					continue
-				}
-				for _, spec := range d.Specs {
-					vs := spec.(*ast.ValueSpec)
-					for i, name := range vs.Names {
-						if name.Name != f803bMarker {
-							continue
-						}
-						if i >= len(vs.Values) {
-							return false, fmt.Errorf("archtest: %s.%s has no value in %s", diagnosticsPath, f803bMarker, file)
-						}
-						id, ok := vs.Values[i].(*ast.Ident)
-						if !ok || (id.Name != "true" && id.Name != "false") {
-							return false, fmt.Errorf("archtest: %s.%s must be the literal true or false (%s)", diagnosticsPath, f803bMarker, file)
-						}
-						pending, found = id.Name == "true", true
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, name := range vs.Names {
+					if name.Name != f803bMarker {
+						continue
 					}
+					if i >= len(vs.Values) {
+						return false, fmt.Errorf("archtest: %s.%s has no value in %s", diagnosticsPath, f803bMarker, file)
+					}
+					id, ok := vs.Values[i].(*ast.Ident)
+					if !ok || (id.Name != "true" && id.Name != "false") {
+						return false, fmt.Errorf("archtest: %s.%s must be the literal true or false (%s)", diagnosticsPath, f803bMarker, file)
+					}
+					pending, found = id.Name == "true", true
 				}
 			}
 		}
 	}
 	if !found {
-		return false, fmt.Errorf("archtest: %s.%s is not declared in the %d non-test file(s) of the package: if F8-03b removed it, remove the F8-03b gate (core/archtest/f803b_gate.go) with it; otherwise the guard would be vacuous", diagnosticsPath, f803bMarker, len(files))
-	}
-	if !pending && len(scanner) > 0 {
-		slices.Sort(scanner)
-		return false, fmt.Errorf("archtest: %s.%s is false while the path scanner it stands for is still declared (%s): the marker is not a switch; F8-03b replaces the scanner and deletes the marker and this guard in the same change", diagnosticsPath, f803bMarker, strings.Join(uniq(scanner), ", "))
+		return false, fmt.Errorf("archtest: %s.%s is not declared in the %d non-test file(s) of the package: if F8-03b removed it, remove the F8-03b gate (core/archtest/f803b_*.go) with it; otherwise the guard would be vacuous", diagnosticsPath, f803bMarker, len(files))
 	}
 	return pending, nil
 }

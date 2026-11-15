@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_gate_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91c3e5a7-0d48-4f26-8b1e-6a7d2f4c9e03
 // last-edited: 2026-11-15
 
@@ -7,12 +7,51 @@ package archtest
 
 import (
 	"maps"
+	"os"
 	"strings"
 	"testing"
 )
 
-// gateTree is a fixture core module: diagnostics with the marker and a New and an
-// Exporter, healthhttp built on it (a type reference, no construction), a kernel
+// gateExportGo is the fixture diagnostics' export.go: an Exporter, New, and the
+// run-time refusal with the probe in the shape the probe pin reads.
+const gateExportGo = `package diagnostics
+
+import (
+	"errors"
+	"testing"
+)
+
+type Exporter struct{ isTestBinary func() bool }
+
+func New() (*Exporter, error) { return newExporter(nil, testing.Testing) }
+
+func newExporter(cfg any, isTestBinary func() bool) (*Exporter, error) {
+	if err := redesignRefusal(RedesignPendingF8_03b, isTestBinary); err != nil {
+		return nil, err
+	}
+	return &Exporter{isTestBinary: isTestBinary}, nil
+}
+
+func (e *Exporter) testBinary() bool {
+	if e.isTestBinary != nil {
+		return e.isTestBinary()
+	}
+	return testing.Testing()
+}
+
+func (e *Exporter) Build() error { return redesignRefusal(RedesignPendingF8_03b, e.testBinary) }
+
+func redesignRefusal(pending bool, isTestBinary func() bool) error {
+	if pending && !isTestBinary() {
+		return errors.New("refused")
+	}
+	return nil
+}
+`
+
+// gateTree is a fixture core module: diagnostics with the marker, a New, an
+// Exporter and the run-time refusal with its probe (the shape the probe pin
+// reads), healthhttp built on it (a type reference, no construction), a kernel
 // that imports neither in non-test code, and a test file that imports healthhttp
 // and calls New. pending is the marker's value; extra adds or replaces files.
 func gateTree(t *testing.T, pending string, extra map[string]string) string {
@@ -23,12 +62,7 @@ func gateTree(t *testing.T, pending string, extra map[string]string) string {
 
 const RedesignPendingF8_03b = ` + pending + `
 `,
-		"health/diagnostics/export.go": `package diagnostics
-
-type Exporter struct{}
-
-func New() (*Exporter, error) { return &Exporter{}, nil }
-`,
+		"health/diagnostics/export.go": gateExportGo,
 		"internal/healthhttp/routes.go": `package healthhttp
 
 import "github.com/falkcorp/mediacore/health/diagnostics"
@@ -61,9 +95,9 @@ func TestBoot(t *testing.T) {
 // TestF803bGate (F8-03 round 8): while the marker is true, a non-test file that
 // imports healthhttp or constructs the Exporter in any spelling is reported, with
 // the message that says the mount is blocked; tests, diagnostics itself and
-// healthhttp's own use of the Exporter type are not; with the marker false
-// nothing is reported; and the guard refuses a tree it cannot read the marker
-// from.
+// healthhttp's own use of the Exporter type are not; the guard refuses a tree
+// whose marker is false (round 10: false is not a valid state) and a tree it
+// cannot read the marker from.
 func TestF803bGate(t *testing.T) {
 	findingsFor := func(t *testing.T, root string) []string {
 		t.Helper()
@@ -178,10 +212,14 @@ func Mount() { _ = healthhttp.Register(nil) }
 		}
 	})
 
-	// The same breaches with the marker false: F8-03b has landed, the gate is open.
-	t.Run("MarkerFalseReportsNothing", func(t *testing.T) {
-		root := gateTree(t, "false", map[string]string{
-			"kernel/kernel.go": `package kernel
+	// Round 10, N-1: false is not a valid state. The marker has two states, true
+	// and deleted (F8-03b deletes it together with the refusal and this guard),
+	// so a false marker is refused whatever else the tree holds.
+	t.Run("MarkerFalseIsRefused", func(t *testing.T) {
+		for name, extra := range map[string]map[string]string{
+			"clean tree": nil,
+			"with breaches": {
+				"kernel/kernel.go": `package kernel
 
 import (
 	"github.com/falkcorp/mediacore/health/diagnostics"
@@ -190,9 +228,12 @@ import (
 
 func Boot() { e, _ := diagnostics.New(); _ = healthhttp.Register(e) }
 `,
-		})
-		if got := findingsFor(t, root); len(got) != 0 {
-			t.Fatalf("a false marker still reported:\n  %s", strings.Join(got, "\n  "))
+			},
+		} {
+			got, err := F803bGateFindings(gateTree(t, "false", extra))
+			if err == nil || !strings.Contains(err.Error(), "false is not a valid state") || !strings.Contains(err.Error(), f803bMarker) {
+				t.Errorf("%s: a false marker gave findings %v, err = %v; want the not-a-valid-state error", name, got, err)
+			}
 		}
 	})
 
@@ -208,30 +249,27 @@ func Boot() { e, _ := diagnostics.New(); _ = healthhttp.Register(e) }
 		}
 	})
 
-	// Round 9, m-1: the marker stands for the scanner. A flip to false while
-	// scanPaths or tokenAt are still declared in a non-test file is refused, not
-	// believed.
-	t.Run("MarkerFalseWhileScannerRemainsIsRefused", func(t *testing.T) {
-		for name, src := range map[string]string{
-			"scanPaths": "package diagnostics\n\nconst RedesignPendingF8_03b = false\n\nfunc scanPaths() {}\n",
-			"tokenAt":   "package diagnostics\n\nfunc tokenAt() {}\n\nconst RedesignPendingF8_03b = false\n",
-		} {
-			_, err := F803bGateFindings(gateTree(t, "false", map[string]string{"health/diagnostics/paths.go": src}))
-			if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "not a switch") {
-				t.Errorf("%s declared with a false marker: err = %v, want the not-a-switch refusal naming it", name, err)
-			}
-		}
-		// Not the scanner: a method of that name, or the function in a test file.
+	// Round 10, N-1: no symbol name is consulted, so whatever the scanner is
+	// called, wherever it is declared (a function, a method of any receiver,
+	// nowhere, a test file), a false marker is refused. Round 9 tied the marker to
+	// the scanner's names and a method receiver defeated it; this pins the shapes
+	// that did.
+	t.Run("MarkerFalseIsRefusedWhateverTheScannerIs", func(t *testing.T) {
+		const decl = "package diagnostics\n\nconst RedesignPendingF8_03b = false\n\n"
 		for name, files := range map[string]map[string]string{
-			"method":    {"health/diagnostics/paths.go": "package diagnostics\n\nconst RedesignPendingF8_03b = false\n\ntype t struct{}\n\nfunc (t) scanPaths() {}\n"},
-			"test file": {"health/diagnostics/paths_test.go": "package diagnostics\n\nfunc scanPaths() {}\nfunc tokenAt() {}\n"},
+			"scanPaths function":  {"health/diagnostics/paths.go": decl + "func scanPaths() {}\n"},
+			"tokenAt function":    {"health/diagnostics/paths.go": decl + "func tokenAt() {}\n"},
+			"method of pathRoots": {"health/diagnostics/paths.go": decl + "type pathRoots []string\n\nfunc (r pathRoots) scanPaths() {}\nfunc (r pathRoots) tokenAt() {}\n"},
+			"renamed scanner":     {"health/diagnostics/paths.go": decl + "func scanText() {}\n"},
+			"no scanner":          {"health/diagnostics/paths.go": decl},
+			"test file only":      {"health/diagnostics/paths.go": decl, "health/diagnostics/paths_test.go": "package diagnostics\n\nfunc scanPaths() {}\n"},
 		} {
-			if _, err := F803bGateFindings(gateTree(t, "false", files)); err != nil {
-				t.Errorf("%s: err = %v, want the gate open (not the scanner)", name, err)
+			if _, err := F803bGateFindings(gateTree(t, "false", files)); err == nil || !strings.Contains(err.Error(), "false is not a valid state") {
+				t.Errorf("%s with a false marker: err = %v, want the not-a-valid-state error", name, err)
 			}
 		}
-		// Marker true with the scanner declared is the pending state, not an error.
-		files := map[string]string{"health/diagnostics/paths.go": "package diagnostics\n\nconst RedesignPendingF8_03b = true\n\nfunc scanPaths() {}\nfunc tokenAt() {}\n"}
+		// Marker true with a scanner of any shape is the pending state, not an error.
+		files := map[string]string{"health/diagnostics/paths.go": "package diagnostics\n\nconst RedesignPendingF8_03b = true\n\ntype pathRoots []string\n\nfunc (r pathRoots) scanPaths() {}\nfunc scanPaths() {}\nfunc tokenAt() {}\n"}
 		if got, err := F803bGateFindings(gateTree(t, "true", files)); err != nil || len(got) != 0 {
 			t.Errorf("true marker with the scanner: %v, %v; want no findings", got, err)
 		}
@@ -276,7 +314,47 @@ func Boot2() { _ = healthhttp.Register(nil) }
 // TestF803bGateOverCore runs the guard over the real core module: while
 // diagnostics.RedesignPendingF8_03b is true, nothing outside tests imports
 // healthhttp or builds the Exporter, so F8-04 cannot mount the diagnostics
-// routes before F8-03b.
+// routes before F8-03b, and the refusal's probe is testing.Testing.
 func TestF803bGateOverCore(t *testing.T) {
 	F803bGate(t)
+}
+
+// TestF803bGateOverCoreRefusesAFalseMarker (round 10, N-1) runs the gate over the
+// real core tree with the marker read as false through the injected reader (no
+// file is edited): the gate must fail. Round 9's gate passed this, because its
+// tie to the scanner counted free functions and the real scanner is two methods
+// of pathRoots. The reader first reads the real marker and requires it true, so
+// the test also fails if the marker is no longer the literal the gate reads.
+func TestF803bGateOverCoreRefusesAFalseMarker(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := ModuleRoot(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var read int
+	asFalse := func(files []string) (bool, error) {
+		real, err := f803bReadMarker(files)
+		if err != nil {
+			return false, err
+		}
+		if !real {
+			t.Errorf("the real marker is already false; the test expects true to flip")
+		}
+		read++
+		return false, nil
+	}
+	got, err := f803bFindings(root, asFalse)
+	if read != 1 {
+		t.Fatalf("the injected reader ran %d times, want 1 (err = %v)", read, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "false is not a valid state") {
+		t.Fatalf("the gate over the real core tree with a false marker: findings %v, err = %v; want the not-a-valid-state error", got, err)
+	}
+	// And with the real marker the same call is clean.
+	if got, err := f803bFindings(root, f803bReadMarker); err != nil || len(got) != 0 {
+		t.Errorf("the gate over the real core tree: %v, %v; want no findings", got, err)
+	}
 }

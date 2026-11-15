@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/executive-summary.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 85a66690-09c6-401b-8020-a2ec1acc9b74 -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-15 -->
 
 # Platform core: executive summary
 
@@ -96,5 +96,5 @@ Every open question is now answered (decision D15 in the spec's decision record)
 
 ## Next
 
-You apply the `main` rule and the merge queue. Work then starts with the R0 hotfixes (wave 1). The plan now has 133
+You apply the `main` rule and the merge queue. Work then starts with the R0 hotfixes (wave 1). The plan now has 134
 tasks; its critical path is still about 82 working days.
