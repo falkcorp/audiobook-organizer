@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: c0ba68fc-0752-49a5-9e51-187eca399e39
 // last-edited: 2026-11-14
 
