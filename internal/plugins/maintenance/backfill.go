@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.10.3
+// version: 1.10.4
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -450,6 +450,14 @@ func t6g2MalformedM4BTranscodeParallelism() tasks.Parallelism {
 // UpdateBookFileHashes, which recomputes the book's aggregates, so the books
 // row too) and their done flag; the transcode also quarantines books. HEAD
 // declares no Writes for any of the four.
+//
+// The atom pass also writes the file-provenance ledger (file_prov: keys, the
+// file_provenance resource): removeMovementAtomsFromFile calls
+// tagger.WriteTagsSafe, whose VerifyWritten step, on a read-back mismatch,
+// runs recordVerifyFailure, which resolves the FileProvenanceRecorder from the
+// hash store and calls fileops.RecordObserved -> AppendFileEvent. Verify after
+// write defaults on, so the ledger is a live write of that pass. Remux and
+// transcode record through RecordRewrite, which does not touch the ledger.
 func t6g2ExternalIDBackfillMeta() t6g2Meta {
 	return t6g2Meta{
 		Kind:     t6g2KindExternalIDBackfill,
@@ -468,7 +476,7 @@ func t6g2MovementAtomCleanupMeta() t6g2Meta {
 		Kind:     t6g2KindMovementAtomCleanup,
 		Title:    t6g2MovementAtomCleanupTitle,
 		Help:     t6g2MovementAtomCleanupHelp,
-		Effects:  tasks.Writes(t6g2Res(ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks)...),
+		Effects:  tasks.Writes(t6g2Res(ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks, ops.ResFileProvenance)...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  60 * time.Minute,
