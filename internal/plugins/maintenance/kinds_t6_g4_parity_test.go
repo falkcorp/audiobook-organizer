@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_parity_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 1f3e20f0-c667-44b8-9f41-3e7208c9958c
 // last-edited: 2026-11-15
 
@@ -475,7 +475,7 @@ func init() {
 	// file-provenance-capture: a root with two files; the run hashes them and
 	// appends one orphan observation per file to the ledger.
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
-		kind: fileProvenanceCaptureKind, want: []ops.Resource{ops.ResBookFiles},
+		kind: fileProvenanceCaptureKind, want: []ops.Resource{ops.ResFileProvenance},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			p, store, root := newCaptureFixture(t, map[string]string{"a.m4b": "alpha-bytes", "sub/b.m4b": "bravo-bytes"})
 			return &t6g4LiveEnv{
@@ -501,9 +501,9 @@ func init() {
 
 	// file-provenance-export: three ledger events; the run appends them to a JSONL
 	// file (a write outside the writer, declared as files) and advances the cursor
-	// (a writer call, recorded as book_files).
+	// (a writer call, recorded as file_provenance).
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
-		kind: fileProvenanceExportKind, want: []ops.Resource{ops.ResBookFiles}, unrecorded: []ops.Resource{ops.ResFiles},
+		kind: fileProvenanceExportKind, want: []ops.Resource{ops.ResFileProvenance}, unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			p, store, out := newExportFixture(t)
 			seedEvents(t, store, 3)
