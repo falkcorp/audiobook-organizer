@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_scaling_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3e8a5d71-c204-4b96-8f1d-6a0b9e2c4d58
 // last-edited: 2026-11-14
 
@@ -207,7 +207,10 @@ func TestRedactPaths_QuotedTokenShapesAreLinear(t *testing.T) {
 		"quote runs, then percent": strings.Repeat(`"`, 100_000) + "%41 /home/bruce",
 		// Round 7, review finding 1: a URL cut at a byte that is not in an
 		// authority leaves a token of its own after it.
-		"cut urls, encoded tails": strings.Repeat(`https://h,a%41`, 12_000) + " /home/bruce",
+		"cut urls, encoded tails": strings.Repeat(`https://h,%41`, 60_000) + " /home/bruce",
+		"cut urls, no query":      strings.Repeat(`https://h,`, 90_000) + " /home/bruce",
+		"cut urls, query last":    strings.Repeat(`https://h,`, 90_000) + "?x /home/bruce",
+		"cut urls, many queries":  strings.Repeat(`https://h,?`, 60_000) + " /home/bruce",
 		"cut urls, compact json":  strings.Repeat(`{"u":"https://h","p":"a%41"}`, 5_000) + " /home/bruce",
 		"cut urls, backslashes":   strings.Repeat(`https://h\a%41`, 12_000) + " /home/bruce",
 		"cut urls, no encoding":   strings.Repeat(`https://h<a`, 20_000) + " /home/bruce",
