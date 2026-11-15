@@ -1,7 +1,5 @@
 # Owned by F5-18 (the F5 flip); only F5-18 may delete this file, and F5-18 requires the directory empty.
 # The non-test files whose HEAD definitions tasklint flags (writer-bypass, store-capture) and no conversion row lists.
 # One repo-relative path per line, sorted; the directory is read as one union that may only shrink (05-tasks §5T.8.4).
-internal/plugins/maintenance/duration_backfill_unknown_rows.go
-internal/plugins/maintenance/transcribe_stats_accum.go
 internal/server/batch_apply_refusal.go
 internal/server/server.go

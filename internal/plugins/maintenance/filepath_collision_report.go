@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/filepath_collision_report.go
-// version: 1.0.1
+// version: 1.1.3
 // guid: 80fcbf6b-a38f-4f44-86f4-7f1f06d2a0d2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -17,9 +17,12 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
+
+// filePathCollisionReportKind is rule R3: the native kind of maintenance.filepath-collision-report.
+const filePathCollisionReportKind tasks.Kind = "books.maintenance.filepath-collision-report"
 
 // --- filepath-collision-report ---
 //
@@ -135,6 +138,13 @@ func (p *Plugin) filePathCollisionReportDef() sdk.OperationDef {
 	}
 }
 
+// filePathCollisionEnv is what the core needs from its engine (rules R2 and R10).
+// The kind is ReadOnly, so its env carries no writer.
+type filePathCollisionEnv struct {
+	t6g4Base
+}
+
+// runFilePathCollisionReport is the v2 shell around runFilePathCollisionReportCore (rule R2 item 2).
 func (p *Plugin) runFilePathCollisionReport(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	store := p.deps.OpsStore()
 	if store == nil {
@@ -147,13 +157,50 @@ func (p *Plugin) runFilePathCollisionReport(ctx context.Context, rawParams json.
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
+	_, err := runFilePathCollisionReportCore(ctx, params, filePathCollisionEnv{
+		t6g4Base: t6g4HeadBase(reporter, false, headT6G4Store{OpsStore: store, deps: p.deps}, nil),
+	})
+	return err
+}
 
-	report, err := buildFilePathCollisionReport(ctx, store, params, reporter)
+// filePathCollisionReportKind is the native shell (rule R2 item 3): ReadOnly,
+// so it is handed no writer.
+func (p *Plugin) filePathCollisionReportKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(filePathCollisionReportKind, tasks.TaskSpec[filePathCollisionReportParams, filePathCollisionReport]{
+		Common: tasks.Common{
+			Title: "Book.FilePath collision report",
+			Help: "Enumerates every book's FilePath and reports how many books share a " +
+				"FilePath with another book -- the population a future write path must check " +
+				"before trusting Book.FilePath as an identity signal (e.g. as a repoint source). " +
+				"REPORT-ONLY: takes no action and modifies nothing.",
+			Effects:        tasks.ReadOnly(),
+			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:         tasks.ResumeDrop,
+			Priority:       tasks.PriorityLow,
+			ConcurrencyKey: tasks.Key("books.maintenance.filepath-collision-report"),
+			Timeout:        30 * time.Minute,
+			Schedule:       sched,
+			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in filePathCollisionReportParams) (filePathCollisionReport, error) {
+			base, err := t6g4NativeBase(rc, deps, false)
+			if err != nil {
+				return filePathCollisionReport{}, err
+			}
+			return runFilePathCollisionReportCore(rc.Context(), in, filePathCollisionEnv{t6g4Base: base})
+		},
+	})
+}
+
+// runFilePathCollisionReportCore is HEAD's body (rule R2 item 1) after the shell
+// resolved the store and decoded params.
+func runFilePathCollisionReportCore(ctx context.Context, params filePathCollisionReportParams, env filePathCollisionEnv) (filePathCollisionReport, error) {
+	report, err := t6g4BuildFilePathCollisionReport(ctx, env.Store, params, env.t6g4Base)
 	if err != nil {
-		return err
+		return report, err
 	}
 
-	log := reporter.Logger()
+	log := env.Logger()
 	for _, s := range report.Sample {
 		log.Info("filepath-collision-report: collision group", "file_path", s.FilePath, "book_ids", s.BookIDs)
 	}
@@ -161,7 +208,7 @@ func (p *Plugin) runFilePathCollisionReport(ctx context.Context, rawParams json.
 		"total_books", report.TotalBooks, "empty_file_path", report.EmptyFilePath,
 		"distinct_paths", report.DistinctPaths, "collision_groups", report.CollisionGroups,
 		"affected_rows", report.AffectedRows, "collision_rate", report.collisionRate())
-	return nil
+	return report, nil
 }
 
 // filePathCollisionShardCount bounds the fan-out of the collision sweep to
@@ -220,13 +267,13 @@ func shardBookCores(books []database.BookCore, n int) [][]database.BookCore {
 	return shards
 }
 
-// buildFilePathCollisionReport performs the sweep and RETURNS the report.
-//
-// Split out from the op body so the counts can be asserted as values rather
-// than scraped from a log line -- this op's entire purpose is the numbers it
-// produces, and any op that later relies on them deserves a report tested
-// directly.
-func buildFilePathCollisionReport(ctx context.Context, store filePathCollisionStore, params filePathCollisionReportParams, reporter sdk.Reporter) (filePathCollisionReport, error) {
+// t6g4BuildFilePathCollisionReport performs the sweep and RETURNS the report, over
+// an env base: the sweep's progress and its loop run through the base, so the
+// core can hand it either shell's. Split out from the op body so the counts can
+// be asserted as values rather than scraped from a log line -- this op's entire
+// purpose is the numbers it produces.
+func t6g4BuildFilePathCollisionReport(ctx context.Context, store filePathCollisionStore, params filePathCollisionReportParams, base t6g4Base) (filePathCollisionReport, error) {
+	reporter := base.reporter(ctx)
 	sampleLimit := params.SampleLimit
 	if sampleLimit <= 0 {
 		sampleLimit = filePathCollisionSampleLimit
@@ -257,7 +304,14 @@ func buildFilePathCollisionReport(ctx context.Context, store filePathCollisionSt
 		prog := sdk.NewProgress(reporter, len(items))
 		prog.Start(fmt.Sprintf("Scanning %d book(s) across %d shard(s) for FilePath collisions…", len(books), len(items)))
 
-		err = registry.RunItems(ctx, reporter, items, func(_ context.Context, it filePathCollisionShard) error {
+		err = base.Each(ctx, len(items), t6g4EachOpts{
+			Concurrency: t6g4CPU,
+			Collect:     true,
+			Label: func(i, t int) string {
+				return fmt.Sprintf("Scanned shard %d/%d", i+1, t)
+			},
+		}, func(_ context.Context, shardIdx int) error {
+			it := items[shardIdx]
 			local := make(map[string][]string)
 			localEmpty := 0
 			for _, b := range it.books {
@@ -280,12 +334,6 @@ func buildFilePathCollisionReport(ctx context.Context, store filePathCollisionSt
 			mergeMu.Unlock()
 			emptyPath.Add(int64(localEmpty))
 			return nil
-		}, registry.RunItemsOptions{
-			Concurrency: filePathCollisionShardCount(),
-			ErrMode:     registry.ErrModeCollect,
-			Label: func(i, t int) string {
-				return fmt.Sprintf("Scanned shard %d/%d", i+1, t)
-			},
 		})
 		if err != nil {
 			return filePathCollisionReport{}, fmt.Errorf("collision sweep: %w", err)

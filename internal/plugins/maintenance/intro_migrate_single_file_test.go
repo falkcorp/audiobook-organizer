@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file_test.go
-// version: 1.0.4
+// version: 1.0.6
 // guid: 91e4c07b-5a63-4d28-8f10-2b74e9d6a35c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -167,7 +167,6 @@ func TestClassifyMigrateCandidate(t *testing.T) {
 // the more actionable reason (relink, then transcribe), so it must win when
 // both apply.
 func TestMigrateOneBookReportsRowShapeBeforeTranscript(t *testing.T) {
-	p := New(fakeDeps{})
 	log := slog.Default()
 
 	bookNoTranscript := func(id string) (*database.Book, error) {
@@ -179,7 +178,7 @@ func TestMigrateOneBookReportsRowShapeBeforeTranscript(t *testing.T) {
 			GetBookByIDFunc:  bookNoTranscript,
 			GetBookFilesFunc: func(string) ([]database.BookFile, error) { return nil, nil },
 		}
-		if got := p.migrateOneBook(store, log, "b-zero", true, false); got != migrateNoRows {
+		if got := t6g4MigrateOneBook(store, store, log, "b-zero", true, false); got != migrateNoRows {
 			t.Errorf("reason = %q, want %q — zero-row books must be reported by row shape "+
 				"even when the transcript is also missing", got, migrateNoRows)
 		}
@@ -192,7 +191,7 @@ func TestMigrateOneBookReportsRowShapeBeforeTranscript(t *testing.T) {
 				return []database.BookFile{{ID: "f1", BookID: id, FilePath: "/lib/a.mp3"}}, nil
 			},
 		}
-		if got := p.migrateOneBook(store, log, "b-linked", true, false); got != migrateNoTranscript {
+		if got := t6g4MigrateOneBook(store, store, log, "b-linked", true, false); got != migrateNoTranscript {
 			t.Errorf("reason = %q, want %q", got, migrateNoTranscript)
 		}
 	})

@@ -1,7 +1,7 @@
 // file: internal/arch/resume_restart_guard_test.go
-// version: 1.0.1
+// version: 1.0.3
 // guid: 87f31afd-8f18-4eed-8095-a44c9e9c30bf
-// last-edited: 2026-11-03
+// last-edited: 2026-11-15
 
 package arch
 
@@ -232,12 +232,15 @@ var restartWithoutCheckpoint = map[string]string{
 	"internal/plugins/maintenance/repair_transcribe_status.go maintenance.repair-transcribe-status":   "a repaired row leaves the transport-failure state it is selected by; it never calls Whisper",
 	"internal/plugins/maintenance/intro_migrate_single_file.go maintenance.intro-migrate-single-file": "copies a transcript onto one row; overwrite is off by default so a re-run skips rows that already carry one",
 	"internal/plugins/maintenance/extract_wav_clips.go maintenance.extract-wav-clips":                 "skip_existing (default true) skips a clip already in the cache; pure I/O, no paid call",
-	"internal/plugins/maintenance/file_intro_transcribe.go fileIntroOpID":                             "a file is DONE when IntroSourceHash == FileHash, so the remaining work is re-selected on restart (the file's own comment)",
-	"internal/plugins/maintenance/reconcile.go itunes.heal":                                           "a reflinked file is no longer missing, so it leaves the heal set; reflink is idempotent",
-	"internal/plugins/dedup/window_index_build.go windowIndexBuildOpID":                               "a file with a member list is skipped, so a rerun continues where the last stopped (the op's own comment)",
-	"internal/plugins/deluge/link_backfill.go linkBackfillOpID":                                       "a linked row is skipped as already_linked; the run is bounded by limit and reports next_start_after",
-	"internal/server/identification_advance_op.go identificationAdvanceOpID":                          "the dirty set IS the resume state: a processed book's mark is gone, so a restart finds only what is still owed",
-	"internal/server/purge_soft_deleted_op.go purgeSoftDeletedOpID":                                   "the next run reclassifies the trash; a purged book is gone from it",
+	"internal/plugins/maintenance/intro_transcribe.go maintenance.transcribe-book-intros": "only_missing (default) re-selects every book still without a transcript, so the remaining work is " +
+		"re-selected on restart, and the whisper result journal serves the clips a killed run already transcribed; HEAD's CheckpointFn " +
+		"({LastBookID, OnlyMissing}) was never called at the page concurrency (registry.runItemsPar), so no resume anchor was lost",
+	"internal/plugins/maintenance/file_intro_transcribe.go fileIntroOpID":    "a file is DONE when IntroSourceHash == FileHash, so the remaining work is re-selected on restart (the file's own comment)",
+	"internal/plugins/maintenance/reconcile.go itunes.heal":                  "a reflinked file is no longer missing, so it leaves the heal set; reflink is idempotent",
+	"internal/plugins/dedup/window_index_build.go windowIndexBuildOpID":      "a file with a member list is skipped, so a rerun continues where the last stopped (the op's own comment)",
+	"internal/plugins/deluge/link_backfill.go linkBackfillOpID":              "a linked row is skipped as already_linked; the run is bounded by limit and reports next_start_after",
+	"internal/server/identification_advance_op.go identificationAdvanceOpID": "the dirty set IS the resume state: a processed book's mark is gone, so a restart finds only what is still owed",
+	"internal/server/purge_soft_deleted_op.go purgeSoftDeletedOpID":          "the next run reclassifies the trash; a purged book is gone from it",
 
 	// Store-anchored: the resume point is a cursor the op's own store keeps.
 	"internal/plugins/maintenance/opchange_book_index.go opChangeBookIndexRebuildID": "the resume point lives in the store, not the registry: " +

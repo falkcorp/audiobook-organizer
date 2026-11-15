@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retired_claims_test.go
-// version: 1.1.3
+// version: 1.1.6
 // guid: c41f7a0e-2b95-4d63-8e1a-5f90d3b7a264
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -53,11 +53,11 @@ func retireFileOnto(t *testing.T, ps *database.PebbleStore, holderID, path strin
 // "held as a retired version" guard could not fire and a second row was made.
 func TestFsRegroupApply_GapOnRetiredVersionFileCreatesNoSecondRow(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	holder := fsSeedBook(t, s, "Retire Holder", filepath.Join(t.TempDir(), "holder"))
 	// Member 2 has no row of its own: its file is the gap, and a retired version
 	// of another book holds it.
-	gapPath := filepath.Join(fsFragBase(t), "Cage of Souls - 2", "3.mp3")
+	gapPath := filepath.Join(fsFragBase(t), "Knightfall - 2", "3.mp3")
 	require.FileExists(t, gapPath)
 	retired := retireFileOnto(t, s, holder, gapPath)
 
@@ -66,7 +66,7 @@ func TestFsRegroupApply_GapOnRetiredVersionFileCreatesNoSecondRow(t *testing.T) 
 	require.Len(t, frag, 1, "the fragment group is still planned: the plan reads live rows only (%s)", plan.summary())
 	liveBefore := fsRowCount(t, s)
 
-	res, err := applyFSRepairPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-retired-gap"})
+	res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-retired-gap"})
 	require.NoError(t, err)
 	require.Zero(t, res.RowsCreated, "no row may be created on a retired version's file: %s", res)
 
@@ -84,11 +84,11 @@ func TestFsRegroupApply_GapOnRetiredVersionFileCreatesNoSecondRow(t *testing.T) 
 // injected error must reach it too.
 func TestFsRegroupApply_CompleteLookupErrorSkipsGroup(t *testing.T) {
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	g := &fsGuardStore{PebbleStore: s, atPathRowsErr: context.DeadlineExceeded}
 	plan := fsPlan(t, g)
 	before := fsRowCount(t, s)
-	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-lookup2"})
+	res, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-lookup2"})
 	require.Error(t, err)
 	require.Zero(t, res.Groups)
 	require.Equal(t, before, fsRowCount(t, s))
@@ -242,10 +242,10 @@ func TestRfPathClaim_RetiredRowIsAClaimWhoeverHoldsIt(t *testing.T) {
 // memdb is warming up (the complete lookup reports unavailable).
 func TestFsRegroupApply_CompleteLookupDownWithNoRetiredVersionsStillApplies(t *testing.T) {
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	g := &fsGuardStore{PebbleStore: s, atPathRowsErr: database.ErrBookFilesAtPathUnavailable}
 	plan := fsPlan(t, g)
-	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-warm-noretired"})
+	res, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-warm-noretired"})
 	require.NoError(t, err)
 	require.NotZero(t, res.Groups, "the group applies: %s", res)
 }
@@ -254,13 +254,13 @@ func TestFsRegroupApply_CompleteLookupDownWithNoRetiredVersionsStillApplies(t *t
 // unavailable the group is refused before any write.
 func TestFsRegroupApply_CompleteLookupDownWithRetiredVersionsRefusesTheGroup(t *testing.T) {
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	holder := fsSeedBook(t, s, "Retire Holder", filepath.Join(t.TempDir(), "holder"))
 	retireFileOnto(t, s, holder, filepath.Join(t.TempDir(), "elsewhere.mp3"))
 	g := &fsGuardStore{PebbleStore: s, atPathRowsErr: database.ErrBookFilesAtPathUnavailable}
 	plan := fsPlan(t, g)
 	before := fsRowCount(t, s)
-	res, err := applyFSRepairPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-warm-retired"})
+	res, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-warm-retired"})
 	require.Error(t, err, "the group fails visibly; the apply reports a count of errors")
 	require.Zero(t, res.Groups)
 	require.Equal(t, before, fsRowCount(t, s))
