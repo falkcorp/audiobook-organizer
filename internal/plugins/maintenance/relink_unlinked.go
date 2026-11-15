@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.relink-unlinked-books.
 //
@@ -220,7 +220,7 @@ func relinkUnlinkedBooksCore(ctx context.Context, params relinkParams, env relin
 	scanErr := env.Items(ctx, relinkUnlinkedBooksParallelism(), len(ids), t6g6ItemsOptions{
 		Collect:       true,
 		ProgressTotal: len(ids),
-		Label: func(i, total int) string {
+		PureLabel: func(i, total int) string {
 			return fmt.Sprintf("Phase 1/2: checking book %d/%d…", i+1, total)
 		},
 	}, func(ctx context.Context, idx int) error {

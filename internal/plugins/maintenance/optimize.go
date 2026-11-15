@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.7.3
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -151,18 +152,29 @@ const (
 const optimizeTotalBudget = 36 * time.Hour
 
 // optimizeYieldMargin is how close to the attempt's deadline the sweep stops
-// starting children and yields instead (the kernel's own YieldMargin).
+// waiting on the running child (or starting a new one) and yields instead (the
+// kernel's own YieldMargin).
 const optimizeYieldMargin = 5 * time.Minute
 
-// optimizeCheckpoint is what a yielding attempt saves: when the sweep began
-// (the 36h budget runs from it, across attempts) and the children it has already
-// finished, by name (the child list depends on config flags that can change
-// between attempts, so an index would not be stable).
+// optimizeInFlight names the child a yielding (or crashing) attempt had started
+// and not seen end: the resumed attempt re-attaches to this run instead of
+// launching the child a second time.
+type optimizeInFlight struct {
+	Name  string `json:"name"`
+	RunID string `json:"run_id"`
+}
+
+// optimizeCheckpoint is what the sweep saves after every child boundary and at a
+// yield: when the sweep began (the 36h budget runs from it, across attempts),
+// the children already finished, by name (the child list depends on config flags
+// that can change between attempts, so an index would not be stable), and the
+// child in flight, if any.
 type optimizeCheckpoint struct {
-	StartedAt time.Time `json:"started_at"`
-	Finished  []string  `json:"finished"`
-	Completed int       `json:"completed"`
-	Failed    int       `json:"failed"`
+	StartedAt time.Time         `json:"started_at"`
+	Finished  []string          `json:"finished"`
+	Completed int               `json:"completed"`
+	Failed    int               `json:"failed"`
+	InFlight  *optimizeInFlight `json:"in_flight,omitempty"`
 }
 
 // optimizeNative is the native kind. The sweep writes nothing itself (its
@@ -170,10 +182,14 @@ type optimizeCheckpoint struct {
 // run would start live children, so a Preview run is refused.
 //
 // Resume is ResumeContinue, a deviation from rule R5's mapping of HEAD's
-// ResumeDrop: the executor only honours ErrContinueInPlace for a ResumeContinue
-// kind, and the kind needs it to keep HEAD's 36h total under the kernel's 24h
-// attempt cap. HEAD never checkpointed, so a crash (as opposed to a yield)
-// resumes with no checkpoint and starts the sweep over, which is what Drop did.
+// ResumeDrop, and unlike opchange the checkpoint IS read on restart (Restore, in
+// optimizeCore). The executor only honours ErrContinueInPlace for a
+// ResumeContinue kind, and the kind needs it to keep HEAD's 36h total under the
+// kernel's 24h attempt cap. The sweep checkpoints after the child it enqueues
+// and after every child that ends, so a crash resumes at the next child (or
+// re-attaches to the child in flight) rather than re-running the sweep. HEAD
+// dropped an interrupted sweep; a restart now resumes it, a behaviour change
+// recorded in seams.d/F5-11.md.
 func (p *Plugin) optimizeNative(_ t6g6Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g6Common(optimizeKind, sched)
 	c.Title = "Library optimize sweep"
@@ -184,7 +200,8 @@ func (p *Plugin) optimizeNative(_ t6g6Deps, sched func(tasks.Kind) *tasks.Schedu
 	c.ConcurrencyKey = tasks.Key("books.maintenance.library-optimize")
 	// The kernel refuses a Timeout over tasks.MaxTimeout (24h). HEAD's 36h is kept
 	// as optimizeTotalBudget across attempts: the sweep yields between children
-	// before the attempt's deadline (optimizeYieldMargin) and resumes.
+	// before the attempt's deadline (optimizeYieldMargin), even while a child is
+	// still running, and resumes.
 	c.Timeout = tasks.MaxTimeout
 	c.ProgressTimeout = optimizeProgressTimeout
 	return tasks.Task(optimizeKind, tasks.TaskSpec[struct{}, struct{}]{
@@ -200,15 +217,32 @@ func (p *Plugin) optimizeNative(_ t6g6Deps, sched func(tasks.Kind) *tasks.Schedu
 					ref, err := rc.Enqueue(t6g6KindFor(defID), params)
 					return string(ref.ID), err
 				},
-				Wait: func(_ context.Context, childID string, _ func(childop.Observation)) error {
-					out, err := rc.Await(tasks.RunRef{ID: tasks.RunID(childID)})
-					if err != nil {
-						return err
+				// rc.Await takes no context, so the wait runs in its own goroutine
+				// and ctx (the sweep's deadline minus the yield margin) ends the
+				// wait without ending the child. The goroutine returns when the
+				// attempt's own context ends, which a yield does.
+				Wait: func(ctx context.Context, childID string, _ func(childop.Observation)) error {
+					type awaited struct {
+						out tasks.Outcome
+						err error
 					}
-					if out.State != tasks.StateSucceeded {
-						return fmt.Errorf("child run %s ended %s: %s", childID, out.State, out.Err)
+					done := make(chan awaited, 1)
+					go func() {
+						out, err := rc.Await(tasks.RunRef{ID: tasks.RunID(childID)})
+						done <- awaited{out, err}
+					}()
+					select {
+					case r := <-done:
+						if r.err != nil {
+							return r.err
+						}
+						if r.out.State != tasks.StateSucceeded {
+							return fmt.Errorf("child run %s ended %s: %s", childID, r.out.State, r.out.Err)
+						}
+						return nil
+					case <-ctx.Done():
+						return context.Cause(ctx)
 					}
-					return nil
 				},
 			}
 			return struct{}{}, optimizeCore(rc.Context(), env)
@@ -302,8 +336,10 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 	finished := map[string]bool{}
 	var finishedOrder []string
 
-	// A resumed native attempt carries on from the children the yielding attempt
-	// finished, under the one 36h budget measured from the sweep's first start.
+	// A resumed native attempt carries on from the children the earlier attempt
+	// finished, under the one 36h budget measured from the sweep's first start,
+	// and re-attaches to the child it left in flight.
+	var inFlight *optimizeInFlight
 	if env.Restore != nil {
 		var cp optimizeCheckpoint
 		ok, err := env.Restore(&cp)
@@ -311,21 +347,34 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 			return fmt.Errorf("restore optimize checkpoint: %w", err)
 		}
 		if ok {
-			if !cp.StartedAt.IsZero() {
-				start = cp.StartedAt
+			if cp.StartedAt.IsZero() {
+				// A zero start would silently restart the 36h budget.
+				return fmt.Errorf("restore optimize checkpoint: no start time recorded")
 			}
-			if time.Since(start) >= optimizeTotalBudget {
-				return fmt.Errorf("optimize sweep exceeded its %s budget across attempts", optimizeTotalBudget)
-			}
+			start = cp.StartedAt
 			completed, failed = cp.Completed, cp.Failed
 			for _, name := range cp.Finished {
 				finished[name] = true
 			}
 			finishedOrder = append(finishedOrder, cp.Finished...)
+			inFlight = cp.InFlight
 			env.Log(slog.LevelInfo, fmt.Sprintf("Resuming optimize sweep: %d/%d children already finished", len(cp.Finished), total))
 		}
 	}
 	finishedThisAttempt := 0
+	budgetErr := func() error {
+		return fmt.Errorf("optimize sweep exceeded its %s budget across attempts", optimizeTotalBudget)
+	}
+	// save records the sweep's position (native only: HEAD has no Checkpoint).
+	save := func(fl *optimizeInFlight) error {
+		if env.Checkpoint == nil {
+			return nil
+		}
+		if err := env.Checkpoint(optimizeCheckpoint{StartedAt: start, Finished: finishedOrder, Completed: completed, Failed: failed, InFlight: fl}); err != nil {
+			return fmt.Errorf("checkpoint optimize sweep: %w", err)
+		}
+		return nil
+	}
 
 	prog := t6g6NewProgress(env.t6g6Env, total)
 	prog.Start("Starting optimize sweep...")
@@ -335,15 +384,20 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 			prog.StepN(i+1, fmt.Sprintf("Child %d/%d: %s already finished", i+1, total, ch.name))
 			continue
 		}
-		// Yield between children when the attempt is about to run out: a child
-		// already in flight cannot be interrupted (rc.Await takes no context), so
-		// this is the only point the sweep can hand the attempt back. At least one
-		// child must have finished in this attempt, or the resumed attempt would
-		// make no progress and yield again at once.
-		if env.Deadline != nil && env.Checkpoint != nil && finishedThisAttempt > 0 {
+		// HEAD's 36h total is checked at every child boundary: no child starts
+		// past it.
+		if time.Since(start) >= optimizeTotalBudget {
+			return budgetErr()
+		}
+		reattach := inFlight != nil && inFlight.Name == ch.name
+		// Yield before starting a child when the attempt is about to run out. At
+		// least one child must have finished in this attempt, or the resumed
+		// attempt would make no progress and yield again at once. A child that
+		// is already running is handled at its wait, below.
+		if !reattach && env.Deadline != nil && env.Checkpoint != nil && finishedThisAttempt > 0 {
 			if dl := env.Deadline(); !dl.IsZero() && time.Until(dl) < optimizeYieldMargin {
-				if cpErr := env.Checkpoint(optimizeCheckpoint{StartedAt: start, Finished: finishedOrder, Completed: completed, Failed: failed}); cpErr != nil {
-					return fmt.Errorf("checkpoint optimize sweep: %w", cpErr)
+				if err := save(nil); err != nil {
+					return err
 				}
 				env.Log(slog.LevelInfo, fmt.Sprintf("Optimize sweep yielding before child %d/%d: attempt deadline near", i+1, total))
 				return tasks.ErrContinueInPlace
@@ -377,23 +431,41 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 		)
 		env.Log(slog.LevelInfo, fmt.Sprintf("Starting child %d/%d: %s", i+1, total, ch.name))
 
-		childID, err := env.Enqueue(ctx, ch.defID, ch.params)
-		if err != nil {
-			elapsed := time.Since(childStart)
-			logger.WarnCtx(ctx, "maintenance.library-optimize: child enqueue failed",
-				"operation_id", opID,
-				"child", ch.name,
-				"def_id", ch.defID,
-				"elapsed_ms", elapsed.Milliseconds(),
-				"error", err,
-			)
-			env.Log(slog.LevelWarn,
-				fmt.Sprintf("Child %s enqueue failed (skipping): %v", ch.name, err))
-			failed++
-			finished[ch.name] = true
-			finishedOrder = append(finishedOrder, ch.name)
-			finishedThisAttempt++
-			continue
+		var childID string
+		if reattach {
+			// The earlier attempt started this child and did not see it end:
+			// wait on that run (a child that finished in between answers at
+			// once) and never launch it twice.
+			childID = inFlight.RunID
+			inFlight = nil
+			env.Log(slog.LevelInfo, fmt.Sprintf("Re-attaching to child %d/%d: %s (run %s)", i+1, total, ch.name, childID))
+		} else {
+			var err error
+			childID, err = env.Enqueue(ctx, ch.defID, ch.params)
+			if err != nil {
+				elapsed := time.Since(childStart)
+				logger.WarnCtx(ctx, "maintenance.library-optimize: child enqueue failed",
+					"operation_id", opID,
+					"child", ch.name,
+					"def_id", ch.defID,
+					"elapsed_ms", elapsed.Milliseconds(),
+					"error", err,
+				)
+				env.Log(slog.LevelWarn,
+					fmt.Sprintf("Child %s enqueue failed (skipping): %v", ch.name, err))
+				failed++
+				finished[ch.name] = true
+				finishedOrder = append(finishedOrder, ch.name)
+				finishedThisAttempt++
+				if err := save(nil); err != nil {
+					return err
+				}
+				continue
+			}
+			// Record the run id before waiting: a crash from here re-attaches.
+			if err := save(&optimizeInFlight{Name: ch.name, RunID: childID}); err != nil {
+				return err
+			}
 		}
 
 		logger.InfoCtx(ctx, "maintenance.library-optimize: child enqueued",
@@ -404,7 +476,39 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 
 		// Wait for the child to reach a terminal state, relaying its progress so
 		// this op's watchdog sees the child working.
-		if waitErr := env.Wait(ctx, childID, relayChildProgress(prog, i, total, ch.name)); waitErr != nil {
+		// A native wait ends at the earlier of the attempt's deadline minus the
+		// yield margin and the end of the 36h budget, so a child still running
+		// then is yielded on instead of timing the whole attempt out.
+		waitCtx, cancelWait := ctx, context.CancelFunc(func() {})
+		var budgetAt time.Time
+		if env.Deadline != nil && env.Checkpoint != nil {
+			budgetAt = start.Add(optimizeTotalBudget)
+			until := budgetAt
+			if dl := env.Deadline(); !dl.IsZero() && dl.Add(-optimizeYieldMargin).Before(until) {
+				until = dl.Add(-optimizeYieldMargin)
+			}
+			waitCtx, cancelWait = context.WithDeadline(ctx, until)
+		}
+		waitErr := env.Wait(waitCtx, childID, relayChildProgress(prog, i, total, ch.name))
+		waitExpired := waitErr != nil && ctx.Err() == nil &&
+			errors.Is(waitCtx.Err(), context.DeadlineExceeded) && errors.Is(waitErr, context.DeadlineExceeded)
+		cancelWait()
+		if waitErr != nil && env.Deadline != nil && ctx.Err() != nil {
+			// The attempt itself is ending (cancel or timeout), not the child
+			// failing: the child stays in flight in the last checkpoint.
+			return context.Cause(ctx)
+		}
+		if waitExpired {
+			if !time.Now().Before(budgetAt) {
+				return budgetErr()
+			}
+			if err := save(&optimizeInFlight{Name: ch.name, RunID: childID}); err != nil {
+				return err
+			}
+			env.Log(slog.LevelInfo, fmt.Sprintf("Optimize sweep yielding with child %d/%d (%s) still running: attempt deadline near", i+1, total, ch.name))
+			return tasks.ErrContinueInPlace
+		}
+		if waitErr != nil {
 			elapsed := time.Since(childStart)
 			logger.WarnCtx(ctx, "maintenance.library-optimize: child failed or timed out",
 				"operation_id", opID,
@@ -421,6 +525,9 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 			finishedThisAttempt++
 			if env.Deadline != nil { // native only: HEAD reports nothing after a child ends
 				prog.StepN(i+1, fmt.Sprintf("Child %d/%d: %s failed", i+1, total, ch.name))
+			}
+			if err := save(nil); err != nil {
+				return err
 			}
 			continue
 		}
@@ -440,6 +547,9 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 		finishedThisAttempt++
 		if env.Deadline != nil { // native only: HEAD reports nothing after a child ends
 			prog.StepN(i+1, fmt.Sprintf("Child %d/%d: %s done", i+1, total, ch.name))
+		}
+		if err := save(nil); err != nil {
+			return err
 		}
 	}
 

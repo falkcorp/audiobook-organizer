@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.14.4
+// version: 1.14.5
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.regroup-shattered-ai (PR-B1).
 //
@@ -295,7 +295,7 @@ func regroupShatteredAICore(ctx context.Context, limit int, dryRun bool, env reg
 	scanErr := env.Items(ctx, regroupShatteredAIParallelism(), len(ids), t6g6ItemsOptions{
 		Collect:       true,
 		ProgressTotal: len(ids),
-		Label: func(i, total int) string {
+		PureLabel: func(i, total int) string {
 			return fmt.Sprintf("Phase 1/2: scanning book %d/%d…", i+1, total)
 		},
 	}, func(ctx context.Context, idx int) error {

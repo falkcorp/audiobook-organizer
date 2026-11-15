@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -349,7 +349,7 @@ func repairTranscribeStatusCore(ctx context.Context, lastBookID string, dryRun b
 	pages := chunkIDs(allIDs[startIdx:], repairStatusPageSize)
 	err = env.Items(ctx, repairTranscribeStatusParallelism(), len(pages), t6g6ItemsOptions{
 		ProgressTotal: len(pages),
-		Label:         func(i, t int) string { return fmt.Sprintf("Page %d/%d", i+1, t) },
+		PureLabel:     func(i, t int) string { return fmt.Sprintf("Page %d/%d", i+1, t) },
 	}, func(ctx context.Context, pi int) error {
 		ids := pages[pi]
 		local := map[string]int{}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_m5_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8b6d14-52a7-4c9f-b1d0-7a4f92c6e385
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/falkcorp/mediacore/tasks"
@@ -186,6 +187,48 @@ func TestT6G6Native_ParamsReachTheCores(t *testing.T) {
 		_, err := runT6G6Kind(t, def, tasks.ModeLive, gate, `{"reportPath":"/gotham/report.tsv"}`)
 		require.NoError(t, err)
 		require.Equal(t, []string{"/gotham/report.tsv"}, got)
+	})
+
+	t.Run("relink includeDirectories repairs a directory-shaped book", func(t *testing.T) {
+		setup := func(t *testing.T, p *t6g6Probe) {
+			s := &t6g6TestStore{}
+			s.add(database.Book{ID: "01BATBOOK00000000000000F1", Title: "Arkham Asylum",
+				FilePath: makeFolder(t, "Chapter 01.mp3", "Chapter 02.mp3")})
+			p.store = s
+		}
+		require.Empty(t, run(t, setup, relinkUnlinkedBooksKind, ``), "a directory-shaped book is skipped by default")
+		require.Equal(t, []string{"CreateBookFile Chapter 01.mp3", "CreateBookFile Chapter 02.mp3"},
+			t6g6Sorted(run(t, setup, relinkUnlinkedBooksKind, `{"includeDirectories":true}`)))
+	})
+
+	t.Run("recover sourceDirs and reflinkOutside reach the plan", func(t *testing.T) {
+		// One row whose bytes exist only under a source dir. The report TSV names
+		// the bucket the plan put the row in.
+		bucketOf := func(t *testing.T, params func(src string) string) string {
+			t.Helper()
+			p := newT6G6Probe(t)
+			src := t.TempDir()
+			const size = 4301
+			writeFile(t, filepath.Join(src, "Hush", "renamed.mp3"), size)
+			gone := filepath.Join(p.root, "Gotham", "Hush", "gone.mp3")
+			bookID, fileID := "01BATBOOK00000000000000F2", "01BATFILE00000000000000F2"
+			s := &t6g6TestStore{files: map[string][]database.BookFile{}}
+			s.cores = append(s.cores, database.BookFileCore{ID: fileID, BookID: bookID, FilePath: gone, FileSize: size})
+			s.files[bookID] = []database.BookFile{{ID: fileID, BookID: bookID, FilePath: gone, FileSize: size}}
+			p.store = s
+			_, err := runT6G6Kind(t, t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), recoverMissingFilesKind), tasks.ModeLive, gate, params(src))
+			require.NoError(t, err)
+			b, err := os.ReadFile(p.reportPath)
+			require.NoError(t, err)
+			return string(b)
+		}
+		require.Contains(t, bucketOf(t, func(string) string { return `{}` }), "\nnowhere\t",
+			"without a source dir the bytes are nowhere")
+		require.Contains(t, bucketOf(t, func(src string) string { return `{"sourceDirs":[` + strconv.Quote(src) + `]}` }), "\noutside\t",
+			"sourceDirs finds the bytes outside the library")
+		require.Contains(t, bucketOf(t, func(src string) string {
+			return `{"sourceDirs":[` + strconv.Quote(src) + `],"reflinkOutside":true}`
+		}), "\nreflinkable\t", "reflinkOutside turns the outside match into a reflink")
 	})
 
 	t.Run("regroup limit stops the stale purge", func(t *testing.T) {
@@ -434,4 +477,36 @@ func TestT6G6Optimize_ChildKindsAreTheLaunchedConstants(t *testing.T) {
 	require.Equal(t, tasks.Kind("books.acoustid.fingerprint-rescan"), t6g6KindFor(optimizeChildFingerprintRescan))
 	require.Equal(t, tasks.Kind("books.acoustid.scan"), t6g6KindFor(optimizeChildAcoustIDScan))
 	require.Equal(t, tasks.Kind("books.acoustid.backfill"), t6g6KindFor(optimizeChildAcoustIDBackfill))
+}
+
+// The native repoint decodes its params as strictly as HEAD did: an unknown key, a
+// repeated key and trailing data are refused before any read, so a mistyped key
+// fails the run instead of being dropped.
+func TestT6G6Native_RepointRefusesLooseParams(t *testing.T) {
+	gate := &t6g6GateWriter{name: "gotham"}
+	for _, params := range []string{
+		`{"repoints":[],"bogus":1}`,
+		`{"repoints":[],"repoints":[]}`,
+		`{"repoints":[]} {"repoints":[]}`,
+	} {
+		p := newT6G6Probe(t)
+		_, err := runT6G6Kind(t, t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), rbfKind), tasks.ModePreview, gate, params)
+		require.Error(t, err, params)
+		require.Empty(t, p.rec.snapshot(), params)
+	}
+}
+
+// Native pools carry the item-only progress labels HEAD set (the counter labels
+// are a recorded seam): each pure label is handed to tasks.RunItems.
+func TestT6G6Native_PoolForwardsThePureLabel(t *testing.T) {
+	h := newT6G6LiveHost(relinkUnlinkedBooksKind, nil)
+	var got []string
+	require.NoError(t, t6g6NativeItems(tasks.NewRC(h))(context.Background(), tasks.Sequential("test"), 2,
+		t6g6ItemsOptions{PureLabel: func(i, total int) string {
+			s := "item " + itoa(i+1) + "/" + itoa(total)
+			got = append(got, s)
+			return s
+		}},
+		func(context.Context, int) error { return nil }))
+	require.ElementsMatch(t, []string{"item 1/2", "item 2/2"}, got)
 }

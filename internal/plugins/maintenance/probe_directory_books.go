@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.4.4
+// version: 1.4.5
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.probe-directory-books.
 //
@@ -295,7 +295,7 @@ func probeDirectoryBooksCore(ctx context.Context, limit int, env probeDirectoryB
 	scanErr := env.Items(ctx, probeDirectoryBooksParallelism(), len(ids), t6g6ItemsOptions{
 		Collect:       true,
 		ProgressTotal: len(ids),
-		Label: func(i, total int) string {
+		PureLabel: func(i, total int) string {
 			return fmt.Sprintf("Phase 1/3: checking book %d/%d…", i+1, total)
 		},
 	}, func(_ context.Context, i int) error {
@@ -520,7 +520,7 @@ func t6g6ProbeAllVia(
 		// and a legitimately large folder would be truncated mid-measurement,
 		// producing exactly the partial evidence this op refuses to act on.
 		// The bound that matters is per-FILE, inside probeFolderDurations.
-		Label: func(i, total int) string {
+		PureLabel: func(i, total int) string {
 			return fmt.Sprintf("Phase 2/3: probing folder %d/%d…", i+1, total)
 		},
 	}, func(ctx context.Context, i int) error {

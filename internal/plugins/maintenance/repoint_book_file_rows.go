@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.5.5
+// version: 1.5.6
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.repoint-book-file-rows.
 //
@@ -411,9 +411,15 @@ func (p *Plugin) repointBookFileRowsNative(deps t6g6Deps, sched func(tasks.Kind)
 	return tasks.Task(rbfKind, tasks.TaskSpec[json.RawMessage, rbfReport]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (rbfReport, error) {
-			in, err := t6g6DecodeNative[rbfNativeParams](rbfKind, raw)
-			if err != nil {
+			// HEAD decoded strictly (unknown and duplicate keys and trailing data
+			// refused before any read), so a mistyped key fails the run instead of
+			// being dropped. The mode keys are refused first, by name.
+			if err := t6g6RefuseModeKeys(rbfKind, raw); err != nil {
 				return rbfReport{}, err
+			}
+			var in rbfNativeParams
+			if err := decodeStrictParams(raw, &in); err != nil {
+				return rbfReport{}, fmt.Errorf("%s: decode params: %w", rbfKind, err)
 			}
 			live := rc.Mode() == tasks.ModeLive
 			dry := !live

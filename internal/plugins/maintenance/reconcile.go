@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reconcile.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: b8c9d0e1-f2a3-4567-1234-789012345678
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -75,10 +75,19 @@ func (p *Plugin) itunesHealNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.S
 	c := t6g6Common(itunesHealKind, sched)
 	c.Title = "iTunes path heal"
 	c.Help = itunesHealHelp
-	// HEAD declared no Writes. The heal repoints and merges book rows (books,
-	// book_files, the undo journal under operations) and reflinks files back
-	// into the library (files).
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResFiles)), tasks.Res("books", string(ops.ResOperations)))
+	// HEAD declared no Writes. The heal repoints and merges book rows and reflinks
+	// files back into the library. Its duplicate collapse is a full book merge
+	// (merge.Service.MergeBooksWithOptions), traced in the test map
+	// t6g6WriterResource: books, external_ids (the losers' ids move to the
+	// survivor), operations (the undo pointer and sibling journal), user_state (the
+	// losers' progress and read status follow), indexes (the identification dirty
+	// mark), plus book_files and files for the repoint and reflink. sync_identity
+	// and ai_journal arrive with F5-06 (seams.d/F5-11.md).
+	c.Effects = tasks.Writes(
+		tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)),
+		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResFiles)),
+		tasks.Res("books", string(ops.ResIndexes)), tasks.Res("books", string(ops.ResOperations)),
+		tasks.Res("books", string(ops.ResUserState)))
 	// HEAD's def says Restart because the reflink is idempotent. The heal never
 	// writes a checkpoint of its own (LastProcessedPID only comes in through the
 	// params), so a restart re-walks from the start: ResumeFromZero, not Continue.

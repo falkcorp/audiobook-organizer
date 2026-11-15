@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_merged_user_state_native_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 3c9d2e71-6b04-4a58-9f1e-7d2b8a5c4e30
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -218,4 +218,28 @@ func TestT6G6More_ComposedUserStateStacksCapabilities(t *testing.T) {
 	require.NotNil(t, database.AsBookmarkCopier(c), "bookmark copier")
 	_, ok := database.AsCapability[database.UserPositionTimestampWriter](c)
 	require.True(t, ok, "timestamp writer")
+}
+
+// pending_only reaches the repair: with it set, only the durable pending-repair
+// records are completed, so the stranded state a bare run would infer a survivor
+// for stays where it is.
+func TestT6G6More_RepairMergedPendingOnlyReachesTheCore(t *testing.T) {
+	gate := &t6g6GateWriter{name: "gotham"}
+	run := func(t *testing.T, params string) (stateOnWinner bool) {
+		store, userID, winnerID, _ := strandedFixture(t)
+		pebble, ok := store.(*database.PebbleStore)
+		require.True(t, ok)
+		p := newT6G6Probe(t)
+		y := &t6g6UserStateSpy{s: pebble, rec: p.rec.rec}
+		p.rec.us = y
+		p.store = t6g6UserStateStore{y: y}
+		def := t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), repairMergedUserStateKind)
+		_, err := runT6G6Kind(t, def, tasks.ModeLive, gate, params)
+		require.NoError(t, err)
+		w, err := store.GetUserBookState(userID, winnerID)
+		require.NoError(t, err)
+		return w != nil
+	}
+	require.True(t, run(t, `{}`), "a bare run moves the stranded state")
+	require.False(t, run(t, `{"pending_only":true}`), "pending_only leaves it: no pending record names it")
 }

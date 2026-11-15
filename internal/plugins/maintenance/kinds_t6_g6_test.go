@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.2.6
+// version: 1.3.0
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -55,34 +55,71 @@ type t6g6Recorder struct {
 	ensure func(database.OpChangeEnsureOptions) (database.OpChangeByBookEnsureResult, error)
 }
 
-// t6g6WriterResource maps every writer method the spy can record to the Effects
-// resource it writes, written out by hand. A recorded call whose method is not
-// in this map fails the test, so a new writer method cannot slip past the
-// declared write set.
-var t6g6WriterResource = map[string]string{
-	"CompactActivityEntries":        "books/" + string(ops.ResActivity),
-	"RecompactActivityDigests":      "books/" + string(ops.ResActivity),
-	"RebuildOpChangeByBookIndex":    "books/" + string(ops.ResOperations),
-	"EnsureOpChangeByBookIndexWith": "books/" + string(ops.ResOperations),
-	"CreateOperationChange":         "books/" + string(ops.ResOperations),
-	"CollapseHealDuplicates":        "books/" + string(ops.ResBooks),
-	"HealTrack":                     "books/" + string(ops.ResFiles),
-	"UpdateBookFiles":               "books/" + string(ops.ResBookFiles),
-	"CreateBookFile":                "books/" + string(ops.ResBookFiles),
-	"ModifyBookFile":                "books/" + string(ops.ResBookFiles),
-	"RecomputeBookAggregates":       "books/" + string(ops.ResBooks),
-	"ModifyBook":                    "books/" + string(ops.ResBooks),
-	"UpsertReviewItem":              "books/" + string(ops.ResReviewItems),
-	"DeleteReviewItemIfPending":     "books/" + string(ops.ResReviewItems),
-	"SetRaw":                        "books/" + string(ops.ResUserState),
-	"DeleteRaw":                     "books/" + string(ops.ResUserState),
-	"SetUserBookState":              "books/" + string(ops.ResUserState),
-	"SetUserPosition":               "books/" + string(ops.ResUserState),
-	"SetUserPositionAt":             "books/" + string(ops.ResUserState),
-	"ClearUserPositions":            "books/" + string(ops.ResUserState),
-	"MintOrGetSyncID":               "books/" + string(ops.ResUserState),
-	"RecordSyncMerge":               "books/" + string(ops.ResUserState),
-	"CopyBookmarkIfAbsent":          "books/" + string(ops.ResUserState),
+// t6g6WriterResource maps every writer method the spy can record to the FULL set
+// of Effects resources its call chain writes. Each entry is traced from the
+// store call chain, cited in the comment above it, not hand-picked: a method that
+// reaches several tables lists all of them. A recorded call whose method is not
+// in this map fails the test, and t6g6AssertWritesDeclared requires every traced
+// resource to be in the kind's declared write set.
+//
+// Resources that arrive with a later row are named in seams.d/F5-11.md and are
+// not listed here: sync_identity (F5-06) for MintOrGetSyncID, RecordSyncMerge and
+// CollapseHealDuplicates' follow, and ai_journal (F5-06) for the heal's whisper
+// journal.
+var t6g6WriterResource = map[string][]string{
+	// store CompactActivityEntries: the activity log only.
+	"CompactActivityEntries": t6g6Eff(ops.ResActivity),
+	// store RecompactActivityDigests: the activity digest tier only.
+	"RecompactActivityDigests": t6g6Eff(ops.ResActivity),
+	// store Rebuild/EnsureOpChangeByBookIndex: the by-book index keys of the undo ledger.
+	"RebuildOpChangeByBookIndex":    t6g6Eff(ops.ResOperations),
+	"EnsureOpChangeByBookIndexWith": t6g6Eff(ops.ResOperations),
+	// store CreateOperationChange: one undo-ledger row.
+	"CreateOperationChange": t6g6Eff(ops.ResOperations),
+	// reconcile.collapseHealDuplicates -> merge.Service.MergeBooksWithOptions
+	// (internal/merge/service.go): ModifyBook / SoftDeleteBook on every member
+	// (books); ReassignExternalIDs loser -> survivor (external_ids); the
+	// sibling-move journal and group redirect SetRaw (sibling_journal.go:548,
+	// group_redirect.go:112) and the undo pointer's CreateOperationChange
+	// (undo_pointer.go:96) (operations, the undo journal); FollowMerge /
+	// followOntoFlagHolder moving the losers' progress and read status
+	// (sync_follow.go:617-644, follow_journaled.go:177-201: SetUserBookState,
+	// ClearUserPositions, SetUserPosition) and the pending-repair SetRaw/DeleteRaw
+	// (sync_follow.go:162) (user_state); MarkIdentDirtyBestEffort on the survivor
+	// (service.go:544) (indexes, the identification driver's dirty set); and
+	// MintOrGetSyncID / RecordSyncMerge (service.go:1467, 1486; sync_identity,
+	// F5-06). The combine-only paths (MoveBookFilesToBook, SetBookAuthors,
+	// RecordUserOverridesLocked: service.go:2136, 2737, 2788, 3190) are not
+	// reachable from MergeBooksWithOptions.
+	"CollapseHealDuplicates": t6g6Eff(ops.ResBooks, ops.ResExternalIDs, ops.ResOperations, ops.ResUserState, ops.ResIndexes),
+	// the iTunes heal's reflink of a missing track into the library: bytes on disk.
+	"HealTrack": t6g6Eff(ops.ResFiles),
+	// store UpdateBookFiles / CreateBookFile: the book_file row, then the books
+	// aggregate recompute (pebble_store_bookfiles.go after :331,
+	// ErrBookAggregatesRecompute).
+	"UpdateBookFiles": t6g6Eff(ops.ResBookFiles, ops.ResBooks),
+	"CreateBookFile":  t6g6Eff(ops.ResBookFiles, ops.ResBooks),
+	// store ModifyBookFile: the book_file row only (the repoint recomputes through RecomputeBookAggregates).
+	"ModifyBookFile": t6g6Eff(ops.ResBookFiles),
+	// store RecomputeBookAggregates / ModifyBook: the books row.
+	"RecomputeBookAggregates": t6g6Eff(ops.ResBooks),
+	"ModifyBook":              t6g6Eff(ops.ResBooks),
+	// store UpsertReviewItem / DeleteReviewItemIfPending: review_items.
+	"UpsertReviewItem":          t6g6Eff(ops.ResReviewItems),
+	"DeleteReviewItemIfPending": t6g6Eff(ops.ResReviewItems),
+	// repair-merged-user-state: the pending-repair raw keys and the per-user state
+	// it moves (repair_merged_user_state.go, sync_follow.go moveLoserState).
+	"SetRaw":               t6g6Eff(ops.ResUserState),
+	"DeleteRaw":            t6g6Eff(ops.ResUserState),
+	"SetUserBookState":     t6g6Eff(ops.ResUserState),
+	"SetUserPosition":      t6g6Eff(ops.ResUserState),
+	"SetUserPositionAt":    t6g6Eff(ops.ResUserState),
+	"ClearUserPositions":   t6g6Eff(ops.ResUserState),
+	"CopyBookmarkIfAbsent": t6g6Eff(ops.ResUserState),
+	// MintOrGetSyncID / RecordSyncMerge also write sync_identity (F5-06's
+	// constant, absent on this branch): declared user_state only until stacking.
+	"MintOrGetSyncID": t6g6Eff(ops.ResUserState),
+	"RecordSyncMerge": t6g6Eff(ops.ResUserState),
 }
 
 // t6g6Eff is the sorted "books/<resource>" refs of the given pkg/ops constants.
@@ -107,9 +144,11 @@ func t6g6AssertWritesDeclared(t *testing.T, calls []string, def tasks.Definition
 	}
 	for _, c := range calls {
 		method, _, _ := strings.Cut(c, " ")
-		res, ok := t6g6WriterResource[method]
-		require.True(t, ok, "%s: writer method %q has no resource in t6g6WriterResource", def.Kind(), method)
-		require.True(t, declared[res], "%s: %q writes %s, which its Effects do not declare", def.Kind(), c, res)
+		traced, ok := t6g6WriterResource[method]
+		require.True(t, ok, "%s: writer method %q has no resource set in t6g6WriterResource", def.Kind(), method)
+		for _, res := range traced {
+			require.True(t, declared[res], "%s: %q writes %s, which its Effects do not declare", def.Kind(), c, res)
+		}
 	}
 }
 
@@ -482,7 +521,7 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.recompactActivityDigestsDef(), resume: tasks.ResumeDrop, timeout: 60 * time.Minute,
 			effects: t6g6Eff(ops.ResActivity)},
 		{head: p.itunesHealDef(), resume: tasks.ResumeFromZero, timeout: 60 * time.Minute,
-			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResFiles, ops.ResOperations)},
+			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResExternalIDs, ops.ResFiles, ops.ResIndexes, ops.ResOperations, ops.ResUserState)},
 		{head: p.recoverMissingFilesDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
 			par: cpu(recoverMissingFilesParallelism), wantPar: "fixed(24): ",
 			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResFiles)},

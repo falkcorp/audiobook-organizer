@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g6.go
-// version: 1.1.4
+// version: 1.2.0
 // guid: d78a6104-de76-4b10-ab6f-1cf177912760
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -118,10 +118,17 @@ type t6g6ItemsOptions struct {
 	// ProgressBase and ProgressTotal place a slice of a larger set on the
 	// progress bar.
 	ProgressBase, ProgressTotal int
-	// Label is HEAD's per-item progress label. Called inside the worker
-	// goroutines, so it reads counters atomically. The native pool labels
-	// nothing from it.
+	// Label is HEAD's per-item progress label for a loop whose label reads
+	// running counters. Called inside the worker goroutines, so it reads them
+	// atomically. The native pool cannot carry it: tasks.ItemsOptions.Label is
+	// pure (the item only), so a counter label is dropped natively (a recorded
+	// seam in seams.d/F5-11.md: recover's three loops and the heal).
 	Label func(i, total int) string
+	// PureLabel is HEAD's label for a loop whose label reads only the item index
+	// and the total ("Phase 1/3: checking book i/total"). Both pools carry it:
+	// HEAD's as Label, the native as the item-only tasks.ItemsOptions.Label (the
+	// item is the index). Set at most one of Label and PureLabel.
+	PureLabel func(i, total int) string
 }
 
 // t6g6ItemsFunc runs fn over the indexes 0..n-1 on the shell's pool with the
@@ -141,6 +148,10 @@ func t6g6HeadItems(rep sdk.Reporter) t6g6ItemsFunc {
 		if o.Collect {
 			mode = opsregistry.ErrModeCollect
 		}
+		lbl := o.Label
+		if lbl == nil {
+			lbl = o.PureLabel
+		}
 		return opsregistry.RunItems(ctx, rep, idx, func(ctx context.Context, i int) error {
 			return fn(ctx, i)
 		}, opsregistry.RunItemsOptions{
@@ -148,7 +159,7 @@ func t6g6HeadItems(rep sdk.Reporter) t6g6ItemsFunc {
 			ErrMode:        mode,
 			ProgressOffset: o.ProgressBase,
 			ProgressTotal:  o.ProgressTotal,
-			Label:          o.Label,
+			Label:          lbl,
 		})
 	}
 }
@@ -166,9 +177,14 @@ func t6g6NativeItems(rc *tasks.RC) t6g6ItemsFunc {
 		if o.Collect {
 			mode = tasks.Collect
 		}
+		// The item is the index, so the pure label closes over n for the total.
+		var label func(int) string
+		if o.PureLabel != nil {
+			label = func(i int) string { return o.PureLabel(i, n) }
+		}
 		_, err := tasks.RunItems(rc, par, idx, func(ic *tasks.ItemRC, i int) error {
 			return fn(ic.Context(), i)
-		}, tasks.ItemsOptions[int]{OnError: mode, ProgressBase: o.ProgressBase, ProgressTotal: o.ProgressTotal})
+		}, tasks.ItemsOptions[int]{OnError: mode, ProgressBase: o.ProgressBase, ProgressTotal: o.ProgressTotal, Label: label})
 		var ie *tasks.ItemsError
 		if errors.As(err, &ie) {
 			if o.Collect && len(ie.Errs) > 0 {
