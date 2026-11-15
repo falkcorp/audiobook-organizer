@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.12.0
+# version: 1.13.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-15
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -683,15 +683,26 @@ class RecordPassTest(unittest.TestCase):
 
     def test_a_listed_5xx_without_its_listed_message_is_a_recorder_failure(self):
         self.rig.fake.handler_status["PUT /api/v1/audiobooks"] = 500
-        self.rig.fake.handler_message = "open /home/runner/work/x: permission denied (10.1.2.3)"
+        self.rig.fake.handler_message = "open /srv/batcave/archive/joker.mp3: permission denied (192.0.2.7)"
         with self.assertRaises(rec.RecorderError) as cm:
             self.rig.run()
         text = str(cm.exception)
         self.assertIn("PUT /api/v1/audiobooks/:id", text)
         self.assertIn("failed-to-update-audiobook", text)
-        # the shape of the body is named, its path and address are not
-        self.assertNotIn("/home/runner", text)
-        self.assertNotIn("10.1.2.3", text)
+        # the body is classified (its length and kind), none of its words are printed:
+        # not a path component, not the message, not an address. The old shape_of kept
+        # every letter, so "batcave", "joker" and "permission" all reached the log.
+        self.assertIn("chars of", text)
+        for word in ("srv", "batcave", "archive", "joker", "permission", "denied", "192"):
+            self.assertNotIn(word, text)
+
+    def test_shape_of_names_the_kind_of_a_body_and_none_of_its_words(self):
+        self.assertEqual(rec.shape_of("  "), "empty body")
+        self.assertEqual(rec.shape_of('{"error": "open /srv/batcave: denied"}'), "38 chars of a JSON object with 1 keys")
+        self.assertEqual(rec.shape_of("[1, 2]"), "6 chars of JSON that is not an object")
+        out = rec.shape_of("open /srv/batcave/joker.mp3: permission denied")
+        self.assertTrue(out.endswith("chars of text"))
+        self.assertNotIn("batcave", out)
 
     def test_a_listed_5xx_the_anonymous_caller_also_gets_is_not_a_verdict(self):
         # a 5xx before the decision (a crash in the middleware) is not an allow.

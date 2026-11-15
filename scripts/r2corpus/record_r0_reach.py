@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.10.0
+# version: 1.11.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-15
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -245,10 +245,21 @@ OK_5XX_REASONS: dict[str, tuple[str, str | None]] = {
 
 
 def shape_of(body: str) -> str:
-    """A body reduced to letters and spaces (every other character becomes ``_``),
-    cut to 60 characters: enough to see which message a failing run got without
-    printing a path, an address or an id into a public log."""
-    return "".join(c if c.isalpha() or c == " " else "_" for c in body.strip()[:60])
+    """A classification of a body, never any of its text: its length, whether it is a
+    JSON object and how many keys that object has. Enough to see whether a failing
+    run got an empty reply, a plain-text line or an error document, and nothing that
+    can carry a path, an address, an id or a message into a public log (a word of the
+    body is a word of a path: ``/home/<name>/...`` survives any letters-only filter)."""
+    text = body.strip()
+    if not text:
+        return "empty body"
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return f"{len(text)} chars of text"
+    if isinstance(doc, dict):
+        return f"{len(text)} chars of a JSON object with {len(doc)} keys"
+    return f"{len(text)} chars of JSON that is not an object"
 
 
 def reason_token(route: str, status: int, body: str) -> str:
