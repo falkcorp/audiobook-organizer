@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_storediff_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 8e2f6a1c-47b3-4d09-9c5e-b13a7d60f4e2
 // last-edited: 2026-11-15
 
@@ -38,8 +38,10 @@ import (
 // owns it, by the longest matching prefix. It follows the vocabulary in
 // t6g5WriterResources: a derived index belongs to the row it indexes; narrator,
 // book-narrator and chapter rows are `books`; preferences and playlists are
-// `user_state`; the sync-id rows (sync_item:, sync_file:, sync_alias_use) are
-// `sync_identity`, the same key families F5-06's backfill-sync-ids writes; the undo
+// `user_state`; the file provenance ledger (every file_prov prefix: events, hash
+// index, orphans, sequence) is `file_provenance`, never `book_files`; the sync-id
+// rows (sync_item:, sync_file:, sync_alias_use) are `sync_identity`, the same key
+// families F5-06's backfill-sync-ids writes; the undo
 // journal (opchange, the merge sibling-move journal) is `operations`; a record
 // keyed on a book or a version group (path_history, group redirects) is `books`.
 var t6g5KeyFamilyResource = map[string]ops.Resource{
@@ -66,7 +68,7 @@ var t6g5KeyFamilyResource = map[string]ops.Resource{
 	"book_file":             ops.ResBookFiles,
 	"bf:":                   ops.ResBookFiles,
 	"bfs:":                  ops.ResBookFiles,
-	"file_prov":             ops.ResBookFiles,
+	"file_prov":             ops.ResFileProvenance,
 	"author:":               ops.ResAuthors,
 	"author_":               ops.ResAuthors,
 	"book_authors:":         ops.ResAuthors,
