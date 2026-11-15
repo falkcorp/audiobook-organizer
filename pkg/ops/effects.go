@@ -1,7 +1,7 @@
 // file: pkg/ops/effects.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package ops
 

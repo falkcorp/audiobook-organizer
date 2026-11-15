@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -720,7 +720,10 @@ func TestT6G1Kinds_ActivityBackfillCheckpointStopsAtAFailedWindow(t *testing.T) 
 	deps.ActivityFilter = t6g1HeadActivity{s}
 	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(deps, nil), activityFilterIndexBackfillKind)
 
-	_, h, _ := runT6G1Full(t, def, tasks.ModeLive, &t6g1GateWriter{}, "", nil)
+	// Four workers, not NumCPU: with a wide pool the first failure can cancel
+	// the run before the checkpoint cadence (8 completions) is reached.
+	_, h, err := runT6G1Full(t, def, tasks.ModeLive, &t6g1GateWriter{}, `{"workers":4}`, nil)
+	require.ErrorContains(t, err, "injected window failure")
 	raw, ok := h.CheckpointJSON("")
 	require.True(t, ok, "29 windows ran before the failure; the run must have checkpointed")
 	var cp activityFilterIndexBackfillParams

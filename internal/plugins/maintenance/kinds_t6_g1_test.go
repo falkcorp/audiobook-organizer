@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -212,6 +213,10 @@ func t6g1WriteSet(c tasks.Common) []string {
 // asserts the recorded resources are within the kind's declared WriteSet, so a
 // wrong or missing resource in an Effects declaration fails a test instead of
 // being copied into a second hand-typed table.
+//
+// DeleteAuthor and MergeDeleteAuthor include books: both run the store's
+// deleteAuthor, whose repointPrimaryScalarsBeforeDelete calls ModifyBook on
+// every book whose primary author is the one deleted (author_primary_repoint.go).
 var t6g1WriterResources = map[string][]string{
 	"AIJournalPruner":              {string(ops.ResAIJournal)},
 	"BackfillFilterIndexWindow":    {string(ops.ResActivity)},
@@ -219,14 +224,14 @@ var t6g1WriterResources = map[string][]string{
 	"ClearFilterIndexBackfillDone": {string(ops.ResActivity)},
 	"ReconcileFilterIndexCoverage": {string(ops.ResActivity)},
 	"CreateAuthor":                 {string(ops.ResAuthors)},
-	"DeleteAuthor":                 {string(ops.ResAuthors)},
+	"DeleteAuthor":                 {string(ops.ResBooks), string(ops.ResAuthors)},
 	"ModifyBookAuthors":            {string(ops.ResAuthors)},
 	"SetBookAuthors":               {string(ops.ResAuthors)},
 	"ModifyBook":                   {string(ops.ResBooks)},
 	"RecordOperationChange":        {string(ops.ResOperations)},
 	"JournalStep":                  {string(ops.ResOperations)},
 	"MoveCredits":                  {string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResOperations)},
-	"MergeDeleteAuthor":            {string(ops.ResAuthors), string(ops.ResOperations)},
+	"MergeDeleteAuthor":            {string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResOperations)},
 	"RenameAuthorJournaled":        {string(ops.ResAuthors), string(ops.ResOperations)},
 	"SetRaw":                       {string(ops.ResAuthorityLists)},
 	"DeleteRawBatch":               {string(ops.ResAuthorityLists)},
@@ -309,7 +314,9 @@ func TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod(t *testing.T) {
 
 // t6g1OpsVocabulary is every Resource constant pkg/ops/effects.go declares,
 // read from the source with go/ast, so adding a constant needs no edit here and
-// a name that is only a string literal in a kind is not in the set.
+// a name that is only a string literal in a kind is not in the set. The count pin
+// is deliberate: it catches a constant written without the Resource type, which
+// the enumeration skips, so adding a constant means bumping the count here.
 func t6g1OpsVocabulary(t *testing.T) map[string]bool {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -364,34 +371,77 @@ func TestT6G1Kinds_EffectsUseOnlyOpsResources(t *testing.T) {
 	}
 }
 
-// t6g1KindWriterField names, for each kind that writes through a writer group,
-// the t6g1Writers field its core takes. The expected write set of the kind is
-// derived from that field's interface, never from what a fixture happens to
-// call.
-var t6g1KindWriterField = map[tasks.Kind]string{
-	pruneAIJournalKind:              "PruneAIJournal",
-	activityFilterIndexBackfillKind: "ActivityFilter",
-	authorSplitScanKind:             "AuthorSplit",
-	authorConjunctionRepairKind:     "Merge",
-	authorDuplicateMergeKind:        "Merge",
-	authorIDRepairKind:              "IDRepair",
-	authorPathLinkKind:              "PathLink",
-	purgeEmptyAuthorsKind:           "PurgeEmpty",
-	authorStripMergeKind:            "StripMerge",
-	authorityBuildKind:              "AuthorityBuild",
+// t6g1KindByIdent maps the kind constant a shell passes to t6g1WriterOf, by its
+// source name, to the kind. An ident missing here fails the test below.
+var t6g1KindByIdent = map[string]tasks.Kind{
+	"pruneAIJournalKind":              pruneAIJournalKind,
+	"activityFilterIndexBackfillKind": activityFilterIndexBackfillKind,
+	"authorSplitScanKind":             authorSplitScanKind,
+	"authorConjunctionRepairKind":     authorConjunctionRepairKind,
+	"authorDuplicateMergeKind":        authorDuplicateMergeKind,
+	"authorIDRepairKind":              authorIDRepairKind,
+	"authorPathLinkKind":              authorPathLinkKind,
+	"purgeEmptyAuthorsKind":           purgeEmptyAuthorsKind,
+	"authorStripMergeKind":            authorStripMergeKind,
+	"authorityBuildKind":              authorityBuildKind,
+}
+
+// t6g1KindWriterFields names, for each kind that writes through a writer group,
+// the t6g1Writers field its shell takes. It is read from the shells themselves
+// (each t6g1WriterOf call's kind argument and the field its pick closure
+// returns), so it cannot drift from what the shell does.
+func t6g1KindWriterFields(t *testing.T) map[tasks.Kind]string {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	fset := token.NewFileSet()
+	out := map[tasks.Kind]string{}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		require.NoError(t, err)
+		file, err := parser.ParseFile(fset, f, src, 0)
+		require.NoError(t, err)
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 4 {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "t6g1WriterOf" {
+				return true
+			}
+			pos := fset.Position(call.Pos())
+			kindID, ok := call.Args[2].(*ast.Ident)
+			require.True(t, ok, "%s: t6g1WriterOf's kind argument is not a constant name", pos)
+			kind, known := t6g1KindByIdent[kindID.Name]
+			require.True(t, known, "%s: kind %s is not in t6g1KindByIdent", pos, kindID.Name)
+			lit, ok := call.Args[3].(*ast.FuncLit)
+			require.True(t, ok, "%s: t6g1WriterOf's pick is not a func literal", pos)
+			require.Len(t, lit.Body.List, 1, "%s: the pick closure must be a single return", pos)
+			ret, ok := lit.Body.List[0].(*ast.ReturnStmt)
+			require.True(t, ok && len(ret.Results) == 1, "%s: the pick closure must return one value", pos)
+			sel, ok := ret.Results[0].(*ast.SelectorExpr)
+			require.True(t, ok, "%s: the pick closure must return ws.<Field>", pos)
+			require.NotContains(t, out, kind, "%s: %s is built twice", pos, kind)
+			out[kind] = sel.Sel.Name
+			return true
+		})
+	}
+	require.Len(t, out, len(t6g1KindByIdent), "a kind in t6g1KindByIdent has no t6g1WriterOf call, or the reverse")
+	return out
 }
 
 // t6g1OutsideWriterSeam lists, per kind, the declared write resources that are
-// written outside the writer interface, with the reason. A kind absent from
+// written outside the writer interface, with the reason (only the two
+// fetch-driven kinds: every other write goes through a method in
+// t6g1WriterResources). A kind absent from
 // t6g1KindWriterField writes only that way.
 var t6g1OutsideWriterSeam = map[tasks.Kind]struct {
 	res []string
 	why string
 }{
-	purgeEmptyAuthorsKind: {
-		res: []string{string(ops.ResBooks)},
-		why: "DeleteAuthor sweeps the author out of each book's author junction, a write to the books table the interface method does not name",
-	},
 	resolveProductionAuthorsKind: {
 		res: []string{string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResSeries), string(ops.ResBookFiles),
 			string(ops.ResOperations), string(ops.ResMetadataCache), string(ops.ResFieldStates)},
@@ -404,6 +454,44 @@ var t6g1OutsideWriterSeam = map[tasks.Kind]struct {
 	},
 }
 
+// The read side of every kind is write-free. The write-set derivation reflects
+// only over t6g1Writers; a write added to a store or reader interface would
+// bypass the gated writer and every check above. Each method on each read
+// dependency must start with a read verb (or be one of the named reads), and
+// none may be a method t6g1WriterResources maps.
+func TestT6G1Kinds_ReadDependenciesHaveNoWriteMethods(t *testing.T) {
+	readVerbs := []string{
+		"Get", "List", "Count", "Scan", "Can", "Verify",
+		"AuthorFileRefCounts", "AuthorRefBucketCounts", "AuthorRefCounts",
+		"FilterIndexBackfillDone", "FilterIndexEarliestNanos", "ReconcileSupport",
+	}
+	var types []reflect.Type
+	st := reflect.TypeOf(t6g1Stores{})
+	for i := range st.NumField() {
+		types = append(types, st.Field(i).Type)
+	}
+	dt := reflect.TypeOf(t6g1Deps{})
+	for _, name := range []string{"ActivityFilter", "PlanReader"} {
+		f, ok := dt.FieldByName(name)
+		require.True(t, ok, "t6g1Deps.%s", name)
+		types = append(types, f.Type)
+	}
+	mt := reflect.TypeOf(applygate.ManualOnlyReaders{})
+	for i := range mt.NumField() {
+		types = append(types, mt.Field(i).Type)
+	}
+	for _, it := range types {
+		require.Equal(t, reflect.Interface, it.Kind(), "%s is not a read interface", it)
+		for j := range it.NumMethod() {
+			name := it.Method(j).Name
+			_, isWrite := t6g1WriterResources[name]
+			require.False(t, isWrite, "%s.%s is a writer method on a read dependency: it would bypass the gated writer", it, name)
+			ok := slices.ContainsFunc(readVerbs, func(v string) bool { return strings.HasPrefix(name, v) })
+			require.True(t, ok, "%s.%s does not look like a read; writes belong on t6g1Writers, or add the verb to readVerbs after review", it, name)
+		}
+	}
+}
+
 // A kind's declared WriteSet is exactly the union of the resources of every
 // method on its writer interface, plus the listed resources written outside it.
 // Unlike the live subset check this does not depend on which path a fixture
@@ -411,6 +499,7 @@ var t6g1OutsideWriterSeam = map[tasks.Kind]struct {
 // whether or not any test reaches the write.
 func TestT6G1Kinds_WriteSetEqualsTheWriterInterfaceUnion(t *testing.T) {
 	wt := reflect.TypeOf(t6g1Writers{})
+	kindWriterField := t6g1KindWriterFields(t)
 	for _, d := range (&Plugin{}).t6g1Kinds(fakeT6G1Deps(t), nil) {
 		kind := d.Kind()
 		declared := map[string]bool{}
@@ -418,12 +507,12 @@ func TestT6G1Kinds_WriteSetEqualsTheWriterInterfaceUnion(t *testing.T) {
 			declared[r.Kind] = true
 		}
 		if len(declared) == 0 {
-			require.NotContains(t, t6g1KindWriterField, kind, "%s is read-only", kind)
+			require.NotContains(t, kindWriterField, kind, "%s is read-only", kind)
 			require.NotContains(t, t6g1OutsideWriterSeam, kind, "%s is read-only", kind)
 			continue
 		}
 		union := map[string]bool{}
-		if field, ok := t6g1KindWriterField[kind]; ok {
+		if field, ok := kindWriterField[kind]; ok {
 			sf, found := wt.FieldByName(field)
 			require.True(t, found, "%s: no t6g1Writers field %s", kind, field)
 			for j := range sf.Type.NumMethod() {
@@ -443,7 +532,7 @@ func TestT6G1Kinds_WriteSetEqualsTheWriterInterfaceUnion(t *testing.T) {
 				outside[r] = true
 			}
 		}
-		_, hasField := t6g1KindWriterField[kind]
+		_, hasField := kindWriterField[kind]
 		require.True(t, hasField || len(outside) > 0, "%s writes but has neither a writer field nor an outside-the-seam entry", kind)
 		want := map[string]bool{}
 		for r := range union {
@@ -547,19 +636,12 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 		checkpoints bool
 		// readOnly: the two reports write nothing.
 		readOnly bool
-		// fetchWrites is what the kind's metadata fetch writes through the
-		// fetcher or runner built over the run's writer, which no writer-method
-		// spy sees (resolve and auto-match). The write sets of every other kind
-		// are checked against the writes a live run records
-		// (t6g1RequireWritesDeclared), not against a table typed here.
-		fetchWrites []string
 	}
 	rows := []row{
 		{head: p.activityFilterIndexBackfillDef(), par: activityFilterIndexBackfillParallelism(0), wantPar: "cpu", checkpoints: true},
 		{head: p.pruneAIJournalDef()},
 		{head: p.authorSplitScanDef(), par: authorSplitScanParallelism(), wantPar: "fixed(4): "},
-		{head: p.resolveProductionAuthorsDef(), par: resolveProductionAuthorsParallelism(), wantPar: "fixed(",
-			fetchWrites: []string{"books/books", "books/authors", "books/series", "books/book_files", "books/operations", "books/metadata_cache", "books/field_states"}},
+		{head: p.resolveProductionAuthorsDef(), par: resolveProductionAuthorsParallelism(), wantPar: "fixed("},
 		{head: p.authorConjunctionRepairDef()},
 		{head: p.authorDuplicateMergeDef()},
 		{head: p.authorIDRepairDef(), par: authorIDRepairParallelism(), wantPar: "cpu"},
@@ -569,8 +651,7 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.authorTitleFragmentScanDef(), readOnly: true},
 		{head: p.authorWhitespaceCollisionReportDef(), readOnly: true},
 		{head: p.authorityBuildDef(), par: authorityBuildParallelism(0), wantPar: "cpu"},
-		{head: p.autoMatchTranscribedDef(), par: autoMatchTranscribedParallelism(), wantPar: "fixed(1): ", checkpoints: true,
-			fetchWrites: []string{"books/books", "books/authors", "books/book_files", "books/operations", "books/metadata_cache", "books/field_states"}},
+		{head: p.autoMatchTranscribedDef(), par: autoMatchTranscribedParallelism(), wantPar: "fixed(1): ", checkpoints: true},
 	}
 
 	seen := map[tasks.Kind]bool{}
@@ -620,9 +701,6 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 		} else {
 			require.False(t, c.Effects.IsReadOnly(), "%s writes", id)
 			require.NotEmpty(t, c.Effects.WriteSet(), "%s declares no write", id)
-			for _, w := range r.fetchWrites {
-				require.Contains(t, t6g1WriteSet(c), w, "%s must declare what its metadata fetch writes", id)
-			}
 		}
 
 		if r.wantPar != "" {
