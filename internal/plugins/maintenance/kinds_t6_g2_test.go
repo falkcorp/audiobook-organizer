@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-14
 
@@ -13,6 +13,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1003,6 +1004,82 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 			}
 		}
 	})
+
+	// The one entry whose chain crosses packages: quarantine's. Each resource it
+	// claims is tied to the call in the production source that touches it, so an
+	// entry cannot lose a resource the code still touches (the Effects check
+	// cannot see it: the transcode's own entry already covers the same names),
+	// and a trace whose call was removed or renamed fails here.
+	t.Run("quarantine's touch entry matches the calls it reaches", func(t *testing.T) {
+		svc := filepath.Join("..", "..", "quarantine", "service.go")
+		srv := filepath.Join("..", "..", "server", "quarantine_known_bad.go")
+		evidence := []struct {
+			res      ops.Resource // "" = a link of the chain, no resource of its own
+			file, fn string
+			callee   string
+		}{
+			{"", srv, "quarantineKnownBadFiles", "QuarantineBook"},
+			{"", svc, "QuarantineBook", "relocate"},
+			{"", svc, "relocate", "moveNoClobber"},
+			{"", svc, "relocate", "repointRow"},
+			{ops.ResFiles, svc, "moveNoClobber", "Rename"},
+			{ops.ResBookFiles, svc, "repointRow", "UpdateBookFile"},
+			{ops.ResBooks, svc, "QuarantineBook", "RecordPathChange"},
+			{ops.ResBooks, svc, "QuarantineBook", "ModifyBook"},
+			{ops.ResSettings, srv, "quarantineKnownBadFiles", "SetSetting"},
+		}
+		claimed := map[ops.Resource]bool{}
+		for _, e := range evidence {
+			if !t6g2CallsIn(t, e.file, e.fn)[e.callee] {
+				t.Errorf("%s no longer calls %s: the quarantine trace is stale", e.fn, e.callee)
+			}
+			if e.res != "" {
+				claimed[e.res] = true
+			}
+		}
+		entry := map[ops.Resource]bool{}
+		for _, n := range t6g2Touches["QuarantineKnownBadFiles"] {
+			entry[n] = true
+		}
+		if !maps.Equal(claimed, entry) {
+			t.Errorf("t6g2Touches[QuarantineKnownBadFiles] = %v, the calls it reaches touch %v", t6g2Touches["QuarantineKnownBadFiles"], slices.Collect(maps.Keys(claimed)))
+		}
+	})
+}
+
+// t6g2CallsIn is the set of names called inside one function or method of a
+// source file: "Rename" for os.Rename(...), "ModifyBook" for qs.store.ModifyBook(...),
+// "relocate" for a plain or method call of that name.
+func t6g2CallsIn(t *testing.T, path, fn string) map[string]bool {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	calls := map[string]bool{}
+	found := false
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != fn || fd.Body == nil {
+			continue
+		}
+		found = true
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			if ce, ok := n.(*ast.CallExpr); ok {
+				switch f := ce.Fun.(type) {
+				case *ast.SelectorExpr:
+					calls[f.Sel.Name] = true
+				case *ast.Ident:
+					calls[f.Name] = true
+				}
+			}
+			return true
+		})
+	}
+	if !found {
+		t.Fatalf("%s has no function %s", path, fn)
+	}
+	return calls
 }
 
 // t6g2OpsVocabulary is every Resource constant declared in pkg/ops/effects.go,
