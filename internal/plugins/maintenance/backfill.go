@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.10.4
+// version: 1.10.5
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
 // last-edited: 2026-11-15
 
@@ -151,16 +151,31 @@ func t6g2BootWalkRun(ctx context.Context, env t6g2Env, params bootBackfillParams
 // checkpoint, serialized. The first call only starts the clock: the time to
 // collect the candidates is not a checkpoint gap.
 func newYieldDue(ctx context.Context, margin time.Duration) func() bool {
+	return adaptiveYieldDue(ctx.Deadline, time.Now, margin, nil)
+}
+
+// adaptiveYieldDue is the yield test both shells use: true when the time left
+// before deadline() is under max(margin, 2 * the slowest gap between two calls
+// this attempt has seen). The first call only starts the clock. kernel, when
+// set, is an earlier-or-equal reason to stop (the native kernel's own
+// rc.ShouldYield) and is consulted on every call, so it can only bring the
+// yield forward. deadline reports ok=false when there is none (never yields on
+// time). The returned func is not safe for concurrent use: a walk calls it once
+// per checkpoint, serialized.
+func adaptiveYieldDue(deadline func() (time.Time, bool), now func() time.Time, margin time.Duration, kernel func() bool) func() bool {
 	var last time.Time
 	var slowest time.Duration
 	return func() bool {
-		now := time.Now()
+		n := now()
 		if !last.IsZero() {
-			slowest = max(slowest, now.Sub(last))
+			slowest = max(slowest, n.Sub(last))
 		}
-		last = now
-		dl, ok := ctx.Deadline()
-		return ok && time.Until(dl) < max(margin, 2*slowest)
+		last = n
+		if kernel != nil && kernel() {
+			return true
+		}
+		dl, ok := deadline()
+		return ok && dl.Sub(n) < max(margin, 2*slowest)
 	}
 }
 
