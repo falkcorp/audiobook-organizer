@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.35.5
+// version: 1.35.6
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
 // last-edited: 2026-11-15
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -388,7 +389,15 @@ func runTranscodeTempCleanupCore(ctx context.Context, env transcodeTempCleanupEn
 			env.Log(slog.LevelWarn, fmt.Sprintf("Skipping import path %q: %v", ip.Path, statErr))
 			continue
 		}
-		removed += env.Writer.CleanupStaleTempFiles(ip.Path, app, transcodeTempMaxAge, !env.Live)
+		if env.Live {
+			removed += env.Writer.CleanupStaleTempFiles(ip.Path, app, transcodeTempMaxAge)
+		} else {
+			// A preview counts with a read of its own, never through the writer: a
+			// gated writer's Do does not run the call in Preview, so a count taken
+			// through it is always 0 (the run reported "would remove 0" however many
+			// stale files there were). The dry-run walk touches nothing.
+			removed += transcode.CleanupStaleTempFiles(ip.Path, app, transcodeTempMaxAge, true)
+		}
 		swept++
 	}
 	verb := "Removed"

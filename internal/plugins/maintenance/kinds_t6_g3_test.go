@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
 // last-edited: 2026-11-15
 
@@ -160,12 +160,8 @@ func (w *t6g3RecWriter) CleanupOrphanedTempFiles(string, string) int {
 	w.note("CleanupOrphanedTempFiles")
 	return 2
 }
-func (w *t6g3RecWriter) CleanupStaleTempFiles(_ string, _ pathutil.AppDirs, _ time.Duration, dryRun bool) int {
-	if dryRun {
-		w.note("CleanupStaleTempFiles:dry")
-	} else {
-		w.note("CleanupStaleTempFiles:live")
-	}
+func (w *t6g3RecWriter) CleanupStaleTempFiles(string, pathutil.AppDirs, time.Duration) int {
+	w.note("CleanupStaleTempFiles")
 	return 1
 }
 func (w *t6g3RecWriter) RemoveOldBackupFiles(context.Context, string, pathutil.AppDirs, func(string) (time.Time, bool), time.Duration, func(slog.Level, string, ...any)) (int, error) {
@@ -287,9 +283,9 @@ func (s *t6g3ForwardSpy) CleanupOrphanedTempFiles(rootDir string, opID string) i
 	s.note("CleanupOrphanedTempFiles")
 	return s.inner.CleanupOrphanedTempFiles(rootDir, opID)
 }
-func (s *t6g3ForwardSpy) CleanupStaleTempFiles(root string, app pathutil.AppDirs, maxAge time.Duration, dryRun bool) int {
+func (s *t6g3ForwardSpy) CleanupStaleTempFiles(root string, app pathutil.AppDirs, maxAge time.Duration) int {
 	s.note("CleanupStaleTempFiles")
-	return s.inner.CleanupStaleTempFiles(root, app, maxAge, dryRun)
+	return s.inner.CleanupStaleTempFiles(root, app, maxAge)
 }
 func (s *t6g3ForwardSpy) RemoveOldBackupFiles(ctx context.Context, root string, app pathutil.AppDirs, match func(string) (time.Time, bool), maxAge time.Duration, log func(slog.Level, string, ...any)) (int, error) {
 	s.note("RemoveOldBackupFiles")
@@ -786,7 +782,7 @@ func TestT6G3Kinds_WritesThroughShell(t *testing.T) {
 			setup: func(f *t6g3Fake) {
 				f.store.paths = []database.ImportPath{{ID: 1, Path: root}}
 			},
-			wantCalls: []string{"CleanupStaleTempFiles:live"},
+			wantCalls: []string{"CleanupStaleTempFiles"},
 		},
 		{headID: "maintenance.cleanup-activity-log", wantCalls: []string{"CompactActivityEntries", "MaintainActivityLog"}},
 		{headID: "maintenance.cleanup-old-backups", wantCalls: []string{"RemoveOldBackupFiles"}},
