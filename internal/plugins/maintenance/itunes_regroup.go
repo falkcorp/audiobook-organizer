@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.32.2
+// version: 1.33.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -225,8 +225,14 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 // delete carries (t6g5RegroupUserState); HEAD declares only capabilities. The dry-run
 // keys are refused, the mode is the run's.
 func (p *Plugin) itunesRegroupKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	// authors, field_states, embeddings and metadata_cache: DeleteBook removes the
+	// book's author links, its field-state row, its embedding and dedup candidates
+	// and its metadata cache with the book row; UpdateBook and ModifyBook stamp
+	// the cache stale on an identity change. Traced per method in the seams note.
 	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)),
-		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResUserState)))
+		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResUserState)),
+		tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResFieldStates)),
+		tasks.Res("books", string(ops.ResEmbeddings)), tasks.Res("books", string(ops.ResMetadataCache)))
 	return tasks.Task(itunesRegroupKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g5Common(p.itunesRegroupDef(), itunesRegroupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {

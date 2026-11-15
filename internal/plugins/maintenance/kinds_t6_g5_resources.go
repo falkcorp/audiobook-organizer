@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_resources.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d2a4e8b7-6f13-4c95-b0e1-3a7c95d4f208
 // last-edited: 2026-11-15
 
@@ -23,7 +23,11 @@ import "github.com/falkcorp/audiobook-organizer/pkg/ops"
 //
 // The resource names are the pkg/ops constants. Vocabulary mappings the row
 // accepts, because pkg/ops has no finer name: narrator, book-narrator and
-// chapter rows are `books`; user preferences and user playlists are `user_state`.
+// chapter rows are `books`; user preferences and user playlists are `user_state`;
+// the store's derived secondary keys (the ident: rows, path and version-group
+// indexes) belong to the row that owns them, so they are not `indexes`, which
+// names the search and memdb index set; path_history and the merge sibling
+// journal are `operations`.
 // TestT6G5Resources_EveryNameIsAnOpsConstant checks the values.
 var t6g5WriterResources = map[string][]ops.Resource{
 	"CarryStateBeforeHardDelete": {ops.ResUserState},
@@ -32,15 +36,15 @@ var t6g5WriterResources = map[string][]ops.Resource{
 	"CloneBookIntoLibrary":       {ops.ResBooks, ops.ResBookFiles, ops.ResFiles, ops.ResAuthors, ops.ResUserState, ops.ResOperations},
 	"CreateBook":                 {ops.ResBooks},
 	"CreateNarrator":             {ops.ResBooks},
-	"DeleteBook":                 {ops.ResBooks, ops.ResBookFiles},
-	"DeleteBookFilesByIDs":       {ops.ResBookFiles},
+	"DeleteBook":                 {ops.ResBooks, ops.ResAuthors, ops.ResFieldStates, ops.ResEmbeddings, ops.ResMetadataCache, ops.ResUserState},
+	"DeleteBookFilesByIDs":       {ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex},
 	"DeleteMetadataCache":        {ops.ResMetadataCache},
 	"DeleteNarrator":             {ops.ResBooks},
 	"HardDeleteWithoutUserState": {},
 	"ImportSmartPlaylists":       {ops.ResUserState},
 	"InvalidateAuthorsCache":     {},
-	"MergeBooks":                 {ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResUserState, ops.ResOperations},
-	"ModifyBook":                 {ops.ResBooks},
+	"MergeBooks":                 {ops.ResBooks, ops.ResExternalIDs, ops.ResUserState, ops.ResOperations},
+	"ModifyBook":                 {ops.ResBooks, ops.ResMetadataCache},
 	"ModifyBookFile":             {ops.ResBookFiles, ops.ResBooks},
 	"MoveBookFilesToBook":        {ops.ResBookFiles, ops.ResBooks},
 	"MoveBookFilesToBookBulk":    {ops.ResBookFiles, ops.ResBooks},
@@ -53,7 +57,7 @@ var t6g5WriterResources = map[string][]ops.Resource{
 	"SetBookAuthors":             {ops.ResAuthors},
 	"SetBookNarrators":           {ops.ResBooks},
 	"SetUserPreferenceForUser":   {ops.ResUserState},
-	"UpdateBook":                 {ops.ResBooks},
+	"UpdateBook":                 {ops.ResBooks, ops.ResMetadataCache},
 	"UpdateBookFiles":            {ops.ResBookFiles, ops.ResBooks},
 }
 
@@ -70,5 +74,8 @@ type t6g5OutsideWrite struct {
 var t6g5OutsideWriterWrites = map[string][]t6g5OutsideWrite{
 	"itunes.clone-into-library": {
 		{ops.ResFiles, "the mixed-cleanup, rollback and rmdir steps call os.Remove directly; F5-18 should route them through a writer method stamped files, or accept that they run after the last fenced write"},
+	},
+	"maintenance.merge-same-path-dupes": {
+		{ops.ResBookFiles, "HEAD's own definition declares book_files for this op, and the native kind keeps that declared capability; the trace of MergeBooks found no book_file write on its path (only CombineBooks writes file rows), so no writer method carries it"},
 	},
 }

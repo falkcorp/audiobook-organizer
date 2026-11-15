@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -262,7 +262,10 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 // libraryStateRepairKind builds the native kind. Writes: HEAD's declared
 // books resource; the preview is HEAD's dry run.
 func (p *Plugin) libraryStateRepairKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)))
+	// metadata_cache: ModifyBook stamps a stale mark on a book's metadata
+	// candidate cache when a write changes the book's identity fields, and the
+	// store cannot tell the method's callers apart.
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResMetadataCache)))
 	return tasks.Task(libraryStateRepairKind, tasks.TaskSpec[json.RawMessage, libraryStateRepairResult]{
 		Common: t6g5Common(p.repairLibraryStateDef(), libraryStateRepairKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (libraryStateRepairResult, error) {

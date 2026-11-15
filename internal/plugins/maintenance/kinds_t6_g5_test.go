@@ -278,10 +278,10 @@ type t6g5Want struct {
 
 func t6g5Wants() []t6g5Want {
 	return []t6g5Want{
-		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResFiles), string(ops.ResOperations), string(ops.ResUserState)}},
+		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResFieldStates), string(ops.ResFiles), string(ops.ResFingerprintIndex), string(ops.ResMetadataCache), string(ops.ResOperations), string(ops.ResUserState)}},
 		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false, []string{string(ops.ResUserState)}},
-		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState)}},
-		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks)}},
+		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResExternalIDs), string(ops.ResFieldStates), string(ops.ResMetadataCache), string(ops.ResUserState)}},
+		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks), string(ops.ResMetadataCache)}},
 		{"maintenance.mark-missing-files", (*Plugin).markMissingFilesDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks)}},
 		{"maintenance.merge-same-path-dupes", (*Plugin).mergeSamePathDupesDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResOperations), string(ops.ResUserState)}},
 		{"maintenance.metadata-refresh", (*Plugin).metadataRefreshDef, tasks.ResumeFromZero, true, nil},

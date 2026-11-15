@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-11-15
 
@@ -560,7 +560,13 @@ func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind
 		// operations: CloneBookIntoLibrary reaches organizer.CreateOrganizedVersion,
 		// which journals every apply (RecordOperationChange, RecordPathChange) under
 		// the run's op ID, so a clone must not run beside another undo-journal writer.
-		tasks.Res("books", string(ops.ResOperations)))
+		tasks.Res("books", string(ops.ResOperations)),
+		// fingerprint_index (DeleteBookFilesByIDs drops the file's fingerprint
+		// windows), field_states, embeddings and metadata_cache (DeleteBook removes
+		// them with the book row; ModifyBook stamps the cache stale): the rollback
+		// and repair paths call both. Traced per method in the seams note.
+		tasks.Res("books", string(ops.ResFingerprintIndex)), tasks.Res("books", string(ops.ResFieldStates)),
+		tasks.Res("books", string(ops.ResEmbeddings)), tasks.Res("books", string(ops.ResMetadataCache)))
 	return tasks.Task(itunesCloneIntoLibraryKind, tasks.TaskSpec[json.RawMessage, *icReport]{
 		Common: t6g5Common(p.itunesCloneIntoLibraryDef(), itunesCloneIntoLibraryKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (*icReport, error) {
