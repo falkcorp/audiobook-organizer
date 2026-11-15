@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 1b7e4c92-5a3d-4e68-9f02-c6d8a1b3e5f7
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -31,14 +31,14 @@ func (f fakeAtPathVerifier) VerifyBookAtPathIndex(context.Context) (database.Boo
 
 func TestBookAtPathVerify_CleanIndexPasses(t *testing.T) {
 	rep := database.BookAtPathIndexReport{SentinelSet: true, BooksScanned: 3, IndexKeysScanned: 4, ExtraRowGone: 1}
-	if err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, &fakeReporter{}); err != nil {
+	if err := t6g2VerifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, headT6G2Env(nil, &fakeReporter{})); err != nil {
 		t.Fatalf("extras alone must not fail the op: %v", err)
 	}
 }
 
 func TestBookAtPathVerify_MissingLiveFails(t *testing.T) {
 	rep := database.BookAtPathIndexReport{MissingLive: 2}
-	err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, &fakeReporter{})
+	err := t6g2VerifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, headT6G2Env(nil, &fakeReporter{}))
 	if err == nil || !strings.Contains(err.Error(), "INCOMPLETE") {
 		t.Fatalf("missing live keys must fail the op, got %v", err)
 	}
@@ -50,7 +50,7 @@ func TestBookAtPathVerify_MissingLiveFails(t *testing.T) {
 func TestBookAtPathVerify_MarkersNotInSetFails(t *testing.T) {
 	rep := database.BookAtPathIndexReport{SentinelSet: true, BooksScanned: 3, IndexKeysScanned: 3,
 		MarkersNotInSet: 1, SampleNotInSet: []string{"01BADROW"}}
-	err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, &fakeReporter{})
+	err := t6g2VerifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, headT6G2Env(nil, &fakeReporter{}))
 	if err == nil || !strings.Contains(err.Error(), "missing from the in-memory") ||
 		!strings.Contains(err.Error(), "maintenance.book-atpath-index-backfill") ||
 		!strings.Contains(err.Error(), "01BADROW") {
@@ -65,7 +65,7 @@ func TestBookAtPathVerify_MarkersNotInSetFails(t *testing.T) {
 func TestBookAtPathVerify_MissingTrashedFails(t *testing.T) {
 	rep := database.BookAtPathIndexReport{SentinelSet: true, BooksScanned: 3, IndexKeysScanned: 2,
 		MissingTrashed: 1, SampleMissingTrashed: []string{"01TRASHED /lib/a.m4b"}}
-	err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, &fakeReporter{})
+	err := t6g2VerifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, headT6G2Env(nil, &fakeReporter{}))
 	if err == nil || !strings.Contains(err.Error(), "INCOMPLETE") ||
 		!strings.Contains(err.Error(), "soft-deleted") ||
 		!strings.Contains(err.Error(), "01TRASHED") ||
@@ -76,14 +76,14 @@ func TestBookAtPathVerify_MissingTrashedFails(t *testing.T) {
 
 func TestBookAtPathVerify_UndecodableRowsFail(t *testing.T) {
 	rep := database.BookAtPathIndexReport{UndecodableRows: 1}
-	if err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, &fakeReporter{}); err == nil {
+	if err := t6g2VerifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{rep: rep}, headT6G2Env(nil, &fakeReporter{})); err == nil {
 		t.Fatal("an unchecked row must not be reported as a passing verify")
 	}
 }
 
 func TestBookAtPathVerify_StoreErrorPropagates(t *testing.T) {
 	boom := errors.New("boom")
-	err := verifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{err: boom}, &fakeReporter{})
+	err := t6g2VerifyBookAtPathIndex(context.Background(), fakeAtPathVerifier{err: boom}, headT6G2Env(nil, &fakeReporter{}))
 	if !errors.Is(err, boom) {
 		t.Fatalf("got %v, want wrapped boom", err)
 	}
