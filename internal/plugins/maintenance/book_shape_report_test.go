@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_shape_report_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7b2d9e14-0c63-4a58-8f71-6d3a92c4e150
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -83,7 +83,10 @@ func (f *bookShapeFixture) store(t *testing.T) *database.MockStore {
 
 func (f *bookShapeFixture) run(t *testing.T, params bookShapeReportParams) bookShapeReport {
 	t.Helper()
-	rep, err := buildBookShapeReport(context.Background(), f.store(t), params, &fakeReporter{})
+	rr := &fakeReporter{}
+	env := headT6G2Env(nil, rr)
+	env.Items = headT6G2Items(rr, bookShapeConcurrency(params.Concurrency))
+	rep, err := buildBookShapeReportCore(context.Background(), f.store(t), params, env)
 	require.NoError(t, err)
 	return rep
 }
