@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-14
 
@@ -407,6 +407,9 @@ type t6g4EachOpts struct {
 	Collect bool
 	// ProgressTotal is the absolute denominator (0 = n).
 	ProgressTotal int
+	// Reason is what bounds Concurrency, as the loop's declared Parallelism shows
+	// it. Empty falls back to a generic reason.
+	Reason string
 	// ProgressBase is the absolute offset of item 0 when the n items are the tail
 	// of a larger set an earlier attempt already completed (0 = item 0 is the
 	// first). HEAD's registry.RunItemsOptions calls it ProgressOffset.
@@ -441,7 +444,11 @@ func t6g4RunEach(rc *tasks.RC, n int, o t6g4EachOpts, fn func(ctx context.Contex
 	if o.Label != nil {
 		opts.Label = func(i int) string { return o.Label(i, n) }
 	}
-	_, err := tasks.RunItems(rc, t6g4Par(o, "a T6 group 4 loop at HEAD's registry.RunItems concurrency"), idx,
+	reason := o.Reason
+	if reason == "" {
+		reason = "a T6 group 4 loop at HEAD's registry.RunItems concurrency"
+	}
+	_, err := tasks.RunItems(rc, t6g4Par(o, reason), idx,
 		func(ic *tasks.ItemRC, i int) error { return fn(ic.Context(), i) }, opts)
 	return err
 }
