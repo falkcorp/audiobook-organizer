@@ -1,7 +1,7 @@
 // file: core/internal/executor/attempt.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 4ad76723-6fc7-4bac-840b-f169142b4af9
-// last-edited: 2026-11-11
+// last-edited: 2026-11-15
 
 package executor
 
@@ -283,6 +283,12 @@ func (a *attempt) Touch() {
 	a.reported.Store(true)
 }
 
+// relayLiveness stamps the watchdog's input for await: a run blocked on a
+// live child. Unlike Touch it leaves reported alone, because waiting is not
+// the run reporting for itself: a parent that never reported and goes quiet
+// after its Await is still struck never_reported.
+func (a *attempt) relayLiveness() { a.lastReport.Store(a.e.now().UnixNano()) }
+
 // nextSeq numbers an intent or log entry: the attempt in the high half, so
 // entries of different attempts never collide and none needs a stored
 // counter.
@@ -328,7 +334,7 @@ func (a *attempt) Enqueue(kind tasks.Kind, params any, opts ...tasks.StartOption
 	return ref, err
 }
 
-func (a *attempt) Await(ref tasks.RunRef) (tasks.Outcome, error) { return a.e.await(a.ctx, ref.ID) }
+func (a *attempt) Await(ref tasks.RunRef) (tasks.Outcome, error) { return a.e.await(a, ref.ID) }
 
 func (a *attempt) StandDown(key tasks.Key) (tasks.Hold, error) { return a.e.standDown(a, key) }
 

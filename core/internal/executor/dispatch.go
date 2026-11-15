@@ -1,7 +1,7 @@
 // file: core/internal/executor/dispatch.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 159fa4ea-e5b1-45c1-abd9-61611bd6e318
-// last-edited: 2026-11-11
+// last-edited: 2026-11-15
 
 package executor
 
@@ -577,20 +577,67 @@ func (e *executor) awaitUnpaused(ctx context.Context) error {
 	}
 }
 
+// awaitRelaysPerLimit is how many times per ProgressTimeout await stamps
+// the awaiting run's liveness while the child is alive: three, so one late
+// or missed relay (a slow store read, a scheduling hiccup) still leaves the
+// run well inside its watchdog limit.
+const awaitRelaysPerLimit = 3
+
+// awaitAlive reports whether a child in state s will advance without an
+// operator or a restart: queued, waiting for its dependencies, running, or
+// stopping (its grace is bounded). An interrupted child waits for the next
+// boot, a quiesced one for its stand-down hold to be released, and one
+// awaiting a decision for a person; none is alive, so none keeps the waiting
+// run alive either.
+func awaitAlive(s tasks.RunState) bool {
+	switch s {
+	case tasks.StateQueued, tasks.StateWaitingDeps, tasks.StateRunning, tasks.StateStopping:
+		return true
+	default:
+		return false
+	}
+}
+
 // await is rc.Await (HEAD's childop, re-implemented): it returns the run's
-// outcome once it is terminal; ctx ends the wait.
-func (e *executor) await(ctx context.Context, id tasks.RunID) (tasks.Outcome, error) {
+// outcome once it is terminal; the attempt's context ends the wait (a
+// cancel, a stop, or the attempt's Timeout deadline, with that cause).
+//
+// While the child is alive (awaitAlive) it also stamps the awaiting
+// attempt's liveness, the watchdog's input, awaitRelaysPerLimit times per
+// the awaiting kind's ProgressTimeout, so a parent blocked on a long child
+// is not stopped as silent. The stamp is in memory (no store write); the
+// cost is one run read per relay. It is liveness only: it neither counts as
+// progress for ErrContinueInPlace nor marks the run as having reported.
+// There is no goroutine: the stamps are written by the waiting goroutine
+// itself, so they stop the moment the wait returns, the child is found
+// terminal, or the context ends.
+//
+// A child that is stalled is the child's own watchdog's business: when it
+// stops the child, the run goes terminal and this returns. A child that no
+// watchdog covers (queued, Batch, Fixer, Uninterruptible) is waited on
+// until the awaiting attempt's own Timeout.
+func (e *executor) await(a *attempt, id tasks.RunID) (tasks.Outcome, error) {
+	ctx := a.ctx
+	relay := time.NewTicker(max(a.d.progTO/awaitRelaysPerLimit, e.config().DispatchTick))
+	defer relay.Stop()
 	for {
 		sig := e.termSignal()
 		rec, err := e.runs.Get(ctx, id)
 		if err != nil {
+			if ctx.Err() != nil {
+				return tasks.Outcome{}, context.Cause(ctx) // the read lost a race with the stop: report the stop's cause, not the bare ctx error
+			}
 			return tasks.Outcome{}, err
 		}
 		if rec.State.Terminal() {
 			return tasks.Outcome{State: rec.State, Result: rec.Result, Err: rec.Error}, nil
 		}
+		if awaitAlive(rec.State) {
+			a.relayLiveness()
+		}
 		select {
 		case <-sig:
+		case <-relay.C:
 		case <-ctx.Done():
 			return tasks.Outcome{}, context.Cause(ctx)
 		}
