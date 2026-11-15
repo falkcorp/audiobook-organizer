@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-15
 
@@ -39,8 +39,11 @@ import (
 //     archtest.F803bShippedTagSets derives (the TagSets() entries that run on the
 //     host, plus the -tags lists in Makefile*, Dockerfile*, .github/workflows and
 //     .woodpecker, make variables such as $(GO_BUILD_TAGS) resolved from the
-//     Makefile; a list it cannot resolve fails the test), to prove New and Build
-//     refuse in each. A variable set outside the repo's files, a GOOS other than
+//     Makefile and the -include'd files that exist, and the release build in
+//     .goreleaser.yml (tags: and env: CGO_ENABLED, per goos); a list it cannot
+//     resolve fails the test), to prove New and Build refuse in each. A variable
+//     set outside the repo's files (a Makefile.local that is not in the checkout
+//     included), a GOOS other than
 //     the host's (the constraint rule reads those files instead) and a tag list a
 //     script assembles at run time are not covered.
 //

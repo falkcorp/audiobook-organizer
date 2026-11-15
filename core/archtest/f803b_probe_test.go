@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0e5a8c31-7d92-4b64-a1f7-3c6e9d2b5a08
 // last-edited: 2026-11-15
 
@@ -473,6 +473,49 @@ func TestF803bShippedTagSets(t *testing.T) {
 		t.Errorf("unresolvable include: err = %v, want a failure naming the include", err)
 	}
 
+	// Final review round, fix 3: the release build, .goreleaser.yml.
+	_, grCore := fixture(map[string]string{
+		".goreleaser.yml": "builds:\n  - id: batcave\n    env:\n      - CGO_ENABLED=0\n      - GOFLAGS=-mod=readonly\n    goos:\n      - linux\n      - plan9\n    tags:\n      - embed_frontend\n      - gotham\n",
+	})
+	grSets, _, err := F803bShippedTagSets(grCore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gr []string
+	for _, ts := range grSets {
+		if strings.HasPrefix(ts.Name, "goreleaser ") {
+			gr = append(gr, ts.GOOS+"/cgo"+ts.CGOEnabled+"/"+strings.Join(ts.Tags, ","))
+		}
+	}
+	if want := "linux/cgo0/embed_frontend,gotham|plan9/cgo0/embed_frontend,gotham"; strings.Join(gr, "|") != want {
+		t.Errorf("goreleaser sets = %v, want %s", gr, want)
+	}
+	for name, body := range map[string]string{
+		"template tag": "builds:\n  - id: a\n    goos: [linux]\n    tags:\n      - \"{{ .Env.TAGS }}\"\n",
+		"no goos":      "builds:\n  - id: a\n    tags: [embed_frontend]\n",
+		"flags -tags":  "builds:\n  - id: a\n    goos: [linux]\n    flags: [\"-tags=gotham\"]\n",
+		"bad cgo":      "builds:\n  - id: a\n    goos: [linux]\n    env: [\"CGO_ENABLED=maybe\"]\n",
+		"invalid yaml": "builds: [\n",
+	} {
+		_, c := fixture(map[string]string{".goreleaser.yml": body})
+		if _, _, err := F803bShippedTagSets(c); err == nil || !strings.Contains(err.Error(), ".goreleaser.yml") {
+			t.Errorf("%s: err = %v, want a failure naming .goreleaser.yml", name, err)
+		}
+	}
+	// Over this repo: the release build is read, the darwin set is the existing
+	// TagSets() entry (not listed twice) and linux has its own CGO=0 set.
+	count := func(goos string) int {
+		n := 0
+		for _, ts := range sets {
+			if ts.GOOS == goos && ts.CGOEnabled == "0" && slices.Equal(ts.Tags, []string{"embed_frontend"}) {
+				n++
+			}
+		}
+		return n
+	}
+	if count("linux") != 1 || count("darwin") != 1 {
+		t.Errorf("release sets for the real repo: linux CGO=0 embed_frontend x%d, darwin x%d; want 1 each (from .goreleaser.yml)", count("linux"), count("darwin"))
+	}
 	for name, files := range map[string]map[string]string{
 		"undefined variable":  {"Makefile": "x:\n\tgo build -tags \"embed_frontend $(NOT_DEFINED_ANYWHERE)\" .\n"},
 		"shell variable":      {"Makefile": "x:\n\tgo build -tags \"$$TAGS\" .\n"},
