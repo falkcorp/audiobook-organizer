@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: b8c9d0e1-f2a3-4567-1234-789012345678
 // last-edited: 2026-11-15
 
@@ -82,13 +82,17 @@ func (p *Plugin) itunesHealNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.S
 	// survivor), operations (the undo pointer and sibling journal), user_state (the
 	// losers' progress and read status follow), indexes (the identification dirty
 	// mark), plus files for the reflink. It writes no book_file row (the merge's
-	// file moves are combine-only). sync_identity and ai_journal arrive with F5-06
-	// (seams.d/F5-11.md).
+	// file moves are combine-only). It also writes sync_identity (the merge follow
+	// mints and records sync ids: MintOrGetSyncID and RecordSyncMerge,
+	// internal/merge/service.go) and ai_journal (the ambiguous-track resolver
+	// journals Whisper results through HealWhisperJournal,
+	// internal/reconcile/itunes_heal.go).
 	c.Effects = tasks.Writes(
 		tasks.Res("books", string(ops.ResBooks)),
 		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResFiles)),
 		tasks.Res("books", string(ops.ResIndexes)), tasks.Res("books", string(ops.ResOperations)),
-		tasks.Res("books", string(ops.ResUserState)))
+		tasks.Res("books", string(ops.ResUserState)),
+		tasks.Res("books", string(ops.ResSyncIdentity)), tasks.Res("books", string(ops.ResAIJournal)))
 	// HEAD's def says Restart because the reflink is idempotent. The heal never
 	// writes a checkpoint of its own (LastProcessedPID only comes in through the
 	// params), so a restart re-walks from the start: ResumeFromZero, not Continue.

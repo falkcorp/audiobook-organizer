@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-15
 
@@ -63,10 +63,9 @@ type t6g6Recorder struct {
 // in this map fails the test, and t6g6AssertWritesDeclared requires every traced
 // resource to be in the kind's declared write set.
 //
-// Resources that arrive with a later row are named in seams.d/F5-11.md and are
-// not listed here: sync_identity (F5-06) for MintOrGetSyncID, RecordSyncMerge and
-// CollapseHealDuplicates' follow, and ai_journal (F5-06) for the heal's whisper
-// journal.
+// The heal's whisper journal (ai_journal) is not a writer-method call the spy
+// records (HealWhisperJournal is an accessor the spy answers with nil), so it is
+// pinned by the heal row of TestT6G6Kinds_MatchHEADDefs instead.
 var t6g6WriterResource = map[string][]string{
 	// store CompactActivityEntries: the activity log only.
 	"CompactActivityEntries": t6g6Eff(ops.ResActivity),
@@ -90,11 +89,11 @@ var t6g6WriterResource = map[string][]string{
 	// ClearUserPositions, SetUserPosition) and the pending-repair SetRaw/DeleteRaw
 	// (sync_follow.go:162) (user_state); MarkIdentDirtyBestEffort on the survivor
 	// (service.go:544) (indexes, the identification driver's dirty set); and
-	// MintOrGetSyncID / RecordSyncMerge (service.go:1467, 1486; sync_identity,
-	// F5-06). The combine-only paths (MoveBookFilesToBook, SetBookAuthors,
+	// MintOrGetSyncID / RecordSyncMerge (service.go:1467, 1486; sync_identity).
+	// The combine-only paths (MoveBookFilesToBook, SetBookAuthors,
 	// RecordUserOverridesLocked: service.go:2136, 2737, 2788, 3190) are not
 	// reachable from MergeBooksWithOptions.
-	"CollapseHealDuplicates": t6g6Eff(ops.ResBooks, ops.ResExternalIDs, ops.ResOperations, ops.ResUserState, ops.ResIndexes),
+	"CollapseHealDuplicates": t6g6Eff(ops.ResBooks, ops.ResExternalIDs, ops.ResOperations, ops.ResUserState, ops.ResIndexes, ops.ResSyncIdentity),
 	// the iTunes heal's reflink of a missing track into the library: bytes on disk.
 	"HealTrack": t6g6Eff(ops.ResFiles),
 	// store UpdateBookFiles / CreateBookFile: the book_file row, then the books
@@ -121,10 +120,11 @@ var t6g6WriterResource = map[string][]string{
 	"SetUserPositionAt":    t6g6Eff(ops.ResUserState),
 	"ClearUserPositions":   t6g6Eff(ops.ResUserState),
 	"CopyBookmarkIfAbsent": t6g6Eff(ops.ResUserState),
-	// MintOrGetSyncID / RecordSyncMerge also write sync_identity (F5-06's
-	// constant, absent on this branch): declared user_state only until stacking.
-	"MintOrGetSyncID": t6g6Eff(ops.ResUserState),
-	"RecordSyncMerge": t6g6Eff(ops.ResUserState),
+	// MintOrGetSyncID / RecordSyncMerge write only the sync-item keys
+	// (sync_item:<id>, sync_item:book:<book>; pebble_store_syncid.go:201-205 and
+	// :497), which are sync_identity, never user_state.
+	"MintOrGetSyncID": t6g6Eff(ops.ResSyncIdentity),
+	"RecordSyncMerge": t6g6Eff(ops.ResSyncIdentity),
 }
 
 // t6g6Eff is the sorted "books/<resource>" refs of the given pkg/ops constants.
@@ -540,7 +540,7 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.recompactActivityDigestsDef(), resume: tasks.ResumeDrop, timeout: 60 * time.Minute,
 			effects: t6g6Eff(ops.ResActivity)},
 		{head: p.itunesHealDef(), resume: tasks.ResumeFromZero, timeout: 60 * time.Minute,
-			effects: t6g6Eff(ops.ResBooks, ops.ResExternalIDs, ops.ResFiles, ops.ResIndexes, ops.ResOperations, ops.ResUserState)},
+			effects: t6g6Eff(ops.ResAIJournal, ops.ResBooks, ops.ResExternalIDs, ops.ResFiles, ops.ResIndexes, ops.ResOperations, ops.ResSyncIdentity, ops.ResUserState)},
 		{head: p.recoverMissingFilesDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
 			par: cpu(recoverMissingFilesParallelism), wantPar: "fixed(24): ",
 			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResFiles)},
@@ -549,7 +549,7 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.relinkUnlinkedBooksDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
 			par: cpu(relinkUnlinkedBooksParallelism), wantPar: "cpu", effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks)},
 		{head: p.repairMergedUserStateDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
-			effects: t6g6Eff(ops.ResBooks, ops.ResUserState)},
+			effects: t6g6Eff(ops.ResBooks, ops.ResSyncIdentity, ops.ResUserState)},
 		{head: p.repairTranscribeStatusDef(), resume: tasks.ResumeFromZero, timeout: 2 * time.Hour,
 			par: cpu(repairTranscribeStatusParallelism), wantPar: "fixed(8): ", effects: t6g6Eff(ops.ResBooks)},
 		{head: p.repointBookFileRowsDef(), resume: tasks.ResumeDrop, timeout: p.repointBookFileRowsDef().Timeout,
