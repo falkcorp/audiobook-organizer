@@ -1,5 +1,5 @@
 // file: core/outbox/export_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c3f2f7d8-6a5e-4c61-b8a8-0b2d0b9c4e11
 // last-edited: 2026-11-15
 
@@ -23,6 +23,9 @@ type TestHooks struct {
 	// BeforeRetentionBatch runs after a sweep decided what to delete, before the
 	// batch re-reads the cursors the decision rests on.
 	BeforeRetentionBatch func(topic string, pp int)
+	// AfterDeadRead runs in syncDead once the dead-letter counters are read and
+	// before they are published, with the recount lock held.
+	AfterDeadRead func()
 }
 
 // SetTestHooks installs h; call it before the relay starts.
@@ -38,10 +41,16 @@ func (o *Outbox) SetTestHooks(h TestHooks) {
 	o.hooks.afterFailCommit = h.AfterFailCommit
 	o.hooks.beforeDeadCommit = h.BeforeDeadCommit
 	o.hooks.beforeRetentionBatch = h.BeforeRetentionBatch
+	o.hooks.afterDeadRead = h.AfterDeadRead
 }
 
 // SetSweepEvery sets the retention sweep interval; call it before the relay starts.
 func (o *Outbox) SetSweepEvery(d time.Duration) { o.sweepEvery = d }
+
+// SetStatusEvery sets how often the relay refreshes status and health; call it
+// before the relay starts. A test that wants a report to come from the event
+// that caused it, not from the next periodic refresh, sets it past the test.
+func (o *Outbox) SetStatusEvery(d time.Duration) { o.statusEvery = d }
 
 // BackoffDelay exposes backoffDelay.
 func BackoffDelay(attempt int, lo, hi time.Duration, u float64) time.Duration {

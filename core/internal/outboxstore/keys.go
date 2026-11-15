@@ -1,7 +1,7 @@
 // file: core/internal/outboxstore/keys.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 47a4a283-dcad-4da8-b454-90f24d1d624d
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 // Package outboxstore is the key layout, the record formats and the raw
 // staging of core's durable outbox, the c/outbox/ keyspace (05-events §5E.5.2).
@@ -19,8 +19,9 @@
 //	cur/<consumer>/<topic>/<pp>             a consumer's cursor on one partition (Serialized)
 //	try/<consumer>/<topic>/<pp>             the messages of that pair under retry
 //	dead/<consumer>/<topic>/<seq20>         dead-lettered message, error token and attempts (Serialized)
+//	deadn/<consumer>/<topic>/<pp>           how many dead letters that pair holds (Serialized)
 //
-// The Serialized sub-prefixes are exactly seq/, cur/ and dead/. Every write of
+// The Serialized sub-prefixes are exactly seq/, cur/, dead/ and deadn/. Every write of
 // a pair's state (its cursor, its try record) rides in a batch that read the
 // pair's cursor with GetForUpdate and rewrote it with a higher Rev, so two
 // writers of one pair (a zombie relay, an operator's purge racing a delivery)
@@ -30,6 +31,21 @@
 // discard reads it through LoadDead, so two operators on one letter, or an
 // operator and the relay, can never both commit, whether or not the pair still
 // has a cursor row.
+//
+// deadn/ is the dead letters' count, kept so that reading it costs one row per
+// (consumer, topic, partition) instead of a scan of every letter. It is never
+// written on its own: StageDead and StageDeleteDead change it in the SAME batch
+// as the letter, behind a GetForUpdate of the counter's key, so the count and
+// the letters commit together or not at all and two writers of one pair can
+// never both bump it from the same value. It is sharded by the pair (the
+// letter's Part) because a counter per consumer would make every partition's
+// worker contend on one key; pair state is already serialized by the cursor, so
+// the shard adds no contention the pair did not have. A letter that does not
+// decode has no partition to name, so RepairDeadCounts books it under the shard
+// UnreadShard, a key no writer maintains. A zero count has no row: an absent
+// counter is zero. RepairDeadCounts builds the counters from the letters (the
+// first start after an upgrade, and the periodic audit), and says what it
+// changed.
 //
 // The rows hold every value as a codec.JSON record of version 1. A row of
 // another version is never skipped, defaulted or marked done: decoding it
@@ -57,7 +73,14 @@ const (
 	famCur  = "cur"
 	famTry  = "try"
 	famDead = "dead"
+	// famDeadN is deadn/, the per-pair count of dead/.
+	famDeadN = "deadn"
 )
+
+// UnreadShard is the deadn/ shard of the dead letters that do not decode: they
+// name no partition, so no writer keeps this counter, and only RepairDeadCounts
+// sets it.
+const UnreadShard = "unread"
 
 // MaxPartitions is the most partitions a topic may declare: pp is two digits.
 const MaxPartitions = 99
@@ -66,18 +89,20 @@ const MaxPartitions = 99
 const DefaultPartitions = 16
 
 // StorageSpec is the c/outbox/ spec the kernel registers for Owner: a core
-// keyspace whose Serialized sub-prefixes are exactly seq/, cur/ and dead/.
+// keyspace whose Serialized sub-prefixes are exactly seq/, cur/, dead/ and
+// deadn/.
 func StorageSpec() storage.Spec {
 	return storage.Spec{Keyspace: true, Serialized: SerializedPrefixes()}
 }
 
-// SerializedPrefixes are the relative Serialized sub-prefixes: seq/, cur/ and
-// dead/.
+// SerializedPrefixes are the relative Serialized sub-prefixes: seq/, cur/,
+// dead/ and deadn/.
 func SerializedPrefixes() []string {
 	return []string{
 		string(keys.Prefix(keys.Str(famSeq))),
 		string(keys.Prefix(keys.Str(famCur))),
 		string(keys.Prefix(keys.Str(famDead))),
+		string(keys.Prefix(keys.Str(famDeadN))),
 	}
 }
 
@@ -152,6 +177,21 @@ func DeadPrefix(consumer string) []byte {
 // DeadRoot is the dead/ family.
 func DeadRoot() []byte { return keys.Prefix(keys.Str(famDead)) }
 
+// shardOf is the deadn/ shard of a dead letter whose partition is part.
+func shardOf(part int) string { return fmt.Sprintf("%02d", part) }
+
+// DeadCountKey is deadn/<consumer>/<topic>/<pp>.
+func DeadCountKey(consumer, topic string, pp int) []byte {
+	return deadCountKey(consumer, topic, shardOf(pp))
+}
+
+func deadCountKey(consumer, topic, shard string) []byte {
+	return keys.Join(keys.Str(famDeadN), keys.Str(consumer), keys.Str(topic), keys.Str(shard))
+}
+
+// DeadCountRoot is the deadn/ family.
+func DeadCountRoot() []byte { return keys.Prefix(keys.Str(famDeadN)) }
+
 // splitKey splits rel into its segments and checks the family and arity.
 func splitKey(rel []byte, family string, n int) ([]string, error) {
 	segs, err := keys.Split(rel)
@@ -218,6 +258,16 @@ func ParseCurKey(rel []byte) (consumer, topic string, pp int, err error) {
 		return "", "", 0, err
 	}
 	return s[1], s[2], pp, nil
+}
+
+// ParseDeadCountKey splits deadn/<consumer>/<topic>/<shard>; the shard is a
+// partition's two digits or UnreadShard.
+func ParseDeadCountKey(rel []byte) (consumer, topic, shard string, err error) {
+	s, err := splitKey(rel, famDeadN, 4)
+	if err != nil {
+		return "", "", "", err
+	}
+	return s[1], s[2], s[3], nil
 }
 
 // ParseDeadKey splits dead/<consumer>/<topic>/<seq20>.

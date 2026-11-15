@@ -1,7 +1,7 @@
 // file: core/internal/outboxstore/store_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a6f2d813-3c9e-47b0-8d51-0e7b4a9c2f68
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package outboxstore_test
 
@@ -447,7 +447,9 @@ func TestDead_StoreListCountDelete(t *testing.T) {
 	if _, ok, err := s.LoadDead(ctx, del, consumer, topic, 5); err != nil || !ok {
 		t.Fatalf("LoadDead of the letter to delete: %v %v", ok, err)
 	}
-	must(t, s.StageDeleteDead(del, consumer, topic, 5))
+	if found, err := s.StageDeleteDead(ctx, del, consumer, topic, 5); err != nil || !found {
+		t.Fatalf("StageDeleteDead = %v, %v", found, err)
+	}
 	must(t, del.Commit(ctx, storage.Sync))
 	del.Close()
 	if _, ok, _ := s.GetDead(ctx, consumer, topic, 5); ok {

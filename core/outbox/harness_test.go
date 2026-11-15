@@ -1,5 +1,5 @@
 // file: core/outbox/harness_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1e7fbb59-5fbb-4c44-9df0-2d6b9f8a1c70
 // last-edited: 2026-11-15
 
@@ -90,7 +90,11 @@ type rigOpts struct {
 	noFreeze   bool // leave registration open (registration tests)
 	inst       *outbox.Instruments
 	sweep      time.Duration
-	log        *slog.Logger // the Outbox's and the executor's (the relay logs through its run) logger; nil is silent
+	// statusEvery, when set, is how often the relay refreshes status and health
+	// (15 seconds by default); a test that must see a report come from the event
+	// that caused it sets it past the test, so the periodic refresh cannot do it.
+	statusEvery time.Duration
+	log         *slog.Logger // the Outbox's and the executor's (the relay logs through its run) logger; nil is silent
 }
 
 // registration is one owner's handlers.
@@ -252,6 +256,9 @@ func newRig(t testing.TB, opts rigOpts) *rig {
 	}
 	if opts.sweep > 0 {
 		ob.SetSweepEvery(opts.sweep)
+	}
+	if opts.statusEvery > 0 {
+		ob.SetStatusEvery(opts.statusEvery)
 	}
 	if opts.hooks != nil {
 		ob.SetTestHooks(*opts.hooks)

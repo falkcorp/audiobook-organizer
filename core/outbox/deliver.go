@@ -1,5 +1,5 @@
 // file: core/outbox/deliver.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 2a6ad2a4-6bc1-4f3b-b7f1-0ee9e2bb7d3f
 // last-edited: 2026-11-15
 
@@ -672,6 +672,11 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 	fctx, cancel := settleCtx(ctx)
 	defer cancel()
 	err := storage.RetryOnConflict(fctx, settleAttempts, func(ctx context.Context) (err error) {
+		// The dead letter this batch may stage bumps its pair's counter, which
+		// must exist before it is bumped.
+		if err := o.ensureDeadCounts(ctx); err != nil {
+			return err
+		}
 		b := o.store.OpenBatch()
 		defer closeBatch(b, &err)
 		st, err := o.store.LoadPair(ctx, b, p)
@@ -724,7 +729,7 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 		r.log.Warn("outbox: delivery failed; will retry", slog.String("consumer", reg.name), slog.String("topic", ti.name),
 			slog.Uint64("seq", row.Seq), slog.Int("attempt", attempt), slog.String("token", token), slog.String("err_type", errType(herr)))
 	case out == outAcked && dead:
-		r.deadLettered(ctx, reg.name)
+		r.deadLettered(ctx)
 		r.log.Error("outbox: message dead-lettered", slog.String("consumer", reg.name), slog.String("topic", ti.name),
 			slog.Uint64("seq", row.Seq), slog.Int("attempts", attempt), slog.String("token", token), slog.String("err_type", errType(herr)))
 	}
@@ -943,6 +948,11 @@ func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo
 	out := outHalt
 	var cnt roundCounts
 	err := storage.RetryOnConflict(ctx, settleAttempts, func(ctx context.Context) (err error) {
+		// The dead letters this batch may stage bump their pair's counter, which
+		// must exist before it is bumped.
+		if err := o.ensureDeadCounts(ctx); err != nil {
+			return err
+		}
 		b := o.store.OpenBatch()
 		defer closeBatch(b, &err)
 		st, err := o.store.LoadPair(ctx, b, p)
@@ -1051,7 +1061,7 @@ func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo
 			o.inst.retried(ti.name, reg.name)
 		}
 		if cnt.dead > 0 {
-			r.deadLettered(ctx, reg.name)
+			r.deadLettered(ctx)
 		}
 		if cnt.gone > 0 {
 			r.log.Warn("outbox: messages under retry were gone from the store; their retry entries were dropped",

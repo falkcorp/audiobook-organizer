@@ -1,5 +1,5 @@
 // file: core/outbox/outbox.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 5b3c4366-8534-4dc4-870f-850dfab2b120
 // last-edited: 2026-11-15
 
@@ -216,16 +216,18 @@ type Outbox struct {
 
 	runs atomic.Pointer[runsBox]
 
-	wake       chan struct{} // the intake nudge (a buffered 1)
-	startReq   chan struct{} // asks RunNudger to start a relay (a buffered 1)
-	running    atomic.Bool   // a relay run is in its loop
-	opsEpoch   atomic.Uint64 // bumped by every operator action; the relay forgets what it knew
-	sweepEvery time.Duration // retention sweep interval
-	hooks      hooks
-	deadMu     sync.Mutex   // serializes syncDead: each recount reads the store inside it, so the last one to publish saw the newest state
-	faults     faultLimiter // one logged line a minute per repeating failure, for the relay and RefreshStatus alike
-	topicsMu   sync.Mutex
-	topicsMem  map[string]*topicInfo
+	wake        chan struct{} // the intake nudge (a buffered 1)
+	startReq    chan struct{} // asks RunNudger to start a relay (a buffered 1)
+	running     atomic.Bool   // a relay run is in its loop
+	opsEpoch    atomic.Uint64 // bumped by every operator action; the relay forgets what it knew
+	sweepEvery  time.Duration // retention sweep interval
+	hooks       hooks
+	statusEvery time.Duration // how often the relay refreshes status and core.outbox's health
+	deadMu      sync.Mutex    // serializes syncDead: each recount reads the store inside it, so the last one to publish saw the newest state
+	deadSeeded  atomic.Bool   // the deadn/ counters have been built from the letters in this process (seedDeadCounts)
+	faults      faultLimiter  // one logged line a minute per repeating failure, for the relay and RefreshStatus alike
+	topicsMu    sync.Mutex
+	topicsMem   map[string]*topicInfo
 }
 
 type runsBox struct{ r Runs }
@@ -243,7 +245,7 @@ func New(o Options) (*Outbox, error) {
 		cfgFn: o.Config, inst: o.Instruments, health: newHealthState(o.Health, nil),
 		consumer: map[string]*consumerReg{}, declared: map[string]bool{}, byModule: map[string]map[string]bool{},
 		core: map[string]bool{}, wake: make(chan struct{}, 1), startReq: make(chan struct{}, 1),
-		sweepEvery: 30 * time.Second, topicsMem: map[string]*topicInfo{},
+		sweepEvery: 30 * time.Second, statusEvery: statusEvery, topicsMem: map[string]*topicInfo{},
 	}
 	if ob.log == nil {
 		ob.log = slog.New(slog.DiscardHandler)
@@ -420,6 +422,9 @@ type hooks struct {
 	// before the batch that deletes it re-reads the cursors it rests on (pp is -1
 	// for an orphan cursor dropped on its own).
 	beforeRetentionBatch func(topic string, pp int)
+	// AfterDeadRead runs in syncDead once the dead-letter counters are read and
+	// before they are published, holding deadMu.
+	afterDeadRead func()
 }
 
 func (h *hooks) get() hooks {
@@ -428,7 +433,8 @@ func (h *hooks) get() hooks {
 	return hooks{beforeIntakeCommit: h.beforeIntakeCommit, afterIntakeCommit: h.afterIntakeCommit,
 		afterHandler: h.afterHandler, beforeAckCommit: h.beforeAckCommit, afterAckCommit: h.afterAckCommit,
 		beforeFailCommit: h.beforeFailCommit, afterFailCommit: h.afterFailCommit,
-		beforeDeadCommit: h.beforeDeadCommit, beforeRetentionBatch: h.beforeRetentionBatch}
+		beforeDeadCommit: h.beforeDeadCommit, beforeRetentionBatch: h.beforeRetentionBatch,
+		afterDeadRead: h.afterDeadRead}
 }
 
 // topicInfo is a durable topic's resolved view.

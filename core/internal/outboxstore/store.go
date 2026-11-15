@@ -1,14 +1,17 @@
 // file: core/internal/outboxstore/store.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 754dc428-ceb7-4876-824c-cde4fb15a4f3
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package outboxstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/mediacore/storage"
@@ -59,7 +62,16 @@ func rowErr(where string, err error) error {
 
 // Store is the c/outbox/ keyspace. It holds the handle, which is the
 // capability to write it: Stage binds it to a producer's batch.
-type Store struct{ ks storage.Keyspace }
+type Store struct {
+	ks storage.Keyspace
+	// beforeRepairCommit is a test seam: RepairDeadCounts runs it with its fixes
+	// computed and before the batch that applies them is opened. Nil in production.
+	beforeRepairCommit func()
+	// scanned counts the keys the dead-letter counting reads have visited
+	// (DeadTotals, DeadCounts, RepairDeadCounts): what a test reads to show a
+	// recount costs the same however many letters the store holds.
+	scanned atomic.Int64
+}
 
 // New returns the store over ks, the c/outbox/ keyspace.
 func New(ks storage.Keyspace) *Store { return &Store{ks: ks} }
@@ -450,6 +462,8 @@ func (s *Store) StagePair(b *storage.Batch, p Pair, st PairState, now time.Time)
 // StageDead stages a dead letter of consumer on topic at seq. dead/ is
 // Serialized, so the key is read with GetForUpdate first: a letter another
 // batch wrote or removed since fails this commit instead of being overwritten.
+// A letter that is new also raises its pair's counter (deadn/), in this same
+// batch; one that replaces a letter of the same key leaves it where it was.
 func (s *Store) StageDead(ctx context.Context, b *storage.Batch, consumer, topic string, seq uint64, d Dead) error {
 	raw, err := deadCodec().Encode(d)
 	if err != nil {
@@ -457,10 +471,52 @@ func (s *Store) StageDead(ctx context.Context, b *storage.Batch, consumer, topic
 	}
 	b.Bind(s.ks)
 	key := DeadKey(consumer, topic, seq)
-	if _, err := b.GetForUpdate(ctx, s.ks, key); err != nil && !errors.Is(err, storage.ErrNotFound) {
+	_, err = b.GetForUpdate(ctx, s.ks, key)
+	created := errors.Is(err, storage.ErrNotFound)
+	if err != nil && !created {
 		return err
 	}
-	return b.In(s.ks).Set(key, raw)
+	if err := b.In(s.ks).Set(key, raw); err != nil {
+		return err
+	}
+	if !created {
+		return nil
+	}
+	return s.bumpDeadCount(ctx, b, consumer, topic, shardOf(d.Part), 1)
+}
+
+// bumpDeadCount adds delta to the counter of (consumer, topic, shard) through
+// b: the counter is read with GetForUpdate (a repeated read in one batch sees
+// the batch's own earlier bump and keeps the first read's precondition), so two
+// batches that bump one counter from the same value cannot both commit. A
+// counter that would go below zero (an absent one a letter was removed
+// against: drift, which RepairDeadCounts names) stays at zero; a zero counter
+// has no row.
+func (s *Store) bumpDeadCount(ctx context.Context, b *storage.Batch, consumer, topic, shard string, delta int) error {
+	key := deadCountKey(consumer, topic, shard)
+	n := 0
+	raw, err := b.GetForUpdate(ctx, s.ks, key)
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
+	case err != nil:
+		return err
+	default:
+		c, derr := deadCountCodec().Decode(raw)
+		if derr != nil {
+			return rowErr(fmt.Sprintf("dead count %s/%s/%s", consumer, topic, shard), derr)
+		}
+		n = c.N
+	}
+	n = max(0, n+delta)
+	w := b.In(s.ks)
+	if n == 0 {
+		return w.Delete(key)
+	}
+	enc, err := deadCountCodec().Encode(DeadCount{N: n})
+	if err != nil {
+		return err
+	}
+	return w.Set(key, enc)
 }
 
 // StageCursorInit creates the cursors of a newly registered consumer, one per
@@ -649,6 +705,7 @@ func (s *Store) DeadCounts(ctx context.Context) (map[string]int, error) {
 		if serr != nil {
 			return out, serr
 		}
+		s.scanned.Add(1)
 		c, _, _, perr := ParseDeadKey(kv.Key)
 		if perr != nil {
 			return out, perr
@@ -656,6 +713,174 @@ func (s *Store) DeadCounts(ctx context.Context) (map[string]int, error) {
 		out[c]++
 	}
 	return out, nil
+}
+
+// DeadTotals is the dead letters by consumer, summed from the per-pair
+// counters (deadn/): one row per (consumer, topic, partition) that holds a
+// letter, however many letters that is. A counter that does not decode is a
+// *RowError; RepairDeadCounts rewrites it.
+func (s *Store) DeadTotals(ctx context.Context) (map[string]int, error) {
+	root := DeadCountRoot()
+	out := map[string]int{}
+	for kv, serr := range s.ks.Scan(ctx, storage.ScanOptions{Start: root, End: keys.PrefixEnd(root)}) {
+		if serr != nil {
+			return nil, serr
+		}
+		s.scanned.Add(1)
+		c, _, _, perr := ParseDeadCountKey(kv.Key)
+		if perr != nil {
+			return nil, perr
+		}
+		n, derr := deadCountCodec().Decode(kv.Value)
+		if derr != nil {
+			return nil, rowErr(fmt.Sprintf("dead count %s", kv.Key), derr)
+		}
+		out[c] += n.N
+	}
+	return out, nil
+}
+
+// DeadCountFix is one counter RepairDeadCounts rewrote: Had is what the counter
+// held (zero when it had no row), Want what the letters add up to.
+type DeadCountFix struct {
+	Consumer, Topic, Shard string
+	Had, Want              int
+	Absent                 bool // the counter had no row
+	Unreadable             bool // the counter's row did not decode
+}
+
+// repairAttempts is how often RepairDeadCounts re-reads after a writer got
+// between its read and its commit.
+const repairAttempts = 5
+
+// RepairDeadCounts makes every deadn/ counter equal to the dead/ letters it
+// counts, and returns each counter it had to change. It is what builds the
+// counters for letters written before deadn/ existed (the first start after an
+// upgrade), and what the periodic audit calls when the counters and the letters
+// disagree; it never changes a counter that is right.
+//
+// It reads dead/ and deadn/ from ONE snapshot. A writer changes a letter and
+// its counter in one batch, so the snapshot always holds letters and counters
+// that agree about every write that landed, and a difference it finds is a
+// real one, not a write caught half way. The fix commits in a batch that reads
+// each counter it rewrites with GetForUpdate and fails (ErrConflict, re-read)
+// if that counter is not byte-for-byte what the snapshot held: a writer that
+// touched a pair since the snapshot changed its counter too, so a repair can
+// never overwrite a count that moved. A crash anywhere before the commit leaves
+// the store as it was; the next run starts over. A second run finds nothing.
+// A letter that does not decode is counted under UnreadShard.
+func (s *Store) RepairDeadCounts(ctx context.Context) ([]DeadCountFix, error) {
+	var fixes []DeadCountFix
+	err := storage.RetryOnConflict(ctx, repairAttempts, func(ctx context.Context) (err error) {
+		fixes = nil
+		snap, err := s.ks.Snapshot()
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, snap.Close()) }()
+
+		type shardRef struct{ consumer, topic, shard string }
+		refs := map[string]shardRef{}
+		want := map[string]int{}
+		droot := DeadRoot()
+		for kv, serr := range snap.Scan(ctx, storage.ScanOptions{Start: droot, End: keys.PrefixEnd(droot)}) {
+			if serr != nil {
+				return serr
+			}
+			s.scanned.Add(1)
+			c, t, _, perr := ParseDeadKey(kv.Key)
+			if perr != nil {
+				return perr
+			}
+			shard := UnreadShard
+			if d, derr := deadCodec().Decode(kv.Value); derr == nil {
+				shard = shardOf(d.Part)
+			}
+			k := string(deadCountKey(c, t, shard))
+			refs[k] = shardRef{c, t, shard}
+			want[k]++
+		}
+		have := map[string][]byte{}
+		croot := DeadCountRoot()
+		for kv, serr := range snap.Scan(ctx, storage.ScanOptions{Start: croot, End: keys.PrefixEnd(croot)}) {
+			if serr != nil {
+				return serr
+			}
+			s.scanned.Add(1)
+			c, t, shard, perr := ParseDeadCountKey(kv.Key)
+			if perr != nil {
+				return perr
+			}
+			k := string(kv.Key)
+			refs[k] = shardRef{c, t, shard}
+			have[k] = bytes.Clone(kv.Value)
+		}
+		ordered := make([]string, 0, len(refs))
+		for k := range refs {
+			ordered = append(ordered, k)
+		}
+		slices.Sort(ordered)
+		for _, k := range ordered {
+			raw, present := have[k]
+			fix := DeadCountFix{Consumer: refs[k].consumer, Topic: refs[k].topic, Shard: refs[k].shard, Want: want[k], Absent: !present}
+			if present {
+				c, derr := deadCountCodec().Decode(raw)
+				fix.Had, fix.Unreadable = c.N, derr != nil
+			}
+			if present && !fix.Unreadable && fix.Had == fix.Want {
+				continue
+			}
+			if !present && fix.Want == 0 {
+				continue
+			}
+			fixes = append(fixes, fix)
+		}
+		if len(fixes) == 0 {
+			return nil
+		}
+
+		if s.beforeRepairCommit != nil {
+			s.beforeRepairCommit()
+		}
+		b := s.OpenBatch()
+		defer b.Close()
+		b.Bind(s.ks)
+		w := b.In(s.ks)
+		for _, fix := range fixes {
+			key := deadCountKey(fix.Consumer, fix.Topic, fix.Shard)
+			now, gerr := b.GetForUpdate(ctx, s.ks, key)
+			switch {
+			case errors.Is(gerr, storage.ErrNotFound):
+				if _, was := have[string(key)]; was {
+					return storage.ErrConflict
+				}
+			case gerr != nil:
+				return gerr
+			default:
+				if !bytes.Equal(now, have[string(key)]) {
+					return storage.ErrConflict
+				}
+			}
+			if fix.Want == 0 {
+				if err := w.Delete(key); err != nil {
+					return err
+				}
+				continue
+			}
+			enc, eerr := deadCountCodec().Encode(DeadCount{N: fix.Want})
+			if eerr != nil {
+				return eerr
+			}
+			if err := w.Set(key, enc); err != nil {
+				return err
+			}
+		}
+		return b.Commit(ctx, storage.Sync)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return fixes, nil
 }
 
 // FindDead finds the dead letter of consumer at seq, whatever its topic: a
@@ -699,10 +924,30 @@ func (s *Store) LoadDead(ctx context.Context, b *storage.Batch, consumer, topic 
 	return d, true, nil
 }
 
-// StageDeleteDead stages the removal of one dead letter. The batch must have
-// read the letter with LoadDead first: dead/ is Serialized, and a delete
-// without that read is refused at commit (storage.ErrBlindWrite) instead of
-// removing a letter another operator already handled.
-func (s *Store) StageDeleteDead(b *storage.Batch, consumer, topic string, seq uint64) error {
-	return b.Bind(s.ks).In(s.ks).Delete(DeadKey(consumer, topic, seq))
+// StageDeleteDead stages the removal of one dead letter, and lowers its pair's
+// counter in the same batch. It reads the letter through b with GetForUpdate
+// itself (dead/ is Serialized, so a delete that did not read first is a blind
+// write and fails at commit; a read here also names the letter's partition, which
+// is the counter's shard), so a caller that called LoadDead first has read it
+// twice, which costs nothing and keeps the first read's precondition. It
+// reports whether the letter was there; a letter that does not decode is an
+// error, because it names no shard to lower.
+func (s *Store) StageDeleteDead(ctx context.Context, b *storage.Batch, consumer, topic string, seq uint64) (found bool, err error) {
+	b.Bind(s.ks)
+	key := DeadKey(consumer, topic, seq)
+	raw, err := b.GetForUpdate(ctx, s.ks, key)
+	if errors.Is(err, storage.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	d, err := deadCodec().Decode(raw)
+	if err != nil {
+		return false, rowErr(fmt.Sprintf("dead row %s/%s/%d", consumer, topic, seq), err)
+	}
+	if err := b.In(s.ks).Delete(key); err != nil {
+		return false, err
+	}
+	return true, s.bumpDeadCount(ctx, b, consumer, topic, shardOf(d.Part), -1)
 }
