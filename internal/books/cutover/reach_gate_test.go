@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_gate_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7d3a8f21-6c4e-4b95-a0d7-1e9b2c5f8a36
 // last-edited: 2026-11-14
 
@@ -273,13 +273,14 @@ func reachGateProblems(res reachDiffResult, rows []reachExpect) []string {
 
 // reachChecks is everything the oracle fails on for one run: the gate (an
 // unexpected cell, an unused or miscounted row), the routes only one side has,
-// the delegated set, the uniform-404 routes and the oracle's size.
+// the delegated set, the uniform-404 routes, the oracle's size and the golden cell list.
 func reachChecks(vd *reachR0Doc, res reachDiffResult, rows []reachExpect) []string {
 	out := reachGateProblems(res, rows)
 	out = append(out, reachOneSideProblems(res)...)
 	out = append(out, reachDelegatedProblems(vd, res)...)
 	out = append(out, reachUniformNotFoundProblems(vd)...)
 	out = append(out, reachCountProblems(vd, res)...)
+	out = append(out, reachGoldenProblems(res)...)
 	return out
 }
 
