@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.5
+// version: 1.0.7
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
 // last-edited: 2026-11-15
 
@@ -347,12 +347,48 @@ func t6g1OpsVocabulary(t *testing.T) map[string]bool {
 	return valid
 }
 
-// Every name in every kind's declared Effects (write, read and delete sets) and
-// in t6g1WriterResources is a pkg/ops Resource constant. A literal that merely
-// compiles, such as "aux_stores", is caught by value here.
-func TestT6G1Kinds_EffectsUseOnlyOpsResources(t *testing.T) {
+// t6AllNativeKinds is every native kind of the package, from the six group
+// lists (the package's registry until F5-18's Registrar.Tasks replaces it), by
+// kind. A kind listed in two groups, or a group that lists none, fails the test:
+// the vocabulary check below is only as wide as this list.
+func t6AllNativeKinds(t *testing.T) []tasks.Definition {
+	t.Helper()
+	p := &Plugin{}
+	var defs []tasks.Definition
+	g4, err := t6g4Kinds(func() t6g4Deps { d, _ := fakeT6G4Deps(t); return d }(), nil)
+	require.NoError(t, err)
+	groups := map[string][]tasks.Definition{
+		"g1": p.t6g1Kinds(fakeT6G1Deps(t), nil),
+		"g2": p.t6g2Kinds(newT6G2Fakes(t).deps(), nil),
+		"g3": p.t6g3Kinds(fakeT6G3Deps(t), nil),
+		"g4": g4,
+		"g5": p.t6g5Kinds(fakeT6G5Deps(t), nil),
+		"g6": p.t6g6Kinds(fakeT6G6Deps(t), nil),
+	}
+	seen := map[tasks.Kind]string{}
+	for _, name := range []string{"g1", "g2", "g3", "g4", "g5", "g6"} {
+		require.NotEmpty(t, groups[name], "group %s lists no native kind", name)
+		for _, d := range groups[name] {
+			if prev, dup := seen[d.Kind()]; dup {
+				t.Fatalf("kind %s is listed by group %s and group %s", d.Kind(), prev, name)
+			}
+			seen[d.Kind()] = name
+			defs = append(defs, d)
+		}
+	}
+	return defs
+}
+
+// Every name in every native kind's declared Effects (write, read and delete
+// sets) of the whole package, and in t6g1WriterResources, is a pkg/ops Resource
+// constant, compared by VALUE: a literal that merely compiles, such as
+// "aux_stores", or one that spells a constant's value by hand, is not a constant
+// of pkg/ops and is caught here. The source scan that forbids the literal
+// spelling itself is TestT6G1Kinds_EffectsNamesAreConstantsNotLiterals, which
+// walks every non-test file of the package.
+func TestT6Kinds_EffectsUseOnlyOpsResources(t *testing.T) {
 	valid := t6g1OpsVocabulary(t)
-	for _, d := range (&Plugin{}).t6g1Kinds(fakeT6G1Deps(t), nil) {
+	for _, d := range t6AllNativeKinds(t) {
 		c := tasks.CommonOf(d)
 		for _, r := range slices.Concat(c.Effects.WriteSet(), c.Effects.ReadSet(), c.Effects.DeleteSet()) {
 			require.Equal(t, "books", r.Module, "%s", d.Kind())
@@ -557,11 +593,16 @@ func t6g1SortedKeys(m map[string]bool) []string {
 // Every Effects resource name in this package is a pkg/ops constant, written
 // string(ops.ResX): a string literal for the name would be invisible to the
 // vocabulary check's rename safety and to a search for who declares a resource.
+// A package-level constant that is itself a raw string literal ("user_state")
+// and is passed to tasks.Res is the same literal one step removed, and equally
+// fails: it would duplicate a pkg/ops constant's value without being that
+// constant.
 func TestT6G1Kinds_EffectsNamesAreConstantsNotLiterals(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
 	fset := token.NewFileSet()
-	checked := 0
+	var parsed []*ast.File
+	rawStringConsts := map[string]bool{}
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -570,6 +611,24 @@ func TestT6G1Kinds_EffectsNamesAreConstantsNotLiterals(t *testing.T) {
 		require.NoError(t, err)
 		file, err := parser.ParseFile(fset, f, src, 0)
 		require.NoError(t, err)
+		parsed = append(parsed, file)
+		for _, d := range file.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, sp := range gd.Specs {
+				vs := sp.(*ast.ValueSpec)
+				for i, v := range vs.Values {
+					if lit, ok := v.(*ast.BasicLit); ok && lit.Kind == token.STRING && i < len(vs.Names) {
+						rawStringConsts[vs.Names[i].Name] = true
+					}
+				}
+			}
+		}
+	}
+	checked := 0
+	for _, file := range parsed {
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok || len(call.Args) != 2 {
@@ -583,8 +642,18 @@ func TestT6G1Kinds_EffectsNamesAreConstantsNotLiterals(t *testing.T) {
 				return true
 			}
 			checked++
-			_, lit := call.Args[1].(*ast.BasicLit)
+			arg := call.Args[1]
+			// string(x) is the spelling for a typed constant; judge x.
+			if conv, ok := arg.(*ast.CallExpr); ok && len(conv.Args) == 1 {
+				if fn, ok := conv.Fun.(*ast.Ident); ok && fn.Name == "string" {
+					arg = conv.Args[0]
+				}
+			}
+			_, lit := arg.(*ast.BasicLit)
 			require.False(t, lit, "%s: tasks.Res names its resource with a string literal; use string(ops.ResX)", fset.Position(call.Pos()))
+			if id, ok := arg.(*ast.Ident); ok {
+				require.False(t, rawStringConsts[id.Name], "%s: tasks.Res names its resource with %s, a constant defined as a raw string; use string(ops.ResX)", fset.Position(call.Pos()), id.Name)
+			}
 			return true
 		})
 	}
