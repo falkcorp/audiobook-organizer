@@ -1,7 +1,7 @@
 // file: core/outbox/relay_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9a4d6e13-0b57-4c82-8e1f-72c5d3a0b6f4
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package outbox_test
 
@@ -108,11 +108,16 @@ func TestOutbox_RelayRestartsAfterCancel(t *testing.T) {
 	ctx := t.Context()
 	go r.ob.RunNudger(ctx)
 	r.stage("wayne-manor", Dispatch{Villain: "Penguin"})
-	eventually(t, "a new relay to deliver", func() bool { return rc.count() == 2 })
-	stays(t, "exactly two deliveries", 150*time.Millisecond, func() bool { return rc.count() == 2 })
-	if got := rc.villains(); got[0] != "Joker" || got[1] != "Penguin" {
-		t.Fatalf("delivered %v", got)
+	// At least two, not exactly two: a Joker that is delivered again lets the new
+	// relay reach Penguin as a third delivery within one poll of this loop, and
+	// an equality test that misses the moment the count is two waits out its
+	// whole deadline and reports a relay that never delivered. The count and the
+	// villains are checked below, where that failure is named for what it is.
+	eventually(t, "a new relay to deliver", func() bool { return rc.count() >= 2 })
+	if got := rc.villains(); len(got) != 2 || got[0] != "Joker" || got[1] != "Penguin" {
+		t.Fatalf("delivered %v, want Joker once and then Penguin once", got)
 	}
+	stays(t, "exactly two deliveries", 150*time.Millisecond, func() bool { return rc.count() == 2 })
 }
 
 // cancelRelayInline cancels the one relay run from inside a relay hook and
