@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/redesign_binary_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8d3f5b72-6a14-4c90-b7e2-1f9a4d6c0e53
 // last-edited: 2026-11-15
 
@@ -19,14 +19,19 @@ import (
 	"github.com/falkcorp/mediacore/archtest"
 )
 
-// goTool is the go command that built this test binary's toolchain: the one on
-// PATH, else GOROOT's.
+// goTool is the go command the test builds with: the one on PATH, else the one
+// under the GOROOT environment variable (runtime.GOROOT is deprecated: it reports
+// the root used at build time, which is not meaningful on another machine).
 func goTool(t *testing.T) string {
 	t.Helper()
 	if p, err := exec.LookPath("go"); err == nil {
 		return p
 	}
-	p := filepath.Join(runtime.GOROOT(), "bin", "go")
+	root := os.Getenv("GOROOT")
+	if root == "" {
+		t.Fatal("no go command on PATH and GOROOT is not set")
+	}
+	p := filepath.Join(root, "bin", "go")
 	if _, err := os.Stat(p); err != nil {
 		t.Fatalf("no go command on PATH or in GOROOT: %v", err)
 	}
