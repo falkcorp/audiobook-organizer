@@ -1,5 +1,5 @@
 // file: core/outbox/status.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0b7f0c06-1d5b-4e3c-9a64-2f0f9d3a8e64
 // last-edited: 2026-11-15
 
@@ -95,19 +95,24 @@ type ConsumerStatus struct {
 // counts that needed it are marked as "at least"; only a failure of the store
 // returns an error. The first call of a process also builds the dead-letter
 // counters from the stored letters if they are not built yet (deadn/; see
-// seedDeadCounts), which is a write of its own, made once.
+// seedDeadCounts), which is a write of its own, made once. The counters are
+// derived data: one that does not decode is named in Stopped (under its pair,
+// cause "corrupt_row") and left out of the dead count until the next
+// RefreshStatus repairs it, and so are keys under dead/ or deadn/ that belong to
+// no letter or counter (Topic "dead/" or "deadn/").
 func (o *Outbox) Status(ctx context.Context) (Status, error) {
-	dead, err := o.deadCounts(ctx)
+	rd, err := o.readDead(ctx)
 	if err != nil {
 		return Status{At: o.now()}, fmt.Errorf("status: dead letters: %w", err)
 	}
-	return o.status(ctx, dead)
+	return o.status(ctx, rd)
 }
 
-// status is Status with the dead-letter counts by consumer already read:
-// RefreshStatus reads them once, under the lock that publishes them to the
-// health component, and builds the status from the same reading.
-func (o *Outbox) status(ctx context.Context, dead map[string]int) (Status, error) {
+// status is Status with the dead-letter reading already made: RefreshStatus
+// reads it once, under the lock that publishes it to the health component, and
+// builds the status from the same reading.
+func (o *Outbox) status(ctx context.Context, rd deadReading) (Status, error) {
+	dead := rd.counts
 	st := Status{At: o.now()}
 	stopped := map[StoppedStatus]bool{}
 	stop := func(s StoppedStatus) {
@@ -115,6 +120,9 @@ func (o *Outbox) status(ctx context.Context, dead map[string]int) (Status, error
 			stopped[s] = true
 			st.Stopped = append(st.Stopped, s)
 		}
+	}
+	for _, s := range rd.stopped {
+		stop(s)
 	}
 	intake := map[string]TopicStatus{}
 	for _, name := range o.sortedTopics() {

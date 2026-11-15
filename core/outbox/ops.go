@@ -1,5 +1,5 @@
 // file: core/outbox/ops.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 4b1a1f7a-0a62-4d4e-8f1d-8d2a0b5f7c33
 // last-edited: 2026-11-15
 
@@ -93,11 +93,11 @@ func (o *Outbox) knownConsumer(ctx context.Context, name string) (bool, error) {
 			return true, nil
 		}
 	}
-	counts, err := o.deadCounts(ctx)
+	rd, err := o.readDead(ctx)
 	if err != nil {
 		return false, err
 	}
-	return counts[name] > 0, nil
+	return rd.counts[name] > 0, nil
 }
 
 // missingDead is the 404 of a dead-letter operation: the consumer is unknown,
@@ -168,7 +168,7 @@ func (o *Outbox) mutateDead(ctx context.Context, consumer string, seq uint64, re
 		}
 	}
 	err = storage.RetryOnConflict(ctx, settleAttempts, func(ctx context.Context) (err error) {
-		if err := o.ensureDeadCounts(ctx); err != nil {
+		if err := o.healDeadCounts(ctx); err != nil {
 			return err
 		}
 		b := o.store.OpenBatch()

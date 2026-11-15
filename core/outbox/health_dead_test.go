@@ -1,5 +1,5 @@
 // file: core/outbox/health_dead_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b584e6da-2910-4648-aa3d-af25cc239b55
 // last-edited: 2026-11-15
 
@@ -375,4 +375,137 @@ func counterSum(t testing.TB, r *rig) int {
 		sum += c.N
 	}
 	return sum
+}
+
+// failingHandler is a consumer that always fails, so MaxAttempts = 1 dead-letters
+// every message it gets.
+func failingHandler() func(testing.TB, *rig) []registration {
+	return func(testing.TB, *rig) []registration {
+		return []registration{{owner: "core", hs: []outbox.Handler{
+			outbox.Consume(notice(), consumerN, func(context.Context, outbox.Message[Dispatch]) error {
+				return errors.New("the Batmobile is in the shop")
+			}),
+		}}}
+	}
+}
+
+// A key under dead/ that is no letter's (a hand edit, a bug of another build)
+// must not stop dead-lettering. The relay used to refuse to write a dead letter
+// until the counters were built, and RepairDeadCounts aborted on the key, so the
+// counters were never built: the message redelivered forever, its pair stayed
+// blocked, and nothing showed as Stopped. Now the repair skips and names the key,
+// the dead letter is written, and Status and core.outbox say a dead/ key is bad.
+func TestOutbox_AStrayKeyUnderDeadDoesNotStopDeadLettering(t *testing.T) {
+	r := newRig(t, rigOpts{
+		noRelay:     true,
+		cfg:         func(c *outbox.Config) { c.MaxAttempts = 1 },
+		statusEvery: time.Hour,
+		register:    failingHandler(),
+	})
+	const legacy = 3
+	for i := range legacy {
+		plantLetter(t, r, uint64(1000+i), i%2)
+	}
+	stray := append(append([]byte(nil), outboxstore.DeadRoot()...), 'j')
+	r.putRaw(stray, []byte(`x`))
+	r.startRelay()
+	r.stage("wayne-manor", Dispatch{Villain: "Joker"})
+	eventually(t, "the message to be dead-lettered beside the stray key", func() bool {
+		return r.count(outboxstore.DeadRoot()) == legacy+1+1 // the legacy letters, the new one, the stray key
+	})
+	ctx := context.Background()
+	r.ob.RefreshStatus(ctx)
+	st, err := r.ob.Status(ctx)
+	must(t, err)
+	if !stoppedHas(st, outbox.StoppedStatus{Topic: "dead/", Cause: "corrupt_row"}) {
+		t.Fatalf("Stopped = %+v, want the stray dead/ key named (Topic dead/, corrupt_row)", st.Stopped)
+	}
+	if got := deadOf(st, consumerN); got != legacy+1 {
+		t.Fatalf("Status counts %d dead letters, want %d (every readable letter, the stray key is no letter)", got, legacy+1)
+	}
+	if res := r.healthOf(); res.Status != health.StatusDegraded || res.Reason != "delivery_stopped" || !strings.Contains(res.Detail, "dead/") {
+		t.Fatalf("core.outbox = %s (%s: %s), want Degraded with delivery_stopped naming dead/", res.Status, res.Reason, res.Detail)
+	}
+	if got := counterSum(t, r); got != legacy+1 {
+		t.Fatalf("the counters add up to %d, want %d", got, legacy+1)
+	}
+}
+
+// A counter row that does not decode is derived data: Status names it (under its
+// pair, leaving it out of the dead count) instead of failing, and the next
+// refresh rewrites it from the letters. Status used to return the decode error,
+// so a single bad counter hid the whole status.
+func TestOutbox_StatusNamesAnUnreadableDeadCounterAndRefreshRepairsIt(t *testing.T) {
+	logs := &logCapture{}
+	r := newRig(t, rigOpts{noExec: true, log: logs.logger(), register: consumeInto(&recorder{}, consumerN)})
+	seedDead(t, r, consumerN, 7, true)
+	ctx := context.Background()
+	if _, err := r.ob.Status(ctx); err != nil { // builds the counters
+		t.Fatal(err)
+	}
+	pp := outboxstore.Partition("wayne-manor", 2)
+	r.putRaw(outboxstore.DeadCountKey(consumerN, noticeName, pp), []byte(`not a counter`))
+
+	st, err := r.ob.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status = %v with one unreadable counter, want the counter named instead", err)
+	}
+	want := outbox.StoppedStatus{Topic: noticeName, Consumer: consumerN, Partition: pp, Cause: "corrupt_row"}
+	if !stoppedHas(st, want) {
+		t.Fatalf("Stopped = %+v, want %+v", st.Stopped, want)
+	}
+	if got := deadOf(st, consumerN); got != 0 {
+		t.Fatalf("Status counts %d dead letters, want 0: the unreadable counter is left out of the sum", got)
+	}
+
+	r.ob.RefreshStatus(ctx)
+	if st, err = r.ob.Status(ctx); err != nil || stoppedHas(st, want) || deadOf(st, consumerN) != 1 {
+		t.Fatalf("after the refresh: Status counts %d (%v), Stopped = %+v; want 1 dead letter and the counter no longer named", deadOf(st, consumerN), err, st.Stopped)
+	}
+	if n := logs.count("counter_unreadable=true"); n != 1 {
+		t.Fatalf("the repair of the unreadable counter was logged %d times, want once:\n%s", n, logs.text())
+	}
+	if res := r.healthOf(); res.Status != health.StatusDegraded || res.Reason != "dead_letters" {
+		t.Fatalf("core.outbox = %s (%s) after the repair, want Degraded for the letter alone", res.Status, res.Reason)
+	}
+}
+
+// A build of the counters that keeps failing must not stop dead-lettering, and
+// must not hide: core.outbox is Degraded with delivery_stopped naming the
+// counters until a build succeeds. The relay used to refuse to write any dead
+// letter while the counters were unbuilt, so an ordered message redelivered
+// forever and an unordered round redelivered its successes, with nothing Stopped.
+func TestOutbox_ACounterBuildThatKeepsFailingIsNamedAndDoesNotStopDeadLettering(t *testing.T) {
+	var failing atomic.Bool
+	failing.Store(true)
+	hooks := &outbox.TestHooks{SeedDeadCounts: func() error {
+		if failing.Load() {
+			return errors.New("the Batcave disk is full")
+		}
+		return nil
+	}}
+	r := newRig(t, rigOpts{
+		cfg:         func(c *outbox.Config) { c.MaxAttempts = 1 },
+		statusEvery: time.Hour,
+		hooks:       hooks,
+		register:    failingHandler(),
+	})
+	eventually(t, "core.outbox to name the counters that cannot be built", func() bool {
+		res := r.healthOf()
+		return res.Status == health.StatusDegraded && res.Reason == "delivery_stopped" && strings.Contains(res.Detail, "dead_counters")
+	})
+	r.stage("wayne-manor", Dispatch{Villain: "Joker"})
+	eventually(t, "the message to be dead-lettered while the counters are unbuilt", func() bool { return r.count(outboxstore.DeadRoot()) == 1 })
+
+	failing.Store(false)
+	ctx := context.Background()
+	eventually(t, "the counters to build and core.outbox to stop naming them", func() bool {
+		r.ob.Wake()
+		st, err := r.ob.Status(ctx)
+		res := r.healthOf()
+		return err == nil && deadOf(st, consumerN) == 1 && res.Reason == "dead_letters" && !strings.Contains(res.Detail, "dead_counters")
+	})
+	if got := counterSum(t, r); got != 1 {
+		t.Fatalf("the counters add up to %d, want 1", got)
+	}
 }

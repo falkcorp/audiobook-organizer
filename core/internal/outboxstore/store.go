@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/store.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 754dc428-ceb7-4876-824c-cde4fb15a4f3
 // last-edited: 2026-11-15
 
@@ -493,31 +493,34 @@ func (s *Store) StageDead(ctx context.Context, b *storage.Batch, consumer, topic
 // bumpDeadCount adds delta to the counter of (consumer, topic, shard) through
 // b: the counter is read with GetForUpdate (a repeated read in one batch sees
 // the batch's own earlier bump and keeps the first read's precondition), so two
-// batches that bump one counter from the same value cannot both commit. A
-// counter that would go below zero (an absent one a letter was removed
-// against: drift, which RepairDeadCounts names) stays at zero; a zero counter
-// has no row.
+// batches that bump one counter from the same value cannot both commit. Every
+// write raises the counter's Rev, so its bytes change on every bump, including
+// one that leaves N where it was. A zero count has no row. A bump that would
+// take N below zero (a letter removed against an absent or zero counter: drift)
+// writes a zero row instead of deleting a key that may already be absent: the
+// row is a write RepairDeadCounts's precondition can see, and RepairDeadCounts
+// treats any zero row as a counter to correct.
 func (s *Store) bumpDeadCount(ctx context.Context, b *storage.Batch, consumer, topic, shard string, delta int) error {
 	key := deadCountKey(consumer, topic, shard)
-	n := 0
+	var cur DeadCount
 	raw, err := b.GetForUpdate(ctx, s.ks, key)
 	switch {
 	case errors.Is(err, storage.ErrNotFound):
 	case err != nil:
 		return err
 	default:
-		c, derr := deadCountCodec().Decode(raw)
-		if derr != nil {
+		var derr error
+		if cur, derr = deadCountCodec().Decode(raw); derr != nil {
 			return rowErr(fmt.Sprintf("dead count %s/%s/%s", consumer, topic, shard), derr)
 		}
-		n = c.N
 	}
-	n = max(0, n+delta)
+	next := DeadCount{N: cur.N + delta, Rev: cur.Rev + 1}
 	w := b.In(s.ks)
-	if n == 0 {
-		return w.Delete(key)
+	if next.N == 0 && delta < 0 && cur.N > 0 {
+		return w.Delete(key) // the counter reached zero by counting: no row
 	}
-	enc, err := deadCountCodec().Encode(DeadCount{N: n})
+	next.N = max(0, next.N)
+	enc, err := deadCountCodec().Encode(next)
 	if err != nil {
 		return err
 	}
@@ -702,45 +705,68 @@ func (s *Store) ScanDead(ctx context.Context, after []byte, limit int) ([]DeadRo
 	return out, last, nil
 }
 
-// DeadCounts counts the dead letters by consumer (keys only).
-func (s *Store) DeadCounts(ctx context.Context) (map[string]int, error) {
+// DeadCounts counts the dead letters by consumer (keys only). A key that is not
+// a dead-letter key is not counted and not an error: unparseable says how many
+// there were, so the caller can name them.
+func (s *Store) DeadCounts(ctx context.Context) (counts map[string]int, unparseable int, err error) {
 	root := DeadRoot()
 	out := map[string]int{}
 	for kv, serr := range s.ks.Scan(ctx, storage.ScanOptions{Start: root, End: keys.PrefixEnd(root), KeysOnly: true}) {
 		if serr != nil {
-			return out, serr
+			return out, unparseable, serr
 		}
 		s.scanned.Add(1)
 		c, _, _, perr := ParseDeadKey(kv.Key)
 		if perr != nil {
-			return out, perr
+			unparseable++
+			continue
 		}
 		out[c]++
 	}
-	return out, nil
+	return out, unparseable, nil
+}
+
+// UnreadableCount is a counter row that does not decode: Err is a *RowError.
+type UnreadableCount struct {
+	Consumer, Topic, Shard string
+	Err                    error
+}
+
+// DeadTotal is what DeadTotals read: the dead letters by consumer, summed from
+// the counters that decode, the counters that did not (named, and left out of
+// the sums; RepairDeadCounts rewrites them), and how many keys under deadn/ are
+// no counter's at all.
+type DeadTotal struct {
+	ByConsumer  map[string]int
+	Unreadable  []UnreadableCount
+	Unparseable int
 }
 
 // DeadTotals is the dead letters by consumer, summed from the per-pair
 // counters (deadn/): one row per (consumer, topic, partition) that holds a
-// letter, however many letters that is. A counter that does not decode is a
-// *RowError; RepairDeadCounts rewrites it.
-func (s *Store) DeadTotals(ctx context.Context) (map[string]int, error) {
+// letter, however many letters that is. A counter that does not decode does
+// not fail the read: it is named in Unreadable, because it is derived data and
+// the next repair rewrites it.
+func (s *Store) DeadTotals(ctx context.Context) (DeadTotal, error) {
 	root := DeadCountRoot()
-	out := map[string]int{}
+	out := DeadTotal{ByConsumer: map[string]int{}}
 	for kv, serr := range s.ks.Scan(ctx, storage.ScanOptions{Start: root, End: keys.PrefixEnd(root)}) {
 		if serr != nil {
-			return nil, serr
+			return DeadTotal{}, serr
 		}
 		s.scanned.Add(1)
-		c, _, _, perr := ParseDeadCountKey(kv.Key)
+		c, t, shard, perr := ParseDeadCountKey(kv.Key)
 		if perr != nil {
-			return nil, perr
+			out.Unparseable++
+			continue
 		}
 		n, derr := deadCountCodec().Decode(kv.Value)
 		if derr != nil {
-			return nil, rowErr(fmt.Sprintf("dead count %s", kv.Key), derr)
+			out.Unreadable = append(out.Unreadable, UnreadableCount{Consumer: c, Topic: t, Shard: shard,
+				Err: rowErr(fmt.Sprintf("dead count %s/%s/%s", c, t, shard), derr)})
+			continue
 		}
-		out[c] += n.N
+		out.ByConsumer[c] += n.N
 	}
 	return out, nil
 }
@@ -752,6 +778,13 @@ type DeadCountFix struct {
 	Had, Want              int
 	Absent                 bool // the counter had no row
 	Unreadable             bool // the counter's row did not decode
+}
+
+// DeadCountRepair is what RepairDeadCounts did: the counters it rewrote, and
+// how many keys under dead/ and deadn/ it could not parse and so left alone.
+type DeadCountRepair struct {
+	Fixes       []DeadCountFix
+	Unparseable int
 }
 
 // repairAttempts is how often RepairDeadCounts re-reads after a writer got
@@ -774,10 +807,11 @@ const repairAttempts = 5
 // never overwrite a count that moved. A crash anywhere before the commit leaves
 // the store as it was; the next run starts over. A second run finds nothing.
 // A letter that does not decode is counted under UnreadShard.
-func (s *Store) RepairDeadCounts(ctx context.Context) ([]DeadCountFix, error) {
+func (s *Store) RepairDeadCounts(ctx context.Context) (DeadCountRepair, error) {
 	var fixes []DeadCountFix
+	unparseable := 0
 	err := storage.RetryOnConflict(ctx, repairAttempts, func(ctx context.Context) (err error) {
-		fixes = nil
+		fixes, unparseable = nil, 0
 		snap, err := s.ks.Snapshot()
 		if err != nil {
 			return err
@@ -795,7 +829,8 @@ func (s *Store) RepairDeadCounts(ctx context.Context) ([]DeadCountFix, error) {
 			s.scanned.Add(1)
 			c, t, _, perr := ParseDeadKey(kv.Key)
 			if perr != nil {
-				return perr
+				unparseable++ // no consumer to count it for: named by the caller, left in place
+				continue
 			}
 			shard := UnreadShard
 			if d, derr := deadCodec().Decode(kv.Value); derr == nil {
@@ -814,7 +849,8 @@ func (s *Store) RepairDeadCounts(ctx context.Context) ([]DeadCountFix, error) {
 			s.scanned.Add(1)
 			c, t, shard, perr := ParseDeadCountKey(kv.Key)
 			if perr != nil {
-				return perr
+				unparseable++
+				continue
 			}
 			k := string(kv.Key)
 			refs[k] = shardRef{c, t, shard}
@@ -832,7 +868,9 @@ func (s *Store) RepairDeadCounts(ctx context.Context) ([]DeadCountFix, error) {
 				c, derr := deadCountCodec().Decode(raw)
 				fix.Had, fix.Unreadable = c.N, derr != nil
 			}
-			if present && !fix.Unreadable && fix.Had == fix.Want {
+			// A zero row is always a counter to correct: counting never leaves
+			// one, only a delete against a missing counter does.
+			if present && !fix.Unreadable && fix.Had == fix.Want && fix.Had != 0 {
 				continue
 			}
 			if !present && fix.Want == 0 {
@@ -872,7 +910,10 @@ func (s *Store) RepairDeadCounts(ctx context.Context) ([]DeadCountFix, error) {
 				}
 				continue
 			}
-			enc, eerr := deadCountCodec().Encode(DeadCount{N: fix.Want})
+			// Rev stays monotone across a repair: the bytes after it never equal
+			// bytes any earlier reader holds. An unreadable row restarts at 1.
+			prev, _ := deadCountCodec().Decode(now)
+			enc, eerr := deadCountCodec().Encode(DeadCount{N: fix.Want, Rev: prev.Rev + 1})
 			if eerr != nil {
 				return eerr
 			}
@@ -883,9 +924,9 @@ func (s *Store) RepairDeadCounts(ctx context.Context) ([]DeadCountFix, error) {
 		return b.Commit(ctx, storage.Sync)
 	})
 	if err != nil {
-		return nil, err
+		return DeadCountRepair{}, err
 	}
-	return fixes, nil
+	return DeadCountRepair{Fixes: fixes, Unparseable: unparseable}, nil
 }
 
 // FindDead finds the dead letter of consumer at seq, whatever its topic: a

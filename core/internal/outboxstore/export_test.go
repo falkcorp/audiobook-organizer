@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/export_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8c1e7d40-2a95-4b3f-a6d1-5e0f9b7c3a28
 // last-edited: 2026-11-15
 
