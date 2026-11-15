@@ -1,7 +1,7 @@
 // file: core/outbox/logs_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7f507577-1d8d-4031-8266-e190b04b52d9
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package outbox_test
 
@@ -312,7 +312,7 @@ func TestOutbox_LostSettleLogCarriesNoErrorText(t *testing.T) {
 		t.Fatalf("a stored value reached the log:\n%s", out)
 	}
 	var line string
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(l, lost) {
 			line = l
 			break
