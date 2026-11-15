@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_mutation_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d3f60a82-7b19-4e54-8c2d-0a5e91b4f736
 // last-edited: 2026-11-14
 
@@ -59,7 +59,7 @@ func TestReachOracle_AnyChangedAtomRowIsReported(t *testing.T) {
 	atoms := idAtoms()
 	base, _ := reachCompare(t, pd, vd, atoms, atoms)
 	was := reachCellSet(base)
-	rows := append(reachExpected(), reachRecorderLimits()...)
+	rows := reachOracleRows()
 	for _, row := range atoms {
 		for _, side := range []string{"route resolution", "M3 and route resolution"} {
 			m3Atoms := atoms
@@ -106,18 +106,6 @@ func reachJudgeRoutes(vd *reachR0Doc, atoms []m3.AtomRow, whos []reachWho, route
 	return reachJudgeErr(vd, atoms, whos)
 }
 
-// reachChecks is everything the oracle fails on for one run: the gate (an
-// unexpected cell, an unused or miscounted row), the routes only one side has,
-// the delegated set, the uniform-404 routes and the oracle's size.
-func reachChecks(vd *reachR0Doc, res reachDiffResult, rows []reachExpect) []string {
-	out := reachGateProblems(res, rows)
-	out = append(out, reachOneSideProblems(res)...)
-	out = append(out, reachDelegatedProblems(vd, res)...)
-	out = append(out, reachUniformNotFoundProblems(vd)...)
-	out = append(out, reachCountProblems(vd, res)...)
-	return out
-}
-
 // reachRouteMutant is one change to one manifest route.
 type reachRouteMutant struct {
 	kind  string
@@ -146,7 +134,11 @@ func reachRouteMutants(routes []httpapi.LegacyRoute) []reachRouteMutant {
 			add("AnyAuthenticated route narrowed to core:admin", i, func(r *httpapi.LegacyRoute) { r.Perm = rbac.Need(rbac.CoreAdmin) })
 		default:
 			add("route widened to AnyAuthenticated", i, func(r *httpapi.LegacyRoute) { r.Perm = rbac.AnyAuthenticated })
-			add("route narrowed to core:admin", i, func(r *httpapi.LegacyRoute) { r.Perm = rbac.Need(rbac.CoreAdmin) })
+			// A route that already requires core:admin narrowed to core:admin is
+			// the same requirement, not a mutant (round-2 NIT-1).
+			if perm.String() != rbac.Need(rbac.CoreAdmin).String() {
+				add("route narrowed to core:admin", i, func(r *httpapi.LegacyRoute) { r.Perm = rbac.Need(rbac.CoreAdmin) })
+			}
 		}
 		if perm.Kind() == rbac.KindAllOf && len(perm.Permissions()) > 1 {
 			scopes := perm.Permissions()
@@ -170,7 +162,7 @@ func reachRouteMutants(routes []httpapi.LegacyRoute) []reachRouteMutant {
 func reachEquivalentKind(m reachRouteMutant, routes []httpapi.LegacyRoute) string {
 	lr := routes[m.idx]
 	if _, pinned := reachHandlerAdmin[m.route]; pinned || lr.Guards.Owner {
-		return "dominated by the Owner guard's core:admin fallback or the handler-admin pin"
+		return "dominated by the Owner guard (the table holds no owner-assured principal, so the no-owner fallback and the owner-set model both refuse everyone it refuses) or by the handler-admin pin"
 	}
 	return "no principal of the table tells the requirement from its replacement"
 }
@@ -178,7 +170,7 @@ func reachEquivalentKind(m reachRouteMutant, routes []httpapi.LegacyRoute) strin
 // reachEquivalentMutants is how many mutants the generator produces that move no
 // principal's reach. It is pinned so a change in the oracle's resolving power (a
 // principal added or dropped, a requirement changed) is a visible decision.
-const reachEquivalentMutants = 37
+const reachEquivalentMutants = 30
 
 func reachVerdictsEqual(a, b *reachR2) bool { return maps.Equal(a.verdict, b.verdict) }
 
@@ -192,7 +184,7 @@ func TestReachOracle_AnyChangedManifestRouteFailsTheOracle(t *testing.T) {
 	atoms := idAtoms()
 	snap, seed := reachMigrate(t, pd, atoms)
 	whos := reachWhos(t, snap, seed, pd.Principals, reachCatalog(t))
-	rows := append(reachExpected(), reachRecorderLimits()...)
+	rows := reachOracleRows()
 
 	routes := reachManifest()
 	baseRes, baseR2, err := reachJudgeRoutes(vd, atoms, whos, routes)
@@ -265,7 +257,7 @@ func TestReachOracle_ARouteAddedDroppedOrDelegatedWithoutADecisionFails(t *testi
 	atoms := idAtoms()
 	snap, seed := reachMigrate(t, pd, atoms)
 	whos := reachWhos(t, snap, seed, pd.Principals, reachCatalog(t))
-	rows := append(reachExpected(), reachRecorderLimits()...)
+	rows := reachOracleRows()
 	routes := reachManifest()
 
 	t.Run("a new route with no requirement is refused outright", func(t *testing.T) {
@@ -353,7 +345,9 @@ var reachMaskedRoutes = map[string]string{
 	"POST /api/v1/users/merges/:jid/undo":                     "legacy(users.manage)",
 }
 
-func TestReachOracle_RoutesAGuardDominatesKeepTheirRequirement(t *testing.T) {
+// reachMaskedProblems is what the masked-route pin fails on, as text.
+func reachMaskedProblems() []string {
+	var out []string
 	got := map[string]string{}
 	for _, lr := range reachManifest() {
 		k := lr.Method + " " + lr.GinPath
@@ -363,12 +357,20 @@ func TestReachOracle_RoutesAGuardDominatesKeepTheirRequirement(t *testing.T) {
 	}
 	for k, want := range reachMaskedRoutes {
 		if got[k] != want {
-			t.Errorf("%s: requirement %q, pinned %q (the oracle cannot see this change: an Owner guard or the handler pin dominates it)", k, got[k], want)
+			out = append(out, fmt.Sprintf("%s: requirement %q, pinned %q (the oracle cannot see this change: an Owner guard or the handler pin dominates it)", k, got[k], want))
 		}
 	}
 	for k := range got {
 		if _, ok := reachMaskedRoutes[k]; !ok {
-			t.Errorf("%s is Owner-guarded or pinned and its requirement is not pinned in reachMaskedRoutes", k)
+			out = append(out, k+" is Owner-guarded or pinned and its requirement is not pinned in reachMaskedRoutes")
 		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestReachOracle_RoutesAGuardDominatesKeepTheirRequirement(t *testing.T) {
+	for _, p := range reachMaskedProblems() {
+		t.Error(p)
 	}
 }

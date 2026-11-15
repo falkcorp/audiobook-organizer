@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_gate_test.go
-// version: 1.4.0
+// version: 1.6.0
 // guid: 7d3a8f21-6c4e-4b95-a0d7-1e9b2c5f8a36
 // last-edited: 2026-11-14
 
@@ -7,11 +7,13 @@ package cutover
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m3"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -178,11 +180,6 @@ func reachExpected() []reachExpect {
 			route: reachInteractiveRoutes(), who: whoIs("authoff"), r0: 'A', r2: 'D', want: 11,
 		},
 		{
-			name:  "05-rbac 4.11(d): credential-metadata routes answer the auth-disabled principal 401",
-			why:   "HEAD's handler needs a user and has none with auth off; the successor is core's native route, whose answer is core's half",
-			route: routeIs(reachIdentityRoutes...), who: whoIs("authoff"), r0: 'D', r2: 'A', want: 7,
-		},
-		{
 			name:  "05-authn 4.8: restore's owner guard falls back to Interactive plus core:admin",
 			why:   "HEAD's s.perm let a role holding every atom restore; with no OwnerVerifier the guard's fallback needs core:admin, which a custom role never holds (core:backup.restore, 05-rbac 6.2, is the core half's check)",
 			route: routeIs("POST /api/v1/backup/restore"), who: whoIs("session:custom-all"), r0: 'A', r2: 'D', want: 1,
@@ -217,9 +214,31 @@ func reachRecorderLimits() []reachExpect {
 			why:   "POST /auth/api-keys/:id/rotate (retired, answers 410) refuses a key whose target it cannot show is its own user's; the probe's id is unknown",
 			route: routeIs("POST /api/v1/auth/api-keys/:id/rotate"), who: whoHas("key:"), r0: 'D', r2: 'A', want: 21,
 		},
+	}
+}
+
+// reachHandlerRefusals are the eight gains of the auth-disabled principal that
+// no policy changed: the manifest keeps each route AnyAuthenticated until F4-08
+// deletes the seven credential routes (their successors are core's native routes,
+// whose answer to the auth-disabled principal is the core-route half's assertion,
+// 05-rbac 4.11(d) and 05-authn 4.11, 4.13), and the auth-disabled principal holds
+// every non-AuthRequired scope, so the router admits it. R0 refuses it in the
+// HANDLER, which needs a user and has none with auth off (401, or 403 for
+// approve). These are not 05-rbac 4.11(d) tightenings: that clause is about core's
+// routes. Each refusal is held on HEAD by
+// internal/server TestReachHeadHandlers_RefuseTheAuthDisabledPrincipal and is an
+// F4-08 obligation to prove again on the registered path (seams.d/F4-07.md,
+// round-2 MINOR-3). Asserted on both letters like every row.
+func reachHandlerRefusals() []reachExpect {
+	return []reachExpect{
 		{
-			name:  "recorder limit: approving needs a user and a verified method inside the handler",
-			why:   "R0's ApproveRun refuses the auth-disabled principal for want of a user to record; R2's route-level atom is books:view",
+			name:  "HEAD handler refusal: a credential route needs a user, the auth-disabled principal has none (401)",
+			why:   "the route stays AnyAuthenticated at the router; R0's handler answers 401 without a user; F4-08 deletes the route or proves the successor's refusal",
+			route: routeIs(reachIdentityRoutes...), who: whoIs("authoff"), r0: 'D', r2: 'A', want: 7,
+		},
+		{
+			name:  "HEAD handler refusal: approving needs a user and a verified method, the auth-disabled principal has neither (403)",
+			why:   "R0's ApproveRun refuses it for want of a user to record; R2's route-level atom is books:view",
 			route: routeIs("POST /api/v3/ops/runs/:id/approve"), who: whoIs("authoff"), r0: 'D', r2: 'A', want: 1,
 		},
 	}
@@ -252,18 +271,58 @@ func reachGateProblems(res reachDiffResult, rows []reachExpect) []string {
 	return out
 }
 
+// reachChecks is everything the oracle fails on for one run: the gate (an
+// unexpected cell, an unused or miscounted row), the routes only one side has,
+// the delegated set, the uniform-404 routes and the oracle's size.
+func reachChecks(vd *reachR0Doc, res reachDiffResult, rows []reachExpect) []string {
+	out := reachGateProblems(res, rows)
+	out = append(out, reachOneSideProblems(res)...)
+	out = append(out, reachDelegatedProblems(vd, res)...)
+	out = append(out, reachUniformNotFoundProblems(vd)...)
+	out = append(out, reachCountProblems(vd, res)...)
+	return out
+}
+
+// reachStaticProblems are the pins that are not about one run's cells: the
+// requirement of every route a guard or the handler pin masks, the handler code
+// the pin rests on, the pin's own placement and the cells it hides, and the mount
+// switch. They are part of the oracle, so the documented command
+// (`go test ./internal/books/cutover -run TestIdentityCutover_ReachOracle`) fails
+// on any of them; a sibling test calls each alone as well.
+func reachStaticProblems(t testing.TB, vd *reachR0Doc, atoms []m3.AtomRow, whos []reachWho, res reachDiffResult) []string {
+	t.Helper()
+	var out []string
+	out = append(out, reachMaskedProblems()...)
+	out = append(out, reachHandlerAdminProblems(os.ReadFile, reachHandlerAdmin, reachHandlerAdminFuncs)...)
+	out = append(out, reachPinSitProblems()...)
+	out = append(out, reachPinHiddenProblems(t, vd, atoms, whos, res)...)
+	src, err := os.ReadFile(reachMountSource)
+	if err != nil {
+		return append(out, err.Error())
+	}
+	return append(out, reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil)...)
+}
+
+// reachOracleRows are every expected row the oracle holds the diff to.
+func reachOracleRows() []reachExpect {
+	return slices.Concat(reachExpected(), reachHandlerRefusals(), reachRecorderLimits())
+}
+
 func TestIdentityCutover_ReachOracle(t *testing.T) {
 	pd, vd := reachLoad(t)
 	atoms := idAtoms()
-	res, _ := reachCompare(t, pd, vd, atoms, atoms)
+	res, whos := reachCompare(t, pd, vd, atoms, atoms)
 	t.Logf("R0 routes recorded: %d; manifest routes compared: %d (%d cells, task starts and approvals included); delegated to the ABS handler: %d; R0 only: %d; R2 only: %d; differing cells: %d",
-		vd.RouteCount, vd.RouteCount-len(res.r0Only)-len(res.delegated), res.compared, len(res.delegated), len(res.r0Only), len(res.r2Only), len(res.cells))
-	rows := append(reachExpected(), reachRecorderLimits()...)
+		vd.RouteCount, res.routesCompared, res.compared, len(res.delegated), len(res.r0Only), len(res.r2Only), len(res.cells))
+	rows := reachOracleRows()
 	c := reachClassify(res.cells, rows)
 	for _, r := range rows {
 		t.Logf("expected difference %-3d cells: %s", c.hits[r.name], r.name)
 	}
-	for _, p := range reachGateProblems(res, rows) {
+	for _, p := range reachChecks(vd, res, rows) {
+		t.Error(p)
+	}
+	for _, p := range reachStaticProblems(t, vd, atoms, whos, res) {
 		t.Error(p)
 	}
 }

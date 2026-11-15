@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_baseline_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b8f1c64-d702-4e95-a6c3-0e47b9d1f258
 // last-edited: 2026-11-14
 
@@ -229,7 +229,7 @@ func TestReachBaseline_UniformNotFoundRoutesAreOpenOrDelegated(t *testing.T) {
 func reachCountProblems(vd *reachR0Doc, res reachDiffResult) []string {
 	got := map[string]int{
 		"R0 routes recorded":                     vd.RouteCount,
-		"manifest routes compared":               vd.RouteCount - len(res.r0Only) - len(res.delegated),
+		"manifest routes compared":               res.routesCompared,
 		"routes delegated to the ABS handler":    len(res.delegated),
 		"routes only R0 has":                     len(res.r0Only),
 		"routes only R2 has":                     len(res.r2Only),
@@ -238,7 +238,7 @@ func reachCountProblems(vd *reachR0Doc, res reachDiffResult) []string {
 	}
 	want := map[string]int{
 		"R0 routes recorded":                     572,
-		"manifest routes compared":               501,
+		"manifest routes compared":               505,
 		"routes delegated to the ABS handler":    68,
 		"routes only R0 has":                     3,
 		"routes only R2 has":                     1,
