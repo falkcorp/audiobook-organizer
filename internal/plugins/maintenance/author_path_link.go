@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.12.1
+// version: 1.12.2
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-11-14
 
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -878,7 +879,7 @@ func (p *Plugin) authorPathLinkNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 	c := t6g1Common(authorPathLinkKind, sched)
 	c.Title = "Link path-derived authors to author rows"
 	c.Help = authorPathLinkHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-path-link")

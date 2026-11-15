@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_conjunction_repair.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 2f8a41c6-9d73-4e05-b18a-6c4f2e93d70b
 // last-edited: 2026-11-14
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -213,7 +214,7 @@ func (p *Plugin) authorConjunctionRepairNative(deps t6g1Deps, sched func(tasks.K
 	c := t6g1Common(authorConjunctionRepairKind, sched)
 	c.Title = "Repair author names with a stranded ampersand"
 	c.Help = authorConjunctionRepairHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-conjunction-repair")

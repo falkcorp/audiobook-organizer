@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/ai_journal_prune.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: d906856e-dcfc-4b03-a4ad-ca561f540095
 // last-edited: 2026-11-14
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -214,7 +215,7 @@ func (p *Plugin) pruneAIJournalNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 	c := t6g1Common(pruneAIJournalKind, sched)
 	c.Title = "Prune AI result journal"
 	c.Help = "Deletes journalled whisper transcription results older than ai_journal_retention_days (default 30; 0 keeps them forever). Transcripts on books are not touched."
-	c.Effects = tasks.Writes(tasks.Res("books", "ai_journal"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResAIJournal)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books." + PruneAIJournalDefID)

@@ -1,7 +1,7 @@
 // file: internal/repairs/kinds.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 0f3a6c1e-2b7d-4d58-9a41-6c8e5b2d7f13
-// last-edited: 2026-11-12
+// last-edited: 2026-11-14
 
 package repairs
 
@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // This file is the native-shell half of the repairs framework (05-tasks
@@ -179,7 +180,7 @@ func (k *repairKind) common() tasks.Common {
 		Help:  f.Description(),
 		// Every fixer's rows are books and the series they name; the single
 		// Write the apply makes per row (see apply) is a "books" write.
-		Effects:        tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "series")),
+		Effects:        tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResSeries))),
 		Resume:         tasks.ResumeContinue,
 		Timeout:        6 * time.Hour,
 		Priority:       tasks.PriorityNormal,
@@ -455,7 +456,7 @@ func (k *repairKind) apply(ic *tasks.ItemRC, w tasks.Writer, params json.RawMess
 	}
 	err := w.Do(ctx, tasks.Write{
 		Name:     "books.repairs." + f.ID(),
-		Resource: tasks.Res("books", "books"),
+		Resource: tasks.Res("books", string(ops.ResBooks)),
 		Subject:  subject,
 	}, func(ctx context.Context) ([]tasks.Change, error) {
 		// The repairs.Writer journals what it writes itself (history rows,

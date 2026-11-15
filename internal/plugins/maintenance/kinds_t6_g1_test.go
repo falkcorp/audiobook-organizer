@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
 // last-edited: 2026-11-14
 
@@ -9,7 +9,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -309,6 +314,7 @@ var t6g1OpsVocabulary = []ops.Resource{
 	ops.ResEmbeddings, ops.ResOperations, ops.ResCatalog, ops.ResFingerprintIndex,
 	ops.ResSettings, ops.ResActivity, ops.ResFiles, ops.ResExternalIDs, ops.ResUserState,
 	ops.ResMetadataCache, ops.ResFieldStates, ops.ResIndexes, ops.ResAIJournal, ops.ResAuthorityLists,
+	ops.ResSyncIdentity, ops.ResMetrics, ops.ResCoverText,
 }
 
 func TestT6G1Kinds_EffectsUseOnlyOpsResources(t *testing.T) {
@@ -323,6 +329,144 @@ func TestT6G1Kinds_EffectsUseOnlyOpsResources(t *testing.T) {
 			require.True(t, valid[r.Kind], "%s declares %q, which is not a pkg/ops resource constant", d.Kind(), r.Kind)
 		}
 	}
+}
+
+// t6g1KindWriterField names, for each kind that writes through a writer group,
+// the t6g1Writers field its core takes. The expected write set of the kind is
+// derived from that field's interface, never from what a fixture happens to
+// call.
+var t6g1KindWriterField = map[tasks.Kind]string{
+	pruneAIJournalKind:              "PruneAIJournal",
+	activityFilterIndexBackfillKind: "ActivityFilter",
+	authorSplitScanKind:             "AuthorSplit",
+	authorConjunctionRepairKind:     "Merge",
+	authorDuplicateMergeKind:        "Merge",
+	authorIDRepairKind:              "IDRepair",
+	authorPathLinkKind:              "PathLink",
+	purgeEmptyAuthorsKind:           "PurgeEmpty",
+	authorStripMergeKind:            "StripMerge",
+	authorityBuildKind:              "AuthorityBuild",
+}
+
+// t6g1OutsideWriterSeam lists, per kind, the declared write resources that are
+// written outside the writer interface, with the reason. A kind absent from
+// t6g1KindWriterField writes only that way.
+var t6g1OutsideWriterSeam = map[tasks.Kind]struct {
+	res []string
+	why string
+}{
+	purgeEmptyAuthorsKind: {
+		res: []string{string(ops.ResBooks)},
+		why: "DeleteAuthor sweeps the author out of each book's author junction, a write to the books table the interface method does not name",
+	},
+	resolveProductionAuthorsKind: {
+		res: []string{string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResSeries), string(ops.ResBookFiles),
+			string(ops.ResOperations), string(ops.ResMetadataCache), string(ops.ResFieldStates)},
+		why: "every write is metafetch's apply behind the fetcher, built over the run's writer; no writer group is involved",
+	},
+	autoMatchTranscribedKind: {
+		res: []string{string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResBookFiles),
+			string(ops.ResOperations), string(ops.ResMetadataCache), string(ops.ResFieldStates)},
+		why: "every write is metafetch's apply behind the runners, built over the run's writer; no writer group is involved",
+	},
+}
+
+// A kind's declared WriteSet is exactly the union of the resources of every
+// method on its writer interface, plus the listed resources written outside it.
+// Unlike the live subset check this does not depend on which path a fixture
+// takes: dropping or adding a resource in an Effects declaration fails here
+// whether or not any test reaches the write.
+func TestT6G1Kinds_WriteSetEqualsTheWriterInterfaceUnion(t *testing.T) {
+	wt := reflect.TypeOf(t6g1Writers{})
+	for _, d := range (&Plugin{}).t6g1Kinds(fakeT6G1Deps(t), nil) {
+		kind := d.Kind()
+		declared := map[string]bool{}
+		for _, r := range tasks.CommonOf(d).Effects.WriteSet() {
+			declared[r.Kind] = true
+		}
+		if len(declared) == 0 {
+			require.NotContains(t, t6g1KindWriterField, kind, "%s is read-only", kind)
+			require.NotContains(t, t6g1OutsideWriterSeam, kind, "%s is read-only", kind)
+			continue
+		}
+		union := map[string]bool{}
+		if field, ok := t6g1KindWriterField[kind]; ok {
+			sf, found := wt.FieldByName(field)
+			require.True(t, found, "%s: no t6g1Writers field %s", kind, field)
+			for j := range sf.Type.NumMethod() {
+				name := sf.Type.Method(j).Name
+				res, mapped := t6g1WriterResources[name]
+				require.True(t, mapped, "%s: writer method %s has no row in t6g1WriterResources", kind, name)
+				for _, r := range res {
+					union[r] = true
+				}
+			}
+		}
+		outside := map[string]bool{}
+		if o, ok := t6g1OutsideWriterSeam[kind]; ok {
+			require.NotEmpty(t, o.why, "%s: an outside-the-seam entry needs a reason", kind)
+			for _, r := range o.res {
+				require.False(t, union[r], "%s: %s is listed as outside the writer seam but a writer method already covers it", kind, r)
+				outside[r] = true
+			}
+		}
+		_, hasField := t6g1KindWriterField[kind]
+		require.True(t, hasField || len(outside) > 0, "%s writes but has neither a writer field nor an outside-the-seam entry", kind)
+		want := map[string]bool{}
+		for r := range union {
+			want[r] = true
+		}
+		for r := range outside {
+			want[r] = true
+		}
+		require.Equal(t, t6g1SortedKeys(want), t6g1SortedKeys(declared), "%s: declared WriteSet differs from writer-interface union + outside-the-seam", kind)
+	}
+}
+
+func t6g1SortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Every Effects resource name in this package is a pkg/ops constant, written
+// string(ops.ResX): a string literal for the name would be invisible to the
+// vocabulary check's rename safety and to a search for who declares a resource.
+func TestT6G1Kinds_EffectsNamesAreConstantsNotLiterals(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	fset := token.NewFileSet()
+	checked := 0
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		require.NoError(t, err)
+		file, err := parser.ParseFile(fset, f, src, 0)
+		require.NoError(t, err)
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 2 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Res" {
+				return true
+			}
+			if x, ok := sel.X.(*ast.Ident); !ok || x.Name != "tasks" {
+				return true
+			}
+			checked++
+			_, lit := call.Args[1].(*ast.BasicLit)
+			require.False(t, lit, "%s: tasks.Res names its resource with a string literal; use string(ops.ResX)", fset.Position(call.Pos()))
+			return true
+		})
+	}
+	require.Positive(t, checked, "the scan found no tasks.Res call; it is looking in the wrong place")
 }
 
 // The native pool's watermark is the contiguous finished prefix, whatever the

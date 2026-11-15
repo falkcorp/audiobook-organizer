@@ -1,5 +1,5 @@
 // file: pkg/ops/effects.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
 // last-edited: 2026-11-14
 
@@ -48,6 +48,15 @@ const (
 	// names rebuilt from the library export, plus the owner overrides. It is not
 	// ResCatalog, which is the author catalog (cat:* keys).
 	ResAuthorityLists Resource = "authority_lists"
+	// ResSyncIdentity is the cross-device sync identity (sync ids and their
+	// pointers on book rows), as F5-01's backfill-sync-ids writes it.
+	ResSyncIdentity Resource = "sync_identity"
+	// ResMetrics is the Pebble metrics store (time-series rows with a TTL).
+	ResMetrics Resource = "metrics"
+	// ResCoverText is the cover-text store (cover_text:<sha256> records and the
+	// cover_text_book:<book id> index, internal/covertext) that the cover-text
+	// read kind writes. No F5-06 kind uses it; F5-08 switches to it.
+	ResCoverText Resource = "cover_text"
 )
 
 // deletePrefix marks a Resource built by Deletes.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/activity_filter_index_backfill.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: d7602035-c210-4555-84a3-7a28e0a22f83
 // last-edited: 2026-11-14
 
@@ -19,6 +19,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -268,7 +269,7 @@ func (p *Plugin) activityFilterIndexBackfillNative(deps t6g1Deps, sched func(tas
 	c := t6g1Common(activityFilterIndexBackfillKind, sched)
 	c.Title = "Backfill activity filter indexes"
 	c.Help = activityFilterIndexBackfillHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "activity"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResActivity)))
 	// The run checkpoints its window watermark and restores it (rc.Restore).
 	c.Resume = tasks.ResumeContinue
 	c.Priority = tasks.PriorityLow

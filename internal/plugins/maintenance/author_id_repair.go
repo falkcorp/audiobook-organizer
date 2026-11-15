@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_id_repair.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: 6b2f8e19-4d73-4c0a-9e51-a8d7c3f02b64
 // last-edited: 2026-11-14
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -290,7 +291,7 @@ func (p *Plugin) authorIDRepairNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 	c := t6g1Common(authorIDRepairKind, sched)
 	c.Title = "Repair dangling and duplicate author ids"
 	c.Help = authorIDRepairHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-id-repair")

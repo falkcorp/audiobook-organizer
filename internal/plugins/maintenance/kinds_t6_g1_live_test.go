@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-14
 
@@ -156,16 +156,27 @@ type t6g1CountActivity struct {
 
 	mu      sync.Mutex
 	windows []int64 // the from bound of each window written
-	marks   int
-	clears  int
-	res     t6g1ResourceLog
+	// failCall, when positive, makes the failCall-th window write fail; failedFrom
+	// is the from bound of the window it failed.
+	failCall   int
+	failedFrom int64
+	marks      int
+	clears     int
+	res        t6g1ResourceLog
 }
 
 func (a *t6g1CountActivity) BackfillFilterIndexWindow(ctx context.Context, from, to int64, openEnded bool) (int, error) {
 	a.mu.Lock()
 	a.windows = append(a.windows, from)
+	fail := a.failCall > 0 && len(a.windows) == a.failCall
+	if fail {
+		a.failedFrom = from
+	}
 	a.mu.Unlock()
 	a.res.record("BackfillFilterIndexWindow")
+	if fail {
+		return 0, errors.New("injected window failure")
+	}
 	return a.t6g1HeadActivity.BackfillFilterIndexWindow(ctx, from, to, openEnded)
 }
 
@@ -694,16 +705,38 @@ func TestT6G1Kinds_ActivityBackfillWritesAContiguousCheckpoint(t *testing.T) {
 	require.Positive(t, cp.ResumeFrom, "the watermark advanced")
 	require.LessOrEqual(t, cp.ResumeFrom, cp.PlanWindows)
 
+}
+
+// A window that fails never counts as done: the last checkpoint's watermark is
+// at or below it, whatever finished above it. A watermark that ran past a gap
+// would make a resume skip the failed window and mark the index done over rows
+// that were never indexed.
+func TestT6G1Kinds_ActivityBackfillCheckpointStopsAtAFailedWindow(t *testing.T) {
+	s, _ := newAfibStore(t, 40)
+	probe := &t6g1LiveProbe{}
+	probe.act = &t6g1CountActivity{t6g1HeadActivity: t6g1HeadActivity{s}, failCall: 30}
+	deps := probe.deps(nil)
+	deps.ActivityFilter = t6g1HeadActivity{s}
+	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(deps, nil), activityFilterIndexBackfillKind)
+
+	_, h, _ := runT6G1Full(t, def, tasks.ModeLive, &t6g1GateWriter{}, "", nil)
+	raw, ok := h.CheckpointJSON("")
+	require.True(t, ok, "29 windows ran before the failure; the run must have checkpointed")
+	var cp activityFilterIndexBackfillParams
+	require.NoError(t, json.Unmarshal(raw, &cp))
+
 	probe.act.mu.Lock()
-	indexed := map[int64]bool{}
-	for _, from := range probe.act.windows {
-		indexed[from] = true
-	}
+	failedFrom := probe.act.failedFrom
 	probe.act.mu.Unlock()
-	for i := range cp.ResumeFrom {
-		from, _, _ := activityFilterIndexWindowBounds(cp, i)
-		require.True(t, indexed[from], "the checkpoint says windows 0..%d are done but window %d was never indexed", cp.ResumeFrom-1, i)
+	failedIdx := -1
+	for i := range cp.PlanWindows {
+		if from, _, _ := activityFilterIndexWindowBounds(cp, i); from == failedFrom {
+			failedIdx = i
+		}
 	}
+	require.GreaterOrEqual(t, failedIdx, 0, "the failed window must be one of the plan's windows")
+	require.LessOrEqual(t, cp.ResumeFrom, failedIdx,
+		"the checkpoint says windows 0..%d are done but window %d failed", cp.ResumeFrom-1, failedIdx)
 }
 
 // A resumed auto-match skips every book up to and including the checkpoint's
@@ -881,35 +914,73 @@ func TestT6G1Kinds_PurgeAbortsWhenTheDeleteIsFenced(t *testing.T) {
 	}
 }
 
+// t6g1TagStub is a non-nil owner-manual tag reader.
+type t6g1TagStub struct{}
+
+func (t6g1TagStub) GetBookTagsDetailed(string) ([]database.BookTag, error) { return nil, nil }
+
 // A kind whose deps lack NewWriters, or the writer group it needs, or (for the
-// kinds that read the owner-manual check) the readers, is refused with a
-// sentence before it does anything, in Preview too: a nil there would panic.
+// kinds that read the owner-manual check) a reader, is refused with a sentence
+// before it does anything, in Preview too for the writer half: a nil there
+// would panic. The writer half runs with every owner-manual reader wired, so a
+// refusal can only come from the writer guard; the reader half runs with
+// writers wired and one reader missing at a time.
 func TestT6G1Kinds_RefusesUnwiredWritersAndReaders(t *testing.T) {
+	st := newSplitRelinkStore(t)
 	probe := &t6g1LiveProbe{}
-	base := probe.deps(nil)
+	base := probe.deps(st)
+	base.ManualOnly.Tags = t6g1TagStub{}
+	require.NotNil(t, base.ManualOnly.Files)
+	require.NotNil(t, base.ManualOnly.Series)
+	require.NotNil(t, base.ManualOnly.Authors)
 
 	noWriters := base
 	noWriters.NewWriters = nil
 	emptyGroup := base
 	emptyGroup.NewWriters = func(tasks.Writer) t6g1Writers { return t6g1Writers{} }
-	for name, deps := range map[string]t6g1Deps{"NewWriters nil": noWriters, "writer group nil": emptyGroup} {
+	for name, c := range map[string]struct {
+		deps t6g1Deps
+		want string
+	}{
+		"NewWriters nil":   {noWriters, "NewWriters is not wired"},
+		"writer group nil": {emptyGroup, "the kind's writer group is not wired"},
+	} {
 		for _, kind := range []tasks.Kind{
 			pruneAIJournalKind, authorSplitScanKind, purgeEmptyAuthorsKind, authorStripMergeKind,
 		} {
-			defs := (&Plugin{}).t6g1Kinds(deps, nil)
-			def := t6g1ByKind(t, defs, kind)
-			err := runT6G1Kind(t, def, tasks.ModeLive, &t6g1GateWriter{}, "")
-			require.Error(t, err, "%s/%s", name, kind)
-			require.Contains(t, err.Error(), "not wired", "%s/%s", name, kind)
+			for _, mode := range []tasks.Mode{tasks.ModePreview, tasks.ModeLive} {
+				def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(c.deps, nil), kind)
+				err := runT6G1Kind(t, def, mode, &t6g1GateWriter{}, "")
+				require.Error(t, err, "%s/%s/%v", name, kind, mode)
+				require.Contains(t, err.Error(), c.want, "%s/%s/%v", name, kind, mode)
+			}
 		}
 	}
 
-	noReaders := base
+	// One reader missing at a time, each named in the refusal. Series is a leg
+	// only of the two BookManualOnly kinds; auto-match builds its own.
+	readers := []struct {
+		name   string
+		clear  func(*t6g1Deps)
+		series bool
+	}{
+		{"ManualOnly.Files", func(d *t6g1Deps) { d.ManualOnly.Files = nil }, false},
+		{"ManualOnly.Authors", func(d *t6g1Deps) { d.ManualOnly.Authors = nil }, false},
+		{"ManualOnly.Tags", func(d *t6g1Deps) { d.ManualOnly.Tags = nil }, false},
+		{"ManualOnly.Series", func(d *t6g1Deps) { d.ManualOnly.Series = nil }, true},
+	}
 	for _, kind := range []tasks.Kind{authorPathLinkKind, authorStripMergeKind, autoMatchTranscribedKind} {
-		def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(noReaders, nil), kind)
-		err := runT6G1Kind(t, def, tasks.ModeLive, &t6g1GateWriter{}, "")
-		require.Error(t, err, "%s", kind)
-		require.Contains(t, err.Error(), "ManualOnly", "%s", kind)
+		for _, r := range readers {
+			if r.series && kind == autoMatchTranscribedKind {
+				continue
+			}
+			d := base
+			r.clear(&d)
+			def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(d, nil), kind)
+			err := runT6G1Kind(t, def, tasks.ModeLive, &t6g1GateWriter{}, "")
+			require.Error(t, err, "%s without %s", kind, r.name)
+			require.Contains(t, err.Error(), r.name+" is not wired", "%s without %s", kind, r.name)
+		}
 	}
 }
 

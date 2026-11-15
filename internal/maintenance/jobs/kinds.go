@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
-// last-edited: 2026-11-12
+// last-edited: 2026-11-14
 
 package jobs
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -329,44 +330,42 @@ func startRequirement(job maintenance.MaintenanceJob) rbac.Requirement {
 // writes nothing (ReadOnly). A job missing from the table gets no declared
 // Effects, which registration refuses.
 //
-// Resource kinds (tasks.Res("books", kind)), named as pkg/ops names them:
-// books, book_files, authors, series, external_ids, user_state, operations,
-// settings, files (bytes on disk); sync_identity and metrics are coined here.
-var jobWrites = map[string][]string{
-	"backfill-book-files":             {"book_files", "operations"},
-	"backfill-file-hashes":            {"books", "book_files", "operations", "files"},
-	"backfill-itunes-positions":       {"user_state"},
-	"backfill-merge-undo-pointers":    {"operations"},
-	"backfill-metadata-source-hash":   {"books"},
-	"backfill-sync-ids":               {"sync_identity"},
-	"bulk-deluge-import":              {"book_files", "files", "operations"},
-	"cleanup-empty-folders":           {"files"},
-	"cleanup-organize-mess":           {"files"},
-	"cleanup-series":                  {"books", "series"},
-	"dedup-books":                     {"books", "book_files", "external_ids", "user_state"},
-	"enrich-book-files":               {"book_files"},
-	"fix-author-narrator-swap":        {"books"},
-	"fix-file-modes":                  {"files"},
-	"fix-read-by-narrator":            {"books"},
-	"fix-version-groups":              {"books", "book_files"},
-	"merge-chapter-groups":            {"books", "book_files", "authors", "external_ids", "user_state", "operations", "sync_identity"},
-	"normalize-primary-flags":         {"books"},
-	"prune-book-snapshots":            {"books"},
-	"purge-unknown-author-duplicates": {"books"},
-	"recompute-book-aggregates":       {"books", "operations"},
-	"recompute-itunes-paths":          {"book_files"},
-	"refetch-missing-authors":         {"books", "authors"},
-	"relink-missing-to-itunes":        {"books", "book_files"},
+// Resource kinds (tasks.Res("books", kind)) are the pkg/ops constants.
+var jobWrites = map[string][]ops.Resource{
+	"backfill-book-files":             {ops.ResBookFiles, ops.ResOperations},
+	"backfill-file-hashes":            {ops.ResBooks, ops.ResBookFiles, ops.ResOperations, ops.ResFiles},
+	"backfill-itunes-positions":       {ops.ResUserState},
+	"backfill-merge-undo-pointers":    {ops.ResOperations},
+	"backfill-metadata-source-hash":   {ops.ResBooks},
+	"backfill-sync-ids":               {ops.ResSyncIdentity},
+	"bulk-deluge-import":              {ops.ResBookFiles, ops.ResFiles, ops.ResOperations},
+	"cleanup-empty-folders":           {ops.ResFiles},
+	"cleanup-organize-mess":           {ops.ResFiles},
+	"cleanup-series":                  {ops.ResBooks, ops.ResSeries},
+	"dedup-books":                     {ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResUserState},
+	"enrich-book-files":               {ops.ResBookFiles},
+	"fix-author-narrator-swap":        {ops.ResBooks},
+	"fix-file-modes":                  {ops.ResFiles},
+	"fix-read-by-narrator":            {ops.ResBooks},
+	"fix-version-groups":              {ops.ResBooks, ops.ResBookFiles},
+	"merge-chapter-groups":            {ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResExternalIDs, ops.ResUserState, ops.ResOperations, ops.ResSyncIdentity},
+	"normalize-primary-flags":         {ops.ResBooks},
+	"prune-book-snapshots":            {ops.ResBooks},
+	"purge-unknown-author-duplicates": {ops.ResBooks},
+	"recompute-book-aggregates":       {ops.ResBooks, ops.ResOperations},
+	"recompute-itunes-paths":          {ops.ResBookFiles},
+	"refetch-missing-authors":         {ops.ResBooks, ops.ResAuthors},
+	"relink-missing-to-itunes":        {ops.ResBooks, ops.ResBookFiles},
 	"relink-report":                   {},
-	"repoint-version-primary":         {"books"},
-	"retention-and-hygiene":           {"operations", "settings"},
-	"revert-metadata-fetch":           {"books"},
+	"repoint-version-primary":         {ops.ResBooks},
+	"retention-and-hygiene":           {ops.ResOperations, ops.ResSettings},
+	"revert-metadata-fetch":           {ops.ResBooks},
 	"scan-chapter-groups":             {},
-	"scan-composer-tags":              {"book_files", "operations", "files"},
+	"scan-composer-tags":              {ops.ResBookFiles, ops.ResOperations, ops.ResFiles},
 	"scan-duplicate-files":            {},
 	"scan-duration-mismatch":          {},
 	"scan-metadata-hash-dups":         {},
-	"sweep-pebble-metrics-ttl":        {"metrics"},
+	"sweep-pebble-metrics-ttl":        {ops.ResMetrics},
 }
 
 func effectsFor(jobID string) tasks.Effects {
@@ -379,7 +378,7 @@ func effectsFor(jobID string) tasks.Effects {
 	}
 	refs := make([]tasks.Resource, len(ws))
 	for i, w := range ws {
-		refs[i] = tasks.Res("books", w)
+		refs[i] = tasks.Res("books", string(w))
 	}
 	return tasks.Writes(refs...)
 }

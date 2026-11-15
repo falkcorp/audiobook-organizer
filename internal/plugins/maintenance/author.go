@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author.go
-// version: 1.16.1
+// version: 1.16.2
 // guid: e5f6a7b8-c9d0-1234-ef01-456789012345
 // last-edited: 2026-11-14
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -383,7 +384,7 @@ func (p *Plugin) authorSplitScanNative(deps t6g1Deps, sched func(tasks.Kind) *ta
 	c := t6g1Common(authorSplitScanKind, sched)
 	c.Title = "Author split scan"
 	c.Help = authorSplitScanHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-split-scan")
@@ -830,8 +831,8 @@ func (p *Plugin) resolveProductionAuthorsNative(deps t6g1Deps, sched func(tasks.
 	// trace): book, credits, segment titles, change record (operations), the
 	// fetched-metadata cache (metadata_cache) and the field-state snapshot
 	// (field_states).
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "series"),
-		tasks.Res("books", "book_files"), tasks.Res("books", "operations"), tasks.Res("books", "metadata_cache"), tasks.Res("books", "field_states"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResSeries)),
+		tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResFieldStates)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.resolve-production-authors")

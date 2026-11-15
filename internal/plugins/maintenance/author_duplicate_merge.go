@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
 // last-edited: 2026-11-14
 
@@ -16,6 +16,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -197,7 +198,7 @@ func (p *Plugin) authorDuplicateMergeNative(deps t6g1Deps, sched func(tasks.Kind
 	c := t6g1Common(authorDuplicateMergeKind, sched)
 	c.Title = "Merge an operator-confirmed list of duplicate authors"
 	c.Help = authorDuplicateMergeHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "operations"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-duplicate-merge")

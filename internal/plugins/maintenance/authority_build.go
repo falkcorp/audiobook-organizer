@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/authority_build.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7b057b54-4781-486b-b075-fe627504dcf1
 // last-edited: 2026-11-14
 
@@ -24,6 +24,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -279,7 +280,7 @@ func (p *Plugin) authorityBuildNative(deps t6g1Deps, sched func(tasks.Kind) *tas
 	c := t6g1Common(authorityBuildKind, sched)
 	c.Title = "Authority lists: build"
 	c.Help = authorityBuildHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "authority_lists"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResAuthorityLists)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books." + authorityBuildOpID)

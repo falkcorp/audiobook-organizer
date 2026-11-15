@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-11-14
 
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -172,8 +173,8 @@ func (p *Plugin) autoMatchTranscribedNative(deps t6g1Deps, sched func(tasks.Kind
 	// (metadata_cache) and the per-field state snapshot (field_states) and the
 	// duplicate flag
 	// of a shared source hash (books, checkMetadataSourceHashDuplicates).
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "book_files"),
-		tasks.Res("books", "operations"), tasks.Res("books", "metadata_cache"), tasks.Res("books", "field_states"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResBookFiles)),
+		tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResFieldStates)))
 	// The run checkpoints the last book visited and restores it (rc.Restore).
 	c.Resume = tasks.ResumeContinue
 	c.Priority = tasks.PriorityLow

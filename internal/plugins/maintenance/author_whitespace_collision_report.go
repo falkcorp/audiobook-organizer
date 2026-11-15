@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_whitespace_collision_report.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a5d0c32-4fbc-47b6-ab12-2cfbbff82249
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -296,7 +297,7 @@ func (p *Plugin) authorWhitespaceCollisionNative(deps t6g1Deps, sched func(tasks
 	c := t6g1Common(authorWhitespaceCollisionKind, sched)
 	c.Title = "Author whitespace-collision report"
 	c.Help = authorWhitespaceCollisionHelp
-	c.Effects = tasks.ReadOnly(tasks.Res("books", "authors"))
+	c.Effects = tasks.ReadOnly(tasks.Res("books", string(ops.ResAuthors)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-whitespace-collision-report")

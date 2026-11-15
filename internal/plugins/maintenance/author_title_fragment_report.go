@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_title_fragment_report.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 13220b5a-7a38-4977-b0f3-257781a67fe3
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -262,7 +263,7 @@ func (p *Plugin) authorTitleFragmentNative(deps t6g1Deps, sched func(tasks.Kind)
 	c := t6g1Common(authorTitleFragmentKind, sched)
 	c.Title = "Author title-fragment scan"
 	c.Help = authorTitleFragmentHelp
-	c.Effects = tasks.ReadOnly(tasks.Res("books", "authors"))
+	c.Effects = tasks.ReadOnly(tasks.Res("books", string(ops.ResAuthors)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-title-fragment-scan")

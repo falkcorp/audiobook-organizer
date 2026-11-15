@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4494039c-1a79-4b3b-9872-ecea118f76ad
 // last-edited: 2026-11-14
 
@@ -484,17 +484,21 @@ func t6g1WriterOf[W any](deps t6g1Deps, rc *tasks.RC, kind tasks.Kind, pick func
 	return w, nil
 }
 
-// manualOnlyWires are the owner-manual readers a Live run needs: all four for
-// applygate.BookManualOnly (path-link, strip-merge), Files alone for
-// applygate.BulkManualOnlyGuard (auto-match). A missing reader fails closed on
-// every book, so a run would report success having applied nothing.
-func (d t6g1Deps) manualOnlyWires(all bool) []t6g1Wire {
-	w := []t6g1Wire{{"ManualOnly.Files", d.ManualOnly.Files != nil}}
-	if all {
-		w = append(w,
-			t6g1Wire{"ManualOnly.Series", d.ManualOnly.Series != nil},
-			t6g1Wire{"ManualOnly.Authors", d.ManualOnly.Authors != nil},
-			t6g1Wire{"ManualOnly.Tags", d.ManualOnly.Tags != nil})
+// manualOnlyWires are the owner-manual readers a Live run needs: Files,
+// Authors and Tags as HEAD wires them for both guards, plus Series when series
+// is set (applygate.BookManualOnly: path-link, strip-merge). Auto-match fills
+// the series leg from its own run index, so it passes false. A missing reader
+// is skipped silently by applygate.BulkManualOnlyGuard and fails closed on
+// every book in BookManualOnly; either way a run would report success having
+// applied nothing, so the shell refuses first.
+func (d t6g1Deps) manualOnlyWires(series bool) []t6g1Wire {
+	w := []t6g1Wire{
+		{"ManualOnly.Files", d.ManualOnly.Files != nil},
+		{"ManualOnly.Authors", d.ManualOnly.Authors != nil},
+		{"ManualOnly.Tags", d.ManualOnly.Tags != nil},
+	}
+	if series {
+		w = append(w, t6g1Wire{"ManualOnly.Series", d.ManualOnly.Series != nil})
 	}
 	return w
 }
