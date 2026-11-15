@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/keys.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 47a4a283-dcad-4da8-b454-90f24d1d624d
 // last-edited: 2026-11-15
 
@@ -30,7 +30,11 @@
 // relay writes it behind a GetForUpdate of the key, and an operator's retry or
 // discard reads it through LoadDead, so two operators on one letter, or an
 // operator and the relay, can never both commit, whether or not the pair still
-// has a cursor row.
+// has a cursor row. A writer of a dead letter also reads its pair's counter in
+// deadn/ (below), so an operator's retry or discard can now conflict with the
+// relay's dead-lettering of ANOTHER letter of the same pair, not only with a
+// writer of the same letter: the loser re-reads and tries again, and gives up
+// with the operator-visible conflict only after repeated losses.
 //
 // deadn/ is the dead letters' count, kept so that reading it costs one row per
 // (consumer, topic, partition) instead of a scan of every letter. It is never
@@ -45,7 +49,11 @@
 // UnreadShard, a key no writer maintains. A zero count has no row: an absent
 // counter is zero. RepairDeadCounts builds the counters from the letters (the
 // first start after an upgrade, and the periodic audit), and says what it
-// changed.
+// changed. deadn/ is derived: every number in it is a count of dead/ rows, so it
+// is the one family a repair rewrites whatever the version of the row it
+// replaces (a counter of another version is rebuilt from the letters, which hold
+// everything it says); nothing lives only there, which is why the rule below,
+// that a row of another version is never defaulted, does not apply to it.
 //
 // The rows hold every value as a codec.JSON record of version 1. A row of
 // another version is never skipped, defaulted or marked done: decoding it

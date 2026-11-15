@@ -1,5 +1,5 @@
 // file: core/outbox/export_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: c3f2f7d8-6a5e-4c61-b8a8-0b2d0b9c4e11
 // last-edited: 2026-11-15
 
@@ -51,6 +51,9 @@ func (o *Outbox) SetSweepEvery(d time.Duration) { o.sweepEvery = d }
 // before the relay starts. A test that wants a report to come from the event
 // that caused it, not from the next periodic refresh, sets it past the test.
 func (o *Outbox) SetStatusEvery(d time.Duration) { o.statusEvery = d }
+
+// KeysScanned is how many keys the dead-letter counting reads have visited.
+func (o *Outbox) KeysScanned() int64 { return o.store.KeysScanned() }
 
 // BackoffDelay exposes backoffDelay.
 func BackoffDelay(attempt int, lo, hi time.Duration, u float64) time.Duration {

@@ -68,10 +68,15 @@ type Store struct {
 	// computed and before the batch that applies them is opened. Nil in production.
 	beforeRepairCommit func()
 	// scanned counts the keys the dead-letter counting reads have visited
-	// (DeadTotals, DeadCounts, RepairDeadCounts): what a test reads to show a
-	// recount costs the same however many letters the store holds.
+	// (DeadTotals, DeadCounts, RepairDeadCounts); see KeysScanned.
 	scanned atomic.Int64
 }
+
+// KeysScanned is how many keys the dead-letter counting reads (DeadTotals,
+// DeadCounts, RepairDeadCounts) have visited since the store was made. A test
+// reads it to show that dead-lettering costs the same per letter however many
+// letters the store holds.
+func (s *Store) KeysScanned() int64 { return s.scanned.Load() }
 
 // New returns the store over ks, the c/outbox/ keyspace.
 func New(ks storage.Keyspace) *Store { return &Store{ks: ks} }

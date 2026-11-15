@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-events.md -->
-<!-- version: 1.12.3 -->
+<!-- version: 1.12.4 -->
 <!-- guid: 6dbdef8e-e3f3-4088-bdb9-ba37a706165d -->
-<!-- last-edited: 2026-11-12 -->
+<!-- last-edited: 2026-11-15 -->
 
 # 05 — Events (`core/events`) and Outbox (`core/outbox`)
 
@@ -455,6 +455,7 @@ Storage (`c/outbox/` core keyspace):
 | `c/outbox/cur/<consumer>/<topic>/<pp>` | highest acked seq |
 | `c/outbox/try/<consumer>/<topic>/<pp>` | `{seq, attempt, next_at, last_error_token}` for the head message |
 | `c/outbox/dead/<consumer>/<topic>/<seq20>` | dead-lettered message + error token + attempts |
+| `c/outbox/deadn/<consumer>/<topic>/<pp>` | how many dead letters that pair holds (`Serialized`); changed in the same batch as every letter written or removed, so a recount reads one row per partition instead of scanning `dead/`; a zero count has no row, a letter that does not decode is counted under the shard `unread`, and the counters are rebuilt from `dead/` at the first start and audited on every status refresh |
 
 | Property | Contract |
 |---|---|

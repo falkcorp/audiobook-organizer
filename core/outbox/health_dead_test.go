@@ -1,5 +1,5 @@
 // file: core/outbox/health_dead_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b584e6da-2910-4648-aa3d-af25cc239b55
 // last-edited: 2026-11-15
 
@@ -8,6 +8,7 @@ package outbox_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -305,4 +306,73 @@ func deadOf(st outbox.Status, consumer string) int {
 		}
 	}
 	return -1
+}
+
+// Dead-lettering through the relay reads a number of keys linear in the number
+// of messages, whatever the store already holds. The relay builds the counters
+// from the letters that predate them once, when it starts, and then every dead
+// letter's recount reads one row per partition that holds letters. A recount
+// that scanned the letters (or an audit run per message, or a build that was not
+// latched) reads every stored letter each time: here that is about thirty
+// thousand keys for the messages below, against about a thousand.
+func TestOutbox_DeadLetteringThroughTheRelayReadsKeysLinearly(t *testing.T) {
+	const legacy, messages = 50, 200
+	r := newRig(t, rigOpts{
+		noRelay:     true,
+		cfg:         func(c *outbox.Config) { c.MaxAttempts = 1 },
+		statusEvery: time.Hour,
+		register: func(testing.TB, *rig) []registration {
+			return []registration{{owner: "core", hs: []outbox.Handler{
+				outbox.Consume(notice(), consumerN, func(context.Context, outbox.Message[Dispatch]) error {
+					return errors.New("the Batmobile is in the shop")
+				}),
+			}}}
+		},
+	})
+	for i := range legacy {
+		plantLetter(t, r, uint64(1000+i), i%4)
+	}
+	if n := r.count(outboxstore.DeadCountRoot()); n != 0 {
+		t.Fatalf("%d counters before the relay started, want none", n)
+	}
+	r.startRelay()
+	eventually(t, "the relay to build the counters from the stored letters", func() bool { return r.count(outboxstore.DeadCountRoot()) == 4 })
+	eventually(t, "the relay's first status refresh", func() bool { return r.healthOf().Status == health.StatusDegraded })
+	before := r.ob.KeysScanned()
+
+	for i := range messages {
+		r.stage(fmt.Sprintf("wayne-manor-%d", i), Dispatch{Villain: "Joker"})
+	}
+	// The counters are read straight from the keyspace here, not through Status,
+	// so the polling does not add to the keys the outbox itself read.
+	eventually(t, "every message to be dead-lettered and counted", func() bool {
+		return r.count(outboxstore.DeadRoot()) == legacy+messages && counterSum(t, r) == legacy+messages
+	})
+	// The recount after the last commit reads a few counter rows; the budget below
+	// is far wider than that.
+	read := r.ob.KeysScanned() - before
+	linear := int64(messages*8 + 2*(legacy+messages))
+	t.Logf("%d messages dead-lettered over %d stored letters: %d keys read (linear budget %d, a scan per message would read about %d)",
+		messages, legacy, read, linear, messages*(legacy+messages/2))
+	if read > linear {
+		t.Fatalf("dead-lettering %d messages read %d keys, want at most %d: something reads the stored letters per message", messages, read, linear)
+	}
+	st, err := r.ob.Status(context.Background())
+	if err != nil || deadOf(st, consumerN) != legacy+messages {
+		t.Fatalf("Status counts %d dead letters (%v), want %d", deadOf(st, consumerN), err, legacy+messages)
+	}
+}
+
+// counterSum adds up the deadn/ counters by reading them directly.
+func counterSum(t testing.TB, r *rig) int {
+	t.Helper()
+	root := outboxstore.DeadCountRoot()
+	sum := 0
+	for kv, err := range r.outKS.Scan(context.Background(), storage.ScanOptions{Start: root, End: prefixEnd(root)}) {
+		must(t, err)
+		c, err := codec.JSON[outboxstore.DeadCount](outboxstore.RecordVersion).Decode(kv.Value)
+		must(t, err)
+		sum += c.N
+	}
+	return sum
 }

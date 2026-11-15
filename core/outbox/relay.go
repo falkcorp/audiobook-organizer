@@ -1,5 +1,5 @@
 // file: core/outbox/relay.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: 77b6d1de-9cf2-4c52-8f0b-7e9a5c2b6d11
 // last-edited: 2026-11-15
 
@@ -109,6 +109,14 @@ func (o *Outbox) relayBody(rc *tasks.RC, _ struct{}) (struct{}, error) {
 		}
 		o.health.setDisabled(false)
 		rc.Progress().Tick()
+		// The dead-letter counters are built here, before any delivery of the
+		// loop, on the run's own context: building them scans every stored letter
+		// once, which a settle (5 seconds, once per message) must never be the
+		// place to do. A failure is logged and retried at the top of the next
+		// loop; until it succeeds a dead letter is not written (requireDeadCounts).
+		if err := o.ensureDeadCounts(ctx); err != nil {
+			r.fault("building the dead-letter counters", err)
+		}
 		r.syncEpoch()
 		before := r.moved.Load()
 		r.ensureCursors(ctx)
@@ -549,9 +557,25 @@ func (o *Outbox) seedDeadCounts(ctx context.Context) error {
 	return nil
 }
 
-// ensureDeadCounts is seedDeadCounts for a caller that does not hold deadMu:
-// every writer of a dead letter calls it before its batch, so the counter it
-// bumps is never an unbuilt one.
+// errDeadCountsNotBuilt: a dead letter was about to be written before the
+// counters were built in this process.
+var errDeadCountsNotBuilt = errors.New("outbox: the dead-letter counters are not built yet")
+
+// requireDeadCounts is the relay's guard before it writes a dead letter: the
+// relay builds the counters at the top of every loop (ensureDeadCounts), so a
+// settle that finds them unbuilt means that build failed, and the letter waits
+// for the next loop (the message is delivered again) instead of the settle
+// scanning every stored letter inside its own deadline.
+func (o *Outbox) requireDeadCounts() error {
+	if o.deadSeeded.Load() {
+		return nil
+	}
+	return errDeadCountsNotBuilt
+}
+
+// ensureDeadCounts is seedDeadCounts for a caller that does not hold deadMu: the
+// relay's loop and the operator paths (Status, RetryDead, DiscardDead), which
+// run on a request's context and are not per message.
 func (o *Outbox) ensureDeadCounts(ctx context.Context) error {
 	if o.deadSeeded.Load() {
 		return nil
