@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package diagnostics
 
@@ -18,6 +18,7 @@ import (
 	"iter"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/falkcorp/mediacore/rbac"
@@ -422,6 +423,13 @@ func (st *build) walk(key string, v any, depth int) any {
 // carries the redacted key text. Keys that collapse to the same text are kept
 // apart with a "#2", "#3" suffix, in the order of the original keys, so no
 // member is lost and the result does not depend on map order.
+//
+// The suffix search is linear in the number of keys: next remembers, per
+// redacted text, the first suffix not yet tried. out only ever grows, so a
+// suffix below that counter was taken when it was passed and stays taken, and
+// resuming from the counter picks exactly the suffix a search from "#2" would
+// (the probe from 2 for every key was quadratic: 16,000 keys that all redact to
+// "<path>" took 12.8 s).
 func (st *build) walkObject(x map[string]any, depth int) map[string]any {
 	keys := make([]string, 0, len(x))
 	for k := range x {
@@ -429,14 +437,20 @@ func (st *build) walkObject(x map[string]any, depth int) map[string]any {
 	}
 	slices.Sort(keys)
 	out := make(map[string]any, len(x))
+	next := map[string]int{}
 	for _, k := range keys {
 		base := st.redactKey(k)
 		nk := base
-		for n := 2; ; n++ {
-			if _, taken := out[nk]; !taken {
-				break
+		if _, taken := out[nk]; taken {
+			n := max(next[base], 2)
+			for {
+				nk = base + "#" + strconv.Itoa(n)
+				n++
+				if _, taken := out[nk]; !taken {
+					break
+				}
 			}
-			nk = fmt.Sprintf("%s#%d", base, n)
+			next[base] = n
 		}
 		out[nk] = st.walkMember(k, x[k], depth+1)
 	}
