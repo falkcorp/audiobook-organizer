@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_storediff_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e2f6a1c-47b3-4d09-9c5e-b13a7d60f4e2
 // last-edited: 2026-11-15
 
@@ -88,34 +88,69 @@ var t6g5KeyFamilyResource = map[string]ops.Resource{
 	"op_result:":                ops.ResOperations,
 	"merge:sibling-journal:":    ops.ResOperations,
 	"merge:combine-journal:":    ops.ResOperations,
-	"metadata_state:":           ops.ResFieldStates,
-	"emb:":                      ops.ResEmbeddings,
-	"dedup":                     ops.ResEmbeddings,
-	"metadata_cache:":           ops.ResMetadataCache,
-	"pcache:":                   ops.ResMetadataCache,
-	"metadata_fetch_cache:":     ops.ResMetadataCache,
-	"fpidx":                     ops.ResFingerprintIndex,
-	"fpwin":                     ops.ResFingerprintIndex,
-	"ext_id:":                   ops.ResExternalIDs,
+	// The undo journal's clock ceiling moves only when the journal writes (opchange rows), so it
+	// belongs to the journal. op_result: (a per-book result keyed on an op, not an undo row) is
+	// deliberately NOT mapped: no kind of this group writes it, so one that did fails closed.
+	"system:journal_clock":  ops.ResOperations,
+	"act:":                  ops.ResActivity,
+	"setting:":              ops.ResSettings,
+	"metadata_state:":       ops.ResFieldStates,
+	"emb:":                  ops.ResEmbeddings,
+	"dedup":                 ops.ResEmbeddings,
+	"metadata_cache:":       ops.ResMetadataCache,
+	"pcache:":               ops.ResMetadataCache,
+	"metadata_fetch_cache:": ops.ResMetadataCache,
+	"fpidx":                 ops.ResFingerprintIndex,
+	"fpwin":                 ops.ResFingerprintIndex,
+	"ext_id:":               ops.ResExternalIDs,
 }
 
-// t6g5FrameworkFamilies are families no kind of this group writes on purpose: the
-// host's own operation records and process-wide counters and caches. A key
-// changing there is the harness or the store's bookkeeping, not the kind's write.
-var t6g5FrameworkFamilies = []string{
-	"counter:", "stats:", "met:", "system:", "act:", "syslog:", "setting:",
-	"quick_query_cache:", "op:", "opv2:", "opv3:", "operation:", "operationlog:", "opsummary:",
+// t6g5ExcludedKeys are the key prefixes a run may change without any kind
+// having written them on purpose, each with the reason. The list is narrow by
+// design: a family nobody named here and nobody mapped above fails closed, so
+// activity (act:), settings (setting:) and the rest of system: are judged like
+// every other key. The only dynamic exclusion is the run's own activity index
+// (act:op:<runID>), which t6g5DiffStore takes as its skip argument.
+var t6g5ExcludedKeys = []struct{ prefix, reason string }{
+	{"counter:", "id counters the store bumps whenever any row is created"},
+	{"stats:", "cached library and playback stats the store invalidates on any book write"},
+	{"met:", "process metrics the store samples"},
+	{"syslog:", "system-log entries the host's logger appends during any run"},
+	{"quick_query_cache:", "result cache the store invalidates on book writes"},
+	{"op:", "operation records the task framework keeps for every run"},
+	{"opv2:", "operations v2 rows the task framework keeps for every run"},
+	{"opv3:", "operations v3 rows the task framework keeps for every run"},
+	{"operation:", "v1 operation rows the task framework keeps for every run"},
+	{"operationlog:", "v1 operation logs the task framework keeps for every run"},
+	{"opsummary:", "v1 operation summaries the task framework keeps for every run"},
+	{"system:backfill:", "index backfill markers the store maintains itself, never a kind"},
+	{"system:census:", "the db census the store maintains itself, never a kind"},
+	{"system:flag:", "one-time index-built flags the store maintains itself, never a kind"},
+	{"system:migration:", "migration stamps the store maintains itself, never a kind"},
+	{"system:activity_filter_index_", "activity filter-index cursors the store maintains itself, never a kind"},
+	{"setting:system:flag:", "SetSetting form of the one-time index-built flags (store-maintained)"},
+	{"setting:book_isbn_index_v1_done", "one-time ISBN index-built flag the store maintains itself"},
+	{"pref:_system:itunes_clone_record:", "the clone kind's own undo record, written through SetUserPreferenceForUser: judged by the per-method check against that method's row, and kept out of the resource set so it cannot stand in for the user state a run is expected to write"},
 }
 
-// t6g5Snapshot is every key of the store with its value.
-func t6g5Snapshot(t *testing.T, s *database.PebbleStore) map[string]string {
-	t.Helper()
+// t6g5SnapshotOf is every key of the store with its value.
+func t6g5SnapshotOf(s *database.PebbleStore) (map[string]string, error) {
 	kvs, err := s.ScanPrefix("")
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]string, len(kvs))
 	for _, kv := range kvs {
 		out[kv.Key] = string(kv.Value)
 	}
+	return out, nil
+}
+
+// t6g5Snapshot is t6g5SnapshotOf failing the test on a scan error.
+func t6g5Snapshot(t *testing.T, s *database.PebbleStore) map[string]string {
+	t.Helper()
+	out, err := t6g5SnapshotOf(s)
+	require.NoError(t, err)
 	return out
 }
 
@@ -142,24 +177,33 @@ func t6g5FamilyOf(key string) string {
 	return best
 }
 
-// t6g5ResourceOf is the resource owning a key family, by the longest matching
-// prefix of t6g5KeyFamilyResource, and whether the family is one a kind may write.
-func t6g5ResourceOf(family string) (ops.Resource, bool) {
+// t6g5ResourceOf is the resource owning a key, by the longest matching prefix
+// of t6g5KeyFamilyResource (matched against the key, so a single bare key such
+// as system:journal_clock can be mapped inside a family that is otherwise
+// unmapped), and whether any entry covers it.
+func t6g5ResourceOf(key string) (ops.Resource, bool) {
 	best, res := "", ops.Resource("")
 	for p, r := range t6g5KeyFamilyResource {
-		if strings.HasPrefix(family, p) && len(p) > len(best) {
+		if strings.HasPrefix(key, p) && len(p) > len(best) {
 			best, res = p, r
 		}
 	}
 	return res, best != ""
 }
 
-func t6g5DiffStore(before, after map[string]string) t6g5StoreDiff {
+// t6g5DiffStore is the resources before -> after changed. skip lists extra key
+// prefixes to ignore for this run only (the run's own act:op:<runID> index).
+func t6g5DiffStore(before, after map[string]string, skip ...string) t6g5StoreDiff {
 	d := t6g5StoreDiff{sample: map[string]string{}}
 	seen := map[string]bool{}
 	note := func(key string) {
-		for _, fw := range t6g5FrameworkFamilies {
-			if strings.HasPrefix(key, fw) {
+		for _, ex := range t6g5ExcludedKeys {
+			if strings.HasPrefix(key, ex.prefix) {
+				return
+			}
+		}
+		for _, sk := range skip {
+			if strings.HasPrefix(key, sk) {
 				return
 			}
 		}
@@ -169,7 +213,7 @@ func t6g5DiffStore(before, after map[string]string) t6g5StoreDiff {
 			d.problems = append(d.problems, fmt.Sprintf("%q is in no registered key family", key))
 			return
 		}
-		res, ok := t6g5ResourceOf(fam)
+		res, ok := t6g5ResourceOf(key)
 		if !ok {
 			d.problems = append(d.problems, fmt.Sprintf("%q (family %q) has no resource in t6g5KeyFamilyResource", key, fam))
 			return
@@ -196,19 +240,23 @@ func t6g5DiffStore(before, after map[string]string) t6g5StoreDiff {
 }
 
 // t6g5RunNativeDiff is t6g5RunNativeOn over a PebbleStore, with the store's key
-// diff taken around the run.
-func t6g5RunNativeDiff(t *testing.T, s *database.PebbleStore, p *Plugin, mode tasks.Mode, headID string, scanKey tasks.Key, params string) (t6g5NativeRun, t6g5StoreDiff) {
+// diff taken around the run AND around every outermost writer call (the spy
+// snapshots s before and after each one, see t6g5Spy.note).
+func t6g5RunNativeDiff(t *testing.T, s *database.PebbleStore, p *Plugin, mode tasks.Mode, headID string, scanKey tasks.Key, params string, opts ...t6g5SpyOption) (t6g5NativeRun, t6g5StoreDiff) {
 	t.Helper()
 	before := t6g5Snapshot(t, s)
-	r := t6g5RunNativeOn(t, p, mode, headID, scanKey, params)
-	return r, t6g5DiffStore(before, t6g5Snapshot(t, s))
+	r := t6g5RunNativeWith(t, s, p, mode, headID, scanKey, params, opts...)
+	return r, t6g5DiffStore(before, t6g5Snapshot(t, s), "act:op:"+r.runID)
 }
 
 // requireStoreWritesWithin fails unless every resource the run wrote to the
-// store is both declared by the kind and stamped on at least one method the spy
-// saw, and every resource in mustWrite was written. Two sources are compared
-// to the claims, the store's keys and the spy's method calls, so the claims
-// cannot be edited to agree with each other.
+// store is declared by the kind, is stamped on at least one method the spy saw,
+// and (per method) is within the row of the method whose call changed it; and
+// every resource in mustWrite was written. Three sources are compared to the
+// claims, the store's keys, the spy's method calls and the keys each call
+// changed, so the claims cannot be edited to agree with each other, and a
+// method whose row lost a resource is caught by its own call even when a
+// sibling method's row still stamps that resource.
 func (r t6g5NativeRun) requireStoreWritesWithin(t *testing.T, d t6g5StoreDiff, mustWrite ...string) {
 	t.Helper()
 	require.Empty(t, d.problems, "every key the run changed belongs to a registered family with a resource mapping")
@@ -228,6 +276,45 @@ func (r t6g5NativeRun) requireStoreWritesWithin(t *testing.T, d t6g5StoreDiff, m
 	}
 	for _, res := range mustWrite {
 		assert.Contains(t, d.resources, res, "the run was expected to write %q to the store", res)
+	}
+	r.requireEachCallWithinItsRow(t)
+}
+
+// requireEachCallWithinItsRow checks the per-call attribution: the keys each
+// outermost writer call changed map to resources inside THAT method's row of
+// t6g5WriterResources. Nested calls (a delete closure run inside
+// CarryStateThenHardDelete) belong to the outer call's window, so its row must
+// cover them.
+func (r t6g5NativeRun) requireEachCallWithinItsRow(t *testing.T) {
+	t.Helper()
+	r.spy.mu.Lock()
+	defer r.spy.mu.Unlock()
+	assert.Empty(t, r.spy.attrProblems, "every key a writer call changed belongs to a registered family with a resource mapping")
+	if r.spy.attrConcurrent {
+		t.Logf("%s called the writer from two goroutines at once: the per-call attribution is off for this run, the run-wide checks still apply", r.def.Kind())
+	}
+	for method, seen := range r.spy.observed {
+		row := map[string]bool{}
+		for _, res := range t6g5WriterResources[method] {
+			row[string(res)] = true
+		}
+		for res, key := range seen {
+			assert.True(t, row[res], "%s changed %q (key %q), which is not in its row of t6g5WriterResources %v", method, res, key, t6g5WriterResources[method])
+		}
+	}
+}
+
+// requireMethodWrote pins that a call of method changed the store in each of
+// the named resources: it proves a fixture exercises the write a row claims,
+// so the per-call check above is not vacuous for that row.
+func (r t6g5NativeRun) requireMethodWrote(t *testing.T, method string, resources ...string) {
+	t.Helper()
+	r.spy.mu.Lock()
+	defer r.spy.mu.Unlock()
+	require.False(t, r.spy.attrConcurrent, "the per-call attribution was off for this run (concurrent writer calls), so %s's writes were not observed", method)
+	for _, res := range resources {
+		_, ok := r.spy.observed[method][res]
+		assert.True(t, ok, "a call of %s was expected to change a %q key; it changed %v", method, res, r.spy.observed[method])
 	}
 }
 
@@ -267,23 +354,49 @@ func TestT6G5StoreDiff_EveryFamilyMappingIsAnOpsConstantValue(t *testing.T) {
 		assert.True(t, values[string(res)], "%q maps to %q, which is no pkg/ops constant", prefix, res)
 		found := false
 		for _, f := range database.KeyFamilies() {
-			if strings.HasPrefix(f.Prefix, prefix) {
+			if strings.HasPrefix(f.Prefix, prefix) || strings.HasPrefix(prefix, f.Prefix) {
 				found = true
 				break
 			}
 		}
-		assert.True(t, found, "%q prefixes no registered key family", prefix)
+		assert.True(t, found, "%q is inside or around no registered key family", prefix)
 	}
-	for _, fw := range t6g5FrameworkFamilies {
+	for _, ex := range t6g5ExcludedKeys {
+		assert.NotEmpty(t, ex.reason, "excluded prefix %q names its reason", ex.prefix)
 		found := false
 		for _, f := range database.KeyFamilies() {
-			if strings.HasPrefix(f.Prefix, fw) {
+			if strings.HasPrefix(f.Prefix, ex.prefix) || strings.HasPrefix(ex.prefix, f.Prefix) {
 				found = true
 				break
 			}
 		}
-		assert.True(t, found, "framework family %q prefixes no registered key family", fw)
+		assert.True(t, found, "excluded prefix %q is inside or around no registered key family", ex.prefix)
 	}
+}
+
+// The rulings the table depends on, pinned by key: a record keyed on a book
+// (path_history) is a books write, the undo journals (opchange, the merge
+// sibling-move journal and its clock) are operations, activity and settings
+// are their own resources, and a key nobody mapped is a problem, never a pass.
+func TestT6G5StoreDiff_RulingsAreMapped(t *testing.T) {
+	cases := map[string]ops.Resource{
+		"path_history:01BATMAN00000000000000PH01:1": ops.ResBooks,
+		"opchange:01BATMAN00000000000000OP01:1":     ops.ResOperations,
+		"merge:sibling-journal:01BATMAN0000000001":  ops.ResOperations,
+		"system:journal_clock":                      ops.ResOperations,
+		"act:info:01BATMAN00000000000000AC01":       ops.ResActivity,
+		"setting:repairs_last_plan_op:fixer":        ops.ResSettings,
+	}
+	for key, want := range cases {
+		d := t6g5DiffStore(nil, map[string]string{key: "v"})
+		assert.Empty(t, d.problems, key)
+		assert.Equal(t, []string{string(want)}, d.resources, "%s is a %s write", key, want)
+	}
+	d := t6g5DiffStore(nil, map[string]string{"op_result:01BATMAN00000000000000OP01:b": "v", "system:unheard:of": "v"})
+	assert.Len(t, d.problems, 2, "op_result: is off-vocabulary for this group and an unmapped system: key fails closed")
+	skipped := t6g5DiffStore(nil, map[string]string{"act:op:RUN1:x": "v", "act:op:RUN2:x": "v"}, "act:op:RUN1")
+	assert.Equal(t, []string{string(ops.ResActivity)}, skipped.resources, "only the run's own act:op: index is skipped; another run's rows are activity writes")
+	assert.Equal(t, 1, skipped.changed)
 }
 
 // --- every writing kind's preview writes nothing ---
@@ -328,7 +441,7 @@ func t6g5PreviewCases() []t6g5PreviewCase {
 		{"maintenance.merge-same-path-dupes", "", func(t *testing.T) (*database.PebbleStore, *Plugin, string) {
 			s := newRepairPebble(t)
 			dir := t.TempDir()
-			path := "/lib/Author/Book.m4b"
+			path := filepath.Join(dir, "Bruce Wayne", "Hush.m4b")
 			for _, id := range []string{"01BATMAN00000000000000MG03", "01BATMAN00000000000000MG04"} {
 				_, err := s.CreateBook(&database.Book{ID: id, Title: "Hush", FilePath: path})
 				require.NoError(t, err)

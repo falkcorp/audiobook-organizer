@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_resources_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c9b940e-34ff-4da6-88ba-5dbfff0b5b2a
 // last-edited: 2026-11-15
 
@@ -215,6 +215,32 @@ var t6g5SourceFiles = []string{
 	"move_book_file_rows.go",
 	"narrator_purge_empty.go",
 	"narrator_split_joined.go",
+}
+
+// TestT6G5Resources_SourceFilesListIsComplete: the hand list above is checked
+// against the files themselves. A file of this package that is not a test, is
+// not one of the group's own kinds_t6_g5*.go files, declares an Effects with
+// tasks.Res and names this row's wiring (t6g5...) is one of this row's kind
+// files. A kind file added without joining t6g5SourceFiles would escape the
+// syntax-tree check below, and a listed file that stopped declaring Effects
+// would keep a stale entry; this test fails on either. A sibling group's file
+// (typed helpers, its own wiring names) matches neither condition.
+func TestT6G5Resources_SourceFilesListIsComplete(t *testing.T) {
+	all, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	var derived []string
+	for _, name := range all {
+		if strings.HasSuffix(name, "_test.go") || strings.HasPrefix(name, "kinds_t6_g5") {
+			continue
+		}
+		b, err := os.ReadFile(name)
+		require.NoError(t, err)
+		if strings.Contains(string(b), "tasks.Res(") && strings.Contains(string(b), "t6g5") {
+			derived = append(derived, name)
+		}
+	}
+	assert.ElementsMatch(t, t6g5SourceFiles, derived,
+		"t6g5SourceFiles must list exactly the non-test files that declare Effects with tasks.Res and name t6g5 wiring")
 }
 
 // TestT6G5Resources_EveryNameIsAnOpsConstant: every resource name this group

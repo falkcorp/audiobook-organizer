@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-15
 
@@ -18,6 +18,8 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/assert"
@@ -59,14 +62,144 @@ type t6g5Spy struct {
 	unmapped []string
 	opIDs    []string
 	merged   [][]string
+
+	// Per-call attribution (set only by t6g5RunNativeWith over a PebbleStore):
+	// snap reads every key of the store; skip is extra key prefixes to ignore
+	// (the run's own act:op: index); stack holds the calls whose windows are
+	// open, innermost last; observed is, per method, the resources the keys
+	// changed during its own calls belong to (each with one sample key);
+	// attrConcurrent is set when writer calls from two goroutines overlapped,
+	// which disables the attribution for the rest of the run.
+	snap           func() (map[string]string, error)
+	skip           []string
+	stack          []*t6g5Frame
+	observed       map[string]map[string]string
+	attrProblems   []string
+	attrConcurrent bool
+	mergeThrough   func(opID string, bookIDs []string, primaryID string) (int, error)
 }
 
-func (s *t6g5Spy) note(name string) {
+// t6g5Frame is one writer call whose window is open: the store before it, the
+// goroutine that made it, and the keys that calls nested inside it already
+// claimed (they are attributed to the nested method, not to this one).
+type t6g5Frame struct {
+	name    string
+	gid     uint64
+	before  map[string]string
+	claimed map[string]bool
+}
+
+// t6g5GoID is the calling goroutine's id, parsed from the stack header.
+func t6g5GoID() uint64 {
+	var buf [64]byte
+	f := strings.Fields(string(buf[:runtime.Stack(buf[:], false)]))
+	id, _ := strconv.ParseUint(f[1], 10, 64)
+	return id
+}
+
+// t6g5ChangedKeys is every key whose value differs between before and after.
+func t6g5ChangedKeys(before, after map[string]string) []string {
+	var out []string
+	for k, v := range after {
+		if old, ok := before[k]; !ok || old != v {
+			out = append(out, k)
+		}
+	}
+	for k := range before {
+		if _, ok := after[k]; !ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// note records a call of name and returns the function to defer, which closes
+// the call's window: `defer s.note("X")()`. When the spy holds a store, every
+// call is bracketed by a snapshot before and after, and the keys that changed
+// are attributed to that method. Calls nest: the delete closure that
+// CarryStateThenHardDelete runs arrives as its own DeleteBook call inside the
+// outer window, and its keys are attributed to DeleteBook and removed from the
+// outer call's diff, matching the table (whose CarryStateThenHardDelete row
+// says "del arrives separately as DeleteBook"). Writer calls from two
+// goroutines at once cannot be told apart by snapshots, so the first overlap
+// turns the attribution off for the run (attrConcurrent), loudly for any test
+// that pins a method's writes with requireMethodWrote; the run-wide checks do
+// not depend on it.
+func (s *t6g5Spy) note(name string) func() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.calls = append(s.calls, name)
 	if _, ok := t6g5WriterResources[name]; !ok {
 		s.unmapped = append(s.unmapped, name)
+	}
+	off := s.snap == nil || s.attrConcurrent
+	s.mu.Unlock()
+	if off {
+		return func() {}
+	}
+	gid := t6g5GoID()
+	before, berr := s.snap()
+	f := &t6g5Frame{name: name, gid: gid, before: before, claimed: map[string]bool{}}
+	s.mu.Lock()
+	if n := len(s.stack); s.attrConcurrent || (n > 0 && s.stack[n-1].gid != gid) {
+		s.attrConcurrent = true
+		s.stack, s.observed = nil, nil
+		s.mu.Unlock()
+		return func() {}
+	}
+	s.stack = append(s.stack, f)
+	s.mu.Unlock()
+	return func() {
+		after, aerr := s.snap()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.attrConcurrent {
+			return
+		}
+		n := len(s.stack)
+		if n == 0 || s.stack[n-1] != f {
+			s.attrConcurrent = true
+			s.stack, s.observed = nil, nil
+			return
+		}
+		s.stack = s.stack[:n-1]
+		if berr != nil || aerr != nil {
+			s.attrProblems = append(s.attrProblems, fmt.Sprintf("%s: snapshot failed: %v %v", name, berr, aerr))
+			return
+		}
+		own := after
+		if len(f.claimed) > 0 {
+			own = make(map[string]string, len(after))
+			for k, v := range after {
+				own[k] = v
+			}
+			for k := range f.claimed {
+				if v, ok := before[k]; ok {
+					own[k] = v
+				} else {
+					delete(own, k)
+				}
+			}
+		}
+		d := t6g5DiffStore(before, own, s.skip...)
+		s.attrProblems = append(s.attrProblems, d.problems...)
+		if s.observed == nil {
+			s.observed = map[string]map[string]string{}
+		}
+		if s.observed[name] == nil {
+			s.observed[name] = map[string]string{}
+		}
+		for _, res := range d.resources {
+			s.observed[name][res] = d.sample[res]
+		}
+		if len(s.stack) > 0 {
+			parent := s.stack[len(s.stack)-1]
+			for k := range f.claimed {
+				parent.claimed[k] = true
+			}
+			for _, k := range t6g5ChangedKeys(before, own) {
+				parent.claimed[k] = true
+			}
+		}
 	}
 }
 
@@ -101,159 +234,165 @@ func (s *t6g5Spy) recorded() []string {
 }
 
 func (s *t6g5Spy) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
-	s.note("ModifyBook")
+	defer s.note("ModifyBook")()
 	return s.inner.ModifyBook(id, fn)
 }
 
 func (s *t6g5Spy) SetLibraryStateOrganized(id, from string) (bool, bool, error) {
-	s.note("SetLibraryStateOrganized")
+	defer s.note("SetLibraryStateOrganized")()
 	return s.inner.SetLibraryStateOrganized(id, from)
 }
 
 func (s *t6g5Spy) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
-	s.note("ModifyBookFile")
+	defer s.note("ModifyBookFile")()
 	return s.inner.ModifyBookFile(bookID, fileID, fn)
 }
 
 func (s *t6g5Spy) DeleteBook(id string) error {
-	s.note("DeleteBook")
+	defer s.note("DeleteBook")()
 	return s.inner.DeleteBook(id)
 }
 
 func (s *t6g5Spy) DeleteBookFilesByIDs(refs []database.BookFileRef) ([]database.BookFile, error) {
-	s.note("DeleteBookFilesByIDs")
+	defer s.note("DeleteBookFilesByIDs")()
 	return s.inner.DeleteBookFilesByIDs(refs)
 }
 
 func (s *t6g5Spy) SetBookAuthors(bookID string, authors []database.BookAuthor) error {
-	s.note("SetBookAuthors")
+	defer s.note("SetBookAuthors")()
 	return s.inner.SetBookAuthors(bookID, authors)
 }
 
 func (s *t6g5Spy) SetUserPreferenceForUser(userID, key, value string) error {
-	s.note("SetUserPreferenceForUser")
+	defer s.note("SetUserPreferenceForUser")()
 	return s.inner.SetUserPreferenceForUser(userID, key, value)
 }
 
 func (s *t6g5Spy) CloneBookIntoLibrary(book *database.Book, files []database.BookFile, opID string) (string, error) {
-	s.note("CloneBookIntoLibrary")
+	defer s.note("CloneBookIntoLibrary")()
 	return s.inner.CloneBookIntoLibrary(book, files, opID)
 }
 
 func (s *t6g5Spy) Reflink(src, dst string) error {
-	s.note("Reflink")
+	defer s.note("Reflink")()
 	return s.inner.Reflink(src, dst)
 }
 
 func (s *t6g5Spy) SaveChaptersForBook(bookID string, chapters []database.Chapter) error {
-	s.note("SaveChaptersForBook")
+	defer s.note("SaveChaptersForBook")()
 	return s.inner.SaveChaptersForBook(bookID, chapters)
 }
 
 func (s *t6g5Spy) CarryStateBeforeHardDelete(keepID, doomedID string) error {
-	s.note("CarryStateBeforeHardDelete")
+	defer s.note("CarryStateBeforeHardDelete")()
 	return s.inner.CarryStateBeforeHardDelete(keepID, doomedID)
 }
 
 func (s *t6g5Spy) HardDeleteWithoutUserState(bookID string, del func() error) error {
-	s.note("HardDeleteWithoutUserState")
+	defer s.note("HardDeleteWithoutUserState")()
 	return s.inner.HardDeleteWithoutUserState(bookID, del)
 }
 
 func (s *t6g5Spy) CarryStateBetweenLiveBooks(toID, fromID string) error {
-	s.note("CarryStateBetweenLiveBooks")
+	defer s.note("CarryStateBetweenLiveBooks")()
 	return s.inner.CarryStateBetweenLiveBooks(toID, fromID)
 }
 
 func (s *t6g5Spy) DeleteMetadataCache(bookID string) error {
-	s.note("DeleteMetadataCache")
+	defer s.note("DeleteMetadataCache")()
 	return s.inner.DeleteMetadataCache(bookID)
 }
 
 func (s *t6g5Spy) UpdateBookFiles(ctx context.Context, files []*database.BookFile, afterRow func(i int, applied bool)) (int, error) {
-	s.note("UpdateBookFiles")
+	defer s.note("UpdateBookFiles")()
 	return s.inner.UpdateBookFiles(ctx, files, afterRow)
 }
 
-// MergeBooks records the merge and does not run it: the merge itself is the
-// server's, and what these tests prove is that the core asked for it under the
-// run's ID with the right books.
+// MergeBooks records the merge and, unless a test set mergeThrough, does not run
+// it: the merge itself is the server's, and what most tests prove is that the
+// core asked for it under the run's ID with the right books. A test that needs
+// the merge's own store writes (the store-diff test of merge-same-path-dupes)
+// sets mergeThrough to a real merge.Service over the same store.
 func (s *t6g5Spy) MergeBooks(opID string, bookIDs []string, primaryID string) (int, error) {
-	s.note("MergeBooks")
+	defer s.note("MergeBooks")()
 	s.mu.Lock()
 	s.opIDs = append(s.opIDs, opID)
 	s.merged = append(s.merged, append([]string{primaryID}, bookIDs...))
+	through := s.mergeThrough
 	s.mu.Unlock()
+	if through != nil {
+		return through(opID, bookIDs, primaryID)
+	}
 	return len(bookIDs) - 1, nil
 }
 
 func (s *t6g5Spy) MoveBookFilesToBookBulk(moves []database.BookFileMove, targetBookID string) error {
-	s.note("MoveBookFilesToBookBulk")
+	defer s.note("MoveBookFilesToBookBulk")()
 	return s.inner.MoveBookFilesToBookBulk(moves, targetBookID)
 }
 
 func (s *t6g5Spy) MoveBookFilesToBook(fileIDs []string, sourceBookID, targetBookID string) error {
-	s.note("MoveBookFilesToBook")
+	defer s.note("MoveBookFilesToBook")()
 	return s.inner.MoveBookFilesToBook(fileIDs, sourceBookID, targetBookID)
 }
 
 func (s *t6g5Spy) DeleteNarrator(id int) error {
-	s.note("DeleteNarrator")
+	defer s.note("DeleteNarrator")()
 	return s.inner.DeleteNarrator(id)
 }
 
 func (s *t6g5Spy) InvalidateAuthorsCache() {
-	s.note("InvalidateAuthorsCache")
+	defer s.note("InvalidateAuthorsCache")()
 	s.inner.InvalidateAuthorsCache()
 }
 
 func (s *t6g5Spy) RecordOperationChange(c *database.OperationChange) error {
-	s.note("RecordOperationChange")
+	defer s.note("RecordOperationChange")()
 	return s.inner.RecordOperationChange(c)
 }
 
 func (s *t6g5Spy) CreateNarrator(name string) (*database.Narrator, error) {
-	s.note("CreateNarrator")
+	defer s.note("CreateNarrator")()
 	return s.inner.CreateNarrator(name)
 }
 
 func (s *t6g5Spy) SetBookNarrators(bookID string, narrators []database.BookNarrator) error {
-	s.note("SetBookNarrators")
+	defer s.note("SetBookNarrators")()
 	return s.inner.SetBookNarrators(bookID, narrators)
 }
 
 func (s *t6g5Spy) ImportSmartPlaylists(lib *itunes.ITLLibrary, ownerUserID string) itunesservice.PlaylistImportResult {
-	s.note("ImportSmartPlaylists")
+	defer s.note("ImportSmartPlaylists")()
 	return s.inner.ImportSmartPlaylists(lib, ownerUserID)
 }
 
 func (s *t6g5Spy) UpdateBook(id string, book *database.Book) (*database.Book, error) {
-	s.note("UpdateBook")
+	defer s.note("UpdateBook")()
 	return s.inner.UpdateBook(id, book)
 }
 
 func (s *t6g5Spy) RecomputeBookAggregates(bookID string) error {
-	s.note("RecomputeBookAggregates")
+	defer s.note("RecomputeBookAggregates")()
 	return s.inner.RecomputeBookAggregates(bookID)
 }
 
 func (s *t6g5Spy) CreateBook(book *database.Book) (*database.Book, error) {
-	s.note("CreateBook")
+	defer s.note("CreateBook")()
 	return s.inner.CreateBook(book)
 }
 
 func (s *t6g5Spy) ReassignExternalID(source, externalID, newBookID string) error {
-	s.note("ReassignExternalID")
+	defer s.note("ReassignExternalID")()
 	return s.inner.ReassignExternalID(source, externalID, newBookID)
 }
 
 func (s *t6g5Spy) NewUserStateProbe() (t6g5RegroupStateProbe, error) {
-	s.note("NewUserStateProbe")
+	defer s.note("NewUserStateProbe")()
 	return s.inner.NewUserStateProbe()
 }
 
 func (s *t6g5Spy) CarryStateThenHardDelete(keepID, doomedID string, precheck, del func() error) error {
-	s.note("CarryStateThenHardDelete")
+	defer s.note("CarryStateThenHardDelete")()
 	return s.inner.CarryStateThenHardDelete(keepID, doomedID, precheck, del)
 }
 
@@ -281,8 +420,40 @@ func t6g5RunNative(t *testing.T, store database.Store, root, headID string, scan
 // carry whatever the kind's HEAD adapters call) and a chosen mode.
 func t6g5RunNativeOn(t *testing.T, p *Plugin, mode tasks.Mode, headID string, scanKey tasks.Key, params string) t6g5NativeRun {
 	t.Helper()
+	return t6g5RunNativeWith(t, nil, p, mode, headID, scanKey, params)
+}
+
+// t6g5SpyOption configures the spy before a run starts.
+type t6g5SpyOption func(*t6g5Spy)
+
+// t6g5MergeThroughStore makes the spy's MergeBooks run a real merge.Service over
+// store, the way the server's BookMerger does, so the merge's own writes (the
+// sibling journal, the group redirect, the sync-identity rows) reach the store
+// the store-diff test watches.
+func t6g5MergeThroughStore(store *database.PebbleStore) t6g5SpyOption {
+	return func(s *t6g5Spy) {
+		s.mergeThrough = func(opID string, bookIDs []string, primaryID string) (int, error) {
+			res, err := merge.NewService(store).MergeBooksWithOptions(bookIDs, primaryID, merge.MergeOptions{OperationID: opID})
+			if err != nil {
+				return 0, err
+			}
+			return res.SoftDeleted, nil
+		}
+	}
+}
+
+// t6g5RunNativeWith is t6g5RunNativeOn with an optional store to attribute
+// writes on: given one, the spy snapshots it around every outermost writer call.
+func t6g5RunNativeWith(t *testing.T, store *database.PebbleStore, p *Plugin, mode tasks.Mode, headID string, scanKey tasks.Key, params string, opts ...t6g5SpyOption) t6g5NativeRun {
+	t.Helper()
 	b := p.t6g5HeadBase(context.Background(), &fakeReporter{}, true)
 	spy := &t6g5Spy{inner: b.Writer}
+	if store != nil {
+		spy.snap = func() (map[string]string, error) { return t6g5SnapshotOf(store) }
+	}
+	for _, o := range opts {
+		o(spy)
+	}
 	var mu sync.Mutex
 	var handed []tasks.Writer
 	deps := t6g5Deps{
@@ -299,6 +470,7 @@ func t6g5RunNativeOn(t *testing.T, p *Plugin, mode tasks.Mode, headID string, sc
 	gate := &t6g5Gate{id: headID}
 	holds := &t6g5Holds{}
 	rc, _ := newT6G5HostCtx(context.Background(), d.Kind(), mode, gate, holds)
+	spy.skip = []string{"act:op:" + string(rc.RunID())}
 	out, err := t6g5Run(t, d, rc, params)
 	mu.Lock()
 	defer mu.Unlock()
@@ -456,16 +628,21 @@ func TestT6G5Native_MissingFileRepoint(t *testing.T) {
 func TestT6G5Native_MergeSamePathDupes(t *testing.T) {
 	s := newRepairPebble(t)
 	dir := t.TempDir()
-	path := "/lib/Author/Book.m4b"
-	for _, id := range []string{"01BATMAN00000000000000MG01", "01BATMAN00000000000000MG02"} {
+	path := filepath.Join(dir, "Bruce Wayne", "Hush.m4b")
+	ids := []string{"01BATMAN00000000000000MG01", "01BATMAN00000000000000MG02"}
+	for _, id := range ids {
 		_, err := s.CreateBook(&database.Book{ID: id, Title: "Hush", FilePath: path})
 		require.NoError(t, err)
 		require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: id, FilePath: path, FileHash: "H"}))
 	}
-	r := t6g5RunNative(t, s, dir, "maintenance.merge-same-path-dupes", t6g5ScanKey,
-		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`)
+	// The merge runs for real (merge.Service over the same store), so the store
+	// diff sees the merge's own journal, redirect and sync rows, not the stub's none.
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.merge-same-path-dupes", t6g5ScanKey,
+		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`, t6g5MergeThroughStore(s))
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks))
+	r.requireMethodWrote(t, "MergeBooks", string(ops.ResBooks))
 	keys, _ := r.holds.snapshot()
 	assert.Empty(t, keys, "the merge takes no scan stand-down (HEAD took none)")
 	var plan mergeSamePathPlan
@@ -474,7 +651,16 @@ func TestT6G5Native_MergeSamePathDupes(t *testing.T) {
 	assert.Equal(t, 1, plan.Merged)
 	require.Equal(t, 1, r.spy.count("MergeBooks"), "the merge reached the writer")
 	assert.Equal(t, []string{r.runID}, r.spy.opIDs, "merged under the run's own ID")
-	assert.ElementsMatch(t, []string{"01BATMAN00000000000000MG01", "01BATMAN00000000000000MG02"}, r.spy.merged[0][1:])
+	assert.ElementsMatch(t, ids, r.spy.merged[0][1:])
+	deleted := 0
+	for _, id := range ids {
+		b, err := s.GetBookByID(id)
+		require.NoError(t, err)
+		if b == nil || b.IsSoftDeleted() {
+			deleted++
+		}
+	}
+	assert.Equal(t, 1, deleted, "the real merge retired exactly one of the two rows")
 }
 
 func TestT6G5Native_MetadataCacheReap(t *testing.T) {
@@ -482,12 +668,22 @@ func TestT6G5Native_MetadataCacheReap(t *testing.T) {
 	dir := t.TempDir()
 	const orphan = "01BATMAN00000000000000OR01"
 	require.NoError(t, s.PutMetadataCache(&database.MetadataCandidateCache{BookID: orphan, FetchedAt: time.Now()}))
+	// A live book with a file row and a cache of its own: rows in resources the
+	// reap must NOT write (books, book_files) and a cache it must spare, so a
+	// reap that also touched the book, its files or a live cache changes a key
+	// the value diff can see.
+	const live = "01BATMAN00000000000000OR02"
+	_, err := s.CreateBook(&database.Book{ID: live, Title: "Under the Red Hood", FilePath: filepath.Join(dir, "Jason Todd")})
+	require.NoError(t, err)
+	require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "01ROWOR0000000000000000002", BookID: live, FilePath: filepath.Join(dir, "Jason Todd", "01.mp3")}))
+	require.NoError(t, s.PutMetadataCache(&database.MetadataCandidateCache{BookID: live, FetchedAt: time.Now()}))
 
 	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.metadata-cache-reap", "",
 		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
 	r.requireStoreWritesWithin(t, d, string(ops.ResMetadataCache))
+	assert.Equal(t, []string{string(ops.ResMetadataCache)}, d.resources, "the reap writes the metadata cache and nothing else")
 	var plan reapPlan
 	require.NoError(t, json.Unmarshal(r.out, &plan))
 	assert.Equal(t, 1, plan.Reaped)
@@ -495,6 +691,9 @@ func TestT6G5Native_MetadataCacheReap(t *testing.T) {
 	got, err := s.GetMetadataCache(orphan)
 	require.NoError(t, err)
 	assert.Nil(t, got, "the orphaned row is gone")
+	kept, err := s.GetMetadataCache(live)
+	require.NoError(t, err)
+	assert.NotNil(t, kept, "a live book's cache is spared")
 	keys, _ := r.holds.snapshot()
 	assert.Empty(t, keys, "the reap takes no scan stand-down")
 }
@@ -540,6 +739,9 @@ func TestT6G5Native_RepairLibraryState(t *testing.T) {
 	b, err := s.CreateBook(&database.Book{ID: "01BATMAN00000000000000LS01", Title: "Arkham Asylum",
 		FilePath: filepath.Join(root, "Bruce Wayne", "Arkham Asylum", "01.mp3"), LibraryState: &state, OrganizedFileHash: &hash})
 	require.NoError(t, err)
+	// A cache row for the book, a resource the repair must NOT write: a repair
+	// that also dropped or stamped it changes a key the diff can see.
+	require.NoError(t, s.PutMetadataCache(&database.MetadataCandidateCache{BookID: b.ID, FetchedAt: time.Now()}))
 
 	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: root}), tasks.ModeLive, "maintenance.repair-library-state", "", "")
 	require.NoError(t, r.err)
@@ -636,8 +838,11 @@ func TestT6G5Native_CloneApply(t *testing.T) {
 	require.NoError(t, r.err)
 	r.requireWriter(t)
 	// operations: CreateOrganizedVersion journals its changes under the run's op ID
-	// (opchange: keys), a write no method name says; user_state: the clone's undo record.
-	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResOperations), string(ops.ResUserState))
+	// (opchange: keys), a write no method name says. The clone's own undo record
+	// (a user_state preference) is excluded from the store diff by name
+	// (t6g5ExcludedKeys), so user_state is not asserted here: the call count below
+	// proves the record reached the writer, and the per-call check holds its row.
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResOperations))
 	r.requireHold(t)
 	var rep icReport
 	require.NoError(t, json.Unmarshal(r.out, &rep))
@@ -696,7 +901,7 @@ func TestT6G5Native_CloneRollback(t *testing.T) {
 		`{"rollback":true,"group_ids":["vg-t"]}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
-	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResUserState))
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResBookFiles))
 	r.requireHold(t)
 	var rep icReport
 	require.NoError(t, json.Unmarshal(r.out, &rep))
@@ -718,6 +923,46 @@ func TestT6G5Native_CloneRollback(t *testing.T) {
 	tb, err := f.s.GetBookByID("T")
 	require.NoError(t, err)
 	assert.Equal(t, "organized", *tb.LibraryState)
+}
+
+// A rollback carries the clone's listening state back onto the source. When the
+// clone's reader had FINISHED it, the carry also moves the iTunes play-count mark
+// onto the source's book row (carryPlayCountMark), so CarryStateBeforeHardDelete
+// writes `books` as well as `user_state`. The plain rollback has no state to
+// carry, so the row's `books` entry was never exercised by any run: dropping it
+// from t6g5WriterResources passed every check. Here the per-call attribution
+// sees the carry's own books write against its own row.
+func TestT6G5Native_CloneRollbackCarriesAFinishedReadersPlayCountMark(t *testing.T) {
+	f := newICFixture(t)
+	src := f.itunes("Year One.m4b")
+	f.book(t, "T", "vg-t", "Year One", []string{src})
+	g := icGroup(t, f.run(t, icParams{Apply: true, GroupIDs: []string{"vg-t"}}), "vg-t")
+	require.Equal(t, icOutcomeApplied, g.Outcome, g.Error)
+	cloneID := g.CloneBookID
+	require.NotEmpty(t, cloneID)
+
+	u, err := f.s.CreateUser("alfred", "alfred@example.com", "argon2id", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: cloneID, Status: database.UserBookStatusFinished, ProgressPct: 100}))
+	mark := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	_, err = f.s.ModifyBook(cloneID, func(b *database.Book) error { b.ITunesPlayCountBumpedAt = &mark; return nil })
+	require.NoError(t, err)
+
+	r, d := t6g5RunNativeDiff(t, f.s, t6g5ClonePlugin(f), tasks.ModeLive, "itunes.clone-into-library", t6g5ScanKey,
+		`{"rollback":true,"group_ids":["vg-t"]}`)
+	require.NoError(t, r.err)
+	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResUserState))
+	var rep icReport
+	require.NoError(t, json.Unmarshal(r.out, &rep))
+	rb := icGroup(t, &rep, "vg-t")
+	require.Equal(t, icOutcomeRolled, rb.Outcome, "the rollback was not refused: "+rb.Error)
+	require.Equal(t, 1, r.spy.count("CarryStateBeforeHardDelete"), "the state carry reached the writer")
+	r.requireMethodWrote(t, "CarryStateBeforeHardDelete", string(ops.ResBooks), string(ops.ResUserState))
+	tb, err := f.s.GetBookByID("T")
+	require.NoError(t, err)
+	require.NotNil(t, tb.ITunesPlayCountBumpedAt, "the finished reader's play-count mark landed on the source")
+	assert.True(t, tb.ITunesPlayCountBumpedAt.Equal(mark))
 }
 
 // --- regroup ---
@@ -771,10 +1016,10 @@ func TestT6G5Native_Regroup(t *testing.T) {
 func TestT6G5Native_RegroupPreviewWritesNothing(t *testing.T) {
 	s, _, plan, _ := regroupWithState(t)
 	loser := plan.DeleteBooks[0]
-	r := t6g5RunNativeOn(t, New(fakeDeps{store: s, root: rgRoot}), tasks.ModePreview, "itunes.regroup", "",
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: rgRoot}), tasks.ModePreview, "itunes.regroup", "",
 		`{"xmlPath":"`+t6g5RegroupXML(t)+`"}`)
 	require.NoError(t, r.err)
-	assert.Empty(t, r.spy.calls, "a preview makes no write")
+	r.requireNoStoreWrites(t, d)
 	b, err := s.GetBookByID(loser)
 	require.NoError(t, err)
 	assert.NotNil(t, b)
@@ -848,16 +1093,18 @@ func TestT6G5Native_PlaylistImport(t *testing.T) {
 	xml := t6g5PlaylistXML(t)
 	params := `{"libraryPath":"` + xml + `","ownerUserId":"alfred","allowEmptyQueries":true}`
 
-	preview := t6g5RunNativeOn(t, New(fakeDeps{store: s}), tasks.ModePreview, "itunes.playlist-import", "", params)
+	preview, pd := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s}), tasks.ModePreview, "itunes.playlist-import", "", params)
 	require.NoError(t, preview.err)
+	preview.requireNoStoreWrites(t, pd)
 	assert.Zero(t, preview.spy.count("ImportSmartPlaylists"), "a preview imports nothing")
 	pl, err := s.GetUserPlaylistByITunesPID(t6g5PlaylistPIDKey)
 	require.NoError(t, err)
 	assert.Nil(t, pl)
 
-	r := t6g5RunNativeOn(t, New(fakeDeps{store: s}), tasks.ModeLive, "itunes.playlist-import", "", params)
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s}), tasks.ModeLive, "itunes.playlist-import", "", params)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResUserState))
 	assert.Equal(t, 1, r.spy.count("ImportSmartPlaylists"), "the import reached the writer")
 	pl, err = s.GetUserPlaylistByITunesPID(t6g5PlaylistPIDKey)
 	require.NoError(t, err)
