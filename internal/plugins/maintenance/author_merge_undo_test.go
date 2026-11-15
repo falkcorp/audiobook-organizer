@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_merge_undo_test.go
-// version: 1.12.3
+// version: 1.13.0
 // guid: 4b8e2f17-a9c3-4d65-8e01-3c7f5a9d2b64
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -188,8 +188,7 @@ func TestAuthorIDRepair_UndoRestoresTheMergedDuplicate(t *testing.T) {
 // operation a revert can name.
 func TestMergeAuthorInto_RefusesAnApplyWithNoOperationID(t *testing.T) {
 	w := newMergeUndoWorld(t, "Undo NoOp From", "Undo NoOp Into", 0)
-	p := New(&fakeDeps{store: w.st})
-	n, rows, err := p.mergeAuthorInto(context.Background(), w.from, w.into, false, "", nil)
+	n, rows, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{w.st}, t6g1HeadWriter{w.st}, w.from, w.into, false, "", nil)
 	require.Error(t, err)
 	require.Zero(t, n)
 	require.Zero(t, rows)
@@ -301,8 +300,7 @@ func (s primaryRecordingStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]
 func TestAuthorIDRepair_RepointsTheDenormalizedAuthorToo(t *testing.T) {
 	w := newMergeUndoWorld(t, "Undo Denorm Author", "UNDO DENORM AUTHOR", 0)
 	st := primaryRecordingStore{PebbleStore: w.st, authors: map[string]*database.Author{}}
-	p := New(&fakeDeps{store: st})
-	ch, _, _ := p.authorIDMergeOne(st, false, "op-denorm", "undo denorm author", w.from, w.into, slog.Default())
+	ch, _, _ := authorIDMergeOneVia(t6g1HeadStore{st}, t6g1HeadWriter{st}, false, "op-denorm", "undo denorm author", w.from, w.into, slog.Default())
 	require.Equal(t, authorIDMergeMerged, ch.Outcome, "%+v", ch)
 	got := st.authors[w.books[0]]
 	require.NotNil(t, got, "the primary book's Author was not written")
@@ -315,8 +313,7 @@ func TestAuthorIDRepair_RepointsTheDenormalizedAuthorToo(t *testing.T) {
 func TestMergeAuthorInto_ABookListedTwiceIsJournaledOnce(t *testing.T) {
 	w := newMergeUndoWorld(t, "Undo Twice From", "Undo Twice Into", 0)
 	st := primaryRecordingStore{PebbleStore: w.st, authors: map[string]*database.Author{}, twice: true}
-	p := New(&fakeDeps{store: st})
-	n, rows, err := p.mergeAuthorInto(context.Background(), w.from, w.into, false, "op-twice", slog.Default())
+	n, rows, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{st}, t6g1HeadWriter{st}, w.from, w.into, false, "op-twice", slog.Default())
 	require.NoError(t, err)
 	require.Equal(t, len(w.books), n, "each distinct book is relinked once")
 	require.Equal(t, len(w.books)+1, rows, "one credit row per distinct book and the delete row")
