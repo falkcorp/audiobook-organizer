@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_storediff_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 8e2f6a1c-47b3-4d09-9c5e-b13a7d60f4e2
 // last-edited: 2026-11-15
 
@@ -37,8 +37,9 @@ import (
 // t6g5KeyFamilyResource maps a key-family prefix to the pkg/ops resource that
 // owns it, by the longest matching prefix. It follows the vocabulary in
 // t6g5WriterResources: a derived index belongs to the row it indexes; narrator,
-// book-narrator and chapter rows are `books`; preferences, playlists and the
-// sync-id rows are `user_state` until pkg/ops names sync identity; the undo
+// book-narrator and chapter rows are `books`; preferences and playlists are
+// `user_state`; the sync-id rows (sync_item:, sync_file:, sync_alias_use) are
+// `sync_identity`, the same key families F5-06's backfill-sync-ids writes; the undo
 // journal (opchange, the merge sibling-move journal) is `operations`; a record
 // keyed on a book or a version group (path_history, group redirects) is `books`.
 var t6g5KeyFamilyResource = map[string]ops.Resource{
@@ -85,9 +86,9 @@ var t6g5KeyFamilyResource = map[string]ops.Resource{
 	"user_tag:":                         ops.ResUserState,
 	"merge_user_state_pending:":         ops.ResUserState,
 	"merge:survivor-reconcile:":         ops.ResUserState,
-	"sync_item:":                        ops.ResUserState,
-	"sync_file:":                        ops.ResUserState,
-	"sync_alias_use":                    ops.ResUserState,
+	"sync_item:":                        ops.ResSyncIdentity,
+	"sync_file:":                        ops.ResSyncIdentity,
+	"sync_alias_use":                    ops.ResSyncIdentity,
 	"idx:":                              ops.ResUserState,
 	"opchange":                          ops.ResOperations,
 	"merge:sibling-journal:":            ops.ResOperations,
@@ -409,6 +410,9 @@ func TestT6G5StoreDiff_RulingsAreMapped(t *testing.T) {
 		"system:journal_clock":                      ops.ResOperations,
 		"act:info:01BATMAN00000000000000AC01":       ops.ResActivity,
 		"setting:repairs_last_plan_op:fixer":        ops.ResSettings,
+		"sync_item:01BATMAN00000000000000SI01":      ops.ResSyncIdentity,
+		"sync_file:lookup:01BATMAN0000000001:F1":    ops.ResSyncIdentity,
+		"sync_alias_use:u1:01BATMAN00000000000SA1":  ops.ResSyncIdentity,
 	}
 	for key, want := range cases {
 		d := t6g5DiffStore(nil, map[string]string{key: "v"})
