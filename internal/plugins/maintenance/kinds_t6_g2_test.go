@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-14
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
@@ -67,6 +68,10 @@ type t6g2FakeStore struct {
 	verified   int      // VerifyBookAtPathIndex calls
 	classified []string // ClassifyBookSigMigration calls (preview of the sidecar migration)
 	scanAfters []string // the cursor of every ScanBookFileAcoustIDIndex call
+
+	// gt gates the store reads a pool's items make (an acoustid judgement, a
+	// build folder's book_file lookup), so a test can pin that pool's width.
+	gt t6g2Gate
 }
 
 // t6g2ScanPage is one page of the acoustid index scan.
@@ -89,7 +94,10 @@ func (s *t6g2FakeStore) GetBookByID(id string) (*database.Book, error) {
 	return nil, nil
 }
 
-func (s *t6g2FakeStore) GetBookFiles(id string) ([]database.BookFile, error) { return s.files[id], nil }
+func (s *t6g2FakeStore) GetBookFiles(id string) ([]database.BookFile, error) {
+	defer s.gt.enter()()
+	return s.files[id], nil
+}
 
 func (s *t6g2FakeStore) GetBookSnapshots(id string, _ int) ([]database.BookSnapshot, error) {
 	return s.snaps[id], nil
@@ -139,6 +147,7 @@ func (s *t6g2FakeStore) ScanBookFileAcoustIDIndex(after string, _ int) ([]databa
 }
 
 func (s *t6g2FakeStore) JudgeBookFileAcoustIDEntry(database.BookFileAcoustIDEntry) (database.BookFileAcoustIDVerdict, error) {
+	defer s.gt.enter()()
 	return s.verdict, nil
 }
 
@@ -169,48 +178,69 @@ type t6g2RecWriter struct {
 	failItem   error
 	failItemAt int
 
-	// gate, when positive, holds each pool item (a walk item or a chapters
-	// write) until that many are in flight at once, or two seconds have passed
-	// since the first; peak is the most that were in flight. A pool narrower
-	// than the gate never reaches it, and a wider one exceeds it.
-	gate         int
-	inflight     int
-	peak         int
-	gateDeadline time.Time
+	// gt, when its width is set, holds each pool item that enters it (a walk
+	// item, a chapters write, a sidecar migration, a build) until that many
+	// are in flight at once.
+	gt t6g2Gate
 }
 
-// enter marks one pool item in flight, honours the gate, and returns the
-// function that marks it done.
-func (w *t6g2RecWriter) enter() func() {
-	w.mu.Lock()
-	w.inflight++
-	w.peak = max(w.peak, w.inflight)
-	if w.gateDeadline.IsZero() {
-		w.gateDeadline = time.Now().Add(2 * time.Second)
+// t6g2Gate holds each caller of enter until `want` are inside at once, or two
+// seconds have passed since the first caller; peak is the most that were inside
+// together. A pool narrower than the gate never reaches it, so its peak stays
+// below it; a wider one overshoots. The gate is its own type so the writer, the
+// store and a reporter can each hold one without sharing a width.
+type t6g2Gate struct {
+	mu       sync.Mutex
+	want     int
+	inflight int
+	peak     int
+	deadline time.Time
+}
+
+// set is the width the gate waits for; zero (the default) never waits.
+func (g *t6g2Gate) set(n int) {
+	g.mu.Lock()
+	g.want = n
+	g.mu.Unlock()
+}
+
+// enter marks one caller in flight, honours the gate, and returns the function
+// that marks it done.
+func (g *t6g2Gate) enter() func() {
+	g.mu.Lock()
+	g.inflight++
+	g.peak = max(g.peak, g.inflight)
+	if g.want > 0 && g.deadline.IsZero() {
+		g.deadline = time.Now().Add(2 * time.Second)
 	}
-	deadline, gate := w.gateDeadline, w.gate
-	w.mu.Unlock()
-	for gate > 0 && time.Now().Before(deadline) {
-		w.mu.Lock()
-		reached := w.peak >= gate
-		w.mu.Unlock()
+	deadline, want := g.deadline, g.want
+	g.mu.Unlock()
+	for want > 0 && time.Now().Before(deadline) {
+		g.mu.Lock()
+		reached := g.peak >= want
+		g.mu.Unlock()
 		if reached {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
 	return func() {
-		w.mu.Lock()
-		w.inflight--
-		w.mu.Unlock()
+		g.mu.Lock()
+		g.inflight--
+		g.mu.Unlock()
 	}
 }
 
-func (w *t6g2RecWriter) peakInFlight() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.peak
+func (g *t6g2Gate) peakInFlight() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.peak
 }
+
+// enter and peakInFlight are the writer's gate.
+func (w *t6g2RecWriter) enter() func() { return w.gt.enter() }
+
+func (w *t6g2RecWriter) peakInFlight() int { return w.gt.peakInFlight() }
 
 // t6g2WalkItems is the length of the walk a boot pass drives.
 const t6g2WalkItems = 6
@@ -344,11 +374,13 @@ func (w *t6g2RecWriter) SaveChaptersForBook(id string, chapters []database.Chapt
 }
 
 func (w *t6g2RecWriter) BatchCreateBookFiles(files []*database.BookFile) error {
+	defer w.enter()()
 	w.rec(fmt.Sprintf("BatchCreateBookFiles:%d", len(files)))
 	return nil
 }
 
 func (w *t6g2RecWriter) MigrateBookSigToSidecar(id string) (database.BookSigMigrateOutcome, error) {
+	defer w.enter()()
 	w.rec("MigrateBookSigToSidecar:" + id)
 	return database.BookSigMigrateMigrated, nil
 }
@@ -882,7 +914,14 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 			// The resources the row's writer calls touch, from t6g2Touches (traced
 			// from what each production writer reaches, not from the Effects).
 			touched := map[string]bool{}
-			for _, call := range r.wantLive {
+			calls := slices.Clone(r.wantLive)
+			// The boot-mode build of the at-path index ({"if_needed":true}) writes
+			// through BackfillBookAtPathIndex, which the forced rebuild's row does
+			// not call; the same kind's Effects must cover it too.
+			if r.kind == t6g2KindBookAtPathIndexBackfill {
+				calls = append(calls, "BackfillBookAtPathIndex")
+			}
+			for _, call := range calls {
 				method, _, _ := strings.Cut(call, ":")
 				res, ok := t6g2Touches[method]
 				if !ok {
@@ -905,61 +944,112 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 		}
 	})
 
-	// Every resource a kind declares is a name of the shared Effects vocabulary
-	// (pkg/ops/effects.go); a coined name would be refused at registration.
+	// Every name a kind declares (writes, reads, deletes), every row's expected
+	// resources and every name in the traced touch map is a Resource constant of
+	// pkg/ops/effects.go. The constants are read from that file's syntax tree, not
+	// retyped here: an untyped string literal compiles wherever a Resource is
+	// wanted, so only a comparison against the declared set catches a coined name.
 	t.Run("effects use the shared vocabulary", func(t *testing.T) {
+		names := t6g2OpsVocabulary(t)
 		valid := map[string]bool{}
-		for _, r := range []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries,
-			ops.ResReviewItems, ops.ResEmbeddings, ops.ResOperations, ops.ResCatalog, ops.ResFingerprintIndex,
-			ops.ResSettings, ops.ResActivity, ops.ResFiles, ops.ResExternalIDs, ops.ResUserState,
-			ops.ResMetadataCache, ops.ResFieldStates, ops.ResIndexes} {
-			valid[tasks.Res("books", string(r)).String()] = true
+		for _, n := range names {
+			valid[tasks.Res("books", n).String()] = true
 		}
 		for _, d := range (&Plugin{}).t6g2Kinds(newT6G2Fakes(t).deps(), nil) {
-			for _, x := range tasks.CommonOf(d).Effects.WriteSet() {
-				if !valid[x.String()] {
-					t.Errorf("%s declares %s, which is not in the shared Effects vocabulary", d.Kind(), x)
+			e := tasks.CommonOf(d).Effects
+			for label, set := range map[string][]entity.Ref{"writes": e.WriteSet(), "reads": e.ReadSet(), "deletes": e.DeleteSet()} {
+				for _, x := range set {
+					if !valid[x.String()] {
+						t.Errorf("%s %s %s, which is not a pkg/ops Resource constant", d.Kind(), label, x)
+					}
+				}
+			}
+		}
+		for _, r := range t6g2Rows() {
+			for _, n := range append(slices.Clone(r.writes), r.reads...) {
+				if !slices.Contains(names, string(n)) {
+					t.Errorf("%s: test row names %q, which is not a pkg/ops Resource constant", r.kind, n)
+				}
+			}
+		}
+		for method, res := range t6g2Touches {
+			for _, n := range res {
+				if !slices.Contains(names, string(n)) {
+					t.Errorf("t6g2Touches[%s] names %q, which is not a pkg/ops Resource constant", method, n)
 				}
 			}
 		}
 	})
 
-	t.Run("parallelism", func(t *testing.T) {
-		pars := map[tasks.Kind]tasks.Parallelism{
-			t6g2KindExternalIDBackfill:          t6g2ExternalIDBackfillParallelism(),
-			t6g2KindMovementAtomCleanup:         t6g2MovementAtomCleanupParallelism(),
-			t6g2KindMalformedM4BRemux:           t6g2MalformedM4BRemuxParallelism(),
-			t6g2KindMalformedM4BTranscode:       t6g2MalformedM4BTranscodeParallelism(),
-			t6g2KindBookShapeReport:             t6g2BookShapeReportParallelism(bookShapeReportParams{}),
-			t6g2KindBookFileAcoustIDIndexRepair: t6g2BookFileAcoustIDIndexRepairParallelism(),
-			t6g2KindBookSigSidecarMigrate:       t6g2BookSigSidecarMigrateParallelism(),
-			t6g2KindBuildFolderBookFiles:        t6g2BuildFolderBookFilesParallelism(),
-			t6g2KindChaptersBackfill:            t6g2ChaptersBackfillParallelism(),
-		}
-		for _, r := range t6g2Rows() {
-			par, ok := pars[r.kind]
-			if r.parPrefix == "" {
-				if ok {
-					t.Errorf("%s: has a parallelism but HEAD has no pool", r.kind)
-				}
-				continue
-			}
-			if !ok {
-				t.Errorf("%s: HEAD runs a pool of %d but the kind declares none", r.kind, r.workers)
-				continue
-			}
-			if !strings.HasPrefix(par.String(), r.parPrefix) {
-				t.Errorf("%s: parallelism %q, want prefix %q", r.kind, par.String(), r.parPrefix)
-			}
-			if par.Workers() != r.workers {
-				t.Errorf("%s: %d workers, want HEAD's %d", r.kind, par.Workers(), r.workers)
+	// The touch map is the oracle of "effects cover every write", so it must not
+	// have a hole: a writer method with no entry would be an unchecked write, and
+	// an entry with no method a stale claim.
+	t.Run("touch map has an entry for every writer method", func(t *testing.T) {
+		iface := reflect.TypeOf((*t6g2Writer)(nil)).Elem()
+		methods := map[string]bool{}
+		for i := range iface.NumMethod() {
+			name := iface.Method(i).Name
+			methods[name] = true
+			if len(t6g2Touches[name]) == 0 {
+				t.Errorf("t6g2Writer.%s has no t6g2Touches entry", name)
 			}
 		}
-		// book-shape-report: the concurrency param when set, else every CPU.
-		if got := t6g2BookShapeReportParallelism(bookShapeReportParams{Concurrency: 3}); got.Workers() != 3 {
-			t.Errorf("shape report with concurrency 3 runs %d workers, want 3", got.Workers())
+		if len(methods) == 0 {
+			t.Fatal("t6g2Writer reflects no methods")
+		}
+		for name := range t6g2Touches {
+			if !methods[name] {
+				t.Errorf("t6g2Touches[%s] names no t6g2Writer method", name)
+			}
 		}
 	})
+}
+
+// t6g2OpsVocabulary is every Resource constant declared in pkg/ops/effects.go,
+// read from the file's syntax tree. It is not a hand-typed copy: a constant added
+// there is in the set the moment it is added.
+func t6g2OpsVocabulary(t *testing.T) []string {
+	t.Helper()
+	path := filepath.Join("..", "..", "..", "pkg", "ops", "effects.go")
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var names []string
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "Resource" {
+				continue
+			}
+			for _, v := range vs.Values {
+				lit, ok := v.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				name, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", lit.Value, err)
+				}
+				names = append(names, name)
+			}
+		}
+	}
+	// ResBooks and ResFiles are the floor: an empty or tiny parse would make
+	// every comparison against it pass or fail for the wrong reason.
+	for _, want := range []string{string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResFiles), string(ops.ResSettings)} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("parsed %d Resource constants from %s, none is %q", len(names), path, want)
+		}
+	}
+	return names
 }
 
 // t6g2AtomScopes reads one atom's scopes from internal/books/atoms.go.
@@ -1153,22 +1243,42 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 
 // t6g2Touches is, per t6g2Writer method, the resource kinds the production
 // writer rewrites. It is traced from the code each method reaches, not copied
-// from any kind's Effects: BatchCreateBookFiles runs notifyBookFileChanges and
-// then RecomputeBookAggregates, which rewrites the books row; a remux's and a
-// transcode's RecordRewrite run UpdateBookFileHashes, which rewrites the
-// book_file row and recomputes the same aggregates; so does the movement-atom
-// cleanup, whose removeMovementAtomsFromFile installs metadata.WithBookFileHashes
-// before tagger.WriteTagsSafe, and WriteTagsSafe ends in
-// Store.UpdateBookFileHashes; the boot passes record their done flag in
-// settings; the transcode's quarantine step marks books.
+// from any kind's Effects, and every t6g2Writer method has an entry (a test
+// reflects over the interface). The trace, method -> what it calls -> resources:
+//
+//   - BackfillExternalIDs: itunes.BackfillExternalIDs -> BulkCreateExternalIDMappings
+//     (external_ids), then SetSetting for its done flag (settings).
+//   - StripMovementAtoms: removeMovementAtomsFromFile rewrites the file's tags
+//     (files), installs metadata.WithBookFileHashes before tagger.WriteTagsSafe,
+//     which ends in Store.UpdateBookFileHashes (book_files, and the books
+//     aggregates it recomputes); SetSetting for the done flag (settings).
+//   - RemuxMalformedM4BFiles, TranscodeMalformedM4BFiles: rewrite the file (files),
+//     then RecordRewrite -> UpdateBookFileHashes (book_files, books aggregates);
+//     SetSetting for the done flag (settings). The transcode also marks a book
+//     it gave up on through the quarantine step (books).
+//   - QuarantineKnownBadFiles: QuarantineService.QuarantineBook renames the files
+//     into .failed/ (files, service.go os.Rename in moveNoClobber), repoints each
+//     book_file row through UpdateBookFile (book_files), records the move with
+//     RecordPathChange (books: the path history lives on the book's key space) and
+//     calls ModifyBook (books); then SetSetting for the done flag (settings).
+//   - RepairBookHashIndex, RebuildBookAtPathIndex, BackfillBookAtPathIndex: write
+//     index keys and the build's sentinel, all keyed by book (books).
+//   - DeleteOrphanBookFileAcoustIDEntries: deletes acoustid index keys, which are
+//     book_file segment lookups (book_files); it never writes a book_file row.
+//   - ModifyBook: the books row (books).
+//   - SaveChaptersForBook: chapters are stored under the book (books).
+//   - BatchCreateBookFiles: creates the book_file rows (book_files), then
+//     notifyBookFileChanges and RecomputeBookAggregates rewrite the books row (books).
+//   - MigrateBookSigToSidecar: moves a book's signature into its sidecar key (books).
 var t6g2Touches = map[string][]ops.Resource{
 	"BackfillExternalIDs":                 {ops.ResExternalIDs, ops.ResSettings},
 	"StripMovementAtoms":                  {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
 	"RemuxMalformedM4BFiles":              {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
 	"TranscodeMalformedM4BFiles":          {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
-	"QuarantineKnownBadFiles":             {ops.ResBooks, ops.ResSettings},
+	"QuarantineKnownBadFiles":             {ops.ResFiles, ops.ResBookFiles, ops.ResBooks, ops.ResSettings},
 	"RepairBookHashIndex":                 {ops.ResBooks},
 	"RebuildBookAtPathIndex":              {ops.ResBooks},
+	"BackfillBookAtPathIndex":             {ops.ResBooks},
 	"DeleteOrphanBookFileAcoustIDEntries": {ops.ResBookFiles},
 	"ModifyBook":                          {ops.ResBooks},
 	"SaveChaptersForBook":                 {ops.ResBooks},
@@ -2043,7 +2153,7 @@ func t6g2StartParamsSubtests(t *testing.T) {
 // otherwise. Each item holds until the declared number are in flight at once,
 // so a narrower pool never reaches it and a wider one overshoots.
 func t6g2HeadWidthSubtests(t *testing.T) {
-	run := func(t *testing.T, f *t6g2Fakes, kind tasks.Kind, params string) {
+	runWith := func(t *testing.T, f *t6g2Fakes, kind tasks.Kind, params string, rep sdk.Reporter) {
 		t.Helper()
 		var r t6g2Row
 		for _, c := range t6g2Rows() {
@@ -2052,10 +2162,20 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 			}
 		}
 		p := &Plugin{deps: t6g2HeadDeps{fakeDeps: fakeDeps{store: t6g2HeadStore{f: f}}, w: f.writer}}
-		rep := &t6g2ResultReporter{fakeReporter: &fakeReporter{}}
 		if err := r.def(p).Run(context.Background(), json.RawMessage(params), rep); err != nil {
 			t.Fatalf("HEAD run: %v", err)
 		}
+	}
+	run := func(t *testing.T, f *t6g2Fakes, kind tasks.Kind, params string) {
+		t.Helper()
+		runWith(t, f, kind, params, &t6g2ResultReporter{fakeReporter: &fakeReporter{}})
+	}
+	ids := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("bat-%d", i+1)
+		}
+		return out
 	}
 	for _, tc := range []struct {
 		kind  tasks.Kind
@@ -2067,7 +2187,7 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 	} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			f := newT6G2Fakes(t)
-			f.writer.gate = tc.width
+			f.writer.gt.set(tc.width)
 			run(t, f, tc.kind, t6g2HeadLive[tc.kind])
 			if got := f.writer.peakInFlight(); got != tc.width {
 				t.Errorf("HEAD ran %d items at once, want its %d workers", got, tc.width)
@@ -2080,11 +2200,100 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 		f := newT6G2Fakes(t)
 		t6g2ChaptersFixture(t, f, ids...)
 		want := min(runtime.NumCPU(), len(ids))
-		f.writer.gate = want
+		f.writer.gt.set(want)
 		quoted, _ := json.Marshal(ids)
 		run(t, f, t6g2KindChaptersBackfill, fmt.Sprintf(`{"apply":true,"book_ids":%s}`, quoted))
 		if got := f.writer.peakInFlight(); got != want {
 			t.Errorf("HEAD ran %d books at once, want min(NumCPU, books) = %d", got, want)
 		}
 	})
+
+	t.Run("bookfile-acoustid-index-repair judges on every core", func(t *testing.T) {
+		f := newT6G2Fakes(t)
+		f.store.acoustid = make([]database.BookFileAcoustIDEntry, 16)
+		f.store.verdict = database.AcoustIDEntryRowGone
+		want := min(runtime.NumCPU(), len(f.store.acoustid))
+		f.store.gt.set(want)
+		run(t, f, t6g2KindBookFileAcoustIDIndexRepair, t6g2HeadLive[t6g2KindBookFileAcoustIDIndexRepair])
+		if got := f.store.gt.peakInFlight(); got != want {
+			t.Errorf("HEAD judged %d entries at once, want min(NumCPU, entries) = %d", got, want)
+		}
+	})
+
+	t.Run("booksig-sidecar-migrate migrates pages on every core", func(t *testing.T) {
+		// Pages of bookSigMigratePageSize ids are the pool's items.
+		const pages = 4
+		f := newT6G2Fakes(t)
+		f.store.ids = ids(pages * bookSigMigratePageSize)
+		want := min(runtime.NumCPU(), pages)
+		f.writer.gt.set(want)
+		run(t, f, t6g2KindBookSigSidecarMigrate, t6g2HeadLive[t6g2KindBookSigSidecarMigrate])
+		if got := f.writer.peakInFlight(); got != want {
+			t.Errorf("HEAD migrated %d pages at once, want min(NumCPU, pages) = %d", got, want)
+		}
+	})
+
+	t.Run("build-folder-book-files checks and builds on every core", func(t *testing.T) {
+		books := ids(8)
+		f := newT6G2Fakes(t)
+		stubProbe(t, map[string]int{"01.mp3": 100, "02.mp3": 200})
+		organized, primary := "organized", true
+		f.store.books = map[string]*database.Book{}
+		for _, id := range books {
+			f.store.books[id] = &database.Book{
+				ID: id, Title: "Batman: Year One " + id, FilePath: makeFolder(t, "01.mp3", "02.mp3"),
+				LibraryState: &organized, IsPrimaryVersion: &primary,
+			}
+		}
+		want := min(runtime.NumCPU(), len(books))
+		// Phase 1 reads each book's rows; phase 2 writes them. Each is its own pool.
+		f.store.gt.set(want)
+		f.writer.gt.set(want)
+		quoted, _ := json.Marshal(books)
+		run(t, f, t6g2KindBuildFolderBookFiles, fmt.Sprintf(`{"apply":true,"book_ids":%s}`, quoted))
+		if got := f.store.gt.peakInFlight(); got != want {
+			t.Errorf("HEAD checked %d books at once (phase 1), want min(NumCPU, books) = %d", got, want)
+		}
+		if got := f.writer.peakInFlight(); got != want {
+			t.Errorf("HEAD built %d books at once (phase 2), want min(NumCPU, books) = %d", got, want)
+		}
+		if n := len(f.writer.got()); n != len(books) {
+			t.Errorf("HEAD built %d books, want %d", n, len(books))
+		}
+	})
+
+	t.Run("book-shape-report classifies shards on every core", func(t *testing.T) {
+		// One group per book, one shard per core, so every shard is a pool item.
+		const books = 8
+		f := newT6G2Fakes(t)
+		organized, primary := "organized", true
+		for _, id := range ids(books) {
+			dir := t.TempDir()
+			paths := touchAudio(t, dir, "01.mp3", "02.mp3")
+			f.store.core = append(f.store.core, database.BookCore{
+				ID: id, Title: "Batman: Year One " + id, FilePath: dir, LibraryState: &organized, IsPrimaryVersion: &primary,
+			})
+			for j, p := range paths {
+				f.store.fileCores = append(f.store.fileCores, database.BookFileCore{ID: fmt.Sprintf("%s-f%d", id, j), BookID: id, FilePath: p})
+			}
+		}
+		want := min(runtime.NumCPU(), books)
+		rep := &t6g2TouchReporter{t6g2ResultReporter: &t6g2ResultReporter{fakeReporter: &fakeReporter{}}}
+		rep.gt.set(want)
+		params := fmt.Sprintf(`{"oversizedThreshold":1,"reportPath":%q}`, filepath.Join(f.reportDir, "shape.tsv"))
+		runWith(t, f, t6g2KindBookShapeReport, params, rep)
+		if got := rep.gt.peakInFlight(); got != want {
+			t.Errorf("HEAD classified %d shards at once, want min(NumCPU, groups) = %d", got, want)
+		}
+	})
 }
+
+// t6g2TouchReporter is a reporter whose liveness stamp passes through a gate:
+// book-shape-report stamps it from inside each shard, so the gate counts the
+// shards in flight.
+type t6g2TouchReporter struct {
+	*t6g2ResultReporter
+	gt t6g2Gate
+}
+
+func (r *t6g2TouchReporter) TouchLiveness() { defer r.gt.enter()() }

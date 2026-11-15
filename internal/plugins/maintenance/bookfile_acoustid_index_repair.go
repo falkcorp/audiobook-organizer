@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/bookfile_acoustid_index_repair.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8b4e1d27-5f90-4c63-a2d8-e07c91b3f5a4
 // last-edited: 2026-11-14
 
@@ -408,8 +408,10 @@ func t6g2BookFileAcoustIDIndexRepairKind(deps t6g2Deps, sched func(tasks.Kind) *
 		} else if t := bytes.TrimSpace(raw); len(t) > 0 && !bytes.Equal(t, []byte("null")) {
 			// No checkpoint: honour the start params' resume_after and done as
 			// HEAD does (it decodes them from the params it was started with).
-			// A checkpoint wins when there is one, as HEAD's registry merges it
-			// over the params. The mode keys were refused above.
+			// A checkpoint wins when there is one: here it replaces the params
+			// outright, where HEAD's registry merges it over them. The two are
+			// equal for every checkpoint the core writes, because each carries
+			// the whole of acoustIDRepairParams. The mode keys were refused above.
 			if err := json.Unmarshal(t, &run.Params); err != nil {
 				return t6g2NoResult{}, fmt.Errorf("%s: invalid params: %w", m.Kind, err)
 			}
