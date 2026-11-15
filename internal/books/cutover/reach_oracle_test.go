@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_oracle_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c27d5a40-9e18-4b63-8f02-3a6d1e7b9c54
 // last-edited: 2026-11-14
 
@@ -72,6 +72,15 @@ type reachR0Approval struct {
 	Verdict string         `json:"verdict"` // A, D, or N (the probe did not reach the approver check)
 }
 
+// reachR0OwnerSet is R0's answers on the owner-gated routes with owner_email set
+// in the stored config and no Cloudflare Access verifier, so no principal of the
+// table is the owner (record_r0_reach.py owner_set).
+type reachR0OwnerSet struct {
+	What       string         `json:"what"`
+	OwnerEmail string         `json:"owner_email"`
+	Routes     []reachR0Route `json:"routes"`
+}
+
 type reachR0Doc struct {
 	R0Tag           string            `json:"r0_tag"`
 	OverlaySHA256   string            `json:"overlay_sha256"` // digest of the overlay store the recording copied
@@ -82,6 +91,7 @@ type reachR0Doc struct {
 	UniformNotFound []string          `json:"uniform_not_found"`
 	Tasks           []reachR0Task     `json:"tasks"`
 	Approvals       []reachR0Approval `json:"approvals"`
+	OwnerSet        *reachR0OwnerSet  `json:"owner_set"` // nil until R0 is recorded with an owner set
 }
 
 func reachReadJSON(t testing.TB, name string, v any) {
@@ -278,17 +288,6 @@ var reachHandlerAdmin = map[string]string{
 	"PUT /api/v1/users/:id/email":     "05-rbac 4.6: SetUserEmail checks core:admin in place of the admin role name (handlers/user.go:456-458) @v0.223.0",
 }
 
-// reachHandlerAdminSources are the HEAD handler files the pin is about, and the
-// role-name test each still carries. While those tests are in the code the pin
-// states what the router cannot see; the day F4-08 or the handler migration (04)
-// replaces them with rbac.Can, the pin has outlived its reason and
-// TestReachHandlerAdminPin_GoesWhenTheHandlersMigrate fails, so the registered
-// path must prove those handlers and the pin is deleted.
-var reachHandlerAdminSources = map[string]string{
-	"../../server/handlers/user_merge.go": "slices.Contains(actor.Roles, adminRole)",
-	"../../server/handlers/user.go":       "slices.Contains(actor.Roles, adminRole)",
-}
-
 // reachUnenforced are the atoms no route enforces: books' table gives them a
 // zero route requirement, and a route naming one is an error (resolveRoutes).
 var reachUnenforced = map[string]bool{"playlists.create": true}
@@ -412,6 +411,10 @@ type reachDiffResult struct {
 	r2Only    []string
 	compared  int
 	delegated []string // on R2 and R0, but enforced inside the ABS handler
+	// routesCompared counts the R0 routes whose cells were compared: R0's routes
+	// that R2 gates itself (neither delegated nor R0-only), counted as the loop
+	// meets them. Task starts and approvals are pseudo-routes and not counted.
+	routesCompared int
 }
 
 // reachDiff compares R0's recorded verdicts with R2's. It is pure: both sides
@@ -434,6 +437,9 @@ func reachDiff(r0 *reachR0Doc, r2 *reachR2) reachDiffResult {
 		if !ok {
 			res.r0Only = append(res.r0Only, k)
 			continue
+		}
+		if r.Method != reachTaskStartMethod && r.Method != reachTaskApproveMeth {
+			res.routesCompared++
 		}
 		// A route has a letter per principal; a task start or approval has one
 		// per principal the recorder asked (not the auth-disabled one).

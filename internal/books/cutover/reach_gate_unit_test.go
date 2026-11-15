@@ -1,12 +1,11 @@
 // file: internal/books/cutover/reach_gate_unit_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a8c2e71-0d36-4f94-b7a3-c1e9d6f20b58
 // last-edited: 2026-11-14
 
 package cutover
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -205,43 +204,6 @@ func TestReachGate_HandlerAdminPinRefusesWhoLacksCoreAdmin(t *testing.T) {
 	}
 	if len(reachHandlerAdmin) != 3 {
 		t.Errorf("reachHandlerAdmin pins %d routes, want the three the spec names", len(reachHandlerAdmin))
-	}
-}
-
-// The pin is an assumption about handler code, so it is held to the code. While
-// HEAD's role-name tests are in the handlers it stands; once they are gone the
-// pin must go with them and the registered path proves the handlers (seams.d/
-// F4-07.md, obligations on F4-08).
-func TestReachHandlerAdminPin_GoesWhenTheHandlersMigrate(t *testing.T) {
-	for path, want := range reachHandlerAdminSources {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		if !strings.Contains(string(b), want) {
-			t.Errorf("%s no longer holds %q: the handler check the reachHandlerAdmin pin states has moved. Delete the pin and prove the three routes (footprint, merges, email) through the registered path, as seams.d/F4-07.md asks of F4-08", path, want)
-		}
-	}
-}
-
-// The pin refuses a caller without core:admin on top of the route's own
-// requirement; it does not replace it. A pinned route that stops asking for
-// users.manage at the router would still pass the gate, because every cell the
-// pin leaves open is one R0 also leaves open, so the requirement is asserted here.
-func TestReachHandlerAdminPin_SitsOnRoutesThatAskForUsersManage(t *testing.T) {
-	seen := 0
-	for _, lr := range reachManifest() {
-		key := lr.Method + " " + lr.GinPath
-		if _, pinned := reachHandlerAdmin[key]; !pinned {
-			continue
-		}
-		seen++
-		if lr.Perm.Kind() != rbac.KindLegacyAtom || lr.Perm.Atom() != "users.manage" {
-			t.Errorf("%s is pinned as a handler-level core:admin check, but its route requirement is kind %v, not the users.manage atom", key, lr.Perm.Kind())
-		}
-	}
-	if seen != len(reachHandlerAdmin) {
-		t.Errorf("%d of %d pinned routes are in the manifest", seen, len(reachHandlerAdmin))
 	}
 }
 

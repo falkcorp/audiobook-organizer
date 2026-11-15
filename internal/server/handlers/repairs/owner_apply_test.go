@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/owner_apply_test.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 4c8a1e57-3b29-4d6f-a0e4-6f2d9b7c1a83
-// last-edited: 2026-11-09
+// last-edited: 2026-11-14
 
 package repairs
 
@@ -240,6 +240,42 @@ func TestOwnerApply_RefusesNonInteractiveOrNonAdmin(t *testing.T) {
 			r, enq, _ := ownerSetup(t, caller)
 			w := ownerPost(r, ownerPath, `{"plan_op_id":"op-owner-plan","row_id":"own"}`, browserHdrs)
 			require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+			require.Empty(t, enq.calls)
+		})
+	}
+}
+
+// The admin-role check (handler.go, the case after the owner proof) is the one
+// the F4-07 reach oracle cannot see: its probe's dummy fixer id is a 404 before
+// any authorization (round-2 MINOR-5). Here the fixer, plan and row are real and
+// the owner proof is valid (a verified Access sign-in as owner_email), so the only
+// thing left to refuse a caller is the role: every non-admin, whatever scopes its
+// roles hold, gets the admin-role message and nothing is enqueued, while an admin
+// passes the same request. The reach oracle's session:editor, session:viewer and
+// custom roles map to the roles below.
+func TestOwnerApply_AdminRoleCheckIsReachedWithARealIDAndRefusesEveryNonAdmin(t *testing.T) {
+	body := `{"plan_op_id":"op-owner-plan","row_id":"own"}`
+	for name, roles := range map[string][]string{
+		"editor":                 {"editor"},
+		"viewer":                 {"viewer"},
+		"custom role":            {"custom-all"},
+		"fp-worker":              {"fp-worker"},
+		"a role named like it":   {"administrator"},
+		"no role":                nil,
+		"admin among the others": {"viewer", "admin"},
+	} {
+		wantAdmin := name == "admin among the others"
+		t.Run(name, func(t *testing.T) {
+			user := &database.User{ID: "u-owner", Username: "owner", Status: "active", Roles: roles}
+			r, enq, _ := ownerSetup(t, ownerCaller{auth.MethodCFAccess, user, testOwnerEmail})
+			w := ownerPost(r, ownerPath, body, browserHdrs)
+			if wantAdmin {
+				require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+				require.Len(t, enq.calls, 1)
+				return
+			}
+			require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+			require.Contains(t, w.Body.String(), "owner apply needs the admin role", "the refusal must be the admin-role check, not an earlier one")
 			require.Empty(t, enq.calls)
 		})
 	}
