@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_m5_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 3e8b6d14-52a7-4c9f-b1d0-7a4f92c6e385
 // last-edited: 2026-11-15
 
@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/tasks"
@@ -21,6 +22,8 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // Review item M5, the tests the first rounds left out: each one fails on the
@@ -85,6 +88,47 @@ func TestT6G6Head_HealRunReflinksMissingTrack(t *testing.T) {
 	require.NoError(t, p.itunesHealDef().Run(context.Background(), json.RawMessage(`{}`), &fakeReporter{}))
 	_, err := os.Stat(filepath.Join(healDir, "Hush.mp3"))
 	require.NoError(t, err, "the heal reflinked the missing track to its mapped path")
+}
+
+// The heal declares ai_journal because the journal its ambiguous-track resolver
+// is handed writes aijournal: keys. The spy answers HealWhisperJournal with nil,
+// and the transcription that calls Complete needs ffmpeg and a whisper pool, so
+// this pins the production side of the same claim: the journal HEAD's writer
+// hands the heal (reconcile.NewHeadHealWriter, which the native writer adapts)
+// puts its result under the aijournal: root of a real store, and the kind's
+// Effects declare the resource that names that root (stack review C11).
+func TestT6G6Kinds_HealWhisperJournalWritesTheDeclaredAIJournalKeys(t *testing.T) {
+	store := newRepairPebble(t)
+	j := reconcile.NewHeadHealWriter(store).HealWhisperJournal()
+	require.NotNil(t, j, "a store with a raw KV surface yields the whisper journal")
+
+	before, _, err := store.ScanPrefixPage("", "", 1000)
+	require.NoError(t, err)
+	require.NoError(t, j.Complete("batclip-0001", "http://192.0.2.10:8000", "base", map[string]string{"text": "Year One"}))
+	after, _, err := store.ScanPrefixPage("", "", 1000)
+	require.NoError(t, err)
+
+	seen := map[string]bool{}
+	for _, kv := range before {
+		seen[kv.Key] = true
+	}
+	var written []string
+	for _, kv := range after {
+		if !seen[kv.Key] {
+			written = append(written, kv.Key)
+		}
+	}
+	require.NotEmpty(t, written, "Complete journals the result")
+	for _, k := range written {
+		require.True(t, strings.HasPrefix(k, "aijournal:whisper:"), "the heal's journal writes only under the ai_journal keyspace (pkg/ops.ResAIJournal), wrote %q", k)
+	}
+
+	def := t6g6ByKind(t, (&Plugin{}).t6g6Kinds(newT6G6Probe(t).deps(), nil), itunesHealKind)
+	declared := map[string]bool{}
+	for _, res := range tasks.CommonOf(def).Effects.WriteSet() {
+		declared[tasks.FormatRef(res)] = true
+	}
+	require.True(t, declared["books/"+string(ops.ResAIJournal)], "%s writes aijournal: keys but does not declare %s", itunesHealKind, ops.ResAIJournal)
 }
 
 // ---- param pass-throughs ----------------------------------------------------
