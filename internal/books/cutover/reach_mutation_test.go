@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_mutation_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d3f60a82-7b19-4e54-8c2d-0a5e91b4f736
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package cutover
 
@@ -155,22 +155,34 @@ func reachRouteMutants(routes []httpapi.LegacyRoute) []reachRouteMutant {
 }
 
 // reachEquivalentKind says why a mutant that changed no route's R2 verdict for
-// any of the 37 principals could not have been seen by this oracle: a guard or the
-// handler pin already dominates the requirement the mutant changed, or the
-// principal table does not hold a principal that tells the two requirements apart
-// (every holder of the old requirement holds the new one, and the reverse).
+// any of the 37 principals, and that neither the owner-set comparison nor any
+// other check of reachChecks fails on, could not have been seen by this oracle: an
+// Owner guard or the handler pin dominates the requirement the mutant changed (the
+// fallback and the owner-set model both refuse every principal of the table on a
+// guarded route whatever its requirement says), or the principal table does not
+// hold a principal that tells the two requirements apart (every holder of the old
+// requirement holds the new one, and the reverse). The three mutants that DROP an
+// Owner guard are not in this class: the owner-set model reads R2, so a route that
+// lost its guard no longer refuses the admin session, which the recording refuses.
 func reachEquivalentKind(m reachRouteMutant, routes []httpapi.LegacyRoute) string {
 	lr := routes[m.idx]
 	if _, pinned := reachHandlerAdmin[m.route]; pinned || lr.Guards.Owner {
-		return "dominated by the Owner guard (the table holds no owner-assured principal, so the no-owner fallback and the owner-set model both refuse everyone it refuses) or by the handler-admin pin"
+		return "dominated by the Owner guard (the table holds no owner-assured principal, so the no-owner fallback and the owner-set model both refuse everyone the requirement would) or by the handler-admin pin"
 	}
 	return "no principal of the table tells the requirement from its replacement"
 }
 
 // reachEquivalentMutants is how many mutants the generator produces that move no
-// principal's reach. It is pinned so a change in the oracle's resolving power (a
-// principal added or dropped, a requirement changed) is a visible decision.
-const reachEquivalentMutants = 30
+// principal's reach and that no check of reachChecks fails on. It is pinned so a
+// change in the oracle's resolving power (a principal added or dropped, a
+// requirement changed) is a visible decision.
+const reachEquivalentMutants = 27
+
+// reachKilledByOwnerSet is how many mutants leave every principal's R2 letter
+// unchanged and are failed by reachChecks all the same: the Owner guard dropped on
+// the three guest-token routes, whose own requirement (core:admin) gives the
+// admin session the letter the fallback gave it, but which the recording refuses.
+const reachKilledByOwnerSet = 3
 
 func reachVerdictsEqual(a, b *reachR2) bool { return maps.Equal(a.verdict, b.verdict) }
 
@@ -199,6 +211,7 @@ func TestReachOracle_AnyChangedManifestRouteFailsTheOracle(t *testing.T) {
 	byKind := map[string][3]int{} // total, moved reach and failed, equivalent
 	var escaped []string
 	equivalentWhy := map[string]int{}
+	killedByOwnerSet, equivalentButPinned := 0, 0
 	for _, m := range mutants {
 		changed := slices.Clone(routes)
 		m.apply(&changed[m.idx])
@@ -208,8 +221,16 @@ func TestReachOracle_AnyChangedManifestRouteFailsTheOracle(t *testing.T) {
 		switch {
 		case err != nil:
 			c[1]++ // a route that no longer resolves fails the oracle by itself
+		case reachVerdictsEqual(baseR2, r2) && len(reachChecks(vd, res, rows)) > 0:
+			// R2's letters did not move and the oracle fails anyway: the owner-set
+			// comparison reads the manifest's guards, not only its letters.
+			killedByOwnerSet++
+			c[1]++
 		case reachVerdictsEqual(baseR2, r2):
 			equivalentWhy[reachEquivalentKind(m, routes)]++
+			if len(reachMaskedProblemsOf(changed)) > 0 {
+				equivalentButPinned++
+			}
 			c[2]++
 		default:
 			if len(reachChecks(vd, res, rows)) == 0 {
@@ -230,12 +251,15 @@ func TestReachOracle_AnyChangedManifestRouteFailsTheOracle(t *testing.T) {
 		total, caught, equivalent = total+c[0], caught+c[1], equivalent+c[2]
 		t.Logf("manifest mutants %-48s %4d: reach moved and oracle failed %4d, equivalent %3d", k, c[0], c[1], c[2])
 	}
-	t.Logf("manifest mutants in all: %d; reach moved and the oracle failed on %d; equivalent (reach unchanged) %d; escaped %d", total, caught, equivalent, len(escaped))
+	t.Logf("manifest mutants in all: %d; killed (reach moved and the oracle failed, or reach unchanged and the owner-set comparison failed it) %d, of which %d by the owner-set comparison alone; equivalent %d (%d of them also failed by the masked-route pin, which this loop does not run); escaped %d", total, caught, killedByOwnerSet, equivalent, equivalentButPinned, len(escaped))
 	for why, n := range equivalentWhy {
 		t.Logf("equivalent mutants (reach unchanged for all principals), %d: %s", n, why)
 	}
 	for _, e := range escaped {
 		t.Error(e)
+	}
+	if killedByOwnerSet != reachKilledByOwnerSet {
+		t.Errorf("%d mutants kept R2's letters and were failed by the owner-set comparison, want the %d Owner-guard drops on the guest-token routes", killedByOwnerSet, reachKilledByOwnerSet)
 	}
 	if equivalent != reachEquivalentMutants {
 		t.Errorf("%d mutants changed no principal's reach, the pinned count is %d: the oracle's resolving power changed (a principal, a requirement or the generator)", equivalent, reachEquivalentMutants)
@@ -346,10 +370,13 @@ var reachMaskedRoutes = map[string]string{
 }
 
 // reachMaskedProblems is what the masked-route pin fails on, as text.
-func reachMaskedProblems() []string {
+func reachMaskedProblems() []string { return reachMaskedProblemsOf(reachManifest()) }
+
+// reachMaskedProblemsOf is reachMaskedProblems over the given manifest.
+func reachMaskedProblemsOf(routes []httpapi.LegacyRoute) []string {
 	var out []string
 	got := map[string]string{}
-	for _, lr := range reachManifest() {
+	for _, lr := range routes {
 		k := lr.Method + " " + lr.GinPath
 		if _, pinned := reachHandlerAdmin[k]; pinned || lr.Guards.Owner {
 			got[k] = lr.Perm.String()

@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_gate_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7d3a8f21-6c4e-4b95-a0d7-1e9b2c5f8a36
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package cutover
 
@@ -273,7 +273,9 @@ func reachGateProblems(res reachDiffResult, rows []reachExpect) []string {
 
 // reachChecks is everything the oracle fails on for one run: the gate (an
 // unexpected cell, an unused or miscounted row), the routes only one side has,
-// the delegated set, the uniform-404 routes, the oracle's size and the golden cell list.
+// the delegated set, the uniform-404 routes, the oracle's size, the golden cell
+// list and the owner-set comparison (the recording against the model that reads
+// res.r2, the evaluation of the manifest this run judged).
 func reachChecks(vd *reachR0Doc, res reachDiffResult, rows []reachExpect) []string {
 	out := reachGateProblems(res, rows)
 	out = append(out, reachOneSideProblems(res)...)
@@ -281,7 +283,7 @@ func reachChecks(vd *reachR0Doc, res reachDiffResult, rows []reachExpect) []stri
 	out = append(out, reachUniformNotFoundProblems(vd)...)
 	out = append(out, reachCountProblems(vd, res)...)
 	out = append(out, reachGoldenProblems(res)...)
-	return out
+	return append(out, reachOwnerSetProblems(vd, res.r2, reachNoOwnerAssured)...)
 }
 
 // reachStaticProblems are the pins that are not about one run's cells: the
@@ -295,13 +297,23 @@ func reachStaticProblems(t testing.TB, vd *reachR0Doc, atoms []m3.AtomRow, whos 
 	var out []string
 	out = append(out, reachMaskedProblems()...)
 	out = append(out, reachHandlerAdminProblems(os.ReadFile, reachHandlerAdmin, reachHandlerAdminFuncs)...)
+	routeSrc, err := os.ReadFile(reachRouteSource)
+	if err != nil {
+		return append(out, err.Error())
+	}
+	out = append(out, reachRouteHandlerProblems(routeSrc, reachHandlerAdmin, reachHandlerRoutes)...)
 	out = append(out, reachPinSitProblems()...)
 	out = append(out, reachPinHiddenProblems(t, vd, atoms, whos, res)...)
+	seams, err := os.ReadFile(reachSeamsSource)
+	if err != nil {
+		return append(out, err.Error())
+	}
+	out = append(out, reachObligationProblems(reachObligationInput{vd: vd, res: res, refusals: len(reachHandlerRefusals()), assured: reachNoOwnerAssured}, reachFlipObligations, seams)...)
 	src, err := os.ReadFile(reachMountSource)
 	if err != nil {
 		return append(out, err.Error())
 	}
-	return append(out, reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil)...)
+	return append(out, reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil, reachFlipObligations)...)
 }
 
 // reachOracleRows are every expected row the oracle holds the diff to.

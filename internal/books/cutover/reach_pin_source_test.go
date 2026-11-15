@@ -1,7 +1,7 @@
 // file: internal/books/cutover/reach_pin_source_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6dca55f4-5b1d-4718-b6a4-30854084cc7c
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package cutover
 
@@ -12,6 +12,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -152,49 +153,99 @@ func reachEndsInReturn(b *ast.BlockStmt) bool {
 	return ok
 }
 
-// reachHasAdminRefusal reports whether the body holds the pinned refusal: an if
-// whose condition ORs both negated tests and whose body returns.
-func reachHasAdminRefusal(body *ast.BlockStmt) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		ifs, ok := n.(*ast.IfStmt)
-		if !ok || found {
-			return !found
-		}
-		role, key := false, false
-		for _, op := range reachOrOperands(ifs.Cond) {
-			role = role || reachNegatedCall(op, reachIsAdminRoleTest)
-			key = key || reachNegatedCall(op, reachIsKeyMayActAsAdmin)
-		}
-		if role && key && reachEndsInReturn(ifs.Body) {
-			found = true
-		}
-		return !found
-	})
-	return found
+// reachIsCurrentUserAssign reports whether st is `<a>, <b> := <pkg>.CurrentUser(c)`,
+// the only statement that may precede the refusal.
+func reachIsCurrentUserAssign(st ast.Stmt) bool {
+	as, ok := st.(*ast.AssignStmt)
+	if !ok || as.Tok != token.DEFINE || len(as.Rhs) != 1 {
+		return false
+	}
+	call, ok := as.Rhs[0].(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "CurrentUser"
 }
 
-// reachCallsGuard reports whether the body calls <x>.name(...) as the condition
-// or init of an if whose body returns when it fails: `if _, ok := h.name(c); !ok {
-// return }` (the shape every merge handler uses).
-func reachCallsGuard(body *ast.BlockStmt, name string) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		ifs, ok := n.(*ast.IfStmt)
-		if !ok || found || ifs.Init == nil || !reachEndsInReturn(ifs.Body) {
-			return !found
+// reachIsAdminRefusal reports whether st is the pinned refusal: an if with no init
+// whose condition ORs both negated tests and whose body returns.
+func reachIsAdminRefusal(st ast.Stmt) bool {
+	ifs, ok := st.(*ast.IfStmt)
+	if !ok || ifs.Init != nil {
+		return false
+	}
+	role, key := false, false
+	for _, op := range reachOrOperands(ifs.Cond) {
+		role = role || reachNegatedCall(op, reachIsAdminRoleTest)
+		key = key || reachNegatedCall(op, reachIsKeyMayActAsAdmin)
+	}
+	return role && key && reachEndsInReturn(ifs.Body)
+}
+
+// reachHasAdminRefusal reports whether the body holds the pinned refusal as a
+// TOP-LEVEL statement, preceded by nothing but the CurrentUser assignment: an if
+// that ORs both negated tests and returns. Walking the whole body (as an earlier
+// version did) accepted the refusal inside a dead closure, under `if false`, or
+// behind a request parameter (round-3 MINOR-A M1, M2, M4): each leaves the text
+// and removes the refusal for the caller the pin is about.
+func reachHasAdminRefusal(body *ast.BlockStmt) bool {
+	for i, st := range body.List {
+		if i > 1 {
+			return false
 		}
-		ast.Inspect(ifs.Init, func(m ast.Node) bool {
-			if c, ok := m.(*ast.CallExpr); ok {
-				if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
-					found = true
-				}
-			}
-			return !found
-		})
-		return !found
-	})
-	return found
+		if reachIsAdminRefusal(st) {
+			return i == 0 || reachIsCurrentUserAssign(body.List[0])
+		}
+		if i == 0 && !reachIsCurrentUserAssign(st) {
+			return false
+		}
+	}
+	return false
+}
+
+// reachCallsGuard reports whether the body's FIRST statement is
+// `if _, ok := <x>.name(...); !ok { ...return }`, the shape every merge handler
+// uses: the condition is exactly the negation of the identifier the init assigned
+// from the call, so `; ok {`, `; false {` and a guard that is not the first
+// statement are refused.
+func reachCallsGuard(body *ast.BlockStmt, name string) bool {
+	if len(body.List) == 0 {
+		return false
+	}
+	ifs, ok := body.List[0].(*ast.IfStmt)
+	if !ok || ifs.Init == nil || !reachEndsInReturn(ifs.Body) {
+		return false
+	}
+	as, ok := ifs.Init.(*ast.AssignStmt)
+	if !ok || as.Tok != token.DEFINE || len(as.Rhs) != 1 || len(as.Lhs) != 2 {
+		return false
+	}
+	call, ok := as.Rhs[0].(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != name {
+		return false
+	}
+	okID, ok := as.Lhs[1].(*ast.Ident)
+	if !ok {
+		return false
+	}
+	var cond ast.Expr = ifs.Cond
+	for {
+		p, isParen := cond.(*ast.ParenExpr)
+		if !isParen {
+			break
+		}
+		cond = p.X
+	}
+	u, ok := cond.(*ast.UnaryExpr)
+	if !ok || u.Op != token.NOT {
+		return false
+	}
+	id, ok := u.X.(*ast.Ident)
+	return ok && id.Name == okID.Name
 }
 
 // reachAdminFuncProblems checks one function against the source of its file.
@@ -259,6 +310,144 @@ func TestReachHandlerAdminPin_GoesWhenTheHandlersMigrate(t *testing.T) {
 	}
 }
 
+// ---- the registered route table ----
+
+// reachRouteSource is where the three pinned routes are registered.
+const reachRouteSource = "../../server/wire_library_routes.go"
+
+// reachHandlerRoutes names, for each pinned route, the handler the registration
+// must hand it: the functions reachHandlerAdminFuncs checks are the ones the route
+// reaches only while this holds. Without it the pin could keep the text of a
+// handler that no longer serves the route (round-3 MINOR-A M7).
+var reachHandlerRoutes = map[string]string{
+	"GET /api/v1/users/:id/footprint": "UserFootprint",
+	"GET /api/v1/users/merges":        "ListUserMerges",
+	"PUT /api/v1/users/:id/email":     "SetUserEmail",
+}
+
+// reachRegistration is one route registration read from wire_library_routes.go.
+type reachRegistration struct {
+	method  string
+	suffix  string // the group's own prefix plus the route's: "/users/merges"
+	handler string // the last argument, `userH.<name>`'s name, or "" when it is not one
+}
+
+// reachRegistrations reads every registration on a group the file creates with
+// `x := ....Group("/prefix")`: x.GET/PUT/POST/DELETE/PATCH(rel, ...) and
+// s.credRoute / s.credRouteWhen / s.ownerCredRoute(x, http.MethodX, rel, ...).
+func reachRegistrations(src []byte) ([]reachRegistration, error) {
+	f, err := parser.ParseFile(token.NewFileSet(), reachRouteSource, src, 0)
+	if err != nil {
+		return nil, err
+	}
+	str := func(e ast.Expr) (string, bool) {
+		lit, ok := e.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return "", false
+		}
+		v, err := strconv.Unquote(lit.Value)
+		return v, err == nil
+	}
+	prefix := map[string]string{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || len(call.Args) < 1 {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Group" {
+			if id, ok := as.Lhs[0].(*ast.Ident); ok {
+				if v, ok := str(call.Args[0]); ok {
+					prefix[id.Name] = v
+				}
+			}
+		}
+		return true
+	})
+	handlerOf := func(call *ast.CallExpr) string {
+		sel, ok := call.Args[len(call.Args)-1].(*ast.SelectorExpr)
+		if !ok {
+			return ""
+		}
+		if x, ok := sel.X.(*ast.Ident); !ok || x.Name != "userH" {
+			return ""
+		}
+		return sel.Sel.Name
+	}
+	verbs := map[string]bool{"GET": true, "PUT": true, "POST": true, "DELETE": true, "PATCH": true}
+	var out []reachRegistration
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch {
+		case verbs[sel.Sel.Name]:
+			g, ok := sel.X.(*ast.Ident)
+			rel, ok2 := str(call.Args[0])
+			if ok && ok2 && prefix[g.Name] != "" {
+				out = append(out, reachRegistration{sel.Sel.Name, prefix[g.Name] + rel, handlerOf(call)})
+			}
+		case sel.Sel.Name == "credRoute" || sel.Sel.Name == "credRouteWhen" || sel.Sel.Name == "ownerCredRoute":
+			if len(call.Args) < 4 {
+				return true
+			}
+			g, ok := call.Args[0].(*ast.Ident)
+			verb, ok2 := call.Args[1].(*ast.SelectorExpr)
+			rel, ok3 := str(call.Args[2])
+			if ok && ok2 && ok3 && prefix[g.Name] != "" && strings.HasPrefix(verb.Sel.Name, "Method") {
+				out = append(out, reachRegistration{strings.ToUpper(strings.TrimPrefix(verb.Sel.Name, "Method")), prefix[g.Name] + rel, handlerOf(call)})
+			}
+		}
+		return true
+	})
+	return out, nil
+}
+
+// reachRouteHandlerProblems is what the route-to-handler side of the pin fails on,
+// as text: each pinned route is registered exactly once, with the handler
+// reachHandlerRoutes names.
+func reachRouteHandlerProblems(src []byte, pin map[string]string, want map[string]string) []string {
+	regs, err := reachRegistrations(src)
+	if err != nil {
+		return []string{reachRouteSource + " does not parse: " + err.Error()}
+	}
+	var out []string
+	for route := range pin {
+		method, path, _ := strings.Cut(route, " ")
+		wantHandler, ok := want[route]
+		if !ok {
+			out = append(out, route+" is pinned and reachHandlerRoutes names no handler for it")
+			continue
+		}
+		var hits []reachRegistration
+		for _, r := range regs {
+			if r.method == method && strings.HasSuffix(path, r.suffix) {
+				hits = append(hits, r)
+			}
+		}
+		switch {
+		case len(hits) != 1:
+			out = append(out, fmt.Sprintf("%s: %s registers it %d time(s), want exactly 1", route, reachRouteSource, len(hits)))
+		case hits[0].handler != wantHandler:
+			out = append(out, fmt.Sprintf("%s: %s registers it with %q, the pin rests on userH.%s", route, reachRouteSource, hits[0].handler, wantHandler))
+		}
+	}
+	for route := range want {
+		if _, ok := pin[route]; !ok {
+			out = append(out, route+" has a handler named in reachHandlerRoutes and is not pinned")
+		}
+	}
+	return out
+}
+
 // ---- the mount switch ----
 
 const reachMountSource = "../module.go"
@@ -312,9 +501,10 @@ func reachMountAuth(src []byte) (string, error) {
 // false), books may mount only with LegacyAuthGin: the router is not the
 // authorization decision for the 11 pinned cells until the registered path
 // proves the handlers, and the oracle models no owner-assured deployment until
-// R0 has been recorded with an owner set. An unreadable or unfamiliar mount fails
-// closed.
-func reachFlipProblems(src []byte, pinned int, ownerRecorded bool) []string {
+// R0 has been recorded with an owner set. It also fails once per open obligation
+// (reachFlipObligations: what the oracle knows it does not compare), so that list
+// must be empty at the flip. An unreadable or unfamiliar mount fails closed.
+func reachFlipProblems(src []byte, pinned int, ownerRecorded bool, obligations []reachFlipObligation) []string {
 	auth, err := reachMountAuth(src)
 	if err != nil {
 		return []string{"the mount's Auth could not be read, so the flip to LegacyAuthCore cannot be ruled out: " + err.Error()}
@@ -330,6 +520,9 @@ func reachFlipProblems(src []byte, pinned int, ownerRecorded bool) []string {
 		if !ownerRecorded {
 			out = append(out, "books mounts with LegacyAuthCore and verdicts.json holds no owner_set recording: the oracle modelled only deployments with no owner set (05-authn 4.8 keeps the owner-set behaviour through core.auth.owner.required). Record R0 with owner_email set and model it before the flip")
 		}
+		for _, o := range obligations {
+			out = append(out, fmt.Sprintf("books mounts with LegacyAuthCore while %s is open: %s", o.name, o.discharge))
+		}
 		return out
 	}
 	return []string{fmt.Sprintf("books mounts with Auth %s, which this guard does not know: it fails closed until the guard names it", auth)}
@@ -344,7 +537,7 @@ func TestReachFlip_FailsWhileThePinOrTheOwnerlessModelStands(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, vd := reachLoad(t)
-	for _, p := range reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil) {
+	for _, p := range reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil, reachFlipObligations) {
 		t.Error(p)
 	}
 }
@@ -471,18 +664,142 @@ func TestReachFlip_FailsAtTheFlipWhileThePinOrTheOwnerlessModelStands(t *testing
 		src           []byte
 		pinned        int
 		ownerRecorded bool
+		obligations   []reachFlipObligation
 		want          int // problems
 	}{
-		{"unflipped: nothing to say", src, 3, false, 0},
-		{"flipped with the pin", flipped, 3, true, 1},
-		{"flipped with no owner-set recording", flipped, 0, false, 1},
-		{"flipped with both", flipped, 3, false, 2},
-		{"flipped with neither: free to go", flipped, 0, true, 0},
-		{"an unreadable mount fails closed", []byte("package books\n"), 0, true, 1},
-		{"an unfamiliar Auth fails closed", reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        authMode(),"), 0, true, 1},
+		{"unflipped: nothing to say", src, 3, false, reachFlipObligations, 0},
+		{"flipped with the pin", flipped, 3, true, nil, 1},
+		{"flipped with no owner-set recording", flipped, 0, false, nil, 1},
+		{"flipped with both", flipped, 3, false, nil, 2},
+		{"flipped with neither and no open obligation: free to go", flipped, 0, true, nil, 0},
+		{"flipped with every open obligation", flipped, 0, true, reachFlipObligations, len(reachFlipObligations)},
+		{"an unreadable mount fails closed", []byte("package books\n"), 0, true, nil, 1},
+		{"an unfamiliar Auth fails closed", reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        authMode(),"), 0, true, nil, 1},
 	} {
-		if got := reachFlipProblems(tc.src, tc.pinned, tc.ownerRecorded); len(got) != tc.want {
+		if got := reachFlipProblems(tc.src, tc.pinned, tc.ownerRecorded, tc.obligations); len(got) != tc.want {
 			t.Errorf("%s: %d problem(s) %q, want %d", tc.name, len(got), got, tc.want)
 		}
+	}
+}
+
+// One flip case per obligation: with the pin gone and an owner-set recording, an
+// obligation that is the only one open still blocks the flip, with exactly one
+// problem that names it. Removing an entry from the list while the flip stands is
+// caught by reachObligationProblems (reach_flip_obligations_test.go).
+func TestReachFlip_EachOpenObligationAloneBlocksTheFlip(t *testing.T) {
+	src, err := os.ReadFile(reachMountSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped := reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        httpapi.LegacyAuthCore,")
+	if len(reachFlipObligations) == 0 {
+		t.Fatal("no open obligations listed: nothing blocks the flip")
+	}
+	for _, o := range reachFlipObligations {
+		got := reachFlipProblems(flipped, 0, true, []reachFlipObligation{o})
+		if len(got) != 1 || !strings.Contains(got[0], o.name) {
+			t.Errorf("flipped with only %s open: %q", o.name, got)
+		}
+	}
+}
+
+// ---- round-3 MINOR-A: the refusal must be a top-level statement, and the pinned
+// routes must reach the functions that hold it ----
+
+func TestReachRouteTable_TheRealRegistrationsNameThePinnedHandlers(t *testing.T) {
+	src, err := os.ReadFile(reachRouteSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := reachRouteHandlerProblems(src, reachHandlerAdmin, reachHandlerRoutes); len(p) != 0 {
+		t.Fatalf("%s", strings.Join(p, "\n"))
+	}
+	regs, err := reachRegistrations(src)
+	if err != nil || len(regs) < 10 {
+		t.Fatalf("the registration reader found %d registrations (%v): it no longer reads the file's shapes", len(regs), err)
+	}
+}
+
+// M7: the route is rewired to a different handler (the pin keeps the text of one
+// that no longer serves it), registered twice, or no longer registered at all.
+func TestReachRouteTable_FailsWhenAPinnedRouteIsRewiredDuplicatedOrDropped(t *testing.T) {
+	src, err := os.ReadFile(reachRouteSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const email = `s.credRoute(users, http.MethodPut, "/:id/email", s.perm("users.manage"), userH.SetUserEmail)`
+	const merges = `users.GET("/merges", s.perm("users.manage"), userH.ListUserMerges)`
+	const footprint = `users.GET("/:id/footprint", s.perm("users.manage"), userH.UserFootprint)`
+	for _, tc := range []struct {
+		name, from, to, want string
+	}{
+		{"M7: the email route rewired to another handler", email, `s.credRoute(users, http.MethodPut, "/:id/email", s.perm("users.manage"), userH.DeactivateUser)`, "DeactivateUser"},
+		{"the merges route rewired to the footprint handler", merges, `users.GET("/merges", s.perm("users.manage"), userH.UserFootprint)`, "UserFootprint"},
+		{"the footprint route rewired to a closure", footprint, `users.GET("/:id/footprint", s.perm("users.manage"), func(c *gin.Context) {})`, `registers it with ""`},
+		{"the email route registered twice", email, email + "\n\t\t" + email, "2 time(s)"},
+		{"the footprint route no longer registered", footprint, "", "0 time(s)"},
+		{"the merges route moved to another verb", merges, `users.POST("/merges", s.perm("users.manage"), userH.ListUserMerges)`, "0 time(s)"},
+	} {
+		got := reachRouteHandlerProblems(reachMutate(t, src, tc.from, tc.to), reachHandlerAdmin, reachHandlerRoutes)
+		if len(got) != 1 || !strings.Contains(got[0], tc.want) {
+			t.Errorf("%s: %q, want one problem naming %s", tc.name, got, tc.want)
+		}
+	}
+	if got := reachRouteHandlerProblems(src, map[string]string{"GET /api/v1/batcave/gadgets": "x"}, reachHandlerRoutes); len(got) == 0 {
+		t.Error("a pinned route with no handler named was accepted")
+	}
+	if got := reachRouteHandlerProblems(src, map[string]string{}, reachHandlerRoutes); len(got) == 0 {
+		t.Error("a handler named for a route that is no longer pinned was accepted")
+	}
+}
+
+// M1, M2 and M4 (and the guard-call variants): each keeps the refusal's text and
+// takes it off the path of the caller the pin is about.
+func TestReachHandlerAdminPin_FailsWhenTheRefusalIsNotATopLevelStatement(t *testing.T) {
+	user, err := os.ReadFile("../../server/handlers/user.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	merge, err := os.ReadFile("../../server/handlers/user_merge.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const setCond = `!ok || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c)`
+	const setIf = "\tif " + setCond + " {\n\t\thttputil.RespondWithForbidden(c, \"setting another user's email needs the admin role\")\n\t\treturn\n\t}\n"
+	const mergeCond = `!has || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c)`
+	const mergeIf = "\tif " + mergeCond + " {\n\t\thttputil.RespondWithForbidden(c, \"merging accounts needs the admin role\")\n\t\treturn \"\", false\n\t}\n"
+	const foot = "func (h *UserHandler) UserFootprint(c *gin.Context) {\n\tif _, ok := h.mergeActor(c); !ok {\n\t\treturn\n\t}\n"
+	for _, tc := range []struct {
+		name string
+		file string
+		src  []byte
+		from string
+		to   string
+		want string
+	}{
+		{"M1: SetUserEmail's refusal inside a closure that is never called", "handlers/user.go", user, setIf, "\t_ = func() {\n" + setIf + "\t}\n", "SetUserEmail"},
+		{"M2: SetUserEmail's refusal under if false", "handlers/user.go", user, "\tif " + setCond + " {\n\t\thttputil.RespondWithForbidden(c, \"setting another user's email needs the admin role\")", "\tif false {\n\t\thttputil.RespondWithForbidden(c, \"setting another user's email needs the admin role\")", "SetUserEmail"},
+		{"M4: SetUserEmail's refusal behind a query parameter", "handlers/user.go", user, setIf, "\tif c.Query(\"batarang\") == \"\" {\n" + setIf + "\t}\n", "SetUserEmail"},
+		{"SetUserEmail's refusal moved below another statement", "handlers/user.go", user, setIf + "\tif h.emailSetter == nil {", "\tif h.emailSetter == nil {" + "\n\t\thttputil.RespondWithInternalError(c, \"x\")\n\t\treturn\n\t}\n" + setIf + "\tif false {", "SetUserEmail"},
+		{"M1: mergeActor's refusal inside a closure", "handlers/user_merge.go", merge, mergeIf, "\t_ = func() {\n" + mergeIf + "\t}\n", "mergeActor"},
+		{"M2: mergeActor's refusal under if false", "handlers/user_merge.go", merge, "\tif " + mergeCond + " {\n\t\thttputil.RespondWithForbidden(c, \"merging accounts needs the admin role\")", "\tif false {\n\t\thttputil.RespondWithForbidden(c, \"merging accounts needs the admin role\")", "mergeActor"},
+		{"M4: mergeActor's refusal behind a query parameter", "handlers/user_merge.go", merge, mergeIf, "\tif c.Query(\"batarang\") == \"\" {\n" + mergeIf + "\t}\n", "mergeActor"},
+		{"the footprint guard call's condition is false", "handlers/user_merge.go", merge, foot, "func (h *UserHandler) UserFootprint(c *gin.Context) {\n\tif _, ok := h.mergeActor(c); false {\n\t\treturn\n\t}\n", "UserFootprint"},
+		{"the footprint guard call is gated behind a query parameter", "handlers/user_merge.go", merge, foot, "func (h *UserHandler) UserFootprint(c *gin.Context) {\n\tif c.Query(\"batarang\") == \"\" {\n\tif _, ok := h.mergeActor(c); !ok {\n\t\treturn\n\t}\n\t}\n", "UserFootprint"},
+		{"the footprint guard call tests a different identifier", "handlers/user_merge.go", merge, foot, "func (h *UserHandler) UserFootprint(c *gin.Context) {\n\tif _, ok := h.mergeActor(c); !c.IsAborted() {\n\t\treturn\n\t}\n", "UserFootprint"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mutant := reachMutate(t, tc.src, tc.from, tc.to)
+			read := func(path string) ([]byte, error) {
+				if strings.HasSuffix(path, tc.file) {
+					return mutant, nil
+				}
+				return os.ReadFile(path)
+			}
+			got := reachHandlerAdminProblems(read, reachHandlerAdmin, reachHandlerAdminFuncs)
+			if len(got) == 0 || !strings.Contains(strings.Join(got, "\n"), tc.want) {
+				t.Errorf("%s: the guard passed or does not name %s: %q", tc.name, tc.want, got)
+			}
+		})
 	}
 }
