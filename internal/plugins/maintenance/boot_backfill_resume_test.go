@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/boot_backfill_resume_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 579d9a65-c4dd-4668-8bd0-c8fb6914b259
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -196,7 +196,7 @@ func TestNewYieldDue(t *testing.T) {
 	}
 }
 
-// The real worker pool: the remux walk driven by bootWalkRun (registry.RunItems
+// The real worker pool: the remux walk driven by t6g2BootWalkRun (registry.RunItems
 // at the op's pool size) writes checkpoints through reporter.Checkpoint, and a
 // resume from the last one asks about no file the cursor covers. Out of order
 // completion is what the contiguous watermark exists for, so the assertions
@@ -231,7 +231,7 @@ func TestBootOps_RemuxResumesOnTheRealPoolWithoutReprocessingBeforeTheCursor(t *
 	rep := &ckptReporter{}
 	rm := remux.New(store)
 	rm.SetProtectedChecker(first)
-	run := bootWalkRun(ctx, rep, bootBackfillParams{}, bootWalkWorkers, false)
+	run := t6g2BootWalkRun(ctx, (&Plugin{}).t6g2HeadBootEnv(rep, bootWalkWorkers), bootBackfillParams{}, false)
 	if err := rm.RemuxMalformedFiles(ctx, nil, walkresume.WithRun(run)); err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestBootOps_RemuxResumesOnTheRealPoolWithoutReprocessingBeforeTheCursor(t *
 	second := &askRecorder{}
 	rm2 := remux.New(store)
 	rm2.SetProtectedChecker(second)
-	run2 := bootWalkRun(context.Background(), &ckptReporter{}, rep.last(t), bootWalkWorkers, false)
+	run2 := t6g2BootWalkRun(context.Background(), (&Plugin{}).t6g2HeadBootEnv(&ckptReporter{}, bootWalkWorkers), rep.last(t), false)
 	if err := rm2.RemuxMalformedFiles(context.Background(), nil, walkresume.WithRun(run2)); err != nil {
 		t.Fatal(err)
 	}
