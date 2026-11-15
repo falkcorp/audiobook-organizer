@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.6
+// version: 2.16.7
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-15
 
@@ -792,7 +792,7 @@ func durationPoolOn(each t6g4EachFn, get func(id string) (*database.Book, error)
 			Reason:        durationPoolReason,
 			ItemTimeout:   durationBookTimeout,
 			ProgressTotal: progressTotal,
-			Label:         func(i, _ int) string { return "book " + ids[i] },
+			PureLabel:     func(i, _ int) string { return "book " + ids[i] },
 		}, func(ctx context.Context, i int) (err error) {
 			// A panicking book ends the run with an error that names it (the
 			// loop's own recovery names only the item's index). The panic is

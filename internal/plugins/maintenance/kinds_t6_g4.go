@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.13
+// version: 1.0.14
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-15
 
@@ -445,9 +445,18 @@ type t6g4EachOpts struct {
 	// Concurrency: 0 or 1 is HEAD's sequential default (tasks.Sequential), n>1
 	// is tasks.Fixed(n), t6g4CPU is tasks.CPU().
 	Concurrency int
-	// Label names item i of total; it runs inside the worker goroutine, so any
-	// counter it reads needs the caller's mutex or atomic.
+	// Label names item i of total for a loop whose label reads running
+	// counters; it runs inside the worker goroutine, so any counter it reads
+	// needs the caller's mutex or atomic. The native runner does not carry it:
+	// tasks.ItemsOptions.Label is pure (the item only) and is rendered before
+	// the item runs, so a counter label would show pre-item tallies and could
+	// step backwards. A counter label is dropped natively (seams.d/F5-09.md).
 	Label func(i, total int) string
+	// PureLabel names item i of total for a loop whose label reads only the
+	// index and the total. Both runners carry it: HEAD's as Label, the native
+	// as the item-only tasks.ItemsOptions.Label (the item is the index). Set at
+	// most one of Label and PureLabel.
+	PureLabel func(i, total int) string
 	// ItemTimeout is HEAD's PerItemTimeout.
 	ItemTimeout time.Duration
 	// Collect is HEAD's ErrModeCollect (tasks.Collect): run every item, join
@@ -506,8 +515,14 @@ func t6g4RunEach(rc *tasks.RC, n int, o t6g4EachOpts, fn func(ctx context.Contex
 	if o.Collect {
 		opts.OnError = tasks.Collect
 	}
-	if o.Label != nil {
-		opts.Label = func(i int) string { return o.Label(i, n) }
+	// Only the index-only label crosses. HEAD's label total is the absolute
+	// ProgressTotal when set (run_items.go), else n.
+	if o.PureLabel != nil {
+		labelTotal := n
+		if o.ProgressTotal > 0 {
+			labelTotal = o.ProgressTotal
+		}
+		opts.Label = func(i int) string { return o.PureLabel(i, labelTotal) }
 	}
 	reason := o.Reason
 	if reason == "" {
@@ -529,10 +544,14 @@ func t6g4RunEachHEAD(reporter sdk.Reporter) func(ctx context.Context, n int, o t
 		if conc == t6g4CPU {
 			conc = runtime.NumCPU()
 		}
+		lbl := o.Label
+		if lbl == nil {
+			lbl = o.PureLabel
+		}
 		opts := registry.RunItemsOptions{
 			Concurrency:    conc,
 			PerItemTimeout: o.ItemTimeout,
-			Label:          o.Label,
+			Label:          lbl,
 			ProgressTotal:  o.ProgressTotal,
 			ProgressOffset: o.ProgressBase,
 		}
