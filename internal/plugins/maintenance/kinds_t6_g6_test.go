@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.4.6
+// version: 1.4.7
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-15
 
@@ -35,11 +35,11 @@ import (
 )
 
 // t6g6Recorder is the writer a test hands the kinds: it records the calls that
-// reach it. Every method a test does not exercise panics (the nil embedded
-// interface), so an unexpected write fails loudly.
+// reach it. It implements every method of t6g6Writer itself (the compiler checks
+// that where the probe returns it), so a writer method added to the interface
+// breaks this file until the recorder answers it, instead of panicking on a nil
+// embedded interface the first time a kind calls it.
 type t6g6Recorder struct {
-	t6g6Writer
-
 	mu    sync.Mutex
 	calls []string
 	// books lets ModifyBook run the caller's fn on a copy, so the test sees the
