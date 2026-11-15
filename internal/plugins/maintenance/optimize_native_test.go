@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize_native_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9a1e4c52-3d78-4b06-8e2f-5c7d0b1a6f93
 // last-edited: 2026-11-15
 
@@ -43,6 +43,7 @@ type t6g6OptimizeHost struct {
 	// awaited records every run id awaited.
 	enqErr  map[tasks.Kind]error
 	onEnq   func(tasks.Kind)
+	onAwait func(tasks.RunID)
 	block   map[tasks.Kind]chan struct{}
 	awaited []tasks.RunID
 }
@@ -63,6 +64,9 @@ func (h *t6g6OptimizeHost) Enqueue(k tasks.Kind, params any, _ ...tasks.StartOpt
 }
 
 func (h *t6g6OptimizeHost) Await(ref tasks.RunRef) (tasks.Outcome, error) {
+	if h.onAwait != nil {
+		h.onAwait(ref.ID)
+	}
 	h.mu.Lock()
 	h.awaited = append(h.awaited, ref.ID)
 	var blk chan struct{}
@@ -241,7 +245,21 @@ func TestT6G6Optimize_CrashAfterAChildResumesAtTheNext(t *testing.T) {
 			snap, _ = h.CheckpointJSON("")
 		}
 	}
+	var awaiting json.RawMessage
+	var awaitedID tasks.RunID
+	h.onAwait = func(id tasks.RunID) {
+		if awaiting == nil {
+			awaiting, _ = h.CheckpointJSON("")
+			awaitedID = id
+		}
+	}
 	require.NoError(t, t6g6RunOptimize(t, h))
+	// The checkpoint already names the child's run while it is awaited, so a crash
+	// there re-attaches instead of launching it again.
+	var mid optimizeCheckpoint
+	require.NoError(t, json.Unmarshal(awaiting, &mid))
+	require.NotNil(t, mid.InFlight)
+	require.Equal(t, string(awaitedID), mid.InFlight.RunID)
 	require.NotNil(t, snap, "a checkpoint existed before the second child started")
 	var cp optimizeCheckpoint
 	require.NoError(t, json.Unmarshal(snap, &cp))
