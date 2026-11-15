@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/paths_scaling_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3e8a5d71-c204-4b96-8f1d-6a0b9e2c4d58
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package diagnostics
 
@@ -192,6 +192,13 @@ func TestRedactPaths_UrlAndEncodedTokenShapesAreLinear(t *testing.T) {
 // that token again from each quote (every quote is a place a token may start) is
 // quadratic; one judgement covers every start inside it. None of these may be,
 // and none may leak.
+//
+// Sizing: core-ci runs this under -race and -coverprofile on a shared runner
+// that was measured at twice a workstation's time, and one shape (encoded
+// tails, 780 KB) took 3.05 s there against the 3 s bound while being linear
+// (1.5 s locally, and exactly twice that for twice the input). The cut-URL shapes are
+// now sized to at most about half a second locally, which a quadratic scan still misses
+// by tens of seconds.
 func TestRedactPaths_QuotedTokenShapesAreLinear(t *testing.T) {
 	roots := scalingRoots()
 	for name, line := range map[string]string{
@@ -207,9 +214,9 @@ func TestRedactPaths_QuotedTokenShapesAreLinear(t *testing.T) {
 		"quote runs, then percent": strings.Repeat(`"`, 100_000) + "%41 /home/bruce",
 		// Round 7, review finding 1: a URL cut at a byte that is not in an
 		// authority leaves a token of its own after it.
-		"cut urls, encoded tails": strings.Repeat(`https://h,%41`, 60_000) + " /home/bruce",
-		"cut urls, no query":      strings.Repeat(`https://h,`, 90_000) + " /home/bruce",
-		"cut urls, query last":    strings.Repeat(`https://h,`, 90_000) + "?x /home/bruce",
+		"cut urls, encoded tails": strings.Repeat(`https://h,%41`, 20_000) + " /home/bruce",
+		"cut urls, no query":      strings.Repeat(`https://h,`, 40_000) + " /home/bruce",
+		"cut urls, query last":    strings.Repeat(`https://h,`, 40_000) + "?x /home/bruce",
 		"cut urls, many queries":  strings.Repeat(`https://h,?`, 60_000) + " /home/bruce",
 		"cut urls, compact json":  strings.Repeat(`{"u":"https://h","p":"a%41"}`, 5_000) + " /home/bruce",
 		"cut urls, backslashes":   strings.Repeat(`https://h\a%41`, 12_000) + " /home/bruce",
