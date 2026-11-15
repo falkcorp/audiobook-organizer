@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0e5a8c31-7d92-4b64-a1f7-3c6e9d2b5a08
 // last-edited: 2026-11-15
 
@@ -407,10 +407,10 @@ func TestF803bShippedTagSets(t *testing.T) {
 		return dir, filepath.Join(dir, "core")
 	}
 	_, core := fixture(map[string]string{
-		"Makefile":                "TAGS := pprof\nMORE = $(TAGS) fts5\nDEFAULT ?= shipit\nDEFAULT ?= ignored\nx:\n\tgo build -tags \"embed_frontend $(MORE) $(DEFAULT)\" .\n",
+		"Makefile":                "TAGS := pprof\n-include Makefile.local\nMORE = $(TAGS) fts5\nDEFAULT ?= shipit\nDEFAULT ?= ignored\nx:\n\tgo build -tags \"embed_frontend $(MORE) $(DEFAULT)\" .\n",
 		".github/workflows/w.yml": "run: go build -tags embed_frontend,fts5 .\n",
 		"scripts/other.sh":        "go build -tags notscanned .\n",
-		"Makefile.local":          "TAGS := local\n",
+		"Makefile.local":          "TAGS := local\nDEFAULT ?= robin\n",
 	})
 	fsets, fnamed, err := F803bShippedTagSets(core)
 	if err != nil {
@@ -426,11 +426,53 @@ func TestF803bShippedTagSets(t *testing.T) {
 		}
 	}
 	slices.Sort(extra)
-	// Makefile.local is a Makefile too; its TAGS := local overrides in its own
-	// scope only, so the root Makefile's list resolves with its own TAGS.
-	if want := "embed_frontend,fts5|embed_frontend,fts5,pprof,shipit"; strings.Join(extra, "|") != want {
+	// Final review round, fix 2. make reads the Makefile top to bottom and an
+	// existing -include'd file at its include line (f803bMakeVarsInto): Makefile.local's
+	// TAGS := local comes after TAGS := pprof, so it wins; its DEFAULT ?= robin
+	// runs before the Makefile's own DEFAULT ?= shipit, which therefore yields.
+	// (Before this round the fixture pinned the reverse: Makefile.local ignored.)
+	if want := "embed_frontend,fts5|embed_frontend,fts5,local,robin"; strings.Join(extra, "|") != want {
 		t.Errorf("sets added from build files = %v, want %s", extra, want)
 	}
+	// An assignment after the include line overrides the included file's, and an
+	// include of a file that does not exist changes nothing.
+	for name, files := range map[string]map[string]string{
+		"assignment after the include wins": {
+			"Makefile":       "-include Makefile.local\nTAGS := pprof\nx:\n\tgo build -tags \"$(TAGS)\" .\n",
+			"Makefile.local": "TAGS := local\n",
+		},
+		"include of a missing file": {
+			"Makefile": "TAGS := pprof\n-include Makefile.local\nx:\n\tgo build -tags \"$(TAGS)\" .\n",
+		},
+		"nested include is read in place": {
+			"Makefile":       "TAGS := local\n-include Makefile.local\nx:\n\tgo build -tags \"$(TAGS)\" .\n",
+			"Makefile.local": "include more.mk\nTAGS += pprof\n",
+			"more.mk":        "TAGS := ignored\n",
+		},
+	} {
+		_, c := fixture(files)
+		sets, _, err := F803bShippedTagSets(c)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var got []string
+		for _, ts := range sets {
+			if strings.HasPrefix(ts.Name, "build files: ") {
+				got = append(got, strings.Join(ts.Tags, ","))
+			}
+		}
+		// pprof is also a TagSets() entry, so only the nested case adds a set.
+		want := map[string]string{"assignment after the include wins": "", "include of a missing file": "", "nested include is read in place": "ignored,pprof"}[name]
+		if strings.Join(got, "|") != want {
+			t.Errorf("%s: sets added = %v, want %q", name, got, want)
+		}
+	}
+	// An include whose name cannot be expanded fails the derivation.
+	_, c := fixture(map[string]string{"Makefile": "-include $(NOT_DEFINED_ANYWHERE)\nx:\n\tgo build -tags pprof .\n"})
+	if _, _, err := F803bShippedTagSets(c); err == nil || !strings.Contains(err.Error(), "include") {
+		t.Errorf("unresolvable include: err = %v, want a failure naming the include", err)
+	}
+
 	for name, files := range map[string]map[string]string{
 		"undefined variable":  {"Makefile": "x:\n\tgo build -tags \"embed_frontend $(NOT_DEFINED_ANYWHERE)\" .\n"},
 		"shell variable":      {"Makefile": "x:\n\tgo build -tags \"$$TAGS\" .\n"},

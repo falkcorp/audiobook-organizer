@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2d6f0a8-4c17-4e93-9a5b-7d1e3c8f2a60
 // last-edited: 2026-11-15
 
@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -368,9 +369,54 @@ func f803bMakeRef() *regexp.Regexp {
 // f803bExpand resolves the references in it.
 func f803bMakeVars(body string) map[string]string {
 	vars := map[string]string{}
-	assign := f803bMakeAssign()
+	// A nil read function reads no file: an include line is skipped, as if the
+	// included file did not exist.
+	_ = f803bMakeVarsInto(vars, body, nil, 0)
+	return vars
+}
+
+func f803bMakeInclude() *regexp.Regexp {
+	return regexp.MustCompile(`^(?:-include|sinclude|include)\s+(.*?)\s*$`)
+}
+
+// f803bMakeVarsInto applies the assignments of body to vars, in order, and reads
+// an included file at the line that includes it. This is the make rule
+// implemented here: make reads a makefile top to bottom; an `include`,
+// `-include` or `sinclude` line reads the named file in place (a file that does
+// not exist is skipped, which is what `-include Makefile.local` relies on); every
+// assignment, in either file, happens when it is read, so a later assignment
+// wins, `?=` yields to any earlier assignment and `+=` appends. A recipe is
+// expanded after the whole makefile is read, so it sees the final values
+// whichever file set them: that final state is what ends up in vars. read returns
+// the body of an included file, by the name written in the include line, and
+// whether it exists. Include names are expanded with the variables set so far; a
+// name that cannot be expanded is an error, since the file it names might exist.
+func f803bMakeVarsInto(vars map[string]string, body string, read func(name string) (string, bool), depth int) error {
+	assign, include := f803bMakeAssign(), f803bMakeInclude()
 	for line := range strings.SplitSeq(body, "\n") {
 		if strings.HasPrefix(line, "\t") || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if m := include.FindStringSubmatch(line); m != nil {
+			if read == nil {
+				continue
+			}
+			names, bad := f803bExpand(m[1], vars)
+			if len(bad) > 0 {
+				return fmt.Errorf("include %s: cannot resolve %s", m[1], strings.Join(bad, ", "))
+			}
+			for _, name := range strings.Fields(names) {
+				inc, ok := read(name)
+				if !ok {
+					continue
+				}
+				if depth >= 8 {
+					return fmt.Errorf("include %s: nested deeper than 8 levels", name)
+				}
+				if err := f803bMakeVarsInto(vars, inc, read, depth+1); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		m := assign.FindStringSubmatch(line)
@@ -392,7 +438,7 @@ func f803bMakeVars(body string) map[string]string {
 			vars[name] = val
 		}
 	}
-	return vars
+	return nil
 }
 
 // f803bExpand replaces every $(NAME) and ${NAME} in text with the value of NAME
@@ -475,18 +521,24 @@ func f803bTagsIn(body string, vars map[string]string) (lists [][]string, unresol
 // (GOOS, tag set) pairs CI and the Dockerfiles build, 03 §3.5.1 item 4) that apply to
 // the core module, plus every distinct -tags list read from the repo's own
 // build files (Makefile*, Dockerfile*, the workflow and pipeline YAML under
-// .github/workflows and .woodpecker) that TagSets() does not already name. A
-// make variable in a tag list ($(GO_BUILD_TAGS)) is resolved from the
+// .github/workflows and .woodpecker) that TagSets() does not already name,.
+//
+// A make variable in a tag list ($(GO_BUILD_TAGS)) is resolved from the
 // assignments of the Makefile that holds it, else from the other Makefiles when
-// they agree on one value; `?=` counts as the default. The second return is how
-// many distinct lists the build files named. Any -tags argument it cannot reduce
-// to a concrete list (an undefined or computed variable, a shell or workflow
-// variable, a make function) is an error that names each one: such a list would
-// otherwise be dropped and its set never built. Not covered: an assignment in a
-// gitignored Makefile.local, a variable set on the make command line or in the
-// environment, and a list a script assembles at run time. coreRoot is the core
-// module's directory. Tags only: -race is not a tag, and the race set here is the
-// tag.
+// they agree on one value; `?=` counts as the default. Make's own rule is
+// followed for included files (f803bMakeVarsInto): an `include` or `-include`
+// line reads the named file, when it exists, at that line, so `-include
+// Makefile.local` after `GO_BUILD_TAGS := pprof` lets an existing Makefile.local
+// override it and an assignment after the include line overrides Makefile.local.
+// The second return is how many distinct lists the build files named. Any -tags
+// argument it cannot reduce to a concrete list (an undefined
+// or computed variable, a shell or workflow variable, a make function) is an error that names each one: such a list would
+// otherwise be dropped and its set never built. Not covered: a Makefile.local
+// that is absent from the checkout (it is gitignored, so CI and a fresh clone
+// never have one; the test sees the one on the machine that runs it), a variable
+// set on the make command line or in the environment, a list a script assembles
+// at run time, and the release build (.goreleaser.yml is not read). coreRoot is the core module's directory.
+// Tags only: -race is not a tag, and the race set here is the tag.
 func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 	key := func(tags []string) string {
 		c := slices.Clone(tags)
@@ -506,8 +558,10 @@ func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 	}
 	type buildFile struct{ rel, body string }
 	var files []buildFile
+	bodies := map[string]string{} // every text file read, by repo-relative slash path
 	_, err := f803bRepoText(f803bRepoRoot(coreRoot), func(rel string, body []byte) {
 		base := filepath.Base(rel)
+		bodies[rel] = string(body)
 		if strings.HasPrefix(base, "Makefile") || strings.HasPrefix(base, "Dockerfile") ||
 			strings.HasPrefix(rel, ".github/workflows/") || strings.HasPrefix(rel, ".woodpecker/") {
 			files = append(files, buildFile{rel, string(body)})
@@ -516,7 +570,9 @@ func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	// Each Makefile's own variables, and the values the Makefiles agree on.
+	// Each Makefile's own variables (its included files read in place, see
+	// f803bMakeVarsInto), and the values the Makefiles agree on.
+	var unresolved []string
 	own := map[string]map[string]string{}
 	agreed := map[string]string{}
 	conflict := map[string]bool{}
@@ -524,7 +580,21 @@ func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 		if !strings.HasPrefix(filepath.Base(f.rel), "Makefile") {
 			continue
 		}
-		own[f.rel] = f803bMakeVars(f.body)
+		vars := map[string]string{}
+		read := func(name string) (string, bool) {
+			// make resolves a relative include against its working directory, the
+			// repo root for the repo's Makefile; try the includer's directory first.
+			for _, rel := range []string{path.Join(path.Dir(f.rel), name), path.Clean(name)} {
+				if body, ok := bodies[rel]; ok {
+					return body, true
+				}
+			}
+			return "", false
+		}
+		if err := f803bMakeVarsInto(vars, f.body, read, 0); err != nil {
+			unresolved = append(unresolved, f.rel+" "+err.Error())
+		}
+		own[f.rel] = vars
 		for name, val := range own[f.rel] {
 			if prev, seen := agreed[name]; seen && prev != val {
 				conflict[name] = true
@@ -533,7 +603,6 @@ func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 		}
 	}
 	named := map[string][]string{}
-	var unresolved []string
 	for _, f := range files {
 		var vars map[string]string
 		if mine, isMake := own[f.rel]; isMake {
