@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -52,9 +52,8 @@ var t6g3MethodResources = map[string][]ops.Resource{
 	"MaintainActivityLog":      {ops.ResActivity},
 	"SetUserPreferenceForUser": {ops.ResUserState},
 	"ModifyBook":               {ops.ResBooks},
-	// The cover-text records. The coordinator swaps this entry to ops.ResCoverText
-	// with t6g3CoverTextResource (cover_ops.go) at stacking.
-	"SetRaw":                 {ops.ResMetadataCache},
+	// The cover-text records, the same resource as t6g3CoverTextResource (cover_ops.go).
+	"SetRaw":                 {ops.ResCoverText},
 	"ModifyBookCredits":      {ops.ResBooks, ops.ResAuthors},
 	"CreateNarrator":         {ops.ResBooks},
 	"DeleteNarrator":         {ops.ResBooks},
@@ -628,7 +627,7 @@ var t6g3Wants = []t6g3Want{
 	{"maintenance.combine-journal-check", "Combine journal readability check", tasks.ResumeDrop, "books.maintenance.combine-journal-check", 10 * time.Minute, 0, true, nil, ""},
 	{"maintenance.compact-activity-log", "Compact activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 6 * time.Hour, 20 * time.Minute, false, []string{string(ops.ResActivity)}, ""},
 	{"maintenance.folder-cover-backfill", "Use folder cover images", tasks.ResumeDrop, "books.maintenance.folder-cover-backfill", 120 * time.Minute, 0, false, []string{string(ops.ResBooks)}, ""},
-	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, []string{string(ops.ResMetadataCache)}, ""},
+	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, []string{string(ops.ResCoverText)}, ""},
 	{"maintenance.credit-census", "Author/narrator credit census", tasks.ResumeDrop, "books.maintenance.credit-census", 2 * time.Hour, 0, true, nil, ""},
 	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{string(ops.ResAuthors), string(ops.ResBooks), string(ops.ResOperations)}, ""},
 }

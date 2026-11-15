@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cover_ops.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: e5a3c8f2-1d7b-4e96-8c40-6b2f9d1a7e35
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — ops maintenance.folder-cover-backfill and
 // maintenance.cover-text-read.
@@ -507,9 +507,9 @@ func (p *Plugin) runCoverTextRead(ctx context.Context, raw json.RawMessage, repo
 // coverTextReadKind builds the native kind. HEAD declares a Preview, so it runs
 // in either mode. Writes found: the per-image text records and the per-book
 // image index, both raw-key records of the cover-text store (resource
-// metadata_cache: the closest constant in pkg/ops/effects.go, as the store holds
-// derived per-image reads, not book metadata; F5-06 owns any new constant); the
-// op never writes a book. The `workers` param and the capacity-sized live pool are carried: the core sizes the pool and the native
+// cover_text, ops.ResCoverText: the store holds derived per-image reads, not
+// book metadata); the op never writes a book. The `workers` param and the
+// capacity-sized live pool are carried: the core sizes the pool and the native
 // shell gives that size to tasks.RunItems as a fixed parallelism, so a read
 // never queues behind a semaphore inside an item.
 func (p *Plugin) coverTextReadKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
@@ -541,11 +541,9 @@ func (p *Plugin) coverTextReadKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.
 }
 
 // t6g3CoverTextResource is the Effects resource of the cover-text records
-// (the `cover_text:` and `cover_text_book:` key families). pkg/ops/effects.go on
-// this branch has no constant for them, so the closest one is declared;
-// F5-06 adds ops.ResCoverText, and the coordinator swaps this one line to it at
-// stacking (with the SetRaw entry of t6g3MethodResources in the test).
-const t6g3CoverTextResource = ops.ResMetadataCache
+// (the `cover_text:` and `cover_text_book:` key families), the ops.ResCoverText
+// constant F5-06 added to pkg/ops/effects.go.
+const t6g3CoverTextResource = ops.ResCoverText
 
 // coverTextReadCore is the shared body of both shells.
 func coverTextReadCore(ctx context.Context, params coverOpParams, env coverTextReadEnv) error {
