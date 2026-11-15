@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 0e5a8c31-7d92-4b64-a1f7-3c6e9d2b5a08
 // last-edited: 2026-11-15
 
@@ -329,7 +329,7 @@ func TestF803bMakeVars(t *testing.T) {
 		"E := a",
 		"E += b",
 		"export F := exported",
-		"override G = over",
+		"  G = indented",
 		"H ?= default",
 		"\tI := recipe line",
 		"# J := comment",
@@ -341,13 +341,207 @@ func TestF803bMakeVars(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"A": "one", "B": "two", "C": "three", "D": "first", "E": "a b", "F": "exported", "G": "over", "H": "default", "K": "nospace", "L": "", "url": "http://x/#frag"}
+	want := map[string]string{"A": "one", "B": "two", "C": "three", "D": "first", "E": "a b", "F": "exported", "G": "indented", "H": "default", "K": "nospace", "L": "", "url": "http://x/#frag"}
 	if len(got) != len(want) {
 		t.Errorf("variables = %v, want %v", got, want)
 	}
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+// TestF803bMakeModel (final review round, delta review m1): `:=` is expanded
+// where it is written and `=` where it is used, so a later reassignment changes
+// the second and not the first; a name `:=` cannot expand there is poisoned
+// instead of resolved late; and every construct the model does not read is an
+// error naming file:line.
+func TestF803bMakeModel(t *testing.T) {
+	// Immediate versus deferred. TAGS is reassigned after both uses.
+	got, err := f803bMakeVars(strings.Join([]string{
+		"TAGS := pprof",
+		"NOW := x $(TAGS)",
+		"LATER = x $(TAGS)",
+		"APPENDED := a",
+		"APPENDED += $(TAGS)",
+		"REC = a",
+		"REC += $(TAGS)",
+		"TAGS := local",
+		"TAGS := $(TAGS) more",
+	}, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{
+		"NOW":      "x pprof",
+		"LATER":    "x $(TAGS)",
+		"APPENDED": "a pprof",
+		"REC":      "a $(TAGS)",
+		"TAGS":     "local more",
+	} {
+		if got[k] != want {
+			t.Errorf("%s = %q, want %q", k, got[k], want)
+		}
+	}
+	// A backslash-continued assignment is one assignment.
+	got, err = f803bMakeVars("A := one \\\n  two\nB = $(A)\n")
+	if err != nil || got["A"] != "one two" {
+		t.Errorf("continued line: A = %q, %v; want %q", got["A"], err, "one two")
+	}
+
+	refused := func(t *testing.T, name string, files map[string]string, wantPart string) {
+		t.Helper()
+		base := map[string]string{"go.mod": "module r\n", "core/go.mod": "module c\n"}
+		maps.Copy(base, files)
+		dir := writeModule(t, base)
+		_, _, err := F803bShippedTagSets(filepath.Join(dir, "core"))
+		if err == nil || !strings.Contains(err.Error(), "cannot be reduced to a concrete tag set") || !strings.Contains(err.Error(), wantPart) {
+			t.Errorf("%s: err = %v, want a failure containing %q", name, err, wantPart)
+		}
+	}
+	tags := "x:\n\tgo build -tags \"$(TAGS)\" .\n"
+	// The m1 scenario: a simple variable that reads TAGS above an include that
+	// reassigns it. make ships the value TAGS had at that line.
+	t.Run("ImmediateExpansionUsesTheValueAtItsLine", func(t *testing.T) {
+		dir := writeModule(t, map[string]string{
+			"go.mod": "module r\n", "core/go.mod": "module c\n",
+			"Makefile":       "TAGS := pprof\nALL := fts5 $(TAGS)\n-include Makefile.local\nx:\n\tgo build -tags \"$(ALL)\" .\n",
+			"Makefile.local": "TAGS := gotham\n",
+		})
+		sets, _, err := F803bShippedTagSets(filepath.Join(dir, "core"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, ts := range sets {
+			if strings.HasPrefix(ts.Name, "build files: ") {
+				got = append(got, strings.Join(ts.Tags, ","))
+			}
+		}
+		if want := "fts5,pprof"; strings.Join(got, "|") != want {
+			t.Errorf("sets from build files = %v, want %s (gotham is the final TAGS, but ALL was expanded before it)", got, want)
+		}
+	})
+	t.Run("PoisonedByAnUnsetName", func(t *testing.T) {
+		refused(t, "unset at :=", map[string]string{"Makefile": "ALL := fts5 $(LATER_NAME)\nLATER_NAME := pprof\nx:\n\tgo build -tags \"$(ALL)\" .\n"}, "Makefile:1")
+		refused(t, "shell at :=", map[string]string{"Makefile": "ALL := $(shell cat t)\nx:\n\tgo build -tags \"$(ALL)\" .\n"}, "Makefile:1")
+	})
+	t.Run("SelfAppendIdiomResolves", func(t *testing.T) {
+		// n3: GO_BUILD_TAGS := $(GO_BUILD_TAGS) x used to hit the nesting limit.
+		dir := writeModule(t, map[string]string{
+			"go.mod": "module r\n", "core/go.mod": "module c\n",
+			"Makefile":       "TAGS := pprof\n-include Makefile.local\n" + tags,
+			"Makefile.local": "TAGS := $(TAGS) gotham\n",
+		})
+		sets, _, err := F803bShippedTagSets(filepath.Join(dir, "core"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(sets, func(ts TagSet) bool { return strings.Join(ts.Tags, ",") == "gotham,pprof" }) {
+			t.Errorf("no gotham,pprof set among %d sets", len(sets))
+		}
+	})
+	t.Run("RefusedConstructs", func(t *testing.T) {
+		for name, c := range map[string]struct {
+			files map[string]string
+			part  string
+		}{
+			"ifeq":                            {map[string]string{"Makefile": "ifeq ($(A),1)\nTAGS := a\nelse\nTAGS := b\nendif\n" + tags}, "Makefile:1: \"ifeq\""},
+			"ifdef":                           {map[string]string{"Makefile": "TAGS := a\nifdef X\nTAGS := b\nendif\n" + tags}, "Makefile:2: \"ifdef\""},
+			"ifndef indented":                 {map[string]string{"Makefile": "TAGS := a\n  ifndef X\nendif\n" + tags}, "\"ifndef\""},
+			"conditional in an included file": {map[string]string{"Makefile": "TAGS := a\n-include Makefile.local\n" + tags, "Makefile.local": "\nifneq ($(A),)\nendif\n"}, "Makefile.local:2: \"ifneq\""},
+			"override":                        {map[string]string{"Makefile": "override TAGS := a\n" + tags}, "\"override\""},
+			"export override":                 {map[string]string{"Makefile": "export override TAGS := a\n" + tags}, "\"override\""},
+			"define":                          {map[string]string{"Makefile": "define TAGS\na\nendef\n" + tags}, "\"define\""},
+			"undefine":                        {map[string]string{"Makefile": "TAGS := a\nundefine TAGS\n" + tags}, "\"undefine\""},
+			"target-specific":                 {map[string]string{"Makefile": "TAGS := a\nx: TAGS := b\n" + tags}, "target-specific"},
+			"target-specific ?=":              {map[string]string{"Makefile": "TAGS := a\nbuild: export TAGS ?= b\n" + tags}, "target-specific"},
+			"glob include":                    {map[string]string{"Makefile": "TAGS := a\n-include mk/*.mk\n" + tags}, "glob include"},
+			"include skipped md":              {map[string]string{"Makefile": "TAGS := a\n-include notes.md\n" + tags, "notes.md": "TAGS := b\n"}, "exists but was not read"},
+			"include skipped dir":             {map[string]string{"Makefile": "TAGS := a\n-include dist/v.mk\n" + tags, "dist/v.mk": "TAGS := b\n"}, "exists but was not read"},
+		} {
+			refused(t, name, c.files, c.part)
+		}
+	})
+	t.Run("IncludeResolvesAgainstTheMakefilesDirectory", func(t *testing.T) {
+		// n2: make resolves against its working directory, not the repo root: a
+		// core/Makefile that includes local.mk reads core/local.mk, and the root's
+		// local.mk is not a candidate. With no core/local.mk the include is absent.
+		dir := writeModule(t, map[string]string{
+			"go.mod": "module r\n", "core/go.mod": "module c\n",
+			"core/Makefile": "TAGS := a\n-include local.mk\n" + tags,
+			"local.mk":      "TAGS := rootwins\n",
+		})
+		sets, _, err := F803bShippedTagSets(filepath.Join(dir, "core"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ts := range sets {
+			if slices.Contains(ts.Tags, "rootwins") {
+				t.Errorf("set %v: core/Makefile's include read the repo root's local.mk", ts.Tags)
+			}
+		}
+	})
+}
+
+// TestF803bGoreleaserSets (final review round, delta review m2 and n1): the
+// release build's overrides and GOFLAGS tag lists produce their own sets, and
+// what the reading does not model is refused with the build named.
+func TestF803bGoreleaserSets(t *testing.T) {
+	describe := func(sets []TagSet) string {
+		var out []string
+		for _, ts := range sets {
+			out = append(out, ts.GOOS+"/cgo"+ts.CGOEnabled+"/"+strings.Join(ts.Tags, ","))
+		}
+		slices.Sort(out)
+		return strings.Join(out, " ")
+	}
+	t.Run("OverridesAndGOFLAGS", func(t *testing.T) {
+		sets, bad := f803bGoreleaserSets(".goreleaser.yml", `
+env:
+  - GOFLAGS=-tags=arkham
+builds:
+  - id: batcave
+    env: [CGO_ENABLED=0, "GOFLAGS=-mod=readonly -tags=gotham,robin"]
+    goos: [linux, darwin]
+    tags: [embed_frontend]
+    overrides:
+      - goos: darwin
+        goarch: arm64
+        tags: [pprof]
+        env: [CGO_ENABLED=1]
+      - goos: linux
+        env: ["GOFLAGS=-tags=joker"]
+`)
+		if len(bad) != 0 {
+			t.Fatalf("refused: %v", bad)
+		}
+		want := "darwin/cgo0/arkham darwin/cgo0/embed_frontend darwin/cgo0/gotham,robin " +
+			"darwin/cgo1/arkham darwin/cgo1/gotham,robin darwin/cgo1/pprof " +
+			"linux/cgo0/arkham linux/cgo0/embed_frontend linux/cgo0/gotham,robin linux/cgo0/joker"
+		if got := describe(sets); got != want {
+			t.Errorf("sets:\n got  %s\n want %s", got, want)
+		}
+	})
+	for name, c := range map[string]struct{ body, part string }{
+		"includes":                {"includes:\n  - from_file: {path: other.yml}\nbuilds: []\n", "includes"},
+		"top-level CGO_ENABLED":   {"env: [CGO_ENABLED=0]\nbuilds: []\n", "top-level CGO_ENABLED"},
+		"top-level env tags":      {"env: [\"FLAGS=-tags=x\"]\nbuilds: []\n", "outside GOFLAGS"},
+		"build env tags":          {"builds:\n  - id: a\n    goos: [linux]\n    env: [\"X=-tags=x\"]\n", "outside GOFLAGS"},
+		"GOFLAGS shell tags":      {"builds:\n  - id: a\n    goos: [linux]\n    env: [\"GOFLAGS=-tags=$TAGS\"]\n", "GOFLAGS"},
+		"override template tag":   {"builds:\n  - id: a\n    goos: [linux]\n    overrides:\n      - tags: [\"{{ .Env.T }}\"]\n", "template"},
+		"override flags -tags":    {"builds:\n  - id: a\n    goos: [linux]\n    overrides:\n      - flags: [\"-tags=x\"]\n", "flags"},
+		"override CGO not 0 or 1": {"builds:\n  - id: a\n    goos: [linux]\n    overrides:\n      - env: [CGO_ENABLED=2]\n", "not 0 or 1"},
+		"goos template":           {"builds:\n  - id: a\n    goos: [\"{{ .Os }}\"]\n", "template"},
+		"env template":            {"builds:\n  - id: a\n    goos: [linux]\n    env: [\"CGO_ENABLED={{ .Env.C }}\"]\n", "template"},
+		"tag template":            {"builds:\n  - id: a\n    goos: [linux]\n    tags: [\"{{ .Env.T }}\"]\n", "template"},
+		"flags template":          {"builds:\n  - id: a\n    goos: [linux]\n    flags: [\"{{ .Env.F }}\"]\n", "template"},
+		"top-level env template":  {"env: [\"A={{ .Env.A }}\"]\nbuilds: []\n", "template"},
+	} {
+		sets, bad := f803bGoreleaserSets(".goreleaser.yml", c.body)
+		if len(bad) == 0 || !strings.Contains(strings.Join(bad, "\n"), c.part) {
+			t.Errorf("%s: sets %v, refused %v; want a refusal containing %q", name, sets, bad, c.part)
 		}
 	}
 }
