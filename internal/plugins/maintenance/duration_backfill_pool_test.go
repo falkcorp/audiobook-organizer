@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_pool_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 6df2f8ff-a5db-4063-902a-56a68a37c969
 // last-edited: 2026-11-15
 
@@ -30,14 +30,26 @@ import (
 // hang when a book's worker dies.
 
 // gatedDurStore answers a book per id and holds every GetBookFiles (the first
-// call a worker makes on a book) at a one-shot barrier of want concurrent
-// callers, recording the most that were ever inside at once.
+// call a worker makes on a book) at a one-shot two-phase barrier, recording the
+// most that were ever inside at once.
+//
+// Phase 1 waits, up to patience, for floor workers to be inside at once. floor
+// is how many the declared parallelism guarantees (the cap, or the declared
+// workers), so reaching it is a matter of the test's goroutines being scheduled,
+// not of a window: a slow machine only makes phase 1 take longer, and patience
+// is a hang guard, not a measuring stick. Phase 2 then holds the barrier for a
+// short grace window (or until want are inside) so that a regression that lets
+// MORE than floor in at once has the time to show as maxIn > floor. Only phase 2
+// is time-bounded, and a miss there can only hide a regression, never fail a
+// correct run.
 type gatedDurStore struct {
 	zeroT6G4Store
 	books    int
 	want     int32
-	patience time.Duration
-	panicOn  string // GetBookFiles of this book id panics once ("" = never)
+	floor    int32         // workers that must be inside before the grace window starts (0 = want)
+	grace    time.Duration // how long to keep waiting for more than floor
+	patience time.Duration // hang guard for phase 1
+	panicOn  string        // GetBookFiles of this book id panics once ("" = never)
 
 	in, maxIn atomic.Int32
 	released  atomic.Bool
@@ -63,8 +75,21 @@ func (s *gatedDurStore) GetBookFiles(id string) ([]database.BookFile, error) {
 		}
 	}
 	if !s.released.Load() {
+		floor := s.floor
+		if floor == 0 {
+			floor = s.want
+		}
 		deadline := time.Now().Add(s.patience)
-		for s.in.Load() < s.want && time.Now().Before(deadline) {
+		var graceEnds time.Time
+		for in := s.in.Load(); in < s.want && time.Now().Before(deadline); in = s.in.Load() {
+			if in >= floor {
+				if graceEnds.IsZero() {
+					graceEnds = time.Now().Add(s.grace)
+				}
+				if !time.Now().Before(graceEnds) {
+					break
+				}
+			}
 			time.Sleep(time.Millisecond)
 		}
 		s.released.Store(true)
@@ -108,18 +133,21 @@ func TestDurationBackfillNative_BookPoolRunsTheDeclaredWorkers(t *testing.T) {
 		name            string
 		workers, capN   int
 		want            int32
-		patience        time.Duration
+		floor           int32
+		grace           time.Duration
 		wantMaxInFlight int32
 	}{
-		{"fixed(4)", 4, 0, 4, 5 * time.Second, 4},
+		{"fixed(4)", 4, 0, 4, 4, 0, 4},
 		// The operator's parallelism cap lowers the declared 4 to 2. The drain
-		// loops then run two at a time, and the queue is still drained.
-		{"cap 2 under workers 4", 4, 2, 4, 300 * time.Millisecond, 2},
-		{"sequential at workers 1", 1, 0, 2, 200 * time.Millisecond, 1},
+		// loops then run two at a time, and the queue is still drained. The
+		// barrier waits (up to its hang guard) until the two allowed are inside,
+		// then gives a third and fourth 300 ms to show up if the cap leaked.
+		{"cap 2 under workers 4", 4, 2, 4, 2, 300 * time.Millisecond, 2},
+		{"sequential at workers 1", 1, 0, 2, 1, 200 * time.Millisecond, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			store := &gatedDurStore{books: 8, want: c.want, patience: c.patience}
+			store := &gatedDurStore{books: 8, want: c.want, floor: c.floor, grace: c.grace, patience: 5 * time.Second}
 			_, out, err := runDurationNative(t, store, c.workers, 8, c.capN)
 			if err != nil {
 				t.Fatal(err)
@@ -377,7 +405,12 @@ func runDurationLiveOne(t *testing.T, store *timeoutDurStore, rec *t6g4Calls) (d
 func TestDurationBackfillNative_ABookThatOutlastsItsBoundIsReportedOnceAndStrikesNothing(t *testing.T) {
 	origTimeout, origProbe := durationBookTimeout, durationProbe
 	t.Cleanup(func() { durationBookTimeout, durationProbe = origTimeout, origProbe })
-	durationBookTimeout = 100 * time.Millisecond
+	// The loop's item timeout is a real-clock context deadline that starts before
+	// the book is read, and the core has no clock to inject, so the bound is
+	// widened instead: the probe has to be reached within 2 s of the item
+	// starting (it is reached in microseconds, after an in-memory re-read), and
+	// then the book is held until that bound, and only that bound, ends it.
+	durationBookTimeout = 2 * time.Second
 	var probes atomic.Int32
 	durationProbe = func(ctx context.Context, _ string) (*mediainfo.MediaInfo, error) {
 		probes.Add(1)
