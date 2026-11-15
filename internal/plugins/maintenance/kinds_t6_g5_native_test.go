@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-15
 
@@ -665,13 +665,15 @@ func TestT6G5Native_MergeSamePathDupes(t *testing.T) {
 	assert.Equal(t, 1, deleted, "the real merge retired exactly one of the two rows")
 }
 
-// MergeBooks declares books, external_ids, user_state and operations, but the
-// plain two-book merge above writes only books: the sibling-move journal
-// (operations) is written only when a loser has version-group siblings to move,
-// and external_ids / user_state only when the loser has ids and state to carry.
-// Here each book has a sibling in its own version group, an external id and a
-// user's listening state, so whichever book loses, the merge's own writes reach
-// all four resources and the per-call attribution holds them to the MergeBooks row.
+// MergeBooks declares books, external_ids, user_state, sync_identity and
+// operations, but the plain two-book merge above is only required to write books:
+// the sibling-move journal (operations) is written only when a loser has
+// version-group siblings to move, and external_ids / user_state only when the
+// loser has ids and state to carry. Here each book has a sibling in its own
+// version group, an external id and a user's listening state, so whichever book
+// loses, the merge's own writes reach all five resources (the loser's sync id is
+// minted in any merge) and the per-call attribution holds them to the MergeBooks
+// row.
 func TestT6G5Native_MergeSamePathDupesCarriesIDsStateAndSiblings(t *testing.T) {
 	s := newRepairPebble(t)
 	dir := t.TempDir()
@@ -696,9 +698,9 @@ func TestT6G5Native_MergeSamePathDupesCarriesIDsStateAndSiblings(t *testing.T) {
 		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`, t6g5MergeThroughStore(s))
 	require.NoError(t, r.err)
 	r.requireWriter(t)
-	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState), string(ops.ResOperations))
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState), string(ops.ResSyncIdentity), string(ops.ResOperations))
 	require.Equal(t, 1, r.spy.count("MergeBooks"), "the merge reached the writer")
-	r.requireMethodWrote(t, "MergeBooks", string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState), string(ops.ResOperations))
+	r.requireMethodWrote(t, "MergeBooks", string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState), string(ops.ResSyncIdentity), string(ops.ResOperations))
 }
 
 func TestT6G5Native_MetadataCacheReap(t *testing.T) {

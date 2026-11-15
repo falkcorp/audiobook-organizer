@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — MERGE repair for duplicate book records that point at the
 // exact same audio file.
@@ -218,11 +218,14 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 // mergeSamePathDupesKind builds the native kind. Writes: HEAD's declared
 // book_files resource and what the merge it calls writes (MergeBooks: the
 // books, the external-id reroute, the losers' listening state following the
-// survivor, the undo journal); the preview is HEAD's dry run. The params decode into
+// survivor, the undo journal, the losers' sync ids and their redirects); the preview is HEAD's dry run. The params decode into
 // HEAD's struct after the mode key (apply) is refused.
 func (p *Plugin) mergeSamePathDupesKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)),
-		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResUserState)), tasks.Res("books", string(ops.ResOperations)))
+		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResUserState)), tasks.Res("books", string(ops.ResOperations)),
+		// sync_identity: MergeBooks mints each loser a sync id and records the redirect
+		// to the survivor (MintOrGetSyncID, RecordSyncMerge, FollowMerge): sync_item: rows.
+		tasks.Res("books", string(ops.ResSyncIdentity)))
 	return tasks.Task(mergeSamePathDupesKind, tasks.TaskSpec[json.RawMessage, mergeSamePathPlan]{
 		Common: t6g5Common(p.mergeSamePathDupesDef(), mergeSamePathDupesKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (mergeSamePathPlan, error) {
