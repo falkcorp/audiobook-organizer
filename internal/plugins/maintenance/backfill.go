@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -443,16 +444,18 @@ func t6g2MalformedM4BTranscodeParallelism() tasks.Parallelism {
 }
 
 // Effects found by reading what each server function writes (the PR lists them):
-// the ids pass writes external_ids and its done flag (settings); the atom and
-// remux passes rewrite files on disk, the book_file rows that describe them and
-// their done flag; the transcode also quarantines books. HEAD declares no
-// Writes for any of the four.
+// the ids pass writes external_ids and its done flag (settings); the atom,
+// remux and transcode passes rewrite files on disk, the book_file rows that
+// describe them (WriteTagsSafe and RecordRewrite both end in
+// UpdateBookFileHashes, which recomputes the book's aggregates, so the books
+// row too) and their done flag; the transcode also quarantines books. HEAD
+// declares no Writes for any of the four.
 func t6g2ExternalIDBackfillMeta() t6g2Meta {
 	return t6g2Meta{
 		Kind:     t6g2KindExternalIDBackfill,
 		Title:    t6g2ExternalIDBackfillTitle,
 		Help:     t6g2ExternalIDBackfillHelp,
-		Effects:  tasks.Writes(t6g2Res("external_ids", "settings")...),
+		Effects:  tasks.Writes(t6g2Res(ops.ResExternalIDs, ops.ResSettings)...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  30 * time.Minute,
@@ -465,7 +468,7 @@ func t6g2MovementAtomCleanupMeta() t6g2Meta {
 		Kind:     t6g2KindMovementAtomCleanup,
 		Title:    t6g2MovementAtomCleanupTitle,
 		Help:     t6g2MovementAtomCleanupHelp,
-		Effects:  tasks.Writes(t6g2Res("files", "settings")...),
+		Effects:  tasks.Writes(t6g2Res(ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks)...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  60 * time.Minute,
@@ -478,7 +481,7 @@ func t6g2MalformedM4BRemuxMeta() t6g2Meta {
 		Kind:     t6g2KindMalformedM4BRemux,
 		Title:    t6g2MalformedM4BRemuxTitle,
 		Help:     t6g2MalformedM4BRemuxHelp,
-		Effects:  tasks.Writes(t6g2Res("files", "book_files", "settings", "books")...),
+		Effects:  tasks.Writes(t6g2Res(ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks)...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  120 * time.Minute,
@@ -491,7 +494,7 @@ func t6g2MalformedM4BTranscodeMeta() t6g2Meta {
 		Kind:            t6g2KindMalformedM4BTranscode,
 		Title:           t6g2MalformedM4BTranscodeTitle,
 		Help:            t6g2MalformedM4BTranscodeHelp,
-		Effects:         tasks.Writes(t6g2Res("files", "book_files", "settings", "books")...),
+		Effects:         tasks.Writes(t6g2Res(ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks)...),
 		Resume:          tasks.ResumeAsk,
 		Priority:        tasks.PriorityLow,
 		Timeout:         6 * time.Hour,

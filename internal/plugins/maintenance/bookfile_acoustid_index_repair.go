@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/bookfile_acoustid_index_repair.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8b4e1d27-5f90-4c63-a2d8-e07c91b3f5a4
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -378,7 +380,7 @@ func t6g2BookFileAcoustIDIndexRepairMeta() t6g2Meta {
 		Kind:     t6g2KindBookFileAcoustIDIndexRepair,
 		Title:    t6g2BookFileAcoustIDIndexRepairTitle,
 		Help:     t6g2BookFileAcoustIDIndexRepairHelp,
-		Effects:  tasks.Writes(t6g2Res("book_files")...).AlsoReads(t6g2Res("book_files")...),
+		Effects:  tasks.Writes(t6g2Res(ops.ResBookFiles)...).AlsoReads(t6g2Res(ops.ResBookFiles)...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  60 * time.Minute,
@@ -403,6 +405,14 @@ func t6g2BookFileAcoustIDIndexRepairKind(deps t6g2Deps, sched func(tasks.Kind) *
 		}
 		if ok {
 			run.Params = saved
+		} else if t := bytes.TrimSpace(raw); len(t) > 0 && !bytes.Equal(t, []byte("null")) {
+			// No checkpoint: honour the start params' resume_after and done as
+			// HEAD does (it decodes them from the params it was started with).
+			// A checkpoint wins when there is one, as HEAD's registry merges it
+			// over the params. The mode keys were refused above.
+			if err := json.Unmarshal(t, &run.Params); err != nil {
+				return t6g2NoResult{}, fmt.Errorf("%s: invalid params: %w", m.Kind, err)
+			}
 		}
 		run.Params.DryRun, run.Params.DryRunCamel = &dryRun, nil
 		env, err := t6g2NativeEnv(rc, deps, par)

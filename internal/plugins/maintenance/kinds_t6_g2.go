@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g2.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: f05c0cfb-33a6-46e3-a29b-4ab6825825dc
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -60,10 +61,10 @@ var t6g2SettingsManageScopes = []rbac.Permission{
 func t6g2StartRequirement() rbac.Requirement { return rbac.AllOf(t6g2SettingsManageScopes...) }
 
 // t6g2Res is rule R7's resource spelling: tasks.Res("books", kind) per name.
-func t6g2Res(kinds ...string) []tasks.Resource {
+func t6g2Res(kinds ...ops.Resource) []tasks.Resource {
 	out := make([]tasks.Resource, len(kinds))
 	for i, k := range kinds {
-		out[i] = tasks.Res("books", k)
+		out[i] = tasks.Res("books", string(k))
 	}
 	return out
 }
@@ -571,18 +572,36 @@ type t6g2Deps struct {
 	ReportPath func(explicit, fileName string) (string, error)
 }
 
-// t6g2NativeEnv is the env of a native run. par is the kind's declared
-// parallelism, bound into Items.
+// t6g2NativeEnv is the env of a native run of a writing kind. par is the
+// kind's declared parallelism, bound into Items. It refuses a missing store,
+// writer factory or writer: a writing kind must run through the run's
+// tasks.Writer.
 func t6g2NativeEnv(rc *tasks.RC, deps t6g2Deps, par tasks.Parallelism) (t6g2Env, error) {
+	return t6g2NativeEnvOf(rc, deps, par, true)
+}
+
+// t6g2NativeReadEnv is the env of a native run of a ReadOnly kind (the at-path
+// verify and the shape report). The executor gives a ReadOnly def no
+// tasks.Writer (rc.Writer() is nil), so this never asks deps.NewWriter for one
+// and env.Writer stays nil: no read-only core touches it, and a factory that
+// returns nil for a nil Writer cannot fail the run.
+func t6g2NativeReadEnv(rc *tasks.RC, deps t6g2Deps, par tasks.Parallelism) (t6g2Env, error) {
+	return t6g2NativeEnvOf(rc, deps, par, false)
+}
+
+func t6g2NativeEnvOf(rc *tasks.RC, deps t6g2Deps, par tasks.Parallelism, writes bool) (t6g2Env, error) {
 	if deps.Store == nil {
 		return t6g2Env{}, fmt.Errorf("%s: t6g2Deps.Store is not set", rc.Kind())
 	}
-	if deps.NewWriter == nil {
-		return t6g2Env{}, fmt.Errorf("%s: t6g2Deps.NewWriter is not set", rc.Kind())
-	}
-	w := deps.NewWriter(rc.Writer())
-	if w == nil {
-		return t6g2Env{}, fmt.Errorf("%s: t6g2Deps.NewWriter returned no writer", rc.Kind())
+	var w t6g2Writer
+	if writes {
+		if deps.NewWriter == nil {
+			return t6g2Env{}, fmt.Errorf("%s: t6g2Deps.NewWriter is not set", rc.Kind())
+		}
+		w = deps.NewWriter(rc.Writer())
+		if w == nil {
+			return t6g2Env{}, fmt.Errorf("%s: t6g2Deps.NewWriter returned no writer", rc.Kind())
+		}
 	}
 	env := t6g2Env{
 		Log: func(l slog.Level, m string, a ...slog.Attr) {

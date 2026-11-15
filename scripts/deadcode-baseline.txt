@@ -685,7 +685,9 @@ internal/plugins/maintenance.t6g2MovementAtomCleanupKind
 internal/plugins/maintenance.t6g2MovementAtomCleanupMeta
 internal/plugins/maintenance.t6g2MovementAtomCleanupParallelism
 internal/plugins/maintenance.t6g2NativeEnv
+internal/plugins/maintenance.t6g2NativeEnvOf
 internal/plugins/maintenance.t6g2NativeItems
+internal/plugins/maintenance.t6g2NativeReadEnv
 internal/plugins/maintenance.t6g2ParamObject
 internal/plugins/maintenance.t6g2RefuseModeKeys
 internal/plugins/maintenance.t6g2RefuseNotLive

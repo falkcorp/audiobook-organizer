@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_sidecar_migrate.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 2c8f6a90-4b17-4e35-9d82-1a5e703c6f84
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -282,7 +283,7 @@ func t6g2BookSigSidecarMigrateMeta() t6g2Meta {
 		Kind:     t6g2KindBookSigSidecarMigrate,
 		Title:    t6g2BookSigSidecarMigrateTitle,
 		Help:     t6g2BookSigSidecarMigrateHelp,
-		Effects:  tasks.Writes(t6g2Res("books")...),
+		Effects:  tasks.Writes(t6g2Res(ops.ResBooks)...),
 		Resume:   tasks.ResumeDrop,
 		Priority: tasks.PriorityLow,
 		Timeout:  90 * time.Minute,

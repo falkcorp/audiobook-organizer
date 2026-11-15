@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/chapters_backfill.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 5d3b7e14-9c62-4a8f-b0d7-2e6194af8c35
 // last-edited: 2026-11-14
 
@@ -78,6 +78,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -278,8 +279,10 @@ func (p *Plugin) chaptersBackfillDef() sdk.OperationDef {
 		// the size of that list.
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
-		// Shares the ffprobe lane with the other whole-library probe op so the
-		// two cannot saturate every core at once.
+		// This key serialises chapters-backfill with itself only: no other op
+		// declares it (probe-directory-books' own key is
+		// maintenance.relink-unlinked-books), so it shares no lane with the
+		// other whole-library probe op despite the name.
 		ConcurrencyKey: "maintenance.probe-directory-books",
 		Cancellable:    true,
 		Isolate:        false,
@@ -698,11 +701,13 @@ func t6g2ChaptersBackfillMeta() t6g2Meta {
 		// Effects vocabulary (pkg/ops/effects.go) has no chapters constant, so
 		// the per-book chapter rows are declared as books rather than coining a
 		// name; see the PR's Review decisions.
-		Effects:  tasks.Writes(t6g2Res("books")...),
+		Effects:  tasks.Writes(t6g2Res(ops.ResBooks)...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  24 * time.Hour,
-		// Shares the ffprobe lane with the other whole-library probe op.
+		// Held by this kind alone: no other kind declares it (probe-directory-books
+		// runs under the relink-unlinked-books key), so it is not a shared ffprobe
+		// lane. The key is HEAD's, mapped 1:1.
 		Key: "maintenance.probe-directory-books",
 	}
 }

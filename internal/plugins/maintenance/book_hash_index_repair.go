@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_hash_index_repair.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6f2a8c15-4d93-4e70-b1a6-3c9e0d7b5a28
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -257,7 +258,7 @@ func t6g2BookHashIndexRepairMeta() t6g2Meta {
 		Kind:    t6g2KindBookHashIndexRepair,
 		Title:   t6g2BookHashIndexRepairTitle,
 		Help:    t6g2BookHashIndexRepairHelp,
-		Effects: tasks.Writes(t6g2Res("books")...).AlsoReads(t6g2Res("books")...),
+		Effects: tasks.Writes(t6g2Res(ops.ResBooks)...).AlsoReads(t6g2Res(ops.ResBooks)...),
 		// ResumeRestart at HEAD, but nothing here ever checkpoints: a restart
 		// verifies by reading again, so the kind says it runs from zero.
 		Resume:   tasks.ResumeFromZero,

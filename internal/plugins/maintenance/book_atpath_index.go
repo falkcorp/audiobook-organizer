@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/book_atpath_index.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 6d2a9e41-7c3b-4f85-a0d6-8b1e5c9f2a74
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -359,7 +360,7 @@ func t6g2BookAtPathIndexBackfillMeta() t6g2Meta {
 		Kind:     t6g2KindBookAtPathIndexBackfill,
 		Title:    t6g2BookAtPathIndexBackfillTitle,
 		Help:     t6g2BookAtPathIndexBackfillHelp,
-		Effects:  tasks.Writes(t6g2Res("books")...),
+		Effects:  tasks.Writes(t6g2Res(ops.ResBooks)...),
 		Resume:   tasks.ResumeDrop,
 		Priority: tasks.PriorityLow,
 		Timeout:  30 * time.Minute,
@@ -374,7 +375,7 @@ func t6g2BookAtPathIndexVerifyKind(deps t6g2Deps, sched func(tasks.Kind) *tasks.
 		if err := t6g2RefuseModeKeys(m.Kind, raw); err != nil {
 			return t6g2NoResult{}, err
 		}
-		env, err := t6g2NativeEnv(rc, deps, tasks.Parallelism{})
+		env, err := t6g2NativeReadEnv(rc, deps, tasks.Parallelism{})
 		if err != nil {
 			return t6g2NoResult{}, err
 		}

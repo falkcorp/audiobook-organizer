@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.1.4
+// version: 1.2.0
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-14
 
@@ -165,6 +165,51 @@ type t6g2RecWriter struct {
 	yieldDue []bool             // run.YieldDue() after the walk, per pass
 	// yieldWhenDue makes a pass return walkresume.ErrYield when YieldDue is true.
 	yieldWhenDue bool
+	// failItem, when non-nil, is returned by the walk's item failItemAt.
+	failItem   error
+	failItemAt int
+
+	// gate, when positive, holds each pool item (a walk item or a chapters
+	// write) until that many are in flight at once, or two seconds have passed
+	// since the first; peak is the most that were in flight. A pool narrower
+	// than the gate never reaches it, and a wider one exceeds it.
+	gate         int
+	inflight     int
+	peak         int
+	gateDeadline time.Time
+}
+
+// enter marks one pool item in flight, honours the gate, and returns the
+// function that marks it done.
+func (w *t6g2RecWriter) enter() func() {
+	w.mu.Lock()
+	w.inflight++
+	w.peak = max(w.peak, w.inflight)
+	if w.gateDeadline.IsZero() {
+		w.gateDeadline = time.Now().Add(2 * time.Second)
+	}
+	deadline, gate := w.gateDeadline, w.gate
+	w.mu.Unlock()
+	for gate > 0 && time.Now().Before(deadline) {
+		w.mu.Lock()
+		reached := w.peak >= gate
+		w.mu.Unlock()
+		if reached {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return func() {
+		w.mu.Lock()
+		w.inflight--
+		w.mu.Unlock()
+	}
+}
+
+func (w *t6g2RecWriter) peakInFlight() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.peak
 }
 
 // t6g2WalkItems is the length of the walk a boot pass drives.
@@ -182,9 +227,14 @@ func (w *t6g2RecWriter) walk(ctx context.Context, run walkresume.Run) error {
 	}
 	if run.Exec != nil {
 		err := run.Exec(ctx, t6g2WalkItems, run.Resume.Index, func(_ context.Context, i int) error {
+			defer w.enter()()
 			w.mu.Lock()
 			w.walked = append(w.walked, i)
+			failItem, failAt := w.failItem, w.failItemAt
 			w.mu.Unlock()
+			if failItem != nil && i == failAt {
+				return failItem
+			}
 			return nil
 		}, func(_ context.Context, mark int) {
 			w.mu.Lock()
@@ -288,6 +338,7 @@ func (w *t6g2RecWriter) ModifyBook(id string, fn func(*database.Book) error) (*d
 }
 
 func (w *t6g2RecWriter) SaveChaptersForBook(id string, chapters []database.Chapter) error {
+	defer w.enter()()
 	w.rec(fmt.Sprintf("SaveChaptersForBook:%s:%d", id, len(chapters)))
 	return nil
 }
@@ -469,7 +520,7 @@ type t6g2Row struct {
 	// resume is the rule R5 mapping of head.ResumePolicy.
 	resume tasks.ResumePolicy
 	// writes is the declared write set (nil: ReadOnly); reads is AlsoReads.
-	writes, reads []string
+	writes, reads []ops.Resource
 	// workers is HEAD's worker count and parPrefix the rule R4 spelling;
 	// parPrefix "" means HEAD's body has no RunItems loop.
 	workers   int
@@ -495,22 +546,22 @@ func t6g2Rows() []t6g2Row {
 	rows := []t6g2Row{
 		{
 			def: (*Plugin).externalIDBackfillDef, kind: t6g2KindExternalIDBackfill, resume: tasks.ResumeContinue,
-			writes: []string{"external_ids", "settings"}, workers: t6g2BootExternalIDWorkers, parPrefix: "fixed(1)",
+			writes: []ops.Resource{ops.ResExternalIDs, ops.ResSettings}, workers: t6g2BootExternalIDWorkers, parPrefix: "fixed(1)",
 			liveOnly: true, params: `{}`, wantLive: []string{"BackfillExternalIDs"},
 		},
 		{
 			def: (*Plugin).movementAtomCleanupDef, kind: t6g2KindMovementAtomCleanup, resume: tasks.ResumeContinue,
-			writes: []string{"files", "settings"}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
+			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
 			liveOnly: true, params: `{}`, wantLive: []string{"StripMovementAtoms"},
 		},
 		{
 			def: (*Plugin).malformedM4BRemuxDef, kind: t6g2KindMalformedM4BRemux, resume: tasks.ResumeContinue,
-			writes: []string{"files", "book_files", "settings", "books"}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
+			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
 			liveOnly: true, params: `{}`, wantLive: []string{"RemuxMalformedM4BFiles"},
 		},
 		{
 			def: (*Plugin).malformedM4BTranscodeDef, kind: t6g2KindMalformedM4BTranscode, resume: tasks.ResumeAsk,
-			writes: []string{"files", "book_files", "settings", "books"}, workers: bootTranscodeWorkers, parPrefix: "fixed(2)",
+			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks}, workers: bootTranscodeWorkers, parPrefix: "fixed(2)",
 			liveOnly: true, params: `{"quarantine_after":true}`,
 			wantLive: []string{"TranscodeMalformedM4BFiles", "QuarantineKnownBadFiles"},
 		},
@@ -523,12 +574,12 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).bookAtPathIndexBackfillDef, kind: t6g2KindBookAtPathIndexBackfill, resume: tasks.ResumeDrop,
-			writes: []string{"books"}, liveOnly: true, params: `{}`,
+			writes: []ops.Resource{ops.ResBooks}, liveOnly: true, params: `{}`,
 			wantLive: []string{"RebuildBookAtPathIndex"},
 		},
 		{
 			def: (*Plugin).bookHashIndexRepairDef, kind: t6g2KindBookHashIndexRepair, resume: tasks.ResumeFromZero,
-			writes: []string{"books"}, reads: []string{"books"}, params: `{}`,
+			writes: []ops.Resource{ops.ResBooks}, reads: []ops.Resource{ops.ResBooks}, params: `{}`,
 			wantLive: []string{"RepairBookHashIndex"},
 		},
 		{
@@ -538,7 +589,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).bookFileAcoustIDIndexRepairDef, kind: t6g2KindBookFileAcoustIDIndexRepair, resume: tasks.ResumeContinue,
-			writes: []string{"book_files"}, reads: []string{"book_files"}, workers: runtime.NumCPU(), parPrefix: "cpu",
+			writes: []ops.Resource{ops.ResBookFiles}, reads: []ops.Resource{ops.ResBookFiles}, workers: runtime.NumCPU(), parPrefix: "cpu",
 			params: `{}`,
 			arrange: func(t *testing.T, f *t6g2Fakes) {
 				f.store.acoustid = []database.BookFileAcoustIDEntry{{}}
@@ -548,7 +599,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).bookSigRecoveryAuditDef, kind: t6g2KindBookSigRecoveryAudit, resume: tasks.ResumeDrop,
-			writes: []string{"books"}, params: `{}`,
+			writes: []ops.Resource{ops.ResBooks}, params: `{}`,
 			arrange: func(t *testing.T, f *t6g2Fakes) {
 				desc := "A Bat out of Gotham"
 				snap, err := json.Marshal(&database.Book{Title: "The Dark Knight Returns", Description: &desc})
@@ -563,14 +614,14 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).bookSigSidecarMigrateDef, kind: t6g2KindBookSigSidecarMigrate, resume: tasks.ResumeDrop,
-			writes: []string{"books"}, workers: runtime.NumCPU(), parPrefix: "cpu", params: `{}`,
+			writes: []ops.Resource{ops.ResBooks}, workers: runtime.NumCPU(), parPrefix: "cpu", params: `{}`,
 			arrange:        func(t *testing.T, f *t6g2Fakes) { f.store.ids = []string{"bat-1", "bat-2"} },
 			wantLive:       []string{"MigrateBookSigToSidecar:bat-1", "MigrateBookSigToSidecar:bat-2"},
 			wantClassified: []string{"bat-1", "bat-2"},
 		},
 		{
 			def: (*Plugin).buildFolderBookFilesDef, kind: t6g2KindBuildFolderBookFiles, resume: tasks.ResumeDrop,
-			writes: []string{"book_files", "books"}, workers: runtime.NumCPU(), parPrefix: "cpu",
+			writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, workers: runtime.NumCPU(), parPrefix: "cpu",
 			params: `{"book_ids":["bat-1"]}`,
 			arrange: func(t *testing.T, f *t6g2Fakes) {
 				stubProbe(t, map[string]int{"01.mp3": 100, "02.mp3": 200})
@@ -584,7 +635,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).chaptersBackfillDef, kind: t6g2KindChaptersBackfill, resume: tasks.ResumeContinue,
-			writes: []string{"books"}, workers: runtime.NumCPU(), parPrefix: "cpu",
+			writes: []ops.Resource{ops.ResBooks}, workers: runtime.NumCPU(), parPrefix: "cpu",
 			params:   `{"book_ids":["bat-1"]}`,
 			arrange:  func(t *testing.T, f *t6g2Fakes) { t6g2ChaptersFixture(t, f, "bat-1") },
 			wantLive: []string{"SaveChaptersForBook:bat-1:2"},
@@ -769,10 +820,10 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 			}
 
 			// Effects (rule R7).
-			res := func(names []string) []string {
+			res := func(names []ops.Resource) []string {
 				out := make([]string, len(names))
 				for i, n := range names {
-					out[i] = tasks.Res("books", n).String()
+					out[i] = tasks.Res("books", string(n)).String()
 				}
 				return out
 			}
@@ -838,7 +889,7 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 					t.Fatalf("%s: no traced touches for writer method %s", r.kind, method)
 				}
 				for _, n := range res {
-					touched[tasks.Res("books", n).String()] = true
+					touched[tasks.Res("books", string(n)).String()] = true
 				}
 			}
 			for x := range touched {
@@ -963,7 +1014,12 @@ func t6g2ArrangeAndRun(t *testing.T, r t6g2Row, mode tasks.Mode, params string) 
 		r.arrange(t, f)
 	}
 	def := t6g2KindByName(t, (&Plugin{}).t6g2Kinds(f.deps(), nil), r.kind)
-	h := t6g2NewHost(r.kind, mode, &t6g2RunWriter{name: string(r.kind)})
+	// The executor gives a ReadOnly def no tasks.Writer, so neither does the host.
+	var w tasks.Writer
+	if r.writes != nil {
+		w = &t6g2RunWriter{name: string(r.kind)}
+	}
+	h := t6g2NewHost(r.kind, mode, w)
 	_, err := t6g2RunKind(t, def, tasks.NewRC(h), params)
 	return f, h, err
 }
@@ -1042,6 +1098,8 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 	t.Run("head shell", t6g2HeadShellSubtests)
 	t.Run("read-only kinds", t6g2ReadOnlySubtests)
 	t.Run("restore", t6g2RestoreSubtests)
+	t.Run("start params", t6g2StartParamsSubtests)
+	t.Run("head pool width", t6g2HeadWidthSubtests)
 	t.Run("parallelism used", t6g2ParallelismSubtests)
 	t.Run("boot walk", t6g2BootWalkSubtests)
 	t.Run("pool", t6g2PoolSubtests)
@@ -1096,23 +1154,26 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 // t6g2Touches is, per t6g2Writer method, the resource kinds the production
 // writer rewrites. It is traced from the code each method reaches, not copied
 // from any kind's Effects: BatchCreateBookFiles runs notifyBookFileChanges and
-// then RecomputeBookAggregates, which rewrites the books row; a remux's
-// RecordRewrite runs UpdateBookFileHashes, which recomputes the same
-// aggregates; the boot passes record their done flag in settings; the
-// transcode's quarantine step marks books.
-var t6g2Touches = map[string][]string{
-	"BackfillExternalIDs":                 {"external_ids", "settings"},
-	"StripMovementAtoms":                  {"files", "settings"},
-	"RemuxMalformedM4BFiles":              {"files", "book_files", "settings", "books"},
-	"TranscodeMalformedM4BFiles":          {"files", "book_files", "settings"},
-	"QuarantineKnownBadFiles":             {"books", "settings"},
-	"RepairBookHashIndex":                 {"books"},
-	"RebuildBookAtPathIndex":              {"books"},
-	"DeleteOrphanBookFileAcoustIDEntries": {"book_files"},
-	"ModifyBook":                          {"books"},
-	"SaveChaptersForBook":                 {"books"},
-	"BatchCreateBookFiles":                {"book_files", "books"},
-	"MigrateBookSigToSidecar":             {"books"},
+// then RecomputeBookAggregates, which rewrites the books row; a remux's and a
+// transcode's RecordRewrite run UpdateBookFileHashes, which rewrites the
+// book_file row and recomputes the same aggregates; so does the movement-atom
+// cleanup, whose removeMovementAtomsFromFile installs metadata.WithBookFileHashes
+// before tagger.WriteTagsSafe, and WriteTagsSafe ends in
+// Store.UpdateBookFileHashes; the boot passes record their done flag in
+// settings; the transcode's quarantine step marks books.
+var t6g2Touches = map[string][]ops.Resource{
+	"BackfillExternalIDs":                 {ops.ResExternalIDs, ops.ResSettings},
+	"StripMovementAtoms":                  {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
+	"RemuxMalformedM4BFiles":              {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
+	"TranscodeMalformedM4BFiles":          {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
+	"QuarantineKnownBadFiles":             {ops.ResBooks, ops.ResSettings},
+	"RepairBookHashIndex":                 {ops.ResBooks},
+	"RebuildBookAtPathIndex":              {ops.ResBooks},
+	"DeleteOrphanBookFileAcoustIDEntries": {ops.ResBookFiles},
+	"ModifyBook":                          {ops.ResBooks},
+	"SaveChaptersForBook":                 {ops.ResBooks},
+	"BatchCreateBookFiles":                {ops.ResBookFiles, ops.ResBooks},
+	"MigrateBookSigToSidecar":             {ops.ResBooks},
 }
 
 // t6g2HeadLive is the params that make HEAD's shell write for each writing def.
@@ -1306,8 +1367,8 @@ func t6g2ReadOnlySubtests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("verify: %v", err)
 		}
-		if f.store.verified != 1 || len(f.writer.got()) != 0 || len(f.newWriters) != 1 {
-			t.Errorf("verified=%d writes=%v writers=%d, want one verify, no writes", f.store.verified, f.writer.got(), len(f.newWriters))
+		if f.store.verified != 1 || len(f.writer.got()) != 0 || len(f.newWriters) != 0 {
+			t.Errorf("verified=%d writes=%v writers=%d, want one verify, no writes and no writer requested", f.store.verified, f.writer.got(), len(f.newWriters))
 		}
 		_ = h
 		// An incomplete index fails the run, as HEAD's does.
@@ -1325,8 +1386,8 @@ func t6g2ReadOnlySubtests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("shape report: %v", err)
 		}
-		if len(f.writer.got()) != 0 {
-			t.Errorf("a read-only report wrote %v", f.writer.got())
+		if len(f.writer.got()) != 0 || len(f.newWriters) != 0 {
+			t.Errorf("a read-only report wrote %v and requested %d writers, want neither", f.writer.got(), len(f.newWriters))
 		}
 		paths, _ := filepath.Glob(filepath.Join(f.reportDir, "book-shape-report-*.tsv"))
 		if len(paths) != 1 {
@@ -1351,6 +1412,35 @@ func t6g2ReadOnlySubtests(t *testing.T) {
 		}
 		if _, err := os.Stat(explicit); err != nil {
 			t.Errorf("explicit report path not written: %v", err)
+		}
+	})
+
+	// A factory that answers nil for the nil Writer a ReadOnly def gets (or no
+	// factory at all) must not fail a read-only run: the kinds never ask.
+	t.Run("read-only kinds never request a writer", func(t *testing.T) {
+		for _, kind := range []tasks.Kind{t6g2KindBookAtPathIndexVerify, t6g2KindBookShapeReport} {
+			for name, newWriter := range map[string]func(tasks.Writer) t6g2Writer{
+				"no factory": nil,
+				"a factory that refuses a nil writer": func(w tasks.Writer) t6g2Writer {
+					t.Errorf("%s: NewWriter was called (with %v)", kind, w)
+					return nil
+				},
+			} {
+				f := newT6G2Fakes(t)
+				if kind == t6g2KindBookShapeReport {
+					t6g2ShapeFixture(t, f)
+				}
+				deps := f.deps()
+				deps.NewWriter = newWriter
+				def := t6g2KindByName(t, (&Plugin{}).t6g2Kinds(deps, nil), kind)
+				params := `{"oversizedThreshold":1}`
+				if kind == t6g2KindBookAtPathIndexVerify {
+					params = `{}`
+				}
+				if _, err := t6g2RunKind(t, def, t6g2NewRC(kind, tasks.ModePreview, nil), params); err != nil {
+					t.Errorf("%s with %s: %v", kind, name, err)
+				}
+			}
 		}
 	})
 
@@ -1517,6 +1607,13 @@ func t6g2ParallelismSubtests(t *testing.T) {
 					t.Errorf("a pool ran %d workers, want HEAD's %d (all: %v)", n, r.workers, got)
 				}
 			}
+			// The worker count alone cannot tell the declared CPU() from a shell
+			// that resolved NumCPU and passed Fixed(NumCPU): only CPU() workers take
+			// a core.tasks.cpu_slots slot.
+			acquires, _ := h.CPUStats()
+			if usesCPU := strings.HasPrefix(r.parPrefix, "cpu"); usesCPU != (acquires > 0) {
+				t.Errorf("declared %q but the pool took %d CPU slots (a CPU() pool takes one per item, a Fixed pool none)", r.parPrefix, acquires)
+			}
 		})
 	}
 
@@ -1623,6 +1720,23 @@ func t6g2BootWalkSubtests(t *testing.T) {
 		}
 	})
 
+	// The walk's items run with Collect: one item's failure must not cancel the
+	// item context of the others (an in-flight ffmpeg), as a FailFast stop would.
+	t.Run("a failed item does not stop the others", func(t *testing.T) {
+		boom := errors.New("Scarecrow escaped")
+		f := newT6G2Fakes(t)
+		f.writer.failItem, f.writer.failItemAt = boom, 1
+		def := t6g2KindByName(t, (&Plugin{}).t6g2Kinds(f.deps(), nil), t6g2KindExternalIDBackfill)
+		h := t6g2NewHost(t6g2KindExternalIDBackfill, tasks.ModeLive, &t6g2RunWriter{})
+		_, err := t6g2RunKind(t, def, tasks.NewRC(h), `{}`)
+		if !errors.Is(err, boom) {
+			t.Errorf("err = %v, want the item error", err)
+		}
+		if got := f.writer.sortedWalked(); !slices.Equal(got, []int{0, 1, 2, 3, 4, 5}) {
+			t.Errorf("executed %v, want every item despite the failure (Fixed(1) fail-fast would stop at 1)", got)
+		}
+	})
+
 	t.Run("a yield hands the run back in place", func(t *testing.T) {
 		f, _, err := run(t, "", true)
 		if !errors.Is(err, tasks.ErrContinueInPlace) {
@@ -1720,6 +1834,54 @@ func t6g2PoolSubtests(t *testing.T) {
 		}
 		if !slices.Equal(dones, []int64{11, 12, 13}) {
 			t.Errorf("progress = %v, want 11, 12, 13 (the offset plus the items done)", dones)
+		}
+	})
+
+	// A failed item must not advance the watermark, or a resume skips it forever
+	// and the run reports done (HEAD's run_items.go guards the same case).
+	t.Run("a failed item never advances the watermark", func(t *testing.T) {
+		var marks []int
+		err := t6g2NativeItems(rc, tasks.Fixed(1, "test"))(context.Background(), 5, t6g2Loop{
+			Collect: true, CheckpointEvery: 1,
+			CheckpointState: func(_ context.Context, mark int) error { marks = append(marks, mark); return nil },
+		}, func(_ context.Context, i int) error {
+			if i == 2 {
+				return boomA
+			}
+			return nil
+		})
+		if !errors.Is(err, boomA) {
+			t.Errorf("err = %v, want the item error", err)
+		}
+		if !slices.Equal(marks, []int{1, 2}) {
+			t.Errorf("watermarks = %v, want only 1 and 2: items 3 and 4 succeeded but item 2 did not, so a resume must start at 2", marks)
+		}
+	})
+
+	// A run cancelled with no item having failed must not read as success.
+	t.Run("a cancelled run with no item error returns the cause", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		host := &t6g2Host{FakeRun: taskstest.NewFakeRun(ctx, t6g2KindChaptersBackfill), mode: tasks.ModeLive}
+		var ran []int
+		err := t6g2NativeItems(tasks.NewRC(host), tasks.Fixed(1, "test"))(ctx, 5, t6g2Loop{Collect: true}, func(_ context.Context, i int) error {
+			ran = append(ran, i)
+			if i == 1 {
+				cancel() // the run ends; the items after this one never start
+			}
+			return nil
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v after running %v, want context.Canceled: a cancelled run is not a success", err, ran)
+		}
+	})
+
+	t.Run("t6g2ItemsError returns the cause when no item failed", func(t *testing.T) {
+		for _, collect := range []bool{true, false} {
+			err := t6g2ItemsError(&tasks.ItemsError{FirstIndex: -1, Cause: context.Canceled}, collect)
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("collect=%v: err = %v, want the run's cause", collect, err)
+			}
 		}
 	})
 
@@ -1821,4 +1983,108 @@ func t6g2RefusalSubtests(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Start params and HEAD's production pool widths.
+// ---------------------------------------------------------------------------
+
+// t6g2StartParamsSubtests: with no checkpoint, bookfile-acoustid-index-repair
+// starts from the resume_after and done its start params carry, as HEAD's does;
+// a checkpoint, when there is one, wins.
+func t6g2StartParamsSubtests(t *testing.T) {
+	start := `{"resume_after":"bat-key-02","done":{"scanned":7,"live":1,"lacks_seg":0,"row_gone":2,"malformed":0}}`
+	arrange := func(f *t6g2Fakes) {
+		f.store.verdict = database.AcoustIDEntryRowGone
+		f.store.pages = map[string]t6g2ScanPage{
+			"bat-key-02": {entries: []database.BookFileAcoustIDEntry{{}}, next: "bat-key-09"},
+			"bat-key-09": {},
+			"bat-key-05": {},
+		}
+	}
+	t.Run("honoured without a checkpoint", func(t *testing.T) {
+		f := newT6G2Fakes(t)
+		arrange(f)
+		def := t6g2KindByName(t, (&Plugin{}).t6g2Kinds(f.deps(), nil), t6g2KindBookFileAcoustIDIndexRepair)
+		h := t6g2NewHost(t6g2KindBookFileAcoustIDIndexRepair, tasks.ModeLive, &t6g2RunWriter{})
+		if _, err := t6g2RunKind(t, def, tasks.NewRC(h), start); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.store.scanAfters; !slices.Equal(got, []string{"bat-key-02", "bat-key-09"}) {
+			t.Errorf("scan cursors = %v, want the scan to start after the start params' key", got)
+		}
+		raw, ok := h.CheckpointJSON("")
+		if !ok {
+			t.Fatal("no checkpoint written after the page")
+		}
+		var saved acoustIDRepairParams
+		if err := json.Unmarshal(raw, &saved); err != nil {
+			t.Fatal(err)
+		}
+		if saved.Done == nil || saved.Done.Scanned != 8 {
+			t.Errorf("saved checkpoint = %s, want the start params' count carried on (7 + 1)", raw)
+		}
+	})
+	t.Run("a checkpoint wins over the start params", func(t *testing.T) {
+		f := newT6G2Fakes(t)
+		arrange(f)
+		if _, err := t6g2Seeded(t, f, t6g2KindBookFileAcoustIDIndexRepair, start, `{"resume_after":"bat-key-05"}`); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.store.scanAfters; !slices.Equal(got, []string{"bat-key-05"}) {
+			t.Errorf("scan cursors = %v, want the checkpoint's key, not the start params'", got)
+		}
+	})
+}
+
+// t6g2HeadWidthSubtests pins the pool widths of HEAD's own shells, which are
+// what production runs today: a later edit that narrows one to a single worker
+// (the whole-library-on-one-core incident shape) fails here with CI green
+// otherwise. Each item holds until the declared number are in flight at once,
+// so a narrower pool never reaches it and a wider one overshoots.
+func t6g2HeadWidthSubtests(t *testing.T) {
+	run := func(t *testing.T, f *t6g2Fakes, kind tasks.Kind, params string) {
+		t.Helper()
+		var r t6g2Row
+		for _, c := range t6g2Rows() {
+			if c.kind == kind {
+				r = c
+			}
+		}
+		p := &Plugin{deps: t6g2HeadDeps{fakeDeps: fakeDeps{store: t6g2HeadStore{f: f}}, w: f.writer}}
+		rep := &t6g2ResultReporter{fakeReporter: &fakeReporter{}}
+		if err := r.def(p).Run(context.Background(), json.RawMessage(params), rep); err != nil {
+			t.Fatalf("HEAD run: %v", err)
+		}
+	}
+	for _, tc := range []struct {
+		kind  tasks.Kind
+		width int
+	}{
+		{t6g2KindMovementAtomCleanup, bootWalkWorkers},
+		{t6g2KindMalformedM4BRemux, bootWalkWorkers},
+		{t6g2KindMalformedM4BTranscode, bootTranscodeWorkers},
+	} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			f := newT6G2Fakes(t)
+			f.writer.gate = tc.width
+			run(t, f, tc.kind, t6g2HeadLive[tc.kind])
+			if got := f.writer.peakInFlight(); got != tc.width {
+				t.Errorf("HEAD ran %d items at once, want its %d workers", got, tc.width)
+			}
+		})
+	}
+
+	t.Run("a per-CPU kind (chapters-backfill) uses every core", func(t *testing.T) {
+		ids := []string{"bat-1", "bat-2", "bat-3", "bat-4", "bat-5", "bat-6", "bat-7", "bat-8"}
+		f := newT6G2Fakes(t)
+		t6g2ChaptersFixture(t, f, ids...)
+		want := min(runtime.NumCPU(), len(ids))
+		f.writer.gate = want
+		quoted, _ := json.Marshal(ids)
+		run(t, f, t6g2KindChaptersBackfill, fmt.Sprintf(`{"apply":true,"book_ids":%s}`, quoted))
+		if got := f.writer.peakInFlight(); got != want {
+			t.Errorf("HEAD ran %d books at once, want min(NumCPU, books) = %d", got, want)
+		}
+	})
 }

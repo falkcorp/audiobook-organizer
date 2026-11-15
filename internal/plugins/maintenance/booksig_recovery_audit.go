@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/booksig_recovery_audit.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 5f2a7c14-9b3e-4d6a-8e1f-2c0d5a9b7e34
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -432,7 +433,7 @@ func t6g2BookSigRecoveryAuditMeta() t6g2Meta {
 		Help:  t6g2BookSigRecoveryAuditHelp,
 		// HEAD declares no Writes but applies by writing the books table, so the
 		// effects say what the apply does (R7: preview is supported).
-		Effects:  tasks.Writes(t6g2Res("books")...),
+		Effects:  tasks.Writes(t6g2Res(ops.ResBooks)...),
 		Resume:   tasks.ResumeDrop,
 		Priority: tasks.PriorityLow,
 		Timeout:  60 * time.Minute,
