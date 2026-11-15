@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.7
+// version: 2.16.8
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-15
 
@@ -911,7 +911,10 @@ func (p *Plugin) durationBackfillKind(deps t6g4Deps, sched *tasks.Schedule) task
 			// Declared write-set (as HEAD, dispatcher Gate 3b): this op rewrites
 			// book_file rows. It also writes the book's own Duration and
 			// DurationVerifiedAt columns (ModifyBook), which HEAD never declared.
-			Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks)...),
+			// ModifyBook also stamps the metadata cache stale on an identity change and
+			// stages the ident: rows (metadata_cache, indexes: the shared ModifyBook
+			// row, kinds_resources.go).
+			Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,

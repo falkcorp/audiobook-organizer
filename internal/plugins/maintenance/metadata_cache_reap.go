@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 6b1f9d47-3c82-4e05-9a71-d84c2f60e5b3
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — REAPER for metadata_cache rows whose book is gone.
 //
@@ -241,7 +241,9 @@ func (p *Plugin) runMetadataCacheReap(ctx context.Context, rawParams json.RawMes
 // delete (DeleteMetadataCache), the books-store resource "metadata_cache"; the
 // per-row report is a file, not a store write.
 func (p *Plugin) metadataCacheReapKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(ops.ResMetadataCache)))
+	// indexes: DeleteMetadataCache stages the ident: rows (commitMetadataCacheWrite),
+	// which `indexes` owns (kinds_resources.go).
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(metadataCacheReapKind, tasks.TaskSpec[json.RawMessage, reapPlan]{
 		Common: t6g5Common(p.metadataCacheReapDef(), metadataCacheReapKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (reapPlan, error) {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 29eb0771-6105-406d-b32a-2a11e3535809
 // last-edited: 2026-11-15
 
@@ -850,3 +850,27 @@ var _ = t6g3KindList
 // books module. Every Effects resource in this group is written through it, as
 // the pkg/ops constant, never as a string literal.
 func t6g3Res(r ops.Resource) tasks.Resource { return tasks.Res("books", string(r)) }
+
+// t6g3ResRow is t6g3Res for every resource of a row of t6WriterResources
+// (kinds_resources.go), so a kind whose writer calls one method can declare
+// exactly that method's row, derived and not retyped.
+func t6g3ResRow(row []ops.Resource) []tasks.Resource {
+	out := make([]tasks.Resource, len(row))
+	for i, r := range row {
+		out[i] = t6g3Res(r)
+	}
+	return out
+}
+
+// The shared rows the group 3 kinds derive their Effects from, converted once at
+// package initialisation. A kind copies the slice before adding its own writes.
+var (
+	// t6g3PurgeWrites is the purge-deleted chain: the carry and the hard delete
+	// (stack review D2).
+	t6g3PurgeWrites = t6g3ResRow(t6WriterResources["RunAutoPurgeSoftDeleted"])
+	// t6g3TrashCleanupWrites is trash-cleanup's own call: version rows, the files it
+	// unlinks and its merge-stop streak setting (stack review N2).
+	t6g3TrashCleanupWrites = t6g3ResRow(t6WriterResources["CleanupTrashedVersions"])
+	// t6g3ModifyBookWrites is what a kind's ModifyBook call writes.
+	t6g3ModifyBookWrites = t6g3ResRow(t6WriterResources["ModifyBook"])
+)

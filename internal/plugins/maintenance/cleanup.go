@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.35.3
+// version: 1.35.5
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -97,9 +97,16 @@ func runPurgeDeletedCore(ctx context.Context, env purgeDeletedEnv) (struct{}, er
 // purge's book rows, their external-id tombstones, the files it removes, the
 // undo records it reads and clears (audiobooks.PurgeSoftDeletedUnattended) and
 // the activity entries the run flushes under its operation id (ActivityFlushOp).
+// The purge also carries each book's listening state and sync id onto its
+// survivor (merge.CarryStateThenHardDelete: user_state, sync_identity) and then
+// hard-deletes the book (store DeleteBook: authors, field_states, embeddings,
+// metadata_cache, user_state, and the ident: rows, `indexes`), which HEAD never
+// declared and the first native cut left out. The declaration is the shared row
+// of RunAutoPurgeSoftDeleted (kinds_resources.go), which is built from the
+// CarryStateThenHardDelete and DeleteBook rows, plus the activity flush; it is not
+// retyped here, so a widened DeleteBook row widens the purge (stack review D2).
 func (p *Plugin) purgeDeletedKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(t6g3Res(ops.ResBooks), t6g3Res(ops.ResExternalIDs),
-		t6g3Res(ops.ResFiles), t6g3Res(ops.ResOperations), t6g3Res(ops.ResActivity))
+	eff := tasks.Writes(append(slices.Clone(t6g3PurgeWrites), t6g3Res(ops.ResActivity))...)
 	return tasks.Task(t6g3PurgeDeletedKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g3Common(p.purgeDeletedDef(), t6g3PurgeDeletedKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
@@ -964,9 +971,15 @@ func (p *Plugin) runTrashCleanup(ctx context.Context, _ json.RawMessage, reporte
 // trashCleanupKind builds the native kind. Live-only writer. Writes found:
 // CleanupTrashedVersions purges trashed versions (book_version rows, counted
 // under books), removes their files and the files the kept-file sweep unlinks (files), and moves unsettled
-// versions to purge_failed (book_version rows, counted under books).
+// versions to purge_failed (book_version rows, counted under books). It also
+// records the merge-stop streak in the raw key versions:trash_cleanup:merge_stop_streak
+// (recordMergeStopStreak: SetRaw/DeleteRaw through RawKVStore), a setting-like
+// counter, so it declares `settings`. It does not go through the purge's
+// carry-and-delete chain (versions.CleanupTrashedVersions writes version rows,
+// unlinks files and keeps that one counter), so the purge-deleted widening does
+// not extend to it (stack review D2, parity review N2).
 func (p *Plugin) trashCleanupKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(t6g3Res(ops.ResBooks), t6g3Res(ops.ResFiles))
+	eff := tasks.Writes(t6g3TrashCleanupWrites...)
 	return tasks.Task(t6g3TrashCleanupKind, tasks.TaskSpec[json.RawMessage, TrashCleanupResult]{
 		Common: t6g3Common(p.trashCleanupDef(), t6g3TrashCleanupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (TrashCleanupResult, error) {

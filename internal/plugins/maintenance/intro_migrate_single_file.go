@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.6.6
+// version: 1.6.7
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
 // last-edited: 2026-11-15
 
@@ -174,8 +174,13 @@ func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule
 		Common: tasks.Common{
 			Title: "Migrate intro transcripts to single-file books",
 			Help:  "Tier 0 of the per-file intro backfill. Copies the book-level intro transcript onto the book's one BookFile row, for the ~33,780 single-file books (75.3% of the library). Zero GPU: it is a copy, not a transcription. Multi-file books are deliberately refused because the book-level transcript does not record which file produced it and the silence-retry path may have used file 2. Previews by default (a preview reports what it would copy and writes nothing); start it in live mode to write.",
-			// UpdateBookFile whole-row write-back on BookFile rows (reads Books).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles)...).AlsoReads(t6g4Res(ops.ResBooks)...),
+			// UpdateBookFile whole-row write-back on BookFile rows. books: every
+			// UpdateBookFile recomputes the book's aggregates afterwards
+			// (updateBookFile with recomputeAggregates -> RecomputeBookAggregates ->
+			// ModifyBook), which commits the book row when the stored aggregate has
+			// drifted (the shared UpdateBookFile row, kinds_resources.go; stack parity
+			// review P1). It was declared as a read of books until then.
+			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: overwrite is off by default, so a re-run skips a row that already carries a transcript), so the 05-tasks mapping is

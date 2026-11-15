@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: c0ba68fc-0752-49a5-9e51-187eca399e39
 // last-edited: 2026-11-15
 
@@ -278,14 +278,14 @@ type t6g5Want struct {
 
 func t6g5Wants() []t6g5Want {
 	return []t6g5Want{
-		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResFieldStates), string(ops.ResFiles), string(ops.ResFingerprintIndex), string(ops.ResMetadataCache), string(ops.ResOperations), string(ops.ResSyncIdentity), string(ops.ResUserState)}},
+		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResFieldStates), string(ops.ResFiles), string(ops.ResFingerprintIndex), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResOperations), string(ops.ResSyncIdentity), string(ops.ResUserState)}},
 		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false, []string{string(ops.ResUserState)}},
-		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResExternalIDs), string(ops.ResFieldStates), string(ops.ResMetadataCache), string(ops.ResSyncIdentity), string(ops.ResUserState)}},
+		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResExternalIDs), string(ops.ResFieldStates), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResSyncIdentity), string(ops.ResUserState)}},
 		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks)}},
 		{"maintenance.mark-missing-files", (*Plugin).markMissingFilesDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks)}},
-		{"maintenance.merge-same-path-dupes", (*Plugin).mergeSamePathDupesDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResOperations), string(ops.ResSyncIdentity), string(ops.ResUserState)}},
+		{"maintenance.merge-same-path-dupes", (*Plugin).mergeSamePathDupesDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResOperations), string(ops.ResSyncIdentity), string(ops.ResUserState)}},
 		{"maintenance.metadata-refresh", (*Plugin).metadataRefreshDef, tasks.ResumeFromZero, true, nil},
-		{"maintenance.metadata-cache-reap", (*Plugin).metadataCacheReapDef, tasks.ResumeDrop, false, []string{string(ops.ResMetadataCache)}},
+		{"maintenance.metadata-cache-reap", (*Plugin).metadataCacheReapDef, tasks.ResumeDrop, false, []string{string(ops.ResIndexes), string(ops.ResMetadataCache)}},
 		{"maintenance.missing-file-audit", (*Plugin).missingFileAuditDef, tasks.ResumeDrop, true, nil},
 		{"maintenance.missing-file-repair", (*Plugin).missingFileRepairDef, tasks.ResumeDrop, true, nil},
 		{"maintenance.missing-file-repoint", (*Plugin).missingFileRepointDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks)}},

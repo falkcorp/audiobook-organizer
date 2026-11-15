@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -270,7 +270,11 @@ func (p *Plugin) purgeEmptyAuthorsNative(deps t6g1Deps, sched func(tasks.Kind) *
 	c := t6g1Common(purgeEmptyAuthorsKind, sched)
 	c.Title = "Purge empty authors"
 	c.Help = purgeEmptyAuthorsHelp
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResOperations)))
+	// metadata_cache and indexes: every path of this kind re-authors books through
+	// ModifyBook (directly or inside DeleteAuthor, MergeDeleteAuthor and MoveCredits),
+	// whose shared row (kinds_resources.go) also stamps the metadata cache stale on an
+	// identity change and stages the ident: rows (`indexes`).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.purge-empty-authors")

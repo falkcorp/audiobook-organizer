@@ -623,7 +623,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).malformedM4BTranscodeDef, kind: t6g2KindMalformedM4BTranscode, resume: tasks.ResumeAsk,
-			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks}, workers: bootTranscodeWorkers, parPrefix: "fixed(2)",
+			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}, workers: bootTranscodeWorkers, parPrefix: "fixed(2)",
 			liveOnly: true, params: `{"quarantine_after":true}`,
 			wantLive: []string{"TranscodeMalformedM4BFiles", "QuarantineKnownBadFiles"},
 		},
@@ -662,7 +662,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).bookSigRecoveryAuditDef, kind: t6g2KindBookSigRecoveryAudit, resume: tasks.ResumeDrop,
-			writes: []ops.Resource{ops.ResBooks}, params: `{}`,
+			writes: []ops.Resource{ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}, params: `{}`,
 			arrange: func(t *testing.T, f *t6g2Fakes) {
 				desc := "A Bat out of Gotham"
 				snap, err := json.Marshal(&database.Book{Title: "The Dark Knight Returns", Description: &desc})
@@ -1041,28 +1041,32 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 	t.Run("quarantine's touch entry matches the calls it reaches", func(t *testing.T) {
 		svc := filepath.Join("..", "..", "quarantine", "service.go")
 		srv := filepath.Join("..", "..", "server", "quarantine_known_bad.go")
+		// res is what the callee writes: a literal for a callee that is not a
+		// writer method (a rename, a path-history record, a setting), and the
+		// shared row of t6WriterResources for one that is (UpdateBookFile,
+		// ModifyBook), so a widened row has to be claimed here too.
 		evidence := []struct {
-			res      ops.Resource // "" = a link of the chain, no resource of its own
+			res      []ops.Resource // nil = a link of the chain, no resource of its own
 			file, fn string
 			callee   string
 		}{
-			{"", srv, "quarantineKnownBadFiles", "QuarantineBook"},
-			{"", svc, "QuarantineBook", "relocate"},
-			{"", svc, "relocate", "moveNoClobber"},
-			{"", svc, "relocate", "repointRow"},
-			{ops.ResFiles, svc, "moveNoClobber", "Rename"},
-			{ops.ResBookFiles, svc, "repointRow", "UpdateBookFile"},
-			{ops.ResBooks, svc, "QuarantineBook", "RecordPathChange"},
-			{ops.ResBooks, svc, "QuarantineBook", "ModifyBook"},
-			{ops.ResSettings, srv, "quarantineKnownBadFiles", "SetSetting"},
+			{nil, srv, "quarantineKnownBadFiles", "QuarantineBook"},
+			{nil, svc, "QuarantineBook", "relocate"},
+			{nil, svc, "relocate", "moveNoClobber"},
+			{nil, svc, "relocate", "repointRow"},
+			{[]ops.Resource{ops.ResFiles}, svc, "moveNoClobber", "Rename"},
+			{t6WriterResources["UpdateBookFile"], svc, "repointRow", "UpdateBookFile"},
+			{[]ops.Resource{ops.ResBooks}, svc, "QuarantineBook", "RecordPathChange"},
+			{t6WriterResources["ModifyBook"], svc, "QuarantineBook", "ModifyBook"},
+			{[]ops.Resource{ops.ResSettings}, srv, "quarantineKnownBadFiles", "SetSetting"},
 		}
 		claimed := map[ops.Resource]bool{}
 		for _, e := range evidence {
 			if !t6g2CallsIn(t, e.file, e.fn)[e.callee] {
 				t.Errorf("%s no longer calls %s: the quarantine trace is stale", e.fn, e.callee)
 			}
-			if e.res != "" {
-				claimed[e.res] = true
+			for _, r := range e.res {
+				claimed[r] = true
 			}
 		}
 		entry := map[ops.Resource]bool{}
@@ -1358,9 +1362,14 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // t6g2Touches is, per t6g2Writer method, the resource kinds the production
-// writer rewrites. It is traced from the code each method reaches, not copied
-// from any kind's Effects, and every t6g2Writer method has an entry (a test
-// reflects over the interface). The trace, method -> what it calls -> resources:
+// writer rewrites: this group's view of t6WriterResources (kinds_resources.go),
+// the one method table of every converted group. It is traced from the code each
+// method reaches, not copied from any kind's Effects, and every t6g2Writer method
+// has an entry (a test reflects over the interface). Each composite row there is
+// built from the base rows it reaches, so ModifyBook's metadata_cache and
+// indexes and the file-row methods' books aggregate reach the quarantine step and
+// the boot rewrites without being retyped. The trace, method -> what it calls ->
+// resources:
 //
 //   - BackfillExternalIDs: itunes.BackfillExternalIDs -> BulkCreateExternalIDMappings
 //     (external_ids), then SetSetting for its done flag (settings).
@@ -1381,31 +1390,19 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 //     into .failed/ (files, service.go os.Rename in moveNoClobber), repoints each
 //     book_file row through UpdateBookFile (book_files), records the move with
 //     RecordPathChange (books: the path history lives on the book's key space) and
-//     calls ModifyBook (books); then SetSetting for the done flag (settings).
+//     calls ModifyBook (books, metadata_cache, indexes: its shared row); then
+//     SetSetting for the done flag (settings).
 //   - RepairBookHashIndex, RebuildBookAtPathIndex, BackfillBookAtPathIndex: write
 //     index keys and the build's sentinel, all keyed by book (books).
 //   - DeleteOrphanBookFileAcoustIDEntries: deletes acoustid index keys, which are
 //     book_file segment lookups (book_files); it never writes a book_file row.
-//   - ModifyBook: the books row (books).
+//   - ModifyBook: the books row, the metadata-cache stale stamp on an identity
+//     change and the ident: rows the store stages (books, metadata_cache, indexes).
 //   - SaveChaptersForBook: chapters are stored under the book (books).
 //   - BatchCreateBookFiles: creates the book_file rows (book_files), then
 //     notifyBookFileChanges and RecomputeBookAggregates rewrite the books row (books).
 //   - MigrateBookSigToSidecar: moves a book's signature into its sidecar key (books).
-var t6g2Touches = map[string][]ops.Resource{
-	"BackfillExternalIDs":                 {ops.ResExternalIDs, ops.ResSettings},
-	"StripMovementAtoms":                  {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks, ops.ResFileProvenance},
-	"RemuxMalformedM4BFiles":              {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
-	"TranscodeMalformedM4BFiles":          {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
-	"QuarantineKnownBadFiles":             {ops.ResFiles, ops.ResBookFiles, ops.ResBooks, ops.ResSettings},
-	"RepairBookHashIndex":                 {ops.ResBooks},
-	"RebuildBookAtPathIndex":              {ops.ResBooks},
-	"BackfillBookAtPathIndex":             {ops.ResBooks},
-	"DeleteOrphanBookFileAcoustIDEntries": {ops.ResBookFiles},
-	"ModifyBook":                          {ops.ResBooks},
-	"SaveChaptersForBook":                 {ops.ResBooks},
-	"BatchCreateBookFiles":                {ops.ResBookFiles, ops.ResBooks},
-	"MigrateBookSigToSidecar":             {ops.ResBooks},
-}
+var t6g2Touches = t6WriterView(nil, reflect.TypeFor[t6g2Writer]())
 
 // t6g2HeadLive is the params that make HEAD's shell write for each writing def.
 var t6g2HeadLive = map[tasks.Kind]string{
@@ -2331,6 +2328,9 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 				return r.workers
 			}
 		}
+		t.Fatalf("no row for %s", kind)
+		return 0
+	}
 	// perCPUWorkers is workersOf for a kind whose pool is one worker per CPU
 	// (HEAD's shell passes runtime.NumCPU()). On a one-CPU runner that width IS
 	// one, so no pin can tell the pool from a mutant narrowed to a single
@@ -2344,9 +2344,6 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 			t.Skipf("%s: a one-CPU runner cannot tell a per-CPU pool from width 1", kind)
 		}
 		return want
-	}
-		t.Fatalf("no row for %s", kind)
-		return 0
 	}
 	for _, kind := range []tasks.Kind{t6g2KindMovementAtomCleanup, t6g2KindMalformedM4BRemux, t6g2KindMalformedM4BTranscode} {
 		t.Run(string(kind), func(t *testing.T) {
@@ -2419,10 +2416,10 @@ func t6g2HeadWidthSubtests(t *testing.T) {
 		// writes them. Each is its own pool and phase 1 finishes before phase 2
 		// starts. The store gate is limited to the first len(books) GetBookFiles
 		// calls, which are exactly phase 1's, so phase 2's re-reads can neither
-		f.store.gt.setFirst(len(books))
 		// hold nor count toward the phase-1 peak: only a phase-1 pool as wide as
 		// the declaration reaches it. The writer gate sees phase 2's writes only.
 		f.store.gt.set(want)
+		f.store.gt.setFirst(len(books))
 		f.writer.gt.set(want)
 		quoted, _ := json.Marshal(books)
 		run(t, f, t6g2KindBuildFolderBookFiles, fmt.Sprintf(`{"apply":true,"book_ids":%s}`, quoted))

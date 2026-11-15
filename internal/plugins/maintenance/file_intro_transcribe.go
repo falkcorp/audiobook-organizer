@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.9
+// version: 1.8.10
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-11-15
 
@@ -489,10 +489,12 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			// HEAD declares no Writes (see the long comment on fileIntroTranscribeDef).
 			// The body writes a file's intro group (SetBookFileIntro, ClearBookFileIntro,
 			// RecordIntroTimeout: book_files), a book's transcript fill (ModifyBook:
-			// books). The run's counters (the stats:transcribe-files key) have no
-			// pkg/ops constant and are written outside the gated writer on purpose:
-			// see t6g4StatsSink.
-			Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks)...),
+			// books). ModifyBook also stamps the metadata cache stale on an identity
+			// change and stages the ident: rows (metadata_cache, indexes: the shared
+			// ModifyBook row, kinds_resources.go). The run's counters (the
+			// stats:transcribe-files key) have no pkg/ops constant and are written
+			// outside the gated writer on purpose: see t6g4StatsSink.
+			Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
 			Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:   tasks.ResumeContinue,
 			Priority: tasks.PriorityLow,

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.33.1
+// version: 1.33.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-11-15
 
@@ -235,7 +235,11 @@ func (p *Plugin) itunesRegroupKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.
 		tasks.Res("books", string(ops.ResEmbeddings)), tasks.Res("books", string(ops.ResMetadataCache)),
 		// sync_identity: CarryStateThenHardDelete follows the emptied fragment's sync id
 		// onto the target (MintOrGetSyncID, RecordSyncMerge): sync_item: / sync_alias_use rows.
-		tasks.Res("books", string(ops.ResSyncIdentity)))
+		tasks.Res("books", string(ops.ResSyncIdentity)),
+		// indexes: DeleteBook, ModifyBook and UpdateBook stage the ident: rows, the
+		// identification driver's derived state; `indexes` owns that family
+		// (kinds_resources.go).
+		tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(itunesRegroupKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g5Common(p.itunesRegroupDef(), itunesRegroupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {

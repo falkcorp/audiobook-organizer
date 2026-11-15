@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/cover_ops.go
-// version: 1.2.4
+// version: 1.2.6
 // guid: e5a3c8f2-1d7b-4e96-8c40-6b2f9d1a7e35
 // last-edited: 2026-11-15
 
@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -257,12 +258,17 @@ const folderCoverBackfillOpID = "maintenance.folder-cover-backfill"
 
 // folderCoverBackfillKind builds the native kind. HEAD declares a Preview, so
 // it runs in either mode (HEAD's dry_run default of true becomes the start
-// request's mode). Writes found: ModifyBook on the book's cover fields only.
+// request's mode). Writes found: ModifyBook on the book's cover fields (the
+// books row, the metadata-cache stale stamp and the ident: rows, the shared
+// ModifyBook row of kinds_resources.go) and the cover image it stores under
+// {library}/.covers (foldercover.Apply -> metadata.StoreCoverImage: bytes on disk,
+// written inside the one ModifyBook-bearing core and never through a writer method,
+// so `files` has no method row; stack parity review N1).
 // HEAD's `workers` param (clamped 1-32) is carried: the core sizes the pool
 // (the param, else twice the cores) and the shell hands that size to
 // tasks.RunItems as tasks.Fixed.
 func (p *Plugin) folderCoverBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(t6g3Res(ops.ResBooks))
+	eff := tasks.Writes(append(slices.Clone(t6g3ModifyBookWrites), t6g3Res(ops.ResFiles))...)
 	return tasks.Task(t6g3FolderCoverBackfillKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g3Common(p.folderCoverBackfillDef(), t6g3FolderCoverBackfillKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
