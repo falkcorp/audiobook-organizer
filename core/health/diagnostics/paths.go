@@ -1,11 +1,12 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-15
 
 package diagnostics
 
 import (
+	"errors"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -16,16 +17,43 @@ import (
 )
 
 // RedesignPendingF8_03b is true while this file's path redactor is the token
-// scanner that the F8-03 round 7 review found cannot make a bundle safe to share
-// (docs/agent-tasks/platform-core/seams.d/F8-03.md, "Round 8: what the redactor
-// does not meet"; the review is the "F8-03 #4658: break-it and design review,
-// round 7" report). While it is true, nothing outside tests may import
-// core/internal/healthhttp or construct the bundle Exporter with New, and
-// core/archtest's F8_03bGate fails the build if something does: F8-04 mounts the
-// diagnostics routes, so F8-04 is blocked on F8-03b. The row that replaces this
-// file's scanner (todo.d, F8-03b) deletes the marker with it and removes the
-// guard in the same change.
+// scanner (scanPaths and tokenAt below) that the F8-03 round 7 review found
+// cannot make a bundle safe to share (docs/agent-tasks/platform-core/seams.d/F8-03.md,
+// "Round 8: what the redactor does not meet"; the review is the "F8-03 #4658:
+// break-it and design review, round 7" report). While it is true:
+//
+//   - New and Build refuse, outside a test binary, with ErrRedesignPendingF8_03b
+//     (redesignRefusal). That is the check every bundle passes through, from any
+//     module, wrapper or constructor, so F8-04 cannot mount or run the exporter
+//     by accident;
+//   - core/archtest's F803bGate fails the build if non-test code in core imports
+//     core/internal/healthhttp or constructs the Exporter (an early signal, with
+//     the file and line), and fails it if this constant is false while scanPaths
+//     or tokenAt are still declared in this package: the constant stands for the
+//     scanner, so it cannot be flipped to open the gate.
+//
+// F8-04 mounts the diagnostics routes, so F8-04 is blocked on F8-03b
+// (docs/agent-tasks/platform-core/F8-03b-share-safe-bundle.md, TODO id
+// TODO-F8-03B-SHARE-SAFE-BUNDLE). The row that replaces the scanner deletes this
+// constant, redesignRefusal and the guard in the same change.
 const RedesignPendingF8_03b = true
+
+// ErrRedesignPendingF8_03b is what New and Build return while
+// RedesignPendingF8_03b is true and the caller is not a test binary.
+var ErrRedesignPendingF8_03b = errors.New("diagnostics: refusing to build a bundle: the path redactor cannot make a bundle safe to share until F8-03b replaces it (docs/agent-tasks/platform-core/F8-03b-share-safe-bundle.md)")
+
+// redesignRefusal is the refusal New and Build apply: ErrRedesignPendingF8_03b
+// when pending is true and the caller is not a test binary, else nil.
+// isTestBinary is testing.Testing in production code and a stand-in in the test
+// that asserts the refusal (as core/auth/password does for its test-only
+// options), so the production path is exercised by a test binary without a
+// package-level variable.
+func redesignRefusal(pending bool, isTestBinary func() bool) error {
+	if pending && !isTestBinary() {
+		return ErrRedesignPendingF8_03b
+	}
+	return nil
+}
 
 // PathRoot is a known filesystem root, by the name a reader of the bundle
 // sees. An absolute path inside Path is written "<root:NAME>/rest"; any other

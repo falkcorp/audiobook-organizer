@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c3e5a7-0d48-4f26-8b1e-6a7d2f4c9e03
 // last-edited: 2026-11-15
 
@@ -205,6 +205,60 @@ func Boot() { e, _ := diagnostics.New(); _ = healthhttp.Register(e) }
 			if _, err := F803bGateFindings(gateTree(t, "true", files)); err == nil {
 				t.Errorf("%s: a marker the guard cannot read passed", name)
 			}
+		}
+	})
+
+	// Round 9, m-1: the marker stands for the scanner. A flip to false while
+	// scanPaths or tokenAt are still declared in a non-test file is refused, not
+	// believed.
+	t.Run("MarkerFalseWhileScannerRemainsIsRefused", func(t *testing.T) {
+		for name, src := range map[string]string{
+			"scanPaths": "package diagnostics\n\nconst RedesignPendingF8_03b = false\n\nfunc scanPaths() {}\n",
+			"tokenAt":   "package diagnostics\n\nfunc tokenAt() {}\n\nconst RedesignPendingF8_03b = false\n",
+		} {
+			_, err := F803bGateFindings(gateTree(t, "false", map[string]string{"health/diagnostics/paths.go": src}))
+			if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "not a switch") {
+				t.Errorf("%s declared with a false marker: err = %v, want the not-a-switch refusal naming it", name, err)
+			}
+		}
+		// Not the scanner: a method of that name, or the function in a test file.
+		for name, files := range map[string]map[string]string{
+			"method":    {"health/diagnostics/paths.go": "package diagnostics\n\nconst RedesignPendingF8_03b = false\n\ntype t struct{}\n\nfunc (t) scanPaths() {}\n"},
+			"test file": {"health/diagnostics/paths_test.go": "package diagnostics\n\nfunc scanPaths() {}\nfunc tokenAt() {}\n"},
+		} {
+			if _, err := F803bGateFindings(gateTree(t, "false", files)); err != nil {
+				t.Errorf("%s: err = %v, want the gate open (not the scanner)", name, err)
+			}
+		}
+		// Marker true with the scanner declared is the pending state, not an error.
+		files := map[string]string{"health/diagnostics/paths.go": "package diagnostics\n\nconst RedesignPendingF8_03b = true\n\nfunc scanPaths() {}\nfunc tokenAt() {}\n"}
+		if got, err := F803bGateFindings(gateTree(t, "true", files)); err != nil || len(got) != 0 {
+			t.Errorf("true marker with the scanner: %v, %v; want no findings", got, err)
+		}
+	})
+
+	// Round 9, n-2: the check is syntactic, so a file that no tag set compiles is
+	// parsed too. A file under a tag set that is loaded is reported once.
+	t.Run("FilesNoTagSetBuildsAreParsed", func(t *testing.T) {
+		const body = `import "github.com/falkcorp/mediacore/internal/healthhttp"
+
+func Boot2() { _ = healthhttp.Register(nil) }
+`
+		root := gateTree(t, "true", map[string]string{
+			"kernel/never.go":      "//go:build neverbuilt\n\npackage kernel\n\n" + body,
+			"kernel/ignore.go":     "//go:build ignore\n\npackage main\n\n" + body,
+			"kernel/loaded.go":     "//go:build bench\n\npackage kernel\n\n" + body,
+			"kernel/never_test.go": "//go:build neverbuilt\n\npackage kernel\n\n" + body,
+		})
+		got := findingsFor(t, root)
+		by := findingsByFile(root, got)
+		for _, f := range []string{"kernel/never.go", "kernel/ignore.go", "kernel/loaded.go"} {
+			if by[f] != 1 {
+				t.Errorf("%s: %d reports, want 1:\n  %s", f, by[f], strings.Join(got, "\n  "))
+			}
+		}
+		if len(got) != 3 {
+			t.Errorf("%d reports, want 3 (a test file that no tag set builds is exempt too):\n  %s", len(got), strings.Join(got, "\n  "))
 		}
 	})
 

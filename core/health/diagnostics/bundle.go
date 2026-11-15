@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: effb9b73-b53b-433b-92a8-5f9cb806d08d
 // last-edited: 2026-11-15
 
@@ -424,40 +424,59 @@ func (st *build) walk(key string, v any, depth int) any {
 // apart with a "#2", "#3" suffix, in the order of the original keys, so no
 // member is lost and the result does not depend on map order.
 //
-// The suffix search is linear in the number of keys: next remembers, per
-// redacted text, the first suffix not yet tried. out only ever grows, so a
-// suffix below that counter was taken when it was passed and stays taken, and
-// resuming from the counter picks exactly the suffix a search from "#2" would
-// (the probe from 2 for every key was quadratic: 16,000 keys that all redact to
-// "<path>" took 12.8 s).
+// The suffix search is linear in the number of keys (keyNamer): it remembers,
+// per redacted text, the first suffix not yet tried. The probe from "#2" for
+// every key was quadratic: 16,000 keys that all redact to "<path>" took 12.8 s.
 func (st *build) walkObject(x map[string]any, depth int) map[string]any {
 	keys := make([]string, 0, len(x))
 	for k := range x {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	out := make(map[string]any, len(x))
-	next := map[string]int{}
+	kn := newKeyNamer(len(x))
 	for _, k := range keys {
-		out[uniqueKey(out, next, st.redactKey(k))] = st.walkMember(k, x[k], depth+1)
+		kn.out[kn.name(st.redactKey(k))] = st.walkMember(k, x[k], depth+1)
 	}
-	return out
+	st.keyProbes += kn.probes
+	return kn.out
 }
 
-// uniqueKey is the name base gets in out: base itself when it is free, else
-// base#2, base#3, ... the first of those that is free. next is the caller's
-// per-base counter (the first suffix not yet tried for that base) and is updated
-// here; it makes the search resume where the last one for the same base stopped.
-func uniqueKey(out map[string]any, next map[string]int, base string) string {
-	if _, taken := out[base]; !taken {
+// keyNamer names the members of one rebuilt object. out is the object so far;
+// next is, per redacted text, the first suffix not yet tried for it. out only
+// ever grows, so a suffix below that counter was taken when it was passed and
+// stays taken, and resuming from the counter picks exactly the suffix a search
+// from "#2" would.
+//
+// The cost is at most three lookups per member: one for the text itself, one
+// for each occupied name passed over (a name "X#N" is a candidate only for the
+// text X, so it is passed over once, by that one counter), and one for the free
+// name found. probes counts the lookups so a test asserts that bound, not a
+// time, which a loaded runner moves.
+type keyNamer struct {
+	out    map[string]any
+	next   map[string]int
+	probes int
+}
+
+func newKeyNamer(size int) *keyNamer {
+	return &keyNamer{out: make(map[string]any, size), next: map[string]int{}}
+}
+
+// name is the key base gets in out: base itself when it is free, else base#2,
+// base#3, ... the first of those that is free. It does not store a value under
+// the name; the caller does, before the next call.
+func (kn *keyNamer) name(base string) string {
+	kn.probes++
+	if _, taken := kn.out[base]; !taken {
 		return base
 	}
-	n := max(next[base], 2)
+	n := max(kn.next[base], 2)
 	for {
 		nk := base + "#" + strconv.Itoa(n)
 		n++
-		if _, taken := out[nk]; !taken {
-			next[base] = n
+		kn.probes++
+		if _, taken := kn.out[nk]; !taken {
+			kn.next[base] = n
 			return nk
 		}
 	}
