@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-15
 
@@ -1055,6 +1055,61 @@ func TestT6G1Kinds_RefusesUnwiredWritersAndReaders(t *testing.T) {
 			require.Contains(t, err.Error(), r.name+" is not wired", "%s without %s", kind, r.name)
 		}
 	}
+}
+
+// The pool's label rule (the one rule of groups 1 to 6): an
+// index-only label (PureLabel) is carried by both pools and sees the same
+// (index, total) pairs; a counter label (Label) stays on HEAD's pool and is
+// never called by the native one, because tasks.ItemsOptions.Label is pure.
+func TestT6G1Items_PureLabelCrossesAndCounterLabelDoesNot(t *testing.T) {
+	const n = 7
+	type pair struct{ i, total int }
+	pools := map[string]func() t6g1ItemsFunc{
+		"head": func() t6g1ItemsFunc { return t6g1HeadItems(&fakeReporter{}) },
+		"native": func() t6g1ItemsFunc {
+			h := &t6g1Host{FakeRun: taskstest.NewFakeRun(context.Background(), "books.test.label"), mode: tasks.ModeLive}
+			return t6g1NativeItems(tasks.NewRC(h), tasks.Fixed(2, "test"))
+		},
+	}
+	want := make([]pair, 0, n)
+	for i := range n {
+		want = append(want, pair{i, n})
+	}
+	for name, mk := range pools {
+		t.Run(name+"/pure", func(t *testing.T) {
+			var mu sync.Mutex
+			var got []pair
+			err := mk()(context.Background(), n, t6g1ItemsOptions{PureLabel: func(i, total int) string {
+				mu.Lock()
+				got = append(got, pair{i, total})
+				mu.Unlock()
+				return fmt.Sprintf("item %d of %d", i+1, total)
+			}}, func(context.Context, int) error { return nil })
+			require.NoError(t, err)
+			// HEAD's pool renders each item's label twice (before and after its
+			// work), so compare the distinct pairs.
+			slices.SortFunc(got, func(a, b pair) int { return a.i - b.i })
+			require.Equal(t, want, slices.Compact(got), "the %s pool renders PureLabel for every item with (index, total)", name)
+		})
+	}
+	t.Run("native/counter label is dropped", func(t *testing.T) {
+		var calls atomic.Int32
+		err := pools["native"]()(context.Background(), n, t6g1ItemsOptions{Label: func(int, int) string {
+			calls.Add(1)
+			return "counter"
+		}}, func(context.Context, int) error { return nil })
+		require.NoError(t, err)
+		require.Zero(t, calls.Load(), "the native pool never calls a counter label")
+	})
+	t.Run("head/counter label is called", func(t *testing.T) {
+		var calls atomic.Int32
+		err := pools["head"]()(context.Background(), n, t6g1ItemsOptions{Label: func(int, int) string {
+			calls.Add(1)
+			return "counter"
+		}}, func(context.Context, int) error { return nil })
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, calls.Load(), int32(n), "HEAD's pool calls the counter label for every item")
+	})
 }
 
 // The native pool runs the parallelism the kind declares: tasks.CPU() takes
