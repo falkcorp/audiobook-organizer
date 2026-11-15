@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_resources.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 3f9b6d21-5a84-4e07-b1c3-7d2e08a46f59
 // last-edited: 2026-11-15
 
@@ -271,11 +271,15 @@ func t6WriterComposites(rows map[string][]ops.Resource) {
 	// The purge (audiobooks.PurgeSoftDeletedUnattended): the carry
 	// (merge.CarryStateThenHardDelete(Locked)) and then store DeleteBook per book,
 	// plus what the purge itself writes: the books row it retires, the external ids
-	// it reroutes, the bytes it removes (files) and its undo journal. The carry and
-	// the delete are one source with F5-10's rows: a purge excludes every kind
+	// it reroutes and the bytes it removes (files; the purge_pending_file: journal
+	// that records a removal not yet carried out describes those bytes, so it is
+	// filed under files too). It writes NO undo journal: CarryStateThenHardDelete
+	// hands FollowAbsorbedJournaled a nil persist, and nothing in the purge records
+	// an opchange: row, so `operations` is not declared (stack review n4). The carry
+	// and the delete are one source with F5-10's rows: a purge excludes every kind
 	// that writes what they write.
 	rows["RunAutoPurgeSoftDeleted"] = t6RowsUnion(
-		[]ops.Resource{ops.ResBooks, ops.ResExternalIDs, ops.ResFiles, ops.ResOperations},
+		[]ops.Resource{ops.ResBooks, ops.ResExternalIDs, ops.ResFiles},
 		rows["CarryStateThenHardDelete"], rows["DeleteBook"])
 	// Trash cleanup (versions.CleanupTrashedVersions) does NOT go through the
 	// carry or DeleteBook: its store surface (versions.TrashedVersionCleaner) writes
