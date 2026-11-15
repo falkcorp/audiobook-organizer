@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

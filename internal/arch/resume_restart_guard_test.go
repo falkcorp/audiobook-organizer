@@ -1,7 +1,7 @@
 // file: internal/arch/resume_restart_guard_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 87f31afd-8f18-4eed-8095-a44c9e9c30bf
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package arch
 

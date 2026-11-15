@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/app_dir_guard_test.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 7c94e0a6-5d31-4b82-9e08-3f61b7d425ac
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

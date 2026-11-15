@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_migrate_single_file.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 6b0d94e7-1c58-4a32-bf07-9e5d2a17c630
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops_batch_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d3a390db-7a5a-41df-ba14-226aeb15655c
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -179,7 +179,7 @@ func TestAIDedupBatchKind_RestoresHEADShapedCheckpoint(t *testing.T) {
 		deps, pr := fakeT6G4Deps(t)
 		pr.store.aiParsing = true
 		pr.store.authors = []database.Author{{ID: 1, Name: "Alfred Pennyworth"}}
-		def := t6g4KindByName(t, t6g4Kinds(deps, nil), aiDedupBatchKind)
+		def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), aiDedupBatchKind)
 		host, rc := newT6G4RC(aiDedupBatchKind, tasks.ModeLive, &t6g4RunWriter{})
 		return def, pr, host, rc
 	}

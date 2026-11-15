@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 7e1c4b9a-52d8-4f36-a0b7-c9d13e6f2a84
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

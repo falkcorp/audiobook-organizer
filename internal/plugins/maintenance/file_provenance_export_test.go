@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: d61df6f5-c2e0-47ab-b028-44d97b64001c
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 //
 // The export is what turns "we can detect that history was destroyed" into
 // "history was not destroyed". The chain proves a row was rewritten; only a

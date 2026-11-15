@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_spy_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0976ab2f-77df-47d7-b719-f47dbda178bb
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.7.2
+// version: 1.7.3
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

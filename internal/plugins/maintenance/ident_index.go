@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ident_index.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 90d81b9d-7102-4e21-a4ac-e55a95d3922c
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

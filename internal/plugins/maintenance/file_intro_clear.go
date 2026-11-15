@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_clear.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6f3b8d25-e471-4a09-b2c6-1d8a95e7f034
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

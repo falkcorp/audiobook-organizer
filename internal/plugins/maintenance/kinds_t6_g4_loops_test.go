@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_loops_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 633f4bb6-49d8-463f-9e52-e1bb347a81d6
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/filepath_collision_report_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 989ac723-652b-498c-bd0f-55ce506ba859
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

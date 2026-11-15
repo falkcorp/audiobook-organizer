@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/duration_backfill_pool_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6df2f8ff-a5db-4063-902a-56a68a37c969
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 )
 
 // The book grain of maintenance.duration-backfill runs its ffprobe workers as a
@@ -86,7 +88,7 @@ func runDurationNative(t *testing.T, store *gatedDurStore, workers, books int, c
 		Store:     store,
 		NewWriter: func(tasks.Writer) t6g4Writer { return recT6G4Writer{rec: &t6g4Calls{}} },
 	}
-	def := t6g4KindByName(t, t6g4Kinds(deps, nil), durationBackfillKind)
+	def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), durationBackfillKind)
 	host, rc := newT6G4RC(durationBackfillKind, tasks.ModePreview, &t6g4RunWriter{})
 	if capWorkers > 0 {
 		host.SetCap(capWorkers)
@@ -157,10 +159,15 @@ func TestDurationBackfillNative_BookPoolCountsBooksInItsProgress(t *testing.T) {
 }
 
 // pacedDurStore counts the books a worker has started and answers each at once.
+// onStart, when set, runs inside the book's first read with the number started
+// so far; paused marks the span in which no book may start.
 type pacedDurStore struct {
 	zeroT6G4Store
-	books   int
-	started atomic.Int32
+	books    int
+	started  atomic.Int32
+	onStart  func(n int32)
+	paused   atomic.Bool
+	violated atomic.Int32 // books that started while paused was set
 }
 
 func (s *pacedDurStore) CountAllBooks() (int, error) { return s.books, nil }
@@ -168,36 +175,50 @@ func (s *pacedDurStore) GetBookByID(id string) (*database.Book, error) {
 	return &database.Book{ID: id, Title: "Batman " + id}, nil
 }
 func (s *pacedDurStore) GetBookFiles(string) ([]database.BookFile, error) {
-	s.started.Add(1)
+	n := s.started.Add(1)
+	if s.paused.Load() {
+		s.violated.Add(1)
+	}
+	if s.onStart != nil {
+		s.onStart(n)
+	}
 	time.Sleep(5 * time.Millisecond)
 	return nil, nil
 }
 
 // An operator pause takes effect between books, mid-run: the pause gate runs
-// before every item, and the books are the items.
+// before every item, and the books are the items. The pause is raised from
+// inside the third book's own read, so the book in flight is known exactly and
+// the test asserts on what started, not on how long anything took; its one
+// sleep only gives a wrongly started book time to show itself.
 func TestDurationBackfillNative_AnOperatorPauseHoldsTheNextBookMidRun(t *testing.T) {
 	store := &pacedDurStore{books: 40}
 	deps := t6g4Deps{Store: store, NewWriter: func(tasks.Writer) t6g4Writer { return recT6G4Writer{rec: &t6g4Calls{}} }}
-	def := t6g4KindByName(t, t6g4Kinds(deps, nil), durationBackfillKind)
+	def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), durationBackfillKind)
 	host, rc := newT6G4RC(durationBackfillKind, tasks.ModePreview, &t6g4RunWriter{})
+	raised := make(chan struct{})
+	store.onStart = func(n int32) {
+		if n == 3 {
+			store.paused.Store(true) // before the pause, so the next start is a violation
+			host.Pause()
+			close(raised)
+		}
+	}
 	done := make(chan error, 1)
 	go func() {
 		_, err := runT6G4Kind(t, def, rc, fmt.Sprintf(`{"workers":1,"bookIds":%s}`, durationBookIDs(40)))
 		done <- err
 	}()
-	for store.started.Load() < 3 {
-		time.Sleep(time.Millisecond)
+	select {
+	case <-raised:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the run never reached its third book")
 	}
-	host.Pause()
-	time.Sleep(100 * time.Millisecond) // let the book in flight finish
-	held := store.started.Load()
-	time.Sleep(150 * time.Millisecond)
-	if now := store.started.Load(); now != held {
-		t.Fatalf("books kept starting while paused: %d then %d of 40", held, now)
+	time.Sleep(50 * time.Millisecond) // a book that wrongly started would show itself now
+	if held, v := store.started.Load(), store.violated.Load(); held != 3 || v != 0 {
+		t.Fatalf("books kept starting while paused: %d started (want 3), %d of them after the pause", held, v)
 	}
-	if held >= 40 {
-		t.Fatalf("the run finished before the pause took effect (%d books)", held)
-	}
+	store.paused.Store(false)
 	host.Unpause()
 	select {
 	case err := <-done:
@@ -307,5 +328,87 @@ func TestDurationPoolHEAD_RunsExactlyTheWorkersAndWaitsForThem(t *testing.T) {
 	}
 	if running.Load() != 0 {
 		t.Fatal("the pool returned while a worker was still running")
+	}
+}
+
+// timeoutDurStore answers one book with three segments of unknown duration, so
+// every one needs a probe.
+type timeoutDurStore struct {
+	zeroT6G4Store
+	rereads atomic.Int32
+	failGet bool // the pool's re-read of the book fails (the producer's first read does not)
+}
+
+func (s *timeoutDurStore) CountAllBooks() (int, error) { return 1, nil }
+func (s *timeoutDurStore) GetBookByID(id string) (*database.Book, error) {
+	if s.rereads.Add(1) > 1 && s.failGet {
+		return nil, errors.New("the Batcave store is down")
+	}
+	return &database.Book{ID: id, Title: "Batman " + id}, nil
+}
+func (s *timeoutDurStore) GetBookFiles(id string) ([]database.BookFile, error) {
+	out := make([]database.BookFile, 3)
+	for i := range out {
+		out[i] = database.BookFile{ID: fmt.Sprintf("%s-f%d", id, i+1), BookID: id, FilePath: fmt.Sprintf("/lib/%s/%02d.m4b", id, i+1), TrackNumber: i + 1}
+	}
+	return out, nil
+}
+
+func runDurationLiveOne(t *testing.T, store *timeoutDurStore, rec *t6g4Calls) (durationBackfillResult, error) {
+	t.Helper()
+	deps := t6g4Deps{Store: store, NewWriter: func(tasks.Writer) t6g4Writer { return recT6G4Writer{rec: rec} }}
+	def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), durationBackfillKind)
+	_, rc := newT6G4RC(durationBackfillKind, tasks.ModeLive, &t6g4RunWriter{})
+	raw, err := runT6G4Kind(t, def, rc, `{"workers":1,"bookIds":["bruce-01"]}`)
+	var out durationBackfillResult
+	if err == nil {
+		if uerr := json.Unmarshal(raw, &out); uerr != nil {
+			t.Fatal(uerr)
+		}
+	}
+	return out, err
+}
+
+// A book that outlasts its bound (review N18) is reported once, as unread: no
+// timeout strike on any file (none was fully read), no result built under the
+// expired context, and no further probes: mediainfo.Extract cannot be
+// cancelled, so each extra call would start a subprocess nobody waits for. The
+// bound is the real-clock ItemTimeout of the loop, shortened through the var.
+func TestDurationBackfillNative_ABookThatOutlastsItsBoundIsReportedOnceAndStrikesNothing(t *testing.T) {
+	origTimeout, origProbe := durationBookTimeout, durationProbe
+	t.Cleanup(func() { durationBookTimeout, durationProbe = origTimeout, origProbe })
+	durationBookTimeout = 100 * time.Millisecond
+	var probes atomic.Int32
+	durationProbe = func(ctx context.Context, _ string) (*mediainfo.MediaInfo, error) {
+		probes.Add(1)
+		<-ctx.Done() // the first segment's probe never answers
+		return nil, ctx.Err()
+	}
+
+	rec := &t6g4Calls{}
+	out, err := runDurationLiveOne(t, &timeoutDurStore{}, rec)
+	if err != nil {
+		t.Fatalf("a book that timed out must not end the run: %v", err)
+	}
+	if n := probes.Load(); n != 1 {
+		t.Fatalf("%d probes were started, want 1: after the bound no further file of the book may be probed", n)
+	}
+	if out.Examined != 1 || out.ReadErrors != 1 {
+		t.Fatalf("examined=%d read_errors=%d, want the book reported exactly once as unread", out.Examined, out.ReadErrors)
+	}
+	if out.WriteErrors != 0 || out.Eligible != 0 || out.Corrected != 0 {
+		t.Fatalf("a timed-out book must write and count nothing else: %+v", out)
+	}
+	if got := rec.all(); len(got) != 0 {
+		t.Fatalf("a timed-out book wrote %v: no strike may be recorded on a file that was never read", got)
+	}
+}
+
+// A store error on the pool's re-read of a book is an error of the run naming
+// the book, not "gone".
+func TestDurationBackfillNative_AFailedRereadOfABookEndsTheRunNamingIt(t *testing.T) {
+	_, err := runDurationLiveOne(t, &timeoutDurStore{failGet: true}, &t6g4Calls{})
+	if err == nil || !strings.Contains(err.Error(), "bruce-01") || !strings.Contains(err.Error(), "Batcave store is down") {
+		t.Fatalf("want the re-read error naming the book, got %v", err)
 	}
 }

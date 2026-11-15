@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_real_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 075c2d47-deca-45e6-8742-449c0093b857
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -183,7 +183,7 @@ func TestAIDedupBatchKind_LiveRunBuildsItsWriterFromRCAndRecordsReviewItems(t *t
 	deps, pr := fakeT6G4Deps(t)
 	pr.store.aiParsing = true
 	pr.store.authors = []database.Author{{ID: 1, Name: "Alfred Pennyworth"}}
-	def := t6g4KindByName(t, t6g4Kinds(deps, nil), aiDedupBatchKind)
+	def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), aiDedupBatchKind)
 	run := &t6g4RunWriter{name: "run"}
 	_, rc := newT6G4RC(aiDedupBatchKind, tasks.ModeLive, run)
 	if _, err := runT6G4Kind(t, def, rc, ""); err != nil {
@@ -227,6 +227,25 @@ func (c *countingStats) PutFileIntroStats(s *database.FileIntroStats) error {
 	return c.inner.PutFileIntroStats(s)
 }
 
+// Review N20: a nil t6g4Deps.Stats would let both transcribe kinds run and
+// persist none of their counters, with no log and no error. Registration refuses
+// it, so a forgotten wiring fails at startup, not silently at the first run.
+func TestT6G4Kinds_RegistrationRefusesNilStats(t *testing.T) {
+	deps, _ := fakeT6G4Deps(t)
+	if deps.Stats != nil {
+		t.Fatal("the fake deps must not set Stats for this test")
+	}
+	defs, err := t6g4Kinds(deps, nil)
+	if err == nil || defs != nil || !strings.Contains(err.Error(), "Stats") {
+		t.Fatalf("a nil Stats must be a registration error naming it, got defs=%d err=%v", len(defs), err)
+	}
+	deps.Stats = headT6G4Stats{}
+	defs, err = t6g4Kinds(deps, nil)
+	if err != nil || len(defs) != len(t6g4Expected) {
+		t.Fatalf("with a sink the registration must succeed with all %d kinds, got %d err=%v", len(t6g4Expected), len(defs), err)
+	}
+}
+
 // Review N6: the stats keys are written outside the gated writer. The run below
 // is the live transcribe-book-intros parity case: its counters must reach the
 // stats sink (t6g4Deps.Stats) and none of them may appear as a writer call. The
@@ -262,7 +281,7 @@ func TestT6G4Kinds_TranscribeStatsBypassTheGatedWriter(t *testing.T) {
 	deps := t6g4RealDeps(env.p, rec, &handed)
 	sink := &countingStats{inner: deps.Stats}
 	deps.Stats = sink
-	def := t6g4KindByName(t, t6g4Kinds(deps, nil), c.kind)
+	def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), c.kind)
 	h, cancel := t6g4RealHost(c.kind, 0, &t6g4RunWriter{name: "native"})
 	defer cancel()
 	if _, err := runT6G4Kind(t, def, tasks.NewRC(h), env.paramsFor(false, *c)); err != nil {

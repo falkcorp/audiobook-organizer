@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

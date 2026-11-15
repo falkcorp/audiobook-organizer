@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.23.3
+// version: 2.23.4
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //

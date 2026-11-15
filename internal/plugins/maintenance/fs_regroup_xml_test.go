@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.8.1
+// version: 2.8.2
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -1571,7 +1571,7 @@ func TestFsRegroupKind_NativePreviewClassifiesAtDeclaredCPUParallelism(t *testin
 		Store:     fsNativeStore{ps: s},
 		NewWriter: func(tasks.Writer) t6g4Writer { return recT6G4Writer{rec: &t6g4Calls{}} },
 	}
-	def := t6g4KindByName(t, t6g4Kinds(deps, nil), fsRegroupKind)
+	def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), fsRegroupKind)
 	host, rc := newT6G4RC(fsRegroupKind, tasks.ModePreview, &t6g4RunWriter{})
 	if _, err := runT6G4Kind(t, def, rc, ""); err != nil {
 		t.Fatal(err)

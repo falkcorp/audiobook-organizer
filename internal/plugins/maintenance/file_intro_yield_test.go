@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_yield_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 79b2a942-e84c-447f-a8c4-433000d6fd16
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -246,13 +246,16 @@ func TestFileIntroYield_NoYieldWhenNothingIsLeftOrNoMarginOrNoCheckpoint(t *test
 		files  int
 		margin time.Duration
 		ckpt   bool
+		saves  int // checkpoint writes of the run
 	}{
-		// One batch only: the first batch runs, nothing remains to defer.
-		{"single batch", fileIntroBatchGroups, fileIntroYieldMargin, true},
-		// HEAD: no margin.
-		{"margin 0 is HEAD", 2*fileIntroBatchGroups + 1, 0, true},
+		// One batch only: the first batch runs, nothing remains to defer. The
+		// cursor follows the completed prefix (review N22), so that batch is
+		// saved once; the run does not yield.
+		{"single batch", fileIntroBatchGroups, fileIntroYieldMargin, true, 1},
+		// HEAD: no margin, so no checkpoint at all.
+		{"margin 0 is HEAD", 2*fileIntroBatchGroups + 1, 0, true, 0},
 		// A yield cannot be resumed without a checkpoint to hold the cursor.
-		{"no checkpoint hook", 2*fileIntroBatchGroups + 1, fileIntroYieldMargin, false},
+		{"no checkpoint hook", 2*fileIntroBatchGroups + 1, fileIntroYieldMargin, false, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -271,8 +274,8 @@ func TestFileIntroYield_NoYieldWhenNothingIsLeftOrNoMarginOrNoCheckpoint(t *test
 			if res.Stats == nil || !res.Stats.Done || res.Stats.Attempted != c.files {
 				t.Fatalf("stats: %+v", res.Stats)
 			}
-			if ck != nil && ck.saves != 0 {
-				t.Fatalf("a run that did not yield checkpointed %d times", ck.saves)
+			if ck != nil && ck.saves != c.saves {
+				t.Fatalf("the run checkpointed %d times, want %d", ck.saves, c.saves)
 			}
 		})
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_yieldwait_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0a7c4e-8b1f-4e63-9a52-3f6c1d2b7e90
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -19,8 +19,12 @@ import (
 
 // Review N1: the waits of the native transcribe-file-intros run (the scan-busy
 // pause before the whisper call and at the write gate, and the outage retry
-// sleep) stop at the yield margin, so a native run never ends timed_out because
-// of a wait. HEAD passes no giveUp and waits as it always did.
+// sleep) stop at the yield margin, and the whisper call itself ends at the call
+// margin (N16, file_intro_round4_test.go), so a wait does not carry a native run
+// to its timeout, which is terminal. The two exceptions are documented on
+// fileIntroBatchLoop.run: nothing is bounded until this attempt's batch 0 is
+// done, and a scan that outlasts a whole attempt found by a resumed attempt.
+// HEAD passes no giveUp and waits as it always did.
 
 func TestFileIntroYieldWait_PauseGivesUpInsideTheMarginOnlyWhileBusy(t *testing.T) {
 	orig := fileIntroPauseInterval

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows_crossfolder.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 65b43ad1-649a-4077-856f-593cb93f5cbd
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

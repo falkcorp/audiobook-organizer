@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_primary_handoff_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 7c3a9e15-4d2b-4f80-a6e1-b95d0c28f473
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

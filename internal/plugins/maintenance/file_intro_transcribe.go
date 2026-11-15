@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.7
+// version: 1.8.8
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -414,6 +414,13 @@ type fileIntroEnv struct {
 	// yields; the native shell sets fileIntroYieldMargin. It has an effect only
 	// with a SaveCheckpoint, which a yield cannot do without.
 	YieldMargin time.Duration
+	// CallMargin is how long before the context's deadline a whisper call is cut
+	// (fileIntroCallMargin): the call, the dispatcher's pacing included, runs
+	// under a context that ends then, once this attempt's batch 0 has completed,
+	// and a call cut that way yields instead of ending the run timed_out. 0 (HEAD)
+	// never cuts a call. Like YieldMargin it has an effect only with a
+	// SaveCheckpoint.
+	CallMargin time.Duration
 }
 
 // fileIntroNativeParams is fileIntroParams for the native run: the mode comes
@@ -489,8 +496,11 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:   tasks.ResumeContinue,
 			Priority: tasks.PriorityLow,
-			// HEAD's 30 days is above tasks.MaxTimeout; the run is resumable, so a
-			// timeout at the cap continues where it stopped.
+			// HEAD's 30 days is above tasks.MaxTimeout. A timeout is terminal, so the
+			// run does not wait for it: it stops starting batches and yields
+			// (tasks.ErrContinueInPlace) fileIntroYieldMargin before the deadline,
+			// and the next attempt continues from the checkpoint. See
+			// fileIntroBatchLoop.run for what can still reach the timeout.
 			ConcurrencyKey:  tasks.Key("books." + fileIntroOpID),
 			Timeout:         tasks.MaxTimeout,
 			ProgressTimeout: 30 * time.Minute,
@@ -509,7 +519,7 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			// so only a native run yields before its deadline (review M4).
 			return p.runFileIntroTranscribeCore(rc.Context(), fileIntroParams{
 				OnlyMissing: in.OnlyMissing, RetryFailed: in.RetryFailed, ClearRunID: in.ClearRunID,
-			}, fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin})
+			}, fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin, CallMargin: fileIntroCallMargin()})
 		},
 	})
 }
@@ -584,7 +594,23 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 	}
 	// A live run refuses to start while a scan or bulk apply is running (see
 	// fileIntroWaitWhileBusy for why); the preview above never reaches here.
-	if err := fileIntroRefuseIfBusy(queue); err != nil {
+	//
+	// A RESUMED attempt waits for the scan instead (review N17). It is
+	// re-queued at once after a yield, and a yield is often caused by a scan:
+	// the scan-busy give-up leaves a batch undone because a scan was running at
+	// the margin, so the next attempt very likely starts while it still is.
+	// Refusing then would end the run failed and lose the yield (HEAD, which
+	// never resumes, keeps the refusal for a fresh start). The wait is bounded by
+	// ctx only: it cannot yield again, because a yield needs this attempt to have
+	// completed a batch (the executor's progress proof), so a scan that outlasts
+	// a whole attempt ends the run timed_out, as a batch 0 parked in a wait does.
+	if resumed {
+		if err := waitWhileScanBusy(ctx, fileIntroOpID, queue, func(def string) {
+			env.Progress(base, base+1, mark+"paused — "+def+" is running; resumes when it finishes")
+		}); err != nil {
+			return res, err
+		}
+	} else if err := fileIntroRefuseIfBusy(queue); err != nil {
 		return res, err
 	}
 
@@ -670,23 +696,43 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 		},
 		each: env.Each,
 	}
-	if env.SaveCheckpoint != nil {
-		loop.yieldMargin = env.YieldMargin
-		if loop.yieldMargin > 0 {
-			// The waits of the native run are bounded by the same margin as the
-			// loop (HEAD leaves giveUp nil and waits as before).
-			w.giveUp = loop.shouldYield
-		}
-	}
-	prefix, yielded, err := loop.run(ctx)
-	if err == nil && yielded {
+	// saveCursor checkpoints the run after prefix more batches than the earlier
+	// attempts completed.
+	saveCursor := func(prefix int) error {
 		cur := fileIntroCursor{RunID: runID, DoneBatches: base + prefix, Last: prior.Last, Stats: accum.snapshot()}
 		if prefix > 0 {
 			last := batches[prefix-1]
 			k := fileIntroKeyOf(last[len(last)-1])
 			cur.Last = &k
 		}
-		if cerr := env.SaveCheckpoint(cur); cerr != nil {
+		return env.SaveCheckpoint(cur)
+	}
+	if env.SaveCheckpoint != nil {
+		loop.yieldMargin = env.YieldMargin
+		if loop.yieldMargin > 0 {
+			// The waits of the native run are bounded by the same margin as the
+			// loop, and its whisper calls end CallMargin before the deadline (HEAD
+			// leaves both nil and waits as before).
+			w.giveUp = loop.shouldYield
+			w.callMargin, w.batchZeroDone = env.CallMargin, loop.firstDone.Load
+			// The cursor is saved every time the contiguous completed prefix
+			// advances, not only at the yield (review N22): a crash or the nightly
+			// deploy then resumes near where the run stopped, and the stats key does
+			// not go backwards. The rate is at most one small JSON write per
+			// completed batch (fileIntroBatchGroups files of whisper work), so
+			// seconds apart per worker and never faster than the batches finish. A
+			// failed write is logged and retried by the next advance or the yield.
+			loop.onAdvance = func(prefix int) {
+				if cerr := saveCursor(prefix); cerr != nil {
+					log.Warn("transcribe-file-intros: cannot checkpoint after a batch; the next batch or the yield tries again",
+						"run_id", runID, "batches_complete", base+prefix, "err", cerr)
+				}
+			}
+		}
+	}
+	prefix, yielded, err := loop.run(ctx)
+	if err == nil && yielded {
+		if cerr := saveCursor(prefix); cerr != nil {
 			accum.flush(false)
 			return res, fmt.Errorf("%s: save checkpoint before yielding: %w", fileIntroOpID, cerr)
 		}
@@ -720,11 +766,30 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 	return res, nil
 }
 
+// fileIntroCheckpointBudget is what the yield path is allowed after a whisper
+// call has been cut: the checkpoint write, the final stats flush and the
+// progress reset, with room for a slow store.
+const fileIntroCheckpointBudget = 2 * time.Minute
+
+// fileIntroCallMargin is how long before the attempt's deadline a whisper call
+// is cut (fileIntroWorker.boundCall). It is derived from the longest the pool
+// itself can wait inside one call, transcribe.PoolPaceMax (the dispatcher paces
+// a refused request for that long before it gives up), plus the checkpoint
+// budget and a minute of slack, so it is strictly larger than the two: a call
+// that starts with the margin still ahead can pace its whole allowance and the
+// yield still has its budget. A function because PoolPaceMax is read from the
+// pool, so a change there moves this with it; the test pins the inequality.
+func fileIntroCallMargin() time.Duration {
+	return transcribe.PoolPaceMax() + fileIntroCheckpointBudget + time.Minute
+}
+
 // fileIntroYieldMargin is how close to its deadline a native attempt gets before
 // it stops starting batches, stops waiting (scan-busy pause, outage retry) and
-// yields (tasks.ErrContinueInPlace) to a fresh attempt. Only a whisper request
-// already in flight can still run past it (see fileIntroBatchLoop.run).
-const fileIntroYieldMargin = 5 * time.Minute
+// yields (tasks.ErrContinueInPlace) to a fresh attempt. It is a minute beyond
+// fileIntroCallMargin, so a batch is never started in the span where its whisper
+// call would be cut at once. See fileIntroBatchLoop.run for what the margin
+// does and does not bound.
+var fileIntroYieldMargin = fileIntroCallMargin() + time.Minute
 
 // fileIntroKey orders groups exactly as selectFileIntroWork does: the tier (0
 // when any member is a book's first file), then the first member's book and
@@ -799,8 +864,11 @@ type fileIntroBatchLoop struct {
 	yieldMargin time.Duration
 	runBatch    func(ctx context.Context, groups []fileIntroGroup) (int, error)
 	afterBatch  func(settled int)
-	label       func(i, total int) string
-	each        t6g4EachFn
+	// onAdvance, when set, is called with the new length of the contiguous
+	// completed prefix each time it grows. Calls are serialised.
+	onAdvance func(prefix int)
+	label     func(i, total int) string
+	each      t6g4EachFn
 
 	// firstDone is set once this attempt's batch 0 has completed; yielding waits
 	// for it, so a yield always leaves a prefix of at least one batch.
@@ -843,7 +911,20 @@ func (l *fileIntroBatchLoop) shouldYield() bool {
 // errFileIntroYieldNow, and the batch is skipped like one that never started
 // (not done, not failed; results already answered but not yet written are
 // dropped and re-sent by the next attempt, at most one batch of whisper work
-// per worker). So a native run never ends timed_out because of a wait.
+// per worker).
+//
+// The whisper call is bounded too (review N16): it runs under a context that
+// ends fileIntroCallMargin before the deadline (fileIntroWorker.boundCall), the
+// dispatcher's pacing and the transport's queueing behind the book op included.
+// A call cut that way returns errFileIntroYieldNow with nothing written for it;
+// its files get no result and no strike and are re-sent by the next attempt.
+//
+// So a native run does not end timed_out because of a wait, with two exceptions
+// that share one reason: a yield needs this attempt to have completed a batch
+// (the executor fails a yield that made no progress past its starting point), so
+// nothing is bounded until batch 0 is done, and a scan that outlasts the whole
+// attempt, found by a resumed attempt before its batch 0, is not either. Such an
+// attempt has made no progress for its entire timeout.
 //
 // "Inside the margin" means time.Until(deadline) < yieldMargin, strictly: with
 // exactly yieldMargin left the run is "not yet within" it (time.Until(deadline)
@@ -859,12 +940,12 @@ func (l *fileIntroBatchLoop) shouldYield() bool {
 // arrives (it would have waited the whole attempt) is not given up: a yield
 // with no completed batch would not count as progress either.
 //
-// What the margin does NOT bound is a whisper request already in flight: it
-// ends when its endpoints answer or their per-clip deadlines pass, which a
-// margin of five minutes covers in practice but cannot guarantee.
+// A batch the call context cut still counts as not done, so the prefix, the
+// cursor and the progress bar stay exact.
 func (l *fileIntroBatchLoop) run(ctx context.Context) (prefix int, yielded bool, err error) {
 	done := make([]bool, len(l.batches))
 	var mu sync.Mutex
+	advanced := 0 // length of the contiguous completed prefix, under mu
 	l.deadline, l.hasDeadline = ctx.Deadline()
 	if len(l.batches) > 0 {
 		err = l.each(ctx, len(l.batches), t6g4EachOpts{
@@ -884,8 +965,11 @@ func (l *fileIntroBatchLoop) run(ctx context.Context) (prefix int, yielded bool,
 			}
 			n, berr := l.runBatch(ctx, l.batches[i])
 			if errors.Is(berr, errFileIntroYieldNow) {
-				// A wait gave up inside the margin: the batch is skipped, exactly
-				// as one not started at the margin (not done, not failed).
+				// A wait gave up inside the margin, or the whisper call was cut at
+				// its own: the batch is skipped, exactly as one not started at the
+				// margin (not done, not failed). The latch is not redundant: a cut
+				// call does not go through shouldYield, so this is what makes run
+				// report the yield.
 				l.yielding.Store(true)
 				return nil
 			}
@@ -896,6 +980,14 @@ func (l *fileIntroBatchLoop) run(ctx context.Context) (prefix int, yielded bool,
 				}
 				mu.Lock()
 				done[i] = true
+				grown := false
+				for advanced < len(done) && done[advanced] {
+					advanced++
+					grown = true
+				}
+				if grown && l.onAdvance != nil {
+					l.onAdvance(advanced)
+				}
 				mu.Unlock()
 			}
 			return berr
@@ -970,6 +1062,59 @@ type fileIntroWorker struct {
 	// then stop waiting and the batch is left for the next attempt. nil (HEAD)
 	// waits as long as it always did.
 	giveUp func() bool
+	// callMargin and batchZeroDone bound the whisper call (see boundCall): zero
+	// and nil (HEAD) never cut a call.
+	callMargin    time.Duration
+	batchZeroDone func() bool
+}
+
+// callBoundHit reports that a whisper call must not start (or go on): the run
+// has a call margin, a deadline, this attempt's batch 0 is done, and strictly
+// less than the margin is left.
+func (w *fileIntroWorker) callBoundHit(ctx context.Context) bool {
+	if w.callMargin <= 0 || w.batchZeroDone == nil || !w.batchZeroDone() {
+		return false
+	}
+	dl, ok := ctx.Deadline()
+	return ok && time.Until(dl) < w.callMargin
+}
+
+// boundCall returns the context one whisper call runs under: ctx itself when
+// the run has no call margin or deadline, otherwise ctx cancelled with
+// errFileIntroYieldNow as its cause once callMargin is all that is left before
+// the deadline AND this attempt's batch 0 is done (until then it re-asks every
+// fileIntroPauseInterval, since a yield with no completed batch would not count
+// as progress). The caller reads context.Cause before it calls the release.
+func (w *fileIntroWorker) boundCall(ctx context.Context) (context.Context, context.CancelFunc) {
+	dl, ok := ctx.Deadline()
+	if w.callMargin <= 0 || w.batchZeroDone == nil || !ok {
+		return ctx, func() {}
+	}
+	cctx, cancel := context.WithCancelCause(ctx)
+	stop := make(chan struct{})
+	go func() {
+		for {
+			wait := time.Until(dl.Add(-w.callMargin))
+			if wait <= 0 {
+				if w.batchZeroDone() {
+					cancel(errFileIntroYieldNow)
+					return
+				}
+				wait = fileIntroPauseInterval
+			}
+			t := time.NewTimer(wait)
+			select {
+			case <-t.C:
+			case <-cctx.Done():
+				t.Stop()
+				return
+			case <-stop:
+				t.Stop()
+				return
+			}
+		}
+	}()
+	return cctx, func() { close(stop); cancel(nil) }
 }
 
 func (w *fileIntroWorker) progress(msg string) {
@@ -1109,8 +1254,8 @@ func fileIntroWaitWhileBusy(ctx context.Context, queue OpQueueReader, onWait fun
 	return waitWhileScanBusy(ctx, fileIntroOpID, queue, onWait)
 }
 
-// waitWhileBusy is fileIntroWaitWhileBusy announcing the pause in the op's
-// progress line.
+// waitWhileBusy is the per-file op's scan gate (waitWhileScanBusyUnless with the
+// worker's giveUp, nil for HEAD) announcing the pause in the op's progress line.
 func (w *fileIntroWorker) waitWhileBusy(ctx context.Context) error {
 	return waitWhileScanBusyUnless(ctx, fileIntroOpID, w.queue, func(def string) {
 		w.progress(introLiveMarker + "paused — " + def + " is running; resumes when it finishes")
@@ -1200,6 +1345,12 @@ func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileI
 	}
 	pending := jobs
 	for try := 1; ; try++ {
+		// Inside the call margin no request is started: the pool could pace for
+		// longer than is left (review N16). What was answered by earlier tries is
+		// dropped with the rest and re-sent by the next attempt.
+		if w.callBoundHit(ctx) {
+			return nil, errFileIntroYieldNow
+		}
 		out, err := func() (map[string]fileIntroWhisperResult, error) {
 			// A request can outlast the watchdog's progress budget (a chunk of
 			// clips each allowed up to the worker's per-clip deadline), so say
@@ -1209,8 +1360,19 @@ func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileI
 				w.progress(introLiveMarker + fmt.Sprintf("waiting on whisper: %d files in flight for %s",
 					len(pending), elapsed.Round(time.Second)))
 			})()
-			return fileIntroWhisperFn(ctx, pending, nil)
+			cctx, release := w.boundCall(ctx)
+			defer release()
+			out, err := fileIntroWhisperFn(cctx, pending, nil)
+			if err != nil && ctx.Err() == nil && errors.Is(context.Cause(cctx), errFileIntroYieldNow) {
+				// The call context ended at the margin while the run's did not:
+				// nothing is settled, nothing is struck.
+				return nil, errFileIntroYieldNow
+			}
+			return out, err
 		}()
+		if errors.Is(err, errFileIntroYieldNow) {
+			return nil, err
+		}
 		if err != nil {
 			// A try that failed produced its timeouts and crashes under conditions
 			// that say nothing about the clips: they are not settled, so they are

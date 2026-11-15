@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.47.4
+// version: 3.47.5
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

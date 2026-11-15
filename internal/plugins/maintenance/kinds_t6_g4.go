@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -298,7 +299,7 @@ type t6g4TranscribeWrites interface {
 // its own outcomes (no run reads them back to decide anything), so they are
 // written straight to the store, like a log line. HEAD's sink resolves the store
 // capability and persists nothing where there is none; the native kinds take it
-// from t6g4Deps.Stats (nil: nothing is persisted).
+// from t6g4Deps.Stats (required: t6g4Kinds refuses a nil one).
 type t6g4StatsSink interface {
 	t6g4TranscribeStatsSink
 	t6g4FileIntroStatsSink
@@ -392,8 +393,8 @@ type t6g4Deps struct {
 	// where there is no scanner).
 	Scan ScanController
 	// Stats persists the two transcribe kinds' counters, outside the gated writer
-	// (t6g4StatsSink says why). Nil persists nothing, as a store without the keys
-	// does at HEAD. No other kind reads it.
+	// (t6g4StatsSink says why). Required: t6g4Kinds refuses a nil one (a nil sink
+	// persists nothing, silently). No other kind reads it.
 	Stats t6g4StatsSink
 }
 
@@ -1000,10 +1001,28 @@ func t6g4RefuseModeKeys(kind tasks.Kind, m t6g4ModeKeys) error {
 	return nil
 }
 
-// t6g4Kinds returns every native kind of this group, in file order, each with
-// Schedule: sched(kind) (rule R9; a nil sched means none). Nothing calls it in
-// production: F5-18 passes the list to Registrar.Tasks.
-func t6g4Kinds(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
+// t6g4Kinds is the group's registration entry: it refuses deps that would make a
+// kind fail only when it first runs, then returns every native kind of this
+// group (t6g4KindsUnchecked). Nothing calls it in production: F5-18 passes the
+// list to Registrar.Tasks.
+//
+// A nil deps.Stats is such a case (review N20): the two transcribe kinds would
+// run and persist none of their counters, so the monitors that read
+// stats:transcribe and stats:transcribe-files go dark with no error and no log.
+// It is refused here, at wiring.
+func t6g4Kinds(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule) ([]tasks.Definition, error) {
+	if deps.Stats == nil {
+		return nil, errors.New("maintenance: t6g4Deps.Stats is nil: the transcribe kinds would not persist their counters " +
+			"(stats:transcribe, stats:transcribe-files) and both monitors would go dark without an error; set Stats before registering")
+	}
+	return t6g4KindsUnchecked(deps, sched), nil
+}
+
+// t6g4KindsUnchecked returns every native kind of this group, in file order, each
+// with Schedule: sched(kind) (rule R9; a nil sched means none), without checking
+// deps. t6g4Kinds is the checked entry; the tests that exercise one kind with
+// the deps it needs use this.
+func t6g4KindsUnchecked(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
 	// The kinds are methods only to reach the shared helper methods of *Plugin;
 	// the native cores read nothing from the plugin's fields (rule R10).
 	p := &Plugin{}

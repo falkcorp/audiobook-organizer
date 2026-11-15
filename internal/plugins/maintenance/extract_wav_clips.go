@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.10.4
+// version: 1.10.5
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 

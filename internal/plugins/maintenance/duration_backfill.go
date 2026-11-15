@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.5
+// version: 2.16.6
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -86,6 +86,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -224,6 +225,11 @@ func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaI
 	}
 	return info, err
 }
+
+// durationProbe is the header read of the book grain's per-file probes
+// (extractWithTimeout). A var so a test can drive a probe that outlasts its
+// book's bound; production never writes it.
+var durationProbe = extractWithTimeout
 
 // durLog is the project logger for per-file read failures. Per-file detail
 // goes here rather than into the operation log, which carries the counts.
@@ -556,6 +562,14 @@ func processBookForReextractMode(
 
 	if len(segs) > 0 {
 		for si := range segs {
+			// A book whose context ended (its own bound on the native pool, or the
+			// run) is not probed any further: mediainfo.Extract cannot be
+			// cancelled, so every remaining call would start a subprocess nobody
+			// waits for, and its DeadlineExceeded would be recorded as a timeout
+			// strike on a file that was never read. process discards the result.
+			if ctx.Err() != nil {
+				return res
+			}
 			f := segs[si]
 			// An empty path used to `continue`, which contributed 0 to the total
 			// and left the book looking fully resolved: the book was then written
@@ -591,7 +605,7 @@ func processBookForReextractMode(
 				continue
 			default:
 				usedFfprobe = true
-				info, mErr := extractWithTimeout(ctx, f.FilePath)
+				info, mErr := durationProbe(ctx, f.FilePath)
 				switch {
 				case mErr != nil || info == nil || info.Duration <= 0:
 					// One unreadable segment used to abandon the WHOLE book with no
@@ -644,7 +658,10 @@ func processBookForReextractMode(
 			res.noPath = true
 			return res
 		}
-		info, mErr := extractWithTimeout(ctx, book.FilePath)
+		if ctx.Err() != nil {
+			return res // the book's bound or the run ended: see process
+		}
+		info, mErr := durationProbe(ctx, book.FilePath)
 		if mErr != nil || info == nil || info.Duration <= 0 {
 			recordReadFailure(&res, book.FilePath, mErr, warns)
 			return res
@@ -778,15 +795,21 @@ func durationPoolOn(each t6g4EachFn, get func(id string) (*database.Book, error)
 			Label:         func(i, _ int) string { return "book " + ids[i] },
 		}, func(ctx context.Context, i int) (err error) {
 			// A panicking book ends the run with an error that names it (the
-			// loop's own recovery names only the item's index).
+			// loop's own recovery names only the item's index). The panic is
+			// wrapped as the loop's *tasks.PanicError, so the stack and the value
+			// survive and the loop logs the stack once.
 			defer func() {
 				if r := recover(); r != nil {
-					err = fmt.Errorf("book %s: panic: %v", ids[i], r)
+					err = fmt.Errorf("book %s: %w", ids[i], &tasks.PanicError{Value: r, Stack: debug.Stack()})
 				}
 			}()
 			book, gerr := get(ids[i])
-			if gerr != nil || book == nil {
-				return nil // gone since the producer saw it
+			if gerr != nil {
+				// A read error is not "gone": it ends the run, naming the book.
+				return fmt.Errorf("book %s: re-read: %w", ids[i], gerr)
+			}
+			if book == nil {
+				return nil // deleted since the producer saw it
 			}
 			process(ctx, *book)
 			return nil
@@ -1076,8 +1099,23 @@ func (p *Plugin) runDurationBackfillCore(ctx context.Context, params durationRee
 	// book's work and is shared by both. warns is shared by every worker
 	// (atomic).
 	warns := &readWarnLimiter{}
-	process := func(ctx context.Context, book database.Book) bool {
-		res := processBookForReextractMode(ctx, store, book, skipBefore, zeroRows, warns)
+	process := func(bctx context.Context, book database.Book) bool {
+		res := processBookForReextractMode(bctx, store, book, skipBefore, zeroRows, warns)
+		if bctx.Err() != nil {
+			// The result was built under an expired context: it may stop part-way
+			// through the book, so it is never sent (a random select between the
+			// send and Done used to decide). If the run itself ended there is
+			// nothing more to report. If only the book's own bound expired (the
+			// native pool's ItemTimeout), the book is reported ONCE as unread:
+			// no strike on any file (none was fully read), no duration written,
+			// and the next run tries it again.
+			if ctx.Err() != nil {
+				return false
+			}
+			durLog.Warn("duration-backfill: book %s: gave up after %s; not recorded against any file",
+				logger.SanitizeLogValue(book.ID), durationBookTimeout)
+			res = bookProcessResult{book: book, readErrs: 1, readErrExample: "book " + book.ID + " (timed out)"}
+		}
 		select {
 		case resultCh <- res:
 			return true

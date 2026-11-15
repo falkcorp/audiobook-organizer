@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_atoms_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b9e0d7a-52c3-4f18-8a6d-1e7c3b95a0f2
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance_test
 

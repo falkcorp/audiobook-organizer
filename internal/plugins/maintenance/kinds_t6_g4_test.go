@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -563,7 +563,7 @@ func t6g4KindByName(t *testing.T, defs []tasks.Definition, kind tasks.Kind) task
 // conformance suite (05-tasks 5T.9 last row).
 func TestT6G4Kinds_Conformance(t *testing.T) {
 	deps, _ := fakeT6G4Deps(t)
-	defs := t6g4Kinds(deps, nil)
+	defs := t6g4KindsUnchecked(deps, nil)
 	if got, want := len(defs), len(t6g4Expected); got != want {
 		t.Fatalf("t6g4Kinds returned %d definitions, want %d", got, want)
 	}
@@ -632,9 +632,9 @@ var t6g4Expected = []t6g4Want{
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
 		resume: tasks.ResumeContinue, yieldsNatively: true, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{t6g4ResProvenance}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{t6g4ResProvenance, ops.ResFiles}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles, ops.ResFiles}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: filePathCollisionReportKind, head: func(p *Plugin) sdk.OperationDef { return p.filePathCollisionReportDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: fsRegroupKind, head: func(p *Plugin) sdk.OperationDef { return p.fsRegroupXMLDef() },
@@ -701,7 +701,7 @@ func t6g4PkgOpsResources(t *testing.T) []ops.Resource {
 func TestT6G4Kinds_EveryDeclaredResourceIsAPkgOpsConstant(t *testing.T) {
 	vocab := t6g4PkgOpsResources(t)
 	deps, _ := fakeT6G4Deps(t)
-	for _, d := range t6g4Kinds(deps, nil) {
+	for _, d := range t6g4KindsUnchecked(deps, nil) {
 		e := tasks.CommonOf(d).Effects
 		var kinds []string
 		for _, r := range e.WriteSet() {
@@ -786,7 +786,7 @@ func t6g4NamesModeKey(help string) bool {
 func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 	deps, _ := fakeT6G4Deps(t)
 	p := &Plugin{}
-	defs := t6g4Kinds(deps, nil)
+	defs := t6g4KindsUnchecked(deps, nil)
 	t.Run("schedule-hook-and-parallelism", t6g4CheckScheduleHookAndParallelism)
 	for _, w := range t6g4Expected {
 		t.Run(string(w.kind), func(t *testing.T) {
@@ -880,7 +880,7 @@ func t6g4CheckScheduleHookAndParallelism(t *testing.T) {
 		by[k] = s
 		return s
 	}
-	for _, d := range t6g4Kinds(deps, hook) {
+	for _, d := range t6g4KindsUnchecked(deps, hook) {
 		if got := tasks.CommonOf(d).Schedule; got == nil || !reflect.DeepEqual(got, by[d.Kind()]) {
 			t.Errorf("%s: Schedule = %v, want the hook's value for that kind", d.Kind(), got)
 		}
@@ -936,7 +936,7 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 			}
 			if w.liveOnly {
 				deps, pr := fakeT6G4Deps(t)
-				def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
+				def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), w.kind)
 				_, rc := newT6G4RC(w.kind, tasks.ModePreview, &t6g4RunWriter{})
 				err := t6g4RunSafely(t, def, rc, "")
 				if err == nil || !strings.Contains(err.Error(), "preview not supported") {
@@ -947,7 +947,7 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 				}
 			} else {
 				deps, pr := fakeT6G4Deps(t)
-				def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
+				def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), w.kind)
 				_, rc := newT6G4RC(w.kind, tasks.ModePreview, &t6g4RunWriter{})
 				_ = t6g4RunSafely(t, def, rc, "")
 				for _, c := range pr.store.rec.all() {
@@ -967,7 +967,7 @@ func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 			// writer; pin it on so the run does not depend on the host's environment.
 			t.Setenv(serverdecode.EnvVar, "true")
 			deps, pr := fakeT6G4Deps(t)
-			def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
+			def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), w.kind)
 			run := &t6g4RunWriter{name: "run"}
 			_, rc := newT6G4RC(w.kind, tasks.ModeLive, run)
 			_ = t6g4RunSafely(t, def, rc, "")
@@ -1005,7 +1005,7 @@ func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
 					for _, v := range values {
 						body := fmt.Sprintf(`{%q:%s}`, key, v)
 						deps, pr := fakeT6G4Deps(t)
-						def := t6g4KindByName(t, t6g4Kinds(deps, nil), w.kind)
+						def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), w.kind)
 						_, rc := newT6G4RC(w.kind, tasks.ModeLive, &t6g4RunWriter{})
 						err := t6g4RunSafely(t, def, rc, body)
 						if err == nil || !strings.Contains(err.Error(), "the "+spellings[0]+" param is not accepted") {
@@ -1035,7 +1035,7 @@ func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
 // is the oracle of TestT6G4Kinds_EffectsCoverRecordedWrites, so it is compared
 // against the real interface by reflection and against the vocabulary by name.
 var t6g4WriterResource = map[string]ops.Resource{
-	"AppendFileEvent":               t6g4ResProvenance,
+	"AppendFileEvent":               ops.ResBookFiles, // file_prov: ledger, declared book_files until ops.ResFileProvenance (seams.d/F5-09.md)
 	"CarryOverFingerprintWindows":   ops.ResFingerprintIndex,
 	"ClearBookFileIntro":            ops.ResBookFiles,
 	"ClearIntroTimeouts":            ops.ResBookFiles,
@@ -1054,7 +1054,7 @@ var t6g4WriterResource = map[string]ops.Resource{
 	"RecordIntroTimeout":            ops.ResBookFiles,
 	"SetBookFileHash":               ops.ResBookFiles,
 	"SetBookFileIntro":              ops.ResBookFiles,
-	"SetFileProvExportCursor":       t6g4ResProvenance, // the export cursor belongs to the provenance ledger
+	"SetFileProvExportCursor":       ops.ResBookFiles, // the export cursor belongs to the provenance ledger (same interim resource)
 	"SubmitAuthorDedupJob":          ops.ResReviewItems,
 	"UpdateBookFile":                ops.ResBookFiles,
 	"UpdateBookFiles":               ops.ResBookFiles,
@@ -1113,7 +1113,7 @@ func TestT6G4FSRegroup_LiveApplyNeedsScanStandDown(t *testing.T) {
 		if !withScan {
 			deps.Scan = nil
 		}
-		def := t6g4KindByName(t, t6g4Kinds(deps, nil), fsRegroupKind)
+		def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), fsRegroupKind)
 		_, rc := newT6G4RC(fsRegroupKind, mode, &t6g4RunWriter{})
 		return pr, t6g4RunSafely(t, def, rc, "")
 	}
@@ -1244,7 +1244,7 @@ func T6G4StartRequirement() rbac.Requirement { return t6g4StartRequirement() }
 func T6G4KindStarts(t *testing.T) map[tasks.Kind]rbac.Requirement {
 	deps, _ := fakeT6G4Deps(t)
 	out := map[tasks.Kind]rbac.Requirement{}
-	for _, d := range t6g4Kinds(deps, nil) {
+	for _, d := range t6g4KindsUnchecked(deps, nil) {
 		out[d.Kind()] = tasks.CommonOf(d).Perms.Start
 	}
 	return out

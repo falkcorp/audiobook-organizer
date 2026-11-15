@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 4f8e1a67-05b3-4d29-9c7e-3a6b2d80f514
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
