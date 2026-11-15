@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
 // last-edited: 2026-11-15
 
@@ -445,17 +445,8 @@ func planMergeSamePathDupesVia(ctx context.Context, store mergeSamePathStore, me
 		Collect:   true,
 		PureLabel: func(i, t int) string { return fmt.Sprintf("Classified %d/%d groups", i+1, t) },
 	}, func(_ context.Context, gi int) error {
+		// groups are keyed by path (byPath), so gi is this group's slot in results.
 		g := groups[gi]
-		idx := -1
-		for i := range groups {
-			if groups[i].path == g.path {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			return nil
-		}
 		// Confirm the stored hash is present and identical across every record.
 		var refHash string
 		verified := true
@@ -467,14 +458,14 @@ func planMergeSamePathDupesVia(ctx context.Context, store mergeSamePathStore, me
 				// report as a clean "nothing to merge" dry run. Its own bucket,
 				// logged at Error by the caller.
 				verified = false
-				results[idx] = classified{g: g, bucket: "read-error",
+				results[gi] = classified{g: g, bucket: "read-error",
 					reason: "could not read book_files for " + b.ID + ": " + ferr.Error()}
 				break
 			}
 			h := hashForPath(files, g.path)
 			if h == "" {
 				verified = false
-				results[idx] = classified{g: g, bucket: "unverified-hash",
+				results[gi] = classified{g: g, bucket: "unverified-hash",
 					reason: "record " + b.ID + " has no stored hash for the shared file"}
 				break
 			}
@@ -482,7 +473,7 @@ func planMergeSamePathDupesVia(ctx context.Context, store mergeSamePathStore, me
 				refHash = h
 			} else if h != refHash {
 				verified = false
-				results[idx] = classified{g: g, bucket: "hash-mismatch",
+				results[gi] = classified{g: g, bucket: "hash-mismatch",
 					reason: "stored hash disagrees across records on the same path"}
 				break
 			}
@@ -497,7 +488,7 @@ func planMergeSamePathDupesVia(ctx context.Context, store mergeSamePathStore, me
 				losers = append(losers, b.ID)
 			}
 		}
-		results[idx] = classified{g: g, mergeable: true, primaryID: primary.ID,
+		results[gi] = classified{g: g, mergeable: true, primaryID: primary.ID,
 			loserIDs: losers, bucket: "mergeable", reason: "hash-confirmed same file"}
 		return nil
 	})
@@ -522,8 +513,8 @@ func planMergeSamePathDupesVia(ctx context.Context, store mergeSamePathStore, me
 			plan.Mergeable++
 			mergeable = append(mergeable, r)
 		default:
-			// A group that fell through classify with no bucket set (the idx<0
-			// guard, unreachable today) would otherwise vanish from every count
+			// A group that fell through classify with no bucket set (a classify
+			// body that returned without filling its results slot, unreachable today) would otherwise vanish from every count
 			// and the report. Make that loud rather than a silent drop.
 			log.Error("merge-same-path-dupes: group classified into no bucket — REPORT THIS",
 				"path", r.g.path)
