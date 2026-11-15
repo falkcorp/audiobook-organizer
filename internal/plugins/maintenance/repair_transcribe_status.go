@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.5.4
+// version: 1.5.5
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
 // last-edited: 2026-11-15
 
@@ -278,8 +278,9 @@ func (p *Plugin) repairTranscribeStatusNative(deps t6g6Deps, sched func(tasks.Ki
 	c.Help = repairTranscribeStatusHelp
 	// ModifyBook writes the books row, stamps the metadata cache stale on an identity
 	// change and stages the ident: rows (the shared row, kinds_resources.go).
+	// authors: ModifyBook also stages author_books_legacy: for a book with an author.
 	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResMetadataCache)),
-		tasks.Res("books", string(ops.ResIndexes)))
+		tasks.Res("books", string(ops.ResIndexes)), tasks.Res("books", string(ops.ResAuthors)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.repair-transcribe-status")

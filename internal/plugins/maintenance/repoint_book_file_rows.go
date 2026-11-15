@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repoint_book_file_rows.go
-// version: 1.5.6
+// version: 1.5.7
 // guid: 9f2c4e71-3b8a-4d06-a5e2-7c1d8b6f0a39
 // last-edited: 2026-11-15
 
@@ -402,7 +402,9 @@ func (p *Plugin) repointBookFileRowsNative(deps t6g6Deps, sched func(tasks.Kind)
 	c.Help = rbfHelp
 	// HEAD declared book_files only. The apply also recomputes the book's
 	// aggregates (books) and journals the old row to the undo journal (operations).
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResOperations)))
+	// The shared fileRow of kinds_resources.go: a book_file row write also
+	// recomputes the owning book (books, authors, metadata_cache, indexes).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	// A re-run is safe: a repointed row's file is present, so it is refused at
 	// the old-path-missing gate.
 	c.Resume = tasks.ResumeDrop

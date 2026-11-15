@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.11.3
+// version: 1.11.4
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — MARK missing book_file rows by reconciling the stored
 // book_file.Missing flag with what is actually on disk.
@@ -241,7 +241,12 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 // the book's size and duration (HEAD declares none; found: UpdateBookFiles). The params
 // decode into HEAD's struct after the mode key (apply) is refused.
 func (p *Plugin) markMissingFilesKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)))
+	// The book_file row writers: the shared fileRow of kinds_resources.go (the row
+	// and everything the aggregate recompute it triggers writes: books, authors,
+	// metadata_cache, indexes).
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)),
+		tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResMetadataCache)),
+		tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(markMissingFilesKind, tasks.TaskSpec[json.RawMessage, markMissingPlan]{
 		Common: t6g5Common(p.markMissingFilesDef(), markMissingFilesKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (markMissingPlan, error) {

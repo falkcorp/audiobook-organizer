@@ -1,5 +1,5 @@
 // file: pkg/ops/effects.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
 // last-edited: 2026-11-15
 
@@ -37,14 +37,18 @@ const (
 	ResMetadataCache Resource = "metadata_cache"
 	ResFieldStates   Resource = "field_states"
 
-	// ResIndexes is the set of derived index families that have their own
-	// writers: the search and memdb index and the store's ident: rows (the
-	// identity index, ident:state/by/dirty/reason/meta). The ident: rows are
-	// indexes in every maintenance group (F5-07, F5-09, F5-10, F5-11), the same
-	// whether an ident-index rebuild or a book write stages them. Row-family
-	// secondary indexes kept in a row's own batch (book_atpath:, book_hash:,
-	// book_file_acoustid:, path and version-group indexes) are NOT indexes:
-	// they belong to the row family's resource (books, book_files).
+	// ResIndexes is the store's ident: rows (the identity index,
+	// ident:state/by/dirty/reason/meta): the derived state the identification
+	// driver reads. That is the whole definition, and it is exactly what the
+	// maintenance writer table (internal/plugins/maintenance/kinds_resources.go)
+	// uses it for in every group (F5-07, F5-09, F5-10, F5-11): a method declares
+	// `indexes` when it can stage ident: rows, whether an ident-index rebuild or
+	// a book write does it. It does NOT name the search index or the in-memory
+	// (memdb) read model: those follow the store's own commits and no kind
+	// declares them. Row-family secondary indexes kept in a row's own batch
+	// (book_atpath:, book_hash:, book_file_acoustid:, author_books_legacy:, path
+	// and version-group indexes) are NOT indexes: they belong to the row family's
+	// resource (books, book_files, authors).
 	ResIndexes Resource = "indexes"
 
 	// ResAIJournal is the durable AI result journal (aijournal:<kind>:<key>
