@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
 // last-edited: 2026-11-15
 
@@ -465,7 +465,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 					env.Log(slog.LevelInfo, fmt.Sprintf("Optimize sweep: child %s is no longer in the list; waiting on its run %s first", inFlight.Name, inFlight.RunID))
 				}
 			}
-			env.Log(slog.LevelInfo, fmt.Sprintf("Resuming optimize sweep: %d/%d children already finished", len(cp.Finished), total))
+			env.Log(slog.LevelInfo, fmt.Sprintf("Resuming optimize sweep: %d/%d children already finished", len(cp.Finished), max(total, len(cp.Finished))))
 		}
 	}
 	native := env.Deadline != nil
