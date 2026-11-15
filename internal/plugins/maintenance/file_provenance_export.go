@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
 // last-edited: 2026-11-14
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/tasks"
@@ -192,7 +193,7 @@ func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) 
 			// cursor in the provenance keyspace. pkg/ops has no provenance-ledger
 			// constant; the nearest valid name is book_files. Listed under
 			// "Review decisions".
-			Effects:        tasks.Writes(t6g4Res("book_files", "files")...),
+			Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResFiles)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,

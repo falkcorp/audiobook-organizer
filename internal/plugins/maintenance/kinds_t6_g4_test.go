@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-14
 
@@ -594,6 +594,10 @@ type t6g4Want struct {
 	// re-reads nothing is a run from zero (the arch guard's
 	// restartWithoutCheckpoint list names those shells).
 	headCheckpoints bool
+	// yieldsNatively: HEAD checkpoints nothing, but the native shell checkpoints a
+	// cursor and yields before its deadline (review M4), so its Resume is Continue
+	// by that ruling and not by rule R5's mapping. Exactly one kind does this.
+	yieldsNatively bool
 	// writes is the native write set, as ops.Resource names (every one must be a
 	// constant of pkg/ops); nil with readOnly true means "Declared ReadOnly".
 	writes   []string
@@ -630,7 +634,7 @@ var t6g4Expected = []t6g4Want{
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
 		resume: tasks.ResumeFromZero, writes: []string{"book_files"}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
-		resume: tasks.ResumeContinue, headCheckpoints: true, writes: []string{"book_files", "books"}, helpReworded: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, writes: []string{"book_files", "books"}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
 		resume: tasks.ResumeDrop, writes: []string{"book_files"}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
@@ -740,7 +744,7 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			} else if c.Help != head.Description {
 				t.Errorf("Help differs from HEAD's Description")
 			}
-			if wantResume := t6g4HeadResume(head.ResumePolicy, w.headCheckpoints); c.Resume != w.resume || c.Resume != wantResume {
+			if wantResume := t6g4HeadResume(head.ResumePolicy, w.headCheckpoints || w.yieldsNatively); c.Resume != w.resume || c.Resume != wantResume {
 				t.Errorf("Resume = %v, table %v, mapping of HEAD's %v (checkpoints=%v) is %v", c.Resume, w.resume, head.ResumePolicy, w.headCheckpoints, wantResume)
 			}
 			wantTimeout := min(head.Timeout, tasks.MaxTimeout)

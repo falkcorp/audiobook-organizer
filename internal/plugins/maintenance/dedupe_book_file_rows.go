@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-11-14
 
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -354,7 +355,7 @@ func (p *Plugin) dedupeBookFileRowsKind(deps t6g4Deps, sched *tasks.Schedule) ta
 			// fingerprint windows to its twin (CarryOverFingerprintWindows:
 			// fingerprint_index) and journals each deletion for undo
 			// (CreateOperationChange: operations).
-			Effects: tasks.Writes(t6g4Res("book_files", "books", "fingerprint_index", "operations")...),
+			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: a removed duplicate row no longer matches the selection), so the 05-tasks mapping is

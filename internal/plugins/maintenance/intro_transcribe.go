@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.47.1
+// version: 3.47.2
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-11-14
 
@@ -34,6 +34,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -302,7 +303,7 @@ func (p *Plugin) introTranscribeNativeKind(deps t6g4Deps, sched *tasks.Schedule)
 			// run's stats aggregate (PutTranscribeStats, the stats:transcribe key) and
 			// the whisper result journal (OpenWhisperJournal): neither has a pkg/ops
 			// constant, so they are listed under "Review decisions", not declared.
-			Effects: tasks.Writes(t6g4Res("books", "book_files")...),
+			Effects: tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: only_missing re-selects every book still without a transcript), so the 05-tasks mapping is

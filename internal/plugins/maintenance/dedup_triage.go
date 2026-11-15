@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedup_triage.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: 3a4b5c6d-7e8f-9012-abcd-ef1234567890
 // last-edited: 2026-11-14
 
@@ -17,6 +17,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -384,7 +385,7 @@ func (p *Plugin) dedupExactTriageKind(deps t6g4Deps, sched *tasks.Schedule) task
 			Help:  "Classifies all pending exact-layer dedup candidates into 5 populations (genuine/stub/fragment/title_leak/unknown) and reports counts. A preview (the default) deletes nothing. Started in live mode, it dismisses every purgeable candidate (stub/title_leak) via a status update; genuine/fragment/unknown candidates are never touched.",
 			// Dismissing a candidate is a status update on a dedup candidate row,
 			// which lives in the embedding store.
-			Effects:        tasks.Writes(t6g4Res("embeddings")...),
+			Effects:        tasks.Writes(t6g4Res(ops.ResEmbeddings)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,

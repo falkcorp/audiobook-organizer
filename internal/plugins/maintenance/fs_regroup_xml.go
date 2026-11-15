@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.23.2
+// version: 2.23.3
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-11-14
 
@@ -69,6 +69,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -325,7 +326,7 @@ func (p *Plugin) fsRegroupXMLKind(deps t6g4Deps, sched *tasks.Schedule) tasks.De
 			// (ReassignExternalID: external_ids) and writes the undo ledger it
 			// reverts from (CreateOperationChange, MarkOperationChangesReverted:
 			// operations).
-			Effects:        tasks.Writes(t6g4Res("books", "book_files", "external_ids", "operations")...),
+			Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,

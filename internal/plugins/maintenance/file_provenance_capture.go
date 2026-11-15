@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_provenance_capture.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 4f8e1a67-05b3-4d29-9c7e-3a6b2d80f514
 // last-edited: 2026-11-14
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -168,7 +169,7 @@ func (p *Plugin) fileProvenanceCaptureKind(deps t6g4Deps, sched *tasks.Schedule)
 			// The events are the file-history chain of a book_file (orphans until the
 			// file is imported). pkg/ops has no provenance-ledger constant; the
 			// nearest valid name is book_files. Listed under "Review decisions".
-			Effects:        tasks.Writes(t6g4Res("book_files")...),
+			Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.2
+// version: 2.16.3
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-14
 
@@ -98,6 +98,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/tasks"
@@ -860,7 +861,7 @@ func (p *Plugin) durationBackfillKind(deps t6g4Deps, sched *tasks.Schedule) task
 			// Declared write-set (as HEAD, dispatcher Gate 3b): this op rewrites
 			// book_file rows. It also writes the book's own Duration and
 			// DurationVerifiedAt columns (ModifyBook), which HEAD never declared.
-			Effects:        tasks.Writes(t6g4Res("book_files", "books")...),
+			Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,
@@ -1098,8 +1099,11 @@ func (p *Plugin) runDurationBackfillCore(ctx context.Context, params durationRee
 			dispatched++
 			select {
 			case jobCh <- book:
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-pctx.Done():
+				// pctx ends with the run (it derives from ctx) or when the pool ended
+				// in error with jobCh undrained; ctx alone would never fire for the
+				// second and this send would block forever.
+				return pctx.Err()
 			}
 			return nil
 		}

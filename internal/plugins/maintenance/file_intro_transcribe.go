@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-11-14
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -482,7 +483,7 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			// books). It also writes the run's counters (PutFileIntroStats, the
 			// stats:transcribe-files key), which has no pkg/ops constant: listed under
 			// "Review decisions", not declared.
-			Effects:  tasks.Writes(t6g4Res("book_files", "books")...),
+			Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks)...),
 			Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:   tasks.ResumeContinue,
 			Priority: tasks.PriorityLow,
@@ -504,9 +505,16 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			}
 			return p.runFileIntroTranscribeCore(rc.Context(), fileIntroParams{
 				OnlyMissing: in.OnlyMissing, RetryFailed: in.RetryFailed, ClearRunID: in.ClearRunID,
-			}, fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin})
+			}, fileIntroNativeEnv(base))
 		},
 	})
+}
+
+// fileIntroNativeEnv is the env the native shell hands the core: the resolved
+// base plus the yield margin. HEAD's shell builds fileIntroEnv without a margin,
+// so only the native run yields before its deadline (review M4).
+func fileIntroNativeEnv(base t6g4Base) fileIntroEnv {
+	return fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin}
 }
 
 // runFileIntroTranscribeCore is HEAD's body (rule R2 item 1) after the shell
@@ -533,7 +541,27 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 	mark := introModeMarker(dryRun)
 	log := env.Logger()
 
-	env.Progress(0, 1, mark+"Selecting work — reading every book file")
+	// An attempt that yielded (or was cut off) left a cursor: the run's id and
+	// counters, how many batches it completed, and the last group of the
+	// contiguous completed prefix. HEAD never checkpoints this op (its base has
+	// no LoadCheckpoint), so there it is always a fresh run. It is read before
+	// the first progress line so a continued attempt's bar starts at the batches
+	// already done instead of dropping back to zero while it selects.
+	var prior fileIntroCursor
+	resumed := false
+	if !dryRun && env.LoadCheckpoint != nil {
+		ok, lerr := env.LoadCheckpoint(&prior)
+		if lerr != nil {
+			return fileIntroResult{}, fmt.Errorf("%s: restore checkpoint: %w", fileIntroOpID, lerr)
+		}
+		resumed = ok
+	}
+	base := 0
+	if resumed {
+		base = prior.DoneBatches
+	}
+
+	env.Progress(base, base+1, mark+"Selecting work — reading every book file")
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
 		return fileIntroResult{}, fmt.Errorf("%s: read book files: %w", fileIntroOpID, err)
@@ -567,28 +595,13 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 		runID = "run-" + time.Now().UTC().Format(time.RFC3339)
 	}
 
-	// An attempt that yielded (or was cut off) left a cursor: the run's id and
-	// counters, how many batches it completed, and the last group of the
-	// contiguous completed prefix. HEAD never checkpoints this op (its base has
-	// no LoadCheckpoint), so there it is always a fresh run.
-	var prior fileIntroCursor
-	resumed := false
-	if env.LoadCheckpoint != nil {
-		ok, lerr := env.LoadCheckpoint(&prior)
-		if lerr != nil {
-			return res, fmt.Errorf("%s: restore checkpoint: %w", fileIntroOpID, lerr)
-		}
-		resumed = ok
-	}
 	if resumed && prior.RunID != "" {
 		runID = prior.RunID
 	}
 	res.RunID = runID
 
 	groups := sel.groups
-	base := 0
 	if resumed {
-		base = prior.DoneBatches
 		// Only a forced run (only_missing=false) needs the prefix skipped: the
 		// default run's selection already leaves out every file that has a result.
 		if !onlyMissing && prior.Last != nil {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/ident_index.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 90d81b9d-7102-4e21-a4ac-e55a95d3922c
 // last-edited: 2026-11-14
 
@@ -14,6 +14,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -135,7 +136,7 @@ func (p *Plugin) identIndexKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Defi
 				"ident: queries answer 503 while a from-scratch rebuild runs. Writes ident: rows only, never " +
 				"book or metadata cache rows.",
 			// HEAD declares books; the rebuild writes ident: index rows (indexes).
-			Effects:        tasks.Writes(t6g4Res("books", "indexes")...),
+			Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResIndexes)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,

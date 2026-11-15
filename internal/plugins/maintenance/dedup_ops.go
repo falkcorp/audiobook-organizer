@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedup_ops.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: e1f2a3b4-c5d6-7890-4567-012345678901
 // last-edited: 2026-11-14
 
@@ -16,6 +16,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/oklog/ulid/v2"
@@ -214,7 +215,7 @@ func (p *Plugin) aiDedupBatchKind(deps t6g4Deps, sched *tasks.Schedule) tasks.De
 			// journal only, so the nearest valid name is review_items: the AI
 			// author review queue the batch's results land in. Listed under
 			// "Review decisions" in the PR.
-			Effects:        tasks.Writes(t6g4Res("review_items")...),
+			Effects:        tasks.Writes(t6g4Res(ops.ResReviewItems)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeContinue,
 			Priority:       tasks.PriorityLow,

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_yield_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 79b2a942-e84c-447f-a8c4-433000d6fd16
 // last-edited: 2026-11-14
 
@@ -347,10 +347,17 @@ func yieldLoop(n int, run func(i int) error) *fileIntroBatchLoop {
 }
 
 func TestFileIntroBatchLoop_PrefixStopsAtTheFirstBatchLeftForTheNextAttempt(t *testing.T) {
-	release := make(chan struct{})
+	release, started0 := make(chan struct{}), make(chan struct{})
 	l := yieldLoop(3, func(i int) error {
-		if i == 0 {
+		switch i {
+		case 0:
+			close(started0)
 			<-release // batch 0 is slow; batch 1 finishes first, and batch 2 starts inside the margin
+		case 1:
+			// The runner starts its workers as goroutines in no fixed order. Batch 1
+			// must not finish before batch 0 has begun, or batch 0 would itself start
+			// inside the margin and be skipped, which is a different scenario.
+			<-started0
 		}
 		return nil
 	})
@@ -373,12 +380,16 @@ func TestFileIntroBatchLoop_PrefixStopsAtTheFirstBatchLeftForTheNextAttempt(t *t
 func TestFileIntroBatchLoop_AnOutOfOrderCompletionIsNotAPrefix(t *testing.T) {
 	// Batch 0 fails after batch 1 finished and batch 2 was skipped: the error is
 	// returned, never a yield, and the prefix does not pass the failed batch.
-	release := make(chan struct{})
+	release, started0 := make(chan struct{}), make(chan struct{})
 	boom := errors.New("whisper pool down")
 	l := yieldLoop(3, func(i int) error {
-		if i == 0 {
+		switch i {
+		case 0:
+			close(started0)
 			<-release
 			return boom
+		case 1:
+			<-started0 // see the prefix test: batch 0 must have begun before batch 1 can finish
 		}
 		return nil
 	})
@@ -394,5 +405,26 @@ func TestFileIntroBatchLoop_AnOutOfOrderCompletionIsNotAPrefix(t *testing.T) {
 	}
 	if prefix != 0 {
 		t.Fatalf("prefix = %d, want 0 (batch 0 failed)", prefix)
+	}
+}
+
+// TestFileIntroNativeEnv_SetsTheYieldMargin pins the shell wiring of review M4:
+// the native env carries the five minute margin and keeps the base it was given,
+// and HEAD's env (built by the HEAD shell) carries none.
+func TestFileIntroNativeEnv_SetsTheYieldMargin(t *testing.T) {
+	var base t6g4Base
+	base.Live = true
+	env := fileIntroNativeEnv(base)
+	if env.YieldMargin != fileIntroYieldMargin {
+		t.Errorf("native YieldMargin = %v, want fileIntroYieldMargin %v", env.YieldMargin, fileIntroYieldMargin)
+	}
+	if fileIntroYieldMargin != 5*time.Minute {
+		t.Errorf("fileIntroYieldMargin = %v, the ruling is five minutes", fileIntroYieldMargin)
+	}
+	if !env.Live {
+		t.Errorf("native env dropped the base it was given: %+v", env.t6g4Base)
+	}
+	if head := (fileIntroEnv{t6g4Base: base}); head.YieldMargin != 0 {
+		t.Errorf("HEAD's env must set no margin, got %v", head.YieldMargin)
 	}
 }

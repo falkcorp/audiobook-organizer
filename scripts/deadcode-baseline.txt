@@ -651,6 +651,7 @@ internal/plugins/maintenance.Plugin.introMigrateSingleFileKind
 internal/plugins/maintenance.Plugin.introTranscribeNativeKind
 internal/plugins/maintenance.consolidationLeftoversFixer.newSource
 internal/plugins/maintenance.duplicateCopiesFixer.detail
+internal/plugins/maintenance.durationPoolOn
 internal/plugins/maintenance.folderBooksFixer.handOff
 internal/plugins/maintenance.fragmentFixer.stores
 internal/plugins/maintenance.junkTitleFixer.buildJunkIndex

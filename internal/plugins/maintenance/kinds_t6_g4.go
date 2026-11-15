@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-14
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/rbac"
@@ -61,11 +62,12 @@ func t6g4StartRequirement() rbac.Requirement {
 	return rbac.AllOf(t6g4SettingsManageScopes...)
 }
 
-// t6g4Res is rule R7's res(s) = tasks.Res("books", s).
-func t6g4Res(kinds ...string) []tasks.Resource {
-	out := make([]tasks.Resource, len(kinds))
-	for i, k := range kinds {
-		out[i] = tasks.Res("books", k)
+// t6g4Res is rule R7's res(s) = tasks.Res("books", s). It takes the pkg/ops
+// constants, never a string, so a coined resource name does not compile.
+func t6g4Res(resources ...ops.Resource) []tasks.Resource {
+	out := make([]tasks.Resource, len(resources))
+	for i, r := range resources {
+		out[i] = tasks.Res("books", string(r))
 	}
 	return out
 }
