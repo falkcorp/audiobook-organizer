@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_real_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 075c2d47-deca-45e6-8742-449c0093b857
 // last-edited: 2026-11-14
 
@@ -9,7 +9,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +43,8 @@ func t6g4RealDeps(p *Plugin, rec *t6g4Calls, handed *[]tasks.Writer) t6g4Deps {
 		// fs-regroup's live apply parks the scan through the same service HEAD's shell
 		// uses: the plugin's own deps.
 		Scan: p.deps,
+		// The stats keys are written outside the spy on purpose (t6g4StatsSink).
+		Stats: headT6G4Stats{store: store},
 		NewWriter: func(w tasks.Writer) t6g4Writer {
 			*handed = append(*handed, w)
 			return spyT6G4Writer{inner: headT6G4Writer{store: store, deps: p.deps, prov: prov}, rec: rec}
@@ -132,6 +137,10 @@ func init() {
 			}
 		}
 		t6g4SameResources(t, rec, ops.ResBookFiles, ops.ResBooks)
+		t6g4NoStatsThroughTheWriter(t, rec)
+		if st, err := fx.s.GetFileIntroStats(); err != nil || st == nil {
+			t.Errorf("the run's counters (stats:transcribe-files) were not persisted: %+v err=%v", st, err)
+		}
 		for _, r := range decl.WriteSet() {
 			if r.Kind != string(ops.ResBookFiles) && r.Kind != string(ops.ResBooks) {
 				t.Errorf("declared %q, which the run never wrote", r.Kind)
@@ -188,4 +197,79 @@ func TestAIDedupBatchKind_LiveRunBuildsItsWriterFromRCAndRecordsReviewItems(t *t
 	if len(declared) != 1 || declared[0].Kind != string(ops.ResReviewItems) {
 		t.Errorf("declared write set = %v, want exactly review_items", declared)
 	}
+}
+
+// t6g4NoStatsThroughTheWriter fails if the run called a stats method on the
+// gated writer: the two stats keys are written outside it (t6g4StatsSink), so a
+// recorded call would mean a gated write that F5-18's writer refuses.
+func t6g4NoStatsThroughTheWriter(t *testing.T, rec *t6g4Calls) {
+	t.Helper()
+	for _, name := range rec.all() {
+		if strings.HasPrefix(name, "Put") && strings.HasSuffix(name, "Stats") {
+			t.Errorf("%s went through the gated writer; the stats keys have no pkg/ops resource and must bypass it", name)
+		}
+	}
+}
+
+// countingStats counts the calls that reach the stats sink and passes them on.
+type countingStats struct {
+	inner             t6g4StatsSink
+	transcribe, intro atomic.Int64
+}
+
+func (c *countingStats) PutTranscribeStats(s *database.TranscribeStats) error {
+	c.transcribe.Add(1)
+	return c.inner.PutTranscribeStats(s)
+}
+
+func (c *countingStats) PutFileIntroStats(s *database.FileIntroStats) error {
+	c.intro.Add(1)
+	return c.inner.PutFileIntroStats(s)
+}
+
+// Review N6: the stats keys are written outside the gated writer. The run below
+// is the live transcribe-book-intros parity case: its counters must reach the
+// stats sink (t6g4Deps.Stats) and none of them may appear as a writer call. The
+// writer interface and the spy map must not name them either.
+func TestT6G4Kinds_TranscribeStatsBypassTheGatedWriter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds a real PebbleStore; skipped in -short")
+	}
+	iface := reflect.TypeOf((*t6g4Writer)(nil)).Elem()
+	for i := 0; i < iface.NumMethod(); i++ {
+		if n := iface.Method(i).Name; strings.HasSuffix(n, "Stats") {
+			t.Errorf("t6g4Writer has %s: a stats key must not be a gated write", n)
+		}
+	}
+	for n := range t6g4WriterResource {
+		if strings.HasSuffix(n, "Stats") {
+			t.Errorf("the spy map names %s", n)
+		}
+	}
+
+	var c *t6g4LiveCase
+	for i := range t6g4LiveCases {
+		if t6g4LiveCases[i].kind == introTranscribeKind {
+			c = &t6g4LiveCases[i]
+		}
+	}
+	if c == nil {
+		t.Fatal("no live case for transcribe-book-intros")
+	}
+	env := c.seed(t)
+	rec := &t6g4Calls{}
+	var handed []tasks.Writer
+	deps := t6g4RealDeps(env.p, rec, &handed)
+	sink := &countingStats{inner: deps.Stats}
+	deps.Stats = sink
+	def := t6g4KindByName(t, t6g4Kinds(deps, nil), c.kind)
+	h, cancel := t6g4RealHost(c.kind, 0, &t6g4RunWriter{name: "native"})
+	defer cancel()
+	if _, err := runT6G4Kind(t, def, tasks.NewRC(h), env.paramsFor(false, *c)); err != nil {
+		t.Fatalf("native run: %v", err)
+	}
+	if sink.transcribe.Load() == 0 {
+		t.Error("the run's counters never reached the stats sink")
+	}
+	t6g4NoStatsThroughTheWriter(t, rec)
 }

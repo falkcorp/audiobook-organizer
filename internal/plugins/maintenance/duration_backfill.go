@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.3
+// version: 2.16.4
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-14
 
@@ -54,7 +54,7 @@
 // clock for the ffprobe tail proportionally. All DB writes happen on a single
 // collector goroutine — no locking required on counters or PebbleDB writes.
 // The pool itself is a seam (durationBackfillEnv.Pool): HEAD's shell runs the
-// goroutines, the native shell runs the same drain loop under a tasks loop
+// goroutines, the native shell runs the books as the items of a tasks loop
 // declared Fixed(Workers); the collector is the same single goroutine in both.
 //
 // Liveness and cancellation: the collector reports progress at most every ~15s
@@ -722,19 +722,26 @@ const durationBackfillKind tasks.Kind = "books." + durationBackfillOpID
 type durationBackfillEnv struct {
 	t6g4Base
 	SetUnknownRowsResult func(UnknownRowsResult) error
-	// Pool runs workers copies of body concurrently and returns when every one
-	// has returned (rule R4). body drains the book queue, so it returns only when
-	// the queue closes or ctx ends. progressTotal is the bar's denominator when
-	// known (0 when not). A non-nil error means the pool ended abnormally.
-	Pool func(ctx context.Context, workers, progressTotal int, body func(context.Context)) error
+	// Pool processes the books the producer sends on jobs, workers at a time,
+	// and returns when jobs is drained (rule R4). process handles one book and
+	// reports whether the run may go on (false once ctx ended). progressTotal is
+	// the bar's denominator when known (0 when not). A non-nil error means the
+	// pool ended abnormally; the core then stops its producer.
+	Pool func(ctx context.Context, workers, progressTotal int, jobs <-chan database.Book, process func(ctx context.Context, book database.Book) bool) error
 }
 
-// durationPoolHEAD is HEAD's pool: workers goroutines, moved out of the core
-// unchanged. It reports no progress of its own and never fails.
-func durationPoolHEAD(ctx context.Context, workers, _ int, body func(context.Context)) error {
+// durationPoolHEAD is HEAD's pool: workers goroutines each draining jobs, moved
+// out of the core unchanged. It reports no progress of its own and never fails.
+func durationPoolHEAD(ctx context.Context, workers, _ int, jobs <-chan database.Book, process func(context.Context, database.Book) bool) error {
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
-		wg.Go(func() { body(ctx) })
+		wg.Go(func() {
+			for book := range jobs {
+				if !process(ctx, book) {
+					return
+				}
+			}
+		})
 	}
 	wg.Wait()
 	return nil
@@ -743,25 +750,38 @@ func durationPoolHEAD(ctx context.Context, workers, _ int, body func(context.Con
 // durationPoolReason is what bounds the book pool, as its loop declares it.
 const durationPoolReason = "ffprobe subprocesses, bounded by the workers param (default 4, max 16)"
 
-// durationPoolOn is the native pool: each worker is one item of each's loop,
+// durationBookTimeout bounds one book's processing on the native pool. A book
+// is probed file by file under extractTimeout (30s each) and its segments are
+// written one by one, so a book that takes this long is stuck, not slow. A var
+// so a test can shorten it.
+var durationBookTimeout = 30 * time.Minute
+
+// durationPoolOn is the native pool: the books are the items of each's loop,
 // declared Fixed(workers) (so the operator's parallelism cap applies). The
-// items are drain loops, not units of work, so the loop's own accounting says
-// nothing about the run: its per-item progress is parked at the end of the bar
-// (done = progressTotal + k of progressTotal + workers) instead of reporting
-// k of workers, and no item timeout applies. A cap below workers runs the
-// drain loops one after another, which still drains the queue.
-func durationPoolOn(each t6g4EachFn) func(ctx context.Context, workers, progressTotal int, body func(context.Context)) error {
-	return func(ctx context.Context, workers, progressTotal int, body func(context.Context)) error {
-		o := t6g4EachOpts{
-			Concurrency: workers,
-			Reason:      durationPoolReason,
-			Label:       func(int, int) string { return "book workers draining the queue" },
+// producer's filtered stream is first drained into a list of book ids (a few
+// megabytes for a whole library), then every book is one item: an operator
+// pause is honoured before each book, durationBookTimeout bounds each, and the
+// loop's own progress counts books against the same denominator as the
+// collector's heartbeat. The item re-reads its book by id, so it processes the
+// book as it is when its turn comes; a book deleted meanwhile is skipped.
+func durationPoolOn(each t6g4EachFn, get func(id string) (*database.Book, error)) func(ctx context.Context, workers, progressTotal int, jobs <-chan database.Book, process func(context.Context, database.Book) bool) error {
+	return func(ctx context.Context, workers, progressTotal int, jobs <-chan database.Book, process func(context.Context, database.Book) bool) error {
+		var ids []string
+		for book := range jobs {
+			ids = append(ids, book.ID)
 		}
-		if progressTotal > 0 {
-			o.ProgressBase, o.ProgressTotal = progressTotal, progressTotal+workers
-		}
-		return each(ctx, workers, o, func(ctx context.Context, _ int) error {
-			body(ctx)
+		return each(ctx, len(ids), t6g4EachOpts{
+			Concurrency:   workers,
+			Reason:        durationPoolReason,
+			ItemTimeout:   durationBookTimeout,
+			ProgressTotal: progressTotal,
+			Label:         func(i, _ int) string { return "book " + ids[i] },
+		}, func(ctx context.Context, i int) error {
+			book, err := get(ids[i])
+			if err != nil || book == nil {
+				return nil // gone since the producer saw it
+			}
+			process(ctx, *book)
 			return nil
 		})
 	}
@@ -895,7 +915,7 @@ func (p *Plugin) durationBackfillKind(deps t6g4Deps, sched *tasks.Schedule) task
 				params.SkipAgeDays = *in.SkipAgeDays
 				raw, _ = json.Marshal(map[string]int{"skipAgeDays": *in.SkipAgeDays})
 			}
-			return p.runDurationBackfillCore(rc.Context(), params, raw, durationBackfillEnv{t6g4Base: base, Pool: durationPoolOn(base.Each)})
+			return p.runDurationBackfillCore(rc.Context(), params, raw, durationBackfillEnv{t6g4Base: base, Pool: durationPoolOn(base.Each, base.Store.GetBookByID)})
 		},
 	})
 }
@@ -1044,20 +1064,20 @@ func (p *Plugin) runDurationBackfillCore(ctx context.Context, params durationRee
 	resultCh := make(chan bookProcessResult, params.Workers*2)
 
 	// The worker pool is a seam (env.Pool): HEAD's shell runs params.Workers
-	// goroutines, the native shell runs the same drain loop as the items of a
-	// tasks loop declared Fixed(params.Workers). warns is shared by every worker
+	// goroutines each draining jobCh, the native shell runs the books as the
+	// items of a tasks loop declared Fixed(params.Workers). process is one
+	// book's work and is shared by both. warns is shared by every worker
 	// (atomic).
 	warns := &readWarnLimiter{}
-	worker := func(ctx context.Context) {
-		for book := range jobCh {
-			res := processBookForReextractMode(ctx, store, book, skipBefore, zeroRows, warns)
-			select {
-			case resultCh <- res:
-			case <-ctx.Done():
-				// The collector stops draining on cancel; without this
-				// select every worker would block on the send forever.
-				return
-			}
+	process := func(ctx context.Context, book database.Book) bool {
+		res := processBookForReextractMode(ctx, store, book, skipBefore, zeroRows, warns)
+		select {
+		case resultCh <- res:
+			return true
+		case <-ctx.Done():
+			// The collector stops draining on cancel; without this
+			// select every worker would block on the send forever.
+			return false
 		}
 	}
 	// pctx ends with the run, or when the pool ends without having drained jobCh
@@ -1067,7 +1087,7 @@ func (p *Plugin) runDurationBackfillCore(ctx context.Context, params durationRee
 	defer stopProducer()
 	poolErr := make(chan error, 1)
 	go func() {
-		err := env.Pool(ctx, params.Workers, totalBooks, worker)
+		err := env.Pool(ctx, params.Workers, totalBooks, jobCh, process)
 		poolErr <- err
 		if err != nil {
 			stopProducer()

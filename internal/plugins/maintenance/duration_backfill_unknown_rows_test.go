@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7e1c4b9a-52d8-4f36-a0b7-c9d13e6f2a84
 // last-edited: 2026-11-14
 
@@ -1336,12 +1336,13 @@ func TestUnknownRows_FalseBookGrainFlagsAreHarmless(t *testing.T) {
 }
 
 // runUnknownRowsBackfillHEAD runs the unknown-rows backfill the way HEAD's shell
-// does: the deferred-aggregate writer resolved off the store only when it has
-// the capability, HEAD's loop runner, and the result persisted on the reporter.
+// does: the deferred-aggregate writer resolved off the store through the
+// production resolution (t6g4DeferAggregatesWriter), only when it has the
+// capability, HEAD's loop runner, and the result persisted on the reporter.
 func runUnknownRowsBackfillHEAD(p *Plugin, ctx context.Context, store unknownRowsStore, params durationReextractParams,
 	dryRun bool, reporter sdk.Reporter) error {
 	var writer segmentFailureWriter
-	if w, ok := database.AsCapability[segmentFailureWriter](store); ok {
+	if w, ok := t6g4DeferAggregatesWriter(store); ok {
 		writer = w
 	}
 	return p.t6g4RunUnknownRowsBackfill(ctx, store, writer, t6g4RunEachHEAD(reporter),

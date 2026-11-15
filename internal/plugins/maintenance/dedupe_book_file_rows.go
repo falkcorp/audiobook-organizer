@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.13.3
+// version: 1.13.4
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-11-14
 
@@ -354,7 +354,9 @@ func (p *Plugin) dedupeBookFileRowsKind(deps t6g4Deps, sched *tasks.Schedule) ta
 			// fingerprint windows to its twin (CarryOverFingerprintWindows:
 			// fingerprint_index) and journals each deletion for undo
 			// (CreateOperationChange: operations).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations)...),
+			// It also writes the per-book and per-row decisions TSVs under the
+			// library root (files: bytes on disk, written outside the writer).
+			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations, ops.ResFiles)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: a removed duplicate row no longer matches the selection), so the 05-tasks mapping is

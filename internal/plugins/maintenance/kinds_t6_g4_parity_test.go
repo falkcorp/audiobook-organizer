@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_parity_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 1f3e20f0-c667-44b8-9f41-3e7208c9958c
 // last-edited: 2026-11-14
 
@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -215,14 +216,95 @@ func t6g4MemStore(t *testing.T) *database.PebbleStore {
 	return s
 }
 
-// t6g4ObserveBooks renders every book and its rows, ordered by title and path.
-// roots are per-seed directories (a TempDir each) that file paths sit under;
-// each is rendered as <root> so two seeds of one case compare equal.
+// t6g4NormalizeOp maps the operation ids the two sides of a parity case run under:
+// HEAD's def.Run is handed a reporter named run-head-shell, and the native
+// kind's run id is the fake host's. Both render as <op>; an id that is neither
+// (an empty one, one lifted from another source) renders as itself, so a
+// journal row filed under the wrong operation fails the comparison.
+func t6g4NormalizeOp(opID string) string {
+	if opID == "run-head-shell" || strings.HasPrefix(opID, "fake-") {
+		return "<op>"
+	}
+	return fmt.Sprintf("<WRONG-OP %q>", opID)
+}
+
+// t6g4BookTitle names a book by title, because a book id differs between two
+// seeds of one case.
+func t6g4BookTitle(s *database.PebbleStore, id string) string {
+	b, err := s.GetBookByID(id)
+	if err != nil || b == nil {
+		return "<no book>"
+	}
+	return b.Title
+}
+
+// t6g4ObserveJournal renders the undo-journal rows: change type, field, book
+// (by title) and operation (normalised), one line per row, ordered.
+func t6g4ObserveJournal(t *testing.T, s *database.PebbleStore) string {
+	t.Helper()
+	var lines []string
+	if err := s.ScanOperationChanges(func(c *database.OperationChange) error {
+		lines = append(lines, fmt.Sprintf("{op=%s type=%s field=%q book=%q}", t6g4NormalizeOp(c.OperationID), c.ChangeType, c.FieldName, t6g4BookTitle(s, c.BookID)))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(lines)
+	return fmt.Sprintf("journal(%d)=%s", len(lines), strings.Join(lines, ","))
+}
+
+// t6g4ObserveStats renders the two stats aggregates a transcribe run keeps, the
+// keys stats:transcribe and stats:transcribe-files, with the clock fields
+// cleared and the run id normalised.
+func t6g4ObserveStats(t *testing.T, s *database.PebbleStore) string {
+	t.Helper()
+	books, err := s.GetTranscribeStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := s.GetFileIntroStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	if books != nil {
+		c := *books
+		c.StartedAt, c.UpdatedAt = time.Time{}, time.Time{}
+		c.RunOpID = t6g4NormalizeOp(c.RunOpID)
+		out = fmt.Sprintf("stats:transcribe=%+v", c)
+	} else {
+		out = "stats:transcribe=nil"
+	}
+	if files != nil {
+		c := *files
+		c.StartedAt, c.UpdatedAt = time.Time{}, time.Time{}
+		c.RunOpID = t6g4NormalizeOp(c.RunOpID)
+		out += fmt.Sprintf(" stats:transcribe-files=%+v", c)
+	} else {
+		out += " stats:transcribe-files=nil"
+	}
+	return out
+}
+
+// t6g4ObserveBooks renders every book and its rows, ordered by title and path,
+// then the undo journal and the stats aggregates. roots are per-seed directories
+// (a TempDir each) that file paths sit under; each is rendered as <root> so two
+// seeds of one case compare equal.
+//
+// A book shows its aggregate size and its file-row count, its transcript, the
+// fields parsed from the transcript (title, author, narrator), and each row its
+// duration, transcript, window count and timeout strikes.
 func t6g4ObserveBooks(t *testing.T, s *database.PebbleStore, roots ...string) string {
 	t.Helper()
 	ids, err := s.ListBookIDs()
 	if err != nil {
 		t.Fatal(err)
+	}
+	opt := func(p *string) string {
+		if p == nil {
+			return "nil"
+		}
+		return fmt.Sprintf("%q", *p)
 	}
 	var lines []string
 	for _, id := range ids {
@@ -233,6 +315,10 @@ func t6g4ObserveBooks(t *testing.T, s *database.PebbleStore, roots ...string) st
 		dur := -1
 		if b.Duration != nil {
 			dur = *b.Duration
+		}
+		size := int64(-1) // nil: the aggregate was never written
+		if b.FileSize != nil {
+			size = *b.FileSize
 		}
 		tr := ""
 		if b.IntroTranscription != nil {
@@ -267,10 +353,12 @@ func t6g4ObserveBooks(t *testing.T, s *database.PebbleStore, roots ...string) st
 		if b.TranscribeStatus != nil {
 			status = *b.TranscribeStatus
 		}
-		lines = append(lines, fmt.Sprintf("%s dur=%d intro=%q status=%q rows=%s", b.Title, dur, tr, status, strings.Join(rows, ",")))
+		lines = append(lines, fmt.Sprintf("%s dur=%d size=%d filecount=%d intro=%q status=%q parsed=(%s | %s | %s) rows=%s",
+			b.Title, dur, size, len(files), tr, status,
+			opt(b.TranscribedTitle), opt(b.TranscribedAuthor), opt(b.TranscribedNarrator), strings.Join(rows, ",")))
 	}
 	slices.Sort(lines)
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n") + "\n" + t6g4ObserveJournal(t, s) + "\n" + t6g4ObserveStats(t, s)
 }
 
 func init() {
@@ -282,6 +370,8 @@ func init() {
 		kind: dedupeBookFileRowsKind, headParams: `{"apply":true}`, params: `{}`,
 		widths: func() []int { return []int{tasks.CPU().Workers()} },
 		want:   []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations},
+		// the decisions TSVs under the library root
+		unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := t6g4MemStore(t)
 			for _, id := range seedDupBooks(t, s, 2, 3) {
@@ -379,7 +469,7 @@ func init() {
 	// file-provenance-capture: a root with two files; the run hashes them and
 	// appends one orphan observation per file to the ledger.
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
-		kind: fileProvenanceCaptureKind, want: []ops.Resource{ops.ResBookFiles},
+		kind: fileProvenanceCaptureKind, want: []ops.Resource{t6g4ResProvenance},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			p, store, root := newCaptureFixture(t, map[string]string{"a.m4b": "alpha-bytes", "sub/b.m4b": "bravo-bytes"})
 			return &t6g4LiveEnv{
@@ -407,7 +497,7 @@ func init() {
 	// file (a write outside the writer, declared as files) and advances the cursor
 	// (a writer call, recorded as book_files).
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
-		kind: fileProvenanceExportKind, want: []ops.Resource{ops.ResBookFiles}, unrecorded: []ops.Resource{ops.ResFiles},
+		kind: fileProvenanceExportKind, want: []ops.Resource{t6g4ResProvenance}, unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			p, store, out := newExportFixture(t)
 			seedEvents(t, store, 3)
@@ -452,7 +542,7 @@ func init() {
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := regroupStore(t)
 			base := fsFragBase(t)
-			ids := seedFragments(t, s, base, "Cage of Souls", 3)
+			ids := seedFragments(t, s, base, "Knightfall", 3)
 			if err := s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "PID-X", BookID: ids[2]}); err != nil {
 				t.Fatal(err)
 			}
@@ -480,7 +570,7 @@ func init() {
 				if b, err := s.GetBookByID(owner); err == nil && b != nil {
 					who = fmt.Sprintf("title=%q deleted=%v", b.Title, b.IsSoftDeleted())
 				}
-				return strings.Join(lines, "\n") + "\nPID-X -> " + who
+				return strings.Join(lines, "\n") + "\nPID-X -> " + who + "\n" + t6g4ObserveJournal(t, s)
 			}}
 		},
 	})
@@ -492,6 +582,8 @@ func init() {
 		kind: extractWAVClipsKind, headParams: `{}`, params: `{}`,
 		widths: func() []int { return []int{1} },
 		want:   []ops.Resource{ops.ResBookFiles},
+		// the clips and hardlinks under the library root
+		unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			t.Setenv(serverdecode.EnvVar, "true")
 			t6g4FFmpegShim(t)
@@ -536,7 +628,9 @@ func init() {
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: introTranscribeKind, headParams: `{"dry_run":false}`, params: `{}`,
 		widths: func() []int { return []int{introTranscribePageConc} },
-		want:   []ops.Resource{ops.ResBooks, ops.ResBookFiles},
+		// the clips cut into the clip cache are written outside the writer
+		want:       slices.DeleteFunc(slices.Clone(t6g4IntroTranscribeWrites), func(r ops.Resource) bool { return r == ops.ResFiles }),
+		unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			orig := config.AppConfig.WhisperClipCacheDir
 			config.AppConfig.WhisperClipCacheDir = ""
@@ -546,7 +640,7 @@ func init() {
 			swapTranscribeBatchFn(t, func(_ context.Context, jobs map[string]string, _ transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
 				out := make(map[string]transcribe.BatchResult, len(jobs))
 				for k := range jobs {
-					out[k] = transcribe.BatchResult{Text: "Hush, written by Jeph Loeb, narrated by Alfred Pennyworth. Copyright 2002 DC Comics."}
+					out[k] = transcribe.BatchResult{Text: "Hush, written by Lucius Fox, narrated by Alfred Pennyworth. Copyright 2002 DC Comics."}
 				}
 				return out, nil
 			})
@@ -572,4 +666,52 @@ func init() {
 			return &t6g4LiveEnv{p: p, observe: func() string { return t6g4ObserveBooks(t, s, root) }}
 		},
 	})
+}
+
+// Review N5: ident-index-rebuild has no row in the table above (a freshly seeded
+// store has an index that is already clean, so HEAD's run has no state of its
+// own to change), so HEAD's def.Run is pinned here on a real PebbleStore: `{}`
+// previews and writes nothing, `{"dry_run":true}` is the same, and
+// `{"dry_run":false}` rebuilds.
+func TestIdentIndexRebuildHEAD_DefRunPreviewsByDefaultAndRebuildsOnDryRunFalse(t *testing.T) {
+	s := t6g4MemStore(t)
+	for _, title := range []string{"Year One", "Hush"} {
+		if _, err := s.CreateBook(&database.Book{Title: title, FilePath: "/lib/" + title}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	def := New(fakeDeps{store: s}).identIndexRebuildDef()
+	state := func() string {
+		rep, err := s.VerifyIdentIndex(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Sprintf("ready=%v counts=%+v report=%+v", s.IdentIndexReady(), s.IdentCounts(), rep)
+	}
+	run := func(params string) string {
+		t.Helper()
+		rep := &fileIntroRep{id: "run-head-shell"}
+		if err := def.Run(context.Background(), json.RawMessage(params), rep); err != nil {
+			t.Fatalf("def.Run(%s): %v", params, err)
+		}
+		return rep.lastMessage()
+	}
+
+	before := state()
+	for _, params := range []string{`{}`, `{"dry_run":true}`} {
+		msg := run(params)
+		if !strings.HasPrefix(msg, "preview:") {
+			t.Errorf("%s ended with %q, want a preview report", params, msg)
+		}
+		if got := state(); got != before {
+			t.Errorf("%s changed the index:\n%s\nwas\n%s", params, got, before)
+		}
+	}
+	msg := run(`{"dry_run":false}`)
+	if !strings.HasPrefix(msg, "rebuilt the identification index: books=2 ") {
+		t.Errorf(`{"dry_run":false} ended with %q, want the rebuild's report over the 2 books`, msg)
+	}
+	if rep, err := s.VerifyIdentIndex(context.Background()); err != nil || !rep.Clean() || !s.IdentIndexReady() {
+		t.Errorf("after the rebuild the index is not clean and ready: %+v ready=%v err=%v", rep, s.IdentIndexReady(), err)
+	}
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_spy_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0976ab2f-77df-47d7-b719-f47dbda178bb
 // last-edited: 2026-11-14
 
@@ -88,16 +88,6 @@ func (w spyT6G4Writer) MoveBookFilesToBookBulk(a0 []database.BookFileMove, a1 st
 func (w spyT6G4Writer) OpenWhisperJournal() (transcribe.ResultJournal, error) {
 	w.rec.add("OpenWhisperJournal")
 	return w.inner.OpenWhisperJournal()
-}
-
-func (w spyT6G4Writer) PutFileIntroStats(a0 *database.FileIntroStats) error {
-	w.rec.add("PutFileIntroStats")
-	return w.inner.PutFileIntroStats(a0)
-}
-
-func (w spyT6G4Writer) PutTranscribeStats(a0 *database.TranscribeStats) error {
-	w.rec.add("PutTranscribeStats")
-	return w.inner.PutTranscribeStats(a0)
 }
 
 func (w spyT6G4Writer) ReassignExternalID(a0 string, a1 string, a2 string) error {

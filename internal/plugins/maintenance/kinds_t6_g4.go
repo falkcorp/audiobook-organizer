@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-14
 
@@ -71,6 +71,24 @@ func t6g4Res(resources ...ops.Resource) []tasks.Resource {
 	}
 	return out
 }
+
+// t6g4ResProvenance is the resource the file-provenance ledger (the file_prov
+// keyspace the capture and export kinds append to) is declared as. pkg/ops has no
+// constant of its own for it on this branch, so the ledger is declared as the
+// book_files family it describes. Sibling F5-06 adds ops.ResFileProvenance
+// ("file_provenance"); at stacking the coordinator swaps it in by changing this
+// ONE line, and the capture and export Effects, the spy map and the parity table
+// all follow it.
+const t6g4ResProvenance = ops.ResBookFiles
+
+// t6g4IntroTranscribeWrites is transcribe-book-intros' declared write set. The
+// whisper result journal it also writes (OpenWhisperJournal) has no pkg/ops
+// constant on this branch; at stacking the coordinator adds ops.ResAIJournal
+// here (this one line) and to the spy map's OpenWhisperJournal entry (the other
+// one line), and the Effects, the expected table and the parity case follow.
+// ResFiles is the clips it cuts into the clip cache (bytes on disk, written
+// outside the writer).
+var t6g4IntroTranscribeWrites = []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResFiles}
 
 // ---- the group's two interfaces and its dependency value (rule R10) ----
 
@@ -250,23 +268,39 @@ type t6g4FileIntroReads interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
-// t6g4FileIntroWrites are the per-file intro writes: a result, a rollback, the
-// timeout strikes, and the run's persisted counters.
+// t6g4FileIntroWrites are the per-file intro writes: a result, a rollback and the
+// timeout strikes. The run's persisted counters are not here: see t6g4StatsSink.
 type t6g4FileIntroWrites interface {
 	SetBookFileIntro(bookID, fileID string, r database.BookFileIntroResult) (database.BookFileIntroWrite, error)
 	ClearBookFileIntro(bookID, fileID, runOpID string) (before *database.BookFile, cleared bool, err error)
 	RecordIntroTimeout(bookID, fileID string, s database.IntroTimeoutStrike) (database.IntroTimeoutOutcome, error)
 	ClearIntroTimeouts(bookID, fileID, sourceHash string) (cleared bool, err error)
-	PutFileIntroStats(*database.FileIntroStats) error
 }
 
-// t6g4TranscribeWrites are the per-book intro transcription's two writes beyond
-// the shared groups: the run's persisted counters (a no-op where the store has no
-// stats key, as HEAD's nil sink was) and the whisper result journal, which is a
-// write-through key/value store.
+// t6g4TranscribeWrites is the per-book intro transcription's one write beyond the
+// shared groups: the whisper result journal, a write-through key/value store. The
+// run's persisted counters are not here: see t6g4StatsSink.
 type t6g4TranscribeWrites interface {
-	PutTranscribeStats(*database.TranscribeStats) error
 	OpenWhisperJournal() (transcribe.ResultJournal, error)
+}
+
+// t6g4StatsSink persists the two transcribe runs' counters: the PebbleDB keys
+// stats:transcribe (transcribe-book-intros) and stats:transcribe-files
+// (transcribe-file-intros).
+//
+// It is deliberately NOT part of t6g4Writer. A write through the writer is gated:
+// the writer checks the resource it touches against the kind's declared write
+// set, and these two keys have no pkg/ops Resource constant to declare, so a
+// gated write would be refused once F5-18 wires the real writer over rc.Writer()
+// and the counters would silently stop being written (both accumulators log a
+// failed flush and carry on). They are monitoring aggregates a run derives from
+// its own outcomes (no run reads them back to decide anything), so they are
+// written straight to the store, like a log line. HEAD's sink resolves the store
+// capability and persists nothing where there is none; the native kinds take it
+// from t6g4Deps.Stats (nil: nothing is persisted).
+type t6g4StatsSink interface {
+	t6g4TranscribeStatsSink
+	t6g4FileIntroStatsSink
 }
 
 // t6g4BookModifyWrites is ModifyBook: a write of the book row's own columns
@@ -356,6 +390,10 @@ type t6g4Deps struct {
 	// its writes. Nil means none (HEAD's degraded caller, which runs unchanged
 	// where there is no scanner).
 	Scan ScanController
+	// Stats persists the two transcribe kinds' counters, outside the gated writer
+	// (t6g4StatsSink says why). Nil persists nothing, as a store without the keys
+	// does at HEAD. No other kind reads it.
+	Stats t6g4StatsSink
 }
 
 // ---- the env every core receives (rule R2, widened by the notes in seams.d/F5-09.md) ----
@@ -382,11 +420,21 @@ type t6g4Base struct {
 	LoadCheckpoint func(v any) (bool, error)
 	Writer         t6g4Writer // rule R10: the only write path
 	Store          t6g4Store  // rule R10: the only read path
+	// Stats is the one write that is not through Writer (see t6g4StatsSink); set
+	// by the two transcribe kinds' shells only.
+	Stats t6g4StatsSink
 	// Each is the loop runner the core calls where HEAD called
 	// registry.RunItems: n items addressed by index (the core closes over its
 	// slice), at the concurrency in o. HEAD's shell backs it with
 	// registry.RunItems, the native shell with tasks.RunItems (rule R4).
 	Each func(ctx context.Context, n int, o t6g4EachOpts, fn func(ctx context.Context, i int) error) error
+}
+
+// withStats returns b with the stats sink set (a HEAD shell of one of the two
+// transcribe kinds).
+func (b t6g4Base) withStats(s t6g4StatsSink) t6g4Base {
+	b.Stats = s
+	return b
 }
 
 // t6g4CPU is t6g4EachOpts.Concurrency for a loop HEAD sizes at runtime.NumCPU():
@@ -634,6 +682,7 @@ func t6g4NativeBase(rc *tasks.RC, deps t6g4Deps, needsWriter bool) (t6g4Base, er
 		LoadCheckpoint: rc.Restore,
 		Writer:         w,
 		Store:          deps.Store,
+		Stats:          deps.Stats,
 		Each: func(_ context.Context, n int, o t6g4EachOpts, fn func(ctx context.Context, i int) error) error {
 			return t6g4RunEach(rc, n, o, fn)
 		},
@@ -687,8 +736,16 @@ func (h headT6G4Store) GetChaptersForBook(bookID string) ([]database.Chapter, er
 }
 
 func (h headT6G4Store) DeferAggregatesAvailable() bool {
-	_, ok := database.AsCapability[segmentFailureWriter](h.OpsStore)
+	_, ok := t6g4DeferAggregatesWriter(h.OpsStore)
 	return ok
+}
+
+// t6g4DeferAggregatesWriter is HEAD's one resolution of the deferred-aggregate
+// writer off a store: the capability database.AsCapability finds through the
+// store's decorator chain, absent where no layer has it. HEAD's shell, the
+// writer adapter and the unknown-rows test shim all resolve through it.
+func t6g4DeferAggregatesWriter(store any) (segmentFailureWriter, bool) {
+	return database.AsCapability[segmentFailureWriter](store)
 }
 
 func (h headT6G4Store) FileIntroWritesAvailable() bool {
@@ -779,7 +836,7 @@ func (h headT6G4Writer) UpdateBookFiles(ctx context.Context, files []*database.B
 }
 
 func (h headT6G4Writer) ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
-	w, ok := database.AsCapability[segmentFailureWriter](h.store)
+	w, ok := t6g4DeferAggregatesWriter(h.store)
 	if !ok {
 		return nil, fmt.Errorf("the store cannot defer aggregates")
 	}
@@ -826,9 +883,11 @@ func (h headT6G4Writer) ClearIntroTimeouts(bookID, fileID, sourceHash string) (b
 	return intros.ClearIntroTimeouts(bookID, fileID, sourceHash)
 }
 
-// PutFileIntroStats is best effort, as HEAD's sink is: a store without the
-// capability simply persists no counters.
-func (h headT6G4Writer) PutFileIntroStats(st *database.FileIntroStats) error {
+// headT6G4Stats is the t6g4StatsSink HEAD's shells hand a core: best effort, as
+// HEAD's sinks are, so a store without the capability simply persists no counters.
+type headT6G4Stats struct{ store OpsStore }
+
+func (h headT6G4Stats) PutFileIntroStats(st *database.FileIntroStats) error {
 	sink, ok := database.AsCapability[database.FileIntroStatsStore](h.store)
 	if !ok {
 		return nil
@@ -836,9 +895,7 @@ func (h headT6G4Writer) PutFileIntroStats(st *database.FileIntroStats) error {
 	return sink.PutFileIntroStats(st)
 }
 
-// PutTranscribeStats is best effort, as HEAD's sink was: a store without the
-// capability persists no counters.
-func (h headT6G4Writer) PutTranscribeStats(st *database.TranscribeStats) error {
+func (h headT6G4Stats) PutTranscribeStats(st *database.TranscribeStats) error {
 	sink, ok := database.AsCapability[database.TranscribeStatsStore](h.store)
 	if !ok {
 		return nil

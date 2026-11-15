@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.47.3
+// version: 3.47.4
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-11-14
 
@@ -34,7 +34,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -286,7 +285,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// concurrency (see the note after the page loop), so the def restarts from
 	// zero and says so in internal/arch's restartWithoutCheckpoint.
 	_, err = p.runIntroTranscribeCore(ctx, params, introTranscribeEnv{
-		t6g4Base: t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}),
+		t6g4Base: t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}).withStats(headT6G4Stats{store: store}),
 	})
 	return err
 }
@@ -299,11 +298,13 @@ func (p *Plugin) introTranscribeNativeKind(deps t6g4Deps, sched *tasks.Schedule)
 			Title: "Transcribe book intros",
 			Help:  introTranscribeNativeHelp,
 			// HEAD declares Writes: books. The body also writes a file's timeout
-			// strikes (RecordIntroTimeout, ClearIntroTimeouts: book_files), the
-			// run's stats aggregate (PutTranscribeStats, the stats:transcribe key) and
-			// the whisper result journal (OpenWhisperJournal): neither has a pkg/ops
-			// constant, so they are listed under "Review decisions", not declared.
-			Effects: tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles)...),
+			// strikes (RecordIntroTimeout, ClearIntroTimeouts: book_files) and the
+			// whisper result journal (OpenWhisperJournal), which has no pkg/ops
+			// constant on this branch (the coordinator adds ops.ResAIJournal here at
+			// stacking, see t6g4IntroTranscribeWrites). The run's stats aggregate (the
+			// stats:transcribe key) has none either and is written outside the gated
+			// writer on purpose: see t6g4StatsSink.
+			Effects: tasks.Writes(t6g4Res(t6g4IntroTranscribeWrites...)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: only_missing re-selects every book still without a transcript), so the 05-tasks mapping is
@@ -336,7 +337,7 @@ func (p *Plugin) introTranscribeNativeKind(deps t6g4Deps, sched *tasks.Schedule)
 // runIntroTranscribeCore is HEAD's body (rule R2 item 1) after the shell resolved
 // the store, decoded params and resolved the mode: env.Live is true exactly when
 // HEAD's dryRun is false. It reads through env.Store and writes only through
-// env.Writer.
+// env.Writer, except the stats:transcribe counters (env.Stats).
 func (p *Plugin) runIntroTranscribeCore(ctx context.Context, params introTranscribeParams, env introTranscribeEnv) (introTranscribeResult, error) {
 	store := env.Store
 	reporter := env.reporter(ctx)
@@ -475,8 +476,8 @@ func (p *Plugin) runIntroTranscribeCore(ctx context.Context, params introTranscr
 	// so a direct assertion misses the capability — unwrap one level like the
 	// HTTP handlers do. Without this the sink stays nil and stats:transcribe is
 	// never written (the aggregate endpoint returns null even while the op runs).
-	// The sink is the writer's PutTranscribeStats, which persists nothing where
-	// the store has no stats capability: the same in-memory-only run.
+	// The sink is env.Stats (t6g4StatsSink), which persists nothing where the
+	// store has no stats capability: the same in-memory-only run.
 
 	// The whisper result journal makes a restart mid-page lossless: every
 	// transcript an endpoint returns is journalled (keyed by clip bytes + the
@@ -495,7 +496,7 @@ func (p *Plugin) runIntroTranscribeCore(ctx context.Context, params introTranscr
 	// a strike, a permanent verdict and `clear_run_id` mean the same thing in
 	// both ops (a start time string matched no op id, so clear_run_id could not
 	// select this op's verdicts and SameRun could never match the other op's).
-	accum := newTranscribeStatsAccum(env.Writer, fileIntroRunID(reporter), total, startedAt)
+	accum := newTranscribeStatsAccum(env.Stats, fileIntroRunID(reporter), total, startedAt)
 	pj := pageJournal{refresh: retrySilence}
 	if j, jerr := env.Writer.OpenWhisperJournal(); jerr != nil {
 		log.Warn("transcribe-book-intros: result journal unavailable, running without restart protection", "err", jerr)

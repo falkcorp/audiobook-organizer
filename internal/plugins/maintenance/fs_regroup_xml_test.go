@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml_test.go
-// version: 2.8.0
+// version: 2.8.1
 // guid: 2a7c5e91-8d34-4b6f-a012-9f3e7c1d56ab
 // last-edited: 2026-11-14
 
@@ -198,7 +198,7 @@ func fsFragBase(t *testing.T) string {
 	if v, ok := fsFragBases.Load(t); ok {
 		return v.(string)
 	}
-	base := filepath.Join(t.TempDir(), "Adrian Tchaikovsky", "Cage of Souls - Cage of Souls")
+	base := filepath.Join(t.TempDir(), "Bruce Wayne", "Knightfall - Knightfall")
 	fsFragBases.Store(t, base)
 	t.Cleanup(func() { fsFragBases.Delete(t) })
 	return base
@@ -236,7 +236,7 @@ func fsPrimary(t *testing.T, s *database.PebbleStore, id string) bool {
 // and writes nothing.
 func TestFsRegroupFragments_DryRunReportsPlanAndWritesNothing(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	before := fsRowCount(t, s)
 
 	p := &Plugin{deps: &fakeDeps{store: s}}
@@ -269,7 +269,7 @@ func TestFsRegroupFragments_DryRunReportsPlanAndWritesNothing(t *testing.T) {
 // change is journaled under the op id.
 func TestFsRegroupFragments_ApplyMergesSoftDeletesAndJournals(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	if err := s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "PID-X", BookID: ids[2]}); err != nil {
 		t.Fatalf("seed ext-id: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestFsRegroupFragments_ApplyMergesSoftDeletesAndJournals(t *testing.T) {
 		t.Errorf("book_file rows decreased %d → %d", before, after)
 	}
 	sb, _ := s.GetBookByID(survivor)
-	if sb.Title != "Cage of Souls" || sb.FilePath != fsFragBase(t) {
+	if sb.Title != "Knightfall" || sb.FilePath != fsFragBase(t) {
 		t.Errorf("survivor = %q @ %q", sb.Title, sb.FilePath)
 	}
 	if id, _ := s.GetBookByExternalID("itunes", "PID-X"); id != survivor {
@@ -517,7 +517,7 @@ func TestFsRegroupApply_RefusesDuringScan(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := regroupStore(t)
-			ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+			ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 			before := fsRowCount(t, s)
 			plan := fsPlan(t, s)
 			if _, err := fsApplyPlan(context.Background(), s, tc.scan, tc.queue, plan, fsRegroupParams{}, &opIDReporter{id: "op-scan"}); err == nil {
@@ -536,7 +536,7 @@ func TestFsRegroupApply_RefusesDuringScan(t *testing.T) {
 
 	// And with a live lease the stand-down is held for the write phase.
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 2)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 2)
 	c := &recordingScanController{renewOK: true}
 	if _, err := fsApplyPlan(context.Background(), s, c, fsQueue{}, fsPlan(t, s), fsRegroupParams{}, &opIDReporter{id: "op-held"}); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -551,7 +551,7 @@ func TestFsRegroupApply_RefusesDuringScan(t *testing.T) {
 // op id refuses because it could not journal.
 func TestFsRegroupApply_LookupErrorSkipsGroupAndOpIDRequired(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	before := fsRowCount(t, s)
 	g := &fsGuardStore{PebbleStore: s, lookupErr: errors.New("transient")}
 	plan := fsPlan(t, g)
@@ -582,7 +582,7 @@ func TestFsRegroupFragments_RevertRestoresShellsAndRows(t *testing.T) {
 	s := regroupStore(t)
 	var ids []string
 	for i := 1; i <= 3; i++ {
-		p := fmt.Sprintf("%s/Cage of Souls - %d/%d.mp3", fsFragBase(t), i, 3)
+		p := fmt.Sprintf("%s/Knightfall - %d/%d.mp3", fsFragBase(t), i, 3)
 		id := fsSeedBook(t, s, "", p)
 		fsSeedRow(t, s, id, p)
 		ids = append(ids, id)
@@ -661,7 +661,7 @@ func TestFsRegroupFragments_RevertRestoresShellsAndRows(t *testing.T) {
 // of creating two rows for one file.
 func TestFsRegroupFragments_SharedPathRefused(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	b2, _ := s.GetBookByID(ids[1])
 	twin := fsSeedBook(t, s, "", b2.FilePath)
 	before := fsRowCount(t, s)
@@ -687,7 +687,7 @@ func TestFsRegroupFragments_SharedPathRefused(t *testing.T) {
 // would get both a moved row and a created one; it is refused instead.
 func TestFsRegroupFragments_RowPathDiffersRefused(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	b3, _ := s.GetBookByID(ids[2])
 	other := filepath.Join(filepath.Dir(b3.FilePath), "other.mp3")
 	fsWriteFile(t, other)
@@ -719,7 +719,7 @@ func TestFsRegroupFragments_RevertAfterCreateLeavesRowsOnTheirBooks(t *testing.T
 	base := fsFragBase(t)
 	var ids []string
 	for i, n := range []int{1, 2, 4} {
-		p := fmt.Sprintf("%s/Cage of Souls - %d/%d.mp3", base, n, n)
+		p := fmt.Sprintf("%s/Knightfall - %d/%d.mp3", base, n, n)
 		fsWriteFile(t, p)
 		id := fsSeedBook(t, s, "", p)
 		if i == 0 {
@@ -779,7 +779,7 @@ func TestFsRegroupRevert_RefusesFieldsChangedSince(t *testing.T) {
 	base := fsFragBase(t)
 	var ids []string
 	for i := 1; i <= 3; i++ {
-		p := fmt.Sprintf("%s/Cage of Souls - %d/%d.mp3", base, i, 3)
+		p := fmt.Sprintf("%s/Knightfall - %d/%d.mp3", base, i, 3)
 		id := fsSeedBook(t, s, "", p)
 		fsSeedRow(t, s, id, p)
 		ids = append(ids, id)
@@ -839,7 +839,7 @@ func TestFsRegroupRevert_RefusesFieldsChangedSince(t *testing.T) {
 // soft-deleted between the plan and the apply skips the group untouched.
 func TestFsRegroupApply_SurvivorSoftDeletedMidRunSkipsGroup(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	before := fsRowCount(t, s)
 	plan := fsPlan(t, s)
 	frag := fsGroupsOf(plan, fsCatFragments)
@@ -902,7 +902,7 @@ func TestFsRegroupDuplicates_NonPrimaryOwnerRefused(t *testing.T) {
 // flags it, and the apply refuses the group on its own too.
 func TestFsRegroupFragments_MissingFileRefused(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	b3, _ := s.GetBookByID(ids[2])
 	if err := os.Remove(b3.FilePath); err != nil {
 		t.Fatal(err)
@@ -931,8 +931,8 @@ func TestFsRegroupFragments_MissingFileRefused(t *testing.T) {
 func TestFsRegroupFragments_EarlierSurvivorRefusesRerun(t *testing.T) {
 	s := regroupStore(t)
 	base := fsFragBase(t)
-	seedFragments(t, s, base, "Cage of Souls", 3)
-	fsSeedBook(t, s, "Cage of Souls", base)
+	seedFragments(t, s, base, "Knightfall", 3)
+	fsSeedBook(t, s, "Knightfall", base)
 	plan := fsPlan(t, s)
 	if n := len(fsGroupsOf(plan, fsCatFragments)); n != 0 {
 		t.Fatalf("leftover shells beside an earlier survivor were classified fragments: %s", plan.summary())
@@ -948,7 +948,7 @@ func TestFsRegroupFragments_EarlierSurvivorRefusesRerun(t *testing.T) {
 func TestFsRegroupApply_ProtectedAfterPlanSkipsGroup(t *testing.T) {
 	s := regroupStore(t)
 	base := fsFragBase(t)
-	seedFragments(t, s, base, "Cage of Souls", 3)
+	seedFragments(t, s, base, "Knightfall", 3)
 	before := fsRowCount(t, s)
 	plan := fsPlan(t, s)
 	if n := len(fsGroupsOf(plan, fsCatFragments)); n != 1 {
@@ -1000,14 +1000,14 @@ func fsRequireUntouched(t *testing.T, s *database.PebbleStore, ids []string, row
 // apply is reported by the preflight and left alone by the revert.
 func TestFsRegroupRevert_RefusesTitleEditedSince(t *testing.T) {
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	plan, g := fsOneFragmentsGroup(t, s)
 	if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-title"}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	sb, _ := s.GetBookByID(g.SurvivorID)
-	if sb.Title != "Cage of Souls" {
-		t.Fatalf("apply set title %q, want %q", sb.Title, "Cage of Souls")
+	if sb.Title != "Knightfall" {
+		t.Fatalf("apply set title %q, want %q", sb.Title, "Knightfall")
 	}
 	sb.Title = "User Edited Title"
 	if _, err := s.UpdateBook(sb.ID, sb); err != nil {
@@ -1038,9 +1038,9 @@ func TestFsRegroupRevert_RefusesTitleEditedSince(t *testing.T) {
 func TestFsRegroupApply_BookAtFolderAfterPlanSkipsGroup(t *testing.T) {
 	s := regroupStore(t)
 	base := fsFragBase(t)
-	ids := seedFragments(t, s, base, "Cage of Souls", 3)
+	ids := seedFragments(t, s, base, "Knightfall", 3)
 	plan, _ := fsOneFragmentsGroup(t, s)
-	late := fsSeedBook(t, s, "Cage of Souls", base)
+	late := fsSeedBook(t, s, "Knightfall", base)
 	before := fsRowCount(t, s)
 	res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-late-book"})
 	if err != nil || res.Skipped != 1 {
@@ -1067,7 +1067,7 @@ func TestFsRegroupApply_VersionChangeAfterPlanSkipsGroup(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := regroupStore(t)
-			ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+			ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 			plan, _ := fsOneFragmentsGroup(t, s)
 			books := make([]*database.Book, len(ids))
 			for i, id := range ids {
@@ -1094,9 +1094,9 @@ func TestFsRegroupApply_VersionChangeAfterPlanSkipsGroup(t *testing.T) {
 func TestFsRegroupApply_MemberRowsChangedAfterPlanSkipsGroup(t *testing.T) {
 	s := regroupStore(t)
 	base := fsFragBase(t)
-	ids := seedFragments(t, s, base, "Cage of Souls", 3)
+	ids := seedFragments(t, s, base, "Knightfall", 3)
 	plan, _ := fsOneFragmentsGroup(t, s)
-	fsSeedRow(t, s, ids[0], base+"/Cage of Souls - 9/9.mp3")
+	fsSeedRow(t, s, ids[0], base+"/Knightfall - 9/9.mp3")
 	before := fsRowCount(t, s)
 	res, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-gained"})
 	if err != nil || res.Skipped != 1 {
@@ -1133,7 +1133,7 @@ func TestFsRegroupXML_WriteSetExcludesBookFileWriters(t *testing.T) {
 // hand-built index, the apply side on a plan that recorded the row.
 func TestFsRegroupFragments_FileOutsideChapterFolderRefused(t *testing.T) {
 	base := fsFragBase(t)
-	pa, pb := base+"/Cage of Souls - 1/1.mp3", base+"/Cage of Souls - 2/2.mp3"
+	pa, pb := base+"/Knightfall - 1/1.mp3", base+"/Knightfall - 2/2.mp3"
 	bonus := base + "/bonus.mp3"
 	for _, f := range []string{pa, pb, bonus} {
 		fsWriteFile(t, f)
@@ -1148,7 +1148,7 @@ func TestFsRegroupFragments_FileOutsideChapterFolderRefused(t *testing.T) {
 	}
 
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	plan, g := fsOneFragmentsGroup(t, s)
 	if err := s.CreateBookFile(&database.BookFile{BookID: ids[0], FilePath: bonus, TrackNumber: 2}); err != nil {
 		t.Fatal(err)
@@ -1195,8 +1195,8 @@ func TestFsRegroupApply_BookAtFolderMissedByPathIndexSkipsGroup(t *testing.T) {
 		shape func(t *testing.T, s *database.PebbleStore, base string) string // the live book left at the folder
 	}{
 		{"key owner moved off the folder", func(t *testing.T, s *database.PebbleStore, base string) string {
-			x := fsSeedBook(t, s, "Cage of Souls", base)
-			y := fsSeedBook(t, s, "Cage of Souls", base)
+			x := fsSeedBook(t, s, "Knightfall", base)
+			y := fsSeedBook(t, s, "Knightfall", base)
 			xb, err := s.GetBookByID(x)
 			if err != nil || xb == nil {
 				t.Fatalf("book %s: %v", x, err)
@@ -1208,8 +1208,8 @@ func TestFsRegroupApply_BookAtFolderMissedByPathIndexSkipsGroup(t *testing.T) {
 			return y
 		}},
 		{"key owner soft-deleted", func(t *testing.T, s *database.PebbleStore, base string) string {
-			x := fsSeedBook(t, s, "Cage of Souls", base)
-			y := fsSeedBook(t, s, "Cage of Souls", base)
+			x := fsSeedBook(t, s, "Knightfall", base)
+			y := fsSeedBook(t, s, "Knightfall", base)
 			if err := merge.SoftDeleteBook(s, x); err != nil {
 				t.Fatal(err)
 			}
@@ -1219,7 +1219,7 @@ func TestFsRegroupApply_BookAtFolderMissedByPathIndexSkipsGroup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := regroupStore(t)
 			base := fsFragBase(t)
-			ids := seedFragments(t, s, base, "Cage of Souls", 3)
+			ids := seedFragments(t, s, base, "Knightfall", 3)
 			plan, _ := fsOneFragmentsGroup(t, s)
 			x := tc.shape(t, s, base)
 			if b, err := s.GetBookByFilePath(base); err == nil && b != nil && b.ID == x && !b.IsSoftDeleted() {
@@ -1251,7 +1251,7 @@ func TestFsRegroupRevert_TitleRevertStates(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := regroupStore(t)
-			seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+			seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 			plan, g := fsOneFragmentsGroup(t, s)
 			if _, err := fsApplyPlan(context.Background(), s, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-states"}); err != nil {
 				t.Fatalf("apply: %v", err)
@@ -1322,7 +1322,7 @@ func TestFsRegroupRevert_TitleRevertStates(t *testing.T) {
 // group as an error and applies nothing. It is never read as a free folder.
 func TestFsRegroupApply_BookFolderLookupErrorFailsGroup(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	plan, _ := fsOneFragmentsGroup(t, s)
 	before := fsRowCount(t, s)
 	g := &fsGuardStore{PebbleStore: s, atPathErr: errors.New("book_atpath read failed")}
@@ -1341,7 +1341,7 @@ func TestFsRegroupApply_BookFolderLookupErrorFailsGroup(t *testing.T) {
 // would not).
 func TestFsRegroupApply_OtherLiveBookAtFolderRefusesGroup(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	plan, grp := fsOneFragmentsGroup(t, s)
 	before := fsRowCount(t, s)
 	g := &fsGuardStore{PebbleStore: s, atPathIDs: []string{grp.SurvivorID, "other-live-book"}}
@@ -1519,7 +1519,7 @@ func TestFsRegroupDuplicates_SoftDeleteErrorKeepsItsJournalRowUnlessTheShellRead
 // classification was a second, untracked pool beside its own loop.
 func TestPlanFSRepair_ClassifiesOnTheCallersLoopRunner(t *testing.T) {
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	want := fsPlan(t, s)
 
 	rep := &fakeReporter{}
@@ -1566,7 +1566,7 @@ func (s fsNativeStore) GetAllBookFilesCore() ([]database.BookFileCore, error) {
 // so it holds CPU slots from the run's pool (taskstest.FakeRun counts them).
 func TestFsRegroupKind_NativePreviewClassifiesAtDeclaredCPUParallelism(t *testing.T) {
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	deps := t6g4Deps{
 		Store:     fsNativeStore{ps: s},
 		NewWriter: func(tasks.Writer) t6g4Writer { return recT6G4Writer{rec: &t6g4Calls{}} },

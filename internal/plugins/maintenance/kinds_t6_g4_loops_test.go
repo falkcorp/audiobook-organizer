@@ -1,18 +1,23 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_loops_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 633f4bb6-49d8-463f-9e52-e1bb347a81d6
 // last-edited: 2026-11-14
 
 package maintenance
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // TestT6G4WorkersFor (review NIT 16): the width a loop of n items runs with is
@@ -96,5 +101,43 @@ func TestT6G4Loops_EveryFixedOrSequentialLoopNamesItsReason(t *testing.T) {
 	}
 	if seen == 0 || withReason < 6 {
 		t.Fatalf("scanned %d loop literals, %d with a reason: the scan no longer finds the group's loops", seen, withReason)
+	}
+}
+
+// TestT6G4RunEach_ItemTimeoutGivesEachItemAContextWithADeadline: the native loop
+// runner turns t6g4EachOpts.ItemTimeout (HEAD's PerItemTimeout) into a deadline on
+// the context every item runs under, and gives an item none when the option is
+// zero. The duration pool of the native duration-backfill relies on it for its
+// 30-minute per-book bound.
+func TestT6G4RunEach_ItemTimeoutGivesEachItemAContextWithADeadline(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		timeout time.Duration
+		want    bool
+	}{
+		{"a timeout", time.Hour, true},
+		{"no timeout", 0, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, rc := newT6G4RC(durationBackfillKind, tasks.ModeLive, &t6g4RunWriter{})
+			var items, bounded atomic.Int32
+			err := t6g4RunEach(rc, 6, t6g4EachOpts{Concurrency: 2, Reason: "a test loop", ItemTimeout: c.timeout},
+				func(ctx context.Context, _ int) error {
+					items.Add(1)
+					if dl, ok := ctx.Deadline(); ok && time.Until(dl) > 0 && time.Until(dl) <= c.timeout {
+						bounded.Add(1)
+					}
+					return nil
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if items.Load() != 6 {
+				t.Fatalf("ran %d items, want 6", items.Load())
+			}
+			if got := bounded.Load(); (got == 6) != c.want || (!c.want && got != 0) {
+				t.Fatalf("%d of 6 items ran under an item deadline, want all=%v", got, c.want)
+			}
+		})
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
 // last-edited: 2026-11-14
 
@@ -190,10 +190,8 @@ func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) 
 				"missing rows as deletion evidence. Path is required; a preview (the default) " +
 				"writes nothing, start in live mode to write.",
 			// Appends the ledger to a JSONL file on disk (files) and moves the export
-			// cursor in the provenance keyspace. pkg/ops has no provenance-ledger
-			// constant; the nearest valid name is book_files. Listed under
-			// "Review decisions".
-			Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResFiles)...),
+			// cursor in the provenance keyspace, declared as t6g4ResProvenance.
+			Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance, ops.ResFiles)...),
 			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
 			Resume:         tasks.ResumeDrop,
 			Priority:       tasks.PriorityLow,

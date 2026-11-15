@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-14
 
@@ -9,9 +9,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
+	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -361,16 +366,6 @@ func (w recT6G4Writer) OpenWhisperJournal() (transcribe.ResultJournal, error) {
 	return r0, nil
 }
 
-func (w recT6G4Writer) PutFileIntroStats(a0 *database.FileIntroStats) error {
-	w.rec.add("PutFileIntroStats")
-	return nil
-}
-
-func (w recT6G4Writer) PutTranscribeStats(a0 *database.TranscribeStats) error {
-	w.rec.add("PutTranscribeStats")
-	return nil
-}
-
 func (w recT6G4Writer) ReassignExternalID(a0 string, a1 string, a2 string) error {
 	w.rec.add("ReassignExternalID")
 	return nil
@@ -598,8 +593,9 @@ type t6g4Want struct {
 	// cursor and yields before its deadline (review M4), so its Resume is Continue
 	// by that ruling and not by rule R5's mapping. Exactly one kind does this.
 	yieldsNatively bool
-	// writes is the native write set, spelled with the pkg/ops constants so a
-	// coined name does not compile; nil with readOnly true means "Declared ReadOnly".
+	// writes is the native write set, spelled with the pkg/ops constants (and
+	// checked against pkg/ops/effects.go by TestT6G4Kinds_EveryDeclaredResourceIsAPkgOpsConstant);
+	// nil with readOnly true means "Declared ReadOnly".
 	writes   []ops.Resource
 	readOnly bool
 	// liveOnly: HEAD runs this only in an explicit live mode (rule R7).
@@ -628,17 +624,17 @@ var t6g4Expected = []t6g4Want{
 	{kind: dedupExactTriageKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupExactTriageDef() },
 		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResEmbeddings}, helpReworded: true},
 	{kind: dedupeBookFileRowsKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupeBookFileRowsDef() },
-		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations}, hasDependsOn: true, helpReworded: true},
+		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations, ops.ResFiles}, hasDependsOn: true, helpReworded: true},
 	{kind: durationBackfillKind, head: func(p *Plugin) sdk.OperationDef { return p.durationBackfillDef() },
 		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
-		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles}, liveOnly: true},
+		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResFiles}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
 		resume: tasks.ResumeContinue, yieldsNatively: true, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{t6g4ResProvenance}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles, ops.ResFiles}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{t6g4ResProvenance, ops.ResFiles}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: filePathCollisionReportKind, head: func(p *Plugin) sdk.OperationDef { return p.filePathCollisionReportDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: fsRegroupKind, head: func(p *Plugin) sdk.OperationDef { return p.fsRegroupXMLDef() },
@@ -650,16 +646,91 @@ var t6g4Expected = []t6g4Want{
 	{kind: introMigrateSingleFileKind, head: func(p *Plugin) sdk.OperationDef { return p.introMigrateSingleFileDef() },
 		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles}, helpReworded: true},
 	{kind: introTranscribeKind, head: func(p *Plugin) sdk.OperationDef { return p.introTranscribeDef() },
-		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBooks, ops.ResBookFiles}, noLive: true, helpReworded: true},
+		resume: tasks.ResumeFromZero, writes: t6g4IntroTranscribeWrites, noLive: true, helpReworded: true},
 }
 
-// t6g4OpsResources is pkg/ops's resource vocabulary, spelled through the
-// constants so a rename or removal there breaks this file at compile time.
-var t6g4OpsResources = []ops.Resource{
-	ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResSeries, ops.ResReviewItems,
-	ops.ResEmbeddings, ops.ResOperations, ops.ResCatalog, ops.ResFingerprintIndex,
-	ops.ResSettings, ops.ResActivity, ops.ResFiles, ops.ResExternalIDs, ops.ResUserState,
-	ops.ResMetadataCache, ops.ResFieldStates, ops.ResIndexes,
+// t6g4PkgOpsResources is pkg/ops's resource vocabulary: the string value of every
+// constant of type Resource declared in pkg/ops/effects.go, read from the source
+// with go/ast so it cannot drift from a hand-kept copy. (A coined name still
+// compiles as a bare string, so the vocabulary is checked by value, not by the
+// compiler.)
+func t6g4PkgOpsResources(t *testing.T) []ops.Resource {
+	t.Helper()
+	// go test runs in the package directory, and -trimpath only strips file
+	// names from the binary, not the working directory.
+	path := filepath.Join("..", "..", "..", "pkg", "ops", "effects.go")
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var out []ops.Resource
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "Resource" {
+				continue
+			}
+			for _, v := range vs.Values {
+				lit, ok := v.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("a Resource constant in %s is not a string literal: %T", path, v)
+				}
+				s, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out = append(out, ops.Resource(s))
+			}
+		}
+	}
+	if len(out) < 17 || !slices.Contains(out, ops.ResBooks) || !slices.Contains(out, ops.ResFiles) {
+		t.Fatalf("read %d Resource constants from %s (%v); the parse is wrong", len(out), path, out)
+	}
+	return out
+}
+
+// TestT6G4Kinds_EveryDeclaredResourceIsAPkgOpsConstant: every resource name any
+// group-4 kind declares (writes, reads or deletes), every name in the spy map and
+// every name in the expected table is the value of a constant in pkg/ops. The
+// vocabulary is closed: a new name is a decision for the owner of pkg/ops, not
+// something a kind coins.
+func TestT6G4Kinds_EveryDeclaredResourceIsAPkgOpsConstant(t *testing.T) {
+	vocab := t6g4PkgOpsResources(t)
+	deps, _ := fakeT6G4Deps(t)
+	for _, d := range t6g4Kinds(deps, nil) {
+		e := tasks.CommonOf(d).Effects
+		var kinds []string
+		for _, r := range e.WriteSet() {
+			kinds = append(kinds, r.Kind)
+		}
+		for _, r := range e.ReadSet() {
+			kinds = append(kinds, r.Kind)
+		}
+		for _, r := range e.DeleteSet() {
+			kinds = append(kinds, r.Kind)
+		}
+		for _, k := range kinds {
+			if !slices.Contains(vocab, ops.Resource(k)) {
+				t.Errorf("%s declares %q, which is not a pkg/ops Resource constant", d.Kind(), k)
+			}
+		}
+	}
+	for m, r := range t6g4WriterResource {
+		if r != "" && !slices.Contains(vocab, r) {
+			t.Errorf("the spy map sends %s to %q, which is not a pkg/ops Resource constant", m, r)
+		}
+	}
+	for _, w := range t6g4Expected {
+		for _, r := range w.writes {
+			if !slices.Contains(vocab, r) {
+				t.Errorf("the expected table gives %s the write %q, which is not a pkg/ops Resource constant", w.kind, r)
+			}
+		}
+	}
 }
 
 // t6g4HeadResume is rule R5's mapping of HEAD's ResumePolicy: Restart is
@@ -787,7 +858,7 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			// Every declared name (reads included) is a pkg/ops resource constant:
 			// the vocabulary is closed, a new name is a Review decision, not a coin.
 			for _, r := range append(c.Effects.WriteSet(), c.Effects.ReadSet()...) {
-				if !slices.Contains(t6g4OpsResources, ops.Resource(r.Kind)) {
+				if !slices.Contains(t6g4PkgOpsResources(t), ops.Resource(r.Kind)) {
 					t.Errorf("Effects name %q, which is not a pkg/ops resource constant", r.Kind)
 				}
 			}
@@ -958,12 +1029,13 @@ func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
 
 // t6g4WriterResource is the spy's method-to-resource map: for every method of
 // t6g4Writer, the pkg/ops resource a call to it writes. A "" value marks a store
-// with no pkg/ops constant (stats rows and the whisper result journal), which
-// no Effects can name; those are listed in the PR's Review decisions. The map
+// with no pkg/ops constant (the whisper result journal), which no Effects can
+// name; it is listed in seams.d/F5-09.md. The two stats keys are not here at all:
+// they are written outside the gated writer (t6g4StatsSink). The map
 // is the oracle of TestT6G4Kinds_EffectsCoverRecordedWrites, so it is compared
 // against the real interface by reflection and against the vocabulary by name.
 var t6g4WriterResource = map[string]ops.Resource{
-	"AppendFileEvent":               ops.ResBookFiles, // the provenance ledger has no constant
+	"AppendFileEvent":               t6g4ResProvenance,
 	"CarryOverFingerprintWindows":   ops.ResFingerprintIndex,
 	"ClearBookFileIntro":            ops.ResBookFiles,
 	"ClearIntroTimeouts":            ops.ResBookFiles,
@@ -975,16 +1047,14 @@ var t6g4WriterResource = map[string]ops.Resource{
 	"ModifyBook":                    ops.ResBooks,
 	"ModifyBookFileDeferAggregates": ops.ResBookFiles,
 	"MoveBookFilesToBookBulk":       ops.ResBookFiles,
-	"OpenWhisperJournal":            "",
-	"PutFileIntroStats":             "",
-	"PutTranscribeStats":            "",
+	"OpenWhisperJournal":            "", // ops.ResAIJournal at stacking (see t6g4IntroTranscribeWrites)
 	"ReassignExternalID":            ops.ResExternalIDs,
 	"RebuildIdentIndex":             ops.ResIndexes,
 	"RecomputeBookAggregates":       ops.ResBooks,
 	"RecordIntroTimeout":            ops.ResBookFiles,
 	"SetBookFileHash":               ops.ResBookFiles,
 	"SetBookFileIntro":              ops.ResBookFiles,
-	"SetFileProvExportCursor":       ops.ResBookFiles, // the export cursor belongs to the provenance ledger
+	"SetFileProvExportCursor":       t6g4ResProvenance, // the export cursor belongs to the provenance ledger
 	"SubmitAuthorDedupJob":          ops.ResReviewItems,
 	"UpdateBookFile":                ops.ResBookFiles,
 	"UpdateBookFiles":               ops.ResBookFiles,
@@ -1011,7 +1081,7 @@ func TestT6G4Kinds_WriterSpyMapCoversInterface(t *testing.T) {
 		if !seen[name] {
 			t.Errorf("t6g4WriterResource names %s, which is not a t6g4Writer method", name)
 		}
-		if res != "" && !slices.Contains(t6g4OpsResources, res) {
+		if res != "" && !slices.Contains(t6g4PkgOpsResources(t), res) {
 			t.Errorf("%s maps to %q, not a pkg/ops resource", name, res)
 		}
 	}
@@ -1063,7 +1133,11 @@ func TestT6G4FSRegroup_LiveApplyNeedsScanStandDown(t *testing.T) {
 }
 
 // t6g4RecordedResources maps the writer calls a run recorded to the resources
-// they wrote, failing the test on a method the spy map does not know.
+// they wrote. A name the spy map does not know is skipped, as a store read (the
+// shared call record also holds those); it does NOT fail here. That a writer
+// method has a map entry is pinned by TestT6G4Kinds_WriterSpyMapCoversInterface,
+// which compares the map with t6g4Writer's methods by reflection. A method with
+// the entry "" (the whisper journal) is a write that names no resource.
 func t6g4RecordedResources(t *testing.T, calls []string) []string {
 	t.Helper()
 	set := map[string]bool{}
