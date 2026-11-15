@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-15
 
@@ -641,7 +641,8 @@ func TestT6G5Native_CloneApply(t *testing.T) {
 // could lose files and no test would notice.
 func TestT6G5Native_CloneMixedApplyReflinksThroughTheWriter(t *testing.T) {
 	f := newICFixture(t)
-	lib := filepath.Join(f.root, "Bruce Wayne", "The Long Halloween", "01.mp3")
+	// "Author" is the folder icTestDeps.plan lands every clone under, not a fixture name.
+	lib := filepath.Join(f.root, "Author", "The Long Halloween", "01.mp3")
 	it := f.itunes("02.mp3")
 	f.book(t, "M", "vg-m", "The Long Halloween", []string{lib, it})
 	p := t6g5ClonePlugin(f)
@@ -659,7 +660,7 @@ func TestT6G5Native_CloneMixedApplyReflinksThroughTheWriter(t *testing.T) {
 	require.Equal(t, icOutcomeApplied, g.Outcome, g.Reason+g.Error)
 	assert.Equal(t, 1, r.spy.count("Reflink"), "the iTunes file was cloned through the writer")
 	assert.Contains(t, r.spy.recorded(), string(ops.ResFiles), "the clone's bytes on disk are a recorded write")
-	_, err := os.Stat(filepath.Join(f.root, "Bruce Wayne", "The Long Halloween", "02.mp3"))
+	_, err := os.Stat(filepath.Join(f.root, "Author", "The Long Halloween", "02.mp3"))
 	require.NoError(t, err, "the clone landed in the library")
 }
 
