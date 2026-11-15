@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md -->
-<!-- version: 1.1.5 -->
+<!-- version: 1.1.6 -->
 <!-- guid: 9c425807-35e2-4fe7-9289-5de6f5478ebe -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-15 -->
 
 # F8-04 — F8 flip, one PR: backup in core's layout with its routes, the updater move wired, health wired with /api/health and /api/v1/health deleted and every caller on /health, the kernel /metrics mount with no rename, InterimExport and app.Options.InterimBackends deleted
 
@@ -19,6 +19,8 @@
 the subsystems, deletes what they replace and switches every first-party caller in the same PR, so the merged `main`
 boots and passes e2e. It merges alone in its wave. The R2 freeze is on (since F3-08, which merged before F3-07): do not touch
 `.github/workflows/prerelease.yml`.
+
+> **STOP: do not mount `healthhttp` or the diagnostics routes, and do not build the diagnostics `Exporter`, until F8-03b merges.** The path redactor F8-03 shipped does not make a bundle safe to share (usernames and directory trees leak for names with spaces, `~user`, `smb://` paths and build flags; see `docs/agent-tasks/platform-core/seams.d/F8-03.md`, "Round 8"). F8-03b (`todo.d/2026-11-15-f8-03b-share-safe-bundle.md`) replaces it. `archtest.F803bGate` fails the build while `diagnostics.RedesignPendingF8_03b` is true and non-test code imports `core/internal/healthhttp` or constructs the Exporter. F8-03b is a dependency of this row's item 3 (Health) in addition to F8-03.
 
 ## START HERE (do this first, exactly)
 

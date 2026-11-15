@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.6.0
+// version: 1.6.2
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package diagnostics
 
@@ -14,6 +14,18 @@ import (
 	"unicode"
 	"unicode/utf8"
 )
+
+// RedesignPendingF8_03b is true while this file's path redactor is the token
+// scanner that the F8-03 round 7 review found cannot make a bundle safe to share
+// (docs/agent-tasks/platform-core/seams.d/F8-03.md, "Round 8: what the redactor
+// does not meet"; the review is the "F8-03 #4658: break-it and design review,
+// round 7" report). While it is true, nothing outside tests may import
+// core/internal/healthhttp or construct the bundle Exporter with New, and
+// core/archtest's F8_03bGate fails the build if something does: F8-04 mounts the
+// diagnostics routes, so F8-04 is blocked on F8-03b. The row that replaces this
+// file's scanner (todo.d, F8-03b) deletes the marker with it and removes the
+// guard in the same change.
+const RedesignPendingF8_03b = true
 
 // PathRoot is a known filesystem root, by the name a reader of the bundle
 // sees. An absolute path inside Path is written "<root:NAME>/rest"; any other
@@ -190,16 +202,16 @@ func (r pathRoots) scanPaths(s string, depth int, mode scanMode, skipJudged bool
 	return b.String()
 }
 
-// Placeholders for what the redacted view does not show of a request target.
+// Placeholders for what the redacted bundle does not show of a request target.
 const (
 	queryPlaceholder    = "?<query>"
 	fragmentPlaceholder = "#<fragment>"
 )
 
-// opaqueTail is the query and fragment of a route or URL as the redacted view
+// opaqueTail is the query and fragment of a route or URL as the redacted bundle
 // writes them: one fixed placeholder for everything from the first "?" or "#" to
 // the end of the target. It is not split on "&", "=" or ";" and not decoded: a
-// query value is not diagnostic data a non-admin bundle needs, and splitting is
+// query value is not diagnostic data a shared bundle needs, and splitting is
 // what a raw "&", "#" or "=" inside a directory name defeats (the part after it
 // would be a different value, and a key such as "b/Gordonx/Books" is as
 // readable as a value). rest is "" or starts with "?" or "#".
