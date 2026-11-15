@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2d6f0a8-4c17-4e93-9a5b-7d1e3c8f2a60
 // last-edited: 2026-11-15
 
@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -340,41 +341,133 @@ func f803bLinkerFindings(root string) ([]string, int, error) {
 }
 
 // f803bTagFlag finds a go command's -tags (or --tags, or -tags=) argument in a
-// line of a build file: a quoted list, or an unquoted word. It must follow a
-// space, a quote or a parenthesis, so --no-tags, rc-tags and git's --tags
-// (whose next word is not a tag) do not match as tags; f803bTagWord keeps only
-// words that are build-tag identifiers. Both are built on each call (03 R5: no
-// package-level mutable variable).
+// line of a build file: a quoted list, or an unquoted word (a make variable
+// reference counts as one word). It must follow a space, a quote or a
+// parenthesis, so --no-tags and rc-tags do not match. Built on each call (03 R5:
+// no package-level mutable variable).
 func f803bTagFlag() *regexp.Regexp {
-	return regexp.MustCompile(`(?:^|[\s"'(])--?tags(?:=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s"'\\);]+))`)
+	return regexp.MustCompile(`(?:^|[\s"'(])--?tags(?:=|\s+)(?:"([^"]*)"|'([^']*)'|((?:\$[({][^)}]*[)}]|[^\s"'\\);])+))`)
 }
 
 func f803bTagWord() *regexp.Regexp {
 	return regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`)
 }
 
-// f803bTagsIn returns the build-tag lists named by -tags arguments in body, one
-// sorted, deduplicated list per occurrence, skipping a make or shell variable
-// ($(GO_BUILD_TAGS), ${TAGS}) and any word that is not a tag.
-func f803bTagsIn(body string) [][]string {
-	var out [][]string
-	flag, word := f803bTagFlag(), f803bTagWord()
+func f803bMakeAssign() *regexp.Regexp {
+	return regexp.MustCompile(`^(?:export\s+|override\s+)*([A-Za-z_][A-Za-z0-9_.]*)\s*(\?=|::=|:=|\+=|=)\s*(.*?)\s*$`)
+}
+
+func f803bMakeRef() *regexp.Regexp {
+	return regexp.MustCompile(`\$[({]([^(){}$]*)[)}]`)
+}
+
+// f803bMakeVars returns NAME to value for the variable assignments of a
+// Makefile body: `=`, `:=`, `::=`, `?=` (only when the name is not yet set) and
+// `+=` (appended with a space), at the start of a line (a recipe line starts with
+// a tab), with a trailing ` # comment` removed. A value is kept as written;
+// f803bExpand resolves the references in it.
+func f803bMakeVars(body string) map[string]string {
+	vars := map[string]string{}
+	assign := f803bMakeAssign()
 	for line := range strings.SplitSeq(body, "\n") {
+		if strings.HasPrefix(line, "\t") || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		m := assign.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		name, op, val := m[1], m[2], m[3]
+		if k := strings.Index(val, " #"); k >= 0 {
+			val = strings.TrimSpace(val[:k])
+		}
+		switch op {
+		case "?=":
+			if _, set := vars[name]; !set {
+				vars[name] = val
+			}
+		case "+=":
+			vars[name] = strings.TrimSpace(vars[name] + " " + val)
+		default:
+			vars[name] = val
+		}
+	}
+	return vars
+}
+
+// f803bExpand replaces every $(NAME) and ${NAME} in text with the value of NAME
+// in vars, repeatedly (a value may name another variable, to a depth of 8). It
+// returns the names it could not resolve: a name that is not in vars, a make
+// function call ($(shell ...), $(if ...): a name with a space, comma or colon),
+// a name still unresolved after 8 rounds, and a reference it left because vars is
+// nil.
+func f803bExpand(text string, vars map[string]string) (string, []string) {
+	ref := f803bMakeRef()
+	var bad []string
+	for depth := 0; depth < 8 && ref.MatchString(text); depth++ {
+		bad = bad[:0]
+		text = ref.ReplaceAllStringFunc(text, func(m string) string {
+			name := ref.FindStringSubmatch(m)[1]
+			if v, ok := vars[name]; ok && !strings.ContainsAny(name, " ,:") {
+				return v
+			}
+			bad = append(bad, name)
+			return m
+		})
+		if len(bad) > 0 {
+			return text, slices.Clone(bad)
+		}
+	}
+	if ref.MatchString(text) {
+		return text, []string{"(nested deeper than 8 levels)"}
+	}
+	return text, nil
+}
+
+// f803bTagsIn returns the build-tag lists named by -tags arguments in body, one
+// sorted, deduplicated list per occurrence, and a description of every -tags
+// argument it could not reduce to a concrete list ("line N: -tags <text>: why").
+// A make variable reference is resolved from vars (a nil vars resolves none, for
+// a file that is not a Makefile); a shell variable ($TAG, ${TAG}, $$TAG), a
+// GitHub expression (${{ ... }}), backticks, a make function call, or a word that
+// is not a build tag identifier is reported, not dropped. An argument whose first
+// word starts with a dash is not a tag list (git's `--tags --always`) and is
+// skipped, as is a comment line.
+func f803bTagsIn(body string, vars map[string]string) (lists [][]string, unresolved []string) {
+	flag, word := f803bTagFlag(), f803bTagWord()
+	n := 0
+	for line := range strings.SplitSeq(body, "\n") {
+		n++
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
 		for _, m := range flag.FindAllStringSubmatch(line, -1) {
-			list := m[1] + m[2] + m[3]
+			text := m[1] + m[2] + m[3]
+			if first, _, _ := strings.Cut(strings.TrimSpace(text), " "); strings.HasPrefix(first, "-") {
+				continue
+			}
+			expanded, bad := f803bExpand(text, vars)
+			if len(bad) > 0 {
+				unresolved = append(unresolved, fmt.Sprintf("line %d: -tags %s: cannot resolve %s", n, text, strings.Join(bad, ", ")))
+				continue
+			}
 			var tags []string
-			for _, w := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
-				if word.MatchString(w) {
-					tags = append(tags, w)
+			ok := true
+			for _, w := range strings.FieldsFunc(expanded, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+				if !word.MatchString(w) {
+					unresolved = append(unresolved, fmt.Sprintf("line %d: -tags %s: %q is not a build tag (a shell or workflow variable, a function call, or a spelling this reading does not know)", n, text, w))
+					ok = false
+					break
 				}
+				tags = append(tags, w)
 			}
 			slices.Sort(tags)
-			if tags = slices.Compact(tags); len(tags) > 0 {
-				out = append(out, tags)
+			if tags = slices.Compact(tags); ok && len(tags) > 0 {
+				lists = append(lists, tags)
 			}
 		}
 	}
-	return out
+	return lists, unresolved
 }
 
 // F803bShippedTagSets returns the tag sets a binary of this repo is built with,
@@ -382,10 +475,18 @@ func f803bTagsIn(body string) [][]string {
 // (GOOS, tag set) pairs CI and the Dockerfiles build, 03 §3.5.1 item 4) that apply to
 // the core module, plus every distinct -tags list read from the repo's own
 // build files (Makefile*, Dockerfile*, the workflow and pipeline YAML under
-// .github/workflows and .woodpecker) that TagSets() does not already name. The
-// second return is how many distinct lists the build files named, so a caller can
-// tell that the reading found something. coreRoot is the core module's directory.
-// Tags only: -race is not a tag, and the race tag set here is the tag.
+// .github/workflows and .woodpecker) that TagSets() does not already name. A
+// make variable in a tag list ($(GO_BUILD_TAGS)) is resolved from the
+// assignments of the Makefile that holds it, else from the other Makefiles when
+// they agree on one value; `?=` counts as the default. The second return is how
+// many distinct lists the build files named. Any -tags argument it cannot reduce
+// to a concrete list (an undefined or computed variable, a shell or workflow
+// variable, a make function) is an error that names each one: such a list would
+// otherwise be dropped and its set never built. Not covered: an assignment in a
+// gitignored Makefile.local, a variable set on the make command line or in the
+// environment, and a list a script assembles at run time. coreRoot is the core
+// module's directory. Tags only: -race is not a tag, and the race set here is the
+// tag.
 func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 	key := func(tags []string) string {
 		c := slices.Clone(tags)
@@ -403,21 +504,58 @@ func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 			have[key(ts.Tags)] = true
 		}
 	}
-	root := f803bRepoRoot(coreRoot)
-	named := map[string][]string{}
-	_, err := f803bRepoText(root, func(rel string, body []byte) {
+	type buildFile struct{ rel, body string }
+	var files []buildFile
+	_, err := f803bRepoText(f803bRepoRoot(coreRoot), func(rel string, body []byte) {
 		base := filepath.Base(rel)
-		buildFile := strings.HasPrefix(base, "Makefile") || strings.HasPrefix(base, "Dockerfile") ||
-			strings.HasPrefix(rel, ".github/workflows/") || strings.HasPrefix(rel, ".woodpecker/")
-		if !buildFile {
-			return
-		}
-		for _, tags := range f803bTagsIn(string(body)) {
-			named[key(tags)] = tags
+		if strings.HasPrefix(base, "Makefile") || strings.HasPrefix(base, "Dockerfile") ||
+			strings.HasPrefix(rel, ".github/workflows/") || strings.HasPrefix(rel, ".woodpecker/") {
+			files = append(files, buildFile{rel, string(body)})
 		}
 	})
 	if err != nil {
 		return nil, 0, err
+	}
+	// Each Makefile's own variables, and the values the Makefiles agree on.
+	own := map[string]map[string]string{}
+	agreed := map[string]string{}
+	conflict := map[string]bool{}
+	for _, f := range files {
+		if !strings.HasPrefix(filepath.Base(f.rel), "Makefile") {
+			continue
+		}
+		own[f.rel] = f803bMakeVars(f.body)
+		for name, val := range own[f.rel] {
+			if prev, seen := agreed[name]; seen && prev != val {
+				conflict[name] = true
+			}
+			agreed[name] = val
+		}
+	}
+	named := map[string][]string{}
+	var unresolved []string
+	for _, f := range files {
+		var vars map[string]string
+		if mine, isMake := own[f.rel]; isMake {
+			vars = map[string]string{}
+			for name, val := range agreed {
+				if !conflict[name] {
+					vars[name] = val
+				}
+			}
+			maps.Copy(vars, mine)
+		}
+		lists, bad := f803bTagsIn(f.body, vars)
+		for _, tags := range lists {
+			named[key(tags)] = tags
+		}
+		for _, b := range bad {
+			unresolved = append(unresolved, f.rel+" "+b)
+		}
+	}
+	if len(unresolved) > 0 {
+		sort.Strings(unresolved)
+		return nil, 0, fmt.Errorf("archtest: %d -tags argument(s) in the repo's build files cannot be reduced to a concrete tag set, so the real-binary test of the F8-03b refusal would never build them: teach f803bTagsIn the spelling or write the list out:\n  %s", len(unresolved), strings.Join(unresolved, "\n  "))
 	}
 	keys := make([]string, 0, len(named))
 	for k := range named {

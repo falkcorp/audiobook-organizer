@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-15
 
@@ -35,8 +35,14 @@ import (
 //     two states, true and deleted: false is an error, not a way to open the gate,
 //     and no symbol name is consulted. Deleting it is the F8-03b PR's reviewed act,
 //     together with redesignRefusal and the gate. TestRedesignRefusal_RealBinary
-//     builds and runs a production binary, once per tag set the repo ships with,
-//     to prove New and Build refuse in each.
+//     builds and runs a production binary under each tag set that
+//     archtest.F803bShippedTagSets derives (the TagSets() entries that run on the
+//     host, plus the -tags lists in Makefile*, Dockerfile*, .github/workflows and
+//     .woodpecker, make variables such as $(GO_BUILD_TAGS) resolved from the
+//     Makefile; a list it cannot resolve fails the test), to prove New and Build
+//     refuse in each. A variable set outside the repo's files, a GOOS other than
+//     the host's (the constraint rule reads those files instead) and a tag list a
+//     script assembles at run time are not covered.
 //
 // F8-04 mounts the diagnostics routes, so F8-04 is blocked on F8-03b
 // (docs/agent-tasks/platform-core/F8-03b-share-safe-bundle.md, TODO id

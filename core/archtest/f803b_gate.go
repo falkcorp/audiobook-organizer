@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_gate.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4e7a1c92-6b35-4d08-a9f1-2c5d8e03b764
 // last-edited: 2026-11-15
 
@@ -69,8 +69,10 @@ const (
 // It does not look for anything a rename of a symbol the guard has no name for
 // could hide: the names it reads are the marker and the ones the probe pin reads,
 // and each fails the build or the guard when it is not found. The run-time
-// refusal is checked in real binaries under every tag set the repo ships with
-// by TestRedesignRefusal_RealBinary in diagnostics.
+// refusal is checked in real binaries, under each tag set archtest.F803bShippedTagSets
+// derives (TagSets() on this host, and the -tags lists of the Makefiles,
+// Dockerfiles, workflows and pipelines with make variables resolved), by
+// TestRedesignRefusal_RealBinary in diagnostics.
 //
 // The F8-03 round 7 review found that the path redactor in
 // core/health/diagnostics leaks usernames and directory trees in realistic
@@ -147,7 +149,9 @@ func f803bFindings(dir string, readMarker func(files []string) (bool, error)) ([
 	for _, path := range []string{diagnosticsPath, healthhttpPath} {
 		p, ok := pkgs[path]
 		if !ok {
-			continue
+			// A renamed or moved package would otherwise drop out of rule (b)
+			// without a word: the same vacuity the diagnostics check above refuses.
+			return nil, fmt.Errorf("archtest: %s is not among the %d loaded packages; rule (b) would not check it (renamed or moved? update the path in f803b_gate.go)", path, len(pkgs))
 		}
 		for _, f := range slices.Concat(p.GoFiles, p.IgnoredGoFiles) {
 			why, err := f803bConstraint(f)
