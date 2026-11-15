@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_flip_obligations_unit_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e8a5c17-92d4-4b60-a1f3-7c6d09e2b845
 // last-edited: 2026-11-15
 
@@ -71,20 +71,25 @@ func TestReachObligations_TheTableIsStatedInTheSeamsAndEveryRowIsOpenToday(t *te
 	if n := len(reachStateOf(t, in, "F4-07-HANDLER-REFUSALS").bar); n != 8 {
 		t.Errorf("the HANDLER-REFUSALS bar is %d cells, want the 8 auth-off cells on non-Public routes: %v", n, reachStateOf(t, in, "F4-07-HANDLER-REFUSALS").bar)
 	}
-	// The bar is every route with a recorded 404 (6 uniform plus 145 mixed): the
-	// in-handler sites the row is named for sit on mixed-status routes, so a bar of
-	// the uniform routes alone would not overlap them.
+	// The bar is the union of the in-handler sites' routes (reachHiddenSites), not a
+	// recorded status: four sites sit on routes that never answered 404.
 	hidden := reachStateOf(t, in, "F4-07-HIDDEN-HANDLER-CHECKS").bar
-	if len(hidden) != 151 {
-		t.Errorf("the HIDDEN-HANDLER-CHECKS bar is %d routes, want the 151 with a recorded 404 (derived from verdicts.json statuses)", len(hidden))
-	}
-	for _, k := range in.vd.UniformNotFound {
-		if !slices.Contains(hidden, k) {
-			t.Errorf("the HIDDEN-HANDLER-CHECKS bar lacks the uniform-404 route %s", k)
+	want := map[string]bool{}
+	for _, s := range reachHiddenSites {
+		for _, r := range s.routes {
+			want[r] = true
 		}
 	}
-	if len(hidden) <= len(in.vd.UniformNotFound) {
-		t.Errorf("the HIDDEN-HANDLER-CHECKS bar (%d) is no larger than the uniform-404 list (%d): it reads the wrong set", len(hidden), len(in.vd.UniformNotFound))
+	for _, r := range reachOwnerRoutes(in) {
+		want[r] = true
+	}
+	if len(hidden) != len(want) || len(hidden) != 31 {
+		t.Errorf("the HIDDEN-HANDLER-CHECKS bar is %d routes, want the %d routes of the %d sites and the owner routes", len(hidden), len(want), len(reachHiddenSites))
+	}
+	for _, r := range []string{"GET /api/v1/users/invites", "PUT /api/v1/auth/me/password", "POST /api/v1/audiobooks/batch", "GET /api/v3/ops/events"} {
+		if !slices.Contains(hidden, r) {
+			t.Errorf("the HIDDEN-HANDLER-CHECKS bar lacks %s, a site route that no recorded 404 finds", r)
+		}
 	}
 	owner := reachOwnerRoutes(in)
 	if len(owner) != 9 {
