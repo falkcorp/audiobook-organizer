@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e5a8c31-7d92-4b64-a1f7-3c6e9d2b5a08
 // last-edited: 2026-11-15
 
@@ -7,7 +7,9 @@ package archtest
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -193,21 +195,29 @@ func TestF803bGateFlagsABadProbeInTheRealShape(t *testing.T) {
 	}
 }
 
-// TestF803bLinkerFindings (round 10, N-3): a build path that names the linker
-// symbol that makes testing.Testing true is reported, with its line; prose,
-// node_modules and this guard's own files are not.
+// TestF803bLinkerFindings (round 11, O-2): the guard reads text files by content,
+// so a script without an extension, a PowerShell file, a .conf and Makefile.local
+// are read; documentation, git, node_modules, a binary (NUL byte), a file over
+// 4 MiB and the guard's own files are not.
 func TestF803bLinkerFindings(t *testing.T) {
 	flag := f803bTestBinaryFlag
 	root := writeModule(t, map[string]string{
 		"go.mod":                       "module example.com/m\n\ngo 1.27.0\n",
 		"Makefile":                     "build:\n\tgo build -ldflags \"-X " + flag + "=1\" ./...\n",
+		"Makefile.local":               "LDFLAGS += -X " + flag + "=1\n",
 		"Dockerfile.build":             "RUN go build -ldflags=-X=" + flag + "=1 .\n",
 		"scripts/build.sh":             "#!/bin/sh\ngo build -ldflags '-X " + flag + "=1'\n",
-		".github/workflows/ci.yml":     "run: go test -ldflags \"-X " + flag + "=1\"\n",
+		"deploy/rollback-helpers/rb":   "#!/bin/sh\ngo build -ldflags '-X " + flag + "=1'\n",
+		"deploy/build.ps1":             "go build -ldflags \"-X " + flag + "=1\"\n",
+		"deploy/build.conf":            "GOFLAGS=-ldflags=-X=" + flag + "=1\n",
+		".github/workflows/ci.yml":     "env:\n  GOFLAGS: -ldflags=-X=" + flag + "=1\n",
 		"tools/build.py":               "FLAGS = '-X " + flag + "=1'\n",
 		"cmd/run.go":                   "package main\n\nvar f = \"-X " + flag + "=1\"\n",
 		"docs/notes.md":                "the flag " + flag + " is described here\n",
+		"docs/notes.txt":               "the flag " + flag + " is described here\n",
 		"web/node_modules/p/x.json":    "{\"f\": \"" + flag + "\"}\n",
+		"bin/tool":                     "\x00\x01 " + flag + "\n",
+		"big/generated.sql":            strings.Repeat("-- padding\n", 400000) + flag + "\n",
 		"core/archtest/f803b_probe.go": "package archtest\n\nconst x = \"" + flag + "\"\n",
 		"clean/Makefile":               "build:\n\tgo build ./...\n",
 	})
@@ -216,20 +226,167 @@ func TestF803bLinkerFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		".github/workflows/ci.yml:1",
+		".github/workflows/ci.yml:2",
 		"Dockerfile.build:1",
+		"Makefile.local:1",
 		"Makefile:2",
 		"cmd/run.go:3",
+		"deploy/build.conf:1",
+		"deploy/build.ps1:1",
+		"deploy/rollback-helpers/rb:2",
 		"scripts/build.sh:2",
 		"tools/build.py:1",
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("findings = %v, want %v", got, want)
 	}
-	// Makefile, Dockerfile.build, build.sh, ci.yml, build.py, run.go and
-	// clean/Makefile; not the markdown, node_modules or the guard's own file.
-	if scanned != 7 {
-		t.Errorf("scanned %d files, want 7", scanned)
+	// go.mod, the 10 files above, clean/Makefile: 12; not the markdown, text,
+	// node_modules, binary, oversized file or the guard's own file.
+	if scanned != 12 {
+		t.Errorf("scanned %d files, want 12", scanned)
+	}
+}
+
+// TestF803bTagsIn: the -tags arguments of build-file lines, in the spellings the
+// repo uses, and not the look-alikes (git's --tags, --no-tags, a name ending
+// in -tags, a make variable).
+func TestF803bTagsIn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		want string
+	}{
+		"quoted list":       {`go build -tags "embed_frontend fts5 native_taglib" \` + "\n", "embed_frontend,fts5,native_taglib"},
+		"make variable":     {"\t@go build -tags \"embed_frontend $(GO_BUILD_TAGS)\" -o x .\n", "embed_frontend"},
+		"only a variable":   {"\t@go build -tags \"$(GO_BUILD_TAGS)\" -o x .\n", ""},
+		"bare word":         {"go test -tags pprof -run Pprof ./...\n", "pprof"},
+		"equals":            {"go test -tags=integration ./...\n", "integration"},
+		"comma list":        {"go vet -tags integration,bench ./...\n", "bench,integration"},
+		"double dash":       {"go build --tags unitlifecycle .\n", "unitlifecycle"},
+		"in parentheses":    {"## (go vet/test -tags pprof)\n", "pprof"},
+		"git describe":      {"VERSION := $(shell git describe --tags --always --dirty)\n", ""},
+		"git describe abbr": {"git describe --tags --abbrev=0\n", ""},
+		"no-tags":           {"git fetch --no-tags origin main\n", ""},
+		"name ending":       {"group: cleanup-orphan-rc-tags\n", ""},
+		"two on a line":     {"go vet -tags pprof . && go test -tags native_taglib .\n", "pprof|native_taglib"},
+	} {
+		var got []string
+		for _, tags := range f803bTagsIn(tc.body) {
+			got = append(got, strings.Join(tags, ","))
+		}
+		if strings.Join(got, "|") != tc.want {
+			t.Errorf("%s: tag lists %q, want %q", name, strings.Join(got, "|"), tc.want)
+		}
+	}
+}
+
+// TestF803bShippedTagSets (round 11, O-1 c): over this repo, the sets the
+// real-binary test builds include the ones the build files name. If the reading
+// of Makefiles, Dockerfiles and workflows stopped matching, the real-binary test
+// would build the TagSets() list alone; this fails first.
+func TestF803bShippedTagSets(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := ModuleRoot(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sets, named, err := F803bShippedTagSets(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if named == 0 {
+		t.Fatal("no -tags list read from the repo's build files")
+	}
+	has := func(tags ...string) bool {
+		return slices.ContainsFunc(sets, func(ts TagSet) bool {
+			a, b := slices.Clone(ts.Tags), slices.Clone(tags)
+			slices.Sort(a)
+			slices.Sort(b)
+			return ts.GOOS == "" && slices.Equal(a, b)
+		})
+	}
+	for _, want := range [][]string{
+		nil, // the default build
+		{"embed_frontend"},
+		{"embed_frontend", "fts5", "native_taglib"}, // Dockerfile, Makefile
+		{"native_taglib"},
+		{"pprof"},
+		{"integration"},
+		{"bench"},
+		{"unitlifecycle"},
+	} {
+		if !has(want...) {
+			t.Errorf("no host tag set %v among %d sets", want, len(sets))
+		}
+	}
+	// A list only a build file names is added to TagSets(): found in a fixture.
+	fixture := writeModule(t, map[string]string{
+		"go.mod":                  "module r\n",
+		"core/go.mod":             "module c\n",
+		"Makefile":                "x:\n\tgo build -tags \"shipit embed_frontend\" .\n",
+		".github/workflows/w.yml": "run: go build -tags embed_frontend,fts5 .\n",
+		"scripts/other.sh":        "go build -tags notscanned .\n",
+	})
+	fsets, fnamed, err := F803bShippedTagSets(filepath.Join(fixture, "core"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fnamed != 2 {
+		t.Errorf("the fixture's build files named %d lists, want 2 (a script outside the build files is not read)", fnamed)
+	}
+	var extra []string
+	for _, ts := range fsets {
+		if strings.HasPrefix(ts.Name, "build files: ") {
+			extra = append(extra, strings.Join(ts.Tags, ","))
+		}
+	}
+	slices.Sort(extra)
+	if strings.Join(extra, "|") != "embed_frontend,fts5|embed_frontend,shipit" {
+		t.Errorf("sets added from build files = %v", extra)
+	}
+}
+
+// TestF803bSuffixConstraint: the go command's file-name rule, and its known OS
+// and architecture lists against this toolchain's `go tool dist list`.
+func TestF803bSuffixConstraint(t *testing.T) {
+	for name, want := range map[string]string{
+		"build.go":             "",
+		"windows.go":           "",
+		"linux_notes.go":       "",
+		"build_notes.go":       "",
+		"build_test.go":        "",
+		"build_linux.go":       "file name suffix _linux",
+		"build_amd64.go":       "file name suffix _amd64",
+		"build_linux_arm64.go": "file name suffix _linux_arm64",
+		"build_linux_test.go":  "file name suffix _linux",
+		"_linux.go":            "file name suffix _linux",
+		"build_arm64_linux.go": "file name suffix _linux",
+		"build_unix.go":        "",
+		"build_wasip1_wasm.go": "file name suffix _wasip1_wasm",
+		"build_mips64p32le.go": "file name suffix _mips64p32le",
+	} {
+		if got := f803bSuffixConstraint(name); got != want {
+			t.Errorf("%s: %q, want %q", name, got, want)
+		}
+	}
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("no go command: %v", err)
+	}
+	out, err := exec.Command(goBin, "tool", "dist", "list").Output()
+	if err != nil {
+		t.Fatalf("go tool dist list: %v", err)
+	}
+	for pair := range strings.FieldsSeq(string(out)) {
+		goos, goarch, _ := strings.Cut(pair, "/")
+		if !slices.Contains(f803bKnownOS(), goos) {
+			t.Errorf("GOOS %q (go tool dist list) is not in f803bKnownOS(): a file named x_%s.go would pass the constraint rule", goos, goos)
+		}
+		if !slices.Contains(f803bKnownArch(), goarch) {
+			t.Errorf("GOARCH %q (go tool dist list) is not in f803bKnownArch(): a file named x_%s.go would pass the constraint rule", goarch, goarch)
+		}
 	}
 }
 
