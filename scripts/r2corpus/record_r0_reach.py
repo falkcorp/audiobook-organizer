@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.6.1
+# version: 1.7.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-14
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -22,15 +22,22 @@ A probe is a request that fails *after* authorization when it is authorized: a
 dummy path id (404) or an empty ``{}`` body (400/422). So a 401/403 is a
 denial and any other status below 500 is an allow. Nothing else is a verdict:
 a 429, a 5xx and a connection error are recorder failures, never recorded, and
-a drift sentinel (a census of users, books and task definitions, plus a
-per-principal canary) fails the run when a probe changed the store or killed the
-server.
+a drift sentinel (a census of users, books, task definitions and the stored config,
+plus a per-principal canary) fails the run when a probe changed the store or killed
+the server.
+
+The two routes that write the stored config get a body their handlers refuse before
+writing (``CONFIG_PROBE_BODIES``), so the census can digest the config.
 
 Two boots: one with auth on (every principal but ``authoff``) and one on a copy
 whose stored config has ``enable_auth`` turned off (``authoff``; R0 reads the
 stored config after the environment, so ``ENABLE_AUTH=false`` does not reach a
 store that has one: ``r0config/edit_config.go.txt``). Secrets never reach the
 output: keys are minted on the copy and held in memory only.
+
+Two more boots, with ``owner_email`` set in the stored config, record the nine routes R0
+puts behind its owner gate (``OWNER_ROUTES``) for every principal into ``verdicts.json``'s
+``owner_set`` section: production sets an owner and the main recording does not.
 
 ``--check`` re-derives the data and exits 1 on any differing verdict cell, a
 changed R0 binary, a changed route count or principal list, or a changed overlay
@@ -260,7 +267,27 @@ def probe_path(path: str) -> str:
     return _WILD.sub("r2reach/missing", _PARAM.sub(DUMMY_ID, path))
 
 
-def probe_body(method: str) -> Any:
+# A route whose handler writes the stored config before it can refuse an empty body
+# gets a body its handler refuses with a 400 before any write, so the census's
+# digest of the stored config can hold (it failed once on R0, GitHub Actions run
+# 43636904080, because the two PUTs below wrote the whole config back for ``{}``).
+# Authorization still runs first, so the letters are the empty body's.
+#
+# - ``PUT /api/v1/config``: UpdateService.UpdateConfig answers 400 for a key Config
+#   does not have, after authorization and before anything is written
+#   (internal/config/update_service.go @v0.223.0).
+# - ``PUT /api/v1/maintenance-window/config``: its handler binds a typed body, so an
+#   unknown key is ignored and the zero value would be saved; an hour outside 0-23
+#   is answered 400 before the save (handlers/scheduler_admin.go @v0.223.0).
+CONFIG_PROBE_BODIES: dict[tuple[str, str], Any] = {
+    ("PUT", "/api/v1/config"): {"r2reach_probe": True},
+    ("PUT", "/api/v1/maintenance-window/config"): {"window_start": -1},
+}
+
+
+def probe_body(method: str, path: str = "") -> Any:
+    if (method, path) in CONFIG_PROBE_BODIES:
+        return CONFIG_PROBE_BODIES[(method, path)]
     return {} if method in MUTATING else None
 
 
@@ -285,7 +312,7 @@ def probe_request(method: str, path: str, principal_name: str) -> tuple[str, Any
         return path.replace(":token", probe_token(principal_name)), None
     if (method, path) == INVITE_ACCEPT:
         return path, {"token": probe_token(principal_name)}
-    return probe_path(path), probe_body(method)
+    return probe_path(path), probe_body(method, path)
 
 
 class RecorderError(RuntimeError):
@@ -575,14 +602,12 @@ def probe_approvals(probes: list[Probe], runs: list[dict[str, Any]]) -> list[dic
 
 
 def census(admin: Probe) -> dict[str, Any]:
-    """What probing must not change: users (id, name, roles, status), books and task defs.
+    """What probing must not change: users (id, name, roles, status), books, task defs
+    and the stored config (a digest of GET /api/v1/config).
 
-    The stored config is not in the census. It was added once, as a digest of
-    ``GET /api/v1/config``, and the first run against the real R0 (GitHub Actions run
-    43636904080, a throwaway ``--check``) failed on it: the recorder's own authorized
-    probes ``PUT /api/v1/config`` and ``PUT /api/v1/maintenance-window/config`` with an
-    empty body, and R0 writes the whole config back, so it differs after the pass by
-    design. A census of what the probes themselves rewrite cannot hold."""
+    The two routes that write the config (``CONFIG_PROBE_BODIES``) are probed with a
+    body their handlers refuse before writing, so a config that differs after the
+    pass is a probe that changed a setting."""
     users = admin.fetch("/api/v1/users")
     if users.status != 200:
         raise RecorderError(f"census: GET /api/v1/users -> {users.status}")
@@ -602,10 +627,18 @@ def census(admin: Probe) -> dict[str, Any]:
     if not isinstance(total, int) or isinstance(total, bool):
         # A census that reads nothing counts nothing: the sentinel would pass on any drift.
         raise RecorderError(f"census: the book count is {total!r}, not a number")
+    config = admin.fetch("/api/v1/config")
+    if config.status != 200:
+        raise RecorderError(f"census: GET /api/v1/config -> {config.status}")
+    if not isinstance(config.body, dict) or not config.body:
+        raise RecorderError("census: GET /api/v1/config returned no settings to digest")
     return {
         "users": [list(r) for r in rows],
         "books": total,
         "task_defs": [d["id"] for d in task_defs(admin)],
+        "config": hashlib.sha256(
+            json.dumps(config.body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
     }
 
 
@@ -679,6 +712,7 @@ def record_pass(
             "users": len(after["users"]),
             "books": after["books"],
             "task_defs": len(after["task_defs"]),
+            "config_sha256": after["config"],
         }
     return out
 
@@ -755,6 +789,39 @@ def build_verdicts(
     }
 
 
+def stitch_columns(
+    principals: list[dict[str, Any]], on: list[list[int]], off: list[list[int]]
+) -> list[list[int]]:
+    """The auth-on boot's columns and the auth-off boot's, in principal order."""
+    cols_on, cols_off = iter(on), iter(off)
+    return [next(cols_off) if p["kind"] == "authoff" else next(cols_on) for p in principals]
+
+
+def owner_set_doc(
+    routes: list[dict[str, Any]], principals: list[dict[str, Any]], columns: list[list[int]]
+) -> dict[str, Any]:
+    """The owner-set recording: one verdict string per owner-gated route, one letter
+    per principal of the table (the auth-disabled one included), as the main
+    recording's routes are."""
+    rows = []
+    for i, r in enumerate(routes):
+        st = [col[i] for col in columns]
+        rows.append(
+            {
+                "method": r["method"],
+                "path": r["path"],
+                "status": st,
+                "verdict": "".join(DENY if s in DENY_STATUSES else ALLOW for s in st),
+            }
+        )
+    return {
+        "what": "R0's allow/deny on the owner-gated routes with owner_email set in the stored "
+        "config and no Cloudflare Access verifier, so no principal is the owner",
+        "owner_email": OWNER_EMAIL,
+        "routes": rows,
+    }
+
+
 # ---------------------------------------------------------------- files
 
 
@@ -800,6 +867,22 @@ def diff_verdicts(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
         for i, (a, b) in enumerate(zip(o[key], n[key])):
             if a != b:
                 out.append(f"{key[0]} {key[1]} / {names[i]}: {a} -> {b}")
+    old_owner, new_owner = old.get("owner_set") or {}, new.get("owner_set") or {}
+    if old_owner.get("owner_email") != new_owner.get("owner_email"):
+        out.append(
+            f"owner_set.owner_email: {old_owner.get('owner_email')!r} -> {new_owner.get('owner_email')!r}"
+        )
+    oo = {(r["method"], r["path"]): r["verdict"] for r in old_owner.get("routes", [])}
+    no = {(r["method"], r["path"]): r["verdict"] for r in new_owner.get("routes", [])}
+    for key in sorted(set(oo) | set(no)):
+        if key not in oo or key not in no:
+            out.append(
+                f"owner_set {key[0]} {key[1]}: route {'added' if key not in oo else 'removed'}"
+            )
+            continue
+        for i, (a, b) in enumerate(zip(oo[key], no[key])):
+            if a != b:
+                out.append(f"owner_set {key[0]} {key[1]} / {names[i]}: {a} -> {b}")
     for sect in ("tasks", "approvals"):
         o2 = {r.get("id", r.get("run_id")): r["verdict"] for r in old.get(sect, [])}
         n2 = {r.get("id", r.get("run_id")): r["verdict"] for r in new.get(sect, [])}
@@ -902,6 +985,41 @@ DISCOVERY_FLAG = "deluge_discovery_enabled=*>true"
 BOOT_FLAGS = [WORKER_FLAG, DISCOVERY_FLAG]
 AUTH_OFF_EDIT = "enable_auth=true>false"
 
+# The owner-set recording. Production sets ``owner_email``; the main recording does
+# not, so R0's owner gate (``ownerGateWhenOwnerSet``, owner_routes.go @v0.223.0, which
+# is on only while ``owner_email`` is set) was never on in it. These are the routes
+# R0 puts behind that gate (wire_library_routes.go, wire_system_routes.go
+# @v0.223.0), recorded again in boots whose stored config holds OWNER_EMAIL. R0's
+# gate needs ``auth.OwnerProofWhyNot``: a verified Cloudflare Access JWT for the
+# owner's email, which no principal of the table can hold (the boot has no Access
+# verifier), so the table's whole answer is the gate's refusal, and the recording
+# shows that R0 refuses a non-owner admin session on every one of them.
+# The address is a fixture on a reserved domain.
+OWNER_EMAIL = "bruce@example.invalid"
+OWNER_EDIT = f'owner_email=*>"{OWNER_EMAIL}"'
+OWNER_ROUTES: tuple[tuple[str, str], ...] = (
+    ("GET", "/api/v1/admin/guest-service-tokens/plan"),
+    ("POST", "/api/v1/admin/guest-service-tokens/:userId/revoke"),
+    ("POST", "/api/v1/backup/restore"),
+    ("POST", "/api/v1/system/factory-reset"),
+    ("POST", "/api/v1/system/reset"),
+    ("POST", "/api/v1/users/:id/merge-into/:target/apply"),
+    ("POST", "/api/v1/users/:id/merge-into/:target/preview"),
+    ("POST", "/api/v1/users/merges/:jid/resume"),
+    ("POST", "/api/v1/users/merges/:jid/undo"),
+)
+
+
+def owner_routes(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """OWNER_ROUTES' entries of the route dump; a missing one is a recorder failure."""
+    by_key = {(r["method"], r["path"]): r for r in routes}
+    missing = [f"{m} {p}" for m, p in OWNER_ROUTES if (m, p) not in by_key]
+    if missing:
+        raise RecorderError(
+            "OWNER_ROUTES names route(s) the dump does not have: " + ", ".join(missing)
+        )
+    return [by_key[k] for k in OWNER_ROUTES]
+
 
 def edit_config(layout: Any, edits: list[str]) -> None:
     """Rewrite keys of the staged copy's stored config blob (edit_config.go.txt).
@@ -954,7 +1072,12 @@ def boot_and_record(
     routes: list[dict[str, Any]],
     principals: list[dict[str, Any]],
     auth_off: bool,
+    owner_set: bool = False,
 ) -> dict[str, Any]:
+    """One boot of R0 on a fresh throwaway copy and one pass over ``routes``.
+
+    ``owner_set`` writes ``OWNER_EMAIL`` into the copy's stored config as well, and
+    skips the census, tasks and approvals (the owner-set recording is of a few routes)."""
     layout = w.Layout(pathlib.Path(args.workdir))
     stage_copy(args, layout)
     # R0 builds its per-peer rate limiter from the stored config, which the
@@ -963,7 +1086,12 @@ def boot_and_record(
     env: dict[str, str] = {}
     # ENABLE_AUTH=false does not reach a store that has a config_blob either:
     # rewrite the keys in the throwaway copy's blob.
-    edit_config(layout, [*BOOT_FLAGS, AUTH_OFF_EDIT] if auth_off else list(BOOT_FLAGS))
+    edits = list(BOOT_FLAGS)
+    if auth_off:
+        edits.append(AUTH_OFF_EDIT)
+    if owner_set:
+        edits.append(OWNER_EDIT)
+    edit_config(layout, edits)
     proc = w.R0Process(binary, layout, args.port, docker=args.docker, extra_env=env)
     client = w.Client(proc.base, user_agent=RECORDER_UA)
     proc.start()
@@ -980,10 +1108,13 @@ def boot_and_record(
         mine = [p for p in principals if p["kind"] != "authoff"]
         probes = prepare_credentials(client, mine)
         admin = probes["session:admin"]
-        return record_pass(lambda p: probes[p["name"]], mine, routes, admin, args.workers, True)
+        return record_pass(
+            lambda p: probes[p["name"]], mine, routes, admin, args.workers, not owner_set
+        )
     finally:
         stop_throwaway(proc)
-        keep_log(layout, f"{args.workdir.rstrip('/')}-logs", "off" if auth_off else "on")
+        boot = ("off" if auth_off else "on") + ("-owner" if owner_set else "")
+        keep_log(layout, f"{args.workdir.rstrip('/')}-logs", boot)
 
 
 def stop_throwaway(proc: Any) -> None:
@@ -1048,9 +1179,16 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
             save_partial(out / PARTIAL_ON, on)
     off = boot_and_record(args, binary, routes, principals, auth_off=True)
     # Stitch the two boots' columns in principal order.
-    cols_on = iter(on["columns"])
-    cols_off = iter(off["columns"])
-    columns = [next(cols_off) if p["kind"] == "authoff" else next(cols_on) for p in principals]
+    columns = stitch_columns(principals, on["columns"], off["columns"])
+    # The same two boots again with an owner set, over the owner-gated routes only.
+    owner_subset = owner_routes(routes)
+    owner_on = boot_and_record(
+        args, binary, owner_subset, principals, auth_off=False, owner_set=True
+    )
+    owner_off = boot_and_record(
+        args, binary, owner_subset, principals, auth_off=True, owner_set=True
+    )
+    owner_columns = stitch_columns(principals, owner_on["columns"], owner_off["columns"])
     meta = {
         "what": "R0's allow/deny per (route, principal); A = past the authorization decision, "
         "D = 401/403 (record_r0_reach.py)",
@@ -1062,6 +1200,7 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     }
     extra = {k: on[k] for k in ("tasks", "approvals", "census")}
     extra["canary"] = {**on["canary"], **off["canary"]}
+    extra["owner_set"] = owner_set_doc(owner_subset, principals, owner_columns)
     return principals_doc(principals), build_verdicts(meta, routes, principals, columns, extra)
 
 
