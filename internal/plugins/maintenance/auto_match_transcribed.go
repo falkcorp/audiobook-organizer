@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -138,10 +138,14 @@ type autoMatchTranscribedEnv struct {
 }
 
 // autoMatchTranscribedNativeParams are the native kind's params: HEAD's without
-// dry_run (the run's mode carries it) and without last_book_id (rc.Restore
-// carries the checkpoint).
+// dry_run (the run's mode carries it). last_book_id stays, as at HEAD: a start
+// request may name the book to resume after, and rc.Restore's checkpoint, when
+// the run has one, replaces it (HEAD's registry merges the saved checkpoint
+// over the params, and the checkpoint is these same params with last_book_id
+// advanced).
 type autoMatchTranscribedNativeParams struct {
-	MinScore float64 `json:"min_score,omitempty"`
+	MinScore   float64 `json:"min_score,omitempty"`
+	LastBookID string  `json:"last_book_id,omitempty"`
 }
 
 // UnmarshalJSON refuses the keys the run's mode replaces (t6g1RefuseModeKeys).
@@ -186,13 +190,15 @@ func (p *Plugin) autoMatchTranscribedNative(deps t6g1Deps, sched func(tasks.Kind
 			if err := t6g1RefuseUnwired(rc, autoMatchTranscribedKind, deps.manualOnlyWires(false)...); err != nil {
 				return struct{}{}, err
 			}
-			params := autoMatchTranscribedParams{MinScore: np.MinScore}
+			params := autoMatchTranscribedParams{MinScore: np.MinScore, LastBookID: np.LastBookID}
 			var cp autoMatchTranscribedParams
 			ok, err := rc.Restore(&cp)
 			if err != nil {
 				return struct{}{}, fmt.Errorf("maintenance.auto-match-transcribed: restore checkpoint: %w", err)
 			}
-			if ok {
+			// A checkpoint that names a last book wins over the start params'
+			// (HEAD's merge: last_book_id is omitempty, so an empty one is absent).
+			if ok && cp.LastBookID != "" {
 				params.LastBookID = cp.LastBookID
 			}
 			env := autoMatchTranscribedEnv{
