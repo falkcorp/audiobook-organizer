@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_gate_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 7d3a8f21-6c4e-4b95-a0d7-1e9b2c5f8a36
 // last-edited: 2026-11-15
 
@@ -283,7 +283,7 @@ func reachChecks(vd *reachR0Doc, res reachDiffResult, rows []reachExpect) []stri
 	out = append(out, reachUniformNotFoundProblems(vd)...)
 	out = append(out, reachCountProblems(vd, res)...)
 	out = append(out, reachGoldenProblems(res)...)
-	return append(out, reachOwnerSetProblems(vd, res.r2, reachNoOwnerAssured)...)
+	return append(out, reachOwnerSetProblems(vd, res.r2, reachOwnerAssured)...)
 }
 
 // reachStaticProblems are the pins that are not about one run's cells: the
@@ -308,12 +308,13 @@ func reachStaticProblems(t testing.TB, vd *reachR0Doc, atoms []m3.AtomRow, whos 
 	if err != nil {
 		return append(out, err.Error())
 	}
-	out = append(out, reachObligationProblems(reachObligationInput{vd: vd, res: res, refusals: len(reachHandlerRefusals()), assured: reachNoOwnerAssured}, reachFlipObligations, seams)...)
+	in := reachObligationInputFrom(vd, res)
+	out = append(out, reachObligationProblems(in, reachObligations, seams)...)
 	src, err := os.ReadFile(reachMountSource)
 	if err != nil {
 		return append(out, err.Error())
 	}
-	return append(out, reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil, reachFlipObligations)...)
+	return append(out, reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil, reachOpenObligations(in, reachObligations))...)
 }
 
 // reachOracleRows are every expected row the oracle holds the diff to.
