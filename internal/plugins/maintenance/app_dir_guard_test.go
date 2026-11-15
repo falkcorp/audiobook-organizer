@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/app_dir_guard_test.go
-// version: 1.4.2
+// version: 1.4.4
 // guid: 7c94e0a6-5d31-4b82-9e08-3f61b7d425ac
-// last-edited: 2026-10-19
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -146,7 +146,7 @@ func TestFileProvenanceCapture_SkipsAppDirs(t *testing.T) {
 		dumps := filepath.Join(root, "openlibrary-dumps")
 		raw, err := json.Marshal(map[string]any{"roots": []string{dumps}})
 		require.NoError(t, err)
-		res, err := p.captureFileProvenance(context.Background(), raw)
+		res, err := captureFileProvenanceHEAD(p, context.Background(), raw)
 		require.NoError(t, err)
 		require.Equal(t, 1, res.Walked,
 			"an explicitly named root is a deliberate choice and must not be skipped")

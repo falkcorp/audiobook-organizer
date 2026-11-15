@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.15.2
+// version: 2.16.6
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -53,6 +53,9 @@
 // over books means up to Workers ffprobe subprocesses run at once, cutting wall
 // clock for the ffprobe tail proportionally. All DB writes happen on a single
 // collector goroutine — no locking required on counters or PebbleDB writes.
+// The pool itself is a seam (durationBackfillEnv.Pool): HEAD's shell runs the
+// goroutines, the native shell runs the books as the items of a tasks loop
+// declared Fixed(Workers); the collector is the same single goroutine in both.
 //
 // Liveness and cancellation: the collector reports progress at most every ~15s
 // between books, and INSIDE a book's segment writes it stamps the watchdog's
@@ -83,6 +86,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -95,8 +99,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 type durationReextractParams struct {
@@ -219,6 +225,11 @@ func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaI
 	}
 	return info, err
 }
+
+// durationProbe is the header read of the book grain's per-file probes
+// (extractWithTimeout). A var so a test can drive a probe that outlasts its
+// book's bound; production never writes it.
+var durationProbe = extractWithTimeout
 
 // durLog is the project logger for per-file read failures. Per-file detail
 // goes here rather than into the operation log, which carries the counts.
@@ -551,6 +562,14 @@ func processBookForReextractMode(
 
 	if len(segs) > 0 {
 		for si := range segs {
+			// A book whose context ended (its own bound on the native pool, or the
+			// run) is not probed any further: mediainfo.Extract cannot be
+			// cancelled, so every remaining call would start a subprocess nobody
+			// waits for, and its DeadlineExceeded would be recorded as a timeout
+			// strike on a file that was never read. process discards the result.
+			if ctx.Err() != nil {
+				return res
+			}
 			f := segs[si]
 			// An empty path used to `continue`, which contributed 0 to the total
 			// and left the book looking fully resolved: the book was then written
@@ -586,7 +605,7 @@ func processBookForReextractMode(
 				continue
 			default:
 				usedFfprobe = true
-				info, mErr := extractWithTimeout(ctx, f.FilePath)
+				info, mErr := durationProbe(ctx, f.FilePath)
 				switch {
 				case mErr != nil || info == nil || info.Duration <= 0:
 					// One unreadable segment used to abandon the WHOLE book with no
@@ -639,7 +658,10 @@ func processBookForReextractMode(
 			res.noPath = true
 			return res
 		}
-		info, mErr := extractWithTimeout(ctx, book.FilePath)
+		if ctx.Err() != nil {
+			return res // the book's bound or the run ended: see process
+		}
+		info, mErr := durationProbe(ctx, book.FilePath)
 		if mErr != nil || info == nil || info.Duration <= 0 {
 			recordReadFailure(&res, book.FilePath, mErr, warns)
 			return res
@@ -707,6 +729,143 @@ func processBookForReextractMode(
 // stamped on every row regardless. A var so tests can set it to zero.
 var reextractSegmentProgressInterval = 15 * time.Second
 
+// durationBackfillKind is the native kind of maintenance.duration-backfill (rule R3).
+const durationBackfillKind tasks.Kind = "books." + durationBackfillOpID
+
+// durationBackfillEnv is what the core needs from its engine (rules R2 and R10).
+// SetUnknownRowsResult persists the unknownRows mode's op result where the shell
+// has a place for one (HEAD's reporter); the native shell leaves it nil and the
+// result is the core's return value.
+type durationBackfillEnv struct {
+	t6g4Base
+	SetUnknownRowsResult func(UnknownRowsResult) error
+	// Pool processes the books the producer sends on jobs, workers at a time,
+	// and returns when jobs is drained (rule R4). process handles one book and
+	// reports whether the run may go on (false once ctx ended). progressTotal is
+	// the bar's denominator when known (0 when not). A non-nil error means the
+	// pool ended abnormally; the core then stops its producer.
+	Pool func(ctx context.Context, workers, progressTotal int, jobs <-chan database.Book, process func(ctx context.Context, book database.Book) bool) error
+}
+
+// durationPoolHEAD is HEAD's pool: workers goroutines each draining jobs, moved
+// out of the core unchanged. It reports no progress of its own and never fails.
+func durationPoolHEAD(ctx context.Context, workers, _ int, jobs <-chan database.Book, process func(context.Context, database.Book) bool) error {
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Go(func() {
+			for book := range jobs {
+				if !process(ctx, book) {
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	return nil
+}
+
+// durationPoolReason is what bounds the book pool, as its loop declares it.
+const durationPoolReason = "ffprobe subprocesses, bounded by the workers param (default 4, max 16)"
+
+// durationBookTimeout bounds one book's processing on the native pool. A book
+// is probed file by file under extractTimeout (30s each) and its segments are
+// written one by one, so a book that takes this long is stuck, not slow. A var
+// so a test can shorten it.
+var durationBookTimeout = 30 * time.Minute
+
+// durationPoolOn is the native pool: the books are the items of each's loop,
+// declared Fixed(workers) (so the operator's parallelism cap applies). The
+// producer's filtered stream is first drained into a list of book ids (a few
+// megabytes for a whole library), then every book is one item: an operator
+// pause is honoured before each book, durationBookTimeout bounds each, and the
+// loop's own progress counts books against the same denominator as the
+// collector's heartbeat. The item re-reads its book by id, so it processes the
+// book as it is when its turn comes; a book deleted meanwhile is skipped.
+func durationPoolOn(each t6g4EachFn, get func(id string) (*database.Book, error)) func(ctx context.Context, workers, progressTotal int, jobs <-chan database.Book, process func(context.Context, database.Book) bool) error {
+	return func(ctx context.Context, workers, progressTotal int, jobs <-chan database.Book, process func(context.Context, database.Book) bool) error {
+		var ids []string
+		for book := range jobs {
+			ids = append(ids, book.ID)
+		}
+		return each(ctx, len(ids), t6g4EachOpts{
+			Concurrency:   workers,
+			Reason:        durationPoolReason,
+			ItemTimeout:   durationBookTimeout,
+			ProgressTotal: progressTotal,
+			Label:         func(i, _ int) string { return "book " + ids[i] },
+		}, func(ctx context.Context, i int) (err error) {
+			// A panicking book ends the run with an error that names it (the
+			// loop's own recovery names only the item's index). The panic is
+			// wrapped as the loop's *tasks.PanicError, so the stack and the value
+			// survive and the loop logs the stack once.
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("book %s: %w", ids[i], &tasks.PanicError{Value: r, Stack: debug.Stack()})
+				}
+			}()
+			book, gerr := get(ids[i])
+			if gerr != nil {
+				// A read error is not "gone": it ends the run, naming the book.
+				return fmt.Errorf("book %s: re-read: %w", ids[i], gerr)
+			}
+			if book == nil {
+				return nil // deleted since the producer saw it
+			}
+			process(ctx, *book)
+			return nil
+		})
+	}
+}
+
+// durationBackfillNativeParams is durationReextractParams for the native run:
+// the mode comes from the start request, so dryRun, dry_run and apply are
+// accepted only to be refused. SkipAgeDays is a pointer because the unknownRows mode refuses
+// the key when it is present at all (HEAD reads that off the raw params).
+type durationBackfillNativeParams struct {
+	Limit               int      `json:"limit"`
+	Workers             int      `json:"workers"`
+	SkipAgeDays         *int     `json:"skipAgeDays,omitempty"`
+	Force               bool     `json:"force"`
+	OnlyMissingDuration bool     `json:"onlyMissingDuration"`
+	BookIDs             []string `json:"bookIds,omitempty"`
+	BookIDsSnake        []string `json:"book_ids,omitempty"`
+	ZeroRowsOnly        bool     `json:"zeroRowsOnly"`
+	ZeroRowsOnlySnake   bool     `json:"zero_rows_only"`
+	Mode                string   `json:"mode,omitempty"`
+	FileIDs             []string `json:"fileIds,omitempty"`
+	FileIDsSnake        []string `json:"file_ids,omitempty"`
+	t6g4ModeKeys
+}
+
+// durationBackfillResult is the run's outcome. The book-grain run fills the
+// counters; the unknownRows mode fills UnknownRows instead.
+type durationBackfillResult struct {
+	DryRun             bool               `json:"dry_run"`
+	Examined           int                `json:"examined"`
+	Eligible           int                `json:"eligible"`
+	FromFingerprint    int                `json:"from_fingerprint"`
+	FromStored         int                `json:"from_stored"`
+	FromFfprobe        int                `json:"from_ffprobe"`
+	WouldChange        int                `json:"would_change"`
+	RoughlyDouble      int                `json:"roughly_double"`
+	MSCorrectedRows    int                `json:"ms_corrected_rows"`
+	Incomplete         int                `json:"incomplete_books"`
+	RecentlyVerified   int                `json:"recently_verified_skipped"`
+	Estimated          int                `json:"estimated_segments"`
+	MissingOnDisk      int                `json:"missing_on_disk"`
+	ReadErrors         int                `json:"read_errors"`
+	WriteErrors        int                `json:"write_errors"`
+	NoFilePath         int                `json:"no_filepath"`
+	NoOwnFolderSkipped int                `json:"no_own_folder_skipped"`
+	ITunesSkipped      int                `json:"itunes_skipped"`
+	CopyBooks          int                `json:"copy_books"`
+	CopyRows           int                `json:"copy_rows_untouched"`
+	Corrected          int                `json:"corrected"`
+	Summary            string             `json:"summary,omitempty"`
+	UnknownRows        *UnknownRowsResult `json:"unknown_rows,omitempty"`
+}
+
+// runDurationBackfill is the v2 shell around runDurationBackfillCore (rule R2 item 2).
 func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	params := durationReextractParams{Workers: 4, SkipAgeDays: 90} // safe defaults
 	if len(raw) > 0 {
@@ -722,6 +881,84 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	if err != nil {
 		return err
 	}
+	store := p.deps.OpsStore()
+	if store == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	_, err = p.runDurationBackfillCore(ctx, params, raw, durationBackfillEnv{
+		t6g4Base:             t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}),
+		SetUnknownRowsResult: func(res UnknownRowsResult) error { return registry.ReporterSetResult(reporter, res) },
+		Pool:                 durationPoolHEAD,
+	})
+	return err
+}
+
+// durationBackfillKindDef is the native shell (rule R2 item 3). HEAD has a
+// preview, so a preview run counts and writes nothing.
+func (p *Plugin) durationBackfillKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(durationBackfillKind, tasks.TaskSpec[durationBackfillNativeParams, durationBackfillResult]{
+		Common: tasks.Common{
+			Title: "Backfill book durations",
+			Help: "The single duration operation. Reads the real per-file duration already stored from fingerprinting (AcoustIDFingerprintDurationSec) first — a fast DB pass — " +
+				"and falls back to ffprobe only for never-fingerprinted files. Handles both multi-file and virtual single-file books. " +
+				"Corrects Book.Duration where the old fileSize÷bitrate estimate was wrong (PR #1555; m4b/m4a were ~2× too short). " +
+				"Never overwrites a real duration with an estimate, and skips books with any unreadable segment. " +
+				"A preview counts what would change (incl. fingerprint vs ffprobe split); start in live mode to apply. " +
+				"Workers param (default 4) controls ffprobe concurrency — higher = faster ffprobe tail. " +
+				"Set onlyMissingDuration=true to scope the run to books with no known duration. " +
+				"mode=unknownRows is the row-grain pass: it walks book_file rows in ANY book (copies and books/itunes rows included, read-only on disk) that no one has measured, " +
+				"borrows a duration from a sibling row at the same path, promotes the fingerprint duration, then ffprobes the rest (absent files are not probed; rows excluded from scanning are skipped); narrow it with fileIds / bookIds. On demand only.",
+			// Declared write-set (as HEAD, dispatcher Gate 3b): this op rewrites
+			// book_file rows. It also writes the book's own Duration and
+			// DurationVerifiedAt columns (ModifyBook), which HEAD never declared.
+			Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks)...),
+			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:         tasks.ResumeDrop,
+			Priority:       tasks.PriorityLow,
+			ConcurrencyKey: tasks.Key("books." + durationBackfillOpID),
+			Timeout:        120 * time.Minute,
+			Schedule:       sched,
+			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in durationBackfillNativeParams) (durationBackfillResult, error) {
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return durationBackfillResult{}, err
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return durationBackfillResult{}, err
+			}
+			params := durationReextractParams{
+				Workers: 4, SkipAgeDays: 90, // safe defaults, as HEAD's shell
+				Limit: in.Limit, Force: in.Force, OnlyMissingDuration: in.OnlyMissingDuration,
+				BookIDs: in.BookIDs, BookIDsSnake: in.BookIDsSnake,
+				ZeroRowsOnly: in.ZeroRowsOnly, ZeroRowsOnlySnake: in.ZeroRowsOnlySnake,
+				Mode: in.Mode, FileIDs: in.FileIDs, FileIDsSnake: in.FileIDsSnake,
+			}
+			if in.Workers != 0 {
+				params.Workers = in.Workers
+			}
+			// validateUnknownRowsParams reads the presence of skipAgeDays off the raw
+			// params, so a typed run presents the key exactly when it was set.
+			var raw json.RawMessage
+			if in.SkipAgeDays != nil {
+				params.SkipAgeDays = *in.SkipAgeDays
+				raw, _ = json.Marshal(map[string]int{"skipAgeDays": *in.SkipAgeDays})
+			}
+			return p.runDurationBackfillCore(rc.Context(), params, raw, durationBackfillEnv{t6g4Base: base, Pool: durationPoolOn(base.Each, base.Store.GetBookByID)})
+		},
+	})
+}
+
+// runDurationBackfillCore is HEAD's body (rule R2 item 1) after the shell
+// decoded params, resolved the mode and the store: env.Live is true exactly when
+// HEAD's dryRun is false. raw is the params as sent (the unknownRows validation
+// needs the presence of skipAgeDays). It reads through env.Store and writes only
+// through env.Writer.
+func (p *Plugin) runDurationBackfillCore(ctx context.Context, params durationReextractParams, raw json.RawMessage, env durationBackfillEnv) (durationBackfillResult, error) {
+	dryRun := !env.Live
+	store := env.Store
+	reporter := env.reporter(ctx)
 	// Clamp worker count.
 	if params.Workers < 1 {
 		params.Workers = 4
@@ -738,20 +975,35 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		skipBefore = time.Now().AddDate(0, 0, -params.SkipAgeDays)
 	}
 
-	store := p.deps.OpsStore()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-
 	if dryRun {
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN — no changes will be written")
 	}
 
 	if params.Mode != "" || len(params.FileIDs) > 0 || len(params.FileIDsSnake) > 0 {
 		if err := validateUnknownRowsParams(params, raw); err != nil {
-			return err
+			return durationBackfillResult{DryRun: dryRun}, err
 		}
-		return p.runUnknownRowsBackfill(ctx, store, params, dryRun, reporter)
+		// HEAD hands the row walk the store it resolves AsCapability off, and a
+		// writer only when the store can defer aggregates (nil otherwise).
+		var writer segmentFailureWriter
+		if env.Store.DeferAggregatesAvailable() {
+			writer = env.Writer
+		}
+		var ur UnknownRowsResult
+		urSet := false
+		err := p.t6g4RunUnknownRowsBackfill(ctx, t6g4View{env.Store, env.Writer}, writer, env.Each,
+			func(r UnknownRowsResult) error {
+				ur, urSet = r, true
+				if env.SetUnknownRowsResult != nil {
+					return env.SetUnknownRowsResult(r)
+				}
+				return nil
+			}, params, dryRun, reporter)
+		out := durationBackfillResult{DryRun: dryRun}
+		if urSet {
+			out.UnknownRows = &ur
+		}
+		return out, err
 	}
 
 	totalBooks, countErr := store.CountAllBooks()
@@ -806,6 +1058,19 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		lastLog     = time.Now()
 	)
 
+	// snap is the result so far; only the collector (this goroutine) calls it.
+	snap := func() durationBackfillResult {
+		return durationBackfillResult{
+			DryRun: dryRun, Examined: examined, Eligible: eligible,
+			FromFingerprint: fpBooks, FromStored: storedDurBooks, FromFfprobe: ffprobeBooks,
+			WouldChange: wouldChange, RoughlyDouble: roughlyDouble, MSCorrectedRows: msFixedRows,
+			Incomplete: incomplete, RecentlyVerified: recentlyVerified, Estimated: estimated,
+			MissingOnDisk: missingOnDisk, ReadErrors: readErrs, WriteErrors: writeErrs,
+			NoFilePath: noPath, NoOwnFolderSkipped: noOwnFolder, ITunesSkipped: itunesSkipped,
+			CopyBooks: copyBooks, CopyRows: copyRows, Corrected: written,
+		}
+	}
+
 	heartbeat := func(force bool) {
 		if !force && time.Since(lastLog) < logInterval {
 			return
@@ -828,26 +1093,52 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	jobCh := make(chan database.Book, params.Workers*2)
 	resultCh := make(chan bookProcessResult, params.Workers*2)
 
-	// Start worker pool. warns is shared by every worker (atomic).
+	// The worker pool is a seam (env.Pool): HEAD's shell runs params.Workers
+	// goroutines each draining jobCh, the native shell runs the books as the
+	// items of a tasks loop declared Fixed(params.Workers). process is one
+	// book's work and is shared by both. warns is shared by every worker
+	// (atomic).
 	warns := &readWarnLimiter{}
-	var wg sync.WaitGroup
-	for i := 0; i < params.Workers; i++ {
-		wg.Go(func() {
-			for book := range jobCh {
-				res := processBookForReextractMode(ctx, store, book, skipBefore, zeroRows, warns)
-				select {
-				case resultCh <- res:
-				case <-ctx.Done():
-					// The collector stops draining on cancel; without this
-					// select every worker would block on the send forever.
-					return
-				}
+	process := func(bctx context.Context, book database.Book) bool {
+		res := processBookForReextractMode(bctx, store, book, skipBefore, zeroRows, warns)
+		if bctx.Err() != nil {
+			// The result was built under an expired context: it may stop part-way
+			// through the book, so it is never sent (a random select between the
+			// send and Done used to decide). If the run itself ended there is
+			// nothing more to report. If only the book's own bound expired (the
+			// native pool's ItemTimeout), the book is reported ONCE as unread:
+			// no strike on any file (none was fully read), no duration written,
+			// and the next run tries it again.
+			if ctx.Err() != nil {
+				return false
 			}
-		})
+			durLog.Warn("duration-backfill: book %s: gave up after %s; not recorded against any file",
+				logger.SanitizeLogValue(book.ID), durationBookTimeout)
+			res = bookProcessResult{book: book, readErrs: 1, readErrExample: "book " + book.ID + " (timed out)"}
+		}
+		select {
+		case resultCh <- res:
+			return true
+		case <-ctx.Done():
+			// The collector stops draining on cancel; without this
+			// select every worker would block on the send forever.
+			return false
+		}
 	}
-	// Close resultCh once all workers finish.
+	// pctx ends with the run, or when the pool ends without having drained jobCh
+	// (a native worker that panicked): the producer then stops instead of
+	// blocking on a send nobody will receive.
+	pctx, stopProducer := context.WithCancel(ctx)
+	defer stopProducer()
+	poolErr := make(chan error, 1)
 	go func() {
-		wg.Wait()
+		err := env.Pool(ctx, params.Workers, totalBooks, jobCh, process)
+		poolErr <- err
+		if err != nil {
+			stopProducer()
+		}
+		// resultCh closes on every way the pool can end, so the collector's
+		// range always finishes.
 		close(resultCh)
 	}()
 
@@ -873,8 +1164,11 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			dispatched++
 			select {
 			case jobCh <- book:
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-pctx.Done():
+				// pctx ends with the run (it derives from ctx) or when the pool ended
+				// in error with jobCh undrained; ctx alone would never fire for the
+				// second and this send would block forever.
+				return pctx.Err()
 			}
 			return nil
 		}
@@ -891,7 +1185,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 				}
 			}
 		} else {
-			err = sdk.PageBooks(ctx, store, reporter, pageSize, visit)
+			err = sdk.PageBooks(pctx, store, reporter, pageSize, visit)
 		}
 		close(jobCh)
 		producerErr <- err
@@ -902,7 +1196,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		if err := ctx.Err(); err != nil {
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 				"cancelled after %d books examined, %d corrected", examined, written))
-			return err
+			return snap(), err
 		}
 		examined++
 		heartbeat(false)
@@ -945,16 +1239,15 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		// not the book is eligible, and never in a dry run. This precedes the
 		// eligibility check on purpose: an all-failed book is ineligible.
 		if !dryRun && len(res.failedBFs) > 0 {
-			deferred, ok := database.AsCapability[segmentFailureWriter](store)
-			if !ok {
+			if !store.DeferAggregatesAvailable() {
 				writeErrs++
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: the store cannot defer aggregates; %d probe failure(s) not recorded", res.book.ID, len(res.failedBFs)))
 			} else {
-				_, nErr, fErr := recordSegmentProbeFailures(ctx, deferred, reporter, res.failedBFs)
+				_, nErr, fErr := recordSegmentProbeFailures(ctx, env.Writer, reporter, res.failedBFs)
 				if nErr > 0 || fErr != nil {
 					if ctx.Err() != nil {
-						return ctx.Err()
+						return snap(), ctx.Err()
 					}
 					writeErrs += nErr
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
@@ -980,7 +1273,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			// the next run for SkipAgeDays while its total is still short by
 			// every unresolved segment.
 			if !dryRun && res.unresolved == 0 {
-				stampVerifiedAt(store, reporter, res.book.ID)
+				stampVerifiedAt(env.Writer, reporter, res.book.ID)
 			}
 			continue
 		}
@@ -1021,7 +1314,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			}
 			bookID, nSeg := res.book.ID, len(rows)
 			lastSegLog := time.Now()
-			_, uErr := store.UpdateBookFiles(ctx, rows, func(i int, _ bool) {
+			_, uErr := env.Writer.UpdateBookFiles(ctx, rows, func(i int, _ bool) {
 				// A row write just finished: real work, so stamp liveness.
 				registry.TouchLiveness(reporter)
 				if time.Since(lastSegLog) >= reextractSegmentProgressInterval {
@@ -1040,7 +1333,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 					_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 						"cancelled while writing book %s's segments, after %d books examined, %d corrected",
 						bookID, examined, written))
-					return ctx.Err()
+					return snap(), ctx.Err()
 				}
 				// Not stamped verified, so the next run retries this book.
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
@@ -1049,7 +1342,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 				continue
 			}
 		} else if len(res.segs) > 0 {
-			if rErr := store.RecomputeBookAggregates(res.book.ID); rErr != nil {
+			if rErr := env.Writer.RecomputeBookAggregates(res.book.ID); rErr != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: RecomputeBookAggregates failed: %v", res.book.ID, rErr))
 				writeErrs++
@@ -1073,7 +1366,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			nd := res.newDur
 			oldDur := res.book.Duration
 			applied := false
-			row, uErr := store.ModifyBook(res.book.ID, func(cur *database.Book) error {
+			row, uErr := env.Writer.ModifyBook(res.book.ID, func(cur *database.Book) error {
 				if !sameIntPtr(cur.Duration, oldDur) {
 					return database.ErrSkipBookWrite
 				}
@@ -1104,14 +1397,19 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		// incomplete book would hide its short total from the next run for
 		// SkipAgeDays.
 		if res.unresolved == 0 {
-			stampVerifiedAt(store, reporter, res.book.ID)
+			stampVerifiedAt(env.Writer, reporter, res.book.ID)
 		}
 		heartbeat(false)
 	}
 
-	// Wait for producer and surface any non-limit error.
-	if err := <-producerErr; err != nil && err != errLimitReached {
-		return fmt.Errorf("book scan: %w", err)
+	// Wait for producer and surface any non-limit error. A pool that ended in
+	// error is reported before the producer's context error it caused.
+	perr := <-producerErr
+	if err := <-poolErr; err != nil {
+		return snap(), fmt.Errorf("book workers: %w", err)
+	}
+	if err := perr; err != nil && err != errLimitReached {
+		return snap(), fmt.Errorf("book scan: %w", err)
 	}
 
 	if n := warns.suppressed(); n > 0 {
@@ -1135,7 +1433,9 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		total = examined
 	}
 	_ = reporter.UpdateProgress(total, total, summary)
-	return nil
+	out := snap()
+	out.Summary = summary
+	return out, nil
 }
 
 // readFailureCounts renders the two read-failure counters for the progress and

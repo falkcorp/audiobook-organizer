@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.4.2
+// version: 1.6.4
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -659,7 +659,13 @@ func (r *unknownRowsRun) rowSettled(bookID string) {
 	}
 }
 
-func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsStore, params durationReextractParams,
+// t6g4RunUnknownRowsBackfill is the unknown-rows backfill with its four reaches
+// outside the row walk passed in, so HEAD's shell and the native kind run the
+// one implementation: writer (nil when the store cannot defer aggregates), each
+// (the pool runner), setResult (persists the op result) and the store, whose
+// RecomputeBookAggregates is the recompute's write.
+func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRowsStore, writer segmentFailureWriter,
+	each t6g4EachFn, setResult func(UnknownRowsResult) error, params durationReextractParams,
 	dryRun bool, reporter sdk.Reporter) error {
 	workers := unknownRowsConcurrency(params.Workers)
 	res := UnknownRowsResult{DryRun: dryRun}
@@ -818,22 +824,18 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	all, cand, donorIdx, donorCache = nil, nil, nil, nil
 
 	if dryRun {
-		return finishUnknownRowsDryRun(reporter, res, pass1, pass2, perBkt)
+		return finishUnknownRowsDryRun(reporter, setResult, res, pass1, pass2, perBkt)
 	}
 
-	var writer segmentFailureWriter
-	if len(pass1)+len(pass2) > 0 {
-		var ok bool
-		if writer, ok = database.AsCapability[segmentFailureWriter](store); !ok {
-			return fmt.Errorf("unknownRows: the store cannot defer aggregates, so nothing was written")
-		}
+	if len(pass1)+len(pass2) > 0 && writer == nil {
+		return fmt.Errorf("unknownRows: the store cannot defer aggregates, so nothing was written")
 	}
 	run := newUnknownRowsRun(writer, store, pass2)
 
 	// A cancelled run must still bring the aggregates of every row it wrote up
 	// to date, so the leftover sweep below runs on every exit path.
 	runErr := func() error {
-		if err := unknownRowsPool(ctx, reporter, workers, &run.ctr, pass1, "borrowing/promoting", func(_ context.Context, w unknownRowWork) error {
+		if err := t6g4UnknownRowsPool(ctx, each, reporter, workers, &run.ctr, pass1, "borrowing/promoting", func(_ context.Context, w unknownRowWork) error {
 			wrote, wErr := writeUnknownRow(run.writer, w.row, func(cur *database.BookFile) error {
 				return cur.SetMeasuredDuration(w.sec)
 			})
@@ -853,7 +855,7 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 			_, probing := run.pending[id]
 			return !probing
 		}), workers)
-		return unknownRowsPool(ctx, reporter, workers, &run.ctr, groupProbeRows(pass2), "probing", func(ctx context.Context, g []unknownRowWork) error {
+		return t6g4UnknownRowsPool(ctx, each, reporter, workers, &run.ctr, groupProbeRows(pass2), "probing", func(ctx context.Context, g []unknownRowWork) error {
 			return run.probeAndSettle(ctx, g)
 		})
 	}()
@@ -878,7 +880,7 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	summary := unknownRowsSummary(res)
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(res.Scanned, max(res.Scanned, 1), summary)
-	setErr := registry.ReporterSetResult(reporter, res)
+	setErr := setResult(res)
 	switch {
 	case runErr != nil:
 		return runErr
@@ -890,15 +892,26 @@ func (p *Plugin) runUnknownRowsBackfill(ctx context.Context, store unknownRowsSt
 	return nil
 }
 
-// unknownRowsPool runs fn over items through registry.RunItems with the pool
-// size set EXPLICITLY (RunItems is sequential by default). Each item checks ctx
-// first and stamps liveness when done. Label runs inside the worker goroutines,
-// so every counter it reads is atomic.
-func unknownRowsPool[T any](ctx context.Context, reporter sdk.Reporter, workers int, ctr *unknownRowsCounters,
+// t6g4UnknownRowsPool runs fn over items through any loop runner (each is HEAD's
+// registry.RunItems or the native tasks.RunItems) with the pool size set
+// EXPLICITLY (RunItems is sequential by default). Each item checks ctx first and
+// stamps liveness when done. Label runs inside the worker goroutines, so every
+// counter it reads is atomic.
+func t6g4UnknownRowsPool[T any](ctx context.Context, each t6g4EachFn, reporter sdk.Reporter, workers int, ctr *unknownRowsCounters,
 	items []T, name string, fn func(context.Context, T) error) error {
 	ctr.done.Store(0)
 	total := len(items)
-	return registry.RunItems(ctx, reporter, items, func(ctx context.Context, it T) error {
+	return each(ctx, total, t6g4EachOpts{
+		Concurrency: workers,
+		Reason:      "the run's workers parameter, clamped to [1, unknownRowsMaxWorkers] by unknownRowsConcurrency",
+		Collect:     true,
+		Label: func(i, _ int) string {
+			return fmt.Sprintf("%s %d/%d (measured=%d failed=%d env-skipped=%d changed=%d write-err=%d probes=%d)",
+				name, ctr.done.Load(), total,
+				ctr.borrowed.Load()+ctr.promoted.Load()+ctr.probedKnown.Load(), ctr.probeFailed.Load(),
+				ctr.envSkipped.Load(), ctr.changed.Load(), ctr.writeErrs.Load(), ctr.probes.Load())
+		},
+	}, func(ctx context.Context, i int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -906,16 +919,7 @@ func unknownRowsPool[T any](ctx context.Context, reporter sdk.Reporter, workers 
 			ctr.done.Add(1)
 			registry.TouchLiveness(reporter)
 		}()
-		return fn(ctx, it)
-	}, registry.RunItemsOptions{
-		Concurrency: workers,
-		ErrMode:     registry.ErrModeCollect,
-		Label: func(i, _ int) string {
-			return fmt.Sprintf("%s %d/%d (measured=%d failed=%d env-skipped=%d changed=%d write-err=%d probes=%d)",
-				name, ctr.done.Load(), total,
-				ctr.borrowed.Load()+ctr.promoted.Load()+ctr.probedKnown.Load(), ctr.probeFailed.Load(),
-				ctr.envSkipped.Load(), ctr.changed.Load(), ctr.writeErrs.Load(), ctr.probes.Load())
-		},
+		return fn(ctx, items[i])
 	})
 }
 
@@ -1071,7 +1075,7 @@ func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork)
 	return nil
 }
 
-func finishUnknownRowsDryRun(reporter sdk.Reporter, res UnknownRowsResult, pass1, pass2 []unknownRowWork,
+func finishUnknownRowsDryRun(reporter sdk.Reporter, setResult func(UnknownRowsResult) error, res UnknownRowsResult, pass1, pass2 []unknownRowWork,
 	perBook map[string]*UnknownRowsBookCounts) error {
 	for _, w := range pass1 {
 		if w.src == srcBorrow {
@@ -1101,7 +1105,7 @@ func finishUnknownRowsDryRun(reporter sdk.Reporter, res UnknownRowsResult, pass1
 	summary := unknownRowsSummary(res)
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(res.Scanned, max(res.Scanned, 1), summary)
-	if err := registry.ReporterSetResult(reporter, res); err != nil {
+	if err := setResult(res); err != nil {
 		return fmt.Errorf("unknownRows: persist result: %w", err)
 	}
 	return nil

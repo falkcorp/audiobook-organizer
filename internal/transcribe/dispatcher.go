@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.31.1
+// version: 1.31.2
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-11-03
+// last-edited: 2026-11-15
 
 package transcribe
 
@@ -2562,6 +2562,13 @@ var (
 	poolPaceInterval = 30 * time.Second
 	poolPaceMax      = 6 * time.Minute
 )
+
+// PoolPaceMax is the longest one dispatch may wait for an endpoint to come back
+// (poolPaceMax). A caller that must end a whisper call by a deadline (the native
+// transcribe-file-intros run, which has to yield before its attempt's timeout)
+// sizes its margin from it, so a later change to the allowance moves the margin
+// instead of leaving it too short.
+func PoolPaceMax() time.Duration { return poolPaceMax }
 
 // paceWait is how long to wait for an endpoint this dispatch has no evidence
 // against (no entry in lastErr) to come out of a cooldown an earlier dispatch

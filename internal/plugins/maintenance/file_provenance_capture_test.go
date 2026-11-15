@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_capture_test.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: 6b40f9d2-7c15-4e83-a09b-2d5e1f847c36
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -48,14 +48,14 @@ func runCapture(t *testing.T, p *Plugin, params map[string]any) fileProvCaptureR
 	raw, err := json.Marshal(params)
 	require.NoError(t, err)
 
-	res, err := p.captureFileProvenance(context.Background(), raw)
+	res, err := captureFileProvenanceHEAD(p, context.Background(), raw)
 	require.NoError(t, err)
 	return res
 }
 
 func TestFileProvenanceCaptureRequiresRoots(t *testing.T) {
 	p, _, _ := newCaptureFixture(t, nil)
-	_, err := p.captureFileProvenance(context.Background(), json.RawMessage(`{}`))
+	_, err := captureFileProvenanceHEAD(p, context.Background(), json.RawMessage(`{}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "root")
 }
@@ -184,7 +184,7 @@ func TestFileProvenanceCaptureSurvivesAMissingRoot(t *testing.T) {
 
 func TestFileProvenanceCaptureFailsWithoutAProvenanceStore(t *testing.T) {
 	p := New(provDeps{prov: nil})
-	_, err := p.captureFileProvenance(context.Background(),
+	_, err := captureFileProvenanceHEAD(p, context.Background(),
 		json.RawMessage(`{"roots":["/tmp"]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not initialized")
@@ -218,4 +218,16 @@ func TestFileProvenanceCaptureContinuesPastAnUnreadableSubdirectory(t *testing.T
 	assert.Positive(t, res.Errors, "the unreadable directory was not counted")
 	assert.Equal(t, 2, res.Recorded,
 		"the sweep stopped at the unreadable directory instead of continuing past it")
+}
+
+// captureFileProvenanceHEAD runs HEAD's capture body the way HEAD's shell does
+// (the shared params decode, the head env over the deps' provenance store, the
+// report lines) and returns the tally the shell discards, so a test asserts the
+// numbers as values rather than scraping a log line.
+func captureFileProvenanceHEAD(p *Plugin, ctx context.Context, rawParams json.RawMessage) (fileProvCaptureResult, error) {
+	params, err := decodeFileProvCaptureParams(rawParams)
+	if err != nil {
+		return fileProvCaptureResult{}, err
+	}
+	return p.runFileProvenanceCaptureCore(ctx, params, p.fileProvenanceCaptureHeadEnv(&fakeReporter{}, params.Apply))
 }
