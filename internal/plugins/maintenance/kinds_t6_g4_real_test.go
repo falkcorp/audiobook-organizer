@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_real_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 075c2d47-deca-45e6-8742-449c0093b857
 // last-edited: 2026-11-14
 
@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
@@ -28,16 +29,20 @@ import (
 
 var _ t6g4Writer = spyT6G4Writer{}
 
-// t6g4RealDeps is a t6g4Deps over p's own store: reads through headT6G4Store,
+// t6g4RealDeps is a t6g4Deps over p's own deps: reads through headT6G4Store,
 // writes through a spy over headT6G4Writer. handed collects the tasks.Writer each
 // NewWriter call received.
 func t6g4RealDeps(p *Plugin, rec *t6g4Calls, handed *[]tasks.Writer) t6g4Deps {
 	store := p.deps.OpsStore()
+	prov := p.deps.FileProvenanceStore()
 	return t6g4Deps{
-		Store: headT6G4Store{OpsStore: store, deps: p.deps},
+		Store: headT6G4Store{OpsStore: store, deps: p.deps, prov: prov},
+		// fs-regroup's live apply parks the scan through the same service HEAD's shell
+		// uses: the plugin's own deps.
+		Scan: p.deps,
 		NewWriter: func(w tasks.Writer) t6g4Writer {
 			*handed = append(*handed, w)
-			return spyT6G4Writer{inner: headT6G4Writer{store: store, deps: p.deps}, rec: rec}
+			return spyT6G4Writer{inner: headT6G4Writer{store: store, deps: p.deps, prov: prov}, rec: rec}
 		},
 	}
 }
@@ -157,5 +162,30 @@ func TestFileIntroHEADShell_DefRunWritesThroughTheStore(t *testing.T) {
 	}
 	if n != 3 {
 		t.Fatalf("fixture has %d files, want 3", n)
+	}
+}
+
+// TestAIDedupBatchKind_LiveRunBuildsItsWriterFromRCAndRecordsReviewItems: the one
+// write of ai-dedup-batch is the batch submission, declared as review_items. The
+// native run must build its writer from THIS run's rc.Writer() and record exactly
+// that resource. HEAD's shell is driven in dedup_ops_batch_test.go through
+// runAIDedupBatchHEAD, because def.Run builds a real OpenAI parser from config.
+func TestAIDedupBatchKind_LiveRunBuildsItsWriterFromRCAndRecordsReviewItems(t *testing.T) {
+	deps, pr := fakeT6G4Deps(t)
+	pr.store.aiParsing = true
+	pr.store.authors = []database.Author{{ID: 1, Name: "Alfred Pennyworth"}}
+	def := t6g4KindByName(t, t6g4Kinds(deps, nil), aiDedupBatchKind)
+	run := &t6g4RunWriter{name: "run"}
+	_, rc := newT6G4RC(aiDedupBatchKind, tasks.ModeLive, run)
+	if _, err := runT6G4Kind(t, def, rc, ""); err != nil {
+		t.Fatal(err)
+	}
+	if pr.newWriterCalls != 1 || pr.handed != tasks.Writer(run) {
+		t.Errorf("NewWriter called %d time(s) with %v, want once with this run's rc.Writer()", pr.newWriterCalls, pr.handed)
+	}
+	t6g4SameResources(t, pr.store.rec, ops.ResReviewItems)
+	declared := tasks.CommonOf(def).Effects.WriteSet()
+	if len(declared) != 1 || declared[0].Kind != string(ops.ResReviewItems) {
+		t.Errorf("declared write set = %v, want exactly review_items", declared)
 	}
 }
