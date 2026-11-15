@@ -658,6 +658,7 @@ internal/plugins/maintenance.itunesHealCore
 internal/plugins/maintenance.itunesHealParallelism
 internal/plugins/maintenance.junkTitleFixer.buildJunkIndex
 internal/plugins/maintenance.junkTitleFixer.candidateTitle
+internal/plugins/maintenance.optimizeAwaitTicking
 internal/plugins/maintenance.rbfPreviewWriter.CreateOperationChange
 internal/plugins/maintenance.rbfPreviewWriter.ModifyBookFile
 internal/plugins/maintenance.rbfPreviewWriter.RecomputeBookAggregates

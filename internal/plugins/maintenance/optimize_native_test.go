@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize_native_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9a1e4c52-3d78-4b06-8e2f-5c7d0b1a6f93
 // last-edited: 2026-11-15
 
@@ -247,6 +247,10 @@ func TestT6G6Optimize_ChildOutlivesDeadlineYieldsAndResumeReattaches(t *testing.
 	require.Equal(t, "temp-file-cleanup", cp.InFlight.Name)
 	require.Equal(t, "books.maintenance.temp-file-cleanup#1", cp.InFlight.RunID)
 	require.False(t, cp.StartedAt.IsZero())
+	// The yield carries progress the kernel accepts: no child finished in this
+	// attempt, yet the run's reported done moved past its start (0).
+	require.Greater(t, h.lastReported(), int64(0))
+	require.Equal(t, int64(cp.Steps), h.lastReported(), "the checkpointed steps are the reported done")
 
 	// Resume: the child has finished in between; the resumed attempt waits on the
 	// same run and starts only the three children left.
