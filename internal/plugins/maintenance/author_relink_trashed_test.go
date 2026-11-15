@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_relink_trashed_test.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: c5e8a1f4-2d67-4b93-8f0c-6a9d3e71b254
-// last-edited: 2026-11-09
+// last-edited: 2026-11-13
 
 package maintenance
 
@@ -97,8 +97,7 @@ func TestMergeAuthorInto_MovesTrashedBookCredit(t *testing.T) {
 	live := mkRelinkTrashedBook(t, s, "merge-live", from.ID, false)
 	trashed := mkRelinkTrashedBook(t, s, "merge-trashed", from.ID, true)
 
-	p := &Plugin{deps: fakeDeps{store: s}}
-	n, _, err := p.mergeAuthorInto(context.Background(), *from, *into, false, "op-relink-merge", slog.Default())
+	n, _, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{s}, t6g1HeadWriter{s}, *from, *into, false, "op-relink-merge", slog.Default())
 	require.NoError(t, err)
 	require.Equal(t, 2, n, "both the live and the trashed book must be relinked")
 
@@ -128,8 +127,7 @@ func TestUnlinkAndDeleteAuthor_PromotesSurvivorOnTrashedBook(t *testing.T) {
 
 	trashed := mkRelinkTrashedBook(t, s, "strip-trashed", junk.ID, true, keep.ID)
 
-	p := &Plugin{deps: fakeDeps{store: s}}
-	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk,
+	n, held, err := unlinkAndDeleteAuthorVia(context.Background(), t6g1HeadStore{s}, t6g1HeadWriter{s}, *junk,
 		map[int]bool{junk.ID: true}, nil, false, slog.Default())
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
@@ -153,12 +151,11 @@ func TestUnlinkAndDeleteAuthor_SoleCreditIsHeldAndRowKept(t *testing.T) {
 	sole := mkRelinkTrashedBook(t, s, "sole-credit", junk.ID, false)
 	shared := mkRelinkTrashedBook(t, s, "shared-credit", junk.ID, false, keep.ID)
 
-	p := &Plugin{deps: fakeDeps{store: s}}
 	doomed := map[int]bool{junk.ID: true}
 
 	// Dry run and apply agree.
 	for _, dry := range []bool{true, false} {
-		n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, doomed, nil, dry, slog.Default())
+		n, held, err := unlinkAndDeleteAuthorVia(context.Background(), t6g1HeadStore{s}, t6g1HeadWriter{s}, *junk, doomed, nil, dry, slog.Default())
 		require.NoError(t, err)
 		require.Equal(t, 1, n, "only the co-authored book is unlinked (dry=%v)", dry)
 		require.Equal(t, []string{sole}, held, "dry=%v", dry)
@@ -173,7 +170,7 @@ func TestUnlinkAndDeleteAuthor_SoleCreditIsHeldAndRowKept(t *testing.T) {
 
 	// A book relinked to a real author in the same run is not at risk: a
 	// run that has relinked it (dry-run prediction) may delete the row.
-	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, doomed, map[string]bool{sole: true}, true, slog.Default())
+	n, held, err := unlinkAndDeleteAuthorVia(context.Background(), t6g1HeadStore{s}, t6g1HeadWriter{s}, *junk, doomed, map[string]bool{sole: true}, true, slog.Default())
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Empty(t, held)
@@ -194,8 +191,7 @@ func TestUnlinkAndDeleteAuthor_NarratorOnlyCoCreditIsHeld(t *testing.T) {
 		{BookID: id, AuthorID: reader.ID, Role: "narrator", Position: 1},
 	}))
 
-	p := &Plugin{deps: fakeDeps{store: s}}
-	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, map[int]bool{junk.ID: true}, nil, false, slog.Default())
+	n, held, err := unlinkAndDeleteAuthorVia(context.Background(), t6g1HeadStore{s}, t6g1HeadWriter{s}, *junk, map[int]bool{junk.ID: true}, nil, false, slog.Default())
 	require.NoError(t, err)
 	require.Zero(t, n)
 	require.Equal(t, []string{id}, held)
@@ -214,8 +210,7 @@ func TestUnlinkAndDeleteAuthor_JunkCoCreditIsHeld(t *testing.T) {
 	require.NoError(t, err)
 	id := mkRelinkTrashedBook(t, s, "junk-co", junk.ID, false, studio.ID)
 
-	p := &Plugin{deps: fakeDeps{store: s}}
-	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, map[int]bool{junk.ID: true}, nil, false, slog.Default())
+	n, held, err := unlinkAndDeleteAuthorVia(context.Background(), t6g1HeadStore{s}, t6g1HeadWriter{s}, *junk, map[int]bool{junk.ID: true}, nil, false, slog.Default())
 	require.NoError(t, err)
 	require.Zero(t, n)
 	require.Equal(t, []string{id}, held)
@@ -231,8 +226,7 @@ func TestUnlinkAndDeleteAuthor_TrashedSoleCreditDoesNotHoldTheRow(t *testing.T) 
 	require.NoError(t, err)
 	mkRelinkTrashedBook(t, s, "trashed-sole", junk.ID, true)
 
-	p := &Plugin{deps: fakeDeps{store: s}}
-	n, held, err := p.unlinkAndDeleteAuthor(context.Background(), *junk, map[int]bool{junk.ID: true}, nil, false, slog.Default())
+	n, held, err := unlinkAndDeleteAuthorVia(context.Background(), t6g1HeadStore{s}, t6g1HeadWriter{s}, *junk, map[int]bool{junk.ID: true}, nil, false, slog.Default())
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Empty(t, held)
@@ -393,8 +387,7 @@ func TestMergePaths_AStoreWithoutTheMergeDeleteCapabilityRefuses(t *testing.T) {
 	t.Run("mergeAuthorInto", func(t *testing.T) {
 		s, from, into, book := world(t, "merge")
 		hidden := noMergeDeleteStore{Store: s}
-		p := &Plugin{deps: fakeDeps{store: hidden}}
-		n, _, err := p.mergeAuthorInto(context.Background(), *from, *into, false, "op-capless", slog.Default())
+		n, _, err := mergeAuthorIntoVia(context.Background(), t6g1HeadStore{hidden}, t6g1HeadWriter{hidden}, *from, *into, false, "op-capless", slog.Default())
 		require.ErrorIs(t, err, database.ErrAuthorMergeDeleteUnsupported)
 		require.Zero(t, n, "no credit moved")
 		untouched(t, s, from, book)
@@ -402,8 +395,7 @@ func TestMergePaths_AStoreWithoutTheMergeDeleteCapabilityRefuses(t *testing.T) {
 	t.Run("author-id-repair", func(t *testing.T) {
 		s, from, into, book := world(t, "idrepair")
 		hidden := noMergeDeleteStore{Store: s}
-		p := &Plugin{deps: fakeDeps{store: hidden}}
-		ch, wrote, ledger := p.authorIDMergeOne(hidden, false, "op-capless", "capless", *from, *into, slog.Default())
+		ch, wrote, ledger := authorIDMergeOneVia(t6g1HeadStore{hidden}, t6g1HeadWriter{hidden}, false, "op-capless", "capless", *from, *into, slog.Default())
 		require.Equal(t, authorIDMergeFailed, ch.Outcome)
 		require.Contains(t, ch.Error, "AuthorMergeDeleter")
 		require.False(t, wrote, "nothing written")
