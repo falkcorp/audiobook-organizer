@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.8.0
+# version: 1.9.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-15
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -15,6 +15,7 @@ Run: python3 -m pytest scripts/tests/test_record_r0_reach.py -q
 
 from __future__ import annotations
 
+import contextlib
 import http.server
 import importlib.util
 import io
@@ -969,6 +970,62 @@ class OwnerSetTest(unittest.TestCase):
                 routes, [[200, 403, 403], [403, 403, 403]], subset, gated
             )
         self.assertIn("nothing shows the gate on", str(cm.exception))
+
+    def _record_with(self, owner_status: int):
+        """record() with every boot faked: the main recording allows (200) the first
+        principal everywhere, and the owner-set boots answer ``owner_status`` to it."""
+        routes = [{"method": m, "path": p} for m, p in rec.OWNER_ROUTES] + [
+            {"method": "GET", "path": "/api/v1/health"}
+        ]
+        table = rec.principal_table()
+        n_on = sum(1 for p in table if p["kind"] != "authoff")
+
+        def fake_boot(args, binary, rts, principals, auth_off, owner_set=False):
+            mine = [p for p in principals if (p["kind"] == "authoff") == auth_off]
+            cols = []
+            for k in range(len(mine)):
+                allowed = k == 0 and not auth_off
+                st = (owner_status if owner_set else 200) if allowed else 403
+                cols.append([st] * len(rts))
+            return {
+                "columns": cols,
+                "tasks": [],
+                "approvals": [],
+                "census": {},
+                "canary": {},
+            }
+
+        self.assertGreater(n_on, 1)
+        args = rec.build_parser().parse_args(["--check", "--binary", "r0"])
+        manifest = {"r0_tag": "v0", "r0_binary_sha256": "x"}
+        patches = [
+            mock.patch.object(
+                rec.w, "MANIFEST_PATH", mock.Mock(read_text=lambda **k: json.dumps(manifest))
+            ),
+            mock.patch.object(rec.ra, "check_answers_still_valid"),
+            mock.patch.object(rec.w, "read_r0_tag", return_value="v0"),
+            mock.patch.object(rec, "load_routes", return_value={"r0_tag": "v0", "routes": routes}),
+            mock.patch.object(rec.w, "check_native_binary"),
+            mock.patch.object(rec.w, "sha256_file", return_value="x"),
+            mock.patch.object(rec.w, "check_outside_maintenance_window"),
+            mock.patch.object(rec, "boot_and_record", side_effect=fake_boot),
+            mock.patch.object(rec, "overlay_digest", return_value="d"),
+            mock.patch.object(rec, "recorded_by", return_value={}),
+            mock.patch.object(rec, "build_verdicts", return_value={}),
+            mock.patch.object(rec, "principals_doc", return_value={}),
+        ]
+        with contextlib.ExitStack() as stack:
+            for pt in patches:
+                stack.enter_context(pt)
+            return rec.record(args)
+
+    def test_record_fails_when_the_owner_boots_left_the_gate_inert(self):
+        with self.assertRaises(rec.RecorderError) as cm:
+            self._record_with(owner_status=200)  # answers as the main recording did
+        self.assertIn("OWNER_EMAIL did not reach R0", str(cm.exception))
+
+    def test_record_accepts_owner_boots_whose_gate_refused_the_allowed_principal(self):
+        self._record_with(owner_status=403)
 
     def test_the_columns_of_the_two_boots_are_stitched_in_principal_order(self):
         table = [

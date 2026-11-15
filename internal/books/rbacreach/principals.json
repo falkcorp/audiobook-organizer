@@ -1,9 +1,9 @@
 {
  "_header": {
   "file": "internal/books/rbacreach/principals.json",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "guid": "b3c2f6e1-7d48-4a15-9e0b-5c1a8d2f4e67",
-  "last-edited": "2026-11-13"
+  "last-edited": "2026-11-15"
  },
  "what": "the principal table of 05-rbac section 12; the Go oracle seeds the same rows",
  "users": {
