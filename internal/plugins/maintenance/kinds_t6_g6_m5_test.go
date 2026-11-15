@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_m5_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 3e8b6d14-52a7-4c9f-b1d0-7a4f92c6e385
 // last-edited: 2026-11-15
 
@@ -527,6 +527,13 @@ func TestT6G6Optimize_ChildKindsAreTheLaunchedConstants(t *testing.T) {
 // valid (the proven repoint fixture's own item), so a plain json.Unmarshal would
 // accept it: only the strict decode can refuse it, and the control row (the same
 // item, no loose key) runs the repoint to the end.
+//
+// Two layers refuse. The kind's own decodeStrictParams refuses the unknown key,
+// the duplicate key and the unknown field ("decode params"). Data after the
+// object never reaches the kind: the executor's decode of the start request
+// (json.Unmarshal into the raw params, core/tasks/erased.go) refuses it first, so
+// that row asserts the executor's refusal and that nothing ran. Either way HEAD's
+// "unexpected data after the params object" refusal holds.
 func TestT6G6Native_RepointRefusesLooseParams(t *testing.T) {
 	gate := &t6g6GateWriter{name: "gotham"}
 	run := func(t *testing.T, params func(f rbfFixture) string) (*t6g6Probe, error) {
@@ -535,7 +542,7 @@ func TestT6G6Native_RepointRefusesLooseParams(t *testing.T) {
 		p.store = t6g6RBFStore{s: f.s}
 		p.rec.backing = f.s
 		def := t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), rbfKind)
-		_, err := runT6G6Kind(t, def, tasks.ModeLive, gate, params(f))
+		_, err := runT6G6KindRefusing(t, def, tasks.ModeLive, gate, params(f))
 		return p, err
 	}
 	item := func(f rbfFixture) string {
@@ -548,18 +555,21 @@ func TestT6G6Native_RepointRefusesLooseParams(t *testing.T) {
 	require.NoError(t, err, "the control payload applies")
 	require.NotEmpty(t, p.rec.snapshot())
 
-	for name, params := range map[string]func(f rbfFixture) string{
-		"unknown key":   func(f rbfFixture) string { return `{"repoints":[` + item(f) + `],"bogus":1}` },
-		"duplicate key": func(f rbfFixture) string { return `{"repoints":[` + item(f) + `],"repoints":[` + item(f) + `]}` },
-		"trailing data": func(f rbfFixture) string { return `{"repoints":[` + item(f) + `]} {}` },
-		"unknown field": func(f rbfFixture) string {
+	for name, c := range map[string]struct {
+		params func(f rbfFixture) string
+		want   string // a substring of the refusal
+	}{
+		"unknown key":   {func(f rbfFixture) string { return `{"repoints":[` + item(f) + `],"bogus":1}` }, "decode params"},
+		"duplicate key": {func(f rbfFixture) string { return `{"repoints":[` + item(f) + `],"repoints":[` + item(f) + `]}` }, "decode params"},
+		"trailing data": {func(f rbfFixture) string { return `{"repoints":[` + item(f) + `]} {}` }, "do not decode"},
+		"unknown field": {func(f rbfFixture) string {
 			it := item(f)
 			return `{"repoints":[` + it[:len(it)-1] + `,"bogus":1}]}`
-		},
+		}, "decode params"},
 	} {
-		p, err := run(t, params)
+		p, err := run(t, c.params)
 		require.Error(t, err, name)
-		require.Contains(t, err.Error(), "decode params", name)
+		require.Contains(t, err.Error(), c.want, name)
 		require.Empty(t, p.rec.snapshot(), name+" wrote")
 	}
 }
