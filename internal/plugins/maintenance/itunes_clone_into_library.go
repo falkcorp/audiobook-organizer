@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-11-15
 
@@ -553,6 +553,11 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)),
 		tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResUserState)),
+		// sync_identity: the clone's copy takes over the source's sync id
+		// (merge.FollowVersionHandover, through CreateOrganizedVersion) and a rollback's
+		// carry moves it back (CarryStateBeforeHardDelete, CarryStateBetweenLiveBooks:
+		// MintOrGetSyncID, RecordSyncMerge); sync_item: / sync_file: / sync_alias_use rows.
+		tasks.Res("books", string(ops.ResSyncIdentity)),
 		// files: a live apply reflinks audio into the library tree (CloneBookIntoLibrary,
 		// Reflink) and rollback removes those files, so a clone must not run beside
 		// another bytes-on-disk writer such as the empty-folder sweep.

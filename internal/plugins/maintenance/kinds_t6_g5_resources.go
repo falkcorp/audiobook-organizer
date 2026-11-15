@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_resources.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d2a4e8b7-6f13-4c95-b0e1-3a7c95d4f208
 // last-edited: 2026-11-15
 
@@ -33,15 +33,20 @@ import "github.com/falkcorp/audiobook-organizer/pkg/ops"
 // nothing else: the OperationChange rows (opchange:), and the merge sibling-move
 // journal (merge:sibling-journal:<id>), which is the undo payload of one merge.
 // A record keyed on a book or a version group belongs to `books`: path_history:
-// rows (a per-book path log), and the merge group-redirect keys.
+// rows (a per-book path log), and the merge group-redirect keys. Sync ids and
+// their redirects (the sync_item:, sync_file: and sync_alias_use families) are
+// `sync_identity`, F5-06's constant, wherever a merge follow or a handover writes
+// them; a method that also moves real listening state keeps `user_state` too.
 // TestT6G5Resources_EveryNameIsAnOpsConstant checks the values.
 var t6g5WriterResources = map[string][]ops.Resource{
-	// The carry moves listening state (user_state) and, when the loser was
-	// finished, stamps the play-count mark on the winner's book row (books).
-	"CarryStateBeforeHardDelete": {ops.ResBooks, ops.ResUserState},
-	"CarryStateBetweenLiveBooks": {ops.ResBooks, ops.ResUserState},
-	"CarryStateThenHardDelete":   {ops.ResBooks, ops.ResUserState},
-	"CloneBookIntoLibrary":       {ops.ResBooks, ops.ResBookFiles, ops.ResFiles, ops.ResAuthors, ops.ResUserState, ops.ResOperations},
+	// The carry moves listening state (user_state), follows the absorbed book's
+	// sync id onto the survivor (sync_identity: FollowAbsorbedJournaled ->
+	// MintOrGetSyncID, RecordSyncMerge) and, when the loser was finished, stamps
+	// the play-count mark on the winner's book row (books).
+	"CarryStateBeforeHardDelete": {ops.ResBooks, ops.ResUserState, ops.ResSyncIdentity},
+	"CarryStateBetweenLiveBooks": {ops.ResBooks, ops.ResUserState, ops.ResSyncIdentity},
+	"CarryStateThenHardDelete":   {ops.ResBooks, ops.ResUserState, ops.ResSyncIdentity},
+	"CloneBookIntoLibrary":       {ops.ResBooks, ops.ResBookFiles, ops.ResFiles, ops.ResAuthors, ops.ResUserState, ops.ResSyncIdentity, ops.ResOperations},
 	"CreateBook":                 {ops.ResBooks},
 	"CreateNarrator":             {ops.ResBooks},
 	"DeleteBook":                 {ops.ResBooks, ops.ResAuthors, ops.ResFieldStates, ops.ResEmbeddings, ops.ResMetadataCache, ops.ResUserState},
@@ -51,7 +56,7 @@ var t6g5WriterResources = map[string][]ops.Resource{
 	"HardDeleteWithoutUserState": {},
 	"ImportSmartPlaylists":       {ops.ResUserState},
 	"InvalidateAuthorsCache":     {},
-	"MergeBooks":                 {ops.ResBooks, ops.ResExternalIDs, ops.ResUserState, ops.ResOperations},
+	"MergeBooks":                 {ops.ResBooks, ops.ResExternalIDs, ops.ResUserState, ops.ResSyncIdentity, ops.ResOperations},
 	"ModifyBook":                 {ops.ResBooks, ops.ResMetadataCache},
 	"ModifyBookFile":             {ops.ResBookFiles, ops.ResBooks},
 	"MoveBookFilesToBook":        {ops.ResBookFiles, ops.ResBooks},
