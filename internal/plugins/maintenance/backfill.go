@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.10.6
+// version: 1.10.7
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
 // last-edited: 2026-11-15
 
@@ -488,10 +488,11 @@ func t6g2ExternalIDBackfillMeta() t6g2Meta {
 
 func t6g2MovementAtomCleanupMeta() t6g2Meta {
 	return t6g2Meta{
-		Kind:     t6g2KindMovementAtomCleanup,
-		Title:    t6g2MovementAtomCleanupTitle,
-		Help:     t6g2MovementAtomCleanupHelp,
-		Effects:  tasks.Writes(t6g2Res(ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks, ops.ResFileProvenance)...),
+		Kind:  t6g2KindMovementAtomCleanup,
+		Title: t6g2MovementAtomCleanupTitle,
+		Help:  t6g2MovementAtomCleanupHelp,
+		// The shared row of t6WriterResources, not a retyped list (kinds_resources.go).
+		Effects:  tasks.Writes(t6g2Res(t6WriterResources["StripMovementAtoms"]...)...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  60 * time.Minute,
@@ -501,10 +502,11 @@ func t6g2MovementAtomCleanupMeta() t6g2Meta {
 
 func t6g2MalformedM4BRemuxMeta() t6g2Meta {
 	return t6g2Meta{
-		Kind:     t6g2KindMalformedM4BRemux,
-		Title:    t6g2MalformedM4BRemuxTitle,
-		Help:     t6g2MalformedM4BRemuxHelp,
-		Effects:  tasks.Writes(t6g2Res(ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks)...),
+		Kind:  t6g2KindMalformedM4BRemux,
+		Title: t6g2MalformedM4BRemuxTitle,
+		Help:  t6g2MalformedM4BRemuxHelp,
+		// The shared row of t6WriterResources, not a retyped list (kinds_resources.go).
+		Effects:  tasks.Writes(t6g2Res(t6WriterResources["RemuxMalformedM4BFiles"]...)...),
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		Timeout:  120 * time.Minute,

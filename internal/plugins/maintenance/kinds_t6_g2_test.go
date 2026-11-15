@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.7
+// version: 1.3.8
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-15
 
@@ -1426,11 +1426,14 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 //     index keys and the build's sentinel, all keyed by book (books).
 //   - DeleteOrphanBookFileAcoustIDEntries: deletes acoustid index keys, which are
 //     book_file segment lookups (book_files); it never writes a book_file row.
-//   - ModifyBook: the books row, the metadata-cache stale stamp on an identity
-//     change and the ident: rows the store stages (books, metadata_cache, indexes).
+//   - ModifyBook: the books row, the author_books_legacy: rows an author id stages,
+//     the metadata-cache stale stamp on an identity change and the ident: rows the
+//     store stages (books, authors, metadata_cache, indexes: the whole book row,
+//     whatever a caller's closure sets today, per the one rule of kinds_resources.go).
 //   - SaveChaptersForBook: chapters are stored under the book (books).
 //   - BatchCreateBookFiles: creates the book_file rows (book_files), then
-//     notifyBookFileChanges and RecomputeBookAggregates rewrite the books row (books).
+//     notifyBookFileChanges and RecomputeBookAggregates rewrite the book through
+//     ModifyBook (the whole book row, as ModifyBook's).
 //   - MigrateBookSigToSidecar: moves a book's signature into its sidecar key (books).
 var t6g2Touches = t6WriterView(nil, reflect.TypeFor[t6g2Writer]())
 
