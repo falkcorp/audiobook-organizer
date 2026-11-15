@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/nightly_compact_activity_log.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 0b7e4d92-5c1a-4f38-9e26-d8a3f17c6b45
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -15,7 +15,6 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -163,7 +162,7 @@ func nightlyCompactActivityLogCore(ctx context.Context, env nightlyCompactActivi
 	startMsg := fmt.Sprintf("Nightly compaction: collapsing every activity entry before %s (local midnight, keeping %d full day(s) before today)",
 		cutoff.Format(time.RFC3339), keep)
 	const opName = "nightly-compact-activity-log"
-	result, err := nightlyCompactAndRecord(ctx, cutoff, startMsg, env)
+	result, err := compactAndRecordCore(ctx, cutoff, startMsg, nightlyCompactRecordEnv{env: env})
 
 	if env.SetResult != nil {
 		if setErr := env.SetResult(result); setErr != nil {
@@ -179,56 +178,25 @@ func nightlyCompactActivityLogCore(ctx context.Context, env nightlyCompactActivi
 	return result, nil
 }
 
-// nightlyCompactAndRecord is the inlined copy of F5-08's compactAndRecordCore
-// (compact_activity_log.go, another row's file), isolated here so the swap
-// is one body replacement: it returns the compaction's own unwrapped error and
-// the result record, and the caller does the SetResult and the opName wrapping.
-// Swap: replace this body with
-//
-//	return compactAndRecordCore(ctx, cutoff, startMsg, nightlyCompactRecordEnv{env})
-//
-// where nightlyCompactRecordEnv adapts env.Log, env.Progress and
-// env.Writer.CompactActivityEntries to compactRecordEnv. F5-18 removes this copy.
-func nightlyCompactAndRecord(ctx context.Context, cutoff time.Time, startMsg string, env nightlyCompactActivityLogEnv) (CompactActivityLogResult, error) {
-	logger.InfoCtx(ctx, startMsg)
-	env.Log(slog.LevelInfo, startMsg)
-	// First liveness stamp BEFORE the store is called: with nothing to do there
-	// are no chunk events, and the watchdog's never_reported strike must not
-	// fire on an op that finished in milliseconds but was slow to persist.
-	env.Progress(0, 0, "starting compaction")
+// nightlyCompactRecordEnv adapts the nightly env to compactRecordEnv, the
+// interface F5-08's compactAndRecordCore takes. It defines all three methods
+// itself: t6g6Env.Log and t6g6Env.Progress are func FIELDS, not methods, so
+// embedding the env would not satisfy the interface, and the compaction write
+// is the env's Writer.
+type nightlyCompactRecordEnv struct {
+	env nightlyCompactActivityLogEnv
+}
 
-	totals, err := env.Writer.CompactActivityEntries(ctx, cutoff, func(ev database.CompactProgressEvent) {
-		msg := fmt.Sprintf("%s: %d days compacted, %d entries removed so far",
-			ev.Backend, ev.Result.DaysCompacted, ev.Result.EntriesDeleted)
-		if !ev.Day.IsZero() {
-			msg += fmt.Sprintf(" (day %s)", ev.Day.UTC().Format("2006-01-02"))
-		}
-		env.Progress(ev.Result.EntriesDeleted, 0, msg)
-	})
+func (e nightlyCompactRecordEnv) Log(level slog.Level, msg string, attrs ...slog.Attr) {
+	e.env.Log(level, msg, attrs...)
+}
 
-	outcome := CompactBackendOutcome{DaysCompacted: totals.DaysCompacted, EntriesDeleted: totals.EntriesDeleted}
-	if err != nil {
-		outcome.Error = err.Error()
-	}
-	result := CompactActivityLogResult{
-		Cutoff:         cutoff.UTC(),
-		DaysCompacted:  totals.DaysCompacted,
-		EntriesDeleted: totals.EntriesDeleted,
-		Backends:       map[string]CompactBackendOutcome{"active": outcome},
-	}
+func (e nightlyCompactRecordEnv) Progress(done, total int, msg string) {
+	e.env.Progress(done, total, msg)
+}
 
-	totalMsg := fmt.Sprintf("Activity compaction totals: %d days compacted, %d entries removed",
-		result.DaysCompacted, result.EntriesDeleted)
-	if err != nil {
-		totalMsg = fmt.Sprintf("Activity compaction FAILED after %d days compacted, %d entries removed: %v",
-			result.DaysCompacted, result.EntriesDeleted, err)
-		env.Log(slog.LevelError, totalMsg)
-	} else {
-		env.Log(slog.LevelInfo, totalMsg)
-	}
-	logger.InfoCtx(ctx, totalMsg)
-	env.Progress(result.EntriesDeleted, result.EntriesDeleted, totalMsg)
-	return result, err
+func (e nightlyCompactRecordEnv) CompactActivityEntries(ctx context.Context, cutoff time.Time, progress database.CompactProgress) (database.CompactResult, error) {
+	return e.env.Writer.CompactActivityEntries(ctx, cutoff, progress)
 }
 
 // nightlyCompactionCutoff returns the start of now's local calendar day, moved
