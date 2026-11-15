@@ -1,11 +1,12 @@
 // file: core/archtest/f803b_probe_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0e5a8c31-7d92-4b64-a1f7-3c6e9d2b5a08
 // last-edited: 2026-11-15
 
 package archtest
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -248,40 +249,110 @@ func TestF803bLinkerFindings(t *testing.T) {
 }
 
 // TestF803bTagsIn: the -tags arguments of build-file lines, in the spellings the
-// repo uses, and not the look-alikes (git's --tags, --no-tags, a name ending
-// in -tags, a make variable).
+// repo uses, and not the look-alikes (git's --tags, --no-tags, a name ending in
+// -tags, a comment). A reference that cannot be resolved is reported, never
+// dropped (round 12, P-1).
 func TestF803bTagsIn(t *testing.T) {
+	vars := map[string]string{"GO_BUILD_TAGS": "pprof", "MORE": "fts5 $(GO_BUILD_TAGS)", "LOOP": "$(LOOP)"}
 	for name, tc := range map[string]struct {
-		body string
-		want string
+		body  string
+		vars  map[string]string
+		want  string // lists, joined
+		unres string // substrings of the unresolved reports, joined with |
 	}{
-		"quoted list":       {`go build -tags "embed_frontend fts5 native_taglib" \` + "\n", "embed_frontend,fts5,native_taglib"},
-		"make variable":     {"\t@go build -tags \"embed_frontend $(GO_BUILD_TAGS)\" -o x .\n", "embed_frontend"},
-		"only a variable":   {"\t@go build -tags \"$(GO_BUILD_TAGS)\" -o x .\n", ""},
-		"bare word":         {"go test -tags pprof -run Pprof ./...\n", "pprof"},
-		"equals":            {"go test -tags=integration ./...\n", "integration"},
-		"comma list":        {"go vet -tags integration,bench ./...\n", "bench,integration"},
-		"double dash":       {"go build --tags unitlifecycle .\n", "unitlifecycle"},
-		"in parentheses":    {"## (go vet/test -tags pprof)\n", "pprof"},
-		"git describe":      {"VERSION := $(shell git describe --tags --always --dirty)\n", ""},
-		"git describe abbr": {"git describe --tags --abbrev=0\n", ""},
-		"no-tags":           {"git fetch --no-tags origin main\n", ""},
-		"name ending":       {"group: cleanup-orphan-rc-tags\n", ""},
-		"two on a line":     {"go vet -tags pprof . && go test -tags native_taglib .\n", "pprof|native_taglib"},
+		"quoted list":       {body: `go build -tags "embed_frontend fts5 native_taglib" \` + "\n", want: "embed_frontend,fts5,native_taglib"},
+		"bare word":         {body: "go test -tags pprof -run Pprof ./...\n", want: "pprof"},
+		"equals":            {body: "go test -tags=integration ./...\n", want: "integration"},
+		"comma list":        {body: "go vet -tags integration,bench ./...\n", want: "bench,integration"},
+		"double dash":       {body: "go build --tags unitlifecycle .\n", want: "unitlifecycle"},
+		"in parentheses":    {body: "echo \"(go vet/test -tags pprof)\"\n", want: "pprof"},
+		"git describe":      {body: "VERSION := $(shell git describe --tags --always --dirty)\n"},
+		"git describe abbr": {body: "git describe --tags --abbrev=0\n"},
+		"no-tags":           {body: "git fetch --no-tags origin main\n"},
+		"name ending":       {body: "group: cleanup-orphan-rc-tags\n"},
+		"comment line":      {body: "# go vet -tags $(NOT_DEFINED)\n"},
+		"two on a line":     {body: "go vet -tags pprof . && go test -tags native_taglib .\n", want: "pprof|native_taglib"},
+		// Make variables (P-1).
+		"variable in a list": {body: "\t@go build -tags \"embed_frontend $(GO_BUILD_TAGS)\" -o x .\n", vars: vars, want: "embed_frontend,pprof"},
+		"only a variable":    {body: "\t@go build -tags \"$(GO_BUILD_TAGS)\" -o x .\n", vars: vars, want: "pprof"},
+		"braces":             {body: "\t@go build -tags \"native_taglib ${GO_BUILD_TAGS}\" .\n", vars: vars, want: "native_taglib,pprof"},
+		"unquoted variable":  {body: "\tgo build -tags $(GO_BUILD_TAGS) .\n", vars: vars, want: "pprof"},
+		"nested variable":    {body: "\tgo build -tags \"$(MORE) bench\" .\n", vars: vars, want: "bench,fts5,pprof"},
+		// Unresolved: reported with the line, not dropped.
+		"undefined variable":  {body: "\tgo build -tags \"embed_frontend $(NOT_DEFINED)\" .\n", vars: vars, unres: "line 1|NOT_DEFINED"},
+		"no variables at all": {body: "\tgo build -tags \"embed_frontend $(GO_BUILD_TAGS)\" .\n", unres: "GO_BUILD_TAGS"},
+		"self reference":      {body: "\tgo build -tags \"$(LOOP)\" .\n", vars: vars, unres: "LOOP"},
+		"make function":       {body: "\tgo build -tags \"$(shell cat tags.txt)\" .\n", vars: vars, unres: "shell cat tags.txt"},
+		"shell variable":      {body: "go build -tags \"$TAGS\" .\n", unres: "\"$TAGS\" is not a build tag"},
+		"shell braces":        {body: "go build -tags \"embed_frontend ${EXTRA_TAGS}\" .\n", unres: "EXTRA_TAGS"},
+		"workflow expression": {body: "run: go test -tags \"${{ matrix.tags }}\" ./...\n", unres: "line 1"},
+		"backticks":           {body: "go build -tags \"`cat tags`\" .\n", unres: "not a build tag"},
 	} {
+		lists, unres := f803bTagsIn(tc.body, tc.vars)
 		var got []string
-		for _, tags := range f803bTagsIn(tc.body) {
+		for _, tags := range lists {
 			got = append(got, strings.Join(tags, ","))
 		}
 		if strings.Join(got, "|") != tc.want {
 			t.Errorf("%s: tag lists %q, want %q", name, strings.Join(got, "|"), tc.want)
 		}
+		if tc.unres == "" && len(unres) != 0 {
+			t.Errorf("%s: unexpected unresolved reports %q", name, unres)
+		}
+		if tc.unres != "" {
+			if len(unres) != 1 {
+				t.Errorf("%s: %d unresolved reports %q, want 1", name, len(unres), unres)
+				continue
+			}
+			for sub := range strings.SplitSeq(tc.unres, "|") {
+				if !strings.Contains(unres[0], sub) {
+					t.Errorf("%s: unresolved report %q lacks %q", name, unres[0], sub)
+				}
+			}
+			if len(lists) != 0 {
+				t.Errorf("%s: an unresolved argument also produced the lists %q", name, lists)
+			}
+		}
 	}
 }
 
-// TestF803bShippedTagSets (round 11, O-1 c): over this repo, the sets the
-// real-binary test builds include the ones the build files name. If the reading
-// of Makefiles, Dockerfiles and workflows stopped matching, the real-binary test
+// TestF803bMakeVars: the assignment forms and the one rule that matters for a
+// default: `?=` keeps an earlier value, `+=` appends, a recipe line is not an
+// assignment, a comment is stripped.
+func TestF803bMakeVars(t *testing.T) {
+	body := strings.Join([]string{
+		"A := one",
+		"B = two  # trailing comment",
+		"C ::= three",
+		"D ?= first",
+		"D ?= second",
+		"E := a",
+		"E += b",
+		"export F := exported",
+		"override G = over",
+		"H ?= default",
+		"\tI := recipe line",
+		"# J := comment",
+		"K=nospace",
+		"L :=",
+		"url := http://x/#frag",
+	}, "\n")
+	got := f803bMakeVars(body)
+	want := map[string]string{"A": "one", "B": "two", "C": "three", "D": "first", "E": "a b", "F": "exported", "G": "over", "H": "default", "K": "nospace", "L": "", "url": "http://x/#frag"}
+	if len(got) != len(want) {
+		t.Errorf("variables = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+// TestF803bShippedTagSets (round 11, O-1 c; round 12, P-1): over this repo, the
+// sets the real-binary test builds include the ones the build files name,
+// make variables resolved, and the deployed set among them. If the reading of
+// Makefiles, Dockerfiles and workflows stopped matching, the real-binary test
 // would build the TagSets() list alone; this fails first.
 func TestF803bShippedTagSets(t *testing.T) {
 	wd, err := os.Getwd()
@@ -316,20 +387,32 @@ func TestF803bShippedTagSets(t *testing.T) {
 		{"integration"},
 		{"bench"},
 		{"unitlifecycle"},
+		// Through $(GO_BUILD_TAGS) in the Makefile: `make build-linux`, which
+		// `make deploy` runs, builds the production binary with this set.
+		{"embed_frontend", "fts5", "native_taglib", "pprof"},
+		{"embed_frontend", "pprof"},
+		{"bench", "pprof"},
 	} {
 		if !has(want...) {
 			t.Errorf("no host tag set %v among %d sets", want, len(sets))
 		}
 	}
-	// A list only a build file names is added to TagSets(): found in a fixture.
-	fixture := writeModule(t, map[string]string{
-		"go.mod":                  "module r\n",
-		"core/go.mod":             "module c\n",
-		"Makefile":                "x:\n\tgo build -tags \"shipit embed_frontend\" .\n",
+
+	// Variables resolve, and an argument that cannot be resolved fails the
+	// derivation by name instead of dropping out. Round 12, P-1.
+	fixture := func(files map[string]string) (string, string) {
+		base := map[string]string{"go.mod": "module r\n", "core/go.mod": "module c\n"}
+		maps.Copy(base, files)
+		dir := writeModule(t, base)
+		return dir, filepath.Join(dir, "core")
+	}
+	_, core := fixture(map[string]string{
+		"Makefile":                "TAGS := pprof\nMORE = $(TAGS) fts5\nDEFAULT ?= shipit\nDEFAULT ?= ignored\nx:\n\tgo build -tags \"embed_frontend $(MORE) $(DEFAULT)\" .\n",
 		".github/workflows/w.yml": "run: go build -tags embed_frontend,fts5 .\n",
 		"scripts/other.sh":        "go build -tags notscanned .\n",
+		"Makefile.local":          "TAGS := local\n",
 	})
-	fsets, fnamed, err := F803bShippedTagSets(filepath.Join(fixture, "core"))
+	fsets, fnamed, err := F803bShippedTagSets(core)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,8 +426,23 @@ func TestF803bShippedTagSets(t *testing.T) {
 		}
 	}
 	slices.Sort(extra)
-	if strings.Join(extra, "|") != "embed_frontend,fts5|embed_frontend,shipit" {
-		t.Errorf("sets added from build files = %v", extra)
+	// Makefile.local is a Makefile too; its TAGS := local overrides in its own
+	// scope only, so the root Makefile's list resolves with its own TAGS.
+	if want := "embed_frontend,fts5|embed_frontend,fts5,pprof,shipit"; strings.Join(extra, "|") != want {
+		t.Errorf("sets added from build files = %v, want %s", extra, want)
+	}
+	for name, files := range map[string]map[string]string{
+		"undefined variable":  {"Makefile": "x:\n\tgo build -tags \"embed_frontend $(NOT_DEFINED_ANYWHERE)\" .\n"},
+		"shell variable":      {"Makefile": "x:\n\tgo build -tags \"$$TAGS\" .\n"},
+		"workflow expression": {".github/workflows/w.yml": "run: go test -tags \"${{ matrix.tags }}\" ./...\n"},
+		"Dockerfile ARG":      {"Dockerfile": "ARG TAGS=embed_frontend\nRUN go build -tags \"$TAGS\" .\n"},
+		"make function":       {"Makefile": "x:\n\tgo build -tags \"$(shell cat tags.txt)\" .\n"},
+	} {
+		_, core := fixture(files)
+		_, _, err := F803bShippedTagSets(core)
+		if err == nil || !strings.Contains(err.Error(), "cannot be reduced to a concrete tag set") || !strings.Contains(err.Error(), "-tags") {
+			t.Errorf("%s: err = %v, want a failure naming the argument", name, err)
+		}
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_gate_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 91c3e5a7-0d48-4f26-8b1e-6a7d2f4c9e03
 // last-edited: 2026-11-15
 
@@ -53,7 +53,8 @@ func redesignRefusal(pending bool, isTestBinary func() bool) error {
 // Exporter and the run-time refusal with its probe (the shape the probe pin
 // reads), healthhttp built on it (a type reference, no construction), a kernel
 // that imports neither in non-test code, and a test file that imports healthhttp
-// and calls New. pending is the marker's value; extra adds or replaces files.
+// and calls New. pending is the marker's value; extra adds or replaces files,
+// and a file whose extra value is gateDelete is removed.
 func gateTree(t *testing.T, pending string, extra map[string]string) string {
 	t.Helper()
 	files := map[string]string{
@@ -89,8 +90,12 @@ func TestBoot(t *testing.T) {
 `,
 	}
 	maps.Copy(files, extra)
+	maps.DeleteFunc(files, func(_, body string) bool { return body == gateDelete })
 	return writeModule(t, files)
 }
+
+// gateDelete, as a gateTree extra's value, removes that file from the tree.
+const gateDelete = "\x00delete"
 
 // TestF803bGate (F8-03 round 8): while the marker is true, a non-test file that
 // imports healthhttp or constructs the Exporter in any spelling is reported, with
@@ -399,6 +404,19 @@ func Boot2() { _ = healthhttp.Register(nil) }
 		}
 		if len(got) != 3 {
 			t.Errorf("%d reports, want 3 (a test file that no tag set builds is exempt too):\n  %s", len(got), strings.Join(got, "\n  "))
+		}
+	})
+
+	// Round 12, P-2: a healthhttp that is not among the loaded packages (renamed or
+	// moved) would drop out of rule (b) without a word. The gate refuses the tree.
+	t.Run("MissingHealthhttpRefused", func(t *testing.T) {
+		root := gateTree(t, "true", map[string]string{
+			"internal/healthhttp/routes.go": gateDelete,
+			"kernel/kernel_test.go":         "package kernel\n",
+		})
+		_, err := F803bGateFindings(root)
+		if err == nil || !strings.Contains(err.Error(), healthhttpPath) || !strings.Contains(err.Error(), "rule (b) would not check it") {
+			t.Errorf("a tree without healthhttp: err = %v, want a refusal naming %s", err, healthhttpPath)
 		}
 	})
 

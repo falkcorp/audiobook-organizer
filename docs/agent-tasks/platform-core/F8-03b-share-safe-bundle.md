@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-03b-share-safe-bundle.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3c8e5f21-7a94-4d06-b2e1-0f6d9a4c7b85 -->
 <!-- last-edited: 2026-11-15 -->
 
@@ -75,7 +75,8 @@ wires it to every byte that leaves, and deletes the marker, the runtime refusal 
    - `diagnostics.RedesignPendingF8_03b` (or its derived replacement);
    - `ErrRedesignPendingF8_03b` with `redesignRefusal`, the `Exporter.isTestBinary` field and `testBinary`;
    - the real-binary proof: `core/health/diagnostics/redesign_binary_test.go` (it builds `testdata/probemain/` under
-     each tag set the repo ships with, through `archtest.F803bShippedTagSets`, and runs it) and `testdata/probemain/`,
+     each tag set `archtest.F803bShippedTagSets` derives from `TagSets()` and the `-tags` lists of the build files, make
+     variables resolved, one build per distinct file selection, and runs it) and `testdata/probemain/`,
      and `redesign_refusal_test.go`;
    - the guard files `core/archtest/f803b_gate.go`, `f803b_gate_test.go`, `f803b_probe.go` and `f803b_probe_test.go`
      (the gate with its build-constraint rule, the probe pin, `F803bShippedTagSets` and `F803bNoLinkerOverride`, which
