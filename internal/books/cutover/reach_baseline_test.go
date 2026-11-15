@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_baseline_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b8f1c64-d702-4e95-a6c3-0e47b9d1f258
 // last-edited: 2026-11-15
 
@@ -274,8 +274,10 @@ func TestReachOracle_RouteAndCellCountsArePinned(t *testing.T) {
 
 // reachServerErrorReasons names the cause of every route R0 answers 5xx to for a
 // probe that was let through: the same closed vocabulary as OK_5XX_REASONS in
-// scripts/r2corpus/record_r0_reach.py, kept here by hand so that changing the
-// recorder's list without this one (or the reverse) fails. A 5xx is a handler
+// scripts/r2corpus/record_r0_reach.py, kept here by hand and held to the
+// recorder's table by TestReachBaseline_ServerErrorReasonsMatchTheRecordersTable,
+// so changing either list without the other fails, whether or not the recording
+// has a 5xx cell on the route. A 5xx is a handler
 // that was reached and could not finish in the throwaway store, never a
 // refusal, and the token says which of its failures it was.
 var reachServerErrorReasons = map[string]string{
@@ -302,6 +304,81 @@ var reachServerErrorReasons = map[string]string{
 	"GET /api/v1/deluge/discover":                               "deluge-unreachable",
 	"POST /api/v1/operations/:id/revert":                        "failed-to-revert-operation",
 	"POST /api/v1/update/apply":                                 "failed-to-apply-update",
+}
+
+const reachRecorderSource = "scripts/r2corpus/record_r0_reach.py"
+
+var (
+	reachRecorderTable = regexp.MustCompile(`(?s)\nOK_5XX_REASONS: [^\n]*= \{\n(.*?)\n\}\n`)
+	reachRecorderEntry = regexp.MustCompile(`"([A-Z]+ /[^"]*)":\s*\(\s*"([^"]+)",`)
+)
+
+// reachRecorderReasons reads OK_5XX_REASONS (route to token) out of the recorder's
+// source text. It fails on a table it cannot find or an entry it cannot read, so a
+// reformatted table cannot make the comparison pass on an empty map.
+func reachRecorderReasons(t testing.TB, src string) map[string]string {
+	t.Helper()
+	m := reachRecorderTable.FindStringSubmatch(src)
+	if m == nil {
+		t.Fatal("OK_5XX_REASONS is not in the recorder's source in the shape this test reads")
+	}
+	out := map[string]string{}
+	for _, e := range reachRecorderEntry.FindAllStringSubmatch(m[1], -1) {
+		out[e[1]] = e[2]
+	}
+	if got, want := len(out), strings.Count(m[1], `": (`); got != want {
+		t.Fatalf("read %d of the table's %d entries", got, want)
+	}
+	return out
+}
+
+// reachServerErrorReasonDiff lists the differences between the two tables.
+func reachServerErrorReasonDiff(goSide, py map[string]string) []string {
+	var diff []string
+	for k, v := range goSide {
+		if pv, ok := py[k]; !ok {
+			diff = append(diff, k+": in reachServerErrorReasons only")
+		} else if pv != v {
+			diff = append(diff, fmt.Sprintf("%s: Go says %q, the recorder says %q", k, v, pv))
+		}
+	}
+	for k := range py {
+		if _, ok := goSide[k]; !ok {
+			diff = append(diff, k+": in the recorder's OK_5XX_REASONS only")
+		}
+	}
+	sort.Strings(diff)
+	return diff
+}
+
+// The two tables are one vocabulary. The cell check below covers a route only when
+// the recording has a 5xx cell on it, which two listed routes lack, so this
+// compares the tables themselves: an edit to one side alone fails here.
+func TestReachBaseline_ServerErrorReasonsMatchTheRecordersTable(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash(reachRecorderSource)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	py := reachRecorderReasons(t, string(raw))
+	if len(py) != len(reachServerErrorReasons) {
+		t.Errorf("the recorder lists %d routes, reachServerErrorReasons %d", len(py), len(reachServerErrorReasons))
+	}
+	if diff := reachServerErrorReasonDiff(reachServerErrorReasons, py); len(diff) > 0 {
+		t.Errorf("reachServerErrorReasons and the recorder's OK_5XX_REASONS differ:\n  %s", strings.Join(diff, "\n  "))
+	}
+	// the comparison itself must see a one-sided edit
+	changed := map[string]string{}
+	for k, v := range reachServerErrorReasons {
+		changed[k] = v
+	}
+	changed["POST /api/v1/update/apply"] = "failed-to-apply-update-x"
+	if len(reachServerErrorReasonDiff(changed, py)) != 1 {
+		t.Error("a one-sided token change is not reported by the comparison")
+	}
+	delete(changed, "POST /api/v1/update/apply")
+	if len(reachServerErrorReasonDiff(changed, py)) != 1 {
+		t.Error("a one-sided route removal is not reported by the comparison")
+	}
 }
 
 // Every 5xx cell carries the token the list names for its route, and no other
