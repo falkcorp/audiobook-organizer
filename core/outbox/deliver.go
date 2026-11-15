@@ -1,7 +1,7 @@
 // file: core/outbox/deliver.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 2a6ad2a4-6bc1-4f3b-b7f1-0ee9e2bb7d3f
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package outbox
 
@@ -705,6 +705,9 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 		if dead {
 			out = outAcked
 		}
+		if h := o.hooks.get(); h.afterFailCommit != nil {
+			h.afterFailCommit(reg.name, row.Seq)
+		}
 		return nil
 	})
 	if err != nil {
@@ -721,7 +724,7 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 		r.log.Warn("outbox: delivery failed; will retry", slog.String("consumer", reg.name), slog.String("topic", ti.name),
 			slog.Uint64("seq", row.Seq), slog.Int("attempt", attempt), slog.String("token", token), slog.String("err_type", errType(herr)))
 	case out == outAcked && dead:
-		o.health.addDead(reg.name, o.now())
+		r.deadLettered(ctx, reg.name)
 		r.log.Error("outbox: message dead-lettered", slog.String("consumer", reg.name), slog.String("topic", ti.name),
 			slog.Uint64("seq", row.Seq), slog.Int("attempts", attempt), slog.String("token", token), slog.String("err_type", errType(herr)))
 	}
@@ -1048,7 +1051,7 @@ func (r *relay) settleRound(ctx context.Context, reg *consumerReg, ti *topicInfo
 			o.inst.retried(ti.name, reg.name)
 		}
 		if cnt.dead > 0 {
-			o.health.addDead(reg.name, o.now())
+			r.deadLettered(ctx, reg.name)
 		}
 		if cnt.gone > 0 {
 			r.log.Warn("outbox: messages under retry were gone from the store; their retry entries were dropped",

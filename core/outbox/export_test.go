@@ -1,7 +1,7 @@
 // file: core/outbox/export_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c3f2f7d8-6a5e-4c61-b8a8-0b2d0b9c4e11
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package outbox
 
@@ -18,6 +18,7 @@ type TestHooks struct {
 	BeforeAckCommit    func(consumer string, seq uint64)
 	AfterAckCommit     func(consumer string, seq uint64)
 	BeforeFailCommit   func(consumer string, seq uint64)
+	AfterFailCommit    func(consumer string, seq uint64)
 	BeforeDeadCommit   func(consumer string, seq uint64)
 	// BeforeRetentionBatch runs after a sweep decided what to delete, before the
 	// batch re-reads the cursors the decision rests on.
@@ -34,6 +35,7 @@ func (o *Outbox) SetTestHooks(h TestHooks) {
 	o.hooks.beforeAckCommit = h.BeforeAckCommit
 	o.hooks.afterAckCommit = h.AfterAckCommit
 	o.hooks.beforeFailCommit = h.BeforeFailCommit
+	o.hooks.afterFailCommit = h.AfterFailCommit
 	o.hooks.beforeDeadCommit = h.BeforeDeadCommit
 	o.hooks.beforeRetentionBatch = h.BeforeRetentionBatch
 }
