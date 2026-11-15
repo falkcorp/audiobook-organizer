@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_test.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: c0ba68fc-0752-49a5-9e51-187eca399e39
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -278,7 +278,7 @@ type t6g5Want struct {
 
 func t6g5Wants() []t6g5Want {
 	return []t6g5Want{
-		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResFiles), string(ops.ResUserState)}},
+		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResFiles), string(ops.ResOperations), string(ops.ResUserState)}},
 		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false, []string{string(ops.ResUserState)}},
 		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState)}},
 		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks)}},

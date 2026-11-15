@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.18.4
+// version: 1.19.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -509,8 +509,8 @@ type itunesCloneEnv struct {
 // itunesCloneIntoLibrary is the v2 shell: HEAD's nil-store check and runner,
 // then the shared core.
 func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, rootDir string, reporter sdk.Reporter) (*icReport, error) {
-	ops, vps := p.deps.OpsStore(), p.deps.VersionPrimaryStore()
-	if ops == nil || vps == nil {
+	opsStore, vps := p.deps.OpsStore(), p.deps.VersionPrimaryStore()
+	if opsStore == nil || vps == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
 	base := p.t6g5HeadBase(ctx, reporter, params.Apply || params.Rollback || params.Repair)
@@ -522,12 +522,12 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 			if reflink == nil {
 				reflink = fileops.Reflink
 			}
-			run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, reads: ops, cloner: p.deps, reflink: reflink, tags: p.deps.BookTagReader()}
+			run := &icRunner{store: icStore{OpsStore: opsStore, ChapterReader: vps}, reads: opsStore, cloner: p.deps, reflink: reflink, tags: p.deps.BookTagReader()}
 			if um := p.deps.MergeUserStateStore(); um != nil {
 				run.userState = um
 			}
 			if writes {
-				cp, ok := database.AsCapability[chapterPersister](ops)
+				cp, ok := database.AsCapability[chapterPersister](opsStore)
 				if !ok {
 					return nil, fmt.Errorf("itunes-clone-into-library: store cannot write chapter tables; refusing to write")
 				}
@@ -556,7 +556,11 @@ func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind
 		// files: a live apply reflinks audio into the library tree (CloneBookIntoLibrary,
 		// Reflink) and rollback removes those files, so a clone must not run beside
 		// another bytes-on-disk writer such as the empty-folder sweep.
-		tasks.Res("books", string(ops.ResFiles)))
+		tasks.Res("books", string(ops.ResFiles)),
+		// operations: CloneBookIntoLibrary reaches organizer.CreateOrganizedVersion,
+		// which journals every apply (RecordOperationChange, RecordPathChange) under
+		// the run's op ID, so a clone must not run beside another undo-journal writer.
+		tasks.Res("books", string(ops.ResOperations)))
 	return tasks.Task(itunesCloneIntoLibraryKind, tasks.TaskSpec[json.RawMessage, *icReport]{
 		Common: t6g5Common(p.itunesCloneIntoLibraryDef(), itunesCloneIntoLibraryKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (*icReport, error) {

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_lease_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b3e5d92-1c48-4f6a-a0d7-5e92c3b1f846
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -9,10 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"sync"
 	"testing"
 
@@ -89,8 +86,8 @@ func TestT6G5Repoint_LeaseLapseMidBookStopsTheBatch(t *testing.T) {
 	store := &repointFakeStore{full: map[string][]database.BookFile{}}
 	for i := range t6g5LapseBookRows {
 		id := fmt.Sprintf("f%d", i)
-		writeFile(t, filepath.Join(dir, fmt.Sprintf("Stem - %02d.mp3", i+1)), 1000)
-		broken := filepath.Join(dir, fmt.Sprintf("Stem - %d", i+1), "35.mp3")
+		writeFile(t, filepath.Join(dir, fmt.Sprintf("Year One - %02d.mp3", i+1)), 1000)
+		broken := filepath.Join(dir, fmt.Sprintf("Year One - %d", i+1), "35.mp3")
 		store.cores = append(store.cores, database.BookFileCore{ID: id, BookID: "b1", FilePath: broken, FileSize: 1000})
 		store.full["b1"] = append(store.full["b1"], database.BookFile{ID: id, BookID: "b1", FilePath: broken, FileSize: 1000})
 	}
@@ -161,32 +158,4 @@ func TestT6G5HeadWriter_NewUserStateProbeErrorIsANilInterface(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list users")
 	assert.True(t, probe == nil, "the failed probe is a nil interface, not a nil pointer inside one")
-}
-
-// t6g5ResLiteral matches tasks.Res("<module>", "<kind literal>").
-var t6g5ResLiteral = regexp.MustCompile(`tasks\.Res\("[^"]*",\s*"`)
-
-// TestT6G5Effects_NoResourceNameLiteral: every resource name this package
-// declares is a pkg/ops constant (string(ops.ResX)), never a string literal, so
-// a coined name does not compile and F5-18's writer stamps the same vocabulary.
-func TestT6G5Effects_NoResourceNameLiteral(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	require.NoError(t, err)
-	checked := 0
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		raw, err := os.ReadFile(name)
-		require.NoError(t, err)
-		checked++
-		for n, line := range strings.Split(string(raw), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "//") {
-				continue
-			}
-			assert.False(t, t6g5ResLiteral.MatchString(line), "%s:%d declares a resource by literal name: %s", name, n+1, strings.TrimSpace(line))
-		}
-	}
-	require.Positive(t, checked, "the guard read the package's source files")
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.1.3
+// version: 1.2.0
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"slices"
 	"sort"
@@ -46,65 +45,8 @@ import (
 // t6g5ScanKey is the library scan's concurrency key the native tests configure.
 const t6g5ScanKey tasks.Key = "books.library-scan"
 
-// t6g5SpyWrites maps EVERY method of t6g5Writer to the books resources a call
-// to it writes, named by the pkg/ops constants. An empty list is a method that
-// changes nothing on disk or in a store: it either runs a closure the spy records
-// separately (HardDeleteWithoutUserState runs the caller's delete, which arrives
-// as DeleteBook, after a read-only user-state check), drops an in-memory cache
-// (InvalidateAuthorsCache) or only reads (NewUserStateProbe). Reflink and
-// CloneBookIntoLibrary change bytes on disk, so they map to files. The spy
-// refuses a method with no entry (t6g5NativeRun.requireWriter fails), and
-// TestT6G5Spy_MapsEveryWriterMethod fails when the interface and this table
-// disagree, so a new writer method cannot slip past the Effects check.
-var t6g5SpyWrites = map[string][]string{
-	"CarryStateBeforeHardDelete": {string(ops.ResUserState)},
-	"CarryStateBetweenLiveBooks": {string(ops.ResUserState)},
-	"CarryStateThenHardDelete":   {string(ops.ResUserState)},
-	"CloneBookIntoLibrary":       {string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResFiles)},
-	"CreateBook":                 {string(ops.ResBooks)},
-	"CreateNarrator":             {string(ops.ResBooks)},
-	"DeleteBook":                 {string(ops.ResBooks), string(ops.ResBookFiles)},
-	"DeleteBookFilesByIDs":       {string(ops.ResBookFiles)},
-	"DeleteMetadataCache":        {string(ops.ResMetadataCache)},
-	"DeleteNarrator":             {string(ops.ResBooks)},
-	"HardDeleteWithoutUserState": {},
-	"ImportSmartPlaylists":       {string(ops.ResUserState)},
-	"InvalidateAuthorsCache":     {},
-	"MergeBooks":                 {string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResExternalIDs), string(ops.ResUserState), string(ops.ResOperations)},
-	"ModifyBook":                 {string(ops.ResBooks)},
-	"ModifyBookFile":             {string(ops.ResBookFiles), string(ops.ResBooks)},
-	"MoveBookFilesToBook":        {string(ops.ResBookFiles), string(ops.ResBooks)},
-	"MoveBookFilesToBookBulk":    {string(ops.ResBookFiles), string(ops.ResBooks)},
-	"NewUserStateProbe":          {},
-	"Reflink":                    {string(ops.ResFiles)},
-	"ReassignExternalID":         {string(ops.ResExternalIDs)},
-	"RecomputeBookAggregates":    {string(ops.ResBooks)},
-	"RecordOperationChange":      {string(ops.ResOperations)},
-	"SaveChaptersForBook":        {string(ops.ResBooks)},
-	"SetBookAuthors":             {string(ops.ResAuthors)},
-	"SetBookNarrators":           {string(ops.ResBooks)},
-	"SetUserPreferenceForUser":   {string(ops.ResUserState)},
-	"UpdateBook":                 {string(ops.ResBooks)},
-	"UpdateBookFiles":            {string(ops.ResBookFiles), string(ops.ResBooks)},
-}
-
-// TestT6G5Spy_MapsEveryWriterMethod keeps t6g5SpyWrites and t6g5Writer in step:
-// a method added to the interface needs a resource entry before any native test
-// can pass, and an entry for a method the interface no longer has is stale.
-func TestT6G5Spy_MapsEveryWriterMethod(t *testing.T) {
-	typ := reflect.TypeFor[t6g5Writer]()
-	var methods []string
-	for i := range typ.NumMethod() {
-		methods = append(methods, typ.Method(i).Name)
-	}
-	var mapped []string
-	for name := range t6g5SpyWrites {
-		mapped = append(mapped, name)
-	}
-	sort.Strings(methods)
-	sort.Strings(mapped)
-	assert.Equal(t, methods, mapped, "t6g5SpyWrites names exactly the methods of t6g5Writer")
-}
+// The resources each writer method writes are t6g5WriterResources, the table in
+// production code that F5-18's writer reads too; the spy below reads the same one.
 
 // t6g5Spy is the writer the native shells are handed: the real HEAD writer
 // with every write the group makes recorded first. Every method is written out
@@ -123,7 +65,7 @@ func (s *t6g5Spy) note(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, name)
-	if _, ok := t6g5SpyWrites[name]; !ok {
+	if _, ok := t6g5WriterResources[name]; !ok {
 		s.unmapped = append(s.unmapped, name)
 	}
 }
@@ -146,8 +88,8 @@ func (s *t6g5Spy) recorded() []string {
 	defer s.mu.Unlock()
 	seen := map[string]bool{}
 	for _, c := range s.calls {
-		for _, r := range t6g5SpyWrites[c] {
-			seen[r] = true
+		for _, r := range t6g5WriterResources[c] {
+			seen[string(r)] = true
 		}
 	}
 	out := make([]string, 0, len(seen))
@@ -480,9 +422,9 @@ func TestT6G5Native_MarkMissingFiles(t *testing.T) {
 func TestT6G5Native_MissingFileRepoint(t *testing.T) {
 	s := newRepairPebble(t)
 	dir := t.TempDir()
-	real := filepath.Join(dir, "Stem - 02.mp3")
+	real := filepath.Join(dir, "Year One - 02.mp3")
 	require.NoError(t, os.WriteFile(real, make([]byte, 1234), 0o644))
-	broken := filepath.Join(dir, "Stem - 2", "35.mp3")
+	broken := filepath.Join(dir, "Year One - 2", "35.mp3")
 	const book = "01BATMAN00000000000000RP01"
 	_, err := s.CreateBook(&database.Book{ID: book, Title: "The Long Halloween", FilePath: dir})
 	require.NoError(t, err)
@@ -699,9 +641,9 @@ func TestT6G5Native_CloneApply(t *testing.T) {
 // could lose files and no test would notice.
 func TestT6G5Native_CloneMixedApplyReflinksThroughTheWriter(t *testing.T) {
 	f := newICFixture(t)
-	lib := filepath.Join(f.root, "Author", "Book M", "01.mp3")
+	lib := filepath.Join(f.root, "Bruce Wayne", "The Long Halloween", "01.mp3")
 	it := f.itunes("02.mp3")
-	f.book(t, "M", "vg-m", "Book M", []string{lib, it})
+	f.book(t, "M", "vg-m", "The Long Halloween", []string{lib, it})
 	p := t6g5ClonePlugin(f)
 	p.reflinkFile = fileops.CopyFileIngestExclusive // a plain exclusive copy: CI filesystems cannot clone
 
@@ -717,7 +659,7 @@ func TestT6G5Native_CloneMixedApplyReflinksThroughTheWriter(t *testing.T) {
 	require.Equal(t, icOutcomeApplied, g.Outcome, g.Reason+g.Error)
 	assert.Equal(t, 1, r.spy.count("Reflink"), "the iTunes file was cloned through the writer")
 	assert.Contains(t, r.spy.recorded(), string(ops.ResFiles), "the clone's bytes on disk are a recorded write")
-	_, err := os.Stat(filepath.Join(f.root, "Author", "Book M", "02.mp3"))
+	_, err := os.Stat(filepath.Join(f.root, "Bruce Wayne", "The Long Halloween", "02.mp3"))
 	require.NoError(t, err, "the clone landed in the library")
 }
 

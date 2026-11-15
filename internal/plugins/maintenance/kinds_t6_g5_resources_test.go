@@ -1,0 +1,262 @@
+// file: internal/plugins/maintenance/kinds_t6_g5_resources_test.go
+// version: 1.0.0
+// guid: 5c9b940e-34ff-4da6-88ba-5dbfff0b5b2a
+// last-edited: 2026-11-15
+
+package maintenance
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/falkcorp/mediacore/tasks"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// These tests tie the three places a resource name lives: the method table
+// (t6g5WriterResources, the one F5-18's writer reads), each kind's declared
+// Effects, and the pkg/ops vocabulary. They compare VALUES and walk the parsed
+// source, so a spelling trick (a split line, a raw string, an alias constant, a
+// helper) cannot get past them the way it got past a line regex.
+
+// opsResourceNames parses pkg/ops/effects.go and returns every constant of type
+// Resource, as name -> value. It is read from source, not hand-typed, so a
+// constant added to pkg/ops is known here the day it lands. The path is found
+// from the working directory (CI builds with -trimpath, which breaks
+// runtime.Caller).
+func opsResourceNames(t *testing.T) map[string]string {
+	t.Helper()
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	src := filepath.Join(wd, "..", "..", "..", "pkg", "ops", "effects.go")
+	f, err := parser.ParseFile(token.NewFileSet(), src, nil, 0)
+	require.NoError(t, err)
+	out := map[string]string{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs := sp.(*ast.ValueSpec)
+			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "Resource" {
+				continue
+			}
+			for i, n := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				require.True(t, ok, "%s is a string literal constant", n.Name)
+				val, err := strconv.Unquote(lit.Value)
+				require.NoError(t, err)
+				out[n.Name] = val
+			}
+		}
+	}
+	require.NotEmpty(t, out, "pkg/ops/effects.go declares Resource constants")
+	require.Equal(t, "books", out["ResBooks"], "the parse reads the real vocabulary")
+	return out
+}
+
+func opsResourceValues(t *testing.T) map[string]bool {
+	t.Helper()
+	vals := map[string]bool{}
+	for _, v := range opsResourceNames(t) {
+		vals[v] = true
+	}
+	return vals
+}
+
+// t6g5KindWriterIfaces names, for each converted kind, the writer interfaces its
+// core is handed, so "the methods this kind can call" is read from the compiled
+// interface and not copied by hand. A kind that gains a method in one of these
+// interfaces gains its resources here, and its Effects must follow.
+func t6g5KindWriterIfaces() map[string][]reflect.Type {
+	return map[string][]reflect.Type{
+		"itunes.clone-into-library":          {reflect.TypeFor[icStoreWriter]()},
+		"itunes.playlist-import":             {reflect.TypeFor[playlistImportWriter]()},
+		"itunes.regroup":                     {reflect.TypeFor[itunesRegroupWriter]()},
+		"maintenance.repair-library-state":   {reflect.TypeFor[libraryStateRepairModifier]()},
+		"maintenance.mark-missing-files":     {reflect.TypeFor[bookFileBatchWriter]()},
+		"maintenance.merge-same-path-dupes":  {reflect.TypeFor[mergeSamePathMerger]()},
+		"maintenance.metadata-cache-reap":    {reflect.TypeFor[reapCacheDeleter]()},
+		"maintenance.missing-file-repoint":   {reflect.TypeFor[bookFileBatchWriter]()},
+		"maintenance.move-book-file-rows":    {reflect.TypeFor[mbfWriter]()},
+		"maintenance.purge-empty-narrators":  {reflect.TypeFor[narratorPurger]()},
+		"maintenance.split-joined-narrators": {reflect.TypeFor[narratorSplitWriter]()},
+	}
+}
+
+func ifaceMethods(types []reflect.Type) []string {
+	seen := map[string]bool{}
+	for _, ty := range types {
+		for i := range ty.NumMethod() {
+			seen[ty.Method(i).Name] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for m := range seen {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestT6G5Resources_TableCoversEveryWriterMethod: the production table names
+// exactly the methods of t6g5Writer, by reflection. A method added to the
+// interface needs a row before any native test (or F5-18's writer) can use it.
+func TestT6G5Resources_TableCoversEveryWriterMethod(t *testing.T) {
+	typ := reflect.TypeFor[t6g5Writer]()
+	var methods, rows []string
+	for i := range typ.NumMethod() {
+		methods = append(methods, typ.Method(i).Name)
+	}
+	for name := range t6g5WriterResources {
+		rows = append(rows, name)
+	}
+	sort.Strings(methods)
+	sort.Strings(rows)
+	assert.Equal(t, methods, rows, "t6g5WriterResources names exactly the methods of t6g5Writer")
+	for name, rs := range t6g5WriterResources {
+		assert.NotNil(t, rs, "%s: an empty row is written as an explicit empty list, never left nil", name)
+	}
+}
+
+// TestT6G5Resources_EffectsAreTheUnionOfTheirMethods: each writing kind's
+// declared write set equals the union of the resources of every method it can
+// call, plus the writes its core makes outside the writer, each with a stated
+// reason (t6g5OutsideWriterWrites). Equality, not a subset: an Effects entry
+// nothing writes, and a method resource the kind does not declare, both fail.
+func TestT6G5Resources_EffectsAreTheUnionOfTheirMethods(t *testing.T) {
+	p := &Plugin{}
+	defs := p.t6g5Kinds(fakeT6G5Deps(t), nil)
+	ifaces := t6g5KindWriterIfaces()
+	wants := t6g5Wants()
+	require.Len(t, defs, len(wants))
+	for i, w := range wants {
+		if w.readOnly {
+			assert.NotContains(t, ifaces, w.headID, "a read-only kind has no writer interface")
+			assert.NotContains(t, t6g5OutsideWriterWrites, w.headID)
+			continue
+		}
+		t.Run(w.headID, func(t *testing.T) {
+			types, ok := ifaces[w.headID]
+			require.True(t, ok, "%s is mapped to the writer interfaces its core takes", w.headID)
+			union := map[string]bool{}
+			for _, m := range ifaceMethods(types) {
+				rs, ok := t6g5WriterResources[m]
+				require.True(t, ok, "method %s has a row in t6g5WriterResources", m)
+				for _, r := range rs {
+					union[string(r)] = true
+				}
+			}
+			for _, o := range t6g5OutsideWriterWrites[w.headID] {
+				assert.NotEmpty(t, strings.TrimSpace(o.Why), "an outside write states why the writer does not carry it")
+				union[string(o.Resource)] = true
+			}
+			want := make([]string, 0, len(union))
+			for r := range union {
+				want = append(want, r)
+			}
+			sort.Strings(want)
+			assert.Equal(t, want, t6g5WriteKinds(t, tasks.CommonOf(defs[i]).Effects),
+				"declared Effects equal the union of the methods this kind can call plus its reasoned outside writes")
+		})
+	}
+	for id := range t6g5OutsideWriterWrites {
+		_, ok := ifaces[id]
+		assert.True(t, ok, "t6g5OutsideWriterWrites names a real writing kind (%s)", id)
+	}
+}
+
+// TestT6G5Resources_EveryNameIsAnOpsConstant: every resource name this group
+// declares, wherever it is written down, is the VALUE of a pkg/ops Resource
+// constant. It walks the live data (the method table, the outside writes, every
+// kind's write set, and the expected write sets in the test tables) and the
+// parsed source of every file in the package, tests included. A coined name
+// compiles (an untyped string constant converts to ops.Resource), so this test
+// is the only guard against one.
+func TestT6G5Resources_EveryNameIsAnOpsConstant(t *testing.T) {
+	names := opsResourceNames(t)
+	values := opsResourceValues(t)
+
+	for method, rs := range t6g5WriterResources {
+		for _, r := range rs {
+			assert.True(t, values[string(r)], "t6g5WriterResources[%s] names %q, which is no pkg/ops constant", method, r)
+		}
+	}
+	for id, outs := range t6g5OutsideWriterWrites {
+		for _, o := range outs {
+			assert.True(t, values[string(o.Resource)], "t6g5OutsideWriterWrites[%s] names %q, which is no pkg/ops constant", id, o.Resource)
+		}
+	}
+	defs := (&Plugin{}).t6g5Kinds(fakeT6G5Deps(t), nil)
+	for _, d := range defs {
+		for _, r := range tasks.CommonOf(d).Effects.WriteSet() {
+			assert.True(t, values[r.Kind], "%s declares %q, which is no pkg/ops constant", d.Kind(), r.Kind)
+		}
+	}
+	for _, w := range t6g5Wants() {
+		for _, r := range w.writes {
+			assert.True(t, values[r], "the expected write set of %s names %q, which is no pkg/ops constant", w.headID, r)
+		}
+	}
+
+	// Source walk: the second argument of every tasks.Res call, in every file of
+	// the package, must be string(ops.<one of the Resource constants>).
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+	fset := token.NewFileSet()
+	calls := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, e.Name(), nil, 0)
+		require.NoError(t, err)
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || !isSelector(call.Fun, "tasks", "Res") {
+				return true
+			}
+			calls++
+			pos := fset.Position(call.Pos())
+			if !assert.Len(t, call.Args, 2, "%s: tasks.Res takes a module and a kind", pos) {
+				return true
+			}
+			conv, ok := call.Args[1].(*ast.CallExpr)
+			if !assert.True(t, ok && isIdent(conv.Fun, "string") && len(conv.Args) == 1,
+				"%s: a resource kind is written string(ops.ResX), not a literal, alias or helper result", pos) {
+				return true
+			}
+			sel, ok := conv.Args[0].(*ast.SelectorExpr)
+			if !assert.True(t, ok && isIdent(sel.X, "ops"), "%s: the converted value is an ops.<constant>", pos) {
+				return true
+			}
+			_, known := names[sel.Sel.Name]
+			assert.True(t, known, "%s: ops.%s is not a Resource constant in pkg/ops/effects.go", pos, sel.Sel.Name)
+			return true
+		})
+	}
+	require.Positive(t, calls, "the walk found the package's tasks.Res calls")
+}
+
+func isIdent(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+func isSelector(e ast.Expr, pkg, name string) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == name && isIdent(sel.X, pkg)
+}

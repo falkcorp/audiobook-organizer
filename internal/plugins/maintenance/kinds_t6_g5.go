@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 30f92b7b-033e-4403-927a-99445211075c
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -342,18 +342,9 @@ func t6g5NativeLease(rc *tasks.RC, deps t6g5Deps) t6g5LeaseFunc {
 	}
 }
 
-// t6g5BatchOpts is bookFileBatchOpts without the reporter: the engine-neutral
-// options of one book's batch write.
-type t6g5BatchOpts struct {
-	// Progress renders the progress line for row done of total, at most once per
-	// bookFileBatchProgressInterval.
-	Progress func(done, total int) (current, progressTotal int, msg string)
-	// Abort, when it returns true, stops the rest of this book's batch.
-	Abort func() bool
-	// OnRow is called after each row attempt with its index and whether it was
-	// applied.
-	OnRow func(i int, applied bool)
-}
+// t6g5BatchOpts is the engine-neutral options of one book's batch write:
+// bookFileBatchOpts without the reporter.
+type t6g5BatchOpts = bookFileBatchHooks
 
 // t6g5WriteBookFileBatch is writeBookFileBatch over the env: the same body
 // (writeBookFileBatchVia), with the per-row stamp and the progress line going to

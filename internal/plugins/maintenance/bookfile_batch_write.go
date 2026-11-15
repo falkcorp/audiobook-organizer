@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/bookfile_batch_write.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f0a9c61-8d24-4b17-9e35-c1a7f2b64d08
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package maintenance — shared plumbing for ops that rewrite MANY book_file
 // rows of the SAME book.
@@ -39,8 +39,9 @@ import (
 
 // bookFileBatchProgressInterval throttles the in-book progress line. Liveness
 // is stamped on EVERY row (see bookFileBatchOpts.Reporter); this only paces the
-// human-readable message.
-const bookFileBatchProgressInterval = 10 * time.Second
+// human-readable message. A var, not a const, so a test can drive the progress
+// wiring without waiting ten seconds; nothing in production assigns it.
+var bookFileBatchProgressInterval = 10 * time.Second
 
 // bookFileBatchGroup is one book's share of a flat work list.
 type bookFileBatchGroup[T any] struct {
@@ -195,14 +196,12 @@ func flattenJoinedErrs(err error) []error {
 	return []error{err}
 }
 
-// bookFileBatchOpts configures writeBookFileBatch.
-type bookFileBatchOpts struct {
-	// Reporter receives a liveness stamp after EVERY row. Without it a book
-	// with thousands of rows would look frozen to the stuck-op watchdog for
-	// the whole batch, because registry.RunItems stamps once per ITEM and the
-	// item is now a whole book.
-	Reporter sdk.Reporter
-
+// bookFileBatchHooks is the engine-neutral part of one book's batch write: the
+// callbacks the HEAD shells (through bookFileBatchOpts) and the native shells
+// (through the t6g5 variants) both pass. It lives here, with the body that
+// reads it, so production code does not import its options type from a dark
+// group's scaffolding.
+type bookFileBatchHooks struct {
 	// Progress, when non-nil, renders the progress line for row done of total
 	// in this book. It is called at most once per bookFileBatchProgressInterval.
 	Progress func(done, total int) (current, progressTotal int, msg string)
@@ -217,6 +216,24 @@ type bookFileBatchOpts struct {
 	// OnRow, when non-nil, is called after each row attempt with the row's
 	// index in the slice handed to writeBookFileBatch and whether it was
 	// applied, so a caller can bucket its own per-row counters.
+	OnRow func(i int, applied bool)
+}
+
+// bookFileBatchOpts configures writeBookFileBatch.
+type bookFileBatchOpts struct {
+	// Reporter receives a liveness stamp after EVERY row. Without it a book
+	// with thousands of rows would look frozen to the stuck-op watchdog for
+	// the whole batch, because registry.RunItems stamps once per ITEM and the
+	// item is now a whole book.
+	Reporter sdk.Reporter
+
+	// Progress: see bookFileBatchHooks.Progress.
+	Progress func(done, total int) (current, progressTotal int, msg string)
+
+	// Abort: see bookFileBatchHooks.Abort.
+	Abort func() bool
+
+	// OnRow: see bookFileBatchHooks.OnRow.
 	OnRow func(i int, applied bool)
 }
 
@@ -240,14 +257,15 @@ func writeBookFileBatch(ctx context.Context, store bookFileBatchWriter, rows []*
 	if opts.Reporter != nil {
 		sink.Progress = func(cur, tot int, msg string) { _ = opts.Reporter.UpdateProgress(cur, tot, msg) }
 	}
-	return writeBookFileBatchVia(ctx, store, rows, sink, t6g5BatchOpts{Progress: opts.Progress, Abort: opts.Abort, OnRow: opts.OnRow})
+	return writeBookFileBatchVia(ctx, store, rows, sink, bookFileBatchHooks{Progress: opts.Progress, Abort: opts.Abort, OnRow: opts.OnRow})
 }
 
 // bookFileBatchSink is where a batch write sends its liveness stamp and its
 // progress line: a sdk.Reporter for the HEAD shells, the run's env for the
 // native ones.
 type bookFileBatchSink struct {
-	// Touch stamps liveness after EVERY row. Never nil.
+	// Touch stamps liveness after EVERY row. A nil Touch is skipped, so a sink
+	// built without one cannot panic inside the store's per-row callback.
 	Touch func()
 	// Progress renders the throttled progress line; nil drops it.
 	Progress func(current, total int, msg string)
@@ -256,7 +274,7 @@ type bookFileBatchSink struct {
 // writeBookFileBatchVia is the body of writeBookFileBatch (and of the native
 // shells' t6g5WriteBookFileBatch) over a sink, so the abort-after-N-rows rule
 // is written once and tested once.
-func writeBookFileBatchVia(ctx context.Context, store bookFileBatchWriter, rows []*database.BookFile, sink bookFileBatchSink, opts t6g5BatchOpts) bookFileWriteOutcome {
+func writeBookFileBatchVia(ctx context.Context, store bookFileBatchWriter, rows []*database.BookFile, sink bookFileBatchSink, opts bookFileBatchHooks) bookFileWriteOutcome {
 	if len(rows) == 0 {
 		return bookFileWriteOutcome{}
 	}
@@ -267,7 +285,9 @@ func writeBookFileBatchVia(ctx context.Context, store bookFileBatchWriter, rows 
 	lastProgress := time.Now()
 	written, err := store.UpdateBookFiles(batchCtx, rows, func(i int, applied bool) {
 		done++
-		sink.Touch()
+		if sink.Touch != nil {
+			sink.Touch()
+		}
 		if opts.OnRow != nil {
 			opts.OnRow(i, applied)
 		}
