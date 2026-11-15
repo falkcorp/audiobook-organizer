@@ -81,10 +81,11 @@ func (p *Plugin) itunesHealNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.S
 	// t6g6WriterResource: books, external_ids (the losers' ids move to the
 	// survivor), operations (the undo pointer and sibling journal), user_state (the
 	// losers' progress and read status follow), indexes (the identification dirty
-	// mark), plus book_files and files for the repoint and reflink. sync_identity
-	// and ai_journal arrive with F5-06 (seams.d/F5-11.md).
+	// mark), plus files for the reflink. It writes no book_file row (the merge's
+	// file moves are combine-only). sync_identity and ai_journal arrive with F5-06
+	// (seams.d/F5-11.md).
 	c.Effects = tasks.Writes(
-		tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)),
+		tasks.Res("books", string(ops.ResBooks)),
 		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResFiles)),
 		tasks.Res("books", string(ops.ResIndexes)), tasks.Res("books", string(ops.ResOperations)),
 		tasks.Res("books", string(ops.ResUserState)))

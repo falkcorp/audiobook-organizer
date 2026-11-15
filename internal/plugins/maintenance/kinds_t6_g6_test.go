@@ -521,7 +521,7 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 		{head: p.recompactActivityDigestsDef(), resume: tasks.ResumeDrop, timeout: 60 * time.Minute,
 			effects: t6g6Eff(ops.ResActivity)},
 		{head: p.itunesHealDef(), resume: tasks.ResumeFromZero, timeout: 60 * time.Minute,
-			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResExternalIDs, ops.ResFiles, ops.ResIndexes, ops.ResOperations, ops.ResUserState)},
+			effects: t6g6Eff(ops.ResBooks, ops.ResExternalIDs, ops.ResFiles, ops.ResIndexes, ops.ResOperations, ops.ResUserState)},
 		{head: p.recoverMissingFilesDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
 			par: cpu(recoverMissingFilesParallelism), wantPar: "fixed(24): ",
 			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResFiles)},

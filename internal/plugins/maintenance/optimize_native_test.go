@@ -276,12 +276,12 @@ func TestT6G6Optimize_BudgetIsHeldAtEveryBoundary(t *testing.T) {
 	require.Contains(t, err.Error(), "budget")
 	require.Empty(t, h.kinds())
 
-	// Mid-sweep: the budget ends 150ms into the second child's wait.
+	// Mid-sweep: the budget ends 2s into the second child's wait.
 	h = newT6G6OptimizeHost(t)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	h.block["books.acoustid.fingerprint-rescan"] = release
-	seed(h, optimizeCheckpoint{StartedAt: time.Now().Add(-optimizeTotalBudget + 150*time.Millisecond), Finished: []string{"temp-file-cleanup"}, Completed: 1})
+	seed(h, optimizeCheckpoint{StartedAt: time.Now().Add(-optimizeTotalBudget + 2*time.Second), Finished: []string{"temp-file-cleanup"}, Completed: 1})
 	err = t6g6RunOptimize(t, h)
 	require.Error(t, err)
 	require.NotErrorIs(t, err, tasks.ErrContinueInPlace)

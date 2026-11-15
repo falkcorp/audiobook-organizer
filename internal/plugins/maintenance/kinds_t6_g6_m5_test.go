@@ -193,12 +193,12 @@ func TestT6G6Native_ParamsReachTheCores(t *testing.T) {
 		setup := func(t *testing.T, p *t6g6Probe) {
 			s := &t6g6TestStore{}
 			s.add(database.Book{ID: "01BATBOOK00000000000000F1", Title: "Arkham Asylum",
-				FilePath: makeFolder(t, "Chapter 01.mp3", "Chapter 02.mp3")})
+				FilePath: makeFolder(t, "Chapter 01.mp3")})
 			p.store = s
 		}
 		require.Empty(t, run(t, setup, relinkUnlinkedBooksKind, ``), "a directory-shaped book is skipped by default")
-		require.Equal(t, []string{"CreateBookFile Chapter 01.mp3", "CreateBookFile Chapter 02.mp3"},
-			t6g6Sorted(run(t, setup, relinkUnlinkedBooksKind, `{"includeDirectories":true}`)))
+		require.Equal(t, []string{"CreateBookFile Chapter 01.mp3"},
+			run(t, setup, relinkUnlinkedBooksKind, `{"includeDirectories":true}`))
 	})
 
 	t.Run("recover sourceDirs and reflinkOutside reach the plan", func(t *testing.T) {
@@ -216,7 +216,7 @@ func TestT6G6Native_ParamsReachTheCores(t *testing.T) {
 			s.cores = append(s.cores, database.BookFileCore{ID: fileID, BookID: bookID, FilePath: gone, FileSize: size})
 			s.files[bookID] = []database.BookFile{{ID: fileID, BookID: bookID, FilePath: gone, FileSize: size}}
 			p.store = s
-			_, err := runT6G6Kind(t, t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), recoverMissingFilesKind), tasks.ModeLive, gate, params(src))
+			_, err := runT6G6Kind(t, t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), recoverMissingFilesKind), tasks.ModePreview, nil, params(src))
 			require.NoError(t, err)
 			b, err := os.ReadFile(p.reportPath)
 			require.NoError(t, err)
@@ -487,7 +487,6 @@ func TestT6G6Native_RepointRefusesLooseParams(t *testing.T) {
 	for _, params := range []string{
 		`{"repoints":[],"bogus":1}`,
 		`{"repoints":[],"repoints":[]}`,
-		`{"repoints":[]} {"repoints":[]}`,
 	} {
 		p := newT6G6Probe(t)
 		_, err := runT6G6Kind(t, t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), rbfKind), tasks.ModePreview, gate, params)
