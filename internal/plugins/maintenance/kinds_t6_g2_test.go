@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-15
 
@@ -594,7 +594,7 @@ func t6g2Rows() []t6g2Row {
 		},
 		{
 			def: (*Plugin).movementAtomCleanupDef, kind: t6g2KindMovementAtomCleanup, resume: tasks.ResumeContinue,
-			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
+			writes: []ops.Resource{ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks, ops.ResFileProvenance}, workers: bootWalkWorkers, parPrefix: "fixed(4)",
 			liveOnly: true, params: `{}`, wantLive: []string{"StripMovementAtoms"},
 		},
 		{
@@ -1348,7 +1348,12 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 //   - StripMovementAtoms: removeMovementAtomsFromFile rewrites the file's tags
 //     (files), installs metadata.WithBookFileHashes before tagger.WriteTagsSafe,
 //     which ends in Store.UpdateBookFileHashes (book_files, and the books
-//     aggregates it recomputes); SetSetting for the done flag (settings).
+//     aggregates it recomputes); SetSetting for the done flag (settings). The
+//     same WriteTagsSafe ends in VerifyWritten, whose read-back-mismatch branch
+//     runs recordVerifyFailure -> fileops.RecordObserved -> AppendFileEvent, a
+//     file_prov: key write (file_provenance); verify_after_write defaults on and
+//     no production caller sets WriteTagsSafeOptions.Provenance, so that is the
+//     ledger write a tag write makes.
 //   - RemuxMalformedM4BFiles, TranscodeMalformedM4BFiles: rewrite the file (files),
 //     then RecordRewrite -> UpdateBookFileHashes (book_files, books aggregates);
 //     SetSetting for the done flag (settings). The transcode also marks a book
@@ -1369,7 +1374,7 @@ func TestT6G2Kinds_WritesThroughShell(t *testing.T) {
 //   - MigrateBookSigToSidecar: moves a book's signature into its sidecar key (books).
 var t6g2Touches = map[string][]ops.Resource{
 	"BackfillExternalIDs":                 {ops.ResExternalIDs, ops.ResSettings},
-	"StripMovementAtoms":                  {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
+	"StripMovementAtoms":                  {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks, ops.ResFileProvenance},
 	"RemuxMalformedM4BFiles":              {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
 	"TranscodeMalformedM4BFiles":          {ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks},
 	"QuarantineKnownBadFiles":             {ops.ResFiles, ops.ResBookFiles, ops.ResBooks, ops.ResSettings},
