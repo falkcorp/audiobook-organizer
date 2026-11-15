@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-14
 
@@ -903,6 +903,7 @@ func t6g4UnknownRowsPool[T any](ctx context.Context, each t6g4EachFn, reporter s
 	total := len(items)
 	return each(ctx, total, t6g4EachOpts{
 		Concurrency: workers,
+		Reason:      "the run's workers parameter, clamped to [1, unknownRowsMaxWorkers] by unknownRowsConcurrency",
 		Collect:     true,
 		Label: func(i, _ int) string {
 			return fmt.Sprintf("%s %d/%d (measured=%d failed=%d env-skipped=%d changed=%d write-err=%d probes=%d)",

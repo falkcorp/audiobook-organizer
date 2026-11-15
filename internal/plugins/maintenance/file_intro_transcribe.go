@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-11-14
 
@@ -827,6 +827,7 @@ func (l *fileIntroBatchLoop) run(ctx context.Context) (prefix int, yielded bool,
 			// workers spread over every Mac instead of queueing on the first. The
 			// transport still enforces each endpoint's own cap.
 			Concurrency:   l.slots,
+			Reason:        "one worker per whisper slot across all endpoints (fileIntroSlots); the transport still enforces each endpoint's own cap",
 			ProgressBase:  l.base,
 			ProgressTotal: l.base + len(l.batches),
 			Label:         l.label,

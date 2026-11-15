@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-14
 
@@ -598,9 +598,9 @@ type t6g4Want struct {
 	// cursor and yields before its deadline (review M4), so its Resume is Continue
 	// by that ruling and not by rule R5's mapping. Exactly one kind does this.
 	yieldsNatively bool
-	// writes is the native write set, as ops.Resource names (every one must be a
-	// constant of pkg/ops); nil with readOnly true means "Declared ReadOnly".
-	writes   []string
+	// writes is the native write set, spelled with the pkg/ops constants so a
+	// coined name does not compile; nil with readOnly true means "Declared ReadOnly".
+	writes   []ops.Resource
 	readOnly bool
 	// liveOnly: HEAD runs this only in an explicit live mode (rule R7).
 	liveOnly bool
@@ -624,33 +624,33 @@ type t6g4Want struct {
 // the PR's Review decisions).
 var t6g4Expected = []t6g4Want{
 	{kind: aiDedupBatchKind, head: func(p *Plugin) sdk.OperationDef { return p.aiDedupBatchDef() },
-		resume: tasks.ResumeContinue, headCheckpoints: true, writes: []string{"review_items"}, liveOnly: true},
+		resume: tasks.ResumeContinue, headCheckpoints: true, writes: []ops.Resource{ops.ResReviewItems}, liveOnly: true},
 	{kind: dedupExactTriageKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupExactTriageDef() },
-		resume: tasks.ResumeDrop, writes: []string{"embeddings"}, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResEmbeddings}, helpReworded: true},
 	{kind: dedupeBookFileRowsKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupeBookFileRowsDef() },
-		resume: tasks.ResumeFromZero, writes: []string{"book_files", "books", "fingerprint_index", "operations"}, hasDependsOn: true, helpReworded: true},
+		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations}, hasDependsOn: true, helpReworded: true},
 	{kind: durationBackfillKind, head: func(p *Plugin) sdk.OperationDef { return p.durationBackfillDef() },
-		resume: tasks.ResumeDrop, writes: []string{"book_files", "books"}, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
-		resume: tasks.ResumeFromZero, writes: []string{"book_files"}, liveOnly: true},
+		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
-		resume: tasks.ResumeContinue, yieldsNatively: true, writes: []string{"book_files", "books"}, helpReworded: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
-		resume: tasks.ResumeDrop, writes: []string{"book_files"}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
-		resume: tasks.ResumeDrop, writes: []string{"book_files", "files"}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles, ops.ResFiles}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: filePathCollisionReportKind, head: func(p *Plugin) sdk.OperationDef { return p.filePathCollisionReportDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: fsRegroupKind, head: func(p *Plugin) sdk.OperationDef { return p.fsRegroupXMLDef() },
-		resume: tasks.ResumeDrop, writes: []string{"books", "book_files", "external_ids", "operations"}, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations}, helpReworded: true},
 	{kind: identIndexKind, head: func(p *Plugin) sdk.OperationDef { return p.identIndexRebuildDef() },
-		resume: tasks.ResumeDrop, writes: []string{"books", "indexes"}, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBooks, ops.ResIndexes}, helpReworded: true},
 	{kind: integrityCheckKind, head: func(p *Plugin) sdk.OperationDef { return p.integrityCheckDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: introMigrateSingleFileKind, head: func(p *Plugin) sdk.OperationDef { return p.introMigrateSingleFileDef() },
-		resume: tasks.ResumeFromZero, writes: []string{"book_files"}, helpReworded: true},
+		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles}, helpReworded: true},
 	{kind: introTranscribeKind, head: func(p *Plugin) sdk.OperationDef { return p.introTranscribeDef() },
-		resume: tasks.ResumeFromZero, writes: []string{"books", "book_files"}, noLive: true, helpReworded: true},
+		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBooks, ops.ResBookFiles}, noLive: true, helpReworded: true},
 }
 
 // t6g4OpsResources is pkg/ops's resource vocabulary, spelled through the
@@ -776,7 +776,10 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			if c.Schedule != nil {
 				t.Errorf("Schedule = %v with a nil hook, want none", c.Schedule)
 			}
-			want := slices.Clone(w.writes)
+			want := make([]string, len(w.writes))
+			for i, r := range w.writes {
+				want[i] = string(r)
+			}
 			slices.Sort(want)
 			if got := t6g4WriteKinds(c.Effects); w.readOnly != c.Effects.IsReadOnly() || !slices.Equal(got, want) {
 				t.Errorf("Effects: readOnly=%v writes=%v, want readOnly=%v writes=%v", c.Effects.IsReadOnly(), got, w.readOnly, want)

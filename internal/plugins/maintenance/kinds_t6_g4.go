@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-14
 
@@ -410,12 +410,29 @@ type t6g4EachOpts struct {
 	// ProgressTotal is the absolute denominator (0 = n).
 	ProgressTotal int
 	// Reason is what bounds Concurrency, as the loop's declared Parallelism shows
-	// it. Empty falls back to a generic reason.
+	// it. Every Fixed or Sequential loop names its own; empty falls back to
+	// t6g4GenericReason. A CPU loop takes no reason.
 	Reason string
 	// ProgressBase is the absolute offset of item 0 when the n items are the tail
 	// of a larger set an earlier attempt already completed (0 = item 0 is the
 	// first). HEAD's registry.RunItemsOptions calls it ProgressOffset.
 	ProgressBase int
+}
+
+// t6g4GenericReason is the reason a Fixed or Sequential loop declares when its
+// options name none. A CPU loop takes no reason.
+const t6g4GenericReason = "a T6 group 4 loop at HEAD's registry.RunItems concurrency"
+
+// t6g4WorkersFor is the worker count a loop of n items runs with: the declared
+// Parallelism's Workers(), never more than n. A caller that logs or sizes
+// something from the width uses this instead of reading runtime.NumCPU itself,
+// so the number it reports is the one the loop declares.
+func t6g4WorkersFor(o t6g4EachOpts, n int) int {
+	reason := o.Reason
+	if reason == "" {
+		reason = t6g4GenericReason
+	}
+	return min(t6g4Par(o, reason).Workers(), n)
 }
 
 // t6g4Par returns the tasks.Parallelism a loop declares for o.
@@ -448,7 +465,7 @@ func t6g4RunEach(rc *tasks.RC, n int, o t6g4EachOpts, fn func(ctx context.Contex
 	}
 	reason := o.Reason
 	if reason == "" {
-		reason = "a T6 group 4 loop at HEAD's registry.RunItems concurrency"
+		reason = t6g4GenericReason
 	}
 	_, err := tasks.RunItems(rc, t6g4Par(o, reason), idx,
 		func(ic *tasks.ItemRC, i int) error { return fn(ic.Context(), i) }, opts)

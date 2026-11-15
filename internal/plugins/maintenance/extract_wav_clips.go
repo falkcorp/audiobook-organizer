@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.10.2
+// version: 1.10.3
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
 // last-edited: 2026-11-14
 
@@ -174,6 +174,7 @@ func (p *Plugin) runExtractWAVClipsCore(ctx context.Context, params extractWAVPa
 
 	err = env.Each(ctx, len(pages), t6g4EachOpts{
 		Concurrency:   1,
+		Reason:        "pages run one at a time; each page already fans out introTranscribeFFWorkers ffmpeg workers, so the page loop adds none",
 		ProgressTotal: len(pages),
 		Label: func(i, t int) string {
 			return fmt.Sprintf("Page %d/%d — %d extracted, %d skipped", i+1, t, extracted, skipped)

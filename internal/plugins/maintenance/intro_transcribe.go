@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.47.2
+// version: 3.47.3
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-11-14
 
@@ -544,6 +544,7 @@ func (p *Plugin) runIntroTranscribeCore(ctx context.Context, params introTranscr
 	// batches far more efficiently than one large serial one.
 	err = env.Each(ctx, len(pages), t6g4EachOpts{
 		Concurrency:   introTranscribePageConc,
+		Reason:        "introTranscribePageConc pages at once, each running introTranscribeFFWorkers ffmpeg workers: the product is sized to the server's core count",
 		ProgressTotal: len(pages),
 		Label: func(i, t int) string {
 			return mark + fmt.Sprintf("Page %d/%d — %d books transcribed", i+1, t, int(processed.Load()))

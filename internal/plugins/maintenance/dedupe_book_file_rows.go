@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/dedupe_book_file_rows.go
-// version: 1.13.2
+// version: 1.13.3
 // guid: 1c7f4b93-6a05-42e8-9d31-8b0e5a2f7c46
 // last-edited: 2026-11-14
 
@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -638,13 +637,7 @@ func (p *Plugin) runDedupeBookFileRowsCore(ctx context.Context, params DedupeBoo
 	// each book COMPLETES, via a monotonic atomic counter that stays ordered even
 	// when books finish out of order. The stuck-op watchdog therefore sees progress
 	// on every completion rather than once per sequential step.
-	workers := min(runtime.NumCPU(), len(bookIDs))
-	log.Info("dedupe-book-file-rows: processing books in parallel",
-		"books", len(bookIDs), "workers", workers)
-
-	// opID was captured once, before PASS 1, so every worker tags its journal
-	// rows with the same operation id.
-	runErr := env.Each(ctx, len(bookIDs), t6g4EachOpts{
+	eachOpts := t6g4EachOpts{
 		Concurrency: t6g4CPU,
 		// Collect: a single failing book must not abandon the other 175.
 		// Per-book failures are already counted and logged above, and the callback
@@ -653,7 +646,16 @@ func (p *Plugin) runDedupeBookFileRowsCore(ctx context.Context, params DedupeBoo
 		Label: func(i, total int) string {
 			return fmt.Sprintf("book %d/%d", i+1, total)
 		},
-	}, func(ctx context.Context, bookIdx int) error {
+	}
+	// The width the loop declares (CPU() at both shells), capped at the books:
+	// HEAD's min(runtime.NumCPU(), len(bookIDs)) read through the same Parallelism.
+	workers := t6g4WorkersFor(eachOpts, len(bookIDs))
+	log.Info("dedupe-book-file-rows: processing books in parallel",
+		"books", len(bookIDs), "workers", workers)
+
+	// opID was captured once, before PASS 1, so every worker tags its journal
+	// rows with the same operation id.
+	runErr := env.Each(ctx, len(bookIDs), eachOpts, func(ctx context.Context, bookIdx int) error {
 		bookID := bookIDs[bookIdx]
 		// GetBookFiles reads Pebble directly (raw prefix iteration), NOT memdb, so
 		// AcoustIDFingerprint is present and un-stripped here. That is exactly why
