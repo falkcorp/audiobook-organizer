@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_resources.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3f9b6d21-5a84-4e07-b1c3-7d2e08a46f59
 // last-edited: 2026-11-15
 
@@ -186,12 +186,16 @@ func t6WriterResourceTable() map[string][]ops.Resource {
 		"DedupTriageApply":              {ops.ResEmbeddings},
 		"AIJournalPruner":               {ops.ResAIJournal},
 		"OpenWhisperJournal":            {ops.ResAIJournal},
-		"RebuildIdentIndex":             {ops.ResIndexes},
-		"AppendFileEvent":               {ops.ResFileProvenance},
-		"SetFileProvExportCursor":       {ops.ResFileProvenance},
-		"SetRaw/authority_lists":        {ops.ResAuthorityLists},
-		"DeleteRawBatch":                {ops.ResAuthorityLists},
-		"SetRaw/cover_text":             {ops.ResCoverText},
+		// HealWhisperJournal hands the heal the journal shared with the intro
+		// transcribe kinds; the heal's transcription writes aijournal: keys
+		// through it.
+		"HealWhisperJournal":      {ops.ResAIJournal},
+		"RebuildIdentIndex":       {ops.ResIndexes},
+		"AppendFileEvent":         {ops.ResFileProvenance},
+		"SetFileProvExportCursor": {ops.ResFileProvenance},
+		"SetRaw/authority_lists":  {ops.ResAuthorityLists},
+		"DeleteRawBatch":          {ops.ResAuthorityLists},
+		"SetRaw/cover_text":       {ops.ResCoverText},
 		// The activity store.
 		"ActivityFlushOp":              {ops.ResActivity},
 		"CompactActivityEntries":       {ops.ResActivity},

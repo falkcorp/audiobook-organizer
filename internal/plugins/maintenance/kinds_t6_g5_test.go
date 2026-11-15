@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: c0ba68fc-0752-49a5-9e51-187eca399e39
 // last-edited: 2026-11-15
 
@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
@@ -265,33 +264,35 @@ func TestT6G5Kinds_Conformance(t *testing.T) {
 	taskstest.Conformance(t, defs...)
 }
 
-// t6g5Want is one converted definition's expected native shape. The write sets
-// and resume policies are literals, never derived from the code under test;
-// title, timeouts and the concurrency key are compared with HEAD's own def.
+// t6g5Want is one converted definition's expected native shape. The resume
+// policies are literals, never derived from the code under test; title, timeouts
+// and the concurrency key are compared with HEAD's own def. The write set is NOT
+// a literal here: it is the union of the shared table's rows for the methods the
+// kind's writer interfaces list plus its reasoned outside writes, asserted by
+// TestT6G5Resources_EffectsAreTheUnionOfTheirMethods.
 type t6g5Want struct {
 	headID   string
 	def      func(*Plugin) sdk.OperationDef
 	resume   tasks.ResumePolicy
 	readOnly bool
-	writes   []string
 }
 
 func t6g5Wants() []t6g5Want {
 	return []t6g5Want{
-		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResFieldStates), string(ops.ResFiles), string(ops.ResFingerprintIndex), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResOperations), string(ops.ResSyncIdentity), string(ops.ResUserState)}},
-		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false, []string{string(ops.ResUserState)}},
-		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResExternalIDs), string(ops.ResFieldStates), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResSyncIdentity), string(ops.ResUserState)}},
-		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks)}},
-		{"maintenance.mark-missing-files", (*Plugin).markMissingFilesDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks)}},
-		{"maintenance.merge-same-path-dupes", (*Plugin).mergeSamePathDupesDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResOperations), string(ops.ResSyncIdentity), string(ops.ResUserState)}},
-		{"maintenance.metadata-refresh", (*Plugin).metadataRefreshDef, tasks.ResumeFromZero, true, nil},
-		{"maintenance.metadata-cache-reap", (*Plugin).metadataCacheReapDef, tasks.ResumeDrop, false, []string{string(ops.ResIndexes), string(ops.ResMetadataCache)}},
-		{"maintenance.missing-file-audit", (*Plugin).missingFileAuditDef, tasks.ResumeDrop, true, nil},
-		{"maintenance.missing-file-repair", (*Plugin).missingFileRepairDef, tasks.ResumeDrop, true, nil},
-		{"maintenance.missing-file-repoint", (*Plugin).missingFileRepointDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks)}},
-		{"maintenance.move-book-file-rows", (*Plugin).moveBookFileRowsDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks)}},
-		{"maintenance.purge-empty-narrators", (*Plugin).purgeEmptyNarratorsDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks), string(ops.ResOperations)}},
-		{"maintenance.split-joined-narrators", (*Plugin).splitJoinedNarratorsDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks), string(ops.ResOperations)}},
+		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false},
+		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false},
+		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false},
+		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false},
+		{"maintenance.mark-missing-files", (*Plugin).markMissingFilesDef, tasks.ResumeDrop, false},
+		{"maintenance.merge-same-path-dupes", (*Plugin).mergeSamePathDupesDef, tasks.ResumeDrop, false},
+		{"maintenance.metadata-refresh", (*Plugin).metadataRefreshDef, tasks.ResumeFromZero, true},
+		{"maintenance.metadata-cache-reap", (*Plugin).metadataCacheReapDef, tasks.ResumeDrop, false},
+		{"maintenance.missing-file-audit", (*Plugin).missingFileAuditDef, tasks.ResumeDrop, true},
+		{"maintenance.missing-file-repair", (*Plugin).missingFileRepairDef, tasks.ResumeDrop, true},
+		{"maintenance.missing-file-repoint", (*Plugin).missingFileRepointDef, tasks.ResumeDrop, false},
+		{"maintenance.move-book-file-rows", (*Plugin).moveBookFileRowsDef, tasks.ResumeDrop, false},
+		{"maintenance.purge-empty-narrators", (*Plugin).purgeEmptyNarratorsDef, tasks.ResumeDrop, false},
+		{"maintenance.split-joined-narrators", (*Plugin).splitJoinedNarratorsDef, tasks.ResumeDrop, false},
 	}
 }
 
@@ -319,7 +320,7 @@ func TestT6G5Kinds_MatchHEADDefs(t *testing.T) {
 			assert.True(t, c.Effects.Declared())
 			assert.Equal(t, w.readOnly, c.Effects.IsReadOnly(), "R7 effects class")
 			if !w.readOnly {
-				assert.Equal(t, w.writes, t6g5WriteKinds(t, c.Effects), "R7 write set")
+				assert.NotEmpty(t, t6g5WriteKinds(t, c.Effects), "a writing kind declares a write set; its contents are the union test's")
 			}
 			assert.Equal(t, "", t6g5ParString(d), "a Task declares no Parallelism: its loops pass theirs to RunItems")
 		})

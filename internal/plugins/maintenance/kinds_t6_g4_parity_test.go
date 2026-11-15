@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_parity_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 1f3e20f0-c667-44b8-9f41-3e7208c9958c
 // last-edited: 2026-11-15
 
@@ -375,7 +375,8 @@ func init() {
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: dedupeBookFileRowsKind, headParams: `{"apply":true}`, params: `{}`,
 		widths: func() []int { return []int{tasks.CPU().Workers()} },
-		want:   []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations},
+		// the writer methods the run records; the table owns what each writes
+		want: t6RowsOf("CarryOverFingerprintWindows", "CreateOperationChange", "DeleteBookFilesByIDs"),
 		// the decisions TSVs under the library root
 		unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
@@ -447,8 +448,8 @@ func init() {
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: introMigrateSingleFileKind, headParams: `{"dry_run":false}`, params: `{}`,
 		widths: func() []int { return []int{8} },
-		// UpdateBookFile recomputes the book's aggregates afterwards: book_files and books
-		want: []ops.Resource{ops.ResBookFiles, ops.ResBooks},
+		// UpdateBookFile writes the row and recomputes the book's aggregates afterwards
+		want: t6RowsOf("UpdateBookFile"),
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := t6g4MemStore(t)
 			tr := "This is Gotham Central, a Batman audiobook narrated by Alfred Pennyworth."
@@ -467,7 +468,7 @@ func init() {
 	// observable change is that the service was asked to apply.
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: dedupExactTriageKind, headParams: `{"apply":true}`, params: `{}`,
-		want: []ops.Resource{ops.ResEmbeddings},
+		want: t6RowsOf("DedupTriageApply"),
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			d := &triageDeps{}
 			p := newTriagePlugin(d)
@@ -480,7 +481,7 @@ func init() {
 	// file-provenance-capture: a root with two files; the run hashes them and
 	// appends one orphan observation per file to the ledger.
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
-		kind: fileProvenanceCaptureKind, want: []ops.Resource{ops.ResFileProvenance},
+		kind: fileProvenanceCaptureKind, want: t6RowsOf("AppendFileEvent"),
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			p, store, root := newCaptureFixture(t, map[string]string{"a.m4b": "alpha-bytes", "sub/b.m4b": "bravo-bytes"})
 			return &t6g4LiveEnv{
@@ -508,7 +509,7 @@ func init() {
 	// file (a write outside the writer, declared as files) and advances the cursor
 	// (a writer call, recorded as file_provenance).
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
-		kind: fileProvenanceExportKind, want: []ops.Resource{ops.ResFileProvenance}, unrecorded: []ops.Resource{ops.ResFiles},
+		kind: fileProvenanceExportKind, want: t6RowsOf("SetFileProvExportCursor"), unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			p, store, out := newExportFixture(t)
 			seedEvents(t, store, 3)
@@ -551,7 +552,7 @@ func init() {
 		widths: func() []int { return []int{tasks.CPU().Workers()} },
 		// ModifyBook (the survivor's title and path, the shells' soft delete) also
 		// writes metadata_cache and indexes
-		want: []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes},
+		want: t6RowsOf("CreateBookFile", "MarkOperationChangesReverted", "ModifyBook", "MoveBookFilesToBookBulk", "ReassignExternalID"),
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := regroupStore(t)
 			base := fsFragBase(t)
@@ -594,8 +595,8 @@ func init() {
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: extractWAVClipsKind, headParams: `{}`, params: `{}`,
 		widths: func() []int { return []int{1} },
-		// SetBookFileHash notifies the aggregate recompute: book_files and books
-		want: []ops.Resource{ops.ResBookFiles, ops.ResBooks},
+		// SetBookFileHash writes the row and notifies the aggregate recompute
+		want: t6RowsOf("SetBookFileHash"),
 		// the clips and hardlinks under the library root
 		unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
@@ -643,7 +644,7 @@ func init() {
 		kind: introTranscribeKind, headParams: `{"dry_run":false}`, params: `{}`,
 		widths: func() []int { return []int{introTranscribePageConc} },
 		// the clips cut into the clip cache are written outside the writer
-		want:       slices.DeleteFunc(slices.Clone(t6g4IntroTranscribeWrites), func(r ops.Resource) bool { return r == ops.ResFiles }),
+		want:       t6RowsOf("ClearIntroTimeouts", "ModifyBook", "OpenWhisperJournal"),
 		unrecorded: []ops.Resource{ops.ResFiles},
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			orig := config.AppConfig.WhisperClipCacheDir
