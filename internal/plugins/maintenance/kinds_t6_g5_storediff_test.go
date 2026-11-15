@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_storediff_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8e2f6a1c-47b3-4d09-9c5e-b13a7d60f4e2
 // last-edited: 2026-11-15
 
@@ -90,7 +90,6 @@ var t6g5KeyFamilyResource = map[string]ops.Resource{
 	"sync_alias_use":                    ops.ResUserState,
 	"idx:":                              ops.ResUserState,
 	"opchange":                          ops.ResOperations,
-	"op_result:":                        ops.ResOperations,
 	"merge:sibling-journal:":            ops.ResOperations,
 	"merge:combine-journal:":            ops.ResOperations,
 	// The undo journal's clock ceiling moves only when the journal writes (opchange rows), so it

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-15
 
@@ -665,6 +665,42 @@ func TestT6G5Native_MergeSamePathDupes(t *testing.T) {
 	assert.Equal(t, 1, deleted, "the real merge retired exactly one of the two rows")
 }
 
+// MergeBooks declares books, external_ids, user_state and operations, but the
+// plain two-book merge above writes only books: the sibling-move journal
+// (operations) is written only when a loser has version-group siblings to move,
+// and external_ids / user_state only when the loser has ids and state to carry.
+// Here each book has a sibling in its own version group, an external id and a
+// user's listening state, so whichever book loses, the merge's own writes reach
+// all four resources and the per-call attribution holds them to the MergeBooks row.
+func TestT6G5Native_MergeSamePathDupesCarriesIDsStateAndSiblings(t *testing.T) {
+	s := newRepairPebble(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Bruce Wayne", "Hush.m4b")
+	ids := []string{"01BATMAN00000000000000MG11", "01BATMAN00000000000000MG12"}
+	siblings := []string{"01BATMAN00000000000000MG13", "01BATMAN00000000000000MG14"}
+	u, err := s.CreateUser("alfred", "alfred@example.com", "argon2id", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	for i, id := range ids {
+		vg := fmt.Sprintf("vg-hush-%d", i)
+		_, err := s.CreateBook(&database.Book{ID: id, Title: "Hush", FilePath: path, VersionGroupID: &vg})
+		require.NoError(t, err)
+		require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: id, FilePath: path, FileHash: "H"}))
+		sib := filepath.Join(dir, "Bruce Wayne", fmt.Sprintf("Hush %d.m4b", i))
+		_, err = s.CreateBook(&database.Book{ID: siblings[i], Title: "Hush (alt)", FilePath: sib, VersionGroupID: &vg})
+		require.NoError(t, err)
+		require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: siblings[i], FilePath: sib, FileHash: fmt.Sprintf("S%d", i)}))
+		require.NoError(t, s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: fmt.Sprintf("PID-HUSH-%d", i), BookID: id}))
+		require.NoError(t, s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: id, Status: database.UserBookStatusInProgress, ProgressPct: 30 + i, LastActivityAt: time.Now()}))
+	}
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.merge-same-path-dupes", t6g5ScanKey,
+		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`, t6g5MergeThroughStore(s))
+	require.NoError(t, r.err)
+	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState), string(ops.ResOperations))
+	require.Equal(t, 1, r.spy.count("MergeBooks"), "the merge reached the writer")
+	r.requireMethodWrote(t, "MergeBooks", string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState), string(ops.ResOperations))
+}
+
 func TestT6G5Native_MetadataCacheReap(t *testing.T) {
 	s := newRepairPebble(t)
 	dir := t.TempDir()
@@ -966,6 +1002,42 @@ func TestT6G5Native_CloneRollbackCarriesAFinishedReadersPlayCountMark(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, tb.ITunesPlayCountBumpedAt, "the finished reader's play-count mark landed on the source")
 	assert.True(t, tb.ITunesPlayCountBumpedAt.Equal(mark))
+}
+
+// CarryStateBetweenLiveBooks runs only when a rollback fails AFTER the clone's
+// users' state was carried to the source, and the source is a book ABS does not
+// list while the clone is: the state is then moved back onto the live clone
+// (keepCloneStateVisible). It writes the winner's book row (the play-count
+// mark) and user state, so the call is observed against both. The failing step
+// is the clone's DeleteBook, the last write of the rollback, so the carry back
+// is the run's own recovery and the group reports failed.
+func TestT6G5Native_CloneRollbackFailureCarriesStateBackBetweenLiveBooks(t *testing.T) {
+	f := newICFixture(t)
+	cloneID, user := applyCloneWithProgress(t, f)
+	mark := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	_, err := f.s.ModifyBook(cloneID, func(b *database.Book) error { b.ITunesPlayCountBumpedAt = &mark; return nil })
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetUserBookState(&database.UserBookState{UserID: user.ID, BookID: cloneID, Status: database.UserBookStatusFinished, ProgressPct: 100, LastActivityAt: time.Now()}))
+	// A source ABS does not list, so the carry back has to land on the clone.
+	runner := &icRunner{store: icStore{OpsStore: f.s}}
+	rec, err := runner.loadRecord("vg-t")
+	require.NoError(t, err)
+	rec.SourcePriorState = "imported"
+	require.NoError(t, runner.saveRecord(rec))
+
+	fs := &icStepFailStore{PebbleStore: f.s, step: "delete_book", sourceID: "T", cloneID: cloneID}
+	p := New(icTestDeps{fakeDeps: fakeDeps{store: fs, root: f.root}, s: f.s, root: f.root})
+	r, d := t6g5RunNativeDiff(t, f.s, p, tasks.ModeLive, "itunes.clone-into-library", t6g5ScanKey,
+		`{"rollback":true,"group_ids":["vg-t"]}`)
+	require.NoError(t, r.err)
+	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResUserState))
+	var rep icReport
+	require.NoError(t, json.Unmarshal(r.out, &rep))
+	g := icGroup(t, &rep, "vg-t")
+	require.Equal(t, icOutcomeFailed, g.Outcome, "the rollback's last step failed: "+g.Error)
+	require.Equal(t, 1, r.spy.count("CarryStateBetweenLiveBooks"), "the state was moved back through the writer")
+	r.requireMethodWrote(t, "CarryStateBetweenLiveBooks", string(ops.ResBooks), string(ops.ResUserState))
 }
 
 // --- regroup ---
