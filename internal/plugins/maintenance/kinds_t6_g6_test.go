@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-15
 
@@ -64,8 +64,12 @@ type t6g6Recorder struct {
 // resource to be in the kind's declared write set.
 //
 // The heal's whisper journal (ai_journal) is not a writer-method call the spy
-// records (HealWhisperJournal is an accessor the spy answers with nil), so it is
-// pinned by the heal row of TestT6G6Kinds_MatchHEADDefs instead.
+// records (HealWhisperJournal is an accessor the spy answers with nil, and the
+// transcription that writes the journal needs ffmpeg and a whisper pool), so it
+// is pinned by TestT6G6Kinds_HealWhisperJournalWritesTheDeclaredAIJournalKeys
+// (kinds_t6_g6_m5_test.go): the production journal over a real store writes under
+// aijournal:, and the heal's Effects declare ai_journal. The heal row of
+// TestT6G6Kinds_MatchHEADDefs only compares the declaration with HEAD's.
 var t6g6WriterResource = map[string][]string{
 	// store CompactActivityEntries: the activity log only.
 	"CompactActivityEntries": t6g6Eff(ops.ResActivity),
