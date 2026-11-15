@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-14
 
@@ -79,6 +79,13 @@ const (
 	// start of a path ("/api/v1/x//Users/bruce", which is what the access log
 	// writes for "/api/v1/x/%2FUsers%2Fbruce"), and only a scheme's "//" is not.
 	scanRoutePath
+	// scanDecoded is a modifier, not a mode of its own: the text was produced by
+	// percent-decoding a token that held an encoded separator. The two exceptions
+	// of pathBoundary that exist for the redactor's own output (the "/" after a
+	// configured root's placeholder, the "/" of a closing tag) do not apply to it:
+	// nothing the redactor writes has an encoded separator, so a "/" that came out
+	// of a "%2F" after "<root:lib>" is the start of a path, not a rewritten tail.
+	scanDecoded scanMode = 4
 )
 
 func (r pathRoots) redactPathsAt(s string, depth int, mode scanMode) string {
@@ -93,7 +100,7 @@ func (r pathRoots) scanPaths(s string, depth int, mode scanMode, skipJudged bool
 		return s
 	}
 	if depth > maxNest {
-		if r.hasPathStart(s, mode) || mode == scanText && strings.Contains(s, "%") && r.encodedPathToken(s) {
+		if r.hasPathStart(s, mode) || mode&scanRoutePath == 0 && strings.Contains(s, "%") && r.encodedPathToken(s) {
 			return "<path>"
 		}
 		return s
@@ -103,7 +110,7 @@ func (r pathRoots) scanPaths(s string, depth int, mode scanMode, skipJudged bool
 	// The whole-token rules (tokenAt) can only fire in text that holds a URL's
 	// "://" or a "%", and only where a token or a scheme can start; most lines
 	// hold neither, and a line of 400k bytes should not pay a call per byte.
-	tokens := mode == scanText && (strings.Contains(s, "://") || strings.IndexByte(s, '%') >= 0)
+	tokens := mode&scanRoutePath == 0 && (strings.Contains(s, "://") || strings.IndexByte(s, '%') >= 0)
 	// judged is the end of the last token tokenAt read and found no encoded path
 	// in. A token ends at whitespace and nothing else (routeExtent), so a quote
 	// inside it is a place another token may start, and the text after it is a
@@ -115,6 +122,26 @@ func (r pathRoots) scanPaths(s string, depth int, mode scanMode, skipJudged bool
 	// off: the text there is a token of its own even with no whitespace or quote in
 	// front of it ("https://h,%2FUsers%2Fbruce").
 	cut, judgedCut := -1, 0
+	// queryRun is the end of the whitespace-delimited run that starts at j when it
+	// holds a "?" or "#" at or after j, and 0 when it holds none. Both searches are
+	// remembered and only redone past the point they reached, so a line of cut URLs
+	// costs one pass over it.
+	qAt, runEnd := -1, -1
+	queryRun := func(j int) int {
+		if j > runEnd {
+			runEnd = j + routeExtent(s[j:])
+		}
+		if j > qAt {
+			qAt = len(s) + 1
+			if k := strings.IndexAny(s[j:], "?#"); k >= 0 {
+				qAt = j + k
+			}
+		}
+		if qAt < runEnd {
+			return runEnd
+		}
+		return 0
+	}
 	for i := 0; i < len(s); {
 		if tokens && (i == 0 || i == cut || s[i-1] <= ' ' || s[i-1] == 0x7f || s[i-1] == '"' || s[i-1] == '`' || isAlpha(s[i])) {
 			// A token that starts at a cut is a different token from the one read
@@ -123,12 +150,22 @@ func (r pathRoots) scanPaths(s string, depth int, mode scanMode, skipJudged bool
 			force := i == cut && (!skipJudged || i >= judgedCut)
 			end, repl, ok, read, urlCut := r.tokenAt(s, i, depth, !skipJudged || i >= judged || force, force)
 			if ok {
+				if urlCut {
+					// The URL ended at a byte that cannot be in an authority. A "?"
+					// or "#" later in the same run still opens the opaque query or
+					// fragment (G8, G9): from the first one to the end of the run
+					// it is one placeholder, and what lies between is scanned as
+					// text. With none, the text after the cut is a token of its own.
+					if e := queryRun(end); e > end {
+						repl += r.afterCut(s[end:e], depth)
+						end = e
+					} else {
+						cut = end
+					}
+				}
 				b.WriteString(s[last:i])
 				b.WriteString(repl)
 				last, i = end, end
-				if urlCut {
-					cut = end
-				}
 				continue
 			}
 			if force {
@@ -250,7 +287,7 @@ func isSchemeByte(c byte) bool {
 
 // urlSchemeEnd is the length of the scheme of s when s starts "scheme://" (a
 // letter, then letters, digits, "+", "-" and "."), and 0 otherwise. file: URLs
-// are paths, and keep the path rule.
+// and URLs with an empty authority are paths, and keep the path rule.
 func urlSchemeEnd(s string) int {
 	if len(s) == 0 || !isAlpha(s[0]) {
 		return 0
@@ -262,6 +299,26 @@ func urlSchemeEnd(s string) int {
 	if !strings.HasPrefix(s[n:], "://") || strings.EqualFold(s[:n], "file") {
 		return 0
 	}
+	if len(s) > n+3 && (s[n+3] == '/' || winDrive(s, n+3)) {
+		// No authority ("https:///Users/bruce"), or a drive where the authority
+		// would be ("https://C:\Users\bruce"): the log's credential scrub leaves
+		// these behind when it eats a host or the start of a path, and each is a
+		// path, as file:/// is.
+		return 0
+	}
+	// An authority is kept as written, so one that holds an encoded separator
+	// ("https://%2FUsers%2Fbruce", "https://C%3A%5CUsers", also left by the scrub)
+	// is an encoded path and not a host: the whole token is judged as one.
+	auth := s[n+3:]
+	end := 0
+	for end < len(auth) && authorityByte(auth[end]) {
+		end++
+	}
+	if strings.IndexByte(auth[:end], '%') >= 0 {
+		if _, _, sep := lenientDecode(auth[:end], false); sep {
+			return 0
+		}
+	}
 	return n
 }
 
@@ -271,7 +328,8 @@ func urlSchemeEnd(s string) int {
 // is scanned as text, so a quote, comma or backslash after a host in compact JSON
 // ("https://h","p":"/Users/bruce") is never read as part of the URL. A userinfo
 // with a sub-delimiter in it ("a,b@host") is cut early; the cost is that the rest
-// is read as text, which still redacts every path in it.
+// is read as text, which still redacts every path in it. An authority that holds
+// an encoded separator at any decoding layer is no authority (urlSchemeEnd).
 func authorityByte(c byte) bool {
 	return isAlpha(c) || c >= '0' && c <= '9' || c >= utf8.RuneSelf || strings.IndexByte("-._~%:@[]", c) >= 0
 }
@@ -310,7 +368,7 @@ func (r pathRoots) urlText(tok string, schemeEnd, depth int) string {
 	if c := rest[authEnd]; c != '/' && c != '?' && c != '#' {
 		// A byte that cannot be in an authority (a whole value that starts as a
 		// URL and holds one): the URL ends there and the rest is text.
-		return tok[:schemeEnd+3+authEnd] + r.redactPathsAt(rest[authEnd:], depth+1, scanText)
+		return tok[:schemeEnd+3+authEnd] + r.afterCut(rest[authEnd:], depth)
 	}
 	head, rest := tok[:schemeEnd+3+authEnd], rest[authEnd:]
 	pathPart, tail := rest, ""
@@ -321,6 +379,17 @@ func (r pathRoots) urlText(tok string, schemeEnd, depth int) string {
 		head += "/" + r.routePath(pathPart[1:], depth)
 	}
 	return head + opaqueTail(tail)
+}
+
+// afterCut is what follows a URL that ended at a byte that cannot be in an
+// authority, up to the end of its run: the text before the first "?" or "#" is
+// scanned as text, and from there to the end the query or fragment is one
+// placeholder, as it is for a URL that did not end early (G8, G9).
+func (r pathRoots) afterCut(rest string, depth int) string {
+	if q := strings.IndexAny(rest, "?#"); q >= 0 {
+		return r.redactPathsAt(rest[:q], depth+1, scanText) + opaqueTail(rest[q:])
+	}
+	return r.redactPathsAt(rest, depth+1, scanText)
 }
 
 // urlHasTail reports whether the first whitespace-delimited chunk of s, a value
@@ -350,12 +419,17 @@ func hasEncodedSep(s string) bool {
 // (fail closed).
 func (r pathRoots) encodedPathToken(tok string) bool {
 	cur := tok
+	// sep: some layer so far held an encoded separator, so a separator in the
+	// layers after it may have been decoded (the placeholder or tag before it can
+	// be encoded one layer deeper than the separator).
+	sep := false
 	for range maxDecode + 1 {
 		next := unescapeLenient(cur, false)
 		if next == cur {
 			return false
 		}
-		if hasEncodedSep(cur) && r.hasPathStart(next, scanText) {
+		sep = sep || hasEncodedSep(cur)
+		if sep && r.hasPathStart(next, scanText|scanDecoded) {
 			return true
 		}
 		cur = next
@@ -386,7 +460,7 @@ func (r pathRoots) hasPathStart(s string, mode scanMode) bool {
 // ".." out of the subtree, "/livez/x") the whole chunk is "<path>", so a
 // route-shaped token that does not parse never leaves a tail behind.
 func (r pathRoots) pathAt(s string, i, depth int, mode scanMode) (end int, repl string) {
-	if mode == scanRoutePath {
+	if mode&scanRoutePath != 0 {
 		// A path that starts inside a route's path part runs to the end of the
 		// part: the part is not prose, so no delimiter ends the path early.
 		return len(s), r.name(s[i:], depth)
@@ -615,11 +689,15 @@ func (r pathRoots) routeText(tok string, depth int) string {
 // part with no path in it is kept as written; one with a path is written
 // re-encoded if it had to be decoded.
 func (r pathRoots) routePath(pp string, depth int) string {
-	dec, exhausted := lenientDecode(pp, false)
+	dec, exhausted, sep := lenientDecode(pp, false)
 	if exhausted {
 		return "<value>"
 	}
-	out := r.redactPathsAt(dec, depth+1, scanRoutePath)
+	mode := scanRoutePath
+	if sep {
+		mode |= scanDecoded // a "/" decoded from "%2F" is never a rewritten tail
+	}
+	out := r.redactPathsAt(dec, depth+1, mode)
 	switch {
 	case out == dec:
 		return pp
@@ -649,16 +727,19 @@ const maxDecode = 5
 
 // lenientDecode percent-decodes s to a fixed point, at most maxDecode rounds,
 // and reports whether it was still changing at the end (fail closed: the caller
-// writes a placeholder). Linear: a fixed number of linear passes.
-func lenientDecode(s string, plus bool) (dec string, exhausted bool) {
+// writes a placeholder), and whether any layer held an encoded separator (sep:
+// a "/" or "\\" in the result may have been decoded). Linear: a fixed number of
+// linear passes.
+func lenientDecode(s string, plus bool) (dec string, exhausted, sep bool) {
 	for range maxDecode {
 		next := unescapeLenient(s, plus)
 		if next == s {
-			return s, false
+			return s, false, sep
 		}
+		sep = sep || hasEncodedSep(s)
 		s = next
 	}
-	return s, unescapeLenient(s, plus) != s
+	return s, unescapeLenient(s, plus) != s, sep || hasEncodedSep(s)
 }
 
 // unescapeLenient decodes every valid %XX (and "+" as a space when plus) and
@@ -984,9 +1065,9 @@ func shapedSegment(s string, j int) bool {
 func (r pathRoots) pathBoundary(s string, i int, mode scanMode) bool {
 	c := s[i-1]
 	switch {
-	case c == '>' && r.endsRootPlaceholder(s, i):
+	case c == '>' && mode&scanDecoded == 0 && r.endsRootPlaceholder(s, i):
 		return false
-	case c == '<' && closingTag(s, i):
+	case c == '<' && mode&scanDecoded == 0 && closingTag(s, i):
 		return false
 	case c == '/':
 		if i >= 3 && s[i-2] == '/' && s[i-3] == ':' {
@@ -995,7 +1076,7 @@ func (r pathRoots) pathBoundary(s string, i int, mode scanMode) bool {
 		// In a route's path part the second slash of a run starts a path, unless
 		// the run follows a scheme's colon or is longer (the first slash of the
 		// run is judged once, so a run of slashes is not rescanned).
-		return mode == scanRoutePath && (i < 2 || s[i-2] != '/' && s[i-2] != ':')
+		return mode&scanRoutePath != 0 && (i < 2 || s[i-2] != '/' && s[i-2] != ':')
 	case c == ':' && s[i] == '/' && i+1 < len(s) && s[i+1] == '/':
 		return false
 	case isNameByte(c):

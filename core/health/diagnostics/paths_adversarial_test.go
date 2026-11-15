@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_adversarial_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d4b7e21-3a6c-4f58-8e0d-5b1c2a97f634
 // last-edited: 2026-11-14
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -277,6 +278,12 @@ var ctxs = []ctx{
 	{"compact-tail", `https://abs.example","p":"%s","q":"?x`, "text"},
 	{"compact-path", `{"u":"https://abs.example/x","p":"%s"}`, "text"},
 	{"compact-route", `{"u":"/api/v1/x","p":"%s"}`, "text"},
+	// Review finding 4: a "?" or "#" after the cut still opens the opaque tail.
+	{"compact-q-after", `https://abs.example","p":"%s","q":"a?b`, "text"},
+	{"compact-q-before", `https://abs.example","q":"a?b","p":"%s"`, "text"},
+	{"cut-query", `https://abs.example<x?path=%s`, "query"},
+	{"cut-fragment", `https://abs.example"x#%s`, "query"},
+	{"cut-comma-query", `https://abs.example,x?a=1&path=%s`, "query"},
 	// Round 7, review finding 2: a "<root:NAME>" placeholder or a closing tag in
 	// the same whitespace-free run, in front of a quote and the planted text.
 	{"tag-prefix", `</b>"%s`, "text"},
@@ -927,7 +934,7 @@ func TestRedactPaths_URLAuthorityEndsAtAByteThatCannotBeInIt(t *testing.T) {
 		same(`"https://abs.example/x?p=1","p":"/Users/bruce/`+marker+`"`, `"https://abs.example/x?<query>`),
 		// A URL with a query after a byte that ends the authority: the query is no
 		// longer the URL's, so the text after the byte is scanned as text.
-		same(`{"u":"https://h","q":"?a=/Users/bruce/`+marker+`"}`, `{"u":"https://h","q":"?a=<path>"}`),
+		same(`{"u":"https://h","q":"?a=/Users/bruce/`+marker+`"}`, `{"u":"https://h","q":"?<query>`),
 	)
 	runExact(t, cases)
 	// The whole-value road: a value that starts as a URL and holds a "?" or "#"
@@ -957,6 +964,9 @@ func TestRedactPaths_EncodedTokenAfterAQuoteAndAPrefix(t *testing.T) {
 	roots := advRoots()
 	prefixes := []string{"", "x", "<root:lib>", "<root:lib>/a", "<root:vault>", "<root:nope>", "</b>", "</tag>", "</b></i>", "(", "<", "'(", "[<root:lib>",
 		"%3Croot:lib%3E", "%3C%2Fb%3E", "a@", "k=", "<root:lib>/x@", "<root:lib><root:vault>", "/srv/lib", "/srv/lib/a@", "/api/x", "/api/x?q=", "https://h", "https://h/x", "50%25", "%zz", "%2", "%"}
+	// (No-quote spellings are TestRedactPaths_EncodedPathAfterAPlaceholderOrTag:
+	// after a name byte, a root path or a URL host the same text is not a token
+	// of its own.)
 	quotes := []string{`"`, "`", `"'`, `\"`, `""`, "`\""}
 	encoded := []string{
 		"%2FUsers%2Fbruce%2F" + marker, "%2fUsers%2fbruce%2f" + marker, "%252FUsers%252Fbruce%252F" + marker,
@@ -985,6 +995,195 @@ func TestRedactPaths_EncodedTokenAfterAQuoteAndAPrefix(t *testing.T) {
 	}
 	if n < 5000 {
 		t.Fatalf("only %d cases", n)
+	}
+}
+
+// TestRedactPaths_EncodedPathAfterAPlaceholderOrTag (round 7, review finding 3):
+// "<root:lib>/rest" is the redactor's own output for a path under a root, so a
+// raw "/" right after the ">" of a configured root's placeholder is not the start
+// of a path (its tail is already rewritten), and neither is the "/" of a closing
+// tag. A "/" that came from percent-decoding is no such thing: nothing the
+// redactor wrote has an encoded separator after a placeholder, so
+// "<root:lib>%2FUsers%2Fbruce%2FGordonx" is an encoded absolute path that happens
+// to follow a placeholder-shaped prefix and must be "<path>". The exceptions
+// apply to a raw byte only, at every decoding layer.
+func TestRedactPaths_EncodedPathAfterAPlaceholderOrTag(t *testing.T) {
+	roots := advRoots()
+	bodies := []string{
+		"%2FUsers%2Fbruce%2F" + marker, "%2fUsers%2fbruce%2f" + marker,
+		"%252FUsers%252Fbruce%252F" + marker, "%25252FUsers%25252Fbruce%25252F" + marker,
+		"%5C%5Cvault%5Cshare%5C" + marker, "C%3A%5CUsers%5Cbruce%5C" + marker,
+		"%2FUsers/bruce/" + marker, "%2F%2FUsers%2Fbruce%2F" + marker,
+	}
+	prefixes := []string{"<root:lib>", "<root:vault>", "</b>", "</tag>", "</b></i>", "<root:lib></b>", "<root:lib><root:vault>", "x<root:lib>", "(<root:lib>", "k=<root:lib>", "[</b>", "<root:lib>/a", "%3Croot:lib%3E", "%253Croot:lib%253E"}
+	var n int
+	// The same text in a route's or a URL's path part, where it is decoded and
+	// read again as a path part.
+	for _, in := range []string{
+		"/api/v1/x/<root:lib>%2FUsers%2Fbruce%2F" + marker, "/api/v1/x/</b>%2FUsers%2Fbruce%2F" + marker,
+		"/api/v1/x/<root:lib>%252FUsers%252Fbruce%252F" + marker, "/api/v1/x/%3Croot:lib%3E%2FUsers%2Fbruce%2F" + marker,
+		"/api/v1/x/%253Croot:lib%253E%2FUsers%2Fbruce%2F" + marker, "https://h/x/<root:lib>%2FUsers%2Fbruce%2F" + marker,
+		"GET /api/v1/x/<root:lib>%2FUsers%2Fbruce%2F" + marker + " 200",
+	} {
+		for road, run := range map[string]func(string) string{"text": roots.redactPaths, "value": roots.redactValue} {
+			out := run(in)
+			for _, f := range decodedForms(out) {
+				if strings.Contains(f, marker) {
+					t.Errorf("[%s] marker survived\n in:  %q\n out: %q", road, in, out)
+					break
+				}
+			}
+		}
+	}
+	for _, pre := range prefixes {
+		for _, body := range bodies {
+			for _, post := range []string{"", " 200", ")", ","} {
+				in := pre + body + post
+				for road, run := range map[string]func(string) string{"text": roots.redactPaths, "value": roots.redactValue} {
+					out := run(in)
+					for _, f := range decodedForms(out) {
+						if strings.Contains(f, marker) {
+							t.Errorf("[%s] marker survived\n in:  %q\n out: %q", road, in, out)
+							break
+						}
+					}
+					n++
+				}
+			}
+		}
+	}
+	if n < 400 {
+		t.Fatalf("only %d cases", n)
+	}
+	// What the redactor writes is still left alone: a raw "/" after a configured
+	// root's placeholder is no path start (its own output is a fixed point), and
+	// the "/" of a closing tag is none either.
+	runExact(t, []pc{
+		same("<root:lib>/a/b", "<root:lib>/a/b"),
+		same("<b>x</b>/ok", "<b>x</b><path>"), // only the "/" of the closing tag is no start; this one is
+		same("</div>/Users/bruce/"+marker, "</div><path>"),
+	})
+}
+
+// TestRedactPaths_URLCutThenQueryIsOpaque (round 7, review finding 4): when a
+// URL ends at a byte that cannot be in an authority, a "?" or "#" later in the
+// same run still opens the opaque query or fragment (G8, G9): from the first one
+// to the end of the run (the end of the value, on the value road) it is one
+// placeholder, whatever it holds, and the text between the cut and the "?" is
+// scanned as text. Cutting the URL must not turn its query into free text, where
+// a raw "&" or "=" in a name ends a path early.
+func TestRedactPaths_URLCutThenQueryIsOpaque(t *testing.T) {
+	runExact(t, []pc{
+		{`https://h"x?p=/Users/a&b/` + marker + `/Books`, `https://h"x?<query>`, `https://h"x?<query>`},
+		{`https://h<x#/Users/bruce/` + marker + `/y`, `https://h<x#<fragment>`, `https://h<x#<fragment>`},
+		{"https://h`x?p=/Users/a'b/" + marker, "https://h`x?<query>", "https://h`x?<query>"},
+		{`https://h\x?p=/Users/a)b/` + marker, `https://h\x?<query>`, `https://h\x?<query>`},
+		{`https://h,"p":"/Users/bruce/` + marker + `","q":"a?b=/Users/a&b/` + marker + `"`, `https://h,"p":"<path>","q":"a?<query>`, `https://h,"p":"<path>","q":"a?<query>`},
+		{`see https://h"x?p=/Users/a&b/` + marker + ` and /Users/bruce/` + marker, `see https://h"x?<query> and <path>`, `see https://h"x?<query> and <path>`},
+		{`{"u":"https://h","q":"x?p=/Users/a&b/` + marker + `"}`, `{"u":"https://h","q":"x?<query>`, `{"u":"https://h","q":"x?<query>`},
+	})
+	roots := advRoots()
+	for _, in := range []string{
+		`https://h"x?p=/Users/a&b/` + marker + `/Books`, `https://h<x#/Users/bruce/` + marker + `/y`,
+		`https://h"x?p=%2FUsers%2Fa%26b%2F` + marker, `https://h"x#a&b=/Users/` + marker,
+		`https://h,"p":"x?q=/Users/a;b/` + marker + `"`,
+	} {
+		for road, run := range map[string]func(string) string{"text": roots.redactPaths, "value": roots.redactValue} {
+			if out := run(in); strings.Contains(out, marker) {
+				t.Errorf("[%s] %q -> %q", road, in, out)
+			}
+		}
+	}
+}
+
+// The invariant the non-admin (redacted) view is meant to guarantee, stated once
+// (seams note F8-03, "The invariant"): no byte that follows an absolute-path
+// start survives, whether the start is raw or percent-encoded at any depth, in any
+// delimiter context. TestRedactPaths_NoPathByteSurvivesProperty checks it
+// directly: it builds inputs from independent parts (a prefix, a context, a path
+// spelling, a directory name made of delimiter bytes, a wrapper, a suffix), plants
+// the marker in the path, and fails if the marker is readable in the output on any
+// road. A new way to hide a path is a new part in one of the tables below.
+
+// propPrefixes are what may stand in front of a target in the same
+// whitespace-free run: nothing, a root's placeholder, closing tags, an opening
+// quote or bracket, and a URL cut short by a byte that cannot be in its host. root
+// marks a prefix that ends the placeholder of a configured root (a raw path right
+// after one is that root's already rewritten tail, by design, so a raw target is
+// not planted directly behind it).
+var propPrefixes = []struct {
+	s     string
+	joins int // see the join* constants
+}{
+	{"", joinNone}, {"<root:lib>", joinRoot}, {"<root:vault>", joinRoot}, {"</b>", joinNone}, {"</tag>", joinNone}, {"<root:lib></b>", joinNone},
+	{"</b><root:lib>", joinRoot}, {"%3Croot:lib%3E", joinEncoded}, {"%253Croot:lib%253E", joinEncoded}, {`"`, joinNone}, {"`", joinNone}, {"(", joinNone}, {`{"k":"`, joinNone},
+	{`"https://h","p":"`, joinNone}, {"https://h,", joinNone}, {"https://h<", joinNone}, {"https://h>", joinNone}, {"https://h`", joinNone}, {`https://h\`, joinNone},
+	{`{"u":"https://h","p":`, joinNone}, {`{"u":"https://h:8080","p":"`, joinNone}, {`https://h"x`, joinName}, {`https://h"x?q=1&`, joinNone},
+}
+
+// What a prefix leaves in front of a target that follows it directly: nothing
+// (any spelling is a path), a configured root's placeholder (a raw path there is
+// that root's rewritten tail, by design; an encoded one is not, finding 3), an
+// encoded placeholder (a raw path is glued to its last name byte; an encoded one
+// decodes to a path after ">"), or a name byte (anything after it is glued to a
+// name: relative text, G1).
+const (
+	joinNone = iota
+	joinRoot
+	joinEncoded
+	joinName
+)
+
+func TestRedactPaths_NoPathByteSurvivesProperty(t *testing.T) {
+	roots := advRoots()
+	roadList := roadsFor(roots)
+	names := allNames()
+	// PATHS_PROP_SEED and PATHS_PROP_N widen the search by hand (a different seed
+	// and a bigger sample); CI runs the fixed ones.
+	seed, n := uint64(1115), 60_000
+	if v, err := strconv.ParseUint(os.Getenv("PATHS_PROP_SEED"), 10, 64); err == nil {
+		seed = v
+	}
+	if v, err := strconv.Atoi(os.Getenv("PATHS_PROP_N")); err == nil && v > 0 {
+		n = v
+	}
+	rng := rand.New(rand.NewPCG(2026, seed))
+	ran, skipped := 0, 0
+	for range n {
+		pre := propPrefixes[rng.IntN(len(propPrefixes))]
+		ci, fi := rng.IntN(len(ctxs)), rng.IntN(len(forms))
+		name := names[rng.IntN(len(names))]
+		wi, si := rng.IntN(len(wrappers)), rng.IntN(len(suffixes))
+		p, ok := plant(ci, fi, name, wi, si)
+		// A target right behind a prefix that joins it (see the join constants) is
+		// not planted where it would not be a path start by design.
+		raw := !forms[fi].encoded
+		if !ok || wi == 0 && (pre.joins == joinRoot && raw || pre.joins == joinEncoded && (raw || p.ctxKind != "text") || pre.joins == joinName) {
+			skipped++
+			continue
+		}
+		in := pre.s + p.in
+		for _, rd := range roadList {
+			// With a prefix the whole value is prose or a URL cut short, judged as
+			// text: it is held to the text promise, and to the whole-value one
+			// where both apply.
+			want := p.text
+			if rd.name != "text" {
+				want = p.text && p.whole
+				if pre.s == "" {
+					want = p.whole
+				}
+			}
+			if pre.s != "" && strings.ContainsAny(pre.s, "?#") {
+				want = want && p.ctxKind != "text" || p.ctxKind == "text" && p.text // the query is opaque to the end of the run
+			}
+			out := safeRun(rd, in)
+			invariants(t, rd, in, out, want)
+			ran++
+		}
+	}
+	if ran < n*3/2 {
+		t.Fatalf("only %d cases ran (%d skipped); the generator shrank", ran, skipped)
 	}
 }
 
