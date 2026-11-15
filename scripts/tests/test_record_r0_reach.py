@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.9.0
+# version: 1.10.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-15
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -987,13 +987,19 @@ class OwnerSetTest(unittest.TestCase):
                 allowed = k == 0 and not auth_off
                 st = (owner_status if owner_set else 200) if allowed else 403
                 cols.append([st] * len(rts))
-            return {
+            out = {
                 "columns": cols,
                 "tasks": [],
                 "approvals": [],
                 "census": {},
-                "canary": {},
+                "canary": {p["name"]: 200 for p in mine},
             }
+            if owner_set and not auth_off:
+                out["refusals"] = {
+                    f"{m} {p}": "Owner actions need you to sign in through Cloudflare Access"
+                    for m, p in rec.OWNER_ROUTES
+                }
+            return out
 
         self.assertGreater(n_on, 1)
         args = rec.build_parser().parse_args(["--check", "--binary", "r0"])
@@ -1026,6 +1032,87 @@ class OwnerSetTest(unittest.TestCase):
 
     def test_record_accepts_owner_boots_whose_gate_refused_the_allowed_principal(self):
         self._record_with(owner_status=403)
+
+    def test_the_owner_doc_carries_the_owner_boots_canary_and_the_admin_refusals(self):
+        table = [p for p in rec.principal_table() if p["name"] in {"session:admin", "anonymous"}]
+        routes = [{"method": "POST", "path": "/api/v1/backup/restore"}]
+        refusals = {"POST /api/v1/backup/restore": "sign in through Cloudflare Access"}
+        doc = rec.owner_set_doc(
+            routes, table, [[403], [401]], {"session:admin": 200, "anonymous": 401}, refusals
+        )
+        self.assertEqual(doc["canary"], {"session:admin": 200, "anonymous": 401})
+        self.assertEqual(doc["routes"][0]["admin_refusal"], "sign in through Cloudflare Access")
+        self.assertIn("NOT recorded", doc["what"])
+
+    def test_the_owner_boots_canaries_must_equal_the_main_boots(self):
+        rec.check_owner_canaries({"a": 200, "b": 401}, {"a": 200, "b": 401})
+        with self.assertRaises(rec.RecorderError) as cm:
+            rec.check_owner_canaries({"a": 200, "b": 401}, {"a": 200, "b": 403})
+        self.assertIn("b", str(cm.exception))
+        with self.assertRaises(rec.RecorderError):
+            rec.check_owner_canaries({"a": 200}, {"a": 200, "b": 401})
+
+    def _admin_that_answers(self, status, body):
+        class Admin:
+            principal = {"name": "session:admin", "kind": "session"}
+
+            def send(self, method, path, req_body, body_sink=None):
+                if body_sink is not None:
+                    body_sink.append(body)
+                return status
+
+        return Admin()
+
+    def test_the_admin_refusal_must_be_the_owner_gates_own_403(self):
+        routes = [{"method": "POST", "path": "/api/v1/backup/restore"}]
+        gate = json.dumps(
+            {"error": "Owner actions need you to sign in through Cloudflare Access; a password"}
+        )
+        got = rec.owner_refusals(self._admin_that_answers(403, gate), routes)
+        self.assertIn(rec.OWNER_REFUSAL_TEXT, got["POST /api/v1/backup/restore"])
+        # a 403 for another reason (a role, a guard) is no evidence about the gate
+        with self.assertRaises(rec.RecorderError) as cm:
+            rec.owner_refusals(
+                self._admin_that_answers(403, '{"error":"missing permission"}'), routes
+            )
+        self.assertIn("without the owner gate's text", str(cm.exception))
+        # and a route the admin session is let through on is a gate that did not hold
+        with self.assertRaises(rec.RecorderError) as cm:
+            rec.owner_refusals(self._admin_that_answers(400, "{}"), routes)
+        self.assertIn("want 403", str(cm.exception))
+
+    def test_a_body_is_read_for_an_error_response_only_and_only_when_asked(self):
+        rig = Rig()
+        self.addCleanup(rig.close)
+        sink: list[str] = []
+        status = rec.status_only(
+            rig.client, "GET", "/api/v1/health", None, "none", 10.0, body_sink=sink
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(len(sink), 1)
+        self.assertEqual(
+            rec.status_only(rig.client, "GET", "/api/v1/health", None, "none", 10.0), 404
+        )
+
+    def test_check_compares_the_admin_refusals_and_the_owner_canary(self):
+        base = {
+            "principals": ["a"],
+            "routes": [],
+            "owner_set": {
+                "owner_email": rec.OWNER_EMAIL,
+                "canary": {"a": 200},
+                "routes": [
+                    {"method": "POST", "path": "/x", "verdict": "D", "admin_refusal": "sign in"}
+                ],
+            },
+        }
+        self.assertEqual(rec.diff_verdicts(base, base), [])
+        other = json.loads(json.dumps(base))
+        other["owner_set"]["routes"][0]["admin_refusal"] = "missing permission"
+        self.assertEqual(len(rec.diff_verdicts(base, other)), 1)
+        other = json.loads(json.dumps(base))
+        other["owner_set"]["canary"] = {"a": 403}
+        self.assertEqual(len(rec.diff_verdicts(base, other)), 1)
 
     def test_the_columns_of_the_two_boots_are_stitched_in_principal_order(self):
         table = [
@@ -1200,7 +1287,19 @@ class ProvenanceTest(unittest.TestCase):
             "ImageVersion": "20261101.186.1",
         }
         got = rec.recorded_by(env)
-        self.assertEqual(got["recorder_commit"], "a" * 40)
+        # the run's own HEAD is a throwaway commit; the recorder's commit is the last
+        # one that touched scripts/r2corpus in the checkout
+        self.assertEqual(got["run_head"], "a" * 40)
+        self.assertNotEqual(got["recorder_commit"], "a" * 40)
+        self.assertRegex(got["recorder_commit"], r"^[0-9a-f]{40}$")
+        last = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", "scripts/r2corpus"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(got["recorder_commit"], last)
         self.assertEqual(
             (got["workflow"], got["run_id"], got["run_attempt"]), ("R0 reach record", "7", "2")
         )

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.8.0
+# version: 1.9.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
 # last-edited: 2026-11-15
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
@@ -43,6 +43,11 @@ the environment unconditionally (``applyEnvAuthoritativeConfig``), so a value wr
 the stored config is overwritten at boot. A first recording that wrote it there
 recorded the gate off (every letter identical to the main recording), so a boot whose
 owner gate did not take effect is a recorder failure (``check_owner_gate_took_effect``).
+The owner boots also record each principal's canary (which must equal the main boots',
+``check_owner_canaries``) and the admin session's refusal text on every owner route,
+which must be the gate's own (``OWNER_REFUSAL_TEXT``: a 403 for another reason is no
+evidence about the gate). The owner's ALLOW side is not recorded: R0 admits the owner
+only for a verified Cloudflare Access JWT, and the boot has no verifier and no issuer.
 
 ``--check`` re-derives the data and exits 1 on any differing verdict cell, a
 changed R0 binary, a changed route count or principal list, or a changed overlay
@@ -71,6 +76,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import contextlib
 import datetime
 import functools
 import hashlib
@@ -383,6 +389,7 @@ def status_only(
     auth: str,
     timeout: float,
     source: str | None = None,
+    body_sink: list[str] | None = None,
 ) -> int:
     """Send one request and return its status without reading the body.
 
@@ -390,6 +397,10 @@ def status_only(
     stream whose heartbeat keeps resetting the socket timeout (a probe that was
     authorized for ``GET /api/events`` hung the first runner pass for 37 minutes).
     A 429 is not retried: it means the rate limiter is on, a recorder failure.
+
+    ``body_sink`` asks for the first 2 KiB of an error response's body (never of a
+    success: an authorized probe can reach a stream that does not end); an error
+    response is a short body whose end the server sends.
     """
     hdrs = {"Accept": "application/json", "User-Agent": RECORDER_UA}
     data = None
@@ -411,6 +422,8 @@ def status_only(
             return int(r.status)  # leaving the block closes the connection
     except urllib.error.HTTPError as e:
         try:
+            if body_sink is not None:
+                body_sink.append(e.read(2048).decode("utf-8", errors="replace"))
             return int(e.code)
         finally:
             e.close()
@@ -426,13 +439,14 @@ class Probe:
         self.auth = _auth_name(principal)
         self.canary_status: int | None = None  # what the first canary answered
 
-    def send(self, method: str, path: str, body: Any) -> int:
+    def send(self, method: str, path: str, body: Any, body_sink: list[str] | None = None) -> int:
         """The status line of one request, with the body left unread: a probe that
         is authorized can reach a stream (SSE) that never ends, and the verdict
-        is the status, which the headers already carry."""
+        is the status, which the headers already carry. ``body_sink`` takes an
+        error response's body (``status_only``)."""
         try:
             source = SOURCES.next() if SOURCES else None
-            return status_only(self.client, method, path, body, self.auth, 60.0, source)
+            return status_only(self.client, method, path, body, self.auth, 60.0, source, body_sink)
         except OSError as e:  # connection refused/reset, timeout: the server died
             raise RecorderError(f"{self.principal['name']} {method} {path}: {e}") from e
 
@@ -737,23 +751,28 @@ def overlay_digest(root: pathlib.Path) -> str:
 
 def recorded_by(env: Any = None) -> dict[str, str]:
     """Who wrote this recording: the GitHub Actions run when there is one, else the
-    local checkout. Provenance only; ``--check`` never compares it."""
+    local checkout. Provenance only; ``--check`` never compares it.
+
+    ``recorder_commit`` is the last commit that touched ``scripts/r2corpus`` in the
+    checkout, which is the commit that carries this recorder: a recording run's own
+    HEAD is a throwaway commit on a branch that is deleted afterwards (it adds the
+    workflow file and nothing else), so that one is kept apart as ``run_head``."""
     env = os.environ if env is None else env
-    commit = env.get("GITHUB_SHA", "")
-    if not commit:
-        try:
-            commit = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=w.REPO_ROOT,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-        except (OSError, subprocess.CalledProcessError):
-            commit = "unknown"
+    run_head = env.get("GITHUB_SHA", "")
+    commit = ""
+    with contextlib.suppress(OSError, subprocess.CalledProcessError):
+        commit = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", "scripts/r2corpus"],
+            cwd=w.REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    commit = commit or run_head or "unknown"
     image = "/".join(x for x in (env.get("ImageOS", ""), env.get("ImageVersion", "")) if x)
     return {
         "recorder_commit": commit,
+        "run_head": run_head,
         "workflow": env.get("GITHUB_WORKFLOW", "local"),
         "run_id": env.get("GITHUB_RUN_ID", ""),
         "run_attempt": env.get("GITHUB_RUN_ATTEMPT", ""),
@@ -835,26 +854,101 @@ def check_owner_gate_took_effect(
         )
 
 
+# What R0's owner gate says to a caller that is not the verified owner
+# (auth.OwnerProofWhyNot @v0.223.0: the method test comes first, before the email is
+# compared). A 403 with any other text is a refusal for another reason (a role, a
+# guard) and says nothing about the gate.
+OWNER_REFUSAL_TEXT = "sign in through Cloudflare Access"
+
+
+def refusal_message(body: str) -> str:
+    """The message of an error body: its ``error`` (or ``message``) string when the
+    body is a JSON object that has one, else the body, trimmed."""
+    text = body.strip()
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return text[:300]
+    if isinstance(doc, dict):
+        for key in ("error", "message"):
+            if isinstance(doc.get(key), str):
+                return doc[key].strip()[:300]
+    return text[:300]
+
+
+def owner_refusals(admin: Probe, routes: list[dict[str, Any]]) -> dict[str, str]:
+    """The admin session's refusal on each owner route, as R0 words it: the body of
+    a second request on every route (the first one's status is in the columns). The
+    admin session is the principal the main recording allowed, so its refusal is the
+    owner gate's own. A route that does not refuse (any status but 403) is a recorder
+    failure; so is a 403 that does not carry the gate's text."""
+    out: dict[str, str] = {}
+    problems: list[str] = []
+    for r in routes:
+        m, p = r["method"], r["path"]
+        req_path, req_body = probe_request(m, p, admin.principal["name"])
+        sink: list[str] = []
+        status = admin.send(m, req_path, req_body, sink)
+        msg = refusal_message(sink[0]) if sink else ""
+        if status != 403:
+            problems.append(f"{m} {p}: the admin session was answered {status}, want 403")
+        elif OWNER_REFUSAL_TEXT not in msg:
+            problems.append(
+                f"{m} {p}: 403 without the owner gate's text ({OWNER_REFUSAL_TEXT!r}): {msg!r}"
+            )
+        out[f"{m} {p}"] = msg
+    if problems:
+        raise RecorderError(
+            "the owner gate's refusal is not what R0's auth.OwnerProofWhyNot says:\n"
+            + "\n".join(problems)
+        )
+    return out
+
+
+def check_owner_canaries(main: dict[str, int | None], owner: dict[str, int | None]) -> None:
+    """Every principal's canary in the owner boots answers what it did in the main
+    boots: an owner boot whose credentials behaved differently is not a recording of
+    the same principals."""
+    if main != owner:
+        diff = sorted(k for k in set(main) | set(owner) if main.get(k) != owner.get(k))
+        raise RecorderError(
+            "the owner boots' canaries differ from the main boots' for: " + ", ".join(diff)
+        )
+
+
 def owner_set_doc(
-    routes: list[dict[str, Any]], principals: list[dict[str, Any]], columns: list[list[int]]
+    routes: list[dict[str, Any]],
+    principals: list[dict[str, Any]],
+    columns: list[list[int]],
+    canary: dict[str, int | None] | None = None,
+    refusals: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """The owner-set recording: one verdict string per owner-gated route, one letter
     per principal of the table (the auth-disabled one included), as the main
-    recording's routes are."""
+    recording's routes are. ``refusals`` is the admin session's refusal text per
+    route and ``canary`` the owner boots' per-principal canary."""
     rows = []
     for i, r in enumerate(routes):
         st = [col[i] for col in columns]
-        rows.append(
-            {
-                "method": r["method"],
-                "path": r["path"],
-                "status": st,
-                "verdict": "".join(DENY if s in DENY_STATUSES else ALLOW for s in st),
-            }
-        )
+        row: dict[str, Any] = {
+            "method": r["method"],
+            "path": r["path"],
+            "status": st,
+            "verdict": "".join(DENY if s in DENY_STATUSES else ALLOW for s in st),
+        }
+        if refusals is not None:
+            row["admin_refusal"] = refusals[f"{r['method']} {r['path']}"]
+        rows.append(row)
+    extra: dict[str, Any] = {}
+    if canary is not None:
+        extra["canary"] = canary
     return {
+        **extra,
         "what": "R0's allow/deny on the owner-gated routes with OWNER_EMAIL set in its "
-        "environment and no Cloudflare Access verifier, so no principal is the owner",
+        "environment and no Cloudflare Access verifier, so no principal is the owner: "
+        "R0 refuses every principal, and the admin session's refusal is the gate's own "
+        "(admin_refusal). The owner's allow side is NOT recorded: it needs a verified "
+        "Access JWT, which this boot cannot mint (no verifier, no issuer)",
         "owner_email": OWNER_EMAIL,
         "routes": rows,
     }
@@ -910,6 +1004,19 @@ def diff_verdicts(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
         out.append(
             f"owner_set.owner_email: {old_owner.get('owner_email')!r} -> {new_owner.get('owner_email')!r}"
         )
+    if old_owner.get("canary") != new_owner.get("canary"):
+        out.append(f"owner_set.canary: {old_owner.get('canary')!r} -> {new_owner.get('canary')!r}")
+    for key in sorted(
+        {(r["method"], r["path"]) for r in old_owner.get("routes", [])}
+        & {(r["method"], r["path"]) for r in new_owner.get("routes", [])}
+    ):
+        was = next(r for r in old_owner["routes"] if (r["method"], r["path"]) == key)
+        now = next(r for r in new_owner["routes"] if (r["method"], r["path"]) == key)
+        if was.get("admin_refusal") != now.get("admin_refusal"):
+            out.append(
+                f"owner_set {key[0]} {key[1]}: admin refusal "
+                f"{was.get('admin_refusal')!r} -> {now.get('admin_refusal')!r}"
+            )
     oo = {(r["method"], r["path"]): r["verdict"] for r in old_owner.get("routes", [])}
     no = {(r["method"], r["path"]): r["verdict"] for r in new_owner.get("routes", [])}
     for key in sorted(set(oo) | set(no)):
@@ -1147,9 +1254,12 @@ def boot_and_record(
         mine = [p for p in principals if p["kind"] != "authoff"]
         probes = prepare_credentials(client, mine)
         admin = probes["session:admin"]
-        return record_pass(
+        out = record_pass(
             lambda p: probes[p["name"]], mine, routes, admin, args.workers, not owner_set
         )
+        if owner_set:
+            out["refusals"] = owner_refusals(admin, routes)
+        return out
     finally:
         stop_throwaway(proc)
         boot = ("off" if auth_off else "on") + ("-owner" if owner_set else "")
@@ -1229,6 +1339,9 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     )
     owner_columns = stitch_columns(principals, owner_on["columns"], owner_off["columns"])
     check_owner_gate_took_effect(routes, columns, owner_subset, owner_columns)
+    owner_canary = {**owner_on["canary"], **owner_off["canary"]}
+    main_canary = {**on["canary"], **off["canary"]}
+    check_owner_canaries(main_canary, owner_canary)
     meta = {
         "what": "R0's allow/deny per (route, principal); A = past the authorization decision, "
         "D = 401/403 (record_r0_reach.py)",
@@ -1239,8 +1352,10 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
         "recorded": recorded_by(),
     }
     extra = {k: on[k] for k in ("tasks", "approvals", "census")}
-    extra["canary"] = {**on["canary"], **off["canary"]}
-    extra["owner_set"] = owner_set_doc(owner_subset, principals, owner_columns)
+    extra["canary"] = main_canary
+    extra["owner_set"] = owner_set_doc(
+        owner_subset, principals, owner_columns, owner_canary, owner_on["refusals"]
+    )
     return principals_doc(principals), build_verdicts(meta, routes, principals, columns, extra)
 
 
