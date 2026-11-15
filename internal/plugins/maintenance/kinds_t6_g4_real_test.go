@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_real_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 075c2d47-deca-45e6-8742-449c0093b857
 // last-edited: 2026-11-15
 
@@ -136,15 +136,30 @@ func init() {
 				}
 			}
 		}
-		t6g4SameResources(t, rec, ops.ResBookFiles, ops.ResBooks)
+		// The fixture's files all take the path that sets the intro and then
+		// stamps the book's aggregate (SetBookFileIntro, ModifyBook); the resources
+		// those two calls write are the table's rows, not a retyped list.
+		t6g4SameResources(t, rec, t6RowsOf("SetBookFileIntro", "ModifyBook")...)
 		t6g4NoStatsThroughTheWriter(t, rec)
 		if st, err := fx.s.GetFileIntroStats(); err != nil || st == nil {
 			t.Errorf("the run's counters (stats:transcribe-files) were not persisted: %+v err=%v", st, err)
 		}
-		for _, r := range decl.WriteSet() {
-			if r.Kind != string(ops.ResBookFiles) && r.Kind != string(ops.ResBooks) {
-				t.Errorf("declared %q, which the run never wrote", r.Kind)
+		// What the kind declares is the union of the rows of every writer method
+		// its core can call (a file the fixture does not reach clears the intro or
+		// records a timeout), nothing the core never calls.
+		canCall := []string{"SetBookFileIntro", "ClearBookFileIntro", "RecordIntroTimeout", "ClearIntroTimeouts", "ModifyBook"}
+		for _, m := range rec.all() {
+			if !slices.Contains(canCall, m) {
+				t.Errorf("the run called %s, which is not among the writer methods the kind can call %v", m, canCall)
 			}
+		}
+		var declared []ops.Resource
+		for _, r := range decl.WriteSet() {
+			declared = append(declared, ops.Resource(r.Kind))
+		}
+		slices.Sort(declared)
+		if want := t6RowsOf(canCall...); !slices.Equal(declared, want) {
+			t.Errorf("declared write set %v, want the union of the rows of %v = %v", declared, canCall, want)
 		}
 	}
 }
