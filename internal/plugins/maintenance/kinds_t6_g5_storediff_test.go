@@ -42,52 +42,57 @@ import (
 // journal (opchange, the merge sibling-move journal) is `operations`; a record
 // keyed on a book or a version group (path_history, group redirects) is `books`.
 var t6g5KeyFamilyResource = map[string]ops.Resource{
-	"book:":                     ops.ResBooks,
-	"book_sig:":                 ops.ResBooks,
-	"book_atpath":               ops.ResBooks,
-	"book_hash:":                ops.ResBooks,
-	"book_organizedhash:":       ops.ResBooks,
-	"book_originalhash:":        ops.ResBooks,
-	"book_narrators:":           ops.ResBooks,
-	"book_ver:":                 ops.ResBooks,
-	"book_tag:":                 ops.ResBooks,
-	"tag_idx:":                  ops.ResBooks,
-	"alt_titles:":               ops.ResBooks,
-	"ident:":                    ops.ResBooks,
-	"path_history:":             ops.ResBooks,
-	"tombstone:":                ops.ResBooks,
-	"chapters:":                 ops.ResBooks,
-	"narrator":                  ops.ResBooks,
-	"work:":                     ops.ResBooks,
-	"metadata_rejection:":       ops.ResBooks,
-	"merge:group-redirect:":     ops.ResBooks,
-	"b:duration_map:":           ops.ResBooks,
-	"book_file":                 ops.ResBookFiles,
-	"bf:":                       ops.ResBookFiles,
-	"bfs:":                      ops.ResBookFiles,
-	"file_prov":                 ops.ResBookFiles,
-	"author:":                   ops.ResAuthors,
-	"author_":                   ops.ResAuthors,
-	"book_authors:":             ops.ResAuthors,
-	"ubs:":                      ops.ResUserState,
-	"upos:":                     ops.ResUserState,
-	"playp:":                    ops.ResUserState,
-	"playe:":                    ops.ResUserState,
-	"pref:":                     ops.ResUserState,
-	"upl:":                      ops.ResUserState,
-	"playlist":                  ops.ResUserState,
-	"bookmark:":                 ops.ResUserState,
-	"user_tag:":                 ops.ResUserState,
-	"merge_user_state_pending:": ops.ResUserState,
-	"merge:survivor-reconcile:": ops.ResUserState,
-	"sync_item:":                ops.ResUserState,
-	"sync_file:":                ops.ResUserState,
-	"sync_alias_use":            ops.ResUserState,
-	"idx:":                      ops.ResUserState,
-	"opchange":                  ops.ResOperations,
-	"op_result:":                ops.ResOperations,
-	"merge:sibling-journal:":    ops.ResOperations,
-	"merge:combine-journal:":    ops.ResOperations,
+	"book:":                 ops.ResBooks,
+	"book_sig:":             ops.ResBooks,
+	"book_atpath":           ops.ResBooks,
+	"book_hash:":            ops.ResBooks,
+	"book_organizedhash:":   ops.ResBooks,
+	"book_originalhash:":    ops.ResBooks,
+	"book_narrators:":       ops.ResBooks,
+	"book_ver:":             ops.ResBooks,
+	"book_tag:":             ops.ResBooks,
+	"tag_idx:":              ops.ResBooks,
+	"alt_titles:":           ops.ResBooks,
+	"ident:":                ops.ResBooks,
+	"path_history:":         ops.ResBooks,
+	"tombstone:":            ops.ResBooks,
+	"chapters:":             ops.ResBooks,
+	"narrator":              ops.ResBooks,
+	"work:":                 ops.ResBooks,
+	"metadata_rejection:":   ops.ResBooks,
+	"merge:group-redirect:": ops.ResBooks,
+	"b:duration_map:":       ops.ResBooks,
+	"book_file":             ops.ResBookFiles,
+	"bf:":                   ops.ResBookFiles,
+	"bfs:":                  ops.ResBookFiles,
+	"file_prov":             ops.ResBookFiles,
+	"author:":               ops.ResAuthors,
+	"author_":               ops.ResAuthors,
+	"book_authors:":         ops.ResAuthors,
+	"ubs:":                  ops.ResUserState,
+	"upos:":                 ops.ResUserState,
+	"playp:":                ops.ResUserState,
+	"playe:":                ops.ResUserState,
+	"pref:":                 ops.ResUserState,
+	// The clone kind's own undo record. It is a user_state write like any other
+	// preference and every check judges it (declared, stamped, per call, preview), but
+	// it is listed in t6g5SelfRecordKeys so it cannot, on its own, satisfy a
+	// run's must-write user_state: that has to come from the state the run moves.
+	"pref:_system:itunes_clone_record:": ops.ResUserState,
+	"upl:":                              ops.ResUserState,
+	"playlist":                          ops.ResUserState,
+	"bookmark:":                         ops.ResUserState,
+	"user_tag:":                         ops.ResUserState,
+	"merge_user_state_pending:":         ops.ResUserState,
+	"merge:survivor-reconcile:":         ops.ResUserState,
+	"sync_item:":                        ops.ResUserState,
+	"sync_file:":                        ops.ResUserState,
+	"sync_alias_use":                    ops.ResUserState,
+	"idx:":                              ops.ResUserState,
+	"opchange":                          ops.ResOperations,
+	"op_result:":                        ops.ResOperations,
+	"merge:sibling-journal:":            ops.ResOperations,
+	"merge:combine-journal:":            ops.ResOperations,
 	// The undo journal's clock ceiling moves only when the journal writes (opchange rows), so it
 	// belongs to the journal. op_result: (a per-book result keyed on an op, not an undo row) is
 	// deliberately NOT mapped: no kind of this group writes it, so one that did fails closed.
@@ -130,7 +135,6 @@ var t6g5ExcludedKeys = []struct{ prefix, reason string }{
 	{"system:activity_filter_index_", "activity filter-index cursors the store maintains itself, never a kind"},
 	{"setting:system:flag:", "SetSetting form of the one-time index-built flags (store-maintained)"},
 	{"setting:book_isbn_index_v1_done", "one-time ISBN index-built flag the store maintains itself"},
-	{"pref:_system:itunes_clone_record:", "the clone kind's own undo record, written through SetUserPreferenceForUser: judged by the per-method check against that method's row, and kept out of the resource set so it cannot stand in for the user state a run is expected to write"},
 }
 
 // t6g5SnapshotOf is every key of the store with its value.
@@ -162,9 +166,21 @@ type t6g5StoreDiff struct {
 	sample map[string]string
 	// problems lists changed keys no registered family or no resource mapping covers.
 	problems []string
-	// changed counts every changed key outside the framework families.
+	// changed counts every changed key outside the excluded keys.
 	changed int
+	// keys and selfKeys count, per resource, the changed keys and how many of
+	// them are a kind's record about its own run (t6g5SelfRecordKeys).
+	keys, selfKeys map[string]int
 }
+
+// t6g5SelfRecordKeys are key prefixes of a record a kind writes about its own
+// run (the clone's undo record). They count as writes everywhere except as
+// evidence for a must-write resource, see writes.
+var t6g5SelfRecordKeys = []string{"pref:_system:itunes_clone_record:"}
+
+// writes reports whether res was written by something other than the kind's
+// own run record, which is what a must-write resource has to be.
+func (d t6g5StoreDiff) writes(res string) bool { return d.keys[res] > d.selfKeys[res] }
 
 // t6g5FamilyOf is the longest registered key family that prefixes key, or "".
 func t6g5FamilyOf(key string) string {
@@ -194,7 +210,7 @@ func t6g5ResourceOf(key string) (ops.Resource, bool) {
 // t6g5DiffStore is the resources before -> after changed. skip lists extra key
 // prefixes to ignore for this run only (the run's own act:op:<runID> index).
 func t6g5DiffStore(before, after map[string]string, skip ...string) t6g5StoreDiff {
-	d := t6g5StoreDiff{sample: map[string]string{}}
+	d := t6g5StoreDiff{sample: map[string]string{}, keys: map[string]int{}, selfKeys: map[string]int{}}
 	seen := map[string]bool{}
 	note := func(key string) {
 		for _, ex := range t6g5ExcludedKeys {
@@ -218,6 +234,12 @@ func t6g5DiffStore(before, after map[string]string, skip ...string) t6g5StoreDif
 			d.problems = append(d.problems, fmt.Sprintf("%q (family %q) has no resource in t6g5KeyFamilyResource", key, fam))
 			return
 		}
+		d.keys[string(res)]++
+		for _, sr := range t6g5SelfRecordKeys {
+			if strings.HasPrefix(key, sr) {
+				d.selfKeys[string(res)]++
+			}
+		}
 		if !seen[string(res)] {
 			seen[string(res)] = true
 			d.resources = append(d.resources, string(res))
@@ -240,8 +262,8 @@ func t6g5DiffStore(before, after map[string]string, skip ...string) t6g5StoreDif
 }
 
 // t6g5RunNativeDiff is t6g5RunNativeOn over a PebbleStore, with the store's key
-// diff taken around the run AND around every outermost writer call (the spy
-// snapshots s before and after each one, see t6g5Spy.note).
+// diff taken around the run AND around every writer call (the spy snapshots s
+// before and after each one, nested calls included, see t6g5Spy.note).
 func t6g5RunNativeDiff(t *testing.T, s *database.PebbleStore, p *Plugin, mode tasks.Mode, headID string, scanKey tasks.Key, params string, opts ...t6g5SpyOption) (t6g5NativeRun, t6g5StoreDiff) {
 	t.Helper()
 	before := t6g5Snapshot(t, s)
@@ -275,24 +297,25 @@ func (r t6g5NativeRun) requireStoreWritesWithin(t *testing.T, d t6g5StoreDiff, m
 		assert.True(t, stamped[res], "the run wrote %q (key %q), which no method the run called is stamped with in t6g5WriterResources", res, d.sample[res])
 	}
 	for _, res := range mustWrite {
-		assert.Contains(t, d.resources, res, "the run was expected to write %q to the store", res)
+		assert.True(t, d.writes(res), "the run was expected to write %q to the store (other than a record about its own run)", res)
 	}
 	r.requireEachCallWithinItsRow(t)
 }
 
 // requireEachCallWithinItsRow checks the per-call attribution: the keys each
-// outermost writer call changed map to resources inside THAT method's row of
-// t6g5WriterResources. Nested calls (a delete closure run inside
-// CarryStateThenHardDelete) belong to the outer call's window, so its row must
-// cover them.
+// writer call changed map to resources inside THAT method's row of
+// t6g5WriterResources. A nested call (the delete closure CarryStateThenHardDelete
+// runs arrives as its own DeleteBook) is attributed to its own method and removed
+// from the outer call's diff. The run fails if writer calls from two goroutines
+// overlapped, since snapshots cannot tell them apart and the check would be
+// vacuous: none of this group's fixtures does that, so a failure means a kind
+// started calling the writer from a pool and the check needs a design for it.
 func (r t6g5NativeRun) requireEachCallWithinItsRow(t *testing.T) {
 	t.Helper()
 	r.spy.mu.Lock()
 	defer r.spy.mu.Unlock()
 	assert.Empty(t, r.spy.attrProblems, "every key a writer call changed belongs to a registered family with a resource mapping")
-	if r.spy.attrConcurrent {
-		t.Logf("%s called the writer from two goroutines at once: the per-call attribution is off for this run, the run-wide checks still apply", r.def.Kind())
-	}
+	require.False(t, r.spy.attrConcurrent, "%s called the writer from two goroutines at once: the per-call attribution cannot attribute those writes", r.def.Kind())
 	for method, seen := range r.spy.observed {
 		row := map[string]bool{}
 		for _, res := range t6g5WriterResources[method] {
@@ -319,7 +342,8 @@ func (r t6g5NativeRun) requireMethodWrote(t *testing.T, method string, resources
 }
 
 // requireNoStoreWrites is the preview contract: no writer method was called and
-// no key outside the framework families changed.
+// no key outside the named exclusions (t6g5ExcludedKeys, the run's own act:op:
+// index) changed.
 func (r t6g5NativeRun) requireNoStoreWrites(t *testing.T, d t6g5StoreDiff) {
 	t.Helper()
 	assert.Empty(t, r.spy.calls, "a preview calls no writer method")
@@ -394,6 +418,12 @@ func TestT6G5StoreDiff_RulingsAreMapped(t *testing.T) {
 	}
 	d := t6g5DiffStore(nil, map[string]string{"op_result:01BATMAN00000000000000OP01:b": "v", "system:unheard:of": "v"})
 	assert.Len(t, d.problems, 2, "op_result: is off-vocabulary for this group and an unmapped system: key fails closed")
+	rec := t6g5DiffStore(nil, map[string]string{"pref:_system:itunes_clone_record:vg-t": "v"})
+	assert.Empty(t, rec.problems)
+	assert.Equal(t, []string{string(ops.ResUserState)}, rec.resources, "the clone's own record is a user_state write everywhere")
+	assert.False(t, rec.writes(string(ops.ResUserState)), "but it alone is no evidence of user state a run was expected to move")
+	both := t6g5DiffStore(nil, map[string]string{"pref:_system:itunes_clone_record:vg-t": "v", "ubs:alfred:01BATMAN00000000000000UB01": "s"})
+	assert.True(t, both.writes(string(ops.ResUserState)), "a real user-state key next to the record is")
 	skipped := t6g5DiffStore(nil, map[string]string{"act:op:RUN1:x": "v", "act:op:RUN2:x": "v"}, "act:op:RUN1")
 	assert.Equal(t, []string{string(ops.ResActivity)}, skipped.resources, "only the run's own act:op: index is skipped; another run's rows are activity writes")
 	assert.Equal(t, 1, skipped.changed)

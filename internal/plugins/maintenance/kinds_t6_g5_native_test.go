@@ -79,13 +79,12 @@ type t6g5Spy struct {
 	mergeThrough   func(opID string, bookIDs []string, primaryID string) (int, error)
 }
 
-// t6g5Frame is one writer call whose window is open: the store before it, the
-// goroutine that made it, and the keys that calls nested inside it already
-// claimed (they are attributed to the nested method, not to this one).
+// t6g5Frame is one writer call whose window is open: the goroutine that made
+// it and the keys that calls nested inside it already claimed (they are
+// attributed to the nested method, not to this one).
 type t6g5Frame struct {
 	name    string
 	gid     uint64
-	before  map[string]string
 	claimed map[string]bool
 }
 
@@ -137,8 +136,10 @@ func (s *t6g5Spy) note(name string) func() {
 		return func() {}
 	}
 	gid := t6g5GoID()
-	before, berr := s.snap()
-	f := &t6g5Frame{name: name, gid: gid, before: before, claimed: map[string]bool{}}
+	f := &t6g5Frame{name: name, gid: gid, claimed: map[string]bool{}}
+	// The frame is pushed BEFORE the snapshot: a writer call from another
+	// goroutine that starts in the gap sees this frame and turns the attribution
+	// off, instead of landing between "frame open" and "before taken" unnoticed.
 	s.mu.Lock()
 	if n := len(s.stack); s.attrConcurrent || (n > 0 && s.stack[n-1].gid != gid) {
 		s.attrConcurrent = true
@@ -148,6 +149,7 @@ func (s *t6g5Spy) note(name string) func() {
 	}
 	s.stack = append(s.stack, f)
 	s.mu.Unlock()
+	before, berr := s.snap()
 	return func() {
 		after, aerr := s.snap()
 		s.mu.Lock()
@@ -839,9 +841,10 @@ func TestT6G5Native_CloneApply(t *testing.T) {
 	r.requireWriter(t)
 	// operations: CreateOrganizedVersion journals its changes under the run's op ID
 	// (opchange: keys), a write no method name says. The clone's own undo record
-	// (a user_state preference) is excluded from the store diff by name
-	// (t6g5ExcludedKeys), so user_state is not asserted here: the call count below
-	// proves the record reached the writer, and the per-call check holds its row.
+	// (a user_state preference) is judged like any write but is a self record
+	// (t6g5SelfRecordKeys), so it cannot stand in for a must-write user_state, which
+	// is not asserted here: the call count below proves the record reached the
+	// writer, and the per-call check holds SetUserPreferenceForUser to its row.
 	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResOperations))
 	r.requireHold(t)
 	var rep icReport
@@ -1011,6 +1014,33 @@ func TestT6G5Native_Regroup(t *testing.T) {
 	pos, err := s.ListUserPositionsForBook(u.ID, target)
 	require.NoError(t, err)
 	assert.NotEmpty(t, pos, "the user's state landed on the surviving book")
+}
+
+// The regroup's delete pass carries the loser's state through
+// CarryStateThenHardDelete. With a FINISHED loser that carries its iTunes
+// play-count mark, the carry stamps the mark on the target's book row, a books
+// write of the carry's own (the delete closure arrives as DeleteBook and is
+// attributed to that method). regroupWithState seeds an in-progress loser, so
+// without this fixture the row's `books` entry was never exercised.
+func TestT6G5Native_RegroupCarriesAFinishedLosersPlayCountMark(t *testing.T) {
+	s, u, plan, _ := regroupWithState(t)
+	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
+	require.NoError(t, s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: loser, Status: database.UserBookStatusFinished, ProgressPct: 100}))
+	mark := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	_, err := s.ModifyBook(loser, func(b *database.Book) error { b.ITunesPlayCountBumpedAt = &mark; return nil })
+	require.NoError(t, err)
+
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: rgRoot}), tasks.ModeLive, "itunes.regroup", "",
+		`{"xmlPath":"`+t6g5RegroupXML(t)+`"}`)
+	require.NoError(t, r.err)
+	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResUserState))
+	require.Equal(t, 1, r.spy.count("CarryStateThenHardDelete"), "the carry went through the writer")
+	r.requireMethodWrote(t, "CarryStateThenHardDelete", string(ops.ResBooks), string(ops.ResUserState))
+	tb, err := s.GetBookByID(target)
+	require.NoError(t, err)
+	require.NotNil(t, tb.ITunesPlayCountBumpedAt, "the finished loser's play-count mark landed on the target")
+	assert.True(t, tb.ITunesPlayCountBumpedAt.Equal(mark))
 }
 
 func TestT6G5Native_RegroupPreviewWritesNothing(t *testing.T) {
