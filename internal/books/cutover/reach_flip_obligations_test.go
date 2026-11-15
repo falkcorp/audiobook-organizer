@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_flip_obligations_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 0b7d4e92-6a35-4c18-9f40-d82c1a5e7b36
 // last-edited: 2026-11-15
 
@@ -10,6 +10,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -112,7 +113,7 @@ var reachObligations = []reachObligation{
 	{
 		name:      "F4-07-HIDDEN-HANDLER-CHECKS",
 		discharge: "seams.d/F4-07.md, Obligations on F4-08, hidden handler checks: prove the in-handler checks the probe's dummy-id 404 hides, on the registered path, with a real id",
-		dir:       ".", test: "TestReachRegisteredPath_HiddenHandlerChecks", unit: "uniform-404 routes",
+		dir:       ".", test: "TestReachRegisteredPath_HiddenHandlerChecks", unit: "routes with a recorded 404",
 		bar: reachBarHiddenHandlerChecks,
 	},
 	{
@@ -215,13 +216,20 @@ func reachBarHandlerRefusals(in reachObligationInput) []string {
 	return reachSorted(set)
 }
 
-// reachBarHiddenHandlerChecks: every route the probe's dummy id turned into a 404
-// for every principal. The recording shows the router's answer on these, not the
-// handler's own.
+// reachBarHiddenHandlerChecks: every route on which at least one principal's
+// recorded status is 404. A handler that turns the probe's dummy path id into a 404
+// before its own permission test hides that test from the recording, and the
+// in-handler sites the row is named for sit on routes whose statuses are mixed
+// 401/403/404, so the bar must read every route with a recorded 404, not only the
+// routes whose 404 was identical for every principal (vd.UniformNotFound, which are
+// Public or delegated routes where the probe saw no decision and are a subset of
+// this set). A registered-path discharge replays each of these routes with a real id.
 func reachBarHiddenHandlerChecks(in reachObligationInput) []string {
 	set := map[string]bool{}
-	for _, k := range in.vd.UniformNotFound {
-		set[k] = true
+	for _, r := range in.vd.Routes {
+		if slices.Contains(r.Status, http.StatusNotFound) {
+			set[r.key()] = true
+		}
 	}
 	return reachSorted(set)
 }
