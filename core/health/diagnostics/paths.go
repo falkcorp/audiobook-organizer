@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-14
 
@@ -97,14 +97,23 @@ func (r pathRoots) redactPathsAt(s string, depth int, mode scanMode) string {
 	// "://" or a "%", and only where a token or a scheme can start; most lines
 	// hold neither, and a line of 400k bytes should not pay a call per byte.
 	tokens := mode == scanText && (strings.Contains(s, "://") || strings.IndexByte(s, '%') >= 0)
+	// judged is the end of the last token tokenAt read and found no encoded path
+	// in. A token ends at whitespace and nothing else (routeExtent), so a quote
+	// inside it is a place another token may start, and the text after it is a
+	// part of the same token: read again, it would find nothing the whole did not
+	// (the decoding is local to each escape). Without this a line of quotes and no
+	// whitespace judges its whole rest from every quote, which is quadratic.
+	judged := 0
 	for i := 0; i < len(s); {
 		if tokens && (i == 0 || s[i-1] <= ' ' || s[i-1] == 0x7f || s[i-1] == '"' || s[i-1] == '`' || isAlpha(s[i])) {
-			if end, repl, ok := r.tokenAt(s, i, depth); ok {
+			end, repl, ok, read := r.tokenAt(s, i, depth, i >= judged)
+			if ok {
 				b.WriteString(s[last:i])
 				b.WriteString(repl)
 				last, i = end, end
 				continue
 			}
+			judged = max(judged, read)
 		}
 		if !r.pathStart(s, i, mode) {
 			i++
@@ -147,50 +156,52 @@ func opaqueTail(rest string) string {
 
 // tokenAt is the whole-token rules of free text, tried where a token starts. It
 // returns the end of what it replaced and the replacement, or ok=false when the
-// byte at i is nothing it judges.
+// byte at i is nothing it judges. encoded says whether the encoded-token rule may
+// run here; when it ran and found nothing, read is the end of the token it read,
+// so the caller does not judge a token that starts inside it again.
 //
 //   - A URL ("scheme://host/path?query", any scheme but file) is kept as written
 //     except for its path part (routePath, as for a route) and its query and
 //     fragment (opaqueTail). It is recognised wherever its scheme starts.
-//   - Where a token starts (after whitespace, a control byte, a quote or a
-//     backtick, past any opening bracket or apostrophe), a token that is not a
+//   - Where a token starts (after whitespace or a control byte, past any opening
+//     bracket, quote, backtick or apostrophe), a token that is not a
 //     route or a URL and that carries a percent-encoded separator whose decoded
 //     text holds an absolute path is "<path>" whole (encodedPathToken). Free text
 //     cut a path at its delimiters; an encoded path is not cut, so its tail
 //     cannot be a different token.
-func (r pathRoots) tokenAt(s string, i, depth int) (end int, repl string, ok bool) {
+func (r pathRoots) tokenAt(s string, i, depth int, encoded bool) (end int, repl string, ok bool, read int) {
 	if isAlpha(s[i]) && (i == 0 || !isSchemeByte(s[i-1])) {
 		if n := urlSchemeEnd(s[i:]); n > 0 {
 			tok := trimRouteTail(s[i : i+routeExtent(s[i:])])
 			if len(tok) > n+2 {
-				return i + len(tok), r.urlText(tok, n, depth), true
+				return i + len(tok), r.urlText(tok, n, depth), true, 0
 			}
 		}
 	}
-	if !tokenStart(s, i) {
-		return 0, "", false
+	if !encoded || !tokenStart(s, i) {
+		return 0, "", false, 0
 	}
 	p := i
-	for p < len(s) && strings.IndexByte("'([{<", s[p]) >= 0 {
+	for p < len(s) && strings.IndexByte("'([{<\"`", s[p]) >= 0 {
 		p++
 	}
 	if p >= len(s) || routeStart(s[p:]) {
-		return 0, "", false
+		return 0, "", false, 0
 	}
 	if n := urlSchemeEnd(s[p:]); n > 0 {
-		return 0, "", false // the URL rule above owns it
+		return 0, "", false, 0 // the URL rule above owns it
 	}
 	e := routeExtent(s[p:])
 	tok := trimRouteTail(s[p : p+e])
 	if strings.IndexByte(tok, '%') < 0 || !r.encodedPathToken(tok) {
-		return 0, "", false
+		return 0, "", false, p + e
 	}
-	return p + len(tok), s[i:p] + "<path>", true
+	return p + len(tok), s[i:p] + "<path>", true, 0
 }
 
 // tokenStart reports whether a token of free text starts at i: the text start or
-// the byte after whitespace, a control byte, a double quote or a backtick (the
-// bytes routeExtent ends a token at).
+// the byte after whitespace, a control byte, a double quote or a backtick (a
+// quote opens a quoted token; the extent of one is whitespace, routeExtent).
 func tokenStart(s string, i int) bool {
 	if i == 0 {
 		return true
@@ -299,8 +310,9 @@ func (r pathRoots) hasPathStart(s string, mode scanMode) bool {
 // inside, which is judged (routeText); anything else is "<path>".
 //
 // A token that starts like a route is read to the end of its chunk (routeExtent),
-// not to the first path delimiter: a query is one placeholder to the end of the
-// token, whatever "'", ")", ",", "&" or "=" it holds raw. If the chunk is not a route (a bad escape, a
+// to whitespace and not to the first path delimiter: a query is one placeholder to
+// the end of the token, whatever quote, bracket, comma, "&" or "=" it holds raw
+// (G9), and the path part is read to the same end. If the chunk is not a route (a bad escape, a
 // ".." out of the subtree, "/livez/x") the whole chunk is "<path>", so a
 // route-shaped token that does not parse never leaves a tail behind.
 func (r pathRoots) pathAt(s string, i, depth int, mode scanMode) (end int, repl string) {
@@ -469,33 +481,43 @@ func routeStart(s string) bool {
 }
 
 // routeExtent is the length of the chunk a route-shaped token spans in free
-// text: to whitespace, a control byte, a double quote, a backtick or a `\"`
-// escape. Every other byte is part of it, including the bytes that end a
-// filesystem path ("'" ")" "," "]" ";" "|" "}" "<" ">"), because a query may
-// hold any of them raw.
+// text: to whitespace or a control byte, and no other byte ends it. Not a double
+// quote, a backtick, a `\"` escape, an apostrophe, a bracket or a comma: a query
+// may hold any of them raw (G9), and so may a directory name in the path part
+// ("/api/v1/x//Users/a"b/Gordonx": the part after the quote is still the name).
+// The token is then judged as a whole, so no byte of it is a way to end the
+// token early and leave the rest of a name in the clear.
 func routeExtent(s string) int {
 	n := 0
-	for n < len(s) {
-		c := s[n]
-		if c <= ' ' || c == 0x7f || c == '"' || c == '`' {
-			break
-		}
-		if c == '\\' && n+1 < len(s) && s[n+1] == '"' {
-			break
-		}
+	for n < len(s) && s[n] > ' ' && s[n] != 0x7f {
 		n++
 	}
 	return n
 }
 
 // trimRouteTail drops the punctuation that closes a route in prose
-// ("(GET /api/x)", "'/api/x?a=b'", "GET /api/x, then") so it stays outside the
-// token. One backward pass. A final segment of dots ("/api/x/..") is a name, not
+// ("(GET /api/x)", "GET /api/x, then") so it stays outside the token. One
+// backward pass. A final segment of dots ("/api/x/..") is a name, not
 // punctuation, as in trimPathTail.
+//
+// A token with a "?" or "#" is not trimmed at all (G9): its query is opaque to
+// the end of the chunk, so the bracket or quote glued to its end is part of the
+// query and goes with it. Only a token with no query gives its closers back; the
+// quotes among them, a double quote, a backtick and a `\"`, are not part of a
+// path part either, and a quote in the middle of the token stays inside it.
 func trimRouteTail(tok string) string {
+	if strings.ContainsAny(tok, "?#") {
+		return tok
+	}
 	cut := len(tok)
-	for cut > 0 && strings.IndexByte("'),];|}!.:", tok[cut-1]) >= 0 {
-		cut--
+	for cut > 0 {
+		if cut >= 2 && tok[cut-2] == '\\' && tok[cut-1] == '"' {
+			cut -= 2
+		} else if strings.IndexByte("'),];|}!.:\"`", tok[cut-1]) >= 0 {
+			cut--
+		} else {
+			break
+		}
 	}
 	if cut > 0 && (tok[cut-1] == '/' || tok[cut-1] == '\\') {
 		for cut < len(tok) && tok[cut] == '.' {

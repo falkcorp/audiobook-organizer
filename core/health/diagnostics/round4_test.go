@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/round4_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c2e9a40-5d18-4b63-a0f7-1e94c6b83d25
 // last-edited: 2026-11-14
 
@@ -97,9 +97,9 @@ func TestDiagnostics_QueryStringIsOpaque(t *testing.T) {
 		same("/api/v1/books#/home/bruce/y", "/api/v1/books#<fragment>"),
 		same("/api/v1/books?a=1#/home/bruce/y", "/api/v1/books?<query>"),
 		// The pattern layer runs first and writes "c=[REDACTED]" for the nested
-		// URL-shaped tail; the route rule then reads the trailing "]" as the
-		// closer of a bracketed route and leaves it outside the placeholder.
-		{in: "/api/v1/x?a=/api/x?b=/api/x?c=/api/x?d=/Users/bruce", value: "/api/v1/x?<query>", text: "/api/v1/x?<query>]"},
+		// URL-shaped tail; the query runs to the end of the chunk (G9), so the
+		// trailing "]" is inside it and nothing of it is left behind.
+		same("/api/v1/x?a=/api/x?b=/api/x?c=/api/x?d=/Users/bruce", "/api/v1/x?<query>"),
 	})
 
 	// The access log's own JSON line.

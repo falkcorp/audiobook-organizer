@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_adversarial_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9d4b7e21-3a6c-4f58-8e0d-5b1c2a97f634
 // last-edited: 2026-11-14
 
@@ -157,10 +157,12 @@ var oddNames = []string{"x'" + marker, "x(" + marker + ")", "x)" + marker, "x," 
 	// so none of these may split it and leave the part after it.
 	"x&" + marker, "x#" + marker, "x=" + marker, "x?" + marker, "x&y=" + marker, "x#y&" + marker}
 
-// quoteNames hold a double quote or backtick, which ends a text token and makes
-// a whole value prose; they are planted only where the grammar reads a value
-// whole (inside a route query, encoded).
-var quoteNames = []string{`x"` + marker, "x`" + marker}
+// quoteNames hold a double quote, a backtick or a JSON-escaped quote (a backslash
+// and a quote: what an unparsed JSON line writes for a quote in a name). They end
+// a path in free text and make a whole value prose, but not a route or a URL
+// (G9): a route's query runs to the next whitespace whatever it holds, and so
+// does its path part, so a name with a quote in it is carried whole there.
+var quoteNames = []string{`x"` + marker, "x`" + marker, `x\"` + marker, `x""` + marker}
 
 // allNames is the fuzz's name table.
 func allNames() []string {
@@ -305,10 +307,10 @@ func plant(ci, fi int, name string, wi int, si int) (p planted, ok bool) {
 	plain := isPlain(name)
 	quote := strings.ContainsAny(name, "\"`")
 	space := strings.Contains(name, " ")
-	// The text road. A route's token ends at whitespace or a quote (G4), so
-	// those bytes in a raw name end it; an encoded name has none. Outside a
-	// route a path run ends at every delimiter (G2), so only a plain name is
-	// carried whole.
+	// The text road. A route's token ends at whitespace only (G9), so a raw
+	// space in a name ends it; an encoded name has none. Outside a route a
+	// path run ends at every delimiter (G2), so only a plain name is carried
+	// whole.
 	switch {
 	case !routeKind && f.encoded:
 		// G7: an encoded path outside a route is one token, written "<path>"
@@ -317,7 +319,10 @@ func plant(ci, fi int, name string, wi int, si int) (p planted, ok bool) {
 	case routeKind && f.encoded && !f.rawName:
 		p.text = true
 	case routeKind:
-		p.text = !space && !quote
+		// G9: a route or URL token runs to whitespace and no other byte ends
+		// it, in its query and in its path part alike, so a quote in the name
+		// is carried whole.
+		p.text = !space
 	default:
 		p.text = plain
 	}
@@ -327,10 +332,10 @@ func plant(ci, fi int, name string, wi int, si int) (p planted, ok bool) {
 	// path that is the whole value is one path unless a quote or a later
 	// ": " makes it prose.
 	switch {
-	case c.name == "url-path" && (space || quote):
-		// A URL's path part with a raw space or quote and no query to open an
-		// opaque tail is cut there like any path in free text (G2); only a
-		// route's path part is read to the end of a whole value.
+	case c.name == "url-path" && space:
+		// A URL's path part with a raw space and no query to open an opaque
+		// tail is cut there like any path in free text (G2); only a route's
+		// path part is read to the end of a whole value.
 		p.whole = false
 	case p.routeWhole:
 		p.whole = true
@@ -426,6 +431,8 @@ func FuzzRedactPaths(f *testing.F) {
 		for _, fi := range []int{0, 1, 5, 7, 9} {
 			f.Add(uint8(ci), uint8(fi), "x'"+marker, uint8(0), uint8(0), "")
 			f.Add(uint8(ci), uint8(fi), "x&#=;?%"+marker, uint8(0), uint8(0), "")
+			f.Add(uint8(ci), uint8(fi), "x\"'`)]>,"+marker, uint8(0), uint8(0), "")
+			f.Add(uint8(ci), uint8(fi), `x\"`+marker, uint8(0), uint8(0), "")
 		}
 	}
 	f.Add(uint8(30), uint8(5), "bat", uint8(1), uint8(1), " later /Users/x")
@@ -465,7 +472,8 @@ func FuzzRedactPaths(f *testing.F) {
 // separate segment (pathOf adds it).
 func cleanName(raw string) string {
 	var b strings.Builder
-	for _, r := range raw {
+	rs := []rune(raw)
+	for i, r := range rs {
 		if b.Len() >= 40 {
 			break
 		}
@@ -474,6 +482,8 @@ func cleanName(raw string) string {
 			b.WriteRune(r)
 		case strings.ContainsRune("-_.~'(),;|}]>%@+*!#&=?\"` ", r):
 			b.WriteRune(r)
+		case r == '\\' && i+1 < len(rs) && rs[i+1] == '"':
+			b.WriteRune(r) // the JSON escape of a quote; the quote follows
 		}
 	}
 	s := b.String()
@@ -536,13 +546,15 @@ func TestRedactPaths_RouteQueryIsOpaque(t *testing.T) {
 		same("/api/v1/books?sort=a)b&path=%2FUsers%2Fbruce", "/api/v1/books?<query>"),
 		same("/api/v1/authors/O'Brien/books?path=%2FUsers%2Fbruce", "/api/v1/authors/O'Brien/books?<query>"),
 		same("/api/v1/books/1,2,3?path=%2FUsers%2Fbruce", "/api/v1/books/1,2,3?<query>"),
-		// A route in a line: the punctuation that closes it stays outside.
-		same("(GET /api/v1/x?p=%2FUsers%2Fbruce)", "(GET /api/v1/x?<query>)"),
-		same("[GET /api/v1/x?p=%2FUsers%2Fbruce]", "[GET /api/v1/x?<query>]"),
-		same("'/api/v1/x?p=%2FUsers%2Fbruce'", "'/api/v1/x?<query>'"),
-		same(`"/api/v1/x?p=%2FUsers%2Fbruce"`, `"/api/v1/x?<query>"`),
-		{in: "/api/v1/x?p=%2FUsers%2Fbruce, then", text: "/api/v1/x?<query>, then", value: "/api/v1/x?<query>"},
-		{in: "GET /api/v1/x?p=%2FUsers%2Fbruce: denied", text: "GET /api/v1/x?<query>: denied", value: "GET /api/v1/x?<query>: denied"},
+		// A route in a line: the query runs to the next whitespace (G9), so the
+		// bracket, quote or punctuation glued to its end goes with it. That is the
+		// accepted cost of reading no delimiter as the end of a query.
+		same("(GET /api/v1/x?p=%2FUsers%2Fbruce)", "(GET /api/v1/x?<query>"),
+		same("[GET /api/v1/x?p=%2FUsers%2Fbruce]", "[GET /api/v1/x?<query>"),
+		same("'/api/v1/x?p=%2FUsers%2Fbruce'", "'/api/v1/x?<query>"),
+		same(`"/api/v1/x?p=%2FUsers%2Fbruce"`, `"/api/v1/x?<query>`),
+		{in: "/api/v1/x?p=%2FUsers%2Fbruce, then", text: "/api/v1/x?<query> then", value: "/api/v1/x?<query>"},
+		same("GET /api/v1/x?p=%2FUsers%2Fbruce: denied", "GET /api/v1/x?<query> denied"),
 		// A query with no path is as opaque as one with a path: there is one rule.
 		same("/api/v1/books?sort=title,asc&page=2", "/api/v1/books?<query>"),
 		same("GET /api/v1/books?ids=1,2,3 200", "GET /api/v1/books?<query> 200"),
@@ -669,7 +681,7 @@ func TestRedactPaths_EncodedPathOutsideARouteIsRedacted(t *testing.T) {
 		same("rate=50%25%2F100", "rate=50%25%2F100"),
 		same("name=Bruce%20Wayne", "name=Bruce%20Wayne"),
 		// A URL: its query and fragment are the same placeholder as a route's.
-		same("Get \"https://abs.example/api/x?path=%2FUsers%2Fbruce\"", "Get \"https://abs.example/api/x?<query>\""),
+		same("Get \"https://abs.example/api/x?path=%2FUsers%2Fbruce\"", "Get \"https://abs.example/api/x?<query>"),
 		same("https://abs.example/items?p=/Users/a&b/Gordonx/Books", "https://abs.example/items?<query>"),
 		same("url=https://abs.example/items?p=/Users/a;b/Gordonx", "url=https://abs.example/items?<query>"),
 		same("https://abs.example/items/%2FUsers%2Fbruce", "https://abs.example/items/<path>"),
@@ -725,6 +737,137 @@ func TestRedactPaths_RawQueryDelimiterInANameIsRedacted(t *testing.T) {
 		{in: "https://abs.example/x?path=/Users/Bruce Wayne/Gordonx/Books", value: "https://abs.example/x?<query>"},
 		{in: "/api/v1/x?path=/Users/Bruce Wayne/Gordonx/Books", value: "/api/v1/x?<query>"},
 		same("/api/v1/x?path=/Users/a%26b/Gordonx/Books", "/api/v1/x?<query>"),
+	})
+}
+
+// TestRedactPaths_QueryRunsToWhitespaceWhateverItHolds (G9): once a route or URL
+// has a "?" or "#", the opaque query runs to the next whitespace in every
+// context, free text included. A raw quote, backtick, apostrophe, bracket, angle
+// bracket or comma in a directory name does not end it, and none of what the
+// token held is left behind. The cost is the other direction: the quote or bracket
+// that closes a route in prose, and punctuation glued to its end, goes with the
+// query.
+func TestRedactPaths_QueryRunsToWhitespaceWhateverItHolds(t *testing.T) {
+	q := "/Users/a%sb/" + marker + "/Books"
+	var cases []pc
+	for _, c := range []string{`"`, "`", "'", ")", "]", ">", ",", "}", "|", ";", `\"`, `""`, `")`, "`)"} {
+		raw := fmt.Sprintf(q, c)
+		cases = append(cases,
+			same("GET /api/v1/x?p="+raw+" 200", "GET /api/v1/x?<query> 200"),
+			same("GET /api/v1/x#"+raw+" 200", "GET /api/v1/x#<fragment> 200"),
+			same("GET /api/v1/x?a=1#"+raw+" 200", "GET /api/v1/x?<query> 200"),
+			same("GET https://abs.example/x?p="+raw+" 200", "GET https://abs.example/x?<query> 200"),
+			same("GET https://abs.example/x#"+raw+" 200", "GET https://abs.example/x#<fragment> 200"),
+			same("see /api/v1/x?"+raw+", then", "see /api/v1/x?<query> then"),
+		)
+	}
+	cases = append(cases,
+		// The documented cost: a route quoted or bracketed in prose loses its
+		// closer and any punctuation glued to it.
+		same(`"/api/x?a=1" failed`, `"/api/x?<query> failed`),
+		same("`/api/x?a=1` failed", "`/api/x?<query> failed"),
+		same("(GET /api/x?a=1)", "(GET /api/x?<query>"),
+		same(`GET /api/x?a=1, 200`, `GET /api/x?<query> 200`),
+		// A route with no query still gives its closers back.
+		same(`"/api/v1/books/1" failed`, `"/api/v1/books/1" failed`),
+		same("`/api/v1/books/1` failed", "`/api/v1/books/1` failed"),
+		same("(GET /api/v1/books/1)", "(GET /api/v1/books/1)"),
+		same(`GET /api/v1/books/1, 200`, `GET /api/v1/books/1, 200`),
+		same(`path="/api/v1/books/1"`, `path="/api/v1/books/1"`),
+	)
+	runExact(t, cases)
+}
+
+// TestRedactPaths_QuoteInARoutePathIsNotAnEnd (G9, neighbour a): the path part of
+// a route or URL before any "?" is one chunk to the next whitespace as well. It
+// ended at a raw quote or backtick, and a directory name that held one
+// ("/api/v1/files//Users/a"b/Gordonx/Books") left "b/Gordonx/Books" in the clear
+// after the "<path>". A path that starts inside the part (a doubled slash, or an
+// encoded one) now runs to the end of the chunk. A route's own segments
+// ("/api/v1/files/Users/a"b/Gordonx") are not a filesystem path (no absolute path
+// starts in them), so they are shown as written, as they are without the quote.
+func TestRedactPaths_QuoteInARoutePathIsNotAnEnd(t *testing.T) {
+	var cases []pc
+	for _, c := range []string{`"`, "`", `\"`, "'", ")", ">"} {
+		name := "a" + c + "b"
+		cases = append(cases,
+			same("GET /api/v1/files//Users/"+name+"/"+marker+"/Books 200", "GET /api/v1/files/<path> 200"),
+			same("GET /api/v1/files/%2FUsers%2F"+name+"/"+marker+"/Books 200", "GET /api/v1/files/<path> 200"),
+			same("GET https://abs.example/files//Users/"+name+"/"+marker+"/Books 200", "GET https://abs.example/files/<path> 200"),
+			same("GET https://abs.example/files/%2FUsers%2F"+name+"/"+marker+"/Books 200", "GET https://abs.example/files/<path> 200"),
+		)
+	}
+	cases = append(cases,
+		// Shown as written: not a filesystem path, and the same text without the
+		// quote.
+		same(`GET /api/v1/files/Users/a"b/Gordonx/Books 200`, `GET /api/v1/files/Users/a"b/Gordonx/Books 200`),
+		same(`GET /api/v1/files/Users/a/Gordonx/Books 200`, `GET /api/v1/files/Users/a/Gordonx/Books 200`),
+		same(`GET https://abs.example/files/Users/a"b/Gordonx/Books 200`, `GET https://abs.example/files/Users/a"b/Gordonx/Books 200`),
+		// A quoted route with a path inside it gives the closing quote back.
+		same(`path="/api/v1/x//Users/bruce"`, `path="/api/v1/x/<path>"`),
+		same("path=`/api/v1/x//Users/bruce`", "path=`/api/v1/x/<path>`"),
+		same(`msg=\"/api/v1/x//Users/bruce\"`, `msg=\"/api/v1/x/<path>\"`),
+	)
+	runExact(t, cases)
+}
+
+// TestRedactPaths_WhitespaceInANameEndsTheToken (G9, neighbour b): a raw space,
+// tab or line break ends a route's token in free text, in the query as in the
+// path part, as it ends any token (G2). The part of the name after it is the next
+// token, and a bare "Gordonx/Books" is not a path. A whole value that starts as a
+// route or URL reads a space and a tab to its end (a line break is kept, so the
+// redactor never changes the number of lines); free text does not. This is the
+// limit the redactor still has and is listed for the owner in the seams note.
+func TestRedactPaths_WhitespaceInANameEndsTheToken(t *testing.T) {
+	roots := advRoots()
+	for _, ws := range []string{" ", "\t", "\n", "\r"} {
+		in := "GET /api/v1/x?p=/Users/a" + ws + "b/" + marker + "/Books 200"
+		want := "GET /api/v1/x?<query>" + ws + "b/" + marker + "/Books 200"
+		if got := roots.redactPaths(in); got != want {
+			t.Errorf("query, %q\n got  %q\n want %q", ws, got, want)
+		}
+		in = "GET /api/v1/x//Users/a" + ws + "b/" + marker + "/Books 200"
+		want = "GET /api/v1/x/<path>" + ws + "b/" + marker + "/Books 200"
+		if got := roots.redactPaths(in); got != want {
+			t.Errorf("path part, %q\n got  %q\n want %q", ws, got, want)
+		}
+	}
+	// A whole value that is one route reads a space or a tab through.
+	for _, ws := range []string{" ", "\t"} {
+		if got := roots.redactValue("/api/v1/x?p=/Users/a" + ws + "b/" + marker + "/Books"); got != "/api/v1/x?<query>" {
+			t.Errorf("whole value, %q: %q", ws, got)
+		}
+	}
+}
+
+// TestRedactPaths_EscapedQuoteInAJSONStringDoesNotEndTheQuery (G9, neighbour c): a
+// query that starts in one JSON string value and holds an escaped quote ("\\\"")
+// is one query on every road. In the decoded string it is a real quote; in the
+// raw line (a line that is not valid JSON, or text around one) it is a backslash
+// and a quote. Neither ends the token.
+func TestRedactPaths_EscapedQuoteInAJSONStringDoesNotEndTheQuery(t *testing.T) {
+	roots := advRoots()
+	w := &sectionWriter{st: &build{red: log.NewRedactor(nil), roots: roots, written: map[string]bool{}}}
+	// Valid JSON lines: the decoder gives the string a real quote.
+	for _, line := range []string{
+		`{"msg":"request","path":"/api/v1/x?p=/Users/a\"b/Gordonx/Books"}`,
+		`{"msg":"request","path":"GET /api/v1/x?p=/Users/a\"b/Gordonx/Books 200"}`,
+		`{"msg":"request","path":"GET https://abs.example/x?p=/Users/a\"b/Gordonx/Books 200"}`,
+		`{"msg":"request","path":"GET /api/v1/files//Users/a\"b/Gordonx/Books 200"}`,
+		`{"msg":"request","path":"/api/v1/x?p=/Users/a\u0022b/Gordonx/Books"}`,
+		`{"msg":"request","a":"/api/v1/x?p=/Users/a","path":"/api/v1/x?p=/Users/a\"b/Gordonx/Books"}`,
+	} {
+		out := w.redactLine([]byte(line))
+		if strings.Contains(out, marker) || !json.Valid([]byte(out)) {
+			t.Errorf("JSON line\n in:  %s\n out: %s", line, out)
+		}
+	}
+	// Raw text: the escape is a backslash and a quote.
+	runExact(t, []pc{
+		same(`{"msg":"GET /api/v1/x?p=/Users/a\"b/Gordonx/Books 200"}`, `{"msg":"GET /api/v1/x?<query> 200"}`),
+		same(`{"msg":"GET /api/v1/x//Users/a\"b/Gordonx/Books 200"}`, `{"msg":"GET /api/v1/x/<path> 200"}`),
+		same(`/api/v1/x?p=/Users/a\"b/Gordonx/Books`, `/api/v1/x?<query>`),
+		same(`GET https://abs.example/x?p=/Users/a\"b/Gordonx/Books 200`, `GET https://abs.example/x?<query> 200`),
 	})
 }
 
