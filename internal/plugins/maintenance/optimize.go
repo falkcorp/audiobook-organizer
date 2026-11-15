@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
 // last-edited: 2026-11-15
 
@@ -132,7 +132,41 @@ type optimizeEnv struct {
 	// feeds this op's watchdog from the child's observations; the native wait
 	// ignores it and ticks liveness on a timer instead (optimizeAwaitTicking).
 	Wait func(ctx context.Context, childID string, relay func(childop.Observation)) error
+	// Clock is the sweep's source of time for its 36h budget: the boundary check
+	// at each child, and the end of a wait. The zero value is the wall clock; a
+	// test swaps in a clock it advances by hand (optimizeSweepClock), so a budget
+	// that ends "two seconds into a wait" is an event, not a race.
+	Clock optimizeClock
 }
+
+// optimizeClock is the time the sweep's budget is measured on. Both members are
+// optional; nil is the wall clock (time.Now, context.WithDeadline).
+type optimizeClock struct {
+	// Now is the current time.
+	Now func() time.Time
+	// WithDeadline is context.WithDeadline on this clock's time: the returned
+	// context ends with context.DeadlineExceeded (its Err and its cause) when the
+	// clock reaches t.
+	WithDeadline func(ctx context.Context, t time.Time) (context.Context, context.CancelFunc)
+}
+
+func (c optimizeClock) now() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
+}
+
+func (c optimizeClock) withDeadline(ctx context.Context, t time.Time) (context.Context, context.CancelFunc) {
+	if c.WithDeadline != nil {
+		return c.WithDeadline(ctx, t)
+	}
+	return context.WithDeadline(ctx, t)
+}
+
+// optimizeSweepClock is the clock the native shell hands the core. Nil members
+// are the wall clock; tests swap it.
+var optimizeSweepClock optimizeClock
 
 // The HEAD def IDs of the four children the sweep starts. The native sweep starts
 // each by t6g6KindFor(id) ("books." + id), so the kind a sibling row declares for
@@ -217,6 +251,7 @@ func (p *Plugin) optimizeNative(_ t6g6Deps, sched func(tasks.Kind) *tasks.Schedu
 			env := optimizeEnv{
 				t6g6Env:  t6g6NativeEnv(rc),
 				Deadline: rc.Deadline,
+				Clock:    optimizeSweepClock,
 				Enqueue: func(_ context.Context, defID string, params any) (string, error) {
 					ref, err := rc.Enqueue(t6g6KindFor(defID), params)
 					return string(ref.ID), err
@@ -300,7 +335,7 @@ func optimizeAwaitTicking(ctx context.Context, await func() (tasks.Outcome, erro
 // optimizeCore is the body of runOptimize. env.OpID names the run in the logs.
 func optimizeCore(ctx context.Context, env optimizeEnv) error {
 	opID := env.OpID
-	start := time.Now()
+	start := env.Clock.now()
 
 	logger.InfoCtx(ctx, "maintenance.library-optimize: sweep started",
 		"operation_id", opID,
@@ -486,7 +521,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 		}
 		// HEAD's 36h total is checked at every child boundary: no child starts
 		// past it.
-		if time.Since(start) >= optimizeTotalBudget {
+		if env.Clock.now().Sub(start) >= optimizeTotalBudget {
 			return budgetErr()
 		}
 		reattach := inFlight != nil && inFlight.Name == ch.name
@@ -495,7 +530,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 		// attempt would make no progress and yield again at once. A child that
 		// is already running is handled at its wait, below.
 		if !reattach && env.Deadline != nil && env.Checkpoint != nil && finishedThisAttempt > 0 {
-			if dl := env.Deadline(); !dl.IsZero() && time.Until(dl) < optimizeYieldMargin {
+			if dl := env.Deadline(); !dl.IsZero() && dl.Sub(env.Clock.now()) < optimizeYieldMargin {
 				if err := save(nil); err != nil {
 					return err
 				}
@@ -599,7 +634,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 			if dl := env.Deadline(); !dl.IsZero() && dl.Add(-optimizeYieldMargin).Before(until) {
 				until = dl.Add(-optimizeYieldMargin)
 			}
-			waitCtx, cancelWait = context.WithDeadline(ctx, until)
+			waitCtx, cancelWait = env.Clock.withDeadline(ctx, until)
 		}
 		waitErr := env.Wait(waitCtx, childID, relayChildProgress(prog, i, total, ch.name))
 		waitExpired := waitErr != nil && ctx.Err() == nil &&
@@ -611,7 +646,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 			return context.Cause(ctx)
 		}
 		if waitExpired {
-			if !time.Now().Before(budgetAt) {
+			if !env.Clock.now().Before(budgetAt) {
 				return budgetErr()
 			}
 			if err := save(&optimizeInFlight{Name: ch.name, RunID: childID}); err != nil {

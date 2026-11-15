@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize_native_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9a1e4c52-3d78-4b06-8e2f-5c7d0b1a6f93
 // last-edited: 2026-11-15
 
@@ -304,12 +304,96 @@ func TestT6G6Optimize_CrashAfterAChildResumesAtTheNext(t *testing.T) {
 	}, h2.kinds())
 }
 
+// fakeSweepClock is the sweep's time on a clock the test advances by hand.
+// withDeadline returns a context that ends with context.DeadlineExceeded (its
+// Err and its cause, as a real deadline does) when advance reaches the deadline,
+// and never on its own.
+type fakeSweepClock struct {
+	mu      sync.Mutex
+	t       time.Time
+	waiters []*fakeSweepWaiter
+}
+
+type fakeSweepWaiter struct {
+	at     time.Time
+	expire func()
+}
+
+type fakeDeadlineCtx struct {
+	context.Context
+	at      time.Time
+	expired atomic.Bool
+}
+
+func (c *fakeDeadlineCtx) Deadline() (time.Time, bool) { return c.at, true }
+
+func (c *fakeDeadlineCtx) Err() error {
+	if c.expired.Load() {
+		return context.DeadlineExceeded
+	}
+	return c.Context.Err()
+}
+
+func (c *fakeSweepClock) clock() optimizeClock {
+	return optimizeClock{
+		Now: func() time.Time {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			return c.t
+		},
+		WithDeadline: func(ctx context.Context, at time.Time) (context.Context, context.CancelFunc) {
+			inner, cancel := context.WithCancelCause(ctx)
+			fc := &fakeDeadlineCtx{Context: inner, at: at}
+			expire := func() {
+				fc.expired.Store(true)
+				cancel(context.DeadlineExceeded)
+			}
+			c.mu.Lock()
+			if !at.After(c.t) {
+				c.mu.Unlock()
+				expire()
+			} else {
+				c.waiters = append(c.waiters, &fakeSweepWaiter{at: at, expire: expire})
+				c.mu.Unlock()
+			}
+			return fc, func() { cancel(context.Canceled) }
+		},
+	}
+}
+
+// advance moves the clock forward and expires every deadline it reached.
+func (c *fakeSweepClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	var due []func()
+	kept := c.waiters[:0]
+	for _, w := range c.waiters {
+		if w.at.After(c.t) {
+			kept = append(kept, w)
+		} else {
+			due = append(due, w.expire)
+		}
+	}
+	c.waiters = kept
+	c.mu.Unlock()
+	for _, f := range due {
+		f()
+	}
+}
+
 // HEAD's 36h budget is kept across attempts: a checkpoint whose sweep began over
 // the budget ago fails before any child starts; one that runs out while a child
 // is still running fails instead of yielding; and a checkpoint with no start time
 // is corrupt, not a fresh budget.
 func TestT6G6Optimize_BudgetIsHeldAtEveryBoundary(t *testing.T) {
 	t6g6OptimizeFlags(t, true, true)
+	// The budget is measured on a clock this test advances, so "the budget ends
+	// 2 s into the wait" is an event the test fires, not a race with the wall
+	// clock.
+	clk := &fakeSweepClock{t: time.Date(2026, time.November, 15, 12, 0, 0, 0, time.UTC)}
+	origClock := optimizeSweepClock
+	optimizeSweepClock = clk.clock()
+	t.Cleanup(func() { optimizeSweepClock = origClock })
 	seed := func(h *t6g6OptimizeHost, cp optimizeCheckpoint) {
 		raw, err := json.Marshal(cp)
 		require.NoError(t, err)
@@ -317,18 +401,20 @@ func TestT6G6Optimize_BudgetIsHeldAtEveryBoundary(t *testing.T) {
 	}
 
 	h := newT6G6OptimizeHost(t)
-	seed(h, optimizeCheckpoint{StartedAt: time.Now().Add(-37 * time.Hour), Finished: []string{"temp-file-cleanup"}})
+	seed(h, optimizeCheckpoint{StartedAt: clk.clock().Now().Add(-37 * time.Hour), Finished: []string{"temp-file-cleanup"}})
 	err := t6g6RunOptimize(t, h)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "budget")
 	require.Empty(t, h.kinds())
 
-	// Mid-sweep: the budget ends 2s into the second child's wait.
+	// Mid-sweep: the budget has 2 s left when the second child's wait begins, and
+	// the clock is advanced past it from inside that wait.
 	h = newT6G6OptimizeHost(t)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	h.block["books.acoustid.fingerprint-rescan"] = release
-	seed(h, optimizeCheckpoint{StartedAt: time.Now().Add(-optimizeTotalBudget + 2*time.Second), Finished: []string{"temp-file-cleanup"}, Completed: 1})
+	h.onAwait = func(tasks.RunID) { clk.advance(3 * time.Second) }
+	seed(h, optimizeCheckpoint{StartedAt: clk.clock().Now().Add(-optimizeTotalBudget + 2*time.Second), Finished: []string{"temp-file-cleanup"}, Completed: 1})
 	err = t6g6RunOptimize(t, h)
 	require.Error(t, err)
 	require.NotErrorIs(t, err, tasks.ErrContinueInPlace)
