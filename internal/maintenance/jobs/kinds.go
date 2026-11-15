@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package jobs
 
@@ -361,7 +361,7 @@ var jobWrites = map[string][]ops.Resource{
 	"retention-and-hygiene":           {ops.ResOperations, ops.ResSettings},
 	"revert-metadata-fetch":           {ops.ResBooks},
 	"scan-chapter-groups":             {},
-	"scan-composer-tags":              {ops.ResBookFiles, ops.ResOperations, ops.ResFiles},
+	"scan-composer-tags":              {ops.ResBookFiles, ops.ResFileProvenance, ops.ResOperations, ops.ResFiles},
 	"scan-duplicate-files":            {},
 	"scan-duration-mismatch":          {},
 	"scan-metadata-hash-dups":         {},
