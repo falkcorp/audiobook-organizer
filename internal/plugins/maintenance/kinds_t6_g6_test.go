@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-15
 
@@ -490,6 +490,31 @@ func runT6G6Kind(t *testing.T, d tasks.Definition, mode tasks.Mode, w tasks.Writ
 	}
 	p, err := decode(raw)
 	require.NoError(t, err)
+	h := &t6g6Host{FakeRun: taskstest.NewFakeRun(context.Background(), d.Kind()), mode: mode, w: w}
+	_, err = task.Run(tasks.NewRC(h), p)
+	return h, err
+}
+
+// runT6G6KindRefusing is runT6G6Kind for a start that may be refused before the
+// run body: an error from the executor's decode of the params is returned (not
+// failed on), so a test can assert a refusal wherever it happens. A refused
+// start returns a nil host, since no run began.
+func runT6G6KindRefusing(t *testing.T, d tasks.Definition, mode tasks.Mode, w tasks.Writer, params string) (*t6g6Host, error) {
+	t.Helper()
+	r, ok := d.(interface {
+		ExecutorRunners() (func(json.RawMessage) (any, error), *tasks.TaskSpec[any, json.RawMessage], *tasks.BatchSpec[any, any, json.RawMessage], *tasks.FixerSpec[any, any])
+	})
+	require.True(t, ok, "%T has no ExecutorRunners", d)
+	decode, task, _, _ := r.ExecutorRunners()
+	require.NotNil(t, task, "%s is not a Task", d.Kind())
+	var raw json.RawMessage
+	if params != "" {
+		raw = json.RawMessage(params)
+	}
+	p, err := decode(raw)
+	if err != nil {
+		return nil, err
+	}
 	h := &t6g6Host{FakeRun: taskstest.NewFakeRun(context.Background(), d.Kind()), mode: mode, w: w}
 	_, err = task.Run(tasks.NewRC(h), p)
 	return h, err
