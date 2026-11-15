@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/r2corpus/record_r0_reach.py
-# version: 1.7.0
+# version: 1.8.0
 # guid: 8e5b1d7c-4a92-4f36-b0c8-2d7a9e3f6b14
-# last-edited: 2026-11-14
+# last-edited: 2026-11-15
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
 
 05-rbac §6.3 / 09 §9.2.6: the reach oracle compares, for every (route, principal)
@@ -35,9 +35,14 @@ stored config after the environment, so ``ENABLE_AUTH=false`` does not reach a
 store that has one: ``r0config/edit_config.go.txt``). Secrets never reach the
 output: keys are minted on the copy and held in memory only.
 
-Two more boots, with ``owner_email`` set in the stored config, record the nine routes R0
+Two more boots, with ``OWNER_EMAIL`` set in R0's environment, record the nine routes R0
 puts behind its owner gate (``OWNER_ROUTES``) for every principal into ``verdicts.json``'s
-``owner_set`` section: production sets an owner and the main recording does not.
+``owner_set`` section: production sets an owner and the main recording does not. The
+environment is the only way in: ``owner_email`` is an auth-surface key that R0 takes from
+the environment unconditionally (``applyEnvAuthoritativeConfig``), so a value written to
+the stored config is overwritten at boot. A first recording that wrote it there
+recorded the gate off (every letter identical to the main recording), so a boot whose
+owner gate did not take effect is a recorder failure (``check_owner_gate_took_effect``).
 
 ``--check`` re-derives the data and exits 1 on any differing verdict cell, a
 changed R0 binary, a changed route count or principal list, or a changed overlay
@@ -797,6 +802,39 @@ def stitch_columns(
     return [next(cols_off) if p["kind"] == "authoff" else next(cols_on) for p in principals]
 
 
+def check_owner_gate_took_effect(
+    routes: list[dict[str, Any]],
+    columns: list[list[int]],
+    owner_subset: list[dict[str, Any]],
+    owner_columns: list[list[int]],
+) -> None:
+    """The owner-set boots must show R0's owner gate on: with no principal the owner,
+    every cell the main recording allowed on an owner route is denied here, and at
+    least one such cell exists. A boot whose owner email never reached R0 answers
+    exactly as the main recording did, which would record the gate as inert."""
+    index = {(r["method"], r["path"]): i for i, r in enumerate(routes)}
+    allowed = 0
+    still: list[str] = []
+    for j, r in enumerate(owner_subset):
+        i = index[(r["method"], r["path"])]
+        for k, col in enumerate(columns):
+            if col[i] in DENY_STATUSES:
+                continue
+            allowed += 1
+            if owner_columns[k][j] not in DENY_STATUSES:
+                still.append(f"{r['method']} {r['path']} (principal #{k})")
+    if allowed == 0:
+        raise RecorderError(
+            "the main recording allows no cell of an owner route: nothing shows the gate on"
+        )
+    if still:
+        raise RecorderError(
+            "OWNER_EMAIL did not reach R0: the owner gate left allowed cells allowed on "
+            + ", ".join(still[:5])
+            + (f" and {len(still) - 5} more" if len(still) > 5 else "")
+        )
+
+
 def owner_set_doc(
     routes: list[dict[str, Any]], principals: list[dict[str, Any]], columns: list[list[int]]
 ) -> dict[str, Any]:
@@ -815,8 +853,8 @@ def owner_set_doc(
             }
         )
     return {
-        "what": "R0's allow/deny on the owner-gated routes with owner_email set in the stored "
-        "config and no Cloudflare Access verifier, so no principal is the owner",
+        "what": "R0's allow/deny on the owner-gated routes with OWNER_EMAIL set in its "
+        "environment and no Cloudflare Access verifier, so no principal is the owner",
         "owner_email": OWNER_EMAIL,
         "routes": rows,
     }
@@ -989,14 +1027,14 @@ AUTH_OFF_EDIT = "enable_auth=true>false"
 # not, so R0's owner gate (``ownerGateWhenOwnerSet``, owner_routes.go @v0.223.0, which
 # is on only while ``owner_email`` is set) was never on in it. These are the routes
 # R0 puts behind that gate (wire_library_routes.go, wire_system_routes.go
-# @v0.223.0), recorded again in boots whose stored config holds OWNER_EMAIL. R0's
+# @v0.223.0), recorded again in boots whose environment holds OWNER_EMAIL. R0's
 # gate needs ``auth.OwnerProofWhyNot``: a verified Cloudflare Access JWT for the
 # owner's email, which no principal of the table can hold (the boot has no Access
 # verifier), so the table's whole answer is the gate's refusal, and the recording
 # shows that R0 refuses a non-owner admin session on every one of them.
 # The address is a fixture on a reserved domain.
 OWNER_EMAIL = "bruce@example.invalid"
-OWNER_EDIT = f'owner_email=*>"{OWNER_EMAIL}"'
+OWNER_ENV = {"OWNER_EMAIL": OWNER_EMAIL}
 OWNER_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/api/v1/admin/guest-service-tokens/plan"),
     ("POST", "/api/v1/admin/guest-service-tokens/:userId/revoke"),
@@ -1076,8 +1114,9 @@ def boot_and_record(
 ) -> dict[str, Any]:
     """One boot of R0 on a fresh throwaway copy and one pass over ``routes``.
 
-    ``owner_set`` writes ``OWNER_EMAIL`` into the copy's stored config as well, and
-    skips the census, tasks and approvals (the owner-set recording is of a few routes)."""
+    ``owner_set`` boots R0 with ``OWNER_EMAIL`` in its environment (the stored config
+    cannot carry it) and skips the census, tasks and approvals (the owner-set recording
+    is of a few routes)."""
     layout = w.Layout(pathlib.Path(args.workdir))
     stage_copy(args, layout)
     # R0 builds its per-peer rate limiter from the stored config, which the
@@ -1090,7 +1129,7 @@ def boot_and_record(
     if auth_off:
         edits.append(AUTH_OFF_EDIT)
     if owner_set:
-        edits.append(OWNER_EDIT)
+        env.update(OWNER_ENV)
     edit_config(layout, edits)
     proc = w.R0Process(binary, layout, args.port, docker=args.docker, extra_env=env)
     client = w.Client(proc.base, user_agent=RECORDER_UA)
@@ -1189,6 +1228,7 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
         args, binary, owner_subset, principals, auth_off=True, owner_set=True
     )
     owner_columns = stitch_columns(principals, owner_on["columns"], owner_off["columns"])
+    check_owner_gate_took_effect(routes, columns, owner_subset, owner_columns)
     meta = {
         "what": "R0's allow/deny per (route, principal); A = past the authorization decision, "
         "D = 401/403 (record_r0_reach.py)",
