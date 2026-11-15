@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-14
 
@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"sync"
@@ -24,6 +25,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -356,12 +358,21 @@ func t6g5RunNativeOn(t *testing.T, p *Plugin, mode tasks.Mode, headID string, sc
 	return t6g5NativeRun{out: out, err: err, spy: spy, holds: holds, gate: gate, handed: slices.Clone(handed), runID: string(rc.RunID()), def: d, rc: rc}
 }
 
+// t6g5TB is the part of testing.T requireWriter uses, so a test can hand it a
+// recording double and see it fail.
+type t6g5TB interface {
+	require.TestingT
+	Helper()
+}
+
 // requireWriter proves the shell built its writer from this run's rc.Writer(),
 // and that every resource a write reached is one the kind declares: the
 // resources the spy saw must be a subset of the kind's Effects.WriteSet(), and
 // the spy must have met no method it has no mapping for. A run that recorded
 // nothing fails: the subset check is vacuous over an empty record.
-func (r t6g5NativeRun) requireWriter(t *testing.T) {
+func (r t6g5NativeRun) requireWriter(t *testing.T) { t.Helper(); r.requireWriterOn(t) }
+
+func (r t6g5NativeRun) requireWriterOn(t t6g5TB) {
 	t.Helper()
 	require.Len(t, r.handed, 1, "NewWriter is called once per run")
 	assert.Same(t, r.gate, r.handed[0], "NewWriter is handed this run's rc.Writer()")
@@ -371,6 +382,44 @@ func (r t6g5NativeRun) requireWriter(t *testing.T) {
 	for _, res := range r.spy.recorded() {
 		assert.Contains(t, declared, res, "the run wrote %q, which %s does not declare in its Effects", res, r.def.Kind())
 	}
+}
+
+// t6g5RecordingTB records the failures requireWriter reports instead of failing
+// the test, and stops the goroutine on FailNow as testing.T does.
+type t6g5RecordingTB struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (*t6g5RecordingTB) Helper() {}
+func (r *t6g5RecordingTB) Errorf(format string, args ...any) {
+	r.mu.Lock()
+	r.msgs = append(r.msgs, fmt.Sprintf(format, args...))
+	r.mu.Unlock()
+}
+func (*t6g5RecordingTB) FailNow() { runtime.Goexit() }
+
+// requireWriter must fail a run that wrote nothing, and a run whose spy recorded
+// a resource the kind does not declare, so a vacuous or over-wide live test cannot
+// pass the subset check.
+func TestT6G5RequireWriter_FailsOnAnEmptyRecordAndOnAnUndeclaredResource(t *testing.T) {
+	d := t6g5KindByName(t, (&Plugin{}).t6g5Kinds(fakeT6G5Deps(t), nil), "maintenance.metadata-cache-reap")
+	gate := &t6g5Gate{id: "meta"}
+	run := func(calls ...string) []string {
+		r := t6g5NativeRun{spy: &t6g5Spy{calls: calls}, gate: gate, handed: []tasks.Writer{gate}, def: d}
+		rec := &t6g5RecordingTB{}
+		done := make(chan struct{})
+		go func() { defer close(done); r.requireWriterOn(rec) }()
+		<-done
+		return rec.msgs
+	}
+	assert.Empty(t, run("DeleteMetadataCache"), "a recorded write of a declared resource passes")
+	empty := run()
+	require.NotEmpty(t, empty, "a run that recorded nothing is a failure")
+	assert.Contains(t, empty[0], "wrote something")
+	undeclared := run("DeleteMetadataCache", "SetBookAuthors")
+	require.NotEmpty(t, undeclared, "a recorded resource outside the kind's Effects is a failure")
+	assert.Contains(t, undeclared[0], "does not declare")
 }
 
 // requireHold proves the run stood the scan down under the configured key and
@@ -641,6 +690,35 @@ func TestT6G5Native_CloneApply(t *testing.T) {
 	owner, err := f.s.GetBookFileByPID("PID-T0")
 	require.NoError(t, err)
 	assert.Equal(t, g.CloneBookID, owner.BookID, "the library copy owns the PID")
+}
+
+// A mixed book (one file already in the library, one under the iTunes tree) is
+// completed in place by reflinking only the iTunes file. That clone must reach
+// the run's writer as Reflink, which changes bytes on disk and so maps to
+// files: with an empty Reflink entry in the spy map the declared write set
+// could lose files and no test would notice.
+func TestT6G5Native_CloneMixedApplyReflinksThroughTheWriter(t *testing.T) {
+	f := newICFixture(t)
+	lib := filepath.Join(f.root, "Author", "Book M", "01.mp3")
+	it := f.itunes("02.mp3")
+	f.book(t, "M", "vg-m", "Book M", []string{lib, it})
+	p := t6g5ClonePlugin(f)
+	p.reflinkFile = fileops.CopyFileIngestExclusive // a plain exclusive copy: CI filesystems cannot clone
+
+	r := t6g5RunNativeOn(t, p, tasks.ModeLive, "itunes.clone-into-library", t6g5ScanKey,
+		`{"apply":true,"group_ids":["vg-m"]}`)
+	require.NoError(t, r.err)
+	r.requireWriter(t)
+	r.requireHold(t)
+	var rep icReport
+	require.NoError(t, json.Unmarshal(r.out, &rep))
+	g := icGroup(t, &rep, "vg-m")
+	require.Equal(t, icKindMixed, g.Kind)
+	require.Equal(t, icOutcomeApplied, g.Outcome, g.Reason+g.Error)
+	assert.Equal(t, 1, r.spy.count("Reflink"), "the iTunes file was cloned through the writer")
+	assert.Contains(t, r.spy.recorded(), string(ops.ResFiles), "the clone's bytes on disk are a recorded write")
+	_, err := os.Stat(filepath.Join(f.root, "Author", "Book M", "02.mp3"))
+	require.NoError(t, err, "the clone landed in the library")
 }
 
 // The rollback reads the run's store for the retired rows

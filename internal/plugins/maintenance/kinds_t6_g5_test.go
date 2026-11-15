@@ -247,7 +247,7 @@ func t6g5ParString(d tasks.Definition) string {
 
 // t6g5WriteKinds lists the resource kinds an Effects writes, sorted, and fails
 // the test when any of them is declared under a module other than books.
-func t6g5WriteKinds(t *testing.T, e tasks.Effects) []string {
+func t6g5WriteKinds(t t6g5TB, e tasks.Effects) []string {
 	t.Helper()
 	var out []string
 	for _, r := range e.WriteSet() {
