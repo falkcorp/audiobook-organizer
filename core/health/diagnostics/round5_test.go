@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/round5_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b1f8c36-92d4-4e07-a3b8-6d70c2e19f54
 // last-edited: 2026-11-14
 
@@ -42,31 +42,53 @@ func TestDiagnostics_BuildRefusesAMismatchedActor(t *testing.T) {
 	}
 }
 
-// TestDiagnostics_RouteQueryRound5 runs the round-5 shapes through a real
-// bundle: the value road and the text-line road both, with runPathCases
+// TestDiagnostics_RouteQueryRound6 runs the round-5 and round-6 shapes through a
+// real bundle: the value road and the text-line road both, with runPathCases
 // failing the test if any input changed the number of log lines.
 //
-// N-1: a quote, bracket, comma or pipe inside a query does not end the route.
-// N-2: a query that does not decode is redacted, not passed through.
-// N-3: a rewritten value never writes a decoded line break.
+// N-1: a quote, bracket, comma or pipe inside a query does not end the route;
+// the query is one placeholder whatever it holds.
+// N-3: no decoded line break ever reaches the output.
 // N-4: symbols between slashes are not a path.
 // N-5: a doubled slash inside a route's path starts a path.
-func TestDiagnostics_RouteQueryRound5(t *testing.T) {
+// G7: a URL's query is opaque like a route's, and a token that carries an
+// encoded separator and decodes to an absolute path is "<path>" whole.
+// G8: a raw "&", "#", "=", ";", "?" or "%" in a directory name inside a query
+// cannot split it, because nothing in the query is shown.
+func TestDiagnostics_RouteQueryRound6(t *testing.T) {
 	const browse = "/api/v1/filesystem/browse?path="
 	runPathCases(t, []pathCase{
-		same("/api/v1/x?a=O'Brien&p=%2FUsers%2Fbruce", "/api/v1/x?a=O'Brien&p=<path>"),
-		same("/api/v1/x?a=b)c&p=%2FUsers%2Fbruce", "/api/v1/x?a=b)c&p=<path>"),
-		same("/api/v1/x?a=b,c&p=%2FUsers%2Fbruce", "/api/v1/x?a=b,c&p=<path>"),
-		same("/api/v1/x?a=b|c&p=%2FUsers%2Fbruce", "/api/v1/x?a=b|c&p=<path>"),
-		same("/api/v1/x?a=b]c&p=%2FUsers%2Fbruce", "/api/v1/x?a=b]c&p=<path>"),
-		same("/api/v1/x?a=b;c&p=%2FUsers%2Fbruce", "/api/v1/x?a=b;c&p=<path>"),
-		same(browse+"%2FUsers%2Fbruce%2F50%", browse+"<path>"),
-		same(browse+"%2FUsers%2Fbruce%zz", browse+"<path>"),
-		same("/api/v1/x?a=50%&path=%2FUsers%2Fbruce", "/api/v1/x?a=50%&path=<path>"),
-		same("GET "+browse+"%2FUsers%2Fbruce%0Aforged-line 200", "GET "+browse+"<path>%0Aforged-line 200"),
-		same("GET "+browse+"%2FUsers%2Fbruce%0D%0Aforged 200", "GET "+browse+"<path>%0D%0Aforged 200"),
-		same("/api/v1/x?msg=see%20%2FUsers%2Fbruce%20now", "/api/v1/x?msg=see%20<path>%20now"),
-		same("/api/v1/x?m=%E2%80%A8%2FUsers%2Fbruce", "/api/v1/x?m=%E2%80%A8<path>"),
+		same("/api/v1/x?a=O'Brien&p=%2FUsers%2Fbruce", "/api/v1/x?<query>"),
+		same("/api/v1/x?a=b)c&p=%2FUsers%2Fbruce", "/api/v1/x?<query>"),
+		same("/api/v1/x?a=b,c&p=%2FUsers%2Fbruce", "/api/v1/x?<query>"),
+		same("/api/v1/x?a=b|c&p=%2FUsers%2Fbruce", "/api/v1/x?<query>"),
+		same("/api/v1/x?a=b]c&p=%2FUsers%2Fbruce", "/api/v1/x?<query>"),
+		same("/api/v1/x?a=b;c&p=%2FUsers%2Fbruce", "/api/v1/x?<query>"),
+		same(browse+"%2FUsers%2Fbruce%2F50%", "/api/v1/filesystem/browse?<query>"),
+		same(browse+"%2FUsers%2Fbruce%zz", "/api/v1/filesystem/browse?<query>"),
+		same("/api/v1/x?a=50%&path=%2FUsers%2Fbruce", "/api/v1/x?<query>"),
+		same("GET "+browse+"%2FUsers%2Fbruce%0Aforged-line 200", "GET /api/v1/filesystem/browse?<query> 200"),
+		same("GET "+browse+"%2FUsers%2Fbruce%0D%0Aforged 200", "GET /api/v1/filesystem/browse?<query> 200"),
+		same("/api/v1/x?m=%E2%80%A8%2FUsers%2Fbruce", "/api/v1/x?<query>"),
+		// G8: the shapes that used to split a query.
+		same("/api/v1/x?path=/Users/a&b/Gordonx/Books", "/api/v1/x?<query>"),
+		same("/api/v1/x?sort=a}b&path=/Users%2F#z%2FGordonx%2FBooks", "/api/v1/x?<query>"),
+		same("/api/v1/x?/Users/a=b/Gordonx/Books=1", "/api/v1/x?<query>"),
+		same("/api/v1/x?p=/Users/a;b/Gordonx/Books", "/api/v1/x?<query>"),
+		same("/api/v1/x?p=/Users/a?b/Gordonx/Books", "/api/v1/x?<query>"),
+		same("/api/v1/x?p=/Users/a%b/Gordonx/Books", "/api/v1/x?<query>"),
+		// G7(1): a full URL.
+		same("https://abs.example/api/x?path=%2FUsers%2Fbruce", "https://abs.example/api/x?<query>"),
+		same("https://abs.example/items?p=/Users/a&b/Gordonx/Books#frag", "https://abs.example/items?<query>"),
+		same("https://abs.example/items#/Users/bruce", "https://abs.example/items#<fragment>"),
+		same("https://example.com/y", "https://example.com/y"),
+		// G7(2): an encoded separator outside a route and a URL.
+		same("path=%2FUsers%2Fbruce", "<path>"),
+		same("path=%2FUsers%2Fbruce%2FGordonx%2FBooks and more", "<path> and more"),
+		same("open C%3A%5CUsers%5Cbruce failed", "open <path> failed"),
+		same("see 50%25 done", "see 50%25 done"),
+		same("application%2Fjson", "application%2Fjson"),
+		// N-5, N-4.
 		same("/api/v1/x//Users/bruce", "/api/v1/x/<path>"),
 		same("/api/v1/x/%2FUsers%2Fbruce", "/api/v1/x/<path>"),
 		same("a*/home/bruce/x", "a*<path>"),
