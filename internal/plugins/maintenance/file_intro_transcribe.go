@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-11-14
 
@@ -43,7 +43,10 @@ import (
 // A file is DONE when IntroSourceHash == FileHash; that marker is on
 // BookFileCore (memdb), so selecting the remaining work is one in-memory pass
 // and a restart resumes exactly where it stopped, with no checkpoint (the
-// checkpoint hook is not called by RunItems under concurrency anyway).
+// checkpoint hook is not called by RunItems under concurrency anyway). The
+// native kind adds one: near its deadline it checkpoints a cursor (see
+// fileIntroCursor) and yields to a fresh attempt, which HEAD's 30-day timeout
+// never needed.
 
 const (
 	fileIntroOpID = "maintenance.transcribe-file-intros"
@@ -403,6 +406,11 @@ const fileIntroKind tasks.Kind = "books." + fileIntroOpID
 // fileIntroEnv is what the core needs from its engine (rules R2 and R10).
 type fileIntroEnv struct {
 	t6g4Base
+	// YieldMargin is how close to the context's deadline the run stops starting
+	// batches and yields (tasks.ErrContinueInPlace). 0 (HEAD's shell) never
+	// yields; the native shell sets fileIntroYieldMargin. It has an effect only
+	// with a SaveCheckpoint, which a yield cannot do without.
+	YieldMargin time.Duration
 }
 
 // fileIntroNativeParams is fileIntroParams for the native run: the mode comes
@@ -496,7 +504,7 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			}
 			return p.runFileIntroTranscribeCore(rc.Context(), fileIntroParams{
 				OnlyMissing: in.OnlyMissing, RetryFailed: in.RetryFailed, ClearRunID: in.ClearRunID,
-			}, fileIntroEnv{t6g4Base: base})
+			}, fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin})
 		},
 	})
 }
@@ -558,21 +566,58 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 	if runID == "" {
 		runID = "run-" + time.Now().UTC().Format(time.RFC3339)
 	}
+
+	// An attempt that yielded (or was cut off) left a cursor: the run's id and
+	// counters, how many batches it completed, and the last group of the
+	// contiguous completed prefix. HEAD never checkpoints this op (its base has
+	// no LoadCheckpoint), so there it is always a fresh run.
+	var prior fileIntroCursor
+	resumed := false
+	if env.LoadCheckpoint != nil {
+		ok, lerr := env.LoadCheckpoint(&prior)
+		if lerr != nil {
+			return res, fmt.Errorf("%s: restore checkpoint: %w", fileIntroOpID, lerr)
+		}
+		resumed = ok
+	}
+	if resumed && prior.RunID != "" {
+		runID = prior.RunID
+	}
 	res.RunID = runID
+
+	groups := sel.groups
+	base := 0
+	if resumed {
+		base = prior.DoneBatches
+		// Only a forced run (only_missing=false) needs the prefix skipped: the
+		// default run's selection already leaves out every file that has a result.
+		if !onlyMissing && prior.Last != nil {
+			groups = fileIntroSkipThrough(groups, *prior.Last)
+		}
+	}
+
 	startedAt := time.Now()
-	accum := &fileIntroAccum{sink: env.Writer, log: log, stats: database.FileIntroStats{
+	stats := database.FileIntroStats{
 		RunOpID: runID, StartedAt: startedAt, UpdatedAt: startedAt,
 		Eligible: sel.eligible, TranscribedAtStart: sel.transcribedAtStart, TranscribedNow: sel.transcribedAtStart,
 		Selected:      sel.selected,
 		SkippedNoHash: sel.skippedNoHash, SkippedMissing: sel.skippedMissing,
 		SkippedUnsupported: sel.skippedUnsupported, SkippedFailed: sel.skippedFailed,
-	}}
+	}
+	if resumed {
+		// The counters describe the whole run, not this attempt.
+		stats = prior.Stats
+		stats.RunOpID = runID
+		stats.UpdatedAt = startedAt
+	}
+	accum := &fileIntroAccum{sink: env.Writer, log: log, stats: stats}
 	log.Info("transcribe-file-intros: starting",
 		"run_id", runID, "only_missing", onlyMissing, "retry_failed", retryFailed,
 		"eligible", sel.eligible, "already_done", sel.transcribedAtStart,
-		"selected", sel.selected, "groups", len(sel.groups), "reuse_files", sel.reuseFiles, "slots", slots)
+		"selected", sel.selected, "groups", len(groups), "reuse_files", sel.reuseFiles, "slots", slots,
+		"resumed", resumed, "batches_done_earlier", base)
 
-	if len(sel.groups) == 0 {
+	if len(sel.groups) == 0 && !resumed {
 		accum.flush(true)
 		env.Progress(1, 1, mark+fmt.Sprintf(
 			"Done — nothing to transcribe (%d of %d eligible files already have a result)",
@@ -587,27 +632,55 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 		store: store, writer: env.Writer, queue: queue, reporter: reporter, accum: accum,
 		runID: runID, onlyMissing: onlyMissing,
 	}
-	batches := chunkFileIntroGroups(sel.groups, fileIntroBatchGroups)
-	w.batchesTotal = len(batches)
+	batches := chunkFileIntroGroups(groups, fileIntroBatchGroups)
+	w.batchesTotal = base + len(batches)
+	w.batchesDone.Store(int64(base))
+	remainingFiles := 0
+	for _, g := range groups {
+		remainingFiles += len(g.Members)
+	}
 	var filesDone atomic.Int64
-	err = env.Each(ctx, len(batches), t6g4EachOpts{
-		// One worker per whisper slot across all endpoints. Each call carries one
-		// batch; the dispatcher places it on an endpoint with a free slot,
-		// rotating among equal-priority endpoints (allocateJobsWith), so the
-		// workers spread over every Mac instead of queueing on the first. The
-		// transport still enforces each endpoint's own cap.
-		Concurrency:   slots,
-		ProgressTotal: len(batches),
-		Label: func(i, t int) string {
-			return mark + fmt.Sprintf("Batch %d/%d — %d of %d files handled", i+1, t, int(filesDone.Load()), sel.selected)
+	loop := &fileIntroBatchLoop{
+		batches: batches, base: base, slots: slots,
+		runBatch: w.runBatch,
+		afterBatch: func(n int) {
+			w.batchesDone.Add(1)
+			filesDone.Add(int64(n))
+			accum.flush(false)
 		},
-	}, func(ctx context.Context, i int) error {
-		n, berr := w.runBatch(ctx, batches[i])
-		w.batchesDone.Add(1)
-		filesDone.Add(int64(n))
+		// The runner's own total is this attempt's batch count; the bar's is absolute.
+		label: func(i, _ int) string {
+			return mark + fmt.Sprintf("Batch %d/%d — %d of %d files handled", base+i+1, base+len(batches), int(filesDone.Load()), remainingFiles)
+		},
+		each: env.Each,
+	}
+	if env.SaveCheckpoint != nil {
+		loop.yieldMargin = env.YieldMargin
+	}
+	prefix, yielded, err := loop.run(ctx)
+	if err == nil && yielded {
+		cur := fileIntroCursor{RunID: runID, DoneBatches: base + prefix, Last: prior.Last, Stats: accum.snapshot()}
+		if prefix > 0 {
+			last := batches[prefix-1]
+			k := fileIntroKeyOf(last[len(last)-1])
+			cur.Last = &k
+		}
+		if cerr := env.SaveCheckpoint(cur); cerr != nil {
+			accum.flush(false)
+			return res, fmt.Errorf("%s: save checkpoint before yielding: %w", fileIntroOpID, cerr)
+		}
 		accum.flush(false)
-		return berr
-	})
+		st := accum.snapshot()
+		res.Stats = &st
+		// Reset the bar to the exact prefix: RunItems counted the batches it
+		// skipped at the margin as completed, and the next attempt's progress
+		// proof is measured against this value.
+		env.Progress(base+prefix, base+len(batches), mark+fmt.Sprintf(
+			"Yielding before the deadline — %d of %d batches complete; continuing in place", base+prefix, base+len(batches)))
+		log.Info("transcribe-file-intros: yielding before the deadline",
+			"run_id", runID, "batches_complete", base+prefix, "batches_total", base+len(batches))
+		return res, tasks.ErrContinueInPlace
+	}
 	accum.flush(true)
 	st := accum.snapshot()
 	res.Stats = &st
@@ -624,6 +697,147 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 		runID, st.OK, st.Unparsed, st.Silence, st.WhisperError, st.FFmpegError, st.TranscribeTimeout, st.SourceMissing, st.Reused, st.Deferred, st.Stale,
 		st.BookFills, st.TranscribedNow, st.Eligible))
 	return res, nil
+}
+
+// fileIntroYieldMargin is how close to its deadline a native attempt gets before
+// it stops starting batches and yields (tasks.ErrContinueInPlace) to a fresh
+// attempt. It is a best-effort margin, not a bound: a batch already running can
+// outlive it (see fileIntroBatchLoop.run).
+const fileIntroYieldMargin = 5 * time.Minute
+
+// fileIntroKey orders groups exactly as selectFileIntroWork does: the tier (0
+// when any member is a book's first file), then the first member's book and
+// ordinal. The sort is stable and keyed on the first member only, so it is a
+// total order over groups that differ in those three fields; two groups that
+// share all three would be a duplicate hash for the same first file, which
+// selection cannot produce.
+type fileIntroKey struct {
+	Tier    int    `json:"tier"`
+	BookID  string `json:"book_id"`
+	Ordinal int    `json:"ordinal"`
+}
+
+func fileIntroKeyOf(g fileIntroGroup) fileIntroKey {
+	m := g.Members[0]
+	return fileIntroKey{Tier: g.tier(), BookID: m.BookID, Ordinal: m.Ordinal}
+}
+
+// atOrBefore reports k <= o in selection order.
+func (k fileIntroKey) atOrBefore(o fileIntroKey) bool {
+	if k.Tier != o.Tier {
+		return k.Tier < o.Tier
+	}
+	if k.BookID != o.BookID {
+		return k.BookID < o.BookID
+	}
+	return k.Ordinal <= o.Ordinal
+}
+
+// fileIntroSkipThrough returns the groups after the last one at or before last.
+// groups is in selection order, so the skipped groups are a prefix.
+func fileIntroSkipThrough(groups []fileIntroGroup, last fileIntroKey) []fileIntroGroup {
+	n := 0
+	for n < len(groups) && fileIntroKeyOf(groups[n]).atOrBefore(last) {
+		n++
+	}
+	return groups[n:]
+}
+
+// fileIntroCursor is the native run's checkpoint, written when an attempt
+// yields. Stats are the run's counters so far (the next attempt keeps counting
+// from them); DoneBatches is the absolute number of completed batches, which
+// keeps the progress bar monotone across attempts; Last is the last group of the
+// contiguous completed prefix, nil when none has completed.
+type fileIntroCursor struct {
+	RunID       string                  `json:"run_id"`
+	DoneBatches int                     `json:"done_batches"`
+	Last        *fileIntroKey           `json:"last,omitempty"`
+	Stats       database.FileIntroStats `json:"stats"`
+}
+
+// fileIntroBatchLoop runs the op's batches through the env's loop runner and,
+// when yieldMargin is set, stops starting batches once the context's deadline is
+// that close.
+type fileIntroBatchLoop struct {
+	batches [][]fileIntroGroup
+	// base is how many batches earlier attempts completed: progress is reported
+	// as base+i, against base+len(batches).
+	base  int
+	slots int
+	// yieldMargin 0 never yields (HEAD).
+	yieldMargin time.Duration
+	runBatch    func(ctx context.Context, groups []fileIntroGroup) (int, error)
+	afterBatch  func(settled int)
+	label       func(i, total int) string
+	each        t6g4EachFn
+
+	completed atomic.Int64
+	yielding  atomic.Bool
+}
+
+// run returns the number of batches in the contiguous completed prefix of
+// l.batches, whether it stopped early at the margin, and the first real error.
+//
+// A batch past the margin returns nil WITHOUT running, rather than an error: a
+// FailFast loop cancels the items still in flight on the first error, and a
+// yield must let them finish (their results are written as they land). The
+// price is that the loop counts a skipped batch as completed in its own
+// progress; the caller resets the bar to the exact prefix.
+//
+// The margin is checked only before a batch starts and only once this attempt
+// has completed one: yielding with nothing done would fail the executor's
+// "progress past the starting point" proof and end the run. A batch already
+// running when the deadline nears can outlive the margin (a paused scan or a
+// whisper outage retry waits minutes); the run context then ends, the batch's
+// context error is returned, and the run falls back to the executor's timeout
+// path, which resumes from the last checkpoint exactly as it did before this
+// yield existed.
+func (l *fileIntroBatchLoop) run(ctx context.Context) (prefix int, yielded bool, err error) {
+	done := make([]bool, len(l.batches))
+	var mu sync.Mutex
+	deadline, hasDeadline := ctx.Deadline()
+	shouldYield := func() bool {
+		if l.yielding.Load() {
+			return true
+		}
+		if l.yieldMargin <= 0 || !hasDeadline || l.completed.Load() == 0 || time.Until(deadline) >= l.yieldMargin {
+			return false
+		}
+		l.yielding.Store(true)
+		return true
+	}
+	if len(l.batches) > 0 {
+		err = l.each(ctx, len(l.batches), t6g4EachOpts{
+			// One worker per whisper slot across all endpoints. Each call carries one
+			// batch; the dispatcher places it on an endpoint with a free slot,
+			// rotating among equal-priority endpoints (allocateJobsWith), so the
+			// workers spread over every Mac instead of queueing on the first. The
+			// transport still enforces each endpoint's own cap.
+			Concurrency:   l.slots,
+			ProgressBase:  l.base,
+			ProgressTotal: l.base + len(l.batches),
+			Label:         l.label,
+		}, func(ctx context.Context, i int) error {
+			if shouldYield() {
+				return nil
+			}
+			n, berr := l.runBatch(ctx, l.batches[i])
+			l.afterBatch(n)
+			if berr == nil {
+				l.completed.Add(1)
+				mu.Lock()
+				done[i] = true
+				mu.Unlock()
+			}
+			return berr
+		})
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for prefix < len(done) && done[prefix] {
+		prefix++
+	}
+	return prefix, err == nil && l.yielding.Load(), err
 }
 
 func chunkFileIntroGroups(gs []fileIntroGroup, size int) [][]fileIntroGroup {

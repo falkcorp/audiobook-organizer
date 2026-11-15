@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-14
 
@@ -407,6 +407,10 @@ type t6g4EachOpts struct {
 	Collect bool
 	// ProgressTotal is the absolute denominator (0 = n).
 	ProgressTotal int
+	// ProgressBase is the absolute offset of item 0 when the n items are the tail
+	// of a larger set an earlier attempt already completed (0 = item 0 is the
+	// first). HEAD's registry.RunItemsOptions calls it ProgressOffset.
+	ProgressBase int
 }
 
 // t6g4Par returns the tasks.Parallelism a loop declares for o.
@@ -430,7 +434,7 @@ func t6g4RunEach(rc *tasks.RC, n int, o t6g4EachOpts, fn func(ctx context.Contex
 	for i := range idx {
 		idx[i] = i
 	}
-	opts := tasks.ItemsOptions[int]{ItemTimeout: o.ItemTimeout, ProgressTotal: o.ProgressTotal}
+	opts := tasks.ItemsOptions[int]{ItemTimeout: o.ItemTimeout, ProgressTotal: o.ProgressTotal, ProgressBase: o.ProgressBase}
 	if o.Collect {
 		opts.OnError = tasks.Collect
 	}
@@ -458,6 +462,7 @@ func t6g4RunEachHEAD(reporter sdk.Reporter) func(ctx context.Context, n int, o t
 			PerItemTimeout: o.ItemTimeout,
 			Label:          o.Label,
 			ProgressTotal:  o.ProgressTotal,
+			ProgressOffset: o.ProgressBase,
 		}
 		if o.Collect {
 			opts.ErrMode = registry.ErrModeCollect
