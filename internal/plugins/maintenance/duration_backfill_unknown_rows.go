@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-15
 
@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
@@ -86,12 +87,33 @@ import (
 // only for books where a Duration was set. A failure record moves nothing an
 // aggregate reads.
 //
-// The recompute is prompt, not deferred to the end of the run. A book whose rows
-// are all settled is recomputed by the worker that settled its last row; books
-// that only borrowed or promoted are recomputed when pass 1 ends. Only the
-// leftovers (a cancelled run) are recomputed at the end, under a context that
-// survives the cancellation. So a long probe pass does not leave measured books
-// reading stale totals until the last file finishes.
+// The recompute belongs to the item that finishes the book, not to the end of
+// the run. Every row, whatever its pass and outcome, settles ONCE, right after
+// its own write (or its decision not to write); the worker that settles a book's
+// last row recomputes the book inside that same item, so a long probe pass does
+// not leave measured books reading stale totals until the last file finishes, and
+// nothing is owed to a point after the loop.
+//
+// That matters because the recompute is a write. Natively it goes through the
+// run's gated writer, which refuses with tasks.ErrFenced once the run is
+// canceled, timed out or abandoned, so a recompute that waited for "after the
+// run" would never happen on exactly the runs that need it. There is no write
+// outside the fence here: the final sweep below still runs on every exit path
+// (HEAD's store is ungated, so a HEAD run recomputes the books of a cancelled
+// run), but natively it is the net for a book whose item failed with the run
+// still alive, and a book it cannot reach is reported by name (see
+// unknownRowsRecompute.owed), never counted as done.
+//
+// A book that is cut mid-run is found again by a rerun, because the rerun
+// re-plans from the store: a row is a candidate while it is unknown, and a cut
+// book has at least one row that was not settled, i.e. not yet written (the
+// native kind is ResumeDrop; it keeps no cursor for this grain, and needs
+// none). The one shape that is not found again is a cancel landing between a
+// book's last row write and its recompute, two adjacent gated writes of one
+// item; the book then has every row measured and a stale aggregate, which a
+// book-grain run with force recomputes. Closing that gap needs a single gated
+// write that sets the last row and recomputes (seams.d/F5-09.md, "Readings the
+// brief did not settle").
 //
 // Dry run (the default) runs pass 1's decisions and reports what pass 2 would
 // probe (would_probe) but does NOT run ffprobe or stat anything: a preview that
@@ -481,6 +503,11 @@ type unknownRowsRecompute struct {
 
 	done, failed atomic.Int64
 	firstErr     atomic.Pointer[error]
+
+	// owed is the books whose recompute the gate refused (tasks.ErrFenced):
+	// their rows are measured and their aggregates are stale.
+	owedMu sync.Mutex
+	owed   []string
 }
 
 func (r *unknownRowsRecompute) touch(bookID string) {
@@ -531,6 +558,11 @@ func (r *unknownRowsRecompute) run(bookID string) {
 	r.mu.Unlock()
 
 	if err := r.store.RecomputeBookAggregates(bookID); err != nil {
+		if errors.Is(err, tasks.ErrFenced) {
+			r.owedMu.Lock()
+			r.owed = append(r.owed, bookID)
+			r.owedMu.Unlock()
+		}
 		r.failed.Add(1)
 		e := fmt.Errorf("book %s: RecomputeBookAggregates: %w", bookID, err)
 		r.firstErr.CompareAndSwap(nil, &e)
@@ -539,12 +571,11 @@ func (r *unknownRowsRecompute) run(bookID string) {
 	r.done.Add(1)
 }
 
-// runAll recomputes ids over a bounded pool. It deliberately does NOT go through
-// registry.RunItems: RunItems honours the op's pause gate, so a recompute that
-// must outlive a cancelled run (a row written before the cancel is a complete
-// write and its book must follow it) would block on a paused op, and
-// context.WithoutCancel would only hide that. An errgroup with SetLimit has no
-// gate and no context to cancel.
+// runAll recomputes ids over a bounded pool: the final sweep. It deliberately
+// does NOT go through registry.RunItems, whose pause gate would block a sweep
+// that runs after a cancelled run; an errgroup with SetLimit has no gate and no
+// context to cancel. It is a net, not the mechanism: a book is normally
+// recomputed by the item that settled its last row (rowSettled).
 func (r *unknownRowsRecompute) runAll(reporter sdk.Reporter, ids []string, workers int) {
 	if len(ids) == 0 {
 		return
@@ -559,6 +590,15 @@ func (r *unknownRowsRecompute) runAll(reporter sdk.Reporter, ids []string, worke
 		})
 	}
 	_ = g.Wait()
+}
+
+// owedBooks returns, sorted, the books whose recompute was refused by the gate.
+func (r *unknownRowsRecompute) owedBooks() []string {
+	r.owedMu.Lock()
+	defer r.owedMu.Unlock()
+	out := append([]string(nil), r.owed...)
+	sort.Strings(out)
+	return out
 }
 
 func (r *unknownRowsRecompute) err() error {
@@ -596,26 +636,29 @@ type unknownRowsRun struct {
 	ctr    unknownRowsCounters
 	warns  *readWarnLimiter
 	books  *unknownRowsRecompute
-	// pending counts, per book, the pass-2 rows not yet settled. The map is built
-	// before pass 2 and never written again (only the counters inside change), so
-	// workers read it without a lock. A book is absent when it has no pass-2 row.
+	// pending counts, per book, the rows of either pass not yet settled. The map
+	// is built before pass 1 and never written again (only the counters inside
+	// change), so workers read it without a lock. A book is absent when it has no
+	// row to act on.
 	pending map[string]*atomic.Int32
 }
 
-func newUnknownRowsRun(writer segmentFailureWriter, store unknownRowsStore, pass2 []unknownRowWork) *unknownRowsRun {
+func newUnknownRowsRun(writer segmentFailureWriter, store unknownRowsStore, pass1, pass2 []unknownRowWork) *unknownRowsRun {
 	r := &unknownRowsRun{
 		writer:  writer,
 		warns:   &readWarnLimiter{},
 		books:   &unknownRowsRecompute{store: store},
 		pending: map[string]*atomic.Int32{},
 	}
-	for _, w := range pass2 {
-		c := r.pending[w.row.BookID]
-		if c == nil {
-			c = new(atomic.Int32)
-			r.pending[w.row.BookID] = c
+	for _, rows := range [][]unknownRowWork{pass1, pass2} {
+		for _, w := range rows {
+			c := r.pending[w.row.BookID]
+			if c == nil {
+				c = new(atomic.Int32)
+				r.pending[w.row.BookID] = c
+			}
+			c.Add(1)
 		}
-		c.Add(1)
 	}
 	return r
 }
@@ -646,9 +689,13 @@ func (r *unknownRowsRun) recordWrite(w unknownRowWork, wrote bool, wErr error, c
 	}
 }
 
-// rowSettled is called once per pass-2 row when its outcome is final. The worker
-// that settles a book's last row recomputes it right then, so the book's
-// aggregates are current while the rest of the pass is still probing.
+// rowSettled is called once per row, of either pass, when its outcome is final
+// (written, failed to write, or deliberately left alone), and in the same item
+// that decided it. The worker that settles a book's last row recomputes the book
+// right then, so the aggregates are current while the rest of the run is still
+// going and never wait for a point after the loop, where the gate may refuse
+// them. A row whose item was cut (the run's context ended first) is never
+// settled: it was not written either, so it is still a candidate on a rerun.
 func (r *unknownRowsRun) rowSettled(bookID string) {
 	c := r.pending[bookID]
 	if c == nil {
@@ -830,10 +877,10 @@ func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRo
 	if len(pass1)+len(pass2) > 0 && writer == nil {
 		return fmt.Errorf("unknownRows: the store cannot defer aggregates, so nothing was written")
 	}
-	run := newUnknownRowsRun(writer, store, pass2)
+	run := newUnknownRowsRun(writer, store, pass1, pass2)
 
-	// A cancelled run must still bring the aggregates of every row it wrote up
-	// to date, so the leftover sweep below runs on every exit path.
+	// Every book is recomputed by the item that settles its last row; the sweep
+	// below runs on every exit path and is the net for a book whose item failed.
 	runErr := func() error {
 		if err := t6g4UnknownRowsPool(ctx, each, reporter, workers, &run.ctr, pass1, "borrowing/promoting", func(_ context.Context, w unknownRowWork) error {
 			wrote, wErr := writeUnknownRow(run.writer, w.row, func(cur *database.BookFile) error {
@@ -844,23 +891,23 @@ func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRo
 				counter = &run.ctr.promoted
 			}
 			run.recordWrite(w, wrote, wErr, counter, true)
+			run.rowSettled(w.row.BookID)
 			return nil
 		}); err != nil {
 			return err
 		}
-		// Pass 1 is over: every book that only borrowed or promoted is final.
-		// Books that also have rows to probe are recomputed when their last
-		// probe row settles.
-		run.books.runAll(reporter, run.books.pending(func(id string) bool {
-			_, probing := run.pending[id]
-			return !probing
-		}), workers)
-		return t6g4UnknownRowsPool(ctx, each, reporter, workers, &run.ctr, groupProbeRows(pass2), "probing", func(ctx context.Context, g []unknownRowWork) error {
-			return run.probeAndSettle(ctx, g)
-		})
+		return t6g4UnknownRowsPool(ctx, each, reporter, workers, &run.ctr, groupProbeRows(pass2), "probing", run.probeGroup)
 	}()
 
 	run.books.runAll(reporter, run.books.pending(nil), workers)
+	if owed := run.books.owedBooks(); len(owed) > 0 {
+		shown := owed[:min(len(owed), 5)]
+		for i := range shown {
+			shown[i] = logger.SanitizeLogValue(shown[i])
+		}
+		durLog.Warn("duration-backfill unknownRows: %d book(s) have every row measured and a stale aggregate, because the run was fenced before their recompute (first %d: %s); a book-grain duration-backfill run with force recomputes them",
+			len(owed), len(shown), strings.Join(shown, ", "))
+	}
 	rcErr := run.books.err()
 	res.BooksRecomputed = int(run.books.done.Load())
 
@@ -951,28 +998,26 @@ func groupProbeRows(rows []unknownRowWork) [][]unknownRowWork {
 	return groups
 }
 
-// probeAndSettle runs one group and, when it completed, settles each of its
-// rows (see rowSettled). A group cut short by cancellation settles nothing: its
-// books are picked up by the leftover sweep.
-func (r *unknownRowsRun) probeAndSettle(ctx context.Context, group []unknownRowWork) error {
-	if err := r.probeGroup(ctx, group); err != nil {
-		return err
-	}
+// settleGroup settles every row of a group whose outcome is final without a write.
+func (r *unknownRowsRun) settleGroup(group []unknownRowWork) {
 	for _, w := range group {
 		r.rowSettled(w.row.BookID)
 	}
-	return nil
 }
 
 // skipGroupEnvironment records that a whole group was left alone for a reason
 // that says nothing about the file's bytes: nothing is written to any row.
 func (r *unknownRowsRun) skipGroupEnvironment(group []unknownRowWork) {
 	r.ctr.envSkipped.Add(int64(len(group)))
+	r.settleGroup(group)
 }
 
 // probeGroup is pass 2 for one group of rows that are the same file
 // (probeGroupKey): at most ONE header probe, then the outcome applied to every
-// row. Each row's write has its own precondition (writeUnknownRow), so a row that
+// row. Each row settles (rowSettled) as soon as its own outcome is final, not
+// when the group ends, so a book whose last row is in this group is recomputed
+// before a cancel can cut the group's later rows; a row the cancel cuts is not
+// settled and, not being written, is still a candidate on a rerun. Each row's write has its own precondition (writeUnknownRow), so a row that
 // changed underneath is skipped and its siblings still get the result. Counts
 // stay per row.
 //
@@ -1016,6 +1061,7 @@ func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork)
 	switch unknownRowVerdict(first.row, &unknownRowDisk{Size: fi.Size(), Regular: fi.Mode().IsRegular()}) {
 	case unknownRowNotRegular:
 		r.ctr.notRegular.Add(int64(len(group)))
+		r.settleGroup(group)
 		if r.warns.allow() {
 			durLog.Warn("duration-backfill unknownRows: book %s file %s (+%d row(s) at the same path): not a regular file; rows left unprobed",
 				logger.SanitizeLogValue(first.row.BookID), logger.SanitizeLogValue(first.row.ID), len(group)-1)
@@ -1023,6 +1069,7 @@ func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork)
 		return nil
 	case unknownRowChanged:
 		r.ctr.changed.Add(int64(len(group)))
+		r.settleGroup(group)
 		if r.warns.allow() {
 			durLog.Warn("duration-backfill unknownRows: book %s file %s (+%d row(s) at the same path): file is %d bytes on disk but the row records %d; not probed",
 				logger.SanitizeLogValue(first.row.BookID), logger.SanitizeLogValue(first.row.ID), len(group)-1, fi.Size(), first.row.FileSize)
@@ -1046,6 +1093,7 @@ func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork)
 				return cur.SetMeasuredDuration(sec)
 			})
 			r.recordWrite(w, wrote, wErr, &r.ctr.probedKnown, true)
+			r.rowSettled(w.row.BookID)
 		}
 		return nil
 	}
@@ -1071,6 +1119,7 @@ func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork)
 			return nil
 		})
 		r.recordWrite(w, wrote, wErr, &r.ctr.probeFailed, false)
+		r.rowSettled(w.row.BookID)
 	}
 	return nil
 }

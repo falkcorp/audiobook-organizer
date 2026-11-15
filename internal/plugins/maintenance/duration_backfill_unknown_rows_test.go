@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_test.go
-// version: 1.3.4
+// version: 1.3.5
 // guid: 7e1c4b9a-52d8-4f36-a0b7-c9d13e6f2a84
 // last-edited: 2026-11-15
 
@@ -1231,7 +1231,7 @@ func TestUnknownRows_CancelStopsAGroupBetweenRows(t *testing.T) {
 			ID: fmt.Sprintf("f%d", i), BookID: "b1", FilePath: path, FileSize: urSize}, src: srcProbe})
 	}
 	w := &cancellingWriter{cancel: cancel}
-	run := newUnknownRowsRun(w, nopRecompute{}, group)
+	run := newUnknownRowsRun(w, nopRecompute{}, nil, group)
 
 	err := run.probeGroup(ctx, group)
 
