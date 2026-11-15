@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/dead_counts_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f6d2a9e-5b1c-4e7a-9d84-1c0b7e52a6f3
 // last-edited: 2026-11-15
 
@@ -255,14 +255,14 @@ func TestDeadCounts_RecountCostDoesNotGrowWithTheLetters(t *testing.T) {
 	s, _ := openStore(t)
 	ctx := context.Background()
 	start := time.Now()
-	before := outboxstore.KeysScanned(s)
+	before := s.KeysScanned()
 	for i := range letters {
 		stageDeads(t, s, consumer, i%partitions, uint64(i+1))
 		if _, err := s.DeadTotals(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	read := outboxstore.KeysScanned(s) - before
+	read := s.KeysScanned() - before
 	t.Logf("%d letters over %d partitions: %d keys read by %d recounts (%.1f per recount), %v", letters, partitions, read, letters, float64(read)/letters, time.Since(start).Round(time.Millisecond))
 	if limit := int64(letters * partitions); read > limit {
 		t.Fatalf("%d recounts read %d keys, want at most %d (one row per partition each): a recount that reads the letters is quadratic", letters, read, limit)
@@ -273,13 +273,13 @@ func TestDeadCounts_RecountCostDoesNotGrowWithTheLetters(t *testing.T) {
 
 	// The scan the counters replaced, for contrast: it reads every letter, every time.
 	const sample = 300
-	before = outboxstore.KeysScanned(s)
+	before = s.KeysScanned()
 	for range sample {
 		if _, err := s.DeadCounts(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if per := (outboxstore.KeysScanned(s) - before) / sample; per != letters {
+	if per := (s.KeysScanned() - before) / sample; per != letters {
 		t.Fatalf("a scan of the letters read %d keys, want all %d: the counter does not see the cost it is meant to show", per, letters)
 	}
 }

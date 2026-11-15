@@ -1,5 +1,5 @@
 // file: core/outbox/ops.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4b1a1f7a-0a62-4d4e-8f1d-8d2a0b5f7c33
 // last-edited: 2026-11-15
 
@@ -149,8 +149,11 @@ func (o *Outbox) DiscardDead(ctx context.Context, consumer string, seq uint64) e
 // the letter itself on every path: of two operators on one letter, or an
 // operator racing the relay, the second commit fails with ErrConflict, and
 // RetryOnConflict re-reads, which finds the letter gone (ErrDeadNotFound, the
-// answer for an operator that lost). Nothing here depends on the pair still
-// having a cursor row.
+// answer for an operator that lost). The batch also bumps the letter's pair
+// counter (deadn/), so it conflicts with the relay's dead-lettering of another
+// letter of the same pair too; that loser re-reads as well, and only repeated
+// losses become ErrDeadConflict. Nothing here depends on the pair still having
+// a cursor row.
 func (o *Outbox) mutateDead(ctx context.Context, consumer string, seq uint64, restage bool) error {
 	topic, _, found, err := o.store.FindDead(ctx, consumer, seq)
 	if err != nil {

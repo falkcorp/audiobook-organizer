@@ -1,5 +1,5 @@
 // file: core/outbox/outbox.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 5b3c4366-8534-4dc4-870f-850dfab2b120
 // last-edited: 2026-11-15
 
@@ -83,8 +83,10 @@ var (
 	ErrNoRuns             = errors.New("outbox: no task executor is bound")
 	ErrUnknownConsumer    = errors.New("outbox: consumer unknown")
 	ErrDeadNotFound       = errors.New("outbox: no such dead letter")
-	// ErrDeadConflict: the dead letter kept changing under the operation (other
-	// operators acting on it); list it again and retry if it is still there.
+	// ErrDeadConflict: the dead letter, or its pair's dead-letter counter, kept
+	// changing under the operation (other operators acting on it, or the relay
+	// dead-lettering another message of the same pair); list it again and retry
+	// if it is still there.
 	ErrDeadConflict = errors.New("outbox: the dead letter changed under the operation")
 )
 
