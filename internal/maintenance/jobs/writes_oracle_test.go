@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package jobs_test
 
@@ -75,7 +75,11 @@ func oracleNoun(name string) string {
 	case strings.Contains(name, "UserBookState"), strings.Contains(name, "UserPosition"),
 		strings.Contains(name, "UserTag"), strings.Contains(name, "Bookmark"), strings.Contains(name, "UserProgress"):
 		return "user_state"
-	case strings.Contains(name, "BookFile"), strings.Contains(name, "FileEvent"):
+	case strings.Contains(name, "FileEvent"):
+		// The provenance ledger (file_prov:* keys) is its own resource, not a
+		// book_files row: ops.ResFileProvenance, named by the kind it declares.
+		return "file_provenance"
+	case strings.Contains(name, "BookFile"):
 		return "book_files"
 	case strings.Contains(name, "Author"):
 		return "authors"
