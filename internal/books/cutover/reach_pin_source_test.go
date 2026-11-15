@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_pin_source_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6dca55f4-5b1d-4718-b6a4-30854084cc7c
 // last-edited: 2026-11-15
 
@@ -11,7 +11,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -121,8 +123,11 @@ func reachNegatedCall(e ast.Expr, match func(*ast.CallExpr) bool) bool {
 	return ok && match(call)
 }
 
-// reachIsAdminRoleTest matches slices.Contains(<x>.Roles, adminRole).
-func reachIsAdminRoleTest(c *ast.CallExpr) bool {
+// reachIsAdminRoleTest matches slices.Contains(<actor>.Roles, adminRole), where
+// <actor> is the identifier the CurrentUser assignment bound: a test on some
+// other value's Roles (a variable introduced after the assignment, a request
+// field) keeps the text and tests nobody the pin is about (round-4 A2c).
+func reachIsAdminRoleTest(c *ast.CallExpr, actor string) bool {
 	sel, ok := c.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != "Contains" || len(c.Args) != 2 {
 		return false
@@ -132,6 +137,9 @@ func reachIsAdminRoleTest(c *ast.CallExpr) bool {
 	}
 	roles, ok := c.Args[0].(*ast.SelectorExpr)
 	if !ok || roles.Sel.Name != "Roles" {
+		return false
+	}
+	if x, ok := roles.X.(*ast.Ident); !ok || actor == "" || x.Name != actor {
 		return false
 	}
 	id, ok := c.Args[1].(*ast.Ident)
@@ -153,55 +161,83 @@ func reachEndsInReturn(b *ast.BlockStmt) bool {
 	return ok
 }
 
-// reachIsCurrentUserAssign reports whether st is `<a>, <b> := <pkg>.CurrentUser(c)`,
-// the only statement that may precede the refusal.
-func reachIsCurrentUserAssign(st ast.Stmt) bool {
+// reachCurrentUserActor returns the identifier a statement of the shape
+// `<a>, <b> := <pkg>.CurrentUser(c)` binds the user to (a), or "" when st is not
+// that statement or binds the user to the blank identifier. It is the only
+// statement that may precede the refusal.
+func reachCurrentUserActor(st ast.Stmt) string {
 	as, ok := st.(*ast.AssignStmt)
-	if !ok || as.Tok != token.DEFINE || len(as.Rhs) != 1 {
-		return false
+	if !ok || as.Tok != token.DEFINE || len(as.Rhs) != 1 || len(as.Lhs) != 2 {
+		return ""
 	}
 	call, ok := as.Rhs[0].(*ast.CallExpr)
 	if !ok {
-		return false
+		return ""
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == "CurrentUser"
+	if !ok || sel.Sel.Name != "CurrentUser" {
+		return ""
+	}
+	id, ok := as.Lhs[0].(*ast.Ident)
+	if !ok || id.Name == "_" {
+		return ""
+	}
+	return id.Name
+}
+
+// reachRefusalReturns reports whether a block ends in the return that refuses:
+// a bare return for a function with no results, and for one with results a
+// return whose LAST result is the literal `false` (mergeActor's `ok`). A refusal
+// that answers 403 and then returns `"", true` hands the caller the success
+// path under a refusal status and keeps every other line of the check (A2).
+func reachRefusalReturns(b *ast.BlockStmt, hasResults bool) bool {
+	if len(b.List) == 0 {
+		return false
+	}
+	ret, ok := b.List[len(b.List)-1].(*ast.ReturnStmt)
+	if !ok {
+		return false
+	}
+	if !hasResults {
+		return len(ret.Results) == 0
+	}
+	if len(ret.Results) == 0 {
+		return false
+	}
+	last, ok := ret.Results[len(ret.Results)-1].(*ast.Ident)
+	return ok && last.Name == "false"
 }
 
 // reachIsAdminRefusal reports whether st is the pinned refusal: an if with no init
-// whose condition ORs both negated tests and whose body returns.
-func reachIsAdminRefusal(st ast.Stmt) bool {
+// whose condition ORs both negated tests (the role test on the bound actor) and
+// whose body ends in the refusing return.
+func reachIsAdminRefusal(st ast.Stmt, actor string, hasResults bool) bool {
 	ifs, ok := st.(*ast.IfStmt)
 	if !ok || ifs.Init != nil {
 		return false
 	}
 	role, key := false, false
 	for _, op := range reachOrOperands(ifs.Cond) {
-		role = role || reachNegatedCall(op, reachIsAdminRoleTest)
+		role = role || reachNegatedCall(op, func(c *ast.CallExpr) bool { return reachIsAdminRoleTest(c, actor) })
 		key = key || reachNegatedCall(op, reachIsKeyMayActAsAdmin)
 	}
-	return role && key && reachEndsInReturn(ifs.Body)
+	return role && key && reachRefusalReturns(ifs.Body, hasResults)
 }
 
-// reachHasAdminRefusal reports whether the body holds the pinned refusal as a
-// TOP-LEVEL statement, preceded by nothing but the CurrentUser assignment: an if
-// that ORs both negated tests and returns. Walking the whole body (as an earlier
-// version did) accepted the refusal inside a dead closure, under `if false`, or
-// behind a request parameter (round-3 MINOR-A M1, M2, M4): each leaves the text
-// and removes the refusal for the caller the pin is about.
-func reachHasAdminRefusal(body *ast.BlockStmt) bool {
-	for i, st := range body.List {
-		if i > 1 {
-			return false
-		}
-		if reachIsAdminRefusal(st) {
-			return i == 0 || reachIsCurrentUserAssign(body.List[0])
-		}
-		if i == 0 && !reachIsCurrentUserAssign(st) {
-			return false
-		}
+// reachHasAdminRefusal reports whether the body holds the pinned refusal as its
+// SECOND statement, right after the CurrentUser assignment that binds the actor:
+// an if that ORs both negated tests (the role test on that actor) and ends in
+// the refusing return. Walking the whole body (as an earlier version did)
+// accepted the refusal inside a dead closure, under `if false`, or behind a
+// request parameter (round-3 MINOR-A M1, M2, M4): each leaves the text and
+// removes the refusal for the caller the pin is about. hasResults is whether the
+// function declares results, which decides what its refusing return looks like.
+func reachHasAdminRefusal(body *ast.BlockStmt, hasResults bool) bool {
+	if len(body.List) < 2 {
+		return false
 	}
-	return false
+	actor := reachCurrentUserActor(body.List[0])
+	return actor != "" && reachIsAdminRefusal(body.List[1], actor, hasResults)
 }
 
 // reachCallsGuard reports whether the body's FIRST statement is
@@ -262,8 +298,9 @@ func reachAdminFuncProblems(src []byte, fn reachAdminFunc) []string {
 	if fd == nil {
 		return []string{fmt.Sprintf("%s: %s is gone or renamed: the handler the reachHandlerAdmin pin states has moved", fn.file, who)}
 	}
-	if fn.guard && !reachHasAdminRefusal(fd.Body) {
-		return []string{fmt.Sprintf("%s: %s no longer refuses a caller that lacks the admin role (an if that ORs !slices.Contains(<actor>.Roles, adminRole) and !APIKeyMayActAsAdmin and returns)", fn.file, who)}
+	hasResults := fd.Type.Results != nil && len(fd.Type.Results.List) > 0
+	if fn.guard && !reachHasAdminRefusal(fd.Body, hasResults) {
+		return []string{fmt.Sprintf("%s: %s no longer refuses a caller that lacks the admin role (right after `<actor>, <ok> := CurrentUser(c)`, an if that ORs !slices.Contains(<actor>.Roles, adminRole) and !APIKeyMayActAsAdmin and returns, with a literal false last when the function has results)", fn.file, who)}
 	}
 	if fn.callee != "" && !reachCallsGuard(fd.Body, fn.callee) {
 		return []string{fmt.Sprintf("%s: %s no longer returns when %s refuses", fn.file, who, fn.callee)}
@@ -319,17 +356,35 @@ const reachRouteSource = "../../server/wire_library_routes.go"
 // must hand it: the functions reachHandlerAdminFuncs checks are the ones the route
 // reaches only while this holds. Without it the pin could keep the text of a
 // handler that no longer serves the route (round-3 MINOR-A M7).
-var reachHandlerRoutes = map[string]string{
-	"GET /api/v1/users/:id/footprint": "UserFootprint",
-	"GET /api/v1/users/merges":        "ListUserMerges",
-	"PUT /api/v1/users/:id/email":     "SetUserEmail",
+var reachHandlerRoutes = map[string]reachHandlerRoute{
+	"GET /api/v1/users/:id/footprint": {handler: "UserFootprint", via: "GET"},
+	"GET /api/v1/users/merges":        {handler: "ListUserMerges", via: "GET"},
+	"PUT /api/v1/users/:id/email":     {handler: "SetUserEmail", via: "credRoute"},
+}
+
+// reachHandlerRoute is what a pinned route's registration must look like: the
+// handler, the call that registers it, and, between the path and the handler,
+// exactly the one route guard `s.perm("users.manage")` and nothing else. An
+// extra argument is an inline middleware (the review's A3), which the AST pin
+// of the handler cannot see and which can answer before the handler does.
+type reachHandlerRoute struct {
+	handler string
+	via     string // "GET" for `<group>.GET`, "credRoute" for `s.credRoute(<group>, http.MethodPut, ...)`
+}
+
+// reachGuardArgs is the registration's arguments between the path and the end,
+// as the file spells them, that a pinned route's registration must have.
+func (r reachHandlerRoute) guardArgs() []string {
+	return []string{`s.perm("users.manage")`, "userH." + r.handler}
 }
 
 // reachRegistration is one route registration read from wire_library_routes.go.
 type reachRegistration struct {
 	method  string
-	suffix  string // the group's own prefix plus the route's: "/users/merges"
-	handler string // the last argument, `userH.<name>`'s name, or "" when it is not one
+	suffix  string   // the group's own prefix plus the route's: "/users/merges"
+	handler string   // the last argument, `userH.<name>`'s name, or "" when it is not one
+	via     string   // the verb for `<group>.GET(...)`, the helper's name for `s.credRoute(...)`
+	args    []string // every argument after the path, as written (go/types.ExprString)
 }
 
 // reachRegistrations reads every registration on a group the file creates with
@@ -377,6 +432,13 @@ func reachRegistrations(src []byte) ([]reachRegistration, error) {
 		}
 		return sel.Sel.Name
 	}
+	argsFrom := func(call *ast.CallExpr, from int) []string {
+		var out []string
+		for _, a := range call.Args[from:] {
+			out = append(out, types.ExprString(a))
+		}
+		return out
+	}
 	verbs := map[string]bool{"GET": true, "PUT": true, "POST": true, "DELETE": true, "PATCH": true}
 	var out []reachRegistration
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -393,7 +455,7 @@ func reachRegistrations(src []byte) ([]reachRegistration, error) {
 			g, ok := sel.X.(*ast.Ident)
 			rel, ok2 := str(call.Args[0])
 			if ok && ok2 && prefix[g.Name] != "" {
-				out = append(out, reachRegistration{sel.Sel.Name, prefix[g.Name] + rel, handlerOf(call)})
+				out = append(out, reachRegistration{sel.Sel.Name, prefix[g.Name] + rel, handlerOf(call), sel.Sel.Name, argsFrom(call, 1)})
 			}
 		case sel.Sel.Name == "credRoute" || sel.Sel.Name == "credRouteWhen" || sel.Sel.Name == "ownerCredRoute":
 			if len(call.Args) < 4 {
@@ -403,7 +465,7 @@ func reachRegistrations(src []byte) ([]reachRegistration, error) {
 			verb, ok2 := call.Args[1].(*ast.SelectorExpr)
 			rel, ok3 := str(call.Args[2])
 			if ok && ok2 && ok3 && prefix[g.Name] != "" && strings.HasPrefix(verb.Sel.Name, "Method") {
-				out = append(out, reachRegistration{strings.ToUpper(strings.TrimPrefix(verb.Sel.Name, "Method")), prefix[g.Name] + rel, handlerOf(call)})
+				out = append(out, reachRegistration{strings.ToUpper(strings.TrimPrefix(verb.Sel.Name, "Method")), prefix[g.Name] + rel, handlerOf(call), sel.Sel.Name, argsFrom(call, 3)})
 			}
 		}
 		return true
@@ -414,7 +476,7 @@ func reachRegistrations(src []byte) ([]reachRegistration, error) {
 // reachRouteHandlerProblems is what the route-to-handler side of the pin fails on,
 // as text: each pinned route is registered exactly once, with the handler
 // reachHandlerRoutes names.
-func reachRouteHandlerProblems(src []byte, pin map[string]string, want map[string]string) []string {
+func reachRouteHandlerProblems(src []byte, pin map[string]string, want map[string]reachHandlerRoute) []string {
 	regs, err := reachRegistrations(src)
 	if err != nil {
 		return []string{reachRouteSource + " does not parse: " + err.Error()}
@@ -422,7 +484,7 @@ func reachRouteHandlerProblems(src []byte, pin map[string]string, want map[strin
 	var out []string
 	for route := range pin {
 		method, path, _ := strings.Cut(route, " ")
-		wantHandler, ok := want[route]
+		wantRoute, ok := want[route]
 		if !ok {
 			out = append(out, route+" is pinned and reachHandlerRoutes names no handler for it")
 			continue
@@ -436,8 +498,12 @@ func reachRouteHandlerProblems(src []byte, pin map[string]string, want map[strin
 		switch {
 		case len(hits) != 1:
 			out = append(out, fmt.Sprintf("%s: %s registers it %d time(s), want exactly 1", route, reachRouteSource, len(hits)))
-		case hits[0].handler != wantHandler:
-			out = append(out, fmt.Sprintf("%s: %s registers it with %q, the pin rests on userH.%s", route, reachRouteSource, hits[0].handler, wantHandler))
+		case hits[0].handler != wantRoute.handler:
+			out = append(out, fmt.Sprintf("%s: %s registers it with %q, the pin rests on userH.%s", route, reachRouteSource, hits[0].handler, wantRoute.handler))
+		case hits[0].via != wantRoute.via:
+			out = append(out, fmt.Sprintf("%s: %s registers it through %s, the pin rests on %s", route, reachRouteSource, hits[0].via, wantRoute.via))
+		case !reflect.DeepEqual(hits[0].args, wantRoute.guardArgs()):
+			out = append(out, fmt.Sprintf("%s: %s registers it with the arguments %v, the pin rests on exactly %v (an extra one is a middleware the pin cannot see)", route, reachRouteSource, hits[0].args, wantRoute.guardArgs()))
 		}
 	}
 	for route := range want {
@@ -602,6 +668,9 @@ func TestReachHandlerAdminPin_FailsOnEachWayTheRefusalCanBeDisabled(t *testing.T
 		{"the key test is dropped", cond, `!has || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole)`, "mergeActor"},
 		{"the role test is no longer negated", cond, `!has || actor == nil || actor.Status != "active" || slices.Contains(actor.Roles, adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c)`, "mergeActor"},
 		{"the refusal no longer returns", "\t\treturn \"\", false\n\t}\n\tif h.merge == nil {", "\t}\n\tif h.merge == nil {", "mergeActor"},
+		{"A2: the refusal answers 403 and returns ok", "\t\treturn \"\", false\n\t}\n\tif h.merge == nil {", "\t\treturn \"\", true\n\t}\n\tif h.merge == nil {", "mergeActor"},
+		{"A2: the refusal returns a computed ok", "\t\treturn \"\", false\n\t}\n\tif h.merge == nil {", "\t\treturn \"\", h.merge != nil\n\t}\n\tif h.merge == nil {", "mergeActor"},
+		{"A2c: the role test reads another value's Roles", cond, `!has || actor == nil || actor.Status != "active" || !slices.Contains(servermiddleware.Roles, adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c)`, "mergeActor"},
 		{"footprint ignores the actor check", "func (h *UserHandler) UserFootprint(c *gin.Context) {\n\tif _, ok := h.mergeActor(c); !ok {\n\t\treturn\n\t}\n", "func (h *UserHandler) UserFootprint(c *gin.Context) {\n\tif _, ok := h.mergeActor(c); ok {\n\t}\n", "UserFootprint"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -620,6 +689,35 @@ func TestReachHandlerAdminPin_FailsOnEachWayTheRefusalCanBeDisabled(t *testing.T
 				t.Errorf("%s: the failure does not name %s: %q", tc.name, tc.want, got)
 			}
 		})
+	}
+}
+
+// A2c on SetUserEmail: the role test reads the Roles of a value other than the
+// signed-in user the CurrentUser assignment bound.
+func TestReachHandlerAdminPin_FailsWhenTheRoleTestReadsAnotherValue(t *testing.T) {
+	src, err := os.ReadFile("../../server/handlers/user.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutant := reachMutate(t, src,
+		`actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c) {
+		httputil.RespondWithForbidden(c, "setting another user's email needs the admin role")`,
+		`actor.Status != "active" || !slices.Contains(c.Keys["roles"].([]string), adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c) {
+		httputil.RespondWithForbidden(c, "setting another user's email needs the admin role")`)
+	got := reachAdminFuncProblems(mutant, reachAdminFunc{file: "user.go", recv: "UserHandler", name: "SetUserEmail", guard: true})
+	if len(got) != 1 || !strings.Contains(got[0], "no longer refuses") {
+		t.Errorf("a role test on another value: %q", got)
+	}
+	bound := reachMutate(t, src,
+		`actor, ok := servermiddleware.CurrentUser(c)
+	if !ok || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c) {
+		httputil.RespondWithForbidden(c, "setting another user's email needs the admin role")`,
+		`_, ok := servermiddleware.CurrentUser(c)
+	if !ok || actor == nil || actor.Status != "active" || !slices.Contains(actor.Roles, adminRole) || !servermiddleware.APIKeyMayActAsAdmin(c) {
+		httputil.RespondWithForbidden(c, "setting another user's email needs the admin role")`)
+	got = reachAdminFuncProblems(bound, reachAdminFunc{file: "user.go", recv: "UserHandler", name: "SetUserEmail", guard: true})
+	if len(got) != 1 {
+		t.Errorf("a CurrentUser assignment that binds nothing to the test: %q", got)
 	}
 }
 
@@ -739,6 +837,12 @@ func TestReachRouteTable_FailsWhenAPinnedRouteIsRewiredDuplicatedOrDropped(t *te
 		{"the email route registered twice", email, email + "\n\t\t" + email, "2 time(s)"},
 		{"the footprint route no longer registered", footprint, "", "0 time(s)"},
 		{"the merges route moved to another verb", merges, `users.POST("/merges", s.perm("users.manage"), userH.ListUserMerges)`, "0 time(s)"},
+		{"A3: an inline middleware before the footprint handler", footprint, `users.GET("/:id/footprint", s.perm("users.manage"), gin.Logger(), userH.UserFootprint)`, "an extra one is a middleware"},
+		{"A3: an inline middleware before the route guard", merges, `users.GET("/merges", gin.Recovery(), s.perm("users.manage"), userH.ListUserMerges)`, "an extra one is a middleware"},
+		{"A3: an inline middleware on the credential route", email, `s.credRoute(users, http.MethodPut, "/:id/email", s.perm("users.manage"), gin.Logger(), userH.SetUserEmail)`, "an extra one is a middleware"},
+		{"the route guard is dropped", merges, `users.GET("/merges", userH.ListUserMerges)`, "an extra one is a middleware"},
+		{"the route guard asks for another permission", footprint, `users.GET("/:id/footprint", s.perm("users.view"), userH.UserFootprint)`, "an extra one is a middleware"},
+		{"the email route registered without the credential helper", email, `users.PUT("/:id/email", s.perm("users.manage"), userH.SetUserEmail)`, "registers it through PUT"},
 	} {
 		got := reachRouteHandlerProblems(reachMutate(t, src, tc.from, tc.to), reachHandlerAdmin, reachHandlerRoutes)
 		if len(got) != 1 || !strings.Contains(got[0], tc.want) {
