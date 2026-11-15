@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
 // last-edited: 2026-11-15
 
@@ -55,9 +55,15 @@ type t6g4TranscribeStatsSink interface {
 // t6g4TranscribeStatsSink — in that case the accumulator still tracks
 // counts in memory (used for the op's final log line) but never persists.
 type transcribeStatsAccum struct {
-	mu    sync.Mutex
-	stats database.TranscribeStats
-	sink  t6g4TranscribeStatsSink
+	// writeMu orders the persisted snapshots: flush holds it across the copy AND
+	// the Put, so the snapshot written last is the one copied last. Lock order
+	// is always writeMu then mu; mu stays short-held (counter updates never wait
+	// on a sink write), and nothing under mu may call flush. Same shape as
+	// fileIntroAccum.flush.
+	writeMu sync.Mutex
+	mu      sync.Mutex
+	stats   database.TranscribeStats
+	sink    t6g4TranscribeStatsSink
 	// stuck counts consecutive pages the pool answered "worker stuck" (see
 	// whisperStuckMaxBatches); a page that gets an answer resets it.
 	stuck stuckStreak
@@ -185,7 +191,14 @@ func (a *transcribeStatsAccum) recordCacheHits(n int) {
 
 // flush persists the current counters. Safe to call concurrently. No-op when
 // sink is nil. markDone=true stamps the run as finished.
+//
+// The copy and the Put are one step under writeMu. Copying under mu alone and
+// writing after releasing it let two page goroutines flushing at once land the
+// older snapshot last, so the persisted aggregate (and the live monitor reading
+// it) went backwards mid-run.
 func (a *transcribeStatsAccum) flush(markDone bool) {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
 	a.mu.Lock()
 	if markDone {
 		a.stats.Done = true
