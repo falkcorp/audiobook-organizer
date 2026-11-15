@@ -1,5 +1,5 @@
 // file: core/outbox/status.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0b7f0c06-1d5b-4e3c-9a64-2f0f9d3a8e64
 // last-edited: 2026-11-15
 
@@ -38,7 +38,8 @@ type Status struct {
 }
 
 // StoppedStatus is one stopped topic or pair. Consumer is empty for a topic;
-// Partition is meaningful for a pair only. Cause is a closed token:
+// Partition is meaningful for a pair only (-1 for the counter of letters that do
+// not decode). Cause is a closed token:
 // "corrupt_row", "unknown_version" (a row of a newer build) or
 // "partitions_changed".
 type StoppedStatus struct {
