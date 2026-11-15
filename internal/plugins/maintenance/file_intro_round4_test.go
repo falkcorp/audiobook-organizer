@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_round4_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3b7e1c92-5d48-4a06-8f1d-c9a2e6b04d37
 // last-edited: 2026-11-15
 
@@ -48,9 +48,40 @@ func (fx *introFx) callBoundRun(within, yieldMargin, callMargin time.Duration, c
 	fx.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), within)
 	fx.t.Cleanup(cancel)
+	return fx.callBoundRunCtx(ctx, yieldMargin, callMargin, ck)
+}
+
+// callBoundRunCtx is callBoundRun over a context the caller built.
+func (fx *introFx) callBoundRunCtx(ctx context.Context, yieldMargin, callMargin time.Duration, ck *memCheckpoint) (fileIntroResult, error) {
+	fx.t.Helper()
 	env := fx.yieldEnv(&fileIntroRep{id: "run-call-bound"}, ck, nil, yieldMargin)
 	env.CallMargin = callMargin
 	return fx.yieldRun(ctx, env, true)
+}
+
+// armedDeadlineCtx is a run context whose deadline is a function of the test's
+// own progress instead of the wall clock, so a test can place the call cut
+// relative to an event (batch 0 finishing) rather than relative to when the
+// context was made. Until arm is called its deadline is an hour away, which is
+// all the run's own one-time read at the top and batch 0's call bound ever see.
+// Once armed, every read answers "callMargin plus slack from this very read":
+// the call-bound check (time.Until(deadline) < callMargin) is then false by the
+// slack no matter how long batch 0 and the selection took, and the call's own
+// cut timer fires one slack after the read. It never expires by itself; the
+// test's own timeout and cleanup end it.
+type armedDeadlineCtx struct {
+	context.Context
+	callMargin, slack time.Duration
+	armed             atomic.Bool
+}
+
+func (c *armedDeadlineCtx) arm() { c.armed.Store(true) }
+
+func (c *armedDeadlineCtx) Deadline() (time.Time, bool) {
+	if !c.armed.Load() {
+		return time.Now().Add(time.Hour), true
+	}
+	return time.Now().Add(c.callMargin + c.slack), true
 }
 
 // A whisper call that never answers (a pool pacing for minutes, a transport
@@ -63,11 +94,23 @@ func TestFileIntroCallBound_ABlockedWhisperCallYieldsWithTheCursorAndNoStrike(t 
 	fileIntroSlots = func() int { return 1 }
 	fx.yieldFiles(2*fileIntroBatchGroups + 1)
 
+	// The cut is placed relative to batch 0 finishing, not to the run's start:
+	// the context's deadline is far away until batch 0's call has answered, and
+	// from then on each read puts the cut one slack (500 ms) after it, with the
+	// call-bound check false by that slack. How long batch 0 and the selection
+	// take, however slow the machine, moves neither edge.
+	const callMargin = 2 * time.Second
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	t.Cleanup(cancelRun)
+	armed := &armedDeadlineCtx{Context: runCtx, callMargin: callMargin, slack: 500 * time.Millisecond}
+
 	var calls atomic.Int32
 	inner := fileIntroWhisperFn
 	fileIntroWhisperFn = func(ctx context.Context, jobs map[string]fileIntroJob, prog func(int, int)) (map[string]fileIntroWhisperResult, error) {
 		if calls.Add(1) == 1 {
-			return inner(ctx, jobs, prog) // batch 0 answers
+			out, err := inner(ctx, jobs, prog) // batch 0 answers
+			armed.arm()
+			return out, err
 		}
 		<-ctx.Done() // batch 1 never does: only its context can end it
 		return nil, ctx.Err()
@@ -76,10 +119,8 @@ func TestFileIntroCallBound_ABlockedWhisperCallYieldsWithTheCursorAndNoStrike(t 
 	ck := &memCheckpoint{}
 	done := make(chan error, 1)
 	go func() {
-		// The deadline is 3 s away and calls are cut 2 s before it, so the cut
-		// lands about one second in; batches would still start until 100 ms
-		// before the deadline.
-		_, err := fx.callBoundRun(3*time.Second, 100*time.Millisecond, 2*time.Second, ck)
+		// Batches would still start until 100 ms before the (armed) deadline.
+		_, err := fx.callBoundRunCtx(armed, 100*time.Millisecond, callMargin, ck)
 		done <- err
 	}()
 	select {
