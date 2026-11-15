@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_resources_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c9b940e-34ff-4da6-88ba-5dbfff0b5b2a
 // last-edited: 2026-11-15
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -134,9 +135,10 @@ func TestT6G5Resources_TableCoversEveryWriterMethod(t *testing.T) {
 
 // TestT6G5Resources_EffectsAreTheUnionOfTheirMethods: each writing kind's
 // declared write set equals the union of the resources of every method it can
-// call, plus the writes its core makes outside the writer, each with a stated
-// reason (t6g5OutsideWriterWrites). Equality, not a subset: an Effects entry
-// nothing writes, and a method resource the kind does not declare, both fail.
+// call, plus the writes its core makes outside the writer (t6g5OutsideWriterWrites)
+// and the capabilities it keeps only for HEAD parity (t6g5HeadParityDeclared),
+// each with a stated reason. Equality, not a subset: an Effects entry nothing
+// writes, and a method resource the kind does not declare, both fail.
 func TestT6G5Resources_EffectsAreTheUnionOfTheirMethods(t *testing.T) {
 	p := &Plugin{}
 	defs := p.t6g5Kinds(fakeT6G5Deps(t), nil)
@@ -147,6 +149,7 @@ func TestT6G5Resources_EffectsAreTheUnionOfTheirMethods(t *testing.T) {
 		if w.readOnly {
 			assert.NotContains(t, ifaces, w.headID, "a read-only kind has no writer interface")
 			assert.NotContains(t, t6g5OutsideWriterWrites, w.headID)
+			assert.NotContains(t, t6g5HeadParityDeclared, w.headID)
 			continue
 		}
 		t.Run(w.headID, func(t *testing.T) {
@@ -164,6 +167,10 @@ func TestT6G5Resources_EffectsAreTheUnionOfTheirMethods(t *testing.T) {
 				assert.NotEmpty(t, strings.TrimSpace(o.Why), "an outside write states why the writer does not carry it")
 				union[string(o.Resource)] = true
 			}
+			for _, o := range t6g5HeadParityDeclared[w.headID] {
+				assert.NotEmpty(t, strings.TrimSpace(o.Why), "a head-parity declaration states why nothing on the path writes it")
+				union[string(o.Resource)] = true
+			}
 			want := make([]string, 0, len(union))
 			for r := range union {
 				want = append(want, r)
@@ -177,15 +184,46 @@ func TestT6G5Resources_EffectsAreTheUnionOfTheirMethods(t *testing.T) {
 		_, ok := ifaces[id]
 		assert.True(t, ok, "t6g5OutsideWriterWrites names a real writing kind (%s)", id)
 	}
+	for id, parity := range t6g5HeadParityDeclared {
+		_, ok := ifaces[id]
+		assert.True(t, ok, "t6g5HeadParityDeclared names a real writing kind (%s)", id)
+		for _, o := range parity {
+			for _, m := range ifaceMethods(ifaces[id]) {
+				assert.NotContains(t, t6g5WriterResources[m], o.Resource,
+					"%s: a head-parity resource is one NO method carries; %s does, so it is a traced write and belongs to the table", id, m)
+			}
+		}
+	}
+}
+
+// t6g5SourceFiles are the files that build this row's kinds (each declares one
+// kind's Effects with tasks.Res) and the group's shared kinds_t6_g5*.go files.
+// The syntax-tree check below is scoped to them on purpose: sibling groups
+// (F5-07, F5-08, F5-09) build their Effects from typed ops.Resource helpers
+// (tasks.Res("books", string(r))), which is correct for them and which a whole
+// package walk would fail the day they stack with this row. The value checks
+// still cover every declared name wherever it was written.
+var t6g5SourceFiles = []string{
+	"itunes_clone_into_library.go",
+	"itunes_playlist_import.go",
+	"itunes_regroup.go",
+	"library_state_repair.go",
+	"mark_missing_files.go",
+	"merge_same_path_dupes.go",
+	"metadata_cache_reap.go",
+	"missing_file_repoint.go",
+	"move_book_file_rows.go",
+	"narrator_purge_empty.go",
+	"narrator_split_joined.go",
 }
 
 // TestT6G5Resources_EveryNameIsAnOpsConstant: every resource name this group
 // declares, wherever it is written down, is the VALUE of a pkg/ops Resource
-// constant. It walks the live data (the method table, the outside writes, every
-// kind's write set, and the expected write sets in the test tables) and the
-// parsed source of every file in the package, tests included. A coined name
-// compiles (an untyped string constant converts to ops.Resource), so this test
-// is the only guard against one.
+// constant. It walks the live data (the method table, the outside writes, the
+// head-parity list, every kind's write set, and the expected write sets in the
+// test tables) and the parsed source of this row's files (t6g5SourceFiles and
+// kinds_t6_g5*.go, tests included). A coined name compiles (an untyped string
+// constant converts to ops.Resource), so this test is the only guard against one.
 func TestT6G5Resources_EveryNameIsAnOpsConstant(t *testing.T) {
 	names := opsResourceNames(t)
 	values := opsResourceValues(t)
@@ -206,23 +244,27 @@ func TestT6G5Resources_EveryNameIsAnOpsConstant(t *testing.T) {
 			assert.True(t, values[r.Kind], "%s declares %q, which is no pkg/ops constant", d.Kind(), r.Kind)
 		}
 	}
+	for id, outs := range t6g5HeadParityDeclared {
+		for _, o := range outs {
+			assert.True(t, values[string(o.Resource)], "t6g5HeadParityDeclared[%s] names %q, which is no pkg/ops constant", id, o.Resource)
+		}
+	}
 	for _, w := range t6g5Wants() {
 		for _, r := range w.writes {
 			assert.True(t, values[r], "the expected write set of %s names %q, which is no pkg/ops constant", w.headID, r)
 		}
 	}
 
-	// Source walk: the second argument of every tasks.Res call, in every file of
-	// the package, must be string(ops.<one of the Resource constants>).
-	entries, err := os.ReadDir(".")
+	// Source walk: the second argument of every tasks.Res call in this row's
+	// files must be string(ops.<one of the Resource constants>).
+	files := slices.Clone(t6g5SourceFiles)
+	group, err := filepath.Glob("kinds_t6_g5*.go")
 	require.NoError(t, err)
+	files = append(files, group...)
 	fset := token.NewFileSet()
 	calls := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, e.Name(), nil, 0)
+	for _, name := range files {
+		f, err := parser.ParseFile(fset, name, nil, 0)
 		require.NoError(t, err)
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
@@ -248,7 +290,7 @@ func TestT6G5Resources_EveryNameIsAnOpsConstant(t *testing.T) {
 			return true
 		})
 	}
-	require.Positive(t, calls, "the walk found the package's tasks.Res calls")
+	require.Positive(t, calls, "the walk found this row's tasks.Res calls")
 }
 
 func isIdent(e ast.Expr, name string) bool {

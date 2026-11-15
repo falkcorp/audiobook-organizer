@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 30f92b7b-033e-4403-927a-99445211075c
 // last-edited: 2026-11-15
 
@@ -740,6 +740,14 @@ func (w headT6g5Writer) ModifyBook(id string, fn func(*database.Book) error) (*d
 		return nil, err
 	}
 	return st.ModifyBook(id, fn)
+}
+
+func (w headT6g5Writer) SetLibraryStateOrganized(id, from string) (found, applied bool, err error) {
+	st, err := w.opsStore()
+	if err != nil {
+		return false, false, err
+	}
+	return setLibraryStateOrganized(st.ModifyBook, id, from)
 }
 
 func (s headT6g5Store) ListMetadataCacheKeys() ([]database.MetadataCacheSummary, error) {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-15
 
@@ -103,6 +103,11 @@ func (s *t6g5Spy) recorded() []string {
 func (s *t6g5Spy) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
 	s.note("ModifyBook")
 	return s.inner.ModifyBook(id, fn)
+}
+
+func (s *t6g5Spy) SetLibraryStateOrganized(id, from string) (bool, bool, error) {
+	s.note("SetLibraryStateOrganized")
+	return s.inner.SetLibraryStateOrganized(id, from)
 }
 
 func (s *t6g5Spy) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
@@ -375,10 +380,11 @@ func (r t6g5NativeRun) requireHold(t *testing.T) {
 
 func TestT6G5Native_MoveBookFileRows(t *testing.T) {
 	f := newMBFFixture(t)
-	r := t6g5RunNative(t, f.s, t.TempDir(), "maintenance.move-book-file-rows", t6g5ScanKey,
+	r, d := t6g5RunNativeDiff(t, f.s, New(fakeDeps{store: f.s, root: t.TempDir()}), tasks.ModeLive, "maintenance.move-book-file-rows", t6g5ScanKey,
 		`{"moves":[{"row_id":"`+f.ch01+`","to_book_id":"`+f.dst+`"}]}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBookFiles))
 	r.requireHold(t)
 	var rep mbfReport
 	require.NoError(t, json.Unmarshal(r.out, &rep))
@@ -402,10 +408,11 @@ func TestT6G5Native_MarkMissingFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "01ROWMM0000000000000000001", BookID: "01BATMAN00000000000000MM01", FilePath: gone}))
 
-	r := t6g5RunNative(t, s, dir, "maintenance.mark-missing-files", t6g5ScanKey,
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.mark-missing-files", t6g5ScanKey,
 		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBookFiles))
 	r.requireHold(t)
 	var plan markMissingPlan
 	require.NoError(t, json.Unmarshal(r.out, &plan))
@@ -430,10 +437,11 @@ func TestT6G5Native_MissingFileRepoint(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "01ROWRP0000000000000000001", BookID: book, FilePath: broken, FileSize: 1234}))
 
-	r := t6g5RunNative(t, s, dir, "maintenance.missing-file-repoint", t6g5ScanKey,
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.missing-file-repoint", t6g5ScanKey,
 		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBookFiles))
 	r.requireHold(t)
 	var plan repointPlan
 	require.NoError(t, json.Unmarshal(r.out, &plan))
@@ -475,10 +483,11 @@ func TestT6G5Native_MetadataCacheReap(t *testing.T) {
 	const orphan = "01BATMAN00000000000000OR01"
 	require.NoError(t, s.PutMetadataCache(&database.MetadataCandidateCache{BookID: orphan, FetchedAt: time.Now()}))
 
-	r := t6g5RunNative(t, s, dir, "maintenance.metadata-cache-reap", "",
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: dir}), tasks.ModeLive, "maintenance.metadata-cache-reap", "",
 		`{"reportPath":"`+filepath.Join(dir, "r.tsv")+`"}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResMetadataCache))
 	var plan reapPlan
 	require.NoError(t, json.Unmarshal(r.out, &plan))
 	assert.Equal(t, 1, plan.Reaped)
@@ -495,9 +504,10 @@ func TestT6G5Native_PurgeEmptyNarrators(t *testing.T) {
 	n, err := s.CreateNarrator("Selina Kyle")
 	require.NoError(t, err)
 
-	r := t6g5RunNative(t, s, t.TempDir(), "maintenance.purge-empty-narrators", t6g5ScanKey, "")
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: t.TempDir()}), tasks.ModeLive, "maintenance.purge-empty-narrators", t6g5ScanKey, "")
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResOperations))
 	r.requireHold(t)
 	var rep emptyNarratorReport
 	require.NoError(t, json.Unmarshal(r.out, &rep))
@@ -511,9 +521,10 @@ func TestT6G5Native_PurgeEmptyNarrators(t *testing.T) {
 
 func TestT6G5Native_SplitJoinedNarrators(t *testing.T) {
 	f := newSplitJoinedFixture(t)
-	r := t6g5RunNative(t, f.s, t.TempDir(), "maintenance.split-joined-narrators", t6g5ScanKey, "")
+	r, d := t6g5RunNativeDiff(t, f.s, New(fakeDeps{store: f.s, root: t.TempDir()}), tasks.ModeLive, "maintenance.split-joined-narrators", t6g5ScanKey, "")
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResOperations))
 	r.requireHold(t)
 	var rep splitJoinedReport
 	require.NoError(t, json.Unmarshal(r.out, &rep))
@@ -527,17 +538,19 @@ func TestT6G5Native_RepairLibraryState(t *testing.T) {
 	root := t.TempDir()
 	state, hash := libStateImported, "deadbeef"
 	b, err := s.CreateBook(&database.Book{ID: "01BATMAN00000000000000LS01", Title: "Arkham Asylum",
-		FilePath: filepath.Join(root, "Some Author", "Some Book", "01.mp3"), LibraryState: &state, OrganizedFileHash: &hash})
+		FilePath: filepath.Join(root, "Bruce Wayne", "Arkham Asylum", "01.mp3"), LibraryState: &state, OrganizedFileHash: &hash})
 	require.NoError(t, err)
 
-	r := t6g5RunNative(t, s, root, "maintenance.repair-library-state", "", "")
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: root}), tasks.ModeLive, "maintenance.repair-library-state", "", "")
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks))
+	assert.Equal(t, []string{string(ops.ResBooks)}, d.resources, "the repair writes the books resource and nothing else: its one write sets LibraryState, which trips no metadata-cache stale stamp")
 	var res libraryStateRepairResult
 	require.NoError(t, json.Unmarshal(r.out, &res))
 	assert.False(t, res.DryRun)
 	assert.Equal(t, 1, res.Outcomes[lsrRepaired])
-	assert.Equal(t, 1, r.spy.count("ModifyBook"))
+	assert.Equal(t, 1, r.spy.count("SetLibraryStateOrganized"))
 	got, err := s.GetBookByID(b.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got.LibraryState)
@@ -564,7 +577,7 @@ func TestT6G5Head_RepairLibraryStateApplies(t *testing.T) {
 	root := t.TempDir()
 	state, hash := libStateImported, "deadbeef"
 	b, err := s.CreateBook(&database.Book{ID: "01BATMAN00000000000000LS02", Title: "Arkham Knight",
-		FilePath: filepath.Join(root, "Some Author", "Some Book", "01.mp3"), LibraryState: &state, OrganizedFileHash: &hash})
+		FilePath: filepath.Join(root, "Bruce Wayne", "Arkham Asylum", "01.mp3"), LibraryState: &state, OrganizedFileHash: &hash})
 	require.NoError(t, err)
 	p := New(fakeDeps{store: s, root: root})
 
@@ -618,10 +631,13 @@ func TestT6G5Native_CloneApply(t *testing.T) {
 	src := f.itunes("Year One.m4b")
 	f.book(t, "T", "vg-t", "Year One", []string{src})
 
-	r := t6g5RunNativeOn(t, t6g5ClonePlugin(f), tasks.ModeLive, "itunes.clone-into-library", t6g5ScanKey,
+	r, d := t6g5RunNativeDiff(t, f.s, t6g5ClonePlugin(f), tasks.ModeLive, "itunes.clone-into-library", t6g5ScanKey,
 		`{"apply":true,"group_ids":["vg-t"]}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	// operations: CreateOrganizedVersion journals its changes under the run's op ID
+	// (opchange: keys), a write no method name says; user_state: the clone's undo record.
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResOperations), string(ops.ResUserState))
 	r.requireHold(t)
 	var rep icReport
 	require.NoError(t, json.Unmarshal(r.out, &rep))
@@ -676,10 +692,11 @@ func TestT6G5Native_CloneRollback(t *testing.T) {
 	cloneID := g.CloneBookID
 	require.NotEmpty(t, cloneID)
 
-	r := t6g5RunNativeOn(t, t6g5ClonePlugin(f), tasks.ModeLive, "itunes.clone-into-library", t6g5ScanKey,
+	r, d := t6g5RunNativeDiff(t, f.s, t6g5ClonePlugin(f), tasks.ModeLive, "itunes.clone-into-library", t6g5ScanKey,
 		`{"rollback":true,"group_ids":["vg-t"]}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResUserState))
 	r.requireHold(t)
 	var rep icReport
 	require.NoError(t, json.Unmarshal(r.out, &rep))
@@ -732,10 +749,11 @@ func TestT6G5Native_Regroup(t *testing.T) {
 	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
 	xml := t6g5RegroupXML(t)
 
-	r := t6g5RunNativeOn(t, New(fakeDeps{store: s, root: rgRoot}), tasks.ModeLive, "itunes.regroup", "",
+	r, d := t6g5RunNativeDiff(t, s, New(fakeDeps{store: s, root: rgRoot}), tasks.ModeLive, "itunes.regroup", "",
 		`{"xmlPath":"`+xml+`"}`)
 	require.NoError(t, r.err)
 	r.requireWriter(t)
+	r.requireStoreWritesWithin(t, d, string(ops.ResBooks), string(ops.ResUserState))
 	keys, _ := r.holds.snapshot()
 	assert.Empty(t, keys, "the regroup takes no scan stand-down (HEAD took none)")
 	assert.Positive(t, r.spy.count("NewUserStateProbe"), "the delete pass listed users through the writer")

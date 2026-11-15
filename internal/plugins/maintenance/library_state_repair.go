@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
 // last-edited: 2026-11-15
 
@@ -180,9 +180,54 @@ type libraryStateRepairReader interface {
 	GetAllBooksCoreComplete(limit, offset int) ([]database.BookCore, error)
 }
 
-// libraryStateRepairModifier writes one book row.
+// libraryStateRepairModifier writes one book's library_state. It is a narrow
+// method and not ModifyBook so the write can be stamped for what it is: the
+// only column it sets is LibraryState, which trips none of ModifyBook's
+// identity-change side effects (the metadata-cache stale stamp), so the method
+// writes the books resource alone and this kind need not serialize against the
+// metadata-cache writers.
 type libraryStateRepairModifier interface {
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	// SetLibraryStateOrganized moves the book from state `from` to organized,
+	// re-asserting `from` and the organized-file hash on the row re-read under the
+	// write lock. found is false when the row does not exist; applied is false
+	// when the row's state or hash no longer qualifies (nothing is written).
+	SetLibraryStateOrganized(id, from string) (found, applied bool, err error)
+}
+
+// setLibraryStateOrganized is the guarded write behind SetLibraryStateOrganized,
+// over any ModifyBook: the head writer passes the store's, a test passes its fake.
+//
+// The state is re-asserted INSIDE the ModifyBook closure, on the row re-read
+// under the write lock, because the scope snapshot is minutes old by the time
+// the last row is written and this op declares no ConcurrencyKey against the
+// scan or organize paths that also write this column. A row whose state moved
+// since the scan is reported as changed_since_scan and NOT clobbered.
+//
+// OrganizedFileHash is re-checked too: it is the evidence the whole repair
+// rests on, and a row that lost it between scan and write no longer qualifies.
+func setLibraryStateOrganized(modify func(id string, fn func(*database.Book) error) (*database.Book, error), id, from string) (found, applied bool, err error) {
+	row, err := modify(id, func(cur *database.Book) error {
+		curState := ""
+		if cur.LibraryState != nil {
+			curState = *cur.LibraryState
+		}
+		if curState != from {
+			return database.ErrSkipBookWrite
+		}
+		if cur.OrganizedFileHash == nil || strings.TrimSpace(*cur.OrganizedFileHash) == "" {
+			return database.ErrSkipBookWrite
+		}
+		organized := libStateOrganized
+		cur.LibraryState = &organized
+		applied = true
+		return nil
+	})
+	if err != nil {
+		return false, false, err
+	}
+	// ModifyBook returns (nil, nil) for a missing row, and (row, nil) for
+	// ErrSkipBookWrite, which the applied flag tells apart from a write.
+	return row != nil, applied, nil
 }
 
 // libraryStateRepairKind is the native kind of maintenance.repair-library-state (F5-10).
@@ -262,10 +307,7 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 // libraryStateRepairKind builds the native kind. Writes: HEAD's declared
 // books resource; the preview is HEAD's dry run.
 func (p *Plugin) libraryStateRepairKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	// metadata_cache: ModifyBook stamps a stale mark on a book's metadata
-	// candidate cache when a write changes the book's identity fields, and the
-	// store cannot tell the method's callers apart.
-	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResMetadataCache)))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)))
 	return tasks.Task(libraryStateRepairKind, tasks.TaskSpec[json.RawMessage, libraryStateRepairResult]{
 		Common: t6g5Common(p.repairLibraryStateDef(), libraryStateRepairKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (libraryStateRepairResult, error) {
@@ -456,44 +498,17 @@ func classifyLibraryStateRepair(
 	return ch, false
 }
 
-// applyLibraryStateRepair writes one row.
-//
-// The state is re-asserted INSIDE the ModifyBook closure, on the row re-read
-// under the write lock, because the scope snapshot is minutes old by the time
-// the last row is written and this op declares no ConcurrencyKey against the
-// scan or organize paths that also write this column. A row whose state moved
-// since the scan is reported as changed_since_scan and NOT clobbered.
-//
-// OrganizedFileHash is re-checked too: it is the evidence the whole repair
-// rests on, and a row that lost it between scan and write no longer qualifies.
+// applyLibraryStateRepair writes one row through the writer's guarded
+// SetLibraryStateOrganized (see setLibraryStateOrganized for the re-assertions).
 func applyLibraryStateRepair(store libraryStateRepairModifier, ch libraryStateRepairChange) libraryStateRepairChange {
-	wrote := false
-	row, err := store.ModifyBook(ch.BookID, func(cur *database.Book) error {
-		curState := ""
-		if cur.LibraryState != nil {
-			curState = *cur.LibraryState
-		}
-		if curState != ch.OldState {
-			return database.ErrSkipBookWrite
-		}
-		if cur.OrganizedFileHash == nil || strings.TrimSpace(*cur.OrganizedFileHash) == "" {
-			return database.ErrSkipBookWrite
-		}
-		organized := libStateOrganized
-		cur.LibraryState = &organized
-		wrote = true
-		return nil
-	})
+	found, applied, err := store.SetLibraryStateOrganized(ch.BookID, ch.OldState)
 	switch {
 	case err != nil:
 		ch.Outcome = lsrWriteFailed
 		ch.Detail = err.Error()
-	case row == nil:
-		// ModifyBook returns (nil, nil) for a missing row.
+	case !found:
 		ch.Outcome = lsrRowGone
-	case !wrote:
-		// ErrSkipBookWrite returns (row, nil), which is indistinguishable from a
-		// successful write by the return value alone — hence the explicit flag.
+	case !applied:
 		ch.Outcome = lsrChangedSinceScan
 	default:
 		ch.Outcome = lsrRepaired

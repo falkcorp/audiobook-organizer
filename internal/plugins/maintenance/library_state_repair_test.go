@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/library_state_repair_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3e8b1c47-90fd-4a26-b5e1-6c7a24f0d913
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -188,6 +188,10 @@ func (s *lsrFakeStore) ModifyBook(id string, fn func(*database.Book) error) (*da
 		return nil, err
 	}
 	return row, nil
+}
+
+func (s *lsrFakeStore) SetLibraryStateOrganized(id, from string) (bool, bool, error) {
+	return setLibraryStateOrganized(s.ModifyBook, id, from)
 }
 
 func lsrRow(state string, hash bool) *database.Book {
