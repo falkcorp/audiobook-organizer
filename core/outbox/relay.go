@@ -1,7 +1,7 @@
 // file: core/outbox/relay.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 77b6d1de-9cf2-4c52-8f0b-7e9a5c2b6d11
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package outbox
 
@@ -453,14 +453,48 @@ func (o *Outbox) RefreshStatus(ctx context.Context) {
 		return
 	}
 	o.inst.publish(&st)
-	dead := make(map[string]int, len(st.Consumers))
-	for _, c := range st.Consumers {
-		if c.Dead > 0 {
-			dead[c.Name] = c.Dead
-		}
+	// The dead-letter counts are read again, inside syncDead's lock, rather than
+	// taken from st: st was computed before this point, and publishing it after
+	// an operator's retry or a relay's dead-lettering had published a newer count
+	// would put the older one back.
+	if err := o.syncDead(ctx); err != nil && ctx.Err() == nil {
+		o.faultLog(o.log, "status", err)
 	}
-	o.health.setDead(dead)
+}
+
+// syncDead recounts the dead letters in the store and reports them through the
+// health component. Every writer of that count (the relay's dead-lettering, an
+// operator's retry or discard through changed, the periodic RefreshStatus) goes
+// through here, and the recount is read inside deadMu: a recount that starts
+// after another one published reads a store at least as new as the one that
+// published, so the last publisher always holds the newest count. An in-memory
+// increment after the commit could land after an operator had already removed
+// the letter, and leave core.outbox Degraded until the next refresh.
+func (o *Outbox) syncDead(ctx context.Context) error {
+	o.deadMu.Lock()
+	defer o.deadMu.Unlock()
+	counts, err := o.store.DeadCounts(ctx)
+	if err != nil {
+		return err
+	}
+	o.health.setDead(counts)
 	o.health.report(o.now())
+	return nil
+}
+
+// deadLettered tells the health component that consumer dead-lettered a message
+// whose commit is done. The recount runs on settleCtx: the dead letter is
+// durable even when the run was canceled, and Degraded should say so. If the
+// store cannot be read it counts the letter in memory, so a dead letter is
+// never reported as nothing; the next refresh replaces that count with the
+// store's.
+func (r *relay) deadLettered(ctx context.Context, consumer string) {
+	o := r.o
+	sctx, cancel := settleCtx(ctx)
+	defer cancel()
+	if err := o.syncDead(sctx); err != nil {
+		o.health.addDead(consumer, o.now())
+	}
 }
 
 // sortedTopics lists the durable topics of the catalog by name.

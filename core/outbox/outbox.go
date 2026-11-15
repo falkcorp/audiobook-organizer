@@ -1,7 +1,7 @@
 // file: core/outbox/outbox.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5b3c4366-8534-4dc4-870f-850dfab2b120
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Package outbox is core's durable, at-least-once event delivery (05-events
 // §5E.1, §5E.4, §5E.5.2, §5E.5.3). A producer stages a message into its own
@@ -222,6 +222,7 @@ type Outbox struct {
 	opsEpoch   atomic.Uint64 // bumped by every operator action; the relay forgets what it knew
 	sweepEvery time.Duration // retention sweep interval
 	hooks      hooks
+	deadMu     sync.Mutex   // serializes syncDead: each recount reads the store inside it, so the last one to publish saw the newest state
 	faults     faultLimiter // one logged line a minute per repeating failure, for the relay and RefreshStatus alike
 	topicsMu   sync.Mutex
 	topicsMem  map[string]*topicInfo
@@ -409,6 +410,9 @@ type hooks struct {
 	// BeforeFailCommit runs with a failed delivery's retry record (or its dead
 	// letter) staged, before it commits.
 	beforeFailCommit func(consumer string, seq uint64)
+	// AfterFailCommit runs once a failed delivery's retry record (or its dead
+	// letter) committed, before the health component is told about it.
+	afterFailCommit func(consumer string, seq uint64)
 	// BeforeDeadCommit runs with an operator's retry or discard of a dead letter
 	// staged, before it commits.
 	beforeDeadCommit func(consumer string, seq uint64)
@@ -423,7 +427,7 @@ func (h *hooks) get() hooks {
 	defer h.mu.Unlock()
 	return hooks{beforeIntakeCommit: h.beforeIntakeCommit, afterIntakeCommit: h.afterIntakeCommit,
 		afterHandler: h.afterHandler, beforeAckCommit: h.beforeAckCommit, afterAckCommit: h.afterAckCommit,
-		beforeFailCommit: h.beforeFailCommit,
+		beforeFailCommit: h.beforeFailCommit, afterFailCommit: h.afterFailCommit,
 		beforeDeadCommit: h.beforeDeadCommit, beforeRetentionBatch: h.beforeRetentionBatch}
 }
 
