@@ -1,7 +1,7 @@
 // file: pkg/ops/effects.go
-// version: 1.1.0
+// version: 1.4.1
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
-// last-edited: 2026-10-17
+// last-edited: 2026-11-15
 
 package ops
 
@@ -16,7 +16,8 @@ import (
 type Resource string
 
 // Resources. The first nine are v2's set; the rest are what v2 ops wrote
-// without a name.
+// without a name. Every name an Effects declaration uses must be one of these
+// constants; do not coin a catch-all.
 const (
 	ResBooks            Resource = "books"
 	ResBookFiles        Resource = "book_files"
@@ -36,6 +37,31 @@ const (
 	ResMetadataCache Resource = "metadata_cache"
 	ResFieldStates   Resource = "field_states"
 	ResIndexes       Resource = "indexes"
+
+	// ResAIJournal is the durable AI result journal (aijournal:<kind>:<key>
+	// keys, internal/ai/resultjournal): whisper and batch results kept so a
+	// restart does not pay for them twice. No other constant names it: it is
+	// not the undo journal (ResOperations) and not a metadata cache.
+	ResAIJournal Resource = "ai_journal"
+	// ResAuthorityLists is the authority lists (ref_person:, ref_pub:,
+	// ref_asin:, ref_src: and ref_ovr: keys, internal/authority): reference
+	// names rebuilt from the library export, plus the owner overrides. It is not
+	// ResCatalog, which is the author catalog (cat:* keys).
+	ResAuthorityLists Resource = "authority_lists"
+	// ResSyncIdentity is the cross-device sync identity (sync ids and their
+	// pointers on book rows), as F5-01's backfill-sync-ids writes it.
+	ResSyncIdentity Resource = "sync_identity"
+	// ResMetrics is the Pebble metrics store (time-series rows with a TTL).
+	ResMetrics Resource = "metrics"
+	// ResCoverText is the cover-text store (cover_text:<sha256> records and the
+	// cover_text_book:<book id> index, internal/covertext) that the cover-text
+	// read kind writes. No F5-06 kind uses it; F5-08 switches to it.
+	ResCoverText Resource = "cover_text"
+	// ResFileProvenance is the file provenance ledger (file_prov:, file_prov_hash:,
+	// file_prov_orphan: and file_prov_seq: keys, internal/books/store) that the
+	// provenance capture/export kinds and the quarantine path write. No F5-06
+	// kind uses it; the siblings that write it switch to it.
+	ResFileProvenance Resource = "file_provenance"
 )
 
 // deletePrefix marks a Resource built by Deletes.
