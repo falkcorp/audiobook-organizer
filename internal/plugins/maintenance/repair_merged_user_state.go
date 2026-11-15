@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repair_merged_user_state.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: 8d4b2f67-1a9e-4c35-b7d0-9e6f3a2c1b58
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 // Moves user state stranded under merged-away books onto their survivors.
 //
@@ -364,7 +364,10 @@ func (p *Plugin) repairMergedUserStateNative(deps t6g6Deps, sched func(tasks.Kin
 	// HEAD declared no Writes. The pass moves listening state (position rows,
 	// progress rows, bookmarks) and clears the pending-repair records (user_state)
 	// and carries the play-count marks onto the survivor with ModifyBook (books).
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResUserState)))
+	// MintOrGetSyncID and RecordSyncMerge (t6g6SyncWrites) write the sync-item keys
+	// (sync_identity), which are not user state.
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResUserState)),
+		tasks.Res("books", string(ops.ResSyncIdentity)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books." + merge.UserStateRepairOpID)
