@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_shattered_ai.go
-// version: 1.14.3
+// version: 1.14.4
 // guid: 8b3e6d21-4f97-4c05-a1d8-2e7b9c0f5a63
 // last-edited: 2026-11-14
 
@@ -52,6 +52,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // regroupParams configures the regroup scan. The op never changes books or files
@@ -208,7 +210,7 @@ func (p *Plugin) regroupShatteredAINative(deps t6g6Deps, sched func(tasks.Kind) 
 	c := t6g6Common(regroupShatteredAIKind, sched)
 	c.Title = "Regroup shattered books (review-queue producer)"
 	c.Help = regroupShatteredAIHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "review_items"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResReviewItems)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.regroup-shattered-ai")

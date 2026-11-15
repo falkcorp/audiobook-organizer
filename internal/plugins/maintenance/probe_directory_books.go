@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/probe_directory_books.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 6f2a90d4-3c81-4e57-b0a6-9d47e1c85b23
 // last-edited: 2026-11-14
 
@@ -69,6 +69,8 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // probeDirParams configures the op.
@@ -218,7 +220,7 @@ func (p *Plugin) probeDirectoryBooksNative(deps t6g6Deps, sched func(tasks.Kind)
 	c := t6g6Common(probeDirectoryBooksKind, sched)
 	c.Title = "Probe directory-shaped books (tier 2 · re-classify)"
 	c.Help = probeDirectoryBooksHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "book_files"), tasks.Res("books", "books"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.maintenance.relink-unlinked-books")

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_unlinked.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: c17b493a-8d02-4f65-b9e1-604a8f2371cd
 // last-edited: 2026-11-14
 
@@ -50,6 +50,8 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // relinkParams configures the op.
@@ -155,7 +157,7 @@ func (p *Plugin) relinkUnlinkedBooksNative(deps t6g6Deps, sched func(tasks.Kind)
 	c.Help = relinkUnlinkedBooksHelp
 	// HEAD declared no Writes. The repair creates book_file rows and the batch
 	// create recomputes the owning book's aggregates, so both are declared.
-	c.Effects = tasks.Writes(tasks.Res("books", "book_files"), tasks.Res("books", "books"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.maintenance.relink-unlinked-books")

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_transcribe_status.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: a5e3c81f-7204-4b96-9d3a-1f68b05e2c47
 // last-edited: 2026-11-14
 
@@ -20,6 +20,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // Repairs transcribe_status rows that record a TRANSPORT failure rather than a
@@ -274,7 +276,7 @@ func (p *Plugin) repairTranscribeStatusNative(deps t6g6Deps, sched func(tasks.Ki
 	c := t6g6Common(repairTranscribeStatusKind, sched)
 	c.Title = "Repair transcribe status after a transport outage"
 	c.Help = repairTranscribeStatusHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "books"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.repair-transcribe-status")

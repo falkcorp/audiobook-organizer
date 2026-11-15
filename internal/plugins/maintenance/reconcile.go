@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reconcile.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: b8c9d0e1-f2a3-4567-1234-789012345678
 // last-edited: 2026-11-14
 
@@ -15,6 +15,8 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // itunesHealHelp is the def's Description, which the native kind carries as its Help.
@@ -76,7 +78,7 @@ func (p *Plugin) itunesHealNative(deps t6g6Deps, sched func(tasks.Kind) *tasks.S
 	// HEAD declared no Writes. The heal repoints and merges book rows (books,
 	// book_files, the undo journal under operations) and reflinks files back
 	// into the library (files).
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"), tasks.Res("books", "files"), tasks.Res("books", "operations"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResFiles)), tasks.Res("books", string(ops.ResOperations)))
 	// HEAD's def says Restart because the reflink is idempotent. The heal never
 	// writes a checkpoint of its own (LastProcessedPID only comes in through the
 	// params), so a restart re-walks from the start: ResumeFromZero, not Continue.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/recover_missing_files.go
-// version: 1.15.2
+// version: 1.15.3
 // guid: 4e8b1d27-9a3c-4f60-bb15-7c2e9d84a013
 // last-edited: 2026-11-14
 
@@ -76,6 +76,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // recoverDefaultMax bounds how many rows one run will repoint, so a first production run
@@ -351,7 +353,7 @@ func (p *Plugin) recoverMissingFilesNative(deps t6g6Deps, sched func(tasks.Kind)
 	// aggregates (books), and the opt-in reflinkOutside branch clones files on disk
 	// (files, the resource F5-08 names it). Effects are static per kind, so files
 	// is declared for every run, as the widest the kind can do.
-	c.Effects = tasks.Writes(tasks.Res("books", "book_files"), tasks.Res("books", "books"), tasks.Res("books", "files"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResFiles)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.recover-missing-files")

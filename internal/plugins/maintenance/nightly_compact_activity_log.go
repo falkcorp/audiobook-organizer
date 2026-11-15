@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/nightly_compact_activity_log.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 0b7e4d92-5c1a-4f38-9e26-d8a3f17c6b45
 // last-edited: 2026-11-14
 
@@ -17,6 +17,8 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // NightlyCompactActivityLogDefID is the def the nightly_activity_compaction
@@ -116,7 +118,7 @@ func (p *Plugin) nightlyCompactActivityLogNative(deps t6g6Deps, sched func(tasks
 	c := t6g6Common(nightlyCompactActivityLogKind, sched)
 	c.Title = "Nightly activity compaction (00:10 local)"
 	c.Help = nightlyCompactActivityLogHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "activity"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResActivity)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.cleanup-activity-log")

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-11-14
 
@@ -20,6 +20,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // --- opchange_by_book: index rebuild op ---
@@ -248,7 +250,7 @@ func (p *Plugin) opChangeBookIndexNative(deps t6g6Deps, sched func(tasks.Kind) *
 	c := t6g6Common(opChangeBookIndexKind, sched)
 	c.Title = "Operation-journal by-book index rebuild"
 	c.Help = opChangeBookIndexHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "operations"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResOperations)))
 	c.Resume = tasks.ResumeContinue
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.opchange-book-index")

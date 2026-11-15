@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-14
 
@@ -26,6 +26,8 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // t6g6Recorder is the writer a test hands the kinds: it records the calls that
@@ -55,28 +57,40 @@ type t6g6Recorder struct {
 // in this map fails the test, so a new writer method cannot slip past the
 // declared write set.
 var t6g6WriterResource = map[string]string{
-	"CompactActivityEntries":     "books/activity",
-	"RecompactActivityDigests":   "books/activity",
-	"RebuildOpChangeByBookIndex": "books/operations",
-	"CreateOperationChange":      "books/operations",
-	"CollapseHealDuplicates":     "books/books",
-	"HealTrack":                  "books/files",
-	"UpdateBookFiles":            "books/book_files",
-	"CreateBookFile":             "books/book_files",
-	"ModifyBookFile":             "books/book_files",
-	"RecomputeBookAggregates":    "books/books",
-	"ModifyBook":                 "books/books",
-	"UpsertReviewItem":           "books/review_items",
-	"DeleteReviewItemIfPending":  "books/review_items",
-	"SetRaw":                     "books/user_state",
-	"DeleteRaw":                  "books/user_state",
-	"SetUserBookState":           "books/user_state",
-	"SetUserPosition":            "books/user_state",
-	"SetUserPositionAt":          "books/user_state",
-	"ClearUserPositions":         "books/user_state",
-	"MintOrGetSyncID":            "books/user_state",
-	"RecordSyncMerge":            "books/user_state",
-	"CopyBookmarkIfAbsent":       "books/user_state",
+	"CompactActivityEntries":     "books/" + string(ops.ResActivity),
+	"RecompactActivityDigests":   "books/" + string(ops.ResActivity),
+	"RebuildOpChangeByBookIndex": "books/" + string(ops.ResOperations),
+	"CreateOperationChange":      "books/" + string(ops.ResOperations),
+	"CollapseHealDuplicates":     "books/" + string(ops.ResBooks),
+	"HealTrack":                  "books/" + string(ops.ResFiles),
+	"UpdateBookFiles":            "books/" + string(ops.ResBookFiles),
+	"CreateBookFile":             "books/" + string(ops.ResBookFiles),
+	"ModifyBookFile":             "books/" + string(ops.ResBookFiles),
+	"RecomputeBookAggregates":    "books/" + string(ops.ResBooks),
+	"ModifyBook":                 "books/" + string(ops.ResBooks),
+	"UpsertReviewItem":           "books/" + string(ops.ResReviewItems),
+	"DeleteReviewItemIfPending":  "books/" + string(ops.ResReviewItems),
+	"SetRaw":                     "books/" + string(ops.ResUserState),
+	"DeleteRaw":                  "books/" + string(ops.ResUserState),
+	"SetUserBookState":           "books/" + string(ops.ResUserState),
+	"SetUserPosition":            "books/" + string(ops.ResUserState),
+	"SetUserPositionAt":          "books/" + string(ops.ResUserState),
+	"ClearUserPositions":         "books/" + string(ops.ResUserState),
+	"MintOrGetSyncID":            "books/" + string(ops.ResUserState),
+	"RecordSyncMerge":            "books/" + string(ops.ResUserState),
+	"CopyBookmarkIfAbsent":       "books/" + string(ops.ResUserState),
+}
+
+// t6g6Eff is the sorted "books/<resource>" refs of the given pkg/ops constants.
+// Expected write sets are spelled with the constants, so a coined resource name
+// does not compile.
+func t6g6Eff(rs ...ops.Resource) []string {
+	out := make([]string, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, "books/"+string(r))
+	}
+	sort.Strings(out)
+	return out
 }
 
 // t6g6AssertWritesDeclared fails when a recorded write names a method with no
@@ -424,32 +438,32 @@ func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
 	cpu := func(f func() tasks.Parallelism) *tasks.Parallelism { v := f(); return &v }
 	rows := []row{
 		{head: p.nightlyCompactActivityLogDef(), resume: tasks.ResumeDrop, timeout: 6 * time.Hour,
-			effects: []string{"books/activity"}},
+			effects: t6g6Eff(ops.ResActivity)},
 		{head: p.opChangeBookIndexRebuildDef(), resume: tasks.ResumeContinue, timeout: 60 * time.Minute,
-			effects: []string{"books/operations"}},
+			effects: t6g6Eff(ops.ResOperations)},
 		{head: p.optimizeDef(), resume: tasks.ResumeContinue, timeout: tasks.MaxTimeout},
 		{head: p.orphanBookFilesCleanupDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute},
 		{head: p.orphanBookFilesRepointPlanDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
 			par: cpu(orphanBookFilesRepointPlanParallelism), wantPar: "cpu"},
 		{head: p.probeDirectoryBooksDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
-			par: cpu(probeDirectoryBooksParallelism), wantPar: "cpu", effects: []string{"books/book_files", "books/books"}},
+			par: cpu(probeDirectoryBooksParallelism), wantPar: "cpu", effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks)},
 		{head: p.recompactActivityDigestsDef(), resume: tasks.ResumeDrop, timeout: 60 * time.Minute,
-			effects: []string{"books/activity"}},
+			effects: t6g6Eff(ops.ResActivity)},
 		{head: p.itunesHealDef(), resume: tasks.ResumeFromZero, timeout: 60 * time.Minute,
-			effects: []string{"books/book_files", "books/books", "books/files", "books/operations"}},
+			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResFiles, ops.ResOperations)},
 		{head: p.recoverMissingFilesDef(), resume: tasks.ResumeDrop, timeout: 4 * time.Hour,
 			par: cpu(recoverMissingFilesParallelism), wantPar: "fixed(24): ",
-			effects: []string{"books/book_files", "books/books", "books/files"}},
+			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResFiles)},
 		{head: p.regroupShatteredAIDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
-			par: cpu(regroupShatteredAIParallelism), wantPar: "cpu", effects: []string{"books/review_items"}},
+			par: cpu(regroupShatteredAIParallelism), wantPar: "cpu", effects: t6g6Eff(ops.ResReviewItems)},
 		{head: p.relinkUnlinkedBooksDef(), resume: tasks.ResumeDrop, timeout: 120 * time.Minute,
-			par: cpu(relinkUnlinkedBooksParallelism), wantPar: "cpu", effects: []string{"books/book_files", "books/books"}},
+			par: cpu(relinkUnlinkedBooksParallelism), wantPar: "cpu", effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks)},
 		{head: p.repairMergedUserStateDef(), resume: tasks.ResumeDrop, timeout: 30 * time.Minute,
-			effects: []string{"books/books", "books/user_state"}},
+			effects: t6g6Eff(ops.ResBooks, ops.ResUserState)},
 		{head: p.repairTranscribeStatusDef(), resume: tasks.ResumeFromZero, timeout: 2 * time.Hour,
-			par: cpu(repairTranscribeStatusParallelism), wantPar: "fixed(8): ", effects: []string{"books/books"}},
+			par: cpu(repairTranscribeStatusParallelism), wantPar: "fixed(8): ", effects: t6g6Eff(ops.ResBooks)},
 		{head: p.repointBookFileRowsDef(), resume: tasks.ResumeDrop, timeout: p.repointBookFileRowsDef().Timeout,
-			effects: []string{"books/book_files", "books/books", "books/operations"}},
+			effects: t6g6Eff(ops.ResBookFiles, ops.ResBooks, ops.ResOperations)},
 	}
 
 	seen := map[tasks.Kind]bool{}

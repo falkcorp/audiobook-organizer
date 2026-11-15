@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repair_merged_user_state.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 8d4b2f67-1a9e-4c35-b7d0-9e6f3a2c1b58
 // last-edited: 2026-11-14
 
@@ -44,6 +44,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 type repairMergedUserStateParams struct {
@@ -362,7 +364,7 @@ func (p *Plugin) repairMergedUserStateNative(deps t6g6Deps, sched func(tasks.Kin
 	// HEAD declared no Writes. The pass moves listening state (position rows,
 	// progress rows, bookmarks) and clears the pending-repair records (user_state)
 	// and carries the play-count marks onto the survivor with ModifyBook (books).
-	c.Effects = tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "user_state"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResUserState)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books." + merge.UserStateRepairOpID)

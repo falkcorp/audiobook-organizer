@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/recompact_activity_digests.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b4f2e61-3d7a-4c95-a0e8-5f1c9d6b2a73
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -17,6 +17,8 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
 // RecompactActivityDigestsDefID is the def id of the admin-triggered digest
@@ -108,7 +110,7 @@ func (p *Plugin) recompactActivityDigestsNative(deps t6g6Deps, sched func(tasks.
 	c := t6g6Common(recompactActivityDigestsKind, sched)
 	c.Title = "Recompact activity digests"
 	c.Help = recompactActivityDigestsHelp
-	c.Effects = tasks.Writes(tasks.Res("books", "activity"))
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResActivity)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.cleanup-activity-log")
