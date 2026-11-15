@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_paths_test.go
-// version: 1.0.6
+// version: 1.0.7
 // guid: d41c7b92-6a35-4e08-9f1d-83b5e2a07c64
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -23,7 +23,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/covertext"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -419,15 +418,21 @@ func TestT6G3_CreditsBackfillCoreEnvBoundsItsGroupsByNumCPU(t *testing.T) {
 	assert.Equal(t, runtime.NumCPU(), env.Workers)
 }
 
-// The credits backfill's effects name every resource its writer touches, using
-// only the pkg/ops/effects.go constants: the books with their narrator joins and
-// the narrator records (books), the author joins a credits write replaces
-// (authors) and the operation store's rows (operations); and what it reads. The
-// native live test checks the writes the run made against this set.
+// The credits backfill's effects are the union of the rows of every method of
+// its writer (t6g3CreditsWriter): the book and narrator writes, the author joins a
+// credits write replaces, the metadata-cache stamp and ident: rows a credits write
+// carries, and the operation store's rows; and what it reads. The native live
+// test checks the writes the run made against this set.
 func TestT6G3_CreditsBackfillEffects(t *testing.T) {
 	d := t6g3KindByName(t, (&Plugin{}).t6g3Kinds(t6g3Deps{}, nil), "maintenance.credits-backfill")
 	e := tasks.CommonOf(d).Effects
-	assert.Equal(t, []string{string(ops.ResAuthors), string(ops.ResBooks), string(ops.ResOperations)}, t6g3WriteKinds(e))
+	// The writes are the shared table's rows for the writer methods the backfill
+	// can call (t6g3CreditsWriter), not a retyped resource list.
+	var want []string
+	for _, r := range t6RowsOf("ModifyBookCredits", "CreateNarrator", "DeleteNarrator", "CreateOperationChange", "InvalidateAuthorsCache") {
+		want = append(want, string(r))
+	}
+	assert.Equal(t, want, t6g3WriteKinds(e))
 	var reads []string
 	for _, r := range e.ReadSet() {
 		reads = append(reads, r.Kind)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.5
+// version: 1.3.6
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
 // last-edited: 2026-11-15
 
@@ -901,11 +901,13 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 				if !c.Effects.IsReadOnly() {
 					t.Errorf("Effects are not ReadOnly")
 				}
-			} else if got := refs(c.Effects.WriteSet()); !slices.Equal(got, res(r.writes)) {
-				t.Errorf("write set = %v, want %v", got, res(r.writes))
+			} else if got := slices.Sorted(slices.Values(refs(c.Effects.WriteSet()))); !slices.Equal(got, slices.Sorted(slices.Values(res(r.writes)))) {
+				// A set, not a sequence: a kind whose Effects are built from the shared
+				// table's sorted union (t6RowsUnion) lists them in that order.
+				t.Errorf("write set = %v, want %v", got, slices.Sorted(slices.Values(res(r.writes))))
 			}
-			if got := refs(c.Effects.ReadSet()); !slices.Equal(got, res(r.reads)) {
-				t.Errorf("read set = %v, want %v", got, res(r.reads))
+			if got := slices.Sorted(slices.Values(refs(c.Effects.ReadSet()))); !slices.Equal(got, slices.Sorted(slices.Values(res(r.reads)))) {
+				t.Errorf("read set = %v, want %v", got, slices.Sorted(slices.Values(res(r.reads))))
 			}
 			// What HEAD declared stays declared: its Writes/Reads are a subset.
 			for _, hw := range r.head.Writes {

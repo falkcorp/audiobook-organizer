@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_parity_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 1f3e20f0-c667-44b8-9f41-3e7208c9958c
 // last-edited: 2026-11-15
 
@@ -73,13 +73,6 @@ type t6g4LiveCase struct {
 	// unrecorded are declared resources the run writes outside the writer (a file
 	// on disk), so no writer call can record them.
 	unrecorded []ops.Resource
-	// unexercised are writer methods the kind can call on a branch this fixture
-	// does not reach (a book with no fingerprint segment, say). The kind still
-	// declares what their rows write, since the production run reaches them; the
-	// check below requires each to be a method of the writer, absent from the
-	// run's recorded calls (a recorded method belongs in want), and adds its row to
-	// the declared set the run must equal.
-	unexercised []string
 	// widths, when set, is the distinct worker counts the native run's loops
 	// declare (the value each loop hands the host's CapWorkers), exactly: the
 	// parallelism the run actually used, not a number in a table.
@@ -160,18 +153,6 @@ func TestT6G4Kinds_LiveRunsMatchHEADAndRecordTheirWrites(t *testing.T) {
 			expect := map[string]bool{}
 			for _, r := range append(slices.Clone(c.want), c.unrecorded...) {
 				expect[string(r)] = true
-			}
-			for _, m := range c.unexercised {
-				row, ok := t6g4WriterResource[m]
-				if !ok {
-					t.Errorf("unexercised names %s, which is not a t6g4Writer method", m)
-				}
-				if slices.Contains(rec.all(), m) {
-					t.Errorf("unexercised names %s, but the run recorded it: its resources belong in want", m)
-				}
-				for _, r := range row {
-					expect[string(r)] = true
-				}
 			}
 			if !slices.Equal(t6g4Keys(declared), t6g4Keys(expect)) {
 				t.Errorf("declared write set %v, but the live run touches %v", t6g4Keys(declared), t6g4Keys(expect))
@@ -423,15 +404,15 @@ func init() {
 	// duration-backfill, fingerprint pass. Book one has a segment whose stored
 	// duration is far off its fingerprint duration: the run rewrites that row in one
 	// UpdateBookFiles call (book_files). Book two has segments within tolerance but
-	// a wrong total: the run only recomputes its aggregates (books).
+	// a wrong total: the run writes the corrected total with ModifyBook.
 	t6g4LiveCases = append(t6g4LiveCases, t6g4LiveCase{
 		kind: durationBackfillKind, headParams: `{"dryRun":false}`, params: `{}`,
 		widths: func() []int { return []int{4} },
-		want:   []ops.Resource{ops.ResBookFiles, ops.ResBooks},
-		// the branch for a book with no fingerprint segment writes its total with
-		// ModifyBook (metadata_cache, indexes besides the books row); neither seeded
-		// book takes it
-		unexercised: []string{"ModifyBook"},
+		// The fixture records UpdateBookFiles (the off-tolerance row) and ModifyBook
+		// (the book whose total is wrong: it writes its total through ModifyBook,
+		// which carries the metadata_cache stamp and the ident: rows with the books
+		// row). Spelled as method names: the table owns what each writes.
+		want: t6RowsOf("ModifyBook", "UpdateBookFiles"),
 		seed: func(t *testing.T) *t6g4LiveEnv {
 			s := t6g4MemStore(t)
 			for _, bk := range []struct {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.4.4
+// version: 1.4.5
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-15
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -485,6 +486,40 @@ func t6g6ByKind(t *testing.T, defs []tasks.Definition, kind tasks.Kind) tasks.De
 
 func TestT6G6Kinds_Conformance(t *testing.T) {
 	taskstest.Conformance(t, (&Plugin{}).t6g6Kinds(fakeT6G6Deps(t), nil)...)
+}
+
+// TestT6G6Resources_TableCoversEveryWriterMethod: the group's view of the shared
+// table names exactly the write methods of t6g6Writer, including the ones that
+// only exist behind a capability getter (repair-merged-user-state writes its sync
+// identity, bookmarks and position timestamps through them). Before the view
+// walked the getters, SetUserPositionAt and its two siblings had no row and the
+// repair's recorded writes failed with "has no resource set".
+func TestT6G6Resources_TableCoversEveryWriterMethod(t *testing.T) {
+	methods := t6WriterMethods(reflect.TypeFor[t6g6Writer]())
+	for _, capMethod := range []string{"MintOrGetSyncID", "RecordSyncMerge", "CopyBookmarkIfAbsent", "SetUserPositionAt"} {
+		require.Contains(t, methods, capMethod, "the capability-getter walk must reach %s", capMethod)
+	}
+	for _, getter := range []string{"UserStateSyncWrites", "UserStateBookmarkWrites", "UserStateTimestampWriter"} {
+		require.NotContains(t, methods, getter, "%s hands out an interface; it is not a write", getter)
+	}
+	rows := make([]string, 0, len(t6g6WriterResource))
+	for name := range t6g6WriterResource {
+		rows = append(rows, name)
+	}
+	sort.Strings(rows)
+	var missing, extra []string
+	for _, m := range methods {
+		if !slices.Contains(rows, m) {
+			missing = append(missing, m)
+		}
+	}
+	for _, r := range rows {
+		if !slices.Contains(methods, r) {
+			extra = append(extra, r)
+		}
+	}
+	require.Empty(t, missing, "t6g6Writer methods with no row in the shared table")
+	require.Empty(t, extra, "rows in the group's view for a method t6g6Writer does not have")
 }
 
 func TestT6G6Kinds_MatchHEADDefs(t *testing.T) {
