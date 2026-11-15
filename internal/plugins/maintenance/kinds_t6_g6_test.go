@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-15
 
@@ -21,6 +21,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
@@ -79,9 +80,11 @@ var t6g6WriterResource = map[string][]string{
 	// reconcile.collapseHealDuplicates -> merge.Service.MergeBooksWithOptions
 	// (internal/merge/service.go): ModifyBook / SoftDeleteBook on every member
 	// (books); ReassignExternalIDs loser -> survivor (external_ids); the
-	// sibling-move journal and group redirect SetRaw (sibling_journal.go:548,
-	// group_redirect.go:112) and the undo pointer's CreateOperationChange
-	// (undo_pointer.go:96) (operations, the undo journal); FollowMerge /
+	// sibling-move journal (sibling_journal.go:548) and the undo pointer's
+	// CreateOperationChange (undo_pointer.go:96) (operations, the undo journal);
+	// the group redirect SetRaw (group_redirect.go:113) is version-group state
+	// (books, by the path_history ruling: path_history and group-redirect keys
+	// are books); FollowMerge /
 	// followOntoFlagHolder moving the losers' progress and read status
 	// (sync_follow.go:617-644, follow_journaled.go:177-201: SetUserBookState,
 	// ClearUserPositions, SetUserPosition) and the pending-repair SetRaw/DeleteRaw
@@ -99,8 +102,10 @@ var t6g6WriterResource = map[string][]string{
 	// ErrBookAggregatesRecompute).
 	"UpdateBookFiles": t6g6Eff(ops.ResBookFiles, ops.ResBooks),
 	"CreateBookFile":  t6g6Eff(ops.ResBookFiles, ops.ResBooks),
-	// store ModifyBookFile: the book_file row only (the repoint recomputes through RecomputeBookAggregates).
-	"ModifyBookFile": t6g6Eff(ops.ResBookFiles),
+	// store ModifyBookFile -> modifyBookFile(..., recompute=true)
+	// (pebble_store_bookfile_modify.go:42, :78): the book_file row, then the
+	// books aggregate recompute.
+	"ModifyBookFile": t6g6Eff(ops.ResBookFiles, ops.ResBooks),
 	// store RecomputeBookAggregates / ModifyBook: the books row.
 	"RecomputeBookAggregates": t6g6Eff(ops.ResBooks),
 	"ModifyBook":              t6g6Eff(ops.ResBooks),
@@ -302,6 +307,20 @@ func (s *t6g6TestStore) ListReviewItems(database.ReviewFilter) ([]database.Revie
 }
 func (s *t6g6TestStore) OpChangeIndexVerifier() (t6g6OpChangeIndexVerifier, string, bool) {
 	return t6g6TestVerifier{}, "fake", true
+}
+
+// GetBookFileByPath answers the seeded file whose last two path elements match
+// (a test's temp root may be reached through a symlink).
+func (s *t6g6TestStore) GetBookFileByPath(path string) (*database.BookFile, error) {
+	key := func(p string) string { return filepath.Join(filepath.Base(filepath.Dir(p)), filepath.Base(p)) }
+	for _, fs := range s.files {
+		for _, f := range fs {
+			if key(f.FilePath) == key(path) {
+				return &f, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // add seeds one book (and its files) under id.
@@ -620,6 +639,56 @@ func t6g6ShatterStore(t *testing.T) *t6g6TestStore {
 	return s
 }
 
+// t6g6HealLibrary sets up one iTunes track whose mapped path is missing and a
+// library copy of its file under each of the named folders of the probe's root.
+// One folder gives layer 1 a single candidate; two give it a tie.
+func t6g6HealLibrary(t *testing.T, p *t6g6Probe, folders ...string) {
+	t.Helper()
+	healDir := t.TempDir()
+	for _, f := range folders {
+		writeFile(t, filepath.Join(p.root, f, "Hush.mp3"), 10)
+	}
+	xml := filepath.Join(t.TempDir(), "Library.xml")
+	require.NoError(t, os.WriteFile(xml, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>Tracks</key><dict><key>1</key><dict>
+<key>Location</key><string>file://localhost/W:/Gotham/Hush.mp3</string>
+<key>Name</key><string>Hush</string><key>Artist</key><string>Bruce Wayne</string>
+<key>Persistent ID</key><string>BATPID0000000001</string></dict></dict></dict></plist>`), 0o644))
+	oldITunes, oldRoot := config.AppConfig.ITunes, config.AppConfig.RootDir
+	t.Cleanup(func() { config.AppConfig.ITunes, config.AppConfig.RootDir = oldITunes, oldRoot })
+	config.AppConfig.ITunes.LibraryReadPath = xml
+	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{{From: "W:/Gotham", To: healDir}}
+	config.AppConfig.RootDir = p.root
+}
+
+// The heal's duplicate collapse runs a full book merge, and only a native test
+// that makes it fire exercises the traced resource set of CollapseHealDuplicates
+// against the kind's Effects. Two library copies of the track tie on layer 1;
+// each holds the same stored print, so layer 2 collapses their books.
+func TestT6G6Native_HealCollapseWritesAreTraced(t *testing.T) {
+	p := newT6G6Probe(t)
+	t6g6HealLibrary(t, p, "Arkham", "Gotham")
+	fp := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	s := &t6g6TestStore{}
+	for i, folder := range []string{"Arkham", "Gotham"} {
+		id := "01BATBOOK0000000000000H0" + itoa(i+1)
+		s.add(database.Book{ID: id}, database.BookFile{
+			ID: "01BATFILE0000000000000H0" + itoa(i+1), BookID: id,
+			FilePath:            filepath.Join(p.root, folder, "Hush.mp3"),
+			AcoustIDFingerprint: fp, AcoustIDFPVersion: fingerprint.PrintEncodingVersion,
+		})
+	}
+	p.store = s
+	def := t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), itunesHealKind)
+	_, err := runT6G6Kind(t, def, tasks.ModeLive, &t6g6GateWriter{name: "gotham"}, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"CollapseHealDuplicates 01BATBOOK0000000000000H01",
+		"HealTrack Hush.mp3 <- Hush.mp3",
+	}, p.rec.snapshot())
+	t6g6AssertWritesDeclared(t, p.rec.snapshot(), def)
+}
+
 func t6g6WriteCases() []t6g6WriteCase {
 	const transportErr = `transcribe remote: transcribe-batch chunk 0-32: Post "http://<host>/transcribe-batch": dial tcp: connect: connection refused`
 	return []t6g6WriteCase{
@@ -637,24 +706,8 @@ func t6g6WriteCases() []t6g6WriteCase {
 		},
 		{
 			kind: itunesHealKind, liveOnly: true,
-			setup: func(t *testing.T, p *t6g6Probe) {
-				// One iTunes track whose mapped path is missing, with its file in the
-				// library under the same name: layer 1 resolves the single candidate.
-				healDir := t.TempDir()
-				writeFile(t, filepath.Join(p.root, "Gotham", "Hush.mp3"), 10)
-				xml := filepath.Join(t.TempDir(), "Library.xml")
-				require.NoError(t, os.WriteFile(xml, []byte(`<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict><key>Tracks</key><dict><key>1</key><dict>
-<key>Location</key><string>file://localhost/W:/Gotham/Hush.mp3</string>
-<key>Name</key><string>Hush</string><key>Artist</key><string>Bruce Wayne</string>
-<key>Persistent ID</key><string>BATPID0000000001</string></dict></dict></dict></plist>`), 0o644))
-				oldITunes, oldRoot := config.AppConfig.ITunes, config.AppConfig.RootDir
-				t.Cleanup(func() { config.AppConfig.ITunes, config.AppConfig.RootDir = oldITunes, oldRoot })
-				config.AppConfig.ITunes.LibraryReadPath = xml
-				config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{{From: "W:/Gotham", To: healDir}}
-				config.AppConfig.RootDir = p.root
-			},
-			live: []string{"HealTrack Hush.mp3 <- Hush.mp3"},
+			setup: func(t *testing.T, p *t6g6Probe) { t6g6HealLibrary(t, p, "Gotham") },
+			live:  []string{"HealTrack Hush.mp3 <- Hush.mp3"},
 		},
 		{
 			kind: relinkUnlinkedBooksKind,

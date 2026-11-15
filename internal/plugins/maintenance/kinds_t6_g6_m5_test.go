@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_m5_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8b6d14-52a7-4c9f-b1d0-7a4f92c6e385
 // last-edited: 2026-11-15
 
@@ -479,19 +479,29 @@ func TestT6G6Optimize_ChildKindsAreTheLaunchedConstants(t *testing.T) {
 	require.Equal(t, tasks.Kind("books.acoustid.backfill"), t6g6KindFor(optimizeChildAcoustIDBackfill))
 }
 
-// The native repoint decodes its params as strictly as HEAD did: an unknown key, a
-// repeated key and trailing data are refused before any read, so a mistyped key
-// fails the run instead of being dropped.
+// HEAD decoded the repoint params strictly. Every payload below is otherwise
+// valid (one non-empty repoint), so a plain json.Unmarshal would accept it: only
+// the strict decode can refuse it, and the control row shows the same payload
+// without the loose key gets past the decode.
 func TestT6G6Native_RepointRefusesLooseParams(t *testing.T) {
 	gate := &t6g6GateWriter{name: "gotham"}
-	for _, params := range []string{
-		`{"repoints":[],"bogus":1}`,
-		`{"repoints":[],"repoints":[]}`,
-	} {
+	const rp = `{"row_id":"r1","book_id":"b1","new_path":"/library/gotham/a.m4b"}`
+	run := func(params string) error {
 		p := newT6G6Probe(t)
 		_, err := runT6G6Kind(t, t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), rbfKind), tasks.ModePreview, gate, params)
-		require.Error(t, err, params)
-		require.Empty(t, p.rec.snapshot(), params)
+		return err
+	}
+	for name, params := range map[string]string{
+		"unknown key":   `{"repoints":[` + rp + `],"bogus":1}`,
+		"duplicate key": `{"repoints":[` + rp + `],"repoints":[` + rp + `]}`,
+		"unknown field": `{"repoints":[{"row_id":"r1","book_id":"b1","new_path":"/library/gotham/a.m4b","bogus":1}]}`,
+	} {
+		err := run(params)
+		require.Error(t, err, name)
+		require.Contains(t, err.Error(), "decode params", name)
+	}
+	if err := run(`{"repoints":[` + rp + `]}`); err != nil {
+		require.NotContains(t, err.Error(), "decode params", "the control payload decodes")
 	}
 }
 
@@ -508,4 +518,15 @@ func TestT6G6Native_PoolForwardsThePureLabel(t *testing.T) {
 		}},
 		func(context.Context, int) error { return nil }))
 	require.ElementsMatch(t, []string{"item 1/2", "item 2/2"}, got)
+
+	// HEAD's label gets the absolute ProgressTotal when the loop sets one.
+	got = nil
+	require.NoError(t, t6g6NativeItems(tasks.NewRC(h))(context.Background(), tasks.Sequential("test"), 2,
+		t6g6ItemsOptions{ProgressBase: 8, ProgressTotal: 10, PureLabel: func(i, total int) string {
+			s := "item " + itoa(i+1) + "/" + itoa(total)
+			got = append(got, s)
+			return s
+		}},
+		func(context.Context, int) error { return nil }))
+	require.ElementsMatch(t, []string{"item 1/10", "item 2/10"}, got)
 }

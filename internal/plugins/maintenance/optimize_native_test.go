@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize_native_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9a1e4c52-3d78-4b06-8e2f-5c7d0b1a6f93
 // last-edited: 2026-11-15
 
@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,6 +47,30 @@ type t6g6OptimizeHost struct {
 	onAwait func(tasks.RunID)
 	block   map[tasks.Kind]chan struct{}
 	awaited []tasks.RunID
+
+	// touches counts liveness stamps (rc.Progress().Tick); reported is every
+	// done value the run reported (rc.Progress().Set), in order.
+	touches  atomic.Int64
+	reported []int64
+}
+
+func (h *t6g6OptimizeHost) Touch() { h.touches.Add(1) }
+
+func (h *t6g6OptimizeHost) ReportProgress(done int64, _ tasks.Total) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reported = append(h.reported, done)
+}
+
+// lastReported is the last done value the run reported (what the kernel would
+// hold as the run's Done when the attempt ends), or 0.
+func (h *t6g6OptimizeHost) lastReported() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.reported) == 0 {
+		return 0
+	}
+	return h.reported[len(h.reported)-1]
 }
 
 func (h *t6g6OptimizeHost) Enqueue(k tasks.Kind, params any, _ ...tasks.StartOption) (tasks.RunRef, error) {
@@ -348,4 +373,192 @@ func TestT6G6Optimize_PreviewRefused(t *testing.T) {
 	h.mode = tasks.ModePreview
 	require.Error(t, t6g6RunOptimize(t, h))
 	require.Empty(t, h.kinds())
+}
+
+// While the sweep waits on a child the kernel's await keeps nothing alive, so
+// the wait stamps liveness itself every optimizeLivenessEvery (a quarter of the
+// watchdog budget) and stops when the wait returns. The clock is a channel the
+// test drives, so a child that runs for hours costs no time.
+func TestT6G6Optimize_WaitTicksLivenessAndStopsWithTheWait(t *testing.T) {
+	require.LessOrEqual(t, 3*optimizeLivenessEvery, optimizeProgressTimeout, "three ticks may be missed")
+
+	clock := make(chan time.Time)
+	var stopped, asked atomic.Int64
+	var every atomic.Int64
+	newTicker := func(d time.Duration) (<-chan time.Time, func()) {
+		asked.Add(1)
+		every.Store(int64(d))
+		return clock, func() { stopped.Add(1) }
+	}
+	ticked := make(chan struct{}, 16)
+	var ticks atomic.Int64
+	tick := func() { ticks.Add(1); ticked <- struct{}{} }
+
+	release := make(chan struct{})
+	res := make(chan error, 1)
+	go func() {
+		res <- optimizeAwaitTicking(context.Background(), func() (tasks.Outcome, error) {
+			<-release
+			return tasks.Outcome{State: tasks.StateSucceeded}, nil
+		}, tick, newTicker, "child#1")
+	}()
+	<-ticked // the stamp at the start of the wait
+	for i := 0; i < 3; i++ {
+		clock <- time.Now() // one tick per interval of the (fake) clock
+		<-ticked
+	}
+	require.Equal(t, int64(4), ticks.Load(), "a stamp at the start and one per interval")
+	require.Equal(t, optimizeLivenessEvery, time.Duration(every.Load()))
+	require.Zero(t, stopped.Load(), "the ticker runs while the child does")
+
+	close(release)
+	require.NoError(t, <-res)
+	require.Equal(t, int64(1), stopped.Load(), "the ticker stopped with the wait")
+	select {
+	case clock <- time.Now():
+		t.Fatal("a tick was taken after the wait returned")
+	default:
+	}
+	require.Equal(t, int64(4), ticks.Load(), "no stamp after the wait")
+}
+
+// The native sweep wires it: a child that is still running keeps the parent's
+// liveness stamped, tick by tick, and the stamps stop once the sweep is done.
+func TestT6G6Optimize_NativeSweepStampsLivenessWhileAChildRuns(t *testing.T) {
+	t6g6OptimizeFlags(t, false, false)
+	clock := make(chan time.Time)
+	old := optimizeNewTicker
+	t.Cleanup(func() { optimizeNewTicker = old })
+	optimizeNewTicker = func(time.Duration) (<-chan time.Time, func()) { return clock, func() {} }
+
+	h := newT6G6OptimizeHost(t)
+	release := make(chan struct{})
+	h.block["books.maintenance.temp-file-cleanup"] = release
+	awaiting := make(chan struct{})
+	h.onAwait = func(id tasks.RunID) {
+		if strings.HasPrefix(string(id), "books.maintenance.temp-file-cleanup") {
+			close(awaiting)
+		}
+	}
+	res := make(chan error, 1)
+	go func() { res <- t6g6RunOptimize(t, h) }()
+	<-awaiting
+	for i := 0; i < 3; i++ {
+		clock <- time.Now()
+	}
+	require.Eventually(t, func() bool { return h.touches.Load() == 4 }, 5*time.Second, time.Millisecond,
+		"one stamp at the start of the wait and one per tick while the child runs")
+	close(release)
+	require.NoError(t, <-res)
+	after := h.touches.Load()
+	select {
+	case clock <- time.Now():
+		t.Fatal("a tick was taken after the sweep ended")
+	default:
+	}
+	require.Equal(t, after, h.touches.Load())
+}
+
+// A yield must carry progress the kernel accepts (done past where the attempt
+// began), also when the attempt finished no child: here the first attempt waits
+// on a child past its deadline, and so does the one that re-attaches to it.
+func TestT6G6Optimize_YieldWithNoChildFinishedStillReportsProgress(t *testing.T) {
+	t6g6OptimizeFlags(t, true, true)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	yield := func(h *t6g6OptimizeHost) {
+		h.block["books.maintenance.temp-file-cleanup"] = release
+		h.deadline = time.Now().Add(optimizeYieldMargin + 150*time.Millisecond)
+	}
+
+	h := newT6G6OptimizeHost(t)
+	yield(h)
+	require.ErrorIs(t, t6g6RunOptimize(t, h), tasks.ErrContinueInPlace)
+	first := h.lastReported()
+	require.Greater(t, first, int64(0), "progress past the run's start (0)")
+	_, raw := t6g6OptimizeCheckpointOf(t, h)
+
+	h2 := newT6G6OptimizeHost(t)
+	yield(h2)
+	require.NoError(t, h2.SetCheckpoint("", json.RawMessage(raw)))
+	require.ErrorIs(t, t6g6RunOptimize(t, h2), tasks.ErrContinueInPlace)
+	require.Greater(t, h2.lastReported(), first, "the re-attached attempt reports past where the one before ended")
+	h2.mu.Lock()
+	awaited := append([]tasks.RunID(nil), h2.awaited...)
+	h2.mu.Unlock()
+	require.Equal(t, []tasks.RunID{"books.maintenance.temp-file-cleanup#1"}, awaited)
+	require.Empty(t, h2.kinds(), "nothing was launched a second time")
+	cp, _ := t6g6OptimizeCheckpointOf(t, h2)
+	require.NotNil(t, cp.InFlight, "the child is still recorded in flight")
+}
+
+// A child that was in flight when a flag change took it off the list is still
+// waited on, ahead of the rest, and counted; its run is never left beside the
+// children that start after it.
+func TestT6G6Optimize_InFlightChildNoLongerListedIsWaitedOn(t *testing.T) {
+	t6g6OptimizeFlags(t, false, false) // acoustid-backfill is off today
+	raw, err := json.Marshal(optimizeCheckpoint{
+		StartedAt: time.Now().Add(-time.Hour),
+		InFlight:  &optimizeInFlight{Name: "acoustid-backfill", RunID: "books.acoustid.backfill#9"},
+	})
+	require.NoError(t, err)
+	h := newT6G6OptimizeHost(t)
+	require.NoError(t, h.SetCheckpoint("", json.RawMessage(raw)))
+	require.NoError(t, t6g6RunOptimize(t, h))
+	require.Equal(t, tasks.RunID("books.acoustid.backfill#9"), h.awaited[0], "the recorded run is waited on first")
+	require.Equal(t, []tasks.Kind{"books.maintenance.temp-file-cleanup", "books.acoustid.scan"}, h.kinds(),
+		"only today's children are launched, and not the dropped one")
+	cp, _ := t6g6OptimizeCheckpointOf(t, h)
+	require.Equal(t, []string{"acoustid-backfill", "temp-file-cleanup", "acoustid-scan"}, cp.Finished)
+	require.Equal(t, 3, cp.Completed)
+	require.Nil(t, cp.InFlight)
+}
+
+// A child that fails after it was waited on is recorded at once: a crash right
+// after it resumes at the next child, not at the failed one.
+func TestT6G6Optimize_FailedChildIsCheckpointedAtOnce(t *testing.T) {
+	t6g6OptimizeFlags(t, true, true)
+	h := newT6G6OptimizeHost(t)
+	h.failKind["books.maintenance.temp-file-cleanup"] = true
+	var snap json.RawMessage
+	h.onEnq = func(k tasks.Kind) {
+		if k == "books.acoustid.fingerprint-rescan" {
+			snap, _ = h.CheckpointJSON("")
+		}
+	}
+	require.NoError(t, t6g6RunOptimize(t, h))
+	require.NotNil(t, snap)
+	var cp optimizeCheckpoint
+	require.NoError(t, json.Unmarshal(snap, &cp))
+	require.Equal(t, []string{"temp-file-cleanup"}, cp.Finished)
+	require.Equal(t, 1, cp.Failed)
+	require.Equal(t, 0, cp.Completed)
+	require.Nil(t, cp.InFlight)
+}
+
+// The kernel's repeat-start dedupe folds a start with identical params into the
+// run already there, so a resumed sweep whose in-flight record was lost (the
+// checkpoint flushes at most every 30s) must start the child with params
+// identical to the first start's.
+func TestT6G6Optimize_LostInFlightRecordRestartsTheChildWithIdenticalParams(t *testing.T) {
+	t6g6OptimizeFlags(t, true, true)
+	first := newT6G6OptimizeHost(t)
+	require.NoError(t, t6g6RunOptimize(t, first))
+	want := map[tasks.Kind]any{}
+	for i, k := range first.kinds() {
+		want[k] = first.params[i]
+	}
+
+	// The crash lost the record of fingerprint-rescan, started but not recorded.
+	raw, err := json.Marshal(optimizeCheckpoint{
+		StartedAt: time.Now().Add(-time.Hour), Finished: []string{"temp-file-cleanup"}, Completed: 1,
+	})
+	require.NoError(t, err)
+	h := newT6G6OptimizeHost(t)
+	require.NoError(t, h.SetCheckpoint("", json.RawMessage(raw)))
+	require.NoError(t, t6g6RunOptimize(t, h))
+	require.Equal(t, "books.acoustid.fingerprint-rescan", string(h.kinds()[0]))
+	for i, k := range h.kinds() {
+		require.Equal(t, want[k], h.params[i], "params of %s", k)
+	}
 }

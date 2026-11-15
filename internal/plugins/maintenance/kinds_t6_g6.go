@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d78a6104-de76-4b10-ab6f-1cf177912760
 // last-edited: 2026-11-15
 
@@ -177,10 +177,15 @@ func t6g6NativeItems(rc *tasks.RC) t6g6ItemsFunc {
 		if o.Collect {
 			mode = tasks.Collect
 		}
-		// The item is the index, so the pure label closes over n for the total.
+		// The item is the index, so the pure label closes over the total HEAD's
+		// label saw: the absolute ProgressTotal when set (run_items.go), else n.
 		var label func(int) string
 		if o.PureLabel != nil {
-			label = func(i int) string { return o.PureLabel(i, n) }
+			labelTotal := n
+			if o.ProgressTotal > 0 {
+				labelTotal = o.ProgressTotal
+			}
+			label = func(i int) string { return o.PureLabel(i, labelTotal) }
 		}
 		_, err := tasks.RunItems(rc, par, idx, func(ic *tasks.ItemRC, i int) error {
 			return fn(ic.Context(), i)
