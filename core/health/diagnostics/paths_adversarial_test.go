@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_adversarial_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9d4b7e21-3a6c-4f58-8e0d-5b1c2a97f634
 // last-edited: 2026-11-14
 
@@ -676,7 +676,32 @@ func TestRedactPaths_EncodedPathOutsideARouteIsRedacted(t *testing.T) {
 		same("https://abs.example/a/b", "https://abs.example/a/b"),
 		same("https://abs.example", "https://abs.example"),
 		same("ws://abs.example:8080/x#top", "ws://abs.example:8080/x#<fragment>"),
+		// A URL's path part still decoding after the bound is not shown.
+		same("https://abs.example/items/"+nestEncoded("/Users/bruce", 8), "https://abs.example/<value>"),
+		// "%XX" prose is not judged whole: only a token that carries an encoded
+		// separator is, so a raw path next to a "%25" loses just the path.
+		same("rate=50%25,/Users/bruce/Books", "rate=50%25,<path>"),
 	})
+}
+
+// TestRedactPaths_EncodedPathNestedInTailsFailsClosed: a path under a root is
+// read again from inside its tail, and that nests; past maxNest the text that
+// still holds a percent-encoded path is "<path>", as one that holds a raw path
+// is.
+func TestRedactPaths_EncodedPathNestedInTailsFailsClosed(t *testing.T) {
+	roots := advRoots()
+	// A bare token that carries the encoded path is judged whole at the top, so
+	// the nested read is reached through a route's or a URL's path part.
+	for _, prefix := range []string{"", "/api/x//", "https://h/x//"} {
+		for n := 1; n <= 8; n++ {
+			in := prefix + strings.Repeat("/srv/lib/a@", n) + "%2FUsers%2Fbruce"
+			for name, run := range map[string]func(string) string{"text": roots.redactPaths, "value": roots.redactValue} {
+				if out := run(in); strings.Contains(out, "bruce") {
+					t.Errorf("[%s] %d nested tails: %q -> %q", name, n, in, out)
+				}
+			}
+		}
+	}
 }
 
 // TestRedactPaths_RawQueryDelimiterInANameIsRedacted (G8): a raw "&", "#", "=",
@@ -694,6 +719,11 @@ func TestRedactPaths_RawQueryDelimiterInANameIsRedacted(t *testing.T) {
 		same("/api/v1/x?path=/Users/a#b/Gordonx/Books", "/api/v1/x?<query>"),
 		same("/api/v1/x#/Users/a&b/Gordonx/Books", "/api/v1/x#<fragment>"),
 		same("/api/v1/x?path=/Users/a%23b/Gordonx/Books", "/api/v1/x?<query>"),
+		// A raw space in a query: a value that is one URL (or one route) is read
+		// whole, so the words after the space are part of the query. Free text
+		// ends the token at the space, as it does for a route.
+		{in: "https://abs.example/x?path=/Users/Bruce Wayne/Gordonx/Books", value: "https://abs.example/x?<query>"},
+		{in: "/api/v1/x?path=/Users/Bruce Wayne/Gordonx/Books", value: "/api/v1/x?<query>"},
 		same("/api/v1/x?path=/Users/a%26b/Gordonx/Books", "/api/v1/x?<query>"),
 	})
 }
