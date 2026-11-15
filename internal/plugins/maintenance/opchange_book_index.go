@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-11-14
 
@@ -155,9 +155,9 @@ func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 		// A forced rebuild (dry_run=false) interrupted by a restart starts over
 		// from the first row, as an operator's re-run would; the boot ensure
 		// resumes the cursor it left. Because the cursors are the store's, Run
-		// never calls reporter.Checkpoint; internal/arch's
-		// restartWithoutCheckpoint names this def with that reason, and
-		// TestResumeRestartDefsCheckpoint fails if either side changes.
+		// never calls reporter.Checkpoint at HEAD (env.Checkpoint is nil there; only
+		// the native shell sets it, to write the marker its yield needs). The
+		// internal/arch guard is a static scan, so it sees that one call site.
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.opchange-book-index",
@@ -448,8 +448,10 @@ func t6g6EnsureOpChangeBookIndex(ctx context.Context, r t6g6OpChangeIndexBuilder
 		// The kernel honours a yield only after a checkpoint since the attempt
 		// started; HEAD's registry did not need one (the cursors are the store's),
 		// so only a native shell, which sets Checkpoint, writes this marker.
-		if cpErr := env.SaveCheckpoint(opChangeYieldCheckpoint{VerifiedRows: res.Verify.VerifiedRows}); cpErr != nil {
-			return fmt.Errorf("opchange_by_book index verify: checkpoint before yielding: %w", cpErr)
+		if env.Checkpoint != nil {
+			if cpErr := env.Checkpoint(opChangeYieldCheckpoint{VerifiedRows: res.Verify.VerifiedRows}); cpErr != nil {
+				return fmt.Errorf("opchange_by_book index verify: checkpoint before yielding: %w", cpErr)
+			}
 		}
 		return fmt.Errorf("opchange_by_book index verify: %w", env.ContinueInPlace)
 	}
