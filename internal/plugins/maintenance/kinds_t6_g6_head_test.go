@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_head_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8c1d4e72-3b95-4a60-b2f8-6e0a9d5c1347
 // last-edited: 2026-11-14
 
@@ -125,4 +125,26 @@ func TestT6G6Native_RepointRefusesWithoutITunesRoots(t *testing.T) {
 	require.Contains(t, err.Error(), "resolve iTunes roots")
 	require.Zero(t, p.writerCalls(), "a refused run built a writer")
 	require.Equal(t, f.oldPath, f.storedRow(t).FilePath)
+}
+
+// t6g6OpsFetchSpy counts the OpsStore fetches a shell makes.
+type t6g6OpsFetchSpy struct {
+	fakeDeps
+	fetches int
+}
+
+func (d *t6g6OpsFetchSpy) OpsStore() OpsStore {
+	d.fetches++
+	return d.fakeDeps.OpsStore()
+}
+
+// The orphan-cleanup HEAD shell refuses the removed delete mode before it
+// fetches the store, as HEAD did; the core refuses too, so only the fetch count
+// tells the shell's own guard from the core's.
+func TestT6G6Head_OrphanCleanupRefusesDeleteBeforeFetchingStore(t *testing.T) {
+	spy := &t6g6OpsFetchSpy{fakeDeps: fakeDeps{store: newRepairPebble(t)}}
+	p := &Plugin{deps: spy}
+	err := p.orphanBookFilesCleanupDef().Run(context.Background(), json.RawMessage(`{"delete":true}`), &fakeReporter{})
+	require.ErrorIs(t, err, errOrphanDeleteRemoved)
+	require.Zero(t, spy.fetches, "the shell fetched the store before refusing delete")
 }
