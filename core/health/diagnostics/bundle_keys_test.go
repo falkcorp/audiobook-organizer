@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/bundle_keys_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8d2f4a61-7c03-4e95-b1a8-3f6e0c9d5b72
 // last-edited: 2026-11-15
 
@@ -133,6 +133,11 @@ func collidingKeys(n int) map[string]any {
 // failed core-ci twice, at 3.05 s and at 3.29 s, for a scan that was linear).
 // Under the quadratic search 1,000 keys already cost 500,000 lookups against a
 // bound of 3,000.
+//
+// The count is self-reported: keyNamer increments probes beside each map lookup,
+// so work it does not count (a scan or a string build per name, say) is invisible
+// to this test. It proves the lookup count, which is what the quadratic search
+// grew; it is not a proof of the whole cost, and no clock stands in for one.
 //
 // Four shapes, each at four sizes, with no clock: every key collapses to one text;
 // the suffix names are already taken by real keys, which the counter has to pass

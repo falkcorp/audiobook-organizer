@@ -3552,6 +3552,26 @@
   "notes": "Tier: a move of the R0 updater with an offline fetch. R0's updater tests re-pointed with unchanged expectations; the fake asset answers --version-json. Deps names notify.Service (F7-05), providerhttp.Client (F7-02), events.Bus (F4-04) and the health registry (F2-10). Also builds 05-updater §5U.9's metric families with their series golden. 04 keys: F8 create mediacore/updater; F8 move internal/updater -> mediacore/updater. Owns gate tests: TestABOUpdaterSourceMatchesHEAD; TestApply_RawAssetNoBackup; TestFetchRelease_NamedReleaseOnly."
  },
  {
+  "id": "F8-03b",
+  "title": "Share-safe diagnostics bundle: the path redactor replaced by a sanitizer that meets S1 (no byte of a bundle names a directory, file, user or host outside a configured root), applied to every byte that leaves, the F8-03b marker, its runtime refusal and its gate deleted",
+  "release": "F8",
+  "wave": "W37",
+  "tier": "T3",
+  "depends_on": [
+   "F8-03"
+  ],
+  "files": [
+   "core/health/diagnostics/",
+   "core/internal/healthhttp/",
+   "core/archtest/f803b_gate.go",
+   "core/archtest/f803b_gate_test.go",
+   "core/archtest/f803b_probe.go",
+   "core/archtest/f803b_probe_test.go"
+  ],
+  "spec": "05-health \u00a75H.3.5; docs/agent-tasks/platform-core/seams.d/F8-03.md (S1, Round 8)",
+  "notes": "Tier: a sanitizer that decides what a third party may read; Opus review and a T3 security review before merge. A follow-up row of the merged F8-03 (round 7 and 8 reviews of PR #4658), named F8-03b because its name is the marker's (diagnostics.RedesignPendingF8_03b, ErrRedesignPendingF8_03b, archtest.F803bGate); the rows-take-the-next-free-number rule would call it F8-05. Replaces the token scanner in core/health/diagnostics/paths.go, applies the sanitizer to every byte that leaves (Writer.JSON values and keys, Writer.File lines, manifest text, zip entry names, the health route's Detail) and deletes the marker, the runtime refusal in New and Build, and the archtest gate, probe pin and linker-flag guard. Covers no 04 key of its own: F8-03 owns the F8 grow of mediacore/health/diagnostics. F8-04 depends on it: F8-04 mounts the diagnostics routes. Dark: no route is mounted, nothing in ABO switches."
+ },
+ {
   "id": "F8-04",
   "title": "F8 flip, one PR: backup in core's layout with its routes, the updater move wired, health wired with /api/health and /api/v1/health deleted and every caller switched to /health, the kernel /metrics mount with no rename, InterimExport and app.Options.InterimBackends deleted",
   "release": "F8",
@@ -3561,7 +3581,8 @@
    "F7-09",
    "F8-01",
    "F8-02",
-   "F8-03"
+   "F8-03",
+   "F8-03b"
   ],
   "files": [
    "main.go",

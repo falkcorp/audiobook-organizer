@@ -1,11 +1,11 @@
 <!-- file: docs/plans/platform-core/task-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: 98285867-08c9-4873-8207-d381e15999fc -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-15 -->
 
 # Platform-core: every task in plain language
 
-All 133 tasks of the [implementation plan](implementation-plan.md) (127 for agents, 6 for the owner) in 46 waves, grouped by stage in the order they run. Each has what it builds and why it is needed. The full brief for each task is in [`docs/agent-tasks/platform-core/`](../../agent-tasks/platform-core/README.md).
+All 134 tasks of the [implementation plan](implementation-plan.md) (128 for agents, 6 for the owner) in 46 waves, grouped by stage in the order they run. Each has what it builds and why it is needed. The full brief for each task is in [`docs/agent-tasks/platform-core/`](../../agent-tasks/platform-core/README.md).
 
 Critical path (82 working days; 106.5 if every wave waits for the one before): OWNER-01 → R0-05 → OWNER-02 → R1-35 → R1-01 → R1-02 → R1-10 → R1-32 → R1-36 → R1-13 → R1-20 → R1-21 → R1-23 → R1-25 → R1-27 → R1-28 → OWNER-03 → F2-09 → F2-01 → F2-06 → F3-04 → F3-06 → F3-07 → F4-08 → F5-18 → F6-03 → F7-09 → F8-04 → R2-01 → OWNER-05 → F9-05 → F9-02 → F9-03 → R3-04 → OWNER-06.
 
@@ -190,7 +190,7 @@ Outside services (download client, metadata providers, AI, webhooks) move onto e
 | **F7-08** Migrate integrations with migration step M6 | Migration | Builds a one-way migration that turns old settings into instances with secret references, moves AI jobs, webhook rules and import roots into core, and deletes the old config blob and dirty set. | Existing users' integration settings must survive the move. Without it, they would lose their settings, or old secrets would stay in the clear. | W34 · F7-01, F7-03, F7-05, F7-06, F7-07, F3-06, F2-13 |
 | **F7-09** Switch to core integrations **(critical path)** | Migration | In one PR, wires integrations, AI jobs, provider gates, library roots and notify into the app, registers M6, deletes the old plugin system and the unauthenticated plugins route, and renames AI metrics. | This is the cutover for integrations. Until it lands, the old plugin system and config handlers remain. | W37 · F6-03, F7-02, F7-03, F7-04, F7-05, F7-06, F7-07, F7-08, F7-10 |
 
-## R2 part 7 · Backup, updates and rollback (4)
+## R2 part 7 · Backup, updates and rollback (5)
 
 Backup, the updater and the one-command rollback move onto the engine.
 
@@ -199,7 +199,8 @@ Backup, the updater and the one-command rollback move onto the engine.
 | **F8-01** Build core backup and restore | Feature | Adds core's backup format with provenance, a catalogue, backup service, and readers for the old backup format, including offline restore with gap fill. Dark. | Backups must cover every core store and still restore old archives. Without it, old backups would be unrestorable after migration. | W30 · F4-04, F3-03, F4-11 |
 | **F8-03** Finish core health and diagnostics | Feature | Adds health snapshots, liveness and readiness probes, system routes, a status topic, startup steps, a watchdog ping and a diagnostics bundle. Dark. | Supervisors and operators need accurate health signals. Without them, a hung app looks healthy, or a starting app gets killed. | W30 · F2-10, F2-11, F4-04 |
 | **F8-02** Move the updater into core | Plumbing | Moves the updater into core, parameterised by release source, with an offline fetch and a rollback target in the Makefile. | Core needs a reusable updater. A rollback path to the pre-freeze release is the safety net if the upgrade goes wrong. | W33 · F2-05, F7-05, F7-02, F4-04, F2-10 |
-| **F8-04** Switch to core backup, health and metrics **(critical path)** | Migration | In one PR, wires core backup and the updater, replaces the old health paths with /health everywhere, mounts /metrics from the kernel and removes the interim export. | This is the cutover. Old health URLs are deleted, so any caller left on them would break. First backups written in the new format. | W38 · F7-09, F8-01, F8-02, F8-03 |
+| **F8-03b** Make the diagnostics bundle safe to share | Feature | Replaces the path redactor in the diagnostics bundle with a sanitizer that keeps every directory, file, user and host outside a configured root out of the zip, applies it to every byte that leaves, and removes the temporary refusal and build check that keep the bundle unused until then. Dark. | A diagnostics zip is handed to third parties. The first redactor leaked user names and folder trees in realistic inputs, so the diagnostics routes stay unmounted until this lands. | W37 · F8-03 |
+| **F8-04** Switch to core backup, health and metrics **(critical path)** | Migration | In one PR, wires core backup and the updater, replaces the old health paths with /health everywhere, mounts /metrics from the kernel and removes the interim export. | This is the cutover. Old health URLs are deleted, so any caller left on them would break. First backups written in the new format. | W38 · F7-09, F8-01, F8-02, F8-03, F8-03b |
 
 ## The new UI shell (ships in R3) (5)
 

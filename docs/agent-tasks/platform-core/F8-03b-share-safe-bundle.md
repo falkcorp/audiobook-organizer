@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-03b-share-safe-bundle.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 3c8e5f21-7a94-4d06-b2e1-0f6d9a4c7b85 -->
 <!-- last-edited: 2026-11-15 -->
 
@@ -19,7 +19,8 @@
 **Gate:** plan, then execute autonomously in a worktree with its own PR. Dark: nothing in ABO switches, no route is
 mounted. Until this row merges, `diagnostics.New` and `Exporter.Build` return `diagnostics.ErrRedesignPendingF8_03b`
 outside a test binary, and `archtest.F803bGate` fails the build if core's non-test code imports
-`core/internal/healthhttp` or builds the Exporter.
+`core/internal/healthhttp` or builds the Exporter, if the marker is `false`, or if the refusal's probe is not
+`testing.Testing`.
 
 ## START HERE (do this first, exactly)
 
@@ -68,10 +69,17 @@ wires it to every byte that leaves, and deletes the marker, the runtime refusal 
      F8-03 for a scan that was linear;
    - (f) validator negatives;
    - (g) an end-to-end `Build` over a realistic fake ring, scanning the zip bytes for planted usernames.
-5. **Delete in the same change:** `diagnostics.RedesignPendingF8_03b` (or its derived replacement),
-   `ErrRedesignPendingF8_03b` with `redesignRefusal`, the `Exporter.isTestBinary` field and `testBinary`,
-   `core/archtest/f803b_gate.go` and `f803b_gate_test.go`, and `paths.go`'s grammar machinery with the tests that pin
-   only that grammar. (`archtest.Package.IgnoredGoFiles` is general loader API and stays.)
+5. **Delete in the same change** (removal is this PR's reviewed act, and no check enforces it: the marker has two
+   states, `true` and deleted, and `archtest.F803bGate` fails on `false`, so nothing but deleting it opens the gate):
+   - `diagnostics.RedesignPendingF8_03b` (or its derived replacement);
+   - `ErrRedesignPendingF8_03b` with `redesignRefusal`, the `Exporter.isTestBinary` field and `testBinary`;
+   - the real-binary proof: `core/health/diagnostics/redesign_binary_test.go` and `testdata/probemain/`, and
+     `redesign_refusal_test.go`;
+   - the guard files `core/archtest/f803b_gate.go`, `f803b_gate_test.go`, `f803b_probe.go` and `f803b_probe_test.go`
+     (the gate, the probe pin and `F803bNoLinkerOverride`, which keeps any build path from passing
+     `-ldflags "-X testing.testBinary=1"`);
+   - `paths.go`'s grammar machinery with the tests that pin only that grammar.
+   (`archtest.Package.IgnoredGoFiles` is general loader API and stays.)
 6. **Update docs:**
    - the seams note: S1's status, the residual and the costs;
    - the F8-04 brief: remove the STOP line and keep F8-03b in `Depends on`;
@@ -139,9 +147,9 @@ Record each ruling, or the default taken, in the seams note.
 | `core/health/diagnostics/sanitize.go` (+ `sanitize_test.go`, a fuzz target) | new |
 | `core/health/diagnostics/paths.go` | grammar deleted; `PathRoot`, `newPathRoots` and the root helpers kept (move to `roots.go` if clearer); marker, `ErrRedesignPendingF8_03b`, `redesignRefusal` deleted |
 | `core/health/diagnostics/bundle.go`, `build.go`, `manifest` code | the sanitizer on every byte that leaves; `isTestBinary` and `testBinary` deleted |
-| `core/health/diagnostics/*_test.go` | grammar-only tests deleted; the refusal test (`redesign_refusal_test.go`) deleted; new tests (a) to (g) |
+| `core/health/diagnostics/*_test.go`, `testdata/probemain/` | grammar-only tests deleted; the refusal tests (`redesign_refusal_test.go`, `redesign_binary_test.go`) and `testdata/probemain/` deleted; new tests (a) to (g) |
 | `core/internal/healthhttp/` | `Sanitize` injected into the deps; Detail passes through it |
-| `core/archtest/f803b_gate.go`, `f803b_gate_test.go` | deleted |
+| `core/archtest/f803b_gate.go`, `f803b_gate_test.go`, `f803b_probe.go`, `f803b_probe_test.go` | deleted |
 | `docs/agent-tasks/platform-core/seams.d/F8-03.md`, `F8-04-f8-flip-backup-health-metrics.md` | updated |
 | `changelog.d/`, `TODO.md` | a fragment (no header, no `##` heading); the TODO entry checked off |
 
@@ -150,7 +158,7 @@ Record each ruling, or the default taken, in the seams note.
 ```bash
 grep -n 'RedesignPendingF8_03b' core/health/diagnostics/paths.go            # the marker, const true
 grep -rn 'ErrRedesignPendingF8_03b' core/health/diagnostics/*.go            # the refusal in New and Build
-ls core/archtest/f803b_gate*.go                                              # the gate and its test
+ls core/archtest/f803b_*.go                                                  # the gate, the probe pin and their tests
 grep -n 'F8-03b' docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md   # the STOP line and Depends on
 grep -n 'TODO-F8-03B-SHARE-SAFE-BUNDLE' TODO.md todo.d/*.md                  # the entry (TODO.md once folded in)
 ```
@@ -166,7 +174,7 @@ cd .. && make ci && make -C core ci
 ```
 
 Expected: every leak of the seams note's "Round 8" list is an exact-output test, the fuzz run finds nothing, no test
-reads a clock to assert linearity, and `grep -rn 'RedesignPendingF8_03b\|F803bGate' core docs` finds only history.
+reads a clock to assert linearity, and `grep -rn 'RedesignPendingF8_03b\|F803bGate\|F803bNoLinkerOverride' core docs` finds only history.
 
 ## Out of scope
 
