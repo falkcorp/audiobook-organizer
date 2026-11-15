@@ -1,5 +1,5 @@
 // file: internal/server/reach_pin_behaviour_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0c2b8e-9b1f-4c63-a7e4-2f8d6a1c3b90
 // last-edited: 2026-11-15
 
@@ -393,8 +393,8 @@ func resetTargetEmail(f *credGuardFixture) error {
 	return nil
 }
 
-// TestReachPin_RoutesAreAllInTheRouter keeps the table honest: every route it
-// names exists and the table covers the three the oracle's pin hides.
+// TestReachPin_RoutesAreAllInTheRouter keeps the table in step with the router:
+// every route it names exists and the table covers the three the oracle's pin hides.
 func TestReachPin_RoutesAreAllInTheRouter(t *testing.T) {
 	f := setupCredGuardServer(t)
 	have := map[string]bool{}
