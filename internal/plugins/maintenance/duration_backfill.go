@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.9
+// version: 2.16.10
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-15
 
@@ -819,21 +819,22 @@ func durationPoolOn(each t6g4EachFn, get func(id string) (*database.Book, error)
 
 // durationBackfillNativeParams is durationReextractParams for the native run:
 // the mode comes from the start request, so dryRun, dry_run and apply are
-// accepted only to be refused. SkipAgeDays is a pointer because the unknownRows mode refuses
-// the key when it is present at all (HEAD reads that off the raw params).
+// accepted only to be refused. SkipAgeDays is raw because the unknownRows mode refuses
+// the key when it is present at all, null included (HEAD reads that off the raw
+// params): a pointer would decode null to nil and read as absent.
 type durationBackfillNativeParams struct {
-	Limit               int      `json:"limit"`
-	Workers             int      `json:"workers"`
-	SkipAgeDays         *int     `json:"skipAgeDays,omitempty"`
-	Force               bool     `json:"force"`
-	OnlyMissingDuration bool     `json:"onlyMissingDuration"`
-	BookIDs             []string `json:"bookIds,omitempty"`
-	BookIDsSnake        []string `json:"book_ids,omitempty"`
-	ZeroRowsOnly        bool     `json:"zeroRowsOnly"`
-	ZeroRowsOnlySnake   bool     `json:"zero_rows_only"`
-	Mode                string   `json:"mode,omitempty"`
-	FileIDs             []string `json:"fileIds,omitempty"`
-	FileIDsSnake        []string `json:"file_ids,omitempty"`
+	Limit               int             `json:"limit"`
+	Workers             int             `json:"workers"`
+	SkipAgeDays         json.RawMessage `json:"skipAgeDays,omitempty"`
+	Force               bool            `json:"force"`
+	OnlyMissingDuration bool            `json:"onlyMissingDuration"`
+	BookIDs             []string        `json:"bookIds,omitempty"`
+	BookIDsSnake        []string        `json:"book_ids,omitempty"`
+	ZeroRowsOnly        bool            `json:"zeroRowsOnly"`
+	ZeroRowsOnlySnake   bool            `json:"zero_rows_only"`
+	Mode                string          `json:"mode,omitempty"`
+	FileIDs             []string        `json:"fileIds,omitempty"`
+	FileIDsSnake        []string        `json:"file_ids,omitempty"`
 	t6g4ModeKeys
 }
 
@@ -945,10 +946,14 @@ func (p *Plugin) durationBackfillKind(deps t6g4Deps, sched *tasks.Schedule) task
 			}
 			// validateUnknownRowsParams reads the presence of skipAgeDays off the raw
 			// params, so a typed run presents the key exactly when it was set.
+			// A null value leaves the default, as HEAD's decode of null into an int does,
+			// but the key was still sent.
 			var raw json.RawMessage
-			if in.SkipAgeDays != nil {
-				params.SkipAgeDays = *in.SkipAgeDays
-				raw, _ = json.Marshal(map[string]int{"skipAgeDays": *in.SkipAgeDays})
+			if len(in.SkipAgeDays) > 0 {
+				if err := json.Unmarshal(in.SkipAgeDays, &params.SkipAgeDays); err != nil {
+					return durationBackfillResult{}, fmt.Errorf("%s: invalid params: skipAgeDays: %w", rc.Kind(), err)
+				}
+				raw, _ = json.Marshal(map[string]json.RawMessage{"skipAgeDays": in.SkipAgeDays})
 			}
 			return p.runDurationBackfillCore(rc.Context(), params, raw, durationBackfillEnv{t6g4Base: base, Pool: durationPoolOn(base.Each, base.Store.GetBookByID)})
 		},
