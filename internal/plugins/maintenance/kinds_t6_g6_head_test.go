@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_head_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 8c1d4e72-3b95-4a60-b2f8-6e0a9d5c1347
 // last-edited: 2026-11-14
 
@@ -147,4 +147,13 @@ func TestT6G6Head_OrphanCleanupRefusesDeleteBeforeFetchingStore(t *testing.T) {
 	err := p.orphanBookFilesCleanupDef().Run(context.Background(), json.RawMessage(`{"delete":true}`), &fakeReporter{})
 	require.ErrorIs(t, err, errOrphanDeleteRemoved)
 	require.Zero(t, spy.fetches, "the shell fetched the store before refusing delete")
+}
+
+// The native orphan-cleanup kind refuses the removed delete mode through its
+// own core (a ReadOnly kind never reaches the shell's guard).
+func TestT6G6Native_OrphanCleanupRefusesDelete(t *testing.T) {
+	p := newT6G6Probe(t)
+	defs := (&Plugin{}).t6g6Kinds(p.deps(), nil)
+	_, err := runT6G6Kind(t, t6g6ByKind(t, defs, orphanBookFilesCleanupKind), tasks.ModeLive, &t6g6GateWriter{name: "gotham"}, `{"delete":true}`)
+	require.ErrorIs(t, err, errOrphanDeleteRemoved)
 }
