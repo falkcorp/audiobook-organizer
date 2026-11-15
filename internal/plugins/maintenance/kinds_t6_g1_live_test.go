@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_live_test.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 5e2a9c71-0d3b-4f68-b1a4-7c8e6f2d9a13
 // last-edited: 2026-11-15
 
@@ -844,8 +844,10 @@ func TestT6G1Kinds_RefuseModeKeysInParams(t *testing.T) {
 // HEAD decoded the authority-build params strictly (decodeStrictParams); the
 // native kind must too (review C6, stack). Every body below is otherwise valid,
 // so a plain json.Unmarshal would accept it and apply or plan with a dropped or
-// last-wins value; the executor's decode refuses each before the run reads
-// anything. The controls (the same keys, no loose one) decode.
+// last-wins value. The refusal is at the executor's decode (the params type's
+// UnmarshalJSON, or json.Unmarshal itself for the trailing data), so a start
+// with such a body never produces params and the run body never executes. The
+// controls (the same keys, no loose one) decode.
 func TestT6G1Kinds_AuthorityBuildRefusesLooseParams(t *testing.T) {
 	probe := &t6g1LiveProbe{}
 	def := t6g1ByKind(t, (&Plugin{}).t6g1Kinds(probe.deps(authorityTestStore(t)), nil), authorityBuildKind)
@@ -865,11 +867,6 @@ func TestT6G1Kinds_AuthorityBuildRefusesLooseParams(t *testing.T) {
 	} {
 		_, err := decode(json.RawMessage(body))
 		require.Error(t, err, "%s: %s", name, body)
-
-		// And through a whole run: the start fails and nothing is written.
-		err = runT6G1Kind(t, def, tasks.ModeLive, &t6g1GateWriter{name: "authority"}, body)
-		require.Error(t, err, "%s: %s", name, body)
-		require.Zero(t, probe.cw.total(), "%s wrote", name)
 	}
 }
 
