@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_flip_obligations_unit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8a5c17-92d4-4b60-a1f3-7c6d09e2b845
 // last-edited: 2026-11-15
 
@@ -437,5 +437,20 @@ func TestReachObligations_OneOwnerPredicateFeedsTheModelAndTheBar(t *testing.T) 
 	withRec := reachObligationInput{vd: &rec, res: res, manifest: in.manifest, assured: func(p string) bool { return p == owner }}
 	if got, want := len(reachBarOwnerAllow(withRec)), len(reachBarOwnerAllow(in))-1; got != want {
 		t.Errorf("a recorded owner allow left the OWNER-ALLOW bar at %d, want %d", got, want)
+	}
+}
+
+// A test name the seams state only as the start of a longer name is not stated.
+func TestReachObligations_ALongerNameIsNotTheNameTheSeamsState(t *testing.T) {
+	const text = "cleared by `TestReachRegisteredPath_OwnerSetX` (F4-07-OWNER-SETX)"
+	for _, w := range []string{"TestReachRegisteredPath_OwnerSet", "F4-07-OWNER-SET"} {
+		if reachNamesWord(text, w) {
+			t.Errorf("%s was found inside a longer name", w)
+		}
+	}
+	for _, w := range []string{"TestReachRegisteredPath_OwnerSetX", "F4-07-OWNER-SETX"} {
+		if !reachNamesWord(text, w) {
+			t.Errorf("%s is stated and was not found", w)
+		}
 	}
 }

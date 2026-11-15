@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_flip_obligations_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 0b7d4e92-6a35-4c18-9f40-d82c1a5e7b36
 // last-edited: 2026-11-15
 
@@ -12,6 +12,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -544,6 +545,12 @@ func reachObligationTokens(text string) []string {
 	return reachSorted(set)
 }
 
+// reachNamesWord reports whether text names word as a whole identifier: a longer
+// name that merely begins with it (TestX against TestXY) is not the name.
+func reachNamesWord(text, word string) bool {
+	return regexp.MustCompile(`(^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(word) + `($|[^A-Za-z0-9_-])`).MatchString(text)
+}
+
 // reachObligationProblems is what the table fails on, as text: well-formed rows,
 // the seams' Obligations section naming exactly the rows (each with its test), and
 // every registered discharge naming a known row and a test that is a test.
@@ -562,10 +569,10 @@ func reachObligationProblems(in reachObligationInput, table []reachObligation, s
 		if strings.TrimSpace(o.discharge) == "" || o.dir == "" || o.test == "" || o.bar == nil || o.unit == "" {
 			out = append(out, o.name+" is not a complete row (discharge, dir, test, unit and bar are all required)")
 		}
-		if !strings.Contains(section, o.name) {
+		if !reachNamesWord(section, o.name) {
 			out = append(out, o.name+" is a row and the seams' Obligations section does not state it")
 		}
-		if !strings.Contains(section, o.test) {
+		if !reachNamesWord(section, o.test) {
 			out = append(out, o.name+": the seams' Obligations section does not name its discharge test "+o.test)
 		}
 	}

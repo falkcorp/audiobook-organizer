@@ -1,5 +1,5 @@
 # file: scripts/tests/test_record_r0_reach.py
-# version: 1.11.0
+# version: 1.12.0
 # guid: 2f6c9d84-1b37-4a5e-8d02-7e3a5b9c1f60
 # last-edited: 2026-11-15
 """Tests for scripts/r2corpus/record_r0_reach.py and its committed data (F4-07).
@@ -727,6 +727,25 @@ class RecordPassTest(unittest.TestCase):
         )
         known = {f"{r['method']} {r['path']}" for r in dump["routes"]}
         self.assertEqual(sorted(set(rec.OK_5XX) - known), [])
+
+    def test_the_committed_recording_carries_the_recorders_token_for_every_5xx_cell(self):
+        # The Go side holds the data to its own copy of this table; this holds the
+        # recorder's table to the data, so changing a token in one place only is
+        # caught here and not at the next recording.
+        data = json.loads(
+            (REPO_ROOT / "internal/books/rbacreach/verdicts.json").read_text(encoding="utf-8")
+        )
+        seen = 0
+        for route in data["routes"]:
+            key = f"{route['method']} {route['path']}"
+            if not any(s >= 500 for s in route["status"]):
+                self.assertNotIn("reason", route, key)
+                continue
+            seen += 1
+            token = rec.OK_5XX_REASONS[key][0]
+            want = [token if s >= 500 else "" for s in route["status"]]
+            self.assertEqual(route["reason"], want, key)
+        self.assertGreater(seen, 0)
 
     def test_a_429_is_a_recorder_failure_not_a_deny(self):
         self.rig.fake.fail_status["GET /api/v1/health"] = 429
