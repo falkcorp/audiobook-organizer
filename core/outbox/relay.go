@@ -1,5 +1,5 @@
 // file: core/outbox/relay.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 77b6d1de-9cf2-4c52-8f0b-7e9a5c2b6d11
 // last-edited: 2026-11-15
 
@@ -498,7 +498,10 @@ func (o *Outbox) readingOf(t outboxstore.DeadTotal) deadReading {
 	rd := deadReading{counts: t.ByConsumer}
 	for _, u := range t.Unreadable {
 		cause, _ := rowCause(u.Err)
-		pp, _ := strconv.Atoi(u.Shard) // UnreadShard has no partition: 0
+		pp, perr := strconv.Atoi(u.Shard)
+		if perr != nil {
+			pp = -1 // the shard of letters that do not decode: no partition, and not partition 0's entry
+		}
 		rd.stopped = append(rd.stopped, StoppedStatus{Topic: u.Topic, Consumer: u.Consumer, Partition: pp, Cause: cause})
 	}
 	if t.Unparseable > 0 {
@@ -534,7 +537,12 @@ func (o *Outbox) syncDead(ctx context.Context, audit bool) (deadReading, error) 
 	o.deadMu.Lock()
 	defer o.deadMu.Unlock()
 	if err := o.seedDeadCounts(ctx); err != nil {
-		return deadReading{}, err
+		rd, uerr := o.unbuiltReading(ctx, err)
+		if uerr == nil {
+			o.health.setDead(rd.counts)
+			o.health.report(o.now())
+		}
+		return rd, uerr
 	}
 	totals, err := o.store.DeadTotals(ctx)
 	if err != nil {
@@ -615,7 +623,6 @@ func (o *Outbox) seedDeadCounts(ctx context.Context) error {
 		return err
 	}
 	o.logDeadFixes(rep.Fixes, true)
-	o.deadBad.Store(int64(rep.Unparseable))
 	o.deadSeeded.Store(true)
 	// Dead letters written while the build was failing were never counted for
 	// health (their recount could not read counters that did not exist): publish
@@ -644,13 +651,28 @@ func (o *Outbox) ensureDeadCounts(ctx context.Context) error {
 // first if they are not built.
 func (o *Outbox) readDead(ctx context.Context) (deadReading, error) {
 	if err := o.ensureDeadCounts(ctx); err != nil {
-		return deadReading{}, err
+		return o.unbuiltReading(ctx, err)
 	}
 	totals, err := o.store.DeadTotals(ctx)
 	if err != nil {
 		return deadReading{}, err
 	}
 	return o.readingOf(totals), nil
+}
+
+// unbuiltReading is the reading while the counters cannot be built (buildErr):
+// the letters counted by their keys (one scan), and the stopped subject
+// dead_counters, so Status and the gauges keep working and say why. A canceled
+// context, or a scan that fails too, is an error.
+func (o *Outbox) unbuiltReading(ctx context.Context, buildErr error) (deadReading, error) {
+	if ctx.Err() != nil {
+		return deadReading{}, buildErr
+	}
+	counts, _, err := o.store.DeadCounts(ctx)
+	if err != nil {
+		return deadReading{}, errors.Join(buildErr, err)
+	}
+	return deadReading{counts: counts, stopped: []StoppedStatus{{Topic: deadCountersSubject, Cause: "counters_unbuilt"}}}, nil
 }
 
 // healDeadCounts makes sure the counters are built and that every one decodes,
@@ -721,6 +743,11 @@ func sameCounts(a, b map[string]int) bool {
 // in-memory count to fall back on, because one that raced an operator's retry
 // is how a retried letter used to leave the component Degraded.
 func (r *relay) deadLettered(ctx context.Context) {
+	// Counters not built (the loop's heal is retrying the build): a recount would
+	// run the whole build scan again under the lock for every dead letter.
+	if !r.o.deadSeeded.Load() {
+		return
+	}
 	sctx, cancel := settleCtx(ctx)
 	defer cancel()
 	if _, err := r.o.syncDead(sctx, false); err != nil {

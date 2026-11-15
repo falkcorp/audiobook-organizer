@@ -1,5 +1,5 @@
 // file: core/outbox/health_dead_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b584e6da-2910-4648-aa3d-af25cc239b55
 // last-edited: 2026-11-15
 
@@ -508,4 +508,54 @@ func TestOutbox_ACounterBuildThatKeepsFailingIsNamedAndDoesNotStopDeadLettering(
 	if got := counterSum(t, r); got != 1 {
 		t.Fatalf("the counters add up to %d, want 1", got)
 	}
+}
+
+// While the counters cannot be built, Status and RefreshStatus still work: Status
+// returns the letters counted by their keys and names dead_counters as stopped
+// (counters_unbuilt), where it used to return the build's error. And a dead
+// letter written meanwhile does not re-run the build: the relay's recount is
+// skipped until the loop's own retry succeeds, so the build is attempted a
+// bounded number of times, not once per dead letter.
+func TestOutbox_StatusWorksAndRecountsAreSkippedWhileTheCountersCannotBeBuilt(t *testing.T) {
+	const messages = 40
+	var failing atomic.Bool
+	var attempts atomic.Int32
+	failing.Store(true)
+	hooks := &outbox.TestHooks{SeedDeadCounts: func() error {
+		attempts.Add(1)
+		if failing.Load() {
+			return errors.New("the Batcave disk is full")
+		}
+		return nil
+	}}
+	r := newRig(t, rigOpts{
+		noRelay:     true,
+		cfg:         func(c *outbox.Config) { c.MaxAttempts = 1 },
+		statusEvery: time.Hour,
+		hooks:       hooks,
+		register:    failingHandler(),
+	})
+	plantLetter(t, r, 1000, 0)
+	plantLetter(t, r, 1001, 1)
+	ctx := context.Background()
+	st, err := r.ob.Status(ctx)
+	if err != nil {
+		t.Fatalf("Status = %v while the counters cannot be built, want its normal result", err)
+	}
+	if !stoppedHas(st, outbox.StoppedStatus{Topic: "dead_counters", Cause: "counters_unbuilt"}) || deadOf(st, consumerN) != 2 {
+		t.Fatalf("Status: Stopped = %+v, dead = %d; want dead_counters named and the 2 letters counted", st.Stopped, deadOf(st, consumerN))
+	}
+	r.ob.RefreshStatus(ctx) // must not fail and leave the gauges stale
+
+	r.startRelay()
+	eventually(t, "the relay's first build attempt", func() bool { return attempts.Load() >= 3 }) // Status, RefreshStatus, the loop
+	before := attempts.Load()
+	for i := range messages {
+		r.stage(fmt.Sprintf("wayne-manor-%d", i), Dispatch{Villain: "Joker"})
+	}
+	eventually(t, "every message to be dead-lettered", func() bool { return r.count(outboxstore.DeadRoot()) == 2+messages })
+	if n := attempts.Load() - before; n >= messages/2 {
+		t.Fatalf("%d build attempts for %d dead letters, want far fewer: every dead letter re-ran the build", n, messages)
+	}
+	failing.Store(false)
 }
