@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.15.2
+// version: 1.15.3
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -544,7 +544,11 @@ func (p *Plugin) authorStripMergeNative(deps t6g1Deps, sched func(tasks.Kind) *t
 	c := t6g1Common(authorStripMergeKind, sched)
 	c.Title = "Strip author numbering and merge"
 	c.Help = authorStripMergeHelp
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)))
+	// metadata_cache and indexes: every path of this kind re-authors books through
+	// ModifyBook (directly or inside DeleteAuthor, MergeDeleteAuthor and MoveCredits),
+	// whose shared row (kinds_resources.go) also stamps the metadata cache stale on an
+	// identity change and stages the ident: rows (`indexes`).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-strip-merge")

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.6.5
+// version: 1.6.6
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
 // last-edited: 2026-11-15
 
@@ -225,7 +225,11 @@ func (p *Plugin) mergeSamePathDupesKind(deps t6g5Deps, sched func(tasks.Kind) *t
 		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResUserState)), tasks.Res("books", string(ops.ResOperations)),
 		// sync_identity: MergeBooks mints each loser a sync id and records the redirect
 		// to the survivor (MintOrGetSyncID, RecordSyncMerge, FollowMerge): sync_item: rows.
-		tasks.Res("books", string(ops.ResSyncIdentity)))
+		tasks.Res("books", string(ops.ResSyncIdentity)),
+		// metadata_cache and indexes: MergeBooks re-authors every member through
+		// ModifyBook (the stale stamp on the cache row when the identity changes) and
+		// stages the ident: rows (`indexes`, kinds_resources.go).
+		tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	return tasks.Task(mergeSamePathDupesKind, tasks.TaskSpec[json.RawMessage, mergeSamePathPlan]{
 		Common: t6g5Common(p.mergeSamePathDupesDef(), mergeSamePathDupesKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (mergeSamePathPlan, error) {

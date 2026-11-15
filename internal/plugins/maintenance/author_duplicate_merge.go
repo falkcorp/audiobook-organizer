@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_duplicate_merge.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: eb7daa4e-b1e4-4a15-92c5-b89e53cc6be3
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -198,7 +198,11 @@ func (p *Plugin) authorDuplicateMergeNative(deps t6g1Deps, sched func(tasks.Kind
 	c := t6g1Common(authorDuplicateMergeKind, sched)
 	c.Title = "Merge an operator-confirmed list of duplicate authors"
 	c.Help = authorDuplicateMergeHelp
-	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)))
+	// metadata_cache and indexes: every path of this kind re-authors books through
+	// ModifyBook (directly or inside DeleteAuthor, MergeDeleteAuthor and MoveCredits),
+	// whose shared row (kinds_resources.go) also stamps the metadata cache stale on an
+	// identity change and stages the ident: rows (`indexes`).
+	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.author-duplicate-merge")

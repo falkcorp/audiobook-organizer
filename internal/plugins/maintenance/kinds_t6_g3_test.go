@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
 // last-edited: 2026-11-15
 
@@ -35,36 +35,20 @@ import (
 // --- recording fakes of t6g3Writer and t6g3Store (rule R10) ---
 
 // t6g3MethodResources maps each t6g3Writer write method to the pkg/ops/effects.go
-// resources it can write. It is the one place a method's effect is written down
-// for the Effects tests: a recording writer notes the resources of every method a
-// run calls, and the test checks them against the kind's declared WriteSet, so the
+// resources it can write: this group's view of t6WriterResources
+// (kinds_resources.go), the one method table of every converted group, so a method
+// carries the same row here as in every other group (ModifyBook writes the books
+// row, the metadata-cache stale stamp and the ident: rows; ModifyBookCredits the
+// same plus the author junction; the purge row is built from the carry and the
+// book delete). A recording writer notes the resources of every method a run
+// calls, and the test checks them against the kind's declared WriteSet, so the
 // declaration is judged against what the run did, not against a second copy of
-// itself. A method with no entry fails the test.
-var t6g3MethodResources = map[string][]ops.Resource{
-	"RunAutoPurgeSoftDeleted":  {ops.ResBooks, ops.ResExternalIDs, ops.ResFiles, ops.ResOperations},
-	"ActivityFlushOp":          {ops.ResActivity},
-	"ResolveTombstoneChains":   {ops.ResAuthors},
-	"CleanupTrashedVersions":   {ops.ResBooks, ops.ResFiles},
-	"CleanupOrphanedTempFiles": {ops.ResActivity, ops.ResFiles},
-	"CleanupStaleTempFiles":    {ops.ResFiles},
-	"RemoveOldBackupFiles":     {ops.ResFiles},
-	"CompactActivityEntries":   {ops.ResActivity},
-	"MaintainActivityLog":      {ops.ResActivity},
-	"SetUserPreferenceForUser": {ops.ResUserState},
-	"ModifyBook":               {ops.ResBooks},
-	// The cover-text records, the same resource as t6g3CoverTextResource (cover_ops.go).
-	"SetRaw":                 {ops.ResCoverText},
-	"ModifyBookCredits":      {ops.ResBooks, ops.ResAuthors},
-	"CreateNarrator":         {ops.ResBooks},
-	"DeleteNarrator":         {ops.ResBooks},
-	"CreateOperationChange":  {ops.ResOperations},
-	"InvalidateAuthorsCache": {ops.ResAuthors},
-	// The run's own rows (opv2:row:) and the judged markers are op rows, not an
-	// Effects resource: mapped, with no resource.
-	"ReplaceOpRowsPrefix": nil,
-	"SaveClassLists":      nil,
-	"ClearClassLists":     nil,
-}
+// itself. A method with no entry fails the test. SetRaw is this group's
+// cover-text record (the same resource as t6g3CoverTextResource, cover_ops.go).
+// The run's own rows (opv2:row:) and the judged markers (ReplaceOpRowsPrefix,
+// SaveClassLists, ClearClassLists) are op rows, not an Effects resource: mapped
+// to an empty row.
+var t6g3MethodResources = t6WriterView(map[string]string{"SetRaw": "SetRaw/cover_text"}, reflect.TypeFor[t6g3Writer]())
 
 // Every writer method has an entry, and no entry names a method the writer lacks.
 func TestT6G3_MethodResourcesCoverTheWriterInterface(t *testing.T) {
@@ -616,20 +600,20 @@ type t6g3Want struct {
 }
 
 var t6g3Wants = []t6g3Want{
-	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, []string{string(ops.ResActivity), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResFiles), string(ops.ResOperations)}, ""},
+	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, []string{string(ops.ResActivity), string(ops.ResAuthors), string(ops.ResBooks), string(ops.ResEmbeddings), string(ops.ResExternalIDs), string(ops.ResFieldStates), string(ops.ResFiles), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResOperations), string(ops.ResSyncIdentity), string(ops.ResUserState)}, ""},
 	{"maintenance.tombstone-cleanup", "Resolve author tombstone chains", tasks.ResumeDrop, "books.maintenance.tombstone-cleanup", time.Hour, 0, false, []string{string(ops.ResAuthors)}, ""},
 	{"maintenance.temp-file-cleanup", "Clean orphaned temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResActivity), string(ops.ResFiles)}, ""},
 	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResFiles)}, ""},
 	{"maintenance.cleanup-activity-log", "Clean activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 30 * time.Minute, 20 * time.Minute, false, []string{string(ops.ResActivity)}, ""},
 	{"maintenance.cleanup-old-backups", "Clean old backup files", tasks.ResumeFromZero, "books.maintenance.cleanup-old-backups", time.Hour, time.Hour, false, []string{string(ops.ResFiles)}, ""},
-	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResBooks), string(ops.ResFiles)}, ""},
+	{"maintenance.trash-cleanup", "Purge trashed book versions", tasks.ResumeDrop, "books.maintenance.trash-cleanup", time.Hour, time.Hour, false, []string{string(ops.ResBooks), string(ops.ResFiles), string(ops.ResSettings)}, ""},
 	{"maintenance.clear-apply-rename-failures", "Clear apply rename-failure records", tasks.ResumeDrop, "books.maintenance.clear-apply-rename-failures", 10 * time.Minute, 10 * time.Minute, false, []string{string(ops.ResUserState)}, ""},
 	{"maintenance.combine-journal-check", "Combine journal readability check", tasks.ResumeDrop, "books.maintenance.combine-journal-check", 10 * time.Minute, 0, true, nil, ""},
 	{"maintenance.compact-activity-log", "Compact activity log", tasks.ResumeDrop, "books.maintenance.cleanup-activity-log", 6 * time.Hour, 20 * time.Minute, false, []string{string(ops.ResActivity)}, ""},
-	{"maintenance.folder-cover-backfill", "Use folder cover images", tasks.ResumeDrop, "books.maintenance.folder-cover-backfill", 120 * time.Minute, 0, false, []string{string(ops.ResBooks)}, ""},
+	{"maintenance.folder-cover-backfill", "Use folder cover images", tasks.ResumeDrop, "books.maintenance.folder-cover-backfill", 120 * time.Minute, 0, false, []string{string(ops.ResBooks), string(ops.ResFiles), string(ops.ResIndexes), string(ops.ResMetadataCache)}, ""},
 	{"maintenance.cover-text-read", "Read cover text (vision)", tasks.ResumeDrop, "books.maintenance.cover-text-read", 24 * time.Hour, 0, false, []string{string(ops.ResCoverText)}, ""},
 	{"maintenance.credit-census", "Author/narrator credit census", tasks.ResumeDrop, "books.maintenance.credit-census", 2 * time.Hour, 0, true, nil, ""},
-	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{string(ops.ResAuthors), string(ops.ResBooks), string(ops.ResOperations)}, ""},
+	{"maintenance.credits-backfill", "Author/narrator credits backfill", tasks.ResumeContinue, "books.maintenance.credit-census", 12 * time.Hour, 0, false, []string{string(ops.ResAuthors), string(ops.ResBooks), string(ops.ResIndexes), string(ops.ResMetadataCache), string(ops.ResOperations)}, ""},
 }
 
 func TestT6G3Kinds_MatchHEADDefs(t *testing.T) {

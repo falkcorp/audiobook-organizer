@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.6
+// version: 1.2.8
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-15
 
@@ -626,11 +626,11 @@ var t6g4Expected = []t6g4Want{
 	{kind: dedupeBookFileRowsKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupeBookFileRowsDef() },
 		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFingerprintIndex, ops.ResOperations, ops.ResFiles}, hasDependsOn: true, helpReworded: true},
 	{kind: durationBackfillKind, head: func(p *Plugin) sdk.OperationDef { return p.durationBackfillDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}, helpReworded: true},
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
-		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResFiles}, liveOnly: true},
+		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResFiles}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
-		resume: tasks.ResumeContinue, yieldsNatively: true, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
 		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResFileProvenance}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
@@ -638,13 +638,13 @@ var t6g4Expected = []t6g4Want{
 	{kind: filePathCollisionReportKind, head: func(p *Plugin) sdk.OperationDef { return p.filePathCollisionReportDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: fsRegroupKind, head: func(p *Plugin) sdk.OperationDef { return p.fsRegroupXMLDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations}, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes}, helpReworded: true},
 	{kind: identIndexKind, head: func(p *Plugin) sdk.OperationDef { return p.identIndexRebuildDef() },
 		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBooks, ops.ResIndexes}, helpReworded: true},
 	{kind: integrityCheckKind, head: func(p *Plugin) sdk.OperationDef { return p.integrityCheckDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: introMigrateSingleFileKind, head: func(p *Plugin) sdk.OperationDef { return p.introMigrateSingleFileDef() },
-		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles}, helpReworded: true},
+		resume: tasks.ResumeFromZero, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
 	{kind: introTranscribeKind, head: func(p *Plugin) sdk.OperationDef { return p.introTranscribeDef() },
 		resume: tasks.ResumeFromZero, writes: t6g4IntroTranscribeWrites, noLive: true, helpReworded: true},
 }
@@ -719,9 +719,11 @@ func TestT6G4Kinds_EveryDeclaredResourceIsAPkgOpsConstant(t *testing.T) {
 			}
 		}
 	}
-	for m, r := range t6g4WriterResource {
-		if r != "" && !slices.Contains(vocab, r) {
-			t.Errorf("the spy map sends %s to %q, which is not a pkg/ops Resource constant", m, r)
+	for m, rs := range t6g4WriterResource {
+		for _, r := range rs {
+			if !slices.Contains(vocab, r) {
+				t.Errorf("the spy map sends %s to %q, which is not a pkg/ops Resource constant", m, r)
+			}
 		}
 	}
 	for _, w := range t6g4Expected {
@@ -1028,36 +1030,18 @@ func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
 }
 
 // t6g4WriterResource is the spy's method-to-resource map: for every method of
-// t6g4Writer, the pkg/ops resource a call to it writes. A "" value would mark a
-// store with no pkg/ops constant, which no Effects can name; none is left. The two stats keys are not here at all:
-// they are written outside the gated writer (t6g4StatsSink). The map
-// is the oracle of TestT6G4Kinds_EffectsCoverRecordedWrites, so it is compared
+// t6g4Writer, the pkg/ops resources a call to it writes. It is this group's view
+// of t6WriterResources (kinds_resources.go), the one table of every converted
+// group, so a method that reaches two resources carries both: every book_file
+// method that notifies the aggregate recompute (SetBookFileHash, UpdateBookFile,
+// UpdateBookFiles, CreateBookFile, MoveBookFilesToBookBulk, DeleteBookFilesByIDs)
+// writes the books row too, and ModifyBook carries the metadata_cache stale stamp
+// and the ident: rows (`indexes`). This map held one resource per method until the
+// stack's parity review (P1); its shape could not say so. The two stats keys are
+// not here at all: they are written outside the gated writer (t6g4StatsSink). The
+// map is the oracle of TestT6G4Kinds_EffectsCoverRecordedWrites, so it is compared
 // against the real interface by reflection and against the vocabulary by name.
-var t6g4WriterResource = map[string]ops.Resource{
-	"AppendFileEvent":               ops.ResFileProvenance, // the file_prov: ledger
-	"CarryOverFingerprintWindows":   ops.ResFingerprintIndex,
-	"ClearBookFileIntro":            ops.ResBookFiles,
-	"ClearIntroTimeouts":            ops.ResBookFiles,
-	"CreateBookFile":                ops.ResBookFiles,
-	"CreateOperationChange":         ops.ResOperations,
-	"DedupTriageApply":              ops.ResEmbeddings,
-	"DeleteBookFilesByIDs":          ops.ResBookFiles,
-	"MarkOperationChangesReverted":  ops.ResOperations,
-	"ModifyBook":                    ops.ResBooks,
-	"ModifyBookFileDeferAggregates": ops.ResBookFiles,
-	"MoveBookFilesToBookBulk":       ops.ResBookFiles,
-	"OpenWhisperJournal":            ops.ResAIJournal, // the whisper result journal (aijournal: keys)
-	"ReassignExternalID":            ops.ResExternalIDs,
-	"RebuildIdentIndex":             ops.ResIndexes,
-	"RecomputeBookAggregates":       ops.ResBooks,
-	"RecordIntroTimeout":            ops.ResBookFiles,
-	"SetBookFileHash":               ops.ResBookFiles,
-	"SetBookFileIntro":              ops.ResBookFiles,
-	"SetFileProvExportCursor":       ops.ResFileProvenance, // the export cursor belongs to the provenance ledger
-	"SubmitAuthorDedupJob":          ops.ResReviewItems,
-	"UpdateBookFile":                ops.ResBookFiles,
-	"UpdateBookFiles":               ops.ResBookFiles,
-}
+var t6g4WriterResource = t6WriterView(nil, reflect.TypeFor[t6g4Writer]())
 
 // t6g4WriterCalls tells a write from a store read in the shared call record.
 func t6g4WriterCalls(name string) bool { _, ok := t6g4WriterResource[name]; return ok }
@@ -1065,7 +1049,7 @@ func t6g4WriterCalls(name string) bool { _, ok := t6g4WriterResource[name]; retu
 // TestT6G4Kinds_WriterSpyMapCoversInterface: every method of t6g4Writer has a
 // spy mapping, so a writer method added without one fails here rather than
 // slipping past the recorded-writes check; every mapped name is a real method
-// and a pkg/ops resource (or the explicit "" for no constant).
+// and a pkg/ops resource.
 func TestT6G4Kinds_WriterSpyMapCoversInterface(t *testing.T) {
 	iface := reflect.TypeOf((*t6g4Writer)(nil)).Elem()
 	seen := map[string]bool{}
@@ -1076,12 +1060,17 @@ func TestT6G4Kinds_WriterSpyMapCoversInterface(t *testing.T) {
 			t.Errorf("t6g4Writer.%s has no entry in t6g4WriterResource", name)
 		}
 	}
-	for name, res := range t6g4WriterResource {
+	for name, rs := range t6g4WriterResource {
 		if !seen[name] {
 			t.Errorf("t6g4WriterResource names %s, which is not a t6g4Writer method", name)
 		}
-		if res != "" && !slices.Contains(t6g4PkgOpsResources(t), res) {
-			t.Errorf("%s maps to %q, not a pkg/ops resource", name, res)
+		if rs == nil {
+			t.Errorf("%s has a nil row: an empty row is an explicit empty list", name)
+		}
+		for _, res := range rs {
+			if !slices.Contains(t6g4PkgOpsResources(t), res) {
+				t.Errorf("%s maps to %q, not a pkg/ops resource", name, res)
+			}
 		}
 	}
 }
@@ -1136,16 +1125,16 @@ func TestT6G4FSRegroup_LiveApplyNeedsScanStandDown(t *testing.T) {
 // shared call record also holds those); it does NOT fail here. That a writer
 // method has a map entry is pinned by TestT6G4Kinds_WriterSpyMapCoversInterface,
 // which compares the map with t6g4Writer's methods by reflection. A method with
-// an entry "" would be a write that names no resource.
+// an empty row is a method that writes nothing itself.
 func t6g4RecordedResources(t *testing.T, calls []string) []string {
 	t.Helper()
 	set := map[string]bool{}
 	for _, c := range calls {
-		res, ok := t6g4WriterResource[c]
+		rs, ok := t6g4WriterResource[c]
 		if !ok {
 			continue // a store read, not a writer call
 		}
-		if res != "" {
+		for _, res := range rs {
 			set[string(res)] = true
 		}
 	}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.10.5
+// version: 1.10.6
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
 // last-edited: 2026-11-15
 
@@ -108,10 +108,14 @@ func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks
 		Common: tasks.Common{
 			Title: "Extract WAV clips for transcription cache",
 			Help:  "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes.",
-			// book_files: the file hash it persists. files: the clips it cuts and
-			// the content-stable hardlinks it makes under the library root (bytes
-			// on disk, written outside the writer).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResFiles)...),
+			// book_files: the file hash it persists. books: SetBookFileHash notifies the
+			// aggregate recompute when a hash makes or breaks a pairing of two rows
+			// (writeHashesOver -> RecomputeBookAggregates -> ModifyBook), which commits
+			// the book row's Duration (the shared SetBookFileHash row, kinds_resources.go;
+			// stack parity review P1). files: the clips it cuts and the content-stable
+			// hardlinks it makes under the library root (bytes on disk, written outside
+			// the writer).
+			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResFiles)...),
 			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
 			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 			// internal/arch: skip_existing (the default) skips a clip already in the cache), so the 05-tasks mapping is

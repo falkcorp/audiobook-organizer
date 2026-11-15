@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.10.3
+// version: 1.10.4
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-11-15
 
@@ -176,9 +176,12 @@ func (p *Plugin) autoMatchTranscribedNative(deps t6g1Deps, sched func(tasks.Kind
 	// record (operations, recordApplyHistory), the fetched-metadata cache
 	// (metadata_cache) and the per-field state snapshot (field_states) and the
 	// duplicate flag
-	// of a shared source hash (books, checkMetadataSourceHashDuplicates).
+	// of a shared source hash (books, checkMetadataSourceHashDuplicates). The book
+	// writes also stage the ident: rows (indexes: the shared ModifyBook row,
+	// kinds_resources.go).
 	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResBookFiles)),
-		tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResFieldStates)))
+		tasks.Res("books", string(ops.ResOperations)), tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResFieldStates)),
+		tasks.Res("books", string(ops.ResIndexes)))
 	// The run checkpoints the last book visited and restores it (rc.Restore).
 	c.Resume = tasks.ResumeContinue
 	c.Priority = tasks.PriorityLow

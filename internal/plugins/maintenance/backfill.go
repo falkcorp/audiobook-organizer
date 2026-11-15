@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/backfill.go
-// version: 1.10.5
+// version: 1.10.6
 // guid: f2a3b4c5-d6e7-8901-5678-123456789012
 // last-edited: 2026-11-15
 
@@ -514,10 +514,15 @@ func t6g2MalformedM4BRemuxMeta() t6g2Meta {
 
 func t6g2MalformedM4BTranscodeMeta() t6g2Meta {
 	return t6g2Meta{
-		Kind:            t6g2KindMalformedM4BTranscode,
-		Title:           t6g2MalformedM4BTranscodeTitle,
-		Help:            t6g2MalformedM4BTranscodeHelp,
-		Effects:         tasks.Writes(t6g2Res(ops.ResFiles, ops.ResBookFiles, ops.ResSettings, ops.ResBooks)...),
+		Kind:  t6g2KindMalformedM4BTranscode,
+		Title: t6g2MalformedM4BTranscodeTitle,
+		Help:  t6g2MalformedM4BTranscodeHelp,
+		// The transcode's own row plus the quarantine step it can run
+		// (quarantine_after): QuarantineBook calls ModifyBook, whose row also writes
+		// metadata_cache and indexes, so the declaration is the union of the two shared
+		// rows of t6WriterResources (kinds_resources.go), not a retyped list.
+		Effects: tasks.Writes(t6g2Res(t6RowsUnion(t6WriterResources["TranscodeMalformedM4BFiles"],
+			t6WriterResources["QuarantineKnownBadFiles"])...)...),
 		Resume:          tasks.ResumeAsk,
 		Priority:        tasks.PriorityLow,
 		Timeout:         6 * time.Hour,

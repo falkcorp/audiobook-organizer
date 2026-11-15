@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_storediff_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 8e2f6a1c-47b3-4d09-9c5e-b13a7d60f4e2
 // last-edited: 2026-11-15
 
@@ -36,7 +36,10 @@ import (
 
 // t6g5KeyFamilyResource maps a key-family prefix to the pkg/ops resource that
 // owns it, by the longest matching prefix. It follows the vocabulary in
-// t6g5WriterResources: a derived index belongs to the row it indexes; narrator,
+// t6g5WriterResources: the ident: rows (the identification driver's derived
+// state, the set RebuildIdentIndex rebuilds) are `indexes`, as everywhere in the
+// stack (kinds_resources.go), so a method that stages them is stamped `indexes`;
+// every other derived secondary key belongs to the row it indexes; narrator,
 // book-narrator and chapter rows are `books`; preferences and playlists are
 // `user_state`; the file provenance ledger (every file_prov prefix: events, hash
 // index, orphans, sequence) is `file_provenance`, never `book_files`; the sync-id
@@ -56,7 +59,7 @@ var t6g5KeyFamilyResource = map[string]ops.Resource{
 	"book_tag:":             ops.ResBooks,
 	"tag_idx:":              ops.ResBooks,
 	"alt_titles:":           ops.ResBooks,
-	"ident:":                ops.ResBooks,
+	"ident:":                ops.ResIndexes,
 	"path_history:":         ops.ResBooks,
 	"tombstone:":            ops.ResBooks,
 	"chapters:":             ops.ResBooks,

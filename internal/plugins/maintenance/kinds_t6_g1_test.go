@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g1_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 8b0c5c2e-6a54-4c27-9d0e-3f1a7d52e0b4
 // last-edited: 2026-11-15
 
@@ -206,35 +206,37 @@ func t6g1WriteSet(c tasks.Common) []string {
 }
 
 // t6g1WriterResources maps every method of every group 1 writer interface to
-// the resources that write touches. It is keyed on the interfaces' methods, not
-// on the Effects under test: TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod
-// reflects over t6g1Writers and fails for a method with no row, and the spies
-// record the resources of each write a live run actually makes. A live run then
-// asserts the recorded resources are within the kind's declared WriteSet, so a
-// wrong or missing resource in an Effects declaration fails a test instead of
-// being copied into a second hand-typed table.
+// the resources that write touches, as strings: this group's view of
+// t6WriterResources (kinds_resources.go), the one method table of every converted
+// group. It is keyed on the interfaces' methods, not on the Effects under test:
+// TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod reflects over t6g1Writers
+// and fails for a method with no row, and the spies record the resources of each
+// write a live run actually makes. A live run then asserts the recorded resources
+// are within the kind's declared WriteSet, so a wrong or missing resource in an
+// Effects declaration fails a test instead of being copied into a second
+// hand-typed table. SetRaw is this group's authority-list write.
 //
-// DeleteAuthor and MergeDeleteAuthor include books: both run the store's
-// deleteAuthor, whose repointPrimaryScalarsBeforeDelete calls ModifyBook on
-// every book whose primary author is the one deleted (author_primary_repoint.go).
-var t6g1WriterResources = map[string][]string{
-	"AIJournalPruner":              {string(ops.ResAIJournal)},
-	"BackfillFilterIndexWindow":    {string(ops.ResActivity)},
-	"MarkFilterIndexBackfillDone":  {string(ops.ResActivity)},
-	"ClearFilterIndexBackfillDone": {string(ops.ResActivity)},
-	"ReconcileFilterIndexCoverage": {string(ops.ResActivity)},
-	"CreateAuthor":                 {string(ops.ResAuthors)},
-	"DeleteAuthor":                 {string(ops.ResBooks), string(ops.ResAuthors)},
-	"ModifyBookAuthors":            {string(ops.ResAuthors)},
-	"SetBookAuthors":               {string(ops.ResAuthors)},
-	"ModifyBook":                   {string(ops.ResBooks)},
-	"RecordOperationChange":        {string(ops.ResOperations)},
-	"JournalStep":                  {string(ops.ResOperations)},
-	"MoveCredits":                  {string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResOperations)},
-	"MergeDeleteAuthor":            {string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResOperations)},
-	"RenameAuthorJournaled":        {string(ops.ResAuthors), string(ops.ResOperations)},
-	"SetRaw":                       {string(ops.ResAuthorityLists)},
-	"DeleteRawBatch":               {string(ops.ResAuthorityLists)},
+// DeleteAuthor and MergeDeleteAuthor include books and what ModifyBook writes with
+// it: both run the store's deleteAuthor, whose repointPrimaryScalarsBeforeDelete
+// calls ModifyBook on every book whose primary author is the one deleted
+// (author_primary_repoint.go); their shared rows are built from ModifyBook's.
+var t6g1WriterResources = t6g1WriterView()
+
+func t6g1WriterView() map[string][]string {
+	var types []reflect.Type
+	wt := reflect.TypeFor[t6g1Writers]()
+	for i := range wt.NumField() {
+		types = append(types, wt.Field(i).Type)
+	}
+	out := map[string][]string{}
+	for method, row := range t6WriterView(map[string]string{"SetRaw": "SetRaw/authority_lists"}, types...) {
+		strs := make([]string, len(row))
+		for i, r := range row {
+			strs[i] = string(r)
+		}
+		out[method] = strs
+	}
+	return out
 }
 
 // t6g1ResourceLog records the resources of the writes a spy saw, and the
@@ -485,12 +487,12 @@ var t6g1OutsideWriterSeam = map[tasks.Kind]struct {
 }{
 	resolveProductionAuthorsKind: {
 		res: []string{string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResSeries), string(ops.ResBookFiles),
-			string(ops.ResOperations), string(ops.ResMetadataCache), string(ops.ResFieldStates)},
+			string(ops.ResOperations), string(ops.ResMetadataCache), string(ops.ResFieldStates), string(ops.ResIndexes)},
 		why: "every write is metafetch's apply behind the fetcher, built over the run's writer; no writer group is involved",
 	},
 	autoMatchTranscribedKind: {
 		res: []string{string(ops.ResBooks), string(ops.ResAuthors), string(ops.ResBookFiles),
-			string(ops.ResOperations), string(ops.ResMetadataCache), string(ops.ResFieldStates)},
+			string(ops.ResOperations), string(ops.ResMetadataCache), string(ops.ResFieldStates), string(ops.ResIndexes)},
 		why: "every write is metafetch's apply behind the runners, built over the run's writer; no writer group is involved",
 	},
 }
