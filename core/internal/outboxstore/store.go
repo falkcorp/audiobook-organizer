@@ -1,5 +1,5 @@
 // file: core/internal/outboxstore/store.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 754dc428-ceb7-4876-824c-cde4fb15a4f3
 // last-edited: 2026-11-15
 
@@ -487,10 +487,10 @@ func (s *Store) StageDead(ctx context.Context, b *storage.Batch, consumer, topic
 	if !created {
 		return nil
 	}
-	return s.bumpDeadCount(ctx, b, consumer, topic, shardOf(d.Part), 1)
+	return s.bumpDeadCount(ctx, b, consumer, topic, d.Part, 1)
 }
 
-// bumpDeadCount adds delta to the counter of (consumer, topic, shard) through
+// bumpDeadCount adds delta to the counter of (consumer, topic, partition part) through
 // b: the counter is read with GetForUpdate (a repeated read in one batch sees
 // the batch's own earlier bump and keeps the first read's precondition), so two
 // batches that bump one counter from the same value cannot both commit. Every
@@ -500,8 +500,8 @@ func (s *Store) StageDead(ctx context.Context, b *storage.Batch, consumer, topic
 // writes a zero row instead of deleting a key that may already be absent: the
 // row is a write RepairDeadCounts's precondition can see, and RepairDeadCounts
 // treats any zero row as a counter to correct.
-func (s *Store) bumpDeadCount(ctx context.Context, b *storage.Batch, consumer, topic, shard string, delta int) error {
-	key := deadCountKey(consumer, topic, shard)
+func (s *Store) bumpDeadCount(ctx context.Context, b *storage.Batch, consumer, topic string, part, delta int) error {
+	key := DeadCountKey(consumer, topic, part)
 	var cur DeadCount
 	raw, err := b.GetForUpdate(ctx, s.ks, key)
 	switch {
@@ -511,7 +511,7 @@ func (s *Store) bumpDeadCount(ctx context.Context, b *storage.Batch, consumer, t
 	default:
 		var derr error
 		if cur, derr = deadCountCodec().Decode(raw); derr != nil {
-			return rowErr(fmt.Sprintf("dead count %s/%s/%s", consumer, topic, shard), derr)
+			return rowErr(fmt.Sprintf("dead count %s/%s/%s", consumer, topic, shardOf(part)), derr)
 		}
 	}
 	next := DeadCount{N: cur.N + delta, Rev: cur.Rev + 1}
@@ -886,7 +886,11 @@ func (s *Store) RepairDeadCounts(ctx context.Context) (DeadCountRepair, error) {
 			s.beforeRepairCommit()
 		}
 		b := s.OpenBatch()
-		defer b.Close()
+		defer func() {
+			if cerr := b.Close(); cerr != nil && err == nil {
+				err = fmt.Errorf("outboxstore: close repair batch: %w", cerr)
+			}
+		}()
 		b.Bind(s.ks)
 		w := b.In(s.ks)
 		for _, fix := range fixes {
@@ -912,8 +916,15 @@ func (s *Store) RepairDeadCounts(ctx context.Context) (DeadCountRepair, error) {
 			}
 			// Rev stays monotone across a repair: the bytes after it never equal
 			// bytes any earlier reader holds. An unreadable row restarts at 1.
-			prev, _ := deadCountCodec().Decode(now)
-			enc, eerr := deadCountCodec().Encode(DeadCount{N: fix.Want, Rev: prev.Rev + 1})
+			// A row that does not decode is the Unreadable fix recorded above (named
+			// by the caller); it restarts at 1.
+			var rev uint64
+			if prev, derr := deadCountCodec().Decode(now); derr == nil {
+				rev = prev.Rev
+			} else if !fix.Unreadable && !fix.Absent {
+				return rowErr(fmt.Sprintf("dead count %s/%s/%s", fix.Consumer, fix.Topic, fix.Shard), derr)
+			}
+			enc, eerr := deadCountCodec().Encode(DeadCount{N: fix.Want, Rev: rev + 1})
 			if eerr != nil {
 				return eerr
 			}
@@ -995,5 +1006,5 @@ func (s *Store) StageDeleteDead(ctx context.Context, b *storage.Batch, consumer,
 	if err := b.In(s.ks).Delete(key); err != nil {
 		return false, err
 	}
-	return true, s.bumpDeadCount(ctx, b, consumer, topic, shardOf(d.Part), -1)
+	return true, s.bumpDeadCount(ctx, b, consumer, topic, d.Part, -1)
 }
