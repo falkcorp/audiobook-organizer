@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: b2d6f0a8-4c17-4e93-9a5b-7d1e3c8f2a60
 // last-edited: 2026-11-15
 
@@ -357,7 +357,7 @@ func f803bTagWord() *regexp.Regexp {
 }
 
 func f803bMakeAssign() *regexp.Regexp {
-	return regexp.MustCompile(`^(?:export\s+|override\s+)*([A-Za-z_][A-Za-z0-9_.]*)\s*(\?=|::=|:=|\+=|=)\s*(.*?)\s*$`)
+	return regexp.MustCompile(`^(?:export\s+)*([A-Za-z_][A-Za-z0-9_.]*)\s*(\?=|::=|:=|\+=|=)\s*(.*?)\s*$`)
 }
 
 func f803bMakeRef() *regexp.Regexp {
@@ -370,52 +370,128 @@ func f803bMakeRef() *regexp.Regexp {
 // a tab), with a trailing ` # comment` removed. A value is kept as written;
 // f803bExpand resolves the references in it.
 func f803bMakeVars(body string) (map[string]string, error) {
-	vars := map[string]string{}
+	env := newF803bMakeEnv()
 	// A nil read function reads no file: an include line is skipped, as if the
 	// included file did not exist.
-	err := f803bMakeVarsInto(vars, body, nil, 0)
-	return vars, err
+	err := f803bMakeVarsInto(env, "(body)", body, nil, 0)
+	return env.vars, err
+}
+
+// f803bMakeEnv is the variable state of one make run: each variable's text and
+// whether it is a simple variable (assigned with := or ::=, expanded when
+// assigned) or a recursive one (= and ?=, expanded when used).
+type f803bMakeEnv struct {
+	vars   map[string]string
+	simple map[string]bool
+}
+
+func newF803bMakeEnv() *f803bMakeEnv {
+	return &f803bMakeEnv{vars: map[string]string{}, simple: map[string]bool{}}
 }
 
 func f803bMakeInclude() *regexp.Regexp {
 	return regexp.MustCompile(`^(?:-include|sinclude|include)\s+(.*?)\s*$`)
 }
 
-// f803bMakeVarsInto applies the assignments of body to vars, in order, and reads
-// an included file at the line that includes it. This is the make rule
-// implemented here: make reads a makefile top to bottom; an `include`,
+// f803bMakeRefused matches the directives the make model does not read and so
+// refuses: conditionals (both branches would be applied), define/endef (a
+// multi-line variable), undefine, and override (which makes a later plain
+// assignment a no-op in make).
+func f803bMakeRefused() *regexp.Regexp {
+	return regexp.MustCompile(`^(?:export\s+)*(ifeq|ifneq|ifdef|ifndef|else|endif|define|endef|undefine|override)(?:\s|\(|$)`)
+}
+
+// f803bMakeTargetVar matches a target-specific variable assignment
+// (`target: VAR := x`), which applies to one target's recipe only; the model has
+// no per-target scope, so it refuses the line.
+func f803bMakeTargetVar() *regexp.Regexp {
+	return regexp.MustCompile(`^[^\s#:=][^:=]*:\s*(?:(?:export|override|private)\s+)*[A-Za-z_][A-Za-z0-9_.]*\s*(?:\?=|::=|:=|\+=|=)`)
+}
+
+// f803bMakeLines joins backslash-continued lines the way make does (the break
+// and the next line's leading blanks become one space) and returns each logical
+// line with the number of its first physical line.
+func f803bMakeLines(body string) (lines []string, nums []int) {
+	phys := strings.Split(body, "\n")
+	for i := 0; i < len(phys); i++ {
+		start, line := i+1, phys[i]
+		for strings.HasSuffix(line, "\\") && i+1 < len(phys) {
+			i++
+			line = strings.TrimRight(strings.TrimSuffix(line, "\\"), " \t") + " " + strings.TrimLeft(phys[i], " \t")
+		}
+		lines = append(lines, line)
+		nums = append(nums, start)
+	}
+	return lines, nums
+}
+
+// f803bMakeVarsInto applies the assignments of body to env, in order, and reads
+// an included file at the line that includes it. The model, and what it refuses:
+//
+// Modelled (make's own rules): make reads a makefile top to bottom. An `include`,
 // `-include` or `sinclude` line reads the named file in place (a file that does
-// not exist is skipped, which is what `-include Makefile.local` relies on); every
+// not exist is skipped, which is what `-include Makefile.local` relies on). Every
 // assignment, in either file, happens when it is read, so a later assignment
-// wins, `?=` yields to any earlier assignment and `+=` appends. A recipe is
-// expanded after the whole makefile is read, so it sees the final values
-// whichever file set them: that final state is what ends up in vars. read returns
-// the body of an included file, by the name written in the include line, and
-// whether it exists. Include names are expanded with the variables set so far; a
-// name that cannot be expanded is an error, since the file it names might exist.
-func f803bMakeVarsInto(vars map[string]string, body string, read func(name string) (string, bool), depth int) error {
-	assign, include := f803bMakeAssign(), f803bMakeInclude()
-	for line := range strings.SplitSeq(body, "\n") {
+// wins, `?=` yields to any earlier assignment and `+=` appends. `=` and `?=` make
+// a recursive variable, expanded when a recipe uses it, so it sees the final
+// values; `:=` and `::=` make a simple variable, expanded at its line with the
+// values set so far, and `+=` to a simple variable expands its text at its line
+// too. A name `:=` cannot expand at its line (a make function, or a variable not
+// set yet, which make would read as empty) is not guessed: the variable is
+// poisoned, and any -tags list that uses it fails the derivation naming the
+// file and line. A backslash-continued line is one line. The result in env is the
+// state after the whole makefile, which is what a recipe sees.
+//
+// Refused with an error naming file:line and the construct (the model has no
+// reading of them, so they cannot be proved unrelated to a -tags list):
+// ifeq/ifneq/ifdef/ifndef/else/endif, define/endef, undefine, override, a
+// target-specific assignment, an include name with a glob character, and an
+// include of a file that exists but that the file walker skipped, or lies outside
+// the repo.
+//
+// read returns the body of an included file by the name written in the include
+// line, whether it exists, and an error when it exists but was not read. Include
+// names are expanded with the variables set so far; a name that cannot be
+// expanded is an error, since the file it names might exist. label names body in
+// messages.
+func f803bMakeVarsInto(env *f803bMakeEnv, label, body string, read func(name string) (string, bool, error), depth int) error {
+	assign, include, refused, targetVar := f803bMakeAssign(), f803bMakeInclude(), f803bMakeRefused(), f803bMakeTargetVar()
+	lines, nums := f803bMakeLines(body)
+	for i, line := range lines {
+		where := fmt.Sprintf("%s:%d", label, nums[i])
 		if strings.HasPrefix(line, "\t") || strings.HasPrefix(strings.TrimSpace(line), "#") {
 			continue
+		}
+		line = strings.TrimLeft(line, " ")
+		if m := refused.FindStringSubmatch(line); m != nil {
+			return fmt.Errorf("%s: %q is not modelled (the derivation cannot tell whether it affects a -tags list); write the tag list without it", where, m[1])
+		}
+		if targetVar.MatchString(line) {
+			return fmt.Errorf("%s: a target-specific variable assignment is not modelled: %s", where, strings.TrimSpace(line))
 		}
 		if m := include.FindStringSubmatch(line); m != nil {
 			if read == nil {
 				continue
 			}
-			names, bad := f803bExpand(m[1], vars)
+			names, bad := f803bExpand(m[1], env.vars)
 			if len(bad) > 0 {
-				return fmt.Errorf("include %s: cannot resolve %s", m[1], strings.Join(bad, ", "))
+				return fmt.Errorf("%s: include %s: cannot resolve %s", where, m[1], strings.Join(bad, ", "))
+			}
+			if strings.ContainsAny(names, "*?[") {
+				return fmt.Errorf("%s: include %s: a glob include is not modelled", where, names)
 			}
 			for name := range strings.FieldsSeq(names) {
-				inc, ok := read(name)
+				inc, ok, err := read(name)
+				if err != nil {
+					return fmt.Errorf("%s: include %s: %v", where, name, err)
+				}
 				if !ok {
 					continue
 				}
 				if depth >= 8 {
-					return fmt.Errorf("include %s: nested deeper than 8 levels", name)
+					return fmt.Errorf("%s: include %s: nested deeper than 8 levels", where, name)
 				}
-				if err := f803bMakeVarsInto(vars, inc, read, depth+1); err != nil {
+				if err := f803bMakeVarsInto(env, name, inc, read, depth+1); err != nil {
 					return err
 				}
 			}
@@ -429,15 +505,33 @@ func f803bMakeVarsInto(vars map[string]string, body string, read func(name strin
 		if k := strings.Index(val, " #"); k >= 0 {
 			val = strings.TrimSpace(val[:k])
 		}
+		// immediate is val expanded now, or a poison reference that no later
+		// expansion can resolve (its name holds spaces and a colon).
+		immediate := func() string {
+			out, bad := f803bExpand(val, env.vars)
+			if len(bad) > 0 {
+				return fmt.Sprintf("$(F803b immediate expansion at %s: %s cannot be resolved there)", where, strings.Join(bad, ", "))
+			}
+			return out
+		}
 		switch op {
 		case "?=":
-			if _, set := vars[name]; !set {
-				vars[name] = val
+			if _, set := env.vars[name]; !set {
+				env.vars[name] = val
+				env.simple[name] = false
 			}
 		case "+=":
-			vars[name] = strings.TrimSpace(vars[name] + " " + val)
+			if env.simple[name] {
+				env.vars[name] = strings.TrimSpace(env.vars[name] + " " + immediate())
+			} else {
+				env.vars[name] = strings.TrimSpace(env.vars[name] + " " + val)
+			}
+		case ":=", "::=":
+			env.vars[name] = immediate()
+			env.simple[name] = true
 		default:
-			vars[name] = val
+			env.vars[name] = val
+			env.simple[name] = false
 		}
 	}
 	return nil
@@ -445,68 +539,154 @@ func f803bMakeVarsInto(vars map[string]string, body string, read func(name strin
 
 // f803bGoreleaserSets reads the release build's tag sets from a .goreleaser.yml
 // body: one TagSet per (build, goos), carrying the build's `tags:` list and its
-// `env: CGO_ENABLED=` value. goreleaser builds every goos listed, so the release
-// binary of each is a shipped set. It is an error (named in the returned list, one
-// "name: why" per problem) when a build's tags, goos or env hold a template
-// ({{ ... }}), when a build names no goos (goreleaser's default list is not read
-// here), and when a build's `flags:` name -tags (that spelling would add tags this
-// reading does not merge).
+// `env: CGO_ENABLED=` value, plus one per `overrides:` entry (its own tags, env
+// and goos) and one per GOFLAGS=-tags=... in a build's, an override's or the
+// top-level `env:` (a GOFLAGS tag list is a build the release can make when no
+// -tags argument replaces it, so it is built as its own set). goreleaser builds
+// every goos listed, so the release binary of each is a shipped set. It returns a
+// description ("where: why", one per problem) for everything it does not model
+// and so refuses: a template ({{ ... }}) in tags, goos, env, flags or an override,
+// a build with no goos (goreleaser's default list is not read), `flags:` that name
+// -tags, an env entry other than GOFLAGS that names -tags, CGO_ENABLED anywhere
+// but a build's or override's own `env:` (the top-level one), CGO_ENABLED that is
+// not 0 or 1, a tag that is not a build tag identifier, and a top-level
+// `includes:` (a file this reading does not follow).
 func f803bGoreleaserSets(rel, body string) (sets []TagSet, bad []string) {
+	type override struct {
+		Goos   string   `yaml:"goos"`
+		Goarch string   `yaml:"goarch"`
+		Env    []string `yaml:"env"`
+		Tags   []string `yaml:"tags"`
+		Flags  []string `yaml:"flags"`
+	}
 	var cfg struct {
-		Builds []struct {
-			ID    string   `yaml:"id"`
-			Env   []string `yaml:"env"`
-			Goos  []string `yaml:"goos"`
-			Tags  []string `yaml:"tags"`
-			Flags []string `yaml:"flags"`
+		Includes any      `yaml:"includes"`
+		Env      []string `yaml:"env"`
+		Builds   []struct {
+			ID        string     `yaml:"id"`
+			Env       []string   `yaml:"env"`
+			Goos      []string   `yaml:"goos"`
+			Tags      []string   `yaml:"tags"`
+			Flags     []string   `yaml:"flags"`
+			Overrides []override `yaml:"overrides"`
 		} `yaml:"builds"`
 	}
 	if err := yaml.Unmarshal([]byte(body), &cfg); err != nil {
 		return nil, []string{rel + ": " + err.Error()}
 	}
-	for i, b := range cfg.Builds {
-		name := b.ID
-		if name == "" {
-			name = strconv.Itoa(i)
+	if cfg.Includes != nil {
+		bad = append(bad, rel+": includes: names files this reading does not follow")
+	}
+	// envTags reads an env list: its CGO_ENABLED value, the tag lists a GOFLAGS
+	// entry names, and the problems.
+	envTags := func(env []string, allowCGO bool) (cgo string, goflags [][]string, problems []string) {
+		for _, e := range env {
+			switch {
+			case strings.HasPrefix(e, "CGO_ENABLED="):
+				if !allowCGO {
+					problems = append(problems, fmt.Sprintf("%q: a top-level CGO_ENABLED is not modelled (set it in the build's env)", e))
+					continue
+				}
+				cgo = strings.TrimPrefix(e, "CGO_ENABLED=")
+				if cgo != "0" && cgo != "1" {
+					problems = append(problems, fmt.Sprintf("CGO_ENABLED=%q is not 0 or 1", cgo))
+				}
+			case strings.HasPrefix(e, "GOFLAGS=") && strings.Contains(e, "-tags"):
+				lists, unres := f803bTagsIn(strings.TrimPrefix(e, "GOFLAGS="), nil)
+				goflags = append(goflags, lists...)
+				for _, u := range unres {
+					problems = append(problems, "GOFLAGS: "+u)
+				}
+			case strings.Contains(e, "-tags"):
+				problems = append(problems, fmt.Sprintf("env %q names -tags outside GOFLAGS", e))
+			}
 		}
-		where := rel + " build " + name
-		var problems []string
-		for _, v := range slices.Concat(b.Env, b.Goos, b.Tags, b.Flags) {
+		return cgo, goflags, problems
+	}
+	check := func(env, goos, tags, flags []string) (problems []string) {
+		for _, v := range slices.Concat(env, goos, tags, flags) {
 			if strings.Contains(v, "{{") {
 				problems = append(problems, fmt.Sprintf("%q is a template, which this reading does not evaluate", v))
 			}
 		}
-		if len(b.Goos) == 0 {
-			problems = append(problems, "names no goos (goreleaser's default list is not read here)")
-		}
-		for _, f := range b.Flags {
+		for _, f := range flags {
 			if strings.Contains(f, "-tags") {
 				problems = append(problems, fmt.Sprintf("flags %q name -tags; put the list under tags:", f))
 			}
 		}
-		cgo := ""
-		for _, e := range b.Env {
-			if v, ok := strings.CutPrefix(e, "CGO_ENABLED="); ok {
-				cgo = v
-			}
-		}
-		if cgo != "" && cgo != "0" && cgo != "1" {
-			problems = append(problems, fmt.Sprintf("CGO_ENABLED=%q is not 0 or 1", cgo))
-		}
-		for _, w := range b.Tags {
+		for _, w := range tags {
 			if !f803bTagWord().MatchString(w) {
 				problems = append(problems, fmt.Sprintf("tag %q is not a build tag", w))
 			}
+		}
+		return problems
+	}
+	_, topFlags, topProblems := envTags(cfg.Env, false)
+	if len(topProblems) > 0 {
+		bad = append(bad, rel+": top-level env: "+strings.Join(topProblems, "; "))
+	}
+	if len(cfg.Env) > 0 {
+		if p := check(cfg.Env, nil, nil, nil); len(p) > 0 {
+			bad = append(bad, rel+": top-level env: "+strings.Join(p, "; "))
+		}
+	}
+	seen := map[string]bool{}
+	add := func(name, goos, cgo string, tags []string) {
+		tags = slices.Clone(tags)
+		slices.Sort(tags)
+		tags = slices.Compact(tags)
+		k := goos + "/" + cgo + "/" + strings.Join(tags, ",")
+		if !seen[k] {
+			seen[k] = true
+			sets = append(sets, TagSet{Name: name, GOOS: goos, CGOEnabled: cgo, Tags: tags})
+		}
+	}
+	for i, b := range cfg.Builds {
+		id := b.ID
+		if id == "" {
+			id = strconv.Itoa(i)
+		}
+		where := rel + " build " + id
+		cgo, flagLists, problems := envTags(b.Env, true)
+		problems = append(problems, check(b.Env, b.Goos, b.Tags, b.Flags)...)
+		if len(b.Goos) == 0 {
+			problems = append(problems, "names no goos (goreleaser's default list is not read here)")
 		}
 		if len(problems) > 0 {
 			bad = append(bad, where+": "+strings.Join(problems, "; "))
 			continue
 		}
-		tags := slices.Clone(b.Tags)
-		slices.Sort(tags)
-		tags = slices.Compact(tags)
 		for _, goos := range b.Goos {
-			sets = append(sets, TagSet{Name: "goreleaser " + name + " " + goos, GOOS: goos, CGOEnabled: cgo, Tags: tags})
+			add("goreleaser "+id+" "+goos, goos, cgo, b.Tags)
+			for _, l := range slices.Concat(flagLists, topFlags) {
+				add("goreleaser "+id+" "+goos+" GOFLAGS", goos, cgo, l)
+			}
+		}
+		for j, ov := range b.Overrides {
+			owhere := fmt.Sprintf("%s override %d", where, j)
+			ocgo, oflagLists, oproblems := envTags(ov.Env, true)
+			oproblems = append(oproblems, check(ov.Env, []string{ov.Goos}, ov.Tags, ov.Flags)...)
+			if len(oproblems) > 0 {
+				bad = append(bad, owhere+": "+strings.Join(oproblems, "; "))
+				continue
+			}
+			goses := b.Goos
+			if ov.Goos != "" {
+				goses = []string{ov.Goos}
+			}
+			tags, c := b.Tags, cgo
+			if len(ov.Tags) > 0 {
+				tags = ov.Tags
+			}
+			if ocgo != "" {
+				c = ocgo
+			}
+			for _, goos := range goses {
+				add(fmt.Sprintf("goreleaser %s override %d %s", id, j, goos), goos, c, tags)
+				for _, l := range slices.Concat(oflagLists, flagLists, topFlags) {
+					add(fmt.Sprintf("goreleaser %s override %d %s GOFLAGS", id, j, goos), goos, c, l)
+				}
+			}
 		}
 	}
 	return sets, bad
@@ -652,6 +832,7 @@ func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 	// Each Makefile's own variables (its included files read in place, see
 	// f803bMakeVarsInto), and the values the Makefiles agree on.
 	var unresolved []string
+	repoRoot := f803bRepoRoot(coreRoot)
 	own := map[string]map[string]string{}
 	agreed := map[string]string{}
 	conflict := map[string]bool{}
@@ -659,20 +840,33 @@ func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 		if !strings.HasPrefix(filepath.Base(f.rel), "Makefile") {
 			continue
 		}
-		vars := map[string]string{}
-		read := func(name string) (string, bool) {
-			// make resolves a relative include against its working directory, the
-			// repo root for the repo's Makefile; try the includer's directory first.
-			for _, rel := range []string{path.Join(path.Dir(f.rel), name), path.Clean(name)} {
-				if body, ok := bodies[rel]; ok {
-					return body, true
-				}
+		env := newF803bMakeEnv()
+		// make resolves a relative include against its working directory, which
+		// for a Makefile is the directory it sits in (make is run there, or with
+		// -C): the includer's own directory, and not the directory of an included
+		// file or the repo root.
+		base := path.Dir(f.rel)
+		read := func(name string) (string, bool, error) {
+			rel := path.Clean(path.Join(base, name))
+			if path.IsAbs(name) {
+				rel = ""
 			}
-			return "", false
+			if body, ok := bodies[rel]; ok && rel != "" {
+				return body, true, nil
+			}
+			disk := name
+			if !path.IsAbs(name) {
+				disk = filepath.Join(repoRoot, filepath.FromSlash(rel))
+			}
+			if _, err := os.Stat(disk); err == nil {
+				return "", false, fmt.Errorf("the file exists but was not read (outside the repo, a documentation extension, a skipped directory, a binary or over 4 MiB)")
+			}
+			return "", false, nil
 		}
-		if err := f803bMakeVarsInto(vars, f.body, read, 0); err != nil {
-			unresolved = append(unresolved, f.rel+" "+err.Error())
+		if err := f803bMakeVarsInto(env, f.rel, f.body, read, 0); err != nil {
+			unresolved = append(unresolved, err.Error())
 		}
+		vars := env.vars
 		own[f.rel] = vars
 		for name, val := range own[f.rel] {
 			if prev, seen := agreed[name]; seen && prev != val {
