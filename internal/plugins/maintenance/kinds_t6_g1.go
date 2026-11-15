@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g1.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 4494039c-1a79-4b3b-9872-ecea118f76ad
-// last-edited: 2026-11-14
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -202,10 +202,19 @@ type t6g1ItemsOptions struct {
 	// (items from the start that are all finished, ResumeFrom included). Calls
 	// are serialized. A failed item never advances it.
 	CheckpointState func(ctx context.Context, watermark int) error
-	// Label is HEAD's per-item progress label. Called inside the worker
-	// goroutines, so it reads counters atomically. The native pool labels
-	// nothing from it.
+	// Label is HEAD's per-item progress label for a loop whose label reads
+	// running counters. Called inside the worker goroutines, so it reads counters
+	// atomically. The native pool does not carry it: tasks.ItemsOptions.Label is
+	// pure (the item only) and is rendered before the item runs, so a counter label
+	// would show pre-item tallies and could step backwards. A counter label is
+	// dropped natively, the one rule of groups 3 to 6 (seams.d/F5-06.md).
 	Label func(i, total int) string
+	// PureLabel is HEAD's label for a loop whose label reads only the item index
+	// and the total. Both pools carry it: HEAD's as Label, the native one as the
+	// item-only tasks.ItemsOptions.Label (the item is the index). Set at most one
+	// of Label and PureLabel. No group 1 loop has an index-only label today (every
+	// one reads a counter), so this field is the rule's slot, not a live path.
+	PureLabel func(i, total int) string
 }
 
 // t6g1ItemsFunc runs fn over the indexes 0..n-1 on the shell's pool. The first
@@ -219,6 +228,10 @@ func t6g1HeadItems(rep sdk.Reporter) t6g1ItemsFunc {
 		for i := range idx {
 			idx[i] = i
 		}
+		lbl := o.Label
+		if lbl == nil {
+			lbl = o.PureLabel
+		}
 		return opsregistry.RunItems(ctx, rep, idx, func(ctx context.Context, i int) error {
 			return fn(ctx, i)
 		}, opsregistry.RunItemsOptions{
@@ -229,7 +242,7 @@ func t6g1HeadItems(rep sdk.Reporter) t6g1ItemsFunc {
 			CheckpointEvery:   o.CheckpointEvery,
 			CheckpointFn:      o.CheckpointFn,
 			CheckpointStateFn: o.CheckpointState,
-			Label:             o.Label,
+			Label:             lbl,
 		})
 	}
 }
@@ -251,6 +264,12 @@ func t6g1NativeItems(rc *tasks.RC, par tasks.Parallelism) t6g1ItemsFunc {
 			idx = append(idx, i)
 		}
 		wm := newT6g1Watermark(from, n, o.CheckpointEvery, o.CheckpointState)
+		itemsOpts := tasks.ItemsOptions[int]{ProgressBase: o.ProgressBase + from, ProgressTotal: o.ProgressTotal}
+		// Only the index-only label crosses: the item is the index and the total
+		// is n, what HEAD's label saw. A counter label is dropped.
+		if o.PureLabel != nil {
+			itemsOpts.Label = func(i int) string { return o.PureLabel(i, n) }
+		}
 		_, err := tasks.RunItems(rc, par, idx, func(ic *tasks.ItemRC, i int) error {
 			if err := fn(ic.Context(), i); err != nil {
 				return err
@@ -264,7 +283,7 @@ func t6g1NativeItems(rc *tasks.RC, par tasks.Parallelism) t6g1ItemsFunc {
 				}
 			}
 			return nil
-		}, tasks.ItemsOptions[int]{ProgressBase: o.ProgressBase + from, ProgressTotal: o.ProgressTotal})
+		}, itemsOpts)
 		var ie *tasks.ItemsError
 		if errors.As(err, &ie) && ie.First != nil {
 			return ie.First
