@@ -127,10 +127,15 @@ func TestFileIntroYieldWait_WithoutGiveUpTheOutageIsRetriedToTheLimit(t *testing
 // failed, not counted as settled, and the loop reports a clean yield.
 func TestFileIntroYieldWait_AGivenUpBatchIsSkippedNotFailedNorCounted(t *testing.T) {
 	var afterCalls atomic.Int32
+	// A wait only gives up once batch 0 is done (shouldYield requires it), so
+	// batch 1 gives up after batch 0 has completed, as it does in a real run.
+	batch0 := make(chan struct{})
 	l := yieldLoop(2, func(i int) error {
 		if i == 1 {
+			<-batch0
 			return errFileIntroYieldNow
 		}
+		close(batch0)
 		return nil
 	})
 	l.afterBatch = func(int) { afterCalls.Add(1) }

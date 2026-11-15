@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.8.6
+// version: 1.8.7
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
 // last-edited: 2026-11-14
 
@@ -379,9 +379,6 @@ func (a *fileIntroAccum) snapshot() database.FileIntroStats {
 // snapshot last, so the persisted stats (and the status page reading them) went
 // backwards mid-run.
 func (a *fileIntroAccum) flush(done bool) {
-	if a.sink == nil {
-		return
-	}
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
 	a.mu.Lock()
@@ -389,6 +386,11 @@ func (a *fileIntroAccum) flush(done bool) {
 	a.stats.Done = done
 	cp := a.stats
 	a.mu.Unlock()
+	// The counters in the result (Done included) do not depend on a sink: a run
+	// started with no stats sink still reports that it finished.
+	if a.sink == nil {
+		return
+	}
 	if err := a.sink.PutFileIntroStats(&cp); err != nil && a.log != nil {
 		a.log.Warn("transcribe-file-intros: stats write failed", "err", err)
 	}

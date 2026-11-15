@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.4
+// version: 2.16.5
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-14
 
@@ -776,9 +776,16 @@ func durationPoolOn(each t6g4EachFn, get func(id string) (*database.Book, error)
 			ItemTimeout:   durationBookTimeout,
 			ProgressTotal: progressTotal,
 			Label:         func(i, _ int) string { return "book " + ids[i] },
-		}, func(ctx context.Context, i int) error {
-			book, err := get(ids[i])
-			if err != nil || book == nil {
+		}, func(ctx context.Context, i int) (err error) {
+			// A panicking book ends the run with an error that names it (the
+			// loop's own recovery names only the item's index).
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("book %s: panic: %v", ids[i], r)
+				}
+			}()
+			book, gerr := get(ids[i])
+			if gerr != nil || book == nil {
 				return nil // gone since the producer saw it
 			}
 			process(ctx, *book)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
 // last-edited: 2026-11-14
 
@@ -186,15 +186,17 @@ func (a *transcribeStatsAccum) recordCacheHits(n int) {
 // flush persists the current counters. Safe to call concurrently. No-op when
 // sink is nil. markDone=true stamps the run as finished.
 func (a *transcribeStatsAccum) flush(markDone bool) {
-	if a.sink == nil {
-		return
-	}
 	a.mu.Lock()
 	if markDone {
 		a.stats.Done = true
 	}
 	snapshot := a.stats // copy under lock
 	a.mu.Unlock()
+	// The run's counters (Done included) do not depend on a sink: a native run
+	// started with no stats sink (t6g4Deps.Stats unset) still reports it finished.
+	if a.sink == nil {
+		return
+	}
 	// M1 (2026-07 error-correction sweep): a persist failure here used to be
 	// swallowed with `_ =`. flush is called after every page, so a
 	// transiently failing sink previously left the live-monitor aggregate

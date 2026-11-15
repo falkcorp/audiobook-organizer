@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_yield_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 79b2a942-e84c-447f-a8c4-433000d6fd16
 // last-edited: 2026-11-14
 
@@ -88,7 +88,7 @@ func (p *yieldProgress) last() (int, int) {
 func (fx *introFx) yieldEnv(rep *fileIntroRep, ck *memCheckpoint, prog *yieldProgress, margin time.Duration) fileIntroEnv {
 	fx.t.Helper()
 	store := fx.p.deps.OpsStore()
-	base := t6g4HeadBase(rep, true, headT6G4Store{OpsStore: store, deps: fx.p.deps}, headT6G4Writer{store: store})
+	base := t6g4HeadBase(rep, true, headT6G4Store{OpsStore: store, deps: fx.p.deps}, headT6G4Writer{store: store}).withStats(headT6G4Stats{store: store})
 	if ck != nil {
 		base.SaveCheckpoint, base.LoadCheckpoint = ck.save, ck.load
 	}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retired_claims_test.go
-// version: 1.1.4
+// version: 1.1.5
 // guid: c41f7a0e-2b95-4d63-8e1a-5f90d3b7a264
 // last-edited: 2026-11-14
 
@@ -53,11 +53,11 @@ func retireFileOnto(t *testing.T, ps *database.PebbleStore, holderID, path strin
 // "held as a retired version" guard could not fire and a second row was made.
 func TestFsRegroupApply_GapOnRetiredVersionFileCreatesNoSecondRow(t *testing.T) {
 	s := regroupStore(t)
-	ids := seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	ids := seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	holder := fsSeedBook(t, s, "Retire Holder", filepath.Join(t.TempDir(), "holder"))
 	// Member 2 has no row of its own: its file is the gap, and a retired version
 	// of another book holds it.
-	gapPath := filepath.Join(fsFragBase(t), "Cage of Souls - 2", "3.mp3")
+	gapPath := filepath.Join(fsFragBase(t), "Knightfall - 2", "3.mp3")
 	require.FileExists(t, gapPath)
 	retired := retireFileOnto(t, s, holder, gapPath)
 
@@ -84,7 +84,7 @@ func TestFsRegroupApply_GapOnRetiredVersionFileCreatesNoSecondRow(t *testing.T) 
 // injected error must reach it too.
 func TestFsRegroupApply_CompleteLookupErrorSkipsGroup(t *testing.T) {
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	g := &fsGuardStore{PebbleStore: s, atPathRowsErr: context.DeadlineExceeded}
 	plan := fsPlan(t, g)
 	before := fsRowCount(t, s)
@@ -242,7 +242,7 @@ func TestRfPathClaim_RetiredRowIsAClaimWhoeverHoldsIt(t *testing.T) {
 // memdb is warming up (the complete lookup reports unavailable).
 func TestFsRegroupApply_CompleteLookupDownWithNoRetiredVersionsStillApplies(t *testing.T) {
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	g := &fsGuardStore{PebbleStore: s, atPathRowsErr: database.ErrBookFilesAtPathUnavailable}
 	plan := fsPlan(t, g)
 	res, err := fsApplyPlan(context.Background(), g, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-warm-noretired"})
@@ -254,7 +254,7 @@ func TestFsRegroupApply_CompleteLookupDownWithNoRetiredVersionsStillApplies(t *t
 // unavailable the group is refused before any write.
 func TestFsRegroupApply_CompleteLookupDownWithRetiredVersionsRefusesTheGroup(t *testing.T) {
 	s := regroupStore(t)
-	seedFragments(t, s, fsFragBase(t), "Cage of Souls", 3)
+	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	holder := fsSeedBook(t, s, "Retire Holder", filepath.Join(t.TempDir(), "holder"))
 	retireFileOnto(t, s, holder, filepath.Join(t.TempDir(), "elsewhere.mp3"))
 	g := &fsGuardStore{PebbleStore: s, atPathRowsErr: database.ErrBookFilesAtPathUnavailable}

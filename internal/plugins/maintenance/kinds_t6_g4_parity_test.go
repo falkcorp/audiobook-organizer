@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_parity_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 1f3e20f0-c667-44b8-9f41-3e7208c9958c
 // last-edited: 2026-11-14
 
@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -228,6 +229,11 @@ func t6g4NormalizeOp(opID string) string {
 	return fmt.Sprintf("<WRONG-OP %q>", opID)
 }
 
+// t6g4ULIDRe matches a ULID. A journal row's field name carries the id of the
+// file row it names (book_file_delete, book_file:<id>), which differs between
+// two seeds of one case.
+var t6g4ULIDRe = regexp.MustCompile(`[0-9A-HJKMNP-TV-Z]{26}`)
+
 // t6g4BookTitle names a book by title, because a book id differs between two
 // seeds of one case.
 func t6g4BookTitle(s *database.PebbleStore, id string) string {
@@ -244,7 +250,7 @@ func t6g4ObserveJournal(t *testing.T, s *database.PebbleStore) string {
 	t.Helper()
 	var lines []string
 	if err := s.ScanOperationChanges(func(c *database.OperationChange) error {
-		lines = append(lines, fmt.Sprintf("{op=%s type=%s field=%q book=%q}", t6g4NormalizeOp(c.OperationID), c.ChangeType, c.FieldName, t6g4BookTitle(s, c.BookID)))
+		lines = append(lines, fmt.Sprintf("{op=%s type=%s field=%q book=%q}", t6g4NormalizeOp(c.OperationID), c.ChangeType, t6g4ULIDRe.ReplaceAllString(c.FieldName, "<id>"), t6g4BookTitle(s, c.BookID)))
 		return nil
 	}); err != nil {
 		t.Fatal(err)
