@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 5e2b8f4a-91c6-4d03-b7a5-2c8e60f1d9a7
 // last-edited: 2026-11-14
 
@@ -46,6 +46,8 @@ type t6g6Recorder struct {
 	// the test store's reads) go to; it records its own writes into this
 	// recorder.
 	us *t6g6UserStateSpy
+	// cutoffs are the cutoffs CompactActivityEntries was handed.
+	cutoffs []time.Time
 }
 
 // t6g6WriterResource maps every writer method the spy can record to the Effects
@@ -105,7 +107,10 @@ func (r *t6g6Recorder) snapshot() []string {
 	return append([]string(nil), r.calls...)
 }
 
-func (r *t6g6Recorder) CompactActivityEntries(context.Context, time.Time, database.CompactProgress) (database.CompactResult, error) {
+func (r *t6g6Recorder) CompactActivityEntries(_ context.Context, cutoff time.Time, _ database.CompactProgress) (database.CompactResult, error) {
+	r.mu.Lock()
+	r.cutoffs = append(r.cutoffs, cutoff)
+	r.mu.Unlock()
 	r.rec("CompactActivityEntries")
 	return database.CompactResult{DaysCompacted: 2, EntriesDeleted: 9}, nil
 }

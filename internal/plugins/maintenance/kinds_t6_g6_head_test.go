@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g6_head_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8c1d4e72-3b95-4a60-b2f8-6e0a9d5c1347
 // last-edited: 2026-11-14
 
@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -89,4 +91,38 @@ func TestT6G6Head_RecoverApplyRepointsRow(t *testing.T) {
 	row, err = s.GetBookFileByID("01BATBOOK00000000000000E1", "01BATFILE00000000000000E1")
 	require.NoError(t, err)
 	require.Equal(t, target, row.FilePath, "apply repoints the row onto the renamed file")
+}
+
+// The native nightly run takes its cutoff from the configured keep-days dep, the
+// local midnight keepDays days back, and hands it to the one compaction write.
+func TestT6G6Native_NightlyCutoffFollowsKeepDays(t *testing.T) {
+	loc := time.FixedZone("gotham", -5*3600)
+	orig := nightlyNow
+	nightlyNow = func() time.Time { return time.Date(2026, 9, 14, 0, 10, 0, 0, loc) }
+	t.Cleanup(func() { nightlyNow = orig })
+
+	p := newT6G6Probe(t) // ActivityLogFullDetailDays is 30
+	defs := (&Plugin{}).t6g6Kinds(p.deps(), nil)
+	_, err := runT6G6Kind(t, t6g6ByKind(t, defs, nightlyCompactActivityLogKind), tasks.ModeLive, &t6g6GateWriter{name: "gotham"}, "")
+	require.NoError(t, err)
+	require.Len(t, p.rec.cutoffs, 1)
+	require.True(t, time.Date(2026, 8, 15, 0, 0, 0, 0, loc).Equal(p.rec.cutoffs[0]), "cutoff %s", p.rec.cutoffs[0])
+}
+
+// Without resolvable iTunes roots the repoint cannot prove a path is outside
+// them, so the native shell refuses before it builds a writer.
+func TestT6G6Native_RepointRefusesWithoutITunesRoots(t *testing.T) {
+	f := newRBFFixture(t, -1, "-")
+	p := newT6G6Probe(t)
+	p.store = t6g6RBFStore{s: f.s}
+	deps := p.deps()
+	deps.ITunesRoots = nil
+	defs := (&Plugin{}).t6g6Kinds(deps, nil)
+	b, err := json.Marshal(map[string]any{"repoints": []rbfRepoint{f.item()}})
+	require.NoError(t, err)
+	_, err = runT6G6Kind(t, t6g6ByKind(t, defs, rbfKind), tasks.ModeLive, &t6g6GateWriter{name: "gotham"}, string(b))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "resolve iTunes roots")
+	require.Zero(t, p.writerCalls(), "a refused run built a writer")
+	require.Equal(t, f.oldPath, f.storedRow(t).FilePath)
 }
