@@ -1,7 +1,7 @@
 // file: core/outbox/relay.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 77b6d1de-9cf2-4c52-8f0b-7e9a5c2b6d11
-// last-edited: 2026-11-12
+// last-edited: 2026-11-14
 
 package outbox
 
@@ -68,7 +68,10 @@ type relay struct {
 // intake, delivers to every consumer, sweeps retention and reports health,
 // until relay_rotate has passed, then succeeds. Everything durable it writes
 // is a batch that went through the run's fenced writer, and every state it
-// changes carries its own guard, so a zombie run can only fail its commits.
+// changes carries its own guard, so a zombie run can only fail its commits,
+// with one deliberate exception: the settle of a message whose handler already
+// returned (settleAck, settleFail) commits on settleCtx, past the run's cancel,
+// and settleCtx says why nothing can be writing beside it.
 func (o *Outbox) relayBody(rc *tasks.RC, _ struct{}) (struct{}, error) {
 	ctx := rc.Context()
 	if rc.Mode() != tasks.ModeLive {
@@ -147,6 +150,11 @@ func (r *relay) setStop(err error) {
 }
 
 func (r *relay) stopped() bool { return r.stopCause() != nil }
+
+// stopping is whether the run is ending: its context is done or a pair worker
+// recorded a stop. fault and lostSettle share it so that a stop silences one
+// exactly when it triggers the other.
+func (r *relay) stopping() bool { return r.rc.Context().Err() != nil || r.stopped() }
 
 // stopCause is the error that ended the run, or nil while it goes on; mu guards
 // it because the pair workers set it.

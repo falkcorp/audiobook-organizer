@@ -1,7 +1,7 @@
 // file: core/outbox/fault.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 41666c62-b0eb-40fc-ab35-17a0619edae8
-// last-edited: 2026-11-12
+// last-edited: 2026-11-14
 
 package outbox
 
@@ -128,10 +128,24 @@ func (o *Outbox) faultLog(log *slog.Logger, what string, err error) {
 // fault logs an error that is neither a cancellation nor an expected race,
 // once a minute per what.
 func (r *relay) fault(what string, err error) {
-	if err == nil || r.rc.Context().Err() != nil || r.stopped() {
+	if err == nil || r.stopping() {
 		return
 	}
 	r.o.faultLog(r.log, what, err)
+}
+
+// lostSettle says that a settle (step is "ack" or "failure") did not commit
+// while the run was stopping. fault stays quiet in that state, because a stop is
+// the likely cause of the failure, which would leave the lost write unrecorded:
+// this line says that the message will be delivered again. It names the class of
+// the failure and its Go type, never its text, as every fault line does.
+func (r *relay) lostSettle(step string, reg *consumerReg, ti *topicInfo, seq uint64, err error) {
+	if err == nil || !r.stopping() {
+		return
+	}
+	attrs := append([]any{slog.String("consumer", reg.name), slog.String("topic", ti.name), slog.Uint64("seq", seq),
+		slog.String("step", step)}, errAttrs(err)...)
+	r.log.Warn("outbox: a settle did not commit after the run stopped; the message is delivered again", attrs...)
 }
 
 // partitionsOK says whether a topic may be worked on: its messages were

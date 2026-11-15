@@ -1,7 +1,7 @@
 // file: core/outbox/outbox.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b3c4366-8534-4dc4-870f-850dfab2b120
-// last-edited: 2026-11-12
+// last-edited: 2026-11-14
 
 // Package outbox is core's durable, at-least-once event delivery (05-events
 // §5E.1, §5E.4, §5E.5.2, §5E.5.3). A producer stages a message into its own
@@ -406,6 +406,9 @@ type hooks struct {
 	beforeAckCommit func(consumer string, seq uint64)
 	// AfterAckCommit runs once an ack committed.
 	afterAckCommit func(consumer string, seq uint64)
+	// BeforeFailCommit runs with a failed delivery's retry record (or its dead
+	// letter) staged, before it commits.
+	beforeFailCommit func(consumer string, seq uint64)
 	// BeforeDeadCommit runs with an operator's retry or discard of a dead letter
 	// staged, before it commits.
 	beforeDeadCommit func(consumer string, seq uint64)
@@ -420,6 +423,7 @@ func (h *hooks) get() hooks {
 	defer h.mu.Unlock()
 	return hooks{beforeIntakeCommit: h.beforeIntakeCommit, afterIntakeCommit: h.afterIntakeCommit,
 		afterHandler: h.afterHandler, beforeAckCommit: h.beforeAckCommit, afterAckCommit: h.afterAckCommit,
+		beforeFailCommit: h.beforeFailCommit,
 		beforeDeadCommit: h.beforeDeadCommit, beforeRetentionBatch: h.beforeRetentionBatch}
 }
 

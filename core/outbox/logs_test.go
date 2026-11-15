@@ -1,7 +1,7 @@
 // file: core/outbox/logs_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 7f507577-1d8d-4031-8266-e190b04b52d9
-// last-edited: 2026-11-12
+// last-edited: 2026-11-14
 
 package outbox_test
 
@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/falkcorp/mediacore/internal/outboxstore"
 	"github.com/falkcorp/mediacore/outbox"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // logSentinel stands for a payload value. Every scenario below makes the
@@ -270,4 +272,58 @@ func TestOutbox_FailureLogsCarryNoPayload(t *testing.T) {
 			})
 		}
 	})
+}
+
+// A settle that cannot commit while the run stops is logged (fault stays quiet
+// then), and, like every fault line, the line carries the class and the Go type
+// of the failure and never its text. From inside the handler window the test
+// overwrites the pair's cursor rows with the sentinel and cancels the run, so
+// the settle's read of the cursor fails to decode while the run is stopping.
+func TestOutbox_LostSettleLogCarriesNoErrorText(t *testing.T) {
+	logs := &logCapture{}
+	var self atomic.Pointer[rig]
+	var fired atomic.Bool
+	r := newRig(t, rigOpts{
+		log:     logs.logger(),
+		noRelay: true,
+		hooks: &outbox.TestHooks{AfterHandler: func(consumer string, _ uint64) {
+			if consumer != consumerN || !fired.CompareAndSwap(false, true) {
+				return
+			}
+			rg := self.Load()
+			for pp := range 2 { // the notice topic's partitions
+				rg.putRaw(outboxstore.CurKey(consumerN, noticeName, pp), []byte(logSentinel))
+			}
+			cancelRelayInline(t, rg)
+		}},
+		register: consumeInto(&recorder{}, consumerN),
+	})
+	self.Store(r)
+
+	r.stage("wayne-manor", Dispatch{Villain: "Joker"})
+	ref, err := r.x.Start(context.Background(), outbox.RelayKind, tasks.StartRequest{Mode: tasks.ModeRequestLive})
+	must(t, err)
+	r.waitRun(ref.ID, tasks.StateCanceled)
+	const lost = "a settle did not commit after the run stopped"
+	eventually(t, "the lost settle to be logged", func() bool { return logs.count(lost) >= 1 })
+
+	out := logs.text()
+	if strings.Contains(out, logSentinel) {
+		t.Fatalf("a stored value reached the log:\n%s", out)
+	}
+	var line string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, lost) {
+			line = l
+			break
+		}
+	}
+	for _, want := range []string{"consumer=" + consumerN, "topic=" + noticeName, "seq=", "step=ack", "fault=", "err_type="} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the lost-settle line lacks %q: %s", want, line)
+		}
+	}
+	if strings.Contains(line, " err=") {
+		t.Errorf("the lost-settle line carries the error's text: %s", line)
+	}
 }

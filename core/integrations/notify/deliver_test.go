@@ -1,7 +1,7 @@
 // file: core/integrations/notify/deliver_test.go
-// version: 1.0.7
+// version: 1.0.8
 // guid: b8d24f6a-3e17-4c90-a5b2-9f0e7d1c4a63
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package notify_test
 
@@ -362,6 +362,7 @@ func TestDeliver_SlowChannelDoesNotBlockAnother(t *testing.T) {
 			select {
 			case <-release:
 			case <-ctx.Done():
+				return ctx.Err() // a send cut short by a stop must not report success: nil is acked
 			}
 		}
 		return nil

@@ -1,5 +1,5 @@
 // file: core/outbox/deliver.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 2a6ad2a4-6bc1-4f3b-b7f1-0ee9e2bb7d3f
 // last-edited: 2026-11-14
 
@@ -30,9 +30,33 @@ import (
 // without bound.
 const maxTryUnordered = 64
 
-// ackTimeout bounds the commit of an ack for a message whose handler already
-// returned nil, which runs on a context detached from the run's cancellation.
-const ackTimeout = 5 * time.Second
+// settleTimeout bounds the commit of a settle (the ack of a delivered message,
+// or the record of a failed delivery) for a message whose handler already
+// returned. It bounds the steps of the commit, not an fsync already under way:
+// what ends a write that is stuck is the executor's shutdown drain and the
+// store's close.
+const settleTimeout = 5 * time.Second
+
+// settleCtx is the context a settle commits on: the run's values and none of
+// its cancellation, bounded by settleTimeout. The handler has returned, so what
+// it did is done and the settle only records it; dropping the record on a
+// cancel that landed in between would redeliver a message that took effect (an
+// ack) or hand the message an attempt the failure plan never budgeted (a
+// failure).
+//
+// Committing after the run was canceled is safe because nothing can be writing
+// beside it. The executor keeps a stopped run's concurrency key and write set
+// until its goroutine returns, and a settle runs inside that goroutine, so no
+// successor relay starts while one is in flight (internal/executor/dispatch.go,
+// "zombies keep their key until their goroutine exits"). Every writer of a
+// cursor only moves it forward (ackInto, settleRound and purgePair take the
+// max), so a late commit cannot move one backwards, and the GetForUpdate read of
+// the cursor still fails the commit of a settle that an operator's purge
+// overtook between the read and the commit. The permit that fences the run's
+// other writes is checked when the pass's write begins, not here.
+func settleCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
+}
 
 // outcome is what became of one delivery step.
 type outcome uint8
@@ -558,20 +582,17 @@ func (r *relay) deliverOne(ctx context.Context, reg *consumerReg, ti *topicInfo,
 
 // settleAck commits the cursor advance for a message the consumer took over.
 // The batch reads the pair's cursor with GetForUpdate and rewrites it, so a
-// writer that got there first (a zombie run, an operator's purge) fails this
-// commit instead of being overwritten.
+// writer that commits between the read and this commit (an operator's purge)
+// fails it instead of being overwritten.
 //
 // The consumer already took the message over, so its effect is done and the ack
 // only records that fact. A cancel of the run that lands between the handler's
-// return and this commit must not discard it: the ack commits on a context that
-// outlives the run's cancellation, bounded by ackTimeout so a shutdown cannot
-// hang on it. The fence is checked when the pass's write begins, not here, and
-// the cursor guard above still fails the commit of a zombie run, so committing
-// after a cancel can only record a delivery that happened.
+// return and this commit must not discard it: the ack commits on settleCtx,
+// which outlives the run's cancellation (see there for why that is safe).
 func (r *relay) settleAck(ctx context.Context, reg *consumerReg, ti *topicInfo, p outboxstore.Pair, row outboxstore.MsgRow, res execResult) outcome {
 	o := r.o
 	out := outHalt
-	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ackTimeout)
+	actx, cancel := settleCtx(ctx)
 	defer cancel()
 	err := storage.RetryOnConflict(actx, settleAttempts, func(ctx context.Context) (err error) {
 		b := o.store.OpenBatch()
@@ -602,12 +623,7 @@ func (r *relay) settleAck(ctx context.Context, reg *consumerReg, ti *topicInfo, 
 		return nil
 	})
 	if err != nil {
-		if ctx.Err() != nil {
-			// fault stays quiet once the run is stopping, which would leave a
-			// lost ack unrecorded: say that the message will be delivered again.
-			r.log.Warn("outbox: ack not committed at shutdown; the message is delivered again",
-				slog.String("consumer", reg.name), slog.String("topic", ti.name), slog.Uint64("seq", row.Seq), slog.Any("err", err))
-		}
+		r.lostSettle("ack", reg, ti, row.Seq, err)
 		r.fault("ack of "+reg.name, err)
 		return outHalt
 	}
@@ -639,6 +655,13 @@ func (r *relay) countSettled(reg *consumerReg, ti *topicInfo, res execResult) {
 // with the next time, or, for a permanent error or the last attempt, the dead
 // letter and the cursor advance together (the message is never both lost and
 // unrecorded). The error text is not stored; the token is.
+//
+// Like settleAck it commits on settleCtx: a cancel that lands after the
+// caller's check and before this commit must not lose a failure the handler
+// really reported (its attempt, its backoff, a RetryAfter hint, or the dead
+// letter of a permanent error). A failure seen after the cancel is the
+// caller's to drop (the handler's error may be the cancel's), not this
+// function's.
 func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo, p outboxstore.Pair, row outboxstore.MsgRow, attempt int, herr error) outcome {
 	o := r.o
 	out := outHalt
@@ -646,7 +669,9 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 	var next time.Time
 	var token string
 	var used int
-	err := storage.RetryOnConflict(ctx, settleAttempts, func(ctx context.Context) (err error) {
+	fctx, cancel := settleCtx(ctx)
+	defer cancel()
+	err := storage.RetryOnConflict(fctx, settleAttempts, func(ctx context.Context) (err error) {
 		b := o.store.OpenBatch()
 		defer closeBatch(b, &err)
 		st, err := o.store.LoadPair(ctx, b, p)
@@ -670,6 +695,9 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 		if err := o.store.StagePair(b, p, st, o.now()); err != nil {
 			return err
 		}
+		if h := o.hooks.get(); h.beforeFailCommit != nil {
+			h.beforeFailCommit(reg.name, row.Seq)
+		}
 		if err := b.Commit(ctx, storage.Sync); err != nil {
 			return err
 		}
@@ -680,6 +708,7 @@ func (r *relay) settleFail(ctx context.Context, reg *consumerReg, ti *topicInfo,
 		return nil
 	})
 	if err != nil {
+		r.lostSettle("failure", reg, ti, row.Seq, err)
 		r.fault("recording a failure of "+reg.name, err)
 		return outHalt
 	}
