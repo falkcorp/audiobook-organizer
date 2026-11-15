@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5b1d7c34-9e02-4a68-b3f5-2c8e6d0a7f19
 // last-edited: 2026-11-14
 
@@ -82,6 +82,13 @@ const (
 )
 
 func (r pathRoots) redactPathsAt(s string, depth int, mode scanMode) string {
+	return r.scanPaths(s, depth, mode, true)
+}
+
+// scanPaths is redactPathsAt; skipJudged says whether a token that starts inside
+// an extent already judged is skipped (the linear-time rule below). Only the
+// differential test passes false, to prove the skip changes nothing.
+func (r pathRoots) scanPaths(s string, depth int, mode scanMode, skipJudged bool) string {
 	if !strings.ContainsAny(s, "/\\%") {
 		return s
 	}
@@ -104,16 +111,31 @@ func (r pathRoots) redactPathsAt(s string, depth int, mode scanMode) string {
 	// (the decoding is local to each escape). Without this a line of quotes and no
 	// whitespace judges its whole rest from every quote, which is quadratic.
 	judged := 0
+	// cut is where a URL that ended at a byte that cannot be in an authority left
+	// off: the text there is a token of its own even with no whitespace or quote in
+	// front of it ("https://h,%2FUsers%2Fbruce").
+	cut, judgedCut := -1, 0
 	for i := 0; i < len(s); {
-		if tokens && (i == 0 || s[i-1] <= ' ' || s[i-1] == 0x7f || s[i-1] == '"' || s[i-1] == '`' || isAlpha(s[i])) {
-			end, repl, ok, read := r.tokenAt(s, i, depth, i >= judged)
+		if tokens && (i == 0 || i == cut || s[i-1] <= ' ' || s[i-1] == 0x7f || s[i-1] == '"' || s[i-1] == '`' || isAlpha(s[i])) {
+			// A token that starts at a cut is a different token from the one read
+			// from before it, so the read there does not stand for it; it has its
+			// own mark (judgedCut), which keeps a run of cut URLs linear.
+			force := i == cut && (!skipJudged || i >= judgedCut)
+			end, repl, ok, read, urlCut := r.tokenAt(s, i, depth, !skipJudged || i >= judged || force, force)
 			if ok {
 				b.WriteString(s[last:i])
 				b.WriteString(repl)
 				last, i = end, end
+				if urlCut {
+					cut = end
+				}
 				continue
 			}
-			judged = max(judged, read)
+			if force {
+				judgedCut = max(judgedCut, read)
+			} else {
+				judged = max(judged, read)
+			}
 		}
 		if !r.pathStart(s, i, mode) {
 			i++
@@ -169,34 +191,44 @@ func opaqueTail(rest string) string {
 //     text holds an absolute path is "<path>" whole (encodedPathToken). Free text
 //     cut a path at its delimiters; an encoded path is not cut, so its tail
 //     cannot be a different token.
-func (r pathRoots) tokenAt(s string, i, depth int, encoded bool) (end int, repl string, ok bool, read int) {
+func (r pathRoots) tokenAt(s string, i, depth int, encoded, forced bool) (end int, repl string, ok bool, read int, urlCut bool) {
 	if isAlpha(s[i]) && (i == 0 || !isSchemeByte(s[i-1])) {
 		if n := urlSchemeEnd(s[i:]); n > 0 {
-			tok := trimRouteTail(s[i : i+routeExtent(s[i:])])
+			ext := urlExtent(s[i:], n)
+			tok := trimRouteTail(s[i : i+ext])
 			if len(tok) > n+2 {
-				return i + len(tok), r.urlText(tok, n, depth), true, 0
+				// A URL cut at a byte that cannot be in its authority leaves the
+				// rest of the token to be judged as a token of its own.
+				return i + len(tok), r.urlText(tok, n, depth), true, 0, i+ext < len(s) && s[i+ext] > ' ' && s[i+ext] != 0x7f
 			}
 		}
 	}
-	if !encoded || !tokenStart(s, i) {
-		return 0, "", false, 0
+	if !encoded || !forced && !tokenStart(s, i) {
+		return 0, "", false, 0, false
 	}
 	p := i
 	for p < len(s) && strings.IndexByte("'([{<\"`", s[p]) >= 0 {
 		p++
 	}
 	if p >= len(s) || routeStart(s[p:]) {
-		return 0, "", false, 0
+		return 0, "", false, 0, false
 	}
 	if n := urlSchemeEnd(s[p:]); n > 0 {
-		return 0, "", false, 0 // the URL rule above owns it
+		return 0, "", false, 0, false // the URL rule above owns it
 	}
+	// The token is judged with the bytes skipped above in front of it, not from
+	// p: a path start is judged against the byte before it (pathBoundary), and
+	// from p the first byte has none, so "</b>%2F..." read from after its "<"
+	// started a path at "/b>" where the same text inside a longer token is a
+	// closing tag. With the prefix in, a token is judged the same wherever it
+	// starts, which is what lets the caller skip a start inside an extent it has
+	// read (judged).
 	e := routeExtent(s[p:])
-	tok := trimRouteTail(s[p : p+e])
-	if strings.IndexByte(tok, '%') < 0 || !r.encodedPathToken(tok) {
-		return 0, "", false, p + e
+	full := trimRouteTail(s[i : p+e])
+	if len(full) <= p-i || strings.IndexByte(full, '%') < 0 || !r.encodedPathToken(full) {
+		return 0, "", false, p + e, false
 	}
-	return p + len(tok), s[i:p] + "<path>", true, 0
+	return i + len(full), s[i:p] + "<path>", true, 0, false
 }
 
 // tokenStart reports whether a token of free text starts at i: the text start or
@@ -233,14 +265,52 @@ func urlSchemeEnd(s string) int {
 	return n
 }
 
+// authorityByte reports a byte that can be in a URL's authority (userinfo, host
+// and port): a letter, a digit, "-._~%:@[]" and a byte of a non-ASCII host. It is
+// a whitelist on purpose: a byte outside it ends the authority, and what follows
+// is scanned as text, so a quote, comma or backslash after a host in compact JSON
+// ("https://h","p":"/Users/bruce") is never read as part of the URL. A userinfo
+// with a sub-delimiter in it ("a,b@host") is cut early; the cost is that the rest
+// is read as text, which still redacts every path in it.
+func authorityByte(c byte) bool {
+	return isAlpha(c) || c >= '0' && c <= '9' || c >= utf8.RuneSelf || strings.IndexByte("-._~%:@[]", c) >= 0
+}
+
+// urlExtent is the length of the URL token that starts at s[0] ("scheme://" is
+// schemeEnd+3 bytes). The authority ends at the first byte that cannot be in one
+// (authorityByte), and the token ends there; when the authority is followed by
+// "/", "?" or "#" the token runs on to whitespace as a route's does (routeExtent:
+// after a "?" or "#" the opaque query runs to whitespace whatever it holds, G9,
+// and the path part to the same end). The scan of the authority is bounded by its
+// own length, so a line of URL starts costs a pass over the authorities, and a
+// token that runs to whitespace is consumed by the caller.
+func urlExtent(s string, schemeEnd int) int {
+	j := schemeEnd + 3
+	for j < len(s) && authorityByte(s[j]) {
+		j++
+	}
+	if j < len(s) && s[j] != '/' && s[j] != '?' && s[j] != '#' {
+		return j
+	}
+	return j + routeExtent(s[j:])
+}
+
 // urlText is a URL token as written except for its inside: the authority stays,
 // the path part is judged as a route's is (routePath), and the query and
 // fragment are one placeholder (opaqueTail). schemeEnd is urlSchemeEnd of tok.
 func (r pathRoots) urlText(tok string, schemeEnd, depth int) string {
 	rest := tok[schemeEnd+3:]
-	authEnd := strings.IndexAny(rest, "/?#")
-	if authEnd < 0 {
+	authEnd := 0
+	for authEnd < len(rest) && authorityByte(rest[authEnd]) {
+		authEnd++
+	}
+	if authEnd == len(rest) {
 		return tok
+	}
+	if c := rest[authEnd]; c != '/' && c != '?' && c != '#' {
+		// A byte that cannot be in an authority (a whole value that starts as a
+		// URL and holds one): the URL ends there and the rest is text.
+		return tok[:schemeEnd+3+authEnd] + r.redactPathsAt(rest[authEnd:], depth+1, scanText)
 	}
 	head, rest := tok[:schemeEnd+3+authEnd], rest[authEnd:]
 	pathPart, tail := rest, ""
