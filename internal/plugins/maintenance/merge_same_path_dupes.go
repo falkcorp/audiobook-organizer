@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/merge_same_path_dupes.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 31a21313-3b7f-41b3-919c-9fd48feebd6e
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — MERGE repair for duplicate book records that point at the
 // exact same audio file.
@@ -45,6 +45,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -220,8 +221,8 @@ func (p *Plugin) runMergeSamePathDupes(ctx context.Context, rawParams json.RawMe
 // survivor, the undo journal); the preview is HEAD's dry run. The params decode into
 // HEAD's struct after the mode key (apply) is refused.
 func (p *Plugin) mergeSamePathDupesKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBooks)), tasks.Res("books", string(sdk.ResBookFiles)),
-		tasks.Res("books", "external_ids"), tasks.Res("books", "user_state"), tasks.Res("books", "operations"))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)),
+		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResUserState)), tasks.Res("books", string(ops.ResOperations)))
 	return tasks.Task(mergeSamePathDupesKind, tasks.TaskSpec[json.RawMessage, mergeSamePathPlan]{
 		Common: t6g5Common(p.mergeSamePathDupesDef(), mergeSamePathDupesKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (mergeSamePathPlan, error) {

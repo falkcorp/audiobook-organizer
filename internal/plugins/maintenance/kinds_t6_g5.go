@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 30f92b7b-033e-4403-927a-99445211075c
 // last-edited: 2026-11-14
 
@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -356,49 +355,17 @@ type t6g5BatchOpts struct {
 	OnRow func(i int, applied bool)
 }
 
-// t6g5WriteBookFileBatch is writeBookFileBatch over the env: the same single
-// UpdateBookFiles call per book, a liveness stamp after every row, the same
-// throttled progress line and the same abort, with the stamp and the progress
-// going to the env rather than a reporter.
+// t6g5WriteBookFileBatch is writeBookFileBatch over the env: the same body
+// (writeBookFileBatchVia), with the per-row stamp and the progress line going to
+// the env rather than a reporter.
 func t6g5WriteBookFileBatch(ctx context.Context, w bookFileBatchWriter, rows []*database.BookFile, env t6g5Base, opts t6g5BatchOpts) bookFileWriteOutcome {
-	if len(rows) == 0 {
-		return bookFileWriteOutcome{}
-	}
-	batchCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	done := 0
-	lastProgress := time.Now()
-	written, err := w.UpdateBookFiles(batchCtx, rows, func(i int, applied bool) {
-		done++
-		env.Touch()
-		if opts.OnRow != nil {
-			opts.OnRow(i, applied)
-		}
-		if opts.Progress != nil && time.Since(lastProgress) >= bookFileBatchProgressInterval {
-			cur, tot, msg := opts.Progress(done, len(rows))
-			env.Progress(cur, tot, msg)
-			lastProgress = time.Now()
-		}
-		// Checked AFTER the row, so the abort stops the NEXT row rather than
-		// discarding work already committed.
-		if opts.Abort != nil && opts.Abort() {
-			cancel()
-		}
-	})
-	return classifyBookFileWrites(written, err)
+	return writeBookFileBatchVia(ctx, w, rows, bookFileBatchSink{Touch: env.Touch, Progress: env.Progress}, opts)
 }
 
 // t6g5PrewriteHeartbeat is prewriteHeartbeat over the env: every
 // bookFileStatLivenessEvery rows it stamps the run live, then asks abort.
 func t6g5PrewriteHeartbeat(env t6g5Base, abort func() bool) func(i int) bool {
-	return func(i int) bool {
-		if i%bookFileStatLivenessEvery != 0 {
-			return true
-		}
-		env.Touch()
-		return abort == nil || !abort()
-	}
+	return prewriteHeartbeatVia(env.Touch, abort)
 }
 
 // t6g5Held is a scan stand-down held across a whole run, with everything the

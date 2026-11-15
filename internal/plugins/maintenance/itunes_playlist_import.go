@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_playlist_import.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 7c4e91a3-58bd-42f6-9e0a-1d6b3f8c25e4
 // last-edited: 2026-11-14
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -154,7 +155,7 @@ func (p *Plugin) runITunesPlaylistImport(ctx context.Context, raw json.RawMessag
 // CapLibraryWrite capability. The dry-run keys are refused, the mode is the
 // run's.
 func (p *Plugin) itunesPlaylistImportKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "user_state"))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResUserState)))
 	return tasks.Task(itunesPlaylistImportKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g5Common(p.itunesPlaylistImportDef(), itunesPlaylistImportKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {

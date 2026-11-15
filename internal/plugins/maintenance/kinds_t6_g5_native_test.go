@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_native_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6c1f0b7e-3a52-4d8c-9f40-b8e2a7d15c63
 // last-edited: 2026-11-14
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,43 +45,45 @@ import (
 const t6g5ScanKey tasks.Key = "books.library-scan"
 
 // t6g5SpyWrites maps EVERY method of t6g5Writer to the books resources a call
-// to it writes. An empty list is a method that writes no row of its own: it
-// either runs a closure the spy records separately (HardDeleteWithoutUserState
-// runs the caller's delete, which arrives as DeleteBook), or touches no store
-// (Reflink, InvalidateAuthorsCache) or only reads (NewUserStateProbe). The spy
+// to it writes, named by the pkg/ops constants. An empty list is a method that
+// changes nothing on disk or in a store: it either runs a closure the spy records
+// separately (HardDeleteWithoutUserState runs the caller's delete, which arrives
+// as DeleteBook, after a read-only user-state check), drops an in-memory cache
+// (InvalidateAuthorsCache) or only reads (NewUserStateProbe). Reflink and
+// CloneBookIntoLibrary change bytes on disk, so they map to files. The spy
 // refuses a method with no entry (t6g5NativeRun.requireWriter fails), and
 // TestT6G5Spy_MapsEveryWriterMethod fails when the interface and this table
 // disagree, so a new writer method cannot slip past the Effects check.
 var t6g5SpyWrites = map[string][]string{
-	"CarryStateBeforeHardDelete": {"user_state"},
-	"CarryStateBetweenLiveBooks": {"user_state"},
-	"CarryStateThenHardDelete":   {"user_state"},
-	"CloneBookIntoLibrary":       {"books", "book_files"},
-	"CreateBook":                 {"books"},
-	"CreateNarrator":             {"books"},
-	"DeleteBook":                 {"books", "book_files"},
-	"DeleteBookFilesByIDs":       {"book_files"},
-	"DeleteMetadataCache":        {"metadata_cache"},
-	"DeleteNarrator":             {"books"},
+	"CarryStateBeforeHardDelete": {string(ops.ResUserState)},
+	"CarryStateBetweenLiveBooks": {string(ops.ResUserState)},
+	"CarryStateThenHardDelete":   {string(ops.ResUserState)},
+	"CloneBookIntoLibrary":       {string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResFiles)},
+	"CreateBook":                 {string(ops.ResBooks)},
+	"CreateNarrator":             {string(ops.ResBooks)},
+	"DeleteBook":                 {string(ops.ResBooks), string(ops.ResBookFiles)},
+	"DeleteBookFilesByIDs":       {string(ops.ResBookFiles)},
+	"DeleteMetadataCache":        {string(ops.ResMetadataCache)},
+	"DeleteNarrator":             {string(ops.ResBooks)},
 	"HardDeleteWithoutUserState": {},
-	"ImportSmartPlaylists":       {"user_state"},
+	"ImportSmartPlaylists":       {string(ops.ResUserState)},
 	"InvalidateAuthorsCache":     {},
-	"MergeBooks":                 {"books", "book_files", "external_ids", "user_state", "operations"},
-	"ModifyBook":                 {"books"},
-	"ModifyBookFile":             {"book_files", "books"},
-	"MoveBookFilesToBook":        {"book_files", "books"},
-	"MoveBookFilesToBookBulk":    {"book_files", "books"},
+	"MergeBooks":                 {string(ops.ResBooks), string(ops.ResBookFiles), string(ops.ResExternalIDs), string(ops.ResUserState), string(ops.ResOperations)},
+	"ModifyBook":                 {string(ops.ResBooks)},
+	"ModifyBookFile":             {string(ops.ResBookFiles), string(ops.ResBooks)},
+	"MoveBookFilesToBook":        {string(ops.ResBookFiles), string(ops.ResBooks)},
+	"MoveBookFilesToBookBulk":    {string(ops.ResBookFiles), string(ops.ResBooks)},
 	"NewUserStateProbe":          {},
-	"Reflink":                    {},
-	"ReassignExternalID":         {"external_ids"},
-	"RecomputeBookAggregates":    {"books"},
-	"RecordOperationChange":      {"operations"},
-	"SaveChaptersForBook":        {"books"},
-	"SetBookAuthors":             {"authors"},
-	"SetBookNarrators":           {"books"},
-	"SetUserPreferenceForUser":   {"user_state"},
-	"UpdateBook":                 {"books"},
-	"UpdateBookFiles":            {"book_files", "books"},
+	"Reflink":                    {string(ops.ResFiles)},
+	"ReassignExternalID":         {string(ops.ResExternalIDs)},
+	"RecomputeBookAggregates":    {string(ops.ResBooks)},
+	"RecordOperationChange":      {string(ops.ResOperations)},
+	"SaveChaptersForBook":        {string(ops.ResBooks)},
+	"SetBookAuthors":             {string(ops.ResAuthors)},
+	"SetBookNarrators":           {string(ops.ResBooks)},
+	"SetUserPreferenceForUser":   {string(ops.ResUserState)},
+	"UpdateBook":                 {string(ops.ResBooks)},
+	"UpdateBookFiles":            {string(ops.ResBookFiles), string(ops.ResBooks)},
 }
 
 // TestT6G5Spy_MapsEveryWriterMethod keeps t6g5SpyWrites and t6g5Writer in step:
@@ -356,13 +359,15 @@ func t6g5RunNativeOn(t *testing.T, p *Plugin, mode tasks.Mode, headID string, sc
 // requireWriter proves the shell built its writer from this run's rc.Writer(),
 // and that every resource a write reached is one the kind declares: the
 // resources the spy saw must be a subset of the kind's Effects.WriteSet(), and
-// the spy must have met no method it has no mapping for.
+// the spy must have met no method it has no mapping for. A run that recorded
+// nothing fails: the subset check is vacuous over an empty record.
 func (r t6g5NativeRun) requireWriter(t *testing.T) {
 	t.Helper()
 	require.Len(t, r.handed, 1, "NewWriter is called once per run")
 	assert.Same(t, r.gate, r.handed[0], "NewWriter is handed this run's rc.Writer()")
 	assert.Empty(t, r.spy.unmapped, "every writer method the run called has a resource mapping")
-	declared := t6g5WriteKinds(tasks.CommonOf(r.def).Effects)
+	require.NotEmpty(t, r.spy.recorded(), "a live run of a writing kind wrote something, or the subset check below proves nothing")
+	declared := t6g5WriteKinds(t, tasks.CommonOf(r.def).Effects)
 	for _, res := range r.spy.recorded() {
 		assert.Contains(t, declared, res, "the run wrote %q, which %s does not declare in its Effects", res, r.def.Kind())
 	}

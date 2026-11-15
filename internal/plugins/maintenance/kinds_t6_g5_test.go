@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g5_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: c0ba68fc-0752-49a5-9e51-187eca399e39
 // last-edited: 2026-11-14
 
@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/falkcorp/mediacore/tasks/taskstest"
@@ -213,6 +214,14 @@ func t6g5Run(t *testing.T, d tasks.Definition, rc *tasks.RC, params string) (jso
 	}
 	p, err := decode(raw)
 	require.NoError(t, err)
+	// A run that panics fails THIS test instead of killing the test binary: with
+	// the binary dead, every test after it (in later files) never runs, and a
+	// mutation pass would credit the kill to whichever test crashed first.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("%s panicked instead of returning an error: %v", d.Kind(), r)
+		}
+	}()
 	return task.Run(rc, p)
 }
 
@@ -236,10 +245,13 @@ func t6g5ParString(d tasks.Definition) string {
 	return p.String()
 }
 
-// t6g5WriteKinds lists the books resource kinds an Effects writes, sorted.
-func t6g5WriteKinds(e tasks.Effects) []string {
+// t6g5WriteKinds lists the resource kinds an Effects writes, sorted, and fails
+// the test when any of them is declared under a module other than books.
+func t6g5WriteKinds(t *testing.T, e tasks.Effects) []string {
+	t.Helper()
 	var out []string
 	for _, r := range e.WriteSet() {
+		assert.Equal(t, "books", r.Module, "every write of this group is declared under the books module (%s)", r.Kind)
 		out = append(out, r.Kind)
 	}
 	slices.Sort(out)
@@ -266,20 +278,20 @@ type t6g5Want struct {
 
 func t6g5Wants() []t6g5Want {
 	return []t6g5Want{
-		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{"authors", "book_files", "books", "user_state"}},
-		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false, []string{"user_state"}},
-		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{"book_files", "books", "external_ids", "user_state"}},
-		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false, []string{"books"}},
-		{"maintenance.mark-missing-files", (*Plugin).markMissingFilesDef, tasks.ResumeDrop, false, []string{"book_files", "books"}},
-		{"maintenance.merge-same-path-dupes", (*Plugin).mergeSamePathDupesDef, tasks.ResumeDrop, false, []string{"book_files", "books", "external_ids", "operations", "user_state"}},
+		{"itunes.clone-into-library", (*Plugin).itunesCloneIntoLibraryDef, tasks.ResumeDrop, false, []string{string(ops.ResAuthors), string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResFiles), string(ops.ResUserState)}},
+		{"itunes.playlist-import", (*Plugin).itunesPlaylistImportDef, tasks.ResumeDrop, false, []string{string(ops.ResUserState)}},
+		{"itunes.regroup", (*Plugin).itunesRegroupDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResUserState)}},
+		{"maintenance.repair-library-state", (*Plugin).repairLibraryStateDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks)}},
+		{"maintenance.mark-missing-files", (*Plugin).markMissingFilesDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks)}},
+		{"maintenance.merge-same-path-dupes", (*Plugin).mergeSamePathDupesDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks), string(ops.ResExternalIDs), string(ops.ResOperations), string(ops.ResUserState)}},
 		{"maintenance.metadata-refresh", (*Plugin).metadataRefreshDef, tasks.ResumeFromZero, true, nil},
-		{"maintenance.metadata-cache-reap", (*Plugin).metadataCacheReapDef, tasks.ResumeDrop, false, []string{"metadata_cache"}},
+		{"maintenance.metadata-cache-reap", (*Plugin).metadataCacheReapDef, tasks.ResumeDrop, false, []string{string(ops.ResMetadataCache)}},
 		{"maintenance.missing-file-audit", (*Plugin).missingFileAuditDef, tasks.ResumeDrop, true, nil},
 		{"maintenance.missing-file-repair", (*Plugin).missingFileRepairDef, tasks.ResumeDrop, true, nil},
-		{"maintenance.missing-file-repoint", (*Plugin).missingFileRepointDef, tasks.ResumeDrop, false, []string{"book_files", "books"}},
-		{"maintenance.move-book-file-rows", (*Plugin).moveBookFileRowsDef, tasks.ResumeDrop, false, []string{"book_files", "books"}},
-		{"maintenance.purge-empty-narrators", (*Plugin).purgeEmptyNarratorsDef, tasks.ResumeDrop, false, []string{"books", "operations"}},
-		{"maintenance.split-joined-narrators", (*Plugin).splitJoinedNarratorsDef, tasks.ResumeDrop, false, []string{"books", "operations"}},
+		{"maintenance.missing-file-repoint", (*Plugin).missingFileRepointDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks)}},
+		{"maintenance.move-book-file-rows", (*Plugin).moveBookFileRowsDef, tasks.ResumeDrop, false, []string{string(ops.ResBookFiles), string(ops.ResBooks)}},
+		{"maintenance.purge-empty-narrators", (*Plugin).purgeEmptyNarratorsDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks), string(ops.ResOperations)}},
+		{"maintenance.split-joined-narrators", (*Plugin).splitJoinedNarratorsDef, tasks.ResumeDrop, false, []string{string(ops.ResBooks), string(ops.ResOperations)}},
 	}
 }
 
@@ -307,7 +319,7 @@ func TestT6G5Kinds_MatchHEADDefs(t *testing.T) {
 			assert.True(t, c.Effects.Declared())
 			assert.Equal(t, w.readOnly, c.Effects.IsReadOnly(), "R7 effects class")
 			if !w.readOnly {
-				assert.Equal(t, w.writes, t6g5WriteKinds(c.Effects), "R7 write set")
+				assert.Equal(t, w.writes, t6g5WriteKinds(t, c.Effects), "R7 write set")
 			}
 			assert.Equal(t, "", t6g5ParString(d), "a Task declares no Parallelism: its loops pass theirs to RunItems")
 		})

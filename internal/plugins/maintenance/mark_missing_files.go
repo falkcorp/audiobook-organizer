@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/mark_missing_files.go
-// version: 1.11.2
+// version: 1.11.3
 // guid: 3d7a9c14-6e28-4f5b-b0a3-1c9e5d827f46
 // last-edited: 2026-11-14
 
@@ -54,6 +54,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -240,7 +241,7 @@ func (p *Plugin) runMarkMissingFiles(ctx context.Context, rawParams json.RawMess
 // the book's size and duration (HEAD declares none; found: UpdateBookFiles). The params
 // decode into HEAD's struct after the mode key (apply) is refused.
 func (p *Plugin) markMissingFilesKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)), tasks.Res("books", string(sdk.ResBooks)))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)))
 	return tasks.Task(markMissingFilesKind, tasks.TaskSpec[json.RawMessage, markMissingPlan]{
 		Common: t6g5Common(p.markMissingFilesDef(), markMissingFilesKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (markMissingPlan, error) {

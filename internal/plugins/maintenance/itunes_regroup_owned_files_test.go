@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_owned_files_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: c3a58e17-4f20-4b96-8d71-e0b92a6f5c34
 // last-edited: 2026-11-14
 
@@ -80,7 +80,7 @@ func TestITunesRegroupApply_DeleteKeepsHolderOfOnlyRetiredRowsWithItsState(t *te
 	retireRowInto(t, s, loser)
 
 	p := &Plugin{}
-	if _, err := t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState); err != nil {
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserStateFor); err != nil {
 		t.Fatalf("t6g5ApplyRegroupPlan: %v", err)
 	}
 	live, err := s.GetBookFiles(loser)
@@ -132,7 +132,7 @@ func TestITunesRegroupApply_DeleteRechecksOwnedRowsUnderTheLockBeforeTheCarry(t 
 	w := &retiredAfterFirstReadStore{PebbleStore: s, t: t, bookID: loser}
 
 	p := &Plugin{}
-	if _, err := t6g5ApplyRegroupPlan(context.Background(), w, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState); err != nil {
+	if _, err := t6g5ApplyRegroupPlan(context.Background(), w, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserStateFor); err != nil {
 		t.Fatalf("t6g5ApplyRegroupPlan: %v", err)
 	}
 	if w.calls < 2 {

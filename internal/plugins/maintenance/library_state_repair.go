@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/library_state_repair.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7c41d9e2-8b06-4f53-9a17-2e5d0b3c68af
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -261,7 +262,7 @@ func (p *Plugin) runRepairLibraryState(ctx context.Context, rawParams json.RawMe
 // libraryStateRepairKind builds the native kind. Writes: HEAD's declared
 // books resource; the preview is HEAD's dry run.
 func (p *Plugin) libraryStateRepairKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBooks)))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)))
 	return tasks.Task(libraryStateRepairKind, tasks.TaskSpec[json.RawMessage, libraryStateRepairResult]{
 		Common: t6g5Common(p.repairLibraryStateDef(), libraryStateRepairKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (libraryStateRepairResult, error) {

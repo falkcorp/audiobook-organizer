@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/manual_only_followups_test.go
-// version: 1.2.6
+// version: 1.2.7
 // guid: 414c97a5-21fa-425f-81df-a00e9bf95fd6
 // last-edited: 2026-11-14
 
@@ -89,7 +89,7 @@ func TestITunesRegroupApply_SkipsCheckFailedGroup(t *testing.T) {
 		{Title: "Album G", PIDs: []string{"q1", "q2"}},
 	}, snap)
 	require.True(t, plan.Groups[0].ManualCheckFailed)
-	_, err = t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState)
+	_, err = t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserStateFor)
 	require.NoError(t, err)
 
 	for _, id := range []string{f1, f2} {
@@ -163,7 +163,7 @@ func TestITunesRegroupApply_RecheckReadFailureSkipsGroup(t *testing.T) {
 	require.Equal(t, 2, plan.Consolidated)
 
 	s.failID, s.armed = plan.Groups[0].Target, true
-	_, err = t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserState)
+	_, err = t6g5ApplyRegroupPlan(context.Background(), s, plan, rgRoot, t6g5RgReporter(context.Background(), rep), p.t6g5RegroupUserStateFor)
 	require.Error(t, err, "a recheck read failure is reported at the end of the run")
 
 	var skipped bool

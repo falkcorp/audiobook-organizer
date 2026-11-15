@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/move_book_file_rows.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 43feca72-a61b-4386-97c9-17d58ba2bf8c
 // last-edited: 2026-11-14
 
@@ -57,6 +57,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -254,7 +255,7 @@ func t6g5MbfHeadProgress(reporter sdk.Reporter) func(done, total int, msg string
 // book_files resource and the books both ends of a move recompute
 // (MoveBookFilesToBookBulk); the preview is HEAD's dry run.
 func (p *Plugin) moveBookFileRowsKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", string(sdk.ResBookFiles)), tasks.Res("books", string(sdk.ResBooks)))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBookFiles)), tasks.Res("books", string(ops.ResBooks)))
 	return tasks.Task(moveBookFileRowsKind, tasks.TaskSpec[json.RawMessage, mbfReport]{
 		Common: t6g5Common(p.moveBookFileRowsDef(), moveBookFileRowsKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (mbfReport, error) {

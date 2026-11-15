@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.32.1
+// version: 1.32.2
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-11-14
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 	"golang.org/x/sync/errgroup"
@@ -211,7 +212,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 		RootDir:  config.AppConfig.RootDir,
 		NewStore: func() (regroupCoreStore, func(itunesRegroupStore) t6g5RegroupUserState, error) {
 			rstore, err := newRegroupRunStore(store, p.deps.BookTagReader())
-			return rstore, p.t6g5RegroupUserState, err
+			return rstore, p.t6g5RegroupUserStateFor, err
 		},
 	}
 	return itunesRegroupCore(ctx, params, env)
@@ -224,8 +225,8 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 // delete carries (t6g5RegroupUserState); HEAD declares only capabilities. The dry-run
 // keys are refused, the mode is the run's.
 func (p *Plugin) itunesRegroupKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"),
-		tasks.Res("books", "external_ids"), tasks.Res("books", "user_state"))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)),
+		tasks.Res("books", string(ops.ResExternalIDs)), tasks.Res("books", string(ops.ResUserState)))
 	return tasks.Task(itunesRegroupKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: t6g5Common(p.itunesRegroupDef(), itunesRegroupKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
@@ -394,11 +395,11 @@ func regroupCheckFailedBooks(snap itunesservice.Snapshot) []string {
 	return ids
 }
 
-// t6g5RegroupUserState is where the empty-book delete reads users' listening state
+// t6g5RegroupUserStateFor is where the empty-book delete reads users' listening state
 // and carries it to the regrouped book: the wired merge user-state store, else
 // the run's store when it can (a bare PebbleStore in tests). nil fails the
 // delete closed.
-func (p *Plugin) t6g5RegroupUserState(store itunesRegroupStore) t6g5RegroupUserState {
+func (p *Plugin) t6g5RegroupUserStateFor(store itunesRegroupStore) t6g5RegroupUserState {
 	if p.deps != nil {
 		if um := p.deps.MergeUserStateStore(); um != nil {
 			return icMergeUserState{um}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/metadata_cache_reap.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6b1f9d47-3c82-4e05-9a71-d84c2f60e5b3
-// last-edited: 2026-11-13
+// last-edited: 2026-11-14
 
 // Package maintenance — REAPER for metadata_cache rows whose book is gone.
 //
@@ -52,6 +52,7 @@ import (
 	"sync/atomic"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -240,7 +241,7 @@ func (p *Plugin) runMetadataCacheReap(ctx context.Context, rawParams json.RawMes
 // delete (DeleteMetadataCache), the books-store resource "metadata_cache"; the
 // per-row report is a file, not a store write.
 func (p *Plugin) metadataCacheReapKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "metadata_cache"))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResMetadataCache)))
 	return tasks.Task(metadataCacheReapKind, tasks.TaskSpec[json.RawMessage, reapPlan]{
 		Common: t6g5Common(p.metadataCacheReapDef(), metadataCacheReapKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (reapPlan, error) {

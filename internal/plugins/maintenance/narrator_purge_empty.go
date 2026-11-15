@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/narrator_purge_empty.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: b1c1b8ef-893a-4ff8-9714-8ed1521febfa
 // last-edited: 2026-11-14
 
@@ -17,6 +17,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -230,7 +231,7 @@ func (p *Plugin) purgeEmptyNarrators(ctx context.Context, params purgeEmptyNarra
 // HEAD declares none. The params decode into HEAD's struct after the mode key
 // (apply) is refused.
 func (p *Plugin) purgeEmptyNarratorsKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "operations"))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResOperations)))
 	return tasks.Task(purgeEmptyNarratorsKind, tasks.TaskSpec[json.RawMessage, emptyNarratorReport]{
 		Common: t6g5Common(p.purgeEmptyNarratorsDef(), purgeEmptyNarratorsKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (emptyNarratorReport, error) {

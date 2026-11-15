@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.18.3
+// version: 1.18.4
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-11-14
 
@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -542,15 +543,20 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 // book_files and the chapter table through the store calls, the book rows the
 // clone creates (CloneBookIntoLibrary), the credit lists (SetBookAuthors), the
 // listening state a rollback carries back to the source (icUserState) and the
-// undo records in _system preferences (SetUserPreferenceForUser); HEAD declares
-// only capabilities.
+// undo records in _system preferences (SetUserPreferenceForUser), and the audio
+// bytes a live apply reflinks into the library tree and a rollback removes
+// (files); HEAD declares only capabilities.
 // apply, rollback and repair stay params (HEAD's LiveOneOf: they pick which
 // write a live run makes, they are not the run's mode): a preview forces all
 // three false, a live run must name exactly one. dry_run and dryRun, which
 // would carry the mode, are refused like every writing kind's.
 func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
-	eff := tasks.Writes(tasks.Res("books", "books"), tasks.Res("books", "book_files"),
-		tasks.Res("books", "authors"), tasks.Res("books", "user_state"))
+	eff := tasks.Writes(tasks.Res("books", string(ops.ResBooks)), tasks.Res("books", string(ops.ResBookFiles)),
+		tasks.Res("books", string(ops.ResAuthors)), tasks.Res("books", string(ops.ResUserState)),
+		// files: a live apply reflinks audio into the library tree (CloneBookIntoLibrary,
+		// Reflink) and rollback removes those files, so a clone must not run beside
+		// another bytes-on-disk writer such as the empty-folder sweep.
+		tasks.Res("books", string(ops.ResFiles)))
 	return tasks.Task(itunesCloneIntoLibraryKind, tasks.TaskSpec[json.RawMessage, *icReport]{
 		Common: t6g5Common(p.itunesCloneIntoLibraryDef(), itunesCloneIntoLibraryKind, eff, sched),
 		Run: func(rc *tasks.RC, raw json.RawMessage) (*icReport, error) {
