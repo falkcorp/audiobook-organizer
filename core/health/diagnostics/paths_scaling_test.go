@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_scaling_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3e8a5d71-c204-4b96-8f1d-6a0b9e2c4d58
 // last-edited: 2026-11-14
 
@@ -149,24 +149,27 @@ func bestOf(run func(string) string, line string) (out string, best time.Duratio
 // decoded up to maxDecode+1 layers before it is judged. Each shape below makes a
 // naive version re-read its token from every scheme start, every "%" or every
 // token start, and so is quadratic. None may be, on the text road or on the
-// whole-value road, and none may leak.
+// whole-value road, and none may leak. The lines are sized to take well under a
+// second each with -race and -coverprofile on a workstation (core-ci runs them
+// that way on a shared runner several times slower), and a quadratic scan of
+// them still takes many seconds.
 func TestRedactPaths_UrlAndEncodedTokenShapesAreLinear(t *testing.T) {
 	roots := scalingRoots()
 	for name, line := range map[string]string{
-		"https runs":            strings.Repeat("https://h/", 40_000) + "?p=/home/bruce",
-		"url queries":           strings.Repeat("https://h/x?a=1 ", 25_000) + "/home/bruce",
-		"url long query":        "https://h/x?" + strings.Repeat("a=1&", 90_000) + "p=/home/bruce",
-		"url fragments":         "https://h/x" + strings.Repeat("#a", 100_000) + "#/home/bruce",
-		"scheme-start letters":  strings.Repeat("a!", 150_000) + "/home/bruce",
-		"scheme-like runs":      strings.Repeat("ab+c-d.e", 50_000) + " /home/bruce",
-		"encoded layers":        "path=" + strings.Repeat("%25", 130_000) + "2Fhome%2Fbruce",
-		"encoded separators":    "path=" + strings.Repeat("%2F", 130_000) + "home%2Fbruce",
-		"many encoded tokens":   strings.Repeat("a%2Fb ", 60_000) + "/home/bruce",
-		"many token starts":     strings.Repeat(`"%2F`, 90_000) + "/home/bruce",
-		"opening brackets":      strings.Repeat("(", 300_000) + "%2Fhome%2Fbruce",
-		"bracketed tokens":      strings.Repeat("(a%2Fb) ", 40_000) + "/home/bruce",
-		"bad escapes":           "path=" + strings.Repeat("%zz&%2", 60_000) + "&%2Fhome%2Fbruce",
-		"encoded tokens, paths": strings.Repeat("x=%2Fhome%2Fbruce ", 20_000),
+		"https runs":            strings.Repeat("https://h/", 15_000) + "?p=/home/bruce",
+		"url queries":           strings.Repeat("https://h/x?a=1 ", 8_000) + "/home/bruce",
+		"url long query":        "https://h/x?" + strings.Repeat("a=1&", 30_000) + "p=/home/bruce",
+		"url fragments":         "https://h/x" + strings.Repeat("#a", 30_000) + "#/home/bruce",
+		"scheme-start letters":  strings.Repeat("a!", 50_000) + "/home/bruce",
+		"scheme-like runs":      strings.Repeat("ab+c-d.e", 12_000) + " /home/bruce",
+		"encoded layers":        "path=" + strings.Repeat("%25", 40_000) + "2Fhome%2Fbruce",
+		"encoded separators":    "path=" + strings.Repeat("%2F", 40_000) + "home%2Fbruce",
+		"many encoded tokens":   strings.Repeat("a%2Fb ", 15_000) + "/home/bruce",
+		"many token starts":     strings.Repeat(`"%2F`, 20_000) + "/home/bruce",
+		"opening brackets":      strings.Repeat("(", 100_000) + "%2Fhome%2Fbruce",
+		"bracketed tokens":      strings.Repeat("(a%2Fb) ", 10_000) + "/home/bruce",
+		"bad escapes":           "path=" + strings.Repeat("%zz&%2", 20_000) + "&%2Fhome%2Fbruce",
+		"encoded tokens, paths": strings.Repeat("x=%2Fhome%2Fbruce ", 6_000),
 	} {
 		if len(line) >= maxLineBytes {
 			t.Fatalf("%s: %d bytes would not reach the redactor", name, len(line))
