@@ -1,7 +1,7 @@
 // file: internal/transcribe/workerswap_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 2c80f6dd-e49e-4cf4-acef-60b49489f7aa
-// last-edited: 2026-11-03
+// last-edited: 2026-11-15
 
 package transcribe
 
@@ -846,8 +846,24 @@ func TestVerify_ARecentConfirmationVouchesForAnUnreadableProbeAndAnOldOneDoesNot
 	}
 }
 
+// confirmed reports whether a readable probe has confirmed the frozen identity.
+func (e *identityEvidence) confirmed() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return !e.at.IsZero()
+}
+
 // The poll is the usual source of that confirmation: a probe it read during the
 // request vouches for a response whose own probe is then unreadable.
+//
+// The request must not answer, and /health must not go down, until the poll's
+// confirmation is RECORDED. Two earlier gates were weaker and made this test
+// flaky under -race: the server counts a probe on entering its handler, before
+// it has chosen the status, so flipping on that count could turn the very probe
+// being counted into a 500; and the poller records a confirmation only after the
+// client has read the 200, so answering as soon as the handler was entered let the
+// post-response check run before the evidence existed. Waiting on the evidence
+// itself leaves no ordering to chance.
 func TestVerify_APollProbeDuringTheRequestVouchesForTheResponse(t *testing.T) {
 	shortLiveness(t, 15*time.Millisecond)
 	freshCanaryMemory(t)
@@ -859,10 +875,16 @@ func TestVerify_APollProbeDuringTheRequestVouchesForTheResponse(t *testing.T) {
 		return http.StatusOK, swapHealth(batMachine)
 	})
 	noteCanaryPort(batKey, srv.URL, true)
-	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
+	seen := &identityEvidence{}
+	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true, seen: seen})
 	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error {
-		deadline := time.Now().Add(5 * time.Second)
-		for hits.Load() == 0 && time.Now().Before(deadline) {
+		// The bound only ends a poll that never confirms; it is not a timing
+		// the test relies on.
+		deadline := time.Now().Add(10 * time.Second)
+		for !seen.confirmed() {
+			if time.Now().After(deadline) {
+				return errors.New("setup: the poll never confirmed the machine during the request")
+			}
 			time.Sleep(time.Millisecond)
 		}
 		down.Store(true) // the worker stops answering /health the moment it answers the request
