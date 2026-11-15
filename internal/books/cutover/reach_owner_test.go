@@ -1,5 +1,5 @@
 // file: internal/books/cutover/reach_owner_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c0e8b71-3f2a-4d96-8a14-b7e69d1c2f08
 // last-edited: 2026-11-15
 
@@ -27,7 +27,9 @@ import (
 // table holds none, so every principal is refused. reachOwnerSetVerdict is that
 // model; the test compares it with the recording, route by route and principal
 // by principal. It is a separate comparison with no expected differences, so the
-// 217-cell golden list is untouched.
+// 217-cell golden list is untouched. A missing recording fails it (the recording is
+// committed; the flip guard in reach_pin_source_test.go holds the same condition
+// at the mount switch).
 
 // reachOwnerRecorded are the nine routes the recorder boots again with an owner
 // set (OWNER_ROUTES in scripts/r2corpus/record_r0_reach.py).
@@ -140,7 +142,7 @@ func reachManifestOwnerRoutes() []string {
 func TestReachOwnerSet_R0RefusesEveryTablePrincipalAsTheOwnerSetModelDoes(t *testing.T) {
 	pd, vd := reachLoad(t)
 	if vd.OwnerSet == nil {
-		t.Skip("verdicts.json has no owner_set recording; TestReachFlip_FailsAtTheFlipWhileThePinOrTheOwnerlessModelStands holds the flip until it does")
+		t.Fatal("verdicts.json has no owner_set recording: the owner-gated routes were recorded without an owner (record_r0_reach.py)")
 	}
 	whos := make([]reachWho, len(pd.Principals))
 	for i, pr := range pd.Principals {
