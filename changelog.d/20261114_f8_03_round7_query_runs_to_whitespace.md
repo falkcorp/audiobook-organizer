@@ -1,0 +1,3 @@
+### Fixed
+
+- core: the diagnostics bundle's opaque query now runs to the next whitespace in every context. A raw quote, backtick, apostrophe, bracket, angle bracket or comma in a directory name inside a request target or URL query no longer ends the redaction early and leaves the rest of the name in a free-text log line. The path part of a request target or URL is read to the same end, so a directory name with a quote in it after a doubled slash or an encoded separator is replaced whole. A quoted route with a query loses its closing quote and any punctuation glued to it in the redacted view. Pinned by exact-output tests, a widened planted-marker generator and fuzz target, and linear-time tests for a line of quotes.

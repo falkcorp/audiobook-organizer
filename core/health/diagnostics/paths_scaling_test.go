@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/paths_scaling_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 3e8a5d71-c204-4b96-8f1d-6a0b9e2c4d58
 // last-edited: 2026-11-14
 
@@ -170,6 +170,41 @@ func TestRedactPaths_UrlAndEncodedTokenShapesAreLinear(t *testing.T) {
 		"bracketed tokens":      strings.Repeat("(a%2Fb) ", 10_000) + "/home/bruce",
 		"bad escapes":           "path=" + strings.Repeat("%zz&%2", 20_000) + "&%2Fhome%2Fbruce",
 		"encoded tokens, paths": strings.Repeat("x=%2Fhome%2Fbruce ", 6_000),
+	} {
+		if len(line) >= maxLineBytes {
+			t.Fatalf("%s: %d bytes would not reach the redactor", name, len(line))
+		}
+		for road, run := range map[string]func(string) string{"text": roots.redactPaths, "value": roots.redactValue} {
+			out, d := bestOf(run, line)
+			if d > scalingBound {
+				t.Fatalf("%s/%s: %d bytes took %s in each of %d runs, want under %s: the scan is not linear", name, road, len(line), d, scalingAttempts, scalingBound)
+			}
+			if strings.Contains(out, "bruce") {
+				t.Errorf("%s/%s: a path survived: %q", name, road, head(out))
+			}
+		}
+	}
+}
+
+// TestRedactPaths_QuotedTokenShapesAreLinear (round 7, G9): a route, a URL and an
+// encoded token run to whitespace and no quote, backtick or bracket ends them, so
+// a line with many quotes and no whitespace is one long token. A scan that judged
+// that token again from each quote (every quote is a place a token may start) is
+// quadratic; one judgement covers every start inside it. None of these may be,
+// and none may leak.
+func TestRedactPaths_QuotedTokenShapesAreLinear(t *testing.T) {
+	roots := scalingRoots()
+	for name, line := range map[string]string{
+		"quoted encoded no path":   strings.Repeat(`"a%41`, 20_000) + " /home/bruce",
+		"quotes then a percent":    strings.Repeat(`"a`, 60_000) + " %zz /home/bruce",
+		"backtick tokens":          strings.Repeat("`a%41", 20_000) + " /home/bruce",
+		"escaped quote tokens":     strings.Repeat(`\"a%41`, 15_000) + " /home/bruce",
+		"quoted route paths":       strings.Repeat(`"/api/x`, 20_000) + " /home/bruce",
+		"quoted route queries":     strings.Repeat(`"/api/x?a=1`, 15_000) + " /home/bruce",
+		"quoted url paths":         strings.Repeat(`"https://h/x`, 12_000) + " /home/bruce",
+		"quoted url queries":       strings.Repeat(`"https://h/x?a=%41`, 8_000) + " /home/bruce",
+		"quoted tokens, spaced":    strings.Repeat(`"a%41" `, 15_000) + "/home/bruce",
+		"quote runs, then percent": strings.Repeat(`"`, 100_000) + "%41 /home/bruce",
 	} {
 		if len(line) >= maxLineBytes {
 			t.Fatalf("%s: %d bytes would not reach the redactor", name, len(line))
