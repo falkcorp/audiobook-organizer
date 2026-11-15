@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_gate.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4e7a1c92-6b35-4d08-a9f1-2c5d8e03b764
 // last-edited: 2026-11-15
 
@@ -215,6 +215,9 @@ func f803bReadMarker(files []string) (bool, error) {
 			return false, fmt.Errorf("parse %s: %v", file, err)
 		}
 		for _, d := range af.Decls {
+			if name := f803bShadowedBool(d); name != "" {
+				return false, fmt.Errorf("archtest: %s declares %q at package level in %s: the marker is read as the identifier text true or false, and a package-level %s (const true = false) would change what that text means; the guard does not evaluate it, so the declaration is refused", diagnosticsPath, name, file, name)
+			}
 			gd, ok := d.(*ast.GenDecl)
 			if !ok || gd.Tok != token.CONST {
 				continue
@@ -250,6 +253,39 @@ func f803bReadMarker(files []string) (bool, error) {
 		return false, fmt.Errorf("archtest: %s.%s is declared %d times (%s): the marker is one constant in one file; a second declaration (a build-tagged pair, say) lets a build see a value this guard did not", diagnosticsPath, f803bMarker, len(decls), strings.Join(decls, ", "))
 	}
 	return true, nil
+}
+
+// f803bShadowedBool returns "true" or "false" when d declares that identifier at
+// package level (a const, var, type or plain func), and "" otherwise. The marker
+// reader matches the identifier text of the marker's value, so a package that
+// redeclares true or false would make that text mean something else. This is the
+// source-level stand-in for evaluating the constant through go/types, which the
+// reader does not do (it parses without type-checking, so archtest imports
+// nothing it guards); refusing the declaration is stricter than evaluating it.
+func f803bShadowedBool(d ast.Decl) string {
+	isBool := func(id *ast.Ident) bool { return id.Name == "true" || id.Name == "false" }
+	switch d := d.(type) {
+	case *ast.FuncDecl:
+		if d.Recv == nil && isBool(d.Name) {
+			return d.Name.Name
+		}
+	case *ast.GenDecl:
+		for _, spec := range d.Specs {
+			switch spec := spec.(type) {
+			case *ast.ValueSpec:
+				for _, n := range spec.Names {
+					if isBool(n) {
+						return n.Name
+					}
+				}
+			case *ast.TypeSpec:
+				if isBool(spec.Name) {
+					return spec.Name.Name
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // f803bKnownOS and f803bKnownArch return the GOOS and GOARCH values the go

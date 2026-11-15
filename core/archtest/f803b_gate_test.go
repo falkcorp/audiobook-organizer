@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_gate_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 91c3e5a7-0d48-4f26-8b1e-6a7d2f4c9e03
 // last-edited: 2026-11-15
 
@@ -329,6 +329,33 @@ func Boot() { e, _ := diagnostics.New(); _ = healthhttp.Register(e) }
 		grouped := map[string]string{"health/diagnostics/paths.go": "package diagnostics\n\nconst (\n\tother = 1\n\tRedesignPendingF8_03b = true\n)\n"}
 		if got, err := F803bGateFindings(gateTree(t, "true", grouped)); err != nil || len(got) != 0 {
 			t.Errorf("one declaration in a const group: %v, %v; want none", got, err)
+		}
+	})
+
+	// Final review round, fix 1: the reader matches the text true, so a package
+	// that redeclares true or false (const, var, type or func) must be refused, in
+	// the marker's file or any other file of diagnostics, built or not.
+	t.Run("ShadowedTrueIsRefused", func(t *testing.T) {
+		shadow := func(path, body string) map[string]string { return map[string]string{path: body} }
+		for name, files := range map[string]map[string]string{
+			"const true = false, other file": shadow("health/diagnostics/shadow.go", "package diagnostics\n\nconst true = false\n"),
+			"grouped const false":            shadow("health/diagnostics/shadow.go", "package diagnostics\n\nconst (\n\tother = 1\n\tfalse = true\n)\n"),
+			"var true":                       shadow("health/diagnostics/shadow.go", "package diagnostics\n\nvar true = 0\n"),
+			"type true":                      shadow("health/diagnostics/shadow.go", "package diagnostics\n\ntype true int\n"),
+			"func true":                      shadow("health/diagnostics/shadow.go", "package diagnostics\n\nfunc true() {}\n"),
+			"in an ignored file":             shadow("health/diagnostics/shadow.go", "//go:build neverbuilt\n\npackage diagnostics\n\nconst true = false\n"),
+			"marker file shadows true":       shadow("health/diagnostics/paths.go", "package diagnostics\n\nconst true = false\n\nconst RedesignPendingF8_03b = true\n"),
+		} {
+			got, err := F803bGateFindings(gateTree(t, "true", files))
+			if err == nil || !strings.Contains(err.Error(), "at package level") {
+				t.Errorf("%s: err = %v, findings %v; want the package-level declaration error", name, err, got)
+			}
+		}
+		// A local named true inside a function does not touch the package-level
+		// marker and is not refused.
+		local := shadow("health/diagnostics/local.go", "package diagnostics\n\nfunc local() bool { true := false; return true }\n")
+		if got, err := F803bGateFindings(gateTree(t, "true", local)); err != nil || len(got) != 0 {
+			t.Errorf("local shadow: %v, %v; want none", got, err)
 		}
 	})
 
