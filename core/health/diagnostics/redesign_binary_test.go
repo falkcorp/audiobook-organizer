@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/redesign_binary_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d3f5b72-6a14-4c90-b7e2-1f9a4d6c0e53
 // last-edited: 2026-11-15
 
@@ -68,7 +68,9 @@ func moduleRoot(t *testing.T) string {
 //   - the TagSets() entries for this module that run on this host, and every
 //     -tags list in Makefile*, Dockerfile*, .github/workflows/ and .woodpecker/,
 //     with a make variable in a list ($(GO_BUILD_TAGS)) resolved from the
-//     Makefile's own assignments (=, :=, ?=, +=, nested). The deployed set,
+//     Makefile's own assignments (=, :=, ?=, +=, nested, with an existing
+//     -include'd file read at its include line), and the release build,
+//     .goreleaser.yml's tags: and env: CGO_ENABLED per goos. The deployed set,
 //     `make build-linux`'s embed_frontend fts5 native_taglib pprof, is one of them
 //     and is pinned below. A -tags argument the derivation cannot reduce to a
 //     concrete list fails archtest.F803bShippedTagSets, so it cannot drop out;
@@ -76,8 +78,8 @@ func moduleRoot(t *testing.T) string {
 //     machine); the gate's constraint rule (b) reads the files of both packages
 //     for every GOOS instead.
 //
-// Still missed: a variable set outside the repo's files (a gitignored
-// Makefile.local, the make command line, the environment, a CI input), a tag list
+// Still missed: a variable set outside the repo's files (a Makefile.local that
+// is not in the checkout, the make command line, the environment, a CI input), a tag list
 // a script assembles at run time, a build file outside the scanned set, and
 // a linker -X override of the testing package's test-binary variable, which only
 // archtest.F803bNoLinkerOverride's text scan guards.

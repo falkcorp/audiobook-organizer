@@ -1,5 +1,5 @@
 // file: core/archtest/f803b_probe.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2d6f0a8-4c17-4e93-9a5b-7d1e3c8f2a60
 // last-edited: 2026-11-15
 
@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // f803bProbeNote ends every finding of the probe pin.
@@ -441,6 +443,75 @@ func f803bMakeVarsInto(vars map[string]string, body string, read func(name strin
 	return nil
 }
 
+// f803bGoreleaserSets reads the release build's tag sets from a .goreleaser.yml
+// body: one TagSet per (build, goos), carrying the build's `tags:` list and its
+// `env: CGO_ENABLED=` value. goreleaser builds every goos listed, so the release
+// binary of each is a shipped set. It is an error (named in the returned list, one
+// "name: why" per problem) when a build's tags, goos or env hold a template
+// ({{ ... }}), when a build names no goos (goreleaser's default list is not read
+// here), and when a build's `flags:` name -tags (that spelling would add tags this
+// reading does not merge).
+func f803bGoreleaserSets(rel, body string) (sets []TagSet, bad []string) {
+	var cfg struct {
+		Builds []struct {
+			ID    string   `yaml:"id"`
+			Env   []string `yaml:"env"`
+			Goos  []string `yaml:"goos"`
+			Tags  []string `yaml:"tags"`
+			Flags []string `yaml:"flags"`
+		} `yaml:"builds"`
+	}
+	if err := yaml.Unmarshal([]byte(body), &cfg); err != nil {
+		return nil, []string{rel + ": " + err.Error()}
+	}
+	for i, b := range cfg.Builds {
+		name := b.ID
+		if name == "" {
+			name = strconv.Itoa(i)
+		}
+		where := rel + " build " + name
+		var problems []string
+		for _, v := range slices.Concat(b.Env, b.Goos, b.Tags, b.Flags) {
+			if strings.Contains(v, "{{") {
+				problems = append(problems, fmt.Sprintf("%q is a template, which this reading does not evaluate", v))
+			}
+		}
+		if len(b.Goos) == 0 {
+			problems = append(problems, "names no goos (goreleaser's default list is not read here)")
+		}
+		for _, f := range b.Flags {
+			if strings.Contains(f, "-tags") {
+				problems = append(problems, fmt.Sprintf("flags %q name -tags; put the list under tags:", f))
+			}
+		}
+		cgo := ""
+		for _, e := range b.Env {
+			if v, ok := strings.CutPrefix(e, "CGO_ENABLED="); ok {
+				cgo = v
+			}
+		}
+		if cgo != "" && cgo != "0" && cgo != "1" {
+			problems = append(problems, fmt.Sprintf("CGO_ENABLED=%q is not 0 or 1", cgo))
+		}
+		for _, w := range b.Tags {
+			if !f803bTagWord().MatchString(w) {
+				problems = append(problems, fmt.Sprintf("tag %q is not a build tag", w))
+			}
+		}
+		if len(problems) > 0 {
+			bad = append(bad, where+": "+strings.Join(problems, "; "))
+			continue
+		}
+		tags := slices.Clone(b.Tags)
+		slices.Sort(tags)
+		tags = slices.Compact(tags)
+		for _, goos := range b.Goos {
+			sets = append(sets, TagSet{Name: "goreleaser " + name + " " + goos, GOOS: goos, CGOEnabled: cgo, Tags: tags})
+		}
+	}
+	return sets, bad
+}
+
 // f803bExpand replaces every $(NAME) and ${NAME} in text with the value of NAME
 // in vars, repeatedly (a value may name another variable, to a depth of 8). It
 // returns the names it could not resolve: a name that is not in vars, a make
@@ -521,7 +592,9 @@ func f803bTagsIn(body string, vars map[string]string) (lists [][]string, unresol
 // (GOOS, tag set) pairs CI and the Dockerfiles build, 03 §3.5.1 item 4) that apply to
 // the core module, plus every distinct -tags list read from the repo's own
 // build files (Makefile*, Dockerfile*, the workflow and pipeline YAML under
-// .github/workflows and .woodpecker) that TagSets() does not already name,.
+// .github/workflows and .woodpecker) that TagSets() does not already name, plus
+// the release build: the repo root's .goreleaser.yml, one set per (build, goos)
+// with the build's `tags:` and `env: CGO_ENABLED=` (f803bGoreleaserSets).
 //
 // A make variable in a tag list ($(GO_BUILD_TAGS)) is resolved from the
 // assignments of the Makefile that holds it, else from the other Makefiles when
@@ -531,13 +604,15 @@ func f803bTagsIn(body string, vars map[string]string) (lists [][]string, unresol
 // Makefile.local` after `GO_BUILD_TAGS := pprof` lets an existing Makefile.local
 // override it and an assignment after the include line overrides Makefile.local.
 // The second return is how many distinct lists the build files named. Any -tags
-// argument it cannot reduce to a concrete list (an undefined
-// or computed variable, a shell or workflow variable, a make function) is an error that names each one: such a list would
+// argument or goreleaser build it cannot reduce to a concrete list (an undefined
+// or computed variable, a shell or workflow variable, a make function, a
+// goreleaser template) is an error that names each one: such a list would
 // otherwise be dropped and its set never built. Not covered: a Makefile.local
 // that is absent from the checkout (it is gitignored, so CI and a fresh clone
 // never have one; the test sees the one on the machine that runs it), a variable
 // set on the make command line or in the environment, a list a script assembles
-// at run time, and the release build (.goreleaser.yml is not read). coreRoot is the core module's directory.
+// at run time, and goreleaser configuration in a file other than the root
+// .goreleaser.yml or .goreleaser.yaml. coreRoot is the core module's directory.
 // Tags only: -race is not a tag, and the race set here is the tag.
 func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 	key := func(tags []string) string {
@@ -559,9 +634,13 @@ func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 	type buildFile struct{ rel, body string }
 	var files []buildFile
 	bodies := map[string]string{} // every text file read, by repo-relative slash path
+	var goreleaser []buildFile
 	_, err := f803bRepoText(f803bRepoRoot(coreRoot), func(rel string, body []byte) {
 		base := filepath.Base(rel)
 		bodies[rel] = string(body)
+		if rel == ".goreleaser.yml" || rel == ".goreleaser.yaml" {
+			goreleaser = append(goreleaser, buildFile{rel, string(body)})
+		}
 		if strings.HasPrefix(base, "Makefile") || strings.HasPrefix(base, "Dockerfile") ||
 			strings.HasPrefix(rel, ".github/workflows/") || strings.HasPrefix(rel, ".woodpecker/") {
 			files = append(files, buildFile{rel, string(body)})
@@ -622,9 +701,22 @@ func F803bShippedTagSets(coreRoot string) ([]TagSet, int, error) {
 			unresolved = append(unresolved, f.rel+" "+b)
 		}
 	}
+	for _, g := range goreleaser {
+		gsets, gbad := f803bGoreleaserSets(g.rel, g.body)
+		unresolved = append(unresolved, gbad...)
+		for _, ts := range gsets {
+			// A TagSets() entry with the same GOOS, CGO setting and tags is the
+			// same build; do not list it twice.
+			if !slices.ContainsFunc(out, func(o TagSet) bool {
+				return o.Patterns == nil && o.GOOS == ts.GOOS && o.CGOEnabled == ts.CGOEnabled && key(o.Tags) == key(ts.Tags)
+			}) {
+				out = append(out, ts)
+			}
+		}
+	}
 	if len(unresolved) > 0 {
 		sort.Strings(unresolved)
-		return nil, 0, fmt.Errorf("archtest: %d -tags argument(s) in the repo's build files cannot be reduced to a concrete tag set, so the real-binary test of the F8-03b refusal would never build them: teach f803bTagsIn the spelling or write the list out:\n  %s", len(unresolved), strings.Join(unresolved, "\n  "))
+		return nil, 0, fmt.Errorf("archtest: %d -tags argument(s) or release build(s) in the repo's build files cannot be reduced to a concrete tag set, so the real-binary test of the F8-03b refusal would never build them: teach f803bTagsIn (or f803bGoreleaserSets) the spelling or write the list out:\n  %s", len(unresolved), strings.Join(unresolved, "\n  "))
 	}
 	keys := make([]string, 0, len(named))
 	for k := range named {
