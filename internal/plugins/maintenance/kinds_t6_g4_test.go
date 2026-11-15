@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-15
 
@@ -632,9 +632,9 @@ var t6g4Expected = []t6g4Want{
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
 		resume: tasks.ResumeContinue, yieldsNatively: true, writes: []ops.Resource{ops.ResBookFiles, ops.ResBooks}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResFileProvenance}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
-		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResBookFiles, ops.ResFiles}, timeout: 120 * time.Minute, helpReworded: true},
+		resume: tasks.ResumeDrop, writes: []ops.Resource{ops.ResFileProvenance, ops.ResFiles}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: filePathCollisionReportKind, head: func(p *Plugin) sdk.OperationDef { return p.filePathCollisionReportDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: fsRegroupKind, head: func(p *Plugin) sdk.OperationDef { return p.fsRegroupXMLDef() },
@@ -1035,7 +1035,7 @@ func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
 // is the oracle of TestT6G4Kinds_EffectsCoverRecordedWrites, so it is compared
 // against the real interface by reflection and against the vocabulary by name.
 var t6g4WriterResource = map[string]ops.Resource{
-	"AppendFileEvent":               ops.ResBookFiles, // file_prov: ledger, declared book_files until ops.ResFileProvenance (seams.d/F5-09.md)
+	"AppendFileEvent":               ops.ResFileProvenance, // the file_prov: ledger
 	"CarryOverFingerprintWindows":   ops.ResFingerprintIndex,
 	"ClearBookFileIntro":            ops.ResBookFiles,
 	"ClearIntroTimeouts":            ops.ResBookFiles,
@@ -1054,7 +1054,7 @@ var t6g4WriterResource = map[string]ops.Resource{
 	"RecordIntroTimeout":            ops.ResBookFiles,
 	"SetBookFileHash":               ops.ResBookFiles,
 	"SetBookFileIntro":              ops.ResBookFiles,
-	"SetFileProvExportCursor":       ops.ResBookFiles, // the export cursor belongs to the provenance ledger (same interim resource)
+	"SetFileProvExportCursor":       ops.ResFileProvenance, // the export cursor belongs to the provenance ledger
 	"SubmitAuthorDedupJob":          ops.ResReviewItems,
 	"UpdateBookFile":                ops.ResBookFiles,
 	"UpdateBookFiles":               ops.ResBookFiles,

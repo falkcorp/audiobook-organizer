@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-15
 
@@ -75,13 +75,11 @@ func t6g4Res(resources ...ops.Resource) []tasks.Resource {
 }
 
 // t6g4ResProvenance is the resource the file-provenance ledger (the file_prov
-// keyspace the capture and export kinds append to) is declared as. pkg/ops has no
-// constant of its own for it on this branch, so the ledger is declared as the
-// book_files family it describes. Sibling F5-06 adds ops.ResFileProvenance
-// ("file_provenance"); at stacking the coordinator swaps it in by changing this
-// ONE line, and the capture and export Effects, the spy map and the parity table
-// all follow it.
-const t6g4ResProvenance = ops.ResBookFiles
+// keyspace the capture and export kinds append to) is declared as:
+// ops.ResFileProvenance ("file_provenance"), the constant F5-06 added. The
+// capture and export Effects follow it; the tests spell the resource
+// independently, so a wrong value here fails a test.
+const t6g4ResProvenance = ops.ResFileProvenance
 
 // t6g4IntroTranscribeWrites is transcribe-book-intros' declared write set. The
 // whisper result journal it also writes (OpenWhisperJournal) has no pkg/ops
