@@ -1,7 +1,7 @@
 // file: core/internal/sse/sse_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7c1e4b93-5d28-4a6f-9b07-e2a3c8d41f56
-// last-edited: 2026-11-12
+// last-edited: 2026-11-15
 
 package sse_test
 
@@ -793,33 +793,52 @@ func TestServe_FramesAreOneDataLine(t *testing.T) {
 		"truncated": {"{\"a\":\n", "", true},
 		"plain":     {`{"a":1}`, `data: {"a":1}`, false},
 	}
-	for name, c := range cases {
-		b := broker(t, nil)
-		s, j := sub(t, b, nil)
-		j.data = func(e *sse.Entry) []byte { return []byte(c.data) }
-		rec, done := run(t.Context(), s)
-		rec.awaitText(t, "core.stream.opened.v1")
-		pub(b, "a.x", "")
-		if c.withheld {
-			time.Sleep(30 * time.Millisecond)
-			if strings.Contains(rec.text(), "id: ") || strings.Contains(rec.text(), "999") {
-				t.Errorf("%s: forged or broken data reached the wire:\n%s", name, rec.text())
+	// The stream-opened frame carries a timestamp, so a payload check must not
+	// depend on what digits the clock shows: run every case on the real clock
+	// and on a fixed one whose nanoseconds are all 9s.
+	clocks := map[string]func(*sse.Options){
+		"realclock": nil,
+		"clock999": func(o *sse.Options) {
+			o.Now = func() time.Time { return time.Date(2026, 11, 15, 12, 0, 0, 999999999, time.UTC) }
+		},
+	}
+	for cname, mod := range clocks {
+		for name, c := range cases {
+			name := cname + "/" + name
+			b := broker(t, mod)
+			s, j := sub(t, b, nil)
+			j.data = func(e *sse.Entry) []byte { return []byte(c.data) }
+			rec, done := run(t.Context(), s)
+			rec.awaitText(t, "core.stream.opened.v1")
+			pub(b, "a.x", "")
+			if c.withheld {
+				time.Sleep(30 * time.Millisecond)
+				// A withheld payload delivers no event frame, so no id: field
+				// exists at all, and no line is a field the payload planted.
+				if got := ids(rec.text()); len(got) != 0 {
+					t.Errorf("%s: withheld payload still produced id fields %v:\n%s", name, got, rec.text())
+				}
+				for l := range strings.SplitSeq(rec.text(), "\n") {
+					if l == "id: 999" || l == "data: {}" || strings.HasPrefix(l, "event:") {
+						t.Errorf("%s: forged field line %q reached the wire:\n%s", name, l, rec.text())
+					}
+				}
+			} else {
+				rec.awaitText(t, c.want)
+				if got := ids(rec.text()); len(got) != 1 {
+					t.Errorf("%s: ids %v", name, got)
+				}
 			}
-		} else {
-			rec.awaitText(t, c.want)
-			if got := ids(rec.text()); len(got) != 1 {
-				t.Errorf("%s: ids %v", name, got)
+			// Every non-blank line of the stream is a recognised field: nothing
+			// the payload held became a field of its own.
+			for l := range strings.SplitSeq(rec.text(), "\n") {
+				if l != "" && !strings.HasPrefix(l, "data: ") && !strings.HasPrefix(l, "id: ") && !strings.HasPrefix(l, "retry: ") && !strings.HasPrefix(l, ": ") {
+					t.Errorf("%s: stray line %q", name, l)
+				}
 			}
+			b.Close()
+			finished(t, done)
 		}
-		// Every non-blank line of the stream is a recognised field: nothing
-		// the payload held became a field of its own.
-		for l := range strings.SplitSeq(rec.text(), "\n") {
-			if l != "" && !strings.HasPrefix(l, "data: ") && !strings.HasPrefix(l, "id: ") && !strings.HasPrefix(l, "retry: ") && !strings.HasPrefix(l, ": ") {
-				t.Errorf("%s: stray line %q", name, l)
-			}
-		}
-		b.Close()
-		finished(t, done)
 	}
 }
 
