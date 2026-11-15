@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export_test.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: d61df6f5-c2e0-47ab-b028-44d97b64001c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 //
 // The export is what turns "we can detect that history was destroyed" into
 // "history was not destroyed". The chain proves a row was rewritten; only a
@@ -96,7 +96,7 @@ func runExport(t *testing.T, p *Plugin, params map[string]any) fileProvExportRes
 	t.Helper()
 	raw, err := json.Marshal(params)
 	require.NoError(t, err)
-	res, err := p.exportFileProvenance(context.Background(), raw)
+	res, err := exportFileProvenanceHEAD(p, context.Background(), raw)
 	require.NoError(t, err)
 	return res
 }
@@ -122,7 +122,7 @@ func readLines(t *testing.T, path string) []fileProvExportLine {
 
 func TestFileProvenanceExportRequiresAPath(t *testing.T) {
 	p, _, _ := newExportFixture(t)
-	_, err := p.exportFileProvenance(context.Background(), json.RawMessage(`{}`))
+	_, err := exportFileProvenanceHEAD(p, context.Background(), json.RawMessage(`{}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "path")
 }
@@ -131,7 +131,7 @@ func TestFileProvenanceExportRequiresAPath(t *testing.T) {
 // against whatever the process happens to consider its working directory.
 func TestFileProvenanceExportRejectsANonAbsolutePath(t *testing.T) {
 	p, _, _ := newExportFixture(t)
-	_, err := p.exportFileProvenance(context.Background(),
+	_, err := exportFileProvenanceHEAD(p, context.Background(),
 		json.RawMessage(`{"path":"ledger.jsonl"}`))
 	require.Error(t, err)
 }
@@ -265,7 +265,7 @@ func TestFileProvenanceExportReportsSequenceGaps(t *testing.T) {
 
 func TestFileProvenanceExportFailsWithoutAProvenanceStore(t *testing.T) {
 	p := New(provDeps{prov: nil})
-	_, err := p.exportFileProvenance(context.Background(),
+	_, err := exportFileProvenanceHEAD(p, context.Background(),
 		json.RawMessage(`{"path":"/tmp/x.jsonl"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not initialized")
@@ -287,7 +287,7 @@ func TestFileProvenanceExportLeavesTheCursorWhenTheFileCannotBeOpened(t *testing
 	// A directory cannot be opened for appending.
 	raw, mErr := json.Marshal(map[string]any{"path": t.TempDir(), "apply": true})
 	require.NoError(t, mErr)
-	_, err := p.exportFileProvenance(context.Background(), raw)
+	_, err := exportFileProvenanceHEAD(p, context.Background(), raw)
 	require.Error(t, err)
 
 	cur, cErr := store.GetFileProvExportCursor()
@@ -333,7 +333,7 @@ func TestFileProvenanceExportLeavesTheCursorWhenTheWriteFails(t *testing.T) {
 
 	raw, mErr := json.Marshal(map[string]any{"path": out, "apply": true})
 	require.NoError(t, mErr)
-	_, err := p.exportFileProvenance(context.Background(), raw)
+	_, err := exportFileProvenanceHEAD(p, context.Background(), raw)
 	require.Error(t, err)
 
 	cur, cErr := store.GetFileProvExportCursor()
@@ -352,7 +352,7 @@ func TestFileProvenanceExportLeavesTheCursorWhenTheSyncFails(t *testing.T) {
 
 	raw, mErr := json.Marshal(map[string]any{"path": out, "apply": true})
 	require.NoError(t, mErr)
-	_, err := p.exportFileProvenance(context.Background(), raw)
+	_, err := exportFileProvenanceHEAD(p, context.Background(), raw)
 	require.Error(t, err)
 	assert.Positive(t, w.written, "the test did not reach the sync step")
 
@@ -426,4 +426,16 @@ func TestFileProvenanceExportDoesNotCallPreChainEventsBroken(t *testing.T) {
 
 	assert.Equal(t, 1, res.ChainsVerified)
 	assert.Zero(t, res.ChainsBroken, "pre-chain events were reported as tampering")
+}
+
+// exportFileProvenanceHEAD runs HEAD's export body the way HEAD's shell does (the
+// shared params decode, the head env over the deps' provenance store, the report
+// lines) and returns the tally the shell discards, so a test asserts the numbers
+// as values rather than scraping a log line.
+func exportFileProvenanceHEAD(p *Plugin, ctx context.Context, rawParams json.RawMessage) (fileProvExportResult, error) {
+	params, err := decodeFileProvExportParams(rawParams)
+	if err != nil {
+		return fileProvExportResult{}, err
+	}
+	return p.runFileProvenanceExportCore(ctx, params, p.fileProvenanceExportHeadEnv(&fakeReporter{}, params.Apply))
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_provenance_export.go
-// version: 1.1.2
+// version: 1.2.5
 // guid: 08ef35af-5704-459a-aeec-e88245abde52
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -14,9 +14,14 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/tasks"
 )
+
+// fileProvenanceExportKind is rule R3: the native kind of maintenance.file-provenance-export.
+const fileProvenanceExportKind tasks.Kind = "books.maintenance.file-provenance-export"
 
 // Getting the ledger OUT of the database it lives in.
 //
@@ -142,11 +147,95 @@ func (p *Plugin) fileProvenanceExportDef() sdk.OperationDef {
 	}
 }
 
+// fileProvExportEnv is what the core needs from its engine (rules R2 and R10).
+type fileProvExportEnv struct {
+	t6g4Base
+}
+
+// fileProvExportNativeParams is fileProvExportParams for the native run: the
+// mode keys are only refusal markers (the mode comes from the start request).
+type fileProvExportNativeParams struct {
+	Path string `json:"path"`
+	Max  int    `json:"max"`
+	t6g4ModeKeys
+}
+
+// runFileProvenanceExport is the v2 shell around runFileProvenanceExportCore (rule R2 item 2).
 func (p *Plugin) runFileProvenanceExport(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
-	log := reporter.Logger()
-	result, err := p.exportFileProvenance(ctx, rawParams)
+	params, err := decodeFileProvExportParams(rawParams)
 	if err != nil {
 		return err
+	}
+	_, err = p.runFileProvenanceExportCore(ctx, params, p.fileProvenanceExportHeadEnv(reporter, params.Apply))
+	return err
+}
+
+// fileProvenanceExportHeadEnv builds the env HEAD's shell gives the core: the
+// provenance store resolved off the deps (nil when no layer implements it).
+func (p *Plugin) fileProvenanceExportHeadEnv(reporter sdk.Reporter, apply bool) fileProvExportEnv {
+	prov := p.deps.FileProvenanceStore()
+	return fileProvExportEnv{t6g4Base: t6g4HeadBase(reporter, apply,
+		headT6G4Store{deps: p.deps, prov: prov}, headT6G4Writer{prov: prov})}
+}
+
+// fileProvenanceExportKind is the native shell (rule R2 item 3). HEAD has a
+// preview (it reads the ledger and verifies chains, writing nothing).
+func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(fileProvenanceExportKind, tasks.TaskSpec[fileProvExportNativeParams, fileProvExportResult]{
+		Common: tasks.Common{
+			Title: "Export the file provenance ledger to append-only JSONL",
+			Help: "Appends every provenance event newer than the durable export " +
+				"cursor to a JSONL file, so the ledger survives corruption of the database " +
+				"it lives in. Never rewrites what it has written. Reports sequence gaps and " +
+				"missing rows as deletion evidence. Path is required; a preview (the default) " +
+				"writes nothing, start in live mode to write.",
+			// Appends the ledger to a JSONL file on disk (files) and moves the export
+			// cursor in the provenance keyspace, declared as t6g4ResProvenance.
+			Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance, ops.ResFiles)...),
+			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:         tasks.ResumeDrop,
+			Priority:       tasks.PriorityLow,
+			ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-export"),
+			// HEAD declares no Timeout (the registry's own default applies); the
+			// native kind states 120 minutes (F5-09 review, MINOR 13). Listed in
+			// the PR's Deviations.
+			Timeout:  120 * time.Minute,
+			Schedule: sched,
+			Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in fileProvExportNativeParams) (fileProvExportResult, error) {
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return fileProvExportResult{}, err
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return fileProvExportResult{}, err
+			}
+			return p.runFileProvenanceExportCore(rc.Context(), fileProvExportParams{
+				Path: in.Path, Apply: base.Live, Max: in.Max,
+			}, fileProvExportEnv{t6g4Base: base})
+		},
+	})
+}
+
+// decodeFileProvExportParams is the params decode both HEAD entry points share.
+func decodeFileProvExportParams(rawParams json.RawMessage) (fileProvExportParams, error) {
+	var params fileProvExportParams
+	if len(rawParams) > 0 {
+		if err := json.Unmarshal(rawParams, &params); err != nil {
+			return fileProvExportParams{}, fmt.Errorf("file-provenance-export: decode params: %w", err)
+		}
+	}
+	return params, nil
+}
+
+// runFileProvenanceExportCore is HEAD's run body (rule R2 item 1): the export and
+// the report lines.
+func (p *Plugin) runFileProvenanceExportCore(ctx context.Context, params fileProvExportParams, env fileProvExportEnv) (fileProvExportResult, error) {
+	log := env.Logger()
+	result, err := p.exportFileProvenanceCore(ctx, params, env)
+	if err != nil {
+		return result, err
 	}
 
 	if b, mErr := json.Marshal(result); mErr == nil {
@@ -179,20 +268,12 @@ func (p *Plugin) runFileProvenanceExport(ctx context.Context, rawParams json.Raw
 		"cursor_after", result.CursorAfter, "max_seq", result.MaxSeq,
 		"bytes", result.BytesWritten, "chains_verified", result.ChainsVerified,
 		"chains_broken", result.ChainsBroken)
-	return nil
+	return result, nil
 }
 
-// exportFileProvenance does the work and returns the tally.
-//
-// Split from the reporter plumbing so the behaviour can be asserted directly
-// rather than by parsing a log line back out of a fake reporter.
-func (p *Plugin) exportFileProvenance(ctx context.Context, rawParams json.RawMessage) (fileProvExportResult, error) {
-	var params fileProvExportParams
-	if len(rawParams) > 0 {
-		if err := json.Unmarshal(rawParams, &params); err != nil {
-			return fileProvExportResult{}, fmt.Errorf("file-provenance-export: decode params: %w", err)
-		}
-	}
+// exportFileProvenanceCore is the export itself over decoded params. The ledger is
+// read through env.Store and the cursor advanced only through env.Writer.
+func (p *Plugin) exportFileProvenanceCore(ctx context.Context, params fileProvExportParams, env fileProvExportEnv) (fileProvExportResult, error) {
 	if params.Path == "" {
 		return fileProvExportResult{}, fmt.Errorf("file-provenance-export: path is required")
 	}
@@ -207,8 +288,8 @@ func (p *Plugin) exportFileProvenance(ctx context.Context, rawParams json.RawMes
 		params.Max = fileProvExportDefaultMax
 	}
 
-	store := p.deps.FileProvenanceStore()
-	if store == nil {
+	store := env.Store
+	if !store.FileProvenanceAvailable() {
 		return fileProvExportResult{}, fmt.Errorf("file-provenance-export: provenance store not initialized")
 	}
 
@@ -332,7 +413,7 @@ func (p *Plugin) exportFileProvenance(ctx context.Context, rawParams json.RawMes
 	}
 
 	last := rows[len(rows)-1].Seq
-	if err := store.SetFileProvExportCursor(last); err != nil {
+	if err := env.Writer.SetFileProvExportCursor(last); err != nil {
 		return result, fmt.Errorf("file-provenance-export: advance cursor: %w", err)
 	}
 	result.CursorAfter = last

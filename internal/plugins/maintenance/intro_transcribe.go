@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe.go
-// version: 3.45.3
+// version: 3.47.5
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -35,6 +35,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // introTranscribeOpID is the per-book op's registry id (error prefixes, the
@@ -190,6 +191,17 @@ type introTranscribeParams struct {
 	RemoteExtract *bool `json:"remote_extract,omitempty"`
 }
 
+// introTranscribeHelpBody is the part of the description both the v2 def and the
+// native kind share: everything but the sentence about the run's mode.
+const introTranscribeHelpBody = "Transcribes the first 90 seconds of each book's first audio file with Whisper. Where the clip is cut depends on remote_extract: by default, when this server may not decode audio (production) and a Whisper worker advertises path_pipeline, the server sends the worker the file's path and the worker cuts the clip from its own NFS mount (no server decode, no clip cache; a worker with a lost mount defers the page instead of failing books); otherwise ffmpeg runs on this host, which needs ALLOW_SERVER_DECODE. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Works in pages of 200 books sent as batches. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode; a path_unmapped book, whose worker could not read the share, is never durable and is simply retried) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply."
+
+// introTranscribeHelp is the definition's description, shared by HEAD's v2 def only.
+const introTranscribeHelp = introTranscribeHelpBody + " dry_run defaults to true for every mode (full transcribe, extract_only and reparse_only): a run that states no mode only selects the work and reports how many books it would process, writing nothing and decoding nothing. Pass dry_run=false (or dryRun=false) to transcribe, extract or reparse for real."
+
+// introTranscribeNativeHelp is the native kind's Help: the same text with the mode
+// sentence of a run whose mode is the start request's (a dry_run param is refused).
+const introTranscribeNativeHelp = introTranscribeHelpBody + " A run started in preview mode (the default) only selects the work and reports how many books it would process, writing nothing and decoding nothing; start it in live mode to transcribe, extract or reparse for real."
+
 func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:              "maintenance.transcribe-book-intros",
@@ -197,7 +209,7 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessRunItems,
 		Plugin:          "maintenance",
 		DisplayName:     "Transcribe book intros",
-		Description:     "Transcribes the first 90 seconds of each book's first audio file with Whisper. Where the clip is cut depends on remote_extract: by default, when this server may not decode audio (production) and a Whisper worker advertises path_pipeline, the server sends the worker the file's path and the worker cuts the clip from its own NFS mount (no server decode, no clip cache; a worker with a lost mount defers the page instead of failing books); otherwise ffmpeg runs on this host, which needs ALLOW_SERVER_DECODE. Stores the result in TranscribedTitle/Author/Narrator (separate from curated metadata) for disambiguation and dedup cross-checks. Works in pages of 200 books sent as batches. 90s captures past Audible jingles/music intros that caused 30s clips to return only 'This is Audible.' By default (only_missing) it skips books whose last attempt failed for a durable reason (source file gone, no audio, ffmpeg could not decode; a path_unmapped book, whose worker could not read the share, is never durable and is simply retried) and auto-retries them once their source file is back on disk, so it stops re-running the same broken books every pass; retry_failed=true forces those back in. Param reparse_only=true re-runs the parser over already-stored transcripts and rewrites the parsed fields with no ffmpeg/Whisper — use it to apply a parser fix to existing books cheaply. dry_run defaults to true for every mode (full transcribe, extract_only and reparse_only): a run that states no mode only selects the work and reports how many books it would process, writing nothing and decoding nothing. Pass dry_run=false (or dryRun=false) to transcribe, extract or reparse for real.",
+		Description:     introTranscribeHelp,
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.transcribe-book-intros",
@@ -219,6 +231,39 @@ func (p *Plugin) introTranscribeDef() sdk.OperationDef {
 	}
 }
 
+// introTranscribeKind is the native kind of maintenance.transcribe-book-intros (rule R3).
+const introTranscribeKind tasks.Kind = "books." + introTranscribeOpID
+
+// introTranscribeEnv is what the core needs from its engine (rules R2 and R10).
+type introTranscribeEnv struct {
+	t6g4Base
+}
+
+// introTranscribeNativeParams is introTranscribeParams for the native run: the
+// mode comes from the start request, so dry_run, dryRun and apply are accepted
+// only to be refused.
+type introTranscribeNativeParams struct {
+	LastBookID    string `json:"last_book_id,omitempty"`
+	OnlyMissing   *bool  `json:"only_missing,omitempty"`
+	RetrySilence  *bool  `json:"retry_silence,omitempty"`
+	RetryFailed   *bool  `json:"retry_failed,omitempty"`
+	ReparseOnly   *bool  `json:"reparse_only,omitempty"`
+	ExtractOnly   *bool  `json:"extract_only,omitempty"`
+	RemoteExtract *bool  `json:"remote_extract,omitempty"`
+	t6g4ModeKeys
+}
+
+// introTranscribeResult is the run's outcome: the selection, and the counters of
+// a live transcribe run.
+type introTranscribeResult struct {
+	DryRun    bool                      `json:"dry_run"`
+	Reparse   bool                      `json:"reparse,omitempty"`
+	Selected  int                       `json:"selected"`
+	Processed int                       `json:"processed"`
+	Stats     *database.TranscribeStats `json:"stats,omitempty"`
+}
+
+// runIntroTranscribe is the v2 shell around runIntroTranscribeCore (rule R2 item 2).
 func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	store := p.deps.OpsStore()
 	if store == nil {
@@ -231,18 +276,80 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			return fmt.Errorf("maintenance.intro-transcribe: decode params: %w", err)
 		}
 	}
+	// One mode for every path in the core; omitted = preview.
+	dryRun, err := opmode.ResolveDryRun("maintenance.transcribe-book-intros", params.DryRun, params.DryRunCamel)
+	if err != nil {
+		return err
+	}
+	// No SaveCheckpoint: HEAD's CheckpointFn was never called at the page
+	// concurrency (see the note after the page loop), so the def restarts from
+	// zero and says so in internal/arch's restartWithoutCheckpoint.
+	_, err = p.runIntroTranscribeCore(ctx, params, introTranscribeEnv{
+		t6g4Base: t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}).withStats(headT6G4Stats{store: store}),
+	})
+	return err
+}
+
+// introTranscribeNativeKind is the native shell (rule R2 item 3). HEAD has a
+// preview, so a preview run selects and counts and writes nothing.
+func (p *Plugin) introTranscribeNativeKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(introTranscribeKind, tasks.TaskSpec[introTranscribeNativeParams, introTranscribeResult]{
+		Common: tasks.Common{
+			Title: "Transcribe book intros",
+			Help:  introTranscribeNativeHelp,
+			// HEAD declares Writes: books. The body also writes a file's timeout
+			// strikes (RecordIntroTimeout, ClearIntroTimeouts: book_files) and the
+			// whisper result journal (OpenWhisperJournal), which has no pkg/ops
+			// constant on this branch (the coordinator adds ops.ResAIJournal here at
+			// stacking, see t6g4IntroTranscribeWrites). The run's stats aggregate (the
+			// stats:transcribe key) has none either and is written outside the gated
+			// writer on purpose: see t6g4StatsSink.
+			Effects: tasks.Writes(t6g4Res(t6g4IntroTranscribeWrites...)...),
+			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
+			// internal/arch: only_missing re-selects every book still without a transcript), so the 05-tasks mapping is
+			// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
+			Resume:          tasks.ResumeFromZero,
+			Priority:        tasks.PriorityLow,
+			ConcurrencyKey:  tasks.Key("books." + introTranscribeOpID),
+			Timeout:         10 * time.Hour,
+			ProgressTimeout: 30 * time.Minute,
+			Schedule:        sched,
+			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in introTranscribeNativeParams) (introTranscribeResult, error) {
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return introTranscribeResult{}, err
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return introTranscribeResult{}, err
+			}
+			return p.runIntroTranscribeCore(rc.Context(), introTranscribeParams{
+				LastBookID: in.LastBookID, OnlyMissing: in.OnlyMissing, RetrySilence: in.RetrySilence,
+				RetryFailed: in.RetryFailed, ReparseOnly: in.ReparseOnly, ExtractOnly: in.ExtractOnly,
+				RemoteExtract: in.RemoteExtract,
+			}, introTranscribeEnv{t6g4Base: base})
+		},
+	})
+}
+
+// runIntroTranscribeCore is HEAD's body (rule R2 item 1) after the shell resolved
+// the store, decoded params and resolved the mode: env.Live is true exactly when
+// HEAD's dryRun is false. It reads through env.Store and writes only through
+// env.Writer, except the stats:transcribe counters (env.Stats).
+func (p *Plugin) runIntroTranscribeCore(ctx context.Context, params introTranscribeParams, env introTranscribeEnv) (introTranscribeResult, error) {
+	store := env.Store
+	reporter := env.reporter(ctx)
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
 	retrySilence := params.RetrySilence != nil && *params.RetrySilence
 	retryFailed := params.RetryFailed != nil && *params.RetryFailed
 	reparseOnly := params.ReparseOnly != nil && *params.ReparseOnly
 	extractOnly := params.ExtractOnly != nil && *params.ExtractOnly
-	// One mode for every path below; omitted = preview.
-	dryRun, err := opmode.ResolveDryRun("maintenance.transcribe-book-intros", params.DryRun, params.DryRunCamel)
-	if err != nil {
-		return err
-	}
+	dryRun := !env.Live
+	res := introTranscribeResult{DryRun: dryRun}
 
-	log := reporter.Logger()
+	log := env.Logger()
 
 	// Reparse-only mode short-circuits the whole Whisper pipeline: it re-runs the
 	// parser over stored transcripts and rewrites the parsed fields. Used to apply
@@ -253,16 +360,17 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		// library-wide write blind. Pass dry_run=false to apply.
 		ids, err := store.ListBookIDs()
 		if err != nil {
-			return fmt.Errorf("list book ids: %w", err)
+			return res, fmt.Errorf("list book ids: %w", err)
 		}
-		return p.reparseStoredIntros(ctx, store, reporter, ids, dryRun)
+		res.Reparse, res.Selected = true, len(ids)
+		return res, p.reparseStoredIntros(ctx, t6g4View{store, env.Writer}, reporter, ids, dryRun)
 	}
 
 	// Where the clips are cut. Resolved for previews too, so the preview can name
 	// it; the probe is one read-only /health per endpoint and decodes nothing.
 	mode, modeNote, err := resolveExtractMode(ctx, params.RemoteExtract, extractOnly)
 	if err != nil {
-		return err
+		return res, err
 	}
 
 	// ffmpeg runs on this host ONLY in local mode, so only local mode is gated.
@@ -273,9 +381,9 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	if !dryRun && mode == extractLocal {
 		if err := serverdecode.Check("maintenance.transcribe-book-intros"); err != nil {
 			if modeNote != "" {
-				return fmt.Errorf("%w (remote_extract not used: %s)", err, modeNote)
+				return res, fmt.Errorf("%w (remote_extract not used: %s)", err, modeNote)
 			}
-			return err
+			return res, err
 		}
 	}
 
@@ -286,7 +394,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// transcribed. See fix/transcribe-full-library.
 	allIDs, err := store.ListBookIDs()
 	if err != nil {
-		return fmt.Errorf("list book ids: %w", err)
+		return res, fmt.Errorf("list book ids: %w", err)
 	}
 
 	// Resume support: skip past the last book ID checkpointed by a prior run.
@@ -336,12 +444,13 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		extractOnly:  extractOnly,
 	})
 	if err != nil {
-		return err
+		return res, err
 	}
 	total := len(sel.work)
+	res.Selected = total
 
 	if dryRun {
-		return previewIntroTranscribe(reporter, sel, extractOnly, len(allIDs), startIdx, mode, modeNote)
+		return res, previewIntroTranscribe(reporter, sel, extractOnly, len(allIDs), startIdx, mode, modeNote)
 	}
 
 	log.Info("transcribe-book-intros: starting batch run",
@@ -367,7 +476,8 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// so a direct assertion misses the capability — unwrap one level like the
 	// HTTP handlers do. Without this the sink stays nil and stats:transcribe is
 	// never written (the aggregate endpoint returns null even while the op runs).
-	statsSink, _ := database.AsCapability[database.TranscribeStatsStore](store)
+	// The sink is env.Stats (t6g4StatsSink), which persists nothing where the
+	// store has no stats capability: the same in-memory-only run.
 
 	// The whisper result journal makes a restart mid-page lossless: every
 	// transcript an endpoint returns is journalled (keyed by clip bytes + the
@@ -386,9 +496,9 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// a strike, a permanent verdict and `clear_run_id` mean the same thing in
 	// both ops (a start time string matched no op id, so clear_run_id could not
 	// select this op's verdicts and SameRun could never match the other op's).
-	accum := newTranscribeStatsAccum(statsSink, fileIntroRunID(reporter), total, startedAt)
+	accum := newTranscribeStatsAccum(env.Stats, fileIntroRunID(reporter), total, startedAt)
 	pj := pageJournal{refresh: retrySilence}
-	if j, jerr := resultjournal.New(store, whisperJournalKind); jerr != nil {
+	if j, jerr := env.Writer.OpenWhisperJournal(); jerr != nil {
 		log.Warn("transcribe-book-intros: result journal unavailable, running without restart protection", "err", jerr)
 	} else {
 		pj.journal = countingJournal{ResultJournal: j, accum: accum}
@@ -401,7 +511,9 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
 			"Done — nothing to transcribe (%d already transcribed, %d unreadable)",
 			sel.skipped, sel.unreadable()))
-		return nil
+		st := accum.snapshot()
+		res.Stats = &st
+		return res, nil
 	}
 	accum.flush(false) // initial write: monitor sees the run has started
 
@@ -409,9 +521,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// (the whole point of batch mode: load the model once per 200 books).
 	pages := chunkIDs(sel.work, introTranscribePageSize)
 
-	// processed and lastID are written by concurrent page goroutines — must be
-	// thread-safe. processed uses atomic arithmetic; lastID uses a mutex because
-	// string assignment is not atomic (pointer + length, two words).
+	// processed is written by concurrent page goroutines, so it uses atomic arithmetic.
 	var processed atomic.Int64
 	accum.heartbeat = bookIntroHeartbeat(reporter)
 	// A timeout strike is a write to a book_file row, which a library scan's
@@ -420,13 +530,12 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// defers the strike (the book is simply retried next run) instead of holding
 	// the page, and its liveness beat, for as long as the scan lasts. A host with
 	// no queue reader runs ungated, as this op always has.
-	if queue := p.deps.OperationQueueStore(); queue != nil {
+	if store.HasOperationQueue() {
 		accum.gate = func(context.Context) error {
-			return scanBusyNow(introTranscribeOpID, queue)
+			return scanBusyNow(introTranscribeOpID, store)
 		}
 	}
-	var lastIDMu sync.Mutex
-	var lastID string
+	pageStore := t6g4NewIntroPageStore(store, env.Writer)
 
 	// RunItems drives the page loop with introTranscribePageConc pages in flight
 	// at once. Each page runs its own ffmpeg workers (introTranscribeFFWorkers),
@@ -434,7 +543,15 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 	// settings). Pages send independent batches to the Whisper server; the server's
 	// BatchedInferencePipeline queues them and the GPU processes overlapping small
 	// batches far more efficiently than one large serial one.
-	err = registry.RunItems(ctx, reporter, pages, func(ctx context.Context, ids []string) error {
+	err = env.Each(ctx, len(pages), t6g4EachOpts{
+		Concurrency:   introTranscribePageConc,
+		Reason:        "introTranscribePageConc pages at once, each running introTranscribeFFWorkers ffmpeg workers: the product is sized to the server's core count",
+		ProgressTotal: len(pages),
+		Label: func(i, t int) string {
+			return mark + fmt.Sprintf("Page %d/%d — %d books transcribed", i+1, t, int(processed.Load()))
+		},
+	}, func(ctx context.Context, pi int) error {
+		ids := pages[pi]
 		books := make([]database.Book, 0, len(ids))
 		skipped, deferred := 0, 0
 		for _, id := range ids {
@@ -449,9 +566,6 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 					"book_id", id, "err", gerr)
 				continue
 			}
-			lastIDMu.Lock()
-			lastID = id
-			lastIDMu.Unlock()
 			// Re-checked at page time: selection ran at the start of the run, and
 			// a book transcribed since (another op, a manual apply) must not be
 			// redone. hasTranscriptAlready — not needsTranscribeWork — so a
@@ -487,7 +601,7 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			_ = reporter.UpdateProgress(cur, total,
 				mark+fmt.Sprintf("%s — %d/%d books", verb, cur, total))
 		}
-		done := p.processTranscribePage(ctx, store, log, books, p.deps.RootDir(), onBook, accum, extractOnly, retryFailed, pj, mode)
+		done := p.processTranscribePage(ctx, pageStore, log, books, store.RootDir(), onBook, accum, extractOnly, retryFailed, pj, mode)
 		cum := int(processed.Add(int64(done)))
 		accum.flush(false) // persist cumulative counts so the monitor sees live progress
 		if n := accum.stuck.n.Load(); n >= whisperStuckMaxBatches {
@@ -507,35 +621,27 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 		log.Info("transcribe-book-intros: page complete",
 			"page_books", done, "cumulative_processed", cum, "total_books", total)
 		return nil
-	}, registry.RunItemsOptions{
-		Concurrency:   introTranscribePageConc,
-		ProgressTotal: len(pages),
-		Label: func(i, t int) string {
-			return mark + fmt.Sprintf("Page %d/%d — %d books transcribed", i+1, t, int(processed.Load()))
-		},
-		// NOTE: registry.runItemsPar never calls CheckpointFn -- only the
-		// sequential runItemsSeq does -- so at introTranscribePageConc > 1 this
-		// LastBookID checkpoint is never written and a resumed run starts from
-		// the top. Resume is still lossless: only_missing re-selects every book
-		// without a transcript, and the whisper result journal serves the
-		// clips a killed run already transcribed.
-		CheckpointFn: func(ctx context.Context) error {
-			lastIDMu.Lock()
-			lid := lastID
-			lastIDMu.Unlock()
-			om := onlyMissing
-			return reporter.Checkpoint(introTranscribeParams{LastBookID: lid, OnlyMissing: &om})
-		},
 	})
+	// HEAD also passed a CheckpointFn writing {LastBookID, OnlyMissing}, but
+	// registry.runItemsPar never calls CheckpointFn (only the sequential runner
+	// does), so at introTranscribePageConc > 1 it was never written and a resumed
+	// run started from the top. It is not carried: resume is lossless because
+	// only_missing re-selects every book without a transcript, and the whisper
+	// result journal serves the clips a killed run already transcribed.
 	if err != nil {
 		// Mark the run done even on error so the monitor stops treating it as
 		// in-flight; the counts reflect whatever was processed before the error.
 		accum.flush(true)
-		return err
+		st := accum.snapshot()
+		res.Stats = &st
+		res.Processed = int(processed.Load())
+		return res, err
 	}
 
 	accum.flush(true)
 	st := accum.snapshot()
+	res.Stats = &st
+	res.Processed = int(processed.Load())
 	total64 := int(processed.Load())
 	log.Info("transcribe-book-intros: complete",
 		"processed", total64, "total_books", total, "attempted", st.Attempted,
@@ -549,7 +655,33 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 			"(of %d total; %d skipped, %d of them known-broken not retried, %d unreadable)",
 		st.OK, st.SourceMissing, st.FFmpegError, st.WhisperError, st.PathUnmapped, st.Empty, st.Deferred, total,
 		st.SkippedExisting, sel.failedSkipped, st.Unreadable)+journalFailureNote(st.JournalWriteFailures))
-	return nil
+	return res, nil
+}
+
+// t6g4IntroPageFiles is the transcribePageStore the page worker reads files and
+// writes book columns through.
+type t6g4IntroPageFiles struct {
+	bookFileLister
+	bookModifier
+}
+
+// t6g4IntroPageFilesWithStrikes is t6g4IntroPageFiles for a store that can also write a
+// file's timeout strikes: it satisfies database.BookFileIntroStore, which is what
+// recordBookTimeout and clearFileTimeouts look for with database.AsCapability.
+type t6g4IntroPageFilesWithStrikes struct {
+	t6g4IntroPageFiles
+	database.BookFileIntroStore
+}
+
+// t6g4NewIntroPageStore is the page worker's store over the core's read and write
+// seams. The strike methods are present only where reads reports the store can
+// write per-file intro results, mirroring HEAD's capability probe on its store.
+func t6g4NewIntroPageStore(reads t6g4Store, writes t6g4Writer) transcribePageStore {
+	base := t6g4IntroPageFiles{bookFileLister: reads, bookModifier: writes}
+	if reads.FileIntroWritesAvailable() {
+		return t6g4IntroPageFilesWithStrikes{t6g4IntroPageFiles: base, BookFileIntroStore: writes}
+	}
+	return base
 }
 
 // introPreviewMarker and introLiveMarker open every progress message of a

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/ident_index.go
-// version: 1.2.3
+// version: 1.3.3
 // guid: 90d81b9d-7102-4e21-a4ac-e55a95d3922c
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -14,8 +14,13 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
+
+// identIndexKind is rule R3: "books." + database.IdentIndexRebuildOpID.
+const identIndexKind tasks.Kind = "books." + database.IdentIndexRebuildOpID
 
 // --- ident: identification index rebuild op ---
 //
@@ -69,6 +74,21 @@ func (p *Plugin) identIndexRebuildDef() sdk.OperationDef {
 	}
 }
 
+// identIndexEnv is what the core needs from its engine (rules R2 and R10).
+type identIndexEnv struct {
+	t6g4Base
+}
+
+// t6g4IdentIndexView is the identIndexRebuilder the core hands the preview and
+// rebuild passes: its verify read comes from env.Store and its rebuild write
+// from env.Writer.
+type t6g4IdentIndexView struct {
+	t6g4IdentReads
+	t6g4IdentWrites
+}
+
+// runIdentIndexRebuild is the v2 shell around runIdentIndexRebuildCore (rule R2
+// item 2).
 func (p *Plugin) runIdentIndexRebuild(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
 	var params opmode.DryRunParams
 	if len(raw) > 0 {
@@ -89,10 +109,64 @@ func (p *Plugin) runIdentIndexRebuild(ctx context.Context, raw json.RawMessage, 
 		return fmt.Errorf("cannot run: store is %T, which has no identification index "+
 			"(and no store in its decorator chain does)", store)
 	}
-	if dryRun {
-		return previewIdentIndex(ctx, r, reporter)
+	_, err = p.runIdentIndexRebuildCore(ctx, struct{}{}, identIndexEnv{
+		t6g4Base: t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps, ident: r}, headT6G4Writer{store: store, ident: r}),
+	})
+	return err
+}
+
+// identIndexNativeParams is the native run's params: none of its own, and the
+// three mode keys accepted only to be refused (HEAD took dry_run through
+// opmode.DryRunParams; the native run's mode comes from the start request).
+type identIndexNativeParams struct {
+	t6g4ModeKeys
+}
+
+// identIndexKind is the native shell (rule R2 item 3). It refuses a dry_run
+// param: the run's mode decides, preview by default as at HEAD.
+func (p *Plugin) identIndexKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(identIndexKind, tasks.TaskSpec[identIndexNativeParams, struct{}]{
+		Common: tasks.Common{
+			Title: "Identification index rebuild",
+			Help: "Manual rebuild of the book identification index (ident:state: and ident:by: rows and " +
+				"their in-memory counts) that the Library's ident: filter and the review summary's ident_counts " +
+				"read. Every boot already builds or reconciles it and retries a failure, so this is the manual " +
+				"handle for the same repair. Preview by default: reports the books whose state is wrong, the " +
+				"orphan rows and keys, and the counter drift, writes nothing. Started in live mode it rebuilds; " +
+				"ident: queries answer 503 while a from-scratch rebuild runs. Writes ident: rows only, never " +
+				"book or metadata cache rows.",
+			// HEAD declares books; the rebuild writes ident: index rows (indexes).
+			Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResIndexes)...),
+			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:         tasks.ResumeDrop,
+			Priority:       tasks.PriorityLow,
+			ConcurrencyKey: tasks.Key("books.maintenance.ident-index"),
+			Timeout:        30 * time.Minute,
+			Schedule:       sched,
+			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in identIndexNativeParams) (struct{}, error) {
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return struct{}{}, err
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return struct{}{}, err
+			}
+			return p.runIdentIndexRebuildCore(rc.Context(), struct{}{}, identIndexEnv{t6g4Base: base})
+		},
+	})
+}
+
+// runIdentIndexRebuildCore is HEAD's body (rule R2 item 1) after the mode and the
+// store capability were resolved: a preview verifies through env.Store, a live
+// run rebuilds through env.Writer.
+func (p *Plugin) runIdentIndexRebuildCore(ctx context.Context, _ struct{}, env identIndexEnv) (struct{}, error) {
+	rep := env.reporter(ctx)
+	if !env.Live {
+		return struct{}{}, previewIdentIndex(ctx, t6g4IdentIndexView{env.Store, env.Writer}, rep)
 	}
-	return rebuildIdentIndex(ctx, r, reporter)
+	return struct{}{}, rebuildIdentIndex(ctx, t6g4IdentIndexView{env.Store, env.Writer}, rep)
 }
 
 // previewIdentIndex is the read-only mode: it reports what a rebuild would

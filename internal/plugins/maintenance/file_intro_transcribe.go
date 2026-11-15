@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/file_intro_transcribe.go
-// version: 1.6.2
+// version: 1.8.9
 // guid: 2a9d6f41-c803-4be7-95a0-7d14e8b3c6f2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -24,7 +24,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // maintenance.transcribe-file-intros transcribes the first fileIntroClipSeconds
@@ -42,7 +44,10 @@ import (
 // A file is DONE when IntroSourceHash == FileHash; that marker is on
 // BookFileCore (memdb), so selecting the remaining work is one in-memory pass
 // and a restart resumes exactly where it stopped, with no checkpoint (the
-// checkpoint hook is not called by RunItems under concurrency anyway).
+// checkpoint hook is not called by RunItems under concurrency anyway). The
+// native kind adds one: near its deadline it checkpoints a cursor (see
+// fileIntroCursor) and yields to a fresh attempt, which HEAD's 30-day timeout
+// never needed.
 
 const (
 	fileIntroOpID = "maintenance.transcribe-file-intros"
@@ -345,8 +350,14 @@ type fileIntroAccum struct {
 	writeMu sync.Mutex
 	mu      sync.Mutex
 	stats   database.FileIntroStats
-	sink    database.FileIntroStatsStore
+	sink    t6g4FileIntroStatsSink
 	log     *slog.Logger // reporter's logger; nil in tests that do not care
+}
+
+// t6g4FileIntroStatsSink persists the run's counters: the one method of
+// database.FileIntroStatsStore the accumulator calls.
+type t6g4FileIntroStatsSink interface {
+	PutFileIntroStats(*database.FileIntroStats) error
 }
 
 func (a *fileIntroAccum) update(fn func(s *database.FileIntroStats)) {
@@ -368,9 +379,6 @@ func (a *fileIntroAccum) snapshot() database.FileIntroStats {
 // snapshot last, so the persisted stats (and the status page reading them) went
 // backwards mid-run.
 func (a *fileIntroAccum) flush(done bool) {
-	if a.sink == nil {
-		return
-	}
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
 	a.mu.Lock()
@@ -378,6 +386,11 @@ func (a *fileIntroAccum) flush(done bool) {
 	a.stats.Done = done
 	cp := a.stats
 	a.mu.Unlock()
+	// The counters in the result (Done included) do not depend on a sink: a run
+	// started with no stats sink still reports that it finished.
+	if a.sink == nil {
+		return
+	}
 	if err := a.sink.PutFileIntroStats(&cp); err != nil && a.log != nil {
 		a.log.Warn("transcribe-file-intros: stats write failed", "err", err)
 	}
@@ -390,16 +403,61 @@ func fileIntroRunID(reporter sdk.Reporter) string {
 	return "run-" + time.Now().UTC().Format(time.RFC3339)
 }
 
-// fileIntroStore is the slice of the ops store this op reads and writes
-// through ordinary methods. (The field-scoped book_file writes come through
-// database.BookFileIntroStore, a capability.)
-type fileIntroStore interface {
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
+// fileIntroKind is the native kind of maintenance.transcribe-file-intros (rule R3).
+const fileIntroKind tasks.Kind = "books." + fileIntroOpID
+
+// fileIntroEnv is what the core needs from its engine (rules R2 and R10).
+type fileIntroEnv struct {
+	t6g4Base
+	// YieldMargin is how close to the context's deadline the run stops starting
+	// batches and yields (tasks.ErrContinueInPlace). 0 (HEAD's shell) never
+	// yields; the native shell sets fileIntroYieldMargin. It has an effect only
+	// with a SaveCheckpoint, which a yield cannot do without.
+	YieldMargin time.Duration
+	// CallMargin is how long before the context's deadline a whisper call is cut
+	// (fileIntroCallMargin): the call, the dispatcher's pacing included, runs
+	// under a context that ends then, once this attempt's batch 0 has completed,
+	// and a call cut that way yields instead of ending the run timed_out. 0 (HEAD)
+	// never cuts a call. Like YieldMargin it has an effect only with a
+	// SaveCheckpoint.
+	CallMargin time.Duration
+}
+
+// fileIntroNativeParams is fileIntroParams for the native run: the mode comes
+// from the start request, so dry_run, dryRun and apply are accepted only to be
+// refused.
+type fileIntroNativeParams struct {
+	OnlyMissing *bool  `json:"only_missing,omitempty"`
+	RetryFailed *bool  `json:"retry_failed,omitempty"`
+	ClearRunID  string `json:"clear_run_id,omitempty"`
+	t6g4ModeKeys
+}
+
+// fileIntroResult is the run's outcome: the selection (always), the counters of
+// a live run, or the rollback's tallies.
+type fileIntroResult struct {
+	DryRun   bool                     `json:"dry_run"`
+	RunID    string                   `json:"run_id,omitempty"`
+	Eligible int                      `json:"eligible"`
+	Selected int                      `json:"selected"`
+	Stats    *database.FileIntroStats `json:"stats,omitempty"`
+	Cleared  *fileIntroClearResult    `json:"cleared,omitempty"`
+}
+
+// fileIntroWorkerReads is the one row read the worker makes: a donor file.
+type fileIntroWorkerReads interface {
 	GetBookFileByID(bookID, fileID string) (*database.BookFile, error)
-	GetBookByID(id string) (*database.Book, error)
+}
+
+// fileIntroWorkerWrites is what the worker writes: a file's result, a timeout
+// strike, and a book-level fill.
+type fileIntroWorkerWrites interface {
+	SetBookFileIntro(bookID, fileID string, r database.BookFileIntroResult) (database.BookFileIntroWrite, error)
+	RecordIntroTimeout(bookID, fileID string, s database.IntroTimeoutStrike) (database.IntroTimeoutOutcome, error)
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 }
 
+// runFileIntroTranscribe is the v2 shell around runFileIntroTranscribeCore (rule R2 item 2).
 func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
 	store := p.deps.OpsStore()
 	if store == nil {
@@ -415,109 +473,545 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 	if err != nil {
 		return err
 	}
+	_, err = p.runFileIntroTranscribeCore(ctx, params, fileIntroEnv{
+		t6g4Base: t6g4HeadBase(reporter, !dryRun, headT6G4Store{OpsStore: store, deps: p.deps}, headT6G4Writer{store: store}).withStats(headT6G4Stats{store: store}),
+	})
+	return err
+}
+
+// fileIntroTranscribeKind is the native shell (rule R2 item 3). HEAD has a
+// preview, so a preview run counts and writes nothing.
+func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
+	return tasks.Task(fileIntroKind, tasks.TaskSpec[fileIntroNativeParams, fileIntroResult]{
+		Common: tasks.Common{
+			Title: "Transcribe file intros",
+			Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced.",
+			// HEAD declares no Writes (see the long comment on fileIntroTranscribeDef).
+			// The body writes a file's intro group (SetBookFileIntro, ClearBookFileIntro,
+			// RecordIntroTimeout: book_files), a book's transcript fill (ModifyBook:
+			// books). The run's counters (the stats:transcribe-files key) have no
+			// pkg/ops constant and are written outside the gated writer on purpose:
+			// see t6g4StatsSink.
+			Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks)...),
+			Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
+			Resume:   tasks.ResumeContinue,
+			Priority: tasks.PriorityLow,
+			// HEAD's 30 days is above tasks.MaxTimeout. A timeout is terminal, so the
+			// run does not wait for it: it stops starting batches and yields
+			// (tasks.ErrContinueInPlace) fileIntroYieldMargin before the deadline,
+			// and the next attempt continues from the checkpoint. See
+			// fileIntroBatchLoop.run for what can still reach the timeout.
+			ConcurrencyKey:  tasks.Key("books." + fileIntroOpID),
+			Timeout:         tasks.MaxTimeout,
+			ProgressTimeout: 30 * time.Minute,
+			Schedule:        sched,
+			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
+		},
+		Run: func(rc *tasks.RC, in fileIntroNativeParams) (fileIntroResult, error) {
+			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
+				return fileIntroResult{}, err
+			}
+			base, err := t6g4NativeBase(rc, deps, true)
+			if err != nil {
+				return fileIntroResult{}, err
+			}
+			// Only the native shell sets the margins: HEAD's builds the env without
+			// either, so only a native run yields before its deadline (review M4)
+			// and cuts a whisper call before it (N16). A test drives this shell to a
+			// blocked call to pin that it hands both over (N32).
+			return p.runFileIntroTranscribeCore(rc.Context(), fileIntroParams{
+				OnlyMissing: in.OnlyMissing, RetryFailed: in.RetryFailed, ClearRunID: in.ClearRunID,
+			}, fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin, CallMargin: fileIntroCallMargin()})
+		},
+	})
+}
+
+// runFileIntroTranscribeCore is HEAD's body (rule R2 item 1) after the shell
+// resolved the store, decoded params and resolved the mode: env.Live is true
+// exactly when HEAD's dryRun is false. It reads through env.Store and writes
+// only through env.Writer, except the stats:transcribe-files counters
+// (env.Stats).
+func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntroParams, env fileIntroEnv) (fileIntroResult, error) {
+	store := env.Store
+	dryRun := !env.Live
+	reporter := env.reporter(ctx)
+	var queue OpQueueReader
+	if store.HasOperationQueue() {
+		queue = store
+	}
 	if params.ClearRunID != "" {
-		return p.clearFileIntros(ctx, store, p.deps.OperationQueueStore(), reporter, params.ClearRunID, dryRun)
+		cleared, err := p.t6g4ClearFileIntros(ctx, fileIntroClearIO{
+			reads: store, writes: env.Writer, writable: store.FileIntroWritesAvailable(), each: env.Each,
+		}, queue, reporter, params.ClearRunID, dryRun)
+		return fileIntroResult{DryRun: dryRun, RunID: params.ClearRunID, Cleared: &cleared}, err
 	}
 
 	onlyMissing := params.OnlyMissing == nil || *params.OnlyMissing
 	retryFailed := params.RetryFailed != nil && *params.RetryFailed
 	mark := introModeMarker(dryRun)
-	log := reporter.Logger()
+	log := env.Logger()
 
-	_ = reporter.UpdateProgress(0, 1, mark+"Selecting work — reading every book file")
+	// An attempt that yielded (or was cut off) left a cursor: the run's id and
+	// counters, how many batches it completed, and the last group of the
+	// contiguous completed prefix. HEAD never checkpoints this op (its base has
+	// no LoadCheckpoint), so there it is always a fresh run. It is read before
+	// the first progress line so a continued attempt's bar starts at the batches
+	// already done instead of dropping back to zero while it selects.
+	var prior fileIntroCursor
+	resumed := false
+	if !dryRun && env.LoadCheckpoint != nil {
+		ok, lerr := env.LoadCheckpoint(&prior)
+		if lerr != nil {
+			return fileIntroResult{}, fmt.Errorf("%s: restore checkpoint: %w", fileIntroOpID, lerr)
+		}
+		resumed = ok
+	}
+	base := 0
+	if resumed {
+		base = prior.DoneBatches
+	}
+
+	env.Progress(base, base+1, mark+"Selecting work — reading every book file")
 	cores, err := store.GetAllBookFilesCore()
 	if err != nil {
-		return fmt.Errorf("%s: read book files: %w", fileIntroOpID, err)
+		return fileIntroResult{}, fmt.Errorf("%s: read book files: %w", fileIntroOpID, err)
 	}
 	sel := selectFileIntroWork(cores, fileIntroSelectOpts{onlyMissing: onlyMissing, retryFailed: retryFailed})
 	cores = nil
+	res := fileIntroResult{DryRun: dryRun, Eligible: sel.eligible, Selected: sel.selected}
 
 	if dryRun {
-		return previewFileIntros(reporter, sel, onlyMissing)
+		return res, previewFileIntros(reporter, sel, onlyMissing)
 	}
 
 	slots := fileIntroSlots()
 	if slots < 1 {
-		return fmt.Errorf("%s: no whisper endpoint is configured (whisper_endpoints / whisper_remote_url); refusing to start a run that cannot transcribe", fileIntroOpID)
+		return res, fmt.Errorf("%s: no whisper endpoint is configured (whisper_endpoints / whisper_remote_url); refusing to start a run that cannot transcribe", fileIntroOpID)
 	}
 	if err := fileIntroPreflight(ctx); err != nil {
-		return err
+		return res, err
 	}
-	intros, ok := database.AsCapability[database.BookFileIntroStore](store)
-	if !ok {
-		return fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
+	if !store.FileIntroWritesAvailable() {
+		return res, fmt.Errorf("%s: the store does not support per-file intro writes", fileIntroOpID)
 	}
-	queue := p.deps.OperationQueueStore()
 	// A live run refuses to start while a scan or bulk apply is running (see
 	// fileIntroWaitWhileBusy for why); the preview above never reaches here.
-	if err := fileIntroRefuseIfBusy(queue); err != nil {
-		return err
+	//
+	// A RESUMED attempt waits for the scan instead (review N17). It is
+	// re-queued at once after a yield, and a yield is often caused by a scan:
+	// the scan-busy give-up leaves a batch undone because a scan was running at
+	// the margin, so the next attempt very likely starts while it still is.
+	// Refusing then would end the run failed and lose the yield (HEAD, which
+	// never resumes, keeps the refusal for a fresh start). The wait is bounded by
+	// ctx only: it cannot yield again, because a yield needs this attempt to have
+	// completed a batch (the executor's progress proof), so a scan that outlasts
+	// a whole attempt ends the run timed_out, as a batch 0 parked in a wait does.
+	if resumed {
+		if err := waitWhileScanBusy(ctx, fileIntroOpID, queue, func(def string) {
+			env.Progress(base, base+1, mark+"paused — "+def+" is running; resumes when it finishes")
+		}); err != nil {
+			return res, err
+		}
+	} else if err := fileIntroRefuseIfBusy(queue); err != nil {
+		return res, err
 	}
 
-	runID := fileIntroRunID(reporter)
+	runID := env.OpID
+	if runID == "" {
+		runID = "run-" + time.Now().UTC().Format(time.RFC3339)
+	}
+
+	if resumed && prior.RunID != "" {
+		runID = prior.RunID
+	}
+	res.RunID = runID
+
+	groups := sel.groups
+	if resumed {
+		// Only a forced run (only_missing=false) needs the prefix skipped: the
+		// default run's selection already leaves out every file that has a result.
+		if !onlyMissing && prior.Last != nil {
+			groups = fileIntroSkipThrough(groups, *prior.Last)
+		}
+	}
+
 	startedAt := time.Now()
-	sink, _ := database.AsCapability[database.FileIntroStatsStore](store)
-	accum := &fileIntroAccum{sink: sink, log: log, stats: database.FileIntroStats{
+	stats := database.FileIntroStats{
 		RunOpID: runID, StartedAt: startedAt, UpdatedAt: startedAt,
 		Eligible: sel.eligible, TranscribedAtStart: sel.transcribedAtStart, TranscribedNow: sel.transcribedAtStart,
 		Selected:      sel.selected,
 		SkippedNoHash: sel.skippedNoHash, SkippedMissing: sel.skippedMissing,
 		SkippedUnsupported: sel.skippedUnsupported, SkippedFailed: sel.skippedFailed,
-	}}
-	log.Info("transcribe-file-intros: starting",
+	}
+	if resumed {
+		// The counters describe the whole run, not this attempt.
+		stats = prior.Stats
+		stats.RunOpID = runID
+		stats.UpdatedAt = startedAt
+	}
+	accum := &fileIntroAccum{sink: env.Stats, log: log, stats: stats}
+	startAttrs := []any{
 		"run_id", runID, "only_missing", onlyMissing, "retry_failed", retryFailed,
 		"eligible", sel.eligible, "already_done", sel.transcribedAtStart,
-		"selected", sel.selected, "groups", len(sel.groups), "reuse_files", sel.reuseFiles, "slots", slots)
+		"selected", sel.selected, "groups", len(groups), "reuse_files", sel.reuseFiles, "slots", slots,
+	}
+	if resumed {
+		// HEAD never resumes (no checkpoint), so its line keeps HEAD's attributes.
+		startAttrs = append(startAttrs, "resumed", true, "batches_done_earlier", base)
+	}
+	log.Info("transcribe-file-intros: starting", startAttrs...)
 
-	if len(sel.groups) == 0 {
+	if len(sel.groups) == 0 && !resumed {
 		accum.flush(true)
-		_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
+		env.Progress(1, 1, mark+fmt.Sprintf(
 			"Done — nothing to transcribe (%d of %d eligible files already have a result)",
 			sel.transcribedAtStart, sel.eligible))
-		return nil
+		st := accum.snapshot()
+		res.Stats = &st
+		return res, nil
 	}
 	accum.flush(false)
 
 	w := &fileIntroWorker{
-		store: store, intros: intros, queue: queue, reporter: reporter, accum: accum,
+		store: store, writer: env.Writer, queue: queue, reporter: reporter, accum: accum,
 		runID: runID, onlyMissing: onlyMissing,
 	}
-	batches := chunkFileIntroGroups(sel.groups, fileIntroBatchGroups)
-	w.batchesTotal = len(batches)
+	batches := chunkFileIntroGroups(groups, fileIntroBatchGroups)
+	w.batchesTotal = base + len(batches)
+	w.batchesDone.Store(int64(base))
+	remainingFiles := 0
+	for _, g := range groups {
+		remainingFiles += len(g.Members)
+	}
 	var filesDone atomic.Int64
-	err = registry.RunItems(ctx, reporter, batches, func(ctx context.Context, b []fileIntroGroup) error {
-		n, berr := w.runBatch(ctx, b)
-		w.batchesDone.Add(1)
-		filesDone.Add(int64(n))
-		accum.flush(false)
-		return berr
-	}, registry.RunItemsOptions{
-		// One worker per whisper slot across all endpoints. Each call carries one
-		// batch; the dispatcher places it on an endpoint with a free slot,
-		// rotating among equal-priority endpoints (allocateJobsWith), so the
-		// workers spread over every Mac instead of queueing on the first. The
-		// transport still enforces each endpoint's own cap.
-		Concurrency:   slots,
-		ProgressTotal: len(batches),
-		Label: func(i, t int) string {
-			return mark + fmt.Sprintf("Batch %d/%d — %d of %d files handled", i+1, t, int(filesDone.Load()), sel.selected)
+	loop := &fileIntroBatchLoop{
+		batches: batches, base: base, slots: slots,
+		runBatch: w.runBatch,
+		afterBatch: func(n int) {
+			w.batchesDone.Add(1)
+			filesDone.Add(int64(n))
+			accum.flush(false)
 		},
-	})
+		// The runner's own total is this attempt's batch count; the bar's is absolute.
+		label: func(i, _ int) string {
+			return mark + fmt.Sprintf("Batch %d/%d — %d of %d files handled", base+i+1, base+len(batches), int(filesDone.Load()), remainingFiles)
+		},
+		each: env.Each,
+	}
+	// saveCursor checkpoints the run after prefix more batches than the earlier
+	// attempts completed.
+	saveCursor := func(prefix int) error {
+		cur := fileIntroCursor{RunID: runID, DoneBatches: base + prefix, Last: prior.Last, Stats: accum.snapshot()}
+		if prefix > 0 {
+			last := batches[prefix-1]
+			k := fileIntroKeyOf(last[len(last)-1])
+			cur.Last = &k
+		}
+		return env.SaveCheckpoint(cur)
+	}
+	if env.SaveCheckpoint != nil {
+		loop.yieldMargin = env.YieldMargin
+		if loop.yieldMargin > 0 {
+			// The waits of the native run are bounded by the same margin as the
+			// loop, and its whisper calls end CallMargin before the deadline (HEAD
+			// leaves both nil and waits as before).
+			w.giveUp = loop.shouldYield
+			w.callMargin, w.batchZeroDone = env.CallMargin, loop.firstDone.Load
+			// The cursor is saved every time the contiguous completed prefix
+			// advances, not only at the yield (review N22): a crash or the nightly
+			// deploy then resumes near where the run stopped, and the stats key does
+			// not go backwards. The rate is at most one small JSON write per
+			// completed batch (fileIntroBatchGroups files of whisper work), so
+			// seconds apart per worker and never faster than the batches finish. A
+			// failed write is logged and retried by the next advance or the yield.
+			loop.onAdvance = func(prefix int) {
+				if cerr := saveCursor(prefix); cerr != nil {
+					log.Warn("transcribe-file-intros: cannot checkpoint after a batch; the next batch or the yield tries again",
+						"run_id", runID, "batches_complete", base+prefix, "err", cerr)
+				}
+			}
+		}
+	}
+	prefix, yielded, err := loop.run(ctx)
+	if err == nil && yielded {
+		if cerr := saveCursor(prefix); cerr != nil {
+			accum.flush(false)
+			return res, fmt.Errorf("%s: save checkpoint before yielding: %w", fileIntroOpID, cerr)
+		}
+		accum.flush(false)
+		st := accum.snapshot()
+		res.Stats = &st
+		// Reset the bar to the exact prefix: RunItems counted the batches it
+		// skipped at the margin as completed, and the next attempt's progress
+		// proof is measured against this value.
+		env.Progress(base+prefix, base+len(batches), mark+fmt.Sprintf(
+			"Yielding before the deadline — %d of %d batches complete; continuing in place", base+prefix, base+len(batches)))
+		log.Info("transcribe-file-intros: yielding before the deadline",
+			"run_id", runID, "batches_complete", base+prefix, "batches_total", base+len(batches))
+		return res, tasks.ErrContinueInPlace
+	}
 	accum.flush(true)
 	st := accum.snapshot()
+	res.Stats = &st
 	log.Info("transcribe-file-intros: finished",
 		"run_id", runID, "attempted", st.Attempted, "ok", st.OK, "unparsed", st.Unparsed, "silence", st.Silence,
 		"whisper_error", st.WhisperError, "ffmpeg_error", st.FFmpegError, "transcribe_timeout", st.TranscribeTimeout, "source_missing", st.SourceMissing, "reused", st.Reused,
 		"deferred", st.Deferred, "stale", st.Stale, "already_had", st.AlreadyHad, "book_fills", st.BookFills,
 		"coverage_now", st.TranscribedNow, "eligible", st.Eligible, "err", err)
 	if err != nil {
-		return err
+		return res, err
 	}
-	_ = reporter.UpdateProgress(1, 1, mark+fmt.Sprintf(
+	env.Progress(1, 1, mark+fmt.Sprintf(
 		"Done — run %s: %d ok, %d unparsed, %d silent, %d whisper-err, %d ffmpeg-err, %d decode-timeout, %d source-missing, %d reused, %d deferred, %d stale; %d book transcripts filled; coverage %d/%d files",
 		runID, st.OK, st.Unparsed, st.Silence, st.WhisperError, st.FFmpegError, st.TranscribeTimeout, st.SourceMissing, st.Reused, st.Deferred, st.Stale,
 		st.BookFills, st.TranscribedNow, st.Eligible))
-	return nil
+	return res, nil
+}
+
+// fileIntroCheckpointBudget is what the yield path is allowed after a whisper
+// call has been cut: the checkpoint write, the final stats flush and the
+// progress reset, with room for a slow store.
+const fileIntroCheckpointBudget = 2 * time.Minute
+
+// fileIntroCallMargin is how long before the attempt's deadline a whisper call
+// is cut (fileIntroWorker.boundCall). After a cut the run still has to leave
+// the call (its cancellation tail: the liveness verification after a response
+// is not cancellable, about ten seconds of probes) and run the yield path (the
+// checkpoint write, the final stats flush and the progress reset, the
+// fileIntroCheckpointBudget). The pool's own pacing allowance,
+// transcribe.PoolPaceMax (the dispatcher paces a refused request for that long
+// before it gives up), is the third term: a request must not start where its
+// own pacing could outlast what is left, and callBoundHit refuses to start one
+// inside the margin. The margin is strictly larger than the allowance plus the
+// budget, with a minute of slack; TestFileIntroMargins_* pins the inequality.
+//
+// It is a func variable for two reasons: PoolPaceMax is read from the pool, so a
+// change there moves the margin with it, and the native-shell test replaces it
+// (with fileIntroYieldMargin) by margins that fit a seconds-long deadline, so a
+// shell that forgets to hand it to the run fails a test (N32). Nothing else
+// assigns it.
+var fileIntroCallMargin = func() time.Duration {
+	return transcribe.PoolPaceMax() + fileIntroCheckpointBudget + time.Minute
+}
+
+// fileIntroYieldMargin is how close to its deadline a native attempt gets before
+// it stops starting batches, stops waiting (scan-busy pause, outage retry) and
+// yields (tasks.ErrContinueInPlace) to a fresh attempt. It is a minute beyond
+// the call margin, so a batch is never started in the span where its whisper
+// call would be cut at once. It is computed once, at init, from the call margin
+// of that moment; the two could only diverge if the pool's pace allowance
+// changed at run time, which only a test does. See fileIntroBatchLoop.run for
+// what the margin does and does not bound.
+var fileIntroYieldMargin = fileIntroCallMargin() + time.Minute
+
+// fileIntroKey orders groups exactly as selectFileIntroWork does: the tier (0
+// when any member is a book's first file), then the first member's book and
+// ordinal. The sort is stable and keyed on the first member only, so it is a
+// total order over groups that differ in those three fields; two groups that
+// share all three would be a duplicate hash for the same first file, which
+// selection cannot produce.
+type fileIntroKey struct {
+	Tier    int    `json:"tier"`
+	BookID  string `json:"book_id"`
+	Ordinal int    `json:"ordinal"`
+}
+
+func fileIntroKeyOf(g fileIntroGroup) fileIntroKey {
+	m := g.Members[0]
+	return fileIntroKey{Tier: g.tier(), BookID: m.BookID, Ordinal: m.Ordinal}
+}
+
+// atOrBefore reports k <= o in selection order.
+func (k fileIntroKey) atOrBefore(o fileIntroKey) bool {
+	if k.Tier != o.Tier {
+		return k.Tier < o.Tier
+	}
+	if k.BookID != o.BookID {
+		return k.BookID < o.BookID
+	}
+	return k.Ordinal <= o.Ordinal
+}
+
+// fileIntroSkipThrough returns the groups after the last one at or before last.
+// groups is in selection order, so the skipped groups are a prefix.
+func fileIntroSkipThrough(groups []fileIntroGroup, last fileIntroKey) []fileIntroGroup {
+	n := 0
+	for n < len(groups) && fileIntroKeyOf(groups[n]).atOrBefore(last) {
+		n++
+	}
+	return groups[n:]
+}
+
+// fileIntroCursor is the native run's checkpoint, written when an attempt
+// yields. Stats are the run's counters so far (the next attempt keeps counting
+// from them); DoneBatches is the absolute number of completed batches, which
+// keeps the progress bar monotone across attempts; Last is the last group of the
+// contiguous completed prefix, nil when none has completed.
+//
+// Hazard of a forced run (only_missing=false): such a run has no done-marker to
+// find its place by (every file is selected again, done or not), so the next
+// attempt skips by KEY: every group at or before Last in selection order is taken
+// to be done (fileIntroSkipThrough). That holds while the library stands still.
+// A group that appears between the attempts AT OR BEFORE Last (a book imported,
+// or a file whose hash changed so it moved tier or ordinal) is skipped, not
+// transcribed, by that run; it is picked up by the next run, which starts again
+// from the beginning. The default run is not exposed: its selection leaves out
+// whatever has a result, so it needs no skip.
+type fileIntroCursor struct {
+	RunID       string                  `json:"run_id"`
+	DoneBatches int                     `json:"done_batches"`
+	Last        *fileIntroKey           `json:"last,omitempty"`
+	Stats       database.FileIntroStats `json:"stats"`
+}
+
+// fileIntroBatchLoop runs the op's batches through the env's loop runner and,
+// when yieldMargin is set, stops starting batches once the context's deadline is
+// that close.
+type fileIntroBatchLoop struct {
+	batches [][]fileIntroGroup
+	// base is how many batches earlier attempts completed: progress is reported
+	// as base+i, against base+len(batches).
+	base  int
+	slots int
+	// yieldMargin 0 never yields (HEAD).
+	yieldMargin time.Duration
+	runBatch    func(ctx context.Context, groups []fileIntroGroup) (int, error)
+	afterBatch  func(settled int)
+	// onAdvance, when set, is called with the new length of the contiguous
+	// completed prefix each time it grows. Calls are serialised.
+	onAdvance func(prefix int)
+	label     func(i, total int) string
+	each      t6g4EachFn
+
+	// firstDone is set once this attempt's batch 0 has completed; yielding waits
+	// for it, so a yield always leaves a prefix of at least one batch.
+	firstDone atomic.Bool
+	yielding  atomic.Bool
+	// deadline is the run context's, read once at the top of run.
+	deadline    time.Time
+	hasDeadline bool
+}
+
+// shouldYield reports that the run is inside its yield margin (strictly less
+// than yieldMargin left before the context's deadline) and that this attempt's
+// batch 0 has completed, and latches it: once true it stays true. The batch
+// loop asks it before starting a batch; the worker asks it (as giveUp) when a
+// pause or retry sleep would otherwise go on, so no wait carries the run past
+// the deadline. It is false without a margin or a deadline (HEAD).
+func (l *fileIntroBatchLoop) shouldYield() bool {
+	if l.yielding.Load() {
+		return true
+	}
+	if l.yieldMargin <= 0 || !l.hasDeadline || !l.firstDone.Load() || time.Until(l.deadline) >= l.yieldMargin {
+		return false
+	}
+	l.yielding.Store(true)
+	return true
+}
+
+// run returns the number of batches in the contiguous completed prefix of
+// l.batches, whether it stopped early at the margin, and the first real error.
+//
+// A batch past the margin returns nil WITHOUT running, rather than an error: a
+// FailFast loop cancels the items still in flight on the first error, and a
+// yield must let them finish (their results are written as they land). The
+// price is that the loop counts a skipped batch as completed in its own
+// progress; the caller resets the bar to the exact prefix.
+//
+// The margin is checked before a batch starts, and by the batch's own waits
+// (the scan-busy pause before the whisper call and at the write gate, and the
+// outage retry sleep): a wait that would go on inside the margin returns
+// errFileIntroYieldNow, and the batch is skipped like one that never started
+// (not done, not failed; results already answered but not yet written are
+// dropped and re-sent by the next attempt, at most one batch of whisper work
+// per worker).
+//
+// The whisper call is bounded too (review N16): it runs under a context that
+// ends fileIntroCallMargin before the deadline (fileIntroWorker.boundCall), the
+// dispatcher's pacing and the transport's queueing behind the book op included.
+// A call cut that way returns errFileIntroYieldNow with nothing written for it;
+// its files get no result and no strike and are re-sent by the next attempt.
+//
+// So a native run does not end timed_out because of a wait, with two exceptions
+// that share one reason: a yield needs this attempt to have completed a batch
+// (the executor fails a yield that made no progress past its starting point), so
+// nothing is bounded until batch 0 is done, and a scan that outlasts the whole
+// attempt, found by a resumed attempt before its batch 0, is not either. Such an
+// attempt has made no progress for its entire timeout.
+//
+// "Inside the margin" means time.Until(deadline) < yieldMargin, strictly: with
+// exactly yieldMargin left the run is "not yet within" it (time.Until(deadline)
+// >= yieldMargin is the not-yet test shouldYield makes), and it yields only once
+// this attempt's FIRST batch has completed: a yield must leave a prefix of at
+// least one batch, or it would fail the executor's
+// "progress past the starting point" proof and end the run. Waiting on batch 0
+// rather than on any completed batch matters because the loop's workers start
+// in no fixed order: a later batch can finish before batch 0 begins, and batch
+// 0 would then start inside the margin and be skipped, leaving a prefix of
+// zero. The cost is that batches keep starting past the margin while batch 0 is
+// still running, and that a batch 0 still parked in a wait when the deadline
+// arrives (it would have waited the whole attempt) is not given up: a yield
+// with no completed batch would not count as progress either.
+//
+// A batch the call context cut still counts as not done, so the prefix, the
+// cursor and the progress bar stay exact.
+func (l *fileIntroBatchLoop) run(ctx context.Context) (prefix int, yielded bool, err error) {
+	done := make([]bool, len(l.batches))
+	var mu sync.Mutex
+	advanced := 0 // length of the contiguous completed prefix, under mu
+	l.deadline, l.hasDeadline = ctx.Deadline()
+	if len(l.batches) > 0 {
+		err = l.each(ctx, len(l.batches), t6g4EachOpts{
+			// One worker per whisper slot across all endpoints. Each call carries one
+			// batch; the dispatcher places it on an endpoint with a free slot,
+			// rotating among equal-priority endpoints (allocateJobsWith), so the
+			// workers spread over every Mac instead of queueing on the first. The
+			// transport still enforces each endpoint's own cap.
+			Concurrency:   l.slots,
+			Reason:        "one worker per whisper slot across all endpoints (fileIntroSlots); the transport still enforces each endpoint's own cap",
+			ProgressBase:  l.base,
+			ProgressTotal: l.base + len(l.batches),
+			Label:         l.label,
+		}, func(ctx context.Context, i int) error {
+			if l.shouldYield() {
+				return nil
+			}
+			n, berr := l.runBatch(ctx, l.batches[i])
+			if errors.Is(berr, errFileIntroYieldNow) {
+				// A wait gave up inside the margin, or the whisper call was cut at
+				// its own: the batch is skipped, exactly as one not started at the
+				// margin (not done, not failed). The latch is not redundant: a cut
+				// call does not go through shouldYield, so this is what makes run
+				// report the yield.
+				l.yielding.Store(true)
+				return nil
+			}
+			l.afterBatch(n)
+			if berr == nil {
+				if i == 0 {
+					l.firstDone.Store(true)
+				}
+				mu.Lock()
+				done[i] = true
+				grown := false
+				for advanced < len(done) && done[advanced] {
+					advanced++
+					grown = true
+				}
+				if grown && l.onAdvance != nil {
+					l.onAdvance(advanced)
+				}
+				mu.Unlock()
+			}
+			return berr
+		})
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for prefix < len(done) && done[prefix] {
+		prefix++
+	}
+	return prefix, err == nil && l.yielding.Load(), err
 }
 
 func chunkFileIntroGroups(gs []fileIntroGroup, size int) [][]fileIntroGroup {
@@ -559,8 +1053,8 @@ func previewFileIntros(reporter sdk.Reporter, sel fileIntroSelection, onlyMissin
 // fileIntroWorker holds what a batch needs; shared by every worker goroutine,
 // so everything on it is read-only or internally synchronised.
 type fileIntroWorker struct {
-	store       fileIntroStore
-	intros      database.BookFileIntroStore
+	store       fileIntroWorkerReads
+	writer      fileIntroWorkerWrites
 	queue       OpQueueReader
 	reporter    sdk.Reporter
 	accum       *fileIntroAccum
@@ -576,6 +1070,64 @@ type fileIntroWorker struct {
 	// progressMu serialises reporter calls made outside RunItems' own: the
 	// reporter is not required to be goroutine-safe.
 	progressMu sync.Mutex
+	// giveUp, when set (the native run, with a yield margin), reports that the
+	// run is inside its margin: the scan-busy pause and the outage retry sleep
+	// then stop waiting and the batch is left for the next attempt. nil (HEAD)
+	// waits as long as it always did.
+	giveUp func() bool
+	// callMargin and batchZeroDone bound the whisper call (see boundCall): zero
+	// and nil (HEAD) never cut a call.
+	callMargin    time.Duration
+	batchZeroDone func() bool
+}
+
+// callBoundHit reports that a whisper call must not start (or go on): the run
+// has a call margin, a deadline, this attempt's batch 0 is done, and strictly
+// less than the margin is left.
+func (w *fileIntroWorker) callBoundHit(ctx context.Context) bool {
+	if w.callMargin <= 0 || w.batchZeroDone == nil || !w.batchZeroDone() {
+		return false
+	}
+	dl, ok := ctx.Deadline()
+	return ok && time.Until(dl) < w.callMargin
+}
+
+// boundCall returns the context one whisper call runs under: ctx itself when
+// the run has no call margin or deadline, otherwise ctx cancelled with
+// errFileIntroYieldNow as its cause once callMargin is all that is left before
+// the deadline AND this attempt's batch 0 is done (until then it re-asks every
+// fileIntroPauseInterval, since a yield with no completed batch would not count
+// as progress). The caller reads context.Cause before it calls the release.
+func (w *fileIntroWorker) boundCall(ctx context.Context) (context.Context, context.CancelFunc) {
+	dl, ok := ctx.Deadline()
+	if w.callMargin <= 0 || w.batchZeroDone == nil || !ok {
+		return ctx, func() {}
+	}
+	cctx, cancel := context.WithCancelCause(ctx)
+	stop := make(chan struct{})
+	go func() {
+		for {
+			wait := time.Until(dl.Add(-w.callMargin))
+			if wait <= 0 {
+				if w.batchZeroDone() {
+					cancel(errFileIntroYieldNow)
+					return
+				}
+				wait = fileIntroPauseInterval
+			}
+			t := time.NewTimer(wait)
+			select {
+			case <-t.C:
+			case <-cctx.Done():
+				t.Stop()
+				return
+			case <-stop:
+				t.Stop()
+				return
+			}
+		}
+	}()
+	return cctx, func() { close(stop); cancel(nil) }
 }
 
 func (w *fileIntroWorker) progress(msg string) {
@@ -636,6 +1188,22 @@ func fileIntroRefuseIfBusy(queue OpQueueReader) error {
 // per-file op around every write batch, the per-book op around the book_file
 // writes it makes (timeout strikes).
 func waitWhileScanBusy(ctx context.Context, opID string, queue OpQueueReader, onWait func(def string)) error {
+	return waitWhileScanBusyUnless(ctx, opID, queue, onWait, nil)
+}
+
+// errFileIntroYieldNow is what a wait of the native transcribe-file-intros run
+// returns when it would have to keep waiting but the run is inside its yield
+// margin: the batch is left for the next attempt (not failed, not completed).
+// HEAD never sees it, because HEAD passes no giveUp.
+var errFileIntroYieldNow = errors.New("transcribe-file-intros: inside the yield margin; the batch is left for the next attempt")
+
+// waitWhileScanBusyUnless is waitWhileScanBusy with an optional bound: when
+// giveUp is non-nil and reports true while a scan or bulk apply is still
+// running, the wait ends with errFileIntroYieldNow instead of continuing. It is
+// asked only when the wait would otherwise go on, so a batch that finds no scan
+// running is never dropped for being inside the margin. A nil giveUp is the
+// unbounded wait HEAD always had.
+func waitWhileScanBusyUnless(ctx context.Context, opID string, queue OpQueueReader, onWait func(def string), giveUp func() bool) error {
 	if queue == nil {
 		return fmt.Errorf("%s: cannot verify no library scan is active; refusing to run", opID)
 	}
@@ -658,6 +1226,9 @@ func waitWhileScanBusy(ctx context.Context, opID string, queue OpQueueReader, on
 			busy := fileIntroBusyDef(active)
 			if busy == "" {
 				return nil
+			}
+			if giveUp != nil && giveUp() {
+				return errFileIntroYieldNow
 			}
 			if onWait != nil {
 				onWait(busy)
@@ -696,12 +1267,46 @@ func fileIntroWaitWhileBusy(ctx context.Context, queue OpQueueReader, onWait fun
 	return waitWhileScanBusy(ctx, fileIntroOpID, queue, onWait)
 }
 
-// waitWhileBusy is fileIntroWaitWhileBusy announcing the pause in the op's
-// progress line.
+// waitWhileBusy is the per-file op's scan gate (waitWhileScanBusyUnless with the
+// worker's giveUp, nil for HEAD) announcing the pause in the op's progress line.
 func (w *fileIntroWorker) waitWhileBusy(ctx context.Context) error {
-	return fileIntroWaitWhileBusy(ctx, w.queue, func(def string) {
+	return waitWhileScanBusyUnless(ctx, fileIntroOpID, w.queue, func(def string) {
 		w.progress(introLiveMarker + "paused — " + def + " is running; resumes when it finishes")
-	})
+	}, w.giveUp)
+}
+
+// sleepOrYield waits d, ctx-aware. With no giveUp it is one timer (HEAD's wait,
+// unchanged); with one it waits in fileIntroPauseInterval slices and returns
+// errFileIntroYieldNow as soon as giveUp reports true, so a retry sleep never
+// carries the run past its yield margin.
+func (w *fileIntroWorker) sleepOrYield(ctx context.Context, d time.Duration) error {
+	if w.giveUp == nil {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			return nil
+		}
+	}
+	end := time.Now().Add(d)
+	for {
+		if w.giveUp() {
+			return errFileIntroYieldNow
+		}
+		left := time.Until(end)
+		if left <= 0 {
+			return nil
+		}
+		t := time.NewTimer(min(left, fileIntroPauseInterval))
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
 }
 
 // groupResult is what a group's file result looks like before it is applied
@@ -753,6 +1358,12 @@ func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileI
 	}
 	pending := jobs
 	for try := 1; ; try++ {
+		// Inside the call margin no request is started: the pool could pace for
+		// longer than is left (review N16). What was answered by earlier tries is
+		// dropped with the rest and re-sent by the next attempt.
+		if w.callBoundHit(ctx) {
+			return nil, errFileIntroYieldNow
+		}
 		out, err := func() (map[string]fileIntroWhisperResult, error) {
 			// A request can outlast the watchdog's progress budget (a chunk of
 			// clips each allowed up to the worker's per-clip deadline), so say
@@ -762,8 +1373,19 @@ func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileI
 				w.progress(introLiveMarker + fmt.Sprintf("waiting on whisper: %d files in flight for %s",
 					len(pending), elapsed.Round(time.Second)))
 			})()
-			return fileIntroWhisperFn(ctx, pending, nil)
+			cctx, release := w.boundCall(ctx)
+			defer release()
+			out, err := fileIntroWhisperFn(cctx, pending, nil)
+			if err != nil && ctx.Err() == nil && errors.Is(context.Cause(cctx), errFileIntroYieldNow) {
+				// The call context ended at the margin while the run's did not:
+				// nothing is settled, nothing is struck.
+				return nil, errFileIntroYieldNow
+			}
+			return out, err
 		}()
+		if errors.Is(err, errFileIntroYieldNow) {
+			return nil, err
+		}
 		if err != nil {
 			// A try that failed produced its timeouts and crashes under conditions
 			// that say nothing about the clips: they are not settled, so they are
@@ -819,12 +1441,8 @@ func (w *fileIntroWorker) callWhisper(ctx context.Context, jobs map[string]fileI
 			"jobs", len(pending), "try", try, "of", fileIntroOutageMaxTries, "retry_in", wait.String(), "endpoints", te.Endpoints, "err", te.Err.Error())
 		w.progress(introLiveMarker + fmt.Sprintf("whisper endpoints unreachable (try %d of %d); retrying in %s",
 			try, fileIntroOutageMaxTries, wait.Round(time.Second)))
-		t := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return nil, ctx.Err()
-		case <-t.C:
+		if serr := w.sleepOrYield(ctx, wait); serr != nil {
+			return nil, serr
 		}
 	}
 }
@@ -882,6 +1500,11 @@ func (w *fileIntroWorker) runBatch(ctx context.Context, groups []fileIntroGroup)
 		out, err := w.callWhisper(ctx, jobs)
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
+		}
+		if errors.Is(err, errFileIntroYieldNow) {
+			// Inside the yield margin with the pool unreachable: nothing is
+			// written, the batch is re-sent by the next attempt.
+			return 0, err
 		}
 		// answered fills the group of every job the pool answered, errors or
 		// not: a per-file result that settled stands even when the batch as a
@@ -1122,7 +1745,7 @@ func (w *fileIntroWorker) applyGroup(g fileIntroGroup, gr groupResult) (int, err
 		if r.At.IsZero() {
 			r.At = time.Now()
 		}
-		wrote, err := w.intros.SetBookFileIntro(m.BookID, m.FileID, r)
+		wrote, err := w.writer.SetBookFileIntro(m.BookID, m.FileID, r)
 		if err != nil {
 			log.Warn("transcribe-file-intros: write failed", "file_id", m.FileID, "err", err)
 			w.accum.update(func(s *database.FileIntroStats) { s.WriteErrors++ })
@@ -1146,7 +1769,7 @@ func (w *fileIntroWorker) applyGroup(g fileIntroGroup, gr groupResult) (int, err
 // transcribe_timeout status, which selection skips.
 func (w *fileIntroWorker) recordTimeout(g fileIntroGroup, m fileIntroItem, gr groupResult) {
 	log := w.reporter.Logger()
-	out, err := w.intros.RecordIntroTimeout(m.BookID, m.FileID, database.IntroTimeoutStrike{
+	out, err := w.writer.RecordIntroTimeout(m.BookID, m.FileID, database.IntroTimeoutStrike{
 		SourceHash: g.Hash, RunOpID: w.runID, Detail: gr.res.Error, At: gr.res.At,
 		Limit: transcribeTimeoutStrikeLimit, MinGap: transcribeStrikeMinGap, Worker: gr.worker,
 	})
@@ -1236,7 +1859,7 @@ func (w *fileIntroWorker) count(gr groupResult, wrote database.BookFileIntroWrit
 // that equality is how clear_run_id later recognises its own fill.
 func (w *fileIntroWorker) fillBook(bookID string, r database.BookFileIntroResult, gr groupResult) error {
 	wrote := false
-	_, err := w.store.ModifyBook(bookID, func(cur *database.Book) error {
+	_, err := w.writer.ModifyBook(bookID, func(cur *database.Book) error {
 		if cur.IntroTranscription != nil && *cur.IntroTranscription != "" {
 			return database.ErrSkipBookWrite
 		}

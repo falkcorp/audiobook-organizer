@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/transcribe_stats_accum.go
-// version: 1.7.1
+// version: 1.8.3
 // guid: 9d3b1e57-6a02-4c8f-b14d-7e9a2f5c08b1
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -42,16 +42,22 @@ const (
 	statusExtracted    = "extracted" // extract-only mode: WAV cached, not transcribed
 )
 
+// t6g4TranscribeStatsSink is the one method the accumulator calls to persist its
+// counters: database.TranscribeStatsStore without its read.
+type t6g4TranscribeStatsSink interface {
+	PutTranscribeStats(*database.TranscribeStats) error
+}
+
 // transcribeStatsAccum is a thread-safe accumulator for the live transcription
 // aggregate. The 4 concurrent page goroutines all record outcomes into it; the
 // op flushes it to PebbleDB (via sink) after each page so a monitor can read
 // one key. sink may be nil when the store does not implement
-// database.TranscribeStatsStore — in that case the accumulator still tracks
+// t6g4TranscribeStatsSink — in that case the accumulator still tracks
 // counts in memory (used for the op's final log line) but never persists.
 type transcribeStatsAccum struct {
 	mu    sync.Mutex
 	stats database.TranscribeStats
-	sink  database.TranscribeStatsStore
+	sink  t6g4TranscribeStatsSink
 	// stuck counts consecutive pages the pool answered "worker stuck" (see
 	// whisperStuckMaxBatches); a page that gets an answer resets it.
 	stuck stuckStreak
@@ -86,7 +92,7 @@ func (a *transcribeStatsAccum) beat(msg string) {
 	}
 }
 
-func newTranscribeStatsAccum(sink database.TranscribeStatsStore, opID string, totalBooks int, startedAt time.Time) *transcribeStatsAccum {
+func newTranscribeStatsAccum(sink t6g4TranscribeStatsSink, opID string, totalBooks int, startedAt time.Time) *transcribeStatsAccum {
 	return &transcribeStatsAccum{
 		sink: sink,
 		stats: database.TranscribeStats{
@@ -180,15 +186,17 @@ func (a *transcribeStatsAccum) recordCacheHits(n int) {
 // flush persists the current counters. Safe to call concurrently. No-op when
 // sink is nil. markDone=true stamps the run as finished.
 func (a *transcribeStatsAccum) flush(markDone bool) {
-	if a.sink == nil {
-		return
-	}
 	a.mu.Lock()
 	if markDone {
 		a.stats.Done = true
 	}
 	snapshot := a.stats // copy under lock
 	a.mu.Unlock()
+	// The run's counters (Done included) do not depend on a sink: a native run
+	// started with no stats sink (t6g4Deps.Stats unset) still reports it finished.
+	if a.sink == nil {
+		return
+	}
 	// M1 (2026-07 error-correction sweep): a persist failure here used to be
 	// swallowed with `_ =`. flush is called after every page, so a
 	// transiently failing sink previously left the live-monitor aggregate

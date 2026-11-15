@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/filepath_collision_report_test.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: 989ac723-652b-498c-bd0f-55ce506ba859
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package maintenance
 
@@ -18,9 +18,9 @@ func runFilePathCollisionReport(t *testing.T, books []database.BookCore, params 
 	store := &database.MockStore{
 		GetAllBooksCoreFunc: func(limit, offset int) ([]database.BookCore, error) { return books, nil },
 	}
-	rep, err := buildFilePathCollisionReport(context.Background(), store, params, &fakeReporter{})
+	rep, err := t6g4BuildFilePathCollisionReport(context.Background(), store, params, t6g4HeadBase(&fakeReporter{}, false, nil, nil))
 	if err != nil {
-		t.Fatalf("buildFilePathCollisionReport: %v", err)
+		t.Fatalf("t6g4BuildFilePathCollisionReport: %v", err)
 	}
 	return rep
 }
