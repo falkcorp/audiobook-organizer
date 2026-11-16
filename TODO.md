@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.41 -->
+<!-- version: 10.78.42 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -11,7 +11,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-13 -->
+<!-- last-edited: 2026-11-16 -->
 
 # Project TODO — live items only
 
@@ -23,6 +23,181 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **F4-06-REPORTKEY** `m3.reportKey` (F4-06) should report a key whose base set is empty and whose owner's role closure holds no ambient scope, as `OutcomeReported` with the warning "a key's scopes lie outside its owner's roles, which hold no ambient scope; it reaches no route after the cutover". Such a key compiles to an empty checker (05-rbac 6.3 as amended by F4-07's ruling), so the cutover's dry-run report should name it instead of letting it fail silently at runtime.
+
+- [ ] **TODO-F8-03-BOOT-WIRING** F8-04 wires what F8-03 built dark: call `registerCoreComponents`, `startHealthLoops` and `beginHealthShutdown` (`core/kernel/health.go`) from the boot and shutdown paths, build the registry with `NewRegistryWith` (options, metrics, timings) in place of `NewRegistry()`, mount `healthhttp.Register` and `RegisterProbes`, supply the real `diagnostics` `Enqueuer` and `Runs` with `Deps.Retention`, `Deps.Now`, the library roots (`diagnostics.Config.Roots`, which drive path redaction) and `ExportParams.Perms`, declare `core:system.status` in the RBAC catalog, call `Registry.SetStatusPublisher(health.PublishStatus(<core scope>))` (the topic is declared in `kernel.coreTopics`), and add `Registrar.StartupSteps` and `Registrar.Diagnostics`. Acceptance: `/readyz` answers 503 before startup completes and as soon as shutdown begins, and `archtest.StartupSteps` runs over the kernel against the real table. Brief: `docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md`; details in `docs/agent-tasks/platform-core/seams.d/F8-03.md`.
+- [ ] **TODO-F8-03-DIAGNOSTICS-PRUNE** Register the `core.diagnostics.prune` task (schedule key `core.diagnostics.schedules.prune`) and the config keys for retention, log lines, task runs and max file bytes. F8-03 ships `diagnostics.Prune(root, retention, now)` and nothing schedules it, so bundles accumulate until it is wired.
+- [ ] **TODO-F8-03-CLOSE-TIMEOUT** F8-04 clamps the storage close timeout to the shutdown budget. `core.storage.close_timeout` defaults to 30s and the whole `core.shutdown.budget` is 25s (8s in a container), so a storage close that uses its full timeout outlives the budget the supervisor kills at. `StopBudget.Run` runs `PhaseStorage` synchronously and never abandons it by design (a skipped close loses the WAL sync), so the bound has to come from the caller: pass the close a context or timeout of `min(close_timeout, Registry/StopBudget.Remaining())` where F8-04 wires `PhaseStorage`, or lower the default below the budget. Found by review of F8-03; see `docs/agent-tasks/platform-core/seams.d/F8-03.md`.
+
+- [ ] **F4-07-HANDLER-PIN** F4-08 (or the handler migration, 04): discharge the 11 cells `reachHandlerAdmin` hides (`reach_pin_test.go`, `reachPinnedCells`): the core half of `TestUserMerge_ScopedAdminKeyRefused`, a `SetUserEmail` equivalent, and custom-role-session and auth-off columns on `GET /users/:id/footprint`, `GET /users/merges` and `PUT /users/:id/email`, run on the registered path. Then delete `reachHandlerAdmin`, `reachHandlerAdminFuncs`, `reach_pin_test.go` and the handler half of `reach_pin_source_test.go`. Until then `TestReachHandlerAdminPin_GoesWhenTheHandlersMigrate` fails when the HEAD role-name check leaves the named functions in `handlers/user_merge.go` and `handlers/user.go`, and `TestReachFlip_FailsWhileThePinOrTheOwnerlessModelStands` fails when `internal/books/module.go` mounts with `LegacyAuthCore` while the pin stands.
+- [ ] **F4-07-RANDOM-ROLES** F4-08 (listed in `reachObligations`, blocks the flip to `LegacyAuthCore`; the discharge test is `TestLegacyStage13_RandomRolesAdmitOnlyWhatTheSuccessorAdmits` in `core/httpapi`, the directory of the stage-13 decision; its bar is the 10 distinct legacy atoms of the manifest's routes, declared by string literals in the test's file): the custom-role half of the reach oracle over random native roles (05-http-api 8.1, SEC4-2): for random native roles, stage 13 admits a legacy route only if the route's successor admits it. R0 has no role CRUD, so no recording can hold it; it is a test over core's own routes on the registered path.
+- [ ] **F4-07-HANDLER-REFUSALS** F4-08 (a row of `reachObligations`, cleared by `TestReachRegisteredPath_HandlerRefusals` in `internal/books/cutover`; a row is open until that test exists, asserts and declares the bar the guard computes): prove the eight auth-off handler refusals again on the registered path: `GET /auth/me`, `GET /auth/sessions`, `DELETE /auth/sessions/:id`, `GET /auth/api-keys`, `GET /auth/api-keys/:id`, `POST /auth/api-keys` (key minting), `DELETE /auth/api-keys/:id` and `POST /api/v3/ops/runs/:id/approve`. Port `TestReachHeadHandlers_RefuseTheAuthDisabledPrincipal` (`internal/server/reach_head_refusals_test.go`), or delete the seven credential routes before the flip.
+- [ ] **F4-07-ABS-REPLAY** F4-08 (a row of `reachObligations`, cleared by `TestReachRegisteredPath_AbsReplay` in `internal/books/cutover`; a row is open until that test exists, asserts and declares the bar the guard computes): replay R0's recording of the 64 delegated ABS routes (2368 recorded cells `internal/books/rbacreach/verdicts.json` `abs_only`, nothing compares them today) against the registered path after M3 moves keys and roles into core, and state F-1's outcome on that surface: `key:fp-worker:view`, `key:fp-worker:settings` and `key:fp-worker:users` are admitted by the ABS handler at R0. The 7 collection write routes carry an in-handler `auth.Can(PermCollectionsManage)` (`handlers/abs/collections.go:575`).
+- [ ] **F4-07-HIDDEN-HANDLER-CHECKS** F4-08 or the handler migration (04) (a row of `reachObligations`, cleared by `TestReachRegisteredPath_HiddenHandlerChecks` in `internal/books/cutover`; a row is open until that test exists, asserts and declares the bar the guard computes): prove on the registered path the in-handler checks the probe's dummy-id 404 hides (the guard's bar is the 31 routes that reach the in-handler check sites below, listed in `reachHiddenSites` and pinned to the handler source with go/ast, so a site added, removed or renamed fails the test; the bar is not computed from recorded 404s, four sites are on routes that never answered 404; a discharge replays each route with a real id): `handlers/apikeys.go:171`, `handlers/auth.go:632`, `handlers/audiobooks/handler.go:986`, `handlers/operations_v2.go:793`, `wire_repairs_routes.go:111`, `wire_ops_v3_routes.go:102`, `handlers/audiobooks/handler_permission.go:35`, `maintenance_dispatcher.go:72`, `cfaccess/owner_guard.go:74` and `handlers/user.go:288`. The owner-apply admin check (`handlers/repairs/handler.go:568`) is held on HEAD already.
+- [ ] **F4-07-OWNER-SET** F4-08 (a row of `reachObligations`, cleared by `TestReachRegisteredPath_OwnerSet` in `internal/books/cutover`; a row is open until that test exists, asserts and declares the bar the guard computes): with `internal/cfaccess` configured and an owner set, assert on the registered path that a non-owner admin session is refused on every `Guards.Owner` route (the 8 in the manifest; core's successor of the R0-only reset pair is `POST /api/core/v1/system/factory-reset`, `Guards.Owner`, 05-rbac.md:767); the oracle's principal table holds no owner-assured principal.
+- [ ] **F4-07-OWNER-ALLOW** F4-08 (a row of `reachObligations`, cleared by `TestReachRegisteredPath_OwnerAllow` in `internal/books/cutover`; a row is open until that test exists, asserts and declares the bar the guard computes): the Access-verified owner is admitted on every `Guards.Owner` route. R0's allow side is unrecorded: the recording boot has no Access verifier and no issuer, so no principal can be the owner, and `verdicts.json` `owner_set` holds no allowed cell. Record it (an HTTPS stand-in issuer, a trusted CA, a signed JWT, an owner-only column, never a 38th principal) or assert it on the registered path.
+- [ ] **F4-07-PRINCIPAL-CLASSES** spec owner (05-rbac section 12): decide whether to add the principal classes the oracle does not run: `session_delegated`, a Cloudflare Access identity, an owner-assured principal, an ABS-token principal on non-delegated routes, a user with no role, a multi-role user (`fp-worker` plus another), the key of the `custom-unknown` user and the zero-users first run. Listed in `seams.d/F4-07.md`, "Flagged for the spec's owner".
+
+- [ ] F5-18: back the native authority-build plan lookup with the tasks run store. A native Preview's `plan_op_id` is its RunID, but `deps.PlanReader` reads a v2 operation row, so a native apply of a native dry run cannot find its plan. Replace `TestT6G1Kinds_AuthorityBuildAppliesFromAPlantedV2PlanRow` with a test that feeds a native Preview's own result to the Live run. See `docs/agent-tasks/platform-core/seams.d/F5-06.md`.
+- [ ] F5-18: rewrite the native Help text of the 12 T6 group 1 writing kinds. It is verbatim HEAD and tells callers to pass `apply=true` or `dry_run=false`, which the native kinds refuse; name the run mode instead.
+- [ ] F5-18: register every resource name the T6 group 1 kinds use in `r.Resources(...)`: `activity`, `metadata_cache`, `field_states`, `ai_journal`, `authority_lists`; also `sync_identity` and `metrics` (F5-01), `cover_text` (F5-08) and `file_provenance` (F5-09, F5-07). No kind uses `aux_stores` any more.
+- [ ] F5-18: add the first test that runs the real metafetch apply (resolve-production-authors, auto-match-transcribed) through an Effects-enforcing writer; the gated writer must map tag writes to books, the change record to operations and `metadata_state:` to field_states.
+
+- [ ] **TODO-F5-07-CHAPTERS-KEY** Decide whether `maintenance.chapters-backfill` should
+      share a concurrency key with another whole-library probe op. HEAD declares
+      `maintenance.probe-directory-books` for it, and a comment said it shared the
+      ffprobe lane with probe-directory-books, but that op's own key is
+      `maintenance.relink-unlinked-books`, so the chapters key serialises it with
+      nothing. F5-07 maps the key 1:1 and does not change it. Acceptance: either
+      chapters-backfill and the other probe op declare one key (and a test pins it),
+      or the comments say the lane is chapters-only. Brief: seams note
+      `docs/agent-tasks/platform-core/seams.d/F5-07.md`, "Flag for owner".
+
+- [ ] **TODO-F5-09-FILE-INTROS-WRITE-SET** Decide the declared write set of the
+      native `books.maintenance.transcribe-file-intros` kind before F5-18 registers
+      it. It declares `book_files` and `books` (it writes intro results onto file
+      rows and fills the book transcript through `ModifyBook`; it does not
+      re-aggregate the parent book), so once registered the scheduler
+      will hold back every other writer of those two resources while it runs,
+      including the nightly acoustid backfill, for the length of a full-library
+      transcription. A ref lock cannot narrow an Effects hold (a ref lock grants no write).
+      Options: (a) the parent run declares no row writes and each batch runs as a
+      short child run through `rc.Enqueue` whose `Common.Subjects` names that
+      batch's book and book_file refs; (b) a narrower `pkg/ops` resource for intro
+      results; (c) keep the declaration and accept the hold-back. Acceptance: the decision is recorded in
+      the F5-18 seams note and the kind's Effects match it. Brief:
+      `docs/agent-tasks/platform-core/seams.d/F5-09.md`.
+
+- [ ] **TODO-F5-11-HOLD-RENEW** Do not register the 14 native group 6 maintenance
+      kinds (`books.maintenance.*`, `books.itunes.heal`) until core has `Hold.Renew`
+      and the native shells use it. A native apply takes the library-scan stand-down
+      once and keeps it for the run, but a lease can lapse in a long recover or
+      repoint (HEAD's registry renewed it), and the native heartbeat does not stamp
+      liveness either. Acceptance: core `Hold` has a renew call, the native
+      stand-down (`t6g6NativeStandDown`) renews while the run lives and stops the
+      writer if it lapses, the shells stamp liveness from progress, and a test
+      fails when either is removed. F5-18 blocker. Notes: `docs/agent-tasks/platform-core/seams.d/F5-11.md`.
+
+- [ ] **TODO-F5-18-CREDITS-CLASS-LISTS-RUN-ROWS** Route the native credits-backfill
+      class id lists (`SaveClassLists`/`ClearClassLists`) to `RunStore.ReplaceRows`
+      on the run's own id, not through `rc.Writer()`: run rows are not gated by
+      Preview, so a native preview keeps them with no Preview hole in the Writer.
+      HEAD's dry run keeps them (`TestT6G3_CreditsBackfillHeadShellDryRunWritesNoBook`).
+- [ ] **TODO-F5-18-CREDITS-OPS-LISTER** The ops lister must return native runs of
+      `books.maintenance.credits-backfill`: `otherCreditsBackfillOps` filters on
+      `row.DefID == "maintenance.credits-backfill"` and would stop seeing earlier
+      attempts.
+- [ ] **TODO-F5-18-CREDITS-JUDGED-MARKERS-HOME** Judged markers are op rows written
+      under an earlier (terminal) operation's id, and native `ReplaceRows` refuses a
+      closed ledger (`core/tasks/native.go`). Give them a home outside the judged
+      run's ledger (rows on the judging run keyed by the source id, or a journal
+      annotation) and have the lister read them from there; the marker failure is
+      only logged, so every later apply would silently re-judge.
+- [ ] **TODO-F5-18-FOLDER-COVER-SCAN-GUARD** The folder-cover scan guard reads the
+      v2 queue for `DefID == "library.scan"` (`cover_ops.go`,
+      `fs_regroup_xml.go`) and goes dead once the scan is native. It must move to
+      `NotWhile`/`StandDown`; this is a must, not a may.
+- [ ] **TODO-F5-18-JOURNAL-ALLOWLIST** Delete the `kinds_t6_g3.go` entry from
+      `journalDirectAllowed` in `internal/arch/journal_direct_writers_test.go` once
+      F5-18 wires a real writer for `CreateOperationChange`.
+
+- [ ] **TODO-OUTBOX-ROUND-CANCEL** Settle the completed part of a canceled
+      unordered round in `core/outbox` — `passUnordered` drops the whole round
+      when the run's context ends (`deliver.go`, "nothing is settled: the round
+      is delivered again"), so every handler that already returned nil in it is
+      delivered again by the next relay run. A round holds up to
+      `4 x unordered_parallelism` messages (window), so a graceful shutdown
+      redelivers up to 16 messages that took effect at the default
+      parallelism of 4, on every restart. The ordered path (`settleAck`,
+      `settleFail`) already commits past a cancel on `settleCtx`; the round
+      does not, and its comment documents redelivery for a crash only.
+      Requirements for the fix: settle the done items in one batch on
+      `settleCtx`, but `settleRound` moves the cursor to `newMax`
+      unconditionally and skips items that are not done, so on a partial round
+      it would skip the unfinished new messages for good. `newMax` must be
+      capped at the highest contiguous done sequence, or each unfinished item
+      must go into the try record due now with its attempt unchanged. A
+      handler error that arrives after the cancel must count as not done (it
+      may be the cancel's own error), or it would burn an attempt or
+      dead-letter. A skipped message is worse than a duplicate, so the test
+      must cancel mid-round with some items done and some not and assert that
+      the done ones are acked, the rest are delivered once by the next run,
+      and none is skipped.
+
+- [ ] **TODO-AWAIT-YIELD** A `ResumeContinue` parent cannot yield (`ErrContinueInPlace`) around a long child: `rc.Await` is not interrupted by `ShouldYield`, so the parent runs to `timed_out`. Have `Await` return a yield sentinel once `ShouldYield()` holds, so the parent can checkpoint the child's run reference and re-await after its requeue; `yieldNext` still needs real progress. Found in the review of the Await liveness relay (core/internal/executor/dispatch.go `await`).
+
+- [ ] **TODO-F5-09-RESUMED-INTRO-SCAN-HOLD** Hold a continued
+      `books.maintenance.transcribe-file-intros` attempt at dispatch while a v2
+      library scan or bulk metadata apply is queued or running, instead of waiting
+      inside the run. Today a resumed attempt (a cursor exists) waits for the scan
+      in the run and cannot yield again while it waits (the executor's `yieldNext`
+      needs progress past the starting point), so continuous scan activity for a
+      whole attempt (about 24 h: a zombie queue row, back-to-back chained scans, a
+      weekly sweep across restarts) ends the run `timed_out`, which is terminal.
+      HEAD fails at once in the same restart-while-a-scan-is-queued case, so the
+      native kind is better than HEAD there; it only loses how much continuous busy
+      time one run tolerates. Fix at F5-18: a `Ready` signal derived from the v2
+      queue (Down while one of the busy defs is queued or running), or, once the
+      busy ops are native kinds that declare `book_files`, the write-set conflict
+      or `NotWhile`. Acceptance: a continued attempt queued behind a scan does not
+      start, burns no attempt clock, and the in-run wait is deleted. Brief:
+      `docs/agent-tasks/platform-core/seams.d/F5-09.md`.
+
+- [ ] **TODO-F5-10-NARROW-WRITER-TYPES** Give each F5-10 kind a writer type that has only
+      the methods its Effects allow, instead of the shared `t6g5Writer` (30 methods) that
+      every kind of the group receives. Today a kind can call a method outside its own
+      write set and only the tests and the F5-18 run-time fence refuse it; with narrow
+      types the compiler refuses it, and the per-call checks in
+      `kinds_t6_g5_storediff_test.go` become a second line rather than the only one.
+      Cost, sized by the round-6 review: 13 to 14 files and 150 to 250 lines (one
+      interface per kind, the head and native writers split to match, the spy and the
+      fixtures adjusted). This is F5-18 row work: that row's fence refuses an
+      out-of-Effects write at run time, so it should decide whether the compile-time
+      version is worth the churn. Brief:
+      `docs/agent-tasks/platform-core/F5-18-tasks-flip-engine-deleted.md`.
+
+- [ ] F5-18: close the three blind spots of the F5-10 store-key diff with the run-time write fence. A before/after key diff cannot see (1) a write that leaves a key's bytes unchanged, (2) the delete of an already-absent key, or (3) a key created and deleted inside one call. The F5-18 fence stamps every writer call with the resources it touches, so a write of any of these shapes outside a method's declared row is refused when it is attempted, not inferred afterwards. The F5-10 tests deliberately add no recorder to the store write path.
+
+- [ ] F5-18: decide whether the book write stays one coarse resource group, now that the shared method table widens. The stack's one rule (`internal/plugins/maintenance/kinds_resources.go`: a row lists everything its store method can write) made every kind that reaches ModifyBook, UpdateBook, RecomputeBookAggregates or a file-row method declare `books`, `authors`, `metadata_cache` and `indexes`. 25 kinds widened by one to three resources, all toward more exclusion, because admission compares DECLARED write sets (`core/internal/executor/dispatch.go`, `overlapsSet`). The cost is coarser exclusion, never a missed one, and it lands on long jobs: `maintenance.extract-wav-clips` (24 h timeout) and `maintenance.intro-migrate-single-file` (2 h) declared only `book_files` and `books` before and now conflict with every other kind that writes book metadata; `maintenance.metadata-cache-reap` (`metadata_cache`, `indexes`) can now wait behind `maintenance.transcribe-file-intros` (timeout 30 days), `maintenance.transcribe-book-intros` (10 h), `maintenance.credits-backfill` (12 h) and the two above for days. Options to cost before F5-18 wires the executor: (1) leave it, and accept the waits (the scheduler is the only caller of most of these); (2) write the derived state in the row's own batch under the row's resource, so a ModifyBook is stamped `books` alone: a store change, since today the stale stamp, the `ident:` rows and the `author_books_legacy:` rows are staged by the same batch but under other key families; (3) split the aggregate recompute out into its own `book_aggregates` resource that file-row kinds declare and metadata kinds do not, which needs the store to guarantee a file-row method writes no identity field; (4) give the dispatch gate a finer key than the resource kind (`Subjects`/`ResID`: per-book or per-author exclusion), so two kinds on disjoint books run together. Related, from the duration-backfill unknown-rows fix: the row that finishes a book is now written with `ModifyBookFile` (one write that recomputes), which is already inside that kind's declared set; see `docs/agent-tasks/platform-core/seams.d/F5-09.md`. Recorded in `docs/agent-tasks/platform-core/seams.d/F5-10.md` ("One rule").
+
+- [ ] F5-18: let a gated writer call name every resource of its method's row. The shared method-to-resource table (`t6WriterResources`, `internal/plugins/maintenance/kinds_resources.go`) gives most store methods a row of several resources (ModifyBook is `books`, `metadata_cache`, `indexes`; the file-row methods are `book_files`, `books`; MergeBooks has seven). `tasks.Write.Resource` (`core/tasks/writer.go`) is ONE `entity.Ref`, and `core/internal/executor/writer.go` checks only that tag against the kind's Effects (`ErrOutsideEffects`). Admission is not affected: the dispatch gate compares the kinds' DECLARED write sets (`core/internal/executor/dispatch.go`, `overlapsSet(a.writes, ws)`), so a kind that declares every resource of its rows is excluded against every other kind that declares one of them, whatever a write is tagged. What a single tag per write loses is RUNTIME detection of an under-declared Effects: a write tagged `books` that also touches `metadata_cache` or `indexes` is accepted even when the kind never declared them, so the declaration tests of the maintenance package (rows, union equality, store diffs) are the only guard until the writer sees every resource of a call. Extend the writer API so a write names all the resources of its row and the writer checks each against the Effects; do not split one store call into one `Do` per resource (it would record a call as several writes with a fence able to land between them), and do not build a per-call workaround in the kinds. Stamping is per group (each group's writer interface takes its rows from its view of the table), not one global books writer. Register for the books module the names the rows use that no kind declared before: `settings`, `metadata_cache`, `indexes`, `sync_identity`, `fingerprint_index`, `field_states`, `embeddings`, `files`. Recorded in `docs/agent-tasks/platform-core/seams.d/F5-09.md` and `F5-10.md`.
+
+- [ ] **TODO-F8-03B-SHARE-SAFE-BUNDLE** Replace the path redactor in `core/health/diagnostics/paths.go` with a structure that makes the diagnostics zip safe to hand to a third party (S1 in `docs/agent-tasks/platform-core/seams.d/F8-03.md`), then delete `diagnostics.RedesignPendingF8_03b`, the run-time refusal (`ErrRedesignPendingF8_03b`, `redesignRefusal`) and the archtest guard (`core/archtest/f803b_*.go`), the real-binary test (`core/health/diagnostics/redesign_binary_test.go`) and `testdata/probemain/` with it. The brief is `docs/agent-tasks/platform-core/F8-03b-share-safe-bundle.md` (the eight obligations of the review). **Blocks F8-04** (`diagnostics.New` and `Exporter.Build` refuse outside a test binary while the marker is true, and `archtest.F803bGate` fails while it is true and core's non-test code imports `core/internal/healthhttp` or constructs the bundle Exporter). Sonnet worker at medium effort, then an Opus review and a T3 security review. Closes the open leaks M6 (a path behind a URL authority the log redactor's credential scrub built; the fuzz input is in the seams note), M1 (whitespace or a delimiter inside a directory name), M2 (a start glued to a name byte or a letter), M3 (`\Users`, `C:rel`, `~user`, doubly escaped and HTML-entity forms), M4 (`smb://`, `nfs://`, `sftp://` paths) and m1 (the health route's Detail), all with example inputs in the seams note. Outline, from the round 7 review of PR #4658 (the break-it and design review of head 7235dc265, option "3+5 hybrid"):
+  1. New `sanitize.go`, replacing `paths.go`: `type Sanitizer struct{ roots pathRoots }` and `func (s Sanitizer) Text(str string) string`. Split on `unicode.IsSpace` (so U+2028 and U+00A0 count as whitespace). A token is **triggered** if it contains `/`, `\`, `%`, `&#` or `~` anywhere, or, after stripping leading `"'([{<`, starts with `[A-Za-z]:`. A triggered token becomes `<root:NAME>` when its body, cleaned under both separator readings with a case-insensitive drive match, sits under a configured root, and `<path>` otherwise; leading opening punctuation stays outside the placeholder and a trailing run of `: , ; . ) ] } " '` stays after it. Placeholders hold no trigger byte, so `Text(Text(x)) == Text(x)`. **Bridge rule:** untriggered words between two triggered words in the same string are wiped too (this closes `HD` in `/Volumes/Macintosh HD/Users/x`). Untriggered tokens are kept byte for byte with their whitespace.
+  2. Template recognisers, applied before the token wipe, for Go file-error messages, parsed exactly: `*os.PathError` is `<op> <path>: <err>` with `op` one of the `os` package ops (`open`, `stat`, `lstat`, `mkdir`, `remove`, `rename`, `readdir`, `readlink`, `chmod`, `chown`, `chtimes`, `truncate`, `symlink`, `link`, `unlinkat`, `fdopendir`, `write`, `read`, `close`, `seek`, `sync`), and `<err>` the remainder after the last `": "` whose suffix is a known `syscall.Errno` string or the `fs.ErrNotExist`, `ErrPermission` or `ErrExist` text; `*os.LinkError` is `<op> <old> <new>: <err>`; `exec: "<name>": ...` follows the same pattern. Every path between the op and the errno is one `<path>` or `<root:NAME>`, spaces and all; wrapped errors are found by searching for ` <op> ` from the left and the errno suffix from the right. Test against a table built from real `os.Open`, `os.Stat` and `os.Rename` errors on temp directories whose names hold spaces, quotes, commas, tabs and Unicode.
+  3. Key allowlist in the JSON walk: `safeKeys map[string]func(string) bool` with validators for `level` (enum), `time` (RFC 3339), `component`, `module`, `kind`, `task`, `state`, `status`, `outcome`, `reason` (`^[a-z0-9_.:-]{1,64}$`), `method` (HTTP enum), `route` and `pattern` (`^/[A-Za-z0-9/{}._-]*$`, no `..` segment: a route template, never the raw URL), `run_id` and `id` (ULID or UUID), `version` (semver or VCS revision). A value that passes its key's validator is kept; anything else goes through `Text`. Keys always go through `Text`, with the linear collision counter of `walkObject`. Order stays: log redactor first (secrets), then the allowlist or `Text`.
+  4. Use the sanitizer everywhere text leaves: `Writer.JSON`, `Writer.File` lines, manifest `Errors`, zip entry names (reject a name that `Text` would change), and the health route's Detail (`healthhttp` gets `Sanitize func(string) string` in its deps), which fixes m1.
+  5. Delete the grammar machinery (`scanPaths`, `tokenAt`, `pathAt`, `urlText`, `afterCut`, `routeText`, `routePath`, `lenientDecode`, the `judged` and `cut` bookkeeping, G1 to G9) and the tests that pin only that grammar (`paths_adversarial_test.go`'s grammar tables, `round4_test.go`, `round5_test.go`, the grammar parts of `hardening_test.go`). Keep `PathRoot`, `newPathRoots` and the root-matching helpers. Delete the F8-03b marker and gate in the same change.
+  6. Tests: (a) a structural property and fuzz target, with no marker tables: for any input, every output token containing a trigger byte is a placeholder; seed the corpus with every input in the seams note's open-leak list. (b) Idempotence. (c) A residual table that asserts exactly what survives. (d) The template table from real OS errors. (e) Linearity at 1 MiB plus 50,000 colliding keys. (f) Validator negatives (`route` holding `..`, `%2F` or a raw filesystem path; `method` outside the enum). (g) End-to-end `Build` over a fake ring of realistic records, scanning the zip bytes for planted usernames.
+  7. Docs: S1, the residual and the costs in the seams note (inline routes and URLs, MIME types and `a/b` vanish from free text; structured `route` and `method` keep the useful part), and a changelog fragment.
+  **Residual after F8-03b:** only the last word or words of a space-containing final path segment in text that is not a Go error template and has no later separator in the same string (`user dir /Users/Bruce Wayne is full` keeps `Wayne`). A strict variant (a string with any triggered token is replaced whole by `<text:N bytes>`) is a one-line policy switch and costs the errno text.
+  **Owner decisions, with the defaults this row assumes:** (1) accept the small residual: yes; (2) library author and title paths under a configured root: hidden, `<root:NAME>` only; (3) bare usernames and hostnames outside paths: out of scope; (4) move the path rule into the shared log redactor: inject it now, move it later (a 05-logging edit).
+
+- [ ] **TODO-OUTBOX-DEAD-AUDIT-SCAN** Make the dead-letter audit in `core/outbox`
+      cheaper after an operator action — `RefreshStatus` (which every operator
+      action calls through `changed`) runs `auditDeadCounts`, a keys-only scan of
+      the whole `dead/` family, so a retry or discard in a store holding many
+      letters pays one full scan each time. The scan is the audit that finds a
+      drifted counter, so it cannot simply be dropped; options are to audit only
+      on the relay's periodic refresh and have `changed` recount from the
+      counters alone, or to audit at most once a minute. Whichever is chosen,
+      keep the audit on the periodic refresh and keep the forced audit for a
+      counter that does not decode, and add a test that a burst of operator
+      actions reads a number of keys independent of the letters stored.
+
+- [ ] **TODO-OUTBOX-DEADN-REV-ABA** Close two small gaps in the `core/outbox`
+      dead-letter counters — (1) counting a `deadn/` counter down to zero deletes
+      its row, so a later write starts `Rev` over and a repair that read
+      `{1,2}` can see the same bytes again after a delete, a clamp and an add
+      (the repair then writes a count one too high; the next audit fixes it):
+      keep a zero row or take `Rev` from a monotone source; (2) `healDeadCounts`
+      at the top of every relay loop reads one `deadn/` row per pair that holds
+      letters, which is not O(1) when healthy: bound it (check only when a
+      counter write failed, or at most once per status interval) and add a
+      counted-reads assertion for idle loops.
+
+- [ ] **TODO-PLAN-CHECKERS-CI** Run the platform-core plan's own checkers in CI: `python3 -I docs/plans/platform-core/tools/check_waves.py docs/plans/platform-core/tools/inventory.json docs/specs/platform-core` (six checks over the inventory) and `python3 -I docs/plans/platform-core/tools/test_check_waves.py` (the row-id pattern and the F8-03b row). Neither runs in any workflow, Woodpecker pipeline, Makefile target or script today, so an inventory edit that breaks a dependency, a wave or a path passes CI; the F8-03b row was missing from the inventory for three review rounds before a reviewer ran the checker by hand. Also note that `scripts/check_task_briefs.py` defaults to the holistic task directory and crashes (IndexError, line 82) when pointed at `docs/agent-tasks`, so it is not a check of the platform-core briefs.
 
 - [ ] **TODO-F7-03-VALIDATE-ENDPOINT** Call `ai.Router.ValidateEndpoint` on every
       Put of an `ai`-kind instance in the F7 flip (F7-09). F7-03 ships the hook and
