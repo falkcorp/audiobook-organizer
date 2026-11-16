@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.10.2
+// version: 1.10.6
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
 // last-edited: 2026-11-15
 
@@ -130,7 +130,8 @@ type optimizeEnv struct {
 	Deadline func() time.Time
 	// Wait blocks until the child ends. relay is HEAD's progress relay, which
 	// feeds this op's watchdog from the child's observations; the native wait
-	// ignores it and ticks liveness on a timer instead (optimizeAwaitTicking).
+	// ignores it: the kernel's await keeps the waiting run alive while its child
+	// is (core/internal/executor dispatch.go await).
 	Wait func(ctx context.Context, childID string, relay func(childop.Observation)) error
 	// Clock is the sweep's source of time for its 36h budget: the boundary check
 	// at each child, and the end of a wait. The zero value is the wall clock; a
@@ -259,77 +260,49 @@ func (p *Plugin) optimizeNative(_ t6g6Deps, sched func(tasks.Kind) *tasks.Schedu
 				// rc.Await takes no context, so the wait runs in its own goroutine
 				// and ctx (the sweep's deadline minus the yield margin) ends the
 				// wait without ending the child. The goroutine returns when the
-				// attempt's own context ends, which a yield does. The kernel's
-				// await does NOT keep this run alive while it blocks (the rc.Await
-				// doc says it does; the executor's await never touches liveness),
-				// so the wait ticks liveness itself, see optimizeAwaitTicking.
+				// attempt's own context ends, which a yield does. The wait stamps
+				// no liveness itself: the kernel's await relays it to this run
+				// while the child is alive (and, deliberately, not while it waits
+				// for a restart or a person), core/internal/executor dispatch.go
+				// await, pinned by core's
+				// TestAwait_ParentSurvivesChildLongerThanItsWatchdogLimit and
+				// TestAwait_ChildNeedingAPersonOrARestartDoesNotKeepParentAlive. A
+				// tick of the row's own would keep the sweep alive while its child
+				// waits for a person or a restart, overriding that rule.
 				Wait: func(ctx context.Context, childID string, _ func(childop.Observation)) error {
-					return optimizeAwaitTicking(ctx, func() (tasks.Outcome, error) {
-						return rc.Await(tasks.RunRef{ID: tasks.RunID(childID)})
-					}, rc.Progress().Tick, optimizeNewTicker, childID)
+					type awaited struct {
+						out tasks.Outcome
+						err error
+					}
+					done := make(chan awaited, 1)
+					go func() {
+						// A panic here is outside the run body's recover and
+						// would end the process: report it as the wait's error.
+						defer func() {
+							if r := recover(); r != nil {
+								done <- awaited{err: fmt.Errorf("await child run %s panicked: %v", childID, r)}
+							}
+						}()
+						out, err := rc.Await(tasks.RunRef{ID: tasks.RunID(childID)})
+						done <- awaited{out, err}
+					}()
+					select {
+					case r := <-done:
+						if r.err != nil {
+							return r.err
+						}
+						if r.out.State != tasks.StateSucceeded {
+							return fmt.Errorf("child run %s ended %s: %s", childID, r.out.State, r.out.Err)
+						}
+						return nil
+					case <-ctx.Done():
+						return context.Cause(ctx)
+					}
 				},
 			}
 			return struct{}{}, optimizeCore(rc.Context(), env)
 		},
 	})
-}
-
-// optimizeLivenessEvery is how often a native wait stamps the run's liveness: a
-// quarter of the watchdog's budget, so three ticks can be missed before the
-// run is stuck. The child's own watchdog covers a hung child.
-const optimizeLivenessEvery = optimizeProgressTimeout / 4
-
-// optimizeNewTicker is the clock the native wait ticks on; a test swaps in a
-// channel it drives by hand. stop releases the ticker.
-var optimizeNewTicker = func(d time.Duration) (<-chan time.Time, func()) {
-	t := time.NewTicker(d)
-	return t.C, t.Stop
-}
-
-// optimizeAwaitTicking blocks until the child ends or ctx does, stamping the
-// run's liveness (tick) every optimizeLivenessEvery while it blocks and not
-// after it returns. await runs in its own goroutine because rc.Await takes no
-// context. The kernel's await does not touch liveness (core/internal/executor
-// dispatch.go await, against the doc on core/tasks rc.go Await), so a child that
-// outlives the sweep's 65-minute ProgressTimeout would otherwise get the sweep
-// stopped as a cancel, which is never resumed. The core fix is filed separately
-// (seams.d/F5-11.md, F5-18 blocker); this tick stays correct after it, and is to be removed once core's await stamps the parent itself (core PR #4675).
-func optimizeAwaitTicking(ctx context.Context, await func() (tasks.Outcome, error), tick func(), newTicker func(time.Duration) (<-chan time.Time, func()), childID string) error {
-	type awaited struct {
-		out tasks.Outcome
-		err error
-	}
-	done := make(chan awaited, 1)
-	go func() {
-		// A panic here is outside the run body's recover and would end the
-		// process: report it as the wait's error instead.
-		defer func() {
-			if r := recover(); r != nil {
-				done <- awaited{err: fmt.Errorf("await child run %s panicked: %v", childID, r)}
-			}
-		}()
-		out, err := await()
-		done <- awaited{out, err}
-	}()
-	ticks, stop := newTicker(optimizeLivenessEvery)
-	defer stop()
-	tick()
-	for {
-		select {
-		case r := <-done:
-			if r.err != nil {
-				return r.err
-			}
-			if r.out.State != tasks.StateSucceeded {
-				return fmt.Errorf("child run %s ended %s: %s", childID, r.out.State, r.out.Err)
-			}
-			return nil
-		case <-ticks:
-			tick()
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		}
-	}
 }
 
 // optimizeCore is the body of runOptimize. env.OpID names the run in the logs.
