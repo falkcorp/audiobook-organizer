@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.11
+// version: 1.2.12
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-15
 
@@ -138,6 +138,11 @@ func (zeroT6G4Store) DedupTriagePreview(a0 context.Context) (*TriageReport, erro
 }
 
 func (zeroT6G4Store) DeferAggregatesAvailable() bool {
+	var r0 bool
+	return r0
+}
+
+func (zeroT6G4Store) ReportingRecomputeAvailable() bool {
 	var r0 bool
 	return r0
 }
