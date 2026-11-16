@@ -789,7 +789,6 @@ internal/plugins/maintenance.junkTitleFixer.buildJunkIndex
 internal/plugins/maintenance.junkTitleFixer.candidateTitle
 internal/plugins/maintenance.newT6G2Watermark
 internal/plugins/maintenance.newT6g1Watermark
-internal/plugins/maintenance.optimizeAwaitTicking
 internal/plugins/maintenance.pruneAIJournalNativeParams.UnmarshalJSON
 internal/plugins/maintenance.purgeEmptyAuthorsNativeParams.UnmarshalJSON
 internal/plugins/maintenance.rbfPreviewWriter.CreateOperationChange

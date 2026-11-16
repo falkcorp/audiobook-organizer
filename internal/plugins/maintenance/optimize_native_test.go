@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize_native_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9a1e4c52-3d78-4b06-8e2f-5c7d0b1a6f93
 // last-edited: 2026-11-15
 
@@ -465,62 +465,18 @@ func TestT6G6Optimize_PreviewRefused(t *testing.T) {
 	require.Empty(t, h.kinds())
 }
 
-// While the sweep waits on a child the kernel's await keeps nothing alive, so
-// the wait stamps liveness itself every optimizeLivenessEvery (a quarter of the
-// watchdog budget) and stops when the wait returns. The clock is a channel the
-// test drives, so a child that runs for hours costs no time.
-func TestT6G6Optimize_WaitTicksLivenessAndStopsWithTheWait(t *testing.T) {
-	require.LessOrEqual(t, 3*optimizeLivenessEvery, optimizeProgressTimeout, "three ticks may be missed")
-
-	clock := make(chan time.Time)
-	var stopped, asked atomic.Int64
-	var every atomic.Int64
-	newTicker := func(d time.Duration) (<-chan time.Time, func()) {
-		asked.Add(1)
-		every.Store(int64(d))
-		return clock, func() { stopped.Add(1) }
-	}
-	ticked := make(chan struct{}, 16)
-	var ticks atomic.Int64
-	tick := func() { ticks.Add(1); ticked <- struct{}{} }
-
-	release := make(chan struct{})
-	res := make(chan error, 1)
-	go func() {
-		res <- optimizeAwaitTicking(context.Background(), func() (tasks.Outcome, error) {
-			<-release
-			return tasks.Outcome{State: tasks.StateSucceeded}, nil
-		}, tick, newTicker, "child#1")
-	}()
-	<-ticked // the stamp at the start of the wait
-	for i := 0; i < 3; i++ {
-		clock <- time.Now() // one tick per interval of the (fake) clock
-		<-ticked
-	}
-	require.Equal(t, int64(4), ticks.Load(), "a stamp at the start and one per interval")
-	require.Equal(t, optimizeLivenessEvery, time.Duration(every.Load()))
-	require.Zero(t, stopped.Load(), "the ticker runs while the child does")
-
-	close(release)
-	require.NoError(t, <-res)
-	require.Equal(t, int64(1), stopped.Load(), "the ticker stopped with the wait")
-	select {
-	case clock <- time.Now():
-		t.Fatal("a tick was taken after the wait returned")
-	default:
-	}
-	require.Equal(t, int64(4), ticks.Load(), "no stamp after the wait")
-}
-
-// The native sweep wires it: a child that is still running keeps the parent's
-// liveness stamped, tick by tick, and the stamps stop once the sweep is done.
-func TestT6G6Optimize_NativeSweepStampsLivenessWhileAChildRuns(t *testing.T) {
+// The native sweep stamps no liveness of its own while it waits on a child: the
+// kernel's await relays it to the waiting run while the child is alive and,
+// deliberately, not while the child waits for a restart or a person. A tick of
+// the sweep's own would override that rule, so the wait must go through rc.Await
+// and touch nothing. (That the kernel's await really keeps the parent alive past
+// its watchdog limit is core's contract, pinned by core's
+// TestAwait_ParentSurvivesChildLongerThanItsWatchdogLimit; the host here stands
+// in for the kernel and relays nothing, so a stamp counted here is the row's.)
+// The assertion is direct: no timer and no timeout stands between a regression
+// and a failure.
+func TestT6G6Optimize_WaitRidesOnTheKernelsAwaitAndStampsNothingItself(t *testing.T) {
 	t6g6OptimizeFlags(t, false, false)
-	clock := make(chan time.Time)
-	old := optimizeNewTicker
-	t.Cleanup(func() { optimizeNewTicker = old })
-	optimizeNewTicker = func(time.Duration) (<-chan time.Time, func()) { return clock, func() {} }
-
 	h := newT6G6OptimizeHost(t)
 	release := make(chan struct{})
 	h.block["books.maintenance.temp-file-cleanup"] = release
@@ -532,21 +488,11 @@ func TestT6G6Optimize_NativeSweepStampsLivenessWhileAChildRuns(t *testing.T) {
 	}
 	res := make(chan error, 1)
 	go func() { res <- t6g6RunOptimize(t, h) }()
-	<-awaiting
-	for i := 0; i < 3; i++ {
-		clock <- time.Now()
-	}
-	require.Eventually(t, func() bool { return h.touches.Load() == 4 }, 5*time.Second, time.Millisecond,
-		"one stamp at the start of the wait and one per tick while the child runs")
+	<-awaiting // the sweep is blocked in rc.Await on its child
+	require.Zero(t, h.touches.Load(), "the wait stamps no liveness while the child runs")
 	close(release)
 	require.NoError(t, <-res)
-	after := h.touches.Load()
-	select {
-	case clock <- time.Now():
-		t.Fatal("a tick was taken after the sweep ended")
-	default:
-	}
-	require.Equal(t, after, h.touches.Load())
+	require.Zero(t, h.touches.Load(), "the sweep stamped no liveness at all")
 }
 
 // A yield must carry progress the kernel accepts (done past where the attempt
