@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d41c7a2-3b60-4e95-a1f8-6c2d9e07b534
 // last-edited: 2026-11-16
 
@@ -26,20 +26,23 @@ import (
 //  1. The string is split into words on unicode.IsSpace (so U+00A0 and U+2028
 //     are separators, which only ever wipes more).
 //
-//  2. A word is "triggered" when it holds "/", "\", "%", "~", "&#" (or the
-//     named entities for "/", "\", "%", "~", ":") anywhere, or, after leading
+//  2. A word is "triggered" when it holds "/", "\", "%", "~", "&#" or any
+//     named entity ("&amp;#47;" is double-encoded) anywhere, or, after leading
 //     opening punctuation, starts with a letter and ":". A triggered word can be
 //     a path in any spelling: raw, percent-encoded at any depth, JSON-escaped
 //     ("\/", "/", "\\u002F"), an HTML entity, glued to a flag ("-I/x") or
 //     to a key ("p=/x"), a "~user", "C:rel", "\rooted", a UNC path or the path of
 //     a smb, nfs or sftp URL. No start is searched for and no boundary judged.
 //
-//  3. The text of a Go file error is parsed exactly (templates below), so a
-//     name with spaces is wiped whole and the errno text after it survives.
+//  3. A line that ends a Go file error in a known errno text is wiped from its
+//     first triggered word to the word before that text (templates below), so a
+//     name with spaces is wiped whole and the errno text after it survives,
+//     whatever operation or wrapping comes before it.
 //
 //  4. Bridge rule: the words between the first and the last triggered word of a
-//     string (outside a template) are wiped with them, because they may be the
-//     middle of a name that holds spaces ("/Volumes/Macintosh HD/Users/x").
+//     string are wiped with them, because they may be the middle of a name that
+//     holds spaces ("/Volumes/Macintosh HD/Users/x"); a template extends the run
+//     before it instead of starting a second one.
 //
 //  5. A wiped run becomes one placeholder, "<root:NAME>" when its text starts
 //     under a configured root (nothing after it: the tail names authors and
@@ -158,6 +161,9 @@ func tokenize(str string, ops *int) []token {
 
 // triggered reports a word that can be, or hold, a location.
 func triggered(w string) bool {
+	if w == "fork/exec" {
+		return false // the os operation word of exec errors, fixed text
+	}
 	for i := 0; i < len(w); i++ {
 		switch w[i] {
 		case '/', '\\', '%', '~':
@@ -171,18 +177,19 @@ func triggered(w string) bool {
 	return driveStart(w)
 }
 
-// entityTrigger reports the text after "&" that is a numeric entity or the named
-// entity of a separator, "%", "~" or ":".
+// entityTrigger reports the text after "&" that is an HTML entity: a numeric one
+// ("#47;", "#x2F;") or a named one ("sol;", "amp;" as in a double-encoded
+// "&amp;#47;"). Any entity can spell a separator once decoded, so any is a
+// trigger.
 func entityTrigger(rest string) bool {
 	if rest != "" && rest[0] == '#' {
 		return true
 	}
-	for _, n := range [...]string{"sol;", "bsol;", "percnt;", "tilde;", "frasl;", "colon;"} {
-		if len(rest) >= len(n) && strings.EqualFold(rest[:len(n)], n) {
-			return true
-		}
+	n := 0
+	for n < len(rest) && n < 32 && (isLetter(rest[n]) || rest[n] >= '0' && rest[n] <= '9') {
+		n++
 	}
-	return false
+	return n > 0 && n < len(rest) && rest[n] == ';'
 }
 
 // driveStart reports a word that, after leading opening punctuation, starts
@@ -278,25 +285,20 @@ func lowerASCII(s string) string {
 	return s
 }
 
-// templates finds, per line, the Go file error that the line holds: the first
-// os operation word that stands before the last known errno text of the line,
-// when the words between them hold a triggered word. *os.PathError is
-// "<op> <path>: <err>", *os.LinkError "<op> <old> <new>: <err>" and exec.Error
-// `exec: "<name>": <err>`; every word between the operation and the errno text
-// is the path, spaces and all, and is one run. The errno text is searched from
-// the right and the operation from the left, so a wrapped error
-// ("scan: open /a b: no such file") is found and a name that holds ": " is
-// still inside the span.
+// templates finds, per line, the stretch that is the location of a Go file
+// error. *os.PathError is "<op> <path>: <err>", *os.LinkError
+// "<op> <old> <new>: <err>" and exec.Error `exec: "<name>": <err>`, and the
+// error is usually wrapped ("scan <dir>: open <path>: <err>"), so the rule does
+// not parse the operation. The errno text is the one fixed anchor: it is
+// searched from the right, and everything from the line's first triggered word
+// up to the word before it is one run, spaces, colons and all. A relative path
+// has no trigger at its first word ("open My Books/a.m4b"), so the run also
+// takes the words after the nearest operation word to the left of the first
+// triggered word (isOpWord); an operation the list does not know leaves such a
+// relative name's first words. A line with no errno text has no template and
+// falls to the bridge rule.
 func templates(str string, toks []token, errs map[string][][]string, ops *int) []run {
 	var runs []run
-	// trigs[i] is how many of toks[:i] are triggered.
-	trigs := make([]int, len(toks)+1)
-	for i, t := range toks {
-		trigs[i+1] = trigs[i]
-		if t.trig {
-			trigs[i+1]++
-		}
-	}
 	for a := 0; a < len(toks); {
 		b := a
 		for b < len(toks) && toks[b].line == toks[a].line {
@@ -309,15 +311,24 @@ func templates(str string, toks []token, errs map[string][][]string, ops *int) [
 			}
 		}
 		if last >= 0 {
-			for i := a; i <= last-2; i++ {
+			first := -1
+			for i := a; i < last; i++ {
 				*ops += toks[i].e - toks[i].s
-				if !isOpWord(str[toks[i].s:toks[i].e]) {
-					continue
+				if toks[i].trig {
+					first = i
+					break
 				}
-				if trigs[last]-trigs[i+1] > 0 {
-					runs = append(runs, run{first: i + 1, last: last - 1})
+			}
+			if first >= 0 {
+				start := first
+				for i := first - 1; i >= a; i-- {
+					*ops += toks[i].e - toks[i].s
+					if isOpWord(str[toks[i].s:toks[i].e]) {
+						start = i + 1
+						break
+					}
 				}
-				break
+				runs = append(runs, run{first: start, last: last - 1})
 			}
 		}
 		a = b
@@ -344,30 +355,39 @@ func isOpWord(w string) bool {
 }
 
 // generic adds the bridge-rule runs: between templates, the words from the first
-// to the last triggered word of the group are one run.
+// to the last triggered word of the group are one run, and a template extends
+// the run of the group before it when that group holds a triggered word (never
+// a second run, so no word between two locations is left standing).
 func generic(toks []token, tmpl []run) []run {
 	var out []run
-	group := func(a, b int) {
-		first, last := -1, -1
+	firstTrig := func(a, b int) int {
 		for i := a; i < b; i++ {
 			if toks[i].trig {
-				if first < 0 {
-					first = i
-				}
-				last = i
+				return i
 			}
 		}
-		if first >= 0 {
-			out = append(out, run{first: first, last: last})
+		return -1
+	}
+	lastTrig := func(a, b int) int {
+		for i := b - 1; i >= a; i-- {
+			if toks[i].trig {
+				return i
+			}
 		}
+		return -1
 	}
 	gs := 0
 	for _, t := range tmpl {
-		group(gs, t.first)
-		out = append(out, t)
+		if f := firstTrig(gs, t.first); f >= 0 {
+			out = append(out, run{first: f, last: t.last})
+		} else {
+			out = append(out, t)
+		}
 		gs = t.last + 1
 	}
-	group(gs, len(toks))
+	if f := firstTrig(gs, len(toks)); f >= 0 {
+		out = append(out, run{first: f, last: lastTrig(gs, len(toks))})
+	}
 	return out
 }
 
@@ -453,8 +473,8 @@ func locationStart(w string) bool {
 func startsAnother(str string, toks []token, r run) bool {
 	for i := r.first + 1; i <= r.last; i++ {
 		w := str[toks[i].s:toks[i].e]
-		w = w[leadPunct(w):]
-		if w != "" && locationStart(w) {
+		lo, hi := leadPunct(w), len(w)-trailPunct(w) // "y:" ends a name, it is not a drive
+		if lo < hi && locationStart(w[lo:hi]) {
 			return true
 		}
 	}
