@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.6.5
+// version: 1.6.10
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-15
 
@@ -108,12 +108,28 @@ import (
 // re-plans from the store: a row is a candidate while it is unknown, and a cut
 // book has at least one row that was not settled, i.e. not yet written (the
 // native kind is ResumeDrop; it keeps no cursor for this grain, and needs
-// none). The one shape that is not found again is a cancel landing between a
-// book's last row write and its recompute, two adjacent gated writes of one
-// item; the book then has every row measured and a stale aggregate, which a
-// book-grain run with force recomputes. Closing that gap needs a single gated
-// write that sets the last row and recomputes (seams.d/F5-09.md, "Readings the
-// brief did not settle").
+// none).
+//
+// THE RECOMPUTE IS OWED BY THE BOOK'S STATE, NOT BY THIS RUN'S WRITES. A book
+// whose rows are measured but whose aggregate was never refreshed is owed a
+// recompute, whichever run wrote those rows. A rerun of a cancelled run finds
+// only the rows the cancel cut, and those may all end unwritten (the file is
+// gone, the row changed, the probe failed) so that this run writes no measured
+// row for the book at all; a rule of "recompute the books I wrote" never reaches
+// it, and nothing else does. So the plan marks every candidate book that already
+// has a measured row (newUnknownRowsRun's hasMeasured), and the book is
+// recomputed when its last row settles, whatever that row's outcome.
+//
+// The same reasoning closes the in-run window. A book with rows in both passes
+// is not finished until pass 2 is, so a cancel in pass 2 would leave its pass-1
+// rows unreflected; that is the case above, and the state rule repairs it on the
+// rerun. What the rerun cannot repair is a book whose rows are ALL measured (no
+// candidate row is left, so the rerun never reaches it), and that is exactly the
+// book whose last write succeeded and whose recompute was cut. So the book's
+// last row, when it measures, is written with ModifyBookFile, which recomputes
+// the book inside the one gated write: there is no second write to cut. (The
+// store's recompute inside that call is best effort and logs its own failure; a
+// failed recompute there is not counted in books_recomputed or failed.)
 //
 // Dry run (the default) runs pass 1's decisions and reports what pass 2 would
 // probe (would_probe) but does NOT run ffprobe or stat anything: a preview that
@@ -466,7 +482,17 @@ func stillTheProbedRow(cur *database.BookFile, seen database.BookFileCore) bool 
 // other error means nothing was written and wrote is false, whatever the last
 // callback run saw.
 func writeUnknownRow(store segmentFailureWriter, seen database.BookFileCore, mutate func(cur *database.BookFile) error) (wrote bool, err error) {
-	got, err := store.ModifyBookFileDeferAggregates(seen.BookID, seen.ID, func(cur *database.BookFile) error {
+	return writeUnknownRowVia(store.ModifyBookFileDeferAggregates, seen, mutate)
+}
+
+// unknownRowModify is the row write writeUnknownRowVia goes through:
+// ModifyBookFileDeferAggregates (the aggregate is the caller's) or ModifyBookFile
+// (the write recomputes the book's aggregates itself).
+type unknownRowModify func(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+
+// writeUnknownRowVia is writeUnknownRow over either row write.
+func writeUnknownRowVia(modify unknownRowModify, seen database.BookFileCore, mutate func(cur *database.BookFile) error) (wrote bool, err error) {
+	got, err := modify(seen.BookID, seen.ID, func(cur *database.BookFile) error {
 		wrote = false
 		if !stillTheProbedRow(cur, seen) {
 			return database.ErrSkipBookFileWrite
@@ -543,6 +569,22 @@ func (r *unknownRowsRecompute) pending(keep func(bookID string) bool) []string {
 	return out
 }
 
+// recomputedByWrite records that a row write recomputed the book itself
+// (ModifyBookFile), so no later path recomputes it again.
+func (r *unknownRowsRecompute) recomputedByWrite(bookID string) {
+	r.mu.Lock()
+	if _, done := r.claimed[bookID]; done {
+		r.mu.Unlock()
+		return
+	}
+	if r.claimed == nil {
+		r.claimed = map[string]struct{}{}
+	}
+	r.claimed[bookID] = struct{}{}
+	r.mu.Unlock()
+	r.done.Add(1)
+}
+
 // run recomputes one book's aggregates, once: a second call for the same book is
 // a no-op.
 func (r *unknownRowsRecompute) run(bookID string) {
@@ -575,7 +617,7 @@ func (r *unknownRowsRecompute) run(bookID string) {
 // does NOT go through registry.RunItems, whose pause gate would block a sweep
 // that runs after a cancelled run; an errgroup with SetLimit has no gate and no
 // context to cancel. It is a net, not the mechanism: a book is normally
-// recomputed by the item that settled its last row (rowSettled).
+// recomputed by the item that settled its last row (settleNoWrite, writeRow).
 func (r *unknownRowsRecompute) runAll(reporter sdk.Reporter, ids []string, workers int) {
 	if len(ids) == 0 {
 		return
@@ -632,32 +674,82 @@ func idSet(lists ...[]string) map[string]struct{} {
 
 // unknownRowsRun is the state of one apply run's two passes.
 type unknownRowsRun struct {
-	writer segmentFailureWriter
+	writer unknownRowsWriter
 	ctr    unknownRowsCounters
 	warns  *readWarnLimiter
 	books  *unknownRowsRecompute
-	// pending counts, per book, the rows of either pass not yet settled. The map
-	// is built before pass 1 and never written again (only the counters inside
-	// change), so workers read it without a lock. A book is absent when it has no
-	// row to act on.
-	pending map[string]*atomic.Int32
+	// progress holds, per book, how far its rows are. The map is built before pass
+	// 1 and never written again (only the state inside changes), so workers read
+	// it without a lock. A book is absent when it has no row to act on.
+	progress map[string]*unknownRowsBookProgress
 }
 
-func newUnknownRowsRun(writer segmentFailureWriter, store unknownRowsStore, pass1, pass2 []unknownRowWork) *unknownRowsRun {
+// unknownRowsBookProgress tracks one book's rows through both passes so that
+// exactly one worker, the book's closer, finishes the book. A row BEGINS when its
+// item decides its outcome (just before its write, or when it is left alone), and
+// the closer is the row that begins last. The closer waits until every other
+// row's write has returned, then recomputes the book: the recompute is therefore
+// never ahead of a sibling's write, however the pool interleaves the rows.
+// Waiting cannot deadlock: a write in flight depends on nothing the closer holds,
+// and a row that has not begun does not exist as far as the closer is concerned
+// (the closer is the last to begin).
+type unknownRowsBookProgress struct {
+	mu      sync.Mutex
+	idle    *sync.Cond
+	unbegun int // rows whose item has not yet reached its outcome
+	writing int // writes begun and not yet returned
+}
+
+func (b *unknownRowsBookProgress) begin(write bool) (closer bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.unbegun--
+	if b.unbegun == 0 {
+		for b.writing > 0 {
+			b.idle.Wait()
+		}
+		return true
+	}
+	if write {
+		b.writing++
+	}
+	return false
+}
+
+func (b *unknownRowsBookProgress) end() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.writing--; b.writing == 0 {
+		b.idle.Broadcast()
+	}
+}
+
+// newUnknownRowsRun plans the run's per-book progress. hasMeasured is the set of
+// books that already have a measured row in the store (read before the run
+// changes anything): such a book is owed a recompute whatever this run writes, so
+// it is marked here and recomputed when its last row settles (see the header
+// comment, "the recompute is owed by the book's state").
+func newUnknownRowsRun(writer unknownRowsWriter, store unknownRowsStore, pass1, pass2 []unknownRowWork, hasMeasured map[string]struct{}) *unknownRowsRun {
 	r := &unknownRowsRun{
-		writer:  writer,
-		warns:   &readWarnLimiter{},
-		books:   &unknownRowsRecompute{store: store},
-		pending: map[string]*atomic.Int32{},
+		writer:   writer,
+		warns:    &readWarnLimiter{},
+		books:    &unknownRowsRecompute{store: store},
+		progress: map[string]*unknownRowsBookProgress{},
 	}
 	for _, rows := range [][]unknownRowWork{pass1, pass2} {
 		for _, w := range rows {
-			c := r.pending[w.row.BookID]
-			if c == nil {
-				c = new(atomic.Int32)
-				r.pending[w.row.BookID] = c
+			b := r.progress[w.row.BookID]
+			if b == nil {
+				b = &unknownRowsBookProgress{}
+				b.idle = sync.NewCond(&b.mu)
+				r.progress[w.row.BookID] = b
 			}
-			c.Add(1)
+			b.unbegun++
+		}
+	}
+	for id := range r.progress {
+		if _, ok := hasMeasured[id]; ok {
+			r.books.touch(id)
 		}
 	}
 	return r
@@ -689,20 +781,58 @@ func (r *unknownRowsRun) recordWrite(w unknownRowWork, wrote bool, wErr error, c
 	}
 }
 
-// rowSettled is called once per row, of either pass, when its outcome is final
-// (written, failed to write, or deliberately left alone), and in the same item
-// that decided it. The worker that settles a book's last row recomputes the book
-// right then, so the aggregates are current while the rest of the run is still
-// going and never wait for a point after the loop, where the gate may refuse
-// them. A row whose item was cut (the run's context ended first) is never
-// settled: it was not written either, so it is still a candidate on a rerun.
-func (r *unknownRowsRun) rowSettled(bookID string) {
-	c := r.pending[bookID]
-	if c == nil {
+// settleNoWrite is called once per row, of either pass, that is deliberately left
+// alone (no write), in the item that decided it. If it is the book's last row the
+// book is recomputed right then, when the book is owed one (a measured row, from
+// this run or an earlier one: unknownRowsBookProgress). A row whose item was cut
+// (the run's context ended first) never settles: it was not written either, so it
+// is still a candidate on a rerun.
+func (r *unknownRowsRun) settleNoWrite(bookID string) {
+	b := r.progress[bookID]
+	if b == nil {
 		return
 	}
-	if c.Add(-1) == 0 && r.books.isTouched(bookID) {
+	if b.begin(false) {
+		r.closeBook(bookID)
+	}
+}
+
+// closeBook recomputes a book whose last row has settled, when it is owed one.
+func (r *unknownRowsRun) closeBook(bookID string) {
+	if r.books.isTouched(bookID) {
 		r.books.run(bookID)
+	}
+}
+
+// writeRow writes one row of either pass and settles it, in the same item. The
+// row that closes its book and measures is written with ModifyBookFile, which
+// recomputes the book inside the write (one gated write, so a cancel cannot fall
+// between the row and the recompute). Every other row defers the aggregate. When
+// the closing row is not written (skipped, failed, a failure record), the book is
+// recomputed afterwards if it is owed one.
+func (r *unknownRowsRun) writeRow(w unknownRowWork, counter *atomic.Int64, measured bool, mutate func(cur *database.BookFile) error) {
+	b := r.progress[w.row.BookID]
+	closer := b != nil && b.begin(true)
+	if b != nil && !closer {
+		defer b.end() // after recordWrite below: the closer waits for this write to be recorded
+	}
+	modify := r.writer.ModifyBookFileDeferAggregates
+	recomputes := closer && measured
+	if recomputes {
+		modify = r.writer.ModifyBookFile
+	}
+	wrote, wErr := writeUnknownRowVia(modify, w.row, mutate)
+	r.recordWrite(w, wrote, wErr, counter, measured)
+	switch {
+	case !closer:
+	case errors.Is(wErr, tasks.ErrFenced):
+		// The run ended: this row is cut, not settled. Recomputing the book would
+		// only be refused too; a rerun finds the row, and its book (owed by state)
+		// is recomputed when that rerun settles it.
+	case recomputes && wrote:
+		r.books.recomputedByWrite(w.row.BookID)
+	default:
+		r.closeBook(w.row.BookID)
 	}
 }
 
@@ -711,7 +841,7 @@ func (r *unknownRowsRun) rowSettled(bookID string) {
 // one implementation: writer (nil when the store cannot defer aggregates), each
 // (the pool runner), setResult (persists the op result) and the store, whose
 // RecomputeBookAggregates is the recompute's write.
-func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRowsStore, writer segmentFailureWriter,
+func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRowsStore, writer unknownRowsWriter,
 	each t6g4EachFn, setResult func(UnknownRowsResult) error, params durationReextractParams,
 	dryRun bool, reporter sdk.Reporter) error {
 	workers := unknownRowsConcurrency(params.Workers)
@@ -867,6 +997,28 @@ func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRo
 		pass2 = append(pass2, unknownRowWork{row: r, src: srcProbe})
 		bc.WouldProbe++
 	}
+	// The recompute is owed by a book's state, not by this run's writes: a book
+	// the run will act on that already has a measured row is owed one even if every
+	// row this run reaches ends unwritten (see the header comment). Read from the
+	// whole-library rows, before the run changes anything.
+	var hasMeasured map[string]struct{}
+	if !dryRun {
+		acting := map[string]struct{}{}
+		for _, rows := range [][]unknownRowWork{pass1, pass2} {
+			for _, w := range rows {
+				acting[w.row.BookID] = struct{}{}
+			}
+		}
+		hasMeasured = map[string]struct{}{}
+		for i := range all {
+			if _, ok := acting[all[i].BookID]; !ok {
+				continue
+			}
+			if _, known := all[i].DurationSec(); known {
+				hasMeasured[all[i].BookID] = struct{}{}
+			}
+		}
+	}
 	// The decisions hold copies of what they need.
 	all, cand, donorIdx, donorCache = nil, nil, nil, nil
 
@@ -877,21 +1029,19 @@ func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRo
 	if len(pass1)+len(pass2) > 0 && writer == nil {
 		return fmt.Errorf("unknownRows: the store cannot defer aggregates, so nothing was written")
 	}
-	run := newUnknownRowsRun(writer, store, pass1, pass2)
+	run := newUnknownRowsRun(writer, store, pass1, pass2, hasMeasured)
 
 	// Every book is recomputed by the item that settles its last row; the sweep
 	// below runs on every exit path and is the net for a book whose item failed.
 	runErr := func() error {
 		if err := t6g4UnknownRowsPool(ctx, each, reporter, workers, &run.ctr, pass1, "borrowing/promoting", func(_ context.Context, w unknownRowWork) error {
-			wrote, wErr := writeUnknownRow(run.writer, w.row, func(cur *database.BookFile) error {
-				return cur.SetMeasuredDuration(w.sec)
-			})
 			counter := &run.ctr.borrowed
 			if w.src == srcFingerprint {
 				counter = &run.ctr.promoted
 			}
-			run.recordWrite(w, wrote, wErr, counter, true)
-			run.rowSettled(w.row.BookID)
+			run.writeRow(w, counter, true, func(cur *database.BookFile) error {
+				return cur.SetMeasuredDuration(w.sec)
+			})
 			return nil
 		}); err != nil {
 			return err
@@ -905,7 +1055,7 @@ func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRo
 		for i := range shown {
 			shown[i] = logger.SanitizeLogValue(shown[i])
 		}
-		durLog.Warn("duration-backfill unknownRows: %d book(s) have every row measured and a stale aggregate, because the run was fenced before their recompute (first %d: %s); a book-grain duration-backfill run with force recomputes them",
+		durLog.Warn("duration-backfill unknownRows: %d book(s) have a stale aggregate, because the run was fenced before their recompute (first %d: %s); a rerun recomputes a book that still has an unmeasured row, and a book-grain duration-backfill run with force recomputes any other",
 			len(owed), len(shown), strings.Join(shown, ", "))
 	}
 	rcErr := run.books.err()
@@ -1001,7 +1151,7 @@ func groupProbeRows(rows []unknownRowWork) [][]unknownRowWork {
 // settleGroup settles every row of a group whose outcome is final without a write.
 func (r *unknownRowsRun) settleGroup(group []unknownRowWork) {
 	for _, w := range group {
-		r.rowSettled(w.row.BookID)
+		r.settleNoWrite(w.row.BookID)
 	}
 }
 
@@ -1014,7 +1164,7 @@ func (r *unknownRowsRun) skipGroupEnvironment(group []unknownRowWork) {
 
 // probeGroup is pass 2 for one group of rows that are the same file
 // (probeGroupKey): at most ONE header probe, then the outcome applied to every
-// row. Each row settles (rowSettled) as soon as its own outcome is final, not
+// row. Each row settles (settleNoWrite, writeRow) as soon as its own outcome is final, not
 // when the group ends, so a book whose last row is in this group is recomputed
 // before a cancel can cut the group's later rows; a row the cancel cuts is not
 // settled and, not being written, is still a candidate on a rerun. Each row's write has its own precondition (writeUnknownRow), so a row that
@@ -1089,11 +1239,9 @@ func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork)
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			wrote, wErr := writeUnknownRow(r.writer, w.row, func(cur *database.BookFile) error {
+			r.writeRow(w, &r.ctr.probedKnown, true, func(cur *database.BookFile) error {
 				return cur.SetMeasuredDuration(sec)
 			})
-			r.recordWrite(w, wrote, wErr, &r.ctr.probedKnown, true)
-			r.rowSettled(w.row.BookID)
 		}
 		return nil
 	}
@@ -1114,12 +1262,10 @@ func (r *unknownRowsRun) probeGroup(ctx context.Context, group []unknownRowWork)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		wrote, wErr := writeUnknownRow(r.writer, w.row, func(cur *database.BookFile) error {
+		r.writeRow(w, &r.ctr.probeFailed, false, func(cur *database.BookFile) error {
 			cur.RecordDurationProbeFailure(msg)
 			return nil
 		})
-		r.recordWrite(w, wrote, wErr, &r.ctr.probeFailed, false)
-		r.rowSettled(w.row.BookID)
 	}
 	return nil
 }

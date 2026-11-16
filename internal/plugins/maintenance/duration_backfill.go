@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.10
+// version: 2.16.11
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-15
 
@@ -261,6 +261,15 @@ func noteSegmentProbeFailure(failed []database.BookFile, f database.BookFile, er
 // backfill-file-hashes does (hbDeferredStore).
 type segmentFailureWriter interface {
 	ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+}
+
+// unknownRowsWriter is what the unknownRows run writes with: the deferred row
+// write, and ModifyBookFile (which recomputes the book's aggregates inside the
+// write) for the row that finishes a book, so the last row and its recompute are
+// one write.
+type unknownRowsWriter interface {
+	segmentFailureWriter
+	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
 // recordSegmentProbeFailures writes the failed attempts collected for one book.
@@ -995,7 +1004,7 @@ func (p *Plugin) runDurationBackfillCore(ctx context.Context, params durationRee
 		}
 		// HEAD hands the row walk the store it resolves AsCapability off, and a
 		// writer only when the store can defer aggregates (nil otherwise).
-		var writer segmentFailureWriter
+		var writer unknownRowsWriter
 		if env.Store.DeferAggregatesAvailable() {
 			writer = env.Writer
 		}

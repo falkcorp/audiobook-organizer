@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_unknown_rows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d68c7f52-8a70-470d-a54a-4d79de21d579
 // last-edited: 2026-11-15
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -47,6 +48,13 @@ func (w t6g4FencingWriter) ModifyBookFileDeferAggregates(bookID, fileID string, 
 	return w.t6g4Writer.ModifyBookFileDeferAggregates(bookID, fileID, fn)
 }
 
+func (w t6g4FencingWriter) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	if err := w.gate("ModifyBookFile"); err != nil {
+		return nil, err
+	}
+	return w.t6g4Writer.ModifyBookFile(bookID, fileID, fn)
+}
+
 func (w t6g4FencingWriter) RecomputeBookAggregates(bookID string) error {
 	if err := w.gate("RecomputeBookAggregates"); err != nil {
 		return err
@@ -83,13 +91,20 @@ func t6g4UnknownRowsNative(t *testing.T, s *database.PebbleStore, cancelOn int) 
 	return err
 }
 
-// requireNoBookIsLeftStale pins what a cancelled run owes. A book that still has
-// an unknown row is found again by a rerun, which finishes it and recomputes it,
-// so its aggregate may lag meanwhile. A book with measured rows and NO unknown
-// row is found by nothing, so its aggregate must already read every measured row
-// (each row is wantSec): its recompute ran in the item that finished it. It
-// returns how many rows are measured.
-func requireNoBookIsLeftStale(t *testing.T, s *database.PebbleStore, rows []database.BookFile, wantSec int) (measured int) {
+// requireNoBookIsLeftStale pins what a run owes, in two states.
+//
+// Right after a CANCELLED run (rerunDone false) a book that still has an unknown
+// row may lag: a rerun finds that row and recomputes the book. A book with
+// measured rows and NO unknown row is found by nothing, so its aggregate must
+// already read every measured row: its recompute ran in the write that finished
+// it.
+//
+// After a COMPLETED rerun (rerunDone true) no book may lag, whether or not it
+// still has an unknown row. The recompute is owed by the book's state, so a book
+// whose leftover rows all ended unwritten or failed must be recomputed too; a
+// helper that skipped books with unknown rows here would hide exactly that. Each
+// measured row is wantSec. It returns how many rows are measured.
+func requireNoBookIsLeftStale(t *testing.T, s *database.PebbleStore, rows []database.BookFile, wantSec int, rerunDone bool) (measured int) {
 	t.Helper()
 	type tally struct{ known, unknown int }
 	byBook := map[string]*tally{}
@@ -107,12 +122,12 @@ func requireNoBookIsLeftStale(t *testing.T, s *database.PebbleStore, rows []data
 		}
 	}
 	for id, c := range byBook {
-		if c.unknown > 0 || c.known == 0 {
+		if (c.unknown > 0 && !rerunDone) || c.known == 0 {
 			continue
 		}
 		book, err := s.GetBookByID(id)
 		require.NoError(t, err)
-		require.NotNil(t, book.Duration, "book %s has every row measured and a stale aggregate: its recompute was owed past its item, and no rerun will find it", id)
+		require.NotNil(t, book.Duration, "book %s has measured rows and a stale aggregate: its recompute was owed and never ran", id)
 		require.Equal(t, c.known*wantSec, *book.Duration, "book %s", id)
 	}
 	return measured
@@ -121,8 +136,16 @@ func requireNoBookIsLeftStale(t *testing.T, s *database.PebbleStore, rows []data
 // The native port of TestUnknownRows_CancelledRunStillRecomputesWrittenBooks.
 // HEAD's runner has an ungated store, so its final sweep recomputes after a
 // cancel. Natively the recompute is a gated write and is refused once the run
-// ends, so no book is left to a sweep: the rows the cancel cut are still
-// unknown, and the rerun, which re-plans from the store, finishes the book.
+// ends, so the rows the cancel cut are still unknown, and the rerun, which
+// re-plans from the store, finishes the book.
+//
+// This test CANNOT fail on the pre-38b1771b0 code, and is not meant to: its book
+// still has an unknown row, so the old end-of-run sweep (which the gate refused)
+// was never the only path to a correct total; the rerun's own sweep ran, and the
+// book ended right. What changed in 38b1771b0, and later here, is the books with
+// NO unknown row left and the books whose leftover rows end unwritten, which the
+// tests below pin. This one pins the ordinary case: a cut run plus a rerun
+// reaches the right total.
 func TestDurationBackfillNative_UnknownRowsCancelledRunLeavesTheRestToARerun(t *testing.T) {
 	stubFFprobe(t, "echo 30.0")
 	s := newRepairPebble(t)
@@ -137,10 +160,10 @@ func TestDurationBackfillNative_UnknownRowsCancelledRunLeavesTheRestToARerun(t *
 	// settle after the first, so no recompute runs between them. Ending the run at
 	// the second refuses it.
 	require.Error(t, t6g4UnknownRowsNative(t, s, 2), "the run was cancelled")
-	require.Equal(t, 1, requireNoBookIsLeftStale(t, s, rows, 30), "only the row written before the cancel is measured")
+	require.Equal(t, 1, requireNoBookIsLeftStale(t, s, rows, 30, false), "only the row written before the cancel is measured")
 
 	require.NoError(t, t6g4UnknownRowsNative(t, s, 0), "the rerun re-plans from the store and finishes the book")
-	require.Equal(t, 3, requireNoBookIsLeftStale(t, s, rows, 30))
+	require.Equal(t, 3, requireNoBookIsLeftStale(t, s, rows, 30, true))
 	got, err := s.GetBookByID(book.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got.Duration)
@@ -158,10 +181,11 @@ func TestDurationBackfillNative_UnknownRowsAGroupCutAfterOneRowStillRecomputesTh
 	s := newRepairPebble(t)
 	rows := urSamePath(t, s, "", "")
 
-	// Gated calls in order: write(first row), recompute(first book), write(second
-	// row). Ending the run at the third refuses the second row's write.
-	_ = t6g4UnknownRowsNative(t, s, 3)
-	require.Equal(t, 1, requireNoBookIsLeftStale(t, s, rows, 30), "exactly the first row was written")
+	// Gated calls in order: write-and-recompute(first row: it finishes its book, so
+	// it is one ModifyBookFile), write-and-recompute(second row). Ending the run at
+	// the second refuses it.
+	_ = t6g4UnknownRowsNative(t, s, 2)
+	require.Equal(t, 1, requireNoBookIsLeftStale(t, s, rows, 30, false), "exactly the first row was written")
 }
 
 // Books that only borrow a sibling's duration are pass-1 rows. The same rule:
@@ -180,8 +204,65 @@ func TestDurationBackfillNative_UnknownRowsAPassOneBookIsRecomputedInItsOwnItem(
 		rows = append(rows, urFile(t, s, b.ID, shared, nil))
 	}
 
-	// Gated calls in order: write(first borrower), recompute(first borrower),
-	// write(second borrower). The third is refused.
-	_ = t6g4UnknownRowsNative(t, s, 3)
-	require.Equal(t, 1, requireNoBookIsLeftStale(t, s, rows, 30), "exactly the first borrower was written")
+	// Gated calls in order: write-and-recompute(first borrower), write-and-recompute
+	// (second borrower). The second is refused.
+	_ = t6g4UnknownRowsNative(t, s, 2)
+	require.Equal(t, 1, requireNoBookIsLeftStale(t, s, rows, 30, false), "exactly the first borrower was written")
+}
+
+// The recompute is owed by a book's STATE, not by the run's writes. A book with
+// rows in both passes is not finished until pass 2 is: a cancel in pass 2 leaves
+// its pass-1 rows unreflected in the total. The rerun re-plans and finds only the
+// rows the cancel cut; when every one of them ends unwritten (the file is gone) or
+// failed (the probe fails), the rerun writes no measured row for the book. A rule
+// of "recompute the books this run wrote" never reaches it, and nothing else
+// does, so the total stays short for good. HEAD's ungated sweep recomputes it.
+//
+// On dd5df5afa the final assertion fails: Book.Duration is nil after the rerun
+// (require.NotNil in requireNoBookIsLeftStale), because the rerun touched no book.
+func TestDurationBackfillNative_UnknownRowsAMixedBookCutInPassTwoIsRecomputedByARerunThatWritesNothingForIt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// leftover turns the cut row into a row the rerun does not measure.
+		leftover func(t *testing.T, path string)
+	}{
+		{"leftover row is unwritten", func(t *testing.T, path string) { require.NoError(t, os.Remove(path)) }},
+		{"leftover row fails its probe", func(t *testing.T, _ string) { stubFFprobe(t, "exit 1") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubFFprobe(t, "echo 30.0")
+			s := newRepairPebble(t)
+			dir := t.TempDir()
+			shared := filepath.Join(dir, "00-shared.mp3")
+			donor := urBook(t, s, "Batman: Year One", dir)
+			urFile(t, s, donor.ID, shared, func(f *database.BookFile) { f.Duration = database.Secs(30) })
+
+			// One book, three unknown rows: one borrows the donor's duration (pass 1),
+			// two are probed (pass 2).
+			book := urBook(t, s, "Batman: The Long Halloween", dir)
+			var rows []database.BookFile
+			rows = append(rows, urFile(t, s, book.ID, shared, func(f *database.BookFile) { f.TrackNumber = 1 }))
+			cut := filepath.Join(dir, "03.mp3")
+			rows = append(rows,
+				urFile(t, s, book.ID, filepath.Join(dir, "02.mp3"), func(f *database.BookFile) { f.TrackNumber = 2 }),
+				urFile(t, s, book.ID, cut, func(f *database.BookFile) { f.TrackNumber = 3 }))
+
+			// Gated calls in order (one worker): write(borrower), write(first probe),
+			// write-and-recompute(last probe). Ending the run at the third refuses it.
+			require.Error(t, t6g4UnknownRowsNative(t, s, 3), "the run was cut in pass 2")
+			require.Equal(t, 2, requireNoBookIsLeftStale(t, s, rows, 30, false), "the borrowed row and the first probed row are written")
+			stale, err := s.GetBookByID(book.ID)
+			require.NoError(t, err)
+			require.Nil(t, stale.Duration, "the cut run owes the book a recompute: it has two measured rows and a total that reads none")
+
+			// The rerun's only candidate is the cut row, and it ends without a measurement.
+			tc.leftover(t, cut)
+			require.NoError(t, t6g4UnknownRowsNative(t, s, 0))
+			require.Equal(t, 2, requireNoBookIsLeftStale(t, s, rows, 30, true), "the rerun measured nothing new")
+			got, err := s.GetBookByID(book.ID)
+			require.NoError(t, err)
+			require.NotNil(t, got.Duration)
+			require.Equal(t, 60, *got.Duration, "the total reads the two rows the cut run wrote")
+		})
+	}
 }
