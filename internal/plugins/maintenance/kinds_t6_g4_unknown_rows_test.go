@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_unknown_rows_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: d68c7f52-8a70-470d-a54a-4d79de21d579
 // last-edited: 2026-11-15
 
@@ -66,8 +66,10 @@ func (w t6g4FencingWriter) RecomputeBookAggregates(bookID string) error {
 // t6g4UnknownRowsNative runs the NATIVE duration-backfill in unknownRows mode
 // over s, one worker, behind a fencing writer. cancelOn names the gated call
 // (1-based, counted over row writes and recomputes alike) that ends the run
-// before it is refused; zero never cancels. It returns the run's error.
-func t6g4UnknownRowsNative(t *testing.T, s *database.PebbleStore, cancelOn int) error {
+// before it is refused; zero never cancels. It returns the run's error. s is the
+// store the plugin runs against: a PebbleStore, or a wrapper that offers only some
+// of its write capabilities.
+func t6g4UnknownRowsNative(t *testing.T, s database.Store, cancelOn int) error {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -90,6 +92,80 @@ func t6g4UnknownRowsNative(t *testing.T, s *database.PebbleStore, cancelOn int) 
 	h := &t6g4Host{FakeRun: taskstest.NewFakeRun(ctx, durationBackfillKind), mode: tasks.ModeLive, w: &t6g4RunWriter{name: "native"}}
 	_, err := runT6G4Kind(t, def, tasks.NewRC(h), `{"mode":"unknownRows","workers":1}`)
 	return err
+}
+
+// t6g4DeferredOnlyStore reaches the Pebble store through ONE write capability: it
+// embeds database.Store, so no capability beyond that interface's own methods is
+// visible through it, and it is not a database.StoreUnwrapper, so
+// database.AsCapability stops at it. It adds back only the deferred row write
+// (ModifyBookFileDeferAggregates), the shape of a decorator that implements that
+// one method itself and not ModifyBookFileReportingRecompute. deferred counts the
+// deferred row writes that reached it.
+type t6g4DeferredOnlyStore struct {
+	database.Store
+	inner    *database.PebbleStore
+	deferred atomic.Int64
+}
+
+func (d *t6g4DeferredOnlyStore) ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	d.deferred.Add(1)
+	return d.inner.ModifyBookFileDeferAggregates(bookID, fileID, fn)
+}
+
+// A store that cannot do BOTH of what the unknownRows write needs (the deferred row
+// write and the write that recomputes inside itself and reports it) is refused up
+// front, writing nothing. A store with only the deferred write used to be handed
+// the writer: the rows that do not finish a book were written, and every row that
+// did finish one then failed with "the store cannot report", leaving the book's
+// last row unknown on every run. The same fixture on a store with both measures
+// every row, so the refusal is the missing capability and not the fixture.
+func TestDurationBackfillNative_UnknownRowsAreRefusedWithoutBothWriteCapabilities(t *testing.T) {
+	cases := []struct {
+		name string
+		// wrap returns the store the plugin runs against and a count of the deferred
+		// row writes that reached it (nil when the store has none to count).
+		wrap     func(*database.PebbleStore) (database.Store, func() int64)
+		wantErr  bool
+		wantRows int
+	}{
+		{"deferred write only", func(s *database.PebbleStore) (database.Store, func() int64) {
+			d := &t6g4DeferredOnlyStore{Store: s, inner: s}
+			return d, d.deferred.Load
+		}, true, 0},
+		{"neither capability", func(s *database.PebbleStore) (database.Store, func() int64) {
+			return struct{ database.Store }{s}, nil
+		}, true, 0},
+		{"both capabilities", func(s *database.PebbleStore) (database.Store, func() int64) {
+			return s, nil
+		}, false, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubFFprobe(t, "echo 30.0")
+			s := newRepairPebble(t)
+			dir := t.TempDir()
+			book := urBook(t, s, "Batman: Hush", dir)
+			var rows []database.BookFile
+			for i := 0; i < 3; i++ {
+				rows = append(rows, urFile(t, s, book.ID, filepath.Join(dir, fmt.Sprintf("%02d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 }))
+			}
+			store, deferred := tc.wrap(s)
+
+			err := t6g4UnknownRowsNative(t, store, 0)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "so nothing was written")
+				if deferred != nil {
+					require.Zero(t, deferred(), "no row was written through the store that has only the deferred write")
+				}
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.wantRows, requireNoBookIsLeftStale(t, s, rows, 30, true))
+			got, err := s.GetBookByID(book.ID)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRows*30, durtest.Sec(got.Duration), "the book's total reads exactly the rows written")
+		})
+	}
 }
 
 // requireNoBookIsLeftStale pins what a run owes, in two states.

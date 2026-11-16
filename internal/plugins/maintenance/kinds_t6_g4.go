@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.18
+// version: 1.0.19
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-15
 
@@ -348,11 +348,17 @@ type t6g4RegroupWrites interface {
 }
 
 // t6g4DurationReads is what duration-backfill reads beyond the shared groups: the
-// library's book count (the progress denominator), and whether the store can
-// defer aggregates on a row write (HEAD's database.AsCapability probe).
+// library's book count (the progress denominator), and two capability probes
+// (HEAD's database.AsCapability). DeferAggregatesAvailable is whether the store
+// can defer a book's aggregate recompute on a row write, which both the
+// probe-failure record and the unknownRows row write need.
+// ReportingRecomputeAvailable is whether it can also recompute inside a write and
+// report the recompute's error, which only the unknownRows row that finishes a
+// book needs, so the unknownRows run is offered a writer only when BOTH hold.
 type t6g4DurationReads interface {
 	CountAllBooks() (int, error)
 	DeferAggregatesAvailable() bool
+	ReportingRecomputeAvailable() bool
 }
 
 // t6g4DurationWrites are the per-row book_file writes of the duration kinds: the
@@ -761,6 +767,14 @@ func (h headT6G4Store) GetChaptersForBook(bookID string) ([]database.Chapter, er
 
 func (h headT6G4Store) DeferAggregatesAvailable() bool {
 	_, ok := t6g4DeferAggregatesWriter(h.OpsStore)
+	return ok
+}
+
+// ReportingRecomputeAvailable resolves reportingRecomputeWriter the way the
+// writer does (headT6G4Writer.ModifyBookFileReportingRecompute), so the probe and
+// the write cannot disagree about which store layer has it.
+func (h headT6G4Store) ReportingRecomputeAvailable() bool {
+	_, ok := database.AsCapability[reportingRecomputeWriter](h.OpsStore)
 	return ok
 }
 

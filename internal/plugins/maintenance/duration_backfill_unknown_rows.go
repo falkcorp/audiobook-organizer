@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.6.15
+// version: 1.6.18
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-15
 
@@ -877,9 +877,10 @@ func (r *unknownRowsRun) writeRow(w unknownRowWork, counter *atomic.Int64, measu
 
 // t6g4RunUnknownRowsBackfill is the unknown-rows backfill with its four reaches
 // outside the row walk passed in, so HEAD's shell and the native kind run the
-// one implementation: writer (nil when the store cannot defer aggregates), each
-// (the pool runner), setResult (persists the op result) and the store, whose
-// RecomputeBookAggregates is the recompute's write.
+// one implementation: writer (nil when the store lacks the deferred row write or
+// the reporting recompute write), each (the pool runner), setResult (persists the
+// op result) and the store, whose RecomputeBookAggregates is the recompute's
+// write.
 func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRowsStore, writer unknownRowsWriter,
 	each t6g4EachFn, setResult func(UnknownRowsResult) error, params durationReextractParams,
 	dryRun bool, reporter sdk.Reporter) error {
@@ -1066,7 +1067,7 @@ func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRo
 	}
 
 	if len(pass1)+len(pass2) > 0 && writer == nil {
-		return fmt.Errorf("unknownRows: the store cannot defer aggregates, so nothing was written")
+		return fmt.Errorf("unknownRows: the store cannot defer aggregates and report a book's recompute, so nothing was written")
 	}
 	run := newUnknownRowsRun(writer, store, pass1, pass2, hasMeasured)
 
