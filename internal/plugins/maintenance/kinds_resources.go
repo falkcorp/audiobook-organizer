@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_resources.go
-// version: 1.0.5
+// version: 1.0.6
 // guid: 3f9b6d21-5a84-4e07-b1c3-7d2e08a46f59
 // last-edited: 2026-11-15
 
@@ -62,7 +62,8 @@ import (
 //     `books` until the stack settled this; F5-07, F5-09 and F5-11 always said
 //     `indexes`.
 //   - The file-row methods that notify the aggregate recompute (CreateBookFile,
-//     UpdateBookFile, UpdateBookFiles, ModifyBookFile, SetBookFileHash,
+//     UpdateBookFile, UpdateBookFiles, ModifyBookFile,
+//     ModifyBookFileReportingRecompute, SetBookFileHash,
 //     MoveBookFilesToBook(Bulk), DeleteBookFilesByIDs, BatchCreateBookFiles) are
 //     book_files plus BOOKW (notifyBookFileChange -> RecomputeBookAggregates ->
 //     ModifyBook). SetBookFileHash recomputes only when the hash can change an
@@ -191,6 +192,7 @@ func t6WriterResourceTable() map[string][]ops.Resource {
 		"RecordIntroTimeout":                  {ops.ResBookFiles},
 		"SetBookFileIntro":                    {ops.ResBookFiles},
 		"ModifyBookFileDeferAggregates":       {ops.ResBookFiles},
+		"ModifyBookFileReportingRecompute":    fileRow,
 		"CarryOverFingerprintWindows":         {ops.ResFingerprintIndex},
 		"DeleteOrphanBookFileAcoustIDEntries": {ops.ResBookFiles},
 		// --- files on disk -------------------------------------------------------

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_unknown_rows_test.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: d68c7f52-8a70-470d-a54a-4d79de21d579
 // last-edited: 2026-11-15
 
@@ -49,11 +49,11 @@ func (w t6g4FencingWriter) ModifyBookFileDeferAggregates(bookID, fileID string, 
 	return w.t6g4Writer.ModifyBookFileDeferAggregates(bookID, fileID, fn)
 }
 
-func (w t6g4FencingWriter) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
-	if err := w.gate("ModifyBookFile"); err != nil {
+func (w t6g4FencingWriter) ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	if err := w.gate("ModifyBookFileReportingRecompute"); err != nil {
 		return nil, err
 	}
-	return w.t6g4Writer.ModifyBookFile(bookID, fileID, fn)
+	return w.t6g4Writer.ModifyBookFileReportingRecompute(bookID, fileID, fn)
 }
 
 func (w t6g4FencingWriter) RecomputeBookAggregates(bookID string) error {
@@ -183,7 +183,7 @@ func TestDurationBackfillNative_UnknownRowsAGroupCutAfterOneRowStillRecomputesTh
 	rows := urSamePath(t, s, "", "")
 
 	// Gated calls in order: write-and-recompute(first row: it finishes its book, so
-	// it is one ModifyBookFile), write-and-recompute(second row). Ending the run at
+	// it is one ModifyBookFileReportingRecompute), write-and-recompute(second row). Ending the run at
 	// the second refuses it.
 	_ = t6g4UnknownRowsNative(t, s, 2)
 	require.Equal(t, 1, requireNoBookIsLeftStale(t, s, rows, 30, false), "exactly the first row was written")

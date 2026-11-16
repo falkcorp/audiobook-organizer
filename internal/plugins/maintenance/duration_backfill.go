@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.16.11
+// version: 2.16.12
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
 // last-edited: 2026-11-15
 
@@ -264,12 +264,13 @@ type segmentFailureWriter interface {
 }
 
 // unknownRowsWriter is what the unknownRows run writes with: the deferred row
-// write, and ModifyBookFile (which recomputes the book's aggregates inside the
-// write) for the row that finishes a book, so the last row and its recompute are
-// one write.
+// write, and ModifyBookFileReportingRecompute (ModifyBookFile, which recomputes
+// the book's aggregates inside the write, but returning the recompute's error
+// instead of logging it) for the row that finishes a book, so the last row and
+// its recompute are one write whose outcome the run can read.
 type unknownRowsWriter interface {
 	segmentFailureWriter
-	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+	ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
 // recordSegmentProbeFailures writes the failed attempts collected for one book.

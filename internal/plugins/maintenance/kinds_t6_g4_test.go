@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.10
+// version: 1.2.11
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-15
 
@@ -349,14 +349,14 @@ func (w recT6G4Writer) ModifyBook(a0 string, a1 func(*database.Book) error) (*da
 	return r0, nil
 }
 
-func (w recT6G4Writer) ModifyBookFile(a0 string, a1 string, a2 func(*database.BookFile) error) (*database.BookFile, error) {
-	w.rec.add("ModifyBookFile")
+func (w recT6G4Writer) ModifyBookFileDeferAggregates(a0 string, a1 string, a2 func(*database.BookFile) error) (*database.BookFile, error) {
+	w.rec.add("ModifyBookFileDeferAggregates")
 	var r0 *database.BookFile
 	return r0, nil
 }
 
-func (w recT6G4Writer) ModifyBookFileDeferAggregates(a0 string, a1 string, a2 func(*database.BookFile) error) (*database.BookFile, error) {
-	w.rec.add("ModifyBookFileDeferAggregates")
+func (w recT6G4Writer) ModifyBookFileReportingRecompute(a0 string, a1 string, a2 func(*database.BookFile) error) (*database.BookFile, error) {
+	w.rec.add("ModifyBookFileReportingRecompute")
 	var r0 *database.BookFile
 	return r0, nil
 }
@@ -649,7 +649,7 @@ var t6g4Expected = t6g4DeriveWrites([]t6g4Want{
 	{kind: dedupeBookFileRowsKind, head: func(p *Plugin) sdk.OperationDef { return p.dedupeBookFileRowsDef() },
 		resume: tasks.ResumeFromZero, calls: []string{"CarryOverFingerprintWindows", "CreateOperationChange", "DeleteBookFilesByIDs", "RecomputeBookAggregates", "UpdateBookFile"}, outside: []ops.Resource{ops.ResFiles}, hasDependsOn: true, helpReworded: true},
 	{kind: durationBackfillKind, head: func(p *Plugin) sdk.OperationDef { return p.durationBackfillDef() },
-		resume: tasks.ResumeDrop, calls: []string{"ModifyBook", "ModifyBookFile", "ModifyBookFileDeferAggregates", "RecomputeBookAggregates", "UpdateBookFiles"}, helpReworded: true},
+		resume: tasks.ResumeDrop, calls: []string{"ModifyBook", "ModifyBookFileDeferAggregates", "ModifyBookFileReportingRecompute", "RecomputeBookAggregates", "UpdateBookFiles"}, helpReworded: true},
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
 		resume: tasks.ResumeFromZero, calls: []string{"SetBookFileHash"}, outside: []ops.Resource{ops.ResFiles}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows.go
-// version: 1.6.12
+// version: 1.6.15
 // guid: 30470edd-3683-43f8-963e-07e058ba2a3e
 // last-edited: 2026-11-15
 
@@ -127,18 +127,13 @@ import (
 // candidate row is left, so the rerun never reaches it), and that is exactly the
 // book whose last write succeeded and whose recompute was cut. So the book's
 // last row, when the book is owed a recompute (the row measures, or an earlier
-// row of the book did or already had), is written with ModifyBookFile, which
-// recomputes the book inside the one gated write: there is no second write to cut.
-//
-// ⚠️ THAT RECOMPUTE IS NOT VERIFIED. ModifyBookFile runs it after the row commits
-// and, on failure, only logs a Warn (notifyBookFileChange); it does not return the
-// error, so the run cannot tell a recomputed book from one whose recompute failed.
-// HEAD's explicit RecomputeBookAggregates returned that error and failed the run.
-// So such a book is counted in books_recomputed_in_write, never in
-// books_recomputed (verified recomputes) or failed, and the result does not claim
-// more than the store tells it. Reporting the error needs a ModifyBookFile variant
-// that returns the recompute's result, which is a store, mock, resource-table and
-// gated-writer change; it is recorded as an obligation on the F5-09 seam note.
+// row of the book did or already had), is written with
+// ModifyBookFileReportingRecompute: ModifyBookFile's write, which recomputes the
+// book inside the one gated write (there is no second write to cut), but which
+// returns the recompute's error where ModifyBookFile only logs it. So a book
+// whose closing recompute failed is a recompute failure exactly as one whose
+// final-sweep RecomputeBookAggregates failed: it fails the run, is never counted
+// in books_recomputed, and a fenced one is listed as owed.
 //
 // Dry run (the default) runs pass 1's decisions and reports what pass 2 would
 // probe (would_probe) but does NOT run ffprobe or stat anything: a preview that
@@ -293,14 +288,10 @@ type UnknownRowsResult struct {
 	// but in doubt (database.ErrBookFileDurabilityUnknown): it is counted here,
 	// not as a success, and its book is still recomputed.
 	WriteErrors int `json:"write_errors,omitempty"`
-	// BooksRecomputed: books whose aggregates were recomputed by an explicit
-	// RecomputeBookAggregates that reported success, once each.
+	// BooksRecomputed: books whose aggregates were recomputed and the recompute
+	// reported success, once each: by the book's last row's write
+	// (ModifyBookFileReportingRecompute) or by an explicit RecomputeBookAggregates.
 	BooksRecomputed int `json:"books_recomputed,omitempty"`
-	// BooksRecomputedInWrite: books whose last row was written with ModifyBookFile,
-	// which recomputes the book itself. The store logs a failed recompute there and
-	// does not return it, so these are NOT verified: a failure is a Warn in the
-	// log, not a count here. Disjoint from BooksRecomputed.
-	BooksRecomputedInWrite int `json:"books_recomputed_in_write,omitempty"`
 
 	// Books is the per-book breakdown, in a dry run only, the busiest
 	// unknownRowsBookReportCap books first; BooksOmitted is the rest.
@@ -484,8 +475,9 @@ func stillTheProbedRow(cur *database.BookFile, seen database.BookFileCore) bool 
 }
 
 // unknownRowModify is the row write writeUnknownRowVia goes through:
-// ModifyBookFileDeferAggregates (the aggregate is the caller's) or ModifyBookFile
-// (the write recomputes the book's aggregates itself).
+// ModifyBookFileDeferAggregates (the aggregate is the caller's) or
+// ModifyBookFileReportingRecompute (the write recomputes the book's aggregates
+// itself and returns that recompute's error).
 type unknownRowModify func(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 
 // writeUnknownRowVia applies mutate to the stored row under its write lock, but
@@ -500,7 +492,14 @@ type unknownRowModify func(bookID, fileID string, fn func(*database.BookFile) er
 // in doubt), so the caller counts the error and still recomputes the book. Any
 // other error means nothing was written and wrote is false, whatever the last
 // callback run saw. modify is either row write (unknownRowModify).
-func writeUnknownRowVia(modify unknownRowModify, seen database.BookFileCore, mutate func(cur *database.BookFile) error) (wrote bool, err error) {
+//
+// A recomputing write whose row was written but whose recompute failed
+// (database.ErrBookAggregatesStale) is NOT a write failure: wrote is true,
+// writeErr is nil, and the recompute's error is returned apart as recomputeErr,
+// for the caller to count as a recompute failure. When that same write's fsync
+// was also in doubt, writeErr is the durability error and recomputeErr the stale
+// one.
+func writeUnknownRowVia(modify unknownRowModify, seen database.BookFileCore, mutate func(cur *database.BookFile) error) (wrote bool, writeErr, recomputeErr error) {
 	got, err := modify(seen.BookID, seen.ID, func(cur *database.BookFile) error {
 		wrote = false
 		if !stillTheProbedRow(cur, seen) {
@@ -513,15 +512,22 @@ func writeUnknownRowVia(modify unknownRowModify, seen database.BookFileCore, mut
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, database.ErrBookFileDurabilityUnknown) {
-			return wrote, err
+		if errors.Is(err, database.ErrBookAggregatesStale) {
+			recomputeErr = err
+			if !errors.Is(err, database.ErrBookFileDurabilityUnknown) {
+				return wrote, nil, recomputeErr // applied; only the recompute failed
+			}
+			return wrote, err, recomputeErr
 		}
-		return false, err
+		if errors.Is(err, database.ErrBookFileDurabilityUnknown) {
+			return wrote, err, nil
+		}
+		return false, err, nil
 	}
 	if got == nil {
-		return false, nil // the row is gone, or no longer keyed under this book
+		return false, nil, nil // the row is gone, or no longer keyed under this book
 	}
-	return wrote, nil
+	return wrote, nil, nil
 }
 
 // unknownRowsRecompute owns the "recompute each measured book's aggregates once"
@@ -536,10 +542,10 @@ type unknownRowsRecompute struct {
 	touched map[string]struct{}
 	claimed map[string]struct{}
 
-	// done counts verified recomputes (run); inWrite counts books recomputed by
-	// their last row's ModifyBookFile, whose outcome the store does not report.
-	done, inWrite, failed atomic.Int64
-	firstErr              atomic.Pointer[error]
+	// done counts recomputes that reported success (run, or the last row's write:
+	// recomputedByWrite); failed counts those that did not.
+	done, failed atomic.Int64
+	firstErr     atomic.Pointer[error]
 
 	// owed is the books whose recompute the gate refused (tasks.ErrFenced):
 	// their rows are measured and their aggregates are stale.
@@ -580,46 +586,61 @@ func (r *unknownRowsRecompute) pending(keep func(bookID string) bool) []string {
 	return out
 }
 
-// recomputedByWrite records that a row write recomputed the book itself
-// (ModifyBookFile), so no later path recomputes it again. The recompute's own
-// outcome is not reported by the store, so it is counted apart from done.
-func (r *unknownRowsRecompute) recomputedByWrite(bookID string) {
+// claim marks a book's recompute as taken and reports whether the caller took it.
+func (r *unknownRowsRecompute) claim(bookID string) bool {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, done := r.claimed[bookID]; done {
-		r.mu.Unlock()
-		return
+		return false
 	}
 	if r.claimed == nil {
 		r.claimed = map[string]struct{}{}
 	}
 	r.claimed[bookID] = struct{}{}
-	r.mu.Unlock()
-	r.inWrite.Add(1)
+	return true
+}
+
+// recomputedByWrite records that a row write recomputed the book itself
+// (ModifyBookFileReportingRecompute) and the recompute reported success, so no
+// later path recomputes it again.
+func (r *unknownRowsRecompute) recomputedByWrite(bookID string) {
+	if r.claim(bookID) {
+		r.done.Add(1)
+	}
+}
+
+// recomputeFailedInWrite records that a row write was applied but its recompute
+// failed (database.ErrBookAggregatesStale): the same accounting as a failed
+// run(), and the book is claimed so no later path recomputes it again (the row
+// is written, so a rerun does not plan it; a retry here would only be refused or
+// fail the same way).
+func (r *unknownRowsRecompute) recomputeFailedInWrite(bookID string, err error) {
+	if r.claim(bookID) {
+		r.fail(bookID, err)
+	}
+}
+
+// fail counts one book's failed recompute: the run's error, and the book owed
+// when the gate refused it.
+func (r *unknownRowsRecompute) fail(bookID string, err error) {
+	if errors.Is(err, tasks.ErrFenced) {
+		r.owedMu.Lock()
+		r.owed = append(r.owed, bookID)
+		r.owedMu.Unlock()
+	}
+	r.failed.Add(1)
+	e := fmt.Errorf("book %s: RecomputeBookAggregates: %w", bookID, err)
+	r.firstErr.CompareAndSwap(nil, &e)
 }
 
 // run recomputes one book's aggregates, once: a second call for the same book is
 // a no-op.
 func (r *unknownRowsRecompute) run(bookID string) {
-	r.mu.Lock()
-	if _, done := r.claimed[bookID]; done {
-		r.mu.Unlock()
+	if !r.claim(bookID) {
 		return
 	}
-	if r.claimed == nil {
-		r.claimed = map[string]struct{}{}
-	}
-	r.claimed[bookID] = struct{}{}
-	r.mu.Unlock()
-
 	if err := r.store.RecomputeBookAggregates(bookID); err != nil {
-		if errors.Is(err, tasks.ErrFenced) {
-			r.owedMu.Lock()
-			r.owed = append(r.owed, bookID)
-			r.owedMu.Unlock()
-		}
-		r.failed.Add(1)
-		e := fmt.Errorf("book %s: RecomputeBookAggregates: %w", bookID, err)
-		r.firstErr.CompareAndSwap(nil, &e)
+		r.fail(bookID, err)
 		return
 	}
 	r.done.Add(1)
@@ -819,9 +840,10 @@ func (r *unknownRowsRun) closeBook(bookID string) {
 // writeRow writes one row of either pass and settles it, in the same item. The
 // row that closes its book, when the book is owed a recompute (the row measures,
 // or the book is already touched: an earlier row measured, or the plan found a
-// measured row), is written with ModifyBookFile, which recomputes the book inside
-// the write: one gated write, so a cancel cannot fall between the row and the
-// recompute. That holds for a failure record too (a probe failure at the attempt
+// measured row), is written with ModifyBookFileReportingRecompute, which
+// recomputes the book inside the write: one gated write, so a cancel cannot fall
+// between the row and the recompute, and a failed recompute comes back as an
+// error (recomputeFailedInWrite) rather than a log line. That holds for a failure record too (a probe failure at the attempt
 // ceiling), which would otherwise leave an Unreadable row that no rerun plans.
 // Every other row defers the aggregate. When the closing row is not written
 // (skipped, failed), the book is recomputed afterwards if it is owed one.
@@ -834,9 +856,9 @@ func (r *unknownRowsRun) writeRow(w unknownRowWork, counter *atomic.Int64, measu
 	modify := r.writer.ModifyBookFileDeferAggregates
 	recomputes := closer && (measured || r.books.isTouched(w.row.BookID))
 	if recomputes {
-		modify = r.writer.ModifyBookFile
+		modify = r.writer.ModifyBookFileReportingRecompute
 	}
-	wrote, wErr := writeUnknownRowVia(modify, w.row, mutate)
+	wrote, wErr, rcErr := writeUnknownRowVia(modify, w.row, mutate)
 	r.recordWrite(w, wrote, wErr, counter, measured)
 	switch {
 	case !closer:
@@ -844,6 +866,8 @@ func (r *unknownRowsRun) writeRow(w unknownRowWork, counter *atomic.Int64, measu
 		// The run ended: this row is cut, not settled. Recomputing the book would
 		// only be refused too; a rerun finds the row, and its book (owed by state)
 		// is recomputed when that rerun settles it.
+	case recomputes && wrote && rcErr != nil:
+		r.books.recomputeFailedInWrite(w.row.BookID, rcErr)
 	case recomputes && wrote:
 		r.books.recomputedByWrite(w.row.BookID)
 	default:
@@ -1075,7 +1099,6 @@ func (p *Plugin) t6g4RunUnknownRowsBackfill(ctx context.Context, store unknownRo
 	}
 	rcErr := run.books.err()
 	res.BooksRecomputed = int(run.books.done.Load())
-	res.BooksRecomputedInWrite = int(run.books.inWrite.Load())
 
 	res.Borrowed = int(run.ctr.borrowed.Load())
 	res.PromotedFromFingerprint = int(run.ctr.promoted.Load())
@@ -1327,7 +1350,7 @@ func unknownRowsSummary(r UnknownRowsResult) string {
 		return fmt.Sprintf("DRY RUN unknownRows: scanned=%d would-borrow=%d would-promote-from-fingerprint=%d would-probe=%d skipped-unreadable=%d skipped-no-path=%d skipped-user-excluded=%d skipped-bad-path=%d skipped-not-audio=%d skipped-missing=%d not-found=%d (ffprobe is not run in a dry run)",
 			r.Scanned, r.Borrowed, r.PromotedFromFingerprint, r.WouldProbe, r.SkippedUnreadable, r.SkippedNoPath, r.SkippedUserExcluded, r.SkippedBadPath, r.SkippedNotAudio, r.SkippedMissing, r.NotFound)
 	}
-	return fmt.Sprintf("unknownRows: scanned=%d borrowed=%d promoted_from_fingerprint=%d probed_known=%d probe_failed=%d environment_skipped=%d skipped_changed=%d skipped_unreadable=%d skipped_no_path=%d skipped_user_excluded=%d skipped_bad_path=%d skipped_not_audio=%d skipped_not_regular=%d skipped_missing=%d not_found=%d write_errors=%d books_recomputed=%d books_recomputed_in_write=%d",
+	return fmt.Sprintf("unknownRows: scanned=%d borrowed=%d promoted_from_fingerprint=%d probed_known=%d probe_failed=%d environment_skipped=%d skipped_changed=%d skipped_unreadable=%d skipped_no_path=%d skipped_user_excluded=%d skipped_bad_path=%d skipped_not_audio=%d skipped_not_regular=%d skipped_missing=%d not_found=%d write_errors=%d books_recomputed=%d",
 		r.Scanned, r.Borrowed, r.PromotedFromFingerprint, r.ProbedKnown, r.ProbeFailed, r.EnvironmentSkipped, r.SkippedChanged,
-		r.SkippedUnreadable, r.SkippedNoPath, r.SkippedUserExcluded, r.SkippedBadPath, r.SkippedNotAudio, r.SkippedNotRegular, r.SkippedMissing, r.NotFound, r.WriteErrors, r.BooksRecomputed, r.BooksRecomputedInWrite)
+		r.SkippedUnreadable, r.SkippedNoPath, r.SkippedUserExcluded, r.SkippedBadPath, r.SkippedNotAudio, r.SkippedNotRegular, r.SkippedMissing, r.NotFound, r.WriteErrors, r.BooksRecomputed)
 }
