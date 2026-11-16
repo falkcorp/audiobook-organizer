@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize_native_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: 9a1e4c52-3d78-4b06-8e2f-5c7d0b1a6f93
 // last-edited: 2026-11-15
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +49,11 @@ type t6g6OptimizeHost struct {
 	block   map[tasks.Kind]chan struct{}
 	awaited []tasks.RunID
 
+	// awaitPanic makes Await of that kind panic with the value, as an await that
+	// hits a bug would; logs, when non-nil, collects what the run logs.
+	awaitPanic map[tasks.Kind]any
+	logs       *t6g6LogBuffer
+
 	// touches counts liveness stamps (rc.Progress().Tick); reported is every
 	// done value the run reported (rc.Progress().Set), in order.
 	touches  atomic.Int64
@@ -55,6 +61,34 @@ type t6g6OptimizeHost struct {
 }
 
 func (h *t6g6OptimizeHost) Touch() { h.touches.Add(1) }
+
+// t6g6LogBuffer is a log sink safe to write from the sweep's wait goroutine and
+// read from the test.
+type t6g6LogBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *t6g6LogBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *t6g6LogBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// Log is the run's logger: the collecting one when a test set logs, else the
+// fake's discarding one.
+func (h *t6g6OptimizeHost) Log() *slog.Logger {
+	if h.logs == nil {
+		return h.t6g6Host.Log()
+	}
+	return slog.New(slog.NewTextHandler(h.logs, nil))
+}
 
 func (h *t6g6OptimizeHost) ReportProgress(done int64, _ tasks.Total) {
 	h.mu.Lock()
@@ -95,7 +129,13 @@ func (h *t6g6OptimizeHost) Await(ref tasks.RunRef) (tasks.Outcome, error) {
 	h.mu.Lock()
 	h.awaited = append(h.awaited, ref.ID)
 	var blk chan struct{}
+	var boom any
 	failed := false
+	for k, v := range h.awaitPanic {
+		if strings.HasPrefix(string(ref.ID), string(k)) {
+			boom = v
+		}
+	}
 	for k, c := range h.block {
 		if strings.HasPrefix(string(ref.ID), string(k)) {
 			blk = c
@@ -107,6 +147,9 @@ func (h *t6g6OptimizeHost) Await(ref tasks.RunRef) (tasks.Outcome, error) {
 		}
 	}
 	h.mu.Unlock()
+	if boom != nil {
+		panic(boom)
+	}
 	if blk != nil {
 		<-blk
 	}
@@ -149,10 +192,11 @@ func t6g6OptimizeFlags(t *testing.T, backfill, decode bool) {
 func newT6G6OptimizeHost(t *testing.T) *t6g6OptimizeHost {
 	t.Helper()
 	return &t6g6OptimizeHost{
-		t6g6Host: &t6g6Host{FakeRun: taskstest.NewFakeRun(context.Background(), optimizeKind), mode: tasks.ModeLive},
-		failKind: map[tasks.Kind]bool{},
-		enqErr:   map[tasks.Kind]error{},
-		block:    map[tasks.Kind]chan struct{}{},
+		t6g6Host:   &t6g6Host{FakeRun: taskstest.NewFakeRun(context.Background(), optimizeKind), mode: tasks.ModeLive},
+		failKind:   map[tasks.Kind]bool{},
+		enqErr:     map[tasks.Kind]error{},
+		block:      map[tasks.Kind]chan struct{}{},
+		awaitPanic: map[tasks.Kind]any{},
 	}
 }
 
@@ -261,6 +305,28 @@ func TestT6G6Optimize_ChildOutlivesDeadlineYieldsAndResumeReattaches(t *testing.
 		"books.acoustid.fingerprint-rescan", "books.acoustid.scan", "books.acoustid.backfill",
 	}, h2.kinds(), "the in-flight child was not launched a second time")
 	require.Equal(t, tasks.RunID("books.maintenance.temp-file-cleanup#1"), h2.awaited[0])
+}
+
+// The sweep waits on a child in its own goroutine (rc.Await takes no context), a
+// goroutine outside the run body's recover: an await that panics would end the
+// whole process. It is the wait's error instead, so the child counts as failed,
+// the sweep goes on to the next one and the log names the run and the panic. Were
+// the recover missing, this test would not fail cleanly: the panic would take the
+// test binary down with it.
+func TestT6G6Optimize_AwaitPanicBecomesTheChildsFailureNotACrash(t *testing.T) {
+	t6g6OptimizeFlags(t, false, false) // the list is cleanup, scan
+	h := newT6G6OptimizeHost(t)
+	h.logs = &t6g6LogBuffer{}
+	h.awaitPanic["books.maintenance.temp-file-cleanup"] = "boom"
+
+	require.NoError(t, t6g6RunOptimize(t, h), "a child whose await panicked is a failed child, not a failed sweep")
+	require.Equal(t, []tasks.Kind{"books.maintenance.temp-file-cleanup", "books.acoustid.scan"}, h.kinds(),
+		"the sweep went on to the next child")
+	cp, _ := t6g6OptimizeCheckpointOf(t, h)
+	require.Equal(t, []string{"temp-file-cleanup", "acoustid-scan"}, cp.Finished)
+	require.Equal(t, 1, cp.Failed, "the panicked child is counted failed")
+	require.Equal(t, 1, cp.Completed)
+	require.Contains(t, h.logs.String(), "await child run books.maintenance.temp-file-cleanup#1 panicked: boom")
 }
 
 // An attempt that re-attaches to the child an earlier attempt left in flight
