@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_pool_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 6df2f8ff-a5db-4063-902a-56a68a37c969
 // last-edited: 2026-11-15
 
@@ -319,6 +319,51 @@ func TestDurationBackfillNative_AWorkerThatPanicsEndsTheRunInsteadOfHangingIt(t 
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("the run hung after a worker panicked: the producer is blocked on a pool that is gone")
+	}
+}
+
+// A pool that ends in error without draining its jobs must not leave the
+// producer blocked on a send nobody will receive: the core cancels the
+// producer's own context (pctx) when the pool fails, and the producer's send
+// selects on that context, not on the run's. The pool here returns at once and
+// reads nothing, and the store holds far more books than the job channel
+// buffers (workers*2), so the producer is certain to be mid-send when the pool
+// fails. Without the cancel, or with the send watching only the run's context
+// (which nobody ends), the run never returns: that is what the done select
+// guards, and it is a hang guard only, a correct run returns at once.
+func TestDurationBackfill_PoolErrorUnblocksTheProducer(t *testing.T) {
+	const workers, books = 2, 40
+	store := &gatedDurStore{books: books, want: 1}
+	var ids []string
+	for i := 1; i <= books; i++ {
+		ids = append(ids, fmt.Sprintf("bruce-%02d", i))
+	}
+	poolErr := errors.New("the Penguin took the pool")
+	var poolCalls atomic.Int32
+	env := durationBackfillEnv{
+		t6g4Base: t6g4HeadBase(&fakeReporter{}, false, store, nil),
+		Pool: func(context.Context, int, int, <-chan database.Book, func(context.Context, database.Book) bool) error {
+			poolCalls.Add(1)
+			return poolErr // never reads jobs
+		},
+	}
+	params := durationReextractParams{Workers: workers, SkipAgeDays: 90, BookIDs: ids}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := New(fakeDeps{}).runDurationBackfillCore(context.Background(), params, nil, env)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, poolErr) || !strings.Contains(err.Error(), "book workers") {
+			t.Fatalf("want the pool's error reported as the book workers' failure, got %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run hung after the pool failed: the producer is still blocked sending to a pool that is gone")
+	}
+	if poolCalls.Load() != 1 {
+		t.Fatalf("the pool ran %d times, want 1", poolCalls.Load())
 	}
 }
 
