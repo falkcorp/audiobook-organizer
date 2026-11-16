@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/optimize_native_test.go
-// version: 1.3.2
+// version: 1.3.3
 // guid: 9a1e4c52-3d78-4b06-8e2f-5c7d0b1a6f93
 // last-edited: 2026-11-15
 
@@ -261,6 +261,41 @@ func TestT6G6Optimize_ChildOutlivesDeadlineYieldsAndResumeReattaches(t *testing.
 		"books.acoustid.fingerprint-rescan", "books.acoustid.scan", "books.acoustid.backfill",
 	}, h2.kinds(), "the in-flight child was not launched a second time")
 	require.Equal(t, tasks.RunID("books.maintenance.temp-file-cleanup#1"), h2.awaited[0])
+}
+
+// An attempt that re-attaches to the child an earlier attempt left in flight
+// checkpoints at once, before it waits, and the checkpoint carries the re-attach
+// step. The seeded checkpoint already names the run, so the run id alone cannot
+// tell a fresh save from the seed: the step count is what moved. Without the save
+// a re-attach that waits out its whole span is struck as uncheckpointed, and a
+// crash while it waits resumes from the seed's step count, so the kernel could
+// see the next attempt report no progress past the one before.
+func TestT6G6Optimize_ReattachCheckpointsBeforeTheChildEnds(t *testing.T) {
+	t6g6OptimizeFlags(t, false, false) // the list is cleanup, scan
+	const runID = "books.maintenance.temp-file-cleanup#9"
+	seed, err := json.Marshal(optimizeCheckpoint{
+		StartedAt: time.Now().Add(-time.Hour),
+		InFlight:  &optimizeInFlight{Name: "temp-file-cleanup", RunID: runID},
+		Steps:     1,
+	})
+	require.NoError(t, err)
+	h := newT6G6OptimizeHost(t)
+	require.NoError(t, h.SetCheckpoint("", json.RawMessage(seed)))
+	var atAwait json.RawMessage
+	h.onAwait = func(id tasks.RunID) {
+		if atAwait == nil {
+			atAwait, _ = h.CheckpointJSON("") // what a crash while the child runs would resume from
+		}
+	}
+	require.NoError(t, t6g6RunOptimize(t, h))
+	require.Equal(t, tasks.RunID(runID), h.awaited[0], "the recorded run is the one re-attached to")
+	require.NotNil(t, atAwait, "the checkpoint was read as the wait began")
+	var cp optimizeCheckpoint
+	require.NoError(t, json.Unmarshal(atAwait, &cp))
+	require.NotNil(t, cp.InFlight)
+	require.Equal(t, runID, cp.InFlight.RunID)
+	require.Empty(t, cp.Finished, "the child has not ended yet")
+	require.Equal(t, 2, cp.Steps, "the re-attach was checkpointed with its step (the seed held 1)")
 }
 
 // A crash after child k leaves the checkpoint the sweep wrote at that boundary,
