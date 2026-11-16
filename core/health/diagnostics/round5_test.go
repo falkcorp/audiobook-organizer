@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/round5_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b1f8c36-92d4-4e07-a3b8-6d70c2e19f54
-// last-edited: 2026-11-14
+// last-edited: 2026-11-16
 
 package diagnostics_test
 

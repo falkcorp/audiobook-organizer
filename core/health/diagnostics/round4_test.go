@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/round4_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7c2e9a40-5d18-4b63-a0f7-1e94c6b83d25
-// last-edited: 2026-11-14
+// last-edited: 2026-11-16
 
 package diagnostics_test
 
@@ -11,7 +11,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/falkcorp/mediacore/health/diagnostics"
 	"github.com/falkcorp/mediacore/internal/authz"
@@ -159,11 +158,12 @@ func TestDiagnostics_ViewerForSeesTheStampedMethod(t *testing.T) {
 }
 
 // TestDiagnostics_LongPathShapesThroughThePipeline: the log.Redactor runs before
-// the path rule and bounds the text it passes on (64 KiB, the rest is replaced),
-// so a shape is only a cost to the rule if it survives the redactor. These are the shapes that could (a long segment of mixed characters
-// with a trailing run of dots and colons, a run of dot segments, a long query),
-// sent through the real exporter; each must finish in a bounded time and leave
-// no path behind. The rule is linear, so the bound is far from the cost.
+// the sanitizer and bounds the text it passes on (64 KiB, the rest is replaced),
+// so a shape is only a cost to the sanitizer if it survives the redactor. These
+// are the shapes that could (a long segment of mixed characters with a trailing
+// run of dots and colons, a run of dot segments, a long query), sent through the
+// real exporter; none may leave a location behind. The cost is bounded by
+// TestSanitize_OpsAreLinear, which counts steps; there is no clock here.
 func TestDiagnostics_LongPathShapesThroughThePipeline(t *testing.T) {
 	lines := []string{
 		"open /x/a" + strings.Repeat(".", 60_000), // under the redactor's 64 KiB bound: reaches the path rule whole
@@ -182,13 +182,9 @@ func TestDiagnostics_LongPathShapesThroughThePipeline(t *testing.T) {
 			return io.NopCloser(strings.NewReader(strings.Join(lines, "\n") + "\n")), nil
 		}
 	})
-	start := time.Now()
 	res, err := f.build(e, "run-long", diagnostics.ExportParams{ActorID: "robin"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if d := time.Since(start); d > 10*time.Second {
-		t.Errorf("redacting %d long lines took %s: some shape is not linear", len(lines), d)
 	}
 	assertNoneOf(t, f.zipFiles(res.File), "/home/bruce")
 }

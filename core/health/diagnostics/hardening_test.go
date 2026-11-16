@@ -1,7 +1,7 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.0.9
+// version: 1.1.0
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
-// last-edited: 2026-11-14
+// last-edited: 2026-11-16
 
 package diagnostics_test
 
