@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_bookfile_modify.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6d3a9e27-b4c1-4f58-8a02-e7c5d1b9f463
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package store
 
@@ -60,22 +60,68 @@ func (s *PebbleStore) ModifyBookFileDeferAggregates(bookID, fileID string, fn fu
 	return s.modifyBookFile(bookID, fileID, fn, false)
 }
 
+// ErrBookAggregatesStale is the error of ModifyBookFileReportingRecompute when
+// the row WAS written but the recompute of the book's aggregates that follows
+// it failed: the book's stored Duration and FileSize may not read the row. The
+// returned row is non-nil then, and the error wraps the recompute's own error.
+var ErrBookAggregatesStale = errors.New("book file written but its book's aggregates were not refreshed")
+
+// ModifyBookFileReportingRecompute is ModifyBookFile with the recompute's outcome
+// reported: the same stripe, the same compare-and-swap loop, the same callback
+// contract (fn may run more than once, ErrSkipBookFileWrite writes nothing), the
+// same commit (updateBookFileOver) and the same RecomputeBookAggregates after the
+// unlock, in the same cases (a write that changed what the book's aggregates
+// read, including a write whose fsync was in doubt). Only the reporting differs:
+// ModifyBookFile logs a failed recompute (notifyBookFileChange) and returns nil,
+// where this returns it, so the caller that counts or fails on a recompute (the
+// duration-backfill unknownRows run, whose last row of a book is one write that
+// recomputes) can tell a recomputed book from one that is not.
+//
+// When the row was written and the recompute failed the result is (the written
+// row, an error wrapping ErrBookAggregatesStale and the recompute's error): the
+// row is non-nil because it WAS written. A write that failed, was skipped or
+// found no row returns exactly what ModifyBookFile returns. A write whose fsync
+// was in doubt and whose recompute also failed returns both errors (errors.Is
+// matches either) and a nil row, as ModifyBookFile does for the fsync error.
+//
+// Like ModifyBookFileDeferAggregates it is deliberately NOT a Store method
+// (TestStoreFlattenedWidth lets Store only narrow); a consumer declares it as its
+// own interface and resolves it with AsCapability.
+func (s *PebbleStore) ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
+	return s.modifyBookFileReporting(bookID, fileID, fn, true, true)
+}
+
 func (s *PebbleStore) modifyBookFile(bookID, fileID string, fn func(*BookFile) error, recompute bool) (*BookFile, error) {
+	return s.modifyBookFileReporting(bookID, fileID, fn, recompute, false)
+}
+
+// modifyBookFileReporting is the one body of every ModifyBookFile variant.
+// recompute says whether the write refreshes the book's aggregates; report says
+// whether a failed refresh is returned (ErrBookAggregatesStale) rather than
+// logged.
+func (s *PebbleStore) modifyBookFileReporting(bookID, fileID string, fn func(*BookFile) error, recompute, report bool) (out *BookFile, outErr error) {
+	type modified struct {
+		row    *BookFile
+		notify bool
+	}
 	unlock := s.lockBookFile(fileID)
 	notify := false
 	defer func() {
 		unlock()
 		// After the unlock, as in updateBookFile: the aggregate recompute
 		// takes the book's stripe, and no file stripe is held while one is.
-		if notify {
+		if !notify {
+			return
+		}
+		if !report {
 			s.notifyBookFileChange(bookID)
+			return
+		}
+		if rcErr := s.RecomputeBookAggregates(bookID); rcErr != nil {
+			outErr = errors.Join(outErr, fmt.Errorf("%w: book %s: %w", ErrBookAggregatesStale, bookID, rcErr))
 		}
 	}()
 
-	type modified struct {
-		row    *BookFile
-		notify bool
-	}
 	book := bookID
 	got, err := rmwBookFile(&book, fileID, func() (modified, error) {
 		stored, raw, err := s.readBookFileRow(bookID, fileID)

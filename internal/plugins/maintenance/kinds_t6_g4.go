@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4.go
-// version: 1.0.17
+// version: 1.0.18
 // guid: a6f18f0f-9e00-4b3a-a135-2ea70c56209f
 // last-edited: 2026-11-15
 
@@ -357,11 +357,12 @@ type t6g4DurationReads interface {
 
 // t6g4DurationWrites are the per-row book_file writes of the duration kinds: the
 // one that defers the book's aggregate recompute (a probe-failure record, or an
-// unknownRows measurement) and ModifyBookFile, which recomputes inside the write
-// (the unknownRows row that finishes a book).
+// unknownRows measurement) and ModifyBookFileReportingRecompute, which recomputes
+// inside the write and returns the recompute's error (the unknownRows row that
+// finishes a book).
 type t6g4DurationWrites interface {
 	ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
-	ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+	ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
 }
 
 // t6g4View is the read-write store a core hands to a helper that needs both
@@ -866,8 +867,19 @@ func (h headT6G4Writer) ModifyBookFileDeferAggregates(bookID, fileID string, fn 
 	return w.ModifyBookFileDeferAggregates(bookID, fileID, fn)
 }
 
-func (h headT6G4Writer) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
-	return h.store.ModifyBookFile(bookID, fileID, fn)
+// reportingRecomputeWriter is the store capability ModifyBookFileReportingRecompute
+// is: not on database.Store (TestStoreFlattenedWidth), resolved through the
+// store's decorator chain like the deferred-aggregate writer.
+type reportingRecomputeWriter interface {
+	ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error)
+}
+
+func (h headT6G4Writer) ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	w, ok := database.AsCapability[reportingRecomputeWriter](h.store)
+	if !ok {
+		return nil, fmt.Errorf("the store cannot report a book's aggregate recompute")
+	}
+	return w.ModifyBookFileReportingRecompute(bookID, fileID, fn)
 }
 
 func (h headT6G4Writer) intros() (database.BookFileIntroStore, error) {

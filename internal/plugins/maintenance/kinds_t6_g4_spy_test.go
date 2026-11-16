@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_spy_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 0976ab2f-77df-47d7-b719-f47dbda178bb
 // last-edited: 2026-11-15
 
@@ -75,14 +75,14 @@ func (w spyT6G4Writer) ModifyBook(a0 string, a1 func(*database.Book) error) (*da
 	return w.inner.ModifyBook(a0, a1)
 }
 
-func (w spyT6G4Writer) ModifyBookFile(a0 string, a1 string, a2 func(*database.BookFile) error) (*database.BookFile, error) {
-	w.rec.add("ModifyBookFile")
-	return w.inner.ModifyBookFile(a0, a1, a2)
-}
-
 func (w spyT6G4Writer) ModifyBookFileDeferAggregates(a0 string, a1 string, a2 func(*database.BookFile) error) (*database.BookFile, error) {
 	w.rec.add("ModifyBookFileDeferAggregates")
 	return w.inner.ModifyBookFileDeferAggregates(a0, a1, a2)
+}
+
+func (w spyT6G4Writer) ModifyBookFileReportingRecompute(a0 string, a1 string, a2 func(*database.BookFile) error) (*database.BookFile, error) {
+	w.rec.add("ModifyBookFileReportingRecompute")
+	return w.inner.ModifyBookFileReportingRecompute(a0, a1, a2)
 }
 
 func (w spyT6G4Writer) MoveBookFilesToBookBulk(a0 []database.BookFileMove, a1 string) error {

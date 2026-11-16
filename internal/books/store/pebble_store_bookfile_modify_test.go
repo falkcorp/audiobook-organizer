@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_bookfile_modify_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 0c8e5b31-7a92-4d6f-b3e4-9f1a2c6d8e57
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package store
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
@@ -180,6 +181,75 @@ func TestModifyBookFileDeferAggregates_KeepsTheModifyContract(t *testing.T) {
 	require.Error(t, err, "changing BookID must be refused")
 }
 
+// ModifyBookFileReportingRecompute is ModifyBookFile with the recompute's outcome
+// returned: on a clean write it recomputes the book once, exactly as ModifyBookFile
+// does, and returns the same row and no error.
+func TestModifyBookFileReportingRecompute_RecomputesOnceAndReturnsTheWrittenRow(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	b, err := s.CreateBook(&Book{Title: "The Long Halloween", FilePath: "/lib/Gotham/The Long Halloween"})
+	require.NoError(t, err)
+	f := &BookFile{BookID: b.ID, FilePath: "/lib/Gotham/The Long Halloween/01.mp3", Format: "mp3", Duration: Secs(100), FileSize: 1000}
+	require.NoError(t, s.CreateBookFile(f))
+
+	readLogs := captureAggregateLogs(t)
+	row, err := s.ModifyBookFileReportingRecompute(b.ID, f.ID, func(r *BookFile) error { r.Duration = Secs(250); return nil })
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	require.Equal(t, 250, durtest.Sec(row.Duration))
+	require.Equal(t, 1, countAggregateInvocations(readLogs(), b.ID), "the write recomputes the book once, like ModifyBookFile")
+	got, err := s.GetBookByID(b.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Duration)
+	require.Equal(t, 250, *got.Duration, "the book reads the written row")
+}
+
+// The point of the variant: a recompute that fails after the row was written is
+// RETURNED (ErrBookAggregatesStale, wrapping the recompute's own error) with the
+// written row, where ModifyBookFile logs it and reports success. The row is
+// written either way. The book's row is made undecodable so the recompute's own
+// ModifyBook fails; the file row does not depend on it.
+func TestModifyBookFileReportingRecompute_ReturnsAFailedRecomputeAfterAnAppliedWrite(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	f := seedPatchFile(t, s)
+	require.NoError(t, s.db.Set([]byte("book:"+f.BookID), []byte("{not json"), pebble.Sync))
+
+	row, err := s.ModifyBookFileReportingRecompute(f.BookID, f.ID, func(r *BookFile) error { r.Duration = Secs(250); return nil })
+	require.ErrorIs(t, err, ErrBookAggregatesStale)
+	require.NotErrorIs(t, err, ErrBookFileDurabilityUnknown)
+	require.NotNil(t, row, "the row WAS written, so it is returned with the error")
+	require.Equal(t, 250, durtest.Sec(row.Duration))
+	stored, gerr := s.GetBookFileByID(f.BookID, f.ID)
+	require.NoError(t, gerr)
+	require.Equal(t, 250, durtest.Sec(stored.Duration), "the write landed")
+
+	// The contrast: ModifyBookFile writes the same row and says nothing.
+	row, err = s.ModifyBookFile(f.BookID, f.ID, func(r *BookFile) error { r.Duration = Secs(300); return nil })
+	require.NoError(t, err, "ModifyBookFile logs a failed recompute and does not return it")
+	require.Equal(t, 300, durtest.Sec(row.Duration))
+}
+
+// A write that was skipped, found no row or failed has no recompute to report: the
+// variant returns exactly what ModifyBookFile returns, even where the book's own
+// row is unreadable (nothing asks the book).
+func TestModifyBookFileReportingRecompute_NoWriteNoRecomputeError(t *testing.T) {
+	s := setupTestPebbleStore(t)
+	f := seedPatchFile(t, s)
+	require.NoError(t, s.db.Set([]byte("book:"+f.BookID), []byte("{not json"), pebble.Sync))
+
+	row, err := s.ModifyBookFileReportingRecompute(f.BookID, f.ID, func(*BookFile) error { return ErrSkipBookFileWrite })
+	require.NoError(t, err)
+	require.NotNil(t, row, "a skip returns the stored row")
+
+	row, err = s.ModifyBookFileReportingRecompute(f.BookID, "no-such-file", func(*BookFile) error { t.Fatal("fn ran for a missing row"); return nil })
+	require.NoError(t, err)
+	require.Nil(t, row)
+
+	boom := errors.New("boom")
+	_, err = s.ModifyBookFileReportingRecompute(f.BookID, f.ID, func(*BookFile) error { return boom })
+	require.ErrorIs(t, err, boom)
+	require.NotErrorIs(t, err, ErrBookAggregatesStale)
+}
+
 // CONS-18: a millisecond Duration written through either modify variant is
 // stored as seconds, the same as through CreateBookFile and UpdateBookFile. The
 // repair lives in updateBookFileOver, which both variants (and every other
@@ -187,8 +257,9 @@ func TestModifyBookFileDeferAggregates_KeepsTheModifyContract(t *testing.T) {
 // as seconds and 88 kbps as milliseconds, so the heuristic fires.
 func TestModifyBookFile_NormalisesAMillisecondDurationToSeconds(t *testing.T) {
 	variants := map[string]func(s *PebbleStore, bookID, fileID string, fn func(*BookFile) error) (*BookFile, error){
-		"ModifyBookFile":                (*PebbleStore).ModifyBookFile,
-		"ModifyBookFileDeferAggregates": (*PebbleStore).ModifyBookFileDeferAggregates,
+		"ModifyBookFile":                   (*PebbleStore).ModifyBookFile,
+		"ModifyBookFileDeferAggregates":    (*PebbleStore).ModifyBookFileDeferAggregates,
+		"ModifyBookFileReportingRecompute": (*PebbleStore).ModifyBookFileReportingRecompute,
 	}
 	for name, modify := range variants {
 		t.Run(name, func(t *testing.T) {

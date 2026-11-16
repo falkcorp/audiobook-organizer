@@ -1,7 +1,7 @@
 // file: internal/books/store/bookfile_cas_test.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 0f3c52d8-7e19-4b64-a2d0-91c8b5e46a17
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package store
 
@@ -604,6 +604,10 @@ func TestCAS_RetryExhaustion_ReturnsTypedConflict(t *testing.T) {
 		},
 		"ModifyBookFileDeferAggregates": func(f *casFixture) error {
 			_, err := f.s.ModifyBookFileDeferAggregates(f.book.ID, f.file.ID, func(r *BookFile) error { r.Title = "Batman: Hush"; return nil })
+			return err
+		},
+		"ModifyBookFileReportingRecompute": func(f *casFixture) error {
+			_, err := f.s.ModifyBookFileReportingRecompute(f.book.ID, f.file.ID, func(r *BookFile) error { r.Title = "Batman: Hush"; return nil })
 			return err
 		},
 		"UpdateBookFile": func(f *casFixture) error {

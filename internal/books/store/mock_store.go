@@ -1,7 +1,7 @@
 // file: internal/books/store/mock_store.go
-// version: 1.157.3
+// version: 1.157.4
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-15
 
 package store
 
@@ -615,6 +615,7 @@ type MockStore struct {
 	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
 	ModifyBookFileFunc                      func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
 	ModifyBookFileDeferAggregatesFunc       func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
+	ModifyBookFileReportingRecomputeFunc    func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
 	BatchUpsertBookFilesKeepPathsFunc       func(files []*BookFile) error
 	BatchUpsertScannedBookFilesFunc         func(rows []ScannedBookFile) error
@@ -3626,6 +3627,17 @@ func (m *MockStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) err
 func (m *MockStore) ModifyBookFileDeferAggregates(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
 	if m.ModifyBookFileDeferAggregatesFunc != nil {
 		return m.ModifyBookFileDeferAggregatesFunc(bookID, fileID, fn)
+	}
+	return m.ModifyBookFile(bookID, fileID, fn)
+}
+
+// ModifyBookFileReportingRecompute uses ModifyBookFileReportingRecomputeFunc when
+// set; otherwise it behaves as ModifyBookFile (the mock keeps no aggregates, so
+// there is no recompute to fail). Not part of Store, like
+// ModifyBookFileDeferAggregates: a consumer resolves it with database.AsCapability.
+func (m *MockStore) ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error) {
+	if m.ModifyBookFileReportingRecomputeFunc != nil {
+		return m.ModifyBookFileReportingRecomputeFunc(bookID, fileID, fn)
 	}
 	return m.ModifyBookFile(bookID, fileID, fn)
 }

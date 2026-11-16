@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_test.go
-// version: 1.3.8
+// version: 1.3.11
 // guid: 7e1c4b9a-52d8-4f36-a0b7-c9d13e6f2a84
 // last-edited: 2026-11-15
 
@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -430,8 +431,7 @@ echo 30.0`)
 	require.Equal(t, 1, res.Borrowed)
 	require.Equal(t, 2, res.ProbedKnown)
 	require.Equal(t, 5, res.ProbeFailed)
-	require.Equal(t, 1, res.BooksRecomputedInWrite, "the book's last row recomputes it inside its own write")
-	require.Zero(t, res.BooksRecomputed, "no explicit recompute ran, so none was verified")
+	require.Equal(t, 1, res.BooksRecomputed, "the book's last row recomputes it inside its own write, and the recompute reported success")
 	requireAccounted(t, res)
 	require.Equal(t, 1, aggtest.CountInvocations(logs(), mixed.ID), "one recompute for the whole measured book")
 	require.Equal(t, 0, aggtest.CountInvocations(logs(), failing.ID), "failure records move nothing an aggregate reads")
@@ -887,10 +887,10 @@ func (d urDurabilityUnknownStore) ModifyBookFileDeferAggregates(bookID, fileID s
 	return nil, fmt.Errorf("%w: injected fsync failure", database.ErrBookFileDurabilityUnknown)
 }
 
-// ModifyBookFile is the closing row's write: it recomputes the book inside the
-// write and fsyncs like any other, so it needs the same injection.
-func (d urDurabilityUnknownStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
-	if _, err := d.PebbleStore.ModifyBookFile(bookID, fileID, fn); err != nil {
+// ModifyBookFileReportingRecompute is the closing row's write: it recomputes the
+// book inside the write and fsyncs like any other, so it needs the same injection.
+func (d urDurabilityUnknownStore) ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	if _, err := d.PebbleStore.ModifyBookFileReportingRecompute(bookID, fileID, fn); err != nil {
 		return nil, err
 	}
 	return nil, fmt.Errorf("%w: injected fsync failure", database.ErrBookFileDurabilityUnknown)
@@ -920,8 +920,7 @@ func TestUnknownRows_DurabilityUnknownWriteIsAppliedAndItsBookRecomputed(t *test
 
 	require.Equal(t, 2, res.WriteErrors, "both writes are in doubt")
 	require.Zero(t, res.Borrowed+res.ProbedKnown, "an in-doubt write is not counted as a clean one")
-	require.Equal(t, 1, res.BooksRecomputedInWrite, "an applied closing write recomputes the book even when its fsync is in doubt")
-	require.Zero(t, res.BooksRecomputed)
+	require.Equal(t, 1, res.BooksRecomputed, "an applied closing write recomputes the book even when its fsync is in doubt")
 	requireAccounted(t, res)
 	require.Equal(t, 30, durtest.Sec(urRow(t, s, book.ID, borrowed.ID).Duration), "the row was written")
 	require.Equal(t, 30, durtest.Sec(urRow(t, s, book.ID, probed.ID).Duration), "the row was written")
@@ -930,6 +929,83 @@ func TestUnknownRows_DurabilityUnknownWriteIsAppliedAndItsBookRecomputed(t *test
 	require.NoError(t, err)
 	require.NotNil(t, got.Duration)
 	require.Equal(t, 60, *got.Duration)
+}
+
+// urRecomputeFailsStore applies the closing row's write and then reports what
+// ModifyBookFileReportingRecompute reports when the row was written but the
+// recompute that follows it failed: the written row with ErrBookAggregatesStale.
+// A skipped write has no recompute to fail, so it reports nothing.
+type urRecomputeFailsStore struct{ *database.PebbleStore }
+
+func (d urRecomputeFailsStore) ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	applied := false
+	row, err := d.PebbleStore.ModifyBookFileDeferAggregates(bookID, fileID, func(cur *database.BookFile) error {
+		applied = false
+		if err := fn(cur); err != nil {
+			return err
+		}
+		applied = true
+		return nil
+	})
+	if err != nil || !applied {
+		return row, err
+	}
+	return row, fmt.Errorf("%w: book %s: injected recompute failure", database.ErrBookAggregatesStale, bookID)
+}
+
+// m-r4-1: the closing row's recompute is verified. A book whose last row was
+// written but whose recompute then failed is a recompute failure, as it was when
+// the recompute was a second, explicit call: the run fails, the book is not
+// counted as recomputed, and the rows themselves are written (they are not
+// write errors, and a rerun does not plan them again).
+func TestUnknownRows_AFailedClosingRecomputeFailsTheRunAndIsNotCounted(t *testing.T) {
+	stubFFprobe(t, "echo 30.0")
+	s := newRepairPebble(t)
+	dir := t.TempDir()
+	book := urBook(t, s, "Batman: Hush", dir)
+	first := urFile(t, s, book.ID, filepath.Join(dir, "h-01.mp3"), nil)
+	second := urFile(t, s, book.ID, filepath.Join(dir, "h-02.mp3"), func(f *database.BookFile) { f.TrackNumber = 2 })
+
+	rep := &urReporter{}
+	err := runUnknownRowsBackfillHEAD(New(fakeDeps{store: s}), context.Background(), urRecomputeFailsStore{s},
+		durationReextractParams{Mode: durationModeUnknownRows}, false, rep)
+	require.ErrorIs(t, err, database.ErrBookAggregatesStale, "a failed closing recompute fails the run")
+	require.ErrorContains(t, err, "failed their aggregate recompute")
+	res := rep.got(t)
+
+	require.Equal(t, 2, res.ProbedKnown, "both rows were written cleanly")
+	require.Zero(t, res.WriteErrors, "the rows are not write errors")
+	require.Zero(t, res.BooksRecomputed, "a book whose recompute failed is not counted as recomputed")
+	requireAccounted(t, res)
+	require.Equal(t, 30, durtest.Sec(urRow(t, s, book.ID, first.ID).Duration))
+	require.Equal(t, 30, durtest.Sec(urRow(t, s, book.ID, second.ID).Duration))
+}
+
+// recomputeFailedInWrite is run()'s failure accounting for a recompute that
+// happened inside a row's write: the book is claimed (nothing recomputes it
+// again), counted failed and never done, and a fenced one is owed by name.
+func TestUnknownRowsRecompute_FailedInWriteIsAFailureAndClaimsTheBook(t *testing.T) {
+	var calls atomic.Int64
+	rc := &unknownRowsRecompute{store: countingRecompute{calls: &calls}}
+
+	rc.recomputeFailedInWrite("b1", fmt.Errorf("%w: book b1: fenced: %w", database.ErrBookAggregatesStale, tasks.ErrFenced))
+	rc.recomputeFailedInWrite("b2", fmt.Errorf("%w: book b2: disk", database.ErrBookAggregatesStale))
+	rc.run("b1") // claimed: no second recompute
+	rc.recomputedByWrite("b2")
+
+	require.Zero(t, calls.Load(), "a claimed book is never recomputed again")
+	require.EqualValues(t, 2, rc.failed.Load())
+	require.Zero(t, rc.done.Load())
+	require.Equal(t, []string{"b1"}, rc.owedBooks(), "only the fenced book is owed")
+	require.ErrorIs(t, rc.err(), database.ErrBookAggregatesStale)
+}
+
+type countingRecompute struct{ calls *atomic.Int64 }
+
+func (countingRecompute) GetAllBookFilesCore() ([]database.BookFileCore, error) { return nil, nil }
+func (c countingRecompute) RecomputeBookAggregates(string) error {
+	c.calls.Add(1)
+	return nil
 }
 
 // heldWriter is an unknownRowsWriter over in-memory rows whose write of one row
@@ -964,7 +1040,7 @@ func (w *heldWriter) ModifyBookFileDeferAggregates(bookID, fileID string, fn fun
 	return w.row(bookID, fileID, fn)
 }
 
-func (w *heldWriter) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+func (w *heldWriter) ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
 	w.closerStarted.Store(true)
 	w.closerSawHeldDone.Store(w.heldDone.Load())
 	w.closerWrites.Add(1)
@@ -1028,14 +1104,14 @@ func TestUnknownRows_TheClosersRecomputeWaitsForASiblingWriteStillInFlight(t *te
 		runtime.Gosched()
 	}
 	require.False(t, w.closerStarted.Load(), "the closer must wait for the in-flight write, not start its own")
-	require.Zero(t, run.books.inWrite.Load())
+	require.Zero(t, run.books.done.Load())
 
 	close(w.release)
 	wg.Wait()
 
 	require.True(t, w.closerSawHeldDone.Load(), "the closing write started before a sibling's write had returned")
 	require.EqualValues(t, 1, w.closerWrites.Load(), "exactly one closing write")
-	require.EqualValues(t, 1, run.books.inWrite.Load())
+	require.EqualValues(t, 1, run.books.done.Load())
 	require.EqualValues(t, 4, counter.Load(), "every row was written")
 }
 
@@ -1078,12 +1154,13 @@ func TestWriteUnknownRowVia_RetriedCallbackStartsFromNotWritten(t *testing.T) {
 	w := &casLosingWriter{stored: database.BookFile{ID: "f1", BookID: "b1", FilePath: "/lib/batman.mp3", FileSize: urSize}}
 
 	var mutateRuns int
-	wrote, err := writeUnknownRowVia(w.ModifyBookFileDeferAggregates, seen, func(cur *database.BookFile) error {
+	wrote, err, rcErr := writeUnknownRowVia(w.ModifyBookFileDeferAggregates, seen, func(cur *database.BookFile) error {
 		mutateRuns++
 		return cur.SetMeasuredDuration(30)
 	})
 
 	require.NoError(t, err)
+	require.NoError(t, rcErr)
 	require.False(t, wrote, "the row that won the compare-and-swap is not the one the walk saw")
 	require.Equal(t, 2, w.runs, "the fake must have retried for this test to prove anything")
 	require.Equal(t, 1, mutateRuns, "mutate runs only against a row that still matches")
@@ -1094,8 +1171,9 @@ func TestWriteUnknownRowVia_RetriedCallbackStartsFromNotWritten(t *testing.T) {
 func TestWriteUnknownRowVia_ErrorMeansNotWritten(t *testing.T) {
 	boom := errors.New("conflict")
 	w := errWriter{err: boom, runFn: true}
-	wrote, err := writeUnknownRowVia(w.ModifyBookFileDeferAggregates, database.BookFileCore{ID: "f1", BookID: "b1"}, func(cur *database.BookFile) error { return nil })
+	wrote, err, rcErr := writeUnknownRowVia(w.ModifyBookFileDeferAggregates, database.BookFileCore{ID: "f1", BookID: "b1"}, func(cur *database.BookFile) error { return nil })
 	require.ErrorIs(t, err, boom)
+	require.NoError(t, rcErr)
 	require.False(t, wrote)
 }
 
@@ -1297,8 +1375,7 @@ func TestUnknownRows_RecomputeIsPromptAndOncePerBook(t *testing.T) {
 
 	require.True(t, borrowOnlyDoneBeforeAnyProbe.Load(), "a borrow-only book is recomputed when pass 1 ends, before pass 2 starts")
 	require.True(t, fastDoneBeforeSlowEnds.Load(), "a book is recomputed as soon as its last row settles, not at the end of the run")
-	require.Equal(t, 4, res.BooksRecomputedInWrite, "each book's last row recomputes it inside its own write")
-	require.Zero(t, res.BooksRecomputed, "no explicit recompute ran, so none was verified")
+	require.Equal(t, 4, res.BooksRecomputed, "each book's last row recomputes it inside its own write")
 	requireAccounted(t, res)
 	for name, id := range map[string]string{"borrow-only": borrowOnly.ID, "mixed": mixed.ID, "slow": slow.ID, "fast": fast.ID} {
 		require.Equal(t, 1, aggtest.CountInvocations(logs(), id), "%s book must be recomputed exactly once in total", name)
@@ -1372,7 +1449,7 @@ func (w *cancellingWriter) ModifyBookFileDeferAggregates(bookID, fileID string, 
 	return &row, nil
 }
 
-func (w *cancellingWriter) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+func (w *cancellingWriter) ModifyBookFileReportingRecompute(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
 	return w.ModifyBookFileDeferAggregates(bookID, fileID, fn)
 }
 
