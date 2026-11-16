@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.12
+// version: 1.2.13
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-15
 
@@ -496,6 +496,22 @@ type t6g4Host struct {
 	mu       sync.Mutex
 	progress [][2]int64
 	logs     []string
+	notes    []string // Progress.Note: the run's status line, in order
+	touches  int      // Progress.Tick: liveness stamps
+}
+
+// Note records the run's status line (FakeRun's is a no-op).
+func (h *t6g4Host) Note(msg string) {
+	h.mu.Lock()
+	h.notes = append(h.notes, msg)
+	h.mu.Unlock()
+}
+
+// Touch counts a liveness stamp (FakeRun's is a no-op).
+func (h *t6g4Host) Touch() {
+	h.mu.Lock()
+	h.touches++
+	h.mu.Unlock()
 }
 
 func (h *t6g4Host) Mode() tasks.Mode     { return h.mode }
@@ -526,6 +542,60 @@ func (r *t6g4Handler) Handle(_ context.Context, rec slog.Record) error {
 }
 func (r *t6g4Handler) WithAttrs([]slog.Attr) slog.Handler { return r }
 func (r *t6g4Handler) WithGroup(string) slog.Handler      { return r }
+
+// The native base is the one place the engine's seams (status line, liveness,
+// cancel) are wired to the env functions every core calls, and the reporter the
+// helpers beneath a core take is built from those functions. A native base that
+// dropped the status line, never stamped liveness, or answered "not canceled"
+// whatever the host said would pass every other test here: the cores read these
+// through the env and the fakes never look. The run's context is the HOST's, so
+// the reporter's own context (a separate, live one) cannot be what answers
+// IsCanceled.
+func TestT6G4Base_ReporterBridgesTheHostSeams(t *testing.T) {
+	hostCtx, cancelHost := context.WithCancel(context.Background())
+	defer cancelHost()
+	h := &t6g4Host{FakeRun: taskstest.NewFakeRun(hostCtx, durationBackfillKind), mode: tasks.ModeLive, w: &t6g4RunWriter{}}
+	base, err := t6g4NativeBase(tasks.NewRC(h), t6g4Deps{Store: zeroT6G4Store{}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := base.reporter(context.Background()) // live: never the source of IsCanceled here
+
+	rep.SetCurrentItem("Batman: Hush")
+	h.mu.Lock()
+	notes := slices.Clone(h.notes)
+	h.mu.Unlock()
+	if !slices.Equal(notes, []string{"Batman: Hush"}) {
+		t.Fatalf("SetCurrentItem reached the host's status line as %q, want exactly [Batman: Hush]", notes)
+	}
+
+	toucher, ok := rep.(interface{ TouchLiveness() })
+	if !ok {
+		t.Fatalf("%T has no TouchLiveness: registry.TouchLiveness would find nothing to call", rep)
+	}
+	h.mu.Lock()
+	before := h.touches
+	h.mu.Unlock()
+	toucher.TouchLiveness()
+	base.Touch()
+	h.mu.Lock()
+	after := h.touches
+	h.mu.Unlock()
+	if after-before != 2 {
+		t.Fatalf("the reporter's TouchLiveness and the base's Touch stamped the host %d times, want 2", after-before)
+	}
+
+	if rep.IsCanceled() {
+		t.Fatal("IsCanceled is true before anything was canceled")
+	}
+	cancelHost()
+	if !rep.IsCanceled() {
+		t.Fatal("IsCanceled is false after the host's run was canceled")
+	}
+	if !base.Canceled() {
+		t.Fatal("the base's Canceled is false after the host's run was canceled")
+	}
+}
 
 func newT6G4RC(kind tasks.Kind, mode tasks.Mode, w tasks.Writer) (*t6g4Host, *tasks.RC) {
 	h := &t6g4Host{FakeRun: taskstest.NewFakeRun(context.Background(), kind), mode: mode, w: w}
