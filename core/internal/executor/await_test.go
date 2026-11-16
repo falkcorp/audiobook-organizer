@@ -1,5 +1,5 @@
 // file: core/internal/executor/await_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 5e0b3f52-8a1d-4c6e-9b47-2d6a1f0c8e93
 // last-edited: 2026-11-15
 
@@ -8,7 +8,10 @@ package executor
 import (
 	"context"
 	"errors"
+	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -131,14 +134,125 @@ func silentChild(progTO time.Duration) tasks.Definition {
 	})
 }
 
-// settleGoroutines fails the test when goroutines outlive base once the
-// bubble is quiet.
-func settleGoroutines(t *testing.T, base int) {
+// goroutineHeader matches the first line of a goroutine in a runtime.Stack
+// dump: "goroutine 54 [running, synctest bubble 2]:". A goroutine outside
+// every bubble has no bubble in its header, and neither does one in a bubble
+// that has been created but has not run yet: its header reads "[runnable]".
+var goroutineHeader = regexp.MustCompile(`(?m)^goroutine (\d+) \[[^\]\n]*?(?:\bsynctest bubble (\d+))?\]`)
+
+// goroutineSet is a stack dump of the process, cut into goroutines.
+type goroutineSet struct {
+	seen map[int]bool   // every goroutine, in any bubble or none, by ID
+	mine map[int]string // the calling goroutine's bubble's, with their stacks
+}
+
+// goroutinesNow dumps the stacks of the live goroutines. The leak checks read
+// a dump rather than runtime.NumGoroutine because the count is the wrong tool
+// in a bubble. It is process-wide, so it includes the test runner's own
+// goroutines and every other bubble's. It also still counts a goroutine for
+// a few instructions after that goroutine has exited: the runtime tells the
+// bubble a goroutine is gone (which is what lets synctest.Wait return) before
+// it frees the goroutine, and a goroutine descheduled in that window is
+// counted by the call that follows Wait. A dump omits dead goroutines.
+func goroutinesNow(t testing.TB) goroutineSet {
+	t.Helper()
+	dump := func(all bool) string {
+		for size := 1 << 16; ; size *= 2 {
+			buf := make([]byte, size)
+			if n := runtime.Stack(buf, all); n < size {
+				return string(buf[:n])
+			}
+		}
+	}
+	// Blocks are cut at the header lines: a goroutine that has not run yet,
+	// or one running on another thread, has no frames to separate it from
+	// the next block with a blank line.
+	blocks := func(dump string, each func(id int, bubble, block string)) {
+		at := goroutineHeader.FindAllStringSubmatchIndex(dump, -1)
+		for i, m := range at {
+			end := len(dump)
+			if i+1 < len(at) {
+				end = at[i+1][0]
+			}
+			id, err := strconv.Atoi(dump[m[2]:m[3]])
+			if err != nil {
+				t.Fatalf("goroutine header %q: %v", dump[m[0]:m[1]], err)
+			}
+			bubble := ""
+			if m[4] >= 0 {
+				bubble = dump[m[4]:m[5]]
+			}
+			each(id, bubble, strings.TrimSpace(dump[m[0]:end]))
+		}
+	}
+	var own string
+	blocks(dump(false), func(_ int, bubble, _ string) {
+		if own == "" {
+			own = bubble
+		}
+	})
+	if own == "" {
+		t.Fatal("not running in a synctest bubble")
+	}
+	set := goroutineSet{seen: map[int]bool{}, mine: map[int]string{}}
+	blocks(dump(true), func(id int, bubble, block string) {
+		set.seen[id] = true
+		if bubble == own {
+			set.mine[id] = block
+		}
+	})
+	return set
+}
+
+// strayGoroutines returns the stacks of the bubble's goroutines that were not
+// alive in base at all, bubble or not: a goroutine just created before base
+// has no bubble in its header yet, so only its ID tells it from a new one.
+func (s goroutineSet) strayGoroutines(base goroutineSet) []string {
+	var stray []string
+	for id, block := range s.mine {
+		if !base.seen[id] {
+			stray = append(stray, block)
+		}
+	}
+	slices.Sort(stray)
+	return stray
+}
+
+// settleGoroutines fails the test when a goroutine of the bubble that was
+// not live in base (from goroutinesNow) is still live once the bubble is
+// quiet. It names the stray goroutines' stacks.
+func settleGoroutines(t *testing.T, base goroutineSet) {
 	t.Helper()
 	synctest.Wait()
-	if n := runtime.NumGoroutine(); n > base {
-		t.Errorf("%d goroutines after the runs ended, want at most the %d from before", n, base)
+	if stray := goroutinesNow(t).strayGoroutines(base); len(stray) > 0 {
+		t.Errorf("%d goroutines outlived the runs, none was live before:\n\n%s", len(stray), strings.Join(stray, "\n\n"))
 	}
+}
+
+// TestGoroutinesNow pins the helper the leak checks stand on: it reports a
+// goroutine that is still blocked, not one that has exited, and not one
+// outside the bubble (the test's own runner is not in it).
+func TestGoroutinesNow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := goroutinesNow(t)
+		stop := make(chan struct{})
+		go func() { <-stop }()
+		go func() {}()
+		synctest.Wait()
+		if got := goroutinesNow(t).strayGoroutines(base); len(got) != 1 || !strings.Contains(got[0], "TestGoroutinesNow") {
+			t.Fatalf("goroutines added while one blocks and one has exited: %q, want just the blocked one", got)
+		}
+		close(stop)
+		synctest.Wait()
+		if got := goroutinesNow(t).strayGoroutines(base); len(got) != 0 {
+			t.Errorf("goroutines still live after both exited: %q", got)
+		}
+		for id, block := range base.mine {
+			if strings.Contains(block, "testing.runTests") {
+				t.Errorf("goroutine %d is the test runner's, outside the bubble:\n%s", id, block)
+			}
+		}
+	})
 }
 
 // TestAwait_ParentSurvivesChildLongerThanItsWatchdogLimit: a parent whose
@@ -148,7 +262,7 @@ func settleGoroutines(t *testing.T, base int) {
 func TestAwait_ParentSurvivesChildLongerThanItsWatchdogLimit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h, got := awaitRig(t, awaitLimit, lanternChild(5*time.Minute), nil)
-		base := runtime.NumGoroutine()
+		base := goroutinesNow(t)
 		began := time.Now()
 		parent := h.start(awaitParent, tasks.StartRequest{})
 		// Sample the parent's stamp age while it waits. A store read takes no
@@ -201,7 +315,7 @@ func TestAwait_TicksStopWhenAwaitReturns(t *testing.T) {
 		// 5m07s is no multiple of the 20s tick, so the last tick falls
 		// strictly before the child's end.
 		h, got := awaitRig(t, time.Minute, lanternChild(5*time.Minute+7*time.Second), quiet)
-		base := runtime.NumGoroutine()
+		base := goroutinesNow(t)
 		parent := h.start(awaitParent, tasks.StartRequest{})
 		saw := func() awaitSaw {
 			time.Sleep(5*time.Minute + 8*time.Second)
@@ -235,7 +349,7 @@ func TestAwait_TicksStopWhenAwaitReturns(t *testing.T) {
 func TestAwait_CanceledParentReturnsTheCancelAndStopsWaiting(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h, got := awaitRig(t, time.Minute, silentChild(time.Hour), nil)
-		base := runtime.NumGoroutine()
+		base := goroutinesNow(t)
 		parent := h.start(awaitParent, tasks.StartRequest{})
 		// Past the 1m limit, so only the relayed ticks keep the parent alive,
 		// and 10s after a 20s relay tick: the cancel must end the wait itself,
@@ -279,7 +393,7 @@ func TestAwait_CanceledParentReturnsTheCancelAndStopsWaiting(t *testing.T) {
 func TestAwait_StalledChildDoesNotKeepParentAlivePastItsOwnStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h, got := awaitRig(t, time.Minute, silentChild(2*time.Minute), nil)
-		base := runtime.NumGoroutine()
+		base := goroutinesNow(t)
 		parent := h.start(awaitParent, tasks.StartRequest{})
 		time.Sleep(5 * time.Minute)
 		synctest.Wait()
@@ -329,7 +443,7 @@ func TestAwait_ParentIsBoundedByItsOwnDeadline(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h, got := awaitRig(t, time.Minute, silentChild(10*time.Hour), nil, withTimeout(c.timeout))
-				base := runtime.NumGoroutine()
+				base := goroutinesNow(t)
 				began := time.Now()
 				parent := h.start(awaitParent, tasks.StartRequest{})
 				time.Sleep(11 * time.Minute)
@@ -394,7 +508,7 @@ func TestAwait_ContinueInPlaceAfterAwaitStillNeedsRealProgress(t *testing.T) {
 					o.Config = Config{DispatchTick: time.Second, WatchdogInterval: 30 * time.Second, MinCheckpointInterval: time.Nanosecond}
 					o.Catalog = catalogWith(t, "gotham:run")
 				})
-				base := runtime.NumGoroutine()
+				base := goroutinesNow(t)
 				id := h.start(awaitParent, tasks.StartRequest{})
 				time.Sleep(4 * time.Minute)
 				synctest.Wait()
@@ -432,7 +546,7 @@ func TestAwait_ChildThatIgnoresItsStopEndsTheWaitAtAbandon(t *testing.T) {
 			c.Resume = tasks.ResumeDrop
 		})
 		h, got := awaitRig(t, time.Minute, stubborn, nil)
-		base := runtime.NumGoroutine()
+		base := goroutinesNow(t)
 		parent := h.start(awaitParent, tasks.StartRequest{})
 		time.Sleep(5 * time.Minute)
 		synctest.Wait()
