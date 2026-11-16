@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_effects_pinned_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bbc0869b-3caf-4c34-96f7-b5383fa30423
 // last-edited: 2026-11-15
 
@@ -32,7 +32,9 @@ import (
 // row errs wide). Widening is the same edit the other way.
 
 // t6EffectsPin is one kind's declared write, read and delete sets: space
-// separated pkg/ops resource names, sorted, in module "books".
+// separated pkg/ops resource names in module "books", in any order (the tests
+// sort both sides before comparing, so a pinned entry never has to mirror the
+// order the code happens to build a set in).
 type t6EffectsPin struct{ writes, reads, deletes string }
 
 // t6KindEffectsPinned is every native kind of the six converted groups
@@ -124,7 +126,7 @@ var t6KindEffectsPinned = map[tasks.Kind]t6EffectsPin{
 }
 
 // t6WriterResourcesPinned is every row of t6WriterResources: the resources a
-// store or writer method can write, space separated and sorted.
+// store or writer method can write, space separated, in any order.
 var t6WriterResourcesPinned = map[string]string{
 	"AIJournalPruner":                     "ai_journal",
 	"ActivityFlushOp":                     "activity",
@@ -245,7 +247,17 @@ func t6PinnedNames(t *testing.T, kind tasks.Kind, refs []entity.Ref) string {
 	return strings.Join(names, " ")
 }
 
-// t6PinDiff names what got lacks of want and what it has beyond it.
+// t6PinSorted is the resource names of s in sorted order, duplicates kept: two
+// sides are the same list only if they hold the same names the same number of
+// times, so a resource listed twice on either side fails the comparison.
+func t6PinSorted(s string) string {
+	names := strings.Fields(s)
+	slices.Sort(names)
+	return strings.Join(names, " ")
+}
+
+// t6PinDiff names what got lacks of want and what it has beyond it. When both are
+// empty the two hold the same names with different counts (a duplicate).
 func t6PinDiff(want, got string) string {
 	w, g := strings.Fields(want), strings.Fields(got)
 	var missing, extra []string
@@ -258,6 +270,9 @@ func t6PinDiff(want, got string) string {
 		if !slices.Contains(w, x) {
 			extra = append(extra, x)
 		}
+	}
+	if len(missing) == 0 && len(extra) == 0 {
+		return "the same names, listed a different number of times"
 	}
 	return fmt.Sprintf("lost %v, gained %v", missing, extra)
 }
@@ -275,6 +290,7 @@ func TestT6Kinds_EffectsEqualThePinnedSets(t *testing.T) {
 			continue
 		}
 		e := tasks.CommonOf(d).Effects
+		want = t6EffectsPin{writes: t6PinSorted(want.writes), reads: t6PinSorted(want.reads), deletes: t6PinSorted(want.deletes)}
 		got := t6EffectsPin{
 			writes:  t6PinnedNames(t, kind, e.WriteSet()),
 			reads:   t6PinnedNames(t, kind, e.ReadSet()),
@@ -307,13 +323,13 @@ func TestT6WriterResources_EqualThePinnedRows(t *testing.T) {
 		for _, r := range row {
 			names = append(names, string(r))
 		}
-		slices.Sort(names)
-		got := strings.Join(names, " ")
+		got := t6PinSorted(strings.Join(names, " "))
 		want, ok := t6WriterResourcesPinned[method]
 		if !ok {
 			t.Errorf("t6WriterResources has a row for %s with no entry in t6WriterResourcesPinned: add one (typed by hand)", method)
 			continue
 		}
+		want = t6PinSorted(want)
 		if got != want {
 			t.Errorf("t6WriterResources[%s] is %q, pinned %q (%s)", method, got, want, t6PinDiff(want, got))
 		}
