@@ -1,7 +1,7 @@
 // file: core/internal/healthhttp/routes.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6c5017dc-52e8-43c1-b15d-bf6ff14ef910
-// last-edited: 2026-11-13
+// last-edited: 2026-11-16
 
 // Package healthhttp is the HTTP surface of core's health (05-health §5H.3.3):
 // the authenticated health snapshot, system info and system status, the
@@ -97,6 +97,12 @@ type Deps struct {
 	Audit Recorder
 	// Redactor redacts component Detail text; nil means log.NewRedactor(nil).
 	Redactor *log.Redactor
+	// Sanitize wipes locations from component Detail text after the Redactor
+	// (the same rule as the bundle's: diagnostics.Sanitizer.Text over the
+	// library roots). nil means diagnostics.NewSanitizer(nil).Text, which writes
+	// every location "<path>": a route given no sanitizer is share-safe, not
+	// open.
+	Sanitize func(string) string
 	// App and Version identify the build in the health body.
 	App, Version string
 	// Log receives the cause of an internal failure, which is withheld from
@@ -132,6 +138,7 @@ type api struct {
 	now     func() time.Time
 	audit   Recorder
 	red     *log.Redactor
+	san     func(string) string
 	app     string
 	version string
 	log     *slog.Logger
@@ -139,12 +146,15 @@ type api struct {
 
 func newAPI(d Deps) *api {
 	a := &api{reg: d.Health, info: d.Info, runs: d.Runs, enq: d.Enqueuer, root: d.Bundles, audit: d.Audit,
-		keep: d.Retention, now: d.Now, red: d.Redactor, app: d.App, version: d.Version, log: d.Log}
+		keep: d.Retention, now: d.Now, red: d.Redactor, san: d.Sanitize, app: d.App, version: d.Version, log: d.Log}
 	if a.now == nil {
 		a.now = time.Now
 	}
 	if a.red == nil {
 		a.red = log.NewRedactor(nil)
+	}
+	if a.san == nil {
+		a.san = diagnostics.NewSanitizer(nil).Text
 	}
 	return a
 }
@@ -343,8 +353,9 @@ func (a *api) health(w http.ResponseWriter, r *http.Request, _ caller) {
 	a.json(r.Context(), w, http.StatusOK, out)
 }
 
-// redact is the pattern layer for detail text. A redactor that panics gives the
-// fixed "<redacted:error>" and never the text.
+// redact is the pattern layer for detail text: the log redactor (secrets), then
+// the sanitizer (locations). Either one panicking gives the fixed
+// "<redacted:error>" and never the text.
 func (a *api) redact(s string) (out string) {
 	if s == "" {
 		return ""
@@ -355,7 +366,7 @@ func (a *api) redact(s string) (out string) {
 		}
 	}()
 	out, _ = a.red.StringKinds("detail", s)
-	return out
+	return a.san(out)
 }
 
 func (a *api) systemInfo(w http.ResponseWriter, r *http.Request, _ caller) {
