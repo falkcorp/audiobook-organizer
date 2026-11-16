@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_spy_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 0976ab2f-77df-47d7-b719-f47dbda178bb
 // last-edited: 2026-11-15
 
@@ -73,6 +73,11 @@ func (w spyT6G4Writer) MarkOperationChangesReverted(a0 string, a1 []string) erro
 func (w spyT6G4Writer) ModifyBook(a0 string, a1 func(*database.Book) error) (*database.Book, error) {
 	w.rec.add("ModifyBook")
 	return w.inner.ModifyBook(a0, a1)
+}
+
+func (w spyT6G4Writer) ModifyBookFile(a0 string, a1 string, a2 func(*database.BookFile) error) (*database.BookFile, error) {
+	w.rec.add("ModifyBookFile")
+	return w.inner.ModifyBookFile(a0, a1, a2)
 }
 
 func (w spyT6G4Writer) ModifyBookFileDeferAggregates(a0 string, a1 string, a2 func(*database.BookFile) error) (*database.BookFile, error) {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duration_backfill_unknown_rows_test.go
-// version: 1.3.5
+// version: 1.3.6
 // guid: 7e1c4b9a-52d8-4f36-a0b7-c9d13e6f2a84
 // last-edited: 2026-11-15
 
@@ -1231,7 +1231,7 @@ func TestUnknownRows_CancelStopsAGroupBetweenRows(t *testing.T) {
 			ID: fmt.Sprintf("f%d", i), BookID: "b1", FilePath: path, FileSize: urSize}, src: srcProbe})
 	}
 	w := &cancellingWriter{cancel: cancel}
-	run := newUnknownRowsRun(w, nopRecompute{}, nil, group)
+	run := newUnknownRowsRun(w, nopRecompute{}, nil, group, nil)
 
 	err := run.probeGroup(ctx, group)
 
@@ -1250,6 +1250,10 @@ func (w *cancellingWriter) ModifyBookFileDeferAggregates(bookID, fileID string, 
 	_ = fn // never run: the row identity is not what this test is about
 	w.cancel()
 	return &row, nil
+}
+
+func (w *cancellingWriter) ModifyBookFile(bookID, fileID string, fn func(*database.BookFile) error) (*database.BookFile, error) {
+	return w.ModifyBookFileDeferAggregates(bookID, fileID, fn)
 }
 
 type nopRecompute struct{}
@@ -1341,8 +1345,8 @@ func TestUnknownRows_FalseBookGrainFlagsAreHarmless(t *testing.T) {
 // capability, HEAD's loop runner, and the result persisted on the reporter.
 func runUnknownRowsBackfillHEAD(p *Plugin, ctx context.Context, store unknownRowsStore, params durationReextractParams,
 	dryRun bool, reporter sdk.Reporter) error {
-	var writer segmentFailureWriter
-	if w, ok := t6g4DeferAggregatesWriter(store); ok {
+	var writer unknownRowsWriter
+	if w, ok := database.AsCapability[unknownRowsWriter](store); ok {
 		writer = w
 	}
 	return p.t6g4RunUnknownRowsBackfill(ctx, store, writer, t6g4RunEachHEAD(reporter),
