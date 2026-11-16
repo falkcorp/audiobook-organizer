@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_test.go
-// version: 1.2.13
+// version: 1.2.14
 // guid: 952f6abf-08d2-41bd-aec8-95b8a3f39bd9
 // last-edited: 2026-11-15
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -594,6 +595,62 @@ func TestT6G4Base_ReporterBridgesTheHostSeams(t *testing.T) {
 	}
 	if !base.Canceled() {
 		t.Fatal("the base's Canceled is false after the host's run was canceled")
+	}
+}
+
+// t6g4RunEach is the native loop every group 4 core runs its items on. With
+// Collect an item's error does not stop the loop: every item runs and the errors
+// come back joined (HEAD's ErrModeCollect); without it the first error stops the
+// dispatch (sequentially, the items after it never start).
+func TestT6G4RunEach_CollectKeepsGoingAndReturnsTheError(t *testing.T) {
+	boom := errors.New("the Riddler struck on item 1")
+	run := func(collect bool) ([]int, error) {
+		_, rc := newT6G4RC(durationBackfillKind, tasks.ModeLive, &t6g4RunWriter{})
+		var ran []int // sequential: one item at a time, in order
+		err := t6g4RunEach(rc, 3, t6g4EachOpts{Collect: collect}, func(_ context.Context, i int) error {
+			ran = append(ran, i)
+			if i == 1 {
+				return boom
+			}
+			return nil
+		})
+		return ran, err
+	}
+
+	ran, err := run(true)
+	if !slices.Equal(ran, []int{0, 1, 2}) {
+		t.Fatalf("Collect ran items %v, want every item [0 1 2]", ran)
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("Collect returned %v, want it to carry item 1's error", err)
+	}
+
+	ran, err = run(false)
+	if !slices.Equal(ran, []int{0, 1}) {
+		t.Fatalf("without Collect ran items %v, want the loop stopped after item 1 [0 1]", ran)
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("without Collect returned %v, want item 1's error", err)
+	}
+}
+
+// ProgressTotal is the absolute denominator and ProgressBase the offset of item 0
+// when the n items are the tail of a larger set: 3 items from base 4 of 10 report
+// 5/10, 6/10, 7/10, not 1/3 or 5/7.
+func TestT6G4RunEach_ProgressTotalAndBaseReachTheProgress(t *testing.T) {
+	h, rc := newT6G4RC(durationBackfillKind, tasks.ModeLive, &t6g4RunWriter{})
+	err := t6g4RunEach(rc, 3, t6g4EachOpts{ProgressTotal: 10, ProgressBase: 4},
+		func(context.Context, int) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []taskstest.ProgressEvent{{Done: 5, Total: 10}, {Done: 6, Total: 10}, {Done: 7, Total: 10}}
+	got := h.FakeRun.Progress()
+	for i := range got {
+		got[i].Current = "" // the label is not under test
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("progress %+v, want %+v", got, want)
 	}
 }
 

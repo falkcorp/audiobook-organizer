@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_yield_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 79b2a942-e84c-447f-a8c4-433000d6fd16
 // last-edited: 2026-11-15
 
@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -205,6 +207,84 @@ func TestFileIntroYield_CheckpointsACursorAndTheNextAttemptContinuesTheRun(t *te
 				}
 			}
 		})
+	}
+}
+
+// introLogLines records every record a logger it backs receives, one line each:
+// the level, the message, then the attributes as key=value.
+type introLogLines struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *introLogLines) Enabled(context.Context, slog.Level) bool { return true }
+func (l *introLogLines) Handle(_ context.Context, rec slog.Record) error {
+	line := rec.Level.String() + " " + rec.Message
+	rec.Attrs(func(a slog.Attr) bool { line += " " + a.Key + "=" + a.Value.String(); return true })
+	l.mu.Lock()
+	l.lines = append(l.lines, line)
+	l.mu.Unlock()
+	return nil
+}
+func (l *introLogLines) WithAttrs([]slog.Attr) slog.Handler { return l }
+func (l *introLogLines) WithGroup(string) slog.Handler      { return l }
+
+// startLine is the run's one "starting" line, failing the test unless there is
+// exactly one.
+func (l *introLogLines) startLine(t *testing.T) string {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var found []string
+	for _, line := range l.lines {
+		if strings.Contains(line, "transcribe-file-intros: starting") {
+			found = append(found, line)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one starting line, got %d in %q", len(found), l.lines)
+	}
+	return found[0]
+}
+
+// The "starting" line of a CONTINUED attempt says so, and how many batches the
+// earlier attempts completed, so an operator reading the log can tell a resume
+// from a fresh start; HEAD's fresh line keeps HEAD's attributes and carries
+// neither. The attributes are only added on the resumed branch, so a test that
+// reads the cursor and the counters never sees them go missing.
+func TestFileIntroYield_ResumedStartLineCarriesItsAttributes(t *testing.T) {
+	fx := newIntroFx(t)
+	fileIntroSlots = func() int { return 1 } // sequential: the prefix is exactly the first batch
+	fx.yieldFiles(2*fileIntroBatchGroups + 1)
+	ck := &memCheckpoint{}
+
+	fresh := &introLogLines{}
+	env1 := fx.yieldEnv(&fileIntroRep{id: "run-start-1"}, ck, &yieldProgress{}, fileIntroYieldMargin)
+	env1.Logger = func() *slog.Logger { return slog.New(fresh) }
+	if _, err := fx.yieldRun(shortDeadline(t), env1, true); !errors.Is(err, tasks.ErrContinueInPlace) {
+		t.Fatalf("attempt 1 should yield, got %v", err)
+	}
+	cur := ck.cursor(t)
+	if cur.DoneBatches < 1 {
+		t.Fatalf("attempt 1 left no completed batch to resume from: %+v", cur)
+	}
+	line := fresh.startLine(t)
+	if strings.Contains(line, "resumed=") || strings.Contains(line, "batches_done_earlier=") {
+		t.Fatalf("a fresh run's starting line must carry neither resumed attribute: %s", line)
+	}
+
+	resumed := &introLogLines{}
+	env2 := fx.yieldEnv(&fileIntroRep{id: "run-start-1"}, ck, &yieldProgress{}, fileIntroYieldMargin)
+	env2.Logger = func() *slog.Logger { return slog.New(resumed) }
+	if _, err := fx.yieldRun(context.Background(), env2, true); err != nil {
+		t.Fatalf("attempt 2: %v", err)
+	}
+	line = resumed.startLine(t)
+	if !strings.Contains(line, " resumed=true") {
+		t.Fatalf("the continued attempt's starting line does not say it resumed: %s", line)
+	}
+	if want := fmt.Sprintf(" batches_done_earlier=%d", cur.DoneBatches); !strings.Contains(line, want) {
+		t.Fatalf("the continued attempt's starting line does not carry the batches the earlier attempt completed (%s): %s", want, line)
 	}
 }
 
