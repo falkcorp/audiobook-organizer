@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/kinds_t6_g4_unknown_rows_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d68c7f52-8a70-470d-a54a-4d79de21d579
 // last-edited: 2026-11-15
 
@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
 )
 
 // t6g4FencingWriter is a t6g4Writer that behaves as the run's gated writer does
@@ -218,8 +219,12 @@ func TestDurationBackfillNative_UnknownRowsAPassOneBookIsRecomputedInItsOwnItem(
 // of "recompute the books this run wrote" never reaches it, and nothing else
 // does, so the total stays short for good. HEAD's ungated sweep recomputes it.
 //
-// On dd5df5afa the final assertion fails: Book.Duration is nil after the rerun
-// (require.NotNil in requireNoBookIsLeftStale), because the rerun touched no book.
+// On dd5df5afa the final assertions fail: the total still reads 0 after the rerun
+// (requireNoBookIsLeftStale wants 60), because the rerun touched no book.
+//
+// A book's total reads 0, not nil, before anything is measured: creating a row
+// recomputes the book, and the recompute stores the sum it found, zero. So the
+// precondition compares the VALUE, which is what a stale total is.
 func TestDurationBackfillNative_UnknownRowsAMixedBookCutInPassTwoIsRecomputedByARerunThatWritesNothingForIt(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -253,7 +258,7 @@ func TestDurationBackfillNative_UnknownRowsAMixedBookCutInPassTwoIsRecomputedByA
 			require.Equal(t, 2, requireNoBookIsLeftStale(t, s, rows, 30, false), "the borrowed row and the first probed row are written")
 			stale, err := s.GetBookByID(book.ID)
 			require.NoError(t, err)
-			require.Nil(t, stale.Duration, "the cut run owes the book a recompute: it has two measured rows and a total that reads none")
+			require.Zero(t, durtest.Sec(stale.Duration), "the cut run owes the book a recompute: it has two measured rows and a total that reads none")
 
 			// The rerun's only candidate is the cut row, and it ends without a measurement.
 			tc.leftover(t, cut)
