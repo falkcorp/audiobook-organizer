@@ -1,7 +1,7 @@
 // file: internal/server/metadata_integration_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345ef0
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -72,7 +72,7 @@ func TestMetadataFetch_OpenLibraryMatchIsNotApplied(t *testing.T) {
 	created, err := env.Store.CreateBook(&database.Book{Title: "The Hobbit", FilePath: "/fake/hobbit.m4b", Format: "m4b"})
 	require.NoError(t, err)
 
-	_, err = metafetch.NewService(env.Store).FetchMetadataForBook(context.Background(), created.ID)
+	_, err = metafetch.NewService(env.Store).FetchMetadataForBook(context.Background(), created.ID, metafetch.Unattended)
 	require.ErrorIs(t, err, metafetch.ErrReviewOnlyCandidatesNotApplied)
 	updated, err := env.Store.GetBookByID(created.ID)
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestMetadataFetch_WithMockAPI(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(context.Background(), created.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), created.ID, metafetch.Unattended)
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 
@@ -134,7 +134,7 @@ func TestMetadataFetch_FallbackToAuthorSearch(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := metafetch.NewService(env.Store)
-	resp, err := svc.FetchMetadataForBook(context.Background(), created.ID)
+	resp, err := svc.FetchMetadataForBook(context.Background(), created.ID, metafetch.Unattended)
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 
@@ -162,7 +162,7 @@ func TestMetadataFetch_NotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	svc := metafetch.NewService(env.Store)
-	_, err = svc.FetchMetadataForBook(context.Background(), created.ID)
+	_, err = svc.FetchMetadataForBook(context.Background(), created.ID, metafetch.Unattended)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no metadata found")
 }

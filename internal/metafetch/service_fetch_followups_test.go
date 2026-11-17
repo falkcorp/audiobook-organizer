@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_fetch_followups_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4d9a2f6b-1c83-4e57-9b0a-7f2e6c1d8a34
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -68,7 +68,7 @@ func TestFetchMetadataForBook_CancelledContextAborts(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := svc.FetchMetadataForBook(ctx, "b1")
+		_, err := svc.FetchMetadataForBook(ctx, "b1", Unattended)
 		errCh <- err
 	}()
 
@@ -140,7 +140,7 @@ func TestFetchMetadataForBook_StaleCacheYearKindSelfCorrected(t *testing.T) {
 		&mockMetadataSource{name: audibleName},
 	})
 
-	resp, err := svc.FetchMetadataForBook(context.Background(), "b1")
+	resp, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 	require.NoError(t, err)
 	assert.Equal(t, audibleName, resp.Source)
 	require.NotNil(t, updatedBook)
