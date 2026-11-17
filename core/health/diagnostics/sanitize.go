@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8d41c7a2-3b60-4e95-a1f8-6c2d9e07b534
 // last-edited: 2026-11-16
 
@@ -37,13 +37,15 @@ import (
 //
 //  3. On a line with a triggered word, everything from the first triggered
 //     word to the end of the line is one run. Where the word is a location head
-//     (runStart: "/", a "\" that is not an escape, "~/" or "~name/", a drive
-//     with a separator ("C:\", "C:x\y"), "scheme://", "%2F", "%5C", "%7E", an
-//     entity or escape that decodes to a separator; after opening punctuation and
-//     an optional "key=") the run starts at that word; for any other triggered
-//     word ("Gordon/The", "-I/x", "text/plain", a lone "I:", "~word", "&amp;",
-//     "\u0026", an escaped quote) the start of the name is not known and the run
-//     starts at the beginning of the line.
+//     (runStart: "/", a "\" that is not an escape, a tilde with a separator later
+//     in its word ("~/x", "~name/x"), a drive with a separator ("C:\", "C:x\y"),
+//     "scheme://", "%2F", "%5C", an entity or escape that decodes to a separator;
+//     a tilde is a head in every spelling ("%7E", "&#126;", "&#x7E;", "\u007E",
+//     "\x7E") under the same rule, and a separator after it may be spelled any way
+//     too; after opening punctuation and an optional "key=") the run starts at that
+//     word; for any other triggered word ("Gordon/The", "-I/x", "text/plain", a
+//     lone "I:", "~word", "%7Eword", "&amp;", "\u0026", an escaped quote) the start
+//     of the name is not known and the run starts at the beginning of the line.
 //
 //  4. The one exception is an error that ends in a text the sanitizer knows
 //     (errnoTexts: the syscall errors, the fs and os sentinels, the Windows API
@@ -438,11 +440,13 @@ func labelBody(body string) string {
 //
 //   - "/" (and "\" not followed by an escape: "\\" "\/" "\u002F" "\x5C" are
 //     separators, "\"" "\n" "\u0026" are not);
-//   - "~" with a "/" or "\" later in the word ("~/x", "~bruce/x"), not a lone "~word";
+//   - "~", in any spelling ("%7E", "&#126;", "&#x7E;", "\u007E", "\x7E"), with a
+//     separator later in the word, in any spelling ("~/x", "~bruce/x",
+//     "%7Ebruce%2Fx"), not a lone "~word";
 //   - a drive, "X:" with a "/" or "\" later in the word ("C:\x", "C:/x", "C:x\y"),
 //     not a lone "I:";
 //   - "scheme://";
-//   - "%2F", "%5C" or "%7E";
+//   - "%2F" or "%5C";
 //   - an entity that decodes to a separator ("&#47;", "&#x2F;", "&#92;", "&sol;",
 //     "&bsol;", "&amp;#47;"), not "&amp;".
 //
@@ -464,17 +468,26 @@ func runStart(w string) bool {
 	case '\\':
 		return backslashStart(w)
 	case '~':
-		return strings.ContainsAny(w[1:], "/\\")
+		return separatorLater(w[1:])
 	case '%':
 		if len(w) >= 3 {
 			switch strings.ToUpper(w[1:3]) {
-			case "2F", "5C", "7E":
+			case "2F", "5C":
 				return true
+			case "7E":
+				return separatorLater(w[3:])
 			}
 		}
 		return false
 	case '&':
-		return entitySeparator(w[1:])
+		code, n := entityCode(w[1:])
+		switch code {
+		case '/', '\\':
+			return true
+		case '~':
+			return separatorLater(w[1+n:])
+		}
+		return false
 	}
 	if isLetter(w[0]) && len(w) >= 2 && w[1] == ':' && strings.ContainsAny(w[2:], "/\\") {
 		return true
@@ -482,31 +495,68 @@ func runStart(w string) bool {
 	return schemeStart(w)
 }
 
+// separatorLater reports that the rest of a word holds a separator, in any
+// spelling: "/" or "\" (which also starts every JSON and Go escape of one), "%2F"
+// or "%5C", or an entity that decodes to one. It is what a tilde, in any spelling,
+// needs after it to be a head: "~bruce/x" is a home directory, "~Robin" is a word.
+func separatorLater(rest string) bool {
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case '/', '\\':
+			return true
+		case '%':
+			if i+3 <= len(rest) {
+				switch strings.ToUpper(rest[i+1 : i+3]) {
+				case "2F", "5C":
+					return true
+				}
+			}
+		case '&':
+			if code, _ := entityCode(rest[i+1:]); code == '/' || code == '\\' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // backslashStart reports a word that begins with "\" and is a rooted path or an
-// escape that decodes to a separator, not an escape of anything else.
+// escape that decodes to a separator (or to a tilde with a separator after it),
+// not an escape of anything else.
 func backslashStart(w string) bool {
 	if len(w) == 1 {
 		return true
 	}
+	n := 0
 	switch c := w[1]; c {
 	case '\\', '/':
 		return true
 	case '"', '\'', 'n', 'r', 't', 'b', 'f', 'v', 'a', '0', '1', '2', '3', '4', '5', '6', '7':
 		return false
 	case 'u':
-		return hexEscapeSeparator(w[2:], 4)
+		n = 4
 	case 'x':
-		return hexEscapeSeparator(w[2:], 2)
+		n = 2
+	default:
+		return true
 	}
-	return true
+	code, ok := hexEscapeCode(w[2:], n)
+	switch {
+	case !ok:
+		return true // "\unix", "\xyz": not an escape, a rooted path
+	case code == '/' || code == '\\':
+		return true
+	case code == '~':
+		return separatorLater(w[2+n:])
+	}
+	return false
 }
 
-// hexEscapeSeparator reports that the n hex digits at the start of rest are the
-// code of "/", "\" or "~". A word where they are not n hex digits is not an
-// escape ("\unix", "\xyz"), so the "\" is a rooted path.
-func hexEscapeSeparator(rest string, n int) bool {
+// hexEscapeCode is the code of the n hex digits at the start of rest, and false
+// when they are not n hex digits.
+func hexEscapeCode(rest string, n int) (int, bool) {
 	if len(rest) < n {
-		return true
+		return 0, false
 	}
 	v := 0
 	for i := 0; i < n; i++ {
@@ -519,33 +569,39 @@ func hexEscapeSeparator(rest string, n int) bool {
 		case c >= 'A' && c <= 'F':
 			v = v<<4 | int(c-'A'+10)
 		default:
-			return true
+			return 0, false
 		}
 	}
-	return v == '/' || v == '\\' || v == '~'
+	return v, true
 }
 
-// entitySeparator reports the text after "&" that is an entity decoding to "/",
-// "\" or "~": numeric ("#47", "#x2F", leading zeros allowed, the ";" optional),
-// "sol;" or "bsol;", possibly behind "amp;" any number of times ("&amp;#47;").
-func entitySeparator(rest string) bool {
-	for strings.HasPrefix(rest, "amp;") { // "&amp;#47;" decodes to "&#47;"
-		rest = rest[len("amp;"):]
+// entityCode is the code of the entity that starts the text after "&", and how
+// many bytes of that text it takes: numeric ("#47", "#x2F", leading zeros allowed,
+// the ";" optional), "sol;" or "bsol;", possibly behind "amp;" any number of
+// times ("&amp;#47;" decodes to "&#47;"). It is -1 for anything else, "&amp;"
+// itself included.
+func entityCode(rest string) (code, n int) {
+	for strings.HasPrefix(rest[n:], "amp;") {
+		n += len("amp;")
 	}
-	if strings.HasPrefix(rest, "sol;") || strings.HasPrefix(rest, "bsol;") {
-		return true
+	switch {
+	case strings.HasPrefix(rest[n:], "sol;"):
+		return '/', n + len("sol;")
+	case strings.HasPrefix(rest[n:], "bsol;"):
+		return '\\', n + len("bsol;")
 	}
-	if rest == "" || rest[0] != '#' {
-		return false
+	if n >= len(rest) || rest[n] != '#' {
+		return -1, 0
 	}
-	rest = rest[1:]
+	n++
 	base := 10
-	if rest != "" && (rest[0] == 'x' || rest[0] == 'X') {
-		base, rest = 16, rest[1:]
+	if n < len(rest) && (rest[n] == 'x' || rest[n] == 'X') {
+		base = 16
+		n++
 	}
 	v, digits := 0, 0
-	for ; digits < len(rest); digits++ {
-		c := rest[digits]
+	for ; n < len(rest); n++ {
+		c := rest[n]
 		d := -1
 		switch {
 		case c >= '0' && c <= '9':
@@ -561,8 +617,15 @@ func entitySeparator(rest string) bool {
 		if v <= 0x10FFFF {
 			v = v*base + d
 		}
+		digits++
 	}
-	return digits > 0 && (v == '/' || v == '\\' || v == '~')
+	if digits == 0 {
+		return -1, 0
+	}
+	if n < len(rest) && rest[n] == ';' {
+		n++
+	}
+	return v, n
 }
 
 // startsAsLocation reports a word that begins a location, after opening
