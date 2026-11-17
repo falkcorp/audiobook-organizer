@@ -1,7 +1,7 @@
 // file: internal/books/store/book_visibility.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 4eee927b-72ce-4b07-aa41-a91afb2368ba
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -46,6 +46,24 @@ func bookIsSoftDeleted(b *Book) bool {
 //	  | grep -v '^internal/books/store/' | grep -v _test | grep -v mocks
 func (b *Book) IsSoftDeleted() bool {
 	return bookIsSoftDeleted(b)
+}
+
+// IsRetired reports whether the library has put this book away: it is in the
+// trash (MarkedForDeletion) or absorbed into another book (MergedIntoBookID
+// set to a non-empty ID). Either way the row is not a book anyone picks
+// metadata for, so no unattended writer may apply a candidate to it and no
+// candidate fetch should spend provider quota on it.
+//
+// This is the ONE definition. Before it, the trash half had a shared predicate
+// (IsSoftDeleted) and the merged half was re-spelled at every site, three ways
+// (`!= nil`, `!= ""`, and trimmed). The choice here is non-empty: a pointer to
+// "" is how an un-merge clears the field and is not a merge. Whitespace-only
+// IDs are not a value the writers produce, so they are not trimmed.
+//
+// A manual, single-book apply by the owner does not consult this: the owner
+// can still put a candidate on a retired book by hand.
+func (b *Book) IsRetired() bool {
+	return b != nil && (bookIsSoftDeleted(b) || (b.MergedIntoBookID != nil && *b.MergedIntoBookID != ""))
 }
 
 // IsSoftDeleted is the BookCore twin of Book.IsSoftDeleted, for the same reason

@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.20.0
+// version: 3.21.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-11-17
 //
@@ -327,7 +327,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 				if cerr != nil {
 					return
 				}
-				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force, googleCapped[bookID], folderMemo)
+				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force, googleCapped[bookID], folderMemo, p.Interactive)
 				release()
 				resultJSON, err := json.Marshal(result)
 				if err != nil {
@@ -438,11 +438,11 @@ func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.
 	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked, %d with a row marked stale (the book's identity changed), "+
 		"%d owed a fallback provider's answer, %d of them holding only unusable candidates (%d Google Books lookups left for a later quota day, %d of those books still asked of Open Library) "+
 		"(%d books the chain has not answered keep their chain and Open Library steps with any Google step put off) "+
-		"(%d live books read, %d left out with no usable search title) "+
+		"(%d books read, %d retired books left out, %d left out with no usable search title) "+
 		"(%d books held candidates and are asked again only for a source that failed earlier; %d more owe such a source but wait on its backoff) "+
 		"(%d books gave up on a source after %d asks and are left alone until an owner retry or the row's TTL refetch)",
 		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.Stale, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, len(sel.GoogleCapped)-sel.ChainCapped,
-		sel.ChainCapped, sel.Scanned, sel.Unsearchable, sel.OwedDue, sel.OwedWaiting, sel.OwedExhausted, database.OwedMaxAsks)
+		sel.ChainCapped, sel.Scanned, sel.Retired, sel.Unsearchable, sel.OwedDue, sel.OwedWaiting, sel.OwedExhausted, database.OwedMaxAsks)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	candidateFetchLog.Info("%s", msg)
 	return sel, nil

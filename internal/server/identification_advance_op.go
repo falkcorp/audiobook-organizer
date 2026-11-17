@@ -1,7 +1,7 @@
 // file: internal/server/identification_advance_op.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 96facb01-98fa-4ebd-b06d-1422569abedd
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 //
 // Registers identification.advance (spec 02 PR 14): the v2 ADAPTER around
 // the v3-shaped driver body in internal/identification.
@@ -199,7 +199,7 @@ func (s *Server) identFetchOne(mfs *metafetch.Service, store candidateFetchStore
 		if err != nil {
 			return identification.FetchResult{Outcome: identification.OutcomeError, Err: err}
 		}
-		res := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, book.ID, false, false, folderMemo)
+		res := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, book.ID, false, false, folderMemo, false)
 		release()
 		return identFetchResultOf(res, func() string {
 			_, status := unsearchableQueryKind(metabatch.ResolveCandidateSearchQueryMemo(store, book, folderMemo), book.Title)
