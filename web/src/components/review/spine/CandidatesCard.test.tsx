@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CandidatesCard.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: e012200e-9c38-4a1d-8587-8ac43ce9803b
 // last-edited: 2026-11-17
 
@@ -347,7 +347,7 @@ describe('owed source chips', () => {
     });
     const chip = screen.getByTestId('owed-source-chip-gave_up');
     expect(chip).toHaveTextContent('Gave up on a source');
-    expect(chip).toHaveAttribute('title', expect.stringContaining('five asks'));
+    expect(chip).toHaveAttribute('title', expect.stringContaining('five searches'));
     expect(screen.queryByTestId('owed-source-chip-owed')).toBeNull();
   });
 });

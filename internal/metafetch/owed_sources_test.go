@@ -1,5 +1,5 @@
 // file: internal/metafetch/owed_sources_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2e9a40-3b15-4c86-a1f7-0e5c9d84b263
 // last-edited: 2026-11-17
 
@@ -442,4 +442,57 @@ func TestServiceNow_IsTheOverridableClock(t *testing.T) {
 	require.True(t, (&Service{}).Now().Equal(at))
 	restore()
 	require.WithinDuration(t, time.Now(), (&Service{}).Now(), time.Minute)
+}
+
+// A failed ask is charged to the row it was selected from, whoever wrote it. A
+// row under another input hash (the dialog's) is the same row when it already
+// owes, was fetched for the same ASIN and is inside the TTL; a row that owes
+// nothing, another ASIN, a past-TTL row and another question set are not.
+func TestRecordChainOwed_ChargesTheSelectedRowWhateverItsHash(t *testing.T) {
+	fail := OwedUpdate{Failed: map[string]string{"B": metadata.CauseUpstream}}
+	for _, tc := range []struct {
+		name    string
+		mutate  func(e *MetadataCandidateCache)
+		asin    string
+		fp      func(string) string
+		charged bool
+	}{
+		{"other hash, owes, same ASIN", func(e *MetadataCandidateCache) {}, "", nil, true},
+		{"other hash, row fetched for the same ASIN", func(e *MetadataCandidateCache) { e.FetchedForASIN = "B0TESTASIN" }, "b0testasin", nil, true},
+		{"other hash, other ASIN", func(e *MetadataCandidateCache) { e.FetchedForASIN = "B0OTHERASN" }, "B0TESTASIN", nil, false},
+		{"other hash, past the TTL", func(e *MetadataCandidateCache) {
+			e.FetchedAt = nowUTC().Add(-database.MetadataCacheTTL - time.Hour)
+		}, "", nil, false},
+		{"other hash, owes nothing", func(e *MetadataCandidateCache) { e.OwedSources = nil }, "", nil, false},
+		{"other hash, other questions", func(e *MetadataCandidateCache) {}, "", func(fp string) string { return fp + "x" }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOwedFixture(t, true)
+			_, resp := f.fetch(nil, false)
+			f.owe(1, f.t0)
+			e := f.row()
+			e.SourceHash = "another-writers-hash"
+			e.FetchedAt = nowUTC()
+			tc.mutate(e)
+			require.NoError(t, f.store.PutMetadataCache(e))
+			fp := resp.InputFingerprint
+			if tc.fp != nil {
+				fp = tc.fp(fp)
+			}
+			u := fail
+			u.ASIN = tc.asin
+			withNow(t, f.t0.Add(7*time.Hour))
+			_, err := f.mfs.RecordChainOwed(f.bk.ID, f.hash, fp, u)
+			require.NoError(t, err)
+			got := f.row().OwedSources["B"].Attempts
+			if tc.charged {
+				require.Equal(t, 2, got, "a failed ask was not charged to the row it was selected from")
+				require.True(t, f.row().OwedSources["B"].LastAttempt.After(f.t0), "the last attempt did not move")
+			} else if tc.name != "other hash, owes nothing" {
+				require.Equal(t, 1, got, "a row that is not the selected one was charged")
+			} else {
+				require.Empty(t, f.row().OwedSources, "a row that owed nothing was given a debt")
+			}
+		})
+	}
 }

@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-11-17
 //
@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -101,8 +102,19 @@ type MetadataCacheSummary = database.MetadataCacheSummary
 // Matches the existing default response size.
 const metadataCacheTopN = 10
 
-// nowUTC is overridable for tests.
-var nowUTC = func() time.Time { return time.Now().UTC() }
+// nowClock is the overriding clock tests install (SetClockForTesting); nil is
+// the wall clock. An atomic pointer, because ops and workers of an earlier test
+// can still be reading the time while a later test installs its own.
+var nowClock atomic.Pointer[func() time.Time]
+
+// nowUTC is the time the cache's freshness and the owed-source backoff read.
+// Overridable for tests through SetClockForTesting.
+func nowUTC() time.Time {
+	if fn := nowClock.Load(); fn != nil {
+		return (*fn)()
+	}
+	return time.Now().UTC()
+}
 
 // GetCachedCandidates returns the cached entry for bookID plus a
 // freshness flag (entry.IsFresh()). Returns (nil, false, nil) for
@@ -1165,6 +1177,10 @@ type OwedUpdate struct {
 	// in the same window already charged it, and one window is one ask. nil
 	// charges unconditionally (a caller that did not read the row first).
 	Seen map[string]time.Time
+	// ASIN is the ASIN the search was run for (SearchMetadataResponse.BookASIN).
+	// RecordChainOwed uses it to decide whether a row another writer left is
+	// still the row this search was about (see RecordChainOwed).
+	ASIN string
 }
 
 // AnsweredSources returns the sources of resp that were asked and answered:
@@ -1230,6 +1246,20 @@ func rowFetchedForASIN(row *MetadataCandidateCache, bookASIN string) bool {
 // it.
 func (mfs *Service) Now() time.Time { return nowUTC() }
 
+// owedRowStillTheSame reports whether row, written under another input hash
+// than the search that now reports on it (the Search Metadata dialog writes its
+// own, and a forced or TTL refetch can), is the row that search's debt belongs
+// to. The debt follows the book's questions and ASIN, not the writer's hash, the
+// same rule cacheSearchResponse uses to carry it: the row already owes a source,
+// was fetched for the ASIN the search used, and is inside the TTL. A failed ask
+// is then charged to the row it was selected from, also when the search heard
+// from nobody and so wrote no row of its own; otherwise such a book would be
+// re-selected every run with its ask count and last attempt never moving.
+func owedRowStillTheSame(row *MetadataCandidateCache, asin string, now time.Time) bool {
+	return len(row.OwedSources) > 0 && rowFetchedForASIN(row, asin) &&
+		now.Sub(row.FetchedAt) < database.MetadataCacheTTL
+}
+
 // owedCountsAsAsk reports whether a failure with this cause reached the
 // provider and so uses one of the source's OwedMaxAsks asks. A hold (an open
 // breaker, a throttle registry entry) sent nothing: it re-dates the backoff but
@@ -1239,8 +1269,10 @@ func owedCountsAsAsk(cause string) bool { return cause != metadata.CauseHeld }
 // RecordChainOwed records, on bookID's cache row, the chain sources a search
 // could not ask or hear from (o.Failed) as owed -- MetadataCandidateCache.
 // OwedSources, with their backoff -- and clears the ones that answered
-// (o.Answered). It changes only a row for the same inputs (sourceHash) and
-// questions (fingerprint), and writes only when something changed.
+// (o.Answered). It changes only a row for the same questions (fingerprint)
+// written under the same inputs (sourceHash), or under others when the row
+// already owes and is the row the debt belongs to (owedRowStillTheSame), and
+// writes only when something changed.
 //
 // It is a second step, after the search's own write, because the search does
 // not know which of its sources are the chain's and which a fallback
@@ -1256,10 +1288,13 @@ func (mfs *Service) RecordChainOwed(bookID, sourceHash, fingerprint string, o Ow
 	if err != nil {
 		return nil, fmt.Errorf("read cache row for %s: %w", bookID, err)
 	}
-	if entry == nil || entry.SourceHash != sourceHash || entry.SearchFingerprint != fingerprint {
+	if entry == nil || entry.SearchFingerprint != fingerprint {
 		return nil, nil
 	}
 	now := nowUTC()
+	if entry.SourceHash != sourceHash && !owedRowStillTheSame(entry, o.ASIN, now) {
+		return nil, nil
+	}
 	next := make(map[string]database.OwedSource, len(entry.OwedSources)+len(o.Failed))
 	maps.Copy(next, entry.OwedSources)
 	changed := false
@@ -1323,7 +1358,7 @@ func OwedUpdateOf(resp *SearchMetadataResponse, active []string) OwedUpdate {
 	if resp == nil {
 		return OwedUpdate{}
 	}
-	u := OwedUpdate{Answered: resp.AnsweredSources()}
+	u := OwedUpdate{Answered: resp.AnsweredSources(), ASIN: resp.BookASIN}
 	if len(resp.SourcesFailed) > 0 {
 		errs := resp.SourceErrors()
 		u.Failed = make(map[string]string, len(resp.SourcesFailed))
