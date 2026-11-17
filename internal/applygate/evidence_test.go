@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence_test.go
-// version: 1.2.6
+// version: 1.2.7
 // guid: 1b7e3d52-9c4a-4f18-a26d-5e0f8b3c7a91
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package applygate
 
@@ -146,7 +146,24 @@ func TestCheckEvidenceInBatch_OwnerExamples(t *testing.T) {
 			name: "respelled initials are not an overwrite, so no runtime is needed",
 			book: database.Book{Title: "The Hobbit", Author: &database.Author{Name: "J.R.R. Tolkien"},
 				FilePath: "/lib/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"},
-			cand: metafetch.MetadataCandidate{Title: "The Hobbit: Or There and Back Again", Author: "J. R. R. Tolkien"},
+			cand: metafetch.MetadataCandidate{Title: "The Hobbit", Author: "J. R. R. Tolkien"},
+		},
+		// A subtitle the candidate carries inside its title is text the stored
+		// title lacks: the title is neutral, so it confirms nothing and the
+		// pair needs a runtime that agrees (it used to agree on the shared
+		// "Hush" segment).
+		{
+			name: "a subtitle inside the candidate title is neutral and needs a runtime",
+			book: database.Book{Title: "Hush", Author: &database.Author{Name: "Bruce Wayne"},
+				FilePath: "/lib/Bruce Wayne/Hush/Hush.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "Hush: A Gotham Story", Author: "Bruce Wayne"},
+			want: ReasonInsufficientEvidence,
+		},
+		{
+			name: "a subtitle inside the candidate title passes with an agreeing runtime",
+			book: database.Book{Title: "Hush", Author: &database.Author{Name: "Bruce Wayne"}, Duration: new(36000),
+				FilePath: "/lib/Bruce Wayne/Hush/Hush.m4b"},
+			cand: metafetch.MetadataCandidate{Title: "Hush: A Gotham Story", Author: "Bruce Wayne", DurationSec: 36600},
 		},
 		{
 			name: "(ed) in parentheses is a role credit",

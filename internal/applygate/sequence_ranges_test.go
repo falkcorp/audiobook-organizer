@@ -1,5 +1,5 @@
 // file: internal/applygate/sequence_ranges_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 4d9c2a71-8e35-4f60-b2a8-17c6e3d05f94
 // last-edited: 2026-11-17
 
@@ -315,7 +315,11 @@ func evalRuntime(b *database.Book, c *metafetch.MetadataCandidate) Verdict {
 func TestEvaluate_TrackOrdinalTitle(t *testing.T) {
 	book := &database.Book{Title: "08 - The Long Halloween", SeriesPositionRaw: new("6"), Duration: new(36000)}
 	good := metafetch.MetadataCandidate{Title: "The Long Halloween", Series: "Gotham Years", SeriesPosition: "6", Score: 0.95, DurationSec: 36000}
-	if v := evalRuntime(book, &good); v.Allowed || v.Reason != ReasonSequenceUnconfirmed {
+	// "08 - The Long Halloween" against "The Long Halloween" is a NEUTRAL title
+	// (the list number is text the candidate lacks), applied with an agreeing
+	// runtime; the author and narrator agree here so the evidence leg passes and
+	// the sequence leg is what refuses.
+	if v := evalAllVerdict(book, &good); v.Allowed || v.Reason != ReasonSequenceUnconfirmed {
 		t.Fatalf("ordinal 8 against stored position 6: allowed=%v reason=%q, want sequence_unconfirmed", v.Allowed, v.Reason)
 	}
 	other := metafetch.MetadataCandidate{Title: "The Long Halloween", Series: "Gotham Years", SeriesPosition: "8", Score: 0.95, DurationSec: 36000}
@@ -443,12 +447,18 @@ func TestCheckPartialBook_SpanByRange(t *testing.T) {
 // agreements never depend on the runtime: whatever refuses is the rule under
 // test, not a shortage of evidence.
 func evalAll(b *database.Book, c *metafetch.MetadataCandidate) (bool, string) {
+	v := evalAllVerdict(b, c)
+	return v.Allowed, v.Reason
+}
+
+// evalAllVerdict is evalAll's whole verdict: author and narrator agree, so the
+// legs under test are the title, the runtime and the sequence.
+func evalAllVerdict(b *database.Book, c *metafetch.MetadataCandidate) Verdict {
 	bb, cc := *b, *c
 	bb.Author = &database.Author{Name: "Bruce Wayne"}
 	bb.Narrator = new("Alfred Pennyworth")
 	cc.Author, cc.Narrator = "Bruce Wayne", "Alfred Pennyworth"
-	v := evalRuntime(&bb, &cc)
-	return v.Allowed, v.Reason
+	return evalRuntime(&bb, &cc)
 }
 
 // Review trace 1 (MAJOR-1): the stored position is the field most likely to be
@@ -488,8 +498,19 @@ func TestEvaluate_Trace2_LeadingOrdinalWithSeriesNameTitle(t *testing.T) {
 	other := metafetch.MetadataCandidate{Title: "Knightfall", Series: "Gotham Years", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}
 	for runtime, dur := range map[string]*int{"agreeing": new(36000), "neutral": new(34000)} {
 		b := &database.Book{Title: "03 - Knightfall", SeriesPositionRaw: new("1"), Duration: dur}
-		if ok, reason := evalAll(b, &other); ok || reason != ReasonSequenceUnconfirmed {
-			t.Errorf("distinct title, %s runtime: allowed=%v reason=%q, want sequence_unconfirmed", runtime, ok, reason)
+		v := evalAllVerdict(b, &other)
+		if v.Allowed || !slices.Contains(v.Unconfirmed, ReasonSequenceUnconfirmed) {
+			t.Errorf("distinct title, %s runtime: allowed=%v unconfirmed=%v, want a refusal that lists sequence_unconfirmed", runtime, v.Allowed, v.Unconfirmed)
+		}
+		// "03 - Knightfall" against "Knightfall" is a neutral title: with a
+		// runtime that does not agree the title refuses first, and the sequence
+		// refusal stays on the record (Verdict.Unconfirmed).
+		want := ReasonSequenceUnconfirmed
+		if runtime == "neutral" {
+			want = ReasonTitleUnconfirmed
+		}
+		if v.Reason != want {
+			t.Errorf("distinct title, %s runtime: reason=%q, want %s", runtime, v.Reason, want)
 		}
 	}
 	unknown := &database.Book{Title: "03 - Knightfall", SeriesPositionRaw: new("1")}
@@ -635,14 +656,29 @@ func TestCheckSequence_WeakDisagreeingWithWritableSourcesIsAlwaysUnconfirmed(t *
 		for runtime, dur := range map[string]*int{"unknown": nil, "neutral": new(34000), "agreeing": new(36000)} {
 			bb := b
 			bb.Duration = dur
-			ok, reason := evalAll(&bb, &cand)
-			if ok {
+			v := evalAllVerdict(&bb, &cand)
+			if v.Allowed {
 				t.Errorf("%s, runtime %s: applied", name, runtime)
 			}
-			// An unknown runtime is refused first by the overwrite check; the
-			// override record still lists sequence_unconfirmed.
-			if runtime != "unknown" && reason != ReasonSequenceUnconfirmed {
-				t.Errorf("%s, runtime %s: reason=%q, want sequence_unconfirmed", name, runtime, reason)
+			// Whatever refuses first, the override record lists
+			// sequence_unconfirmed.
+			if !slices.Contains(v.Unconfirmed, ReasonSequenceUnconfirmed) {
+				t.Errorf("%s, runtime %s: unconfirmed=%v, want it to list sequence_unconfirmed", name, runtime, v.Unconfirmed)
+			}
+			// An unknown runtime is refused first by the overwrite check. A
+			// neutral title (the book's "02 - " list number is text the
+			// candidate lacks) with a runtime that does not agree is refused
+			// by the title rule before the sequence leg is reached; with an
+			// agreeing runtime the sequence leg is the one that refuses.
+			switch runtime {
+			case "agreeing":
+				if v.Reason != ReasonSequenceUnconfirmed {
+					t.Errorf("%s, runtime %s: reason=%q, want sequence_unconfirmed", name, runtime, v.Reason)
+				}
+			case "neutral":
+				if v.Reason != ReasonSequenceUnconfirmed && v.Reason != ReasonTitleUnconfirmed {
+					t.Errorf("%s, runtime %s: reason=%q, want sequence_unconfirmed or title_unconfirmed", name, runtime, v.Reason)
+				}
 			}
 		}
 	}
@@ -787,8 +823,14 @@ func TestEvaluate_R2Minor2_NewFalseRefusalsFixed(t *testing.T) {
 func TestEvaluate_R2Minor3_CandidateCompleteCollection(t *testing.T) {
 	cand := metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "The Complete Collection", Series: "Gotham Years", Score: 0.95, DurationSec: 108000}
 	book := &database.Book{Title: "Knightfall", Duration: new(101000)}
-	if ok, reason := evalAll(book, &cand); ok || reason != ReasonCollectedRuntimeUnconfirmed {
-		t.Fatalf("allowed=%v reason=%q, want collected_edition_runtime_unconfirmed", ok, reason)
+	// The candidate's subtitle makes the title neutral, so the title rule refuses
+	// a runtime 7% off first; the collected-edition refusal stays on the record.
+	v := evalAllVerdict(book, &cand)
+	if v.Allowed || !slices.Contains(v.Unconfirmed, ReasonCollectedRuntimeUnconfirmed) {
+		t.Fatalf("allowed=%v reason=%q unconfirmed=%v, want a refusal that lists collected_edition_runtime_unconfirmed", v.Allowed, v.Reason, v.Unconfirmed)
+	}
+	if v.Reason != ReasonTitleUnconfirmed {
+		t.Errorf("reason=%q, want title_unconfirmed", v.Reason)
 	}
 }
 

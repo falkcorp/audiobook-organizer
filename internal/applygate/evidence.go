@@ -1,13 +1,14 @@
 // file: internal/applygate/evidence.go
-// version: 1.10.3
+// version: 1.12.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package applygate
 
 import (
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -49,6 +50,9 @@ const (
 	ReasonNarratorMismatch        = "narrator_mismatch"
 	ReasonASINConflict            = "asin_conflict"
 	ReasonInsufficientEvidence    = "insufficient_evidence"
+	// ReasonTitleUnconfirmed: the title only partly matches (the title check
+	// is neutral) and the runtime does not confirm it. See tally.
+	ReasonTitleUnconfirmed = "title_unconfirmed"
 )
 
 // Check outcomes.
@@ -132,8 +136,15 @@ func CheckEvidenceInBatch(book *database.Book, authors Authors, rt database.Book
 }
 
 // tally derives Pass, Reason, Detail and Agreements from Checks: the first
-// block refuses; otherwise at least MinAgreements agreements pass. It is
-// re-run after a check is revised (applyTranscribedTitle).
+// block refuses; otherwise at least MinAgreements agreements pass, with one
+// more condition. A NEUTRAL title (it neither agrees nor conflicts: the
+// candidate and the book share part of a title and differ in the rest) applies
+// only when the runtime check AGREES, known on both sides and within
+// RuntimeAgreeRatio. Author, narrator, ASIN and the transcription are all
+// agreements that do not look at the title or the length, so a neutral title
+// plus two of them is two agreements about a different book. The condition is
+// here, where the agreements are counted, so no caller can count its way around
+// it; applyTranscribedTitle re-runs tally after it revises the title check.
 func (v *EvidenceVerdict) tally() {
 	v.Pass, v.Reason, v.Detail, v.Agreements = false, "", "", 0
 	for _, ch := range v.Checks {
@@ -154,7 +165,26 @@ func (v *EvidenceVerdict) tally() {
 		v.Detail = strconv.Itoa(v.Agreements) + " independent signal(s) agree, need " + strconv.Itoa(MinAgreements)
 		return
 	}
+	if title, rt := v.check("title"), v.check("runtime"); title != nil && title.Outcome == OutcomeNeutral &&
+		(rt == nil || rt.Outcome != OutcomeAgree) {
+		v.Reason = ReasonTitleUnconfirmed
+		v.Detail = "title only partly matches (" + title.Detail + ") and the runtime does not confirm it"
+		if rt != nil && rt.Detail != "" {
+			v.Detail += " (" + rt.Detail + ")"
+		}
+		return
+	}
 	v.Pass = true
+}
+
+// check returns the named check, or nil.
+func (v *EvidenceVerdict) check(name string) *CheckResult {
+	for i := range v.Checks {
+		if v.Checks[i].Name == name {
+			return &v.Checks[i]
+		}
+	}
+	return nil
 }
 
 // overwrites lists identity fields the candidate would REPLACE (not fill).
@@ -318,70 +348,105 @@ func checkAuthorPath(book *database.Book, authors Authors, c *metafetch.Metadata
 	return r
 }
 
-// checkTitle compares the candidate title with every place the book's title
-// lives: the stored title and the file and folder names. A candidate title
-// that equals a SERIES name ("Star Wars" for "A New Dawn: Star Wars") is not
-// allowed to agree through a split segment, and a folder named after the
-// series ("/Star Wars/A New Dawn.m4b") is not a title at all. A candidate whose
-// title IS the series name and that nothing confirms is a hard block: that is
-// the 2026-09-13 "Star Wars" at 233% row.
+// checkTitle compares the candidate's title with the book's, by the one rule
+// in titlecompare.go: AGREE when a whole form of the candidate equals a whole
+// form of the book (the declared fields joined, never trimmed; the book's file
+// and folder names are forms of the book too), DISAGREE when the two TITLE
+// fields conflict (a shared segment with a segment of its own on each side, or
+// the same words with different numbers), and NEUTRAL otherwise: one title
+// holds words or a number the other lacks. A neutral title confirms nothing, and
+// EvidenceVerdict.tally applies it only with a runtime that agrees.
+//
+// "Hush: Part 1" and "Hush: Part 2", or "Batman: Dark Victory" and "Batman:
+// The Long Halloween", share a storyline or franchise name and are different
+// books; a series name, a credited name, a path or a year never makes a pair
+// agree or disagree (an earlier version excused them, and each excuse was a way
+// for two books to agree). A candidate title that equals a SERIES name ("Star
+// Wars" for "A New Dawn: Star Wars") is not a title, and neither is a stored
+// title that equals one ("Batman" for "Batman: Dark Victory" in the series
+// "Batman"): both are the 2026-09-13 "Star Wars" at 233% row, from either side,
+// and block unless a whole form agrees.
+//
+// A conflict between the two title fields blocks even when a file name agrees:
+// the stored title and the file name disagreeing with each other is not
+// confirmation. A path never causes a conflict. A pair with nothing in common
+// blocks only when no form agrees.
 func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult {
 	r := CheckResult{Name: "title"}
-	candVariants := []string{c.Title}
-	if strings.TrimSpace(c.Subtitle) != "" {
-		candVariants = append(candVariants, c.Title+" "+c.Subtitle)
-	}
 	seriesNames := titleSeriesNames(book, c)
-	full, segs := bookTitleVariants(book, seriesNames)
-	// The candidate's own main title ("The Hobbit" of "The Hobbit: Or There
-	// and Back Again") may agree with a whole book title, unless it is the
-	// series name ("Star Wars" of "Star Wars: A New Dawn").
-	if main := strings.TrimSpace(segSplitRe.Split(c.Title, 2)[0]); main != "" &&
-		main != strings.TrimSpace(c.Title) && !seriesNames[normText(main)] {
-		candVariants = append(candVariants, main)
-	}
-
-	best, bestAgainst := 0.0, ""
-	for _, cv := range candVariants {
-		for _, bv := range full {
-			if s := titleSim(cv, bv); s > best {
-				best, bestAgainst = s, bv
-			}
-		}
-		if seriesNames[normText(cv)] {
-			continue
-		}
-		for _, bv := range segs {
-			if s := titleSim(cv, bv); s > best {
-				best, bestAgainst = s, bv
-			}
-		}
-	}
-	if best == 0 && len(full) == 0 {
+	bookForms, pathNames := bookTitleForms(book, seriesNames)
+	if len(bookForms) == 0 {
 		r.Outcome, r.Detail = OutcomeUnknown, "book has no title or file name"
 		return r
 	}
-	r.Detail = "best " + strconv.Itoa(int(best*100+0.5)) + "% vs " + strconv.Quote(bestAgainst)
+	candForms := titleForms(c.Title, c.Subtitle, c.Series)
+	block := func(detail string) CheckResult {
+		r.Outcome, r.Reason, r.Detail = OutcomeBlock, ReasonTitleDisagrees, detail
+		return r
+	}
+	if len(candForms) == 0 {
+		return block("candidate has no title")
+	}
+
+	candField := fieldText(c.Title, c.Subtitle)
+	storedField := fieldText(book.Title, derefStr(book.Subtitle))
+	cmp := titleCmp{class: classNeutral}
+	desc := ""
+	if strings.TrimSpace(book.Title) != "" {
+		cmp = compareTitleFields(candField, storedField)
+		desc = strconv.Quote(candField) + " vs " + strconv.Quote(storedField)
+		if cmp.note != "" {
+			desc += ": " + cmp.note
+		}
+	}
+	if cmp.class == classConflictNumber || cmp.class == classConflictWords {
+		return block("conflicting title: " + desc)
+	}
+	for _, cf := range candForms {
+		if i := slices.Index(bookForms, cf); i >= 0 {
+			r.Outcome, r.Detail = OutcomeAgree, "whole title equals "+strconv.Quote(bookForms[i])
+			return r
+		}
+	}
 	switch {
-	case best >= 0.85:
-		r.Outcome = OutcomeAgree
 	case candidateTitleIsSeriesName(book, c):
-		r.Outcome, r.Reason = OutcomeBlock, ReasonTitleDisagrees
-		r.Detail = "candidate title " + strconv.Quote(c.Title) + " is the series name; " + r.Detail
-	case best < 0.5:
-		r.Outcome, r.Reason = OutcomeBlock, ReasonTitleDisagrees
-	default:
-		r.Outcome = OutcomeNeutral
+		return block("candidate title " + strconv.Quote(c.Title) + " is the series name; " + desc)
+	case storedTitleIsSeriesName(book, c):
+		return block("stored title " + strconv.Quote(book.Title) + " is the series name; " + desc)
+	case cmp.class == classUnrelated:
+		return block("the titles have little in common: " + desc)
+	}
+	r.Outcome = OutcomeNeutral
+	if desc != "" {
+		r.Detail = desc
+		return r
+	}
+	// No stored title: the file and folder names are all the book says. They
+	// can still show that the candidate is another work altogether (nothing
+	// in common with any of them), as before; they never make two titles
+	// conflict, because a name on disk carries narrators, publishers and years.
+	r.Detail = "no stored title; the file and folder names do not equal " + strconv.Quote(candField)
+	unrelated := len(pathNames) > 0
+	for _, pn := range pathNames {
+		if compareTitleFields(candField, pn).class != classUnrelated {
+			unrelated = false
+		}
+	}
+	if unrelated {
+		return block("no stored title and the file and folder names have little in common with " + strconv.Quote(candField) +
+			": " + strconv.Quote(strings.Join(pathNames, ", ")))
 	}
 	return r
 }
 
-// titleSeriesNames is the normalized series names the title check knows: the
-// candidate's series and the book's.
+// titleSeriesNames is the series names the title check knows (the candidate's
+// and the book's), each as its normalised form (formTokens joined): the same
+// normalisation the forms are compared in, so "Batman (Unabridged)" is the
+// series "Batman" and "Book 2" is the series "Book Two".
 func titleSeriesNames(book *database.Book, c *metafetch.MetadataCandidate) map[string]bool {
 	names := map[string]bool{}
 	for _, s := range []string{c.Series, seriesName(book)} {
-		if n := normText(s); n != "" {
+		if n := strings.Join(formTokens(s), " "); n != "" {
 			names[n] = true
 		}
 	}
@@ -394,7 +459,15 @@ func titleSeriesNames(book *database.Book, c *metafetch.MetadataCandidate) map[s
 // lift that block -- not even a transcription that says the same word, since
 // an intro announcing the series names no volume (applyTranscribedTitle).
 func candidateTitleIsSeriesName(book *database.Book, c *metafetch.MetadataCandidate) bool {
-	return titleSeriesNames(book, c)[normText(c.Title)] && strings.TrimSpace(c.Subtitle) == ""
+	return titleSeriesNames(book, c)[strings.Join(formTokens(c.Title), " ")] && strings.TrimSpace(c.Subtitle) == ""
+}
+
+// storedTitleIsSeriesName is candidateTitleIsSeriesName from the book's side:
+// the stored title is a series name and nothing else ("Batman", in the series
+// "Batman"), so it does not say which volume the book is and cannot confirm
+// one. checkTitle reaches it only after a whole form failed to agree.
+func storedTitleIsSeriesName(book *database.Book, c *metafetch.MetadataCandidate) bool {
+	return titleSeriesNames(book, c)[strings.Join(formTokens(book.Title), " ")] && strings.TrimSpace(derefStr(book.Subtitle)) == ""
 }
 
 // checkNarrator compares narrator surnames. A contradiction blocks only when
@@ -451,23 +524,26 @@ func CheckASIN(book *database.Book, c *metafetch.MetadataCandidate) CheckResult 
 	return r
 }
 
-// bookTitleVariants returns whole-title forms (stored title, its
-// parenthetical-stripped form, file base name, folder name) and the segments
-// those split into at ":" / " - " separators. A folder or file name equal to a
-// series name is skipped: it names the series, not this book.
-func bookTitleVariants(book *database.Book, seriesNames map[string]bool) (full, segs []string) {
-	add := func(s string) {
-		if strings.TrimSpace(s) != "" {
-			full = append(full, s)
-		}
-	}
+// bookTitleForms returns the book's whole forms: its stored fields joined (the
+// title, or title and subtitle, each also behind the book's series) and the file
+// base name and the folder name, each as one form (names returns them as
+// written). A folder or file name equal to a series name is skipped: it names
+// the series, not this book. The file names are forms only to AGREE with; they
+// never cause a conflict.
+func bookTitleForms(book *database.Book, seriesNames map[string]bool) (forms, names []string) {
+	out := titleForms(book.Title, derefStr(book.Subtitle), seriesName(book))
 	addPath := func(s string) {
-		if !seriesNames[normText(s)] {
-			add(s)
+		f := strings.Join(formTokens(s), " ")
+		if seriesNames[f] {
+			return
+		}
+		if f != "" {
+			names = append(names, s)
+			if !slices.Contains(out, f) {
+				out = append(out, f)
+			}
 		}
 	}
-	add(book.Title)
-	add(parenRe.ReplaceAllString(book.Title, " "))
 	if p := strings.TrimSpace(book.FilePath); p != "" {
 		base := filepath.Base(p)
 		if ext := filepath.Ext(base); metadata.IsFileExt(ext) {
@@ -477,14 +553,7 @@ func bookTitleVariants(book *database.Book, seriesNames map[string]bool) (full, 
 			addPath(base)
 		}
 	}
-	for _, f := range full {
-		for _, s := range segSplitRe.Split(f, -1) {
-			if strings.TrimSpace(s) != "" && strings.TrimSpace(s) != strings.TrimSpace(f) {
-				segs = append(segs, s)
-			}
-		}
-	}
-	return full, segs
+	return out, names
 }
 
 var (

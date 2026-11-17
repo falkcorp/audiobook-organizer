@@ -1,5 +1,5 @@
 // file: internal/applygate/owner_review.go
-// version: 1.7.4
+// version: 1.7.5
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
 // last-edited: 2026-11-17
 
@@ -25,7 +25,10 @@ import (
 //     transcription_runtime_unverified;
 //   - sequence: all four sequence reasons;
 //   - evidence: every hard contradiction except partial_book and
-//     asin_conflict, and the MinAgreements count (insufficient_evidence).
+//     asin_conflict, the MinAgreements count (insufficient_evidence) and a
+//     neutral title the runtime does not confirm (title_unconfirmed, which
+//     replaces what used to be a pass on two agreements about a different
+//     book: it is a judgement about how sure the match is, like the count).
 //
 // Still blocking (they are not about certainty):
 //   - owner_rejected and owner_rejection_check_failed: the owner already said
