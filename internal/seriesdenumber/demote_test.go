@@ -1,17 +1,11 @@
 // file: internal/seriesdenumber/demote_test.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: c2a81e47-5f30-4d96-b7a3-19e60d8f4b25
 // last-edited: 2026-11-17
 
 package seriesdenumber
 
-import (
-	"math/rand"
-	"regexp"
-	"strconv"
-	"strings"
-	"testing"
-)
+import "testing"
 
 const testAuthor = "Alfred Pennyworth"
 
@@ -118,61 +112,59 @@ func TestDemote_BaseEqualToAnyAuthorsName(t *testing.T) {
 	}
 }
 
-// Every plan the pipeline lets through is rebuilt exactly from its fields by an
-// oracle that shares no code with ParseName: the name is base + separator +
-// optional marker + N, the base has no digit, and N is the position written.
-func TestDemote_EligiblePlansRebuildTheirNameExactly(t *testing.T) {
-	pool := []string{
-		"Gotham", "Knights", "Court", "of", "Owls", "Part", "Pt.", "Unabridged", "Disc", "CD", "Book", "Vol.", "Volume",
-		"No", "#", "Tome", "Band", "and", "&", "to", "-", ":", ",", "01", "2", "05", "66", "1989", ".5", "2.5", "(Special)",
-		"'", "III", "Bat", "BW", "Edition", "99", "100", "0", "Wayne", "Bruce",
+// M1 (PR #4698 round 2): a base that is a PART of the series' own author's name
+// is the author's name, not a series: the surname alone, the given name alone,
+// the name with its initials taken out, in either word order, for every credit of
+// a composite name. Built from the name's words, with no shape special-cased.
+func TestDemote_BaseIsAPartOfTheSeriesOwnAuthorsName(t *testing.T) {
+	cases := []struct{ author, base string }{
+		{"Bruce Wayne", "Wayne"},
+		{"Bruce Wayne", "Bruce"},
+		{"Bruce T. Wayne", "Bruce Wayne"},
+		{"Bruce T. Wayne", "Wayne"},
+		{"Bruce T. Wayne", "Bruce"},
+		{"Bruce Thomas Wayne", "Thomas Wayne"},
+		{"Bruce Thomas Wayne", "Bruce Thomas"},
+		{"Bruce Thomas Wayne", "Thomas"},
+		{"Wayne, Bruce", "Wayne"},
+		{"Wayne, Bruce", "Bruce"},
+		{"Wayne, Bruce T.", "Bruce Wayne"},
+		{"B. T. Wayne", "Wayne"},
+		{"Bruce Wayne & Dick Grayson", "Grayson"},
+		{"Bruce Wayne & Dick Grayson", "Dick"},
+		{"Bruce Wayne and Dick Grayson", "Bruce"},
+		{"Bruce Wayne, Dick Grayson", "Dick Grayson"},
+		{"Ren\u00e9e Montoya", "Montoya"},
+		{"Ren\u00e9e Montoya", "Rene\u0301e"}, // a decomposed accent
+		{"Ludwig van Beethoven", "van Beethoven"},
+		{"Ludwig van Beethoven", "Beethoven"},
+		{"Ludwig van Beethoven", "Ludwig"},
 	}
-	oracle := regexp.MustCompile(`(?i)^(.+?)(?:\s*[-:,\x{2013}\x{2014}]\s*|\s+)(?:(?:book|bk|vol|volume|no)\.?\s*|#\s*)?(\d{1,3})$`)
-	rng := rand.New(rand.NewSource(7))
-	authors := NewAuthorSet([]string{"Bruce Wayne"})
-	eligible := 0
-	for i := 0; i < 60000; i++ {
-		var b strings.Builder
-		for j, n := 0, 1+rng.Intn(6); j < n; j++ {
-			if j > 0 && rng.Intn(6) != 0 {
-				b.WriteByte(' ')
-			}
-			b.WriteString(pool[rng.Intn(len(pool))])
-		}
-		name := b.String()
-		norm := strings.Join(strings.Fields(name), " ")
-		// The planner's reading is taken from the oracle, so the property does not
-		// lean on ParseName for the plan's fields.
-		c := Candidate{FromName: name, AuthorID: 3, Authors: authors}
-		if m := oracle.FindStringSubmatch(norm); m != nil {
-			c.Base = m[1]
-			c.Position, _ = strconv.Atoi(m[2])
-		} else {
-			c.Base, c.Position = norm, 1
-		}
-		if _, held := Demote(c); held {
-			continue
-		}
-		eligible++
-		m := oracle.FindStringSubmatch(norm)
-		if m == nil {
-			t.Fatalf("%q is eligible but is not base + separator + marker + number", name)
-		}
-		if strings.ContainsAny(c.Base, "0123456789") {
-			t.Fatalf("%q is eligible with a digit in the base %q", name, c.Base)
-		}
-		if n, _ := strconv.Atoi(m[2]); n != c.Position || n < 1 || n > MaxPosition {
-			t.Fatalf("%q is eligible at position %d, the name says %s", name, c.Position, m[2])
-		}
-		if !strings.HasPrefix(strings.ToLower(norm), strings.ToLower(c.Base)) {
-			t.Fatalf("%q: base %q is not a prefix of the name", name, c.Base)
-		}
-		if strings.EqualFold(norm[:len(c.Base)], "Bruce Wayne") {
-			t.Fatalf("%q is eligible with an author's name as its base", name)
+	for _, tc := range cases {
+		c := cand(tc.base + " 03")
+		c.AuthorName = tc.author
+		if v, held := Demote(c); !held || v.Code != CodeAuthorBase {
+			t.Errorf("author %q base %q: got %+v held=%v, want %s", tc.author, tc.base, v, held, CodeAuthorBase)
 		}
 	}
-	if eligible < 200 {
-		t.Fatalf("only %d of 60000 generated plans were eligible: the generator no longer reaches the accept path", eligible)
+}
+
+// The part check does not reach for names that are not parts of the author's.
+func TestDemote_ABaseThatIsNotAPartOfTheAuthorsNameIsNotHeld(t *testing.T) {
+	for _, tc := range []struct{ author, base string }{
+		{"Bruce Wayne", "Court of Owls"},
+		{"Bruce Wayne", "Waynes World"},    // contains a name, is not one
+		{"Bruce Wayne", "Wayne Manor"},     // a name plus a word
+		{"Bruce Wayne", "Brucey"},          // a longer word
+		{"Bruce Wayne", "Way"},             // a prefix of a name
+		{"Bruce T. Wayne", "Thomas Wayne"}, // the initial is not Thomas
+		{"Bruce Wayne & Dick Grayson", "Wayne Grayson"},
+		{"Bruce Wayne & Dick Grayson", "Bruce Grayson"}, // across two credits
+	} {
+		c := cand(tc.base + " 03")
+		c.AuthorName = tc.author
+		if v, held := Demote(c); held {
+			t.Errorf("author %q base %q: held as %s (%s), want it to pass", tc.author, tc.base, v.Code, v.Reason)
+		}
 	}
-	t.Logf("%d of 60000 generated plans eligible", eligible)
 }

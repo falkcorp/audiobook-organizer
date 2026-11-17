@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/grammar.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: 5e2c7a91-3b48-4d06-9a1f-c70d8e3b6f24
 // last-edited: 2026-11-17
 
@@ -44,11 +44,20 @@ import (
 //	           no digit anywhere (a second number means the name carries two);
 //	           not end in a connector (of, to, &, and, ...); have at least
 //	           MinBaseLetters letters; not be a bare structural word (chapter,
-//	           track, ...); and the name as a whole must contain no part, format
-//	           or edition word (Part, Unabridged, Disc, CD, Edition, ...).
+//	           track, ...); contain no volume word in ANY position (VolumeWords:
+//	           "Hush Book One 01" has the base "Hush Book One", which numbers a
+//	           book twice); and the name as a whole must contain no part, format
+//	           or edition word (Part, Unabridged, Disc, CD, Ch, Ep, Hour,
+//	           Edition, ...).
+//
+// Words are whole tokens, and an apostrophe inside a word does not split it:
+// "Don't" is one word, not "Don" and "t". A held word is held wherever it
+// stands, so "V for Vendetta 03" and "No Country 02" are held; that is the
+// price of a list a wrong move cannot get past, and the counts are in the
+// report.
 //
 // Holding is cheap (one manual approval in Repairs later); a wrong move is not.
-// Corroboration (decide.go and RunCorroborated) is a separate, second condition.
+// Corroboration (decide.go and CheckRun) is a separate, second condition.
 
 // Grammar codes name the rule that held a name. Stable strings: they appear in
 // the report and in the operator-facing summary.
@@ -106,22 +115,27 @@ var markers = map[string]bool{"book": true, "bk": true, "vol": true, "volume": t
 var partFormatWords = map[string]bool{
 	"part": true, "parts": true, "pt": true,
 	"unabridged": true, "abridged": true,
-	"disc": true, "disk": true, "cd": true, "track": true, "tracks": true,
-	"file": true, "mp3": true, "m4b": true, "audio": true, "side": true,
+	"disc": true, "discs": true, "disk": true, "disks": true, "cd": true, "cds": true,
+	"track": true, "tracks": true,
+	"file": true, "mp3": true, "m4b": true, "audio": true, "side": true, "sides": true,
+	"reel": true, "reels": true, "hour": true, "hours": true,
 	"edition": true, "version": true,
-	"episode": true, "chapter": true, "chap": true, "section": true,
+	"episode": true, "episodes": true, "ep": true,
+	"chapter": true, "chap": true, "ch": true, "section": true,
 }
 
 // VolumeWords are words that mean "volume" or "book" in another language, and
-// the English ones the marker list does not take as a marker. A base that ends
-// in one is held: "Gotham Knights Tome 1" has the base "Gotham Knights Tome",
-// and the next language to appear is not guessed at. Extend the list when a
-// dry run shows another.
+// the English ones the marker list does not take as a marker, and their
+// abbreviations (v, t, bd, nr, vols). A base containing one anywhere is held:
+// "Gotham Knights Tome 1" has the base "Gotham Knights Tome", "Hush Book One 01"
+// has the base "Hush Book One", and the next language to appear is not guessed
+// at. Extend the list when a dry run shows another.
 var VolumeWords = map[string]bool{
 	"tome": true, "tomo": true, "tom": true, "band": true, "libro": true, "livre": true,
 	"teil": true, "buch": true, "deel": true, "volumen": true, "kniha": true, "bok": true,
 	"bog": true, "kirja": true, "volym": true, "numero": true, "number": true,
-	"book": true, "bk": true, "vol": true, "volume": true, "no": true,
+	"book": true, "bk": true, "vol": true, "vols": true, "volume": true, "volumes": true,
+	"no": true, "nr": true, "bd": true, "v": true, "t": true,
 }
 
 // connectorWords end a base that was cut mid-phrase: "Name 01 of" from
@@ -235,8 +249,10 @@ func ParseName(name string) (Parsed, Verdict, bool) {
 		if connectorWords[last] {
 			return hold(CodeBaseEndsConnector, "the base ends in the connector \""+last+"\", so the name was cut mid-phrase")
 		}
-		if VolumeWords[last] {
-			return hold(CodeVolumeWordInBase, "the base ends in the volume word \""+last+"\", which is not a marker this grammar reads")
+	}
+	for _, w := range bw {
+		if VolumeWords[w] {
+			return hold(CodeVolumeWordInBase, "the base contains the volume word \""+w+"\", which is not a marker this grammar reads, so the name numbers a volume twice or in a language the grammar does not know")
 		}
 	}
 	if letterCount(base) < MinBaseLetters {
@@ -267,11 +283,22 @@ func markerWord(s string) (string, bool) {
 	return w, true
 }
 
-// words splits s into lower-case letter-and-digit tokens.
+// words splits s into lower-case letter-and-digit tokens. An apostrophe inside a
+// word stays in it ("don't", "man's"), so a contraction does not leave a stray
+// "t" or "s" behind to be mistaken for an abbreviation; a quote at the edge of a
+// token is dropped.
 func words(s string) []string {
-	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	s = strings.NewReplacer("\u2019", "'", "\u2018", "'").Replace(strings.ToLower(s))
+	toks := strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '\''
 	})
+	out := toks[:0]
+	for _, t := range toks {
+		if t = strings.Trim(t, "'"); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func letterCount(s string) int {
@@ -297,36 +324,3 @@ func isStructural(base string) bool {
 	}
 	return true
 }
-
-// RunCorroborated reports whether the numbers of sibling series support n: the
-// run of consecutive whole numbers that contains n, built from n and the
-// siblings' numbers, has at least RunMin members, and at least two siblings
-// stand behind it. A sibling is another series of the SAME author that passes
-// the grammar with the same base and holds at least one book: the caller
-// filters, this only reads the numbers. Two unrelated numbers under one base
-// ("Name 66", "Name 89") are not a run.
-func RunCorroborated(n int, siblings []int) bool {
-	have := map[int]bool{n: true}
-	others := 0
-	for _, s := range siblings {
-		if !have[s] {
-			others++
-		}
-		have[s] = true
-	}
-	if others < 2 {
-		return false
-	}
-	run := 1
-	for k := n - 1; have[k]; k-- {
-		run++
-	}
-	for k := n + 1; have[k]; k++ {
-		run++
-	}
-	return run >= RunMin
-}
-
-// RunMin is the fewest members of a run of consecutive numbers (n included)
-// that corroborates a position by its siblings.
-const RunMin = 3

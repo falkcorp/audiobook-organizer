@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_apply_test.go
-// version: 3.0.0
+// version: 4.0.0
 // guid: 4c93e07a-1d62-4b8e-a5f3-90b7c1de2846
 // last-edited: 2026-11-17
 
@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -66,15 +67,20 @@ type denumberLib struct {
 	// extraRefs are book rows that hold a series but that the membership read
 	// cannot see (trashed, non-primary): only the unfiltered count has them.
 	extraRefs map[int]int
-	authors   []database.Author
+	// trashed are soft-deleted books: they hold a series (and a position) but the
+	// membership read does not list them; ListSoftDeletedBooks does. A test that
+	// adds one also adds it to extraRefs, as the unfiltered count has it.
+	trashed []*database.Book
+	authors []database.Author
 
 	nextSeriesID int
 	events       []string
 	changes      []database.OperationChange
 	created      []database.Series
 
-	bulkReads, perSeriesReads int
-	nameLookups               map[string]int
+	bulkReads, perSeriesReads, trashReads int
+	titleSeq                              int
+	nameLookups                           map[string]int
 
 	// afterMembership runs once the membership read has answered, so a test can
 	// change a row between the plan and the apply.
@@ -124,7 +130,7 @@ func (l *denumberLib) addSeries(id int, name string, authorID int) {
 // book is not a version of another.
 func (l *denumberLib) addBook(id string, seriesID, seq int, group string) {
 	sid := seriesID
-	b := &database.Book{ID: id, SeriesID: &sid}
+	b := &database.Book{ID: id, SeriesID: &sid, Title: l.nextTitle()}
 	if seq >= 0 {
 		q := seq
 		b.SeriesSequence = &q
@@ -134,6 +140,26 @@ func (l *denumberLib) addBook(id string, seriesID, seq int, group string) {
 		b.VersionGroupID = &g
 	}
 	l.books[id] = b
+}
+
+// nextTitle is a title no other book of the fixture has once its digits and part
+// words are taken off (the run check compares titles that way): "Detective Case"
+// and a base-26 word. A run needs distinct titles, so a book added without one
+// gets a different one each time.
+func (l *denumberLib) nextTitle() string {
+	l.titleSeq++
+	n, word := l.titleSeq, ""
+	for ; n > 0; n = (n - 1) / 26 {
+		word = string(rune('a'+(n-1)%26)) + word
+	}
+	return "Detective Case " + word
+}
+
+// addBookT is addBook with the book's title, for the tests whose evidence is the
+// titles of the books in a run of numbered series.
+func (l *denumberLib) addBookT(id string, seriesID, seq int, group, title string) {
+	l.addBook(id, seriesID, seq, group)
+	l.books[id].Title = title
 }
 
 // addRunAround gives the numbered series "base NN" two siblings of the same
@@ -229,13 +255,26 @@ func (l *denumberLib) wire() {
 				continue
 			}
 			if _, want := out[*b.SeriesID]; want {
-				out[*b.SeriesID] = append(out[*b.SeriesID], database.BookCore{ID: id, SeriesSequence: b.SeriesSequence, VersionGroupID: b.VersionGroupID})
+				out[*b.SeriesID] = append(out[*b.SeriesID], database.BookCore{
+					ID: id, Title: b.Title, SeriesSequence: b.SeriesSequence, VersionGroupID: b.VersionGroupID,
+					ASIN: b.ASIN, ISBN10: b.ISBN10, ISBN13: b.ISBN13,
+				})
 			}
 		}
 		hook := l.afterMembership
 		l.mu.Unlock()
 		if hook != nil {
 			hook()
+		}
+		return out, nil
+	}
+	s.ListSoftDeletedBooksFunc = func(int, int, *time.Time) ([]database.Book, error) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.trashReads++
+		out := make([]database.Book, 0, len(l.trashed))
+		for _, b := range l.trashed {
+			out = append(out, *b)
 		}
 		return out, nil
 	}

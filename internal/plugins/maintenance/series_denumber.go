@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber.go
-// version: 4.0.0
+// version: 5.0.0
 // guid: dee834d3-1f7e-453e-9303-85d37479e79d
 // last-edited: 2026-11-17
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
@@ -30,13 +31,16 @@ import (
 // metadata.SeriesSplit are the same type, so nothing has to convert and there is
 // exactly one copy of the regexes. Do not "restore" a local copy.
 //
-// 🔑 The matcher is shared; the POLICY is not. This package keeps its
-// corroboration requirement (padded, or a sibling series shares the base) and
-// still refuses the low tier outright, because a merge creates and deletes
-// series rows library-wide in one unattended pass. The write path strips every
-// trailing shape on sight, by the owner's explicit instruction, because the cost
-// of a false positive there is one row the owner retypes. See the policy note at
-// the top of internal/metadata/series_position.go before changing either.
+// 🔑 The matcher is shared; the POLICY is not. This package scores a NAME (the
+// tiers below), but a score is not permission: an apply needs the positive
+// grammar (internal/seriesdenumber.ParseName) AND a run of consecutive series of
+// the same author and base, each one book with its own title (CheckRun) AND a
+// target the decision can see. It still refuses the low tier outright, because a
+// merge creates and deletes series rows library-wide in one unattended pass. The
+// write path strips every trailing shape on sight, by the owner's explicit
+// instruction, because the cost of a false positive there is one row the owner
+// retypes. See the policy note at the top of internal/metadata/series_position.go
+// before changing either.
 
 type (
 	SeriesShape      = metadata.SeriesShape
@@ -71,12 +75,15 @@ func IsJunkSeriesBase(base string) bool {
 
 // ApplyEligible reports whether a plan may be executed unattended: only the
 // high tier, and only when no shape check demoted it (a demotion moves the plan
-// to low, so the confidence alone carries both).
+// to low, so the confidence alone carries both). High is necessary and not
+// sufficient: the books of an eligible plan still move only when a run of
+// single-book series with distinct titles corroborates the position
+// (seriesdenumber.Decide), and a plan whose run fails carries no books.
 //
 // 🔒 Medium and low are unconditional refusals: there is no parameter that lets
-// them through. Low, because "86—EIGHTY-SIX" and "08. Battle for the Abyss" are
+// them through. Low, because "52—Gotham Central" and "08. Court of Owls" are
 // the same string shape and a merge creates and deletes series rows. Medium (a
-// bracketed number, "Dragon Born [04]"), because the owner ruled on 2026-09-02
+// bracketed number, "Court of Owls [04]"), because the owner ruled on 2026-09-02
 // that a bracketed number is usually a fragment of one shattered book and not a
 // position, and that a position about 90% likely to be wrong must not be written
 // (metadata.SeriesCleanup.DiscardedPosition). Both tiers are reported, never
@@ -116,26 +123,32 @@ type SeriesMergePlan struct {
 	// planner gave it. See DemotePlans.
 	DemotedBy   string
 	DemotedFrom SeriesConfidence
-	// SiblingRun is true when at least two other series of the same author, with
-	// the same base, that pass the grammar and hold at least one book form a run
-	// of consecutive numbers with this one (seriesdenumber.RunCorroborated). It
-	// is the library's evidence for a position the book does not carry itself.
-	SiblingRun bool
+	// SiblingIDs are the other series of the same author whose names pass the
+	// grammar with the same base and that hold at least one book, ascending by id:
+	// the candidates for a run with this series. The planner reads only names, so
+	// whether they form a run of distinct books is decided where their books are
+	// read (seriesdenumber.CheckRun).
+	SiblingIDs []int
 }
 
 // SeriesDenumber plans the merges that collapse "<Series> <N>" rows into one
-// series per base name, per author.
+// series per base name, per author. It reads NAMES only and scores each one:
 //
-// A bare trailing number is only trusted when the library itself corroborates it:
+//   - an explicit marker ("Book 3") is the high tier;
+//   - a zero-padded number ("Court of Owls 05") is the high tier;
+//   - a bare number is the high tier when another series shares the base
+//     ("Mistborn 3" alongside "Mistborn 6");
+//   - a lone, unpadded bare number ("Robin 3") is reported as low, held as
+//     position_uncorroborated, and never moved: the cost of wrongly merging a real
+//     name is a corrupted series, while the cost of skipping one is that it stays
+//     as it is;
+//   - the embedded, bracketed and leading shapes are medium or low and never
+//     applied.
 //
-//   - the number is zero-padded ("Discworld 05") — nobody titles a work "Blake's 07"; or
-//   - another series shares the same base ("Mistborn 3" alongside "Mistborn 6").
-//
-// A lone, unpadded "Blake's 7" therefore stays untouched, which is the whole
-// point: the cost of wrongly merging a real name is a corrupted series, while the
-// cost of skipping one is that it stays as it is.
-//
-// Explicit markers ("Book 3") need no corroboration — the keyword is the evidence.
+// The high tier is the planner's reading of the NAME, not corroboration. The
+// corroboration is a run of consecutive series, each one book with its own title,
+// which the caller checks with the books in hand: each plan carries the sibling
+// candidates (SiblingIDs) for that.
 func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 	type key struct {
 		base   string
@@ -150,6 +163,10 @@ func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 		if !ok || IsJunkSeriesBase(sp.Base) {
 			continue
 		}
+		// Runs of space inside the base are folded: the store keys a series by its
+		// name with whitespace folded, so a base created with a doubled space would
+		// be a row nothing else resolves to.
+		sp.Base = strings.Join(strings.Fields(sp.Base), " ")
 		splits[s.ID] = sp
 		baseCount[key{strings.ToLower(sp.Base), s.AuthorID}]++
 	}
@@ -160,36 +177,36 @@ func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 		if _, numbered := splits[s.ID]; numbered {
 			continue
 		}
-		canonical[key{strings.ToLower(strings.TrimSpace(s.Name)), s.AuthorID}] = s.ID
+		canonical[key{strings.ToLower(strings.Join(strings.Fields(s.Name), " ")), s.AuthorID}] = s.ID
 	}
 
-	// Pass 3 -- the siblings that can corroborate a position: series of the same
+	// Pass 3 -- the siblings that can take part in a run: series of the same
 	// author, with the same base, whose names pass the positive grammar and that
 	// hold at least one book. An empty row, a held shape ("Part 1") and a series
-	// of another author are not evidence.
-	type sibling struct{ id, n int }
-	siblings := map[key][]sibling{}
+	// of another author are not candidates.
+	siblings := map[key][]int{}
 	for _, s := range in {
 		if s.AuthorID == 0 || s.Books < 1 {
 			continue
 		}
 		if parsed, _, ok := sdn.ParseName(s.Name); ok {
 			k := key{strings.ToLower(parsed.Base), s.AuthorID}
-			siblings[k] = append(siblings[k], sibling{s.ID, parsed.N})
+			siblings[k] = append(siblings[k], s.ID)
 		}
 	}
-	siblingRun := func(s SeriesInput) bool {
+	siblingIDs := func(s SeriesInput) []int {
 		parsed, _, ok := sdn.ParseName(s.Name)
 		if !ok || s.AuthorID == 0 {
-			return false
+			return nil
 		}
-		var nums []int
-		for _, sib := range siblings[key{strings.ToLower(parsed.Base), s.AuthorID}] {
-			if sib.id != s.ID {
-				nums = append(nums, sib.n)
+		var ids []int
+		for _, id := range siblings[key{strings.ToLower(parsed.Base), s.AuthorID}] {
+			if id != s.ID {
+				ids = append(ids, id)
 			}
 		}
-		return sdn.RunCorroborated(parsed.N, nums)
+		sort.Ints(ids)
+		return ids
 	}
 
 	var plans []SeriesMergePlan
@@ -202,19 +219,21 @@ func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 
 		reason := ""
 		conf := sp.Confidence
+		demotedBy, demotedFrom := "", SeriesConfidence("")
 		switch {
-		// ── Trailing shapes: verdicts unchanged from the shipped behaviour. ──
+		// ── Trailing shapes. ──
 		case sp.Shape == ShapeTrailingKeyword:
-			reason, conf = "explicit position keyword", ConfidenceHigh
+			reason, conf = "position keyword in the name", ConfidenceHigh
 		case sp.Shape == ShapeTrailingBare && sp.Padded:
-			reason, conf = "zero-padded position", ConfidenceHigh
+			reason, conf = "zero-padded number in the name", ConfidenceHigh
 		case sp.Shape == ShapeTrailingBare && baseCount[k] > 1:
-			reason, conf = "another series shares this base", ConfidenceHigh
+			reason, conf = "number in the name, another series shares this base", ConfidenceHigh
 		case sp.Shape == ShapeTrailingBare:
-			// A lone unpadded trailing number is not evidence. Dropped outright
-			// rather than reported as low, so "Fahrenheit 451" never appears in a
-			// report an operator might act on.
-			continue
+			// A lone unpadded trailing number is not evidence. It is reported as
+			// low and held, never dropped silently: a count nobody can see is a
+			// shape nobody can review. Low is never applied.
+			reason, conf = "a lone unpadded number: nothing but the name says it is a position", ConfidenceLow
+			demotedBy, demotedFrom = string(sdn.HoldUncorroborated), sp.Confidence
 
 		// ── Embedded shapes (owner item 4). ──
 		case sp.Shape == ShapeEmbeddedKeyword:
@@ -233,7 +252,8 @@ func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 			FromID: s.ID, FromName: s.Name, IntoName: sp.Base,
 			AuthorID: s.AuthorID,
 			IntoID:   canonical[k], Position: sp.Position, Reason: reason, Books: s.Books,
-			Shape: sp.Shape, Confidence: conf, SiblingRun: siblingRun(s),
+			Shape: sp.Shape, Confidence: conf, DemotedBy: demotedBy, DemotedFrom: demotedFrom,
+			SiblingIDs: siblingIDs(s),
 		})
 	}
 	return plans
@@ -244,10 +264,12 @@ func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 // Reason. The planner scores a NAME with a loose matcher; the grammar
 // (seriesdenumber.ParseName) re-reads the name strictly and the checks beside it
 // read what a name cannot show -- an author row that is a placeholder, a base
-// that is an author's name in any word order, a planner that read a different
-// base or number than the name carries. authorNames maps an author id to its
-// name; the base is compared with every author's name, not only the series' own,
-// and an empty map skips the author checks only. The input is not modified.
+// that is an author's name in any word order or a part of the series' own
+// author's name, a planner that read a different base or number than the name
+// carries. authorNames maps EVERY author id to its name; the base is compared
+// with every author's name, not only the series' own. An author id that is not in
+// the map names an author row that does not exist, and is held as no_author like a
+// series with none. The input is not modified.
 func DemotePlans(plans []SeriesMergePlan, authorNames map[int]string) []SeriesMergePlan {
 	out := make([]SeriesMergePlan, len(plans))
 	names := make([]string, 0, len(authorNames))
@@ -264,6 +286,7 @@ func DemotePlans(plans []SeriesMergePlan, authorNames map[int]string) []SeriesMe
 		v, held := sdn.Demote(sdn.Candidate{
 			FromName: pl.FromName, Base: pl.IntoName, Position: pl.Position,
 			AuthorID: pl.AuthorID, AuthorName: name, Authors: authors,
+			AuthorMissing:     !known,
 			AuthorPlaceholder: known && isPlaceholderSeriesAuthor(name),
 		})
 		if !held {

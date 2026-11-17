@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/decide.go
-// version: 2.1.0
+// version: 3.0.0
 // guid: 0b7e5d3a-6c14-4f82-a9d0-3e81c75b2f46
 // last-edited: 2026-11-17
 
@@ -53,11 +53,12 @@ type Source struct {
 	Position int
 	// Books are the source's members, every version included.
 	Books []Book
-	// SiblingRun is true when at least two other series of the same author, with
-	// the same base, that hold books and pass the grammar form a run of
-	// consecutive numbers with this one (RunCorroborated). It corroborates the
-	// position for a book that has none of its own.
-	SiblingRun bool
+	// Run is what the library's run of sibling series says about this one's
+	// position (CheckRun). It is the ONLY corroboration: the book's own stored
+	// position is not, because the importer and series-normalize both write a
+	// position copied from the series name, so the two then agree by
+	// construction.
+	Run RunVerdict
 }
 
 // Group is every numbered series that folds into one base series: the same
@@ -68,9 +69,16 @@ type Group struct {
 	TargetID int
 	BaseName string
 	AuthorID int
-	// Existing are the target's current members. Empty when TargetID is 0.
+	// Existing are the target's current members, trashed ones included: a trashed
+	// book keeps its position and comes back to it on restore. Empty when
+	// TargetID is 0.
 	Existing []Book
-	Sources  []Source
+	// UnseenExisting is how many books the target holds that Existing does not
+	// list and whose positions are therefore unknown: the unfiltered reference
+	// count minus the live and trashed members. Non-zero holds every move into
+	// the target.
+	UnseenExisting int
+	Sources        []Source
 	// TargetIsSource is true when the target is itself a numbered series another
 	// plan of the run folds elsewhere (a base name that resolves, ignoring case,
 	// to a numbered series). Books moved into it would be read by that plan only
@@ -117,12 +125,25 @@ const (
 	// books fold into whatever its name resolves to then.
 	HoldChainedTarget HoldCode = "base_is_a_numbered_series"
 	// HoldUncorroborated: nothing but the series' name says the book is at this
-	// position. The book has no position of its own and the name's number is not
-	// supported by a run of sibling series, so it is held, not guessed.
+	// position. No run of sibling series supports the name's number, and the
+	// book's own stored position does not count (it may have been copied from the
+	// name), so it is held, not guessed.
 	HoldUncorroborated HoldCode = "position_uncorroborated"
 	// HoldLocked: the owner locked the book's series or position, so the op must
 	// not repoint it or give it a number.
 	HoldLocked HoldCode = "series_locked"
+	// HoldMultipleBooks: the numbered series holds more than one distinct book. A
+	// series with several books in it is a series, not one book's debris, and
+	// moving some of them out by position tears it apart. The whole source is
+	// held, whatever its books' positions say.
+	HoldMultipleBooks HoldCode = "source_holds_multiple_books"
+	// HoldRunRejected: a run of consecutive series with this base exists, but one
+	// of its members is not one book with its own title (CheckRun). The run is
+	// evidence of the parts of one shattered book, not of positions.
+	HoldRunRejected HoldCode = "sibling_run_rejected"
+	// HoldTargetUnseen: the target series holds books the decision cannot see, so
+	// it cannot know that a position is free.
+	HoldTargetUnseen HoldCode = "target_has_unseen_members"
 	// HoldBaseElsewhere: a series with the base name already exists under another
 	// author row, and the base does not exist for this author. The op never
 	// creates a second base of the same name beside it; a person merges the two
@@ -174,18 +195,21 @@ func (r GroupResult) MovedBooks() int {
 }
 
 // Decide chooses which books of a Group may move, and holds the rest with a
-// reason. It never moves a book it cannot place:
+// reason. It never moves a book it cannot place. The decision is per SOURCE
+// SERIES, then per book:
 //
+//   - a source that holds more than one distinct book is held whole;
 //   - a book the owner locked (its series or its position) is held;
 //   - a book whose own position differs from the one in its series' name is
 //     held;
-//   - a book is moved only when its position is corroborated: its own stored
-//     position equals the number in the name, or the series' siblings form a
-//     run with it (Source.SiblingRun). Otherwise the name is the only evidence,
-//     and it is held;
+//   - a book is moved only when the library corroborates the position: the
+//     series' siblings form a run of single-book series with distinct titles
+//     (Source.Run). Its own stored position equal to the number is NOT
+//     corroboration; otherwise the name is the only evidence, and it is held;
 //   - when more than one book would sit at one position of the target -- movers
-//     from one source or several, or a mover and a book already there -- every
-//     mover at that position is held and the book already there is untouched.
+//     from one source or several, or a mover and a book already there, trashed
+//     or not -- every mover at that position is held and the book already there
+//     is untouched.
 //
 // Versions of one book count once and are decided together: if any version
 // fails a check, all are held.
@@ -199,6 +223,22 @@ func Decide(g Group) GroupResult {
 				res.Sources[si].Held = append(res.Sources[si].Held, Held{
 					BookID: b.ID, FromSeriesID: s.FromID, Code: HoldChainedTarget,
 					Reason: fmt.Sprintf("the base %q is itself a numbered series this run merges elsewhere; merge it first, then run again", g.BaseName),
+				})
+			}
+		}
+		return res
+	}
+
+	if g.TargetID != 0 && g.UnseenExisting > 0 {
+		for si, s := range g.Sources {
+			res.Sources[si].FromID = s.FromID
+			if s.FromID == g.TargetID {
+				continue
+			}
+			for _, b := range s.Books {
+				res.Sources[si].Held = append(res.Sources[si].Held, Held{
+					BookID: b.ID, FromSeriesID: s.FromID, Code: HoldTargetUnseen,
+					Reason: fmt.Sprintf("the base %q holds %d book(s) the run cannot see (not listed live and not in the trash), so it cannot know the position is free", g.BaseName, g.UnseenExisting),
 				})
 			}
 		}
@@ -242,7 +282,17 @@ func Decide(g Group) GroupResult {
 		if s.FromID == g.TargetID && g.TargetID != 0 {
 			continue // already the canonical row
 		}
-		for _, ident := range groupByIdentity(s.Books) {
+		idents := groupByIdentity(s.Books)
+		if len(idents) > 1 {
+			for _, b := range s.Books {
+				res.Sources[si].Held = append(res.Sources[si].Held, Held{
+					BookID: b.ID, FromSeriesID: s.FromID, Code: HoldMultipleBooks,
+					Reason: fmt.Sprintf("the series holds %d distinct books, so it is a series of its own and none of them is moved out by position", len(idents)),
+				})
+			}
+			continue
+		}
+		for _, ident := range idents {
 			if why := firstLocked(ident); why != "" {
 				for _, b := range ident {
 					res.Sources[si].Held = append(res.Sources[si].Held, Held{
@@ -261,11 +311,14 @@ func Decide(g Group) GroupResult {
 				}
 				continue
 			}
-			if !s.SiblingRun && !ownPositionIs(ident, s.Position) {
+			if s.Run.State != RunConfirmed {
+				code, why := HoldUncorroborated, fmt.Sprintf("only the series name says position %d: no run of %d consecutive series, each one book with its own title, supports it (the book's own stored position does not count, it may have been copied from the name)", s.Position, RunMin)
+				if s.Run.State == RunRejected {
+					code, why = HoldRunRejected, fmt.Sprintf("the series of this base form a run, but it is not made of distinct books: %s", s.Run.Reason)
+				}
 				for _, b := range ident {
 					res.Sources[si].Held = append(res.Sources[si].Held, Held{
-						BookID: b.ID, FromSeriesID: s.FromID, Code: HoldUncorroborated,
-						Reason: fmt.Sprintf("only the series name says position %d: the book has no position of its own and fewer than two sibling series with books form a run with %d", s.Position, s.Position),
+						BookID: b.ID, FromSeriesID: s.FromID, Code: code, Reason: why,
 					})
 				}
 				continue
@@ -339,16 +392,6 @@ func firstDifferingSeq(versions []Book, want int) *int {
 		}
 	}
 	return nil
-}
-
-// ownPositionIs reports whether some version of the book already sits at want.
-func ownPositionIs(versions []Book, want int) bool {
-	for _, b := range versions {
-		if b.Seq != nil && *b.Seq == want {
-			return true
-		}
-	}
-	return false
 }
 
 // firstLocked returns why the first locked version may not be moved, "" when

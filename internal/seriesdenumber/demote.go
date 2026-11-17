@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/demote.go
-// version: 2.0.0
+// version: 3.0.0
 // guid: 609bfb39-82de-4bb5-b398-b84db96913fa
 // last-edited: 2026-11-17
 
@@ -38,12 +38,18 @@ type Candidate struct {
 	Position int
 	// AuthorID is the numbered series' author row, 0 when it has none.
 	AuthorID int
+	// AuthorMissing is true when AuthorID names an author row that does not exist.
+	// It is held as no_author: a dangling id folds every series of the name into
+	// one base exactly as no author does.
+	AuthorMissing bool
 	// AuthorPlaceholder is true when that author row is a stand-in for "no known
 	// author" ("Unknown", "Various", ...). Such a row folds unrelated series of
 	// one name together exactly as author id 0 does, so it is held the same way.
 	AuthorPlaceholder bool
 	// AuthorName is that author's name, "" when unknown. The base-equals-author
-	// check is skipped without it.
+	// check is skipped without it. A base equal to ANY PART of this name is held
+	// (OwnNameKeys): the surname alone, the given name alone, the name with its
+	// initials taken out.
 	AuthorName string
 	// Authors is every author name in the library. A base equal to ANY of them is
 	// held, not only the series' own author: "Name 05" under a different author
@@ -67,8 +73,8 @@ type Verdict struct {
 // library itself corroborates are a second, separate condition (Decide).
 func Demote(c Candidate) (Verdict, bool) {
 	switch {
-	case c.AuthorID == 0:
-		return Verdict{CodeNoAuthor, "the series has no author, so every no-author series of this name would fold into one base"}, true
+	case c.AuthorID == 0 || c.AuthorMissing:
+		return Verdict{CodeNoAuthor, "the series has no author (or its author row does not exist), so every no-author series of this name would fold into one base"}, true
 	case c.AuthorPlaceholder:
 		return Verdict{CodePlaceholderAuthor, "the series' author is a placeholder (unknown, various), so unrelated series of this name would fold into one base"}, true
 	}
@@ -80,10 +86,88 @@ func Demote(c Candidate) (Verdict, bool) {
 		return Verdict{CodeNamesDisagree, "the planner read base \"" + c.Base + "\" at " + strconv.Itoa(c.Position) +
 			" but the name reads \"" + parsed.Base + "\" at " + strconv.Itoa(parsed.N)}, true
 	}
-	if c.Authors.Has(parsed.Base) || (c.AuthorName != "" && NewAuthorSet([]string{c.AuthorName}).Has(parsed.Base)) {
+	if c.Authors.Has(parsed.Base) {
 		return Verdict{CodeAuthorBase, "the base is an author's name, not a series"}, true
 	}
+	if c.AuthorName != "" && ownNameHas(c.AuthorName, parsed.Base) {
+		return Verdict{CodeAuthorBase, "the base is a part of the series' own author's name (surname, given name or the name without its initials), not a series"}, true
+	}
 	return Verdict{}, false
+}
+
+// OwnNameKeys are the comparison keys of every part of one author's name that
+// could stand alone as a base: for each credit of the name (a composite credit
+// "A & B" is two) and each word order of it ("Last, First" is also "First Last"),
+// every run of consecutive name words, with initials (words of one letter) left
+// out. "Bruce T. Wayne" gives Bruce, Wayne, "Bruce Wayne" (the name without its
+// initial) and the whole name; "Wayne, Bruce" gives the same. It is built from
+// the name's words and nothing else, so no shape of name is special-cased: a
+// middle name, a second given name, a particle ("van", "de") each take part.
+func OwnNameKeys(name string) []string {
+	seen := map[string]bool{}
+	var keys []string
+	add := func(s string) {
+		if k := personname.LettersKey(s); k != "" && !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	for _, form := range nameForms(name) {
+		var toks []string
+		for _, w := range strings.Fields(strings.NewReplacer(",", " ", ".", " ").Replace(form)) {
+			if letterCount(w) >= 2 {
+				toks = append(toks, w)
+			}
+		}
+		for i := range toks {
+			for j := i + 1; j <= len(toks); j++ {
+				add(strings.Join(toks[i:j], " "))
+			}
+		}
+	}
+	return keys
+}
+
+func ownNameHas(name, base string) bool {
+	bk := personname.LettersKey(base)
+	if bk == "" {
+		return false
+	}
+	for _, k := range OwnNameKeys(name) {
+		if k == bk {
+			return true
+		}
+	}
+	return false
+}
+
+// nameForms returns the spellings of a name OwnNameKeys reads: each credit of a
+// composite name as written, and each "Last, First" credit also as "First Last".
+func nameForms(name string) []string {
+	name = normalizeName(name)
+	if name == "" {
+		return nil
+	}
+	var forms []string
+	for _, seg := range creditSplit.Split(name, -1) {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		forms = append(forms, seg)
+		pieces := strings.Split(seg, ",")
+		switch {
+		case len(pieces) == 2 && len(strings.Fields(pieces[0])) == 1 && len(strings.Fields(pieces[1])) >= 1:
+			forms = append(forms, strings.TrimSpace(pieces[1])+" "+strings.TrimSpace(pieces[0]))
+		case len(pieces) > 1:
+			for _, pc := range pieces {
+				if pc = strings.TrimSpace(pc); pc != "" {
+					forms = append(forms, pc)
+				}
+			}
+		}
+	}
+	return forms
 }
 
 // AuthorSet is a set of author-name keys (personname.LettersKey: NFC,
