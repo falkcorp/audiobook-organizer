@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_server_cpu.py
-# version: 1.0.0
+# version: 2.0.0
 # guid: c3e91a60-2f5d-4b87-a4c2-7d0b6e18f953
 # last-edited: 2026-11-17
 #
@@ -7,11 +7,15 @@
 # selection (auto | cpu | cuda and the CPU fallback), configuration parsing, the
 # /health contract, and the path pipeline and upload endpoints end to end with a
 # fake model. No real model is loaded and nothing here needs a GPU: the
-# Transcriber is a stub. Real-ffmpeg tests skip when ffmpeg is not installed.
+# Transcriber is a stub, run through ws.InProcessRunner (the production engine
+# decodes in a killable child process; tests/test_whisper_decode_child.py covers
+# that with real child processes). Real-ffmpeg tests skip when ffmpeg is not
+# installed, unless WHISPER_TESTS_REQUIRE_FFMPEG=1 (CI), where a missing ffmpeg FAILS.
 
 import asyncio
 import logging
 import math
+import os
 import pathlib
 import shutil
 import struct
@@ -35,6 +39,14 @@ import whisper_server as ws  # noqa: E402
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
 
 
+def test_ci_has_ffmpeg_when_it_says_it_does():
+    # CI sets WHISPER_TESTS_REQUIRE_FFMPEG=1: the real-ffmpeg tests below must RUN
+    # there, not skip, or the extraction half of the pipeline is untested while
+    # the job is green.
+    if os.environ.get("WHISPER_TESTS_REQUIRE_FFMPEG") == "1":
+        assert HAS_FFMPEG, "WHISPER_TESTS_REQUIRE_FFMPEG=1 but ffmpeg is not on PATH"
+
+
 class FakeTranscriber:
     """Stands in for faster-whisper: reports a device, returns heard-<size>."""
 
@@ -47,6 +59,7 @@ class FakeTranscriber:
         self.gate = None  # a threading.Event the decode waits on
         self.entered = threading.Event()
         self.boom = None
+        self.model = "base.en"
 
     def transcribe(self, audio):
         self.entered.set()
@@ -73,7 +86,16 @@ def _sine_wav(path, seconds=3.0, rate=16000):
         w.writeframes(frames)
 
 
-def _app(monkeypatch, tmp_path, fake=None, cfg=None, requested="auto", reason="test"):
+def _engine(fake, n=1, meta=None):
+    runners = [ws.InProcessRunner(fake) for _ in range(n)]
+    if meta:
+        for r in runners:
+            base = r.meta
+            r.meta = lambda base=base: {**base(), **meta}
+    return ws.Engine(runners)
+
+
+def _app(monkeypatch, tmp_path, fake=None, cfg=None, meta=None):
     monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-cpu-1")
     monkeypatch.setenv(wpp.REQUIRE_MOUNT_ENV, "0")
     share = tmp_path / "share"
@@ -81,23 +103,30 @@ def _app(monkeypatch, tmp_path, fake=None, cfg=None, requested="auto", reason="t
     monkeypatch.setenv(wpp.PATH_MAP_ENV, f"/lib/Gotham={share}")
     fake = fake or FakeTranscriber()
     cfg = cfg or ws.ServerConfig()
-    loaded = ws.LoadedModel(fake, requested, fake.compute_type, reason)
-    app = ws.create_app(cfg, loaded)
+    app = ws.create_app(cfg, _engine(fake, cfg.num_workers, meta))
     return TestClient(app), fake, share, app
 
 
 # ── configuration ────────────────────────────────────────────────────────────
 
 
-def test_defaults_are_auto_device_and_base_model():
+def test_defaults_are_auto_device_no_model_and_loopback():
     cfg = ws.parse_config([], {})
     assert (cfg.device, cfg.model, cfg.compute_type, cfg.cpu_threads) == (
         "auto",
-        "base.en",
+        None,  # the model follows the resolved device (see resolve_model)
         None,
         None,
     )
-    assert (cfg.num_workers, cfg.batch_size, cfg.port, cfg.host) == (1, 8, 19847, "0.0.0.0")
+    # Loopback, like the Mac worker: the path routes read files and have no auth.
+    assert (cfg.num_workers, cfg.batch_size, cfg.port, cfg.host) == (1, 8, 19847, "127.0.0.1")
+    assert ws.ServerConfig().host == "127.0.0.1"
+
+
+def test_the_bind_host_is_opt_in_by_flag_or_environment():
+    assert ws.parse_config(["--host", "0.0.0.0"], {}).host == "0.0.0.0"
+    assert ws.parse_config([], {"WHISPER_HOST": "192.0.2.7"}).host == "192.0.2.7"
+    assert ws.parse_config(["--host", "::1"], {"WHISPER_HOST": "0.0.0.0"}).host == "::1"
 
 
 def test_environment_variables_set_every_option():
@@ -214,7 +243,7 @@ def test_auto_with_no_gpu_loads_int8_on_cpu_with_one_clear_line(caplog):
     lines = [r.getMessage() for r in caplog.records if "whisper device" in r.getMessage()]
     assert len(lines) == 1
     assert "cpu" in lines[0] and "int8" in lines[0] and "no CUDA device found" in lines[0]
-    assert loaded.requested_device == "cpu"
+    assert loaded.attempted_device == "cpu" and loaded.fallback is False
 
 
 def test_auto_falls_back_to_cpu_when_the_cuda_load_fails(caplog):
@@ -230,6 +259,39 @@ def test_auto_falls_back_to_cpu_when_the_cuda_load_fails(caplog):
     lines = [r.getMessage() for r in caplog.records if "whisper device" in r.getMessage()]
     assert len(lines) == 1, "one line, not one per attempt"
     assert "cuda load boom" in lines[0] and "using cpu" in lines[0]
+    # A GPU that was there and failed is a WARNING, not an INFO line (review m7),
+    # and the state is machine-readable: attempted cuda, ran cpu, fallback true.
+    warned = [
+        r for r in caplog.records if r.levelno == logging.WARNING and "FALLBACK" in r.getMessage()
+    ]
+    assert len(warned) == 1 and "cuda load boom" in warned[0].getMessage()
+    assert (loaded.attempted_device, loaded.fallback) == ("cuda", True)
+    assert loaded.attempted_compute_type == "float16"
+
+
+def test_the_model_defaults_by_the_device_that_resolves():
+    cuda = ws.load_transcriber(ws.ServerConfig(), _maker([]), _count(1))
+    assert cuda.model == "large-v2", "a GPU install has always run large-v2"
+    cpu = ws.load_transcriber(ws.ServerConfig(), _maker([]), _count(0))
+    assert cpu.model == "base.en"
+    named = ws.load_transcriber(ws.ServerConfig(model="small.en"), _maker([]), _count(1))
+    assert named.model == "small.en", "an explicit model always wins"
+
+
+def test_a_fallback_to_cpu_takes_the_cpu_default_model_and_says_so(caplog):
+    seen = []
+
+    def make(cfg, device, compute):
+        seen.append((cfg.model, device))
+        if device == "cuda":
+            raise RuntimeError("cuda load boom")
+        return FakeTranscriber(device=device, compute_type=compute)
+
+    with caplog.at_level(logging.WARNING, logger="whisper_server"):
+        loaded = ws.load_transcriber(ws.ServerConfig(), make, _count(1))
+    assert seen == [("large-v2", "cuda"), ("base.en", "cpu")]
+    assert loaded.model == "base.en"
+    assert "model base.en" in caplog.text and "large-v2" in caplog.text
 
 
 def test_explicit_cuda_that_cannot_load_is_loud_not_a_silent_cpu():
@@ -260,39 +322,63 @@ def test_a_model_that_loads_somewhere_else_is_reported_as_loaded(caplog):
 
     with caplog.at_level(logging.WARNING, logger="whisper_server"):
         loaded = ws.load_transcriber(ws.parse_config(["--device", "cuda"], {}), make, _count(1))
-    assert loaded.transcriber.device == "cpu" and loaded.requested_device == "cuda"
+    assert loaded.transcriber.device == "cpu" and loaded.attempted_device == "cuda"
     assert "loaded device=cpu" in caplog.text
 
 
 # ── the decode fingerprint is journal-key material ───────────────────────────
 
 
-def test_a_gpu_float16_worker_keeps_the_fingerprint_it_had_before_this_change():
-    # Literal, computed from the 2.x formula: changing it orphans journalled transcripts.
-    assert ws.decode_fingerprint(ws.ServerConfig(), "float16", True) == "9eb83fa070875d52"
+def test_an_existing_gpu_install_keeps_the_fingerprint_it_had_before_this_change():
+    # Literals computed from the 2.x formula for large-v2, float16, batched, batch 8:
+    # an existing GPU box (the Windows supervisor passed large-v2) must not move,
+    # or every journalled transcript of that worker is orphaned.
+    assert ws.decode_fingerprint("large-v2", 8, "float16", True) == "850881e4bf06fae4"
+
+
+def test_an_unconfigured_gpu_worker_resolves_to_exactly_that_fingerprint():
+    # End to end through the resolution path with no model, no compute type and
+    # no flags, as an existing install runs it: device auto finding a CUDA device.
+    cfg = ws.parse_config([], {})
+    loaded = ws.load_transcriber(cfg, _maker([]), _count(1))
+    t = loaded.transcriber
+    assert (loaded.model, t.device, t.compute_type, t.batched) == (
+        "large-v2",
+        "cuda",
+        "float16",
+        True,
+    )
+    assert ws.decode_fingerprint(loaded.model, cfg.batch_size, t.compute_type, t.batched) == (
+        "850881e4bf06fae4"
+    )
+
+
+def test_base_en_float16_is_the_other_fingerprint_the_old_default_had():
+    assert ws.decode_fingerprint("base.en", 8, "float16", True) == "9eb83fa070875d52"
 
 
 def test_a_cpu_int8_worker_has_its_own_fingerprint():
-    assert ws.decode_fingerprint(ws.ServerConfig(), "int8", True) == "47f40c4def7eeab6"
+    assert ws.decode_fingerprint("base.en", 8, "int8", True) == "47f40c4def7eeab6"
 
 
 def test_every_decode_setting_moves_the_fingerprint():
-    base = ws.decode_fingerprint(ws.ServerConfig(), "int8", True)
+    base = ws.decode_fingerprint("base.en", 8, "int8", True)
     for other in (
-        ws.decode_fingerprint(ws.ServerConfig(model="small.en"), "int8", True),
-        ws.decode_fingerprint(ws.ServerConfig(batch_size=4), "int8", True),
-        ws.decode_fingerprint(ws.ServerConfig(), "float32", True),
-        ws.decode_fingerprint(ws.ServerConfig(), "int8", False),
+        ws.decode_fingerprint("small.en", 8, "int8", True),
+        ws.decode_fingerprint("base.en", 4, "int8", True),
+        ws.decode_fingerprint("base.en", 8, "float32", True),
+        ws.decode_fingerprint("base.en", 8, "int8", False),
     ):
         assert other != base
 
 
-def test_threads_and_workers_do_not_move_the_fingerprint():
-    # They change speed, not text, so they must not orphan the journal.
-    base = ws.decode_fingerprint(ws.ServerConfig(), "int8", True)
-    assert (
-        ws.decode_fingerprint(ws.ServerConfig(cpu_threads=3, num_workers=4), "int8", True) == base
-    )
+def test_threads_and_workers_are_not_inputs_to_the_fingerprint():
+    # They change speed, not text, so they must not orphan the journal: the
+    # function does not even take them.
+    import inspect
+
+    params = set(inspect.signature(ws.decode_fingerprint).parameters)
+    assert params == {"model", "batch_size", "compute_type", "batched"}
 
 
 # ── /health ──────────────────────────────────────────────────────────────────
@@ -335,10 +421,30 @@ def test_health_carries_every_field_the_server_reads(monkeypatch, tmp_path):
 
 def test_health_reports_the_device_that_loaded_and_the_one_asked_for(monkeypatch, tmp_path):
     fake = FakeTranscriber(device="cpu", compute_type="int8", source="model")
-    client, *_ = _app(monkeypatch, tmp_path, fake, requested="cuda", reason="requested cuda")
+    meta = {
+        "attempted_device": "cuda",
+        "attempted_compute_type": "float16",
+        "device_reason": "auto: CUDA found but the model failed to load on it (boom); using cpu",
+        "fallback": True,
+    }
+    client, *_ = _app(monkeypatch, tmp_path, fake, cfg=ws.ServerConfig(device="auto"), meta=meta)
     body = client.get("/health").json()
-    assert body["device"] == "cpu" and body["requested_device"] == "cuda"
-    assert body["device_source"] == "model" and body["device_reason"] == "requested cuda"
+    # Consistent after a GPU-to-CPU fallback (review m7 / nit 7): what was asked,
+    # what the first attempt tried, what ran, and that it fell back.
+    assert body["requested_device"] == "auto" and body["attempted_device"] == "cuda"
+    assert body["requested_compute_type"] == "float16" and body["device"] == "cpu"
+    assert body["compute_type"] == "int8" and body["fallback"] is True
+    assert body["device_source"] == "model" and "using cpu" in body["device_reason"]
+    plain, *_ = _app(monkeypatch, tmp_path)
+    assert plain.get("/health").json()["fallback"] is False
+
+
+def test_health_names_the_path_flavor_and_the_model_in_use(monkeypatch, tmp_path):
+    client, *_ = _app(monkeypatch, tmp_path)
+    body = client.get("/health").json()
+    assert body["path_flavor"] == ("nt" if os.name == "nt" else "posix")
+    assert body["model"] == "base.en"
+    assert body["decode_fingerprint"] == ws.decode_fingerprint("base.en", 8, "int8", True)
 
 
 def test_health_reports_threads_and_workers_on_cpu_only(monkeypatch, tmp_path):
@@ -421,7 +527,7 @@ def test_at_most_num_workers_decodes_run_at_once(workers, expected_peak):
                 running -= 1
             return "x"
 
-    engine = ws.Engine(Slow(), workers)
+    engine = ws.Engine([ws.InProcessRunner(Slow()) for _ in range(workers)])
     threads = [threading.Thread(target=engine.run, args=("p", 1.0)) for _ in range(6)]
     for t in threads:
         t.start()
@@ -431,8 +537,9 @@ def test_at_most_num_workers_decodes_run_at_once(workers, expected_peak):
 
 
 def test_busy_reports_the_most_overdue_decode_and_clears_after_a_failure():
-    engine = ws.Engine(FakeTranscriber(), 2)
-    engine.transcriber.boom = "wedged"
+    fake = FakeTranscriber()
+    engine = _engine(fake, 2)
+    fake.boom = "wedged"
     with pytest.raises(RuntimeError):
         engine.run("p", 1.0)
     assert engine.busy() == (0.0, None), "a failed decode must not stay 'busy'"
@@ -523,6 +630,46 @@ def test_the_single_upload_endpoint_still_works(monkeypatch, tmp_path):
     assert r.json() == {"text": "heard-8", "error": None}
 
 
+def test_the_batch_upload_endpoint_honours_the_request_deadline_header(monkeypatch, tmp_path):
+    # Review m6: like the Mac worker, clips not yet STARTED when the client's
+    # ceiling has passed are answered request_abandoned and never decoded.
+    client, fake, *_ = _app(monkeypatch, tmp_path)
+    r = client.post(
+        "/transcribe-batch",
+        files=[("files", ("101", b"aa", "audio/wav"))],
+        headers={wpp.REQUEST_TIMEOUT_HEADER: "30"},
+    ).json()
+    assert r["results"]["101"]["error"] is None, "inside the ceiling it is decoded"
+    import whisper_path_pipeline as pp
+
+    real_past = pp.past
+    monkeypatch.setattr(ws, "past", lambda deadline: deadline is not None)
+    r = client.post(
+        "/transcribe-batch",
+        files=[("files", ("101", b"aa", "audio/wav")), ("files", ("102", b"bb", "audio/wav"))],
+        headers={wpp.REQUEST_TIMEOUT_HEADER: "30"},
+    ).json()["results"]
+    assert all(v["error"].startswith("request_abandoned:") for v in r.values()), r
+    assert len(fake.calls) == 1, "an abandoned clip is never decoded"
+    assert real_past(None) is False
+
+
+def test_an_upload_limit_comes_from_its_audio_length_not_a_flat_300s(monkeypatch, tmp_path):
+    seen = []
+    client, fake, *_ = _app(monkeypatch, tmp_path)
+    engine = client.app.state.engine
+    real = engine.run
+    engine.run = lambda path, audio_s: (seen.append(audio_s), real(path, audio_s))[1]
+    wav = tmp_path / "long.wav"
+    _sine_wav(wav, 5.0)
+    client.post("/transcribe", files={"file": ("a.wav", wav.read_bytes(), "audio/wav")})
+    assert seen and abs(seen[0] - 5.0) < 0.01, seen
+    # And that length reaches the limit /health will report for it.
+    assert ws.Engine.clip_limit_s(seen[0]) == max(
+        ws.CLIP_TIMEOUT_FLOOR_S, ws.CLIP_TIMEOUT_FACTOR * seen[0]
+    )
+
+
 def test_the_batch_upload_endpoint_keys_results_by_filename(monkeypatch, tmp_path):
     client, fake, *_ = _app(monkeypatch, tmp_path)
     r = client.post(
@@ -547,8 +694,7 @@ def test_an_upload_failure_is_reported_in_the_body_as_it_always_was(monkeypatch,
 def test_creating_the_app_starts_the_machine_id_thread_once(monkeypatch, tmp_path):
     ident = wmi.MachineIdentity()
     monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-cpu-2")
-    loaded = ws.LoadedModel(FakeTranscriber(), "cpu", "int8", "t")
-    ws.create_app(ws.ServerConfig(), loaded, identity=ident)
+    ws.create_app(ws.ServerConfig(), _engine(FakeTranscriber()), identity=ident)
     assert ident.first is not None
     first = ident.first
     assert first.result(timeout=5) is None and ident.start() is first

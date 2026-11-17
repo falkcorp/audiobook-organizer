@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_path_pipeline.py
-# version: 1.0.1
+# version: 1.1.0
 # guid: 5d2c8e17-9b43-4a06-8f1d-3e7a0c6b9d25
 # last-edited: 2026-11-17
 #
@@ -154,6 +154,8 @@ def test_windows_map_accepts(raw, expected):
         "/lib=/mnt/posix",  # a POSIX local root on Windows
         "/lib=relative\\dir",
         "/lib=X:relative",  # drive-relative: resolves against a per-drive cwd
+        "/lib=X:",  # a bare drive is drive-relative too (review m2)
+        "/lib=\\\\host",  # a UNC name with no share
         "/lib=\\rooted-no-drive",
         "/lib=\\\\?\\X:\\lib",  # the extended prefix is the worker's to add
         "/lib=\\\\.\\X:\\lib",
@@ -196,19 +198,19 @@ def test_windows_split_maps_a_plain_path():
 @pytest.mark.parametrize(
     "path,code",
     [
-        ("/lib/Gotham/..\\..\\secret.txt", "path_unmapped"),  # backslash traversal
-        ("/lib/Gotham/a\\b.m4b", "path_unmapped"),
-        ("/lib/Gotham/.. /x.m4b", "path_unmapped"),  # ".. " is ".." on Windows
+        ("/lib/Gotham/..\\..\\secret.txt", "path_unrepresentable"),  # backslash traversal
+        ("/lib/Gotham/a\\b.m4b", "path_unrepresentable"),
+        ("/lib/Gotham/.. /x.m4b", "path_unrepresentable"),  # ".. " is ".." on Windows
         ("/lib/Gotham/../x.m4b", "path_unmapped"),
-        ("/lib/Gotham/C:\\Windows\\x", "path_unmapped"),  # drive escape
-        ("/lib/Gotham/C:/x", "path_unmapped"),
-        ("/lib/Gotham/\\\\evil\\share\\x", "path_unmapped"),  # UNC escape
-        ("/lib/Gotham/\\\\?\\C:\\x", "path_unmapped"),
-        ("/lib/Gotham/CON", "path_unmapped"),
-        ("/lib/Gotham/NUL.m4b", "path_unmapped"),
-        ("/lib/Gotham/sub/com1.m4b", "path_unmapped"),
-        ("/lib/Gotham/stream.m4b:hidden", "path_unmapped"),  # alternate data stream
-        ("/lib/Gotham/trailing.", "path_unmapped"),
+        ("/lib/Gotham/C:\\Windows\\x", "path_unrepresentable"),  # drive escape
+        ("/lib/Gotham/C:/x", "path_unrepresentable"),
+        ("/lib/Gotham/\\\\evil\\share\\x", "path_unrepresentable"),  # UNC escape
+        ("/lib/Gotham/\\\\?\\C:\\x", "path_unrepresentable"),
+        ("/lib/Gotham/CON", "path_unrepresentable"),
+        ("/lib/Gotham/NUL.m4b", "path_unrepresentable"),
+        ("/lib/Gotham/sub/com1.m4b", "path_unrepresentable"),
+        ("/lib/Gotham/stream.m4b:hidden", "path_unrepresentable"),  # alternate data stream
+        ("/lib/Gotham/trailing.", "path_unrepresentable"),
         ("/lib/GothamX/a.m4b", "path_unmapped"),  # sibling prefix
         ("/lib/gotham/a.m4b", "path_unmapped"),  # the SERVER side stays exact
         ("lib/Gotham/a.m4b", "path_unmapped"),
@@ -527,3 +529,47 @@ def test_a_declared_oversized_body_is_refused_without_reading_it():
     }
     asyncio.run(mw(scope, receive, send))
     assert sent[0]["status"] == 413
+
+
+def test_windows_map_accepts_a_drive_root_and_a_share_root():
+    assert wpp.parse_path_map("/lib=X:\\", ntpath) == [("/lib", "X:\\")]
+    assert wpp.parse_path_map("/lib=\\\\arkham\\audio", ntpath) == [("/lib", "\\\\arkham\\audio")]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["/lib/Gotham", "/lib=relative", "/lib=/a/../b", "/lib/../x=/a", "/=/a", "/lib=/"],
+)
+def test_map_errors_never_quote_the_entry(raw):
+    # The text reaches /health, which any caller can read, and a local side can
+    # name a host and a share.
+    with pytest.raises(ValueError) as e:
+        wpp.parse_path_map(raw, posixpath)
+    assert "entry 1" in str(e.value)
+    for token in ("/lib", "relative", "/a"):
+        assert token not in str(e.value).replace("entry 1", ""), (raw, str(e.value))
+
+
+def test_a_nt_map_error_does_not_quote_the_unc_host():
+    with pytest.raises(ValueError) as e:
+        wpp.parse_path_map("/lib=\\\\arkham\\audio\\..\\x", ntpath)
+    assert "arkham" not in str(e.value) and "audio" not in str(e.value)
+
+
+def test_an_absurdly_long_deadline_header_is_capped_not_a_500():
+    class Req:
+        headers = {wpp.REQUEST_TIMEOUT_HEADER: "9" * 5000}
+
+    got = wpp.abandon_deadline(Req())
+    assert got is not None and got > 0
+    Req.headers = {wpp.REQUEST_TIMEOUT_HEADER: "9" * 13}
+    assert wpp.abandon_deadline(Req()) is not None
+    Req.headers = {wpp.REQUEST_TIMEOUT_HEADER: "30"}
+    assert 29 < wpp.abandon_deadline(Req()) - __import__("time").monotonic() <= 30
+
+
+def test_the_extract_argv_carries_a_file_only_protocol_whitelist_and_keeps_the_fingerprint():
+    # Source-level pin for the shared code; the Mac pin suite pins the full argv.
+    src = pathlib.Path(wpp.__file__).read_text()
+    assert '"-protocol_whitelist",\n                        "file",' in src
+    assert wpp.EXTRACT_FINGERPRINT == "c797688b945fe1e6"

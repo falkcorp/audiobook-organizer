@@ -1,5 +1,5 @@
 # file: scripts/whisper_path_pipeline.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: c3e91a57-2d84-4f16-b7a9-0e5d8c4b6f13
 # last-edited: 2026-11-17
 #
@@ -104,6 +104,11 @@ ERR_TRANSCRIBE_TIMEOUT = "transcribe_timeout"
 ERR_DECODER_CRASHED = "decoder_crashed"
 ERR_DECODER_KILLED = "decoder_killed"
 ERR_REQUEST_ABANDONED = "request_abandoned"
+# This worker's filesystem cannot represent the path the server named (a Windows
+# worker and a title with a colon, a trailing dot or a device name). Distinct from
+# path_unmapped, which means "not under a mapped root / root lost": the file is
+# fine and a POSIX worker can read it. Only a non-POSIX worker emits it.
+ERR_PATH_UNREPRESENTABLE = "path_unrepresentable"
 
 # Demuxers ffmpeg may use on a library file. An allow-list, not a deny-list: the
 # share is writable by anyone who can drop a file in it, and a planted .m3u8 /
@@ -226,7 +231,7 @@ def component_problem(part: str, pathmod: Any = None) -> str | None:
     saw, ":" is a drive or an alternate data stream, a trailing dot or space is
     stripped (so ".. " IS ".."), and a device name opens the device, not a file.
     A path refused here exists on the server, so the caller reports it as
-    path_unmapped (retried, never a verdict on the book)."""
+    path_unrepresentable (retried, never a verdict on the book)."""
     pathmod = pathmod or os.path
     if not _is_nt(pathmod):
         return None
@@ -275,24 +280,32 @@ def is_within(root: str, path: str, pathmod: Any = None) -> bool:
     return p == r or p.startswith(r + sep)
 
 
-def _parse_local_root(entry: str, local: str, pathmod: Any) -> str:
-    """Validate and normalise the LOCAL side of one map entry for `pathmod`'s flavor."""
+def _parse_local_root(label: str, local: str, pathmod: Any) -> str:
+    """Validate and normalise the LOCAL side of one map entry for `pathmod`'s flavor.
+
+    `label` is "entry N". Error text never quotes the entry: it is what /health
+    shows to any caller, and a local side can name a host and share."""
     if _is_nt(pathmod):
         drive, rest = ntpath.splitdrive(local)
         extended = local.startswith(("\\\\?\\", "\\\\.\\"))
-        if not drive or extended or rest[:1] not in ("\\", "/", ""):
+        unc = drive.startswith("\\\\")
+        if unc and "\\" not in drive[2:]:
+            drive = ""  # \\host with no share is not a path
+        # A bare drive ("X:") is drive-RELATIVE: it resolves against the process's
+        # per-drive working directory. A UNC share root has an empty rest and is fine.
+        if not drive or extended or (rest[:1] not in ("\\", "/") and not (unc and rest == "")):
             raise ValueError(
-                f"entry {entry!r}: {local!r} must be a drive path (X:\\dir) or a UNC share "
-                "(\\\\host\\share\\dir), without a \\\\?\\ prefix"
+                f"{label}: the local side must be a drive path (X:\\dir, with the backslash) "
+                "or a UNC share (\\\\host\\share\\dir), without a \\\\?\\ prefix"
             )
         if ".." in ntpath.normcase(local).replace("/", "\\").split("\\"):
-            raise ValueError(f"entry {entry!r}: {local!r} must be absolute with no '..'")
+            raise ValueError(f"{label}: the local side must be absolute with no '..'")
         return ntpath.normpath(local)
     if not local.startswith("/") or ".." in local.split("/"):
-        raise ValueError(f"entry {entry!r}: {local!r} must be absolute with no '..'")
+        raise ValueError(f"{label}: the local side must be absolute with no '..'")
     local = posixpath.normpath(local)
     if local == "/":
-        raise ValueError(f"entry {entry!r} maps the filesystem root")
+        raise ValueError(f"{label} maps the filesystem root")
     return local
 
 
@@ -310,20 +323,19 @@ def parse_path_map(raw: str, pathmod: Any = None) -> list[tuple[str, str]]:
     """
     pathmod = pathmod or os.path
     pairs: list[tuple[str, str]] = []
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
+    # Errors name the entry by number, never by value: they reach /health.
+    for number, entry in enumerate((e.strip() for e in raw.split(",") if e.strip()), 1):
+        label = f"entry {number}"
         server, sep, local = entry.partition("=")
         server, local = server.strip(), local.strip()
         if not sep or not server or not local:
-            raise ValueError(f"entry {entry!r} is not server-path=local-path")
+            raise ValueError(f"{label} is not server-path=local-path")
         if not server.startswith("/") or ".." in server.split("/"):
-            raise ValueError(f"entry {entry!r}: {server!r} must be absolute with no '..'")
+            raise ValueError(f"{label}: the server side must be absolute with no '..'")
         server = posixpath.normpath(server)
         if server == "/":
-            raise ValueError(f"entry {entry!r} maps the filesystem root")
-        pairs.append((server, _parse_local_root(entry, local, pathmod)))
+            raise ValueError(f"{label} maps the filesystem root")
+        pairs.append((server, _parse_local_root(label, local, pathmod)))
     pairs.sort(key=lambda p: len(p[0]), reverse=True)
     return pairs
 
@@ -351,7 +363,9 @@ def abandon_deadline(request: Request) -> float | None:
     raw = (request.headers.get(REQUEST_TIMEOUT_HEADER) or "").strip()
     if not (raw.isascii() and raw.isdigit()):
         return None
-    seconds = min(int(raw), _MAX_REQUEST_TIMEOUT_S)
+    # int() of a header past Python's 4300-digit limit raises ValueError (a 500);
+    # anything over 12 digits is past the cap anyway.
+    seconds = _MAX_REQUEST_TIMEOUT_S if len(raw) > 12 else min(int(raw), _MAX_REQUEST_TIMEOUT_S)
     if seconds <= 0:
         return None
     return time.monotonic() + seconds
@@ -531,7 +545,7 @@ class PathPipeline:
             for part in rest:
                 problem = component_problem(part, self.pathmod)
                 if problem:
-                    raise PathJobError(ERR_PATH_UNMAPPED, problem)
+                    raise PathJobError(ERR_PATH_UNREPRESENTABLE, problem)
             return server, local, rest
         raise PathJobError(ERR_PATH_UNMAPPED, "path is not under a mapped prefix")
 
@@ -555,9 +569,12 @@ class PathPipeline:
             raise PathJobError(ERR_PATH_UNMAPPED, "path resolves outside its mapped root")
         if _is_nt(self.pathmod) and len(real) >= NT_EXTENDED_FROM:
             real = to_extended(real)  # past MAX_PATH the plain spelling is not openable
-        # The resolved path, not `mapped`: ffmpeg then opens exactly the file
-        # that was just checked, with no symlink left to swap between the check
-        # and the open.
+        # The resolved path, not `mapped`: the file itself is no longer a symlink.
+        # This narrows the window, it does not close it: a DIRECTORY component of
+        # the resolved path can still be swapped for a symlink between this check
+        # and ffmpeg's open by someone who can write to the share. The impact is
+        # bounded (a whitelisted media file elsewhere on this worker, transcript
+        # only).
         return real
 
     def prepare_path_job(self, job: Any) -> tuple[str, int]:
@@ -632,6 +649,11 @@ class PathPipeline:
                         "0",
                         "-t",
                         str(seconds),
+                        # Local files only: no network protocol can be reached through
+                        # a container that references one. Not in EXTRACT_SETTINGS:
+                        # it does not change the WAV, so the fingerprint stays.
+                        "-protocol_whitelist",
+                        "file",
                         "-i",
                         src,
                         "-vn",
