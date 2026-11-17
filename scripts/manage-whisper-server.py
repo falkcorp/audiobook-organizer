@@ -1,5 +1,5 @@
 # file: scripts/manage-whisper-server.py
-# version: 2.0.0
+# version: 3.0.0
 # guid: f7a8b9c0-d1e2-3456-fabc-678901234567
 # last-edited: 2026-11-17
 #
@@ -102,6 +102,68 @@ def remote_dir() -> str:
     return rf"C:\Users\{require_win_user()}"
 
 
+def ps_quote(text: str) -> str:
+    """A PowerShell single-quoted literal: nothing inside is interpreted, and an
+    embedded quote is doubled."""
+    return "'" + text.replace("'", "''") + "'"
+
+
+def start_process_arg(arg: str) -> str:
+    """One element of Start-Process -ArgumentList as a PowerShell literal. Start-Process
+    joins the elements with spaces and does NOT quote them, so a value with a space (a
+    profile folder, "John Smith") must carry its own double quotes to stay one
+    argument."""
+    if arg and not any(c.isspace() or c == '"' for c in arg):
+        return ps_quote(arg)
+    return ps_quote('"' + arg.replace('"', '\\"') + '"')
+
+
+def build_kill_script(port: int) -> str:
+    """PowerShell that stops whatever LISTENS on `port` (the local address column, not
+    a connection that merely has the port as its remote end)."""
+    return r"""
+$pids = (netstat -ano | Select-String ':__PORT__\s+\S+\s+LISTENING') -replace '.*\s(\d+)$','$1' |
+        Sort-Object -Unique
+foreach ($p in $pids) {
+    if ($p -match '^\d+$') {
+        Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+        Write-Host "Killed PID $p"
+    }
+}
+Start-Sleep -Seconds 1
+""".replace("__PORT__", str(int(port)))
+
+
+def build_launch_script(
+    remote_folder: str, device: str, model: str, bind_host: str, port: int
+) -> str:
+    """PowerShell that finds uv and starts the server hidden. Runs under Windows
+    PowerShell 5.1, the one WinRM gives: no `?.`, no `??`, no PowerShell 7 syntax, and
+    every value is a single-quoted literal."""
+    server_args = [rf"{remote_folder}\whisper_server.py", "--device", device]
+    if model:
+        server_args += ["--model", model]
+    server_args += ["--host", bind_host, "--port", str(int(port))]
+    args_ps = ", ".join(start_process_arg(a) for a in ["run"] + server_args)
+    return rf"""
+$uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+if ($uvCmd) {{ $uvExe = $uvCmd.Source }} else {{ $uvExe = Join-Path $env:USERPROFILE '.local\bin\uv.exe' }}
+if (-not (Test-Path -LiteralPath $uvExe)) {{
+    Write-Error 'uv not found. Install: winget install --id astral-sh.uv'
+    exit 1
+}}
+$log = Join-Path $env:USERPROFILE 'whisper_server.log'
+$p = Start-Process `
+    -FilePath $uvExe `
+    -ArgumentList {args_ps} `
+    -RedirectStandardOutput $log `
+    -RedirectStandardError ($log + '.err') `
+    -WindowStyle Hidden `
+    -PassThru
+Write-Host ('Started PID ' + $p.Id)
+"""
+
+
 def get_session(password: str) -> winrm.Session:
     return winrm.Session(
         f"http://{COMPUTER}:5985/wsman",
@@ -201,47 +263,11 @@ def cmd_restart(session: winrm.Session, device: str, model: str, bind_host: str)
             file=sys.stderr,
         )
 
-    # Kill any process LISTENING on the server port (match the local address column,
-    # not a connection that merely has the port as its remote end).
-    kill_script = r"""
-$pids = (netstat -ano | Select-String ':__PORT__\s+\S+\s+LISTENING') -replace '.*\s(\d+)$','$1' |
-        Sort-Object -Unique
-foreach ($p in $pids) {
-    if ($p -match '^\d+$') {
-        Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
-        Write-Host "Killed PID $p"
-    }
-}
-Start-Sleep -Seconds 1
-""".replace("__PORT__", str(PORT))
-    out = run_ps(session, kill_script)
+    out = run_ps(session, build_kill_script(PORT))
     if out:
         print(f"  {out}")
 
-    # Locate uv and launch the server in the background.
-    server_args = ["run", rf"{remote_dir()}\whisper_server.py", "--device", device]
-    if model:
-        server_args += ["--model", model]
-    server_args += ["--host", bind_host, "--port", str(PORT)]
-    args_ps = ", ".join('"' + a.replace('"', '`"') + '"' for a in server_args)
-    launch_script = rf"""
-$uvExe = (Get-Command uv -ErrorAction SilentlyContinue)?.Source
-if (-not $uvExe) {{ $uvExe = "$env:USERPROFILE\.local\bin\uv.exe" }}
-if (-not (Test-Path $uvExe)) {{
-    Write-Error "uv not found. Install: winget install --id astral-sh.uv"
-    exit 1
-}}
-$log = "$env:USERPROFILE\whisper_server.log"
-$p = Start-Process `
-    -FilePath $uvExe `
-    -ArgumentList {args_ps} `
-    -RedirectStandardOutput $log `
-    -RedirectStandardError  "$log.err" `
-    -WindowStyle Hidden `
-    -PassThru
-Write-Host "Started PID $($p.Id)"
-"""
-    out = run_ps(session, launch_script)
+    out = run_ps(session, build_launch_script(remote_dir(), device, model, bind_host, PORT))
     print(f"  {out}")
 
     # Wait for model load then check health.

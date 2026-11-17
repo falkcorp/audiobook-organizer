@@ -1,5 +1,5 @@
 # file: scripts/whisper-supervisor.ps1
-# version: 3.0.0
+# version: 4.0.0
 # guid: f2fb096e-b2fc-40e4-90d0-01c3501a6296
 # last-edited: 2026-11-17
 
@@ -15,10 +15,14 @@
       * If the process exited with $StopExitCode -> deliberate stop; supervisor exits.
       * Otherwise -> treated as a crash; logs it and restarts after a delay that
         doubles with each crash in a row (RestartDelaySec up to MaxBackoffSec) and
-        starts over once the server has stayed up for HealthyRunSec.
+        starts over once the server has answered /health AND stayed up for
+        HealthyRunSec.
       * After MaxCrashStreak crashes in a row with no healthy run in between, it
         gives up (FATAL, exit 1) instead of retrying forever: a deterministic
-        startup failure (a bad -ComputeType, a missing module) never heals.
+        startup failure (a bad -ComputeType, a missing module) never heals. A run is
+        healthy only if /health answered during it, so a start that never became
+        ready (a model load that hangs for an hour, a port that will not bind) counts
+        as a failure however long it ran.
 
     The server runs on a CUDA GPU or on the CPU. -Device auto (the default) lets
     the server use CUDA when it finds a working device and otherwise fall back to
@@ -36,7 +40,7 @@
 
     To apply a new build (or restart cleanly):
       1. Create the sentinel:   New-Item (Join-Path $env:USERPROFILE whisper-stop.flag)
-      2. Stop the running server (Ctrl-C in its window, or Stop-Process).
+      2. Stop the running server (Ctrl-C in its window, or stop the uv process by id).
       3. The supervisor sees the sentinel, exits cleanly.
       4. Replace the four .py files, delete the sentinel, re-run this script.
 
@@ -102,14 +106,17 @@
     Longest restart delay. Default: 300
 
 .PARAMETER HealthyRunSec
-    A run at least this long ends the crash streak (the next crash starts the
-    backoff over). Default: 120
+    A run that answered /health and then stayed up at least this long ends the crash
+    streak (the next crash starts the backoff over). A run that never answered
+    /health never counts, however long it ran. Default: 120
 
 .PARAMETER MaxCrashStreak
     Crashes in a row, with no run of HealthyRunSec between them, before the
     supervisor gives up. With the defaults (5 s doubling to 300 s) the 8th crash
-    in a row comes about 10 minutes after the first (waits of 5+10+20+40+80+160+300 s); a crash after a healthy run
-    starts the count over. 0 = never give up. Default: 8
+    in a row comes about 10 minutes of WAITING after the first (5+10+20+40+80+160+300
+    s), plus however long each start ran before it failed (a start that hangs in a
+    model load for an hour and then dies counts as one failure and adds that hour);
+    a crash after a healthy run starts the count over. 0 = never give up. Default: 8
 
 .EXAMPLE
     # CPU-only machine, UNC library, small defaults:
@@ -122,8 +129,9 @@
 
 .EXAMPLE
     # Apply a new server build:
-    New-Item (Join-Path $env:USERPROFILE whisper-stop.flag) ; Stop-Process -Name python -Force
-    # ...replace the three .py files...
+    New-Item (Join-Path $env:USERPROFILE whisper-stop.flag)
+    # ...stop the running server (Ctrl-C in the supervisor window)...
+    # ...replace the four .py files...
     Remove-Item (Join-Path $env:USERPROFILE whisper-stop.flag)
     powershell -ExecutionPolicy Bypass -File whisper-supervisor.ps1
 #>
@@ -211,12 +219,29 @@ if (Test-Path $SentinelPath) {
 # -ArgumentList array with spaces and does not quote elements, so a script path
 # under a profile folder with a space would otherwise split into two arguments.
 $serverArgs = @("run", "`"$ScriptPath`"")
-if ($Model) { $serverArgs += @("--model", $Model) }
+if ($Model) { $serverArgs += @("--model", "`"$Model`"") }
 $serverArgs += @("--device", $Device)
 if ($ComputeType) { $serverArgs += @("--compute-type", $ComputeType) }
 if ($CpuThreads -gt 0) { $serverArgs += @("--cpu-threads", "$CpuThreads") }
 $serverArgs += @("--num-workers", "$NumWorkers")
-$serverArgs += @("--host", $BindHost)
+$serverArgs += @("--host", "`"$BindHost`"")
+
+# Where to ask /health. A wildcard bind answers on loopback; an IPv6 literal needs
+# brackets in a URL.
+if ($BindHost -eq "0.0.0.0") { $healthHost = "127.0.0.1" }
+elseif ($BindHost -eq "::") { $healthHost = "[::1]" }
+elseif ($BindHost.Contains(":")) { $healthHost = "[$BindHost]" }
+else { $healthHost = $BindHost }
+$healthUrl = "http://${healthHost}:${Port}/health"
+
+function Test-ServerHealthy {
+    try {
+        $r = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 3
+        return ($r.StatusCode -eq 200)
+    } catch {
+        return $false
+    }
+}
 
 while ($true) {
     # Honor a sentinel created between iterations (deliberate stop).
@@ -231,14 +256,29 @@ while ($true) {
     Write-Log "INFO" "launching whisper server (uv $($serverArgs -join ' '))"
     $startedAt = Get-Date
 
-    # Start in this console so the user can Ctrl-C; capture the exit code.
+    # Start in this console so the user can Ctrl-C. Not -Wait: while it runs we ask
+    # /health, because only a run that became ready is a healthy one.
     $proc = Start-Process -FilePath $uvExe `
         -ArgumentList $serverArgs `
-        -NoNewWindow -PassThru -Wait
+        -NoNewWindow -PassThru
+    $null = $proc.Handle   # keep the handle so ExitCode is readable after exit
+    $everHealthy = $false
+    $lastProbe = [DateTime]::MinValue
+    while (-not $proc.HasExited) {
+        if (-not $everHealthy -and ((Get-Date) - $lastProbe).TotalSeconds -ge 2) {
+            $lastProbe = Get-Date
+            if (Test-ServerHealthy) {
+                $everHealthy = $true
+                Write-Log "INFO" "server answered /health at $healthUrl after $([int]((Get-Date) - $startedAt).TotalSeconds)s"
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    $proc.WaitForExit()
     $exitCode = $proc.ExitCode
     $ranFor = [int]((Get-Date) - $startedAt).TotalSeconds
 
-    Write-Log "INFO" "whisper server exited: code=$exitCode ran_for_sec=$ranFor"
+    Write-Log "INFO" "whisper server exited: code=$exitCode ran_for_sec=$ranFor became_healthy=$everHealthy"
 
     # Deliberate stop paths: sentinel appeared, or the agreed clean-exit code.
     if (Test-Path $SentinelPath) {
@@ -250,16 +290,18 @@ while ($true) {
         break
     }
 
-    # A run that stayed up this long was healthy, so what ended it is a fresh
-    # problem, not a continuation of a crash loop: start the backoff over.
-    if ($ranFor -ge $HealthyRunSec) { $crashStreak = 0 }
+    # A run that answered /health and then stayed up this long was healthy, so what
+    # ended it is a fresh problem, not a continuation of a crash loop: start the
+    # backoff over. A run that never answered /health never resets the streak, however
+    # long it ran: a start that hangs for an hour and dies is still a failed start.
+    if ($everHealthy -and $ranFor -ge $HealthyRunSec) { $crashStreak = 0 }
     $crashStreak++
 
     # Give-up breaker: the Nth crash in a row with no healthy run between them. The
     # backoff caps each delay, so a windowed restart count could never reach a limit
     # (at most 7 restarts fit in any 10 minutes); the streak can.
     if ($MaxCrashStreak -gt 0 -and $crashStreak -ge $MaxCrashStreak) {
-        Write-Log "FATAL" "crash-loop breaker: $crashStreak crashes in a row, none of them after a run of ${HealthyRunSec}s (>= $MaxCrashStreak). Giving up. Investigate (see the server output above), then re-run the supervisor."
+        Write-Log "FATAL" "crash-loop breaker: $crashStreak crashes in a row, none of them a run that answered /health and then stayed up ${HealthyRunSec}s (>= $MaxCrashStreak). Giving up. Investigate (see the server output above), then re-run the supervisor."
         exit 1
     }
     Write-Log "WARN" "crash $crashStreak in a row (the supervisor gives up at $MaxCrashStreak)"

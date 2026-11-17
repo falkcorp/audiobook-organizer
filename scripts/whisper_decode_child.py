@@ -1,5 +1,5 @@
 # file: scripts/whisper_decode_child.py
-# version: 1.0.0
+# version: 2.0.0
 # guid: 5d0c8e7a-3b94-4a62-9f1e-b7a4c2d81e56
 # last-edited: 2026-11-17
 #
@@ -34,6 +34,27 @@
 # built, or {"fatal": "..."} followed by exit if it could not be; then one
 # {"text": ...} or {"error": ...} per request {"path": ...}.
 #
+# Every request carries an id the child echoes and the parent checks, and ANY
+# exception between send and receive kills the child (see run): a stale reply must
+# never be read as the next clip's answer, which would hand one book another book's
+# transcript.
+#
+# Startup pin: the first child that becomes ready fixes the model, device and compute
+# type this worker serves (StartPin). Every later child and every restart is started
+# with those values EXPLICITLY and is refused if it reports anything else, so a
+# restart can never quietly fall from large-v2 on CUDA to base.en on the CPU and file
+# base.en text under large-v2's journal key.
+#
+# Shutdown: the child ignores SIGINT and (POSIX) lives in its own session, like the
+# Mac child, so Ctrl-C stops the worker without the terminal reaching the decode. A
+# clip still in flight when the worker shuts the child down answers decoder_killed
+# (the code for a decode killed from outside), as the Mac worker's does.
+#
+# Parent death: the child exits when its pipe closes or the orphan watch sees the
+# parent gone; on Windows every child is also put in a Job Object with
+# KILL_ON_JOB_CLOSE, so it dies with the parent even while stuck in a native call
+# that holds the GIL (which would stop the orphan watch from running).
+#
 # Exit codes: POSIX reports a signal death as a negative code, so SIGKILL/SIGTERM
 # (an operator, an OOM killer) read as decoder_killed and anything else as
 # decoder_crashed. Windows has no signals: an externally terminated process has an
@@ -41,7 +62,6 @@
 
 import contextlib
 import importlib
-import json
 import logging
 import multiprocessing
 import os
@@ -49,7 +69,7 @@ import signal
 import sys
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -75,6 +95,14 @@ def _resolve_factory(spec: str):
 
 def _child_main(conn, factory_spec: str, factory_arg: dict) -> None:
     """Entry point of the child process (picklable: a module-level function)."""
+    # Ctrl-C belongs to the parent, which decides what the worker does about it.
+    with contextlib.suppress(Exception):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    if sys.platform != "win32":
+        # Its own session, so a terminal's SIGINT/SIGHUP to the worker's process
+        # group never reaches a decode that is mid-clip.
+        with contextlib.suppress(OSError):
+            os.setsid()
     parent = multiprocessing.parent_process()
 
     def orphan_watch() -> None:
@@ -92,16 +120,149 @@ def _child_main(conn, factory_spec: str, factory_arg: dict) -> None:
         with contextlib.suppress(Exception):
             conn.send({"fatal": f"{type(e).__name__}: {e}"})
         raise SystemExit(3)
-    conn.send({"ready": True, "meta": dict(getattr(backend, "meta", {}) or {})})
+    meta = dict(getattr(backend, "meta", {}) or {})
+    meta.setdefault("pid", os.getpid())  # the REAL interpreter, not a launcher
+    conn.send({"ready": True, "meta": meta})
     while True:
         try:
             msg = conn.recv()
         except (EOFError, OSError):
             return
         try:
-            conn.send({"text": backend.transcribe(msg["path"])})
+            conn.send({"id": msg.get("id"), "text": backend.transcribe(msg["path"])})
         except Exception as e:  # noqa: BLE001 - becomes this clip's error
-            conn.send({"error": f"{type(e).__name__}: {e}"})
+            conn.send({"id": msg.get("id"), "error": f"{type(e).__name__}: {e}"})
+
+
+# ── Windows: children die with the parent ────────────────────────────────────
+
+_JOB: Any = None
+_JOB_LOCK = threading.Lock()
+
+
+def _kill_on_close_job() -> Any:
+    """One Job Object for the life of this process, set to kill every process in it
+    when its last handle closes, which is when this process exits however it exits.
+    ctypes only, no dependency. Raises OSError if Windows refuses."""
+    global _JOB
+    import ctypes
+    from ctypes import wintypes
+
+    with _JOB_LOCK:
+        if _JOB is not None:
+            return _JOB
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
+                ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in (
+                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+            )]  # fmt: skip
+
+        class ExtendedLimits(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", BasicLimits),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        info = ExtendedLimits()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        # 9 = JobObjectExtendedLimitInformation
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        _JOB = job
+        return job
+
+
+def _assign_to_job(pid: int) -> None:
+    """Put process `pid` in the kill-on-close job. Failure is logged, not fatal: the
+    orphan watch and pipe EOF still cover every case but a native call that holds the
+    GIL."""
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        job = _kill_on_close_job()
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        # PROCESS_SET_QUOTA | PROCESS_TERMINATE
+        handle = k32.OpenProcess(0x0100 | 0x0001, False, pid)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if not k32.AssignProcessToJobObject(job, handle):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            k32.CloseHandle(handle)
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not put decode process %s in a kill-on-close job: %s", pid, e)
+
+
+class StartPin:
+    """The model, device and compute type this worker serves, fixed by the first
+    child that becomes ready. Shared by every DecodeChild of one worker."""
+
+    KEYS = ("model", "device", "compute_type")
+
+    def __init__(self) -> None:
+        self._mu = threading.Lock()
+        self._meta: Optional[dict] = None
+
+    def values(self) -> Optional[dict]:
+        with self._mu:
+            return None if self._meta is None else {k: self._meta.get(k) for k in self.KEYS}
+
+    def meta(self) -> Optional[dict]:
+        """The FULL meta of the first successful start (what /health reports)."""
+        with self._mu:
+            return None if self._meta is None else dict(self._meta)
+
+    def check_and_record(self, meta: dict) -> Optional[str]:
+        """None if `meta` is acceptable (and recorded when it is the first), else the
+        reason it is not."""
+        with self._mu:
+            if self._meta is None:
+                self._meta = dict(meta)
+                return None
+            want = {k: self._meta.get(k) for k in self.KEYS}
+            got = {k: meta.get(k) for k in self.KEYS}
+            if want != got:
+                return (
+                    f"it loaded {got} but this worker is pinned to {want} (the first start's "
+                    "resolution); a restart never changes the model silently"
+                )
+            return None
 
 
 class DecodeChild:
@@ -119,9 +280,17 @@ class DecodeChild:
         *,
         ready_timeout_s: float = 300.0,
         fault_ttl_s: float = 300.0,
+        pin: Optional[StartPin] = None,
+        pin_arg: Optional[Callable[[dict, dict], dict]] = None,
     ) -> None:
         self._spec = factory_spec
         self._arg = factory_arg
+        # With a pin, every start after the first resolution gets
+        # pin_arg(base_arg, pinned_values) as its factory argument and must report
+        # the pinned values back.
+        self._pin = pin
+        self._pin_arg = pin_arg
+        self._req_id = 0
         self.ready_timeout_s = ready_timeout_s
         self.fault_ttl_s = fault_ttl_s
         self._ctx = multiprocessing.get_context("spawn")
@@ -215,8 +384,13 @@ class DecodeChild:
 
     def _fault_free_start(self, wait: float) -> None:
         parent_conn, child_conn = self._ctx.Pipe(duplex=True)
+        arg = self._arg
+        if self._pin is not None and self._pin_arg is not None:
+            pinned = self._pin.values()
+            if pinned is not None:
+                arg = self._pin_arg(self._arg, pinned)
         proc = self._ctx.Process(
-            target=_child_main, args=(child_conn, self._spec, self._arg), daemon=True
+            target=_child_main, args=(child_conn, self._spec, arg), daemon=True
         )
         try:
             proc.start()
@@ -225,6 +399,8 @@ class DecodeChild:
             child_conn.close()
             raise ChildFaultError(f"decode process could not be started: {e}", starting=True)
         child_conn.close()  # the child's end is the child's now (EOF needs this)
+        if sys.platform == "win32" and proc.pid is not None:
+            _assign_to_job(proc.pid)
         self._proc, self._conn = proc, parent_conn
         self.starts += 1
         try:
@@ -248,8 +424,23 @@ class DecodeChild:
             raise ChildFaultError(
                 "decode process sent an unexpected startup message", starting=True
             )
+        meta = dict(msg.get("meta") or {})
+        if self._pin is not None:
+            why = self._pin.check_and_record(meta)
+            if why:
+                self._kill()
+                raise ChildFaultError(f"decode process refused: {why}", starting=True)
+        log.info(
+            "decode process %s ready: model=%s device=%s compute_type=%s fallback=%s (%s)",
+            meta.get("pid"),
+            meta.get("model"),
+            meta.get("device"),
+            meta.get("compute_type"),
+            meta.get("fallback"),
+            meta.get("device_reason"),
+        )
         with self._mu:
-            self._meta = dict(msg.get("meta") or {})
+            self._meta = meta
 
     def _ensure_child(self) -> None:
         if self.alive():
@@ -267,10 +458,12 @@ class DecodeChild:
         RuntimeError when the backend reports an error for the clip."""
         self._ensure_child()
         proc, conn = self._proc, self._conn
+        self._req_id += 1
+        req_id = self._req_id
         self._set_busy(timeout_s)
         try:
             try:
-                conn.send({"path": wav_path})
+                conn.send({"id": req_id, "path": wav_path})
                 if not conn.poll(timeout_s):
                     self._kill()
                     log.error(
@@ -301,14 +494,24 @@ class DecodeChild:
                     ERR_DECODER_CRASHED,
                     f"the decode process died (exit code {code}) on this clip; it was restarted",
                 )
+            except PathJobError:
+                raise
+            except BaseException:
+                # Anything else between send and receive (an overflowing timeout, an
+                # unpickling error, a KeyboardInterrupt) leaves the child working on a
+                # request nobody will read; its answer would then be taken for the
+                # NEXT clip's. Kill it so the next clip starts a clean child.
+                self._kill()
+                raise
+            if msg.get("id") != req_id:
+                # Second line of defence: an answer to some other request.
+                self._kill()
+                raise PathJobError(
+                    ERR_DECODER_CRASHED,
+                    "the decode process answered a different request; it was restarted",
+                )
             if msg.get("error"):
                 raise RuntimeError(str(msg["error"]))
             return (msg.get("text") or "").strip()
         finally:
             self._set_busy(None)
-
-
-def encode_arg(obj: Any) -> dict:
-    """Round-trip through JSON so a factory argument is plain data, never a live
-    object (it is pickled to the child)."""
-    return json.loads(json.dumps(obj))
