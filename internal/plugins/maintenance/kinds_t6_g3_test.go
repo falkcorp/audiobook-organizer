@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.10
+// version: 1.0.11
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"log/slog"
 	"reflect"
 	"runtime"
@@ -640,7 +641,7 @@ func t6g3ExpectedWrites(t *testing.T, headID string) []string {
 		rows = append(rows, row)
 	}
 	var out []string
-	for _, r := range t6RowsUnion(rows...) {
+	for _, r := range resources.Union(rows...) {
 		out = append(out, string(r))
 	}
 	return out

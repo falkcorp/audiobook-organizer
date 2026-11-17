@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g2_test.go
-// version: 1.3.8
+// version: 1.3.9
 // guid: 7d3c1e58-2b94-4a6f-9e07-c5a18f2d4b63
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -726,7 +727,7 @@ func (r t6g2Row) derive() []ops.Resource {
 	if len(r.calls) == 0 && len(r.outside) == 0 {
 		return nil
 	}
-	return t6RowsUnion(t6RowsOf(r.calls...), r.outside)
+	return resources.Union(t6RowsOf(r.calls...), r.outside)
 }
 
 // t6g2ChaptersFixture arranges one single-file book per id, each with a file
@@ -922,7 +923,7 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 				}
 			} else if got := slices.Sorted(slices.Values(refs(c.Effects.WriteSet()))); !slices.Equal(got, slices.Sorted(slices.Values(res(r.writes)))) {
 				// A set, not a sequence: a kind whose Effects are built from the shared
-				// table's sorted union (t6RowsUnion) lists them in that order.
+				// table's sorted union (resources.Union) lists them in that order.
 				t.Errorf("write set = %v, want %v", got, slices.Sorted(slices.Values(res(r.writes))))
 			}
 			if got := slices.Sorted(slices.Values(refs(c.Effects.ReadSet()))); !slices.Equal(got, slices.Sorted(slices.Values(res(r.reads)))) {
