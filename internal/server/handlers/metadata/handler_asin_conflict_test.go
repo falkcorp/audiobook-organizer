@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_asin_conflict_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4a8e2f63-1c9d-4b07-95e3-d6b0c7a1f248
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metadatahandler_test
 
@@ -144,7 +144,7 @@ func TestApplyAudiobookMetadata_OverrideAppliesAndRecordsIt(t *testing.T) {
 	d.store.EXPECT().GetBookByID("b1").Return(asinBook("B00NEWASIN"), nil)
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, []string{"title"}).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, []string{"title"},
-		metafetch.ApplyOptions{OwnerReviewed: true, GateOverride: applygate.ReasonASINConflict}).
+		metafetch.ApplyOptions{OwnerReviewed: true, GateOverride: applygate.ReasonASINConflict, AllowRetired: true}).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
 	d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata", applyBody(cand, " b00newasin "), idParam("b1"))
@@ -195,7 +195,7 @@ func TestRunQueuedApply_ChecksASINConflictWhenItRuns(t *testing.T) {
 		d.store.EXPECT().GetBookByID("b1").Return(asinBook("B00NEWASIN"), nil)
 		d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
 		d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, mock.Anything,
-			metafetch.ApplyOptions{BatchID: "apply-queued-own", OwnerReviewed: true, GateOverride: applygate.ReasonASINConflict}).
+			metafetch.ApplyOptions{BatchID: "apply-queued-own", OwnerReviewed: true, GateOverride: applygate.ReasonASINConflict, AllowRetired: true}).
 			Return(&metafetch.FetchMetadataResponse{}, nil)
 		d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
 		if err := h.RunQueuedApply(context.Background(), qo, nil); err != nil {
