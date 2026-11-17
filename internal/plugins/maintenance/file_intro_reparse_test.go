@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse_test.go
-// version: 2.0.3
+// version: 2.0.4
 // guid: 2e6b9d14-8a37-4c51-b0f2-d95a1c3e7840
 // last-edited: 2026-11-17
 
@@ -565,17 +565,20 @@ func TestReparseFileIntros_LiveStartGates(t *testing.T) {
 	if _, err := runReparseFileIntros(ctx, noQueue, none, false); err == nil || !strings.Contains(err.Error(), "cannot verify") {
 		t.Errorf("nil queue: err = %v", err)
 	}
+	// The unreadable-queue and busy cases are bounded: without the start gate the
+	// run would go on into the per-chunk scan wait, which retries the queue on its
+	// pause interval, so the missing gate would show as a minutes-long wait and
+	// not as a failure. A bounded context turns the wait into an error that does
+	// not carry the gate's message.
+	bctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	broken := newReparseEnv(s, &fakeReporter{})
 	broken.queue = reparseQueue{err: errors.New("queue down")}
-	if _, err := runReparseFileIntros(ctx, broken, none, false); err == nil || !strings.Contains(err.Error(), "refusing to run") {
+	if _, err := runReparseFileIntros(bctx, broken, none, false); err == nil || !strings.Contains(err.Error(), "refusing to run") {
 		t.Errorf("unreadable queue: err = %v", err)
 	}
 	busy := newReparseEnv(s, &fakeReporter{})
 	busy.queue = reparseQueue{active: []database.OperationV2Row{{DefID: "library.scan", Status: "running"}}}
-	// Bounded: without the start gate the run would sit in the per-chunk scan wait
-	// until the test binary's own timeout, which is a hang and not a failure.
-	bctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 	if _, err := runReparseFileIntros(bctx, busy, none, false); err == nil || !strings.Contains(err.Error(), "library.scan") {
 		t.Errorf("scan running: err = %v", err)
 	}

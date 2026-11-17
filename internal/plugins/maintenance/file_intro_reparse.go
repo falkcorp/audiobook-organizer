@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 7d3a5e91-c2b4-4f08-a6e7-91b0d4c8f325
 // last-edited: 2026-11-17
 
@@ -310,9 +310,6 @@ func addSample(m map[string][]string, class, id string) {
 	ids := m[class]
 	i := sort.SearchStrings(ids, id)
 	if i < len(ids) && ids[i] == id {
-		return
-	}
-	if i >= reparseSampleCap {
 		return
 	}
 	ids = append(ids, "")
