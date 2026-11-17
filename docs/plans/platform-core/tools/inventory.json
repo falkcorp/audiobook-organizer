@@ -3562,14 +3562,10 @@
   ],
   "files": [
    "core/health/diagnostics/",
-   "core/internal/healthhttp/",
-   "core/archtest/f803b_gate.go",
-   "core/archtest/f803b_gate_test.go",
-   "core/archtest/f803b_probe.go",
-   "core/archtest/f803b_probe_test.go"
+   "core/internal/healthhttp/"
   ],
   "spec": "05-health \u00a75H.3.5; docs/agent-tasks/platform-core/seams.d/F8-03.md (S1, Round 8)",
-  "notes": "Tier: a sanitizer that decides what a third party may read; Opus review and a T3 security review before merge. A follow-up row of the merged F8-03 (round 7 and 8 reviews of PR #4658), named F8-03b because its name is the marker's (diagnostics.RedesignPendingF8_03b, ErrRedesignPendingF8_03b, archtest.F803bGate); the rows-take-the-next-free-number rule would call it F8-05. Replaces the token scanner in core/health/diagnostics/paths.go, applies the sanitizer to every byte that leaves (Writer.JSON values and keys, Writer.File lines, manifest text, zip entry names, the health route's Detail) and deletes the marker, the runtime refusal in New and Build, and the archtest gate, probe pin and linker-flag guard. Covers no 04 key of its own: F8-03 owns the F8 grow of mediacore/health/diagnostics. F8-04 depends on it: F8-04 mounts the diagnostics routes. Dark: no route is mounted, nothing in ABO switches."
+  "notes": "Tier: a sanitizer that decides what a third party may read; Opus review and a T3 security review before merge. A follow-up row of the merged F8-03 (round 7 and 8 reviews of PR #4658), named F8-03b because its name was the marker's (the marker, the runtime refusal and the archtest gate this row deleted); the rows-take-the-next-free-number rule would call it F8-05. Replaces the token scanner in core/health/diagnostics/paths.go, applies the sanitizer to every byte that leaves (Writer.JSON values and keys, Writer.File lines, manifest text, zip entry names, the health route's Detail) and deletes the marker, the runtime refusal in New and Build, and the archtest gate, probe pin and linker-flag guard (the four core/archtest/f803b_*.go files, which are therefore no longer listed under files). Landed in round 13 of seams.d/F8-03.md. Covers no 04 key of its own: F8-03 owns the F8 grow of mediacore/health/diagnostics. F8-04 depends on it: F8-04 mounts the diagnostics routes. Dark: no route is mounted, nothing in ABO switches."
  },
  {
   "id": "F8-04",
