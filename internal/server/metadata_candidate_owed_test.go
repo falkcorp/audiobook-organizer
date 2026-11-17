@@ -1,11 +1,13 @@
 // file: internal/server/metadata_candidate_owed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c41e7a96-5d03-4f28-9b6a-2e8f1d70a3c5
 // last-edited: 2026-11-16
 
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -13,6 +15,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
 // A book whose Audnexus lookup failed in the run that found its Open Library or
@@ -400,5 +403,73 @@ func TestCandidateOwed_FailedAskOnAnEmptyRowCountsAndIsBounded(t *testing.T) {
 	}
 	if slices.Contains(sel.IDs, b.ID) {
 		t.Fatalf("selection returned a spent owed row: %+v", sel)
+	}
+}
+
+// The re-ask of an owed source is MERGED into the row: a candidate another CHAIN
+// source (not a fallback provider, whose candidates a replacing write keeps by
+// its own rule) supplied in the run that parked the book stays on the row.
+func TestCandidateOwed_ReaskKeepsAnotherChainSourcesCandidate(t *testing.T) {
+	f, _, ol := newOwedServerFixture(t)
+	f.google.answer = nil // no fallback candidate: the row is Audible's alone
+	f.audible.answer = answersTitle(owedTitle, "Selina Kyle")
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+
+	f.run(t, b.ID)
+	if got := candidateSources(t, owedRow(t, f, b.ID)); !slices.Equal(got, []string{"Audible"}) {
+		t.Fatalf("setup: run 1 candidates = %v, want [Audible]", got)
+	}
+	ol.down.Store(false)
+	metadata.ResetThrottlesForTesting()
+	ageOwed(t, f, b.ID, 7*time.Hour)
+	f.run(t, b.ID)
+	got := candidateSources(t, owedRow(t, f, b.ID))
+	if !slices.Contains(got, "Audnexus (Audible)") || !slices.Contains(got, "Audible") {
+		t.Fatalf("after the re-ask candidates = %v, want Audnexus (Audible) added to Audible", got)
+	}
+}
+
+// owedUpdateOf names only the chain's own sources as owed: a failure filed under
+// a label the verdict cannot re-ask (the direct ASIN lookup's) is no debt.
+func TestOwedUpdateOf_OnlyActiveChainSourcesAreOwed(t *testing.T) {
+	resp := &metafetch.SearchMetadataResponse{SourcesFailed: map[string]string{
+		"Audnexus (Audible)": "502", "Some Other Label": "boom"}}
+	u := owedUpdateOf(resp, []string{"Audnexus (Audible)", "Google Books"})
+	if len(u.Failed) != 1 || u.Failed["Audnexus (Audible)"] == "" {
+		t.Fatalf("Failed = %v, want only Audnexus (Audible)", u.Failed)
+	}
+	if got := owedUpdateOf(nil, nil); len(got.Failed) != 0 || len(got.Answered) != 0 {
+		t.Fatalf("a nil response said something: %+v", got)
+	}
+}
+
+// A run cancelled while Audnexus is being asked says nothing about Audnexus: the
+// failure it sees is the cancellation, and no ask may be spent on it.
+func TestCandidateOwed_CancelledRunRecordsNoDebt(t *testing.T) {
+	f, _, _ := newOwedServerFixture(t)
+	// Another chain source answers, so the chain writes its row: the one place a
+	// debt could be recorded for the failed Audnexus.
+	f.google.answer = nil
+	f.audible.answer = answersTitle(owedTitle, "Selina Kyle")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	f.mfs.SetASINLookupOverride(func(_ context.Context, provider, _ string) (*metadata.BookMetadata, error) {
+		cancel()
+		return nil, &metadata.ProviderStatusError{Provider: provider, Status: 502, Body: "bad gateway"}
+	})
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+
+	params, err := json.Marshal(metadataCandidateFetchOpParams{BookIDs: []string{b.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.s.runMetadataCandidateFetchOp(ctx, params, &resumeRecorder{opID: "op-owed-cancel"})
+
+	e, _ := f.store.GetMetadataCache(b.ID)
+	if e == nil {
+		t.Fatal("no cache row was written, so this tests nothing: the chain must have written its row")
+	}
+	if len(e.OwedSources) != 0 {
+		t.Fatalf("a cancelled run left OwedSources = %+v", e.OwedSources)
 	}
 }
