@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3a5e91-c2b4-4f08-a6e7-91b0d4c8f325
 // last-edited: 2026-11-17
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -466,7 +467,10 @@ func runReparseFileIntros(ctx context.Context, env reparseFileIntrosEnv, resumeF
 	opts := registry.RunItemsOptions{
 		// Chunks are disjoint sets of files and each write is a per-row
 		// compare-and-swap, so workers cannot touch the same row.
-		Concurrency:   workers,
+		Concurrency: workers,
+		// One failed chunk must not stop the others: every chunk that can be
+		// written is, and the failures are reported together.
+		ErrMode:       registry.ErrModeCollect,
 		ProgressTotal: len(chunks),
 		ResumeFrom:    resume,
 		Label: func(i, total int) string {
@@ -506,6 +510,12 @@ func runReparseFileIntros(ctx context.Context, env reparseFileIntrosEnv, resumeF
 			}
 			reparseOne(env, ref, live, local, log, tally)
 		}
+		// A chunk with a failed read or write is reported as failed, so the
+		// watermark stays below it (RunItems never advances it past a failed item)
+		// and a resumed attempt retries the chunk instead of skipping it.
+		if local.WriteErrors > 0 {
+			return fmt.Errorf("%d of %d files in this chunk could not be read or written", local.WriteErrors, len(refs))
+		}
 		chunksDone.Add(1)
 		return nil
 	}, opts)
@@ -515,13 +525,11 @@ func runReparseFileIntros(ctx context.Context, env reparseFileIntrosEnv, resumeF
 		mark, res.Examined, res.Reparsed, res.Unreparsed, res.ParseWrites, res.IdentityWrites, res.IdentityFilled, res.IdentityRepaired, res.StatusPromoted, res.KindConflicts, res.WriteErrors)
 	log.Info(reparseFileIntrosID+": finished", "summary", summary, "err", err)
 	_ = reporter.UpdateProgress(len(chunks), max(len(chunks), 1), summary)
-	if err != nil {
-		return res, err
-	}
 	if res.WriteErrors > 0 {
-		return res, fmt.Errorf("%s: %d writes failed; the rows keep their stored values and a repeat run retries them", reparseFileIntrosID, res.WriteErrors)
+		// err is non-nil here: a chunk with failures returns an error.
+		return res, fmt.Errorf("%s: %d files could not be read or written; they keep their stored values and a resumed or repeat run retries them: %w", reparseFileIntrosID, res.WriteErrors, errors.Join(err))
 	}
-	return res, nil
+	return res, err
 }
 
 // reparseOne re-parses one file and folds the outcome into local.
