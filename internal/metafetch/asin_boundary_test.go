@@ -1,5 +1,5 @@
 // file: internal/metafetch/asin_boundary_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3a7f1e8-52d4-4b09-9e61-8d0b4a27f5c3
 // last-edited: 2026-11-16
 
@@ -106,6 +106,33 @@ func TestSearch_AnASINInTheQueryIsStillLookedUp(t *testing.T) {
 	require.NotEmpty(t, rec.asins())
 	for _, a := range rec.asins() {
 		assert.Equal(t, batASIN, a)
+	}
+}
+
+// An identifier pasted as the whole query ("Search again") still gets its
+// direct lookup, in either case and in the ten-digit form; a one-word title
+// does not.
+func TestSearch_WholeQueryThatIsAnASINIsStillLookedUp(t *testing.T) {
+	for _, tc := range []struct{ query, want string }{
+		{batASIN, batASIN},
+		{"b0gotham99", batASIN},
+		{"0123456789", "0123456789"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			rec := &asinRecorder{}
+			batmanSearch(t, batTitle, tc.query, "", rec)
+			require.NotEmpty(t, rec.asins())
+			for _, a := range rec.asins() {
+				assert.Equal(t, tc.want, a)
+			}
+		})
+	}
+	for _, word := range []string{"Batmobiles", "BATMOBILES", "batmobiles"} {
+		t.Run(word, func(t *testing.T) {
+			rec := &asinRecorder{}
+			batmanSearch(t, batTitle, word, "", rec)
+			assert.Empty(t, rec.asins())
+		})
 	}
 }
 
@@ -235,4 +262,33 @@ func TestCachedLookupASIN_NonJSON400StaysAFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.EqualValues(t, 2, calls.Load())
 	assert.Empty(t, kv.keys(database.PCachePrefix))
+}
+
+// Only Audnexus's 400 is read as "Bad ASIN": the same status and body from any
+// other provider is a failure, and neither it nor Audnexus's JSON 400 about
+// something else is cached as a permanent answer.
+func TestCachedLookupASIN_OnlyAudnexusBadASINIsAnAnswer(t *testing.T) {
+	withSharedCache(t, true)
+	for _, tc := range []struct {
+		name, provider, body string
+	}{
+		{"audible", metadata.SourceIDAudible, batBadASIN},
+		{"audnexus, other message", metadata.SourceIDAudnexus, `{"error":{"code":"BAD_REQUEST","message":"Bad region"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, kv := newPCacheService(t)
+			var calls atomic.Int64
+			svc.asinLookupOverride = func(context.Context, string, string) (*metadata.BookMetadata, error) {
+				calls.Add(1)
+				return nil, &metadata.ProviderStatusError{Provider: tc.provider, Status: 400, Body: tc.body}
+			}
+			p := fanoutParams{ctx: context.Background(), bookID: "book-a", identity: "v1:book-a"}
+			_, err := svc.cachedLookupASIN(p, tc.provider, batASIN)
+			require.Error(t, err)
+			_, err = svc.cachedLookupASIN(p, tc.provider, batASIN)
+			require.Error(t, err)
+			assert.EqualValues(t, 2, calls.Load(), "not remembered")
+			assert.Empty(t, kv.keys(database.PCachePrefix))
+		})
+	}
 }

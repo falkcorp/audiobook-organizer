@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
 // last-edited: 2026-11-16
 
@@ -553,13 +553,14 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 	// failed source makes ErrNoSourceAnswered and the batch re-asks the book
 	// on every run, forever, for an ASIN that simply does not exist.
 	//
-	// A 400 "Bad ASIN" is the same kind of answer, and a permanent one: the
-	// provider has refused THIS value in every region, and will again. It is
+	// Audnexus's 400 "Bad ASIN" is the same kind of answer, and a permanent
+	// one: the provider has refused THIS value in every region, and will again.
+	// Only Audnexus is mapped: its body is the one this was verified against. It is
 	// remembered like a not-found (the negative pcache row, below, for the
 	// provider's negative TTL), and unlike a failure it must not count against
 	// the provider's breaker, or one book's bad value would trip Audnexus for
 	// every other book. It does not start the fallback-region pass above.
-	if metadata.IsNotFound(err) || metadata.IsBadASIN(err) {
+	if metadata.IsNotFound(err) || (providerID == metadata.SourceIDAudnexus && metadata.IsBadASIN(err)) {
 		res, err = nil, nil
 	}
 	// Counted by hand for the same reason the throttle is: this call does not
