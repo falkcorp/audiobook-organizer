@@ -101,6 +101,13 @@ exits at startup naming the variable otherwise), the computed deadline is capped
 256 MiB (413): 256 MiB is about 2.3 hours of 16 kHz stereo PCM, far above an intro
 clip; the cap keeps a huge upload from earning a multi-day deadline.
 
+#### `/health` no longer shows raw start errors, and shows busy during a start
+
+`child_start_error` on the non-Mac worker is now a fixed code plus a short category
+(for example `worker_misconfigured: model_load_failed`); the exception text is in the
+log only. `busy_seconds` covers the time a request spends waiting for a child to
+(re)start, so `/health` never reports idle while a model load is in progress.
+
 #### Request limits on the path routes (both workers)
 
 At most 1024 jobs and 512-character keys per `/transcribe-path-batch` (422), a

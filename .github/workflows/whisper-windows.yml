@@ -1,5 +1,5 @@
 # file: .github/workflows/whisper-windows.yml
-# version: 1.1.0
+# version: 1.2.0
 # guid: c4d81f27-3a95-4b60-8e1d-7f2a95b3c610
 # last-edited: 2026-11-17
 
@@ -30,6 +30,10 @@
 # `uv run` smoke runs the production launch path (uv's own Python 3.14, the spawn
 # child, the real build_engine and factory) with a fake model class. The pytest steps
 # use the runner's Python 3.12; the smoke is what runs on the Python production runs.
+#
+# A hang must fail fast WITH logs, not need a cancel: every step has timeout-minutes
+# and every pytest run has a per-test --timeout (pytest-timeout), so the test that hangs
+# is named in the log.
 #
 # Each test file is its own step with `if: always()`, so one red file does not
 # hide the others and the job log reads pass/fail per file.
@@ -73,35 +77,42 @@ jobs:
           python-version: '3.12'
 
       - name: Install test dependencies
-        run: python -m pip install --quiet fastapi httpx pytest python-multipart
+        run: python -m pip install --quiet fastapi httpx pytest pytest-timeout python-multipart
 
       - name: Install ffmpeg
+        timeout-minutes: 10
         run: |
           if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress }
           ffmpeg -version | Select-Object -First 1
 
       - name: test_whisper_path_pipeline
         if: always()
-        run: python -m pytest -v -rs scripts/tests/test_whisper_path_pipeline.py
+        timeout-minutes: 8
+        run: python -m pytest -v -rs --timeout=240 scripts/tests/test_whisper_path_pipeline.py
 
       - name: test_whisper_server_cpu
         if: always()
-        run: python -m pytest -v -rs scripts/tests/test_whisper_server_cpu.py
+        timeout-minutes: 8
+        run: python -m pytest -v -rs --timeout=240 scripts/tests/test_whisper_server_cpu.py
 
       - name: test_whisper_decode_child
         if: always()
-        run: python -m pytest -v -rs scripts/tests/test_whisper_decode_child.py
+        timeout-minutes: 8
+        run: python -m pytest -v -rs --timeout=240 scripts/tests/test_whisper_decode_child.py
 
       - name: test_manage_whisper_server
         if: always()
-        run: python -m pytest -v -rs scripts/tests/test_manage_whisper_server.py
+        timeout-minutes: 8
+        run: python -m pytest -v -rs --timeout=240 scripts/tests/test_manage_whisper_server.py
 
       - name: test_whisper_supervisor
         if: always()
-        run: python -m pytest -v -rs scripts/tests/test_whisper_supervisor.py
+        timeout-minutes: 8
+        run: python -m pytest -v -rs --timeout=240 scripts/tests/test_whisper_supervisor.py
 
       - name: uv run smoke (production launch path, Python 3.14, fake model)
         if: always()
+        timeout-minutes: 10
         run: |
           python -m pip install --quiet uv
           uv run scripts/tests/whisper_uv_smoke.py

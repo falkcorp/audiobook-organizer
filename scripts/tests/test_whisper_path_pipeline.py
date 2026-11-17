@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_path_pipeline.py
-# version: 1.1.1
+# version: 1.1.2
 # guid: 5d2c8e17-9b43-4a06-8f1d-3e7a0c6b9d25
 # last-edited: 2026-11-17
 #
@@ -570,7 +570,8 @@ def test_an_absurdly_long_deadline_header_is_capped_not_a_500():
     Req.headers = {wpp.REQUEST_TIMEOUT_HEADER: "9" * 13}
     assert wpp.abandon_deadline(Req()) is not None
     Req.headers = {wpp.REQUEST_TIMEOUT_HEADER: "30"}
-    assert 29 < wpp.abandon_deadline(Req()) - __import__("time").monotonic() <= 30
+    # 30.001: a coarse clock (Windows monotonic ticks at 15.6 ms) can give 30.000000000000004
+    assert 29 < wpp.abandon_deadline(Req()) - __import__("time").monotonic() <= 30.001
 
 
 def test_the_extract_argv_carries_a_file_only_protocol_whitelist_and_keeps_the_fingerprint():
