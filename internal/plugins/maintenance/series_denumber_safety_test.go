@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_safety_test.go
-// version: 1.1.0
+// version: 2.0.0
 // guid: 8d3b6e52-9a14-4c70-b2f8-5e1a07c493d6
 // last-edited: 2026-11-17
 
@@ -10,22 +10,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"unicode"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // The safety rules of PR #4684 round 2: the field locks, the scan stand-down,
-// the delete re-check, a journal that voids what it did not write, and the
-// property that nothing the op moves is a shape the grammar does not accept.
+// the delete re-check and a journal that voids what it did not write. The
+// property tests live in internal/seriesdenumber (property_test.go): they need
+// no store, so they run in milliseconds and share no code with the planner.
 // Fixtures use the Batman catalogue only.
 
 // addPlaced adds a numbered series holding one book already placed at seq: it
@@ -177,6 +175,7 @@ func TestSeriesDenumberSafety_APositionLockDoesNotHoldABookAlreadyAtItsPosition(
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	l.lockBook("owls-5", database.FieldKeySeriesPosition, 1)
 
 	l.mustRun(`{"apply": true}`)
@@ -212,9 +211,10 @@ func TestSeriesDenumberSafety_LocksUnreadableInsideTheWriteFailTheWriteClosed(t 
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	var reads atomic.Int32
-	l.store.GetMetadataFieldStatesFunc = func(string) ([]database.MetadataFieldState, error) {
-		if reads.Add(1) >= 2 {
+	l.store.GetMetadataFieldStatesFunc = func(id string) ([]database.MetadataFieldState, error) {
+		if id == "owls-5" && reads.Add(1) >= 2 {
 			return nil, errors.New("metadata state unreadable")
 		}
 		return nil, nil
@@ -305,6 +305,7 @@ func oneOwlsBook(l *denumberLib) {
 	l.addSeries(10, "Court of Owls", denumberAuthor)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20) // the run that corroborates the 5
 }
 
 func TestSeriesDenumberSafety_AnApplyStandsTheScanDownAndReleasesIt(t *testing.T) {
@@ -378,6 +379,7 @@ func TestSeriesDenumberSafety_ALeaseLapsedBeforeAPlanCreatesNoBase(t *testing.T)
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor) // no base yet: the plan would create one
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	d := &sdnScanDeps{renewOK: false}
 	l.steerScan(d)
 
@@ -398,6 +400,7 @@ func TestSeriesDenumberSafety_ALeaseLapsedBeforeABookMovesNoBook(t *testing.T) {
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	d := &sdnScanDeps{renewOK: true, lapsed: func() bool {
 		l.mu.Lock()
 		defer l.mu.Unlock()
@@ -544,7 +547,7 @@ func TestSeriesDenumberSafety_AnApplyWithoutAReportPathIsRefused(t *testing.T) {
 
 func TestSeriesDenumberSafety_ACancelledApplyStillDropsTheCacheAndWritesItsReport(t *testing.T) {
 	l := newDenumberLib(t)
-	for _, n := range []int{5, 6} {
+	for _, n := range []int{5, 6, 7} { // three consecutive single-book series: a run
 		l.addSeries(10+n, fmt.Sprintf("Court of Owls %02d", n), denumberAuthor)
 		l.addBook(fmt.Sprintf("owls-%d", n), 10+n, n, "")
 	}
@@ -681,6 +684,7 @@ func TestSeriesDenumberSafety_ABaseThatAlreadyExistedWhenCreatedIsNotJournaledOr
 	l := newDenumberLib(t)
 	l.addSeries(11, "Court of Owls 05", denumberAuthor)
 	l.addBook("owls-5", 11, 5, "")
+	l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 	l.store.CreateSeriesFunc = func(name string, authorID *int) (*database.Series, error) {
 		return &database.Series{ID: 500, Name: name, AuthorID: authorID}, nil
 	}
@@ -699,7 +703,7 @@ func TestSeriesDenumberSafety_ABaseThatAlreadyExistedWhenCreatedIsNotJournaledOr
 	if l.seriesOf("owls-5") != 11 {
 		t.Errorf("the book moved into a row that was not this run's: series %d", l.seriesOf("owls-5"))
 	}
-	if !strings.Contains(joinLogs(rep), "1 skipped because the base appeared mid-run") {
+	if !strings.Contains(joinLogs(rep), "1 plans skipped because the base appeared mid-run") {
 		t.Errorf("summary %q does not count the skipped plan", joinLogs(rep))
 	}
 }
@@ -764,6 +768,7 @@ func TestSeriesDenumberSafety_MinBooksCountsABookOnceWhateverItsVersions(t *test
 		l.addSeries(11, "Court of Owls 05", denumberAuthor)
 		l.addBook("owls-5-a", 11, 5, "vg-owls-5")
 		l.addBook("owls-5-b", 11, 5, "vg-owls-5")
+		l.addRunAround("Court of Owls", denumberAuthor, 5, 20)
 		return l
 	}
 	l := build()
@@ -777,180 +782,4 @@ func TestSeriesDenumberSafety_MinBooksCountsABookOnceWhateverItsVersions(t *test
 	if l.seriesOf("owls-5-a") != 10 || l.seriesOf("owls-5-b") != 10 {
 		t.Errorf("minBooks 1 did not move both versions")
 	}
-}
-
-// ---------------------------------------------------------------------------
-// The property: nothing the op moves is a shape the grammar does not accept
-// ---------------------------------------------------------------------------
-
-// The oracle is written from the brief's grammar and shares no code with
-// seriesdenumber.ParseName or the planner.
-var sdnOracle = regexp.MustCompile(`(?i)^\s*(.+?)(?:\s*[-:,\x{2013}\x{2014}]\s*|\s+)(?:(?:book|bk|vol|volume|no)\.?\s*|#\s*)?(\d{1,3})\s*$`)
-
-// sdnOracleBannedAnywhere are the part, format and edition words that hold a name
-// wherever they sit; sdnOracleBannedLast are the connectors and volume words that
-// may not be the last word of a base (the word right before the number).
-var (
-	sdnOracleBannedAnywhere = regexp.MustCompile(`(?i)\b(part|pt|disc|cd|edition|unabridged|abridged|omnibus)\b`)
-	sdnOracleBannedLast     = regexp.MustCompile(`(?i)(^|\s)(of|to|and|book|bk|vol|volume|no)$|&$`)
-)
-
-// oracleParse returns the base and number of a name that satisfies the grammar,
-// ok false otherwise. authors are the library's author names: a base that is one
-// of them is held.
-func oracleParse(name string, authors []string) (base string, n int, ok bool) {
-	norm := strings.Join(strings.Fields(name), " ")
-	m := sdnOracle.FindStringSubmatch(norm)
-	if m == nil {
-		return "", 0, false
-	}
-	n, _ = strconv.Atoi(m[2])
-	if n < 1 || n > 99 {
-		return "", 0, false
-	}
-	base = strings.TrimSpace(m[1])
-	letters := 0
-	for _, r := range base {
-		if unicode.IsLetter(r) {
-			letters++
-		}
-	}
-	if base == "" || letters < 3 || strings.ContainsAny(base, "0123456789") ||
-		sdnOracleBannedAnywhere.MatchString(base) || sdnOracleBannedLast.MatchString(base) {
-		return "", 0, false
-	}
-	for _, a := range authors {
-		if strings.EqualFold(base, a) {
-			return "", 0, false
-		}
-	}
-	return base, n, true
-}
-
-func TestSeriesDenumberSafety_PropertyNothingMovesOutsideTheGrammar(t *testing.T) {
-	words := []string{"Court", "Owls", "Gotham", "Knights", "Arkham", "Bat", "Of", "Part", "Disc", "Edition", "Vol", "Book", "Bruce Wayne", "9", "2nd", "Unabridged", "&", "and", "to", "BW"}
-	tails := []string{"%02d", "%d", "Book %d", "Vol. %d", "Vol %d", "#%d", "No %d", "Part %d", "Disc %d", "[%02d]", "%d of 3", "Book .%d", "%03d", "%d.5", "10%d", "1%d%d", "%d-%d"}
-	seps := []string{" ", " - ", ": ", ", ", "-", ""}
-	oracleAuthors := []string{"Bruce Wayne", "Alfred Pennyworth"}
-	// The first cleanWords and cleanTails entries are shapes the grammar accepts:
-	// drawn most of the time, so that enough books reach the move path for the
-	// property to say something about it; the rest are the hostile shapes.
-	const cleanWords, cleanTails = 6, 6
-	rng := rand.New(rand.NewSource(11))
-	moved := 0
-	for iter := 0; iter < 400; iter++ {
-		l := newDenumberLib(t)
-		nextID := 100
-		bases := []string{"", "", ""}
-		for i := range bases {
-			var parts []string
-			for k, nw := 0, 1+rng.Intn(3); k < nw; k++ {
-				if rng.Intn(10) < 7 {
-					parts = append(parts, words[rng.Intn(cleanWords)])
-				} else {
-					parts = append(parts, words[rng.Intn(len(words))])
-				}
-			}
-			bases[i] = strings.Join(parts, " ")
-		}
-		for i, n := 0, 3+rng.Intn(8); i < n; i++ {
-			base := bases[rng.Intn(len(bases))]
-			num := 1 + rng.Intn(9)
-			tail := tails[rng.Intn(len(tails))]
-			if rng.Intn(10) < 6 {
-				tail = tails[rng.Intn(cleanTails)]
-			}
-			var shown string
-			switch strings.Count(tail, "%") {
-			case 2:
-				shown = fmt.Sprintf(tail, num, num+1)
-			default:
-				shown = fmt.Sprintf(tail, num)
-			}
-			name := base + seps[rng.Intn(len(seps))] + shown
-			author := denumberAuthor + rng.Intn(2)
-			seq := -1
-			switch rng.Intn(4) {
-			case 0, 1:
-				seq = num
-			case 2:
-				seq = 1 + rng.Intn(20)
-			}
-			l.addSeries(nextID, name, author)
-			if rng.Intn(5) != 0 {
-				l.addBook(fmt.Sprintf("b%d", nextID), nextID, seq, "")
-			}
-			nextID++
-		}
-		orig := map[string]database.Book{}
-		origSeries := map[int]database.Series{}
-		for _, s := range l.series {
-			origSeries[s.ID] = s
-		}
-		for id, b := range l.books {
-			orig[id] = *b
-		}
-		_, _ = l.run(`{"apply": true}`)
-
-		for id, b := range l.books {
-			before := orig[id]
-			if before.SeriesID == nil || b.SeriesID == nil || *b.SeriesID == *before.SeriesID {
-				continue
-			}
-			moved++
-			src := origSeries[*before.SeriesID]
-			base, n, ok := oracleParse(src.Name, oracleAuthors)
-			if !ok {
-				t.Fatalf("iter %d: book %s moved out of %q, which is not in the grammar", iter, id, src.Name)
-			}
-			if l.seqOf(id) != strconv.Itoa(n) {
-				t.Fatalf("iter %d: book %s from %q is at position %s, want %d", iter, id, src.Name, l.seqOf(id), n)
-			}
-			var into *database.Series
-			for i := range l.series {
-				if l.series[i].ID == *b.SeriesID {
-					into = &l.series[i]
-				}
-			}
-			if into == nil || normSeriesName(into.Name) != normSeriesName(base) {
-				t.Fatalf("iter %d: book %s from %q moved into %+v, want the base %q", iter, id, src.Name, into, base)
-			}
-			// Corroboration, from the library's original rows: the book's own
-			// position was already n, or two other series of the same author with
-			// this base and a book make a run of three with n.
-			own := before.SeriesSequence != nil && *before.SeriesSequence == n
-			if !own {
-				nums := map[int]bool{n: true}
-				for _, other := range origSeries {
-					if other.ID == src.ID || other.AuthorID == nil || src.AuthorID == nil || *other.AuthorID != *src.AuthorID {
-						continue
-					}
-					ob, on, ook := oracleParse(other.Name, oracleAuthors)
-					if !ook || normSeriesName(ob) != normSeriesName(base) {
-						continue
-					}
-					for _, bb := range orig {
-						if bb.SeriesID != nil && *bb.SeriesID == other.ID {
-							nums[on] = true
-							break
-						}
-					}
-				}
-				run := 1
-				for k := n - 1; nums[k]; k-- {
-					run++
-				}
-				for k := n + 1; nums[k]; k++ {
-					run++
-				}
-				if run < 3 {
-					t.Fatalf("iter %d: book %s from %q moved with no corroboration (own position %v, run of %d)", iter, id, src.Name, before.SeriesSequence, run)
-				}
-			}
-		}
-	}
-	if moved < 20 {
-		t.Fatalf("only %d books moved across the generated libraries: the generator no longer reaches the move path", moved)
-	}
-	t.Logf("%d books moved across 400 generated libraries, every one inside the grammar", moved)
 }

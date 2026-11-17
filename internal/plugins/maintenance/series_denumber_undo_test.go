@@ -54,9 +54,16 @@ func (w *denumberUndoWorld) addSeries(t *testing.T, name string) int {
 // primary one is listed by the listing getters.
 func (w *denumberUndoWorld) addBook(t *testing.T, label string, seriesName string, seq int, group string, primary bool) {
 	t.Helper()
+	w.addBookTitled(t, label, label, seriesName, seq, group, primary)
+}
+
+// addBookTitled is addBook with a title of its own: the run check compares
+// titles, so books that stand for different volumes need different ones.
+func (w *denumberUndoWorld) addBookTitled(t *testing.T, label, title, seriesName string, seq int, group string, primary bool) {
+	t.Helper()
 	sid := w.series[seriesName]
 	b := &database.Book{
-		Title:            label,
+		Title:            title,
 		FilePath:         "/denumber-undo/" + label,
 		AuthorID:         &w.author,
 		SeriesID:         &sid,
@@ -111,10 +118,20 @@ func (w *denumberUndoWorld) seriesByName(t *testing.T, name string) *database.Se
 // does not carry.
 func (w *denumberUndoWorld) withSiblings(t *testing.T, nums ...int) {
 	t.Helper()
-	for _, n := range nums {
-		name := fmt.Sprintf("Court of Owls %02d", n)
+	w.withSiblingsOf(t, "Court of Owls", nums...)
+}
+
+// siblingTitles are different Batman titles, one per sibling, so that no two
+// books of a run share a title.
+var siblingTitles = []string{"A Death in the Family", "A Lonely Place of Dying", "Under the Red Hood", "The Long Halloween"}
+
+func (w *denumberUndoWorld) withSiblingsOf(t *testing.T, base string, nums ...int) {
+	t.Helper()
+	for i, n := range nums {
+		name := fmt.Sprintf("%s %02d", base, n)
 		w.addSeries(t, name)
-		w.addBook(t, fmt.Sprintf("sibling-%02d", n), name, 99, "", true)
+		label := fmt.Sprintf("sibling-%s-%02d", strings.ReplaceAll(strings.ToLower(base), " ", "-"), n)
+		w.addBookTitled(t, label, siblingTitles[i%len(siblingTitles)], name, 99, "", true)
 	}
 }
 
@@ -203,13 +220,10 @@ func TestSeriesDenumber_ACanaryApplyIsReverted(t *testing.T) {
 	w := newDenumberUndoWorld(t)
 	id5 := w.addSeries(t, "Court of Owls 05")
 	w.addSeries(t, "Dark Knight 03")
-	w.addBook(t, "owls-5", "Court of Owls 05", -1, "", true)
-	w.addBook(t, "dark-3", "Dark Knight 03", -1, "", true)
+	w.addBookTitled(t, "owls-5", "Year One", "Court of Owls 05", -1, "", true)
+	w.addBookTitled(t, "dark-3", "Hush", "Dark Knight 03", -1, "", true)
 	w.withSiblings(t, 4, 6)
-	w.addSeries(t, "Dark Knight 02")
-	w.addSeries(t, "Dark Knight 04")
-	w.addBook(t, "dark-2", "Dark Knight 02", 99, "", true)
-	w.addBook(t, "dark-4", "Dark Knight 04", 99, "", true)
+	w.withSiblingsOf(t, "Dark Knight", 2, 4)
 
 	w.run(t, `{"apply": true, "baseName": "Court of Owls"}`, "op-denumber-canary")
 	sid, _ := w.bookState(t, "dark-3")
