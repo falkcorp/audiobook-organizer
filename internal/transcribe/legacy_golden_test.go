@@ -1,5 +1,5 @@
 // file: internal/transcribe/legacy_golden_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8e2c5a70-1f93-4b64-a0d7-3c6e9b1f5842
 // last-edited: 2026-11-17
 
@@ -36,8 +36,9 @@ import (
 //     concatenations evaluated, in the grammar, clip, number, reconcile and
 //     re-parse test tables, plus the PR #4687 review inputs)
 //
-// The input is identified by a sha256 prefix, in a field named so that a secret
-// scanner does not read the hex as an API key.
+// Each golden line is the input's sha256 prefix and a digest of the whole parse
+// result (every field of all three positions and ParseAudiobookIntro), so the file
+// carries no title, author or narrator.
 //
 // Each input is classified at three positions (unknown, first of five, fourth
 // of five) so Confidence is pinned as well as Kind, Reason and the fields.
@@ -62,10 +63,28 @@ type legacyClassify struct {
 	CoverArtist   string `json:"cover_artist"`
 }
 
+// legacyGoldenRow is the parse of one input as the full result.
 type legacyGoldenRow struct {
 	Key      string            `json:"input_sha256_prefix"`
 	Classify []legacyClassify  `json:"classify"`
 	Parse    legacyParseFields `json:"parse"`
+}
+
+// legacyGoldenLine is what the golden file stores per input: the input's key and
+// a digest of the whole parse result. The file holds no parsed title, author or
+// narrator, so it copies nothing from the real-library corpora its inputs come
+// from; a difference is diagnosed by the failing test, which prints the input and
+// the current result.
+type legacyGoldenLine struct {
+	Key    string `json:"input_sha256_prefix"`
+	Digest string `json:"output_digest"`
+}
+
+func legacyLine(text string) legacyGoldenLine {
+	row := legacyRow(text)
+	b, _ := json.Marshal(row)
+	h := sha256.Sum256(b)
+	return legacyGoldenLine{Key: row.Key, Digest: hex.EncodeToString(h[:16])}
 }
 
 type legacyParseFields struct {
@@ -170,14 +189,14 @@ func TestLegacyParseGolden(t *testing.T) {
 		defer out.Close()
 		enc := json.NewEncoder(out)
 		for _, s := range texts {
-			if err := enc.Encode(legacyRow(s)); err != nil {
+			if err := enc.Encode(legacyLine(s)); err != nil {
 				t.Fatal(err)
 			}
 		}
 		t.Skipf("wrote %d rows to %s", len(texts), legacyGoldenPath)
 	}
 
-	want := map[string]legacyGoldenRow{}
+	want := map[string]legacyGoldenLine{}
 	f, err := os.Open(legacyGoldenPath)
 	if err != nil {
 		t.Fatalf("open golden: %v", err)
@@ -186,7 +205,7 @@ func TestLegacyParseGolden(t *testing.T) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
-		var r legacyGoldenRow
+		var r legacyGoldenLine
 		if err := json.Unmarshal(sc.Bytes(), &r); err != nil {
 			t.Fatalf("golden line: %v", err)
 		}
@@ -200,19 +219,18 @@ func TestLegacyParseGolden(t *testing.T) {
 	}
 	diffs := 0
 	for _, s := range texts {
-		got := legacyRow(s)
+		got := legacyLine(s)
 		w, ok := want[got.Key]
 		if !ok {
 			t.Errorf("input %q has no golden row", s)
 			diffs++
 			continue
 		}
-		g, _ := json.Marshal(got)
-		e, _ := json.Marshal(w)
-		if string(g) != string(e) {
+		if got.Digest != w.Digest {
 			diffs++
 			if diffs <= 20 {
-				t.Errorf("legacy parse changed for %q\n got  %s\n want %s", s, g, e)
+				cur, _ := json.Marshal(legacyRow(s))
+				t.Errorf("legacy parse changed for %q\n now %s", s, cur)
 			}
 		}
 	}
