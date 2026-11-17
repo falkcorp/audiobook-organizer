@@ -1,5 +1,5 @@
 # file: .github/workflows/whisper-windows.yml
-# version: 1.0.1
+# version: 1.1.0
 # guid: c4d81f27-3a95-4b60-8e1d-7f2a95b3c610
 # last-edited: 2026-11-17
 
@@ -22,6 +22,14 @@
 # machine never runs it. The first run of this job showed 24 and 25 failures there
 # ("pass_fds not supported on Windows"), none of them a defect in code that runs on
 # Windows. They stay in ci.yml's Linux step.
+#
+# Beyond the unit tests: test_whisper_supervisor.py runs whisper-supervisor.ps1 (under
+# powershell.exe, the real Windows PowerShell 5.1) against a fake uv to prove the
+# crash-loop breaker; test_manage_whisper_server.py PARSES the PowerShell that
+# manage-whisper-server.py --restart sends over WinRM with powershell.exe; and the
+# `uv run` smoke runs the production launch path (uv's own Python 3.14, the spawn
+# child, the real build_engine and factory) with a fake model class. The pytest steps
+# use the runner's Python 3.12; the smoke is what runs on the Python production runs.
 #
 # Each test file is its own step with `if: always()`, so one red file does not
 # hide the others and the job log reads pass/fail per file.
@@ -83,3 +91,17 @@ jobs:
       - name: test_whisper_decode_child
         if: always()
         run: python -m pytest -v -rs scripts/tests/test_whisper_decode_child.py
+
+      - name: test_manage_whisper_server
+        if: always()
+        run: python -m pytest -v -rs scripts/tests/test_manage_whisper_server.py
+
+      - name: test_whisper_supervisor
+        if: always()
+        run: python -m pytest -v -rs scripts/tests/test_whisper_supervisor.py
+
+      - name: uv run smoke (production launch path, Python 3.14, fake model)
+        if: always()
+        run: |
+          python -m pip install --quiet uv
+          uv run scripts/tests/whisper_uv_smoke.py

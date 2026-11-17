@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.41.0
+# version: 3.42.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-11-17
 
@@ -647,7 +647,11 @@ jobs:
       # device names, request limits), whose Windows rules run here on Linux
       # through ntpath. No model is loaded and no GPU is needed.
       # test_whisper_decode_child spawns real child processes around a fake
-      # backend that hangs, crashes and exits.
+      # backend that hangs, crashes and exits. test_manage_whisper_server parses the
+      # PowerShell that manage-whisper-server.py sends (with pwsh where the runner has
+      # it; the Windows trial parses it with powershell.exe, the 5.1 WinRM uses).
+      # test_whisper_supervisor (about a minute of real restarts) runs only in the
+      # Windows trial workflow.
       #
       # The real-ffmpeg tests must RUN here, not skip: the step installs ffmpeg,
       # sets WHISPER_TESTS_REQUIRE_FFMPEG=1 (a guard test in test_whisper_server_cpu
@@ -667,7 +671,8 @@ jobs:
             scripts/tests/test_whisper_mlx_pins.py \
             scripts/tests/test_whisper_path_pipeline.py \
             scripts/tests/test_whisper_server_cpu.py \
-            scripts/tests/test_whisper_decode_child.py
+            scripts/tests/test_whisper_decode_child.py \
+            scripts/tests/test_manage_whisper_server.py
 
   # Required checks of 09 §9.2.1 (R1-02): go vet over BOTH modules (root and
   # core/; ./... from the root never reaches the nested core/ module) for every

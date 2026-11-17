@@ -1,5 +1,5 @@
 # file: scripts/install-whisper-supervisor.ps1
-# version: 3.0.0
+# version: 3.0.1
 # guid: 445a38c7-e60e-4e07-a441-80bba4e8b034
 # last-edited: 2026-11-17
 
@@ -200,7 +200,10 @@ Info "task state: $((Get-ScheduledTask -TaskName $TaskName).State)"
 Info "waiting for whisper /health on :$Port (model load can take up to ~90s; a first run also downloads the model)..."
 $ok = $false
 # The server answers on the address it is bound to; a wildcard bind answers on loopback.
-$healthHost = if ($BindHost -in @("0.0.0.0", "::", "")) { "127.0.0.1" } else { $BindHost }
+if ($BindHost -in @("0.0.0.0", "")) { $healthHost = "127.0.0.1" }
+elseif ($BindHost -eq "::") { $healthHost = "[::1]" }
+elseif ($BindHost.Contains(":")) { $healthHost = "[$BindHost]" }
+else { $healthHost = $BindHost }
 for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 3
     try {

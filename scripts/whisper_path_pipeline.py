@@ -1,5 +1,5 @@
 # file: scripts/whisper_path_pipeline.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: c3e91a57-2d84-4f16-b7a9-0e5d8c4b6f13
 # last-edited: 2026-11-17
 #
@@ -522,7 +522,7 @@ class PathPipeline:
         components) for the longest matching prefix, or PathJobError. Touches no
         filesystem, so it is testable for either path flavor.
 
-        Matching is by path COMPONENT: /mnt/bigdataX/a must not match /mnt/bigdata.
+        Matching is by path COMPONENT: /srv/mediaX/a must not match /srv/media.
         The server's path is always POSIX, so it is split on "/" only, then every
         component is checked against what THIS worker's filesystem can address
         (component_problem): on Windows a backslash, a drive colon, a device name

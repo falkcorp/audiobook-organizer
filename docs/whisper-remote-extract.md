@@ -1,5 +1,5 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -290,8 +290,13 @@ With no `--model`, the worker picks by the device it ends up on: **`large-v2` on
 CUDA, `base.en` on CPU**, and logs which and why. An existing GPU install therefore
 keeps the model it always ran and produces the **same decode fingerprint** as before
 this change (pinned in `test_whisper_server_cpu.py`: `850881e4bf06fae4` for
-large-v2, float16, batched, batch size 8), so its result journal is not re-keyed.
-An `auto` worker that falls back from CUDA to CPU re-resolves to `base.en`, because
+large-v2, float16, batched, batch size 8). **The result journal key still changes
+once**: `/health` now sends `"backend": "faster-whisper"`, so the server keys the
+journal `faster-whisper/large-v2` instead of `large-v2`, and an upgraded GPU worker's
+earlier transcripts are redone one time under the new key (no alias is provided). A
+GPU install launched from `manage-whisper-server.py` as it was on main (which passed
+`base.en` and `float16`) now defaults to `large-v2`: a new fingerprint and about 3 GB
+of VRAM; pass `--model base.en` to keep the old model. An `auto` worker that falls back from CUDA to CPU re-resolves to `base.en`, because
 `large-v2` on a CPU would not keep up; pass `--model` to override either way.
 
 ### CPU defaults
@@ -318,13 +323,21 @@ faster-whisper decodes inside a native call Python cannot interrupt. The worker
 therefore loads the model in a **child process** (`scripts/whisper_decode_child.py`,
 started with the `spawn` method, the only one Windows has) and the parent enforces a
 deadline per clip. A decode that misses it is killed and a fresh child is started
-for the next clip, so the worker recovers by itself:
+for the next clip, so the worker recovers by itself. The first child to start
+**pins** the model, device and compute type for the life of the worker: every later
+child and restart is started with those values explicitly and refused (a start fault,
+not a fallback) if it reports anything else, so a restart cannot turn a `large-v2`
+GPU worker into a `base.en` CPU one. `/health` reports the pinned values and the log
+line `decode process N ready: model=... device=... compute_type=...` follows every
+start. A request id travels with each clip and any exception between send and
+receive kills the child, so a stale answer is never taken for the next clip's:
 
 - `transcribe_timeout`: no result within the deadline (the child was killed);
 - `decoder_crashed`: the child died on the clip (a segfault, an exception that took
   the process down); the error text carries the exit code;
 - `decoder_killed`: the child was killed from outside (an operator, the out-of-memory
-  killer; POSIX only, since Windows reports no signal);
+  killer, or the worker shutting down with a clip in flight, as on the Mac worker;
+  POSIX only for the signal case, since Windows reports no signal);
 - `worker_misconfigured`: the child could not start (the model failed to load); the
   worker retries on a later request and shows `child_start_error` in `/health` until
   it can.
@@ -333,7 +346,13 @@ These are the Mac worker's codes with the same meaning, so the server treats the
 identically. The Mac worker's own child (`InferenceChild`) is unchanged: it is built
 on POSIX file descriptors and process groups, and only the contract is shared.
 
-The per-clip deadline is `max(300 s, 8 x the clip's audio length)`, and `/health`
+The per-clip deadline is `max(300 s, 8 x the clip's audio length)`, capped at 3600 s
+(`WHISPER_TRANSCRIBE_MAX_TIMEOUT_S`; a clip of ten minutes of audio would otherwise
+earn 4800 s and a huge upload days). Upload bodies are limited to 256 MiB (413).
+The timeout variables must be finite and above zero, or the worker exits at startup
+naming the variable. The child ignores Ctrl-C and, on Windows, lives in a Job Object
+that kills it with the worker; on POSIX a child stuck in a native call that holds the
+GIL is not reaped if the worker is killed (the orphan watch is a Python thread). `/health`
 reports `busy_seconds` and `busy_limit_seconds` as before. The `300` and `8` are
 generous and **unbenchmarked**: tune them (`WHISPER_TRANSCRIBE_MIN_TIMEOUT_S`,
 `WHISPER_TRANSCRIBE_TIMEOUT_FACTOR`) once a real CPU has been timed. The upload endpoints
@@ -377,9 +396,12 @@ shares a model across threads.
    Unset options take the defaults above, including `-BindHost 127.0.0.1`. To serve
    the LAN add `-BindHost 0.0.0.0` and read "Who can reach the worker" first.
    The supervisor restarts a crashed server with a doubling delay (5 s up to
-   5 min), starts the count over after a run of two minutes or more, and **gives up
-   after 8 crashes in a row** (`-MaxCrashStreak`; about 10 minutes of waiting, the
-   delays being 5, 10, 20, 40, 80, 160 and 300 s), logging FATAL and exiting 1. It
+   5 min), starts the count over after a run that answered `/health` and then stayed
+   up two minutes or more, and **gives up after 8 crashes in a row**
+   (`-MaxCrashStreak`; about 10 minutes of waiting, the delays being 5, 10, 20, 40, 80,
+   160 and 300 s, plus however long each start ran before failing: a start that hangs
+   in a model load for an hour counts once and adds the hour), logging FATAL and
+   exiting 1. A run that never answered `/health` never resets the count. It
    logs to `whisper-supervisor.log` in the profile folder.
    (The earlier "20 restarts in 10 minutes" breaker could never trip: the backoff
    fits at most 7 restarts into any ten minutes.)

@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_server_cpu.py
-# version: 2.0.1
+# version: 2.1.0
 # guid: c3e91a60-2f5d-4b87-a4c2-7d0b6e18f953
 # last-edited: 2026-11-17
 #
@@ -329,10 +329,12 @@ def test_a_model_that_loads_somewhere_else_is_reported_as_loaded(caplog):
 # ── the decode fingerprint is journal-key material ───────────────────────────
 
 
-def test_an_existing_gpu_install_keeps_the_fingerprint_it_had_before_this_change():
-    # Literals computed from the 2.x formula for large-v2, float16, batched, batch 8:
-    # an existing GPU box (the Windows supervisor passed large-v2) must not move,
-    # or every journalled transcript of that worker is orphaned.
+def test_the_large_v2_float16_fingerprint_formula_is_unchanged_from_2x():
+    # Literal computed from the 2.x formula for large-v2, float16, batched, batch 8.
+    # This pins ONLY the decode fingerprint (the hash of the decode settings). It does
+    # NOT say the journal is kept: /health now also sends "backend": "faster-whisper",
+    # so the server keys the journal as faster-whisper/large-v2 instead of large-v2,
+    # and an upgraded GPU worker's earlier results are redone once under the new key.
     assert ws.decode_fingerprint("large-v2", 8, "float16", True) == "850881e4bf06fae4"
 
 
@@ -548,7 +550,7 @@ def test_busy_reports_the_most_overdue_decode_and_clears_after_a_failure():
 def test_the_clip_limit_follows_the_audio_length_with_a_floor():
     assert ws.Engine.clip_limit_s(None) == ws.CLIP_TIMEOUT_FLOOR_S
     assert ws.Engine.clip_limit_s(10) == ws.CLIP_TIMEOUT_FLOOR_S
-    assert ws.Engine.clip_limit_s(600) == 600 * ws.CLIP_TIMEOUT_FACTOR
+    assert ws.Engine.clip_limit_s(400) == 400 * ws.CLIP_TIMEOUT_FACTOR  # under the hard cap
 
 
 # ── the path pipeline end to end, and the upload endpoints ───────────────────

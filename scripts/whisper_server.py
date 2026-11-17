@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 4.0.0
+# version: 5.0.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-11-17
 #
@@ -79,7 +79,14 @@
 # decoder_killed exactly like the Mac worker and the worker recovers by itself.
 # The deadline constants are generous and NOT benchmarked (a slow CPU must not be
 # killed for being slow): WHISPER_TRANSCRIBE_MIN_TIMEOUT_S (300) and
-# WHISPER_TRANSCRIBE_TIMEOUT_FACTOR (8).
+# WHISPER_TRANSCRIBE_TIMEOUT_FACTOR (8), and the computed deadline is capped at
+# WHISPER_TRANSCRIBE_MAX_TIMEOUT_S (3600), so an enormous upload cannot earn an
+# unbounded one. Upload bodies are capped at MAX_UPLOAD_BYTES (256 MiB).
+#
+# The FIRST child to start fixes the model, device and compute type this worker
+# serves; every later child and restart is started with those values explicitly
+# and refused if it reports anything else (no silent GPU-to-CPU fallback after the
+# first resolution, and with --num-workers > 1 every child serves the same model).
 #
 # Windows: see docs/whisper-remote-extract.md. Needs ffmpeg on PATH for the path
 # pipeline. WHISPER_PATH_MAP local sides are drive paths or UNC shares.
@@ -88,6 +95,7 @@ import argparse
 import contextlib
 import dataclasses
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -113,10 +121,11 @@ except ImportError as e:  # pragma: no cover - dependency probe
 # supervisor, a test that loads it by path).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from whisper_decode_child import DecodeChild  # noqa: E402
+from whisper_decode_child import DecodeChild, StartPin  # noqa: E402
 from whisper_machine_id import MachineIdentity  # noqa: E402
 from whisper_path_pipeline import (  # noqa: E402
     ERR_WORKER_MISCONFIGURED,
+    BodyLimitMiddleware,
     ChildFaultError,
     PathJobError,
     PathPipeline,
@@ -146,20 +155,48 @@ LANGUAGE = "en"
 CPU_COMPUTE_TYPES = ("int8", "int8_float32", "float32", "int16")
 CUDA_ONLY_COMPUTE_TYPES = ("float16", "int8_float16", "bfloat16")
 
+
 # The per-clip deadline: max(floor, factor x audio seconds). A decode past it is
 # killed (the clip answers transcribe_timeout, which the Go side counts as a
 # strike), so it is generous on purpose: a slow CPU must not be killed for being
 # slow. NOT benchmarked on a particular machine; tune with the environment.
 # /health reports both so the server sizes its own HTTP ceiling from them.
-CLIP_TIMEOUT_FLOOR_S = float(os.environ.get("WHISPER_TRANSCRIBE_MIN_TIMEOUT_S", "300"))
-CLIP_TIMEOUT_FACTOR = float(os.environ.get("WHISPER_TRANSCRIBE_TIMEOUT_FACTOR", "8"))
+def _env_seconds(name: str, default: float, *, maximum: float = 7 * 86400.0) -> float:
+    """A duration from the environment: finite, positive, and small enough for the
+    pipe poll (about 24 days at most). nan, inf, zero, negative or text exits at
+    startup with the variable's name rather than reaching a decode as an overflow
+    that would desynchronise the child's channel."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not (0.0 < value <= maximum):  # False for nan and inf as well
+        raise SystemExit(f"{name}={raw!r} must be a number greater than 0 and at most {maximum:g}")
+    return value
+
+
+CLIP_TIMEOUT_FLOOR_S = _env_seconds("WHISPER_TRANSCRIBE_MIN_TIMEOUT_S", 300.0)
+CLIP_TIMEOUT_FACTOR = _env_seconds("WHISPER_TRANSCRIBE_TIMEOUT_FACTOR", 8.0, maximum=1e4)
+# Hard ceiling on the COMPUTED deadline (floor x factor x audio length). A clip of
+# 10 minutes of audio gets 8 x 600 = 4800 s at the default factor, so 3600 s (one
+# hour) is above any intro this worker is sent and far below what a huge upload
+# would otherwise earn (a 1 GB upload read as 31,250 s of audio would get 69 hours,
+# and busy_limit_seconds would keep the server's stuck rule from ever firing).
+CLIP_TIMEOUT_CAP_S = _env_seconds("WHISPER_TRANSCRIBE_MAX_TIMEOUT_S", 3600.0)
+# Upload routes (/transcribe, /transcribe-batch) take whole WAVs, which the path
+# routes' 8 MiB limit would refuse. 256 MiB is 2.3 hours of 16 kHz stereo 16-bit PCM,
+# far more than an intro clip, and the whole body is read into memory.
+MAX_UPLOAD_BYTES = 256 * 1024 * 1024
 # How long a RESTARTED child may take to load the model (cached by then). Reported
 # on /health: the server adds it to its HTTP ceiling.
-CHILD_READY_TIMEOUT_S = float(os.environ.get("WHISPER_CHILD_READY_TIMEOUT_S", "300"))
-CHILD_FAULT_TTL_S = float(os.environ.get("WHISPER_CHILD_FAULT_TTL_S", "300"))
+CHILD_READY_TIMEOUT_S = _env_seconds("WHISPER_CHILD_READY_TIMEOUT_S", 300.0)
+CHILD_FAULT_TTL_S = _env_seconds("WHISPER_CHILD_FAULT_TTL_S", 300.0)
 # The FIRST start may download the model (large-v2 is about 3 GB), so it waits far
 # longer than a restart. Startup is before the worker listens, not inside a request.
-STARTUP_TIMEOUT_S = float(os.environ.get("WHISPER_STARTUP_TIMEOUT_S", "3600"))
+STARTUP_TIMEOUT_S = _env_seconds("WHISPER_STARTUP_TIMEOUT_S", 3600.0)
 
 # VAD parameters tuned for audiobook intros: lower threshold so music/quiet speech
 # isn't stripped; shorter silence gap so publisher jingles don't eat the whole clip.
@@ -541,8 +578,17 @@ class ChildBackend:
 
 def child_backend(arg: dict) -> ChildBackend:
     """The factory the decode child calls (named by BACKEND_FACTORY): rebuild the
-    config from plain data, resolve the device and load the model, IN THE CHILD."""
+    config from plain data, resolve the device and load the model, IN THE CHILD.
+
+    arg["transcriber_factory"] ("module:attr") replaces the faster-whisper model
+    class: a test seam so the production wiring (build_engine, the pickled config,
+    this factory, load_transcriber) can run in CI with a fake model."""
     cfg = ServerConfig(**arg["cfg"])
+    spec = arg.get("transcriber_factory")
+    if spec:
+        module, _, attr = spec.partition(":")
+        make = getattr(importlib.import_module(module), attr)
+        return ChildBackend(cfg, load_transcriber(cfg, make=make))
     return ChildBackend(cfg, load_transcriber(cfg))
 
 
@@ -602,15 +648,18 @@ class Engine:
     each), and aggregates what /health reports: the most overdue running clip, the
     last start failure, and the loaded model's meta."""
 
-    def __init__(self, runners: list) -> None:
+    def __init__(self, runners: list, pin: Optional[StartPin] = None) -> None:
         self.runners = list(runners)
+        self._pin = pin
         self._free: queue.Queue = queue.Queue()
         for r in self.runners:
             self._free.put(r)
 
     @staticmethod
     def clip_limit_s(audio_s: Optional[float]) -> float:
-        return max(CLIP_TIMEOUT_FLOOR_S, CLIP_TIMEOUT_FACTOR * (audio_s or 0.0))
+        return max(
+            CLIP_TIMEOUT_FLOOR_S, min(CLIP_TIMEOUT_CAP_S, CLIP_TIMEOUT_FACTOR * (audio_s or 0.0))
+        )
 
     def run(self, wav_path: str, audio_s: Optional[float]) -> str:
         limit = self.clip_limit_s(audio_s)
@@ -636,6 +685,13 @@ class Engine:
         return None
 
     def meta(self) -> dict:
+        """What /health reports: the PINNED resolution (the first start's model,
+        device and compute type, which every child is held to), else the first live
+        runner's."""
+        if self._pin is not None:
+            pinned = self._pin.meta()
+            if pinned:
+                return pinned
         for r in self.runners:
             m = r.meta()
             if m:
@@ -648,19 +704,40 @@ class Engine:
                 r.shutdown()
 
 
-def build_engine(cfg: ServerConfig) -> Engine:
+def _pin_arg(base: dict, pinned: dict) -> dict:
+    """The factory argument for every child after the first resolution: the same
+    config with the model, device and compute type the first child reported, now
+    EXPLICIT (an explicit cuda is strict, so a restart that cannot load it is a
+    start fault, never a quiet CPU run)."""
+    cfg = dict(base["cfg"])
+    cfg.update(model=pinned["model"], device=pinned["device"], compute_type=pinned["compute_type"])
+    return {**base, "cfg": cfg}
+
+
+def build_engine(cfg: ServerConfig, transcriber_factory: Optional[str] = None) -> Engine:
     """The production engine: --num-workers decode processes, started now (the model
-    is loaded, or the load error raised, before the worker listens)."""
+    is loaded, or the load error raised, before the worker listens).
+
+    The first child resolves `auto`; the rest (and every restart) are pinned to what
+    it resolved. A child that cannot load exactly that fails the start, so the
+    worker refuses to serve rather than serve two different models.
+    `transcriber_factory` ("module:attr") is a test seam, see child_backend."""
+    pin = StartPin()
+    arg: dict = {"cfg": dataclasses.asdict(cfg)}
+    if transcriber_factory:
+        arg["transcriber_factory"] = transcriber_factory
     children = [
         DecodeChild(
             BACKEND_FACTORY,
-            {"cfg": dataclasses.asdict(cfg)},
+            arg,
             ready_timeout_s=CHILD_READY_TIMEOUT_S,
             fault_ttl_s=CHILD_FAULT_TTL_S,
+            pin=pin,
+            pin_arg=_pin_arg,
         )
         for _ in range(cfg.num_workers)
     ]
-    engine = Engine(children)
+    engine = Engine(children, pin)
     try:
         for c in children:
             c.start(STARTUP_TIMEOUT_S)
@@ -680,6 +757,9 @@ def create_app(
     identity: Optional[MachineIdentity] = None,
 ) -> FastAPI:
     app = FastAPI()
+    app.add_middleware(
+        BodyLimitMiddleware, paths=("/transcribe", "/transcribe-batch"), limit=MAX_UPLOAD_BYTES
+    )
     pipeline = pipeline or PathPipeline()
     identity = identity or MachineIdentity()
     identity.start()
