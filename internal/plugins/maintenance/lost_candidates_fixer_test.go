@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.1.6
+// version: 1.1.7
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
 // last-edited: 2026-11-17
 
@@ -304,6 +304,9 @@ func TestLostCandidatesFixer_RetiredBooksAreNotPlannedAndReplanNamesWhy(t *testi
 		require.NotEqual(t, rows[k].Fingerprint, got.Fingerprint, "%s: the plan is stale", k)
 	}
 
+	// The live book's refetch must find something, or it is a legitimate
+	// "found nothing" failure and the Applied assertion below is wrong.
+	l.deps.found[l.ids["live"]] = 1
 	res := l.apply(plan, false, "live", "trashed-later", "merged-later")
 	require.Equal(t, repairs.OutcomeApplied, lcRowResult(res, l.ids["live"]).Outcome)
 	require.Equal(t, repairs.OutcomeChangedSincePlan, lcRowResult(res, l.ids["trashed-later"]).Outcome)
