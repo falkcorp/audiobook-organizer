@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus_bad_asin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e8a2d93-7c14-4b60-8f3e-a1d9c06b7e52
 // last-edited: 2026-11-16
 
@@ -97,17 +97,24 @@ func TestAudnexusLookup_BadASIN400StopsAtTheFirstRegion(t *testing.T) {
 // A 400 that is not the provider's own JSON (a proxy's HTML page) says nothing
 // about the ASIN: it is a failure and the other regions are still asked.
 func TestAudnexusLookup_NonJSON400IsAFailureNotABadASIN(t *testing.T) {
-	c, rl, done := plainAudnexus(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte("<html>Bad Request</html>"))
-	})
-	defer done()
-	_, err := c.LookupByASINInRegions(context.Background(), "B0GOTHAM99", []string{"", "uk", "au"})
-	if err == nil || IsBadASIN(err) || IsNotFound(err) {
-		t.Fatalf("err = %v, want a plain failure", err)
-	}
-	if rl.n() != 3 {
-		t.Fatalf("server saw %d requests, want 3", rl.n())
+	for name, body := range map[string]string{
+		"html":                "<html>Bad Request</html>",
+		"json about a region": `{"error":{"code":"BAD_REQUEST","message":"Bad region"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, rl, done := plainAudnexus(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(body))
+			})
+			defer done()
+			_, err := c.LookupByASINInRegions(context.Background(), "B0GOTHAM99", []string{"", "uk", "au"})
+			if err == nil || IsBadASIN(err) || IsNotFound(err) {
+				t.Fatalf("err = %v, want a plain failure", err)
+			}
+			if rl.n() != 3 {
+				t.Fatalf("server saw %d requests, want 3", rl.n())
+			}
+		})
 	}
 }
 
@@ -162,7 +169,11 @@ func TestIsBadASIN(t *testing.T) {
 		want bool
 	}{
 		{&ProviderStatusError{Provider: "x", Status: 400, Body: badASINBody}, true},
-		{fmt.Errorf("region=: %w", &ProviderStatusError{Provider: "x", Status: 400, Body: `{"error":"x"}`}), true},
+		{fmt.Errorf("region=: %w", &ProviderStatusError{Provider: "x", Status: 400, Body: `{"error":{"code":"BAD_REQUEST","message":"Bad ASIN"}}`}), true},
+		// The provider's JSON about something else is not a verdict on the ASIN.
+		{&ProviderStatusError{Provider: "x", Status: 400, Body: `{"error":{"code":"BAD_REQUEST","message":"Bad region"}}`}, false},
+		{&ProviderStatusError{Provider: "x", Status: 400, Body: `{"error":{"code":"invalid_argument","message":"Invalid query"}}`}, false},
+		{&ProviderStatusError{Provider: "x", Status: 400, Body: `["Bad ASIN"]`}, false},
 		{fmt.Errorf("not sent: %w", ErrBadASIN), true},
 		{&ProviderStatusError{Provider: "x", Status: 400, Body: "<html>"}, false},
 		{&ProviderStatusError{Provider: "x", Status: 400}, false},
@@ -205,6 +216,7 @@ func TestFailureCause(t *testing.T) {
 		{"502", &ProviderStatusError{Provider: "x", Status: 502}, CauseUpstream},
 		{"plain 403", &ProviderStatusError{Provider: "x", Status: 403, Body: "forbidden"}, CauseClientError},
 		{"non-JSON 400", &ProviderStatusError{Provider: "x", Status: 400, Body: "<html>"}, CauseClientError},
+		{"another provider's JSON 400", &ProviderStatusError{Provider: "google-books", Status: 400, Body: `{"error":{"code":400,"message":"Invalid value"}}`}, CauseClientError},
 		{"anything else", errors.New("decode failed"), CauseOther},
 	} {
 		if got := FailureCause(tc.err); got != tc.want {

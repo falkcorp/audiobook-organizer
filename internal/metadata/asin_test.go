@@ -1,5 +1,5 @@
 // file: internal/metadata/asin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c9e4a17-b5d3-4860-8f1a-d07e3b6c5a94
 // last-edited: 2026-11-16
 
@@ -60,6 +60,28 @@ func TestASINInText(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ASINInText(tc.in); got != tc.want {
 				t.Fatalf("ASINInText(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestASINQuery(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"modern", "B0GOTHAM99", "B0GOTHAM99"},
+		{"trimmed", "  B0GOTHAM99 ", "B0GOTHAM99"},
+		{"pasted in lower case", "b0gotham99", "B0GOTHAM99"},
+		{"ten digits", "0123456789", "0123456789"},
+		{"nine digits and X", "012345678X", "012345678X"},
+		// A one-word title is a whole query too.
+		{"a ten-letter word", "Batmobiles", ""},
+		{"an upper-case ten-letter word", "BATMOBILES", ""},
+		{"a lower-case ten-letter word", "batmobiles", ""},
+		{"two words", "Year One", ""},
+		{"empty", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ASINQuery(tc.in); got != tc.want {
+				t.Fatalf("ASINQuery(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}

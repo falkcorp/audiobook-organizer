@@ -1,5 +1,5 @@
 // file: internal/metadata/provider_error.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: fa58b130-5ad4-4cfc-b726-728a75522364
 // last-edited: 2026-11-16
 
@@ -47,9 +47,12 @@ func IsNotFound(err error) bool {
 // regions, and unlike a failure it must not mark the provider failed.
 var ErrBadASIN = errors.New("not a valid ASIN")
 
-// IsBadASIN reports whether err is ErrBadASIN, or a 400 whose body is the
-// provider's own JSON (so a proxy's or an edge's HTML 400 stays a failure, as in
-// IsNotFound).
+// IsBadASIN reports whether err is ErrBadASIN, or Audnexus's own refusal of an
+// ASIN: a 400 whose JSON body says "Bad ASIN" (code BAD_REQUEST). Any other 400
+// -- a proxy's or an edge's HTML page, or the provider's JSON about something
+// else (a region or a parameter it rejects) -- says nothing about the ASIN and
+// stays a failure: caching it as "this ASIN is permanently bad" would hide a
+// request we got wrong behind a 14-day negative row.
 func IsBadASIN(err error) bool {
 	if errors.Is(err, ErrBadASIN) {
 		return true
@@ -59,7 +62,10 @@ func IsBadASIN(err error) bool {
 		return false
 	}
 	body := strings.TrimSpace(se.Body)
-	return strings.HasPrefix(body, "{") || strings.HasPrefix(body, "[")
+	if !strings.HasPrefix(body, "{") {
+		return false
+	}
+	return strings.Contains(strings.ToLower(body), `"bad asin"`)
 }
 
 // Failure causes, as reported in a run's refresh summary and a result row's
