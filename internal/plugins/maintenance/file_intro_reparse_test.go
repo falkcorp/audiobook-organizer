@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse_test.go
-// version: 2.0.2
+// version: 2.0.3
 // guid: 2e6b9d14-8a37-4c51-b0f2-d95a1c3e7840
 // last-edited: 2026-11-17
 
@@ -572,7 +572,11 @@ func TestReparseFileIntros_LiveStartGates(t *testing.T) {
 	}
 	busy := newReparseEnv(s, &fakeReporter{})
 	busy.queue = reparseQueue{active: []database.OperationV2Row{{DefID: "library.scan", Status: "running"}}}
-	if _, err := runReparseFileIntros(ctx, busy, none, false); err == nil || !strings.Contains(err.Error(), "library.scan") {
+	// Bounded: without the start gate the run would sit in the per-chunk scan wait
+	// until the test binary's own timeout, which is a hang and not a failure.
+	bctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := runReparseFileIntros(bctx, busy, none, false); err == nil || !strings.Contains(err.Error(), "library.scan") {
 		t.Errorf("scan running: err = %v", err)
 	}
 	if n := s.totalWrites(); n != 0 {
