@@ -731,7 +731,11 @@ func TestTitleForms_ASideWithASubtitleHasNoBareForms(t *testing.T) {
 		{"Hush", "Part 2", "", []string{"hush part #2"}},
 		{"Hush", "Part 2", "Batman", []string{"hush part #2", "batman hush part #2"}},
 	} {
-		if got := titleForms(c.title, c.sub, c.series); !slices.Equal(got, c.want) {
+		var got []string
+		for _, f := range titleForms(c.title, c.sub, c.series) {
+			got = append(got, f.text)
+		}
+		if !slices.Equal(got, c.want) {
 			t.Errorf("titleForms(%q,%q,%q) = %q, want %q", c.title, c.sub, c.series, got, c.want)
 		}
 	}

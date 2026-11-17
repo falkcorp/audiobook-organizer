@@ -1,5 +1,5 @@
 // file: internal/applygate/partial.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b1e7d4a0-3c58-4f26-9a8d-0f6c2e5b7d19
 // last-edited: 2026-11-17
 
@@ -26,18 +26,10 @@ import (
 const ReasonPartialBook = "partial_book"
 
 var (
-	// partRe is a part marker: "Disc 2", "Part II", "Pt. 3", "(2 of 3)".
-	partRe = regexp.MustCompile(`(?i)\b(?:disc|disk|cd|part|pt)\.?\s*(\d+|[ivx]+|one|two|three|four|five)\b|\(\s*(\d+)\s+of\s+\d+\s*\)`)
 	// spanRe marks text covering several books.
 	spanRe = regexp.MustCompile(`(?i)\b(?:omnibus|box(?:ed)?\s*set|boxset|publisher.?s\s+pack|complete\s+series|books\s*\d+\s*(?:-|–|to|thru|&|and)\s*\d+|vol(?:ume)?s\.?\s*\d+\s*(?:-|–|to|&|and)\s*\d+|vol(?:ume)?\.?\s*\d+\s*(?:&|and)\s*\d+)\b`)
 	// fileExtRe is a file extension at the end of a path.
 	fileExtRe = regexp.MustCompile(`\.[A-Za-z][A-Za-z0-9]{1,3}$`)
-	// rangeTailRe follows a part marker that opens a range ("Disc 1-3",
-	// "Parts 1 & 2"): a range means the files hold every part, not one.
-	rangeTailRe = regexp.MustCompile(`(?i)^\s*(?:-|–|to|thru|through|&|and)\s*(?:\d+|[ivx]+)\b`)
-
-	partWords = map[string]float64{"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
-	partRoman = map[string]float64{"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10}
 )
 
 // ClaimIndex records, for one batch, which books would take which candidate,
@@ -173,9 +165,13 @@ func ClaimKey(c *metafetch.MetadataCandidate) string {
 // same folder, a nested folder or a sibling folder takes the same candidate
 // and carries a part number the candidate lacks.
 //
-// Skipped when the runtime check AGREES: files whose runtime matches the
-// candidate's are the whole thing, whatever the folder says. It returns only
-// block or neutral, never agree.
+// Rule (a), the part marker, runs whatever the runtime says: parts of one book
+// can be within 5% of each other's length, so a matching runtime does not say
+// which part the files are. With a runtime that agrees only the book's own
+// title and file name are read for it, not the folder's label, which is where
+// a stale marker lives. Rules (b) and (c) are skipped when the runtime
+// AGREES: files whose runtime matches the candidate's are the whole thing,
+// whatever the folder says. It returns only block or neutral, never agree.
 //
 // Not a block: two books taking one candidate with no part marker. On the
 // 2026-09-13 preview that caught 3 of the 35 flagged rows and newly blocked
@@ -192,16 +188,40 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 		r.Detail = "sibling " + u + " unreadable; manual review"
 		return r
 	}
-	if runtimeOutcome == OutcomeAgree {
-		return r
-	}
-	bside := bookSide(book.Title, book.FilePath)
+	// The stored subtitle is part of the book's own text: "Part 2" there is as
+	// much the files' part marker as one in the title.
+	bTitle := strings.TrimSpace(book.Title + " " + derefStr(book.Subtitle))
+	bside := bookSide(bTitle, book.FilePath)
 	cside := c.Title + " " + c.Subtitle
 	bp, bok := partOf(bside)
 	cp, cok := partOf(cside)
-	if bok && (!cok || bp != cp) {
+	// With a runtime that agrees the folder's label is the one a stale part
+	// marker lives in (a "Disc 2" folder whose files were merged since), so a
+	// part the files are said to be counts only when this book's own text (its
+	// title and its own file name) says it.
+	mp, mok := bp, bok
+	if runtimeOutcome == OutcomeAgree {
+		mp, mok = partOf(bookOwnSide(bTitle, book.FilePath))
+	}
+	if mok && (!cok || mp != cp) {
 		r.Outcome, r.Reason = OutcomeBlock, ReasonPartialBook
-		r.Detail = "the files are part " + ftoa(bp) + "; the candidate " + partText(cp, cok)
+		r.Detail = "the files are part " + ftoa(mp) + "; the candidate " + partText(cp, cok)
+		return r
+	}
+	// The candidate is one part of a book and nothing on the book's side, the
+	// folder included, says the files are a part: the files are the whole book,
+	// or a part the candidate does not name. (A volume number the candidate
+	// alone states is a different matter: that is a series position, and the
+	// sequence leg checks it.)
+	if cok && !bok {
+		r.Outcome, r.Reason = OutcomeBlock, ReasonPartialBook
+		r.Detail = "the candidate is part " + ftoa(cp) + "; nothing says the files are a part"
+		return r
+	}
+	// A runtime that agrees settles the spans and the siblings (the files are
+	// the whole thing whatever the folder says), but not which part: two
+	// parts of one book can be within 5% of each other's length.
+	if runtimeOutcome == OutcomeAgree {
 		return r
 	}
 	// The spans themselves are compared. The RANGES (the books covered) must
@@ -292,27 +312,14 @@ func partText(p float64, ok bool) string {
 	return "is part " + ftoa(p)
 }
 
-// partOf returns the part number of the first part marker in s. A marker
-// that opens a range ("Disc 1-3") is not a part: those files hold them all.
+// partOf returns the part number of the first part marker in s, read by the
+// one sequence number reader (seqnum.ReadStated): "Disc 2", "Part II", "Pt. 3",
+// "(2 of 3)", "Part 1 of 3", the second part. A marker that opens a range
+// ("Disc 1-3") is not a part: those files hold them all.
 func partOf(s string) (float64, bool) {
-	for _, ix := range partRe.FindAllStringSubmatchIndex(s, -1) {
-		if rangeTailRe.MatchString(s[ix[1]:]) {
-			continue
-		}
-		var tok string
-		if ix[2] >= 0 {
-			tok = strings.ToLower(s[ix[2]:ix[3]])
-		} else {
-			tok = s[ix[4]:ix[5]]
-		}
-		if v, ok := partWords[tok]; ok {
-			return v, true
-		}
-		if v, ok := partRoman[tok]; ok {
-			return v, true
-		}
-		if v, err := strconv.ParseFloat(tok, 64); err == nil {
-			return v, true
+	for _, st := range seqnum.ReadStated(s) {
+		if st.Kind == seqnum.KindPart {
+			return st.Number.Value, true
 		}
 	}
 	return 0, false
@@ -324,6 +331,17 @@ func partOf(s string) (float64, bool) {
 func bookSide(title, filePath string) string {
 	d := bookDir(filePath)
 	s := title + " | " + dirBase(d)
+	if p := strings.TrimSpace(filePath); p != "" && p != d {
+		s += " | " + fileExtRe.ReplaceAllString(filepath.Base(p), "")
+	}
+	return s
+}
+
+// bookOwnSide is bookSide without the folder name: the book's title and, for a
+// single-file book, the file name.
+func bookOwnSide(title, filePath string) string {
+	d := bookDir(filePath)
+	s := title
 	if p := strings.TrimSpace(filePath); p != "" && p != d {
 		s += " | " + fileExtRe.ReplaceAllString(filepath.Base(p), "")
 	}
