@@ -1,5 +1,5 @@
 // file: internal/server/series_normalize_partial_merge_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b17e5c40-92d3-4a68-8f01-6c4d7a3e2b95
 // last-edited: 2026-11-17
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -42,6 +43,19 @@ func TestExecuteSeriesNormalize_PartialMergeLeavesTheNameParsedPosition(t *testi
 			"book-moved":    {ID: "book-moved", Title: "Knightquest", SeriesID: new(52)},
 			"book-stranded": {ID: "book-stranded", Title: "Knights End", SeriesID: new(52)},
 		})
+	// The fixture lists a series' books in map order, and the pass stops repointing a
+	// row at its first failure, so which book is stranded would change from run to
+	// run. Listed by id, "book-moved" is repointed before "book-stranded" fails.
+	for _, p := range []*func(int) ([]database.BookCore, error){
+		&f.store.GetBooksBySeriesIDCoreFunc, &f.store.GetBooksBySeriesIDAllVersionsFunc,
+	} {
+		inner := *p
+		*p = func(id int) ([]database.BookCore, error) {
+			out, err := inner(id)
+			sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+			return out, err
+		}
+	}
 	f.store.ModifyBookFunc = func(id string, fn func(*database.Book) error) (*database.Book, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -71,15 +85,24 @@ func TestExecuteSeriesNormalize_PartialMergeLeavesTheNameParsedPosition(t *testi
 
 	moved, stranded := f.books["book-moved"], f.books["book-stranded"]
 	if moved.SeriesID == nil || *moved.SeriesID != 51 {
-		t.Fatalf("book-moved series = %v, want the keeper 51", moved.SeriesID)
+		t.Fatalf("book-moved series = %v, want the keeper 51", derefInt(moved.SeriesID))
 	}
 	if got := f.renamedTo(51); got != "Bane" {
 		t.Fatalf("keeper renamed to %q, want Bane", got)
 	}
 	if stranded.SeriesID == nil || *stranded.SeriesID != 52 {
-		t.Fatalf("book-stranded series = %v, want it left in the numbered row 52", stranded.SeriesID)
+		t.Fatalf("book-stranded series = %v, want it left in the numbered row 52", derefInt(stranded.SeriesID))
 	}
 	if got := f.seq(t, "book-stranded"); got == nil || *got != 5 {
-		t.Fatalf("book-stranded position = %v, want 5: the number parsed from the name of the row it is stranded in", got)
+		t.Fatalf("book-stranded position = %v, want 5: the number parsed from the name of the row it is stranded in", derefInt(got))
 	}
+}
+
+// derefInt prints a *int as its value, or "nil", so a failure message names the
+// series or position instead of an address.
+func derefInt(p *int) any {
+	if p == nil {
+		return "nil"
+	}
+	return *p
 }
