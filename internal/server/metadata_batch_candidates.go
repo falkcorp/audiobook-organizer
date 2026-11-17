@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.30.1
+// version: 4.31.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -324,10 +324,22 @@ func (s *Server) fetchCandidateForBook(
 	// searchAuthor is the author the ladder narrows by (set below, once the
 	// hint is known); "" when the book has none or only a placeholder.
 	searchAuthor := ""
+	// chainFailed / chainCause: the sources the chain search could not ask or
+	// hear from, and why (chainFailure). Set once the chain has run; every
+	// result built after that carries them, so a book the other sources
+	// answered is DEGRADED (SourcesFailed set), not silently clean.
+	var chainFailed []string
+	chainCause := ""
 	withQuery := func(r CandidateResult) CandidateResult {
 		r.SearchQuery = query.Title
 		r.SearchQuerySource = query.Source
 		r.SearchAuthor = searchAuthor
+		if len(chainFailed) > 0 {
+			r.SourcesFailed = chainFailed
+			if r.ErrorCause == "" {
+				r.ErrorCause = chainCause
+			}
+		}
 		return r
 	}
 
@@ -475,6 +487,25 @@ func (s *Server) fetchCandidateForBook(
 		chainOpts.CarryFrom(carryFrom)
 		fetched, resp, ferr := mfs.FetchAndCacheWithResponse(ctx, limiter, bookID, query.Title, authorForHash, "", "", chainOpts)
 		if ferr != nil {
+			chainFailed, chainCause = chainFailure(resp, ferr)
+			// Only identifier-asked sources (Audnexus) failed: the book's
+			// title was never refused, so the fallback providers that still
+			// owe it an answer are asked now instead of waiting behind a
+			// source that cannot answer. The chain's own row is NOT written
+			// (nothing it asked answered), so the failed source stays owed
+			// and the book is selected again. A book the fallback leaves
+			// without a candidate is an error, not a clean "no match".
+			if len(active) > 0 && ctx.Err() == nil && onlyASINSourcesFailed(resp, ferr, idByName) &&
+				len(fallbackOwed(entry, active)) > 0 {
+				if v := metabatch.NoUsableCandidate(store, store, book, entry); !v.Usable {
+					r := fallback(entry, v.Why, "")
+					if r.Status == "no_match" {
+						r.Status = "error"
+						r.Error = chainIncompleteMessage(resp)
+					}
+					return r
+				}
+			}
 			// A primary chain that failed is not a "no match": the fallback
 			// is not asked, and the next run asks the chain again.
 			return withQuery(CandidateResult{
@@ -482,6 +513,9 @@ func (s *Server) fetchCandidateForBook(
 				Status: "error",
 				Error:  fmt.Sprintf("search failed: %v", ferr),
 			})
+		}
+		if resp != nil && len(resp.SourcesFailed) > 0 {
+			chainFailed, chainCause = chainFailure(resp, nil)
 		}
 		entry = fetched
 		if len(active) == 0 {

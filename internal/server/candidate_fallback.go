@@ -1,7 +1,7 @@
 // file: internal/server/candidate_fallback.go
-// version: 2.1.6
+// version: 2.2.0
 // guid: 487502d2-faea-4677-8c9d-171a796ad643
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 //
 // The batch candidate fetch's provider fallback: Open Library, then Google
 // Books, asked only for books the rest of the chain left without a usable
@@ -333,6 +333,7 @@ func (s *Server) runCandidateFallback(ctx context.Context, mfs *metafetch.Servic
 		return finish(fromEntry())
 	}
 	var failed []string // providers that failed without deferring the book
+	failedCause := ""   // metadata.FailureCause of the first of them
 	for _, fb := range in.pending {
 		step := metabatch.FallbackStep{Provider: fb.id, At: time.Now().UTC(), Detail: in.why}
 		if fb.isGoogle() {
@@ -392,9 +393,12 @@ func (s *Server) runCandidateFallback(ctx context.Context, mfs *metafetch.Servic
 				// Open Library failing or held is no reason to keep Google
 				// Books from the book: move on.
 				failed = append(failed, fb.name+": "+err.Error())
+				if failedCause == "" {
+					failedCause = metadata.FailureCause(err)
+				}
 				continue
 			}
-			return finish(CandidateResult{Book: in.bookInfo, Status: "error",
+			return finish(CandidateResult{Book: in.bookInfo, Status: "error", ErrorCause: metadata.FailureCause(err),
 				Error: fmt.Sprintf("fallback search on %s failed: %v", fb.name, err)})
 		}
 		in.entry = entry
@@ -426,6 +430,7 @@ func (s *Server) runCandidateFallback(ctx context.Context, mfs *metafetch.Servic
 		// found", and the next run asks it again.
 		r.Status = "error"
 		r.Error = "fallback incomplete: " + strings.Join(failed, "; ")
+		r.ErrorCause = failedCause
 	}
 	return finish(r)
 }
