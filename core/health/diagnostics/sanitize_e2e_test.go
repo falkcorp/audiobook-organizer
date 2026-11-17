@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize_e2e_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 17158067-310c-4881-b709-9b9df6b06410
 // last-edited: 2026-11-16
 
@@ -26,7 +26,7 @@ import (
 // The usernames and directory names below are Batman-universe people. The
 // invariant of this file: not one of them is in any byte of the bundle, in an
 // entry's content or its name, in the zip's own headers, or in the manifest.
-var plantedNames = []string{"selina", "harvey", "harleen", "Quinzel", "Kyle", "Dent", "Wayne", "Hush", "Brucie"}
+var plantedNames = []string{"selina", "harvey", "harleen", "Quinzel", "Kyle", "Dent", "Wayne", "Hush", "Brucie", "Pennyworth", "Gordon", "Halloween", "Nightwing", "Grayson"}
 
 // scanBundle fails the test for every planted name in the bundle: each entry's
 // name and decompressed content, and the raw bytes of the file.
@@ -72,6 +72,21 @@ func ringLines() []string {
 		`sftp://selina:pw@host.example/home/selina/Hush`,
 		`C:Users\selina\Hush`,
 		"goroutine 1 [running]:\nmain.main()\n\t/Users/selina/src/app/main.go:12 +0x1d",
+		// A spaced final segment, not glued to a separator, in prose that is not an error.
+		`{"level":"INFO","msg":"copied /srv/lib/Alfred Pennyworth/Batman Hush.m4b to the shelf"}`,
+		`{"level":"INFO","msg":"organizing /srv/lib/Jim Gordon/The Long Halloween now"}`,
+		`{"msg":"open /Users/Brucie (1)/Hush Part 2: permission denied"}`,
+		// A tail that is not an error text, and names that hold ": ", quotes and backticks.
+		`{"msg":"write tags /srv/lib/Jim Gordon/Batman: Hush.m4b: unsupported format"}`,
+		`{"msg":"import \"/srv/lib/Alfred Pennyworth/Batman Hush\" failed: unsupported codec"}`,
+		"open /Users/selina/Brucie `Nightwing`/Hush Part 2: permission denied",
+		`open /srv/downloads/Dick Grayson: Nightwing/Hush: no such file or directory`,
+		// logfmt, and JSON text inside a JSON string.
+		`level=INFO msg=organized path="/srv/lib/Jim Gordon/The Long Halloween"`,
+		`{"msg":"payload","detail":"{\"path\":\"/Users/Brucie (1)/Hush\",\"n\":1}"}`,
+		// A relative name has no known start.
+		`planned Alfred Pennyworth/Batman Hush/Part 1.m4b`,
+		`open Jim Gordon/The Long Halloween/Hush.m4b: permission denied`,
 	}
 }
 
@@ -127,7 +142,7 @@ func TestSanitizeE2E_BuildOverAFakeRing(t *testing.T) {
 			// Entry names that are, or hold, a location are refused, and the
 			// error that says so does not echo the name.
 			var errs []error
-			for _, n := range []string{"Users/selina/x.json", "C:Users.json", "a%2Fb.json", "~selina.json", "&#47;x.json", "selina/Hush.json"} {
+			for _, n := range []string{"Users/selina/x.json", "C:Users.json", "a%2Fb.json", "~selina.json", "&#47;x.json", "selina/Hush.json", "fork/exec", "ab: input/output error"} {
 				errs = append(errs, w.JSON(n, 1))
 			}
 			for i, err := range errs {
@@ -247,8 +262,8 @@ func TestSanitizeE2E_LeakTableThroughBothRoads(t *testing.T) {
 	runPathCases(t, []pathCase{
 		same(`open /Volumes/Macintosh HD/Users/bruce/Audiobooks/Hush.m4b: permission denied`, `open <path>: permission denied`),
 		same(`open C:\Users\Bruce Wayne\Music\Hush.m4b: The system cannot find the file specified.`, `open <path>: The system cannot find the file specified.`),
-		same(`open "/Users/bruce/My Books/Hush.m4b": permission denied`, `open "<path>": permission denied`),
-		same(`scan /Users/bruce/<Last>, <First>/Hush failed`, `scan <path> failed`),
+		same(`open "/Users/bruce/My Books/Hush.m4b": permission denied`, `open "<path>: permission denied`),
+		same(`scan /Users/bruce/<Last>, <First>/Hush failed`, `scan <path>`),
 		same("/Users/bruce/a\tb/Hush", `<path>`),
 		same(`%2FUsers%2Fbruce%2Fa b%2FHush`, `<path>`),
 		same(`CGO_CFLAGS=-I/Users/bruce/include -L/Users/bruce/lib`, `<path>`),
@@ -260,17 +275,20 @@ func TestSanitizeE2E_LeakTableThroughBothRoads(t *testing.T) {
 		same(`&#47;Users&#47;bruce&#47;Hush`, `<path>`),
 		same(`smb://nas.example/home/bruce/Hush`, `<path>`),
 		same(`sftp://bruce:pw@host.example/home/bruce/Hush`, `<path>`),
-		same(`/srv/lib/Frank Miller/Hush`, `<root:lib>`),
-		same(`scan /srv/vault/Bruce Wayne/Hush failed`, `scan <root:vault> failed`),
+		same(`/srv/lib/Jim Gordon/Hush`, `<root:lib>`),
+		same(`scan /srv/vault/Bruce Wayne/Hush failed`, `scan <root:vault>`),
 	})
 }
 
-// TestSanitizeE2E_ResidualInTheBundle: the owner-accepted residual is what a
-// bundle shows, and no more: the last words of a spaced final segment in prose
-// that does not start as a location.
-func TestSanitizeE2E_ResidualInTheBundle(t *testing.T) {
+// TestSanitizeE2E_WhatSurvivesInTheBundle: a bundle shows what the sanitizer
+// leaves, and no more: the prose before a location, bare names, and not a word
+// after a location on its line.
+func TestSanitizeE2E_WhatSurvivesInTheBundle(t *testing.T) {
 	runPathCases(t, []pathCase{
-		same(`user dir /Users/Bruce Wayne is full`, `user dir <path> Wayne is full`),
+		same(`user dir /Users/Bruce Wayne is full`, `user dir <path>`),
+		same(`ffprobe /srv/lib/Jim Gordon/The Long Halloween.m4b: exit status 1`, `ffprobe <root:lib>: exit status 1`),
+		same(`organizing /srv/lib/Jim Gordon/The Long Halloween now`, `organizing <root:lib>`),
+		same(`/srv/lib/Alfred Pennyworth/Batman: Hush.m4b`, `<root:lib>`),
 		same(`user alfred logged in`, `user alfred logged in`),
 	})
 }

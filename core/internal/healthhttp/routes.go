@@ -1,5 +1,5 @@
 // file: core/internal/healthhttp/routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c5017dc-52e8-43c1-b15d-bf6ff14ef910
 // last-edited: 2026-11-16
 
@@ -97,12 +97,12 @@ type Deps struct {
 	Audit Recorder
 	// Redactor redacts component Detail text; nil means log.NewRedactor(nil).
 	Redactor *log.Redactor
-	// Sanitize wipes locations from component Detail text after the Redactor
-	// (the same rule as the bundle's: diagnostics.Sanitizer.Text over the
-	// library roots). nil means diagnostics.NewSanitizer(nil).Text, which writes
-	// every location "<path>": a route given no sanitizer is share-safe, not
-	// open.
-	Sanitize func(string) string
+	// Roots are the library roots the share-safety rule names ("<root:NAME>")
+	// in component Detail text, after the Redactor: the route builds
+	// diagnostics.NewSanitizer(Roots) itself, the same rule as the bundle's.
+	// There is no hook to replace the rule: nil Roots write every location
+	// "<path>", and a caller cannot hand the route a rule that lets one through.
+	Roots []diagnostics.PathRoot
 	// App and Version identify the build in the health body.
 	App, Version string
 	// Log receives the cause of an internal failure, which is withheld from
@@ -146,15 +146,12 @@ type api struct {
 
 func newAPI(d Deps) *api {
 	a := &api{reg: d.Health, info: d.Info, runs: d.Runs, enq: d.Enqueuer, root: d.Bundles, audit: d.Audit,
-		keep: d.Retention, now: d.Now, red: d.Redactor, san: d.Sanitize, app: d.App, version: d.Version, log: d.Log}
+		keep: d.Retention, now: d.Now, red: d.Redactor, san: diagnostics.NewSanitizer(d.Roots).Text, app: d.App, version: d.Version, log: d.Log}
 	if a.now == nil {
 		a.now = time.Now
 	}
 	if a.red == nil {
 		a.red = log.NewRedactor(nil)
-	}
-	if a.san == nil {
-		a.san = diagnostics.NewSanitizer(nil).Text
 	}
 	return a
 }

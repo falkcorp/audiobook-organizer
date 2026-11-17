@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/hardening_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d3f1b6a-47c2-4e90-a5d8-1f7b9c2e6a03
 // last-edited: 2026-11-16
 
@@ -554,7 +554,7 @@ func TestDiagnostics_JSONLogLinesStayValid(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
 		t.Fatal(err)
 	}
-	if first["msg"] != `config file "<path>" not found` {
+	if first["msg"] != `config file "<path>` {
 		t.Errorf("msg = %q", first["msg"])
 	}
 	if first["path"] != "<root:audiobooks>" {
@@ -566,7 +566,7 @@ func TestDiagnostics_JSONLogLinesStayValid(t *testing.T) {
 	if first["password"] == "hunter2-not-real" {
 		t.Errorf("password survived: %v", first["password"])
 	}
-	if second["err"] != `open "<path>": denied` || second["n"] != float64(7) {
+	if second["err"] != `open "<path>` || second["n"] != float64(7) {
 		t.Errorf("second line = %v", second)
 	}
 	assertNoneOf(t, map[string][]byte{"logs": []byte(out)}, "/etc/batcave", "/var/lib/batcave", "Application Support", "hunter2-not-real")
@@ -574,7 +574,7 @@ func TestDiagnostics_JSONLogLinesStayValid(t *testing.T) {
 	// A line that is not JSON takes the text rule: a word that holds a location
 	// is wiped whole, with the key and the escape glued to it.
 	text := logsOf(t, nil, []string{`msg=\"/etc/batcave/app.yaml\" gone`, "{not json /etc/batcave/x"})
-	if text != "<path>\" gone\n{not json <path>\n" {
+	if text != "<path>\n{not json <path>\n" {
 		t.Errorf("text lines:\n%q", text)
 	}
 }
