@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-metadata-title-check-executive-summary.md -->
-<!-- version: 2.0.0 -->
+<!-- version: 2.1.0 -->
 <!-- guid: 3b9d6e21-8c47-4f05-a1d2-6e0f7a4c9b83 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -53,6 +53,13 @@ attempt.
 - The same title check also guards the automatic metadata upgrade that runs
   without anyone asking (`metabatch/upgrade.go`), so that path is stricter in
   exactly the same way.
+- The same weakness existed in the path for books whose own title is a
+  placeholder ("Chapter 3", or empty) and that are found by the audio intro. The
+  intro only repeated the library's own search words, yet it was counted as proof
+  the title matched, and it could even override a real disagreement between the
+  titles. It no longer counts as proof: a book found this way is applied on its
+  own only when the recording lengths agree, and a real disagreement between the
+  titles is never overridden (an owner can still approve it).
 - A second, smaller fix: applying from the results of a metadata search did not
   check whether the book had already been applied some other way, so it could
   apply the same book a second time (rewriting its files and tags again). It
@@ -77,9 +84,7 @@ attempt.
     a one-sided subtitle);
   - two titles whose numbers are swapped between pieces ("Knightfall 2: Book 3"
     and "Knightfall 3: Book 2"): refused today only by the separate series-number
-    check, not by the title check;
-  - a match the audio intro confirms through the query path, which skips the
-    length requirement (`transcribed_identity.go`).
+    check, not by the title check.
 
   Closing these needs information the title alone does not carry, and each would
   have to be handled without excusing text by what another field says.
