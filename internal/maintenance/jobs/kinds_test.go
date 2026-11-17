@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 95f5ec58-0c87-4403-b2aa-b306523e06bd
-// last-edited: 2026-11-12
+// last-edited: 2026-11-16
 
 package jobs
 
@@ -162,9 +162,23 @@ func realJob(t *testing.T, id string) maintenance.MaintenanceJob {
 	return j
 }
 
+// mustKindFor is kindFor for a test: a job whose write set cannot be derived is a
+// failure of the test, not a value.
+func mustKindFor(t *testing.T, job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	t.Helper()
+	def, err := kindFor(job, deps, sched)
+	if err != nil {
+		t.Fatalf("kindFor(%s): %v", job.ID(), err)
+	}
+	return def
+}
+
 func TestJobKinds_Conformance(t *testing.T) {
 	d := &depsProbe{ret: &probeStore{}}
-	defs := Kinds(d.deps(), nil)
+	defs, err := Kinds(d.deps(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	jobs := maintenance.All()
 	if len(defs) != 34 || len(defs) != len(jobs) {
 		t.Fatalf("Kinds returned %d definitions for %d jobs, want 34", len(defs), len(jobs))
@@ -184,7 +198,7 @@ func TestJobKinds_ModeMapsToDryRun(t *testing.T) {
 	d := &depsProbe{ret: &probeStore{}}
 	preview := &probeJob{MaintenanceJob: realJob(t, "dedup-books")}  // advertises dry_run=true
 	reader := &probeJob{MaintenanceJob: realJob(t, "relink-report")} // advertises dry_run=false: no preview
-	pk, rk := kindFor(preview, d.deps(), nil), kindFor(reader, d.deps(), nil)
+	pk, rk := mustKindFor(t, preview, d.deps(), nil), mustKindFor(t, reader, d.deps(), nil)
 
 	t.Run("live writes, preview does not", func(t *testing.T) {
 		for _, c := range []struct {
@@ -264,7 +278,7 @@ func TestJobKinds_StoreFromRCWriter(t *testing.T) {
 			ret := &probeStore{name: real.ID()}
 			d := &depsProbe{ret: ret}
 			job := &probeJob{MaintenanceJob: real}
-			def := kindFor(job, d.deps(), nil)
+			def := mustKindFor(t, job, d.deps(), nil)
 
 			var w tasks.Writer
 			if !tasks.CommonOf(def).Effects.IsReadOnly() {
@@ -307,7 +321,7 @@ func TestKindShell_NoStoreFailsBeforeTheJobRuns(t *testing.T) {
 		"nil NewStore": {},
 		"nil store":    {NewStore: func(tasks.Writer) Store { return nil }},
 	} {
-		def := kindFor(job, deps, nil)
+		def := mustKindFor(t, job, deps, nil)
 		_, rc := newKindRC(def.Kind(), tasks.ModeLive, &fakeWriter{})
 		if _, err := runKind(t, def, rc, ""); err == nil {
 			t.Errorf("%s: run succeeded", name)
@@ -322,7 +336,7 @@ func TestKindShell_ResultAndErrors(t *testing.T) {
 	d := &depsProbe{ret: &probeStore{}}
 	run := func(body func(ctx context.Context, rep maintenance.ProgressReporter) error) (json.RawMessage, error) {
 		job := &probeJob{MaintenanceJob: realJob(t, "scan-chapter-groups"), body: body}
-		def := kindFor(job, d.deps(), nil)
+		def := mustKindFor(t, job, d.deps(), nil)
 		_, rc := newKindRC(def.Kind(), tasks.ModeLive, nil)
 		return runKind(t, def, rc, "")
 	}
@@ -343,7 +357,7 @@ func TestKindShell_ResultAndErrors(t *testing.T) {
 		_ = maintenance.SetResult(ctx, "gotham-ledger-"+strings.Repeat("x", 1<<20))
 		return boom
 	}}
-	fdef := kindFor(failing, d.deps(), nil)
+	fdef := mustKindFor(t, failing, d.deps(), nil)
 	var frc *tasks.RC
 	h, frc = newKindRC(fdef.Kind(), tasks.ModeLive, nil)
 	_, err = runKind(t, fdef, frc, "")
@@ -451,7 +465,7 @@ func TestKindShell_StartRequirement(t *testing.T) {
 	}
 	// An atom this package has no row for must fail closed: a zero requirement is
 	// refused at registration, never replaced by a guess.
-	def := kindFor(permJob{base, "library.edit_metadata"}, KindDeps{}, nil)
+	def := mustKindFor(t, permJob{base, "library.edit_metadata"}, KindDeps{}, nil)
 	if !tasks.CommonOf(def).Perms.Start.IsZero() {
 		t.Error("an unmapped permission got a start requirement")
 	}
@@ -468,7 +482,7 @@ func TestKindShell_DefinitionFields(t *testing.T) {
 		asked = append(asked, k)
 		return nil
 	}
-	mk, pk := kindFor(merge, KindDeps{}, sched), kindFor(plain, KindDeps{}, nil)
+	mk, pk := mustKindFor(t, merge, KindDeps{}, sched), mustKindFor(t, plain, KindDeps{}, nil)
 	if c := tasks.CommonOf(mk); c.ConcurrencyKey != "books.library.scan" {
 		t.Errorf("merge-chapter-groups key = %q, want books.library.scan", c.ConcurrencyKey)
 	}
@@ -491,6 +505,10 @@ func TestKindShell_DefinitionFields(t *testing.T) {
 func TestKindShell_EffectsTable(t *testing.T) {
 	seen := map[string]bool{}
 	var readOnly []string
+	jobWrites, err := jobWritesFor()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, job := range maintenance.All() {
 		seen[job.ID()] = true
 		ws, ok := jobWrites[job.ID()]
@@ -498,7 +516,10 @@ func TestKindShell_EffectsTable(t *testing.T) {
 			t.Errorf("%s has no jobWrites row", job.ID())
 			continue
 		}
-		fx := effectsFor(job.ID())
+		fx, err := effectsFor(job.ID())
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !fx.Declared() {
 			t.Errorf("%s: effects are not declared", job.ID())
 		}
@@ -525,8 +546,8 @@ func TestKindShell_EffectsTable(t *testing.T) {
 	if !slices.Equal(readOnly, want) {
 		t.Errorf("ReadOnly jobs = %v, want %v", readOnly, want)
 	}
-	if fx := effectsFor("not-a-job"); fx.Declared() {
-		t.Error("an unknown job got declared effects")
+	if fx, err := effectsFor("not-a-job"); err != nil || fx.Declared() {
+		t.Errorf("an unknown job got declared effects %v (err %v)", fx, err)
 	}
 }
 
@@ -542,7 +563,7 @@ func TestKindShell_ResumeMapping(t *testing.T) {
 		"scan-composer-tags":      tasks.ResumeFromZero,
 		"dedup-books":             tasks.ResumeDrop, // HEAD ResumeDrop
 	} {
-		if got := tasks.CommonOf(kindFor(realJob(t, id), KindDeps{}, nil)).Resume; got != want {
+		if got := tasks.CommonOf(mustKindFor(t, realJob(t, id), KindDeps{}, nil)).Resume; got != want {
 			t.Errorf("%s resume = %v, want %v", id, got, want)
 		}
 	}
@@ -565,7 +586,7 @@ func TestKindShell_ResumeMapping(t *testing.T) {
 func TestKindShell_ApplyDerivedFromMode(t *testing.T) {
 	d := &depsProbe{ret: &probeStore{}}
 	repoint := &probeJob{MaintenanceJob: realJob(t, "repoint-version-primary")}
-	rk := kindFor(repoint, d.deps(), nil)
+	rk := mustKindFor(t, repoint, d.deps(), nil)
 	seen := func() string { return string(maintenance.RawParamsFromCtx(repoint.ctx)) }
 
 	for _, c := range []struct {
@@ -600,7 +621,7 @@ func TestKindShell_ApplyDerivedFromMode(t *testing.T) {
 	}
 
 	other := &probeJob{MaintenanceJob: realJob(t, "dedup-books")}
-	ok := kindFor(other, d.deps(), nil)
+	ok := mustKindFor(t, other, d.deps(), nil)
 	_, rc := newKindRC(ok.Kind(), tasks.ModeLive, &fakeWriter{})
 	if _, err := runKind(t, ok, rc, `{"apply":true}`); err != nil {
 		t.Fatalf("a job with no apply switch refused an apply key: %v", err)
@@ -620,7 +641,7 @@ func TestKindShell_ParamsValidatorRunsBeforeTheStore(t *testing.T) {
 	if _, ok := merge.(maintenance.ParamsValidator); !ok {
 		t.Fatal("merge-chapter-groups lost its ParamsValidator; pick another validating job")
 	}
-	def := kindFor(merge, d.deps(), nil)
+	def := mustKindFor(t, merge, d.deps(), nil)
 
 	_, rc := newKindRC(def.Kind(), tasks.ModeLive, &fakeWriter{})
 	_, err := runKind(t, def, rc, "")

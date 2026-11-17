@@ -1,5 +1,5 @@
 // file: internal/maintenance/resources/resources.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 511262bb-c287-4138-a7ee-7566c9543e3b
 // last-edited: 2026-11-16
 
@@ -12,7 +12,8 @@
 // internal/plugins/maintenance (the converted groups, through t6WriterResources)
 // and internal/maintenance/jobs (the legacy jobs' kinds, through jobWrites).
 // Before it moved here the jobs kept a hand-written second list that disagreed
-// with the table (stack review M2, 2026-11-15).
+// with the table (stack review M2, 2026-11-15); every store write method a job
+// reaches now has a row here, so the jobs keep no resource of their own.
 package resources
 
 import (
@@ -135,11 +136,14 @@ func Table() map[string][]ops.Resource {
 		// --- book rows and their derived state -----------------------------
 		// CreateBook stages the ident: rows and the author_books_legacy: rows; a
 		// new book has no cache row to stamp.
-		"CreateBook":               {ops.ResBooks, ops.ResAuthors, ops.ResIndexes},
-		"ModifyBook":               bookW,
-		"UpdateBook":               bookW,
-		"RecomputeBookAggregates":  bookW,
-		"SaveChaptersForBook":      {ops.ResBooks},
+		"CreateBook":              {ops.ResBooks, ops.ResAuthors, ops.ResIndexes},
+		"ModifyBook":              bookW,
+		"UpdateBook":              bookW,
+		"RecomputeBookAggregates": bookW,
+		"SaveChaptersForBook":     {ops.ResBooks},
+		// PruneBookSnapshots deletes the book_ver:<id>:<nanos> snapshot rows, which
+		// the store-diff vocabulary files under books.
+		"PruneBookSnapshots":       {ops.ResBooks},
 		"SetLibraryStateOrganized": bookW,
 		// DeleteBook removes the book's author links, field-state row, embedding
 		// and dedup candidates and metadata cache with the book row (and its
@@ -173,10 +177,12 @@ func Table() map[string][]ops.Resource {
 		"HardDeleteWithoutUserState": {},
 		"NewUserStateProbe":          {},
 		// --- narrators, authors, credits --------------------------------------
-		"CreateNarrator":         {ops.ResBooks},
-		"DeleteNarrator":         {ops.ResBooks},
-		"SetBookNarrators":       {ops.ResBooks},
-		"CreateAuthor":           {ops.ResAuthors},
+		"CreateNarrator":   {ops.ResBooks},
+		"DeleteNarrator":   {ops.ResBooks},
+		"SetBookNarrators": {ops.ResBooks},
+		"CreateAuthor":     {ops.ResAuthors},
+		// DeleteSeries removes series:<id> and its series:name: index row.
+		"DeleteSeries":           {ops.ResSeries},
 		"ModifyBookAuthors":      {ops.ResAuthors},
 		"SetBookAuthors":         {ops.ResAuthors},
 		"RenameAuthorJournaled":  {ops.ResAuthors, ops.ResOperations},
@@ -195,6 +201,10 @@ func Table() map[string][]ops.Resource {
 		"MoveBookFilesToBookBulk": fileRow,
 		"DeleteBookFilesByIDs":    Union(fileRow, []ops.Resource{ops.ResFingerprintIndex}),
 		"BatchCreateBookFiles":    fileRow,
+		// UpdateBookFileHashes rewrites the bf row and its book_file_hash: index and,
+		// when a hash changed, defers notifyBookFileChange (pebble_store_bookfiles.go),
+		// which recomputes the books aggregate through ModifyBook: a file-row method.
+		"UpdateBookFileHashes": fileRow,
 		// The intro and timeout methods leave the books aggregate to the caller.
 		"ClearBookFileIntro":                  {ops.ResBookFiles},
 		"ClearIntroTimeouts":                  {ops.ResBookFiles},
@@ -211,21 +221,38 @@ func Table() map[string][]ops.Resource {
 		"CleanupStaleTempFiles":    {ops.ResFiles},
 		"RemoveOldBackupFiles":     {ops.ResFiles},
 		// --- external ids, user state, sync ids ---------------------------------
-		"ReassignExternalID":       {ops.ResExternalIDs},
+		"ReassignExternalID": {ops.ResExternalIDs},
+		// ReassignExternalIDs (plural) moves every ext_id: row of one book to
+		// another: the primary rows and both reverse-key families.
+		"ReassignExternalIDs":      {ops.ResExternalIDs},
 		"BackfillExternalIDs":      {ops.ResExternalIDs, ops.ResSettings},
 		"ImportSmartPlaylists":     {ops.ResUserState},
 		"SetUserPreferenceForUser": {ops.ResUserState},
 		"SetRaw/user_state":        {ops.ResUserState},
 		"DeleteRaw":                {ops.ResUserState},
-		"SetUserBookState":         {ops.ResUserState},
-		"SetUserPosition":          {ops.ResUserState},
-		"SetUserPositionAt":        {ops.ResUserState},
-		"ClearUserPositions":       {ops.ResUserState},
-		"CopyBookmarkIfAbsent":     {ops.ResUserState},
-		"MintOrGetSyncID":          {ops.ResSyncIdentity},
-		"RecordSyncMerge":          {ops.ResSyncIdentity},
+		// AddBookUserTag writes user_tag:book:<id> only (SetBookUserTags) and asks
+		// the search index to reindex; CreateBookmark writes bookmark: rows.
+		"AddBookUserTag":       {ops.ResUserState},
+		"CreateBookmark":       {ops.ResUserState},
+		"SetUserBookState":     {ops.ResUserState},
+		"SetUserPosition":      {ops.ResUserState},
+		"SetUserPositionAt":    {ops.ResUserState},
+		"ClearUserPositions":   {ops.ResUserState},
+		"CopyBookmarkIfAbsent": {ops.ResUserState},
+		"MintOrGetSyncID":      {ops.ResSyncIdentity},
+		"RecordSyncMerge":      {ops.ResSyncIdentity},
+		// The sync-file rows (sync_file:<id>, sync_file:lookup:, sync_file:book:).
+		"MintOrGetSyncFileID":   {ops.ResSyncIdentity},
+		"RepointSyncFileToBook": {ops.ResSyncIdentity},
 		// --- undo journal, review items, journals, stores of one resource ----------
-		"RecordOperationChange":         {ops.ResOperations},
+		"RecordOperationChange": {ops.ResOperations},
+		// The v1 operation rows: opstate:<op> (and its :params), opsummary:<id>,
+		// op_result:<op>:<book>, operation:<id> and operationlog:<id>:*.
+		"SaveOperationState":            {ops.ResOperations},
+		"DeleteOperationState":          {ops.ResOperations},
+		"SaveOperationSummaryLog":       {ops.ResOperations},
+		"CreateOperationResult":         {ops.ResOperations},
+		"DeleteOperationWithLogs":       {ops.ResOperations},
 		"CreateOperationChange":         {ops.ResOperations},
 		"JournalStep":                   {ops.ResOperations},
 		"MarkOperationChangesReverted":  {ops.ResOperations},
@@ -247,6 +274,31 @@ func Table() map[string][]ops.Resource {
 		"SetRaw/authority_lists":  {ops.ResAuthorityLists},
 		"DeleteRawBatch":          {ops.ResAuthorityLists},
 		"SetRaw/cover_text":       {ops.ResCoverText},
+		// The merge package's raw keys are three families on one SetRaw/DeleteRaw
+		// interface, so a caller names the family: the combine journal and its
+		// undo-applied record (merge:combine-journal:, merge:combine-undo-applied:)
+		// are the undo journal (operations); merge_user_state_pending: and
+		// merge:survivor-reconcile: are listening state (SetRaw/user_state,
+		// DeleteRaw/user_state); merge:group-redirect: is a book redirect (books). A
+		// bare SetRaw has NO row on purpose: it means a different family on every
+		// interface, and a caller that cannot say which gets no row. The bare
+		// DeleteRaw row above is the user_state keys, which is what the converted
+		// groups' interfaces delete; the jobs name the family they mean.
+		"SetRaw/merge_journal":     {ops.ResOperations},
+		"SetRaw/group_redirect":    {ops.ResBooks},
+		"DeleteRaw/user_state":     {ops.ResUserState},
+		"DeleteRaw/merge_journal":  {ops.ResOperations},
+		"DeleteRaw/group_redirect": {ops.ResBooks},
+		// retention-and-hygiene's sweep of the dead book:series: and book:author:
+		// indexes, which keyfamilies.go registers as children of the book: family.
+		"DeleteRaw/dead_book_index": {ops.ResBooks},
+		// The settings row and the metrics store.
+		"SetSetting":          {ops.ResSettings},
+		"SweepExpiredMetrics": {ops.ResMetrics},
+		// MarkBookAggregatesBackfillDone writes system:backfill:book_aggregates_v1_done,
+		// an index backfill marker the store maintains itself and the storediff map
+		// excludes as no kind's resource: an explicit empty row.
+		"MarkBookAggregatesBackfillDone": {},
 		// The activity store.
 		"ActivityFlushOp":              {ops.ResActivity},
 		"CompactActivityEntries":       {ops.ResActivity},

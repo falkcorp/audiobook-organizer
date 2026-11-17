@@ -1,11 +1,12 @@
 // file: internal/maintenance/jobs/writes_trace_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: c58e1d07-3a92-4f64-b0d3-7e49a2f6c815
 // last-edited: 2026-11-16
 
 package jobs_test
 
 import (
+	"errors"
 	"regexp"
 	"slices"
 	"sort"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -54,8 +56,21 @@ var traceInert = map[string]string{
 }
 
 // traceAliases name a call by its full "<receiver>.<method>" key when its method
-// name is not the store method it stands for.
+// name is not the table key it stands for: the method on a receiver that is a
+// different store method than its name says (an interface whose implementation
+// writes through another method), or a raw-key method whose key family only the
+// receiver knows (SetRaw and DeleteRaw are qualified in the table).
 var traceAliases = map[string]string{
+	// merge-chapter-groups' raw keys. WriteCombineJournal writes the
+	// merge:combine-journal: row (the undo journal: operations); putPendingRepair
+	// writes merge_user_state_pending: and CompletePendingUserStateRepair deletes it
+	// (listening state: user_state). The oracle sees every raw call by its receiver,
+	// so a new raw call on another receiver fails here until it is classified.
+	"merge.CombineJournalWriter.SetRaw":  "SetRaw/merge_journal",
+	"merge.pendingRepairKV.SetRaw":       "SetRaw/user_state",
+	"merge.UserProgressMerger.DeleteRaw": "DeleteRaw/user_state",
+	// retention-and-hygiene's deleteDeadPrefixes: book:series: and book:author:.
+	"jobs.retentionKVStore.DeleteRaw": "DeleteRaw/dead_book_index",
 	// The checkpoint interface of backfill-file-hashes and recompute-book-aggregates
 	// stores its blob through SaveOperationState (checkpointerFrom).
 	"jobs.checkpointer.Save": "SaveOperationState",
@@ -100,13 +115,6 @@ func sharedTable() map[string][]string {
 	return out
 }
 
-// outsideTableAndInTable are the Outside entries whose method name also has a
-// row in the table, because the name means a different key family here. Every
-// other Outside method has no row (TestJobWrites_OutsideTableMethodsHaveNoRow).
-var outsideTableAndInTable = map[string]string{
-	"retention-and-hygiene DeleteRaw": "deletes the dead book:series: and book:author: key prefixes; the table's DeleteRaw row is the user_state keys",
-}
-
 // TestJobWrites_TraceMatchesCode: the store methods jobTraces lists per job are
 // exactly the write methods the job's Run reaches. A method the code reaches that
 // the trace lacks fails (an under-declared job); so does a method the trace lists
@@ -134,14 +142,6 @@ func TestJobWrites_TraceMatchesCode(t *testing.T) {
 		for _, m := range tr.Methods {
 			want[m] = true
 		}
-		disk := false
-		for _, o := range tr.Outside {
-			if o.Via == jobs.ViaDisk {
-				disk = true
-				continue
-			}
-			want[o.Via] = true
-		}
 		for name := range code {
 			if !want[name] {
 				t.Errorf("%s: the code reaches write method %s (%v), which jobTraces does not list", id, name, evidenceFor(j, name))
@@ -152,8 +152,8 @@ func TestJobWrites_TraceMatchesCode(t *testing.T) {
 				t.Errorf("%s: jobTraces lists %s, which the job's code does not reach", id, name)
 			}
 		}
-		if codeDisk := slices.Contains(j.writes, "files"); codeDisk != disk {
-			t.Errorf("%s: the code writes files on disk = %v, jobTraces declares %v", id, codeDisk, disk)
+		if codeDisk := slices.Contains(j.writes, "files"); codeDisk != tr.Files {
+			t.Errorf("%s: the code writes files on disk = %v, jobTraces declares %v", id, codeDisk, tr.Files)
 		}
 	}
 }
@@ -170,60 +170,21 @@ func evidenceFor(j oracleJob, name string) []string {
 	return out
 }
 
-// TestJobWrites_OutsideTableMethodsHaveNoRow: an Outside entry is a store method
-// the shared table does not list. The day the table gets its row the method has to
-// move to Methods, so the table decides what it writes and the job's set cannot
-// keep a stale guess. The only exceptions name a different key family.
-func TestJobWrites_OutsideTableMethodsHaveNoRow(t *testing.T) {
-	table := sharedTable()
-	seen := map[string]bool{}
-	for id, tr := range jobs.JobTraces() {
-		for _, o := range tr.Outside {
-			if o.Via == jobs.ViaDisk {
-				continue
-			}
-			_, hasRow := table[o.Via]
-			_, excused := outsideTableAndInTable[id+" "+o.Via]
-			if excused {
-				seen[id+" "+o.Via] = true
-			}
-			if hasRow && !excused {
-				t.Errorf("%s: %s is listed Outside but the shared table has a row for it (%v); move it to Methods", id, o.Via, table[o.Via])
-			}
-			if !hasRow && excused {
-				t.Errorf("%s: %s is excused as a different key family but the table has no row of that name", id, o.Via)
-			}
-		}
-	}
-	for k := range outsideTableAndInTable {
-		if !seen[k] {
-			t.Errorf("outsideTableAndInTable has %q, which is no Outside entry", k)
-		}
-	}
-}
-
 // TestJobWrites_DerivedFromCodeAndSharedTable is the drift test: each job's
 // declared write set is recomputed from the write methods its code reaches (the
-// SSA oracle) and the shared table, and must be identical. Outside resources are
-// the only input that is not the table's, and only for the store methods the
-// table does not list. A row widened or narrowed in the table, a job that starts
-// calling another method, or a kind that declares anything else fails by job name.
+// SSA oracle) and the shared table, and must be identical. The table is the only
+// source of a resource; files on disk, which no table row covers, are the code's
+// own os calls. A row widened or narrowed in the table, a job that starts calling
+// another method, or a kind that declares anything else fails by job name.
 func TestJobWrites_DerivedFromCodeAndSharedTable(t *testing.T) {
 	derived := oracleJobs(t)
 	table := sharedTable()
-	traces := jobs.JobTraces()
-	for _, d := range jobs.Kinds(jobs.KindDeps{}, nil) {
+	for _, d := range oracleKinds(t) {
 		id := strings.TrimPrefix(string(d.Kind()), "books.maintenance.")
 		j, ok := derived[id]
 		if !ok {
 			t.Errorf("%s: the oracle found no job of that ID", id)
 			continue
-		}
-		outside := map[string]string{}
-		for _, o := range traces[id].Outside {
-			if o.Via != jobs.ViaDisk {
-				outside[o.Via] = o.Res
-			}
 		}
 		set := map[string]bool{}
 		for key := range j.calls {
@@ -231,13 +192,9 @@ func TestJobWrites_DerivedFromCodeAndSharedTable(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if res, isOutside := outside[name]; isOutside {
-				set[res] = true
-				continue
-			}
 			row, ok := table[name]
 			if !ok {
-				t.Errorf("%s: write method %s is in neither the shared table nor jobTraces' Outside (%v)", id, name, evidenceFor(j, name))
+				t.Errorf("%s: write method %s has no row in the shared table (%v)", id, name, evidenceFor(j, name))
 				continue
 			}
 			for _, r := range row {
@@ -252,14 +209,99 @@ func TestJobWrites_DerivedFromCodeAndSharedTable(t *testing.T) {
 			want = append(want, r)
 		}
 		sort.Strings(want)
-		var got []string
-		for _, r := range tasks.CommonOf(d).Effects.WriteSet() {
-			got = append(got, r.Kind)
-		}
-		sort.Strings(got)
-		if !slices.Equal(got, want) {
+		if got := declaredWrites(d); !slices.Equal(got, want) {
 			t.Errorf("%s: declares %v, but its code and the shared table give %v", id, got, want)
 		}
+	}
+}
+
+// rawFamiliesPinned is, per job, every SetRaw and DeleteRaw key of its trace,
+// typed by hand. SetRaw and DeleteRaw are one method name for every key family
+// the store holds, so the oracle (which reduces a call to its name and receiver)
+// cannot tell a user_state key from a books key; the family is a fact read off
+// the key prefix at the call site, recorded in traceAliases, and pinned here so a
+// "simplification" to the bare name (DeleteRaw is the user_state row the converted
+// groups use) fails by job name.
+var rawFamiliesPinned = map[string]string{
+	"merge-chapter-groups":  "DeleteRaw/user_state SetRaw/merge_journal SetRaw/user_state",
+	"retention-and-hygiene": "DeleteRaw/dead_book_index",
+}
+
+func TestJobWrites_RawKeyFamiliesAreQualified(t *testing.T) {
+	for id, tr := range jobs.JobTraces() {
+		var raw []string
+		for _, m := range tr.Methods {
+			if strings.HasPrefix(m, "SetRaw") || strings.HasPrefix(m, "DeleteRaw") {
+				raw = append(raw, m)
+			}
+		}
+		sort.Strings(raw)
+		want := strings.Fields(rawFamiliesPinned[id])
+		if !slices.Equal(raw, want) {
+			t.Errorf("%s: raw-key methods %v, pinned %v", id, raw, want)
+		}
+		if slices.Contains(raw, "DeleteRaw") || slices.Contains(raw, "SetRaw") {
+			t.Errorf("%s lists a bare raw-key method; name the key family", id)
+		}
+	}
+}
+
+// TestJobWrites_BadTraceIsAnErrorNotAPanic: a trace that names a store method the
+// table has no row for must not crash the process. The derivation runs when the
+// kinds are built, in a binary that links this package whether or not F5-18
+// registers them, so it returns the error and Kinds passes it on.
+func TestJobWrites_BadTraceIsAnErrorNotAPanic(t *testing.T) {
+	bad := map[string][]string{"enrich-book-files": {"UpdateBookFile", "NoSuchStoreMethod"}}
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("a missing row panicked: %v", r)
+			}
+		}()
+		_, err = jobs.DeriveWrites(bad, map[string][]ops.Resource{"UpdateBookFile": {ops.ResBookFiles}})
+	}()
+	if err == nil || !strings.Contains(err.Error(), "NoSuchStoreMethod") || !strings.Contains(err.Error(), "enrich-book-files") {
+		t.Fatalf("DeriveWrites error = %v, want one naming the job and the method", err)
+	}
+
+	boom := errors.New("trace names a method without a row")
+	defer jobs.FailJobWritesWith(boom)()
+	defs, kerr := jobs.Kinds(jobs.KindDeps{}, nil)
+	if !errors.Is(kerr, boom) {
+		t.Fatalf("Kinds error = %v, want it to wrap %v", kerr, boom)
+	}
+	if defs != nil {
+		t.Errorf("Kinds returned %d definitions beside an error; a list that lacks one job's writes registers it as declaring none", len(defs))
+	}
+}
+
+// TestJobWrites_EveryTraceMethodHasARow: the real traces derive without error
+// against the real table.
+func TestJobWrites_EveryTraceMethodHasARow(t *testing.T) {
+	traces := map[string][]string{}
+	for id, tr := range jobs.JobTraces() {
+		traces[id] = tr.Methods
+	}
+	if _, err := jobs.DeriveWrites(traces, resources.Table()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// derivationsAtInit is how many times the derivation had run once every package
+// variable and init function of the test binary had been initialized. It is read
+// in an init function, which the runtime runs after all package-level variable
+// initializers, so a `var x = derive()` anywhere in the package is counted.
+var derivationsAtInit int
+
+func init() { derivationsAtInit = jobs.JobWritesDerivations() }
+
+// TestJobWrites_NoDerivationAtPackageInit: linking the package does no work. The
+// derivation used to be a package-level initializer, which ran on every boot of
+// the production binary for kinds nothing registers yet and could panic there.
+func TestJobWrites_NoDerivationAtPackageInit(t *testing.T) {
+	if derivationsAtInit != 0 {
+		t.Errorf("the write sets were derived %d time(s) during package initialization; derive them lazily (jobWritesFor)", derivationsAtInit)
 	}
 }
 
@@ -297,7 +339,7 @@ var jobWritesPinned = map[string]string{
 	"relink-missing-to-itunes":        "authors book_files books indexes metadata_cache",
 	"relink-report":                   "",
 	"repoint-version-primary":         "authors books indexes metadata_cache",
-	"retention-and-hygiene":           "operations settings",
+	"retention-and-hygiene":           "books operations settings",
 	"revert-metadata-fetch":           "authors books indexes metadata_cache",
 	"scan-chapter-groups":             "",
 	"scan-composer-tags":              "authors book_files books file_provenance files indexes metadata_cache operations",
@@ -321,7 +363,7 @@ func declaredWrites(d tasks.Definition) []string {
 // hand-typed jobWritesPinned.
 func TestJobWrites_PinnedLiteral(t *testing.T) {
 	seen := map[string]bool{}
-	for _, d := range jobs.Kinds(jobs.KindDeps{}, nil) {
+	for _, d := range oracleKinds(t) {
 		id := strings.TrimPrefix(string(d.Kind()), "books.maintenance.")
 		seen[id] = true
 		pin, ok := jobWritesPinned[id]
@@ -349,7 +391,7 @@ func TestJobWrites_PinnedLiteral(t *testing.T) {
 // book rows, so `books` has to be in their set.
 func TestJobWrites_NamedBookWriters(t *testing.T) {
 	named := map[string]bool{"enrich-book-files": false, "recompute-itunes-paths": false, "backfill-book-files": false}
-	for _, d := range jobs.Kinds(jobs.KindDeps{}, nil) {
+	for _, d := range oracleKinds(t) {
 		id := strings.TrimPrefix(string(d.Kind()), "books.maintenance.")
 		if _, ok := named[id]; !ok {
 			continue
@@ -378,7 +420,7 @@ var bookWriteFamily = []string{
 	"ModifyBook", "UpdateBook", "RecomputeBookAggregates", "SetLibraryStateOrganized",
 	"CreateBookFile", "UpdateBookFile", "UpdateBookFiles", "ModifyBookFile",
 	"ModifyBookFileReportingRecompute", "SetBookFileHash", "MoveBookFilesToBook",
-	"MoveBookFilesToBookBulk", "DeleteBookFilesByIDs", "BatchCreateBookFiles",
+	"MoveBookFilesToBookBulk", "DeleteBookFilesByIDs", "BatchCreateBookFiles", "UpdateBookFileHashes",
 }
 
 // TestJobWrites_BookWriteFamilyDeclaresCacheAndIndexes: every job whose code calls
@@ -389,7 +431,7 @@ func TestJobWrites_BookWriteFamilyDeclaresCacheAndIndexes(t *testing.T) {
 	derived := oracleJobs(t)
 	table := sharedTable()
 	callers := 0
-	for _, d := range jobs.Kinds(jobs.KindDeps{}, nil) {
+	for _, d := range oracleKinds(t) {
 		id := strings.TrimPrefix(string(d.Kind()), "books.maintenance.")
 		reaches := ""
 		for key := range derived[id].calls {
