@@ -1,3 +1,0 @@
-### Fixed
-
-- core: the diagnostics bundle's path redaction reads a route as a route. A route's query is no longer cut at the first quote, bracket, comma or pipe (the cut left the rest of an encoded path to be read as plain text), a query that does not percent-decode is redacted instead of passed through, and a rewritten query value is written percent-encoded so a decoded line break can never split a log line. Symbols between slashes (`*/15 * * * *`, `50%/50%`, `(read)/(write)`) are no longer taken for paths, a doubled slash inside a route's path starts a path, and the exported `Build` now refuses an actor other than the one the params name, as `Export` already did. Pinned by a grammar-driven planted-marker test and a Go fuzz target.
