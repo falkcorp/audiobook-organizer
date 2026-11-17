@@ -1,0 +1,93 @@
+# file: .github/workflows/lint-trial.yml
+# version: 1.0.0
+# guid: 6b0e4f9a-2c71-4d85-b3a6-9e1f7c5d0a42
+# last-edited: 2026-11-17
+
+# TRIAL, NOT REQUIRED. A GitHub-hosted twin of Woodpecker's `checks-lint`
+# (staticcheck over `.` and `core`), run beside it so the two verdicts can be
+# compared on the same commits before anything moves (owner decision
+# 2026-11-16/17: the last two Woodpecker jobs, `checks-lint` and
+# `test-native-taglib`, go to GitHub-hosted runners, lint first).
+#
+# Woodpecker's `checks-lint` STAYS THE GATE. This workflow changes nothing
+# live: it is not in the branch ruleset, no job `needs` it, and it must not be
+# added to .github/branch-protection.json. Exit criteria for making it
+# required and retiring the Woodpecker job: docs/ci/woodpecker.md, section
+# "Trial: GitHub-hosted lint".
+#
+# Why its own workflow file rather than a ci.yml job: auto-revert.yml fires on
+# the CONCLUSION OF THE WHOLE `Continuous Integration` RUN, and a failed job in
+# that run turns main red and starts a revert. A trial job inside ci.yml could
+# therefore revert main on a push. This workflow is named differently, so its
+# result can never reach auto-revert.yml or auto-revert-backstop.yml.
+#
+# It deliberately has NO `push` trigger: a trial must not produce a red run on
+# main. Like ci.yml it has no `paths-ignore` (ci.yml's header says why: a
+# trigger-level filter leaves commits with no run), and it has no `Changes`
+# job either; it runs on every pull request, as `checks-lint` does.
+name: Lint Trial
+
+on:
+  pull_request:
+    branches: [main, master]
+  # The merge queue tests a gh-readonly-queue/main/* commit. Not required, so
+  # a red result here cannot drop a queue entry.
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+# Same shape as ci.yml: a merge-queue run is never cancelled by a sibling run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'merge_group' && format('merge-group-{0}', github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
+
+permissions:
+  contents: read
+
+jobs:
+  staticcheck:
+    name: Lint (GitHub-hosted, trial)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # What checks-lint.yaml's go_env sets, minus the host cache paths.
+      GOTOOLCHAIN: go1.27.3
+      GOFLAGS: -buildvcs=false
+    steps:
+      # checks-lint's clone is depth 50 with lfs off and builds nothing that
+      # reads a submodule, so neither is fetched here.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      # Before the cache restore, in every job that restores it:
+      # scripts/ci/free_runner_disk.sh says why.
+      - name: Free runner disk
+        run: scripts/ci/free_runner_disk.sh
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      # `make staticcheck` builds the pinned binary itself (staticcheck-install:
+      # `go -C tools/staticcheck install tool`, v0.8.1 per
+      # tools/staticcheck/go.mod) and runs it in `.` and `core`, the same
+      # target checks-lint's `tools` and `staticcheck` steps run.
+      - name: Staticcheck (pinned, tools/staticcheck/go.mod)
+        run: make --no-print-directory staticcheck
