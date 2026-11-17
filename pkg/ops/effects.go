@@ -1,7 +1,7 @@
 // file: pkg/ops/effects.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 56bbb3ad-7cb3-4962-a476-26ea63bdc9ba
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package ops
 
@@ -40,7 +40,7 @@ const (
 	// ResIndexes is the store's ident: rows (the identity index,
 	// ident:state/by/dirty/reason/meta): the derived state the identification
 	// driver reads. That is the whole definition, and it is exactly what the
-	// maintenance writer table (internal/plugins/maintenance/kinds_resources.go)
+	// maintenance writer table (internal/maintenance/resources/resources.go)
 	// uses it for in every group (F5-07, F5-09, F5-10, F5-11): a method declares
 	// `indexes` when it can stage ident: rows, whether an ident-index rebuild or
 	// a book write does it. It does NOT name the search index or the in-memory
