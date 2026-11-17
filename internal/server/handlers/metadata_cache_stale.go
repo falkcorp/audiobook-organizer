@@ -462,11 +462,14 @@ func cacheRowLastChecked(entry *metafetch.MetadataCandidateCache, fetchedAt time
 // count, each row's `stale` flag (which the web's stale chip view reads and
 // does not re-derive), and the refetch-all-stale set all come from it.
 //
-// The second half excludes the two kinds of book the candidate fetch skips
+// The second half excludes the three kinds of book the candidate fetch skips
 // before it asks any provider (fetchCandidateForBook). Counting them made a
 // backlog no refetch could ever clear -- the chip never reached zero and every
 // click re-queued them:
 //
+//   - Retired books (database.Book.IsRetired: in the trash, or merged into
+//     another book). Nothing applies to them, so a refetch would spend
+//     provider quota on a row nobody can use.
 //   - Books the owner marked "no match" (metafetch.IsMarkedNoMatch -- "do not
 //     spend provider quota searching for, or offer, a match they rejected").
 //     ClearMetadataNoMatch makes such a book eligible again.
@@ -477,7 +480,7 @@ func cacheRowLastChecked(entry *metafetch.MetadataCandidateCache, fetchedAt time
 //
 // A row with no readable cache entry is dated off its summary's FetchedAt.
 func cacheRowStale(r loadedCacheRow, freshCutoff time.Time) bool {
-	if metafetch.IsMarkedNoMatch(r.book.MetadataReviewStatus) || !r.searchable {
+	if metafetch.IsMarkedNoMatch(r.book.MetadataReviewStatus) || r.book.IsRetired() || !r.searchable {
 		return false
 	}
 	return !r.lastChecked.After(freshCutoff)
