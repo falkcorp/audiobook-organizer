@@ -1,7 +1,7 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
-<!-- last-edited: 2026-10-27 -->
+<!-- last-edited: 2026-11-17 -->
 
 # Whisper intro transcription with Mac-side extraction
 
@@ -225,3 +225,134 @@ old transcript and upload-path entries are unaffected.
 If workers in one pool were given **different** path maps, a job can be sent to
 a worker that does not map its prefix and come back `path_unmapped`. All four
 current workers share one map, which is the supported setup.
+
+## A non-Mac worker: Windows or Linux, on CPU or GPU
+
+`scripts/whisper_server.py` serves the same path pipeline as the Mac worker, on
+CPU or on a CUDA GPU, so a Windows box (or any non-Mac machine) can take the
+`path_pipeline` jobs above. The wire contract is the Mac worker's: the same
+`/transcribe-path-batch` request and result shapes, the same error codes, the
+same `/health` fields. The path pipeline, its path-safety rules and the `/health`
+body are **shared code** (`scripts/whisper_path_pipeline.py`,
+`scripts/whisper_machine_id.py`) that both workers import, so they cannot drift.
+
+**Deploy all three files together:** `whisper_server.py`,
+`whisper_path_pipeline.py` and `whisper_machine_id.py`, in one folder. The
+Windows supervisor refuses to start without the two modules.
+
+### Choosing the device
+
+```
+uv run scripts/whisper_server.py --device auto   # default: CUDA if it loads, else CPU
+uv run scripts/whisper_server.py --device cpu    # never touches CUDA
+uv run scripts/whisper_server.py --device cuda   # GPU or an error
+```
+
+Every flag has an environment variable (`WHISPER_DEVICE`, `WHISPER_MODEL`,
+`WHISPER_COMPUTE_TYPE`, `WHISPER_CPU_THREADS`, `WHISPER_NUM_WORKERS`,
+`WHISPER_BATCH_SIZE`, `WHISPER_HOST`, `WHISPER_PORT`); a flag beats its variable.
+
+- `auto` uses CUDA when a device is found **and** the model loads on it, and
+  otherwise logs one line (`whisper device: cpu ... (auto: no CUDA device found)`,
+  or `... CUDA found but the model failed to load on it (...); using cpu`) and runs
+  on the CPU. Use `cpu` on a machine whose GPU is gone or flaky: there is nothing
+  to probe, so nothing to fail.
+- `cuda` is strict. If the model cannot load on the GPU the process exits with the
+  error; it never quietly serves from the CPU, so a worker you asked to be a GPU
+  worker is not a slow one in disguise.
+- `/health` reports the device that **actually loaded** (`device`), plus
+  `requested_device`, `device_source` and `device_reason` (additive fields).
+
+### CPU defaults
+
+| setting | default on CPU | note |
+|---|---|---|
+| compute type | `int8` (reported by ctranslate2 as `int8_float32`) | `float16` does not exist on CPU; `--device cpu` with it is a usage error |
+| model | `base.en` | `small.en` is the next step up in quality and several times slower |
+| `--cpu-threads` | logical cores minus 2, at least 1, at most 8 | leaves room for the OS, ffmpeg and `/health` |
+| `--num-workers` | 1 | one decode with every thread on it finishes each clip soonest; raise only on a machine with many more cores than threads (workers x threads cores are kept busy) |
+
+These are starting points, **not measurements**: nothing here was benchmarked on a
+particular desktop CPU. Measure one dry-run dispatch (below) and adjust. The path
+pipeline only ever transcribes the first 90 seconds of a book, which is what makes
+a CPU worth running at all.
+
+Two behaviours differ from the Mac worker, both because the CPU worker decodes
+in-process and cannot kill a decode that hangs:
+
+- it never answers `transcribe_timeout`, `decoder_crashed` or `decoder_killed`
+  (those need a killable child process); and
+- `/health` reports `busy_seconds` and a generous `busy_limit_seconds` (at least
+  300 s, 3x the clip's audio length), so the server's stuck detection still
+  refuses a worker that has wedged.
+
+Changing the model, compute type or decode path changes `decode_fingerprint`,
+which re-keys that worker's result journal: transcripts journalled under the old
+settings are not served for the new ones. Threads and workers do not change it.
+
+### Windows setup
+
+1. Install `uv` (`winget install --id astral-sh.uv`) and ffmpeg
+   (`winget install Gyan.FFmpeg`; the path pipeline cuts clips with it, and
+   `/health` shows `ffmpeg` when it is found).
+2. Make the library reachable from the Windows account that runs the worker, and
+   prefer a **UNC path** (`\\arkham\audio\lib`) to a mapped drive letter: a scheduled
+   task does not see drives mapped in another logon session.
+3. Set the path map. The **server** side is the production server's POSIX path;
+   the **local** side is a drive path or a UNC share:
+
+   ```
+   WHISPER_PATH_MAP=/mnt/bigdata=\\arkham\audio\lib
+   WHISPER_PATH_MAP=/mnt/bigdata=X:\library
+   ```
+
+   The local side must not be relative, drive-relative (`X:dir`), contain `..`, or
+   start with `\\?\`. A drive root (`X:\`) or a share root is accepted.
+4. Install and start the supervised task (from your clone; it copies the three
+   server files and the supervisor into your profile folder):
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\install-whisper-supervisor.ps1 `
+       -Device cpu -PathMap "/mnt/bigdata=\\arkham\audio\lib"
+   ```
+
+   Unset options take the defaults above. The supervisor restarts a crashed server
+   with a doubling delay (5 s up to 5 min, starting over after a run of two minutes
+   or more), gives up after 20 crashes in 10 minutes, and logs to
+   `whisper-supervisor.log` in the profile folder. Allow inbound TCP on the port
+   (default 19847) from the server only.
+
+Windows path rules the worker enforces on top of the Mac worker's (the server's
+paths are POSIX, so this is where a Windows worker can differ):
+
+- the check for "still a mount point" is POSIX-only; on Windows a lost share shows
+  as `readable: false` because listing the root fails;
+- a server path with a component Windows cannot name (a `:` or `\` in a file name,
+  a trailing dot or space, a reserved device name such as `CON` or `NUL.m4b`, or a
+  name over 255 characters) answers `path_unmapped`. The book exists on the server,
+  so this is retried every run and never recorded as a failure, but **this worker
+  cannot transcribe it**; give it a Mac or a Linux worker;
+- containment under the mapped root is case-insensitive, as NTFS and SMB are;
+- paths longer than about 240 characters are handed to ffmpeg in the `\\?\` form.
+
+### Verify
+
+1. On the worker: `curl.exe -s http://127.0.0.1:19847/health`. Expect
+   `"path_pipeline": true`, `"device": "cpu"` (or `cuda`), and every mapped root
+   `"readable": true` in `path_roots`. If `readable` is `false` the account running
+   the worker cannot list the share: fix that first.
+2. From the server (through the tunnel or directly): the same `/health`.
+3. One dry-run dispatch of `maintenance.transcribe-book-intros` (a dry run is the
+   default): it names the endpoints it would use and the mode. Then run it for a
+   handful of books and look at the transcripts and the time per book before
+   turning the worker loose.
+
+An endpoint configured with `require_gpu` refuses a CPU worker (its `/health`
+`device` is not in the GPU allow-list). Leave `require_gpu` off for a CPU worker.
+
+### Request limits (both workers)
+
+Added with the shared pipeline, well above anything the server sends: at most 1024
+jobs and 512-character keys per `/transcribe-path-batch` (422), a path of at most
+4096 characters (a per-job `bad_request`), and a request body of at most 8 MiB
+(413).

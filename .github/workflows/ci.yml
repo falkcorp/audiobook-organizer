@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.39.0
+# version: 3.40.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-11-10
+# last-edited: 2026-11-17
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -638,10 +638,23 @@ jobs:
       # answers 200 with keys nobody reads -- a failure that surfaces as
       # "transcripts silently never land", not as an error. Deps are installed
       # directly rather than via a new action so nothing new needs SHA-pinning.
-      - name: Whisper MLX worker contract tests
+      #
+      # The same step runs the other Whisper worker (scripts/whisper_server.py,
+      # CPU or CUDA) and the path pipeline both workers share. test_whisper_mlx_pins
+      # is the characterization suite that proves the Mac worker answers what it
+      # answered before that pipeline moved out of it; test_whisper_path_pipeline
+      # holds the path-safety tests (traversal, symlink and UNC escape, Windows
+      # device names, request limits), whose Windows rules run here on Linux
+      # through ntpath. No model is loaded and no GPU is needed; the real-ffmpeg
+      # tests use the runner's ffmpeg and skip where there is none.
+      - name: Whisper worker contract tests
         run: |
           python3 -m pip install --quiet fastapi httpx pytest python-multipart
-          python3 -m pytest scripts/tests/test_whisper_mlx_server.py -v
+          python3 -m pytest -v \
+            scripts/tests/test_whisper_mlx_server.py \
+            scripts/tests/test_whisper_mlx_pins.py \
+            scripts/tests/test_whisper_path_pipeline.py \
+            scripts/tests/test_whisper_server_cpu.py
 
   # Required checks of 09 §9.2.1 (R1-02): go vet over BOTH modules (root and
   # core/; ./... from the root never reaches the nested core/ module) for every
