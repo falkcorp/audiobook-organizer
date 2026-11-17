@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_server_cpu.py
-# version: 2.3.0
+# version: 2.3.1
 # guid: c3e91a60-2f5d-4b87-a4c2-7d0b6e18f953
 # last-edited: 2026-11-17
 #
@@ -493,10 +493,17 @@ def test_health_answers_while_a_decode_is_running_and_reports_it_busy(monkeypatc
     t.start()
     try:
         assert fake.entered.wait(10)
-        time.sleep(0.05)
-        started = time.monotonic()
-        body = client.get("/health").json()
-        assert time.monotonic() - started < 2.5, "health must not queue behind the decode"
+        # busy_seconds is rounded to 0.1 s, and a coarse clock (Windows: about 16 ms, and a
+        # sleep that returns early) can leave a fixed short sleep rounding to 0.0, so wait
+        # for the value to show rather than guess how long that takes.
+        deadline = time.monotonic() + 10
+        while True:
+            started = time.monotonic()
+            body = client.get("/health").json()
+            assert time.monotonic() - started < 2.5, "health must not queue behind the decode"
+            if body["busy_seconds"] > 0 or time.monotonic() > deadline:
+                break
+            time.sleep(0.05)
         assert body["busy_seconds"] > 0
         assert body["busy_limit_seconds"] == ws.CLIP_TIMEOUT_FLOOR_S
     finally:
