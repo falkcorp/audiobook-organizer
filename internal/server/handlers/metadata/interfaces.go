@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.30.5
+// version: 1.31.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -153,7 +153,7 @@ type MetadataStore interface {
 
 // MetadataFetcher fetches and searches metadata for a book.
 type MetadataFetcher interface {
-	FetchMetadataForBook(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error)
+	FetchMetadataForBook(ctx context.Context, id string, intent metafetch.FetchIntent) (*metafetch.FetchMetadataResponse, error)
 	FetchAndCache(ctx context.Context, bookID, query, author, narrator, series string, opts metafetch.SearchOptions) (*metafetch.MetadataCandidateCache, error)
 	SearchMetadataForBookWithOptions(id, query, author, narrator, series string, opts metafetch.SearchOptions) (*metafetch.SearchMetadataResponse, error)
 	BrowseSearch(ctx context.Context, bookID string, q metafetch.BrowseQuery, src metafetch.BrowseSources) (*metafetch.SearchMetadataResponse, error)

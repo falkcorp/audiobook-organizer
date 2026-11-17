@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
-// last-edited: 2026-10-10
+// last-edited: 2026-11-17
 
 package metadatahandler
 
@@ -413,8 +413,12 @@ func (h *Handler) writeBackCore(ctx context.Context, id string, segmentIDs []str
 // fetchCore fetches and applies provider metadata for one book. Its file work
 // goes through the pool (metafetch's file-work scheduler), which marks the
 // book pending while the caller still holds the lock.
+//
+// Both callers are the owner's own action on this one book (the Fetch button,
+// and that fetch queued behind a library scan), so the fetch is Interactive:
+// a retired book is fetched like any other, not refused.
 func (h *Handler) fetchCore(ctx context.Context, id string) (*metafetch.FetchMetadataResponse, error) {
-	resp, err := h.metadataFetchService.FetchMetadataForBook(ctx, id)
+	resp, err := h.metadataFetchService.FetchMetadataForBook(ctx, id, metafetch.Interactive)
 	if err != nil {
 		return nil, err
 	}

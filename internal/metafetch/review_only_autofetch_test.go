@@ -1,7 +1,7 @@
 // file: internal/metafetch/review_only_autofetch_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: b881bf7b-f075-494b-b50e-cdc671118002
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -48,10 +48,10 @@ func TestAutoFetch_ReviewOnlyFirstThenAudibleAppliesAudible(t *testing.T) {
 				run   func(*Service, string) (*FetchMetadataResponse, error)
 			}{
 				{"FetchMetadataForBook", func(s *Service, id string) (*FetchMetadataResponse, error) {
-					return s.FetchMetadataForBook(context.Background(), id)
+					return s.FetchMetadataForBook(context.Background(), id, Unattended)
 				}},
 				{"FetchMetadataForBookByTitle", func(s *Service, id string) (*FetchMetadataResponse, error) {
-					return s.FetchMetadataForBookByTitle(context.Background(), id)
+					return s.FetchMetadataForBookByTitle(context.Background(), id, Unattended)
 				}},
 			} {
 				f, id := autoFetchFixture(t, ro, aud)
@@ -76,7 +76,7 @@ func TestAutoFetch_OnlyReviewOnlyMatchesAppliesNothing(t *testing.T) {
 			f, id := autoFetchFixture(t, &verdictSource{name: "Audible"}, ro)
 			before := f.book(id)
 
-			_, err := f.mfs.FetchMetadataForBook(context.Background(), id)
+			_, err := f.mfs.FetchMetadataForBook(context.Background(), id, Unattended)
 			require.ErrorIs(t, err, ErrReviewOnlyCandidatesNotApplied)
 			after := f.book(id)
 			require.Nil(t, after.Description, "nothing may be written")
@@ -88,7 +88,7 @@ func TestAutoFetch_OnlyReviewOnlyMatchesAppliesNothing(t *testing.T) {
 			require.NoError(t, cerr)
 			require.NotNil(t, cached, "the review-only answer must be cached for review")
 
-			_, err = f.mfs.FetchMetadataForBookByTitle(context.Background(), id)
+			_, err = f.mfs.FetchMetadataForBookByTitle(context.Background(), id, Unattended)
 			require.ErrorIs(t, err, ErrReviewOnlyCandidatesNotApplied)
 			require.Nil(t, f.book(id).Description)
 		})
@@ -121,7 +121,7 @@ func TestFetchMetadataForBookByTitle_CancelledCtxWritesNothing(t *testing.T) {
 			cancel:  cancel,
 		}
 		f, id := autoFetchFixture(t, src)
-		_, err := f.mfs.FetchMetadataForBookByTitle(ctx, id)
+		_, err := f.mfs.FetchMetadataForBookByTitle(ctx, id, Unattended)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Nil(t, f.book(id).Description, "nothing may be written after the ctx is cancelled")
 	})
@@ -130,7 +130,7 @@ func TestFetchMetadataForBookByTitle_CancelledCtxWritesNothing(t *testing.T) {
 		cancel()
 		src := &verdictSource{name: "Audible", results: autoFetchRecord("audible description")}
 		f, id := autoFetchFixture(t, src)
-		_, err := f.mfs.FetchMetadataForBookByTitle(ctx, id)
+		_, err := f.mfs.FetchMetadataForBookByTitle(ctx, id, Unattended)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Zero(t, src.calls.Load(), "no provider may be searched on a cancelled ctx")
 		require.Nil(t, f.book(id).Description)

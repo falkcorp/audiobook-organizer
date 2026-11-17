@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_enrich_parallel_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 8d3a5b1e-6f2c-4a97-9e1d-3c7b8f4a2d6e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package itunesservice
 
@@ -36,15 +36,18 @@ type fakeMetadataFetcher struct {
 	inFlight    int
 	maxInFlight int
 	seen        map[string]int
+	// intents is the FetchIntent of every call, in call order.
+	intents []metafetch.FetchIntent
 }
 
 func newFakeMetadataFetcher(fails func(id string) bool) *fakeMetadataFetcher {
 	return &fakeMetadataFetcher{fails: fails, seen: map[string]int{}}
 }
 
-func (f *fakeMetadataFetcher) FetchMetadataForBook(_ context.Context, id string) (*metafetch.FetchMetadataResponse, error) {
+func (f *fakeMetadataFetcher) FetchMetadataForBook(_ context.Context, id string, intent metafetch.FetchIntent) (*metafetch.FetchMetadataResponse, error) {
 	f.mu.Lock()
 	f.calls++
+	f.intents = append(f.intents, intent)
 	f.inFlight++
 	if f.inFlight > f.maxInFlight {
 		f.maxInFlight = f.inFlight

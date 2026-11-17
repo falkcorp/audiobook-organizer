@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.103.5
+// version: 1.104.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -695,7 +695,10 @@ type MetadataRunners interface {
 	// alone (the author is suppressed, so a production-company credit does not
 	// steer the search) and APPLIES the best match, as
 	// metafetch.Service.FetchMetadataForBookByTitle does; it refuses a book
-	// marked no-match. It returns the author ID the book carries afterwards
+	// marked no-match, and (it is Unattended, see metafetch.FetchIntent) a
+	// retired book, for which it returns an error wrapping
+	// metafetch.ErrBookRetired that a caller counts as a skip, not a failure.
+	// It returns the author ID the book carries afterwards
 	// (nil when it has none). An error when the metadata fetch service is not
 	// wired; callers gate on HasMetadataFetchService first. ctx bounds the
 	// provider searches, and a cancelled ctx refuses the write.

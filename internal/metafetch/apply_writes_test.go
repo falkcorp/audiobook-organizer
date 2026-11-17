@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.13.3
+// version: 1.13.4
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 //
 // Pins that a metadata apply writes every selected field, never a deselected
 // one, records provenance for every field it writes, downloads the new cover,
@@ -473,7 +473,7 @@ func TestFetchMetadataForBook_WritesTagsThroughSharedPath(t *testing.T) {
 			name:    "Audible",
 			results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author", Genre: "Fantasy"}},
 		}}
-		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"b1"}, scheduled, "the file work goes through the scheduler (the pool)")
 		assert.Equal(t, tt.want, countPrefix(*calls, "tags:"),
@@ -658,7 +658,7 @@ func TestFetchMetadataForBook_NoPoolTouchesNoFiles(t *testing.T) {
 		name:    "Audible",
 		results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author"}},
 	}}
-	_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+	_, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 	require.NoError(t, err)
 	assert.Zero(t, countPrefix(*calls, "tags:"))
 }
@@ -678,7 +678,7 @@ func TestFetchMetadataForBook_PositionNeedsASeriesName(t *testing.T) {
 			name:    "Audible",
 			results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author", Series: tt.series, SeriesPosition: "3"}},
 		}}
-		_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+		_, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 		require.NoError(t, err)
 		if tt.wantPos {
 			require.NotNil(t, book.SeriesSequence, "series %q", tt.series)
@@ -700,7 +700,7 @@ func TestFetchMetadataForBook_FailedCoverDownloadKeepsPreviousCover(t *testing.T
 		name:    "Audible",
 		results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author", CoverURL: "https://covers.example.test/new.jpg"}},
 	}}
-	_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+	_, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 	require.NoError(t, err)
 	require.NotNil(t, book.CoverURL)
 	assert.Equal(t, prev, *book.CoverURL)
@@ -1201,7 +1201,7 @@ func TestAutoFetchKeepsExistingCover_ApplyReplacesIt(t *testing.T) {
 		name:    "Audible",
 		results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author", CoverURL: cover}},
 	}}
-	_, err := svc.FetchMetadataForBook(context.Background(), "b1")
+	_, err := svc.FetchMetadataForBook(context.Background(), "b1", Unattended)
 	require.NoError(t, err)
 	assert.Zero(t, countPrefix(*calls, "cover:"), "the no-pool auto-fetch path replaced an existing cover")
 
