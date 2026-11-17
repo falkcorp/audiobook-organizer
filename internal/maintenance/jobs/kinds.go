@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
 // last-edited: 2026-11-17
 
@@ -57,10 +57,6 @@ type storeBookRelatedReader interface {
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
 	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
-	PlanBookSnapshotPrune(id string, keepCount int) (database.BookSnapshotPrunePlan, error)
-	// AuditMergeJournalSnapshots is the dry run's read-only count of merges whose
-	// undo snapshots are already gone.
-	AuditMergeJournalSnapshots(idCap int) (database.MergeJournalSnapshotAudit, error)
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 }
 

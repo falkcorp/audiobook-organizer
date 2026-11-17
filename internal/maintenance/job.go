@@ -1,5 +1,5 @@
 // file: internal/maintenance/job.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: 11111111-1111-1111-1111-111111111111
 // last-edited: 2026-11-17
 
@@ -267,13 +267,6 @@ type jobBookRelatedReader interface {
 	// strands them.
 	GetBooksBySeriesIDAllVersions(seriesID int) ([]database.BookCore, error)
 	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
-	// PlanBookSnapshotPrune reads only keys, so a job can size a prune across the
-	// whole library without loading ~7.65 GB of snapshot payloads to count them,
-	// and it excludes the snapshots a live merge journal row still points at.
-	PlanBookSnapshotPrune(id string, keepCount int) (database.BookSnapshotPrunePlan, error)
-	// AuditMergeJournalSnapshots is the dry run's read-only count of merges whose
-	// undo snapshots are already gone.
-	AuditMergeJournalSnapshots(idCap int) (database.MergeJournalSnapshotAudit, error)
 	// GetBooksByVersionGroup lets a job that retires a book re-elect its
 	// version group's primary instead of leaving the group with none.
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)

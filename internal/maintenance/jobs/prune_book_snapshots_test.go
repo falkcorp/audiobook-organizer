@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/prune_book_snapshots_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8bb33b18-e9eb-4210-87e4-f87bb86bf4ae
 // last-edited: 2026-11-17
 
@@ -349,4 +349,32 @@ func TestPruneBookSnapshotsJob_DryRunFailsWithoutAResultSetter(t *testing.T) {
 	j, err := maintenance.Get("prune-book-snapshots")
 	require.NoError(t, err)
 	require.ErrorIs(t, j.Run(context.Background(), store, &noopReporter{}, true), maintenance.ErrNoResultSetter)
+}
+
+// A store with no snapshot planner fails the run before it lists or deletes
+// anything. The planner is a capability outside database.Store, so this is the
+// one way a job can find itself without it (an opaque decorator): it must fail
+// loudly, not prune without the journal pin or report a dry run it cannot back.
+func TestPruneBookSnapshotsJob_StoreWithoutPlannerFailsBeforeAnyWork(t *testing.T) {
+	var listed, pruned atomic.Int64
+	inner := &database.MockStore{
+		ListBookIDsFunc: func() ([]string, error) { listed.Add(1); return []string{"b1"}, nil },
+		PruneBookVersionsFunc: func(string, int) (int, error) {
+			pruned.Add(1)
+			return 1, nil
+		},
+	}
+	// Embedding the Store interface (not *MockStore) forwards only Store's
+	// methods, so the planner capability is hidden, as behind an opaque decorator.
+	opaque := struct{ maintenance.JobStore }{inner}
+
+	j, err := maintenance.Get("prune-book-snapshots")
+	require.NoError(t, err)
+	for _, dryRun := range []bool{true, false} {
+		err = j.Run(context.Background(), opaque, &noopReporter{}, dryRun)
+		require.Error(t, err, "dry_run=%t", dryRun)
+		assert.Contains(t, err.Error(), "SnapshotPrunePlanner")
+	}
+	assert.Zero(t, listed.Load(), "nothing is listed before the capability check")
+	assert.Zero(t, pruned.Load(), "nothing is pruned without a planner")
 }
