@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.15.0
+// version: 1.17.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-11-17
 
@@ -85,8 +85,10 @@ type AutoResolveResult struct {
 	// The remaining fields are the dry run's reviewable plan and are empty on an
 	// apply run (auto_resolve_plan.go).
 	//
-	// MaxMerges is the cap apply would use, so a reviewer knows which of the Plan's
-	// first entries an apply run would take.
+	// MaxMerges is the number of SUCCESSFUL merges after which an apply run stops.
+	// It is not "the Plan's first MaxMerges entries": a pair apply skips or that
+	// fails does not count, so apply can reach pairs ranked past it
+	// (AutoResolveApplyDescription).
 	MaxMerges int `json:"max_merges"`
 	// Plan lists, in the order apply visits them, the eligible pairs a run would
 	// merge, up to autoResolvePlanCap; PlanTruncated is how many more there were.
@@ -446,17 +448,14 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 		slog.Warn("dedup auto-resolve: GetBookSnapshots failed", "book", bookID, "err", err)
 		return 0
 	}
-	// GetBookSnapshots returns newest-first; walk oldest-first to find the
-	// earliest snapshot newer than the baseline.
-	var best int64
-	for _, snap := range slices.Backward(snaps) {
-		ns := snap.Timestamp.UnixNano()
-		if ns > baselineNanos {
-			best = ns
-			break
-		}
+	// The same lookup the snapshot prune uses to keep this snapshot while the
+	// journal entry is still provisional (store.SnapshotPins), shared so the one
+	// kept and the one named here cannot drift apart.
+	nanos := make([]int64, len(snaps))
+	for i, snap := range snaps {
+		nanos[i] = snap.Timestamp.UnixNano()
 	}
-	return best
+	return database.EarliestSnapshotAbove(baselineNanos, nanos)
 }
 
 // UnmergeAuto reverses a Tier-1 auto-merge recorded in the journal at journalKey
@@ -471,8 +470,8 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 // pre-merge snapshot, winner) row no longer exists, an entry still marked Provisional (its merge
 // failed, or the post-merge patch could not be written, so the entry records
 // no snapshot to revert to and no siblings), an entry already undone
-// (UndoneAt; a replay would revert any later merge of the same books), an
-// entry whose pre-merge snapshot (either side's) no longer exists, naming every
+// (UndoneAt; a replay would revert any later merge of the same books), an entry
+// closed because its merge never wrote anything (AbortedAt), an entry whose pre-merge snapshot (either side's) no longer exists, naming every
 // missing one, and an entry whose sibling undo the sibling-move journal refuses.
 //
 // The sibling restore goes through the journal, not the entry's own sibling
@@ -507,6 +506,9 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	if entry.UndoneAt != 0 {
 		return fmt.Errorf("unmerge-auto: journal entry %s was already undone at %s; replaying it could revert a later merge of these books, nothing reverted",
 			journalKey, time.Unix(0, entry.UndoneAt).UTC().Format(time.RFC3339))
+	}
+	if entry.AbortedAt != 0 {
+		return fmt.Errorf("unmerge-auto: journal entry %s is closed: its merge was refused before it wrote anything, so there is nothing to undo; nothing reverted", journalKey)
 	}
 	if entry.Provisional {
 		return fmt.Errorf("unmerge-auto: journal entry %s was never finalized (the merge failed, or its post-merge record could not be written); nothing reverted. Restore loser %s from the trash, and undo any sibling moves with the sibling-move journal the merge logged",

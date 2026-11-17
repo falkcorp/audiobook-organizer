@@ -1,7 +1,7 @@
 // file: internal/books/store/store_width_test.go
-// version: 1.5.2
+// version: 1.5.3
 // guid: 7d1b6c2e-4a93-4f58-9e0d-3c8a52b7f1e4
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -21,11 +21,13 @@ import (
 // reference baseline in store_consumers_test.go (31 -> 28); 07-M14 is expected to
 // lower it next. Any PR that removes Store methods lowers this one: R1-25
 // lowered it 445 -> 444 when the reset routes and LifecycleStore.Reset went.
+// The merge-undo snapshot pin lowered it 444 -> 443 when CountBookSnapshots went
+// (nothing counted snapshots once the prune planned from PlanBookSnapshotPrune).
 //
 // Why a test and not interfacebloat: that linter counts declared entries
-// (Store declares 6 embedded interfaces), so it cannot see the 444 methods
+// (Store declares 6 embedded interfaces), so it cannot see the 443 methods
 // the embeds flatten to.
-const storeMethodBaseline = 444
+const storeMethodBaseline = 443
 
 // flattenedMethodCount parses the non-test Go files in dir and returns the
 // number of distinct methods of the interface named iface, following

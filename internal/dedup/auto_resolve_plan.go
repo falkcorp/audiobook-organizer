@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve_plan.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e8b3d57-a6c1-4f92-b5d4-7c19e2a8f630
 // last-edited: 2026-11-17
 
@@ -29,8 +29,9 @@ import (
 // re-weighted.
 const AutoResolveRuleID = "dedup.auto-resolve/tier1-certain/v1"
 
-// The stored plan is bounded. An entry is about 400 bytes of JSON, so the two
-// caps hold the stored result near 1 MB. Pairs beyond a cap are counted
+// The stored plan is bounded. An entry is up to about 1 KB of JSON (a breakdown
+// carries up to 13 signal kinds), so the two caps hold the stored result to about
+// 2.5 MB at the very most, usually far less. Pairs beyond a cap are counted
 // (PlanTruncated, RefusedTruncated), never silently dropped. The default apply
 // run takes 200 merges, so the plan cap covers ten canary runs.
 const (
@@ -50,8 +51,10 @@ type AutoResolvePlanSignal struct {
 // merge (Plan) or one a guard refused (Refused).
 type AutoResolvePlanEntry struct {
 	// Rank is the 1-based position among eligible pairs in the order apply visits
-	// them (zero on a refused entry). An apply run with max_merges=N takes the
-	// entries ranked 1..N.
+	// them (zero on a refused entry). Rank is the visit order, not a promise: an
+	// apply run stops after max_merges SUCCESSFUL merges and a pair it skips or
+	// that fails does not count, so it can merge a pair ranked past max_merges.
+	// See AutoResolveApplyDescription.
 	Rank        int     `json:"rank,omitempty"`
 	CandidateID int64   `json:"candidate_id"`
 	BookAID     string  `json:"book_a_id"`
@@ -197,6 +200,15 @@ var AutoResolveNotEvaluated = []string{
 	"skip of a pair whose book an earlier merge in the same run already soft-deleted (see shares_book_with_rank)",
 }
 
+// AutoResolveApplyDescription states exactly what an apply run does with respect
+// to a dry run's plan. It is stored in the plan so a reviewer reads it next to the
+// ranks. The apply loop is unchanged by this: it counts only successful merges
+// against max_merges, and it is not bound to a reviewed plan.
+const AutoResolveApplyDescription = "An apply run is not bound to this plan: it re-reads the pending candidates when it runs " +
+	"and visits the eligible pairs in plan order. It stops after max_merges SUCCESSFUL merges; a pair it skips " +
+	"(not_evaluated below) or that fails does not count toward the cap, so it can merge pairs ranked past " +
+	"max_merges that nobody reviewed here."
+
 // AutoResolveDryRunReport is the op result of a dry run: counts and the plan,
 // without titles. It is what the owner reviews before switching apply on.
 type AutoResolveDryRunReport struct {
@@ -221,6 +233,8 @@ type AutoResolveDryRunReport struct {
 	// todo.d for why that clause must be tightened before apply is enabled.
 	PlannedByGuard map[string]int `json:"planned_by_guard"`
 	NotEvaluated   []string       `json:"not_evaluated"`
+	// ApplyDescription is AutoResolveApplyDescription.
+	ApplyDescription string `json:"apply_description"`
 }
 
 // NewAutoResolveDryRunReport builds the op result from a dry run's result.
@@ -246,5 +260,6 @@ func NewAutoResolveDryRunReport(res AutoResolveResult) AutoResolveDryRunReport {
 		PlanCap: autoResolvePlanCap, PlanTruncated: res.PlanTruncated, Plan: plan,
 		RefusedCap: autoResolveRefusedCap, RefusedTruncated: res.RefusedTruncated, Refused: refusedList,
 		RefusedByGuard: refused, PlannedByGuard: planned, NotEvaluated: slices.Clone(AutoResolveNotEvaluated),
+		ApplyDescription: AutoResolveApplyDescription,
 	}
 }

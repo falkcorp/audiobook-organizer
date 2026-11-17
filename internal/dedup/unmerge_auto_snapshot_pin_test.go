@@ -1,5 +1,5 @@
 // file: internal/dedup/unmerge_auto_snapshot_pin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9c4e7a21-5b83-4d06-a1f9-3e2d8b6c0f47
 // last-edited: 2026-11-17
 
@@ -131,9 +131,9 @@ func TestUnmergeAuto_MissingSnapshotRefusesBeforeAnyWrite(t *testing.T) {
 }
 
 // The provisional entry (written before the merge, finalized after) records each
-// book's newest snapshot at that moment, so the prune can keep everything newer
-// while the entry is provisional. Here the finalizing write fails, so the entry
-// stays provisional and its baselines are visible.
+// book's newest snapshot at that moment and that a baseline was recorded, so the
+// prune can pin the one snapshot the patch will name. Here the finalizing write
+// fails, so the entry stays provisional and its baselines are visible.
 func TestMergeBooksJournaled_ProvisionalEntryRecordsEachBooksBaselineSnapshot(t *testing.T) {
 	engine, f, es := pinEngine(t)
 	k := f.Book(t, vptest.Spec{ID: "batman", Group: "H", Primary: "true"})
@@ -157,28 +157,26 @@ func TestMergeBooksJournaled_ProvisionalEntryRecordsEachBooksBaselineSnapshot(t 
 	entry, err := es.GetAutoMergeJournalEntry(keys[0])
 	require.NoError(t, err)
 	require.True(t, entry.Provisional)
+	require.True(t, entry.BaselinesRecorded)
 	require.Equal(t, wantK, entry.WinnerBaselineTS)
 	require.Equal(t, wantL, entry.LoserBaselineTS)
 
-	// And the prune honours it, through the same store the merge ran on: every
-	// snapshot newer than the baseline survives a keep-1 prune.
-	newerThan := func(id string, floor int64) []int64 {
-		snaps, err := f.S.GetBookSnapshots(id, 0)
-		require.NoError(t, err)
-		var out []int64
-		for _, sn := range snaps {
-			if ns := sn.Timestamp.UnixNano(); ns > floor {
-				out = append(out, ns)
-			}
-		}
-		return out
-	}
+	// The prune, through the same store the merge ran on, keeps exactly the
+	// snapshot the patch would have named for each book (the first above its
+	// baseline) and nothing else of what the merge wrote.
 	for id, floor := range map[string]int64{k: wantK, l: wantL} {
+		want := engine.preMergeSnapshotNanos(id, floor)
+		require.NotZero(t, want, "the merge wrote at least one snapshot of %s", id)
 		editTitle(t, f.S, id, 4)
-		pinned := newerThan(id, floor)
-		require.NotEmpty(t, pinned)
 		_, err := f.S.PruneBookSnapshots(id, 1)
 		require.NoError(t, err)
-		require.Equal(t, pinned, newerThan(id, floor), "book %s: nothing newer than the baseline may be pruned", id)
+		snaps, err := f.S.GetBookSnapshots(id, 0)
+		require.NoError(t, err)
+		var got []int64
+		for _, sn := range snaps {
+			got = append(got, sn.Timestamp.UnixNano())
+		}
+		require.Contains(t, got, want, "book %s: the snapshot the patch names must survive the prune", id)
+		require.Len(t, got, 2, "book %s: that one and the newest, nothing else", id)
 	}
 }

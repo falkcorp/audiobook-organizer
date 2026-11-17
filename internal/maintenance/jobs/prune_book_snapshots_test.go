@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/prune_book_snapshots_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 8bb33b18-e9eb-4210-87e4-f87bb86bf4ae
 // last-edited: 2026-11-17
 
@@ -377,4 +377,94 @@ func TestPruneBookSnapshotsJob_StoreWithoutPlannerFailsBeforeAnyWork(t *testing.
 	}
 	assert.Zero(t, listed.Load(), "nothing is listed before the capability check")
 	assert.Zero(t, pruned.Load(), "nothing is pruned without a planner")
+}
+
+// A merge journal row that cannot be read blocks the whole run, in both modes,
+// before any book is listed, planned or pruned, and the error names the row.
+func TestPruneBookSnapshotsJob_UnreadableJournalRowFailsBothModesBeforeAnyWork(t *testing.T) {
+	for _, dryRun := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {
+			var listed, planned, pruned, audited atomic.Int64
+			store := &database.MockStore{
+				CheckSnapshotPinsFunc: func() error {
+					return &database.MergeJournalRowUnreadableError{Key: "dedup:automerge:00000000000000aa", Err: errors.New("invalid character")}
+				},
+				ListBookIDsFunc: func() ([]string, error) { listed.Add(1); return []string{"b1", "b2"}, nil },
+				PlanBookSnapshotPruneFunc: func(string, int) (database.BookSnapshotPrunePlan, error) {
+					planned.Add(1)
+					return database.BookSnapshotPrunePlan{Total: 20, Delete: 10}, nil
+				},
+				AuditMergeJournalSnapshotsFunc: func(int) (database.MergeJournalSnapshotAudit, error) {
+					audited.Add(1)
+					return database.MergeJournalSnapshotAudit{}, nil
+				},
+				PruneBookVersionsFunc: func(string, int) (int, error) { pruned.Add(1); return 10, nil },
+			}
+			j, err := maintenance.Get("prune-book-snapshots")
+			require.NoError(t, err)
+			var capture resultCapture
+			err = j.Run(maintenance.WithResultSetter(context.Background(), capture.set), store, &noopReporter{}, dryRun)
+			require.Error(t, err)
+			var unreadable *database.MergeJournalRowUnreadableError
+			require.ErrorAs(t, err, &unreadable)
+			require.ErrorContains(t, err, "dedup:automerge:00000000000000aa")
+			assert.Zero(t, listed.Load()+planned.Load()+pruned.Load()+audited.Load(), "nothing ran")
+		})
+	}
+}
+
+// A dry run stores its audit before the per-book pass. If a book then fails the
+// run errors, and the stored result is the final one with complete=true and the
+// failure count, not the audit-only placeholder (complete=false).
+func TestPruneBookSnapshotsJob_DryRunWithAFailedBookKeepsTheAuditAndMarksTheResultComplete(t *testing.T) {
+	store := &database.MockStore{
+		ListBookIDsFunc: func() ([]string, error) { return []string{"ok", "bad"}, nil },
+		PlanBookSnapshotPruneFunc: func(id string, keep int) (database.BookSnapshotPrunePlan, error) {
+			if id == "bad" {
+				return database.BookSnapshotPrunePlan{}, errors.New("plan failed")
+			}
+			return database.BookSnapshotPrunePlan{Total: 15, Delete: 5}, nil
+		},
+		AuditMergeJournalSnapshotsFunc: func(int) (database.MergeJournalSnapshotAudit, error) {
+			return database.MergeJournalSnapshotAudit{LiveEntries: 4, MissingSnapshotEntries: 1, StaleProvisional: 2}, nil
+		},
+	}
+	j, err := maintenance.Get("prune-book-snapshots")
+	require.NoError(t, err)
+	var capture resultCapture
+	err = j.Run(maintenance.WithResultSetter(context.Background(), capture.set), store, &noopReporter{}, true)
+	require.ErrorContains(t, err, "1 failures")
+	require.ErrorContains(t, err, "4 live entries", "the audit's numbers are in the error text too: the native shell drops a failing run's result")
+
+	got := capture.decode(t)
+	assert.Equal(t, true, got["complete"])
+	assert.EqualValues(t, 1, got["failed"])
+	assert.EqualValues(t, 4, got["live_merge_journals"])
+	assert.EqualValues(t, 1, got["merge_journals_missing_snapshots"])
+}
+
+// The audit is stored BEFORE the per-book pass, with complete=false, so a run
+// that dies part way still leaves it behind.
+func TestPruneBookSnapshotsJob_DryRunStoresTheAuditBeforeThePerBookPass(t *testing.T) {
+	var capture resultCapture
+	var atFirstPlan map[string]any
+	var once sync.Once
+	store := &database.MockStore{
+		ListBookIDsFunc: func() ([]string, error) { return []string{"b1"}, nil },
+		PlanBookSnapshotPruneFunc: func(string, int) (database.BookSnapshotPrunePlan, error) {
+			once.Do(func() { atFirstPlan = capture.decode(t) })
+			return database.BookSnapshotPrunePlan{Total: 12, Delete: 2}, nil
+		},
+		AuditMergeJournalSnapshotsFunc: func(int) (database.MergeJournalSnapshotAudit, error) {
+			return database.MergeJournalSnapshotAudit{LiveEntries: 9}, nil
+		},
+	}
+	j, err := maintenance.Get("prune-book-snapshots")
+	require.NoError(t, err)
+	require.NoError(t, j.Run(maintenance.WithResultSetter(context.Background(), capture.set), store, &noopReporter{}, true))
+
+	require.NotNil(t, atFirstPlan, "a result was already stored when the first book was planned")
+	assert.Equal(t, false, atFirstPlan["complete"])
+	assert.EqualValues(t, 9, atFirstPlan["live_merge_journals"])
+	assert.Equal(t, true, capture.decode(t)["complete"], "the finished run replaces it")
 }

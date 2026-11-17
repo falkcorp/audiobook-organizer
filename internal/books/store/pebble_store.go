@@ -1,5 +1,5 @@
 // file: internal/books/store/pebble_store.go
-// version: 1.240.0
+// version: 1.240.2
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-11-17
 
@@ -3716,30 +3716,6 @@ func (p *PebbleStore) bookSnapshotKeys(id string) ([][]byte, error) {
 	return keys, iter.Error()
 }
 
-// CountBookSnapshots returns how many CoW snapshots a book has, without reading
-// or allocating any of their payloads.
-//
-// This exists so a prune can be planned without paying for one. Counting via
-// GetBookSnapshots would copy every snapshot's value: on production that is
-// ~127 snapshots per book across 59,086 books, so a whole-library dry run would
-// read and copy the entire ~7.65 GB of history purely to produce a number.
-func (p *PebbleStore) CountBookSnapshots(id string) (int, error) {
-	lower, upper := snapshotKeyRange(id)
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = iter.Close() }()
-
-	n := 0
-	for iter.First(); iter.Valid(); iter.Next() {
-		if snapshotKeyValid(string(iter.Key())) {
-			n++
-		}
-	}
-	return n, iter.Error()
-}
-
 // PruneBookSnapshots keeps the newest keepCount versions and deletes the rest,
 // except a snapshot a live merge journal row still points at (snapshot_pins.go):
 // the undo of an automatic merge restores from those, so they outlive keepCount.
@@ -3763,7 +3739,13 @@ func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) 
 	}
 	// A journal row can be written between reading the pins and committing the
 	// delete. The generation is re-checked just before the commit, and the plan
-	// is redone on a changed one, so a row written during this call is honoured.
+	// is redone on a changed one. That check and the commit are not atomic, and
+	// that is safe: the key list above is frozen, so only snapshots that existed
+	// when it was read can be deleted. A provisional row committed after that read
+	// can only name a snapshot its merge writes later (the row commits before the
+	// merge writes anything), which is not in the list; and the patch that
+	// finalizes a row replaces a pin by the exact snapshot it names, which is the
+	// one the floor already pinned, so it never narrows a pin this call relied on.
 	for attempt := 0; attempt < pruneStablePinsAttempts; attempt++ {
 		pins, err := p.snapshotPins()
 		if err != nil {
@@ -3780,6 +3762,9 @@ func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) 
 				return 0, err
 			}
 		}
+		if pruneBeforeCommitHook != nil {
+			pruneBeforeCommitHook(attempt)
+		}
 		if !pinsAreCurrent(pins) {
 			_ = batch.Close()
 			continue
@@ -3793,6 +3778,11 @@ func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) 
 	}
 	return 0, fmt.Errorf("prune snapshots of book %s: merge journal changed on every attempt, nothing deleted", id)
 }
+
+// pruneBeforeCommitHook is a test seam: called after a plan is made and before the
+// generation re-check, so a test can write a journal row at exactly that point.
+// Nil in production.
+var pruneBeforeCommitHook func(attempt int)
 
 // pruneStablePinsAttempts bounds the re-plan loop in PruneBookSnapshots. A
 // journal write is one per merge, so more than one retry means a merge storm.

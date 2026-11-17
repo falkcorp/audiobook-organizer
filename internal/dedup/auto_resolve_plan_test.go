@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve_plan_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a1e8c37-d204-4b69-93f0-7e6b2c4a9d18
 // last-edited: 2026-11-17
 
@@ -153,7 +153,7 @@ func TestAutoResolveDryRunReport_HasNoTitlesAndRoundTrips(t *testing.T) {
 	engine, s, es := planEngine(t)
 	planBooks(t, s, "A1", "B1")
 	sb := certainBreakdown("A1", "B1", unified.SigExactFile, unified.SigISBNASIN)
-	sb.Signals[0].Evidence = "Batman Begins.m4b at /library/Bruce Wayne/Batman Begins.m4b"
+	sb.Signals[0].Evidence = "Year One.m4b at /library/Bruce Wayne/Year One.m4b"
 	require.NoError(t, es.UpsertCandidate(database.DedupCandidate{
 		EntityType: "book", EntityAID: "A1", EntityBID: "B1", Layer: "exact", Status: "pending",
 		Band: unified.BandCertain, FormulaVersion: "test", ScoreBreakdown: sb,
@@ -163,7 +163,7 @@ func TestAutoResolveDryRunReport_HasNoTitlesAndRoundTrips(t *testing.T) {
 	require.NoError(t, err)
 	raw, err := json.Marshal(NewAutoResolveDryRunReport(res))
 	require.NoError(t, err)
-	for _, forbidden := range []string{"The Dark Knight Returns", "Batman Begins", "Bruce Wayne", "/library", "title"} {
+	for _, forbidden := range []string{"The Dark Knight Returns", "Year One", "Bruce Wayne", "/library", "title"} {
 		require.NotContains(t, string(raw), forbidden)
 	}
 
@@ -242,7 +242,7 @@ func TestAutoResolveEligible_NamesTheDecidingGuard(t *testing.T) {
 		return database.DedupCandidate{
 			ID: 1, EntityType: "book", EntityAID: "A", EntityBID: "B", Band: unified.BandCertain, Status: "pending",
 			ScoreBreakdown: certainBreakdown("A", "B", unified.SigExactFile, unified.SigISBNASIN),
-		}, arPlausibleBook("A", "Same Book"), arPlausibleBook("B", "Same Book")
+		}, arPlausibleBook("A", "Hush"), arPlausibleBook("B", "Hush")
 	}
 	cases := []struct {
 		name  string

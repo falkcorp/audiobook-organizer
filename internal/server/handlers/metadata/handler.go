@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.45.9
+// version: 1.46.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -750,6 +750,9 @@ func respondOwnerRejected(c *gin.Context, err error) {
 
 var noMatchLog = logger.New("metadata.nomatch")
 
+// snapshotPruneLog reports a prune the merge journal blocked.
+var snapshotPruneLog = logger.New("metadata.snapshot-prune")
+
 // markAudiobookNoMatch handles POST /api/v1/audiobooks/:id/mark-no-match.
 func (h *Handler) markAudiobookNoMatchImpl(c *gin.Context) {
 	id := c.Param("id")
@@ -900,6 +903,16 @@ func (h *Handler) pruneBookCOWVersionsImpl(c *gin.Context) {
 	}
 	pruned, err := store.PruneBookSnapshots(id, body.KeepCount)
 	if err != nil {
+		// A merge journal row that cannot be read blocks every prune (it may be the
+		// row that names the snapshot an undo needs). Say which row, so the owner
+		// can repair it, instead of the generic failure.
+		var unreadable *database.MergeJournalRowUnreadableError
+		if errors.As(err, &unreadable) {
+			snapshotPruneLog.Error("snapshot prune of book %s blocked by an unreadable merge journal row %s: %v",
+				logger.SanitizeLogValue(id), logger.SanitizeLogValue(unreadable.Key), err)
+			httputil.RespondWithConflict(c, "a merge journal row is unreadable: "+unreadable.Key+"; prune is blocked until it is repaired")
+			return
+		}
 		httputil.InternalError(c, "failed to prune versions", err)
 		return
 	}
