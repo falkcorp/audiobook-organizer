@@ -1,5 +1,5 @@
 // file: internal/applygate/title_runtime_witness_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d8b2f61-7a3c-4e95-8c10-b2f6a9e35d07
 // last-edited: 2026-11-17
 
@@ -20,8 +20,8 @@ import (
 // property checks it at the Evaluate level, over generated inputs: whatever
 // else agrees (author, narrator, series, sequence position), a pair whose title
 // check is neutral never applies while the runtime is unknown or outside the 5%
-// agree band. ASIN is left out on purpose: a matching ASIN is its own
-// independent identifier, not a witness for the title.
+// agree band. The ASIN, the book-level transcription and the transcription lift
+// are checked as other witnesses below; the query lift is a known gap.
 
 type wtPair struct {
 	stored string
@@ -172,7 +172,8 @@ func TestEvaluate_NeutralTitleNeverAppliesWithoutAnAgreeingRuntime(t *testing.T)
 //	"lift-audio"    EvaluateTranscribed with a search query equal to the
 //	                candidate's title AND the book-level transcription
 //	"lift-query"    EvaluateTranscribed with a search query equal to the
-//	                candidate's title, no book-level transcription
+//	                candidate's title, no book-level transcription (NOT in the
+//	                property: see TestEvaluateTranscribed_QueryLiftBypassesTheRuntimeRule)
 //
 // The author is the path-confirming one, so with the title neutral these are
 // the "two agreements" that used to apply on their own.
@@ -220,7 +221,7 @@ func wtWitnessRun(p wtPair, witness, runtime string) Verdict {
 // a neutral title with no agreeing runtime never applies. The counts logged
 // are what each witness did before the tally rule, kept in the PR body.
 func TestEvaluate_NeutralTitleNeedsRuntimeWhateverTheOtherWitness(t *testing.T) {
-	for _, witness := range []string{"asin", "audio", "lift-audio", "lift-query"} {
+	for _, witness := range []string{"asin", "audio", "lift-audio"} {
 		t.Run(witness, func(t *testing.T) {
 			checked, neutral, titleAgree := 0, 0, 0
 			var offenders []string
@@ -257,5 +258,37 @@ func TestEvaluate_NeutralTitleNeedsRuntimeWhateverTheOtherWitness(t *testing.T) 
 				t.Fatalf("%d neutral-title inputs applied without an agreeing runtime", len(offenders))
 			}
 		})
+	}
+}
+
+// TestEvaluateTranscribed_QueryLiftBypassesTheRuntimeRule pins a KNOWN GAP, it
+// does not endorse it. applyTranscribedTitle (transcribed_identity.go:130-135)
+// sets the title check to AGREE, not neutral, when the search query that found
+// the candidate equals its title and no book-level transcription confirmed it,
+// and it lifts a title_disagrees block the same way (only a series-name title or
+// a folder that names another work refuses the lift). So the "neutral title needs
+// an agreeing runtime" rule never sees these pairs, and two volumes of one
+// storyline apply whenever the runtime agrees ("Hush: Part 1" <- "Hush: Part 2"
+// at 4%). The property test above therefore leaves this witness out: over this
+// pool 0 of 11,694 inputs reach it neutral, so it could not fail.
+//
+// This test asserts exactly that, so it fails when the gap is closed. When it
+// does, move "lift-query" back into the witness loop and delete this test.
+func TestEvaluateTranscribed_QueryLiftBypassesTheRuntimeRule(t *testing.T) {
+	neutral, checked := 0, 0
+	for _, p := range wtTitlePool() {
+		for _, runtime := range []string{"none", "4%", "30%"} {
+			checked++
+			if wtTitleOutcome(wtWitnessRun(p, "lift-query", runtime)) == string(OutcomeNeutral) {
+				neutral++
+			}
+		}
+	}
+	if neutral != 0 {
+		t.Fatalf("%d of %d inputs reach the tally neutral through the query lift: the lift no longer bypasses the runtime rule; move lift-query back into the witness property", neutral, checked)
+	}
+	storyline := wtPair{"Hush: Part 1", metafetch.MetadataCandidate{Title: "Hush: Part 2"}}
+	if v := wtWitnessRun(storyline, "lift-query", "4%"); !v.Allowed {
+		t.Fatalf("known gap closed (verdict %q): move lift-query back into the witness property and delete this test", v.Reason)
 	}
 }
