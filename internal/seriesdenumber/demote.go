@@ -1,7 +1,7 @@
 // file: internal/seriesdenumber/demote.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 609bfb39-82de-4bb5-b398-b84db96913fa
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 // Package seriesdenumber holds the pure decisions behind the
 // maintenance.series-denumber op: which de-numbering plans may be applied
@@ -44,7 +44,7 @@ const (
 const MaxTrustedPosition = 99
 
 // MinBaseLetters is the fewest letters a base name may have. One- and
-// two-letter bases ("AM", "RH") are abbreviations too generic to name one
+// two-letter bases ("BW", "DG") are abbreviations too generic to name one
 // series.
 const MinBaseLetters = 3
 
@@ -101,7 +101,7 @@ type Verdict struct {
 
 // formatWord matches vocabulary of an audio file or an edition, never of a
 // series: "Unabridged", "Disc 2", "CD1", "Track", "Audio". Whole words only, so
-// "Discworld" and "Cdr" do not match.
+// "Discord Knights" and "Cdrom Knights" do not match.
 var formatWord = regexp.MustCompile(`(?i)\b(?:unabridged|abridged|disc|disk|cd|track|file|mp3|m4b|audio|side)\b`)
 
 // partSuffix matches a trailing "Part N" / "Pt N" marker.
