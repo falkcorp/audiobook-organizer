@@ -1,5 +1,5 @@
 // file: internal/applygate/applygate.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
 // last-edited: 2026-11-17
 
@@ -569,8 +569,11 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 // names) are all fields an earlier, possibly wrong, apply or rename can have
 // written, so a weak number that disagrees with them is never confirmed by
 // them. An earlier version let the title and runtime checks stand in for a
-// second source; they cannot: the title check agrees on any shared title
-// segment, so two volumes of one storyline confirmed each other.
+// second source; they cannot: the title check then agreed on any shared title
+// segment, so two volumes of one storyline confirmed each other. It now agrees
+// only on a whole title (titlecompare.go), but the stored title is still a field
+// an earlier apply can have written, so an agreeing title confirms a number only
+// by repeating what that apply wrote, and no corroboration path is added back.
 func weakSetAside(side sideNumber) string {
 	if len(side.Dropped) == 0 || len(side.Kept) == 0 {
 		return ""

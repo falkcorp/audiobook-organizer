@@ -1,7 +1,7 @@
 // file: internal/applygate/refusal.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f3b7bf9e-36b3-4b4a-a634-beaf4cf1a2fa
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package applygate
 
@@ -60,6 +60,7 @@ var structuralRefusals = map[string]struct{}{
 	ReasonNarratorMismatch:        {},
 	ReasonASINConflict:            {},
 	ReasonInsufficientEvidence:    {},
+	ReasonTitleUnconfirmed:        {},
 	// Combined legs (unattended.go).
 	ReasonCollectedRuntimeUnconfirmed: {},
 	// Candidate shape.

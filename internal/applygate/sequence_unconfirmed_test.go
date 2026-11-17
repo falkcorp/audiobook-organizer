@@ -1,11 +1,12 @@
 // file: internal/applygate/sequence_unconfirmed_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d0b7e43-92c1-4a68-b3f7-0e8a1c64d2b9
 // last-edited: 2026-11-17
 
 package applygate
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,33 +19,44 @@ import (
 // Evaluate-level tests. At 950ca3736 every one of them APPLIED (measured); the
 // corroboration path is cut, so each is now refused. A is refused as the
 // book_sequence_conflict it is (the title's own "Year 2" disagrees with the
-// stored position 1, as on main); the others as sequence_unconfirmed.
+// stored position 1, as on main). B to E are pairs of different volumes whose
+// titles now CONFLICT (a shared segment and a segment of its own on each side,
+// or the same words with different numbers), so the title check refuses them
+// first as title_disagrees; the sequence leg's own refusal (a weak number set
+// aside against a stale position) stays on the record in Verdict.Unconfirmed,
+// which is what an override record lists, and the test asserts it still fires.
 func TestEvaluate_R3Majors_WeakNumberAgainstStalePositionNeverApplies(t *testing.T) {
 	legends := "Legends of the Dark Knight"
 	for name, tc := range map[string]struct {
 		book database.Book
 		cand metafetch.MetadataCandidate
 		want string
+		// sequence: the sequence leg's weak-number refusal must be on record.
+		sequence bool
 	}{
 		"A: digit volume word, ordinal 02, stale position 1": {
 			database.Book{Title: "02 - Batman: Year 2", SeriesPositionRaw: new("1"), Duration: new(36000)},
-			metafetch.MetadataCandidate{Title: "Batman: Year One", Series: legends, SeriesPosition: "1", Score: 0.95, DurationSec: 36000}, ReasonBookSequenceConflict},
+			metafetch.MetadataCandidate{Title: "Batman: Year One", Series: legends, SeriesPosition: "1", Score: 0.95, DurationSec: 36000}, ReasonBookSequenceConflict, false},
 		"B: Part 1 stored, file 01, stale position 2": {
 			database.Book{Title: "Hush: Part 1", FilePath: "/lib/Bruce Wayne/Hush/01 - Hush: Part 1.m4b", SeriesPositionRaw: new("2"), Duration: new(36000)},
-			metafetch.MetadataCandidate{Title: "Hush: Part 2", Series: "Batman", SeriesPosition: "2", Score: 0.95, DurationSec: 36000}, ReasonSequenceUnconfirmed},
+			metafetch.MetadataCandidate{Title: "Hush: Part 2", Series: "Batman", SeriesPosition: "2", Score: 0.95, DurationSec: 36000}, ReasonTitleDisagrees, true},
 		"C: ordinal 02 on Part 2 against Part 1": {
 			database.Book{Title: "02 - Hush: Part 2", SeriesPositionRaw: new("1"), Duration: new(36000)},
-			metafetch.MetadataCandidate{Title: "Hush: Part 1", Series: "Batman", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}, ReasonSequenceUnconfirmed},
+			metafetch.MetadataCandidate{Title: "Hush: Part 1", Series: "Batman", SeriesPosition: "1", Score: 0.95, DurationSec: 36000}, ReasonTitleDisagrees, true},
 		"D: roman Part I stored, file 01, stale position 2": {
 			database.Book{Title: "Hush: Part I", FilePath: "/lib/Bruce Wayne/Hush/01 - Hush Part I.m4b", SeriesPositionRaw: new("2"), Duration: new(36000)},
-			metafetch.MetadataCandidate{Title: "Hush: Part II", Series: "Batman", SeriesPosition: "2", Score: 0.95, DurationSec: 36000}, ReasonSequenceUnconfirmed},
+			metafetch.MetadataCandidate{Title: "Hush: Part II", Series: "Batman", SeriesPosition: "2", Score: 0.95, DurationSec: 36000}, ReasonTitleDisagrees, true},
 		"E: a title word that only the candidate's subtitle supplies": {
 			database.Book{Title: "02 - Batman: Dark Victory", SeriesPositionRaw: new("1"), Duration: new(36000)},
-			metafetch.MetadataCandidate{Title: "Batman: The Long Halloween", Subtitle: "The Prelude to Dark Victory", Series: legends, SeriesPosition: "1", Score: 0.95, DurationSec: 36000}, ReasonSequenceUnconfirmed},
+			metafetch.MetadataCandidate{Title: "Batman: The Long Halloween", Subtitle: "The Prelude to Dark Victory", Series: legends, SeriesPosition: "1", Score: 0.95, DurationSec: 36000}, ReasonTitleDisagrees, true},
 	} {
 		book, cand := tc.book, tc.cand
-		if ok, reason := evalAll(&book, &cand); ok || reason != tc.want {
-			t.Errorf("%s: allowed=%v reason=%q, want %s", name, ok, reason, tc.want)
+		v := evalAllVerdict(&book, &cand)
+		if v.Allowed || v.Reason != tc.want {
+			t.Errorf("%s: allowed=%v reason=%q, want %s", name, v.Allowed, v.Reason, tc.want)
+		}
+		if tc.sequence && !slices.Contains(v.Unconfirmed, ReasonSequenceUnconfirmed) {
+			t.Errorf("%s: unconfirmed=%v, want it to list sequence_unconfirmed (the sequence leg must still refuse)", name, v.Unconfirmed)
 		}
 	}
 }

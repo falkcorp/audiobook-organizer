@@ -1,0 +1,480 @@
+// file: internal/applygate/titlecompare.go
+// version: 2.0.0
+// guid: 8e41c7a2-5d09-4b3f-a6e8-2f9c0d71b5a3
+// last-edited: 2026-11-17
+
+package applygate
+
+import (
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
+)
+
+// Title comparison for the evidence leg's title check.
+//
+// The check used to score agreement 1.0 when the candidate's main title (the
+// part before ":") equalled ANY segment of the stored title. Two volumes of one
+// storyline share that segment ("Hush: Part 1" and "Hush: Part 2", "Batman:
+// Dark Victory" and "Batman: The Long Halloween"), so with the runtime inside
+// 5% and the author agreeing the pair applied unattended. A first rewrite
+// compared the whole title but decided agreement by REMOVING text (series
+// names, credited names, "of N", a parenthetical, fuzzy word overlap), and
+// every removal was a new way for two books to agree. This file has one rule
+// and removes nothing:
+//
+//   - AGREE: a whole form of the candidate EQUALS a whole form of the book.
+//     A form is the declared fields JOINED, never trimmed: {title},
+//     {title subtitle}, {series title} or {series title subtitle}. A side that
+//     has a subtitle has no bare-title forms, so "Knightfall" against
+//     "Knightfall" + subtitle "Book 2" is not an agreement. The book's file and
+//     folder names are forms of the book too. Equality is over a closed
+//     normalisation (formTokens) and nothing else.
+//   - DISAGREE: only from the two TITLE fields, and only in two shapes: the
+//     titles share a whole segment and each carries a segment the other lacks
+//     ("Batman: Dark Victory" / "Batman: The Long Halloween"), or they use the
+//     same words with numbers that differ ("Part 1" / "Part 2"). A series name,
+//     a credit, a path or a year never makes a pair agree or disagree.
+//   - everything else that is related is NEUTRAL: one title holds words or a
+//     number the other lacks, so the pair is confirmed by nothing in the title.
+//     A neutral title applies only with a runtime that agrees (EvidenceVerdict
+//     tally).
+//
+// compareTitleFields is symmetric in its two texts, and no remainder is ever
+// excused by what the other fields say.
+
+// titleClass is the verdict on one pair of title fields.
+type titleClass int
+
+const (
+	// classConflictNumber: the same words with numbers that differ ("Part 1"
+	// / "Part 2", "Night of 7 Owls" / "Night of 5 Owls").
+	classConflictNumber titleClass = iota
+	// classConflictWords: a whole segment is shared and each title has a
+	// segment the other lacks.
+	classConflictWords
+	// classUnrelated: little in common, no structure to compare.
+	classUnrelated
+	// classNeutral: related, but one side says something the other does not.
+	classNeutral
+	// classEqual: the two fields normalise to the same words.
+	classEqual
+)
+
+// titleCmp is one pair's verdict with a short reason for the check detail.
+type titleCmp struct {
+	class titleClass
+	note  string
+}
+
+var (
+	// titleTokenRe keeps "1.5" whole and splits everything else on
+	// non-alphanumerics.
+	titleTokenRe = regexp.MustCompile(`\d+\.\d+|[\p{L}\p{N}]+`)
+	// romanRe is I..XXXIX over the letters I, V, X only: "mix" and "civil" are
+	// words, "vi" and "xii" are numerals.
+	romanRe = regexp.MustCompile(`^(?:x{0,3})(?:ix|iv|v?i{0,3})$`)
+	// ordinalDigitRe is "1st", "22nd", "3rd", "4th".
+	ordinalDigitRe = regexp.MustCompile(`^(\d+)(?:st|nd|rd|th)$`)
+
+	unitWords = map[string]int{
+		"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+		"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+		"sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+	}
+	tensWords = map[string]int{
+		"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+	}
+	ordinalWords = map[string]int{
+		"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8,
+		"ninth": 9, "tenth": 10, "eleventh": 11, "twelfth": 12, "thirteenth": 13, "fourteenth": 14,
+		"fifteenth": 15, "sixteenth": 16, "seventeenth": 17, "eighteenth": 18, "nineteenth": 19, "twentieth": 20,
+	}
+	// numberMarkers are the words a single I, V or X is read as a numeral
+	// behind ("Part I"); anywhere else a lone I is the pronoun, a lone V or X
+	// an initial.
+	numberMarkers = map[string]bool{
+		"part": true, "pt": true, "book": true, "bk": true, "volume": true, "vol": true, "chapter": true,
+		"ch": true, "disc": true, "disk": true, "cd": true, "track": true, "episode": true, "act": true,
+		"season": true, "no": true, "number": true,
+	}
+	// leadingArticles are dropped from the front of a segment.
+	leadingArticles = map[string]bool{"the": true, "a": true, "an": true}
+	// editionPhrases is the closed list of words that describe the recording,
+	// not the book, removed wherever they stand. "abridged" is NOT on it: an
+	// abridged recording is a different edition.
+	editionPhrases = [][]string{{"a", "novel"}, {"the", "audiobook"}, {"audiobook"}, {"unabridged"}, {"novel"}}
+	// fieldStop are the words a remainder is not counted for: they join a title
+	// together and carry no identity.
+	fieldStop = map[string]bool{"the": true, "a": true, "an": true, "of": true, "and": true}
+)
+
+// cardTok is the token for a cardinal number; ordTok for an ordinal. They never
+// collide with a word token (the tokenizer cannot produce '#' or '@') and an
+// ordinal is never equal to a cardinal.
+func cardTok(v string) string { return "#" + v }
+func ordTok(v int) string     { return "@" + strconv.Itoa(v) }
+
+func isNumTok(t string) bool { return strings.HasPrefix(t, "#") }
+
+// segTokens normalises ONE segment of a title into tokens: NFKC (so a unicode
+// roman numeral "Ⅱ" is "II"), lower case, diacritics and apostrophes removed,
+// "&" read as "and", numbers read as values, and a leading article dropped.
+// strip also removes the edition words (editionPhrases); a segment that is only
+// edition words ("(Unabridged)") is then empty.
+func segTokens(s string, strip bool) []string {
+	s = strings.ToLower(norm.NFKC.String(s))
+	s = strings.NewReplacer("&", " and ", "#", " ", "'", "", "\u2019", "").Replace(s)
+	var b strings.Builder
+	for _, r := range norm.NFD.String(s) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(r)
+		}
+	}
+	raw := titleTokenRe.FindAllString(b.String(), -1)
+	out := make([]string, 0, len(raw))
+	for i := 0; i < len(raw); i++ {
+		t := raw[i]
+		switch {
+		case isDecimalOrDigits(t):
+			if v, err := strconv.ParseFloat(t, 64); err == nil {
+				out = append(out, cardTok(strconv.FormatFloat(v, 'f', -1, 64)))
+				continue
+			}
+		case ordinalDigitRe.MatchString(t):
+			v, _ := strconv.Atoi(ordinalDigitRe.FindStringSubmatch(t)[1])
+			out = append(out, ordTok(v))
+			continue
+		case ordinalWords[t] > 0:
+			out = append(out, ordTok(ordinalWords[t]))
+			continue
+		case tensWords[t] > 0:
+			v := tensWords[t]
+			// "twenty-one" / "twenty one": a tens word and a unit word are one
+			// number.
+			if i+1 < len(raw) && unitWords[raw[i+1]] >= 1 && unitWords[raw[i+1]] <= 9 {
+				v += unitWords[raw[i+1]]
+				i++
+			}
+			out = append(out, cardTok(strconv.Itoa(v)))
+			continue
+		case unitWords[t] > 0:
+			out = append(out, cardTok(strconv.Itoa(unitWords[t])))
+			continue
+		case len(t) >= 2 && romanRe.MatchString(t):
+			out = append(out, cardTok(strconv.Itoa(romanValue(t))))
+			continue
+		case (t == "i" || t == "v" || t == "x") && len(out) > 0 && numberMarkers[out[len(out)-1]]:
+			out = append(out, cardTok(strconv.Itoa(romanValue(t))))
+			continue
+		}
+		out = append(out, t)
+	}
+	if strip {
+		out = stripEdition(out)
+	}
+	if len(out) > 1 && leadingArticles[out[0]] {
+		out = out[1:]
+	}
+	return out
+}
+
+// stripEdition removes the edition phrases wherever they stand.
+func stripEdition(toks []string) []string {
+	for changed := true; changed; {
+		changed = false
+		for _, ph := range editionPhrases {
+			for i := 0; i+len(ph) <= len(toks); i++ {
+				if slices.Equal(toks[i:i+len(ph)], ph) {
+					toks = append(slices.Clone(toks[:i]), toks[i+len(ph):]...)
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	return toks
+}
+
+func isDecimalOrDigits(s string) bool {
+	dot := false
+	for i, r := range s {
+		switch {
+		case unicode.IsDigit(r):
+		case r == '.' && !dot && i > 0:
+			dot = true
+		default:
+			return false
+		}
+	}
+	return s != ""
+}
+
+func romanValue(s string) int {
+	vals := map[byte]int{'i': 1, 'v': 5, 'x': 10}
+	total := 0
+	for i := 0; i < len(s); i++ {
+		v := vals[s[i]]
+		if i+1 < len(s) && v < vals[s[i+1]] {
+			total -= v
+		} else {
+			total += v
+		}
+	}
+	return total
+}
+
+// titleSegments splits a title field on ":", a spaced dash and brackets and
+// normalises each piece. Empty pieces are dropped. When every piece is
+// edition words the title is kept as written rather than emptied.
+func titleSegments(s string) [][]string {
+	parts := segSplitRe.Split(s, -1)
+	for _, strip := range []bool{true, false} {
+		var out [][]string
+		for _, part := range parts {
+			if toks := segTokens(part, strip); len(toks) > 0 {
+				out = append(out, toks)
+			}
+		}
+		// A title that is nothing but an edition word ("Novel") keeps it.
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
+}
+
+// formTokens is the normalised word sequence of a whole title field: its
+// segments in order.
+func formTokens(s string) []string {
+	var out []string
+	for _, seg := range titleSegments(s) {
+		out = append(out, seg...)
+	}
+	return out
+}
+
+// titleForms are the whole forms of one side of a pair, as joined strings: the
+// title, or the title and subtitle, each also behind the series name. A side
+// with a subtitle has NO bare-title forms: the bare title is a part of what it
+// says, not the whole of it.
+func titleForms(title, subtitle, series string) []string {
+	t, sub, sr := formTokens(title), formTokens(subtitle), formTokens(series)
+	if len(t) == 0 {
+		return nil
+	}
+	var out []string
+	add := func(parts ...[]string) {
+		var all []string
+		for _, p := range parts {
+			all = append(all, p...)
+		}
+		if f := strings.Join(all, " "); !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	if len(sub) == 0 {
+		add(t)
+		if len(sr) > 0 {
+			add(sr, t)
+		}
+		return out
+	}
+	add(t, sub)
+	if len(sr) > 0 {
+		add(sr, t, sub)
+	}
+	return out
+}
+
+// fieldText is a title field and its subtitle as one text, the subtitle a
+// segment of its own.
+func fieldText(title, subtitle string) string {
+	if strings.TrimSpace(subtitle) == "" {
+		return title
+	}
+	return title + ": " + subtitle
+}
+
+// words returns the identity words (not numbers, not joining words) and the
+// sorted cardinal numbers of a token sequence.
+func wordsAndNums(toks []string) (map[string]bool, []string) {
+	words := map[string]bool{}
+	var nums []string
+	for _, t := range toks {
+		switch {
+		case isNumTok(t):
+			nums = append(nums, t)
+		case !fieldStop[t]:
+			words[t] = true
+		}
+	}
+	slices.SortFunc(nums, func(a, b string) int {
+		x, _ := strconv.ParseFloat(a[1:], 64)
+		y, _ := strconv.ParseFloat(b[1:], 64)
+		switch {
+		case x < y:
+			return -1
+		case x > y:
+			return 1
+		}
+		return 0
+	})
+	return words, nums
+}
+
+func subsetOf(a, b map[string]bool) bool {
+	for w := range a {
+		if !b[w] {
+			return false
+		}
+	}
+	return true
+}
+
+func intersects(a, b map[string]bool) bool {
+	for w := range a {
+		if b[w] {
+			return true
+		}
+	}
+	return false
+}
+
+// subMultiset reports whether every element of a is in b, counting repeats.
+func subMultiset(a, b []string) bool {
+	count := map[string]int{}
+	for _, x := range b {
+		count[x]++
+	}
+	for _, x := range a {
+		if count[x] == 0 {
+			return false
+		}
+		count[x]--
+	}
+	return true
+}
+
+// compareTitleFields classifies two TITLE fields (each a title and, when the
+// side has one, its subtitle). The result is the same with the two swapped.
+// It decides nothing about agreement beyond classEqual: the check agrees by
+// form equality (checkTitle), and this only separates a conflict from a pair
+// that merely is not confirmed.
+func compareTitleFields(a, b string) titleCmp {
+	sa, sb := titleSegments(a), titleSegments(b)
+	if len(sa) == 0 || len(sb) == 0 {
+		return titleCmp{class: classUnrelated}
+	}
+	fa, fb := formTokens(a), formTokens(b)
+	if slices.Equal(fa, fb) {
+		return titleCmp{class: classEqual}
+	}
+	wa, na := wordsAndNums(fa)
+	wb, nb := wordsAndNums(fb)
+
+	// The same words with numbers that differ and neither a part of the other
+	// ("Books 1-3" is a part of "Book 1"): another book of the same name.
+	related := intersects(wa, wb) || (len(wa) == 0 && len(wb) == 0)
+	if related && len(na) > 0 && len(nb) > 0 && !slices.Equal(na, nb) && !subMultiset(na, nb) && !subMultiset(nb, na) {
+		return titleCmp{class: classConflictNumber, note: "same words, different numbers (" + numsText(na) + " vs " + numsText(nb) + ")"}
+	}
+
+	// A whole segment in common and a segment of its own on each side.
+	remA, remB, shared := unmatchedSegments(sa, sb)
+	if shared && len(remA) > 0 && len(remB) > 0 {
+		return titleCmp{class: classConflictWords, note: "both share a segment, then continue differently: " +
+			strconv.Quote(strings.Join(remA[0], " ")) + " vs " + strconv.Quote(strings.Join(remB[0], " "))}
+	}
+	if shared {
+		return titleCmp{class: classNeutral, note: "one title continues past the text both share"}
+	}
+
+	switch {
+	case len(wa) > 0 && len(wb) > 0 && (subsetOf(wa, wb) || subsetOf(wb, wa)):
+		return titleCmp{class: classNeutral, note: "one title holds words or a number the other lacks"}
+	case tokenOverlap(fa, fb) >= 0.5:
+		return titleCmp{class: classNeutral, note: "the titles share part of their words"}
+	}
+	return titleCmp{class: classUnrelated}
+}
+
+// tokenOverlap is the share of identity tokens two normalised token sequences
+// have in common: |A and B| / max(|A|, |B|) over the tokens that are not
+// titleStop words, 0 when they share only numbers and either side has a word
+// ("Book 1" / "Part 1" share the 1 and nothing else). It reads the tokens
+// formTokens made, so a number is the same token however it is spelled ("one",
+// "I" and "1"); titleSim, which reads raw text, scored "Year One" against "Year
+// I" differently from "Year 1" and made the class depend on the spelling.
+func tokenOverlap(a, b []string) float64 {
+	set := func(toks []string) map[string]bool {
+		m := map[string]bool{}
+		for _, t := range toks {
+			if !titleStop[t] {
+				m[t] = true
+			}
+		}
+		return m
+	}
+	A, B := set(a), set(b)
+	if len(A) == 0 || len(B) == 0 {
+		return 0
+	}
+	inter, shareWord := 0, false
+	for t := range A {
+		if B[t] {
+			inter++
+			if !isNumTok(t) {
+				shareWord = true
+			}
+		}
+	}
+	if !shareWord {
+		// Checked before the stop words are dropped, as titleSim does: "Book 1"
+		// has a word (book), so sharing only the 1 with "Part 1" is no match.
+		for _, toks := range [][]string{a, b} {
+			for _, t := range toks {
+				if !isNumTok(t) {
+					return 0
+				}
+			}
+		}
+	}
+	return float64(inter) / float64(max(len(A), len(B)))
+}
+
+// unmatchedSegments pairs equal segments of a and b (each used once) and
+// returns what is left on each side. shared reports whether any pair matched.
+func unmatchedSegments(a, b [][]string) (remA, remB [][]string, shared bool) {
+	used := make([]bool, len(b))
+	for _, x := range a {
+		hit := false
+		for j, y := range b {
+			if !used[j] && slices.Equal(x, y) {
+				used[j], hit, shared = true, true, true
+				break
+			}
+		}
+		if !hit {
+			remA = append(remA, x)
+		}
+	}
+	for j, y := range b {
+		if !used[j] {
+			remB = append(remB, y)
+		}
+	}
+	return remA, remB, shared
+}
+
+func numsText(ns []string) string {
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = n[1:]
+	}
+	return strings.Join(parts, ",")
+}
