@@ -1,10 +1,13 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.14.0
+# version: 1.15.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
-# last-edited: 2026-10-26
+# last-edited: 2026-11-16
 #
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.14,<3.15"
+# # Upper bound is deliberate: the default python3 on the Mac is 3.15, and
+# # uvicorn[standard] has no cp315 wheels yet, so an open ">=3.14" makes uv
+# # pick 3.15 and compile from source. Lift the cap once 3.15 wheels exist.
 # dependencies = [
 #   "mlx-whisper>=0.4.0",
 #   "fastapi>=0.111",
