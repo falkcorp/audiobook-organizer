@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus_bad_asin_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e8a2d93-7c14-4b60-8f3e-a1d9c06b7e52
 // last-edited: 2026-11-17
 
@@ -9,14 +9,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"golang.org/x/time/rate"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
 )
 
 // These build the client on a plain http.Client: the 2 rps token bucket of the
@@ -259,37 +263,104 @@ func TestFailureCause_LimiterDeadlineRefusal(t *testing.T) {
 	}
 }
 
-// A region that times out ends the lookup: the next region would wait the same
-// way. One request, not one per region, bounds a hung Audnexus to one region's
-// worst case. A region that answers 5xx is another matter (the ASIN may live in
-// the next one) and still tries on, pinned by the next test.
-type timeoutTransport struct {
-	mu    sync.Mutex
-	calls int
-	err   error
+// regionTransport records the requests a fake Audnexus saw.
+type regionTransport struct {
+	mu      sync.Mutex
+	regions []string
+	budgets []time.Duration
 }
 
-func (tt *timeoutTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	tt.mu.Lock()
-	tt.calls++
-	tt.mu.Unlock()
-	return nil, tt.err
+func (rt *regionTransport) asked() []string {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]string(nil), rt.regions...)
 }
 
-func TestAudnexusLookup_StopsAtTheFirstRegionThatTimesOut(t *testing.T) {
+func foundResponse(r *http.Request) *http.Response {
+	return &http.Response{StatusCode: 200, Header: http.Header{}, Request: r,
+		Body: io.NopCloser(strings.NewReader(`{"asin":"B0GOTHAM99","title":"Gotham Year One"}`))}
+}
+
+func regionClient(answer func(region string, r *http.Request) (*http.Response, error)) (*AudnexusClient, *regionTransport) {
+	rt := &regionTransport{}
+	c := &AudnexusClient{baseURL: "http://192.0.2.1"}
+	c.httpClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		region := r.URL.Query().Get("region")
+		left, _ := providerhttp.AttemptBudgetLeft(r.Context())
+		rt.mu.Lock()
+		rt.regions = append(rt.regions, region)
+		rt.budgets = append(rt.budgets, left)
+		rt.mu.Unlock()
+		return answer(region, r)
+	})}
+	return c, rt
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// A region that times out must not hide the one that has the book: Audnexus's
+// default store can be slow for an ASIN a regional store serves at once, and
+// main walked on to it. The walk is bounded by the budget (providerhttp), not by
+// stopping.
+func TestAudnexusLookup_ATimedOutRegionDoesNotHideALaterOne(t *testing.T) {
+	c, rt := regionClient(func(region string, r *http.Request) (*http.Response, error) {
+		if region == "" {
+			return nil, context.DeadlineExceeded // the default store hung
+		}
+		return foundResponse(r), nil
+	})
+	meta, err := c.LookupByASINInRegions(context.Background(), "B0GOTHAM99", []string{"", "uk", "au"})
+	if err != nil || meta == nil || meta.ASIN != "B0GOTHAM99" {
+		t.Fatalf("lookup = %+v, %v; want the uk store's answer", meta, err)
+	}
+	if got := rt.asked(); len(got) != 2 {
+		t.Fatalf("requests = %v, want 2 (default, uk): at most one per region, none repeated", got)
+	}
+}
+
+func TestAudnexusLookup_EveryRegionHangingIsOneRequestEachAndATimeout(t *testing.T) {
+	c, rt := regionClient(func(string, *http.Request) (*http.Response, error) { return nil, context.DeadlineExceeded })
+	_, err := c.LookupByASINInRegions(context.Background(), "B0GOTHAM99", []string{"", "uk", "au"})
+	if FailureCause(err) != CauseTimeout {
+		t.Fatalf("err = %v (cause %q), want a timeout", err, FailureCause(err))
+	}
+	if got := rt.asked(); len(got) != 3 {
+		t.Fatalf("requests = %v, want 3 (one per region, no in-lookup retry)", got)
+	}
+}
+
+// The walk carries one 30 s budget on the context every region's request sees,
+// which the transport charges and honours (providerhttp's tests pin that).
+func TestAudnexusLookup_EveryRegionSharesOneBudget(t *testing.T) {
+	c, rt := regionClient(func(string, *http.Request) (*http.Response, error) { return nil, context.DeadlineExceeded })
+	_, _ = c.LookupByASINInRegions(context.Background(), "B0GOTHAM99", []string{"", "uk", "au"})
+	for i, left := range rt.budgets {
+		if left != audnexusLookupBudget {
+			t.Fatalf("request %d saw budget %v, want the shared %v (the fake spends none)", i, left, audnexusLookupBudget)
+		}
+	}
+	if audnexusLookupBudget != 30*time.Second {
+		t.Fatalf("audnexusLookupBudget = %v, want main's worst case of 30 s", audnexusLookupBudget)
+	}
+}
+
+// What cannot be sent ends the walk at once: the limiter refusing a call that
+// could not be served before the caller's deadline, and a spent budget.
+func TestAudnexusLookup_LimiterRefusalAndSpentBudgetEndTheWalk(t *testing.T) {
 	for name, terr := range map[string]error{
-		"attempt deadline": context.DeadlineExceeded,
-		"limiter refusal":  errors.New("rate limit wait: rate: Wait(n=1) would exceed context deadline"),
+		"limiter refusal": errors.New("rate limit wait: rate: Wait(n=1) would exceed context deadline"),
+		"budget spent":    fmt.Errorf("providerhttp audnexus: %w", providerhttp.ErrAttemptBudgetSpent),
 	} {
 		t.Run(name, func(t *testing.T) {
-			tt := &timeoutTransport{err: terr}
-			c := &AudnexusClient{httpClient: &http.Client{Transport: tt}, baseURL: "http://192.0.2.1"}
+			c, rt := regionClient(func(string, *http.Request) (*http.Response, error) { return nil, terr })
 			_, err := c.LookupByASINInRegions(context.Background(), "B0GOTHAM99", []string{"", "uk", "au"})
 			if FailureCause(err) != CauseTimeout {
 				t.Fatalf("err = %v (cause %q), want a timeout", err, FailureCause(err))
 			}
-			if tt.calls != 1 {
-				t.Fatalf("requests = %d, want 1: a timed-out region must end the lookup", tt.calls)
+			if got := rt.asked(); len(got) != 1 {
+				t.Fatalf("requests = %v, want 1: nothing more can be sent", got)
 			}
 		})
 	}

@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.45.1
+// version: 1.46.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -1500,6 +1500,10 @@ func (mfs *Service) searchMetadataForBook(
 	// recorded as that provider's fresh "nothing" (noSourceAnswered,
 	// cacheSearchResponse).
 	lookupFailed := map[string]error{}
+	// asinHeard names the providers the direct ASIN lookup below got an answer
+	// from ("no such ASIN" included): the owed-source bookkeeping counts them as
+	// heard from (SearchMetadataResponse.SourcesASINAnswered).
+	var asinHeard []string
 	providerName := func(id, fallback string) string {
 		for _, st := range states {
 			if metadata.ProviderIDOf(st.src) == id {
@@ -1512,6 +1516,8 @@ func (mfs *Service) searchMetadataForBook(
 		result, err := mfs.cachedLookupASIN(fp, metadata.SourceIDAudible, asinToLookup)
 		if err != nil {
 			lookupFailed[providerName(metadata.SourceIDAudible, "Audible")] = err
+		} else {
+			asinHeard = append(asinHeard, providerName(metadata.SourceIDAudible, "Audible"))
 		}
 		if err != nil || result == nil {
 			searchFanoutLog.Debug("search ASIN lookup on Audible failed, trying Audnexus: asin=%s err=%v",
@@ -1521,6 +1527,7 @@ func (mfs *Service) searchMetadataForBook(
 				lookupFailed[providerName(metadata.SourceIDAudnexus, "Audnexus (Audible)")] = err
 			} else {
 				delete(lookupFailed, providerName(metadata.SourceIDAudible, "Audible"))
+				asinHeard = append(asinHeard, providerName(metadata.SourceIDAudnexus, "Audnexus (Audible)"))
 			}
 		}
 		if err == nil && result != nil && strong.positionConflicts(*result) {
@@ -1679,22 +1686,23 @@ func (mfs *Service) searchMetadataForBook(
 		logger.SanitizeLogValue(searchTitle), len(variants))
 
 	return &SearchMetadataResponse{
-		Results:           candidates,
-		Query:             searchTitle,
-		SourcesTried:      sourcesTried,
-		SourcesFailed:     sourcesFailed,
-		SourcesAnswered:   sourcesAnswered,
-		SourcesAsked:      sourcesAsked,
-		InputFingerprint:  in.fingerprint(book.Title),
-		LegacyFingerprint: in.legacyFingerprint(book.Title),
-		BookASIN:          trimmedASIN(book),
-		carryFilter:       strong.filterCarried,
-		sourceErrs:        sourceErrs,
-		mergeCached:       opts.MergeWithCached,
-		mergeRank:         opts.MergeRank,
-		catalogAnswered:   catalogMatch != nil,
-		carryFromHash:     opts.CarryFromSourceHash,
-		carryFromRow:      opts.CarryFromRow,
+		Results:             candidates,
+		Query:               searchTitle,
+		SourcesTried:        sourcesTried,
+		SourcesFailed:       sourcesFailed,
+		SourcesAnswered:     sourcesAnswered,
+		SourcesAsked:        sourcesAsked,
+		SourcesASINAnswered: slices.DeleteFunc(asinHeard, func(n string) bool { _, failed := lookupFailed[n]; return failed }),
+		InputFingerprint:    in.fingerprint(book.Title),
+		LegacyFingerprint:   in.legacyFingerprint(book.Title),
+		BookASIN:            trimmedASIN(book),
+		carryFilter:         strong.filterCarried,
+		sourceErrs:          sourceErrs,
+		mergeCached:         opts.MergeWithCached,
+		mergeRank:           opts.MergeRank,
+		catalogAnswered:     catalogMatch != nil,
+		carryFromHash:       opts.CarryFromSourceHash,
+		carryFromRow:        opts.CarryFromRow,
 	}, nil
 }
 

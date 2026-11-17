@@ -1,7 +1,7 @@
 // file: internal/books/store/iface_metadata.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 //
 // METADATA-CACHED-MATCHER: storage surface for the per-book
 // metadata-candidate cache. Cache lives under PebbleDB key prefix
@@ -155,8 +155,9 @@ type OwedSource struct {
 
 // OwedBackoff is the wait before the re-ask that follows the n-th failed ask
 // (index n-1): 6 h, then 24 h, 3 d, 7 d. A fifth failure ends the re-asks
-// (OwedMaxAsks), after about 11.5 days -- inside the row's 30-day TTL, and
-// short of "every tick, forever" for an ASIN the provider will never answer.
+// (OwedMaxAsks), 270 h = 11.25 days after the first failure (6 + 24 + 72 + 168
+// h) -- inside the row's 30-day TTL, and short of "every tick, forever" for an
+// ASIN the provider will never answer.
 // A source's asks are the only ones this spends: the fallback providers, and
 // so the Google Books budget, are never re-asked on its account.
 var OwedBackoff = [...]time.Duration{6 * time.Hour, 24 * time.Hour, 72 * time.Hour, 168 * time.Hour}
@@ -166,9 +167,14 @@ var OwedBackoff = [...]time.Duration{6 * time.Hour, 24 * time.Hour, 72 * time.Ho
 const OwedMaxAsks = len(OwedBackoff) + 1
 
 // Exhausted reports that the source has used all OwedMaxAsks asks: the
-// scheduled selection and the verdict no longer re-ask it. A forced refetch,
-// a change of the book's search inputs or ASIN, or the row's refetch after its
-// TTL asks it again.
+// scheduled selection and the verdict no longer re-ask it. What starts it over:
+//   - a forced refetch (an explicit owner retry) that asks the source and sees it
+//     fail again restarts its schedule at the first ask (Attempts 1, 6 h), not
+//     one more step on a spent one;
+//   - a refetch of the row after its TTL does not carry the debt: a source that
+//     fails in it is recorded as a first failure, with a fresh schedule;
+//   - a change of the book's search inputs or ASIN drops the debt with the row's
+//     questions, and the batch fetch asks everything again.
 func (o OwedSource) Exhausted() bool { return o.Attempts >= OwedMaxAsks }
 
 // NextAttempt is when the source is next due, false when it is exhausted.
@@ -216,6 +222,29 @@ func (c *MetadataCandidateCache) OwedPending() bool {
 		}
 	}
 	return false
+}
+
+// OwedPendingSources returns, sorted, the sources the row owes an answer that
+// can still be re-asked (not exhausted). The review lane's "still owed" state.
+func (c *MetadataCandidateCache) OwedPendingSources() []string { return c.owedSources(false) }
+
+// OwedExhaustedSources returns, sorted, the sources that used all OwedMaxAsks
+// asks and are left alone: books that gave up on a source. The review lane's
+// "gave up" state.
+func (c *MetadataCandidateCache) OwedExhaustedSources() []string { return c.owedSources(true) }
+
+func (c *MetadataCandidateCache) owedSources(exhausted bool) []string {
+	if c == nil {
+		return nil
+	}
+	var out []string
+	for name, o := range c.OwedSources {
+		if o.Exhausted() == exhausted {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // FallbackDeferred reports whether a fallback provider's last attempt for
@@ -306,6 +335,10 @@ type MetadataCacheSummary struct {
 	// selection reads the row (and its backoff) for a book that holds
 	// candidates and has no fallback provider enabled.
 	Owed bool `json:"owed,omitempty"`
+	// OwedExhausted mirrors "any owed source used all its asks"
+	// (MetadataCandidateCache.OwedExhaustedSources): the candidate fetch
+	// selection counts the books that gave up on a source.
+	OwedExhausted bool `json:"owed_exhausted,omitempty"`
 }
 
 // MetadataCacheStore is the persistence layer for the per-book

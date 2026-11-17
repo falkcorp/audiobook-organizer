@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.46.4
+// version: 1.47.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -978,6 +978,8 @@ func (r *reviewableRow) result(book *database.Book, freshCutoff time.Time) metab
 		IsFresh:          &isFresh,
 		Stale:            &stale,
 		FallbackDeferred: r.row.fallbackDeferred,
+		OwedPending:      r.row.owedPending,
+		OwedExhausted:    r.row.owedExhausted,
 		// The same hash the apply recomputes from the same cache row: every
 		// review-page apply button echoes it back in its pin. Hashed over the
 		// full stored candidate (with its description), so a pageResult
@@ -1021,6 +1023,8 @@ func (u *unreviewableRow) result(book *database.Book, freshCutoff time.Time) met
 		IsFresh:          &isFresh,
 		Stale:            &stale,
 		FallbackDeferred: u.row.fallbackDeferred,
+		OwedPending:      u.row.owedPending,
+		OwedExhausted:    u.row.owedExhausted,
 		ReviewStatus:     reviewStatus,
 	}
 }

@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/books/store (MetadataCandidateCache) — re-exported
@@ -541,7 +541,18 @@ func (mfs *Service) FetchAndCache(ctx context.Context, bookID, query, author, na
 	if err := noSourceAnswered(resp); err != nil {
 		return nil, err
 	}
-	return mfs.cacheSearchResponse(bookID, query, author, narrator, series, resp), nil
+	entry := mfs.cacheSearchResponse(bookID, query, author, narrator, series, resp)
+	// The search dialog's plain fetch is this method's caller, and no op wraps
+	// it: so what it learned about the chain's sources is recorded here -- a
+	// source that failed owes the row an answer (the fetch op re-asks it on its
+	// backoff), one that answered does not -- or the dialog would write a row
+	// that forgets a debt the op had recorded. A dialog refresh (BypassFetchCache)
+	// is an owner retry: it restarts a spent schedule (OwedUpdate.Reset). A
+	// failed record leaves the row as it was and is not the owner's error.
+	if oerr := mfs.recordSearchOwed(entry, resp, opts.BypassFetchCache); oerr != nil {
+		slog.Warn("metafetch: owed sources not recorded", "id", logger.SanitizeLogValue(bookID), "error", logger.SanitizeLogValue(oerr.Error()))
+	}
+	return entry, nil
 }
 
 // FetchAndCacheLimited is FetchAndCache for batch callers that must throttle
@@ -671,11 +682,13 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	// vouched for under other hashed inputs (SearchOptions.CarryFromSourceHash):
 	// its candidates are merged, preserved on an empty answer, or carried
 	// exactly as a same-inputs row's are, instead of being replaced.
-	var prev *MetadataCandidateCache
+	var prev, existing *MetadataCandidateCache
 	if mfs.db != nil {
-		if p, perr := mfs.db.GetMetadataCache(bookID); perr == nil && p != nil &&
-			(p.SourceHash == sourceHash || (resp.carryFromRow && p.SourceHash == resp.carryFromHash)) {
-			prev = p
+		if p, perr := mfs.db.GetMetadataCache(bookID); perr == nil && p != nil {
+			existing = p
+			if p.SourceHash == sourceHash || (resp.carryFromRow && p.SourceHash == resp.carryFromHash) {
+				prev = p
+			}
 		}
 	}
 	// Same inputs, the same questions and the same ASIN: the fallback
@@ -685,15 +698,27 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	// A row with no FetchedForASIN (written before 2026-10-05) counts as
 	// fetched for the ASIN the book holds now -- the preserve-on-empty rule
 	// below: any replacement since was stamped on the row by the store.
-	sameASIN := prev != nil && (strings.TrimSpace(prev.FetchedForASIN) == "" ||
-		strings.EqualFold(strings.TrimSpace(prev.FetchedForASIN), strings.TrimSpace(resp.BookASIN)))
+	sameASIN := prev != nil && rowFetchedForASIN(prev, resp.BookASIN)
 	sameQuestions := prev != nil && prev.SearchFingerprint != "" && prev.SearchFingerprint == entry.SearchFingerprint
 	if sameQuestions && sameASIN {
 		entry.FallbackAttempts = prev.FallbackAttempts
-		// A source this search asked and heard from no longer owes its answer;
-		// the others still do. With other questions or another ASIN the debt
-		// is another one and is dropped (the batch fetch asks everything again).
-		entry.OwedSources = owedAfterSearch(prev.OwedSources, resp)
+	}
+	// The debt a row owes a chain source (OwedSources) belongs to the book's
+	// QUESTIONS and ASIN, not to the hashed hints of whichever caller wrote the
+	// row: the search dialog's plain fetch hashes no inputs and a batch fetch
+	// hashes the query, yet both ask the same questions. So it is carried from
+	// the book's existing row whenever the fingerprints and the ASIN match,
+	// whatever hash that row carries, or the owner opening the dialog would
+	// silently forgive Audnexus and park the book again. A source this search
+	// asked and heard from no longer owes its answer; the others still do. With
+	// other questions or another ASIN the debt is another one and is dropped
+	// (the batch fetch asks everything again), and so is the debt of a row past
+	// its TTL: a source that fails in the refetch of one starts its schedule
+	// afresh (OwedSource.Exhausted).
+	if ex := existing; ex != nil && len(ex.OwedSources) > 0 && ex.SearchFingerprint != "" &&
+		ex.SearchFingerprint == entry.SearchFingerprint && rowFetchedForASIN(ex, resp.BookASIN) &&
+		nowUTC().Sub(ex.FetchedAt) < database.MetadataCacheTTL {
+		entry.OwedSources = owedAfterSearch(ex.OwedSources, resp)
 	}
 
 	switch {
@@ -1129,6 +1154,17 @@ type OwedUpdate struct {
 	// Answered names the sources that answered, with candidates or with
 	// nothing: they no longer owe the row an answer.
 	Answered []string
+	// Reset marks an explicit retry (a forced refetch): a source in Failed that
+	// was already owed restarts its schedule at the first ask (Attempts 1, Since
+	// now) instead of taking one more step on a spent one.
+	Reset bool
+	// Seen is the LastAttempt each owed source had on the row the caller read
+	// when it decided to ask (the zero time for a source that was not owed
+	// then). When it is non-nil, a failed source is charged only if the row
+	// still says that under the row lock: another op that asked the same book
+	// in the same window already charged it, and one window is one ask. nil
+	// charges unconditionally (a caller that did not read the row first).
+	Seen map[string]time.Time
 }
 
 // AnsweredSources returns the sources of resp that were asked and answered:
@@ -1136,7 +1172,9 @@ type OwedUpdate struct {
 // source with nothing to be asked (Audnexus for a book with no ASIN) is
 // "answered" for the per-provider bookkeeping but said nothing about the book,
 // so it is counted only when the response does not name what it asked, as
-// noSourceAnswered does.
+// noSourceAnswered does. A provider the search's direct ASIN lookup heard from
+// (SourcesASINAnswered) is answered as well: a full search asks Audnexus no
+// other way.
 func (r *SearchMetadataResponse) AnsweredSources() []string {
 	if r == nil {
 		return nil
@@ -1148,6 +1186,11 @@ func (r *SearchMetadataResponse) AnsweredSources() []string {
 	var out []string
 	for _, n := range r.SourcesAnswered {
 		if len(asked) == 0 || asked[n] {
+			out = append(out, n)
+		}
+	}
+	for _, n := range r.SourcesASINAnswered {
+		if _, failed := r.SourcesFailed[n]; !failed && !slices.Contains(out, n) {
 			out = append(out, n)
 		}
 	}
@@ -1173,6 +1216,20 @@ func owedAfterSearch(prev map[string]database.OwedSource, resp *SearchMetadataRe
 	return out
 }
 
+// rowFetchedForASIN reports whether row's candidates were fetched for the ASIN
+// the book holds now (bookASIN); a row with no FetchedForASIN (written before
+// 2026-10-05) counts as fetched for it.
+func rowFetchedForASIN(row *MetadataCandidateCache, bookASIN string) bool {
+	return strings.TrimSpace(row.FetchedForASIN) == "" ||
+		strings.EqualFold(strings.TrimSpace(row.FetchedForASIN), strings.TrimSpace(bookASIN))
+}
+
+// Now is the service's clock (the same one the cache's freshness and the owed
+// backoff read), so a caller that decides what is due -- the candidate fetch's
+// selection -- agrees with the verdict and the recorder even when a test moves
+// it.
+func (mfs *Service) Now() time.Time { return nowUTC() }
+
 // owedCountsAsAsk reports whether a failure with this cause reached the
 // provider and so uses one of the source's OwedMaxAsks asks. A hold (an open
 // breaker, a throttle registry entry) sent nothing: it re-dates the backoff but
@@ -1190,17 +1247,17 @@ func owedCountsAsAsk(cause string) bool { return cause != metadata.CauseHeld }
 // provider's (whose deferrals FallbackAttempts keeps), and because a search
 // that heard from nobody writes no row at all. Whatever the fallback wrote in
 // between carried the owed map across (cacheSearchResponse).
-func (mfs *Service) RecordChainOwed(bookID, sourceHash, fingerprint string, o OwedUpdate) error {
+func (mfs *Service) RecordChainOwed(bookID, sourceHash, fingerprint string, o OwedUpdate) (gaveUp []string, err error) {
 	if mfs == nil || mfs.db == nil || (len(o.Failed) == 0 && len(o.Answered) == 0) {
-		return nil
+		return nil, nil
 	}
 	defer mfs.lockRow(bookID)()
 	entry, err := mfs.db.GetMetadataCache(bookID)
 	if err != nil {
-		return fmt.Errorf("read cache row for %s: %w", bookID, err)
+		return nil, fmt.Errorf("read cache row for %s: %w", bookID, err)
 	}
 	if entry == nil || entry.SourceHash != sourceHash || entry.SearchFingerprint != fingerprint {
-		return nil
+		return nil, nil
 	}
 	now := nowUTC()
 	next := make(map[string]database.OwedSource, len(entry.OwedSources)+len(o.Failed))
@@ -1214,27 +1271,87 @@ func (mfs *Service) RecordChainOwed(bookID, sourceHash, fingerprint string, o Ow
 	}
 	for name, cause := range o.Failed {
 		cur, had := next[name]
+		if o.Seen != nil && had && !cur.LastAttempt.Equal(o.Seen[name]) {
+			// Another writer charged this window while this one was asking. A
+			// row that no longer owes the source at all (a refetch past the TTL
+			// dropped the debt) is no such charge: this failure is its first.
+			continue
+		}
+		if had && o.Reset {
+			cur = database.OwedSource{}
+			had = false
+		}
 		if !had {
 			cur.Since = now
 		}
-		if owedCountsAsAsk(cause) {
+		wasSpent := cur.Exhausted()
+		if owedCountsAsAsk(cause) && !wasSpent {
+			// A spent source is not charged further (a search the scheduler would
+			// not have sent, the dialog's, can still ask it): the count stays at
+			// the cap, which is what "exhausted" is read from.
 			cur.Attempts++
 		}
 		cur.LastAttempt, cur.Cause = now, cause
 		next[name] = cur
 		changed = true
+		if !wasSpent && cur.Exhausted() {
+			gaveUp = append(gaveUp, name)
+		}
 	}
+	slices.Sort(gaveUp)
 	if !changed {
-		return nil
+		return nil, nil
 	}
 	if len(next) == 0 {
 		next = nil
 	}
 	entry.OwedSources = next
 	if err := mfs.db.PutMetadataCache(entry); err != nil {
-		return fmt.Errorf("write owed sources for %s: %w", bookID, err)
+		return nil, fmt.Errorf("write owed sources for %s: %w", bookID, err)
 	}
-	return nil
+	return gaveUp, nil
+}
+
+// OwedUpdateOf is what resp (a chain search's response) says about the chain's
+// sources, for RecordChainOwed: each source that failed with its cause
+// (metadata.FailureCause of its own error, else "other"), and each that was asked
+// and answered. Only the chain's own sources (active: the names a re-ask can
+// name, ActiveSourceNames) are owed: a failure filed under another label (the
+// search's direct ASIN lookup, which enriches a runtime) is no source the verdict
+// could re-ask. A nil resp (the search failed before it ran) says nothing.
+func OwedUpdateOf(resp *SearchMetadataResponse, active []string) OwedUpdate {
+	if resp == nil {
+		return OwedUpdate{}
+	}
+	u := OwedUpdate{Answered: resp.AnsweredSources()}
+	if len(resp.SourcesFailed) > 0 {
+		errs := resp.SourceErrors()
+		u.Failed = make(map[string]string, len(resp.SourcesFailed))
+		for name := range resp.SourcesFailed {
+			if !slices.Contains(active, name) {
+				continue
+			}
+			cause := metadata.FailureCause(errs[name])
+			if cause == "" {
+				cause = metadata.CauseOther
+			}
+			u.Failed[name] = cause
+		}
+	}
+	return u
+}
+
+// recordSearchOwed records what a search that wrote entry learned about the
+// chain's sources onto that row (RecordChainOwed, whose sourceHash is the
+// row's own). A nil entry or response says nothing; reset marks an owner retry.
+func (mfs *Service) recordSearchOwed(entry *MetadataCandidateCache, resp *SearchMetadataResponse, reset bool) error {
+	if mfs == nil || entry == nil || resp == nil {
+		return nil
+	}
+	u := OwedUpdateOf(resp, mfs.ActiveSourceNames())
+	u.Reset = reset
+	_, err := mfs.RecordChainOwed(entry.BookID, entry.SourceHash, resp.InputFingerprint, u)
+	return err
 }
 
 // ClearDeferredFallbackAttempts drops the unsettled (deferred) fallback

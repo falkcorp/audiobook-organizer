@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.21.0
+// version: 1.23.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -176,6 +176,20 @@ type CandidateResult struct {
 	// The run's refresh summary counts by it. Both omitted when every source
 	// answered.
 	FailedSources []string `json:"failed_sources,omitempty"`
+	// OwedGaveUp names the chain sources whose ask in this run used up the
+	// row's asks (database.OwedMaxAsks): the book is left alone for them until an
+	// owner retry (a forced refetch) or the row's TTL refetch starts a fresh
+	// schedule. Additive; rows from before it decode with none.
+	OwedGaveUp []string `json:"owed_gave_up,omitempty"`
+	// OwedPending and OwedExhausted are what the book's cache row says NOW about
+	// the chain sources it owes an answer (database.MetadataCandidateCache.
+	// OwedSources), served on the review lane's rows (not a fetch run's):
+	// pending ones will be asked again on the backoff (database.OwedBackoff),
+	// exhausted ones used all database.OwedMaxAsks asks and are left alone until
+	// an owner retry or the row's TTL refetch. Source display names, sorted;
+	// additive, omitted when empty.
+	OwedPending   []string `json:"owed_pending,omitempty"`
+	OwedExhausted []string `json:"owed_exhausted,omitempty"`
 	ErrorCause    string   `json:"error_cause,omitempty"`
 }
 

@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.test.ts
-// version: 1.5.1
+// version: 1.6.0
 // guid: a80c5f34-7d16-4e92-b503-6c1f9a27e408
-// last-edited: 2026-10-29
+// last-edited: 2026-11-17
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -12,6 +12,7 @@ import {
   getRowSx,
   isRowActionable,
   noCandidateLabel,
+  owedSourceChips,
   runtimeDiffers,
   runtimeDiffersFromBook,
   runtimeExceedsUpperBound,
@@ -210,5 +211,38 @@ describe('noCandidateLabel for an identity-stale row', () => {
     expect(l.color).toBe('default');
     expect(l.detail).toMatch(/answer the old title/);
     expect(l.detail).toMatch(/candidate fetch searches the current title/);
+  });
+});
+
+describe('owedSourceChips', () => {
+  it('is empty for a row that owes nothing, with or without the fields', () => {
+    expect(owedSourceChips({})).toEqual([]);
+    expect(owedSourceChips({ owed_pending: [], owed_exhausted: [] })).toEqual([]);
+  });
+
+  it('says a source is still owed, naming it', () => {
+    const [chip, ...rest] = owedSourceChips({ owed_pending: ['Audnexus (Audible)'] });
+    expect(rest).toEqual([]);
+    expect(chip.kind).toBe('owed');
+    expect(chip.label).toBe('Source still owed');
+    expect(chip.color).toBe('warning');
+    expect(chip.detail).toMatch(/Audnexus \(Audible\) could not be asked/);
+  });
+
+  it('says it gave up on a source, naming it and how a retry restarts it', () => {
+    const [chip, ...rest] = owedSourceChips({ owed_exhausted: ['Audnexus (Audible)'] });
+    expect(rest).toEqual([]);
+    expect(chip.kind).toBe('gave_up');
+    expect(chip.label).toBe('Gave up on a source');
+    expect(chip.detail).toMatch(/Audnexus \(Audible\) did not answer after five asks/);
+    expect(chip.detail).toMatch(/Search again/);
+  });
+
+  it('shows both when one source is still owed and another was given up on', () => {
+    const kinds = owedSourceChips({
+      owed_pending: ['Google Books'],
+      owed_exhausted: ['Audnexus (Audible)'],
+    }).map((c) => c.kind);
+    expect(kinds).toEqual(['owed', 'gave_up']);
   });
 });
