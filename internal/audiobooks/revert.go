@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.100.0
+// version: 1.100.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-11-16
 
@@ -413,6 +413,21 @@ type RevertResult struct {
 	// second primary beside the operation's hand-off); the result is
 	// Partial.
 	SettleSkipped []string `json:"settle_skipped,omitempty"`
+}
+
+// RestoredSeriesRows reports whether the revert wrote anything the series
+// caches list: a renamed series put back, a series the operation created removed
+// or one it deleted recreated, or a book's series link restored.
+func (r *RevertResult) RestoredSeriesRows() bool {
+	if r == nil {
+		return false
+	}
+	for _, t := range []string{undo.ChangeTypeSeriesRename, undo.ChangeTypeSeriesCreate, undo.ChangeTypeSeriesRowDelete, undo.RestoredSeriesLink} {
+		if r.RestoredTypes[t] > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Partial reports whether any row of the operation was left un-reverted, or
@@ -955,6 +970,9 @@ func (rs *RevertService) revertLoaded(operationID string, scope *revertScope, ch
 			result.RestoredTypes = map[string]int{}
 		}
 		result.RestoredTypes[c.ChangeType]++
+		if c.ChangeType == "metadata_update" && c.FieldName == "series_id" {
+			result.RestoredTypes[undo.RestoredSeriesLink]++
+		}
 	}
 
 	result.Restored = len(restoredIDs)

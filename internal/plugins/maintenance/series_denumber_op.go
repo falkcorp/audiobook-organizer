@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 3.0.0
+// version: 3.0.1
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-11-16
 
@@ -276,7 +276,9 @@ func planSeriesDenumber(store OpsStore, params SeriesDenumberParams) (*denumberR
 	}
 	counts, cerr := store.GetAllSeriesBookCounts()
 	if cerr != nil {
-		counts = map[int]int{}
+		// Fails closed like every other read here: with no counts every series
+		// reads as empty, which misreports the plan and the empty-series total.
+		return nil, fmt.Errorf("GetAllSeriesBookCounts: %w", cerr)
 	}
 	authors, aerr := store.GetAllAuthors()
 	if aerr != nil {
@@ -792,6 +794,8 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 				log.Warn("series-denumber: not deleting emptied series: its undo row was not written", "series", src.ID, "err", jerr)
 			default:
 				if derr := store.DeleteSeries(src.ID); derr != nil {
+					// The row stays; its undo row finds the series live and does nothing.
+					failed++
 					log.Warn("series-denumber: DeleteSeries failed", "series", src.ID, "err", derr)
 				} else {
 					deleted++

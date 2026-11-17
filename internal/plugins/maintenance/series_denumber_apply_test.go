@@ -762,6 +762,7 @@ func TestRunSeriesDenumber_NeverAppliesAWrongShape(t *testing.T) {
 		{"file part marker, dashed", "Court of Owls-Part03"},
 		{"position of 100 or more", "Court of Owls Book 150"},
 		{"base equal to the author's name", "Bruce Wayne 05"},
+		{"base equal to another author's name", "Alfred Pennyworth 05"},
 		{"base with a leftover trailing digit", "Court of Owls 2 05"},
 		{"two letter base", "Ab 05"},
 		{"chapter base", "Chap-12 03"},
@@ -1010,6 +1011,19 @@ func TestRunSeriesDenumber_FailsClosedWhenGuardCannotAnswer(t *testing.T) {
 	}
 }
 
+func TestRunSeriesDenumber_FailsClosedWithoutBookCounts(t *testing.T) {
+	for _, apply := range []bool{false, true} {
+		l := newDenumberLib(t)
+		l.addSeries(11, "Court of Owls 05", denumberAuthor)
+		l.addBook("owls-5", 11, -1, "")
+		l.store.GetAllSeriesBookCountsFunc = func() (map[int]int, error) { return nil, errors.New("counts unavailable") }
+		if _, err := l.run(fmt.Sprintf(`{"apply": %v}`, apply)); err == nil {
+			t.Errorf("apply=%v: ran without the book counts", apply)
+		}
+		l.assertNoWrites()
+	}
+}
+
 func TestRunSeriesDenumber_FailsClosedWithoutMembership(t *testing.T) {
 	for _, apply := range []bool{false, true} {
 		l := newDenumberLib(t)
@@ -1077,5 +1091,24 @@ func TestRunSeriesDenumber_AFailedWriteKeepsTheSeries(t *testing.T) {
 	}
 	if len(l.changesOfType(undo.ChangeTypeSeriesRowDelete)) != 0 {
 		t.Errorf("a series_row_delete row was written for a series that was kept")
+	}
+}
+
+// A delete that fails is counted as a failure in the summary, and the series
+// stays (its journal row is harmless: the revert finds the series live).
+func TestRunSeriesDenumber_AFailedDeleteIsCounted(t *testing.T) {
+	l := newDenumberLib(t)
+	l.addSeries(10, "Court of Owls", denumberAuthor)
+	l.addSeries(11, "Court of Owls 05", denumberAuthor)
+	l.addBook("owls-5", 11, -1, "")
+	l.store.DeleteSeriesFunc = func(int) error { return errors.New("delete refused") }
+
+	rep := l.mustRun(`{"apply": true}`)
+
+	if l.seriesOf("owls-5") != 10 || l.deleted[11] {
+		t.Fatalf("fixture: book in %d, deleted=%v", l.seriesOf("owls-5"), l.deleted)
+	}
+	if !strings.Contains(joinLogs(rep), "failed 1 ") {
+		t.Errorf("summary %q does not count the failed delete", joinLogs(rep))
 	}
 }

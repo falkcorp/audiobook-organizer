@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/demote.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 609bfb39-82de-4bb5-b398-b84db96913fa
 // last-edited: 2026-11-16
 
@@ -61,6 +61,36 @@ type Candidate struct {
 	// AuthorName is that author's name, "" when unknown. The base-equals-author
 	// check is skipped without it.
 	AuthorName string
+	// Authors is every author name in the library. A base equal to ANY of them is
+	// held, not only the series' own author: "Name 05" under a different author
+	// row for the same person (a pen name, a duplicate) is the same mistake. nil
+	// skips the check.
+	Authors AuthorSet
+}
+
+// AuthorSet is a set of author names compared by their letters and digits only,
+// so case, spacing and punctuation do not hide a match.
+type AuthorSet map[string]struct{}
+
+// NewAuthorSet builds an AuthorSet from names; blank names are skipped.
+func NewAuthorSet(names []string) AuthorSet {
+	set := make(AuthorSet, len(names))
+	for _, n := range names {
+		if k := alnum(n); k != "" {
+			set[k] = struct{}{}
+		}
+	}
+	return set
+}
+
+// Has reports whether name is in the set.
+func (a AuthorSet) Has(name string) bool {
+	k := alnum(name)
+	if k == "" {
+		return false
+	}
+	_, ok := a[k]
+	return ok
 }
 
 // Verdict is a reason a plan must not be applied.
@@ -112,8 +142,8 @@ func Demote(c Candidate) (Verdict, bool) {
 	case c.Position > MaxTrustedPosition:
 		return Verdict{CodeHighPosition, "a position of 100 or more reads as a count or chapter, not a volume"}, true
 
-	case sameName(base, c.AuthorName):
-		return Verdict{CodeAuthorBase, "the base is the author's name, not a series"}, true
+	case sameName(base, c.AuthorName) || c.Authors.Has(base):
+		return Verdict{CodeAuthorBase, "the base is an author's name, not a series"}, true
 
 	case endsInDigit(base):
 		return Verdict{CodeBaseTrailingDigit, "the base still ends in a number, so the name carries two numbers"}, true

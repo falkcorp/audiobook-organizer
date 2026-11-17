@@ -1,5 +1,5 @@
 // file: internal/undo/series_row.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b8e1f64-a207-4d59-9c3e-52d0b7a1e8f3
 // last-edited: 2026-11-16
 
@@ -48,6 +48,12 @@ func NewSeriesSnapshotJSON(s SeriesSnapshot) (string, error) {
 	}
 	return string(b), nil
 }
+
+// RestoredSeriesLink is the extra RestoredTypes key (alongside "metadata_update")
+// a revert counts for each series_id row it restored, so a caller can tell a
+// revert that moved books between series from one that only touched other
+// fields, and drop the series caches (which list books per series) only then.
+const RestoredSeriesLink = "metadata_update:series_id"
 
 // DecodeSeriesCreate parses a ChangeTypeSeriesCreate row.
 func DecodeSeriesCreate(c *database.OperationChange) (SeriesSnapshot, error) {

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber.go
-// version: 3.1.0
+// version: 3.1.1
 // guid: dee834d3-1f7e-453e-9303-85d37479e79d
 // last-edited: 2026-11-16
 
@@ -212,10 +212,16 @@ func SeriesDenumber(in []SeriesInput) []SeriesMergePlan {
 // show -- an audio file's "Part N", a base that is the author's own name, a
 // position of 100 or more, a base of one letter, a series with no author -- and
 // each was found in the "high" tier of a production dry run. authorNames maps an
-// author id to its name for the base-equals-author check; an id it lacks skips
-// that check only. The input is not modified.
+// author id to its name for the base-equals-author check, which compares the base
+// with every author's name, not only the series' own; an empty map skips that
+// check only. The input is not modified.
 func DemotePlans(plans []SeriesMergePlan, authorNames map[int]string) []SeriesMergePlan {
 	out := make([]SeriesMergePlan, len(plans))
+	names := make([]string, 0, len(authorNames))
+	for _, n := range authorNames {
+		names = append(names, n)
+	}
+	authors := sdn.NewAuthorSet(names)
 	for i, pl := range plans {
 		out[i] = pl
 		if pl.Confidence == ConfidenceLow {
@@ -223,7 +229,7 @@ func DemotePlans(plans []SeriesMergePlan, authorNames map[int]string) []SeriesMe
 		}
 		v, held := sdn.Demote(sdn.Candidate{
 			FromName: pl.FromName, Base: pl.IntoName, Position: pl.Position,
-			AuthorID: pl.AuthorID, AuthorName: authorNames[pl.AuthorID],
+			AuthorID: pl.AuthorID, AuthorName: authorNames[pl.AuthorID], Authors: authors,
 		})
 		if !held {
 			continue
