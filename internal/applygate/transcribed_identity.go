@@ -105,7 +105,7 @@ func TranscribedIdentityLifts(book *database.Book, authors Authors, c *metafetch
 // Three blocks are never lifted:
 //
 //   - a conflict between the two title fields ("Hush: Part 1" stored,
-//     "Hush: Part 2" candidate; CheckResult.fieldConflict), whatever the query
+//     "Hush: Part 2" candidate; CheckResult.fieldBlock), whatever the query
 //     or the audio says: a transcription that contradicts the stored title is
 //     a case for owner review, not unattended apply;
 //   - a candidate whose title is the series name, the title check's hard block
@@ -125,7 +125,7 @@ func applyTranscribedTitle(ev *EvidenceVerdict, query, refusal string, audioConf
 		if ch.Name != "title" || ch.Outcome == OutcomeAgree || ch.Outcome == OutcomeNeutral {
 			continue
 		}
-		if ch.fieldConflict {
+		if ch.fieldBlock {
 			ch.Detail += "; not lifted by the transcribed title " + strconv.Quote(query) + ": the two titles conflict"
 			return false
 		}
