@@ -1,13 +1,14 @@
 <!-- file: docs/executive-summaries/2026-11-17-whisper-cpu-worker-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 7b3e5a90-1c64-4d28-9e0f-a52d8c7b1f46 -->
 <!-- last-edited: 2026-11-17 -->
 
 # The Windows transcription machine can now work without a graphics card
 
 **Date:** 17 November 2026 (the day the change was written; the merge date
-replaces it when the pull request lands). Nothing in this change has been run on
-a Windows machine.
+replaces it when the pull request lands). The automated tests run on a Windows
+machine in the build system, but the real transcription machine, its scheduled
+task, the remote-management step and the processor's speed have not been tried.
 
 ## Executive Summary
 

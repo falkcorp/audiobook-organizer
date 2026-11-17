@@ -1,5 +1,5 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -273,7 +273,10 @@ Every flag has an environment variable (`WHISPER_DEVICE`, `WHISPER_MODEL`,
   otherwise runs on the CPU. That fallback is logged at **WARNING** ("whisper GPU
   FALLBACK ...") and is visible in `/health` (`fallback: true`, with
   `device_reason`): a worker you expected to be a GPU worker that quietly became a
-  slow CPU one is exactly what should be noticed. Use `cpu` on a machine whose GPU
+  slow CPU one is exactly what should be noticed. `device_reason` is one of a few
+  fixed phrases (`requested cpu`, `auto: CUDA probe failed`, `auto: no CUDA device
+  found`, ...): `/health` is unauthenticated, so the exception behind a failed probe
+  or load is in the worker log, never on `/health`. Use `cpu` on a machine whose GPU
   is gone or flaky: there is nothing to probe, so nothing to fail.
 - `cuda` is strict. If the model cannot load on the GPU the process exits 1 with the
   reason; it never quietly serves from the CPU.
@@ -317,6 +320,25 @@ Changing the model, compute type or decode path changes `decode_fingerprint`,
 which re-keys that worker's result journal: transcripts journalled under the old
 settings are not served for the new ones. Threads and workers do not change it.
 
+### Every answer names the worker that produced it
+
+The server journals a transcript under the model and fingerprints of the worker that
+decoded it. It used to take them from a `/health` probe that can be 30 seconds old,
+and a worker process that was replaced since (its supervisor restarted it and
+`--device auto` resolved differently) would have had its text filed under the old
+model. So `/transcribe`, `/transcribe-batch`, `/transcribe-path` and
+`/transcribe-path-batch` now carry a top-level `identity` object (`model`, `backend`,
+`decode_fingerprint`, `extract_fingerprint`), read from the worker's startup pin by
+the same function `/health` uses, so the two cannot disagree and a restarted child
+cannot change it. The server files each result under the identity of the answer that
+carried it. When the identity differs from the probe it logs a warning and drops that
+endpoint's cached probe, so the next dispatch asks `/health` again. A worker too old
+to send `identity` is journalled under its `/health` identity as before, and that is
+logged once per endpoint. One limit: the journal is looked up, before a request is
+sent, with the identity the last probe gave, so a result is never filed under the
+wrong model but a lookup in the first dispatch after a replacement can still miss or
+hit under the old one. The Mac worker does not send `identity` yet.
+
 ### A hung decode is killed, not waited on
 
 faster-whisper decodes inside a native call Python cannot interrupt. The worker
@@ -324,8 +346,10 @@ therefore loads the model in a **child process** (`scripts/whisper_decode_child.
 started with the `spawn` method, the only one Windows has) and the parent enforces a
 deadline per clip. A decode that misses it is killed and a fresh child is started
 for the next clip, so the worker recovers by itself. The first child to start
-**pins** the model, device and compute type for the life of the worker: every later
-child and restart is started with those values explicitly and refused (a start fault,
+**pins** the model, device, compute type and batched mode for the life of the worker
+(batched is part of the decode fingerprint: a batched pipeline that failed to build
+would otherwise decode by beam search and file that text under the batched worker's
+fingerprint): every later child and restart is started with those values explicitly and refused (a start fault,
 not a fallback) if it reports anything else, so a restart cannot turn a `large-v2`
 GPU worker into a `base.en` CPU one. `/health` reports the pinned values and the log
 line `decode process N ready: model=... device=... compute_type=...` follows every
@@ -336,14 +360,16 @@ receive kills the child, so a stale answer is never taken for the next clip's:
 - `decoder_crashed`: the child died on the clip (a segfault, an exception that took
   the process down); the error text carries the exit code;
 - `decoder_killed`: the child was killed from outside (an operator, the out-of-memory
-  killer, or the worker shutting down with a clip in flight, as on the Mac worker;
-  POSIX only for the signal case, since Windows reports no signal);
+  killer; POSIX only, since Windows reports no signal, so a process killed from
+  outside reads as `decoder_crashed` there);
 - `worker_misconfigured`: the child could not start (the model failed to load); the
   worker retries on a later request and shows `child_start_error` in `/health` until
-  it can. `/health` is unauthenticated, so it carries only a fixed code and a short
-  category (`worker_misconfigured: model_load_failed`, `start_timeout`,
-  `exited_during_start`, `process_start_failed`, `pinned_model_mismatch`,
-  `protocol_error`); the full error text goes to the worker log only. A worker is
+  it can. `/health` and the job answer are both reachable without authentication, so
+  both carry only a fixed code and a short category word (`model_load_failed`,
+  `start_timeout`, `exited_during_start`, `process_start_failed`,
+  `pinned_model_mismatch`, `protocol_error`; the job error reads
+  `worker_misconfigured: model_load_failed`); the full error text, which can hold a
+  path or a library's exception, goes to the worker log only. A worker is
   also reported busy (`busy_seconds`) while a child is being started for a request.
 
 These are the Mac worker's codes with the same meaning, so the server treats them
@@ -352,10 +378,21 @@ on POSIX file descriptors and process groups, and only the contract is shared.
 
 The per-clip deadline is `max(300 s, 8 x the clip's audio length)`, capped at 3600 s
 (`WHISPER_TRANSCRIBE_MAX_TIMEOUT_S`; a clip of ten minutes of audio would otherwise
-earn 4800 s and a huge upload days). Upload bodies are limited to 256 MiB (413).
+earn 4800 s and a huge upload days). Upload bodies are limited to 256 MiB (413),
+which is about 2.3 hours of 16 kHz mono 16-bit PCM or about 1.2 hours of stereo.
 The timeout variables must be finite and above zero, or the worker exits at startup
 naming the variable. The child ignores Ctrl-C and, on Windows, lives in a Job Object
-that kills it with the worker; on POSIX a child stuck in a native call that holds the
+that kills it with the worker (if the worker could not put a child in the job, the
+child is not protected that way and `/health` says `child_unprotected: true`);
+
+Stopping the worker: the child ignores Ctrl-C, and the worker kills it only in
+`engine.shutdown()`, which runs after the web server has returned. The web server is
+started with its default graceful shutdown, which (as far as the code shows; not
+tried with a hung decode) waits for requests in flight, so a stop during a hung decode
+can wait up to that clip's deadline (at most 3600 s) unless the worker is stopped a
+second time. No clip answers `decoder_killed` because of a stop. A worker killed
+outright (the scheduled task stopped, `Stop-Process`) gives its caller a dropped
+connection and no error, and on Windows the Job Object ends the child with it; on POSIX a child stuck in a native call that holds the
 GIL is not reaped if the worker is killed (the orphan watch is a Python thread). `/health`
 reports `busy_seconds` and `busy_limit_seconds` as before. The `300` and `8` are
 generous and **unbenchmarked**: tune them (`WHISPER_TRANSCRIBE_MIN_TIMEOUT_S`,

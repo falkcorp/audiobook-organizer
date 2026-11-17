@@ -1,7 +1,7 @@
 // file: internal/transcribe/capabilities.go
-// version: 2.7.1
+// version: 2.8.0
 // guid: 3f1c8a52-6d94-4b17-9e02-c8a7d5b41f60
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -297,6 +297,16 @@ func probeForGate(ctx context.Context, url string, cached bool) (remoteHealth, b
 		gateProbeCache.mu.Unlock()
 	}
 	return h, ok
+}
+
+// forgetGateProbe drops url's cached /health answer, so the next gate probes it again.
+// A worker's own transcription answer calls it when the answer's identity differs from
+// the probe's (endpointJournal.observe): the cached view is then known to be stale, and
+// leaving it to expire would let the next dispatch gate, plan and journal from it.
+func forgetGateProbe(url string) {
+	gateProbeCache.mu.Lock()
+	delete(gateProbeCache.m, url)
+	gateProbeCache.mu.Unlock()
 }
 
 // cleanHealth reports whether a completed /health answer carries none of the

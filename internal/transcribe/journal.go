@@ -1,7 +1,7 @@
 // file: internal/transcribe/journal.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 60c7ae00-b3ec-476b-a63e-00418bb73933
-// last-edited: 2026-10-30
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -72,6 +72,11 @@ type endpointJournal struct {
 	// invalidates upload-path entries and retuning decoding invalidates both.
 	extract string
 
+	// mu guards written AND model, fingerprint and extract: they start as what
+	// /health said but are replaced by the identity a worker's answer carries
+	// (observe), which can differ when the worker process was replaced after the
+	// probe. Read them through ident(), never directly, once a call is in flight.
+	//
 	// written is the content key of every result this call journalled, so that a
 	// call whose request is found to have been answered by another machine than
 	// the one it was sent to can take them back (invalidateWritten). A key is
@@ -80,17 +85,110 @@ type endpointJournal struct {
 	written []string
 }
 
-// key is the journal key for a clip with the given sha256.
-func (ej *endpointJournal) key(clipHash string) string {
-	return resultjournal.ContentKey(clipHash, ej.model, ej.fingerprint, clipParamsVersion)
+// journalIdent is one consistent reading of an endpointJournal's identity: the key
+// and the label of a result are built from the SAME reading, so an observe that
+// lands between the two cannot give a result a key of one model and a label of another.
+type journalIdent struct {
+	model, fingerprint, extract string
+}
+
+func (ej *endpointJournal) ident() journalIdent {
+	ej.mu.Lock()
+	defer ej.mu.Unlock()
+	return journalIdent{model: ej.model, fingerprint: ej.fingerprint, extract: ej.extract}
+}
+
+// clipKey is the journal key for a clip with the given sha256.
+func (id journalIdent) clipKey(clipHash string) string {
+	return resultjournal.ContentKey(clipHash, id.model, id.fingerprint, clipParamsVersion)
 }
 
 // label is the Entry.Model recorded with a result: the key's model part.
-func (ej *endpointJournal) label() string {
-	if ej.fingerprint == "" {
-		return ej.model
+func (id journalIdent) label() string {
+	if id.fingerprint == "" {
+		return id.model
 	}
-	return ej.model + "#" + ej.fingerprint
+	return id.model + "#" + id.fingerprint
+}
+
+// key is the journal key for a clip with the given sha256.
+func (ej *endpointJournal) key(clipHash string) string {
+	return ej.ident().clipKey(clipHash)
+}
+
+// responseIdentity is the "identity" object a worker puts in every transcription answer
+// (whisper_server.py 5.1.0+): the model, backend and fingerprints it decoded WITH, the
+// same values it reports on /health. A worker that predates it omits the object.
+type responseIdentity struct {
+	Model              string `json:"model"`
+	Backend            string `json:"backend"`
+	DecodeFingerprint  string `json:"decode_fingerprint"`
+	ExtractFingerprint string `json:"extract_fingerprint"`
+}
+
+// noIdentityLogged records the endpoints already logged for answering without an
+// identity, so an old worker is mentioned once, not once per chunk.
+var noIdentityLogged sync.Map
+
+// observe makes the journal view agree with the worker that actually answered.
+//
+// The view starts from the /health probe the gate read, which can be up to
+// gateProbeTTL old, and a worker PROCESS that was replaced since (restarted by its
+// supervisor, and --device auto resolved differently, say a CUDA load that now fails)
+// can be running another model than that probe said. Journalling its text under the
+// probe's model would serve it as the old model's from then on. So the answer's own
+// identity wins: the results of this answer, and of every later one in the call, are
+// filed under it, and the cached probe for the endpoint is dropped so the next
+// dispatch asks again instead of reusing the stale view.
+//
+// An answer with no identity (a worker older than the field) changes nothing: it is
+// journalled under what /health said, as before, and that is logged once per
+// endpoint. Safe for concurrent use.
+func (ej *endpointJournal) observe(resp *responseIdentity) {
+	if ej == nil {
+		return
+	}
+	if resp == nil || strings.TrimSpace(resp.Model) == "" {
+		if _, seen := noIdentityLogged.LoadOrStore(ej.endpoint, struct{}{}); !seen {
+			journalLog.Info("worker answers carry no identity, journalling under its /health identity: url=%s", logger.SanitizeLogValue(ej.endpoint))
+		}
+		return
+	}
+	got := journalIdent{
+		model:       joinModelIdentity(resp.Backend, resp.Model),
+		fingerprint: strings.TrimSpace(resp.DecodeFingerprint),
+		extract:     strings.TrimSpace(resp.ExtractFingerprint),
+	}
+	ej.mu.Lock()
+	if got.extract == "" {
+		// Not reported (an answer of a route that does not extract): keep the probe's.
+		got.extract = ej.extract
+	}
+	was := journalIdent{model: ej.model, fingerprint: ej.fingerprint, extract: ej.extract}
+	if got == was {
+		ej.mu.Unlock()
+		return
+	}
+	ej.model, ej.fingerprint, ej.extract = got.model, got.fingerprint, got.extract
+	ej.mu.Unlock()
+
+	journalLog.Warn("worker answered as a different model than its /health probe said, journalling under the answer's identity and dropping the cached probe: url=%s probed=%s#%s answered=%s#%s",
+		logger.SanitizeLogValue(ej.endpoint), logger.SanitizeLogValue(was.model), logger.SanitizeLogValue(was.fingerprint), logger.SanitizeLogValue(got.model), logger.SanitizeLogValue(got.fingerprint))
+	forgetGateProbe(ej.endpoint)
+}
+
+// joinModelIdentity is the model's journal identity: qualified by its backend when
+// one is reported (the same checkpoint name on two backends is not guaranteed to
+// produce the same text).
+func joinModelIdentity(backend, model string) string {
+	m := strings.TrimSpace(model)
+	if m == "" {
+		return ""
+	}
+	if b := strings.TrimSpace(backend); b != "" {
+		return b + "/" + m
+	}
+	return m
 }
 
 // modelIdentity is the model the endpoint reported on /health, qualified by
@@ -98,14 +196,7 @@ func (ej *endpointJournal) label() string {
 // is not guaranteed to produce the same text). Empty when the server did not
 // report a model.
 func (h remoteHealth) modelIdentity() string {
-	m := strings.TrimSpace(h.Model)
-	if m == "" {
-		return ""
-	}
-	if b := strings.TrimSpace(h.Backend); b != "" {
-		return b + "/" + m
-	}
-	return m
+	return joinModelIdentity(h.Backend, h.Model)
 }
 
 // newEndpointJournal returns the journal view for one endpoint, or nil when
@@ -261,17 +352,19 @@ func (ej *endpointJournal) completeOne(id, uploadedHash string, r BatchResult) {
 	if ej == nil || uploadedHash == "" {
 		return
 	}
-	ej.put(id, ej.key(uploadedHash), r)
+	ident := ej.ident()
+	ej.put(id, ident.clipKey(uploadedHash), ident.label(), r)
 }
 
-// put journals one result under key, applying the same rules for every kind of
-// job: only a non-empty transcript with no per-file error is journalled (see
-// complete for why), and a failed write is logged, not returned.
-func (ej *endpointJournal) put(id, key string, r BatchResult) {
+// put journals one result under key and label (built from one journalIdent),
+// applying the same rules for every kind of job: only a non-empty transcript with
+// no per-file error is journalled (see complete for why), and a failed write is
+// logged, not returned.
+func (ej *endpointJournal) put(id, key, label string, r BatchResult) {
 	if ej == nil || r.Error != "" || r.Text == "" {
 		return
 	}
-	if err := ej.journal.Complete(key, ej.endpoint, ej.label(), journalResult{Text: r.Text}); err != nil {
+	if err := ej.journal.Complete(key, ej.endpoint, label, journalResult{Text: r.Text}); err != nil {
 		journalLog.Warn("journal write failed, result not restart-protected: job=%s err=%v", id, err)
 		return
 	}

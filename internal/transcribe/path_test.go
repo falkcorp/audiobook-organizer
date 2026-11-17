@@ -1,7 +1,7 @@
 // file: internal/transcribe/path_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d8b0e62-91c7-4a35-b6f0-3e5a7c21d984
-// last-edited: 2026-11-03
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -30,6 +30,9 @@ type pathWorker struct {
 	mu       sync.Mutex
 	requests []map[string]map[string]any // one decoded "jobs" object per POST
 	respond  func(key string, job map[string]any) map[string]any
+	// identity, when set, is the "identity" object every answer carries (a worker
+	// at whisper_server.py 5.1.0 or later); nil models an older worker.
+	identity map[string]any
 	canaries int // canary clips received on /transcribe, answered as a sound worker would
 
 	// healthLog has one entry per GET /health received, in arrival order: the
@@ -65,13 +68,17 @@ func newPathWorker(t *testing.T, health map[string]any) *pathWorker {
 		}
 		w.mu.Lock()
 		w.requests = append(w.requests, body.Jobs)
-		respond := w.respond
+		respond, identity := w.respond, w.identity
 		w.mu.Unlock()
 		results := map[string]any{}
 		for k, j := range body.Jobs {
 			results[k] = respond(k, j)
 		}
-		_ = json.NewEncoder(rw).Encode(map[string]any{"results": results})
+		answer := map[string]any{"results": results}
+		if identity != nil {
+			answer["identity"] = identity
+		}
+		_ = json.NewEncoder(rw).Encode(answer)
 	})
 	mux.HandleFunc("POST /transcribe", func(rw http.ResponseWriter, _ *http.Request) {
 		w.mu.Lock()

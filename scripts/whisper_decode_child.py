@@ -1,5 +1,5 @@
 # file: scripts/whisper_decode_child.py
-# version: 2.2.0
+# version: 2.2.1
 # guid: 5d0c8e7a-3b94-4a62-9f1e-b7a4c2d81e56
 # last-edited: 2026-11-17
 #
@@ -46,9 +46,12 @@
 # base.en text under large-v2's journal key.
 #
 # Shutdown: the child ignores SIGINT and (POSIX) lives in its own session, like the
-# Mac child, so Ctrl-C stops the worker without the terminal reaching the decode. A
-# clip still in flight when the worker shuts the child down answers decoder_killed
-# (the code for a decode killed from outside), as the Mac worker's does.
+# Mac child, so Ctrl-C stops the worker without the terminal reaching the decode. The
+# child is killed by Engine.shutdown(), which runs after the web server has returned;
+# the server's default graceful stop waits for requests in flight, so a stop during a
+# hung decode can take up to that clip's deadline unless the worker is stopped a
+# second time. A stop does not answer a clip decoder_killed, and a worker killed
+# outright gives its caller a dropped connection.
 #
 # Parent death: the child exits when its pipe closes or the orphan watch sees the
 # parent gone; on Windows every child is also put in a Job Object with

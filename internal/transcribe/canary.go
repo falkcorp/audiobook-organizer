@@ -1,7 +1,7 @@
 // file: internal/transcribe/canary.go
-// version: 1.7.5
+// version: 1.8.0
 // guid: 85242dc9-bee7-4bee-9854-d4965e925162
-// last-edited: 2026-10-27
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -692,7 +692,7 @@ func sendCanary(ctx context.Context, g gatedEndpoint) error {
 	defer release()
 	ctx, cancel := context.WithTimeout(ctx, canaryTimeout)
 	defer cancel()
-	r, err := postOneWAV(ctx, &http.Client{Timeout: canaryTimeout}, url, canaryFileName, bytes.NewReader(canaryClip))
+	r, _, err := postOneWAV(ctx, &http.Client{Timeout: canaryTimeout}, url, canaryFileName, bytes.NewReader(canaryClip))
 	if err != nil {
 		return fmt.Errorf("canary clip: %w", err)
 	}
