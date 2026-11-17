@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d41c7a2-3b60-4e95-a1f8-6c2d9e07b534
 // last-edited: 2026-11-16
 
@@ -36,13 +36,14 @@ import (
 //     a smb, nfs or sftp URL.
 //
 //  3. On a line with a triggered word, everything from the first triggered
-//     word to the end of the line is one run. Where the location is known to
-//     start (a word that begins with "/", "\", "~", a drive, "scheme://", an
-//     encoded or entity separator, after opening punctuation and an optional
-//     "key=") the run starts at that word; when the first triggered word has
-//     name characters before its first separator ("Gordon/The", "-I/x",
-//     "text/plain"), the start of the name is not known and the run starts at
-//     the beginning of the line.
+//     word to the end of the line is one run. Where the word is a location head
+//     (runStart: "/", a "\" that is not an escape, "~/" or "~name/", a drive
+//     with a separator ("C:\", "C:x\y"), "scheme://", "%2F", "%5C", "%7E", an
+//     entity or escape that decodes to a separator; after opening punctuation and
+//     an optional "key=") the run starts at that word; for any other triggered
+//     word ("Gordon/The", "-I/x", "text/plain", a lone "I:", "~word", "&amp;",
+//     "\u0026", an escaped quote) the start of the name is not known and the run
+//     starts at the beginning of the line.
 //
 //  4. The one exception is an error that ends in a text the sanitizer knows
 //     (errnoTexts: the syscall errors, the fs and os sentinels, the Windows API
@@ -59,7 +60,7 @@ import (
 //     Text(Text(x)) == Text(x).
 //
 // What survives: the words before the first triggered word of a line, when that
-// word starts a location ("open /x" keeps "open"). What is lost with a location
+// word is a location head ("open /x" keeps "open"). What is lost with a location
 // is the rest of its line, whatever it says: a message after a path ("copied
 // /a/b to the shelf"), a "key=value" after a path, a stack frame's "+0x1d", an
 // inline route, MIME type or URL ("GET /api/v1/books/{id} 200" is "GET <path>",
@@ -71,11 +72,27 @@ import (
 //
 // Not locations, so not touched: a bare user or host name, a name with no
 // separator at all, a time of day, and a classic Mac path
-// ("Macintosh HD:Users:bruce"), which has no trigger byte. Two shapes are not
-// told apart from prose by any rule: a relative path whose first name ends in
-// white space or in an opening quote ("HD /x" reads as the word "HD" before an
-// absolute path, so "HD" stays), and a name that holds a line break, which is
-// wiped one line at a time because the next line has no trigger.
+// ("Macintosh HD:Users:bruce"), which has no trigger byte.
+//
+// What can still survive, as exactly as it can be said (no other word of a path
+// segment does):
+//
+//   - A relative path whose first name, on its line, ends in white space or an
+//     opening quote or bracket, or holds after a space a word that begins like a
+//     real location head (runStart): "HD /x" reads as the word "HD" before an
+//     absolute path, and so do "Alfred /x" and "Alfred ~Robin/x". A word that
+//     only holds a trigger byte ("Part I: Hush/x", "Alfred \u0026 Robin/x",
+//     "Cass \"Orphan\" Cain/x", "Alfred &amp; Robin/x") is not a head, and the
+//     run starts at the line.
+//   - A name that holds a line break, which is wiped one line at a time: a line
+//     of it that has no separator and no head (the first name of a relative path,
+//     a line between two breaks, the last segment) is not a location.
+//   - A classic Mac path, which has no trigger byte.
+//   - The fixed-vocabulary tail: a name that ends in a known error text after a
+//     ": " keeps that text ("/srv/lib/Alfred Pennyworth/Batman: File Exists" is
+//     "<root:lib>: File Exists"; a name made only of an exempt phrase,
+//     "Batman: input/output error", is unchanged). The surviving words can only
+//     be words of errnoTexts.
 //
 // The zero Sanitizer has no roots and knows no error text: every location is
 // "<path>" and wipes to the end of its line.
@@ -109,9 +126,11 @@ type run struct {
 	tmpl        bool
 }
 
-// maxTextBytes is the longest string that is tokenized. A longer one that has a
-// trigger byte is replaced whole: a token slice is about 32 bytes per word.
-const maxTextBytes = 8 << 20
+// maxTextBytes is the longest string that is tokenized: the same bound as a line
+// of a text file (maxLineBytes), so a JSON value costs what a line does. A longer
+// one that has a trigger byte is replaced whole: a token slice is about 32 bytes
+// per word.
+const maxTextBytes = maxLineBytes
 
 // tooLong replaces a string over maxTextBytes. It holds no trigger.
 const tooLong = "<redacted:line_too_long>"
@@ -355,7 +374,7 @@ func lineRuns(str string, toks []token, errs map[string][][]string, ops *int) []
 		}
 		if f >= 0 {
 			r := run{first: f, last: b - 1}
-			if !startsAsLocation(str[toks[f].s:toks[f].e]) {
+			if !runStart(str[toks[f].s:toks[f].e]) {
 				r.first = a
 			}
 			for j := f + 1; j < b; j++ {
@@ -408,6 +427,142 @@ func labelBody(body string) string {
 		body = body[k+1:]
 	}
 	return body[leadPunct(body):]
+}
+
+// runStart reports that the first triggered word of a line is a location head
+// that the run may start at, leaving the words before it. It is stricter than
+// startsAsLocation, because a word that merely holds a trigger byte can sit in
+// the middle of a relative name ("Part I: Hush/01.m4b", "Alfred \u0026 Robin/x",
+// `Cass \"Orphan\" Cain/x`), and the words before it are then the first words of
+// that name. A head is, after opening punctuation and an optional "key=":
+//
+//   - "/" (and "\" not followed by an escape: "\\" "\/" "\u002F" "\x5C" are
+//     separators, "\"" "\n" "\u0026" are not);
+//   - "~" with a "/" or "\" later in the word ("~/x", "~bruce/x"), not a lone "~word";
+//   - a drive, "X:" with a "/" or "\" later in the word ("C:\x", "C:/x", "C:x\y"),
+//     not a lone "I:";
+//   - "scheme://";
+//   - "%2F", "%5C" or "%7E";
+//   - an entity that decodes to a separator ("&#47;", "&#x2F;", "&#92;", "&sol;",
+//     "&bsol;", "&amp;#47;"), not "&amp;".
+//
+// Any other triggered first word starts the run at the beginning of the line.
+// The cost is only prose: a lone "Plan A:" or "&amp;" before a path wipes the
+// words in front of it too. What it cannot do is tell "Alfred ~Robin/x" from
+// "see ~bruce/x": both start at a real head, so the words before it stay.
+func runStart(w string) bool {
+	if k := strings.IndexByte(w, '='); k > 0 && !strings.ContainsAny(w[:k], "/\\%~&") {
+		w = w[k+1:]
+	}
+	w = w[leadPunct(w):]
+	if w == "" {
+		return false
+	}
+	switch w[0] {
+	case '/':
+		return true
+	case '\\':
+		return backslashStart(w)
+	case '~':
+		return strings.ContainsAny(w[1:], "/\\")
+	case '%':
+		if len(w) >= 3 {
+			switch strings.ToUpper(w[1:3]) {
+			case "2F", "5C", "7E":
+				return true
+			}
+		}
+		return false
+	case '&':
+		return entitySeparator(w[1:])
+	}
+	if isLetter(w[0]) && len(w) >= 2 && w[1] == ':' && strings.ContainsAny(w[2:], "/\\") {
+		return true
+	}
+	return schemeStart(w)
+}
+
+// backslashStart reports a word that begins with "\" and is a rooted path or an
+// escape that decodes to a separator, not an escape of anything else.
+func backslashStart(w string) bool {
+	if len(w) == 1 {
+		return true
+	}
+	switch c := w[1]; c {
+	case '\\', '/':
+		return true
+	case '"', '\'', 'n', 'r', 't', 'b', 'f', 'v', 'a', '0', '1', '2', '3', '4', '5', '6', '7':
+		return false
+	case 'u':
+		return hexEscapeSeparator(w[2:], 4)
+	case 'x':
+		return hexEscapeSeparator(w[2:], 2)
+	}
+	return true
+}
+
+// hexEscapeSeparator reports that the n hex digits at the start of rest are the
+// code of "/", "\" or "~". A word where they are not n hex digits is not an
+// escape ("\unix", "\xyz"), so the "\" is a rooted path.
+func hexEscapeSeparator(rest string, n int) bool {
+	if len(rest) < n {
+		return true
+	}
+	v := 0
+	for i := 0; i < n; i++ {
+		c := rest[i]
+		switch {
+		case c >= '0' && c <= '9':
+			v = v<<4 | int(c-'0')
+		case c >= 'a' && c <= 'f':
+			v = v<<4 | int(c-'a'+10)
+		case c >= 'A' && c <= 'F':
+			v = v<<4 | int(c-'A'+10)
+		default:
+			return true
+		}
+	}
+	return v == '/' || v == '\\' || v == '~'
+}
+
+// entitySeparator reports the text after "&" that is an entity decoding to "/",
+// "\" or "~": numeric ("#47", "#x2F", leading zeros allowed, the ";" optional),
+// "sol;" or "bsol;", possibly behind "amp;" any number of times ("&amp;#47;").
+func entitySeparator(rest string) bool {
+	for strings.HasPrefix(rest, "amp;") { // "&amp;#47;" decodes to "&#47;"
+		rest = rest[len("amp;"):]
+	}
+	if strings.HasPrefix(rest, "sol;") || strings.HasPrefix(rest, "bsol;") {
+		return true
+	}
+	if rest == "" || rest[0] != '#' {
+		return false
+	}
+	rest = rest[1:]
+	base := 10
+	if rest != "" && (rest[0] == 'x' || rest[0] == 'X') {
+		base, rest = 16, rest[1:]
+	}
+	v, digits := 0, 0
+	for ; digits < len(rest); digits++ {
+		c := rest[digits]
+		d := -1
+		switch {
+		case c >= '0' && c <= '9':
+			d = int(c - '0')
+		case base == 16 && c >= 'a' && c <= 'f':
+			d = int(c-'a') + 10
+		case base == 16 && c >= 'A' && c <= 'F':
+			d = int(c-'A') + 10
+		}
+		if d < 0 {
+			break
+		}
+		if v <= 0x10FFFF {
+			v = v*base + d
+		}
+	}
+	return digits > 0 && (v == '/' || v == '\\' || v == '~')
 }
 
 // startsAsLocation reports a word that begins a location, after opening
