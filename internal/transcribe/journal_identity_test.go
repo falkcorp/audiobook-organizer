@@ -1,5 +1,5 @@
 // file: internal/transcribe/journal_identity_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b0f3f64-3a51-4f3e-9d0e-6c1f6f2a8e17
 // last-edited: 2026-11-17
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
 // The journal key of a result is the identity of the worker that DECODED it. The gate's
@@ -594,5 +596,108 @@ func TestIdentity_ObserveReturnsWhetherTheAnswerMayBeJournalled(t *testing.T) {
 				t.Fatalf("a refused answer changed the identity: %+v", id)
 			}
 		})
+	}
+}
+
+// A worker that answers with an incomplete identity does so on every answer, and the
+// per-file routes answer once per clip, so the warning is said once per endpoint per call
+// and not once per clip. What it protects is still done on every answer: nothing is
+// journalled and the cached probe is dropped.
+func TestIdentity_APartialIdentityIsWarnedOncePerEndpointPerCall(t *testing.T) {
+	const clips = 5
+	for _, concurrency := range []int{1, clips} {
+		t.Run("concurrency/"+strings.Repeat("x", concurrency), func(t *testing.T) {
+			enableProbeCache(t)
+			logs := logtest.Capture(t, slog.LevelWarn)
+			srv := identityServer(t, map[string]any{"status": "ok", "model": "Robin", "backend": "cpu", "decode_fingerprint": "fp-x"},
+				func(int) map[string]any { return idAnswer("Robin", "", "", "") })
+			h, ok := probeForGate(context.Background(), srv.URL, true)
+			if !ok {
+				t.Fatal("setup probe failed")
+			}
+			h.BatchPipeline = nil // per-file route: one answer per clip
+			j := newMapJournal()
+			if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, concurrency, writeClips(t, clips), nil, j); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(logs.Lines("incomplete identity")); got != 1 {
+				t.Fatalf("the incomplete-identity warning was logged %d times for %d answers, want exactly 1:\n%s", got, clips, logs.String())
+			}
+			if j.len() != 0 {
+				t.Fatalf("a partial identity was journalled: %v", j.keys())
+			}
+		})
+	}
+}
+
+// The once is per call (the view is built per call), so a second call warns again: a worker
+// that is still partial an hour later is still news.
+func TestIdentity_APartialIdentityIsWarnedAgainByTheNextCall(t *testing.T) {
+	logs := logtest.Capture(t, slog.LevelWarn)
+	srv := identityServer(t, map[string]any{"status": "ok", "model": "Robin", "backend": "cpu", "decode_fingerprint": "fp-x"},
+		func(int) map[string]any { return idAnswer("Robin", "", "", "") })
+	for call := 0; call < 2; call++ {
+		h, ok := probeRemoteHealth(context.Background(), srv.URL)
+		h.BatchPipeline = nil
+		if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, writeClips(t, 3), nil, newMapJournal()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(logs.Lines("incomplete identity")); got != 2 {
+		t.Fatalf("two calls logged the warning %d times, want 2:\n%s", got, logs.String())
+	}
+}
+
+// The mismatch warning says what actually happens to the results: with a journal they are
+// filed under the answer's identity; without one nothing is filed, and saying "journalling"
+// there would be wrong. The endpoint is a log value, so it goes through SanitizeLogValue;
+// the logger also sanitizes the finished line, so what this pins is the outcome (no raw
+// newline reaches the log), not which of the two layers did it.
+func TestIdentity_TheMismatchWarningNamesWhatHappensToTheResults(t *testing.T) {
+	const endpoint = "http://192.0.2.7:8080/\nforged: line"
+	answer := &responseIdentity{Model: "Nightwing", Backend: "cpu", DecodeFingerprint: "fp-y"}
+	for _, tc := range []struct {
+		name    string
+		journal ResultJournal
+		want    string
+		notWant string
+	}{
+		{"with a journal", newMapJournal(), "journalling under the answer's identity", "no journal"},
+		{"without a journal", nil, "this endpoint has no journal", "journalling under"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := logtest.Capture(t, slog.LevelWarn)
+			ej := &endpointJournal{journal: tc.journal, endpoint: endpoint, model: "cpu/Robin", fingerprint: "fp-x"}
+			if !ej.observe(answer) {
+				t.Fatal("a complete identity must be journalable")
+			}
+			lines := logs.Lines("different model")
+			if len(lines) != 1 {
+				t.Fatalf("want one mismatch warning, got %d:\n%s", len(lines), logs.String())
+			}
+			if !strings.Contains(lines[0], tc.want) || strings.Contains(lines[0], tc.notWant) {
+				t.Fatalf("warning = %q, want it to contain %q and not %q", lines[0], tc.want, tc.notWant)
+			}
+			if strings.Contains(logs.String(), "\nforged") {
+				t.Fatalf("the endpoint reached the log unsanitised:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+// The same barrier on the three construction-time messages that name the endpoint.
+func TestIdentity_ConstructionWarningsSanitizeTheEndpoint(t *testing.T) {
+	const endpoint = "http://192.0.2.7:8080/\nforged: line"
+	logs := logtest.Capture(t, slog.LevelInfo)
+	newEndpointJournal(newMapJournal(), endpoint, remoteHealth{}, false)                              // not probed
+	newEndpointJournal(newMapJournal(), endpoint, remoteHealth{}, true)                               // no model
+	newEndpointJournal(newMapJournal(), endpoint, remoteHealth{Model: "Robin", Backend: "cpu"}, true) // no fingerprint
+	for _, want := range []string{"was not probed", "reports no model", "no decode_fingerprint"} {
+		if len(logs.Lines(want)) != 1 {
+			t.Fatalf("want one %q line:\n%s", want, logs.String())
+		}
+	}
+	if strings.Contains(logs.String(), "\nforged") {
+		t.Fatalf("the endpoint reached the log unsanitised:\n%s", logs.String())
 	}
 }

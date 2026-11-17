@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_path_pipeline.py
-# version: 1.1.2
+# version: 1.2.0
 # guid: 5d2c8e17-9b43-4a06-8f1d-3e7a0c6b9d25
 # last-edited: 2026-11-17
 #
@@ -579,3 +579,181 @@ def test_the_extract_argv_carries_a_file_only_protocol_whitelist_and_keeps_the_f
     src = pathlib.Path(wpp.__file__).read_text()
     assert '"-protocol_whitelist",\n                        "file",' in src
     assert wpp.EXTRACT_FINGERPRINT == "c797688b945fe1e6"
+
+
+# ── what a caller is told: a code and one word from that code's closed set ───
+
+
+def _all_codes():
+    return sorted(v for k, v in vars(wpp).items() if k.startswith("ERR_") and isinstance(v, str))
+
+
+def test_every_code_is_either_categorised_or_has_one_sentence():
+    # A code in neither table cannot be sent; a code in both would be ambiguous.
+    for code in _all_codes():
+        assert (code in wpp.CODE_CATEGORIES) != (code in wpp.PUBLIC_SENTENCES), code
+
+
+def test_a_categorised_code_is_always_sent_as_code_colon_category():
+    for code, words in wpp.CODE_CATEGORIES.items():
+        for word in sorted(words):
+            assert wpp.wire_error(code, word) == f"{code}: {word}"
+        with pytest.raises(ValueError):
+            wpp.wire_error(code)  # the category is required
+        with pytest.raises(ValueError):
+            wpp.wire_error(code, "the Joker rewired the batcave")  # and must be the code's own
+
+
+def test_a_category_belongs_to_one_code_only_where_it_is_not_shared_on_purpose():
+    # A word another code lists is refused for this one: path_unmapped's root_unreadable
+    # is not an ffmpeg_error.
+    with pytest.raises(ValueError):
+        wpp.wire_error(wpp.ERR_FFMPEG, wpp.CAT_ROOT_UNREADABLE)
+    with pytest.raises(ValueError):
+        wpp.wire_error(wpp.ERR_PATH_UNMAPPED, wpp.CAT_INVALID_DATA)
+
+
+def test_a_code_with_one_reason_is_sent_as_its_fixed_sentence_and_takes_no_category():
+    for code, sentence in wpp.PUBLIC_SENTENCES.items():
+        assert wpp.wire_error(code) == f"{code}: {sentence}"
+        with pytest.raises(ValueError):
+            wpp.wire_error(code, wpp.CAT_OTHER)
+    with pytest.raises(ValueError):
+        wpp.wire_error("no_such_code")
+
+
+def test_a_path_job_error_refuses_a_missing_or_foreign_category_at_construction():
+    with pytest.raises(ValueError):
+        wpp.PathJobError(wpp.ERR_FFMPEG, "x")
+    with pytest.raises(ValueError):
+        wpp.PathJobError(wpp.ERR_FFMPEG, "x", category="free text from a library")
+    e = wpp.PathJobError(wpp.ERR_FFMPEG, "x", category=wpp.CAT_MOOV_MISSING)
+    assert e.wire == "ffmpeg_error: moov_missing" and str(e) == "ffmpeg_error: x"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "category"),
+    [
+        (b"x.m4b: Invalid data found when processing input", wpp.CAT_INVALID_DATA),
+        (b"[mov,mp4] moov atom not found", wpp.CAT_MOOV_MISSING),
+        (b"Output file #0 does not contain any stream", wpp.CAT_NO_AUDIO_STREAM),
+        (b"Stream map '0:a' matches no streams", wpp.CAT_NO_AUDIO_STREAM),
+        (b"Unknown decoder 'batcave'", wpp.CAT_UNSUPPORTED_CODEC),
+        (b"Decoder (codec wayne) not found for input stream #0:0", wpp.CAT_UNSUPPORTED_CODEC),
+        (b"av_read_frame: partial file", wpp.CAT_TRUNCATED_FILE),
+        (b"Error: End of file", wpp.CAT_TRUNCATED_FILE),
+        (b"x.m4b: Permission denied", wpp.CAT_PERMISSION_DENIED),
+        # The first row in table order wins, however the lines come.
+        (b"Permission denied\nmoov atom not found", wpp.CAT_MOOV_MISSING),
+        # Nothing the table knows, or nothing at all: other.
+        (b"the Joker rewired the batcave-keypad-ledger", wpp.CAT_OTHER),
+        (b"", wpp.CAT_OTHER),
+        (b"\xff\xfe\x00 not utf-8", wpp.CAT_OTHER),
+    ],
+)
+def test_ffmpeg_stderr_maps_to_a_category_and_unknown_stderr_to_other(stderr, category):
+    assert wpp.ffmpeg_stderr_category(stderr) == category
+    assert category in wpp.CODE_CATEGORIES[wpp.ERR_FFMPEG]
+
+
+def test_every_row_of_the_stderr_table_names_a_category_of_ffmpeg_error():
+    for phrase, category in wpp.FFMPEG_STDERR_CATEGORIES:
+        assert phrase == phrase.lower(), phrase  # matched against lower-cased stderr
+        assert category in wpp.CODE_CATEGORIES[wpp.ERR_FFMPEG]
+        assert category != wpp.CAT_OTHER  # other is the fallback, not a row
+
+
+def test_ffmpeg_stderr_never_reaches_the_category(lib, monkeypatch):
+    p, root, _ = lib
+    src = str(root / "books" / "Wayne" / "Year One.m4b")
+    with pytest.raises(wpp.PathJobError) as e:
+        p._raise_ffmpeg_failure(src, b"C:\\Users\\Bruce\\x.m4b: the batcave-passphrase-hunter2")
+    assert e.value.wire == "ffmpeg_error: other"
+    assert "hunter2" in e.value.detail  # the log keeps it
+    assert "hunter2" not in e.value.wire and "Bruce" not in e.value.wire
+
+
+def test_a_component_problem_is_a_categorised_path_unrepresentable():
+    got = {
+        name: wpp.component_problem(name, ntpath).wire
+        for name in ("x" * 256, "a:b", "ends.", "CON.m4b")
+    }
+    assert set(got.values()) == {
+        "path_unrepresentable: component_too_long",
+        "path_unrepresentable: bad_character",
+        "path_unrepresentable: trailing_dot_or_space",
+        "path_unrepresentable: reserved_name",
+    }
+
+
+# ── a refused batch is ONE log line, with the count ──────────────────────────
+
+
+def test_a_refused_batch_writes_one_log_line_with_the_count_not_one_per_job(http, caplog):
+    client, cut, *_ = http
+    jobs = {f"b{i}": _job("/elsewhere/x.m4b") for i in range(40)}
+    jobs["rel"] = _job("lib/Gotham/x.m4b")
+    with caplog.at_level("INFO", logger="whisper_path_pipeline"):
+        res = client.post("/transcribe-path-batch", json={"jobs": jobs}).json()["results"]
+    assert len(res) == 41 and cut == []
+    refusals = [r for r in caplog.records if "refused" in r.getMessage()]
+    assert len(refusals) == 1, [r.getMessage() for r in refusals]
+    line = refusals[0].getMessage()
+    assert line.startswith("41 of 41 path jobs refused: ")
+    # grouped by code and category with a count, and the first of each carries its detail
+    assert (
+        "path_unmapped: not_under_prefix x40 (first, job b0: path is not under a mapped prefix)"
+        in line
+    )
+    assert "path_unmapped: not_absolute x1 (first, job rel: path is not absolute)" in line
+    assert refusals[0].levelname == "WARNING"
+
+
+def test_a_request_with_no_refusal_logs_no_refusal_line(http, caplog):
+    client, cut, *_ = http
+    with caplog.at_level("INFO", logger="whisper_path_pipeline"):
+        client.post(
+            "/transcribe-path-batch",
+            json={"jobs": {"ok": _job("/lib/Gotham/books/Wayne/Year One.m4b")}},
+        )
+    assert not [r for r in caplog.records if "refused" in r.getMessage()]
+
+
+# ── a model setting that names a local path is a label, never the path ───────
+
+
+def test_a_hub_repo_id_and_a_short_name_pass_through_unchanged(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # so a relative name cannot happen to exist
+    for name in ("base.en", "large-v2", "Systran/faster-whisper-small", "mlx-community/x-mlx"):
+        assert wpp.public_model_name(name) == name
+
+
+def test_a_local_path_becomes_a_stable_hashed_label(tmp_path):
+    import hashlib
+
+    models = tmp_path / "models" / "whisper-batcave"
+    models.mkdir(parents=True)
+    raw_values = [
+        str(models),  # an existing directory
+        str(tmp_path / "not-yet" / "there"),  # absolute, not on disk
+        "C:\\Users\\Bruce\\models\\whisper",  # a drive path, on any host
+        "\\\\arkham\\share\\models",  # a UNC path
+        "~/models/whisper",
+    ]
+    seen = set()
+    for raw in raw_values:
+        label = wpp.public_model_name(raw)
+        assert label == "local:" + hashlib.sha256(raw.encode()).hexdigest()[:16], raw
+        assert len(label) == len("local:") + 16
+        assert "Bruce" not in label and "models" not in label and "arkham" not in label
+        assert wpp.public_model_name(raw) == label  # stable
+        seen.add(label)
+    assert len(seen) == len(raw_values)  # a different path is a different label
+
+
+def test_a_relative_directory_that_exists_is_local(tmp_path, monkeypatch):
+    (tmp_path / "gotham-model").mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert wpp.public_model_name("gotham-model").startswith("local:")
+    # The same text with no such directory is a name, as a hub id would be.
+    assert wpp.public_model_name("arkham-model") == "arkham-model"

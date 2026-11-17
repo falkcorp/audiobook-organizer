@@ -102,7 +102,7 @@ move and has since been edited on purpose in three places (the ffmpeg argv, the
 modules reach the Mac worker: ffmpeg now runs with `-protocol_whitelist file`, the
 `path_map_error` text on `/health` no longer quotes path-map entries, a
 request-deadline header of more than 12 digits is capped instead of answering 500,
-and its error answers are now a code plus a fixed sentence (next entry).
+and its error answers are now a code plus a fixed sentence or a word from a closed set (next entry).
 
 #### Decode children are tied to the worker
 
@@ -126,21 +126,41 @@ of stereo), far above an intro clip; the cap keeps a huge upload from earning a 
 
 Both workers are unauthenticated, so what they return must not carry what a failure
 said (an exception message, ffmpeg's stderr, a path under a user profile). Every error
-in a response body is now a stable code plus ONE fixed sentence, built by a single
-function that takes no text (`wire_error`), for the upload routes, the path routes and
-an unexpected 500: `whisper_error: transcription failed on this worker` instead of the
-exception, `ffmpeg_error: the audio could not be extracted from the file` instead of
-ffmpeg's last line, and so on for every code. The detail goes to the worker log when the
-answer is made. `/health` reports `ffmpeg` as a boolean, not the path it was found at.
-`child_start_error` is a fixed code plus a short category (for example
-`worker_misconfigured: model_load_failed`) on both workers, `device_reason` is a fixed
-phrase, and a `worker_misconfigured` job answer carries the same category word
-(`ffmpeg_missing` when ffmpeg is not on the PATH). The Go client reads only the code,
-so nothing on the server changes. **The Mac worker's error wording changes** (it used
-to return the exception's own text, and a dead decode's exit code); its codes do not.
-Two limits remain: FastAPI's own 422 for a body that is not a JSON object echoes the
-caller's own input, and `identity.model` is the `--model` value, a local directory when
-the model is loaded from one. `busy_seconds` covers the time a request spends waiting
+in a response body is now a stable code plus either ONE fixed sentence (a code with a
+single reason: `whisper_error: transcription failed on this worker`) or ONE word from a
+closed set for that code (a code with several reasons), built by a single function that
+takes no free text (`wire_error`), for the upload routes, the path routes and an
+unexpected 500. The sets are: `ffmpeg_error` (`invalid_data`, `moov_missing`,
+`no_audio_stream`, `unsupported_codec`, `truncated_file`, `permission_denied`,
+`empty_clip`, `invalid_wav`, `spawn_failed`, `other`), `ffmpeg_timeout`
+(`extract_timeout`, `io_fault`, `os_io_error`), `path_unmapped` (`not_absolute`,
+`dot_dot`, `not_under_prefix`, `root_unreadable`, `symlink_escape`, `path_map_unset`,
+`path_map_invalid`, `mapping_failed`, `source_unreadable`), `path_unrepresentable`
+(`bad_character`, `component_too_long`, `reserved_name`, `trailing_dot_or_space`),
+`bad_request` (`job_not_object`, `path_invalid`, `path_too_long`, `seconds_invalid`),
+`decoder_killed` (`killed_by_signal`, `not_reaped`), `decoder_crashed` (`died_on_clip`,
+`wrong_answer`) and `worker_misconfigured` (`exited_during_start`, `ffmpeg_missing`,
+`model_load_failed`, `pinned_model_mismatch`, `process_start_failed`, `protocol_error`,
+`start_timeout`). ffmpeg's stderr is mapped onto the `ffmpeg_error` words by a small fixed
+phrase table with `other` for anything it does not match, so a stderr line never reaches
+the answer. The detail goes to the worker log when the answer is made. `/health` reports
+`ffmpeg` as a boolean, not the path it was found at. `child_start_error` is a fixed code
+plus one of the `worker_misconfigured` words on both workers, and `device_reason` is a fixed
+phrase. What the server stores: the Go client reads only the code to choose the status.
+The stored `transcribe_error` is then `ffmpeg_error`'s word alone (the status is already
+`ffmpeg_error`), or `<code>: <word>` for every other code (for example
+`path_unmapped: root_unreadable`), or, when the server cannot stat the file either, its own
+`source file not found: <path>`. **The Mac worker's error wording changes** (it used to
+return the exception's own text, and a dead decode's exit code); its codes do not.
+`identity.model` and `/health` `model` no longer carry a local path: a `--model` that is an
+existing directory or an absolute path is reported as `local:` and the first 16 hex digits
+of the SHA-256 of the value (a hub id such as `Systran/faster-whisper-small` is reported
+unchanged), and the raw value is logged once at startup. The decode fingerprint still hashes
+the raw value. One limit remains: FastAPI's own 422 for a body that is not a JSON object
+echoes the caller's own input back to the caller. A source-level test walks every
+`scripts/whisper_*.py` and fails on a response built in one of the shapes it knows
+(it is a tripwire for a route written later, not the guarantee: the runtime tests that
+plant a secret in every failure and look for it in the body are). `busy_seconds` covers the time a request spends waiting
 for a child to (re)start, so `/health` never reports idle while a model load is in
 progress.
 

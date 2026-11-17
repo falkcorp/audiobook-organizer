@@ -1,5 +1,5 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -259,22 +259,62 @@ quotes its text, because `/health` is unauthenticated.
 
 **What an error answer says, on both workers.** Nothing a failure said. Every error
 that leaves either worker in an HTTP body, a per-clip `error` on the upload and path
-routes and the body of an unexpected 500 alike, is a stable code and one fixed sentence
-(`whisper_error: transcription failed on this worker`), built by one function
-(`wire_error` in `scripts/whisper_path_pipeline.py`) that takes no text, so a path, an
-ffmpeg stderr line or a library's exception message cannot reach it. For
-`worker_misconfigured` the sentence is the fixed category word (`model_load_failed`,
-`ffmpeg_missing`, ...). The code is the part the server reads and acts on; nothing on
-the Go side reads the sentence. The detail that used to be in the answer (the exception,
-ffmpeg's last line, the `OSError`, the exit code of a dead decode process) is written to
-the worker's log at the moment the answer is made. `/health` reports `ffmpeg` as
-`true`/`false` (found or not), never where it was found. The path map's error and
-`device_reason` were already fixed text. Two limits: FastAPI's own 422 for a request
-that is not a JSON object echoes the caller's own input back to the caller, and
-`identity.model` (also on `/health`) is the value of `--model`, which is a local
-directory when the model is loaded from one. A test walks the worker scripts and fails
-on any response built from failure text (`test_whisper_wire_text_guard.py`), and
-`test_whisper_server_cpu.py` drives every error route with planted paths and stderr.
+routes and the body of an unexpected 500 alike, is a stable code followed by either one
+fixed sentence (a code with a single reason, `whisper_error: transcription failed on this
+worker`) or one word from a closed set for that code (a code with several reasons). One
+function (`wire_error` in `scripts/whisper_path_pipeline.py`) builds both and takes no
+free text, so a path, an ffmpeg stderr line or a library's exception message cannot reach
+it. The sets, from the raise sites:
+
+| Code | Words |
+|---|---|
+| `ffmpeg_error` | `invalid_data`, `moov_missing`, `no_audio_stream`, `unsupported_codec`, `truncated_file`, `permission_denied`, `empty_clip`, `invalid_wav`, `spawn_failed`, `other` |
+| `ffmpeg_timeout` | `extract_timeout`, `io_fault`, `os_io_error` |
+| `path_unmapped` | `not_absolute`, `dot_dot`, `not_under_prefix`, `root_unreadable`, `symlink_escape`, `path_map_unset`, `path_map_invalid`, `mapping_failed`, `source_unreadable` |
+| `path_unrepresentable` | `bad_character`, `component_too_long`, `reserved_name`, `trailing_dot_or_space` |
+| `bad_request` | `job_not_object`, `path_invalid`, `path_too_long`, `seconds_invalid` |
+| `decoder_killed` | `killed_by_signal`, `not_reaped` |
+| `decoder_crashed` | `died_on_clip`, `wrong_answer` |
+| `worker_misconfigured` | `exited_during_start`, `ffmpeg_missing`, `model_load_failed`, `pinned_model_mismatch`, `process_start_failed`, `protocol_error`, `start_timeout` |
+
+`not_found`, `whisper_error`, `container_rejected`, `transcribe_timeout`,
+`request_abandoned` and `internal_error` have one reason each and carry a fixed sentence.
+ffmpeg's stderr is mapped onto the `ffmpeg_error` words by a short ordered table of
+phrases (`moov atom not found` is `moov_missing`, `Invalid data found` is `invalid_data`,
+and so on) with `other` for anything unmatched, so which line ffmpeg printed never decides
+what is sent. The detail that used to be in the answer (the exception, ffmpeg's last line,
+the `OSError`, the exit code of a dead decode process) is written to the worker's log at
+the moment the answer is made, and a refused batch is logged once per request with the job
+count, grouped by code and word with the first detail of each group, not once per job.
+
+**What the server stores.** The Go client reads the code and nothing after it to choose a
+status (`transcribe.PathErrorCode` cuts on the first `: `). The `transcribe_error` it
+stores is the text after the code for `ffmpeg_error` (the status is already `ffmpeg_error`,
+so the stored detail is the word alone, e.g. `invalid_data`), and the whole
+`<code>: <word>` for every other code (e.g. `path_unmapped: root_unreadable`,
+`decoder_crashed: died_on_clip`). When the worker could not reach a file the server cannot
+stat either, the stored detail is the server's own `source file not found: <path>`. Nothing
+on the Go side parses a word.
+
+`/health` reports `ffmpeg` as `true`/`false` (found or not), never where it was found. The
+path map's error and `device_reason` were already fixed text. `identity.model` (also
+`/health` `model`) is the `--model` value only when that is a hub id; when it is an
+existing directory or an absolute path (POSIX, a Windows drive or UNC path, or a leading
+`~`) it is `local:` plus the first 16 hex digits of the SHA-256 of the value, and the worker
+logs the raw value once at startup so the label can be traced. The decode fingerprint still
+hashes the raw value, so settings that differ only in the model's location still differ.
+One limit: FastAPI's own 422 for a request that is not a JSON object echoes the caller's
+own input back to the caller.
+
+What guards this: `test_whisper_server_cpu.py` and `test_whisper_mlx_pins.py` drive every
+error route with planted paths and stderr and look for them in the body; those runtime
+tests are the guarantee. `test_whisper_wire_text_guard.py` is a cheaper tripwire that
+parses every `scripts/whisper_*.py` and fails on a dict `error`/`detail`, an
+`HTTPException` detail (keyword or positional), the content of a `*Response`, a
+`_note_start` argument, or a `ChildFaultError`/`PathJobError` category that is not built in
+the sanctioned shape (a `wire_error(...)` call, a fixed string, or a `CAT_*` constant). It
+does not prove other shapes safe (a body assembled in a variable, a key other than
+`error`/`detail`), which is why the runtime tests exist.
 
 ### Choosing the device
 

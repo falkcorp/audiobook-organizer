@@ -1,5 +1,5 @@
 # file: scripts/whisper_mlx_server.py
-# version: 1.17.0
+# version: 1.18.0
 # guid: 3f8c21d4-7b6e-4a52-9c18-2d5e7a9b4c60
 # last-edited: 2026-11-17
 #
@@ -138,13 +138,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from whisper_machine_id import MachineIdentity  # noqa: E402
 from whisper_path_pipeline import (  # noqa: E402
+    CAT_DIED_ON_CLIP,
     CAT_EXITED_DURING_START,
+    CAT_KILLED_BY_SIGNAL,
+    CAT_NOT_REAPED,
     CAT_PROCESS_START_FAILED,
     CAT_PROTOCOL_ERROR,
     CAT_START_TIMEOUT,
     ERR_DECODER_CRASHED,
     ERR_DECODER_KILLED,
     ERR_TRANSCRIBE_TIMEOUT,
+    ERR_WORKER_MISCONFIGURED,
     ChildFaultError,
     PathJobError,
     PathPipeline,
@@ -155,6 +159,8 @@ from whisper_path_pipeline import (  # noqa: E402
     install_path_routes,
     misconfigured_error,
     past,
+    public_model_name,
+    wire_error,
 )
 
 DEFAULT_MODEL = "mlx-community/whisper-small.en-mlx"
@@ -390,7 +396,7 @@ class InferenceChild:
         except ChildFaultError as e:
             # The fixed category word, as the decode child does: /health is
             # unauthenticated and the message can carry a path or an OSError's text.
-            self._note_start(f"worker_misconfigured: {e.category}")
+            self._note_start(wire_error(ERR_WORKER_MISCONFIGURED, e.category))
             raise
         self._note_start(None)
 
@@ -465,6 +471,7 @@ class InferenceChild:
                         ERR_DECODER_KILLED,
                         f"the decode process was killed from outside (exit code {code}) "
                         "while on this clip; it was restarted",
+                        category=CAT_NOT_REAPED if code is None else CAT_KILLED_BY_SIGNAL,
                     )
                 # Anything else (a crash signal such as SIGABRT/SIGSEGV/SIGBUS,
                 # or a non-zero exit) is the decoder dying on the clip: a verdict
@@ -474,6 +481,7 @@ class InferenceChild:
                 raise PathJobError(
                     ERR_DECODER_CRASHED,
                     f"the decode process died (exit code {code}) on this clip; it was restarted",
+                    category=CAT_DIED_ON_CLIP,
                 )
             if line is None:
                 self._kill()
@@ -718,7 +726,7 @@ async def health():
     """
     return await pipeline.health_payload(
         identity=identity,
-        model=MODEL_REPO,
+        model=public_model_name(MODEL_REPO),
         backend="mlx",
         device="metal",
         decode_fingerprint=DECODE_FINGERPRINT,
@@ -746,7 +754,11 @@ if __name__ == "__main__":
 
     bind = os.environ.get("WHISPER_BIND", "127.0.0.1")
     port = int(os.environ.get("WHISPER_PORT", "19848"))
-    log.info(f"Ready — model={MODEL_REPO} backend=mlx bind={bind}:{port}")
+    # The raw value, once, here in the log; /health carries public_model_name's label.
+    log.info(
+        f"Ready — model={MODEL_REPO} (reported as {public_model_name(MODEL_REPO)}) "
+        f"backend=mlx bind={bind}:{port}"
+    )
     if bind != "127.0.0.1":
         log.warning(f"binding {bind} — this exposes the worker beyond loopback")
         # log_config=None is required, not cosmetic. uvicorn.run() otherwise

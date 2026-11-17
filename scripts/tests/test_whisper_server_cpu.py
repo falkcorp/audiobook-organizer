@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_server_cpu.py
-# version: 2.4.0
+# version: 2.5.0
 # guid: c3e91a60-2f5d-4b87-a4c2-7d0b6e18f953
 # last-edited: 2026-11-17
 #
@@ -862,6 +862,72 @@ def test_the_identity_is_the_one_in_force_when_the_answer_is_made(monkeypatch, t
     assert second["identity"]["decode_fingerprint"] != first["identity"]["decode_fingerprint"]
 
 
+# ── identity.model never carries a local path ────────────────────────────────
+
+
+def _model_cases(tmp_path):
+    models = tmp_path / "models" / "whisper-batcave"
+    models.mkdir(parents=True)
+    return {
+        "directory": str(models),
+        "absolute": str(tmp_path / "not-yet" / "there"),
+        "windows-drive": r"C:\Users\Bruce\models\batcave-passphrase-hunter2",
+    }
+
+
+def test_a_local_model_path_is_a_label_in_every_answer_and_on_health(monkeypatch, tmp_path):
+    for name, raw in _model_cases(tmp_path).items():
+        client, fake, share, app = _app(monkeypatch, tmp_path, meta={"model": raw})
+        _mapped_source(share)
+        _stub_extract(app, tmp_path)
+        label = wpp.public_model_name(raw)
+        assert label.startswith("local:") and len(label) == 22, name
+        job = {"path": "/lib/Gotham/Wayne/a.wav", "seconds": 5}
+        bodies = {
+            "health": client.get("/health").json(),
+            "upload": client.post(
+                "/transcribe", files={"file": ("a.wav", b"RIFFxxxx", "audio/wav")}
+            ).json(),
+            "path": client.post("/transcribe-path", json=job).json(),
+            "path-batch": client.post("/transcribe-path-batch", json={"jobs": {"k": job}}).json(),
+        }
+        for where, body in bodies.items():
+            ident = body if where == "health" else body["identity"]
+            assert ident["model"] == label, (name, where)
+            text = json.dumps(body)
+            for needle in ("Bruce", "hunter2", "batcave", "models", "not-yet", str(tmp_path)):
+                assert needle not in text, (name, where, needle)
+        # The fingerprint is of the REAL value: it is unchanged by the label, so a journal
+        # row's fingerprint still says which model and settings produced it.
+        want = ws.decode_fingerprint(raw, 8, "int8", True)
+        assert bodies["health"]["decode_fingerprint"] == want, name
+        assert bodies["path"]["identity"]["decode_fingerprint"] == want, name
+
+
+def test_a_hub_repo_id_is_reported_unchanged(monkeypatch, tmp_path):
+    client, fake, share, app = _app(
+        monkeypatch, tmp_path, meta={"model": "Systran/faster-whisper-small"}
+    )
+    body = client.get("/health").json()
+    assert body["model"] == "Systran/faster-whisper-small"
+    batch = client.post("/transcribe-batch", files=[("files", ("1", b"aa", "audio/wav"))]).json()
+    assert batch["identity"]["model"] == "Systran/faster-whisper-small"
+    assert body["decode_fingerprint"] == ws.decode_fingerprint(
+        "Systran/faster-whisper-small", 8, "int8", True
+    )
+
+
+def test_the_label_does_not_change_the_fingerprint_a_path_model_had(monkeypatch, tmp_path):
+    # Hashing the label instead of the raw value would orphan nothing today (no local
+    # install is deployed) but would make two directories with the same label collide
+    # with a hub id of the same text; pin that the fingerprint is the raw value's.
+    raw = _model_cases(tmp_path)["directory"]
+    client, *_ = _app(monkeypatch, tmp_path, meta={"model": raw})
+    got = client.get("/health").json()["decode_fingerprint"]
+    assert got == ws.decode_fingerprint(raw, 8, "int8", True)
+    assert got != ws.decode_fingerprint(wpp.public_model_name(raw), 8, "int8", True)
+
+
 # ── raw exception text never reaches an unauthenticated caller ───────────────
 
 # A string that must not survive: it looks like what a load error can hold (a path
@@ -991,8 +1057,9 @@ def _path_answer(client):
 
 
 def _scenarios():
-    """name -> (setup(monkeypatch, tmp_path, client, fake, share, app), want_code, send)
-    where send(client) is the request that reaches the failure."""
+    """name -> (setup(monkeypatch, tmp_path, client, fake, share, app), want, send)
+    where `want` is the exact error text the caller is told (a code and its category word,
+    or its fixed sentence) and send(client) is the request that reaches the failure."""
 
     def upload(client):
         return client.post(
@@ -1068,35 +1135,68 @@ def _scenarios():
         app.state.engine._free.get_nowait()
         app.state.engine._free.put(app.state.engine.runners[0])
 
+    whisper = "whisper_error: transcription failed on this worker"
+    started = "worker_misconfigured: process_start_failed"
     return {
-        "upload-backend-exception": (boom, "whisper_error", upload),
-        "upload-batch-backend-exception": (boom, "whisper_error", upload_batch),
-        "path-backend-exception": (boom_path, "whisper_error", path_single),
-        "path-batch-backend-exception": (boom_path, "whisper_error", _path_answer),
-        "path-extraction-raises": (extraction_raises, "whisper_error", _path_answer),
-        "path-mapping-raises": (mapping_raises, "path_unmapped", _path_answer),
+        "upload-backend-exception": (boom, whisper, upload),
+        "upload-batch-backend-exception": (boom, whisper, upload_batch),
+        "path-backend-exception": (boom_path, whisper, path_single),
+        "path-batch-backend-exception": (boom_path, whisper, _path_answer),
+        "path-extraction-raises": (extraction_raises, whisper, _path_answer),
+        "path-mapping-raises": (mapping_raises, "path_unmapped: mapping_failed", _path_answer),
         "path-ffmpeg-stderr-tail": (
             ffmpeg_fails(f"{SECRET}: {STDERR_TAIL}".encode()),
-            "ffmpeg_error",
+            "ffmpeg_error: other",
             _path_answer,
         ),
         "path-ffmpeg-read-fault": (
             ffmpeg_fails(f"{SECRET}: Input/output error".encode()),
-            "ffmpeg_timeout",
+            "ffmpeg_timeout: io_fault",
             _path_answer,
         ),
         "path-ffmpeg-container": (
             ffmpeg_fails(f"{SECRET}: demuxer not on whitelist".encode()),
-            "container_rejected",
+            "container_rejected: this worker does not accept the file's container",
             _path_answer,
         ),
-        "path-ffmpeg-oserror": (extraction_oserror, "ffmpeg_error", _path_answer),
-        "path-ffmpeg-io-oserror": (extraction_io_oserror, "ffmpeg_timeout", _path_answer),
-        "path-invalid-wav": (invalid_wav_oserror, "ffmpeg_error", _path_answer),
-        "path-root-unreadable": (root_unreadable, "path_unmapped", _path_answer),
-        "path-start-fault": (start_fault, "worker_misconfigured", _path_answer),
-        "upload-start-fault": (start_fault, "worker_misconfigured", upload),
+        "path-ffmpeg-oserror": (extraction_oserror, "ffmpeg_error: spawn_failed", _path_answer),
+        "path-ffmpeg-io-oserror": (
+            extraction_io_oserror,
+            "ffmpeg_timeout: os_io_error",
+            _path_answer,
+        ),
+        "path-invalid-wav": (invalid_wav_oserror, "ffmpeg_error: invalid_wav", _path_answer),
+        "path-root-unreadable": (
+            root_unreadable,
+            "path_unmapped: root_unreadable",
+            _path_answer,
+        ),
+        "path-start-fault": (start_fault, started, _path_answer),
+        "upload-start-fault": (start_fault, started, upload),
     }
+
+
+# What each scenario's own detail looks like in the worker log: a phrase only that
+# scenario's failure writes. A body that says less than the failure did must never mean
+# the operator knows less, so every scenario has to show its detail in the log, and a
+# line from some other failure (or from the request alone) does not satisfy it.
+LOGGED_DETAIL = {
+    "upload-backend-exception": "decode failed on",
+    "upload-batch-backend-exception": "decode failed on",
+    "path-backend-exception": "decode failed on",
+    "path-batch-backend-exception": "decode failed on",
+    "path-extraction-raises": "cannot cut",
+    "path-mapping-raises": "mapping failed under",
+    "path-ffmpeg-stderr-tail": STDERR_TAIL,
+    "path-ffmpeg-read-fault": "read fault during decode",
+    "path-ffmpeg-container": "format whitelist",
+    "path-ffmpeg-oserror": "No such file or directory",
+    "path-ffmpeg-io-oserror": "read failed on",
+    "path-invalid-wav": "cannot open",
+    "path-root-unreadable": "(mount lost?)",
+    "path-start-fault": "could not be started",
+    "upload-start-fault": "could not be started",
+}
 
 
 class _PathNamingFaultRunner(ws.InProcessRunner):
@@ -1112,52 +1212,41 @@ class _PathNamingFaultRunner(ws.InProcessRunner):
 
 @pytest.mark.parametrize("name", sorted(_scenarios()))
 def test_no_error_route_puts_local_detail_in_a_body(name, monkeypatch, tmp_path, caplog):
-    setup, want_code, send = _scenarios()[name]
+    setup, want, send = _scenarios()[name]
     client, fake, share, app = _app(monkeypatch, tmp_path)
     setup(monkeypatch, tmp_path, client, fake, share, app)
     with caplog.at_level(logging.WARNING):
         body = send(client)
     errors = _errors_in(body)
     assert errors, f"{name}: the scenario produced no error: {body}"
+    # EXACTLY the code and the category word (or the fixed sentence) for this failure:
+    # what the caller is told is a closed-set word, never a rendering of the failure.
     for err in errors:
-        code, _, sentence = err.partition(": ")
-        assert code == want_code, (name, err)
-        assert sentence, (name, err)
+        assert err == want, (name, err)
         _assert_nothing_local(tmp_path, name, err)
-    # Nothing but the code and a fixed sentence: the sentence is one the worker has
-    # on file, not a rendering of this particular failure.
-    for err in errors:
         assert err.partition(": ")[2] in wpp.all_public_sentences(), err
     # The whole body, identity and keys included, carries nothing local either (the
     # server-side prefix and the job key are the caller's own and are not in it).
     _assert_nothing_local(tmp_path, name, str(body), separators=False)
-    # Every refusal leaves its detail in the worker log: that is where the text the
-    # body withholds goes, so a body that says less never means an operator knows less.
-    assert caplog.text, f"{name}: nothing was logged"
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "path-backend-exception",
-        "path-ffmpeg-stderr-tail",
-        "path-ffmpeg-oserror",
-        "path-invalid-wav",
-        "path-mapping-raises",
-        "upload-backend-exception",
-    ],
-)
+def test_every_scenario_names_the_detail_it_must_log():
+    assert set(LOGGED_DETAIL) == set(_scenarios()), "a scenario has no log expectation"
+
+
+@pytest.mark.parametrize("name", sorted(_scenarios()))
 def test_the_detail_withheld_from_the_body_is_in_the_worker_log(
     name, monkeypatch, tmp_path, caplog
 ):
-    setup, _code, send = _scenarios()[name]
+    # Every refusal leaves its detail in the worker log: that is where the text the body
+    # withholds goes, so a body that says less never means an operator knows less. Each
+    # scenario looks for its OWN detail, so an unrelated line cannot satisfy it.
+    setup, _want, send = _scenarios()[name]
     client, fake, share, app = _app(monkeypatch, tmp_path)
     setup(monkeypatch, tmp_path, client, fake, share, app)
     with caplog.at_level(logging.WARNING):
         send(client)
-    # OSError quotes a file name with its backslashes doubled, so look for the part
-    # of the planted path that has none.
-    assert "batcave-passphrase-hunter2" in caplog.text or STDERR_TAIL in caplog.text, name
+    assert LOGGED_DETAIL[name] in caplog.text, f"{name}: {LOGGED_DETAIL[name]!r} is not in the log"
 
 
 def test_health_reports_whether_ffmpeg_was_found_never_where(monkeypatch, tmp_path):

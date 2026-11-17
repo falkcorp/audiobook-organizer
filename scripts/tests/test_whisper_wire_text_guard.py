@@ -1,29 +1,44 @@
 # file: scripts/tests/test_whisper_wire_text_guard.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 7c1e5a93-0d46-4b28-8f3a-5e9b2d7a4c60
 # last-edited: 2026-11-17
 #
-# A source-level guard on what the Whisper workers put in an HTTP body.
+# A source-level tripwire on what the Whisper workers put in an HTTP body.
 #
 # The workers have no authentication, so no error text that leaves them may carry what a
-# failure said (an exception message, an ffmpeg stderr line, a path). The runtime tests
-# (test_whisper_server_cpu.py, test_whisper_mlx_pins.py) drive the routes that exist
-# today; this one fails on a route written tomorrow that builds its error some other
-# way, before anything runs. The rule it enforces is the one in
-# scripts/whisper_path_pipeline.py ("What leaves the process"): an error in a body is
-# wire_error(...) or a fixed string, and nothing else.
+# failure said (an exception message, an ffmpeg stderr line, a path). The GUARANTEE that
+# none does is the runtime tests (test_whisper_server_cpu.py, test_whisper_mlx_pins.py),
+# which drive every route that exists today with a secret planted in every failure and
+# look for it in the body. This file is the cheaper, narrower layer: it fails, before
+# anything runs, on a route written tomorrow in one of the shapes below. It does NOT
+# prove that no other shape leaks (a body assembled from a variable, a dict built by
+# update() or a subscript assignment, a key other than "error" or "detail", a helper
+# that returns the text), and the runtime tests, not this file, are what covers those.
+# The rule it enforces is the one in scripts/whisper_path_pipeline.py ("What leaves the
+# process"): an error in a body is wire_error(...) or a fixed string.
 #
 # Stdlib only (ast + unittest), so it runs in the Repo Guards job, which has no
 # fastapi. It parses the scripts; it never imports them.
 #
-# What is checked, in every worker script:
-#   1. a dict literal with an "error" or "detail" key, and the detail= of an
-#      HTTPException, holds a constant, a wire_error(...) call, an `.wire` attribute (a
-#      PathJobError's sanitized text), or an f-string that interpolates only module
-#      constants. A dict handed straight to a pipe `send(...)` is the decode child's own
-#      protocol, not a response, and is exempt.
-#   2. a "ffmpeg" key in a body is a comparison (a bool), never the path.
-#   3. every ChildFaultError is built with a category= (the fixed word /health shows).
+# Every scripts/whisper_*.py is read (a glob, so a new worker script is covered the day
+# it is added). What is checked:
+#   1. a dict literal with an "error" or "detail" key holds a constant, a
+#      wire_error(...) call, an `.wire` attribute (a PathJobError's sanitized text), or an
+#      f-string that interpolates only module constants. A dict handed straight to a pipe
+#      `send(...)` is the decode child's own protocol, not a response, and is exempt.
+#   2. an HTTPException's detail, given as detail= OR as the second positional argument,
+#      is held to the same rule.
+#   3. the content of every `*Response` class (JSONResponse, PlainTextResponse, Response,
+#      ...), positional or content=, is a dict literal (checked by rule 1) or the same
+#      kind of safe text. A body built elsewhere and passed by name is refused.
+#   4. a "ffmpeg" key in a body is a comparison (a bool), never the path.
+#   5. the argument of `_note_start(...)` (what /health shows as child_start_error) is
+#      None, a wire_error(...) call or a CAT_* constant.
+#   6. every ChildFaultError and every PathJobError of a code that has a closed category
+#      set (the keys of CODE_CATEGORIES in whisper_path_pipeline.py) is built with a
+#      category= that is a CAT_* constant (or a conditional of two, or
+#      ffmpeg_stderr_category(...), or a ChildFaultError's own already-validated .category).
+#      A bare string there is refused, so a typo cannot reach the fault path unnoticed.
 
 import ast
 import pathlib
@@ -31,7 +46,9 @@ import re
 import unittest
 
 SCRIPTS = pathlib.Path(__file__).resolve().parents[1]
-WORKER_SCRIPTS = (
+# The scripts this guard must find. It reads every scripts/whisper_*.py; this is only the
+# floor, so a rename or a deletion of one of these cannot make the guard quietly read less.
+EXPECTED_SCRIPTS = (
     "whisper_path_pipeline.py",
     "whisper_server.py",
     "whisper_mlx_server.py",
@@ -39,6 +56,25 @@ WORKER_SCRIPTS = (
 )
 ERROR_KEYS = ("error", "detail")
 _UPPER = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_CAT = re.compile(r"^CAT_[A-Z0-9_]+$")
+
+
+def worker_scripts():
+    return sorted(SCRIPTS.glob("whisper_*.py"))
+
+
+def tabled_codes():
+    """The ERR_* names that have a category set: the keys of CODE_CATEGORIES in the
+    shared module, read from its source."""
+    tree = ast.parse((SCRIPTS / "whisper_path_pipeline.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "CODE_CATEGORIES" for t in node.targets)
+            and isinstance(node.value, ast.Dict)
+        ):
+            return frozenset(k.id for k in node.value.keys if isinstance(k, ast.Name))
+    raise AssertionError("whisper_path_pipeline.py has no CODE_CATEGORIES dict literal")
 
 
 def _is_const_name(node):
@@ -75,8 +111,32 @@ def _call_name(node):
     return func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
 
 
-def violations(source, filename="<source>"):
+def _category_ok(node):
+    """A category= that is a CAT_* constant, a conditional of two, a call of the one
+    function that maps stderr onto the closed table, or a ChildFaultError's own .category
+    (validated against the closed set when that error was built)."""
+    if isinstance(node, ast.Name):
+        return bool(_CAT.match(node.id))
+    if isinstance(node, ast.IfExp):
+        return _category_ok(node.body) and _category_ok(node.orelse)
+    if isinstance(node, ast.Call):
+        return _call_name(node) == "ffmpeg_stderr_category"
+    if isinstance(node, ast.Attribute):
+        return node.attr == "category"
+    return False
+
+
+def _note_start_ok(node):
+    return (
+        (isinstance(node, ast.Constant) and node.value is None)
+        or (isinstance(node, ast.Call) and _call_name(node) == "wire_error")
+        or (isinstance(node, ast.Name) and bool(_CAT.match(node.id)))
+    )
+
+
+def violations(source, filename="<source>", tabled=None):
     """Every place `source` could put local detail in a response, as 'file:line: why'."""
+    tabled = tabled_codes() if tabled is None else tabled
     tree = ast.parse(source, filename)
     parents = {}
     for parent in ast.walk(tree):
@@ -86,6 +146,9 @@ def violations(source, filename="<source>"):
 
     def report(node, why):
         found.append(f"{filename}:{node.lineno}: {why}")
+
+    def keyword(node, name):
+        return next((k.value for k in node.keywords if k.arg == name), None)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Dict):
@@ -103,40 +166,85 @@ def violations(source, filename="<source>"):
         elif isinstance(node, ast.Call):
             name = _call_name(node)
             if name == "HTTPException":
-                for kw in node.keywords:
-                    if kw.arg == "detail" and not _safe_text(kw.value):
-                        report(kw.value, f"HTTPException detail is {ast.unparse(kw.value)!r}")
-            elif name == "JSONResponse" and node.args and not isinstance(node.args[0], ast.Dict):
-                report(node, "JSONResponse body must be a dict literal this guard can read")
-            elif name == "ChildFaultError" and not any(k.arg == "category" for k in node.keywords):
-                report(node, "ChildFaultError without a category=")
+                detail = keyword(node, "detail")
+                if detail is None and len(node.args) > 1:
+                    detail = node.args[1]
+                if detail is not None and not _safe_text(detail):
+                    report(detail, f"HTTPException detail is {ast.unparse(detail)!r}")
+            elif name.endswith("Response"):
+                content = keyword(node, "content")
+                if content is None and node.args:
+                    content = node.args[0]
+                if (
+                    content is not None
+                    and not isinstance(content, ast.Dict)
+                    and not _safe_text(content)
+                ):
+                    report(
+                        node,
+                        f"{name} content is {ast.unparse(content)!r}, not a dict literal "
+                        "this guard can read or safe text",
+                    )
+            elif name == "_note_start":
+                if len(node.args) != 1 or not _note_start_ok(node.args[0]):
+                    report(node, "_note_start takes None, a wire_error(...) call or a CAT_* name")
+            elif name == "ChildFaultError":
+                category = keyword(node, "category")
+                if category is None:
+                    report(node, "ChildFaultError without a category=")
+                elif not _category_ok(category):
+                    report(category, f"category= is {ast.unparse(category)!r}, not a CAT_* name")
+            elif name == "PathJobError":
+                category = keyword(node, "category")
+                code = node.args[0] if node.args else None
+                if not (isinstance(code, ast.Name) and code.id.startswith("ERR_")):
+                    report(node, "PathJobError's code must be an ERR_* name this guard can read")
+                elif code.id in tabled and category is None:
+                    report(node, f"PathJobError({code.id}) without a category=")
+                if category is not None and not _category_ok(category):
+                    report(category, f"category= is {ast.unparse(category)!r}, not a CAT_* name")
     return found
 
 
 class WireTextGuard(unittest.TestCase):
     def test_no_worker_script_builds_a_response_from_failure_text(self):
         problems = []
-        for name in WORKER_SCRIPTS:
-            path = SCRIPTS / name
-            self.assertTrue(path.is_file(), f"{name} is not where the guard expects it")
-            problems += violations(path.read_text(encoding="utf-8"), name)
+        for path in worker_scripts():
+            problems += violations(path.read_text(encoding="utf-8"), path.name)
         self.assertEqual([], problems, "\n".join(problems))
+
+    def test_every_expected_script_is_read(self):
+        found = {p.name for p in worker_scripts()}
+        for name in EXPECTED_SCRIPTS:
+            self.assertIn(name, found, f"{name} is not where the guard expects it")
 
     def test_the_guard_looks_at_something(self):
         # A guard that matches nothing passes vacuously; the shared module alone has
-        # several response dicts and the Mac worker's category faults.
+        # several response dicts, the category faults and the start-error notes.
         counts = {}
-        for name in WORKER_SCRIPTS:
-            tree = ast.parse((SCRIPTS / name).read_text(encoding="utf-8"))
-            counts[name] = sum(
+        calls = {"_note_start": 0, "ChildFaultError": 0, "PathJobError": 0}
+        for path in worker_scripts():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            counts[path.name] = sum(
                 1
                 for n in ast.walk(tree)
                 if isinstance(n, ast.Dict)
                 and any(isinstance(k, ast.Constant) and k.value in ERROR_KEYS for k in n.keys)
             )
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Call) and _call_name(n) in calls:
+                    calls[_call_name(n)] += 1
         self.assertGreaterEqual(counts["whisper_path_pipeline.py"], 4, counts)
-        for name in WORKER_SCRIPTS:
+        for name in EXPECTED_SCRIPTS:
             self.assertGreaterEqual(counts[name], 1, counts)
+        self.assertGreaterEqual(calls["_note_start"], 4, calls)
+        self.assertGreaterEqual(calls["ChildFaultError"], 10, calls)
+        self.assertGreaterEqual(calls["PathJobError"], 30, calls)
+
+    def test_the_tabled_codes_are_read_from_the_shared_module(self):
+        tabled = tabled_codes()
+        self.assertTrue({"ERR_FFMPEG", "ERR_PATH_UNMAPPED", "ERR_WORKER_MISCONFIGURED"} <= tabled)
+        self.assertNotIn("ERR_NOT_FOUND", tabled)
 
     def test_the_guard_flags_each_way_to_leak(self):
         leaks = {
@@ -144,12 +252,37 @@ class WireTextGuard(unittest.TestCase):
             "an f-string of one": 'def f(e):\n    return {"error": f"failed: {e}"}\n',
             "a name": 'def f(msg):\n    return {"error": msg}\n',
             "a detail dict": 'def f(e):\n    return {"detail": str(e)}\n',
-            "an HTTPException": (
+            "an HTTPException keyword": (
                 "def f(e):\n    raise HTTPException(status_code=500, detail=str(e))\n"
             ),
+            "an HTTPException positional": "def f(e):\n    raise HTTPException(500, str(e))\n",
             "the ffmpeg path": 'def f():\n    return {"ffmpeg": shutil.which("ffmpeg")}\n',
             "an opaque response": "def f(e):\n    return JSONResponse(make(e), 500)\n",
-            "an uncategorised fault": ('def f():\n    raise ChildFaultError("x", starting=True)\n'),
+            "a response content keyword": (
+                "def f(body):\n    return JSONResponse(content=body, status_code=500)\n"
+            ),
+            "a plain-text response": "def f(e):\n    return PlainTextResponse(str(e))\n",
+            "a bare response content keyword": (
+                "def f(e):\n    return Response(content=str(e), status_code=500)\n"
+            ),
+            "a start note of text": "def f(self, e):\n    self._note_start(str(e))\n",
+            "a start note of an f-string": (
+                'def f(self, e):\n    self._note_start(f"worker_misconfigured: {e}")\n'
+            ),
+            "an uncategorised fault": 'def f():\n    raise ChildFaultError("x", starting=True)\n',
+            "a bare-string fault category": (
+                'def f():\n    raise ChildFaultError("x", starting=True, category="start_timeout")\n'
+            ),
+            "a bare-string job category": (
+                'def f():\n    raise PathJobError(ERR_FFMPEG, "x", category="invalid_data")\n'
+            ),
+            "a typo'd category name": (
+                'def f():\n    raise PathJobError(ERR_FFMPEG, "x", category=invalid_data)\n'
+            ),
+            "a categorised code without one": (
+                'def f():\n    raise PathJobError(ERR_FFMPEG, "x")\n'
+            ),
+            "a computed code": 'def f(code):\n    raise PathJobError(code, "x")\n',
         }
         for why, source in leaks.items():
             with self.subTest(why):
@@ -165,7 +298,21 @@ class WireTextGuard(unittest.TestCase):
             '    e = {"ffmpeg": shutil.which("ffmpeg") is not None}\n'
             '    conn.send({"id": 1, "error": f"{type(e).__name__}: {e}"})\n'
             '    raise HTTPException(status_code=422, detail="fixed")\n'
-            '    raise ChildFaultError("x", starting=True, category="start_timeout")\n'
+            '    raise HTTPException(422, "fixed")\n'
+            "    raise HTTPException(422, wire_error(ERR_BAD_REQUEST, CAT_JOB_NOT_OBJECT))\n"
+            '    return JSONResponse({"detail": wire_error(ERR_INTERNAL)}, status_code=500)\n'
+            '    return JSONResponse(content={"detail": "fixed"}, status_code=500)\n'
+            '    return PlainTextResponse("fixed")\n'
+            "    self._note_start(None)\n"
+            "    self._note_start(wire_error(ERR_WORKER_MISCONFIGURED, e.category))\n"
+            "    self._note_start(CAT_START_TIMEOUT)\n"
+            '    raise ChildFaultError("x", starting=True, category=CAT_START_TIMEOUT)\n'
+            '    raise PathJobError(ERR_NOT_FOUND, "x")\n'
+            '    raise PathJobError(ERR_FFMPEG, "x", category=CAT_OTHER)\n'
+            '    raise PathJobError(ERR_FFMPEG, "x", category=ffmpeg_stderr_category(err))\n'
+            '    raise PathJobError(ERR_DECODER_KILLED, "x",'
+            " category=CAT_NOT_REAPED if code is None else CAT_KILLED_BY_SIGNAL)\n"
+            "    raise PathJobError(ERR_WORKER_MISCONFIGURED, str(e), category=e.category)\n"
         )
         self.assertEqual([], violations(fine))
 

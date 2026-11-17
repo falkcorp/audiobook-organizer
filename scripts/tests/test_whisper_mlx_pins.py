@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_pins.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 0e5b7d3a-4c19-4f82-b6a0-91d3c7e5f284
 # last-edited: 2026-11-17
 #
@@ -12,20 +12,22 @@
 # been edited on purpose in exactly three places, each commented where it sits:
 # the ffmpeg argv gained -protocol_whitelist (round 2), /health's path_map_error
 # stopped quoting entries (round 2), and the error text a job answer carries became
-# a fixed sentence per code (round 5, below).
+# a code plus one word from a closed set per code (rounds 5 and 6, below).
 #
 # They drive ONLY seams that survive a refactor: HTTP, environment variables,
 # the PATH lookup of ffmpeg, and WHISPER_BACKEND_FACTORY (a real inference
 # child process running tests/fake_whisper_backend.py). They never patch a
 # function inside the module, so a refactor cannot make them pass vacuously.
 #
-# Round 5 (R4-m3). The error text a job answer carries is now a stable code and ONE
-# fixed sentence per code, never what the failure said: the worker has no
-# authentication, and an exception, an ffmpeg stderr line or a mapped path can each
-# name a profile directory or a host. The codes are unchanged (the Go client matches
-# on nothing else), the sentences are pinned literally below so reading one here shows
-# what a caller sees, and /health's "ffmpeg" is whether it was found, not where. The
-# detail that used to be in the answer is in the worker log.
+# Rounds 5 and 6 (R4-m3, R5-m2). The error text a job answer carries is now a stable
+# code and ONE word from a closed set for that code ("path_unmapped: root_unreadable",
+# "ffmpeg_error: invalid_data"), or one fixed sentence for a code with a single reason,
+# never what the failure said: the worker has no authentication, and an exception, an
+# ffmpeg stderr line or a mapped path can each name a profile directory or a host. The
+# codes are unchanged (the Go client matches on nothing else), the texts are pinned
+# literally below so reading one here shows what a caller sees, and /health's "ffmpeg"
+# is whether it was found, not where. The detail that used to be in the answer is in
+# the worker log.
 #
 # Literal values below (the two fingerprints, the ffmpeg argv) are pinned on
 # purpose: both fingerprints are folded into the server's result-journal keys,
@@ -50,13 +52,22 @@ except ImportError as exc:  # pragma: no cover - dependency-gated
 _SCRIPTS = pathlib.Path(__file__).resolve().parents[1]
 _SERVER = _SCRIPTS / "whisper_mlx_server.py"
 
-# What a caller is told, per code (whisper_path_pipeline.PUBLIC_SENTENCES, pinned here
-# as literals on purpose: changing a sentence is a deliberate edit of this file).
-UNMAPPED = "path_unmapped: the path is not available on this worker"
-BAD_REQUEST = "bad_request: the request was not valid"
+# What a caller is told, per code and category (whisper_path_pipeline.CODE_CATEGORIES
+# and PUBLIC_SENTENCES, pinned here as literals on purpose: changing a word is a
+# deliberate edit of this file).
+UNMAPPED_NOT_ABSOLUTE = "path_unmapped: not_absolute"
+UNMAPPED_DOT_DOT = "path_unmapped: dot_dot"
+UNMAPPED_NOT_UNDER_PREFIX = "path_unmapped: not_under_prefix"
+UNMAPPED_ROOT_UNREADABLE = "path_unmapped: root_unreadable"
+UNMAPPED_SYMLINK_ESCAPE = "path_unmapped: symlink_escape"
+UNMAPPED_MAP_UNSET = "path_unmapped: path_map_unset"
+BAD_REQUEST_JOB = "bad_request: job_not_object"
+BAD_REQUEST_PATH = "bad_request: path_invalid"
+BAD_REQUEST_SECONDS = "bad_request: seconds_invalid"
 NOT_FOUND = "not_found: the file was not found on this worker"
-FFMPEG_ERROR = "ffmpeg_error: the audio could not be extracted from the file"
-FFMPEG_TIMEOUT = "ffmpeg_timeout: reading the file did not finish in time"
+FFMPEG_ERROR_INVALID_DATA = "ffmpeg_error: invalid_data"
+FFMPEG_ERROR_EMPTY_CLIP = "ffmpeg_error: empty_clip"
+FFMPEG_TIMEOUT_IO_FAULT = "ffmpeg_timeout: io_fault"
 CONTAINER = "container_rejected: this worker does not accept the file's container"
 WHISPER_ERROR = "whisper_error: transcription failed on this worker"
 FFMPEG_MISSING = "worker_misconfigured: ffmpeg_missing"
@@ -202,6 +213,30 @@ def test_decode_fingerprint_follows_the_model(pin, monkeypatch):
     assert fp != DECODE_FINGERPRINT_DEFAULT_MODEL
 
 
+def test_a_local_model_directory_is_a_label_on_health_and_a_hub_id_is_not(
+    pin, monkeypatch, tmp_path
+):
+    import hashlib
+
+    local = tmp_path / "models" / "whisper-batcave"
+    local.mkdir(parents=True)
+    seen = {}
+    for raw in (str(local), "mlx-community/whisper-tiny-mlx"):
+        monkeypatch.setenv("WHISPER_MLX_MODEL", raw)
+        other = _load()
+        try:
+            seen[raw] = TestClient(other.app).get("/health").json()
+            fingerprint = other.DECODE_FINGERPRINT
+        finally:
+            other._inference.shutdown()
+        # the fingerprint is of the raw value in both cases
+        assert seen[raw]["decode_fingerprint"] == fingerprint
+    want = "local:" + hashlib.sha256(str(local).encode()).hexdigest()[:16]
+    assert seen[str(local)]["model"] == want
+    assert str(tmp_path) not in json.dumps(seen[str(local)])
+    assert seen["mlx-community/whisper-tiny-mlx"]["model"] == "mlx-community/whisper-tiny-mlx"
+
+
 # ── /health ──────────────────────────────────────────────────────────────────
 
 
@@ -331,7 +366,7 @@ def test_the_single_path_endpoint(pin):
     ok = client.post("/transcribe-path", json={"path": "/lib/Gotham/Arkham/Book/01.m4b"}).json()
     assert ok["error"] is None and ok["text"].startswith("heard-")
     bad = client.post("/transcribe-path", json={"path": "/elsewhere/x.m4b"}).json()
-    assert bad == {"text": "", "error": UNMAPPED}
+    assert bad == {"text": "", "error": UNMAPPED_NOT_UNDER_PREFIX}
 
 
 # ── per-job request validation: the exact error text per input ───────────────
@@ -339,29 +374,29 @@ def test_the_single_path_endpoint(pin):
 GOOD = "/lib/Gotham/Arkham/Book/01.m4b"
 
 REFUSALS = [
-    ("not-a-dict", "oops", BAD_REQUEST),
-    ("no-path", {"seconds": 5}, BAD_REQUEST),
-    ("empty-path", {"path": ""}, BAD_REQUEST),
-    ("int-path", {"path": 7}, BAD_REQUEST),
-    ("nul", {"path": GOOD + "\x00"}, BAD_REQUEST),
-    ("relative", {"path": "lib/Gotham/x"}, UNMAPPED),
-    ("dotdot", {"path": "/lib/Gotham/../../etc/passwd"}, UNMAPPED),
+    ("not-a-dict", "oops", BAD_REQUEST_JOB),
+    ("no-path", {"seconds": 5}, BAD_REQUEST_PATH),
+    ("empty-path", {"path": ""}, BAD_REQUEST_PATH),
+    ("int-path", {"path": 7}, BAD_REQUEST_PATH),
+    ("nul", {"path": GOOD + "\x00"}, BAD_REQUEST_PATH),
+    ("relative", {"path": "lib/Gotham/x"}, UNMAPPED_NOT_ABSOLUTE),
+    ("dotdot", {"path": "/lib/Gotham/../../etc/passwd"}, UNMAPPED_DOT_DOT),
     (
         "dotdot-inside",
         {"path": "/lib/Gotham/Arkham/../Arkham/Book/01.m4b"},
-        UNMAPPED,
+        UNMAPPED_DOT_DOT,
     ),
-    ("unmapped", {"path": "/etc/passwd"}, UNMAPPED),
+    ("unmapped", {"path": "/etc/passwd"}, UNMAPPED_NOT_UNDER_PREFIX),
     (
         "component-lookalike",
         {"path": "/lib/GothamX/Arkham/Book/01.m4b"},
-        UNMAPPED,
+        UNMAPPED_NOT_UNDER_PREFIX,
     ),
-    ("seconds-zero", {"path": GOOD, "seconds": 0}, None),
-    ("seconds-big", {"path": GOOD, "seconds": 601}, None),
-    ("seconds-bool", {"path": GOOD, "seconds": True}, None),
-    ("seconds-str", {"path": GOOD, "seconds": "90"}, None),
-    ("seconds-float", {"path": GOOD, "seconds": 1.5}, None),
+    ("seconds-zero", {"path": GOOD, "seconds": 0}, BAD_REQUEST_SECONDS),
+    ("seconds-big", {"path": GOOD, "seconds": 601}, BAD_REQUEST_SECONDS),
+    ("seconds-bool", {"path": GOOD, "seconds": True}, BAD_REQUEST_SECONDS),
+    ("seconds-str", {"path": GOOD, "seconds": "90"}, BAD_REQUEST_SECONDS),
+    ("seconds-float", {"path": GOOD, "seconds": 1.5}, BAD_REQUEST_SECONDS),
     (
         "missing",
         {"path": "/lib/Gotham/Arkham/Book/02.m4b"},
@@ -380,11 +415,8 @@ def test_refusals_are_pinned(pin, name, job, expected):
     client, _, log = pin
     res = _post(client, {name: job}).json()["results"][name]
     assert res["text"] == ""
-    if expected is None:
-        assert res["error"] == BAD_REQUEST
-    else:
-        assert res["error"] == expected
-    if not expected or not expected.startswith("not_found"):
+    assert res["error"] == expected
+    if not expected.startswith("not_found"):
         assert _ffmpeg_calls(log) == [], "a refused job must never reach ffmpeg"
 
 
@@ -410,7 +442,7 @@ def test_a_symlink_out_of_the_share_is_refused(pin, tmp_path):
         },
     ).json()["results"]
     for key in ("dir", "file"):
-        assert res[key]["error"] == UNMAPPED
+        assert res[key]["error"] == UNMAPPED_SYMLINK_ESCAPE
     assert _ffmpeg_calls(log) == []
 
 
@@ -429,7 +461,7 @@ def test_a_lost_root_is_path_unmapped(pin, monkeypatch, tmp_path):
     client, _, log = pin
     monkeypatch.setenv("WHISPER_PATH_MAP", f"/lib/Gotham={tmp_path / 'gone'}")
     res = _post(client, {"k": {"path": GOOD}}).json()["results"]["k"]
-    assert res["error"] == UNMAPPED
+    assert res["error"] == UNMAPPED_ROOT_UNREADABLE
     assert _ffmpeg_calls(log) == []
 
 
@@ -439,14 +471,14 @@ def test_a_root_that_is_not_a_mount_is_unreadable_by_default(pin, monkeypatch):
     body = client.get("/health").json()
     assert body["path_roots"] == [{"prefix": "/lib/Gotham", "readable": False}]
     res = _post(client, {"k": {"path": GOOD}}).json()["results"]["k"]
-    assert res["error"] == UNMAPPED
+    assert res["error"] == UNMAPPED_ROOT_UNREADABLE
 
 
 def test_no_map_refuses_every_job(pin, monkeypatch):
     client, _, _ = pin
     monkeypatch.delenv("WHISPER_PATH_MAP")
     res = _post(client, {"k": {"path": GOOD}}).json()["results"]["k"]
-    assert res["error"] == UNMAPPED
+    assert res["error"] == UNMAPPED_MAP_UNSET
 
 
 # ── the request envelope ─────────────────────────────────────────────────────
@@ -510,10 +542,17 @@ def test_an_absurd_deadline_header_is_clamped_not_an_error(pin):
 @pytest.mark.parametrize(
     ("stderr", "expected"),
     [
-        ("Input/output error", FFMPEG_TIMEOUT),
-        ("Stale file handle", FFMPEG_TIMEOUT),
+        ("Input/output error", FFMPEG_TIMEOUT_IO_FAULT),
+        ("Stale file handle", FFMPEG_TIMEOUT_IO_FAULT),
         ("x not on whitelist y", CONTAINER),
-        ("Invalid data found when processing input", FFMPEG_ERROR),
+        ("Invalid data found when processing input", FFMPEG_ERROR_INVALID_DATA),
+        ("moov atom not found", "ffmpeg_error: moov_missing"),
+        ("Output file #0 does not contain any stream", "ffmpeg_error: no_audio_stream"),
+        ("Unknown decoder 'batcave'", "ffmpeg_error: unsupported_codec"),
+        ("av_read_frame: partial file", "ffmpeg_error: truncated_file"),
+        ("Permission denied", "ffmpeg_error: permission_denied"),
+        # Stderr the table has never seen is "other", never the stderr itself.
+        ("the Joker rewired the batcave-keypad-ledger", "ffmpeg_error: other"),
     ],
 )
 def test_ffmpeg_failures_are_classified(pin, monkeypatch, stderr, expected):
@@ -528,7 +567,7 @@ def test_an_empty_clip_is_an_ffmpeg_error(pin, monkeypatch):
     client, _, _ = pin
     monkeypatch.setenv("FAKE_FFMPEG_MODE", "empty")
     res = _post(client, {"k": {"path": GOOD}}).json()["results"]["k"]
-    assert res == {"text": "", "error": FFMPEG_ERROR}
+    assert res == {"text": "", "error": FFMPEG_ERROR_EMPTY_CLIP}
 
 
 def test_a_missing_ffmpeg_is_worker_misconfigured(pin, monkeypatch, tmp_path):

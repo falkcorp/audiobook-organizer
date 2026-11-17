@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_remote_test.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: b21d7c95-3e48-4a06-9f1d-5c8e0a64b7f3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -278,6 +278,63 @@ func TestRemotePage_WorkerErrorsMapToTheRightStatus(t *testing.T) {
 			noWrites()
 		})
 	}
+}
+
+// The worker's error text on the wire is "<code>: <category>" (a code with one reason
+// carries a fixed sentence instead): no free text, so nothing local to the worker is in
+// it. What the server stores is therefore that category word, and these pin exactly how
+// much of it survives for each verdict: the code alone decides the status, and nothing
+// here parses the category.
+func TestClassifyTranscribeError_StoresWhatTheWorkerSent(t *testing.T) {
+	present := writeSource(t, "present.m4b")
+	missing := filepath.Join(t.TempDir(), "gone.m4b")
+	cases := []struct {
+		name         string
+		src, errText string
+		wantStatus   string
+		wantDetail   string
+	}{
+		// ffmpeg_error: the status IS the code, so only the category is stored.
+		{"ffmpeg_error stores the category alone", present, "ffmpeg_error: invalid_data", statusFFmpegError, "invalid_data"},
+		{"ffmpeg_error other", present, "ffmpeg_error: other", statusFFmpegError, "other"},
+		// path_unmapped the server can stat: the worker's mapping is at fault, code kept.
+		{"path_unmapped keeps code and category", present, "path_unmapped: root_unreadable", statusPathUnmapped, "path_unmapped: root_unreadable"},
+		// the server cannot stat it either: the file is gone, the detail is the server's own.
+		{"path_unmapped with the file gone", missing, "path_unmapped: not_under_prefix", statusSourceMissing, "source file not found: " + missing},
+		// everything else is whisper_error with the text as sent.
+		{"ffmpeg_timeout", present, "ffmpeg_timeout: io_fault", statusWhisperError, "ffmpeg_timeout: io_fault"},
+		{"decoder_killed", present, "decoder_killed: killed_by_signal", statusWhisperError, "decoder_killed: killed_by_signal"},
+		{"decoder_crashed", present, "decoder_crashed: died_on_clip", statusWhisperError, "decoder_crashed: died_on_clip"},
+		{"bad_request", present, "bad_request: seconds_invalid", statusWhisperError, "bad_request: seconds_invalid"},
+		{"a code with one reason carries its sentence", present, "container_rejected: this worker does not accept the file's container", statusWhisperError, "container_rejected: this worker does not accept the file's container"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, detail := classifyTranscribeError(true, tc.src, tc.errText)
+			if status != tc.wantStatus || detail != tc.wantDetail {
+				t.Fatalf("classify(%q) = (%q, %q), want (%q, %q)", tc.errText, status, detail, tc.wantStatus, tc.wantDetail)
+			}
+		})
+	}
+}
+
+// The same round-trip through the page: the category the worker sent is what lands in the
+// stored transcribe_error of the book.
+func TestRemotePage_TheStoredErrorIsTheWorkersCategory(t *testing.T) {
+	src := writeSource(t, "one.m4b")
+	store, written, books := remoteBookStore(t, map[string][]string{"b1": {src}})
+	rootDir, noWrites := noClipWrites(t)
+	swapPathSeams(t, true, "", func(_ context.Context, _ map[string]transcribe.PathJob, _ transcribe.BatchOptions) (map[string]transcribe.BatchResult, error) {
+		return map[string]transcribe.BatchResult{"b1": {Error: "path_unmapped: root_unreadable"}}, nil
+	})
+	runRemotePage(t, store, books, rootDir)
+	if got := statusOf(t, written); got != statusPathUnmapped {
+		t.Fatalf("status = %q, want %q", got, statusPathUnmapped)
+	}
+	if e := (*written)[0].TranscribeError; e == nil || *e != "path_unmapped: root_unreadable" {
+		t.Fatalf("stored transcribe_error = %v, want %q", e, "path_unmapped: root_unreadable")
+	}
+	noWrites()
 }
 
 // A book whose source the SERVER cannot stat never costs a worker request, and

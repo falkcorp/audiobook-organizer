@@ -1,5 +1,5 @@
 # file: scripts/whisper_decode_child.py
-# version: 2.3.0
+# version: 2.4.0
 # guid: 5d0c8e7a-3b94-4a62-9f1e-b7a4c2d81e56
 # last-edited: 2026-11-17
 #
@@ -77,11 +77,23 @@ from typing import Any, Callable, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from whisper_path_pipeline import (  # noqa: E402
+    CAT_DIED_ON_CLIP,
+    CAT_EXITED_DURING_START,
+    CAT_KILLED_BY_SIGNAL,
+    CAT_MODEL_LOAD_FAILED,
+    CAT_NOT_REAPED,
+    CAT_PINNED_MODEL_MISMATCH,
+    CAT_PROCESS_START_FAILED,
+    CAT_PROTOCOL_ERROR,
+    CAT_START_TIMEOUT,
+    CAT_WRONG_ANSWER,
     ERR_DECODER_CRASHED,
     ERR_DECODER_KILLED,
     ERR_TRANSCRIBE_TIMEOUT,
+    ERR_WORKER_MISCONFIGURED,
     ChildFaultError,
     PathJobError,
+    wire_error,
 )
 
 log = logging.getLogger("whisper_decode_child")
@@ -413,7 +425,7 @@ class DecodeChild:
             self._fault_free_start(wait)
         except ChildFaultError as e:
             log.warning("decode process failed to start (%s): %s", e.category, e)
-            self._note_start(f"worker_misconfigured: {e.category}")
+            self._note_start(wire_error(ERR_WORKER_MISCONFIGURED, e.category))
             raise
         self._note_start(None)
         return self.meta()
@@ -436,7 +448,7 @@ class DecodeChild:
             raise ChildFaultError(
                 f"decode process could not be started: {e}",
                 starting=True,
-                category="process_start_failed",
+                category=CAT_PROCESS_START_FAILED,
             )
         child_conn.close()  # the child's end is the child's now (EOF needs this)
         protected = self._protect(proc.pid)
@@ -450,7 +462,7 @@ class DecodeChild:
                 raise ChildFaultError(
                     f"decode process not ready after {wait:.0f}s",
                     starting=True,
-                    category="start_timeout",
+                    category=CAT_START_TIMEOUT,
                 )
             msg = parent_conn.recv()
         except (EOFError, OSError):
@@ -459,21 +471,21 @@ class DecodeChild:
             raise ChildFaultError(
                 f"decode process exited while starting (exit code {code})",
                 starting=True,
-                category="exited_during_start",
+                category=CAT_EXITED_DURING_START,
             )
         if msg.get("fatal"):
             self._kill()
             raise ChildFaultError(
                 f"decode process could not load its model: {msg['fatal']}",
                 starting=True,
-                category="model_load_failed",
+                category=CAT_MODEL_LOAD_FAILED,
             )
         if not msg.get("ready"):
             self._kill()
             raise ChildFaultError(
                 "decode process sent an unexpected startup message",
                 starting=True,
-                category="protocol_error",
+                category=CAT_PROTOCOL_ERROR,
             )
         meta = dict(msg.get("meta") or {})
         if self._pin is not None:
@@ -483,7 +495,7 @@ class DecodeChild:
                 raise ChildFaultError(
                     f"decode process refused: {why}",
                     starting=True,
-                    category="pinned_model_mismatch",
+                    category=CAT_PINNED_MODEL_MISMATCH,
                 )
         log.info(
             "decode process %s ready: model=%s device=%s compute_type=%s fallback=%s (%s)",
@@ -552,10 +564,12 @@ class DecodeChild:
                         ERR_DECODER_KILLED,
                         f"the decode process was killed from outside (exit code {code}) "
                         "while on this clip; it was restarted",
+                        category=CAT_NOT_REAPED if code is None else CAT_KILLED_BY_SIGNAL,
                     )
                 raise PathJobError(
                     ERR_DECODER_CRASHED,
                     f"the decode process died (exit code {code}) on this clip; it was restarted",
+                    category=CAT_DIED_ON_CLIP,
                 )
             except PathJobError:
                 raise
@@ -572,6 +586,7 @@ class DecodeChild:
                 raise PathJobError(
                     ERR_DECODER_CRASHED,
                     "the decode process answered a different request; it was restarted",
+                    category=CAT_WRONG_ANSWER,
                 )
             if msg.get("error"):
                 raise RuntimeError(str(msg["error"]))
