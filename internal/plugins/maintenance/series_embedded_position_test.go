@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_embedded_position_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c41ba05-3e92-4d18-b6a7-51fd0e93c284
 // last-edited: 2026-11-16
 
@@ -311,11 +311,11 @@ func TestWriteSeriesDenumberReport_ListsHeldCandidatesToo(t *testing.T) {
 	if err := writeSeriesDenumberReport(path, plans, false, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) // split on "\n" only: TrimSpace would eat the trailing empty columns (tabs) of the last row
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
 	if len(lines) != 4 {
 		t.Fatalf("%d lines, want 1 header + 3 candidates:\n%s", len(lines), raw)
 	}
@@ -352,7 +352,7 @@ func TestWriteSeriesDenumberReport_NeutralisesTabsInNames(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	raw, _ := os.ReadFile(path)
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("%d lines, want 2 — an embedded newline split the row:\n%s", len(lines), raw)
 	}
