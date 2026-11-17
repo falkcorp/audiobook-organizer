@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_wire_text_guard.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 7c1e5a93-0d46-4b28-8f3a-5e9b2d7a4c60
 # last-edited: 2026-11-17
 #
@@ -39,6 +39,11 @@
 #      category= that is a CAT_* constant (or a conditional of two, or
 #      ffmpeg_stderr_category(...), or a ChildFaultError's own already-validated .category).
 #      A bare string there is refused, so a typo cannot reach the fault path unnoticed.
+#   7. that category is also a MEMBER of its code's set. The sets are read from
+#      CODE_CATEGORIES (and START_CATEGORIES, which a ChildFaultError is held to) in
+#      whisper_path_pipeline.py, so PathJobError(ERR_FFMPEG, ..., category=CAT_IO_FAULT)
+#      or a CAT_ name nothing defines is refused here, not by a ValueError that the
+#      request handler's `except Exception` would turn into the wrong answer.
 
 import ast
 import pathlib
@@ -63,18 +68,67 @@ def worker_scripts():
     return sorted(SCRIPTS.glob("whisper_*.py"))
 
 
-def tabled_codes():
-    """The ERR_* names that have a category set: the keys of CODE_CATEGORIES in the
-    shared module, read from its source."""
+def _frozenset_names(node, env):
+    """The names in a frozenset expression of the shared module: frozenset({A, B}), a name
+    bound earlier to one (START_CATEGORIES), or a `|` of those. None when unreadable."""
+    if isinstance(node, ast.Name):
+        return env.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        left, right = _frozenset_names(node.left, env), _frozenset_names(node.right, env)
+        return None if left is None or right is None else left | right
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "frozenset"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Set)
+        and all(isinstance(e, ast.Name) for e in node.args[0].elts)
+    ):
+        return frozenset(e.id for e in node.args[0].elts)
+    return None
+
+
+def category_sets():
+    """{ERR_* name: the CAT_* names that code may carry}, read from CODE_CATEGORIES in the
+    shared module's source, plus {"START": START_CATEGORIES} for a ChildFaultError. Every
+    CAT_* constant must be defined once (a name resolves to one word)."""
     tree = ast.parse((SCRIPTS / "whisper_path_pipeline.py").read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Assign)
-            and any(isinstance(t, ast.Name) and t.id == "CODE_CATEGORIES" for t in node.targets)
-            and isinstance(node.value, ast.Dict)
-        ):
-            return frozenset(k.id for k in node.value.keys if isinstance(k, ast.Name))
-    raise AssertionError("whisper_path_pipeline.py has no CODE_CATEGORIES dict literal")
+    env, words, table = {}, {}, None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if _CAT.match(target.id) and isinstance(node.value, ast.Constant):
+            words[target.id] = node.value.value
+        names = _frozenset_names(node.value, env)
+        if names is not None:
+            env[target.id] = names
+        if target.id == "CODE_CATEGORIES" and isinstance(node.value, ast.Dict):
+            table = node.value
+    if table is None:
+        raise AssertionError("whisper_path_pipeline.py has no CODE_CATEGORIES dict literal")
+    sets = {}
+    for key, value in zip(table.keys, table.values):
+        names = _frozenset_names(value, env)
+        if not isinstance(key, ast.Name) or names is None:
+            raise AssertionError(f"CODE_CATEGORIES entry {ast.dump(key)} is not readable")
+        undefined = sorted(n for n in names if n not in words)
+        if undefined:
+            raise AssertionError(f"{key.id} lists {undefined}, which are not defined CAT_ names")
+        sets[key.id] = names
+    if len(set(words.values())) != len(words):
+        raise AssertionError("two CAT_ constants share one word")
+    if "START_CATEGORIES" not in env:
+        raise AssertionError("whisper_path_pipeline.py has no START_CATEGORIES frozenset")
+    sets["START"] = env["START_CATEGORIES"]
+    return sets
+
+
+def tabled_codes():
+    """The ERR_* names that have a category set: the keys of CODE_CATEGORIES."""
+    return frozenset(k for k in category_sets() if k != "START")
 
 
 def _is_const_name(node):
@@ -126,6 +180,32 @@ def _category_ok(node):
     return False
 
 
+def _membership_problems(node, allowed, owner):
+    """Why `node` (a category= that _category_ok accepts) is not one of `allowed`, the CAT_
+    names `owner` may carry; [] when it is. A conditional is checked branch by branch.
+    ffmpeg_stderr_category(...) returns table rows, all of which are ERR_FFMPEG's words
+    (a test in test_whisper_path_pipeline.py holds the table to that); an `.category` is a
+    ChildFaultError's, validated against START_CATEGORIES when it was built, so it fits
+    only a set that contains all of them."""
+    if isinstance(node, ast.Name):
+        if node.id in allowed:
+            return []
+        return [f"{node.id} is not a category of {owner}"]
+    if isinstance(node, ast.IfExp):
+        return _membership_problems(node.body, allowed, owner) + _membership_problems(
+            node.orelse, allowed, owner
+        )
+    if isinstance(node, ast.Call):
+        return [] if owner == "ERR_FFMPEG" else [f"{owner} does not take ffmpeg's stderr words"]
+    if isinstance(node, ast.Attribute):
+        return (
+            []
+            if owner in ("ERR_WORKER_MISCONFIGURED", "ChildFaultError")
+            else [f"{owner} does not take a ChildFaultError's category"]
+        )
+    return [f"cannot read {ast.unparse(node)!r}"]
+
+
 def _note_start_ok(node):
     return (
         (isinstance(node, ast.Constant) and node.value is None)
@@ -134,9 +214,11 @@ def _note_start_ok(node):
     )
 
 
-def violations(source, filename="<source>", tabled=None):
-    """Every place `source` could put local detail in a response, as 'file:line: why'."""
-    tabled = tabled_codes() if tabled is None else tabled
+def violations(source, filename="<source>", sets=None):
+    """Every place `source` could put local detail in a response, as 'file:line: why'.
+    `sets` is category_sets() (the shared module's closed sets), read when not given."""
+    sets = category_sets() if sets is None else sets
+    tabled = frozenset(k for k in sets if k != "START")
     tree = ast.parse(source, filename)
     parents = {}
     for parent in ast.walk(tree):
@@ -194,6 +276,9 @@ def violations(source, filename="<source>", tabled=None):
                     report(node, "ChildFaultError without a category=")
                 elif not _category_ok(category):
                     report(category, f"category= is {ast.unparse(category)!r}, not a CAT_* name")
+                else:
+                    for why in _membership_problems(category, sets["START"], "ChildFaultError"):
+                        report(category, f"ChildFaultError category: {why}")
             elif name == "PathJobError":
                 category = keyword(node, "category")
                 code = node.args[0] if node.args else None
@@ -203,6 +288,11 @@ def violations(source, filename="<source>", tabled=None):
                     report(node, f"PathJobError({code.id}) without a category=")
                 if category is not None and not _category_ok(category):
                     report(category, f"category= is {ast.unparse(category)!r}, not a CAT_* name")
+                elif category is not None and isinstance(code, ast.Name):
+                    for why in _membership_problems(
+                        category, sets.get(code.id, frozenset()), code.id
+                    ):
+                        report(category, f"PathJobError({code.id}): {why}")
     return found
 
 
@@ -240,6 +330,15 @@ class WireTextGuard(unittest.TestCase):
         self.assertGreaterEqual(calls["_note_start"], 4, calls)
         self.assertGreaterEqual(calls["ChildFaultError"], 10, calls)
         self.assertGreaterEqual(calls["PathJobError"], 30, calls)
+
+    def test_the_category_sets_are_read_from_the_shared_module(self):
+        sets = category_sets()
+        self.assertIn("CAT_SPAWN_FAILED", sets["ERR_WORKER_MISCONFIGURED"])
+        self.assertNotIn("CAT_SPAWN_FAILED", sets["ERR_FFMPEG"])
+        self.assertIn("CAT_IO_FAULT", sets["ERR_FFMPEG_TIMEOUT"])
+        # A ChildFaultError is held to the start words, a strict subset of its code's set.
+        self.assertTrue(sets["START"] < sets["ERR_WORKER_MISCONFIGURED"])
+        self.assertNotIn("CAT_SPAWN_FAILED", sets["START"])
 
     def test_the_tabled_codes_are_read_from_the_shared_module(self):
         tabled = tabled_codes()
@@ -283,6 +382,38 @@ class WireTextGuard(unittest.TestCase):
                 'def f():\n    raise PathJobError(ERR_FFMPEG, "x")\n'
             ),
             "a computed code": 'def f(code):\n    raise PathJobError(code, "x")\n',
+            "another code's category": (
+                'def f():\n    raise PathJobError(ERR_FFMPEG, "x", category=CAT_IO_FAULT)\n'
+            ),
+            "a category in one branch of a conditional that is another code's": (
+                'def f(a):\n    raise PathJobError(ERR_DECODER_KILLED, "x",'
+                " category=CAT_NOT_REAPED if a else CAT_DIED_ON_CLIP)\n"
+            ),
+            "a category nothing defines": (
+                'def f():\n    raise PathJobError(ERR_FFMPEG, "x", category=CAT_INVALID_DATAA)\n'
+            ),
+            "a category on a code with a fixed sentence": (
+                'def f():\n    raise PathJobError(ERR_NOT_FOUND, "x", category=CAT_OTHER)\n'
+            ),
+            "a worker-side word under ffmpeg_error": (
+                'def f():\n    raise PathJobError(ERR_FFMPEG, "x", category=CAT_SPAWN_FAILED)\n'
+            ),
+            "stderr words under another code": (
+                'def f(e):\n    raise PathJobError(ERR_PATH_UNMAPPED, "x",'
+                " category=ffmpeg_stderr_category(e))\n"
+            ),
+            "a fault category outside the start words": (
+                'def f():\n    raise ChildFaultError("x", starting=True, category=CAT_DIED_ON_CLIP)\n'
+            ),
+            "a fault category that is a job word": (
+                'def f():\n    raise ChildFaultError("x", starting=True, category=CAT_SPAWN_FAILED)\n'
+            ),
+            "a fault category an ffmpeg word": (
+                'def f():\n    raise ChildFaultError("x", starting=True, category=CAT_OTHER)\n'
+            ),
+            "an inherited category under another code": (
+                'def f(e):\n    raise PathJobError(ERR_FFMPEG, "x", category=e.category)\n'
+            ),
         }
         for why, source in leaks.items():
             with self.subTest(why):
@@ -313,6 +444,11 @@ class WireTextGuard(unittest.TestCase):
             '    raise PathJobError(ERR_DECODER_KILLED, "x",'
             " category=CAT_NOT_REAPED if code is None else CAT_KILLED_BY_SIGNAL)\n"
             "    raise PathJobError(ERR_WORKER_MISCONFIGURED, str(e), category=e.category)\n"
+            '    raise PathJobError(ERR_WORKER_MISCONFIGURED, "x", category=CAT_SPAWN_FAILED)\n'
+            '    raise PathJobError(ERR_WORKER_MISCONFIGURED, "x", category=CAT_FFMPEG_MISSING)\n'
+            '    raise PathJobError(ERR_FFMPEG_TIMEOUT, "x", category=CAT_IO_FAULT)\n'
+            '    raise PathJobError(ERR_PATH_UNMAPPED, "x", category=CAT_SOURCE_UNREADABLE)\n'
+            '    raise ChildFaultError("x", starting=True, category=CAT_FFMPEG_MISSING)\n'
         )
         self.assertEqual([], violations(fine))
 

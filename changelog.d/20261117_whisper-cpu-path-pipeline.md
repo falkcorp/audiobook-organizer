@@ -132,7 +132,7 @@ closed set for that code (a code with several reasons), built by a single functi
 takes no free text (`wire_error`), for the upload routes, the path routes and an
 unexpected 500. The sets are: `ffmpeg_error` (`invalid_data`, `moov_missing`,
 `no_audio_stream`, `unsupported_codec`, `truncated_file`, `permission_denied`,
-`empty_clip`, `invalid_wav`, `spawn_failed`, `other`), `ffmpeg_timeout`
+`empty_clip`, `invalid_wav`, `other`), `ffmpeg_timeout`
 (`extract_timeout`, `io_fault`, `os_io_error`), `path_unmapped` (`not_absolute`,
 `dot_dot`, `not_under_prefix`, `root_unreadable`, `symlink_escape`, `path_map_unset`,
 `path_map_invalid`, `mapping_failed`, `source_unreadable`), `path_unrepresentable`
@@ -141,9 +141,12 @@ unexpected 500. The sets are: `ffmpeg_error` (`invalid_data`, `moov_missing`,
 `decoder_killed` (`killed_by_signal`, `not_reaped`), `decoder_crashed` (`died_on_clip`,
 `wrong_answer`) and `worker_misconfigured` (`exited_during_start`, `ffmpeg_missing`,
 `model_load_failed`, `pinned_model_mismatch`, `process_start_failed`, `protocol_error`,
-`start_timeout`). ffmpeg's stderr is mapped onto the `ffmpeg_error` words by a small fixed
-phrase table with `other` for anything it does not match, so a stderr line never reaches
-the answer. The detail goes to the worker log when the answer is made. `/health` reports
+`start_timeout`, `spawn_failed`, `temp_wav_unusable`). ffmpeg's stderr is mapped onto the `ffmpeg_error` words by a small fixed
+phrase table (matched with the book's file path removed from the stderr, and specific rows
+before the generic one) with `other` for anything it does not match, so a stderr line never
+reaches the answer. A worker-side fault (ffmpeg that cannot be run, the worker's own temp
+clip unreadable or unwritable) is `worker_misconfigured`, which the server defers and
+retries on another worker, not the durable `ffmpeg_error` verdict on the book. The detail goes to the worker log when the answer is made. `/health` reports
 `ffmpeg` as a boolean, not the path it was found at. `child_start_error` is a fixed code
 plus one of the `worker_misconfigured` words on both workers, and `device_reason` is a fixed
 phrase. What the server stores: the Go client reads only the code to choose the status.
@@ -152,8 +155,8 @@ The stored `transcribe_error` is then `ffmpeg_error`'s word alone (the status is
 `path_unmapped: root_unreadable`), or, when the server cannot stat the file either, its own
 `source file not found: <path>`. **The Mac worker's error wording changes** (it used to
 return the exception's own text, and a dead decode's exit code); its codes do not.
-`identity.model` and `/health` `model` no longer carry a local path: a `--model` that is an
-existing directory or an absolute path is reported as `local:` and the first 16 hex digits
+`identity.model` and `/health` `model` no longer carry a local path: a `--model` written as
+a path or naming an existing directory (decided once at startup) is reported as `local:` and the first 16 hex digits
 of the SHA-256 of the value (a hub id such as `Systran/faster-whisper-small` is reported
 unchanged), and the raw value is logged once at startup. The decode fingerprint still hashes
 the raw value. One limit remains: FastAPI's own 422 for a body that is not a JSON object

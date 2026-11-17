@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.18.0
+# version: 1.19.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-11-17
 #
@@ -1319,12 +1319,12 @@ def test_a_child_sigkilled_mid_clip_is_decoder_killed_not_a_crash(childsrv, capl
 def test_a_child_sigterm_or_unreaped_is_decoder_killed(childsrv, monkeypatch):
     mod, client, put, _ = childsrv
     real = mod.InferenceChild._exit_code
-    for code in (-15, None):
+    for code, word in ((-15, "killed_by_signal"), (None, "not_reaped")):
         monkeypatch.setattr(
             mod.InferenceChild, "_exit_code", lambda self, c=code: (real(self), c)[1]
         )
         r = client.post("/transcribe-path", json=put("t.m4b", b"DIEDIE")).json()
-        assert r["error"].startswith("decoder_killed: "), (code, r)
+        assert r["error"] == f"decoder_killed: {word}", (code, r)
 
 
 @pytest.mark.parametrize("data", [b"ABRTABRT", b"DIEDIE"])

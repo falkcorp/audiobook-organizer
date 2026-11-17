@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_decode_child.py
-# version: 2.3.0
+# version: 2.4.0
 # guid: 2c9d7e15-6a48-4f3b-8e01-d5b7a39c6f82
 # last-edited: 2026-11-17
 #
@@ -118,7 +118,24 @@ def test_a_child_killed_from_outside_is_decoder_killed_then_recovers(make_child,
     with pytest.raises(wpp.PathJobError) as e:
         child.run(_wav(tmp_path, "killed.wav"), 20)
     assert _code(e) == "decoder_killed"
+    assert e.value.wire == "decoder_killed: killed_by_signal"
     assert child.run(_wav(tmp_path, "b.wav"), 20) == "heard:b.wav"
+
+
+def test_a_child_that_cannot_be_reaped_is_decoder_killed_not_reaped(
+    make_child, tmp_path, monkeypatch
+):
+    # The pipe closed but the exit code never came (join timed out): not evidence the
+    # clip did it, so decoder_killed, with the word that says why.
+    child = make_child()
+    child.start()
+    real = wdc.DecodeChild._exit_code
+    monkeypatch.setattr(
+        wdc.DecodeChild, "_exit_code", lambda self, proc: (real(self, proc), None)[1]
+    )
+    with pytest.raises(wpp.PathJobError) as e:
+        child.run(_wav(tmp_path, "crash.wav"), 20)
+    assert e.value.wire == "decoder_killed: not_reaped"
 
 
 def test_a_backend_error_is_that_clips_error_and_the_child_stays_up(make_child, tmp_path):
