@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds_native_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e2745473-88af-4f8a-a81d-54e5e9a3b2d2
-// last-edited: 2026-11-12
+// last-edited: 2026-11-16
 
 package jobs_test
 
@@ -156,7 +156,10 @@ func newRecomputeStore(ids []string) (markerStore, *[]string, *[]string) {
 // two jobs to cover, not the brief's three.
 func TestJobKinds_CheckpointerFromRC(t *testing.T) {
 	var gotStore database.Store
-	defs := jobs.Kinds(jobs.KindDeps{NewStore: func(tasks.Writer) jobs.Store { return gotStore.(jobs.Store) }}, nil)
+	defs, err := jobs.Kinds(jobs.KindDeps{NewStore: func(tasks.Writer) jobs.Store { return gotStore.(jobs.Store) }}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("recompute-book-aggregates saves through rc and resumes from HEAD's bytes", func(t *testing.T) {
 		ids := make([]string, 250)
@@ -271,13 +274,14 @@ func TestJobKinds_MatchHEADWrapper(t *testing.T) {
 
 	var asked []tasks.Kind
 	scheduled := tasks.Kind("books.maintenance.dedup-books")
-	defs := jobs.Kinds(jobs.KindDeps{}, func(k tasks.Kind) *tasks.Schedule {
+	defs, err := jobs.Kinds(jobs.KindDeps{}, func(k tasks.Kind) *tasks.Schedule {
 		asked = append(asked, k)
 		if k == scheduled {
 			return &tasks.Schedule{}
 		}
 		return nil
 	})
+	require.NoError(t, err)
 	all := maintenance.All()
 	require.Len(t, all, 34)
 	require.Len(t, defs, len(all))

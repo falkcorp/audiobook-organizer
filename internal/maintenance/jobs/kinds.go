@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
 // last-edited: 2026-11-16
 
@@ -214,14 +214,21 @@ const (
 // Kinds returns one native kind per registered maintenance job, in
 // maintenance.All() order. Nothing registers them in production: F5-18 passes
 // the list to Registrar.Tasks. sched is the schedule lookup of rule R9; nil
-// means no kind is scheduled.
-func Kinds(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
+// means no kind is scheduled. The error is a job whose declared write set cannot
+// be derived (a trace names a store method the shared table has no row for): no
+// kind is returned then, because a list that silently lacks one job's writes
+// would register it as declaring none.
+func Kinds(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) ([]tasks.Definition, error) {
 	jobs := maintenance.All()
 	out := make([]tasks.Definition, 0, len(jobs))
 	for _, job := range jobs {
-		out = append(out, kindFor(job, deps, sched))
+		d, err := kindFor(job, deps, sched)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
 	}
-	return out
+	return out, nil
 }
 
 // kindsRoot names Kinds from non-test code so tasklint's unregistered-kind rule
@@ -231,15 +238,19 @@ func Kinds(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Defini
 var _ = Kinds
 
 // kindFor builds one job's native kind.
-func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) (tasks.Definition, error) {
 	id := job.ID()
+	fx, err := effectsFor(id)
+	if err != nil {
+		return nil, fmt.Errorf("maintenance job %s: %w", id, err)
+	}
 	kind := tasks.Kind(kindNamePrefix + id)
 	pol := job.Policy()
 
 	c := tasks.Common{
 		Title:    job.Name(),
 		Help:     job.Description(),
-		Effects:  effectsFor(id),
+		Effects:  fx,
 		Perms:    tasks.Permissions{Start: startRequirement(job)},
 		Resume:   resumeForJob(id, pol.ResumePolicy),
 		Priority: tasks.PriorityNormal,
@@ -253,7 +264,7 @@ func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kin
 		c.Schedule = sched(kind)
 	}
 	shell := kindShell{kind: kind, job: job, deps: deps, liveOnly: !AdvertisedDryRunDefault(job), derivesApply: declaresApplyKey(job)}
-	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, json.RawMessage]{Common: c, Run: shell.run})
+	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, json.RawMessage]{Common: c, Run: shell.run}), nil
 }
 
 // resumeFor is rule R5's resume column. An unspecified policy stays zero, which
@@ -322,30 +333,33 @@ func startRequirement(job maintenance.MaintenanceJob) rbac.Requirement {
 	return rbac.Requirement{}
 }
 
-// jobWrites is rule R7's "Writes found": per job, the resource kinds its body
-// and every function it calls write. It is DERIVED, not typed: kinds_writes.go
-// lists, per job, the store write methods the job reaches and the writes no row
-// of the shared table (internal/maintenance/resources) covers, and jobWrites is
-// the union of those rows. An empty set is a job that writes nothing (ReadOnly).
-// A job missing from the table gets no declared Effects, which registration
-// refuses.
+// effectsFor is rule R7's "Writes found": per job, the resource kinds its body
+// and every function it calls write (jobWritesFor). They are DERIVED, not typed:
+// kinds_writes.go lists, per job, the store write methods the job reaches, and
+// the union of their rows in the shared table
+// (internal/maintenance/resources) is the set. An empty set is a job that
+// writes nothing (ReadOnly). A job missing from the traces gets no declared
+// Effects, which registration refuses. The error is a trace that names a method
+// the table has no row for.
 //
 // Resource kinds (tasks.Res("books", kind)) are the pkg/ops constants.
-var jobWrites = deriveJobWrites()
-
-func effectsFor(jobID string) tasks.Effects {
-	ws, ok := jobWrites[jobID]
+func effectsFor(jobID string) (tasks.Effects, error) {
+	all, err := jobWritesFor()
+	if err != nil {
+		return tasks.Effects{}, err
+	}
+	ws, ok := all[jobID]
 	if !ok {
-		return tasks.Effects{}
+		return tasks.Effects{}, nil
 	}
 	if len(ws) == 0 {
-		return tasks.ReadOnly()
+		return tasks.ReadOnly(), nil
 	}
 	refs := make([]tasks.Resource, len(ws))
 	for i, w := range ws {
 		refs[i] = tasks.Res("books", string(w))
 	}
-	return tasks.Writes(refs...)
+	return tasks.Writes(refs...), nil
 }
 
 // kindShell is the native shell around one job's Run.

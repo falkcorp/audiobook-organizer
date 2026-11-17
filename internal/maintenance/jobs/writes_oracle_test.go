@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
 // last-edited: 2026-11-16
 
@@ -27,6 +27,23 @@ import (
 // oracleModule is the module whose code the oracle walks into; a call that
 // leaves it is judged by name only (os file mutators), never followed.
 const oracleModule = "github.com/falkcorp/audiobook-organizer"
+
+// oracleBuildTags and oracleEnv are the build the oracle walks: the production
+// binary's (Dockerfile and Makefile build -tags "embed_frontend fts5
+// native_taglib" for linux), not the host's. Without them the walk follows
+// reflink_darwin.go and fix_file_modes_unix.go on a Mac and the !native_taglib
+// files, which are not what ships.
+//
+// native_taglib is the one production tag left out: taglib_cgo.go imports "C"
+// and needs the vendored static libraries and a linux C toolchain to load, which
+// a developer machine does not have, so the walk would not type-check (the
+// !native_taglib variant, taglib_support.go, is walked instead). Both variants
+// reach the same store surface from scan-composer-tags (ResolvePathForWrite,
+// fileops.WriteTagsSafe, VerifyWritten), checked by reading both. CGO_ENABLED=0
+// keeps the load from invoking cgo for the same reason.
+const oracleBuildTags = "-tags=embed_frontend,fts5"
+
+var oracleEnv = []string{"GOOS=linux", "CGO_ENABLED=0"}
 
 // oracleVerb is what makes an interface method call a write. A method that
 // does not start with one of these is a read.
@@ -228,14 +245,52 @@ type oracleJob struct {
 	calls map[string]string
 }
 
+// checkProductionBuild fails when the load did not pick the production build: the
+// linux variant of a file the jobs reach through internal/fileops, and not the
+// darwin one the host would give. A Config that silently stopped applying the
+// build flags would otherwise walk the wrong files and still pass.
+func checkProductionBuild(pkgs []*packages.Package) error {
+	var found bool
+	var bad error
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		if p.PkgPath != oracleModule+"/internal/fileops" {
+			return
+		}
+		found = true
+		var linux, darwin bool
+		for _, f := range p.GoFiles {
+			switch {
+			case strings.HasSuffix(f, "reflink_linux.go"):
+				linux = true
+			case strings.HasSuffix(f, "reflink_darwin.go"):
+				darwin = true
+			}
+		}
+		if !linux || darwin {
+			bad = fmt.Errorf("the oracle did not load the linux build of internal/fileops (reflink_linux.go=%v, reflink_darwin.go=%v)", linux, darwin)
+		}
+	})
+	if !found {
+		return fmt.Errorf("internal/fileops is not in the jobs package's import graph; pick another file to check the build with")
+	}
+	return bad
+}
+
 func loadOracleJobs() (map[string]oracleJob, error) {
-	cfg := &packages.Config{Mode: packages.LoadAllSyntax}
+	cfg := &packages.Config{
+		Mode:       packages.LoadAllSyntax,
+		BuildFlags: []string{oracleBuildTags},
+		Env:        append(os.Environ(), oracleEnv...),
+	}
 	pkgs, err := packages.Load(cfg, "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs")
 	if err != nil {
 		return nil, fmt.Errorf("load jobs package: %w", err)
 	}
 	if packages.PrintErrors(pkgs) > 0 {
 		return nil, fmt.Errorf("the jobs package does not type-check")
+	}
+	if err := checkProductionBuild(pkgs); err != nil {
+		return nil, err
 	}
 	prog, ssapkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
 	for _, p := range ssapkgs {
@@ -288,6 +343,16 @@ func oracleJobs(t *testing.T) map[string]oracleJob {
 	return oracleResult
 }
 
+// oracleKinds is every job's native kind, built with the real write sets.
+func oracleKinds(t *testing.T) []tasks.Definition {
+	t.Helper()
+	defs, err := jobs.Kinds(jobs.KindDeps{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return defs
+}
+
 // constantReturn is the string a one-statement method returns.
 func constantReturn(f *ssa.Function) string {
 	for _, b := range f.Blocks {
@@ -323,7 +388,7 @@ func TestJobWrites_MatchSSAOracle(t *testing.T) {
 		return
 	}
 	derived := oracleJobs(t)
-	defs := jobs.Kinds(jobs.KindDeps{}, nil)
+	defs := oracleKinds(t)
 	if len(defs) != len(derived) {
 		t.Errorf("%d kinds but the oracle found %d jobs", len(defs), len(derived))
 	}
@@ -354,7 +419,7 @@ func TestJobWrites_MatchSSAOracle(t *testing.T) {
 // read from the code, not from checkpointingJobs.
 func TestKindShell_ResumeContinueMeansCheckpoint(t *testing.T) {
 	derived := oracleJobs(t)
-	for _, d := range jobs.Kinds(jobs.KindDeps{}, nil) {
+	for _, d := range oracleKinds(t) {
 		id := strings.TrimPrefix(string(d.Kind()), "books.maintenance.")
 		got := tasks.CommonOf(d).Resume
 		if got == tasks.ResumeContinue && !derived[id].checkpoints {
