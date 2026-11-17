@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_decode_child.py
-# version: 2.0.0
+# version: 2.0.1
 # guid: 2c9d7e15-6a48-4f3b-8e01-d5b7a39c6f82
 # last-edited: 2026-11-17
 #
@@ -494,6 +494,17 @@ def test_with_several_workers_all_serve_the_pin_or_the_worker_refuses_to_start(t
             k.shutdown()
 
 
+def test_engine_meta_is_the_pin_even_when_no_child_is_up(tmp_path):
+    # /health must keep showing what the worker serves while its child is down or
+    # restarting, not an empty meta that would drop the fingerprint.
+    pin, (kid,) = _pinned_children(tmp_path)
+    full = {"model": "large-v2", "device": "cuda", "compute_type": "float16", "pid": 1}
+    assert pin.check_and_record(full) is None
+    engine = ws.Engine([kid], pin)  # kid was never started
+    assert not kid.alive()
+    assert engine.meta()["model"] == "large-v2" and engine.meta()["device"] == "cuda"
+
+
 def test_health_reports_the_pinned_resolution_even_after_a_restart(tmp_path, monkeypatch):
     monkeypatch.setenv("WHISPER_MACHINE_ID", "gotham-pin-1")
     pin, (kid,) = _pinned_children(tmp_path)
@@ -594,8 +605,16 @@ def test_the_computed_deadline_has_a_floor_and_a_hard_cap():
 
 @POSIX_ONLY
 def test_ctrl_c_does_not_reach_the_decode_and_the_child_has_its_own_session(make_child, tmp_path):
-    child = make_child()
-    pid = child.start()["pid"]
+    # A process started from a background shell job inherits SIGINT as IGNORED, and
+    # Python then never installs its KeyboardInterrupt handler, which would make this
+    # test pass for the wrong reason. Start the child from a parent with the default
+    # disposition so the child's own signal.signal(SIGINT, SIG_IGN) is what is tested.
+    previous = signal.signal(signal.SIGINT, signal.SIG_DFL)
+    try:
+        child = make_child()
+        pid = child.start()["pid"]
+    finally:
+        signal.signal(signal.SIGINT, previous)
     assert os.getsid(pid) != os.getsid(0), "its own session: a terminal's SIGINT misses it"
     out = {}
 
