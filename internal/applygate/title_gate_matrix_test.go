@@ -1,5 +1,5 @@
 // file: internal/applygate/title_gate_matrix_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 9a1e4c73-5d2b-4f08-b6a1-3c7e0d58f924
 // last-edited: 2026-11-17
 
@@ -52,12 +52,23 @@ func gateRun(h string, book database.Book, pos string, cand metafetch.MetadataCa
 // The Batman rows are the fixtures: the pairs are published as different books
 // by the owner's catalogue, not data from a real library.
 //
-// M1a ("Year One" against "Grayson: Year One") is neutral and applies at rt5,
-// like M3d ("Hush" against "Hush: Part 2"): the two title fields have the same
-// shape, one text continuing past the other's, and nothing in them says
-// "Grayson" is a credit and "Part 2" is not. A rule that told them apart would
-// have to excuse text by what another field says, the move that made round 1
-// leaky. It is recorded here as the open class it is.
+// M1a ("Year One" against "Grayson: Year One") is neutral and applies at rt5:
+// one text continues past the other's, and nothing in the fields says "Grayson"
+// is a franchise word and not part of the title. A rule that told them apart
+// would have to excuse text by what another field says, the move that made
+// round 1 leaky. It is recorded here as the open class it is, and the policy
+// (a neutral title applies with an agreeing runtime) is under owner review: see
+// title_owner_review_pins_test.go.
+//
+// Two rows CHANGED when the combined round adopted the part-marker and
+// number-by-kind rules (see the changelog fragment, "Reversals"):
+//   - M3d, "Hush" against "Hush: Part 2": was neutral and applied at rt5. A
+//     candidate that is part 2 of a book whose files say nothing of parts is
+//     refused as partial_book whatever the runtime says, since two parts of one
+//     book are often within 5% of each other's length.
+//   - O5, "Knightfall 2: Book 3" against "Knightfall 3: Book 2": was neutral.
+//     The two sides state different volumes in their fields, so it is a title
+//     conflict; one side holding the other's numbers settles nothing.
 func TestEvaluate_TitleGateMatrix(t *testing.T) {
 	bat, tlh := "Batman", "The Long Halloween"
 	legends := "Legends of the Dark Knight"
@@ -90,7 +101,7 @@ func TestEvaluate_TitleGateMatrix(t *testing.T) {
 		{"M3a one-sided number: Subtitle 'Book 2'", "neutral", "rt5", database.Book{Title: "Knightfall"}, "", metafetch.MetadataCandidate{Title: "Knightfall", Subtitle: "Book 2", SeriesPosition: "2"}},
 		{"M3b one-sided number: '(Book 2)'", "neutral", "rt5", database.Book{Title: "Knightfall"}, "", metafetch.MetadataCandidate{Title: "Knightfall (Book 2)"}},
 		{"M3c one-sided number: ' - 2'", "neutral", "rt5", database.Book{Title: "Knightfall"}, "", metafetch.MetadataCandidate{Title: "Knightfall - 2"}},
-		{"M3d lone part marker 'Hush'<-'Hush: Part 2'", "neutral", "rt5", database.Book{Title: "Hush"}, "", metafetch.MetadataCandidate{Title: "Hush: Part 2"}},
+		{"M3d lone part marker 'Hush'<-'Hush: Part 2' (REVERSED: partial_book)", "neutral", "never", database.Book{Title: "Hush"}, "", metafetch.MetadataCandidate{Title: "Hush: Part 2"}},
 		{"M3e control 'Knightfall'<-'Knightfall: Book 2'", "neutral", "rt5", database.Book{Title: "Knightfall"}, "", metafetch.MetadataCandidate{Title: "Knightfall: Book 2"}},
 
 		{"D2a franchise-only candidate", "neutral", "rt5", database.Book{Title: "Batman: Dark Victory"}, "", metafetch.MetadataCandidate{Title: "Batman"}},
@@ -103,7 +114,7 @@ func TestEvaluate_TitleGateMatrix(t *testing.T) {
 		{"O2 sequel by number", "neutral", "rt5", database.Book{Title: "Hush"}, "", metafetch.MetadataCandidate{Title: "Hush 2"}},
 		{"O3 ordinal words", "neutral", "rt5", database.Book{Title: "The Second Robin"}, "", metafetch.MetadataCandidate{Title: "The Third Robin"}},
 		{"O4 seven words, one differs", "neutral", "rt5", database.Book{Title: "Gotham City Dark Knight Detective Tales Batman"}, "", metafetch.MetadataCandidate{Title: "Gotham City Dark Knight Noir Tales Batman"}},
-		{"O5 numbers swapped between segments", "neutral", "never", database.Book{Title: "Knightfall 2: Book 3"}, "", metafetch.MetadataCandidate{Title: "Knightfall 3: Book 2"}},
+		{"O5 numbers swapped between segments (REVERSED: block)", "block", "never", database.Book{Title: "Knightfall 2: Book 3"}, "", metafetch.MetadataCandidate{Title: "Knightfall 3: Book 2"}},
 		{"O6 unicode roman numerals", "block", "never", database.Book{Title: "Hush Ⅱ"}, "", metafetch.MetadataCandidate{Title: "Hush Ⅲ"}},
 
 		{"N1a year folder vs volume", "neutral", "rt5", database.Book{Title: "Knightfall", FilePath: "/lib/Bruce Wayne/Knightfall (1993)/Knightfall (1993).m4b"}, "", metafetch.MetadataCandidate{Title: "Knightfall (Batman, Book 1)", Series: bat, SeriesPosition: "1"}},

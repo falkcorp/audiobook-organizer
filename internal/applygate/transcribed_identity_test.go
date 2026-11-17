@@ -429,11 +429,22 @@ func TestEvaluateTranscribed_QueryNeverAgreesAndNoLiftRemovesATitleConflict(t *t
 		{"Chapter 3", "Knightfall", "none", false, false, "", OutcomeNeutral},
 		{"", "Knightfall", "4%", true, true, "", OutcomeNeutral},
 		{"", "Knightfall", "none", false, false, ReasonInsufficientEvidence, OutcomeNeutral},
-		// "Hush" against "Hush: Part 2" is a neutral title, not a conflict: it
-		// applies only with a runtime that agrees, never with none.
+		// REVERSED in the combined round: "Hush" against "Hush: Part 2" used to
+		// be a neutral title that applied with a runtime that agrees. The
+		// candidate is part 2 of a book and nothing on the book's side says its
+		// files are a part, so the part-marker rule refuses it whatever the
+		// runtime says: two parts of one book are often within 5% of each
+		// other's length.
 		{"Hush", "Hush: Part 2", "none", false, false, "", OutcomeNeutral},
-		{"Hush", "Hush: Part 2", "30%", false, false, ReasonRuntimeMismatch, OutcomeNeutral},
-		{"Hush", "Hush: Part 2", "4%", false, true, "", OutcomeNeutral},
+		{"Hush", "Hush: Part 2", "30%", false, false, "", OutcomeNeutral},
+		{"Hush", "Hush: Part 2", "4%", false, false, ReasonPartialBook, OutcomeNeutral},
+		// The positive control for the neutral rule: a title that only continues
+		// past the stored one ("Dark Victory Returns") is neutral, not a
+		// conflict and not a part, so it applies only with a runtime that agrees
+		// and never with none.
+		{"Dark Victory", "Dark Victory Returns", "none", false, false, "", OutcomeNeutral},
+		{"Dark Victory", "Dark Victory Returns", "30%", false, false, ReasonRuntimeMismatch, OutcomeNeutral},
+		{"Dark Victory", "Dark Victory Returns", "4%", false, true, "", OutcomeNeutral},
 	}
 	for _, tc := range cases {
 		v := run(tc.stored, tc.query, tc.runtime, tc.audio)

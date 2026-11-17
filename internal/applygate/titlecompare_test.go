@@ -26,20 +26,73 @@ import (
 // specification (not by calling it) says what the check must answer.
 
 // ---- the oracle -----------------------------------------------------------
+//
+// The oracle restates the title rule from its one-page specification
+// (E_rule.md in the review notes; the rule is also stated in the doc comments of
+// titleforms.go and titlecompare.go) and calls NONE of the production helpers:
+// no formTokens, titleForms, titleSegments, seqnum or partial.go. Where the
+// production code normalises text, the oracle works on words the generator
+// already holds in canonical form, so a disagreement is a disagreement about
+// the rule, not about a shared helper.
+//
+// What the oracle models, with the rule-page line each part restates:
+//   - forms of a side: title, or title and subtitle, each also behind the
+//     series; a side with a subtitle has no bare-title form (Forms, book side).
+//   - candidate-only forms: "S N T", "T S N", "S N T U", "U N T" with the
+//     position bare or behind Book/Books/Volume/Vol; "T A", "A T", "S N T A",
+//     "A S N T" for the author and the narrator, skipped when the credit equals
+//     the title or the series name (Forms, b-pos and an).
+//   - a subtitle that is only an edition phrase, or exactly "S, Book N" /
+//     "Book N of S" for the declared S and N on a candidate that is not
+//     self-titled, is not a subtitle for the candidate forms (Forms, e).
+//   - the forms that leave a subtitle out are offered only by a candidate with
+//     no real subtitle (ruling 2; the subtitle is never left out).
+//   - a credit never equals a series (ruling 3).
+//   - segment-set equality of the two title fields agrees (Forms, p).
+//   - agree is decided before any conflict test (Order of decisions, 1).
+//   - numbers are compared by kind: a volume against a volume and a part
+//     against a part; "Part 1 of 3" is part 1 (Numbers); the raw-token rule is
+//     the fallback after the kind checks (Numbers, last bullet).
+//   - a file or folder name is a form of the book only when the stored title is
+//     blank (Order of decisions, 3). The generator has no placeholder titles
+//     ("Chapter 3"); those are covered by the by-example tests.
+//
+// Two kinds of pair are skipped by the callers, because the oracle does not
+// model them and a guess would only copy the code:
+//   - a side that states more than one number (oStated.ok): which of two volume
+//     numbers the reader takes is the reader's business, not the rule's;
+//   - a book that has a file name and a title that mentions a number or a
+//     part/book heading (oMaybePlaceholder): whether such a title is one that
+//     "says nothing" (a chapter heading, "Gotham 3", "Book Two") is the
+//     placeholder predicate's business (metadata.NeedsFolderEvidence,
+//     MayBeUnsearchableTitle), which decides whether the file name may be a
+//     form of the book. Path forms are covered by the by-example tests.
 
 // atitle is one side of a pair in the abstract: segments of canonical words
-// (numbers as digit strings), an optional subtitle, an optional series.
+// (numbers as digit strings), an optional subtitle, an optional series, and the
+// fields only the candidate or only the book declares.
 type atitle struct {
 	segs   [][]string
 	sub    []string
 	series []string
-	path   []string // a file or folder name, one segment; empty for none
+	path   []string // a file or folder name, one segment; empty for none (book only)
+	// Candidate-only declared fields.
+	narr    []string // the narrator's name
+	pos     string   // the declared series position, "" for none
+	edition int      // 1: the subtitle is "A Novel", 2: "Unabridged" (sub is then empty)
+	stmt    int      // 1: the subtitle is "S, Book N", 2: "Book N of S" (sub holds its words)
+	// Book only.
+	blank bool // the stored title is blank (segs is then empty)
 }
 
 var (
 	oracleWords   = []string{"hush", "knightfall", "victory", "dark", "halloween", "long", "robin", "penguin", "riddler", "gotham", "owls", "court", "year", "mask"}
 	oracleMarkers = []string{"part", "book"}
 	oracleNums    = []string{"1", "2", "3"}
+	// oraclePositionMarkers are the spellings the rule page lists for a
+	// position: bare, or behind one of four marker words.
+	oraclePositionMarkers = [][]string{nil, {"book"}, {"books"}, {"volume"}, {"vol"}}
+	oracleAuthor          = []string{"bruce", "wayne"}
 )
 
 func flat(segs [][]string) []string {
@@ -68,31 +121,127 @@ func oCanon(a atitle) atitle {
 		}
 		return seg
 	}
-	out := atitle{sub: drop(a.sub), series: drop(a.series), path: drop(a.path)}
+	out := a
+	out.sub, out.series, out.path, out.narr = drop(a.sub), drop(a.series), drop(a.path), drop(a.narr)
+	out.segs = nil
 	for _, sg := range a.segs {
 		out.segs = append(out.segs, drop(sg))
 	}
 	return out
 }
 
-// oForms are the whole forms of one side, per the rule: the title (or title and
+// oForm is a whole form with the roles it is built from.
+type oForm struct {
+	text           string
+	series, credit bool
+}
+
+// oBookForms are the whole forms of the book: the title (or title and
 // subtitle) joined, each also behind the series; no bare title when there is a
 // subtitle.
-func oForms(a atitle) []string {
+func oBookForms(a atitle) []oForm {
+	if len(a.segs) == 0 {
+		return nil
+	}
 	t := flat(a.segs)
-	var out []string
 	if len(a.sub) == 0 {
-		out = append(out, join(t))
+		out := []oForm{{text: join(t)}}
 		if len(a.series) > 0 {
-			out = append(out, join(a.series, t))
+			out = append(out, oForm{text: join(a.series, t), series: true})
 		}
 		return out
 	}
-	out = append(out, join(t, a.sub))
+	out := []oForm{{text: join(t, a.sub)}}
 	if len(a.series) > 0 {
-		out = append(out, join(a.series, t, a.sub))
+		out = append(out, oForm{text: join(a.series, t, a.sub), series: true})
 	}
 	return out
+}
+
+// oSelfTitled: the title is the series name.
+func oSelfTitled(a atitle) bool {
+	return len(a.series) > 0 && join(flat(a.segs)) == join(a.series)
+}
+
+// oDroppable: the subtitle of the candidate is exactly its own declared series
+// and position in a closed spelling ("S, Book N", "Book N of S"), on a
+// candidate that is not self-titled. (An edition subtitle never reaches sub.)
+func oDroppable(a atitle) bool {
+	return a.stmt != 0 && len(a.series) > 0 && a.pos != "" && !oSelfTitled(a)
+}
+
+// oEffectiveSub is the subtitle the candidate says once the closed
+// non-subtitles are dropped.
+func oEffectiveSub(a atitle) []string {
+	if oDroppable(a) {
+		return nil
+	}
+	return a.sub
+}
+
+// oCandForms are the whole forms of the candidate.
+func oCandForms(a atitle) []oForm {
+	if len(a.segs) == 0 {
+		return nil
+	}
+	T, S := flat(a.segs), a.series
+	out := oBookForms(a) // the declared fields as they stand
+	if oDroppable(a) {
+		b := a
+		b.sub = nil
+		out = append(out, oBookForms(b)...)
+	}
+	U := oEffectiveSub(a)
+	var marked [][]string
+	if a.pos != "" {
+		for _, m := range oraclePositionMarkers {
+			marked = append(marked, append(slices.Clone(m), a.pos))
+		}
+	}
+	if len(U) > 0 {
+		// a candidate with a real subtitle offers only the forms that say it
+		for _, mn := range marked {
+			if len(S) > 0 {
+				out = append(out, oForm{text: join(S, mn, T, U), series: true})
+			}
+			out = append(out, oForm{text: join(U, mn, T)})
+		}
+		return out
+	}
+	for _, mn := range marked {
+		if len(S) > 0 {
+			out = append(out, oForm{text: join(S, mn, T), series: true}, oForm{text: join(T, S, mn), series: true})
+		}
+	}
+	for _, X := range [][]string{oracleAuthor, a.narr} {
+		if len(X) == 0 || join(X) == join(T) || join(X) == join(S) {
+			continue
+		}
+		out = append(out, oForm{text: join(T, X), credit: true}, oForm{text: join(X, T), credit: true})
+		for _, mn := range marked {
+			if len(S) > 0 {
+				out = append(out, oForm{text: join(S, mn, T, X), series: true, credit: true},
+					oForm{text: join(X, S, mn, T), series: true, credit: true})
+			}
+		}
+	}
+	return out
+}
+
+// oMatch: the same text, and no credit standing for a series.
+func oMatch(c, b oForm) bool {
+	return c.text == b.text && !(c.credit && b.series)
+}
+
+func oAnyMatch(cands, books []oForm) bool {
+	for _, c := range cands {
+		for _, b := range books {
+			if oMatch(c, b) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // oSegs are the segments of the title field: the title's, then the subtitle.
@@ -102,6 +251,20 @@ func oSegs(a atitle) [][]string {
 		out = append(out, a.sub)
 	}
 	return out
+}
+
+// oSegKey is the segment-set key of the title field as a candidate states it
+// for agreement: the effective subtitle, and the book's declared one.
+func oSegKey(segs [][]string, sub []string) string {
+	var js []string
+	for _, s := range segs {
+		js = append(js, join(s))
+	}
+	if len(sub) > 0 {
+		js = append(js, join(sub))
+	}
+	slices.Sort(js)
+	return strings.Join(js, "|")
 }
 
 func oWordsNums(ws []string) (words map[string]bool, nums []string) {
@@ -191,14 +354,70 @@ func oOverlap(a, b []string) float64 {
 	return float64(inter) / float64(max(len(A), len(B)))
 }
 
-// oConflict: the two title fields conflict.
+// oStated is what one side states about its numbers, read off the shapes the
+// generator builds (one numbered segment at most):
+//
+//	"part N" and "part N of M": part N
+//	"book N" and "<word> N":    volume N
+//
+// ok is false for a side that states more than one number, which the oracle
+// does not model.
+type oStated struct {
+	volume, part string // "" when the side states none
+	ok           bool
+}
+
+func oRead(a atitle) oStated {
+	st := oStated{ok: true}
+	count := 0
+	for _, seg := range oSegs(a) {
+		switch {
+		case len(seg) == 2 && seg[0] == "part" && seg[1] >= "0" && seg[1] <= "9":
+			st.part, count = seg[1], count+1
+		case len(seg) == 4 && seg[0] == "part" && seg[2] == "of":
+			st.part, count = seg[1], count+1
+		case len(seg) == 2 && seg[1] >= "0" && seg[1] <= "9":
+			st.volume, count = seg[1], count+1
+		}
+	}
+	if a.stmt != 0 { // "S, Book N" states volume N
+		st.volume, count = a.pos, count+1
+	}
+	st.ok = count <= 1
+	return st
+}
+
+// oMaybePlaceholder: a stored title the oracle cannot say carries evidence.
+func oMaybePlaceholder(a atitle) bool {
+	for _, seg := range oSegs(a) {
+		for _, w := range seg {
+			if (w >= "0" && w <= "9") || w == "part" || w == "book" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// oConflict: the two title fields conflict, with each side's own numbers (the
+// stated ones by kind, then the raw numbers) and segments.
 func oConflict(book, cand atitle) bool {
 	bs, cs := oSegs(book), oSegs(cand)
 	bw, bn := oWordsNums(flat(bs))
 	cw, cn := oWordsNums(flat(cs))
 	related := oIntersect(bw, cw) || (len(bw) == 0 && len(cw) == 0)
-	if related && len(bn) > 0 && len(cn) > 0 && !slices.Equal(bn, cn) && !oSubMulti(bn, cn) && !oSubMulti(cn, bn) {
-		return true
+	if related {
+		b, c := oRead(book), oRead(cand)
+		if b.volume != "" && c.volume != "" && b.volume != c.volume {
+			return true
+		}
+		if b.part != "" && c.part != "" && b.part != c.part {
+			return true
+		}
+		// the raw-token fallback, for numbers the kind checks do not decide
+		if len(bn) > 0 && len(cn) > 0 && !oSubMulti(bn, cn) && !oSubMulti(cn, bn) {
+			return true
+		}
 	}
 	// a shared whole segment and a segment of its own on each side
 	used := make([]bool, len(bs))
@@ -224,47 +443,74 @@ func oConflict(book, cand atitle) bool {
 	return shared && remC > 0 && remB > 0
 }
 
-// oClass is the rule, restated from its specification: "agree", "neutral" or
-// "block".
-func oClass(book, cand atitle) string {
-	book, cand = oCanon(book), oCanon(cand)
-	if oConflict(book, cand) {
-		return "block"
-	}
-	cf := oForms(cand)
-	for _, bf := range oForms(book) {
-		if slices.Contains(cf, bf) {
-			return "agree"
+// oUnrelated: nothing in common between two title fields given as segments.
+func oUnrelated(bs, cs [][]string) bool {
+	bw, _ := oWordsNums(flat(bs))
+	cw, _ := oWordsNums(flat(cs))
+	for _, c := range cs {
+		for _, b := range bs {
+			if slices.Equal(c, b) {
+				return false
+			}
 		}
 	}
-	// a title that is a series name, on either side, is not a title; and a
-	// file name that is a series name names the series, not this book
+	if len(bw) > 0 && len(cw) > 0 && (oSubset(bw, cw) || oSubset(cw, bw)) {
+		return false
+	}
+	return oOverlap(flat(cs), flat(bs)) < 0.5
+}
+
+// oClass is the rule, restated from its specification, in its order of
+// decisions: "agree", "neutral" or "block".
+func oClass(book, cand atitle) string {
+	book, cand = oCanon(book), oCanon(cand)
+	// 1. a whole declared form is equal, or the two title fields say the same
+	//    segments in another order
+	if oAnyMatch(oCandForms(cand), oBookForms(book)) {
+		return "agree"
+	}
+	if k := oSegKey(book.segs, book.sub); k != "" && k == oSegKey(cand.segs, oEffectiveSub(cand)) {
+		return "agree"
+	}
+	// 2. the two title fields conflict (a blank stored title has none)
+	if !book.blank && oConflict(book, cand) {
+		return "block"
+	}
+	// 3. a file or folder name is a form of the book only for a blank stored
+	//    title; a name equal to a series name names the series
 	names := map[string]bool{}
 	for _, s := range [][]string{cand.series, book.series} {
 		if len(s) > 0 {
 			names[join(s)] = true
 		}
 	}
-	if len(book.path) > 0 && !names[join(book.path)] && slices.Contains(cf, join(book.path)) {
+	if book.blank && len(book.path) > 0 && !names[join(book.path)] &&
+		oAnyMatch(oCandForms(cand), []oForm{{text: join(book.path)}}) {
 		return "agree"
 	}
-	if len(cand.sub) == 0 && names[join(flat(cand.segs))] {
+	// 4. a title that is a series name, on either side, is not a title
+	// (the rule says "no subtitle": the text as written, so an edition phrase
+	// such as "A Novel" counts as one here, unlike in the forms)
+	if len(cand.sub) == 0 && cand.edition == 0 && names[join(flat(cand.segs))] {
 		return "block"
 	}
-	if len(book.sub) == 0 && names[join(flat(book.segs))] {
+	if !book.blank && len(book.sub) == 0 && names[join(flat(book.segs))] {
 		return "block"
 	}
-	// nothing in common
-	bw, _ := oWordsNums(flat(oSegs(book)))
-	cw, _ := oWordsNums(flat(oSegs(cand)))
-	shared := false
-	for _, c := range oSegs(cand) {
-		for _, b := range oSegs(book) {
-			shared = shared || slices.Equal(c, b)
+	if book.blank {
+		// All the book says is its file and folder names. The folder here is the
+		// author's, unrelated to any title; another work altogether blocks, and
+		// a file name that names the series is skipped, leaving only the folder.
+		// A name that conflicts with the candidate (another part, another
+		// number) is not "nothing in common" either, and a path never causes a
+		// conflict: that case stays neutral.
+		pseudo := atitle{segs: [][]string{book.path}}
+		if names[join(book.path)] || (len(book.path) > 0 && !oConflict(pseudo, cand) && oUnrelated(oSegs(pseudo), oSegs(cand))) {
+			return "block"
 		}
+		return "neutral"
 	}
-	if !shared && !(len(bw) > 0 && len(cw) > 0 && (oSubset(bw, cw) || oSubset(cw, bw))) &&
-		oOverlap(flat(oSegs(cand)), flat(oSegs(book))) < 0.5 {
+	if oUnrelated(oSegs(book), oSegs(cand)) {
 		return "block"
 	}
 	return "neutral"
@@ -274,7 +520,9 @@ func oClass(book, cand atitle) string {
 
 func genSeg(r *rand.Rand) []string {
 	var seg []string
-	switch r.IntN(5) {
+	switch r.IntN(6) {
+	case 5: // a part of a set: "part 1 of 3"
+		seg = []string{"part", oracleNums[r.IntN(3)], "of", oracleNums[r.IntN(3)]}
 	case 0: // a numbered part: "part 2"
 		seg = []string{oracleMarkers[r.IntN(2)], oracleNums[r.IntN(3)]}
 	case 1: // words and a number inside: "year 2"
@@ -320,11 +568,49 @@ func genSide(r *rand.Rand) atitle {
 }
 
 func cloneSide(a atitle) atitle {
-	out := atitle{sub: slices.Clone(a.sub), series: slices.Clone(a.series), path: slices.Clone(a.path)}
+	out := a
+	out.sub, out.series, out.path, out.narr = slices.Clone(a.sub), slices.Clone(a.series), slices.Clone(a.path), slices.Clone(a.narr)
+	out.segs = nil
 	for _, s := range a.segs {
 		out.segs = append(out.segs, slices.Clone(s))
 	}
 	return out
+}
+
+// withCandidateFields gives a side the fields only a candidate declares: a
+// narrator from the title word pool (so it can collide with a series or a
+// title), a series position, and a subtitle that is an edition phrase or the
+// candidate's own series statement.
+func withCandidateFields(r *rand.Rand, a atitle) atitle {
+	b := cloneSide(a)
+	b.narr = nil
+	for i := 0; i <= r.IntN(2); i++ {
+		b.narr = append(b.narr, oracleWords[r.IntN(len(oracleWords))])
+	}
+	if len(b.series) > 0 && r.IntN(2) == 0 {
+		b.pos = oracleNums[r.IntN(3)]
+	}
+	switch r.IntN(8) {
+	case 0: // an edition phrase in place of a subtitle
+		b.sub, b.edition = nil, 1+r.IntN(2)
+	case 1, 2: // "S, Book N" or "Book N of S"
+		if len(b.series) > 0 && b.pos != "" {
+			b.stmt = 1 + r.IntN(2)
+			if b.stmt == 1 {
+				b.sub = append(slices.Clone(b.series), "book", b.pos)
+			} else {
+				b.sub = append([]string{"book", b.pos, "of"}, b.series...)
+			}
+		}
+	}
+	return b
+}
+
+// withBlankTitle makes a book whose stored title is blank, with a file name.
+func withBlankTitle(a atitle, name []string) atitle {
+	b := cloneSide(a)
+	b.segs, b.sub, b.blank, b.path = nil, nil, true, slices.Clone(name)
+	return b
 }
 
 // genMutate derives a second side from the first: the same, or with a segment
@@ -464,6 +750,9 @@ func randomName(r *rand.Rand) string {
 
 func renderBook(r *rand.Rand, a atitle) database.Book {
 	b := database.Book{Title: renderTitle(r, a.segs)}
+	if a.blank {
+		b.Title = ""
+	}
 	if len(a.sub) > 0 {
 		b.Subtitle = new(renderWords(r, a.sub))
 	}
@@ -477,15 +766,32 @@ func renderBook(r *rand.Rand, a atitle) database.Book {
 	return b
 }
 
+// renderCand renders a candidate. A narrator the side declares is used;
+// otherwise one is drawn from the word pool, so a credit can collide with a
+// title or a series.
 func renderCand(r *rand.Rand, a atitle) metafetch.MetadataCandidate {
 	c := metafetch.MetadataCandidate{Title: renderTitle(r, a.segs), Series: ""}
-	if len(a.sub) > 0 {
+	switch {
+	case a.stmt == 1:
+		c.Subtitle = renderWords(r, a.series) + ", Book " + a.pos
+	case a.stmt == 2:
+		c.Subtitle = "Book " + a.pos + " of " + renderWords(r, a.series)
+	case a.edition == 1:
+		c.Subtitle = "A Novel"
+	case a.edition == 2:
+		c.Subtitle = "Unabridged"
+	case len(a.sub) > 0:
 		c.Subtitle = renderWords(r, a.sub)
 	}
 	if len(a.series) > 0 {
 		c.Series = renderWords(r, a.series)
 	}
-	c.Narrator = randomName(r)
+	c.SeriesPosition = a.pos
+	if len(a.narr) > 0 {
+		c.Narrator = renderWords(r, a.narr)
+	} else {
+		c.Narrator = randomName(r)
+	}
 	return c
 }
 
@@ -505,6 +811,10 @@ func runTitleCheck(book database.Book, cand metafetch.MetadataCandidate) CheckRe
 	return checkTitle(&book, &cand)
 }
 
+func describeFull(book, cand atitle, bk database.Book, cd metafetch.MetadataCandidate) string {
+	return fmt.Sprintf("%s | abstract book %+v cand %+v | cand narrator %q position %q", describePair(bk, cd), book, cand, cd.Narrator, cd.SeriesPosition)
+}
+
 func describePair(book database.Book, cand metafetch.MetadataCandidate) string {
 	return fmt.Sprintf("book{title %q sub %q series %q path %q} cand{title %q sub %q series %q}",
 		book.Title, derefStr(book.Subtitle), seriesName(&book), book.FilePath, cand.Title, cand.Subtitle, cand.Series)
@@ -518,7 +828,8 @@ func describePair(book database.Book, cand metafetch.MetadataCandidate) string {
 func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 	r := rand.New(rand.NewPCG(20261117, 4688))
 	counts := map[string]int{}
-	bad := 0
+	skipped, bad := 0, 0
+	feature := map[string]int{}
 	const pairs = 25000
 	for i := 0; i < pairs; i++ {
 		a := genSide(r)
@@ -538,25 +849,44 @@ func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 				cand, book = b, a
 				cand.path = nil // a path belongs to the book
 			}
+			cand = withCandidateFields(r, cand)
+			if r.IntN(10) == 0 && len(book.path) > 0 {
+				book = withBlankTitle(book, book.path)
+			}
+			if !oRead(book).ok || !oRead(cand).ok || (len(book.path) > 0 && !book.blank && oMaybePlaceholder(book)) {
+				skipped++
+				continue
+			}
 			bk, cd := renderBook(r, book), renderCand(r, cand)
 			want := oClass(book, cand)
 			got := outcomeClass(runTitleCheck(bk, cd))
 			counts[want]++
+			if book.blank {
+				feature["blank stored title, "+want]++
+			}
+			if cand.pos != "" || cand.stmt != 0 || cand.edition != 0 {
+				feature["candidate position/closed subtitle, "+want]++
+			}
 			if got != want {
 				bad++
 				if bad <= 15 {
-					t.Errorf("want %s, got %s: %s", want, got, describePair(bk, cd))
+					t.Errorf("want %s, got %s: %s", want, got, describeFull(book, cand, bk, cd))
 				}
 			}
 		}
 	}
-	t.Logf("%d checks: %v", pairs*2, counts)
+	t.Logf("%d checks (%d skipped, see the oracle's header): %v; features %v", pairs*2-skipped, skipped, counts, feature)
 	if bad > 0 {
-		t.Fatalf("%d of %d checks differ from the oracle", bad, pairs*2)
+		t.Fatalf("%d checks differ from the oracle", bad)
 	}
 	for _, class := range []string{"agree", "neutral", "block"} {
 		if counts[class] < pairs/20 {
 			t.Fatalf("the generator reached %q only %d times: it is not exercising the rule", class, counts[class])
+		}
+	}
+	for _, f := range []string{"blank stored title, agree", "blank stored title, block", "candidate position/closed subtitle, agree"} {
+		if feature[f] < 100 {
+			t.Fatalf("the generator reached %q only %d times", f, feature[f])
 		}
 	}
 }
@@ -564,9 +894,20 @@ func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 // ---- properties -------------------------------------------------------------
 
 // TestCheckTitle_IsSymmetric: swapping which side is the book and which the
-// candidate never changes the answer, series, subtitles and credits included.
-// The first version decided "identity" from its first argument only (MINOR-4 of
-// the review: the class changed with which side carried the series spelling).
+// candidate never changes the answer, series and subtitles included. The first
+// version decided "identity" from its first argument only (MINOR-4 of the
+// review: the class changed with which side carried the series spelling).
+//
+// The property is stated for the DECLARED title fields, and that is the whole
+// of what it can say. The candidate-only forms (the candidate's author or
+// narrator beside its title, its series position, a closed non-subtitle) are
+// one-sided on purpose: a stored title is the book's own text, and "title plus
+// the narrator's name" is a thing a tagger writes into a stored title, while a
+// stored credit is never a candidate's title. So the candidate here has no
+// credit (its narrator is blanked; the author is the same on both sides) and no
+// position, and the two orders must agree. What the one-sided forms may do is
+// the next two tests: they only move a pair toward AGREE, and the same fields
+// on the book change nothing.
 func TestCheckTitle_IsSymmetric(t *testing.T) {
 	r := rand.New(rand.NewPCG(7, 4688))
 	for i := 0; i < 15000; i++ {
@@ -580,13 +921,74 @@ func TestCheckTitle_IsSymmetric(t *testing.T) {
 		// from the seed and which side it is, not from the order of the calls.
 		bookOf := func(side atitle, id uint64) database.Book { return renderBook(rand.New(rand.NewPCG(seed, id)), side) }
 		candOf := func(side atitle, id uint64) metafetch.MetadataCandidate {
-			return renderCand(rand.New(rand.NewPCG(seed, id)), side)
+			c := renderCand(rand.New(rand.NewPCG(seed, id)), side)
+			c.Narrator = ""
+			return c
 		}
 		x := runTitleCheck(bookOf(a, 1), candOf(b, 2))
 		y := runTitleCheck(bookOf(b, 2), candOf(a, 1))
 		if outcomeClass(x) != outcomeClass(y) {
 			t.Fatalf("book A cand B = %s (%s), book B cand A = %s (%s); A=%+v B=%+v", x.Outcome, x.Detail, y.Outcome, y.Detail, a, b)
 		}
+	}
+}
+
+// TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree: the fields only a
+// candidate declares, its narrator and its series position, add forms and
+// nothing else. Adding them to a candidate leaves the class as it was or makes
+// it AGREE, never the reverse (agree is decided first, so a form that now
+// matches wins over a conflict the plain fields had). The same fields on the
+// BOOK are not read: a stored credit or position is never part of a form.
+func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
+	r := rand.New(rand.NewPCG(17, 4688))
+	moved, same := 0, 0
+	for i := 0; i < 15000; i++ {
+		a := genSide(r)
+		b := genMutate(r, a)
+		if r.IntN(2) == 0 {
+			b.series = slices.Clone(a.series)
+		}
+		// Half the draws: the candidate is the book's title minus its last
+		// segment and the candidate's narrator is that segment, so the credit
+		// form completes the title and the pair can move.
+		completing := ""
+		if len(a.segs) > 1 && r.IntN(2) == 0 {
+			b = cloneSide(a)
+			b.segs, b.sub = b.segs[:len(b.segs)-1], nil
+			completing = strings.Join(a.segs[len(a.segs)-1], " ")
+		}
+		seed := r.Uint64()
+		book := renderBook(rand.New(rand.NewPCG(seed, 1)), a)
+		cand := renderCand(rand.New(rand.NewPCG(seed, 2)), b)
+		plain := cand
+		plain.Narrator, plain.Author, plain.SeriesPosition = "", "", ""
+		with := cand
+		with.Narrator = randomName(rand.New(rand.NewPCG(seed, 3)))
+		if completing != "" {
+			with.Narrator = completing
+		}
+		if len(b.series) > 0 {
+			with.SeriesPosition = oracleNums[int(seed%3)]
+		}
+		before := outcomeClass(checkTitle(&book, &plain))
+		after := outcomeClass(checkTitle(&book, &with))
+		switch {
+		case before == after:
+			same++
+		case after == "agree":
+			moved++
+		default:
+			t.Fatalf("candidate credit/position moved %s to %s: %s", before, after, describePair(book, with))
+		}
+		// the book's own narrator, author and position change nothing
+		other := book
+		other.Narrator, other.Author, other.SeriesPositionRaw = new(randomName(rand.New(rand.NewPCG(seed, 4)))), &database.Author{Name: "Alfred Pennyworth"}, new("2")
+		if got := outcomeClass(checkTitle(&other, &plain)); got != before {
+			t.Fatalf("the book's own credit or position changed %s to %s: %s", before, got, describePair(other, plain))
+		}
+	}
+	if moved < 50 || same < 5000 {
+		t.Fatalf("the property was not exercised: %d moved toward agree, %d unchanged", moved, same)
 	}
 }
 
@@ -601,7 +1003,7 @@ func TestCheckTitle_SeriesCreditsAndPathsNeverChangeAConflict(t *testing.T) {
 	for i := 0; i < 40000 && checked < 2500; i++ {
 		book, cand := genSide(r), genSide(r)
 		book.series, cand.series, book.path = nil, nil, nil
-		if !oConflict(oCanon(book), oCanon(cand)) {
+		if !oRead(book).ok || !oRead(cand).ok || !oConflict(oCanon(book), oCanon(cand)) {
 			continue
 		}
 		checked++
