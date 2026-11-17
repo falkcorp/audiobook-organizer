@@ -1,5 +1,5 @@
 // file: internal/server/retired_apply_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f0c8e52-7a14-4b69-9d27-5c1e6a8b0f43
 // last-edited: 2026-11-17
 
@@ -41,13 +41,38 @@ var retiredShapes = []retiredShape{
 	{"merged_into", func(b *database.Book) { into := "survivor-book-id"; b.MergedIntoBookID = &into }},
 }
 
-// retiredBooks is fakeBooks holding b1 retired in the given shape, with a
-// duration so the certainty gate would otherwise pass it (see fakeBooks).
-func retiredBooks(shape retiredShape) fakeBooks {
+// liveShape is the control: the same fixture, not retired.
+var liveShape = retiredShape{"live", func(*database.Book) {}}
+
+const (
+	fixtureTitle  = "The Long Halloween"
+	fixtureAuthor = "Alfred Pennyworth"
+)
+
+// retiredBook is book id in the given shape, with a duration and a folder
+// that names its title and author so the certainty gate passes it on its own
+// (a refusal can then only be the retirement check's).
+func retiredBook(id string, shape retiredShape) *database.Book {
 	dur := 36000
-	b := &database.Book{ID: "b1", Title: "A Title", FilePath: "/lib/An Author/A Title/A Title.m4b", Duration: &dur}
+	b := &database.Book{ID: id, Title: fixtureTitle,
+		FilePath: "/lib/" + fixtureAuthor + "/" + fixtureTitle + "/" + fixtureTitle + ".m4b", Duration: &dur}
 	shape.retire(b)
-	return fakeBooks{"b1": b}
+	return b
+}
+
+// retiredBooks is fakeBooks holding b1 in the given shape.
+func retiredBooks(shape retiredShape) fakeBooks {
+	return fakeBooks{"b1": retiredBook("b1", shape)}
+}
+
+// retiredCandidateRows is the cache row for retiredBook: one candidate the
+// gate passes, and that candidate.
+func retiredCandidateRows(t *testing.T) ([]json.RawMessage, metafetch.MetadataCandidate) {
+	t.Helper()
+	c := metafetch.MetadataCandidate{Title: fixtureTitle, Author: fixtureAuthor, Score: 0.95, DurationSec: 36000}
+	blob, err := json.Marshal(c)
+	require.NoError(t, err)
+	return []json.RawMessage{blob}, c
 }
 
 // reviewBulkPin is the pin the review page's bulk buttons send: a hash-checked
@@ -61,8 +86,9 @@ func reviewBulkPin(c metafetch.MetadataCandidate) *metafetch.CandidatePin {
 // Control: a live book with the same fixture applies, so the refusals below
 // are the retirement check's doing.
 func TestRetiredApply_ControlLiveBookApplies(t *testing.T) {
-	svc := &fakeApplySvc{candidates: oneCandidate(t)}
-	out := applyCachedCandidateForBookTimed(context.Background(), svc, fakeBooks{}, "b1", false, nil,
+	raw, _ := retiredCandidateRows(t)
+	svc := &fakeApplySvc{candidates: raw}
+	out := applyCachedCandidateForBookTimed(context.Background(), svc, retiredBooks(liveShape), "b1", false, nil,
 		metafetch.NewApplyPhaseTimings(), nil, nil, "")
 	require.True(t, out.Applied, "control did not apply: %+v", out)
 	require.Len(t, svc.appliedIDs, 1)
@@ -74,7 +100,7 @@ func TestRetiredApply_ControlLiveBookApplies(t *testing.T) {
 func TestRetiredApply_CachedBulkApplyRefusesRetiredBook(t *testing.T) {
 	for _, shape := range retiredShapes {
 		t.Run(shape.name, func(t *testing.T) {
-			raw, cand := gatePassingRow(t)
+			raw, cand := retiredCandidateRows(t)
 			pins := map[string]*metafetch.CandidatePin{
 				"no_pin":   nil,
 				"bulk_pin": reviewBulkPin(cand),
@@ -99,13 +125,13 @@ func TestRetiredApply_CachedBulkApplyRefusesRetiredBook(t *testing.T) {
 // refusal can only come from the retirement check.
 func retiredOpResultFixture(retire func(b *database.Book)) (fakeBooks, CandidateResult) {
 	tenHours := 36000
-	b := &database.Book{ID: "b1", Title: "Big Cats 1", Author: &database.Author{Name: "Ann Author"}, Duration: &tenHours}
+	b := &database.Book{ID: "b1", Title: "Hush 1", Author: &database.Author{Name: fixtureAuthor}, Duration: &tenHours}
 	if retire != nil {
 		retire(b)
 	}
-	c := metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours}
+	c := metafetch.MetadataCandidate{Title: "Hush 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours}
 	cr := CandidateResult{Status: "matched", Candidate: &c}
-	cr.Book.Title, cr.Book.Author = "Big Cats 1", "Ann Author"
+	cr.Book.Title, cr.Book.Author = "Hush 1", fixtureAuthor
 	return fakeBooks{"b1": b}, cr
 }
 
@@ -133,7 +159,8 @@ func TestRetiredApply_OpResultPlanRefusesRetiredBook(t *testing.T) {
 func TestRetiredApply_PreviewDoesNotSayApply(t *testing.T) {
 	for _, shape := range retiredShapes {
 		t.Run(shape.name, func(t *testing.T) {
-			svc := fakePreviewSvc{&fakeApplySvc{candidates: oneCandidate(t)}}
+			raw, _ := retiredCandidateRows(t)
+			svc := fakePreviewSvc{&fakeApplySvc{candidates: raw}}
 			plan := planCachedApply(svc, retiredBooks(shape), "b1", nil, nil)
 			row := previewBulkApplyRow(svc, "b1", plan, false, false)
 			assert.NotEqual(t, previewVerdictApply, row.Verdict, "preview row %+v", row)
@@ -146,7 +173,7 @@ func TestRetiredApply_PreviewDoesNotSayApply(t *testing.T) {
 func TestRetiredApply_RowPinStaysManual(t *testing.T) {
 	for _, shape := range retiredShapes {
 		t.Run(shape.name, func(t *testing.T) {
-			raw, cand := gatePassingRow(t)
+			raw, cand := retiredCandidateRows(t)
 			svc := &fakeApplySvc{candidates: raw}
 			out := applyCachedCandidateForBookTimed(context.Background(), svc, retiredBooks(shape), "b1", false, nil,
 				metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
@@ -167,7 +194,7 @@ func newRetiredServerFixture(t *testing.T, s *Server) retiredServerFixture {
 	t.Helper()
 	store := s.storeForWiring()
 	old := time.Now().Add(-2 * database.MetadataCacheTTL)
-	cand, err := json.Marshal(map[string]any{"title": "T", "score": 0.9})
+	cand, err := json.Marshal(map[string]any{"title": "Hush", "score": 0.9})
 	require.NoError(t, err)
 	mk := func(title string, retire func(*database.Book)) string {
 		t.Helper()
@@ -385,9 +412,9 @@ func TestRetiredApply_PreviewRunReportsRetiredRow(t *testing.T) {
 	for _, shape := range retiredShapes {
 		t.Run(shape.name, func(t *testing.T) {
 			books := retiredBooks(shape)
-			dur := 36000
-			books["b2"] = &database.Book{ID: "b2", Title: "A Title", FilePath: "/lib/An Author/Other/A Title.m4b", Duration: &dur}
-			svc := listingPreviewSvc{fakePreviewSvc: fakePreviewSvc{&fakeApplySvc{candidates: oneCandidate(t)}}, ids: []string{"b1", "b2"}}
+			books["b2"] = retiredBook("b2", liveShape)
+			raw, _ := retiredCandidateRows(t)
+			svc := listingPreviewSvc{fakePreviewSvc: fakePreviewSvc{&fakeApplySvc{candidates: raw}}, ids: []string{"b1", "b2"}}
 			rep := &previewTestReporter{}
 			res := &previewResults{}
 			require.NoError(t, runBulkApplyPreview(context.Background(), rep, svc, books, res, "op-preview", bulkApplyPreviewParams{AllCached: true}))

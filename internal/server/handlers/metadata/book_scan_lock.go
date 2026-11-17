@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-11-17
 
@@ -295,7 +295,7 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 		// makes its history write required; the apply is the same hand-picked
 		// overwrite as ever (FillOnly false).
 		resp, err = h.metadataFetchService.ApplyMetadataCandidateWithOptions(id, cand, fields, metafetch.ApplyOptions{
-			BatchID: batchID, OwnerReviewed: true, GateOverride: applyReasonASINConflict})
+			BatchID: batchID, OwnerReviewed: true, GateOverride: applyReasonASINConflict, AllowRetired: true})
 		if errors.Is(err, metafetch.ErrApplyHistoryIncomplete) && resp != nil {
 			// The write stood; only its history did not. Finish the apply
 			// (the files must match the database) and say so.
@@ -306,7 +306,7 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 	case batchID == "":
 		resp, err = h.metadataFetchService.ApplyMetadataCandidate(id, cand, fields)
 	default:
-		resp, err = h.metadataFetchService.ApplyMetadataCandidateWithOptions(id, cand, fields, metafetch.ApplyOptions{BatchID: batchID})
+		resp, err = h.metadataFetchService.ApplyMetadataCandidateWithOptions(id, cand, fields, metafetch.ApplyOptions{BatchID: batchID, AllowRetired: true})
 	}
 	if errors.Is(err, metafetch.ErrOwnerRejectedNotApplied) {
 		// The apply's own re-read (under the book's write stripe) found a
