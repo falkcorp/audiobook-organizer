@@ -1,7 +1,7 @@
 // file: internal/seqnum/seqnum.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b0e7c2a-9d41-4f6e-8a13-c7d2e4f90b61
-// last-edited: 2026-09-14
+// last-edited: 2026-11-16
 
 // Package seqnum extracts a volume / sequence number ("Big Cats 3", "Vol. III",
 // "02 - Title", "Book 1.5") from free text, so a bulk metadata apply can refuse
@@ -29,6 +29,19 @@
 // identical match. So "Disc 2" vs "Disc 3" does NOT block, while "Book 2" vs
 // "Book 3" does. A title whose only number is a part marker has no sequence
 // number at all.
+//
+// # Ranges (collected editions)
+//
+// A box set or omnibus covers several volumes: "Books 1-3", "Vols 1–3" (en
+// dash), "Book 1 to 3", "Books 1 & 2", "Books 1, 2 & 3", or a series-position
+// field that says "1-3". Those read as ONE Number whose Value is the first
+// volume and whose Last is the last (IsRange). A range equals only the same
+// range: never a single volume (so volume 3 never matches "Books 1-3"), never
+// a different range. Every reader of free text and of a position field goes
+// through the same range rules, so the same words cannot read as 1 on one side
+// of a comparison and 3 on the other. An unkeyworded "1-3" is a range only in
+// a position field; in a title it is "Catch-22" or "9-1-1" until a keyword
+// (book, vol, #) says otherwise.
 package seqnum
 
 import (
@@ -41,15 +54,40 @@ import (
 // (a novella between books 1 and 2) never compares equal to "1".
 type Number struct {
 	Value float64
-	// Text is the canonical rendering ("2", "1.5"), for reasons and reports.
+	// Last is the upper end of a collected edition's range ("Books 1-3" has
+	// Value 1, Last 3). It is meaningful only when it exceeds Value; a Number
+	// built without it (the zero value) is a single position.
+	Last float64
+	// Text is the canonical rendering ("2", "1.5", "1-3", "1,3"), for reasons
+	// and reports. ParsePosition reads every Text back to an Equal Number.
 	Text string
 	// Form names the pattern that matched ("marker", "bracket", "leading",
 	// "trailing", "position"), so a report can say why a number was seen.
 	Form string
 }
 
-// Equal reports whether two numbers name the same sequence position.
-func Equal(a, b Number) bool { return a.Value == b.Value }
+// IsRange reports whether n covers several volumes (a collected edition).
+func (n Number) IsRange() bool { return n.Last > n.Value }
+
+func (n Number) last() float64 {
+	if n.IsRange() {
+		return n.Last
+	}
+	return n.Value
+}
+
+// Equal reports whether two numbers name the same sequence position. A range
+// is equal only to the same range (same ends, same members: "1,3" is not
+// "1-3"); a range is never equal to a single position.
+func Equal(a, b Number) bool {
+	if a.Value != b.Value || a.last() != b.last() {
+		return false
+	}
+	if a.IsRange() || b.IsRange() {
+		return a.IsRange() == b.IsRange() && a.Text == b.Text
+	}
+	return true
+}
 
 var (
 	// Noise removed before extraction. Order matters: disc/part markers go
@@ -107,6 +145,11 @@ func Parse(s string) (Number, bool) {
 	c := clean(s)
 	if c == "" {
 		return Number{}, false
+	}
+	// A collected edition's range goes first: "Books 1-3" must not be read
+	// as its trailing number, nor "Book 1-3" as its first.
+	if n, ok := ParseRange(c); ok {
+		return n, true
 	}
 	if m := reMarker.FindStringSubmatch(c); m != nil {
 		if n, ok := toNumber(m[1], "marker"); ok {
@@ -197,6 +240,9 @@ func ParsePosition(s string) (Number, bool) {
 	}
 	if rePlainNumber.MatchString(t) || reRomanOnly.MatchString(t) {
 		return toNumber(t, "position")
+	}
+	if n, ok := parsePositionRange(t); ok {
+		return n, true
 	}
 	n, ok := Parse(s)
 	if ok {

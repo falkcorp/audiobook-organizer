@@ -1,7 +1,7 @@
 // file: internal/applygate/partial.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: b1e7d4a0-3c58-4f26-9a8d-0f6c2e5b7d19
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package applygate
 
@@ -15,6 +15,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 )
 
 // ReasonPartialBook: the files hold one part of a book (or a span of several
@@ -203,7 +204,7 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 		r.Detail = "the files are part " + ftoa(bp) + "; the candidate " + partText(cp, cok)
 		return r
 	}
-	bs, cs := spanRe.FindString(bside), spanRe.FindString(cside)
+	bs, cs := spanOf(bside), spanOf(cside)
 	if (bs == "") != (cs == "") {
 		r.Outcome, r.Reason = OutcomeBlock, ReasonPartialBook
 		r.Detail = "only one side covers several books: files " + strconv.Quote(bs) + ", candidate " + strconv.Quote(cs)
@@ -220,6 +221,22 @@ func checkPartialBook(book *database.Book, c *metafetch.MetadataCandidate, runti
 		}
 	}
 	return r
+}
+
+// spanOf returns the text that marks s as covering several books, or "". It
+// is the span wording (spanRe: omnibus, box set, publisher's pack, ...) or a
+// range read by the shared range reader (seqnum.ParseRange), so "Book 1-3",
+// "Books 1-3", "Vols 1–3" and "Books 1, 2 & 3" are all spans on whichever
+// side they appear: a reading that depended on the plural keyword made the
+// same edition a span on one side and a single book on the other.
+func spanOf(s string) string {
+	if m := spanRe.FindString(s); m != "" {
+		return m
+	}
+	if n, ok := seqnum.ParseRange(s); ok {
+		return "books " + n.Text
+	}
+	return ""
 }
 
 func partText(p float64, ok bool) string {

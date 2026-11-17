@@ -1,7 +1,7 @@
 // file: internal/applygate/booknum.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 9d4f2c83-6a1e-4b57-8c09-e3b7a5d16f42
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package applygate
 
@@ -44,7 +44,12 @@ const ReasonSeriesRenamed = "series_renamed"
 // A TRAILING number ("Title - 01", "Catch-22") is often a track number in a
 // file-derived title or part of a name, not a volume. It counts only when a
 // series position, the stored one or the result's, equals it; otherwise the
-// check is neutral. A part suffix ("Rogue Lawyer - 001", seqnum.PartSuffix)
+// check is neutral. A LEADING number ("08 - Title") is a list number that
+// CheckSequence already sets aside (SourceNumber.Weak): when the book has a
+// stored series position that differs from it, that position names the
+// volume, so the leading number is no volume number to lose and the check is
+// neutral. With no stored position the leading number still counts (it may
+// be the volume), exactly as before. A part suffix ("Rogue Lawyer - 001", seqnum.PartSuffix)
 // on a book with no series name of its own, where the candidate gives no
 // series position, is neutral even when the stored position equals it: that position was derived from the suffix at import
 // and corroborates nothing (see BookNumbers).
@@ -67,6 +72,12 @@ func checkSeriesNumberLost(book *database.Book, c *metafetch.MetadataCandidate, 
 		strings.TrimSpace(c.SeriesPosition) == "" {
 		r.Detail = "trailing " + pn.Text + " in " + quote(book.Title) + " is a part number, not a volume"
 		return r
+	}
+	if n.Form == "leading" {
+		if sp, ok := storedPosition(book); ok && !seqnum.Equal(sp, n) {
+			r.Detail = "leading " + n.Text + " in " + quote(book.Title) + " is a list number: the stored series position #" + sp.Text + " names the volume"
+			return r
+		}
 	}
 	candText := c.Title + " " + c.Subtitle
 	for _, t := range []string{c.Title, candText} {

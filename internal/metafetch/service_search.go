@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.44.5
+// version: 1.44.6
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package metafetch
 
@@ -1339,7 +1339,7 @@ func (mfs *Service) searchMetadataForBook(
 			if baseTier == "f1" {
 				baseWordCount = len(searchWords)
 			}
-			adjusted, adjSteps := ApplyNonBaseAdjustmentsWithBreakdown(baseScore, r, baseWordCount)
+			adjusted, adjSteps := ApplyNonBaseAdjustmentsWithBreakdown(baseScore, r, baseWordCount, book.Title)
 			rec := newScoreRecorder(baseScore, baseTierLabel(baseTier), baseTierDetail(baseTier))
 			rec.adopt(adjSteps, adjusted)
 			score := rec.score
@@ -1525,7 +1525,7 @@ func (mfs *Service) searchMetadataForBook(
 		}
 		if err == nil && result != nil {
 			if seen.add(*result) {
-				score, asinBd := ScoreOneResultWithBreakdown(*result, searchWords)
+				score, asinBd := ScoreOneResultWithBreakdown(*result, searchWords, book.Title)
 				asinRec := recorderFrom(score, &asinBd)
 				if score <= 0 && !strong.siblingEvidence(*result) {
 					// A direct ASIN match always scores high: a score <= 0 means

@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.17.3
+// version: 1.18.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -51,6 +51,7 @@ import (
 	"strings"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
@@ -109,6 +110,15 @@ type SourceNumber struct {
 	Source string `json:"source"` // series_position | title | subtitle | file_name | folder_name
 	Number string `json:"number"`
 	Form   string `json:"form"`
+	// Weak marks a number that is about the file or its place in a list, not
+	// about the volume: a leading ordinal ("08 - Title"), a number beside a
+	// chapter/track/disc/part word or in a track file's name ("02 Chapter
+	// 1"), or a collected edition's range read off a file or folder name. A
+	// weak number is set aside whenever a stronger source exists; with no
+	// stronger source it still counts, so it can only ever remove a conflict
+	// between two sources, never hide the book's only number
+	// (BookNumbers, agree).
+	Weak bool `json:"weak,omitempty"`
 }
 
 // SequenceVerdict is the result of CheckSequence.
@@ -440,6 +450,14 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 //   - book has a number, candidate has none → BLOCK;
 //   - both have one and they differ → BLOCK;
 //   - neither has one, or only the candidate has one → pass.
+//
+// A number is a single position or a range (seqnum.Number.IsRange: "Books
+// 1-3", position "1-3"). A range equals only the same range, so a single
+// volume is never matched to a box set, a box set never to one of its
+// volumes, and "Books 1-3" never to "Books 1-5". Weak numbers (SourceNumber
+// .Weak: track ordinals and file-derived numbers) are set aside whenever a
+// stronger source exists on the same side, so "08 - Title" against series
+// position 6 is one book numbered 6, not a conflict.
 func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) SequenceVerdict {
 	v := SequenceVerdict{BookNumbers: BookNumbers(book), CandidateNumbers: CandidateNumbers(c)}
 	bookNum, bookOK, bookConflict := agree(v.BookNumbers, false)
@@ -465,6 +483,9 @@ func CheckSequence(book *database.Book, c *metafetch.MetadataCandidate) Sequence
 		v.Reason, v.Detail = ReasonSequenceMissingOnCandidate, "book is #"+bookNum.Text+" ("+describe(v.BookNumbers)+"), candidate has no number"
 	case !seqnum.Equal(bookNum, candNum):
 		v.Reason, v.Detail = ReasonSequenceMismatch, "book is #"+bookNum.Text+", candidate is #"+candNum.Text
+		if bookNum.IsRange() || candNum.IsRange() {
+			v.Detail += " (a collected edition is never matched to a different range or to a single volume)"
+		}
 	default:
 		v.Pass = true
 	}
@@ -487,6 +508,15 @@ const (
 	// (matcher.IdentifySeries), so such a position is the suffix again, not
 	// a second piece of evidence.
 	FormDerivedPosition = "part_suffix_position"
+	// FormRangeEndpoint: a series position equal to an end of the range the
+	// book's own TITLE states ("Books 1-3" with position 3). The importer
+	// read the range as its last (plural) or first (singular) number and
+	// stored that, so the position is the title again, not a second opinion.
+	// The range governs and the position is set aside on every comparison;
+	// a position inside the range (2 for "Books 1-3") is a real
+	// disagreement and still blocks. Only the title sets it aside: a range
+	// in a folder or file name is weak, and never overrides a position.
+	FormRangeEndpoint = "range_endpoint_position"
 )
 
 // BookNumbers lists every number found on the book, one per source.
@@ -509,14 +539,20 @@ func BookNumbers(book *database.Book) []SourceNumber {
 			out = append(out, SourceNumber{Source: src, Number: n.Text, Form: n.Form})
 		}
 	}
-	addText := func(src, text string) {
+	// addText reads one text. filePath is the file the text is the name of,
+	// or "" for a title or folder name.
+	addText := func(src, text, filePath string) {
 		if n, stem, ok := seqnum.PartSuffix(text); ok {
 			out = append(out, SourceNumber{Source: src, Number: n.Text, Form: FormPartSuffix})
 			stems = append(stems, stem)
 			return
 		}
 		n, ok := seqnum.Parse(text)
-		add(src, n, ok)
+		if !ok {
+			return
+		}
+		out = append(out, SourceNumber{Source: src, Number: n.Text, Form: n.Form,
+			Weak: weakBookNumber(src, text, filePath, n)})
 	}
 	switch {
 	case book.SeriesPositionRaw != nil && strings.TrimSpace(*book.SeriesPositionRaw) != "":
@@ -526,20 +562,89 @@ func BookNumbers(book *database.Book) []SourceNumber {
 		n, ok := seqnum.ParsePosition(itoa(*book.SeriesSequence))
 		add("series_position", n, ok)
 	}
-	addText("title", book.Title)
+	addText("title", book.Title, "")
 
 	if p := strings.TrimSpace(book.FilePath); p != "" {
 		base := filepath.Base(p)
 		if ext := filepath.Ext(base); ext != "" && len(ext) <= 5 {
 			// A file: its name (sans extension) and its folder.
-			addText("file_name", strings.TrimSuffix(base, ext))
-			addText("folder_name", filepath.Base(filepath.Dir(p)))
+			addText("file_name", strings.TrimSuffix(base, ext), p)
+			addText("folder_name", filepath.Base(filepath.Dir(p)), "")
 		} else {
 			// A directory (multi-file book): its own name.
-			addText("folder_name", base)
+			addText("folder_name", base, "")
 		}
 	}
+	out = markRangeEndpoint(out)
 	return discountPartSuffix(book, out, stems)
+}
+
+// weakBookNumber reports whether a number read from one of the book's own
+// texts says something about the file or its list position rather than the
+// volume. src is the source name, text the text it was read from, filePath
+// the file when the text is a file's name.
+//
+//   - an explicit keyword ("Book 3", "Vol. 2", "#4") and a bracketed number
+//     are the title speaking about the volume: never weak;
+//   - a collected edition's range read off a file or folder name labels the
+//     set of files, not the book: weak;
+//   - a LEADING number ("08 - Title", "02 Title") numbers the title in a
+//     list, whether the list is a series folder or a set of tracks: weak;
+//   - a number beside a chapter, track, disc or part word ("02 Chapter 1"):
+//     the shared series-name matcher (metadata.SplitSeriesPosition) splits
+//     the text and a base that ends in one of those words
+//     (metadata.EndsInTagWord) is a track tag, not a volume: weak;
+//   - any number in the name of a file the shared track-name matcher
+//     (metadata.ExtractTrackInfoFromFilename) reads as a track or disc: weak.
+//
+// A trailing number ("Big Cats 3") is the shape the gate was built to protect
+// and stays strong.
+func weakBookNumber(src, text, filePath string, n seqnum.Number) bool {
+	if n.Form == "marker" || n.Form == "bracket" {
+		return false
+	}
+	if n.IsRange() {
+		return src == "file_name" || src == "folder_name"
+	}
+	if n.Form == "leading" {
+		return true
+	}
+	if sp, ok := metadata.SplitSeriesPosition(text); ok && metadata.EndsInTagWord(sp.Base) {
+		return true
+	}
+	if filePath != "" {
+		ti := metadata.ExtractTrackInfoFromFilename(filePath)
+		return ti.TrackNumber != nil || ti.DiskNumber != nil
+	}
+	return false
+}
+
+// markRangeEndpoint sets aside a series position that equals an end of the
+// range the book's own title states (FormRangeEndpoint).
+func markRangeEndpoint(src []SourceNumber) []SourceNumber {
+	var title seqnum.Number
+	hasRange := false
+	for _, s := range src {
+		if s.Source != "title" || s.Weak || s.Form == FormPartSuffix {
+			continue
+		}
+		if n, ok := seqnum.ParsePosition(s.Number); ok && n.IsRange() {
+			title, hasRange = n, true
+		}
+	}
+	if !hasRange {
+		return src
+	}
+	for i, s := range src {
+		if s.Source != "series_position" {
+			continue
+		}
+		n, ok := seqnum.ParsePosition(s.Number)
+		if ok && !n.IsRange() && (n.Value == title.Value || n.Value == title.Last) {
+			src[i].Form = FormRangeEndpoint
+		}
+	}
+	return src
 }
 
 // discountPartSuffix applies the BookNumbers rule to the sources a part
@@ -611,6 +716,35 @@ func counted(s SourceNumber) bool {
 	return s.Form != FormPartSuffix && s.Form != FormDerivedPosition
 }
 
+// effective is the sources that decide a side's number: with skipPart the
+// part-suffix ones are dropped (counted), a position set aside as a range
+// endpoint is always dropped, and weak sources are dropped when any stronger
+// one remains. When only weak sources remain they all stay: a weak number is
+// still the side's only evidence, and ambiguity must not turn into a pass.
+func effective(src []SourceNumber, skipPart bool) []SourceNumber {
+	var kept []SourceNumber
+	strong := false
+	for _, s := range src {
+		if s.Form == FormRangeEndpoint || (skipPart && !counted(s)) {
+			continue
+		}
+		kept = append(kept, s)
+		if !s.Weak {
+			strong = true
+		}
+	}
+	if !strong {
+		return kept
+	}
+	out := kept[:0:0]
+	for _, s := range kept {
+		if !s.Weak {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // CandidateNumbers lists every number found on the candidate, one per source.
 func CandidateNumbers(c *metafetch.MetadataCandidate) []SourceNumber {
 	if c == nil {
@@ -633,10 +767,7 @@ func CandidateNumbers(c *metafetch.MetadataCandidate) []SourceNumber {
 // conflict=true when two sources name different numbers. With skipPart,
 // sources BookNumbers marked as part suffixes are skipped.
 func agree(src []SourceNumber, skipPart bool) (n seqnum.Number, ok, conflict bool) {
-	for _, s := range src {
-		if skipPart && !counted(s) {
-			continue
-		}
+	for _, s := range effective(src, skipPart) {
 		cur, _ := seqnum.ParsePosition(s.Number)
 		if !ok {
 			n, ok = cur, true
@@ -658,6 +789,12 @@ func describe(src []SourceNumber) string {
 		p := s.Source + "=" + s.Number
 		if !counted(s) {
 			p += " (part number)"
+		}
+		if s.Form == FormRangeEndpoint {
+			p += " (end of the title's range)"
+		}
+		if s.Weak {
+			p += " (track or file number)"
 		}
 		parts = append(parts, p)
 	}
