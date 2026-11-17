@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/executive-summary.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 85a66690-09c6-401b-8020-a2ec1acc9b74 -->
-<!-- last-edited: 2026-11-15 -->
+<!-- last-edited: 2026-11-17 -->
 
 # Platform core: executive summary
 
@@ -97,4 +97,4 @@ Every open question is now answered (decision D15 in the spec's decision record)
 ## Next
 
 You apply the `main` rule and the merge queue. Work then starts with the R0 hotfixes (wave 1). The plan now has 134
-tasks; its critical path is still about 82 working days.
+tasks; its critical path is about 84 working days (82 when it was first written; the owner's 2026-11-16 decision to move the whole web shell to R3 added one step).

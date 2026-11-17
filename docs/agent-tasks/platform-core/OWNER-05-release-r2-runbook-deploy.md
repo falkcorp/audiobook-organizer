@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/OWNER-05-release-r2-runbook-deploy.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 671daa9f-45b1-4ffb-a1ce-a9b0fc7c953c -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-17 -->
 
 # OWNER-05 — Release R2: P12, the runbook's deploy steps 0–8, optional dry run and one-day smoke run, keep or roll back, then cut the R2 production release
 
@@ -15,7 +15,7 @@
 | Release | R2 (the one-way cutover) |
 | Tier | **OWNER**: deploy, production reads, release |
 | Wave | W40 |
-| Depends on | R2-01 (the runbook and the R2 release note; it follows every flip, F8-04 and F9-03) |
+| Depends on | R2-01 (the runbook and the R2 release note; it follows every R2 flip, up to F8-04; F9 is R3's and follows this checkpoint) |
 | Unblocks | every R3 task (you end the R2 freeze yourself after the release; D15) |
 | Spec | 09 §9.4 R2 (Rollback, Owner), §9.3 item 2 (the optional dry run), §9.6 (what changes; last column feeds these steps), §9.7 P12; 05-config §2.4 (keyring export); 05-backup §5B.10 |
 
