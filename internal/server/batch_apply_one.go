@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-11-17
 
@@ -256,7 +256,7 @@ const (
 // review pin lets a retired book through, because that click is the owner
 // confirming one book (metafetch.CandidatePin.IsRowReview).
 func refuseRetired(book *database.Book, cand *metafetch.MetadataCandidate, pin *metafetch.CandidatePin) (cachedApplyPlan, bool) {
-	if !book.IsRetired() || (pin != nil && pin.IsRowReview()) {
+	if !book.IsRetired() || metafetch.PinAllowsRetired(pin) {
 		return cachedApplyPlan{}, false
 	}
 	return cachedApplyPlan{Book: book, Candidate: cand, Reason: applySkipBookRetired,
@@ -306,6 +306,12 @@ type cachedApplyPlan struct {
 	// OwnerReviewed on purpose: OwnerReviewed records a GATE OVERRIDE in the
 	// change history, and a row the gate passed overrode nothing.
 	ReviewApproved bool
+	// AllowRetired: the plan's pin is one that may write a retired book
+	// (metafetch.PinAllowsRetired: a single review row). It becomes
+	// ApplyOptions.AllowRetired, which the apply's own start and under-lock
+	// checks read, so a book retired between this plan and the commit is
+	// refused for every pin except this one, bulk "Replace existing" included.
+	AllowRetired bool
 	// BulkReplace: the owner switched the review page's bulk toggle to
 	// "Replace existing" (owner ruling 2026-09-27) and this book carries a
 	// review_bulk pin (hash-checked or the hashless marker), so the bulk
@@ -400,7 +406,7 @@ func (p cachedApplyPlan) withBulkMode(pin *metafetch.CandidatePin, mode string) 
 // a fill.
 func (p cachedApplyPlan) applyOptions() metafetch.ApplyOptions {
 	overridden := p.OwnerReviewed || p.reviewOnly()
-	opts := metafetch.ApplyOptions{FillOnly: !(p.ReviewApproved || p.BulkReplace || p.reviewOnly())}
+	opts := metafetch.ApplyOptions{FillOnly: !(p.ReviewApproved || p.BulkReplace || p.reviewOnly()), AllowRetired: p.AllowRetired}
 	if p.BulkReplace {
 		opts.OwnerReplace = true
 		opts.UnseenCandidate = p.UnseenBulk
@@ -555,6 +561,7 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	// here (stale_candidate above, nothing written).
 	ownerReview := pin != nil && pin.IsOwnerReview()
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v, Pinnable: true, ReviewApproved: pin != nil && pin.IsRowReview(),
+		AllowRetired: metafetch.PinAllowsRetired(pin),
 		Judged: &applyRefusalInputs{RawCandidate: entry.Candidates[0], SearchFingerprint: entry.SearchFingerprint, CacheStale: entry.Stale,
 			Book: book, Authors: authors, Files: files}}
 	if !v.Allowed && folderExplains && !rowReview {
