@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-16-applygate-sequence-ranges-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 2c7e5a90-4b13-4d68-9f0a-e81d6b3c7a45 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -78,16 +78,31 @@ run before this change, and nothing here has been re-run against that data.
   another volume's details on the current main (four of five reviewed pairs do);
   and the "already applied" skip exists only on the cached-apply route, not on
   the route that fetches fresh candidates.
-- The rule this change keeps, stated once: a book is applied without a person
-  only if every number it carries (stored position, title, file and folder
-  names, the track-like ones included) equals the match's number. A track-like
-  number changes the reason a book is held (a review with a track-number
-  explanation instead of a hard conflict); it never turns a refusal into an
-  apply. The same books are refused as before, with one exception worth
-  naming: a stored title that has both a leading list number and a number of
-  its own at the end ("01 - Batman 451", position 1) used to be read as 1 only
-  and could apply; it is now read as 1 and 451 and held, which is what the
-  gate already did to the same title without the list number.
+- The rule this change keeps for track-like numbers, stated once: a book is
+  applied without a person only if every number it carries (stored position,
+  title, file and folder names, the track-like ones included) equals the
+  match's number. A track-like number changes the reason a book is held (a
+  review with a track-number explanation instead of a hard conflict); it never
+  turns a refusal into an apply. Three things are not subject to it, and each
+  is deliberate. (1) A stored position equal to an end of the title's own
+  range is set aside silently: "Batman Books 1-3" at position 3 passes the
+  sequence check against a 1-3 candidate, and then still needs the collected-
+  edition runtime rule (a known, agreeing runtime) to apply. (2) A book with
+  no number at all passes, as on main. (3) A book whose only numbers are part
+  suffixes passes against a candidate that names no number, as on main.
+- For books whose only odd number is track-like, the same books are refused as
+  before, with one exception worth naming: a stored title that has both a
+  leading list number and a number of its own at the end ("01 - Batman 451",
+  position 1) used to be read as 1 only and could apply; it is now read as 1
+  and 451 and held, which is what the gate already did to the same title
+  without the list number.
+- Collected editions are the separate, intended change in outcome: where main
+  refused a box set, an omnibus or a "Books 1-3" edition, it now applies
+  without a person on a same-range match with a known, agreeing recording
+  length. The recording-length rule also adds refusals: a collected edition
+  with an unknown or only roughly agreeing recording length now goes to a
+  person even for the same range, where two agreeing signals used to be
+  enough.
 - Outcome: no book with a track-like number that disagrees with the number the
   rest of its names and fields agree on is applied without a person in this
   change. The tests pin the cases
