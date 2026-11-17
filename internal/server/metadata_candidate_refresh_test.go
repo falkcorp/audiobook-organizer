@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_refresh_test.go
-// version: 1.0.0
+// version: 1.2.0
 // guid: 0d7c3e59-a418-4b62-93f7-5e2b8c1d6a04
 // last-edited: 2026-11-16
 
@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -25,13 +26,27 @@ const refreshASIN = "B0GOTHAM99" // fake
 // the chain, whose lookups go to lookup.
 func newRefreshFixture(t *testing.T, lookup func(provider string) error) (*fallbackFixture, *callCounter) {
 	t.Helper()
+	return newRefreshFixtureRecord(t, func(provider string) (*metadata.BookMetadata, error) {
+		return nil, lookup(provider)
+	})
+}
+
+// newRefreshFixtureRecord is newRefreshFixture whose lookups can also answer
+// with a record (the provider's product for the ASIN), so a source that failed
+// can later recover. The throttle registry is process-wide: a failed lookup
+// records a failure there and can put Audnexus on hold, so every fixture starts
+// and ends with it cleared.
+func newRefreshFixtureRecord(t *testing.T, lookup func(provider string) (*metadata.BookMetadata, error)) (*fallbackFixture, *callCounter) {
+	t.Helper()
+	metadata.ResetThrottlesForTesting()
+	t.Cleanup(metadata.ResetThrottlesForTesting)
 	f := newFallbackFixture(t, 800)
-	audnexus := &idSource{id: metadata.SourceIDAudnexus, name: "Audnexus", log: f.log}
+	audnexus := &idSource{id: metadata.SourceIDAudnexus, name: "Audnexus (Audible)", log: f.log}
 	f.mfs.SetOverrideSources([]metadata.MetadataSource{f.audible, audnexus, f.openlib, f.google})
 	cc := &callCounter{}
 	f.mfs.SetASINLookupOverride(func(_ context.Context, provider, _ string) (*metadata.BookMetadata, error) {
 		cc.add(provider)
-		return nil, lookup(provider)
+		return lookup(provider)
 	})
 	return f, cc
 }
@@ -77,8 +92,8 @@ func TestCandidateRefresh_BadASINIsNotAFailure(t *testing.T) {
 	if r.Status == "error" {
 		t.Fatalf("status = error (%s); a refused ASIN must not fail the book", r.Error)
 	}
-	if len(r.SourcesFailed) != 0 || r.ErrorCause != "" {
-		t.Fatalf("degraded = %v cause %q, want none", r.SourcesFailed, r.ErrorCause)
+	if len(r.FailedSources) != 0 || r.ErrorCause != "" {
+		t.Fatalf("degraded = %v cause %q, want none", r.FailedSources, r.ErrorCause)
 	}
 	if cc.get(metadata.SourceIDAudnexus) == 0 {
 		t.Fatal("the fixture never reached the Audnexus lookup, so this tests nothing")
@@ -102,8 +117,8 @@ func TestCandidateRefresh_AudnexusFailureDegradesInsteadOfFailing(t *testing.T) 
 	if r.Status == "error" {
 		t.Fatalf("status = error (%s); the title sources answered", r.Error)
 	}
-	if len(r.SourcesFailed) != 1 || r.SourcesFailed[0] != "Audnexus" {
-		t.Fatalf("SourcesFailed = %v, want [Audnexus]", r.SourcesFailed)
+	if len(r.FailedSources) != 1 || r.FailedSources[0] != "Audnexus (Audible)" {
+		t.Fatalf("FailedSources = %v, want [Audnexus (Audible)]", r.FailedSources)
 	}
 	if r.ErrorCause != metadata.CauseUpstream {
 		t.Fatalf("ErrorCause = %q, want %q", r.ErrorCause, metadata.CauseUpstream)
@@ -142,8 +157,8 @@ func TestCandidateRefresh_FailedASINOnlySourceDoesNotBlockTheFallback(t *testing
 		t.Fatalf("Google Books calls %d -> %d: the owed fallback was not asked", googleBefore, f.google.calls.Load())
 	}
 	// The first run's 503 put Audnexus on hold, so the second run did not ask.
-	if len(second.SourcesFailed) != 1 || second.SourcesFailed[0] != "Audnexus" || second.ErrorCause != metadata.CauseHeld {
-		t.Fatalf("second run SourcesFailed = %v cause %q, want [Audnexus] provider_held", second.SourcesFailed, second.ErrorCause)
+	if len(second.FailedSources) != 1 || second.FailedSources[0] != "Audnexus (Audible)" || second.ErrorCause != metadata.CauseHeld {
+		t.Fatalf("second run FailedSources = %v cause %q, want [Audnexus (Audible)] provider_held", second.FailedSources, second.ErrorCause)
 	}
 }
 
@@ -172,9 +187,9 @@ func TestCandidateFetchTally_RefreshSummary(t *testing.T) {
 		{Status: "matched"},
 		{Status: "matched"},
 		{Status: "no_match"},
-		{Status: "matched", SourcesFailed: []string{"Audnexus"}, ErrorCause: metadata.CauseTimeout},
-		{Status: candidateStatusDeferred, SourcesFailed: []string{"Audnexus"}, ErrorCause: metadata.CauseTimeout},
-		{Status: "no_match", SourcesFailed: []string{"Audnexus"}, ErrorCause: metadata.CauseUpstream},
+		{Status: "matched", FailedSources: []string{"Audnexus (Audible)"}, ErrorCause: metadata.CauseTimeout},
+		{Status: candidateStatusDeferred, FailedSources: []string{"Audnexus (Audible)"}, ErrorCause: metadata.CauseTimeout},
+		{Status: "no_match", FailedSources: []string{"Audnexus (Audible)"}, ErrorCause: metadata.CauseUpstream},
 		{Status: "error", ErrorCause: metadata.CauseRateLimited},
 		{Status: "error", ErrorCause: metadata.CauseRateLimited},
 		{Status: "error"},
@@ -186,8 +201,8 @@ func TestCandidateFetchTally_RefreshSummary(t *testing.T) {
 	}
 	tally.recordError("result_not_recorded")
 
-	want := "refresh summary: refreshed 3, degraded 3 (timeout 2, upstream_5xx 1), " +
-		"failed 4 (other 1, rate_limited 2, result_not_recorded 1), not asked 2"
+	want := "refresh summary: refreshed 3, degraded 2 (timeout 1, upstream_5xx 1), " +
+		"failed 4 (other 1, rate_limited 2, result_not_recorded 1), deferred 1, not asked 2"
 	if got := tally.refreshSummary(); got != want {
 		t.Fatalf("refreshSummary =\n %q\nwant\n %q", got, want)
 	}
@@ -199,8 +214,60 @@ func TestCandidateFetchTally_RefreshSummary(t *testing.T) {
 
 func TestCandidateFetchTally_RefreshSummaryEmpty(t *testing.T) {
 	var tally candidateFetchTally
-	if got, want := tally.refreshSummary(), "refresh summary: refreshed 0, degraded 0, failed 0, not asked 0"; got != want {
+	if got, want := tally.refreshSummary(), "refresh summary: refreshed 0, degraded 0, failed 0, deferred 0, not asked 0"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A deferred book is not "refreshed": its fallback lookup was put off, so it
+// has its own bucket and the buckets partition the run.
+func TestCandidateFetchTally_DeferredIsNotRefreshed(t *testing.T) {
+	var tally candidateFetchTally
+	tally.record(CandidateResult{Status: candidateStatusDeferred})
+	tally.record(CandidateResult{Status: candidateStatusDeferred, Fallback: []metabatch.FallbackStep{
+		{Provider: "google-books", Outcome: metabatch.FallbackDeferred}}})
+	want := "refresh summary: refreshed 0, degraded 0, failed 0, deferred 2, not asked 0"
+	if got := tally.refreshSummary(); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// "Not asked" means NO source was asked. A row served from the cache that
+// still ran a fallback provider live was asked; one whose fallback steps were
+// all skipped or deferred, or that has no steps, was not; and one whose owed
+// source was re-asked and failed again is degraded, not "not asked".
+func TestCandidateFetchTally_CachedRowsAreNotAskedOnlyWhenNothingWasAsked(t *testing.T) {
+	cases := []struct {
+		name string
+		r    CandidateResult
+		want string
+	}{
+		{"cached, no fallback", CandidateResult{Status: "matched", Cached: candidateCachedCandidates},
+			"refreshed 0, degraded 0, failed 0, deferred 0, not asked 1"},
+		{"cached, fallback matched live", CandidateResult{Status: "matched", Cached: candidateCachedCandidates,
+			Fallback: []metabatch.FallbackStep{{Provider: "openlibrary", Outcome: metabatch.FallbackMatched}}},
+			"refreshed 1, degraded 0, failed 0, deferred 0, not asked 0"},
+		{"cached, fallback answered no match", CandidateResult{Status: "no_match", Cached: candidateCachedKnownEmpty,
+			Fallback: []metabatch.FallbackStep{{Provider: "openlibrary", Outcome: metabatch.FallbackNoMatch}}},
+			"refreshed 1, degraded 0, failed 0, deferred 0, not asked 0"},
+		{"cached, fallback errored live", CandidateResult{Status: "no_match", Cached: candidateCachedKnownEmpty,
+			Fallback: []metabatch.FallbackStep{{Provider: "openlibrary", Outcome: metabatch.FallbackError}}},
+			"refreshed 1, degraded 0, failed 0, deferred 0, not asked 0"},
+		{"cached, fallback only skipped", CandidateResult{Status: "matched", Cached: candidateCachedCandidates,
+			Fallback: []metabatch.FallbackStep{{Provider: "google-books", Outcome: metabatch.FallbackSkipped}}},
+			"refreshed 0, degraded 0, failed 0, deferred 0, not asked 1"},
+		{"cached, owed source re-asked and failed", CandidateResult{Status: "matched", Cached: candidateCachedCandidates,
+			FailedSources: []string{"Audnexus (Audible)"}, ErrorCause: metadata.CauseTimeout},
+			"refreshed 0, degraded 1 (timeout 1), failed 0, deferred 0, not asked 0"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var tally candidateFetchTally
+			tally.record(c.r)
+			if got, want := tally.refreshSummary(), "refresh summary: "+c.want; got != want {
+				t.Fatalf("got %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -209,7 +276,7 @@ func TestCandidateFetchTally_RefreshSummaryEmpty(t *testing.T) {
 func TestCandidateFetchTally_ResumeSeedsCausesFromStoredRows(t *testing.T) {
 	stored := []CandidateResult{
 		{Status: "error", ErrorCause: metadata.CauseTimeout, Error: "search failed"},
-		{Status: "matched", SourcesFailed: []string{"Audnexus"}, ErrorCause: metadata.CauseBadASIN},
+		{Status: "matched", FailedSources: []string{"Audnexus (Audible)"}, ErrorCause: metadata.CauseBadASIN},
 		{Status: "matched"},
 	}
 	var seeded candidateFetchTally
@@ -224,7 +291,7 @@ func TestCandidateFetchTally_ResumeSeedsCausesFromStoredRows(t *testing.T) {
 		}
 		seeded.record(back)
 	}
-	want := "refresh summary: refreshed 1, degraded 1 (bad_asin 1), failed 1 (timeout 1), not asked 0"
+	want := "refresh summary: refreshed 1, degraded 1 (bad_asin 1), failed 1 (timeout 1), deferred 0, not asked 0"
 	if got := seeded.refreshSummary(); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -237,11 +304,11 @@ func TestCandidateResult_RefreshFieldsAreAdditive(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"book":{"id":"b1"},"status":"matched"}`), &old); err != nil {
 		t.Fatal(err)
 	}
-	if old.SourcesFailed != nil || old.ErrorCause != "" {
+	if old.FailedSources != nil || old.ErrorCause != "" {
 		t.Fatalf("old row decoded with refresh fields: %+v", old)
 	}
 	blob, _ := json.Marshal(CandidateResult{Status: "matched"})
-	if strings.Contains(string(blob), "sources_failed") || strings.Contains(string(blob), "error_cause") {
+	if strings.Contains(string(blob), "failed_sources") || strings.Contains(string(blob), "error_cause") {
 		t.Fatalf("a clean row wrote refresh keys: %s", blob)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/metadata/audnexus_bad_asin_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e8a2d93-7c14-4b60-8f3e-a1d9c06b7e52
 // last-edited: 2026-11-16
 
@@ -14,6 +14,9 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // These build the client on a plain http.Client: the 2 rps token bucket of the
@@ -209,6 +212,9 @@ func TestFailureCause(t *testing.T) {
 		{"our deadline through url.Error", fmt.Errorf(`Get "http://192.0.2.1/x": %w`, context.DeadlineExceeded), CauseTimeout},
 		{"network timeout", timeoutNetErr{true}, CauseTimeout},
 		{"network failure", timeoutNetErr{false}, CauseTransport},
+		{"limiter deadline refusal, wrapped as providerhttp and url.Error wrap it",
+			fmt.Errorf(`Get "http://192.0.2.1/x": %w`, fmt.Errorf("providerhttp audnexus: rate limit wait: %w",
+				errors.New("rate: Wait(n=1) would exceed context deadline"))), CauseTimeout},
 		{"cancel", context.Canceled, CauseCanceled},
 		{"429", &ProviderStatusError{Provider: "x", Status: 429}, CauseRateLimited},
 		{"throttled", ErrProviderThrottled, CauseHeld},
@@ -222,5 +228,33 @@ func TestFailureCause(t *testing.T) {
 		if got := FailureCause(tc.err); got != tc.want {
 			t.Errorf("%s: FailureCause(%v) = %q, want %q", tc.name, tc.err, got, tc.want)
 		}
+	}
+}
+
+// The limiter's refusal to queue a call past the caller's deadline has no
+// sentinel, so FailureCause matches its text. This builds it with the real
+// limiter and the real transport wrap, so a reworded library message or a changed
+// wrap fails here.
+func TestFailureCause_LimiterDeadlineRefusal(t *testing.T) {
+	lim := rate.NewLimiter(rate.Every(time.Hour), 1)
+	if err := lim.Wait(context.Background()); err != nil { // spends the burst token
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := lim.Wait(ctx) // the next token is an hour away
+	if err == nil {
+		t.Fatal("the limiter granted a token it did not have")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Skipf("the limiter now wraps the context error (%v); FailureCause needs no text match", err)
+	}
+	wrapped := fmt.Errorf(`Get "http://192.0.2.1/x": %w`, fmt.Errorf("providerhttp audnexus: rate limit wait: %w", err))
+	if got := FailureCause(wrapped); got != CauseTimeout {
+		t.Fatalf("FailureCause(%v) = %q, want %q", wrapped, got, CauseTimeout)
+	}
+	// Burst exceeded is a different refusal and stays "other".
+	if got := FailureCause(errors.New("rate: Wait(n=2) exceeds limiter's burst 1")); got != CauseOther {
+		t.Fatalf("burst refusal classified %q, want other", got)
 	}
 }

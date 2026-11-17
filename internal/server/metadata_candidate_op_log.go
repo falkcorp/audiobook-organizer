@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op_log.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 17ed77c1-1759-4abb-947e-4de2acc4000c
 // last-edited: 2026-11-16
 //
@@ -62,10 +62,11 @@ type candidateFetchTally struct {
 
 	// The refresh summary (refreshSummary): refreshed books had every source
 	// they were asked answer; degraded books were answered by the others
-	// while some source could not be (CandidateResult.SourcesFailed); failed
-	// books are the errors; notAsked books were served from the cache or
-	// skipped without a provider call. degradedBy / failedBy count the last
-	// two by cause (metadata.Cause*), under mu.
+	// while some source could not be (CandidateResult.FailedSources); failed
+	// books are the errors; deferred books (the deferred counter above) had a
+	// fallback lookup put off; notAsked books were served from the cache or
+	// skipped without a provider call. degradedBy / failedBy count the
+	// degraded and failed ones by cause (metadata.Cause*), under mu.
 	refreshed, degraded, notAsked atomic.Int64
 
 	mu         sync.Mutex
@@ -117,20 +118,43 @@ func bumpCause(m map[string]int64, cause string) map[string]int64 {
 	return m
 }
 
-// recordRefresh files one book under refreshed / degraded / failed / not asked.
+// fallbackAsked reports that a fallback provider was actually asked for the
+// book: at least one step ended in an answer or a failure of the provider's
+// own, not a skip (a gate refused it) or a deferral (nothing was sent).
+func fallbackAsked(steps []metabatch.FallbackStep) bool {
+	for _, st := range steps {
+		switch st.Outcome {
+		case metabatch.FallbackMatched, metabatch.FallbackNoMatch, metabatch.FallbackError:
+			return true
+		}
+	}
+	return false
+}
+
+// recordRefresh files one book under refreshed / degraded / failed / deferred /
+// not asked. The order matters: a book is "not asked" only when NO source was
+// asked, so a row served from the cache whose owed source was re-asked and
+// failed (FailedSources), or whose fallback ran live from the cached row
+// (Cached is stamped on the row either way), is not filed there. A deferred
+// book (status "deferred") is counted by the deferred counter alone: its
+// fallback was put off, which is not a refresh.
 func (t *candidateFetchTally) recordRefresh(r CandidateResult) {
 	switch {
 	case r.Status == "error":
 		t.mu.Lock()
 		t.failedBy = bumpCause(t.failedBy, r.ErrorCause)
 		t.mu.Unlock()
-	case r.Status == "skipped" || r.Cached != "":
+	case r.Status == candidateStatusDeferred:
+		// Counted in record() by t.deferred.
+	case r.Status == "skipped":
 		t.notAsked.Add(1)
-	case len(r.SourcesFailed) > 0:
+	case len(r.FailedSources) > 0:
 		t.degraded.Add(1)
 		t.mu.Lock()
 		t.degradedBy = bumpCause(t.degradedBy, r.ErrorCause)
 		t.mu.Unlock()
+	case r.Cached != "" && !fallbackAsked(r.Fallback):
+		t.notAsked.Add(1)
 	default:
 		t.refreshed.Add(1)
 	}
@@ -138,7 +162,7 @@ func (t *candidateFetchTally) recordRefresh(r CandidateResult) {
 
 // refreshSummary renders the run's refresh outcome with the failures by cause,
 // e.g. "refresh summary: refreshed 700, degraded 12 (timeout 12), failed 3
-// (rate_limited 3), not asked 40". It is logged once, when the run ends or is
+// (rate_limited 3), deferred 5, not asked 40". It is logged once, when the run ends or is
 // cancelled; counts() is the running line and is deliberately unchanged.
 func (t *candidateFetchTally) refreshSummary() string {
 	t.mu.Lock()
@@ -150,8 +174,8 @@ func (t *candidateFetchTally) refreshSummary() string {
 		}
 		return fmt.Sprintf("%d (%s)", n, by)
 	}
-	return fmt.Sprintf("refresh summary: refreshed %d, degraded %s, failed %s, not asked %d",
-		t.refreshed.Load(), with(t.degraded.Load(), degradedBy), with(t.errored.Load(), failedBy), t.notAsked.Load())
+	return fmt.Sprintf("refresh summary: refreshed %d, degraded %s, failed %s, deferred %d, not asked %d",
+		t.refreshed.Load(), with(t.degraded.Load(), degradedBy), with(t.errored.Load(), failedBy), t.deferred.Load(), t.notAsked.Load())
 }
 
 // counts renders the outcome counts, e.g. "matched 820, no match 55, skipped

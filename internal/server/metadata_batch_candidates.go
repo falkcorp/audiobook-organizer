@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.31.0
+// version: 4.32.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-11-16
 //
@@ -327,7 +327,7 @@ func (s *Server) fetchCandidateForBook(
 	// chainFailed / chainCause: the sources the chain search could not ask or
 	// hear from, and why (chainFailure). Set once the chain has run; every
 	// result built after that carries them, so a book the other sources
-	// answered is DEGRADED (SourcesFailed set), not silently clean.
+	// answered is DEGRADED (FailedSources set), not silently clean.
 	var chainFailed []string
 	chainCause := ""
 	withQuery := func(r CandidateResult) CandidateResult {
@@ -335,7 +335,7 @@ func (s *Server) fetchCandidateForBook(
 		r.SearchQuerySource = query.Source
 		r.SearchAuthor = searchAuthor
 		if len(chainFailed) > 0 {
-			r.SourcesFailed = chainFailed
+			r.FailedSources = chainFailed
 			if r.ErrorCause == "" {
 				r.ErrorCause = chainCause
 			}
@@ -396,6 +396,7 @@ func (s *Server) fetchCandidateForBook(
 	// shared daily budget. With neither enabled, plan is empty and this is
 	// the single search it always was.
 	nameByID := mfs.ActiveSourceNamesByID()
+	chainNames := mfs.ActiveSourceNames()
 	plan := candidateFallbackPlan(nameByID)
 	active := activeFallbackPlan(plan)
 	idByName := sourceIDsByName(nameByID)
@@ -422,9 +423,16 @@ func (s *Server) fetchCandidateForBook(
 	// the rest are asked (a quota-starved provider no longer drags the others
 	// into every run); nil asks every provider.
 	var askOnly []string
+	// owedReask: the row holds candidates and the verdict named only the chain
+	// sources it still owes an answer, whose backoff has run out
+	// (database.MetadataCandidateCache.OwedSources). The re-ask asks those
+	// alone and MERGES what they say into the row's candidates; the fallback
+	// providers (and their budget) are not asked on their account.
+	owedReask := false
 	if !force {
 		cached, verdict, ask := mfs.CachedBatchVerdict(book, query.Title, authorForHash)
 		askOnly = ask
+		owedReask = verdict == metafetch.BatchVerdictNone && cached != nil && len(cached.Candidates) > 0 && len(ask) > 0
 		switch verdict {
 		case metafetch.BatchVerdictFreshCandidates:
 			// Fresh candidates the owner cannot use (all rejected, all refused
@@ -464,7 +472,7 @@ func (s *Server) fetchCandidateForBook(
 
 	ask := askOnly
 	if len(ask) == 0 {
-		ask = mfs.ActiveSourceNames()
+		ask = chainNames
 	}
 	primary := splitFallback(ask, plan)
 
@@ -475,12 +483,27 @@ func (s *Server) fetchCandidateForBook(
 	// merged into.
 	entry := mfs.VouchedCachedRow(book, query.Title)
 	carryFrom = entry
+	// recordOwed writes what the chain search learned about its sources onto
+	// the book's row: a source that could not be asked or heard from is owed
+	// (re-asked on a backoff, MetadataCandidateCache.OwedSources), one that
+	// answered is not. A cancelled run says nothing about the providers.
+	recordOwed := func(resp *metafetch.SearchMetadataResponse) {
+		if resp == nil || ctx.Err() != nil {
+			return
+		}
+		u := owedUpdateOf(resp, chainNames)
+		if err := mfs.RecordChainOwed(bookID, metafetch.BatchSourceHash(bookID, query.Title, authorForHash),
+			resp.InputFingerprint, u); err != nil {
+			candidateFetchLog.Warn("record owed sources: book=%s err=%v",
+				logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
+		}
+	}
 	if len(plan) == 0 || len(primary) > 0 {
 		onlySources := askOnly
 		if len(plan) > 0 {
 			onlySources = primary
 		}
-		chainOpts := metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force,
+		chainOpts := metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force, MergeWithCached: owedReask,
 			// A refetch that keeps the fallback providers' candidates
 			// ranks the union like the fallback's merge does.
 			MergeRank: metabatch.MergeRanker(store, store, book)}
@@ -488,35 +511,55 @@ func (s *Server) fetchCandidateForBook(
 		fetched, resp, ferr := mfs.FetchAndCacheWithResponse(ctx, limiter, bookID, query.Title, authorForHash, "", "", chainOpts)
 		if ferr != nil {
 			chainFailed, chainCause = chainFailure(resp, ferr)
-			// Only identifier-asked sources (Audnexus) failed: the book's
-			// title was never refused, so the fallback providers that still
-			// owe it an answer are asked now instead of waiting behind a
-			// source that cannot answer. The chain's own row is NOT written
-			// (nothing it asked answered), so the failed source stays owed
-			// and the book is selected again. A book the fallback leaves
-			// without a candidate is an error, not a clean "no match".
-			if len(active) > 0 && ctx.Err() == nil && onlyASINSourcesFailed(resp, ferr, idByName) &&
-				len(fallbackOwed(entry, active)) > 0 {
-				if v := metabatch.NoUsableCandidate(store, store, book, entry); !v.Usable {
-					r := fallback(entry, v.Why, "")
-					if r.Status == "no_match" {
-						r.Status = "error"
-						r.Error = chainIncompleteMessage(resp)
-					}
-					return r
+			var r CandidateResult
+			held := metabatch.NoUsableCandidate(store, store, book, entry) // what the row already holds
+			switch {
+			case owedReask && ctx.Err() == nil && entry != nil && held.Usable:
+				// The re-ask of an owed source failed again. The book still
+				// holds the candidates the other sources found, so it is
+				// DEGRADED, not failed: it keeps them, the failure is
+				// recorded on the row (the next re-ask waits longer), and
+				// nothing else is asked.
+				r = candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry)
+				r.Cached = candidateCachedCandidates
+				r = withQuery(r)
+			case len(active) > 0 && ctx.Err() == nil && onlyASINSourcesFailed(resp, ferr, idByName) &&
+				len(fallbackOwed(entry, active)) > 0 && !held.Usable:
+				// Only identifier-asked sources (Audnexus) failed: the
+				// book's title was never refused, so the fallback providers
+				// that still owe it an answer are asked now instead of
+				// waiting behind a source that cannot answer. The chain's
+				// own row is NOT written (nothing it asked answered); the
+				// failed source is recorded as owed on the row the fallback
+				// writes (recordOwed below), so it is asked again once its
+				// backoff runs out even if the fallback found a candidate.
+				// A book the fallback leaves without a candidate is an
+				// error, not a clean "no match".
+				r = fallback(entry, held.Why, "")
+				if r.Status == "no_match" {
+					r.Status = "error"
+					r.Error = chainIncompleteMessage(resp)
 				}
+			default:
+				// A primary chain that failed is not a "no match": the
+				// fallback is not asked, and the next run asks the chain
+				// again.
+				r = withQuery(CandidateResult{
+					Book:   bookInfo,
+					Status: "error",
+					Error:  fmt.Sprintf("search failed: %v", ferr),
+				})
 			}
-			// A primary chain that failed is not a "no match": the fallback
-			// is not asked, and the next run asks the chain again.
-			return withQuery(CandidateResult{
-				Book:   bookInfo,
-				Status: "error",
-				Error:  fmt.Sprintf("search failed: %v", ferr),
-			})
+			recordOwed(resp)
+			return r
 		}
 		if resp != nil && len(resp.SourcesFailed) > 0 {
 			chainFailed, chainCause = chainFailure(resp, nil)
 		}
+		// The chain wrote its row: the sources that failed are owed on it,
+		// the ones that answered no longer are. This runs before the
+		// fallback, whose own write carries the owed map across.
+		recordOwed(resp)
 		entry = fetched
 		if len(active) == 0 {
 			return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))

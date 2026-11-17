@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-11-16
 //
@@ -159,16 +159,23 @@ type CandidateResult struct {
 	// identity checks, or the best below the apply score floor). Empty when
 	// the chain had a usable candidate or no fallback provider was due.
 	Fallback []FallbackStep `json:"fallback,omitempty"`
-	// SourcesFailed names the sources the search could NOT ask or hear from
-	// (a timeout, a 5xx, a throttle), whatever the book's Status: a matched
-	// or no_match row with SourcesFailed set is DEGRADED -- the other
-	// sources answered, these did not, and they stay owed for the next run.
+	// FailedSources names the chain sources the search could NOT ask or hear
+	// from (a timeout, a 5xx, a throttle), whatever the book's Status: a
+	// matched or no_match row with FailedSources set is DEGRADED -- the other
+	// sources answered, these did not. The cache row records them as owed
+	// (database.MetadataCandidateCache.OwedSources), and the batch fetch asks
+	// them again, alone, on a bounded backoff (database.OwedBackoff) that ends
+	// after database.OwedMaxAsks asks; the row's candidates are kept meanwhile.
+	// Named apart from the search response's sources_failed (a map of source
+	// to message): this is a list of names.
+	//
 	// ErrorCause is why, in one stable word (metadata.FailureCause:
-	// bad_asin, timeout, rate_limited, quota, upstream_5xx, client_4xx,
-	// canceled, transport, other) -- for a Status "error" row the cause of the
-	// failure, for a degraded row the cause of its failed source. The run's
-	// refresh summary counts by it. Both omitted when every source answered.
-	SourcesFailed []string `json:"sources_failed,omitempty"`
+	// bad_asin, timeout, rate_limited, quota, provider_held, upstream_5xx,
+	// client_4xx, canceled, transport, other) -- for a Status "error" row the
+	// cause of the failure, for a degraded row the cause of its failed source.
+	// The run's refresh summary counts by it. Both omitted when every source
+	// answered.
+	FailedSources []string `json:"failed_sources,omitempty"`
 	ErrorCause    string   `json:"error_cause,omitempty"`
 }
 
