@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_path_pipeline.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 5d2c8e17-9b43-4a06-8f1d-3e7a0c6b9d25
 # last-edited: 2026-11-17
 #
@@ -13,6 +13,7 @@
 # only a Windows filesystem can answer (realpath of a junction, a device name
 # on disk) is NOT covered here and is listed as unverified in the PR.
 
+import asyncio
 import ntpath
 import os
 import pathlib
@@ -502,3 +503,27 @@ def test_windows_machine_guid_is_none_without_winreg():
 
     if sys.platform != "win32":
         assert wmi.MachineIdentity().windows_machine_guid() is None
+
+
+def test_a_declared_oversized_body_is_refused_without_reading_it():
+    # The Content-Length branch: a client that declares 1 GiB must be answered
+    # before any of it is read, not after it has been counted.
+    sent = []
+
+    async def app(scope, receive, send):
+        raise AssertionError("the app must not run")
+
+    async def receive():
+        raise AssertionError("the body must not be read")
+
+    async def send(msg):
+        sent.append(msg)
+
+    mw = wpp.BodyLimitMiddleware(app, ("/transcribe-path-batch",), 1024)
+    scope = {
+        "type": "http",
+        "path": "/transcribe-path-batch",
+        "headers": [(b"content-length", str(1 << 30).encode())],
+    }
+    asyncio.run(mw(scope, receive, send))
+    assert sent[0]["status"] == 413
