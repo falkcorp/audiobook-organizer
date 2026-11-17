@@ -1,7 +1,7 @@
 // file: internal/server/identification_advance_op_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: e7a545a5-fab9-47d7-9f05-5851bcf6cdb8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -414,6 +414,11 @@ func TestIdentFetchResultOf(t *testing.T) {
 			identification.FetchResult{Outcome: identification.OutcomeSkippedDone, Reason: database.IdentReasonNoUsableTitle}},
 		{CandidateResult{Status: "skipped", Error: "skipped: marked no match"}, nil,
 			identification.FetchResult{Outcome: identification.OutcomeSkippedDone}},
+		// A retired book (trashed, or merged away) is a different skip from the
+		// owner's "no match": it records its own reason, never the no-match
+		// outcome the branch above gives.
+		{CandidateResult{Status: "skipped", Error: "skipped: retired book"}, nil,
+			identification.FetchResult{Outcome: identification.OutcomeSkippedDone, Reason: database.IdentReasonRetired}},
 	}
 	for i, c := range cases {
 		got := identFetchResultOf(c.res, c.status)

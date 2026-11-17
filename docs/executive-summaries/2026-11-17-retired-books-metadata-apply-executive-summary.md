@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-retired-books-metadata-apply-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2e8c5a71-4b93-4d06-9f1a-7c3d0b6e8a52 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -22,14 +22,34 @@ refuses retired books`.
   merged away.
 - Those writes are now refused, and the refusal is reported like the others
   ("book retired") in the dry run, the apply summary and the per-book results.
-  Nothing is written, and nothing is counted as a failure.
-- The searches stop too. Looking up a book's details costs a lookup against an
-  outside service that has a daily limit; retired books were being looked up
-  and then refused anyway. The lists that feed the search now leave them out
-  and say how many they left out.
+  Nothing is written. In the jobs named in this summary, a retired book is
+  reported as skipped, with its own reason, rather than as a failed apply. A
+  book put away while a job is already under way (after the job read it,
+  before it wrote) is caught at the write and reported the same way; the
+  version-twin repair reports it with its own outcome, "changed since it was
+  planned", which is not a failure either.
+- Looking up a book's details costs a lookup against an outside service that
+  has a daily limit, and retired books were being looked up and then refused
+  anyway. The lists that feed the lookups now leave them out and say how many
+  they left out: the bulk metadata fetch (both the chosen-books and the
+  whole-library forms), the review page's batch fetch, the stale refetch, the scheduled unfetched run,
+  the transcript-based matcher, the nightly upgrade, the lost-candidates
+  repair and the production-company author resolver (its dry run no longer
+  counts them either). A book that is put away while a run is already
+  searching it can still be looked up once; its result is not written.
+- The automatic Audible-id backfill checks again under the write lock, so a
+  book put away during its Audible request is left alone and counted as such.
+- The job that advances a book through identification used to log a retired
+  book as "marked no match". It now records its own reason, "retired", so a
+  book that was only put away is not described as one with no match.
+- "Search again" on several selected books now says how many books were
+  searched and how many retired ones were left out, instead of the number
+  selected. A selection that is all retired starts nothing and says why.
 - What did not change: you can still pick a match for one book yourself, on any
   book, including one in the trash; approving a single row on the review page
-  still applies it; and "Search again" on one book still searches it.
+  still applies it; and "Search again" on one book still searches it. The
+  search job itself now refuses that one-book mode if it is handed more than
+  one book, so no other caller can switch it on for a whole list.
 - The one-click "fetch metadata" function is covered as well. Other automatic
   jobs call it too (organize's fetch-first step, the iTunes import, the
   production-company author resolvers), so every place that calls it now says

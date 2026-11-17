@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_enrich_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e1cf22ab-aed6-46a8-b67a-9f9695f4ac01
 // last-edited: 2026-11-17
 
@@ -26,7 +26,7 @@ func TestEnrichImportedBooks_RetiredBooksAreSkipsAndDoNotTripTheBreaker(t *testi
 
 	_, store := buildEnrichFixture(t, totalBooks)
 	fetcher := newFakeMetadataFetcher(func(string) bool { return true })
-	fetcher.failErr = fmt.Errorf("book %q: %w", "Synthetic Title", metafetch.ErrBookRetired)
+	fetcher.failErr = fmt.Errorf("book %q: %w", "The Long Halloween", metafetch.ErrBookRetired)
 	imp := &Importer{store: store, mfs: fetcher, enrichConcurrencyOverride: 4}
 
 	imp.enrichImportedBooks(context.Background(), fixtureBookIDs(totalBooks), &itunesImportStatus{}, logger.New("test-enrich-retired"))

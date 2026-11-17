@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.19.0
+// version: 3.19.1
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-11-17
 //
@@ -159,8 +159,17 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	mfs := s.metadataFetchService
 	progress := registryProgressAdapter{r: reporter}
 	if p.Interactive {
-		// One book a person asked for (singleBookSearch): its lookups may
-		// use the reserved interactive share of the daily quotas.
+		// Interactive is one book a person asked for (singleBookSearch). It
+		// widens two things at once: the reserved interactive share of the
+		// daily quotas, and the retired-book skip. The
+		// HTTP route only sets it for exactly one id, but the op is the one
+		// place every producer of params passes through, so it refuses the
+		// flag on anything else instead of trusting the caller: a library-sized
+		// or self-selecting run must not search every retired book in it.
+		if len(p.BookIDs) > 1 || p.Unfetched {
+			return fmt.Errorf("metadata-candidate-fetch: interactive is for exactly one book, got %d book ids (unfetched=%t)",
+				len(p.BookIDs), p.Unfetched)
+		}
 		ctx = metadata.WithInteractiveQuota(ctx)
 	}
 

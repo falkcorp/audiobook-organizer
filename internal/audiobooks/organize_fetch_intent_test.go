@@ -1,5 +1,5 @@
 // file: internal/audiobooks/organize_fetch_intent_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0d6a8b3e-47c1-4e92-b5f0-93a7c2e1d864
 // last-edited: 2026-11-17
 
@@ -32,7 +32,7 @@ func TestNewOrganizeService_FetchFirstCallbackIsUnattended(t *testing.T) {
 			store, err := database.NewPebbleStore(t.TempDir())
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = store.Close() })
-			book := &database.Book{Title: "Quiet Harbor Lights", FilePath: "/lib/qhl/book.m4b"}
+			book := &database.Book{Title: "The Long Halloween", FilePath: "/lib/tlh/book.m4b"}
 			retire(book)
 			created, err := store.CreateBook(book)
 			require.NoError(t, err)
