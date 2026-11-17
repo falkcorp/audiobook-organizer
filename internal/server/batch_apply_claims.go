@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_claims.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 0c6a9e42-7d1b-4f83-a5e2-9b3f1d7c4e60
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -127,7 +127,9 @@ func keysOf[V any](m map[string]V) []string {
 // claimBook reads the book behind a claim, or nil when it must not claim a
 // part:
 //   - gone (GetBookByID returns nil for a missing row);
-//   - soft-deleted (marked for deletion): its files are on their way out;
+//   - retired (Book.IsRetired): in the trash, so its files are on their way
+//     out, or merged into another book, so it is no longer a book of its own
+//     and cannot take a record. Neither holds back a live sibling;
 //   - a non-primary member of a version group: another copy of the same book
 //     (a second rip, a different edition), not a PART of it;
 //   - every one of its file rows is missing: there is nothing on disk to be
@@ -141,7 +143,7 @@ func claimBook(books claimBookReader, id string) (*database.Book, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read book: %w", err)
 	}
-	if book == nil || book.IsSoftDeleted() || (book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion) {
+	if book == nil || book.IsRetired() || (book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion) {
 		return nil, nil
 	}
 	files, err := books.GetBookFiles(id)

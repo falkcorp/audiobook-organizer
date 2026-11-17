@@ -1,5 +1,5 @@
 // file: internal/server/fetch_intent_callers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ba95b95d-5a6d-4c26-bb9e-9f78520ebbc9
 // last-edited: 2026-11-17
 
@@ -82,6 +82,7 @@ func runResolveProductionAuthor(t *testing.T, retire func(*database.Book)) (int6
 	mfs.SetOverrideSources([]metadata.MetadataSource{src})
 	s.metadataFetchService = mfs
 
+	// A real publisher string on purpose: the production-company detector fires only on its known names, and "Tantor Media" is the exact one this test needs.
 	prod, err := store.CreateAuthor("Tantor Media")
 	require.NoError(t, err)
 	id := retiredFetchBook(t, s, "Batman Year One", retire)

@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.53.0
+// version: 1.53.1
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-10-29
+// last-edited: 2026-11-17
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -3185,6 +3185,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         const chunks = chunk(ids, FETCH_CHUNK_SIZE);
         let sent = 0;
         let lastMessage: string | undefined;
+        // What the server actually searched and left out, summed over chunks:
+        // it drops retired books (and books already being fetched) from each
+        // request, so ids.length is how many were asked for, not searched.
+        let searched = 0;
+        let retiredLeftOut = 0;
+        let alreadyFetching = 0;
         for (const part of chunks) {
           if (chunks.length > 1) {
             setBulkProgress({ label: 'Queuing search', done: sent, total: ids.length });
@@ -3197,17 +3203,37 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
             force: true,
             ...(ids.length === 1 ? { interactive: true } : {}),
           });
-          if (resp.operation_id) opIds.push(resp.operation_id);
-          else lastMessage = resp.message;
+          if (resp.operation_id) {
+            opIds.push(resp.operation_id);
+            searched += resp.book_count ?? resp.total_books ?? part.length;
+          } else {
+            lastMessage = resp.message;
+          }
+          retiredLeftOut += resp.retired_skipped ?? 0;
+          alreadyFetching += resp.skipped ?? 0;
           sent += part.length;
         }
+        const retiredNote =
+          retiredLeftOut > 0
+            ? ` (${retiredLeftOut.toLocaleString()} retired book${retiredLeftOut !== 1 ? 's' : ''} left out)`
+            : '';
         if (opIds.length === 0) {
-          toast(lastMessage ?? 'Those books are already being searched.', 'info');
+          // Every chunk declined. Retired books are the one cause worth
+          // naming on its own: the server's per-chunk message covers only its
+          // own chunk, so the last one would stand for the whole set.
+          toast(
+            retiredLeftOut > 0 && alreadyFetching === 0
+              ? `Nothing to search: ${retiredLeftOut.toLocaleString()} retired book${retiredLeftOut !== 1 ? 's' : ''} ` +
+                  '(in the trash or merged into another book) left out.'
+              : (lastMessage ?? 'Those books are already being searched.'),
+            'info'
+          );
           return null;
         }
         toast(
-          `Searching again for ${ids.length.toLocaleString()} book${ids.length !== 1 ? 's' : ''} ` +
-            "with each book's title and author" +
+          `Searching again for ${searched.toLocaleString()} book${searched !== 1 ? 's' : ''}` +
+            retiredNote +
+            " with each book's title and author" +
             (opIds.length > 1 ? ` in ${opIds.length} batches` : '') +
             ' — watch the bell for progress. The list reloads when the search finishes.',
           'info'

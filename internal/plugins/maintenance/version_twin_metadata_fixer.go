@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
-// last-edited: 2026-11-12
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -1634,6 +1634,13 @@ func (f *versionTwinFixer) applyRecord(w *repairs.Writer, svc VersionTwinMetadat
 	batch := vtBatchID(w.OpID(), d.primaryID)
 	resp, err := svc.ApplyMetadataCandidateWithOptions(d.primaryID, *d.cand, d.fields, vtApplyOptions(d, batch, guard))
 	if resp == nil || resp.Book == nil {
+		if errors.Is(err, metafetch.ErrBookRetired) {
+			// The metafetch apply refuses a retired book before this fixer's
+			// own under-lock guard (vtStillNeeds) runs, so the race it would
+			// have reported as changed_since_plan arrives as this error
+			// instead. Same race, same outcome.
+			return errVTChanged("book %s was trashed or merged away before the write", d.primaryID)
+		}
 		if err == nil {
 			err = errors.New("the apply returned no book")
 		}

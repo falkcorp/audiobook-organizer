@@ -1,5 +1,5 @@
 // file: internal/organizer/organize_fetch_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: bb2c34c1-71a9-4a36-9d22-29bdc760d624
 // last-edited: 2026-11-17
 
@@ -50,7 +50,7 @@ func TestPerformOrganize_FetchFirstCountsRetiredBooksAsSkips(t *testing.T) {
 
 	mockDB := &database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
-			return &database.Book{ID: id, Title: "Synthetic Title"}, nil
+			return &database.Book{ID: id, Title: "The Long Halloween"}, nil
 		},
 		GetAllBooksCoreFunc: func(int, int) ([]database.BookCore, error) { return nil, nil },
 	}

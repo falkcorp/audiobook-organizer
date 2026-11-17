@@ -1,11 +1,12 @@
 // file: internal/server/metadata_candidate_retired.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c8e41d7a-5b36-4f92-8a0d-6e1f3b9c2d75
 // last-edited: 2026-11-17
 
 package server
 
 import (
+	"context"
 	"runtime"
 
 	"golang.org/x/sync/errgroup"
@@ -29,21 +30,28 @@ type retiredBookReader interface {
 // is a quota saving, not a gate, and the op re-reads the book.
 //
 // The list can be library-sized (a selection, a select-all review) and each id
-// is a store read, so the reads run on a bounded pool (runtime.NumCPU workers).
-// Each worker writes only its own slot of retired, so no lock is needed.
-func dropRetiredBookIDs(books retiredBookReader, ids []string) (kept []string, retiredCount int) {
+// is a store read, so the reads run on a bounded pool (runtime.NumCPU workers)
+// that stops when ctx does: a request the client has dropped does not keep
+// reading the library. Each worker writes only its own slot of retired, so no
+// lock is needed. A cancelled ctx returns its error and no partial list.
+func dropRetiredBookIDs(ctx context.Context, books retiredBookReader, ids []string) (kept []string, retiredCount int, err error) {
 	retired := make([]bool, len(ids))
-	var g errgroup.Group
+	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
 	for i, id := range ids {
 		g.Go(func() error {
+			if err := gctx.Err(); err != nil {
+				return err
+			}
 			if b, err := books.GetBookByID(id); err == nil && b.IsRetired() {
 				retired[i] = true
 			}
 			return nil
 		})
 	}
-	_ = g.Wait() // the workers never return an error
+	if err := g.Wait(); err != nil {
+		return nil, 0, err
+	}
 	kept = make([]string, 0, len(ids))
 	for i, id := range ids {
 		if retired[i] {
@@ -52,5 +60,5 @@ func dropRetiredBookIDs(books retiredBookReader, ids []string) (kept []string, r
 		}
 		kept = append(kept, id)
 	}
-	return kept, retiredCount
+	return kept, retiredCount, nil
 }

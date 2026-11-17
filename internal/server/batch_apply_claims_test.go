@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_claims_test.go
-// version: 1.7.1
+// version: 1.7.2
 // guid: e4b9c7a2-1f36-4d80-b5c9-8a0d2e6f3b71
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -130,8 +130,8 @@ func TestClaimIndex_SubsetApplySeesSibling(t *testing.T) {
 	}
 }
 
-// TestClaimIndex_SkipsRowsThatAreNotParts: a soft-deleted "CD2" row, a
-// non-primary version and a part whose files are all missing share the live
+// TestClaimIndex_SkipsRowsThatAreNotParts: a soft-deleted or merged-away "CD2"
+// row, a non-primary version and a part whose files are all missing share the live
 // primary's ASIN and folder, and none of them may block it. The live control
 // proves the same fixture does block.
 func TestClaimIndex_SkipsRowsThatAreNotParts(t *testing.T) {
@@ -147,6 +147,8 @@ func TestClaimIndex_SkipsRowsThatAreNotParts(t *testing.T) {
 	}{
 		{name: "live CD2 sibling (control)", sibling: cd2, blocks: true},
 		{name: "soft-deleted CD2 sibling", sibling: func() database.Book { b := cd2(); b.MarkedForDeletion = &yes; return b }},
+		{name: "merged-away CD2 sibling", sibling: func() database.Book { b := cd2(); b.MergedIntoBookID = new("survivor"); return b }},
+		{name: "un-merged CD2 sibling, merge cleared to empty (control)", sibling: func() database.Book { b := cd2(); b.MergedIntoBookID = new(""); return b }, blocks: true},
 		{name: "non-primary version", sibling: func() database.Book { b := cd2(); b.IsPrimaryVersion = &no; return b }},
 		{name: "part row whose files are all missing", sibling: cd2,
 			files: []database.BookFile{{BookID: "b2", Missing: true}, {BookID: "b2", Missing: true}}},

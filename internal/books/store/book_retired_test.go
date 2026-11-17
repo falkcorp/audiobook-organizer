@@ -1,5 +1,5 @@
 // file: internal/books/store/book_retired_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d3b9e41-8a52-4c06-b1e7-0f4a6c2d9e38
 // last-edited: 2026-11-17
 
@@ -30,6 +30,15 @@ func TestBookIsRetired(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.book.IsRetired(); got != tc.want {
 				t.Fatalf("IsRetired() = %v, want %v", got, tc.want)
+			}
+			// The BookCore twin answers the same for the same two fields.
+			var core *BookCore
+			if tc.book != nil {
+				c := tc.book.Core()
+				core = &c
+			}
+			if got := core.IsRetired(); got != tc.want {
+				t.Fatalf("BookCore.IsRetired() = %v, want %v", got, tc.want)
 			}
 		})
 	}

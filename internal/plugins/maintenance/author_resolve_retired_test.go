@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_resolve_retired_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7a3d91c5-2b84-4e06-a1f7-d5c08e6b3f29
 // last-edited: 2026-11-17
 
@@ -32,7 +32,7 @@ func TestResolveProductionAuthors_RetiredBookIsASkipNotAFailure(t *testing.T) {
 			return &realID, nil // resolved
 		case "b2":
 			// The shape Server.FetchMetadataByTitle returns for a retired book.
-			return nil, fmt.Errorf("book %q: %w", "Synthetic Title", metafetch.ErrBookRetired)
+			return nil, fmt.Errorf("book %q: %w", "The Long Halloween", metafetch.ErrBookRetired)
 		default:
 			return nil, errors.New("no match") // b3: a real failed fetch
 		}
