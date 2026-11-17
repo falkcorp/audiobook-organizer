@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_server_cpu.py
-# version: 2.2.0
+# version: 2.3.0
 # guid: c3e91a60-2f5d-4b87-a4c2-7d0b6e18f953
 # last-edited: 2026-11-17
 #
@@ -217,9 +217,12 @@ def test_auto_uses_cuda_only_when_a_device_is_found():
     assert ws.resolve_device("auto", _count(0)) == ("cpu", "auto: no CUDA device found")
 
 
-def test_auto_says_why_when_the_probe_itself_failed():
-    device, reason = ws.resolve_device("auto", _count(0, "OSError: no libcuda"))
-    assert device == "cpu" and "probe failed" in reason and "libcuda" in reason
+def test_auto_says_the_probe_failed_and_keeps_its_text_for_the_log(caplog):
+    with caplog.at_level(logging.WARNING, logger="whisper_server"):
+        device, reason = ws.resolve_device("auto", _count(0, "OSError: no libcuda"))
+    assert device == "cpu" and reason == "auto: CUDA probe failed"
+    assert "libcuda" not in reason, "the reason reaches the unauthenticated /health"
+    assert "libcuda" in caplog.text, "the probe's own error is in the worker log"
 
 
 # ── loading, and the fallback ────────────────────────────────────────────────
@@ -258,7 +261,8 @@ def test_auto_falls_back_to_cpu_when_the_cuda_load_fails(caplog):
     assert loaded.transcriber.device == "cpu" and loaded.transcriber.compute_type == "int8"
     lines = [r.getMessage() for r in caplog.records if "whisper device" in r.getMessage()]
     assert len(lines) == 1, "one line, not one per attempt"
-    assert "cuda load boom" in lines[0] and "using cpu" in lines[0]
+    assert "using cpu" in lines[0] and "cuda load boom" not in lines[0]
+    assert loaded.device_reason == "auto: CUDA found but the model failed to load on it; using cpu"
     # A GPU that was there and failed is a WARNING, not an INFO line (review m7),
     # and the state is machine-readable: attempted cuda, ran cpu, fallback true.
     warned = [
@@ -426,7 +430,7 @@ def test_health_reports_the_device_that_loaded_and_the_one_asked_for(monkeypatch
     meta = {
         "attempted_device": "cuda",
         "attempted_compute_type": "float16",
-        "device_reason": "auto: CUDA found but the model failed to load on it (boom); using cpu",
+        "device_reason": "auto: CUDA found but the model failed to load on it; using cpu",
         "fallback": True,
     }
     client, *_ = _app(monkeypatch, tmp_path, fake, cfg=ws.ServerConfig(device="auto"), meta=meta)
@@ -629,7 +633,7 @@ def test_real_ffmpeg_on_garbage_is_a_durable_ffmpeg_error_not_a_crash(monkeypatc
 def test_the_single_upload_endpoint_still_works(monkeypatch, tmp_path):
     client, fake, *_ = _app(monkeypatch, tmp_path)
     r = client.post("/transcribe", files={"file": ("a.wav", b"RIFFxxxx", "audio/wav")})
-    assert r.json() == {"text": "heard-8", "error": None}
+    assert r.json() == {"text": "heard-8", "error": None, "identity": _health_identity(client)}
 
 
 def test_the_batch_upload_endpoint_honours_the_request_deadline_header(monkeypatch, tmp_path):
@@ -682,7 +686,8 @@ def test_the_batch_upload_endpoint_keys_results_by_filename(monkeypatch, tmp_pat
         "results": {
             "101": {"text": "heard-2", "error": None},
             "102": {"text": "heard-4", "error": None},
-        }
+        },
+        "identity": _health_identity(client),
     }
 
 
@@ -690,7 +695,8 @@ def test_an_upload_failure_is_reported_in_the_body_as_it_always_was(monkeypatch,
     client, fake, *_ = _app(monkeypatch, tmp_path)
     fake.boom = "decode failed"
     r = client.post("/transcribe", files={"file": ("a.wav", b"x", "audio/wav")})
-    assert r.status_code == 200 and r.json() == {"text": "", "error": "decode failed"}
+    assert r.status_code == 200
+    assert r.json() == {"text": "", "error": "decode failed", "identity": _health_identity(client)}
 
 
 def test_creating_the_app_starts_the_machine_id_thread_once(monkeypatch, tmp_path):
@@ -760,3 +766,148 @@ def test_the_upload_routes_refuse_a_body_over_the_limit(monkeypatch, tmp_path, r
 def test_the_upload_limit_is_far_above_an_intro_clip():
     # 90 s of 16 kHz mono 16-bit PCM is 2.9 MB.
     assert ws.MAX_UPLOAD_BYTES == 256 * 1024 * 1024 > 50 * 90 * 32000
+
+
+# ── identity: every answer says which model decoded it ───────────────────────
+
+IDENTITY_KEYS = {"model", "backend", "decode_fingerprint", "extract_fingerprint"}
+
+
+def _identity_of_health(body):
+    return {k: body[k] for k in IDENTITY_KEYS}
+
+
+def _health_identity(client):
+    return _identity_of_health(client.get("/health").json())
+
+
+def _stub_extract(app, tmp_path):
+    """Hand every path job a fresh clip (the pipeline deletes the directory it is given)."""
+    n = [0]
+
+    def extract(src, seconds):
+        n[0] += 1
+        d = tmp_path / f"cut-{n[0]}"
+        d.mkdir()
+        clip = d / "a.wav"
+        _sine_wav(clip, 1.0)
+        return str(d), str(clip)
+
+    app.state.pipeline.extract_clip = extract
+
+
+def _mapped_source(share, name="a.wav"):
+    (share / "Wayne").mkdir(exist_ok=True)
+    (share / "Wayne" / name).write_bytes(b"x")
+
+
+def test_every_transcription_answer_carries_the_identity_health_reports(monkeypatch, tmp_path):
+    client, fake, share, app = _app(monkeypatch, tmp_path)
+    _mapped_source(share)
+    _stub_extract(app, tmp_path)
+    want = _identity_of_health(client.get("/health").json())
+    assert want["model"] == "base.en" and want["backend"] == "faster-whisper"
+    assert want["decode_fingerprint"] == ws.decode_fingerprint("base.en", 8, "int8", True)
+    assert want["extract_fingerprint"] == wpp.EXTRACT_FINGERPRINT
+    job = {"path": "/lib/Gotham/Wayne/a.wav", "seconds": 5}
+    answers = {
+        "upload": client.post("/transcribe", files={"file": ("a.wav", b"RIFFxxxx", "audio/wav")}),
+        "upload-batch": client.post(
+            "/transcribe-batch", files=[("files", ("101", b"aa", "audio/wav"))]
+        ),
+        "path": client.post("/transcribe-path", json=job),
+        "path-batch": client.post("/transcribe-path-batch", json={"jobs": {"k": job}}),
+    }
+    for name, r in answers.items():
+        assert r.status_code == 200, (name, r.text)
+        assert r.json()["identity"] == want, name
+    # The results themselves are untouched by it.
+    assert answers["upload-batch"].json()["results"]["101"] == {"text": "heard-2", "error": None}
+    assert answers["path-batch"].json()["results"]["k"]["text"].startswith("heard-")
+
+
+def test_the_identity_is_the_one_in_force_when_the_answer_is_made(monkeypatch, tmp_path):
+    # Not a copy taken at startup: the answer reads the engine's pin as /health does,
+    # so a different resolution (here a changed pin) is what the answer says.
+    client, fake, share, app = _app(monkeypatch, tmp_path)
+    first = client.post("/transcribe-batch", files=[("files", ("1", b"aa", "audio/wav"))]).json()
+    engine = app.state.engine
+    real = engine.meta
+    engine.meta = lambda: {**real(), "model": "large-v2", "compute_type": "float16"}
+    second = client.post("/transcribe-batch", files=[("files", ("1", b"aa", "audio/wav"))]).json()
+    assert first["identity"]["model"] == "base.en"
+    assert second["identity"]["model"] == "large-v2"
+    assert second["identity"] == _identity_of_health(client.get("/health").json())
+    assert second["identity"]["decode_fingerprint"] != first["identity"]["decode_fingerprint"]
+
+
+# ── raw exception text never reaches an unauthenticated caller ───────────────
+
+# A string that must not survive: it looks like what a load error can hold (a path
+# under a user profile and a token).
+SECRET = r"C:\Users\Bruce\.cache\hub\models--batcave-passphrase-hunter2"
+
+
+def test_the_device_reason_on_health_never_carries_an_exception(monkeypatch, tmp_path, caplog):
+    def make(cfg, device, compute):
+        if device == "cuda":
+            raise RuntimeError(SECRET)
+        return FakeTranscriber(device=device, compute_type=compute)
+
+    with caplog.at_level(logging.WARNING, logger="whisper_server"):
+        loaded = ws.load_transcriber(ws.ServerConfig(), make, _count(1))
+        probed = ws.resolve_device("auto", _count(0, SECRET))
+    assert loaded.fallback is True and SECRET not in loaded.device_reason
+    assert SECRET not in probed[1]
+    assert SECRET in caplog.text, "the text is in the log, where an operator can read it"
+    meta = {"device_reason": loaded.device_reason, "fallback": True}
+    client, *_ = _app(monkeypatch, tmp_path, cfg=ws.ServerConfig(device="auto"), meta=meta)
+    health = client.get("/health").text
+    assert "using cpu" in health and SECRET not in health
+
+
+class _FaultingRunner(ws.InProcessRunner):
+    """Every decode raises the start fault a model that cannot load raises."""
+
+    def run(self, wav_path, timeout_s):
+        raise wpp.ChildFaultError(
+            f"decode process could not load its model: {SECRET}",
+            starting=True,
+            category="model_load_failed",
+        )
+
+
+def test_a_worker_misconfigured_answer_is_a_category_word_never_the_exception(
+    monkeypatch, tmp_path, caplog
+):
+    client, fake, share, app = _app(monkeypatch, tmp_path)
+    app.state.engine.runners[:] = [_FaultingRunner(fake)]
+    app.state.engine._free.get_nowait()
+    app.state.engine._free.put(app.state.engine.runners[0])
+    _mapped_source(share)
+    _stub_extract(app, tmp_path)
+    job = {"path": "/lib/Gotham/Wayne/a.wav", "seconds": 5}
+    want = "worker_misconfigured: model_load_failed"
+    with caplog.at_level(logging.ERROR):
+        answers = {
+            "upload": client.post(
+                "/transcribe", files={"file": ("a.wav", b"RIFFxxxx", "audio/wav")}
+            ),
+            # The second clip of a batch is answered from the first one's start fault.
+            "upload-batch": client.post(
+                "/transcribe-batch",
+                files=[("files", ("1", b"aa", "audio/wav")), ("files", ("2", b"bb", "audio/wav"))],
+            ),
+            "path": client.post("/transcribe-path", json=job),
+            "path-batch": client.post(
+                "/transcribe-path-batch", json={"jobs": {"1": job, "2": job}}
+            ),
+        }
+    for name, r in answers.items():
+        assert r.status_code == 200, (name, r.text)
+        assert SECRET not in r.text and "hunter2" not in r.text, name
+    assert answers["upload"].json()["error"] == want
+    for name in ("upload-batch", "path-batch"):
+        assert {v["error"] for v in answers[name].json()["results"].values()} == {want}, name
+    assert answers["path"].json()["error"] == want
+    assert SECRET in caplog.text, "the exception itself is in the worker log"

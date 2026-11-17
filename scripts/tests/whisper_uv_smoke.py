@@ -1,5 +1,5 @@
 # file: scripts/tests/whisper_uv_smoke.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 8e2a6d40-1c53-4f9b-a7d8-3b5c0e9f1a64
 # last-edited: 2026-11-17
 
@@ -17,13 +17,16 @@ load_transcriber factory with only the model class replaced (the transcriber_fac
 seam), so no faster-whisper or CUDA is needed. It proves the things the pytest suites
 (which run on whatever Python the runner has) cannot: the spawned child is uv's
 interpreter, the pipe protocol and pickled config work on that interpreter, and a hung
-decode is killed and replaced there.
+decode is killed there and the RESTARTED child serves the next request. One decode
+process only (num_workers=1): with two, the next request would be taken by the child
+that never hung and never restarted, and the replacement would go unexercised.
 
 Exits 0 and prints SMOKE OK, or exits non-zero with the reason."""
 
 import os
 import pathlib
 import struct
+import subprocess
 import sys
 import tempfile
 import wave
@@ -55,18 +58,34 @@ def check(cond, message):
         sys.exit(1)
 
 
+def pid_alive(pid):
+    """Whether process `pid` exists. Not os.kill(pid, 0): on Windows that terminates it."""
+    if sys.platform == "win32":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True
+        ).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def main():
     print("python", sys.version.split()[0], sys.executable)
     check(sys.version_info[:2] == (3, 14), f"expected Python 3.14, got {sys.version}")
-    cfg = ws.ServerConfig(device="cpu", num_workers=2)
+    cfg = ws.ServerConfig(device="cpu", num_workers=1)
     engine = ws.build_engine(cfg, transcriber_factory="whisper_fake_backend:FakeTranscriber")
     try:
         print("meta", engine.meta())
         client = TestClient(ws.create_app(cfg, engine))
         health = client.get("/health").json()
         check(health["device"] == "cpu" and health["model"] == "base.en", health)
-        pids = {r.meta()["pid"] for r in engine.runners}
-        check(os.getpid() not in pids and len(pids) == 2, f"decode pids {pids}")
+        first_pid = engine.runners[0].meta()["pid"]
+        check(first_pid != os.getpid(), f"the decode ran in the server process ({first_pid})")
         with tempfile.TemporaryDirectory() as d:
             body = pathlib.Path(wav(d, "a.wav")).read_bytes()
             r = client.post("/transcribe", files={"file": ("a.wav", body, "audio/wav")}).json()
@@ -75,8 +94,16 @@ def main():
                 "/transcribe", files={"file": ("hang.wav", body + b"HANGME", "audio/wav")}
             ).json()
             check((hung["error"] or "").startswith("transcribe_timeout"), hung)
+            check(not pid_alive(first_pid), f"the hung decode process {first_pid} is still alive")
+            # The only decode process is the one just killed, so this request can only be
+            # served by its replacement.
             again = client.post("/transcribe", files={"file": ("b.wav", body, "audio/wav")}).json()
             check(again["error"] is None and again["text"].startswith("heard:"), again)
+            new_pid = engine.runners[0].meta()["pid"]
+            check(
+                new_pid not in (first_pid, os.getpid()), f"no restart: pid {first_pid}->{new_pid}"
+            )
+            check(pid_alive(new_pid), f"the replacement decode process {new_pid} is not running")
         print("SMOKE OK")
     finally:
         engine.shutdown()

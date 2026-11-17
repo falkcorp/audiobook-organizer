@@ -1,5 +1,5 @@
 # file: scripts/whisper_decode_child.py
-# version: 2.1.0
+# version: 2.2.0
 # guid: 5d0c8e7a-3b94-4a62-9f1e-b7a4c2d81e56
 # last-edited: 2026-11-17
 #
@@ -160,6 +160,7 @@ def _kill_on_close_job() -> Any:
             wintypes.LPVOID,
             wintypes.DWORD,
         ]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
         job = k32.CreateJobObjectW(None, None)
         if not job:
             raise ctypes.WinError(ctypes.get_last_error())
@@ -197,15 +198,22 @@ def _kill_on_close_job() -> Any:
         info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         # 9 = JobObjectExtendedLimitInformation
         if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
-            raise ctypes.WinError(ctypes.get_last_error())
+            # The error is read first (CloseHandle may overwrite it), and the handle is
+            # closed: _JOB is still None, so the next start would otherwise create and
+            # leak another.
+            err = ctypes.WinError(ctypes.get_last_error())
+            k32.CloseHandle(job)
+            raise err
         _JOB = job
         return job
 
 
-def _assign_to_job(pid: int) -> None:
-    """Put process `pid` in the kill-on-close job. Failure is logged, not fatal: the
-    orphan watch and pipe EOF still cover every case but a native call that holds the
-    GIL."""
+def _assign_to_job(pid: int) -> bool:
+    """Put process `pid` in the kill-on-close job; True when it is in. Failure is
+    logged and returned, not fatal: the orphan watch and pipe EOF still cover every
+    case but a native call that holds the GIL. The caller reports it (DecodeChild
+    .unprotected, shown on /health), because a worker running without the job looks
+    exactly like one with it until the day its parent dies."""
     import ctypes
     from ctypes import wintypes
 
@@ -225,15 +233,20 @@ def _assign_to_job(pid: int) -> None:
                 raise ctypes.WinError(ctypes.get_last_error())
         finally:
             k32.CloseHandle(handle)
+        return True
     except Exception as e:  # noqa: BLE001
         log.warning("could not put decode process %s in a kill-on-close job: %s", pid, e)
+        return False
 
 
 class StartPin:
     """The model, device and compute type this worker serves, fixed by the first
     child that becomes ready. Shared by every DecodeChild of one worker."""
 
-    KEYS = ("model", "device", "compute_type")
+    # `batched` is here because the decode fingerprint folds it in: a restart whose
+    # batched pipeline failed to build would decode by beam search under the batched
+    # worker's fingerprint, and its text would be filed as the batched decoder's.
+    KEYS = ("model", "device", "compute_type", "batched")
 
     def __init__(self) -> None:
         self._mu = threading.Lock()
@@ -291,6 +304,9 @@ class DecodeChild:
         self._pin = pin
         self._pin_arg = pin_arg
         self._req_id = 0
+        # True while the most recent child started could NOT be put in the Windows
+        # kill-on-close job (see _protect); shown on /health as child_unprotected.
+        self._unprotected = False
         self.ready_timeout_s = ready_timeout_s
         self.fault_ttl_s = fault_ttl_s
         self._ctx = multiprocessing.get_context("spawn")
@@ -329,6 +345,21 @@ class DecodeChild:
             ):
                 return self._start_error
             return None
+
+    def unprotected(self) -> bool:
+        """True when the last child started is running WITHOUT the Windows job object
+        that kills it with this process (the assignment failed; the warning is in the
+        log). It then relies on the orphan watch alone, which a decode that holds the
+        GIL defeats. Always False off Windows, where there is no job to lack."""
+        with self._mu:
+            return self._unprotected
+
+    @staticmethod
+    def _protect(pid: Optional[int]) -> bool:
+        """Tie a started child's life to this process; False when that failed."""
+        if sys.platform != "win32" or pid is None:
+            return True
+        return _assign_to_job(pid)
 
     def _note_start(self, error: Optional[str]) -> None:
         with self._mu:
@@ -379,7 +410,7 @@ class DecodeChild:
             self._fault_free_start(wait)
         except ChildFaultError as e:
             log.warning("decode process failed to start (%s): %s", e.category, e)
-            self._note_start(f"worker_misconfigured: {e.category}")
+            self._note_start(f"worker_misconfigured: {e.category or 'start_failed'}")
             raise
         self._note_start(None)
         return self.meta()
@@ -405,8 +436,9 @@ class DecodeChild:
                 category="process_start_failed",
             )
         child_conn.close()  # the child's end is the child's now (EOF needs this)
-        if sys.platform == "win32" and proc.pid is not None:
-            _assign_to_job(proc.pid)
+        protected = self._protect(proc.pid)
+        with self._mu:
+            self._unprotected = not protected
         self._proc, self._conn = proc, parent_conn
         self.starts += 1
         try:

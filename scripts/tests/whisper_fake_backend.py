@@ -1,5 +1,5 @@
 # file: scripts/tests/whisper_fake_backend.py
-# version: 1.1.1
+# version: 1.2.0
 # guid: 8a2f6c41-9d37-4e05-b1c8-3f7e5a09d264
 # last-edited: 2026-11-17
 #
@@ -21,7 +21,8 @@
 #
 # The factory argument picks how LOADING behaves: {"load": "ok" | "fatal" | "exit" |
 # "hang"}, and {"fatal_if_exists": "<path>"} makes the load fatal while that file
-# exists (a restart that cannot load its model).
+# exists (a restart that cannot load its model). make_pinned also takes
+# {"unbatch_after_first": true}: every load after the first reports batched=False.
 
 import os
 import signal
@@ -135,4 +136,8 @@ def make_pinned(arg):
             raise RuntimeError("CUDA out of memory")
     be = FakeBackend(arg)
     be.meta.update(model=model, device=device, compute_type=compute, loads=n + 1)
+    if arg.get("unbatch_after_first") and n > 0:
+        # The same model, device and compute type, but the batched pipeline failed to
+        # build on this start: a different decoder under the same three values.
+        be.meta["batched"] = False
     return be
