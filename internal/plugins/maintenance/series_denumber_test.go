@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_denumber_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ba5b477d-1d56-4a6a-8a46-3896b785d5f2
-// last-edited: 2026-08-04
+// last-edited: 2026-11-17
 
 package maintenance
 

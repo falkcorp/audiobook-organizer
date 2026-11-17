@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_undo_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2b9e40-3a61-4c85-b1f7-e08c4a5d9376
 // last-edited: 2026-11-17
 
