@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.serverQuery.test.ts
-// version: 1.12.1
+// version: 1.12.2
 // guid: 3b6f1d84-7c20-4a95-9e58-c1d70a2b4e63
-// last-edited: 2026-10-29
+// last-edited: 2026-11-17
 //
 // The Review > Metadata lane's server-side query (view=page), the only way the
 // lane loads its queue since 02-PR19 retired the full-index mode.
@@ -23,6 +23,7 @@ import {
   applyCapMessage,
   DEFAULT_BULK_APPLY_MAX_ITEMS,
   EXPORT_QUEUE_CHANGED_MESSAGE,
+  FETCH_CHUNK_SIZE,
   MAX_QUERY_SKIPPED_IDS,
   newBatchId,
   PRUNE_BUILDING_MAX_WAIT_MS,
@@ -568,6 +569,86 @@ describe('the lane requests', () => {
     for (const id of ids) {
       expect(sentPins()[id], id).toMatchObject({ origin: 'review_bulk', content_hash: `h-${id}` });
     }
+  });
+
+  describe('Search again with retired books in the set', () => {
+    // The server leaves retired books (in the trash, or merged into another
+    // book) out of a multi-book search and reports them in `retired_skipped`.
+    // The toast must say how many books were searched, not how many were asked
+    // for, and an all-retired chunk is an answer, not a failure.
+    async function laneWithRows(ids: string[]) {
+      vi.mocked(api.getReviewPage).mockResolvedValue(pageOf(ids, ids.length, 'g1'));
+      vi.mocked(api.pollOperationV2).mockResolvedValue({} as never);
+      const { result } = renderHook(() => useMetadataLane(toast));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      toast.mockClear();
+      return result;
+    }
+    const confirm = vi.fn(async () => true);
+
+    it('counts only the books searched and says how many retired ones were left out', async () => {
+      const result = await laneWithRows(['a1', 'a2', 'a3']);
+      vi.mocked(api.batchFetchCandidates).mockResolvedValue({
+        operation_id: 'op-1',
+        total_books: 2,
+        book_count: 2,
+        skipped: 0,
+        retired_skipped: 1,
+      });
+      await act(async () => {
+        expect(await result.current.searchAgain(['a1', 'a2', 'a3'], confirm)).toBe('op-1');
+      });
+      const message = String(toast.mock.calls[0][0]);
+      expect(message).toMatch(/Searching again for 2 books /);
+      expect(message).not.toMatch(/for 3 books/);
+      expect(message).toMatch(/1 retired book left out/);
+      expect(toast.mock.calls[0][1]).toBe('info');
+    });
+
+    it('an all-retired answer starts nothing and says why', async () => {
+      const result = await laneWithRows(['a1', 'a2']);
+      vi.mocked(api.batchFetchCandidates).mockResolvedValue({
+        operation_id: '',
+        message:
+          'all 2 selected books are retired (in the trash or merged into another book); nothing to fetch',
+        book_count: 0,
+        skipped: 0,
+        retired_skipped: 2,
+      });
+      await act(async () => {
+        expect(await result.current.searchAgain(['a1', 'a2'], confirm)).toBeNull();
+      });
+      expect(api.pollOperationV2).not.toHaveBeenCalled();
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(String(toast.mock.calls[0][0])).toMatch(/2 retired books/);
+      expect(String(toast.mock.calls[0][0])).toMatch(/nothing to search/i);
+    });
+
+    it('a last chunk that is all retired does not hide the searches the earlier chunks started', async () => {
+      const ids = Array.from({ length: FETCH_CHUNK_SIZE + 3 }, (_, i) => `b${i}`);
+      const result = await laneWithRows(ids.slice(0, 3));
+      vi.mocked(api.batchFetchCandidates)
+        .mockResolvedValueOnce({
+          operation_id: 'op-big',
+          total_books: FETCH_CHUNK_SIZE,
+          book_count: FETCH_CHUNK_SIZE,
+          skipped: 0,
+          retired_skipped: 0,
+        })
+        .mockResolvedValueOnce({
+          operation_id: '',
+          message: 'all 3 selected books are retired',
+          book_count: 0,
+          skipped: 0,
+          retired_skipped: 3,
+        });
+      await act(async () => {
+        expect(await result.current.searchAgain(ids, confirm)).toBe('op-big');
+      });
+      const message = String(toast.mock.calls.at(-1)?.[0]);
+      expect(message).toContain(`Searching again for ${FETCH_CHUNK_SIZE.toLocaleString()} books`);
+      expect(message).toMatch(/3 retired books left out/);
+    });
   });
 
   it('a hand-picked selection is not refused by a new generation', async () => {

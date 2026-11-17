@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.10.4
+// version: 1.11.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package maintenance
 
@@ -268,7 +268,7 @@ func autoMatchTranscribedCore(ctx context.Context, params autoMatchTranscribedPa
 		return nil
 	}
 
-	var scanned, eligible, applied, manualOnly, runtimeUnverified int
+	var scanned, eligible, applied, manualOnly, runtimeUnverified, retiredSkipped int
 
 	// Fail-safe cap (internal/applycap). This op walks the WHOLE library and
 	// decides per book, so its target set is unknowable up front — a running
@@ -325,6 +325,16 @@ func autoMatchTranscribedCore(ctx context.Context, params autoMatchTranscribedPa
 
 		// Only touch books that have never been reviewed.
 		if b.MetadataReviewStatus != nil {
+			return nil
+		}
+		// A retired book (trashed, or merged into another book) is not a
+		// candidate: no apply will accept it (the apply refuses it, and a
+		// refusal would be logged "apply failed" and take a bulk-apply cap
+		// slot), and searching it spends provider quota. Skipped before the
+		// search, so it is never counted eligible and a dry run does not call
+		// it "would-apply".
+		if b.IsRetired() {
+			retiredSkipped++
 			return nil
 		}
 		// Fill-only (owner ruling 2026-09-14): this op may write only an empty
@@ -480,13 +490,13 @@ func autoMatchTranscribedCore(ctx context.Context, params autoMatchTranscribedPa
 	var summary string
 	if dryRun {
 		summary = fmt.Sprintf(
-			"auto-match-transcribed complete (dry-run): scanned %d, eligible %d, would-apply %d, owner-manual skipped %d, runtime unverified %d",
-			scanned, eligible, eligible, manualOnly, runtimeUnverified,
+			"auto-match-transcribed complete (dry-run): scanned %d, eligible %d, would-apply %d, owner-manual skipped %d, runtime unverified %d, retired skipped %d",
+			scanned, eligible, eligible, manualOnly, runtimeUnverified, retiredSkipped,
 		)
 	} else {
 		summary = fmt.Sprintf(
-			"auto-match-transcribed complete: scanned %d, eligible %d, applied %d, owner-manual skipped %d, runtime unverified %d",
-			scanned, eligible, applied, manualOnly, runtimeUnverified,
+			"auto-match-transcribed complete: scanned %d, eligible %d, applied %d, owner-manual skipped %d, runtime unverified %d, retired skipped %d",
+			scanned, eligible, applied, manualOnly, runtimeUnverified, retiredSkipped,
 		)
 	}
 	log.Info(summary)

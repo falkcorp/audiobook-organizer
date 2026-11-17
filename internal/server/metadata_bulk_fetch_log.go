@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: c6c22a1e-80d9-4499-b80a-4a4d4112fa4d
-// last-edited: 2026-11-07
+// last-edited: 2026-11-17
 //
 // Per-book outcome lines and count wording for the bulk metadata fetch
 // (runBulkMetadataFetchAll / runBulkMetadataFetchForBookIDs) op log.
@@ -55,6 +55,39 @@ func (k *noMatchSkips) suffix() string {
 func (k *noMatchSkips) log(ctx context.Context, label string) {
 	if k.n > 0 {
 		logger.InfoCtx(ctx, label+": skipped books marked no-match", "no_match_skipped", k.n)
+	}
+}
+
+// retiredSkips counts the books a bulk fetch leaves out because they are
+// retired: in the trash, or merged into another book (Book.IsRetired). A search
+// would spend provider quota on candidates no apply accepts. Like noMatchSkips
+// it is filled while the work list is built serially, so it needs no lock, and
+// a skipped book writes no ledger row.
+type retiredSkips struct{ n int }
+
+// skip reports whether the book is retired, counting it when it is. It takes
+// the verdict rather than the row because the whole-library loop holds a
+// BookCore and the by-ID loop a Book.
+func (k *retiredSkips) skip(retired bool) bool {
+	if !retired {
+		return false
+	}
+	k.n++
+	return true
+}
+
+// suffix is the summary fragment naming the count, empty when none were skipped.
+func (k *retiredSkips) suffix() string {
+	if k.n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", retired %d", k.n)
+}
+
+// log records the count through internal/logging when any book was skipped.
+func (k *retiredSkips) log(ctx context.Context, label string) {
+	if k.n > 0 {
+		logger.InfoCtx(ctx, label+": skipped retired books", "retired_skipped", k.n)
 	}
 }
 

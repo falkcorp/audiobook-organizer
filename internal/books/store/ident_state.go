@@ -1,7 +1,7 @@
 // file: internal/books/store/ident_state.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: c4038689-1fb5-485d-86f8-f91b20eeac6a
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -98,7 +98,7 @@ const (
 )
 
 // Reasons this package emits. deriveIdent emits the first two; the
-// identification driver (internal/identification) records the other four
+// identification driver (internal/identification) records the other five
 // through SetIdentReason, and IdentStateFor attaches them.
 const (
 	// IdentReasonStale: has_candidates from a row marked Stale (the book was
@@ -119,6 +119,10 @@ const (
 	// IdentReasonManualOnly: the best candidate belongs to the owner's
 	// manual-only libraries; it is never applied without a person.
 	IdentReasonManualOnly = "manual_only"
+	// IdentReasonRetired: the book is retired (in the trash, or merged into
+	// another book), so the pipeline did not ask the providers about it. Not
+	// "no_match": nobody ruled on the book's identity, the library put it away.
+	IdentReasonRetired = "retired"
 	// IdentReasonQuotaDeferred: a provider step was put off (a daily quota
 	// spent, a throttle hold); a later run asks it.
 	IdentReasonQuotaDeferred = "quota_deferred"
