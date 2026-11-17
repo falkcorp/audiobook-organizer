@@ -1,5 +1,5 @@
 # file: scripts/install-whisper-supervisor.ps1
-# version: 2.0.0
+# version: 3.0.0
 # guid: 445a38c7-e60e-4e07-a441-80bba4e8b034
 # last-edited: 2026-11-17
 
@@ -33,13 +33,18 @@
     (relative to where you run this from).
 
 .PARAMETER InstallDir
-    Where the supervisor AND whisper_server.py, whisper_path_pipeline.py and
-    whisper_machine_id.py are copied and run from. Default: your user profile folder.
+    Where the supervisor AND whisper_server.py, whisper_path_pipeline.py,
+    whisper_machine_id.py and whisper_decode_child.py are copied and run from.
+    Default: your user profile folder.
 
-.PARAMETER Device, Model, ComputeType, CpuThreads, NumWorkers, PathMap, Port
+.PARAMETER Device, Model, ComputeType, CpuThreads, NumWorkers, PathMap, Port, BindHost
     Passed to the supervisor in the scheduled task's command line (see
     whisper-supervisor.ps1). Unset means the supervisor's and server's defaults:
-    -Device auto, the server's model, the device's compute type.
+    -Device auto, the model the device calls for (large-v2 on a GPU, base.en on a
+    CPU), the device's compute type, and -BindHost 127.0.0.1 (loopback only).
+    A worker that must be reached over the LAN needs -BindHost 0.0.0.0 AND a
+    firewall rule for the server only: the worker has no authentication and the
+    path routes return transcripts of files under -PathMap.
 
 .PARAMETER TaskName
     Scheduled Task name. Default: WhisperSupervisor
@@ -74,6 +79,7 @@ param(
     [int]$CpuThreads     = 0,
     [int]$NumWorkers     = 1,
     [string]$PathMap     = "",
+    [string]$BindHost    = "127.0.0.1",
     [int]$Port           = 19847
 )
 
@@ -86,6 +92,15 @@ $LogPath = Join-Path $InstallDir "whisper-supervisor.log"
 $ServerPath = Join-Path $InstallDir "whisper_server.py"
 
 function Info($m) { Write-Host "[install] $m" }
+
+# One argument for the task's command line, quoted so a value with a space stays
+# one argument. Backslashes just before the closing quote are doubled: a value
+# ending in one (a drive root "X:\") would otherwise read as \" and swallow the
+# quote. A value with a quote in it cannot be quoted safely and is refused.
+function Quote-Arg([string]$Value) {
+    if ($Value.Contains('"')) { throw "a value with a double quote in it cannot be passed: $Value" }
+    return '"' + ($Value -replace '(\\+)$', '$1$1') + '"'
+}
 
 # No elevation required. The task runs at the user's NORMAL token (see step 5):
 # whisper_server.py needs no admin rights (it's launched manually unelevated),
@@ -101,10 +116,10 @@ if (-not (Test-Path $RepoScript)) {
 }
 
 # 1. Copy the committed supervisor to the install path, and the server with its
-# two sibling modules (whisper_server.py imports them from its own folder, so
-# all three or none).
+# three sibling modules (whisper_server.py imports them from its own folder, so
+# all four or none).
 $repoDir = Split-Path -Parent (Resolve-Path $RepoScript)
-$serverFiles = @("whisper_server.py", "whisper_path_pipeline.py", "whisper_machine_id.py")
+$serverFiles = @("whisper_server.py", "whisper_path_pipeline.py", "whisper_machine_id.py", "whisper_decode_child.py")
 foreach ($f in $serverFiles) {
     if (-not (Test-Path (Join-Path $repoDir $f))) {
         Write-Error "$f not found next to $RepoScript; the server cannot run without all of: $($serverFiles -join ', ')."
@@ -154,19 +169,20 @@ Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Silent
 # quoted so a path with a space stays one argument; unset options are left out
 # so the supervisor's and the server's defaults apply.
 $supArgs = @(
-    "-ScriptPath `"$ServerPath`"",
-    "-SentinelPath `"$SentinelPath`"",
-    "-LogPath `"$LogPath`"",
+    "-ScriptPath $(Quote-Arg $ServerPath)",
+    "-SentinelPath $(Quote-Arg $SentinelPath)",
+    "-LogPath $(Quote-Arg $LogPath)",
     "-Device $Device",
     "-NumWorkers $NumWorkers",
+    "-BindHost $(Quote-Arg $BindHost)",
     "-Port $Port"
 )
-if ($Model) { $supArgs += "-Model `"$Model`"" }
-if ($ComputeType) { $supArgs += "-ComputeType `"$ComputeType`"" }
+if ($Model) { $supArgs += "-Model $(Quote-Arg $Model)" }
+if ($ComputeType) { $supArgs += "-ComputeType $(Quote-Arg $ComputeType)" }
 if ($CpuThreads -gt 0) { $supArgs += "-CpuThreads $CpuThreads" }
-if ($PathMap) { $supArgs += "-PathMap `"$PathMap`"" }
+if ($PathMap) { $supArgs += "-PathMap $(Quote-Arg $PathMap)" }
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallPath`" $($supArgs -join ' ')"
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $(Quote-Arg $InstallPath) $($supArgs -join ' ')"
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
@@ -183,10 +199,12 @@ Info "task state: $((Get-ScheduledTask -TaskName $TaskName).State)"
 # 7. Wait for whisper to come back up (model load can take ~30-60s).
 Info "waiting for whisper /health on :$Port (model load can take up to ~90s; a first run also downloads the model)..."
 $ok = $false
+# The server answers on the address it is bound to; a wildcard bind answers on loopback.
+$healthHost = if ($BindHost -in @("0.0.0.0", "::", "")) { "127.0.0.1" } else { $BindHost }
 for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 3
     try {
-        $h = (Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:$Port/health" -TimeoutSec 4).Content
+        $h = (Invoke-WebRequest -UseBasicParsing -Uri "http://${healthHost}:$Port/health" -TimeoutSec 4).Content
         if ($h -match '"status"\s*:\s*"ok"') { Info "whisper healthy: $h"; $ok = $true; break }
     } catch { }
 }

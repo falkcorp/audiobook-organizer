@@ -19,8 +19,8 @@ book and decodes nothing.
 
 ```
 server (no decode)                         Mac worker (ports 19848-19851)
-  book -> /mnt/bigdata/books/.../01.m4b
-  POST /transcribe-path-batch  ------------>  WHISPER_PATH_MAP: /mnt/bigdata -> ~/mnt/bigdata
+  book -> /srv/library/Gotham/Wayne/01.m4b
+  POST /transcribe-path-batch  ------------>  WHISPER_PATH_MAP: /srv/library -> ~/mnt/library
   {"jobs": {id: {path, seconds}}}             ffmpeg -ss 0 -t 90 ... -> 16 kHz mono WAV
                                               mlx whisper -> text
   {"results": {id: {text, error}}}  <-------
@@ -36,12 +36,12 @@ map onto the mount.
 NFSv4 fails for a non-root mount with "Invalid argument"; NFSv3 works.
 
 ```bash
-mkdir -p ~/mnt/bigdata
-mount_nfs -o vers=3,ro,soft,noresvport,nolocks,timeo=10,retrans=3,deadtimeout=30 <server-host>:/mnt/bigdata ~/mnt/bigdata
-ls ~/mnt/bigdata | head          # must list the library
+mkdir -p ~/mnt/library
+mount_nfs -o vers=3,ro,soft,noresvport,nolocks,timeo=10,retrans=3,deadtimeout=30 <server-host>:/srv/library ~/mnt/library
+ls ~/mnt/library | head          # must list the library
 ```
 
-`<server-host>` is "the server" (the host that exports `/mnt/bigdata`). The
+`<server-host>` is "the server" (the host that exports `/srv/library`). The
 mount is read-only on purpose: the worker never writes to the library.
 
 The timeout options are not optional. `soft` makes a read on an unreachable
@@ -58,7 +58,7 @@ still a mount point (`os.path.ismount`), so a forcibly unmounted share shows as
 `readable: false` in `/health` and each job answers `path_unmapped`, instead of
 an empty listing turning every file into `not_found`. Consequences to know:
 
-- The mapped local root must be the mount point itself (`~/mnt/bigdata`), not a
+- The mapped local root must be the mount point itself (`~/mnt/library`), not a
   subdirectory of it. A map that deliberately points at a plain directory needs
   `WHISPER_PATH_REQUIRE_MOUNT=0` in the worker's environment.
 - Recovery after a forced unmount is the LaunchAgent below: it re-mounts within
@@ -69,7 +69,7 @@ an empty listing turning every file into `not_found`. Consequences to know:
   own `WHISPER_EXTRACT_TIMEOUT` (120 s per clip) is the backstop either way.
 
 To mount it at every login and re-mount it if it drops, use a user LaunchAgent.
-Save as `~/Library/LaunchAgents/com.jdfalk.bigdata-nfs.plist` (replace
+Save as `~/Library/LaunchAgents/com.example.library-nfs.plist` (replace
 `<server-host>`; the paths are absolute because launchd does not expand `~`):
 
 ```xml
@@ -77,28 +77,28 @@ Save as `~/Library/LaunchAgents/com.jdfalk.bigdata-nfs.plist` (replace
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.jdfalk.bigdata-nfs</string>
+  <key>Label</key><string>com.example.library-nfs</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>mkdir -p /Users/jdfalk/mnt/bigdata &amp;&amp; { /sbin/mount | /usr/bin/grep -q ' on /Users/jdfalk/mnt/bigdata ' || /sbin/mount_nfs -o vers=3,ro,soft,noresvport,nolocks,timeo=10,retrans=3,deadtimeout=30 &lt;server-host&gt;:/mnt/bigdata /Users/jdfalk/mnt/bigdata; }</string>
+    <string>mkdir -p /Users/<you>/srv/library &amp;&amp; { /sbin/mount | /usr/bin/grep -q ' on /Users/<you>/srv/library ' || /sbin/mount_nfs -o vers=3,ro,soft,noresvport,nolocks,timeo=10,retrans=3,deadtimeout=30 &lt;server-host&gt;:/srv/library /Users/<you>/srv/library; }</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>300</integer>
-  <key>StandardErrorPath</key><string>/Users/jdfalk/Library/Logs/bigdata-nfs.err</string>
+  <key>StandardErrorPath</key><string>/Users/<you>/Library/Logs/library-nfs.err</string>
 </dict>
 </plist>
 ```
 
 `StartInterval` re-runs the script every 5 minutes; it does nothing while the
 mount is present and re-mounts after a drop. Load it with
-`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jdfalk.bigdata-nfs.plist`.
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.library-nfs.plist`.
 
 ### 2. Give every worker `WHISPER_PATH_MAP`
 
 ```
-WHISPER_PATH_MAP=/mnt/bigdata=/Users/jdfalk/mnt/bigdata
+WHISPER_PATH_MAP=/srv/library=/Users/<you>/srv/library
 ```
 
 Format: comma-separated `server-path=mac-path` pairs. Both sides absolute, no
@@ -109,7 +109,7 @@ A malformed value does the same and says why in `/health` (`path_map_error`).
 The workers are the launchd agents `com.jdfalk.whisper-mlx` (port 19848) and
 `com.jdfalk.whisper-mlx-19849`, `-19850`, `-19851`. Add the variable to each
 plist's `EnvironmentVariables` dictionary (do it in your own editor, or with
-`/usr/libexec/PlistBuddy -c 'Add :EnvironmentVariables:WHISPER_PATH_MAP string /mnt/bigdata=/Users/jdfalk/mnt/bigdata' <plist>`).
+`/usr/libexec/PlistBuddy -c 'Add :EnvironmentVariables:WHISPER_PATH_MAP string /srv/library=/Users/<you>/srv/library' <plist>`).
 
 Then **reload** each agent. launchd reads a plist only when the job is
 bootstrapped, so `kickstart` alone restarts the worker with the *old*
@@ -132,7 +132,7 @@ launchctl kickstart -k gui/$(id -u)/com.jdfalk.whisper-mlx-19849   # and -19850,
 ```
 
 `scripts/setup_mac_ai_worker.py` rewrites these plists from scratch, so pass
-`--whisper-path-map /mnt/bigdata=/Users/jdfalk/mnt/bigdata` whenever you re-run
+`--whisper-path-map /srv/library=/Users/<you>/srv/library` whenever you re-run
 it, or the variable is dropped.
 
 It also gives `--host-index 0` the server-side ports `19848..`, the same port the
@@ -149,15 +149,15 @@ On the Mac:
 curl -s http://127.0.0.1:19848/health | python3 -m json.tool
 ```
 
-Expect `"path_pipeline": true`, `"path_prefixes": ["/mnt/bigdata"]`, and
-`"path_roots": [{"prefix": "/mnt/bigdata", "readable": true}]`. Check all four
+Expect `"path_pipeline": true`, `"path_prefixes": ["/srv/library"]`, and
+`"path_roots": [{"prefix": "/srv/library", "readable": true}]`. Check all four
 ports, and check from the server through the tunnel too (`127.0.0.1:19848` ...
 `19851` there).
 
 `readable` is checked live with a directory listing. A shell in Terminal can
 read the volume under Terminal's own privacy grant, which says nothing about
 the launchd agent, so **trust the agent's `/health`**, not your shell. If it
-says `readable: false` while `ls ~/mnt/bigdata` works, macOS is denying the
+says `readable: false` while `ls ~/mnt/library` works, macOS is denying the
 agent access to the network volume (System Settings, Privacy and Security).
 
 ## How the op behaves
@@ -236,9 +236,26 @@ same `/health` fields. The path pipeline, its path-safety rules and the `/health
 body are **shared code** (`scripts/whisper_path_pipeline.py`,
 `scripts/whisper_machine_id.py`) that both workers import, so they cannot drift.
 
-**Deploy all three files together:** `whisper_server.py`,
-`whisper_path_pipeline.py` and `whisper_machine_id.py`, in one folder. The
-Windows supervisor refuses to start without the two modules.
+**Deploy all four files together:** `whisper_server.py`,
+`whisper_path_pipeline.py`, `whisper_machine_id.py` and `whisper_decode_child.py`,
+in one folder. The Windows supervisor refuses to start without the three modules.
+
+### Who can reach the worker (read this before binding wider)
+
+**The worker has no authentication.** It binds `127.0.0.1` by default, exactly like
+the Mac worker, and the server reaches it through an SSH tunnel. A worker bound
+wider (`--host 0.0.0.0` or an interface address; `-BindHost` in the supervisor and
+installer) is an explicit opt-in, and what it exposes is this: **any host that can
+reach the port can ask the worker to transcribe any file under its mapped roots and
+read the transcript back**, and can occupy its decode slots. It logs a warning at
+start when bound beyond loopback. If a LAN worker is what you need, firewall the
+port to the server only. Real authentication for both workers (a shared-secret
+header the shared module checks and the Go client sends) is filed as a follow-up
+and not part of this change.
+
+`/health` no longer echoes the path-map entries when the map is invalid: the error
+names the entry's position ("entry 2 is not server-path=local-path") and never
+quotes its text, because `/health` is unauthenticated.
 
 ### Choosing the device
 
@@ -253,15 +270,29 @@ Every flag has an environment variable (`WHISPER_DEVICE`, `WHISPER_MODEL`,
 `WHISPER_BATCH_SIZE`, `WHISPER_HOST`, `WHISPER_PORT`); a flag beats its variable.
 
 - `auto` uses CUDA when a device is found **and** the model loads on it, and
-  otherwise logs one line (`whisper device: cpu ... (auto: no CUDA device found)`,
-  or `... CUDA found but the model failed to load on it (...); using cpu`) and runs
-  on the CPU. Use `cpu` on a machine whose GPU is gone or flaky: there is nothing
-  to probe, so nothing to fail.
-- `cuda` is strict. If the model cannot load on the GPU the process exits with the
-  error; it never quietly serves from the CPU, so a worker you asked to be a GPU
-  worker is not a slow one in disguise.
-- `/health` reports the device that **actually loaded** (`device`), plus
-  `requested_device`, `device_source` and `device_reason` (additive fields).
+  otherwise runs on the CPU. That fallback is logged at **WARNING** ("whisper GPU
+  FALLBACK ...") and is visible in `/health` (`fallback: true`, with
+  `device_reason`): a worker you expected to be a GPU worker that quietly became a
+  slow CPU one is exactly what should be noticed. Use `cpu` on a machine whose GPU
+  is gone or flaky: there is nothing to probe, so nothing to fail.
+- `cuda` is strict. If the model cannot load on the GPU the process exits 1 with the
+  reason; it never quietly serves from the CPU.
+- `/health` reports the device that **actually loaded** (`device`), and
+  `requested_device` is what you asked for (`auto`, `cpu` or `cuda`), always. The
+  device and compute type the load first tried are `attempted_device` and
+  `requested_compute_type`. Also `device_source`, `device_reason`, `fallback`,
+  `num_workers` and `path_flavor` (`nt` or `posix`: how this worker judges path
+  components, which the server can use to route files a Windows worker cannot name).
+
+### The model follows the device
+
+With no `--model`, the worker picks by the device it ends up on: **`large-v2` on
+CUDA, `base.en` on CPU**, and logs which and why. An existing GPU install therefore
+keeps the model it always ran and produces the **same decode fingerprint** as before
+this change (pinned in `test_whisper_server_cpu.py`: `850881e4bf06fae4` for
+large-v2, float16, batched, batch size 8), so its result journal is not re-keyed.
+An `auto` worker that falls back from CUDA to CPU re-resolves to `base.en`, because
+`large-v2` on a CPU would not keep up; pass `--model` to override either way.
 
 ### CPU defaults
 
@@ -270,25 +301,50 @@ Every flag has an environment variable (`WHISPER_DEVICE`, `WHISPER_MODEL`,
 | compute type | `int8` (reported by ctranslate2 as `int8_float32`) | `float16` does not exist on CPU; `--device cpu` with it is a usage error |
 | model | `base.en` | `small.en` is the next step up in quality and several times slower |
 | `--cpu-threads` | logical cores minus 2, at least 1, at most 8 | leaves room for the OS, ffmpeg and `/health` |
-| `--num-workers` | 1 | one decode with every thread on it finishes each clip soonest; raise only on a machine with many more cores than threads (workers x threads cores are kept busy) |
+| `--num-workers` | 1 | decode **processes**, each holding its own copy of the model (memory scales with it); raise only on a machine with many more cores than threads |
 
 These are starting points, **not measurements**: nothing here was benchmarked on a
 particular desktop CPU. Measure one dry-run dispatch (below) and adjust. The path
 pipeline only ever transcribes the first 90 seconds of a book, which is what makes
-a CPU worth running at all.
-
-Two behaviours differ from the Mac worker, both because the CPU worker decodes
-in-process and cannot kill a decode that hangs:
-
-- it never answers `transcribe_timeout`, `decoder_crashed` or `decoder_killed`
-  (those need a killable child process); and
-- `/health` reports `busy_seconds` and a generous `busy_limit_seconds` (at least
-  300 s, 3x the clip's audio length), so the server's stuck detection still
-  refuses a worker that has wedged.
+a CPU worker worth running at all.
 
 Changing the model, compute type or decode path changes `decode_fingerprint`,
 which re-keys that worker's result journal: transcripts journalled under the old
 settings are not served for the new ones. Threads and workers do not change it.
+
+### A hung decode is killed, not waited on
+
+faster-whisper decodes inside a native call Python cannot interrupt. The worker
+therefore loads the model in a **child process** (`scripts/whisper_decode_child.py`,
+started with the `spawn` method, the only one Windows has) and the parent enforces a
+deadline per clip. A decode that misses it is killed and a fresh child is started
+for the next clip, so the worker recovers by itself:
+
+- `transcribe_timeout`: no result within the deadline (the child was killed);
+- `decoder_crashed`: the child died on the clip (a segfault, an exception that took
+  the process down); the error text carries the exit code;
+- `decoder_killed`: the child was killed from outside (an operator, the out-of-memory
+  killer; POSIX only, since Windows reports no signal);
+- `worker_misconfigured`: the child could not start (the model failed to load); the
+  worker retries on a later request and shows `child_start_error` in `/health` until
+  it can.
+
+These are the Mac worker's codes with the same meaning, so the server treats them
+identically. The Mac worker's own child (`InferenceChild`) is unchanged: it is built
+on POSIX file descriptors and process groups, and only the contract is shared.
+
+The per-clip deadline is `max(300 s, 8 x the clip's audio length)`, and `/health`
+reports `busy_seconds` and `busy_limit_seconds` as before. The `300` and `8` are
+generous and **unbenchmarked**: tune them (`WHISPER_TRANSCRIBE_MIN_TIMEOUT_S`,
+`WHISPER_TRANSCRIBE_TIMEOUT_FACTOR`) once a real CPU has been timed. The upload endpoints
+(`/transcribe`, `/transcribe-batch`) get the same length-derived limit and also
+honour the request-deadline header, so a client that has given up does not keep a
+decode slot. A child that is still loading its model has 300 s after a restart; the
+first start has an hour, because it can include the model download.
+
+`--num-workers N` now means N decode processes, so the old worry that the
+underlying library is not thread-safe at `num_workers > 1` does not arise: nothing
+shares a model across threads.
 
 ### Windows setup
 
@@ -302,38 +358,60 @@ settings are not served for the new ones. Threads and workers do not change it.
    the **local** side is a drive path or a UNC share:
 
    ```
-   WHISPER_PATH_MAP=/mnt/bigdata=\\arkham\audio\lib
-   WHISPER_PATH_MAP=/mnt/bigdata=X:\library
+   WHISPER_PATH_MAP=/srv/library=\\arkham\audio\lib
+   WHISPER_PATH_MAP=/srv/library=X:\library
    ```
 
-   The local side must not be relative, drive-relative (`X:dir`), contain `..`, or
-   start with `\\?\`. A drive root (`X:\`) or a share root is accepted.
-4. Install and start the supervised task (from your clone; it copies the three
+   The local side must not be relative, drive-relative (`X:dir`), a bare drive
+   (`X:`, which means "the current directory on X"), a bare `\\host` with no share,
+   contain `..`, or start with `\\?\`. A drive path (`X:\library`), a drive root
+   (`X:\`) or a share (`\\host\share`) is accepted.
+4. Install and start the supervised task (from your clone; it copies the four
    server files and the supervisor into your profile folder):
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\install-whisper-supervisor.ps1 `
-       -Device cpu -PathMap "/mnt/bigdata=\\arkham\audio\lib"
+       -Device cpu -PathMap "/srv/library=\\arkham\audio\lib"
    ```
 
-   Unset options take the defaults above. The supervisor restarts a crashed server
-   with a doubling delay (5 s up to 5 min, starting over after a run of two minutes
-   or more), gives up after 20 crashes in 10 minutes, and logs to
-   `whisper-supervisor.log` in the profile folder. Allow inbound TCP on the port
-   (default 19847) from the server only.
+   Unset options take the defaults above, including `-BindHost 127.0.0.1`. To serve
+   the LAN add `-BindHost 0.0.0.0` and read "Who can reach the worker" first.
+   The supervisor restarts a crashed server with a doubling delay (5 s up to
+   5 min), starts the count over after a run of two minutes or more, and **gives up
+   after 8 crashes in a row** (`-MaxCrashStreak`; about 10 minutes of waiting, the
+   delays being 5, 10, 20, 40, 80, 160 and 300 s), logging FATAL and exiting 1. It
+   logs to `whisper-supervisor.log` in the profile folder.
+   (The earlier "20 restarts in 10 minutes" breaker could never trip: the backoff
+   fits at most 7 restarts into any ten minutes.)
 
-Windows path rules the worker enforces on top of the Mac worker's (the server's
-paths are POSIX, so this is where a Windows worker can differ):
+`scripts/manage-whisper-server.py` is an alternative deploy over WinRM (`--deploy`,
+`--restart`, `--status`). It copies the four files in 1200-byte chunks and checks
+the SHA-256 of each, because WinRM carries a script on a command line of at most
+8191 characters, so a 47 KB file cannot go in one command (the largest command it
+sends is about 5 KB). `--status` is a plain HTTP request and needs no Windows
+account. The port is `WHISPER_PORT` (default 19847) for the health check, for
+finding the old process, and for the launched server.
+
+### Windows path rules
+
+The server's paths are POSIX, so this is where a Windows worker can differ:
 
 - the check for "still a mount point" is POSIX-only; on Windows a lost share shows
   as `readable: false` because listing the root fails;
 - a server path with a component Windows cannot name (a `:` or `\` in a file name,
   a trailing dot or space, a reserved device name such as `CON` or `NUL.m4b`, or a
-  name over 255 characters) answers `path_unmapped`. The book exists on the server,
-  so this is retried every run and never recorded as a failure, but **this worker
-  cannot transcribe it**; give it a Mac or a Linux worker;
+  name over 255 characters) answers **`path_unrepresentable`**, a code of its own,
+  distinct from `path_unmapped` (outside the mapped prefix, `..`, a symlink out of
+  the root). The book exists on the server, so the server retries it every run and
+  never records a failure, but **this worker cannot transcribe it**; it needs a
+  worker whose filesystem can name the file. Today the Go side treats an unknown
+  code as an ordinary retryable worker error, so the book is retried on whichever
+  worker comes next; routing it deliberately by the worker's `path_flavor` is a
+  filed follow-up. The safety rule itself is not loosened;
 - containment under the mapped root is case-insensitive, as NTFS and SMB are;
-- paths longer than about 240 characters are handed to ffmpeg in the `\\?\` form.
+- paths longer than about 240 characters are handed to ffmpeg in the `\\?\` form;
+- ffmpeg is started with `-protocol_whitelist file`, so a planted file cannot make
+  it open a network URL.
 
 ### Verify
 
@@ -341,7 +419,7 @@ paths are POSIX, so this is where a Windows worker can differ):
    `"path_pipeline": true`, `"device": "cpu"` (or `cuda`), and every mapped root
    `"readable": true` in `path_roots`. If `readable` is `false` the account running
    the worker cannot list the share: fix that first.
-2. From the server (through the tunnel or directly): the same `/health`.
+2. From the server through the SSH tunnel (a loopback worker answers nowhere else).
 3. One dry-run dispatch of `maintenance.transcribe-book-intros` (a dry run is the
    default): it names the endpoints it would use and the mode. Then run it for a
    handful of books and look at the transcripts and the time per book before
@@ -350,9 +428,20 @@ paths are POSIX, so this is where a Windows worker can differ):
 An endpoint configured with `require_gpu` refuses a CPU worker (its `/health`
 `device` is not in the GPU allow-list). Leave `require_gpu` off for a CPU worker.
 
+### Not verified
+
+Nothing in this section has been run on a real Windows machine with a real GPU or a
+real desktop CPU. What was run: the shared pipeline and server tests on macOS and
+Linux (a fake backend that hangs, crashes and exits, in a real spawned child), the
+same tests on a `windows-latest` GitHub runner (`whisper-windows.yml`), a CPU model
+(`tiny.en`) end to end on macOS, and the supervisor's breaker with a fake `uv` under
+PowerShell for macOS. Not run: a Scheduled Task, WinRM, a UNC share, NTFS name
+rules, CUDA.
+
 ### Request limits (both workers)
 
 Added with the shared pipeline, well above anything the server sends: at most 1024
 jobs and 512-character keys per `/transcribe-path-batch` (422), a path of at most
 4096 characters (a per-job `bad_request`), and a request body of at most 8 MiB
-(413).
+(413). A request-deadline header longer than 12 digits is capped to the maximum
+rather than failing the request.
