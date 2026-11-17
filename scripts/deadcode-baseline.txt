@@ -619,6 +619,7 @@ internal/maintenance/jobs.declaresApplyKey
 internal/maintenance/jobs.effectsFor
 internal/maintenance/jobs.kindFor
 internal/maintenance/jobs.kindShell.run
+internal/maintenance/jobs.kindsRoot
 internal/maintenance/jobs.newRCProgress
 internal/maintenance/jobs.paramObject
 internal/maintenance/jobs.rcCheckpointer.Load
