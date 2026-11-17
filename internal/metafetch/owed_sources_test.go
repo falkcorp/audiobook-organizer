@@ -1,5 +1,5 @@
 // file: internal/metafetch/owed_sources_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d2e9a40-3b15-4c86-a1f7-0e5c9d84b263
 // last-edited: 2026-11-16
 
@@ -245,8 +245,17 @@ func TestCacheSearch_FailedSourceKeepsItsEarlierCandidates(t *testing.T) {
 	require.ElementsMatch(t, []string{"A", "B"}, f.sources(f.row()), "B's earlier candidate was dropped because B failed this time")
 
 	// The same search with a DIFFERENT question does not carry them: they
-	// answered another one.
-	_, _, _ = f.mfs.FetchAndCacheWithResponse(context.Background(), nil, f.bk.ID, owedTitle+" Two", "", "", "",
+	// answered another one. The book's own title is part of the questions (the
+	// search fingerprint) but not of the row's source hash, which hashes the
+	// caller's query: the row is the same one and only the fingerprint tells
+	// the questions apart.
+	retitled := *f.bk
+	retitled.Title = owedTitle + " (Retitled)"
+	_, err := f.store.UpdateBook(f.bk.ID, &retitled)
+	require.NoError(t, err)
+	_, resp, _ = f.mfs.FetchAndCacheWithResponse(context.Background(), nil, f.bk.ID, owedTitle, "", "", "",
 		SearchOptions{BypassFetchCache: true})
+	require.Contains(t, resp.SourcesFailed, "B")
+	require.NotEqual(t, f.row().SearchFingerprint, "")
 	require.NotContains(t, f.sources(f.row()), "B", "B's candidate from another question was carried")
 }
