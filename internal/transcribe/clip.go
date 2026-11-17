@@ -1,5 +1,5 @@
 // file: internal/transcribe/clip.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 9c4e1b73-28a5-4d06-bf92-7a3d05e8c614
 // last-edited: 2026-11-17
 
@@ -75,9 +75,14 @@ var AllClipKinds = []ClipKind{
 // it, so a re-parse can tell "never parsed" from "parsed by the current grammar".
 //
 // What forces a bump (and what does not) is stated at the top of
-// clip_version_test.go; TestClipParserVersionIsBumped enforces it against a
-// hash of every table and rule of the grammar and of the stored fields it
-// produces over a frozen input list.
+// clip_version_test.go; TestClipParserVersionIsBumped enforces it with two hashes:
+// of the stored fields ParseClip produces over a frozen input list, and of the
+// comment-stripped source of every declaration ParseClip can reach (the clip files
+// and the legacy parser code they read, every regular expression, keyword list and
+// threshold included). If the outputs change, bump. If only the source changes, the
+// test asks the author to record the new source hash as an equivalent of the
+// current version, which is a reviewer-visible statement that no stored field can
+// change, and no bump.
 const ClipParserVersion = 1
 
 // ClipParse is the structured reading of one stored intro clip.
