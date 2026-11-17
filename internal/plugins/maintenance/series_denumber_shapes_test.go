@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_shapes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 60a27f27-6670-4e9f-9f7c-b5f9deccf612
 // last-edited: 2026-11-17
 

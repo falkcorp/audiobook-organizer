@@ -1,11 +1,15 @@
 // file: internal/seriesdenumber/grammar_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7ebf2f9c-4978-464b-9c4c-c768027dd6ce
 // last-edited: 2026-11-17
 
 package seriesdenumber
 
-import "testing"
+import (
+	"testing"
+
+	"golang.org/x/text/unicode/norm"
+)
 
 func TestParseName_Accepts(t *testing.T) {
 	cases := []struct {
@@ -160,5 +164,27 @@ func TestParseName_Holds(t *testing.T) {
 				t.Fatalf("held as %s with no reason", v.Code)
 			}
 		})
+	}
+}
+
+// A tagger's Unicode form must not decide whether a series is read: a base that
+// ends in an accented letter ends in a combining mark when decomposed, which the
+// "ends in a letter" rule would otherwise hold while the composed spelling passes.
+func TestParseName_ComposedAndDecomposedSpellingsAreOneName(t *testing.T) {
+	for _, base := range []string{"Gotham Caf\u00e9", "D\u00e9tective Comics"} {
+		composed, _, okC := ParseName(base + " 02")
+		decomposed, _, okD := ParseName(norm.NFD.String(base) + " 02")
+		if !okC || !okD {
+			t.Fatalf("%q: composed accepted=%v, decomposed accepted=%v, want both", base, okC, okD)
+		}
+		if composed.Base != decomposed.Base {
+			t.Errorf("%q: the composed base %q and the decomposed base %q differ", base, composed.Base, decomposed.Base)
+		}
+	}
+}
+
+func TestTitleKey_ComposedAndDecomposedTitlesAreOneKey(t *testing.T) {
+	if a, b := TitleKey("Zo\u00eb Returns Part 1"), TitleKey(norm.NFD.String("Zo\u00eb Returns Part 2")); a != b || a == "" {
+		t.Errorf("composed key %q, decomposed key %q, want one non-empty key", a, b)
 	}
 }

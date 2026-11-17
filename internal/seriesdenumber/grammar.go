@@ -1,5 +1,5 @@
 // file: internal/seriesdenumber/grammar.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 5e2c7a91-3b48-4d06-9a1f-c70d8e3b6f24
 // last-edited: 2026-11-17
 
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // ─── THE POSITIVE GRAMMAR ───────────────────────────────────────────────────
@@ -103,8 +105,12 @@ type Parsed struct {
 	N int
 }
 
-// normalizeName trims s and collapses every run of whitespace to one space.
-func normalizeName(s string) string { return strings.Join(strings.Fields(s), " ") }
+// normalizeName trims s, collapses every run of whitespace to one space and
+// composes it (NFC). Composing matters: "Café" typed as "e" plus a combining
+// accent ends in a mark, not a letter, so a decomposed base would be held as "does
+// not end in a letter" while the same name composed passes, and a tagger's choice
+// of Unicode form would decide whether a series is read at all.
+func normalizeName(s string) string { return norm.NFC.String(strings.Join(strings.Fields(s), " ")) }
 
 // markers are the closed list of position markers, lower-case, without the
 // optional trailing ".".
@@ -288,7 +294,7 @@ func markerWord(s string) (string, bool) {
 // "t" or "s" behind to be mistaken for an abbreviation; a quote at the edge of a
 // token is dropped.
 func words(s string) []string {
-	s = strings.NewReplacer("\u2019", "'", "\u2018", "'").Replace(strings.ToLower(s))
+	s = strings.NewReplacer("\u2019", "'", "\u2018", "'").Replace(norm.NFC.String(strings.ToLower(s)))
 	toks := strings.FieldsFunc(s, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '\''
 	})
