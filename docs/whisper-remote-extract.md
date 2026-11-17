@@ -1,5 +1,5 @@
 <!-- file: docs/whisper-remote-extract.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 38f7ba56-da3d-4ab2-8b9c-839df9cb5612 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -340,7 +340,11 @@ receive kills the child, so a stale answer is never taken for the next clip's:
   POSIX only for the signal case, since Windows reports no signal);
 - `worker_misconfigured`: the child could not start (the model failed to load); the
   worker retries on a later request and shows `child_start_error` in `/health` until
-  it can.
+  it can. `/health` is unauthenticated, so it carries only a fixed code and a short
+  category (`worker_misconfigured: model_load_failed`, `start_timeout`,
+  `exited_during_start`, `process_start_failed`, `pinned_model_mismatch`,
+  `protocol_error`); the full error text goes to the worker log only. A worker is
+  also reported busy (`busy_seconds`) while a child is being started for a request.
 
 These are the Mac worker's codes with the same meaning, so the server treats them
 identically. The Mac worker's own child (`InferenceChild`) is unchanged: it is built

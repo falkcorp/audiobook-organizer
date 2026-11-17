@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_decode_child.py
-# version: 2.0.2
+# version: 2.1.0
 # guid: 2c9d7e15-6a48-4f3b-8e01-d5b7a39c6f82
 # last-edited: 2026-11-17
 #
@@ -173,7 +173,8 @@ def test_a_model_that_cannot_load_is_a_start_fault_with_the_reason(make_child):
         child.start()
     assert e.value.starting is True
     assert "could not load its model" in str(e.value) and "could not load the model" in str(e.value)
-    assert "could not load the model" in child.start_error()
+    assert child.start_error() == "worker_misconfigured: model_load_failed"
+    assert "could not load the model" not in child.start_error(), "no raw text for /health"
 
 
 def test_a_child_that_exits_before_ready_reports_its_exit_code(make_child):
@@ -350,7 +351,9 @@ def test_a_restart_that_cannot_load_is_worker_misconfigured_and_visible_in_healt
     assert _job(client, "hang")["error"].startswith("transcribe_timeout:")
     err = _job(client, "ok")["error"]
     assert err.startswith("worker_misconfigured:") and "could not load its model" in err
-    assert "child_start_error" in client.get("/health").json()
+    shown = client.get("/health").json()["child_start_error"]
+    assert shown == "worker_misconfigured: model_load_failed"
+    assert "could not load" not in shown and "Error" not in shown, "no raw load error text"
     marker.unlink()
     assert _job(client, "ok")["error"] is None, "and it comes back by itself once it can load"
     assert "child_start_error" not in client.get("/health").json()
@@ -724,3 +727,27 @@ def test_control_without_the_job_object_a_gil_holding_child_survives_its_parent(
         assert not _wait_gone(pid, 12), "survived: nothing else reaps it (that is the point)"
     finally:
         _kill_pid(pid)
+
+
+def test_health_shows_busy_while_a_child_start_is_in_progress(make_child, tmp_path):
+    # The request arrives, the child must (re)start first and its model load hangs:
+    # /health must say busy for the whole of it, not idle.
+    child = make_child({"load": "hang"}, ready_timeout_s=4)
+    seen = {}
+
+    def run():
+        seen["r"] = _swallow(child.run, _wav(tmp_path, "a.wav"), 20)
+
+    t = threading.Thread(target=run)
+    t.start()
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and child.busy()[1] is None:
+            time.sleep(0.02)
+        busy_for, limit = child.busy()
+        assert limit is not None, "busy (with a limit) during the start"
+        assert limit >= 20, "the limit covers the load and the decode"
+    finally:
+        t.join(30)
+    assert isinstance(seen["r"], wpp.ChildFaultError)
+    assert child.busy() == (0.0, None), "idle again once the start failed"

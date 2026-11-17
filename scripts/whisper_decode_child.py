@@ -1,5 +1,5 @@
 # file: scripts/whisper_decode_child.py
-# version: 2.0.0
+# version: 2.1.0
 # guid: 5d0c8e7a-3b94-4a62-9f1e-b7a4c2d81e56
 # last-edited: 2026-11-17
 #
@@ -299,7 +299,7 @@ class DecodeChild:
         self._mu = threading.Lock()
         self._busy_since: Optional[float] = None
         self._busy_limit: Optional[float] = None
-        self._start_error: Optional[str] = None
+        self._start_error: Optional[str] = None  # a short category, safe for /health
         self._start_error_at = 0.0
         self._meta: dict = {}
         self.starts = 0
@@ -318,8 +318,9 @@ class DecodeChild:
             self._busy_limit = limit
 
     def start_error(self) -> Optional[str]:
-        """The last failure to START the child within fault_ttl_s with no start
-        succeeding since, else None. It expires so a worker the client refused for
+        """A short category of the last failure to START the child (for the
+        unauthenticated /health: never the exception text, which is in the log), within
+        fault_ttl_s with no start succeeding since, else None. It expires so a worker the client refused for
         it is sent the request that starts the child again."""
         with self._mu:
             if (
@@ -377,7 +378,8 @@ class DecodeChild:
         try:
             self._fault_free_start(wait)
         except ChildFaultError as e:
-            self._note_start(str(e))
+            log.warning("decode process failed to start (%s): %s", e.category, e)
+            self._note_start(f"worker_misconfigured: {e.category}")
             raise
         self._note_start(None)
         return self.meta()
@@ -397,7 +399,11 @@ class DecodeChild:
         except Exception as e:
             parent_conn.close()
             child_conn.close()
-            raise ChildFaultError(f"decode process could not be started: {e}", starting=True)
+            raise ChildFaultError(
+                f"decode process could not be started: {e}",
+                starting=True,
+                category="process_start_failed",
+            )
         child_conn.close()  # the child's end is the child's now (EOF needs this)
         if sys.platform == "win32" and proc.pid is not None:
             _assign_to_job(proc.pid)
@@ -406,30 +412,44 @@ class DecodeChild:
         try:
             if not parent_conn.poll(wait):
                 self._kill()
-                raise ChildFaultError(f"decode process not ready after {wait:.0f}s", starting=True)
+                raise ChildFaultError(
+                    f"decode process not ready after {wait:.0f}s",
+                    starting=True,
+                    category="start_timeout",
+                )
             msg = parent_conn.recv()
         except (EOFError, OSError):
             code = self._exit_code(proc)
             self._kill()
             raise ChildFaultError(
-                f"decode process exited while starting (exit code {code})", starting=True
+                f"decode process exited while starting (exit code {code})",
+                starting=True,
+                category="exited_during_start",
             )
         if msg.get("fatal"):
             self._kill()
             raise ChildFaultError(
-                f"decode process could not load its model: {msg['fatal']}", starting=True
+                f"decode process could not load its model: {msg['fatal']}",
+                starting=True,
+                category="model_load_failed",
             )
         if not msg.get("ready"):
             self._kill()
             raise ChildFaultError(
-                "decode process sent an unexpected startup message", starting=True
+                "decode process sent an unexpected startup message",
+                starting=True,
+                category="protocol_error",
             )
         meta = dict(msg.get("meta") or {})
         if self._pin is not None:
             why = self._pin.check_and_record(meta)
             if why:
                 self._kill()
-                raise ChildFaultError(f"decode process refused: {why}", starting=True)
+                raise ChildFaultError(
+                    f"decode process refused: {why}",
+                    starting=True,
+                    category="pinned_model_mismatch",
+                )
         log.info(
             "decode process %s ready: model=%s device=%s compute_type=%s fallback=%s (%s)",
             meta.get("pid"),
@@ -456,7 +476,15 @@ class DecodeChild:
         PathJobError(decoder_killed) when it was killed from outside or could not
         be reaped, ChildFaultError when a child cannot be started, and
         RuntimeError when the backend reports an error for the clip."""
-        self._ensure_child()
+        # Busy from the moment the request arrives, INCLUDING while a child is
+        # (re)started: /health must never say idle while a model load is in progress
+        # for a request. The limit covers the load, then the decode gets its own.
+        self._set_busy(self.ready_timeout_s + timeout_s)
+        try:
+            self._ensure_child()
+        except BaseException:
+            self._set_busy(None)
+            raise
         proc, conn = self._proc, self._conn
         self._req_id += 1
         req_id = self._req_id

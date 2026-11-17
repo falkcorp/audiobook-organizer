@@ -1,5 +1,5 @@
 # file: scripts/whisper_path_pipeline.py
-# version: 1.2.1
+# version: 1.3.0
 # guid: c3e91a57-2d84-4f16-b7a9-0e5d8c4b6f13
 # last-edited: 2026-11-17
 #
@@ -191,9 +191,13 @@ class ChildFaultError(RuntimeError):
     deterministically kills it must be able to settle. The flag stays so a
     handler can tell the two apart if a start-less fault is ever raised again."""
 
-    def __init__(self, message: str, *, starting: bool):
+    def __init__(self, message: str, *, starting: bool, category: str = "start_failed"):
         super().__init__(message)
         self.starting = starting
+        # A short fixed word for the UNAUTHENTICATED /health (child_start_error); the
+        # message, which can carry a path or a library's exception text, goes to the
+        # log only.
+        self.category = category
 
 
 # Limits on what a network request may ask for. The Go client never comes near
