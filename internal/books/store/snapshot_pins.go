@@ -1,5 +1,5 @@
 // file: internal/books/store/snapshot_pins.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4a7d1c93-e5b2-4f08-9c61-2d8f0b3a6e75
 // last-edited: 2026-11-17
 
@@ -264,6 +264,31 @@ func collectAutoMergeSnapshotPins(db *GatedDB, pins *SnapshotPins) error {
 		return nil
 	})
 }
+
+// SnapshotPrunePlanner is the read side of the snapshot prune: what a prune
+// would do, and which merges a past prune already made impossible to undo.
+//
+// It is deliberately a capability resolved with AsCapability, NOT part of
+// Store. Store is a ratchet (store_width_test.go: the flattened method count may
+// only fall), and the one caller, the prune-book-snapshots job, needs these two
+// methods and nothing else of them. Naming the interface keeps the requirement
+// greppable and keeps Store from growing two methods for one job.
+type SnapshotPrunePlanner interface {
+	// PlanBookSnapshotPrune reports what PruneBookSnapshots(id, keepCount) would
+	// do without deleting: how many it would remove and how many it keeps only
+	// because a live merge journal row points at them. A dry run takes its
+	// numbers from here, not from arithmetic on a snapshot count.
+	PlanBookSnapshotPrune(id string, keepCount int) (BookSnapshotPrunePlan, error)
+	// AuditMergeJournalSnapshots counts live auto-merge journal entries whose
+	// snapshots are already gone (ids only, capped). Read-only; one pass over the
+	// journal.
+	AuditMergeJournalSnapshots(idCap int) (MergeJournalSnapshotAudit, error)
+}
+
+var (
+	_ SnapshotPrunePlanner = (*PebbleStore)(nil)
+	_ SnapshotPrunePlanner = (*MockStore)(nil)
+)
 
 // MergeJournalSnapshotAudit is a read-only count of live auto-merge journal
 // entries whose snapshots are already gone, so an operator learns whether a

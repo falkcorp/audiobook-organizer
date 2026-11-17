@@ -1,5 +1,5 @@
 // file: internal/books/store/mock_store.go
-// version: 1.158.0
+// version: 1.158.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-11-17
 

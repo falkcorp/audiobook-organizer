@@ -5338,66 +5338,6 @@ func (_c *MockStore_AppendOpLogsV2_Call) RunAndReturn(run func(rows []store.OpLo
 	return _c
 }
 
-// AuditMergeJournalSnapshots provides a mock function for the type MockStore
-func (_mock *MockStore) AuditMergeJournalSnapshots(idCap int) (store.MergeJournalSnapshotAudit, error) {
-	ret := _mock.Called(idCap)
-
-	if len(ret) == 0 {
-		panic("no return value specified for AuditMergeJournalSnapshots")
-	}
-
-	var r0 store.MergeJournalSnapshotAudit
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(int) (store.MergeJournalSnapshotAudit, error)); ok {
-		return returnFunc(idCap)
-	}
-	if returnFunc, ok := ret.Get(0).(func(int) store.MergeJournalSnapshotAudit); ok {
-		r0 = returnFunc(idCap)
-	} else {
-		r0 = ret.Get(0).(store.MergeJournalSnapshotAudit)
-	}
-	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
-		r1 = returnFunc(idCap)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockStore_AuditMergeJournalSnapshots_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AuditMergeJournalSnapshots'
-type MockStore_AuditMergeJournalSnapshots_Call struct {
-	*mock.Call
-}
-
-// AuditMergeJournalSnapshots is a helper method to define mock.On call
-//   - idCap int
-func (_e *MockStore_Expecter) AuditMergeJournalSnapshots(idCap any) *MockStore_AuditMergeJournalSnapshots_Call {
-	return &MockStore_AuditMergeJournalSnapshots_Call{Call: _e.mock.On("AuditMergeJournalSnapshots", idCap)}
-}
-
-func (_c *MockStore_AuditMergeJournalSnapshots_Call) Run(run func(idCap int)) *MockStore_AuditMergeJournalSnapshots_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 int
-		if args[0] != nil {
-			arg0 = args[0].(int)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_AuditMergeJournalSnapshots_Call) Return(mergeJournalSnapshotAudit store.MergeJournalSnapshotAudit, err error) *MockStore_AuditMergeJournalSnapshots_Call {
-	_c.Call.Return(mergeJournalSnapshotAudit, err)
-	return _c
-}
-
-func (_c *MockStore_AuditMergeJournalSnapshots_Call) RunAndReturn(run func(idCap int) (store.MergeJournalSnapshotAudit, error)) *MockStore_AuditMergeJournalSnapshots_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // BatchCreateBookFiles provides a mock function for the type MockStore
 func (_mock *MockStore) BatchCreateBookFiles(files []*store.BookFile) error {
 	ret := _mock.Called(files)
@@ -25868,72 +25808,6 @@ func (_c *MockStore_PatchBookFileFields_Call) Return(before *store.BookFile, aft
 }
 
 func (_c *MockStore_PatchBookFileFields_Call) RunAndReturn(run func(bookID string, fileID string, patch store.BookFileFieldPatch) (*store.BookFile, *store.BookFile, error)) *MockStore_PatchBookFileFields_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// PlanBookSnapshotPrune provides a mock function for the type MockStore
-func (_mock *MockStore) PlanBookSnapshotPrune(id string, keepCount int) (store.BookSnapshotPrunePlan, error) {
-	ret := _mock.Called(id, keepCount)
-
-	if len(ret) == 0 {
-		panic("no return value specified for PlanBookSnapshotPrune")
-	}
-
-	var r0 store.BookSnapshotPrunePlan
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, int) (store.BookSnapshotPrunePlan, error)); ok {
-		return returnFunc(id, keepCount)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string, int) store.BookSnapshotPrunePlan); ok {
-		r0 = returnFunc(id, keepCount)
-	} else {
-		r0 = ret.Get(0).(store.BookSnapshotPrunePlan)
-	}
-	if returnFunc, ok := ret.Get(1).(func(string, int) error); ok {
-		r1 = returnFunc(id, keepCount)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockStore_PlanBookSnapshotPrune_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PlanBookSnapshotPrune'
-type MockStore_PlanBookSnapshotPrune_Call struct {
-	*mock.Call
-}
-
-// PlanBookSnapshotPrune is a helper method to define mock.On call
-//   - id string
-//   - keepCount int
-func (_e *MockStore_Expecter) PlanBookSnapshotPrune(id any, keepCount any) *MockStore_PlanBookSnapshotPrune_Call {
-	return &MockStore_PlanBookSnapshotPrune_Call{Call: _e.mock.On("PlanBookSnapshotPrune", id, keepCount)}
-}
-
-func (_c *MockStore_PlanBookSnapshotPrune_Call) Run(run func(id string, keepCount int)) *MockStore_PlanBookSnapshotPrune_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		var arg1 int
-		if args[1] != nil {
-			arg1 = args[1].(int)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockStore_PlanBookSnapshotPrune_Call) Return(bookSnapshotPrunePlan store.BookSnapshotPrunePlan, err error) *MockStore_PlanBookSnapshotPrune_Call {
-	_c.Call.Return(bookSnapshotPrunePlan, err)
-	return _c
-}
-
-func (_c *MockStore_PlanBookSnapshotPrune_Call) RunAndReturn(run func(id string, keepCount int) (store.BookSnapshotPrunePlan, error)) *MockStore_PlanBookSnapshotPrune_Call {
 	_c.Call.Return(run)
 	return _c
 }

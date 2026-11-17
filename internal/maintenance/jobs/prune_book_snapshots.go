@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/prune_book_snapshots.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f3714dde-e788-468a-958a-5514eebcd952
 // last-edited: 2026-11-17
 
@@ -149,6 +149,16 @@ const mergeJournalIDCap = 200
 func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	keepCount := keepCountFromCtx(ctx)
 
+	// The planner is a capability outside database.Store (see
+	// database.SnapshotPrunePlanner), resolved through any store decorator. A
+	// store that lacks it fails the run: the apply path sizes each book's prune
+	// from the plan, and a dry run that skipped the plan would report numbers the
+	// apply does not honour.
+	planner, ok := database.AsCapability[database.SnapshotPrunePlanner](store)
+	if !ok {
+		return fmt.Errorf("prune-book-snapshots: store %T cannot plan a snapshot prune (database.SnapshotPrunePlanner)", store)
+	}
+
 	ids, err := store.ListBookIDs()
 	if err != nil {
 		return fmt.Errorf("list book ids: %w", err)
@@ -163,7 +173,7 @@ func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobSt
 	var audit database.MergeJournalSnapshotAudit
 	if dryRun {
 		var aerr error
-		if audit, aerr = store.AuditMergeJournalSnapshots(mergeJournalIDCap); aerr != nil {
+		if audit, aerr = planner.AuditMergeJournalSnapshots(mergeJournalIDCap); aerr != nil {
 			return fmt.Errorf("audit merge journal snapshots: %w", aerr)
 		}
 	}
@@ -176,7 +186,7 @@ func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobSt
 	// a keys-only iteration plus a batched delete, not network-bound.
 	//
 	// The set of snapshots a merge journal pins is built once by the store and
-	// shared by every worker (store.PlanBookSnapshotPrune / PruneBookSnapshots),
+	// shared by every worker (planner.PlanBookSnapshotPrune / store.PruneBookSnapshots),
 	// not rebuilt per book.
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
@@ -194,7 +204,7 @@ func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobSt
 			}
 			scanned.Add(1)
 
-			plan, cerr := store.PlanBookSnapshotPrune(id, keepCount)
+			plan, cerr := planner.PlanBookSnapshotPrune(id, keepCount)
 			if cerr != nil {
 				failed.Add(1)
 				msg := cerr.Error()
