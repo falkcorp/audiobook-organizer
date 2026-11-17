@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/writes_oracle_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 40eadd67-76ac-419f-a3fe-7d1ed5e586e2
-// last-edited: 2026-11-15
+// last-edited: 2026-11-16
 
 package jobs_test
 
@@ -93,8 +93,9 @@ func oracleNoun(name string) string {
 
 // derivedWrites walks every function a job's Run reaches (closures included,
 // inside the module only) and returns the resource kinds it writes.
-func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evidence map[string]string, checkpoints bool) {
+func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evidence map[string]string, checkpoints bool, calls map[string]string) {
 	set := map[string]bool{}
+	calls = map[string]string{}
 	evidence = map[string]string{}
 	note := func(kind, why string) {
 		set[kind] = true
@@ -162,6 +163,9 @@ func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evid
 				if com.IsInvoke() {
 					name := com.Method.Name()
 					recv := types.TypeString(com.Value.Type(), func(p *types.Package) string { return p.Name() })
+					if _, ok := calls[recv+"."+name]; !ok {
+						calls[recv+"."+name] = f.String()
+					}
 					if oracleVerb.MatchString(name) && !oracleNotAWrite.MatchString(recv) {
 						note(oracleResource(recv, name), recv+"."+name+" in "+f.String())
 					}
@@ -178,6 +182,15 @@ func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evid
 				}
 				if callee.Pkg != nil && callee.Pkg.Pkg.Path() == "os" && oracleFileWriters[callee.Name()] {
 					note("files", "os."+callee.Name()+" in "+f.String())
+				}
+				if callee.Pkg != nil && strings.Contains(callee.Pkg.Pkg.Path(), "/internal/books/store") {
+					key := "STOREFN." + callee.Name()
+					if callee.Signature.Recv() != nil {
+						key = "STORECONCRETE." + types.TypeString(callee.Signature.Recv().Type(), func(p *types.Package) string { return p.Name() }) + "." + callee.Name()
+					}
+					if _, ok := calls[key]; !ok {
+						calls[key] = f.String()
+					}
 				}
 				// A concrete store type called directly (not through an
 				// interface) is judged like an interface call: the store
@@ -197,7 +210,7 @@ func derivedWrites(prog *ssa.Program, runFn *ssa.Function) (kinds []string, evid
 		kinds = append(kinds, k)
 	}
 	sort.Strings(kinds)
-	return kinds, evidence, checkpoints
+	return kinds, evidence, checkpoints, calls
 }
 
 // oracleJobWrites loads the jobs package with its dependencies' syntax and
@@ -207,6 +220,12 @@ type oracleJob struct {
 	writes      []string
 	evidence    map[string]string
 	checkpoints bool
+	// calls is every method the job's Run reaches on an interface, and every
+	// function or method of the store package it calls directly, as
+	// "<receiver>.<method>" (STOREFN.<name> for a store package function), with
+	// the function it was found in. The names are unfiltered: writes_trace_test.go
+	// decides which of them write.
+	calls map[string]string
 }
 
 func loadOracleJobs() (map[string]oracleJob, error) {
@@ -247,8 +266,8 @@ func loadOracleJobs() (map[string]oracleJob, error) {
 		if id == "" {
 			return nil, fmt.Errorf("job type %s: ID() does not return a constant string", tn.Name())
 		}
-		w, why, cp := derivedWrites(prog, prog.MethodValue(runSel))
-		out[id] = oracleJob{writes: w, evidence: why, checkpoints: cp}
+		w, why, cp, calls := derivedWrites(prog, prog.MethodValue(runSel))
+		out[id] = oracleJob{writes: w, evidence: why, checkpoints: cp, calls: calls}
 	}
 	return out, nil
 }
@@ -283,14 +302,23 @@ func constantReturn(f *ssa.Function) string {
 	return ""
 }
 
-// TestJobWrites_MatchSSAOracle derives every job's write set from its code
-// (the interface writes and file mutations its Run reaches) and compares it,
-// kind for kind, with the Effects the native kind declares. The count-only
-// check in TestKindShell_EffectsTable cannot see a swapped kind.
+// TestJobWrites_MatchSSAOracle derives every job's write set from its code by
+// NAME (the interface writes and file mutations its Run reaches, classified by
+// the receiver's and the method's noun) and requires the Effects the native kind
+// declares to cover it, kind for kind. It is a floor: it stops at the store and
+// reads names, so it cannot see what a store method writes underneath (the stale
+// stamp and the ident: rows of ModifyBook, the books aggregate behind a file-row
+// method). Equality with what the store writes is TestJobWrites_DerivedFromCodeAndSharedTable
+// in writes_trace_test.go, which reads the shared method-to-resource table.
+// Before 2026-11-16 this test demanded equality with the name classes, which
+// pinned the table to the oracle's blind spot (stack review M2).
 func TestJobWrites_MatchSSAOracle(t *testing.T) {
 	if os.Getenv("JOBWRITES_ORACLE_DUMP") != "" {
 		for id, j := range oracleJobs(t) {
 			fmt.Printf("ORACLE %s: %v checkpoints=%v %v\n", id, j.writes, j.checkpoints, j.evidence)
+			for c, in := range j.calls {
+				fmt.Printf("CALL %s: %s <- %s\n", id, c, in)
+			}
 		}
 		return
 	}
@@ -302,7 +330,6 @@ func TestJobWrites_MatchSSAOracle(t *testing.T) {
 	for _, d := range defs {
 		id := strings.TrimPrefix(string(d.Kind()), "books.maintenance.")
 		dj, ok := derived[id]
-		want := dj.writes
 		if !ok {
 			t.Errorf("%s: the oracle found no job of that ID", id)
 			continue
@@ -313,8 +340,10 @@ func TestJobWrites_MatchSSAOracle(t *testing.T) {
 			got = append(got, r.Kind)
 		}
 		sort.Strings(got)
-		if !slices.Equal(got, want) {
-			t.Errorf("%s: declared writes %v, derived from the code %v (evidence %v)", id, got, want, dj.evidence)
+		for _, w := range dj.writes {
+			if !slices.Contains(got, w) {
+				t.Errorf("%s: declared writes %v lack %s, which the code names (evidence %v)", id, got, w, dj.evidence)
+			}
 		}
 	}
 }

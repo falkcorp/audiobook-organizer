@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
-// last-edited: 2026-11-15
+// last-edited: 2026-11-16
 
 package jobs
 
@@ -22,7 +22,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -323,50 +322,16 @@ func startRequirement(job maintenance.MaintenanceJob) rbac.Requirement {
 	return rbac.Requirement{}
 }
 
-// jobWrites is rule R7's "Writes found": per job, the books resource kinds its
-// body and every function it calls write, read off the write methods it calls
-// on its store argument and the files it writes (reachability over the job's
-// Run, listed per job in the PR description). An empty set is a job that
-// writes nothing (ReadOnly). A job missing from the table gets no declared
-// Effects, which registration refuses.
+// jobWrites is rule R7's "Writes found": per job, the resource kinds its body
+// and every function it calls write. It is DERIVED, not typed: kinds_writes.go
+// lists, per job, the store write methods the job reaches and the writes no row
+// of the shared table (internal/maintenance/resources) covers, and jobWrites is
+// the union of those rows. An empty set is a job that writes nothing (ReadOnly).
+// A job missing from the table gets no declared Effects, which registration
+// refuses.
 //
 // Resource kinds (tasks.Res("books", kind)) are the pkg/ops constants.
-var jobWrites = map[string][]ops.Resource{
-	"backfill-book-files":             {ops.ResBookFiles, ops.ResOperations},
-	"backfill-file-hashes":            {ops.ResBooks, ops.ResBookFiles, ops.ResOperations, ops.ResFiles},
-	"backfill-itunes-positions":       {ops.ResUserState},
-	"backfill-merge-undo-pointers":    {ops.ResOperations},
-	"backfill-metadata-source-hash":   {ops.ResBooks},
-	"backfill-sync-ids":               {ops.ResSyncIdentity},
-	"bulk-deluge-import":              {ops.ResBookFiles, ops.ResFiles, ops.ResOperations},
-	"cleanup-empty-folders":           {ops.ResFiles},
-	"cleanup-organize-mess":           {ops.ResFiles},
-	"cleanup-series":                  {ops.ResBooks, ops.ResSeries},
-	"dedup-books":                     {ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResUserState},
-	"enrich-book-files":               {ops.ResBookFiles},
-	"fix-author-narrator-swap":        {ops.ResBooks},
-	"fix-file-modes":                  {ops.ResFiles},
-	"fix-read-by-narrator":            {ops.ResBooks},
-	"fix-version-groups":              {ops.ResBooks, ops.ResBookFiles},
-	"merge-chapter-groups":            {ops.ResBooks, ops.ResBookFiles, ops.ResAuthors, ops.ResExternalIDs, ops.ResUserState, ops.ResOperations, ops.ResSyncIdentity},
-	"normalize-primary-flags":         {ops.ResBooks},
-	"prune-book-snapshots":            {ops.ResBooks},
-	"purge-unknown-author-duplicates": {ops.ResBooks},
-	"recompute-book-aggregates":       {ops.ResBooks, ops.ResOperations},
-	"recompute-itunes-paths":          {ops.ResBookFiles},
-	"refetch-missing-authors":         {ops.ResBooks, ops.ResAuthors},
-	"relink-missing-to-itunes":        {ops.ResBooks, ops.ResBookFiles},
-	"relink-report":                   {},
-	"repoint-version-primary":         {ops.ResBooks},
-	"retention-and-hygiene":           {ops.ResOperations, ops.ResSettings},
-	"revert-metadata-fetch":           {ops.ResBooks},
-	"scan-chapter-groups":             {},
-	"scan-composer-tags":              {ops.ResBookFiles, ops.ResFileProvenance, ops.ResOperations, ops.ResFiles},
-	"scan-duplicate-files":            {},
-	"scan-duration-mismatch":          {},
-	"scan-metadata-hash-dups":         {},
-	"sweep-pebble-metrics-ttl":        {ops.ResMetrics},
-}
+var jobWrites = deriveJobWrites()
 
 func effectsFor(jobID string) tasks.Effects {
 	ws, ok := jobWrites[jobID]
