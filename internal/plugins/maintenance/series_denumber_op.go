@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/series_denumber_op.go
-// version: 4.0.0
+// version: 5.0.0
 // guid: 3f0b6c84-52d1-4a97-9e35-c8b71d0af426
 // last-edited: 2026-11-17
 
@@ -120,16 +120,20 @@ func (p *Plugin) seriesDenumberDef() sdk.OperationDef {
 			"into the book's series position. Only names that match one exact grammar are ever applied: " +
 			"<base><separator><optional Book/Bk/Vol/Volume/No/#><number 1-99>, where the base has no digit, " +
 			"no connector (of, to, &, and) before the number, no part/format/edition word and no volume word. " +
-			"And the number must be corroborated: the book's own stored position equals it, or at least two " +
-			"other series of the same author with the same base, each holding a book, form a run of three " +
-			"consecutive numbers with it. Everything else is held and reported with the reason: a lone " +
-			"\"Fahrenheit 451\" stays, and so do \"Part 2\", a fraction, a range, a base that is an author's " +
-			"name, a series with no author or a placeholder author, a bracketed or leading number (reported " +
-			"as medium or low, never applied). A book the owner locked (series or position) is held, a book " +
-			"is never moved onto a position another book holds or given a position over one it already has, " +
-			"and an emptied series is deleted only after its references are counted again right before the " +
-			"delete. The apply stands the scanner down while it writes. Every change is journaled, so an " +
-			"apply can be undone from the operation's change log. Dry-run by default; pass {\"apply\": true, " +
+			"And the number must be corroborated by the library: the series must hold exactly one book, and " +
+			"at least two other series of the same author with the same base, each holding exactly one book " +
+			"with its own title, must form a run of three or more consecutive numbers with it. A series that " +
+			"holds several books, a run with a member that holds several, one whose books share a title, an " +
+			"identifier or the base name itself, and a book's own stored position (the importer copies it from " +
+			"the name) are NOT corroboration. Everything else is held and reported with the reason: a lone " +
+			"\"Batman 66\" stays, and so do \"Part 2\", a fraction, a range, a base that is an author's name " +
+			"or a part of it, a series with no author, a dangling author or a placeholder author, a bracketed " +
+			"or leading number (reported as medium or low, never applied). A book the owner locked (series or " +
+			"position) is held, a book is never moved onto a position another book holds (live or trashed) or " +
+			"given a position over one it already has, and an emptied series is deleted only after its " +
+			"references are counted again and its row is read again right before the delete. The apply stands " +
+			"the scanner down while it writes. Every change is journaled, so an apply can be undone from the " +
+			"operation's change log. Dry-run by default; pass {\"apply\": true, " +
 			"\"reportPath\": \"...\"} to merge (the report is required to apply), and {\"limit\": N, " +
 			"\"minBooks\": N, \"baseName\": \"...\"} to canary.",
 		// RESUME AUDIT 2026-09-11 (b): ResumeDrop, was ResumeRestart with no
@@ -196,22 +200,37 @@ func (p *Plugin) runSeriesDenumber(ctx context.Context, raw json.RawMessage, rep
 	// (applySeriesDenumber).
 	hold := t6g1Hold{Lost: func() bool { return false }, Release: func() {}}
 	if params.Apply {
-		h, sdErr := p.t6g1HeadStandDown(reporter)(ctx, "series-denumber apply")
+		// The shared helper returns held=false, with no error, when there is no scan
+		// controller (a degraded context). Other write ops run on without the
+		// interlock then; this one writes series rows library-wide and does not: no
+		// gate, no apply.
+		holderID, held, release, sdErr := acquireScanStandDownForApply(ctx, p.deps, reporter, "series-denumber apply")
 		if sdErr != nil {
 			return fmt.Errorf("series-denumber: refusing to apply: acquire scan stand-down: %w", sdErr)
 		}
-		defer h.Release()
-		hold = h
+		defer release()
+		if !held {
+			return errors.New("series-denumber: refusing to apply: the scanner could not be stood down (no scan controller), so a running scan could rewrite the books underneath the writes")
+		}
+		hold = t6g1Hold{
+			Lost:    func() bool { return scanStandDownLostForApply(p.deps, holderID, held) },
+			Release: release,
+		}
 	}
 	log.Info("series-denumber: starting", "apply", params.Apply, "limit", params.Limit,
 		"min_books", params.MinBooks, "base_name", params.BaseName)
 
+	planStart := time.Now()
 	run, err := planSeriesDenumber(store, params)
 	if err != nil {
 		return err
 	}
+	// The stand-down lease (5 minutes by default) is renewed per plan and per book
+	// of the apply, not while planning: a plan that takes longer than the lease
+	// lapses it, and the first check of the apply then stops the run before any
+	// write. The duration is logged so that margin can be read off a real run.
 	log.Info("series-denumber: plan complete", "series", run.scanned, "candidates", len(run.candidates),
-		"eligible", len(run.plans), "selected", len(run.selected))
+		"eligible", len(run.plans), "selected", len(run.selected), "planning_ms", time.Since(planStart).Milliseconds())
 	if len(run.candidates) == 0 {
 		summary := fmt.Sprintf("series-denumber: %d series scanned, 0 carry a book number — nothing to do", run.scanned)
 		_ = reporter.Log(slog.LevelInfo, summary)
@@ -412,13 +431,27 @@ func planSeriesDenumber(store OpsStore, params SeriesDenumberParams) (*denumberR
 	// "book:" scan once the memdb is tainted) and BEFORE the dry-run branch so the
 	// preview and the apply see the same answer. Fails CLOSED: an empty map would
 	// read as "every series is empty" and the apply deletes on that.
+	//
+	// The siblings of every plan are read with it: a run is judged by what its
+	// members' books are (CheckRun), and a sibling that is no plan of its own (a
+	// held shape, another tier) is still a member of the run.
 	memberIDs := make([]int, 0, 2*len(run.plans))
+	seenMember := map[int]bool{}
+	addMember := func(id int) {
+		if !seenMember[id] {
+			seenMember[id] = true
+			memberIDs = append(memberIDs, id)
+		}
+	}
 	for _, pl := range run.plans {
-		memberIDs = append(memberIDs, pl.FromID)
+		addMember(pl.FromID)
+		for _, sid := range pl.SiblingIDs {
+			addMember(sid)
+		}
 	}
 	for _, g := range run.groups {
 		if g.targetID != 0 {
-			memberIDs = append(memberIDs, g.targetID)
+			addMember(g.targetID)
 		}
 	}
 	members, mErr := database.SeriesMembershipAllVersions(store, memberIDs)
@@ -426,6 +459,21 @@ func planSeriesDenumber(store OpsStore, params SeriesDenumberParams) (*denumberR
 		return nil, fmt.Errorf("series-denumber: refusing to run without series membership: %w", mErr)
 	}
 	run.members = members
+
+	// The trashed books of every existing target. The membership read above lists
+	// live books only, but a trashed book keeps its position in the series and
+	// returns to it on restore, so a mover must not take it. Read once, and only
+	// when some target exists (the read is a scan of the trash).
+	targetIDs := map[int]bool{}
+	for _, g := range run.groups {
+		if g.targetID != 0 {
+			targetIDs[g.targetID] = true
+		}
+	}
+	trashedIn, tErr := readTrashedMembers(store, targetIDs)
+	if tErr != nil {
+		return nil, fmt.Errorf("series-denumber: refusing to run without the trashed members of the base series: %w", tErr)
+	}
 
 	// The owner's field locks of every book a plan could move, read once and in
 	// parallel (one metadata-state read per book). A book whose locks cannot be
@@ -460,7 +508,7 @@ func planSeriesDenumber(store OpsStore, params SeriesDenumberParams) (*denumberR
 			grp.AuthorID = *g.authorID
 		}
 		if g.targetID != 0 {
-			grp.Existing = coreToBooks(members[g.targetID], nil)
+			grp.Existing, grp.UnseenExisting = targetView(members[g.targetID], trashedIn[g.targetID], refCounts[g.targetID])
 		} else {
 			for _, other := range byName[normSeriesName(g.baseName)] {
 				if g.authorID == nil || other.AuthorID == nil || *other.AuthorID != *g.authorID {
@@ -473,7 +521,8 @@ func planSeriesDenumber(store OpsStore, params SeriesDenumberParams) (*denumberR
 			pl := run.plans[pi]
 			grp.Sources = append(grp.Sources, sdn.Source{
 				FromID: pl.FromID, FromName: pl.FromName, Position: pl.Position,
-				Books: coreToBooks(members[pl.FromID], locks), SiblingRun: pl.SiblingRun,
+				Books: coreToBooks(members[pl.FromID], locks),
+				Run:   runVerdictFor(pl, run.seriesByID, members),
 			})
 		}
 		g.decision = sdn.Decide(grp)
@@ -557,6 +606,96 @@ func coreToBooks(cores []database.BookCore, locks map[string]bookLock) []sdn.Boo
 	return out
 }
 
+// factsOf reduces membership rows to what the run check compares.
+func factsOf(cores []database.BookCore) []sdn.Facts {
+	out := make([]sdn.Facts, 0, len(cores))
+	for _, c := range cores {
+		f := sdn.Facts{ID: c.ID, Title: c.Title}
+		if c.VersionGroupID != nil {
+			f.Identity = *c.VersionGroupID
+		}
+		if c.ASIN != nil {
+			f.ASIN = *c.ASIN
+		}
+		if c.ISBN10 != nil {
+			f.ISBN10 = *c.ISBN10
+		}
+		if c.ISBN13 != nil {
+			f.ISBN13 = *c.ISBN13
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// runVerdictFor asks whether the series of a plan sits in a run of consecutive,
+// single-book, distinctly titled series of its author and base. The siblings are
+// numbered by what their own names carry.
+func runVerdictFor(pl SeriesMergePlan, byID map[int]database.Series, members database.SeriesBooksMap) sdn.RunVerdict {
+	self := sdn.RunSeries{ID: pl.FromID, N: pl.Position, Books: factsOf(members[pl.FromID])}
+	var siblings []sdn.RunSeries
+	for _, id := range pl.SiblingIDs {
+		ser, ok := byID[id]
+		if !ok {
+			continue
+		}
+		parsed, _, ok := sdn.ParseName(ser.Name)
+		if !ok {
+			continue
+		}
+		siblings = append(siblings, sdn.RunSeries{ID: id, N: parsed.N, Books: factsOf(members[id])})
+	}
+	return sdn.CheckRun(pl.IntoName, self, siblings)
+}
+
+// trashLister is the one read of the trash this op needs.
+type trashLister interface {
+	ListSoftDeletedBooks(limit, offset int, olderThan *time.Time) ([]database.Book, error)
+}
+
+// readTrashedMembers returns the soft-deleted books that sit in any of the given
+// series. It reads the whole trash once (there is no per-series trash read) and
+// does not read it at all when no series is asked about.
+func readTrashedMembers(store trashLister, ids map[int]bool) (map[int][]database.Book, error) {
+	out := map[int][]database.Book{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	trashed, err := store.ListSoftDeletedBooks(0, 0, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ListSoftDeletedBooks: %w", err)
+	}
+	for _, b := range trashed {
+		if b.SeriesID != nil && ids[*b.SeriesID] {
+			out[*b.SeriesID] = append(out[*b.SeriesID], b)
+		}
+	}
+	return out, nil
+}
+
+// targetView is what a base series holds, as the position decision needs it: its
+// live books and its trashed ones, plus how many book rows reference the series
+// that are in neither list (refs is the unfiltered count). A non-zero unseen
+// holds every move into the series: the decision cannot know a position is free.
+func targetView(live []database.BookCore, trashed []database.Book, refs int) (existing []sdn.Book, unseen int) {
+	existing = coreToBooks(live, nil)
+	for _, b := range trashed {
+		sb := sdn.Book{ID: b.ID}
+		if b.SeriesSequence != nil {
+			v := *b.SeriesSequence
+			sb.Seq = &v
+		}
+		if b.VersionGroupID != nil {
+			sb.Identity = *b.VersionGroupID
+		}
+		existing = append(existing, sb)
+	}
+	if n := refs - len(live) - len(trashed); n > 0 {
+		unseen = n
+	}
+	return existing, unseen
+}
+
 // normSeriesName is the store's name key: case and runs of space folded.
 func normSeriesName(name string) string {
 	return strings.ToLower(strings.Join(strings.Fields(name), " "))
@@ -621,16 +760,7 @@ func (r *denumberRun) describe(params SeriesDenumberParams) string {
 
 	// What the decision holds back, over every eligible plan (not only the
 	// selected ones), so the canary controls do not hide it.
-	heldByCode := map[sdn.HoldCode]int{}
-	carrying := 0
-	for i := range r.plans {
-		if len(r.results[i].Moves) > 0 {
-			carrying++
-		}
-		for _, h := range r.results[i].Held {
-			heldByCode[h.Code]++
-		}
-	}
+	heldByCode, carrying := r.heldByCode()
 
 	// What the selected plans would do.
 	bases := map[int]struct{}{}
@@ -672,20 +802,38 @@ func (r *denumberRun) describe(params SeriesDenumberParams) string {
 
 	return fmt.Sprintf(
 		"%d series scanned, %d carry a position (%s). Demoted to low by a shape check: %d (%s). "+
-			"%d plans are apply-eligible and %d of them move books; books held back, never moved: "+
-			"%d have a position of their own that differs, %d would share a position. "+
+			"%d plans are apply-eligible and %d of them move books; books held back, never moved, by reason: %s. "+
 			"%d numbered series have no books at all (dedup.series-prune removes empty series; this op does not). "+
 			"Selected (minBooks %d, base %q, limit %d): %d plans into %d base series (%d to be created), %d books would move, "+
 			"%d would be merged but NOT deleted (still referenced by rows this run cannot move: %s) — by evidence: %s | "+
 			"applying: %s | held: %s",
 		r.scanned, len(r.candidates), tiers,
 		sumCounts(r.byDemotion), strings.Join(demoted, " "),
-		len(r.plans), carrying, heldByCode[sdn.HoldOwnPosition], heldByCode[sdn.HoldCollision],
+		len(r.plans), carrying, formatHoldCounts(heldByCode),
 		r.emptyNumbered,
 		maxInt(params.MinBooks, 1), params.BaseName, params.Limit, len(r.selected), len(bases), len(newBases), booksMoving,
 		heldBackByGuard, strings.Join(heldBackExamples, "; "),
 		strings.Join(reasons, " "),
 		strings.Join(examples, "; "), strings.Join(heldExamples, "; "))
+}
+
+// formatHoldCounts renders every hold code with its count, in code order, so a
+// summary never leaves a code out: a hold the line does not show is a hold nobody
+// looks at. "none" when nothing was held.
+func formatHoldCounts(m map[sdn.HoldCode]int) string {
+	if len(m) == 0 {
+		return "none"
+	}
+	codes := make([]string, 0, len(m))
+	for c := range m {
+		codes = append(codes, string(c))
+	}
+	sort.Strings(codes)
+	parts := make([]string, 0, len(codes))
+	for _, c := range codes {
+		parts = append(parts, fmt.Sprintf("%s=%d", c, m[sdn.HoldCode(c)]))
+	}
+	return strings.Join(parts, " ")
 }
 
 func sumCounts(m map[string]int) int {
@@ -703,30 +851,222 @@ func maxInt(a, b int) int {
 	return b
 }
 
-// applySeriesDenumber executes the selected plans. Every write is journaled for
-// undo under opID BEFORE it is made, in the order the revert needs (it runs
-// newest first):
+// journalRecorder writes one undo-journal row under the run's operation id.
+type journalRecorder func(*database.OperationChange) error
+
+// versionResult is what moving one row of a book did.
+type versionResult struct {
+	written   *database.Book
+	did       bool
+	skip      string
+	journaled []*database.OperationChange
+	err       error
+}
+
+// moveVersion repoints one book row from fromID to targetID, writing only
+// SeriesID (and a missing SeriesSequence) under the book's write lock, so a
+// column another writer commits meanwhile is not reverted. The fresh row
+// decides: a book moved off the source meanwhile, given a position of its own,
+// or locked by the owner since the plan was made is left alone, and so is a base
+// that was deleted meanwhile. The owner's locks go through
+// database.ApplyRespectingLocks, the one place that maps a lock to its columns
+// (series_name protects the series and the position, series_position the
+// position); a mutation it had to take back is a book that stays.
 //
-//  1. a series_create row, AFTER the base series was really created by this run
-//     (the new row is empty; one that already holds books was somebody else's and
-//     is neither used nor journaled) and before any book moves into it;
-//  2. per book, inside the ModifyBook callback, a series_id row and, when the
-//     book had no position, a series_sequence row (sdn.MoveRows). A journal
-//     failure aborts the write and a skipped book leaves no row; and a row whose
-//     write then FAILED is voided (Voided + RevertedAt), so a revert never acts
-//     on a move that did not happen, whatever another writer did to the book since;
-//  3. a series_row_delete row (snapshot) before an emptied numbered series is
-//     deleted, so the revert can recreate it under its own id; voided when the
-//     delete fails.
+// dry runs every check and the lock-respecting mutation on the fresh row and
+// returns without writing or journaling: the preflight of a book's versions.
+//
+// 🔒 Journaling order, inside the callback: the rows are written after every
+// check passed and BEFORE ModifyBook writes the row, so a crash leaves a row for a
+// write that did not happen (voided by the caller, never replayed), never a write
+// without a row.
+func moveVersion(store OpsStore, record journalRecorder, mv sdn.Move, fromID, targetID int, dry bool) versionResult {
+	var r versionResult
+	sid := targetID
+	written, err := store.ModifyBook(mv.BookID, func(full *database.Book) error {
+		if full.SeriesID == nil || *full.SeriesID != fromID {
+			r.skip = "left the source series meanwhile"
+			return database.ErrSkipBookWrite
+		}
+		if full.SeriesSequence != nil && *full.SeriesSequence != mv.NewSeq {
+			r.skip = fmt.Sprintf("has its own position %d", *full.SeriesSequence)
+			return database.ErrSkipBookWrite
+		}
+		cur := mv
+		cur.SetSeq = full.SeriesSequence == nil
+		oldSeries, oldSeq := full.SeriesID, full.SeriesSequence
+		restored, lerr := database.ApplyRespectingLocks(store, full, func(b *database.Book) {
+			b.SeriesID = &sid
+			if cur.SetSeq {
+				pos := mv.NewSeq
+				b.SeriesSequence = &pos
+			}
+		})
+		if lerr != nil {
+			return fmt.Errorf("field locks unavailable, book NOT written: %w", lerr)
+		}
+		if len(restored) > 0 {
+			// A column the owner locked was taken back. The other column may still
+			// hold the mutation: the move is all or nothing, so put both back.
+			full.SeriesID, full.SeriesSequence = oldSeries, oldSeq
+			r.skip = string(sdn.HoldLocked) + ": the owner locked " + strings.Join(restored, ", ")
+			return database.ErrSkipBookWrite
+		}
+		// The base must still exist: a concurrent delete (dedup.series-prune)
+		// would otherwise leave the book pointing at a deleted series.
+		if tgt, terr := store.GetSeriesByID(targetID); terr != nil {
+			return fmt.Errorf("read base series %d: %w", targetID, terr)
+		} else if tgt == nil {
+			r.skip = fmt.Sprintf("the base series %d no longer exists", targetID)
+			return database.ErrSkipBookWrite
+		}
+		if dry {
+			return database.ErrSkipBookWrite
+		}
+		for _, jr := range sdn.MoveRows(cur, targetID) {
+			c := &database.OperationChange{
+				BookID: jr.BookID, ChangeType: jr.ChangeType, FieldName: jr.FieldName,
+				OldValue: jr.OldValue, NewValue: jr.NewValue,
+			}
+			if err := record(c); err != nil {
+				return err
+			}
+			r.journaled = append(r.journaled, c)
+		}
+		r.did = true
+		return nil
+	})
+	r.written, r.err = written, err
+	if err != nil || written == nil {
+		r.did = false
+	}
+	return r
+}
+
+// restoreVersion takes one moved row back to the source series (the
+// compensation of a book whose later version could not move). It acts only on a
+// row still in the target: one that moved again belongs to another writer now.
+func restoreVersion(store OpsStore, mv sdn.Move, fromID, targetID int) error {
+	moved := false
+	_, err := store.ModifyBook(mv.BookID, func(full *database.Book) error {
+		if full.SeriesID == nil || *full.SeriesID != targetID {
+			return database.ErrSkipBookWrite
+		}
+		from := fromID
+		full.SeriesID = &from
+		if mv.SetSeq && full.SeriesSequence != nil && *full.SeriesSequence == mv.NewSeq {
+			full.SeriesSequence = nil
+		}
+		moved = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !moved {
+		return errors.New("the row is no longer in the base series")
+	}
+	return nil
+}
+
+// moveGroups splits a plan's moves into the versions of one book each, in order.
+func moveGroups(moves []sdn.Move) [][]sdn.Move {
+	var order []string
+	by := map[string][]sdn.Move{}
+	for _, m := range moves {
+		if _, seen := by[m.Identity]; !seen {
+			order = append(order, m.Identity)
+		}
+		by[m.Identity] = append(by[m.Identity], m)
+	}
+	out := make([][]sdn.Move, 0, len(order))
+	for _, k := range order {
+		out = append(out, by[k])
+	}
+	return out
+}
+
+// bookOfMove is the decision's view of a book a move put into the target.
+func bookOfMove(mv sdn.Move) sdn.Book {
+	seq := mv.NewSeq
+	b := sdn.Book{ID: mv.BookID, Seq: &seq}
+	if id, ok := strings.CutPrefix(mv.Identity, "g:"); ok {
+		b.Identity = id
+	}
+	return b
+}
+
+// targetState is what the apply knows about one base series: every book it holds
+// (live, trashed, and the ones this run put there) and how many rows that is.
+type targetState struct {
+	existing []sdn.Book
+	tracked  int
+}
+
+// readTargetState reads a base series' members again, live and trashed, right
+// before the first write into it.
+func readTargetState(store OpsStore, targetID int) (*targetState, error) {
+	live, err := database.SeriesMembershipAllVersions(store, []int{targetID})
+	if err != nil {
+		return nil, fmt.Errorf("re-read members of series %d: %w", targetID, err)
+	}
+	trashed, err := readTrashedMembers(store, map[int]bool{targetID: true})
+	if err != nil {
+		return nil, fmt.Errorf("re-read trashed members of series %d: %w", targetID, err)
+	}
+	existing, _ := targetView(live[targetID], trashed[targetID], 0)
+	return &targetState{existing: existing, tracked: len(live[targetID]) + len(trashed[targetID])}, nil
+}
+
+// heldByCode counts the books the decision holds, per code, over every eligible
+// plan (the canary controls do not hide it), and how many plans move books.
+func (r *denumberRun) heldByCode() (map[sdn.HoldCode]int, int) {
+	held := map[sdn.HoldCode]int{}
+	carrying := 0
+	for i := range r.plans {
+		if len(r.results[i].Moves) > 0 {
+			carrying++
+		}
+		for _, h := range r.results[i].Held {
+			held[h.Code]++
+		}
+	}
+	return held, carrying
+}
+
+// applySeriesDenumber executes the selected plans. Every write is journaled for
+// undo under opID, in the order the revert needs (it runs newest first). The
+// order is NOT the same for every row, and the difference matters after a crash:
+//
+//  1. a series_create row is written AFTER the base series was really created by
+//     this run (the new row is empty; one that already holds books was somebody
+//     else's and is neither used nor journaled) and BEFORE any book moves into it.
+//     A crash between the create and its row leaves an empty, unjournaled series,
+//     which dedup.series-prune removes; it never leaves a book in an unjournaled
+//     series;
+//  2. per book version, inside the ModifyBook callback, the series_id row and, when
+//     the book had no position, the series_sequence row (sdn.MoveRows) are written
+//     BEFORE the row is. A journal failure aborts the write and a skipped book
+//     leaves no row; a row whose write then FAILED is voided (Voided +
+//     RevertedAt), so a revert never acts on a move that did not happen, whatever
+//     another writer did to the book since;
+//  3. a series_row_delete row (snapshot of the row read again at delete time) is
+//     written BEFORE an emptied numbered series is deleted, so the revert can
+//     recreate it under its own id; voided when the delete fails.
 //
 // 🔒 The scanner stands down for the whole run (hold), and the lease is checked
-// before every plan and every book.
+// before every plan, every book and every delete.
 //
 // 🔒 SEQUENTIAL ON PURPOSE. Two plans folding onto one base must not both decide
 // the base is missing and create it; series creation is the shared mutable state
 // here (contrast dedupe-book-file-rows, where every book is disjoint). The
 // position decision is made per base over the whole eligible set before this
-// loop (sdn.Decide), so the loop never has to compare books itself.
+// loop (sdn.Decide), and re-checked against the target right before the first
+// write into it (sdn.Recheck), so the loop never has to compare books itself.
+//
+// 🔒 A book and its alternate versions move together or not at all: every version
+// is checked on its fresh row (moveVersion, dry) before the first is written, and
+// a version that then fails takes the earlier ones back.
 //
 // Cancelled or failed runs still drop the series cache and write the outcome
 // report for what they did write (the defer below): a half-applied run is the one
@@ -761,8 +1101,11 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 			targets[gi] = g.targetID
 		}
 	}
+	states := map[int]*targetState{} // group index -> what the base holds, read at the first write
 	var outcomes []sdn.ReportRow
-	var merged, movedBooks, created, deleted, failed, stayed, refusedByGuard, targetAppeared, heldDelete int
+	var merged, plansMoving, movedBooks, created, deleted, failed, stayed, refusedByGuard, targetAppeared, heldDelete int
+	appliedHeld := map[sdn.HoldCode]int{}
+	receivedBase := map[int]bool{}
 
 	defer func() {
 		// Creating base series, moving books between them and deleting the emptied
@@ -850,6 +1193,7 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 			}
 			targetID = ns.ID
 			targets[gi] = targetID
+			states[gi] = &targetState{} // empty by the check above
 			created++
 			outcomes = append(outcomes, sdn.ReportRow{
 				Kind: sdn.KindCreatedSeries, IntoName: name, NewSeriesID: strconv.Itoa(ns.ID), Status: "created",
@@ -870,163 +1214,258 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 				"series", pl.FromID, "name", pl.FromName, "unfiltered_refs", run.refCounts[pl.FromID], "movable_books", sourceBooks)
 		}
 
+		// 🔒 The base as it is NOW. The decision read it when the plan was made,
+		// which is as old as every plan before this one took to apply: a book moved
+		// into it, restored from the trash into it, or linked to it by a row nothing
+		// lists since then holds a position this plan would take. Members are read
+		// again, live and trashed, once per base before the first write into it;
+		// the row count is checked again for every plan, and the books this run
+		// moved in are tracked in between.
+		st := states[gi]
+		if st == nil {
+			var rerr error
+			if st, rerr = readTargetState(store, targetID); rerr != nil {
+				failed++
+				log.Warn("series-denumber: could not re-read the base before writing, plan skipped", "series", targetID, "err", rerr)
+				continue
+			}
+			states[gi] = st
+		}
+		refs, rerr := counter.GetSeriesBookRefCount(targetID)
+		if rerr != nil {
+			failed++
+			log.Warn("series-denumber: could not count the base's rows before writing, plan skipped", "series", targetID, "err", rerr)
+			continue
+		}
+		unseen := max(refs-st.tracked, 0)
+		keep, heldNow := sdn.Recheck(pl.IntoName, sr.Moves, st.existing, unseen)
+
 		movedAll := true
 		stay := 0
-		for _, mv := range sr.Moves {
-			if hold.Lost() {
-				return fmt.Errorf("series-denumber: scan stand-down lease lapsed at book %s; stopped with %d books moved", mv.BookID, movedBooks)
-			}
-			sid := targetID
-			did := false
-			skip := ""
-			var journaled []*database.OperationChange
-			// Write only SeriesID (and a missing SeriesSequence), under the book's
-			// write lock, so a column another writer commits meanwhile is not
-			// reverted. The fresh row decides: a book moved off the source meanwhile,
-			// given a position of its own, or locked by the owner since the plan was
-			// made, is left alone, and so is a base that was deleted meanwhile.
-			written, uerr := store.ModifyBook(mv.BookID, func(full *database.Book) error {
-				if full.SeriesID == nil || *full.SeriesID != pl.FromID {
-					skip = "left the source series meanwhile"
-					return database.ErrSkipBookWrite
-				}
-				if full.SeriesSequence != nil && *full.SeriesSequence != mv.NewSeq {
-					skip = fmt.Sprintf("has its own position %d", *full.SeriesSequence)
-					return database.ErrSkipBookWrite
-				}
-				// The owner's locks, read again now: one set after the plan was made
-				// still holds the book. Fails closed (an error aborts the write).
-				locks, lerr := database.LoadFieldLocks(store, full.ID)
-				if lerr != nil {
-					return fmt.Errorf("field locks unavailable, book NOT written: %w", lerr)
-				}
-				cur := mv
-				cur.SetSeq = full.SeriesSequence == nil
-				switch {
-				case locks.Locked(database.FieldKeySeriesName):
-					skip = string(sdn.HoldLocked) + ": the owner locked " + database.FieldKeySeriesName
-					return database.ErrSkipBookWrite
-				case cur.SetSeq && locks.Locked(database.FieldKeySeriesPosition):
-					skip = string(sdn.HoldLocked) + ": the owner locked " + database.FieldKeySeriesPosition
-					return database.ErrSkipBookWrite
-				}
-				// The base must still exist: a concurrent delete (dedup.series-prune)
-				// would otherwise leave the book pointing at a deleted series.
-				if tgt, terr := store.GetSeriesByID(targetID); terr != nil {
-					return fmt.Errorf("read base series %d: %w", targetID, terr)
-				} else if tgt == nil {
-					skip = fmt.Sprintf("the base series %d no longer exists", targetID)
-					return database.ErrSkipBookWrite
-				}
-				for _, jr := range sdn.MoveRows(cur, targetID) {
-					c := &database.OperationChange{
-						BookID: jr.BookID, ChangeType: jr.ChangeType, FieldName: jr.FieldName,
-						OldValue: jr.OldValue, NewValue: jr.NewValue,
-					}
-					if err := record(c); err != nil {
-						return err
-					}
-					journaled = append(journaled, c)
-				}
-				full.SeriesID = &sid
-				if cur.SetSeq {
-					pos := mv.NewSeq
-					full.SeriesSequence = &pos
-				}
-				did = true
-				return nil
-			})
-			wrote := uerr == nil && written != nil && did
-			if len(journaled) > 0 && !wrote {
-				// The rows describe a write that did not happen (a later row failed,
-				// or the book write itself did). Voided, a revert would otherwise
-				// replay the old value over whatever a later writer committed.
-				if verr := void(journaled); verr != nil {
-					failed++
-					log.Warn("series-denumber: could not void the journal rows of a failed write", "book", mv.BookID, "err", verr)
-				}
-			}
-			row := sdn.ReportRow{
+		movedHere := 0
+		for _, h := range heldNow {
+			appliedHeld[h.Code]++
+			stayed++
+			stay++
+			log.Info("series-denumber: book not moved", "book", h.BookID, "why", string(h.Code)+": "+h.Reason)
+			outcomes = append(outcomes, sdn.ReportRow{
 				Kind: sdn.KindBook, FromSeriesID: pl.FromID, FromName: pl.FromName, IntoName: pl.IntoName,
-				Position: pl.Position, BookID: mv.BookID, OldSeq: sdn.SeqString(mv.OldSeq),
-				NewSeriesID: strconv.Itoa(targetID), NewSeq: strconv.Itoa(mv.NewSeq),
+				Position: pl.Position, BookID: h.BookID, NewSeriesID: strconv.Itoa(targetID),
+				Status: "skipped: " + string(h.Code) + ": " + h.Reason,
+			})
+		}
+
+		for _, versions := range moveGroups(keep) {
+			if hold.Lost() {
+				return fmt.Errorf("series-denumber: scan stand-down lease lapsed at book %s; stopped with %d books moved", versions[0].BookID, movedBooks)
 			}
-			switch {
-			case uerr != nil:
-				failed++
-				movedAll = false
-				log.Warn("series-denumber: ModifyBook failed", "book", mv.BookID, "err", uerr)
-				row.Status = "failed: " + uerr.Error()
-			case written == nil:
-				failed++
-				movedAll = false
-				row.Status = "failed: book not written"
-			case !did:
-				// Nothing was written and nothing journaled; the book keeps the
-				// source series referenced, so the source is not deleted.
-				stayed++
-				stay++
-				log.Info("series-denumber: book not moved", "book", mv.BookID, "why", skip)
-				row.Status = "skipped: " + skip
-			default:
+			rowFor := func(mv sdn.Move, status string) sdn.ReportRow {
+				return sdn.ReportRow{
+					Kind: sdn.KindBook, FromSeriesID: pl.FromID, FromName: pl.FromName, IntoName: pl.IntoName,
+					Position: pl.Position, BookID: mv.BookID, OldSeq: sdn.SeqString(mv.OldSeq),
+					NewSeriesID: strconv.Itoa(targetID), NewSeq: strconv.Itoa(mv.NewSeq), Status: status,
+				}
+			}
+			// leave records every version of the book as not moved.
+			leave := func(why string) {
+				for _, mv := range versions {
+					stayed++
+					stay++
+					outcomes = append(outcomes, rowFor(mv, "skipped: "+why))
+				}
+			}
+
+			// Preflight: with more than one version, every one is checked on its
+			// fresh row before the first is written, so a lock or a changed position
+			// found late does not split the book across two series.
+			if len(versions) > 1 {
+				blocked := ""
+				for _, mv := range versions {
+					r := moveVersion(store, record, mv, pl.FromID, targetID, true)
+					if r.err != nil {
+						blocked = "its version " + mv.BookID + " could not be checked: " + r.err.Error()
+						break
+					}
+					if r.skip != "" {
+						blocked = "its version " + mv.BookID + " " + r.skip
+						break
+					}
+				}
+				if blocked != "" {
+					log.Info("series-denumber: book not moved", "book", versions[0].BookID, "why", blocked)
+					leave("none of its versions moved, because " + blocked)
+					continue
+				}
+			}
+
+			type landed struct {
+				mv sdn.Move
+				r  versionResult
+			}
+			var done []landed
+			for _, mv := range versions {
+				r := moveVersion(store, record, mv, pl.FromID, targetID, false)
+				wrote := r.err == nil && r.written != nil && r.did
+				if len(r.journaled) > 0 && !wrote {
+					// The rows describe a write that did not happen (a later row failed,
+					// or the book write itself did). Voided, a revert would otherwise
+					// replay the old value over whatever a later writer committed.
+					if verr := void(r.journaled); verr != nil {
+						failed++
+						log.Warn("series-denumber: could not void the journal rows of a failed write", "book", mv.BookID, "err", verr)
+					}
+				}
+				if wrote {
+					done = append(done, landed{mv, r})
+					continue
+				}
+
+				// This version did not move. The earlier ones of the same book did:
+				// take them back, so the book is not split across two series.
+				for di := len(done) - 1; di >= 0; di-- {
+					d := done[di]
+					if rerr := restoreVersion(store, d.mv, pl.FromID, targetID); rerr != nil {
+						// It stays in the base. It is journaled, so a revert still puts it
+						// back; the run reports the split loudly and does not delete.
+						failed++
+						movedAll = false
+						log.Error("series-denumber: a book's versions are SPLIT across two series: a later version did not move and this one could not be taken back",
+							"book", d.mv.BookID, "from_series", pl.FromID, "to_series", targetID, "err", rerr)
+						continue
+					}
+					if verr := void(d.r.journaled); verr != nil {
+						failed++
+						log.Warn("series-denumber: could not void the journal rows of a move that was taken back", "book", d.mv.BookID, "err", verr)
+					}
+					done = append(done[:di], done[di+1:]...)
+				}
+				switch {
+				case r.err != nil:
+					failed++
+					movedAll = false
+					log.Warn("series-denumber: ModifyBook failed", "book", mv.BookID, "err", r.err)
+					outcomes = append(outcomes, rowFor(mv, "failed: "+r.err.Error()))
+				case r.written == nil:
+					failed++
+					movedAll = false
+					outcomes = append(outcomes, rowFor(mv, "failed: book not written"))
+				default:
+					// Nothing was written and nothing journaled; the book keeps the
+					// source series referenced, so the source is not deleted.
+					stayed++
+					stay++
+					log.Info("series-denumber: book not moved", "book", mv.BookID, "why", r.skip)
+					outcomes = append(outcomes, rowFor(mv, "skipped: "+r.skip))
+				}
+				for _, other := range versions {
+					if other.BookID == mv.BookID {
+						continue
+					}
+					kept := false
+					for _, d := range done {
+						if d.mv.BookID == other.BookID {
+							kept = true // could not be taken back; reported as moved below
+						}
+					}
+					if !kept {
+						stayed++
+						stay++
+						outcomes = append(outcomes, rowFor(other, "skipped: another version of this book did not move"))
+					}
+				}
+				break
+			}
+			for _, d := range done {
 				// 🔑 LOAD-BEARING: the emptiness check below reads this map. Without
 				// the Move it still lists every book this plan just moved, and the
 				// emptied source is never deleted.
-				run.members.Move(mv.BookID, pl.FromID, &sid)
+				sid := targetID
+				run.members.Move(d.mv.BookID, pl.FromID, &sid)
+				st.existing = append(st.existing, bookOfMove(d.mv))
+				st.tracked++
 				movedBooks++
-				row.Status = "moved"
+				movedHere++
+				receivedBase[targetID] = true
+				outcomes = append(outcomes, rowFor(d.mv, "moved"))
 			}
-			outcomes = append(outcomes, row)
+		}
+		if movedHere > 0 {
+			plansMoving++
 		}
 
 		// Delete the emptied source only when every book it held moved, none was
 		// held back or skipped, the unfiltered guard confirms nothing else
 		// references it, and it is not a held row. The references are counted AGAIN
 		// immediately before the delete: the planning-time map is minutes old and a
-		// book may have been linked into the series since. The snapshot is journaled
-		// BEFORE the delete: a revert recreates the row from it. A delete that then
-		// fails voids the row.
+		// book may have been linked into the series since. The row is read again
+		// too: the snapshot a revert recreates it from must be the row that is
+		// deleted, not the one planned, and a series renamed or re-authored since
+		// the plan is somebody's edit this run does not delete over. The snapshot
+		// is journaled BEFORE the delete; a delete that then fails voids the row.
 		src := run.seriesByID[pl.FromID]
-		if movedAll && stay == 0 && len(sr.Held) == 0 && safeToDelete &&
+		if movedAll && stay == 0 && len(sr.Held) == 0 && len(heldNow) == 0 && safeToDelete &&
 			len(run.members[pl.FromID]) == 0 && !database.SeriesHeld(src) {
-			if refs, rerr := counter.GetSeriesBookRefCount(src.ID); rerr != nil {
+			// The lease is checked again here: this is the last write of the plan and
+			// the only one with no book loop around it to renew it.
+			if hold.Lost() {
+				return fmt.Errorf("series-denumber: scan stand-down lease lapsed before deleting series %d; stopped with %d books moved", src.ID, movedBooks)
+			}
+			cur, gerr := store.GetSeriesByID(src.ID)
+			switch {
+			case gerr != nil:
 				failed++
 				heldDelete++
-				log.Warn("series-denumber: not deleting emptied series: its references could not be counted", "series", src.ID, "err", rerr)
-				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: references not countable: " + rerr.Error()})
-			} else if refs != 0 {
+				log.Warn("series-denumber: not deleting emptied series: it could not be read again", "series", src.ID, "err", gerr)
+				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: row not readable: " + gerr.Error()})
+			case cur == nil:
+				// Already gone: nothing to delete and nothing to journal.
+				log.Info("series-denumber: emptied series is already deleted", "series", src.ID)
+				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: already deleted by someone else"})
+			case cur.Name != src.Name || !sameAuthorPtr(cur.AuthorID, src.AuthorID) || database.SeriesHeld(*cur):
 				heldDelete++
-				log.Warn("series-denumber: not deleting emptied series: a book references it now", "series", src.ID, "name", src.Name, "refs", refs)
-				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: fmt.Sprintf("kept: %d book rows reference it since the plan", refs)})
-			} else {
-				snap, serr := undo.NewSeriesSnapshotJSON(undo.SeriesSnapshot{ID: src.ID, Name: src.Name, AuthorID: src.AuthorID})
-				srcID := src.ID
-				var jerr error
-				var delRow *database.OperationChange
-				if serr != nil {
-					jerr = serr
-				} else {
-					delRow = &database.OperationChange{SeriesID: &srcID, ChangeType: undo.ChangeTypeSeriesRowDelete, OldValue: snap}
-					jerr = record(delRow)
-				}
-				switch {
-				case jerr != nil:
+				log.Warn("series-denumber: not deleting emptied series: it changed since the plan was made",
+					"series", src.ID, "planned_name", src.Name, "name_now", cur.Name)
+				outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: the series was renamed, re-authored or held since the plan"})
+			default:
+				if refs, rerr := counter.GetSeriesBookRefCount(src.ID); rerr != nil {
 					failed++
-					log.Warn("series-denumber: not deleting emptied series: its undo row was not written", "series", src.ID, "err", jerr)
-				default:
-					if derr := store.DeleteSeries(src.ID); derr != nil {
-						// The row stays, so its undo row is voided: a revert has nothing to
-						// restore.
-						failed++
-						log.Warn("series-denumber: DeleteSeries failed", "series", src.ID, "err", derr)
-						if verr := void([]*database.OperationChange{delRow}); verr != nil {
-							log.Warn("series-denumber: could not void the delete's undo row", "series", src.ID, "err", verr)
-						}
+					heldDelete++
+					log.Warn("series-denumber: not deleting emptied series: its references could not be counted", "series", src.ID, "err", rerr)
+					outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "kept: references not countable: " + rerr.Error()})
+				} else if refs != 0 {
+					heldDelete++
+					log.Warn("series-denumber: not deleting emptied series: a book references it now", "series", src.ID, "name", src.Name, "refs", refs)
+					outcomes = append(outcomes, sdn.ReportRow{Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: fmt.Sprintf("kept: %d book rows reference it since the plan", refs)})
+				} else {
+					snap, serr := undo.NewSeriesSnapshotJSON(undo.SeriesSnapshot{ID: cur.ID, Name: cur.Name, AuthorID: cur.AuthorID})
+					srcID := cur.ID
+					var jerr error
+					var delRow *database.OperationChange
+					if serr != nil {
+						jerr = serr
 					} else {
-						deleted++
-						outcomes = append(outcomes, sdn.ReportRow{
-							Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "deleted",
-						})
+						delRow = &database.OperationChange{SeriesID: &srcID, ChangeType: undo.ChangeTypeSeriesRowDelete, OldValue: snap}
+						jerr = record(delRow)
+					}
+					switch {
+					case jerr != nil:
+						failed++
+						log.Warn("series-denumber: not deleting emptied series: its undo row was not written", "series", src.ID, "err", jerr)
+					default:
+						if derr := store.DeleteSeries(src.ID); derr != nil {
+							// The row stays, so its undo row is voided: a revert has nothing to
+							// restore.
+							failed++
+							log.Warn("series-denumber: DeleteSeries failed", "series", src.ID, "err", derr)
+							if verr := void([]*database.OperationChange{delRow}); verr != nil {
+								log.Warn("series-denumber: could not void the delete's undo row", "series", src.ID, "err", verr)
+							}
+						} else {
+							deleted++
+							outcomes = append(outcomes, sdn.ReportRow{
+								Kind: sdn.KindDeletedSeries, FromSeriesID: src.ID, FromName: src.Name, Status: "deleted",
+							})
+						}
 					}
 				}
 			}
@@ -1034,20 +1473,21 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		merged++
 		if (n+1)%25 == 0 || n+1 == len(run.selected) {
 			_ = reporter.UpdateProgress(n+1, len(run.selected),
-				fmt.Sprintf("merged %d/%d series (%d books moved)", merged, len(run.selected), movedBooks))
+				fmt.Sprintf("processed %d/%d plans (%d books moved)", merged, len(run.selected), movedBooks))
 		}
 	}
 
-	bases := map[int]struct{}{}
-	for _, i := range run.selected {
-		bases[run.groupOf[i]] = struct{}{}
-	}
+	heldPlan, _ := run.heldByCode()
 	summary := fmt.Sprintf(
-		"series-denumber: %d series scanned, merged %d plans into %d base series "+
-			"(%d books moved, %d base series created, %d emptied series deleted, %d emptied series kept at the last count, "+
-			"%d books skipped, %d held back by the reference guard, %d skipped because the base appeared mid-run), "+
-			"failed %d | undo: revert operation %s",
-		run.scanned, merged, len(bases), movedBooks, created, deleted, heldDelete, stayed, refusedByGuard, targetAppeared, failed, opID)
+		"series-denumber: %d series scanned, %d of %d selected plans moved at least one book, %d books moved into %d base series "+
+			"(%d base series created, %d emptied series deleted, %d emptied series NOT deleted because a book or a change appeared since the plan, "+
+			"%d plans' sources kept by the reference guard, %d plans skipped because the base appeared mid-run, "+
+			"%d books skipped at apply time: %s, failed %d) | held at plan time over every eligible plan, by reason: %s | "+
+			"demoted to low, never applied: %s | undo: revert operation %s",
+		run.scanned, plansMoving, len(run.selected), movedBooks, len(receivedBase),
+		created, deleted, heldDelete, refusedByGuard, targetAppeared,
+		stayed, formatHoldCounts(appliedHeld), failed,
+		formatHoldCounts(heldPlan), run.demotedSummary(), opID)
 	_ = reporter.Log(slog.LevelInfo, summary)
 	_ = reporter.UpdateProgress(len(run.selected), len(run.selected), summary)
 	if failed > 0 {
@@ -1056,4 +1496,27 @@ func (p *Plugin) applySeriesDenumber(ctx context.Context, store OpsStore, report
 		return fmt.Errorf("series-denumber: %d writes failed (the rest of the run is journaled and can be undone): %s", failed, summary)
 	}
 	return nil
+}
+
+// sameAuthorPtr compares two optional author ids.
+func sameAuthorPtr(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// demotedSummary lists the shape checks that moved plans to low, with counts:
+// grammar and author holds, and the lone unpadded names held as
+// position_uncorroborated.
+func (r *denumberRun) demotedSummary() string {
+	if len(r.byDemotion) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(r.byDemotion))
+	for code, n := range r.byDemotion {
+		parts = append(parts, fmt.Sprintf("%s=%d", code, n))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, " ")
 }

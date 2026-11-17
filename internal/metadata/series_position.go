@@ -1,7 +1,7 @@
 // file: internal/metadata/series_position.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c1d0a4e-9b73-4f26-8a51-6d2e4c9f7b30
-// last-edited: 2026-09-02
+// last-edited: 2026-11-17
 
 package metadata
 
@@ -141,7 +141,7 @@ var junkSeriesBases = map[string]struct{}{
 // Stripping "Chapter 12" leaves the keyword stranded on the end, and merging on
 // that base manufactures a series named after the word "chapter".
 var trailingJunkWord = regexp.MustCompile(
-	`(?i)[\s:,\-–—_]+(chapter|chapters|disc|disk|cd|track|part|pt|book|vol|volume|side|tape|section|pack|omnibus|box set|boxset)\s*$`)
+	`(?i)[\s:,\-–—_]+(chapter|chapters|ch|ep|episode|episodes|disc|discs|disk|cd|cds|track|part|pt|book|vol|vols|volume|volumes|v|t|bd|nr|side|sides|reel|hour|hours|tape|section|pack|omnibus|box set|boxset)\s*$`)
 
 // leadingSeparator catches the mirror-image artefact the embedded shapes create.
 // The existing guard only checks SUFFIXES because it was built for a parser that
