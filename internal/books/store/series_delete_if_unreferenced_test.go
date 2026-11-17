@@ -320,7 +320,7 @@ func TestDeleteSeriesIfUnreferenced_DoesNotDeadlockWithWritersThatCreateSeries(t
 			for i := 0; i < 60; i++ {
 				id := ids[(w*7+i)%books]
 				_, _ = s.ModifyBook(id, func(b *Book) error {
-					ser, err := s.CreateSeries(fmt.Sprintf("Arc %d", (w+i)%5), nil)
+					ser, err := s.CreateSeries(fmt.Sprintf("Knightfall %d", (w+i)%5), nil)
 					if err != nil {
 						return err
 					}
@@ -334,7 +334,7 @@ func TestDeleteSeriesIfUnreferenced_DoesNotDeadlockWithWritersThatCreateSeries(t
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 60; i++ {
-			ser, err := s.CreateSeries(fmt.Sprintf("Scratch %d", i%3), nil)
+			ser, err := s.CreateSeries(fmt.Sprintf("No Mans Land %d", i%3), nil)
 			if err == nil {
 				_, _ = s.DeleteSeriesIfUnreferenced(ser.ID)
 			}
