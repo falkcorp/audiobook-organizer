@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-whisper-cpu-worker-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 7b3e5a90-1c64-4d28-9e0f-a52d8c7b1f46 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -48,11 +48,15 @@ task, the remote-management step and the processor's speed have not been tried.
 - The worker has no password, so anyone who can reach it could read the messages it
   sends back when something fails, and those messages could contain a folder name
   from the Windows user's profile or part of a program's error text. Every failure
-  now answers with a short fixed code and a fixed sentence, on both the Windows and
-  the Mac workers, and what used to be in the message goes to the worker's own log.
-  The health report also says whether the audio-cutting tool was found, not where it is. The
-  server only ever read the code, so nothing on its side changes. The Mac worker's
-  failure wording changed with it.
+  now answers with a short fixed code and either a fixed sentence or one word picked
+  from a short list for that kind of failure ("other" covers anything the list does
+  not name), on both the
+  Windows and the Mac workers, and what used to be in the message goes to the worker's
+  own log. The health report also says whether the audio-cutting tool was found, not
+  where it is, and when a model is loaded from a folder the report gives a short label
+  for it instead of the folder's location. The server only ever read the code to decide
+  what to do; what it saves in the book's record is that code and word. The Mac
+  worker's failure wording changed with it.
 - When a worker answers with an incomplete description of itself (a missing model name
   or settings fingerprint), the server now keeps that answer out of its saved results
   instead of filing it under a less specific key.

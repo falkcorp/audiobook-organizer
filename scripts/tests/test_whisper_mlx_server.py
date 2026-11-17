@@ -1,5 +1,5 @@
 # file: scripts/tests/test_whisper_mlx_server.py
-# version: 1.17.0
+# version: 1.18.0
 # guid: 8b4d19f2-6c30-4e71-a5d9-1f7c3e8a2b45
 # last-edited: 2026-11-17
 #
@@ -51,13 +51,14 @@ except ImportError as exc:  # pragma: no cover - dependency-gated
 
 _SERVER = pathlib.Path(__file__).resolve().parents[1] / "whisper_mlx_server.py"
 
-# What a caller is told for a failure: a code and ONE fixed sentence, never what the
-# failure said (whisper-cpu round 5). The detail is in the worker log, so the tests that
+# What a caller is told for a failure: a code and ONE word from a closed set for that
+# code (or one fixed sentence for a code with a single reason), never what the failure
+# said (whisper-cpu rounds 5 and 6). The detail is in the worker log, so the tests that
 # used to read it from the body read it from caplog.
 WHISPER_ERROR = "whisper_error: transcription failed on this worker"
-UNMAPPED = "path_unmapped: the path is not available on this worker"
-DECODER_CRASHED = "decoder_crashed: the decode process crashed on this clip"
-DECODER_KILLED = "decoder_killed: the decode process was killed while on this clip"
+UNMAPPED_ROOT_UNREADABLE = "path_unmapped: root_unreadable"
+DECODER_CRASHED = "decoder_crashed: died_on_clip"
+DECODER_KILLED = "decoder_killed: killed_by_signal"
 
 
 def _wpp():
@@ -580,7 +581,7 @@ def test_lost_mount_fails_each_job_closed_as_path_unmapped(pathsrv, monkeypatch,
     res = client.post(
         "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
-    assert res["error"] == UNMAPPED and "mount lost" in caplog.text
+    assert res["error"] == UNMAPPED_ROOT_UNREADABLE and "mount lost" in caplog.text
 
 
 def test_no_map_refuses_every_job(pathsrv, monkeypatch):
@@ -629,7 +630,11 @@ def test_one_failing_path_job_does_not_fail_the_batch(pathsrv, monkeypatch):
 
     def selective(src, seconds):
         if src.endswith("bad.m4b"):
-            raise _wpp().PathJobError(_wpp().ERR_FFMPEG, "Invalid data found when processing input")
+            raise _wpp().PathJobError(
+                _wpp().ERR_FFMPEG,
+                "Invalid data found when processing input",
+                category=_wpp().CAT_INVALID_DATA,
+            )
         return real(src, seconds)
 
     monkeypatch.setattr(mod.pipeline, "extract_clip", selective)
@@ -643,7 +648,7 @@ def test_one_failing_path_job_does_not_fail_the_batch(pathsrv, monkeypatch):
         },
     ).json()["results"]
     assert results["good"]["error"] is None
-    assert results["bad"]["error"].startswith("ffmpeg_error:")
+    assert results["bad"]["error"] == "ffmpeg_error: invalid_data"
 
 
 def test_a_whisper_failure_is_prefixed_and_isolated(pathsrv, monkeypatch, caplog):
@@ -823,14 +828,16 @@ def test_worker_misconfigured_reaches_the_client_as_a_prefixed_error(pathsrv, mo
 
     def no_ffmpeg(src, seconds):
         raise _wpp().PathJobError(
-            _wpp().ERR_WORKER_MISCONFIGURED, "ffmpeg is not on PATH on this worker"
+            _wpp().ERR_WORKER_MISCONFIGURED,
+            "ffmpeg is not on PATH on this worker",
+            category=_wpp().CAT_FFMPEG_MISSING,
         )
 
     monkeypatch.setattr(mod.pipeline, "extract_clip", no_ffmpeg)
     res = client.post(
         "/transcribe-path-batch", json={"jobs": {"k": _job("/lib/Gotham/books/A/one.m4b")}}
     ).json()["results"]["k"]
-    assert res["error"].startswith("worker_misconfigured:")
+    assert res["error"] == "worker_misconfigured: ffmpeg_missing"
 
 
 # A soft, read-only mount that stays dead past deadtimeout is forcibly

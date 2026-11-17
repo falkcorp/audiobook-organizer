@@ -1,5 +1,5 @@
 # file: scripts/whisper_path_pipeline.py
-# version: 1.5.0
+# version: 1.6.0
 # guid: c3e91a57-2d84-4f16-b7a9-0e5d8c4b6f13
 # last-edited: 2026-11-17
 #
@@ -184,19 +184,24 @@ _MAX_REQUEST_TIMEOUT_S = 10**9
 # not by remembering at each site:
 #
 #   * an error that leaves in a body is ALWAYS wire_error(code, category): a stable
-#     code (the ERR_* list above, which the Go client matches on) and ONE fixed
-#     sentence per code, or, for worker_misconfigured only, a fixed category word.
-#     Nothing the failure itself said can reach it, because wire_error takes no text;
+#     code (the ERR_* list above, which the Go client matches on) and then ONE word
+#     from a closed set for that code (CODE_CATEGORIES: "path_unmapped: root_unreadable",
+#     "ffmpeg_error: invalid_data") or, for a code with a single possible reason, ONE
+#     fixed sentence. Nothing the failure itself said can reach it, because wire_error
+#     takes no text and refuses a category its code does not list;
 #   * the failure's own detail (PathJobError.detail, an exception's text, ffmpeg's
 #     stderr line) goes to the worker log only, which is written by error_result at the
 #     moment it makes the body, so a body and its log line cannot disagree about what
 #     failed and no site has to remember to log;
-#   * test_whisper_wire_text_guard.py walks every worker script and fails on a response
-#     built any other way.
+#   * test_whisper_wire_text_guard.py reads every scripts/whisper_*.py and fails on the
+#     response shapes it knows how to read (its header lists exactly which); it is a
+#     tripwire for the common ways to write a leak, not a proof. The guarantee that no
+#     route leaks is the runtime tests, which plant a secret in every failure of every
+#     route that exists and look for it in the body.
 ERR_INTERNAL = "internal_error"  # a handler failed unexpectedly: the 500 body only
 
-# A fixed word for why a worker cannot do jobs, shown on /health as child_start_error and
-# in a worker_misconfigured answer. A closed set: ChildFaultError and PathJobError refuse
+# Why a worker cannot do jobs, shown on /health as child_start_error and in a
+# worker_misconfigured answer. A closed set: ChildFaultError and PathJobError refuse
 # any other, so a library's message cannot become a category.
 CAT_PROCESS_START_FAILED = "process_start_failed"
 CAT_START_TIMEOUT = "start_timeout"
@@ -217,52 +222,195 @@ START_CATEGORIES = frozenset(
     }
 )
 
-# One sentence per code. Written for the operator who reads a Go-side status, so each
-# says what kind of thing went wrong without saying where.
+# path_unmapped: the path is refused, or the root it maps to cannot be read. They need
+# different operator actions (fix a mount, or fix the map), which is why the word is kept.
+CAT_NOT_ABSOLUTE = "not_absolute"
+CAT_DOT_DOT = "dot_dot"
+CAT_NOT_UNDER_PREFIX = "not_under_prefix"
+CAT_ROOT_UNREADABLE = "root_unreadable"
+CAT_SYMLINK_ESCAPE = "symlink_escape"
+CAT_PATH_MAP_UNSET = "path_map_unset"
+CAT_PATH_MAP_INVALID = "path_map_invalid"
+CAT_SOURCE_UNREADABLE = "source_unreadable"
+CAT_MAPPING_FAILED = "mapping_failed"
+# path_unrepresentable: what this worker's filesystem cannot name.
+CAT_COMPONENT_TOO_LONG = "component_too_long"
+CAT_BAD_CHARACTER = "bad_character"
+CAT_TRAILING_DOT_OR_SPACE = "trailing_dot_or_space"
+CAT_RESERVED_NAME = "reserved_name"
+# bad_request: the shape of the job.
+CAT_SECONDS_INVALID = "seconds_invalid"
+CAT_PATH_INVALID = "path_invalid"
+CAT_PATH_TOO_LONG = "path_too_long"
+CAT_JOB_NOT_OBJECT = "job_not_object"
+# ffmpeg_error: why the clip could not be cut. The first two come from checking the WAV;
+# the next five from a fixed table over ffmpeg's stderr (FFMPEG_STDERR_CATEGORIES);
+# spawn_failed is the OS refusing to run ffmpeg; other is stderr the table does not know.
+CAT_EMPTY_CLIP = "empty_clip"
+CAT_INVALID_WAV = "invalid_wav"
+CAT_INVALID_DATA = "invalid_data"
+CAT_MOOV_MISSING = "moov_missing"
+CAT_NO_AUDIO_STREAM = "no_audio_stream"
+CAT_UNSUPPORTED_CODEC = "unsupported_codec"
+CAT_TRUNCATED_FILE = "truncated_file"
+CAT_PERMISSION_DENIED = "permission_denied"
+CAT_SPAWN_FAILED = "spawn_failed"
+CAT_OTHER = "other"
+# ffmpeg_timeout: a read that stalled or faulted, not a verdict on the file.
+CAT_IO_FAULT = "io_fault"
+CAT_EXTRACT_TIMEOUT = "extract_timeout"
+CAT_OS_IO_ERROR = "os_io_error"
+# decoder_crashed / decoder_killed: how the decode process went.
+CAT_DIED_ON_CLIP = "died_on_clip"
+CAT_WRONG_ANSWER = "wrong_answer"
+CAT_KILLED_BY_SIGNAL = "killed_by_signal"
+CAT_NOT_REAPED = "not_reaped"
+
+# The closed set of words each code may carry after it. A code listed here is always
+# sent as "<code>: <category>"; a code not listed has one possible reason and is sent as
+# "<code>: <sentence>" (PUBLIC_SENTENCES). Written from the raise sites: add the word
+# here when a new site needs one, and the operator learns the reason without the body
+# ever carrying the failure's own text.
+CODE_CATEGORIES = {
+    ERR_PATH_UNMAPPED: frozenset(
+        {
+            CAT_NOT_ABSOLUTE,
+            CAT_DOT_DOT,
+            CAT_NOT_UNDER_PREFIX,
+            CAT_ROOT_UNREADABLE,
+            CAT_SYMLINK_ESCAPE,
+            CAT_PATH_MAP_UNSET,
+            CAT_PATH_MAP_INVALID,
+            CAT_SOURCE_UNREADABLE,
+            CAT_MAPPING_FAILED,
+        }
+    ),
+    ERR_PATH_UNREPRESENTABLE: frozenset(
+        {CAT_COMPONENT_TOO_LONG, CAT_BAD_CHARACTER, CAT_TRAILING_DOT_OR_SPACE, CAT_RESERVED_NAME}
+    ),
+    ERR_BAD_REQUEST: frozenset(
+        {CAT_SECONDS_INVALID, CAT_PATH_INVALID, CAT_PATH_TOO_LONG, CAT_JOB_NOT_OBJECT}
+    ),
+    ERR_FFMPEG: frozenset(
+        {
+            CAT_EMPTY_CLIP,
+            CAT_INVALID_WAV,
+            CAT_INVALID_DATA,
+            CAT_MOOV_MISSING,
+            CAT_NO_AUDIO_STREAM,
+            CAT_UNSUPPORTED_CODEC,
+            CAT_TRUNCATED_FILE,
+            CAT_PERMISSION_DENIED,
+            CAT_SPAWN_FAILED,
+            CAT_OTHER,
+        }
+    ),
+    ERR_FFMPEG_TIMEOUT: frozenset({CAT_IO_FAULT, CAT_EXTRACT_TIMEOUT, CAT_OS_IO_ERROR}),
+    ERR_DECODER_CRASHED: frozenset({CAT_DIED_ON_CLIP, CAT_WRONG_ANSWER}),
+    ERR_DECODER_KILLED: frozenset({CAT_KILLED_BY_SIGNAL, CAT_NOT_REAPED}),
+    ERR_WORKER_MISCONFIGURED: START_CATEGORIES,
+}
+
+# What ffmpeg's stderr says, as a category: the FIRST row whose text is in the
+# lower-cased stderr wins, and stderr no row matches is CAT_OTHER. A fixed table over
+# fixed phrases: the stderr itself (which carries the file's path) is never an output.
+FFMPEG_STDERR_CATEGORIES = (
+    ("moov atom not found", CAT_MOOV_MISSING),
+    ("invalid data found", CAT_INVALID_DATA),
+    ("does not contain any stream", CAT_NO_AUDIO_STREAM),
+    ("matches no streams", CAT_NO_AUDIO_STREAM),
+    ("unknown decoder", CAT_UNSUPPORTED_CODEC),
+    ("decoder (codec", CAT_UNSUPPORTED_CODEC),
+    ("unsupported codec", CAT_UNSUPPORTED_CODEC),
+    ("end of file", CAT_TRUNCATED_FILE),
+    ("partial file", CAT_TRUNCATED_FILE),
+    ("truncated", CAT_TRUNCATED_FILE),
+    ("permission denied", CAT_PERMISSION_DENIED),
+)
+
+# One sentence for each code that has no category: it has a single possible reason.
 PUBLIC_SENTENCES = {
-    ERR_PATH_UNMAPPED: "the path is not available on this worker",
     ERR_NOT_FOUND: "the file was not found on this worker",
-    ERR_FFMPEG: "the audio could not be extracted from the file",
-    ERR_FFMPEG_TIMEOUT: "reading the file did not finish in time",
-    ERR_BAD_REQUEST: "the request was not valid",
     ERR_WHISPER: "transcription failed on this worker",
-    ERR_WORKER_MISCONFIGURED: "this worker cannot run the job",
     ERR_CONTAINER_REJECTED: "this worker does not accept the file's container",
     ERR_TRANSCRIBE_TIMEOUT: "transcription did not finish in time and was stopped",
-    ERR_DECODER_CRASHED: "the decode process crashed on this clip",
-    ERR_DECODER_KILLED: "the decode process was killed while on this clip",
     ERR_REQUEST_ABANDONED: ABANDONED_DETAIL,
-    ERR_PATH_UNREPRESENTABLE: "this worker's filesystem cannot represent the path",
     ERR_INTERNAL: "the worker failed while handling the request",
 }
 
 
 def all_public_sentences() -> frozenset:
-    """Every text wire_error can put after a code (the sentences and the categories)."""
-    return frozenset(PUBLIC_SENTENCES.values()) | START_CATEGORIES
+    """Every text wire_error can put after a code (the sentences and every category)."""
+    words = frozenset().union(*CODE_CATEGORIES.values())
+    return frozenset(PUBLIC_SENTENCES.values()) | words
+
+
+def ffmpeg_stderr_category(stderr: bytes) -> str:
+    """The category of an ffmpeg failure, from its stderr by FFMPEG_STDERR_CATEGORIES."""
+    text = stderr.decode("utf-8", "replace").lower()
+    for phrase, category in FFMPEG_STDERR_CATEGORIES:
+        if phrase in text:
+            return category
+    return CAT_OTHER
 
 
 def wire_error(code: str, category: str | None = None) -> str:
     """THE sanitizer: the one error text that may leave the process in an HTTP body.
 
-    "<code>: <fixed sentence>", or "worker_misconfigured: <category>" when the failure
-    has a category. It takes no free text, so there is nothing to scrub: a path, a
+    "<code>: <category>" for a code in CODE_CATEGORIES (the category is required and
+    must be one that code lists), "<code>: <sentence>" for any other known code (which
+    takes no category). It takes no free text, so there is nothing to scrub: a path, a
     stderr line or an exception message cannot get in. The Go side reads the code (the
-    text before the first ": ") and nothing else (PathErrorCode)."""
+    text before the first ": ") and nothing else (PathErrorCode), and stores the rest
+    as the book's detail."""
+    allowed = CODE_CATEGORIES.get(code)
+    if allowed is not None:
+        if category not in allowed:
+            raise ValueError(f"{category!r} is not a category of {code!r}")
+        return f"{code}: {category}"
     if code not in PUBLIC_SENTENCES:
         raise ValueError(f"unknown error code {code!r}")
-    if code == ERR_WORKER_MISCONFIGURED and category is not None:
-        if category not in START_CATEGORIES:
-            raise ValueError(f"unknown start category {category!r}")
-        return f"{code}: {category}"
+    if category is not None:
+        raise ValueError(f"{code!r} takes no category")
     return f"{code}: {PUBLIC_SENTENCES[code]}"
+
+
+LOCAL_MODEL_PREFIX = "local:"
+
+
+def is_local_model(value: str) -> bool:
+    """True when a model setting names something on THIS machine's disk: an existing
+    directory, or an absolute path of either flavor (a drive or UNC path counts on any
+    platform, so the answer does not depend on where the worker runs). A hub repo id
+    ("Systran/faster-whisper-small", "mlx-community/...") contains a "/" but is neither,
+    and a short name ("base.en") names nothing local."""
+    return (
+        os.path.isdir(value)
+        or os.path.isabs(value)
+        or bool(ntpath.splitdrive(value)[0])
+        or value.startswith("~")
+    )
+
+
+def public_model_name(value: str) -> str:
+    """The model name a body may carry: `value` itself when it is a hub repo id or a
+    short name, and "local:<first 16 hex of sha256 of the raw value>" when it names a
+    local path (a directory under a user profile, say), since every answer and /health
+    would otherwise tell any caller where the worker keeps its files. A stable label: the
+    same path is the same label, and a different path another one, so a journal row
+    still says which model produced it. The decode fingerprint hashes the RAW value, so
+    it is unchanged by this."""
+    if not is_local_model(value):
+        return value
+    return LOCAL_MODEL_PREFIX + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 class PathJobError(Exception):
     """A per-job failure carrying one of the stable ERR_* codes.
 
     `detail` is for the worker log only (str(e) is "code: detail", which is what the
-    log lines print); what the caller is told is `wire`, built from the code alone."""
+    log lines print); what the caller is told is `wire`, built from the code and its
+    category alone. A code with a closed category set (CODE_CATEGORIES) needs one."""
 
     def __init__(self, code: str, detail: str, *, category: str | None = None):
         wire_error(code, category)  # refuses an unknown code or category at construction
@@ -329,9 +477,11 @@ def _is_nt(pathmod: Any) -> bool:
     return getattr(pathmod, "__name__", "") == "ntpath"
 
 
-def component_problem(part: str, pathmod: Any = None) -> str | None:
+def component_problem(part: str, pathmod: Any = None) -> PathJobError | None:
     """Why `part` (one component of a SERVER path) cannot safely be appended to a
-    local root on this worker's filesystem, or None.
+    local root on this worker's filesystem, as the path_unrepresentable error to raise,
+    or None. Its category is the word the caller is told; its detail is for the worker
+    log.
 
     On POSIX every component the server can have is addressable, so this is None.
     On Windows a component from the network is hostile input to an API that
@@ -344,13 +494,29 @@ def component_problem(part: str, pathmod: Any = None) -> str | None:
     if not _is_nt(pathmod):
         return None
     if len(part) > 255:
-        return "component is longer than 255 characters"
+        return PathJobError(
+            ERR_PATH_UNREPRESENTABLE,
+            "component is longer than 255 characters",
+            category=CAT_COMPONENT_TOO_LONG,
+        )
     if any(ord(c) < 32 or c in _NT_BAD_CHARS for c in part):
-        return "component has a character Windows cannot use in a name"
+        return PathJobError(
+            ERR_PATH_UNREPRESENTABLE,
+            "component has a character Windows cannot use in a name",
+            category=CAT_BAD_CHARACTER,
+        )
     if part[-1] in ". ":
-        return "component ends with a dot or a space, which Windows strips"
+        return PathJobError(
+            ERR_PATH_UNREPRESENTABLE,
+            "component ends with a dot or a space, which Windows strips",
+            category=CAT_TRAILING_DOT_OR_SPACE,
+        )
     if part.split(".", 1)[0].rstrip(" ").lower() in _NT_RESERVED:
-        return "component is a reserved Windows device name"
+        return PathJobError(
+            ERR_PATH_UNREPRESENTABLE,
+            "component is a reserved Windows device name",
+            category=CAT_RESERVED_NAME,
+        )
     return None
 
 
@@ -450,7 +616,11 @@ def parse_path_map(raw: str, pathmod: Any = None) -> list[tuple[str, str]]:
 
 def check_seconds(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_CLIP_SECONDS:
-        raise PathJobError(ERR_BAD_REQUEST, f"seconds must be an integer in 1..{MAX_CLIP_SECONDS}")
+        raise PathJobError(
+            ERR_BAD_REQUEST,
+            f"seconds must be an integer in 1..{MAX_CLIP_SECONDS}",
+            category=CAT_SECONDS_INVALID,
+        )
     return value
 
 
@@ -466,6 +636,24 @@ def error_result(e: BaseException, where: str | None = None) -> dict:
     if isinstance(e, PathJobError):
         return {"text": "", "error": e.wire}
     return {"text": "", "error": wire_error(ERR_WHISPER)}
+
+
+def log_refusals(refused: list, total: int) -> None:
+    """ONE worker-log line for the jobs of a request that were refused before any
+    extraction: how many of how many, how many for each code and category, and the full
+    detail of the first of each (the text the bodies withhold). Once per request, not once
+    per job: a lost mount refuses every job of a 1024-job batch for the same reason, and
+    1024 identical lines say nothing the first did not."""
+    if not refused:
+        return
+    groups: dict[str, list] = {}
+    for key, e in refused:
+        groups.setdefault(f"{e.code}: {e.category}" if e.category else e.code, []).append((key, e))
+    summary = "; ".join(
+        f"{name} x{len(group)} (first, job {group[0][0]}: {group[0][1].detail})"
+        for name, group in groups.items()
+    )
+    log.warning("%d of %d path jobs refused: %s", len(refused), total, summary)
 
 
 def abandoned_result() -> dict:
@@ -527,12 +715,14 @@ def validate_wav(path: str) -> None:
     """Non-empty and parses as the 16 kHz mono PCM we asked for."""
     try:
         if os.path.getsize(path) <= 44:
-            raise PathJobError(ERR_FFMPEG, "ffmpeg produced an empty clip")
+            raise PathJobError(ERR_FFMPEG, "ffmpeg produced an empty clip", category=CAT_EMPTY_CLIP)
         with wave.open(path, "rb") as w:
             if w.getnframes() <= 0 or w.getframerate() != 16000 or w.getnchannels() != 1:
-                raise PathJobError(ERR_FFMPEG, "ffmpeg produced an invalid WAV")
+                raise PathJobError(
+                    ERR_FFMPEG, "ffmpeg produced an invalid WAV", category=CAT_INVALID_WAV
+                )
     except (wave.Error, EOFError, OSError) as e:
-        raise PathJobError(ERR_FFMPEG, f"invalid WAV: {e}")
+        raise PathJobError(ERR_FFMPEG, f"invalid WAV: {e}", category=CAT_INVALID_WAV)
 
 
 def discard_extraction(fut: concurrent.futures.Future) -> None:
@@ -647,14 +837,20 @@ class PathPipeline:
         or a trailing dot would otherwise change what the joined path means.
         """
         if not isinstance(path, str) or not path or "\x00" in path:
-            raise PathJobError(ERR_BAD_REQUEST, "path must be a non-empty string")
+            raise PathJobError(
+                ERR_BAD_REQUEST, "path must be a non-empty string", category=CAT_PATH_INVALID
+            )
         if len(path) > MAX_PATH_CHARS:
-            raise PathJobError(ERR_BAD_REQUEST, f"path is longer than {MAX_PATH_CHARS} characters")
+            raise PathJobError(
+                ERR_BAD_REQUEST,
+                f"path is longer than {MAX_PATH_CHARS} characters",
+                category=CAT_PATH_TOO_LONG,
+            )
         if not path.startswith("/"):
-            raise PathJobError(ERR_PATH_UNMAPPED, "path is not absolute")
+            raise PathJobError(ERR_PATH_UNMAPPED, "path is not absolute", category=CAT_NOT_ABSOLUTE)
         parts = [p for p in path.split("/") if p not in ("", ".")]
         if ".." in parts:
-            raise PathJobError(ERR_PATH_UNMAPPED, "path contains '..'")
+            raise PathJobError(ERR_PATH_UNMAPPED, "path contains '..'", category=CAT_DOT_DOT)
         for server, local in pairs:
             sparts = server.strip("/").split("/")
             if parts[: len(sparts)] != sparts:
@@ -663,9 +859,11 @@ class PathPipeline:
             for part in rest:
                 problem = component_problem(part, self.pathmod)
                 if problem:
-                    raise PathJobError(ERR_PATH_UNREPRESENTABLE, problem)
+                    raise problem
             return server, local, rest
-        raise PathJobError(ERR_PATH_UNMAPPED, "path is not under a mapped prefix")
+        raise PathJobError(
+            ERR_PATH_UNMAPPED, "path is not under a mapped prefix", category=CAT_NOT_UNDER_PREFIX
+        )
 
     def map_server_path(self, path: Any, pairs: list[tuple[str, str]]) -> str:
         """Translate a server path to its local path, or raise PathJobError.
@@ -678,13 +876,19 @@ class PathPipeline:
         server, local, rest = self.split_server_path(path, pairs)
         if not self.root_readable(local):
             raise PathJobError(
-                ERR_PATH_UNMAPPED, f"mapped root for {server} is not readable (mount lost?)"
+                ERR_PATH_UNMAPPED,
+                f"mapped root for {server} is not readable (mount lost?)",
+                category=CAT_ROOT_UNREADABLE,
             )
         mapped = os.path.join(local, *rest)
         real_root = os.path.realpath(local)
         real = os.path.realpath(mapped)
         if not is_within(real_root, real, self.pathmod):
-            raise PathJobError(ERR_PATH_UNMAPPED, "path resolves outside its mapped root")
+            raise PathJobError(
+                ERR_PATH_UNMAPPED,
+                "path resolves outside its mapped root",
+                category=CAT_SYMLINK_ESCAPE,
+            )
         if _is_nt(self.pathmod) and len(real) >= NT_EXTENDED_FROM:
             real = to_extended(real)  # past MAX_PATH the plain spelling is not openable
         # The resolved path, not `mapped`: the file itself is no longer a symlink.
@@ -698,12 +902,16 @@ class PathPipeline:
     def prepare_path_job(self, job: Any) -> tuple[str, int]:
         """Validate one job and return (local_path, seconds); raises PathJobError."""
         if not isinstance(job, dict):
-            raise PathJobError(ERR_BAD_REQUEST, "job must be an object")
+            raise PathJobError(
+                ERR_BAD_REQUEST, "job must be an object", category=CAT_JOB_NOT_OBJECT
+            )
         seconds = check_seconds(job.get("seconds", DEFAULT_CLIP_SECONDS))
         pairs, perr = self.path_map()
         if not pairs:
             raise PathJobError(
-                ERR_PATH_UNMAPPED, perr or f"{PATH_MAP_ENV} is not set on this worker"
+                ERR_PATH_UNMAPPED,
+                perr or f"{PATH_MAP_ENV} is not set on this worker",
+                category=CAT_PATH_MAP_INVALID if perr else CAT_PATH_MAP_UNSET,
             )
         return self.map_server_path(job.get("path"), pairs), seconds
 
@@ -720,23 +928,32 @@ class PathPipeline:
           stderr names an I/O fault or timeout                       -> ffmpeg_timeout
           ffmpeg refused the container (format whitelist)            -> container_rejected
           otherwise                                                  -> ffmpeg_error
+
+        The caller is told the code and a category (ffmpeg_stderr_category for the last
+        one); ffmpeg's own line goes to the worker log.
         """
         root = self.mapped_root_of(src)
         if (root is not None and not self.root_readable(root)) or not os.path.isfile(src):
             raise PathJobError(
-                ERR_PATH_UNMAPPED, "source became unreadable while ffmpeg ran (mount lost?)"
+                ERR_PATH_UNMAPPED,
+                "source became unreadable while ffmpeg ran (mount lost?)",
+                category=CAT_SOURCE_UNREADABLE,
             )
         text = stderr.decode("utf-8", "replace").lower()
         if any(marker in text for marker in IO_FAULT_MARKERS):
             raise PathJobError(
-                ERR_FFMPEG_TIMEOUT, f"read fault during decode: {_ffmpeg_tail(stderr)}"
+                ERR_FFMPEG_TIMEOUT,
+                f"read fault during decode: {_ffmpeg_tail(stderr)}",
+                category=CAT_IO_FAULT,
             )
         if WHITELIST_REJECTION_MARKER in text:
             raise PathJobError(
                 ERR_CONTAINER_REJECTED,
                 "container is not on this worker's format whitelist (renamed or unusual file)",
             )
-        raise PathJobError(ERR_FFMPEG, _ffmpeg_tail(stderr))
+        raise PathJobError(
+            ERR_FFMPEG, _ffmpeg_tail(stderr), category=ffmpeg_stderr_category(stderr)
+        )
 
     def extract_clip(self, src: str, seconds: int) -> tuple[str, str]:
         """Extract the first `seconds` of `src` to a validated 16 kHz mono WAV.
@@ -792,12 +1009,15 @@ class PathPipeline:
                     timeout=self.extract_timeout_s,
                 )
             except subprocess.TimeoutExpired:
-                raise PathJobError(ERR_FFMPEG_TIMEOUT, f"ffmpeg exceeded {self.extract_timeout_s}s")
-            except OSError as e:
                 raise PathJobError(
-                    ERR_FFMPEG_TIMEOUT if e.errno in (errno.EIO, errno.ETIMEDOUT) else ERR_FFMPEG,
-                    str(e),
+                    ERR_FFMPEG_TIMEOUT,
+                    f"ffmpeg exceeded {self.extract_timeout_s}s",
+                    category=CAT_EXTRACT_TIMEOUT,
                 )
+            except OSError as e:
+                if e.errno in (errno.EIO, errno.ETIMEDOUT):
+                    raise PathJobError(ERR_FFMPEG_TIMEOUT, str(e), category=CAT_OS_IO_ERROR)
+                raise PathJobError(ERR_FFMPEG, str(e), category=CAT_SPAWN_FAILED)
             if proc.returncode != 0:
                 self._raise_ffmpeg_failure(src, proc.stderr)
             validate_wav(wav)
@@ -840,19 +1060,23 @@ class PathPipeline:
         results: dict[str, dict] = {}
         pending: dict[str, concurrent.futures.Future] = {}
         pool = self.get_extract_pool()
+        refused: list[tuple[str, PathJobError]] = []
         for key, job in jobs.items():
             try:
                 src, seconds = self.prepare_path_job(job)
             except PathJobError as e:
-                results[key] = error_result(e, f"path job {key} refused")
+                results[key] = error_result(e)
+                refused.append((key, e))
                 continue
             except Exception as e:  # defensive: a mapping bug must not fail the batch
-                results[key] = error_result(
-                    PathJobError(ERR_PATH_UNMAPPED, f"mapping failed: {e}"),
-                    f"path job {key} refused",
+                refusal = PathJobError(
+                    ERR_PATH_UNMAPPED, f"mapping failed: {e}", category=CAT_MAPPING_FAILED
                 )
+                results[key] = error_result(refusal)
+                refused.append((key, refusal))
                 continue
             pending[key] = pool.submit(self.extract_clip, src, seconds)
+        log_refusals(refused, len(jobs))
         start_fault: ChildFaultError | None = None
         try:
             for key, fut in pending.items():

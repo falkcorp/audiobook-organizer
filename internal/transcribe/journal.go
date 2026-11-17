@@ -1,5 +1,5 @@
 // file: internal/transcribe/journal.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 60c7ae00-b3ec-476b-a63e-00418bb73933
 // last-edited: 2026-11-17
 
@@ -86,6 +86,11 @@ type endpointJournal struct {
 	// recorded only after its write succeeded.
 	mu      sync.Mutex
 	written []string
+	// partialWarned is set once this call has warned about an incomplete identity from
+	// this endpoint, so the warning is once per endpoint per call: a per-file route
+	// answers once per clip, and a worker that is partial once is partial on every one.
+	// Guarded by mu. The cached probe is still dropped on every such answer.
+	partialWarned bool
 }
 
 // journalIdent is one consistent reading of an endpointJournal's identity: the key
@@ -192,8 +197,14 @@ func (ej *endpointJournal) observeIdentity(resp *responseIdentity, needExtract b
 		extract:     strings.TrimSpace(resp.ExtractFingerprint),
 	}
 	if strings.TrimSpace(resp.Model) == "" || strings.TrimSpace(resp.Backend) == "" || got.fingerprint == "" || (needExtract && got.extract == "") {
-		journalLog.Warn("worker answered with an incomplete identity, its results are not journalled and the cached probe is dropped: url=%s model=%t backend=%t decode_fingerprint=%t extract_fingerprint=%t",
-			logger.SanitizeLogValue(ej.endpoint), strings.TrimSpace(resp.Model) != "", strings.TrimSpace(resp.Backend) != "", got.fingerprint != "", got.extract != "")
+		ej.mu.Lock()
+		first := !ej.partialWarned
+		ej.partialWarned = true
+		ej.mu.Unlock()
+		if first {
+			journalLog.Warn("worker answered with an incomplete identity, its results are not journalled and the cached probe is dropped (said once per call for this endpoint): url=%s model=%t backend=%t decode_fingerprint=%t extract_fingerprint=%t",
+				logger.SanitizeLogValue(ej.endpoint), strings.TrimSpace(resp.Model) != "", strings.TrimSpace(resp.Backend) != "", got.fingerprint != "", got.extract != "")
+		}
 		forgetGateProbe(ej.endpoint)
 		return false
 	}
@@ -210,7 +221,12 @@ func (ej *endpointJournal) observeIdentity(resp *responseIdentity, needExtract b
 	ej.model, ej.fingerprint, ej.extract = got.model, got.fingerprint, got.extract
 	ej.mu.Unlock()
 
-	journalLog.Warn("worker answered as a different model than its /health probe said, journalling under the answer's identity and dropping the cached probe: url=%s probed=%s#%s answered=%s#%s",
+	// What happens to the results depends on whether there is a journal to put them in.
+	consequence := "dropping the cached probe (this endpoint has no journal, so nothing is filed under the answer's identity)"
+	if ej.journal != nil {
+		consequence = "journalling under the answer's identity and dropping the cached probe"
+	}
+	journalLog.Warn("worker answered as a different model than its /health probe said, "+consequence+": url=%s probed=%s#%s answered=%s#%s",
 		logger.SanitizeLogValue(ej.endpoint), logger.SanitizeLogValue(was.model), logger.SanitizeLogValue(was.fingerprint), logger.SanitizeLogValue(got.model), logger.SanitizeLogValue(got.fingerprint))
 	forgetGateProbe(ej.endpoint)
 	return true
@@ -254,18 +270,18 @@ func (h remoteHealth) modelIdentity() string {
 func newEndpointJournal(j ResultJournal, endpoint string, h remoteHealth, probed bool) *endpointJournal {
 	if !probed {
 		if j != nil {
-			journalLog.Warn("endpoint was not probed, results from it are not journalled: url=%s", endpoint)
+			journalLog.Warn("endpoint was not probed, results from it are not journalled: url=%s", logger.SanitizeLogValue(endpoint))
 		}
 		return nil
 	}
 	model := h.modelIdentity()
 	fp := strings.TrimSpace(h.DecodeFingerprint)
 	if j != nil && model == "" {
-		journalLog.Warn("endpoint reports no model on /health, results from it are not journalled: url=%s", endpoint)
+		journalLog.Warn("endpoint reports no model on /health, results from it are not journalled: url=%s", logger.SanitizeLogValue(endpoint))
 		j = nil
 	}
 	if j != nil && fp == "" {
-		journalLog.Info("endpoint reports no decode_fingerprint, journalling by model only: url=%s model=%s", endpoint, model)
+		journalLog.Info("endpoint reports no decode_fingerprint, journalling by model only: url=%s model=%s", logger.SanitizeLogValue(endpoint), logger.SanitizeLogValue(model))
 	}
 	return &endpointJournal{journal: j, endpoint: endpoint, model: model, fingerprint: fp, extract: strings.TrimSpace(h.ExtractFingerprint)}
 }

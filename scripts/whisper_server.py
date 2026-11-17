@@ -1,5 +1,5 @@
 # file: scripts/whisper_server.py
-# version: 5.2.0
+# version: 5.3.0
 # guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 # last-edited: 2026-11-17
 #
@@ -135,6 +135,7 @@ from whisper_path_pipeline import (  # noqa: E402
     install_path_routes,
     misconfigured_error,
     past,
+    public_model_name,
 )
 
 DEVICES = ("auto", "cpu", "cuda")
@@ -793,7 +794,9 @@ def create_app(
         process that decoded, whichever child process that was."""
         model = meta.get("model", cfg.model or DEFAULT_CPU_MODEL)
         return {
-            "model": model,
+            # What a body may carry (a local path becomes a stable label); the
+            # fingerprint below still hashes the real value.
+            "model": public_model_name(model),
             "backend": "faster-whisper",
             "decode_fingerprint": decode_fingerprint(
                 model,
@@ -941,6 +944,9 @@ def main(argv: Optional[List[str]] = None) -> None:
         f"Loading model (device={cfg.device}, model={cfg.model or 'by device'}; "
         "the first run downloads the model)..."
     )
+    if cfg.model and public_model_name(cfg.model) != cfg.model:
+        # The raw value, once, here in the log. Every answer and /health carry the label.
+        log.info(f"model {cfg.model} is reported to callers as {public_model_name(cfg.model)}")
     try:
         engine = build_engine(cfg)
     except ChildFaultError as e:
