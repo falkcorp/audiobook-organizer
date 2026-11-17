@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/kinds.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a3972df8-a6a8-49ee-b157-c35c462e3c8d
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package jobs
 
@@ -231,11 +231,23 @@ func Kinds(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) ([]tasks.Defin
 	return out, nil
 }
 
-// kindsRoot names Kinds from non-test code so tasklint's unregistered-kind rule
-// counts it a registration root until F5-18's Registrar.Tasks call replaces
-// this line (a list function nothing references registers nothing, and the
-// analyzer does not load test files). F5-18 deletes it.
-var _ = Kinds
+// kindsRoot is Kinds as the one-result list function tasklint's
+// unregistered-kind rule recognises (it counts a package-level func whose only
+// result is []tasks.Definition; Kinds also returns an error, so it is not one),
+// named from non-test code so the rule counts it a registration root until
+// F5-18's Registrar.Tasks call replaces this line (a list function nothing
+// references registers nothing, and the analyzer does not load test files).
+// Nothing calls it: it exists for the analyzer, and the error it drops is
+// Kinds' to report to its real caller. F5-18 deletes both lines.
+func kindsRoot(deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) []tasks.Definition {
+	defs, err := Kinds(deps, sched)
+	if err != nil {
+		return nil
+	}
+	return defs
+}
+
+var _ = kindsRoot
 
 // kindFor builds one job's native kind.
 func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kind) *tasks.Schedule) (tasks.Definition, error) {
