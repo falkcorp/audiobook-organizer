@@ -1,5 +1,5 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.1.1 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -83,6 +83,13 @@ in its own workflow rather than in ci.yml because auto-revert.yml reacts to the
 conclusion of the whole `Continuous Integration` run: a red trial job inside
 that run would revert main. For the same reason the trial has no `push`
 trigger.
+
+The trial has its own Go cache key (`<os>-lint-trial-go-1.27-<go.sum hash>`,
+not starting with `<os>-go-1.27-`). ci.yml's keys are only read-only
+`restore-keys` fallbacks, so a cold trial starts warm. The trial never writes a
+key ci.yml reads: actions/cache never re-saves an existing key, so a
+staticcheck-only cache saved under ci.yml's key would be restored by every
+ci.yml test job until go.sum changed (the #3882 race-cache problem).
 
 Exit criteria for step two (a separate PR, only with the owner's go):
 
