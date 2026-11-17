@@ -1,5 +1,5 @@
 // file: internal/transcribe/reconcile.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e2f7a846-1d35-4b9c-8c60-4a91b7d3f052
 // last-edited: 2026-11-17
 
@@ -140,12 +140,12 @@ func mergeField(stored, parsed string, isTitle bool, filled, repaired int) (stri
 }
 
 var (
-	// leakedCreditRe is credit wording inside a value: "Maruyama Translated by
-	// Emily", "Title Narrated by X".
+	// leakedCreditRe is credit wording inside a value: "Lucius Translated by
+	// Barbara", "Title Narrated by X".
 	leakedCreditRe = regexp.MustCompile(`(?i)\b(?:written|authored|narrated|read|performed|voiced|translated|produced|edited|published|presented)(?:\s+for\s+you)?\s+by\b`)
 
 	// danglingVerbRe is a credit verb welded onto the END of a value: the
-	// "Awakened Essence 1 Written" defect, where the split landed on the bare "by".
+	// "Gotham Nights 1 Written" defect, where the split landed on the bare "by".
 	danglingVerbRe = regexp.MustCompile(`(?i)\b(?:written|authored|narrated|performed|voiced|translated|read)[.,]?\s*$`)
 
 	// leakedPublisherRe is the publisher's lead left on the front of a title.

@@ -1,5 +1,5 @@
 // file: internal/transcribe/classify.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7d41f0a2-6c93-4b18-a5e7-2f9b6c0d3184
 // last-edited: 2026-11-17
 
@@ -360,10 +360,10 @@ var leadSentenceEndRe = regexp.MustCompile(`[.!?]+\s+`)
 // (lowercase pronouns or past-tense verbs), or, when it spans several
 // sentences, end on a clause that names no publisher ("Bruce stared at the
 // screen. Alfred presents..."). A multi-sentence jingle that does end on one
-// ("Graphic Audio. A movie in your mind. Graphic Audio presents") still counts.
+// ("Gotham Audio. A tale in your mind. Gotham Audio presents") still counts.
 func isPublisherLead(lead string) bool {
 	// Judge the lead WITHOUT the word "presents": it is the last word of the final
-	// sentence, and would make "Tantor Audio. A Division of Recorded Books.
+	// sentence, and would make "Wayne Audio. A Division of Gotham Books.
 	// Presents" end on a clause that names no publisher.
 	lead = publisherFromLead(lead)
 	if startsWithMarker(lead) || proseMarkerRe.MatchString(lead) || proseVerbRe.MatchString(lead) {
