@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-03b-share-safe-bundle.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 3c8e5f21-7a94-4d06-b2e1-0f6d9a4c7b85 -->
 <!-- last-edited: 2026-11-16 -->
 
@@ -132,14 +132,16 @@ wires it to every byte that leaves, and deletes the marker, the runtime refusal 
 6. Docs: S1, the residual and the costs in the seams note (inline routes and URLs, MIME types and `a/b` vanish from
    free text; structured `route` and `method` keep the useful part), and a changelog fragment.
 
-**Residual after F8-03b:** only the last word or words of a space-containing final path segment in text that is not a
-Go error template and has no later separator in the same string (`user dir /Users/Bruce Wayne is full` keeps `Wayne`).
-A strict variant (a string with any triggered token is replaced whole by `<text:N bytes>`) is a one-line policy switch
-and costs the errno text.
+**Superseded in round 14 (the review of `7d3057ba1`).** The rule in items 1 to 4 above (a literal bridge between
+triggered words, a template parsed by operation, `Sanitize func(string) string` in the health deps, and the residual
+that was described here as "the last word or words of a space-containing final segment") is replaced: a location now
+wipes from its first word to the end of the line, a known error text that ends the line is the only thing kept after
+it, and `healthhttp.Deps` takes `Roots`. The residual was a title or username word, so it is removed and no ruling
+accepted it. `seams.d/F8-03.md`, "Round 13", is the current description.
 
 ## Owner decisions, with the defaults this row assumes
 
-1. Accept the small residual above: **yes**.
+1. Accept the small residual above: **default assumed, withdrawn in round 14** (it was never an owner ruling; the residual no longer exists).
 2. Library author and title paths under a configured root (leak m3): **hidden**, `<root:NAME>` only.
 3. Bare usernames and hostnames outside paths (n3): **out of scope**.
 4. Move the path rule into the shared log redactor: **inject it now, move it later** (a 05-logging edit).

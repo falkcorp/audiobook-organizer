@@ -1,5 +1,5 @@
 <!-- file: docs/agent-tasks/platform-core/F8-04-f8-flip-backup-health-metrics.md -->
-<!-- version: 1.1.8 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9c425807-35e2-4fe7-9289-5de6f5478ebe -->
 <!-- last-edited: 2026-11-16 -->
 
@@ -20,7 +20,7 @@ the subsystems, deletes what they replace and switches every first-party caller 
 boots and passes e2e. It merges alone in its wave. The R2 freeze is on (since F3-08, which merged before F3-07): do not touch
 `.github/workflows/prerelease.yml`.
 
-> F8-03b has merged: the diagnostics bundle is share-safe (`seams.d/F8-03.md`, Round 13). When this row mounts `healthhttp` and builds the Exporter, pass the library roots as `diagnostics.Config.Roots` and `diagnostics.NewSanitizer(roots).Text` as `healthhttp.Deps.Sanitize` (nil is fail-closed: every location is written `<path>`).
+> F8-03b has merged: the diagnostics bundle is share-safe (`seams.d/F8-03.md`, Round 13). When this row mounts `healthhttp` and builds the Exporter, pass the library roots both as `diagnostics.Config.Roots` and as `healthhttp.Deps.Roots` (`healthhttp` builds `diagnostics.NewSanitizer(Roots)` itself; there is no function to pass, and nil roots are fail-closed: every location is written `<path>`).
 
 ## START HERE (do this first, exactly)
 

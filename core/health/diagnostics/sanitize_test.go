@@ -172,6 +172,23 @@ func TestSanitize_WhatSurvivesAndWhatIsLost(t *testing.T) {
 		{`["/Users/Bruce Wayne",3]`, `["<path>`},
 		{`import "/srv/lib/Alfred Pennyworth/Batman Hush" failed: unsupported codec`, `import "<root:lib>`},
 		{"open /srv/lib/Alfred Pennyworth/It `Rains`/x y: permission denied", `open <root:lib>: permission denied`},
+		// Every spelling that starts a location keeps the words before it (so the
+		// run begins at the word, not at the line), after opening punctuation and a key=.
+		{`see %2FUsers%2Fbruce%2Fx y`, `see <path>`},
+		{`see %5CUsers%5Cbruce x y`, `see <path>`},
+		{`see %7Ebruce%2Fx y`, `see <path>`},
+		{`see &#47;Users&#47;x y`, `see <path>`},
+		{`see &sol;Users&sol;x y`, `see <path>`},
+		{`see \\Users\\bruce\\x y`, `see <path>`},
+		{`see ~bruce/x y`, `see <path>`},
+		{`see C:\Users\x y`, `see <path>`},
+		{`see C:Users\x y`, `see <path>`},
+		{`see smb://nas.example/x y`, `see <path>`},
+		{`see file:///Users/x y`, `see <path>`},
+		{`see "/Users/x y`, `see "<path>`},
+		{`see (~/x y`, `see (<path>`},
+		{`see key=/Users/x y`, `see <path>`},
+		{`see key="/Users/x y`, `see <path>`},
 		// A relative name has no known start: the run begins at the line's first word.
 		{`Jim Gordon/The Long Halloween`, `<path>`},
 		{`planned Alfred Pennyworth/Batman Hush/Part 1.m4b`, `<path>`},
