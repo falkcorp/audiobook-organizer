@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/file_intro_reparse_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 2e6b9d14-8a37-4c51-b0f2-d95a1c3e7840
 // last-edited: 2026-11-17
 
@@ -46,6 +46,8 @@ type reparseFakeStore struct {
 	writes map[string]int
 	// failWrite lists "book/file" keys whose write returns an error.
 	failWrite map[string]bool
+	// failRead lists "book/file" keys whose read returns an error.
+	failRead map[string]bool
 	// beforeDecide runs once per key, under no lock, before the writer's first
 	// decide: the point where a concurrent writer can change the row.
 	beforeDecide func(s *reparseFakeStore, key string)
@@ -64,7 +66,7 @@ type reparseFakeStore struct {
 func newReparseFakeStore() *reparseFakeStore {
 	return &reparseFakeStore{
 		rows: map[string]*database.BookFile{}, writes: map[string]int{},
-		failWrite: map[string]bool{}, raced: map[string]bool{}, decides: map[string]int{},
+		failWrite: map[string]bool{}, failRead: map[string]bool{}, raced: map[string]bool{}, decides: map[string]int{},
 	}
 }
 
@@ -106,6 +108,9 @@ func (s *reparseFakeStore) GetAllBookFilesCore() ([]database.BookFileCore, error
 func (s *reparseFakeStore) GetBookFileByID(book, file string) (*database.BookFile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failRead[rpKey(book, file)] {
+		return nil, errors.New("read failed (fault injected)")
+	}
 	r, ok := s.rows[rpKey(book, file)]
 	if !ok {
 		return nil, nil
@@ -1245,5 +1250,24 @@ func TestReparseFileIntros_AnotherWriterGotThereFirst(t *testing.T) {
 	}
 	if res.Examined != 1 || res.Reparsed != 1 || res.Selected != 1 {
 		t.Errorf("selected %d examined %d reparsed %d, want 1 each", res.Selected, res.Examined, res.Reparsed)
+	}
+}
+
+// A file that cannot be READ is an error, not a vanished row: it keeps its stored
+// values, fails its chunk (so the watermark holds), and the books still balance.
+func TestReparseFileIntros_ReadErrorIsAnErrorNotGone(t *testing.T) {
+	s := newReparseFakeStore()
+	seedMany(s, 5)
+	s.failRead[rpKey("b1", fid(2))] = true
+
+	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), reparseResumeKey{}, false)
+	if err == nil {
+		t.Fatal("a failed read did not fail the run")
+	}
+	if res.Errors != 1 || res.Gone != 0 {
+		t.Errorf("errors = %d, gone = %d, want 1 and 0", res.Errors, res.Gone)
+	}
+	if res.Selected != res.Examined+res.Gone+res.Errors || res.Examined != 4 {
+		t.Errorf("selected %d examined %d gone %d errors %d", res.Selected, res.Examined, res.Gone, res.Errors)
 	}
 }
