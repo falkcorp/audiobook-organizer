@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-11-17
 //
@@ -562,7 +562,7 @@ func (mfs *Service) FetchAndCache(ctx context.Context, bookID, query, author, na
 	// is an owner retry: it restarts a spent schedule (OwedUpdate.Reset). A
 	// failed record leaves the row as it was and is not the owner's error.
 	if oerr := mfs.recordSearchOwed(entry, resp, opts.BypassFetchCache); oerr != nil {
-		slog.Warn("metafetch: owed sources not recorded", "id", logger.SanitizeLogValue(bookID), "error", logger.SanitizeLogValue(oerr.Error()))
+		cachePreloadLog.Warn("owed sources not recorded: book_id=%s err=%v", logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(oerr.Error()))
 	}
 	return entry, nil
 }
