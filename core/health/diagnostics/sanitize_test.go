@@ -1,5 +1,5 @@
 // file: core/health/diagnostics/sanitize_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 36bfade5-be50-496e-b763-33a05bf55746
 // last-edited: 2026-11-16
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -178,6 +179,15 @@ func TestSanitize_WhatSurvivesAndWhatIsLost(t *testing.T) {
 		{`see %2FUsers%2Fbruce%2Fx y`, `see <path>`},
 		{`see %5CUsers%5Cbruce x y`, `see <path>`},
 		{`see %7Ebruce%2Fx y`, `see <path>`},
+		{`see %7Ebruce/x y`, `see <path>`},
+		{`see &#126;bruce/x y`, `see <path>`},
+		{`see \u007Ebruce/x y`, `see <path>`},
+		// An encoded tilde is a head only under the rule of a raw one. With no
+		// separator later in its word it is the word "~Robin" is, so the run starts at
+		// the line and takes "Alfred" with it.
+		{`Alfred %7ERobin Batman/Hush`, `<path>`},
+		{`Alfred &#126;Robin Batman/Hush`, `<path>`},
+		{`Alfred \u007ERobin Batman/Hush`, `<path>`},
 		{`see &#47;Users&#47;x y`, `see <path>`},
 		{`see &sol;Users&sol;x y`, `see <path>`},
 		{`see \\Users\\bruce\\x y`, `see <path>`},
@@ -210,6 +220,7 @@ func TestSanitize_WhatSurvivesAndWhatIsLost(t *testing.T) {
 		// ~bruce/x", a real head after a word, so the word before it stays.
 		{`Alfred ~Robin/Batman Hush`, `Alfred <path>`},
 		{`Alfred /Batman Hush`, `Alfred <path>`},
+		{`Alfred %7ERobin/Batman Hush`, `Alfred <path>`},
 		// The fixed-vocabulary tail: a name that ends in a known error text, after a
 		// ": ", keeps that text (it can only be a word of the list), and a name made
 		// only of an exempt phrase has no trigger left.
@@ -255,10 +266,14 @@ func TestSanitize_WhatSurvivesAndWhatIsLost(t *testing.T) {
 // word; anything else that triggers starts it at the line.
 func TestSanitize_RunStartHeads(t *testing.T) {
 	heads := []string{
-		"/x", "(/x", "k=/x", `k="/x`, `\`, `\x`, `\\x`, `\/x`, `\u002Fx`, `\u005cx`, `\u007Ex`, `\x2Fx`, `\x5Cx`, `\unix`, `\xyz`, `\Users\x`,
-		"~/x", "~bruce/x", `~bruce\x`, "(~/x", "C:/x", `C:\x`, `C:x\y`, "c:x/y", `"C:\x`,
+		"/x", "(/x", "k=/x", `k="/x`, `\`, `\x`, `\\x`, `\/x`, `\u002Fx`, `\u005cx`, `\x2Fx`, `\x5Cx`, `\unix`, `\xyz`, `\Users\x`,
+		"~/x", "~bruce/x", `~bruce\x`, "(~/x", "~bruce%2Fx", "~bruce&#47;x",
+		// An encoded tilde is a head under the rule of a raw one: a separator later in the word.
+		"%7E/x", "%7ebruce/x", `%7Ebruce\x`, "%7Ebruce%2Fx", "%7ebruce%5cx", "%7Ebruce&#47;x", "(%7Ebruce/x", "k=%7Ebruce/x",
+		"&#126;/x", "&#126;bruce/x", "&#x7E;bruce/x", "&#X7e;bruce\\x", "&#0126;bruce/x", "&#126x/y", "&amp;#126;bruce/x", "&sol;", "&#126;bruce%2Fx",
+		`\u007E/x`, `\u007ebruce/x`, `\x7Ebruce\x`, `\x7ebruce%2Fx`, `\u007Ebruce&#47;x`, "C:/x", `C:\x`, `C:x\y`, "c:x/y", `"C:\x`,
 		"smb://h/x", "file:///x", "a+b.c-d://x",
-		"%2Fx", "%5cx", "%7ex", "&#47;x", "&#x2F;x", "&#X2f;x", "&#0000047;x", "&#92;x", "&#x5C;x", "&#126;x", "&#x7E;x", "&#47x", "&sol;x", "&bsol;x", "&amp;#47;x", "&amp;amp;#x2F;x", "&amp;sol;x",
+		"%2Fx", "%5cx", "&#47;x", "&#x2F;x", "&#X2f;x", "&#0000047;x", "&#92;x", "&#x5C;x", "&#47x", "&sol;x", "&bsol;x", "&amp;#47;x", "&amp;amp;#x2F;x", "&amp;sol;x",
 	}
 	for _, w := range heads {
 		if !runStart(w) {
@@ -267,6 +282,10 @@ func TestSanitize_RunStartHeads(t *testing.T) {
 	}
 	notHeads := []string{
 		"", "(", "I:", "C:x", "(I:", "~", "~Robin", "(~Robin", "k=~Robin",
+		// An encoded tilde with no separator later in the word is a word, as "~Robin" is.
+		"%7E", "%7ERobin", "%7erobin", "(%7ERobin", "k=%7ERobin", "%7E%41", "%7Ebruce%252Fx",
+		"&#126;", "&#126;Robin", "&#x7E;Robin", "&#X7e;", "&#126", "&amp;#126;Robin", "&#126;bruce&amp;", "&#126;bruce&#38;x",
+		`\u007E`, `\u007ERobin`, `\u007eRobin`, `\x7E`, `\x7ERobin`, `\x7eRobin`, `\u007Ebruce&#38;x`,
 		`\"x`, `\'x`, `\nx`, `\rx`, `\tx`, `\bx`, `\fx`, `\vx`, `\ax`, `\0x`, `\7x`, `\u0026x`, `\u0041`, `\u00aex`, `\u00AEx`, `\x26x`, `\x41`, `\x2ax`, `\x2Ax`,
 		"&amp;", "&amp;amp;", "&#x41;", "&#38;", "&#;", "&#x;", "&amp;#38;", "&lt;x", "&", "&#4",
 		"%2", "%41x", "%252Fx", "Gordon/x", "-I/x", "text/plain", "a:b", "http:x", "1:",
@@ -627,7 +646,7 @@ func FuzzSanitizerText(f *testing.F) {
 	}
 	for i, pf := range forms {
 		if pf.start == "" {
-			for _, n := range []string{"Batman Part I:", `Alfred \u0026 Robin`, `Cass \"Orphan\" Cain`, "~Robin", "Alfred &amp; Robin", "Alfred ~Robin"} {
+			for _, n := range []string{"Batman Part I:", `Alfred \u0026 Robin`, `Cass \"Orphan\" Cain`, "~Robin", "Alfred &amp; Robin", "Alfred ~Robin", "Alfred %7ERobin", "Alfred &#126;Robin", `Alfred \u007ERobin`} {
 				f.Add("planned ", n, "Gordon Dent", "Hush", "", uint8(i))
 			}
 		}
@@ -718,7 +737,9 @@ func FuzzSanitizerText(f *testing.F) {
 // relativeFirstNameIsProse reports a first name of a relative path whose words
 // are spelled like the prose before an absolute path: it ends in white space or
 // an opening quote or bracket, or a word after its first is a real head once the
-// separator is appended ("Alfred ~Robin" + "/" is "~Robin/").
+// separator is appended ("Alfred ~Robin" + "/" is "~Robin/"). Whether a word is a
+// head is docHead's answer, written from the head list in the Sanitizer doc and
+// not from runStart, so a head that runStart gets wrong cannot excuse its own leak.
 func relativeFirstNameIsProse(n1, sep string) bool {
 	if n1 == "" {
 		return false
@@ -733,11 +754,172 @@ func relativeFirstNameIsProse(n1, sep string) bool {
 		if i == len(ws)-1 {
 			w += sep
 		}
-		if runStart(w) {
+		if docHead(w) {
 			return true
 		}
 	}
 	return false
+}
+
+var (
+	docOpening = regexp.MustCompile(`^["'(\[{<]*`)
+	docKey     = regexp.MustCompile(`^[^=/\\%~&]+=`)
+	docScheme  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+	// An entity at the start of the text, behind any number of "amp;" ("&amp;#47;").
+	docEntity  = regexp.MustCompile(`^&(?:amp;)*(#[xX][0-9A-Fa-f]+|#[0-9]+|sol;|bsol;)`)
+	docEncoded = regexp.MustCompile(`^%(?:2[Ff]|5[Cc]|7[Ee])`)
+)
+
+// docEntityValue is the character an entity at the start of s decodes to, and
+// the text after it (an optional ";" included). ok is false for no entity.
+func docEntityValue(s string) (r rune, rest string, ok bool) {
+	m := docEntity.FindStringSubmatch(s)
+	if m == nil {
+		return 0, "", false
+	}
+	rest = strings.TrimPrefix(s[len(m[0]):], ";")
+	switch m[1] {
+	case "sol;":
+		return '/', s[len(m[0]):], true
+	case "bsol;":
+		return '\\', s[len(m[0]):], true
+	}
+	digits, base := m[1][1:], 10
+	if digits[0] == 'x' || digits[0] == 'X' {
+		digits, base = digits[1:], 16
+	}
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return 0, rest, true // "&#0;"
+	}
+	if len(digits) > 6 {
+		return 0x110000, rest, true // beyond Unicode: no separator
+	}
+	v, err := strconv.ParseInt(digits, base, 32)
+	if err != nil {
+		return 0x110000, rest, true
+	}
+	return rune(v), rest, true
+}
+
+// docSeparatorIn reports a separator in s, in any spelling the Sanitizer doc
+// lists: "/" or "\", "%2F" or "%5C", an entity that decodes to one.
+func docSeparatorIn(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '/', '\\':
+			return true
+		case '%':
+			if len(s) >= i+3 && (strings.EqualFold(s[i:i+3], "%2F") || strings.EqualFold(s[i:i+3], "%5C")) {
+				return true
+			}
+		case '&':
+			if r, _, ok := docEntityValue(s[i:]); ok && (r == '/' || r == '\\') {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// docHead is the documented head list, as the Sanitizer doc gives it, written
+// against the text and not against runStart: after opening punctuation and an
+// optional "key=", a word is a location head when it is
+//
+//   - "/", or "\" that is a rooted path or an escape of a separator;
+//   - a tilde, in any spelling ("~", "%7E", "&#126;", "\u007E", "\x7E"), with a
+//     separator later in the word, in any spelling;
+//   - a drive "X:" with a "/" or "\" later in the word;
+//   - "scheme://";
+//   - "%2F" or "%5C";
+//   - an entity that decodes to "/" or "\".
+func docHead(w string) bool {
+	w = docOpening.ReplaceAllString(w, "")
+	w = docKey.ReplaceAllString(w, "")
+	w = docOpening.ReplaceAllString(w, "")
+	switch {
+	case w == "":
+		return false
+	case w[0] == '/':
+		return true
+	case w[0] == '\\':
+		return docBackslashHead(w[1:])
+	case w[0] == '~':
+		return docSeparatorIn(w[1:])
+	case docEncoded.MatchString(w):
+		if strings.EqualFold(w[:3], "%7E") {
+			return docSeparatorIn(w[3:])
+		}
+		return true
+	case w[0] == '&':
+		r, rest, ok := docEntityValue(w)
+		switch {
+		case !ok:
+			return false
+		case r == '/' || r == '\\':
+			return true
+		case r == '~':
+			return docSeparatorIn(rest)
+		}
+		return false
+	}
+	if len(w) >= 2 && w[1] == ':' && (w[0] >= 'a' && w[0] <= 'z' || w[0] >= 'A' && w[0] <= 'Z') && strings.ContainsAny(w[2:], "/\\") {
+		return true
+	}
+	return docScheme.MatchString(w)
+}
+
+// docBackslashHead is docHead for the text after a leading "\": a separator, a
+// rooted name, or a "\u" or "\x" escape of a separator or of a tilde with a
+// separator later. "\"", "\n" and "\u0026" are escapes of something else.
+func docBackslashHead(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	switch rest[0] {
+	case '\\', '/':
+		return true
+	case '"', '\'', 'n', 'r', 't', 'b', 'f', 'v', 'a', '0', '1', '2', '3', '4', '5', '6', '7':
+		return false
+	case 'u', 'x':
+		n := 4
+		if rest[0] == 'x' {
+			n = 2
+		}
+		if len(rest) < 1+n {
+			return true // too short to be an escape: a rooted name
+		}
+		v, err := strconv.ParseUint(rest[1:1+n], 16, 16)
+		if err != nil {
+			return true // "\unix", "\xyz": a rooted name
+		}
+		switch v {
+		case '/', '\\':
+			return true
+		case '~':
+			return docSeparatorIn(rest[1+n:])
+		}
+		return false
+	}
+	return true
+}
+
+// TestSanitize_DocHeadAgreesWithRunStart: the fuzz oracle and the sanitizer
+// read the head list the same way on the table, so a fuzz run that trusts the
+// oracle is checking runStart and not a second, different list.
+func TestSanitize_DocHeadAgreesWithRunStart(t *testing.T) {
+	for _, w := range []string{
+		"/x", "(/x", "k=/x", `k="/x`, `\`, `\x`, `\\x`, `\/x`, `\u002Fx`, `\u005cx`, `\x2Fx`, `\x5Cx`, `\unix`, `\xyz`, `\Users\x`, `\u00`, `\x2`,
+		"~/x", "~bruce/x", `~bruce\x`, "~bruce%2Fx", "~bruce&#47;x", "~Robin", "~", "(~Robin", "~bruce&amp;", "~bruce%2", "~bruce&#38;x",
+		"%7E/x", "%7ebruce%2Fx", "%7ERobin", "%7E", "%7Ebruce&sol;x", "%2Fx", "%5cx", "%41x", "%252Fx",
+		"&#126;/x", "&#126;Robin", "&#x7E;bruce/x", "&#x7E;Robin", "&#126x/y", "&#126", "&amp;#126;bruce/x", "&#47;x", "&sol;x", "&bsol;x", "&amp;", "&#38;", "&#x;", "&#;", "&#00000000000000047;x", "&#47x",
+		`\u007E/x`, `\u007ERobin`, `\x7Ebruce\x`, `\x7ERobin`, `\u0026x`, `\u00aex`, `\"x`, `\nx`,
+		"C:/x", `C:\x`, "C:x", "I:", "smb://h/x", "a+b.c-d://x", "http:x", "Gordon/x", "-I/x", "text/plain", "", "(",
+	} {
+		if got, want := docHead(w), runStart(w); got != want {
+			t.Errorf("docHead(%q) = %v, runStart(%q) = %v", w, got, w, want)
+		}
+	}
 }
 
 // FuzzSanitizerArbitrary is the brief's item 4a: any input at all. The output is
