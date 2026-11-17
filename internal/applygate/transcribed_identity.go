@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: fedfaa92-fca3-4c73-b38b-25f4b0426918
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package applygate
 
@@ -91,30 +91,43 @@ func TranscribedIdentityLifts(book *database.Book, authors Authors, c *metafetch
 
 // applyTranscribedTitle revises the evidence leg's title check for a
 // candidate whose title matches the transcribed title it was found by, and
-// reports whether it changed anything. A title check that already agreed is
-// left alone (the stored title vouched on its own).
+// reports whether it changed anything.
 //
-// Otherwise the block is lifted, but the match is counted as an agreement
-// only when the transcription check has not already counted it
-// (audioConfirmed: the book-level transcribed title confirmed the candidate).
-// It is ONE fact -- the audio says this title -- and counting it twice would
-// let a placeholder book with no runtime, author or ASIN evidence pass
-// MinAgreements on the transcription alone. A file-level transcription does
-// not reach the transcription check, so there the title check carries it.
+// The query is the gate's own text (the book's transcription or folder name,
+// sent to a provider), not a witness for the candidate, so it never makes the
+// title AGREE. It raises a title check that has no evidence (a block because
+// the stored title is "" or "Chapter 3" and the candidate is unrelated to it,
+// or unknown because the book has no title or file name) to NEUTRAL at most,
+// and a neutral title applies only with a runtime that agrees (tally). That is
+// the same rule every other partial title is under, with no special case. A
+// title check that already agreed or is already neutral is left alone.
 //
-// Two blocks are never lifted (transcribedLiftRefusal): a candidate whose
-// title is the series name, and a book whose folder names a different work
-// than the transcription. The first is the title check's hard block and an
-// intro announcing "Discworld" names no volume; the second is evidence
-// against the transcription, not a missing title.
+// Three blocks are never lifted:
 //
-// refusal is transcribedLiftRefusal's answer; when set, a block is annotated
-// with it and nothing is lifted.
+//   - a conflict between the two title fields ("Hush: Part 1" stored,
+//     "Hush: Part 2" candidate; CheckResult.fieldConflict), whatever the query
+//     or the audio says: a transcription that contradicts the stored title is
+//     a case for owner review, not unattended apply;
+//   - a candidate whose title is the series name, the title check's hard block
+//     (an intro announcing "Discworld" names no volume);
+//   - a book whose folder names a different work than the transcription, which
+//     is evidence against the transcription, not a missing title.
+//
+// The last two are transcribedLiftRefusal's; refusal is its answer, and when
+// set a block is annotated with it and nothing is lifted.
+//
+// audioConfirmed: the book-level transcribed title already confirmed the
+// candidate, which the transcription check counts as one agreement; the title
+// check never adds a second one for the same fact.
 func applyTranscribedTitle(ev *EvidenceVerdict, query, refusal string, audioConfirmed bool) bool {
 	for i := range ev.Checks {
 		ch := &ev.Checks[i]
-		if ch.Name != "title" || ch.Outcome == OutcomeAgree {
+		if ch.Name != "title" || ch.Outcome == OutcomeAgree || ch.Outcome == OutcomeNeutral {
 			continue
+		}
+		if ch.fieldConflict {
+			ch.Detail += "; not lifted by the transcribed title " + strconv.Quote(query) + ": the two titles conflict"
+			return false
 		}
 		if refusal != "" {
 			if ch.Outcome == OutcomeBlock {
@@ -127,12 +140,11 @@ func applyTranscribedTitle(ev *EvidenceVerdict, query, refusal string, audioConf
 			detail += " (stored title and path: " + ch.Detail + ")"
 		}
 		ch.Reason = ""
+		ch.Outcome = OutcomeNeutral
 		if audioConfirmed {
-			ch.Outcome = OutcomeNeutral
 			ch.Detail = detail + "; counted once, under transcription"
 		} else {
-			ch.Outcome = OutcomeAgree
-			ch.Detail = detail
+			ch.Detail = detail + "; the query is not a witness, so the runtime must confirm it"
 		}
 		ev.tally()
 		return true
