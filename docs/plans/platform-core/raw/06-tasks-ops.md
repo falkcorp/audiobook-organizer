@@ -1,7 +1,7 @@
 <!-- file: docs/plans/platform-core/raw/06-tasks-ops.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e8be7cec-774d-40d4-97e2-1f4c7cbf5036 -->
-<!-- last-edited: 2026-11-03 -->
+<!-- last-edited: 2026-11-17 -->
 
 # 06 - Task / job system (ops) inventory
 
@@ -225,8 +225,8 @@ State machine: v2 statuses (`queued, running, completed, failed, canceled, inter
 ## 6. Table of every registered op / job / scheduled task
 
 Method and caveats (read before using the table):
-* Rows 1-200 are every `OperationDef` struct literal with a resolvable `ID` found by a static extraction over non-test Go files (cross-checked against each plugin's `Register`/`OperationDefs()` list: acoustid 8, dedup 32, deluge 4, metafetch 3, maintenance 104, itunes 1+1 excluded). Server ops (47 literals in `internal/server`), `scheduler.metadata-upgrade`, and `repairs.plan/apply` are included. Rows 201-234 are the 34 `maintenance.MaintenanceJob`s.
-* Total = 234 rows (233 registered + 1 excluded stub `itunes.import` in `plugins/itunes`, because `internal/server/itunes_ops.go` registers the live `itunes.import`). No dynamically generated defs were found, but a runtime registry dump was not run (UNKNOWN: whether some conditionally-registered defs, e.g. plugins that return a nil plugin when deps are missing, are absent in a given deployment).
+* Rows 1-201 are every `OperationDef` struct literal with a resolvable `ID` found by a static extraction over non-test Go files (cross-checked against each plugin's `Register`/`OperationDefs()` list: acoustid 8, dedup 32, deluge 4, metafetch 3, maintenance 105, itunes 1+1 excluded). Server ops (47 literals in `internal/server`), `scheduler.metadata-upgrade`, and `repairs.plan/apply` are included. Rows 202-235 are the 34 `maintenance.MaintenanceJob`s.
+* Total = 235 rows (234 registered + 1 excluded stub `itunes.import` in `plugins/itunes`, because `internal/server/itunes_ops.go` registers the live `itunes.import`). No dynamically generated defs were found, but a runtime registry dump was not run (UNKNOWN: whether some conditionally-registered defs, e.g. plugins that return a nil plugin when deps are missing, are absent in a given deployment).
 * "Owner" = file:line of the def literal (package = directory). "Trigger": `task X` = a `TaskDefinition` enqueues it (interval/daily/onstart/window index from `internal/scheduler/testdata/cadence.golden`, which is rendered with the test-default config, so enabled-by-default is NOT shown; see 6.1); `manual/internal` = API-triggered (`POST /api/v1/operations/v2`, `POST /api/v3/ops/defs/:id/runs`) or enqueued by another op/handler (not exhaustively traced); `v2 cron ... (declarative only)` = the def carries a cron string that nothing evaluates.
 * "Resumable?": `restart (checkpoint)` = resumes from the saved checkpoint; `requeue` = re-run from zero; `drop` = lost on restart; `ask` = waits for a person.
 * "Concurrency": union of `Concurrency:` expressions found **in the same Go file** as the def literal (heuristic: the `RunItems` call is sometimes in another file, then shown as `-`; `-` also covers ops with no per-item loop). `NumCPU` = `runtime.NumCPU()`.
@@ -392,83 +392,84 @@ Method and caveats (read before using the table):
 | 155 | `maintenance.repair-library-state` | `internal/plugins/maintenance/library_state_repair.go:183` | manual/internal | drop | RunItems | NumCPU | audiobook |
 | 156 | `maintenance.repair-merged-user-state` | `internal/plugins/maintenance/repair_merged_user_state.go:53` | manual/internal | drop | None | - | audiobook |
 | 157 | `maintenance.repair-transcribe-status` | `internal/plugins/maintenance/repair_transcribe_status.go:194` | manual/internal | restart (checkpoint) | RunItems | 8 | audiobook |
-| 158 | `maintenance.repoint-book-file-rows` | `internal/plugins/maintenance/repoint_book_file_rows.go:254` | manual/internal | drop | Manual | - | audiobook |
-| 159 | `maintenance.repoint-missing-to-folder-audio` | `internal/plugins/maintenance/repoint_missing_to_folder_audio.go:332` | manual/internal | drop | RunItems | rfPlanWorkers, rfStatWorkers, rfWriteWorkers | audiobook |
-| 160 | `maintenance.repoint-unrecorded-renames` | `internal/plugins/maintenance/repoint_unrecorded_renames.go:97` | manual/internal | drop | RunItems | repointUnrecordedRenamesConcurrency, ErrMode: opsregistry.ErrModeCollect}), the set is normally tiny (writes that | audiobook |
-| 161 | `maintenance.reports-prune` | `internal/plugins/maintenance/reports_prune.go:104` | task `reports_prune` every 24h0m0s window#15 | drop | None | - | generic |
-| 162 | `maintenance.resolve-production-authors` | `internal/plugins/maintenance/author.go:582` | task `resolve_production_authors` | drop | Manual | authorSplitScanWorkers, resolveProductionAuthorsWorkers() | audiobook |
-| 163 | `maintenance.review-status-index-repair` | `internal/plugins/maintenance/review_status_index_repair.go:51` | manual/internal | drop | Manual | - | audiobook |
-| 164 | `maintenance.rewrite-path-prefix` | `internal/plugins/maintenance/rewrite_path_prefix.go:364` | manual/internal | drop | RunItems | rewritePathPrefixConcurrency | audiobook |
-| 165 | `maintenance.series-denumber` | `internal/plugins/maintenance/series_denumber_op.go:75` | manual/internal | drop | Manual | - | audiobook |
-| 166 | `maintenance.series-phantom-repair` | `internal/plugins/maintenance/series_phantom_repair.go:166` | manual/internal | restart (checkpoint) | RunItems | NumCPU | audiobook |
-| 167 | `maintenance.split-joined-narrators` | `internal/plugins/maintenance/narrator_split_joined.go:165` | manual/internal | drop | Manual | - | audiobook |
-| 168 | `maintenance.tag-backfill` | `internal/plugins/maintenance/tag_backfill.go:192` | manual/internal | drop | RunItems | NumCPU * 4 | audiobook |
-| 169 | `maintenance.temp-file-cleanup` | `internal/plugins/maintenance/cleanup.go:140` | task `temp_file_cleanup` window#13 +onstart v2 cron `30 1 * * *` (declarative only) | drop | None | - | generic |
-| 170 | `maintenance.throttle-reset` | `internal/plugins/maintenance/throttle_reset.go:70` | manual/internal | drop | None | - | generic |
-| 171 | `maintenance.title-backfill` | `internal/plugins/maintenance/title_backfill.go:40` | manual/internal | drop | Manual | - | audiobook |
-| 172 | `maintenance.title-repair` | `internal/plugins/maintenance/title_repair.go:145` | manual/internal | drop | RunItems | workers | audiobook |
-| 173 | `maintenance.tombstone-cleanup` | `internal/plugins/maintenance/cleanup.go:92` | task `tombstone_cleanup` every 24h0m0s v2 cron `0 4 * * *` (declarative only) | drop | Manual | - | generic |
-| 174 | `maintenance.transcode-temp-cleanup` | `internal/plugins/maintenance/cleanup.go:193` | task `transcode_temp_cleanup` every 1h0m0s +onstart | drop | None | - | generic |
-| 175 | `maintenance.transcribe-book-intros` | `internal/plugins/maintenance/intro_transcribe.go:195` | manual/internal | restart (checkpoint) | RunItems | introTranscribePageConc | audiobook |
-| 176 | `maintenance.transcribe-file-intros` | `internal/plugins/maintenance/file_intro_transcribe.go:109` | manual/internal | restart (checkpoint) | RunItems | slots | audiobook |
-| 177 | `maintenance.trash-cleanup` | `internal/plugins/maintenance/cleanup.go:489` | task `trash_cleanup` window#14 v2 cron `0 6 * * *` (declarative only) | drop | None | - | generic |
-| 178 | `maintenance.unknown-author-audit` | `internal/plugins/maintenance/unknown_author_audit.go:104` | manual/internal | drop | Manual | - | audiobook |
-| 179 | `maintenance.version-group-primary-repair` | `internal/plugins/maintenance/version_group_primary_repair.go:284` | manual/internal | drop | Manual | vgRepairWorkers | audiobook |
-| 180 | `maintenance.version-group-primary-report` | `internal/plugins/maintenance/version_group_primary_report.go:161` | manual/internal | drop | Manual | - | audiobook |
-| 181 | `maintenance.window` | `internal/server/scheduler_maintenance_window_op.go:29` | manual/internal | drop | Manual | - | audiobook |
-| 182 | `merge.CombineJournalCheckOp` | `internal/plugins/maintenance/combine_journal_check.go:43` | manual/internal | drop | Manual | - | audiobook |
-| 183 | `metadata.batch-apply-cached` | `internal/server/batch_apply_op.go:313` | manual/internal | restart (checkpoint) | RunItems | writeBackWorkers() | audiobook |
-| 184 | `metadata.batch-apply-refusals-reset` | `internal/server/batch_apply_refusal_reset_op.go:101` | manual/internal | drop | Manual | - | audiobook |
-| 185 | `metadata.batch-save` | `internal/server/batch_save_op.go:131` | manual/internal | drop | RunItems | writeBackWorkers() | audiobook |
-| 186 | `metadata.bulk-apply-preview` | `internal/server/bulk_apply_preview.go:261` | manual/internal | requeue (from zero) | RunItems | NumCPU | audiobook |
-| 187 | `metadata.candidate-fetch` | `internal/server/metadata_candidate_op.go:112` | task `candidate_fetch` | restart (checkpoint) | Manual | - | audiobook |
-| 188 | `metafetch.asin-backfill` | `internal/plugins/metafetch/asin_backfill.go:213` | task `asin_backfill` | restart (checkpoint) | RunItems | workers | audiobook |
-| 189 | `metafetch.calibrate-scoring` | `internal/plugins/metafetch/calibrate_scoring.go:120` | manual/internal | drop | RunItems | NumCPU | audiobook |
-| 190 | `metafetch.pcache-sweep` | `internal/plugins/metafetch/pcache_sweep.go:115` | manual/internal | drop | Manual | - | audiobook |
-| 191 | `openlibrary.download` | `internal/server/openlibrary_ops.go:32` | manual/internal | drop | Manual | - | audiobook |
-| 192 | `openlibrary.import` | `internal/server/openlibrary_ops.go:74` | manual/internal | drop | Manual | - | audiobook |
-| 193 | `operations.backfill-legacy-status` | `internal/server/legacy_backfill_op.go:40` | manual/internal | drop | Manual | - | audiobook |
-| 194 | `p.LegacyOpID` | `internal/server/apply_when_scanned_op.go:123` | manual/internal | requeue (from zero) | Manual | - | audiobook |
-| 195 | `reconcile.apply` | `internal/server/reconcile_ops.go:121` | manual/internal | drop | Manual | - | audiobook |
-| 196 | `reconcile.scan` | `internal/server/reconcile_ops.go:42` | task `reconcile_scan` | drop | Manual | - | audiobook |
-| 197 | `repairs.apply` | `internal/plugins/maintenance/repairs_ops.go:54` | manual/internal | restart (checkpoint) | Manual | - | generic |
-| 198 | `repairs.plan` | `internal/plugins/maintenance/repairs_ops.go:35` | manual/internal | drop | Manual | - | generic |
-| 199 | `scheduler.metadata-upgrade` | `internal/scheduler/extra_ops.go:89` | task `metadata_upgrade` | drop | Manual | - | audiobook |
-| 200 | `usermerge.OpDefID` | `internal/plugins/maintenance/user_merge.go:63` | manual/internal | drop | None | - | audiobook |
-| 201 | `maintenance.backfill-book-files` | `internal/maintenance/jobs/backfill_book_files.go:30` | manual only | drop | Manual | - | audiobook |
-| 202 | `maintenance.backfill-file-hashes` | `internal/maintenance/jobs/backfill_file_hashes.go:42` | manual only | restart (checkpoint) | Manual | - | audiobook |
-| 203 | `maintenance.backfill-itunes-positions` | `internal/maintenance/jobs/backfill_itunes_positions.go:25` | manual only | drop | Manual | BackfillConcurrency() | audiobook |
-| 204 | `maintenance.backfill-merge-undo-pointers` | `internal/maintenance/jobs/backfill_merge_undo_pointers.go:20` | manual only | drop | Manual | - | audiobook |
-| 205 | `maintenance.backfill-metadata-source-hash` | `internal/maintenance/jobs/backfill_metadata_source_hash.go:19` | manual only | drop | Manual | - | audiobook |
-| 206 | `maintenance.backfill-sync-ids` | `internal/maintenance/jobs/backfill_sync_ids.go:19` | manual only | drop | Manual | BackfillConcurrency() | audiobook |
-| 207 | `maintenance.bulk-deluge-import` | `internal/maintenance/jobs/bulk_deluge_import.go:27` | manual only | restart (checkpoint) | Manual | - | audiobook |
-| 208 | `maintenance.cleanup-empty-folders` | `internal/maintenance/jobs/cleanup_empty_folders.go:23` | manual only | restart (checkpoint) | Manual | - | generic |
-| 209 | `maintenance.cleanup-organize-mess` | `internal/maintenance/jobs/cleanup_organize_mess.go:26` | manual only | drop | Manual | - | audiobook |
-| 210 | `maintenance.cleanup-series` | `internal/maintenance/jobs/cleanup_series.go:21` | manual only | drop | Manual | - | audiobook |
-| 211 | `maintenance.dedup-books` | `internal/maintenance/jobs/dedup_books.go:29` | manual only | drop | Manual | - | audiobook |
-| 212 | `maintenance.enrich-book-files` | `internal/maintenance/jobs/enrich_book_files.go:21` | manual only | drop | Manual | - | audiobook |
-| 213 | `maintenance.fix-author-narrator-swap` | `internal/maintenance/jobs/fix_author_narrator_swap.go:19` | manual only | drop | Manual | - | audiobook |
-| 214 | `maintenance.fix-file-modes` | `internal/maintenance/jobs/fix_file_modes.go:17` | manual only | drop | Manual | - | generic |
-| 215 | `maintenance.fix-read-by-narrator` | `internal/maintenance/jobs/fix_read_by_narrator.go:20` | manual only | drop | Manual | - | audiobook |
-| 216 | `maintenance.fix-version-groups` | `internal/maintenance/jobs/fix_version_groups.go:31` | manual only | drop | Manual | - | audiobook |
-| 217 | `maintenance.merge-chapter-groups` | `internal/maintenance/jobs/merge_chapter_groups.go:30` | manual only | drop | Manual | - | audiobook |
-| 218 | `maintenance.normalize-primary-flags` | `internal/maintenance/jobs/normalize_primary_flags.go:20` | manual only | drop | Manual | - | audiobook |
-| 219 | `maintenance.prune-book-snapshots` | `internal/maintenance/jobs/prune_book_snapshots.go:21` | manual only | drop | Manual | - | audiobook |
-| 220 | `maintenance.purge-unknown-author-duplicates` | `internal/maintenance/jobs/purge_ua_duplicates.go:31` | manual only | drop | Manual | - | audiobook |
-| 221 | `maintenance.recompute-book-aggregates` | `internal/maintenance/jobs/recompute_book_aggregates.go:46` | manual only | restart (checkpoint) | Manual | - | audiobook |
-| 222 | `maintenance.recompute-itunes-paths` | `internal/maintenance/jobs/recompute_itunes_paths.go:20` | manual only | drop | Manual | - | audiobook |
-| 223 | `maintenance.refetch-missing-authors` | `internal/maintenance/jobs/refetch_missing_authors.go:24` | manual only | restart (checkpoint) | Manual | - | audiobook |
-| 224 | `maintenance.relink-missing-to-itunes` | `internal/maintenance/jobs/relink_missing_to_itunes.go:26` | manual only | drop | Manual | - | audiobook |
-| 225 | `maintenance.relink-report` | `internal/maintenance/jobs/relink_report.go:25` | manual only | drop | Manual | - | audiobook |
-| 226 | `maintenance.repoint-version-primary` | `internal/maintenance/jobs/repoint_version_primary.go:20` | manual only | drop | Manual | - | audiobook |
-| 227 | `maintenance.retention-and-hygiene` | `internal/maintenance/jobs/retention_and_hygiene.go:21` | manual only | restart (checkpoint) | Manual | - | generic |
-| 228 | `maintenance.revert-metadata-fetch` | `internal/maintenance/jobs/revert_metadata_fetch.go:20` | manual only | drop | Manual | - | audiobook |
-| 229 | `maintenance.scan-chapter-groups` | `internal/maintenance/jobs/scan_chapter_groups.go:14` | manual only | drop | Manual | - | audiobook |
-| 230 | `maintenance.scan-composer-tags` | `internal/maintenance/jobs/scan_composer_tags.go:28` | manual only | restart (checkpoint) | Manual | - | audiobook |
-| 231 | `maintenance.scan-duplicate-files` | `internal/maintenance/jobs/scan_duplicate_files.go:17` | manual only | drop | Manual | - | audiobook |
-| 232 | `maintenance.scan-duration-mismatch` | `internal/maintenance/jobs/scan_duration_mismatch.go:17` | manual only | drop | Manual | - | audiobook |
-| 233 | `maintenance.scan-metadata-hash-dups` | `internal/maintenance/jobs/scan_metadata_hash_dups.go:17` | manual only | drop | Manual | - | audiobook |
-| 234 | `maintenance.sweep-pebble-metrics-ttl` | `internal/maintenance/jobs/sweep_pebble_metrics_ttl.go:23` | manual only | drop | Manual | - | generic |
+| 158 | `maintenance.reparse-file-intros` | `internal/plugins/maintenance/file_intro_reparse.go:454` | manual/internal | restart (no checkpoint) | RunItems | NumCPU | audiobook |
+| 159 | `maintenance.repoint-book-file-rows` | `internal/plugins/maintenance/repoint_book_file_rows.go:254` | manual/internal | drop | Manual | - | audiobook |
+| 160 | `maintenance.repoint-missing-to-folder-audio` | `internal/plugins/maintenance/repoint_missing_to_folder_audio.go:332` | manual/internal | drop | RunItems | rfPlanWorkers, rfStatWorkers, rfWriteWorkers | audiobook |
+| 161 | `maintenance.repoint-unrecorded-renames` | `internal/plugins/maintenance/repoint_unrecorded_renames.go:97` | manual/internal | drop | RunItems | repointUnrecordedRenamesConcurrency, ErrMode: opsregistry.ErrModeCollect}), the set is normally tiny (writes that | audiobook |
+| 162 | `maintenance.reports-prune` | `internal/plugins/maintenance/reports_prune.go:104` | task `reports_prune` every 24h0m0s window#15 | drop | None | - | generic |
+| 163 | `maintenance.resolve-production-authors` | `internal/plugins/maintenance/author.go:582` | task `resolve_production_authors` | drop | Manual | authorSplitScanWorkers, resolveProductionAuthorsWorkers() | audiobook |
+| 164 | `maintenance.review-status-index-repair` | `internal/plugins/maintenance/review_status_index_repair.go:51` | manual/internal | drop | Manual | - | audiobook |
+| 165 | `maintenance.rewrite-path-prefix` | `internal/plugins/maintenance/rewrite_path_prefix.go:364` | manual/internal | drop | RunItems | rewritePathPrefixConcurrency | audiobook |
+| 166 | `maintenance.series-denumber` | `internal/plugins/maintenance/series_denumber_op.go:75` | manual/internal | drop | Manual | - | audiobook |
+| 167 | `maintenance.series-phantom-repair` | `internal/plugins/maintenance/series_phantom_repair.go:166` | manual/internal | restart (checkpoint) | RunItems | NumCPU | audiobook |
+| 168 | `maintenance.split-joined-narrators` | `internal/plugins/maintenance/narrator_split_joined.go:165` | manual/internal | drop | Manual | - | audiobook |
+| 169 | `maintenance.tag-backfill` | `internal/plugins/maintenance/tag_backfill.go:192` | manual/internal | drop | RunItems | NumCPU * 4 | audiobook |
+| 170 | `maintenance.temp-file-cleanup` | `internal/plugins/maintenance/cleanup.go:140` | task `temp_file_cleanup` window#13 +onstart v2 cron `30 1 * * *` (declarative only) | drop | None | - | generic |
+| 171 | `maintenance.throttle-reset` | `internal/plugins/maintenance/throttle_reset.go:70` | manual/internal | drop | None | - | generic |
+| 172 | `maintenance.title-backfill` | `internal/plugins/maintenance/title_backfill.go:40` | manual/internal | drop | Manual | - | audiobook |
+| 173 | `maintenance.title-repair` | `internal/plugins/maintenance/title_repair.go:145` | manual/internal | drop | RunItems | workers | audiobook |
+| 174 | `maintenance.tombstone-cleanup` | `internal/plugins/maintenance/cleanup.go:92` | task `tombstone_cleanup` every 24h0m0s v2 cron `0 4 * * *` (declarative only) | drop | Manual | - | generic |
+| 175 | `maintenance.transcode-temp-cleanup` | `internal/plugins/maintenance/cleanup.go:193` | task `transcode_temp_cleanup` every 1h0m0s +onstart | drop | None | - | generic |
+| 176 | `maintenance.transcribe-book-intros` | `internal/plugins/maintenance/intro_transcribe.go:195` | manual/internal | restart (checkpoint) | RunItems | introTranscribePageConc | audiobook |
+| 177 | `maintenance.transcribe-file-intros` | `internal/plugins/maintenance/file_intro_transcribe.go:109` | manual/internal | restart (checkpoint) | RunItems | slots | audiobook |
+| 178 | `maintenance.trash-cleanup` | `internal/plugins/maintenance/cleanup.go:489` | task `trash_cleanup` window#14 v2 cron `0 6 * * *` (declarative only) | drop | None | - | generic |
+| 179 | `maintenance.unknown-author-audit` | `internal/plugins/maintenance/unknown_author_audit.go:104` | manual/internal | drop | Manual | - | audiobook |
+| 180 | `maintenance.version-group-primary-repair` | `internal/plugins/maintenance/version_group_primary_repair.go:284` | manual/internal | drop | Manual | vgRepairWorkers | audiobook |
+| 181 | `maintenance.version-group-primary-report` | `internal/plugins/maintenance/version_group_primary_report.go:161` | manual/internal | drop | Manual | - | audiobook |
+| 182 | `maintenance.window` | `internal/server/scheduler_maintenance_window_op.go:29` | manual/internal | drop | Manual | - | audiobook |
+| 183 | `merge.CombineJournalCheckOp` | `internal/plugins/maintenance/combine_journal_check.go:43` | manual/internal | drop | Manual | - | audiobook |
+| 184 | `metadata.batch-apply-cached` | `internal/server/batch_apply_op.go:313` | manual/internal | restart (checkpoint) | RunItems | writeBackWorkers() | audiobook |
+| 185 | `metadata.batch-apply-refusals-reset` | `internal/server/batch_apply_refusal_reset_op.go:101` | manual/internal | drop | Manual | - | audiobook |
+| 186 | `metadata.batch-save` | `internal/server/batch_save_op.go:131` | manual/internal | drop | RunItems | writeBackWorkers() | audiobook |
+| 187 | `metadata.bulk-apply-preview` | `internal/server/bulk_apply_preview.go:261` | manual/internal | requeue (from zero) | RunItems | NumCPU | audiobook |
+| 188 | `metadata.candidate-fetch` | `internal/server/metadata_candidate_op.go:112` | task `candidate_fetch` | restart (checkpoint) | Manual | - | audiobook |
+| 189 | `metafetch.asin-backfill` | `internal/plugins/metafetch/asin_backfill.go:213` | task `asin_backfill` | restart (checkpoint) | RunItems | workers | audiobook |
+| 190 | `metafetch.calibrate-scoring` | `internal/plugins/metafetch/calibrate_scoring.go:120` | manual/internal | drop | RunItems | NumCPU | audiobook |
+| 191 | `metafetch.pcache-sweep` | `internal/plugins/metafetch/pcache_sweep.go:115` | manual/internal | drop | Manual | - | audiobook |
+| 192 | `openlibrary.download` | `internal/server/openlibrary_ops.go:32` | manual/internal | drop | Manual | - | audiobook |
+| 193 | `openlibrary.import` | `internal/server/openlibrary_ops.go:74` | manual/internal | drop | Manual | - | audiobook |
+| 194 | `operations.backfill-legacy-status` | `internal/server/legacy_backfill_op.go:40` | manual/internal | drop | Manual | - | audiobook |
+| 195 | `p.LegacyOpID` | `internal/server/apply_when_scanned_op.go:123` | manual/internal | requeue (from zero) | Manual | - | audiobook |
+| 196 | `reconcile.apply` | `internal/server/reconcile_ops.go:121` | manual/internal | drop | Manual | - | audiobook |
+| 197 | `reconcile.scan` | `internal/server/reconcile_ops.go:42` | task `reconcile_scan` | drop | Manual | - | audiobook |
+| 198 | `repairs.apply` | `internal/plugins/maintenance/repairs_ops.go:54` | manual/internal | restart (checkpoint) | Manual | - | generic |
+| 199 | `repairs.plan` | `internal/plugins/maintenance/repairs_ops.go:35` | manual/internal | drop | Manual | - | generic |
+| 200 | `scheduler.metadata-upgrade` | `internal/scheduler/extra_ops.go:89` | task `metadata_upgrade` | drop | Manual | - | audiobook |
+| 201 | `usermerge.OpDefID` | `internal/plugins/maintenance/user_merge.go:63` | manual/internal | drop | None | - | audiobook |
+| 202 | `maintenance.backfill-book-files` | `internal/maintenance/jobs/backfill_book_files.go:30` | manual only | drop | Manual | - | audiobook |
+| 203 | `maintenance.backfill-file-hashes` | `internal/maintenance/jobs/backfill_file_hashes.go:42` | manual only | restart (checkpoint) | Manual | - | audiobook |
+| 204 | `maintenance.backfill-itunes-positions` | `internal/maintenance/jobs/backfill_itunes_positions.go:25` | manual only | drop | Manual | BackfillConcurrency() | audiobook |
+| 205 | `maintenance.backfill-merge-undo-pointers` | `internal/maintenance/jobs/backfill_merge_undo_pointers.go:20` | manual only | drop | Manual | - | audiobook |
+| 206 | `maintenance.backfill-metadata-source-hash` | `internal/maintenance/jobs/backfill_metadata_source_hash.go:19` | manual only | drop | Manual | - | audiobook |
+| 207 | `maintenance.backfill-sync-ids` | `internal/maintenance/jobs/backfill_sync_ids.go:19` | manual only | drop | Manual | BackfillConcurrency() | audiobook |
+| 208 | `maintenance.bulk-deluge-import` | `internal/maintenance/jobs/bulk_deluge_import.go:27` | manual only | restart (checkpoint) | Manual | - | audiobook |
+| 209 | `maintenance.cleanup-empty-folders` | `internal/maintenance/jobs/cleanup_empty_folders.go:23` | manual only | restart (checkpoint) | Manual | - | generic |
+| 210 | `maintenance.cleanup-organize-mess` | `internal/maintenance/jobs/cleanup_organize_mess.go:26` | manual only | drop | Manual | - | audiobook |
+| 211 | `maintenance.cleanup-series` | `internal/maintenance/jobs/cleanup_series.go:21` | manual only | drop | Manual | - | audiobook |
+| 212 | `maintenance.dedup-books` | `internal/maintenance/jobs/dedup_books.go:29` | manual only | drop | Manual | - | audiobook |
+| 213 | `maintenance.enrich-book-files` | `internal/maintenance/jobs/enrich_book_files.go:21` | manual only | drop | Manual | - | audiobook |
+| 214 | `maintenance.fix-author-narrator-swap` | `internal/maintenance/jobs/fix_author_narrator_swap.go:19` | manual only | drop | Manual | - | audiobook |
+| 215 | `maintenance.fix-file-modes` | `internal/maintenance/jobs/fix_file_modes.go:17` | manual only | drop | Manual | - | generic |
+| 216 | `maintenance.fix-read-by-narrator` | `internal/maintenance/jobs/fix_read_by_narrator.go:20` | manual only | drop | Manual | - | audiobook |
+| 217 | `maintenance.fix-version-groups` | `internal/maintenance/jobs/fix_version_groups.go:31` | manual only | drop | Manual | - | audiobook |
+| 218 | `maintenance.merge-chapter-groups` | `internal/maintenance/jobs/merge_chapter_groups.go:30` | manual only | drop | Manual | - | audiobook |
+| 219 | `maintenance.normalize-primary-flags` | `internal/maintenance/jobs/normalize_primary_flags.go:20` | manual only | drop | Manual | - | audiobook |
+| 220 | `maintenance.prune-book-snapshots` | `internal/maintenance/jobs/prune_book_snapshots.go:21` | manual only | drop | Manual | - | audiobook |
+| 221 | `maintenance.purge-unknown-author-duplicates` | `internal/maintenance/jobs/purge_ua_duplicates.go:31` | manual only | drop | Manual | - | audiobook |
+| 222 | `maintenance.recompute-book-aggregates` | `internal/maintenance/jobs/recompute_book_aggregates.go:46` | manual only | restart (checkpoint) | Manual | - | audiobook |
+| 223 | `maintenance.recompute-itunes-paths` | `internal/maintenance/jobs/recompute_itunes_paths.go:20` | manual only | drop | Manual | - | audiobook |
+| 224 | `maintenance.refetch-missing-authors` | `internal/maintenance/jobs/refetch_missing_authors.go:24` | manual only | restart (checkpoint) | Manual | - | audiobook |
+| 225 | `maintenance.relink-missing-to-itunes` | `internal/maintenance/jobs/relink_missing_to_itunes.go:26` | manual only | drop | Manual | - | audiobook |
+| 226 | `maintenance.relink-report` | `internal/maintenance/jobs/relink_report.go:25` | manual only | drop | Manual | - | audiobook |
+| 227 | `maintenance.repoint-version-primary` | `internal/maintenance/jobs/repoint_version_primary.go:20` | manual only | drop | Manual | - | audiobook |
+| 228 | `maintenance.retention-and-hygiene` | `internal/maintenance/jobs/retention_and_hygiene.go:21` | manual only | restart (checkpoint) | Manual | - | generic |
+| 229 | `maintenance.revert-metadata-fetch` | `internal/maintenance/jobs/revert_metadata_fetch.go:20` | manual only | drop | Manual | - | audiobook |
+| 230 | `maintenance.scan-chapter-groups` | `internal/maintenance/jobs/scan_chapter_groups.go:14` | manual only | drop | Manual | - | audiobook |
+| 231 | `maintenance.scan-composer-tags` | `internal/maintenance/jobs/scan_composer_tags.go:28` | manual only | restart (checkpoint) | Manual | - | audiobook |
+| 232 | `maintenance.scan-duplicate-files` | `internal/maintenance/jobs/scan_duplicate_files.go:17` | manual only | drop | Manual | - | audiobook |
+| 233 | `maintenance.scan-duration-mismatch` | `internal/maintenance/jobs/scan_duration_mismatch.go:17` | manual only | drop | Manual | - | audiobook |
+| 234 | `maintenance.scan-metadata-hash-dups` | `internal/maintenance/jobs/scan_metadata_hash_dups.go:17` | manual only | drop | Manual | - | audiobook |
+| 235 | `maintenance.sweep-pebble-metrics-ttl` | `internal/maintenance/jobs/sweep_pebble_metrics_ttl.go:23` | manual only | drop | Manual | - | generic |
 
 ### 6.1 Scheduler tasks (`TaskDefinition`, 38 registered)
 
@@ -528,10 +529,10 @@ Notes: (a) `transcode` (`tasks.go:529`) enqueues nothing by design (fails withou
 
 | Dimension | Counts |
 |---|---|
-| Rows | 234 (233 registered + 1 excluded stub) |
-| Class | audiobook 199, generic 24, integration (iTunes) 7, integration (download client / Deluge) 4 |
-| Resume | drop 162, restart (checkpoint) 51, requeue 18, ask 3 |
-| Liveness | Manual 155, RunItems 68, None 11 |
+| Rows | 235 (234 registered + 1 excluded stub) |
+| Class | audiobook 200, generic 24, integration (iTunes) 7, integration (download client / Deluge) 4 |
+| Resume | drop 162, restart (checkpoint) 51, restart (no checkpoint) 1, requeue 18, ask 3 |
+| Liveness | Manual 155, RunItems 69, None 11 |
 | Native `pkg/ops` v3 defs | 0 |
 | Scheduler `TaskDefinition`s | 38 (36 enqueue a def; `transcode` and `batch_poller` do not) |
 | v2 defs carrying a cron string | 15 (14 maintenance + `deluge.protected-paths-sync`); all declarative |
