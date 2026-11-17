@@ -252,8 +252,8 @@ func TestCandidateOwed_AHoldDoesNotSpendAnAsk(t *testing.T) {
 	}
 }
 
-// A degraded result never replaces or outranks an existing candidate from the
-// better source: a forced refetch while Audnexus is down, with another source
+// A degraded result does not discard the candidate an earlier answer of the
+// better source left on the row, or rank another source's candidate over it: a forced refetch while Audnexus is down, with another source
 // answering, keeps the Audnexus candidate the row already holds, first, and the
 // review-only Google candidate too.
 func TestCandidateOwed_DegradedResultKeepsTheBetterCandidate(t *testing.T) {
@@ -490,8 +490,8 @@ func setOwed(t *testing.T, f *fallbackFixture, bookID string, n int, ago time.Du
 
 // The owner opens the Search Metadata dialog on a parked book between two runs.
 // Its plain fetch writes the row under another input hash than the op's, and
-// must neither drop the debt Audnexus owes nor spend the book's re-ask: the next
-// selection still hands the book back and the op still asks Audnexus.
+// must not drop the debt Audnexus owes (it charges its own failed ask, once): the
+// next selection still hands the book back and the op still asks Audnexus.
 func TestCandidateOwed_DialogFetchBetweenRunsKeepsTheDebt(t *testing.T) {
 	f, _, ol := newOwedServerFixture(t)
 	b := f.book(t, owedTitle, withASIN(refreshASIN))
@@ -530,6 +530,49 @@ func TestCandidateOwed_DialogFetchBetweenRunsKeepsTheDebt(t *testing.T) {
 	if r.Candidate == nil || r.Candidate.Source != "Audnexus (Audible)" || len(owedRow(t, f, b.ID).OwedSources) != 0 {
 		t.Fatalf("the re-ask after the dialog fetch = {%+v}, owed %+v, want Audnexus answered and the debt cleared",
 			r.Candidate, owedRow(t, f, b.ID).OwedSources)
+	}
+}
+
+// The same sequence with Audnexus still down at the re-ask: the dialog's row has
+// another input hash than the op's, and the op's failed re-ask must still be
+// charged. If its record missed that row the book would be due on every run and
+// never exhaust, the unbounded re-ask the schedule exists to stop.
+func TestCandidateOwed_FailedReaskAfterADialogRewriteIsStillCharged(t *testing.T) {
+	for _, failAll := range []bool{false, true} {
+		t.Run(fmt.Sprintf("every_source_fails=%t", failAll), func(t *testing.T) {
+			failedReaskAfterADialogRewrite(t, failAll)
+		})
+	}
+}
+
+func failedReaskAfterADialogRewrite(t *testing.T, failAll bool) {
+	t.Helper()
+	f, _, _ := newOwedServerFixture(t)
+	b := f.book(t, owedTitle, withASIN(refreshASIN))
+	f.run(t, b.ID) // Audnexus down: owed, attempt 1
+	if _, err := f.mfs.FetchAndCache(context.Background(), b.ID, "", "", "", "",
+		metafetch.SearchOptions{BypassProviderThrottle: true}); err != nil {
+		t.Fatalf("dialog fetch: %v", err)
+	}
+	metadata.ResetThrottlesForTesting()
+	ageOwed(t, f, b.ID, 25*time.Hour)
+	before := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"]
+
+	if failAll {
+		// Nothing answers the re-ask, so the search writes no row of its own.
+		f.google.answer = nil
+		f.google.err = &metadata.ProviderStatusError{Provider: metadata.SourceIDGoogleBooks, Status: 503, Body: "backend error"}
+	}
+	f.run(t, b.ID) // the due re-ask: Audnexus is still down
+	after, owed := owedRow(t, f, b.ID).OwedSources["Audnexus (Audible)"]
+	if !owed {
+		t.Fatal("the failed re-ask cleared the debt")
+	}
+	if after.Attempts != before.Attempts+1 {
+		t.Fatalf("attempts after a failed re-ask on the dialog's row = %d, want %d", after.Attempts, before.Attempts+1)
+	}
+	if !after.LastAttempt.After(before.LastAttempt) {
+		t.Fatalf("last attempt did not move (%v -> %v): the book would be due again at once", before.LastAttempt, after.LastAttempt)
 	}
 }
 
