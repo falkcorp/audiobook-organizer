@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 8e41c7a2-5d09-4b3f-a6e8-2f9c0d71b5a3
 // last-edited: 2026-11-17
 
@@ -26,28 +26,36 @@ import (
 // 5% and the author agreeing the pair applied unattended. A first rewrite
 // compared the whole title but decided agreement by REMOVING text (series
 // names, credited names, "of N", a parenthetical, fuzzy word overlap), and
-// every removal was a new way for two books to agree. This file has one rule
-// and removes nothing:
+// every removal was a new way for two books to agree. This file and
+// titleforms.go have one rule and remove nothing:
 //
-//   - AGREE: a whole form of the candidate EQUALS a whole form of the book.
-//     A form is the declared fields JOINED, never trimmed: {title},
-//     {title subtitle}, {series title} or {series title subtitle}. A side that
-//     has a subtitle has no bare-title forms, so "Knightfall" against
+//   - AGREE (decided first, in titleforms.go and checkTitle): a whole form of
+//     the candidate EQUALS a whole form of the book. A form is declared fields
+//     JOINED, never trimmed: the title, the title and subtitle, each also behind
+//     the series name, and for a candidate with no real subtitle the series,
+//     position and credit forms titleforms.go lists, each in a fixed role. A
+//     side that has a subtitle has no bare-title forms, so "Knightfall" against
 //     "Knightfall" + subtitle "Book 2" is not an agreement. The book's file and
-//     folder names are forms of the book too. Equality is over a closed
-//     normalisation (formTokens) and nothing else.
-//   - DISAGREE: only from the two TITLE fields, and only in two shapes: the
-//     titles share a whole segment and each carries a segment the other lacks
-//     ("Batman: Dark Victory" / "Batman: The Long Halloween"), or they use the
-//     same words with numbers that differ ("Part 1" / "Part 2"). A series name,
-//     a credit, a path or a year never makes a pair agree or disagree.
+//     folder names are forms of the book only when its stored title is blank or
+//     a placeholder. Equality is over a closed normalisation (formTokens) and
+//     nothing else.
+//   - DISAGREE: only from the two TITLE fields, only when no form agreed, and
+//     only in two shapes: the titles share a whole segment and each carries a
+//     segment the other lacks ("Batman: Dark Victory" / "Batman: The Long
+//     Halloween"), or each states a number of the same KIND (a volume, a part;
+//     seqnum.ReadStated) and the numbers differ ("Part 1" / "Part 2", "Hush 1" /
+//     "Hush 2"). A number only one side states is not a conflict ("Who Am I" /
+//     "Who Am I 2"). A series name, a credit, a path or a year never makes a
+//     pair disagree.
 //   - everything else that is related is NEUTRAL: one title holds words or a
 //     number the other lacks, so the pair is confirmed by nothing in the title.
 //     A neutral title applies only with a runtime that agrees (EvidenceVerdict
 //     tally).
 //
-// compareTitleFields is symmetric in its two texts, and no remainder is ever
-// excused by what the other fields say.
+// compareTitleFields is symmetric in its two texts and no remainder is ever
+// excused by what the other fields say. The whole check is symmetric only in
+// the declared title fields: the candidate-only forms (credit, position) are
+// one-sided on purpose (titleforms.go).
 
 // titleClass is the verdict on one pair of title fields.
 type titleClass int

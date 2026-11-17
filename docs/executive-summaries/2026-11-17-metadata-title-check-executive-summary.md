@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-11-17-metadata-title-check-executive-summary.md -->
-<!-- version: 2.1.0 -->
+<!-- version: 2.2.0 -->
 <!-- guid: 3b9d6e21-8c47-4f05-a1d2-6e0f7a4c9b83 -->
 <!-- last-edited: 2026-11-17 -->
 
@@ -27,29 +27,48 @@ attempt.
   credited name, a number written as words) and every removal was a new way for
   two different books to look alike. It is replaced by one rule that removes
   nothing.
-- The title check now gives one of three answers:
+- The title check now gives one of three answers, and it asks them in this
+  order:
   - **Same.** The whole title of one side equals the whole title of the other
     after only harmless differences are ignored: capital letters, accents, "and"
     against "&", a leading "The", "(Unabridged)", numbers written as digits,
     words or roman numerals. A series name in front of the title counts when the
-    series is known. The file name counts too, because it is how the book is
-    stored. Nothing else makes two titles the same: not a series name, not an
-    author or narrator name, not a year.
+    series is known. When the found book has no subtitle, its series and number,
+    or its author's or narrator's name, written beside its title can also make
+    the whole title (as a tagger often writes it), but a name is never allowed to
+    stand in for a series name, and a found book that has a real subtitle never
+    gets these extra spellings, so words added as a subtitle cannot be skipped
+    over. A subtitle such as "A Novel", "Unabridged" or "Series, Book 2" (the
+    book's own series and number) is not counted as a real subtitle. The file name counts too, but only
+    for a library book whose own title is empty or a placeholder ("Chapter 3");
+    for a book with a real title the file name neither agrees nor disagrees.
+    Nothing else makes two titles the same: not a series name on its own, not a
+    year.
   - **Different.** The titles share a whole piece and each has a piece of its
-    own ("Batman: Dark Victory" and "Batman: The Long Halloween"), or they use
-    the same words with different numbers ("Part 1" and "Part 2", "Night of 7
-    Owls" and "Night of 5 Owls"). The match is refused. A series name, a
-    credit, a file name or a year cannot talk the check out of this.
+    own ("Batman: Dark Victory" and "Batman: The Long Halloween"), or both state a
+    number of the same kind (a volume, or a part) and the numbers differ ("Part
+    1" and "Part 2", "Hush 1" and "Hush 2", "Part 1 of 3" and "Part 3"). A
+    number only one side states is not a difference ("Who Am I" and "Who Am I
+    2"). The match is refused. A series name, a credit, a file name or a year
+    cannot talk the check out of this. Numbers swapped between the pieces
+    ("Knightfall 2: Book 3" and "Knightfall 3: Book 2") now count as different;
+    an earlier version of this change let them through.
   - **Neutral.** Everything else that is related: one title simply says more
-    than the other ("Hush" and "Hush: A Gotham Story",
-    "Hush" and "Hush: Part 2", or a stored title that starts with a list number
-    such as "08 - The Long Halloween"). A neutral title confirms nothing by itself, so
-    it is applied on its own only when the recording lengths also agree, both
-    known and within 5%. Without that it waits for review, whatever else
-    matches (author, narrator, ASIN or the audio intro). If the author is the
-    only other thing that agrees, the book is reported as lacking evidence; if
-    two other things agree, it is reported as "title only partly matches and the
-    runtime does not confirm it". An owner review can still approve either.
+    than the other ("Hush" and "Hush: A Gotham Story", or a stored title that
+    starts with a list number such as "08 - The Long Halloween"). A neutral title confirms
+    nothing by itself, so it is applied on its own only when the recording
+    lengths also agree, both known and within 5%. Without that it waits for
+    review, whatever else matches (author, narrator, ASIN or the audio intro). If
+    the author is the only other thing that agrees, the book is reported as
+    lacking evidence; if two other things agree, it is reported as "title only
+    partly matches and the runtime does not confirm it". An owner review can
+    still approve either.
+- A part is checked on its own as well. If the found book is "Part 2" of a
+  title and the library book is not marked as a part, the match is refused even
+  when the recording lengths agree, because two parts of one book are often
+  within 5% of each other's length. Before this change such a pair was applied
+  when the lengths agreed. In the other direction, an old "Disc 2" folder name
+  no longer refuses a book whose recording length already agrees.
 - The same title check also guards the automatic metadata upgrade that runs
   without anyone asking (`metabatch/upgrade.go`), so that path is stricter in
   exactly the same way.
@@ -81,10 +100,11 @@ attempt.
   - a candidate that is only a franchise name, with no series recorded for it,
     against a book in that franchise;
   - "Year One" against "Grayson: Year One" (a one-sided credit looks exactly like
-    a one-sided subtitle);
-  - two titles whose numbers are swapped between pieces ("Knightfall 2: Book 3"
-    and "Knightfall 3: Book 2"): refused today only by the separate series-number
-    check, not by the title check.
-
+    a one-sided subtitle).
   Closing these needs information the title alone does not carry, and each would
   have to be handled without excusing text by what another field says.
+- Left for the owner to decide, and not changed here: a neutral title that is
+  applied because the recording lengths agree. In a replay over 4000 books, 49 of
+  the 61 applications that rest on a neutral title rest on the length alone.
+  Today's behaviour is pinned by tests marked "under owner review", and the open
+  question is on the TODO list.
