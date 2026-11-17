@@ -1,7 +1,7 @@
 // file: internal/audiobooks/organize.go
-// version: 2.4.2
+// version: 2.5.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/service.go. This file provides type aliases and
@@ -12,6 +12,8 @@ package audiobooks
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -51,7 +53,14 @@ func NewOrganizeService(db organizeServiceStore) *OrganizeService {
 	svc.ComputeITunesPath = metafetch.ComputeITunesPath
 	svc.FetchMetadataForBook = func(ctx context.Context, bookID string) (any, error) {
 		mfs := metafetch.NewService(db)
-		return mfs.FetchMetadataForBook(ctx, bookID)
+		// Organize works through the library and nobody picks a book: the
+		// fetch is Unattended, and a retired book is reported to the organizer
+		// as a skip it can count (its package cannot import metafetch).
+		resp, err := mfs.FetchMetadataForBook(ctx, bookID, metafetch.Unattended)
+		if errors.Is(err, metafetch.ErrBookRetired) {
+			return nil, fmt.Errorf("%w: %w", organizer.ErrFetchSkippedRetired, err)
+		}
+		return resp, err
 	}
 
 	return svc

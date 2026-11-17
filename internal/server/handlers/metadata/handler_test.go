@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.21.3
+// version: 1.21.4
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -210,7 +210,7 @@ func TestGetMetadataFields(t *testing.T) {
 
 func TestFetchAudiobookMetadata(t *testing.T) {
 	h, d := newHandler(t)
-	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "b1").Return(&metafetch.FetchMetadataResponse{
+	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "b1", metafetch.Interactive).Return(&metafetch.FetchMetadataResponse{
 		Message: "ok", Source: "audible", Book: &database.Book{ID: "b1", Title: "T"},
 	}, nil)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T2"}, nil)
@@ -225,7 +225,7 @@ func TestFetchAudiobookMetadata(t *testing.T) {
 
 func TestFetchAudiobookMetadata_NotFound(t *testing.T) {
 	h, d := newHandler(t)
-	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "bx").Return(nil, assertErr("nope"))
+	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "bx", metafetch.Interactive).Return(nil, assertErr("nope"))
 	w := doReq(h.FetchAudiobookMetadata, http.MethodPost, "/audiobooks/bx/fetch-metadata", nil, idParam("bx"))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
@@ -237,7 +237,7 @@ func TestFetchAudiobookMetadata_NotFound(t *testing.T) {
 // and nothing is queued for write-back.
 func TestFetchAudiobookMetadata_ReviewOnlyMatchIsLeftForReview(t *testing.T) {
 	h, d := newHandler(t)
-	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "b1").
+	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "b1", metafetch.Interactive).
 		Return(nil, &metafetch.ReviewOnlyNotAppliedError{Title: "T", Sources: []string{"Open Library"}})
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
 	w := doReq(h.FetchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/fetch-metadata", nil, idParam("b1"))
