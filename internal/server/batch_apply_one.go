@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.43.5
+// version: 1.43.6
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -576,6 +576,19 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 			berr = fmt.Errorf("book %s not found", id)
 		}
 		return cachedApplyPlan{Candidate: &cand, Reason: applySkipBookNotFound, Err: berr}
+	}
+	// An applied book is always left alone here. planCachedApply lets a single
+	// review-row pin re-apply one, but nobody picks candidates on this path, so
+	// there is no pin to honour. The op result's own "applied" status is not
+	// enough: it is written only when THIS path applies the book, so a book
+	// applied since the fetch by the cached bulk apply, the review lane, the
+	// single-book dialog or another op still has a "matched" result, and
+	// without this check batch-apply-candidates (and its preview) would apply
+	// it again -- file work, a tag write, an iTunes write-back and a history
+	// entry each time. Checked before no-match, like planCachedApply.
+	if database.MetadataApplied(book.MetadataReviewStatus) {
+		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAlreadyApplied,
+			Err: fmt.Errorf("book %s: metadata already applied (review status %q)", id, *book.MetadataReviewStatus)}
 	}
 	// Nobody picks candidates on this path, so a no-match book is always left.
 	if metafetch.IsMarkedNoMatch(book.MetadataReviewStatus) {

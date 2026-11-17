@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package server
 
@@ -376,6 +376,11 @@ func (s *Server) applyOpResultCandidateLocked(ctx context.Context, books bookRea
 	plan := planOpResultApply(books, bookID, cr, claims)
 	if plan.Reason == applySkipMarkedNoMatch {
 		// Marked "no match" since the fetch: nothing to apply.
+		return opResultApplyOutcome{skipped: true}
+	}
+	if plan.Reason == applySkipAlreadyApplied {
+		// Applied since the fetch (by another path): nothing to apply, and not
+		// an error either, as in the cached bulk apply.
 		return opResultApplyOutcome{skipped: true}
 	}
 	if plan.Reason == applySkipGateBlocked {

@@ -1,13 +1,14 @@
 // file: internal/applygate/evidence.go
-// version: 1.10.3
+// version: 1.11.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package applygate
 
 import (
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -115,7 +116,7 @@ func CheckEvidenceInBatch(book *database.Book, authors Authors, rt database.Book
 		runtime,
 		checkAuthorRole(c),
 		checkAuthorPath(book, authors, c),
-		checkTitle(book, c),
+		checkTitle(book, authors, c),
 		checkNarrator(book, c, narratorArmed),
 		CheckASIN(book, c),
 		checkCastInAuthor(&nameSource{author: authors.credit(), narrator: bookNarrator(book)}, c.Author, c.Narrator),
@@ -318,62 +319,121 @@ func checkAuthorPath(book *database.Book, authors Authors, c *metafetch.Metadata
 	return r
 }
 
-// checkTitle compares the candidate title with every place the book's title
-// lives: the stored title and the file and folder names. A candidate title
-// that equals a SERIES name ("Star Wars" for "A New Dawn: Star Wars") is not
-// allowed to agree through a split segment, and a folder named after the
-// series ("/Star Wars/A New Dawn.m4b") is not a title at all. A candidate whose
-// title IS the series name and that nothing confirms is a hard block: that is
-// the 2026-09-13 "Star Wars" at 233% row.
-func checkTitle(book *database.Book, c *metafetch.MetadataCandidate) CheckResult {
+// checkTitle compares the candidate's whole title with every place the book's
+// title lives: the stored title and the file and folder names. Agreement needs
+// the WHOLE identifying title to match on both sides (compareTitles), not a
+// segment they share: "Hush: Part 1" and "Hush: Part 2", or "Batman: Dark
+// Victory" and "Batman: The Long Halloween", share a storyline or franchise
+// name and are different books. A candidate title that equals a SERIES name
+// ("Star Wars" for "A New Dawn: Star Wars") is not allowed to agree through a
+// shared segment, and a folder named after the series ("/Star Wars/A New
+// Dawn.m4b") is not a title at all. A candidate whose title IS the series name
+// and that nothing confirms is a hard block: that is the 2026-09-13 "Star
+// Wars" at 233% row.
+//
+// A pair that CONFLICTS (the same words with a number the other side gives
+// differently, or a shared segment with a remainder on each side that the other
+// does not account for) blocks as title_disagrees even when another variant of
+// the book agrees: the stored title and the file name disagreeing with each
+// other is not confirmation. Two conflicts are weaker evidence and only block
+// when nothing agrees: a word remainder found in a FILE or FOLDER name, which
+// carries narrators, publishers and years the stored title does not.
+func checkTitle(book *database.Book, authors Authors, c *metafetch.MetadataCandidate) CheckResult {
 	r := CheckResult{Name: "title"}
-	candVariants := []string{c.Title}
-	if strings.TrimSpace(c.Subtitle) != "" {
-		candVariants = append(candVariants, c.Title+" "+c.Subtitle)
-	}
 	seriesNames := titleSeriesNames(book, c)
-	full, segs := bookTitleVariants(book, seriesNames)
-	// The candidate's own main title ("The Hobbit" of "The Hobbit: Or There
-	// and Back Again") may agree with a whole book title, unless it is the
-	// series name ("Star Wars" of "Star Wars: A New Dawn").
-	if main := strings.TrimSpace(segSplitRe.Split(c.Title, 2)[0]); main != "" &&
-		main != strings.TrimSpace(c.Title) && !seriesNames[normText(main)] {
-		candVariants = append(candVariants, main)
-	}
-
-	best, bestAgainst := 0.0, ""
-	for _, cv := range candVariants {
-		for _, bv := range full {
-			if s := titleSim(cv, bv); s > best {
-				best, bestAgainst = s, bv
-			}
-		}
-		if seriesNames[normText(cv)] {
-			continue
-		}
-		for _, bv := range segs {
-			if s := titleSim(cv, bv); s > best {
-				best, bestAgainst = s, bv
-			}
-		}
-	}
-	if best == 0 && len(full) == 0 {
+	variants := bookTitleVariants(book, seriesNames)
+	if len(variants) == 0 {
 		r.Outcome, r.Detail = OutcomeUnknown, "book has no title or file name"
 		return r
 	}
-	r.Detail = "best " + strconv.Itoa(int(best*100+0.5)) + "% vs " + strconv.Quote(bestAgainst)
+	ctx := newTitleCtx(seriesNames, authors.credit(), c.Author, bookNarrator(book), c.Narrator)
+
+	var (
+		bestAgree, bestOther    = -1.0, -1.0
+		agreeAgainst, otherVs   string
+		numConflict, wordInName string
+		wordInFile              string
+		anyNeutral              bool
+	)
+	for _, cf := range candidateTitleForms(c) {
+		for _, bv := range variants {
+			cmp := compareTitles(cf, bv.text, ctx)
+			desc := strconv.Quote(cf) + " vs " + strconv.Quote(bv.text)
+			if cmp.note != "" {
+				desc += ": " + cmp.note
+			}
+			switch cmp.class {
+			case classConflictNumber:
+				if numConflict == "" {
+					numConflict = desc
+				}
+			case classConflictWords:
+				switch {
+				case bv.stored && wordInName == "":
+					wordInName = desc
+				case !bv.stored && wordInFile == "":
+					wordInFile = desc
+				}
+			case classAgree:
+				if bestAgree < 1 {
+					bestAgree, agreeAgainst = 1, bv.text
+				}
+			default:
+				sim := titleSim(cf, bv.text)
+				if sim > bestOther {
+					bestOther, otherVs = sim, bv.text
+				}
+				if cmp.class == classNeutral {
+					anyNeutral = true
+				}
+			}
+		}
+	}
+	block := func(detail string) CheckResult {
+		r.Outcome, r.Reason, r.Detail = OutcomeBlock, ReasonTitleDisagrees, detail
+		return r
+	}
 	switch {
-	case best >= 0.85:
-		r.Outcome = OutcomeAgree
+	case numConflict != "":
+		return block("conflicting title: " + numConflict)
+	case wordInName != "":
+		return block("conflicting title: " + wordInName)
+	case bestAgree >= 1:
+		r.Outcome, r.Detail = OutcomeAgree, "best 100% vs "+strconv.Quote(agreeAgainst)
+		return r
+	case wordInFile != "":
+		return block("conflicting title in the file or folder name: " + wordInFile)
+	}
+	if bestOther < 0 {
+		bestOther = 0
+	}
+	r.Detail = "best " + strconv.Itoa(int(bestOther*100+0.5)) + "% vs " + strconv.Quote(otherVs)
+	switch {
 	case candidateTitleIsSeriesName(book, c):
-		r.Outcome, r.Reason = OutcomeBlock, ReasonTitleDisagrees
-		r.Detail = "candidate title " + strconv.Quote(c.Title) + " is the series name; " + r.Detail
-	case best < 0.5:
+		return block("candidate title " + strconv.Quote(c.Title) + " is the series name; " + r.Detail)
+	case !anyNeutral:
 		r.Outcome, r.Reason = OutcomeBlock, ReasonTitleDisagrees
 	default:
 		r.Outcome = OutcomeNeutral
 	}
 	return r
+}
+
+// candidateTitleForms are the candidate's titles to compare: the title, the
+// title with its subtitle (a segment of its own, so a remainder is seen as
+// one) and the title without a parenthetical ("Title (Series, Book 2)").
+func candidateTitleForms(c *metafetch.MetadataCandidate) []string {
+	forms := []string{c.Title}
+	add := func(s string) {
+		if strings.TrimSpace(s) != "" && !slices.Contains(forms, s) {
+			forms = append(forms, s)
+		}
+	}
+	if strings.TrimSpace(c.Subtitle) != "" {
+		add(c.Title + ": " + c.Subtitle)
+	}
+	add(parenRe.ReplaceAllString(c.Title, " "))
+	return forms
 }
 
 // titleSeriesNames is the normalized series names the title check knows: the
@@ -451,23 +511,32 @@ func CheckASIN(book *database.Book, c *metafetch.MetadataCandidate) CheckResult 
 	return r
 }
 
-// bookTitleVariants returns whole-title forms (stored title, its
-// parenthetical-stripped form, file base name, folder name) and the segments
-// those split into at ":" / " - " separators. A folder or file name equal to a
-// series name is skipped: it names the series, not this book.
-func bookTitleVariants(book *database.Book, seriesNames map[string]bool) (full, segs []string) {
-	add := func(s string) {
+// titleVariant is one place a book's title lives. stored marks the title the
+// organizer holds (as written, and without its parenthetical); the others come
+// from the file and folder names.
+type titleVariant struct {
+	text   string
+	stored bool
+}
+
+// bookTitleVariants returns the book's whole-title forms: the stored title, its
+// parenthetical-stripped form, the file base name and the folder name. A folder
+// or file name equal to a series name is skipped: it names the series, not this
+// book.
+func bookTitleVariants(book *database.Book, seriesNames map[string]bool) []titleVariant {
+	var out []titleVariant
+	add := func(s string, stored bool) {
 		if strings.TrimSpace(s) != "" {
-			full = append(full, s)
+			out = append(out, titleVariant{text: s, stored: stored})
 		}
 	}
 	addPath := func(s string) {
 		if !seriesNames[normText(s)] {
-			add(s)
+			add(s, false)
 		}
 	}
-	add(book.Title)
-	add(parenRe.ReplaceAllString(book.Title, " "))
+	add(book.Title, true)
+	add(parenRe.ReplaceAllString(book.Title, " "), true)
 	if p := strings.TrimSpace(book.FilePath); p != "" {
 		base := filepath.Base(p)
 		if ext := filepath.Ext(base); metadata.IsFileExt(ext) {
@@ -477,14 +546,7 @@ func bookTitleVariants(book *database.Book, seriesNames map[string]bool) (full, 
 			addPath(base)
 		}
 	}
-	for _, f := range full {
-		for _, s := range segSplitRe.Split(f, -1) {
-			if strings.TrimSpace(s) != "" && strings.TrimSpace(s) != strings.TrimSpace(f) {
-				segs = append(segs, s)
-			}
-		}
-	}
-	return full, segs
+	return out
 }
 
 var (
