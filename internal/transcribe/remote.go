@@ -1,5 +1,5 @@
 // file: internal/transcribe/remote.go
-// version: 2.19.0
+// version: 2.20.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
 // last-edited: 2026-11-17
 
@@ -81,6 +81,9 @@ type remoteHealth struct {
 	// It is part of the result-journal key -- see newEndpointJournal; empty
 	// means the endpoint's results are not journalled.
 	Model string `json:"model"`
+	// Language is the decode language the server reports, when it does. Neither
+	// bundled worker reports it yet (the key is absent), so it is empty today.
+	Language string `json:"language"`
 	// Backend ("mlx", ...) qualifies Model in the journal key; optional.
 	Backend string `json:"backend"`
 	// DecodeFingerprint is a short hash of the server's output-affecting
