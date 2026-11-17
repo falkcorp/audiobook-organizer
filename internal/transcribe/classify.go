@@ -1,7 +1,7 @@
 // file: internal/transcribe/classify.go
-// version: 1.0.1
+// version: 1.1.2
 // guid: 7d41f0a2-6c93-4b18-a5e7-2f9b6c0d3184
-// last-edited: 2026-08-07
+// last-edited: 2026-11-17
 
 package transcribe
 

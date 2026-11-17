@@ -1,7 +1,7 @@
 // file: internal/transcribe/dispatcher.go
-// version: 1.31.2
+// version: 1.32.0
 // guid: ea9de4e6-980d-411f-a92c-878af1df490a
-// last-edited: 2026-11-15
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -1963,8 +1963,8 @@ func dispatchPool[J any](ctx context.Context, endpoints []Endpoint, requires []s
 					continue
 				}
 				if br.Endpoint == "" {
-					br.Endpoint = ep.URL
-					br.Worker = probeByURL[ep.URL].storedWorker()
+					g := probeByURL[ep.URL]
+					br = stampAnswer(br, g, ep.URL, g.storedWorker())
 				}
 				results[id] = br
 				settledHere[id] = true
@@ -2413,8 +2413,7 @@ func dispatchSingle[J any](ctx context.Context, g gatedEndpoint, refused []gpuRe
 			// as dispatchPool's do; only a result the dispatcher made itself
 			// (a deferral) is unnamed.
 			if br.Endpoint == "" {
-				br.Endpoint = url
-				br.Worker = g.answerWorker()
+				br = stampAnswer(br, g, url, g.answerWorker())
 			}
 			results[id] = br
 		}

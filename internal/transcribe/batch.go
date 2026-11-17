@@ -1,7 +1,7 @@
 // file: internal/transcribe/batch.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-10-30
+// last-edited: 2026-11-17
 
 package transcribe
 
@@ -47,6 +47,17 @@ type BatchResult struct {
 	// when no worker gave the result, or the endpoint's /health could not be
 	// read (an unknown machine never earns a file another strike).
 	Worker string
+	// Model is the whisper model the answering worker had loaded, from its
+	// /health (or, when the worker's response names one, from the response). The
+	// per-file op records it in IntroMeta so a transcript carries what produced
+	// it. Empty for a result no worker gave and for a worker whose /health could
+	// not be read: absent is "not known", never a default.
+	Model string
+	// Language is the decode language, when the worker or its response reports
+	// one. Neither bundled worker reports it today (both hard-code it), so this
+	// stays empty until they do; it is deliberately NOT defaulted here, because a
+	// language the code assumed would be stored as if the worker had said it.
+	Language string
 }
 
 // ProgressFunc is an optional callback invoked after each book finishes

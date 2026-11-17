@@ -1,7 +1,7 @@
 // file: internal/transcribe/parse.go
-// version: 3.0.1
+// version: 3.1.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-02
+// last-edited: 2026-11-17
 
 package transcribe
 
