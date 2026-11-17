@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-11-16-metadata-refresh-bad-asin-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 7a1c9e34-5b82-4d06-b3f1-0e8d2a64c957 -->
-<!-- last-edited: 2026-11-16 -->
+<!-- last-edited: 2026-11-17 -->
 
 # The metadata refresh stops failing on nearly every book it picks
 
@@ -94,6 +94,6 @@ from the numbers: the production logs do not record how long each request took.
 **The fix.** The limit now starts when the request has its place in the line and
 covers only the exchange with the service. A request that times out is tried
 once more after a short pause, and no more than that. This retry applies only
-to a service that has such a limit. In the worst case a lookup that hangs in all
-three regions now ends after about a minute (it took a minute and a half before),
-at the cost of six requests instead of three.
+to a service that has such a limit. A lookup that hangs now gives up after the first region that times out, since the next one would
+wait the same way: at worst about twenty-two seconds and two requests, where it
+used to be thirty seconds and three requests.

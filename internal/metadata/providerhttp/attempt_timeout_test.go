@@ -1,7 +1,7 @@
 // file: internal/metadata/providerhttp/attempt_timeout_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9b4f7e21-0c58-4d3a-a6e9-3f1d82b7c405
-// last-edited: 2026-11-16
+// last-edited: 2026-11-17
 
 package providerhttp
 
@@ -341,7 +341,8 @@ func (timeoutErr) Temporary() bool { return true }
 // attempt times out, and the time charged is each attempt's full deadline plus
 // the backoff actually taken (the injectable wait records it). It must stay
 // inside the provider's Timeout -- the Audnexus built-ins give 21.5 s of 30 s
-// -- and a lookup of three regions inside what three of the old Timeouts were.
+// -- and, with the lookup stopping at the first region that times out, a whole
+// lookup inside what three of the old 10 s per-region deadlines were.
 func TestAttemptTimeout_WorstCaseStaysInsideTimeout(t *testing.T) {
 	resetForTest()
 	t.Cleanup(resetForTest)
@@ -374,9 +375,12 @@ func TestAttemptTimeout_WorstCaseStaysInsideTimeout(t *testing.T) {
 	if charged > l.Timeout {
 		t.Fatalf("one region's worst case = %v, over the provider Timeout %v", charged, l.Timeout)
 	}
-	const regions = 3 // audnexusSearchRegions
-	if perLookup, before := regions*charged, regions*l.Timeout; perLookup > before {
-		t.Fatalf("a %d-region lookup's worst case = %v, over the %v it was before", regions, perLookup, before)
+	const (
+		regions        = 3                // audnexusSearchRegions
+		oldRegionLimit = 10 * time.Second // audnexusPerRegionTimeout, queue included
+	)
+	if before := regions * oldRegionLimit; charged > before {
+		t.Fatalf("a hung lookup's worst case = %v, over the %v it was before (%d regions x %v)", charged, before, regions, oldRegionLimit)
 	}
 	if charged > 21500*time.Millisecond {
 		t.Fatalf("one region's worst case = %v, documented as at most 21.5s", charged)
