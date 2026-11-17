@@ -1,5 +1,5 @@
 // file: internal/books/store/snapshot_pins_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b2f6e0a4-83d1-4c57-9a7e-5d1c4e8b2f93
 // last-edited: 2026-11-17
 
@@ -119,14 +119,38 @@ func (f *pinFixture) editBook(t *testing.T, id, title string) {
 	time.Sleep(time.Millisecond)
 }
 
+// pinnedAmong is the pinned subset of a book's snapshots as the prune sees it.
+func (f *pinFixture) pinnedAmong(t *testing.T, id string) []int64 {
+	t.Helper()
+	pins, err := f.s.snapshotPins()
+	require.NoError(t, err)
+	existing := f.timestamps(t, id)
+	got := pins.Pinned(id, existing)
+	var out []int64
+	for _, ts := range existing {
+		if _, ok := got[ts]; ok {
+			out = append(out, ts)
+		}
+	}
+	return out
+}
+
+func TestEarliestSnapshotAbove(t *testing.T) {
+	require.Equal(t, int64(0), EarliestSnapshotAbove(5, nil))
+	require.Equal(t, int64(0), EarliestSnapshotAbove(9, []int64{3, 9, 5}), "nothing above the floor")
+	require.Equal(t, int64(6), EarliestSnapshotAbove(5, []int64{9, 6, 3, 5, 12}), "strictly above, whatever the order")
+	require.Equal(t, int64(3), EarliestSnapshotAbove(0, []int64{9, 3, 5}), "floor 0 is the oldest snapshot")
+}
+
 // A merge writes its journal entry BEFORE the merge and patches the snapshot
 // timestamps in AFTER it, by finding "the earliest snapshot newer than the
-// baseline". In between the entry names no snapshot, so it pins a RANGE: every
-// snapshot of its books newer than the baseline it recorded.
-func TestPrune_ProvisionalEntryPinsEverySnapshotNewerThanItsBaseline(t *testing.T) {
+// baseline". In between the entry names none, so it pins exactly that snapshot:
+// the first one above its baseline, and nothing else of the book.
+func TestPrune_ProvisionalEntryPinsOnlyTheFirstSnapshotAboveItsBaseline(t *testing.T) {
 	f := newPinFixture(t)
 	id, before := f.bookWithSnapshots(t, "Batman", 3)
-	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, MergedAt: time.Now().UnixNano(), WinnerBaselineTS: before[2]})
+	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, BaselinesRecorded: true,
+		MergedAt: time.Now().UnixNano(), WinnerBaselineTS: before[2]})
 	for i := range 3 { // the merge's own writes
 		f.editBook(t, id, fmt.Sprintf("merged edit %d", i))
 	}
@@ -135,21 +159,25 @@ func TestPrune_ProvisionalEntryPinsEverySnapshotNewerThanItsBaseline(t *testing.
 
 	deleted, err := f.s.PruneBookSnapshots(id, 1)
 	require.NoError(t, err)
-	require.Equal(t, 3, deleted, "only the snapshots at or before the baseline are deletable")
-	require.Equal(t, all[3:], f.timestamps(t, id), "everything newer than the baseline survives, however small keep is")
+	require.Equal(t, 4, deleted, "the three at or below the baseline and the second merge write are deletable")
+	require.Equal(t, []int64{all[3], all[5]}, f.timestamps(t, id),
+		"the first snapshot above the baseline (what the patch will name) and the newest one survive, nothing more")
 }
 
-// The pin set is cached. A snapshot written AFTER it was built must still be
-// pinned: the merge's own writes land exactly then.
-func TestPins_ProvisionalRangeCoversASnapshotWrittenAfterTheSetWasBuilt(t *testing.T) {
+// The pin set is cached, but a floor is resolved against the snapshots the book has
+// WHEN THE PRUNE DECIDES, not when the set was built: the merge's own writes land
+// after the set was built, and the snapshot the patch names is one of them.
+func TestPins_FloorResolvesAgainstSnapshotsWrittenAfterTheSetWasBuilt(t *testing.T) {
 	f := newPinFixture(t)
 	id, before := f.bookWithSnapshots(t, "Batman", 3)
-	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, MergedAt: time.Now().UnixNano(), WinnerBaselineTS: before[2]})
+	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, BaselinesRecorded: true,
+		MergedAt: time.Now().UnixNano(), WinnerBaselineTS: before[2]})
 
-	built, err := f.s.snapshotPins() // built now, with no snapshot newer than the baseline yet
+	built, err := f.s.snapshotPins() // no snapshot above the baseline exists yet
 	require.NoError(t, err)
 	require.Zero(t, built.Len(), "no exact pin: the entry names no timestamp")
-	require.Equal(t, 2, built.RangedBooks(), "both books of the entry are pinned by range")
+	require.Equal(t, []int64{before[2]}, built.Floors(id))
+	require.Empty(t, f.pinnedAmong(t, id), "nothing above the floor yet, so nothing to pin yet")
 
 	f.editBook(t, id, "the merge's write")
 	f.editBook(t, id, "another")
@@ -157,65 +185,111 @@ func TestPins_ProvisionalRangeCoversASnapshotWrittenAfterTheSetWasBuilt(t *testi
 
 	again, err := f.s.snapshotPins()
 	require.NoError(t, err)
-	require.Same(t, built, again, "no journal write since, so the set was not rebuilt")
-	require.True(t, again.Has(id, all[3]) && again.Has(id, all[4]), "snapshots written after the build are pinned by the range")
-	require.False(t, again.Has(id, before[2]), "the baseline itself is not newer than the baseline")
+	require.Same(t, built, again, "no journal write since, so the set was not rebuilt: the answer is computed on demand")
+	require.Equal(t, []int64{all[3]}, f.pinnedAmong(t, id), "the first snapshot above the floor, written after the build")
 
 	deleted, err := f.s.PruneBookSnapshots(id, 1)
 	require.NoError(t, err)
 	require.Equal(t, 3, deleted)
-	require.Equal(t, all[3:], f.timestamps(t, id))
+	require.Equal(t, []int64{all[3], all[4]}, f.timestamps(t, id))
 }
 
-// Two provisional entries on one book (a cluster merge shares its winner) merge
-// to the wider range: the lower floor.
-func TestPrune_TwoProvisionalEntriesOnOneBookPinFromTheLowerFloor(t *testing.T) {
+// Two provisional entries on one book (a cluster merge shares its winner) each
+// keep their OWN pin. Merging them to the lower floor would pin the first
+// snapshot above the lower floor only and leave the newer in-flight merge's
+// pre-merge snapshot unpinned.
+func TestPrune_TwoProvisionalEntriesOnOneBookEachKeepTheirOwnPin(t *testing.T) {
 	f := newPinFixture(t)
 	id, ts := f.bookWithSnapshots(t, "Batman", 6)
 	now := time.Now().UnixNano()
-	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, MergedAt: now, WinnerBaselineTS: ts[3]})
-	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "nightwing", Provisional: true, MergedAt: now + 1, WinnerBaselineTS: ts[1]})
+	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, BaselinesRecorded: true, MergedAt: now, WinnerBaselineTS: ts[3]})
+	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "nightwing", Provisional: true, BaselinesRecorded: true, MergedAt: now + 1, WinnerBaselineTS: ts[1]})
 
+	require.ElementsMatch(t, []int64{ts[2], ts[4]}, f.pinnedAmong(t, id), "the first snapshot above each row's own floor")
 	deleted, err := f.s.PruneBookSnapshots(id, 1)
 	require.NoError(t, err)
-	require.Equal(t, 2, deleted, "only ts[0] and ts[1], at or below the lower floor, are deletable")
-	require.Equal(t, ts[2:], f.timestamps(t, id))
+	require.Equal(t, 3, deleted, "ts[0], ts[1], ts[3]")
+	require.Equal(t, []int64{ts[2], ts[4], ts[5]}, f.timestamps(t, id))
 }
 
-// An entry that recorded no baseline (written before the field existed, or the
-// book had no snapshot yet) cannot say where its range starts, so it pins all.
-func TestPrune_ProvisionalEntryWithoutABaselinePinsEverySnapshotOfBothBooks(t *testing.T) {
+// An entry written before baselines were recorded has no baseline, so its floor is
+// MergedAt: set after the baselines would have been read and before the merge
+// wrote anything. The old behaviour for it (floor 0) pinned every snapshot.
+func TestPrune_LegacyProvisionalEntryUsesMergedAtAsItsFloor(t *testing.T) {
 	f := newPinFixture(t)
-	w, _ := f.bookWithSnapshots(t, "Batman", 5)
-	l, _ := f.bookWithSnapshots(t, "Robin", 5)
-	f.journal(t, AutoMergeJournalEntry{WinnerID: w, LoserID: l, Provisional: true, MergedAt: time.Now().UnixNano()})
+	w, ts := f.bookWithSnapshots(t, "Batman", 6)
+	l, _ := f.bookWithSnapshots(t, "Robin", 3)
+	f.journal(t, AutoMergeJournalEntry{WinnerID: w, LoserID: l, Provisional: true, MergedAt: ts[2] + 1}) // no BaselinesRecorded
 
-	for _, id := range []string{w, l} {
-		deleted, err := f.s.PruneBookSnapshots(id, 1)
-		require.NoError(t, err)
-		require.Zero(t, deleted)
-		require.Len(t, f.timestamps(t, id), 5)
-	}
+	require.Equal(t, []int64{ts[3]}, f.pinnedAmong(t, w), "the first snapshot written after MergedAt")
+	deleted, err := f.s.PruneBookSnapshots(w, 1)
+	require.NoError(t, err)
+	require.Equal(t, 4, deleted, "not 0: a legacy row no longer pins the whole history")
+	require.Equal(t, []int64{ts[3], ts[5]}, f.timestamps(t, w))
 }
 
-// A provisional entry whose merge failed stays provisional. The row is the
-// evidence the merge may have run, so it keeps pinning for as long as it exists,
-// however old, and the dry run counts it.
-func TestPrune_StaleProvisionalEntryStillPinsAndIsCounted(t *testing.T) {
+// With no recorded baseline AND no MergedAt there is nothing to bound the entry,
+// and the first snapshot above 0 is the book's oldest, the same answer the patch
+// itself would give for a baseline of 0.
+func TestPrune_ProvisionalEntryWithNoFloorAtAllPinsTheOldestSnapshot(t *testing.T) {
+	f := newPinFixture(t)
+	w, ts := f.bookWithSnapshots(t, "Batman", 5)
+	pins := &SnapshotPins{byBook: map[string]map[int64]struct{}{}, floors: map[string][]int64{}}
+	e := AutoMergeJournalEntry{WinnerID: w, LoserID: "robin", Provisional: true}
+	wf, lf := e.provisionalFloors()
+	pins.addFloor(e.WinnerID, wf)
+	pins.addFloor(e.LoserID, lf)
+	got := pins.Pinned(w, ts)
+	require.Len(t, got, 1)
+	require.Contains(t, got, ts[0])
+}
+
+// A recorded baseline of 0 is a real baseline (the book had no snapshot when the
+// merge began), not "unknown", so it is not replaced by MergedAt.
+func TestPrune_RecordedZeroBaselineIsARealBaseline(t *testing.T) {
+	f := newPinFixture(t)
+	id, ts := f.bookWithSnapshots(t, "Batman", 4)
+	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, BaselinesRecorded: true, MergedAt: time.Now().UnixNano()})
+	require.Equal(t, []int64{ts[0]}, f.pinnedAmong(t, id), "the first snapshot above 0 is the oldest")
+}
+
+// A provisional entry whose merge failed in a way that does not prove nothing was
+// written stays provisional. The row is the evidence the merge may have run, so it
+// keeps pinning for as long as it exists, however old, and the dry run counts it.
+// What it pins is one snapshot per book.
+func TestPrune_StaleProvisionalEntryStillPinsOneSnapshotAndIsCounted(t *testing.T) {
 	f := newPinFixture(t)
 	id, ts := f.bookWithSnapshots(t, "Batman", 6)
 	old := time.Now().Add(-48 * time.Hour).UnixNano()
-	key := f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, MergedAt: old, WinnerBaselineTS: ts[1]})
+	key := f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, BaselinesRecorded: true, MergedAt: old, WinnerBaselineTS: ts[1]})
 
 	deleted, err := f.s.PruneBookSnapshots(id, 1)
 	require.NoError(t, err)
-	require.Equal(t, 2, deleted, "ts[0] and ts[1] are not newer than the baseline; ts[2..4] are pinned; ts[5] is the kept one")
-	require.Equal(t, ts[2:], f.timestamps(t, id))
+	require.Equal(t, 4, deleted, "ts[0], ts[1], ts[3], ts[4]; ts[2] is the pin and ts[5] the kept one")
+	require.Equal(t, []int64{ts[2], ts[5]}, f.timestamps(t, id))
 
 	a, err := f.s.AuditMergeJournalSnapshots(10)
 	require.NoError(t, err)
 	require.Equal(t, 1, a.StaleProvisional)
 	require.Equal(t, []string{key}, a.StaleProvisionalIDs)
+}
+
+// A closed (aborted) entry never merged anything: it pins nothing and is not a
+// stale provisional row.
+func TestPrune_AbortedProvisionalEntryPinsNothingAndIsNotStale(t *testing.T) {
+	f := newPinFixture(t)
+	id, ts := f.bookWithSnapshots(t, "Batman", 6)
+	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", Provisional: true, BaselinesRecorded: true,
+		MergedAt: time.Now().Add(-48 * time.Hour).UnixNano(), WinnerBaselineTS: ts[1], AbortedAt: time.Now().UnixNano()})
+
+	require.Empty(t, f.pinnedAmong(t, id))
+	deleted, err := f.s.PruneBookSnapshots(id, 2)
+	require.NoError(t, err)
+	require.Equal(t, 4, deleted)
+
+	a, err := f.s.AuditMergeJournalSnapshots(10)
+	require.NoError(t, err)
+	require.Zero(t, a.StaleProvisional, "closed rows are not counted")
 }
 
 func TestPrune_UndoneProvisionalEntryPinsNothing(t *testing.T) {
@@ -259,7 +333,8 @@ func TestAuditMergeJournalSnapshots(t *testing.T) {
 	f.journal(t, AutoMergeJournalEntry{WinnerID: w, LoserID: l, Provisional: true, MergedAt: now + 4}) // young: in flight
 	f.journal(t, AutoMergeJournalEntry{WinnerID: w, LoserID: l, MergedAt: now + 5})
 	stale := f.journal(t, AutoMergeJournalEntry{WinnerID: w, LoserID: l, Provisional: true, MergedAt: now - int64(3*time.Hour)})
-	f.journal(t, AutoMergeJournalEntry{WinnerID: w, LoserID: l, Provisional: true, UndoneAt: now, MergedAt: now - int64(4*time.Hour)}) // undone: not stale
+	f.journal(t, AutoMergeJournalEntry{WinnerID: w, LoserID: l, Provisional: true, UndoneAt: now, MergedAt: now - int64(4*time.Hour)})  // undone: not stale
+	f.journal(t, AutoMergeJournalEntry{WinnerID: w, LoserID: l, Provisional: true, AbortedAt: now, MergedAt: now - int64(5*time.Hour)}) // closed: not stale
 	_ = ok
 
 	a, err := f.s.AuditMergeJournalSnapshots(10)
@@ -278,7 +353,7 @@ func TestAuditMergeJournalSnapshots(t *testing.T) {
 	require.Equal(t, 1, capped.Truncated)
 }
 
-func TestAuditMergeJournalSnapshots_ReadsAndWritesNothing(t *testing.T) {
+func TestAuditMergeJournalSnapshots_WritesNothing(t *testing.T) {
 	f := newPinFixture(t)
 	id, ts := f.bookWithSnapshots(t, "Batman", 3)
 	f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", WinnerPreMergeTS: ts[0]})
@@ -345,7 +420,7 @@ func TestPlanBookSnapshotPrune_MatchesWhatPruneDeletes(t *testing.T) {
 
 func TestPlanSnapshotPrune_PinnedSnapshotInsideTheKeepWindowIsNotCountedAsPinned(t *testing.T) {
 	keys := [][]byte{[]byte("book_ver:b:1"), []byte("book_ver:b:2"), []byte("book_ver:b:3")}
-	pins := &SnapshotPins{byBook: map[string]map[int64]struct{}{}}
+	pins := &SnapshotPins{byBook: map[string]map[int64]struct{}{}, floors: map[string][]int64{}}
 	pins.add("b", 3)
 	toDelete, plan := planSnapshotPrune("b", keys, 1, pins)
 	require.Len(t, toDelete, 2)
@@ -381,7 +456,7 @@ func TestSnapshotPins_BuiltOncePerGenerationNotOncePerBook(t *testing.T) {
 	second, err := f.s.snapshotPins()
 	require.NoError(t, err)
 	require.NotSame(t, first, second, "a journal write rebuilds the set")
-	require.True(t, second.Has("batman", 6))
+	require.Contains(t, second.Pinned("batman", []int64{5, 6}), int64(6))
 }
 
 // dumpKV is every key and value in the store's DB, for "wrote nothing" checks.
@@ -396,4 +471,74 @@ func dumpKV(t *testing.T, s *PebbleStore) map[string]string {
 	}
 	require.NoError(t, iter.Error())
 	return out
+}
+
+// The re-plan loop. A journal row written between the plan and the commit makes
+// the plan stale, so it is redone; a journal that changes on every attempt ends
+// the call with an error and deletes nothing.
+func TestPruneBookSnapshots_ReplansWhenAJournalRowLandsBeforeTheCommit(t *testing.T) {
+	f := newPinFixture(t)
+	id, ts := f.bookWithSnapshots(t, "Batman", 6)
+	var attempts []int
+	pruneBeforeCommitHook = func(attempt int) {
+		attempts = append(attempts, attempt)
+		if attempt == 0 { // a merge's entry lands after the first plan
+			f.journal(t, AutoMergeJournalEntry{WinnerID: id, LoserID: "robin", WinnerPreMergeTS: ts[0]})
+		}
+	}
+	t.Cleanup(func() { pruneBeforeCommitHook = nil })
+
+	deleted, err := f.s.PruneBookSnapshots(id, 2)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, attempts, "planned twice: the stale plan was not committed")
+	require.Equal(t, 3, deleted)
+	require.Contains(t, f.timestamps(t, id), ts[0], "the entry that landed mid-call is honoured")
+}
+
+func TestPruneBookSnapshots_GivesUpAfterFiveChangedJournalsAndDeletesNothing(t *testing.T) {
+	f := newPinFixture(t)
+	id, _ := f.bookWithSnapshots(t, "Batman", 6)
+	n := 0
+	pruneBeforeCommitHook = func(attempt int) {
+		n++
+		f.journal(t, AutoMergeJournalEntry{WinnerID: "alfred", LoserID: "robin", WinnerPreMergeTS: int64(100 + attempt), MergedAt: time.Now().UnixNano() + int64(attempt)})
+	}
+	t.Cleanup(func() { pruneBeforeCommitHook = nil })
+
+	deleted, err := f.s.PruneBookSnapshots(id, 2)
+	require.Error(t, err)
+	require.Zero(t, deleted)
+	require.Equal(t, pruneStablePinsAttempts, n)
+	require.Len(t, f.timestamps(t, id), 6, "nothing was deleted")
+}
+
+// One unreadable journal row: the pin build fails, names the row, and the failure
+// is remembered for pinFailureTTL so a whole-library prune does not rescan the
+// journal once per book. A journal write, or the TTL, ends the memory.
+func TestSnapshotPins_UnreadableRowIsNamedAndTheFailureIsRememberedForAWhile(t *testing.T) {
+	f := newPinFixture(t)
+	id, _ := f.bookWithSnapshots(t, "Batman", 3)
+	badKey := dedupAutoMergeJournalPfx + "ffffffffffffffff"
+	require.NoError(t, f.s.SetRaw(badKey, []byte("{not json")))
+	autoMergeJournalGen.Add(1)
+
+	now := time.Now()
+	pinClock = func() time.Time { return now }
+	t.Cleanup(func() { pinClock = time.Now })
+
+	err := f.s.CheckSnapshotPins()
+	var unreadable *MergeJournalRowUnreadableError
+	require.ErrorAs(t, err, &unreadable)
+	require.Equal(t, badKey, unreadable.Key)
+	require.Contains(t, err.Error(), "prune is blocked until it is repaired")
+
+	// Repair the row behind the store's back (no journal write, so no new
+	// generation): inside the TTL the failure is answered from memory.
+	require.NoError(t, f.s.SetRaw(badKey, []byte(`{"winner_id":"a","loser_id":"b"}`)))
+	require.ErrorAs(t, f.s.CheckSnapshotPins(), &unreadable, "remembered: the journal is not rescanned per call")
+	_, err = f.s.PlanBookSnapshotPrune(id, 1)
+	require.ErrorAs(t, err, &unreadable)
+
+	now = now.Add(pinFailureTTL + time.Second)
+	require.NoError(t, f.s.CheckSnapshotPins(), "after the TTL the repaired row reads fine")
 }

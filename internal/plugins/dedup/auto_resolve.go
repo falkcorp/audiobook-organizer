@@ -1,5 +1,5 @@
 // file: internal/plugins/dedup/auto_resolve.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a7c1f08-9d24-4e6b-8b15-2c9f0a5d7e61
 // last-edited: 2026-11-17
 
@@ -39,7 +39,7 @@ func (p *Plugin) autoResolveDef() sdk.OperationDef {
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Auto-resolve CERTAIN dedup candidates (Tier 1)",
-		Description:     "Dry-run by default: reports which Band-CERTAIN dedup candidates WOULD auto-merge (≥2 primary signals or a whole-book-signature true_dup label). apply=true performs the merges, gated by the dedup.auto_resolve_enabled kill switch and a max_merges cap.",
+		Description:     "Dry-run by default: reports which Band-CERTAIN dedup candidates WOULD auto-merge (≥2 primary signals or a whole-book-signature true_dup label). apply=true performs the merges, gated by the dedup.auto_resolve_enabled kill switch, and stops after max_merges successful merges (it is not bound to a reviewed dry run).",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityHigh,
 		ConcurrencyKey:  "dedup.auto-resolve",

@@ -1,5 +1,5 @@
 // file: internal/books/store/dedup_automerge_journal.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
 // last-edited: 2026-11-17
 
@@ -99,15 +99,25 @@ type AutoMergeJournalEntry struct {
 	// which is what every patched one of them is.
 	Provisional bool `json:"provisional,omitempty"`
 
-	// WinnerBaselineTS / LoserBaselineTS are, on a provisional entry, the UnixNano
-	// of each book's newest book_ver snapshot when the merge began (0: it had
-	// none, or the entry predates these fields). The merge's pre-merge record is
-	// the earliest snapshot newer than this, so the snapshot prune keeps every
-	// snapshot of the book newer than it while the entry is provisional
+	// WinnerBaselineTS / LoserBaselineTS are, on a provisional entry written by
+	// this version, the UnixNano of each book's newest book_ver snapshot when the
+	// merge began (0: it had none), and BaselinesRecorded says they were taken, so
+	// a 0 is a real baseline and not "unknown". The merge's pre-merge record is the
+	// earliest snapshot newer than the baseline, so the snapshot prune keeps that
+	// one snapshot per book while the entry is provisional
 	// (store.collectAutoMergeSnapshotPins). The patch that finalizes the entry
-	// drops them: from then on the entry names the snapshots exactly.
-	WinnerBaselineTS int64 `json:"winner_baseline_ts,omitempty"`
-	LoserBaselineTS  int64 `json:"loser_baseline_ts,omitempty"`
+	// drops all three: from then on the entry names the snapshots exactly. An
+	// entry without BaselinesRecorded predates the fields; its floor is MergedAt.
+	WinnerBaselineTS  int64 `json:"winner_baseline_ts,omitempty"`
+	LoserBaselineTS   int64 `json:"loser_baseline_ts,omitempty"`
+	BaselinesRecorded bool  `json:"baselines_recorded,omitempty"`
+
+	// AbortedAt closes a provisional entry whose merge was refused before it wrote
+	// anything (merge.RefusedBeforeWriteError): there is no merge to undo, and the
+	// entry pins no snapshot. It stays Provisional on purpose, so a binary that
+	// predates the field still refuses to undo it and still treats its loser as
+	// open. UnmergeAuto and the snapshot pins both ignore an aborted entry.
+	AbortedAt int64 `json:"aborted_at,omitempty"`
 
 	// UndoneAt is when UnmergeAuto reverted this entry (UnixNano), zero
 	// before. UnmergeAuto refuses an entry already undone: its reverts
@@ -257,4 +267,16 @@ func (s *EmbeddingStore) OpenAutoMergeLosers() (*AutoMergeOpenLosers, error) {
 		return nil, fmt.Errorf("scan automerge journal: %w", err)
 	}
 	return out, nil
+}
+
+// provisionalFloors is the floor of the range each side of a provisional entry
+// pins from: the earliest snapshot above it is the one the entry's patch will
+// name. Recorded baselines are used as they are (0 included, which is a book that
+// had no snapshot). An entry from before baselines were recorded uses MergedAt,
+// set after they would have been read and before the merge wrote anything.
+func (e AutoMergeJournalEntry) provisionalFloors() (winner, loser int64) {
+	if e.BaselinesRecorded {
+		return e.WinnerBaselineTS, e.LoserBaselineTS
+	}
+	return e.MergedAt, e.MergedAt
 }

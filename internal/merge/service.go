@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.64.5
+// version: 1.65.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package merge
 
@@ -264,6 +264,24 @@ func (e *ProvisionalScanError) Error() string {
 		"run its deep scan first (a merge decided without a file hash rests on "+
 		"title similarity alone)", e.BookID)
 }
+
+// RefusedBeforeWriteError wraps an error MergeBooksWithOptions returned from its
+// read-only phase, before it took the first version-group lock. Everything up to
+// that point only reads (the book and file loads, the participant guards, the
+// iTunes guard, the election and the version-group resolution), so this error is
+// proof that the merge wrote nothing: no book row, no snapshot, no journal.
+//
+// The error's TYPE is not that proof, which is why this wrapper exists.
+// BookNotFoundError and ProvisionalScanError are also raised after the merge has
+// begun writing (the per-member re-reads), and a plain failure carries no
+// guarantee either; only a failure from this phase is wrapped. A caller that
+// closes a provisional undo-journal row on a failed merge (dedup's journaled
+// merge) must key on this wrapper and nothing else. errors.As and errors.Is see
+// through it to the underlying error.
+type RefusedBeforeWriteError struct{ Err error }
+
+func (e *RefusedBeforeWriteError) Error() string { return e.Err.Error() }
+func (e *RefusedBeforeWriteError) Unwrap() error { return e.Err }
 
 // IsRefusal reports whether err is one of the service's typed refusals of the
 // caller's request — a file-less forced primary, a soft-deleted participant,
@@ -566,6 +584,19 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// guard lived only at that one caller; enforcing it here protects every
 	// caller, present and future, regardless of whether it remembers to
 	// de-dupe first.
+	// Until the version-group locks are taken below, this function only reads, so
+	// any error it returns in that span provably wrote nothing and is marked as
+	// such (RefusedBeforeWriteError). readOnlyPhase ends on the line before the
+	// first lock; keep every write after it. Registered first so it runs last,
+	// after the part-way handler below has had its say (that one only fires once
+	// membership writes began, which is after the phase ended).
+	readOnlyPhase := true
+	defer func() {
+		if retErr != nil && readOnlyPhase {
+			retErr = &RefusedBeforeWriteError{Err: retErr}
+		}
+	}()
+
 	seen := make(map[string]bool, len(bookIDs))
 	deduped := make([]string, 0, len(bookIDs))
 	for _, id := range bookIDs {
@@ -811,6 +842,7 @@ func (ms *Service) mergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			planned[books[i].ID] = *books[i].VersionGroupID
 		}
 	}
+	readOnlyPhase = false
 	unlockGroups, lockedGroups, err := versionprimary.LockPlannedGroups(ms.db, ids, planned, versionGroupID)
 	if err != nil {
 		return nil, fmt.Errorf("lock version groups for merge: %w", err)

@@ -1,5 +1,5 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
 // last-edited: 2026-11-17
 
@@ -183,32 +183,49 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 	// same entries rather than creating a second set.
 	mergedAt := time.Now().UnixNano()
 	journalKeys := make([]string, 0, len(ids)-1)
+	provisional := make([]database.AutoMergeJournalEntry, 0, len(ids)-1)
 	for _, loserID := range othersThan(ids, predWinner) {
-		key, err := de.putJournal(database.AutoMergeJournalEntry{
+		entry := database.AutoMergeJournalEntry{
 			CandidateID: candidateID,
 			WinnerID:    predWinner,
 			LoserID:     loserID,
 			Tag:         tag,
 			MergedAt:    mergedAt + int64(len(journalKeys)),
 			Provisional: true,
-			// The snapshot prune keeps every snapshot of these two books newer
-			// than their baselines until the patch below finalizes the entry
-			// (the merge's own writes are the pre-merge records it will name).
-			WinnerBaselineTS: baselines[predWinner],
-			LoserBaselineTS:  baselines[loserID],
-		})
+			// While the entry is provisional the snapshot prune keeps ONE
+			// snapshot per book: the earliest one newer than its baseline, the
+			// pre-merge record the patch below will name (the merge's own writes
+			// land after the entry does).
+			WinnerBaselineTS:  baselines[predWinner],
+			LoserBaselineTS:   baselines[loserID],
+			BaselinesRecorded: true,
+		}
+		key, err := de.putJournal(entry)
 		if err != nil {
 			// A provisional entry that cannot be written means this merge would
 			// be irreversible, which is a worse outcome than no merge at all.
-			// Any entries already written name only books that were never
-			// merged; they are inert and an operator can ignore them.
+			// Entries already written for it are closed here when that can be
+			// proven harmless: the merge never started, so they describe nothing.
+			de.abortProvisional(provisional, "the next provisional entry could not be written")
 			return nil, journalKeys, fmt.Errorf("merge-journaled: write provisional journal entry (merge skipped): %w", err)
 		}
 		journalKeys = append(journalKeys, key)
+		provisional = append(provisional, entry)
 	}
 
 	result, mergeErr := de.mergeService.MergeBooks(ids, keepID)
 	if mergeErr != nil {
+		// A refusal from the merge's read-only phase proves it wrote nothing, so
+		// the entries describe a merge that never happened: close them, which
+		// releases their snapshot pins. Only that proof closes a row. Any other
+		// failure (a plain error, a typed one raised after writes began, a
+		// part-way merge) may have written, so its entries stay provisional and
+		// keep pinning the one snapshot per book an operator would need.
+		var refused *merge.RefusedBeforeWriteError
+		if errors.As(mergeErr, &refused) {
+			de.abortProvisional(provisional, "the merge was refused before it wrote anything")
+			return nil, journalKeys, fmt.Errorf("merge-journaled: merge books: %w", mergeErr)
+		}
 		// A merge that failed after its first write may have moved siblings.
 		// The provisional entries stay provisional (UnmergeAuto refuses
 		// them); the sibling journal is the undo for those moves.
@@ -267,6 +284,21 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 	return result, journalKeys, nil
 }
 
+// abortProvisional closes provisional entries whose merge provably never
+// started (AbortedAt): UnmergeAuto and the snapshot pins both ignore a closed
+// entry. A failure to close is logged and leaves the entry provisional, which is
+// the safe state: it keeps its pin and UnmergeAuto refuses it.
+func (de *Engine) abortProvisional(entries []database.AutoMergeJournalEntry, why string) {
+	now := time.Now().UnixNano()
+	for _, e := range entries {
+		e.AbortedAt = now
+		if _, err := de.putJournal(e); err != nil {
+			journaledMergeLog.Warn("merge-journaled: could not close a provisional journal entry for a merge that never wrote anything (candidate %d, winner %s, loser %s, %s); it stays provisional and keeps pinning one snapshot per book: %v",
+				e.CandidateID, logger.SanitizeLogValue(e.WinnerID), logger.SanitizeLogValue(e.LoserID), why, err)
+		}
+	}
+}
+
 // predictPrimary picks the book merge.MergeBooks will elect as primary when no
 // keepID is supplied, by calling the exported merge.ElectPrimary on the same
 // two inputs MergeBooks feeds it: the books and their file rows.
@@ -306,9 +338,11 @@ func (de *Engine) predictPrimary(ids []string) (string, error) {
 		return books[best].ID, nil
 	}
 	// -1 means every participant is soft-deleted, so MergeBooks is about to
-	// refuse this merge outright and the entries written for it are inert. Name
-	// the first book so the entry count stays N-1, and let MergeBooks produce
-	// the authoritative (typed) error rather than inventing one here.
+	// refuse this merge outright. Its refusal comes from the read-only phase, so
+	// MergeBooksJournaled closes the entries written for it (they are NOT inert
+	// until then: each pins a snapshot per book). Name the first book so the entry
+	// count stays N-1, and let MergeBooks produce the authoritative (typed) error
+	// rather than inventing one here.
 	return ids[0], nil
 }
 

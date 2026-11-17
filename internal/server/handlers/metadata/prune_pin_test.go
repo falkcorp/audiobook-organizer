@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/prune_pin_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c3f9a52-1e84-4d60-b2a7-9d5e0c8f4a31
 // last-edited: 2026-11-17
 
@@ -95,6 +95,8 @@ func TestPruneBookCOWVersions_UnreadableJournalDeletesNothing(t *testing.T) {
 
 	w := doReq(h.PruneBookCOWVersions, http.MethodPost, "/audiobooks/"+b.ID+"/cow-versions/prune",
 		map[string]any{"keep_count": 2}, idParam(b.ID))
-	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "a merge journal row is unreadable: dedup:automerge:ffffffffffffffff; prune is blocked until it is repaired",
+		"the owner is told which row to repair, not a generic failure")
 	require.Len(t, snapshotNanos(t, s, b.ID), 6, "nothing was deleted")
 }

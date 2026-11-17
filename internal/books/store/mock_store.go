@@ -1,5 +1,5 @@
 // file: internal/books/store/mock_store.go
-// version: 1.158.1
+// version: 1.158.2
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-11-17
 
@@ -97,9 +97,9 @@ type MockStore struct {
 	GetBookAtVersionFunc                 func(id string, ts time.Time) (*Book, error)
 	RevertBookToVersionFunc              func(id string, ts time.Time) (*Book, error)
 	PruneBookVersionsFunc                func(id string, keepCount int) (int, error)
-	CountBookSnapshotsFunc               func(id string) (int, error)
 	PlanBookSnapshotPruneFunc            func(id string, keepCount int) (BookSnapshotPrunePlan, error)
 	AuditMergeJournalSnapshotsFunc       func(idCap int) (MergeJournalSnapshotAudit, error)
+	CheckSnapshotPinsFunc                func() error
 	MarkITunesSyncedFunc                 func(bookIDs []string) (int64, error)
 	GetITunesDirtyBooksFunc              func() ([]Book, error)
 	GetITunesPurgePendingBooksFunc       func() ([]Book, error)
@@ -2758,16 +2758,6 @@ func (m *MockStore) PruneBookSnapshots(id string, keepCount int) (int, error) {
 	return 0, nil
 }
 
-// CountBookSnapshots reports a book's snapshot count. Backed by its own hook so
-// a test can make counting disagree with pruning -- which is exactly the shape a
-// dry run has to get right.
-func (m *MockStore) CountBookSnapshots(id string) (int, error) {
-	if m.CountBookSnapshotsFunc != nil {
-		return m.CountBookSnapshotsFunc(id)
-	}
-	return 0, nil
-}
-
 // PlanBookSnapshotPrune reports what a prune of the book would do. Backed by its
 // own hook; the default plans nothing, like PruneBookSnapshots' default.
 func (m *MockStore) PlanBookSnapshotPrune(id string, keepCount int) (BookSnapshotPrunePlan, error) {
@@ -2775,6 +2765,13 @@ func (m *MockStore) PlanBookSnapshotPrune(id string, keepCount int) (BookSnapsho
 		return m.PlanBookSnapshotPruneFunc(id, keepCount)
 	}
 	return BookSnapshotPrunePlan{}, nil
+}
+
+func (m *MockStore) CheckSnapshotPins() error {
+	if m.CheckSnapshotPinsFunc != nil {
+		return m.CheckSnapshotPinsFunc()
+	}
+	return nil
 }
 
 func (m *MockStore) AuditMergeJournalSnapshots(idCap int) (MergeJournalSnapshotAudit, error) {

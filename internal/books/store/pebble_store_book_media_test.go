@@ -1,7 +1,7 @@
 // file: internal/books/store/pebble_store_book_media_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 2bd37725-b63d-4529-8450-c4e8858d385b
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package store
 
@@ -74,10 +74,11 @@ func TestFillBookMediaInfo_NoWriteWhenNothingEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snaps, err := s.CountBookSnapshots(b.ID)
+	snapPlan, err := s.PlanBookSnapshotPrune(b.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	snaps := snapPlan.Total
 
 	got, err := s.FillBookMediaInfo(b.ID, BookMediaInfoPatch{Duration: new(999), Codec: new("aac")})
 	if err != nil {
@@ -93,10 +94,11 @@ func TestFillBookMediaInfo_NoWriteWhenNothingEmpty(t *testing.T) {
 	if before.UpdatedAt == nil || after.UpdatedAt == nil || !before.UpdatedAt.Equal(*after.UpdatedAt) {
 		t.Errorf("UpdatedAt changed %v -> %v: a no-op fill wrote the row", before.UpdatedAt, after.UpdatedAt)
 	}
-	snapsAfter, err := s.CountBookSnapshots(b.ID)
+	snapPlanAfter, err := s.PlanBookSnapshotPrune(b.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapsAfter := snapPlanAfter.Total
 	if snapsAfter != snaps {
 		t.Errorf("snapshots %d -> %d: a no-op fill wrote a version", snaps, snapsAfter)
 	}

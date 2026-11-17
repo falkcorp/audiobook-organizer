@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/prune_book_snapshots.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: f3714dde-e788-468a-958a-5514eebcd952
 // last-edited: 2026-11-17
 
@@ -105,6 +105,11 @@ func keepCountFromCtx(ctx context.Context) int {
 type PruneBookSnapshotsResult struct {
 	DryRun    bool `json:"dry_run"`
 	KeepCount int  `json:"keep_count"`
+	// Complete is false on the result a dry run stores before the per-book pass:
+	// the merge journal audit below is final, the per-book counts are not. A run
+	// that ends early (a failed book, a cancel) leaves that result in place, so the
+	// audit survives.
+	Complete bool `json:"complete"`
 	// BooksScanned is every book visited.
 	BooksScanned int `json:"books_scanned"`
 	// BooksPruned is the books that had something to delete (dry run: would).
@@ -133,11 +138,13 @@ type PruneBookSnapshotsResult struct {
 	MergeJournalsMissingTruncated int      `json:"merge_journals_missing_truncated,omitempty"`
 
 	// StaleProvisionalMergeJournals counts auto-merge entries that have been
-	// provisional for over an hour: the merge failed, or its finalizing write
-	// never landed, so the entry cannot be undone. Each keeps pinning the later
-	// snapshots of its two books for as long as the row exists; this count is the
-	// bug report, and StaleProvisionalMergeJournalIDs names them (ids only,
-	// capped; the _truncated count is the rest).
+	// provisional for over an hour: the merge failed in a way that does not prove
+	// it wrote nothing, or its finalizing write never landed, so the entry cannot
+	// be undone. Each keeps pinning ONE snapshot per book (the first above its
+	// floor) for as long as the row exists; this count is the bug report, and
+	// StaleProvisionalMergeJournalIDs names them (ids only, capped; the _truncated
+	// count is the rest). Rows closed because their merge never wrote anything are
+	// not counted.
 	StaleProvisionalMergeJournals          int      `json:"stale_provisional_merge_journals"`
 	StaleProvisionalMergeJournalIDs        []string `json:"stale_provisional_merge_journal_ids,omitempty"`
 	StaleProvisionalMergeJournalsTruncated int      `json:"stale_provisional_merge_journals_truncated,omitempty"`
@@ -159,6 +166,15 @@ func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobSt
 		return fmt.Errorf("prune-book-snapshots: store %T cannot plan a snapshot prune (database.SnapshotPrunePlanner)", store)
 	}
 
+	// Pin health, once, before any per-book work and in both modes. With a journal
+	// row that cannot be read no book can be pruned (the row may name the snapshot
+	// an undo needs), so the run fails here, naming the row, instead of failing
+	// once per book. The planner remembers the failure, so nothing below would
+	// re-scan the journal either.
+	if perr := planner.CheckSnapshotPins(); perr != nil {
+		return fmt.Errorf("prune-book-snapshots: %w", perr)
+	}
+
 	ids, err := store.ListBookIDs()
 	if err != nil {
 		return fmt.Errorf("list book ids: %w", err)
@@ -175,6 +191,16 @@ func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobSt
 		var aerr error
 		if audit, aerr = planner.AuditMergeJournalSnapshots(mergeJournalIDCap); aerr != nil {
 			return fmt.Errorf("audit merge journal snapshots: %w", aerr)
+		}
+		// The audit is the one answer only a dry run gives, so it is stored NOW,
+		// before the per-book pass, and the final result replaces it only if the
+		// pass finishes. On the registry path the UI runs today
+		// (server/maintenance_job_op.go) a result set here survives a run that later
+		// fails. The native shell (kinds.go) drops the result of any run that returns
+		// an error, so a failing run also carries the audit's numbers in its error
+		// text (below), which that shell keeps.
+		if rerr := maintenance.SetResult(ctx, pruneResult(true, keepCount, false, audit, 0, 0, 0, 0, 0)); rerr != nil {
+			return fmt.Errorf("persist prune audit: %w", rerr)
 		}
 	}
 
@@ -247,19 +273,8 @@ func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobSt
 	reporter.Log("info", fmt.Sprintf("%s %d snapshots across %d books (scanned %d, kept %d pinned by a merge journal, failed %d)",
 		verb, deleted.Load(), booksPruned.Load(), scanned.Load(), pinned.Load(), failed.Load()), nil)
 
-	res := PruneBookSnapshotsResult{
-		DryRun: dryRun, KeepCount: keepCount,
-		BooksScanned: int(scanned.Load()), BooksPruned: int(booksPruned.Load()),
-		SnapshotsDeleted: int(deleted.Load()), PinnedByJournal: int(pinned.Load()), Failed: int(failed.Load()),
-		LiveMergeJournals:             audit.LiveEntries,
-		MergeJournalsMissingSnapshots: audit.MissingSnapshotEntries,
-		MergeJournalsMissingIDs:       audit.MissingJournalIDs,
-		MergeJournalsMissingTruncated: audit.Truncated,
-
-		StaleProvisionalMergeJournals:          audit.StaleProvisional,
-		StaleProvisionalMergeJournalIDs:        audit.StaleProvisionalIDs,
-		StaleProvisionalMergeJournalsTruncated: audit.StaleProvisionalTruncated,
-	}
+	res := pruneResult(dryRun, keepCount, true, audit, int(scanned.Load()), int(booksPruned.Load()),
+		int(deleted.Load()), int(pinned.Load()), int(failed.Load()))
 	if dryRun {
 		reporter.Log("info", fmt.Sprintf("Merge journal audit: %d live entries, %d with undo snapshots already missing, %d stale provisional entries",
 			audit.LiveEntries, audit.MissingSnapshotEntries, audit.StaleProvisional), nil)
@@ -272,7 +287,30 @@ func (j *pruneBookSnapshotsJob) Run(ctx context.Context, store maintenance.JobSt
 		}
 	}
 	if failed.Load() > 0 {
+		if dryRun {
+			return fmt.Errorf("prune completed with %d failures (merge journal audit: %d live entries, %d with undo snapshots already missing, %d stale provisional)",
+				failed.Load(), audit.LiveEntries, audit.MissingSnapshotEntries, audit.StaleProvisional)
+		}
 		return fmt.Errorf("prune completed with %d failures", failed.Load())
 	}
 	return nil
+}
+
+// pruneResult assembles the run's result. The audit fields are set only when the
+// run is a dry run (audit is the zero value otherwise).
+func pruneResult(dryRun bool, keepCount int, complete bool, audit database.MergeJournalSnapshotAudit,
+	scanned, booksPruned, deleted, pinned, failed int) PruneBookSnapshotsResult {
+	return PruneBookSnapshotsResult{
+		DryRun: dryRun, KeepCount: keepCount, Complete: complete,
+		BooksScanned: scanned, BooksPruned: booksPruned,
+		SnapshotsDeleted: deleted, PinnedByJournal: pinned, Failed: failed,
+		LiveMergeJournals:             audit.LiveEntries,
+		MergeJournalsMissingSnapshots: audit.MissingSnapshotEntries,
+		MergeJournalsMissingIDs:       audit.MissingJournalIDs,
+		MergeJournalsMissingTruncated: audit.Truncated,
+
+		StaleProvisionalMergeJournals:          audit.StaleProvisional,
+		StaleProvisionalMergeJournalIDs:        audit.StaleProvisionalIDs,
+		StaleProvisionalMergeJournalsTruncated: audit.StaleProvisionalTruncated,
+	}
 }
