@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 85df29b0-0d44-40e8-bbab-726ab6928927
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metadatahandler_test
 
@@ -241,7 +241,7 @@ func TestRunQueuedApply_CandidateWithNoLaterEditApplies(t *testing.T) {
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, mock.Anything,
-		metafetch.ApplyOptions{BatchID: "apply-queued-own"}).Return(&metafetch.FetchMetadataResponse{}, nil)
+		metafetch.ApplyOptions{BatchID: "apply-queued-own", AllowRetired: true}).Return(&metafetch.FetchMetadataResponse{}, nil)
 	d.pool.EXPECT().Submit("b1", mock.Anything).Return(false)
 	if err := h.RunQueuedApply(context.Background(), queuedCandidate(), nil); err != nil {
 		t.Fatalf("RunQueuedApply: %v", err)

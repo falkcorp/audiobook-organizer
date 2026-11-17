@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-11-17
 
@@ -133,6 +133,14 @@ func RowPinnedBook(pins map[string]CandidatePin) (string, bool) {
 	return best, found
 }
 
+// PinAllowsRetired is the ONE rule for who may write onto a retired book:
+// only a single review row's pin, one human click on one row (IsRowReview).
+// A nil pin, a review-page bulk pin (fill or replace) and the hashless marker
+// do not. The plan checks of the bulk applies (refuseRetired) and the
+// ApplyOptions.AllowRetired their apply is built with both come from this
+// function, so the plan and the backstop cannot disagree about it.
+func PinAllowsRetired(pin *CandidatePin) bool { return pin != nil && pin.IsRowReview() }
+
 // IsOwnerReview reports whether p comes from an apply button on the review
 // page (any origin above), and so makes the apply owner-reviewed.
 func (p CandidatePin) IsOwnerReview() bool {
@@ -253,6 +261,17 @@ type ApplyOptions struct {
 	// UnseenCandidate keeps both of those automatic behaviours (see
 	// automatic) while still letting the apply overwrite.
 	UnseenCandidate bool
+	// AllowRetired says a retired book (in the trash, or absorbed into another
+	// book: database.Book.IsRetired) may be written. It is the ONLY thing that
+	// lets an apply onto a retired book through, at the start and again under
+	// the book's write lock; it is deliberately not derived from automatic(),
+	// because an overwriting apply that is not automatic (the review page's
+	// bulk "Replace existing") is still nobody picking THIS book. It is true
+	// only for one human click on one book: a single review row's pin
+	// (PinAllowsRetired) and the single-book dialog (ApplyMetadataCandidate and
+	// the handler's own options). The zero value refuses, so a new caller
+	// cannot write a retired book by forgetting a field.
+	AllowRetired bool
 	// BatchID, when set, is the batch id every change-history row of this
 	// apply carries, instead of a fresh random one. The queued single-book
 	// apply (metadata.apply-when-scanned) fixes it when the apply is queued,
@@ -304,9 +323,10 @@ type ApplyOptions struct {
 
 // automatic reports whether nobody picked this candidate: a fill-only apply,
 // or an overwriting one of a candidate nobody was shown. An automatic apply
-// refuses a book marked "no match" or retired (at the start and again at
-// commit) and
+// refuses a book marked "no match" (at the start and again at commit) and
 // records the match only when the book ends up holding the candidate's title.
+// It has nothing to do with retired books: those are refused unless
+// AllowRetired.
 func (o ApplyOptions) automatic() bool { return o.FillOnly || o.UnseenCandidate }
 
 // ErrNothingToApply is returned by an apply with RefuseEmptyWrite when no
@@ -320,11 +340,12 @@ var ErrNothingToApply = errors.New("metadata apply: no field left to write")
 // mark and is not refused.
 var ErrMarkedNoMatch = errors.New("metadata: book is marked no match")
 
-// ErrBookRetired is returned by an automatic apply (nobody picked this
-// candidate for this book) for a retired book: one in the trash or absorbed
-// into another book (database.Book.IsRetired). Nothing is written. Bulk callers
-// report the book as skipped, not failed. A person-picked apply is the owner
-// working on that one book by hand and is not refused.
+// ErrBookRetired is returned by an apply without ApplyOptions.AllowRetired for
+// a retired book: one in the trash or absorbed into another book
+// (database.Book.IsRetired). Nothing is written. Bulk callers report the book
+// as skipped, not failed. A single review row's apply and the single-book
+// dialog set AllowRetired (the owner working on that one book by hand) and are
+// not refused.
 var ErrBookRetired = errors.New("metadata: book is retired")
 
 // IsMarkedNoMatch reports whether the owner marked this book "no match"

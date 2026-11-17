@@ -1,7 +1,7 @@
 // file: internal/plugins/metafetch/asin_backfill.go
-// version: 1.12.4
+// version: 1.12.5
 // guid: c4e9a2f7-1d36-4b85-9a0e-6f2b8d31c7a4
-// last-edited: 2026-11-09
+// last-edited: 2026-11-17
 
 package metafetch
 
@@ -125,6 +125,13 @@ const (
 // errASINFilledMeanwhile aborts the write when another writer filled the ASIN
 // (or a user locked it) between the search and the write.
 var errASINFilledMeanwhile = errors.New("asin filled or locked by another writer during the search")
+
+// errBookRetiredMeanwhile aborts a write when the book was trashed or merged
+// away during the Audible request: the row re-read under the write lock is
+// retired (database.Book.IsRetired), and nothing is written. It is a counted
+// skip (skippedDeleted or skippedMerged, as at the start of the run), never a
+// failure and never a miss marker.
+var errBookRetiredMeanwhile = errors.New("book retired during the audible request")
 
 // errISBNFilledMeanwhile aborts an ISBN-only write when another writer filled
 // an ISBN (or a user locked ISBN-13) between the lookup and the write.
@@ -604,6 +611,17 @@ func (r *asinBackfillRun) runBookIDs(ctx context.Context, reporter sdk.Reporter,
 	return registry.RunItems(ctx, reporter, books, r.processBook, r.options(0, len(books), workers))
 }
 
+// skipRetiredMeanwhile counts a write refused because the book retired during
+// the request, in the same counter the start-of-run check uses for that shape.
+func (r *asinBackfillRun) skipRetiredMeanwhile(bookID string, retired *database.Book) {
+	if retired.IsSoftDeleted() {
+		r.tally.skippedDeleted.Add(1)
+	} else {
+		r.tally.skippedMerged.Add(1)
+	}
+	r.log.Info("book retired during the search; left alone: book_id=%s", logger.SanitizeLogValue(bookID))
+}
+
 // processBook is one book. It returns an error only for cancellation or a run
 // that must stop (a provider outage); every per-book outcome, including a
 // per-book failure, is counted and returns nil so RunItems' fail-fast mode
@@ -931,7 +949,14 @@ func (r *asinBackfillRun) apply(b *database.Book, locks database.FieldLocks, tit
 	asin := d.ASIN
 	isbn := d.ISBN
 	isbnWritten := false
+	var retiredRow database.Book
 	_, err := r.writer.Modify(bookID, func(fresh *database.Book) error {
+		// Re-read under the book's lock: a book trashed or merged away during
+		// the search is not written, whatever the snapshot said.
+		if fresh.IsRetired() {
+			retiredRow = *fresh
+			return errBookRetiredMeanwhile
+		}
 		if fresh.ASIN != nil && strings.TrimSpace(*fresh.ASIN) != "" {
 			return errASINFilledMeanwhile
 		}
@@ -969,6 +994,8 @@ func (r *asinBackfillRun) apply(b *database.Book, locks database.FieldLocks, tit
 	switch {
 	case errors.Is(err, errOwnerRejectedRecord):
 		r.refuseOwnerRejected(bookID, asinMissKey(bookID), asin)
+	case errors.Is(err, errBookRetiredMeanwhile):
+		r.skipRetiredMeanwhile(bookID, &retiredRow)
 	case errors.Is(err, errASINFilledMeanwhile):
 		t.filledMeanwhile.Add(1)
 		r.log.Info("asin filled or locked during the search; left alone: book_id=%s", logger.SanitizeLogValue(bookID))
@@ -1175,7 +1202,12 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book, 
 			isbn, asin, logger.SanitizeLogValue(b.ID))
 		return nil
 	}
+	var retiredRow database.Book
 	_, err = r.writer.Modify(b.ID, func(fresh *database.Book) error {
+		if fresh.IsRetired() {
+			retiredRow = *fresh
+			return errBookRetiredMeanwhile
+		}
 		if fresh.ASIN == nil || !strings.EqualFold(strings.TrimSpace(*fresh.ASIN), asin) || !bookHasNoISBN(fresh) {
 			return errISBNFilledMeanwhile
 		}
@@ -1200,6 +1232,8 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book, 
 	switch {
 	case errors.Is(err, errOwnerRejectedRecord):
 		r.refuseOwnerRejected(b.ID, isbnMissKey(b.ID), asin)
+	case errors.Is(err, errBookRetiredMeanwhile):
+		r.skipRetiredMeanwhile(b.ID, &retiredRow)
 	case errors.Is(err, errISBNFilledMeanwhile):
 		t.filledMeanwhile.Add(1)
 		r.log.Info("isbn filled, locked or asin changed during the lookup; left alone: book_id=%s", logger.SanitizeLogValue(b.ID))

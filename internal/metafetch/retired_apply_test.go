@@ -1,5 +1,5 @@
 // file: internal/metafetch/retired_apply_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91d2a6c4-0e7b-4f35-8a19-2b6c5d7e3f80
 // last-edited: 2026-11-17
 
@@ -109,4 +109,98 @@ func TestRetiredApply_RetiredDuringApplyIsNotWritten(t *testing.T) {
 			require.Nil(t, *updated, "nothing was committed onto the retired row")
 		})
 	}
+}
+
+// Options that overwrite but are not automatic(): the review page's bulk
+// "Replace existing" (OwnerReplace, FillOnly false, UnseenCandidate false)
+// and a bare ApplyOptions{}. Neither says a retired book may be written, so
+// both refuse one, at the start and again under the lock. (Round 2 of #4694:
+// the backstop keyed on automatic() and let these through.)
+var overwritingApplyOptions = map[string]ApplyOptions{
+	"bulk_replace":          {OwnerReplace: true, RequireHistory: true},
+	"bulk_replace_reviewed": {OwnerReplace: true, OwnerReviewed: true, GateOverride: "owner_reviewed", RequireHistory: true},
+	"bare_options":          {},
+}
+
+func TestRetiredApply_OverwritingApplyWithoutAllowRetiredRefusesRetiredBook(t *testing.T) {
+	for _, rc := range retiredFieldCases {
+		for label, opts := range overwritingApplyOptions {
+			t.Run(rc.name+"/"+label, func(t *testing.T) {
+				store, book, updated := stampFixture(false)
+				rc.retire(book)
+				resp, err := NewService(store).ApplyMetadataCandidateWithOptions("stamp-1", stampCandidate, nil, opts)
+				require.ErrorIs(t, err, ErrBookRetired)
+				require.Nil(t, resp)
+				require.Nil(t, *updated, "nothing was committed")
+			})
+		}
+	}
+}
+
+// The under-lock half: the book is live when the apply first reads it and
+// retired by the time the write takes the lock.
+func TestRetiredApply_OverwritingApplyRetiredDuringApplyIsNotWritten(t *testing.T) {
+	for _, rc := range retiredFieldCases {
+		for label, opts := range overwritingApplyOptions {
+			t.Run(rc.name+"/"+label, func(t *testing.T) {
+				store, book, updated := stampFixture(false)
+				reads := 0
+				store.GetBookByIDFunc = func(string) (*database.Book, error) {
+					reads++
+					clone := *book
+					if reads > 1 {
+						rc.retire(&clone)
+					}
+					return &clone, nil
+				}
+				_, err := NewService(store).ApplyMetadataCandidateWithOptions("stamp-1", stampCandidate, nil, opts)
+				require.ErrorIs(t, err, ErrBookRetired, "the in-lock refusal is typed")
+				require.Nil(t, *updated, "nothing was committed onto the retired row")
+			})
+		}
+	}
+}
+
+// AllowRetired is the one thing that lets a retired book be written: a single
+// review row (overwriting, owner-reviewed) and the single-book dialog set it.
+// Both the start check and the under-lock check read it, so a book that is
+// retired only by the time the lock is taken is still written for them.
+func TestRetiredApply_AllowRetiredWritesRetiredBook(t *testing.T) {
+	rowApprove := ApplyOptions{AllowRetired: true, OwnerReviewed: true, GateOverride: "owner_reviewed", RequireHistory: true}
+	for _, rc := range retiredFieldCases {
+		for label, opts := range map[string]ApplyOptions{"dialog": {AllowRetired: true}, "row_pin": rowApprove} {
+			t.Run(rc.name+"/"+label+"/retired_at_start", func(t *testing.T) {
+				store, book, updated := stampFixture(false)
+				rc.retire(book)
+				applyIgnoringHistory(t, store, nil, opts)
+				require.NotNil(t, *updated, "a person-picked apply of a retired book must write")
+			})
+			t.Run(rc.name+"/"+label+"/retired_during_apply", func(t *testing.T) {
+				store, book, updated := stampFixture(false)
+				reads := 0
+				store.GetBookByIDFunc = func(string) (*database.Book, error) {
+					reads++
+					clone := *book
+					if reads > 1 {
+						rc.retire(&clone)
+					}
+					return &clone, nil
+				}
+				applyIgnoringHistory(t, store, nil, opts)
+				require.NotNil(t, *updated, "the person's apply is not refused under the lock")
+			})
+		}
+	}
+}
+
+// The no-match check is a different rule from the retired one and keeps
+// keying on automatic(): AllowRetired must not lift a "no match" refusal of an
+// automatic apply, and a plain overwrite still overrides the owner's mark.
+func TestRetiredApply_AllowRetiredDoesNotLiftNoMatch(t *testing.T) {
+	noMatch := "no_match"
+	store, book, updated := stampFixture(false)
+	book.MetadataReviewStatus = &noMatch
+	_, err := NewService(store).ApplyMetadataCandidateWithOptions("stamp-1", stampCandidate, nil, ApplyOptions{FillOnly: true, AllowRetired: true})
+	require.ErrorIs(t, err, ErrMarkedNoMatch)
+	require.Nil(t, *updated)
 }

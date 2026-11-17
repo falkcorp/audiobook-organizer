@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.56.0
+// version: 1.57.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-11-17
 
@@ -654,7 +654,9 @@ func (mfs *Service) persistFetchedMetadata(bookID string, meta metadata.BookMeta
 // hand-picked apply and may overwrite filled fields; batch and automatic
 // callers use ApplyMetadataCandidateWithOptions with FillOnly.
 func (mfs *Service) ApplyMetadataCandidate(id string, candidate MetadataCandidate, fields []string) (*FetchMetadataResponse, error) {
-	return mfs.ApplyMetadataCandidateWithOptions(id, candidate, fields, ApplyOptions{})
+	// The single-book dialog: a person picking this candidate for this book,
+	// even a retired one.
+	return mfs.ApplyMetadataCandidateWithOptions(id, candidate, fields, ApplyOptions{AllowRetired: true})
 }
 
 // ApplyMetadataCandidateWithOptions is ApplyMetadataCandidate with opts
@@ -694,9 +696,11 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	}
 
 	// A retired book (in the trash, or absorbed into another book) is not
-	// one anybody is picking metadata for. Same choke point, same rule: an
-	// automatic apply never writes onto it (re-checked at commit, below).
-	if opts.automatic() && book.IsRetired() {
+	// one anybody is picking metadata for. Same choke point, one rule: no apply
+	// writes onto it unless the caller says a person picked this book
+	// (opts.AllowRetired: a single review row, the single-book dialog), however
+	// the options otherwise overwrite (re-checked at commit, below).
+	if !opts.AllowRetired && book.IsRetired() {
 		return nil, fmt.Errorf("book %s: %w", id, ErrBookRetired)
 	}
 
@@ -895,17 +899,19 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// that committed during the apply was silently reverted. A book with an
 	// error means the write stands and its history did not land; commitApply
 	// logged it at Error and undo refuses that apply.
-	var noMatchGuard func(*database.Book) error
-	if opts.automatic() {
-		// The no_match and retired checks above read the row this apply
-		// loaded; re-check the row as it stands under the write lock, so a
-		// "no match" the owner set (or a merge or trash that landed) while
-		// this apply ran is not overwritten.
-		noMatchGuard = func(fresh *database.Book) error {
-			if IsMarkedNoMatch(fresh.MetadataReviewStatus) {
+	// The no_match and retired checks above read the row this apply loaded;
+	// re-check the row as it stands under the write lock, so a "no match" the
+	// owner set (or a merge or trash that landed) while this apply ran is not
+	// overwritten. They key on different options: no_match on automatic()
+	// (nobody picked this candidate), retired on AllowRetired (nobody picked
+	// this BOOK).
+	var rowStateGuard func(*database.Book) error
+	if opts.automatic() || !opts.AllowRetired {
+		rowStateGuard = func(fresh *database.Book) error {
+			if opts.automatic() && IsMarkedNoMatch(fresh.MetadataReviewStatus) {
 				return fmt.Errorf("book %s: %w", id, ErrMarkedNoMatch)
 			}
-			if fresh.IsRetired() {
+			if !opts.AllowRetired && fresh.IsRetired() {
 				return fmt.Errorf("book %s: %w", id, ErrBookRetired)
 			}
 			return nil
@@ -917,7 +923,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// rejection itself reports the refusal its own way. When any of them
 	// refuses, commitApply also takes back the author credits
 	// guardedApplyWith wrote above (revertAuthorCredits).
-	commitGuard := composeCommitGuards(noMatchGuard, opts.Guard, rejectionGuard)
+	commitGuard := composeCommitGuards(rowStateGuard, opts.Guard, rejectionGuard)
 	// A hand-picked apply that changed a repair-locked field makes the lock
 	// the person's: reverting the repair later must not lift it and let a
 	// rescan put the junk back over the person's choice. The claim runs INSIDE
