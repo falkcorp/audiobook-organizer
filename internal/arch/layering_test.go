@@ -1,7 +1,7 @@
 // file: internal/arch/layering_test.go
-// version: 1.5.12
+// version: 1.5.13
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
-// last-edited: 2026-11-13
+// last-edited: 2026-11-16
 
 // Package arch holds architecture guard tests. It has no non-test code.
 //
@@ -121,6 +121,7 @@ var layerOf = map[string]int{
 	"internal/metrics":               0, // table: leaf
 	"internal/models":                0, // table: leaf
 	"internal/mtls":                  0, // computed: imports no module package
+	"internal/seriesdenumber":        0, // computed: imports no module package
 	"internal/walkresume":            0, // computed: imports no module package
 	"internal/operations/freshness":  0, // computed: imports no module package
 	"internal/operations/opmode":     0, // computed: imports no module package

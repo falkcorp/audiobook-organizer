@@ -1,7 +1,7 @@
 // file: internal/books/store/change_type_class.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 7e1c4d52-93a8-4f60-b2d7-5a0e6c18f3b4
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package store
 
@@ -79,6 +79,8 @@ var undoChangeTypeHoldsUserData = map[string]bool{
 	"junk_author_credits":          false, // ChangeTypeJunkAuthorCredits
 	"junk_author_create":           false, // ChangeTypeJunkAuthorCreate
 	"series_rename":                false, // ChangeTypeSeriesRename
+	"series_create":                false, // ChangeTypeSeriesCreate
+	"series_row_delete":            false, // ChangeTypeSeriesRowDelete
 	"book_file_reassign":           false, // ChangeTypeBookFileReassign
 	"book_file_track":              false, // ChangeTypeBookFileTrack
 	"book_path_update":             false, // ChangeTypeBookPathUpdate

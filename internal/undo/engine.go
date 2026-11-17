@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.56.1
+// version: 1.57.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 //
 // Undo preflight. PreflightUndoConflictsFromChanges predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -298,7 +298,7 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		// every time, so neither may be counted restorable here.
 		book, refusal := CheckRestoreBook(store, c.BookID)
 		if refusal == nil {
-			refusal = CheckRestoreReferent(store, c)
+			refusal = CheckRestoreReferent(plan.SeriesView(store), c)
 		}
 		switch {
 		case refusal != nil:
@@ -335,7 +335,7 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 				return rowVerdict{refusal: err}
 			}
 			if withLink {
-				if err := CheckRestoreReferent(store, link); err != nil {
+				if err := CheckRestoreReferent(plan.SeriesView(store), link); err != nil {
 					return rowVerdict{refusal: err}
 				}
 			}
@@ -377,6 +377,17 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return rowVerdict{refusal: refusal}
 	case ChangeTypeSeriesRename:
 		return verdictOf(CheckRestoreReferent(store, c))
+	case ChangeTypeSeriesRowDelete:
+		// The revert recreates the series under its id (RestoreSeries); the books'
+		// series_id rows, reverted after it, depend on it (RevertPlan.SeriesView).
+		return verdictOf(SeriesRowDeleteVerdict(store, c))
+	case ChangeTypeSeriesCreate:
+		// The revert deletes the created series only while it is unchanged and
+		// empty and keeps it otherwise; it never refuses the row.
+		if _, err := DecodeSeriesCreate(c); err != nil {
+			return rowVerdict{refusal: err}
+		}
+		return rowVerdict{}
 	case ChangeTypeAuthorRename:
 		// The revert renames the author back only while it is live under its
 		// own id, still carries the name the rename wrote, and no other live

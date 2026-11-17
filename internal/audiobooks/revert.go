@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.99.2
+// version: 1.100.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-11-09
+// last-edited: 2026-11-16
 
 package audiobooks
 
@@ -1137,6 +1137,10 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertTagWrite(c)
 	case undo.ChangeTypeSeriesRename:
 		return rs.revertSeriesRename(c)
+	case undo.ChangeTypeSeriesRowDelete:
+		return rs.revertSeriesRowDelete(c)
+	case undo.ChangeTypeSeriesCreate:
+		return rs.revertSeriesCreate(c)
 	case undo.ChangeTypeBookFileReassign:
 		return rs.revertBookFileReassign(c, plan)
 	case database.ChangeTypeBookFileRepoint:
@@ -2863,6 +2867,95 @@ func (rs *RevertService) revertSeriesRename(c *database.OperationChange) error {
 		return fmt.Errorf("series rename not reverted, %w", renameRefusal(err))
 	}
 	return nil
+}
+
+// revertSeriesRowDelete recreates a series row an operation deleted after
+// emptying it, under the id it had, so the books' series_id rows (older, reverted
+// after this one) have a series to go back to. It is idempotent: a row already
+// live exactly as snapshotted is counted restored. A name another series took
+// since, or an id live as something else, refuses the row and writes nothing.
+func (rs *RevertService) revertSeriesRowDelete(c *database.OperationChange) error {
+	snap, err := undo.DecodeSeriesRowDelete(c)
+	if err != nil {
+		return err
+	}
+	r, ok := database.AsCapability[database.SeriesRestorer](rs.db)
+	if !ok {
+		return fmt.Errorf("series row not restored: this store cannot restore series %d", snap.ID)
+	}
+	if err := r.RestoreSeries(snap.ID, snap.Name, snap.AuthorID); err != nil {
+		switch {
+		case errors.Is(err, database.ErrSeriesNameTaken):
+			return &undo.ReferentError{Reason: undo.ReasonSeriesNameTaken, Detail: err.Error()}
+		case errors.Is(err, database.ErrSeriesIDInUse):
+			return &undo.ReferentError{Reason: undo.ReasonSeriesRenamedSince, Detail: err.Error()}
+		}
+		return fmt.Errorf("restore series %d: %w", snap.ID, err)
+	}
+	return nil
+}
+
+// revertSeriesCreate removes the series an operation created, by the id the row
+// journaled, and only while it is still that series (same name and author), is
+// not held, and no book names it. Rows are reverted newest first, so the books
+// the operation moved into it are put back before this runs. Anything else
+// keeps the row and succeeds: a series somebody renamed or filled is theirs.
+func (rs *RevertService) revertSeriesCreate(c *database.OperationChange) error {
+	snap, err := undo.DecodeSeriesCreate(c)
+	if err != nil {
+		return err
+	}
+	cur, err := rs.db.GetSeriesByID(snap.ID)
+	if err != nil {
+		return fmt.Errorf("look up created series %d: %w", snap.ID, err)
+	}
+	if cur == nil {
+		return nil // already gone
+	}
+	if cur.Name != snap.Name || !sameAuthorPtr(cur.AuthorID, snap.AuthorID) {
+		revertLog.Info("revert kept series %d: renamed since the operation created it", cur.ID)
+		return nil
+	}
+	if database.SeriesHeld(*cur) {
+		revertLog.Info("revert kept series %d: held", cur.ID)
+		return nil
+	}
+	counter, ok := database.AsCapability[database.SeriesBookRefCounter](rs.db)
+	if !ok {
+		return fmt.Errorf("revert created series %d: this store cannot count its books", cur.ID)
+	}
+	n, err := counter.GetSeriesBookRefCount(cur.ID)
+	if err != nil {
+		return fmt.Errorf("count books of created series %d: %w", cur.ID, err)
+	}
+	if n > 0 {
+		revertLog.Info("revert kept series %d: still holds %d books", cur.ID, n)
+		return nil
+	}
+	deleter, ok := database.AsCapability[seriesDeleter](rs.db)
+	if !ok {
+		return fmt.Errorf("revert created series %d: this store cannot delete a series", cur.ID)
+	}
+	if err := deleter.DeleteSeries(cur.ID); err != nil {
+		if errors.Is(err, database.ErrSeriesHeld) {
+			return nil
+		}
+		return fmt.Errorf("delete created series %d: %w", cur.ID, err)
+	}
+	return nil
+}
+
+// seriesDeleter is the one series write revertSeriesCreate needs; revertServiceStore
+// is narrow on purpose, so it is resolved as a capability.
+type seriesDeleter interface {
+	DeleteSeries(id int) error
+}
+
+func sameAuthorPtr(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // renameRefusal turns a RenameSeriesIf refusal into the undo.ReferentError
