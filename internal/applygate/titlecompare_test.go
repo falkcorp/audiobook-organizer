@@ -1,5 +1,5 @@
 // file: internal/applygate/titlecompare_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 0b5a7e12-93c4-4d68-a1f7-6e2d9c40b835
 // last-edited: 2026-11-17
 
@@ -830,7 +830,7 @@ func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 	counts := map[string]int{}
 	skipped, bad := 0, 0
 	feature := map[string]int{}
-	const pairs = 25000
+	pairs := scaled(25000)
 	for i := 0; i < pairs; i++ {
 		a := genSide(r)
 		var b atitle
@@ -885,7 +885,7 @@ func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 		}
 	}
 	for _, f := range []string{"blank stored title, agree", "blank stored title, block", "candidate position/closed subtitle, agree"} {
-		if feature[f] < 100 {
+		if feature[f] < scaled(100) {
 			t.Fatalf("the generator reached %q only %d times", f, feature[f])
 		}
 	}
@@ -910,7 +910,7 @@ func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 // on the book change nothing.
 func TestCheckTitle_IsSymmetric(t *testing.T) {
 	r := rand.New(rand.NewPCG(7, 4688))
-	for i := 0; i < 15000; i++ {
+	for i := 0; i < scaled(15000); i++ {
 		a := genSide(r)
 		b := genSide(r)
 		if r.IntN(2) == 0 {
@@ -942,7 +942,7 @@ func TestCheckTitle_IsSymmetric(t *testing.T) {
 func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 	r := rand.New(rand.NewPCG(17, 4688))
 	moved, same := 0, 0
-	for i := 0; i < 15000; i++ {
+	for i := 0; i < scaled(15000); i++ {
 		a := genSide(r)
 		b := genMutate(r, a)
 		if r.IntN(2) == 0 {
@@ -987,7 +987,7 @@ func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 			t.Fatalf("the book's own credit or position changed %s to %s: %s", before, got, describePair(other, plain))
 		}
 	}
-	if moved < 50 || same < 5000 {
+	if moved < scaled(50) || same < scaled(5000) {
 		t.Fatalf("the property was not exercised: %d moved toward agree, %d unchanged", moved, same)
 	}
 }
@@ -1000,7 +1000,7 @@ func TestCheckTitle_CandidateOnlyFieldsOnlyMoveTowardAgree(t *testing.T) {
 func TestCheckTitle_SeriesCreditsAndPathsNeverChangeAConflict(t *testing.T) {
 	r := rand.New(rand.NewPCG(11, 4688))
 	checked := 0
-	for i := 0; i < 40000 && checked < 2500; i++ {
+	for i := 0; i < scaled(40000) && checked < scaled(2500); i++ {
 		book, cand := genSide(r), genSide(r)
 		book.series, cand.series, book.path = nil, nil, nil
 		if !oRead(book).ok || !oRead(cand).ok || !oConflict(oCanon(book), oCanon(cand)) {
@@ -1018,7 +1018,7 @@ func TestCheckTitle_SeriesCreditsAndPathsNeverChangeAConflict(t *testing.T) {
 			}
 		}
 	}
-	if checked < 1000 {
+	if checked < scaled(1000) {
 		t.Fatalf("only %d conflicting pairs generated", checked)
 	}
 }
@@ -1050,7 +1050,7 @@ func TestCheckTitle_AddedTextNeverAgrees(t *testing.T) {
 		return b
 	}
 	agreeing := 0
-	for i := 0; i < 6000; i++ {
+	for i := 0; i < scaled(6000); i++ {
 		a := genSide(r)
 		b := genMutate(r, a)
 		a.path, b.path = nil, nil
@@ -1073,7 +1073,7 @@ func TestCheckTitle_AddedTextNeverAgrees(t *testing.T) {
 			agreeing++
 		}
 	}
-	if agreeing < 300 {
+	if agreeing < scaled(300) {
 		t.Fatalf("only %d agreeing base pairs: the property was not exercised", agreeing)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/applygate/title_rule_examples_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6d1c58a2-9e04-4b73-8f25-a3e07d94b160
 // last-edited: 2026-11-17
 
@@ -100,6 +100,20 @@ func TestCheckTitle_RuleExamples(t *testing.T) {
 		{"the candidate's series statement is not a subtitle",
 			database.Book{Title: "Hush", Series: series("Batman")},
 			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "Batman, Book 2", Series: "Batman", SeriesPosition: "2"}, "agree"},
+
+		// a candidate with a real subtitle offers only the forms that state it:
+		// the series-and-number and credit forms that leave it out would agree
+		// with a stored title that never says the subtitle, and a stored title
+		// the candidate's subtitle is not part of is not the candidate's title
+		{"a real subtitle is not left out of the series-and-number form",
+			database.Book{Title: "Batman, Book 2: Hush"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "A Gotham Story", Series: "Batman", SeriesPosition: "2"}, "block"},
+		{"a real subtitle is not left out of the title-then-series form",
+			database.Book{Title: "Hush Batman 2"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "A Gotham Story", Series: "Batman", SeriesPosition: "2"}, "block"},
+		{"a real subtitle is not left out of the credit form",
+			database.Book{Title: "Hush Alfred Pennyworth"},
+			metafetch.MetadataCandidate{Title: "Hush", Subtitle: "A Gotham Story", Narrator: "Alfred Pennyworth"}, "block"},
 
 		// the stored subtitle is the book's own text
 		{"the stored subtitle completes the candidate's title",
